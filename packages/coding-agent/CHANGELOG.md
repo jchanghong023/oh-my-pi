@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add `/loopgoal` with `/loop` parameters to repeat a fixed goal prompt, compact above 50% context, and stop when the agent replies exactly `无`.
 - Add an independently copied Dev frontend with three-column Release/IR/SR navigation, read-only materials, native chat/settings and multi-project registration; leave the original WebGUI unchanged.
 - Add local-worktree and browser-only requirements intake, whole-group format checks, independent review and human confirmation, plus versioned, digest-checked ZIP handoff without source chat or credentials.
 - Revise imported requirements before merge in a fresh local native conversation; verified requirements merge freezes the complete IR/SR group.
@@ -20,6 +21,8 @@
 - Refresh workspace files and Git changes automatically, and settle all owned sessions and resources before exiting WebGUI.
 
 ### Changed
+
+- Share one Dev UI between standalone prototype preview and embedded OMP startup, with separate data sources and no sample-data fallback in the native host.
 
 - Keep Dev, WebGUI and `/sketch` browser launch manual in offline mode while retaining complete URLs and offline Linux clipboard requests.
 

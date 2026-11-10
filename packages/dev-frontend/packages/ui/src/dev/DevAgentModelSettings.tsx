@@ -1,29 +1,26 @@
+import { useDevDataSource } from "./data-source.js";
 import { useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { SettingsGroupCard, SettingsRow } from "@/settings/SettingsPageParts.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { DevPersonalConfigScope } from "./DevPersonalConfigScope.js";
-import {
-	PROTOTYPE_AGENT_MODELS,
-	createPrototypeAgentModelSamples,
-	readPrototypeAgentModels,
-	savePrototypeAgentModels,
-} from "./mock/agent-models.js";
 
 export function DevAgentModelSettings() {
+ const source = useDevDataSource();
+ if (!source.models) return <p className="text-ui-sm text-foreground-subtle">当前数据源尚未接入此功能。</p>;
 	const { locale } = useZCodeIntl();
 	const zh = locale === "zh-CN";
-	const [saved, setSaved] = useState(readPrototypeAgentModels);
-	const [draft, setDraft] = useState(readPrototypeAgentModels);
+	const [saved, setSaved] = useState(source.models!.read);
+	const [draft, setDraft] = useState(source.models!.read);
 	const [message, setMessage] = useState("");
 	const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
-	const modelName = (id: string) => PROTOTYPE_AGENT_MODELS.find(model => model.id === id)?.name ?? id;
+	const modelName = (id: string) => source.models!.choices.find(model => model.id === id)?.name ?? id;
 	const updateAgent = (id: string, patch: { model?: string; reasoning?: string }) => {
 		setDraft(current => ({ ...current, agents: current.agents.map(agent => agent.id === id ? { ...agent, ...patch } : agent) }));
 		setMessage("");
 	};
-	const modelOptions = PROTOTYPE_AGENT_MODELS.map(model => (
+	const modelOptions = source.models!.choices.map(model => (
 		<SelectItem key={model.id} value={model.id}>
 			{model.name} · {model.provider}
 		</SelectItem>
@@ -96,17 +93,17 @@ export function DevAgentModelSettings() {
 				</p>
 			</section>
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<Button variant="ghost" onClick={() => { setDraft(createPrototypeAgentModelSamples()); setMessage(""); }}>{zh ? "恢复演示配置" : "Restore demo configuration"}</Button>
+				{source.mode === "prototype" && source.models!.samples && <Button variant="ghost" onClick={() => { setDraft(source.models!.samples!()); setMessage(""); }}>{zh ? "恢复演示配置" : "Restore demo configuration"}</Button>}
 				<div className="flex items-center gap-2">
 					{dirty && <span className="text-ui-sm text-foreground-subtle">{zh ? "有未保存的更改" : "Unsaved changes"}</span>}
 					<Button variant="outline" disabled={!dirty} onClick={() => { setDraft(structuredClone(saved)); setMessage(""); }}>{zh ? "取消" : "Cancel"}</Button>
-					<Button disabled={!dirty} onClick={() => { savePrototypeAgentModels(draft); setSaved(structuredClone(draft)); setMessage(zh ? "演示服务配置已保存，当前服务共用" : "Demo service configuration saved for this service"); }}>{zh ? "保存配置" : "Save configuration"}</Button>
+					<Button disabled={!dirty} onClick={() => { source.models!.save(draft); setSaved(structuredClone(draft)); setMessage(zh ? "服务配置已保存" : "Service configuration saved"); }}>{zh ? "保存配置" : "Save configuration"}</Button>
 				</div>
 			</div>
 			<p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
-			<p className="text-ui-sm leading-6 text-foreground-subtle">
+			{source.mode === "prototype" && <p className="text-ui-sm leading-6 text-foreground-subtle">
 				{zh ? "原型演示：模型及思考强度为样例选项，未连接真实模型。保存仅在本页内存生效，刷新后恢复初始样例。" : "Prototype: models and reasoning levels are sample options with no live connection. Saved changes stay in page memory and reset on refresh."}
-			</p>
+			</p>}
 		</div>
 	);
 }

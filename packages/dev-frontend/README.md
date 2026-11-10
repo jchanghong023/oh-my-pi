@@ -1,8 +1,17 @@
-# Dev 阶段性前端原型
+# Dev 共享前端与独立预览
 
-当前是复制 WebGUI 后独立演示的桌面 UI/UX 原型，使用本目录组件、样式、原聊天输入框及仓库内样例。没有真实 OMP 服务、模型调用、Git／PR、SQLite 或多人同步。
+本目录维护同一套 Dev 页面、组件、样式和聊天输入框。独立预览注入仓库内样例，OMP 正式入口注入真实宿主数据与原生 RPC；两者共用 `app/DevApplication.tsx`，不复制界面。本轮只分离数据来源及启动装配，不新增原型功能或实现完整 Dev 业务后端。
 
 **最新 Dev 规则已由用户确认为权威需求，见[流程说明](../../docs-zh-CN/spec-driven-orchestration.md)与[OpenSpec 总提案](../../openspec/changes/refactor-dev-webgui-requirement-intake/proposal.md)。此前已更新需求文档；已对齐六个 Agent 设置、IR 验收收尾、仓库级开发准入／并行占用，以及正式入库与开发冻结时点演示；其余差异仍待更新。下述现有样例行为不等于最新需求已经实现。**
+
+## 数据来源与 OMP 挂载
+
+- `packages/ui/src/dev/types.ts`、`data-source.ts` 定义中立视图与注入合同；UI 不直接导入样例模块，纯显示派生由 `domain.ts` 统一维护。
+- `preview/main.tsx` 与 `preview/prototype-data-source.ts` 仅供独立预览，继续使用现有内存样例与启动命令，不访问 OMP、真实模型、Git 或业务数据库。
+- `runtime/main.tsx` 与 `runtime/omp-data-source.ts` 使用当前 Dev 能力地址内的 HTTP／WS／RPC，读取真实项目、Release、需求和材料，绑定真实工作区及原生会话；网络或读取失败不回退样例，也不自动重放操作。
+- 在仓库根执行 `bun run gen:dev` 生成供 `/dev`／`omp dev` 使用的正式内嵌资源；正式模块依赖图禁止加载预览适配器与 mock 模块，运行时不依赖 Vite。预览与正式入口共用 `vite.config.ts`，均以 Firefox 128 为目标。
+- 真实入口只开放当前宿主已提供的能力；新版需求评审、方案、并发／冻结、交付、IR 验收、自由会话及角色设置等完整业务仍须按权威规格实施。不把旧协议事实冒充新版业务成功，不新增旧流程界面；原 WebGUI 不变。
+
 
 ## 最新需求与当前原型差异
 
@@ -44,7 +53,7 @@ bun ./standalone.ts start
 
 ## 当前原型的界面与数据
 
-- `preview/main.tsx` 为独立入口，`preview/mock-services.ts` 提供内存适配，不启动真实服务。
+- `preview/main.tsx` 通过 `preview/prototype-data-source.ts` 注入内存数据；`preview/mock-services.ts` 为同一 UI 提供原型服务，不启动真实宿主。
 - `packages/ui/src/dev/mock/` 为纳入仓库的样例数据，提示词 Markdown 同样属于原型资源，本轮未改动。
 - 项目 `demo-aurora`、`demo-mobile` 及 `/demo/aurora-console` 等路径只作文字展示，不要求本机存在；业务动作通常只改变当前页面内存，刷新恢复。主题、折叠及草稿等浏览器偏好可保留，清除站点数据可完全重置。
 
@@ -197,4 +206,4 @@ bun ./standalone.ts start
 
 ## 交付检查
 
-此前已同步最新需求。设置页已补齐 IR 验收 Agent 配置；本轮再增加 IR 主界面入口、独立会话、材料和最终 PR 全流程演示，没有接入真实模型、配置落盘或验收执行。其余流程差异仍以上方表格为准，历史界面巡查不能证明最新业务目标已实现。
+现有原型保留六个角色设置及需求、开发、交付和 IR 验收演示；本轮只分离其数据源，并将同一 UI 接入现有 OMP 宿主。构建、局部测试及浏览器启动／交互验证不代表最新完整业务、真实提供者质量、SQLite、Git／PR 或多人协作已实现或通过验收。

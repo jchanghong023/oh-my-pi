@@ -1,24 +1,18 @@
-import { retryPrototypeMaterialRead, retryPrototypeSessionRead } from "./mock/recovery.js";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ComposerDraftHandoff } from "../v4/composer/composerDraftWorkspaceTransfer.js";
 import type { ConversationComposerSendOptions } from "../v4/ConversationComposer.js";
+import { useDevDataSource } from "./data-source.js";
 import type {
   DevAction, DevMaterialView, DevNativeSessionRef, DevSelection, DevWorkflowResult, DevWorkflowStage, DevWorkflowView,
-} from "./mock/types.js";
-import { createPrototypeFreeChat, readPrototypeFreeChat, setPrototypeFreeProject } from "./mock/free-chats.js";
-import { applyPrototypeAction, DEFAULT_SELECTION, getPrototypeWorkflow, prototypeWorkflowChanges, resolvePrototypeSession } from "./mock/workflow.js";
+} from "./types.js";
 
 export type { DevWorkflowView, DevWorkflowStage, DevMaterialView, DevSelection };
 export const DEV_STAGES: DevWorkflowStage[] = ["planning", "executing", "pr"];
-export const DEV_STAGE_LABELS = { planning: "开发计划", executing: "开发与验证", pr: "交付 PR" };
-export const devClientId = "frontend-prototype-tab";
+export const DEV_STAGE_LABELS = { solution: "方案", planning: "开发计划", executing: "开发与验证", pr: "交付 PR" };
 export function devQuery(selection: DevSelection): string {
   const query = new URLSearchParams();
   for (const key of ["projectId", "irId", "srId"] as const) if (selection[key]) query.set(key, selection[key]!);
   return query.toString();
-}
-export function nativeTarget(view: DevWorkflowView | undefined, selection: DevSelection): DevNativeSessionRef | undefined {
-  return view ? resolvePrototypeSession(view, selection) : undefined;
 }
 export interface DevFirstDiscussion {
   session: DevNativeSessionRef;
@@ -40,97 +34,114 @@ interface DevContextValue {
 }
 const DevContext = createContext<DevContextValue | null>(null);
 export const useDev = () => useContext(DevContext);
-/** Phase-one frontend prototype. All interactions below are in-memory presentation only.
- * Real OMP integration and actual business acceptance resume after prototype confirmation. */
+
+/** One UI state controller; the entry point owns data and execution authority. */
 export function DevProvider({ children }: { children: ReactNode }) {
-  const [selection, setSelection] = useState<DevSelection>({ ...DEFAULT_SELECTION });
+  const source = useDevDataSource();
+  const [selection, setSelection] = useState<DevSelection>(() => ({ ...source.initialSelection }));
   const selectionRef = useRef(selection);
-  const [view, setView] = useState<DevWorkflowView>(() => getPrototypeWorkflow(DEFAULT_SELECTION));
+  const [view, setView] = useState<DevWorkflowView>();
+  const viewRef = useRef(view);
   const [error, setError] = useState<string>();
-  const [releaseId, updateReleaseId] = useState(() => getPrototypeWorkflow(DEFAULT_SELECTION).releases[0]?.id ?? "");
+  const [pending, setPending] = useState(true);
+  const [releaseId, updateReleaseId] = useState("");
+  const requestRevision = useRef(0);
   const firstDiscussionRef = useRef<DevFirstDiscussion | undefined>(undefined);
   const claimed = useRef<DevFirstDiscussion | undefined>(undefined);
   const [firstDiscussion, setFirstDiscussion] = useState<DevFirstDiscussion>();
   const report = useCallback((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)), []);
+  const load = useCallback(async (target: DevSelection, projectChanged = false) => {
+    const revision = ++requestRevision.current;
+    setPending(true);
+    try {
+      const next = await source.readWorkflow(target);
+      if (revision !== requestRevision.current) return;
+      viewRef.current = next;
+      setView(next);
+      setError(next.error);
+      updateReleaseId(current => !projectChanged && next.releases.some(item => item.id === current) ? current : next.releases[0]?.id ?? "");
+    } catch (cause) {
+      if (revision === requestRevision.current) report(cause);
+    } finally {
+      if (revision === requestRevision.current) setPending(false);
+    }
+  }, [source, report]);
+  const refresh = useCallback(() => load(selectionRef.current), [load]);
   useEffect(() => {
-    const subscription = prototypeWorkflowChanges.event(() => setView(getPrototypeWorkflow(selectionRef.current)));
-    return () => subscription.dispose();
-  }, []);
+    void refresh();
+    const unsubscribe = source.subscribeWorkflow(() => { void refresh(); });
+    return () => { unsubscribe(); requestRevision.current += 1; };
+  }, [source, refresh]);
   const select = useCallback((value: DevSelection) => {
     const projectChanged = selectionRef.current.projectId !== value.projectId;
-    setPrototypeFreeProject(value.projectId);
+    source.selectProject(value.projectId);
     selectionRef.current = value;
     setSelection(value);
-    const next = getPrototypeWorkflow(value);
-    setView(next);
     setError(undefined);
-    updateReleaseId(current => !projectChanged && next.releases.some(item => item.id === current) ? current : next.releases[0]?.id ?? "");
+    void load(value, projectChanged);
     if (firstDiscussionRef.current && firstDiscussionRef.current.session.irId !== value.irId) {
       firstDiscussionRef.current = undefined;
       setFirstDiscussion(undefined);
     }
-  }, []);
+  }, [source, load]);
   const startFreeChat = useCallback((projectId?: string) => {
-    try { const meta = createPrototypeFreeChat(projectId ?? selectionRef.current.projectId!); select({ projectId: meta.projectId!, freeSessionId: meta.taskId }); }
-    catch (cause) { report(cause); }
-  }, [select, report]);
+    const targetProjectId = projectId ?? selectionRef.current.projectId;
+    if (!targetProjectId) { report(new Error("请先选择项目。")); return; }
+    void source.createFreeChat(targetProjectId).then(meta => select({ projectId: meta.projectId, freeSessionId: meta.taskId }), report);
+  }, [source, select, report]);
   const openFreeChat = useCallback((taskId: string, files = false) => {
-    const item = readPrototypeFreeChat(taskId); if (!item) { report(new Error("自由会话不存在或已移除。")); return; }
-    select({ projectId: item.meta.projectId!, freeSessionId: taskId, freeFiles: files });
-  }, [select, report]);
+    void source.readFreeChat(taskId).then(item => {
+      if (!item) { report(new Error("自由会话不存在或已移除。")); return; }
+      select({ projectId: item.projectId, freeSessionId: taskId, freeFiles: files });
+    }, report);
+  }, [source, select, report]);
   const setReleaseId = useCallback((id: string) => {
     const current = selectionRef.current;
-    const data = getPrototypeWorkflow(current);
-    if (!data.releases.some(item => item.id === id)) return;
+    const data = viewRef.current;
+    if (!data?.releases.some(item => item.id === id)) return;
     updateReleaseId(id);
     const selected = [...data.groups, ...data.drafts].find(item => item.id === current.irId);
     if (selected && selected.releaseId !== id) select({ projectId: current.projectId });
   }, [select]);
-  const refresh = useCallback(async () => { setView(getPrototypeWorkflow(selectionRef.current)); setError(undefined); }, []);
   const retryMaterial = useCallback(async (path: string) => {
-    const current = getPrototypeWorkflow(selectionRef.current);
-    if (!current.materials.some(item => item.path === path && item.irId === selectionRef.current.irId)) return false;
-    const recovered = retryPrototypeMaterialRead(path);
-    setView(getPrototypeWorkflow(selectionRef.current));
-    return recovered;
-  }, []);
+    try {
+      const recovered = await source.retryMaterial(path, selectionRef.current);
+      await refresh();
+      return recovered;
+    } catch (cause) { report(cause); return false; }
+  }, [source, refresh, report]);
   const retrySession = useCallback(async () => {
-    const target = selectionRef.current;
-    const current = getPrototypeWorkflow(target);
-    const sr = current.srs.find(item => item.id === target.srId && item.irId === target.irId);
-    const ref = sr?.sessions.find(item => item.phase === (target.stage ?? sr.stage) && item.round === (target.stageRound ?? sr.round));
-    if (ref) retryPrototypeSessionRead(ref.sessionId);
-    setView(getPrototypeWorkflow(target)); setError(undefined);
-  }, []);
+    try { await source.retrySession(selectionRef.current); await refresh(); }
+    catch (cause) { report(cause); }
+  }, [source, refresh, report]);
   const command = useCallback(async (value: DevAction) => {
     const target = selectionRef.current;
     try {
-      const result = applyPrototypeAction(value, target);
+      const result = await source.command(value, target, viewRef.current?.revision ?? 0);
+      if (result.status === "failed") throw new Error(result.error ?? result.receipt.error ?? "操作失败。");
+      // An operation completing in the background must not navigate a different view.
+      if (selectionRef.current !== target) return result;
       if (value.type === "createProposal") select({ projectId: result.projectId, irId: result.irId });
       else if (value.type === "beginProposalRevision") select({ projectId: result.projectId, irId: result.irId, discussionPhase: "requirements" });
       else if (value.type === "markRequirementsMerged") select({ projectId: target.projectId, irId: target.irId });
       else if (["submitProposalReview", "acceptProposal", "generateProposalSolution", "returnProposal"].includes(value.type)) select({ ...target, discussionPhase: undefined });
       else if (value.type === "deleteRequirement") select({ projectId: target.projectId });
       else if (["startSr", "approveStage", "backStage"].includes(value.type)) select({ projectId: target.projectId, irId: target.irId, srId: target.srId });
-      else {
-        const next = getPrototypeWorkflow(target);
-        setView(next);
-        updateReleaseId(current => next.releases.some(item => item.id === current) ? current : next.releases[0]?.id ?? "");
-      }
+      else await refresh();
       setError(undefined);
       return result;
     } catch (cause) { report(cause); return undefined; }
-  }, [report, select]);
+  }, [source, refresh, report, select]);
   const openFirstDiscussion = useCallback(async (handoff: ComposerDraftHandoff, text: string, options: ConversationComposerSendOptions) => {
     const target = selectionRef.current;
     const result = await command({ type: "createProposal", projectId: target.projectId, releaseId });
-    const session = result?.view && nativeTarget(result.view, selectionRef.current);
-    if (!session) throw new Error("前端样例讨论尚未选择。输入内容未发送。");
+    const session = result?.view && source.resolveSession(result.view, selectionRef.current);
+    if (!session) throw new Error("需求讨论会话尚未就绪。输入内容未发送。");
     const incoming = { session, handoff, text, options };
     firstDiscussionRef.current = incoming;
     claimed.current = undefined;
     setFirstDiscussion(incoming);
-  }, [command, releaseId]);
+  }, [source, command, releaseId]);
   const takeFirstDiscussion = useCallback((sessionId: string) => {
     const incoming = firstDiscussionRef.current;
     if (!incoming || claimed.current === incoming || incoming.session.sessionId !== sessionId) return;
@@ -143,7 +154,7 @@ export function DevProvider({ children }: { children: ReactNode }) {
     setFirstDiscussion(undefined);
     if (cause !== undefined) report(cause);
   }, [report]);
-  return <DevContext.Provider value={{ view, selection, session: nativeTarget(view, selection), pending: false,
+  return <DevContext.Provider value={{ view, selection, session: view && source.resolveSession(view, selection), pending,
     error, releaseId, setReleaseId, select, refresh, retryMaterial, retrySession, command, report, firstDiscussion, startFreeChat, openFreeChat,
     openFirstDiscussion, takeFirstDiscussion, finishFirstDiscussion }}>{children}</DevContext.Provider>;
 }

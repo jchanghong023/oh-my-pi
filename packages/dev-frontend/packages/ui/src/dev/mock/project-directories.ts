@@ -1,6 +1,6 @@
-import { getPrototypeEmployeeId } from "./employee.js";
+import { getEmployeeId } from "../identity.js";
 export function prototypeProjectDirectories() {
- const employeeId = getPrototypeEmployeeId();
+ const employeeId = getEmployeeId();
  return [
 	{ path: `/demo/${employeeId}/aurora-console`, name: "我的 Aurora 开发项目", git: true, branch: "main", repositoryRoot: "/demo/aurora-console" },
 	{ path: `/demo/${employeeId}/mobile-console`, name: "我的 Mobile 开发项目", git: true, branch: "main", repositoryRoot: "/demo/mobile-console" },

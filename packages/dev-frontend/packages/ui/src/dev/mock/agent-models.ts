@@ -1,18 +1,5 @@
+import type { DevAgentModel, DevAgentModelSettings, DevAgentRole, DevAgentModelBinding } from "../types.js";
 import type { ModelSelection } from "@zcode/shared";
-export interface PrototypeAgentModel {
-	id: string;
-	name: string;
-	nameEn: string;
-	description: string;
-	descriptionEn: string;
-	model: string;
-	reasoning: string;
-}
-
-export interface PrototypeAgentModelSettings {
-	defaultModel: string;
-	agents: PrototypeAgentModel[];
-}
 
 export const PROTOTYPE_AGENT_MODELS = [
 	{ id: "anthropic/claude-sonnet-4.5", name: "Claude Sonnet 4.5", providerId: "prototype-anthropic", provider: "Anthropic" },
@@ -22,7 +9,7 @@ export const PROTOTYPE_AGENT_MODELS = [
 	{ id: "opencode/beam-free", name: "Beam Free", providerId: "prototype-opencode-go", provider: "OpenCode Go" },
 ];
 
-const sampleSettings: PrototypeAgentModelSettings = {
+const sampleSettings: DevAgentModelSettings = {
 	defaultModel: "anthropic/claude-sonnet-4.5",
 	agents: [
 		{ id: "requirements", name: "业务需求 Agent", nameEn: "Requirements Agent", description: "澄清业务目标，整理 IR 与 SR。", descriptionEn: "Clarify business goals and organize requirements.", model: "openai/gpt-5.2", reasoning: "high" },
@@ -37,36 +24,24 @@ const sampleSettings: PrototypeAgentModelSettings = {
 // 模拟运行 Web 服务的 OMP 账号／profile 配置，不随浏览器工号切换。
 // 原型配置只存在于本页内存，离开设置后可读回；刷新页面恢复样例。
 let savedSettings = structuredClone(sampleSettings);
-export function readPrototypeAgentModels(): PrototypeAgentModelSettings {
+export function readPrototypeAgentModels(): DevAgentModelSettings {
 	return structuredClone(savedSettings);
 }
-export function savePrototypeAgentModels(settings: PrototypeAgentModelSettings): void {
+export function savePrototypeAgentModels(settings: DevAgentModelSettings): void {
 	savedSettings = structuredClone(settings);
  configurationRevision += 1;
  for (const listener of listeners) listener();
 }
-export function createPrototypeAgentModelSamples(): PrototypeAgentModelSettings {
+export function createPrototypeAgentModelSamples(): DevAgentModelSettings {
 	return structuredClone(sampleSettings);
 }
 
-export type PrototypeAgentRole = "requirements" | "requirements-review" | "solution" | "planning" | "execution" | "ir-acceptance";
-export interface PrototypeAgentModelBinding {
- role: PrototypeAgentRole;
- roleName: string;
- modelKey: string;
- modelName: string;
- providerId: string;
- modelId: string;
- reasoning: string;
- inherited: boolean;
- configurationRevision: number;
-}
 let configurationRevision = 1;
 const listeners = new Set<() => void>();
 export function prototypeAgentModelConfigurationRevision(): number { return configurationRevision; }
 export function subscribePrototypeAgentModels(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }
 /** 角色会话创建时复制的演示配置，不调用或验证真实模型。 */
-export function readPrototypeAgentModelBinding(role: PrototypeAgentRole): PrototypeAgentModelBinding {
+export function readPrototypeAgentModelBinding(role: DevAgentRole): DevAgentModelBinding {
  const agent = savedSettings.agents.find(item => item.id === role);
  if (!agent) throw new Error("此 Dev Agent 未配置。");
  const inherited = agent.model === "inherit";
@@ -75,11 +50,11 @@ export function readPrototypeAgentModelBinding(role: PrototypeAgentRole): Protot
  if (!model) throw new Error("请选择原型支持的演示模型。");
  return { role, roleName: agent.name, modelKey, modelName: model.name, providerId: model.providerId, modelId: model.name, reasoning: agent.reasoning, inherited, configurationRevision };
 }
-export function prototypeAgentModelBindingChanged(binding: PrototypeAgentModelBinding): boolean {
+export function prototypeAgentModelBindingChanged(binding: DevAgentModelBinding): boolean {
  const latest = readPrototypeAgentModelBinding(binding.role);
  return latest.modelKey !== binding.modelKey || latest.reasoning !== binding.reasoning || latest.inherited !== binding.inherited;
 }
 
-export function prototypeAgentModelSelection(binding: PrototypeAgentModelBinding): ModelSelection {
+export function prototypeAgentModelSelection(binding: DevAgentModelBinding): ModelSelection {
  return { providerId: binding.providerId, modelId: binding.modelId, ...(binding.reasoning !== "default" ? { options: { reasoningLevel: binding.reasoning } } : {}) };
 }

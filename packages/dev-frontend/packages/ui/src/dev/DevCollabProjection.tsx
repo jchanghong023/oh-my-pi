@@ -1,3 +1,4 @@
+import { useDevDataSource } from "./data-source.js";
 import { useState } from "react";
 import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
@@ -6,10 +7,10 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { MessageResponse } from "@/components/ai-elements/message.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { useDev } from "./DevContext.js";
-import { getPrototypePeers } from "./mock/collaboration.js";
 
 /** Reuses the existing collaboration dialog; no remote transport or extra chat surface. */
 export function DevCollabProjection() {
+ const source = useDevDataSource();
   const dev = useDev()!;
   const theme = useZCodeStore(state => state.theme);
   const [open, setOpen] = useState(false);
@@ -17,10 +18,11 @@ export function DevCollabProjection() {
   const [peerId, setPeerId] = useState("");
   const [materialPath, setMaterialPath] = useState("");
   const [tab, setTab] = useState<"materials" | "logs">("materials");
-  const peers = getPrototypePeers(dev.selection.projectId);
+  const peers = source.collaboration?.peers(dev.selection.projectId) ?? [];
   const visiblePeers = peers.filter(peer => `${peer.name} ${peer.role}`.includes(query));
   const peer = peers.find(item => item.id === peerId);
   const material = peer?.materials.find(item => item.path === materialPath) ?? peer?.materials[0];
+  if (source.mode !== "prototype" || !source.collaboration) return null;
   return <>
     <Button size="sm" variant="ghost" className="ml-auto shrink-0 gap-1.5" aria-label="协作成员与共享材料（样例）" data-testid="collab-open" onClick={() => setOpen(true)}>
       <Users className="size-3.5" />协作<span className="text-foreground-subtle">{peers.length}</span>

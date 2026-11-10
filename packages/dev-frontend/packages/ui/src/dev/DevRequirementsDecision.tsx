@@ -1,3 +1,4 @@
+import { useDevDataSource } from "./data-source.js";
 import { useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Label } from "@/components/ui/label.js";
@@ -6,8 +7,8 @@ import { MessageResponse } from "@/components/ai-elements/message.js";
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
 import { useDev } from "./DevContext.js";
-import { prototypeRequirementsDecisionCurrent, prototypeRequirementsReviewCurrent } from "./mock/requirements-review.js";
-import type { DevRequirementGroup, DevRequirementsDecision, DevReview } from "./mock/types.js";
+import { requirementsDecisionCurrent, requirementsReviewCurrent } from "./domain.js";
+import type { DevRequirementGroup, DevRequirementsDecision, DevReview } from "./types.js";
 
 const outcomeLabels: Record<DevRequirementsDecision["outcome"], string> = {
  supplement: "要求补充需求并重新评审",
@@ -27,11 +28,13 @@ function ReviewBinding({ review }: { review: DevReview }) {
 
 /** 人工记录独立保存；不改写 AI 报告，不自动评审，也不提供绕过门槛的确认。 */
 export function DevRequirementsDecision({ group, readOnly = false }: { group: DevRequirementGroup; readOnly?: boolean }) {
+ const source = useDevDataSource();
+ if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
  const dev = useDev()!;
  const [draft, setDraft] = useState<DecisionDraft>();
  const editable = !readOnly && ["draft", "solution-ready"].includes(group.status) && (group.proposalStage ?? "requirements") === "requirements";
- const current = prototypeRequirementsReviewCurrent(group);
- const draftCurrent = Boolean(draft && prototypeRequirementsDecisionCurrent(group, draft));
+ const current = requirementsReviewCurrent(group);
+ const draftCurrent = Boolean(draft && requirementsDecisionCurrent(group, draft));
  const decisions = group.requirementsDecisions ?? [];
  const begin = () => {
   if (!editable || !current || !group.review) return;
@@ -57,7 +60,7 @@ export function DevRequirementsDecision({ group, readOnly = false }: { group: De
    <div className="flex flex-wrap gap-2"><Button type="submit" size="sm" data-testid="requirements-decision-submit" disabled={!editable || !draftCurrent || dev.pending || !draft.opinion.trim() || !draft.result.trim()}>保存人工处理记录（演示）</Button><Button type="button" size="sm" variant="ghost" onClick={() => setDraft(undefined)}>取消记录</Button></div>
   </form>}
   {decisions.length === 0 ? <p className="text-ui-sm text-foreground-subtle" data-testid="requirements-decision-empty">尚无人工处理记录。</p> : <div className="space-y-2" data-testid="requirements-decision-history">{decisions.map((decision, index) => {
-   const decisionCurrent = prototypeRequirementsDecisionCurrent(group, decision);
+   const decisionCurrent = requirementsDecisionCurrent(group, decision);
    const superseded = decisions.slice(index + 1).some(item => item.reviewId === decision.reviewId && item.snapshotDigest === decision.snapshotDigest);
    return <details key={`${decision.reviewId}:${decision.createdAt}:${index}`} className="rounded-md border border-border p-3 text-ui-sm" data-testid="requirements-decision-record" open={decisionCurrent && !superseded}>
     <summary className="cursor-pointer"><span data-testid="requirements-decision-version">{decisionCurrent ? superseded ? "当前版本较早处理（已替代）" : "当前版本最新人工处理" : "历史处理（不属于当前评审版本）"}</span> · {outcomeLabels[decision.outcome]}</summary>

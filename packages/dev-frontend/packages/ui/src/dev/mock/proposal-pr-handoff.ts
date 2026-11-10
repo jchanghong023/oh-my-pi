@@ -1,47 +1,21 @@
-import { prototypeRequirementsReviewBlocker } from "./requirements-review.js";
-import { getPrototypeEmployeeId } from "./employee.js";
-import { hasCurrentProposalSolution } from "./proposal-flow.js";
+import type { DevPrHandoffScenario, DevPrHandoffFile, DevPrHandoff, DevPrHandoffInput } from "../types.js";
+import { requirementsReviewBlocker } from "../domain.js";
+import { getEmployeeId } from "../identity.js";
+import { hasCurrentProposalSolution } from "../domain.js";
 import { prototypeChangeId, prototypeChangeRoot } from "./proposal-storage.js";
 import { normalizePrototypeProjectPath, prototypeProjectDirectories } from "./project-directories.js";
 import { readPrototypeDevelopmentRoot, readPrototypeProjectSettings } from "./project-settings.js";
-import type { DevProject, DevRequirementGroup } from "./types.js";
+import type { DevProject, DevRequirementGroup } from "../types.js";
 
-export type PrototypePrHandoffScenario = "current" | "missing-directory" | "wrong-repository" | "change-conflict" | "stale-version";
-export interface PrototypePrHandoffFile {
- path: string;
- sourcePath: string;
- targetPath: string;
- version: string;
- digest: string;
-}
-export interface PrototypePrHandoff {
- ready: boolean;
- blockers: string[];
- employeeId: string;
- sourceDirectory: string;
- targetDirectory?: string;
- branch: string;
- targetBranch: string;
- changeRoot: string;
- files: PrototypePrHandoffFile[];
-}
-export interface PrototypePrHandoffInput {
- group: DevRequirementGroup;
- project?: DevProject;
- developmentRoot?: string;
- developmentDirectory?: { path: string; repositoryRoot?: string; git: boolean };
- employeeId: string;
- scenario?: PrototypePrHandoffScenario;
-}
 
 /** 只推导内存样例；不读取目录、执行 Git 或把样例检查当作真实仓库事实。 */
-export function derivePrototypeProposalPrHandoff(input: PrototypePrHandoffInput): PrototypePrHandoff {
+export function derivePrototypeProposalPrHandoff(input: DevPrHandoffInput): DevPrHandoff {
  const { group, project, employeeId, scenario = "current" } = input;
  const changeRoot = prototypeChangeRoot(group.id);
  const sourceDirectory = group.proposalLocation?.directory ?? "";
  const targetDirectory = scenario === "missing-directory" ? undefined : input.developmentRoot;
  const blockers: string[] = [];
- const reviewBlocker = prototypeRequirementsReviewBlocker(group);
+ const reviewBlocker = requirementsReviewBlocker(group);
  if (reviewBlocker) blockers.push(reviewBlocker);
  if (!project || project.id !== group.projectId) blockers.push("提案所属项目不可用，请重新选择项目。");
  if (!sourceDirectory) blockers.push("缺少提案固定临时工作区，不能确定交接来源。");
@@ -64,8 +38,8 @@ export function derivePrototypeProposalPrHandoff(input: PrototypePrHandoffInput)
   targetDirectory, branch: `dev/requirements/${prototypeChangeId(group.id)}`, targetBranch: project?.defaultBranch ?? "未确定", changeRoot, files };
 }
 
-export function readPrototypeProposalPrHandoff(group: DevRequirementGroup, scenario: PrototypePrHandoffScenario = "current"): PrototypePrHandoff {
- const employeeId = getPrototypeEmployeeId();
+export function readPrototypeProposalPrHandoff(group: DevRequirementGroup, scenario: DevPrHandoffScenario = "current"): DevPrHandoff {
+ const employeeId = getEmployeeId();
  const developmentRoot = readPrototypeDevelopmentRoot(group.projectId, employeeId);
  const project = readPrototypeProjectSettings().projects.find(item => item.id === group.projectId);
  const developmentDirectory = prototypeProjectDirectories().find(item => item.path === developmentRoot);

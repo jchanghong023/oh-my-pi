@@ -3,7 +3,7 @@ import { FileText, MessageSquare, Search } from "lucide-react";
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command.js";
 import { quickPickCommandClassName, quickPickDialogClassName, quickPickItemClassName, quickPickMetadataClassName } from "@/quickpick/quickPickStyles.js";
 import { HighlightedMatchText } from "@/quickpick/HighlightedMatchText.js";
-import { PROPOSAL_STATUS_LABELS } from "./mock/proposal-flow.js";
+import { PROPOSAL_STATUS_LABELS } from "./domain.js";
 import { useDev, DEV_STAGE_LABELS } from "./DevContext.js";
 
 /** 与 WebGUI 命令中心共用弹层、输入、键盘选择及动效，仅替换需求数据。 */

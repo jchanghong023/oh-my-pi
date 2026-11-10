@@ -13,46 +13,6 @@ import { persistProviderDisplayOrder } from "@/lib/providerDisplayOrderPersisten
 import { persistPersonalProviderDeletion } from "@/lib/providerPersonalPersistence.js";
 import { persistPersonalProvider } from "@/lib/providerPersonalSave.js";
 import type { ProviderOrderView } from "@/lib/modelProviderOrdering.js";
-import { createPrototypeModelSettingsView } from "@/dev/prototype-model-settings.js";
-
-/** In-memory presentation state, used only by the Dev prototype settings component. */
-export function usePrototypeModelProviders() {
-  const [view, setView] = useState(createPrototypeModelSettingsView);
-  const nextProviderIdRef = useRef(1);
-  const modelProviders = useMemo(
-    () => resolveProviderSettingsFormProviders({ view }),
-    [view],
-  );
-  const reset = useCallback(() => {
-    setView(createPrototypeModelSettingsView());
-  }, []);
-  const addPresentationProvider = useCallback((input: {
-    templateId?: string;
-    providerName?: string;
-  }): string => {
-    const template = view.providerTemplates.find((item) => item.templateId === input.templateId);
-    const providerId = `prototype-provider-${nextProviderIdRef.current++}`;
-    setView((current) => ({
-      ...current,
-      revision: current.revision + 1,
-      providerOrder: [...current.providerOrder, providerId],
-      providers: [...current.providers, {
-        providerId,
-        providerName: input.providerName || "OpenCode Go",
-        templateId: template?.templateId,
-        enabled: false,
-        executable: false,
-        personalConfig: {},
-        effectiveConfig: structuredClone(template?.config ?? { group: "standard-personal" }),
-        issues: [],
-        models: [],
-      }],
-    }));
-    return providerId;
-  }, [view.providerTemplates]);
-
-  return { modelProviders, providerTemplates: view.providerTemplates, reset, addPresentationProvider };
-}
 
 export function useModelProviders(target: {
   workspacePath: string;

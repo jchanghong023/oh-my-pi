@@ -1,3 +1,4 @@
+import { useDevDataSource } from "./data-source.js";
 import { useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog.js";
 import { AutomationsSection } from "@/settings/AutomationsSection.js";
@@ -8,7 +9,9 @@ interface AutomationSession { workspacePath: string; workspaceIdentity?: string;
 
 /** 复用原自动化页面，演示会话独立于 Dev 的 IR/SR，避免历史查看改变需求目标。 */
 export function DevAutomations({ workspacePath, workspaceIdentity }: { workspacePath: string; workspaceIdentity?: string }) {
-	const [session, setSession] = useState<AutomationSession | null>(null);
+	const source = useDevDataSource();
+ if (source.mode !== "prototype") return null;
+ const [session, setSession] = useState<AutomationSession | null>(null);
 	const scope = useMemo(() => ({ workspacePath: session?.workspacePath ?? workspacePath, workspaceIdentity: session ? session.workspaceIdentity : workspaceIdentity }), [session?.workspacePath, session?.workspaceIdentity, workspacePath, workspaceIdentity]);
 	return <div data-testid="dev-automations">
 		<p className="mb-4 text-ui-sm text-foreground-subtle">前端原型：自动化定义、运行历史和子任务均为内存样例；不会后台调度、调用模型、写入配置或推进 IR/SR。</p>

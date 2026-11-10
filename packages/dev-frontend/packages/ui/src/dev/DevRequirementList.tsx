@@ -1,5 +1,5 @@
 import { DevIrAcceptanceEntry } from "./DevIrAcceptance.js";
-import { IR_ACCEPTANCE_LABELS, irAcceptanceVersionBlocker } from "./mock/ir-acceptance.js";
+import { IR_ACCEPTANCE_LABELS, irAcceptanceVersionBlocker } from "./domain.js";
 import { useState } from "react";
 import { ProjectFolderIcon } from "@/project-sidebar/ProjectFolderIcon.js";
 import { ChevronDown, CircleDot, ListChevronsDownUp, ListChevronsUpDown, ListFilter, MessagesSquare, Search, X } from "lucide-react";
@@ -9,9 +9,9 @@ import { Badge } from "@/components/ui/badge.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
-import { PROPOSAL_STATUS_LABELS } from "./mock/proposal-flow.js";
+import { PROPOSAL_STATUS_LABELS } from "./domain.js";
 import { useDev, DEV_STAGE_LABELS } from "./DevContext.js";
-import type { DevRequirementGroup } from "./mock/types.js";
+import type { DevRequirementGroup } from "./types.js";
 
 export function DevRequirementList({ title, groups, proposal = false, expandedIrIds, onExpandedChange, onSearch, onNavigate, automationsActive, open, onOpenChange }: {
  open: boolean; onOpenChange(open: boolean): void;

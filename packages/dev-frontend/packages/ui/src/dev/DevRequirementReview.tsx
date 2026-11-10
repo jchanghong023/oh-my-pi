@@ -1,4 +1,5 @@
-import { prototypeRequirementsReviewBlocker, prototypeRequirementsReviewCurrent, prototypeRequirementsReviewInputs } from "./mock/requirements-review.js";
+import { useDevDataSource } from "./data-source.js";
+import { requirementsReviewBlocker, requirementsReviewCurrent, requirementsReviewInputs } from "./domain.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
 import { DevRequirementsDecision } from "./DevRequirementsDecision.js";
 import { useState } from "react";
@@ -9,17 +10,19 @@ import { Label } from "@/components/ui/label.js";
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { MessageResponse } from "@/components/ai-elements/message.js";
 import { useDev } from "./DevContext.js";
-import type { DevRequirementGroup } from "./mock/types.js";
+import type { DevRequirementGroup } from "./types.js";
 
 /** 复用需求工作流的评审投影；此组件不持有第二份评审或需求状态。 */
 export function DevRequirementReview({ group, readOnly = false }: { group: DevRequirementGroup; readOnly?: boolean }) {
+ const source = useDevDataSource();
+ if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
  const dev = useDev()!;
  const [open, setOpen] = useState(false);
  const [supplement, setSupplement] = useState("");
  const review = group.review;
- const current = prototypeRequirementsReviewCurrent(group);
- const blocker = prototypeRequirementsReviewBlocker(group);
- const hasInputs = Boolean(prototypeRequirementsReviewInputs(group));
+ const current = requirementsReviewCurrent(group);
+ const blocker = requirementsReviewBlocker(group);
+ const hasInputs = Boolean(requirementsReviewInputs(group));
  const editable = !readOnly && ["draft", "solution-ready"].includes(group.status);
  const canSupplement = editable && (group.proposalStage ?? "requirements") === "requirements";
  const target = { projectId: group.projectId, irId: group.id };

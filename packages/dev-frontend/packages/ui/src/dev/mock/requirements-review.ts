@@ -1,53 +1,10 @@
+import { requirementsReviewInputs } from "../domain.js";
 import { readPrototypeAgentModelBinding } from "./agent-models.js";
-import type { DevFileVersion, DevRequirementGroup, DevRequirementsDecision, DevReview } from "./types.js";
+import type { DevRequirementGroup, DevReview } from "../types.js";
 import initialReport from "./requirements-review-open.md?raw";
 import approvedReport from "./requirements-review-approved.md?raw";
 import updatedReport from "./requirements-review-updated.md?raw";
 
-
-/** 业务评审只绑定 proposal 与全部增量 spec，技术 design 的生成不让业务评审过期。 */
-export function prototypeRequirementsReviewInputs(group: DevRequirementGroup): DevFileVersion[] | undefined {
- const rows = group.snapshot?.srs ?? [];
- if (!rows.length || rows.length !== group.srIds.length || !group.srIds.every(id => rows.some(sr => sr.id === id))) return;
- const root = group.documentPath.replace(/proposal\.md$/, "");
- const required = new Set([group.documentPath, ...rows.map(sr => sr.documentPath)]);
- const files = group.files.filter(file => file.path === group.documentPath || (file.path.startsWith(`${root}specs/`) && file.path.endsWith("/spec.md")));
- if (files.length !== required.size || new Set(files.map(file => file.path)).size !== required.size || !files.every(file => required.has(file.path))) return;
- return files.map(({ path, sha256, size }) => ({ path, sha256, size })).sort((a, b) => a.path.localeCompare(b.path));
-}
-export function prototypeRequirementsReviewCurrent(group: DevRequirementGroup): boolean {
- const review = group.review;
- const files = prototypeRequirementsReviewInputs(group);
- if (!review || !files || !review.inputFiles || review.snapshotDigest !== group.snapshot?.digest || review.round !== (group.proposalRound ?? 1)) return false;
- return sameFileVersions(files, review.inputFiles);
-}
-
-function sameFileVersions(files: DevFileVersion[], recordedFiles: DevFileVersion[]): boolean {
- const recorded = [...recordedFiles].sort((a, b) => a.path.localeCompare(b.path));
- return files.length === recorded.length && files.every((file, index) => file.path === recorded[index]?.path && file.sha256 === recorded[index]?.sha256 && file.size === recorded[index]?.size);
-}
-
-/** 人工处理绑定原始 AI 评审和材料；不是替代 AI 结论的通过凭证。 */
-export function prototypeRequirementsDecisionCurrent(group: DevRequirementGroup, decision: Pick<DevRequirementsDecision, "reviewId" | "snapshotDigest" | "inputFiles">): boolean {
- const files = prototypeRequirementsReviewInputs(group);
- return Boolean(files && prototypeRequirementsReviewCurrent(group) && decision.reviewId === group.review?.id
-  && decision.snapshotDigest === group.snapshot?.digest && sameFileVersions(files, decision.inputFiles));
-}
-export function prototypeRequirementsReviewBlocker(group: DevRequirementGroup): string | undefined {
- const files = prototypeRequirementsReviewInputs(group);
- if (!files) return "请先补齐 IR 与至少一个 SR 的需求材料，再发起业务需求评审。";
- if (!group.review) return "尚未完成业务需求评审，请先检查当前需求版本。";
- if (!prototypeRequirementsReviewCurrent(group)) return "需求版本已变化，旧评审已失效，请重新评审。";
- // 同材料重跑只产生新评审，不能解除尚未处理的争议或代替实际补充材料。
- const decisions = group.requirementsDecisions ?? [];
- let decision: DevRequirementsDecision | undefined;
- for (let index = decisions.length - 1; index >= 0; index--) {
-  if (sameFileVersions(files, decisions[index]!.inputFiles)) { decision = decisions[index]; break; }
- }
- if (decision?.outcome === "defer") return "业务争议暂缓处理，尚未解决；请记录新的明确处理结果，或更新需求材料后重新评审。相同材料重评不能解除暂缓。";
- if (decision?.outcome === "supplement") return "人工处理要求补充需求并重评；请先更新需求材料，再显式发起业务需求评审。相同材料重评不能替代补充。";
- if (!group.review.passed || group.review.findings?.some(item => item.level === "blocking")) return "业务需求评审未通过，请补充阻断问题并重新评审；业务争议交人工处理。";
-}
 
 /** 静态评审演示；只返回投影数据，状态仍由共享 workflow action 写入。 */
 export function createPrototypeRequirementsReview(group: DevRequirementGroup, employeeId: string, seedPassed = false): DevReview {
@@ -56,7 +13,7 @@ export function createPrototypeRequirementsReview(group: DevRequirementGroup, em
  return {
   id: `sample-requirements-review:${group.projectId}:${group.id}:${round}:${group.revision}`,
   snapshotDigest: group.snapshot?.digest ?? "sample-missing-snapshot",
-  inputFiles: structuredClone(prototypeRequirementsReviewInputs(group) ?? []),
+  inputFiles: structuredClone(requirementsReviewInputs(group) ?? []),
   passed: supplemented,
   modelConfig: readPrototypeAgentModelBinding("requirements-review"),
   report: seedPassed ? approvedReport : supplemented ? updatedReport : initialReport,

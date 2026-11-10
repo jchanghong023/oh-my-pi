@@ -204,6 +204,8 @@ export interface DevWorkflowView {
 	drafts: DevRequirementGroup[];
 	srs: DevSystemRequirement[];
 	selected?: DevObjectRef;
+	/** Native working directory for the exact selected object, never a client-side path guess. */
+	workspace?: { path: string; identity: string };
 	materials: DevMaterialView[];
 	operations: DevOperationReceipt[];
 	sessions: DevNativeSessionRef[];

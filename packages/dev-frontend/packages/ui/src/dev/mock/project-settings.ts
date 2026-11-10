@@ -1,6 +1,6 @@
 import { prototypeRecoveryScenario } from "./recovery.js";
-import { getPrototypeEmployeeId } from "./employee.js";
-import type { DevProject } from "./types.js";
+import { getEmployeeId } from "../identity.js";
+import type { DevProject } from "../types.js";
 
 interface PrototypeProjectSettings { projects: DevProject[] }
 const createdAt = "2026-11-10T09:00:00.000Z";
@@ -25,9 +25,9 @@ export function addPrototypeProject(input: { id: string; name: string; root: str
 
 // 按工号和共享项目关联；不是服务账号的 OMP profile，也不修改共享 root。
 const developmentRoots = new Map<string, string>([["j00808874:demo-aurora", "/demo/j00808874/aurora-console"]]);
-export function readPrototypeDevelopmentRoot(projectId: string, employeeId = getPrototypeEmployeeId()): string | undefined {
+export function readPrototypeDevelopmentRoot(projectId: string, employeeId = getEmployeeId()): string | undefined {
 	return developmentRoots.get(`${employeeId}:${projectId}`);
 }
-export function savePrototypeDevelopmentRoot(projectId: string, root: string, employeeId = getPrototypeEmployeeId()): void {
+export function savePrototypeDevelopmentRoot(projectId: string, root: string, employeeId = getEmployeeId()): void {
 	developmentRoots.set(`${employeeId}:${projectId}`, root);
 }

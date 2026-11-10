@@ -1,5 +1,6 @@
+import { useDevDataSource } from "./data-source.js";
 import { DevWorkflowHelp } from "./DevWorkflowHelp.js";
-import { IR_ACCEPTANCE_LABELS, irAcceptanceVersionBlocker } from "./mock/ir-acceptance.js";
+import { IR_ACCEPTANCE_LABELS, irAcceptanceVersionBlocker } from "./domain.js";
 import { useEffect, useState, type ReactNode } from "react";
 import { CalendarClock, Plus, MessageCirclePlus } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
@@ -9,13 +10,12 @@ import { useZCodeStore } from "@/store/StoreProvider.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useDev, DEV_STAGE_LABELS } from "./DevContext.js";
-import { readPrototypeSidebarPreferences, updatePrototypeSidebarPreferences } from "./mock/navigation.js";
+import { readSidebarPreferences, updateSidebarPreferences } from "./navigation.js";
 import { DevProjectReleaseMenu } from "./DevProjectReleaseMenu.js";
 import { DevRequirementSearch } from "./DevRequirementSearch.js";
 import { useProjectDirectory } from "@/project-sidebar/ProjectDirectoryProvider.js";
-import { subscribePrototypeFreeChats } from "./mock/free-chats.js";
 import { DevRequirementList } from "./DevRequirementList.js";
-import { getPrototypeEmployeeId } from "./mock/employee.js";
+import { getEmployeeId } from "./identity.js";
 
 interface DevSidebarProps { projects: ReactNode; onNavigate?: () => void; onOpenAutomations?: () => void; automationsActive?: boolean }
 
@@ -25,10 +25,11 @@ export function DevSidebar(props: DevSidebarProps) {
 }
 
 function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automationsActive }: DevSidebarProps) {
+ const source = useDevDataSource();
 	const dev = useDev()!;
 	const { view, selection, select, command, pending, releaseId } = dev;
 	const scope = `${selection.projectId}:${releaseId}`;
-	const [preferences, setPreferences] = useState(() => readPrototypeSidebarPreferences(scope));
+	const [preferences, setPreferences] = useState(() => readSidebarPreferences(scope));
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [helpOpen, setHelpOpen] = useState(false);
 	const [searchScope, setSearchScope] = useState<"proposals" | "formal">("formal");
@@ -39,19 +40,19 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 	const selectedRelease = view?.releases.find(item => item.id === releaseId);
 	const allGroups = releaseId ? view?.groups.filter(group => group.releaseId === releaseId) ?? [] : [];
 	const allDrafts = releaseId ? view?.drafts.filter(group => group.releaseId === releaseId) ?? [] : [];
-	const employeeId = getPrototypeEmployeeId();
+	const employeeId = getEmployeeId();
 	const development = view?.repositoryDevelopment;
 	const activeSrs = development?.activeSrs ?? [];
 	const activeAcceptance = view?.groups.find(group => group.acceptance && group.acceptance.status !== "completed");
 	const idleOwner = !activeSrs.length && !activeAcceptance ? view?.groups.find(group => development?.owners.some(owner => owner.irId === group.id && owner.projectId === group.projectId)) : undefined;
 	const updatePreferences = (patch: Partial<typeof preferences>) => {
-		updatePrototypeSidebarPreferences(scope, patch);
+		updateSidebarPreferences(scope, patch);
 		setPreferences(current => ({ ...current, ...patch }));
 	};
 	useEffect(() => {
         // Root 切换会话会重挂侧栏；记录查看目标，避免重挂或刷新反复打开用户刚收起的 IR。
         const target = JSON.stringify([selection.irId ?? null, selection.srId ?? null]);
-        const saved = readPrototypeSidebarPreferences(scope);
+        const saved = readSidebarPreferences(scope);
         if (saved.lastViewedTarget === target) return;
         const group = [...(view?.groups ?? []), ...(view?.drafts ?? [])].find(item => item.id === selection.irId && item.releaseId === releaseId);
         const patch = group ? {
@@ -59,7 +60,7 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
             expandedIrIds: [...new Set([...saved.expandedIrIds, group.id])],
             ...(view?.drafts.some(item => item.id === group.id) ? { proposalSectionOpen: true } : { formalSectionOpen: true }),
         } : { lastViewedTarget: target };
-        updatePrototypeSidebarPreferences(scope, patch);
+        updateSidebarPreferences(scope, patch);
         setPreferences(current => ({ ...current, ...patch }));
     }, [selection.irId, selection.srId, scope, releaseId, view?.groups, view?.drafts]);
 
@@ -67,9 +68,9 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 	return (
 		<nav data-testid="dev-workflow-root" aria-label="Dev 需求导航" className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar text-ui-base">
 			<div className="shrink-0 space-y-3 px-2 pt-3 pb-4">
-				<Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project} data-testid="dev-new-free-chat" onClick={() => { dev.startFreeChat(); onNavigate?.(); }}><MessageCirclePlus className="size-4" />新建会话</Button>
-				<Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project || !releaseId} data-testid="new-requirement" onClick={() => { void command({ type: "createProposal", releaseId }); onNavigate?.(); }}><Plus className="size-4" />新建需求提案</Button>
-				{onOpenAutomations && <Button variant="ghost" size="lg" className={`w-full justify-start gap-2 ${automationsActive ? "bg-selected text-foreground" : ""}`} aria-pressed={automationsActive ?? false} data-testid="dev-automations-open" onClick={onOpenAutomations}><CalendarClock className="size-4" />自动化</Button>}
+				{source.capabilities.freeChat && <Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project} data-testid="dev-new-free-chat" onClick={() => { dev.startFreeChat(); onNavigate?.(); }}><MessageCirclePlus className="size-4" />新建会话</Button>}
+				{source.capabilities.workflowCommands.includes("createProposal") && <Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project || !releaseId} data-testid="new-requirement" onClick={() => { void command({ type: "createProposal", releaseId }); onNavigate?.(); }}><Plus className="size-4" />新建需求提案</Button>}
+				{source.mode === "prototype" && onOpenAutomations && <Button variant="ghost" size="lg" className={`w-full justify-start gap-2 ${automationsActive ? "bg-selected text-foreground" : ""}`} aria-pressed={automationsActive ?? false} data-testid="dev-automations-open" onClick={onOpenAutomations}><CalendarClock className="size-4" />自动化</Button>}
 			</div>
             {activeSrs.length > 0 && <section className="shrink-0 space-y-1 border-t border-border/50 px-2 py-3" aria-label="仓库正在开发">
               <div className="flex items-center justify-between px-2.5 text-ui-sm text-foreground-subtle"><span>正在开发</span><span data-testid="repository-sr-capacity">{activeSrs.length}/{development!.limit} 个 SR</span></div>
@@ -101,7 +102,7 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
               </Button>
             </section>}
 			<div className="min-h-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto border-t border-border/50 py-3">
-				<DevFreeProjectBoundary>{projects}</DevFreeProjectBoundary>
+				{source.capabilities.freeChat && <DevFreeProjectBoundary>{projects}</DevFreeProjectBoundary>}
 				<DevRequirementList open={preferences.formalSectionOpen} onOpenChange={formalSectionOpen => updatePreferences({ formalSectionOpen })} title="正式需求" groups={allGroups} expandedIrIds={preferences.expandedIrIds} onExpandedChange={expandedIrIds => updatePreferences({ expandedIrIds })} onSearch={() => { setSearchScope("formal"); setSearchOpen(true); }} onNavigate={onNavigate} automationsActive={automationsActive} />
 				<DevRequirementList open={preferences.proposalSectionOpen} onOpenChange={proposalSectionOpen => updatePreferences({ proposalSectionOpen })} title="需求提案" groups={allDrafts} proposal expandedIrIds={preferences.expandedIrIds} onExpandedChange={expandedIrIds => updatePreferences({ expandedIrIds })} onSearch={() => { setSearchScope("proposals"); setSearchOpen(true); }} onNavigate={onNavigate} automationsActive={automationsActive} />
 			</div>
@@ -113,8 +114,9 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 }
 
 function DevFreeProjectBoundary({ children }: { children: ReactNode }) {
+ const source = useDevDataSource();
  const { refresh } = useProjectDirectory();
  const dev = useDev()!;
- useEffect(() => { void refresh(); return subscribePrototypeFreeChats(() => { void refresh(); }); }, [refresh, dev.view?.projects.length]);
+ useEffect(() => { void refresh(); return source.freeChats?.subscribe(() => { void refresh(); }); }, [refresh, dev.view?.projects.length]);
  return <>{children}</>;
 }

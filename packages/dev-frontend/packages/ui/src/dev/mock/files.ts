@@ -1,7 +1,7 @@
 import { readPrototypeFreeWorkspaceRoots } from "./free-chats.js";
 import { prototypeDirectoryIssue } from "./recovery.js";
 import { getPrototypeWorkflow } from "./workflow.js";
-import { getPrototypeEmployeeId } from "./employee.js";
+import { getEmployeeId } from "../identity.js";
 import { prototypeProjectDirectories } from "./project-directories.js";
 import { readPrototypeDevelopmentRoot, readPrototypeProjectSettings } from "./project-settings.js";
 import type { IServiceAccessor } from "@zcode/services";
@@ -64,7 +64,7 @@ export function createPrototypeFileServices(): Pick<IServiceAccessor, "fileServi
   };
   const assertWritable = (root: string) => {
     const sr = recordedSrs().find(item => item.worktree?.path === rootFor(root));
-    if (sr && (sr.status !== "developing" || sr.developerEmployeeId !== getPrototypeEmployeeId())) throw new Error("此 SR 工作区仅供查看，不能修改其他同事或已完成 SR 的审查样例。");
+    if (sr && (sr.status !== "developing" || sr.developerEmployeeId !== getEmployeeId())) throw new Error("此 SR 工作区仅供查看，不能修改其他同事或已完成 SR 的审查样例。");
     if (readPrototypeProjectSettings().projects.some(project => project.root === rootFor(root))) throw new Error("共享项目目录只读，请使用自己的开发 worktree。");
   };
   const assertBranchMutable = (root: string) => {

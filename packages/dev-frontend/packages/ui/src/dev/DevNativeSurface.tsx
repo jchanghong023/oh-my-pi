@@ -1,9 +1,9 @@
-import { useCallback, useMemo, useRef, type ComponentType } from "react";
+import { useCallback, useRef, type ComponentType } from "react";
 import RawAnsi from "ansi-to-react";
 import type {
   DevNativeSurfaceTarget, DevNativeUiStateEvent, DevNativePredictionSnapshot, DevNativePredictionAction,
-} from "./mock/types.js";
-import { devClientId, useDev } from "./DevContext.js";
+} from "./types.js";
+import { useOptionalDevDataSource } from "./data-source.js";
 
 const NativeText = RawAnsi as unknown as ComponentType<{ children?: string; linkify?: boolean }>;
 
@@ -21,26 +21,21 @@ export function sameNativeSurfaceTarget(a: DevNativeSurfaceTarget, b: DevNativeS
   return nativeSurfaceKey(a) === nativeSurfaceKey(b);
 }
 
-/** The phase-one prototype preserves the original composer without native UI injection or I/O. */
-export function useDevNativeSurface(sessionId: string | null | undefined, workspaceIdentity?: string) {
-  const dev = useDev();
-  const session = dev?.session;
-  const target = useMemo<DevNativeSurfaceTarget | undefined>(() => {
-    if (workspaceIdentity?.startsWith("omp-dev-collab:") || !session || session.sessionId !== sessionId) return;
-    return { projectId: session.projectId, irId: session.irId, srId: session.srId,
-      sessionId: session.sessionId, phase: session.phase, round: session.round, clientId: devClientId };
-  }, [sessionId, workspaceIdentity, session?.projectId, session?.irId, session?.srId, session?.sessionId, session?.phase, session?.round]);
+/** Neither adapter currently advertises native-surface transport. The composer remains native-chat driven. */
+export function useDevNativeSurface(_sessionId: string | null | undefined, _workspaceIdentity?: string) {
+  const source = useOptionalDevDataSource();
   const editorRevision = useRef(0);
   const editorText = useRef("");
   const updateEditor = useCallback((text: string) => {
     if (text !== editorText.current) { editorText.current = text; editorRevision.current += 1; }
   }, []);
-  const predictionAction = useCallback(async (_action: DevNativePredictionAction): Promise<{ accepted: boolean }> => ({ accepted: false }), []);
-  const snapshot = useMemo<NativeSurfaceSnapshot | undefined>(() => target ? {
-    target, events: [], prediction: null, editorRevisionAtRead: editorRevision.current, editorReadyAtRead: true,
-  } : undefined, [target]);
-  return { target, key: target ? nativeSurfaceKey(target) : "", snapshot,
-    error: undefined, updateEditor, predictionAction, editorRevision };
+  const predictionAction = useCallback(async (_action: DevNativePredictionAction): Promise<{ accepted: boolean }> => {
+    throw new Error("当前数据源未接入原生预测操作。");
+  }, []);
+  return { target: undefined as DevNativeSurfaceTarget | undefined, key: "",
+    snapshot: undefined as NativeSurfaceSnapshot | undefined,
+    error: source?.capabilities.nativeSurface ? "当前 UI 未接入原生扩展界面传输。" : undefined,
+    updateEditor, predictionAction, editorRevision };
 }
 
 export function DevNativeSurface({ target, events, error, placement = "aboveEditor" }: {

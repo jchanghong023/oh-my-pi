@@ -1,10 +1,10 @@
 import { readSafeLocalStorage, writeSafeLocalStorage } from "@/lib/browserEnvironment.js";
-import { getPrototypeEmployeeId } from "./employee.js";
+import { getEmployeeId } from "./identity.js";
 
-export type PrototypeRequirementFilter = "all" | "developing" | "pending" | "completed";
+export type DevRequirementFilter = "all" | "developing" | "pending" | "completed";
 interface SidebarPreferences {
 	query: string;
-	filter: PrototypeRequirementFilter;
+	filter: DevRequirementFilter;
 	formalSectionOpen: boolean;
 	proposalSectionOpen: boolean;
 	expandedIrIds: string[];
@@ -12,8 +12,8 @@ interface SidebarPreferences {
 }
 // 仅保存当前浏览器的查看偏好，不是共享配置、执行授权或工作流状态。
 const preferences = new Map<string, SidebarPreferences>();
-function storageKey(key: string): string { return `dev-sidebar:${getPrototypeEmployeeId()}:${key}`; }
-export function readPrototypeSidebarPreferences(key: string): SidebarPreferences {
+function storageKey(key: string): string { return `dev-sidebar:${getEmployeeId()}:${key}`; }
+export function readSidebarPreferences(key: string): SidebarPreferences {
  const scoped = storageKey(key);
  const cached = preferences.get(scoped);
  if (cached) return structuredClone(cached);
@@ -31,8 +31,8 @@ export function readPrototypeSidebarPreferences(key: string): SidebarPreferences
  preferences.set(scoped, result);
  return structuredClone(result);
 }
-export function updatePrototypeSidebarPreferences(key: string, patch: Partial<SidebarPreferences>): void {
- const next = { ...readPrototypeSidebarPreferences(key), ...patch };
+export function updateSidebarPreferences(key: string, patch: Partial<SidebarPreferences>): void {
+ const next = { ...readSidebarPreferences(key), ...patch };
  preferences.set(storageKey(key), next);
  const { formalSectionOpen, proposalSectionOpen, expandedIrIds, lastViewedTarget } = next;
  writeSafeLocalStorage(storageKey(key), JSON.stringify({ formalSectionOpen, proposalSectionOpen, expandedIrIds, lastViewedTarget }));

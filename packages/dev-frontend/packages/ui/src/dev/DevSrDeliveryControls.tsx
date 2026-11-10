@@ -1,3 +1,4 @@
+import { useDevDataSource } from "./data-source.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
 import { useState } from "react";
 import { Button } from "@/components/ui/button.js";
@@ -5,10 +6,12 @@ import { Input } from "@/components/ui/input.js";
 import { Checkbox } from "@/components/ui/checkbox.js";
 import { Label } from "@/components/ui/label.js";
 import { useDev } from "./DevContext.js";
-import { prototypeSrDefaultCommit, prototypeSrDeliveryBlocker, prototypeSrDeliveryInputBlocker, SR_DELIVERY_LABELS } from "./mock/sr-delivery.js";
-import type { DevSystemRequirement } from "./mock/types.js";
+import { srDefaultCommit, srDeliveryBlocker, srDeliveryInputBlocker, SR_DELIVERY_LABELS } from "./domain.js";
+import type { DevSystemRequirement } from "./types.js";
 
 export function DevSrDeliveryControls({ sr }: { sr: DevSystemRequirement }) {
+ const source = useDevDataSource();
+ if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
   const dev = useDev()!;
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState(sr.codePr?.url ?? "");
@@ -16,12 +19,12 @@ export function DevSrDeliveryControls({ sr }: { sr: DevSystemRequirement }) {
   const [note, setNote] = useState("");
   const [scopeUnchanged, setScopeUnchanged] = useState(false);
   const delivery = sr.delivery;
-  const inputBlocker = prototypeSrDeliveryInputBlocker(dev.view!, sr);
-  const blocker = prototypeSrDeliveryBlocker(dev.view!, sr);
+  const inputBlocker = srDeliveryInputBlocker(dev.view!, sr);
+  const blocker = srDeliveryBlocker(dev.view!, sr);
   const conflict = delivery?.status === "git-conflict" || delivery?.status === "requirement-conflict";
   const needsHuman = conflict && !delivery?.humanResolution;
-  const latest = prototypeSrDefaultCommit(dev.view!, sr.projectId);
-  const canVerify = delivery?.status === "prepared" && delivery.defaultCommit === latest && !prototypeSrDeliveryBlocker(dev.view!, sr, false);
+  const latest = srDefaultCommit(dev.view!, sr.projectId);
+  const canVerify = delivery?.status === "prepared" && delivery.defaultCommit === latest && !srDeliveryBlocker(dev.view!, sr, false);
   const currentPr = Boolean(sr.codePr && delivery?.prCandidate === delivery?.candidate);
   const prepare = async () => {
     const result = await dev.command({ type: "prepareSrDelivery" });

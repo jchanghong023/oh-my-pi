@@ -1,14 +1,16 @@
+import { useDevDataSource } from "./data-source.js";
 import { DevIrFinalPrControls } from "./DevIrFinalPrControls.js";
 import { ArrowLeft, Check, ClipboardCheck } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { useDev } from "./DevContext.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
-import { IR_ACCEPTANCE_LABELS, irAcceptanceBlocker, irAcceptanceVersionBlocker, irAcceptanceReportBlocker } from "./mock/ir-acceptance.js";
-import { getPrototypeEmployeeId } from "./mock/employee.js";
-import { readPrototypeDevelopmentRoot } from "./mock/project-settings.js";
-import type { DevRequirementGroup } from "./mock/types.js";
+import { IR_ACCEPTANCE_LABELS, irAcceptanceBlocker, irAcceptanceVersionBlocker, irAcceptanceReportBlocker } from "./domain.js";
+import { getEmployeeId } from "./identity.js";
+import type { DevRequirementGroup } from "./types.js";
 
 export function DevIrAcceptanceEntry({ group, compact = false, onNavigate }: { group: DevRequirementGroup; compact?: boolean; onNavigate?: () => void }) {
+  const source = useDevDataSource();
+  if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
   const dev = useDev()!;
   const blocker = dev.view ? irAcceptanceBlocker(dev.view, group) : "正在读取 SR 状态。";
   const title = group.acceptance ? `IR 验收 · ${dev.view && irAcceptanceVersionBlocker(dev.view, group) ? "待重新验收" : IR_ACCEPTANCE_LABELS[group.acceptance.status]}` : blocker ?? "全部 SR 已合并，可进入 IR 整体验收。";
@@ -22,12 +24,14 @@ export function DevIrAcceptanceEntry({ group, compact = false, onNavigate }: { g
 }
 
 export function DevIrAcceptanceHeader({ group }: { group: DevRequirementGroup }) {
+ const source = useDevDataSource();
+  if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
   const dev = useDev()!;
   const acceptance = group.acceptance;
   const blocker = irAcceptanceBlocker(dev.view!, group);
   const versionIssue = irAcceptanceVersionBlocker(dev.view!, group);
   const reportIssue = irAcceptanceReportBlocker(dev.view!, group);
-  const owns = acceptance?.employeeId === getPrototypeEmployeeId();
+  const owns = acceptance?.employeeId === getEmployeeId();
   const phase = acceptance?.status === "completed" ? 2 : acceptance?.status === "pr-ready" || acceptance?.status === "pr-submitted" ? 1 : 0;
   const ready = acceptance?.status === "passed" && !reportIssue;
   return <header className="space-y-3 border-b border-border bg-background px-4 py-3" data-testid="ir-acceptance-header" data-status={acceptance?.status ?? "ready"} data-stale={Boolean(versionIssue)}>
@@ -43,7 +47,7 @@ export function DevIrAcceptanceHeader({ group }: { group: DevRequirementGroup })
     <DevAgentModelSummary binding={acceptance?.session.modelConfig} />
     {acceptance && <p className="text-ui-sm text-foreground-subtle">验收开发人：{acceptance.employeeId} · 候选：{acceptance.candidate}{!owns ? " · 当前仅查看" : ""}</p>}
     <div className="flex flex-wrap gap-2">
-      {!acceptance && <Button size="sm" data-testid="ir-acceptance-start" disabled={!!blocker || !readPrototypeDevelopmentRoot(group.projectId)} onClick={() => void dev.command({ type: "startIrAcceptance" })}>开始 IR 验收（演示）</Button>}
+      {!acceptance && <Button size="sm" data-testid="ir-acceptance-start" disabled={!!blocker || !source.projects?.readDevelopmentRoot(group.projectId)} onClick={() => void dev.command({ type: "startIrAcceptance" })}>开始 IR 验收（演示）</Button>}
       {owns && !versionIssue && acceptance?.status === "reviewing" && <>
         <Button size="sm" data-testid="ir-acceptance-find-issues" onClick={() => void dev.command({ type: "generateIrAcceptanceReport", outcome: "issues" })}>生成验收报告（演示）</Button>
         <Button size="sm" variant="outline" data-testid="ir-acceptance-pass" onClick={() => void dev.command({ type: "generateIrAcceptanceReport", outcome: "passed" })}>{acceptance.hasFixes ? "复验通过（演示）" : "演示无需修复通过"}</Button>
@@ -53,7 +57,7 @@ export function DevIrAcceptanceHeader({ group }: { group: DevRequirementGroup })
     </div>
     {versionIssue && <div className="space-y-2" data-testid="ir-acceptance-stale"><p role="status" className="text-ui-sm text-foreground-subtle">{versionIssue}</p>{owns && <Button size="sm" data-testid="ir-acceptance-restart" onClick={() => void dev.command({ type: "restartIrAcceptance" })}>重新对齐并验收（演示）</Button>}</div>}
     {!versionIssue && reportIssue && acceptance?.status === "passed" && <div className="space-y-2"><p className="text-ui-sm text-foreground-subtle">{reportIssue}</p>{owns && <Button size="sm" onClick={() => void dev.command({ type: "restartIrAcceptance" })}>重新验收（演示）</Button>}</div>}
-    {!acceptance && <p role="status" className="text-ui-sm text-foreground-subtle">{blocker ?? (!readPrototypeDevelopmentRoot(group.projectId) ? "请先在设置中添加我的开发项目。" : "全部 SR 已合并核验（样例）；明确开始后创建独立 IR 验收会话及修复／归档工作区。")}</p>}
+    {!acceptance && <p role="status" className="text-ui-sm text-foreground-subtle">{blocker ?? (!source.projects?.readDevelopmentRoot(group.projectId) ? "请先在设置中添加我的开发项目。" : "全部 SR 已合并核验（样例）；明确开始后创建独立 IR 验收会话及修复／归档工作区。")}</p>}
     {acceptance?.status === "issues" && <p role="status" className="text-ui-sm text-foreground-subtle">发现需求范围内的实现问题，请修复并重新整体验收；业务或方案变化须暂停并重新提案。</p>}
     {owns && acceptance && ["pr-ready", "pr-submitted"].includes(acceptance.status) && <DevIrFinalPrControls key={`${group.id}:${acceptance.candidate}`} group={group} />}
     {acceptance?.status === "completed" && <p role="status" className="text-ui-sm text-foreground-subtle">最终 PR 已合并并核验（样例），IR 已完成，仓库占用已释放。验收历史只读，未删除 worktree 或分支。</p>}

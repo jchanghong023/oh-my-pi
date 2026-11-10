@@ -1,8 +1,9 @@
+import { useOptionalDevDataSource } from "@/dev/data-source.js";
 import { DevIrAcceptanceWelcome } from "@/dev/DevIrAcceptance.js";
 import { DevEmptyState } from "@/dev/DevEmptyState.js";
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useDev } from "@/dev/DevContext.js";
-import { prototypeConversationReadOnlyReason } from "@/dev/mock/conversation-access.js";
+import { conversationReadOnlyReason } from "@/dev/domain.js";
 import { DevAutomations } from "@/dev/DevAutomations.js";
 import { DevSidebar, DevStageHeader, DevReadonlyOverview } from "@/dev/DevWorkbench.js";
 import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
@@ -327,10 +328,11 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   taskFindDialogProps,
 }: WorkspaceShellLayoutProps) {
   const dev = useDev();
+  const devSource = useOptionalDevDataSource();
   const devSr = dev?.view?.srs.find(item => item.id === dev.selection.srId);
   const devGroup = [...(dev?.view?.groups ?? []), ...(dev?.view?.drafts ?? [])].find(item => item.id === dev?.selection.irId);
   const devProposalHistory = !!dev?.view?.drafts.some(item => item.id === dev.selection.irId) && !!dev?.selection.discussionPhase && dev.selection.discussionPhase !== (devGroup?.proposalStage ?? "requirements");
-  const devOwnershipReadOnlyReason = prototypeConversationReadOnlyReason(dev?.view, dev?.selection ?? {});
+  const devOwnershipReadOnlyReason = devSource?.mode === "prototype" ? conversationReadOnlyReason(dev?.view, dev?.selection ?? {}) : undefined;
   const devFrozen = !!dev && !dev.selection.irAcceptance && !dev.selection.srId && Boolean(devGroup?.freeze);
   const devEmpty = Boolean(dev && !dev.selection.freeSessionId && (!dev.selection.irId || (!dev.session && devSr?.status !== "pending")));
   const devReadOnly = !!dev && !!dev.selection.srId && !dev.session && !dev.view?.drafts.some(item => item.id === dev.selection.irId);
@@ -1753,7 +1755,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       onOpenBrowserUrl={handleOpenBrowserUrl}
       fileTreeOpenRequest={fileTreeOpenRequest}
       onCreateTask={
-        dev ? request => { dev.startFreeChat(request?.projectId ?? undefined); showChatMainView(); mobile?.navigateToChat(); } : mobile
+        dev ? request => { dev.startFreeChat(typeof request === "object" ? request?.projectId ?? undefined : undefined); showChatMainView(); mobile?.navigateToChat(); } : mobile
           ? (request) => {
               handleCreateTaskInChat(request);
               if (!workspaceReadOnlyReason) mobile.navigateToChat();
@@ -1802,7 +1804,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   );
 
   const renderWorkspaceSidebar = (mobile?: { navigateToChat(): void }) => dev ? (
-    <DevSidebar projects={renderNativeProjectSidebar(mobile, true)} onNavigate={mobile?.navigateToChat ?? showChatMainView} onOpenAutomations={() => { handleOpenAutomations(); mobile?.navigateToChat(); }} automationsActive={workspaceMainView === "automations"} />
+    <DevSidebar projects={renderNativeProjectSidebar(mobile, true)} onNavigate={mobile?.navigateToChat ?? showChatMainView} onOpenAutomations={devSource?.mode === "prototype" ? () => { handleOpenAutomations(); mobile?.navigateToChat(); } : undefined} automationsActive={workspaceMainView === "automations"} />
   ) : renderNativeProjectSidebar(mobile);
 
   // Reuse the responsive phone layout for browsers connected directly to local OMP.
@@ -1960,7 +1962,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                   onRefreshGit={handleRefreshGit}
                   onOpenGitReview={handleOpenGitReview}
                   onOpenBrowserUrl={handleOpenBrowserUrl}
-                  onOpenAutomationsMain={handleOpenAutomations}
+                  onOpenAutomationsMain={!dev || devSource?.mode === "prototype" ? handleOpenAutomations : undefined}
                   onOpenCodeViewer={handleOpenCodeViewer}
                   onAutoOpenAssistantPptx={isDesktop ? handleAutoOpenAssistantPptx : undefined}
                   onOpenFileLink={handleOpenMarkdownFileLink}
@@ -2284,7 +2286,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                                 onOpenGitReview={handleOpenGitReview}
                                 onPaneActiveSessionChange={handlePaneActiveSessionChange}
                                 onOpenBrowserUrl={handleOpenBrowserUrl}
-                                onOpenAutomationsMain={handleOpenAutomations}
+                                onOpenAutomationsMain={!dev || devSource?.mode === "prototype" ? handleOpenAutomations : undefined}
                                 onOpenCodeViewer={handleOpenCodeViewer}
                                 onAutoOpenAssistantPptx={
                                   isDesktop ? handleAutoOpenAssistantPptx : undefined

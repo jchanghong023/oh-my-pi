@@ -1,23 +1,22 @@
-import type { PrototypeAgentModelBinding } from "./agent-models.js";
 /** Phase-one frontend presentation contracts. No OMP runtime dependency or execution authority. */
 export const DEV_WORKFLOW_VERSION = 1 as const;
 export const DEV_WORKFLOW_STAGES = ["planning", "executing", "pr"] as const;
-export type DevWorkflowStage = (typeof DEV_WORKFLOW_STAGES)[number];
-export type DevRequirementStatus = "draft" | "solution-ready" | "requirements-pr" | "formal" | "frozen" | "deleted";
+export type DevWorkflowStage = (typeof DEV_WORKFLOW_STAGES)[number] | "solution";
+export type DevRequirementStatus = "draft" | "solution-ready" | "requirements-pr" | "formal" | "frozen" | "deleted" | "reviewing" | "confirmed";
 export interface DevObjectRef { projectId: string; irId: string; srId?: string }
 export interface DevNativeSessionRef extends DevObjectRef {
   sessionId: string; sessionFile: string; role: "requirements" | "solution" | "reviewer" | "ir-acceptance" | DevWorkflowStage;
-  phase: "requirements" | "solution" | "ir-acceptance" | DevWorkflowStage; round: number; modelConfig?: PrototypeAgentModelBinding;
+  phase: "requirements" | "solution" | "ir-acceptance" | DevWorkflowStage; round: number; modelConfig?: DevAgentModelBinding;
 }
 export interface DevFileVersion { path: string; sha256: string; size: number }
 export interface DevProject {
-  id: string; name: string; storageName: string; root: string; commonDir: string; revision: number;
+  id: string; name: string; storageName?: string; root: string; commonDir: string; revision: number;
   createdAt: string; updatedAt: string; defaultBranch: string; remote?: string; repositoryId: string;
 }
 export interface DevRelease { id: string; projectId: string; title: string; createdAt: string }
 export interface DevWorktree { path: string; branch: string; baseCommit: string }
 export interface DevReview {
-  id: string; snapshotDigest: string; passed: boolean; report: string; modelConfig?: PrototypeAgentModelBinding;
+  id: string; snapshotDigest: string; passed: boolean; report: string; modelConfig?: DevAgentModelBinding;
   inputFiles?: DevFileVersion[];
   requestedBy?: string; round?: number; findings?: { id: string; level: "blocking" | "suggestion"; message: string; documentPath: string }[];
   reviewer: DevNativeSessionRef | { sessionId: string; role: "reviewer"; sourceProjectId: string; imported: true }; createdAt: string;
@@ -47,7 +46,7 @@ export interface DevProposalRevision {
 export interface DevRequirementDeletion { version: 1; operationId: string; deletedAt: string; manualCloseNeeded: boolean; requirementsPrUrl?: string }
 export interface DevStageApproval { stage: DevWorkflowStage; round: number; operationId: string; digest: string; files: DevFileVersion[]; approvedAt: string; valid?: boolean }
 export interface DevStageMaterial extends DevFileVersion {
-  stage: DevWorkflowStage; kind: "plan" | "completion" | "ut" | "st" | "delivery"; round: number; valid: boolean;
+  stage: DevWorkflowStage; kind: "solution" | "plan" | "completion" | "ut" | "st" | "delivery"; round: number; valid: boolean;
 }
 export interface DevSrDelivery {
   candidate: string; round: number; defaultCommit: string; inputDigest: string;
@@ -59,7 +58,7 @@ export interface DevSrDelivery {
 }
 export interface DevSystemRequirement {
   id: string; projectId: string; irId: string; title: string; documentPath: string;
-  status: "pending" | "developing" | "completed"; stage?: DevWorkflowStage; round: number;
+  status: "pending" | "developing" | "completed"; stage?: DevWorkflowStage | "solution"; round: number;
   delivery?: DevSrDelivery; deliveryHistory?: DevSrDelivery[];
   dependencySrIds?: string[];
   developerEmployeeId?: string; startedAt?: string; developmentRoot?: string;
@@ -80,7 +79,7 @@ export interface DevIrAcceptance {
 }
 export interface DevRequirementGroup {
   id: string; projectId: string; releaseId: string; title: string; documentPath: string;
-  origin: "local" | "browser"; status: DevRequirementStatus; revision: number; srIds: string[];
+  origin: "local" | "browser" | "import"; status: DevRequirementStatus; revision: number; srIds: string[];
   files: DevFileVersion[]; evidenceFiles?: DevFileVersion[]; retiredFiles?: DevFileVersion[]; worktree?: DevWorktree;
   sessions: DevNativeSessionRef[]; snapshot?: DevRequirementSnapshot; confirmation?: DevConfirmation; review?: DevReview; reviewHistory?: DevReview[];
   requirementsPr?: DevPrFact; merge?: DevMergeFact; createdAt: string;
@@ -122,6 +121,7 @@ export interface DevWorkflowView {
   materials: DevMaterialView[]; operations: DevOperationReceipt[]; sessions: DevNativeSessionRef[];
   repositoryDevelopment?: DevRepositoryDevelopment;
   repositoryHeads?: Record<string, string>;
+  workspace?: { path: string; identity: string };
   running: DevNativeSessionRef[]; changes?: DevChangedFile[]; error?: string;
 }
 export interface DevCommandBase { operationId: string; expectedRevision: number; projectId?: string; irId?: string; srId?: string }
@@ -191,8 +191,78 @@ export interface DevNativePredictionSnapshot { target: DevNativeSurfaceTarget; g
 export type DevNativePredictionAction =
   | { type: "cancel" } | { type: "draft"; text: string } | { type: "shown"; generation: number }
   | { type: "accepted"; generation: number; rank: number };
-export interface PrototypePeer {
+export interface DevPeer {
   id: string; name: string; role: string; status: string; projectId: string;
   materials: { title: string; path: string; content: string }[];
   logs: { id: string; time: string; text: string }[];
+}
+
+export interface DevAgentModel {
+	id: string;
+	name: string;
+	nameEn: string;
+	description: string;
+	descriptionEn: string;
+	model: string;
+	reasoning: string;
+}
+
+export interface DevAgentModelSettings {
+	defaultModel: string;
+	agents: DevAgentModel[];
+}
+
+export type DevAgentRole = "requirements" | "requirements-review" | "solution" | "planning" | "execution" | "ir-acceptance";
+export interface DevAgentModelBinding {
+ role: DevAgentRole;
+ roleName: string;
+ modelKey: string;
+ modelName: string;
+ providerId: string;
+ modelId: string;
+ reasoning: string;
+ inherited: boolean;
+ configurationRevision: number;
+}
+
+export interface DevSkillDesignDraft {
+	name: string;
+	goal: string; when: string; inputs: string; outputs: string;
+	boundaries: string; references: string; example: string; notes: string[];
+}
+
+export type DevPrHandoffScenario = "current" | "missing-directory" | "wrong-repository" | "change-conflict" | "stale-version";
+export interface DevPrHandoffFile {
+ path: string;
+ sourcePath: string;
+ targetPath: string;
+ version: string;
+ digest: string;
+}
+export interface DevPrHandoff {
+ ready: boolean;
+ blockers: string[];
+ employeeId: string;
+ sourceDirectory: string;
+ targetDirectory?: string;
+ branch: string;
+ targetBranch: string;
+ changeRoot: string;
+ files: DevPrHandoffFile[];
+}
+export interface DevPrHandoffInput {
+ group: DevRequirementGroup;
+ project?: DevProject;
+ developmentRoot?: string;
+ developmentDirectory?: { path: string; repositoryRoot?: string; git: boolean };
+ employeeId: string;
+ scenario?: DevPrHandoffScenario;
+}
+
+export interface DevWorkspace {
+ path?: string;
+ identity: string;
+ kind: "free" | "proposal" | "development" | "reference" | "unavailable";
+ error?: string;
+ blockedPath?: string;
 }

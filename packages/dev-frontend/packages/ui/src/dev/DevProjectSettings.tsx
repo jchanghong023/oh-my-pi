@@ -1,4 +1,6 @@
-import { useState } from "react";
+import type { DevWorkflowView } from "./types.js";
+import { useDevDataSource } from "./data-source.js";
+import { useEffect, useState } from "react";
 import { Folder, FolderGit2, FolderOpen, GitBranch, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
@@ -7,15 +9,13 @@ import { Badge } from "@/components/ui/badge.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { SettingsGroupCard, SettingsBadge } from "@/settings/SettingsPageParts.js";
-import { readPrototypeDevelopmentRoot } from "./mock/project-settings.js";
-import { getPrototypeEmployeeId } from "./mock/employee.js";
+import { getEmployeeId } from "./identity.js";
 import { useDev } from "./DevContext.js";
-import { getPrototypeWorkflow } from "./mock/workflow.js";
-import { prototypeProjectDirectories, checkPrototypeProjectDirectory, checkPrototypeDevelopmentDirectory } from "./mock/project-directories.js";
 
 export function DevProjectSettings() {
+ const source = useDevDataSource();
 	const dev = useDev();
-	const employeeId = getPrototypeEmployeeId();
+	const employeeId = getEmployeeId();
 	const [projectOpen, setProjectOpen] = useState(false);
 	const [browserOpen, setBrowserOpen] = useState(false);
 	const [browsePath, setBrowsePath] = useState("");
@@ -30,9 +30,14 @@ export function DevProjectSettings() {
 	const [developmentRoot, setDevelopmentRoot] = useState("");
 	const [developmentError, setDevelopmentError] = useState("");
 	const [message, setMessage] = useState("");
+	const [projectViews, setProjectViews] = useState<{ project: DevWorkflowView["projects"][number]; view: DevWorkflowView }[]>([]);
+	useEffect(() => {
+	 let active = true;
+	 Promise.all((dev?.view?.projects ?? []).map(async project => ({ project, view: await source.readWorkflow({ projectId: project.id }) }))).then(views => { if (active) setProjectViews(views); }).catch(cause => { if (active) setMessage(cause instanceof Error ? cause.message : String(cause)); });
+	 return () => { active = false; };
+	}, [source, dev?.view]);
 	if (!dev) return null;
 	const projects = dev.view?.projects ?? [];
-	const projectViews = projects.map(project => ({ project, view: getPrototypeWorkflow({ projectId: project.id }) }));
 	const releaseCount = projectViews.reduce((count, item) => count + item.view.releases.length, 0);
 	const changeRoot = (value: string) => {
 		setRoot(value);
@@ -47,13 +52,13 @@ export function DevProjectSettings() {
 	};
 	return (
 		<section className="space-y-6" data-testid="dev-project-settings">
-			<div className="space-y-2"><SettingsBadge>团队共享 · 所有人可见</SettingsBadge><p className="text-ui-sm text-foreground-subtle">项目与 Release 保存在共享数据库。共享项目路径只读；开发时使用按工号关联的个人开发项目。</p></div>
+			<div className="space-y-2"><SettingsBadge>{source.mode === "prototype" ? "团队共享 · 演示数据" : "OMP 项目数据"}</SettingsBadge><p className="text-ui-sm text-foreground-subtle">{source.mode === "prototype" ? "共享项目路径只读；开发时使用按工号关联的个人开发项目。" : "显示当前 OMP 服务返回的项目与 Release。浏览器工号不会切换服务账号或授权。"}</p></div>
 			<div className="flex flex-wrap items-start justify-between gap-3">
 				<div className="space-y-1">
 					<p className="text-ui-base text-foreground-subtle">所有人查看同一份项目与 Release。当前工号：{employeeId}。</p>
 					<p className="text-ui-sm text-foreground-subtle">{projects.length} 个项目 · {releaseCount} 个 Release</p>
 				</div>
-				<Button onClick={openProject}><Plus className="size-4" />添加已有项目目录</Button>
+				{source.projects && source.capabilities.workflowCommands.includes("registerProject") && <Button onClick={openProject}><Plus className="size-4" />添加已有项目目录</Button>}
 			</div>
 			{projectViews.map(({ project, view }) => (
 				<SettingsGroupCard key={project.id}>
@@ -77,9 +82,9 @@ export function DevProjectSettings() {
 						<div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4">
 							<div className="min-w-0 space-y-1">
 								<p className="text-ui-base font-medium">我的开发项目 <span className="text-ui-sm font-normal text-foreground-subtle">工号 {employeeId}</span></p>
-								<p className="break-all font-mono text-ui-sm text-foreground-subtle" data-testid={`development-root-${project.id}`}>{readPrototypeDevelopmentRoot(project.id) ?? "尚未配置 · 可以浏览，进入开发前需添加"}</p>
+								<p className="break-all font-mono text-ui-sm text-foreground-subtle" data-testid={`development-root-${project.id}`}>{source.projects?.readDevelopmentRoot(project.id) ?? "尚未配置 · 可以浏览，进入开发前需添加"}</p>
 							</div>
-							<Button variant="outline" onClick={() => { setDevelopmentProjectId(project.id); setDevelopmentRoot(readPrototypeDevelopmentRoot(project.id) ?? ""); setDevelopmentError(""); }} aria-label={`配置${project.name}的开发项目`}>{readPrototypeDevelopmentRoot(project.id) ? "修改开发项目" : "添加开发项目"}</Button>
+							{source.projects && source.capabilities.workflowCommands.includes("setDevelopmentRoot") && <Button variant="outline" onClick={() => { setDevelopmentProjectId(project.id); setDevelopmentRoot(source.projects?.readDevelopmentRoot(project.id) ?? ""); setDevelopmentError(""); }} aria-label={`配置${project.name}的开发项目`}>{source.projects?.readDevelopmentRoot(project.id) ? "修改开发项目" : "添加开发项目"}</Button>}
 						</div>
 						{view.releases.length ? (
 							<ul className="divide-y divide-border">
@@ -109,7 +114,7 @@ export function DevProjectSettings() {
 			))}
 			{!projects.length && <p className="text-ui-base text-foreground-subtle">还没有项目。添加已有 Git 项目目录后，即可创建 Release。</p>}
 			<p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
-			<p className="text-ui-sm leading-6 text-foreground-subtle">原型演示：共享项目、Release、按工号关联的开发目录及校验均为内存样例；不连接真实数据库或文件系统，不执行 Git，刷新后恢复。</p>
+			{source.mode === "prototype" && <p className="text-ui-sm leading-6 text-foreground-subtle">原型演示：共享项目、Release、按工号关联的开发目录及校验均为内存样例；不连接真实数据库或文件系统，不执行 Git，刷新后恢复。</p>}
 
 			<Dialog open={projectOpen} onOpenChange={setProjectOpen}>
 				<DialogContent className="sm:max-w-lg">
@@ -119,7 +124,7 @@ export function DevProjectSettings() {
 					</DialogHeader>
 					<form className="space-y-4" onSubmit={async event => {
 						event.preventDefault();
-						const check = checkPrototypeProjectDirectory(root, projects.map(project => project.root));
+						const check = await source.projects!.checkProjectDirectory(root, projects.map(project => project.root));
 						if (!check.valid) { setProjectError(check.error); return; }
 						const projectName = name.trim() || check.directory.name;
 						const result = await dev.command({ type: "registerProject", registrationScope: "target-root", root: check.root, name: projectName });
@@ -129,7 +134,7 @@ export function DevProjectSettings() {
 						<div className="space-y-2">
 							<Label htmlFor="project-directory">项目目录</Label>
 							<div className="flex flex-wrap gap-2">
-								<Input id="project-directory" className="min-w-0 flex-1 basis-48" placeholder="输入项目根目录，如 /demo/payment-service" value={root} onChange={event => changeRoot(event.target.value)} aria-invalid={Boolean(projectError)} aria-describedby={projectError ? "project-directory-help project-directory-error" : "project-directory-help"} required />
+								<Input id="project-directory" className="min-w-0 flex-1 basis-48" placeholder="输入项目根目录" value={root} onChange={event => changeRoot(event.target.value)} aria-invalid={Boolean(projectError)} aria-describedby={projectError ? "project-directory-help project-directory-error" : "project-directory-help"} required />
 								<Button type="button" variant="outline" onClick={() => { setBrowsePath(root); setBrowserOpen(true); }}><FolderOpen className="size-4" />浏览目录</Button>
 							</div>
 							<p id="project-directory-help" className="text-ui-sm text-foreground-subtle">可输入路径或浏览目录。点击“添加项目”时自动检查目录是否为有效 Git 项目。</p>
@@ -154,7 +159,7 @@ export function DevProjectSettings() {
 						event.preventDefault();
 						const project = projects.find(item => item.id === developmentProjectId);
 						if (!project) return;
-						const check = checkPrototypeDevelopmentDirectory(developmentRoot, project.root);
+						const check = await source.projects!.checkDevelopmentDirectory(developmentRoot, project.root);
 						if (!check.valid) { setDevelopmentError(check.error); return; }
 						const result = await dev.command({ type: "setDevelopmentRoot", projectId: project.id, root: check.root });
 						if (result?.status === "completed") { setDevelopmentProjectId(""); setMessage(`已保存“${project.name}”的个人开发项目。共享路径保持只读。`); }
@@ -170,7 +175,7 @@ export function DevProjectSettings() {
 				<DialogContent className="sm:max-w-lg">
 					<DialogHeader><DialogTitle>选择项目目录</DialogTitle><DialogDescription>演示服务端文件浏览器 · /demo。请选择 Git 项目根目录，不需要选择 .git 子目录。</DialogDescription></DialogHeader>
 					<div className="max-h-[45vh] overflow-y-auto rounded-xl border border-border">
-						{prototypeProjectDirectories().filter(directory => developmentProjectId || !directory.repositoryRoot).map(directory => {
+						{source.projects?.listDirectories().filter(directory => developmentProjectId || !directory.repositoryRoot).map(directory => {
 							const added = projects.some(project => project.root === directory.path);
 							return <Button key={directory.path} type="button" variant={browsePath === directory.path ? "secondary" : "ghost"} className="h-auto w-full justify-start gap-3 rounded-none px-3 py-3 text-left" disabled={added} onClick={() => setBrowsePath(directory.path)} aria-pressed={browsePath === directory.path}>
 								{directory.git ? <FolderGit2 className="size-4 shrink-0" /> : <Folder className="size-4 shrink-0" />}
@@ -191,7 +196,7 @@ export function DevProjectSettings() {
 					<DialogHeader><DialogTitle>添加 Release</DialogTitle><DialogDescription>Release 属于所选共享项目，添加后所有人可见，保存在共享数据库。</DialogDescription></DialogHeader>
 					<form className="space-y-4" onSubmit={async event => {
 						event.preventDefault();
-						if (getPrototypeWorkflow({ projectId: releaseProjectId }).releases.some(release => release.title.toLowerCase() === releaseTitle.trim().toLowerCase())) { setReleaseError("此项目中已存在同名 Release，请使用其他名称。"); return; }
+						if ((await source.readWorkflow({ projectId: releaseProjectId })).releases.some(release => release.title.toLowerCase() === releaseTitle.trim().toLowerCase())) { setReleaseError("此项目中已存在同名 Release，请使用其他名称。"); return; }
 						const result = await dev.command({ type: "createRelease", projectId: releaseProjectId, title: releaseTitle });
 						if (result?.status === "completed") { setReleaseOpen(false); setMessage(`已为“${projects.find(project => project.id === releaseProjectId)?.name}”添加 Release“${releaseTitle.trim()}”。`); }
 						else setReleaseError("未能添加 Release，请检查名称和所属项目。");

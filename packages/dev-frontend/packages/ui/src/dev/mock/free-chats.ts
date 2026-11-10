@@ -1,5 +1,5 @@
 import type { ProjectTask, VirtualProject, IServiceAccessor } from "@zcode/services";
-import { getPrototypeEmployeeId } from "./employee.js";
+import { getEmployeeId } from "../identity.js";
 import { readPrototypeProjectSettings, readPrototypeDevelopmentRoot } from "./project-settings.js";
 import { unavailablePrototypeOperation } from "./events.js";
 
@@ -21,7 +21,7 @@ export function freeProjectId(identity?: string): string | undefined { return id
 function make(projectId: string, taskId: string, title: string, updatedAt: number, empty: boolean, root?: string, identity?: string): FreeChat {
  const project = readPrototypeProjectSettings().projects.find(item => item.id === projectId);
  if (!project) throw new Error("请选择已登记项目。");
- const employeeId = getPrototypeEmployeeId();
+ const employeeId = getEmployeeId();
  return { empty, deleted: false, meta: { taskId, traceId: `sample:${taskId}`, title, projectId, hostId: "local", pinned: false, archived: false,
   workspacePath: root ?? readPrototypeDevelopmentRoot(projectId) ?? project.root,
   workspaceIdentity: identity ?? `${FREE_WORKSPACE_PREFIX}${projectId}:${employeeId}`,
@@ -64,7 +64,7 @@ export function createPrototypeProjectServices(): Pick<IServiceAccessor, "projec
   restoreProject: async id => { find(id); hiddenProjects.delete(id); notify(); return find(id); },
   moveTask: async input => { find(input.projectId); const item = records.get(input.task.taskId); if (!item) throw new Error("自由会话不存在。"); item.meta.projectId = input.projectId; notify(); },
   reorderProjects: async () => {},
-  prepareSession: async params => { const project = find(params?.projectId ?? projects()[0]!.id); return { workspacePath: project.roots[0]!.rootPath, additionalDirectories: [], projectId: project.id, workspaceIdentity: `${FREE_WORKSPACE_PREFIX}${project.id}:${getPrototypeEmployeeId()}` }; },
+  prepareSession: async params => { const project = find(params?.projectId ?? projects()[0]!.id); return { workspacePath: project.roots[0]!.rootPath, additionalDirectories: [], projectId: project.id, workspaceIdentity: `${FREE_WORKSPACE_PREFIX}${project.id}:${getEmployeeId()}` }; },
   resolveSessionDirectories: async task => { const item = readPrototypeFreeChat(task.taskId); if (!item) throw new Error("自由会话不存在。"); return { workspacePath: item.meta.workspacePath, workspaceIdentity: item.meta.workspaceIdentity, additionalDirectories: [], projectId: item.meta.projectId }; },
   measureProjectData: unavailablePrototypeOperation, deleteProjectData: unavailablePrototypeOperation,
  } };

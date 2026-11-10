@@ -1,12 +1,15 @@
+import { useDevDataSource } from "./data-source.js";
 import { useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
 import { Label } from "@/components/ui/label.js";
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { useDev } from "./DevContext.js";
-import type { DevRequirementGroup } from "./mock/types.js";
+import type { DevRequirementGroup } from "./types.js";
 
 export function DevRequirementDraft({ group }: { group: DevRequirementGroup }) {
+ const source = useDevDataSource();
+ if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
  const dev = useDev()!;
  const [open, setOpen] = useState(false);
  const [note, setNote] = useState("");

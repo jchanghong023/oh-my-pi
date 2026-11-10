@@ -13,6 +13,6 @@ export function prototypeSpecPath(irId: string, srId: string): string { return `
 export function prototypeProposalLocation(projectId: string, proposalId: string, employeeId: string) {
  const project = readPrototypeProjectSettings().projects.find(item => item.id === projectId);
  if (!project) throw new Error("提案所属项目不存在。");
- return { projectName: project.storageName, employeeId,
+ return { projectName: project.storageName ?? project.name, employeeId,
   directory: `/tmpdata/DFT_LAB/omp/${project.storageName}/${employeeId}/${proposalId}/` };
 }

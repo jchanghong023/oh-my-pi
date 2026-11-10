@@ -1,5 +1,5 @@
 import { prototypeRecoveryScenario } from "./recovery.js";
-import type { DevRelease } from "./types.js";
+import type { DevRelease } from "../types.js";
 
 const createdAt = "2026-11-10T09:00:00.000Z";
 // 共享数据库中按项目关联的 Release 清单内存投影。

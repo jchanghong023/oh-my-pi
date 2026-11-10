@@ -283,6 +283,13 @@ export class DevWorkflowHost {
 		if (selected) {
 			this.#validateObject(view, selected);
 			view.selected = selected;
+			const group = [...view.groups, ...view.drafts].find(item => item.id === selected.irId)!;
+			const sr = view.srs.find(item => item.id === selected.srId && item.irId === selected.irId);
+			const project = view.projects.find(item => item.id === selected.projectId)!;
+			view.workspace = {
+				path: sr?.worktree?.path ?? this.#requirementCwd(project, group),
+				identity: canonicalJson(selected),
+			};
 		}
 		view.running = [];
 		for (const pending of this.#projects.values()) {
@@ -314,7 +321,10 @@ export class DevWorkflowHost {
 		)
 			throw new Error("SR identity does not belong to this IR");
 	}
-	async bind(browserId: string, ref: { projectId: string; irId?: string; srId?: string }): Promise<object> {
+	async bind(
+		browserId: string,
+		ref: { projectId: string; irId?: string; srId?: string; sessionId?: string; round?: number },
+	): Promise<object> {
 		if (this.#closing) throw new Error("Dev host is exiting");
 		const view = await this.store.view(ref.projectId);
 		this.#assertNativeAdmission(ref.projectId);
@@ -323,11 +333,13 @@ export class DevWorkflowHost {
 		if (ref.irId) this.#validateObject(view, { ...ref, irId: ref.irId });
 		else if (ref.srId) throw new Error("SR selection requires its IR");
 		const previous = this.#bindings.get(browserId);
-		const session = ref.irId
-			? view.sessions
-					.filter(item => item.irId === ref.irId && item.srId === ref.srId && item.role !== "reviewer")
-					.at(-1)
-			: undefined;
+		const sessions = ref.irId
+			? view.sessions.filter(item => item.irId === ref.irId && item.srId === ref.srId && item.role !== "reviewer")
+			: [];
+		const session = ref.sessionId
+			? sessions.find(item => item.sessionId === ref.sessionId && item.round === ref.round)
+			: sessions.at(-1);
+		if (ref.sessionId && !session) throw new Error("Native session/round does not belong to the selected Dev object");
 		// Re-reading the exact target is not a new ownership epoch. In particular,
 		// observing a session prepared by this page must not revoke its live socket.
 		if (
@@ -339,7 +351,9 @@ export class DevWorkflowHost {
 		)
 			return { binding: { ...previous }, session };
 		const binding = {
-			...ref,
+			projectId: ref.projectId,
+			irId: ref.irId,
+			srId: ref.srId,
 			sessionId: session?.sessionId,
 			round: session?.round,
 			epoch: (previous?.epoch ?? 0) + 1,
@@ -1028,15 +1042,19 @@ export class DevWorkflowHost {
 			: undefined;
 		if (binding?.srId && !sr) throw new Error("SR identity is no longer available");
 		const cwd = sr?.worktree?.path ?? (group ? this.#requirementCwd(state.project, group) : state.project.root);
-		const session = (sr?.sessions ?? group?.sessions ?? []).filter(item => item.role !== "reviewer").at(-1);
+		const sessions = (sr?.sessions ?? group?.sessions ?? []).filter(item => item.role !== "reviewer");
+		const session = binding?.sessionId
+			? sessions.find(item => item.sessionId === binding.sessionId && item.round === binding.round)
+			: sessions.at(-1);
+		if (binding?.sessionId && !session) throw new Error("Bound native session/round is no longer available");
 		return {
 			project: state.project,
 			binding,
 			cwd,
 			session,
-			inputAllowed: sr
+			inputAllowed: session?.sessionId === sessions.at(-1)?.sessionId && (sr
 				? sr.status === "developing"
-				: !!group && group.status !== "frozen" && group.status !== "deleted" && group.status !== "reviewing",
+				: !!group && group.status !== "frozen" && group.status !== "deleted" && group.status !== "reviewing"),
 			workspaceIdentity: canonicalJson({ projectId: id, irId: binding?.irId, srId: binding?.srId }),
 		};
 	}
@@ -1132,15 +1150,11 @@ export class DevWorkflowHost {
 					saved.srId && group?.snapshot
 						? await this.#frozenAuthority(metadata.cwd, group, group.snapshot)
 						: undefined;
-				const sr = saved.srId
-					? state.srs.find(item => item.id === saved.srId && item.irId === saved.irId)
-					: undefined;
 				native = await project.runtime.prepare({
 					binding: saved,
 					cwd: metadata.cwd,
 					sessionRef: saved,
-					readonlyRecovery:
-						(group?.status === "frozen" && !saved.srId) || (!!saved.srId && sr?.status === "completed"),
+					readonlyRecovery: !metadata.inputAllowed,
 					outputPaths:
 						saved.phase === "requirements"
 							? [`docs/dev/intake/${saved.irId}/requirements.json`]
@@ -1197,6 +1211,7 @@ export class DevWorkflowHost {
 		const identity = this.#contexts.get(context.connectionId)!;
 		const binding = this.#bindings.get(identity.browserId);
 		if (!binding?.irId) throw new Error("Select an IR/SR before creating a native conversation");
+		if (context.inputAllowed === false) throw new Error("Selected native session is read-only");
 		const ref = await this.prepare(identity.browserId, { ...binding, irId: binding.irId });
 		const project = await this.project(ref.projectId);
 		const session = project.runtime.session(ref);

@@ -636,6 +636,38 @@ describe("workflow capability HTTP service", () => {
 		expect(f.session.messages).toEqual([]);
 	}, 120_000);
 
+	test("application workflow observer survives page object rebindings without creating actors", async () => {
+		await using f = await fixture();
+		const selected = await f.create();
+		const initial = Promise.withResolvers<void>();
+		const changed = Promise.withResolvers<string>();
+		const address = new URL("workflow/events?scope=application", f.base);
+		address.protocol = "ws:";
+		address.searchParams.set("clientId", f.clientId);
+		const socket = new WebSocket(address, {
+			headers: { Cookie: f.cookie, Origin: f.base.origin, "X-Dev-Client": f.clientId },
+		});
+		socket.addEventListener("message", event => {
+			const frame = JSON.parse(String(event.data));
+			if (frame.t === "workflow") initial.resolve();
+			if (frame.t === "binding" && frame.binding?.irId && frame.binding.irId !== selected.irId)
+				changed.resolve(frame.binding.irId);
+		});
+		socket.addEventListener("error", () => {
+			initial.reject(new Error("Application workflow observer failed"));
+			changed.reject(new Error("Application workflow observer failed"));
+		});
+		try {
+			await initial.promise;
+			const other = await f.create();
+			expect(await changed.promise).toBe(other.irId!);
+			expect(socket.readyState).toBe(WebSocket.OPEN);
+			expect(f.provider.requests).toHaveLength(0);
+		} finally {
+			socket.close();
+		}
+	}, 120_000);
+
 	test("event reconnect reads facts without actor creation; socket mutations close and rebinding discards old object delivery", async () => {
 		await using f = await fixture();
 		const selected = await f.create();

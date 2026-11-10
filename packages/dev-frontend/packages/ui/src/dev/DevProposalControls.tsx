@@ -1,18 +1,21 @@
-import { prototypeRequirementsReviewBlocker } from "./mock/requirements-review.js";
+import { useDevDataSource } from "./data-source.js";
+import { requirementsReviewBlocker } from "./domain.js";
 import { useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Label } from "@/components/ui/label.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
-import { getPrototypeEmployeeId } from "./mock/employee.js";
+import { getEmployeeId } from "./identity.js";
 import { DevProposalDeliveryControls } from "./DevProposalDeliveryControls.js";
 import { DevRequirementReview } from "./DevRequirementReview.js";
 import { DevRequirementDraft } from "./DevRequirementDraft.js";
 import { useDev } from "./DevContext.js";
-import { hasCurrentProposalSolution, PROPOSAL_STATUS_LABELS } from "./mock/proposal-flow.js";
-import type { DevRequirementGroup } from "./mock/types.js";
+import { hasCurrentProposalSolution, PROPOSAL_STATUS_LABELS } from "./domain.js";
+import type { DevRequirementGroup } from "./types.js";
 
 export function DevProposalControls({ group }: { group: DevRequirementGroup }) {
+ const source = useDevDataSource();
+ if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
  const dev = useDev()!;
  const [returnOpen, setReturnOpen] = useState(false);
  const [reason, setReason] = useState("");
@@ -21,9 +24,9 @@ export function DevProposalControls({ group }: { group: DevRequirementGroup }) {
  const history = viewing !== phase;
  const target = { projectId: group.projectId, irId: group.id };
  const ready = hasCurrentProposalSolution(group);
- const reviewBlocker = prototypeRequirementsReviewBlocker(group);
+ const reviewBlocker = requirementsReviewBlocker(group);
  const accepted = group.developerAcceptance?.round === (group.proposalRound ?? 1) ? group.developerAcceptance : undefined;
- const mine = accepted?.employeeId === getPrototypeEmployeeId();
+ const mine = accepted?.employeeId === getEmployeeId();
  return <div className="space-y-2" data-testid="proposal-controls">
   <nav aria-label="需求讨论阶段" className="flex gap-1">
    <Button size="sm" variant={viewing === "requirements" ? "secondary" : "ghost"} aria-pressed={viewing === "requirements"} onClick={() => dev.select({ ...dev.selection, discussionPhase: "requirements" })}>业务需求</Button>

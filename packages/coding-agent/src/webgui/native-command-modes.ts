@@ -19,6 +19,7 @@ import {
 	type ParsedLoopArgs,
 } from "../modes/loop-limit";
 import { evaluateLoopCondition } from "../modes/loop-condition";
+import { isLoopGoalComplete, renderLoopGoalPrompt } from "../modes/loop-goal";
 import { cfgDisplayMode, cfgLoopConditionTimeoutMs, cfgLoopMode } from "../modes/settings";
 import type { SubmittedUserInput } from "../modes/types";
 import { RpcGoalController } from "../modes/rpc/rpc-goal";
@@ -43,7 +44,7 @@ import {
 	type NativeWebGuiInteractionOrigin,
 } from "./native-interactions";
 
-export type NativeWebGuiModeCommand = "plan" | "loop" | "goal" | "goal-autopilot";
+export type NativeWebGuiModeCommand = "plan" | "loop" | "loopgoal" | "goal" | "goal-autopilot";
 export type NativeWebGuiDisplayMode = SettingValueOf<typeof cfgDisplayMode>;
 export type NativeWebGuiInteractiveModeCommand =
 	| "settings"
@@ -58,6 +59,8 @@ export type NativeWebGuiInteractiveModeCommand =
 export interface NativeWebGuiModeController {
 	ready(): Promise<void>;
 	runModeCommand(mode: NativeWebGuiModeCommand, args: string): Promise<SlashCommandResult>;
+	prepareLoopGoalPrompt(text: string): Promise<string | boolean>;
+	cancelLoopGoalPrompt(): void;
 	runNativeModeCommand(
 		command: NativeWebGuiInteractiveModeCommand,
 		args: string,
@@ -277,6 +280,8 @@ export function createNativeWebGuiModeController(
 		| {
 				args: ParsedLoopArgs;
 				limit: LoopLimitRuntime | undefined;
+				loopGoal: boolean;
+				preparing?: boolean;
 				prompt?: string;
 				generation: number;
 				timer?: Timer;
@@ -457,6 +462,9 @@ export function createNativeWebGuiModeController(
 			loop.timer = undefined;
 		} else loop = undefined;
 	};
+	const cancelLoopGoalPrompt = () => {
+		if (loop?.loopGoal) stopLoop(true);
+	};
 	const submitSynthetic = async (text: string, images?: SubmittedUserInput["images"]) => {
 		assertLive();
 		if (session.isStreaming) {
@@ -471,15 +479,53 @@ export function createNativeWebGuiModeController(
 			await session.followUp(text, images, { synthetic: true });
 		}
 	};
+	const prepareLoopGoalPrompt = async (text: string): Promise<string | boolean> => {
+		resumeInput();
+		const current = loop;
+		if (!current?.loopGoal) return false;
+		if (disposed || stopped || session.isDisposed) return true;
+		const rendered = renderLoopGoalPrompt(text);
+		clearTimeout(current.timer);
+		current.timer = undefined;
+		current.condition?.abort();
+		const generation = ++current.generation;
+		const lifecycle = lifecycleGeneration;
+		const sessionGeneration = session.sessionGeneration;
+		const isCurrent = () =>
+			loop === current &&
+			generation === current.generation &&
+			lifecycle === lifecycleGeneration &&
+			sessionGeneration === session.sessionGeneration &&
+			!stopped &&
+			!disposed &&
+			!session.isDisposed;
+		current.prompt = rendered;
+		current.preparing = true;
+		try {
+			if ((session.getContextUsage()?.percent ?? 0) > 50) {
+				await session.waitForIdle();
+				if (!isCurrent()) return true;
+				if ((session.getContextUsage()?.percent ?? 0) > 50) {
+					await session.compact(undefined, { suppressContinuation: true });
+					if (!isCurrent()) return true;
+				}
+			}
+			return isCurrent() ? rendered : true;
+		} finally {
+			if (isCurrent()) current.preparing = false;
+		}
+	};
 	const scheduleLoop = () => {
 		const current = loop;
-		if (!current?.prompt || stopped || disposed || current.timer) return;
+		if (!current?.prompt || current.preparing || stopped || disposed || current.timer) return;
 		const generation = current.generation;
+		const sessionGeneration = session.sessionGeneration;
 		current.timer = setTimeout(() => {
 			current.timer = undefined;
 			void (async () => {
 				await session.waitForIdle();
 				if (loop !== current || generation !== current.generation || stopped || disposed) return;
+				if (current.loopGoal && sessionGeneration !== session.sessionGeneration) return;
 				if (isLoopLimitExhausted(current.limit)) {
 					stopLoop();
 					await output("Loop limit reached.");
@@ -495,6 +541,7 @@ export function createNativeWebGuiModeController(
 						signal: condition.signal,
 					});
 					if (loop !== current || generation !== current.generation || stopped || disposed) return;
+					if (current.loopGoal && sessionGeneration !== session.sessionGeneration) return;
 					if (verdict.kind !== "continue") {
 						stopLoop();
 						if ("message" in verdict) await output(verdict.message);
@@ -505,7 +552,7 @@ export function createNativeWebGuiModeController(
 					scheduleLoop();
 					return;
 				}
-				const action = cfgLoopMode.get(session.settings);
+				const action = current.loopGoal ? undefined : cfgLoopMode.get(session.settings);
 				if (action === "reset" && session.getVibeModeState()?.enabled) {
 					stopLoop();
 					await output("Exit vibe mode before using reset loops. Loop mode disabled.");
@@ -515,10 +562,14 @@ export function createNativeWebGuiModeController(
 					stopLoop();
 					return;
 				}
-				if (action === "compact") await session.compact(undefined, { suppressContinuation: true });
+				if (current.loopGoal) {
+					if ((session.getContextUsage()?.percent ?? 0) > 50)
+						await session.compact(undefined, { suppressContinuation: true });
+				} else if (action === "compact") await session.compact(undefined, { suppressContinuation: true });
 				else if (action === "reset")
 					await scoped(loopOrigin, () => nativeWebGuiCommandHost(session).resetContext());
 				if (loop !== current || generation !== current.generation || stopped || disposed) return;
+				if (current.loopGoal && sessionGeneration !== session.sessionGeneration) return;
 				const inputId = crypto.randomUUID();
 				const rollbackOrigin = loopOrigin
 					? registerNativeWebGuiInputOrigin(session, inputId, loopOrigin)
@@ -530,6 +581,13 @@ export function createNativeWebGuiModeController(
 					throw error;
 				}
 			})().catch(error => {
+				if (
+					current.loopGoal &&
+					(loop !== current ||
+						generation !== current.generation ||
+						sessionGeneration !== session.sessionGeneration)
+				)
+					return;
 				stopLoop();
 				session.emitNotice("error", String(error), "webgui-loop");
 			});
@@ -558,7 +616,13 @@ export function createNativeWebGuiModeController(
 		}
 		goals.observe(event);
 		if (event.type === "goal_updated" && event.state?.enabled) releaseInterview = undefined;
-		if (event.type === "message_start" && event.message.role === "user" && !event.message.synthetic && loop) {
+		if (
+			event.type === "message_start" &&
+			event.message.role === "user" &&
+			!event.message.synthetic &&
+			loop &&
+			!loop.loopGoal
+		) {
 			const text =
 				typeof event.message.content === "string"
 					? event.message.content
@@ -573,6 +637,13 @@ export function createNativeWebGuiModeController(
 			loop.generation++;
 		}
 		if (event.type === "agent_end") {
+			if (loop?.loopGoal) {
+				if (event.isTerminal === false) return;
+				if (isLoopGoalComplete(event.messages)) {
+					stopLoop();
+					return;
+				}
+			}
 			if (
 				event.messages.some(
 					message =>
@@ -925,10 +996,24 @@ export function createNativeWebGuiModeController(
 		}
 		const parsed = parseLoopArgs(args);
 		if (typeof parsed === "string") throw new Error(parsed);
-		loop = { args: parsed, limit: createLoopLimitRuntime(parsed.limit), prompt: parsed.prompt, generation: 0 };
+		const current = {
+			args: parsed,
+			limit: createLoopLimitRuntime(parsed.limit),
+			loopGoal: mode === "loopgoal",
+			prompt: mode === "loopgoal" ? undefined : parsed.prompt,
+			generation: 0,
+		};
+		loop = current;
 		loopOrigin = nativeWebGuiInteractionOrigin();
 		if (parsed.intervalMs !== undefined) consumeLoopLimitIteration(loop.limit);
-		await output("Loop mode enabled. Stop suspends repeats; /loop disables it.");
+		const lifecycle = lifecycleGeneration;
+		await output(
+			current.loopGoal
+				? "Loopgoal mode enabled. Stop suspends repeats; /loopgoal disables it."
+				: "Loop mode enabled. Stop suspends repeats; /loop disables it.",
+		);
+		if (current.loopGoal && (loop !== current || lifecycle !== lifecycleGeneration || stopped || disposed))
+			return consumed();
 		return parsed.prompt ? { prompt: parsed.prompt } : consumed();
 	}
 	async function runNativeModeCommand(
@@ -1197,5 +1282,13 @@ export function createNativeWebGuiModeController(
 	})();
 	void readyTask.catch(error => session.emitNotice("error", String(error), "webgui-mode-restore"));
 	mediaOwners.set(session, { report: reportMediaState, disconnect: disconnectMedia, resumeInput });
-	return { ready: () => readyTask, runModeCommand, runNativeModeCommand, stop, dispose };
+	return {
+		ready: () => readyTask,
+		runModeCommand,
+		prepareLoopGoalPrompt,
+		cancelLoopGoalPrompt,
+		runNativeModeCommand,
+		stop,
+		dispose,
+	};
 }

@@ -1,39 +1,27 @@
-import { getPrototypeEmployeeId } from "./employee.js";
-import { hasCurrentProposalSolution } from "./proposal-flow.js";
+import { proposalVersion, proposalDeliveryCurrent, hasCurrentProposalSolution, requirementsReviewBlocker } from "../domain.js";
+import { getEmployeeId } from "../identity.js";
 import { readPrototypeProposalPrHandoff } from "./proposal-pr-handoff.js";
-import { prototypeRequirementsReviewBlocker } from "./requirements-review.js";
-import type { DevAction, DevRequirementGroup, DevWorkflowView } from "./types.js";
+import type { DevAction, DevRequirementGroup, DevWorkflowView } from "../types.js";
 
 export type PrototypeProposalDeliveryAction = Extract<DevAction, { type: "confirmProposal" | "publishProposal" | "markRequirementsPrSubmitted" | "markRequirementsMerged" }>;
 
-/** Opaque in-memory version, not a real Git commit or content hash. */
-export function prototypeProposalVersion(group: DevRequirementGroup): string {
- return JSON.stringify({
-  round: group.proposalRound ?? 1, digest: group.snapshot?.digest, title: group.title,
-  srIds: [...group.srIds].sort(), solution: group.proposalSolution,
-  files: [...group.files].sort((a, b) => a.path.localeCompare(b.path)),
- });
-}
-export function prototypeProposalDeliveryCurrent(group: DevRequirementGroup): boolean {
- return Boolean(group.proposalDelivery && hasCurrentProposalSolution(group) && group.proposalDelivery.version === prototypeProposalVersion(group));
-}
 export function isPrototypeProposalDeliveryAction(action: DevAction): action is PrototypeProposalDeliveryAction {
  return ["confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markRequirementsMerged"].includes(action.type);
 }
 export function validatePrototypeProposalDeliveryAction(view: DevWorkflowView, group: DevRequirementGroup, action: PrototypeProposalDeliveryAction): void {
- const blocker = prototypeRequirementsReviewBlocker(group);
+ const blocker = requirementsReviewBlocker(group);
  if (blocker) throw new Error(blocker);
  if (group.proposalStage !== "solution" || !hasCurrentProposalSolution(group)) throw new Error("请先完成当前需求版本的方案。");
- if (group.developerAcceptance?.employeeId !== getPrototypeEmployeeId() || group.developerAcceptance.round !== (group.proposalRound ?? 1)) throw new Error("仅本轮接手开发人员可操作提案交付演示。");
+ if (group.developerAcceptance?.employeeId !== getEmployeeId() || group.developerAcceptance.round !== (group.proposalRound ?? 1)) throw new Error("仅本轮接手开发人员可操作提案交付演示。");
  const handoff = readPrototypeProposalPrHandoff(group);
  if (!handoff.ready) throw new Error(handoff.blockers.join("；"));
  if (!group.files.every(file => view.materials.some(material => material.projectId === group.projectId && material.irId === group.id && material.path === file.path && material.sha256 === file.sha256 && material.size === file.size && material.valid && material.content !== undefined && !material.error))) throw new Error("当前提案材料缺失、读取失败或版本不一致，不能确认、推送或核验合并。");
  if (action.type === "confirmProposal") {
-  if (group.status !== "solution-ready" || action.version !== prototypeProposalVersion(group)) throw new Error("确认页面对应旧版本，请重新查看当前 IR、全部 SR 与方案后确认。");
+  if (group.status !== "solution-ready" || action.version !== proposalVersion(group)) throw new Error("确认页面对应旧版本，请重新查看当前 IR、全部 SR 与方案后确认。");
   return;
  }
  const delivery = group.proposalDelivery;
- if (!delivery || !prototypeProposalDeliveryCurrent(group) || action.candidate !== delivery.candidate) throw new Error("提案版本已变化，旧确认、推送与 PR 已失效，请重新确认当前版本。");
+ if (!delivery || !proposalDeliveryCurrent(group) || action.candidate !== delivery.candidate) throw new Error("提案版本已变化，旧确认、推送与 PR 已失效，请重新确认当前版本。");
  if (action.type === "publishProposal") {
   if (group.status !== "solution-ready") throw new Error("请在登记人工 PR 前演示提交与推送。");
   return;

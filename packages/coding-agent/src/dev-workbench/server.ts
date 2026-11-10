@@ -67,6 +67,9 @@ function selection(value: Record<string, unknown>) {
 		projectId: text(value.projectId, "projectId"),
 		...(value.irId === undefined ? {} : { irId: text(value.irId, "irId") }),
 		...(value.srId === undefined ? {} : { srId: text(value.srId, "srId") }),
+		...(value.sessionId === undefined
+			? {}
+			: { sessionId: text(value.sessionId, "sessionId"), round: integer(value.round, "round") }),
 	};
 }
 function query(url: URL): Record<string, unknown> {
@@ -444,7 +447,11 @@ export async function createDevWorkbenchApplication(
 						});
 					if (route === "workflow/events" || route === "ws" || route === "collab/events") {
 						if (!origin) return json({ error: "WebSocket Origin is required" }, 403);
-						const selected = host.workflow.binding(browserId);
+						// Application observers survive object/RPC rebindings on this page.
+						const selected =
+							route === "workflow/events" && params.scope === "application"
+								? undefined
+								: host.workflow.binding(browserId);
 						if (route !== "collab/events" && params.irId) {
 							const requested = ref(params);
 							host.workflow.assertBrowser(browserId, requested);

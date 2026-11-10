@@ -488,6 +488,26 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "loopgoal",
+		icon: "loop",
+		description:
+			"Repeat a fixed goal prompt after each turn until the agent replies 无; compact above 50% context. Uses the same parameters and stop controls as /loop.",
+		inlineHint: "[count|duration] [interval] [--while|--until '<cmd>'] [goal]",
+		allowArgs: true,
+		handleRpc: (command, runtime) => runtime.runModeCommand("loopgoal", command.args),
+		getTuiAutocompleteDescription: runtime =>
+			runtime.ctx.loopGoalMode
+				? runtime.ctx.loopModePaused
+					? "Loopgoal: paused"
+					: "Loopgoal: on"
+				: "Loopgoal: off",
+		handleTui: async (command, runtime) => {
+			const prompt = await runtime.ctx.handleLoopCommand(command.args, true);
+			clearSubmittedText(runtime);
+			if (prompt) return { prompt };
+		},
+	},
+	{
 		name: "queue",
 		icon: "inbox",
 		description: "Queue a message for after the agent yields",

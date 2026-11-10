@@ -1,16 +1,10 @@
+import type { DevWorkspace } from "../types.js";
 import { prototypeDirectoryIssue } from "./recovery.js";
-import type { DevSelection, DevWorkflowView } from "./types.js";
+import type { DevSelection, DevWorkflowView } from "../types.js";
 import { readPrototypeFreeChat } from "./free-chats.js";
 
-export interface PrototypeWorkspace {
- path?: string;
- identity: string;
- kind: "free" | "proposal" | "development" | "reference" | "unavailable";
- error?: string;
- blockedPath?: string;
-}
 /** 只解析已记录的工作区，不创建目录、不按当前查看人重绑 SR。 */
-function resolveRecordedWorkspace(view: DevWorkflowView | undefined, selection: DevSelection): PrototypeWorkspace {
+function resolveRecordedWorkspace(view: DevWorkflowView | undefined, selection: DevSelection): DevWorkspace {
  const project = view?.projects.find(item => item.id === selection.projectId);
  const identity = `dev-ui-prototype:${selection.projectId ?? "unselected"}`;
  if (!project) return { kind: "unavailable", identity, error: view?.projects.length ? "所选项目不存在，请重新选择项目。" : "尚未添加项目，请先登记已有 Git 项目。" };
@@ -36,7 +30,7 @@ function resolveRecordedWorkspace(view: DevWorkflowView | undefined, selection: 
  return project ? { kind: "reference", path: project.root, identity } : { kind: "unavailable", identity, error: "请先选择有效项目。" };
 }
 
-export function resolvePrototypeWorkspace(view: DevWorkflowView | undefined, selection: DevSelection): PrototypeWorkspace {
+export function resolvePrototypeWorkspace(view: DevWorkflowView | undefined, selection: DevSelection): DevWorkspace {
  const workspace = resolveRecordedWorkspace(view, selection);
  if (!workspace.path) return workspace;
  const issue = prototypeDirectoryIssue(workspace.path);

@@ -1,7 +1,7 @@
-import type { PrototypePeer } from "./types.js";
+import type { DevPeer } from "../types.js";
 
 /** Phase-one local collaboration samples, never a discovery or presence service. */
-export const prototypePeers: PrototypePeer[] = [
+export const prototypePeers: DevPeer[] = [
   { id: "peer-design", name: "林悦", role: "产品与体验", status: "在线（样例）", projectId: "demo-aurora",
     materials: [
       { title: "登录体验走查", path: "shared/auth-experience.md", content: "# 登录体验走查（共享样例）\n\n这是前端样例，不是真实协作记录。\n\n- 首次进入突出项目与需求上下文。\n- 权限不足时解释原因并保留返回路径。\n- 材料可带入原输入框，但不自动发送。\n\n待确认：默认项目、草稿命名与长列表布局。" },
@@ -24,6 +24,6 @@ export const prototypePeers: PrototypePeer[] = [
     materials: [{ title: "移动导航草案", path: "shared/mobile-navigation.md", content: "# 移动导航草案（共享样例）\n\n项目切换、通知卡片、个人资料和离线提示使用一致的交互语言。\n\n仅用于阶段性前端原型，不代表移动端实现或真实多人连接。" }],
     logs: [{ id: "mobile-1", time: "11:02", text: "样例记录：整理移动工作台导航与通知资料。" }] },
 ];
-export function getPrototypePeers(projectId?: string): PrototypePeer[] {
+export function getPrototypePeers(projectId?: string): DevPeer[] {
   return prototypePeers.filter(peer => peer.projectId === projectId);
 }

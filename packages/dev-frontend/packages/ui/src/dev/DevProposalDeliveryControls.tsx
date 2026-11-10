@@ -1,3 +1,5 @@
+import { useDevDataSource } from "./data-source.js";
+import type { DevPrHandoffScenario } from "./types.js";
 import { useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Checkbox } from "@/components/ui/checkbox.js";
@@ -7,10 +9,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { useDev } from "./DevContext.js";
 import { DevProposalPrHandoff } from "./DevProposalPrHandoff.js";
-import { getPrototypeEmployeeId } from "./mock/employee.js";
-import { prototypeProposalDeliveryCurrent, prototypeProposalVersion } from "./mock/proposal-delivery.js";
-import { readPrototypeProposalPrHandoff, type PrototypePrHandoffScenario } from "./mock/proposal-pr-handoff.js";
-import type { DevFileVersion, DevProposalDelivery, DevRequirementGroup } from "./mock/types.js";
+import { getEmployeeId } from "./identity.js";
+import { proposalDeliveryCurrent, proposalVersion } from "./domain.js";
+import type { DevFileVersion, DevProposalDelivery, DevRequirementGroup } from "./types.js";
 
 type DeliveryStep = "confirm" | "push" | "pr" | "merge";
 interface DeliveryDialog {
@@ -37,21 +38,24 @@ function DeliveryRecord({ delivery, stale = false }: { delivery: DevProposalDeli
 }
 
 export function DevProposalDeliveryControls({ group, readOnly = false }: { group: DevRequirementGroup; readOnly?: boolean }) {
+ const source = useDevDataSource();
+ if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
+ if (!source.prototype) return <p className="text-ui-sm text-foreground-subtle">当前数据源尚未接入此功能。</p>;
  const dev = useDev()!;
  const [dialog, setDialog] = useState<DeliveryDialog | null>(null);
- const [scenario, setScenario] = useState<PrototypePrHandoffScenario>("current");
+ const [scenario, setScenario] = useState<DevPrHandoffScenario>("current");
  const [checkedFiles, setCheckedFiles] = useState<string[]>([]);
  const [acknowledged, setAcknowledged] = useState(false);
  const [url, setUrl] = useState("");
  const delivery = group.proposalDelivery;
- const current = prototypeProposalDeliveryCurrent(group);
- const version = prototypeProposalVersion(group);
+ const current = proposalDeliveryCurrent(group);
+ const version = proposalVersion(group);
  const pushed = !!delivery && current && delivery.pushedCandidate === delivery.candidate;
  const registered = !!group.requirementsPr && !!delivery && pushed && delivery.prCandidate === delivery.candidate;
  const accepted = group.developerAcceptance;
- const mine = accepted?.round === (group.proposalRound ?? 1) && accepted.employeeId === getPrototypeEmployeeId();
+ const mine = accepted?.round === (group.proposalRound ?? 1) && accepted.employeeId === getEmployeeId();
  const active = !readOnly && (group.proposalStage ?? "requirements") === "solution" && (group.status === "solution-ready" || group.status === "requirements-pr");
- const handoff = readPrototypeProposalPrHandoff(group, scenario);
+ const handoff = source.prototype!.readPrHandoff(group, scenario);
  const boundCurrent = !!dialog && dialog.version === version && (dialog.step === "confirm" || (current && dialog.candidate === delivery?.candidate));
  const allFilesChecked = !!dialog?.files.length && dialog.files.every(file => checkedFiles.includes(file.path));
  const editable = active && mine && !dev.pending && handoff.ready && boundCurrent;

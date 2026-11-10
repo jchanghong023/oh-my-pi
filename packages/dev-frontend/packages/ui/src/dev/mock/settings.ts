@@ -3,7 +3,7 @@ import { resolvePrototypeWorkspace } from "./workspace.js";
 import type { IServiceAccessor, ModelSelectionView, ProviderSettingsView } from "@zcode/services";
 import type { AppSettings, ModelSelection } from "@zcode/shared";
 import type { ProviderSettingsProviderView, RegistryModelConfigObject } from "@zcode/provider";
-import { createPrototypeModelSettingsView } from "../prototype-model-settings.js";
+import { createPrototypeModelSettingsView } from "./model-settings.js";
 import { createPrototypeEvent } from "./events.js";
 import { getPrototypeWorkflow } from "./workflow.js";
 
@@ -89,7 +89,7 @@ export function createPrototypeSettingsServices(sessionWorkspaces: Map<string, s
     },
     modelSelectionService: {
       onDidChange: modelChanged.event,
-      getView: async input => modelView(input?.sessionId, input?.selection),
+      getView: async input => modelView(input?.sessionId, input?.selection ?? undefined),
       setSessionModel: async input => { if (bindingFor(input.sessionId)) throw new Error("此 Agent 会话保留创建时模型；请在模型设置修改后用于新会话。"); selection = { providerId: input.providerId, modelId: input.modelId, options: { reasoningLevel: "standard" } }; modelChanged.fire(modelView(input.sessionId)); return modelView(input.sessionId); },
     },
     providerSettingsService: {

@@ -1,4 +1,4 @@
-import { PROTOTYPE_AGENT_MODELS } from "./mock/agent-models.js";
+import { PROTOTYPE_AGENT_MODELS } from "./agent-models.js";
 import type { ModelConfigObject, ProviderConfigObject } from "@zcode/provider";
 import type { ProviderSettingsView } from "@zcode/services";
 

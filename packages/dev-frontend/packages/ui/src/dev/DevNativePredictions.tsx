@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DevNativePredictionAction, DevNativePredictionSnapshot, DevNativeSurfaceTarget } from "./mock/types.js";
+import type { DevNativePredictionAction, DevNativePredictionSnapshot, DevNativeSurfaceTarget } from "./types.js";
 import { nativeSurfaceKey, sameNativeSurfaceTarget } from "./DevNativeSurface.js";
 
 export function DevNativePredictions({ target, prediction, draft, disabled, onAction, onInsert }: {

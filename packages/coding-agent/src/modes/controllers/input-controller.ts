@@ -1352,6 +1352,12 @@ export class InputController {
 				return;
 			}
 
+			if (text && this.ctx.loopGoalMode) {
+				const prompt = await this.ctx.prepareLoopGoalPrompt(text);
+				if (prompt === undefined) return;
+				text = prompt;
+			}
+
 			// `side: true` file commands answer as a /btw side question: off the
 			// transcript and runnable mid-turn, so they never steer the running work.
 			// The side question carries text only, so the submitted attachments drop.

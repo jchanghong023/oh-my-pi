@@ -1,3 +1,4 @@
+import { useDevDataSource } from "./data-source.js";
 import { useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
@@ -5,10 +6,12 @@ import { Checkbox } from "@/components/ui/checkbox.js";
 import { Label } from "@/components/ui/label.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
 import { useDev } from "./DevContext.js";
-import { irFinalPackageBlocker } from "./mock/ir-acceptance.js";
-import type { DevRequirementGroup } from "./mock/types.js";
+import { irFinalPackageBlocker } from "./domain.js";
+import type { DevRequirementGroup } from "./types.js";
 
 export function DevIrFinalPrControls({ group }: { group: DevRequirementGroup }) {
+ const source = useDevDataSource();
+ if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
   const dev = useDev()!;
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState(group.acceptance?.pr?.url ?? "");

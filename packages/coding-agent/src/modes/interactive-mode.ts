@@ -340,6 +340,7 @@ import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
 import { imageReferenceHyperlink, setImageBlobWriter } from "@oh-my-pi/pi-tui/prompt/image-references";
 import { describeLoopCondition, evaluateLoopCondition, type LoopConditionVerdict } from "./loop-condition";
+import { isLoopGoalComplete, renderLoopGoalPrompt } from "./loop-goal";
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
@@ -1410,6 +1411,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	planModePlanFilePath: string | undefined = undefined;
 	loopModeEnabled = false;
 	loopModePaused = false;
+	loopGoalMode = false;
 	loopPrompt: string | undefined = undefined;
 	loopLimit: LoopLimitRuntime | undefined = undefined;
 	loopCondition: LoopConditionConfig | undefined = undefined;
@@ -1442,6 +1444,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#loopConditionAbort: AbortController | undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
 	#loopAutoSubmitGeneration = 0;
+	#loopGoalPreparation: number | undefined;
 	#loopIntervalMs: number | undefined;
 	#pendingLoopIterations = 0;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
@@ -3335,14 +3338,13 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.session.prewarmModelConnection();
 				}
 				if (event.type === "config_warnings_changed") this.#syncHeaderExtras();
-				if (
-					event.type === "agent_end" &&
-					event.isTerminal !== false &&
-					this.onInputCallback &&
-					this.loopModeEnabled
-				) {
-					if (this.#loopIntervalMs === undefined) this.#scheduleLoopAutoSubmit();
-					else this.armLoopAutoSubmit(this.session.waitForIdle());
+				if (event.type === "agent_end" && event.isTerminal !== false && this.loopModeEnabled) {
+					if (this.loopGoalMode && this.loopPrompt && isLoopGoalComplete(event.messages)) {
+						this.disableLoopMode("Loopgoal completed.");
+					} else if (this.onInputCallback) {
+						if (this.#loopIntervalMs === undefined) this.#scheduleLoopAutoSubmit();
+						else this.armLoopAutoSubmit(this.session.waitForIdle());
+					}
 				}
 				void this.#handleGoalSessionEvent(event);
 			}),
@@ -3416,6 +3418,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#scheduleLoopAutoSubmit(): void {
+		if (this.loopGoalMode && this.#loopGoalPreparation === this.#loopAutoSubmitGeneration) return;
 		this.#cancelLoopAutoSubmit();
 		if (this.isDevWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
@@ -3424,7 +3427,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		const prompt = this.loopPrompt;
-		const loopAction = cfgLoopMode.get(settings);
+		const loopAction = this.loopGoalMode ? "prompt" : cfgLoopMode.get(settings);
 		this.#deferLoopAutoSubmit(() => {
 			void this.#runLoopIteration(loopAction, prompt);
 		}, this.#loopIntervalMs ?? 800);
@@ -3686,7 +3689,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#syncLoopModeStatus();
 
-		if (action === "compact") {
+		if (this.loopGoalMode) {
+			await this.#compactLoopGoalContext();
+		} else if (action === "compact") {
 			await this.handleCompactCommand();
 		} else if (action === "reset") {
 			await this.handleClearCommand();
@@ -3755,6 +3760,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const wasEnabled = this.loopModeEnabled;
 		this.loopModeEnabled = false;
 		this.loopModePaused = false;
+		this.loopGoalMode = false;
 		this.loopPrompt = undefined;
 		this.loopLimit = undefined;
 		this.loopCondition = undefined;
@@ -3779,6 +3785,36 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loopPrompt = prompt;
 		this.loopModePaused = false;
 		this.#syncLoopModeStatus();
+	}
+
+	async #compactLoopGoalContext(): Promise<void> {
+		if ((this.session.getContextUsage()?.percent ?? 0) > 50) await this.handleCompactCommand();
+	}
+
+	async prepareLoopGoalPrompt(objective: string): Promise<string | undefined> {
+		if (!this.loopGoalMode) return objective;
+		const prompt = renderLoopGoalPrompt(objective);
+		const owner = this.session;
+		this.#pendingLoopIterations++;
+		this.setLoopPrompt(prompt);
+		const generation = this.#loopAutoSubmitGeneration;
+		this.#loopGoalPreparation = generation;
+		const current = () =>
+			this.session === owner &&
+			this.loopGoalMode &&
+			this.loopModeEnabled &&
+			this.loopPrompt === prompt &&
+			this.#loopAutoSubmitGeneration === generation;
+		try {
+			if (this.#isAutoSubmitBlocked()) await owner.waitForIdle();
+			if (!current()) return undefined;
+			await this.#compactLoopGoalContext();
+			return current() ? prompt : undefined;
+		} finally {
+			if (this.#loopGoalPreparation === generation) this.#loopGoalPreparation = undefined;
+			this.#pendingLoopIterations--;
+			this.syncIdleMaintenanceView();
+		}
 	}
 
 	/**
@@ -3817,7 +3853,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncLoopModeStatus();
 	}
 
-	async handleLoopCommand(args = ""): Promise<string | undefined> {
+	async handleLoopCommand(args = "", goal = false): Promise<string | undefined> {
 		if (this.loopModeEnabled) {
 			this.disableLoopMode();
 			return undefined;
@@ -3827,6 +3863,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showError(parsed);
 			return undefined;
 		}
+		this.loopGoalMode = goal;
 		this.#enableLoopMode(parsed.limit, parsed.condition, Boolean(parsed.prompt), parsed.intervalMs);
 		// Hand any inline prompt back to the dispatcher so the normal submit flow
 		// runs the first iteration — it records the text as the loop prompt and
@@ -3863,7 +3900,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const conditionSuffix = condition ? ` Continuing ${describeLoopCondition(condition)}.` : "";
 		const tail = hasPrompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn.";
 		this.showStatus(
-			`Loop mode enabled.${limitSuffix}${remainingSuffix}${intervalSuffix}${conditionSuffix} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; /loop again to disable.`,
+			`${this.loopGoalMode ? "Loopgoal" : "Loop"} mode enabled.${limitSuffix}${remainingSuffix}${intervalSuffix}${conditionSuffix} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; /${this.loopGoalMode ? "loopgoal" : "loop"} again to disable.`,
 		);
 	}
 

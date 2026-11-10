@@ -1,3 +1,6 @@
+import { useDevDataSource } from "./data-source.js";
+import type { DevSkillDesignDraft } from "./types.js";
+import { SKILL_DESIGN_FIELDS, skillName } from "./skill-design-fields.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, FileCode2, FolderGit2, MessageSquare, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
@@ -10,29 +13,24 @@ import { SettingsGroupCard } from "@/settings/SettingsPageParts.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.js";
 import { SessionPane } from "@/v4/SessionPane.js";
 import { V4PaneConversationProvider } from "@/v4/V4ConversationContext.js";
-import { readPrototypeDevelopmentRoot } from "./mock/project-settings.js";
 import { useDev } from "./DevContext.js";
-import { readPrototypeSkills, savePrototypeDesignedSkill } from "./mock/skills.js";
-import {
-	SKILL_DESIGN_FIELDS, PROTOTYPE_SKILL_DESIGN_SAMPLE,
-	readPrototypeSkillDesign, savePrototypeSkillDesignDraft, prototypeSkillDesignSession,
-	renderPrototypeSkillDesign, onPrototypeSkillDesignSupplement, prototypeSkillName,
-	type PrototypeSkillDesignDraft,
-} from "./mock/skill-design.js";
 
-interface SkillPreview { content: string; digest: string; name: string; draft: PrototypeSkillDesignDraft }
+interface SkillPreview { content: string; digest: string; name: string; draft: DevSkillDesignDraft }
 
 export function DevSkillDesignSettings() {
+ const source = useDevDataSource();
+ if (source.mode !== "prototype" || !source.skillDesign) return <p className="text-ui-sm text-foreground-subtle">当前数据源尚未接入此功能。</p>;
 	const dev = useDev();
 	const project = dev?.view?.projects.find(item => item.id === dev.selection.projectId);
 	if (!project) return <p className="text-ui-base text-foreground-subtle">请先在主页面选择一个已登记的 Git 项目，再设计项目技能。</p>;
-	return <SkillDesignEditor key={project.id} projectId={project.id} projectName={project.name} workspacePath={readPrototypeDevelopmentRoot(project.id) ?? project.root} developmentRoot={readPrototypeDevelopmentRoot(project.id)} />;
+	return <SkillDesignEditor key={project.id} projectId={project.id} projectName={project.name} workspacePath={source.projects?.readDevelopmentRoot(project.id) ?? project.root} developmentRoot={source.projects?.readDevelopmentRoot(project.id)} />;
 }
 
 function SkillDesignEditor({ projectId, projectName, workspacePath, developmentRoot }: { projectId: string; projectName: string; workspacePath: string; developmentRoot?: string }) {
-	const sessionId = prototypeSkillDesignSession(projectId);
-	const scope = useMemo(() => ({ workspacePath, workspaceIdentity: `dev-ui-prototype:${projectId}` }), [workspacePath, projectId]);
-	const [draft, setDraft] = useState(() => readPrototypeSkillDesign(sessionId));
+	const source = useDevDataSource();
+	const sessionId = source.skillDesign!.session(projectId);
+	const scope = useMemo(() => ({ workspacePath, workspaceIdentity: source.skillDesign!.workspaceIdentity(projectId) }), [source, workspacePath, projectId]);
+	const [draft, setDraft] = useState(() => source.skillDesign!.read(sessionId));
 	const [preview, setPreview] = useState<SkillPreview | null>(null);
 	const [tab, setTab] = useState("chat");
 	const [optionalOpen, setOptionalOpen] = useState(false);
@@ -46,7 +44,7 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
 	const missing = required.filter(field => !draft[field.id].trim());
 	const completed = required.length - missing.length;
 	const canGenerate = !missing.length;
-	const targetName = prototypeSkillName(draft);
+	const targetName = skillName(draft);
 	const targetPath = developmentRoot ? `${developmentRoot}/.omp/skills/${targetName}/SKILL.md` : "请先在 Dev 项目与 Release 中配置我的开发项目；共享目录只读。";
 	const validName = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(targetName) && targetName.length <= 64;
 	const previewCurrent = Boolean(preview && preview.digest === JSON.stringify(draft));
@@ -55,15 +53,15 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
 		...(draft.name !== preview.draft.name ? [{ label: "技能标识", before: preview.draft.name, after: draft.name }] : []),
 		...(JSON.stringify(draft.notes) !== JSON.stringify(preview.draft.notes) ? [{ label: "补充讨论", before: preview.draft.notes.join("\n"), after: draft.notes.join("\n") }] : []),
 	] : [];
-	const collision = readPrototypeSkills(workspacePath).some(skill => skill.name === targetName);
-	const updateDraft = (next: PrototypeSkillDesignDraft) => {
-		setDraft(next); savePrototypeSkillDesignDraft(sessionId, next);
+	const collision = source.skillDesign!.listSkills(workspacePath).some(skill => skill.name === targetName);
+	const updateDraft = (next: DevSkillDesignDraft) => {
+		setDraft(next); source.skillDesign!.saveDraft(sessionId, next);
 		setError(""); setNotice(""); setSavedPath("");
 	};
 	useEffect(() => {
-		const subscription = onPrototypeSkillDesignSupplement(id => {
+		const subscription = source.skillDesign!.subscribe(id => {
 			if (id !== sessionId) return;
-			const next = readPrototypeSkillDesign(sessionId);
+			const next = source.skillDesign!.read(sessionId);
 			setDraft(next); setSavedPath(""); setError("");
 		});
 		return () => subscription.dispose();
@@ -79,11 +77,11 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
 		if (draft.when.trim().replace(/\s+/g, " ").length > 1024) { setError("适用场景过长，请精简到 1024 个字符以内。"); return; }
 		const next = { ...draft, name: targetName };
 		updateDraft(next);
-		setPreview({ content: renderPrototypeSkillDesign(targetName, next), digest: JSON.stringify(next), name: targetName, draft: structuredClone(next) });
+		setPreview({ content: source.skillDesign!.render(targetName, next), digest: JSON.stringify(next), name: targetName, draft: structuredClone(next) });
 		setTab("preview");
 	};
 	const fillExample = () => {
-		const example = PROTOTYPE_SKILL_DESIGN_SAMPLE;
+		const example = source.skillDesign!.sample!;
 		const next = { ...draft };
 		for (const field of SKILL_DESIGN_FIELDS) if (!next[field.id].trim()) next[field.id] = example[field.id];
 		if (!next.name.trim()) next.name = example.name;
@@ -93,7 +91,7 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
 	const focusMissing = () => document.getElementById(`skill-design-${missing[0]?.id}`)?.focus();
 	const save = () => {
 		if (!developmentRoot || !preview || !previewCurrent || collision || !validName || savedPath) return;
-		try { setSavedPath(savePrototypeDesignedSkill(developmentRoot, preview.name, draft.when, preview.content)); setError(""); }
+		try { setSavedPath(source.skillDesign!.saveSkill(developmentRoot, preview.name, draft.when, preview.content)); setError(""); }
 		catch (cause) { setError(cause instanceof Error ? cause.message : "演示保存失败，请检查标识。"); }
 	};
 	return <div className="flex h-[calc(100dvh-9rem)] min-h-[34rem] flex-col gap-3" data-testid="dev-skill-design">
@@ -104,7 +102,7 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
 		<div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4">
 			<section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border" aria-labelledby="skill-design-brief-title">
 				<div className="shrink-0 space-y-3 border-b border-border p-4">
-					<div className="flex items-center justify-between gap-2"><h3 id="skill-design-brief-title" className="text-ui-base font-medium">技能说明</h3><div className="flex items-center gap-3"><span role="status" className="text-ui-sm text-foreground-subtle">必填 {completed}/{required.length}</span><Button variant="ghost" size="sm" onClick={fillExample}>填入示例</Button></div></div>
+					<div className="flex items-center justify-between gap-2"><h3 id="skill-design-brief-title" className="text-ui-base font-medium">技能说明</h3><div className="flex items-center gap-3"><span role="status" className="text-ui-sm text-foreground-subtle">必填 {completed}/{required.length}</span>{source.mode === "prototype" && source.skillDesign!.sample && <Button variant="ghost" size="sm" onClick={fillExample}>填入示例</Button>}</div></div>
 				</div>
 				<div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4" data-testid="skill-design-fields">
 					{required.map(field => <div key={field.id} className="space-y-1.5"><div className="flex items-center justify-between gap-2"><Label htmlFor={`skill-design-${field.id}`}>{field.label}<span className="ml-1 text-foreground-subtle">*</span></Label>{Boolean(draft[field.id].trim()) && <Check className="size-3.5 text-foreground-subtle" aria-label="已填写" />}</div><SettingsFormTextarea id={`skill-design-${field.id}`} rows={2} required className="min-h-20 w-full" value={draft[field.id]} placeholder={field.placeholder} onChange={event => updateDraft({ ...draft, [field.id]: event.target.value })} aria-describedby={`skill-design-${field.id}-help`} /><p id={`skill-design-${field.id}-help`} className="text-ui-sm text-foreground-subtle">{field.hint}</p></div>)}

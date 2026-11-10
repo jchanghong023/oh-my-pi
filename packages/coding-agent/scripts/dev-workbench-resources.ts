@@ -164,13 +164,14 @@ async function collectBuildDeclarations(inputs: Map<string, Uint8Array>): Promis
 		"packages/dev-frontend/copy-manifest.json",
 		"packages/dev-frontend/tsconfig.base.json",
 		"packages/coding-agent/package.json",
+		"packages/dev-frontend/vite.config.ts",
 		"packages/coding-agent/scripts/dev-workbench-resources.ts",
 		"packages/coding-agent/src/dev-workbench/assets.ts",
 	]) {
 		const absolute = path.join(repoRoot, file);
 		inputs.set(absolute, await fs.readFile(absolute));
 	}
-	for (const directory of ["preview", "packages/web/public", "config"]) {
+	for (const directory of ["preview", "runtime", "app", "packages/web/public", "config"]) {
 		await walkFiles(path.join(frontendDir, directory), async file => {
 			if (!inputs.has(file)) inputs.set(file, await fs.readFile(file));
 		});
@@ -327,14 +328,14 @@ export async function buildDevWorkbenchAssets(): Promise<ReadonlyMap<string, Dev
 	await collectBuildTools(inputs);
 	const loadedConfig = await loadConfigFromFile(
 		{ command: "build", mode: "production" },
-		path.join(frontendDir, "preview/vite.config.ts"),
+		path.join(frontendDir, "runtime/vite.config.ts"),
 		repoRoot,
 	);
 	if (!loadedConfig) throw new Error("Dev frontend build configuration is unavailable.");
 	const config = loadedConfig.config;
 	const viteEntry = fileURLToPath(import.meta.resolve("vite"));
 	const packageDirectories = new Set<string>();
-	const capture = async (id: string): Promise<void> => {
+	const capture = async (id: string, imported = false): Promise<void> => {
 		if (id.startsWith("\0")) return;
 		const file = id.startsWith("file:") ? fileURLToPath(id) : id.split("?")[0]!;
 		if (!path.isAbsolute(file)) return;
@@ -344,6 +345,12 @@ export async function buildDevWorkbenchAssets(): Promise<ReadonlyMap<string, Dev
 			relative.startsWith("packages/coding-agent/src/webgui/")
 		)
 			throw new Error(`Dev build attempted to load original frontend input: ${file}`);
+		if (
+			imported &&
+			(relative.startsWith("packages/dev-frontend/preview/") ||
+				relative.startsWith("packages/dev-frontend/packages/ui/src/dev/mock/"))
+		)
+			throw new Error(`OMP Dev production build loaded prototype data: ${file}`);
 		try {
 			if (!(await fs.stat(file)).isFile()) return;
 			if (!inputs.has(file)) inputs.set(file, await fs.readFile(file));
@@ -377,14 +384,14 @@ export async function buildDevWorkbenchAssets(): Promise<ReadonlyMap<string, Dev
 			}
 		},
 		async load(id) {
-			await capture(id);
+			await capture(id, true);
 			return null;
 		},
 		generateBundle: {
 			// Run after Vite removes pure-CSS chunks and transfers their metadata.
 			order: "post",
 			async handler(_options, bundle) {
-				for (const id of this.getModuleIds()) await capture(id);
+				for (const id of this.getModuleIds()) await capture(id, true);
 				for (const imported of devWorkbenchOutputReferences(bundle)) emittedReferences.add(imported);
 			},
 		},

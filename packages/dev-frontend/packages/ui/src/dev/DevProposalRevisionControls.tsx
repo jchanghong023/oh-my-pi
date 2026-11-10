@@ -1,3 +1,4 @@
+import { useDevDataSource } from "./data-source.js";
 import { useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
@@ -5,15 +6,17 @@ import { Label } from "@/components/ui/label.js";
 import { MessageResponse } from "@/components/ai-elements/message.js";
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { useDev } from "./DevContext.js";
-import { prototypeProposalRevisionBlocker } from "./mock/proposal-revision.js";
-import type { DevRequirementGroup } from "./mock/types.js";
+import { proposalRevisionBlocker } from "./domain.js";
+import type { DevRequirementGroup } from "./types.js";
 
 export function DevProposalRevisionControls({ group }: { group: DevRequirementGroup }) {
+ const source = useDevDataSource();
+ if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
  const dev = useDev()!;
  const [open, setOpen] = useState(false);
  const [reason, setReason] = useState("");
  const formal = dev.view?.groups.some(item => item.id === group.id);
- const blocker = dev.view ? prototypeProposalRevisionBlocker(dev.view, group) : "正在读取提案。";
+ const blocker = dev.view ? proposalRevisionBlocker(dev.view, group) : "正在读取提案。";
  return <section className="space-y-2 text-ui-sm" data-testid="proposal-revision-controls">
   {formal && <Button size="sm" variant="outline" data-testid="proposal-revision-start" disabled={dev.pending || !!blocker} title={blocker} onClick={() => setOpen(true)}>修订正式提案（演示）</Button>}
   {group.revising && <p role="status" className="text-foreground-subtle" data-testid="proposal-revision-blocked">正式提案修订中：原入库版本保留在历史；全部 SR 禁止开始开发。补充需求后须重新评审、人工确认、提交推送及提案 PR 合并核验，才能恢复开发准入。</p>}

@@ -357,6 +357,7 @@ export interface InteractiveModeContext {
 	goalModePaused: boolean;
 	loopModeEnabled: boolean;
 	loopModePaused: boolean;
+	loopGoalMode?: boolean;
 	loopPrompt?: string;
 	loopLimit?: LoopLimitRuntime;
 	loopCondition?: LoopConditionConfig;
@@ -785,7 +786,8 @@ export interface InteractiveModeContext {
 	handleGuidedGoalCommand(rest?: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
 	/** True while `/guided-goal` is interviewing the user and no goal record exists yet. */
 	isGuidedGoalInterviewActive(): boolean;
-	handleLoopCommand(args?: string): Promise<string | undefined>;
+	handleLoopCommand(args?: string, goal?: boolean): Promise<string | undefined>;
+	prepareLoopGoalPrompt(objective: string): Promise<string | undefined>;
 	setLoopPrompt(prompt: string): void;
 	armLoopAutoSubmit(promptPromise: Promise<unknown>): void;
 	disableLoopMode(message?: string): void;

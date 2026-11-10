@@ -204,6 +204,37 @@ async function conversation(f: NativeHostFixture) {
 }
 
 describe("native workflow host", () => {
+	test("selected workflow exposes the native workspace and exact session binding rejects a foreign round", async () => {
+		await using f = await fixture();
+		const { ref, native, session } = await conversation(f);
+		const before = await f.host.workflow.view(ref.projectId);
+		const selected = await f.host.workflow.view(ref.projectId, ref);
+		expect(selected.workspace?.path).toBe(session.sessionManager.getCwd());
+		expect(JSON.parse(selected.workspace!.identity)).toEqual(ref);
+		await f.host.workflow.bind("exact-session-page", {
+			...ref,
+			sessionId: native.sessionId,
+			round: native.round,
+		});
+		const binding = f.host.workflow.binding("exact-session-page");
+		const metadata = await f.host.workflow.workspace("exact-session-page", ref.projectId);
+		expect(metadata.session?.sessionId).toBe(native.sessionId);
+		expect(metadata.cwd).toBe(selected.workspace!.path);
+		await expect(
+			f.host.workflow.bind("exact-session-page", {
+				...ref,
+				sessionId: native.sessionId,
+				round: native.round + 1,
+			}),
+		).rejects.toThrow("session/round");
+		expect(f.host.workflow.binding("exact-session-page")).toEqual(binding);
+		await expect(
+			f.host.workflow.bind("exact-session-page", { ...ref, sessionId: "foreign-session", round: native.round }),
+		).rejects.toThrow("session/round");
+		expect((await f.host.workflow.view(ref.projectId)).revision).toBe(before.revision);
+		expect(f.provider.requests).toHaveLength(0);
+	}, 120_000);
+
 	test("canonical opening reuses listener and root, isolates settings, and read-only selection creates no actor", async () => {
 		await using f = await fixture();
 		const reopened = await createDevWorkbenchHost({

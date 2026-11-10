@@ -17,7 +17,7 @@ import { createPrototypeEvent, silentPrototypeEvent, unavailablePrototypeOperati
 import { PROTOTYPE_MODEL_SELECTION } from "./settings.js";
 import { prototypeConversationFileChanges } from "./files.js";
 import { resolvePrototypeWorkspace } from "./workspace.js";
-import { prototypeConversationReadOnlyReason } from "./conversation-access.js";
+import { conversationReadOnlyReason } from "../domain.js";
 import { applyPrototypeAction, getPrototypeWorkflow } from "./workflow.js";
 import { prototypeSkillDesignReply } from "./skill-design.js";
 import { createPrototypeAutomationServices } from "./automations.js";
@@ -232,7 +232,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       const view = getPrototypeWorkflow({ projectId: project.id });
       const ref = view.sessions.find(item => item.sessionId === value.meta.taskId);
       if (!ref) continue;
-      const reason = prototypeConversationReadOnlyReason(view, { projectId: ref.projectId, irId: ref.irId, srId: ref.srId, ...(ref.phase === "ir-acceptance" ? { irAcceptance: true } : ref.phase === "requirements" || ref.phase === "solution" ? { discussionPhase: ref.phase } : { stage: ref.phase, stageRound: ref.round }) });
+      const reason = conversationReadOnlyReason(view, { projectId: ref.projectId, irId: ref.irId, srId: ref.srId, ...(ref.phase === "ir-acceptance" ? { irAcceptance: true } : ref.phase === "requirements" || ref.phase === "solution" ? { discussionPhase: ref.phase } : { stage: ref.phase, stageRound: ref.round }) });
       if (reason) throw new Error(reason);
       const proposal = view.drafts.find(item => item.id === ref.irId);
       if (ref.phase === "requirements" && proposal && content.trim()) {
