@@ -4286,10 +4286,7 @@ export function SessionPane({
         onDragOver={effectiveDropTargetController?.onDragOver}
         onDragLeave={effectiveDropTargetController?.onDragLeave}
         onDrop={effectiveDropTargetController?.onDrop}
-        className={cn(
-          "relative flex h-full min-h-0 flex-col",
-          compactForRemoteControl && "min-w-0",
-        )}
+        className={cn("relative flex h-full min-h-0 flex-col", compactForRemoteControl && "min-w-0")}
       >
         {effectiveDropTargetController?.active ? (
           <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-accent/55 backdrop-blur-sm">
@@ -4306,11 +4303,13 @@ export function SessionPane({
             </div>
           </div>
         ) : null}
-        {!embedded && <ConversationHeader
-          title={snapshot?.meta.title ?? ""}
-          onClosePane={onClosePane}
-          workspaceBadge={workspaceBadge}
-        />}
+        {!embedded && (
+          <ConversationHeader
+            title={snapshot?.meta.title ?? ""}
+            onClosePane={onClosePane}
+            workspaceBadge={workspaceBadge}
+          />
+        )}
 
         <div
           className={cn(
@@ -4377,13 +4376,9 @@ export function SessionPane({
               onCancelBackgroundWork={readOnly ? undefined : handleCancelBackgroundWork}
               onOpenSubagentSession={onOpenSubagentSession ? handleOpenSubagentSession : undefined}
               onOpenSubagentDirectory={
-                onOpenSubagentDirectory && !compactForRemoteControl
-                  ? handleOpenSubagentDirectory
-                  : undefined
+                onOpenSubagentDirectory && !compactForRemoteControl ? handleOpenSubagentDirectory : undefined
               }
-              onOpenWorkflowRun={
-                onOpenWorkflowRun && sessionId ? handleOpenWorkflowRunFromPanel : undefined
-              }
+              onOpenWorkflowRun={onOpenWorkflowRun && sessionId ? handleOpenWorkflowRunFromPanel : undefined}
               endedWorkflowRunCount={endedWorkflowRunCount}
               onOpenWorkflowRunDirectory={
                 onOpenWorkflowRunDirectory && !compactForRemoteControl
@@ -4406,8 +4401,6 @@ export function SessionPane({
           {errored && remoteAvailable ? (
             <SessionSubscriptionErrorPanel
               error={state.lastError ?? intl.formatMessage({ id: "chat.error.connectionLost" })}
-              sessionId={sessionId}
-              workspacePath={workspacePath}
               onReconnect={handleRetrySubscribe}
               reconnectLabel={
                 state.lifecycle?.state === "faulted"
@@ -4416,93 +4409,75 @@ export function SessionPane({
               }
             />
           ) : (
-              <BotGroupDeliveryProvider
-                taskId={extendedConversationAvailable ? sessionId : null}
-                workspacePath={workspacePath}
-                workspaceIdentity={workspaceIdentity}
-              >
-                <ConversationTimeline
-                  compactForRemoteControl={compactForRemoteControl}
-                  scrollToBottomActionRef={timelineScrollToBottomRef}
-                  scrollToQueryActionRef={timelineScrollToQueryRef}
-                  rows={timelineSnapshot?.rows.window ?? []}
-                  pendingGuides={timelineSnapshot ? pendingGuideProjection?.pendingGuides : []}
-                  apiRetry={timelineSnapshot?.control.apiRetry ?? null}
-                  totalCount={timelineSnapshot?.rows.totalCount ?? 0}
-                  sessionKey={sessionId ?? "draft"}
-                  scrollMemoryKey={timelineScrollMemoryKey}
-                  rowContext={rowContext}
-                  onFork={forkActionsEnabled ? handleFork : undefined}
-                  onRetry={retryActionsEnabled ? handleRetry : undefined}
-                  onFeedbackChange={
-                    !readOnly && !selectionSideChat && sessionId
-                      ? handleAssistantFeedback
-                      : undefined
-                  }
-                  onEdit={editActionsEnabled ? handleEdit : undefined}
-                  canLoadOlder={timelineSnapshot ? hasOlderRows(timelineSnapshot) : false}
-                  loadingOlder={timelineSnapshot ? state.loadingOlder : false}
-                  onLoadOlder={handleLoadOlder}
-                  onLoadAllOlder={handleLoadAllOlder}
-                  turnNavigatorDirectoryRevision={state.turnNavigatorDirectoryRevision}
-                  bottomDock={conversationBottomDock}
-                  emptyState={
-                    !remoteAvailable ? (
-                      <div className="p-6 text-center text-ui-base text-foreground-subtle">
-                        {intl.formatMessage({ id: "remote.conversation.placeholder" })}
-                      </div>
-                    ) : isDraft ? (
-                      <div data-testid={TID_CHAT_EMPTY} className="w-full">
-                        <ConversationDraftEmptyState
-                          compactForRemoteControl={compactForRemoteControl}
-                        />
-                      </div>
-                    ) : null
-                  }
-                  // 浮窗形态只露出底部输入区，空会话也必须贴底，不能居中。
-                  centerEmptyStateWithDock={isDraft && !isFloatingPresentation}
-                  floatingComposerDock={isFloatingPresentation}
-                  onComposerDockHeightChange={
-                    isFloatingPresentation && focused
-                      ? panePresentation.reportComposerDockHeight
-                      : undefined
-                  }
-                  onLatestTurnSummaryChange={
-                    isFloatingPresentation && focused
-                      ? handleFloatingLatestTurnSummaryChange
-                      : undefined
-                  }
-                  compactEmptyStateWithDock={compactForRemoteControl}
-                  summaryPanelLayout={statusPanelLayout}
-                  conversationFindQuery={!isDraft && focused ? conversationFindQuery : ""}
-                  conversationFindActiveIndex={
-                    !isDraft && focused ? conversationFindActiveIndex : -1
-                  }
-                  conversationFindNavigationRequestId={
-                    !isDraft && focused ? conversationFindNavigationRequestId : 0
-                  }
-                  onConversationFindMatchStateChange={
-                    !isDraft && focused ? onConversationFindMatchStateChange : undefined
-                  }
-                  searchResultHighlightRequest={isDraft ? null : searchResultHighlightRequest}
-                  onSearchResultHighlightDone={onSearchResultHighlightDone}
-                  sessionPhase={isDraft ? undefined : snapshot?.control.phase}
-                  selectionActions={
-                    !isDraft &&
-                    sessionId &&
-                    !readOnly &&
-                    !selectionSideChat &&
-                    !isMobileTextInputViewport
-                      ? {
-                          enabled: focused && !blockingInteractionId,
-                          sideActionDisabled: selectionSideActionBlocked,
-                          onAddToCurrentTask: handleAddSelectionToCurrentTask,
-                          onAskInSideChat: handleOpenSelectionSideConversation,
-                        }
-                      : undefined
-                  }
-                />
-              </BotGroupDeliveryProvider>
+            <BotGroupDeliveryProvider
+              taskId={extendedConversationAvailable ? sessionId : null}
+              workspacePath={workspacePath}
+              workspaceIdentity={workspaceIdentity}
+            >
+              <ConversationTimeline
+                compactForRemoteControl={compactForRemoteControl}
+                scrollToBottomActionRef={timelineScrollToBottomRef}
+                scrollToQueryActionRef={timelineScrollToQueryRef}
+                rows={timelineSnapshot?.rows.window ?? []}
+                pendingGuides={timelineSnapshot ? pendingGuideProjection?.pendingGuides : []}
+                apiRetry={timelineSnapshot?.control.apiRetry ?? null}
+                totalCount={timelineSnapshot?.rows.totalCount ?? 0}
+                sessionKey={sessionId ?? "draft"}
+                scrollMemoryKey={timelineScrollMemoryKey}
+                rowContext={rowContext}
+                onFork={forkActionsEnabled ? handleFork : undefined}
+                onRetry={retryActionsEnabled ? handleRetry : undefined}
+                onFeedbackChange={!readOnly && !selectionSideChat && sessionId ? handleAssistantFeedback : undefined}
+                onEdit={editActionsEnabled ? handleEdit : undefined}
+                canLoadOlder={timelineSnapshot ? hasOlderRows(timelineSnapshot) : false}
+                loadingOlder={timelineSnapshot ? state.loadingOlder : false}
+                onLoadOlder={handleLoadOlder}
+                onLoadAllOlder={handleLoadAllOlder}
+                turnNavigatorDirectoryRevision={state.turnNavigatorDirectoryRevision}
+                bottomDock={conversationBottomDock}
+                emptyState={
+                  !remoteAvailable ? (
+                    <div className="p-6 text-center text-ui-base text-foreground-subtle">
+                      {intl.formatMessage({ id: "remote.conversation.placeholder" })}
+                    </div>
+                  ) : isDraft ? (
+                    <div data-testid={TID_CHAT_EMPTY} className="w-full">
+                      <ConversationDraftEmptyState compactForRemoteControl={compactForRemoteControl} />
+                    </div>
+                  ) : null
+                }
+                // 浮窗形态只露出底部输入区，空会话也必须贴底，不能居中。
+                centerEmptyStateWithDock={isDraft && !isFloatingPresentation}
+                floatingComposerDock={isFloatingPresentation}
+                onComposerDockHeightChange={
+                  isFloatingPresentation && focused ? panePresentation.reportComposerDockHeight : undefined
+                }
+                onLatestTurnSummaryChange={
+                  isFloatingPresentation && focused ? handleFloatingLatestTurnSummaryChange : undefined
+                }
+                compactEmptyStateWithDock={compactForRemoteControl}
+                summaryPanelLayout={statusPanelLayout}
+                conversationFindQuery={!isDraft && focused ? conversationFindQuery : ""}
+                conversationFindActiveIndex={!isDraft && focused ? conversationFindActiveIndex : -1}
+                conversationFindNavigationRequestId={!isDraft && focused ? conversationFindNavigationRequestId : 0}
+                onConversationFindMatchStateChange={
+                  !isDraft && focused ? onConversationFindMatchStateChange : undefined
+                }
+                searchResultHighlightRequest={isDraft ? null : searchResultHighlightRequest}
+                onSearchResultHighlightDone={onSearchResultHighlightDone}
+                sessionPhase={isDraft ? undefined : snapshot?.control.phase}
+                selectionActions={
+                  !isDraft && sessionId && !readOnly && !selectionSideChat && !isMobileTextInputViewport
+                    ? {
+                        enabled: focused && !blockingInteractionId,
+                        sideActionDisabled: selectionSideActionBlocked,
+                        onAddToCurrentTask: handleAddSelectionToCurrentTask,
+                        onAskInSideChat: handleOpenSelectionSideConversation,
+                      }
+                    : undefined
+                }
+              />
+            </BotGroupDeliveryProvider>
           )}
         </div>
       </div>

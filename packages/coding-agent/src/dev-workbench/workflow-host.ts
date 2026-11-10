@@ -1052,9 +1052,11 @@ export class DevWorkflowHost {
 			binding,
 			cwd,
 			session,
-			inputAllowed: session?.sessionId === sessions.at(-1)?.sessionId && (sr
-				? sr.status === "developing"
-				: !!group && group.status !== "frozen" && group.status !== "deleted" && group.status !== "reviewing"),
+			inputAllowed:
+				session?.sessionId === sessions.at(-1)?.sessionId &&
+				(sr
+					? sr.status === "developing"
+					: !!group && group.status !== "frozen" && group.status !== "deleted" && group.status !== "reviewing"),
 			workspaceIdentity: canonicalJson({ projectId: id, irId: binding?.irId, srId: binding?.srId }),
 		};
 	}

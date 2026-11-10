@@ -62,7 +62,7 @@ export class VSBuffer {
   }
 
   readUInt8(offset: number): number {
-    return this.buffer[offset];
+    return this.buffer[offset]!;
   }
 
   writeUInt8(value: number, offset: number): void {
@@ -71,10 +71,10 @@ export class VSBuffer {
 
   readUInt32BE(offset: number): number {
     return (
-      ((this.buffer[offset] << 24) |
-        (this.buffer[offset + 1] << 16) |
-        (this.buffer[offset + 2] << 8) |
-        this.buffer[offset + 3]) >>>
+      ((this.readUInt8(offset) << 24) |
+        (this.readUInt8(offset + 1) << 16) |
+        (this.readUInt8(offset + 2) << 8) |
+        this.readUInt8(offset + 3)) >>>
       0
     );
   }

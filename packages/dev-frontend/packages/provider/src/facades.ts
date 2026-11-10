@@ -195,7 +195,7 @@ export interface ModelSelectionProviderView extends Pick<
 }
 
 export interface ModelSelectionViewInput {
-  readonly selection: ModelSelection | null;
+  readonly selection?: ModelSelection | null;
   readonly sessionId?: string;
 }
 
@@ -268,9 +268,7 @@ export class ProviderSettingsFacade {
       return Object.freeze({
         inheritedConfig: config.toJSON(),
         effectiveConfig: config.toJSON(),
-        issues: Object.freeze([
-          ...config.validateComplete(["providers", input.providerId, "models", input.modelId]),
-        ]),
+        issues: Object.freeze([...config.validateComplete(["providers", input.providerId, "models", input.modelId])]),
       });
     }
 
@@ -284,18 +282,11 @@ export class ProviderSettingsFacade {
     });
     let personalRules = snapshot.config.personalModels;
     if (input.originalModelId !== input.modelId) {
-      personalRules = personalRules.renameExactModel(
-        input.providerId,
-        input.originalModelId,
-        input.modelId,
-      );
+      personalRules = personalRules.renameExactModel(input.providerId, input.originalModelId, input.modelId);
     }
     // 此入口预览智能配置草稿；固定模式不请求推荐，重新开启时不能沿用旧固定标记。
     personalRules = personalRules.setExact(input.providerId, input.modelId, personalConfig, true);
-    const config = ModelConfigRules.composeEffective(
-      snapshot.config.zcodeBuiltinModelRules,
-      personalRules,
-    ).resolve({
+    const config = ModelConfigRules.composeEffective(snapshot.config.zcodeBuiltinModelRules, personalRules).resolve({
       providerId: input.providerId,
       templateId: provider.templateId,
       modelId: input.modelId,
@@ -305,9 +296,7 @@ export class ProviderSettingsFacade {
     return Object.freeze({
       inheritedConfig: inheritedConfig.toJSON(),
       effectiveConfig: config.toJSON(),
-      issues: Object.freeze([
-        ...config.validateComplete(["providers", input.providerId, "models", input.modelId]),
-      ]),
+      issues: Object.freeze([...config.validateComplete(["providers", input.providerId, "models", input.modelId])]),
     });
   }
 
@@ -326,9 +315,7 @@ export class ProviderSettingsFacade {
         ...(input?.templateId ? { templateId: input.templateId } : {}),
         ...(input?.providerName ? { providerName: input.providerName } : {}),
         ...(input?.locale ? { locale: input.locale } : {}),
-        ...(input?.initialConfig
-          ? { initialConfig: parseProviderConfig(input.initialConfig) }
-          : {}),
+        ...(input?.initialConfig ? { initialConfig: parseProviderConfig(input.initialConfig) } : {}),
       }),
     ).then(({ result, view }) => ({ providerId: result.providerId, view }));
   }
@@ -349,21 +336,14 @@ export class ProviderSettingsFacade {
   }
 
   deletePersonalProvider(providerId: ProviderId): Promise<ProviderSettingsView> {
-    return this.#mutateProvider(providerId, "delete-provider", (target) =>
-      target.deletePersonalProvider(providerId),
-    );
+    return this.#mutateProvider(providerId, "delete-provider", (target) => target.deletePersonalProvider(providerId));
   }
 
   reorderPersonalProviders(providerIds: readonly ProviderId[]): Promise<ProviderSettingsView> {
-    return this.#mutate("reorder-providers", (target) =>
-      target.reorderPersonalProviders(providerIds),
-    );
+    return this.#mutate("reorder-providers", (target) => target.reorderPersonalProviders(providerIds));
   }
 
-  reorderPersonalModels(
-    providerId: ProviderId,
-    modelIds: readonly ModelId[],
-  ): Promise<ProviderSettingsView> {
+  reorderPersonalModels(providerId: ProviderId, modelIds: readonly ModelId[]): Promise<ProviderSettingsView> {
     return this.#mutateProvider(providerId, "reorder-models", (target) =>
       target.reorderPersonalModels(providerId, modelIds, this.#modelMembership(providerId)),
     );
@@ -392,12 +372,7 @@ export class ProviderSettingsFacade {
     nextModelId: ModelId,
   ): Promise<ProviderSettingsView> {
     return this.#mutateProvider(providerId, "rename-model", (target) =>
-      target.renamePersonalModel(
-        providerId,
-        currentModelId,
-        nextModelId,
-        this.#modelMembership(providerId),
-      ),
+      target.renamePersonalModel(providerId, currentModelId, nextModelId, this.#modelMembership(providerId)),
     );
   }
 
@@ -428,28 +403,14 @@ export class ProviderSettingsFacade {
     });
   }
 
-  setPersonalModelEnabled(
-    providerId: ProviderId,
-    modelId: ModelId,
-    enabled: boolean,
-  ): Promise<ProviderSettingsView> {
+  setPersonalModelEnabled(providerId: ProviderId, modelId: ModelId, enabled: boolean): Promise<ProviderSettingsView> {
     return this.#mutateProvider(providerId, "set-model-enabled", (target) =>
-      target.setPersonalModelEnabled(
-        providerId,
-        modelId,
-        enabled,
-        this.#modelMembership(providerId),
-      ),
+      target.setPersonalModelEnabled(providerId, modelId, enabled, this.#modelMembership(providerId)),
     );
   }
 
-  #modelMembership(
-    providerId: ProviderId,
-    snapshot = requireSnapshot(this.#source),
-  ): ProviderModelMembership {
-    const provider = snapshot.resolution.resolvedProviders.find(
-      (item) => item.providerId === providerId,
-    );
+  #modelMembership(providerId: ProviderId, snapshot = requireSnapshot(this.#source)): ProviderModelMembership {
+    const provider = snapshot.resolution.resolvedProviders.find((item) => item.providerId === providerId);
     if (!provider) throw new Error(`Provider 不存在: ${providerId}`);
     // 配置成员与可执行模型不是同一名单：禁用、无权益和不完整模型仍可编辑。
     // Account 的空/替换名单也必须原样使用，不能再与静态 Built-in 取并集。
@@ -460,8 +421,7 @@ export class ProviderSettingsFacade {
       ),
       personalRevision: snapshot.config.personalRevision,
       assertCurrent: () => {
-        if (this.#source.getSnapshot() !== snapshot)
-          throw new Error("Provider Settings snapshot revision conflict");
+        if (this.#source.getSnapshot() !== snapshot) throw new Error("Provider Settings snapshot revision conflict");
       },
     });
   }
@@ -530,11 +490,7 @@ export class ModelSelectionFacade {
     this.#resolveLegacyReasoningLevel = resolveLegacyReasoningLevel;
   }
 
-  getView(
-    configuredDefault?: ModelSelection,
-    revision?: number,
-    input?: ModelSelectionViewInput,
-  ): ModelSelectionView {
+  getView(configuredDefault?: ModelSelection, revision?: number, input?: ModelSelectionViewInput): ModelSelectionView {
     // 账号事实与候选从同一已应用快照读取；不把最新 Settings 配给旧 Registry。
     const snapshot = input ? requireSnapshot(this.#source) : this.#source.getSnapshot();
     const registry = snapshot?.registry ?? this.#source.getView();
@@ -564,7 +520,7 @@ export class ModelSelectionFacade {
           .map(projectModelSelectionProviderView),
       ),
       ...(initial.source === "none" ? {} : { preferredSelection: initial.selection }),
-      ...(input
+      ...(input?.selection !== undefined
         ? resolveEffectiveModelSelection({
             selection: input.selection,
             registry,

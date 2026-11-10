@@ -376,10 +376,10 @@ export const TaskList = memo(function TaskList({
         hoverEnabled={hoverEnabled}
         isPinned={isPinned}
         isArchived={isArchived}
-        isActive={isWorkspaceActive && task.taskId === activeTaskId}
-        isMobileActive={
-          mobileActiveTaskKey ===
-          `${buildTaskWorkspaceKey(workspacePath, workspaceIdentity)}:${task.taskId}`
+        isActive={
+          mobileActiveTaskKey !== undefined
+            ? mobileActiveTaskKey === `${buildTaskWorkspaceKey(workspacePath, workspaceIdentity)}:${task.taskId}`
+            : isWorkspaceActive && task.taskId === activeTaskId
         }
         onSelectTask={handleSelectTaskItem}
         onArchiveTaskInline={handleArchiveTaskFromInline}

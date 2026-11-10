@@ -378,7 +378,7 @@ export function getPlainTextPatchFallbackLines(patch: string): string[] | null {
       // 真正负责渲染的 @pierre/diffs 解析结果为准，不能让两套解析语义再次产生漏网输入。
       // 这里不能调用 getSingularPatch：它会在预期的多文件结果上先 console.error(files) 再抛错，
       // 把用户代码泄露到控制台。改用 throwOnError 解析并自行判断数量，让正常降级保持无日志副作用。
-      const parsedPatches = parsePatchFiles(patch, undefined, true);
+      const parsedPatches = parsePatchFiles(patch, { throwOnError: true });
       if (parsedPatches.length === 1 && parsedPatches[0]?.files.length === 1) {
         return null;
       }

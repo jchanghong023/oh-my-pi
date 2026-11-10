@@ -20,6 +20,8 @@ function resolveRecordedWorkspace(view: DevWorkflowView | undefined, selection: 
   const acceptance = group?.acceptance;
   return acceptance ? { kind: "development", path: acceptance.worktree.path, identity: `${identity}:ir-acceptance:${group.id}:${acceptance.employeeId}` } : { kind: "reference", path: project.root, identity: `${identity}:ir-acceptance:${group?.id}` };
  }
+ // 入库改变提案状态，不改变已有讨论的会话工作区；SR 和验收仍使用各自开发目录。
+ if (!selection.srId && group?.proposalLocation) return { kind: "proposal", path: group.proposalLocation.directory.replace(/\/$/, ""), identity: `${identity}:proposal:${group.id}` };
  const sr = view?.srs.find(item => item.id === selection.srId && item.irId === selection.irId);
  if (selection.srId && !sr) return { kind: "unavailable", identity, error: "所选 SR 已不存在或不属于当前需求。不会替换成其他 SR 的会话。" };
  if (sr && sr.status !== "pending") {

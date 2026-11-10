@@ -51,6 +51,9 @@ bun ./standalone.ts start
 
 等价脚本：`bun run install:standalone`、`bun run start`。可选静态构建：`bun ./standalone.ts build`，输出在本包 `build/dev`；不要直接用 `file://` 打开源码。依赖清单或锁文件变化后重新执行安装命令；不要复制其他机器的 `node_modules`。
 
+本包显式锁定与 React 19 运行时匹配的 `@types/react`／`@types/react-dom`，避免被间接依赖的 React 18 类型覆盖。更新这些依赖后仍按上述独立安装命令准备环境，不需要安装根仓库依赖。
+
+
 ## 当前原型的界面与数据
 
 - `preview/main.tsx` 通过 `preview/prototype-data-source.ts` 注入内存数据；`preview/mock-services.ts` 为同一 UI 提供原型服务，不启动真实宿主。

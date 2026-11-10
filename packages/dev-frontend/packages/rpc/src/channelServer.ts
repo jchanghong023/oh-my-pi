@@ -13,10 +13,7 @@ import {
 export class ChannelServer<TContext = string> implements IChannelServer<TContext>, IDisposable {
   private channels = new Map<string, IServerChannel<TContext>>();
   private activeRequests = new Map<number, IDisposable>();
-  private pendingRequests = new Map<
-    string,
-    { request: any; timer: ReturnType<typeof setTimeout> }[]
-  >();
+  private pendingRequests = new Map<string, { request: any; timer: ReturnType<typeof setTimeout> }[]>();
   private protocolListener: IDisposable | null;
 
   constructor(
@@ -264,7 +261,7 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
       return false;
     }
     const [pending] = requests.splice(index, 1);
-    clearTimeout(pending.timer);
+    clearTimeout(pending!.timer);
     if (requests.length === 0) {
       this.pendingRequests.delete(channelName);
     }
@@ -290,9 +287,7 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
           message: `Channel name '${request.channelName}' timed out after ${this.timeoutDelay}ms`,
           stack: undefined,
         },
-        type: request.type === RequestType.Promise
-          ? ResponseType.PromiseError
-          : ResponseType.EventError,
+        type: request.type === RequestType.Promise ? ResponseType.PromiseError : ResponseType.EventError,
       });
     }, this.timeoutDelay);
 
@@ -306,7 +301,7 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
     }
 
     while (requests.length > 0) {
-      const { request } = requests[0];
+      const { request } = requests[0]!;
       this.removePendingRequest(channelName, request.id);
       switch (request.type) {
         case RequestType.Promise:

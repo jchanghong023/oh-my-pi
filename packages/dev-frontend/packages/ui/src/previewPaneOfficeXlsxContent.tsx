@@ -3,7 +3,7 @@ import { XlsxViewer, setWasmSource, type XlsxViewerController } from "@extend-ai
 import xlsxWasmUrl from "@extend-ai/react-xlsx/duke_sheets_wasm_bg.wasm?url";
 import { cn } from "@/components/lib/utils.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { installDocumentLinkSafety, sanitizeDocumentHref } from "@/lib/officeFilePreview.js";
+import { installDocumentLinkSafety } from "@/lib/officeFilePreview.js";
 import { logger } from "@/logger.js";
 
 setWasmSource(xlsxWasmUrl);
@@ -62,8 +62,7 @@ function XlsxSheetTabs({ controller, label }: { controller: XlsxViewerController
 
     event.preventDefault();
     selectTab(nextTabIndex);
-    const tabButtons =
-      event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]');
+    const tabButtons = event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]');
     tabButtons?.item(nextTabIndex).focus();
   };
 
@@ -80,9 +79,7 @@ function XlsxSheetTabs({ controller, label }: { controller: XlsxViewerController
             aria-selected={isActive}
             className={cn(
               "h-7 max-w-48 shrink-0 truncate rounded-md px-2 text-ui-sm transition-colors",
-              isActive
-                ? "bg-selected text-foreground"
-                : "text-foreground-subtle hover:bg-hover hover:text-foreground",
+              isActive ? "bg-selected text-foreground" : "text-foreground-subtle hover:bg-hover hover:text-foreground",
             )}
             key={tab.id}
             onClick={() => selectTab(tabIndex)}
@@ -100,15 +97,7 @@ function XlsxSheetTabs({ controller, label }: { controller: XlsxViewerController
   );
 }
 
-function XlsxPreviewError({
-  error,
-  message,
-  sourcePath,
-}: {
-  error: Error;
-  message: string;
-  sourcePath: string;
-}) {
+function XlsxPreviewError({ error, message, sourcePath }: { error: Error; message: string; sourcePath: string }) {
   useEffect(() => {
     logger.error("[PreviewPane] Excel 文件解析失败", {
       path: sourcePath,
@@ -139,23 +128,10 @@ export function PreviewPaneOfficeXlsxContent({
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const { intl } = useZCodeIntl();
   const sheetTabsLabel = intl.formatMessage({ id: "codeViewer.excel.sheetTabs" });
-  const handleOpenLink = useCallback(
-    (href: string) => {
-      const safeHref = sanitizeDocumentHref(href);
-      if (!safeHref || safeHref.startsWith("#")) {
-        logger.warn("[PreviewPane] 已阻断 Excel 不安全外链", { path: sourcePath });
-        return;
-      }
-      onOpenBrowserUrl?.(safeHref);
-    },
-    [onOpenBrowserUrl, sourcePath],
-  );
   // react-xlsx 的默认工具栏同时承载编辑动作和 sheet tabs。
   // 预览关闭默认工具栏后会丢失多表导航，因此只通过 toolbar render prop 补回只读 sheet tabs。
   const renderSheetTabs = useCallback(
-    (controller: XlsxViewerController) => (
-      <XlsxSheetTabs controller={controller} label={sheetTabsLabel} />
-    ),
+    (controller: XlsxViewerController) => <XlsxSheetTabs controller={controller} label={sheetTabsLabel} />,
     [sheetTabsLabel],
   );
   useEffect(() => {
@@ -172,8 +148,6 @@ export function PreviewPaneOfficeXlsxContent({
       <XlsxViewer
         file={buffer}
         fileName={sourcePath}
-        // Canvas 单元格及形状/图片曾直接 window.open，绕过 <a> 检查；共同出口交由宿主校验。
-        onOpenLink={handleOpenLink}
         height="100%"
         isDark={isDark}
         readOnly
@@ -181,15 +155,9 @@ export function PreviewPaneOfficeXlsxContent({
         showDefaultToolbar={false}
         toolbar={renderSheetTabs}
         loadingState={
-          <div
-            aria-busy="true"
-            className="h-full min-h-0 w-full bg-background"
-            data-office-preview-pending
-          />
+          <div aria-busy="true" className="h-full min-h-0 w-full bg-background" data-office-preview-pending />
         }
-        errorState={(error) => (
-          <XlsxPreviewError error={error} message={errorMessage} sourcePath={sourcePath} />
-        )}
+        errorState={(error) => <XlsxPreviewError error={error} message={errorMessage} sourcePath={sourcePath} />}
         fileTooLargeState={() => (
           <div className="p-3 text-sm text-destructive" role="alert">
             {errorMessage}

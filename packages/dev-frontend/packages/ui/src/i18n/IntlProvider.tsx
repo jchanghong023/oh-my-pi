@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { ReactNode } from "react";
+import type { Context, ReactNode } from "react";
 import type { Locale } from "@zcode/shared";
 import zhCN from "./locales/zh-CN.js";
 
@@ -28,7 +28,13 @@ const value: IntlContextValue = {
   },
 };
 
-const IntlContext = createContext<IntlContextValue | null>(null);
+// Fast Refresh can retain memoized consumers from an older module while replacing
+// the provider. Keep their Context identity shared across HMR generations.
+const hotData = import.meta.hot?.data as
+  | { zcodeIntlContext?: Context<IntlContextValue | null> }
+  | undefined;
+const IntlContext = hotData?.zcodeIntlContext ?? createContext<IntlContextValue | null>(null);
+if (hotData) hotData.zcodeIntlContext = IntlContext;
 
 /** 界面固定使用中文，不读取或改写用户保存的语言偏好。 */
 export function ZCodeIntlProvider({ children }: { children: ReactNode }) {

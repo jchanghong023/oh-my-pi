@@ -68,8 +68,8 @@ function readIntVQL(reader: IReader): number {
   let value = 0;
   for (let n = 0; ; n += 7) {
     const next = reader.read(1);
-    value |= (next.buffer[0] & 0b01111111) << n;
-    if (!(next.buffer[0] & 0b10000000)) {
+    value |= (next.readUInt8(0) & 0b01111111) << n;
+    if (!(next.readUInt8(0) & 0b10000000)) {
       return value;
     }
   }
@@ -96,7 +96,7 @@ function writeInt32VQL(writer: IWriter, value: number): void {
     scratch.buffer[i] = value & 0b01111111;
     value = value >>> 7;
     if (value > 0) {
-      scratch.buffer[i] |= 0b10000000;
+      scratch.buffer[i] = scratch.readUInt8(i) | 0b10000000;
     }
   }
   writer.write(scratch);

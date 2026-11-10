@@ -10,7 +10,8 @@ const packages = path.join(root, "packages");
 
 function dependencyFile(name: string, relative: string): string {
 	const file = path.join(root, "node_modules", name, relative);
-	if (!fs.existsSync(file)) throw new Error(`Missing local Dev dependency: ${name}/${relative}. Run bun ./standalone.ts install.`);
+	if (!fs.existsSync(file))
+		throw new Error(`Missing local Dev dependency: ${name}/${relative}. Run bun ./standalone.ts install.`);
 	return copiedPath(fs.realpathSync(file));
 }
 
@@ -32,7 +33,11 @@ function copiedFrontendPackages(): Plugin {
 				if (relative.startsWith("..") || path.isAbsolute(relative))
 					throw new Error(`Dev package-local import is outside the copy: ${importer}`);
 				const packageName = relative.split(path.sep)[0]!;
-				const resolved = await this.resolve(copiedPath(path.join(packages, packageName, "src", source.slice(5))), importer, { skipSelf: true });
+				const resolved = await this.resolve(
+					copiedPath(path.join(packages, packageName, "src", source.slice(5))),
+					importer,
+					{ skipSelf: true },
+				);
 				if (!resolved) throw new Error(`Unresolved copied Dev import: ${source}`);
 				return resolved;
 			}
@@ -50,12 +55,20 @@ function copiedFrontendPackages(): Plugin {
 					entry = conditions.browser ?? conditions.import ?? conditions.default;
 				}
 				if (typeof entry !== "string") throw new Error(`No copied Dev export: ${source}`);
-				const resolved = await this.resolve(copiedPath(path.resolve(packageRoot, entry)), importer, { skipSelf: true });
+				const resolved = await this.resolve(copiedPath(path.resolve(packageRoot, entry)), importer, {
+					skipSelf: true,
+				});
 				if (!resolved) throw new Error(`Unresolved copied Dev export: ${source}`);
 				return resolved;
 			}
-			if (source.startsWith(".") || source.startsWith("/") || source.startsWith("\0") ||
-				path.isAbsolute(source) || /^[a-z][a-z\d+.-]*:/i.test(source)) return;
+			if (
+				source.startsWith(".") ||
+				source.startsWith("/") ||
+				source.startsWith("\0") ||
+				path.isAbsolute(source) ||
+				/^[a-z][a-z\d+.-]*:/i.test(source)
+			)
+				return;
 			const resolved = await this.resolve(source, importer, { skipSelf: true });
 			if (resolved && !resolved.id.startsWith("\0")) {
 				const id = resolved.id.split("?")[0]!;
@@ -78,7 +91,10 @@ export function createDevFrontendConfig(entryRoot: string, outputDirectory: stri
 				{ find: "@", replacement: path.join(packages, "ui/src") },
 				{ find: /^tailwindcss$/, replacement: dependencyFile("tailwindcss", "index.css") },
 				{ find: /^tw-animate-css$/, replacement: dependencyFile("tw-animate-css", "dist/tw-animate.css") },
-				{ find: "tailwind-scrollbar-hide/v4", replacement: dependencyFile("tailwind-scrollbar-hide", "src/styles.css") },
+				{
+					find: "tailwind-scrollbar-hide/v4",
+					replacement: dependencyFile("tailwind-scrollbar-hide", "src/styles.css"),
+				},
 				{ find: "shadcn/tailwind.css", replacement: dependencyFile("shadcn", "dist/tailwind.css") },
 				{ find: "katex/dist/katex.min.css", replacement: dependencyFile("katex", "dist/katex.min.css") },
 				{ find: "@tailwindcss/typography", replacement: dependencyFile("@tailwindcss/typography", "src/index.js") },

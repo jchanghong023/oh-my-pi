@@ -348,9 +348,13 @@ function RootInner({
     ? confirmedNativeScope.scope : undefined;
   const defaultNativeSession = rootModelSelectionView?.nativeSession;
   const nativeWorkspaceScope = useMemo<NativeWorkspaceSessionScope>(() => {
-    const path = workspaceShellPath ?? "";
+    const path = workspaceShellPath;
+    if (!path) return { workspacePath: "", ready: false };
     if (selectedNativeResident && selectedNativeSession) {
-      if (!areWorkspaceFilePathsEqual(selectedNativeSession.workspacePath, path)) {
+      if (
+        !selectedNativeSession.workspacePath ||
+        !areWorkspaceFilePathsEqual(selectedNativeSession.workspacePath, path)
+      ) {
         return { workspacePath: path, ready: false };
       }
       if (retainedNativeScope?.sessionId === selectedNativeSession.sessionId) return retainedNativeScope;
@@ -361,20 +365,27 @@ function RootInner({
     }
     // Viewing a readonly history never changes the last confirmed execution/file owner.
     if (retainedNativeScope) return retainedNativeScope;
-    if (defaultNativeSession?.chatAvailable &&
-        areWorkspaceFilePathsEqual(defaultNativeSession.workspacePath, path)) {
+    if (
+      defaultNativeSession?.chatAvailable &&
+      defaultNativeSession.workspacePath &&
+      areWorkspaceFilePathsEqual(defaultNativeSession.workspacePath, path)
+    ) {
       return { workspacePath: path, sessionId: defaultNativeSession.sessionId, ready: true };
     }
     return {
       workspacePath: path,
-      ready: !selectedNativeSessionId ||
-        (selectedNativeRead.state.status === "ready" && !selectedNativeResident),
+      ready: !selectedNativeSessionId || (selectedNativeRead.state.status === "ready" && !selectedNativeResident),
     };
   }, [
-    workspaceShellPath, selectedNativeSessionId, selectedNativeResident,
-    selectedNativeSession?.sessionId, selectedNativeSession?.workspacePath,
-    selectedNativeRead.state.status, retainedNativeScope,
-    defaultNativeSession?.sessionId, defaultNativeSession?.workspacePath,
+    workspaceShellPath,
+    selectedNativeSessionId,
+    selectedNativeResident,
+    selectedNativeSession?.sessionId,
+    selectedNativeSession?.workspacePath,
+    selectedNativeRead.state.status,
+    retainedNativeScope,
+    defaultNativeSession?.sessionId,
+    defaultNativeSession?.workspacePath,
     defaultNativeSession?.chatAvailable,
   ]);
   useEffect(() => {
@@ -383,19 +394,30 @@ function RootInner({
       previous?.services === workspaceScopedServices &&
       previous.scope.sessionId === nativeWorkspaceScope.sessionId &&
       previous.scope.workspacePath === nativeWorkspaceScope.workspacePath
-        ? previous : { services: workspaceScopedServices, scope: nativeWorkspaceScope });
+        ? previous
+        : { services: workspaceScopedServices, scope: nativeWorkspaceScope },
+    );
   }, [nativeHostAvailable, nativeWorkspaceScope, workspaceScopedServices]);
   useEffect(() => {
-    if (!nativeHostAvailable || !selectedNativeResident || !selectedNativeSession ||
-        !workspaceShellPath ||
-        areWorkspaceFilePathsEqual(selectedNativeSession.workspacePath, workspaceShellPath)) return;
+    if (
+      !nativeHostAvailable ||
+      !selectedNativeResident ||
+      !selectedNativeSession ||
+      !workspaceShellPath ||
+      !selectedNativeSession.workspacePath ||
+      areWorkspaceFilePathsEqual(selectedNativeSession.workspacePath, workspaceShellPath)
+    )
+      return;
     // Same-project /cd still requires rebuilding every absolute-path service and pane.
     const target = new URL(window.location.href);
     target.searchParams.set("session", selectedNativeSession.sessionId);
     window.location.replace(target.href);
   }, [
-    nativeHostAvailable, selectedNativeResident, selectedNativeSession?.sessionId,
-    selectedNativeSession?.workspacePath, workspaceShellPath,
+    nativeHostAvailable,
+    selectedNativeResident,
+    selectedNativeSession?.sessionId,
+    selectedNativeSession?.workspacePath,
+    workspaceShellPath,
   ]);
   const nativeScopedWorkspaceServices = useMemo(
     () => nativeHostAvailable

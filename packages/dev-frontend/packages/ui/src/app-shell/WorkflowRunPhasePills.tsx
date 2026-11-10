@@ -1,22 +1,14 @@
+import type { ReactElement } from "react";
 import type { WorkflowRunPendingQuestion, WorkflowRunState } from "@zcode/shared/zcode-protocol-v4";
 import { laneDisplayName } from "@/components/workflow-graph/lane-name.js";
 import { phaseDisplayName } from "@/components/workflow-graph/phase-name.js";
 import type { WorkflowCausalityGraphData } from "@/components/workflow-graph/types.js";
-import type {
-  TimelinePill,
-  WorkflowTimelineModel,
-} from "@/components/workflow-timeline/timeline-model.js";
+import type { TimelinePill, WorkflowTimelineModel } from "@/components/workflow-timeline/timeline-model.js";
 import { pillActivity } from "@/components/workflow-timeline/timeline-pill-activity.js";
 import { pillInstanceKey } from "@/components/workflow-timeline/roster-model.js";
-import {
-  WorkflowAgentPill,
-  type WorkflowAgentPillOpen,
-} from "@/components/workflow-timeline/WorkflowAgentPill.js";
+import { WorkflowAgentPill, type WorkflowAgentPillOpen } from "@/components/workflow-timeline/WorkflowAgentPill.js";
 import { WorkflowRunQuestionRow } from "@/app-shell/WorkflowRunQuestionRow.js";
-import {
-  SpinePillTrailer,
-  type useWorkflowActorModelLabels,
-} from "@/app-shell/WorkflowRunSpineParts.js";
+import { SpinePillTrailer, type useWorkflowActorModelLabels } from "@/app-shell/WorkflowRunSpineParts.js";
 import type { WorkflowActorInstance } from "@/app-shell/workflowRunPanel.js";
 
 /**
@@ -24,15 +16,12 @@ import type { WorkflowActorInstance } from "@/app-shell/workflowRunPanel.js";
  * WorkflowRunPhaseList.tsx 拆出（max-lines 门）：那里只管节的开合、落点与留白，药丸怎么命名、怎么打开、
  * 尾槽写什么全在这里。纯函数工厂：清单每帧调用一次拿到三把闭包，没有自己的状态。
  */
-type FormatMessage = (
-  descriptor: { id: string },
-  values?: Record<string, string | number>,
-) => string;
+type FormatMessage = (descriptor: { id: string }, values?: Record<string, string | number>) => string;
 
 export interface PhasePillRenderers {
   nameOf: (pill: TimelinePill) => string;
   pillProps: (pill: TimelinePill) => Parameters<typeof WorkflowAgentPill>[0];
-  renderPill: (pill: TimelinePill) => JSX.Element;
+  renderPill: (pill: TimelinePill) => ReactElement;
 }
 
 export function phasePillRenderers({

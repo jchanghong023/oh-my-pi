@@ -72,9 +72,9 @@ function stageFor(id: string): Stage {
   if (id === "demo-pr" || id.endsWith("-pr")) return "pr";
   return "requirements";
 }
-function rowsFor(sessionId: string, stage: Stage): ConversationRow[] {
+function rowsFor(sessionId: string, discussion: readonly (readonly [string, string])[]): ConversationRow[] {
   const rows: ConversationRow[] = [];
-  for (const [user, assistant] of PROTOTYPE_CHAT_DISCUSSIONS[stage]) appendRows(rows, sessionId, user, assistant, initialTime + rows.length * 60000);
+  for (const [user, assistant] of discussion) appendRows(rows, sessionId, user, assistant, initialTime + rows.length * 60000);
   return rows;
 }
 function appendRows(rows: ConversationRow[], sessionId: string, user: string, assistant: string, at: number, commandId?: string, attachments?: AttachmentRef[], model = "Beam Free"): void {
@@ -85,8 +85,8 @@ function appendRows(rows: ConversationRow[], sessionId: string, user: string, as
   rows.push({ ...common, rowId: base + 1, entityId: `${turnId}-user`, kind: "userInput", text: user, origin: "realUser", sourceCommandId: commandId, attachments });
   rows.push({ ...common, rowId: base + 2, entityId: `${turnId}-assistant`, kind: "assistantText", text: assistant, state: "complete", model: `${model} · 预置演示回复` });
 }
-function conversation(sessionId: string, stage: Stage, title: string): ConversationSnapshot {
-  const rows = rowsFor(sessionId, stage);
+function conversation(sessionId: string, stage: Stage, title: string, discussion: readonly (readonly [string, string])[]): ConversationSnapshot {
+  const rows = rowsFor(sessionId, discussion);
   return {
     protocolVersion: 1, sessionId, logEpoch: `${epoch}:${sessionId}`, seq: 1, revision: 1,
     runtimeInitialization: { status: "ready", attemptId: "prototype-no-runtime" },
@@ -97,7 +97,7 @@ function conversation(sessionId: string, stage: Stage, title: string): Conversat
     modelTransition: null, usage: { contextWindow: null, cumulative: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } },
     queue: { items: [], autoDrain: true }, pendingInteractions: [], pendingCommands: [], backgroundWorks: [],
     subagents: { revision: 0, childSessionIds: [], running: [], endedTotal: 0 }, goal: null,
-    plan: stage === "planning" ? { updatedAt: initialTime, items: [{ id: "prototype-plan-1", content: "评审会话恢复交互（样例）", status: "completed" }, { id: "prototype-plan-2", content: "用户确认后对接真实 OMP", status: "pending" }, { id: "prototype-plan-3", content: "执行真实验证与验收", status: "pending" }] } : null,
+    plan: stage === "planning" && rows.length > 0 ? { updatedAt: initialTime, items: [{ id: "prototype-plan-1", content: `评审${title}（样例）`, status: "completed" }, { id: "prototype-plan-2", content: "用户确认后对接真实 OMP", status: "pending" }, { id: "prototype-plan-3", content: "执行真实验证与验收", status: "pending" }] } : null,
     workspaceHookAdmission: null, workspaceMcpAdmission: null,
     rows: { window: rows, totalCount: rows.length, firstRowId: rows[0]?.rowId ?? null },
   };
@@ -126,17 +126,28 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     const group = [...workflow.groups, ...workflow.drafts].find(item => item.id === ref?.irId);
     const stage = ref?.phase ?? stageFor(sessionId);
     const title = free?.meta.title ?? (sessionId.startsWith("prototype-skill-design:") ? "Skill 设计 · 补充讨论（样例）" : `${sr?.title ?? group?.title ?? "需求讨论"} · ${stage === "ir-acceptance" ? "IR 验收" : stage === "requirements" ? "需求" : stage === "solution" ? "方案" : stage === "planning" ? "计划" : stage === "executing" ? "实施" : "交付"}（样例）`);
-    const snapshot = conversation(sessionId, stage, title);
-    if (workflow.drafts.some(item => item.id === group?.id)) {
+    // 专属讨论只能绑定对应对象，不能因阶段相同而灌入新提案或新 SR。
+    const sampleStage = stage === "free" || stage === "ir-acceptance"
+      || (group?.id === "ir-auth" && !sr && stage === "requirements")
+      || (group?.id === "ir-auth" && !sr && stage === "solution")
+      || (group?.id === "ir-auth" && sr?.id === "sr-session" && stage === "planning")
+      || (group?.id === "ir-auth" && sr?.id === "sr-permissions" && stage === "executing")
+      || (group?.id === "ir-auth" && sr?.id === "sr-audit" && stage === "pr");
+    const snapshot = conversation(sessionId, stage, title, sampleStage ? PROTOTYPE_CHAT_DISCUSSIONS[stage] : []);
+    if (ref && group && !group.proposalLocation && !sampleStage) {
+      appendRows(snapshot.rows.window, sessionId, `请讨论「${sr?.title ?? group.title}」的${stage === "planning" ? "开发计划" : stage === "executing" ? "实施边界" : stage === "pr" ? "交付评审" : "需求"}。`, `**${sr?.title ?? group.title} · 对象专属演示**\n\n当前仅展示此对象的阶段讨论入口，没有已执行的模型、工具或验证记录。请围绕本对象补充目标、边界与验收条件；不会复用其他需求的历史。`, initialTime);
+      snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
+    }
+    if (!sr && ["draft-automation", "draft-notification", "draft-mobile-search"].includes(group?.id ?? "") && (stage === "requirements" || stage === "solution")) {
       snapshot.rows.window = [];
       appendRows(snapshot.rows.window, sessionId, proposalDiscussionPrompt, stage === "solution" ? proposalSolutionDiscussion : proposalDiscussion, initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
-    if (group?.id === "ir-dashboard") {
+    if (!sr && group?.id === "ir-dashboard" && stage === "requirements") {
       snapshot.rows.window = []; appendRows(snapshot.rows.window, sessionId, "希望团队数据总览能清晰展示项目进度和趋势，支持筛选和空态。", "**数据总览需求讨论样例**\n\n建议提供概览指标、趋势卡片、项目筛选及无数据状态，并补齐键盘导航和窄屏布局。这里仅使用独立的前端样例，不读取真实指标。", initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
-    if (!free && stage !== "ir-acceptance" && root.includes("mobile") && !workflow.drafts.some(item => item.id === group?.id)) {
+    if (!free && group && !group.proposalLocation && stage !== "ir-acceptance" && root.includes("mobile")) {
       snapshot.rows.window = []; appendRows(snapshot.rows.window, sessionId, `请讨论${sr?.title ?? group?.title ?? "移动工作台"}的移动端体验。`, `**移动工作台${stage}讨论样例**\n\n为${sr?.title ?? "移动协作"}提供单手可触达导航、明确返回路径、加载与离线提示。保留项目上下文并使用可访问标签。\n\n当前内容仅为阶段性前端原型样例，未读取设备、运行工具或接入真实 OMP。`, initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
@@ -365,7 +376,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
         const child = ensure(`prototype-side-${++nextId}`, params.workspacePath, params.workspaceIdentity);
         child.stage = value.stage;
         child.meta.title = `${value.meta.title} · 辅助讨论`;
-        child.snapshot = conversation(child.meta.taskId, value.stage, child.meta.title);
+        child.snapshot = conversation(child.meta.taskId, value.stage, child.meta.title, []);
         if (payload.firstInput) append(child, payload.firstInput.text, envelope.commandId);
         ack.result = { type: "createSelectionSideSession", sessionId: child.meta.taskId };
       } else if (envelope.type === "setFollowupMode") {

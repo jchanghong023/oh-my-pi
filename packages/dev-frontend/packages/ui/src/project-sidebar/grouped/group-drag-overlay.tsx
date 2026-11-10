@@ -7,21 +7,12 @@ import { getTaskGroupDisplayTitle } from "@/project-sidebar/grouped/group-title.
 
 type GroupNode = Extract<ZCodeGroupedTaskViewNode, { type: "group" }>;
 
-function GroupDragOverlay({
-  node,
-  className,
-  style,
-}: {
-  node: GroupNode;
-  className?: string;
-  style?: CSSProperties;
-}) {
+function GroupDragOverlay({ node, className, style }: { node: GroupNode; className?: string; style?: CSSProperties }) {
   const { intl } = useZCodeIntl();
   // cron 在存储层使用 `cron` 占位名；拖拽浮层曾绕过普通 header 的本地化逻辑，
-  // 导致拖动时从“定时任务”闪回内部值。三种 header 统一走同一个标题格式化入口。
+  // 导致拖动时从“定时任务”闪回内部值。各 header 统一走同一个标题格式化入口。
   const displayTitle = getTaskGroupDisplayTitle(node.group, {
     cron: intl.formatMessage({ id: "taskGroup.cronGroupName" }),
-    offPeak: intl.formatMessage({ id: "offPeak.sidebar.groupTitle" }),
   });
 
   return (

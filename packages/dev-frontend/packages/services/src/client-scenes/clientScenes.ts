@@ -1,6 +1,3 @@
-import { ServiceChannels } from "@zcode/shared";
-import { createServiceDescriptor } from "../descriptors.js";
-
 export interface ClientSceneResponseBody<T> {
   code: number;
   msg: string;
@@ -59,7 +56,3 @@ export type ClientScenesResponse = ClientSceneResponseBody<ClientSceneConfig[]>;
 export interface IClientScenesService {
   list(): Promise<ClientScenesResponse>;
 }
-
-export const IClientScenesService = createServiceDescriptor<IClientScenesService>(
-  ServiceChannels.ClientScenes,
-);

@@ -109,8 +109,8 @@ export class ChunkStream {
       return null;
     }
 
-    if (this.chunks[0].byteLength >= byteCount) {
-      return this.chunks[0].slice(0, byteCount);
+    if (this.chunks[0]!.byteLength >= byteCount) {
+      return this.chunks[0]!.slice(0, byteCount);
     }
 
     const result = VSBuffer.alloc(byteCount);
@@ -143,15 +143,15 @@ export class ChunkStream {
       return null;
     }
 
-    if (this.chunks[0].byteLength === byteCount) {
+    if (this.chunks[0]!.byteLength === byteCount) {
       const result = this.chunks.shift()!;
       this.totalLength -= byteCount;
       return result;
     }
 
-    if (this.chunks[0].byteLength > byteCount) {
-      const result = this.chunks[0].slice(0, byteCount);
-      this.chunks[0] = this.chunks[0].slice(byteCount);
+    if (this.chunks[0]!.byteLength > byteCount) {
+      const result = this.chunks[0]!.slice(0, byteCount);
+      this.chunks[0] = this.chunks[0]!.slice(byteCount);
       this.totalLength -= byteCount;
       return result;
     }
@@ -160,7 +160,7 @@ export class ChunkStream {
     const result = VSBuffer.alloc(byteCount);
     let offset = 0;
     while (offset < byteCount) {
-      const chunk = this.chunks[0];
+      const chunk = this.chunks[0]!;
       const needed = byteCount - offset;
       if (chunk.byteLength <= needed) {
         result.set(chunk, offset);

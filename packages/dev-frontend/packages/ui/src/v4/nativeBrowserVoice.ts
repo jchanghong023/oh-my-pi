@@ -161,7 +161,8 @@ function makeOffer(voice: BrowserVoice): Promise<Record<string, unknown>> {
       const microphone = await waitForOperation(voice, permission, context.signal);
       assertCurrent(voice);
       const tracks = microphone.getAudioTracks();
-      if (tracks.length !== 1 || tracks[0].readyState !== "live") {
+      const track = tracks[0];
+      if (tracks.length !== 1 || !track || track.readyState !== "live") {
         throw new Error("The selected microphone has no single live audio track.");
       }
       const peer = new RTCPeerConnection({ iceServers: [] });
@@ -175,15 +176,23 @@ function makeOffer(voice: BrowserVoice): Promise<Record<string, unknown>> {
       voice.audio = audio;
       document.body.appendChild(audio);
       audio.addEventListener("error", () => {
-        if (!voice.closed) closeVoice(voice, new Error(audio.error?.message || "Native live voice audio playback failed."));
+        if (!voice.closed)
+          closeVoice(voice, new Error(audio.error?.message || "Native live voice audio playback failed."));
       });
-      peer.addEventListener("track", event => {
-        if (voice.closed) { event.track.stop(); return; }
+      peer.addEventListener("track", (event) => {
+        if (voice.closed) {
+          event.track.stop();
+          return;
+        }
         if (event.track.kind === "audio") {
           remote.addTrack(event.track);
-          event.track.addEventListener("ended", () => {
-            if (!voice.closed) closeVoice(voice, new Error("The native live voice remote audio track ended."));
-          }, { once: true });
+          event.track.addEventListener(
+            "ended",
+            () => {
+              if (!voice.closed) closeVoice(voice, new Error("The native live voice remote audio track ended."));
+            },
+            { once: true },
+          );
         }
       });
       peer.addEventListener("iceconnectionstatechange", () => {
@@ -191,10 +200,15 @@ function makeOffer(voice: BrowserVoice): Promise<Record<string, unknown>> {
           closeVoice(voice, new Error(`Native live voice ICE connection ${peer.iceConnectionState}.`));
         }
       });
-      tracks[0].addEventListener("ended", () => {
-        if (!voice.closed) closeVoice(voice, new Error("The browser microphone was disconnected or its permission was revoked."));
-      }, { once: true });
-      peer.addTrack(tracks[0], microphone);
+      track.addEventListener(
+        "ended",
+        () => {
+          if (!voice.closed)
+            closeVoice(voice, new Error("The browser microphone was disconnected or its permission was revoked."));
+        },
+        { once: true },
+      );
+      peer.addTrack(track, microphone);
       // The server retains the provider control sideband; this page carries media only.
       const channel = peer.createDataChannel("oai-events");
       voice.channel = channel;

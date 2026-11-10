@@ -16,6 +16,8 @@ import {
 } from "@/lib/taskSidePaneMemory.js";
 import {
   ensureSidePaneTab,
+  closeSidePaneTab,
+  closeSidePaneTabForScope,
   closeSidePaneTabs,
   isSidePaneTabVisibleInScope,
   closeGitSidePane,

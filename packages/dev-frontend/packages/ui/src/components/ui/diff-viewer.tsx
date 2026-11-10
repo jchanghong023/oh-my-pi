@@ -34,7 +34,7 @@ type DiffViewerMultiFileInput = {
 
 export type DiffViewerProps = Omit<HTMLAttributes<HTMLDivElement>, "children"> &
   (DiffViewerPatchInput | DiffViewerMultiFileInput) & {
-    options?: FileDiffOptions<undefined>;
+    options?: FileDiffOptions<undefined, undefined>;
     disableWorkerPool?: boolean;
     diffClassName?: string;
     fontSizePx?: number;
@@ -55,10 +55,7 @@ function DiffViewerComponent(props: DiffViewerProps) {
     <DiffsWorkerPoolProvider
       disabled={props.disableWorkerPool}
       renderOptions={{
-        theme:
-          props.lightTheme && props.darkTheme
-            ? { light: props.lightTheme, dark: props.darkTheme }
-            : undefined,
+        theme: props.lightTheme && props.darkTheme ? { light: props.lightTheme, dark: props.darkTheme } : undefined,
         lineDiffType: "word-alt",
         preferredHighlighter: DIFFS_PREFERRED_HIGHLIGHTER,
         ...props.options,
@@ -95,7 +92,7 @@ function DiffViewerContent(props: DiffViewerProps) {
     }),
     [fontSizePx, style],
   );
-  const options = useMemo<FileDiffOptions<undefined>>(
+  const options = useMemo<FileDiffOptions<undefined, undefined>>(
     () => ({
       diffStyle: "unified",
       diffIndicators: "bars",
@@ -146,12 +143,7 @@ function DiffViewerContent(props: DiffViewerProps) {
   const divProps = rendersPatch ? omitPatchDiffProps(props) : omitMultiFileDiffProps(props);
 
   return (
-    <div
-      className={cn("h-full w-full overflow-auto", className)}
-      data-diff-viewer=""
-      style={viewerStyle}
-      {...divProps}
-    >
+    <div className={cn("h-full w-full overflow-auto", className)} data-diff-viewer="" style={viewerStyle} {...divProps}>
       {diffNode}
     </div>
   );

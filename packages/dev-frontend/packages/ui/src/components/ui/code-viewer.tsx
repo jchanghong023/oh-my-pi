@@ -686,7 +686,7 @@ function CodeViewerContent({
   }, [file.cacheKey, firstLineNumber, focusedEndLine, focusedStartLine, focusRequestId]);
   // 依赖是 CSS 字符串（内容）而不是数组引用：调用方每次渲染给一个新数组时，options 不该跟着换（File 会重排）。
   const markedLinesCss = codeViewerMarkedLinesCss(markedLines);
-  const options = useMemo<FileOptions<CodeViewerAnnotationMetadata>>(
+  const options = useMemo<FileOptions<CodeViewerAnnotationMetadata, undefined>>(
     () => ({
       disableFileHeader: true,
       disableLineNumbers: !showLineNumbers,
@@ -695,8 +695,7 @@ function CodeViewerContent({
       preferredHighlighter: DIFFS_PREFERRED_HIGHLIGHTER,
       enableLineSelection: canUseCommentLineSelection,
       enableGutterUtility: canUseCommentGutterUtility,
-      lineHoverHighlight:
-        canUseCommentLineSelection || canUseCommentGutterUtility ? "both" : "disabled",
+      lineHoverHighlight: canUseCommentLineSelection || canUseCommentGutterUtility ? "both" : "disabled",
       onLineSelectionEnd: handleLineSelectionEnd,
       // 自定义 renderGutterUtility 只能拿 hover 行，拖拽 comment + 时会退化成单行。
       // 使用 @pierre/diffs 的 gutter selection 回调，让点击和拖拽都走同一套 range 计算。
