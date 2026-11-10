@@ -1,3 +1,4 @@
+import { retryPrototypeMaterialRead, retryPrototypeSessionRead } from "./mock/recovery.js";
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
 import type { ComposerDraftHandoff } from "../v4/composer/composerDraftWorkspaceTransfer.js";
 import type { ConversationComposerSendOptions } from "../v4/ConversationComposer.js";
@@ -5,7 +6,7 @@ import type {
   DevAction, DevMaterialView, DevNativeSessionRef, DevSelection, DevWorkflowResult, DevWorkflowStage, DevWorkflowView,
 } from "./mock/types.js";
 import { createPrototypeFreeChat, readPrototypeFreeChat, setPrototypeFreeProject } from "./mock/free-chats.js";
-import { applyPrototypeAction, DEFAULT_SELECTION, getPrototypeWorkflow, resolvePrototypeSession, PROTOTYPE_RELEASE_ID } from "./mock/workflow.js";
+import { applyPrototypeAction, DEFAULT_SELECTION, getPrototypeWorkflow, resolvePrototypeSession } from "./mock/workflow.js";
 
 export type { DevWorkflowView, DevWorkflowStage, DevMaterialView, DevSelection };
 export const DEV_STAGES: DevWorkflowStage[] = ["planning", "executing", "pr"];
@@ -29,7 +30,7 @@ interface DevContextValue {
   view?: DevWorkflowView; selection: DevSelection; session?: DevNativeSessionRef;
   startFreeChat(projectId?: string): void; openFreeChat(taskId: string, files?: boolean): void;
   pending: boolean; error?: string; releaseId: string; setReleaseId(id: string): void;
-  select(value: DevSelection): void; refresh(): Promise<void>;
+  select(value: DevSelection): void; refresh(): Promise<void>; retryMaterial(path: string): Promise<boolean>; retrySession(): Promise<void>;
   command(value: DevAction): Promise<DevWorkflowResult | undefined>;
   firstDiscussion?: DevFirstDiscussion;
   openFirstDiscussion(handoff: ComposerDraftHandoff, text: string, options: ConversationComposerSendOptions): Promise<void>;
@@ -46,7 +47,7 @@ export function DevProvider({ children }: { children: ReactNode }) {
   const selectionRef = useRef(selection);
   const [view, setView] = useState<DevWorkflowView>(() => getPrototypeWorkflow(DEFAULT_SELECTION));
   const [error, setError] = useState<string>();
-  const [releaseId, updateReleaseId] = useState(PROTOTYPE_RELEASE_ID);
+  const [releaseId, updateReleaseId] = useState(() => getPrototypeWorkflow(DEFAULT_SELECTION).releases[0]?.id ?? "");
   const firstDiscussionRef = useRef<DevFirstDiscussion | undefined>(undefined);
   const claimed = useRef<DevFirstDiscussion | undefined>(undefined);
   const [firstDiscussion, setFirstDiscussion] = useState<DevFirstDiscussion>();
@@ -81,14 +82,29 @@ export function DevProvider({ children }: { children: ReactNode }) {
     const selected = [...data.groups, ...data.drafts].find(item => item.id === current.irId);
     if (selected && selected.releaseId !== id) select({ projectId: current.projectId });
   }, [select]);
-  const refresh = useCallback(async () => { setView(getPrototypeWorkflow(selectionRef.current)); }, []);
+  const refresh = useCallback(async () => { setView(getPrototypeWorkflow(selectionRef.current)); setError(undefined); }, []);
+  const retryMaterial = useCallback(async (path: string) => {
+    const current = getPrototypeWorkflow(selectionRef.current);
+    if (!current.materials.some(item => item.path === path && item.irId === selectionRef.current.irId)) return false;
+    const recovered = retryPrototypeMaterialRead(path);
+    setView(getPrototypeWorkflow(selectionRef.current));
+    return recovered;
+  }, []);
+  const retrySession = useCallback(async () => {
+    const target = selectionRef.current;
+    const current = getPrototypeWorkflow(target);
+    const sr = current.srs.find(item => item.id === target.srId && item.irId === target.irId);
+    const ref = sr?.sessions.find(item => item.phase === (target.stage ?? sr.stage) && item.round === (target.stageRound ?? sr.round));
+    if (ref) retryPrototypeSessionRead(ref.sessionId);
+    setView(getPrototypeWorkflow(target)); setError(undefined);
+  }, []);
   const command = useCallback(async (value: DevAction) => {
     const target = selectionRef.current;
     try {
       const result = applyPrototypeAction(value, target);
       if (value.type === "createProposal") select({ projectId: result.projectId, irId: result.irId });
       else if (value.type === "markRequirementsMerged") select({ projectId: target.projectId, irId: target.irId });
-      else if (["submitProposalReview", "generateProposalSolution", "returnProposal"].includes(value.type)) select({ ...target, discussionPhase: undefined });
+      else if (["submitProposalReview", "acceptProposal", "generateProposalSolution", "returnProposal"].includes(value.type)) select({ ...target, discussionPhase: undefined });
       else if (value.type === "deleteRequirement") select({ projectId: target.projectId });
       else if (["startSr", "approveStage", "backStage"].includes(value.type)) select({ projectId: target.projectId, irId: target.irId, srId: target.srId });
       else {
@@ -123,6 +139,6 @@ export function DevProvider({ children }: { children: ReactNode }) {
     if (cause !== undefined) report(cause);
   }, [report]);
   return <DevContext.Provider value={{ view, selection, session: nativeTarget(view, selection), pending: false,
-    error, releaseId, setReleaseId, select, refresh, command, report, firstDiscussion, startFreeChat, openFreeChat,
+    error, releaseId, setReleaseId, select, refresh, retryMaterial, retrySession, command, report, firstDiscussion, startFreeChat, openFreeChat,
     openFirstDiscussion, takeFirstDiscussion, finishFirstDiscussion }}>{children}</DevContext.Provider>;
 }

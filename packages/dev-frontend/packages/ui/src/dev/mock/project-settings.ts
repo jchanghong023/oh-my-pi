@@ -1,3 +1,4 @@
+import { prototypeRecoveryScenario } from "./recovery.js";
 import { getPrototypeEmployeeId } from "./employee.js";
 import type { DevProject } from "./types.js";
 
@@ -12,7 +13,7 @@ function project(id: string, name: string, root: string): DevProject {
 const projects = [project("demo-aurora", "Aurora 协作控制台", "/demo/aurora-console"), project("demo-mobile", "Mobile 移动工作台", "/demo/mobile-console")];
 // 共享数据库项目表的内存投影；不访问真实 SQLite 或项目目录。
 let settings: PrototypeProjectSettings = {
-	projects,
+	projects: prototypeRecoveryScenario === "empty-projects" ? [] : projects,
 };
 
 export function readPrototypeProjectSettings(): PrototypeProjectSettings {

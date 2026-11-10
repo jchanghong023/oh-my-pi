@@ -69,3 +69,6 @@ export function createPrototypeProjectServices(): Pick<IServiceAccessor, "projec
   measureProjectData: unavailablePrototypeOperation, deleteProjectData: unavailablePrototypeOperation,
  } };
 }
+
+/** 只返回现有元数据中的冻结根路径，供样例文件服务识别；不加载聊天。 */
+export function readPrototypeFreeWorkspaceRoots(): string[] { return [...new Set([...records.values()].map(item => item.meta.workspacePath))]; }

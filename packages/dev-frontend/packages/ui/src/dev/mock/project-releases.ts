@@ -1,3 +1,4 @@
+import { prototypeRecoveryScenario } from "./recovery.js";
 import type { DevRelease } from "./types.js";
 
 const createdAt = "2026-11-10T09:00:00.000Z";
@@ -13,6 +14,9 @@ const releasesByProject = new Map<string, DevRelease[]>([
 		{ id: "mobile-release-2026-12", projectId: "demo-mobile", title: "2026.12 · 离线体验", createdAt },
 	]],
 ]);
+
+if (prototypeRecoveryScenario === "empty-projects") releasesByProject.clear();
+if (prototypeRecoveryScenario === "empty-releases") releasesByProject.set("demo-aurora", []);
 
 export function readPrototypeProjectReleases(projectId?: string): DevRelease[] {
 	return structuredClone(projectId ? releasesByProject.get(projectId) ?? [] : [...releasesByProject.values()].flat());

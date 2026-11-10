@@ -1,5 +1,8 @@
+import { DevIrAcceptanceWelcome } from "@/dev/DevIrAcceptance.js";
+import { DevEmptyState } from "@/dev/DevEmptyState.js";
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useDev } from "@/dev/DevContext.js";
+import { prototypeConversationReadOnlyReason } from "@/dev/mock/conversation-access.js";
 import { DevAutomations } from "@/dev/DevAutomations.js";
 import { DevSidebar, DevStageHeader, DevReadonlyOverview } from "@/dev/DevWorkbench.js";
 import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
@@ -327,8 +330,10 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const devSr = dev?.view?.srs.find(item => item.id === dev.selection.srId);
   const devGroup = [...(dev?.view?.groups ?? []), ...(dev?.view?.drafts ?? [])].find(item => item.id === dev?.selection.irId);
   const devProposalHistory = !!dev?.view?.drafts.some(item => item.id === dev.selection.irId) && !!dev?.selection.discussionPhase && dev.selection.discussionPhase !== (devGroup?.proposalStage ?? "requirements");
-  const devFrozen = !!dev && !dev.selection.srId && devGroup?.status === "frozen";
-  const devReadOnly = !!dev && !!dev.selection.srId && devSr?.status !== "developing" && !dev.view?.drafts.some(item => item.id === dev.selection.irId);
+  const devOwnershipReadOnlyReason = prototypeConversationReadOnlyReason(dev?.view, dev?.selection ?? {});
+  const devFrozen = !!dev && !dev.selection.irAcceptance && !dev.selection.srId && Boolean(devGroup?.freeze);
+  const devEmpty = Boolean(dev && !dev.selection.freeSessionId && (!dev.selection.irId || (!dev.session && devSr?.status !== "pending")));
+  const devReadOnly = !!dev && !!dev.selection.srId && !dev.session && !dev.view?.drafts.some(item => item.id === dev.selection.irId);
   const { intl } = useZCodeIntl();
   const nativeHostAvailable = useNativeHostAvailable();
   const platform = usePlatform();
@@ -1827,7 +1832,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 draftDropTargetController={
                   activeTaskId === null ? draftHeaderDropTargetController : undefined
                 }
-                readOnlyReason={workspaceReadOnlyReason}
+                readOnlyReason={devOwnershipReadOnlyReason ?? workspaceReadOnlyReason}
                 workspaceAbsPath={workspaceAbsPath}
                 remoteSessionId={workspaceRemoteSessionId}
                 workspaceIdentity={workspaceIdentity}
@@ -1864,7 +1869,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 allowOpenWorkspace={allowOpenWorkspace}
               />
             </ScopedErrorBoundary>
-              {dev && !dev.selection.freeSessionId && workspaceMainView === "chat" && <DevStageHeader />}
+              {dev && !!dev.selection.irId && !dev.selection.freeSessionId && workspaceMainView === "chat" && <DevStageHeader />}
             </>
           ) : null
         }
@@ -1918,7 +1923,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 </div>
               </AutomationsMainBreadcrumbFrame>
             </main>
-          ) : devReadOnly ? <DevReadonlyOverview /> : (
+          ) : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
             <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
               {/* Bugfix: 手机远控聊天页中间层必须继续提供 flex 高度链。
                 只有 h-full 的普通 block 会让 ChatView 的 flex-1 失效，草稿空态贴顶且内部滚动被外层裁掉。 */}
@@ -1936,8 +1941,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                   allowEscapeStopOutsidePane={
                     isWorkspaceVisible && !isSidePaneOpen && !isSidePaneVisible
                   }
-                  readOnly={Boolean(workspaceReadOnlyReason) || devFrozen || devProposalHistory}
-                  readOnlyReason={devProposalHistory ? "当前是另一讨论阶段的历史，只读；返回当前阶段继续处理。" : devFrozen ? "整组需求已冻结，正式需求及拆分不可修改。" : workspaceReadOnlyReason}
+                  readOnly={Boolean(workspaceReadOnlyReason || devOwnershipReadOnlyReason) || devFrozen || devProposalHistory}
+                  readOnlyReason={devOwnershipReadOnlyReason ?? (devProposalHistory ? "当前是另一讨论阶段的历史，只读；返回当前阶段继续处理。" : devFrozen ? "整组需求已冻结，正式需求及拆分不可修改。" : workspaceReadOnlyReason)}
                   workspacePath={workspaceAbsPath}
                   workspaceIdentity={workspaceIdentity}
                   sessionId={activeTaskId}
@@ -2136,7 +2141,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                             draftDropTargetController={
                               activeTaskId === null ? draftHeaderDropTargetController : undefined
                             }
-                            readOnlyReason={workspaceReadOnlyReason}
+                            readOnlyReason={devOwnershipReadOnlyReason ?? workspaceReadOnlyReason}
                             workspaceAbsPath={workspaceAbsPath}
                             remoteSessionId={workspaceRemoteSessionId}
                             workspaceIdentity={workspaceIdentity}
@@ -2174,7 +2179,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                           />
                         </ScopedErrorBoundary>
                       ) : null}
-                      {dev && !dev.selection.freeSessionId && workspaceMainView === "chat" && <DevStageHeader />}
+                      {dev && !!dev.selection.irId && !dev.selection.freeSessionId && workspaceMainView === "chat" && <DevStageHeader />}
                       <div className="min-h-0 flex-1 overflow-hidden">
                         {workspaceMainView === "automations" ? (
                           <main
@@ -2232,7 +2237,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                               </div>
                             </AutomationsMainBreadcrumbFrame>
                           </main>
-                        ) : devReadOnly ? <DevReadonlyOverview /> : (
+                        ) : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
                           <main className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
                             {renderChatFindDialog()}
                             <ScopedErrorBoundary
@@ -2251,8 +2256,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                                 allowEscapeStopOutsidePane={
                                   isWorkspaceVisible && !isSidePaneOpen && !isSidePaneVisible
                                 }
-                                readOnly={Boolean(workspaceReadOnlyReason) || devFrozen || devProposalHistory}
-                                readOnlyReason={devProposalHistory ? "当前是另一讨论阶段的历史，只读；返回当前阶段继续处理。" : devFrozen ? "整组需求已冻结，正式需求及拆分不可修改。" : workspaceReadOnlyReason}
+                                readOnly={Boolean(workspaceReadOnlyReason || devOwnershipReadOnlyReason) || devFrozen || devProposalHistory}
+                                readOnlyReason={devOwnershipReadOnlyReason ?? (devProposalHistory ? "当前是另一讨论阶段的历史，只读；返回当前阶段继续处理。" : devFrozen ? "整组需求已冻结，正式需求及拆分不可修改。" : workspaceReadOnlyReason)}
                                 foregroundEnabled={isWorkspaceVisible}
                                 workspacePath={workspaceAbsPath}
                                 workspaceIdentity={workspaceIdentity}

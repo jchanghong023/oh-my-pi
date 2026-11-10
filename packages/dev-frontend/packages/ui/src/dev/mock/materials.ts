@@ -1,3 +1,4 @@
+import { prototypeChangeRoot, prototypeSpecPath, prototypeCapabilityName } from "./proposal-storage.js";
 import type { DevMaterialView, DevStageMaterial, DevWorkflowStage } from "./types.js";
 
 const disclaimer = "> 阶段性前端原型 · 以下全部为可纳入 Git 的样例数据，不代表代码执行、测试通过、审核或交付验收。后续经确认再对接真实 OMP。";
@@ -5,6 +6,8 @@ const stageByKind: Record<DevStageMaterial["kind"], DevWorkflowStage> = {
   plan: "planning", completion: "executing", ut: "executing", st: "executing", delivery: "pr",
 };
 export const MATERIAL_KIND_LABELS = {
+  "sr-delivery-package": "SR 交付清单与 PR 信息",
+  "ir-acceptance-report": "IR 验收报告", "ir-final-pr": "最终 PR 信息",
   ir: "业务需求 IR", sr: "系统需求 SR", solution: "提案方案", plan: "开发计划",
   completion: "开发完成报告", ut: "单元测试 UT", st: "系统测试 ST", delivery: "交付说明", attachment: "参考资料",
 };
@@ -13,10 +16,52 @@ export function prototypeMaterial(input: Omit<DevMaterialView, "sha256" | "size"
   return { ...input, sha256: `sample:${input.path}`, size: new TextEncoder().encode(content).length, valid: true };
 }
 export function requirementMaterials(projectId: string, irId: string, title: string, rows: { id: string; title: string }[]): DevMaterialView[] {
-  return [prototypeMaterial({ projectId, irId, kind: "ir", path: `requirements/${irId}/IR.md`, content: `# ${title}\n\n${disclaimer}\n\n## 背景与目标\nAurora 团队希望在统一工作台中完成需求讨论、拆分、阶段切换与只读材料查阅，减少跨页面寻找上下文。\n\n## 用户场景\n1. 产品负责人选择项目与 Release，查看正式 IR 和草稿。\n2. 开发者进入 SR，查看已合入方案、开发计划与验证资料。\n3. 评审者复制或下载材料，将引用带入原聊天输入框后手动发送。\n\n## 功能范围\n${rows.map((row, index) => `${index + 1}. ${row.title}（${row.id}）`).join("\n")}\n\n## 交互验收目标（尚未真实验收）\n- 导航、材料与当前项目/IR/SR 归属一致。\n- 阶段选择清晰，历史材料保持只读。\n- 带入讨论只准备未发送草稿，不触发模型。\n\n## 本阶段边界\n仅前端内存演示；刷新页面恢复样例。真实身份、仓库、审批、测试与 OMP 对接留待用户确认后的阶段。` }),
-  ...rows.map(row => prototypeMaterial({ projectId, irId, srId: row.id, kind: "sr", path: `requirements/${irId}/${row.id}/SR.md`, content: `# ${row.title}\n\n${disclaimer}\n\n关联 IR：${title}（${irId}）\n\n## 交互需求\n- 展示当前阶段、状态、材料清单与操作历史。\n- 与同一项目的需求讨论保持清楚的上下文边界。\n- 提供空态、长文本、取消和返回操作。\n\n## 示例输入\n项目 ${projectId} / SR ${row.id}，使用团队默认演示设置。\n\n## 预期展示\n需求摘要、只读文档和未发送讨论草稿；不读写任何真实业务数据。\n\n## 后续真实验收\n确认原型后再以实际 OMP 行为、仓库事实与验证报告为准。` }))];
+  return [prototypeMaterial({ projectId, irId, kind: "ir", path: `${prototypeChangeRoot(irId)}/proposal.md`, content: `# ${title}
+
+${disclaimer}
+
+## Why
+团队需要清晰的需求讨论、可验证的行为与材料归属，减少跨页面寻找上下文。
+
+## What Changes
+${rows.map(row => `- ${row.title}：详见 specs/${prototypeCapabilityName(row.id)}/spec.md。`).join("\n")}
+
+## Capabilities
+
+### New Capabilities
+${rows.map(row => `- ${prototypeCapabilityName(row.id)}: ${row.title}`).join("\n")}
+
+### Modified Capabilities
+无。
+
+## Impact
+当前项目 ${projectId} 的相关界面与会话能力。提案阶段先在共享临时工作区整理本 change；需求 PR 合并核对后才成为正式需求。仅内存演示，不写入项目。` }),
+  ...rows.map(row => prototypeMaterial({ projectId, irId, srId: row.id, kind: "sr", path: prototypeSpecPath(irId, row.id), content: `# ${row.title}
+
+${disclaimer}
+
+## ADDED Requirements
+
+### Requirement: ${row.title}
+系统 MUST 展示与当前项目和需求一致的内容，并保持明确的查看上下文。
+
+#### Scenario: 查看当前需求
+- **WHEN** 用户选择本能力对应的 SR
+- **THEN** 展示此 spec.md 的完整行为、规则与验收场景
+- **AND** 不自动推进阶段或发送消息
+
+#### Scenario: 没有可展示内容
+- **WHEN** 当前查询无结果或材料缺失
+- **THEN** 显示明确空态，不以其他项目的数据替代
+
+### Requirement: 取消与返回
+系统 MUST 允许用户取消未提交操作并保留原查看位置。
+
+#### Scenario: 取消操作
+- **WHEN** 用户取消弹窗或返回已有会话
+- **THEN** 不改变需求状态，不触发实际执行` }))];
 }
-export function developmentMaterials(projectId: string, irId: string, srId: string, title: string): DevMaterialView[] {
+export function developmentMaterials(projectId: string, irId: string, srId: string, title: string, round = 1): DevMaterialView[] {
   const sections: Record<DevStageMaterial["kind"], string> = {
     plan: `## 工作分解\n| 步骤 | 内容 | 演示负责人 | 展示状态 |\n| --- | --- | --- | --- |\n| 1 | 明确需求边界与导航层级 | 林悦 / 产品 | 样例已整理 |\n| 2 | 复用原界面并补全样例资料 | 陈明 / 前端 | 样例进行中 |\n| 3 | 交互走查与反馈整理 | 周宁 / 体验 | 样例待走查 |\n\n## 交互走查清单\n项目切换、Release 切换、提案选择、三阶段开发材料、复制下载、取消弹窗与带入讨论。\n\n## 后续阶段\n用户确认前端后再实施真实 OMP 接口与端到端验收；本文件不表示这些任务已经实施。`,
     completion: `## 样例变更摘要\n展示需求与阶段导航、只读资料、协作示例和本地设置。\n\n## 样例文件清单\n- ui/navigation/requirement-tree.tsx\n- ui/materials/material-pane.tsx\n- ui/session/discussion.tsx\n\n## 未执行事项\n未调用模型，未操作 Git，未运行构建、UT 或 ST，未提交真实 PR。\n\n## 真实完成判据\n需以后续阶段的实际代码审查、运行记录和用户验收为准。`,
@@ -25,7 +70,7 @@ export function developmentMaterials(projectId: string, irId: string, srId: stri
     delivery: `## 交付展示样例\nRelease：release-2026-11\nSR：${srId}\n\n## 交付内容\n阶段性前端原型界面与独立样例数据，用于跨机器走查 UI/UX。\n\n## PR 信息\n示例 PR 链接和分支仅用于展示，不代表存在真实远端提交或合入。\n\n## 使用与反馈\n刷新后恢复初始样例。记录导航、文案、布局和材料体验反馈。\n\n## 下一阶段\n用户确认后对接真实 OMP，既有业务目标和真实验收标准不取消。`,
   };
   return (Object.keys(stageByKind) as DevStageMaterial["kind"][]).map(kind => prototypeMaterial({
-    projectId, irId, srId, kind, stage: stageByKind[kind], path: `development/${irId}/${srId}/${kind}.md`,
+    projectId, irId, srId, kind, stage: stageByKind[kind], round, path: `development/${irId}/${srId}/round-${round}/${kind}.md`,
     content: `# ${title} · ${MATERIAL_KIND_LABELS[kind]}\n\n${disclaimer}\n\n${sections[kind]}`,
   }));
 }

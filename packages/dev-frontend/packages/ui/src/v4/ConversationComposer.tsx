@@ -608,6 +608,7 @@ function ConversationComposerImpl({
   onNativeComposerTargetChange,
 }: ConversationComposerProps) {
   const dev = useDev();
+  const devRoleModelBound = Boolean(dev?.session?.modelConfig && dev.session.sessionId === sessionId);
   const devProjectDraft = Boolean(dev && !dev.selection.freeSessionId && !dev.selection.irId && !dev.selection.srId && sessionId === null);
   const nativeSurface = useDevNativeSurface(sessionId, workspaceIdentity);
   const [nativeDraft, setNativeDraft] = useState<{ scope: string; text: string }>({ scope: "", text: "" });
@@ -2372,7 +2373,7 @@ function ConversationComposerImpl({
           </span>
         ) : null}
         {remoteAvailable || modelSelectionView?.nativeSession !== undefined ? (
-          <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden empty:hidden">
+          <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden empty:hidden" title={devRoleModelBound ? "此会话使用创建时配置；在模型设置中调整后用于新会话。" : undefined}>
             <V4ComposerModelControls
               workspacePath={workspacePath}
               workspaceIdentity={workspaceIdentity}
@@ -2386,7 +2387,7 @@ function ConversationComposerImpl({
               isMobileViewport={isMobileTextInputViewport}
               draftMode={draftMode}
               draftConfig={draftConfig}
-              disabled={disabled || runtimeBlocked}
+              disabled={disabled || runtimeBlocked || devRoleModelBound}
               activeConfigPicker={activeConfigPicker}
               onConfigPickerOpenChange={handleConfigPickerOpenChange}
               onSelectModel={handleSelectModelTrace}
@@ -2474,6 +2475,7 @@ function ConversationComposerImpl({
       isWebRemoteControl,
       mode,
       handleSelectModelTrace,
+      devRoleModelBound,
       modelSelectionReload,
       modelSelectionState,
       modelSelectionView,

@@ -14,7 +14,7 @@ export function DevDeleteRequirement() {
   const group = [...(view?.groups ?? []), ...(view?.drafts ?? [])].find(item => item.id === selection.irId && item.projectId === selection.projectId);
   if (!group || selection.srId) return null;
   const started = view?.srs.some(sr => sr.irId === group.id && sr.status !== "pending");
-  const prohibition = group.status === "frozen" || started ? "已冻结或有开发阶段的需求样例保留展示；可选择草稿演示移除操作。" : undefined;
+  const prohibition = group.merge || group.status === "frozen" || started ? "已入库的正式提案和开发历史保留展示；可选择草稿演示移除操作。" : undefined;
   const remove = async () => {
     if (targetId !== group.id || prohibition) return;
     await dev.command({ type: "deleteRequirement", version: 1, projectId: group.projectId, irId: group.id });

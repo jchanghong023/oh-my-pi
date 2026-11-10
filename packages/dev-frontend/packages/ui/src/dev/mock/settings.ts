@@ -1,3 +1,5 @@
+import { prototypeAgentModelSelection } from "./agent-models.js";
+import { resolvePrototypeWorkspace } from "./workspace.js";
 import type { IServiceAccessor, ModelSelectionView, ProviderSettingsView } from "@zcode/services";
 import type { AppSettings, ModelSelection } from "@zcode/shared";
 import type { ProviderSettingsProviderView, RegistryModelConfigObject } from "@zcode/provider";
@@ -20,7 +22,7 @@ export const PROTOTYPE_REGISTRY_MODEL: RegistryModelConfigObject = {
     inputFormat: { supportsText: true, supportsImage: false, supportsVideo: false, supportsAudio: false, supportsPdf: false },
     outputFormat: { supportsText: true }, supportsToolCall: true, supportsJsonSchemaOutput: true,
     supportsNativeWebSearch: false, supportsMidConversationSystem: true },
-  optionSpecs: { reasoningLevel: { values: ["standard"], map: "{}" }, maxOutputTokens: { max: 8192, map: "{}" } },
+  optionSpecs: { reasoningLevel: { values: ["standard", "low", "medium", "high"], map: "{}" }, maxOutputTokens: { max: 8192, map: "{}" } },
 };
 
 /** 设置仅保存在本次页面生命周期；实际连接/连通性测试在后续对接阶段实现。 */
@@ -35,24 +37,37 @@ export function createPrototypeSettingsServices(sessionWorkspaces: Map<string, s
     const bound = sessionWorkspaces.get(sessionId);
     if (bound) return bound;
     for (const project of getPrototypeWorkflow().projects) {
-      if (getPrototypeWorkflow({ projectId: project.id }).sessions.some(session => session.sessionId === sessionId)) return project.root;
+      const workflow = getPrototypeWorkflow({ projectId: project.id });
+      const ref = workflow.sessions.find(session => session.sessionId === sessionId);
+      if (ref) return resolvePrototypeWorkspace(workflow, { projectId: ref.projectId, irId: ref.irId, srId: ref.srId }).path ?? project.root;
     }
     return "/demo/aurora-console";
   };
-  const modelView = (sessionId?: string): ModelSelectionView => ({
-    revision: view.revision, preferredSelection: selection, effectiveSelection: selection,
-    providers: view.providers.filter(provider => provider.enabled).map(provider => ({
-      providerId: provider.providerId, providerName: provider.providerName, templateId: provider.templateId,
-      config: provider.effectiveConfig,
-      models: provider.models.filter(model => model.enabled).map(model => ({ modelId: model.modelId, config: PROTOTYPE_REGISTRY_MODEL })),
-    })),
-    ...(sessionId ? { nativeSession: {
-      sessionId, workspacePath: workspaceFor(sessionId), chatAvailable: true, taskRunsAvailable: true,
-      models: view.providers.flatMap(provider => provider.models.filter(model => model.enabled).map(model => ({
-        providerId: provider.providerId, modelId: model.modelId, name: `${model.modelId}（预置回复）`,
-      }))),
-    } } : {}),
-  });
+  const bindingFor = (sessionId?: string) => {
+    if (!sessionId) return undefined;
+    for (const project of getPrototypeWorkflow().projects) {
+      const binding = getPrototypeWorkflow({ projectId: project.id }).sessions.find(ref => ref.sessionId === sessionId)?.modelConfig;
+      if (binding) return binding;
+    }
+  };
+  const modelView = (sessionId?: string, requested?: ModelSelection): ModelSelectionView => {
+    const binding = bindingFor(sessionId);
+    const effective = binding ? prototypeAgentModelSelection(binding) : requested ?? selection;
+    return {
+      revision: view.revision, preferredSelection: effective, effectiveSelection: effective,
+      providers: view.providers.filter(provider => provider.enabled).map(provider => ({
+        providerId: provider.providerId, providerName: provider.providerName, templateId: provider.templateId,
+        config: provider.effectiveConfig,
+        models: provider.models.filter(model => model.enabled).map(model => ({ modelId: model.modelId, config: PROTOTYPE_REGISTRY_MODEL })),
+      })),
+      ...(sessionId ? { nativeSession: {
+        sessionId, workspacePath: workspaceFor(sessionId), chatAvailable: true, taskRunsAvailable: true,
+        models: view.providers.flatMap(provider => provider.models.filter(model => model.enabled && (!binding || (provider.providerId === effective.providerId && model.modelId === effective.modelId))).map(model => ({
+          providerId: provider.providerId, modelId: model.modelId, name: `${model.modelId}（预置回复）`,
+        }))),
+      } } : {}),
+    };
+  };
   const publish = (): ProviderSettingsView => {
     view = { ...view, revision: view.revision + 1 };
     providerChanged.fire(structuredClone(view)); modelChanged.fire(modelView());
@@ -74,8 +89,8 @@ export function createPrototypeSettingsServices(sessionWorkspaces: Map<string, s
     },
     modelSelectionService: {
       onDidChange: modelChanged.event,
-      getView: async input => ({ ...modelView(input?.sessionId), effectiveSelection: input?.selection ?? selection }),
-      setSessionModel: async input => { selection = { providerId: input.providerId, modelId: input.modelId, options: { reasoningLevel: "standard" } }; modelChanged.fire(modelView(input.sessionId)); return modelView(input.sessionId); },
+      getView: async input => modelView(input?.sessionId, input?.selection),
+      setSessionModel: async input => { if (bindingFor(input.sessionId)) throw new Error("此 Agent 会话保留创建时模型；请在模型设置修改后用于新会话。"); selection = { providerId: input.providerId, modelId: input.modelId, options: { reasoningLevel: "standard" } }; modelChanged.fire(modelView(input.sessionId)); return modelView(input.sessionId); },
     },
     providerSettingsService: {
       onDidChange: providerChanged.event,

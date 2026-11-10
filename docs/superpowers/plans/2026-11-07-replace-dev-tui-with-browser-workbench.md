@@ -1,5 +1,7 @@
 # Replace Dev TUI with Browser Workbench Implementation Plan
 
+> 历史实施记录：下文目标、约束、步骤及验收只对应当时版本，已被[最新 Dev 规则](../../../docs-zh-CN/spec-driven-orchestration.md)中冲突条款替代，不再作为新实现指令，也不证明新规则已验收。本次保留历史证据，仅更新文档，不执行本计划。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 一次性以真实浏览器工作台替换 Dev 专属 TUI，完整交付新需求的八阶段、五类原生 Agent、offline Collab、需求级 Git／PR 操作和人工决定；保留普通 OMP TUI 与其他独立能力。

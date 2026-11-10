@@ -18,6 +18,7 @@ export function DevPersonalizationSettings() {
 	const [draft, setDraft] = useState(() => readPrototypeAgentPrompts().draft);
 	const [selected, setSelected] = useState("requirements");
 	const [message, setMessage] = useState("");
+	const selectedAgent = agents.find(agent => agent.id === selected);
 	const dirtyCount = agents.filter(agent => draft[agent.id] !== saved[agent.id]).length;
 	const encoder = new TextEncoder();
 	const oversized = agents.filter(agent => encoder.encode(draft[agent.id] ?? "").length > USER_INSTRUCTIONS_MAX_BYTES);
@@ -27,18 +28,19 @@ export function DevPersonalizationSettings() {
 		if (!canSave) return;
 		savePrototypeAgentPrompts(draft);
 		setSaved({ ...draft });
-		setMessage(zh ? "追加提示词已保存到演示个人配置，所有项目共用。" : "Appended prompts saved to the demo personal configuration for all projects.");
+		setMessage(zh ? "追加提示词已保存到演示服务配置，当前服务的所有项目和访问者共用。" : "Appended instructions saved to the demo service configuration for all projects and visitors.");
 	};
 	return (
 		<div className="space-y-5" data-testid="dev-personalization-settings">
-			<p className="text-ui-base leading-6 text-foreground-subtle">{zh ? "为每个 Dev Agent 追加个人系统提示词，补充表达偏好和工作习惯。追加内容不替换 Agent 内置指令。" : "Append personal system instructions for each Dev Agent to describe your preferences and working habits. These additions do not replace built-in instructions."}</p>
+			<p className="text-ui-base leading-6 text-foreground-subtle">{zh ? "为每个 Dev Agent 追加系统提示词，补充当前服务共用的表达偏好和工作约定。追加内容不替换 Agent 内置指令。" : "Append system instructions for each Dev Agent to describe the preferences and working conventions shared by this service. These additions do not replace built-in instructions."}</p>
 			<DevPersonalConfigScope />
 			<div className="space-y-2">
 				<Label htmlFor="personalization-agent">{zh ? "选择 Agent" : "Select Agent"}</Label>
 				<Select value={selected} onValueChange={value => { setSelected(value); setMessage(""); }}>
-					<SelectTrigger id="personalization-agent" size="lg" className="w-full sm:w-72"><SelectValue /></SelectTrigger>
+					<SelectTrigger id="personalization-agent" size="lg" className="w-full sm:w-72" aria-describedby="personalization-agent-description"><SelectValue /></SelectTrigger>
 					<SelectContent>{agents.map(agent => <SelectItem key={agent.id} value={agent.id}>{zh ? agent.name : agent.nameEn}{draft[agent.id] !== saved[agent.id] ? zh ? " · 未保存" : " · Unsaved" : ""}</SelectItem>)}</SelectContent>
 				</Select>
+				<p id="personalization-agent-description" className="text-ui-sm leading-6 text-foreground-subtle">{zh ? selectedAgent?.description : selectedAgent?.descriptionEn}</p>
 			</div>
 			<div className="space-y-2">
 				<Label htmlFor="agent-system-prompt-append">{zh ? "追加系统提示词" : "Append system instructions"}</Label>
@@ -47,14 +49,14 @@ export function DevPersonalizationSettings() {
 					className="min-h-64 w-full text-ui-base"
 					spellCheck={false}
 					value={draft[selected] ?? ""}
-					placeholder={zh ? "输入希望追加给此 Agent 的个人指令。留空则仅使用原有指令。" : "Enter personal instructions for this Agent. Leave empty to use existing instructions only."}
+					placeholder={zh ? "输入此服务希望追加给该 Agent 的指令。留空则仅使用原有指令。" : "Enter instructions this service should append for this Agent. Leave empty to use existing instructions only."}
 					aria-describedby="agent-prompt-help agent-prompt-size"
 					aria-invalid={currentBytes > USER_INSTRUCTIONS_MAX_BYTES}
 					onChange={event => { const next = { ...draft, [selected]: event.target.value }; setDraft(next); updatePrototypeAgentPromptDrafts(next); setMessage(""); }}
 					onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); save(); } }}
 				/>
 				<div className="flex flex-wrap items-start justify-between gap-2 text-ui-sm text-foreground-subtle">
-					<p id="agent-prompt-help">{zh ? "留空可清除个人追加内容，保留内置指令。" : "Leave empty to clear personal additions and retain built-in instructions."}</p>
+					<p id="agent-prompt-help">{zh ? "留空可清除当前服务的追加内容，保留内置指令。" : "Leave empty to clear additions for this service and retain built-in instructions."}</p>
 					<span id="agent-prompt-size">{(currentBytes / 1024).toFixed(1)} / {USER_INSTRUCTIONS_MAX_BYTES / 1024} KB</span>
 				</div>
 			</div>

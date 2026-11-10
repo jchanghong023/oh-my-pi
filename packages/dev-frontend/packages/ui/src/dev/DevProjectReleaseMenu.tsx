@@ -1,12 +1,12 @@
-import { FolderGit2, Layers, Plus, UserRound, LogOut } from "lucide-react";
+import { FolderGit2, Layers, Plus, UserRound, LogOut, CircleHelp } from "lucide-react";
 import {
-	DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem,
+	DropdownMenuItem, DropdownMenuSeparator, DropdownMenuRadioGroup, DropdownMenuRadioItem,
 	DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu.js";
 import { useDevIdentity } from "./DevEntry.js";
 import { useDev } from "./DevContext.js";
 
-export function DevProjectReleaseMenu({ onManage }: { onManage(): void }) {
+export function DevProjectReleaseMenu({ onManage, onHelp }: { onManage(): void; onHelp(): void }) {
 	const dev = useDev()!;
 	const identity = useDevIdentity();
 	const project = dev.view?.projects.find(item => item.id === dev.selection.projectId);
@@ -32,5 +32,7 @@ export function DevProjectReleaseMenu({ onManage }: { onManage(): void }) {
 				<DropdownMenuItem onSelect={onManage}><Plus className="size-4" />添加或管理 Release</DropdownMenuItem>
 			</DropdownMenuSubContent>
 		</DropdownMenuSub>
+		<DropdownMenuSeparator />
+		<DropdownMenuItem onSelect={onHelp} data-testid="dev-workflow-help-open"><CircleHelp className="size-4" />帮助</DropdownMenuItem>
 	</>;
 }

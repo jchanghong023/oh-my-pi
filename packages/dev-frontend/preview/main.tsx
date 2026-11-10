@@ -2,7 +2,9 @@ import "../packages/ui/src/dev/browserStorage.js";
 import { AppErrorBoundary, Root, ZCodeIntlProvider } from "@zcode/ui";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { readPrototypeFreeChat, readRecentFreeChats } from "../packages/ui/src/dev/mock/free-chats.js";
+import { readRecentFreeChats } from "../packages/ui/src/dev/mock/free-chats.js";
+import { resolvePrototypeWorkspace } from "../packages/ui/src/dev/mock/workspace.js";
+import { DevWorkspaceRecovery } from "../packages/ui/src/dev/DevWorkspaceRecovery.js";
 import { readPrototypeDevelopmentRoot } from "../packages/ui/src/dev/mock/project-settings.js";
 import { DevEntry, useDevIdentity } from "../packages/ui/src/dev/DevEntry.js";
 import { DevProvider, useDev } from "../packages/ui/src/dev/DevContext.js";
@@ -14,9 +16,6 @@ import {
 import { createWebPlatform } from "../packages/web/src/platform/index.js";
 import {
   createPrototypeServices,
-  PROTOTYPE_TASK_ID,
-  PROTOTYPE_WORKSPACE,
-  PROTOTYPE_WORKSPACE_IDENTITY,
 } from "./mock-services.js";
 import "../packages/web/src/styles.css";
 
@@ -31,14 +30,14 @@ function BrowserApplication() {
   const dev = useDev()!;
   const identity = useDevIdentity();
   const { selection, session, view } = dev;
-  const project = view?.projects.find(item => item.id === selection.projectId);
-  const free = selection.freeSessionId ? readPrototypeFreeChat(selection.freeSessionId)?.meta : undefined;
-  const workspacePath = free?.workspacePath ?? project?.root ?? PROTOTYPE_WORKSPACE;
-  const workspaceIdentity = free?.workspaceIdentity ?? `${PROTOTYPE_WORKSPACE_IDENTITY}:${selection.projectId ?? "demo-aurora"}`;
-  const taskId = free?.taskId ?? session?.sessionId ?? PROTOTYPE_TASK_ID;
+  const workspace = resolvePrototypeWorkspace(view, selection);
+  const workspacePath = workspace.path;
+  const workspaceIdentity = workspace.identity;
+  const taskId = selection.freeSessionId ?? session?.sessionId ?? null;
   const [registeredIdentity, setRegisteredIdentity] = useState<string>();
   useEffect(() => {
     // Reuse only the copied UI's in-memory scope registry; no remote connection exists.
+    if (!workspacePath) { setRegisteredIdentity(undefined); return; }
     const registrationId = `prototype:${workspaceIdentity}`;
     registerRemoteWorkspaceSession({
       sessionId: registrationId,
@@ -52,10 +51,11 @@ function BrowserApplication() {
     return () => unregisterRemoteWorkspaceSession(registrationId);
   }, [workspacePath, workspaceIdentity]);
 
-  if (registeredIdentity !== workspaceIdentity) return null;
+  if (!workspacePath) return <DevWorkspaceRecovery workspace={workspace} />;
+  if (registeredIdentity !== workspaceIdentity) return <p role="status" className="min-h-dvh bg-background p-8 text-foreground">正在读取工作区…</p>;
 
   return (
-    <div className="contents" data-dev-connection-state="prototype">
+    <div className="contents" data-dev-connection-state="prototype" data-dev-workspace-path={workspacePath} data-dev-workspace-identity={workspaceIdentity} data-dev-workspace-kind={workspace.kind}>
       <Root
         key={`${selection.projectId}:${selection.irId}:${taskId}:${selection.freeFiles ?? false}`}
         services={services}

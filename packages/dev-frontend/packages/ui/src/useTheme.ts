@@ -1,3 +1,4 @@
+import { readSafeLocalStorage, writeSafeLocalStorage } from "./lib/browserEnvironment.js";
 import { useEffect, useState, useCallback } from "react";
 
 export type Theme = "light" | "dark" | "zai-light" | "zai-dark" | "system";
@@ -81,14 +82,14 @@ function isTheme(value: string | null): value is Theme {
 
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(() => {
-    const saved = globalThis.__ompDevLocalStorage.getItem(STORAGE_KEY);
+    const saved = readSafeLocalStorage(STORAGE_KEY);
     // 默认主题统一收敛到 Zai dark，避免旧 hook 兜底值和 Zustand store 默认值分叉。
     return isTheme(saved) ? normalizeThemePreference(saved) : "zai-dark";
   });
 
   const setTheme = useCallback((t: Theme) => {
     const normalizedTheme = normalizeThemePreference(t);
-    globalThis.__ompDevLocalStorage.setItem(STORAGE_KEY, normalizedTheme);
+    writeSafeLocalStorage(STORAGE_KEY, normalizedTheme);
     setThemeState(normalizedTheme);
     applyTheme(normalizedTheme);
   }, []);

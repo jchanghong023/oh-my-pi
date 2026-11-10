@@ -1,3 +1,6 @@
+import { readSafeLocalStorage, writeSafeLocalStorage } from "@/lib/browserEnvironment.js";
+import { getPrototypeEmployeeId } from "./employee.js";
+
 export type PrototypeRequirementFilter = "all" | "developing" | "pending" | "completed";
 interface SidebarPreferences {
 	query: string;
@@ -5,12 +8,32 @@ interface SidebarPreferences {
 	formalSectionOpen: boolean;
 	proposalSectionOpen: boolean;
 	expandedIrIds: string[];
+	lastViewedTarget?: string;
 }
-// 仅保存当前浏览器页面的查看偏好，不是项目配置、执行授权或工作流状态。
+// 仅保存当前浏览器的查看偏好，不是共享配置、执行授权或工作流状态。
 const preferences = new Map<string, SidebarPreferences>();
+function storageKey(key: string): string { return `dev-sidebar:${getPrototypeEmployeeId()}:${key}`; }
 export function readPrototypeSidebarPreferences(key: string): SidebarPreferences {
-	return { query: "", filter: "all", formalSectionOpen: true, proposalSectionOpen: true, expandedIrIds: [], ...preferences.get(key) };
+ const scoped = storageKey(key);
+ const cached = preferences.get(scoped);
+ if (cached) return structuredClone(cached);
+ const result: SidebarPreferences = { query: "", filter: "all", formalSectionOpen: true, proposalSectionOpen: true, expandedIrIds: [] };
+ try {
+  const saved: unknown = JSON.parse(readSafeLocalStorage(scoped) ?? "null");
+  if (saved && typeof saved === "object") {
+   const value = saved as Partial<SidebarPreferences>;
+   if (typeof value.formalSectionOpen === "boolean") result.formalSectionOpen = value.formalSectionOpen;
+   if (typeof value.proposalSectionOpen === "boolean") result.proposalSectionOpen = value.proposalSectionOpen;
+   if (Array.isArray(value.expandedIrIds)) result.expandedIrIds = value.expandedIrIds.filter((id): id is string => typeof id === "string");
+   if (typeof value.lastViewedTarget === "string") result.lastViewedTarget = value.lastViewedTarget;
+  }
+ } catch { /* 偏好损坏时使用默认展开，不阻断需求查看。 */ }
+ preferences.set(scoped, result);
+ return structuredClone(result);
 }
 export function updatePrototypeSidebarPreferences(key: string, patch: Partial<SidebarPreferences>): void {
-	preferences.set(key, { ...readPrototypeSidebarPreferences(key), ...patch });
+ const next = { ...readPrototypeSidebarPreferences(key), ...patch };
+ preferences.set(storageKey(key), next);
+ const { formalSectionOpen, proposalSectionOpen, expandedIrIds, lastViewedTarget } = next;
+ writeSafeLocalStorage(storageKey(key), JSON.stringify({ formalSectionOpen, proposalSectionOpen, expandedIrIds, lastViewedTarget }));
 }

@@ -34,6 +34,7 @@ export function DevAgentModelSettings() {
 				{zh ? "为 Dev 核心 Agent 分别选择模型与思考强度。未单独指定模型时，跟随默认模型。" : "Choose a model and reasoning level for each core Dev Agent. Agents without a model override follow the default model."}
 			</p>
 			<DevPersonalConfigScope />
+            <p className="text-ui-sm leading-6 text-foreground-subtle" data-testid="agent-model-effective-scope">{zh ? "保存后用于之后新建的角色会话，包括新阶段和返工新轮次。已有会话与历史消息保留创建时的模型和思考强度；不会自动切换运行中的 Agent。自由会话沿用原模型设置方式。" : "Saved settings apply to newly created role sessions, including new stages and rework rounds. Existing sessions and history keep their original model and reasoning level. Free conversations retain their existing model controls."}</p>
 			<section className="space-y-3" aria-labelledby="agent-default-model-title">
 				<h3 id="agent-default-model-title" className="text-ui-base font-medium">{zh ? "默认模型" : "Default model"}</h3>
 				<SettingsGroupCard>
@@ -91,7 +92,7 @@ export function DevAgentModelSettings() {
 					})}
 				</SettingsGroupCard>
 				<p className="text-ui-sm leading-6 text-foreground-subtle">
-					{zh ? "测试与技术审核按需复用 OMP 原生子代理，沿用其模型配置，无需在此单独设置。完成报告和 PR 材料由执行 Agent 整理。" : "Testing and technical review use OMP native subagents and their model settings as needed. The Execution Agent prepares completion reports and PR materials."}
+					{zh ? "测试与代码审查按需复用 OMP 原生子代理，无需重复配置专有 Agent。IR 验收 Agent 负责全部 SR 合并后的整体验收，以及最终修复与归档 PR 材料。" : "Testing and code review reuse OMP native subagents without separate dedicated Agent settings. The IR Acceptance Agent verifies the integrated IR after all SRs merge and prepares the final fixes and archive PR materials."}
 				</p>
 			</section>
 			<div className="flex flex-wrap items-center justify-between gap-3">
@@ -99,7 +100,7 @@ export function DevAgentModelSettings() {
 				<div className="flex items-center gap-2">
 					{dirty && <span className="text-ui-sm text-foreground-subtle">{zh ? "有未保存的更改" : "Unsaved changes"}</span>}
 					<Button variant="outline" disabled={!dirty} onClick={() => { setDraft(structuredClone(saved)); setMessage(""); }}>{zh ? "取消" : "Cancel"}</Button>
-					<Button disabled={!dirty} onClick={() => { savePrototypeAgentModels(draft); setSaved(structuredClone(draft)); setMessage(zh ? "演示配置已保存" : "Demo configuration saved"); }}>{zh ? "保存配置" : "Save configuration"}</Button>
+					<Button disabled={!dirty} onClick={() => { savePrototypeAgentModels(draft); setSaved(structuredClone(draft)); setMessage(zh ? "演示服务配置已保存，当前服务共用" : "Demo service configuration saved for this service"); }}>{zh ? "保存配置" : "Save configuration"}</Button>
 				</div>
 			</div>
 			<p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
