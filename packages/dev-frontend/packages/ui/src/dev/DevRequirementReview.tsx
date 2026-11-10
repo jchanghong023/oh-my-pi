@@ -1,5 +1,6 @@
 import { prototypeRequirementsReviewBlocker, prototypeRequirementsReviewCurrent, prototypeRequirementsReviewInputs } from "./mock/requirements-review.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
+import { DevRequirementsDecision } from "./DevRequirementsDecision.js";
 import { useState } from "react";
 import { ClipboardCheck } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
@@ -36,9 +37,12 @@ export function DevRequirementReview({ group, readOnly = false }: { group: DevRe
     {review && <div className="space-y-4" data-testid="requirements-review-report">
      <DevAgentModelSummary binding={review.modelConfig} />
      <div className="space-y-1 text-ui-sm text-foreground-subtle"><p data-testid="requirements-review-version">{current ? "当前需求版本" : "旧版本记录，需求已更新，需重新评审"} · 第 {review.round ?? 1} 轮 · {review.passed ? "样例：无新增阻断项" : "样例：有待补充事项"}</p><p>发起工号：{review.requestedBy ?? "样例未记录"} · <time dateTime={review.createdAt}>{new Date(review.createdAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</time>（北京时间）</p></div>
+     <p className="break-all text-ui-sm text-foreground-subtle" data-testid="requirements-review-binding">AI 原始评审：{review.id} · 绑定快照：{review.snapshotDigest}</p>
+     <details className="text-ui-sm text-foreground-subtle" data-testid="requirements-review-input-files"><summary className="cursor-pointer">本次 AI 评审绑定的需求文件版本（{review.inputFiles?.length ?? 0}）</summary><ul className="mt-1 space-y-1">{review.inputFiles?.map(file => <li key={file.path} className="break-all font-mono">{file.path} · {file.sha256} · {file.size} 字节</li>)}</ul></details>
      {Boolean(review.findings?.length) && <ul className="space-y-2">{review.findings?.map(item => <li key={item.id} className="rounded-md border border-border p-2 text-ui-sm"><p>{item.level === "blocking" ? "需补充" : "建议"}：{item.message}</p><p className="mt-1 break-all text-foreground-subtle">{item.documentPath}</p></li>)}</ul>}
      <MessageResponse>{review.report}</MessageResponse>
     </div>}
+    <DevRequirementsDecision group={group} readOnly={!canSupplement} />
     {canSupplement && <form className="space-y-2 border-t border-border pt-3" onSubmit={async event => {
      event.preventDefault();
      const result = await dev.command({ type: "supplementRequirements", ...target, note: supplement.trim() });
@@ -49,7 +53,7 @@ export function DevRequirementReview({ group, readOnly = false }: { group: DevRe
      <p className="text-ui-sm text-foreground-subtle">此操作演示更新内存中的需求文件与版本，旧评审和旧方案会失效。实际需求讨论继续使用原聊天框。</p>
      <Button type="submit" size="sm" variant="outline" data-testid="requirements-review-supplement" disabled={dev.pending || !supplement.trim()}>更新需求样例</Button>
     </form>}
-    {Boolean(group.reviewHistory?.length) && <details className="space-y-2 border-t border-border pt-3 text-ui-sm"><summary className="cursor-pointer">历史评审（{group.reviewHistory!.length}）</summary>{group.reviewHistory!.map((item, index) => <details key={`${item.id}:${index}`} className="mt-2 rounded-md border border-border p-2"><summary className="cursor-pointer">第 {item.round ?? 1} 轮 · {item.passed ? "通过记录" : "待补充记录"} · 仅供历史查看</summary><MessageResponse>{item.report}</MessageResponse></details>)}</details>}
+    {Boolean(group.reviewHistory?.length) && <details className="space-y-2 border-t border-border pt-3 text-ui-sm" data-testid="requirements-review-history"><summary className="cursor-pointer">历史 AI 评审（{group.reviewHistory!.length}）</summary>{group.reviewHistory!.map((item, index) => <details key={`${item.id}:${index}`} className="mt-2 space-y-2 rounded-md border border-border p-2"><summary className="cursor-pointer">第 {item.round ?? 1} 轮 · {item.passed ? "通过记录" : "待补充记录"} · 仅供历史查看</summary><DevAgentModelSummary binding={item.modelConfig} /><p className="break-all text-foreground-subtle">AI 原始评审：{item.id} · 绑定快照：{item.snapshotDigest}</p><p className="text-foreground-subtle">发起工号：{item.requestedBy ?? "样例未记录"} · <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</time>（北京时间）</p><details className="text-foreground-subtle"><summary className="cursor-pointer">绑定的需求文件版本（{item.inputFiles?.length ?? 0}）</summary><ul className="mt-1 space-y-1">{item.inputFiles?.map(file => <li key={file.path} className="break-all font-mono">{file.path} · {file.sha256} · {file.size} 字节</li>)}</ul></details>{Boolean(item.findings?.length) && <ul className="space-y-2">{item.findings?.map(finding => <li key={finding.id} className="rounded-md border border-border p-2"><p>{finding.level === "blocking" ? "需补充" : "建议"}：{finding.message}</p><p className="mt-1 break-all text-foreground-subtle">{finding.documentPath}</p></li>)}</ul>}<MessageResponse>{item.report}</MessageResponse></details>)}</details>}
     <p className="text-ui-sm text-foreground-subtle">反复不通过或存在业务争议时交人工处理；不会自动循环评审或把人工意见伪造成 Agent 通过。</p>
     {editable && review && <div className="flex justify-end"><Button type="button" size="sm" data-testid="requirements-review-rerun" disabled={dev.pending || !hasInputs} onClick={() => void run()}>重新需求评审（演示）</Button></div>}
     {dev.error && <p role="alert" className="text-ui-sm text-destructive">{dev.error}</p>}

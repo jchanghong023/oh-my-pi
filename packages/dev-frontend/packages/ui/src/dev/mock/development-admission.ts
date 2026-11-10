@@ -33,6 +33,7 @@ function dependencyGraphIssue(view: DevWorkflowView, group: DevRequirementGroup)
 
 export function prototypeSrStartBlocker(view: DevWorkflowView, group: DevRequirementGroup, sr: DevSystemRequirement): string | undefined {
   if (sr.status !== "pending") return "此 SR 已开始或完成，请继续原会话。";
+  if (group.revising) return "正式提案正在修订；重新评审、确认并通过提案 PR 合并核验前禁止开发。";
   if (!view.groups.some(item => item.id === group.id && item.projectId === group.projectId) || !group.merge || !hasCurrentProposalSolution(group)) return "提案及确认方案尚未合并核验，不能开始开发。";
   const versionIssue = prototypeRequirementConfirmationIssue(group) ?? prototypeRequirementFreezeIssue(group);
   if (versionIssue) return versionIssue;

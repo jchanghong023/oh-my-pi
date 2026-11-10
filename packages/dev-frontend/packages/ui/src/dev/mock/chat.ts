@@ -18,7 +18,7 @@ import { PROTOTYPE_MODEL_SELECTION } from "./settings.js";
 import { prototypeConversationFileChanges } from "./files.js";
 import { resolvePrototypeWorkspace } from "./workspace.js";
 import { prototypeConversationReadOnlyReason } from "./conversation-access.js";
-import { getPrototypeWorkflow } from "./workflow.js";
+import { applyPrototypeAction, getPrototypeWorkflow } from "./workflow.js";
 import { prototypeSkillDesignReply } from "./skill-design.js";
 import { createPrototypeAutomationServices } from "./automations.js";
 import automationPrompt from "./prompts/automation-review.md?raw";
@@ -29,6 +29,8 @@ import proposalDiscussionPrompt from "./prompts/proposal-discussion.md?raw";
 import irAcceptanceRequest from "./ir-acceptance-request.md?raw";
 import irAcceptanceWelcome from "./ir-acceptance-welcome.md?raw";
 import skillDesignWelcome from "./skill-design-welcome.md?raw";
+import requirementsGenerated from "./requirements-generated.md?raw";
+import requirementsSupplemented from "./requirements-supplemented.md?raw";
 
 export interface PrototypeAttachment {
   ref: string;
@@ -224,6 +226,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     if (value.meta.taskId.startsWith(FREE_CHAT_PREFIX)) updatePrototypeFreeChat({ ...value.meta, pinned: value.pinned, archived: value.archived }, { deleted: value.deleted, empty: value.snapshot.rows.window.length === 0 });
   };
   const append = (value: LocalSession, content: string, commandId?: string, refs?: AttachmentRef[]) => {
+    let generated: boolean | undefined;
     // 与输入框共用同一归属规则，避免快捷发送绕过只读提示；不实现真实鉴权。
     for (const project of getPrototypeWorkflow().projects) {
       const view = getPrototypeWorkflow({ projectId: project.id });
@@ -231,11 +234,16 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       if (!ref) continue;
       const reason = prototypeConversationReadOnlyReason(view, { projectId: ref.projectId, irId: ref.irId, srId: ref.srId, ...(ref.phase === "ir-acceptance" ? { irAcceptance: true } : ref.phase === "requirements" || ref.phase === "solution" ? { discussionPhase: ref.phase } : { stage: ref.phase, stageRound: ref.round }) });
       if (reason) throw new Error(reason);
+      const proposal = view.drafts.find(item => item.id === ref.irId);
+      if (ref.phase === "requirements" && proposal && content.trim()) {
+        generated = !proposal.srIds.length;
+        applyPrototypeAction({ type: generated ? "generateRequirements" : "supplementRequirements", projectId: project.id, irId: proposal.id, note: content }, { projectId: project.id, irId: proposal.id, discussionPhase: "requirements" });
+      }
       break;
     }
 
     if (value.stage === "free" && value.meta.title === "新建会话") { value.meta.title = content.trim().split("\n")[0]!.slice(0, 40) || "新建会话"; value.snapshot.meta.title = value.meta.title; }
-    appendRows(value.snapshot.rows.window, value.meta.taskId, content, value.meta.taskId.startsWith("prototype-skill-design:") ? prototypeSkillDesignReply(value.meta.taskId, content) : `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在本次浏览器会话中。当前${value.stage === "ir-acceptance" ? "IR 整体验收" : value.stage === "free" ? "项目自由会话" : value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。用户确认原型后再进入真实后端对接与验收阶段。`, Date.now(), commandId, refs, value.snapshot.config.model);
+    appendRows(value.snapshot.rows.window, value.meta.taskId, content, generated !== undefined ? generated ? requirementsGenerated : requirementsSupplemented : value.meta.taskId.startsWith("prototype-skill-design:") ? prototypeSkillDesignReply(value.meta.taskId, content) : `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在本次浏览器会话中。当前${value.stage === "ir-acceptance" ? "IR 整体验收" : value.stage === "free" ? "项目自由会话" : value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。用户确认原型后再进入真实后端对接与验收阶段。`, Date.now(), commandId, refs, value.snapshot.config.model);
     value.snapshot.rows.totalCount = value.snapshot.rows.window.length; value.snapshot.rows.firstRowId = value.snapshot.rows.window[0]?.rowId ?? null; changed(value);
   };
   const assertModelMutable = (value: LocalSession) => { if (value.agentModelBound) throw new Error("此 Agent 会话保留创建时模型和思考强度，请在模型设置修改后用于新会话。"); };
