@@ -1,6 +1,6 @@
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 /* oxlint-disable eslint(max-lines) -- footer 聚合账户、主题、模式和快捷键菜单。 */
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
 import { DesktopCommandIds } from "@zcode/shared";
 import {
   TID_TASK_SETTINGS_BUTTON,
@@ -13,6 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -20,7 +21,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.js";
 import {
-  PencilRuler,
   Maximize,
   Palette,
   Settings,
@@ -30,8 +30,6 @@ import {
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useShortcutCommandLabel } from "@/shortcuts/useShortcutBindings.js";
-import { useZCodeStore } from "@/store/StoreProvider.js";
-import { normalizeInterfaceMode } from "@/lib/interfaceMode.js";
 import type { Theme } from "@/useTheme.js";
 
 const DESKTOP_ZOOM_MIN_LEVEL = -3;
@@ -45,6 +43,8 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   settingsButtonMode = "settings",
   isDesktop = false,
   className,
+  menuContent,
+  menuDescription,
 }: {
   theme: Theme;
   onThemeChange: (value: string) => void;
@@ -52,11 +52,11 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   settingsButtonMode?: "settings" | "back";
   isDesktop?: boolean;
   className?: string;
+  menuContent?: ReactNode;
+  menuDescription?: ReactNode;
 }) {
   const { intl } = useZCodeIntl();
   const platform = usePlatform();
-  const interfaceMode = useZCodeStore((state) => state.interfaceMode);
-  const setInterfaceMode = useZCodeStore((state) => state.setInterfaceMode);
   const zoomInShortcutLabel = useShortcutCommandLabel("zoomIn");
   const zoomOutShortcutLabel = useShortcutCommandLabel("zoomOut");
   const resetZoomShortcutLabel = useShortcutCommandLabel("resetZoom");
@@ -112,19 +112,21 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
               type="button"
               variant="ghost"
               size={"lg"}
-              className="min-w-0 flex-1 justify-start gap-2 overflow-hidden rounded-tl-2xl rounded-bl-2xl border-0 pl-0"
-              aria-label={intl.formatMessage({ id: "settings.title" })}
+              className={cn("min-w-0 flex-1 justify-start gap-2 overflow-hidden rounded-tl-2xl rounded-bl-2xl border-0 pl-0", menuDescription && "h-auto py-1.5")}
+              aria-label={menuDescription ? "项目与 Release 菜单" : intl.formatMessage({ id: "settings.title" })}
             >
               <Settings className="size-4" />
-              <span className="truncate">OMP</span>
+              <span className="flex min-w-0 flex-1 flex-col text-left">{menuDescription ?? <span className="truncate">OMP</span>}</span>
             </Button>
           </DropdownMenuTrigger>
           {/* Bugfix: 菜单内容保持挂载，避免每次点击头像菜单都重建 footer 内部状态。 */}
           <DropdownMenuContent
             align="start"
+            side="top"
             className="w-max min-w-50 max-w-[calc(100vw-2rem)]"
             forceMount
           >
+            {menuContent && <>{menuContent}<DropdownMenuSeparator /></>}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <Palette className="size-4" />
@@ -146,25 +148,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
                     {intl.formatMessage({
                       id: "sidebar.settings.theme.zai-light",
                     })}
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <PencilRuler className="size-4" />
-                {intl.formatMessage({ id: "settings.interfaceMode" })}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-48">
-                <DropdownMenuRadioGroup
-                  value={interfaceMode}
-                  onValueChange={(value) => setInterfaceMode(normalizeInterfaceMode(value))}
-                >
-                  <DropdownMenuRadioItem value="coding">
-                    {intl.formatMessage({ id: "settings.interfaceMode.coding" })}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="office">
-                    {intl.formatMessage({ id: "settings.interfaceMode.office" })}
                   </DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>

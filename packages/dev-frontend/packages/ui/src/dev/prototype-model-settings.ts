@@ -1,3 +1,4 @@
+import { PROTOTYPE_AGENT_MODELS } from "./mock/agent-models.js";
 import type { ModelConfigObject, ProviderConfigObject } from "@zcode/provider";
 import type { ProviderSettingsView } from "@zcode/services";
 
@@ -31,24 +32,24 @@ const prototypeModelConfig: ModelConfigObject = {
 export function createPrototypeModelSettingsView(): ProviderSettingsView {
   return {
     revision: 0,
-    providerOrder: ["prototype-opencode-go"],
-    providerTemplates: [{
-      templateId: "prototype-opencode-go",
-      templateNameMap: { "zh-CN": "OpenCode Go", "en-US": "OpenCode Go" },
+    providerOrder: [...new Set(PROTOTYPE_AGENT_MODELS.map(model => model.providerId))],
+    providerTemplates: [...new Map(PROTOTYPE_AGENT_MODELS.map(model => [model.providerId, model])).values()].map(model => ({
+      templateId: model.providerId,
+      templateNameMap: { "zh-CN": model.provider, "en-US": model.provider },
       config: structuredClone(prototypeProviderConfig),
-    }],
-    providers: [{
-      providerId: "prototype-opencode-go",
-      providerName: "OpenCode Go",
-      templateId: "prototype-opencode-go",
+    })),
+    providers: [...new Map(PROTOTYPE_AGENT_MODELS.map(model => [model.providerId, model])).values()].map(provider => ({
+      providerId: provider.providerId,
+      providerName: provider.provider,
+      templateId: provider.providerId,
       enabled: true,
       executable: false,
       personalConfig: {},
       effectiveConfig: structuredClone(prototypeProviderConfig),
       issues: [],
-      models: [{
-        kind: "candidate",
-        modelId: "Beam Free",
+      models: PROTOTYPE_AGENT_MODELS.filter(model => model.providerId === provider.providerId).map(model => ({
+        kind: "candidate" as const,
+        modelId: model.name,
         builtin: true,
         enabled: true,
         executable: false,
@@ -56,7 +57,7 @@ export function createPrototypeModelSettingsView(): ProviderSettingsView {
         effectiveBuiltinConfig: structuredClone(prototypeModelConfig),
         effectiveConfig: structuredClone(prototypeModelConfig),
         issues: [],
-      }],
-    }],
+      })),
+    })),
   };
 }

@@ -1,3 +1,9 @@
+import { readPrototypeFreeWorkspaceRoots } from "./free-chats.js";
+import { prototypeDirectoryIssue } from "./recovery.js";
+import { getPrototypeWorkflow } from "./workflow.js";
+import { getPrototypeEmployeeId } from "./employee.js";
+import { prototypeProjectDirectories } from "./project-directories.js";
+import { readPrototypeDevelopmentRoot, readPrototypeProjectSettings } from "./project-settings.js";
 import type { IServiceAccessor } from "@zcode/services";
 import type { GitFileChange, GitRepositorySummary, WorkspaceFileEntry } from "@zcode/shared";
 import type { V4ConversationFileChangesResult } from "@zcode/shared/zcode-protocol-v4";
@@ -28,25 +34,51 @@ export function prototypeConversationFileChanges(root: string): V4ConversationFi
   }] };
 }
 
+function recordedSrs() {
+ return readPrototypeProjectSettings().projects.flatMap(project => getPrototypeWorkflow({ projectId: project.id }).srs);
+}
 function rootFor(path: string): string {
-  return path.startsWith("/demo/mobile-console") ? "/demo/mobile-console" : "/demo/aurora-console";
+  // 自由会话可使用已绑定的个人目录，文件样例按实际会话根解析。
+  const roots = [...readPrototypeProjectSettings().projects.flatMap(project => getPrototypeWorkflow({ projectId: project.id }).groups.flatMap(group => group.acceptance ? [group.acceptance.worktree.path] : [])), ...readPrototypeFreeWorkspaceRoots(), ...readPrototypeProjectSettings().projects.flatMap(project => getPrototypeWorkflow({ projectId: project.id }).drafts.flatMap(group => group.proposalLocation ? [group.proposalLocation.directory.replace(/\/$/, "")] : [])), ...recordedSrs().flatMap(sr => [sr.worktree?.path, sr.developmentRoot].filter((root): root is string => Boolean(root))), ...prototypeProjectDirectories().map(item => item.path), ...readPrototypeProjectSettings().projects.flatMap(item => [item.root, readPrototypeDevelopmentRoot(item.id)].filter((root): root is string => Boolean(root)))];
+  const root = roots.sort((a, b) => b.length - a.length).find(root => path === root || path.startsWith(`${root}/`));
+  if (!root) throw new Error("此路径不属于已登记的样例工作区，不会回落到其他项目。");
+  const issue = prototypeDirectoryIssue(path); if (issue) throw new Error(issue);
+  return root;
 }
 function relative(path: string): string { return path.slice(rootFor(path).length).replace(/^\//, ""); }
 const encoder = new TextEncoder();
 function base64(bytes: Uint8Array): string { return btoa(Array.from(bytes, value => String.fromCharCode(value)).join("")); }
 
 export function createPrototypeFileServices(): Pick<IServiceAccessor, "fileService" | "gitService" | "gitCheckpointService" | "fileWatcherService"> {
-  const files = new Map(Object.entries(PROTOTYPE_FILE_CONTENTS));
-  const staged = new Set<string>();
+  interface WorkspaceFiles { files: Map<string, string>; staged: Set<string>; branch: string; ignore: string }
+  const workspaces = new Map<string, WorkspaceFiles>();
+  const workspace = (root: string): WorkspaceFiles => {
+    const key = rootFor(root);
+    let value = workspaces.get(key);
+    if (!value) {
+      const sr = recordedSrs().find(item => item.worktree?.path === key);
+      value = { files: new Map(Object.entries(PROTOTYPE_FILE_CONTENTS)), staged: new Set(), branch: sr?.worktree?.branch ?? "main", ignore: "node_modules/\ndist/\n.env\n" };
+      workspaces.set(key, value);
+    }
+    return value;
+  };
+  const assertWritable = (root: string) => {
+    const sr = recordedSrs().find(item => item.worktree?.path === rootFor(root));
+    if (sr && (sr.status !== "developing" || sr.developerEmployeeId !== getPrototypeEmployeeId())) throw new Error("此 SR 工作区仅供查看，不能修改其他同事或已完成 SR 的审查样例。");
+    if (readPrototypeProjectSettings().projects.some(project => project.root === rootFor(root))) throw new Error("共享项目目录只读，请使用自己的开发 worktree。");
+  };
+  const assertBranchMutable = (root: string) => {
+    assertWritable(root);
+    if (recordedSrs().some(sr => sr.worktree?.path === rootFor(root))) throw new Error("SR 已绑定固定开发分支，不能在审查中切换或重建分支。");
+  };
   const changes = createPrototypeEvent<FileWatchEvent>();
-  let branch = "demo/ir-auth";
-  let ignore = "node_modules/\ndist/\n.env\n";
   const text = (path: string): string => {
-    const content = files.get(relative(path));
+    const content = workspace(path).files.get(relative(path));
     if (content === undefined) throw new Error(`样例文件不存在：${path}`);
     return content;
   };
   const entries = (root: string): WorkspaceFileEntry[] => {
+    const { files } = workspace(root);
     const directories = new Set<string>();
     for (const path of files.keys()) {
       const pieces = path.split("/");
@@ -55,8 +87,8 @@ export function createPrototypeFileServices(): Pick<IServiceAccessor, "fileServi
     return [...Array.from(directories, path => ({ name: path.split("/").at(-1)!, path: `${root}/${path}`, relativePath: path, type: "directory" as const })),
       ...Array.from(files.keys(), path => ({ name: path.split("/").at(-1)!, path: `${root}/${path}`, relativePath: path, type: "file" as const }))];
   };
-  const summary = (root: string): GitRepositorySummary => ({ workspacePath: root, repoRoot: root, workspaceInRepoPath: "", autoRefreshWatchPaths: [], branchName: branch, trackingBranchName: null, headRefType: "branch", ahead: 0, behind: 0, isDirty: files.has("src/auth/session.ts"), isGitAvailable: true, isRepository: true });
-  const changeList = (root: string): GitFileChange[] => files.has("src/auth/session.ts") ? [{ path: `${root}/src/auth/session.ts`, repoRelativePath: "src/auth/session.ts", workspaceRelativePath: "src/auth/session.ts", kind: "modified", section: staged.has("src/auth/session.ts") ? "staged" : "unstaged", added: 3, removed: 2, isStaged: staged.has("src/auth/session.ts"), isUntracked: false, isConflicted: false }] : [];
+  const summary = (root: string): GitRepositorySummary => ({ workspacePath: root, repoRoot: root, workspaceInRepoPath: "", autoRefreshWatchPaths: [], branchName: workspace(root).branch, trackingBranchName: null, headRefType: "branch", ahead: 0, behind: 0, isDirty: workspace(root).files.has("src/auth/session.ts"), isGitAvailable: true, isRepository: true });
+  const changeList = (root: string): GitFileChange[] => workspace(root).files.has("src/auth/session.ts") ? [{ path: `${root}/src/auth/session.ts`, repoRelativePath: "src/auth/session.ts", workspaceRelativePath: "src/auth/session.ts", kind: "modified", section: workspace(root).staged.has("src/auth/session.ts") ? "staged" : "unstaged", added: 3, removed: 2, isStaged: workspace(root).staged.has("src/auth/session.ts"), isUntracked: false, isConflicted: false }] : [];
   const identity = { userName: "原型演示用户", userEmail: "demo@example.invalid", nameSource: "阶段性原型样例", emailSource: "阶段性原型样例", scopeLabel: "仅内存" };
   const packed = (root: string) => entries(root).map(entry => `${entry.type}\t${entry.relativePath}`).join("\n");
   return {
@@ -87,30 +119,30 @@ export function createPrototypeFileServices(): Pick<IServiceAccessor, "fileServi
       readBinaryPreview: async ({ path }) => { const bytes = encoder.encode(text(path)); return { path, dataBase64: base64(bytes), totalBytes: bytes.length }; },
       listWorkspaceFilesLength: async ({ rootPath }) => packed(rootPath).length,
       listWorkspaceFilesRange: async ({ rootPath, offset, length }) => packed(rootPath).slice(offset, offset + length),
-      readWorkspaceFileSearchIgnore: async () => ({ content: ignore, source: "file" }),
-      applyWorkspaceFileSearchIgnoreTransform: async ({ transform }) => ({ content: transform === "reset-defaults" ? "node_modules/\ndist/\n.env\n" : ignore }),
-      writeWorkspaceFileSearchIgnore: async ({ rootPath, content }) => { ignore = content; changes.fire({ dirPath: rootPath }); },
+      readWorkspaceFileSearchIgnore: async ({ rootPath }) => ({ content: workspace(rootPath).ignore, source: "file" }),
+      applyWorkspaceFileSearchIgnoreTransform: async ({ rootPath, transform }) => ({ content: transform === "reset-defaults" ? "node_modules/\ndist/\n.env\n" : workspace(rootPath).ignore }),
+      writeWorkspaceFileSearchIgnore: async ({ rootPath, content }) => { assertWritable(rootPath); workspace(rootPath).ignore = content; changes.fire({ dirPath: rootPath }); },
     },
     fileWatcherService: { watch: async ({ path }) => ({ id: path }), unwatch: async () => {}, disposeAll() {}, onDynamicChange: () => changes.event },
     gitService: {
       getRepositorySummary: async ({ workspacePath }) => summary(workspacePath),
-      getWorkspaceRepositoryInfo: async ({ workspacePath }) => ({ workspacePath, kind: "main-tree", isGitAvailable: true }),
-      getLocalBranches: async () => ({ headRefType: "branch", currentBranchName: branch, branches: [branch, "main"].map(name => ({ name, isCurrent: name === branch, upstreamName: null, commitHash: null, commitTimestampMs: null })) }),
+      getWorkspaceRepositoryInfo: async ({ workspacePath }) => { workspace(workspacePath); return { workspacePath, kind: recordedSrs().some(sr => sr.worktree?.path === workspacePath) ? "linked-worktree" : "main-tree", isGitAvailable: true }; },
+      getLocalBranches: async ({ workspacePath }) => ({ headRefType: "branch", currentBranchName: workspace(workspacePath).branch, branches: [workspace(workspacePath).branch, "main"].filter((name, index, all) => all.indexOf(name) === index).map(name => ({ name, isCurrent: name === workspace(workspacePath).branch, upstreamName: null, commitHash: null, commitTimestampMs: null })) }),
       getCommitGraph: async () => ({ commits: [], hasMore: false }),
-      switchBranch: async ({ workspacePath, targetBranchName }) => { branch = targetBranchName; return { ok: true, action: "switch", branchName: branch, didChange: true, created: false, summary: summary(workspacePath), issues: [] }; },
-      createBranchAndSwitch: async ({ workspacePath, branchName }) => { branch = branchName; return { ok: true, action: "create-and-switch", branchName: branch, didChange: true, created: true, summary: summary(workspacePath), issues: [] }; },
+      switchBranch: async ({ workspacePath, targetBranchName }) => { assertBranchMutable(workspacePath); workspace(workspacePath).branch = targetBranchName; return { ok: true, action: "switch", branchName: workspace(workspacePath).branch, didChange: true, created: false, summary: summary(workspacePath), issues: [] }; },
+      createBranchAndSwitch: async ({ workspacePath, branchName }) => { assertBranchMutable(workspacePath); workspace(workspacePath).branch = branchName; return { ok: true, action: "create-and-switch", branchName: workspace(workspacePath).branch, didChange: true, created: true, summary: summary(workspacePath), issues: [] }; },
       getChanges: async ({ workspacePath, sourceId }) => changeList(workspacePath).filter(change => sourceId === "staged" ? change.isStaged : !change.isStaged),
       getIgnoredPaths: async () => [],
       getDiff: async ({ path }) => ({ path, availability: "patch", patch: PROTOTYPE_REVIEW_PATCH, beforeContent: PROTOTYPE_REVIEW_BEFORE, afterContent: text(path), summary: "阶段性前端原型的预置差异；未执行 Git。" }),
-      getBranchComparison: async ({ workspacePath }) => ({ baseRef: "main", headRef: branch, comparisonLabel: "样例差异（未执行 Git）", changes: changeList(workspacePath) }),
-      stagePaths: async ({ paths, workspacePath }) => { paths.forEach(path => staged.add(path.startsWith("/") ? relative(path) : path)); changes.fire({ dirPath: workspacePath }); },
-      unstagePaths: async ({ paths, workspacePath }) => { paths.forEach(path => staged.delete(path.startsWith("/") ? relative(path) : path)); changes.fire({ dirPath: workspacePath }); },
-      discardPaths: async ({ paths, workspacePath }) => { if (paths.some(path => path.endsWith("src/auth/session.ts"))) files.set("src/auth/session.ts", PROTOTYPE_REVIEW_BEFORE); changes.fire({ dirPath: workspacePath }); },
+      getBranchComparison: async ({ workspacePath }) => ({ baseRef: "main", headRef: workspace(workspacePath).branch, comparisonLabel: "样例差异（未执行 Git）", changes: changeList(workspacePath) }),
+      stagePaths: async ({ paths, workspacePath }) => { assertWritable(workspacePath); paths.forEach(path => workspace(workspacePath).staged.add(path.startsWith("/") ? relative(path) : path)); changes.fire({ dirPath: workspacePath }); },
+      unstagePaths: async ({ paths, workspacePath }) => { assertWritable(workspacePath); paths.forEach(path => workspace(workspacePath).staged.delete(path.startsWith("/") ? relative(path) : path)); changes.fire({ dirPath: workspacePath }); },
+      discardPaths: async ({ paths, workspacePath }) => { assertWritable(workspacePath); if (paths.some(path => path.endsWith("src/auth/session.ts"))) workspace(workspacePath).files.set("src/auth/session.ts", PROTOTYPE_REVIEW_BEFORE); changes.fire({ dirPath: workspacePath }); },
       generateCommitMessage: async () => ({ message: "[原型样例] 展示会话过期检查差异", providerId: "prototype", model: "预置文本（未调用模型）" }),
       commit: unavailablePrototypeOperation,
       push: unavailablePrototypeOperation,
       getIdentity: async () => identity,
-      refresh: async ({ workspacePath }) => ({ summary: summary(workspacePath), identity, unstagedChanges: changeList(workspacePath).filter(change => !change.isStaged), stagedChanges: changeList(workspacePath).filter(change => change.isStaged), branchComparison: { baseRef: "main", headRef: branch, comparisonLabel: "预置差异", changes: changeList(workspacePath) } }),
+      refresh: async ({ workspacePath }) => ({ summary: summary(workspacePath), identity, unstagedChanges: changeList(workspacePath).filter(change => !change.isStaged), stagedChanges: changeList(workspacePath).filter(change => change.isStaged), branchComparison: { baseRef: "main", headRef: workspace(workspacePath).branch, comparisonLabel: "预置差异", changes: changeList(workspacePath) } }),
     },
     gitCheckpointService: { createCheckpoint: unavailablePrototypeOperation, diffCheckpoints: unavailablePrototypeOperation, restoreBetweenCheckpoints: unavailablePrototypeOperation, deleteCheckpoint: unavailablePrototypeOperation },
   };

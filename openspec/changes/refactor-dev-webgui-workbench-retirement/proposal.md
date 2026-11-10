@@ -1,27 +1,22 @@
-# Proposal
+# Proposal：旧 Dev 条款退役记录 — dev-browser-workbench
 
 ## Why
 
-本 change 是 [refactor-dev-webgui-requirement-intake](../refactor-dev-webgui-requirement-intake/proposal.md) 完整 Dev 重构提案的一部分。当前 `dev-browser-workbench` 仍包含与本轮最终确认的需求模型、四阶段、人工 PR、共享工作流及 WebGUI 使用方式冲突的旧条款，必须明确替换或退役，避免新增规则与旧八阶段同时生效。
+本文件属于[Dev 需求总提案](../refactor-dev-webgui-requirement-intake/proposal.md)，按用户最新确认的规则更新，替换冲突的旧流程表述。
 
 ## What Changes
 
-- 本文件只承载 `dev-browser-workbench` 的 10 项 REMOVED 需求操作，满足包内单 change 不超过十项的格式限制。
-- 全部结论、适用边界、替换关系及尚未确定事项以[总提案](../refactor-dev-webgui-requirement-intake/proposal.md)及本组增量共同定义。
-- 本组必须整体审阅和交付。退役旧条款不等于删掉其普通 OMP 能力、用户数据或未受影响的原生边界，不交付只有删除规则的中间版本。
-- 本轮仅编写需求文件，不生成 design/tasks，不实现代码、不迁移或归档旧状态，不执行软件测试。
+- 本组 `dev-browser-workbench` 共 10 项需求操作，配套见 [规格文件](specs/dev-browser-workbench/spec.md)。
+- 统一采用同仓库单 IR、默认最多两个依赖就绪 SR 并行、首个 SR 启动冻结、人工提案 PR、SR 代码／测试／规格同 PR、IR 验收与最终修复／归档 PR；归档只移动目录，不再次同步规格。
+- 配套 REMOVED 标题仅保留旧条款替换清单；权威基线已按用户本次授权更新，不应重复删除或据此迁移旧状态。
+- 完整部署、目录、角色与流程见[最新 Dev 说明](../../../docs-zh-CN/spec-driven-orchestration.md)。
 
 ## Capabilities
 
-### New Capabilities
-
-无。
-
 ### Modified Capabilities
 
-- `dev-browser-workbench`: 完整对齐总提案中相应领域的最终行为；本 change 的确切需求项见配套 `specs/dev-browser-workbench/spec.md`。
+- `dev-browser-workbench`：与本组总提案和对应权威基线保持一致。
 
 ## Impact
 
-- 后续实现需结合本组所有增量更新对应前端、宿主或编排能力，保留其他既有规则。
-- 本文件不直接修改 `openspec/specs/` 权威基线，只有明确批准后的原生同步/归档才形成新基线。
+本轮仅更新文档，已同步用户确认的 `openspec/specs/` Dev 需求，不表示实现或验收通过。不改原型、代码、静态数据或运行状态；不执行 Git 提交／推送、OpenSpec 同步／归档或数据库迁移。原型未对齐项见[运行说明](../../../packages/dev-frontend/README.md)。

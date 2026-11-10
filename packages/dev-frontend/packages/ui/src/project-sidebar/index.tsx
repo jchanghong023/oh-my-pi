@@ -189,6 +189,18 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
     tabStore.getState().openSettingsTab();
   }, [tabStore]);
   const changeTheme = useCallback((value: string) => setTheme(value as Theme), [setTheme]);
+  if (props.singleProjectConversation) {
+    const project = projects.find(item => item.id === props.conversationProjectId);
+    return <ProjectTaskListContext.Provider value={taskPresentation}>
+      <SidebarTooltipProvider>
+        <section data-testid="dev-free-conversations" aria-label="自由会话" className="min-w-0">
+          {project ? renderProject({ ...project, name: "自由会话" }) : !loading && <p className="px-5 py-3 text-ui-sm text-foreground-subtle">请先选择已登记项目。</p>}
+          {error && <p role="alert" className="px-5 text-ui-sm text-destructive">{error}</p>}
+        </section>
+        {editor && service && <ProjectEditor project={editor.project} projects={tree.projects} service={service} onClose={() => setEditor(null)} onSaved={refresh} onDeleted={refresh} />}
+      </SidebarTooltipProvider>
+    </ProjectTaskListContext.Provider>;
+  }
   return (
     <ProjectTaskListContext.Provider value={taskPresentation}>
       <SidebarTooltipProvider>

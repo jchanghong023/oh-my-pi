@@ -472,42 +472,21 @@ OMP 按要求先确定范围与统一规则，再拆分独立工作项、排队�
 
 OMP 终端支持此命令。完整契约见 [Goal 自动编排需求](../openspec/specs/goal-autopilot/spec.md)，实现与验收边界见[历史验证记录](verification-history.md)。
 
-### 4.8 `/dev`：协同开发模式
+### 4.8 `/dev`：浏览器协同开发
 
-Dev 使用 **Release → IR → 一个或多个 SR**：先整理完整需求、确认全部拆分并独立审核，再人工提交需求 PR；Git 核对合入默认分支后整组冻结，才能按 SR 开发。当前操作在浏览器完成，不是旧 Dev TUI。
+Dev 最新权威需求为长期共享 Web：A 的账号与 Token 运行服务，同事以 `j` 加 8 位数字工号进入；无需密码，仅检查格式。项目／Release 及按工号绑定的开发目录存唯一共享数据库，需求提案先在固定临时目录生成 OpenSpec 标准文件。
 
-| 入口 | 用途 |
-| --- | --- |
-| 普通 OMP 中输入 `/dev` | 进入浏览器 Dev，输出完整地址；进入后当前 TUI 只接受再次 `/dev` 结清退出 |
-| 终端运行 `omp dev` | 使用当前有效目录、profile 和模型启动独立工作台；启动后输入完整一行 `/dev` 并回车，结清后正常退出 |
+流程为业务需求与独立业务评审 → 技术方案及 SR 依赖 → 人工提案 PR → 正式提案 → 同仓库单 IR、默认最多两个依赖就绪 SR 并行 → 各 SR 的代码／测试／规格同 PR → IR 验收 → 最终修复与归档 PR。首个 SR 开始冻结需求和确认方案，归档只移动 Change，不重复同步规格。
 
-进入前先结清普通模型、工具和任务，退出 Loop，并停止普通 Collab 共享或离开 `join`；不会暗中取消普通工作。旧终端新建、配置、推进、返回、丢弃等子操作已退役，不再作为可用入口或兼容别名。
+`/dev`／`omp dev` 为浏览器工作台入口，进入后原 TUI 保持独占；再次 `/dev` 退出前结清自有工作，关闭网页不退出服务。旧 `/dev new`、`next`、`back`、`drop`、工作区 Team 配置及四阶段 TUI 不再作为当前 Dev 的操作合同。
 
-**offline 手动打开浏览器**：复制终端显示的完整地址（包括随机能力路径），按[网页手动打开说明](#devwebguisketch-手动打开网页)访问。远端电脑不能直接把宿主 loopback 当自己的地址；内网地址仍受路由和防火墙限制。非 offline 默认尝试打开本机浏览器，失败保留真实地址；`OMP_DEV_NO_OPEN=1` 可显式跳过。独立 `omp dev` 的 EOF 不代表退出，Windows 自动化应发送 `/dev` 换行并等待正常结束，不能以强杀进程冒充结清。
-
-**浏览器操作顺序：**
-
-1. 在左下角设置登记宿主已有 Git 项目并添加 Release，再选择项目及 Release。Release 不绑定代码分支；不自动 clone 或创建所填目录。
-2. 开发人员用“本地新建”从默认分支创建需求分支和 worktree；业务人员访问长期宿主用“浏览器新建”，仅保存草稿及原生会话，不操作 Git，也不需要自己的 OMP 或 clone。两者使用同一需求 Agent 和格式。
-3. 与 AI 整理完整 IR、全部 SR、附件及验收。标题、正文和拆分只能由 AI 在授权范围内更新，右侧材料只读；上传已有 Markdown 不构成跳过讨论与审核的捷径。
-4. 点击“确认需求与全部拆分并审核”：先格式检查，再由独立 reviewer 审查同一整组固定快照；全部通过才进入正式导航并可下载完整需求 ZIP。修改使旧确认／审核失效，需重新明确确认。
-5. 接手人在自己的 Dev 选择目标项目和 Release 后导入 ZIP；导入检查摘要、版本、完整性和引用，不启动模型、开发或自动 review。合入前需修订时，明确发送请求建立全新本地需求会话，不恢复外部源聊天；改动后重新确认审核。
-6. 在“Git 发布范围与授权”明确选择仅提交或提交并推送；手动到公司平台创建需求 PR，再登记地址。实际 Git 核对整组需求合入后冻结，选择 SR 点击“开始开发”，依次完成**技术方案 → 开发计划 → 开发与验证 → 交付 PR**，各次推进均需页面明确批准。
-7. 开发与验证分别产生实际 UT、ST 报告及完成报告，如实保留失败、未运行和限制。按真实路径和版本授权发布源码、测试及资料，人工创建代码 PR；核对代码实际合入默认分支后 SR 结束、释放名额，仅提醒自行清理 worktree，不自动删除分支或文件。
-
-**看材料不等于操作流程**：左栏是需求导航，中栏是当前原生会话，右栏是只读材料；点击历史阶段只改变查看位置，不启动 Agent、不推进或返回。未选择需求、仅查看未启动 SR 或打开导入包时不自动调用模型；已有阶段会话沿用原生工具、附件、问答与历史。Team／角色模型沿用既有配置方式，不增加 Dev 配置系统或多候选管理；普通 TUI 配置须先退出 Dev。
-
-同项目跨 Release、IR 和 worktree 同时最多一个开发 SR，等待代码 PR 合入也占用名额。“返回技术方案／开发计划”先结清全部递归工作，保留代码与历史，使目标及下游批准／报告失效；PR 合入前可明确返回开发与验证继续修正，不修改冻结需求、不自动 Git 回滚。删除只适用于未冻结且全部 SR 未启动的 IR，保留文件与历史，已有外部 PR 由人关闭，不用于释放开发占用。
-
-关闭、刷新或断线不退出 Dev、不停止已接受任务；宿主须存活。再次 `/dev` 等待 Dev 自有任务真实结清后恢复普通会话或结束独立进程，失败保留锁定和原因，不删需求、不撤销 Git。正式材料进 Git，阶段、占用、PR 事实和原生历史引用使用 Git commonDir 下共享原子 JSON；聊天正文仍由 OMP 管理，不新增 Dev SQLite。NFS 仅顺序换机，旧宿主未知时不自动抢占；旧 Dev 状态不迁移。
-
-详见 [Lander／Sailor：Release／IR／SR 浏览器研发协作指南](lander-sailor-six-stage-agent-workflow.md)，含七项配套增量及当前证据边界。Windows Chrome 页面／设置观察和局部定向检查不代表完整 Provider、Firefox、发行产物、NFS 或公司平台验收；模拟人工 PR 不等于平台批准。代码合入即结束 Dev，不附加旧合入后测试／复测流水线；独立 OpenSpec／Superpowers 仍按下一节使用。
+本轮只更新文档，未改当前代码或原型，也不表示上述目标已经可用。完整流程及实现边界见[最新 Dev 说明](spec-driven-orchestration.md)，原型启动和未对齐项见[Dev README](../packages/dev-frontend/README.md)。历史测试不能证明新规则通过。
 
 ### 4.9 OpenSpec：独立需求闭环
 
-内置 OpenSpec 与 `/dev` 是独立功能，不依赖 `/dev` 的运行或批准。OMP 提供上游十二项 `openspec-*` 技能，可通过 `/skill:openspec-explore`、`/skill:openspec-propose` 等入口调用；当前工作目录直接包含 `openspec/` 时也可按需自动发现。技能原文及完整名称沿用上游，实际操作仍受用户授权和项目规则约束。
+内置 OpenSpec 与 `/dev` 是独立功能，不依赖 `/dev` 的运行或批准。OMP 提供包内五项核心 `openspec-*` 技能，可通过 `/skill:openspec-explore`、`/skill:openspec-propose` 等入口调用；可按原生发现规则按需读取。技能原文及完整名称沿用上游，实际操作仍受用户授权和项目规则约束。
 
-终端使用 `omp openspec --help` 查看上游 CLI 能力；`omp openspec init` 支持原生工具配置选项，默认使用 `spec-driven` schema。内置技能无需通过初始化额外安装。需求同步或归档不等于软件实现及验收，未结束的 `/dev` 不允许借独立技能绕过阶段权限。
+终端使用 `omp openspec --help` 查看上游 CLI 能力；`omp openspec init` 由封装层固定 `--tools=none`，默认使用 `mini` schema，已有或显式选择的 schema 不强制转换。内置技能无需通过初始化额外安装。需求同步或归档不等于软件实现及验收，未结束的 `/dev` 不允许借独立技能绕过阶段权限。
 
 系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI，不是前三个节点可执行命令的模型工具。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
 

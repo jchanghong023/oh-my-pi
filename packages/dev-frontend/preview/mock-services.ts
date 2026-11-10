@@ -1,9 +1,11 @@
+import { createPrototypeProjectServices } from "../packages/ui/src/dev/mock/free-chats.js";
 import type { IServiceAccessor, BroadcastMessage } from "@zcode/services";
 import type { Hook, Memory, OutputStyle } from "@zcode/shared";
 import type { PromptAttachmentTransferProgress as TransferProgress } from "../packages/services/src/prompt-attachment-transfer/promptAttachmentTransfer.js";
 import { createPrototypeChatServices, type PrototypeAttachment } from "../packages/ui/src/dev/mock/chat.js";
 import { createPrototypeFileServices } from "../packages/ui/src/dev/mock/files.js";
 import { createPrototypeSettingsServices } from "../packages/ui/src/dev/mock/settings.js";
+import { readPrototypeSkills } from "../packages/ui/src/dev/mock/skills.js";
 import { createPrototypeEvent, unavailablePrototypeOperation } from "../packages/ui/src/dev/mock/events.js";
 
 export const PROTOTYPE_WORKSPACE = "/demo/aurora-console";
@@ -34,7 +36,7 @@ export function createPrototypeServices(): IServiceAccessor {
   };
   const fileServices = createPrototypeFileServices();
   return {
-    ...fileServices, ...createPrototypeSettingsServices(sessionWorkspaces), ...createPrototypeChatServices(attachments, sessionWorkspaces),
+    ...fileServices, ...createPrototypeProjectServices(), ...createPrototypeSettingsServices(sessionWorkspaces), ...createPrototypeChatServices(attachments, sessionWorkspaces),
     systemService: { info: async () => ({ homedir: "/demo/user", platform: "browser-prototype" }), probeIntranet: unavailable },
     credentialService: { load: async key => credentials.get(key) ?? null, save: async (key, value) => { credentials.set(key, value); }, delete: async key => { credentials.delete(key); } },
     broadcastService: {
@@ -51,7 +53,7 @@ export function createPrototypeServices(): IServiceAccessor {
     },
     clientConfigService: { getSnapshot: async () => ({ pluginStoreOrder: null, zsrcUrl: null }) },
     skillsService: {
-      list: async () => ({ skills: [], capability: { userScopeAvailable: false, userScopeReason: "desktop_only" }, diagnostics: [] }),
+      list: async params => ({ skills: readPrototypeSkills(params.workspacePath), capability: { userScopeAvailable: false, userScopeReason: "desktop_only" }, diagnostics: [] }),
       setEnabled: unavailable, buildPromptContext: async params => ({ prompt: params.prompt, activatedSkillNames: [] }),
       copyToCommon: unavailable, removeFromCommon: unavailable, deleteSkill: unavailable,
     },

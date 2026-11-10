@@ -367,6 +367,7 @@ export function AnimatedSidePanePanel({
 }) {
   const { intl } = useZCodeIntl();
   const dev = useDev();
+  const isDevFlow = Boolean(dev && !dev.selection.freeSessionId);
   const isOfficeMode = useIsOfficeMode();
   const developerToolsEnabled = useDeveloperToolsVisibility();
   const isMobileTextInputViewport = useIsMobileTextInputViewport();
@@ -678,7 +679,7 @@ export function AnimatedSidePanePanel({
       description: intl.formatMessage({ id: "sidePane.launcher.selection-side-conversation" }),
       icon: MessageSquareTextIcon,
       onOpen: onOpenSelectionSideConversation,
-      disabled: Boolean(dev) && !canOpenSelectionSideConversation,
+      disabled: isDevFlow && !canOpenSelectionSideConversation,
     },
     files: {
       id: "files",
@@ -711,15 +712,15 @@ export function AnimatedSidePanePanel({
     },
   };
   const openTabLauncherItems: OpenTabLauncherItem[] = resolveOpenTabLauncherItemIds({
-    canOpenSelectionSideConversation: Boolean(dev) || canOpenSelectionSideConversation,
+    canOpenSelectionSideConversation: isDevFlow || canOpenSelectionSideConversation,
     developerToolsEnabled,
     hasReviewTab,
-    hasDevMaterials: Boolean(dev),
+    hasDevMaterials: isDevFlow,
   })
     .filter((itemId) => !isOfficeMode || itemId !== "review")
     .map((itemId) => openTabLauncherItemById[itemId]);
   const closeSidePaneButton =
-    isVisible && !mobileOverlay && onCloseSidePane ? (
+    isVisible && (!mobileOverlay || dev) && onCloseSidePane ? (
       <div className="flex shrink-0 items-center gap-0.5 [app-region:no-drag]">
         {fullViewToggle ? (
           <SidePaneFullViewToggleButton
@@ -1179,7 +1180,7 @@ export function AnimatedSidePanePanel({
                         ) : tab.type === "new-tab" ? (
                           openTabLauncher
                         ) : tab.type === "dev-materials" ? (
-                          dev ? <DevMaterialsPane /> : null
+                          isDevFlow ? <DevMaterialsPane /> : null
                         ) : tab.type === "developer-tools" ? (
                           <ServiceProvider services={services}>
                             <DeveloperToolsPane

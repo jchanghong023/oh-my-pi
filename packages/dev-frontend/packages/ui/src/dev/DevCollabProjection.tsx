@@ -1,13 +1,17 @@
 import { useState } from "react";
+import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog.js";
+import { MessageResponse } from "@/components/ai-elements/message.js";
+import { useZCodeStore } from "@/store/StoreProvider.js";
 import { useDev } from "./DevContext.js";
 import { getPrototypePeers } from "./mock/collaboration.js";
 
 /** Reuses the existing collaboration dialog; no remote transport or extra chat surface. */
 export function DevCollabProjection() {
   const dev = useDev()!;
+  const theme = useZCodeStore(state => state.theme);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [peerId, setPeerId] = useState("");
@@ -18,8 +22,8 @@ export function DevCollabProjection() {
   const peer = peers.find(item => item.id === peerId);
   const material = peer?.materials.find(item => item.path === materialPath) ?? peer?.materials[0];
   return <>
-    <Button variant="ghost" className="mt-1 justify-start" data-testid="collab-open" onClick={() => setOpen(true)}>
-      远程协作 · 样例
+    <Button size="sm" variant="ghost" className="ml-auto shrink-0 gap-1.5" aria-label="协作成员与共享材料（样例）" data-testid="collab-open" onClick={() => setOpen(true)}>
+      <Users className="size-3.5" />协作<span className="text-foreground-subtle">{peers.length}</span>
     </Button>
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="flex h-[90dvh] max-w-[min(1200px,96vw)] flex-col gap-0 p-0" data-testid="dev-collab-projection">
@@ -32,7 +36,7 @@ export function DevCollabProjection() {
           </div>}
         </header>
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-          <section className="w-full shrink-0 overflow-y-auto border-b border-border p-3 sm:w-60 sm:border-r sm:border-b-0" aria-label="协作成员样例">
+          <section className={`w-full shrink-0 overflow-y-auto border-b border-border p-3 sm:max-h-none sm:w-60 sm:border-r sm:border-b-0 ${peer ? "max-h-36" : "max-h-64"}`} aria-label="协作成员样例">
             <Input data-testid="collab-link" aria-label="筛选样例成员" placeholder="筛选成员或角色" value={query} onChange={event => setQuery(event.target.value)} />
             <div className="mt-3 space-y-1">
               {visiblePeers.map(item => <Button key={item.id} variant={peer?.id === item.id ? "secondary" : "ghost"}
@@ -57,7 +61,7 @@ export function DevCollabProjection() {
                     variant={material?.path === item.path ? "secondary" : "outline"} onClick={() => setMaterialPath(item.path)}>{item.title}</Button>)}</div>
                   {material && <article className="rounded-xl border border-border p-4">
                     <p className="mb-3 break-all text-xs text-foreground-subtle">{material.path} · 只读样例</p>
-                    <pre className="whitespace-pre-wrap break-words text-sm">{material.content}</pre>
+                    <MessageResponse className="min-w-0 break-words" theme={theme}>{material.content}</MessageResponse>
                   </article>}
                 </>}
               </div>

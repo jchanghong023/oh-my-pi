@@ -244,6 +244,8 @@ import {
 } from "@/lib/conversationSelectionReference.js";
 
 export interface SessionPaneProps {
+  /** 嵌入设置页时只收起窗格标题，保留聊天、工具交互与审批能力。 */
+  embedded?: boolean;
   paneId: string;
   sessionId: string | null;
   rootSessionId?: string;
@@ -470,6 +472,7 @@ export function useSessionPaneLease(sessionId: string | null, layer: object) {
  * - 模型表单的本地输入 state 下沉到对应子组件，输入时不牵动整个 pane。
  */
 export function SessionPane({
+  embedded = false,
   paneId,
   sessionId,
   rootSessionId,
@@ -4303,11 +4306,11 @@ export function SessionPane({
             </div>
           </div>
         ) : null}
-        <ConversationHeader
+        {!embedded && <ConversationHeader
           title={snapshot?.meta.title ?? ""}
           onClosePane={onClosePane}
           workspaceBadge={workspaceBadge}
-        />
+        />}
 
         <div
           className={cn(

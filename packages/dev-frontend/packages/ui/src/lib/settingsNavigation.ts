@@ -8,6 +8,7 @@ export type SettingsSectionId =
   | "personalization"
   | "memory"
   | "skill"
+  | "skillDesign"
   | "projects"
   | "archives"
   | "subagents"
@@ -24,11 +25,14 @@ const SETTINGS_SECTION_INTENT_KEY = "zcode-settings-section-intent",
 const SETTINGS_MODEL_PROVIDER_ID_INTENT_KEY = "zcode-settings-model-provider-id-intent";
 const SETTINGS_SECTION_INTENT_EVENT = "zcode:settings-section-intent",
   SETTINGS_LAST_SECTION_STORAGE_KEY = "zcode-settings-last-section";
-// Dev 原型只展示项目/Release、外观与模型设置；其余分区保留类型和原有组件。
+// Dev 原型展示项目/Release、外观、模型、个人追加提示词和技能；其余分区保留原组件。
 const ENABLED_SETTINGS_SECTIONS = new Set<SettingsSectionId>([
   "general",
   "appearance",
   "modelProvider",
+  "personalization",
+  "skill",
+  "skillDesign",
 ]);
 
 export interface SettingsSectionIntentEventDetail {
@@ -49,6 +53,7 @@ function isSettingsSectionId(value: string): value is SettingsSectionId {
     value === "personalization" ||
     value === "memory" ||
     value === "skill" ||
+    value === "skillDesign" ||
     value === "projects" ||
     value === "archives" ||
     value === "subagents" ||

@@ -1,21 +1,33 @@
-import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Download, Copy, PanelLeftClose, Settings, FolderGit2, FileText } from "lucide-react";
+import { DevSrDeliveryControls } from "./DevSrDeliveryControls.js";
+import { prototypeRequirementsReviewCurrent } from "./mock/requirements-review.js";
+import { prototypeSrStartBlocker } from "./mock/development-admission.js";
+import { DevIrAcceptanceEntry, DevIrAcceptanceHeader } from "./DevIrAcceptance.js";
+import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
+import { prototypeStageMaterialBlocker, prototypeStageView } from "./mock/stage-gates.js";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, Download, Copy, Settings, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
-import { Input } from "@/components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.js";
-import { SettingsGroupCard } from "@/settings/SettingsPageParts.js";
+import { SessionPane } from "@/v4/SessionPane.js";
+import { V4PaneConversationProvider } from "@/v4/V4ConversationContext.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import {
 	useDev,
 	DEV_STAGES,
 	DEV_STAGE_LABELS,
 } from "./DevContext.js";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover.js";
+import { MessageResponse } from "@/components/ai-elements/message.js";
+import { useZCodeStore } from "@/store/StoreProvider.js";
+import { DevProposalControls } from "./DevProposalControls.js";
+import { PROPOSAL_STATUS_LABELS } from "./mock/proposal-flow.js";
 import { DevPublishControls } from "./DevPublishControls.js";
 import { DevCollabProjection } from "./DevCollabProjection.js";
 import { DevDeleteRequirement } from "./DevDeleteRequirement.js";
-import { prototypeRequirementDownload } from "./mock/workflow.js";
+import { readPrototypeDevelopmentRoot } from "./mock/project-settings.js";
 import { MATERIAL_KIND_LABELS } from "./mock/materials.js";
+import { getPrototypeEmployeeId } from "./mock/employee.js";
 export const DEV_MATERIAL_DISCUSS = "omp-dev:material-discuss";
 function download(bytes: Blob, name: string) {
 	const url = URL.createObjectURL(bytes);
@@ -50,256 +62,14 @@ function copyMaterial(text: string): Promise<void> {
 		for (const range of previous) selection.addRange(range);
 	}
 }
-export function DevSidebar({ onNavigate }: { onNavigate?: () => void }) {
-	const dev = useDev()!;
-	const openSettings = useTabStore(state => state.openSettingsTab);
-	const importInputRef = useRef<HTMLInputElement>(null);
-	const { view, selection, select, command, pending, releaseId } = dev;
-	const groups = view?.groups.filter(group => group.releaseId === releaseId) ?? [];
-	const drafts = view?.drafts.filter(group => group.releaseId === releaseId) ?? [];
-	const choose = (irId: string) => {
-		select({ projectId: selection.projectId, irId });
-		onNavigate?.();
-	};
-	return (
-		<nav
-			data-testid="dev-workflow-root"
-			className="flex h-full flex-col bg-sidebar px-3 py-3 text-ui-base"
-			aria-label="Dev 需求导航"
-		>
-			<div className="mb-3 flex items-center justify-between gap-2 px-2">
-				<strong>Dev</strong>
-				{onNavigate && (
-					<Button type="button" size="sm" variant="ghost" onClick={onNavigate}>
-						<PanelLeftClose className="size-4" />
-						返回聊天
-					</Button>
-				)}
-			</div>
-			<div className="mb-2 space-y-1">
-				<span className="text-ui-base text-foreground-subtle">Release</span>
-				<Select value={releaseId} onValueChange={dev.setReleaseId}>
-					<SelectTrigger className="w-full" data-testid="release-select" aria-label="Release">
-						<SelectValue placeholder="选择 Release" />
-					</SelectTrigger>
-					<SelectContent position="popper" align="start">
-						{view?.releases.map(release => (
-							<SelectItem key={release.id} value={release.id}>
-								{release.title}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-			</div>
-			<div className="flex flex-wrap gap-1 border-b border-border pb-3">
-				<Button
-					size="sm"
-					data-testid="new-local"
-					disabled={pending || !releaseId}
-					onClick={() => {
-						onNavigate?.();
-						void command({ type: "createLocalDraft", releaseId });
-					}}
-				>
-					本地新建
-				</Button>
-				<Button
-					size="sm"
-					variant="outline"
-					data-testid="new-browser"
-					disabled={pending || !releaseId}
-					onClick={() => {
-						onNavigate?.();
-						void command({ type: "createBrowserDraft", releaseId });
-					}}
-				>
-					浏览器新建
-				</Button>
-				<Button
-					type="button"
-					size="sm"
-					variant="outline"
-					disabled={pending || !releaseId}
-					onClick={() => importInputRef.current?.click()}
-				>
-					导入交互样例
-				</Button>
-				<input
-					ref={importInputRef}
-					data-testid="import-package"
-					type="file"
-					accept=".zip,application/zip"
-					className="sr-only"
-					disabled={pending || !releaseId}
-					onChange={event => {
-						const file = event.target.files?.[0];
-						event.target.value = "";
-						if (!file) return;
-						void command({
-							type: "importPackage",
-							projectId: selection.projectId,
-							releaseId,
-							packageId: `local-preview:${file.name}`,
-						});
-					}}
-				/>
-			</div>
-			<div className="min-h-0 flex-1 overflow-y-auto py-2">
-				{groups.map(group => (
-					<Button
-						key={group.id}
-						variant={selection.irId === group.id ? "secondary" : "ghost"}
-						data-ir-id={group.id}
-						aria-current={selection.irId === group.id ? "page" : undefined}
-						className="w-full justify-start"
-						onClick={() => choose(group.id)}
-					>
-						<span className="min-w-0 flex-1 truncate">{group.title}</span>
-						<small className="text-ui-sm text-foreground-subtle">
-							{group.srIds.length} SR ·{" "}
-							{view?.srs.some(sr => sr.irId === group.id && sr.status === "developing")
-								? "开发中"
-								: group.srIds.length > 0 &&
-									  group.srIds.every(id =>
-											view?.srs.some(
-												sr => sr.id === id && sr.irId === group.id && sr.status === "completed",
-											),
-									  )
-									? "已完成"
-									: group.status === "frozen"
-										? "已冻结"
-										: "待合入"}
-						</small>
-					</Button>
-				))}
-				{drafts.length > 0 && (
-					<section className="mt-4 border-t border-border pt-2">
-						<h2 className="px-2 text-ui-sm text-foreground-subtle">草稿</h2>
-						{drafts.map(group => (
-							<Button
-								key={group.id}
-								variant={selection.irId === group.id ? "secondary" : "ghost"}
-								data-ir-id={group.id}
-								data-dev-draft="true"
-								className="w-full justify-start"
-								onClick={() => choose(group.id)}
-							>
-								<span className="min-w-0 truncate">{group.title || "需求讨论"}</span>
-							</Button>
-						))}
-					</section>
-				)}
-			</div>
-			<div className="space-y-1 border-t border-border pt-3">
-				<span className="flex items-center gap-2 text-ui-base text-foreground-subtle">
-					<FolderGit2 className="size-3.5" />
-					项目
-				</span>
-				<Select value={selection.projectId ?? ""} onValueChange={projectId => select({ projectId })}>
-					<SelectTrigger className="w-full" data-testid="project-select" aria-label="项目">
-						<SelectValue placeholder="选择项目" />
-					</SelectTrigger>
-					<SelectContent position="popper" align="start">
-						{view?.projects.map(project => (
-							<SelectItem key={project.id} value={project.id}>
-								{project.name}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-			</div>
-			<DevCollabProjection />
-			<Button variant="ghost" data-testid="settings" className="mt-2 justify-start" onClick={openSettings}>
-				<Settings size={16} />
-				设置
-			</Button>
-		</nav>
-	);
-}
-export function DevProjectSettings() {
-	const dev = useDev();
-	const [name, setName] = useState("Aurora 协作控制台");
-	const [root, setRoot] = useState("/demo/aurora-console");
-	const [title, setTitle] = useState("2026.12 · 下一迭代");
-	if (!dev) return null;
-	return (
-		<section className="space-y-4" data-testid="dev-project-settings">
-			<p className="text-ui-base leading-6 text-foreground-subtle">
-				阶段性前端原型：以下项目、目录与 Release 仅为演示值。保存只更新浏览器内存，不检查或操作 Git 仓库；后续确认后再对接真实 OMP。
-			</p>
-			<SettingsGroupCard>
-			<form
-				className="grid gap-3 px-4 py-3 sm:grid-cols-2"
-				onSubmit={event => {
-					event.preventDefault();
-					void dev.command({ type: "registerProject", registrationScope: "target-root", name, root });
-				}}
-			>
-				<Input
-					data-testid="project-name"
-					aria-label="项目名称"
-					placeholder="项目名称"
-					value={name}
-					onChange={event => setName(event.target.value)}
-					required
-				/>
-				<Input
-					data-testid="project-root"
-					aria-label="演示项目目录"
-					placeholder="演示项目目录"
-					value={root}
-					onChange={event => setRoot(event.target.value)}
-					required
-				/>
-				<Button className="justify-self-start sm:col-span-2" data-testid="project-register" disabled={dev.pending}>
-					保存项目
-				</Button>
-			</form>
-			<ul className="text-ui-base">
-				{dev.view?.projects.map(project => (
-					<li key={project.id} className="border-t border-border px-4 py-3">
-						<div className="font-medium text-foreground">{project.name}</div>
-						<div className="mt-1 break-all text-foreground-subtle">{project.root}</div>
-					</li>
-				))}
-			</ul>
-			<form
-				className="flex flex-col gap-3 border-t border-border px-4 py-3 sm:flex-row sm:items-center"
-				onSubmit={event => {
-					event.preventDefault();
-					void dev.command({ type: "createRelease", title }).then(result => {
-						if (result?.status === "completed") setTitle("");
-					});
-				}}
-			>
-				<Input
-					data-testid="release-title"
-					className="flex-1"
-					aria-label="Release 名称"
-					placeholder="Release 名称"
-					value={title}
-					onChange={event => setTitle(event.target.value)}
-					required
-				/>
-				<Button className="shrink-0 self-start" data-testid="create-release" disabled={dev.pending || !dev.selection.projectId}>
-					添加 Release
-				</Button>
-			</form>
-			</SettingsGroupCard>
-			{dev.error && (
-				<p role="alert" className="text-ui-base text-destructive">
-					{dev.error}
-				</p>
-			)}
-		</section>
-	);
-}
+export { DevSidebar } from "./DevSidebar.js";
+export { DevProjectSettings } from "./DevProjectSettings.js";
 export function DevStageHeader() {
 	const dev = useDev();
 	const openSettings = useTabStore(state => state.openSettingsTab);
-	const [prUrl, setPrUrl] = useState("");
+	const [directoryCopyStatus, setDirectoryCopyStatus] = useState("");
 	useEffect(() => {
-		setPrUrl("");
+		setDirectoryCopyStatus("");
 	}, [dev?.selection.projectId, dev?.selection.irId, dev?.selection.srId]);
 	if (!dev) return null;
 	const { view, selection, command, pending } = dev;
@@ -322,9 +92,14 @@ export function DevStageHeader() {
 								? "请在导航中选择样例项目，或前往设置添加演示项目。"
 								: !release
 									? "请在导航中选择 Release；尚无 Release 时可前往设置添加。"
-									: "在下方发送需求即可新建本地需求讨论，也可从导航继续已有需求。"}
+									: "点击左侧“新建需求提案”开始，也可从导航继续已有提案。"}
 				</p>
-				<div key="dev-actions" className="flex flex-wrap gap-2">
+            {!proposal && sr && <div className="space-y-1 text-ui-sm text-foreground-subtle" data-testid="sr-admission-summary">
+              <p>当前仓库：{view?.repositoryDevelopment?.activeSrs.length ?? 0}/{view?.repositoryDevelopment?.limit ?? 2} 个 SR 占用名额 · 同仓库同时开发一个 IR</p>
+              <p>前置依赖：{dependencyTitles.length ? dependencyTitles.join("、") : "无，可与独立 SR 并行"}</p>
+              {startBlocker && <p role="status" data-testid="sr-start-blocker">{startBlocker}</p>}
+            </div>}
+			<div key="dev-actions" className="flex flex-wrap gap-2">
 					{!selection.irId && view && (!project || !release) && (
 						<Button size="sm" variant="outline" onClick={openSettings}>
 							<Settings size={14} />
@@ -338,16 +113,18 @@ export function DevStageHeader() {
 				)}
 			</header>
 		);
+	if (selection.irAcceptance) return <DevIrAcceptanceHeader key={group.id} group={group} />;
+	const proposal = view?.drafts.some(item => item.id === group.id);
 	const prFact = sr ? sr.codePr : group.requirementsPr;
-	const confirmed =
-		!!group.snapshot &&
-		group.confirmation?.snapshotDigest === group.snapshot.digest &&
-		group.review?.passed &&
-		group.review.snapshotDigest === group.snapshot.digest &&
-		["confirmed", "requirements-pr", "frozen"].includes(group.status);
-	const canRegisterPr = sr
-		? sr.status === "developing" && sr.stage === "pr"
-		: confirmed && group.status !== "frozen";
+	const employeeId = getPrototypeEmployeeId();
+	const ownsSr = Boolean(sr && sr.developerEmployeeId === employeeId);
+	const viewingOtherSr = Boolean(sr?.status === "developing" && !ownsSr);
+	const stageView = sr ? prototypeStageView(sr, selection) : undefined;
+	const stageEditable = !sr || Boolean(stageView?.isCurrent && ownsSr && dev.session);
+	const materialBlocker = sr ? prototypeStageMaterialBlocker(sr, view?.materials ?? []) : undefined;
+	const startBlocker = sr?.status === "pending" && view ? prototypeSrStartBlocker(view, group, sr) : undefined;
+	const dependencyTitles = (sr?.dependencySrIds ?? []).map(id => view?.srs.find(item => item.id === id && item.irId === group.id)?.title ?? id);
+	const canRegisterPr = !proposal && stageEditable && ownsSr && sr?.status === "developing" && sr.stage === "pr";
 	return (
 		<header
 			className="space-y-2 border-b border-border bg-background px-4 py-3"
@@ -359,85 +136,69 @@ export function DevStageHeader() {
 			<div className="flex flex-wrap items-center gap-2">
 				<strong>{sr?.title || group.title || "需求讨论"}</strong>
 				<span className="text-ui-sm text-foreground-subtle">
-					{sr?.stage
-						? `演示阶段：${DEV_STAGE_LABELS[sr.stage]}`
-						: group.status === "frozen"
-							? "整组业务需求与拆分已冻结"
-							: group.status === "draft"
-								? "需求讨论中"
-								: group.status === "reviewing"
-									? "独立审核中"
-									: group.status === "confirmed"
-										? "需求已确认并通过审核"
-										: group.status === "requirements-pr"
-											? "需求 PR 已登记，待核对合入"
-											: group.status}
+					{proposal ? `${(selection.discussionPhase ?? group.proposalStage) === "solution" ? "方案 Agent" : "业务需求 Agent"} · ${PROPOSAL_STATUS_LABELS[group.status]}` : sr ? sr.status === "completed" ? "已完成 · 历史只读" : sr.stage ? `当前阶段：${DEV_STAGE_LABELS[sr.stage]}` : "待开始开发" : "整组业务需求与方案已随 PR 合入"}
 				</span>
-				<span className="text-ui-sm text-foreground-subtle">阶段性前端原型 · 样例数据，非真实执行或验收</span>
+				<span className="text-ui-sm text-foreground-subtle" title="阶段性前端原型，所有状态均为样例数据，不代表真实执行或验收。">原型 · 演示数据</span>
+				<DevCollabProjection />
 			</div>
+			{!proposal && <div className="space-y-1 text-ui-sm text-foreground-subtle" data-testid="ir-freeze-status" data-frozen={Boolean(group.freeze)}>
+              <p>{group.freeze ? "需求与方案已冻结 · 从首个 SR 开始开发时生效" : "正式提案已入库 · 需求与方案尚未冻结"}</p>
+              <p>{group.freeze ? "冻结覆盖整个 IR、全部 SR 及确认方案；业务或方案变化须重新提案。" : "开始首个 SR 时冻结整组确认版本；开发前的修订也须重新评审、确认并通过提案 PR。"}</p>
+            </div>}
+            {!proposal && !sr && <DevIrAcceptanceEntry group={group} />}
+			<DevAgentModelSummary binding={dev.session?.modelConfig} />
+			{!proposal && sr?.developerEmployeeId && <p className="text-ui-sm text-foreground-subtle" data-testid="sr-developer">开发人：{sr.developerEmployeeId}{sr.status === "developing" ? ownsSr ? " · 我正在开发" : " · 当前仅查看，不操作其他同事的开发会话" : ""}</p>}
+            {!proposal && sr?.worktree && <p className="break-all text-ui-sm text-foreground-subtle" data-testid="sr-workspace-context">{ownsSr && sr.status === "developing" ? "开发工作区" : "查看工作区"}：<code data-testid="sr-workspace-path">{sr.worktree.path}</code></p>}
+            {viewingOtherSr && !sr?.developerEmployeeId && <p className="text-ui-sm text-foreground-subtle" data-testid="sr-developer">当前开发人待确认，仅查看已有记录。</p>}
+            {proposal && <DevProposalControls group={group} />}
 			{sr?.stage && (
 				<nav aria-label="开发阶段" className="flex flex-wrap gap-1">
 					{DEV_STAGES.map((stage, index) => (
 						<Button
 							key={stage}
 							size="sm"
-							variant={sr.stage === stage ? "secondary" : "ghost"}
+							variant={stageView?.stage === stage ? "secondary" : "ghost"}
 							data-testid={`stage-${stage}`}
 							data-stage={stage}
 							data-stage-state={
 								index < DEV_STAGES.indexOf(sr.stage!) ? "completed" : sr.stage === stage ? "current" : "pending"
 							}
-							aria-pressed={selection.stage === stage}
-							onClick={() => dev.select({ ...selection, stage })}
+							aria-pressed={stageView?.stage === stage}
+                            disabled={!sr.sessions.some(item => item.phase === stage)}
+                            title={!sr.sessions.some(item => item.phase === stage) ? "尚未进入此阶段" : undefined}
+							onClick={() => dev.select({ ...selection, stage, stageRound: undefined })}
 						>
 							{DEV_STAGE_LABELS[stage]}
 						</Button>
 					))}
 				</nav>
 			)}
+	            {!proposal && sr?.stage && <div className="flex flex-wrap items-center gap-2" data-testid="stage-view-context"><span className="text-ui-sm text-foreground-subtle">查看：{DEV_STAGE_LABELS[stageView!.stage!]} · 第 {stageView!.round} 轮{stageView!.isCurrent ? " · 当前阶段" : " · 历史只读"}</span>{sr.status === "developing" && !stageView!.isCurrent && <Button size="sm" variant="outline" data-testid="return-current-stage" onClick={() => dev.select({ ...selection, stage: undefined, stageRound: undefined })}>返回当前阶段</Button>}{sr.sessions.filter(item => item.phase === stageView?.stage).length > 1 && <Select value={String(stageView!.round)} onValueChange={value => dev.select({ ...selection, stageRound: Number(value) })}><SelectTrigger className="w-36" aria-label="查看阶段轮次"><SelectValue /></SelectTrigger><SelectContent>{sr.sessions.filter(item => item.phase === stageView?.stage).sort((a,b) => b.round - a.round).map(item => <SelectItem key={item.sessionId} value={String(item.round)}>第 {item.round} 轮{item.phase === sr.stage && item.round === sr.round ? "（当前）" : "（历史）"}</SelectItem>)}</SelectContent></Select>}</div>}
+            {!proposal && sr && <div className="space-y-1 text-ui-sm text-foreground-subtle" data-testid="sr-admission-summary">
+              <p>当前仓库：{view?.repositoryDevelopment?.activeSrs.length ?? 0}/{view?.repositoryDevelopment?.limit ?? 2} 个 SR 占用名额 · 同仓库同时开发一个 IR</p>
+              <p>前置依赖：{dependencyTitles.length ? dependencyTitles.join("、") : "无，可与独立 SR 并行"}</p>
+              {startBlocker && <p role="status" data-testid="sr-start-blocker">{startBlocker}</p>}
+            </div>}
 			<div key="dev-actions" className="flex flex-wrap gap-2">
-				{!sr && group.status !== "frozen" && (
-					<Button
-						size="sm"
-						data-testid="requirement-confirm"
-						disabled={pending || !group.snapshot || group.status === "reviewing" || confirmed}
-						onClick={() => void command({ type: "confirmRequirements", snapshotDigest: group.snapshot!.digest })}
-					>
-						确认需求与全部拆分并审核
-					</Button>
-				)}
-				{!sr && (
-					<Button
-						size="sm"
-						variant="outline"
-						data-testid="requirement-download"
-						disabled={!confirmed}
-						onClick={() => {
-							download(prototypeRequirementDownload(selection), `${group.title}-样例材料.md`);
-						}}
-					>
-						下载需求样例
-					</Button>
-				)}
-				{sr?.status === "pending" && (
+
+				{sr?.status === "pending" && !proposal && !readPrototypeDevelopmentRoot(group.projectId) && <p className="text-ui-sm text-foreground-subtle">进入开发前，请在设置 → Dev 项目与 Release 中添加“我的开发项目”。</p>}
+				{sr?.status === "pending" && !proposal && (
 					<Button
 						size="sm"
 						data-testid="start-sr"
-						disabled={pending || group.status !== "frozen" || !!view?.activeSrId}
+						disabled={pending || !!startBlocker}
+						title={startBlocker}
 						onClick={() => void command({ type: "startSr" })}
 					>
 						开始开发
 					</Button>
 				)}
+                {!proposal && sr?.status === "developing" && stageEditable && <><Button size="sm" variant="outline" data-testid="stage-generate-materials" disabled={pending} onClick={() => void command({ type: "generateStageMaterials", stage: sr.stage!, round: sr.round })}>{materialBlocker ? "生成当前阶段材料（演示）" : "更新阶段材料（演示）"}</Button>{materialBlocker && <p className="text-ui-sm text-foreground-subtle" data-testid="stage-material-blocker">{materialBlocker}</p>}</>}
 				{sr?.status === "developing" && sr.stage !== "pr" && (
 					<Button
 						size="sm"
 						data-testid="stage-approve"
-						disabled={
-							pending ||
-							!sr.materialDigest ||
-							!sr.materials.some(item => item.valid && item.stage === sr.stage && item.round === sr.round)
-						}
+						disabled={pending || !stageEditable || Boolean(materialBlocker)}
 						onClick={() =>
 							void command({
 								type: "approveStage",
@@ -447,31 +208,19 @@ export function DevStageHeader() {
 							})
 						}
 					>
-						{sr.stage === "solution"
-							? "确认方案进入计划"
-							: sr.stage === "planning"
+						{sr.stage === "planning"
 								? "确认计划进入开发与验证"
 								: "确认开发与验证进入交付 PR"}
 					</Button>
 				)}
-				{sr?.status === "developing" && sr.stage !== "solution" && (
-					<Button
-						size="sm"
-						variant="outline"
-						data-testid="back-solution"
-						disabled={pending}
-						onClick={() => void command({ type: "backStage", stage: "solution" })}
-					>
-						返回技术方案（保留代码）
-					</Button>
-				)}
-				{sr?.status === "developing" && sr.stage !== "solution" && sr.stage !== "planning" && (
+
+				{sr?.status === "developing" && sr.stage !== "planning" && (
 					<Button
 						size="sm"
 						variant="outline"
 						data-testid="back-planning"
-						disabled={pending}
-						onClick={() => void command({ type: "backStage", stage: "planning" })}
+						disabled={pending || !stageEditable}
+						onClick={() => void command({ type: "backStage", stage: "planning", fromStage: sr.stage!, round: sr.round })}
 					>
 						返回开发计划（保留代码）
 					</Button>
@@ -481,121 +230,106 @@ export function DevStageHeader() {
 						size="sm"
 						variant="outline"
 						data-testid="back-executing"
-						disabled={pending}
-						onClick={() => void command({ type: "backStage", stage: "executing" })}
+						disabled={pending || !stageEditable}
+						onClick={() => void command({ type: "backStage", stage: "executing", fromStage: sr.stage!, round: sr.round })}
 					>
 						返回开发与验证／继续修正（保留代码）
 					</Button>
 				)}
-				{(sr?.status === "developing" || (!sr && group.status !== "frozen")) && (
+				{(sr?.status === "developing" || (!sr && proposal)) && (
 					<Button
 						size="sm"
 						variant="outline"
 						data-testid="stop"
-						disabled={pending}
+						disabled={pending || viewingOtherSr || Boolean(sr && !stageEditable)}
 						onClick={() => void command({ type: "stop" })}
 					>
 						停止并结清
 					</Button>
 				)}
 				<DevDeleteRequirement key="dev-delete-requirement" />
-				<DevPublishControls
-					key={`${group.id}:${sr?.id ?? "requirements"}:${sr?.round ?? 0}`}
-					group={group}
-					sr={sr}
-				/>
+				<Popover key={`${group.id}:${sr?.id ?? "requirements"}`}>
+					<PopoverTrigger asChild><Button size="sm" variant="ghost" data-testid="dev-flow-details">更多<ChevronDown className="size-3" /></Button></PopoverTrigger>
+					<PopoverContent align="end" className="max-h-[min(28rem,65dvh)] w-[min(28rem,calc(100vw-2rem))] space-y-3 overflow-y-auto" aria-label="流程详情">
+						<p className="text-ui-base font-medium">流程详情与操作记录</p>
+						{!sr && group.proposalLocation && <div className="space-y-2 rounded-md border border-border p-3" data-testid="proposal-directory">
+							<div className="flex items-center justify-between gap-3"><span className="text-ui-base font-medium">提案临时工作区 · 只读</span><Button type="button" size="sm" variant="outline" aria-label="复制提案目录" onClick={async () => {
+								try { await copyMaterial(group.proposalLocation!.directory); setDirectoryCopyStatus("已复制提案目录"); }
+								catch { setDirectoryCopyStatus("复制失败，请选择下方路径手动复制。"); }
+							}}><Copy className="size-3" />复制</Button></div>
+							<p className="text-ui-sm text-foreground-subtle">项目：{group.proposalLocation.projectName} · 提交人：{group.proposalLocation.employeeId}</p>
+							<code className="block select-text break-all text-ui-sm" data-testid="proposal-directory-path">{group.proposalLocation.directory}</code>
+                            <p className="break-all text-ui-sm text-foreground-subtle">Change：{group.documentPath.replace(/\/proposal\.md$/, "")}/</p>
+							<p className="text-ui-sm text-foreground-subtle">OpenSpec 先在此临时工作区生成，需求 PR 前不写入项目目录；同项目所有人可见。当前仅演示，不创建文件。</p>
+							{directoryCopyStatus && <p role="status" className="text-ui-sm text-foreground-subtle">{directoryCopyStatus}</p>}
+						</div>}
+						{proposal && group.developerHandoff && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-submission-details">提交评审人：{group.developerHandoff.employeeId} · <time dateTime={group.developerHandoff.submittedAt}>{new Date(group.developerHandoff.submittedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</time>（北京时间）</p>}
+                        {proposal && group.developerAcceptance && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-acceptance-details">接手开发人：{group.developerAcceptance.employeeId} · <time dateTime={group.developerAcceptance.acceptedAt}>{new Date(group.developerAcceptance.acceptedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</time>（北京时间）{group.developerAcceptance.round !== (group.proposalRound ?? 1) ? " · 历史轮次，需重新接手" : ""}</p>}
+						<fieldset disabled={Boolean(!proposal && sr && !stageEditable)} className="contents"><DevPublishControls
+							key={`${group.id}:${sr?.id ?? "requirements"}:${sr?.round ?? 0}`}
+							group={group}
+							sr={proposal ? undefined : sr}
+						/></fieldset>
+                        {!proposal && sr?.worktree && <div className="space-y-1 text-ui-sm" data-testid="sr-workspace-details"><p className="break-all text-foreground-subtle">启动时开发项目：{sr.developmentRoot ?? "记录缺失"}</p><p className="break-all text-foreground-subtle">固定 worktree：{sr.worktree.path}</p><p className="text-foreground-subtle">聊天、文件与审查使用此 worktree。修改个人开发目录只影响之后新开始的 SR，不重绑当前任务。</p></div>}
+					{(sr?.worktree || group.worktree) && (
+						<p className="text-ui-sm text-foreground-subtle">
+							演示分支：{sr?.worktree?.branch ?? group.worktree?.branch} → {project?.defaultBranch}（不操作 Git）。
+							{prFact && <>示例 PR：{prFact.url}（未查询平台，不代表真实 PR）</>}
+						</p>
+					)}
+                        {Boolean(sr?.approvals.length) && <details className="text-ui-sm" data-testid="stage-approval-records"><summary className="cursor-pointer">阶段确认记录（演示）</summary><ul className="mt-2 space-y-1">{sr?.approvals.map(item => <li key={item.operationId}>{DEV_STAGE_LABELS[item.stage]} · 第 {item.round} 轮 · {item.valid === false ? "已失效" : "已确认"} · {new Date(item.approvedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}（北京时间）</li>)}</ul></details>}
+                        {Boolean(sr?.codePrHistory?.length) && <p className="break-all text-ui-sm text-foreground-subtle">历史代码 PR（不可用作本轮交付）：{sr?.codePrHistory?.map(item => item.url).join("、")}</p>}
+					<Collapsible data-testid="history">
+						<CollapsibleTrigger asChild>
+							<Button type="button" size="sm" variant="ghost">
+								<ChevronDown className="size-3" />
+								操作记录
+							</Button>
+						</CollapsibleTrigger>
+						<CollapsibleContent>
+						{view?.operations
+							.filter(item => item.irId === group.id && (!sr || item.srId === sr.id))
+							.map(item => (
+								<div key={item.operationId} className="text-ui-sm">
+									<span>
+										{item.type} · {item.status}
+									</span>
+									{item.steps.map((step, index) => (
+										<p key={index}>{step.detail}</p>
+									))}
+									{item.error && <p role="alert">{item.error}</p>}
+								</div>
+							))}
+						</CollapsibleContent>
+					</Collapsible>
+					</PopoverContent>
+				</Popover>
 			</div>
-			{(sr?.worktree || group.worktree) && (
-				<p className="text-ui-sm text-foreground-subtle">
-					演示分支：{sr?.worktree?.branch ?? group.worktree?.branch} → {project?.defaultBranch}（不操作 Git）。
-					{prFact && <>示例 PR：{prFact.url}（未查询平台，不代表真实 PR）</>}
-				</p>
-			)}
-			{canRegisterPr && (
-				<form
-					className="flex flex-wrap items-center gap-2"
-					onSubmit={event => {
-						event.preventDefault();
-						void command({ type: sr ? "markCodePrSubmitted" : "markRequirementsPrSubmitted", url: prUrl });
-					}}
-				>
-					<Input
-						className="min-w-40 flex-1"
-						data-testid={sr ? "code-pr-url" : "requirements-pr-url"}
-						aria-label="人工创建的 PR 地址"
-						type="url"
-						required
-						value={prUrl}
-						onChange={event => setPrUrl(event.target.value)}
-					/>
-					<Button size="sm" data-testid={sr ? "code-pr-submit" : "requirements-pr-submit"} disabled={pending || !prUrl.trim()}>
-						演示登记 PR
-					</Button>
-					<Button
-						type="button"
-						size="sm"
-						variant="outline"
-						data-testid={sr ? "code-pr-merged" : "requirements-pr-merged"}
-						disabled={pending || !(sr ? sr.codePr : group.requirementsPr)}
-						onClick={() => void command({ type: sr ? "markCodeMerged" : "markRequirementsMerged" })}
-					>
-						演示确认合入状态
-					</Button>
-					<small className="text-foreground-subtle">仅切换本地展示状态，不查询平台、不核对 Git、不是实际合入。</small>
-				</form>
-			)}
+			{canRegisterPr && <DevSrDeliveryControls key={`${sr!.id}:${sr!.round}`} sr={sr!} />}
 			{sr?.status === "completed" && (
-				<p className="text-ui-base">已完成状态样例；不代表代码、测试或交付已经验收。可在材料面板查看交付资料。</p>
+				<p className="text-ui-base">该 SR 的代码、测试与规格已合并核验（演示），释放一个 SR 名额；IR 仍须整体验收和最终归档。</p>
 			)}
 			{(dev.error || view?.error) && (
 				<p role="alert" className="text-ui-base text-destructive">
 					{dev.error || view?.error}
 				</p>
 			)}
-			<Collapsible data-testid="history">
-				<CollapsibleTrigger asChild>
-					<Button type="button" size="sm" variant="ghost">
-						<ChevronDown className="size-3" />
-						操作记录
-					</Button>
-				</CollapsibleTrigger>
-				<CollapsibleContent>
-				{view?.operations
-					.filter(item => item.irId === group.id && (!sr || item.srId === sr.id))
-					.map(item => (
-						<div key={item.operationId} className="text-ui-sm">
-							<span>
-								{item.type} · {item.status}
-							</span>
-							{item.steps.map((step, index) => (
-								<p key={index}>{step.detail}</p>
-							))}
-							{item.error && <p role="alert">{item.error}</p>}
-						</div>
-					))}
-				</CollapsibleContent>
-			</Collapsible>
 		</header>
 	);
 }
 export function DevReadonlyOverview() {
 	const dev = useDev()!;
 	const sr = dev.view?.srs.find(item => item.id === dev.selection.srId && item.irId === dev.selection.irId);
-	return (
-		<div className="h-full overflow-y-auto p-6 text-ui-base">
-			<FileText className="mb-3 size-6 text-foreground-subtle" />
-			<p>
-				{sr
-					? sr.status === "completed"
-						? "该 SR 已完成，开发讨论只读。可在材料面板查看交付与历史记录。"
-						: "该 SR 尚未开始开发，当前仅可查看需求。整组需求冻结后，点击“开始开发”进入技术方案。"
-					: dev.view
-						? "所选 SR 当前不可用，请从导航选择已有需求。不会自动新建或替换历史会话。"
-						: "正在读取所选 SR…"}
-			</p>
-			<DevSrList />
-		</div>
-	);
+	const project = dev.view?.projects.find(item => item.id === dev.selection.projectId);
+	const scope = useMemo(() => ({ workspacePath: project?.root ?? "", workspaceIdentity: `dev-ui-prototype:${dev.selection.projectId}` }), [project?.root, dev.selection.projectId]);
+	const sessionId = sr?.status === "completed" ? sr.sessions.find(session => session.phase === "pr")?.sessionId ?? null : null;
+	const reason = sr?.status === "completed" ? "该 SR 已完成，历史讨论只读。" : "该 SR 尚未开始开发，请通过顶部“开始开发”进入开发计划。";
+	if (!sr || !project) return <div className="p-6 text-ui-base text-foreground-subtle">所选 SR 当前不可用，请从导航选择已有需求。</div>;
+	return <div className="relative flex h-full min-h-0 flex-1 flex-col" data-testid="dev-sr-readonly-chat">
+		<V4PaneConversationProvider key={sr.id} scope={scope} sessionId={sessionId}>
+			<SessionPane paneId={`dev-readonly-${sr.id}`} sessionId={sessionId} rootSessionId={sessionId ?? undefined} workspacePath={scope.workspacePath} workspaceIdentity={scope.workspaceIdentity} embedded readOnly readOnlyReason={reason} />
+		</V4PaneConversationProvider>
+	</div>;
 }
 export function DevSrList() {
 	const dev = useDev()!;
@@ -621,14 +355,16 @@ export function DevSrList() {
 }
 export function DevMaterialsPane() {
 	const dev = useDev()!;
+	const theme = useZCodeStore(state => state.theme);
 	const { selection, view } = dev;
 	const [path, setPath] = useState("");
+    const [readFeedback, setReadFeedback] = useState("");
 	const materials =
 		view?.materials.filter(
 			item =>
 				item.projectId === selection.projectId &&
 				item.irId === selection.irId &&
-				(!item.srId || item.srId === selection.srId),
+				(selection.irAcceptance ? ["ir", "sr", "solution", "ir-acceptance-report", "ir-final-pr"].includes(item.kind) : !item.srId || item.srId === selection.srId),
 		) ?? [];
 	const sr = view?.srs.find(
 		item => item.id === selection.srId && item.irId === selection.irId && item.projectId === selection.projectId,
@@ -637,19 +373,24 @@ export function DevMaterialsPane() {
 		item => item.id === selection.irId && item.projectId === selection.projectId,
 	);
 	const stage = selection.stage ?? sr?.stage;
-	const preferred = materials.find(
+	const materialStageView = sr ? prototypeStageView(sr, selection) : undefined;
+	const materialHistory = Boolean(materialStageView && !materialStageView.isCurrent);
+	const proposalSolutionView = view?.drafts.some(item => item.id === group?.id) && (selection.discussionPhase ?? group?.proposalStage) === "solution";
+	const deliveryPath = stage === "pr" && sr?.delivery && materialStageView?.round === sr.delivery.round ? sr.delivery.manifestPath : undefined;
+	const acceptancePath = selection.irAcceptance ? group?.acceptance?.finalPrPath ?? group?.acceptance?.reportPath ?? group?.documentPath : undefined;
+	const preferred = [...materials].sort((a,b) => (b.round ?? 0) - (a.round ?? 0)).find(
 		item =>
-			item.valid &&
-			(selection.srId
+			(item.valid || (materialHistory && item.stage)) &&
+			(selection.irAcceptance ? item.path === acceptancePath : deliveryPath ? item.path === deliveryPath : proposalSolutionView && materials.some(candidate => candidate.kind === "solution" && candidate.valid) ? item.kind === "solution" : selection.srId
 				? stage
 					? !!sr &&
 						item.srId === sr.id &&
 						item.stage === stage &&
 						sr.materials.some(
 							current =>
-								current.valid &&
+								(current.valid || materialHistory) &&
 								current.stage === stage &&
-								(stage !== sr.stage || current.round === sr.round) &&
+								current.round === materialStageView?.round &&
 								current.path === item.path &&
 								current.sha256 === item.sha256 &&
 								current.size === item.size,
@@ -659,12 +400,14 @@ export function DevMaterialsPane() {
 	);
 	useEffect(() => {
 		setPath(preferred?.path ?? "");
+        setReadFeedback("");
 	}, [
 		selection.projectId,
 		selection.irId,
 		selection.srId,
 		stage,
 		sr?.round,
+        selection.stageRound,
 		sr?.materialDigest,
 		preferred?.path,
 		preferred?.sha256,
@@ -687,16 +430,17 @@ export function DevMaterialsPane() {
 					</SelectTrigger>
 					<SelectContent position="popper" align="start">
 						<SelectItem value="none">
-							{selection.irId ? awaitingRequirements ? "等待生成需求材料" : "没有当前有效材料" : "发送需求后查看材料"}
+							{selection.irId ? awaitingRequirements ? "等待生成需求材料" : "没有当前有效材料" : "选择需求后查看材料"}
 						</SelectItem>
 						{materials.map(item => (
 							<SelectItem key={item.path} value={item.path}>
-								{MATERIAL_KIND_LABELS[item.kind]} · {item.path.split("/").at(-1)}
-								{!item.valid ? "（已失效）" : ""}
+								{MATERIAL_KIND_LABELS[item.kind]} · {item.kind === "sr" ? item.path.split("/").slice(-2).join("/") : item.path.split("/").at(-1)}
+								{item.round ? ` · 第 ${item.round} 轮` : ""}{!item.valid ? "（已失效）" : ""}
 							</SelectItem>
 						))}
 					</SelectContent>
 				</Select>
+				{path && group && <p className="break-all text-ui-sm text-foreground-subtle" data-testid="material-source-path">{view?.drafts.some(item => item.id === group.id) ? `临时文件：${group.proposalLocation?.directory ?? ""}${path}` : group.acceptance?.status === "completed" && group.acceptance.archive?.moves.some(move => move.sourcePath === path) ? `归档文件（样例）：${group.acceptance.archive.moves.find(move => move.sourcePath === path)!.path}` : `仓库文件：${path}`}</p>}
 				{stage && (
 					<p className="text-ui-sm text-foreground-subtle">
 						查看：{DEV_STAGE_LABELS[stage]} · 演示当前：{sr?.stage ? DEV_STAGE_LABELS[sr.stage] : "未开始"}
@@ -735,7 +479,7 @@ export function DevMaterialsPane() {
 						variant="ghost"
 						data-testid="material-discuss"
 						disabled={
-							material?.content === undefined || !dev.session
+							material?.content === undefined || !dev.session || (selection.irAcceptance && (group?.acceptance?.status === "completed" || group?.acceptance?.status === "pr-ready" || group?.acceptance?.status === "pr-submitted"))
 						}
 						onClick={() =>
 							window.dispatchEvent(
@@ -752,23 +496,23 @@ export function DevMaterialsPane() {
 						带入讨论
 					</Button>
 				</div>
-				{selection.irId && !selection.srId && (
+				{selection.irId && !selection.srId && !selection.irAcceptance && (
 					<>
-						<Button size="sm" variant="ghost" disabled={!preferred} onClick={() => setPath(preferred!.path)}>
-							完整 IR
+						<Button size="sm" variant="ghost" disabled={!preferred} onClick={() => setPath(group?.documentPath ?? preferred!.path)}>
+							proposal.md · IR
 						</Button>
 						<DevSrList />
 					</>
 				)}
-				{group?.review && (
+				{group?.review && !selection.irAcceptance && (
 					<Collapsible className="text-ui-sm" data-testid="requirement-review">
 						<CollapsibleTrigger asChild>
 							<Button type="button" size="sm" variant="ghost">
 								<ChevronDown className="size-3" />
-							独立审核：
-							{group.review.snapshotDigest !== group.snapshot?.digest
+							需求评审：
+							{!prototypeRequirementsReviewCurrent(group)
 								? "旧版本记录（已失效）"
-								: group.review.passed
+								: group.review.passed && !group.review.findings?.some(item => item.level === "blocking")
 									? "通过"
 									: "未通过"}
 							</Button>
@@ -786,15 +530,13 @@ export function DevMaterialsPane() {
 				data-material-valid={current?.valid}
 			>
 				{error || current?.error ? (
-					<p role="alert" className="text-ui-base text-destructive">
-						{error ?? current?.error}
-					</p>
+					<div className="space-y-3"><p role="alert" className="text-ui-base text-destructive">{error ?? current?.error}</p><Button size="sm" variant="outline" data-testid="material-retry" onClick={async () => { const recovered = await dev.retryMaterial(path); setReadFeedback(recovered ? "材料已重新读取。" : "仍无法读取，请恢复原文件；当前阶段可由开发人明确重新生成材料样例。"); }}>重新读取材料</Button>{readFeedback && <p role="status" className="text-ui-sm text-foreground-subtle">{readFeedback}</p>}</div>
 				) : !selection.irId ? (
-					<p className="text-ui-base text-foreground-subtle">发送需求后在此查看只读材料，也可从导航选择已有需求。</p>
+					<p className="text-ui-base text-foreground-subtle">选择需求或新建提案后，在此查看只读材料。</p>
 				) : awaitingRequirements ? (
 					<p role="status" className="text-ui-base text-foreground-subtle">需求材料尚未生成。可先在对话中讨论需求，生成后将在此显示。</p>
 				) : !current ? (
-					<p role="alert" className="text-ui-base text-destructive">
+					<p role={path ? "alert" : "status"} className={`text-ui-base ${path ? "text-destructive" : "text-foreground-subtle"}`}>
 						{path
 							? "所选材料不在当前材料清单中。"
 							: stage
@@ -808,9 +550,7 @@ export function DevMaterialsPane() {
 								材料已失效，需要重新生成或验证。以下仅供历史查看。
 							</p>
 						)}
-						<pre className="whitespace-pre-wrap break-words font-mono text-ui-base">
-							{material?.content ?? "样例材料没有正文。"}
-						</pre>
+						<MessageResponse className="min-w-0 break-words" theme={theme} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "样例材料没有正文。"}</MessageResponse>
 					</>
 				)}
 			</div>
