@@ -1,0 +1,661 @@
+/**
+ * 统一管理所有 data-testid，UI 组件和 E2E 测试共用此单一来源。
+ * 新增 testid 时请在此文件添加，不要在组件中硬编码字符串。
+ * 并且每个都需要中文注释
+ */
+
+/** OAuth 弹窗内的登录按钮 */
+export const TID_OAUTH_LOGIN_BUTTON = "oauth-login-button";
+/** OAuth 弹窗取消按钮 */
+export const TID_OAUTH_CANCEL = "oauth-cancel";
+/** OAuth 等待态复制登录链接按钮 */
+export const TID_OAUTH_COPY_LOGIN_LINK = "oauth-copy-login-link";
+/** OAuth 错误提示文本 */
+export const TID_OAUTH_ERROR = "oauth-error";
+
+// App
+/** 顶部导航栏 */
+export const TID_APP_HEADER = "app-header";
+/** 语言切换按钮 */
+export const TID_LOCALE_TOGGLE = "locale-toggle";
+/** 主题切换按钮 */
+export const TID_THEME_TOGGLE = "theme-toggle";
+export const TID_SIDE_PANE_TOGGLE = "side-pane-toggle";
+/** Side Pane 完整视图：进入/退出按钮、对话 tab、对话宿主与浮窗各部件 */
+export const TID_SIDE_PANE_FULL_VIEW_TOGGLE = "side-pane-full-view-toggle";
+export const TID_SIDE_PANE_FULL_VIEW_CONVERSATION_TAB = "side-pane-full-view-conversation-tab";
+export const TID_SIDE_PANE_FULL_VIEW_HOST = "side-pane-full-view-host";
+export const TID_SIDE_PANE_FULL_VIEW_HEADER = "side-pane-full-view-floating-header";
+export const TID_SIDE_PANE_FULL_VIEW_DRAWER = "side-pane-full-view-floating-drawer";
+export const TID_SIDE_PANE_FULL_VIEW_EXPAND = "side-pane-full-view-floating-expand";
+export const TID_SIDE_PANE_FULL_VIEW_RUNNING = "side-pane-full-view-floating-running";
+export const TID_SIDE_PANE_FULL_VIEW_MINIMIZE = "side-pane-full-view-floating-minimize";
+export const TID_SIDE_PANE_FULL_VIEW_HANDLE = "side-pane-full-view-floating-handle";
+export const TID_SIDE_PANE_FULL_VIEW_BUBBLE = "side-pane-full-view-floating-bubble";
+export const TID_SIDE_PANE_FULL_VIEW_ANSWER_BUBBLE = "side-pane-full-view-answer-bubble";
+export const TID_SIDE_PANE_FULL_VIEW_ANSWER_BUBBLE_CLOSE =
+  "side-pane-full-view-answer-bubble-close";
+export const TID_SIDE_PANE_FULL_VIEW_MENU_OPEN_CONVERSATION =
+  "side-pane-full-view-menu-open-conversation";
+export const TID_SIDE_PANE_FULL_VIEW_MENU_MINIMIZE = "side-pane-full-view-menu-minimize";
+/** Git 显隐切换按钮 */
+export const TID_GIT_TOGGLE = "git-toggle";
+/** Git 面板容器 */
+export const TID_GIT_PANE = "git-pane";
+/** Git 面板关闭按钮 */
+export const TID_GIT_CLOSE_BUTTON = "git-close-button";
+/** 顶部 Git 提交或推送主入口 */
+export const TID_GIT_ACTION_TRIGGER = "git-action-trigger";
+/** Git 提交弹窗 */
+export const TID_GIT_COMMIT_DIALOG = "git-commit-dialog";
+/** Git 提交信息输入框 */
+export const TID_GIT_COMMIT_MESSAGE_INPUT = "git-commit-message-input";
+/** Git 提交信息生成按钮 */
+export const TID_GIT_COMMIT_GENERATE_BUTTON = "git-commit-generate-button";
+/** Git 提交弹窗包含未暂存更改开关 */
+export const TID_GIT_COMMIT_INCLUDE_UNSTAGED = "git-commit-include-unstaged";
+/** Git 提交弹窗底部 Command 动作列表 */
+export const TID_GIT_COMMIT_ACTION_COMMAND = "git-commit-action-command";
+/** Git 提交弹窗底部动作项（动态后缀为动作 id） */
+export const TID_GIT_COMMIT_ACTION_ITEM = "git-commit-action-item";
+/** 预览面板容器 */
+export const TID_PREVIEW_PANE = "preview-pane";
+/** 预览面板关闭按钮 */
+export const TID_PREVIEW_CLOSE_BUTTON = "preview-close-button";
+/** 预览面板上一段按钮 */
+export const TID_PREVIEW_PREV_BUTTON = "preview-prev-button";
+/** 预览面板下一段按钮 */
+export const TID_PREVIEW_NEXT_BUTTON = "preview-next-button";
+/** 工具调用里的“查看代码”按钮 */
+export const TID_TOOL_CODE_VIEWER_BUTTON = "tool-code-viewer-button";
+/** 工具调用摘要行触发按钮（动态后缀为 toolId） */
+export const TID_TOOL_SUMMARY_TRIGGER = "tool-summary-trigger";
+
+// SSHDialog
+/** 打开 SSH 连接弹窗的触发按钮 */
+export const TID_SSH_CONNECT_TRIGGER = "ssh-connect-trigger";
+/** SSH 连接弹窗容器 */
+export const TID_SSH_DIALOG = "ssh-dialog";
+/** 远程连接方式切换到 SSH */
+export const TID_REMOTE_KIND_SSH = "remote-kind-ssh";
+/** 远程连接方式切换到 Server */
+export const TID_REMOTE_KIND_SERVER = "remote-kind-server";
+/** 远程连接方式切换到 WSL */
+export const TID_REMOTE_KIND_WSL = "remote-kind-wsl";
+/** 远程连接方式切换到 Docker */
+export const TID_REMOTE_KIND_DOCKER = "remote-kind-docker";
+/** SSH 主机地址输入框 */
+export const TID_SSH_HOST_INPUT = "ssh-host-input";
+/** SSH 端口号输入框 */
+export const TID_SSH_PORT_INPUT = "ssh-port-input";
+/** SSH 用户名输入框 */
+export const TID_SSH_USERNAME_INPUT = "ssh-username-input";
+/** SSH config alias 选择框 */
+export const TID_SSH_CONFIG_ALIAS_SELECT = "ssh-config-alias-select";
+/** 设置入口「从 SSH config 导入」按钮。 */
+export const TID_SSH_CONFIG_IMPORT = "remote-ssh-config-import";
+/** 已关联 SSH config Host 的标签。 */
+export const TID_SSH_CONFIG_ALIAS_CHIP = "remote-ssh-config-alias-chip";
+/** 新建连接表单头部的实时目标预览。 */
+export const TID_REMOTE_NEW_CONNECTION_PREVIEW = "remote-new-connection-preview";
+/** SSH 密码输入框 */
+export const TID_SSH_PASSWORD_INPUT = "ssh-password-input";
+/** SSH 私钥路径输入框 */
+export const TID_SSH_PRIVATE_KEY_INPUT = "ssh-private-key-input";
+/** SSH 认证方式：密码 */
+export const TID_SSH_AUTH_PASSWORD = "ssh-auth-password";
+/** SSH 认证方式：私钥 */
+export const TID_SSH_AUTH_PRIVATE_KEY = "ssh-auth-private-key";
+/** WSL 发行版选择框 */
+export const TID_WSL_DISTRO_SELECT = "wsl-distro-select";
+/** WSL Linux 用户输入框 */
+export const TID_WSL_USER_INPUT = "wsl-user-input";
+/** Docker 容器选择框 */
+export const TID_DOCKER_CONTAINER_SELECT = "docker-container-select";
+/** Docker 容器名称/ID 输入框 */
+export const TID_DOCKER_CONTAINER_INPUT = "docker-container-input";
+/** Server 远程服务 URL 输入框 */
+export const TID_SERVER_URL_INPUT = "server-url-input";
+/** Server 远程服务名称输入框 */
+export const TID_SERVER_NAME_INPUT = "server-name-input";
+/** Server 远程服务 token 输入框 */
+export const TID_SERVER_TOKEN_INPUT = "server-token-input";
+/** Server 远程默认工作区路径输入框 */
+export const TID_SERVER_WORKSPACE_PATH_INPUT = "server-workspace-path-input";
+/** SSH 连接确认按钮 */
+export const TID_SSH_CONNECT_BUTTON = "ssh-connect-button";
+/** SSH 弹窗取消按钮 */
+export const TID_SSH_CANCEL_BUTTON = "ssh-cancel-button";
+
+// Sidebar
+/** 侧边栏容器 */
+export const TID_SIDEBAR = "sidebar";
+/** 项目视图里的对话二级分区 */
+export const TID_CONVERSATION_SECTION = "conversation-section";
+/** 项目视图里的项目二级分区 */
+export const TID_PROJECT_SECTION = "project-section";
+/** 项目分区新建项目按钮 */
+export const TID_VIRTUAL_PROJECT_ADD = "virtual-project-add";
+/** 任务分区新建任务按钮（全局新建，cwd 为默认执行目录） */
+export const TID_VIRTUAL_PROJECT_NEW_TASK = "virtual-project-new-task";
+/** 项目行（父级 section 带 data-project-id / data-project-name） */
+export const TID_VIRTUAL_PROJECT_ROW = "virtual-project-row";
+/** 项目行展开/收起触发器（aria-expanded 表示任务列表是否展开） */
+export const TID_VIRTUAL_PROJECT_TOGGLE = "virtual-project-toggle";
+/** 项目行折叠态未读指示 */
+export const TID_VIRTUAL_PROJECT_UNREAD = "virtual-project-unread";
+/** 项目行任务列表容器 */
+export const TID_VIRTUAL_PROJECT_TASKS = "virtual-project-tasks";
+/** 项目行 hover 操作区 */
+export const TID_VIRTUAL_PROJECT_ACTIONS = "virtual-project-actions";
+/** 项目行更多菜单触发器 */
+export const TID_VIRTUAL_PROJECT_MENU = "virtual-project-menu";
+/** 项目行打开文件树按钮（多 root 时为下拉触发器） */
+export const TID_VIRTUAL_PROJECT_FILES = "virtual-project-files";
+/** 项目行新建任务按钮（cwd = 项目主要目录） */
+export const TID_VIRTUAL_PROJECT_CREATE_TASK = "virtual-project-create-task";
+/** 项目行菜单 / 右键动作前缀，见 virtualProjectActionTestId */
+export const TID_VIRTUAL_PROJECT_ACTION_PREFIX = "virtual-project";
+/** 全局置顶任务区 */
+export const TID_PROJECT_PINNED_TASKS = "project-pinned-tasks";
+/** 远端 host 分组（data-host-id 为 host id） */
+export const TID_REMOTE_PROJECT_HOST = "remote-project-host";
+/** Composer workspace 选择触发器 */
+export const TID_COMPOSER_WORKSPACE_TRIGGER = "composer-workspace-trigger";
+/** Composer workspace 菜单的远程连接入口 */
+export const TID_COMPOSER_REMOTE_CONNECTION = "composer-remote-connection";
+/** Composer 当前项目解绑按钮 */
+export const TID_COMPOSER_PROJECT_DETACH = "composer-project-detach";
+/** Composer workspace 菜单的非项目工作入口 */
+export const TID_COMPOSER_WORK_OUTSIDE_PROJECT = "composer-work-outside-project";
+// ChatView
+/** 聊天视图容器 */
+export const TID_CHAT_VIEW = "chat-view";
+/** 聊天消息列表 */
+export const TID_CHAT_MESSAGES = "chat-messages";
+/** 聊天输入区上方的错误横幅 */
+export const TID_CHAT_ERROR_BANNER = "chat-error-banner";
+/** Hook 阻断错误的详情按钮 */
+export const TID_CHAT_ERROR_DETAILS_BUTTON = "chat-error-details-button";
+/** Hook 阻断错误横幅左侧图标 */
+export const TID_CHAT_ERROR_HOOK_ICON = "chat-error-hook-icon";
+/** 聊天空状态容器 */
+export const TID_CHAT_EMPTY = "chat-empty";
+/** 聊天输入框 */
+export const TID_CHAT_INPUT = "chat-input";
+/** 聊天附件按钮 */
+export const TID_CHAT_ATTACHMENT_BUTTON = "chat-attachment-button";
+/** 聊天附件菜单项 */
+export const TID_CHAT_ATTACHMENT_MENU_ITEM = "chat-attachment-menu-item";
+/** 聊天发送按钮 */
+export const TID_CHAT_SEND_BUTTON = "chat-send-button";
+/** 聊天停止按钮 */
+export const TID_CHAT_STOP_BUTTON = "chat-stop-button";
+/** 聊天加载指示器 */
+export const TID_CHAT_LOADING = "chat-loading";
+/** 聊天右上角状态摘要面板 */
+export const TID_CHAT_SUMMARY_PANEL = "chat-summary-panel";
+/** 聊天上下文压缩 timeline 横条（动态后缀为 inputId 或 operationId） */
+export const TID_CHAT_COMPACT_MARKER = "chat-compact-marker";
+/** 聊天上下文压缩失败/中断后的重试按钮（动态后缀为 inputId 或 operationId） */
+export const TID_CHAT_COMPACT_RETRY_BUTTON = "chat-compact-retry-button";
+/** 聊天 goal verification timeline 横条（动态后缀为 targetId:goalIteration 或 verificationId） */
+export const TID_CHAT_GOAL_VERIFICATION_MARKER = "chat-goal-verification-marker";
+/** 聊天队列面板 */
+export const TID_CHAT_QUEUE_PANEL = "chat-queue-panel";
+/** 聊天队列项（动态后缀为 queueItemId） */
+export const TID_CHAT_QUEUE_ITEM = "chat-queue-item";
+/** 聊天队列项内容（动态后缀为 queueItemId） */
+export const TID_CHAT_QUEUE_ITEM_CONTENT = "chat-queue-item-content";
+/** 聊天队列项立即发送按钮（动态后缀为 queueItemId） */
+export const TID_CHAT_QUEUE_SEND_NOW_BUTTON = "chat-queue-send-now-button";
+/** 聊天队列项编辑按钮（动态后缀为 queueItemId） */
+export const TID_CHAT_QUEUE_EDIT_BUTTON = "chat-queue-edit-button";
+/** 聊天队列项编辑输入框（动态后缀为 queueItemId） */
+export const TID_CHAT_QUEUE_EDIT_INPUT = "chat-queue-edit-input";
+/** 聊天队列项编辑保存按钮（动态后缀为 queueItemId） */
+export const TID_CHAT_QUEUE_EDIT_SAVE_BUTTON = "chat-queue-edit-save-button";
+/** 聊天队列项编辑取消按钮（动态后缀为 queueItemId） */
+export const TID_CHAT_QUEUE_EDIT_CANCEL_BUTTON = "chat-queue-edit-cancel-button";
+/** 聊天队列项删除按钮（动态后缀为 queueItemId） */
+export const TID_CHAT_QUEUE_REMOVE_BUTTON = "chat-queue-remove-button";
+/** 聊天队列项拖拽手柄（动态后缀为 queueItemId） */
+export const TID_CHAT_QUEUE_DRAG_HANDLE = "chat-queue-drag-handle";
+/** 聊天用户消息容器（动态后缀为 messageId） */
+export const TID_CHAT_USER_MESSAGE = "chat-user-message";
+/** 聊天助手消息容器（动态后缀为 messageId） */
+export const TID_CHAT_ASSISTANT_MESSAGE = "chat-assistant-message";
+/** 聊天助手消息历史折叠触发器（动态后缀为 historyStateKey） */
+export const TID_CHAT_ASSISTANT_HISTORY_TRIGGER = "chat-assistant-history-trigger";
+/** 聊天助手消息历史折叠内容（动态后缀为 historyStateKey） */
+export const TID_CHAT_ASSISTANT_HISTORY_CONTENT = "chat-assistant-history-content";
+/** 独立后台结果轮的任务标题（动态后缀为 turn key） */
+export const TID_CHAT_BACKGROUND_RESULT_TITLE = "chat-background-result-title";
+/** 聊天工具调用块容器（动态后缀为 toolCallId） */
+export const TID_CHAT_TOOL_CALL_BLOCK = "chat-tool-call-block";
+/** 聊天用户消息编辑按钮（动态后缀为 messageId） */
+export const TID_CHAT_MESSAGE_EDIT_BUTTON = "chat-message-edit-button";
+/** 聊天用户消息编辑输入框（动态后缀为 messageId） */
+export const TID_CHAT_MESSAGE_EDIT_INPUT = "chat-message-edit-input";
+/** 聊天用户消息编辑提交按钮（动态后缀为 messageId） */
+export const TID_CHAT_MESSAGE_EDIT_SUBMIT = "chat-message-edit-submit";
+/** 聊天用户消息编辑取消按钮（动态后缀为 messageId） */
+export const TID_CHAT_MESSAGE_EDIT_CANCEL = "chat-message-edit-cancel";
+/** 聊天助手消息 fork 按钮（动态后缀为 messageId） */
+export const TID_CHAT_MESSAGE_FORK_BUTTON = "chat-message-fork-button";
+/** 聊天变更摘要撤销/重新应用按钮（动态后缀为 messageId） */
+export const TID_CHAT_CHANGE_SUMMARY_TOGGLE_FILES_BUTTON =
+  "chat-change-summary-toggle-files-button";
+/** 聊天输入框前缀提示面板 */
+export const TID_PROMPT_SUGGESTION_PANEL = "prompt-suggestion-panel";
+/** 聊天输入框前缀提示分组（动态后缀为分组 id） */
+export const TID_PROMPT_SUGGESTION_SECTION = "prompt-suggestion-section";
+/** 聊天输入框前缀提示选项（动态后缀为选项 id） */
+export const TID_PROMPT_SUGGESTION_OPTION = "prompt-suggestion-option";
+/** 聊天输入框前缀提示状态行（动态后缀为分组 id） */
+export const TID_PROMPT_SUGGESTION_STATUS = "prompt-suggestion-status";
+
+// TaskList
+/** 任务列表容器 */
+export const TID_TASK_LIST = "task-list";
+/** 新建任务按钮 */
+export const TID_TASK_NEW_BUTTON = "task-new-button";
+/** 任务列表条目（动态后缀为 taskId） */
+export const TID_TASK_ITEM = "task-item";
+/** 任务列表空状态 */
+export const TID_TASK_EMPTY = "task-empty";
+/** 任务归档按钮（动态后缀为 taskId） */
+export const TID_TASK_ARCHIVE = "task-archive";
+/** 任务列表下方设置入口按钮 */
+export const TID_TASK_SETTINGS_BUTTON = "task-settings-button";
+
+// Settings
+/** 设置页容器 */
+export const TID_SETTINGS_PAGE = "settings-page";
+/** 设置页返回工作区按钮 */
+export const TID_SETTINGS_BACK_BUTTON = "settings-back-button";
+/** 设置页左侧分区入口（动态后缀为 section id） */
+export const TID_SETTINGS_SECTION_NAV = "settings-section-nav";
+/** 个性化（用户自定义指令）编辑器 */
+export const TID_SETTINGS_PERSONALIZATION_EDITOR = "settings-personalization-editor";
+/** 个性化保存按钮 */
+export const TID_SETTINGS_PERSONALIZATION_SAVE = "settings-personalization-save";
+/** 个性化取消按钮 */
+export const TID_SETTINGS_PERSONALIZATION_CANCEL = "settings-personalization-cancel";
+/** 个性化内容超限提示 */
+export const TID_SETTINGS_PERSONALIZATION_SIZE_HINT = "settings-personalization-size-hint";
+/** 常规设置中的增强 Find/Grep 开关 */
+export const TID_SETTINGS_TOOL_SEARCH_SELECT = "settings-tool-search-select";
+export const TID_SETTINGS_TOOL_SEARCH_OPTION = "settings-tool-search-option";
+export const TID_SETTINGS_NATIVE_SEARCH_SWITCH = "settings-native-search-switch";
+/** 资源管理器顶部 tab（suffix=cpu|memory|storage） */
+export const TID_RESOURCE_MANAGER_TAB = "resource-manager-tab";
+/** 资源管理器「存储」tab：分区容器 */
+export const TID_RESOURCE_MANAGER_STORAGE_SECTION = "resource-manager-storage-section";
+/** 资源管理器「存储」tab：总占用数字 */
+export const TID_RESOURCE_MANAGER_STORAGE_TOTAL = "resource-manager-storage-total";
+/** 资源管理器「存储」tab：扫描状态（data-state=scanning|complete|cancelled|failed|idle） */
+export const TID_RESOURCE_MANAGER_STORAGE_STATUS = "resource-manager-storage-status";
+/** 资源管理器「存储」tab：重新计算按钮 */
+export const TID_RESOURCE_MANAGER_STORAGE_RESCAN = "resource-manager-storage-rescan";
+/** 资源管理器「存储」tab：磁盘卡片（suffix=卷 key 序号） */
+export const TID_RESOURCE_MANAGER_STORAGE_DISK_CARD = "resource-manager-storage-disk-card";
+/** 资源管理器「存储」tab：磁盘卡片里的根目录行（suffix=rootId） */
+export const TID_RESOURCE_MANAGER_STORAGE_ROOT = "resource-manager-storage-root";
+/** 资源管理器「存储」tab：类别行（suffix=categoryId） */
+export const TID_RESOURCE_MANAGER_STORAGE_CATEGORY_ROW = "resource-manager-storage-category-row";
+/** 资源管理器「存储」tab：类别行大小（suffix=categoryId） */
+export const TID_RESOURCE_MANAGER_STORAGE_CATEGORY_SIZE = "resource-manager-storage-category-size";
+/** 资源管理器「存储」tab：类别清理按钮（suffix=categoryId） */
+export const TID_RESOURCE_MANAGER_STORAGE_CATEGORY_CLEAN =
+  "resource-manager-storage-category-clean";
+/** 资源管理器「存储」tab：类别明细视图 */
+export const TID_RESOURCE_MANAGER_STORAGE_DETAIL = "resource-manager-storage-detail";
+/** 资源管理器「存储」tab：明细返回按钮 */
+export const TID_RESOURCE_MANAGER_STORAGE_DETAIL_BACK = "resource-manager-storage-detail-back";
+/** 资源管理器「存储」tab：明细条目行 */
+export const TID_RESOURCE_MANAGER_STORAGE_DETAIL_ENTRY = "resource-manager-storage-detail-entry";
+/** 资源管理器「存储」tab：清理确认框 */
+export const TID_RESOURCE_MANAGER_STORAGE_CONFIRM_DIALOG =
+  "resource-manager-storage-confirm-dialog";
+/** 资源管理器「存储」tab：清理确认框确认按钮 */
+export const TID_RESOURCE_MANAGER_STORAGE_CONFIRM_ACCEPT =
+  "resource-manager-storage-confirm-accept";
+/** 资源管理器「存储」tab：清理确认框取消按钮 */
+export const TID_RESOURCE_MANAGER_STORAGE_CONFIRM_CANCEL =
+  "resource-manager-storage-confirm-cancel";
+/** Memory 设置模块中的总开关 */
+export const TID_SETTINGS_MEMORY_SWITCH = "settings-memory-switch";
+/** Memory 设置模块刷新按钮 */
+export const TID_SETTINGS_MEMORY_REFRESH = "settings-memory-refresh";
+/** Memory Workspace Scope 菜单触发器 */
+export const TID_SETTINGS_MEMORY_SCOPE_TRIGGER = "settings-memory-scope-trigger";
+/** Memory Workspace Scope 图标 */
+export const TID_SETTINGS_MEMORY_SCOPE_ICON = "settings-memory-scope-icon";
+/** Memory 当前 Workspace 文件数量 */
+export const TID_SETTINGS_MEMORY_COUNT = "settings-memory-count";
+/** Memory 文件名搜索输入框 */
+export const TID_SETTINGS_MEMORY_SEARCH_INPUT = "settings-memory-search-input";
+/** Memory 文件名搜索清空按钮 */
+export const TID_SETTINGS_MEMORY_SEARCH_CLEAR = "settings-memory-search-clear";
+/** Memory 项目文件列表返回项目列表按钮 */
+export const TID_SETTINGS_MEMORY_BACK_PROJECTS = "settings-memory-back-projects";
+/** Memory 文件正文返回项目文件列表按钮 */
+export const TID_SETTINGS_MEMORY_BACK_MEMORIES = "settings-memory-back-memories";
+/** Memory workspace 行（动态后缀为 workspace id） */
+export const TID_SETTINGS_MEMORY_WORKSPACE = "settings-memory-workspace";
+
+/** Memory 文件行（动态后缀为文件名） */
+export const TID_SETTINGS_MEMORY_FILE = "settings-memory-file";
+/** Memory 文件类型图标（动态后缀为文件名） */
+export const TID_SETTINGS_MEMORY_FILE_ICON = "settings-memory-file-icon";
+/** Memory 文件名称（动态后缀为文件名） */
+export const TID_SETTINGS_MEMORY_FILE_NAME = "settings-memory-file-name";
+/** Memory 文件更新时间（动态后缀为文件名） */
+export const TID_SETTINGS_MEMORY_FILE_UPDATED_AT = "settings-memory-file-updated-at";
+/** Memory 文件编辑器按钮组（动态后缀为文件名） */
+export const TID_SETTINGS_MEMORY_FILE_EDITOR_ACTIONS = "settings-memory-file-editor-actions";
+/** Memory 原始 Markdown 预览 */
+export const TID_SETTINGS_MEMORY_PREVIEW = "settings-memory-preview";
+/** 常规设置中的 AskUserQuestion 自动继续开关 */
+export const TID_SETTINGS_ASK_USER_QUESTION_AUTO_RESOLUTION_SWITCH =
+  "settings-ask-user-question-auto-resolution-switch";
+/** 设置页通用分区的界面语言下拉触发器 */
+export const TID_SETTINGS_LOCALE_SELECT_TRIGGER = "settings-locale-select-trigger";
+/** 设置页通用分区的界面语言下拉项（动态后缀为 locale preference） */
+export const TID_SETTINGS_LOCALE_SELECT_ITEM = "settings-locale-select-item";
+/** 子智能体列表行（动态后缀为子智能体名称） */
+export const TID_SUBAGENT_ROW = "subagent-row";
+/** 内置子智能体模型选择控件（动态后缀为子智能体名称） */
+export const TID_SUBAGENT_BUILT_IN_MODEL_TRIGGER = "subagent-built-in-model-trigger";
+
+// Model Provider Settings
+/** 模型供应商顶部添加按钮 */
+export const TID_MODEL_PROVIDER_ADD_PROVIDER_BUTTON = "model-provider-add-provider-button";
+/** 模型供应商 Template 选择页 */
+export const TID_MODEL_PROVIDER_TEMPLATE_PICKER = "model-provider-template-picker";
+/** 模型供应商 Template 选择项（动态后缀为 templateId，custom 表示纯自定义） */
+export const TID_MODEL_PROVIDER_TEMPLATE_ITEM = "model-provider-template-item";
+/** 模型供应商 Template 选择页返回当前 Provider 详情的按钮 */
+export const TID_MODEL_PROVIDER_TEMPLATE_BACK_BUTTON = "model-provider-template-back-button";
+/** 模型供应商左侧导航条目（动态后缀为 provider node key） */
+export const TID_MODEL_PROVIDER_NAV_ITEM = "model-provider-nav-item";
+/** 模型供应商连接方式下拉触发器 */
+export const TID_MODEL_PROVIDER_CONNECTION_MODE_TRIGGER = "model-provider-connection-mode-trigger";
+/** 设置页已有 Start Plan 的数量快捷入口。 */
+export const TID_MODEL_PROVIDER_START_PLAN_COUNT_SHORTCUT =
+  "model-provider-start-plan-count-shortcut";
+export const TID_MODEL_PROVIDER_START_PLAN_SWITCH_PREFIX =
+  "model-provider-start-plan-switch-prefix";
+/** 模型供应商连接方式下拉项（动态后缀为连接方式 key） */
+export const TID_MODEL_PROVIDER_CONNECTION_MODE_ITEM = "model-provider-connection-mode-item";
+/** 模型供应商详情 API Key 输入框 */
+export const TID_MODEL_PROVIDER_API_KEY_INPUT = "model-provider-api-key-input";
+/** 模型供应商名称编辑按钮 */
+export const TID_MODEL_PROVIDER_NAME_EDIT_BUTTON = "model-provider-name-edit-button";
+/** 模型供应商名称编辑输入框 */
+export const TID_MODEL_PROVIDER_NAME_INPUT = "model-provider-name-input";
+/** 模型供应商 Base URL 输入框 */
+export const TID_MODEL_PROVIDER_BASE_URL_INPUT = "model-provider-base-url-input";
+/** 模型供应商 API 格式下拉触发器 */
+export const TID_MODEL_PROVIDER_API_FORMAT_TRIGGER = "model-provider-api-format-trigger";
+/** 模型供应商 API 格式下拉项（动态后缀为 API 格式） */
+export const TID_MODEL_PROVIDER_API_FORMAT_ITEM = "model-provider-api-format-item";
+/** 模型供应商模型输入框（动态后缀为模型行号） */
+export const TID_MODEL_PROVIDER_MODEL_INPUT = "model-provider-model-input";
+/** 模型供应商模型删除按钮（动态后缀为模型行号） */
+export const TID_MODEL_PROVIDER_MODEL_DELETE_BUTTON = "model-provider-model-delete-button";
+/** 模型供应商添加模型按钮 */
+export const TID_MODEL_PROVIDER_ADD_MODEL_BUTTON = "model-provider-add-model-button";
+
+// Chat Toolbar
+/** 聊天工具栏模型选择按钮 */
+export const TID_CHAT_MODEL_SELECT_TRIGGER = "chat-model-select-trigger";
+/** 聊天工具栏模型供应商分组（动态后缀为 provider group key） */
+export const TID_CHAT_MODEL_SELECT_GROUP = "chat-model-select-group";
+/** 聊天工具栏模型选择条目（动态后缀为模型 value） */
+export const TID_CHAT_MODEL_SELECT_ITEM = "chat-model-select-item";
+/** 聊天工具栏思考深度选择按钮 */
+export const TID_CHAT_THOUGHT_LEVEL_SELECT_TRIGGER = "chat-thought-level-select-trigger";
+/** 聊天工具栏思考深度选择条目（动态后缀为思考深度 value） */
+export const TID_CHAT_THOUGHT_LEVEL_SELECT_ITEM = "chat-thought-level-select-item";
+/** 聊天工具栏模式选择按钮（v4 switchCollaborationMode e2e 锚点） */
+export const TID_CHAT_MODE_SELECT_TRIGGER = "chat-mode-select-trigger";
+/** 聊天工具栏模式选择条目（动态后缀为 mode value） */
+export const TID_CHAT_MODE_SELECT_ITEM = "chat-mode-select-item";
+/** 思考块折叠触发按钮 */
+export const TID_CHAT_REASONING_TRIGGER = "chat-reasoning-trigger";
+/** 思考块折叠内容容器 */
+export const TID_CHAT_REASONING_CONTENT = "chat-reasoning-content";
+
+// Workspace
+/** 主内容区 header */
+export const TID_WORKSPACE_HEADER = "workspace-header";
+/** 工作区标题 */
+export const TID_WORKSPACE_TITLE = "workspace-title";
+/** 工作区路径 */
+export const TID_WORKSPACE_PATH = "workspace-path";
+/** 工作区 Header 更多菜单按钮 */
+export const TID_WORKSPACE_MORE_BUTTON = "workspace-more-button";
+/** 右上角问号帮助菜单触发按钮 */
+export const TID_WORKSPACE_HELP_MENU_TRIGGER = "workspace-help-menu-trigger";
+/** 问号帮助菜单里的「资源管理器」项（仅桌面端） */
+export const TID_WORKSPACE_HELP_MENU_RESOURCE_MANAGER = "workspace-help-menu-resource-manager";
+/** 工作区文件树面板 */
+export const TID_WORKSPACE_FILE_TREE_PANEL = "workspace-file-tree-panel";
+/** 工作区文件树刷新按钮 */
+export const TID_WORKSPACE_FILE_TREE_REFRESH_BUTTON = "workspace-file-tree-refresh-button";
+/** 工作区文件树条目（动态后缀为文件绝对路径） */
+export const TID_WORKSPACE_FILE_TREE_ROW = "workspace-file-tree-row";
+// SSH 错误提示
+/** SSH 连接错误信息 */
+export const TID_SSH_ERROR = "ssh-error";
+/** SSH 连接成功提示 */
+export const TID_SSH_SUCCESS = "ssh-success";
+
+// V4 会话 pane（protocol-v4 竖切；定位协议带 paneId 维度：同 session 双 pane 时靠 paneId 后缀区分）
+/** v4 会话 pane 容器（动态后缀为 paneId） */
+export const TID_V4_SESSION_PANE = "v4-session-pane";
+/** v4 消息时间线容器 */
+export const TID_V4_TIMELINE = "v4-timeline";
+/** v4 投影行（动态后缀为 rowId） */
+export const TID_V4_ROW = "v4-row";
+/** v4 composer 工作区 Hook 待审核入口与未读点 */
+export const TID_V4_WORKSPACE_HOOK_PENDING_TRIGGER = "v4-workspace-hook-pending-trigger";
+export const TID_V4_WORKSPACE_HOOK_PENDING_UNREAD = "v4-workspace-hook-pending-unread";
+/** v4 工作区 Hook 待审核点击浮层 */
+export const TID_V4_WORKSPACE_HOOK_PENDING_POPOVER = "v4-workspace-hook-pending-popover";
+/** v4 工作区 Hook 待审核浮层「去审核」按钮 */
+export const TID_V4_WORKSPACE_HOOK_PENDING_REVIEW = "v4-workspace-hook-pending-review";
+/** v4 工作区 Hook 待审核浮层「忽略」按钮 */
+export const TID_V4_WORKSPACE_HOOK_PENDING_DISMISS = "v4-workspace-hook-pending-dismiss";
+/** v4 composer 容器 */
+export const TID_V4_COMPOSER = "v4-composer";
+/** v4 composer 文本输入 */
+export const TID_V4_COMPOSER_INPUT = "v4-composer-input";
+/** v4 composer 当前会话后台任务入口 */
+export const TID_V4_COMPOSER_BACKGROUND_WORK_TRIGGER = "v4-composer-background-work-trigger";
+/** v4 composer 电脑操作（CUA）常驻入口按钮 */
+export const TID_V4_COMPOSER_CUA_ENTRY = "v4-composer-cua-entry";
+/** v4 composer 发送按钮 */
+export const TID_V4_COMPOSER_SEND = "v4-composer-send";
+/** v4 暂停队列发送确认：清空队列并发送 */
+export const TID_V4_COMPOSER_CLEAR_QUEUE_SEND = "v4-composer-clear-queue-send";
+/** v4 暂停队列发送确认：保留队列并发送 */
+export const TID_V4_COMPOSER_KEEP_QUEUE_SEND = "v4-composer-keep-queue-send";
+/** v4 暂停队列发送确认弹窗 */
+export const TID_V4_PAUSED_QUEUE_SEND_DIALOG = "v4-paused-queue-send-dialog";
+/** V4 composer 附件 chip（动态后缀为附件 id） */
+export const TID_V4_ATTACHMENT = "v4-attachment";
+/** V4 composer 附件上传进度（动态后缀为附件 id） */
+export const TID_V4_ATTACHMENT_UPLOAD_PROGRESS = "v4-attachment-upload-progress";
+/** V4 composer 附件上传重试（动态后缀为附件 id） */
+export const TID_V4_ATTACHMENT_UPLOAD_RETRY = "v4-attachment-upload-retry";
+/** v4 stop 按钮 */
+export const TID_V4_STOP = "v4-stop";
+/** v4 assistant 行 fork 按钮（动态后缀为 rowId） */
+export const TID_V4_FORK = "v4-fork";
+/** v4 assistant 行 retry 按钮（动态后缀为 rowId） */
+export const TID_V4_RETRY = "v4-retry";
+/** v4 assistant 行点赞按钮（动态后缀为 rowId） */
+export const TID_V4_FEEDBACK_LIKE = "v4-feedback-like";
+/** v4 assistant 行点踩按钮（动态后缀为 rowId） */
+export const TID_V4_FEEDBACK_DISLIKE = "v4-feedback-dislike";
+/** v4 turn Hook 详情按钮（动态后缀为 product turnId） */
+export const TID_V4_HOOK_DETAILS_TRIGGER = "v4-hook-details-trigger";
+/** v4 turn Hook 详情 Popover（动态后缀为 product turnId） */
+export const TID_V4_HOOK_DETAILS_CONTENT = "v4-hook-details-content";
+/** v4 user 行 edit 按钮（动态后缀为 rowId） */
+export const TID_V4_EDIT = "v4-edit";
+/** v4 user query 编辑输入框（动态后缀为 rowId） */
+export const TID_V4_EDIT_INPUT = "v4-edit-input";
+/** v4 user query 编辑提交按钮（动态后缀为 rowId） */
+export const TID_V4_EDIT_SUBMIT = "v4-edit-submit";
+/** v4 user query 编辑取消按钮（动态后缀为 rowId） */
+export const TID_V4_EDIT_CANCEL = "v4-edit-cancel";
+/** v4 user query 编辑附件删除按钮（动态后缀为 rowId-index） */
+export const TID_V4_EDIT_ATTACHMENT_REMOVE = "v4-edit-attachment-remove";
+export const TID_V4_EDIT_REWIND_WORKSPACE = "v4-edit-rewind-workspace";
+/** v4 edit 文件冲突弹窗 */
+export const TID_V4_EDIT_WORKSPACE_CONFLICT_DIALOG = "v4-edit-workspace-conflict-dialog";
+/** v4 edit 文件冲突后降级为仅裁剪对话 */
+export const TID_V4_EDIT_WORKSPACE_CONFLICT_CONVERSATION_ONLY =
+  "v4-edit-workspace-conflict-conversation-only";
+/** v4 queue 面板容器 */
+export const TID_V4_QUEUE = "v4-queue";
+/** v4 暂停队列原因/恢复提示条 */
+export const TID_V4_QUEUE_PAUSED_BANNER = "v4-queue-paused-banner";
+/** v4 暂停队列继续自动消费按钮 */
+export const TID_V4_QUEUE_RESUME = "v4-queue-resume";
+/** v4 queue 项行内编辑输入框（动态后缀为 queueItemId） */
+/** v4 queue 项（动态后缀为 queueItemId） */
+export const TID_V4_QUEUE_ITEM = "v4-queue-item";
+/** v4 queue 项删除按钮（动态后缀为 queueItemId） */
+export const TID_V4_QUEUE_ITEM_DELETE = "v4-queue-item-delete";
+/** v4 queue 项编辑按钮（动态后缀为 queueItemId） */
+export const TID_V4_QUEUE_ITEM_EDIT = "v4-queue-item-edit";
+/** v4 queue 项立即发送按钮（动态后缀为 queueItemId） */
+export const TID_V4_QUEUE_ITEM_SEND_NOW = "v4-queue-item-send-now";
+/** v4 queue 项上移按钮（动态后缀为 queueItemId） */
+export const TID_V4_QUEUE_ITEM_UP = "v4-queue-item-up";
+/** v4 输入控制：queue autoDrain 开关按钮（setAutoDrain 命令） */
+export const TID_V4_AUTODRAIN_TOGGLE = "v4-autodrain-toggle";
+/** v4 输入控制：followup 路由模式开关按钮（setFollowupMode 命令） */
+export const TID_V4_FOLLOWUP_TOGGLE = "v4-followup-toggle";
+/** v4 会话标题显示（meta.title，空则显示占位） */
+export const TID_V4_SESSION_TITLE = "v4-session-title";
+/** v4 会话重命名输入框（renameSession 命令） */
+export const TID_V4_RENAME_INPUT = "v4-rename-input";
+/** v4 会话重命名提交按钮（renameSession 命令） */
+export const TID_V4_RENAME_SUBMIT = "v4-rename-submit";
+/** v4 goal 状态横幅（objective + status，sendGoalCommand/resumeGoal 效果投影） */
+export const TID_V4_GOAL_BANNER = "v4-goal-banner";
+/** v4 会话删除按钮（deleteSession 命令；删除后回 draft） */
+export const TID_V4_DELETE_SESSION = "v4-delete-session";
+/** v4 后台工作面板（backgroundWorks 投影） */
+export const TID_V4_BACKGROUND_WORKS = "v4-background-works";
+/** v4 后台工作项（动态后缀为 workId） */
+export const TID_V4_BACKGROUND_WORK_ITEM = "v4-background-work-item";
+/** v4 后台工作取消按钮（cancelBackgroundWork 命令；动态后缀为 workId） */
+export const TID_V4_BACKGROUND_WORK_CANCEL = "v4-background-work-cancel";
+/** v4 模型配置显示（data-provider/data-model/data-thought，switchModelConfig 效果投影） */
+export const TID_V4_MODEL_CONFIG = "v4-model-config";
+// v4-model-provider-input / v4-model-model-input / v4-model-thought-input /
+// v4-model-apply（调试表单）已退役——模型切换由 composer 工具条的
+// TID_CHAT_MODEL_SELECT_* / TID_CHAT_THOUGHT_LEVEL_SELECT_* 承载。
+/** v4 订阅失败重连按钮 */
+export const TID_V4_RETRY_SUBSCRIBE = "v4-retry-subscribe";
+/** v4 userInput 交互弹窗容器 */
+export const TID_V4_USER_INPUT_DIALOG = "v4-user-input-dialog";
+/** v4 userInput 选项按钮（动态后缀为 optionId） */
+export const TID_V4_USER_INPUT_OPTION = "v4-user-input-option";
+/** v4 userInput 自由文本输入 */
+export const TID_V4_USER_INPUT_TEXT = "v4-user-input-text";
+/** v4 时间线「回到底部」按钮（解除底部跟随后出现，虚拟滚动锚定） */
+export const TID_V4_TIMELINE_BOTTOM = "v4-timeline-bottom";
+/** v4 pane 外壳（Layout/Focus 层包装，动态后缀为 paneId；data-focused 标记焦点 pane，分屏） */
+export const TID_V4_PANE_SHELL = "v4-pane-shell";
+/** v4 向右拆分窗格按钮（pane header；一期为「打开分屏」，二期语义泛化为拆分） */
+export const TID_V4_SPLIT_OPEN = "v4-split-open";
+/** v4 向下拆分窗格按钮（pane header，网格布局） */
+export const TID_V4_SPLIT_DOWN = "v4-split-down";
+/** v4 关闭窗格按钮（非 primary pane header；一期为「关闭分屏」） */
+export const TID_V4_SPLIT_CLOSE = "v4-split-close";
+/** v4 分屏拖拽分隔条（pointer 拖动调宽；data-split-id 标记分割节点） */
+export const TID_V4_SPLIT_DIVIDER = "v4-split-divider";
+/** v4 pane header 的 workspace 徽标（跨 workspace pane 显示归属） */
+export const TID_V4_PANE_WORKSPACE_BADGE = "v4-pane-workspace-badge";
+/** v4 时间线「加载更早」按钮（游标分页；窗口首行未到全序首行时出现） */
+export const TID_V4_TIMELINE_LOAD_OLDER = "v4-timeline-load-older";
+/** v4 对话轮次全局导航 rail（宽屏 2+ 可导航 turn 时出现） */
+export const TID_V4_TURN_NAVIGATOR = "v4-turn-navigator";
+/** v4 对话轮次导航项（动态后缀为 render unit key） */
+export const TID_V4_TURN_NAVIGATOR_ITEM = "v4-turn-navigator-item";
+/** v4 对话轮次导航 HoverCard 预览（动态后缀为 render unit key） */
+export const TID_V4_TURN_NAVIGATOR_TOOLTIP = "v4-turn-navigator-tooltip";
+/** v4 subagent 行下钻开关（动态后缀为 rowId；有 childSessionId 才可点） */
+export const TID_V4_SUBAGENT_TOGGLE = "v4-subagent-toggle";
+/** v4 subagent 下钻迷你时间线容器（动态后缀为 childSessionId） */
+export const TID_V4_SUBAGENT_DRILLDOWN = "v4-subagent-drilldown";
+/** v4 subagent 下钻「在分屏打开」入口（动态后缀为 childSessionId） */
+/** @deprecated subagent 详情已迁移到右侧 tabs；保留常量避免外部旧测试编译失败。 */
+export const TID_V4_SUBAGENT_OPEN_SPLIT = "v4-subagent-open-split";
+export const TID_V4_SUBAGENT_OPEN_SIDE_PANE = "v4-subagent-open-side-pane";
+/** v4 userInput 行附件列表（动态后缀为 rowId） */
+export const TID_V4_ROW_ATTACHMENTS = "v4-row-attachments";
+
+// Plugin 商店
+/** Plugin 设置页里进入插件商店的入口按钮（商店是 WorkspaceShell 主视图，不是设置页分区） */
+export const TID_PLUGIN_STORE_BROWSE = "plugin-store-browse";
+
+// Automations / 定时任务
+export const TID_AUTOMATIONS_OPEN = "automations-open";
+export const TID_AUTOMATIONS_LIST = "automations-list";
+/** 定时 / 闲时列表共用的状态筛选胶囊行（全部 / 进行中 / 已完成 / 失败） */
+export const TID_AUTOMATIONS_STATUS_FILTER = "automations-status-filter";
+export const TID_AUTOMATION_CREATE_MENU = "automation-create-menu";
+export const TID_AUTOMATION_CREATE_MANUALLY = "automation-create-manually";
+export const TID_AUTOMATION_CARD = "automation-card";
+export const TID_AUTOMATION_CARD_MENU = "automation-card-menu";
+export const TID_AUTOMATION_ACTION_TOGGLE = "automation-action-toggle";
+export const TID_AUTOMATION_ACTION_DELETE = "automation-action-delete";
+export const TID_AUTOMATION_FORM_TITLE = "automation-form-title";
+export const TID_AUTOMATION_FORM_PROMPT = "automation-form-prompt";
+export const TID_AUTOMATION_FORM_SUBMIT = "automation-form-submit";
+export const TID_AUTOMATION_RUN_NOW = "automation-run-now";
+export const TID_AUTOMATION_EDIT_BACK = "automation-edit-back";
+// 调度 builder / 自定义重复 / 年度月日选择器（e2e 稳定锚点）
+export const TID_AUTOMATION_FREQUENCY_SELECT = "automation-frequency-select";
+export const TID_AUTOMATION_FREQUENCY_OPTION = "automation-frequency-option";
+export const TID_AUTOMATION_CUSTOM_UNIT_SELECT = "automation-custom-unit-select";
+export const TID_AUTOMATION_CUSTOM_UNIT_OPTION = "automation-custom-unit-option";
+export const TID_AUTOMATION_CUSTOM_INTERVAL_SELECT = "automation-custom-interval-select";
+export const TID_AUTOMATION_CUSTOM_INTERVAL_INCREMENT = "automation-custom-interval-increment";
+export const TID_AUTOMATION_CUSTOM_INTERVAL_DECREMENT = "automation-custom-interval-decrement";
+export const TID_AUTOMATION_CUSTOM_INTERVAL_OPTION = "automation-custom-interval-option";
+export const TID_AUTOMATION_CUSTOM_REPEAT_EDIT = "automation-custom-repeat-edit";
+export const TID_AUTOMATION_CUSTOM_CONFIRM = "automation-custom-confirm";
+export const TID_AUTOMATION_YEAR_MONTHDAY = "automation-year-monthday";
+export const TID_AUTOMATION_YEAR_MONTH_OPTION = "automation-year-month-option";
+export const TID_AUTOMATION_YEAR_DAY_OPTION = "automation-year-day-option";
+export const TID_AUTOMATION_SCHEDULE_PREVIEW = "automation-schedule-preview";
+export const TID_AUTOMATION_SCHEDULE_ADD = "automation-schedule-add";
+export const TID_AUTOMATION_SCHEDULE_DELETE = "automation-schedule-delete";
+export const TID_CRON_CREATE_CARD = "cron-create-card";
+export const TID_CRON_CREATE_OPEN = "cron-create-open";
+export const TID_CONFIRM_DIALOG_CONFIRM = "confirm-dialog-confirm";
+
+/** 为动态元素生成带后缀的 testid，如 file-tree-item-/home/user */
+export function testId(base: string, suffix: string): string {
+  return `${base}-${suffix}`;
+}
+
+/**
+ * 项目行菜单 / 右键动作的 test id（动作 id 如 edit / pin / delete / remove-entry / create-task /
+ * files-<index>）。右键菜单里 create-task 与 files-* 带 `context-` 前缀，和更多菜单区分。
+ */
+export function virtualProjectActionTestId(actionId: string, context = false): string {
+  const scoped = context && (actionId.startsWith("files-") || actionId === "create-task");
+  return `${TID_VIRTUAL_PROJECT_ACTION_PREFIX}-${scoped ? "context-" : ""}${actionId}`;
+}
+

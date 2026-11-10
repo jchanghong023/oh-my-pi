@@ -1,0 +1,8 @@
+node_modules/
+build/
+.vite/
+.vite-temp/
+.cache/
+.env
+.env.*
+!.env.example
