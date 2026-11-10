@@ -41,10 +41,10 @@ export function resolveImportedComposerConfig(
   clientNamespace = "desktop",
 ): ComposerInitialConfig | undefined {
   const { workspacePath, workspaceIdentity, sessionId, reused } = result;
-  if (reused || readV4ComposerDraft(workspacePath, workspaceIdentity, sessionId)) return undefined;
   const scope =
     readComposerWorkspaceScope(workspacePath, workspaceIdentity, clientNamespace) ??
     resolveComposerScope(null, workspaceIdentity, clientNamespace);
+  if (reused || readV4ComposerDraft(workspacePath, workspaceIdentity, sessionId, scope)) return undefined;
   const root = readV4ComposerDraft(workspacePath, workspaceIdentity, V4_DRAFT_SCOPE_ROOT, scope);
   return root?.mode
     ? {

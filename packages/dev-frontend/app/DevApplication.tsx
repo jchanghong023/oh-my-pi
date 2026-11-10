@@ -24,7 +24,7 @@ function BrowserApplication() {
   const workspace = source.resolveWorkspace(view, selection);
   const [connection, setConnection] = useState<{ key: string; services: IServiceAccessor }>();
   const [connectionError, setConnectionError] = useState<string>();
-  const key = JSON.stringify([workspace.identity, workspace.path, selection.projectId, selection.irId, selection.srId, selection.freeSessionId, session?.sessionId, session?.round]);
+  const key = JSON.stringify([identity?.employeeId, workspace.identity, workspace.path, selection.projectId, selection.irId, selection.srId, selection.freeSessionId, session?.sessionId, session?.round]);
 
   useEffect(() => {
     if (!view || !workspace.path) return;
@@ -79,7 +79,7 @@ function BrowserApplication() {
         const target = view.projects.find(item => item.root === path || source.projects?.readDevelopmentRoot(item.id, identity?.employeeId) === path);
         if (!target) throw new Error("请先在 Dev 设置中添加已有 Git 项目。");
         const recent = (await source.readRecentFreeChats(target.id))[0];
-        if (newSession || !recent) dev.startFreeChat(target.id);
+        if (newSession || !recent) dev.startFreeChat(target.id, showFiles);
         else dev.openFreeChat(recent.taskId, showFiles);
       }}
       nativeHostAvailable={source.capabilities.nativeChat}

@@ -285,9 +285,9 @@ export function MentionPlugin({
     } satisfies Record<MentionPanelGroupId, MentionResultGroup<MentionItem>>;
 
     // @ 的类别顺序与 $ 单分组保持原契约；# 的项目分组来自当前 Host 查询结果。
-    return buildVisibleMentionGroups(
-      getMentionPanelGroupOrder(activeTrigger?.trigger).map((groupId) => groupsById[groupId]),
-    );
+    const groups = getMentionPanelGroupOrder(activeTrigger?.trigger).map((groupId) => groupsById[groupId]);
+    // 查询空态属于各自来源，插件目录错误不能吞掉文件/会话的“无匹配”。
+    return hasActiveQuery ? groups : buildVisibleMentionGroups(groups);
   }, [
     fileResult.emptyText,
     fileResult.error,
@@ -295,6 +295,7 @@ export function MentionPlugin({
     fileResult.loading,
     fileResult.title,
     activeTrigger?.trigger,
+    hasActiveQuery,
     pluginsResult.emptyText,
     pluginsResult.error,
     pluginsResult.items,

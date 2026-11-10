@@ -149,6 +149,8 @@ interface SkillsSectionProps {
   onVisibleCountChange?: (count: number) => void;
   onCreateTask?: (request?: CreateTaskRequest) => void;
   onDetailOpenChange?: (open: boolean) => void;
+  onOpenProjectSettings?: () => void;
+  onReturnToUserScope?: () => void;
   unscopedServices?: IServiceAccessor;
   cacheAuthorityKey?: string;
 }
@@ -163,6 +165,8 @@ export function SkillsSection({
   onVisibleCountChange,
   onCreateTask,
   onDetailOpenChange,
+  onOpenProjectSettings,
+  onReturnToUserScope,
   unscopedServices,
   cacheAuthorityKey,
 }: SkillsSectionProps) {
@@ -212,6 +216,7 @@ export function SkillsSection({
   const [error, setError] = useState<string | null>(null);
   const query = searchQuery;
   const [selectedSkill, setSelectedSkill] = useState<SkillSummary | null>(null);
+  const detailTriggerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     onDetailOpenChange?.(selectedSkill !== null);
   }, [onDetailOpenChange, selectedSkill]);
@@ -624,10 +629,11 @@ export function SkillsSection({
           role="button"
           tabIndex={0}
           className="min-w-0 cursor-default rounded-md outline-none focus-visible:ring-2 focus-visible:ring-input-border-focused focus-visible:ring-offset-2 focus-visible:ring-offset-card"
-          onClick={() => setSelectedSkill(skill)}
+          onClick={(event) => { detailTriggerRef.current = event.currentTarget; setSelectedSkill(skill); }}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
+              detailTriggerRef.current = event.currentTarget;
               setSelectedSkill(skill);
             }
           }}
@@ -787,6 +793,11 @@ export function SkillsSection({
       {nativeCatalog && !catalogReady && !targetServiceResolution.catalogError ? (
         <div className="space-y-2 text-foreground-subtle">
           <p>Native 会话未绑定，技能只读目录不可用。</p>
+          <p className="text-ui-sm leading-6">项目范围需要该项目的 Native 会话绑定；工作区中已打开的其他范围会话不会自动用于此项目。刷新不会创建或改绑会话。请在 Dev 项目与 Release 设置中检查对应项目的“我的开发项目”，再从工作区显式选择该项目的已有会话；原型不会自动绑定真实会话。</p>
+          <div className="flex flex-wrap gap-2">
+            {onOpenProjectSettings && <Button variant="outline" onClick={onOpenProjectSettings}>打开 Dev 项目与 Release 设置</Button>}
+            {onReturnToUserScope && <Button variant="outline" onClick={onReturnToUserScope}>返回用户范围</Button>}
+          </div>
           <Button variant="outline" onClick={targetServiceResolution.catalog.reload}>
             {intl.formatMessage({ id: "common.refresh" })}
           </Button>
@@ -877,7 +888,12 @@ export function SkillsSection({
           }
         }}
       >
-        <DialogContent className="max-h-[min(80vh,640px)] max-w-xl overflow-hidden p-0">
+        <DialogContent className="max-h-[min(80vh,640px)] max-w-xl overflow-hidden p-0" onCloseAutoFocus={(event) => {
+          if (detailTriggerRef.current?.isConnected) {
+            event.preventDefault();
+            detailTriggerRef.current.focus();
+          }
+        }}>
           {detailSkill ? (
             <div className="flex min-h-0 flex-col">
               <DialogHeader className="border-b border-popover-border px-4 pt-4 pb-3">

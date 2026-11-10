@@ -22,7 +22,7 @@ export interface DevFirstDiscussion {
 }
 interface DevContextValue {
   view?: DevWorkflowView; selection: DevSelection; session?: DevNativeSessionRef;
-  startFreeChat(projectId?: string): void; openFreeChat(taskId: string, files?: boolean): void;
+  startFreeChat(projectId?: string, files?: boolean): void; openFreeChat(taskId: string, files?: boolean): void;
   pending: boolean; error?: string; releaseId: string; setReleaseId(id: string): void;
   select(value: DevSelection): void; refresh(): Promise<void>; retryMaterial(path: string): Promise<boolean>; retrySession(): Promise<void>;
   command(value: DevAction): Promise<DevWorkflowResult | undefined>;
@@ -38,7 +38,7 @@ export const useDev = () => useContext(DevContext);
 /** One UI state controller; the entry point owns data and execution authority. */
 export function DevProvider({ children }: { children: ReactNode }) {
   const source = useDevDataSource();
-  const [selection, setSelection] = useState<DevSelection>(() => ({ ...source.initialSelection }));
+  const [selection, setSelection] = useState<DevSelection>(() => source.mode === "prototype" && window.history.state?.devSelection ? window.history.state.devSelection as DevSelection : { ...source.initialSelection });
   const selectionRef = useRef(selection);
   const [view, setView] = useState<DevWorkflowView>();
   const viewRef = useRef(view);
@@ -72,8 +72,9 @@ export function DevProvider({ children }: { children: ReactNode }) {
     const unsubscribe = source.subscribeWorkflow(() => { void refresh(); });
     return () => { unsubscribe(); requestRevision.current += 1; };
   }, [source, refresh]);
-  const select = useCallback((value: DevSelection) => {
+  const select = useCallback((value: DevSelection, addHistory = true) => {
     const projectChanged = selectionRef.current.projectId !== value.projectId;
+    if (source.mode === "prototype" && addHistory) window.history.pushState({ ...window.history.state, devSelection: value }, "");
     source.selectProject(value.projectId);
     selectionRef.current = value;
     setSelection(value);
@@ -84,10 +85,19 @@ export function DevProvider({ children }: { children: ReactNode }) {
       setFirstDiscussion(undefined);
     }
   }, [source, load]);
-  const startFreeChat = useCallback((projectId?: string) => {
+  useEffect(() => {
+    if (source.mode !== "prototype") return;
+    window.history.replaceState({ ...window.history.state, devSelection: selectionRef.current }, "");
+    const restore = (event: PopStateEvent) => {
+      if (event.state?.devSelection) select(event.state.devSelection as DevSelection, false);
+    };
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, [source, select]);
+  const startFreeChat = useCallback((projectId?: string, files = false) => {
     const targetProjectId = projectId ?? selectionRef.current.projectId;
     if (!targetProjectId) { report(new Error("请先选择项目。")); return; }
-    void source.createFreeChat(targetProjectId).then(meta => select({ projectId: meta.projectId, freeSessionId: meta.taskId }), report);
+    void source.createFreeChat(targetProjectId).then(meta => select({ projectId: meta.projectId, freeSessionId: meta.taskId, freeFiles: files }), report);
   }, [source, select, report]);
   const openFreeChat = useCallback((taskId: string, files = false) => {
     void source.readFreeChat(taskId).then(item => {

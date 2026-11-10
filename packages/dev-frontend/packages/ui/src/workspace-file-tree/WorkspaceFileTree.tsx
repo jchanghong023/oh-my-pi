@@ -104,6 +104,7 @@ export function WorkspaceFileTree({
   const listRef = useRef<HTMLDivElement | null>(null);
   const pendingActivePreviewRevealPathRef = useRef<string | null>(null);
   const pendingSearchDirectoryRevealPathRef = useRef<string | null>(null);
+  const pendingKeyboardFocusPathRef = useRef<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [fileSearchQuery, setFileSearchQuery] = useState("");
   const [showChangedOnly, setShowChangedOnly] = useState(false);
@@ -196,6 +197,19 @@ export function WorkspaceFileTree({
   });
 
   useEffect(() => {
+    const path = pendingKeyboardFocusPathRef.current;
+    if (!path) return;
+    const element = Array.from(
+      listRef.current?.querySelectorAll<HTMLElement>("[data-workspace-file-path]") ?? [],
+    ).find((node) => node.dataset.workspaceFilePath === path);
+    if (element) {
+      element.focus({ preventScroll: true });
+      pendingKeyboardFocusPathRef.current = null;
+    }
+  });
+
+  useEffect(() => {
+    pendingKeyboardFocusPathRef.current = null;
     setSelectedPath(null);
     setFileSearchQuery("");
     setShowChangedOnly(false);
@@ -555,8 +569,27 @@ export function WorkspaceFileTree({
     },
     [handleDirectoryAction, onOpenPreview, treeData.gitStatusByPath],
   );
+  const focusRow = useCallback(
+    (index: number) => {
+      const target = visibleRows[index];
+      if (!target) return;
+      pendingKeyboardFocusPathRef.current = target.path;
+      setSelectedPath(target.path);
+      rowVirtualizer.scrollToIndex(index, { align: "auto" });
+    },
+    [rowVirtualizer, visibleRows],
+  );
   const handleRowKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>, row: WorkspaceFileTreeRow) => {
+      const index = visibleRows.findIndex((item) => areWorkspaceFilePathsEqual(item.path, row.path));
+      if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
+        event.preventDefault();
+        const nextIndex = event.key === "Home" ? 0
+          : event.key === "End" ? visibleRows.length - 1
+          : Math.max(0, Math.min(visibleRows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
+        focusRow(nextIndex);
+        return;
+      }
       if (event.key === "Enter") {
         event.preventDefault();
         handleOpenPreview(row);
@@ -566,15 +599,26 @@ export function WorkspaceFileTree({
         event.preventDefault();
         if (!row.expanded || hasFileSearchQuery) {
           handleDirectoryAction(row);
+        } else if ((visibleRows[index + 1]?.depth ?? -1) > row.depth) {
+          focusRow(index + 1);
         }
         return;
       }
-      if (event.key === "ArrowLeft" && row.type === "directory" && row.expanded) {
+      if (event.key === "ArrowLeft") {
         event.preventDefault();
-        handleToggleDirectory(row);
+        if (row.type === "directory" && row.expanded && !hasFileSearchQuery) {
+          handleToggleDirectory(row);
+        } else if (!hasFileSearchQuery) {
+          for (let parentIndex = index - 1; parentIndex >= 0; parentIndex--) {
+            if (visibleRows[parentIndex]!.depth < row.depth) {
+              focusRow(parentIndex);
+              break;
+            }
+          }
+        }
       }
     },
-    [handleDirectoryAction, handleOpenPreview, handleToggleDirectory, hasFileSearchQuery],
+    [focusRow, handleDirectoryAction, handleOpenPreview, handleToggleDirectory, hasFileSearchQuery, visibleRows],
   );
 
   const hasActiveFileTreeFilter = fileSearchQuery.trim().length > 0 || showChangedOnly;

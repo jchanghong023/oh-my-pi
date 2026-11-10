@@ -24,6 +24,7 @@ export function DevSrDeliveryControls({ sr }: { sr: DevSystemRequirement }) {
   const conflict = delivery?.status === "git-conflict" || delivery?.status === "requirement-conflict";
   const needsHuman = conflict && !delivery?.humanResolution;
   const latest = srDefaultCommit(dev.view!, sr.projectId);
+  const statusLabel = delivery ? delivery.defaultCommit !== latest || delivery.round !== sr.round || delivery.inputDigest !== sr.materialDigest ? "交付候选已失效，需重新准备" : SR_DELIVERY_LABELS[delivery.status] : "待准备";
   const canVerify = delivery?.status === "prepared" && delivery.defaultCommit === latest && !srDeliveryBlocker(dev.view!, sr, false);
   const currentPr = Boolean(sr.codePr && delivery?.prCandidate === delivery?.candidate);
   const prepare = async () => {
@@ -31,13 +32,13 @@ export function DevSrDeliveryControls({ sr }: { sr: DevSystemRequirement }) {
     if (result) { setConfirmed(false); setScopeUnchanged(false); setNote(""); }
   };
   return <div className="space-y-2" data-testid="sr-delivery-summary">
-    <div className="flex flex-wrap items-center gap-2"><Button size="sm" data-testid="sr-delivery-open" onClick={() => setOpen(true)}>{delivery ? "处理交付 PR" : "准备交付 PR"}</Button><span className="text-ui-sm text-foreground-subtle">{currentPr && !blocker ? "PR 待人工合并核验" : delivery ? SR_DELIVERY_LABELS[delivery.status] : "代码、测试和规格同一个 PR"}</span></div>
+    <div className="flex flex-wrap items-center gap-2"><Button size="sm" data-testid="sr-delivery-open" onClick={() => setOpen(true)}>{delivery ? "处理交付 PR" : "准备交付 PR"}</Button><span className="text-ui-sm text-foreground-subtle">{currentPr && !blocker ? "PR 待人工合并核验" : delivery ? statusLabel : "代码、测试和规格同一个 PR"}</span></div>
     {blocker && delivery && <p className="text-ui-sm text-foreground-subtle">{blocker}</p>}
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader><DialogTitle>SR 交付 PR</DialogTitle><DialogDescription>{sr.title} · 完整交付、合并前验证与人工合并核验。关闭弹窗可在右侧查看 PR 标题、正文与清单，不会丢失交付状态。</DialogDescription></DialogHeader>
         <section className="space-y-2 rounded-lg border border-border p-3" data-testid="sr-delivery-controls" data-status={delivery?.status ?? "unprepared"}>
-    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-ui-sm font-medium">同一 PR 交付：代码、测试与规格</h3><span className="text-ui-xs text-foreground-subtle">{delivery ? SR_DELIVERY_LABELS[delivery.status] : "待准备"}</span></div>
+    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-ui-sm font-medium">同一 PR 交付：代码、测试与规格</h3><span className="text-ui-xs text-foreground-subtle">{statusLabel}</span></div>
     <p className="text-ui-sm text-foreground-subtle" data-testid="sr-delivery-blocker" role="status">{blocker ?? (currentPr ? "已登记当前候选 PR，等待人工评审、合并与结果核验。" : "当前候选已完成合并前验证样例，请人工创建 PR 并登记链接。")}</p>
     <div className="flex flex-wrap gap-2">
       <Button size="sm" variant={delivery ? "outline" : "default"} data-testid="sr-delivery-prepare" disabled={!!inputBlocker || needsHuman} onClick={() => void prepare()}>{delivery?.status === "implementation-issue" ? "修复并重新准备（演示）" : delivery ? "重新准备交付（演示）" : "准备交付清单（演示）"}</Button>

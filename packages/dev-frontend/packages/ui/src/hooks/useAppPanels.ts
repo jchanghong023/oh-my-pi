@@ -368,6 +368,11 @@ export function useAppPanels(options: {
   );
 
   useEffect(() => {
+    // 显式“查看文件”优先于自由会话初始化的审查标签，也覆盖同一会话内后到的导航意图。
+    if (isDevFree && dev?.selection.freeFiles) handleOpenFileManager();
+  }, [activeTaskId, dev?.selection.freeFiles, handleOpenFileManager, isDevFree]);
+
+  useEffect(() => {
     if (!pendingFileManagerTarget) return;
     const targetKey =
       pendingFileManagerTarget.workspaceIdentity?.trim() || pendingFileManagerTarget.workspacePath;

@@ -20,7 +20,12 @@ export function createPrototypeDataSource(): DevDataSource {
   return {
     mode: "prototype", clientId: crypto.randomUUID(), initialSelection: { ...DEFAULT_SELECTION },
     capabilities: { workflowCommands: ["registerProject", "createRelease", "setDevelopmentRoot", "createProposal", "deleteRequirement", "submitProposalReview", "acceptProposal", "runRequirementsReview", "generateRequirements", "supplementRequirements", "generateProposalSolution", "returnProposal", "confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markCodePrSubmitted", "markRequirementsMerged", "beginProposalRevision", "recordRequirementsDecision", "markCodeMerged", "prepareSrDelivery", "publishSrDelivery", "verifySrDelivery", "resolveSrDeliveryConflict", "simulateSrDefaultBranchUpdate", "startSr", "startIrAcceptance", "generateIrAcceptanceReport", "repairIrAcceptance", "prepareIrFinalPr", "restartIrAcceptance", "simulateIrDefaultBranchUpdate", "publishIrFinalPr", "markIrFinalPrSubmitted", "verifyIrFinalMerge", "generateStageMaterials", "approveStage", "backStage", "stop"], prototypeBusiness: true, freeChat: true, nativeChat: true, nativeSurface: false },
-    readWorkflow: async selection => getPrototypeWorkflow(selection),
+    readWorkflow: async selection => {
+      const view = getPrototypeWorkflow(selection);
+      setPrototypeFreeProject(selection.projectId);
+      if (selection.projectId && view.projects.some(project => project.id === selection.projectId)) readRecentFreeChats(selection.projectId);
+      return view;
+    },
     subscribeWorkflow(listener) {
       const subscription = prototypeWorkflowChanges.event(listener);
       const dispose = () => { subscription.dispose(); subscriptions.delete(dispose); };
@@ -29,7 +34,13 @@ export function createPrototypeDataSource(): DevDataSource {
     command: async (action, selection) => applyPrototypeAction(action, selection),
     resolveSession: resolvePrototypeSession,
     retryMaterial: async path => retryPrototypeMaterialRead(path),
-    retrySession: async selection => { const session = resolvePrototypeSession(getPrototypeWorkflow(selection), selection); if (session) retryPrototypeSessionRead(session.sessionId); },
+    retrySession: async selection => {
+      const view = getPrototypeWorkflow(selection);
+      const group = [...view.groups, ...view.drafts].find(item => item.id === selection.irId);
+      const sr = view.srs.find(item => item.id === selection.srId && item.irId === selection.irId);
+      const session = resolvePrototypeSession({ ...view, sessions: sr?.sessions ?? group?.sessions ?? [] }, selection);
+      if (session) retryPrototypeSessionRead(session.sessionId);
+    },
     createFreeChat: async projectId => { const meta = createPrototypeFreeChat(projectId); return { projectId, taskId: meta.taskId }; },
     readFreeChat: async taskId => { const item = readPrototypeFreeChat(taskId); return item?.meta.projectId ? { projectId: item.meta.projectId, taskId } : undefined; },
     readRecentFreeChats: async projectId => readRecentFreeChats(projectId),

@@ -104,7 +104,7 @@ import { usePromptEditorDragState } from "@/prompt-editor/usePromptEditorDragSta
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { advanceComposerDraftRevision } from "@/v4/composer/composerDraftRevision.js";
 import type { AppSlashCommand } from "@/slashCommandHelpers.js";
-import { useOptionalServices } from "@/hooks/useServices.js";
+import { useComposerClientNamespace, useOptionalServices } from "@/hooks/useServices.js";
 import { logger } from "@/logger.js";
 import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
@@ -623,10 +623,13 @@ function ConversationComposerImpl({
   const { intl, locale } = useZCodeIntl();
   const services = useOptionalServices();
   const nativeHostAvailable = useNativeHostAvailable();
+  const composerClientNamespace = useComposerClientNamespace();
   const draftScopeId =
     sessionId ??
     (rootDraftScopeKey ? `${V4_DRAFT_SCOPE_ROOT}:${rootDraftScopeKey}` : V4_DRAFT_SCOPE_ROOT);
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
+  const composerWorkspaceKey = composerClientNamespace.startsWith("dev:")
+    ? JSON.stringify([workspaceKey, composerClientNamespace]) : workspaceKey;
   const configPickerScopeKey = `${workspaceKey}\0${draftScopeId}`;
   const [reloadText, setReloadText] = useState(false);
   const reloadTextRef = useRef(false);
@@ -741,7 +744,8 @@ function ConversationComposerImpl({
     workspacePath,
     workspaceIdentity,
     remoteSessionId,
-    scopeId: draftScopeId,
+    scopeId: composerClientNamespace.startsWith("dev:")
+      ? `${composerClientNamespace}\0${draftScopeId}` : draftScopeId,
     attachmentSessionId,
     attachmentPut,
     stageBrowserFiles: nativeChatSurface,
@@ -885,15 +889,18 @@ function ConversationComposerImpl({
     scopeId: draftScopeId,
   });
   const draftPersistTimerRef = useRef<number | null>(null);
+  const editorDraftRestoredRef = useRef(false);
   const activeSubmissionDraftTransactionRef = useRef<ComposerSubmissionDraftTransaction | null>(
     null,
   );
   const nativeSubmittedDraft = useRef<{ text: string; revision: number; attachmentIds: Set<string> } | null>(null);
 
-  const snapshotDraftOfEditor = useCallback((): {
-    text: string;
-    editorStateJson?: string;
-  } => {
+  const snapshotDraftOfEditor = useCallback((): ComposerDraftContent => {
+    // 卸载可早于下一帧的 Lexical 恢复；此时空编辑器不是用户清空草稿。
+    if (!editorDraftRestoredRef.current) {
+      const { text, editorStateJson, mention } = ownerDraftRef.current.draft;
+      return { text, editorStateJson, mention };
+    }
     let currentText = textRef.current;
     let editorStateJson: string | undefined;
     try {
@@ -1037,7 +1044,7 @@ function ConversationComposerImpl({
     listenAddToChatEvents: listenAddToChatEvents && !disabled,
     onContextRemoved: handleCodeCommentRemoved,
     requestFocus: requestComposerFocus,
-    scopeKey: `${workspaceKey}\0${draftScopeId}`,
+    scopeKey: `${composerWorkspaceKey}\0${draftScopeId}`,
   });
 
   useEffect(() => {
@@ -1105,7 +1112,7 @@ function ConversationComposerImpl({
       previousTarget.scopeId !== draftScopeId ||
       previousTarget.workspacePath !== workspacePath ||
       previousTarget.workspaceIdentity !== workspaceIdentity;
-    let transferredDraft: ReturnType<typeof snapshotDraftOfEditor> | null = null;
+    let transferredDraft: ComposerDraftContent | null = null;
     if (
       targetChanged &&
       !activeSubmissionDraftTransactionRef.current?.matchesTarget(previousTarget.scopeToken)
@@ -1139,6 +1146,7 @@ function ConversationComposerImpl({
     };
 
     const draft = transferredDraft ?? composerDraft;
+    editorDraftRestoredRef.current = false;
     const restoreDraftInto = (api: LexicalChatInputHandle) => {
       if (!draft) {
         if (textRef.current) {
@@ -1156,6 +1164,7 @@ function ConversationComposerImpl({
           },
         }),
       );
+      editorDraftRestoredRef.current = true;
     };
     let unsubscribeSettled: (() => void) | null = null;
     const applyDraft = () => {
@@ -1169,7 +1178,7 @@ function ConversationComposerImpl({
       const restoredText = draft?.text ?? "";
       const restoredRevision = contentRevisionRef.current;
       unsubscribeSettled = subscribeComposerSubmissionSettled(
-        `${workspaceKey}\0${draftScopeId}`,
+        `${composerWorkspaceKey}\0${draftScopeId}`,
         (submission) => {
           // 只清"确实是那次提交、且用户还没在其上继续编辑"的正文；编辑器把回填正文
           // 重新序列化后若与提交原文一致，也视为未编辑。
@@ -1201,6 +1210,7 @@ function ConversationComposerImpl({
     // 依赖收敛到 scope/workspace：draft 恢复只应发生在 scope 切换或 workspace 切换。
   }, [
     draftScopeId,
+    composerWorkspaceKey,
     composerDraftScopeToken,
     persistDraftNow,
     requestComposerFocus,
@@ -1466,7 +1476,7 @@ function ConversationComposerImpl({
       // __draft__，下次新建任务又恢复。发送开始时冻结真正提交的 scope。
       const submissionDraftTransaction = captureComposerSubmissionDraftTransaction(submittedDraft);
       const submittedScopeId = draftScopeRef.current;
-      const submittedScopeKey = `${workspaceKey}\0${submittedScopeId}`;
+      const submittedScopeKey = `${composerWorkspaceKey}\0${submittedScopeId}`;
       let cleanupRevision = contentRevisionRef.current;
       const submission = firstDiscussion?.options.submission ?? createSubmissionFromComposer?.() ?? null;
       const submittedAttachmentIds = attachmentsApi.attachments.map((item) => item.id);
@@ -1773,6 +1783,7 @@ function ConversationComposerImpl({
       dev,
       devProjectDraft,
       workspaceKey,
+      composerWorkspaceKey,
       recoveryCommand,
       recoveryAllowed,
       attachmentsApi,

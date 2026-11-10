@@ -1,6 +1,6 @@
 import { useDevDataSource } from "./data-source.js";
 import { DevSrDeliveryControls } from "./DevSrDeliveryControls.js";
-import { requirementsReviewCurrent } from "./domain.js";
+import { conversationReadOnlyReason, requirementsReviewCurrent } from "./domain.js";
 import { srStartBlocker } from "./domain.js";
 import { DevIrAcceptanceEntry, DevIrAcceptanceHeader } from "./DevIrAcceptance.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
@@ -29,6 +29,7 @@ import { DevCollabProjection } from "./DevCollabProjection.js";
 import { DevDeleteRequirement } from "./DevDeleteRequirement.js";
 import { MATERIAL_KIND_LABELS } from "./domain.js";
 import { getEmployeeId } from "./identity.js";
+import { toast } from "@/components/ui/toast.js";
 export const DEV_MATERIAL_DISCUSS = "omp-dev:material-discuss";
 function download(bytes: Blob, name: string) {
 	const url = URL.createObjectURL(bytes);
@@ -241,7 +242,10 @@ export function DevStageHeader() {
 						variant="outline"
 						data-testid="stop"
 						disabled={pending || (source.mode === "prototype" && (viewingOtherSr || Boolean(sr && !stageEditable)))}
-						onClick={() => void command({ type: "stop" })}
+						onClick={async () => {
+							const result = await command({ type: "stop" });
+							if (result && source.mode === "prototype") toast("已记录停止演示；未执行真实任务结清，也不释放开发占用。");
+						}}
 					>
 						停止并结清
 					</Button>
@@ -301,7 +305,7 @@ export function DevStageHeader() {
 			</div>
 			{canRegisterPr && <DevSrDeliveryControls key={`${sr!.id}:${sr!.round}`} sr={sr!} />}
 			{sr?.status === "completed" && (
-				<p className="text-ui-base">该 SR 的代码、测试与规格已合并核验，释放一个 SR 名额；IR 仍须整体验收和最终归档。</p>
+				<p className="text-ui-base">{group.acceptance?.status === "completed" ? "该 SR 已完成；所属 IR 已完成整体验收和最终归档，当前为历史只读。" : "该 SR 的代码、测试与规格已合并核验，释放一个 SR 名额；IR 仍须整体验收和最终归档。"}</p>
 			)}
 			{(dev.error || view?.error) && (
 				<p role="alert" className="text-ui-base text-destructive">
@@ -371,6 +375,7 @@ export function DevMaterialsPane() {
 	const stage = selection.stage ?? sr?.stage;
 	const materialStageView = sr ? deriveStageView(sr, selection) : undefined;
 	const materialHistory = Boolean(materialStageView && !materialStageView.isCurrent);
+	const discussionReadOnly = conversationReadOnlyReason(view, selection);
 	const proposalSolutionView = view?.drafts.some(item => item.id === group?.id) && (selection.discussionPhase ?? group?.proposalStage) === "solution";
 	const deliveryPath = stage === "pr" && sr?.delivery && materialStageView?.round === sr.delivery.round ? sr.delivery.manifestPath : undefined;
 	const acceptancePath = selection.irAcceptance ? group?.acceptance?.finalPrPath ?? group?.acceptance?.reportPath ?? group?.documentPath : undefined;
@@ -475,8 +480,9 @@ export function DevMaterialsPane() {
 						variant="ghost"
 						data-testid="material-discuss"
 						disabled={
-							material?.content === undefined || !dev.session || (selection.irAcceptance && (group?.acceptance?.status === "completed" || group?.acceptance?.status === "pr-ready" || group?.acceptance?.status === "pr-submitted"))
+							material?.content === undefined || !dev.session || Boolean(discussionReadOnly)
 						}
+						title={discussionReadOnly}
 						onClick={() =>
 							window.dispatchEvent(
 								new CustomEvent(DEV_MATERIAL_DISCUSS, {
@@ -492,6 +498,7 @@ export function DevMaterialsPane() {
 						带入讨论
 					</Button>
 				</div>
+				{discussionReadOnly && <p role="status" className="text-ui-sm text-foreground-subtle">带入讨论不可用：{discussionReadOnly}</p>}
 				{selection.irId && !selection.srId && !selection.irAcceptance && (
 					<>
 						<Button size="sm" variant="ghost" disabled={!preferred} onClick={() => setPath(group?.documentPath ?? preferred!.path)}>

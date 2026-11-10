@@ -5,5 +5,6 @@ export {
 } from "@/image-preview-editor/composerTarget.js";
 export type {
   ImageComposerTarget,
+  ImagePreviewLeaveGuard,
   ImagePreviewSurfaceProps,
 } from "@/image-preview-editor/contract.js";

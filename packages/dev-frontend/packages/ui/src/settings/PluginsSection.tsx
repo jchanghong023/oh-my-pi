@@ -20,6 +20,7 @@ interface PluginsSectionProps {
   workspacePath?: string | null;
   workspaceIdentity?: string;
   onCreateTask?: (request?: CreateTaskRequest) => void;
+  onOpenProjectSettings?: () => void;
 }
 
 export function PluginsSection({
@@ -28,6 +29,7 @@ export function PluginsSection({
   workspacePath,
   workspaceIdentity,
   onCreateTask,
+  onOpenProjectSettings,
 }: PluginsSectionProps) {
   const { intl } = useZCodeIntl();
   const activeWorkspacePath = useTabStore((state) => state.activeWorkspacePath);
@@ -119,6 +121,8 @@ export function PluginsSection({
             scopeFilter={isUserScope ? "user" : "workspace"}
             searchQuery={searchQuery}
             onCreateTask={onCreateTask}
+            onOpenProjectSettings={onOpenProjectSettings}
+            onReturnToUserScope={() => scope.setSelectedScopeKey(scope.toPageScopeKey("user"))}
             onDetailOpenChange={handleEditorOpenChange}
             onVisibleCountChange={setVisibleCount}
             unscopedServices={isUserScope ? userServices : undefined}

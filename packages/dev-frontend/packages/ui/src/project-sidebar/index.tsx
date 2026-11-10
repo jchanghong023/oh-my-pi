@@ -194,6 +194,12 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
     return <ProjectTaskListContext.Provider value={taskPresentation}>
       <SidebarTooltipProvider>
         <section data-testid="dev-free-conversations" aria-label="自由会话" className="min-w-0">
+          <ProjectTaskRows
+            kind="pinned"
+            tasks={selectProjectRows(tree, { kind: "pinned" }).filter(task => task.projectId === props.conversationProjectId)}
+            onSelect={onSelectTask}
+            refresh={refresh}
+          />
           {project ? renderProject({ ...project, name: "自由会话" }) : !loading && <p className="px-5 py-3 text-ui-sm text-foreground-subtle">请先选择已登记项目。</p>}
           {error && <p role="alert" className="px-5 text-ui-sm text-destructive">{error}</p>}
         </section>

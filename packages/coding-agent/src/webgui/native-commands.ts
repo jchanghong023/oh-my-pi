@@ -49,8 +49,7 @@ interface NativeCommandState {
 	hostResources: Set<() => Promise<void>>;
 	runNativeModeCommand: NativeWebGuiModeController["runNativeModeCommand"];
 	runModeCommand: WebGuiSlashCommandRuntime["runModeCommand"];
-	prepareLoopGoalPrompt: NativeWebGuiModeController["prepareLoopGoalPrompt"];
-	cancelLoopGoalPrompt: NativeWebGuiModeController["cancelLoopGoalPrompt"];
+	transformLoopPrompt: NativeWebGuiModeController["transformLoopPrompt"];
 	ready: () => Promise<void>;
 	stopModes: () => Promise<void>;
 	disposeModes: () => Promise<void>;
@@ -78,8 +77,7 @@ function commandState(session: AgentSession): NativeCommandState {
 		output,
 		runModeCommand: modes.runModeCommand,
 		runNativeModeCommand: modes.runNativeModeCommand,
-		prepareLoopGoalPrompt: modes.prepareLoopGoalPrompt,
-		cancelLoopGoalPrompt: modes.cancelLoopGoalPrompt,
+		transformLoopPrompt: modes.transformLoopPrompt,
 		ready: modes.ready,
 		stopModes: modes.stop,
 		disposeModes: modes.dispose,
@@ -145,25 +143,8 @@ export function executeNativeWebGuiCommand(
 			await prepareNativeWebGuiCommands(session);
 			const result = await executeNativeCommand(session, text, options);
 			if (result === true) return true;
-			const state = commandState(session);
-			const controller = new AbortController();
-			const settled = Promise.withResolvers<void>();
-			const operation: NativeCommandOperation = {
-				controller,
-				settled: settled.promise,
-				background: new Set(),
-				completed: false,
-			};
-			state.operations.add(operation);
-			try {
-				if (state.hostStop) return true;
-				const prepared = await state.prepareLoopGoalPrompt(typeof result === "string" ? result : text);
-				return controller.signal.aborted ? true : prepared === false ? result : prepared;
-			} finally {
-				operation.completed = true;
-				state.operations.delete(operation);
-				settled.resolve();
-			}
+			const transformed = commandState(session).transformLoopPrompt(typeof result === "string" ? result : text);
+			return transformed === false ? result : transformed;
 		});
 	return options ? withNativeWebGuiInteractionScope({ ...options, sessionId: session.sessionId }, run) : run();
 }
@@ -310,7 +291,6 @@ export async function cancelNativeWebGuiCommandInputs(session: AgentSession): Pr
 		return;
 	}
 	const operations = [...state.operations];
-	state.cancelLoopGoalPrompt();
 	for (const operation of operations) operation.controller.abort(new Error("Native command input stopped by user"));
 	nativeWebGuiQuestions(session).cancelPendingInteractions();
 	await Promise.all(operations.map(operation => operation.settled));

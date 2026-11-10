@@ -1,6 +1,6 @@
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 /* oxlint-disable eslint(max-lines) -- footer 聚合账户、主题、模式和快捷键菜单。 */
-import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useState, type ReactNode, type Ref } from "react";
 import { DesktopCommandIds } from "@zcode/shared";
 import {
   TID_TASK_SETTINGS_BUTTON,
@@ -45,6 +45,7 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   className,
   menuContent,
   menuDescription,
+  menuTriggerRef,
 }: {
   theme: Theme;
   onThemeChange: (value: string) => void;
@@ -54,6 +55,7 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   className?: string;
   menuContent?: ReactNode;
   menuDescription?: ReactNode;
+  menuTriggerRef?: Ref<HTMLButtonElement>;
 }) {
   const { intl } = useZCodeIntl();
   const platform = usePlatform();
@@ -109,6 +111,7 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
         <DropdownMenu open={profileMenuOpen} onOpenChange={setProfileMenuOpen}>
           <DropdownMenuTrigger asChild>
             <Button
+              ref={menuTriggerRef}
               type="button"
               variant="ghost"
               size={"lg"}

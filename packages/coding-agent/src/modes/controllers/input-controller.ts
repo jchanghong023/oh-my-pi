@@ -42,6 +42,7 @@ import { setCachedImageDimensions } from "@oh-my-pi/pi-tui/prompt/image-referenc
 import { createPromptActionAutocompleteProvider } from "@oh-my-pi/pi-tui/prompt/prompt-action-autocomplete";
 import { createModelMentionSource } from "@oh-my-pi/pi-tui/prompt/model-mention-autocomplete";
 import { createModelBrowserSource } from "../model-browser-source";
+import { renderLoopGoalPrompt } from "../loop-goal";
 import { formatQueueShorthand, parseQueueShorthand, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import { parseFileSlashInvocation, renderFileSlashCommand } from "../../extensibility/slash-commands";
@@ -1352,11 +1353,7 @@ export class InputController {
 				return;
 			}
 
-			if (text && this.ctx.loopGoalMode) {
-				const prompt = await this.ctx.prepareLoopGoalPrompt(text);
-				if (prompt === undefined) return;
-				text = prompt;
-			}
+			if (text && this.ctx.loopGoalMode) text = renderLoopGoalPrompt(text);
 
 			// `side: true` file commands answer as a /btw side question: off the
 			// transcript and runnable mid-turn, so they never steer the running work.

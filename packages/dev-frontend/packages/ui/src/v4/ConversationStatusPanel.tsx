@@ -131,6 +131,8 @@ export interface ConversationStatusPanelProps {
   /** 当前是否为粗指针手机视口。 */
   isMobileViewport?: boolean;
   layoutMode?: "none" | "auto" | "inline";
+  /** 原型嵌入会话：状态区参与布局，给正文和验收提示实际让位。 */
+  inFlow?: boolean;
   summaryPanelVariantOverride?: ChatViewSummaryPanelVariant | null;
   onVariantChange?: (variant: ChatViewSummaryPanelVariant | null) => void;
   terminalSectionOpen?: boolean;
@@ -1891,6 +1893,7 @@ function ConversationStatusPanelImpl({
   isWebRemoteControl = false,
   isMobileViewport = false,
   layoutMode = "none",
+  inFlow = false,
   summaryPanelVariantOverride,
   onVariantChange,
   terminalSectionOpen,
@@ -2002,14 +2005,15 @@ function ConversationStatusPanelImpl({
   return (
     <div
       className={cn(
-        "pointer-events-none absolute top-0 z-20 pt-4",
-        // 旧 ChatView 的 inline 面板直接钉在右侧，正文列通过独立 translate 让位。
-        // v4 若继续用 inset-x-0 + justify-end，会让面板容器宽铺满并改变宽屏下的横向对齐。
-        layoutMode === "inline"
+        inFlow
+          ? "relative flex shrink-0 justify-end px-4 py-2"
+          : "pointer-events-none absolute top-0 z-20 pt-4",
+        // 浮层布局的正文由 timeline 横向让位；原型使用文档流，不复用浮层定位。
+        !inFlow && (layoutMode === "inline"
           ? "right-4"
           : layoutMode === "auto"
             ? "inset-x-0 flex justify-end px-4 @min-[1280px]/conversation:left-auto @min-[1280px]/conversation:right-4 @min-[1280px]/conversation:px-0"
-            : "inset-x-0 flex justify-end px-4",
+            : "inset-x-0 flex justify-end px-4"),
         className,
       )}
     >

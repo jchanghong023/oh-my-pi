@@ -1,3 +1,4 @@
+import type { RefObject } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -13,11 +14,11 @@ const steps = [
   { title: "完成归档", titleEn: "Complete and archive", description: "最终修复和归档通过人工 PR 评审、合并并核验后，整个 IR 完成；需求或方案变化需重新提案。", descriptionEn: "The final fixes and archive PR is reviewed and merged by a person, then verified by the platform. This completes the IR. Changes to requirements or design need a new proposal." },
 ];
 
-export function DevWorkflowHelp({ open, onOpenChange }: { open: boolean; onOpenChange(open: boolean): void }) {
+export function DevWorkflowHelp({ open, onOpenChange, returnFocusRef }: { open: boolean; onOpenChange(open: boolean): void; returnFocusRef?: RefObject<HTMLButtonElement | null> }) {
   const { locale } = useZCodeIntl();
   const zh = locale === "zh-CN";
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-h-[85dvh] max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0" data-testid="dev-workflow-help">
+    <DialogContent onCloseAutoFocus={event => { if (returnFocusRef?.current) { event.preventDefault(); returnFocusRef.current.focus(); } }} className="max-h-[85dvh] max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0" data-testid="dev-workflow-help">
       <DialogHeader className="px-6 pt-6 pb-4 pr-14">
         <DialogTitle>{zh ? "业务流程帮助" : "Workflow help"}</DialogTitle>
         <DialogDescription>{zh ? "一项需求，从讨论到完成。IR 是整体需求，SR 是其中可分别开发的具体需求；PR 是交给人工评审、合并的申请。" : "From an idea to completion. An IR is the overall requirement, an SR is a specific deliverable within it, and a PR is a request for human review and merge."}</DialogDescription>

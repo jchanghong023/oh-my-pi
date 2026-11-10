@@ -10,7 +10,7 @@ import { toast } from "@/components/ui/toast.js";
 import { useOptionalPlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { logger } from "@/logger.js";
-import { ImagePreviewSurface } from "@/image-preview-editor/index.js";
+import { ImagePreviewSurface, type ImagePreviewLeaveGuard } from "@/image-preview-editor/index.js";
 
 export interface ImagePreviewDialogItem {
   alt: string;
@@ -172,8 +172,9 @@ export async function downloadImagePreview(
       suggestedName: imageDownloadFilename(item),
     });
     if (result.canceled) return { kind: "canceled" };
-    if (!result.success || !result.path) throw new Error(result.error || "save_failed");
-    return { kind: "saved", path: result.path };
+    // Web 保存端口成功派发后没有本地路径；不能在已下载后误报失败或再次保存。
+    if (!result.success) throw new Error(result.error || "save_failed");
+    return result.path ? { kind: "saved", path: result.path } : { kind: "started" };
   }
   let blob: Blob;
   try {
@@ -193,8 +194,8 @@ export async function downloadImagePreview(
   if (saveFile) {
     const result = await saveFile({ data: await blob.arrayBuffer(), suggestedName: filename });
     if (result.canceled) return { kind: "canceled" };
-    if (!result.success || !result.path) throw new Error(result.error || "save_failed");
-    return { kind: "saved", path: result.path };
+    if (!result.success) throw new Error(result.error || "save_failed");
+    return result.path ? { kind: "saved", path: result.path } : { kind: "started" };
   }
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -203,7 +204,7 @@ export async function downloadImagePreview(
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(objectUrl);
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 40_000);
   return { kind: "started" };
 }
 
@@ -224,8 +225,20 @@ export function ImagePreviewDialog({
   onOpenChange: (open: boolean) => void;
   open: boolean;
 }) {
-  const { intl } = useZCodeIntl();
+  const { intl, locale } = useZCodeIntl();
   const platform = useOptionalPlatform();
+  const leaveGuardRef = useRef<ImagePreviewLeaveGuard>(null);
+  const requestLeave = (leave: () => void) => {
+    if (leaveGuardRef.current) leaveGuardRef.current.requestLeave(leave);
+    else leave();
+  };
+  const requestOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) onOpenChange(true);
+    else requestLeave(() => onOpenChange(false));
+  };
+  const downloadOriginalLabel = locale.startsWith("zh")
+    ? "下载原图（不含当前标注）"
+    : "Download original (without current annotations)";
   const [activeIndex, setActiveIndex] = useState(initialIndex);
   const [isDownloading, setIsDownloading] = useState(false);
   const [videoState, setVideoState] = useState<"loading" | "ready" | "unsupported">("loading");
@@ -237,8 +250,10 @@ export function ImagePreviewDialog({
   const navigate = (direction: -1 | 1) => {
     if (items.length <= 1) return;
     const next = (activeIndex + direction + items.length) % items.length;
-    setActiveIndex(next);
-    onActiveIndexChange?.(next);
+    requestLeave(() => {
+      setActiveIndex(next);
+      onActiveIndexChange?.(next);
+    });
   };
 
   useEffect(() => {
@@ -297,14 +312,14 @@ export function ImagePreviewDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={requestOpenChange}>
       <DialogContent
         aria-describedby={undefined}
         // Radix modal 会禁用 body 指针事件；预览层需显式恢复命中并退出 Electron 拖拽区。
         className="pointer-events-auto h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-none place-items-center gap-0 overflow-hidden border-0 bg-transparent p-10 shadow-none [app-region:no-drag] sm:h-[calc(100dvh-2rem)] sm:w-[calc(100vw-2rem)] platform-linux-desktop:h-[calc(100dvh-4rem)]"
         onClick={(event) => {
           // 透明内容层覆盖遮罩；只把真实空白点击当关闭，图片与控件不冒充遮罩。
-          if (event.target === event.currentTarget) onOpenChange(false);
+          if (event.target === event.currentTarget) requestOpenChange(false);
         }}
         data-testid={dialogTestId}
         showCloseButton={false}
@@ -316,14 +331,16 @@ export function ImagePreviewDialog({
           {!activeItemIsVideo ? (
             <Button
               type="button"
-              aria-label={intl.formatMessage({ id: "markdownImage.download" })}
+              aria-label={downloadOriginalLabel}
+              title={downloadOriginalLabel}
               className="rounded-full border border-border bg-background text-foreground shadow-md hover:bg-background/80"
               disabled={!activeItem?.src || isDownloading}
               onClick={downloadActiveImage}
-              size="icon-md"
+              size="sm"
               variant="ghost"
             >
               <DownloadIcon />
+              <span>{locale.startsWith("zh") ? "下载原图" : "Download original"}</span>
             </Button>
           ) : null}
           <DialogClose asChild>
@@ -425,7 +442,8 @@ export function ImagePreviewDialog({
               alt={activeItem.alt}
               filename={activeItem.filename}
               imageTestId={imageTestId}
-              onClose={() => onOpenChange(false)}
+              leaveGuardRef={leaveGuardRef}
+              onClose={() => requestOpenChange(false)}
               onSaved={() => onOpenChange(false)}
             />
           ) : null

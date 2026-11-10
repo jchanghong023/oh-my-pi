@@ -3904,7 +3904,7 @@ export function SessionPane({
       hasContent: statusPanelModel.hasContent,
       variant: statusPanelVariant,
     });
-  const statusPanelLayout = !shouldUseStatusPanelInlineLayout
+  const statusPanelLayout = dev || !shouldUseStatusPanelInlineLayout
     ? "none"
     : statusPanelVariant === "auto"
       ? "auto"
@@ -4338,6 +4338,7 @@ export function SessionPane({
               isWebRemoteControl={compactForRemoteControl}
               isMobileViewport={isMobileTextInputViewport}
               layoutMode={statusPanelLayout}
+              inFlow={Boolean(dev)}
               summaryPanelVariantOverride={effectiveSummaryPanelVariantOverride}
               onVariantChange={handleSummaryPanelVariantChange}
               terminalSectionOpen={terminalSectionOpen}

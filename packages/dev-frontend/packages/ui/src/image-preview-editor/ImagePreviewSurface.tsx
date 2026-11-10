@@ -1,7 +1,16 @@
 import { uuidv7 } from "@zcode/shared";
-import { useEffect, useEffectEvent, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useEffectEvent, useImperativeHandle, useRef, useState, type PointerEvent } from "react";
 import { MinusIcon, PlusIcon } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog.js";
 import { Input } from "@/components/ui/input.js";
 import { toast } from "@/components/ui/toast.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -32,8 +41,12 @@ export function ImagePreviewSurface({
   imageTestId,
   onSaved,
   onClose,
+  leaveGuardRef,
 }: ImagePreviewSurfaceProps) {
-  const { intl } = useZCodeIntl();
+  const { intl, locale } = useZCodeIntl();
+  const zh = locale.startsWith("zh");
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const pendingLeave = useRef<(() => void) | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null),
     surfaceRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null),
@@ -81,6 +94,17 @@ export function ImagePreviewSurface({
   const displayed = history.present.map((a) => (draft?.id === a.id ? draft : a));
   if (draft && !history.present.some((a) => a.id === draft.id)) displayed.push(draft);
   if (textDraft?.text?.trim()) displayed.push(textDraft);
+  useImperativeHandle(leaveGuardRef, () => ({
+    requestLeave(leave) {
+      if (savePending.current || confirmLeave) return;
+      if (displayed.length || history.past.length || history.future.length) {
+        pendingLeave.current = leave;
+        setConfirmLeave(true);
+      } else {
+        leave();
+      }
+    },
+  }));
   const commit = (annotations: Annotation[]) => setHistory((h) => updateHistory(h, annotations));
   const setCurrentDraft = (value: Annotation | null) => {
     draftRef.current = value;
@@ -154,7 +178,7 @@ export function ImagePreviewSurface({
   }, []);
   const keyboard = useEffectEvent((event: KeyboardEvent) => {
     if (
-      saving ||
+      saving || confirmLeave ||
       (event.target instanceof Element &&
         event.target.closest("input,textarea,[contenteditable=true]"))
     )
@@ -315,7 +339,11 @@ export function ImagePreviewSurface({
       );
       if (!alive.current) return;
       if (!target.append(file)) throw new Error("Composer rejected the image");
-      onSaved();
+      const leave = pendingLeave.current;
+      pendingLeave.current = null;
+      setConfirmLeave(false);
+      if (leave) leave();
+      else onSaved();
     } catch (error) {
       if (!alive.current) return;
       logger.warn("[ImagePreviewDialog] 标注图片保存失败", {
@@ -329,6 +357,34 @@ export function ImagePreviewSurface({
   };
   return (
     <>
+      <AlertDialog open={confirmLeave} onOpenChange={(nextOpen) => {
+        if (savePending.current) return;
+        setConfirmLeave(nextOpen);
+        if (!nextOpen) pendingLeave.current = null;
+      }}>
+        <AlertDialogContent data-testid="image-preview-unsaved-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{zh ? "保留未保存的标注？" : "Keep unsaved annotations?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {zh
+                ? "保存到对话会新增标注图片副本，不会发送消息。丢弃会清除本次标注及撤销历史；取消可继续编辑。下载原图不会保存标注。"
+                : "Save to chat adds an annotated copy without sending a message. Discard clears these annotations and undo history; cancel continues editing. Downloading the original does not save annotations."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>{intl.formatMessage({ id: "common.cancel" })}</AlertDialogCancel>
+            <Button variant="destructive" disabled={saving} onClick={() => {
+              const leave = pendingLeave.current;
+              pendingLeave.current = null;
+              setConfirmLeave(false);
+              leave?.();
+            }}>{zh ? "丢弃标注" : "Discard annotations"}</Button>
+            <Button disabled={saving || displayed.length === 0} onClick={() => void save()}>
+              {intl.formatMessage({ id: saving ? "imageEditor.saving" : "imageEditor.save" })}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div
         className="absolute inset-x-4 bottom-28 top-20 overflow-hidden sm:inset-x-20 sm:bottom-16"
         data-image-preview-viewport=""

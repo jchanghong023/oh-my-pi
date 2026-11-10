@@ -340,7 +340,7 @@ import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
 import { imageReferenceHyperlink, setImageBlobWriter } from "@oh-my-pi/pi-tui/prompt/image-references";
 import { describeLoopCondition, evaluateLoopCondition, type LoopConditionVerdict } from "./loop-condition";
-import { isLoopGoalComplete, renderLoopGoalPrompt } from "./loop-goal";
+import { isLoopGoalComplete } from "./loop-goal";
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
@@ -1444,7 +1444,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#loopConditionAbort: AbortController | undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
 	#loopAutoSubmitGeneration = 0;
-	#loopGoalPreparation: number | undefined;
 	#loopIntervalMs: number | undefined;
 	#pendingLoopIterations = 0;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
@@ -3418,7 +3417,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#scheduleLoopAutoSubmit(): void {
-		if (this.loopGoalMode && this.#loopGoalPreparation === this.#loopAutoSubmitGeneration) return;
 		this.#cancelLoopAutoSubmit();
 		if (this.isDevWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
@@ -3427,7 +3425,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		const prompt = this.loopPrompt;
-		const loopAction = this.loopGoalMode ? "prompt" : cfgLoopMode.get(settings);
+		const loopAction = cfgLoopMode.get(settings);
 		this.#deferLoopAutoSubmit(() => {
 			void this.#runLoopIteration(loopAction, prompt);
 		}, this.#loopIntervalMs ?? 800);
@@ -3689,9 +3687,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#syncLoopModeStatus();
 
-		if (this.loopGoalMode) {
-			await this.#compactLoopGoalContext();
-		} else if (action === "compact") {
+		if (action === "compact") {
 			await this.handleCompactCommand();
 		} else if (action === "reset") {
 			await this.handleClearCommand();
@@ -3785,36 +3781,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loopPrompt = prompt;
 		this.loopModePaused = false;
 		this.#syncLoopModeStatus();
-	}
-
-	async #compactLoopGoalContext(): Promise<void> {
-		if ((this.session.getContextUsage()?.percent ?? 0) > 50) await this.handleCompactCommand();
-	}
-
-	async prepareLoopGoalPrompt(objective: string): Promise<string | undefined> {
-		if (!this.loopGoalMode) return objective;
-		const prompt = renderLoopGoalPrompt(objective);
-		const owner = this.session;
-		this.#pendingLoopIterations++;
-		this.setLoopPrompt(prompt);
-		const generation = this.#loopAutoSubmitGeneration;
-		this.#loopGoalPreparation = generation;
-		const current = () =>
-			this.session === owner &&
-			this.loopGoalMode &&
-			this.loopModeEnabled &&
-			this.loopPrompt === prompt &&
-			this.#loopAutoSubmitGeneration === generation;
-		try {
-			if (this.#isAutoSubmitBlocked()) await owner.waitForIdle();
-			if (!current()) return undefined;
-			await this.#compactLoopGoalContext();
-			return current() ? prompt : undefined;
-		} finally {
-			if (this.#loopGoalPreparation === generation) this.#loopGoalPreparation = undefined;
-			this.#pendingLoopIterations--;
-			this.syncIdleMaintenanceView();
-		}
 	}
 
 	/**

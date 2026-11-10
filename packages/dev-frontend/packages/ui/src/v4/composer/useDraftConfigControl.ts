@@ -209,6 +209,7 @@ export function useDraftConfigControl(params: {
   // New Task 可以复用同一个 pane；无文字时必须重新取 Recent，不能只清磁盘留旧内存。
   const scopeKey = JSON.stringify([
     workspaceKey,
+    clientNamespace,
     scopeId,
     draftFocusVersion,
     sessionId === null ? composerScopeKey(rootScope) : null,
@@ -643,6 +644,9 @@ export function useDraftConfigControl(params: {
     let active = true;
     return (content: Pick<V4ComposerDraft, "text" | "editorStateJson" | "mention">) => {
       if (!active) return;
+      // A₁→B→A₂：A₂ 已接管同一存储地址时，A₁ 的迟到收口不得覆盖新草稿。
+      if (stateRef.current.scopeKey === target.scopeKey &&
+          stateRef.current.incarnation !== target.incarnation) return;
       active = false;
       const draft = {
         ...target.baseDraft,
@@ -653,8 +657,16 @@ export function useDraftConfigControl(params: {
       target.baseDraft = draft;
       bumpScopeContentRevision(target);
       target.persist(draft);
+      // 只读会卸载 Composer，但 owner 仍存活。保留同一 incarnation 的正文，
+      // 避免重新挂载用 owner 的旧空正文覆盖已落盘草稿。
+      if (stateRef.current.incarnation === target.incarnation) {
+        const nextState = { ...stateRef.current, draft };
+        stateRef.current = nextState;
+        if (mountedRef.current) setStoredState(nextState);
+      }
       const pending = stagedContentRef.current;
-      if (pending?.scopeKey === target.scopeKey) stagedContentRef.current = null;
+      if (pending?.scopeKey === target.scopeKey && pending.incarnation === target.incarnation)
+        stagedContentRef.current = null;
     };
   }, [bumpScopeContentRevision, scopePersistenceTarget]);
   const captureComposerSubmissionDraftTransaction = useCallback(
@@ -823,6 +835,7 @@ export function useDraftConfigControl(params: {
         workspaceIdentity,
         targetSessionId,
         draftForPromotion,
+        rootScope,
       );
       if (!written) return false;
       const staged = stagedContentRef.current;

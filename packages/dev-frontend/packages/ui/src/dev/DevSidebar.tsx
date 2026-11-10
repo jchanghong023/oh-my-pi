@@ -1,7 +1,7 @@
 import { useDevDataSource } from "./data-source.js";
 import { DevWorkflowHelp } from "./DevWorkflowHelp.js";
 import { IR_ACCEPTANCE_LABELS, irAcceptanceVersionBlocker } from "./domain.js";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CalendarClock, Plus, MessageCirclePlus } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Badge } from "@/components/ui/badge.js";
@@ -32,6 +32,7 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 	const [preferences, setPreferences] = useState(() => readSidebarPreferences(scope));
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [helpOpen, setHelpOpen] = useState(false);
+	const helpReturnFocusRef = useRef<HTMLButtonElement>(null);
 	const [searchScope, setSearchScope] = useState<"proposals" | "formal">("formal");
 	const openSettings = useTabStore(state => state.openSettingsTab);
 	const theme = useZCodeStore(state => state.theme);
@@ -107,8 +108,8 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 				<DevRequirementList open={preferences.proposalSectionOpen} onOpenChange={proposalSectionOpen => updatePreferences({ proposalSectionOpen })} title="需求提案" groups={allDrafts} proposal expandedIrIds={preferences.expandedIrIds} onExpandedChange={expandedIrIds => updatePreferences({ expandedIrIds })} onSearch={() => { setSearchScope("proposals"); setSearchOpen(true); }} onNavigate={onNavigate} automationsActive={automationsActive} />
 			</div>
 			<DevRequirementSearch scope={searchScope} open={searchOpen} onOpenChange={setSearchOpen} query={preferences.query} onQueryChange={query => updatePreferences({ query })} onNavigate={onNavigate} />
-			<WorkspaceSidebarFooter className="border-t border-border/50 px-4 pt-2 pb-3" menuContent={<DevProjectReleaseMenu onManage={manageProjects} onHelp={() => setHelpOpen(true)} />} menuDescription={<span className="flex min-w-0 flex-col text-ui-sm text-foreground-subtle" data-testid="project-release-context"><span className="truncate" title={project?.name}>{project?.name ?? "请选择项目"}</span><span className="truncate" title={selectedRelease?.title}>Release · {selectedRelease?.title ?? "尚未选择"}</span></span>} theme={theme} onThemeChange={value => { if (value === "system" || value === "zai-dark" || value === "zai-light") setTheme(value); }} onSettingsButtonClick={openSettings} />
-			<DevWorkflowHelp open={helpOpen} onOpenChange={setHelpOpen} />
+			<WorkspaceSidebarFooter menuTriggerRef={helpReturnFocusRef} className="border-t border-border/50 px-4 pt-2 pb-3" menuContent={<DevProjectReleaseMenu onManage={manageProjects} onHelp={() => setHelpOpen(true)} />} menuDescription={<span className="flex min-w-0 flex-col text-ui-sm text-foreground-subtle" data-testid="project-release-context"><span className="truncate" title={project?.name}>{project?.name ?? "请选择项目"}</span><span className="truncate" title={selectedRelease?.title}>Release · {selectedRelease?.title ?? "尚未选择"}</span></span>} theme={theme} onThemeChange={value => { if (value === "system" || value === "zai-dark" || value === "zai-light") setTheme(value); }} onSettingsButtonClick={openSettings} />
+			<DevWorkflowHelp open={helpOpen} onOpenChange={setHelpOpen} returnFocusRef={helpReturnFocusRef} />
 		</nav>
 	);
 }

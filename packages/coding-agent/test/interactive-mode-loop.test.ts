@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -831,61 +830,57 @@ describe("InteractiveMode loop auto-submit", () => {
 	});
 
 	describe("loopgoal", () => {
-		it("compacts before the first goal turn, retains its literal target, and preserves interval counts", async () => {
-			vi.useFakeTimers();
-			cfgLoopMode.set(settings, "reset");
-			new InputController(mode).setupEditorSubmitHandler();
-			let percent = 51;
-			vi.spyOn(session, "getContextUsage").mockImplementation(() => ({
-				tokens: percent * 100,
-				contextWindow: 10_000,
-				percent,
-			}));
-			const resolved: SubmittedUserInput[] = [];
-			const compact = vi.spyOn(mode, "handleCompactCommand").mockImplementation(async () => {
+		it.each(["prompt", "compact", "reset"] as const)(
+			"uses the ordinary %s policy only between rounds, with the same interval and count",
+			async action => {
+				vi.useFakeTimers();
+				cfgLoopMode.set(settings, action);
+				new InputController(mode).setupEditorSubmitHandler();
+				vi.spyOn(session, "getContextUsage").mockReturnValue({
+					tokens: 9000,
+					contextWindow: 10_000,
+					percent: 90,
+				});
+				const resolved: SubmittedUserInput[] = [];
+				const compact = vi.spyOn(mode, "handleCompactCommand").mockImplementation(async () => {
+					expect(resolved).toHaveLength(0);
+					return "ok";
+				});
+				const clear = vi.spyOn(mode, "handleClearCommand").mockImplementation(async () => {
+					expect(resolved).toHaveLength(0);
+				});
+				pendingInput = mode.getUserInput();
+				void pendingInput.then(input => resolved.push(input));
+				const target = "修复 <parser> & 保留 {{literal}}";
+				await mode.editor.onSubmit?.(`/loopgoal 2 1s ${target}`);
+				await flushMicrotasks();
+				expect(resolved).toHaveLength(1);
+				expect(resolved[0].text).toContain(target);
+				expect(resolved[0].text).not.toBe(target);
+				expect(compact).not.toHaveBeenCalled();
+				expect(clear).not.toHaveBeenCalled();
+				expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 2, remaining: 1 });
+				const first = resolved[0].text;
+				mode.cancelPendingSubmission();
+				resolved.length = 0;
+				pendingInput = mode.getUserInput();
+				void pendingInput.then(input => resolved.push(input));
+				vi.advanceTimersByTime(999);
+				await flushMicrotasks();
 				expect(resolved).toHaveLength(0);
-				percent = 50;
-				return "ok";
-			});
-			const clear = vi.spyOn(mode, "handleClearCommand");
-			pendingInput = mode.getUserInput();
-			void pendingInput.then(input => resolved.push(input));
-			const target = "修复 <parser> & 保留 {{literal}}";
-			await mode.editor.onSubmit?.(`/loopgoal 3 1s ${target}`);
-			await flushMicrotasks();
-			expect(compact).toHaveBeenCalledTimes(1);
-			expect(resolved).toHaveLength(1);
-			expect(resolved[0].text).toContain(target);
-			expect(resolved[0].text).not.toBe(target);
-			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
-			const first = resolved[0].text;
-			mode.cancelPendingSubmission();
-			resolved.length = 0;
-			pendingInput = mode.getUserInput();
-			void pendingInput.then(input => resolved.push(input));
-			vi.advanceTimersByTime(999);
-			await flushMicrotasks();
-			expect(resolved).toHaveLength(0);
-			vi.advanceTimersByTime(1);
-			expect((await pendingInput).text).toBe(first);
-			expect(compact).toHaveBeenCalledTimes(1);
-			mode.cancelPendingSubmission();
-			resolved.length = 0;
-			percent = 51;
-			pendingInput = mode.getUserInput();
-			void pendingInput.then(input => resolved.push(input));
-			vi.advanceTimersByTime(1000);
-			expect((await pendingInput).text).toBe(first);
-			expect(compact).toHaveBeenCalledTimes(2);
-			expect(clear).not.toHaveBeenCalled();
-			mode.cancelPendingSubmission();
-			pendingInput = mode.getUserInput();
-			expect(mode.loopModeEnabled).toBe(false);
-		});
+				vi.advanceTimersByTime(1);
+				expect((await pendingInput).text).toBe(first);
+				expect(compact).toHaveBeenCalledTimes(action === "compact" ? 1 : 0);
+				expect(clear).toHaveBeenCalledTimes(action === "reset" ? 1 : 0);
+				mode.cancelPendingSubmission();
+				await flushMicrotasks();
+				pendingInput = mode.getUserInput();
+				expect(mode.loopModeEnabled).toBe(false);
+			},
+		);
 
 		it("wraps the next manual goal and a new goal after pause without changing legacy repeat counts", async () => {
 			new InputController(mode).setupEditorSubmitHandler();
-			vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
 			const resolved: SubmittedUserInput[] = [];
 			pendingInput = mode.getUserInput();
 			void pendingInput.then(input => resolved.push(input));
@@ -905,25 +900,6 @@ describe("InteractiveMode loop auto-submit", () => {
 			await flushMicrotasks();
 			expect(resolved[0].text).toContain("replacement objective");
 			expect(resolved[0].text).not.toContain("first objective");
-		});
-
-		it("does not submit a goal if the user pauses during first-turn compaction", async () => {
-			new InputController(mode).setupEditorSubmitHandler();
-			vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 51, contextWindow: 100, percent: 51 });
-			const compacting = Promise.withResolvers<CompactionOutcome>();
-			vi.spyOn(mode, "handleCompactCommand").mockImplementation(() => compacting.promise);
-			const resolved: SubmittedUserInput[] = [];
-			pendingInput = mode.getUserInput();
-			void pendingInput.then(input => resolved.push(input));
-			const submit = mode.editor.onSubmit?.("/loopgoal do not send after pause");
-			await flushMicrotasks();
-			mode.pauseLoop();
-			compacting.resolve("ok");
-			await submit;
-			await flushMicrotasks();
-			expect(resolved).toHaveLength(0);
-			expect(mode.loopModePaused).toBe(true);
-			expect(mode.loopPrompt).toBeUndefined();
 		});
 	});
 

@@ -349,7 +349,7 @@ Fork releases require explicit user authorization and use the manual CI workflow
 
 - [已批准需求](openspec/specs/)是 fork 的权威需求目录；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-product-scope/spec.md)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证门禁](openspec/specs/fork-verification-gates/spec.md)和[上游基线](openspec/specs/fork-upstream-baseline/spec.md)分别维护相关约束；适用的 fork 约束优先于上游通用约定。
 - [个人命令](openspec/specs/personal-commands/spec.md)维护 fork 内置斜杠命令及其行为边界。
-- `/loopgoal` 是独立于 `/loop` 的固定目标循环，复用 Loop 参数与调度；提示词位于 `packages/coding-agent/src/prompts/loop-goal.md`，共享语义位于 `packages/coding-agent/src/modes/loop-goal.ts`。首轮及续轮上下文超过 50% 时压缩，最终回复精确为 `无` 时停止；不接入 Goal 管理，保持原 `/loop` 行为，详见[个人命令](openspec/specs/personal-commands/spec.md)。
+- `/loopgoal` 复用 `/loop`，仅增加固定目标提示词包装及最终回复精确为 `无` 时停止；参数、上下文策略、首轮提交、调度与暂停恢复均沿用 Loop，不另设压缩阈值或准备流程，不接入 Goal 管理。提示词位于 `packages/coding-agent/src/prompts/loop-goal.md`，共享语义位于 `packages/coding-agent/src/modes/loop-goal.ts`，详见[个人命令](openspec/specs/personal-commands/spec.md)。
 - Dev 最新规则已由用户确认并同步到 [需求提案](openspec/specs/dev-requirement-intake/spec.md)、[工作台](openspec/specs/dev-browser-workbench/spec.md)及[原生编排](openspec/specs/spec-driven-orchestration/spec.md)；完整说明见 [Dev 流程](docs-zh-CN/spec-driven-orchestration.md)。同仓库单 IR、默认最多两个依赖就绪 SR 并行，首个 SR 启动冻结；SR 代码／测试／规格同 PR，IR 验收后最终修复／归档 PR，归档不再同步规格。旧计划冲突条款不再适用；本次仅文档更新，未改原型与代码，不代表实现完成。其他待定变更不因此获批。
 - Dev 网页工作台 MUST 一次性完成替换，只处理新建需求；保留并复用原生 Agent 和底层能力，NEVER 保留旧 Dev 模式、兼容入口、双轨运行或旧流程迁移／恢复。
 - Dev MUST 是显式启用的独立功能模块；`/dev` 进入后当前 TUI 只接受再次 `/dev` 退出，NEVER 与网页并行执行普通命令或输入。退出 MUST 先结清 Dev 工作再恢复原普通会话，不取消需求或回滚 Git；关闭页面不退出。未开启时不启动 Dev 服务／任务或改写其状态；借用资源不得污染普通 OMP，共享接口只保留确实必要且默认不启用的能力，配置继续沿用原方式。

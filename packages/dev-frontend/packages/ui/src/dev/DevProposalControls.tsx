@@ -30,19 +30,19 @@ export function DevProposalControls({ group }: { group: DevRequirementGroup }) {
  return <div className="space-y-2" data-testid="proposal-controls">
   <nav aria-label="需求讨论阶段" className="flex gap-1">
    <Button size="sm" variant={viewing === "requirements" ? "secondary" : "ghost"} aria-pressed={viewing === "requirements"} onClick={() => dev.select({ ...dev.selection, discussionPhase: "requirements" })}>业务需求</Button>
-   <Button size="sm" variant={viewing === "solution" ? "secondary" : "ghost"} aria-pressed={viewing === "solution"} disabled={!group.developerHandoff} onClick={() => dev.select({ ...dev.selection, discussionPhase: "solution" })}>方案</Button>
+   <Button size="sm" variant={viewing === "solution" ? "secondary" : "ghost"} aria-pressed={viewing === "solution"} disabled={!accepted} onClick={() => dev.select({ ...dev.selection, discussionPhase: "solution" })}>方案</Button>
   </nav>
   <p className="text-ui-sm text-foreground-subtle">{PROPOSAL_STATUS_LABELS[group.status]} · 当前阶段：{phase === "requirements" ? "业务需求" : "方案"}{history ? " · 正在查看历史讨论，只读" : ""}</p>
   {!history && phase === "requirements" && group.status === "draft" && <DevRequirementDraft group={group} />}
   <DevRequirementReview group={group} readOnly={history} />
   {!history && phase === "requirements" && <div className="space-y-2">
    {group.returnFeedback && <div className="rounded-md border border-border p-2 text-ui-sm" data-testid="proposal-return-feedback"><p className="whitespace-pre-wrap break-words">开发反馈：{group.returnFeedback.reason}</p><p className="text-foreground-subtle">由 {group.returnFeedback.employeeId} 打回业务补充，旧方案已失效。</p></div>}
-   <Button size="sm" data-testid="proposal-submit-review" disabled={dev.pending || group.status !== "draft" || !!reviewBlocker} title={reviewBlocker} onClick={() => void dev.command({ type: "submitProposalReview", ...target })}>提交给开发</Button>
-   <p className="text-ui-sm text-foreground-subtle">当前版本业务需求评审通过后，交给开发人员完善方案；此时无需 design.md。</p>
+   <Button size="sm" data-testid="proposal-submit-review" disabled={dev.pending || group.status !== "draft" || !!reviewBlocker || Boolean(group.developerHandoff)} title={reviewBlocker} onClick={() => void dev.command({ type: "submitProposalReview", ...target })}>{group.developerHandoff ? "已交给开发，等待接手" : "提交给开发"}</Button>
+   {group.developerHandoff && !accepted && <Button size="sm" data-testid="proposal-accept" disabled={dev.pending || !!reviewBlocker} title={reviewBlocker} onClick={() => void dev.command({ type: "acceptProposal", ...target })}>接手方案评审</Button>}
+   <p className="text-ui-sm text-foreground-subtle">当前版本业务需求评审通过后，交给开发人员；明确接手后才进入方案阶段，此时无需 design.md。</p>
   </div>}
   {!history && phase === "solution" && <div className="space-y-2">
    <p className="text-ui-sm text-foreground-subtle">提交评审人：{group.developerHandoff?.employeeId} · {accepted ? `接手开发人：${accepted.employeeId}` : "尚未接手，等待开发人员处理"}</p>
-   {!accepted && group.status !== "requirements-pr" && <Button size="sm" data-testid="proposal-accept" disabled={dev.pending || !!reviewBlocker} title={reviewBlocker} onClick={() => void dev.command({ type: "acceptProposal", ...target })}>接手方案评审</Button>}
    <p className="text-ui-sm text-foreground-subtle">{accepted && !mine ? "当前由其他同事接手，可查看需求与方案。" : "接手开发人员在临时工作区完成 design.md；有业务卡点可打回补充。"}</p>
 
    <div className="flex flex-wrap gap-2">

@@ -5,6 +5,7 @@ import type {
   CSSProperties,
   PointerEvent as ReactPointerEvent,
   ReactNode,
+  RefObject,
   WheelEvent as ReactWheelEvent,
 } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -399,6 +400,7 @@ export type MarkdownTableProps = ComponentProps<"table"> & MarkdownTableNodeProp
 export function MarkdownTable({ className, children, node: _node, ...props }: MarkdownTableProps) {
   const { intl } = useZCodeIntl();
   const [previewOpen, setPreviewOpen] = useState(false);
+  const previewTriggerRef = useRef<HTMLButtonElement>(null);
   const [expandedScrollEnabled, setExpandedScrollEnabled] = useState(false);
   const [canToggleExpandedScroll, setCanToggleExpandedScroll] = useState(false);
   const [edgeShadowState, setEdgeShadowState] = useState<MarkdownTableEdgeShadowState>("none");
@@ -1200,7 +1202,7 @@ export function MarkdownTable({ className, children, node: _node, ...props }: Ma
         <MarkdownTableActionButton label={downloadLabel} onClick={handleDownloadCsv}>
           <DownloadIcon className="size-3.5" />
         </MarkdownTableActionButton>
-        <MarkdownTableActionButton label={previewLabel} onClick={() => setPreviewOpen(true)}>
+        <MarkdownTableActionButton buttonRef={previewTriggerRef} label={previewLabel} onClick={() => setPreviewOpen(true)}>
           <Maximize2Icon className="size-3.5" />
         </MarkdownTableActionButton>
         {canToggleExpandedScroll ? (
@@ -1297,7 +1299,7 @@ export function MarkdownTable({ className, children, node: _node, ...props }: Ma
         </div>
       </div>
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="flex max-h-[calc(100vh-2rem)] w-max max-w-[calc(100vw-2rem)] flex-col gap-3 overflow-hidden rounded-2xl p-4 sm:max-h-[calc(100vh-8rem)] sm:max-w-[calc(100vw-8rem)] md:min-w-[640px] lg:min-w-[720px]">
+        <DialogContent onCloseAutoFocus={event => { event.preventDefault(); previewTriggerRef.current?.focus(); }} className="flex max-h-[calc(100vh-2rem)] w-max max-w-[calc(100vw-2rem)] flex-col gap-3 overflow-hidden rounded-2xl p-4 sm:max-h-[calc(100vh-8rem)] sm:max-w-[calc(100vw-8rem)] md:min-w-[640px] lg:min-w-[720px]">
           <DialogHeader className="pr-8">
             <DialogTitle>{previewTitle}</DialogTitle>
             <DialogDescription>{previewDescription}</DialogDescription>
@@ -1350,14 +1352,16 @@ function MarkdownTableActionButton({
   children,
   label,
   onClick,
+  buttonRef,
 }: {
   children: ReactNode;
   label: string;
   onClick: () => void;
+  buttonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   return (
     <ControlHintTooltip title={label}>
-      <Button type="button" variant="ghost" size="icon-md" aria-label={label} onClick={onClick}>
+      <Button ref={buttonRef} type="button" variant="ghost" size="icon-md" aria-label={label} onClick={onClick}>
         {children}
       </Button>
     </ControlHintTooltip>

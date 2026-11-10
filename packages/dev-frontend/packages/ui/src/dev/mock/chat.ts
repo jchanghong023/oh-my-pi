@@ -4,7 +4,7 @@ import { FREE_CHAT_PREFIX, freeProjectId, readPrototypeFreeChat, readRecentFreeC
 import freeChatDiscussion from "./free-chat-discussion.md?raw";
 import freeChatPrompt from "./prompts/free-chat.md?raw";
 import type { IServiceAccessor, ZCodeAgentSessionTarget } from "@zcode/services";
-import type { ModelSelection, ZCodeConfigOption, ZCodeTaskMeta, ZCodeTaskSnapshot, ZCodeSessionStateSnapshot, ZCodeSessionInfo, ZCodeMessageWithParts } from "@zcode/shared";
+import type { ModelSelection, ZCodeConfigOption, ZCodeTaskMeta, ZCodeTaskSnapshot, ZCodeSessionStateSnapshot, ZCodeSessionInfo, ZCodeMessageWithParts, ZCodeWorkspaceTaskListChanged } from "@zcode/shared";
 import { ZCODE_PROTOCOL_NAME, ZCODE_PROTOCOL_VERSION } from "@zcode/shared";
 import {
   V4_WIRE_PROTOCOL_VERSION, commandPayloadSchemas,
@@ -109,6 +109,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
   const frames = createPrototypeEvent<ConversationTopicWireCandidate>();
   const indexFrames = createPrototypeEvent<SessionsIndexTopicWireCandidate>();
   const configFrames = createPrototypeEvent<WorkspaceConfigTopicWireCandidate>();
+  const workspaceEvents = createPrototypeEvent<ZCodeWorkspaceTaskListChanged>();
   const commandResults = new Map<string, CommandAck>();
   const indexSubscriptions = new Map<string, { root: string; identity?: string; ordinal: number }>();
   const workspaceSubscriptions = new Map<string, { root: string; ordinal: number }>();
@@ -235,6 +236,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     for (const sub of subscriptions.values()) if (sub.sessionId === value.meta.taskId && sub.workspacePath === value.meta.workspacePath && sub.workspaceIdentity === value.meta.workspaceIdentity) emit(sub);
     for (const [id, sub] of indexSubscriptions) if (sub.root === value.meta.workspacePath && sub.identity === value.meta.workspaceIdentity) emitIndex(id);
     if (value.meta.taskId.startsWith(FREE_CHAT_PREFIX)) updatePrototypeFreeChat({ ...value.meta, pinned: value.pinned, archived: value.archived }, { deleted: value.deleted, empty: value.snapshot.rows.window.length === 0 });
+    workspaceEvents.fire({ type: "workspace_task_list_changed", workspacePath: value.meta.workspacePath, workspaceIdentity: value.meta.workspaceIdentity, taskId: value.meta.taskId, reason: "task_meta_changed", taskMeta: { ...value.meta, pinned: value.pinned, archived: value.archived } });
   };
   const append = (value: LocalSession, content: string, commandId?: string, refs?: AttachmentRef[]) => {
     let generated: boolean | undefined;
@@ -315,7 +317,13 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     archiveTask: async params => { const value = ensure(params.taskId, params.workspacePath, params.workspaceIdentity); value.archived = true; changed(value); return { ...value.meta }; },
     unarchiveTask: async params => { const value = ensure(params.taskId, params.workspacePath, params.workspaceIdentity); value.archived = false; changed(value); return { ...value.meta }; },
     branchTaskFromPrompt: noRuntime,
-    onDynamicStreamEvent: () => silentPrototypeEvent(), onDynamicTaskTerminalOutcome: () => silentPrototypeEvent(), onDynamicTaskReady: () => silentPrototypeEvent(), onDynamicTaskEvent: () => silentPrototypeEvent(), onDynamicWorkspaceEvent: () => silentPrototypeEvent(), onError: silentPrototypeEvent(),
+    onDynamicStreamEvent: () => silentPrototypeEvent(), onDynamicTaskTerminalOutcome: () => silentPrototypeEvent(), onDynamicTaskReady: () => silentPrototypeEvent(), onDynamicTaskEvent: () => silentPrototypeEvent(),
+    onDynamicWorkspaceEvent: scope => listener => workspaceEvents.event(event => {
+      const workspacePath = typeof scope === "string" ? scope : scope.workspacePath;
+      const workspaceIdentity = typeof scope === "string" ? undefined : scope.workspaceIdentity;
+      if (event.workspacePath === workspacePath && event.workspaceIdentity === workspaceIdentity) listener(event);
+    }),
+    onError: silentPrototypeEvent(),
   };
   const agentService: IServiceAccessor["zcodeAgentService"] = {
     prepareStorage: async () => {}, getStorageStartupState: async () => null, onDynamicStorageStartupState: () => silentPrototypeEvent(),

@@ -2,6 +2,8 @@
 import { DevProjectSettings } from "@/dev/DevWorkbench.js";
 import { DevPersonalizationSettings } from "@/dev/DevPersonalizationSettings.js";
 import { DevSkillDesignSettings } from "@/dev/DevSkillDesignSettings.js";
+import { DevAgentModelSettings, type DevModelDraftActions } from "@/dev/DevAgentModelSettings.js";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog.js";
 import { useDev } from "@/dev/DevContext.js";
 import { ArrowLeft, type LucideIcon } from "lucide-react";
 import {
@@ -149,6 +151,13 @@ export function SettingsPage({
     writeLastSettingsSectionPreference(visibleInitialSection);
     return visibleInitialSection;
   });
+  const [modelDraftActions, setModelDraftActions] = useState<DevModelDraftActions | null>(null);
+  const [pendingNavigation, setPendingNavigation] = useState<(() => void) | null>(null);
+  const requestNavigation = useCallback((navigate: () => void) => {
+    if (modelDraftActions) setPendingNavigation(() => navigate);
+    else navigate();
+  }, [modelDraftActions]);
+  const handleBack = useCallback(() => requestNavigation(() => onBack?.()), [requestNavigation, onBack]);
   const [pluginScopeKey, setPluginScopeKey] = useState(() =>
     consumePendingSettingsPluginScopeKey(),
   );
@@ -172,10 +181,12 @@ export function SettingsPage({
   const setActiveSettingsSection = useCallback(
     (section: SettingsSectionId, fallbackSection: SettingsSectionId = activeSection) => {
       const resolvedSection = resolveSettingsSection(section, fallbackSection);
-      setActiveSection(resolvedSection);
-      writeLastSettingsSectionPreference(resolvedSection);
+      requestNavigation(() => {
+        setActiveSection(resolvedSection);
+        writeLastSettingsSectionPreference(resolvedSection);
+      });
     },
-    [activeSection],
+    [activeSection, requestNavigation],
   );
   const handleOpenModelProviderSettings = useCallback(() => {
     setActiveSettingsSection("modelProvider");
@@ -372,7 +383,7 @@ export function SettingsPage({
                       })}
                       className="m-1 w-[calc(100%-0.5rem)] justify-start gap-2 rounded-xl bg-surface px-1.5 text-remote-foreground-muted hover:bg-surface-hover hover:text-foreground max-lg:m-1 max-lg:size-10 max-lg:justify-center max-lg:px-0"
                       onClick={() => {
-                        onBack?.();
+                        handleBack();
                       }}
                     >
                       <ArrowLeft className="size-4" />
@@ -452,7 +463,7 @@ export function SettingsPage({
                 <WorkspaceSidebarFooter
                   theme={theme}
                   onThemeChange={handleFooterThemeChange}
-                  onSettingsButtonClick={onBack}
+                  onSettingsButtonClick={handleBack}
                   settingsButtonMode="back"
                 />
               </div>
@@ -548,6 +559,7 @@ export function SettingsPage({
                           ) : activeSection === "modelProvider" ? (
                             <ServiceProvider services={localHostServices}>
                               {/* 模型配置属于本机全局事实源；激活远端 workspace 时也不能注入远端 Host。 */}
+                              {dev ? <DevAgentModelSettings onDraftActionsChange={setModelDraftActions} /> :
                               <ModelProviderSection
                                 workspacePath={activeWorkspacePath ?? captionWorkspacePath ?? ""}
                                 connectivityWorkspacePath={
@@ -558,7 +570,7 @@ export function SettingsPage({
                                 onConsumePendingModelProviderTarget={() =>
                                   setPendingModelProviderTarget(undefined)
                                 }
-                              />
+                              />}
                             </ServiceProvider>
                           ) : activeSection === "personalization" ? (
                             dev ? <DevPersonalizationSettings /> : isDesktop || nativeHostAvailable ? (
@@ -594,6 +606,7 @@ export function SettingsPage({
                                 workspacePath={activeWorkspacePath}
                                 workspaceIdentity={activeWorkspaceIdentity}
                                 onCreateTask={onCreateTask}
+                                onOpenProjectSettings={dev ? () => setActiveSettingsSection("general") : undefined}
                               />
                             </div>
                           ) : activeSection === "projects" ? (
@@ -646,6 +659,17 @@ export function SettingsPage({
                   </>
                 </div>
               </SettingsBreadcrumbProvider>
+              <Dialog open={pendingNavigation !== null} onOpenChange={open => { if (!open) setPendingNavigation(null); }}>
+                <DialogContent>
+                  <DialogHeader><DialogTitle>模型设置有未保存的更改</DialogTitle></DialogHeader>
+                  <p className="text-ui-base text-foreground-subtle">离开前保存配置，或明确丢弃本次修改。取消将继续编辑，不写入配置。</p>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setPendingNavigation(null)}>取消，继续编辑</Button>
+                    <Button variant="ghost" onClick={() => { modelDraftActions?.discard(); setPendingNavigation(null); pendingNavigation?.(); }}>丢弃并离开</Button>
+                    <Button onClick={() => { modelDraftActions?.save(); setPendingNavigation(null); pendingNavigation?.(); }}>保存并离开</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </div>
           </section>
         </div>

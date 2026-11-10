@@ -390,6 +390,7 @@ export function AutomationsSection({
 
   const [refreshing, setRefreshing] = useState(false);
   const [view, setView] = useState<AutomationsView>({ mode: "list" });
+  const [createdAutomation, setCreatedAutomation] = useState<ZCodeAutomation | null>(null);
   const [statusFilter, setStatusFilter] = useState<AutomationStatusFilter>(
     DEFAULT_AUTOMATION_STATUS_FILTER,
   );
@@ -635,6 +636,7 @@ export function AutomationsSection({
         );
         return false;
       }
+      setCreatedAutomation(created);
       setNow(Date.now());
       return true;
     },
@@ -879,6 +881,16 @@ export function AutomationsSection({
   return (
     <div data-automations-content className={cn(SETTINGS_FRAME_CONTENT_CLASSNAME, "flex flex-col")}>
       {pageHeader}
+      {createdAutomation && automations.some(item => item.automationId === createdAutomation.automationId) && (
+        <div role="status" className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-border p-3">
+          <span className="text-ui-sm">{locale.startsWith("zh") ? `已创建「${createdAutomation.title}」${dev ? "（内存演示）" : ""}。当前筛选保持不变。` : `Created “${createdAutomation.title}”. Your filter is unchanged.`}</span>
+          <Button size="sm" variant="outline" onClick={() => {
+            const target = automations.find(item => item.automationId === createdAutomation.automationId);
+            if (target) setView({ mode: "edit", automation: target });
+          }}>{locale.startsWith("zh") ? "查看新任务" : "View new task"}</Button>
+          <Button size="sm" variant="ghost" onClick={() => { setStatusFilter(DEFAULT_AUTOMATION_STATUS_FILTER); setCreatedAutomation(null); }}>{locale.startsWith("zh") ? "显示全部任务" : "Show all tasks"}</Button>
+        </div>
+      )}
 
       {hasAnyTasks ? (
         <div className="mt-8 flex items-center justify-end">

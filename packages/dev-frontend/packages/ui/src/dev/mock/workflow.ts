@@ -297,7 +297,7 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
     if (blocker) throw new Error(blocker);
   }
   if (action.type === "runRequirementsReview" && targetProposal && !requirementsReviewInputs(targetProposal)) throw new Error("请先补齐 IR 与全部 SR 需求材料，不能对空提案生成通过记录。");
-  if (action.type === "acceptProposal" && (targetProposal?.proposalStage !== "solution" || !targetProposal.developerHandoff || targetProposal.status === "requirements-pr")) throw new Error("请先提交评审，再由开发人员接手当前轮次。");
+  if (action.type === "acceptProposal" && (targetProposal?.proposalStage !== "requirements" || !targetProposal.developerHandoff || targetProposal.status !== "draft")) throw new Error("请先交给开发，再由开发人员接手当前轮次。");
   if (action.type === "acceptProposal" && targetProposal?.developerAcceptance?.round === (targetProposal?.proposalRound ?? 1)) throw new Error("本轮提案已有接手开发人员，不能重复接手或覆盖他人的记录。");
   if (["generateProposalSolution", "returnProposal", "markRequirementsPrSubmitted"].includes(action.type) && (targetProposal?.developerAcceptance?.round !== (targetProposal?.proposalRound ?? 1) || targetProposal?.developerAcceptance?.employeeId !== getEmployeeId())) throw new Error("请先由当前工号明确接手本轮提案；其他同事可查看，不能代为生成方案、打回或提交 PR。");
   if (action.type === "runRequirementsReview" && targetProposal?.status === "requirements-pr") throw new Error("PR 已提交，本轮仅支持提交 PR 前的需求评审。");
@@ -396,21 +396,21 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       state.sessions = state.sessions.filter(item => item.irId !== irId || item.projectId !== projectId);
       operation.deletion = { version: 1, operationId: operation.operationId, deletedAt: createdAt, manualCloseNeeded: false };
       break;
-    case "submitProposalReview": {
-      currentGroup!.proposalStage = "solution";
+    case "submitProposalReview":
       currentGroup!.developerHandoff = { employeeId: getEmployeeId(), submittedAt: new Date().toISOString() };
       currentGroup!.developerAcceptance = undefined;
+      operation.type = `由 ${getEmployeeId()} 交给开发，保留业务需求阶段等待接手（原型）`;
+      break;
+    case "acceptProposal": {
+      currentGroup!.proposalStage = "solution";
+      currentGroup!.developerAcceptance = { employeeId: getEmployeeId(), acceptedAt: new Date().toISOString(), round: currentGroup!.proposalRound ?? 1 };
       if (!currentGroup!.sessions.some(item => item.phase === "solution" && item.round === (currentGroup!.proposalRound ?? 1))) {
         const session = sessionRef(projectId, currentGroup!.id, "solution", undefined, undefined, currentGroup!.proposalRound ?? 1);
         currentGroup!.sessions.push(session); state.sessions.push(session);
       }
-      operation.type = `由 ${getEmployeeId()} 提交评审，进入方案阶段等待开发接手（原型）`;
+      operation.type = `开发人员 ${getEmployeeId()} 接手本轮提案，进入方案阶段（原型）`;
       break;
     }
-    case "acceptProposal":
-      currentGroup!.developerAcceptance = { employeeId: getEmployeeId(), acceptedAt: new Date().toISOString(), round: currentGroup!.proposalRound ?? 1 };
-      operation.type = `开发人员 ${getEmployeeId()} 接手本轮提案（原型）`;
-      break;
     case "runRequirementsReview":
       if (currentGroup!.review) { currentGroup!.reviewHistory ??= []; currentGroup!.reviewHistory.push(structuredClone(currentGroup!.review)); }
       currentGroup!.revision += 1;

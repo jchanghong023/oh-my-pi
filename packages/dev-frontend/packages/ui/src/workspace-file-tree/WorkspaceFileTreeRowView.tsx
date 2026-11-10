@@ -231,6 +231,8 @@ export function WorkspaceFileTreeRowView({
       <div
         role="treeitem"
         data-testid={testId(TID_WORKSPACE_FILE_TREE_ROW, row.path)}
+        data-workspace-file-path={row.path}
+        aria-selected={selected}
         aria-expanded={isDirectory ? row.expanded : undefined}
         tabIndex={0}
         draggable={!isDeletedFile}

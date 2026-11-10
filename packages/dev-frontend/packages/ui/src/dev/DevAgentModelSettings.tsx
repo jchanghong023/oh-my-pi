@@ -1,12 +1,14 @@
 import { useDevDataSource } from "./data-source.js";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { SettingsGroupCard, SettingsRow } from "@/settings/SettingsPageParts.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { DevPersonalConfigScope } from "./DevPersonalConfigScope.js";
 
-export function DevAgentModelSettings() {
+export interface DevModelDraftActions { save(): void; discard(): void }
+
+export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActionsChange?: (actions: DevModelDraftActions | null) => void }) {
  const source = useDevDataSource();
  if (!source.models) return <p className="text-ui-sm text-foreground-subtle">当前数据源尚未接入此功能。</p>;
 	const { locale } = useZCodeIntl();
@@ -15,6 +17,13 @@ export function DevAgentModelSettings() {
 	const [draft, setDraft] = useState(source.models!.read);
 	const [message, setMessage] = useState("");
 	const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+	useEffect(() => {
+		onDraftActionsChange?.(dirty ? {
+			save: () => { source.models!.save(draft); setSaved(structuredClone(draft)); },
+			discard: () => { setDraft(structuredClone(saved)); setMessage(""); },
+		} : null);
+		return () => onDraftActionsChange?.(null);
+	}, [dirty, draft, saved, source, onDraftActionsChange]);
 	const modelName = (id: string) => source.models!.choices.find(model => model.id === id)?.name ?? id;
 	const updateAgent = (id: string, patch: { model?: string; reasoning?: string }) => {
 		setDraft(current => ({ ...current, agents: current.agents.map(agent => agent.id === id ? { ...agent, ...patch } : agent) }));

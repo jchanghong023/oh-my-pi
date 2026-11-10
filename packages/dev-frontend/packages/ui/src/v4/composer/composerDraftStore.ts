@@ -184,10 +184,13 @@ function draftStorageKey(
   scopeId: string,
   scope?: ComposerScope,
 ): string {
-  // 同目录可以属于多个项目；新建草稿按组织归属隔离，正式 session 仍按工作区隔离。
-  return scopeId === V4_DRAFT_SCOPE_ROOT && scope
-    ? `zcode-v4-composer-project-drafts:v1:${composerScopeKey(scope)}`
-    : getV4ComposerDraftStorageKey(path, identity);
+  // 原型会话也按查看人工号隔离；不能把 Root 的 namespace 只用于新建草稿。
+  if (scopeId === V4_DRAFT_SCOPE_ROOT && scope)
+    return `zcode-v4-composer-project-drafts:v1:${composerScopeKey(scope)}`;
+  const workspaceKey = getV4ComposerDraftStorageKey(path, identity);
+  return scope?.clientNamespace.startsWith("dev:")
+    ? `${workspaceKey}:client:${encodeURIComponent(scope.clientNamespace)}`
+    : workspaceKey;
 }
 export const V4_DRAFT_SCOPE_ROOT = "__draft__";
 const warnedStorageKeys = new Set<string>();

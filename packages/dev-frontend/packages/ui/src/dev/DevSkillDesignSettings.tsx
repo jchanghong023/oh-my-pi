@@ -14,6 +14,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { SessionPane } from "@/v4/SessionPane.js";
 import { V4PaneConversationProvider } from "@/v4/V4ConversationContext.js";
 import { useDev } from "./DevContext.js";
+import { useServices } from "@/hooks/useServices.js";
+import { bindRemoteWorkspaceIdentity, registerRemoteWorkspaceSession, unregisterRemoteWorkspaceSession } from "@/store/remoteWorkspaceSessionStore.js";
 
 interface SkillPreview { content: string; digest: string; name: string; draft: DevSkillDesignDraft }
 
@@ -28,8 +30,15 @@ export function DevSkillDesignSettings() {
 
 function SkillDesignEditor({ projectId, projectName, workspacePath, developmentRoot }: { projectId: string; projectName: string; workspacePath: string; developmentRoot?: string }) {
 	const source = useDevDataSource();
+	const services = useServices();
 	const sessionId = source.skillDesign!.session(projectId);
-	const scope = useMemo(() => ({ workspacePath, workspaceIdentity: source.skillDesign!.workspaceIdentity(projectId) }), [source, workspacePath, projectId]);
+	const scope = useMemo(() => ({ workspacePath, workspaceIdentity: `${source.skillDesign!.workspaceIdentity(projectId)}:skill-design` }), [source, workspacePath, projectId]);
+	useEffect(() => {
+		const registrationId = `dev-skill-designer:${source.clientId}:${crypto.randomUUID()}`;
+		registerRemoteWorkspaceSession({ sessionId: registrationId, workspacePath: scope.workspacePath, workspaceIdentity: scope.workspaceIdentity, services });
+		bindRemoteWorkspaceIdentity(scope.workspaceIdentity, registrationId);
+		return () => unregisterRemoteWorkspaceSession(registrationId);
+	}, [source, scope, services]);
 	const [draft, setDraft] = useState(() => source.skillDesign!.read(sessionId));
 	const [preview, setPreview] = useState<SkillPreview | null>(null);
 	const [tab, setTab] = useState("chat");
@@ -118,9 +127,9 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
 					<Button className="w-full" disabled={!canGenerate} onClick={generate}><Sparkles className="size-3.5" />{preview ? "重新生成预览" : "生成预览"}</Button>
 				</div>
 			</section>
-			<Tabs value={tab} onValueChange={setTab} className="min-h-0 min-w-0 overflow-hidden rounded-xl border border-border">
+			<Tabs value={tab} onValueChange={setTab} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border">
 				<div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2"><TabsList aria-label="技能设计工作区"><TabsTrigger value="chat"><MessageSquare className="size-3.5" />补充讨论</TabsTrigger><TabsTrigger value="preview"><FileCode2 className="size-3.5" />文件预览</TabsTrigger></TabsList>{preview && <span className="text-ui-sm text-foreground-subtle">{savedPath ? "已保存（演示）" : previewCurrent ? "预览已更新" : "预览待更新"}</span>}</div>
-				<TabsContent forceMount value="chat" className={tab === "chat" ? "flex min-h-0 flex-col" : "hidden"}>
+				<TabsContent forceMount value="chat" className={tab === "chat" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
 					<div className="relative min-h-0 flex-1" data-testid="skill-design-chat" onFocusCapture={() => setChatFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setChatFocused(false); }}>
 						<V4PaneConversationProvider scope={scope} sessionId={sessionId}><SessionPane paneId={`skill-designer-${projectId}`} sessionId={sessionId} rootSessionId={sessionId} workspacePath={scope.workspacePath} workspaceIdentity={scope.workspaceIdentity} embedded focused={chatFocused && tab === "chat"} /></V4PaneConversationProvider>
 					</div>
