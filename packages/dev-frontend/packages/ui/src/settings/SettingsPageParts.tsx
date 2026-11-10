@@ -30,7 +30,7 @@ export function ThemeSelect({
 }) {
   return (
     <Select value={value} onValueChange={(nextValue) => onValueChange(nextValue as BundledTheme)}>
-      <SelectTrigger size="lg" className="w-64 min-w-0 justify-between">
+      <SelectTrigger size="lg" className="w-full max-w-64 min-w-0 justify-between">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -126,7 +126,7 @@ export function SettingsRow({
           "grid items-center gap-4",
           controlLayout === "wide"
             ? "grid-cols-1 sm:grid-cols-[minmax(0,1fr)_280px]"
-            : "grid-cols-[minmax(0,1fr)_192px]",
+            : "grid-cols-1 sm:grid-cols-[minmax(0,1fr)_192px]",
         )}
       >
         <div className="min-w-0">

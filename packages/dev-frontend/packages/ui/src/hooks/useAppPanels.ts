@@ -71,6 +71,7 @@ import { clearSelectionSideChat } from "@/lib/selectionSideChatRuntime.js";
 import { clearConversationSelectionReferenceScope } from "@/lib/conversationSelectionReference.js";
 import { subscribeTaskLifecycle } from "@/lib/taskLifecycleEvents.js";
 import { useDev } from "@/dev/DevContext.js";
+import { useIsMobileCompactViewport } from "@/lib/mobileTextInput.js";
 
 
 export interface RecentClosedSidePaneTab {
@@ -102,6 +103,7 @@ export function useAppPanels(options: {
   const { zcodeSessionService } = useServices();
   const isOfficeMode = useIsOfficeMode();
   const isDev = useDev() !== null;
+  const isMobileCompactViewport = useIsMobileCompactViewport();
   const sidePaneMemoryKey = useMemo(
     () =>
       buildTaskSidePaneMemoryKey({
@@ -306,12 +308,16 @@ export function useAppPanels(options: {
     } else if (!initializedDevSidePaneScopesRef.current.has(scopeKey)) {
       initializedDevSidePaneScopesRef.current.add(scopeKey);
       handleOpenDevMaterialsSidePane();
+      // 手机首次进入会话时保留材料标签，但不让抽屉自动盖住聊天和输入。
+      // 后续显式打开仍使用同一面板；桌面继续默认显示材料。
+      if (isMobileCompactViewport) setIsSidePaneCollapsed(true);
     }
   }, [
     activeTaskId,
     activeWorkspaceKey,
     commitSidePaneState,
     handleOpenDevMaterialsSidePane,
+    isMobileCompactViewport,
     isDev,
     sidePaneOwnerId,
   ]);

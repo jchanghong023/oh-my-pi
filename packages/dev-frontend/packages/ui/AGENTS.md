@@ -4,8 +4,8 @@
 
 ## 设计与平台
 
-- 修改界面前读 [DESIGN.md](../../DESIGN.md)，遵守颜色、层级、尺寸、字体、圆角、组件复用、响应式、主题与国际化规则。插件商店另读 [CONTEXT.md](../../CONTEXT.md)。
-- 同时检查桌面和手机 Web；视觉验证使用 DESIGN 定义的当前深浅主题，并考虑不同语言长度。
+- 修改界面前读 [DESIGN.md](../../DESIGN.md)，遵守颜色、层级、尺寸、字体、圆角、组件复用、桌面窗口布局、主题与国际化规则。插件商店另读 [CONTEXT.md](../../CONTEXT.md)。
+- Dev 仅面向桌面浏览器：检查桌面窗口布局、深浅主题及不同语言长度，不要求手机布局、触屏交互或手机实机适配／验收。WebGUI 的手机适配按其原有要求处理，本轮不修改原 WebGUI。
 - 平台操作通过 `usePlatform()` / `IPlatformService`，不直接调用 `window.zcode`。平台实现通过注入隔离：Desktop 入口见 [desktopPlatform.ts](../desktop/src/renderer/src/desktopPlatform.ts)，Web 入口见 [main.tsx](../web/src/main.tsx)。
 
 ## 服务与状态
@@ -20,4 +20,4 @@
 
 - 日志统一使用 [src/logger.ts](src/logger.ts)，它同时输出控制台与本地文件；不直接使用 `console.log` 或 `window.zcode.log`。
 - 交互 bug 用日志或浏览器/CDP 执行证据定位；保留说明非显然根因的中文注释。
-- 交互变更按根验证矩阵维护 E2E；纯视觉变更按矩阵做桌面/手机及主题验证。相关 React 问题可按任务需要使用现有 React skill，不需要为纯文档改动加载它。
+- 交互变更按根验证矩阵维护 E2E；纯视觉变更按 Dev 范围做桌面窗口及主题验证，不将手机适配纳入 Dev 门禁。相关 React 问题可按任务需要使用现有 React skill，不需要为纯文档改动加载它。

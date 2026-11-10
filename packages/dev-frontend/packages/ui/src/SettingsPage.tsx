@@ -502,6 +502,7 @@ export function SettingsPage({
                       <div
                         className={cn(
                           SETTINGS_FRAME_CONTENT_CLASSNAME,
+                          activeSection === "skillDesign" && "max-w-none",
                           "flex flex-col gap-8",
                         )}
                       >

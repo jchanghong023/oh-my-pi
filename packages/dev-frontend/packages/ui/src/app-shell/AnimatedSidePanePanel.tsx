@@ -719,7 +719,7 @@ export function AnimatedSidePanePanel({
     .filter((itemId) => !isOfficeMode || itemId !== "review")
     .map((itemId) => openTabLauncherItemById[itemId]);
   const closeSidePaneButton =
-    isVisible && !mobileOverlay && onCloseSidePane ? (
+    isVisible && (!mobileOverlay || dev) && onCloseSidePane ? (
       <div className="flex shrink-0 items-center gap-0.5 [app-region:no-drag]">
         {fullViewToggle ? (
           <SidePaneFullViewToggleButton

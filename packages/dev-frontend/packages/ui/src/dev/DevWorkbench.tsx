@@ -1,15 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Download, Copy, Settings, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.js";
+import { SessionPane } from "@/v4/SessionPane.js";
+import { V4PaneConversationProvider } from "@/v4/V4ConversationContext.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import {
 	useDev,
 	DEV_STAGES,
 	DEV_STAGE_LABELS,
 } from "./DevContext.js";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover.js";
+import { MessageResponse } from "@/components/ai-elements/message.js";
+import { useZCodeStore } from "@/store/StoreProvider.js";
 import { DevPublishControls } from "./DevPublishControls.js";
 import { DevCollabProjection } from "./DevCollabProjection.js";
 import { DevDeleteRequirement } from "./DevDeleteRequirement.js";
@@ -116,8 +121,8 @@ export function DevStageHeader() {
 			<div className="flex flex-wrap items-center gap-2">
 				<strong>{sr?.title || group.title || "需求讨论"}</strong>
 				<span className="text-ui-sm text-foreground-subtle">
-					{sr?.stage
-						? `演示阶段：${DEV_STAGE_LABELS[sr.stage]}`
+					{sr
+						? sr.status === "completed" ? "已完成 · 历史只读" : sr.stage ? `当前阶段：${DEV_STAGE_LABELS[sr.stage]}` : "待开始开发"
 						: group.status === "frozen"
 							? "整组业务需求与拆分已冻结"
 							: group.status === "draft"
@@ -130,7 +135,7 @@ export function DevStageHeader() {
 											? "需求 PR 已登记，待核对合入"
 											: group.status}
 				</span>
-				<span className="text-ui-sm text-foreground-subtle">阶段性前端原型 · 样例数据，非真实执行或验收</span>
+				<span className="text-ui-sm text-foreground-subtle" title="阶段性前端原型，所有状态均为样例数据，不代表真实执行或验收。">原型 · 演示数据</span>
 				<DevCollabProjection />
 			</div>
 			{sr?.stage && (
@@ -257,18 +262,47 @@ export function DevStageHeader() {
 					</Button>
 				)}
 				<DevDeleteRequirement key="dev-delete-requirement" />
-				<DevPublishControls
-					key={`${group.id}:${sr?.id ?? "requirements"}:${sr?.round ?? 0}`}
-					group={group}
-					sr={sr}
-				/>
+				<Popover key={`${group.id}:${sr?.id ?? "requirements"}`}>
+					<PopoverTrigger asChild><Button size="sm" variant="ghost" data-testid="dev-flow-details">更多<ChevronDown className="size-3" /></Button></PopoverTrigger>
+					<PopoverContent align="end" className="max-h-[min(28rem,65dvh)] w-[min(28rem,calc(100vw-2rem))] space-y-3 overflow-y-auto" aria-label="流程详情">
+						<p className="text-ui-base font-medium">流程详情与操作记录</p>
+						<DevPublishControls
+							key={`${group.id}:${sr?.id ?? "requirements"}:${sr?.round ?? 0}`}
+							group={group}
+							sr={sr}
+						/>
+					{(sr?.worktree || group.worktree) && (
+						<p className="text-ui-sm text-foreground-subtle">
+							演示分支：{sr?.worktree?.branch ?? group.worktree?.branch} → {project?.defaultBranch}（不操作 Git）。
+							{prFact && <>示例 PR：{prFact.url}（未查询平台，不代表真实 PR）</>}
+						</p>
+					)}
+					<Collapsible data-testid="history">
+						<CollapsibleTrigger asChild>
+							<Button type="button" size="sm" variant="ghost">
+								<ChevronDown className="size-3" />
+								操作记录
+							</Button>
+						</CollapsibleTrigger>
+						<CollapsibleContent>
+						{view?.operations
+							.filter(item => item.irId === group.id && (!sr || item.srId === sr.id))
+							.map(item => (
+								<div key={item.operationId} className="text-ui-sm">
+									<span>
+										{item.type} · {item.status}
+									</span>
+									{item.steps.map((step, index) => (
+										<p key={index}>{step.detail}</p>
+									))}
+									{item.error && <p role="alert">{item.error}</p>}
+								</div>
+							))}
+						</CollapsibleContent>
+					</Collapsible>
+					</PopoverContent>
+				</Popover>
 			</div>
-			{(sr?.worktree || group.worktree) && (
-				<p className="text-ui-sm text-foreground-subtle">
-					演示分支：{sr?.worktree?.branch ?? group.worktree?.branch} → {project?.defaultBranch}（不操作 Git）。
-					{prFact && <>示例 PR：{prFact.url}（未查询平台，不代表真实 PR）</>}
-				</p>
-			)}
 			{canRegisterPr && (
 				<form
 					className="flex flex-wrap items-center gap-2"
@@ -310,50 +344,22 @@ export function DevStageHeader() {
 					{dev.error || view?.error}
 				</p>
 			)}
-			<Collapsible data-testid="history">
-				<CollapsibleTrigger asChild>
-					<Button type="button" size="sm" variant="ghost">
-						<ChevronDown className="size-3" />
-						操作记录
-					</Button>
-				</CollapsibleTrigger>
-				<CollapsibleContent>
-				{view?.operations
-					.filter(item => item.irId === group.id && (!sr || item.srId === sr.id))
-					.map(item => (
-						<div key={item.operationId} className="text-ui-sm">
-							<span>
-								{item.type} · {item.status}
-							</span>
-							{item.steps.map((step, index) => (
-								<p key={index}>{step.detail}</p>
-							))}
-							{item.error && <p role="alert">{item.error}</p>}
-						</div>
-					))}
-				</CollapsibleContent>
-			</Collapsible>
 		</header>
 	);
 }
 export function DevReadonlyOverview() {
 	const dev = useDev()!;
 	const sr = dev.view?.srs.find(item => item.id === dev.selection.srId && item.irId === dev.selection.irId);
-	return (
-		<div className="h-full overflow-y-auto p-6 text-ui-base">
-			<FileText className="mb-3 size-6 text-foreground-subtle" />
-			<p>
-				{sr
-					? sr.status === "completed"
-						? "该 SR 已完成，开发讨论只读。可在材料面板查看交付与历史记录。"
-						: "该 SR 尚未开始开发，当前仅可查看需求。整组需求冻结后，点击“开始开发”进入技术方案。"
-					: dev.view
-						? "所选 SR 当前不可用，请从导航选择已有需求。不会自动新建或替换历史会话。"
-						: "正在读取所选 SR…"}
-			</p>
-			<DevSrList />
-		</div>
-	);
+	const project = dev.view?.projects.find(item => item.id === dev.selection.projectId);
+	const scope = useMemo(() => ({ workspacePath: project?.root ?? "", workspaceIdentity: `dev-ui-prototype:${dev.selection.projectId}` }), [project?.root, dev.selection.projectId]);
+	const sessionId = sr?.status === "completed" ? sr.sessions.find(session => session.phase === "pr")?.sessionId ?? null : null;
+	const reason = sr?.status === "completed" ? "该 SR 已完成，历史讨论只读。" : "该 SR 尚未开始开发，请通过顶部“开始开发”进入技术方案。";
+	if (!sr || !project) return <div className="p-6 text-ui-base text-foreground-subtle">所选 SR 当前不可用，请从导航选择已有需求。</div>;
+	return <div className="relative flex h-full min-h-0 flex-1 flex-col" data-testid="dev-sr-readonly-chat">
+		<V4PaneConversationProvider key={sr.id} scope={scope} sessionId={sessionId}>
+			<SessionPane paneId={`dev-readonly-${sr.id}`} sessionId={sessionId} rootSessionId={sessionId ?? undefined} workspacePath={scope.workspacePath} workspaceIdentity={scope.workspaceIdentity} embedded readOnly readOnlyReason={reason} />
+		</V4PaneConversationProvider>
+	</div>;
 }
 export function DevSrList() {
 	const dev = useDev()!;
@@ -379,6 +385,7 @@ export function DevSrList() {
 }
 export function DevMaterialsPane() {
 	const dev = useDev()!;
+	const theme = useZCodeStore(state => state.theme);
 	const { selection, view } = dev;
 	const [path, setPath] = useState("");
 	const materials =
@@ -566,9 +573,7 @@ export function DevMaterialsPane() {
 								材料已失效，需要重新生成或验证。以下仅供历史查看。
 							</p>
 						)}
-						<pre className="whitespace-pre-wrap break-words font-mono text-ui-base">
-							{material?.content ?? "样例材料没有正文。"}
-						</pre>
+						<MessageResponse className="min-w-0 break-words" theme={theme} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "样例材料没有正文。"}</MessageResponse>
 					</>
 				)}
 			</div>

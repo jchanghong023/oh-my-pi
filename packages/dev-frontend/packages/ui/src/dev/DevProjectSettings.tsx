@@ -72,13 +72,14 @@ export function DevProjectSettings() {
 						{view.releases.length ? (
 							<ul className="divide-y divide-border">
 								{view.releases.map(release => {
-									const groups = [...view.groups, ...view.drafts].filter(group => group.releaseId === release.id);
+									const groups = view.groups.filter(group => group.releaseId === release.id);
+									const draftCount = view.drafts.filter(group => group.releaseId === release.id).length;
 									const srCount = groups.reduce((count, group) => count + group.srIds.length, 0);
 									return (
 										<li key={release.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
 											<div className="min-w-0 space-y-1">
 												<p className="break-words text-ui-base font-medium">{release.title}</p>
-												<p className="text-ui-sm text-foreground-subtle">{groups.length} 个需求 · {srCount} 个 SR</p>
+												<p className="text-ui-sm text-foreground-subtle">{groups.length} 个 IR · {srCount} 个 SR{draftCount > 0 && ` · ${draftCount} 个草稿`}</p>
 											</div>
 											<Badge variant="outline">{groups.length ? "已有需求" : "待规划"}</Badge>
 										</li>

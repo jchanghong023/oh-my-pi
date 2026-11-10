@@ -1,7 +1,6 @@
-import { useRef, useState } from "react";
-import { ChevronDown, CircleDot, FileInput, FileText, FolderGit2, ListFilter, PanelLeftClose, Plus, Search, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, CircleDot, FileInput, FileText, Folder, FolderOpen, FolderGit2, ListFilter, MessagesSquare, PanelLeftClose, Plus, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
-import { Input } from "@/components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.js";
@@ -12,6 +11,7 @@ import { useTabStore } from "@/store/TabStoreProvider.js";
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useDev, DEV_STAGE_LABELS } from "./DevContext.js";
 import { readPrototypeSidebarPreferences, updatePrototypeSidebarPreferences, type PrototypeRequirementFilter } from "./mock/navigation.js";
+import { DevRequirementSearch } from "./DevRequirementSearch.js";
 import type { DevRequirementGroup } from "./mock/types.js";
 
 const FILTERS: { id: PrototypeRequirementFilter; title: string }[] = [
@@ -31,7 +31,7 @@ function DevSidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 	const { view, selection, select, command, pending, releaseId } = dev;
 	const scope = `${selection.projectId}:${releaseId}`;
 	const [preferences, setPreferences] = useState(() => readPrototypeSidebarPreferences(scope));
-	const [searchOpen, setSearchOpen] = useState(Boolean(preferences.query));
+	const [searchOpen, setSearchOpen] = useState(false);
 	const fileInput = useRef<HTMLInputElement>(null);
 	const openSettings = useTabStore(state => state.openSettingsTab);
 	const theme = useZCodeStore(state => state.theme);
@@ -51,12 +51,18 @@ function DevSidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 		return srs.some(sr => sr.status === "developing") ? "developing"
 			: srs.length > 0 && srs.every(sr => sr.status === "completed") ? "completed" : "pending";
 	};
-	const query = preferences.query.trim().toLocaleLowerCase();
-	const matches = (group: DevRequirementGroup) => !query || `${group.title} ${view?.srs.filter(sr => sr.irId === group.id).map(sr => sr.title).join(" ") ?? ""}`.toLocaleLowerCase().includes(query);
-	const groups = allGroups.filter(group => matches(group) && (preferences.filter === "all" || status(group) === preferences.filter));
-	const drafts = allDrafts.filter(matches);
+	const groups = allGroups.filter(group => preferences.filter === "all" || status(group) === preferences.filter);
+	const drafts = allDrafts;
+	useEffect(() => {
+		if (selection.irId && !preferences.expandedIrIds.includes(selection.irId)) {
+			const expandedIrIds = [...preferences.expandedIrIds, selection.irId];
+			updatePrototypeSidebarPreferences(scope, { expandedIrIds });
+			setPreferences(current => ({ ...current, expandedIrIds }));
+		}
+		// 仅在查看目标变化时展开所属 IR，允许手动收起当前 IR。
+	}, [selection.irId, selection.srId, scope]);
 	const selectedDraft = allDrafts.some(draft => draft.id === selection.irId);
-	const draftExpanded = preferences.draftsOpen || selectedDraft || Boolean(query);
+	const draftExpanded = preferences.draftsOpen || selectedDraft;
 	const choose = (irId: string) => { select({ projectId: selection.projectId, irId }); onNavigate?.(); };
 	const manageProjects = () => { setPendingSettingsSectionIntent("general"); openSettings(); };
 	return (
@@ -110,25 +116,40 @@ function DevSidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 			<div className="flex min-h-0 flex-1 flex-col border-t border-border/50 pt-3">
 				<div className="flex shrink-0 items-center gap-1 px-2 pb-2">
 					<span className="min-w-0 flex-1 px-2.5 text-ui-base font-medium text-foreground-subtle">需求</span>
-					<ControlHintTooltip title="搜索需求"><Button variant="ghost" size="icon-sm" aria-label="搜索需求" aria-expanded={searchOpen} onClick={() => { if (searchOpen) updatePreferences({ query: "" }); setSearchOpen(value => !value); }}><Search className="size-3.5" /></Button></ControlHintTooltip>
+					<ControlHintTooltip title="搜索需求"><Button variant="ghost" size="icon-sm" aria-label="搜索需求" aria-haspopup="dialog" aria-expanded={searchOpen} className="shrink-0 text-foreground-subtle hover:text-foreground" onClick={() => setSearchOpen(true)}><Search className="size-3.5" /></Button></ControlHintTooltip>
 					<DropdownMenu>
-						<ControlHintTooltip title="筛选需求"><DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="筛选需求" className={preferences.filter !== "all" ? "bg-selected" : ""}><ListFilter className="size-3.5" /></Button></DropdownMenuTrigger></ControlHintTooltip>
-						<DropdownMenuContent align="end"><DropdownMenuRadioGroup value={preferences.filter} onValueChange={value => { const filter = FILTERS.find(item => item.id === value); if (filter) updatePreferences({ filter: filter.id }); }}>{FILTERS.map(filter => <DropdownMenuRadioItem key={filter.id} value={filter.id}>{filter.title}</DropdownMenuRadioItem>)}</DropdownMenuRadioGroup></DropdownMenuContent>
+						<ControlHintTooltip title="筛选需求"><DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="筛选需求" className={`shrink-0 text-foreground-subtle hover:text-foreground ${preferences.filter !== "all" ? "bg-selected" : ""}`}><ListFilter className="size-3.5" /></Button></DropdownMenuTrigger></ControlHintTooltip>
+						<DropdownMenuContent align="end"><DropdownMenuRadioGroup value={preferences.filter} onValueChange={value => { const filter = FILTERS.find(item => item.id === value); if (filter) updatePreferences({ filter: filter.id }); }}>{FILTERS.map(filter => <DropdownMenuRadioItem key={filter.id} value={filter.id}><CircleDot className="size-4 text-foreground-subtle" aria-hidden="true" />{filter.title}</DropdownMenuRadioItem>)}</DropdownMenuRadioGroup></DropdownMenuContent>
 					</DropdownMenu>
 				</div>
-				{searchOpen && <div className="shrink-0 px-3 pb-2"><div className="relative"><Input autoFocus className="pr-7" aria-label="搜索需求标题" placeholder="搜索 IR 或 SR 标题" value={preferences.query} onChange={event => updatePreferences({ query: event.target.value })} onKeyDown={event => { if (event.key === "Escape") { updatePreferences({ query: "" }); setSearchOpen(false); } }} />{preferences.query && <Button variant="ghost" size="icon-xs" className="absolute top-1/2 right-1 -translate-y-1/2" aria-label="清除搜索" onClick={() => updatePreferences({ query: "" })}><X className="size-3" /></Button>}</div></div>}
 				{preferences.filter !== "all" && <div className="flex shrink-0 items-center justify-between px-4 pb-2 text-ui-sm text-foreground-subtle"><span>{FILTERS.find(filter => filter.id === preferences.filter)?.title}</span><Button variant="ghost" size="icon-xs" aria-label="清除筛选" onClick={() => updatePreferences({ filter: "all" })}><X className="size-3" /></Button></div>}
 				<div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-3">
-					{groups.map(group => <Button key={group.id} variant={selection.irId === group.id && !selection.srId ? "secondary" : "ghost"} className="h-auto w-full min-w-0 justify-start px-2.5 py-2 text-left" data-ir-id={group.id} aria-current={selection.irId === group.id && !selection.srId ? "page" : undefined} onClick={() => choose(group.id)}>
-						<span className="min-w-0 flex-1"><span className="block truncate" title={group.title}>{group.title}</span><span className="mt-1 block text-ui-sm text-foreground-subtle">{group.srIds.length} 个 SR · {group.status !== "frozen" && status(group) === "pending" ? "待需求合入" : FILTERS.find(filter => filter.id === status(group))?.title}</span></span>
-					</Button>)}
-					{!groups.length && <div className="space-y-2 px-2.5 py-3 text-ui-sm leading-6 text-foreground-subtle"><p>{!project ? "添加已有 Git 项目后，开始整理需求。" : !releaseId ? "当前项目还没有 Release。" : query || preferences.filter !== "all" ? "没有匹配的正式需求。" : "还没有正式需求。新建需求会先保存在草稿中。"}</p>{(!project || !releaseId) && <Button variant="outline" size="sm" onClick={manageProjects}>{!project ? "添加项目" : "添加 Release"}</Button>}</div>}
+					{groups.map(group => {
+						const expanded = preferences.expandedIrIds.includes(group.id);
+						const srs = view?.srs.filter(sr => sr.irId === group.id) ?? [];
+						const FolderIcon = expanded ? FolderOpen : Folder;
+						return <Collapsible key={group.id} open={expanded} onOpenChange={open => updatePreferences({ expandedIrIds: open ? [...preferences.expandedIrIds, group.id] : preferences.expandedIrIds.filter(id => id !== group.id) })} className="mb-1">
+							<div className="group/ir-row flex min-w-0 items-center rounded-lg hover:bg-menu-hover">
+								<CollapsibleTrigger asChild><Button variant="ghost" className="h-8 min-w-0 flex-1 justify-start gap-2 rounded-lg pr-1 pl-2.5 text-left hover:bg-transparent" data-ir-id={group.id}>
+									<FolderIcon className="size-4 shrink-0 text-foreground-subtle" /><span className="min-w-0 flex-1 truncate text-foreground-subtle" title={group.title}>{group.title}</span><span className="text-ui-sm text-foreground-subtlest">{srs.length}</span>
+								</Button></CollapsibleTrigger>
+								<div className="mr-1 flex shrink-0 items-center opacity-0 transition-opacity group-hover/ir-row:opacity-100 group-focus-within/ir-row:opacity-100 [@media(hover:none)]:opacity-100"><ControlHintTooltip title="需求讨论"><Button variant="ghost" size="icon-sm" aria-label={`${group.title}：需求讨论`} aria-pressed={selection.irId === group.id && !selection.srId} onClick={() => choose(group.id)}><MessagesSquare className="size-3.5 text-foreground-subtle" /></Button></ControlHintTooltip></div>
+							</div>
+							<CollapsibleContent data-testid={`ir-srs-${group.id}`}><div className="space-y-1 pt-1 pl-2">
+								{srs.map(sr => <Button key={sr.id} variant={selection.srId === sr.id ? "secondary" : "ghost"} className="h-8 w-full min-w-0 justify-start gap-2 pr-2.5 pl-6.5 text-left font-normal" data-sr-id={sr.id} aria-current={selection.srId === sr.id ? "page" : undefined} onClick={() => { select({ projectId: selection.projectId, irId: group.id, srId: sr.id }); onNavigate?.(); }}>
+									<span className="min-w-0 flex-1 truncate" title={sr.title}>{sr.title}</span><span className="shrink-0 text-ui-sm text-foreground-subtlest">{sr.status === "completed" ? "已完成" : sr.stage ? DEV_STAGE_LABELS[sr.stage] : "待开始"}</span>
+								</Button>)}
+							</div></CollapsibleContent>
+						</Collapsible>;
+					})}
+					{!groups.length && <div className="space-y-2 px-2.5 py-3 text-ui-sm leading-6 text-foreground-subtle"><p>{!project ? "添加已有 Git 项目后，开始整理需求。" : !releaseId ? "当前项目还没有 Release。" : preferences.filter !== "all" ? "没有匹配的正式需求。" : "还没有正式需求。新建需求会先保存在草稿中。"}</p>{(!project || !releaseId) && <Button variant="outline" size="sm" onClick={manageProjects}>{!project ? "添加项目" : "添加 Release"}</Button>}</div>}
 					{allDrafts.length > 0 && <Collapsible open={draftExpanded} onOpenChange={value => updatePreferences({ draftsOpen: value })} className="mt-3" data-testid="dev-drafts">
 						<CollapsibleTrigger asChild><Button variant="ghost" className="w-full justify-start gap-2 px-2.5 text-foreground-subtle"><ChevronDown className={`size-3 transition-transform ${draftExpanded ? "" : "-rotate-90"}`} />草稿<span className="ml-auto text-ui-sm">{drafts.length}</span></Button></CollapsibleTrigger>
 						<CollapsibleContent>{drafts.map(draft => <Button key={draft.id} variant={selection.irId === draft.id ? "secondary" : "ghost"} className="h-auto w-full justify-start px-2.5 py-2 text-left" data-ir-id={draft.id} data-dev-draft="true" aria-current={selection.irId === draft.id ? "page" : undefined} onClick={() => choose(draft.id)}><span className="min-w-0 truncate" title={draft.title}>{draft.title || "需求讨论"}</span></Button>)}{!drafts.length && <p className="px-2.5 py-2 text-ui-sm text-foreground-subtle">没有匹配的草稿。</p>}</CollapsibleContent>
 					</Collapsible>}
 				</div>
 			</div>
+			<DevRequirementSearch open={searchOpen} onOpenChange={setSearchOpen} query={preferences.query} onQueryChange={query => updatePreferences({ query })} onNavigate={onNavigate} />
 			<WorkspaceSidebarFooter className="px-4 pt-1 pb-3" theme={theme} onThemeChange={value => { if (value === "system" || value === "zai-dark" || value === "zai-light") setTheme(value); }} onSettingsButtonClick={openSettings} />
 		</nav>
 	);

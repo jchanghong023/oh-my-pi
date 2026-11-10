@@ -279,6 +279,14 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
         value.snapshot.rows = { window: [], totalCount: 0, firstRowId: null };
         if (payload.firstInput) append(value, payload.firstInput.text, envelope.commandId, payload.firstInput.attachments);
         ack.result = { type: "createSession", sessionId: value.meta.taskId, ...(payload.firstInput ? { input: { delivery: "startNow", inputId: envelope.commandId } } : {}) };
+      } else if (envelope.type === "createSelectionSideSession") {
+        const payload = commandPayloadSchemas.createSelectionSideSession.parse(envelope.payload);
+        const child = ensure(`prototype-side-${++nextId}`, params.workspacePath, params.workspaceIdentity);
+        child.stage = value.stage;
+        child.meta.title = `${value.meta.title} · 辅助讨论`;
+        child.snapshot = conversation(child.meta.taskId, value.stage, child.meta.title);
+        if (payload.firstInput) append(child, payload.firstInput.text, envelope.commandId);
+        ack.result = { type: "createSelectionSideSession", sessionId: child.meta.taskId };
       } else if (envelope.type === "setFollowupMode") {
         const payload = commandPayloadSchemas.setFollowupMode.parse(envelope.payload); value.snapshot.config.followupMode = payload.mode; changed(value);
       } else if (envelope.type === "switchModelConfig") {
