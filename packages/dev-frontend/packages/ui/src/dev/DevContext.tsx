@@ -54,21 +54,23 @@ export function DevProvider({ children }: { children: ReactNode }) {
   const [firstDiscussion, setFirstDiscussion] = useState<DevFirstDiscussion>();
   const report = useCallback((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)), []);
   const select = useCallback((value: DevSelection) => {
+    const projectChanged = selectionRef.current.projectId !== value.projectId;
     selectionRef.current = value;
     setSelection(value);
     const next = getPrototypeWorkflow(value);
     setView(next);
     setError(undefined);
-    updateReleaseId(current => next.releases.some(item => item.id === current) ? current : next.releases[0]?.id ?? "");
+    updateReleaseId(current => !projectChanged && next.releases.some(item => item.id === current) ? current : next.releases[0]?.id ?? "");
     if (firstDiscussionRef.current && firstDiscussionRef.current.session.irId !== value.irId) {
       firstDiscussionRef.current = undefined;
       setFirstDiscussion(undefined);
     }
   }, []);
   const setReleaseId = useCallback((id: string) => {
-    updateReleaseId(id);
     const current = selectionRef.current;
     const data = getPrototypeWorkflow(current);
+    if (!data.releases.some(item => item.id === id)) return;
+    updateReleaseId(id);
     const selected = [...data.groups, ...data.drafts].find(item => item.id === current.irId);
     if (selected && selected.releaseId !== id) select({ projectId: current.projectId });
   }, [select]);
@@ -77,11 +79,14 @@ export function DevProvider({ children }: { children: ReactNode }) {
     const target = selectionRef.current;
     try {
       const result = applyPrototypeAction(value, target);
-      if (value.type === "registerProject") select({ projectId: result.projectId });
-      else if (["createLocalDraft", "createBrowserDraft", "importPackage"].includes(value.type)) select({ projectId: result.projectId, irId: result.irId });
+      if (["createLocalDraft", "createBrowserDraft", "importPackage"].includes(value.type)) select({ projectId: result.projectId, irId: result.irId });
       else if (value.type === "deleteRequirement") select({ projectId: target.projectId });
       else if (["startSr", "approveStage", "backStage"].includes(value.type)) select({ projectId: target.projectId, irId: target.irId, srId: target.srId });
-      else setView(getPrototypeWorkflow(target));
+      else {
+        const next = getPrototypeWorkflow(target);
+        setView(next);
+        updateReleaseId(current => next.releases.some(item => item.id === current) ? current : next.releases[0]?.id ?? "");
+      }
       setError(undefined);
       return result;
     } catch (cause) { report(cause); return undefined; }

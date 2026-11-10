@@ -4,6 +4,7 @@ import type { PromptAttachmentTransferProgress as TransferProgress } from "../pa
 import { createPrototypeChatServices, type PrototypeAttachment } from "../packages/ui/src/dev/mock/chat.js";
 import { createPrototypeFileServices } from "../packages/ui/src/dev/mock/files.js";
 import { createPrototypeSettingsServices } from "../packages/ui/src/dev/mock/settings.js";
+import { readPrototypeSkills } from "../packages/ui/src/dev/mock/skills.js";
 import { createPrototypeEvent, unavailablePrototypeOperation } from "../packages/ui/src/dev/mock/events.js";
 
 export const PROTOTYPE_WORKSPACE = "/demo/aurora-console";
@@ -51,7 +52,7 @@ export function createPrototypeServices(): IServiceAccessor {
     },
     clientConfigService: { getSnapshot: async () => ({ pluginStoreOrder: null, zsrcUrl: null }) },
     skillsService: {
-      list: async () => ({ skills: [], capability: { userScopeAvailable: false, userScopeReason: "desktop_only" }, diagnostics: [] }),
+      list: async params => ({ skills: readPrototypeSkills(params.workspacePath), capability: { userScopeAvailable: false, userScopeReason: "desktop_only" }, diagnostics: [] }),
       setEnabled: unavailable, buildPromptContext: async params => ({ prompt: params.prompt, activatedSkillNames: [] }),
       copyToCommon: unavailable, removeFromCommon: unavailable, deleteSkill: unavailable,
     },

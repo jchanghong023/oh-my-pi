@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
-import { useModelProviders, usePrototypeModelProviders } from "@/hooks/useModelProviders.js";
+import { useModelProviders } from "@/hooks/useModelProviders.js";
 import { useDev } from "@/dev/DevContext.js";
+import { DevAgentModelSettings } from "@/dev/DevAgentModelSettings.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { sortModelProvidersForDisplay } from "@/lib/modelProviderOrdering.js";
 import { getProviderFormLabel } from "@/lib/providerSettingsFormTypes.js";
@@ -35,80 +36,7 @@ interface ModelProviderSectionProps {
 export function ModelProviderSection(props: ModelProviderSectionProps = {}) {
   const dev = useDev();
   // Separate components keep Dev presentation from mounting the live service-reading hook.
-  return dev ? <PrototypeModelProviderSection /> : <LiveModelProviderSection {...props} />;
-}
-
-function PrototypeModelProviderSection() {
-  const { intl, locale } = useZCodeIntl();
-  const { modelProviders, providerTemplates, reset, addPresentationProvider } = usePrototypeModelProviders();
-  const [selectedProviderId, setSelectedProviderId] = useState("prototype-opencode-go");
-  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
-  const selectedProvider = modelProviders.find((provider) => provider.providerId === selectedProviderId);
-  const prototypeNotice = locale === "zh-CN"
-    ? "UI 原型 · 样例不代表真实模型配置或连接状态。新增仅在当前页面演示；配置编辑与连通性测试暂未接入。"
-    : "UI prototype · Sample data is not live configuration or connectivity. Additions stay on this page; editing and connectivity tests are not connected.";
-  const navigationGroups: ModelProviderNavGroup[] = [{
-    id: "custom",
-    title: intl.formatMessage({ id: "settings.modelProviderTitle" }),
-    items: modelProviders.map((provider) => ({
-      key: createCustomProviderNodeKey(provider.providerId),
-      type: "custom",
-      label: getProviderFormLabel(provider),
-      provider,
-      statusActive: false,
-    })),
-  }];
-  const addProvider = async (input: { templateId?: string; providerName?: string }) => {
-    setSelectedProviderId(addPresentationProvider(input));
-    setTemplatePickerOpen(false);
-  };
-
-  return (
-    <ModelProviderSectionLayout
-      description={`${intl.formatMessage({ id: "settings.modelProviderDescription" })} ${prototypeNotice}`}
-      refreshLabel={intl.formatMessage({ id: "settings.modelProvider.refresh" })}
-      loadingLabel={intl.formatMessage({ id: "common.loading" })}
-      customLoading={false}
-      onRefresh={() => {
-        reset();
-        setSelectedProviderId("prototype-opencode-go");
-        setTemplatePickerOpen(false);
-      }}
-      addProviderLabel={intl.formatMessage({ id: "settings.modelProvider.addProviderAction" })}
-      onAddProvider={() => setTemplatePickerOpen(true)}
-      navigationGroups={navigationGroups}
-      selectedNodeKey={createCustomProviderNodeKey(selectedProviderId)}
-      onSelectNavItem={(item) => {
-        setSelectedProviderId(item.provider.providerId);
-        setTemplatePickerOpen(false);
-      }}
-    >
-      {templatePickerOpen ? (
-        <ProviderTemplatePicker
-          templates={providerTemplates}
-          creating={false}
-          onBack={() => setTemplatePickerOpen(false)}
-          onCreateFromTemplate={(templateId) => addProvider({ templateId })}
-          onCreateCustom={(providerName) => addProvider({ providerName })}
-        />
-      ) : selectedProvider ? (
-        // Model editors resolve inherited config through live services. Keep their original
-        // presentation inert until business integration resumes, including non-button triggers.
-        <fieldset disabled inert aria-label={prototypeNotice} className="m-0 min-w-0 border-0 p-0">
-          <InlineEditableProviderCard
-            key={selectedProvider.providerId}
-            provider={selectedProvider}
-            nameEditable={false}
-            headerActionsVisible={false}
-            readOnlyEndpoints
-            onSave={() => {
-              throw new Error(prototypeNotice);
-            }}
-          />
-        </fieldset>
-      ) : null}
-    </ModelProviderSectionLayout>
-  );
+  return dev ? <DevAgentModelSettings /> : <LiveModelProviderSection {...props} />;
 }
 
 function LiveModelProviderSection({

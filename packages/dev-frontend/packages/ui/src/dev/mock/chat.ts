@@ -12,6 +12,8 @@ import { createPrototypeEvent, silentPrototypeEvent, unavailablePrototypeOperati
 import { PROTOTYPE_MODEL_SELECTION } from "./settings.js";
 import { prototypeConversationFileChanges } from "./files.js";
 import { getPrototypeWorkflow } from "./workflow.js";
+import { prototypeSkillDesignReply } from "./skill-design.js";
+import skillDesignWelcome from "./skill-design-welcome.md?raw";
 
 export interface PrototypeAttachment {
   ref: string;
@@ -101,7 +103,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     const sr = workflow.srs.find(item => item.id === ref?.srId);
     const group = [...workflow.groups, ...workflow.drafts].find(item => item.id === ref?.irId);
     const stage = stageFor(sessionId);
-    const title = `${sr?.title ?? group?.title ?? "需求讨论"} · ${stage === "requirements" ? "需求" : stage === "solution" ? "方案" : stage === "planning" ? "计划" : stage === "executing" ? "实施" : "交付"}（样例）`;
+    const title = sessionId.startsWith("prototype-skill-design:") ? "Skill 设计 · 补充讨论（样例）" : `${sr?.title ?? group?.title ?? "需求讨论"} · ${stage === "requirements" ? "需求" : stage === "solution" ? "方案" : stage === "planning" ? "计划" : stage === "executing" ? "实施" : "交付"}（样例）`;
     const snapshot = conversation(sessionId, stage, title);
     if (group?.id === "ir-dashboard") {
       snapshot.rows.window = []; appendRows(snapshot.rows.window, sessionId, "希望团队数据总览能清晰展示项目进度和趋势，支持筛选和空态。", "**数据总览需求讨论样例**\n\n建议提供概览指标、趋势卡片、项目筛选及无数据状态，并补齐键盘导航和窄屏布局。这里仅使用独立的前端样例，不读取真实指标。", initialTime);
@@ -109,6 +111,11 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     }
     if (root.includes("mobile")) {
       snapshot.rows.window = []; appendRows(snapshot.rows.window, sessionId, `请讨论${sr?.title ?? group?.title ?? "移动工作台"}的移动端体验。`, `**移动工作台${stage}讨论样例**\n\n为${sr?.title ?? "移动协作"}提供单手可触达导航、明确返回路径、加载与离线提示。保留项目上下文并使用可访问标签。\n\n当前内容仅为阶段性前端原型样例，未读取设备、运行工具或接入真实 OMP。`, initialTime);
+      snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
+    }
+    if (sessionId.startsWith("prototype-skill-design:")) {
+      snapshot.rows.window = [];
+      appendRows(snapshot.rows.window, sessionId, "我想设计一个可复用的项目技能。", skillDesignWelcome, initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
     const value: LocalSession = { stage, snapshot, archived: false, pinned: false, deleted: false,
@@ -169,7 +176,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     for (const [id, sub] of indexSubscriptions) if (sub.root === value.meta.workspacePath && sub.identity === value.meta.workspaceIdentity) emitIndex(id);
   };
   const append = (value: LocalSession, content: string, commandId?: string, refs?: AttachmentRef[]) => {
-    appendRows(value.snapshot.rows.window, value.meta.taskId, content, `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在本次浏览器会话中。当前${value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。用户确认原型后再进入真实后端对接与验收阶段。`, Date.now(), commandId, refs);
+    appendRows(value.snapshot.rows.window, value.meta.taskId, content, value.meta.taskId.startsWith("prototype-skill-design:") ? prototypeSkillDesignReply(value.meta.taskId, content) : `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在本次浏览器会话中。当前${value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。用户确认原型后再进入真实后端对接与验收阶段。`, Date.now(), commandId, refs);
     value.snapshot.rows.totalCount = value.snapshot.rows.window.length; value.snapshot.rows.firstRowId = value.snapshot.rows.window[0]?.rowId ?? null; changed(value);
   };
   const updateModel = (value: LocalSession, model: ModelSelection) => { value.snapshot.config.modelSelection = model; value.snapshot.config.provider = model.providerId; value.snapshot.config.model = model.modelId; value.meta.model = model.modelId; changed(value); return legacy(value); };

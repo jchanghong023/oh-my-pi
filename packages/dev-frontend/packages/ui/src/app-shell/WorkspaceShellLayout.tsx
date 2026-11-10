@@ -1798,7 +1798,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
         isMobileViewport={isMobileViewport}
         isWorkspaceVisible={isWorkspaceVisible}
         activeTaskId={activeTaskId}
-        initialNavigationIntent={dev ? "chat" : undefined}
+        // 只选项目／Release 时留在手机导航，选中 IR 或 SR 后才进入聊天。
+        initialNavigationIntent={dev?.selection.irId ? "chat" : undefined}
         isSidePaneOpen={workspaceMainView === "chat" && isSidePaneOpen}
         onCloseSidePane={isSidePaneOpen ? handleToggleSidePane : undefined}
         renderTaskHome={renderWorkspaceSidebar}

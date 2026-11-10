@@ -3078,6 +3078,7 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.testModel.error.unknown": "测试失败",
   "settings.modelProvider.testModel.error.noEndpoint": "未配置 endpoint",
   "settings.skills.title": "技能",
+  "settings.skillDesign.title": "Skill 设计",
   "settings.skills.description": "管理项目级与用户级技能。启用后可在聊天里通过 $skill-name 使用。",
   "settings.skills.searchPlaceholder": "搜索技能...",
   "settings.skills.refresh": "刷新",

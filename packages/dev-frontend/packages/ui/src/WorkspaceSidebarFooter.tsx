@@ -20,7 +20,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.js";
 import {
-  PencilRuler,
   Maximize,
   Palette,
   Settings,
@@ -30,8 +29,6 @@ import {
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useShortcutCommandLabel } from "@/shortcuts/useShortcutBindings.js";
-import { useZCodeStore } from "@/store/StoreProvider.js";
-import { normalizeInterfaceMode } from "@/lib/interfaceMode.js";
 import type { Theme } from "@/useTheme.js";
 
 const DESKTOP_ZOOM_MIN_LEVEL = -3;
@@ -55,8 +52,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
 }) {
   const { intl } = useZCodeIntl();
   const platform = usePlatform();
-  const interfaceMode = useZCodeStore((state) => state.interfaceMode);
-  const setInterfaceMode = useZCodeStore((state) => state.setInterfaceMode);
   const zoomInShortcutLabel = useShortcutCommandLabel("zoomIn");
   const zoomOutShortcutLabel = useShortcutCommandLabel("zoomOut");
   const resetZoomShortcutLabel = useShortcutCommandLabel("resetZoom");
@@ -146,25 +141,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
                     {intl.formatMessage({
                       id: "sidebar.settings.theme.zai-light",
                     })}
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <PencilRuler className="size-4" />
-                {intl.formatMessage({ id: "settings.interfaceMode" })}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-48">
-                <DropdownMenuRadioGroup
-                  value={interfaceMode}
-                  onValueChange={(value) => setInterfaceMode(normalizeInterfaceMode(value))}
-                >
-                  <DropdownMenuRadioItem value="coding">
-                    {intl.formatMessage({ id: "settings.interfaceMode.coding" })}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="office">
-                    {intl.formatMessage({ id: "settings.interfaceMode.office" })}
                   </DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>

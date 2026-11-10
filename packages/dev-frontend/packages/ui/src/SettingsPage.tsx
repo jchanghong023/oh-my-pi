@@ -1,5 +1,8 @@
 /* oxlint-disable eslint(max-lines) */
 import { DevProjectSettings } from "@/dev/DevWorkbench.js";
+import { DevPersonalizationSettings } from "@/dev/DevPersonalizationSettings.js";
+import { DevSkillDesignSettings } from "@/dev/DevSkillDesignSettings.js";
+import { useDev } from "@/dev/DevContext.js";
 import { ArrowLeft, type LucideIcon } from "lucide-react";
 import {
   useCallback,
@@ -129,6 +132,7 @@ export function SettingsPage({
   allowOpenWorkspace?: boolean;
 }) {
   const { intl } = useZCodeIntl();
+  const dev = useDev();
   const nativeHostAvailable = useNativeHostAvailable();
   const { settingsSectionGroups, settingsSections } = useMemo(
     () => createSettingsPageConfig(),
@@ -556,7 +560,7 @@ export function SettingsPage({
                               />
                             </ServiceProvider>
                           ) : activeSection === "personalization" ? (
-                            isDesktop || nativeHostAvailable ? (
+                            dev ? <DevPersonalizationSettings /> : isDesktop || nativeHostAvailable ? (
                               <PersonalizationSection
                                 settingService={localHostServices.settingService}
                                 isDesktop={Boolean(isDesktop)}
@@ -577,15 +581,20 @@ export function SettingsPage({
                                 workspaceDisplayNames={memoryWorkspaceDisplayNames}
                               />
                             </ServiceProvider>
+                          ) : activeSection === "skillDesign" ? (
+                            <DevSkillDesignSettings />
                           ) : activeSection === "skill" ? (
-                            <PluginsSection
-                              key={`skill:${settingsSectionNavigationVersion}`}
-                              mode="skill"
-                              initialScopeKey={pluginScopeKey}
-                              workspacePath={activeWorkspacePath}
-                              workspaceIdentity={activeWorkspaceIdentity}
-                              onCreateTask={onCreateTask}
-                            />
+                            <div className="space-y-4">
+                              {dev && <p className="text-ui-sm leading-6 text-foreground-subtle">原型演示：以下为样例技能，可搜索并查看只读详情；不读取真实技能目录，不执行安装或配置修改。</p>}
+                              <PluginsSection
+                                key={`skill:${settingsSectionNavigationVersion}`}
+                                mode="skill"
+                                initialScopeKey={pluginScopeKey}
+                                workspacePath={activeWorkspacePath}
+                                workspaceIdentity={activeWorkspaceIdentity}
+                                onCreateTask={onCreateTask}
+                              />
+                            </div>
                           ) : activeSection === "projects" ? (
                             <ProjectManagement />
                           ) : activeSection === "archives" ? (

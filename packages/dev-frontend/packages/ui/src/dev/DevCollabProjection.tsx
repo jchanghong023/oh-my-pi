@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog.js";
@@ -18,8 +19,8 @@ export function DevCollabProjection() {
   const peer = peers.find(item => item.id === peerId);
   const material = peer?.materials.find(item => item.path === materialPath) ?? peer?.materials[0];
   return <>
-    <Button variant="ghost" className="mt-1 justify-start" data-testid="collab-open" onClick={() => setOpen(true)}>
-      远程协作 · 样例
+    <Button size="sm" variant="ghost" className="ml-auto shrink-0 gap-1.5" aria-label="协作成员与共享材料（样例）" data-testid="collab-open" onClick={() => setOpen(true)}>
+      <Users className="size-3.5" />协作<span className="text-foreground-subtle">{peers.length}</span>
     </Button>
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="flex h-[90dvh] max-w-[min(1200px,96vw)] flex-col gap-0 p-0" data-testid="dev-collab-projection">

@@ -1,6 +1,9 @@
 import { developmentMaterials, requirementMaterials } from "./materials.js";
+import { checkPrototypeProjectDirectory } from "./project-directories.js";
+import { readPrototypeProjectSettings, addPrototypeProject } from "./project-settings.js";
+import { readPrototypeProjectReleases, addPrototypeRelease } from "./project-releases.js";
 import type {
-  DevAction, DevMaterialView, DevNativeSessionRef, DevOperationReceipt, DevProject, DevRequirementGroup,
+  DevAction, DevMaterialView, DevNativeSessionRef, DevOperationReceipt, DevRequirementGroup,
   DevSelection, DevStageMaterial, DevSystemRequirement, DevWorkflowResult, DevWorkflowStage, DevWorkflowView,
 } from "./types.js";
 
@@ -13,10 +16,6 @@ const phaseSessions = { solution: "demo-solution", planning: "demo-planning", ex
 function sessionRef(projectId: string, irId: string, phase: DevNativeSessionRef["phase"], srId?: string, preferred?: string): DevNativeSessionRef {
   const sessionId = preferred ?? `${projectId}-${irId}-${srId ?? "ir"}-${phase}`;
   return { projectId, irId, ...(srId ? { srId } : {}), sessionId, sessionFile: `/demo/sessions/${sessionId}.jsonl`, role: phase, phase, round: 1 };
-}
-function project(id: string, name: string, root: string): DevProject {
-  return { id, name, root, commonDir: `${root}/.git`, revision: 1, createdAt, updatedAt: createdAt,
-    defaultBranch: "main", remote: "origin", repositoryId: `sample-repository-${id}` };
 }
 function receipt(type: string, revision: number, irId?: string, srId?: string): DevOperationReceipt {
   return { operationId: `sample-operation-${revision}`, commandDigest: `sample:${type}:${revision}`, type,
@@ -57,7 +56,7 @@ function systemRequirement(projectId: string, irId: string, id: string, title: s
   };
 }
 export function createPrototypeWorkflow(): DevWorkflowView {
-  const projects = [project("demo-aurora", "Aurora 协作控制台", "/demo/aurora-console"), project("demo-mobile", "Mobile 移动工作台", "/demo/mobile-console")];
+  const personalSettings = readPrototypeProjectSettings();
   const srs = [
     systemRequirement("demo-aurora", "ir-auth", "sr-auth", "统一登录与会话管理", "solution", false, true),
     systemRequirement("demo-aurora", "ir-auth", "sr-session", "会话恢复与设备管理", "planning", false, true),
@@ -76,11 +75,10 @@ export function createPrototypeWorkflow(): DevWorkflowView {
     group("demo-mobile", "ir-mobile", "移动协作工作台", srs.filter(sr => sr.irId === "ir-mobile")),
     group("demo-mobile", "ir-mobile-offline", "移动端离线体验", srs.filter(sr => sr.irId === "ir-mobile-offline"))];
   const drafts = [group("demo-aurora", "draft-automation", "自动化工作流探索", [], true), group("demo-mobile", "draft-mobile-search", "移动搜索体验草稿", [], true)];
+  for (const item of [...groups, ...drafts]) item.releaseId = readPrototypeProjectReleases(item.projectId)[0]?.id ?? "";
   const materials = [...groups, ...drafts].flatMap(item => requirementMaterials(item.projectId, item.id, item.title, srs.filter(sr => sr.irId === item.id)));
   materials.push(...srs.filter(sr => sr.status !== "pending").flatMap(sr => developmentMaterials(sr.projectId, sr.irId, sr.id, sr.title)));
-  return { version: 1, revision: 12, projects, currentProjectId: DEFAULT_SELECTION.projectId,
-    releases: projects.flatMap(item => [{ id: PROTOTYPE_RELEASE_ID, projectId: item.id, title: "2026.11 · 体验优化", createdAt },
-      { id: "release-2026-12", projectId: item.id, title: "2026.12 · 下一迭代（样例）", createdAt }]),
+  return { version: 1, revision: 12, ...personalSettings, releases: readPrototypeProjectReleases(), currentProjectId: DEFAULT_SELECTION.projectId,
     groups, drafts, srs, materials, operations: [receipt("需求样例整理", 1, "ir-auth"), receipt("方案样例准备", 2, "ir-auth", "sr-auth"),
       receipt("计划样例准备", 3, "ir-auth", "sr-session"), receipt("验证报告展示", 4, "ir-auth", "sr-permissions"),
       receipt("交付信息展示", 5, "ir-auth", "sr-audit"), receipt("完成状态展示", 6, "ir-auth", "sr-onboarding"),
@@ -95,8 +93,10 @@ export function createPrototypeWorkflow(): DevWorkflowView {
 let state = createPrototypeWorkflow();
 export function getPrototypeWorkflow(selection: DevSelection = DEFAULT_SELECTION): DevWorkflowView {
   const projectId = selection.projectId ?? DEFAULT_SELECTION.projectId;
-  return { ...state, currentProjectId: projectId,
-    releases: state.releases.filter(item => item.projectId === projectId), groups: state.groups.filter(item => item.projectId === projectId),
+  const personalSettings = readPrototypeProjectSettings();
+  return { ...state, projects: personalSettings.projects, currentProjectId: projectId,
+    activeSrId: state.srs.find(item => item.projectId === projectId && item.status === "developing")?.id,
+    releases: readPrototypeProjectReleases(projectId), groups: state.groups.filter(item => item.projectId === projectId),
     drafts: state.drafts.filter(item => item.projectId === projectId), srs: state.srs.filter(item => item.projectId === projectId),
     materials: state.materials.filter(item => item.projectId === projectId),
     sessions: state.sessions.filter(item => item.projectId === projectId),
@@ -116,6 +116,25 @@ export function getPrototypeMaterial(selection: DevSelection, path: string): Dev
 }
 /** Small UI-only transitions, not backend workflow approvals or an execution engine. */
 export function applyPrototypeAction(action: DevAction, selection: DevSelection): DevWorkflowResult {
+  if (action.type === "createLocalDraft" || action.type === "createBrowserDraft" || action.type === "importPackage") {
+    const projectId = action.projectId ?? selection.projectId ?? DEFAULT_SELECTION.projectId;
+    if (!readPrototypeProjectReleases(projectId).some(release => release.id === action.releaseId)) {
+      throw new Error("请选择当前项目的有效 Release。");
+    }
+  }
+  if (action.type === "registerProject") {
+    const check = checkPrototypeProjectDirectory(action.root, state.projects.map(item => item.root));
+    if (!check.valid) throw new Error(check.error);
+    if (!action.name.trim()) throw new Error("请输入项目名称。");
+  }
+  if (action.type === "createRelease") {
+    const projectId = action.projectId ?? selection.projectId;
+    if (!state.projects.some(item => item.id === projectId)) throw new Error("请选择已有项目。");
+    if (!action.title.trim()) throw new Error("请输入 Release 名称。");
+    if (readPrototypeProjectReleases(projectId).some(item => item.title.toLowerCase() === action.title.trim().toLowerCase())) {
+      throw new Error("此项目中已存在同名 Release，请使用其他名称。");
+    }
+  }
   state = structuredClone(state);
   const projectId = action.projectId ?? selection.projectId ?? "demo-aurora";
   let irId = action.irId ?? selection.irId;
@@ -127,13 +146,16 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
   switch (action.type) {
     case "registerProject": {
       selectedProjectId = `demo-project-${state.revision}`;
-      state.projects.push(project(selectedProjectId, action.name.trim() || "新项目（样例）", action.root.trim() || "/demo/new-project"));
-      state.releases.push({ id: PROTOTYPE_RELEASE_ID, projectId: selectedProjectId, title: "2026.11 · 体验优化", createdAt });
+      const check = checkPrototypeProjectDirectory(action.root, []);
+      if (!check.valid) throw new Error(check.error);
+      addPrototypeProject({ id: selectedProjectId, name: action.name.trim(), root: check.root, branch: check.directory.branch });
+      Object.assign(state, readPrototypeProjectSettings());
       irId = undefined;
       break;
     }
     case "createRelease":
-      state.releases.push({ id: `demo-release-${state.revision}`, projectId, title: action.title.trim() || "新 Release（样例）", createdAt });
+      addPrototypeRelease({ id: `demo-release-${state.revision}`, projectId, title: action.title.trim(), createdAt });
+      state.releases = readPrototypeProjectReleases();
       break;
     case "createLocalDraft": case "createBrowserDraft": case "importPackage": {
       irId = `draft-demo-${state.revision}`;

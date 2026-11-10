@@ -6,10 +6,10 @@
 
 ## What Changes
 
-- 本文件只承载 `personal-commands` 的 3 项 MODIFIED 和 2 项 ADDED 需求操作，共 5 项，满足包内单 change 不超过十项的格式限制；不修改 WebGUI 正式入口、项目选择或多会话需求。
+- 本文件承载 `personal-commands` 的 3 项 MODIFIED 和 4 项 ADDED 需求操作，共 7 项，满足包内单 change 不超过十项的格式限制；新增 Dev 个人级模型／追加提示词设置及独立 Skill 设计入口，不修改 WebGUI 正式入口、项目选择或多会话需求。
 - 全部结论、适用边界、替换关系及尚未确定事项以[总提案](../refactor-dev-webgui-requirement-intake/proposal.md)及本组增量共同定义。
 - 本组必须整体审阅和交付。退役旧条款不等于删掉其普通 OMP 能力、用户数据或未受影响的原生边界，不交付只有删除规则的中间版本。
-- 本轮仅编写需求文件，不生成 design/tasks，不实现代码、不迁移或归档旧状态，不执行软件测试。
+- 当前按总提案的第一阶段约束，仅调整 Dev 前端原型与相关需求文档；不生成 design/tasks，不接 OMP 或真实配置读写，不迁移或归档旧状态，不恢复后端业务或软件验收。
 
 ## Capabilities
 
