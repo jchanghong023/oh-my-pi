@@ -2,7 +2,7 @@
 
 ## Why
 
-本 change 是 [refactor-dev-webgui-requirement-intake](../refactor-dev-webgui-requirement-intake/proposal.md) 完整 Dev 重构提案的一部分。当前 `dev-browser-workbench` 仍包含与本轮最终确认的需求模型、四阶段、人工 PR、共享工作流及 WebGUI 使用方式冲突的旧条款，必须明确替换或退役，避免新增规则与旧八阶段同时生效。
+本 change 是 [refactor-dev-webgui-requirement-intake](../refactor-dev-webgui-requirement-intake/proposal.md) 完整 Dev 重构提案的一部分。当前 `dev-browser-workbench` 仍包含与本轮最终确认的需求模型、提案两阶段、三阶段开发、PR 和共享工作流及 WebGUI 使用方式冲突的旧条款，必须明确替换或退役，避免新增规则与旧八阶段同时生效。
 
 ## What Changes
 
@@ -10,6 +10,8 @@
 - 全部结论、适用边界、替换关系及尚未确定事项以[总提案](../refactor-dev-webgui-requirement-intake/proposal.md)及本组增量共同定义。
 - 本组必须整体审阅和交付。退役旧条款不等于删掉其普通 OMP 能力、用户数据或未受影响的原生边界，不交付只有删除规则的中间版本。
 - 当前按[总提案的分阶段实施约束](../refactor-dev-webgui-requirement-intake/proposal.md#11-分阶段实施与当前临时状态)仅开发同一套 Dev 前端的 UI/UX 原型：假数据、独立入口及说明纳入仓库，不接 OMP 或真实后端，不运行软件测试；原型获用户确认后再恢复真实对接与最终验收。这是临时开发状态，不是将最终工作台改成纯前端产品，也不生成 design/tasks 或迁移、归档旧状态。
+
+- 左侧恢复当前项目的原生单项目会话行，显示名为“自由会话”，直接展开最近 5 条会话；不增设项目层级，默认右侧审查，与 IR／SR 工作流独立。当前只演示界面和内存数据，真实查询限量与目录归属留待后续对接。
 
 ## Capabilities
 

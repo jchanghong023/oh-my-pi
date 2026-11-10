@@ -1,3 +1,4 @@
+import { useDev } from "@/dev/DevContext.js";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowLeft, FileText, RefreshCw } from "lucide-react";
 import type { IZCodeAgentService } from "@zcode/services";
@@ -29,12 +30,21 @@ export function NativeTaskRunsGate({
   workspaceIdentity?: string;
   children: ReactNode;
 }) {
+  const dev = useDev();
   const owner = useWorkspaceServicesResolution(workspacePath, undefined, workspaceIdentity);
   const modelRead = useModelSelectionServiceView(owner.services.modelSelectionService, owner.rpcReady);
   const { locale } = useZCodeIntl();
   const view =
     modelRead.state.status === "ready" ? modelRead.state.view :
       modelRead.state.status === "loading" ? modelRead.state.catalog : undefined;
+  if (dev) {
+    return <ServiceProvider services={owner.services}><NativeTaskRunsSection
+      key={`${workspacePath}:${dev.session?.sessionId ?? "unbound"}`} header={header}
+      sessionId={dev.session?.sessionId ?? null} available={Boolean(dev.session)}
+      workspacePath={workspacePath ?? ""} workspaceIdentity={workspaceIdentity}
+      remoteSessionId={owner.remoteSessionId ?? undefined}
+    /></ServiceProvider>;
+  }
   if (!view) {
     return (
       <div className={SETTINGS_FRAME_CONTENT_CLASSNAME}>

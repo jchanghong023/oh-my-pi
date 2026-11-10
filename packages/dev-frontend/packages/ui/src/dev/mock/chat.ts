@@ -1,3 +1,6 @@
+import { FREE_CHAT_PREFIX, freeProjectId, readPrototypeFreeChat, readRecentFreeChats, createPrototypeFreeChat, updatePrototypeFreeChat } from "./free-chats.js";
+import freeChatDiscussion from "./free-chat-discussion.md?raw";
+import freeChatPrompt from "./prompts/free-chat.md?raw";
 import type { IServiceAccessor, ZCodeAgentSessionTarget } from "@zcode/services";
 import type { ModelSelection, ZCodeConfigOption, ZCodeTaskMeta, ZCodeTaskSnapshot, ZCodeSessionStateSnapshot, ZCodeSessionInfo, ZCodeMessageWithParts } from "@zcode/shared";
 import { ZCODE_PROTOCOL_NAME, ZCODE_PROTOCOL_VERSION } from "@zcode/shared";
@@ -13,6 +16,12 @@ import { PROTOTYPE_MODEL_SELECTION } from "./settings.js";
 import { prototypeConversationFileChanges } from "./files.js";
 import { getPrototypeWorkflow } from "./workflow.js";
 import { prototypeSkillDesignReply } from "./skill-design.js";
+import { createPrototypeAutomationServices } from "./automations.js";
+import automationPrompt from "./prompts/automation-review.md?raw";
+import automationOutput from "./automation-output.md?raw";
+import proposalSolutionDiscussion from "./proposal-solution-discussion.md?raw";
+import proposalDiscussion from "./proposal-discussion.md?raw";
+import proposalDiscussionPrompt from "./prompts/proposal-discussion.md?raw";
 import skillDesignWelcome from "./skill-design-welcome.md?raw";
 
 export interface PrototypeAttachment {
@@ -26,13 +35,14 @@ export interface PrototypeAttachment {
 }
 
 export const PROTOTYPE_CHAT_DISCUSSIONS = {
+  free: [[freeChatPrompt, freeChatDiscussion]],
   requirements: [
     ["我们希望为 Aurora 企业协作控制台梳理统一登录与权限体验。首屏需要让用户快速找到当前项目，登录过期后要能清晰恢复。先讨论需求，不进入实现。", "可以。建议分成四个边界：统一登录、会话恢复、角色权限、操作审计。\n\n1. 登录支持企业邮箱与 SSO 入口，错误信息靠近字段。\n2. 会话过期后保留未发送草稿，重新进入时回到原项目。\n3. 权限不足时说明缺少的角色，不展示不可操作的危险按钮。\n4. 审计记录包含操作者、对象与时间，并提供空态和筛选。\n\n以上是阶段性前端原型的讨论样例，尚未连接真实认证或 OMP 后端。"],
     ["请补充可访问性和验收边界，并把需求拆成可以分别评审的 SR。", "建议拆分为「统一登录与会话管理」「会话恢复与设备管理」「角色权限与访问边界」「操作审计与交付」。\n\n**交互验收点（待真实验证）**\n- 键盘可到达每个输入和操作项；错误提示关联对应字段。\n- 失效会话不丢失草稿，返回时明确恢复的项目。\n- 切换角色后展示一致的访问边界；空态提供下一步。\n\n右侧只读材料展示需求、拆分关系和样例审阅内容。当前只是第一阶段原型；确认交互后再接入真实 OMP 并完成实际验收。"],
   ],
   solution: [["请给统一登录与会话管理提供一个便于评审的前端方案。", "**方案讨论样例**\n\n将登录表单、会话状态展示和认证适配层分开，避免界面绑定某个服务。默认布局保留项目导航、原生聊天输入框和右侧只读资料。\n\n- 登录页：企业邮箱、SSO 入口、就地校验。\n- 会话失效：保留上下文，显示重新登录入口。\n- 恢复成功：回到之前的项目和需求讨论。\n\n预置代码差异可在原文件/审查面板查看；它不是已运行的实现。"]],
   planning: [["把会话恢复与设备管理方案转成实施计划，并说明依赖。", "**计划展示样例（未执行）**\n\n1. 确认过期、撤销、离线三类状态文案。\n2. 完成会话恢复交互和设备卡片。\n3. 用户确认后对接真实 OMP 与认证契约。\n4. 执行单元、集成与端到端验收，补齐安全审查。\n\n依赖是实际认证环境、接口权限和用户确认。当前未创建后端任务或运行测试。"]],
-  executing: [["展示角色权限实现阶段的状态，以及还需要验证哪些内容。", "**实施状态演示**\n\n样例看板将权限矩阵、访问提示和审查差异分开呈现，方便讨论进行中/待评审状态。\n\n右侧文件面板包含预置源码和实际格式的 unified diff。这里的代码、状态和报告均是前端样例，没有执行工具、修改真实仓库或通过任何测试。真实实现与验收将在后续阶段完成。"]],
+  executing: [["展示角色权限实现阶段的状态，以及还需要验证哪些内容。", "**实施状态演示**\n\n样例看板将权限矩阵、访问提示和审查差异分开呈现，方便讨论进行中/待验证状态。\n\n右侧文件面板包含预置源码和实际格式的 unified diff。这里的代码、状态和报告均是前端样例，没有执行工具、修改真实仓库或通过任何测试。真实实现与验收将在后续阶段完成。"]],
   pr: [["请汇总审计模块交付评审需要检查的内容。", "**交付评审样例**\n\n- 审计筛选、空态、详情和权限提示是否一致。\n- 需求与方案的关联材料是否完整。\n- 代码审查要检查过期边界、可访问性与敏感信息。\n- 真实环境的测试证据和发布审批仍待后续完成。\n\n当前 PR 地址与审阅记录是明确标注的样例，不代表已创建真实 PR、运行测试或完成验收。"]],
 } satisfies Record<string, readonly (readonly [string, string])[]>;
 
@@ -45,6 +55,7 @@ interface LocalSession { meta: ZCodeTaskMeta; stage: Stage; snapshot: Conversati
 interface Subscription { id: string; sessionId: string; workspacePath: string; workspaceIdentity?: string; ordinal: number; }
 
 function stageFor(id: string): Stage {
+  if (id.startsWith(FREE_CHAT_PREFIX)) return "free";
   if (id === "demo-solution" || id.endsWith("-solution")) return "solution";
   if (id === "demo-planning" || id.endsWith("-planning")) return "planning";
   if (id === "demo-executing" || id.endsWith("-executing")) return "executing";
@@ -99,18 +110,30 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     const existing = sessions.get(key);
     if (existing) return existing;
     const workflow = getPrototypeWorkflow({ projectId: root.includes("mobile") ? "demo-mobile" : "demo-aurora" });
+    const free = readPrototypeFreeChat(sessionId);
     const ref = workflow.sessions.find(item => item.sessionId === sessionId);
     const sr = workflow.srs.find(item => item.id === ref?.srId);
     const group = [...workflow.groups, ...workflow.drafts].find(item => item.id === ref?.irId);
     const stage = stageFor(sessionId);
-    const title = sessionId.startsWith("prototype-skill-design:") ? "Skill 设计 · 补充讨论（样例）" : `${sr?.title ?? group?.title ?? "需求讨论"} · ${stage === "requirements" ? "需求" : stage === "solution" ? "方案" : stage === "planning" ? "计划" : stage === "executing" ? "实施" : "交付"}（样例）`;
+    const title = free?.meta.title ?? (sessionId.startsWith("prototype-skill-design:") ? "Skill 设计 · 补充讨论（样例）" : `${sr?.title ?? group?.title ?? "需求讨论"} · ${stage === "requirements" ? "需求" : stage === "solution" ? "方案" : stage === "planning" ? "计划" : stage === "executing" ? "实施" : "交付"}（样例）`);
     const snapshot = conversation(sessionId, stage, title);
+    if (workflow.drafts.some(item => item.id === group?.id)) {
+      snapshot.rows.window = [];
+      appendRows(snapshot.rows.window, sessionId, proposalDiscussionPrompt, stage === "solution" ? proposalSolutionDiscussion : proposalDiscussion, initialTime);
+      snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
+    }
     if (group?.id === "ir-dashboard") {
       snapshot.rows.window = []; appendRows(snapshot.rows.window, sessionId, "希望团队数据总览能清晰展示项目进度和趋势，支持筛选和空态。", "**数据总览需求讨论样例**\n\n建议提供概览指标、趋势卡片、项目筛选及无数据状态，并补齐键盘导航和窄屏布局。这里仅使用独立的前端样例，不读取真实指标。", initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
-    if (root.includes("mobile")) {
+    if (!free && root.includes("mobile") && !workflow.drafts.some(item => item.id === group?.id)) {
       snapshot.rows.window = []; appendRows(snapshot.rows.window, sessionId, `请讨论${sr?.title ?? group?.title ?? "移动工作台"}的移动端体验。`, `**移动工作台${stage}讨论样例**\n\n为${sr?.title ?? "移动协作"}提供单手可触达导航、明确返回路径、加载与离线提示。保留项目上下文并使用可访问标签。\n\n当前内容仅为阶段性前端原型样例，未读取设备、运行工具或接入真实 OMP。`, initialTime);
+      snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
+    }
+    if (sessionId.startsWith("prototype-automation-session:")) {
+      snapshot.meta.title = "自动化讨论（样例）";
+      snapshot.rows.window = [];
+      appendRows(snapshot.rows.window, sessionId, automationPrompt, automationOutput, initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
     if (sessionId.startsWith("prototype-skill-design:")) {
@@ -118,12 +141,15 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       appendRows(snapshot.rows.window, sessionId, "我想设计一个可复用的项目技能。", skillDesignWelcome, initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
-    const value: LocalSession = { stage, snapshot, archived: false, pinned: false, deleted: false,
-      meta: { taskId: sessionId, traceId: `prototype:${sessionId}`, title, workspacePath: root, workspaceIdentity: identity, createdAt: initialTime, updatedAt: initialTime, mode: "build", provider: "glm", model: "Beam Free", status: "completed" } };
+    if (free?.empty) { snapshot.rows.window = []; snapshot.rows.totalCount = 0; snapshot.rows.firstRowId = null; }
+    const value: LocalSession = { stage, snapshot, archived: free?.meta.archived ?? false, pinned: free?.meta.pinned ?? false, deleted: false,
+      meta: { taskId: sessionId, traceId: `prototype:${sessionId}`, title, workspacePath: root, workspaceIdentity: identity, createdAt: initialTime, updatedAt: initialTime, mode: "build", provider: "glm", model: "Beam Free", status: "completed", ...(free?.meta ?? {}) } };
     sessions.set(key, value); return value;
   };
   const target = (params: ZCodeAgentSessionTarget) => ensure(params.sessionId, params.workspacePath, params.workspaceIdentity);
   const list = (root: string, identity?: string) => {
+    const freeProject = freeProjectId(identity);
+    if (freeProject) return readRecentFreeChats(freeProject, 5).filter(meta => meta.workspacePath === root && meta.workspaceIdentity === identity).map(meta => ensure(meta.taskId, root, identity));
     const projectId = root.includes("mobile") ? "demo-mobile" : "demo-aurora";
     for (const ref of getPrototypeWorkflow({ projectId }).sessions) ensure(ref.sessionId, root, identity);
     return [...sessions.values()].filter(item => item.meta.workspacePath === root && item.meta.workspaceIdentity === identity && !item.deleted);
@@ -174,18 +200,28 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     value.snapshot.revision++; value.snapshot.seq++; value.meta.updatedAt = Date.now();
     for (const sub of subscriptions.values()) if (sub.sessionId === value.meta.taskId && sub.workspacePath === value.meta.workspacePath && sub.workspaceIdentity === value.meta.workspaceIdentity) emit(sub);
     for (const [id, sub] of indexSubscriptions) if (sub.root === value.meta.workspacePath && sub.identity === value.meta.workspaceIdentity) emitIndex(id);
+    if (value.meta.taskId.startsWith(FREE_CHAT_PREFIX)) updatePrototypeFreeChat({ ...value.meta, pinned: value.pinned, archived: value.archived }, { deleted: value.deleted, empty: value.snapshot.rows.window.length === 0 });
   };
   const append = (value: LocalSession, content: string, commandId?: string, refs?: AttachmentRef[]) => {
-    appendRows(value.snapshot.rows.window, value.meta.taskId, content, value.meta.taskId.startsWith("prototype-skill-design:") ? prototypeSkillDesignReply(value.meta.taskId, content) : `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在本次浏览器会话中。当前${value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。用户确认原型后再进入真实后端对接与验收阶段。`, Date.now(), commandId, refs);
+    if (value.stage === "free" && value.meta.title === "新建会话") { value.meta.title = content.trim().split("\n")[0]!.slice(0, 40) || "新建会话"; value.snapshot.meta.title = value.meta.title; }
+    appendRows(value.snapshot.rows.window, value.meta.taskId, content, value.meta.taskId.startsWith("prototype-skill-design:") ? prototypeSkillDesignReply(value.meta.taskId, content) : `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在本次浏览器会话中。当前${value.stage === "free" ? "项目自由会话" : value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。用户确认原型后再进入真实后端对接与验收阶段。`, Date.now(), commandId, refs);
     value.snapshot.rows.totalCount = value.snapshot.rows.window.length; value.snapshot.rows.firstRowId = value.snapshot.rows.window[0]?.rowId ?? null; changed(value);
   };
   const updateModel = (value: LocalSession, model: ModelSelection) => { value.snapshot.config.modelSelection = model; value.snapshot.config.provider = model.providerId; value.snapshot.config.model = model.modelId; value.meta.model = model.modelId; changed(value); return legacy(value); };
   const read = async (params: ZCodeAgentSessionTarget) => legacy(target(params));
-  const create = async (params: { workspacePath: string; workspaceIdentity?: string; sessionId?: string }) => legacy(ensure(params.sessionId ?? `prototype-conversation-${++nextId}`, params.workspacePath, params.workspaceIdentity));
+  const create = async (params: { workspacePath: string; workspaceIdentity?: string; sessionId?: string }) => {
+    const projectId = freeProjectId(params.workspaceIdentity);
+    const id = params.sessionId ?? (projectId ? createPrototypeFreeChat(projectId, params.workspacePath, params.workspaceIdentity).taskId : `prototype-conversation-${++nextId}`);
+    return legacy(ensure(id, params.workspacePath, params.workspaceIdentity));
+  };
   const noRuntime = unavailablePrototypeOperation;
   const taskService: IServiceAccessor["zcodeTaskService"] = {
     initialize: async () => ({ available: true, version: "prototype-memory" }), releaseWorkspacePreparation: async () => {}, checkCodexConnectivity: noRuntime,
-    createTask: async params => ensure(`prototype-conversation-${++nextId}`, params.workspacePath, params.workspaceIdentity).meta,
+    createTask: async params => {
+      const projectId = freeProjectId(params.workspaceIdentity);
+      const id = projectId ? createPrototypeFreeChat(projectId, params.workspacePath, params.workspaceIdentity).taskId : `prototype-conversation-${++nextId}`;
+      return ensure(id, params.workspacePath, params.workspaceIdentity).meta;
+    },
     sendPrompt: async params => { const value = [...sessions.values()].find(item => item.meta.taskId === params.taskId) ?? ensure(params.taskId); append(value, params.content); },
     deliverSessionMessage: noRuntime, sendSessionMessageDeliveryResult: async () => {}, enqueueTaskCommand: noRuntime, promoteTaskCommand: noRuntime,
     cancelTaskCommand: async params => ({ canceled: false, commandId: params.commandId }), stopGeneration: async () => {}, compactSession: noRuntime, goalSession: noRuntime,
@@ -246,7 +282,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     resolveSuggestedPluginReference: noRuntime, onDynamicPluginOperationProgress: () => silentPrototypeEvent(),
     getPluginsOverview: async () => ({ marketplaces: [], availablePlugins: [], installedPlugins: [], restorableBuiltins: [], diagnostics: [], capability: { supported: false, reason: "阶段性前端原型没有插件运行时" } }), collectLocalRuntimeChildProcesses: async () => [],
     addPluginMarketplace: noRuntime, removePluginMarketplace: noRuntime, updatePluginMarketplace: noRuntime, installPlugin: noRuntime, cancelPluginOperation: noRuntime, uninstallPlugin: noRuntime, updatePlugin: noRuntime, restoreBuiltinPlugin: noRuntime, configurePlugin: noRuntime, resetPluginConfig: noRuntime, validatePlugin: noRuntime, describePlugin: noRuntime, setPluginEnabled: noRuntime,
-    listAutomations: async () => [], listAllAutomations: async () => [], createAutomation: noRuntime, updateAutomation: noRuntime, deleteAutomation: noRuntime, setAutomationEnabled: noRuntime, restartAutomation: noRuntime, runAutomationNow: noRuntime, listAutomationRuns: async () => [], deleteAutomationRun: noRuntime,
+    ...createPrototypeAutomationServices(),
     generateWorkspaceText: noRuntime, testModelConnectivity: noRuntime, sendPrompt: noRuntime, compactSession: noRuntime, goalSession: noRuntime,
     closeSession: async () => true,
     setModel: async params => updateModel(target(params), params.model),

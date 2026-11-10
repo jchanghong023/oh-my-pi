@@ -2,7 +2,7 @@
 
 ## Why
 
-本 change 是 [refactor-dev-webgui-requirement-intake](../refactor-dev-webgui-requirement-intake/proposal.md) 完整 Dev 重构提案的一部分。当前 `dev-browser-workbench` 仍包含与本轮最终确认的需求模型、四阶段、人工 PR、共享工作流及 WebGUI 使用方式冲突的旧条款，必须明确替换或退役，避免新增规则与旧八阶段同时生效。
+本 change 是 [refactor-dev-webgui-requirement-intake](../refactor-dev-webgui-requirement-intake/proposal.md) 完整 Dev 重构提案的一部分。当前 `dev-browser-workbench` 仍包含与本轮最终确认的需求模型、提案两阶段、三阶段开发、PR 和共享工作流及 WebGUI 使用方式冲突的旧条款，必须明确替换或退役，避免新增规则与旧八阶段同时生效。
 
 ## What Changes
 

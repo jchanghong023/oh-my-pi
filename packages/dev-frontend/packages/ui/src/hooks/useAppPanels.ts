@@ -102,7 +102,9 @@ export function useAppPanels(options: {
   const activeWorkspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
   const { zcodeSessionService } = useServices();
   const isOfficeMode = useIsOfficeMode();
-  const isDev = useDev() !== null;
+  const dev = useDev();
+  const isDev = dev !== null;
+  const isDevFree = Boolean(dev?.selection.freeSessionId);
   const isMobileCompactViewport = useIsMobileCompactViewport();
   const sidePaneMemoryKey = useMemo(
     () =>
@@ -247,12 +249,12 @@ export function useAppPanels(options: {
     [commitSidePaneState, currentSidePaneScope],
   );
   const handleOpenDevMaterialsSidePane = useCallback(() => {
-    if (!isDev) return;
+    if (!isDev || isDevFree) return;
     revealSidePaneForCurrentOwner();
     commitOpenedSidePaneState((current) =>
       activateDevMaterialsSidePane(current, currentSidePaneScope()),
     );
-  }, [commitOpenedSidePaneState, currentSidePaneScope, isDev, revealSidePaneForCurrentOwner]);
+  }, [commitOpenedSidePaneState, currentSidePaneScope, isDev, isDevFree, revealSidePaneForCurrentOwner]);
 
 
   useEffect(() => {
@@ -307,7 +309,10 @@ export function useAppPanels(options: {
       initializedDevSidePaneScopesRef.current.clear();
     } else if (!initializedDevSidePaneScopesRef.current.has(scopeKey)) {
       initializedDevSidePaneScopesRef.current.add(scopeKey);
-      handleOpenDevMaterialsSidePane();
+      if (isDevFree) {
+        revealSidePaneForCurrentOwner();
+        commitOpenedSidePaneState(current => activateGitSidePane(current));
+      } else handleOpenDevMaterialsSidePane();
       // 手机首次进入会话时保留材料标签，但不让抽屉自动盖住聊天和输入。
       // 后续显式打开仍使用同一面板；桌面继续默认显示材料。
       if (isMobileCompactViewport) setIsSidePaneCollapsed(true);
@@ -319,6 +324,9 @@ export function useAppPanels(options: {
     handleOpenDevMaterialsSidePane,
     isMobileCompactViewport,
     isDev,
+    isDevFree,
+    commitOpenedSidePaneState,
+    revealSidePaneForCurrentOwner,
     sidePaneOwnerId,
   ]);
 

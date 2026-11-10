@@ -1,3 +1,5 @@
+import { prototypeProjectDirectories } from "./project-directories.js";
+import { readPrototypeDevelopmentRoot, readPrototypeProjectSettings } from "./project-settings.js";
 import type { IServiceAccessor } from "@zcode/services";
 import type { GitFileChange, GitRepositorySummary, WorkspaceFileEntry } from "@zcode/shared";
 import type { V4ConversationFileChangesResult } from "@zcode/shared/zcode-protocol-v4";
@@ -29,7 +31,9 @@ export function prototypeConversationFileChanges(root: string): V4ConversationFi
 }
 
 function rootFor(path: string): string {
-  return path.startsWith("/demo/mobile-console") ? "/demo/mobile-console" : "/demo/aurora-console";
+  // 自由会话可使用已绑定的个人目录，文件样例按实际会话根解析。
+  const roots = [...prototypeProjectDirectories().map(item => item.path), ...readPrototypeProjectSettings().projects.flatMap(item => [item.root, readPrototypeDevelopmentRoot(item.id)].filter((root): root is string => Boolean(root)))];
+  return roots.sort((a, b) => b.length - a.length).find(root => path === root || path.startsWith(`${root}/`)) ?? "/demo/aurora-console";
 }
 function relative(path: string): string { return path.slice(rootFor(path).length).replace(/^\//, ""); }
 const encoder = new TextEncoder();

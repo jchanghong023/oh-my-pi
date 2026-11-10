@@ -14,7 +14,7 @@ export const prototypePeers: PrototypePeer[] = [
     materials: [
       { title: "阶段导航约定", path: "shared/stage-navigation.md", content: "# 阶段导航约定（共享样例）\n\n方案、计划、开发与验证、交付 PR 使用原界面阶段控件。当前材料与历史材料只读展示。\n\n此文不代表接口已经对接；真实 OMP 集成在用户确认后实施。" },
     ], logs: [
-      { id: "frontend-1", time: "10:05", text: "样例记录：准备四阶段 SR 演示数据，不执行真实任务。" },
+      { id: "frontend-1", time: "10:05", text: "样例记录：准备提案两阶段与三阶段 SR 开发演示数据，不执行真实任务。" },
       { id: "frontend-2", time: "10:18", text: "样例记录：整理材料复制与未发送草稿的交互说明。" },
     ] },
   { id: "peer-quality", name: "周宁", role: "质量与验证", status: "离线（样例）", projectId: "demo-aurora",

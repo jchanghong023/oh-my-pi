@@ -47,7 +47,7 @@ export function createPrototypeSettingsServices(sessionWorkspaces: Map<string, s
       models: provider.models.filter(model => model.enabled).map(model => ({ modelId: model.modelId, config: PROTOTYPE_REGISTRY_MODEL })),
     })),
     ...(sessionId ? { nativeSession: {
-      sessionId, workspacePath: workspaceFor(sessionId), chatAvailable: true, taskRunsAvailable: false,
+      sessionId, workspacePath: workspaceFor(sessionId), chatAvailable: true, taskRunsAvailable: true,
       models: view.providers.flatMap(provider => provider.models.filter(model => model.enabled).map(model => ({
         providerId: provider.providerId, modelId: model.modelId, name: `${model.modelId}（预置回复）`,
       }))),

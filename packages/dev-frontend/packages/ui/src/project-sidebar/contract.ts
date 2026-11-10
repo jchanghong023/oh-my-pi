@@ -83,6 +83,9 @@ export interface SidebarFileTreeOpenRequest {
 }
 /** 项目、时间线共用同一 Host 行集合；回调只负责现有导航，不维护组织状态。 */
 export interface ProjectSidebarProps {
+  /** Dev 原型只展示当前项目的一行，标题为自由会话，直接展开最近聊天。 */
+  singleProjectConversation?: boolean;
+  conversationProjectId?: string;
   workspacePath: string;
   workspaceIdentity?: string;
   workspaceRemoteSessionId?: string;

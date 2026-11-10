@@ -1,3 +1,4 @@
+import { createPrototypeProjectServices } from "../packages/ui/src/dev/mock/free-chats.js";
 import type { IServiceAccessor, BroadcastMessage } from "@zcode/services";
 import type { Hook, Memory, OutputStyle } from "@zcode/shared";
 import type { PromptAttachmentTransferProgress as TransferProgress } from "../packages/services/src/prompt-attachment-transfer/promptAttachmentTransfer.js";
@@ -35,7 +36,7 @@ export function createPrototypeServices(): IServiceAccessor {
   };
   const fileServices = createPrototypeFileServices();
   return {
-    ...fileServices, ...createPrototypeSettingsServices(sessionWorkspaces), ...createPrototypeChatServices(attachments, sessionWorkspaces),
+    ...fileServices, ...createPrototypeProjectServices(), ...createPrototypeSettingsServices(sessionWorkspaces), ...createPrototypeChatServices(attachments, sessionWorkspaces),
     systemService: { info: async () => ({ homedir: "/demo/user", platform: "browser-prototype" }), probeIntranet: unavailable },
     credentialService: { load: async key => credentials.get(key) ?? null, save: async (key, value) => { credentials.set(key, value); }, delete: async key => { credentials.delete(key); } },
     broadcastService: {

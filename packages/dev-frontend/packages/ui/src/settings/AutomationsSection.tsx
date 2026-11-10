@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- 定时任务主视图集中维护列表、创建/编辑整页路由与启停/删除操作，集中更利于交互一致。 */
+import { useDev } from "@/dev/DevContext.js";
 import {
   useCallback,
   useEffect,
@@ -364,6 +365,7 @@ export function AutomationsSection({
   onOpenSession,
 }: AutomationsSectionProps) {
   const { intl, locale } = useZCodeIntl();
+  const dev = useDev();
   const { clientScenesService, zcodeAgentService } = useServices();
   const confirmDialog = useConfirmDialog();
   const { settings: sharedSettings, update: updateSharedSettings } = useSettings();
@@ -410,7 +412,7 @@ export function AutomationsSection({
   const workflowModelView =
     workflowModelRead.state.status === "ready" ? workflowModelRead.state.view :
       workflowModelRead.state.status === "loading" ? workflowModelRead.state.catalog : undefined;
-  const workflowDescription = workflowModelView?.nativeSession !== undefined
+  const workflowDescription = dev ? "只读查看 task / workpool 运行、父子代理、消息与输出的结构样例，未执行真实任务。" : workflowModelView?.nativeSession !== undefined
     ? locale.startsWith("zh")
       ? "只读查看当前 OMP 会话真实的 task / workpool 运行、父子代理、消息与输出。"
       : "Read-only view of actual task / workpool runs, parent-child agents, messages and outputs in the current OMP session."
@@ -707,7 +709,7 @@ export function AutomationsSection({
             (run) => run.trigger === "manual" && Boolean(run.sessionId),
           )?.sessionId;
         toast(
-          intl.formatMessage({ id: "scheduledPreview.toast.running" }, { title: automation.title }),
+          dev ? "已添加演示记录，未执行任务或后台调度。" : intl.formatMessage({ id: "scheduledPreview.toast.running" }, { title: automation.title }),
           {
             durationMs: 4000,
             position: "top-center",
@@ -739,6 +741,7 @@ export function AutomationsSection({
       }
     },
     [
+      dev,
       intl,
       loadRuns,
       onOpenSession,

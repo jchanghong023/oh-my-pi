@@ -6,14 +6,16 @@ import { Label } from "@/components/ui/label.js";
 import { Badge } from "@/components/ui/badge.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
-import { SettingsGroupCard } from "@/settings/SettingsPageParts.js";
-import { DevPersonalConfigScope } from "./DevPersonalConfigScope.js";
+import { SettingsGroupCard, SettingsBadge } from "@/settings/SettingsPageParts.js";
+import { readPrototypeDevelopmentRoot } from "./mock/project-settings.js";
+import { getPrototypeEmployeeId } from "./mock/employee.js";
 import { useDev } from "./DevContext.js";
 import { getPrototypeWorkflow } from "./mock/workflow.js";
-import { PROTOTYPE_PROJECT_DIRECTORIES, checkPrototypeProjectDirectory } from "./mock/project-directories.js";
+import { prototypeProjectDirectories, checkPrototypeProjectDirectory, checkPrototypeDevelopmentDirectory } from "./mock/project-directories.js";
 
 export function DevProjectSettings() {
 	const dev = useDev();
+	const employeeId = getPrototypeEmployeeId();
 	const [projectOpen, setProjectOpen] = useState(false);
 	const [browserOpen, setBrowserOpen] = useState(false);
 	const [browsePath, setBrowsePath] = useState("");
@@ -24,6 +26,9 @@ export function DevProjectSettings() {
 	const [releaseProjectId, setReleaseProjectId] = useState("");
 	const [releaseTitle, setReleaseTitle] = useState("");
 	const [releaseError, setReleaseError] = useState("");
+	const [developmentProjectId, setDevelopmentProjectId] = useState("");
+	const [developmentRoot, setDevelopmentRoot] = useState("");
+	const [developmentError, setDevelopmentError] = useState("");
 	const [message, setMessage] = useState("");
 	if (!dev) return null;
 	const projects = dev.view?.projects ?? [];
@@ -42,10 +47,10 @@ export function DevProjectSettings() {
 	};
 	return (
 		<section className="space-y-6" data-testid="dev-project-settings">
-			<DevPersonalConfigScope scopeLabel="项目清单 · 个人配置" />
+			<div className="space-y-2"><SettingsBadge>团队共享 · 所有人可见</SettingsBadge><p className="text-ui-sm text-foreground-subtle">项目与 Release 保存在共享数据库。共享项目路径只读；开发时使用按工号关联的个人开发项目。</p></div>
 			<div className="flex flex-wrap items-start justify-between gap-3">
 				<div className="space-y-1">
-					<p className="text-ui-base text-foreground-subtle">Dev 管理的项目清单保存在 OMP 个人配置目录；各项目的 Release 清单保存在各自 Git 仓库。</p>
+					<p className="text-ui-base text-foreground-subtle">所有人查看同一份项目与 Release。当前工号：{employeeId}。</p>
 					<p className="text-ui-sm text-foreground-subtle">{projects.length} 个项目 · {releaseCount} 个 Release</p>
 				</div>
 				<Button onClick={openProject}><Plus className="size-4" />添加已有项目目录</Button>
@@ -61,14 +66,21 @@ export function DevProjectSettings() {
 									<Badge variant="outline">Git 项目</Badge>
 									{dev.selection.projectId === project.id && <Badge variant="secondary">当前项目</Badge>}
 								</div>
-								<p className="break-all font-mono text-ui-sm text-foreground-subtle">{project.root}</p>
+								<div className="space-y-1"><p className="text-ui-sm text-foreground-subtle">共享项目路径 · 只读</p><Input aria-label={`${project.name}共享项目路径`} value={project.root} readOnly className="font-mono text-ui-sm" /></div>
 								<div className="flex items-center gap-3 text-ui-sm text-foreground-subtle">
 									<span className="inline-flex items-center gap-1"><GitBranch className="size-3.5" />{project.defaultBranch}</span>
-									<span>{view.releases.length} 个 Release · 项目 Git 管理</span>
+									<span>{view.releases.length} 个 Release · 团队共享</span>
 								</div>
 							</div>
 							<Button variant="outline" onClick={() => openRelease(project.id)} aria-label={`为${project.name}添加 Release`}><Plus className="size-3.5" />添加 Release</Button>
 						</header>
+						<div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4">
+							<div className="min-w-0 space-y-1">
+								<p className="text-ui-base font-medium">我的开发项目 <span className="text-ui-sm font-normal text-foreground-subtle">工号 {employeeId}</span></p>
+								<p className="break-all font-mono text-ui-sm text-foreground-subtle" data-testid={`development-root-${project.id}`}>{readPrototypeDevelopmentRoot(project.id) ?? "尚未配置 · 可以浏览，进入开发前需添加"}</p>
+							</div>
+							<Button variant="outline" onClick={() => { setDevelopmentProjectId(project.id); setDevelopmentRoot(readPrototypeDevelopmentRoot(project.id) ?? ""); setDevelopmentError(""); }} aria-label={`配置${project.name}的开发项目`}>{readPrototypeDevelopmentRoot(project.id) ? "修改开发项目" : "添加开发项目"}</Button>
+						</div>
 						{view.releases.length ? (
 							<ul className="divide-y divide-border">
 								{view.releases.map(release => {
@@ -97,13 +109,13 @@ export function DevProjectSettings() {
 			))}
 			{!projects.length && <p className="text-ui-base text-foreground-subtle">还没有项目。添加已有 Git 项目目录后，即可创建 Release。</p>}
 			<p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
-			<p className="text-ui-sm leading-6 text-foreground-subtle">原型演示：个人项目清单、各项目 Git 中的 Release 清单、目录浏览及校验均为内存样例；不访问真实 OMP 配置或项目文件，不执行 Git 提交，刷新后恢复。</p>
+			<p className="text-ui-sm leading-6 text-foreground-subtle">原型演示：共享项目、Release、按工号关联的开发目录及校验均为内存样例；不连接真实数据库或文件系统，不执行 Git，刷新后恢复。</p>
 
 			<Dialog open={projectOpen} onOpenChange={setProjectOpen}>
 				<DialogContent className="sm:max-w-lg">
 					<DialogHeader>
 						<DialogTitle>添加已有项目目录</DialogTitle>
-						<DialogDescription>选择或输入已有 Git 项目的根目录。</DialogDescription>
+						<DialogDescription>选择或输入服务端已有 Git 项目目录，登记后所有人可见，路径只读。</DialogDescription>
 					</DialogHeader>
 					<form className="space-y-4" onSubmit={async event => {
 						event.preventDefault();
@@ -135,11 +147,30 @@ export function DevProjectSettings() {
 				</DialogContent>
 			</Dialog>
 
+			<Dialog open={Boolean(developmentProjectId)} onOpenChange={open => { if (!open) setDevelopmentProjectId(""); }}>
+				<DialogContent className="sm:max-w-lg">
+					<DialogHeader><DialogTitle>配置我的开发项目</DialogTitle><DialogDescription>{projects.find(project => project.id === developmentProjectId)?.name} · 工号 {employeeId}。路径位于运行 OMP 的服务器，需与共享项目对应同一 Git 仓库；不会修改共享项目路径。</DialogDescription></DialogHeader>
+					<form className="space-y-4" onSubmit={async event => {
+						event.preventDefault();
+						const project = projects.find(item => item.id === developmentProjectId);
+						if (!project) return;
+						const check = checkPrototypeDevelopmentDirectory(developmentRoot, project.root);
+						if (!check.valid) { setDevelopmentError(check.error); return; }
+						const result = await dev.command({ type: "setDevelopmentRoot", projectId: project.id, root: check.root });
+						if (result?.status === "completed") { setDevelopmentProjectId(""); setMessage(`已保存“${project.name}”的个人开发项目。共享路径保持只读。`); }
+					}}>
+						<div className="space-y-2"><Label htmlFor="development-directory">开发项目目录</Label><div className="flex gap-2"><Input id="development-directory" value={developmentRoot} onChange={event => { setDevelopmentRoot(event.target.value); setDevelopmentError(""); }} placeholder="例如 /demo/j00808874/mobile-console" required aria-invalid={Boolean(developmentError)} aria-describedby="development-directory-help" /><Button type="button" variant="outline" onClick={() => { setBrowsePath(developmentRoot); setBrowserOpen(true); }}><FolderOpen className="size-4" />浏览目录</Button></div><p id="development-directory-help" className="text-ui-sm text-foreground-subtle">保存时检查 Git 仓库及所属项目。个人路径只用于当前工号在该项目中的开发。</p></div>
+						{developmentError && <p role="alert" className="text-ui-base text-destructive">{developmentError}</p>}
+						<DialogFooter><Button type="button" variant="outline" onClick={() => setDevelopmentProjectId("")}>取消</Button><Button type="submit" disabled={!developmentRoot.trim() || dev.pending}>保存开发项目</Button></DialogFooter>
+					</form>
+				</DialogContent>
+			</Dialog>
+
 			<Dialog open={browserOpen} onOpenChange={setBrowserOpen}>
 				<DialogContent className="sm:max-w-lg">
-					<DialogHeader><DialogTitle>选择项目目录</DialogTitle><DialogDescription>演示文件浏览器 · /demo。请选择项目根目录，不需要选择 .git 子目录。</DialogDescription></DialogHeader>
+					<DialogHeader><DialogTitle>选择项目目录</DialogTitle><DialogDescription>演示服务端文件浏览器 · /demo。请选择 Git 项目根目录，不需要选择 .git 子目录。</DialogDescription></DialogHeader>
 					<div className="max-h-[45vh] overflow-y-auto rounded-xl border border-border">
-						{PROTOTYPE_PROJECT_DIRECTORIES.map(directory => {
+						{prototypeProjectDirectories().filter(directory => developmentProjectId || !directory.repositoryRoot).map(directory => {
 							const added = projects.some(project => project.root === directory.path);
 							return <Button key={directory.path} type="button" variant={browsePath === directory.path ? "secondary" : "ghost"} className="h-auto w-full justify-start gap-3 rounded-none px-3 py-3 text-left" disabled={added} onClick={() => setBrowsePath(directory.path)} aria-pressed={browsePath === directory.path}>
 								{directory.git ? <FolderGit2 className="size-4 shrink-0" /> : <Folder className="size-4 shrink-0" />}
@@ -150,14 +181,14 @@ export function DevProjectSettings() {
 					</div>
 					<DialogFooter>
 						<Button variant="outline" onClick={() => setBrowserOpen(false)}>取消</Button>
-						<Button disabled={!browsePath || projects.some(project => project.root === browsePath)} onClick={() => { changeRoot(browsePath); setBrowserOpen(false); }}>选择此目录</Button>
+						<Button disabled={!browsePath || projects.some(project => project.root === browsePath)} onClick={() => { if (developmentProjectId) { setDevelopmentRoot(browsePath); setDevelopmentError(""); } else changeRoot(browsePath); setBrowserOpen(false); }}>选择此目录</Button>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
 
 			<Dialog open={releaseOpen} onOpenChange={setReleaseOpen}>
 				<DialogContent className="sm:max-w-lg">
-					<DialogHeader><DialogTitle>添加 Release</DialogTitle><DialogDescription>Release 属于所选项目，用于组织需求与交付，随该项目 Git 仓库管理。</DialogDescription></DialogHeader>
+					<DialogHeader><DialogTitle>添加 Release</DialogTitle><DialogDescription>Release 属于所选共享项目，添加后所有人可见，保存在共享数据库。</DialogDescription></DialogHeader>
 					<form className="space-y-4" onSubmit={async event => {
 						event.preventDefault();
 						if (getPrototypeWorkflow({ projectId: releaseProjectId }).releases.some(release => release.title.toLowerCase() === releaseTitle.trim().toLowerCase())) { setReleaseError("此项目中已存在同名 Release，请使用其他名称。"); return; }

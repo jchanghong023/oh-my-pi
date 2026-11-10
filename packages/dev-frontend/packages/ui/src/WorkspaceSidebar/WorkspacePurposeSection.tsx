@@ -11,6 +11,7 @@ import { cn } from "@/components/lib/utils.js";
 
 export function WorkspacePurposeSection({
   title,
+  icon,
   open,
   onOpenChange,
   action,
@@ -19,8 +20,10 @@ export function WorkspacePurposeSection({
   sortableId,
   dragHandleLabel,
   inset = false,
+  sortable = true,
 }: {
   title: string;
+  icon?: ReactNode;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   action: ReactNode;
@@ -29,6 +32,7 @@ export function WorkspacePurposeSection({
   sortableId: string;
   dragHandleLabel: string;
   inset?: boolean;
+  sortable?: boolean;
 }) {
   const {
     attributes,
@@ -42,7 +46,7 @@ export function WorkspacePurposeSection({
     activeIndex,
     index,
     isOver,
-  } = useSortable({ id: sortableId });
+  } = useSortable({ id: sortableId, disabled: !sortable });
   // 原因：分区原来只有位移动画，无法判断落点；与项目行一样从同一排序状态派生蓝线。
   const dropPosition =
     isOver && active && !isDragging && activeIndex >= 0
@@ -86,13 +90,14 @@ export function WorkspacePurposeSection({
                 这里统一为 section title 的 text-ui-base，避免可折叠能力改变标题层级。 */}
             <button
               ref={setActivatorNodeRef}
-              {...attributes}
-              {...listeners}
+              {...(sortable ? attributes : {})}
+              {...(sortable ? listeners : {})}
               type="button"
-              aria-description={dragHandleLabel}
+              aria-description={sortable ? dragHandleLabel : undefined}
               data-purpose-section-drag-trigger={sortableId}
-              className="flex h-7 min-w-0 flex-1 touch-none items-center gap-1 px-2.5 text-left text-ui-base font-medium text-foreground-subtlest outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30"
+              className={cn("flex h-7 min-w-0 flex-1 touch-none items-center px-2.5 text-left text-ui-base font-medium text-foreground-subtlest outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30", icon ? "gap-2" : "gap-1")}
             >
+              {icon}
               <span className="min-w-0 truncate">{title}</span>
               {open ? (
                 <ChevronDown

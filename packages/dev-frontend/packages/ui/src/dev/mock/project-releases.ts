@@ -1,7 +1,7 @@
 import type { DevRelease } from "./types.js";
 
 const createdAt = "2026-11-10T09:00:00.000Z";
-// 各项目自己 Git 仓库中 Release 清单的内存投影；不属于 OMP 个人配置。
+// 共享数据库中按项目关联的 Release 清单内存投影。
 // 每个项目独立维护，不实际执行文件写入、commit 或 push。
 const releasesByProject = new Map<string, DevRelease[]>([
 	["demo-aurora", [

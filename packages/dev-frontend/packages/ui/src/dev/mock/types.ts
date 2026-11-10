@@ -1,16 +1,16 @@
 /** Phase-one frontend presentation contracts. No OMP runtime dependency or execution authority. */
 export const DEV_WORKFLOW_VERSION = 1 as const;
-export const DEV_WORKFLOW_STAGES = ["solution", "planning", "executing", "pr"] as const;
+export const DEV_WORKFLOW_STAGES = ["planning", "executing", "pr"] as const;
 export type DevWorkflowStage = (typeof DEV_WORKFLOW_STAGES)[number];
-export type DevRequirementStatus = "draft" | "reviewing" | "confirmed" | "requirements-pr" | "frozen" | "deleted";
+export type DevRequirementStatus = "draft" | "solution-ready" | "requirements-pr" | "frozen" | "deleted";
 export interface DevObjectRef { projectId: string; irId: string; srId?: string }
 export interface DevNativeSessionRef extends DevObjectRef {
-  sessionId: string; sessionFile: string; role: "requirements" | "reviewer" | DevWorkflowStage;
-  phase: "requirements" | DevWorkflowStage; round: number;
+  sessionId: string; sessionFile: string; role: "requirements" | "solution" | "reviewer" | DevWorkflowStage;
+  phase: "requirements" | "solution" | DevWorkflowStage; round: number;
 }
 export interface DevFileVersion { path: string; sha256: string; size: number }
 export interface DevProject {
-  id: string; name: string; root: string; commonDir: string; revision: number;
+  id: string; name: string; storageName: string; root: string; commonDir: string; revision: number;
   createdAt: string; updatedAt: string; defaultBranch: string; remote?: string; repositoryId: string;
 }
 export interface DevRelease { id: string; projectId: string; title: string; createdAt: string }
@@ -29,7 +29,7 @@ export interface DevMergeFact { commit: string; branch: string; checkedAt: strin
 export interface DevRequirementDeletion { version: 1; operationId: string; deletedAt: string; manualCloseNeeded: boolean; requirementsPrUrl?: string }
 export interface DevStageApproval { stage: DevWorkflowStage; round: number; operationId: string; digest: string; files: DevFileVersion[]; approvedAt: string }
 export interface DevStageMaterial extends DevFileVersion {
-  stage: DevWorkflowStage; kind: "solution" | "plan" | "completion" | "ut" | "st" | "delivery"; round: number; valid: boolean;
+  stage: DevWorkflowStage; kind: "plan" | "completion" | "ut" | "st" | "delivery"; round: number; valid: boolean;
 }
 export interface DevSystemRequirement {
   id: string; projectId: string; irId: string; title: string; documentPath: string;
@@ -39,11 +39,17 @@ export interface DevSystemRequirement {
 }
 export interface DevRequirementGroup {
   id: string; projectId: string; releaseId: string; title: string; documentPath: string;
-  origin: "local" | "browser" | "import"; status: DevRequirementStatus; revision: number; srIds: string[];
+  origin: "local" | "browser"; status: DevRequirementStatus; revision: number; srIds: string[];
   files: DevFileVersion[]; evidenceFiles?: DevFileVersion[]; retiredFiles?: DevFileVersion[]; worktree?: DevWorktree;
   sessions: DevNativeSessionRef[]; snapshot?: DevRequirementSnapshot; confirmation?: DevConfirmation; review?: DevReview;
-  requirementsPr?: DevPrFact; merge?: DevMergeFact; packageId?: string; packageDigest?: string; createdAt: string;
+  requirementsPr?: DevPrFact; merge?: DevMergeFact; createdAt: string;
   deletion?: DevRequirementDeletion;
+  proposalStage?: "requirements" | "solution";
+  proposalRound?: number;
+  developerHandoff?: { employeeId: string; submittedAt: string };
+  proposalSolution?: { path: string; employeeId: string; generatedAt: string; round: number; valid: boolean };
+  returnFeedback?: { employeeId: string; returnedAt: string; reason: string };
+  proposalLocation?: { projectName: string; employeeId: string; directory: string };
 }
 export interface DevOperationReceipt {
   operationId: string; commandDigest: string; type: string; status: "running" | "completed" | "failed";
@@ -52,7 +58,7 @@ export interface DevOperationReceipt {
 }
 export interface DevMaterialView extends DevFileVersion {
   projectId: string; irId: string; srId?: string;
-  kind: "ir" | "sr" | DevStageMaterial["kind"] | "attachment"; stage?: DevWorkflowStage;
+  kind: "ir" | "sr" | "solution" | DevStageMaterial["kind"] | "attachment"; stage?: DevWorkflowStage;
   valid: boolean; content?: string; error?: string;
 }
 export interface DevChangedFile extends DevFileVersion, DevObjectRef { status: string }
@@ -66,15 +72,18 @@ export interface DevCommandBase { operationId: string; expectedRevision: number;
 export type DevWorkflowCommand = DevCommandBase & (
   | { type: "registerProject"; registrationScope: "target-root"; root: string; name: string }
   | { type: "createRelease"; title: string }
-  | { type: "createLocalDraft" | "createBrowserDraft"; releaseId: string }
-  | { type: "importPackage"; releaseId: string; packageId: string }
+  | { type: "setDevelopmentRoot"; projectId: string; root: string }
+  | { type: "createProposal"; releaseId: string }
   | { type: "deleteRequirement"; version: 1; projectId: string; irId: string }
-  | { type: "confirmRequirements"; snapshotDigest: string }
+  | { type: "submitProposalReview" }
+  | { type: "generateProposalSolution" }
+  | { type: "returnProposal"; reason: string }
   | { type: "markRequirementsPrSubmitted" | "markCodePrSubmitted"; url: string }
-  | { type: "markRequirementsMerged" | "markCodeMerged" }
+  | { type: "markRequirementsMerged"; defaultBranchFilesConfirmed: boolean }
+  | { type: "markCodeMerged" }
   | { type: "startSr" }
   | { type: "approveStage"; stage: DevWorkflowStage; round: number; materialDigest: string }
-  | { type: "backStage"; stage: "solution" | "planning" | "executing" }
+  | { type: "backStage"; stage: "planning" | "executing" }
   | { type: "stop" }
   | { type: "publishMaterials"; scope: "requirements" | "development"; paths: string[]; versions?: DevFileVersion[]; message: string; push: boolean }
 );
@@ -84,7 +93,7 @@ export interface DevWorkflowResult {
   status: "completed" | "failed" | "running"; receipt: DevOperationReceipt; view?: DevWorkflowView;
   error?: string; deletion?: DevRequirementDeletion;
 }
-export interface DevSelection { projectId?: string; irId?: string; srId?: string; stage?: DevWorkflowStage }
+export interface DevSelection { freeSessionId?: string; freeFiles?: boolean; projectId?: string; irId?: string; srId?: string; stage?: DevWorkflowStage; discussionPhase?: "requirements" | "solution" }
 export interface DevNativeSurfaceTarget extends DevObjectRef {
   sessionId: string; phase: DevNativeSessionRef["phase"]; round: number; clientId: string;
 }

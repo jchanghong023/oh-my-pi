@@ -1,4 +1,6 @@
+import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useDev } from "@/dev/DevContext.js";
+import { DevAutomations } from "@/dev/DevAutomations.js";
 import { DevSidebar, DevStageHeader, DevReadonlyOverview } from "@/dev/DevWorkbench.js";
 import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
 import { useWorkbenchGroupStore } from "@/v4/workbenchGroupStore.js";
@@ -324,8 +326,9 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const dev = useDev();
   const devSr = dev?.view?.srs.find(item => item.id === dev.selection.srId);
   const devGroup = [...(dev?.view?.groups ?? []), ...(dev?.view?.drafts ?? [])].find(item => item.id === dev?.selection.irId);
+  const devProposalHistory = !!dev?.view?.drafts.some(item => item.id === dev.selection.irId) && !!dev?.selection.discussionPhase && dev.selection.discussionPhase !== (devGroup?.proposalStage ?? "requirements");
   const devFrozen = !!dev && !dev.selection.srId && devGroup?.status === "frozen";
-  const devReadOnly = !!dev && !!dev.selection.srId && devSr?.status !== "developing";
+  const devReadOnly = !!dev && !!dev.selection.srId && devSr?.status !== "developing" && !dev.view?.drafts.some(item => item.id === dev.selection.irId);
   const { intl } = useZCodeIntl();
   const nativeHostAvailable = useNativeHostAvailable();
   const platform = usePlatform();
@@ -1708,10 +1711,12 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   );
 
   // 手机 home 与桌面 sidebar 共用同一个项目入口；Shell 只接收导航完成事件。
-  const renderWorkspaceSidebar = (mobile?: {
+  const renderNativeProjectSidebar = (mobile?: {
     navigateToChat(): void;
-  }) => dev ? <DevSidebar onNavigate={mobile?.navigateToChat} /> : (
+  }, singleProjectConversation = false) => (
     <WorkspaceSidebar
+      singleProjectConversation={singleProjectConversation}
+      conversationProjectId={dev?.selection.projectId}
       workspacePath={workspaceAbsPath}
       workspaceIdentity={workspaceIdentity}
       workspaceRemoteSessionId={workspaceRemoteSessionId}
@@ -1725,7 +1730,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
           : handleOpenSidebarFiles
       }
       onSelectTask={
-        mobile
+        dev ? (_path, id) => { dev.openFreeChat(id); showChatMainView(); mobile?.navigateToChat(); } : mobile
           ? (...args) => {
               if (handleSelectTaskInChat(...args)) mobile.navigateToChat();
             }
@@ -1743,7 +1748,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       onOpenBrowserUrl={handleOpenBrowserUrl}
       fileTreeOpenRequest={fileTreeOpenRequest}
       onCreateTask={
-        mobile
+        dev ? request => { dev.startFreeChat(request?.projectId ?? undefined); showChatMainView(); mobile?.navigateToChat(); } : mobile
           ? (request) => {
               handleCreateTaskInChat(request);
               if (!workspaceReadOnlyReason) mobile.navigateToChat();
@@ -1759,7 +1764,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
             }
           : (onCreateConversationTask ?? handleCreateTaskInChat)
       }
-      onOpenFolderFromWorkspaceMenu={onOpenFolderFromWorkspaceMenu}
+      onOpenFolderFromWorkspaceMenu={dev ? () => { setPendingSettingsSectionIntent("general"); tabStoreApi.getState().openSettingsTab(); } : onOpenFolderFromWorkspaceMenu}
       theme={theme}
       onConnectRemote={onConnectRemote}
       onSelectRemoteProject={onSelectRemoteProject}
@@ -1790,6 +1795,10 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       automationsActive={workspaceMainView === "automations"}
     />
   );
+
+  const renderWorkspaceSidebar = (mobile?: { navigateToChat(): void }) => dev ? (
+    <DevSidebar projects={renderNativeProjectSidebar(mobile, true)} onNavigate={mobile?.navigateToChat ?? showChatMainView} onOpenAutomations={() => { handleOpenAutomations(); mobile?.navigateToChat(); }} automationsActive={workspaceMainView === "automations"} />
+  ) : renderNativeProjectSidebar(mobile);
 
   // Reuse the responsive phone layout for browsers connected directly to local OMP.
   const renderResponsiveShell = (wideContent: ReactNode) =>
@@ -1823,7 +1832,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 remoteSessionId={workspaceRemoteSessionId}
                 workspaceIdentity={workspaceIdentity}
                 projectName={projectName}
-                activeTaskTitle={dev ? (devSr?.title ?? devGroup?.title ?? "Dev") : activeTaskTitle}
+                activeTaskTitle={dev && !dev.selection.freeSessionId ? (devSr?.title ?? devGroup?.title ?? "Dev") : activeTaskTitle}
                 activeTaskChangeSummary={activeTaskChangeSummary}
                 activeTaskId={activeTaskId}
                 activeTraceId={activeTraceId}
@@ -1855,7 +1864,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 allowOpenWorkspace={allowOpenWorkspace}
               />
             </ScopedErrorBoundary>
-              {dev && <DevStageHeader />}
+              {dev && !dev.selection.freeSessionId && workspaceMainView === "chat" && <DevStageHeader />}
             </>
           ) : null
         }
@@ -1886,22 +1895,24 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                     className="min-h-full"
                   >
                     <div className="mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6">
-                      <AutomationsSection
-                        workspacePath={workspaceAbsPath}
-                        workspaceIdentity={workspaceIdentity}
-                        onCreateViaChat={handleCreateAutomationInChat}
-                        onNavigateToLaunchedRun={handleNavigateToLaunchedRun}
-                        onOpenWorkflowRun={handleOpenSavedWorkflowRun}
-                        onOpenWorkflowArtifact={handleOpenSavedWorkflowArtifact}
-                        openAutomationId={openAutomationId}
-                        openAutomationTab={openAutomationTab}
-                        onOpenAutomationConsumed={onOpenAutomationConsumed}
-                        openWorkflow={openWorkflow}
-                        onOpenWorkflowConsumed={onOpenWorkflowConsumed}
-                        onOpenSession={({ sessionId, workspacePath, workspaceIdentity }) =>
-                          handleSelectTaskInChat(workspacePath, sessionId, workspaceIdentity)
-                        }
-                      />
+                      {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
+                        <AutomationsSection
+                          workspacePath={workspaceAbsPath}
+                          workspaceIdentity={workspaceIdentity}
+                          onCreateViaChat={handleCreateAutomationInChat}
+                          onNavigateToLaunchedRun={handleNavigateToLaunchedRun}
+                          onOpenWorkflowRun={handleOpenSavedWorkflowRun}
+                          onOpenWorkflowArtifact={handleOpenSavedWorkflowArtifact}
+                          openAutomationId={openAutomationId}
+                          openAutomationTab={openAutomationTab}
+                          onOpenAutomationConsumed={onOpenAutomationConsumed}
+                          openWorkflow={openWorkflow}
+                          onOpenWorkflowConsumed={onOpenWorkflowConsumed}
+                          onOpenSession={({ sessionId, workspacePath, workspaceIdentity }) =>
+                            handleSelectTaskInChat(workspacePath, sessionId, workspaceIdentity)
+                          }
+                        />
+                      )}
                     </div>
                   </ScopedErrorBoundary>
                 </div>
@@ -1925,8 +1936,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                   allowEscapeStopOutsidePane={
                     isWorkspaceVisible && !isSidePaneOpen && !isSidePaneVisible
                   }
-                  readOnly={Boolean(workspaceReadOnlyReason) || devFrozen}
-                  readOnlyReason={devFrozen ? "整组需求已冻结，正式需求及拆分不可修改。" : workspaceReadOnlyReason}
+                  readOnly={Boolean(workspaceReadOnlyReason) || devFrozen || devProposalHistory}
+                  readOnlyReason={devProposalHistory ? "当前是另一讨论阶段的历史，只读；返回当前阶段继续处理。" : devFrozen ? "整组需求已冻结，正式需求及拆分不可修改。" : workspaceReadOnlyReason}
                   workspacePath={workspaceAbsPath}
                   workspaceIdentity={workspaceIdentity}
                   sessionId={activeTaskId}
@@ -2130,7 +2141,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                             remoteSessionId={workspaceRemoteSessionId}
                             workspaceIdentity={workspaceIdentity}
                             projectName={projectName}
-                            activeTaskTitle={dev ? (devSr?.title ?? devGroup?.title ?? "Dev") : activeTaskTitle}
+                            activeTaskTitle={dev && !dev.selection.freeSessionId ? (devSr?.title ?? devGroup?.title ?? "Dev") : activeTaskTitle}
                             activeTaskChangeSummary={activeTaskChangeSummary}
                             activeTaskId={activeTaskId}
                             activeTraceId={activeTraceId}
@@ -2163,7 +2174,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                           />
                         </ScopedErrorBoundary>
                       ) : null}
-                      {dev && <DevStageHeader />}
+                      {dev && !dev.selection.freeSessionId && workspaceMainView === "chat" && <DevStageHeader />}
                       <div className="min-h-0 flex-1 overflow-hidden">
                         {workspaceMainView === "automations" ? (
                           <main
@@ -2190,30 +2201,32 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                                   className="min-h-full"
                                 >
                                   <div className="mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6">
-                                    <AutomationsSection
-                                      workspacePath={workspaceAbsPath}
-                                      workspaceIdentity={workspaceIdentity}
-                                      onCreateViaChat={handleCreateAutomationInChat}
-                                      onNavigateToLaunchedRun={handleNavigateToLaunchedRun}
-                                      onOpenWorkflowRun={handleOpenSavedWorkflowRun}
-                                      onOpenWorkflowArtifact={handleOpenSavedWorkflowArtifact}
-                                      openAutomationId={openAutomationId}
-                                      openAutomationTab={openAutomationTab}
-                                      onOpenAutomationConsumed={onOpenAutomationConsumed}
-                                      openWorkflow={openWorkflow}
-                                      onOpenWorkflowConsumed={onOpenWorkflowConsumed}
-                                      onOpenSession={({
-                                        sessionId,
-                                        workspacePath,
-                                        workspaceIdentity,
-                                      }) =>
-                                        handleSelectTaskInChat(
-                                          workspacePath,
+                                    {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
+                                      <AutomationsSection
+                                        workspacePath={workspaceAbsPath}
+                                        workspaceIdentity={workspaceIdentity}
+                                        onCreateViaChat={handleCreateAutomationInChat}
+                                        onNavigateToLaunchedRun={handleNavigateToLaunchedRun}
+                                        onOpenWorkflowRun={handleOpenSavedWorkflowRun}
+                                        onOpenWorkflowArtifact={handleOpenSavedWorkflowArtifact}
+                                        openAutomationId={openAutomationId}
+                                        openAutomationTab={openAutomationTab}
+                                        onOpenAutomationConsumed={onOpenAutomationConsumed}
+                                        openWorkflow={openWorkflow}
+                                        onOpenWorkflowConsumed={onOpenWorkflowConsumed}
+                                        onOpenSession={({
                                           sessionId,
+                                          workspacePath,
                                           workspaceIdentity,
-                                        )
-                                      }
-                                    />
+                                        }) =>
+                                          handleSelectTaskInChat(
+                                            workspacePath,
+                                            sessionId,
+                                            workspaceIdentity,
+                                          )
+                                        }
+                                      />
+                                    )}
                                   </div>
                                 </ScopedErrorBoundary>
                               </div>
@@ -2238,8 +2251,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                                 allowEscapeStopOutsidePane={
                                   isWorkspaceVisible && !isSidePaneOpen && !isSidePaneVisible
                                 }
-                                readOnly={Boolean(workspaceReadOnlyReason) || devFrozen}
-                                readOnlyReason={devFrozen ? "整组需求已冻结，正式需求及拆分不可修改。" : workspaceReadOnlyReason}
+                                readOnly={Boolean(workspaceReadOnlyReason) || devFrozen || devProposalHistory}
+                                readOnlyReason={devProposalHistory ? "当前是另一讨论阶段的历史，只读；返回当前阶段继续处理。" : devFrozen ? "整组需求已冻结，正式需求及拆分不可修改。" : workspaceReadOnlyReason}
                                 foregroundEnabled={isWorkspaceVisible}
                                 workspacePath={workspaceAbsPath}
                                 workspaceIdentity={workspaceIdentity}

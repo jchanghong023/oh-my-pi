@@ -608,7 +608,7 @@ function ConversationComposerImpl({
   onNativeComposerTargetChange,
 }: ConversationComposerProps) {
   const dev = useDev();
-  const devProjectDraft = Boolean(dev && !dev.selection.irId && !dev.selection.srId && sessionId === null);
+  const devProjectDraft = Boolean(dev && !dev.selection.freeSessionId && !dev.selection.irId && !dev.selection.srId && sessionId === null);
   const nativeSurface = useDevNativeSurface(sessionId, workspaceIdentity);
   const [nativeDraft, setNativeDraft] = useState<{ scope: string; text: string }>({ scope: "", text: "" });
   const remoteAvailable = useRemoteConversationAvailable();
