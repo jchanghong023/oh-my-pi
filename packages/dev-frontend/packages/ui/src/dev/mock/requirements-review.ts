@@ -1,5 +1,5 @@
 import { readPrototypeAgentModelBinding } from "./agent-models.js";
-import type { DevFileVersion, DevRequirementGroup, DevReview } from "./types.js";
+import type { DevFileVersion, DevRequirementGroup, DevRequirementsDecision, DevReview } from "./types.js";
 import initialReport from "./requirements-review-open.md?raw";
 import approvedReport from "./requirements-review-approved.md?raw";
 import updatedReport from "./requirements-review-updated.md?raw";
@@ -19,13 +19,33 @@ export function prototypeRequirementsReviewCurrent(group: DevRequirementGroup): 
  const review = group.review;
  const files = prototypeRequirementsReviewInputs(group);
  if (!review || !files || !review.inputFiles || review.snapshotDigest !== group.snapshot?.digest || review.round !== (group.proposalRound ?? 1)) return false;
- const recorded = [...review.inputFiles].sort((a, b) => a.path.localeCompare(b.path));
+ return sameFileVersions(files, review.inputFiles);
+}
+
+function sameFileVersions(files: DevFileVersion[], recordedFiles: DevFileVersion[]): boolean {
+ const recorded = [...recordedFiles].sort((a, b) => a.path.localeCompare(b.path));
  return files.length === recorded.length && files.every((file, index) => file.path === recorded[index]?.path && file.sha256 === recorded[index]?.sha256 && file.size === recorded[index]?.size);
 }
+
+/** 人工处理绑定原始 AI 评审和材料；不是替代 AI 结论的通过凭证。 */
+export function prototypeRequirementsDecisionCurrent(group: DevRequirementGroup, decision: Pick<DevRequirementsDecision, "reviewId" | "snapshotDigest" | "inputFiles">): boolean {
+ const files = prototypeRequirementsReviewInputs(group);
+ return Boolean(files && prototypeRequirementsReviewCurrent(group) && decision.reviewId === group.review?.id
+  && decision.snapshotDigest === group.snapshot?.digest && sameFileVersions(files, decision.inputFiles));
+}
 export function prototypeRequirementsReviewBlocker(group: DevRequirementGroup): string | undefined {
- if (!prototypeRequirementsReviewInputs(group)) return "请先补齐 IR 与至少一个 SR 的需求材料，再发起业务需求评审。";
+ const files = prototypeRequirementsReviewInputs(group);
+ if (!files) return "请先补齐 IR 与至少一个 SR 的需求材料，再发起业务需求评审。";
  if (!group.review) return "尚未完成业务需求评审，请先检查当前需求版本。";
  if (!prototypeRequirementsReviewCurrent(group)) return "需求版本已变化，旧评审已失效，请重新评审。";
+ // 同材料重跑只产生新评审，不能解除尚未处理的争议或代替实际补充材料。
+ const decisions = group.requirementsDecisions ?? [];
+ let decision: DevRequirementsDecision | undefined;
+ for (let index = decisions.length - 1; index >= 0; index--) {
+  if (sameFileVersions(files, decisions[index]!.inputFiles)) { decision = decisions[index]; break; }
+ }
+ if (decision?.outcome === "defer") return "业务争议暂缓处理，尚未解决；请记录新的明确处理结果，或更新需求材料后重新评审。相同材料重评不能解除暂缓。";
+ if (decision?.outcome === "supplement") return "人工处理要求补充需求并重评；请先更新需求材料，再显式发起业务需求评审。相同材料重评不能替代补充。";
  if (!group.review.passed || group.review.findings?.some(item => item.level === "blocking")) return "业务需求评审未通过，请补充阻断问题并重新评审；业务争议交人工处理。";
 }
 

@@ -21,8 +21,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { MessageResponse } from "@/components/ai-elements/message.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { DevProposalControls } from "./DevProposalControls.js";
+import { DevProposalRevisionControls } from "./DevProposalRevisionControls.js";
+import { DevProposalDeliveryControls } from "./DevProposalDeliveryControls.js";
 import { PROPOSAL_STATUS_LABELS } from "./mock/proposal-flow.js";
-import { DevPublishControls } from "./DevPublishControls.js";
 import { DevCollabProjection } from "./DevCollabProjection.js";
 import { DevDeleteRequirement } from "./DevDeleteRequirement.js";
 import { readPrototypeDevelopmentRoot } from "./mock/project-settings.js";
@@ -146,6 +147,8 @@ export function DevStageHeader() {
               <p>{group.freeze ? "冻结覆盖整个 IR、全部 SR 及确认方案；业务或方案变化须重新提案。" : "开始首个 SR 时冻结整组确认版本；开发前的修订也须重新评审、确认并通过提案 PR。"}</p>
             </div>}
             {!proposal && !sr && <DevIrAcceptanceEntry group={group} />}
+            {(!sr || sr.status === "pending") && <DevProposalRevisionControls key={`revision-${group.id}`} group={group} />}
+            {!proposal && !sr && group.proposalDelivery && <DevProposalDeliveryControls group={group} readOnly />}
 			<DevAgentModelSummary binding={dev.session?.modelConfig} />
 			{!proposal && sr?.developerEmployeeId && <p className="text-ui-sm text-foreground-subtle" data-testid="sr-developer">开发人：{sr.developerEmployeeId}{sr.status === "developing" ? ownsSr ? " · 我正在开发" : " · 当前仅查看，不操作其他同事的开发会话" : ""}</p>}
             {!proposal && sr?.worktree && <p className="break-all text-ui-sm text-foreground-subtle" data-testid="sr-workspace-context">{ownsSr && sr.status === "developing" ? "开发工作区" : "查看工作区"}：<code data-testid="sr-workspace-path">{sr.worktree.path}</code></p>}
@@ -265,11 +268,6 @@ export function DevStageHeader() {
 						</div>}
 						{proposal && group.developerHandoff && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-submission-details">提交评审人：{group.developerHandoff.employeeId} · <time dateTime={group.developerHandoff.submittedAt}>{new Date(group.developerHandoff.submittedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</time>（北京时间）</p>}
                         {proposal && group.developerAcceptance && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-acceptance-details">接手开发人：{group.developerAcceptance.employeeId} · <time dateTime={group.developerAcceptance.acceptedAt}>{new Date(group.developerAcceptance.acceptedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</time>（北京时间）{group.developerAcceptance.round !== (group.proposalRound ?? 1) ? " · 历史轮次，需重新接手" : ""}</p>}
-						<fieldset disabled={Boolean(!proposal && sr && !stageEditable)} className="contents"><DevPublishControls
-							key={`${group.id}:${sr?.id ?? "requirements"}:${sr?.round ?? 0}`}
-							group={group}
-							sr={proposal ? undefined : sr}
-						/></fieldset>
                         {!proposal && sr?.worktree && <div className="space-y-1 text-ui-sm" data-testid="sr-workspace-details"><p className="break-all text-foreground-subtle">启动时开发项目：{sr.developmentRoot ?? "记录缺失"}</p><p className="break-all text-foreground-subtle">固定 worktree：{sr.worktree.path}</p><p className="text-foreground-subtle">聊天、文件与审查使用此 worktree。修改个人开发目录只影响之后新开始的 SR，不重绑当前任务。</p></div>}
 					{(sr?.worktree || group.worktree) && (
 						<p className="text-ui-sm text-foreground-subtle">

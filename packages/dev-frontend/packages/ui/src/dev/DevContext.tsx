@@ -1,12 +1,12 @@
 import { retryPrototypeMaterialRead, retryPrototypeSessionRead } from "./mock/recovery.js";
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ComposerDraftHandoff } from "../v4/composer/composerDraftWorkspaceTransfer.js";
 import type { ConversationComposerSendOptions } from "../v4/ConversationComposer.js";
 import type {
   DevAction, DevMaterialView, DevNativeSessionRef, DevSelection, DevWorkflowResult, DevWorkflowStage, DevWorkflowView,
 } from "./mock/types.js";
 import { createPrototypeFreeChat, readPrototypeFreeChat, setPrototypeFreeProject } from "./mock/free-chats.js";
-import { applyPrototypeAction, DEFAULT_SELECTION, getPrototypeWorkflow, resolvePrototypeSession } from "./mock/workflow.js";
+import { applyPrototypeAction, DEFAULT_SELECTION, getPrototypeWorkflow, prototypeWorkflowChanges, resolvePrototypeSession } from "./mock/workflow.js";
 
 export type { DevWorkflowView, DevWorkflowStage, DevMaterialView, DevSelection };
 export const DEV_STAGES: DevWorkflowStage[] = ["planning", "executing", "pr"];
@@ -52,6 +52,10 @@ export function DevProvider({ children }: { children: ReactNode }) {
   const claimed = useRef<DevFirstDiscussion | undefined>(undefined);
   const [firstDiscussion, setFirstDiscussion] = useState<DevFirstDiscussion>();
   const report = useCallback((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)), []);
+  useEffect(() => {
+    const subscription = prototypeWorkflowChanges.event(() => setView(getPrototypeWorkflow(selectionRef.current)));
+    return () => subscription.dispose();
+  }, []);
   const select = useCallback((value: DevSelection) => {
     const projectChanged = selectionRef.current.projectId !== value.projectId;
     setPrototypeFreeProject(value.projectId);
@@ -103,6 +107,7 @@ export function DevProvider({ children }: { children: ReactNode }) {
     try {
       const result = applyPrototypeAction(value, target);
       if (value.type === "createProposal") select({ projectId: result.projectId, irId: result.irId });
+      else if (value.type === "beginProposalRevision") select({ projectId: result.projectId, irId: result.irId, discussionPhase: "requirements" });
       else if (value.type === "markRequirementsMerged") select({ projectId: target.projectId, irId: target.irId });
       else if (["submitProposalReview", "acceptProposal", "generateProposalSolution", "returnProposal"].includes(value.type)) select({ ...target, discussionPhase: undefined });
       else if (value.type === "deleteRequirement") select({ projectId: target.projectId });

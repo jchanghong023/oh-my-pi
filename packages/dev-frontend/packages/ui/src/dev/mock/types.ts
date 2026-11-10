@@ -29,6 +29,21 @@ export interface DevRequirementSnapshot {
 }
 export interface DevPrFact { url: string; sourceBranch: string; targetBranch: string; recordedAt: string; platformVerified: false }
 export interface DevMergeFact { commit: string; branch: string; checkedAt: string; files: DevFileVersion[] }
+export interface DevProposalDelivery {
+  candidate: string; version: string; files: DevFileVersion[];
+  confirmedBy: string; confirmedAt: string;
+  pushedCandidate?: string; pushedAt?: string; prCandidate?: string;
+}
+export interface DevRequirementsDecision {
+  reviewId: string; snapshotDigest: string; inputFiles: DevFileVersion[];
+  opinion: string; outcome: "supplement" | "maintain" | "defer"; result: string;
+  employeeId: string; createdAt: string; review: DevReview;
+}
+export interface DevProposalRevision {
+  reason: string; employeeId: string; startedAt: string; completedAt?: string;
+  snapshot: DevRequirementSnapshot; merge: DevMergeFact; materials: DevMaterialView[];
+  requirementsPr?: DevPrFact; delivery?: DevProposalDelivery; review?: DevReview;
+}
 export interface DevRequirementDeletion { version: 1; operationId: string; deletedAt: string; manualCloseNeeded: boolean; requirementsPrUrl?: string }
 export interface DevStageApproval { stage: DevWorkflowStage; round: number; operationId: string; digest: string; files: DevFileVersion[]; approvedAt: string; valid?: boolean }
 export interface DevStageMaterial extends DevFileVersion {
@@ -69,6 +84,9 @@ export interface DevRequirementGroup {
   files: DevFileVersion[]; evidenceFiles?: DevFileVersion[]; retiredFiles?: DevFileVersion[]; worktree?: DevWorktree;
   sessions: DevNativeSessionRef[]; snapshot?: DevRequirementSnapshot; confirmation?: DevConfirmation; review?: DevReview; reviewHistory?: DevReview[];
   requirementsPr?: DevPrFact; merge?: DevMergeFact; createdAt: string;
+  proposalDelivery?: DevProposalDelivery; proposalDeliveryHistory?: DevProposalDelivery[];
+  proposalRevisions?: DevProposalRevision[]; revising?: boolean;
+  requirementsDecisions?: DevRequirementsDecision[];
   deletion?: DevRequirementDeletion;
   freeze?: { frozenAt: string; frozenBy: string; title: string; snapshotDigest: string; files: DevFileVersion[]; srIds: string[]; dependencies: Record<string, string[]> };
   developmentStartedAt?: string;
@@ -116,11 +134,17 @@ export type DevWorkflowCommand = DevCommandBase & (
   | { type: "submitProposalReview" }
   | { type: "acceptProposal" }
   | { type: "runRequirementsReview" }
+  | { type: "generateRequirements"; note: string }
   | { type: "supplementRequirements"; note: string }
   | { type: "generateProposalSolution" }
   | { type: "returnProposal"; reason: string }
-  | { type: "markRequirementsPrSubmitted" | "markCodePrSubmitted"; url: string }
-  | { type: "markRequirementsMerged"; defaultBranchFilesConfirmed: boolean }
+  | { type: "confirmProposal"; version: string }
+  | { type: "publishProposal"; candidate: string }
+  | { type: "markRequirementsPrSubmitted"; url: string; candidate: string }
+  | { type: "markCodePrSubmitted"; url: string }
+  | { type: "markRequirementsMerged"; candidate: string; defaultBranchFilesConfirmed: boolean }
+  | { type: "beginProposalRevision"; reason: string }
+  | { type: "recordRequirementsDecision"; reviewId: string; snapshotDigest: string; opinion: string; outcome: DevRequirementsDecision["outcome"]; result: string }
   | { type: "markCodeMerged"; candidate: string; filesConfirmed: boolean }
   | { type: "prepareSrDelivery" }
   | { type: "publishSrDelivery"; candidate: string }
@@ -141,7 +165,6 @@ export type DevWorkflowCommand = DevCommandBase & (
   | { type: "approveStage"; stage: DevWorkflowStage; round: number; materialDigest: string }
   | { type: "backStage"; stage: "planning" | "executing"; fromStage: DevWorkflowStage; round: number }
   | { type: "stop" }
-  | { type: "publishMaterials"; scope: "requirements" | "development"; paths: string[]; versions?: DevFileVersion[]; message: string; push: boolean }
 );
 export type DevAction = DevWorkflowCommand extends infer T ? T extends DevWorkflowCommand ? Omit<T, "operationId" | "expectedRevision"> : never : never;
 export interface DevWorkflowResult {
