@@ -2638,6 +2638,7 @@ export class AcpAgent implements Agent {
 		session.setPlanReferencePath(planFilePath);
 		session.setPlanProposalHandler?.(null);
 		session.setPlanModeState(undefined);
+		session.sessionManager.appendModeChange("none", { approvedPlanFilePath: planFilePath });
 		let autosaveFailed = false;
 		try {
 			await autosaveApprovedPlan({

@@ -3079,14 +3079,16 @@ export class ModelRegistry {
 			const models = result.models
 				.map(model => (model.provider === options.providerId ? model : { ...model, provider: options.providerId }))
 				.filter(isAdmittedModel);
+			// An offline pass only reads the cache: a missing row means "not fetched
+			// yet" (a cold, credential-scoped namespace), not an unreachable provider.
 			const status =
 				result.source === "cache"
 					? "cached"
-					: result.source === "bundled" && result.stale
+					: result.source === "bundled" && result.stale && strategy !== "offline"
 						? "unavailable"
 						: result.source === "bundled"
 							? "idle"
-							: result.models.length > 0
+							: models.length > 0
 								? "ok"
 								: "empty";
 			// A throwing fetcher still resolves (cache or bundled), but the failure must reach the state and the log.

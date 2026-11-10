@@ -206,6 +206,100 @@ describe("TodoTool operations", () => {
 		]);
 	});
 
+	it("requires an explicit append phase even when a task is active elsewhere", async () => {
+		const session = createSession();
+		const tool = new TodoTool(session);
+		await tool.execute("init", {
+			op: "init",
+			list: [
+				{ phase: "A", items: ["a1", "a2"] },
+				{ phase: "B", items: ["b1"] },
+			],
+		});
+
+		for (const activeTask of ["a1", "b1"]) {
+			await tool.execute("start", { op: "start", task: activeTask });
+			const before = structuredClone(session.getTodoPhases?.());
+			const rejected = await tool.execute("append", { op: "append", items: ["new"] });
+			expect(rejected.isError).toBe(true);
+			expect(rejected.details?.phases).toEqual(before);
+			expect(session.getTodoPhases?.()).toEqual(before);
+		}
+
+		const explicit = await tool.execute("append-explicit", { op: "append", phase: "A", items: ["a4"] });
+		expect(explicit.isError).toBeUndefined();
+		expect(session.getTodoPhases?.()?.map(phase => phase.tasks.map(task => task.content))).toEqual([
+			["a1", "a2", "a4"],
+			["b1"],
+		]);
+	});
+
+	it("does not infer an append phase from pending tasks or normalize state on failure", async () => {
+		const session = createSession([
+			{ name: "Waiting", tasks: [{ content: "wait", status: "blocked", blocker: "approval" }] },
+			{ name: "Next", tasks: [{ content: "next", status: "pending" }] },
+			{ name: "Later", tasks: [{ content: "later", status: "pending" }] },
+		]);
+		const tool = new TodoTool(session);
+		const before = structuredClone(session.getTodoPhases?.());
+		const result = await tool.execute("append", { op: "append", items: ["new"] });
+		expect(result.isError).toBe(true);
+		expect(result.details?.phases).toEqual(before);
+		expect(session.getTodoPhases?.()).toEqual(before);
+	});
+
+	it("requires a phase after completion and appends without reopening completed work", async () => {
+		const tool = new TodoTool(createSession());
+		await tool.execute("init", {
+			op: "init",
+			list: [
+				{ phase: "A", items: ["a1"] },
+				{ phase: "B", items: ["b1"] },
+			],
+		});
+		await tool.execute("done-a", { op: "done", phase: "A" });
+		await tool.execute("done-b", { op: "done", phase: "B" });
+		const rejected = await tool.execute("append", { op: "append", items: ["b2"] });
+		expect(rejected.isError).toBe(true);
+		expect(rejected.details?.phases.flatMap(phase => phase.tasks.map(task => task.status))).toEqual([
+			"completed",
+			"completed",
+		]);
+		const result = await tool.execute("append", { op: "append", phase: "B", items: ["b2"] });
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.phases).toEqual([
+			{ name: "A", tasks: [{ content: "a1", status: "completed" }] },
+			{
+				name: "B",
+				tasks: [
+					{ content: "b1", status: "completed" },
+					{ content: "b2", status: "in_progress" },
+				],
+			},
+		]);
+	});
+
+	it("requires a phase to create or reuse a phase in an initially empty list", async () => {
+		const session = createSession();
+		const tool = new TodoTool(session);
+		const rejected = await tool.execute("missing", { op: "append", items: ["first"] });
+		expect(rejected.isError).toBe(true);
+		expect(session.getTodoPhases?.()).toEqual([]);
+		const first = await tool.execute("first", { op: "append", phase: "Tasks", items: ["first"] });
+		expect(first.isError).toBeUndefined();
+		const second = await tool.execute("second", { op: "append", phase: "Tasks", items: ["second"] });
+		expect(second.isError).toBeUndefined();
+		expect(session.getTodoPhases?.()).toEqual([
+			{
+				name: "Tasks",
+				tasks: [
+					{ content: "first", status: "in_progress" },
+					{ content: "second", status: "pending" },
+				],
+			},
+		]);
+	});
+
 	it("blocks a task (excluded from remaining, counted distinctly) and unblocks it", async () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", { op: "init", list: [{ phase: "Work", items: ["a", "b"] }] });
@@ -583,8 +677,8 @@ describe("TodoTool lenient op recovery", () => {
 		expect(initialized.isError).toBeUndefined();
 		expect(initialized.details?.op).toBe("init");
 
-		// With existing todos the same shape is ambiguous (flat init would wipe
-		// the list; append lacks a phase) and must error instead of guessing.
+		// With existing todos the same shape is ambiguous (replace via flat init
+		// or append to the active phase) and must error instead of guessing.
 		const populated = new TodoTool(
 			createSession([{ name: "Work", tasks: [{ content: "First", status: "pending" }] }]),
 		);

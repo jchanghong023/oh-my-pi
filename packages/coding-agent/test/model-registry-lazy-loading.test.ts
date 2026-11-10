@@ -55,7 +55,8 @@ describe("ModelRegistry lazy bundled composition", () => {
 		tempDirs.push(tempDir);
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorages.push(authStorage);
-		const cacheProviderId = litellmModelManagerOptions().cacheProviderId;
+		authStorage.keys.setRuntime("litellm", "sk-team-a");
+		const cacheProviderId = litellmModelManagerOptions({ apiKey: "sk-team-a" }).cacheProviderId;
 		if (!cacheProviderId) throw new Error("LiteLLM must define a cache namespace");
 		writeModelCache(
 			cacheProviderId,
@@ -80,6 +81,8 @@ describe("ModelRegistry lazy bundled composition", () => {
 		);
 
 		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		expect(registry.find("litellm", "cached-fixture")).toBeUndefined();
+		await registry.hydrateCredentialScopedModelCaches();
 		expect(registry.find("litellm", "cached-fixture")).toBeUndefined();
 	});
 

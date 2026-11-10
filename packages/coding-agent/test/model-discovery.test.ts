@@ -10,6 +10,7 @@ import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shar
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import * as compatAuth from "@oh-my-pi/pi-catalog/compat/auth";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { fingerprintStaticModels } from "@oh-my-pi/pi-catalog/model-manager";
@@ -26,7 +27,7 @@ import {
 	discoverOpenAIModelsList,
 	discoveryProbeTimeoutMs,
 } from "@oh-my-pi/pi-coding-agent/config/model-discovery";
-import { kNoAuth, ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { kNoAuth, ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resolveCliModel } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { ProviderDiscoverySchema } from "@oh-my-pi/pi-coding-agent/config/models-config-schema";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -71,6 +72,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		resetSettingsForTest();
 		if (originalOllamaBaseUrl === undefined) {
 			delete Bun.env.OLLAMA_BASE_URL;
@@ -115,6 +117,44 @@ describe("ModelRegistry runtime discovery", () => {
 	function getModelsForProvider(registry: ModelRegistry, provider: string) {
 		return registry.getAll().filter(m => m.provider === provider);
 	}
+
+	test("runtime discovery distinguishes a cold offline cache from a successful empty roster", async () => {
+		let fetchCalls = 0;
+		let rows: NonNullable<ProviderConfigInput["models"]> = [
+			{
+				id: "runtime-fixture",
+				name: "Runtime Fixture",
+				contextWindow: 8192,
+				maxTokens: 1024,
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			},
+		];
+		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		registry.registerProvider("ascend", {
+			api: "openai-completions",
+			baseUrl: "https://example.invalid/v1",
+			apiKey: "test-key",
+			fetchDynamicModels: async () => {
+				fetchCalls++;
+				return rows;
+			},
+		});
+
+		await registry.refreshDiscoverableProviders(["ascend"], "offline");
+		expect(fetchCalls).toBe(0);
+		expect(registry.getProviderDiscoveryState("ascend")?.status).toBe("idle");
+		await registry.refreshDiscoverableProviders(["ascend"], "online");
+		expect(registry.getProviderDiscoveryState("ascend")?.status).toBe("ok");
+		expect(registry.find("ascend", "runtime-fixture")).toBeDefined();
+
+		rows = [];
+		await registry.refreshDiscoverableProviders(["ascend"], "online");
+		expect(fetchCalls).toBe(2);
+		expect(registry.getProviderDiscoveryState("ascend")?.status).toBe("empty");
+		expect(getModelsForProvider(registry, "ascend")).toEqual([]);
+	});
 
 	function withEnv(
 		name:
@@ -698,6 +738,8 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("Antigravity discovery unions every account's roster and routes each model to an account serving it", async () => {
+		// Antigravity is paused in its auth rules; its discovery stays for when it is turned back on.
+		vi.spyOn(compatAuth, "providerDisabledReason").mockReturnValue(undefined);
 		// Account A's plan omits Claude 5.5; account B's serves it. Discovery is
 		// authoritative, so reading only one account's roster would prune Claude
 		// 5.5 for both whenever A is the account discovery happens to pick.
@@ -757,6 +799,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("Antigravity routing still works for an account whose login stored no email", async () => {
+		vi.spyOn(compatAuth, "providerDisabledReason").mockReturnValue(undefined);
 		// Google's userinfo lookup is optional at login; such a credential keeps
 		// only its project id, which must still tag and select the account.
 		await authStorage.credentials.set("google-antigravity", [
@@ -4199,10 +4242,14 @@ describe("ModelRegistry runtime discovery", () => {
 				supports_vision: false,
 			},
 		];
+		let scopedIds = ["keep-chat-a", "keep-chat-b"];
 		const fetchMock: FetchImpl = async input => {
 			const url = String(input);
 			if (url === "https://catalog.stencil.so/models.json.zstd") {
 				return Response.json({});
+			}
+			if (url === "http://127.0.0.1:4007/v1/models") {
+				return Response.json({ data: scopedIds.map(id => ({ id })) });
 			}
 			if (url === "http://127.0.0.1:4007/model_group/info") {
 				return Response.json({ data: modelGroups });
@@ -4214,7 +4261,7 @@ describe("ModelRegistry runtime discovery", () => {
 			) {
 				return new Response("Not Found", { status: 404 });
 			}
-			throw new Error(`/v1/models must not reintroduce the excluded model: ${url}`);
+			throw new Error(`Unexpected URL: ${url}`);
 		};
 
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
@@ -4229,6 +4276,7 @@ describe("ModelRegistry runtime discovery", () => {
 		await registry.refreshProvider("litellm", "online");
 		expect(getModelsForProvider(registry, "litellm").map(model => model.id)).toEqual(["keep-chat-a"]);
 
+		scopedIds = ["keep-chat-a"];
 		modelGroups = [{ model_group: "keep-chat-a", mode: "embedding" }];
 		await registry.refreshProvider("litellm", "online");
 		expect(getModelsForProvider(registry, "litellm")).toEqual([]);

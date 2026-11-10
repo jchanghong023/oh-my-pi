@@ -11,6 +11,7 @@ type SkillCommandHost = Pick<
 	| "renderOptimisticSkillMessage"
 	| "clearOptimisticSkillMessage"
 	| "optimisticSkillMessagePending"
+	| "restoreDroppedPrompt"
 > & {
 	session: Pick<
 		InteractiveModeContext["session"],
@@ -48,6 +49,11 @@ interface InvokeSkillCommandOptions {
 	optimistic?: boolean;
 	/** With `queueOnly`: called with the messages the skill prompt pushed onto a queue (see `PromptOptions.onPromptQueued`). */
 	onPromptQueued?: (queued: readonly AgentMessage[]) => void;
+	/**
+	 * Without `queueOnly`: prompts that must run after the skill, in order (see `PromptOptions.followUps`).
+	 * If the skill fails before reaching the session, it goes back to the editor with them as one list.
+	 */
+	followUps?: string[];
 }
 
 /** Built custom-message payload and delivery options for a `/skill:` command. */
@@ -99,15 +105,25 @@ export async function invokeSkillCommandFromText(
 	options?: InvokeSkillCommandOptions,
 ): Promise<boolean> {
 	let optimistic = false;
+	let reachedSession = false;
 	try {
 		const built = await buildSkillCommandPrompt(ctx, text, streamingBehavior, options?.images);
-		if (!built) return false;
+		if (!built) {
+			restoreUndeliveredList(ctx, text, options);
+			return false;
+		}
 		const promptOptions: SkillPromptOptions &
-			Pick<InvokeSkillCommandOptions, "queueOnly" | "goalAutoOrchestrateInitialId" | "onPromptQueued"> =
-			options?.queueOnly || options?.goalAutoOrchestrateInitialId ? { ...built.options } : built.options;
+			Pick<
+				InvokeSkillCommandOptions,
+				"queueOnly" | "goalAutoOrchestrateInitialId" | "onPromptQueued" | "followUps"
+			> = {
+			...built.options,
+		};
 		if (options?.queueOnly) {
 			promptOptions.queueOnly = true;
 			promptOptions.onPromptQueued = options.onPromptQueued;
+		} else {
+			promptOptions.followUps = options?.followUps;
 		}
 		if (options?.goalAutoOrchestrateInitialId)
 			promptOptions.goalAutoOrchestrateInitialId = options.goalAutoOrchestrateInitialId;
@@ -118,10 +134,12 @@ export async function invokeSkillCommandFromText(
 				{ imageLinks: options?.imageLinks },
 			);
 		}
+		reachedSession = true;
 		await ctx.session.promptCustomMessage(built.message, promptOptions);
 		return true;
 	} catch (err) {
 		if (optimistic) ctx.clearOptimisticSkillMessage();
+		if (!reachedSession) restoreUndeliveredList(ctx, text, options);
 		if (options?.propagateErrors) {
 			throw err;
 		}
@@ -134,4 +152,14 @@ export async function invokeSkillCommandFromText(
 			ctx.clearOptimisticSkillMessage();
 		}
 	}
+}
+
+/** The session owns follow-ups it received; a list that never reached it goes back to the editor here. */
+function restoreUndeliveredList(
+	ctx: SkillCommandHost,
+	text: string,
+	options: InvokeSkillCommandOptions | undefined,
+): void {
+	if (!options?.followUps?.length) return;
+	ctx.restoreDroppedPrompt({ text, images: options.images, followUps: options.followUps });
 }

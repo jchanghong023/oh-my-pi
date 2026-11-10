@@ -22,6 +22,7 @@ import type {
 	PlanReviewResolvedEvent,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { planSaveFileName } from "@oh-my-pi/pi-coding-agent/plan-mode/plan-autosave";
+import { dispatchApprovedPlan } from "@oh-my-pi/pi-coding-agent/plan-mode/session-approval";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -2567,6 +2568,20 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(compactSpy.mock.calls[0]?.[3]?.readerModel?.id).toBe(prePlanModel.id);
 	});
 
+	it("persists approval in the shared dispatch used by non-TUI hosts", async () => {
+		const planFilePath = "local://shared-plan.md";
+		const appendModeChange = vi.spyOn(session.sessionManager, "appendModeChange");
+		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(true);
+		await dispatchApprovedPlan(session, {
+			planFilePath,
+			title: "Shared plan",
+			planContent: "# Shared plan\n\nExecute from any native host.",
+		});
+		expect(appendModeChange).toHaveBeenCalledTimes(1);
+		expect(appendModeChange).toHaveBeenCalledWith("none", { approvedPlanFilePath: planFilePath });
+		expect(promptSpy.mock.calls.some(isPlanApprovedCall)).toBe(true);
+	});
+
 	it("Approve and compact context: cancelled outcome skips plan-approved dispatch", async () => {
 		// Mock `handleCompactCommand` to surface the "cancelled" outcome directly.
 		// (Testing the consumer — `#approvePlan`'s outcome handling — at the
@@ -2586,6 +2601,7 @@ describe("InteractiveMode plan review rendering", () => {
 		const showWarningSpy = vi.spyOn(mode, "showWarning");
 		const setPlanRefSpy = vi.spyOn(session, "setPlanReferencePath");
 		const markSentSpy = vi.spyOn(session, "markPlanReferenceSent");
+		const appendModeChange = vi.spyOn(session.sessionManager, "appendModeChange");
 		const promptSpy = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
 		await mode.handlePlanApproval({
@@ -2601,6 +2617,7 @@ describe("InteractiveMode plan review rendering", () => {
 		// Plan reference path was recorded so the session knows about the approved
 		// plan at its final destination …
 		expect(setPlanRefSpy).toHaveBeenCalledWith(planFilePath);
+		expect(appendModeChange).toHaveBeenCalledWith("none", { approvedPlanFilePath: planFilePath });
 		// … but markPlanReferenceSent was NOT called, so the next operator turn
 		// will inject the reference fresh via #buildPlanReferenceMessage. This is
 		// the load-bearing assertion that the cancel path leaves the executor

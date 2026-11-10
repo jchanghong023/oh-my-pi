@@ -2,7 +2,7 @@
 // High-level API
 // ============================================================================
 
-import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
+import { authPolicyFor, providerDisabledReason } from "@oh-my-pi/pi-catalog/compat/auth";
 import {
 	hasProviderModelRules,
 	isRetiredProvider,
@@ -25,6 +25,7 @@ export * from "./anthropic";
 export * from "./device-code";
 export type * from "./types";
 
+// Keep historical login targets available for credential management; filter only the login choices.
 const builtInOAuthProviders: OAuthProviderInfo[] = PROVIDER_REGISTRY.filter(
 	provider => provider.login && provider.showInLoginList !== false,
 ).map(provider => ({
@@ -58,6 +59,21 @@ export function getOAuthProvider(id: OAuthProviderId): OAuthProviderInterface | 
 }
 
 /**
+ * Why `provider` is paused by its auth rules (`disabled "<reason>"`), or
+ * undefined when it may be reached. An extension that registers its own OAuth
+ * login under the paused id takes the id back: that is the end user's choice.
+ */
+export function providerPauseReason(provider: string): string | undefined {
+	return customOAuthProviders.has(provider) ? undefined : providerDisabledReason(provider);
+}
+
+/** Throws {@link AIError.ProviderDisabledError} when {@link providerPauseReason} pauses `provider`. */
+export function assertProviderEnabled(provider: string): void {
+	const reason = providerPauseReason(provider);
+	if (reason !== undefined) throw new AIError.ProviderDisabledError(provider, reason);
+}
+
+/**
  * Remove all custom OAuth providers registered by a source.
  */
 export function unregisterOAuthProviders(sourceId: string): void {
@@ -82,6 +98,8 @@ export async function refreshOAuthToken(
 			provider,
 		});
 	}
+	// A paused provider never starts a token exchange, even for an SDK caller holding an old credential.
+	assertProviderEnabled(provider);
 	const def = getProviderDefinition(provider);
 	if (!def?.login) {
 		throw new AIError.OAuthError(`Unknown OAuth provider: ${provider}`, {
@@ -193,7 +211,9 @@ export function getAllOAuthProviders(): OAuthProviderInfo[] {
  * Get the OAuth providers currently offered for login.
  */
 export function getOAuthProviders(): OAuthProviderInfo[] {
-	return getAllOAuthProviders().filter(provider => isOAuthLoginSupported(provider.id));
+	return getAllOAuthProviders().filter(
+		provider => providerPauseReason(provider.id) === undefined && isOAuthLoginSupported(provider.id),
+	);
 }
 
 /** Provider id that stores `providerId`'s credentials: login aliases (`openai-codex-device`) map to their target (`openai-codex`). */

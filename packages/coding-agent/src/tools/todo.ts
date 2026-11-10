@@ -318,10 +318,9 @@ function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 		errors.push("Missing list for init operation");
 		return [];
 	}
-	// An empty phase name is unaddressable (`append` requires one), so it gets
-	// the default. Duplicate phase names / task contents would be permanently
-	// unaddressable too (every targeting op resolves the first match), so reject
-	// them up front.
+	// An empty phase name cannot be explicitly targeted, so it gets the default.
+	// Duplicate phase names / task contents would be permanently unaddressable
+	// too (every targeting op resolves the first match), so reject them up front.
 	const phases: TodoPhase[] = [];
 	const seenPhases = new Set<string>();
 	const seenTasks = new Set<string>();

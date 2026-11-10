@@ -114,3 +114,4 @@
 - A genuine timeout consumed while goal-autopilot remains active returns `按原目标自主决定，全程授权你继续调查、实施、验证和修复，完成后再汇总`, empty selections and `timedOut`; explicit cancellation, refusal, abort, paused or budget-limited goals do not acquire that reply or approval.
 - Cancelling the rich dialog's custom-answer editor preserves its draft for reopening without changing the submitted answer. Notes target the currently displayed/highlighted answer, including after advancing to another question.
 - Extensions may independently use upstream's `ui.formDialog` HTML form API; it does not replace the `ask` tool or route WebGUI questions through an incompatible form handler.
+- 在 Tern 中，包含至少两个顶层 `<fieldset>` 的 HTML 表单为每组显示一个标签页，另设 Review 页；问题页底部固定显示 Hide／Cancel／Next，最后一个问题页和 Review 页均可 Submit，提交会校验整个表单并跳转到首个待修正答案。各页内容在底栏上方独立滚动，`app.ask.hide`（`Alt+H`）或 Hide 将表单收起为一行；此行为不改变 `ask` 的结构化问题协议。

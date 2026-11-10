@@ -368,7 +368,7 @@ export class CommandController {
 					"error",
 					`Failed to roll back move: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)} (failed to re-align workspace to ${actual})`,
 				);
-				await this.ctx.shutdown();
+				await this.ctx.shutdown({ cancellable: false });
 				return;
 			}
 			this.ctx.session.emitNotice(
@@ -394,7 +394,7 @@ export class CommandController {
 				"error",
 				`Failed to restore source workspace after rollback: workspace remains at ${actual}`,
 			);
-			await this.ctx.shutdown();
+			await this.ctx.shutdown({ cancellable: false });
 			return;
 		}
 		this.ctx.session.emitNotice(

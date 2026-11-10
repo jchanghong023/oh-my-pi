@@ -156,7 +156,11 @@ async function conversation(fixture: WorkflowConsumerFixture) {
 			if (receipt?.status === "failed") throw new Error(`Initial native input failed: ${JSON.stringify(receipt)}`);
 			return current;
 		},
-		value => fixture.provider.requests.length > 0 && value.running.length === 0,
+		value =>
+			fixture.provider.requests.length > 0 &&
+			value.running.length === 0 &&
+			value.operations.some(receipt => receipt.operationId === operationId && receipt.status === "completed") &&
+			!value.operations.some(receipt => receipt.status === "running"),
 		"Initial native conversation",
 	);
 	view = await process.view(projectId);

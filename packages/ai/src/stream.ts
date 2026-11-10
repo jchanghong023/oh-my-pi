@@ -63,6 +63,7 @@ import {
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
 import { getProviderDefinition } from "./registry";
+import { assertProviderEnabled } from "./registry/oauth";
 import type {
 	Api,
 	AssistantMessage,
@@ -857,6 +858,8 @@ function streamDispatch<TApi extends Api>(
 	options: OptionsForApi<TApi> | undefined,
 	limited: boolean,
 ): AssistantMessageEventStream {
+	// A provider turned off in its auth rules is never called, even with a key passed in directly.
+	assertProviderEnabled(model.provider);
 	if (options?.requestAuth !== undefined) {
 		if (!hasRequestAuthMaterial(options.requestAuth)) throw new AIError.MissingApiKeyError(model.provider);
 		options = {

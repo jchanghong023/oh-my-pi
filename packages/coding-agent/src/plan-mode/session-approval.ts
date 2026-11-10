@@ -56,6 +56,7 @@ export async function dispatchApprovedPlan(session: AgentSession, options: Appro
 	const assertCurrentSession = captureSessionGuard(session, options.signal);
 	assertCurrentSession();
 	session.setPlanReferencePath(options.planFilePath);
+	session.sessionManager.appendModeChange("none", { approvedPlanFilePath: options.planFilePath });
 	let autosavedPath: string | null = null;
 	let autosaveError: Error | undefined;
 	try {

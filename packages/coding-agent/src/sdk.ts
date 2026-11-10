@@ -259,6 +259,7 @@ import {
 	resolveRetryFallbackChainKey,
 } from "./session/retry-fallback-chains";
 import { describeUsageFallback } from "./session/retry-fallback-reason";
+import { kUsageLimitRequestProvider } from "./session/turn-recovery";
 import { getReadableCompactionEntry, getRestorableSessionModels } from "./session/session-context";
 import { SessionManager } from "./session/session-manager";
 import { SHAPE_RULE } from "./spotlight/shape";
@@ -684,6 +685,8 @@ export interface CreateAgentSessionOptions {
 
 	/** Model to use. Default: from settings, else first available */
 	model?: Model;
+	/** Role whose alias selected {@link model} (CLI `--model pi/<role>`); retries walk that role's fallback chain. */
+	modelRole?: string;
 	/**
 	 * Allow an explicit {@link model} to be rebound to its same-selector registry
 	 * entry after initial background discovery. The CLI enables this for models
@@ -5693,6 +5696,7 @@ async function createAgentSessionScoped(
 				},
 				host: localSpeculation.host,
 			};
+			let mainRequestProvider: string | undefined;
 
 			agent = new Agent({
 				pauseGate,
@@ -5724,6 +5728,7 @@ async function createAgentSessionScoped(
 				getToolContext: tc => toolContextStore.getContext(tc),
 				getApiKey: effectiveGetApiKey,
 				streamFn: (streamModel, context, streamOptions) => {
+					mainRequestProvider = undefined;
 					options.assertDispatchModel?.(streamModel);
 					// The loop checks the cap before each request, but a side request can finish
 					// in between: refuse here, as this run's refusal, before announcing a dispatch.
@@ -5757,6 +5762,7 @@ async function createAgentSessionScoped(
 					// The provider calls `onPayload` as it sends, past any wait for an in-flight
 					// slot: the prompt cache entry's lifetime starts there, not here.
 					const onPayload = merged.onPayload;
+					mainRequestProvider = streamModel.provider;
 					const stream = primaryStreamFn(streamModel, context, {
 						...merged,
 						...(fallbackCreditRedemption !== undefined ? { fallbackCreditRedemption } : {}),
@@ -5823,6 +5829,20 @@ async function createAgentSessionScoped(
 						: undefined
 					: undefined,
 			});
+			// Stamp the issued pool before AgentSession accounts for the finalized message.
+			agent.subscribe(event => {
+				if (
+					event.type === "message_end" &&
+					event.message.role === "assistant" &&
+					mainRequestProvider !== undefined
+				) {
+					(event.message as typeof event.message & { [kUsageLimitRequestProvider]?: string })[
+						kUsageLimitRequestProvider
+					] = mainRequestProvider;
+				} else if (event.type === "turn_end" || event.type === "agent_end") {
+					mainRequestProvider = undefined;
+				}
+			});
 			// Catalog rows carry the registry settings' extended-window opt-ins; this
 			// session adopts every model with the window its own settings select (a
 			// subagent with a compaction override must not inherit the parent's).
@@ -5840,6 +5860,12 @@ async function createAgentSessionScoped(
 
 			cursorEventEmitter = event => agent.emitExternalEvent(event);
 
+			const retryRole = options.modelRole ?? modelPatternRetryFallbackRole;
+			const recordInitialModelChange = (initialModel: string): void => {
+				sessionManager.appendModelChange(initialModel);
+				if (retryRole && retryRole !== "default") sessionManager.appendModelChange(initialModel, retryRole);
+			};
+
 			// Restore messages if session has existing data
 			if (hasExistingSession) {
 				// Rebuild when the adopted model changes the frame budget or cannot replay the newest compaction.
@@ -5854,6 +5880,8 @@ async function createAgentSessionScoped(
 								obfuscator,
 							);
 				agent.replaceMessages(restored.messages);
+				// An explicit role alias re-owns the resumed branch; plain model selectors do not.
+				if (model && options.modelRole) recordInitialModelChange(`${model.provider}/${model.id}`);
 				if (persistInitialServiceTier) {
 					sessionManager.appendServiceTierChange(
 						Object.keys(initialServiceTierByFamily).length > 0 ? initialServiceTierByFamily : null,
@@ -5861,16 +5889,7 @@ async function createAgentSessionScoped(
 				}
 			} else {
 				// Save initial model, thinking level, and service tier for new sessions so they can be restored on resume.
-				if (model) {
-					const initialModel = `${model.provider}/${model.id}`;
-					sessionManager.appendModelChange(initialModel);
-					// A deferred pattern's own retry role follows the explicit default entry, as
-					// the task executor records it, so chain lookup prefers the pattern's chain
-					// while resume still restores this model as the default.
-					if (modelPatternRetryFallbackRole) {
-						sessionManager.appendModelChange(initialModel, modelPatternRetryFallbackRole);
-					}
-				}
+				if (model) recordInitialModelChange(`${model.provider}/${model.id}`);
 				if (!autoThinking) {
 					// Do not write the `auto` selector before the first turn resolves; auto
 					// classification persists its concrete effort once a real user turn runs.

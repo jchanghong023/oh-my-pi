@@ -23,6 +23,7 @@ function fixture() {
 describe("todo append preserves progress and offers actionable recovery", () => {
 	it.each<Parameters<TodoTool["execute"]>[1]>([
 		{ op: "append", items: ["new task"] },
+		{ op: "append", phase: "", items: ["new task"] },
 		{ op: "append", phase: "Tasks" },
 		{ op: "append", phase: "Tasks", items: [] },
 	])("rejects incomplete append %j and retries against the viewed phase without reset", async args => {

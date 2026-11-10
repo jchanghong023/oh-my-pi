@@ -85,6 +85,45 @@ describe("AgentSession concurrent prompt dispatch", () => {
 		});
 	}
 
+	it.each([false, true])(
+		"keeps queue-only follow-ups behind their input and retains fork metadata (custom=%s)",
+		async custom => {
+			createSession();
+			session.setQueueAutoDrain(false);
+			const sourceCommand = { sessionId: null, commandId: "queued", fingerprint: "queued" };
+			const options = {
+				inputId: "primary-input",
+				sourceCommand,
+				inputClientId: "client",
+				toolDenylist: ["bash"],
+				attachments: [{ ref: "attachment:one", fileName: "one.txt", mime: "text/plain", bytes: 1 }],
+				queueOnly: true,
+				streamingBehavior: "followUp" as const,
+				followUps: ["second input", "third input"],
+			};
+			if (custom) {
+				await session.promptCustomMessage(
+					{ customType: "collab-prompt", content: "first input", display: true, attribution: "user" },
+					{ ...options, queueChipText: "first input" },
+				);
+			} else {
+				await session.prompt("first input", options);
+			}
+			expect(session.getQueuedMessages().followUp).toEqual(["first input", "second input", "third input"]);
+			const inputs = session.getQueuedInputMessages();
+			expect(inputs).toHaveLength(3);
+			expect(inputs[0]).toMatchObject({
+				inputId: options.inputId,
+				sourceCommand,
+				inputClientId: options.inputClientId,
+				toolDenylist: options.toolDenylist,
+				attachments: options.attachments,
+			});
+			expect(new Set(inputs.map(input => ("inputId" in input ? input.inputId : undefined))).size).toBe(3);
+			expect(session.messages.some(message => message.role === "assistant")).toBe(false);
+		},
+	);
+
 	it.each(["navigateTree", "branch", "fork", "branchFromBtw"] as const)(
 		"drops an admitted custom prompt when %s replaces its branch before dispatch",
 		async transition => {
@@ -373,5 +412,23 @@ describe("AgentSession concurrent prompt dispatch", () => {
 
 		expect(await session.prompt("/deploy staging")).toBe(false);
 		expect(commandRuns).toBe(1);
+		session.setQueueAutoDrain(false);
+		const dropped = vi.fn();
+		session.setPromptDropped(dropped);
+		await expect(
+			session.prompt("first queued input", {
+				queueOnly: true,
+				streamingBehavior: "followUp",
+				followUps: ["/deploy staging", "third queued input"],
+			}),
+		).rejects.toThrow();
+		expect(commandRuns).toBe(1);
+		expect(session.getQueuedMessages().followUp).toEqual([]);
+		expect(dropped).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: "first queued input",
+				followUps: ["/deploy staging", "third queued input"],
+			}),
+		);
 	});
 });

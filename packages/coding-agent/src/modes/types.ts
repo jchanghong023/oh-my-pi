@@ -3,7 +3,7 @@ import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Component, Container, EditorTheme, KeyId, Loader, TUI } from "@oh-my-pi/pi-tui";
 import type { TspText } from "@oh-my-pi/pi-wire";
-import type { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
+import type { StatusNotice, StatusNoticeAction } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import type { CollabController } from "../collab/controller";
 import type { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
@@ -33,6 +33,7 @@ import type { MCPManager } from "../mcp";
 import type { MCPAuthHandler } from "../mcp/manager";
 import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
 import type { AgentSession } from "../session/agent-session";
+import type { DroppedPrompt } from "../session/agent-session-types";
 import type { AgentViewSession } from "../session/agent-session-handle";
 import type { CompactMode } from "../session/compact-modes";
 import type { ForeignSessionSource } from "../session/foreign-session-store";
@@ -108,6 +109,8 @@ export type SubmittedUserInput = {
 	 *  it). Normal user Enter carries "steer" to match the streaming-branch Enter;
 	 *  background/continuation submits omit it and default to "followUp". */
 	streamingBehavior?: "steer" | "followUp";
+	/** Prompts sent after this one, in order, as the session prompt's `followUps`. */
+	followUps?: string[];
 	/** Set by `submitInteractiveInput` for a custom-message submission: the session took it (started a turn or queued it into one). */
 	dispatched?: boolean;
 	cancelled: boolean;
@@ -150,12 +153,24 @@ export interface RenderSessionContextOptions {
 	preservedLiveToolCallIds?: ReadonlySet<string>;
 }
 
+export interface RenderInitialMessagesOptions {
+	preserveExistingChat?: boolean;
+	clearTerminalHistory?: boolean;
+	/**
+	 * Called synchronously, once, with the session context the committed transcript was built from.
+	 * Not called when a newer replay supersedes this one.
+	 */
+	onCommit?: (context: SessionContext) => void;
+}
+
 /** How {@link InteractiveModeContext.showStatus} shows a notice. */
 export interface ShowStatusOptions {
 	/** Dims the ANSI line (default true). */
 	dim?: boolean;
 	/** Toasts it on a native terminal (default true); false keeps it to the ANSI transcript. */
 	toast?: boolean;
+	/** A button on the native toast (Undo); the ANSI line has none. */
+	action?: StatusNoticeAction;
 }
 
 export interface SelectOnlyModelSelectorOptions {
@@ -198,6 +213,7 @@ export interface InteractiveModeContext {
 	reportContainer: Container;
 	editor: CustomEditor;
 	editorContainer: Container;
+	editorTopGapContainer: Container;
 	hookWidgetContainerAbove: Container;
 	hookWidgetContainerBelow: Container;
 	statusLine: StatusLineComponent;
@@ -424,7 +440,8 @@ export interface InteractiveModeContext {
 	// Lifecycle
 	init(options?: InteractiveModeInitOptions): Promise<void>;
 	playWelcomeIntro(): void;
-	shutdown(): Promise<void>;
+	/** Close and quit. Operator quits are cancellable by extensions; pass `cancellable: false` for forced closes. */
+	shutdown(options?: { cancellable?: boolean }): Promise<void>;
 	/** Tear down like {@link shutdown}, then relaunch the CLI with the original launch flags, resuming this session. */
 	restart(): Promise<void>;
 	/** Request graceful shutdown at the next fully settled boundary, including background turns. */
@@ -519,10 +536,13 @@ export interface InteractiveModeContext {
 			goalAutoOrchestrateInitialId?: string;
 			display?: boolean;
 			streamingBehavior?: "steer" | "followUp";
+			followUps?: string[];
 		},
 		options?: { preserveDraft?: boolean; clearEditor?: boolean },
 	): SubmittedUserInput;
 	cancelPendingSubmission(): boolean;
+	/** Put a prompt that never reached the agent (and its unsent follow-ups, as one `=>` list) back in an empty editor. */
+	restoreDroppedPrompt(prompt: DroppedPrompt): void;
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;
 	finishPendingSubmission(input: SubmittedUserInput, dispatched?: boolean): void;
 	/**
@@ -571,7 +591,7 @@ export interface InteractiveModeContext {
 		options: RenderSessionContextOptions,
 		renderChunk?: () => void,
 	): Promise<void>;
-	renderInitialMessages(options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean }): Promise<void>;
+	renderInitialMessages(options?: RenderInitialMessagesOptions): Promise<void>;
 	/**
 	 * In-place transcript rewind: drop the rendered components at/after
 	 * `message` when none of their rows reached native scrollback. Returns
@@ -667,7 +687,7 @@ export interface InteractiveModeContext {
 	/** Session-only switch to an already-resolved model (`/switch <selector>`); compacts first when over context. */
 	switchSessionModel(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void>;
 	showPluginSelector(mode?: "install" | "uninstall"): void;
-	showUserMessageSelector(): void;
+	showUserMessageSelector(startAt?: string): void;
 	showCopySelector(): void;
 	showTreeSelector(): void;
 	/** Open the `/effort` picker over the levels the current model accepts. */

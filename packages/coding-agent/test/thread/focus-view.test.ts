@@ -170,6 +170,7 @@ function focusHarness(): FocusHarness {
 			},
 			resetTranscriptAnchors() {},
 			restorePendingToolResults() {},
+			runSerialized: (run: () => Promise<void>) => run(),
 			markViewIdle() {},
 		},
 		statusLine: {

@@ -13,7 +13,7 @@ export const cfgLspEnabled = register({
 		tab: "files",
 		group: "LSP",
 		label: "LSP",
-		description: "启用 lsp 工具以提供代码智能能力（定义、引用、诊断、重命名）",
+		description: "语言服务器集成：lsp 工具、写入/编辑诊断及写入格式化（--no-lsp 在本次运行中禁用）",
 	},
 });
 
