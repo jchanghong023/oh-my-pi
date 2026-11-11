@@ -275,3 +275,17 @@ export function proposalActorLabel(group: DevRequirementGroup): string {
  if (requirementsReviewCurrent(group) && !requirementsReviewBlocker(group)) return group.returnFeedback ? `开发 ${group.returnFeedback.employeeId} 继续方案` : "开发人员进入方案";
  return `业务 ${group.proposalLocation?.employeeId ?? "提出人"} 补充需求`;
 }
+
+/** 正式 IR 聚合进度；筛选不与单个 SR 的执行阶段混用。 */
+export function formalIrStatus(view: DevWorkflowView, group: DevRequirementGroup): "pending" | "developing" | "acceptance" | "completed" {
+ if (group.acceptance?.status === "completed") return "completed";
+ const rows = view.srs.filter(sr => sr.projectId === group.projectId && sr.irId === group.id);
+ if (group.acceptance || (rows.length > 0 && rows.every(sr => sr.status === "completed"))) return "acceptance";
+ if (group.developmentStartedAt || rows.some(sr => sr.status !== "pending" || sr.startedAt)) return "developing";
+ return "pending";
+}
+export function formalIrStageLabel(view: DevWorkflowView, group: DevRequirementGroup): string {
+ const status = formalIrStatus(view, group);
+ if (status === "acceptance") return !group.acceptance ? "待验收" : group.acceptance.status === "reviewing" ? "验收中" : "待归档";
+ return status === "completed" ? "已完成" : status === "developing" ? "开发中" : "待开发";
+}

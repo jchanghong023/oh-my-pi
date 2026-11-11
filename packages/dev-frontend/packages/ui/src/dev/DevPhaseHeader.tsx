@@ -87,7 +87,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
     const owns = acceptance.employeeId === getEmployeeId();
     const versionIssue = irAcceptanceVersionBlocker(view, group);
     if (versionIssue) { status = "需要重新验收"; action = <Button size="sm" disabled={pending || !owns} title={versionIssue} onClick={() => void dev.command({ type: "restartIrAcceptance" })}>重新对齐并验收</Button>; }
-    else if (acceptance.status === "reviewing") { status = "等待完成验收报告"; action = <Button size="sm" disabled={pending || !owns} onClick={() => void dev.command({ type: "generateIrAcceptanceReport", outcome: "issues" })}>生成验收报告</Button>; }
+    else if (acceptance.status === "reviewing") { status = "等待完成验收报告"; action = <Button size="sm" disabled={pending || !owns} onClick={() => void dev.command({ type: "generateIrAcceptanceReport", outcome: "passed" })}>生成验收报告</Button>; }
     else if (acceptance.status === "issues") { status = "发现问题 · 等待修复复验"; action = <Button size="sm" disabled={pending || !owns} onClick={() => void dev.command({ type: "repairIrAcceptance" })}>修复并复验</Button>; }
     else if (acceptance.status === "passed") { status = "验收通过 · 等待人工确认"; action = <Button size="sm" disabled={pending || !owns || !!irAcceptanceReportBlocker(view, group)} onClick={() => void dev.command({ type: "prepareIrFinalPr" })}>下一步：准备归档 PR</Button>; }
     else if (["pr-ready", "pr-submitted"].includes(acceptance.status)) { status = "等待人工合并与核验"; action = <DevIrFinalPrControls group={group} compact />; }

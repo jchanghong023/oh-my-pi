@@ -80,7 +80,7 @@ export function applyIrAcceptanceAction(view: DevWorkflowView, group: DevRequire
     acceptance.reportPath = undefined; acceptance.reportVersion = undefined; acceptance.reportCandidate = undefined; acceptance.reportBaseCommit = undefined; acceptance.srMergeVersion = undefined; acceptance.finalPrPath = undefined; acceptance.finalPrVersion = undefined; acceptance.archive = undefined; acceptance.packageVersion = undefined; acceptance.pushedCandidate = undefined; acceptance.pushedPackageVersion = undefined; acceptance.prCandidate = undefined; acceptance.prPackageVersion = undefined;
   }
   if (action.type === "generateIrAcceptanceReport" || action.type === "repairIrAcceptance") {
-    const passed = action.type === "repairIrAcceptance" || action.outcome === "passed";
+    const passed = true; // 本轮简化原型：验收只走通过与归档，不产生问题和返工。
     if (action.type === "repairIrAcceptance") {
       remember(group); acceptance.hasFixes = true; acceptance.revision += 1; acceptance.candidate = `sample-ir-candidate-${acceptance.revision}`;
       view.materials.filter(item => item.projectId === group.projectId && item.irId === group.id && item.kind === "ir-acceptance-report").forEach(item => { item.valid = false; });
