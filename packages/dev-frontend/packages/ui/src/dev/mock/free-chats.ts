@@ -1,4 +1,5 @@
 import type { ProjectTask, VirtualProject, IServiceAccessor } from "@zcode/services";
+import { PROTOTYPE_BACKEND, prototypeCodeDevelopmentAllowed } from "./backend.js";
 import { getEmployeeId } from "../identity.js";
 import { readPrototypeProjectSettings, readPrototypeDevelopmentRoot } from "./project-settings.js";
 import { unavailablePrototypeOperation } from "./events.js";
@@ -22,9 +23,10 @@ function make(projectId: string, taskId: string, title: string, updatedAt: numbe
  const project = readPrototypeProjectSettings().projects.find(item => item.id === projectId);
  if (!project) throw new Error("请选择已登记项目。");
  const employeeId = getEmployeeId();
+ const workspacePath = root ?? readPrototypeDevelopmentRoot(projectId) ?? project.root;
  return { empty, deleted: false, meta: { taskId, traceId: `sample:${taskId}`, title, projectId, hostId: "local", pinned: false, archived: false,
-  workspacePath: root ?? readPrototypeDevelopmentRoot(projectId) ?? project.root,
-  workspaceIdentity: identity ?? `${FREE_WORKSPACE_PREFIX}${projectId}:${employeeId}`,
+  workspacePath,
+  workspaceIdentity: identity ?? `${FREE_WORKSPACE_PREFIX}${projectId}:${employeeId}:${PROTOTYPE_BACKEND.id}:${workspacePath}`,
   createdAt: updatedAt, updatedAt, mode: "build", provider: "glm", model: "Beam Free", status: "completed" } };
 }
 function seed(projectId: string) {
@@ -35,8 +37,9 @@ function seed(projectId: string) {
 }
 /** 有界的元数据查询；正文只由既有聊天服务在打开会话时读取，不读取 IR/SR 会话。 */
 export function readRecentFreeChats(projectId: string, limit = FREE_CHAT_LIMIT): ProjectTask[] {
+ if (!prototypeCodeDevelopmentAllowed()) return [];
  seed(projectId);
- return [...records.values()].filter(item => item.meta.projectId === projectId && !item.deleted && !item.meta.archived)
+ return [...records.values()].filter(item => item.meta.projectId === projectId && !item.empty && !item.deleted && !item.meta.archived)
   .sort((a,b) => b.meta.updatedAt - a.meta.updatedAt || a.meta.taskId.localeCompare(b.meta.taskId))
   .slice(0, Math.min(FREE_CHAT_LIMIT, Math.max(0, limit))).map(item => structuredClone(item.meta));
 }
@@ -64,7 +67,7 @@ export function createPrototypeProjectServices(): Pick<IServiceAccessor, "projec
   restoreProject: async id => { find(id); hiddenProjects.delete(id); notify(); return find(id); },
   moveTask: async input => { find(input.projectId); const item = records.get(input.task.taskId); if (!item) throw new Error("自由会话不存在。"); item.meta.projectId = input.projectId; notify(); },
   reorderProjects: async () => {},
-  prepareSession: async params => { const project = find(params?.projectId ?? projects()[0]!.id); return { workspacePath: project.roots[0]!.rootPath, additionalDirectories: [], projectId: project.id, workspaceIdentity: `${FREE_WORKSPACE_PREFIX}${project.id}:${getEmployeeId()}` }; },
+  prepareSession: async params => { const project = find(params?.projectId ?? projects()[0]!.id); return { workspacePath: project.roots[0]!.rootPath, additionalDirectories: [], projectId: project.id, workspaceIdentity: `${FREE_WORKSPACE_PREFIX}${project.id}:${getEmployeeId()}:${PROTOTYPE_BACKEND.id}:${project.roots[0]!.rootPath}` }; },
   resolveSessionDirectories: async task => { const item = readPrototypeFreeChat(task.taskId); if (!item) throw new Error("自由会话不存在。"); return { workspacePath: item.meta.workspacePath, workspaceIdentity: item.meta.workspaceIdentity, additionalDirectories: [], projectId: item.meta.projectId }; },
   measureProjectData: unavailablePrototypeOperation, deleteProjectData: unavailablePrototypeOperation,
  } };

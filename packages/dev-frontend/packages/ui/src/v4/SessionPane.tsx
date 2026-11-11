@@ -558,7 +558,7 @@ export function SessionPane({
   const devProjectDraftReady = !dev || Boolean(
     devProjectDraft && !dev.pending && dev.selection.projectId &&
     dev.view?.currentProjectId === dev.selection.projectId &&
-    dev.view.releases.some(release => release.id === dev.releaseId && release.projectId === dev.selection.projectId),
+    (dev.selection.freeDraftId || dev.view.releases.some(release => release.id === dev.releaseId && release.projectId === dev.selection.projectId)),
   );
   const browserPlatform = useOptionalPlatform();
   const nativeAttachmentTarget = useRef<{ sessionId: string | null; target: NativeComposerTarget | null }>({ sessionId, target: null });
@@ -1078,7 +1078,7 @@ export function SessionPane({
     useZCodeSessionStore.getState().invalidateDraftRuntime(workspacePath, workspaceIdentity);
   }, [draftConfigRef, modelSelectionView?.revision, sessionId, workspaceIdentity, workspacePath]);
   const createSubmissionFromComposer = useCallback(
-    () => !dev && nativeHostAvailable && sessionId === null && !nativeDraftSessionId
+    () => (!dev || dev.selection.freeDraftId) && nativeHostAvailable && sessionId === null && !nativeDraftSessionId
       ? null : createComposerSubmissionConfig(draftConfigRef.current, modelSelectionView),
     [dev, draftConfigRef, modelSelectionView, nativeHostAvailable, sessionId, nativeDraftSessionId],
   );
@@ -1174,7 +1174,7 @@ export function SessionPane({
   );
   const ensureNativeDraftSession = useCallback((): Promise<string> => {
     if (sessionId) return Promise.resolve(sessionId);
-    if (dev) return Promise.reject(new Error("所选 Dev 需求的原生会话不可用，请从工作台打开已有会话。"));
+    if (dev && !dev.selection.freeDraftId) return Promise.reject(new Error("所选 Dev 需求的原生会话不可用，请从工作台打开已有会话。"));
     if (nativeDraftSessionId) return Promise.resolve(nativeDraftSessionId);
     if (!nativeHostAvailable) return Promise.reject(new Error("No native browser host is available"));
     if (nativeDraftFlight.current?.ownerKey === nativeDraftOwnerKey)
@@ -4118,7 +4118,7 @@ export function SessionPane({
       modelSelectionState={modelSelectionRead.state}
       modelSelectionReload={modelSelectionRead.reload}
       attachmentSessionId={effectiveSessionId}
-      ensureAttachmentSession={!dev && nativeHostAvailable && sessionId === null ? ensureNativeDraftSession : undefined}
+      ensureAttachmentSession={(!dev || dev.selection.freeDraftId) && nativeHostAvailable && sessionId === null ? ensureNativeDraftSession : undefined}
       modelSelectionSessionId={sessionId ?? nativeDraftSessionId}
       attachmentPut={attachmentPut}
       onRuntimeRestart={onRuntimeRestart}

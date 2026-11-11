@@ -1,3 +1,4 @@
+import { DevFreeChatDraftComposer } from "./DevFreeChatDraftComposer.js";
 import { DevProposalDraftComposer } from "./DevProposalDraftComposer.js";
 import { useDevDataSource } from "./data-source.js";
 import { Button } from "@/components/ui/button.js";
@@ -12,6 +13,7 @@ export function DevEmptyState() {
  const openSettings = useTabStore(state => state.openSettingsTab);
  const project = dev.view?.projects.find(item => item.id === dev.selection.projectId);
  const release = dev.view?.releases.find(item => item.id === dev.releaseId);
+ if (dev.selection.freeDraftId && project && source.capabilities.freeChat) return <DevFreeChatDraftComposer key={dev.selection.freeDraftId} />;
  if (dev.selection.proposalDraftId && project && release && source.capabilities.workflowCommands.includes("createProposal")) return <DevProposalDraftComposer key={dev.selection.proposalDraftId} />;
  const missingSession = Boolean(dev.selection.irId);
  const title = missingSession ? "所选会话暂不可用" : !project ? "请选择项目" : !release ? "此项目尚无 Release" : "选择已有会话";

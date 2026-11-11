@@ -230,7 +230,7 @@ export function conversationReadOnlyReason(view: DevWorkflowView | undefined, se
   const phase = proposal.proposalStage ?? "requirements";
   if (selection.discussionPhase && selection.discussionPhase !== phase) return "正在查看另一讨论阶段的历史，只读。";
   if (proposal.status === "requirements-pr") return "需求 PR 已提交，当前版本只读；合并核对后进入正式需求。";
-  if (phase === "solution") {
+  if (phase === "solution" && access?.codeDevelopment !== false) {
    const acceptance = proposal.developerAcceptance;
    if (!acceptance || acceptance.round !== (proposal.proposalRound ?? 1)) return "请先接手评审，再继续方案讨论。";
    if (acceptance.employeeId !== getEmployeeId()) return `方案由 ${acceptance.employeeId} 接手，当前仅查看。`;

@@ -106,7 +106,7 @@ export function useAppPanels(options: {
   const isOfficeMode = useIsOfficeMode();
   const dev = useDev();
   const isDev = dev !== null;
-  const isDevFree = Boolean(dev?.selection.freeSessionId);
+  const isDevFree = Boolean(dev?.selection.freeSessionId || dev?.selection.freeDraftId);
   const isMobileCompactViewport = useIsMobileCompactViewport();
   const sidePaneMemoryKey = useMemo(
     () =>
@@ -119,7 +119,7 @@ export function useAppPanels(options: {
   );
   const initialSidePaneMemoryState = readTaskSidePaneMemoryState(sidePaneMemoryKey);
 
-  // 普通工作区沿用已保存的侧栏状态；Dev 在首次初始化当前 scope 时打开材料标签。
+  // 普通工作区沿用已保存的侧栏状态；Dev 每次刷新在首次初始化当前 scope 时展开右侧审查／材料，不影响左侧树。
   const [sidePaneState, setSidePaneState] = useState<WorkspaceSidePaneState | null>(
     initialSidePaneMemoryState.sidePaneState,
   );

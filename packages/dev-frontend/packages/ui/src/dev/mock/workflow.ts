@@ -156,7 +156,7 @@ export function createPrototypeWorkflow(): DevWorkflowView {
     item.merge = { commit: `sample-merged-${item.id}`, branch: "main", checkedAt: createdAt, files: structuredClone(item.files) };
     if (item.developmentStartedAt) freezePrototypeRequirement(item, "j00808874", item.developmentStartedAt);
   }
-  materials.push(...groups.map(prototypeProposalSolution));
+  materials.push(...groups.map(prototypeProposalSolution), ...drafts.filter(item => item.proposalStage === "solution").map(prototypeProposalSolution));
   materials.push(...srs.filter(sr => sr.status !== "pending").flatMap(sr => developmentMaterials(sr.projectId, sr.irId, sr.id, sr.title).filter(item => sr.materials.some(file => file.path === item.path))));
   const result: DevWorkflowView = { version: 1, revision: 12, ...sharedSettings, releases: readPrototypeProjectReleases(), currentProjectId: DEFAULT_SELECTION.projectId,
     groups, drafts, srs, materials, repositoryHeads: Object.fromEntries(sharedSettings.projects.map(project => [project.repositoryId, `sample-default-${project.repositoryId}`])), operations: [receipt("需求样例整理", 1, "ir-auth"), receipt("提案方案已随需求合入（样例）", 2, "ir-auth"),

@@ -1,13 +1,22 @@
 import type { DevWorkspace } from "../types.js";
 import { prototypeDirectoryIssue } from "./recovery.js";
 import type { DevSelection, DevWorkflowView } from "../types.js";
-import { readPrototypeFreeChat } from "./free-chats.js";
+import { getEmployeeId } from "../identity.js";
+import { readPrototypeDevelopmentRoot } from "./project-settings.js";
+import { PROTOTYPE_BACKEND, prototypeCodeDevelopmentAllowed } from "./backend.js";
+import { FREE_WORKSPACE_PREFIX, readPrototypeFreeChat } from "./free-chats.js";
 
 /** 只解析已记录的工作区，不创建目录、不按当前查看人重绑 SR。 */
 function resolveRecordedWorkspace(view: DevWorkflowView | undefined, selection: DevSelection): DevWorkspace {
  const project = view?.projects.find(item => item.id === selection.projectId);
  const identity = `dev-ui-prototype:${selection.projectId ?? "unselected"}`;
  if (!project) return { kind: "unavailable", identity, error: view?.projects.length ? "所选项目不存在，请重新选择项目。" : "尚未添加项目，请先登记已有 Git 项目。" };
+ if (!prototypeCodeDevelopmentAllowed() && view?.groups.some(item => item.id === selection.irId)) return { kind: "reference", path: project.root, identity: `${identity}:formal-materials:${getEmployeeId()}` };
+ if (selection.freeDraftId) {
+  const root = readPrototypeDevelopmentRoot(project.id);
+  const key = JSON.stringify([PROTOTYPE_BACKEND.id, getEmployeeId(), project.id, root]);
+  return root && selection.freeDraftId === key ? { kind: "free", path: root, identity: `${FREE_WORKSPACE_PREFIX}${project.id}:${getEmployeeId()}:${PROTOTYPE_BACKEND.id}:${root}` } : { kind: "unavailable", identity, error: "自由会话草稿的开发路径已变更，请重新点击新建会话。原草稿保留在原目录。" };
+ }
  if (selection.freeSessionId) {
   const free = readPrototypeFreeChat(selection.freeSessionId);
   return free && free.meta.projectId === project.id ? { kind: "free", path: free.meta.workspacePath, identity: free.meta.workspaceIdentity ?? identity } : { kind: "unavailable", identity, error: "自由会话的目录记录不可用。" };

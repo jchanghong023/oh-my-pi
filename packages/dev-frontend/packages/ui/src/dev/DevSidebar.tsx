@@ -1,7 +1,7 @@
 import { useDevDataSource } from "./data-source.js";
 import { DevWorkflowHelp } from "./DevWorkflowHelp.js";
 import { IR_ACCEPTANCE_LABELS, irAcceptanceVersionBlocker } from "./domain.js";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import { CalendarClock, Plus, MessageCirclePlus } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Badge } from "@/components/ui/badge.js";
@@ -50,20 +50,7 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 		updateSidebarPreferences(scope, patch);
 		setPreferences(current => ({ ...current, ...patch }));
 	};
-	useEffect(() => {
-        // Root 切换会话会重挂侧栏；记录查看目标，避免重挂或刷新反复打开用户刚收起的 IR。
-        const target = JSON.stringify([selection.irId ?? null, selection.srId ?? null]);
-        const saved = readSidebarPreferences(scope);
-        if (saved.lastViewedTarget === target) return;
-        const group = [...(view?.groups ?? []), ...(view?.drafts ?? [])].find(item => item.id === selection.irId && item.releaseId === releaseId);
-        const patch = group ? {
-            lastViewedTarget: target,
-            expandedIrIds: [...new Set([...saved.expandedIrIds, group.id])],
-            ...(view?.drafts.some(item => item.id === group.id) ? { proposalSectionOpen: true } : { formalSectionOpen: true }),
-        } : { lastViewedTarget: target };
-        updateSidebarPreferences(scope, patch);
-        setPreferences(current => ({ ...current, ...patch }));
-    }, [selection.irId, selection.srId, scope, releaseId, view?.groups, view?.drafts]);
+
 
 	const manageProjects = () => { setPendingSettingsSectionIntent("general"); openSettings(); };
 	return (
@@ -118,10 +105,29 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 	);
 }
 
+const initializedFreeSections = new Set<string>();
+
 function DevFreeProjectBoundary({ children }: { children: ReactNode }) {
  const source = useDevDataSource();
- const { refresh } = useProjectDirectory();
+ const { refresh, preferences, projects } = useProjectDirectory();
  const dev = useDev()!;
  useEffect(() => { void refresh(); return source.freeChats?.subscribe(() => { void refresh(); }); }, [refresh, dev.view?.projects.length]);
- return <>{children}</>;
+ useEffect(() => {
+  const project = projects.find(item => item.id === dev.selection.projectId);
+  if (!project) return;
+  const key = JSON.stringify([source.backend?.id ?? source.clientId, getEmployeeId(), project.id]);
+  if (initializedFreeSections.has(key)) return;
+  initializedFreeSections.add(key);
+  preferences.setExpanded(project, true);
+ }, [source, dev.selection.projectId, projects, preferences]);
+ // 复用原单项目行与按钮，访客保留入口；在任何原生操作触发前给出同一提醒。
+ const blockVisitor = (event: SyntheticEvent) => {
+  if (source.capabilities.codeDevelopment) return;
+  const target = event.target;
+  if (!(target instanceof Element) || !target.closest('button, [role="button"], [role="menuitem"]')) return;
+  event.preventDefault();
+  event.stopPropagation();
+  dev.startFreeChat();
+ };
+ return <div className="contents" onPointerDownCapture={blockVisitor} onClickCapture={blockVisitor} onContextMenuCapture={blockVisitor} onKeyDownCapture={event => { if (event.key === "Enter" || event.key === " ") blockVisitor(event); }}>{children}</div>;
 }

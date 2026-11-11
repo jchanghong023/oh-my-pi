@@ -1,12 +1,12 @@
 import { useDevDataSource } from "./data-source.js";
 import { DevSrDeliveryControls } from "./DevSrDeliveryControls.js";
-import { conversationReadOnlyReason, requirementsReviewCurrent } from "./domain.js";
+import { requirementsReviewCurrent } from "./domain.js";
 import { srStartBlocker } from "./domain.js";
 import { DevIrAcceptanceEntry, DevIrAcceptanceHeader } from "./DevIrAcceptance.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
 import { stageMaterialBlocker, deriveStageView } from "./domain.js";
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Download, Copy, Settings, FileText } from "lucide-react";
+import { ChevronDown, Copy, Settings, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.js";
@@ -29,15 +29,6 @@ import { DevDeleteRequirement } from "./DevDeleteRequirement.js";
 import { MATERIAL_KIND_LABELS } from "./domain.js";
 import { getEmployeeId } from "./identity.js";
 import { toast } from "@/components/ui/toast.js";
-export const DEV_MATERIAL_DISCUSS = "omp-dev:material-discuss";
-function download(bytes: Blob, name: string) {
-	const url = URL.createObjectURL(bytes);
-	const link = document.createElement("a");
-	link.href = url;
-	link.download = name;
-	link.click();
-	setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 function copyMaterial(text: string): Promise<void> {
 	if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
 	const active = document.activeElement;
@@ -354,52 +345,31 @@ export function DevSrList() {
 	);
 }
 export function DevMaterialsPane() {
-  const source = useDevDataSource();
 	const dev = useDev()!;
 	const theme = useZCodeStore(state => state.theme);
 	const { selection, view } = dev;
 	const [path, setPath] = useState("");
     const [readFeedback, setReadFeedback] = useState("");
-	const materials =
-		view?.materials.filter(
-			item =>
-				item.projectId === selection.projectId &&
-				item.irId === selection.irId &&
-				(selection.irAcceptance ? ["ir", "sr", "solution", "ir-acceptance-report", "ir-final-pr"].includes(item.kind) : !item.srId || item.srId === selection.srId),
-		) ?? [];
-	const sr = view?.srs.find(
-		item => item.id === selection.srId && item.irId === selection.irId && item.projectId === selection.projectId,
-	);
-	const group = [...(view?.groups ?? []), ...(view?.drafts ?? [])].find(
-		item => item.id === selection.irId && item.projectId === selection.projectId,
-	);
-	const stage = selection.stage ?? sr?.stage;
-	const materialStageView = sr ? deriveStageView(sr, selection) : undefined;
-	const materialHistory = Boolean(materialStageView && !materialStageView.isCurrent);
-	const discussionReadOnly = conversationReadOnlyReason(view, selection, source.capabilities);
-	const proposalSolutionView = view?.drafts.some(item => item.id === group?.id) && (selection.discussionPhase ?? group?.proposalStage) === "solution";
-	const deliveryPath = stage === "pr" && sr?.delivery && materialStageView?.round === sr.delivery.round ? sr.delivery.manifestPath : undefined;
-	const acceptancePath = selection.irAcceptance ? group?.acceptance?.finalPrPath ?? group?.acceptance?.reportPath ?? group?.documentPath : undefined;
-	const preferred = [...materials].sort((a,b) => (b.round ?? 0) - (a.round ?? 0)).find(
-		item =>
-			(item.valid || (materialHistory && item.stage)) &&
-			(selection.irAcceptance ? item.path === acceptancePath : deliveryPath ? item.path === deliveryPath : proposalSolutionView && materials.some(candidate => candidate.kind === "solution" && candidate.valid) ? item.kind === "solution" : selection.srId
-				? stage
-					? !!sr &&
-						item.srId === sr.id &&
-						item.stage === stage &&
-						sr.materials.some(
-							current =>
-								(current.valid || materialHistory) &&
-								current.stage === stage &&
-								current.round === materialStageView?.round &&
-								current.path === item.path &&
-								current.sha256 === item.sha256 &&
-								current.size === item.size,
-						)
-					: item.kind === "sr" && item.path === sr?.documentPath
-				: item.kind === "ir" && item.path === group?.documentPath),
-	);
+  const sr = view?.srs.find(item => item.id === selection.srId && item.irId === selection.irId && item.projectId === selection.projectId);
+  const group = [...(view?.groups ?? []), ...(view?.drafts ?? [])].find(item => item.id === selection.irId && item.projectId === selection.projectId);
+  const stage = selection.stage ?? sr?.stage;
+  const stageView = sr ? deriveStageView(sr, selection) : undefined;
+  const proposal = view?.drafts.some(item => item.id === group?.id);
+  // IR 只读需求文件；SR 只读自身规格与自身所选阶段／轮次，不能按 IR 混入开发产物。
+  const materials = view?.materials.filter(item => {
+    if (item.projectId !== selection.projectId || item.irId !== selection.irId) return false;
+    if (selection.srId) {
+      if (item.srId !== selection.srId) return false;
+      if (item.kind === "sr" && item.path === sr?.documentPath) return true;
+      return !proposal && Boolean(stage && item.stage === stage && item.round === stageView?.round);
+    }
+    return item.path === group?.documentPath || (item.kind === "sr" && item.path.endsWith("/spec.md")) ||
+      (!item.srId && item.kind === "solution" && item.path.endsWith("/design.md"));
+  }) ?? [];
+  const proposalSolutionView = proposal && (selection.discussionPhase ?? group?.proposalStage) === "solution";
+  const preferred = (selection.srId ? materials.find(item => item.path === sr?.documentPath)
+    : proposalSolutionView ? materials.find(item => item.path.endsWith("/design.md"))
+    : materials.find(item => item.path === group?.documentPath)) ?? materials[0];
 	useEffect(() => {
 		setPath(preferred?.path ?? "");
         setReadFeedback("");
@@ -426,17 +396,18 @@ export function DevMaterialsPane() {
 			data-testid="materials-pane"
 		>
 			<div className="space-y-2 p-3">
+                {group && <p className="text-ui-sm text-foreground-subtle">{selection.srId ? "当前 SR 材料" : "IR 需求材料"} · {materials.length} 个文件</p>}
 				<Select value={path || "none"} onValueChange={value => setPath(value === "none" ? "" : value)}>
-					<SelectTrigger className="w-full min-w-0" data-testid="material-menu" aria-label="材料">
+					<SelectTrigger className="w-full min-w-0" data-testid="material-menu" aria-label={selection.srId ? "当前 SR 文件目录" : "IR 需求文件目录"}>
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent position="popper" align="start">
-						<SelectItem value="none">
-							{selection.irId ? awaitingRequirements ? "等待生成需求材料" : "没有当前有效材料" : "选择需求后查看材料"}
-						</SelectItem>
+                        {!materials.length && <SelectItem value="none">
+                          {selection.irId ? awaitingRequirements ? "等待生成需求材料" : selection.srId ? "当前 SR 材料清单不可用" : "IR 需求材料清单不可用" : "选择需求后查看材料"}
+                        </SelectItem>}
 						{materials.map(item => (
 							<SelectItem key={item.path} value={item.path}>
-								{MATERIAL_KIND_LABELS[item.kind]} · {item.kind === "sr" ? item.path.split("/").slice(-2).join("/") : item.path.split("/").at(-1)}
+								{item.path.endsWith("/design.md") ? "IR 技术设计" : MATERIAL_KIND_LABELS[item.kind]} · {item.path.replace(/^openspec\/changes\/[^/]+\//, "")}
 								{item.round ? ` · 第 ${item.round} 轮` : ""}{!item.valid ? "（已失效）" : ""}
 							</SelectItem>
 						))}
@@ -448,58 +419,6 @@ export function DevMaterialsPane() {
 						查看：{DEV_STAGE_LABELS[stage]} · 当前：{sr?.stage ? DEV_STAGE_LABELS[sr.stage] : "未开始"}
 					</p>
 				)}
-				<div className="flex flex-wrap gap-1">
-					<Button
-						size="sm"
-						variant="ghost"
-						data-testid="material-copy"
-						disabled={material?.content === undefined}
-						onClick={() => {
-							void copyMaterial(material!.content!).catch(dev.report);
-						}}
-					>
-						<Copy size={14} />
-						复制
-					</Button>
-					<Button
-						size="sm"
-						variant="ghost"
-						data-testid="material-download"
-						disabled={material?.content === undefined}
-						onClick={() =>
-							download(
-								new Blob([material!.content!], { type: "text/markdown;charset=utf-8" }),
-								path.split("/").at(-1)!,
-							)
-						}
-					>
-						<Download size={14} />
-						下载
-					</Button>
-					<Button
-						size="sm"
-						variant="ghost"
-						data-testid="material-discuss"
-						disabled={
-							material?.content === undefined || !dev.session || Boolean(discussionReadOnly)
-						}
-						title={discussionReadOnly}
-						onClick={() =>
-							window.dispatchEvent(
-								new CustomEvent(DEV_MATERIAL_DISCUSS, {
-									detail: {
-										...selection,
-										sessionId: dev.session?.sessionId,
-										text: `请讨论以下只读材料（${path}）：\n\n${material!.content}`,
-									},
-								}),
-							)
-						}
-					>
-						带入讨论
-					</Button>
-				</div>
-				{discussionReadOnly && <p role="status" className="text-ui-sm text-foreground-subtle">带入讨论不可用：{discussionReadOnly}</p>}
 				{selection.irId && !selection.srId && !selection.irAcceptance && (
 					<>
 						<Button size="sm" variant="ghost" disabled={!preferred} onClick={() => setPath(group?.documentPath ?? preferred!.path)}>
@@ -543,9 +462,7 @@ export function DevMaterialsPane() {
 					<p role={path ? "alert" : "status"} className={`text-ui-base ${path ? "text-destructive" : "text-foreground-subtle"}`}>
 						{path
 							? "所选材料不在当前材料清单中。"
-							: stage
-								? `${DEV_STAGE_LABELS[stage]}没有当前有效材料；请生成材料，或从菜单选择历史版本只读查看。`
-								: "当前需求材料尚未生成或已失效。"}
+                            : "所选对象的材料清单读取失败，请重新读取。需求文件不依赖聊天是否存在；SR 开发文件仅在对应阶段展示。"}
 					</p>
 				) : (
 					<>

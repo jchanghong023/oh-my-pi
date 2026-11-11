@@ -1,5 +1,4 @@
 import { useDev, type DevFirstDiscussion } from "@/dev/DevContext.js";
-import { DEV_MATERIAL_DISCUSS } from "@/dev/DevWorkbench.js";
 import { DevNativeSurface, sameNativeSurfaceTarget, useDevNativeSurface } from "@/dev/DevNativeSurface.js";
 import { DevNativePredictions } from "@/dev/DevNativePredictions.js";
 import type { SessionLifecycleSnapshot } from "@zcode/shared";
@@ -622,7 +621,7 @@ function ConversationComposerImpl({
 }: ConversationComposerProps) {
   const dev = useDev();
   const devRoleModelBound = Boolean(dev?.session?.modelConfig && dev.session.sessionId === sessionId);
-  const devProjectDraft = Boolean(dev && !dev.selection.freeSessionId && !dev.selection.irId && !dev.selection.srId && sessionId === null);
+  const devProjectDraft = Boolean(dev && !dev.selection.freeDraftId && !dev.selection.freeSessionId && !dev.selection.irId && !dev.selection.srId && sessionId === null);
   const nativeSurface = useDevNativeSurface(sessionId, workspaceIdentity);
   const [nativeDraft, setNativeDraft] = useState<{ scope: string; text: string }>({ scope: "", text: "" });
   const remoteAvailable = useRemoteConversationAvailable();
@@ -1280,21 +1279,6 @@ function ConversationComposerImpl({
     scheduleDraftPersist,
     updateText,
   ]);
-
-  useEffect(() => {
-    if (!dev?.session || !sessionId || disabled || !listenAddToChatEvents || sessionId !== dev.session.sessionId ||
-        workspaceIdentity?.startsWith("omp-dev-collab:")) return;
-    const insert = (event: Event) => {
-      const detail = (event as CustomEvent).detail;
-      if (!detail || detail.projectId !== dev.selection.projectId || detail.irId !== dev.selection.irId ||
-          detail.srId !== dev.selection.srId || (detail.sessionId ?? null) !== (sessionId ?? null) || !inputApiRef.current) return;
-      const text = `${inputApiRef.current.getMarkdown()}\n\n${detail.text}`.trim();
-      inputApiRef.current.setText(text);
-      updateText(text); scheduleDraftPersist(); requestComposerFocus();
-    };
-    window.addEventListener(DEV_MATERIAL_DISCUSS, insert);
-    return () => window.removeEventListener(DEV_MATERIAL_DISCUSS, insert);
-  }, [dev, disabled, listenAddToChatEvents, sessionId, workspaceIdentity, updateText, scheduleDraftPersist, requestComposerFocus]);
 
   const insertNativePrediction = useCallback((text: string) => {
     if (!inputApiRef.current || textRef.current || disabled || pendingRef.current) return;

@@ -1,3 +1,4 @@
+import { prototypeCodeDevelopmentAllowed, prototypeProposalDiscussionAllowed } from "./backend.js";
 import { consumePrototypeSendFailure } from "./recovery.js";
 import { prototypeAgentModelSelection } from "./agent-models.js";
 import { FREE_CHAT_PREFIX, freeProjectId, readPrototypeFreeChat, readRecentFreeChats, createPrototypeFreeChat, updatePrototypeFreeChat } from "./free-chats.js";
@@ -118,9 +119,10 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
   const ensure = (sessionId: string, root = "/demo/aurora-console", identity?: string): LocalSession => {
     sessionWorkspaces.set(sessionId, root);
     const key = `${root}:${identity ?? ""}:${sessionId}`;
+    const ref = getPrototypeWorkflow().projects.flatMap(project => getPrototypeWorkflow({ projectId: project.id }).sessions).find(item => item.sessionId === sessionId);
+    if (ref && !prototypeCodeDevelopmentAllowed() && getPrototypeWorkflow({ projectId: ref.projectId }).groups.some(group => group.id === ref.irId)) throw new Error("当前访问方式只允许查看正式需求材料，不读取所有者的开发会话。");
     const existing = sessions.get(key);
     if (existing) return existing;
-    const ref = getPrototypeWorkflow().projects.flatMap(project => getPrototypeWorkflow({ projectId: project.id }).sessions).find(item => item.sessionId === sessionId);
     const workflow = getPrototypeWorkflow({ projectId: ref?.projectId ?? (root.includes("mobile") ? "demo-mobile" : "demo-aurora"), irId: ref?.irId });
     const free = readPrototypeFreeChat(sessionId);
     const sr = workflow.srs.find(item => item.id === ref?.srId);
@@ -183,11 +185,13 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
   };
   const target = (params: ZCodeAgentSessionTarget) => ensure(params.sessionId, params.workspacePath, params.workspaceIdentity);
   const list = (root: string, identity?: string) => {
+    if (identity?.includes(":formal-materials:") && !prototypeCodeDevelopmentAllowed()) return [];
     const freeProject = freeProjectId(identity);
     if (freeProject) return readRecentFreeChats(freeProject, 5).filter(meta => meta.workspacePath === root && meta.workspaceIdentity === identity).map(meta => ensure(meta.taskId, root, identity));
     const projectId = root.includes("mobile") ? "demo-mobile" : "demo-aurora";
     const workflow = getPrototypeWorkflow({ projectId });
     for (const ref of workflow.sessions) {
+      if (!prototypeCodeDevelopmentAllowed() && workflow.groups.some(group => group.id === ref.irId)) continue;
       const workspace = resolvePrototypeWorkspace(workflow, { projectId, irId: ref.irId, srId: ref.srId, irAcceptance: ref.phase === "ir-acceptance" });
       if (workspace.path === root && (!identity || workspace.identity === identity)) ensure(ref.sessionId, root, identity);
     }
@@ -238,9 +242,9 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
   const changed = (value: LocalSession) => {
     value.snapshot.revision++; value.snapshot.seq++; value.meta.updatedAt = Date.now();
     for (const sub of subscriptions.values()) if (sub.sessionId === value.meta.taskId && sub.workspacePath === value.meta.workspacePath && sub.workspaceIdentity === value.meta.workspaceIdentity) emit(sub);
-    for (const [id, sub] of indexSubscriptions) if (sub.root === value.meta.workspacePath && sub.identity === value.meta.workspaceIdentity) emitIndex(id);
     if (value.meta.taskId.startsWith(FREE_CHAT_PREFIX)) updatePrototypeFreeChat({ ...value.meta, pinned: value.pinned, archived: value.archived }, { deleted: value.deleted, empty: value.snapshot.rows.window.length === 0 });
-    workspaceEvents.fire({ type: "workspace_task_list_changed", workspacePath: value.meta.workspacePath, workspaceIdentity: value.meta.workspaceIdentity, taskId: value.meta.taskId, reason: "task_meta_changed", taskMeta: { ...value.meta, pinned: value.pinned, archived: value.archived } });
+    for (const [id, sub] of indexSubscriptions) if (sub.root === value.meta.workspacePath && sub.identity === value.meta.workspaceIdentity) emitIndex(id);
+    if (!value.meta.taskId.startsWith(FREE_CHAT_PREFIX) || value.snapshot.rows.window.length > 0) workspaceEvents.fire({ type: "workspace_task_list_changed", workspacePath: value.meta.workspacePath, workspaceIdentity: value.meta.workspaceIdentity, taskId: value.meta.taskId, reason: "task_meta_changed", taskMeta: { ...value.meta, pinned: value.pinned, archived: value.archived } });
   };
   const append = (value: LocalSession, content: string, commandId?: string, refs?: AttachmentRef[]) => {
     let generated: boolean | undefined;
@@ -249,7 +253,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       const view = getPrototypeWorkflow({ projectId: project.id });
       const ref = view.sessions.find(item => item.sessionId === value.meta.taskId);
       if (!ref) continue;
-      const reason = conversationReadOnlyReason(view, { projectId: ref.projectId, irId: ref.irId, srId: ref.srId, ...(ref.phase === "ir-acceptance" ? { irAcceptance: true } : ref.phase === "requirements" || ref.phase === "solution" ? { discussionPhase: ref.phase } : { stage: ref.phase, stageRound: ref.round }) });
+      const reason = conversationReadOnlyReason(view, { projectId: ref.projectId, irId: ref.irId, srId: ref.srId, ...(ref.phase === "ir-acceptance" ? { irAcceptance: true } : ref.phase === "requirements" || ref.phase === "solution" ? { discussionPhase: ref.phase } : { stage: ref.phase, stageRound: ref.round }) }, { codeDevelopment: prototypeCodeDevelopmentAllowed(), proposalDiscussion: prototypeProposalDiscussionAllowed() });
       if (reason) throw new Error(reason);
       const proposal = getPrototypeWorkflow({ projectId: project.id, irId: ref.irId }).drafts.find(item => item.id === ref.irId);
       if (ref.phase === "requirements" && proposal && content.trim()) {

@@ -25,7 +25,7 @@ export function createPrototypeDataSource(): DevDataSource {
   const allowed = (type: DevAction["type"]) => type === "setSharedProjectRoot" ? getEmployeeId() === "j00808874" : type === "beginProposalRevision" ? false : proposalActions.has(type) ? prototypeProposalDiscussionAllowed() && (!gitProposalActions.has(type) || prototypeCodeDevelopmentAllowed()) : prototypeCodeDevelopmentAllowed();
   return {
     mode: "prototype", backend: PROTOTYPE_BACKEND, clientId: crypto.randomUUID(), initialSelection: { ...DEFAULT_SELECTION },
-    capabilities: { get settingsWrite() { return prototypeSettingsWriteAllowed(); }, get proposalDiscussion() { return prototypeProposalDiscussionAllowed(); }, get codeDevelopment() { return prototypeCodeDevelopmentAllowed(); }, get workflowCommands() { return (["registerProject", "createRelease", "setDevelopmentRoot", "setSharedProjectRoot", "createProposal", "deleteRequirement", "submitProposalReview", "acceptProposal", "runRequirementsReview", "generateRequirements", "supplementRequirements", "generateProposalSolution", "returnProposal", "confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markCodePrSubmitted", "markRequirementsMerged", "beginProposalRevision", "recordRequirementsDecision", "markCodeMerged", "prepareSrDelivery", "publishSrDelivery", "verifySrDelivery", "resolveSrDeliveryConflict", "simulateSrDefaultBranchUpdate", "startSr", "startIrAcceptance", "generateIrAcceptanceReport", "repairIrAcceptance", "prepareIrFinalPr", "restartIrAcceptance", "simulateIrDefaultBranchUpdate", "publishIrFinalPr", "markIrFinalPrSubmitted", "verifyIrFinalMerge", "generateStageMaterials", "approveStage", "backStage", "stop"] as DevAction["type"][]).filter(allowed); }, prototypeBusiness: true, get freeChat() { return prototypeCodeDevelopmentAllowed(); }, nativeChat: true, nativeSurface: false },
+    capabilities: { get settingsWrite() { return prototypeSettingsWriteAllowed(); }, get proposalDiscussion() { return prototypeProposalDiscussionAllowed(); }, get codeDevelopment() { return prototypeCodeDevelopmentAllowed(); }, get workflowCommands() { return (["registerProject", "createRelease", "setDevelopmentRoot", "setSharedProjectRoot", "createProposal", "deleteRequirement", "submitProposalReview", "acceptProposal", "runRequirementsReview", "generateRequirements", "supplementRequirements", "generateProposalSolution", "returnProposal", "confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markCodePrSubmitted", "markRequirementsMerged", "beginProposalRevision", "recordRequirementsDecision", "markCodeMerged", "prepareSrDelivery", "publishSrDelivery", "verifySrDelivery", "resolveSrDeliveryConflict", "simulateSrDefaultBranchUpdate", "startSr", "startIrAcceptance", "generateIrAcceptanceReport", "repairIrAcceptance", "prepareIrFinalPr", "restartIrAcceptance", "simulateIrDefaultBranchUpdate", "publishIrFinalPr", "markIrFinalPrSubmitted", "verifyIrFinalMerge", "generateStageMaterials", "approveStage", "backStage", "stop"] as DevAction["type"][]).filter(allowed); }, prototypeBusiness: true, freeChat: true, nativeChat: true, nativeSurface: false },
     readWorkflow: async selection => {
       const view = getPrototypeWorkflow(selection);
       setPrototypeFreeProject(selection.projectId);
@@ -45,19 +45,22 @@ export function createPrototypeDataSource(): DevDataSource {
       return applyPrototypeAction(action, selection);
     },
     resolveSession: (view, selection) => {
+      // 访客只浏览正式需求材料；同一 Web 的 Token 不意味着可读取所有者的开发聊天。
+      if (!prototypeCodeDevelopmentAllowed() && view.groups.some(item => item.id === selection.irId)) return undefined;
       if (view.drafts.some(item => item.id === selection.irId) && !prototypeProposalDiscussionAllowed()) return undefined;
       return resolvePrototypeSession(view, selection);
     },
     retryMaterial: async path => retryPrototypeMaterialRead(path),
     retrySession: async selection => {
       const view = getPrototypeWorkflow(selection);
+      if (!prototypeCodeDevelopmentAllowed() && view.groups.some(item => item.id === selection.irId)) return;
       const group = [...view.groups, ...view.drafts].find(item => item.id === selection.irId);
       const sr = view.srs.find(item => item.id === selection.srId && item.irId === selection.irId);
       const session = resolvePrototypeSession({ ...view, sessions: sr?.sessions ?? group?.sessions ?? [] }, selection);
       if (session) retryPrototypeSessionRead(session.sessionId);
     },
     createFreeChat: async projectId => { if (!prototypeCodeDevelopmentAllowed() || !readPrototypeDevelopmentRoot(projectId, PROTOTYPE_BACKEND.owner)) throw new Error("请使用自己的 Web 并配置本项目的 Git 开发路径。"); const meta = createPrototypeFreeChat(projectId); return { projectId, taskId: meta.taskId }; },
-    readFreeChat: async taskId => { const item = readPrototypeFreeChat(taskId); return item?.meta.projectId ? { projectId: item.meta.projectId, taskId } : undefined; },
+    readFreeChat: async taskId => { if (!prototypeCodeDevelopmentAllowed()) return undefined; const item = readPrototypeFreeChat(taskId); return item?.meta.projectId ? { projectId: item.meta.projectId, taskId } : undefined; },
     readRecentFreeChats: async projectId => readRecentFreeChats(projectId),
     selectProject: setPrototypeFreeProject,
     resolveWorkspace: resolvePrototypeWorkspace,

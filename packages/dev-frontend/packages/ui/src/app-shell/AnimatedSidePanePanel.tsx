@@ -62,6 +62,7 @@ import {
 import {
   resolveSidePaneTabsOverflow,
   SIDE_PANE_DEFAULT_EXPANDED_RATIO,
+  SIDE_PANE_DEFAULT_EXPANDED_SIZE,
 } from "@/app-shell/sidePaneLayout.js";
 import {
   resolveAnimatedSidePanePanelLayout,
@@ -367,7 +368,7 @@ export function AnimatedSidePanePanel({
 }) {
   const { intl } = useZCodeIntl();
   const dev = useDev();
-  const isDevFlow = Boolean(dev && !dev.selection.freeSessionId);
+  const isDevFlow = Boolean(dev && !dev.selection.freeSessionId && !dev.selection.freeDraftId);
   const isOfficeMode = useIsOfficeMode();
   const developerToolsEnabled = useDeveloperToolsVisibility();
   const isMobileTextInputViewport = useIsMobileTextInputViewport();
@@ -1239,7 +1240,7 @@ export function AnimatedSidePanePanel({
         id="side-pane"
         panelRef={panelRef}
         elementRef={panelElementRef}
-        defaultSize={panelLayout.defaultSize}
+        defaultSize={dev && isVisible ? SIDE_PANE_DEFAULT_EXPANDED_SIZE : panelLayout.defaultSize}
         minSize={panelLayout.minSize}
         maxSize={panelLayout.maxSize}
         collapsedSize={panelLayout.collapsedSize}
