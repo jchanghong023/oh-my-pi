@@ -1,5 +1,5 @@
 /** 独立原型的可复现故障样例；不探测或修改真实目录／网络。 */
-export const PROTOTYPE_RECOVERY_SCENARIOS = ["proposal-feedback", "proposal-intake", "sr-delivery", "requirements-review", "proposal-freeze", "parallel-admission", "ir-acceptance", "empty-projects", "empty-releases", "empty-requirements", "missing-requirement", "missing-sr", "missing-directory", "unreadable-directory", "wrong-repository", "missing-material", "material-read-failure", "session-read-failure", "send-failure", "operation-failure"] as const;
+export const PROTOTYPE_RECOVERY_SCENARIOS = ["review-chat", "proposal-feedback", "proposal-intake", "sr-delivery", "requirements-review", "proposal-freeze", "parallel-admission", "ir-acceptance", "empty-projects", "empty-releases", "empty-requirements", "missing-requirement", "missing-sr", "missing-directory", "unreadable-directory", "wrong-repository", "missing-material", "material-read-failure", "session-read-failure", "send-failure", "operation-failure"] as const;
 export type PrototypeRecoveryScenario = typeof PROTOTYPE_RECOVERY_SCENARIOS[number];
 const requested = typeof location !== "undefined" ? new URLSearchParams(location.search).get("demo") : null;
 export const prototypeRecoveryScenario = PROTOTYPE_RECOVERY_SCENARIOS.find(item => item === requested);

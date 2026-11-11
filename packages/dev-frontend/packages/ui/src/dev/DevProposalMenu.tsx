@@ -6,7 +6,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { MessageResponse } from "@/components/ai-elements/message.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
 import { DevDeleteRequirement } from "./DevDeleteRequirement.js";
-import { DevRequirementsDecision } from "./DevRequirementsDecision.js";
 import { useDev } from "./DevContext.js";
 import type { DevRequirementGroup } from "./types.js";
 
@@ -37,7 +36,6 @@ export function DevProposalMenu({ group }: { group: DevRequirementGroup }) {
     </div> : <div className="space-y-4 text-ui-sm" data-testid="proposal-operation-records">
      {operations.length ? operations.map(item => <section key={item.operationId} className="space-y-1 border-b border-border pb-3"><p>{operationLabels[item.type] ?? item.type} · {item.status === "completed" ? "已完成" : item.status === "running" ? "进行中" : "失败"}</p><time className="text-foreground-subtle" dateTime={item.startedAt}>{new Date(item.startedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</time>{item.steps.map((step, index) => <p key={index} className="text-foreground-subtle">{step.detail}</p>)}{item.error && <p className="text-destructive">{item.error}</p>}</section>) : <p className="text-foreground-subtle">暂无操作记录。</p>}
      {[...(group.returnFeedbackHistory ?? []), ...(group.returnFeedback ? [group.returnFeedback] : [])].map((feedback, index) => <details key={`${feedback.returnedAt}:${index}`} data-testid="proposal-feedback-history"><summary className="cursor-pointer">第 {index + 1} 次退回意见 · {feedback.employeeId}{feedback.resumedAt ? " · 已继续方案" : " · 最近一次"}</summary><p className="mt-2 whitespace-pre-wrap break-words">{feedback.reason}</p></details>)}
-     <DevRequirementsDecision group={group} readOnly />
      {(group.reviewHistory ?? []).map((review, index) => <details key={`${review.id}:${index}`}><summary className="cursor-pointer">历史需求评审 · 第 {review.round ?? 1} 轮 · {review.passed ? "通过" : "待补充"}</summary><MessageResponse>{review.report}</MessageResponse></details>)}
     </div>}
    </DialogContent>

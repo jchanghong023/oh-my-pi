@@ -1,4 +1,4 @@
-import { proposalDeliveryCurrent, requirementsReviewCurrent } from "../packages/ui/src/dev/domain.js";
+import { proposalDeliveryCurrent } from "../packages/ui/src/dev/domain.js";
 import { PROTOTYPE_BACKEND, prototypeProposalDiscussionAllowed, prototypeCodeDevelopmentAllowed, prototypeSettingsWriteAllowed } from "../packages/ui/src/dev/mock/backend.js";
 import { getEmployeeId } from "../packages/ui/src/dev/identity.js";
 import type { DevAction } from "../packages/ui/src/dev/types.js";
@@ -23,7 +23,7 @@ export function createPrototypeDataSource(): DevDataSource {
   const subscriptions = new Set<() => void>();
   const proposalActions = new Set<DevAction["type"]>(["createProposal", "submitProposalReview", "acceptProposal", "runRequirementsReview", "generateRequirements", "supplementRequirements", "generateProposalSolution", "returnProposal", "recordRequirementsDecision", "confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markRequirementsMerged"]);
   const gitProposalActions = new Set<DevAction["type"]>(["confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markRequirementsMerged"]);
-  const allowed = (type: DevAction["type"]) => type === "setSharedProjectRoot" ? getEmployeeId() === "j00808874" : type === "beginProposalRevision" ? false : proposalActions.has(type) ? (gitProposalActions.has(type) ? prototypeCodeDevelopmentAllowed() : prototypeProposalDiscussionAllowed()) : prototypeCodeDevelopmentAllowed();
+  const allowed = (type: DevAction["type"]) => type === "setSharedProjectRoot" ? getEmployeeId() === "j00808874" : type === "deleteRequirement" ? prototypeProposalDiscussionAllowed() && prototypeCodeDevelopmentAllowed() : (type === "beginProposalRevision" || type === "recordRequirementsDecision") ? false : proposalActions.has(type) ? (gitProposalActions.has(type) ? prototypeCodeDevelopmentAllowed() : prototypeProposalDiscussionAllowed()) : prototypeCodeDevelopmentAllowed();
   return {
     mode: "prototype", backend: PROTOTYPE_BACKEND, clientId: crypto.randomUUID(), initialSelection: { ...DEFAULT_SELECTION },
     capabilities: { get settingsWrite() { return prototypeSettingsWriteAllowed(); }, get proposalDiscussion() { return prototypeProposalDiscussionAllowed(); }, get codeDevelopment() { return prototypeCodeDevelopmentAllowed(); }, get workflowCommands() { return (["registerProject", "createRelease", "setDevelopmentRoot", "setSharedProjectRoot", "createProposal", "deleteRequirement", "submitProposalReview", "acceptProposal", "runRequirementsReview", "generateRequirements", "supplementRequirements", "generateProposalSolution", "returnProposal", "confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markCodePrSubmitted", "markRequirementsMerged", "beginProposalRevision", "recordRequirementsDecision", "markCodeMerged", "prepareSrDelivery", "publishSrDelivery", "verifySrDelivery", "resolveSrDeliveryConflict", "simulateSrDefaultBranchUpdate", "startSr", "startIrAcceptance", "generateIrAcceptanceReport", "repairIrAcceptance", "prepareIrFinalPr", "restartIrAcceptance", "simulateIrDefaultBranchUpdate", "publishIrFinalPr", "markIrFinalPrSubmitted", "verifyIrFinalMerge", "generateStageMaterials", "approveStage", "backStage", "stop"] as DevAction["type"][]).filter(allowed); }, prototypeBusiness: true, freeChat: true, nativeChat: true, nativeSurface: false },
@@ -46,10 +46,10 @@ export function createPrototypeDataSource(): DevDataSource {
       return applyPrototypeAction(action, selection);
     },
     resolveSession: (view, selection) => {
-      if (selection.proposalStep === "requirements-review" || selection.proposalStep === "intake") return undefined;
+      if (selection.proposalStep === "intake") return undefined;
       const proposal = view.drafts.find(item => item.id === selection.irId);
       if (proposal && selection.srId) return undefined;
-      if (proposal && !selection.proposalStep && !selection.discussionPhase && (proposalDeliveryCurrent(proposal) || proposal.status === "requirements-pr" || (proposal.proposalStage !== "solution" && requirementsReviewCurrent(proposal)))) return undefined;
+      if (proposal && !selection.proposalStep && !selection.discussionPhase && (proposalDeliveryCurrent(proposal) || proposal.status === "requirements-pr")) return undefined;
       if (!selection.srId && !selection.irAcceptance && view.groups.some(item => item.id === selection.irId)) return undefined;
       // 访客只浏览正式需求材料；同一 Web 的 Token 不意味着可读取所有者的开发聊天。
       if (!prototypeCodeDevelopmentAllowed() && view.groups.some(item => item.id === selection.irId)) return undefined;
