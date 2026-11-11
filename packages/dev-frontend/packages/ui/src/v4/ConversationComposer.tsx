@@ -1,6 +1,7 @@
 import { useDev, type DevFirstDiscussion } from "@/dev/DevContext.js";
 import { DevNativeSurface, sameNativeSurfaceTarget, useDevNativeSurface } from "@/dev/DevNativeSurface.js";
 import { DevNativePredictions } from "@/dev/DevNativePredictions.js";
+import { DevSketchButton } from "@/dev/DevSketchButton.js";
 import type { SessionLifecycleSnapshot } from "@zcode/shared";
 import {
   WorkspaceHookPendingIndicator,
@@ -2406,6 +2407,7 @@ function ConversationComposerImpl({
             {intl.formatMessage({ id: "remote.conversation.sendUnavailable" })}
           </span>
         ) : null}
+        <DevSketchButton disabled={disabled || runtimeBlocked} onAddFiles={attachmentsApi.addAttachmentFiles} onReturnToComposer={requestComposerFocus} />
         {remoteAvailable || modelSelectionView?.nativeSession !== undefined ? (
           <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden empty:hidden" title={devRoleModelBound ? "此会话使用创建时配置；在模型设置中调整后用于新会话。" : undefined}>
             <V4ComposerModelControls
@@ -2491,6 +2493,8 @@ function ConversationComposerImpl({
       </div>
     ),
     [
+      attachmentsApi.addAttachmentFiles,
+      requestComposerFocus,
       canSend,
       canStop,
       hasDraftToSubmit,
