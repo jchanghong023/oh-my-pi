@@ -15,7 +15,6 @@ import {
 	renderInlineMarkdown,
 	replaceTabs,
 	Text,
-	truncateToWidth,
 	visibleWidth,
 } from "../index";
 
@@ -129,6 +128,7 @@ function sanitizeAskResultDetails(details: AskToolDetails): AskToolDetails {
 			: {}),
 		...(details.customInput !== undefined ? { customInput: sanitizeCarriageReturns(details.customInput) } : {}),
 		...(details.note !== undefined ? { note: sanitizeCarriageReturns(details.note) } : {}),
+		...(details.noteOption !== undefined ? { noteOption: sanitizeCarriageReturns(details.noteOption) } : {}),
 		...(details.questions !== undefined ? { questions: details.questions.map(sanitizeCarriageReturns) } : {}),
 		...(details.results !== undefined
 			? {
@@ -142,6 +142,7 @@ function sanitizeAskResultDetails(details: AskToolDetails): AskToolDetails {
 							? { customInput: sanitizeCarriageReturns(entry.customInput) }
 							: {}),
 						...(entry.note !== undefined ? { note: sanitizeCarriageReturns(entry.note) } : {}),
+						...(entry.noteOption !== undefined ? { noteOption: sanitizeCarriageReturns(entry.noteOption) } : {}),
 					})),
 				}
 			: {}),
@@ -188,19 +189,16 @@ function renderCustomInputLines(uiTheme: Theme, customInput: string): string[] {
 	return out;
 }
 
-/** Render an answer note with tab replacement and line-width clamping. */
-function renderNoteLines(uiTheme: Theme, note: string, width: number): string[] {
-	const prefix = " Note: ";
-	const continuationPrefix = "       ";
-	const firstLineWidth = Math.max(1, width - visibleWidth(prefix));
-	const continuationWidth = Math.max(1, width - visibleWidth(continuationPrefix));
-	return replaceTabs(note)
-		.split("\n")
-		.map((line, index) => {
-			const linePrefix = index === 0 ? `${uiTheme.fg("dim", " Note:")} ` : continuationPrefix;
-			const maxWidth = index === 0 ? firstLineWidth : continuationWidth;
-			return `${linePrefix}${uiTheme.fg("toolOutput", truncateToWidth(line, maxWidth))}`;
-		});
+/** Render an answer note with hanging continuation lines, preserving its option target. */
+function renderNoteLines(uiTheme: Theme, note: string, width: number, noteOption?: string): string[] {
+	const prefix = ` ${uiTheme.fg("dim", "✎")} `;
+	const label = noteOption === undefined ? note : `${noteOption}: ${note}`;
+	return wrapPrefixedLine(
+		prefix,
+		" ".repeat(visibleWidth(prefix)),
+		uiTheme.italic(uiTheme.fg("muted", replaceTabs(label))),
+		width,
+	);
 }
 
 /**
@@ -331,6 +329,7 @@ function renderAnswerOptionLines(
 	width: number,
 	contentWidth: number,
 	selectedIndices?: ReadonlySet<number>,
+	noteOption?: string,
 ): string[] {
 	const selected = new Set(selectedOptions ?? []);
 	// Prefer the full recorded option set; fall back to the selected labels when
@@ -353,7 +352,7 @@ function renderAnswerOptionLines(
 		out.push(...wrapOptionLabel(markerStyled, labelStyled, contentWidth));
 	}
 	if (customInput !== undefined) out.push(...renderCustomInputLines(uiTheme, customInput));
-	if (note !== undefined) out.push(...renderNoteLines(uiTheme, note, width));
+	if (note !== undefined) out.push(...renderNoteLines(uiTheme, note, Math.min(width, contentWidth), noteOption));
 	return out;
 }
 
@@ -386,6 +385,7 @@ function describeAnswers(
 	note: string | undefined,
 	selectedIndices: ReadonlySet<number> | undefined,
 	timedOut?: boolean,
+	noteOption?: string,
 ): NativeChild[] {
 	const selected = new Set(selectedOptions ?? []);
 	if (selected.size === 0 && customInput === undefined && note === undefined) {
@@ -402,7 +402,10 @@ function describeAnswers(
 	return compact([
 		...rows,
 		note !== undefined
-			? text([span(plainText(note), "muted")], { wrap: "word", role: "omp.tool.context" })
+			? text(
+					[span("✎ ", "dim"), span(plainText(noteOption === undefined ? note : `${noteOption}: ${note}`), "em")],
+					{ wrap: "word", role: "omp.tool.answer.note" },
+				)
 			: undefined,
 		timedOut ? text([span(TIMEOUT_NOTICE, "muted")], { wrap: "word", role: "omp.tool.notice" }) : undefined,
 	]);
@@ -461,6 +464,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 						r.note,
 						selectedIndicesFor(rawResults[index]?.options, rawResults[index]?.selectedOptions),
 						r.timedOut,
+						r.noteOption,
 					),
 				),
 			),
@@ -487,6 +491,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 				details.note,
 				selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions),
 				details.timedOut,
+				details.noteOption,
 			),
 		]),
 	};
@@ -652,6 +657,7 @@ export const askToolRenderer = {
 							width,
 							contentWidth,
 							selectedIndicesFor(raw?.options, raw?.selectedOptions),
+							r.noteOption,
 						),
 					];
 					if (r.timedOut) lines.push(uiTheme.fg("dim", TIMEOUT_NOTICE));
@@ -705,6 +711,7 @@ export const askToolRenderer = {
 					width,
 					contentWidth,
 					selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions),
+					details.noteOption,
 				),
 			];
 			if (dTimedOut) {

@@ -5,7 +5,7 @@ set -e
 # Usage: curl -fsSL https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.sh | sh
 #
 # Options:
-#   --binary       Install prebuilt binary
+#   --binary       Install prebuilt binary (default)
 #   --ref <tag>    Install a specific published release
 #   -r <tag>      Shorthand for --ref
 
@@ -565,6 +565,14 @@ install_binary() {
     echo "✓ Installed omp to ${INSTALL_DIR}/omp"
     if [ "$OMP_PROCESS_DETECTION_AVAILABLE" != "true" ]; then
         echo "Existing omp sessions may still use the previous version; exit and restart them to use this update."
+    fi
+
+    # An omp earlier on PATH (a previous `bun install -g`, Homebrew, ...) keeps
+    # winning over this install until it is removed or INSTALL_DIR moves ahead.
+    ACTIVE_OMP="$(command -v omp 2>/dev/null || true)"
+    if [ -n "$ACTIVE_OMP" ] && ! [ "$ACTIVE_OMP" -ef "${INSTALL_DIR}/omp" ]; then
+        echo "'omp' still resolves to ${ACTIVE_OMP}; remove that install or put ${INSTALL_DIR} ahead of it on PATH."
+        return
     fi
 
     # Check if in PATH

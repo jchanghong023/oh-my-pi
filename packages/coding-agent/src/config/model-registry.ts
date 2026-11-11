@@ -19,6 +19,7 @@ import type {
 	ThinkingConfig,
 } from "@oh-my-pi/pi-ai/types";
 import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { litellmUsageProvider } from "@oh-my-pi/pi-ai/usage/litellm";
 import { buildDiscoveredModel, buildModel, nextBuildPriceChange } from "@oh-my-pi/pi-catalog/build";
 import { isRetiredProvider, isSupportedChatProvider } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { collapseBuiltVariants } from "@oh-my-pi/pi-catalog/compat/collapse";
@@ -1429,6 +1430,24 @@ export class ModelRegistry {
 			company_available: !this.#ignoreLocalModelConfig && isCompanyLaneActive() && !companyError,
 			restart_required: companyError !== undefined,
 		});
+		this.#syncLiteLLMUsage();
+	}
+
+	/**
+	 * Register LiteLLM budget usage for `litellm` and every `discovery.type: litellm`
+	 * provider not in `disabledProviders`. A mirror's owner already did this.
+	 */
+	#syncLiteLLMUsage(): void {
+		if (this.#owner) return;
+		const disabled = getDisabledProviderIdsFromSettings(this.#settings);
+		const providers = new Map<string, UsageProvider>();
+		for (const provider of [
+			"litellm",
+			...this.#discoverableProviders.filter(c => c.discovery.type === "litellm").map(c => c.provider),
+		]) {
+			if (!disabled.has(provider)) providers.set(provider, litellmUsageProvider);
+		}
+		this.authStorage.usage.replaceConfiguredProviders(providers);
 	}
 
 	#resetStaticComposition(): void {

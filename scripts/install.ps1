@@ -319,6 +319,13 @@ function Set-InstallEnvironment {
     }
     Write-InstallLog INFO environment_update_completed @{ result = "success"; changed = $needsRestart }
 
+    # An omp earlier on PATH (a previous `bun install -g`, Scoop, ...) keeps
+    # winning over this install: $InstallDir is appended to PATH, not prepended.
+    $Active = Get-Command omp -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($Active -and $Active.Source -ne [System.IO.Path]::GetFullPath((Join-Path $InstallDir "omp.exe"))) {
+        Write-Host "[WARN] 'omp' still resolves to $($Active.Source); remove that install or move $InstallDir ahead of it on PATH." -ForegroundColor Yellow
+    }
+
     return $needsRestart
 }
 

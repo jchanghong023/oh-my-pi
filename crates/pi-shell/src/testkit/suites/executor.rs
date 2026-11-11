@@ -220,8 +220,8 @@ fn a_deferred_host_command_runs_the_program_it_shadows() {
 /// raw operands, even when its syntax normally defers to PATH.
 #[test]
 fn a_deferred_host_command_with_raw_arguments_stays_not_found() {
-	let mut host = FakeHost::new()
-		.with_path_deferral(|name: &BStr, _: &[BString]| name == b"find".as_slice());
+	let mut host =
+		FakeHost::new().with_path_deferral(|name: &BStr, _: &[BString]| name == b"find".as_slice());
 	host.countdown("find", 1, 7);
 	let out = run_script(host, b"PATH=/none; find /c $'\\xff'", &[], Fault::None);
 	assert_eq!(out.status, 127);

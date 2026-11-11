@@ -2094,34 +2094,33 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 				// hook handles it; `exec` keeps its not-found handling (a
 				// process image cannot be a native).
 				let exec = sc.exec.as_ref().expect("exec");
-				let target =
-					if exec.exec_as.is_none() && cx.host.defers_to_path(BStr::new(&name), &exec.argv) {
-						// A deferred command whose shadowed program `PATH` lacks:
-						// the host's own command after all.
-						let rctx = ResolveCtx { has_slash: false, via: Via::Plain };
-						let resolved = cx.host.resolve(BStr::new(&name), exec::mode_of(vp), rctx);
-						// PATH fallback must not revive a host command that
-						// cannot consume the original argument bytes.
-						if matches!(
-							resolved,
-							Resolved::Tool(_) | Resolved::Native(_) | Resolved::Device(_)
-						) && exec.argv[1..]
+				let target = if exec.exec_as.is_none()
+					&& cx.host.defers_to_path(BStr::new(&name), &exec.argv)
+				{
+					// A deferred command whose shadowed program `PATH` lacks:
+					// the host's own command after all.
+					let rctx = ResolveCtx { has_slash: false, via: Via::Plain };
+					let resolved = cx.host.resolve(BStr::new(&name), exec::mode_of(vp), rctx);
+					// PATH fallback must not revive a host command that
+					// cannot consume the original argument bytes.
+					if matches!(resolved, Resolved::Tool(_) | Resolved::Native(_) | Resolved::Device(_))
+						&& exec.argv[1..]
 							.iter()
 							.any(|arg| std::str::from_utf8(arg).is_err())
-							&& !cx.host.accepts_raw_args(BStr::new(&name), &resolved)
-						{
-							Target::NotFound
-						} else {
-							resolved.into()
-						}
-					} else if exec.exec_as.is_none()
-						&& !has_not_found_hook(cx, vp)
-						&& let Some(native) = cx.host.fallback(BStr::new(&name))
+						&& !cx.host.accepts_raw_args(BStr::new(&name), &resolved)
 					{
-						Target::Native(native)
-					} else {
 						Target::NotFound
-					};
+					} else {
+						resolved.into()
+					}
+				} else if exec.exec_as.is_none()
+					&& !has_not_found_hook(cx, vp)
+					&& let Some(native) = cx.host.fallback(BStr::new(&name))
+				{
+					Target::Native(native)
+				} else {
+					Target::NotFound
+				};
 				sc.exec.as_mut().expect("exec").target = Some(target);
 				None
 			},

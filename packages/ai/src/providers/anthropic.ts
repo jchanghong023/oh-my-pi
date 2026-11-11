@@ -2149,6 +2149,11 @@ const streamAnthropicOnce = (
 			}
 
 			let clientArgs: AnthropicClientOptionsArgs | undefined;
+			// Claude Code version the current client advertises on the wire. Captured
+			// when the client is built so a `claude_code_version_too_old` rejection is
+			// judged against the version that request sent, not the process-wide
+			// adopted one (concurrent first requests would otherwise race).
+			let sentClaudeCodeVersion = getClaudeCodeVersion();
 			let requestExtraBetas: readonly string[] = [];
 			let clientDefaultHeaders: Record<string, string> | undefined;
 			// Rebuild headers when a retry changes the advertised beta set.
@@ -2319,6 +2324,7 @@ const streamAnthropicOnce = (
 					disableStrictTools,
 					dropPromptCacheBetas: dropCacheControl || dropCacheControlOptions,
 				};
+				sentClaudeCodeVersion = getClaudeCodeVersion();
 				const created = createClient(model, clientArgs);
 				clientDefaultHeaders = created.defaultHeaders;
 				return created;
@@ -3577,7 +3583,7 @@ const streamAnthropicOnce = (
 						isOAuthToken &&
 						clientArgs &&
 						firstTokenTime === undefined &&
-						adoptRequiredClaudeCodeVersion(streamFailure)
+						adoptRequiredClaudeCodeVersion(streamFailure, sentClaudeCodeVersion)
 					) {
 						logger.warn("anthropic: Claude Code version rejected as too old, retrying with required version", {
 							...diagnosticFields(),
@@ -3587,6 +3593,7 @@ const streamAnthropicOnce = (
 							backoff_ms: 0,
 							next_attempt: wireAttempt + 1,
 						});
+						sentClaudeCodeVersion = getClaudeCodeVersion();
 						client = createClient(model, { ...clientArgs, disableStrictTools }).client;
 						// The version only changes client headers; a redemption keeps its frozen body.
 						if (!usingFallbackCredit) params = await prepareParams();
