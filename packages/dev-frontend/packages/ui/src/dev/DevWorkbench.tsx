@@ -1,6 +1,5 @@
 import { useDevDataSource } from "./data-source.js";
 import { DevSrDeliveryControls } from "./DevSrDeliveryControls.js";
-import { requirementsReviewCurrent } from "./domain.js";
 import { srStartBlocker } from "./domain.js";
 import { DevIrAcceptanceEntry, DevIrAcceptanceHeader } from "./DevIrAcceptance.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
@@ -322,28 +321,6 @@ export function DevReadonlyOverview() {
 		</V4PaneConversationProvider>
 	</div>;
 }
-export function DevSrList() {
-	const dev = useDev()!;
-	return (
-		<ul className="mt-4 space-y-1">
-			{dev.view?.srs
-				.filter(sr => sr.irId === dev.selection.irId)
-				.map(sr => (
-					<li key={sr.id}>
-						<Button
-							variant="ghost"
-							className="w-full justify-start"
-							data-sr-id={sr.id}
-							onClick={() => dev.select({ projectId: sr.projectId, irId: sr.irId, srId: sr.id })}
-						>
-							<span className="min-w-0 flex-1 truncate">{sr.title}</span>
-							<small className="ml-auto text-ui-sm text-foreground-subtle">{sr.status === "completed" ? "已完成" : sr.stage ? DEV_STAGE_LABELS[sr.stage] : "待开始"}</small>
-						</Button>
-					</li>
-				))}
-		</ul>
-	);
-}
 export function DevMaterialsPane() {
 	const dev = useDev()!;
 	const theme = useZCodeStore(state => state.theme);
@@ -419,32 +396,7 @@ export function DevMaterialsPane() {
 						查看：{DEV_STAGE_LABELS[stage]} · 当前：{sr?.stage ? DEV_STAGE_LABELS[sr.stage] : "未开始"}
 					</p>
 				)}
-				{selection.irId && !selection.srId && !selection.irAcceptance && (
-					<>
-						<Button size="sm" variant="ghost" disabled={!preferred} onClick={() => setPath(group?.documentPath ?? preferred!.path)}>
-							proposal.md · IR
-						</Button>
-						<DevSrList />
-					</>
-				)}
-				{group?.review && !selection.irAcceptance && (
-					<Collapsible className="text-ui-sm" data-testid="requirement-review">
-						<CollapsibleTrigger asChild>
-							<Button type="button" size="sm" variant="ghost">
-								<ChevronDown className="size-3" />
-							需求评审：
-							{!requirementsReviewCurrent(group)
-								? "旧版本记录（已失效）"
-								: group.review.passed && !group.review.findings?.some(item => item.level === "blocking")
-									? "通过"
-									: "未通过"}
-							</Button>
-						</CollapsibleTrigger>
-						<CollapsibleContent>
-						<pre className="mt-2 whitespace-pre-wrap break-words">{group.review.report}</pre>
-						</CollapsibleContent>
-					</Collapsible>
-				)}
+
 			</div>
 			<div
 				className="min-h-0 flex-1 overflow-auto p-4"
