@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<!--
+Adapted for native OMP from ogulcancelik/pi-extensions/packages/pi-sketch/extensions/sketch.html
+https://github.com/ogulcancelik/pi-extensions
+Dev prototype copy of OMP Sketch; attachments return to the composer without a backend.
+
+MIT License
+
+Copyright (c) 2025 Can Celik
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OMP 画布</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #1a1a1a;
+      color: #aaa;
+      display: flex;
+      flex-direction: column;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      max-height: 40%;
+      overflow: auto;
+      padding: 4px;
+      font-size: 14px;
+    }
+    .toolbar > * { margin: 4px 6px; }
+    button {
+      background: #333;
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover { background: #444; }
+    button.primary { background: #2563eb; }
+    button.primary:hover { background: #1d4ed8; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .brush-sizes, .colors { display: flex; align-items: center; }
+    .brush-size {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      margin: 0 3px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .brush-size.active { border-color: #2563eb; }
+    .brush-size .dot { background: #fff; border-radius: 50%; }
+    .color-btn {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      margin: 0 2px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+    }
+    .color-btn:hover { opacity: 0.8; }
+    .color-btn.active { border-color: #fff; }
+    .viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; }
+    .canvas-container { position: absolute; transform-origin: 0 0; }
+    .viewport.pan { cursor: grab; }
+    .viewport.panning, .viewport.panning canvas { cursor: grabbing; }
+    .viewport.pan canvas { cursor: inherit; }
+    canvas {
+      display: block;
+      background: #fff;
+      touch-action: none;
+      cursor: crosshair;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+    }
+    .resize-handle {
+      position: absolute;
+      bottom: 4px;
+      right: 4px;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      background: linear-gradient(135deg, transparent 50%, #666 50%);
+      border-radius: 0 0 6px 0;
+      opacity: 0.7;
+    }
+    .resize-handle:hover { opacity: 1; }
+    .footer { flex: none; padding: 6px 12px; font-size: 12px; text-align: center; }
+    .hint { color: #999; }
+    kbd { background: #333; padding: 2px 4px; border-radius: 4px; font-family: inherit; }
+    #status { min-height: 18px; margin-top: 4px; }
+    #zoomLevel { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; }
+    #status[data-state="error"] { color: #fca5a5; }
+    #status[data-state="success"] { color: #86efac; }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="colors" aria-label="画笔颜色">
+      <button class="color-btn active" data-color="#000000" style="background: #000;" title="黑色" aria-label="黑色"></button>
+      <button class="color-btn" data-color="#ef4444" style="background: #ef4444;" title="红色" aria-label="红色"></button>
+      <button class="color-btn" data-color="#22c55e" style="background: #22c55e;" title="绿色" aria-label="绿色"></button>
+      <button class="color-btn" data-color="#3b82f6" style="background: #3b82f6;" title="蓝色" aria-label="蓝色"></button>
+      <button class="color-btn" data-color="#ffffff" style="background: #fff;" title="白色（橡皮擦）" aria-label="白色橡皮擦"></button>
+    </div>
+    <div class="brush-sizes" aria-label="画笔粗细">
+      <button class="brush-size" data-size="2" title="细画笔" aria-label="细画笔"><span class="dot" style="width: 4px; height: 4px;"></span></button>
+      <button class="brush-size active" data-size="4" title="中画笔" aria-label="中画笔"><span class="dot" style="width: 8px; height: 8px;"></span></button>
+      <button class="brush-size" data-size="8" title="粗画笔" aria-label="粗画笔"><span class="dot" style="width: 14px; height: 14px;"></span></button>
+    </div>
+    <button id="panButton" aria-pressed="false" title="拖动以平移视野，不绘制笔迹">平移</button>
+    <button id="zoomOutButton" aria-label="缩小">−</button>
+    <output id="zoomLevel" aria-label="缩放比例">100%</output>
+    <button id="zoomInButton" aria-label="放大">+</button>
+    <button id="actualSizeButton" title="按原始比例显示">100%</button>
+    <button id="fitButton">适应窗口</button>
+    <button id="clearButton">清空</button>
+    <button id="undoButton">撤销</button>
+    <button class="primary" id="sendButton" title="添加为附件，不自动发送消息">发送</button>
+    <button id="cancelButton">取消</button>
+  </div>
+  <main class="viewport" id="viewport" aria-label="绘图工作区">
+    <div class="canvas-container" id="canvasContainer">
+      <canvas id="canvas" width="1000" height="600" aria-label="绘图画布"></canvas>
+      <div class="resize-handle" id="resizeHandle" title="拖动以调整图像尺寸"></div>
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="hint">
+      滚轮：缩放 · <kbd>空格</kbd>＋拖动／中键拖动：平移 · <kbd>Ctrl+V</kbd> 粘贴 · <kbd>Enter</kbd> 添加附件 · <kbd>Esc</kbd> 取消 · <kbd>C</kbd> 清空 · <kbd>Z</kbd> 撤销 · <kbd>1-3</kbd> 画笔粗细
+    </div>
+    <div id="status" role="status" aria-live="polite" data-state="ready">可直接绘图或粘贴截图。添加附件不会自动发送消息。</div>
+  </footer>
+  <script>
+    (function () {
+      'use strict';
+      var canvas = document.getElementById('canvas');
+      var ctx = canvas.getContext('2d');
+      var status = document.getElementById('status');
+      var sendButton = document.getElementById('sendButton');
+      var cancelButton = document.getElementById('cancelButton');
+      const viewport = document.getElementById('viewport');
+      const container = document.getElementById('canvasContainer');
+      const panButton = document.getElementById('panButton');
+      const zoomLevel = document.getElementById('zoomLevel');
+      const initialWidth = Math.max(1, viewport.clientWidth);
+      const initialHeight = Math.max(1, viewport.clientHeight);
+      let zoom = 1;
+      let offsetX = 0;
+      let offsetY = 0;
+      let panMode = false;
+      let spaceHeld = false;
+      let pointerId = null;
+      let panning = false;
+      let panX = 0;
+      let panY = 0;
+      var brushSize = 4;
+      var brushColor = '#000000';
+      var drawing = false;
+      var resizing = false;
+      var restoring = false;
+      var pending = false;
+      var pasteGeneration = 0;
+      var states = [];
+      var lastX = 0;
+      var lastY = 0;
+      var DEFAULT_WIDTH = 1000;
+      var DEFAULT_HEIGHT = 600;
+
+      function setStatus(state, message) {
+        status.setAttribute('data-state', state);
+        status.textContent = message;
+      }
+
+      function busy() { return pending || restoring; }
+
+      function updateView() {
+        container.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${zoom})`;
+        zoomLevel.textContent = `${Math.round(zoom * 100)}%`;
+        viewport.classList.toggle('pan', panMode || spaceHeld);
+        viewport.classList.toggle('panning', panning);
+        panButton.setAttribute('aria-pressed', String(panMode));
+      }
+
+      function zoomAt(value, x, y) {
+        if (busy() || resizing || pointerId !== null) return;
+        const next = Math.max(0.1, Math.min(8, value));
+        offsetX = x - (x - offsetX) * next / zoom;
+        offsetY = y - (y - offsetY) * next / zoom;
+        zoom = next;
+        updateView();
+      }
+
+      function fitCanvas() {
+        zoom = Math.max(0.1, Math.min(8, viewport.clientWidth / canvas.width, viewport.clientHeight / canvas.height));
+        offsetX = (viewport.clientWidth - canvas.width * zoom) / 2;
+        offsetY = (viewport.clientHeight - canvas.height * zoom) / 2;
+        updateView();
+      }
+
+      viewport.addEventListener('wheel', function (event) {
+        event.preventDefault();
+        const rect = viewport.getBoundingClientRect();
+        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1);
+        zoomAt(zoom * Math.exp(-delta * 0.0015), event.clientX - rect.left, event.clientY - rect.top);
+      }, { passive: false });
+      document.getElementById('zoomInButton').addEventListener('click', function () {
+        zoomAt(zoom * 1.25, viewport.clientWidth / 2, viewport.clientHeight / 2);
+      });
+      document.getElementById('zoomOutButton').addEventListener('click', function () {
+        zoomAt(zoom / 1.25, viewport.clientWidth / 2, viewport.clientHeight / 2);
+      });
+      document.getElementById('actualSizeButton').addEventListener('click', function () {
+        zoomAt(1, viewport.clientWidth / 2, viewport.clientHeight / 2);
+      });
+      document.getElementById('fitButton').addEventListener('click', function () {
+        if (!busy() && !resizing && pointerId === null) fitCanvas();
+      });
+      panButton.addEventListener('click', function () {
+        panMode = !panMode;
+        updateView();
+      });
+
+      function whiteBackground() {
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      function saveState() {
+        states.push({ data: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height });
+        if (states.length > 50) states.shift();
+      }
+
+      function finishStroke() {
+        if (!drawing) return;
+        drawing = false;
+        saveState();
+      }
+
+      function clearCanvas() {
+        if (busy() || resizing) return;
+        pasteGeneration++;
+        drawing = false;
+        canvas.width = initialWidth;
+        canvas.height = initialHeight;
+        whiteBackground();
+        saveState();
+        fitCanvas();
+      }
+      function undo() {
+        if (busy() || resizing || states.length < 2) return;
+        pasteGeneration++;
+        drawing = false;
+        restoring = true;
+        var previous = states[states.length - 2];
+        var image = new Image();
+        image.onload = function () {
+          canvas.width = previous.width;
+          canvas.height = previous.height;
+          ctx.drawImage(image, 0, 0);
+          states.pop();
+          restoring = false;
+          fitCanvas();
+        };
+        image.onerror = function () {
+          restoring = false;
+          setStatus('error', '撤销时无法恢复图像。当前绘图保持不变。');
+        };
+        image.src = previous.data;
+      }
+
+      function getPos(event) {
+        var rect = canvas.getBoundingClientRect();
+        return {
+          x: (event.clientX - rect.left) * canvas.width / rect.width,
+          y: (event.clientY - rect.top) * canvas.height / rect.height
+        };
+      }
+
+      viewport.addEventListener('pointerdown', function (event) {
+        if (busy() || resizing || pointerId !== null || (event.button !== 0 && event.button !== 1)) return;
+        const shouldPan = event.button === 1 || panMode || spaceHeld;
+        if (!shouldPan && event.target !== canvas) return;
+        event.preventDefault();
+        pointerId = event.pointerId;
+        viewport.setPointerCapture(pointerId);
+        panning = shouldPan;
+        if (panning) {
+          panX = event.clientX;
+          panY = event.clientY;
+          updateView();
+        } else {
+          drawing = true;
+          var pos = getPos(event);
+          lastX = pos.x;
+          lastY = pos.y;
+          ctx.beginPath();
+          ctx.arc(pos.x, pos.y, brushSize / 2, 0, Math.PI * 2);
+          ctx.fillStyle = brushColor;
+          ctx.fill();
+        }
+      });
+      viewport.addEventListener('pointermove', function (event) {
+        if (event.pointerId !== pointerId) return;
+        if (panning) {
+          offsetX += event.clientX - panX;
+          offsetY += event.clientY - panY;
+          panX = event.clientX;
+          panY = event.clientY;
+          updateView();
+          return;
+        }
+        if (!drawing) return;
+        var pos = getPos(event);
+        ctx.beginPath();
+        ctx.moveTo(lastX, lastY);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.strokeStyle = brushColor;
+        ctx.lineWidth = brushSize;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+        lastX = pos.x;
+        lastY = pos.y;
+      });
+      function finishPointer(event) {
+        if (event.pointerId !== pointerId) return;
+        finishStroke();
+        const capturedId = pointerId;
+        pointerId = null;
+        panning = false;
+        if (viewport.hasPointerCapture(capturedId)) viewport.releasePointerCapture(capturedId);
+        updateView();
+      }
+      viewport.addEventListener('pointerup', finishPointer);
+      viewport.addEventListener('pointercancel', finishPointer);
+      viewport.addEventListener('lostpointercapture', finishPointer);
+
+      function selectButton(selector, selected) {
+        var buttons = document.querySelectorAll(selector);
+        var i;
+        for (i = 0; i < buttons.length; i++) buttons[i].classList.remove('active');
+        selected.classList.add('active');
+      }
+      function bindChoices(selector, choose) {
+        var buttons = document.querySelectorAll(selector);
+        var i;
+        for (i = 0; i < buttons.length; i++) {
+          buttons[i].addEventListener('click', function () {
+            if (busy()) return;
+            selectButton(selector, this);
+            choose(this);
+          });
+        }
+      }
+      bindChoices('.brush-size', function (button) { brushSize = parseInt(button.getAttribute('data-size'), 10); });
+      bindChoices('.color-btn', function (button) { brushColor = button.getAttribute('data-color'); });
+
+      function transport(action, body) {
+        pending = true;
+        sendButton.disabled = true;
+        cancelButton.disabled = true;
+        setStatus('pending', action === 'submit' ? '正在添加绘图附件…' : '正在取消…');
+        window.parent.postMessage({ type: 'dev-sketch', action: action, dataBase64: body }, window.parent.location.origin);
+      }
+      window.addEventListener('message', function (event) {
+        if (event.source !== window.parent || event.origin !== window.parent.location.origin ||
+            !event.data || event.data.type !== 'dev-sketch-error') return;
+        pending = false;
+        sendButton.disabled = false;
+        cancelButton.disabled = false;
+        setStatus('error', event.data.message + ' 绘图已保留，请重试。');
+      });
+      function send() {
+        if (busy() || resizing) return;
+        finishStroke();
+        pasteGeneration++;
+        try {
+          transport('submit', canvas.toDataURL('image/png').split(',')[1]);
+        } catch (error) {
+          pending = false;
+          sendButton.disabled = false;
+          cancelButton.disabled = false;
+          setStatus('error', '无法添加绘图附件。绘图已保留，请重试。');
+        }
+      }
+      function cancel() {
+        if (busy()) return;
+        finishStroke();
+        pasteGeneration++;
+        transport('cancel', '');
+      }
+      document.getElementById('clearButton').addEventListener('click', clearCanvas);
+      document.getElementById('undoButton').addEventListener('click', undo);
+      sendButton.addEventListener('click', send);
+      cancelButton.addEventListener('click', cancel);
+
+      document.addEventListener('keydown', function (event) {
+        var key = (event.key || '').toLowerCase();
+        if (key === ' ' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          event.preventDefault();
+          spaceHeld = true;
+          updateView();
+          return;
+        }
+        if (key === 'enter') { event.preventDefault(); send(); }
+        else if (key === 'escape' || key === 'esc') { event.preventDefault(); cancel(); }
+        else if (event.ctrlKey || event.metaKey || event.altKey) return;
+        else if (key === 'c') clearCanvas();
+        else if (key === 'z') undo();
+        else if (key === '1') document.querySelector('[data-size="2"]').click();
+        else if (key === '2') document.querySelector('[data-size="4"]').click();
+        else if (key === '3') document.querySelector('[data-size="8"]').click();
+      });
+      document.addEventListener('keyup', function (event) {
+        if (event.key !== ' ') return;
+        event.preventDefault();
+        spaceHeld = false;
+        updateView();
+      });
+      window.addEventListener('blur', function () {
+        spaceHeld = false;
+        if (pointerId !== null) finishPointer({ pointerId });
+        updateView();
+      });
+
+      function pasteImage(blob) {
+        var generation = ++pasteGeneration;
+        var image = new Image();
+        var objectUrl = URL.createObjectURL(blob);
+        image.onload = function () {
+          URL.revokeObjectURL(objectUrl);
+          if (generation !== pasteGeneration || busy() || resizing) return;
+          finishStroke();
+          var scale = Math.min(DEFAULT_WIDTH / image.width, DEFAULT_HEIGHT / image.height, 1);
+          canvas.width = Math.max(1, Math.round(image.width * scale));
+          canvas.height = Math.max(1, Math.round(image.height * scale));
+          whiteBackground();
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          saveState();
+          fitCanvas();
+        };
+        image.onerror = function () {
+          URL.revokeObjectURL(objectUrl);
+          setStatus('error', '无法加载粘贴的图片。当前绘图保持不变。');
+        };
+        image.src = objectUrl;
+      }
+      document.addEventListener('paste', function (event) {
+        if (busy() || resizing) return;
+        var items = event.clipboardData && event.clipboardData.items;
+        if (!items) return;
+        var i;
+        for (i = 0; i < items.length; i++) {
+          if (items[i].type.indexOf('image/') !== 0) continue;
+          var blob = items[i].getAsFile();
+          if (!blob) continue;
+          event.preventDefault();
+          pasteImage(blob);
+          break;
+        }
+      });
+
+      const resizeHandle = document.getElementById('resizeHandle');
+      resizeHandle.addEventListener('pointerdown', function (event) {
+        if (event.button !== 0 || busy() || resizing || pointerId !== null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        finishStroke();
+        pasteGeneration++;
+        resizing = true;
+        const resizeId = event.pointerId;
+        resizeHandle.setPointerCapture(resizeId);
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const startWidth = canvas.width;
+        const startHeight = canvas.height;
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        function move(moveEvent) {
+          if (moveEvent.pointerId !== resizeId) return;
+          canvas.width = Math.max(200, Math.round(startWidth + (moveEvent.clientX - startX) / zoom));
+          canvas.height = Math.max(150, Math.round(startHeight + (moveEvent.clientY - startY) / zoom));
+          whiteBackground();
+          ctx.putImageData(imageData, 0, 0);
+        }
+        function finishResize(finishEvent) {
+          if (finishEvent.pointerId !== resizeId) return;
+          resizing = false;
+          saveState();
+          resizeHandle.removeEventListener('pointermove', move);
+          resizeHandle.removeEventListener('pointerup', finishResize);
+          resizeHandle.removeEventListener('pointercancel', finishResize);
+          resizeHandle.removeEventListener('lostpointercapture', finishResize);
+          if (resizeHandle.hasPointerCapture(resizeId)) resizeHandle.releasePointerCapture(resizeId);
+        }
+        resizeHandle.addEventListener('pointermove', move);
+        resizeHandle.addEventListener('pointerup', finishResize);
+        resizeHandle.addEventListener('pointercancel', finishResize);
+        resizeHandle.addEventListener('lostpointercapture', finishResize);
+      });
+
+      canvas.width = initialWidth;
+      canvas.height = initialHeight;
+      updateView();
+      whiteBackground();
+      saveState();
+    }());
+  </script>
+</body>
+</html>
