@@ -60,6 +60,7 @@
 
 ### Fixed
 
+- Keep `/loopgoal` repeating after busy submissions, ignore unrelated completion replies while awaiting its goal, preserve target whitespace, and reuse `/loop` status displays and autocomplete.
 - Preserve queued prompt ownership and Dev/WebGUI isolation when restoring drafts, switching focused sessions, approving plans or requesting shutdown.
 - Preserve command-not-found handling for non-UTF-8 arguments when a Windows-style command has no matching executable in PATH.
 - Clear all matching Todo append error reminders after retrying with the required phase, without dropping unrelated failures.

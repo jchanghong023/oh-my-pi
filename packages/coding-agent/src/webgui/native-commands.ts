@@ -258,7 +258,6 @@ async function executeNativeCommand(
 		const result = await withNativeWebGuiCommandLifecycleGate(session, leaveForLifecycle, () =>
 			executeWebGuiBuiltinSlashCommand(text, runtime),
 		);
-		if (controller.signal.aborted && parsed.name === "loopgoal") return true;
 		if (result === false) return false;
 		if (result && "prompt" in result) {
 			if (result.goalAutoOrchestrateInitialId)

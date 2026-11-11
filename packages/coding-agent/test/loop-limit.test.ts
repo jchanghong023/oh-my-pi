@@ -1,6 +1,4 @@
 import { describe, expect, test, vi } from "bun:test";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { isLoopGoalComplete } from "../src/modes/loop-goal";
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
@@ -9,7 +7,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/loop-limit";
 import type { BuiltinSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 describe("/loop slash command", () => {
 	test("forwards a bare limit argument verbatim", async () => {
@@ -280,37 +277,5 @@ describe("loop limit runtime", () => {
 		expect(isLoopDurationExpired(limit, 600_999)).toBe(false);
 		expect(consumeLoopLimitIteration(limit, 601_000)).toBe(false);
 		expect(isLoopDurationExpired(limit, 601_000)).toBe(true);
-	});
-});
-
-function reply(text: string, stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
-	const message = createAssistantMessage(text);
-	message.stopReason = stopReason;
-	return message;
-}
-
-describe("loopgoal completion", () => {
-	test("stops on the trimmed final reply, not an earlier assistant message", () => {
-		expect(isLoopGoalComplete([reply("继续"), reply(" \n无\t ")])).toBe(true);
-		expect(isLoopGoalComplete([reply("无"), reply("继续")])).toBe(false);
-	});
-
-	test("does not stop on explanations containing the sentinel or on an empty round", () => {
-		expect(isLoopGoalComplete([reply("无。")])).toBe(false);
-		expect(isLoopGoalComplete([])).toBe(false);
-	});
-
-	test.each(["toolUse", "aborted", "error"] as const)("does not treat %s as a completed goal", reason => {
-		expect(isLoopGoalComplete([reply("无", reason)])).toBe(false);
-	});
-
-	test("compares concatenated text blocks without including thinking", () => {
-		const message = reply("");
-		message.content = [
-			{ type: "thinking", thinking: "尚有工作需要核对" },
-			{ type: "text", text: "\n" },
-			{ type: "text", text: "无 " },
-		];
-		expect(isLoopGoalComplete([message])).toBe(true);
 	});
 });

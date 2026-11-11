@@ -3,8 +3,10 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import loopGoalPrompt from "../prompts/loop-goal.md" with { type: "text" };
 import { extractVisibleAssistantText } from "./rpc/rpc-live";
 
+const renderGoalPrompt = prompt.compile(loopGoalPrompt.trimEnd());
+
 export function renderLoopGoalPrompt(objective: string): string {
-	return prompt.render(loopGoalPrompt, { objective });
+	return renderGoalPrompt({ objective });
 }
 
 export function isLoopGoalComplete(messages: readonly AgentMessage[]): boolean {

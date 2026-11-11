@@ -3866,7 +3866,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const conditionSuffix = condition ? ` Continuing ${describeLoopCondition(condition)}.` : "";
 		const tail = hasPrompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn.";
 		this.showStatus(
-			`${this.loopGoalMode ? "Loopgoal" : "Loop"} mode enabled.${limitSuffix}${remainingSuffix}${intervalSuffix}${conditionSuffix} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; /${this.loopGoalMode ? "loopgoal" : "loop"} again to disable.`,
+			`Loop mode enabled.${limitSuffix}${remainingSuffix}${intervalSuffix}${conditionSuffix} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; /loop again to disable.`,
 		);
 	}
 

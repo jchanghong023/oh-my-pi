@@ -233,6 +233,36 @@ export function formatTokenCount(value: number): string {
 	return value.toLocaleString();
 }
 
+const LOOP_MODE_SLASH_COMMAND: SlashCommandSpec = {
+	name: "loop",
+	icon: "loop",
+	acpDescription: "Repeat the next prompt after each turn; Stop pauses the loop and /loop again disables it",
+	get description() {
+		return `Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Use a count/duration followed by an optional interval (10 30s: 10 total turns, waiting 30s after each turn); without an interval, a count limits repeats after the first turn. Gate repeats with \`--until '<cmd>'\` / \`--while '<cmd>'\`. ${formatKeyHint("escape")} suspends the ongoing loop; /loop again to disable.`;
+	},
+	inlineHint: "[count|duration] [interval] [--while|--until '<cmd>'] [prompt]",
+	allowArgs: true,
+	handleRpc: (command, runtime) => runtime.runModeCommand("loop", command.args),
+	getTuiAutocompleteDescription: runtime => {
+		if (!runtime.ctx.loopModeEnabled) return "Loop: off";
+		if (runtime.ctx.loopModePaused) return "Loop: paused";
+		const bounds = [
+			runtime.ctx.loopLimit ? describeLoopLimitRuntime(runtime.ctx.loopLimit) : undefined,
+			runtime.ctx.loopCondition ? describeLoopCondition(runtime.ctx.loopCondition) : undefined,
+		].filter((part): part is string => part !== undefined);
+		if (bounds.length > 0) return `Loop: on (${bounds.join(", ")})`;
+		if (runtime.ctx.loopPrompt) return "Loop: on (repeating prompt)";
+		return "Loop: on (waiting for next prompt)";
+	},
+	handleTui: async (command, runtime) => {
+		const prompt = await runtime.ctx.handleLoopCommand(command.args);
+		clearSubmittedText(runtime);
+		// Surface any inline prompt so the dispatcher returns it and the normal
+		// submit flow runs the first loop iteration (recording it as the loop prompt).
+		if (prompt) return { prompt };
+	},
+};
+
 const GOAL_MODE_SLASH_COMMAND: SlashCommandSpec = {
 	name: "goal",
 	icon: "goal",
@@ -458,49 +488,13 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			);
 		},
 	},
+	LOOP_MODE_SLASH_COMMAND,
 	{
-		name: "loop",
-		icon: "loop",
-		acpDescription: "Repeat the next prompt after each turn; Stop pauses the loop and /loop again disables it",
-		get description() {
-			return `Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Use a count/duration followed by an optional interval (10 30s: 10 total turns, waiting 30s after each turn); without an interval, a count limits repeats after the first turn. Gate repeats with \`--until '<cmd>'\` / \`--while '<cmd>'\`. ${formatKeyHint("escape")} suspends the ongoing loop; /loop again to disable.`;
-		},
-		inlineHint: "[count|duration] [interval] [--while|--until '<cmd>'] [prompt]",
-		allowArgs: true,
-		handleRpc: (command, runtime) => runtime.runModeCommand("loop", command.args),
-		getTuiAutocompleteDescription: runtime => {
-			if (!runtime.ctx.loopModeEnabled) return "Loop: off";
-			if (runtime.ctx.loopModePaused) return "Loop: paused";
-			const bounds = [
-				runtime.ctx.loopLimit ? describeLoopLimitRuntime(runtime.ctx.loopLimit) : undefined,
-				runtime.ctx.loopCondition ? describeLoopCondition(runtime.ctx.loopCondition) : undefined,
-			].filter((part): part is string => part !== undefined);
-			if (bounds.length > 0) return `Loop: on (${bounds.join(", ")})`;
-			if (runtime.ctx.loopPrompt) return "Loop: on (repeating prompt)";
-			return "Loop: on (waiting for next prompt)";
-		},
-		handleTui: async (command, runtime) => {
-			const prompt = await runtime.ctx.handleLoopCommand(command.args);
-			clearSubmittedText(runtime);
-			// Surface any inline prompt so the dispatcher returns it and the normal
-			// submit flow runs the first loop iteration (recording it as the loop prompt).
-			if (prompt) return { prompt };
-		},
-	},
-	{
+		...LOOP_MODE_SLASH_COMMAND,
 		name: "loopgoal",
-		icon: "loop",
 		description:
 			"Repeat a fixed goal prompt after each turn until the agent replies 无. Uses the same parameters, context handling and stop controls as /loop.",
-		inlineHint: "[count|duration] [interval] [--while|--until '<cmd>'] [goal]",
-		allowArgs: true,
 		handleRpc: (command, runtime) => runtime.runModeCommand("loopgoal", command.args),
-		getTuiAutocompleteDescription: runtime =>
-			runtime.ctx.loopGoalMode
-				? runtime.ctx.loopModePaused
-					? "Loopgoal: paused"
-					: "Loopgoal: on"
-				: "Loopgoal: off",
 		handleTui: async (command, runtime) => {
 			const prompt = await runtime.ctx.handleLoopCommand(command.args, true);
 			clearSubmittedText(runtime);

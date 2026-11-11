@@ -579,7 +579,7 @@ export function createNativeWebGuiModeController(
 			loop.generation++;
 		}
 		if (event.type === "agent_end") {
-			if (loop?.goalMode && event.isTerminal !== false && isLoopGoalComplete(event.messages)) {
+			if (loop?.goalMode && loop.prompt && event.isTerminal !== false && isLoopGoalComplete(event.messages)) {
 				stopLoop();
 				return;
 			}
@@ -940,16 +940,12 @@ export function createNativeWebGuiModeController(
 			args: parsed,
 			limit: createLoopLimitRuntime(parsed.limit),
 			goalMode,
-			prompt: parsed.prompt,
+			prompt: goalMode ? undefined : parsed.prompt,
 			generation: 0,
 		};
 		loopOrigin = nativeWebGuiInteractionOrigin();
 		if (parsed.intervalMs !== undefined) consumeLoopLimitIteration(loop.limit);
-		await output(
-			goalMode
-				? "Loopgoal mode enabled. Stop suspends repeats; /loopgoal disables it."
-				: "Loop mode enabled. Stop suspends repeats; /loop disables it.",
-		);
+		await output("Loop mode enabled. Stop suspends repeats; /loop disables it.");
 		return parsed.prompt ? { prompt: parsed.prompt } : consumed();
 	}
 	async function runNativeModeCommand(
