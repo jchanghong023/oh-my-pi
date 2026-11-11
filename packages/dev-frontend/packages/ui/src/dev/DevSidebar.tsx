@@ -40,7 +40,7 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 	const project = view?.projects.find(item => item.id === selection.projectId);
 	const selectedRelease = view?.releases.find(item => item.id === releaseId);
 	const allGroups = releaseId ? view?.groups.filter(group => group.releaseId === releaseId) ?? [] : [];
-	const allDrafts = releaseId ? view?.drafts.filter(group => group.releaseId === releaseId) ?? [] : [];
+	const allDrafts = releaseId ? view?.drafts.filter(group => group.releaseId === releaseId && !group.pendingFirstMessage) ?? [] : [];
 	const employeeId = getEmployeeId();
 	const development = view?.repositoryDevelopment;
 	const activeSrs = development?.activeSrs ?? [];
@@ -70,7 +70,7 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 		<nav data-testid="dev-workflow-root" aria-label="Dev 需求导航" className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar text-ui-base">
 			<div className="shrink-0 space-y-3 px-2 pt-3 pb-4">
 				{source.capabilities.freeChat && <Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project} data-testid="dev-new-free-chat" onClick={() => { dev.startFreeChat(); onNavigate?.(); }}><MessageCirclePlus className="size-4" />新建会话</Button>}
-				{source.capabilities.workflowCommands.includes("createProposal") && <Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project || !releaseId} data-testid="new-requirement" onClick={() => { void command({ type: "createProposal", releaseId }); onNavigate?.(); }}><Plus className="size-4" />新建需求提案</Button>}
+				{source.capabilities.workflowCommands.includes("createProposal") && <Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project || !releaseId} data-testid="new-requirement" onClick={() => { dev.startProposalDraft(); onNavigate?.(); }}><Plus className="size-4" />新建需求提案</Button>}
 				{source.mode === "prototype" && onOpenAutomations && <Button variant="ghost" size="lg" className={`w-full justify-start gap-2 ${automationsActive ? "bg-selected text-foreground" : ""}`} aria-pressed={automationsActive ?? false} data-testid="dev-automations-open" onClick={onOpenAutomations}><CalendarClock className="size-4" />自动化</Button>}
 			</div>
             {activeSrs.length > 0 && <section className="shrink-0 space-y-1 border-t border-border/50 px-2 py-3" aria-label="仓库正在开发">
@@ -79,13 +79,17 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
                 const group = view?.groups.find(item => item.id === sr.irId && item.projectId === sr.projectId);
                 const owner = development?.owners.find(item => item.irId === sr.irId && item.projectId === sr.projectId);
                 const release = view?.releases.find(item => item.id === group?.releaseId);
-                return <Button key={`${sr.projectId}:${sr.id}`} variant={!automationsActive && selection.srId === sr.id && selection.projectId === sr.projectId ? "secondary" : "ghost"} className="h-auto w-full min-w-0 items-start justify-start gap-2 px-2.5 py-2" data-testid="active-sr" data-active-sr-id={sr.id} aria-current={!automationsActive && selection.srId === sr.id && selection.projectId === sr.projectId ? "page" : undefined} onClick={() => {
+                const stage = sr.stage ? DEV_STAGE_LABELS[sr.stage] : "开发中";
+                const developer = sr.developerEmployeeId === employeeId ? "我 · 可继续开发" : `${sr.developerEmployeeId ?? "开发人待确认"} · 只读查看`;
+                const details = [sr.title, group?.title ?? owner?.title, stage, developer, group && group.releaseId !== releaseId ? release?.title : undefined].filter(Boolean).join(" · ");
+                return <Button key={`${sr.projectId}:${sr.id}`} variant={!automationsActive && selection.srId === sr.id && selection.projectId === sr.projectId ? "secondary" : "ghost"} className="h-8 w-full min-w-0 justify-start gap-2 px-2.5 text-left font-normal" title={details} aria-label={details} data-testid="active-sr" data-active-sr-id={sr.id} aria-current={!automationsActive && selection.srId === sr.id && selection.projectId === sr.projectId ? "page" : undefined} onClick={() => {
                   select({ projectId: sr.projectId, irId: sr.irId, srId: sr.id });
                   if (group) dev.setReleaseId(group.releaseId);
                   onNavigate?.();
                 }}>
-                  <Badge variant="outline" className="mt-0.5 h-4 min-w-5 shrink-0 justify-center rounded-sm border-border/70 bg-transparent px-0.5 font-mono text-ui-xs text-foreground-subtle">SR</Badge>
-                  <span className="min-w-0 flex-1 text-left"><span className="block truncate" title={sr.title}>{sr.title}</span><span className="mt-1 block truncate text-ui-sm text-foreground-subtle">{group?.title ?? owner?.title} · {sr.stage ? DEV_STAGE_LABELS[sr.stage] : "开发中"}</span><span className="mt-1 block truncate text-ui-sm text-foreground-subtle" data-testid="active-sr-developer">{sr.developerEmployeeId === employeeId ? "我" : sr.developerEmployeeId} · {sr.developerEmployeeId === employeeId ? "可继续开发" : "只读查看"}</span>{group && group.releaseId !== releaseId && <span className="mt-1 block truncate text-ui-sm text-foreground-subtle">{release?.title} · 点击返回</span>}</span>
+                  <Badge variant="outline" className="h-4 min-w-5 shrink-0 justify-center rounded-sm border-border/70 bg-transparent px-0.5 font-mono text-ui-xs font-medium text-foreground-subtle">SR</Badge>
+                  <span className="min-w-0 flex-1 truncate">{sr.title}</span>
+                  <span className="shrink-0 text-ui-sm text-foreground-subtlest">{stage}</span>
                 </Button>;
               })}
             </section>}

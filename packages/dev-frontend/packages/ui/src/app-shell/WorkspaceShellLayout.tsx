@@ -332,7 +332,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const devSr = dev?.view?.srs.find(item => item.id === dev.selection.srId);
   const devGroup = [...(dev?.view?.groups ?? []), ...(dev?.view?.drafts ?? [])].find(item => item.id === dev?.selection.irId);
   const devProposalHistory = !!dev?.view?.drafts.some(item => item.id === dev.selection.irId) && !!dev?.selection.discussionPhase && dev.selection.discussionPhase !== (devGroup?.proposalStage ?? "requirements");
-  const devOwnershipReadOnlyReason = devSource?.mode === "prototype" ? conversationReadOnlyReason(dev?.view, dev?.selection ?? {}) : undefined;
+  const devOwnershipReadOnlyReason = devSource?.mode === "prototype" ? conversationReadOnlyReason(dev?.view, dev?.selection ?? {}, devSource.capabilities) : undefined;
   const devFrozen = !!dev && !dev.selection.irAcceptance && !dev.selection.srId && Boolean(devGroup?.freeze);
   const devEmpty = Boolean(dev && !dev.selection.freeSessionId && (!dev.selection.irId || (!dev.session && devSr?.status !== "pending")));
   const devReadOnly = !!dev && !!dev.selection.srId && !dev.session && !dev.view?.drafts.some(item => item.id === dev.selection.irId);

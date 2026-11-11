@@ -1,7 +1,11 @@
 import { createContext, createElement, useContext, type ReactNode } from "react";
 import type { IServiceAccessor } from "@zcode/services";
 import type { SkillSummary } from "@zcode/shared";
-import type { DevAction, DevSelection, DevWorkflowView, DevWorkflowResult, DevNativeSessionRef, DevPeer, DevAgentModelSettings, DevAgentModelBinding, DevSkillDesignDraft, DevPrHandoff, DevPrHandoffScenario, DevWorkspace } from "./types.js";
+import type { DevAction, DevSelection, DevWorkflowView, DevWorkflowResult, DevNativeSessionRef, DevPeer, DevAgentModelSettings, DevAgentModelBinding, DevSkillDesignDraft, DevSkillDesignPreview, DevPrHandoff, DevPrHandoffScenario, DevWorkspace } from "./types.js";
+
+export interface DevBackendView {
+  id: string; kind: "developer" | "team"; owner: string; name: string; configDirectory: string; userSkillsDirectory: string;
+}
 
 export interface DevDirectory { path: string; name: string; git: boolean; branch: string; repositoryRoot?: string }
 export type DevDirectoryCheck = { valid: false; error: string } | { valid: true; root: string; directory: DevDirectory };
@@ -10,6 +14,7 @@ export interface DevProjectServices {
   listDirectories(): DevDirectory[];
   checkProjectDirectory(path: string, existingRoots: string[]): Promise<DevDirectoryCheck>;
   checkDevelopmentDirectory(path: string, sharedRoot: string): Promise<DevDirectoryCheck>;
+  checkSharedProjectDirectory(path: string, projectId: string): Promise<DevDirectoryCheck>;
 }
 export interface DevModelServices {
   choices: readonly { id: string; name: string; provider: string }[];
@@ -27,13 +32,16 @@ export interface DevPromptServices {
 }
 export interface DevSkillDesignServices {
   session(projectId: string): string;
+  binding(sessionId: string): DevAgentModelBinding;
   workspaceIdentity(projectId: string): string;
   read(sessionId: string): DevSkillDesignDraft;
   saveDraft(sessionId: string, value: DevSkillDesignDraft): void;
   subscribe(listener: (sessionId: string) => void): { dispose(): void };
-  render(name: string, value: DevSkillDesignDraft): string;
+  prompt(sessionId: string, value: DevSkillDesignDraft): string;
+  temporaryDirectory(sessionId: string): string;
+  readPreview(sessionId: string): DevSkillDesignPreview | undefined;
   listSkills(workspacePath: string): SkillSummary[];
-  saveSkill(workspacePath: string, name: string, description: string, body: string): string;
+  savePreview(sessionId: string, workspacePath: string, name: string, target: "project" | "user"): string;
   sample?: DevSkillDesignDraft;
 }
 export interface DevPrototypeScenarios {
@@ -44,7 +52,8 @@ export interface DevPrototypeScenarios {
 export interface DevDataSource {
   mode: "prototype" | "omp";
   clientId: string;
-  capabilities: { workflowCommands: readonly DevAction["type"][]; prototypeBusiness: boolean; freeChat: boolean; nativeChat: boolean; nativeSurface: boolean };
+  backend?: DevBackendView;
+  capabilities: { settingsWrite?: boolean; proposalDiscussion?: boolean; codeDevelopment?: boolean; workflowCommands: readonly DevAction["type"][]; prototypeBusiness: boolean; freeChat: boolean; nativeChat: boolean; nativeSurface: boolean };
   initialSelection: DevSelection;
   readWorkflow(selection: DevSelection): Promise<DevWorkflowView>;
   subscribeWorkflow(listener: () => void): () => void;

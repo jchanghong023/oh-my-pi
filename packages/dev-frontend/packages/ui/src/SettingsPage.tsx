@@ -1,4 +1,5 @@
 /* oxlint-disable eslint(max-lines) */
+import { DevPersonalConfigScope } from "@/dev/DevPersonalConfigScope.js";
 import { DevProjectSettings } from "@/dev/DevWorkbench.js";
 import { DevPersonalizationSettings } from "@/dev/DevPersonalizationSettings.js";
 import { DevSkillDesignSettings } from "@/dev/DevSkillDesignSettings.js";
@@ -598,7 +599,8 @@ export function SettingsPage({
                             <DevSkillDesignSettings />
                           ) : activeSection === "skill" ? (
                             <div className="space-y-4">
-                              {dev && <p className="text-ui-sm leading-6 text-foreground-subtle">原型演示：以下为样例技能，可搜索并查看只读详情；不读取真实技能目录，不执行安装或配置修改。</p>}
+                              {dev && <DevPersonalConfigScope />}
+                              {dev && <p className="text-ui-sm leading-6 text-foreground-subtle">以下为当前开发者个人技能与当前开发项目技能的样例，可搜索查看；不读取其他开发者或团队服务的技能，不执行真实安装或文件写入。</p>}
                               <PluginsSection
                                 key={`skill:${settingsSectionNavigationVersion}`}
                                 mode="skill"

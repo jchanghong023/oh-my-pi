@@ -237,7 +237,9 @@ export interface ExternalTextInsertRequest {
   requestId: number;
   text: string;
   mention?: ComposerMentionPrefill;
-  mode?: "replace" | "prepend-if-missing";
+  mode?: "replace" | "prepend-if-missing" | "append";
+  /** 只替换上次完整填入且尚未被用户改写的说明，保留用户补充。 */
+  replaceText?: string;
 }
 
 export function restorePersistedComposerDraftIntoInput({
@@ -297,6 +299,17 @@ export function applyExternalTextInsertRequestToComposer({
   }
   if (!inputApi) {
     return appliedRequestId;
+  }
+  if (request.mode === "append") {
+    const current = inputApi.getMarkdown();
+    const text = request.replaceText && current.includes(request.replaceText)
+      ? current.replace(request.replaceText, () => request.text)
+      : current.includes(request.text) ? current : current ? `${current}\n\n${request.text}` : request.text;
+    inputApi.setText(text);
+    updateText(text);
+    scheduleDraftPersist();
+    requestFocus();
+    return request.requestId;
   }
   if (request.mode === "prepend-if-missing" && request.mention) {
     if (!inputApi.prependMentionIfMissing(request.mention)) {
@@ -1153,6 +1166,8 @@ function ConversationComposerImpl({
           api.clear();
           updateText("");
         }
+        // 空草稿同样已完成恢复，后续输入必须从编辑器取实际正文。
+        editorDraftRestoredRef.current = true;
         return;
       }
       updateText(
@@ -1242,7 +1257,7 @@ function ConversationComposerImpl({
         request: externalTextInsertRequest,
         requestFocus: requestComposerFocus,
         scheduleDraftPersist,
-        updateText,
+        updateText: (text) => { editorDraftRestoredRef.current = true; updateText(text); },
       });
       const applied = nextAppliedRequestId === externalTextInsertRequest.requestId;
       appliedExternalTextInsertRequestRef.current = nextAppliedRequestId;
@@ -1251,9 +1266,12 @@ function ConversationComposerImpl({
       }
       return applied;
     };
-    if (applyRequest()) return;
-    if (typeof requestAnimationFrame !== "function") return;
-    const frame = requestAnimationFrame(applyRequest);
+    // 编辑器可能晚于设置页挂载；请求保留到真正填入成功后才确认，不能只等一帧便丢失。
+    if (typeof requestAnimationFrame !== "function") { applyRequest(); return; }
+    let frame = 0;
+    const attempt = () => { if (!applyRequest()) frame = requestAnimationFrame(attempt); };
+    // 排在本轮草稿恢复之后，避免刚追加的说明又被恢复流程清空。
+    frame = requestAnimationFrame(attempt);
     return () => cancelAnimationFrame(frame);
   }, [
     externalTextInsertRequest,
@@ -1811,6 +1829,27 @@ function ConversationComposerImpl({
       workspacePath,
     ],
   );
+  const restoredFirstDiscussion = useRef<DevFirstDiscussion | null>(null);
+  useEffect(() => {
+    const incoming = dev?.firstDiscussion;
+    if (!incoming || incoming.session.sessionId !== sessionId || restoredFirstDiscussion.current === incoming) return;
+    let frame = 0;
+    const restore = () => {
+      const input = inputApiRef.current;
+      if (!input) { frame = requestAnimationFrame(restore); return; }
+      restoredFirstDiscussion.current = incoming;
+      // 项目级未发送草稿转为提案会话时，先交接正文与附件，再让现有首发逻辑接纳一次。
+      replaceComposerDraft({ ...ownerDraftRef.current.draft, ...incoming.handoff.draft });
+      const text = restorePersistedComposerDraftIntoInput({ draft: incoming.handoff.draft, inputApi: input, onEditorStateError: error => logger.warn("提案首发草稿恢复失败，改用正文", error) });
+      editorDraftRestoredRef.current = true;
+      updateText(text);
+      if (incoming.handoff.attachments.length) attachmentsApi.restoreDraftAttachments(incoming.handoff.attachments);
+      scheduleDraftPersist();
+      requestComposerFocus();
+    };
+    frame = requestAnimationFrame(restore);
+    return () => cancelAnimationFrame(frame);
+  }, [dev?.firstDiscussion, sessionId, replaceComposerDraft, updateText, attachmentsApi.restoreDraftAttachments, scheduleDraftPersist, requestComposerFocus]);
   useEffect(() => {
     const incoming = dev?.firstDiscussion;
     if (!dev || !incoming || !sessionId || incoming.session.sessionId !== sessionId ||

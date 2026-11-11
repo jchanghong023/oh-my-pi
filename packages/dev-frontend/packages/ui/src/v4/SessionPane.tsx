@@ -109,6 +109,7 @@ import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import {
   ConversationComposer,
   type ComposerRestoreRequest,
+  type ExternalTextInsertRequest,
   type NativeComposerTarget,
   type ConversationComposerSendOptions,
   type ConversationComposerSendResult,
@@ -246,6 +247,9 @@ import {
 export interface SessionPaneProps {
   /** 嵌入设置页时只收起窗格标题，保留聊天、工具交互与审批能力。 */
   embedded?: boolean;
+  /** 原型设计页向现有聊天输入框投递未发送草稿。 */
+  composerInsertRequest?: ExternalTextInsertRequest | null;
+  onComposerInsertApplied?: (requestId: number) => void;
   paneId: string;
   sessionId: string | null;
   rootSessionId?: string;
@@ -492,6 +496,8 @@ export function SessionPane({
   allowEscapeStopOutsidePane = false,
   onClosePane,
   workspaceBadge,
+  composerInsertRequest,
+  onComposerInsertApplied,
   draftComposerHeader,
   onDropTargetControllerChange,
   gitSummary,
@@ -4094,8 +4100,8 @@ export function SessionPane({
       }
       blockingRequestId={blockingInteractionId}
       listenAddToChatEvents={focused}
-      externalTextInsertRequest={focused && sessionId === null ? composerTextInsertRequest : null}
-      onExternalTextInsertApplied={handleExternalTextInsertApplied}
+      externalTextInsertRequest={focused ? composerInsertRequest ?? (sessionId === null ? composerTextInsertRequest : null) : null}
+      onExternalTextInsertApplied={composerInsertRequest ? onComposerInsertApplied : handleExternalTextInsertApplied}
       autoFocusEnabled={focused}
       disabled={
         (sessionId !== null && modelSelectionDisplayView?.nativeSession !== undefined &&

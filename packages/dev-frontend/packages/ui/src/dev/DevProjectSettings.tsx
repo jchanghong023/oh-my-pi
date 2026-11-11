@@ -26,6 +26,9 @@ export function DevProjectSettings() {
 	const [releaseProjectId, setReleaseProjectId] = useState("");
 	const [releaseTitle, setReleaseTitle] = useState("");
 	const [releaseError, setReleaseError] = useState("");
+	const [sharedProjectId, setSharedProjectId] = useState("");
+  const [sharedRoot, setSharedRoot] = useState("");
+  const [sharedError, setSharedError] = useState("");
 	const [developmentProjectId, setDevelopmentProjectId] = useState("");
 	const [developmentRoot, setDevelopmentRoot] = useState("");
 	const [developmentError, setDevelopmentError] = useState("");
@@ -52,7 +55,7 @@ export function DevProjectSettings() {
 	};
 	return (
 		<section className="space-y-6" data-testid="dev-project-settings">
-			<div className="space-y-2"><SettingsBadge>{source.mode === "prototype" ? "团队共享 · 演示数据" : "OMP 项目数据"}</SettingsBadge><p className="text-ui-sm text-foreground-subtle">{source.mode === "prototype" ? "共享项目路径只读；开发时使用按工号关联的个人开发项目。" : "显示当前 OMP 服务返回的项目与 Release。浏览器工号不会切换服务账号或授权。"}</p></div>
+			<div className="space-y-2"><SettingsBadge>{source.mode === "prototype" ? "团队共享 · 演示数据" : "OMP 项目数据"}</SettingsBadge><p className="text-ui-sm text-foreground-subtle">{source.mode === "prototype" ? "共享项目路径配置由管理员 j00808874 维护，可修改；目录内容只读，为需求和方案讨论提供代码、文档及现有规格依据。修改代码或执行 Git 时，须使用自己的 OMP Web，并配置自己的开发项目路径。" : "显示当前 OMP 服务返回的项目与 Release。浏览器工号不会切换服务账号或授权。"}</p></div>
 			<div className="flex flex-wrap items-start justify-between gap-3">
 				<div className="space-y-1">
 					<p className="text-ui-base text-foreground-subtle">所有人查看同一份项目与 Release。当前工号：{employeeId}。</p>
@@ -71,18 +74,18 @@ export function DevProjectSettings() {
 									<Badge variant="outline">Git 项目</Badge>
 									{dev.selection.projectId === project.id && <Badge variant="secondary">当前项目</Badge>}
 								</div>
-								<div className="space-y-1"><p className="text-ui-sm text-foreground-subtle">共享项目路径 · 只读</p><Input aria-label={`${project.name}共享项目路径`} value={project.root} readOnly className="font-mono text-ui-sm" /></div>
+								<div className="space-y-1"><p className="text-ui-sm text-foreground-subtle">共享项目路径 · 目录内容只读</p><div className="flex flex-wrap items-center gap-2"><Input aria-label={`${project.name}共享项目路径`} value={project.root} readOnly className="min-w-0 flex-1 font-mono text-ui-sm" /><Button variant="outline" disabled={!source.capabilities.workflowCommands.includes("setSharedProjectRoot")} onClick={() => { setSharedProjectId(project.id); setSharedRoot(project.root); setSharedError(""); }} aria-label={`修改${project.name}共享项目路径`}>修改共享项目路径</Button></div><p className="text-ui-sm text-foreground-subtle">仅管理员 j00808874 可修改路径配置，其他账号只读。</p></div>
 								<div className="flex items-center gap-3 text-ui-sm text-foreground-subtle">
 									<span className="inline-flex items-center gap-1"><GitBranch className="size-3.5" />{project.defaultBranch}</span>
 									<span>{view.releases.length} 个 Release · 团队共享</span>
 								</div>
 							</div>
-							<Button variant="outline" onClick={() => openRelease(project.id)} aria-label={`为${project.name}添加 Release`}><Plus className="size-3.5" />添加 Release</Button>
+							<Button variant="outline" disabled={!source.capabilities.workflowCommands.includes("createRelease")} onClick={() => openRelease(project.id)} aria-label={`为${project.name}添加 Release`}><Plus className="size-3.5" />添加 Release</Button>
 						</header>
 						<div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4">
 							<div className="min-w-0 space-y-1">
 								<p className="text-ui-base font-medium">我的开发项目 <span className="text-ui-sm font-normal text-foreground-subtle">工号 {employeeId}</span></p>
-								<p className="break-all font-mono text-ui-sm text-foreground-subtle" data-testid={`development-root-${project.id}`}>{source.projects?.readDevelopmentRoot(project.id) ?? "尚未配置 · 可以浏览，进入开发前需添加"}</p>
+								<p className="break-all font-mono text-ui-sm text-foreground-subtle" data-testid={`development-root-${project.id}`}>{source.projects?.readDevelopmentRoot(project.id) ?? "尚未配置 · 仅浏览；改代码须使用自己的 Web 并配置 Git 开发路径"}</p>
 							</div>
 							{source.projects && source.capabilities.workflowCommands.includes("setDevelopmentRoot") && <Button variant="outline" onClick={() => { setDevelopmentProjectId(project.id); setDevelopmentRoot(source.projects?.readDevelopmentRoot(project.id) ?? ""); setDevelopmentError(""); }} aria-label={`配置${project.name}的开发项目`}>{source.projects?.readDevelopmentRoot(project.id) ? "修改开发项目" : "添加开发项目"}</Button>}
 						</div>
@@ -106,7 +109,7 @@ export function DevProjectSettings() {
 						) : (
 							<div className="space-y-2 px-4 py-6 text-ui-base text-foreground-subtle">
 								<p>尚未添加 Release。创建第一个 Release，开始整理本项目的需求。</p>
-								<Button variant="outline" onClick={() => openRelease(project.id)}>添加第一个 Release</Button>
+								<Button variant="outline" disabled={!source.capabilities.workflowCommands.includes("createRelease")} onClick={() => openRelease(project.id)}>添加第一个 Release</Button>
 							</div>
 						)}
 					</article>
@@ -120,7 +123,7 @@ export function DevProjectSettings() {
 				<DialogContent className="sm:max-w-lg">
 					<DialogHeader>
 						<DialogTitle>添加已有项目目录</DialogTitle>
-						<DialogDescription>选择或输入服务端已有 Git 项目目录，登记后所有人可见，路径只读。</DialogDescription>
+						<DialogDescription>选择或输入服务端已有 Git 项目目录，登记后所有人可见；目录内容只读，路径配置后续由管理员维护。</DialogDescription>
 					</DialogHeader>
 					<form className="space-y-4" onSubmit={async event => {
 						event.preventDefault();
@@ -152,6 +155,24 @@ export function DevProjectSettings() {
 				</DialogContent>
 			</Dialog>
 
+      <Dialog open={Boolean(sharedProjectId)} onOpenChange={open => { if (!open) setSharedProjectId(""); }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader><DialogTitle>修改共享项目路径</DialogTitle><DialogDescription>{projects.find(item => item.id === sharedProjectId)?.name} · 仅管理员 j00808874 可配置。新目录用于需求和方案讨论的只读依据，不会修改代码、执行 Git、移动已有提案或更改个人开发项目。</DialogDescription></DialogHeader>
+          <form className="space-y-4" onSubmit={async event => {
+            event.preventDefault();
+            if (employeeId !== "j00808874") { setSharedError("只有管理员 j00808874 可修改共享项目路径。"); return; }
+            const check = await source.projects!.checkSharedProjectDirectory(sharedRoot, sharedProjectId);
+            if (!check.valid) { setSharedError(check.error); return; }
+            const result = await dev.command({ type: "setSharedProjectRoot", projectId: sharedProjectId, root: check.root });
+            if (result?.status === "completed") { setSharedProjectId(""); setMessage("已更新共享项目路径配置；目录内容仍只读，项目与 Release 关联保留。"); }
+          }}>
+            <div className="space-y-2"><Label htmlFor="shared-project-directory">共享项目目录</Label><div className="flex gap-2"><Input id="shared-project-directory" value={sharedRoot} onChange={event => { setSharedRoot(event.target.value); setSharedError(""); }} required aria-invalid={Boolean(sharedError)} /><Button type="button" variant="outline" onClick={() => { setBrowsePath(sharedRoot); setBrowserOpen(true); }}><FolderOpen className="size-4" />浏览目录</Button></div><p className="text-ui-sm text-foreground-subtle">支持输入或浏览已有 Git 目录；保存前检查是否对应当前项目的同一仓库。</p></div>
+            {sharedError && <p role="alert" className="text-ui-base text-destructive">{sharedError}</p>}
+            <DialogFooter><Button type="button" variant="outline" onClick={() => setSharedProjectId("")}>取消</Button><Button type="submit" disabled={employeeId !== "j00808874" || !sharedRoot.trim() || sharedRoot.trim() === projects.find(item => item.id === sharedProjectId)?.root || dev.pending}>保存共享项目路径</Button></DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
 			<Dialog open={Boolean(developmentProjectId)} onOpenChange={open => { if (!open) setDevelopmentProjectId(""); }}>
 				<DialogContent className="sm:max-w-lg">
 					<DialogHeader><DialogTitle>配置我的开发项目</DialogTitle><DialogDescription>{projects.find(project => project.id === developmentProjectId)?.name} · 工号 {employeeId}。路径位于运行 OMP 的服务器，需与共享项目对应同一 Git 仓库；不会修改共享项目路径。</DialogDescription></DialogHeader>
@@ -175,8 +196,8 @@ export function DevProjectSettings() {
 				<DialogContent className="sm:max-w-lg">
 					<DialogHeader><DialogTitle>选择项目目录</DialogTitle><DialogDescription>演示服务端文件浏览器 · /demo。请选择 Git 项目根目录，不需要选择 .git 子目录。</DialogDescription></DialogHeader>
 					<div className="max-h-[45vh] overflow-y-auto rounded-xl border border-border">
-						{source.projects?.listDirectories().filter(directory => developmentProjectId || !directory.repositoryRoot).map(directory => {
-							const added = projects.some(project => project.root === directory.path);
+						{source.projects?.listDirectories().filter(directory => developmentProjectId || sharedProjectId || !directory.repositoryRoot).map(directory => {
+							const added = projects.some(project => project.id !== sharedProjectId && project.root === directory.path);
 							return <Button key={directory.path} type="button" variant={browsePath === directory.path ? "secondary" : "ghost"} className="h-auto w-full justify-start gap-3 rounded-none px-3 py-3 text-left" disabled={added} onClick={() => setBrowsePath(directory.path)} aria-pressed={browsePath === directory.path}>
 								{directory.git ? <FolderGit2 className="size-4 shrink-0" /> : <Folder className="size-4 shrink-0" />}
 								<span className="min-w-0 flex-1"><span className="block truncate">{directory.name}</span><span className="block truncate text-ui-sm text-foreground-subtle">{directory.path}</span></span>
@@ -186,7 +207,7 @@ export function DevProjectSettings() {
 					</div>
 					<DialogFooter>
 						<Button variant="outline" onClick={() => setBrowserOpen(false)}>取消</Button>
-						<Button disabled={!browsePath || projects.some(project => project.root === browsePath)} onClick={() => { if (developmentProjectId) { setDevelopmentRoot(browsePath); setDevelopmentError(""); } else changeRoot(browsePath); setBrowserOpen(false); }}>选择此目录</Button>
+						<Button disabled={!browsePath || projects.some(project => project.id !== sharedProjectId && project.root === browsePath)} onClick={() => { if (sharedProjectId) { setSharedRoot(browsePath); setSharedError(""); } else if (developmentProjectId) { setDevelopmentRoot(browsePath); setDevelopmentError(""); } else changeRoot(browsePath); setBrowserOpen(false); }}>选择此目录</Button>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>

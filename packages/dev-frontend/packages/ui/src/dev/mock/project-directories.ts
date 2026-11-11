@@ -4,6 +4,8 @@ export function prototypeProjectDirectories() {
  return [
 	{ path: `/demo/${employeeId}/aurora-console`, name: "我的 Aurora 开发项目", git: true, branch: "main", repositoryRoot: "/demo/aurora-console" },
 	{ path: `/demo/${employeeId}/mobile-console`, name: "我的 Mobile 开发项目", git: true, branch: "main", repositoryRoot: "/demo/mobile-console" },
+	{ path: "/demo/shared/aurora-console", name: "Aurora 共享读取副本", git: true, branch: "main", repositoryRoot: "/demo/aurora-console" },
+  { path: "/demo/shared/mobile-console", name: "Mobile 共享读取副本", git: true, branch: "main", repositoryRoot: "/demo/mobile-console" },
 	{ path: "/demo/aurora-console", name: "Aurora 协作控制台", git: true, branch: "main" },
 	{ path: "/demo/mobile-console", name: "Mobile 移动工作台", git: true, branch: "main" },
 	{ path: "/demo/payment-service", name: "Payment 支付服务", git: true, branch: "main" },
@@ -34,6 +36,12 @@ export function checkPrototypeDevelopmentDirectory(path: string, sharedRoot: str
 	const check = checkPrototypeProjectDirectory(path, []);
 	if (!check.valid) return check;
 	if (check.root === sharedRoot) return { valid: false as const, error: "共享项目路径只读，请选择自己的开发项目目录。" };
-	if (check.directory.repositoryRoot !== sharedRoot) return { valid: false as const, error: "该目录与所选共享项目不是同一仓库，请选择对应的开发项目。" };
+	if (prototypeRepositoryRoot(check.root) !== prototypeRepositoryRoot(sharedRoot)) return { valid: false as const, error: "该目录与所选共享项目不是同一仓库，请选择对应的开发项目。" };
 	return check;
+}
+
+export function prototypeRepositoryRoot(path: string): string {
+  const normalized = normalizePrototypeProjectPath(path);
+  const directory = prototypeProjectDirectories().find(item => item.path === normalized);
+  return directory?.repositoryRoot ?? normalized;
 }

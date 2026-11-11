@@ -57,6 +57,7 @@ export interface DevSrDelivery {
   pushedCandidate?: string; prCandidate?: string; humanResolution?: { note: string; employeeId: string; resolvedAt: string };
 }
 export interface DevSystemRequirement {
+  ompWebId?: string;
   id: string; projectId: string; irId: string; title: string; documentPath: string;
   status: "pending" | "developing" | "completed"; stage?: DevWorkflowStage | "solution"; round: number;
   delivery?: DevSrDelivery; deliveryHistory?: DevSrDelivery[];
@@ -78,6 +79,8 @@ export interface DevIrAcceptance {
   merge?: DevMergeFact;
 }
 export interface DevRequirementGroup {
+  pendingFirstMessage?: boolean; clientDraftId?: string;
+  ompWebId?: string;
   id: string; projectId: string; releaseId: string; title: string; documentPath: string;
   origin: "local" | "browser" | "import"; status: DevRequirementStatus; revision: number; srIds: string[];
   files: DevFileVersion[]; evidenceFiles?: DevFileVersion[]; retiredFiles?: DevFileVersion[]; worktree?: DevWorktree;
@@ -116,6 +119,7 @@ export interface DevRepositoryDevelopment {
   owners: (DevObjectRef & { title: string })[];
 }
 export interface DevWorkflowView {
+  ompWebId?: string;
   version: 1; revision: number; projects: DevProject[]; currentProjectId?: string; releases: DevRelease[];
   groups: DevRequirementGroup[]; drafts: DevRequirementGroup[]; srs: DevSystemRequirement[]; selected?: DevObjectRef;
   materials: DevMaterialView[]; operations: DevOperationReceipt[]; sessions: DevNativeSessionRef[];
@@ -129,7 +133,8 @@ export type DevWorkflowCommand = DevCommandBase & (
   | { type: "registerProject"; registrationScope: "target-root"; root: string; name: string }
   | { type: "createRelease"; title: string }
   | { type: "setDevelopmentRoot"; projectId: string; root: string }
-  | { type: "createProposal"; releaseId: string }
+  | { type: "setSharedProjectRoot"; projectId: string; root: string }
+  | { type: "createProposal"; clientDraftId?: string; releaseId: string }
   | { type: "deleteRequirement"; version: 1; projectId: string; irId: string }
   | { type: "submitProposalReview" }
   | { type: "acceptProposal" }
@@ -172,7 +177,7 @@ export interface DevWorkflowResult {
   status: "completed" | "failed" | "running"; receipt: DevOperationReceipt; view?: DevWorkflowView;
   error?: string; deletion?: DevRequirementDeletion;
 }
-export interface DevSelection { irAcceptance?: boolean; freeSessionId?: string; freeFiles?: boolean; projectId?: string; irId?: string; srId?: string; stage?: DevWorkflowStage; stageRound?: number; discussionPhase?: "requirements" | "solution" }
+export interface DevSelection { proposalDraftId?: string; proposalDraftReleaseId?: string; irAcceptance?: boolean; freeSessionId?: string; freeFiles?: boolean; projectId?: string; irId?: string; srId?: string; stage?: DevWorkflowStage; stageRound?: number; discussionPhase?: "requirements" | "solution" }
 export interface DevNativeSurfaceTarget extends DevObjectRef {
   sessionId: string; phase: DevNativeSessionRef["phase"]; round: number; clientId: string;
 }
@@ -212,7 +217,7 @@ export interface DevAgentModelSettings {
 	agents: DevAgentModel[];
 }
 
-export type DevAgentRole = "requirements" | "requirements-review" | "solution" | "planning" | "execution" | "ir-acceptance";
+export type DevAgentRole = "requirements" | "requirements-review" | "solution" | "planning" | "execution" | "ir-acceptance" | "skill-design";
 export interface DevAgentModelBinding {
  role: DevAgentRole;
  roleName: string;
@@ -225,8 +230,14 @@ export interface DevAgentModelBinding {
  configurationRevision: number;
 }
 
+export interface DevSkillDesignPreview {
+  name: string;
+  directory: string;
+  revision: number;
+  files: { path: string; content: string }[];
+}
+
 export interface DevSkillDesignDraft {
-	name: string;
 	goal: string; when: string; inputs: string; outputs: string;
 	boundaries: string; references: string; example: string; notes: string[];
 }

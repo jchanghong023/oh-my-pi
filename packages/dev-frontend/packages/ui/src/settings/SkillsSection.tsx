@@ -1,3 +1,4 @@
+import { useOptionalDevDataSource } from "@/dev/data-source.js";
 /* eslint-disable max-lines -- 技能管理面板需共享筛选、安装与开关交互状态，集中维护更便于一致性 */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -170,6 +171,8 @@ export function SkillsSection({
   unscopedServices,
   cacheAuthorityKey,
 }: SkillsSectionProps) {
+  const devSource = useOptionalDevDataSource();
+  const readOnly = devSource?.capabilities.settingsWrite === false;
   const { intl, locale } = useZCodeIntl();
   const platform = usePlatform();
   const backendBusinessAvailable = useBackendBusinessAvailable();
@@ -382,7 +385,7 @@ export function SkillsSection({
 
   const setEnabled = useCallback(
     async (skillId: string, enabled: boolean) => {
-      if (nativeCatalog || !activeWorkspacePath) {
+      if (readOnly || nativeCatalog || !activeWorkspacePath) {
         return;
       }
       // 移除三方来源后，技能状态统一写入 ZCode Agent 上下文，避免旧 provider 前缀带来分桶漂移。
@@ -412,6 +415,7 @@ export function SkillsSection({
     [
       activeWorkspaceIdentity,
       nativeCatalog,
+      readOnly,
       activeWorkspacePath,
       loadSkills,
       refreshSharedSkillStoreForCurrentWorkspace,
@@ -424,7 +428,7 @@ export function SkillsSection({
   // 复用应用根部已挂载的确认弹窗 store（useConfirmDialog），与子智能体删除流程保持一致。
   const handleDeleteSkill = useCallback(
     async (skill: SkillSummary) => {
-      if (nativeCatalog || !activeWorkspacePath || skill.scope === "plugin") {
+      if (readOnly || nativeCatalog || !activeWorkspacePath || skill.scope === "plugin") {
         return;
       }
       const confirmed = await confirmDialog({
@@ -461,6 +465,7 @@ export function SkillsSection({
     [
       activeWorkspaceIdentity,
       nativeCatalog,
+      readOnly,
       activeWorkspacePath,
       confirmDialog,
       intl,
@@ -537,7 +542,7 @@ export function SkillsSection({
     onVisibleCountChange?.(filteredSkillCount);
   }, [filteredSkillCount, onVisibleCountChange]);
   const handleCreateSkill = () => {
-    if (nativeCatalog || !activeWorkspacePath || !onCreateTask) {
+    if (readOnly || nativeCatalog || !activeWorkspacePath || !onCreateTask) {
       return;
     }
     const effectiveProvider: ZCodeProvider = ZCODE_AGENT_PROVIDER;
@@ -656,6 +661,7 @@ export function SkillsSection({
           ) : skill.scope === "plugin" ? null : (
             <>
               <Switch
+                disabled={readOnly}
                 checked={skill.enabled}
                 onCheckedChange={(checked) => {
                   void setEnabled(skill.id, checked);
@@ -668,6 +674,7 @@ export function SkillsSection({
                 className="shrink-0 text-foreground-subtle hover:bg-destructive/10 hover:text-destructive"
                 aria-label={intl.formatMessage({ id: "common.delete" })}
                 title={intl.formatMessage({ id: "common.delete" })}
+                disabled={readOnly}
                 onClick={() => void handleDeleteSkill(skill)}
               >
                 <Trash2 className="size-3.5" aria-hidden="true" />
@@ -695,7 +702,8 @@ export function SkillsSection({
       onImport={nativeCatalog ? undefined : () => setImportDialogOpen(true)}
       onNew={nativeCatalog ? undefined : handleCreateSkill}
       refreshing={loading}
-      importDisabled={!capability?.userScopeAvailable}
+      importDisabled={readOnly || !capability?.userScopeAvailable}
+      newDisabled={readOnly}
       importActionId="settings.skills.import.open"
       newActionId="settings.skills.create.open"
     />
@@ -703,6 +711,7 @@ export function SkillsSection({
 
   return (
     <div className="space-y-4">
+      {readOnly && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可搜索、筛选并查看技能详情；只有当前 Web 的所有者可修改技能。请启动自己的 OMP Web 修改自己的技能。</p>}
       {nativeCatalog ? (
         <div className="rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle">
           当前 Native 会话的有效技能目录（只读）：{activeWorkspacePath ?? "未绑定会话"}。
@@ -836,7 +845,7 @@ export function SkillsSection({
                   : intl.formatMessage({ id: "settings.plugin.skills.emptyInstalledDescription" })}
                 actions={nativeCatalog ? undefined :
                   <>
-                    <Button type="button" variant="default" size="lg" onClick={handleCreateSkill}>
+                    <Button type="button" variant="default" size="lg" disabled={readOnly} onClick={handleCreateSkill}>
                       <Plus data-icon="inline-start" aria-hidden="true" />
                       {intl.formatMessage({
                         id: "settings.plugin.skills.newSkill",
@@ -846,7 +855,7 @@ export function SkillsSection({
                       type="button"
                       variant="outline"
                       size="lg"
-                      disabled={!capability?.userScopeAvailable}
+                      disabled={readOnly || !capability?.userScopeAvailable}
                       onClick={() => setImportDialogOpen(true)}
                     >
                       <Import data-icon="inline-start" aria-hidden="true" />
@@ -980,7 +989,7 @@ export function SkillsSection({
         </DialogContent>
       </Dialog>
       <SkillsImportDialog
-        open={importDialogOpen && catalogReady && !nativeCatalog}
+        open={importDialogOpen && catalogReady && !nativeCatalog && !readOnly}
         workspacePath={activeWorkspacePath}
         workspaceIdentity={activeWorkspaceIdentity}
         settingsSyncService={targetServiceResolution.services.settingsSyncService}

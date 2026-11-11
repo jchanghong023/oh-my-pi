@@ -132,13 +132,13 @@ export function requirementFreezeIssue(group: DevRequirementGroup): string | und
 export function repositoryDevelopment(view: DevWorkflowView, projectId: string, limit = 2): DevRepositoryDevelopment {
   const repositoryId = view.projects.find(project => project.id === projectId)?.repositoryId;
   const projectIds = new Set(view.projects.filter(project => repositoryId && project.repositoryId === repositoryId).map(project => project.id));
-  const activeSrs = view.srs.filter(sr => projectIds.has(sr.projectId) && sr.status === "developing");
-  const owners = view.groups.filter(group => projectIds.has(group.projectId) && group.acceptance?.status !== "completed" && (group.developmentStartedAt || activeSrs.some(sr => sr.projectId === group.projectId && sr.irId === group.id) || group.acceptance));
+  const activeSrs = view.srs.filter(sr => projectIds.has(sr.projectId) && sr.status === "developing" && (!view.ompWebId || sr.ompWebId === view.ompWebId));
+  const owners = view.groups.filter(group => projectIds.has(group.projectId) && (!view.ompWebId || group.ompWebId === view.ompWebId || activeSrs.some(sr => sr.irId === group.id)) && group.acceptance?.status !== "completed" && (group.developmentStartedAt || activeSrs.some(sr => sr.projectId === group.projectId && sr.irId === group.id) || group.acceptance));
   return { repositoryId: repositoryId ?? "", limit: limit, activeSrs, owners: owners.map(group => ({ projectId: group.projectId, irId: group.id, title: group.title })) };
 }
 
 function dependencyGraphIssue(view: DevWorkflowView, group: DevRequirementGroup): string | undefined {
-  const rows = view.srs.filter(sr => sr.projectId === group.projectId && sr.irId === group.id);
+  const rows = view.srs.filter(sr => sr.projectId === group.projectId && sr.irId === group.id && (!view.ompWebId || !sr.ompWebId || sr.ompWebId === view.ompWebId));
   const byId = new Map(rows.map(sr => [sr.id, sr]));
   const visiting = new Set<string>();
   const visited = new Set<string>();
@@ -148,7 +148,7 @@ function dependencyGraphIssue(view: DevWorkflowView, group: DevRequirementGroup)
     const sr = byId.get(id);
     if (!sr) return "SR 依赖引用了本 IR 之外或不存在的需求，请检查已确认方案。";
     visiting.add(id);
-    for (const dependency of sr.dependencySrIds ?? []) { const issue = inspect(dependency); if (issue) return issue; }
+    for (const dependency of sr.dependencySrIds ?? []) { if (!byId.has(dependency) && view.srs.some(item => item.id === dependency && item.ompWebId && item.ompWebId !== view.ompWebId)) continue; const issue = inspect(dependency); if (issue) return issue; }
     visiting.delete(id); visited.add(id);
   }
   for (const sr of rows) { const issue = inspect(sr.id); if (issue) return issue; }
@@ -164,12 +164,12 @@ export function srStartBlocker(view: DevWorkflowView, group: DevRequirementGroup
   if (group.acceptance) return "此 IR 已进入验收收尾，不能重开 SR 开发。";
   const occupancy = view.repositoryDevelopment ?? repositoryDevelopment(view, group.projectId);
   const other = occupancy.owners.find(owner => owner.projectId !== group.projectId || owner.irId !== group.id);
-  if (other) return `同仓库当前由「${other.title}」占用，最终验收与归档 PR 合并核验后才能开始另一个 IR。`;
+  if (other) return `本 OMP Web 内同仓库当前由「${other.title}」占用，最终验收与归档 PR 合并核验后才能开始另一个 IR。`;
   const graphIssue = dependencyGraphIssue(view, group);
   if (graphIssue) return graphIssue;
-  const unresolved = (sr.dependencySrIds ?? []).map(id => view.srs.find(item => item.id === id && item.irId === group.id && item.projectId === group.projectId)).filter(item => !item || !srMergeVerified(item, view.projects.find(project => project.id === item.projectId)?.defaultBranch));
+  const unresolved = (sr.dependencySrIds ?? []).map(id => view.srs.find(item => item.id === id && item.irId === group.id && item.projectId === group.projectId)).filter(item => !item || ((!view.ompWebId || !item.ompWebId || item.ompWebId === view.ompWebId) && !srMergeVerified(item, view.projects.find(project => project.id === item.projectId)?.defaultBranch)));
   if (unresolved.length) return `等待前置 SR 合并并核验：${unresolved.map(item => item?.title ?? "缺失的 SR").join("、")}`;
-  if (occupancy.activeSrs.length >= occupancy.limit) return `仓库并行名额已满（${occupancy.activeSrs.length}/${occupancy.limit}）；等待评审或合并的 SR 仍占用名额。`;
+  if (occupancy.activeSrs.length >= occupancy.limit) return `本 OMP Web 内并行名额已满（${occupancy.activeSrs.length}/${occupancy.limit}）；等待评审或合并的 SR 仍占用名额。`;
 }
 
 export function srMergeVersion(view: DevWorkflowView, group: DevRequirementGroup): string {
@@ -222,10 +222,11 @@ export function irFinalPackageBlocker(view: DevWorkflowView, group: DevRequireme
 }
 
 /** Display ownership hints only; a browser employee ID is never authorization. */
-export function conversationReadOnlyReason(view: DevWorkflowView | undefined, selection: DevSelection): string | undefined {
+export function conversationReadOnlyReason(view: DevWorkflowView | undefined, selection: DevSelection, access?: { proposalDiscussion?: boolean; codeDevelopment?: boolean }): string | undefined {
  if (!view || selection.freeSessionId) return;
  const proposal = view.drafts.find(item => item.id === selection.irId);
  if (proposal) {
+  if (access?.proposalDiscussion === false) return "提案由 j00808874 的 OMP 管理。当前 Web 只读，请进入 A 的 Web 讨论或修改。";
   const phase = proposal.proposalStage ?? "requirements";
   if (selection.discussionPhase && selection.discussionPhase !== phase) return "正在查看另一讨论阶段的历史，只读。";
   if (proposal.status === "requirements-pr") return "需求 PR 已提交，当前版本只读；合并核对后进入正式需求。";
@@ -236,6 +237,7 @@ export function conversationReadOnlyReason(view: DevWorkflowView | undefined, se
   }
   return;
  }
+ if (access?.codeDevelopment === false) return "改代码须启动自己的 omp dev_web，并配置自己的 Git 项目路径；此入口仅浏览正式需求。";
  if (selection.irAcceptance) {
   const acceptance = view.groups.find(item => item.id === selection.irId)?.acceptance;
   if (!acceptance) return "请先明确开始 IR 验收。";
@@ -248,7 +250,7 @@ export function conversationReadOnlyReason(view: DevWorkflowView | undefined, se
   return;
  }
  const formal = view.groups.find(item => item.id === selection.irId && item.projectId === selection.projectId);
- if (formal && !selection.srId) return formal.freeze ? "需求与方案已在首个 SR 开始时冻结；当前仅查看，变化须重新提案。" : "正式提案已入库但尚未冻结，当前材料与讨论仅供查看；开发前的修订仍须重新评审、确认并通过提案 PR。";
+ if (formal && !selection.srId) return "正式需求已进入仓库，可在自己的 Web 和 Git 项目中自由修改、提交；这里显示入库资料。";
  const sr = view.srs.find(item => item.id === selection.srId && item.irId === selection.irId);
  if (sr?.status === "completed") return "该 SR 已完成，历史会话只读。";
  if (sr?.status === "developing" && sr.developerEmployeeId !== getEmployeeId()) return `该 SR 由 ${sr.developerEmployeeId ?? "其他同事"} 开发，当前仅查看。`;

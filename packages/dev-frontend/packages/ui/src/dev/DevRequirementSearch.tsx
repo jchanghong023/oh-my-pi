@@ -16,7 +16,7 @@ export function DevRequirementSearch({ open, onOpenChange, query, onQueryChange,
 	onNavigate?: () => void;
 }) {
 	const dev = useDev()!;
-	const groups = (scope === "proposals" ? dev.view?.drafts ?? [] : dev.view?.groups ?? []).filter(group => group.releaseId === dev.releaseId);
+	const groups = (scope === "proposals" ? dev.view?.drafts ?? [] : dev.view?.groups ?? []).filter(group => group.releaseId === dev.releaseId && !group.pendingFirstMessage);
 	const normalized = query.trim().toLocaleLowerCase();
 	const choose = (irId: string, srId?: string) => {
 		dev.select({ projectId: dev.selection.projectId, irId, srId });

@@ -1,3 +1,5 @@
+import { requirePrototypeSettingsWrite } from "./backend.js";
+import { PROTOTYPE_BACKEND } from "./backend.js";
 import type { DevAgentModel, DevAgentModelSettings, DevAgentRole, DevAgentModelBinding } from "../types.js";
 import type { ModelSelection } from "@zcode/shared";
 
@@ -18,16 +20,19 @@ const sampleSettings: DevAgentModelSettings = {
 		{ id: "planning", name: "计划 Agent", nameEn: "Planning Agent", description: "依据已确认方案与 SR 依赖编制开发计划，明确任务范围和验证步骤。", descriptionEn: "Plan the SR tasks and verification using the confirmed design and dependencies.", model: "inherit", reasoning: "default" },
 		{ id: "execution", name: "执行 Agent", nameEn: "Execution Agent", description: "按计划实施、测试和代码审查，整理完成报告；代码、测试及该 SR 的规格更新随同一 PR 交付。", descriptionEn: "Implement, test and review the SR; deliver its code, tests and specification updates in the same PR.", model: "anthropic/claude-sonnet-4.5", reasoning: "medium" },
 		{ id: "ir-acceptance", name: "IR 验收 Agent", nameEn: "IR Acceptance Agent", description: "全部 SR 合并后整体验收 IR，修复实现问题并复验，准备最终修复与归档 PR；归档不再同步规格，由人工创建、评审和合并 PR。", descriptionEn: "Accept the integrated IR after all SRs merge, fix implementation issues and reverify. Prepare the final fixes and archive PR without resyncing specs; humans create, review and merge it.", model: "anthropic/claude-opus-4.5", reasoning: "high" },
+    { id: "skill-design", name: "Skill 设计 Agent", nameEn: "Skill Design Agent", description: "在独立设计会话中澄清技能需求、推荐标识并生成临时文件；预览确认后保存到项目或个人技能目录。", descriptionEn: "Clarify skill requirements in a dedicated session, recommend a name, and prepare temporary files for preview before explicitly saving to project or personal skills.", model: "inherit", reasoning: "default" },
 	],
 };
 
-// 模拟运行 Web 服务的 OMP 账号／profile 配置，不随浏览器工号切换。
+// 模拟当前开发者后端自己的 OMP profile；不共享到团队 Web 或其他开发者，不随浏览器工号切换。
 // 原型配置只存在于本页内存，离开设置后可读回；刷新页面恢复样例。
 let savedSettings = structuredClone(sampleSettings);
+if (PROTOTYPE_BACKEND.owner === "j00808875") savedSettings.defaultModel = "openai/gpt-5.2";
 export function readPrototypeAgentModels(): DevAgentModelSettings {
 	return structuredClone(savedSettings);
 }
 export function savePrototypeAgentModels(settings: DevAgentModelSettings): void {
+  requirePrototypeSettingsWrite();
 	savedSettings = structuredClone(settings);
  configurationRevision += 1;
  for (const listener of listeners) listener();

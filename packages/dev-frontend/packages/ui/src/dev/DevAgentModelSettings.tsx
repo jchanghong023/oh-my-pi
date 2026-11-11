@@ -16,16 +16,18 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 	const [saved, setSaved] = useState(source.models!.read);
 	const [draft, setDraft] = useState(source.models!.read);
 	const [message, setMessage] = useState("");
+	const canManage = source.capabilities.settingsWrite === true;
 	const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
 	useEffect(() => {
-		onDraftActionsChange?.(dirty ? {
+		onDraftActionsChange?.(dirty && canManage ? {
 			save: () => { source.models!.save(draft); setSaved(structuredClone(draft)); },
 			discard: () => { setDraft(structuredClone(saved)); setMessage(""); },
 		} : null);
 		return () => onDraftActionsChange?.(null);
-	}, [dirty, draft, saved, source, onDraftActionsChange]);
+	}, [dirty, canManage, draft, saved, source, onDraftActionsChange]);
 	const modelName = (id: string) => source.models!.choices.find(model => model.id === id)?.name ?? id;
 	const updateAgent = (id: string, patch: { model?: string; reasoning?: string }) => {
+    if (!canManage) return;
 		setDraft(current => ({ ...current, agents: current.agents.map(agent => agent.id === id ? { ...agent, ...patch } : agent) }));
 		setMessage("");
 	};
@@ -40,6 +42,7 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 				{zh ? "为 Dev 核心 Agent 分别选择模型与思考强度。未单独指定模型时，跟随默认模型。" : "Choose a model and reasoning level for each core Dev Agent. Agents without a model override follow the default model."}
 			</p>
 			<DevPersonalConfigScope />
+      {!canManage && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可以查看全部模型和 Agent 配置；只有当前 Web 的所有者可修改。请启动自己的 OMP Web 修改自己的配置。</p>}
             <p className="text-ui-sm leading-6 text-foreground-subtle" data-testid="agent-model-effective-scope">{zh ? "保存后用于之后新建的角色会话，包括新阶段和返工新轮次。已有会话与历史消息保留创建时的模型和思考强度；不会自动切换运行中的 Agent。自由会话沿用原模型设置方式。" : "Saved settings apply to newly created role sessions, including new stages and rework rounds. Existing sessions and history keep their original model and reasoning level. Free conversations retain their existing model controls."}</p>
 			<section className="space-y-3" aria-labelledby="agent-default-model-title">
 				<h3 id="agent-default-model-title" className="text-ui-base font-medium">{zh ? "默认模型" : "Default model"}</h3>
@@ -49,7 +52,7 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 						description={zh ? "下方选择“跟随默认”的 Dev Agent 使用此模型。" : "Used by the Dev Agents below that are set to follow the default."}
 						controlLayout="wide"
 						control={
-							<Select value={draft.defaultModel} onValueChange={defaultModel => { setDraft(current => ({ ...current, defaultModel })); setMessage(""); }}>
+							<Select disabled={!canManage} value={draft.defaultModel} onValueChange={defaultModel => { setDraft(current => ({ ...current, defaultModel })); setMessage(""); }}>
 								<SelectTrigger size="lg" className="w-full min-w-0" aria-label={zh ? "默认模型" : "Default model"}><SelectValue /></SelectTrigger>
 								<SelectContent>{modelOptions}</SelectContent>
 							</Select>
@@ -72,7 +75,7 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 								controlLayout="wide"
 								control={
 									<div className="w-full min-w-0 space-y-2">
-										<Select value={agent.model} onValueChange={model => updateAgent(agent.id, { model })}>
+										<Select disabled={!canManage} value={agent.model} onValueChange={model => updateAgent(agent.id, { model })}>
 											<SelectTrigger size="lg" className="w-full min-w-0" aria-label={`${name} ${zh ? "模型" : "model"}`}><SelectValue /></SelectTrigger>
 											<SelectContent>
 												<SelectItem value="inherit">{zh ? "跟随默认" : "Follow default"} · {modelName(draft.defaultModel)}</SelectItem>
@@ -81,7 +84,7 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 										</Select>
 										<div className="flex items-center justify-between gap-2">
 											<span className="shrink-0 text-ui-sm text-foreground-subtle">{zh ? "思考强度" : "Reasoning"}</span>
-											<Select value={agent.reasoning} onValueChange={reasoning => updateAgent(agent.id, { reasoning })}>
+											<Select disabled={!canManage} value={agent.reasoning} onValueChange={reasoning => updateAgent(agent.id, { reasoning })}>
 												<SelectTrigger size="sm" variant="ghost" aria-label={`${name} ${zh ? "思考强度" : "reasoning"}`}><SelectValue /></SelectTrigger>
 												<SelectContent>
 													<SelectItem value="default">{zh ? "模型默认" : "Model default"}</SelectItem>
@@ -102,11 +105,11 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 				</p>
 			</section>
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				{source.mode === "prototype" && source.models!.samples && <Button variant="ghost" onClick={() => { setDraft(source.models!.samples!()); setMessage(""); }}>{zh ? "恢复演示配置" : "Restore demo configuration"}</Button>}
+				{source.mode === "prototype" && source.models!.samples && <Button variant="ghost" disabled={!canManage} onClick={() => { setDraft(source.models!.samples!()); setMessage(""); }}>{zh ? "恢复演示配置" : "Restore demo configuration"}</Button>}
 				<div className="flex items-center gap-2">
 					{dirty && <span className="text-ui-sm text-foreground-subtle">{zh ? "有未保存的更改" : "Unsaved changes"}</span>}
-					<Button variant="outline" disabled={!dirty} onClick={() => { setDraft(structuredClone(saved)); setMessage(""); }}>{zh ? "取消" : "Cancel"}</Button>
-					<Button disabled={!dirty} onClick={() => { source.models!.save(draft); setSaved(structuredClone(draft)); setMessage(zh ? "服务配置已保存" : "Service configuration saved"); }}>{zh ? "保存配置" : "Save configuration"}</Button>
+					<Button variant="outline" disabled={!dirty || !canManage} onClick={() => { setDraft(structuredClone(saved)); setMessage(""); }}>{zh ? "取消" : "Cancel"}</Button>
+					<Button disabled={!dirty || !canManage} onClick={() => { source.models!.save(draft); setSaved(structuredClone(draft)); setMessage(zh ? "我的模型配置已保存" : "My model configuration saved"); }}>{zh ? "保存配置" : "Save configuration"}</Button>
 				</div>
 			</div>
 			<p role="status" className="text-ui-base text-foreground-subtle">{message}</p>

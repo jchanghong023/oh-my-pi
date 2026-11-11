@@ -24,17 +24,19 @@ export function DevPersonalizationSettings() {
 	const encoder = new TextEncoder();
 	const oversized = agents.filter(agent => encoder.encode(draft[agent.id] ?? "").length > USER_INSTRUCTIONS_MAX_BYTES);
 	const currentBytes = encoder.encode(draft[selected] ?? "").length;
-	const canSave = dirtyCount > 0 && oversized.length === 0;
+	const canManage = source.capabilities.settingsWrite === true;
+	const canSave = canManage && dirtyCount > 0 && oversized.length === 0;
 	const save = () => {
 		if (!canSave) return;
 		source.prompts!.save(draft);
 		setSaved({ ...draft });
-		setMessage(zh ? "追加提示词已保存到当前服务配置。" : "Appended instructions saved to this service configuration.");
+		setMessage(zh ? "追加提示词已保存到我的 OMP 配置。" : "Appended instructions saved to my OMP configuration.");
 	};
 	return (
 		<div className="space-y-5" data-testid="dev-personalization-settings">
-			<p className="text-ui-base leading-6 text-foreground-subtle">{zh ? "为每个 Dev Agent 追加系统提示词，补充当前服务共用的表达偏好和工作约定。追加内容不替换 Agent 内置指令。" : "Append system instructions for each Dev Agent to describe the preferences and working conventions shared by this service. These additions do not replace built-in instructions."}</p>
+			<p className="text-ui-base leading-6 text-foreground-subtle">{zh ? "为每个 Dev Agent 追加系统提示词，补充你自己的表达偏好和工作约定。追加内容不替换 Agent 内置指令。" : "Append system instructions for each Dev Agent to describe your own preferences and working conventions. These additions do not replace built-in instructions."}</p>
 			<DevPersonalConfigScope />
+      {!canManage && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可切换 Agent 查看并复制提示词；只有当前 Web 的所有者可修改。请启动自己的 OMP Web 修改自己的配置。</p>}
 			<div className="space-y-2">
 				<Label htmlFor="personalization-agent">{zh ? "选择 Agent" : "Select Agent"}</Label>
 				<Select value={selected} onValueChange={value => { setSelected(value); setMessage(""); }}>
@@ -47,17 +49,18 @@ export function DevPersonalizationSettings() {
 				<Label htmlFor="agent-system-prompt-append">{zh ? "追加系统提示词" : "Append system instructions"}</Label>
 				<SettingsFormTextarea
 					id="agent-system-prompt-append"
+          readOnly={!canManage}
 					className="min-h-64 w-full text-ui-base"
 					spellCheck={false}
 					value={draft[selected] ?? ""}
-					placeholder={zh ? "输入此服务希望追加给该 Agent 的指令。留空则仅使用原有指令。" : "Enter instructions this service should append for this Agent. Leave empty to use existing instructions only."}
+					placeholder={zh ? "输入你希望追加给该 Agent 的指令。留空则仅使用原有指令。" : "Enter instructions you want to append for this Agent. Leave empty to use existing instructions only."}
 					aria-describedby="agent-prompt-help agent-prompt-size"
 					aria-invalid={currentBytes > USER_INSTRUCTIONS_MAX_BYTES}
-					onChange={event => { const next = { ...draft, [selected]: event.target.value }; setDraft(next); source.prompts!.updateDraft(next); setMessage(""); }}
+					onChange={event => { if (!canManage) return; const next = { ...draft, [selected]: event.target.value }; setDraft(next); source.prompts!.updateDraft(next); setMessage(""); }}
 					onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); save(); } }}
 				/>
 				<div className="flex flex-wrap items-start justify-between gap-2 text-ui-sm text-foreground-subtle">
-					<p id="agent-prompt-help">{zh ? "留空可清除当前服务的追加内容，保留内置指令。" : "Leave empty to clear additions for this service and retain built-in instructions."}</p>
+					<p id="agent-prompt-help">{zh ? "留空可清除你自己的追加内容，保留内置指令。" : "Leave empty to clear your own additions and retain built-in instructions."}</p>
 					<span id="agent-prompt-size">{(currentBytes / 1024).toFixed(1)} / {USER_INSTRUCTIONS_MAX_BYTES / 1024} KB</span>
 				</div>
 			</div>
@@ -65,7 +68,7 @@ export function DevPersonalizationSettings() {
 			<SettingsFormActions>
 				{dirtyCount > 0 && <span className="text-ui-sm text-foreground-subtle">{zh ? `${dirtyCount} 个 Agent 有未保存的更改` : `${dirtyCount} Agents have unsaved changes`}</span>}
 				<Button size="lg" disabled={!canSave} onClick={save}>{zh ? "保存" : "Save"}</Button>
-				<Button variant="ghost" size="lg" disabled={!dirtyCount} onClick={() => { setDraft({ ...saved }); source.prompts!.updateDraft(saved); setMessage(""); }}>{zh ? "取消" : "Cancel"}</Button>
+				<Button variant="ghost" size="lg" disabled={!dirtyCount || !canManage} onClick={() => { setDraft({ ...saved }); source.prompts!.updateDraft(saved); setMessage(""); }}>{zh ? "取消" : "Cancel"}</Button>
 			</SettingsFormActions>
 			<p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
 			{source.mode === "prototype" && <p className="text-ui-sm leading-6 text-foreground-subtle">{zh ? "原型演示：保存仅改变本页内存，不写入真实 OMP 配置目录，也不启动 Agent。刷新后恢复样例。" : "Prototype: saving changes page memory only. It does not write real OMP configuration or start an Agent. Refreshing restores samples."}</p>}

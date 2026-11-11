@@ -1,5 +1,6 @@
 import { prototypeRecoveryScenario } from "./recovery.js";
 import { getEmployeeId } from "../identity.js";
+import { checkPrototypeProjectDirectory, prototypeRepositoryRoot } from "./project-directories.js";
 import type { DevProject } from "../types.js";
 
 interface PrototypeProjectSettings { projects: DevProject[] }
@@ -21,6 +22,21 @@ export function readPrototypeProjectSettings(): PrototypeProjectSettings {
 }
 export function addPrototypeProject(input: { id: string; name: string; root: string; branch: string }): void {
 	settings = { ...settings, projects: [...settings.projects, { ...project(input.id, input.name, input.root), defaultBranch: input.branch }] };
+}
+
+export function checkPrototypeSharedProjectDirectory(path: string, projectId: string) {
+  const project = settings.projects.find(item => item.id === projectId);
+  if (!project) return { valid: false as const, error: "请选择已有项目。" };
+  const check = checkPrototypeProjectDirectory(path, settings.projects.filter(item => item.id !== projectId).map(item => item.root));
+  if (!check.valid) return check;
+  if (prototypeRepositoryRoot(check.root) !== prototypeRepositoryRoot(project.root)) return { valid: false as const, error: "新路径必须属于当前项目的同一 Git 仓库，不能用其他仓库替换已有项目。" };
+  return check;
+}
+export function updatePrototypeSharedProjectRoot(projectId: string, root: string): void {
+  if (getEmployeeId() !== "j00808874") throw new Error("只有管理员 j00808874 可修改共享项目路径。");
+  const check = checkPrototypeSharedProjectDirectory(root, projectId);
+  if (!check.valid) throw new Error(check.error);
+  settings = { ...settings, projects: settings.projects.map(item => item.id === projectId ? { ...item, root: check.root, commonDir: `${check.root}/.git`, revision: item.revision + 1, updatedAt: new Date().toISOString() } : item) };
 }
 
 // 按工号和共享项目关联；不是服务账号的 OMP profile，也不修改共享 root。

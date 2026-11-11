@@ -210,7 +210,7 @@ function replaceEditorText(editor: LexicalEditor, text: string) {
 
       root.getLastChild()?.selectEnd();
     },
-    { tag: PROGRAMMATIC_UPDATE_TAG },
+    { discrete: true, tag: PROGRAMMATIC_UPDATE_TAG },
   );
 }
 

@@ -7,6 +7,3 @@ export const SKILL_DESIGN_FIELDS = [
 	{ id: "references", label: "流程、规则或参考资料", hint: "已有模板、规范、工具或依赖。", placeholder: "例如：先阅读项目接口规范，再检查变更和测试", required: false },
 	{ id: "example", label: "真实例子或失败情况", hint: "强烈建议给一个具体的输入和期望结果。", placeholder: "例如：删除必填响应字段时，指出受影响客户端及兼容方案", required: false },
 ] as const;
-
-import type { DevSkillDesignDraft } from "./types.js";
-export function skillName(draft: DevSkillDesignDraft): string { return draft.name.trim() || "project-skill"; }

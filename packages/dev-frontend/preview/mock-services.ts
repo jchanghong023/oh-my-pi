@@ -53,7 +53,7 @@ export function createPrototypeServices(): IServiceAccessor {
     },
     clientConfigService: { getSnapshot: async () => ({ pluginStoreOrder: null, zsrcUrl: null }) },
     skillsService: {
-      list: async params => ({ skills: readPrototypeSkills(params.workspacePath), capability: { userScopeAvailable: false, userScopeReason: "desktop_only" }, diagnostics: [] }),
+      list: async params => ({ skills: readPrototypeSkills(params.workspacePath), capability: { userScopeAvailable: true }, diagnostics: [] }),
       setEnabled: unavailable, buildPromptContext: async params => ({ prompt: params.prompt, activatedSkillNames: [] }),
       copyToCommon: unavailable, removeFromCommon: unavailable, deleteSkill: unavailable,
     },

@@ -15,7 +15,7 @@ import type { DevRequirementGroup } from "./types.js";
 
 export function DevProposalControls({ group }: { group: DevRequirementGroup }) {
  const source = useDevDataSource();
- if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
+ if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness || source.capabilities.proposalDiscussion === false) return null;
  const dev = useDev()!;
  const [returnOpen, setReturnOpen] = useState(false);
  const [reason, setReason] = useState("");

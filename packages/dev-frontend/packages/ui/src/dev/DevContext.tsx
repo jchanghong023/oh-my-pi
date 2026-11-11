@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ComposerDraftHandoff } from "../v4/composer/composerDraftWorkspaceTransfer.js";
 import type { ConversationComposerSendOptions } from "../v4/ConversationComposer.js";
+import { getEmployeeId } from "./identity.js";
 import { useDevDataSource } from "./data-source.js";
 import type {
   DevAction, DevMaterialView, DevNativeSessionRef, DevSelection, DevWorkflowResult, DevWorkflowStage, DevWorkflowView,
@@ -22,6 +23,7 @@ export interface DevFirstDiscussion {
 }
 interface DevContextValue {
   view?: DevWorkflowView; selection: DevSelection; session?: DevNativeSessionRef;
+  startProposalDraft(): void;
   startFreeChat(projectId?: string, files?: boolean): void; openFreeChat(taskId: string, files?: boolean): void;
   pending: boolean; error?: string; releaseId: string; setReleaseId(id: string): void;
   select(value: DevSelection): void; refresh(): Promise<void>; retryMaterial(path: string): Promise<boolean>; retrySession(): Promise<void>;
@@ -35,10 +37,19 @@ interface DevContextValue {
 const DevContext = createContext<DevContextValue | null>(null);
 export const useDev = () => useContext(DevContext);
 
+function scopeProposalDraft(value: DevSelection, webId: string): DevSelection {
+  if (!value.proposalDraftId) return value;
+  try {
+    const key = JSON.parse(value.proposalDraftId);
+    if (Array.isArray(key) && key[0] === webId && key[1] === getEmployeeId() && key[2] === value.projectId && key[3] === value.proposalDraftReleaseId) return value;
+  } catch { /* 无效历史记录不恢复其他账号的未发送输入。 */ }
+  return { projectId: value.projectId };
+}
+
 /** One UI state controller; the entry point owns data and execution authority. */
 export function DevProvider({ children }: { children: ReactNode }) {
   const source = useDevDataSource();
-  const [selection, setSelection] = useState<DevSelection>(() => source.mode === "prototype" && window.history.state?.devSelection ? window.history.state.devSelection as DevSelection : { ...source.initialSelection });
+  const [selection, setSelection] = useState<DevSelection>(() => scopeProposalDraft(source.mode === "prototype" && window.history.state?.devSelection ? window.history.state.devSelection as DevSelection : { ...source.initialSelection }, source.backend?.id ?? source.clientId));
   const selectionRef = useRef(selection);
   const [view, setView] = useState<DevWorkflowView>();
   const viewRef = useRef(view);
@@ -47,6 +58,8 @@ export function DevProvider({ children }: { children: ReactNode }) {
   const [releaseId, updateReleaseId] = useState("");
   const requestRevision = useRef(0);
   const firstDiscussionRef = useRef<DevFirstDiscussion | undefined>(undefined);
+  const provisional = useRef(new Map<string, { projectId: string; irId: string }>());
+  const creatingFirst = useRef<Promise<void> | null>(null);
   const claimed = useRef<DevFirstDiscussion | undefined>(undefined);
   const [firstDiscussion, setFirstDiscussion] = useState<DevFirstDiscussion>();
   const report = useCallback((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)), []);
@@ -56,6 +69,7 @@ export function DevProvider({ children }: { children: ReactNode }) {
     try {
       const next = await source.readWorkflow(target);
       if (revision !== requestRevision.current) return;
+      for (const [key, item] of provisional.current) if (next.drafts.some(group => group.id === item.irId && group.projectId === item.projectId && !group.pendingFirstMessage)) provisional.current.delete(key);
       viewRef.current = next;
       setView(next);
       setError(next.error);
@@ -73,6 +87,7 @@ export function DevProvider({ children }: { children: ReactNode }) {
     return () => { unsubscribe(); requestRevision.current += 1; };
   }, [source, refresh]);
   const select = useCallback((value: DevSelection, addHistory = true) => {
+    value = scopeProposalDraft(value, source.backend?.id ?? source.clientId);
     const projectChanged = selectionRef.current.projectId !== value.projectId;
     if (source.mode === "prototype" && addHistory) window.history.pushState({ ...window.history.state, devSelection: value }, "");
     source.selectProject(value.projectId);
@@ -94,6 +109,16 @@ export function DevProvider({ children }: { children: ReactNode }) {
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);
   }, [source, select]);
+  const startProposalDraft = useCallback(() => {
+    const projectId = selectionRef.current.projectId;
+    if (!projectId || !releaseId || !source.capabilities.workflowCommands.includes("createProposal")) return;
+    const key = JSON.stringify([source.backend?.id ?? source.clientId, getEmployeeId(), projectId, releaseId]);
+    const retry = provisional.current.get(key);
+    const target: DevSelection = retry ? { projectId, irId: retry.irId } : { projectId, proposalDraftId: key, proposalDraftReleaseId: releaseId };
+    const current = selectionRef.current;
+    if (current.projectId === projectId && (retry ? current.irId === retry.irId : current.proposalDraftId === key && !current.irId)) return;
+    select(target);
+  }, [source, releaseId, select]);
   const startFreeChat = useCallback((projectId?: string, files = false) => {
     const targetProjectId = projectId ?? selectionRef.current.projectId;
     if (!targetProjectId) { report(new Error("请先选择项目。")); return; }
@@ -110,9 +135,14 @@ export function DevProvider({ children }: { children: ReactNode }) {
     const data = viewRef.current;
     if (!data?.releases.some(item => item.id === id)) return;
     updateReleaseId(id);
+    if (current.proposalDraftId && current.projectId) {
+      const key = JSON.stringify([source.backend?.id ?? source.clientId, getEmployeeId(), current.projectId, id]);
+      select({ projectId: current.projectId, proposalDraftId: key, proposalDraftReleaseId: id });
+      return;
+    }
     const selected = [...data.groups, ...data.drafts].find(item => item.id === current.irId);
     if (selected && selected.releaseId !== id) select({ projectId: current.projectId });
-  }, [select]);
+  }, [source, select]);
   const retryMaterial = useCallback(async (path: string) => {
     try {
       const recovered = await source.retryMaterial(path, selectionRef.current);
@@ -143,14 +173,25 @@ export function DevProvider({ children }: { children: ReactNode }) {
     } catch (cause) { report(cause); return undefined; }
   }, [source, refresh, report, select]);
   const openFirstDiscussion = useCallback(async (handoff: ComposerDraftHandoff, text: string, options: ConversationComposerSendOptions) => {
+    if (creatingFirst.current) return creatingFirst.current;
+    if (!text.trim() && !handoff.attachments.length) throw new Error("请先输入需求内容或添加附件，再发送。");
     const target = selectionRef.current;
-    const result = await command({ type: "createProposal", projectId: target.projectId, releaseId });
-    const session = result?.view && source.resolveSession(result.view, selectionRef.current);
-    if (!session) throw new Error("需求讨论会话尚未就绪。输入内容未发送。");
-    const incoming = { session, handoff, text, options };
-    firstDiscussionRef.current = incoming;
-    claimed.current = undefined;
-    setFirstDiscussion(incoming);
+    const targetRelease = target.proposalDraftReleaseId ?? releaseId;
+    const key = target.proposalDraftId ?? JSON.stringify([source.backend?.id ?? source.clientId, getEmployeeId(), target.projectId, targetRelease]);
+    const create = async () => {
+      const result = await command({ type: "createProposal", projectId: target.projectId, releaseId: targetRelease, clientDraftId: key });
+      const createdSelection = { projectId: result?.projectId, irId: result?.irId };
+      const session = result?.view && source.resolveSession(result.view, createdSelection);
+      if (!session || !result?.irId || !result.projectId) throw new Error("需求讨论会话尚未就绪。输入内容未发送。");
+      provisional.current.set(key, { projectId: result.projectId, irId: result.irId });
+      const incoming = { session, handoff, text, options };
+      firstDiscussionRef.current = incoming;
+      claimed.current = undefined;
+      setFirstDiscussion(incoming);
+    };
+    const flight = create();
+    creatingFirst.current = flight;
+    try { await flight; } finally { if (creatingFirst.current === flight) creatingFirst.current = null; }
   }, [source, command, releaseId]);
   const takeFirstDiscussion = useCallback((sessionId: string) => {
     const incoming = firstDiscussionRef.current;
@@ -162,9 +203,12 @@ export function DevProvider({ children }: { children: ReactNode }) {
     if (firstDiscussionRef.current !== incoming) return;
     firstDiscussionRef.current = undefined;
     setFirstDiscussion(undefined);
+    if (cause === undefined) {
+      for (const [key, item] of provisional.current) if (item.irId === incoming.session.irId) provisional.current.delete(key);
+    }
     if (cause !== undefined) report(cause);
   }, [report]);
   return <DevContext.Provider value={{ view, selection, session: view && source.resolveSession(view, selection), pending,
-    error, releaseId, setReleaseId, select, refresh, retryMaterial, retrySession, command, report, firstDiscussion, startFreeChat, openFreeChat,
+    error, releaseId, setReleaseId, select, refresh, retryMaterial, retrySession, command, report, firstDiscussion, startProposalDraft, startFreeChat, openFreeChat,
     openFirstDiscussion, takeFirstDiscussion, finishFirstDiscussion }}>{children}</DevContext.Provider>;
 }

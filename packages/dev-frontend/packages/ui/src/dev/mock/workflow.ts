@@ -1,3 +1,4 @@
+import { PROTOTYPE_BACKEND } from "./backend.js";
 import { proposalVersion } from "../domain.js";
 import { proposalRevisionBlocker } from "../domain.js";
 import { isPrototypeProposalDeliveryAction, validatePrototypeProposalDeliveryAction } from "./proposal-delivery.js";
@@ -21,7 +22,7 @@ import { hasCurrentProposalSolution } from "../domain.js";
 import { prototypeProposalSolution } from "./proposal-flow.js";
 import { developmentMaterials, requirementMaterials } from "./materials.js";
 import { checkPrototypeProjectDirectory, checkPrototypeDevelopmentDirectory } from "./project-directories.js";
-import { readPrototypeProjectSettings, addPrototypeProject, readPrototypeDevelopmentRoot, savePrototypeDevelopmentRoot } from "./project-settings.js";
+import { readPrototypeProjectSettings, addPrototypeProject, updatePrototypeSharedProjectRoot, checkPrototypeSharedProjectDirectory, readPrototypeDevelopmentRoot, savePrototypeDevelopmentRoot } from "./project-settings.js";
 import { readPrototypeProjectReleases, addPrototypeRelease } from "./project-releases.js";
 import type {
   DevAction, DevMaterialView, DevNativeSessionRef, DevOperationReceipt, DevRequirementGroup,
@@ -176,15 +177,17 @@ export function createPrototypeWorkflow(): DevWorkflowView {
   return result;
 }
 let state = createPrototypeWorkflow();
+for (const sr of state.srs) if (sr.status === "developing") sr.ompWebId = "local-j00808874";
+for (const group of state.groups) if (group.developmentStartedAt) group.ompWebId = "local-j00808874";
 export const prototypeWorkflowChanges = createPrototypeEvent<void>();
 export function getPrototypeWorkflow(selection: DevSelection = DEFAULT_SELECTION): DevWorkflowView {
   const projectId = selection.projectId ?? DEFAULT_SELECTION.projectId;
   const sharedSettings = readPrototypeProjectSettings();
-  return { ...state, projects: sharedSettings.projects, currentProjectId: projectId,
+  return { ...state, ompWebId: PROTOTYPE_BACKEND.id, projects: sharedSettings.projects, currentProjectId: projectId,
     repositoryHeads: Object.fromEntries(sharedSettings.projects.map(project => [project.repositoryId, prototypeSrDefaultCommit(state, project.id)])),
-    repositoryDevelopment: repositoryDevelopment({ ...state, projects: sharedSettings.projects }, projectId ?? ""),
+    repositoryDevelopment: repositoryDevelopment({ ...state, ompWebId: PROTOTYPE_BACKEND.id, projects: sharedSettings.projects }, projectId ?? ""),
     releases: readPrototypeProjectReleases(projectId), groups: state.groups.filter(item => item.projectId === projectId),
-    drafts: state.drafts.filter(item => item.projectId === projectId), srs: state.srs.filter(item => item.projectId === projectId),
+    drafts: state.drafts.filter(item => item.projectId === projectId && (!item.pendingFirstMessage || item.id === selection.irId)), srs: state.srs.filter(item => item.projectId === projectId),
     materials: state.materials.filter(item => item.projectId === projectId).map(item => prototypeMaterialIssue(item.path) ? { ...item, error: prototypeMaterialIssue(item.path), content: undefined } : item),
     sessions: state.sessions.filter(item => item.projectId === projectId && !prototypeSessionReadIssue(item.sessionId)),
     operations: state.operations.filter(item => !item.irId || [...state.groups, ...state.drafts].some(group => group.projectId === projectId && group.id === item.irId)),
@@ -237,6 +240,11 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
     }
   }
   const targetProjectId = action.projectId ?? selection.projectId ?? DEFAULT_SELECTION.projectId;
+  if (action.type === "setSharedProjectRoot") {
+    if (getEmployeeId() !== "j00808874") throw new Error("只有管理员 j00808874 可修改共享项目路径。");
+    const check = checkPrototypeSharedProjectDirectory(action.root, action.projectId);
+    if (!check.valid) throw new Error(check.error);
+  }
   if (action.type === "setDevelopmentRoot") {
     const project = state.projects.find(item => item.id === targetProjectId);
     if (!project) throw new Error("请选择已有项目。");
@@ -342,6 +350,10 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       irId = undefined;
       break;
     }
+    case "setSharedProjectRoot":
+      updatePrototypeSharedProjectRoot(action.projectId, action.root);
+      Object.assign(state, readPrototypeProjectSettings());
+      break;
     case "setDevelopmentRoot":
       savePrototypeDevelopmentRoot(projectId, action.root.trim().replace(/\/+$/, ""));
       break;
@@ -350,9 +362,14 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       state.releases = readPrototypeProjectReleases();
       break;
     case "createProposal": {
+      const existing = action.clientDraftId ? state.drafts.find(item => item.pendingFirstMessage && item.clientDraftId === action.clientDraftId && item.projectId === projectId && item.releaseId === action.releaseId) : undefined;
+      if (existing) { irId = existing.id; operation.irId = irId; break; }
       irId = `draft-demo-${state.revision}`;
       const item = group(projectId, irId, "新需求提案（样例）", [], true, getEmployeeId());
       item.origin = "browser";
+      item.clientDraftId = action.clientDraftId;
+      item.pendingFirstMessage = Boolean(action.clientDraftId);
+      if (item.pendingFirstMessage) item.title = "未发送草稿";
       item.releaseId = action.releaseId;
       state.drafts.push(item); state.sessions.push(...item.sessions);
       state.materials.push(...requirementMaterials(projectId, irId, item.title, []));
@@ -559,7 +576,7 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
           sr.codePr = undefined;
         }
         sr.stage = next; sr.status = "developing";
-        if (action.type === "startSr") { freezePrototypeRequirement(currentGroup!, getEmployeeId(), new Date().toISOString()); sr.round = 1; sr.developerEmployeeId = getEmployeeId(); sr.startedAt = new Date().toISOString(); sr.developmentRoot = readPrototypeDevelopmentRoot(projectId)!; }
+        if (action.type === "startSr") { freezePrototypeRequirement(currentGroup!, getEmployeeId(), new Date().toISOString()); sr.ompWebId = PROTOTYPE_BACKEND.id; currentGroup!.ompWebId = PROTOTYPE_BACKEND.id; sr.round = 1; sr.developerEmployeeId = getEmployeeId(); sr.startedAt = new Date().toISOString(); sr.developmentRoot = readPrototypeDevelopmentRoot(projectId)!; }
         sr.worktree ??= { path: `${sr.developmentRoot}/.worktrees/${sr.id}`, branch: `demo/${sr.id}`, baseCommit: prototypeSrDefaultCommit(state, projectId) };
         let session = sr.sessions.find(item => item.phase === next && item.round === sr.round);
         if (!session) { session = sessionRef(projectId, sr.irId, next, sr.id, undefined, sr.round); sr.sessions.push(session); state.sessions.push(session); }
@@ -575,4 +592,14 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
   return { operationId: operation.operationId, projectId: selectedProjectId, revision: state.revision, irId, srId,
     status: "completed", receipt: operation, deletion: operation.deletion,
     view: getPrototypeWorkflow({ projectId: selectedProjectId, irId, srId }) };
+}
+
+/** 只有首条消息实际进入会话后，待接纳条目才进入共享提案列表。 */
+export function publishPrototypeProposalForSession(sessionId: string): void {
+  const item = state.drafts.find(group => group.pendingFirstMessage && group.sessions.some(session => session.sessionId === sessionId));
+  if (!item) return;
+  item.pendingFirstMessage = false;
+  if (item.title === "未发送草稿") item.title = "新需求提案 · 整理中（样例）";
+  state.revision += 1;
+  prototypeWorkflowChanges.fire();
 }

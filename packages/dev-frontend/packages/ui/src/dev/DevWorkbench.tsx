@@ -22,7 +22,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { MessageResponse } from "@/components/ai-elements/message.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { DevProposalControls } from "./DevProposalControls.js";
-import { DevProposalRevisionControls } from "./DevProposalRevisionControls.js";
 import { DevProposalDeliveryControls } from "./DevProposalDeliveryControls.js";
 import { PROPOSAL_STATUS_LABELS } from "./domain.js";
 import { DevCollabProjection } from "./DevCollabProjection.js";
@@ -83,9 +82,9 @@ export function DevStageHeader() {
 	if (!group)
 		return (
 			<header className="space-y-2 border-b border-border bg-background px-4 py-3">
-				<strong className="text-ui-base">需求讨论</strong>
+				<strong className="text-ui-base">{selection.proposalDraftId ? "新建需求提案" : "需求讨论"}</strong>
 				<p className="text-ui-sm text-foreground-subtle">
-					{selection.irId
+					{selection.proposalDraftId ? "先输入需求并发送，首次发送成功后才加入提案列表。重复点击“新建需求提案”会回到这份未发送草稿。" : selection.irId
 						? view
 							? "所选需求当前不可用，请从导航选择已有需求。不会自动新建或替换历史会话。"
 							: "正在读取所选需求…"
@@ -139,12 +138,13 @@ export function DevStageHeader() {
 				{source.mode === "prototype" && <span className="text-ui-sm text-foreground-subtle" title="所有状态均为样例数据，不代表真实执行或验收。">原型 · 演示数据</span>}
 				<DevCollabProjection />
 			</div>
-			{!proposal && <div className="space-y-1 text-ui-sm text-foreground-subtle" data-testid="ir-freeze-status" data-frozen={Boolean(group.freeze)}>
-              <p>{group.freeze ? "需求与方案已冻结 · 从首个 SR 开始开发时生效" : "正式提案已入库 · 需求与方案尚未冻结"}</p>
-              <p>{group.freeze ? "冻结覆盖整个 IR、全部 SR 及确认方案；业务或方案变化须重新提案。" : "开始首个 SR 时冻结整组确认版本；开发前的修订也须重新评审、确认并通过提案 PR。"}</p>
+            {!proposal && <div className="space-y-1 text-ui-sm text-foreground-subtle">
+              <p>正式需求已进入 Git 仓库，可在自己的 Web 和开发项目中自由修改、提交，无需回到 A 的提案讨论。</p>
+              <p>SR 并发与依赖仅在当前 OMP Web 内检查；不协调其他 Web 的同 SR、仓库或名额占用。</p>
+              {source.capabilities.codeDevelopment && <Button size="sm" variant="outline" onClick={() => dev.startFreeChat(group.projectId)}>在我的项目中自由修改（演示）</Button>}
             </div>}
+            {proposal && source.capabilities.proposalDiscussion === false && <p className="text-ui-sm text-foreground-subtle">提案只读：讨论记录属于 A 的 OMP，请进入 j00808874 的 Web；当前页面不新建讨论或修改提案。</p>}
             {!proposal && !sr && <DevIrAcceptanceEntry group={group} />}
-            {(!sr || sr.status === "pending") && <DevProposalRevisionControls key={`revision-${group.id}`} group={group} />}
             {!proposal && !sr && group.proposalDelivery && <DevProposalDeliveryControls group={group} readOnly />}
 			<DevAgentModelSummary binding={dev.session?.modelConfig} />
 			{!proposal && sr?.developerEmployeeId && <p className="text-ui-sm text-foreground-subtle" data-testid="sr-developer">开发人：{sr.developerEmployeeId}{sr.status === "developing" ? ownsSr ? " · 我正在开发" : " · 当前仅查看，不操作其他同事的开发会话" : ""}</p>}
@@ -354,6 +354,7 @@ export function DevSrList() {
 	);
 }
 export function DevMaterialsPane() {
+  const source = useDevDataSource();
 	const dev = useDev()!;
 	const theme = useZCodeStore(state => state.theme);
 	const { selection, view } = dev;
@@ -375,7 +376,7 @@ export function DevMaterialsPane() {
 	const stage = selection.stage ?? sr?.stage;
 	const materialStageView = sr ? deriveStageView(sr, selection) : undefined;
 	const materialHistory = Boolean(materialStageView && !materialStageView.isCurrent);
-	const discussionReadOnly = conversationReadOnlyReason(view, selection);
+	const discussionReadOnly = conversationReadOnlyReason(view, selection, source.capabilities);
 	const proposalSolutionView = view?.drafts.some(item => item.id === group?.id) && (selection.discussionPhase ?? group?.proposalStage) === "solution";
 	const deliveryPath = stage === "pr" && sr?.delivery && materialStageView?.round === sr.delivery.round ? sr.delivery.manifestPath : undefined;
 	const acceptancePath = selection.irAcceptance ? group?.acceptance?.finalPrPath ?? group?.acceptance?.reportPath ?? group?.documentPath : undefined;

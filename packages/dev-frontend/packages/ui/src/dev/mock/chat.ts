@@ -18,8 +18,8 @@ import { PROTOTYPE_MODEL_SELECTION } from "./settings.js";
 import { prototypeConversationFileChanges } from "./files.js";
 import { resolvePrototypeWorkspace } from "./workspace.js";
 import { conversationReadOnlyReason } from "../domain.js";
-import { applyPrototypeAction, getPrototypeWorkflow } from "./workflow.js";
-import { prototypeSkillDesignReply } from "./skill-design.js";
+import { applyPrototypeAction, getPrototypeWorkflow, publishPrototypeProposalForSession } from "./workflow.js";
+import { prototypeSkillDesignReply, prototypeSkillDesignBinding } from "./skill-design.js";
 import { createPrototypeAutomationServices } from "./automations.js";
 import automationPrompt from "./prompts/automation-review.md?raw";
 import automationOutput from "./automation-output.md?raw";
@@ -120,13 +120,13 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     const key = `${root}:${identity ?? ""}:${sessionId}`;
     const existing = sessions.get(key);
     if (existing) return existing;
-    const workflow = getPrototypeWorkflow({ projectId: root.includes("mobile") ? "demo-mobile" : "demo-aurora" });
+    const ref = getPrototypeWorkflow().projects.flatMap(project => getPrototypeWorkflow({ projectId: project.id }).sessions).find(item => item.sessionId === sessionId);
+    const workflow = getPrototypeWorkflow({ projectId: ref?.projectId ?? (root.includes("mobile") ? "demo-mobile" : "demo-aurora"), irId: ref?.irId });
     const free = readPrototypeFreeChat(sessionId);
-    const ref = workflow.sessions.find(item => item.sessionId === sessionId);
     const sr = workflow.srs.find(item => item.id === ref?.srId);
     const group = [...workflow.groups, ...workflow.drafts].find(item => item.id === ref?.irId);
     const stage = ref?.phase ?? stageFor(sessionId);
-    const title = free?.meta.title ?? (sessionId.startsWith("prototype-skill-design:") ? "Skill 设计 · 补充讨论（样例）" : `${sr?.title ?? group?.title ?? "需求讨论"} · ${stage === "ir-acceptance" ? "IR 验收" : stage === "requirements" ? "需求" : stage === "solution" ? "方案" : stage === "planning" ? "计划" : stage === "executing" ? "实施" : "交付"}（样例）`);
+    const title = free?.meta.title ?? (sessionId.startsWith("prototype-skill-design:") ? "Skill 设计 Agent · 独立会话（样例）" : `${sr?.title ?? group?.title ?? "需求讨论"} · ${stage === "ir-acceptance" ? "IR 验收" : stage === "requirements" ? "需求" : stage === "solution" ? "方案" : stage === "planning" ? "计划" : stage === "executing" ? "实施" : "交付"}（样例）`);
     // 专属讨论只能绑定对应对象，不能因阶段相同而灌入新提案或新 SR。
     const sampleStage = stage === "free" || stage === "ir-acceptance"
       || (group?.id === "ir-auth" && !sr && stage === "requirements")
@@ -158,13 +158,17 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       appendRows(snapshot.rows.window, sessionId, automationPrompt, automationOutput, initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
+    if (group?.pendingFirstMessage) {
+      snapshot.rows.window = []; snapshot.rows.totalCount = 0; snapshot.rows.firstRowId = null;
+    }
     if (sessionId.startsWith("prototype-skill-design:")) {
       snapshot.rows.window = [];
       appendRows(snapshot.rows.window, sessionId, "我想设计一个可复用的项目技能。", skillDesignWelcome, initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
-    if (ref?.modelConfig) {
-      const binding = ref.modelConfig;
+    const roleBinding = sessionId.startsWith("prototype-skill-design:") ? prototypeSkillDesignBinding(sessionId) : ref?.modelConfig;
+    if (roleBinding) {
+      const binding = roleBinding;
       snapshot.config.modelSelection = prototypeAgentModelSelection(binding);
       snapshot.config.provider = binding.providerId;
       snapshot.config.model = binding.modelId;
@@ -173,7 +177,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       for (const row of snapshot.rows.window) if (row.kind === "assistantText") row.model = `${binding.modelName} · 预置演示回复`;
     }
     if (free?.empty) { snapshot.rows.window = []; snapshot.rows.totalCount = 0; snapshot.rows.firstRowId = null; }
-    const value: LocalSession = { agentModelBound: Boolean(ref?.modelConfig), stage, snapshot, archived: free?.meta.archived ?? false, pinned: free?.meta.pinned ?? false, deleted: false,
+    const value: LocalSession = { agentModelBound: Boolean(roleBinding), stage, snapshot, archived: free?.meta.archived ?? false, pinned: free?.meta.pinned ?? false, deleted: false,
       meta: { taskId: sessionId, traceId: `prototype:${sessionId}`, title, workspacePath: root, workspaceIdentity: identity, createdAt: initialTime, updatedAt: initialTime, mode: "build", provider: "glm", model: snapshot.config.model, status: "completed", ...(free?.meta ?? {}) } };
     sessions.set(key, value); return value;
   };
@@ -247,7 +251,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       if (!ref) continue;
       const reason = conversationReadOnlyReason(view, { projectId: ref.projectId, irId: ref.irId, srId: ref.srId, ...(ref.phase === "ir-acceptance" ? { irAcceptance: true } : ref.phase === "requirements" || ref.phase === "solution" ? { discussionPhase: ref.phase } : { stage: ref.phase, stageRound: ref.round }) });
       if (reason) throw new Error(reason);
-      const proposal = view.drafts.find(item => item.id === ref.irId);
+      const proposal = getPrototypeWorkflow({ projectId: project.id, irId: ref.irId }).drafts.find(item => item.id === ref.irId);
       if (ref.phase === "requirements" && proposal && content.trim()) {
         generated = !proposal.srIds.length;
         applyPrototypeAction({ type: generated ? "generateRequirements" : "supplementRequirements", projectId: project.id, irId: proposal.id, note: content }, { projectId: project.id, irId: proposal.id, discussionPhase: "requirements" });
@@ -257,6 +261,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
 
     if (value.stage === "free" && value.meta.title === "新建会话") { value.meta.title = content.trim().split("\n")[0]!.slice(0, 40) || "新建会话"; value.snapshot.meta.title = value.meta.title; }
     appendRows(value.snapshot.rows.window, value.meta.taskId, content, generated !== undefined ? generated ? requirementsGenerated : requirementsSupplemented : value.meta.taskId.startsWith("prototype-skill-design:") ? prototypeSkillDesignReply(value.meta.taskId, content) : `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在本次浏览器会话中。当前${value.stage === "ir-acceptance" ? "IR 整体验收" : value.stage === "free" ? "项目自由会话" : value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。用户确认原型后再进入真实后端对接与验收阶段。`, Date.now(), commandId, refs, value.snapshot.config.model);
+    publishPrototypeProposalForSession(value.meta.taskId);
     value.snapshot.rows.totalCount = value.snapshot.rows.window.length; value.snapshot.rows.firstRowId = value.snapshot.rows.window[0]?.rowId ?? null; changed(value);
   };
   const assertModelMutable = (value: LocalSession) => { if (value.agentModelBound) throw new Error("此 Agent 会话保留创建时模型和思考强度，请在模型设置修改后用于新会话。"); };

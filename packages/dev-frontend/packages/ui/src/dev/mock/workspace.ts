@@ -12,6 +12,7 @@ function resolveRecordedWorkspace(view: DevWorkflowView | undefined, selection: 
   const free = readPrototypeFreeChat(selection.freeSessionId);
   return free && free.meta.projectId === project.id ? { kind: "free", path: free.meta.workspacePath, identity: free.meta.workspaceIdentity ?? identity } : { kind: "unavailable", identity, error: "自由会话的目录记录不可用。" };
  }
+ if (selection.proposalDraftId && !selection.irId) return { kind: "reference", path: project.root, identity: `${identity}:new-proposal:${selection.proposalDraftId}` };
  const proposal = view?.drafts.find(item => item.id === selection.irId);
  if (proposal) return proposal.proposalLocation ? { kind: "proposal", path: proposal.proposalLocation.directory.replace(/\/$/, ""), identity: `${identity}:proposal:${proposal.id}` } : { kind: "unavailable", identity, error: "提案临时工作区记录缺失。" };
  const group = [...(view?.groups ?? []), ...(view?.drafts ?? [])].find(item => item.id === selection.irId && item.projectId === project.id);
