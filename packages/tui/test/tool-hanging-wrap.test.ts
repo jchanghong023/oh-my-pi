@@ -159,6 +159,40 @@ describe("prefixed tool rows", () => {
 		}
 	});
 
+	it("wraps selected option notes under their matching question without losing the ending", async () => {
+		const theme = (await getThemeByName("dark"))!;
+		const rows = plain(
+			askToolRenderer
+				.renderResult(
+					{
+						content: [],
+						details: {
+							results: [
+								{ id: "other", question: "Unrelated?", options: ["A"], multi: false, selectedOptions: ["A"] },
+								{
+									id: "db",
+									question: "Database?",
+									options: ["First", "Second"],
+									multi: false,
+									selectedOptions: ["Second"],
+									noteOption: "Second",
+									note: "Use the team standard and preserve the remaining deployment details",
+								},
+							],
+						},
+					},
+					{ expanded: false, isPartial: false },
+					theme,
+				)
+				.render(width),
+		);
+		const noteRow = rows.findIndex(row => row.includes("✎ Second:"));
+		expect(noteRow).toBeGreaterThan(rows.findIndex(row => row.includes("Database?")));
+		expect(rows[noteRow + 1]).toStartWith("│   ");
+		expect(rows.join("\n")).toContain("deployment details");
+		expect(rows.filter(row => row.includes("✎ Second:"))).toHaveLength(1);
+	});
+
 	it("hangs Ask option descriptions beneath their prefix and wraps LSP hover code", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const ask = plain(

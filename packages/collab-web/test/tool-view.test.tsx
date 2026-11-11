@@ -241,6 +241,47 @@ describe("ToolView ask renderer", () => {
 		expect(document.body.textContent).toContain("Use the existing database");
 	});
 
+	it("renders selected option notes under the matching answer", () => {
+		const html = renderToStaticMarkup(
+			<ToolView
+				name="ask"
+				defaultOpen
+				args={{ questions }}
+				result={{
+					content: [],
+					details: {
+						results: [
+							{
+								id: "notes",
+								selectedOptions: [],
+								customInput: "none",
+								note: { text: "ignored malformed note" },
+							},
+							{
+								id: "db",
+								selectedOptions: ["Postgres"],
+								noteOption: "Postgres",
+								note: "Team standard",
+							},
+						],
+					},
+				}}
+			/>,
+		);
+
+		const { document } = parseHTML(`<html><body>${html}</body></html>`);
+		const noteRows = Array.from(document.querySelectorAll(".tv-row")).filter(
+			row => row.querySelector(".tv-row-key")?.textContent === "✎",
+		);
+		expect(noteRows).toHaveLength(2);
+		const optionNote = noteRows.find(row => row.textContent?.includes("Team standard"));
+		expect(optionNote?.textContent).toContain("Postgres: Team standard");
+		const questionBlock = optionNote?.closest(".tv-list");
+		expect(questionBlock?.textContent).toContain("Storage backend");
+		expect(questionBlock?.textContent).not.toContain("Notes & caveats");
+		expect(html).not.toContain("ignored malformed note");
+	});
+
 	it("falls back to the result text when details carry no answers", () => {
 		const html = renderToStaticMarkup(
 			<ToolView

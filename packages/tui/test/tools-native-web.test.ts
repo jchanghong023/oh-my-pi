@@ -68,6 +68,35 @@ describe("ask native view", () => {
 		const custom = nodes(view?.body).at(-1)!;
 		expect(JSON.stringify(custom)).toContain("\u201cown\u201d");
 	});
+
+	it("keeps persisted option notes inside their matching question", () => {
+		const view = askToolRenderer.describeResult(
+			{
+				content: [],
+				details: {
+					results: [
+						{ id: "other", question: "Unrelated?", options: ["First"], multi: false, selectedOptions: ["First"] },
+						{
+							id: "db",
+							question: "Database?",
+							options: ["First", "Second"],
+							multi: false,
+							selectedOptions: ["Second"],
+							noteOption: "Second",
+							note: "Team standard",
+							timedOut: true,
+						},
+					],
+				},
+			},
+			opts,
+		);
+		const sections = nodes(view?.body).filter(node => node.k === "section");
+		expect(nodes(sections[0]!.c).some(node => node.p?.role === "omp.tool.answer.note")).toBe(false);
+		const note = nodes(sections[1]!.c).find(node => node.p?.role === "omp.tool.answer.note");
+		expect(JSON.stringify(note)).toContain("Second: Team standard");
+		expect(nodes(sections[1]!.c).at(-1)?.p?.role).toBe("omp.tool.notice");
+	});
 });
 
 describe("generic / MCP native views", () => {

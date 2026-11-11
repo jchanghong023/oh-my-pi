@@ -24,6 +24,7 @@ import type {
 	ServiceTier,
 	ServiceTierByFamily,
 	SimpleStreamOptions,
+	TextContent,
 } from "@oh-my-pi/pi-ai";
 import { mergeHeaders } from "@oh-my-pi/pi-ai/providers/anthropic-headers";
 import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
@@ -34,6 +35,7 @@ import { prewarmModelConnection } from "@oh-my-pi/pi-ai/providers/connection-pre
 import { isOpenAICodexWebSocketPreferred } from "@oh-my-pi/pi-ai/providers/openai-codex-transport";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
+import { syncOpenAIResponsesHistoryTexts } from "@oh-my-pi/pi-ai/utils";
 import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import type { ModelRefreshStrategy } from "@oh-my-pi/pi-catalog/model-manager";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -5805,7 +5807,15 @@ async function createAgentSessionScoped(
 						}
 					}
 					const content = await session?.extensionRunner?.emitAssistantMessage(message, signal);
-					if (content) message.content = content;
+					if (content) {
+						// Same-model Responses replay sends captured payload items verbatim.
+						const texts = content
+							.filter((block): block is TextContent => block.type === "text")
+							.map(block => block.text);
+						const synced = syncOpenAIResponsesHistoryTexts(message.providerPayload, texts);
+						message.content = content;
+						if (synced) message.providerPayload = synced;
+					}
 				},
 				// Recovery only fires on turns without tool calls and appends a new one,
 				// so streamed calls (and their speculation sessions) are never rewritten.

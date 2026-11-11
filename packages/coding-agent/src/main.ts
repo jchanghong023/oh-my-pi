@@ -163,6 +163,7 @@ import {
 	cfgWebSearchEnabled,
 } from "./tools/settings";
 import { cfgBrowserEnabled } from "./tools/browser/settings";
+import { claimTerminal } from "./tools/browser/terminal-owner";
 import {
 	cfgAutocompleteMaxVisible,
 	cfgAutoResume,
@@ -1996,6 +1997,9 @@ export async function runRootCommand(
 			process.stderr.write("Company provider is only available with OMP_OFFLINE=1.\n");
 			process.exit(1);
 		}
+		// The TUI owns the Tern pane or cmux workspace it draws in; an omp its commands start sees the claim and
+		// keeps its browser tabs out of this session's pane.
+		if (isInteractive) claimTerminal();
 		// Before session resolution: resume, fork, and import act on these same
 		// startup-parse flags, so rejecting later would leave forked or imported
 		// transcripts (or an opened picker) behind a usage error.

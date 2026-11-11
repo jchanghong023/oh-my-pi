@@ -508,8 +508,6 @@ async function runFulltestObserved(
 				"scripts/ci-release-checksums.test.ts",
 				"scripts/ci-test-ts.test.ts",
 				"scripts/fulltest.test.ts",
-				"scripts/gen-nix-bun.test.ts",
-				"scripts/inline-functions.test.ts",
 				"scripts/install-tests/fork-installer-routing.test.ts",
 				"scripts/run-rs-task.test.ts",
 				"scripts/slowtest.test.ts",

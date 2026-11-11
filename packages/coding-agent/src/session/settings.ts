@@ -1,5 +1,5 @@
 import { isRecord } from "@oh-my-pi/pi-utils";
-import { combine, effect, register, type SettingValueOf } from "../config/registry";
+import { combine, effect, register, type ScopeLike, type Setting, type SettingValueOf } from "../config/registry";
 import {
 	SERVICE_TIER_ANTHROPIC_OPTIONS,
 	SERVICE_TIER_ANTHROPIC_VALUES,
@@ -1365,30 +1365,41 @@ export const cfgProvidersFetch = register({
 	},
 });
 
+/** A saved-reset window with its own auto-redeem consent. */
+export type ResetWindow = "5h" | "weekly" | "fable";
+
+function resetWindowSetting<const Id extends string>(id: Id, label: string, description: string) {
+	return register({
+		id,
+		type: "enum",
+		values: ["unset", "yes", "no"] as const,
+		default: "unset" as const,
+		ui: {
+			tab: "providers",
+			group: "服务",
+			label,
+			description: `${description} unset 在消耗前询问，无提示界面时绝不消耗；yes 无需询问直接消耗；no 不消耗。`,
+			options: [
+				{ value: "unset", label: "未设置", description: "消耗前询问；无提示界面时绝不消耗。" },
+				{ value: "yes", label: "是", description: "无需询问，消耗符合条件的已保存重置额度。" },
+				{ value: "no", label: "否", description: "不消耗此窗口的已保存重置额度。" },
+			],
+		},
+	});
+}
+
 // Codex saved rate-limit resets (auto-redeem)
-export const cfgCodexResetsAutoRedeem = register({
-	id: "codexResets.autoRedeem",
-	type: "enum",
-	values: ["unset", "yes", "no"] as const,
-	default: "unset" as const,
-	ui: {
-		tab: "providers",
-		group: "服务",
-		label: "Codex 自动兑换已保存的重置额度",
-		description:
-			"自动消耗已保存的 Codex 限流重置额度：轮次受阻且无其他账户可接管时，恢复因 5 小时或每周配额耗尽而受限的账户，并利用即将过期的额度。unset 在首次消耗前询问（无提示界面时，仅消耗 5 分钟内过期的额度），yes 无需询问直接消耗，no 关闭两项检查。",
-		options: [
-			{
-				value: "unset",
-				label: "未设置",
-				description:
-					"检查是否符合条件，在首次消耗已保存的重置额度前询问。无提示界面时，仅消耗 5 分钟内过期的额度。",
-			},
-			{ value: "yes", label: "是", description: "无需询问，消耗符合条件的已保存重置额度。" },
-			{ value: "no", label: "否", description: "不执行已保存重置额度的自动兑换检查。" },
-		],
-	},
-});
+export const cfgCodexResetsAutoRedeem5h = resetWindowSetting(
+	"codexResets.autoRedeem5h",
+	"Codex 自动兑换已保存的重置额度（5 小时）",
+	"用于单独的 5 小时窗口限制，以及用量最高的聊天窗口为 5 小时时的临期额度。",
+);
+
+export const cfgCodexResetsAutoRedeemWeekly = resetWindowSetting(
+	"codexResets.autoRedeemWeekly",
+	"Codex 自动兑换已保存的重置额度（每周）",
+	"用于每周窗口限制，以及用量最高的聊天窗口为每周时的临期额度。仅从短暂 429 等待得知的限制需要两个 Codex 窗口均同意。",
+);
 
 export const cfgCodexResetsMinBlockedMinutes = register({
 	id: "codexResets.minBlockedMinutes",
@@ -1431,39 +1442,34 @@ export const cfgCodexResetsSalvageHorizonHours = register({
 
 /** Codex saved-reset auto-redeem policy (`codexResets.*`). */
 export const cfgCodexResets = combine({
-	autoRedeem: cfgCodexResetsAutoRedeem,
+	autoRedeem5h: cfgCodexResetsAutoRedeem5h,
+	autoRedeemWeekly: cfgCodexResetsAutoRedeemWeekly,
 	minBlockedMinutes: cfgCodexResetsMinBlockedMinutes,
 	keepCredits: cfgCodexResetsKeepCredits,
 	salvageHorizonHours: cfgCodexResetsSalvageHorizonHours,
 });
 
 /** Whether automatic reset redemption asks first, spends, or remains disabled. */
-export type ResetAutoRedeemMode = SettingValueOf<typeof cfgCodexResetsAutoRedeem>;
+export type ResetAutoRedeemMode = SettingValueOf<typeof cfgCodexResetsAutoRedeem5h>;
 
-// Claude Cedar/Juniper rate-limit resets (independent auto-redeem consent)
-export const cfgClaudeResetsAutoRedeem = register({
-	id: "claudeResets.autoRedeem",
-	type: "enum",
-	values: ["unset", "yes", "no"] as const,
-	default: "unset" as const,
-	ui: {
-		tab: "providers",
-		group: "服务",
-		label: "Claude 自动兑换重置额度",
-		description:
-			"自动消耗符合条件的 Claude Cedar 或 Juniper 重置额度。Cedar 仅用于其覆盖的限制；Juniper 仅能恢复单独的 5 小时窗口限制。unset 在首次消耗前询问（无提示界面时，仅消耗 5 分钟内过期的额度），yes 无需询问直接消耗，no 关闭受限恢复和临期利用。",
-		options: [
-			{
-				value: "unset",
-				label: "未设置",
-				description:
-					"实时检查是否符合条件，在首次消耗 Claude 重置额度前询问。无提示界面时，仅消耗 5 分钟内过期的额度。",
-			},
-			{ value: "yes", label: "是", description: "无需询问，消耗符合条件的 Claude 重置额度。" },
-			{ value: "no", label: "否", description: "不执行 Claude 重置额度的自动兑换检查。" },
-		],
-	},
-});
+// Claude Cedar/Juniper/Fable rate-limit resets (independent auto-redeem consent)
+export const cfgClaudeResetsAutoRedeem5h = resetWindowSetting(
+	"claudeResets.autoRedeem5h",
+	"Claude 自动兑换已保存的重置额度（5 小时）",
+	"使用 Cedar 或 Juniper 恢复单独的 5 小时窗口限制，或利用覆盖窗口中 5 小时用量最高的临期额度。",
+);
+
+export const cfgClaudeResetsAutoRedeemWeekly = resetWindowSetting(
+	"claudeResets.autoRedeemWeekly",
+	"Claude 自动兑换已保存的重置额度（每周）",
+	"使用 Cedar 恢复每周或特定模型的限制，或利用覆盖窗口中每周用量最高的临期额度。",
+);
+
+export const cfgClaudeResetsAutoRedeemFable = resetWindowSetting(
+	"claudeResets.autoRedeemFable",
+	"Claude 自动兑换 Fable 重置额度",
+	"使用 Fable 首发重置额度，同时恢复 Fable 每周和 5 小时窗口；仅由本设置控制。",
+);
 
 export const cfgClaudeResetsMinBlockedMinutes = register({
 	id: "claudeResets.minBlockedMinutes",
@@ -1506,11 +1512,38 @@ export const cfgClaudeResetsSalvageHorizonHours = register({
 
 /** Claude reset auto-redeem policy (`claudeResets.*`), independent of {@link cfgCodexResets}. */
 export const cfgClaudeResets = combine({
-	autoRedeem: cfgClaudeResetsAutoRedeem,
+	autoRedeem5h: cfgClaudeResetsAutoRedeem5h,
+	autoRedeemWeekly: cfgClaudeResetsAutoRedeemWeekly,
+	autoRedeemFable: cfgClaudeResetsAutoRedeemFable,
 	minBlockedMinutes: cfgClaudeResetsMinBlockedMinutes,
 	keepCredits: cfgClaudeResetsKeepCredits,
 	salvageHorizonHours: cfgClaudeResetsSalvageHorizonHours,
 });
+
+/** Each provider's saved-reset window settings: the only keys a consent answer is saved to. */
+export const resetWindowSettings: Record<
+	"openai-codex" | "anthropic",
+	Partial<Record<ResetWindow, Setting<ResetAutoRedeemMode>>>
+> = {
+	"openai-codex": { "5h": cfgCodexResetsAutoRedeem5h, weekly: cfgCodexResetsAutoRedeemWeekly },
+	anthropic: {
+		"5h": cfgClaudeResetsAutoRedeem5h,
+		weekly: cfgClaudeResetsAutoRedeemWeekly,
+		fable: cfgClaudeResetsAutoRedeemFable,
+	},
+};
+
+/** Each saved-reset window's consent; a window a provider lacks reads as `no`. */
+export type ResetWindowModes = Partial<Record<ResetWindow, ResetAutoRedeemMode>>;
+
+/** The current consent of every saved-reset window `provider` has. */
+export function resetWindowModes(provider: "openai-codex" | "anthropic", scope: ScopeLike): ResetWindowModes {
+	const modes: ResetWindowModes = {};
+	for (const [window, setting] of Object.entries(resetWindowSettings[provider])) {
+		modes[window as ResetWindow] = setting.get(scope);
+	}
+	return modes;
+}
 
 export const cfgProviderAppendOnlyContext = register({
 	id: "provider.appendOnlyContext",

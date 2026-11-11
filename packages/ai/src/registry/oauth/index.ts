@@ -2,7 +2,7 @@
 // High-level API
 // ============================================================================
 
-import { authPolicyFor, providerDisabledReason } from "@oh-my-pi/pi-catalog/compat/auth";
+import { authPolicyFor, providerDisabledReason, providerLoginWarning } from "@oh-my-pi/pi-catalog/compat/auth";
 import {
 	hasProviderModelRules,
 	isRetiredProvider,
@@ -26,11 +26,12 @@ export * from "./device-code";
 export type * from "./types";
 
 // Keep historical login targets available for credential management; filter only the login choices.
+// Label built-in logins that carry account risks.
 const builtInOAuthProviders: OAuthProviderInfo[] = PROVIDER_REGISTRY.filter(
 	provider => provider.login && provider.showInLoginList !== false,
 ).map(provider => ({
 	id: provider.id,
-	name: provider.name,
+	name: providerLoginWarning(provider.id) === undefined ? provider.name : `${provider.name} (at your own risk)`,
 	available: provider.available ?? true,
 	storeCredentialsAs: provider.storeCredentialsAs,
 }));
@@ -71,6 +72,15 @@ export function providerPauseReason(provider: string): string | undefined {
 export function assertProviderEnabled(provider: string): void {
 	const reason = providerPauseReason(provider);
 	if (reason !== undefined) throw new AIError.ProviderDisabledError(provider, reason);
+}
+
+/**
+ * The account risk a new built-in login of `provider` must accept first
+ * (`login-warning "<text>"`), or undefined. An extension that registers its
+ * own OAuth login under the id owns that prompt instead.
+ */
+export function loginRiskWarning(provider: string): string | undefined {
+	return customOAuthProviders.has(provider) ? undefined : providerLoginWarning(provider);
 }
 
 /**
@@ -204,7 +214,8 @@ export function getAllOAuthProviders(): OAuthProviderInfo[] {
 		available: true,
 		storeCredentialsAs: provider.storeCredentialsAs,
 	}));
-	return [...builtInOAuthProviders, ...customProviders];
+	// A built-in entry an extension took over is listed once, as the extension's.
+	return [...builtInOAuthProviders.filter(provider => !customOAuthProviders.has(provider.id)), ...customProviders];
 }
 
 /**
