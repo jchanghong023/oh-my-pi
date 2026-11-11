@@ -3,6 +3,8 @@ import { GitFork } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
+import { ControlHintTooltip } from "@/ControlHintTooltip.js";
+import { WorkflowAgentFace } from "@/components/workflow-timeline/WorkflowAgentFace.js";
 import { WorkflowTimeline } from "@/components/workflow-timeline/WorkflowTimeline.js";
 import type { TimelineStation, WorkflowTimelineModel } from "@/components/workflow-timeline/timeline-model.js";
 import { useDev } from "./DevContext.js";
@@ -37,7 +39,11 @@ export function DevReviewNavigation() {
  };
  return <div className="shrink-0 space-y-2 border-b border-border px-4 py-2" data-testid="dev-review-navigation">
   <div className="flex items-center justify-between gap-2">
-   <Tabs value={selected} onValueChange={choose} className="min-w-0"><TabsList className="h-8"><TabsTrigger value="summary" className="text-ui-sm">综合意见</TabsTrigger><TabsTrigger value="a" className="text-ui-sm">评审 A</TabsTrigger><TabsTrigger value="b" className="text-ui-sm">评审 B</TabsTrigger><TabsTrigger value="c" className="text-ui-sm">评审 C</TabsTrigger></TabsList></Tabs>
+   <Tabs value={selected} onValueChange={choose} className="min-w-0"><TabsList aria-label="评审 Agent 会话" className="h-11 gap-1 p-1 group-data-horizontal/tabs:h-11">{(["summary", "a", "b", "c"] as const).map(id => {
+    const agent = agents.find(item => item.id === id)!;
+    const label = id === "summary" ? "综合意见" : agent.name;
+    return <ControlHintTooltip key={id} title={`${label} · ${agent.session.modelConfig?.modelName ?? "模型未配置"}`}><TabsTrigger value={id} aria-label={label} className="h-9 w-9 flex-none p-1.5 data-[state=active]:bg-selected data-[state=active]:ring-1 data-[state=active]:ring-border" data-testid={`review-avatar-${id}`}><WorkflowAgentFace name={agent.name} avatarIndex={agents.findIndex(item => item.id === id) + 1} status={agent.status === "completed" ? "done" : agent.status} className="size-6" /></TabsTrigger></ControlHintTooltip>;
+   })}</TabsList></Tabs>
    <Button variant="ghost" size="sm" className="shrink-0 gap-1.5" aria-label="展开评审工作流" title="展开评审工作流" onClick={() => setExpanded(true)}><GitFork className="size-4" />评审流程</Button>
   </div>
   <p className="truncate text-ui-xs text-foreground-subtle" title={current.session.modelConfig?.modelName}>{current.name} · {current.session.modelConfig?.modelName} · 独立评审 {independentDone}/3 · {requirementsReviewCurrent(group) ? review.humanDecision ? `已由 ${review.humanDecision.employeeId} 人工通过` : "综合后由人工判断" : "旧版本，仅供历史查看"}</p>
