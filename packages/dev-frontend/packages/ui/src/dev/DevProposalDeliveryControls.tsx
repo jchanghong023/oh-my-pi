@@ -37,7 +37,7 @@ function DeliveryRecord({ delivery, stale = false }: { delivery: DevProposalDeli
  </div>;
 }
 
-export function DevProposalDeliveryControls({ group, readOnly = false }: { group: DevRequirementGroup; readOnly?: boolean }) {
+export function DevProposalDeliveryControls({ group, readOnly = false, compact = false }: { group: DevRequirementGroup; readOnly?: boolean; compact?: boolean }) {
  const source = useDevDataSource();
  if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
  if (!source.prototype) return <p className="text-ui-sm text-foreground-subtle">当前数据源尚未接入此功能。</p>;
@@ -84,9 +84,9 @@ export function DevProposalDeliveryControls({ group, readOnly = false }: { group
   "合并后转为正式需求，保留 changes/，不自动归档，也不表示实现完成。",
  ].join("\n") : "";
  return <section className="space-y-2" data-testid="proposal-delivery-controls">
-  <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" data-testid="proposal-delivery-open" disabled={dev.pending} onClick={openDialog}>{readOnly || !active || !mine ? "查看需求交付（演示）" : !current ? "确认需求与方案（演示）" : !pushed ? "AI 提交并推送（演示）" : !registered ? "人工创建需求 PR（演示）" : "核验 PR 合并（演示）"}</Button><span className="text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-status">{registered && group.merge ? "当前候选 PR 已合并并核验（演示），正式需求已入库。" : !current ? delivery || history.length ? "文件版本已变化，旧确认、推送与 PR 不可复用，请重新确认。" : "待人工确认当前 IR、全部 SR 与方案。" : !pushed ? "当前候选已确认，尚未推送。" : !registered ? "当前候选已推送（演示），等待人工创建并登记 PR。" : "当前候选 PR 已登记，等待人工合并与逐文件核验。"}</span></div>
-  {delivery && <p className="break-all text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-candidate">{current ? "当前候选" : "旧候选（失效）"}：{delivery.candidate} · 确认人：{delivery.confirmedBy} · {delivery.confirmedAt}</p>}
-  {(history.length > 0 || (!!delivery && !current)) && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-history-summary">保留 {history.length + (delivery && !current ? 1 : 0)} 份历史交付记录，可在交付弹窗查看。</p>}
+  <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant={compact ? "default" : "outline"} data-testid="proposal-delivery-open" disabled={dev.pending} onClick={openDialog}>{readOnly || !active || !mine ? "查看需求交付（演示）" : !current ? compact ? "下一步：需求入库" : "确认需求与方案（演示）" : !pushed ? "AI 提交并推送（演示）" : !registered ? "人工创建需求 PR（演示）" : "核验 PR 合并（演示）"}</Button>{!compact && <span className="text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-status">{registered && group.merge ? "当前候选 PR 已合并并核验（演示），正式需求已入库。" : !current ? delivery || history.length ? "文件版本已变化，旧确认、推送与 PR 不可复用，请重新确认。" : "待人工确认当前 IR、全部 SR 与方案。" : !pushed ? "当前候选已确认，尚未推送。" : !registered ? "当前候选已推送（演示），等待人工创建并登记 PR。" : "当前候选 PR 已登记，等待人工合并与逐文件核验。"}</span>}</div>
+  {!compact && delivery && <p className="break-all text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-candidate">{current ? "当前候选" : "旧候选（失效）"}：{delivery.candidate} · 确认人：{delivery.confirmedBy} · {delivery.confirmedAt}</p>}
+  {!compact && (history.length > 0 || (!!delivery && !current)) && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-history-summary">保留 {history.length + (delivery && !current ? 1 : 0)} 份历史交付记录，可在交付弹窗查看。</p>}
   <Dialog open={dialog !== null} onOpenChange={open => { if (!open) setDialog(null); }}>
    <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
     <DialogHeader><DialogTitle>{dialog ? stepTitles[dialog.step] : "需求交付（演示）"}</DialogTitle><DialogDescription>人工确认版本 → AI commit + push 演示 → 人工创建并登记 PR → 核验默认分支。所有状态仅存内存，不调用真实 Git、网络或模型；关闭弹窗不会执行任何步骤。</DialogDescription></DialogHeader>

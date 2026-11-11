@@ -9,7 +9,7 @@ import { useDev } from "./DevContext.js";
 import { srDefaultCommit, srDeliveryBlocker, srDeliveryInputBlocker, SR_DELIVERY_LABELS } from "./domain.js";
 import type { DevSystemRequirement } from "./types.js";
 
-export function DevSrDeliveryControls({ sr }: { sr: DevSystemRequirement }) {
+export function DevSrDeliveryControls({ sr, compact = false }: { sr: DevSystemRequirement; compact?: boolean }) {
  const source = useDevDataSource();
  if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
   const dev = useDev()!;
@@ -32,8 +32,8 @@ export function DevSrDeliveryControls({ sr }: { sr: DevSystemRequirement }) {
     if (result) { setConfirmed(false); setScopeUnchanged(false); setNote(""); }
   };
   return <div className="space-y-2" data-testid="sr-delivery-summary">
-    <div className="flex flex-wrap items-center gap-2"><Button size="sm" data-testid="sr-delivery-open" onClick={() => setOpen(true)}>{delivery ? "处理交付 PR" : "准备交付 PR"}</Button><span className="text-ui-sm text-foreground-subtle">{currentPr && !blocker ? "PR 待人工合并核验" : delivery ? statusLabel : "代码、测试和规格同一个 PR"}</span></div>
-    {blocker && delivery && <p className="text-ui-sm text-foreground-subtle">{blocker}</p>}
+    <div className="flex flex-wrap items-center gap-2"><Button size="sm" data-testid="sr-delivery-open" onClick={() => setOpen(true)}>{delivery ? "处理交付 PR" : "准备交付 PR"}</Button>{!compact && <span className="text-ui-sm text-foreground-subtle">{currentPr && !blocker ? "PR 待人工合并核验" : delivery ? statusLabel : "代码、测试和规格同一个 PR"}</span>}</div>
+    {!compact && blocker && delivery && <p className="text-ui-sm text-foreground-subtle">{blocker}</p>}
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader><DialogTitle>SR 交付 PR</DialogTitle><DialogDescription>{sr.title} · 完整交付、合并前验证与人工合并核验。关闭弹窗可在右侧查看 PR 标题、正文与清单，不会丢失交付状态。</DialogDescription></DialogHeader>

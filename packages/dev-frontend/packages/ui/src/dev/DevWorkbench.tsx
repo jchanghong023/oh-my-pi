@@ -1,3 +1,4 @@
+import { DevPhaseHeader } from "./DevPhaseHeader.js";
 import { useDevDataSource } from "./data-source.js";
 import { DevSrDeliveryControls } from "./DevSrDeliveryControls.js";
 import { srStartBlocker } from "./domain.js";
@@ -54,7 +55,9 @@ function copyMaterial(text: string): Promise<void> {
 }
 export { DevSidebar } from "./DevSidebar.js";
 export { DevProjectSettings } from "./DevProjectSettings.js";
-export function DevStageHeader() {
+export function DevStageHeader() { return <DevPhaseHeader details={<DevFlowDetails />} />; }
+
+function DevFlowDetails() {
  const source = useDevDataSource();
 	const dev = useDev();
 	const openSettings = useTabStore(state => state.openSettingsTab);
@@ -140,28 +143,7 @@ export function DevStageHeader() {
             {!proposal && sr?.worktree && <p className="break-all text-ui-sm text-foreground-subtle" data-testid="sr-workspace-context">{ownsSr && sr.status === "developing" ? "开发工作区" : "查看工作区"}：<code data-testid="sr-workspace-path">{sr.worktree.path}</code></p>}
             {viewingOtherSr && !sr?.developerEmployeeId && <p className="text-ui-sm text-foreground-subtle" data-testid="sr-developer">当前开发人待确认，仅查看已有记录。</p>}
             {proposal && <DevProposalControls group={group} />}
-			{sr?.stage && (
-				<nav aria-label="开发阶段" className="flex flex-wrap gap-1">
-					{DEV_STAGES.map((stage, index) => (
-						<Button
-							key={stage}
-							size="sm"
-							variant={stageView?.stage === stage ? "secondary" : "ghost"}
-							data-testid={`stage-${stage}`}
-							data-stage={stage}
-							data-stage-state={
-								index < DEV_STAGES.indexOf(sr.stage!) ? "completed" : sr.stage === stage ? "current" : "pending"
-							}
-							aria-pressed={stageView?.stage === stage}
-                            disabled={!sr.sessions.some(item => item.phase === stage)}
-                            title={!sr.sessions.some(item => item.phase === stage) ? "尚未进入此阶段" : undefined}
-							onClick={() => dev.select({ ...selection, stage, stageRound: undefined })}
-						>
-							{DEV_STAGE_LABELS[stage]}
-						</Button>
-					))}
-				</nav>
-			)}
+
 	            {!proposal && sr?.stage && <div className="flex flex-wrap items-center gap-2" data-testid="stage-view-context"><span className="text-ui-sm text-foreground-subtle">查看：{DEV_STAGE_LABELS[stageView!.stage!]} · 第 {stageView!.round} 轮{stageView!.isCurrent ? " · 当前阶段" : " · 历史只读"}</span>{sr.status === "developing" && !stageView!.isCurrent && <Button size="sm" variant="outline" data-testid="return-current-stage" onClick={() => dev.select({ ...selection, stage: undefined, stageRound: undefined })}>返回当前阶段</Button>}{sr.sessions.filter(item => item.phase === stageView?.stage).length > 1 && <Select value={String(stageView!.round)} onValueChange={value => dev.select({ ...selection, stageRound: Number(value) })}><SelectTrigger className="w-36" aria-label="查看阶段轮次"><SelectValue /></SelectTrigger><SelectContent>{sr.sessions.filter(item => item.phase === stageView?.stage).sort((a,b) => b.round - a.round).map(item => <SelectItem key={item.sessionId} value={String(item.round)}>第 {item.round} 轮{item.phase === sr.stage && item.round === sr.round ? "（当前）" : "（历史）"}</SelectItem>)}</SelectContent></Select>}</div>}
             {!proposal && sr && view?.repositoryDevelopment && <div className="space-y-1 text-ui-sm text-foreground-subtle" data-testid="sr-admission-summary">
               <p>当前仓库：{view?.repositoryDevelopment?.activeSrs.length ?? 0}/{view?.repositoryDevelopment?.limit ?? 2} 个 SR 占用名额 · 同仓库同时开发一个 IR</p>
@@ -241,7 +223,7 @@ export function DevStageHeader() {
 				)}
 				<DevDeleteRequirement key="dev-delete-requirement" />
 				<Popover key={`${group.id}:${sr?.id ?? "requirements"}`}>
-					<PopoverTrigger asChild><Button size="sm" variant="ghost" data-testid="dev-flow-details">更多<ChevronDown className="size-3" /></Button></PopoverTrigger>
+					<PopoverTrigger asChild><Button size="sm" variant="ghost" data-testid="dev-flow-details">目录与历史<ChevronDown className="size-3" /></Button></PopoverTrigger>
 					<PopoverContent align="end" className="max-h-[min(28rem,65dvh)] w-[min(28rem,calc(100vw-2rem))] space-y-3 overflow-y-auto" aria-label="流程详情">
 						<p className="text-ui-base font-medium">流程详情与操作记录</p>
 						{!sr && group.proposalLocation && <div className="space-y-2 rounded-md border border-border p-3" data-testid="proposal-directory">

@@ -28,10 +28,7 @@ export function DevProposalControls({ group }: { group: DevRequirementGroup }) {
  const accepted = group.developerAcceptance?.round === (group.proposalRound ?? 1) ? group.developerAcceptance : undefined;
  const mine = accepted?.employeeId === getEmployeeId();
  return <div className="space-y-2" data-testid="proposal-controls">
-  <nav aria-label="需求讨论阶段" className="flex gap-1">
-   <Button size="sm" variant={viewing === "requirements" ? "secondary" : "ghost"} aria-pressed={viewing === "requirements"} onClick={() => dev.select({ ...dev.selection, discussionPhase: "requirements" })}>业务需求</Button>
-   <Button size="sm" variant={viewing === "solution" ? "secondary" : "ghost"} aria-pressed={viewing === "solution"} disabled={!accepted} onClick={() => dev.select({ ...dev.selection, discussionPhase: "solution" })}>方案</Button>
-  </nav>
+
   <p className="text-ui-sm text-foreground-subtle">{PROPOSAL_STATUS_LABELS[group.status]} · 当前阶段：{phase === "requirements" ? "业务需求" : "方案"}{history ? " · 正在查看历史讨论，只读" : ""}</p>
   {!history && phase === "requirements" && group.status === "draft" && <DevRequirementDraft group={group} />}
   <DevRequirementReview group={group} readOnly={history} />

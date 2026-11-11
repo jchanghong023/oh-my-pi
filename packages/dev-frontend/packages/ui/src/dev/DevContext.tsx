@@ -10,7 +10,7 @@ import type {
 
 export type { DevWorkflowView, DevWorkflowStage, DevMaterialView, DevSelection };
 export const DEV_STAGES: DevWorkflowStage[] = ["planning", "executing", "pr"];
-export const DEV_STAGE_LABELS = { solution: "方案", planning: "开发计划", executing: "开发与验证", pr: "交付 PR" };
+export const DEV_STAGE_LABELS = { solution: "方案", planning: "开发计划", executing: "开发与验证", pr: "交付合并" };
 export function devQuery(selection: DevSelection): string {
   const query = new URLSearchParams();
   for (const key of ["projectId", "irId", "srId"] as const) if (selection[key]) query.set(key, selection[key]!);
@@ -180,8 +180,10 @@ export function DevProvider({ children }: { children: ReactNode }) {
       if (selectionRef.current !== target) return result;
       if (value.type === "createProposal") select({ projectId: result.projectId, irId: result.irId });
       else if (value.type === "beginProposalRevision") select({ projectId: result.projectId, irId: result.irId, discussionPhase: "requirements" });
+      else if (value.type === "startIrAcceptance") select({ projectId: target.projectId, irId: target.irId, irAcceptance: true });
       else if (value.type === "markRequirementsMerged") select({ projectId: target.projectId, irId: target.irId });
-      else if (["submitProposalReview", "acceptProposal", "generateProposalSolution", "returnProposal"].includes(value.type)) select({ ...target, discussionPhase: undefined });
+      else if (value.type === "runRequirementsReview" || value.type === "submitProposalReview") select({ ...target, discussionPhase: "requirements", proposalStep: "requirements-review", proposalEditing: undefined });
+      else if (["acceptProposal", "generateProposalSolution", "returnProposal"].includes(value.type)) select({ ...target, discussionPhase: undefined, proposalStep: undefined, proposalEditing: undefined });
       else if (value.type === "deleteRequirement") select({ projectId: target.projectId });
       else if (["startSr", "approveStage", "backStage"].includes(value.type)) select({ projectId: target.projectId, irId: target.irId, srId: target.srId });
       else await refresh();

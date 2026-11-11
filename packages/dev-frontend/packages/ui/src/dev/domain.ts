@@ -261,3 +261,16 @@ export function irFinalPackageVersion(group: DevRequirementGroup): string {
  const acceptance = group.acceptance!;
  return JSON.stringify([acceptance.candidate, acceptance.baseCommit, acceptance.reportVersion, acceptance.srMergeVersion, acceptance.archive]);
 }
+
+/** 原型展示节点不另建 Agent：需求评审和人工入库都有独立的只读查看状态。 */
+export function proposalProgressIndex(group: DevRequirementGroup, selection?: DevSelection): number {
+ if (selection?.proposalEditing && group.proposalStage !== "solution") return 0;
+ if (group.status === "requirements-pr" || proposalDeliveryCurrent(group)) return 3;
+ if (group.proposalStage === "solution") return 2;
+ return requirementsReviewCurrent(group) ? 1 : 0;
+}
+export function proposalViewedIndex(group: DevRequirementGroup, selection: DevSelection): number {
+ if (selection.proposalStep) return ["requirements", "requirements-review", "solution", "intake"].indexOf(selection.proposalStep);
+ if (selection.discussionPhase === "requirements" && proposalProgressIndex(group, selection) > 1) return 0;
+ return proposalProgressIndex(group, selection);
+}

@@ -177,7 +177,7 @@ export interface DevWorkflowResult {
   status: "completed" | "failed" | "running"; receipt: DevOperationReceipt; view?: DevWorkflowView;
   error?: string; deletion?: DevRequirementDeletion;
 }
-export interface DevSelection { freeDraftId?: string; proposalDraftId?: string; proposalDraftReleaseId?: string; irAcceptance?: boolean; freeSessionId?: string; freeFiles?: boolean; projectId?: string; irId?: string; srId?: string; stage?: DevWorkflowStage; stageRound?: number; discussionPhase?: "requirements" | "solution" }
+export interface DevSelection { proposalEditing?: boolean; proposalStep?: "requirements" | "requirements-review" | "solution" | "intake"; freeDraftId?: string; proposalDraftId?: string; proposalDraftReleaseId?: string; irAcceptance?: boolean; freeSessionId?: string; freeFiles?: boolean; projectId?: string; irId?: string; srId?: string; stage?: DevWorkflowStage; stageRound?: number; discussionPhase?: "requirements" | "solution" }
 export interface DevNativeSurfaceTarget extends DevObjectRef {
   sessionId: string; phase: DevNativeSessionRef["phase"]; round: number; clientId: string;
 }

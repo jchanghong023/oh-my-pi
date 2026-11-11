@@ -1,3 +1,5 @@
+import { proposalDeliveryCurrent, requirementsReviewCurrent } from "./domain.js";
+import { DevProposalStageBody } from "./DevPhaseHeader.js";
 import { DevFreeChatDraftComposer } from "./DevFreeChatDraftComposer.js";
 import { DevProposalDraftComposer } from "./DevProposalDraftComposer.js";
 import { useDevDataSource } from "./data-source.js";
@@ -15,6 +17,8 @@ export function DevEmptyState() {
  const release = dev.view?.releases.find(item => item.id === dev.releaseId);
  if (dev.selection.freeDraftId && project && source.capabilities.freeChat) return <DevFreeChatDraftComposer key={dev.selection.freeDraftId} />;
  if (dev.selection.proposalDraftId && project && release && source.capabilities.workflowCommands.includes("createProposal")) return <DevProposalDraftComposer key={dev.selection.proposalDraftId} />;
+ const proposal = dev.view?.drafts.find(item => item.id === dev.selection.irId);
+ if (proposal && (dev.selection.proposalStep === "requirements-review" || dev.selection.proposalStep === "intake" || (!dev.selection.proposalStep && !dev.selection.discussionPhase && (proposalDeliveryCurrent(proposal) || proposal.status === "requirements-pr" || (proposal.proposalStage !== "solution" && requirementsReviewCurrent(proposal)))))) return <DevProposalStageBody />;
  const missingSession = Boolean(dev.selection.irId);
  const title = missingSession ? "所选会话暂不可用" : !project ? "请选择项目" : !release ? "此项目尚无 Release" : "选择已有会话";
  const description = missingSession ? "会话记录缺失或所选阶段尚未开始。不会替换为其他需求或自动创建会话。" : !project ? "先登记已有 Git 项目，再选择它的 Release。" : !release ? "请先选择已有 Release，或在设置中添加。" : "从左侧继续已有会话，或使用下方入口开始。尚未选择会话时不会显示其他需求的聊天。";
