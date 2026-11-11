@@ -1,5 +1,5 @@
 import { DevIrAcceptanceEntry } from "./DevIrAcceptance.js";
-import { IR_ACCEPTANCE_LABELS, irAcceptanceVersionBlocker } from "./domain.js";
+import { formalIrStatus, formalIrStageLabel } from "./domain.js";
 import { useState } from "react";
 import { ProjectFolderIcon } from "@/project-sidebar/ProjectFolderIcon.js";
 import { ChevronDown, CircleDot, ListChevronsDownUp, ListChevronsUpDown, ListFilter, MessagesSquare, Search, X } from "lucide-react";
@@ -21,13 +21,11 @@ export function DevRequirementList({ title, groups, proposal = false, expandedIr
  const dev = useDev()!;
  const [filter, setFilter] = useState("all");
  const options = proposal ? [{id:"all", title:"全部提案"},{id:"draft", title:"草稿"},{id:"solution-ready", title:"方案完成"},{id:"requirements-pr", title:"PR 待合并"}]
- : [{id:"all", title:"全部需求"},{id:"developing",title:"开发中"},{id:"pending",title:"待开发"},{id:"acceptance",title:"验收与交付"},{id:"completed",title:"已完成"}];
+ : [{id:"all", title:"全部需求"},{id:"pending",title:"待开发"},{id:"developing",title:"开发中"},{id:"acceptance",title:"验收与归档"},{id:"completed",title:"已完成"}];
  const visibleGroups = groups.filter(group => {
   if (filter === "all") return true;
   if (proposal) return group.status === filter;
-  const srs = dev.view?.srs.filter(sr => sr.irId === group.id) ?? [];
-  const status = group.acceptance?.status === "completed" ? "completed" : group.acceptance || (srs.length && srs.every(sr => sr.status === "completed")) ? "acceptance" : srs.some(sr => sr.status === "developing") ? "developing" : "pending";
-  return status === filter;
+  return Boolean(dev.view && formalIrStatus(dev.view, group) === filter);
  });
  const choose = (irId: string) => { dev.select({projectId:dev.selection.projectId,irId}); onNavigate?.(); };
  const hasExpanded = visibleGroups.some(group => expandedIrIds.includes(group.id));
@@ -49,7 +47,7 @@ export function DevRequirementList({ title, groups, proposal = false, expandedIr
 						return <Collapsible key={group.id} open={expanded} onOpenChange={open => onExpandedChange(open ? [...expandedIrIds, group.id] : expandedIrIds.filter(id => id !== group.id))} className="mb-1">
 							<div className="group/ir-row flex min-w-0 items-center rounded-lg hover:bg-menu-hover">
 								<CollapsibleTrigger asChild><Button variant="ghost" className={`${proposal ? "h-auto min-h-12 py-1.5" : "h-8"} min-w-0 flex-1 justify-start gap-2 rounded-lg pr-1 pl-2.5 text-left hover:bg-transparent`} data-ir-id={group.id}>
-									<Badge variant="outline" className="h-4 min-w-5 justify-center rounded-sm border-border/70 bg-surface px-0.5 font-mono text-ui-xs font-medium text-foreground-subtle">IR</Badge><span className="min-w-0 flex-1 text-foreground-subtle"><span className="block truncate" title={group.title}>{group.title}</span>{proposal && <span className="mt-0.5 flex items-center justify-between gap-1 text-ui-xs text-foreground-subtlest"><span className="shrink-0 font-mono" title="提案提出人">提出 {group.proposalLocation?.employeeId ?? "未记录"}</span><span className="truncate">{proposalProgressIndex(group) === 3 ? "入库中" : proposalProgressIndex(group) === 1 ? group.review?.passed ? "待开发" : "待业务补充" : group.returnFeedback && !group.returnFeedback.resumedAt ? "待业务补充" : group.proposalStage === "solution" ? group.status === "solution-ready" ? "待入库" : "方案中" : "业务需求"}</span></span>}</span><span className="text-ui-sm text-foreground-subtlest">{proposal ? "" : group.acceptance ? dev.view && irAcceptanceVersionBlocker(dev.view, group) ? "待重新验收" : IR_ACCEPTANCE_LABELS[group.acceptance.status] : srs.length && srs.every(sr => sr.status === "completed") ? "待验收" : srs.length}</span><ChevronDown className={`size-3 shrink-0 text-foreground-subtlest transition-transform ${expanded ? "" : "-rotate-90"}`} aria-hidden="true" />
+									<Badge variant="outline" className="h-4 min-w-5 justify-center rounded-sm border-border/70 bg-surface px-0.5 font-mono text-ui-xs font-medium text-foreground-subtle">IR</Badge><span className="min-w-0 flex-1 text-foreground-subtle"><span className="block truncate" title={group.title}>{group.title}</span>{proposal && <span className="mt-0.5 flex items-center justify-between gap-1 text-ui-xs text-foreground-subtlest"><span className="shrink-0 font-mono" title="提案提出人">提出 {group.proposalLocation?.employeeId ?? "未记录"}</span><span className="truncate">{proposalProgressIndex(group) === 3 ? "入库中" : proposalProgressIndex(group) === 1 ? group.review?.passed ? "待开发" : "待业务补充" : group.returnFeedback && !group.returnFeedback.resumedAt ? "待业务补充" : group.proposalStage === "solution" ? group.status === "solution-ready" ? "待入库" : "方案中" : "业务需求"}</span></span>}</span><span className="text-ui-sm text-foreground-subtlest">{proposal ? "" : dev.view ? formalIrStageLabel(dev.view, group) : "读取中"}</span><ChevronDown className={`size-3 shrink-0 text-foreground-subtlest transition-transform ${expanded ? "" : "-rotate-90"}`} aria-hidden="true" />
 								</Button></CollapsibleTrigger>
 								<div className="mr-1 flex shrink-0 items-center opacity-0 transition-opacity group-hover/ir-row:opacity-100 group-focus-within/ir-row:opacity-100 [@media(hover:none)]:opacity-100"><ControlHintTooltip title="需求讨论"><Button variant="ghost" size="icon-sm" aria-label={`${group.title}：需求讨论`} aria-pressed={dev.selection.irId === group.id && !dev.selection.srId && !dev.selection.irAcceptance} onClick={() => choose(group.id)}><MessagesSquare className="size-3.5 text-foreground-subtle" /></Button></ControlHintTooltip>{!proposal && <DevIrAcceptanceEntry group={group} compact onNavigate={onNavigate} />}</div>
 							</div>

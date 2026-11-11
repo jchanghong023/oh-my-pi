@@ -99,6 +99,9 @@ export function createPrototypeWorkflow(): DevWorkflowView {
     systemRequirement("demo-mobile", "ir-mobile", "sr-mobile-navigation", "移动导航与项目切换", "planning"),
     systemRequirement("demo-mobile", "ir-mobile", "sr-mobile-notifications", "通知列表与阅读状态", "executing"),
     systemRequirement("demo-mobile", "ir-mobile", "sr-mobile-profile", "个人资料卡片（已完成示例）", undefined, true),
+    systemRequirement("demo-aurora", "ir-export", "sr-export", "导出任务与下载", undefined, true),
+    systemRequirement("demo-aurora", "ir-notifications", "sr-notification-inbox", "通知列表与阅读状态", undefined, true),
+    systemRequirement("demo-aurora", "ir-audit-archive", "sr-audit-retention", "审计查询与留存", undefined, true),
     systemRequirement("demo-aurora", "draft-automation", "proposal-sr-trigger", "触发条件与执行范围"),
     systemRequirement("demo-aurora", "draft-automation", "proposal-sr-history", "执行记录与结果查看"),
     systemRequirement("demo-aurora", "draft-notification", "proposal-sr-notification", "通知范围与阅读状态"),
@@ -133,6 +136,9 @@ export function createPrototypeWorkflow(): DevWorkflowView {
   for (const sr of srs.filter(item => item.status === "completed")) sr.codeMerge = { commit: `sample-merged-${sr.id}`, branch: "main", checkedAt: createdAt, files: prototypeSrDeliveryFiles(sr, `sample-merged-${sr.id}`) };
   const groups = [group("demo-aurora", "ir-auth", "账号与权限体验", srs.filter(sr => sr.irId === "ir-auth")),
     group("demo-aurora", "ir-dashboard", "团队数据总览", srs.filter(sr => sr.irId === "ir-dashboard")),
+    group("demo-aurora", "ir-export", "报表导出", srs.filter(sr => sr.irId === "ir-export")),
+    group("demo-aurora", "ir-notifications", "通知中心", srs.filter(sr => sr.irId === "ir-notifications")),
+    group("demo-aurora", "ir-audit-archive", "操作审计", srs.filter(sr => sr.irId === "ir-audit-archive")),
     group("demo-mobile", "ir-mobile", "移动协作工作台", srs.filter(sr => sr.irId === "ir-mobile")),
     group("demo-mobile", "ir-mobile-offline", "移动端离线体验", srs.filter(sr => sr.irId === "ir-mobile-offline"))];
   const drafts = [group("demo-aurora", "draft-automation", "自动化工作流探索", srs.filter(sr => sr.irId === "draft-automation"), true),
@@ -188,6 +194,24 @@ export function createPrototypeWorkflow(): DevWorkflowView {
       path: item.path, sha256: item.sha256, size: item.size, projectId: item.projectId, irId: item.irId, srId: item.srId, status: "M（样例）",
     })),
   };
+  // 同一 Release 五份共享 IR；验收样例来自其他 Web，不占当前 Web 的开发名额。
+  const waiting = groups.find(item => item.id === "ir-export")!;
+  waiting.ompWebId = "local-j00808875";
+  const completed = groups.find(item => item.id === "ir-audit-archive")!;
+  completed.ompWebId = "local-j00808877";
+  applyIrAcceptanceAction(result, completed, { type: "startIrAcceptance" });
+  applyIrAcceptanceAction(result, completed, { type: "generateIrAcceptanceReport", outcome: "passed" });
+  applyIrAcceptanceAction(result, completed, { type: "prepareIrFinalPr" });
+  applyIrAcceptanceAction(result, completed, { type: "publishIrFinalPr", candidate: completed.acceptance!.candidate });
+  applyIrAcceptanceAction(result, completed, { type: "markIrFinalPrSubmitted", url: "https://example.invalid/demo/pulls/ir-audit-archive" });
+  applyIrAcceptanceAction(result, completed, { type: "verifyIrFinalMerge", candidate: completed.acceptance!.candidate, filesConfirmed: true });
+  const accepting = groups.find(item => item.id === "ir-notifications")!;
+  accepting.ompWebId = "local-j00808876";
+  applyIrAcceptanceAction(result, accepting, { type: "startIrAcceptance" });
+  for (const [item, employeeId] of [[completed, "j00808877"], [accepting, "j00808876"]] as const) {
+    item.acceptance!.employeeId = employeeId;
+    item.acceptance!.worktree.path = `/demo/${employeeId}/aurora-console/.worktrees/${item.id}-acceptance`;
+  }
   if (prototypeRecoveryScenario === "empty-releases" || prototypeRecoveryScenario === "empty-requirements") {
     result.groups = result.groups.filter(item => item.projectId !== "demo-aurora"); result.drafts = result.drafts.filter(item => item.projectId !== "demo-aurora");
     result.srs = result.srs.filter(item => item.projectId !== "demo-aurora"); result.materials = result.materials.filter(item => item.projectId !== "demo-aurora");
@@ -197,7 +221,7 @@ export function createPrototypeWorkflow(): DevWorkflowView {
 }
 let state = createPrototypeWorkflow();
 for (const sr of state.srs) if (sr.status === "developing") sr.ompWebId = "local-j00808874";
-for (const group of state.groups) if (group.developmentStartedAt) group.ompWebId = "local-j00808874";
+for (const group of state.groups) if (group.developmentStartedAt) group.ompWebId ??= "local-j00808874";
 export const prototypeWorkflowChanges = createPrototypeEvent<void>();
 export function getPrototypeWorkflow(selection: DevSelection = DEFAULT_SELECTION): DevWorkflowView {
   const projectId = selection.projectId ?? DEFAULT_SELECTION.projectId;

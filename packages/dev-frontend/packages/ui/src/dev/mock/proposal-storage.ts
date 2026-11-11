@@ -2,7 +2,7 @@ import { readPrototypeProjectSettings } from "./project-settings.js";
 
 /** IR/SR 仅为界面映射；文件遵循 OpenSpec change/capability 结构。 */
 export function prototypeChangeId(irId: string): string {
- const samples: Record<string, string> = { "ir-auth": "add-account-access", "ir-dashboard": "add-team-dashboard", "ir-mobile": "add-mobile-workbench", "ir-mobile-offline": "add-mobile-offline", "draft-automation": "add-automation-workflows", "draft-notification": "add-team-notifications", "draft-mobile-search": "add-mobile-search" };
+ const samples: Record<string, string> = { "ir-export": "add-report-export", "ir-notifications": "add-notification-center", "ir-audit-archive": "add-operation-audit", "ir-auth": "add-account-access", "ir-dashboard": "add-team-dashboard", "ir-mobile": "add-mobile-workbench", "ir-mobile-offline": "add-mobile-offline", "draft-automation": "add-automation-workflows", "draft-notification": "add-team-notifications", "draft-mobile-search": "add-mobile-search" };
  return samples[irId] ?? irId;
 }
 export function prototypeChangeRoot(irId: string): string { return `openspec/changes/${prototypeChangeId(irId)}`; }
