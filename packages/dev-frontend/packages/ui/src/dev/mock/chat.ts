@@ -155,6 +155,13 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       appendRows(snapshot.rows.window, sessionId, proposalDiscussionPrompt, stage === "solution" ? proposalSolutionDiscussion : proposalDiscussion, initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
+    if (!sr && group && ["draft-report-export", "draft-resource-booking", "draft-audit-subscription"].includes(group.id) && (stage === "requirements" || stage === "solution")) {
+      snapshot.rows.window = [];
+      const scope = group.snapshot?.srs.map(row => `- ${row.title}：${row.documentPath}`).join("\n") ?? "";
+      appendRows(snapshot.rows.window, sessionId, `请整理「${group.title}」的${stage === "solution" ? "技术方案" : "业务需求与验收范围"}。`,
+        `**${group.title} · ${stage === "solution" ? "技术方案" : "业务需求"}讨论样例**\n\n当前提案范围：\n${scope}\n\n业务材料：${group.documentPath}${stage === "solution" ? `\n技术设计：${group.proposalSolution?.path ?? "尚未生成"}` : ""}\n\n${stage === "solution" ? "本轮方案绑定当前 IR 与全部 SR，涵盖能力边界、异常提示和实施顺序；可从材料区查看完整 design.md。" : "已按本提案独立整理 IR、SR 与验收场景；需求评审报告和后续方案不会复用其他提案的历史。"}\n\n仅展示前端内存样例；未调用模型、执行工具、推送 Git 或创建真实 PR。`, initialTime);
+      snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
+    }
     if (!sr && group?.id === "ir-dashboard" && stage === "requirements") {
       snapshot.rows.window = []; appendRows(snapshot.rows.window, sessionId, "希望团队数据总览能清晰展示项目进度和趋势，支持筛选和空态。", "**数据总览需求讨论样例**\n\n建议提供概览指标、趋势卡片、项目筛选及无数据状态，并补齐键盘导航和窄屏布局。这里仅使用独立的前端样例，不读取真实指标。", initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
