@@ -2,6 +2,7 @@ import { useDev, type DevFirstDiscussion } from "@/dev/DevContext.js";
 import { DevNativeSurface, sameNativeSurfaceTarget, useDevNativeSurface } from "@/dev/DevNativeSurface.js";
 import { DevNativePredictions } from "@/dev/DevNativePredictions.js";
 import { DevSketchButton } from "@/dev/DevSketchButton.js";
+import { DevSpeechInputButton } from "@/dev/DevSpeechInputButton.js";
 import type { SessionLifecycleSnapshot } from "@zcode/shared";
 import {
   WorkspaceHookPendingIndicator,
@@ -1286,6 +1287,15 @@ function ConversationComposerImpl({
     inputApiRef.current.setText(text);
     updateText(text); scheduleDraftPersist(); requestComposerFocus();
   }, [disabled, updateText, scheduleDraftPersist, requestComposerFocus]);
+  const insertSpeechTranscript = useCallback((transcript: string) => {
+    const input = inputApiRef.current;
+    if (!input || disabled || runtimeBlocked || pendingRef.current) return false;
+    const current = input.getMarkdown();
+    const text = current ? `${current}\n${transcript}` : transcript;
+    input.setText(text);
+    updateText(text); scheduleDraftPersist();
+    return true;
+  }, [disabled, runtimeBlocked, updateText, scheduleDraftPersist]);
   useEffect(() => {
     if (!nativeSurface.target || nativeDraft.scope !== `${workspaceIdentity ?? workspacePath}:${sessionId ?? ""}`) return;
     nativeSurface.updateEditor(nativeDraft.text);
@@ -2454,6 +2464,7 @@ function ConversationComposerImpl({
             ))}
           </span>
         ) : null}
+        <DevSpeechInputButton disabled={disabled || runtimeBlocked || pending} onInsertText={insertSpeechTranscript} onReturnToComposer={requestComposerFocus} />
         {showStopControl ? (
           <ControlHintTooltip title={stopTooltipTitle} shortcut="Esc">
             <Button
@@ -2495,6 +2506,7 @@ function ConversationComposerImpl({
     [
       attachmentsApi.addAttachmentFiles,
       requestComposerFocus,
+      insertSpeechTranscript,
       canSend,
       canStop,
       hasDraftToSubmit,
