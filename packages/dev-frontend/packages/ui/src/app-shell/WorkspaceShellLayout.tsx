@@ -3,7 +3,7 @@ import { proposalProgressIndex, proposalViewedIndex } from "@/dev/domain.js";
 import { DevFormalReadOnlyState } from "@/dev/DevFormalReadOnlyState.js";
 import { useOptionalDevDataSource } from "@/dev/data-source.js";
 import { DevIrAcceptanceWelcome } from "@/dev/DevIrAcceptance.js";
-import { DevEmptyState } from "@/dev/DevEmptyState.js";
+import { DevEmptyState, DevProposalSrReadOnlyState } from "@/dev/DevEmptyState.js";
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useDev } from "@/dev/DevContext.js";
 import { conversationReadOnlyReason } from "@/dev/domain.js";
@@ -334,6 +334,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const devSource = useOptionalDevDataSource();
   const devSr = dev?.view?.srs.find(item => item.id === dev.selection.srId);
   const devGroup = [...(dev?.view?.groups ?? []), ...(dev?.view?.drafts ?? [])].find(item => item.id === dev?.selection.irId);
+  const devProposalSr = Boolean(dev?.selection.srId && dev.view?.drafts.some(item => item.id === dev.selection.irId));
   const devProposalHistory = !!dev && !!devGroup && !!dev.view?.drafts.some(item => item.id === devGroup.id) && proposalViewedIndex(devGroup, dev.selection) !== proposalProgressIndex(devGroup, dev.selection);
   const devOwnershipReadOnlyReason = devSource?.mode === "prototype" ? conversationReadOnlyReason(dev?.view, dev?.selection ?? {}, devSource.capabilities) : undefined;
   const devFrozen = !!dev && !dev.selection.irAcceptance && !dev.selection.srId && Boolean(devGroup?.freeze);
@@ -1930,7 +1931,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 </div>
               </AutomationsMainBreadcrumbFrame>
             </main>
-          ) : devVisitorFormal ? <DevFormalReadOnlyState /> : devFormalOverview ? <DevFormalProgressBody /> : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
+          ) : devProposalSr ? <DevProposalSrReadOnlyState /> : devVisitorFormal ? <DevFormalReadOnlyState /> : devFormalOverview ? <DevFormalProgressBody /> : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
             <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
               {/* Bugfix: 手机远控聊天页中间层必须继续提供 flex 高度链。
                 只有 h-full 的普通 block 会让 ChatView 的 flex-1 失效，草稿空态贴顶且内部滚动被外层裁掉。 */}
@@ -2243,7 +2244,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                               </div>
                             </AutomationsMainBreadcrumbFrame>
                           </main>
-                        ) : devVisitorFormal ? <DevFormalReadOnlyState /> : devFormalOverview ? <DevFormalProgressBody /> : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
+                        ) : devProposalSr ? <DevProposalSrReadOnlyState /> : devVisitorFormal ? <DevFormalReadOnlyState /> : devFormalOverview ? <DevFormalProgressBody /> : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
                           <main className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
                             {renderChatFindDialog()}
                             <ScopedErrorBoundary

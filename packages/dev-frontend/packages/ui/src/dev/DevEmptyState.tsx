@@ -34,3 +34,14 @@ export function DevEmptyState() {
   </section>
  </main>;
 }
+
+/** 提案以 IR 为讨论单位；SR 只阅读自身规格，不挂载任何聊天会话。 */
+export function DevProposalSrReadOnlyState() {
+ const dev = useDev()!;
+ return <main className="flex h-full min-h-0 flex-1 items-center justify-center p-6" data-testid="dev-proposal-sr-readonly">
+  <section className="max-w-md space-y-3 text-center">
+   <p className="text-ui-base leading-6 text-foreground-subtle">请进入所属 IR 讨论或修改需求。</p>
+   <Button variant="outline" onClick={() => dev.select({ projectId: dev.selection.projectId, irId: dev.selection.irId })}>返回 IR</Button>
+  </section>
+ </main>;
+}

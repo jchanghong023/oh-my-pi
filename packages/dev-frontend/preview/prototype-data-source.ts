@@ -48,6 +48,7 @@ export function createPrototypeDataSource(): DevDataSource {
     resolveSession: (view, selection) => {
       if (selection.proposalStep === "requirements-review" || selection.proposalStep === "intake") return undefined;
       const proposal = view.drafts.find(item => item.id === selection.irId);
+      if (proposal && selection.srId) return undefined;
       if (proposal && !selection.proposalStep && !selection.discussionPhase && (proposalDeliveryCurrent(proposal) || proposal.status === "requirements-pr" || (proposal.proposalStage !== "solution" && requirementsReviewCurrent(proposal)))) return undefined;
       if (!selection.srId && !selection.irAcceptance && view.groups.some(item => item.id === selection.irId)) return undefined;
       // 访客只浏览正式需求材料；同一 Web 的 Token 不意味着可读取所有者的开发聊天。

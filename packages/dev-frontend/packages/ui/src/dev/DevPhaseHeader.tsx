@@ -32,6 +32,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
   if (!group || !view) return placement === "document" ? null : <>{details}</>;
   const proposal = view.drafts.some(item => item.id === group.id);
   const sr = view.srs.find(item => item.id === selection.srId && item.irId === group.id);
+  if (proposal && sr) return null;
   const acceptance = group.acceptance;
   const phase = proposal ? proposalProgressIndex(group, selection) : sr ? Math.max(0, srStages.indexOf(sr.stage ?? "planning")) : !acceptance ? 0 : ["pr-ready", "pr-submitted", "completed"].includes(acceptance.status) ? 2 : 1;
   const selected = proposal ? proposalViewedIndex(group, selection)

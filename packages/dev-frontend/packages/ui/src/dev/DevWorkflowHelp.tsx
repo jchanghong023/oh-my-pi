@@ -4,7 +4,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 
 const steps = [
-  { section: "需求提案", sectionEn: "Proposal", title: "提出需求", titleEn: "Describe the need", description: "与业务需求 Agent 讨论，明确目标、范围和验收标准，形成整体需求 IR，并拆分为具体需求 SR。", descriptionEn: "Discuss goals, scope and acceptance criteria with the Requirements Agent. Organize the overall requirement (IR) into specific requirements (SRs)." },
+  { section: "需求提案", sectionEn: "Proposal", title: "提出需求", titleEn: "Describe the need", description: "进入提案 IR 与业务需求 Agent 讨论，明确目标、范围和验收标准，再拆分为 SR。提案中的 SR 只查看自身规格，讨论、修改和阶段推进统一从 IR 进入。", descriptionEn: "Discuss goals, scope and acceptance criteria in the proposal IR. Its SRs only show their own specifications; discussion, changes and stage actions belong to the IR." },
   { title: "检查需求", titleEn: "Review requirements", description: "业务需求评审 Agent 检查遗漏和矛盾，有问题则补充完善，有争议由人工决定。", descriptionEn: "The Business Requirements Review Agent checks for gaps and contradictions. Clarify issues and ask a person to resolve disagreements." },
   { title: "制定方案", titleEn: "Design the solution", description: "开发人员接手，由方案 Agent 制定技术方案和开发顺序；需要业务澄清时，退回补充。", descriptionEn: "A developer takes over and the Solution Agent prepares the technical design and development order. Business questions return for clarification." },
   { title: "确认入库", titleEn: "Approve the proposal", description: "人工确认需求与方案，通过 PR 评审并合并后，提案进入“正式需求”。", descriptionEn: "A person confirms the requirements and design. After the proposal PR is reviewed and merged, it appears under Formal Requirements." },
