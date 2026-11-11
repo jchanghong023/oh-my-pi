@@ -42,9 +42,10 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 	const allGroups = releaseId ? view?.groups.filter(group => group.releaseId === releaseId) ?? [] : [];
 	const allDrafts = releaseId ? view?.drafts.filter(group => group.releaseId === releaseId && !group.pendingFirstMessage) ?? [] : [];
 	const employeeId = getEmployeeId();
-	const development = view?.repositoryDevelopment;
+	const ownDevelopmentVisible = source.mode !== "prototype" || (source.backend?.kind === "developer" && Boolean(employeeId) && employeeId === source.backend.owner);
+	const development = ownDevelopmentVisible ? view?.repositoryDevelopment : undefined;
 	const activeSrs = development?.activeSrs ?? [];
-	const activeAcceptance = view?.groups.find(group => group.acceptance && group.acceptance.status !== "completed");
+	const activeAcceptance = ownDevelopmentVisible ? view?.groups.find(group => group.acceptance && group.acceptance.status !== "completed") : undefined;
 	const idleOwner = !activeSrs.length && !activeAcceptance ? view?.groups.find(group => development?.owners.some(owner => owner.irId === group.id && owner.projectId === group.projectId)) : undefined;
 	const updatePreferences = (patch: Partial<typeof preferences>) => {
 		updateSidebarPreferences(scope, patch);
@@ -60,8 +61,8 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 				{source.capabilities.workflowCommands.includes("createProposal") && <Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project || !releaseId} data-testid="new-requirement" onClick={() => { dev.startProposalDraft(); onNavigate?.(); }}><Plus className="size-4" />新建需求提案</Button>}
 				{source.mode === "prototype" && onOpenAutomations && <Button variant="ghost" size="lg" className={`w-full justify-start gap-2 ${automationsActive ? "bg-selected text-foreground" : ""}`} aria-pressed={automationsActive ?? false} data-testid="dev-automations-open" onClick={onOpenAutomations}><CalendarClock className="size-4" />自动化</Button>}
 			</div>
-            {activeSrs.length > 0 && <section className="shrink-0 space-y-1 border-t border-border/50 px-2 py-3" aria-label="仓库正在开发">
-              <div className="flex items-center justify-between px-2.5 text-ui-sm text-foreground-subtle"><span>正在开发</span><span data-testid="repository-sr-capacity">{activeSrs.length}/{development!.limit} 个 SR</span></div>
+            {(source.mode === "prototype" || activeSrs.length > 0) && <section className="shrink-0 space-y-1 border-t border-border/50 px-2 py-3" aria-label="仓库正在开发">
+              <div className="flex items-center justify-between px-2.5 text-ui-sm text-foreground-subtle"><span>正在开发</span><span data-testid="repository-sr-capacity">{activeSrs.length}/{development?.limit ?? 2}{source.mode !== "prototype" ? " 个 SR" : ""}</span></div>
               {activeSrs.map(sr => {
                 const group = view?.groups.find(item => item.id === sr.irId && item.projectId === sr.projectId);
                 const owner = development?.owners.find(item => item.irId === sr.irId && item.projectId === sr.projectId);
