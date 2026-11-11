@@ -16,7 +16,13 @@ export interface DevProject {
 export interface DevRelease { id: string; projectId: string; title: string; createdAt: string }
 export interface DevWorktree { path: string; branch: string; baseCommit: string }
 export interface DevProposalFeedbackNote { employeeId: string; returnedAt: string; reason: string; resumedAt?: string }
+export type DevReviewAgentId = "a" | "b" | "c" | "summary";
+export interface DevReviewAgent {
+ id: DevReviewAgentId; name: string; status: "pending" | "running" | "completed" | "failed";
+ session: DevNativeSessionRef; report: string; promptSnapshot?: string;
+}
 export interface DevReview {
+  agents?: DevReviewAgent[]; humanDecision?: { employeeId: string; decidedAt: string; reviewId: string };
   id: string; snapshotDigest: string; passed: boolean; report: string; modelConfig?: DevAgentModelBinding;
   inputFiles?: DevFileVersion[];
   requestedBy?: string; round?: number; findings?: { id: string; level: "blocking" | "suggestion"; message: string; documentPath: string }[];
@@ -139,7 +145,7 @@ export type DevWorkflowCommand = DevCommandBase & (
   | { type: "createProposal"; clientDraftId?: string; releaseId: string }
   | { type: "deleteRequirement"; version: 1; projectId: string; irId: string }
   | { type: "submitProposalReview" }
-  | { type: "acceptProposal" }
+  | { type: "acceptProposal"; reviewId?: string; snapshotDigest?: string }
   | { type: "runRequirementsReview" }
   | { type: "generateRequirements"; note: string }
   | { type: "supplementRequirements"; note: string }
@@ -179,7 +185,7 @@ export interface DevWorkflowResult {
   status: "completed" | "failed" | "running"; receipt: DevOperationReceipt; view?: DevWorkflowView;
   error?: string; deletion?: DevRequirementDeletion;
 }
-export interface DevSelection { materialPath?: string; proposalEditing?: boolean; proposalStep?: "requirements" | "requirements-review" | "solution" | "intake"; freeDraftId?: string; proposalDraftId?: string; proposalDraftReleaseId?: string; irAcceptance?: boolean; freeSessionId?: string; freeFiles?: boolean; projectId?: string; irId?: string; srId?: string; stage?: DevWorkflowStage; stageRound?: number; discussionPhase?: "requirements" | "solution" }
+export interface DevSelection { reviewAgent?: DevReviewAgentId; materialPath?: string; proposalEditing?: boolean; proposalStep?: "requirements" | "requirements-review" | "solution" | "intake"; freeDraftId?: string; proposalDraftId?: string; proposalDraftReleaseId?: string; irAcceptance?: boolean; freeSessionId?: string; freeFiles?: boolean; projectId?: string; irId?: string; srId?: string; stage?: DevWorkflowStage; stageRound?: number; discussionPhase?: "requirements" | "solution" }
 export interface DevNativeSurfaceTarget extends DevObjectRef {
   sessionId: string; phase: DevNativeSessionRef["phase"]; round: number; clientId: string;
 }
@@ -219,7 +225,7 @@ export interface DevAgentModelSettings {
 	agents: DevAgentModel[];
 }
 
-export type DevAgentRole = "requirements" | "requirements-review" | "solution" | "planning" | "execution" | "ir-acceptance" | "skill-design";
+export type DevAgentRole = "requirements" | "requirements-review-a" | "requirements-review-b" | "requirements-review-c" | "requirements-review" | "solution" | "planning" | "execution" | "ir-acceptance" | "skill-design";
 export interface DevAgentModelBinding {
  role: DevAgentRole;
  roleName: string;

@@ -35,7 +35,7 @@ export function DevProposalControls({ group }: { group: DevRequirementGroup }) {
   {!history && phase === "requirements" && <div className="space-y-2">
    {group.returnFeedback && <div className="rounded-md border border-border p-2 text-ui-sm" data-testid="proposal-return-feedback"><p className="whitespace-pre-wrap break-words">开发反馈：{group.returnFeedback.reason}</p><p className="text-foreground-subtle">由 {group.returnFeedback.employeeId} 打回业务补充，旧方案已失效。</p></div>}
    <Button size="sm" data-testid="proposal-submit-review" disabled={dev.pending || group.status !== "draft" || !!reviewBlocker || Boolean(group.developerHandoff)} title={reviewBlocker} onClick={() => void dev.command({ type: "submitProposalReview", ...target })}>{group.developerHandoff ? "已交给开发，等待接手" : "提交给开发"}</Button>
-   {group.developerHandoff && !accepted && <Button size="sm" data-testid="proposal-accept" disabled={dev.pending || !!reviewBlocker} title={reviewBlocker} onClick={() => void dev.command({ type: "acceptProposal", ...target })}>接手方案评审</Button>}
+   {group.developerHandoff && !accepted && <Button size="sm" data-testid="proposal-accept" disabled={dev.pending || !!reviewBlocker} title={reviewBlocker} onClick={() => void dev.command({ type: "acceptProposal", ...target, reviewId: group.review?.id, snapshotDigest: group.review?.snapshotDigest })}>接手方案评审</Button>}
    <p className="text-ui-sm text-foreground-subtle">当前版本业务需求评审通过后，交给开发人员；明确接手后才进入方案阶段，此时无需 design.md。</p>
   </div>}
   {!history && phase === "solution" && <div className="space-y-2">

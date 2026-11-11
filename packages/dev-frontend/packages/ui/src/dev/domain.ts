@@ -29,12 +29,18 @@ export function requirementsDecisionCurrent(group: DevRequirementGroup, decision
  return Boolean(files && requirementsReviewCurrent(group) && decision.reviewId === group.review?.id
   && decision.snapshotDigest === group.snapshot?.digest && sameFileVersions(files, decision.inputFiles));
 }
-export function requirementsReviewBlocker(group: DevRequirementGroup): string | undefined {
- const files = requirementsReviewInputs(group);
- if (!files) return "请先补齐 IR 与至少一个 SR 的需求材料，再发起业务需求评审。";
- if (!group.review) return "尚未完成业务需求评审，请先检查当前需求版本。";
+/** Human approval is separate from the models' recommendations. */
+export function requirementsReviewReadyBlocker(group: DevRequirementGroup): string | undefined {
+ if (!requirementsReviewInputs(group)) return "请先补齐 IR 与至少一个 SR 的需求材料，再发起需求评审。";
+ if (!group.review) return "尚未发起当前需求版本的评审。";
  if (!requirementsReviewCurrent(group)) return "需求版本已变化，旧评审已失效，请重新评审。";
- if (!group.review.passed || group.review.findings?.some(item => item.level === "blocking")) return "只读评审报告了问题，可直接向评审 Agent 询问；需要补充时返回业务 Agent 修改需求后重评。";
+ const agents = group.review.agents;
+ if (agents && (["a", "b", "c", "summary"].some(id => !agents.some(agent => agent.id === id && agent.status === "completed" && Boolean(agent.report.trim()))))) return "请先完成三个独立评审和综合意见；失败或未完成的报告不能作为完整评审依据。";
+}
+export function requirementsReviewBlocker(group: DevRequirementGroup): string | undefined {
+ const issue = requirementsReviewReadyBlocker(group);
+ if (issue) return issue;
+ if (!group.review!.passed || (group.review!.agents && group.review!.humanDecision?.reviewId !== group.review!.id)) return "综合意见已就绪，请由人工判断通过或返回业务补充；模型意见不自动放行。";
 }
 
 /** Opaque in-memory version, not a real Git commit or content hash. */
@@ -276,6 +282,7 @@ export function proposalViewedIndex(group: DevRequirementGroup, selection: DevSe
 export function proposalActorLabel(group: DevRequirementGroup): string {
  if (group.status === "requirements-pr" || proposalDeliveryCurrent(group)) return `入库开发 ${group.proposalDelivery?.confirmedBy ?? "待确认"}`;
  if (group.proposalStage === "solution") return hasCurrentProposalSolution(group) ? "具备个人 Web 和开发项目的开发人员入库" : `方案开发 ${group.developerAcceptance?.employeeId ?? "待确认"}`;
+ if (requirementsReviewCurrent(group) && !requirementsReviewReadyBlocker(group) && !group.review?.humanDecision) return "人工判断综合意见";
  if (requirementsReviewCurrent(group) && !requirementsReviewBlocker(group)) return group.returnFeedback ? `开发 ${group.returnFeedback.employeeId} 继续方案` : "开发人员进入方案";
  return `业务 ${group.proposalLocation?.employeeId ?? "提出人"} 补充需求`;
 }

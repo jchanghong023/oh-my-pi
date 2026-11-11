@@ -8,7 +8,7 @@ import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { useDev } from "./DevContext.js";
 import { useDevDataSource } from "./data-source.js";
 import { getEmployeeId } from "./identity.js";
-import { deriveStageView, hasCurrentProposalSolution, proposalProgressIndex, proposalViewedIndex, irAcceptanceBlocker, irAcceptanceReportBlocker, irAcceptanceVersionBlocker, requirementsReviewBlocker, requirementsReviewInputs, srStartBlocker, stageMaterialBlocker } from "./domain.js";
+import { requirementsReviewReadyBlocker, deriveStageView, hasCurrentProposalSolution, proposalProgressIndex, proposalViewedIndex, irAcceptanceBlocker, irAcceptanceReportBlocker, irAcceptanceVersionBlocker, requirementsReviewBlocker, requirementsReviewInputs, srStartBlocker, stageMaterialBlocker } from "./domain.js";
 import { DevProposalDeliveryControls } from "./DevProposalDeliveryControls.js";
 import { proposalActorLabel } from "./domain.js";
 import { DevSrDeliveryControls } from "./DevSrDeliveryControls.js";
@@ -42,7 +42,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
   const readOnly = proposal ? !source.capabilities.proposalDiscussion && !(phase >= 2 && hasCurrentProposalSolution(group) && source.capabilities.codeDevelopment) : !source.capabilities.codeDevelopment || Boolean(sr && sr.developerEmployeeId && sr.developerEmployeeId !== getEmployeeId());
   const running = view.running.some(item => item.sessionId === dev.session?.sessionId);
   const complete = sr?.status === "completed" || (!proposal && !sr && acceptance?.status === "completed");
-  const role = proposal ? ["业务需求 Agent", "业务需求评审 Agent", "方案 Agent", "人工确认与 PR 合并"][selected]
+  const role = proposal ? ["业务需求 Agent", group.review?.agents?.find(agent => agent.id === (selection.reviewAgent ?? "summary"))?.name ?? "综合评审 Agent", "方案 Agent", "人工确认与 PR 合并"][selected]
     : sr ? selected === 0 ? "计划 Agent" : "执行 Agent" : selected === 0 ? "各 SR 分别开发" : "IR 验收 Agent";
   const reviewIssue = requirementsReviewBlocker(group);
   const materialIssue = sr ? stageMaterialBlocker(sr, view.materials) : undefined;
@@ -66,8 +66,10 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
   else if (proposal) {
     if (phase === 0) { if (group.returnFeedback && !group.returnFeedback.resumedAt) status = "待业务补充"; else if (!requirementsReviewInputs(group)) status = "需求文档待完成"; action = <Button size="sm" disabled={pending || running || !requirementsReviewInputs(group)} title={!requirementsReviewInputs(group) ? "请先在聊天中完成需求文档" : "检查右侧需求文件后，人工发起评审"} onClick={() => void dev.command({ type: "runRequirementsReview", ...target })}>发起需求评审</Button>; }
     else if (phase === 1) {
-      status = reviewIssue ? "发现待补充问题" : "评审通过";
-      action = <Button size="sm" disabled={pending || running || !!reviewIssue} title={reviewIssue} onClick={() => void dev.command({ type: "acceptProposal", ...target })}>下一步：技术方案</Button>;
+      const readyIssue = requirementsReviewReadyBlocker(group);
+      status = readyIssue ? readyIssue : group.review?.humanDecision ? "已人工通过 · 可进入方案" : "综合意见已就绪 · 等待人工判断";
+      action = selection.reviewAgent && selection.reviewAgent !== "summary" ? <Button size="sm" variant="outline" onClick={() => dev.select({ ...selection, reviewAgent: "summary" })}>查看综合意见</Button>
+       : <Button size="sm" disabled={pending || running || !!readyIssue} title={readyIssue ?? "我已查看综合意见，由我判断本轮需求可以进入方案"} onClick={() => void dev.command({ type: "acceptProposal", ...target, reviewId: group.review?.id, snapshotDigest: group.review?.snapshotDigest })}>通过，进入技术方案</Button>;
     } else if (phase === 2) {
       status = hasCurrentProposalSolution(group) ? "方案已完成 · 待个人项目入库" : ownsSolution ? "等待完成技术设计" : "等待方案开发人处理";
       action = hasCurrentProposalSolution(group) ? <DevProposalDeliveryControls group={group} compact /> : <Button size="sm" disabled={pending || running || !ownsSolution || !!reviewIssue} title={reviewIssue} onClick={() => void dev.command({ type: "generateProposalSolution", ...target })}>生成技术方案</Button>;
@@ -95,7 +97,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
     if (readOnly) guidance = "当前 Web 只能查看提案，请进入 j00808874 的 Web 讨论或修改。";
     else if (running || pending) guidance = running ? "Agent 正在工作，完成后再检查文档并操作。" : "正在更新，请稍候。";
     else if (phase === 0) guidance = group.returnFeedback && !group.returnFeedback.resumedAt ? "请与业务需求 Agent 讨论最新待处理意见，由 AI 补充 IR／SR；文件更新后再发起评审。" : requirementsReviewInputs(group) ? "检查 proposal.md 与全部 SR 的 spec.md 后，发起需求评审。" : "请先在 IR 聊天中完善需求，生成 proposal.md 和 SR 规格。";
-    else if (phase === 1) guidance = reviewIssue ? "评审 Agent 只读报告问题，可直接对话询问；需补充需求时点上一步，由业务 Agent 修改 IR／SR 后重评。" : "评审通过；开发人员点击下一步，在 A 的 OMP 与方案 Agent 对话，不要求个人开发项目。";
+    else if (phase === 1) guidance = requirementsReviewReadyBlocker(group) ?? "请阅读综合意见，由你判断通过或返回业务补充；模型的建议与分歧不会自动判定结果。";
     else if (hasCurrentProposalSolution(group) && !source.capabilities.codeDevelopment) guidance = "需求和方案已就绪。入库请进入自己启动的 OMP Web，并配置自己的开发项目；AI 负责复制草稿、提交及推送。";
     else if (hasCurrentProposalSolution(group) && !source.projects?.readDevelopmentRoot(group.projectId)) guidance = "入库前，请先在设置中配置自己的 Git 开发项目；无需人工复制或编辑文件。";
     else if (!ownsSolution && phase === 2 && !hasCurrentProposalSolution(group)) guidance = `方案由 ${group.developerAcceptance?.employeeId ?? "开发人员"} 在 A 的 OMP 处理，当前仅查看。`;
@@ -117,7 +119,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
       <div className="shrink-0 border-t border-border bg-background p-3" data-testid="dev-document-actions" aria-label="文档确认与阶段操作">
         {guidance && <p className="mb-2 text-ui-sm leading-5 text-foreground-subtle" role="status" data-testid="dev-action-guidance">{guidance}</p>}
         <div className="flex w-full items-center justify-between gap-3" data-testid="dev-phase-actions">
-          {canBack ? <Button size="sm" variant="outline" disabled={pending || running} onClick={() => { if (proposal && phase === 1) { dev.select({ ...selection, proposalEditing: true, proposalStep: "requirements", discussionPhase: "requirements" }); return; } setReason(""); setBackStage("planning"); setBack(true); }}><RotateCcw className="size-3" />{proposal && phase === 2 ? "退出方案，退回业务补充" : proposal ? "上一步：业务需求" : "回退"}</Button> : <span />}
+          {canBack ? <Button size="sm" variant="outline" disabled={pending || running} onClick={() => { if (proposal && phase === 1) { dev.select({ ...selection, proposalEditing: true, proposalStep: "requirements", discussionPhase: "requirements" }); return; } setReason(""); setBackStage("planning"); setBack(true); }}><RotateCcw className="size-3" />{proposal && phase === 2 ? "退出方案，退回业务补充" : proposal ? "返回业务补充" : "回退"}</Button> : <span />}
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
             {source.mode === "prototype" && sr?.status === "developing" && !history && sr.developerEmployeeId === getEmployeeId() && materialIssue && <Button size="sm" variant="outline" disabled={pending || running} onClick={() => void dev.command({ type: "generateStageMaterials", stage: sr.stage!, round: sr.round })}>生成当前阶段材料（演示）</Button>}
             {action}
@@ -128,11 +130,11 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
 
     </>;
   }
-  const actor = proposal && !(phase === 2 && hasCurrentProposalSolution(group)) ? proposalActorLabel(group) : undefined;
+  const actor = proposal && selected !== 1 && !(phase === 2 && hasCurrentProposalSolution(group)) ? proposalActorLabel(group) : undefined;
   const statusText = `${role} · ${status}${actor ? ` · ${actor}` : ""}`;
   return <header className="shrink-0 space-y-1 border-b border-border px-4 py-2" data-testid="dev-phase-header">
     <div className="flex min-w-0 justify-center" data-testid="dev-phase-toolbar">
-      <DevWorkflowTimeline labels={labels} phase={phase} selected={selected} complete={complete} running={running} proposal={proposal} sr={Boolean(sr)} rounds={labels.map((_, index) => proposal ? index === 0 ? group.proposalRound ?? 1 : index === 1 ? group.review?.round ?? 0 : index === 2 ? Math.max(0, ...group.sessions.filter(item => item.phase === "solution").map(item => item.round)) : 0 : sr?.round ?? 1)} returned={Boolean(proposal && group.returnFeedback)} canNavigate={proposal ? Boolean(source.capabilities.proposalDiscussion) : Boolean(source.capabilities.codeDevelopment)} entered={labels.map((_, index) => proposal ? index <= phase || (index === 1 && !!group.review) || (index === 2 && group.sessions.some(item => item.phase === "solution")) || (index === 3 && !!group.proposalDelivery) : sr ? index === 0 || sr.sessions.some(item => item.phase === srStages[index]) : index === 0 || Boolean(acceptance && index <= phase))} onSelect={jump} />
+      <DevWorkflowTimeline labels={labels} phase={phase} selected={selected} complete={complete} running={running} review={proposal ? group.review : undefined} reviewAgent={selection.reviewAgent} canOpenReview={Boolean(proposal && source.capabilities.proposalDiscussion)} onSelectReview={id => dev.select({ ...selection, proposalStep: "requirements-review", discussionPhase: "requirements", reviewAgent: id, materialPath: undefined })} proposal={proposal} sr={Boolean(sr)} rounds={labels.map((_, index) => proposal ? index === 0 ? group.proposalRound ?? 1 : index === 1 ? group.review?.round ?? 0 : index === 2 ? Math.max(0, ...group.sessions.filter(item => item.phase === "solution").map(item => item.round)) : 0 : sr?.round ?? 1)} returned={Boolean(proposal && group.returnFeedback)} canNavigate={proposal ? Boolean(source.capabilities.proposalDiscussion) : Boolean(source.capabilities.codeDevelopment)} entered={labels.map((_, index) => proposal ? index <= phase || (index === 1 && !!group.review) || (index === 2 && group.sessions.some(item => item.phase === "solution")) || (index === 3 && !!group.proposalDelivery) : sr ? index === 0 || sr.sessions.some(item => item.phase === srStages[index]) : index === 0 || Boolean(acceptance && index <= phase))} onSelect={jump} />
 
     </div>
     <p className={`truncate text-center text-ui-sm ${dev.error ? "text-destructive" : "text-foreground-subtle"}`} title={dev.error ?? statusText} role={dev.error ? "alert" : undefined} data-testid="dev-phase-agent">{dev.error ? `操作失败：${dev.error}` : statusText}</p>

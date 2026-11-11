@@ -1,3 +1,4 @@
+import { DevReviewNavigation } from "./DevReviewNavigation.js";
 import { DevProposalFeedback } from "./DevProposalFeedback.js";
 import { DevPhaseHeader, DevDocumentPhaseActions } from "./DevPhaseHeader.js";
 import { useDevDataSource } from "./data-source.js";
@@ -16,7 +17,7 @@ import { useZCodeStore } from "@/store/StoreProvider.js";
 import { DevDeleteRequirement } from "./DevDeleteRequirement.js";
 export { DevSidebar } from "./DevSidebar.js";
 export { DevProjectSettings } from "./DevProjectSettings.js";
-export function DevStageHeader() { return <><DevPhaseHeader details={<DevEmptySelectionHeader />} /><DevProposalFeedback /></>; }
+export function DevStageHeader() { return <><DevPhaseHeader details={<DevEmptySelectionHeader />} /><DevReviewNavigation /><DevProposalFeedback /></>; }
 
 function DevEmptySelectionHeader() {
  const source = useDevDataSource();

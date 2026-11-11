@@ -17,7 +17,7 @@ export function proposalPhaseLabel(group: DevRequirementGroup): string {
 export function proposalProcessingHint(group: DevRequirementGroup): string {
  const phase = proposalProgressIndex(group);
  if (phase === 3) return "入库中";
- if (phase === 1) return group.review?.passed ? "待开发" : "待业务补充";
+ if (phase === 1) return group.review?.humanDecision ? "已人工通过" : "待人工判断";
  if (group.returnFeedback && !group.returnFeedback.resumedAt) return "待业务补充";
  if (phase === 2) return group.status === "solution-ready" ? "待入库" : "方案中";
  return "业务需求";

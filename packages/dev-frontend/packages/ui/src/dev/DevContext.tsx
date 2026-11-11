@@ -182,7 +182,7 @@ export function DevProvider({ children }: { children: ReactNode }) {
       else if (value.type === "beginProposalRevision") select({ projectId: result.projectId, irId: result.irId, discussionPhase: "requirements" });
       else if (value.type === "startIrAcceptance") select({ projectId: target.projectId, irId: target.irId, irAcceptance: true });
       else if (value.type === "markRequirementsMerged") select({ projectId: target.projectId, irId: target.irId });
-      else if (value.type === "runRequirementsReview" || value.type === "submitProposalReview") select({ ...target, discussionPhase: "requirements", proposalStep: "requirements-review", proposalEditing: undefined });
+      else if (value.type === "runRequirementsReview" || value.type === "submitProposalReview") select({ ...target, discussionPhase: "requirements", proposalStep: "requirements-review", reviewAgent: undefined, proposalEditing: undefined });
       else if (["acceptProposal", "generateProposalSolution", "returnProposal"].includes(value.type)) select({ ...target, materialPath: undefined, discussionPhase: undefined, proposalStep: undefined, proposalEditing: undefined });
       else if (value.type === "deleteRequirement") select({ projectId: target.projectId });
       else if (["startSr", "approveStage", "backStage"].includes(value.type)) select({ projectId: target.projectId, irId: target.irId, srId: target.srId });

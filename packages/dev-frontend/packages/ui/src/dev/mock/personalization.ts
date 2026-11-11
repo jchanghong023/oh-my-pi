@@ -1,6 +1,7 @@
 import { requirePrototypeSettingsWrite } from "./backend.js";
 // 仅用于编辑器演示的静态文本；不注入任何真实 Agent。
 import requirements from "./prompts/requirements.md?raw";
+import independentReview from "./prompts/requirements-review-independent.md?raw";
 import requirementsReview from "./prompts/requirements-review.md?raw";
 import solution from "./prompts/solution.md?raw";
 import planning from "./prompts/planning.md?raw";
@@ -13,6 +14,9 @@ export interface PrototypeAgentPrompts { [agentId: string]: string }
 const samples: PrototypeAgentPrompts = {
 	requirements,
 	"requirements-review": requirementsReview,
+  "requirements-review-a": independentReview,
+  "requirements-review-b": independentReview,
+  "requirements-review-c": independentReview,
 	solution,
 	planning,
 	execution,

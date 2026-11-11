@@ -30,7 +30,8 @@ import proposalDiscussionPrompt from "./prompts/proposal-discussion.md?raw";
 import irAcceptanceRequest from "./ir-acceptance-request.md?raw";
 import irAcceptanceWelcome from "./ir-acceptance-welcome.md?raw";
 import skillDesignWelcome from "./skill-design-welcome.md?raw";
-import requirementsReviewPrompt from "./prompts/requirements-review.md?raw";
+import independentReviewPrompt from "./requirements-review-independent-request.md?raw";
+import requirementsReviewPrompt from "./requirements-review-request.md?raw";
 import requirementsReviewDialogue from "./requirements-review-dialogue.md?raw";
 import requirementsGenerated from "./requirements-generated.md?raw";
 import requirementsSupplemented from "./requirements-supplemented.md?raw";
@@ -140,10 +141,10 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       || (group?.id === "ir-auth" && sr?.id === "sr-permissions" && stage === "executing")
       || (group?.id === "ir-auth" && sr?.id === "sr-audit" && stage === "pr");
     const snapshot = conversation(sessionId, stage, title, sampleStage ? PROTOTYPE_CHAT_DISCUSSIONS[stage] : []);
-    const boundReview = group && [group.review, ...(group.reviewHistory ?? [])].find(review => review?.reviewer.sessionId === sessionId);
+    const boundReview = group && [group.review, ...(group.reviewHistory ?? [])].find(review => review?.reviewer.sessionId === sessionId || review?.agents?.some(agent => agent.session.sessionId === sessionId));
     if (stage === "requirements-review" && boundReview) {
       snapshot.rows.window = [];
-      appendRows(snapshot.rows.window, sessionId, requirementsReviewPrompt, boundReview.report, initialTime);
+      appendRows(snapshot.rows.window, sessionId, boundReview.agents?.some(agent => agent.id !== "summary" && agent.session.sessionId === sessionId) ? independentReviewPrompt : requirementsReviewPrompt, boundReview.agents?.find(agent => agent.session.sessionId === sessionId)?.report ?? boundReview.report, initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
     }
     if (ref && group && !group.proposalLocation && !sampleStage) {
@@ -274,7 +275,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       const reason = conversationReadOnlyReason(view, { projectId: ref.projectId, irId: ref.irId, srId: ref.srId, ...(ref.phase === "ir-acceptance" ? { irAcceptance: true } : ref.phase === "requirements" || ref.phase === "solution" ? { discussionPhase: ref.phase } : { stage: ref.phase, stageRound: ref.round }) }, { codeDevelopment: prototypeCodeDevelopmentAllowed(), proposalDiscussion: prototypeProposalDiscussionAllowed() });
       if (reason) throw new Error(reason);
       const proposal = getPrototypeWorkflow({ projectId: project.id, irId: ref.irId }).drafts.find(item => item.id === ref.irId);
-      if (ref.role === "reviewer" && (!proposal || !requirementsReviewCurrent(proposal) || proposal.review?.reviewer.sessionId !== ref.sessionId)) throw new Error("当前为历史评审或需求版本已变化，仅供只读查看；请评审当前版本后再对话。");
+      if (ref.role === "reviewer" && (!proposal || !requirementsReviewCurrent(proposal) || !([proposal.review?.reviewer.sessionId, ...(proposal.review?.agents?.map(agent => agent.session.sessionId) ?? [])].includes(ref.sessionId)))) throw new Error("当前为历史评审或需求版本已变化，仅供只读查看；请评审当前版本后再对话。");
       if (ref.phase === "requirements" && ref.role !== "reviewer" && proposal && content.trim()) {
         generated = !proposal.srIds.length;
         applyPrototypeAction({ type: generated ? "generateRequirements" : "supplementRequirements", projectId: project.id, irId: proposal.id, note: content }, { projectId: project.id, irId: proposal.id, discussionPhase: "requirements" });

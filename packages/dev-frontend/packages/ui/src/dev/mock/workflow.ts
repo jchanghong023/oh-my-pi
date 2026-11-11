@@ -14,8 +14,8 @@ import { prototypeRecoveryScenario, prototypeSessionReadIssue, prototypeMaterial
 import { readPrototypeAgentModelBinding } from "./agent-models.js";
 import { stageMaterialBlocker } from "../domain.js";
 import { readPrototypeProposalPrHandoff } from "./proposal-pr-handoff.js";
-import { createPrototypeRequirementsReview } from "./requirements-review.js";
-import { requirementsReviewBlocker, requirementsReviewCurrent, requirementsReviewInputs, proposalViewedIndex } from "../domain.js";
+import { createPrototypeRequirementsReview, prototypeReviewSessions, prototypeReviewModelBindings } from "./requirements-review.js";
+import { requirementsReviewReadyBlocker, requirementsReviewBlocker, requirementsReviewCurrent, requirementsReviewInputs, proposalViewedIndex } from "../domain.js";
 import { getEmployeeId, isEmployeeId } from "../identity.js";
 import { prototypeChangeRoot, prototypeSpecPath, prototypeProposalLocation } from "./proposal-storage.js";
 import { hasCurrentProposalSolution } from "../domain.js";
@@ -196,6 +196,7 @@ export function createPrototypeWorkflow(): DevWorkflowView {
   const materials = [...groups, ...drafts].flatMap(item => requirementMaterials(item.projectId, item.id, item.title, srs.filter(sr => sr.irId === item.id)));
   for (const item of [...groups, drafts[1]!, reviewProposal, readyProposal, intakeProposal]) item.review = createPrototypeRequirementsReview(item, "j00808874", true);
   drafts[1]!.review!.createdAt = "2026-11-09T09:00:00.000Z";
+  reviewProposal.review!.passed = false; reviewProposal.review!.humanDecision = undefined;
   reviewProposal.review!.createdAt = "2026-11-10T11:00:00.000Z";
   readyProposal.review!.createdAt = "2026-11-10T11:30:00.000Z";
   intakeProposal.review!.createdAt = "2026-11-10T13:00:00.000Z";
@@ -223,8 +224,7 @@ export function createPrototypeWorkflow(): DevWorkflowView {
   materials.push(...srs.filter(sr => sr.status !== "pending").flatMap(sr => developmentMaterials(sr.projectId, sr.irId, sr.id, sr.title).filter(item => sr.materials.some(file => file.path === item.path))));
   if (prototypeRecoveryScenario === "review-chat") drafts[0]!.review = createPrototypeRequirementsReview(drafts[0]!, "j00808876");
   for (const group of [...groups, ...drafts]) {
-    const reviewer = group.review?.reviewer;
-    if (reviewer && "projectId" in reviewer) group.sessions.push(reviewer);
+    if (group.review) group.sessions.push(...prototypeReviewSessions(group.review));
   }
   const result: DevWorkflowView = { version: 1, revision: 12, ...sharedSettings, releases: readPrototypeProjectReleases(), currentProjectId: DEFAULT_SELECTION.projectId,
     groups, drafts, srs, materials, repositoryHeads: Object.fromEntries(sharedSettings.projects.map(project => [project.repositoryId, `sample-default-${project.repositoryId}`])), operations: [receipt("需求样例整理", 1, "ir-auth"), receipt("提案方案已随需求合入（样例）", 2, "ir-auth"),
@@ -290,7 +290,7 @@ export function resolvePrototypeSession(view: DevWorkflowView, selection: DevSel
   if (selection.irAcceptance) return view.groups.find(item => item.id === selection.irId)?.acceptance?.session;
   const proposal = view.drafts.find(item => item.projectId === projectId && item.id === selection.irId);
   if (proposal && !selection.srId && proposalViewedIndex(proposal, selection) === 1) {
-    const reviewer = proposal.review?.reviewer;
+    const reviewer = proposal.review?.agents?.find(agent => agent.id === (selection.reviewAgent ?? "summary"))?.session ?? proposal.review?.reviewer;
     return reviewer && "projectId" in reviewer ? reviewer : undefined;
   }
   if (proposal) return proposal.sessions.filter(item => item.projectId === projectId && item.irId === proposal.id && !item.srId && item.role !== "reviewer" && item.phase === (selection.discussionPhase ?? proposal.proposalStage ?? "requirements")).sort((a, b) => b.round - a.round)[0];
@@ -391,9 +391,11 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
     if (!isEmployeeId(getEmployeeId())) throw new Error("请先输入有效工号。");
   }
   if (targetProposal && ["submitProposalReview", "acceptProposal", "generateProposalSolution", "markRequirementsPrSubmitted", "markRequirementsMerged"].includes(action.type)) {
-    const blocker = requirementsReviewBlocker(targetProposal);
+    const blocker = action.type === "acceptProposal" ? requirementsReviewReadyBlocker(targetProposal) : requirementsReviewBlocker(targetProposal);
     if (blocker) throw new Error(blocker);
   }
+  if (action.type === "runRequirementsReview") prototypeReviewModelBindings();
+  if (action.type === "acceptProposal" && targetProposal?.review?.agents && (action.reviewId !== targetProposal.review.id || action.snapshotDigest !== targetProposal.review.snapshotDigest)) throw new Error("人工通过须绑定当前综合意见和需求版本，请刷新后重新判断。");
   if (action.type === "runRequirementsReview" && targetProposal && !requirementsReviewInputs(targetProposal)) throw new Error("请先补齐 IR 与全部 SR 需求材料，不能对空提案生成通过记录。");
   if (action.type === "acceptProposal" && (targetProposal?.proposalStage !== "requirements" || targetProposal.status !== "draft")) throw new Error("请先完成当前需求版本的评审，再进入技术方案。");
   if (action.type === "acceptProposal" && targetProposal?.developerAcceptance?.round === (targetProposal?.proposalRound ?? 1)) throw new Error("本轮提案已有接手开发人员，不能重复接手或覆盖他人的记录。");
@@ -509,6 +511,8 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       operation.type = `由 ${getEmployeeId()} 交给开发，保留业务需求阶段等待接手（原型）`;
       break;
     case "acceptProposal": {
+      currentGroup!.review!.passed = true;
+      currentGroup!.review!.humanDecision = { employeeId: getEmployeeId(), decidedAt: new Date().toISOString(), reviewId: currentGroup!.review!.id };
       currentGroup!.proposalStage = "solution";
       currentGroup!.developerHandoff ??= { employeeId: getEmployeeId(), submittedAt: new Date().toISOString() };
       if (currentGroup!.returnFeedback) currentGroup!.returnFeedback.resumedAt = new Date().toISOString();
@@ -517,19 +521,18 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
         const session = sessionRef(projectId, currentGroup!.id, "solution", undefined, undefined, currentGroup!.proposalRound ?? 1);
         currentGroup!.sessions.push(session); state.sessions.push(session);
       }
-      operation.type = `开发人员 ${getEmployeeId()} 接手本轮提案，进入方案阶段（原型）`;
+      operation.type = `由 ${getEmployeeId()} 人工通过当前综合意见并进入技术方案（原型）`;
       break;
     }
-    case "runRequirementsReview":
+    case "runRequirementsReview": {
       if (currentGroup!.review) { currentGroup!.reviewHistory ??= []; currentGroup!.reviewHistory.push(structuredClone(currentGroup!.review)); }
       currentGroup!.revision += 1;
       currentGroup!.review = createPrototypeRequirementsReview(currentGroup!, getEmployeeId());
-      if ("projectId" in currentGroup!.review.reviewer) {
-        const reviewer = currentGroup!.review.reviewer;
-        currentGroup!.sessions.push(reviewer); state.sessions.push(reviewer);
-      }
-      operation.type = "只读需求评审 Agent 报告问题并进入评审对话（静态演示）";
+      const reviewers = prototypeReviewSessions(currentGroup!.review);
+      currentGroup!.sessions.push(...reviewers); state.sessions.push(...reviewers);
+      operation.type = "三模型并行评审后由第四个 Agent 综合意见，等待人工判断（固定样例，未调用模型）";
       break;
+    }
     case "recordRequirementsDecision":
       currentGroup!.requirementsDecisions ??= [];
       currentGroup!.requirementsDecisions.push({
