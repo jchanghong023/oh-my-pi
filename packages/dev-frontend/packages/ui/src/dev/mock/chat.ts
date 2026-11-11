@@ -266,9 +266,11 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     let generated: boolean | undefined;
     // 与输入框共用同一归属规则，避免快捷发送绕过只读提示；不实现真实鉴权。
     for (const project of getPrototypeWorkflow().projects) {
-      const view = getPrototypeWorkflow({ projectId: project.id });
-      const ref = view.sessions.find(item => item.sessionId === value.meta.taskId);
+      const index = getPrototypeWorkflow({ projectId: project.id });
+      const ref = index.sessions.find(item => item.sessionId === value.meta.taskId);
       if (!ref) continue;
+      // 首发中的提案对普通列表隐藏；按目标 IR 读取，才能正确识别它的讨论权限。
+      const view = getPrototypeWorkflow({ projectId: ref.projectId, irId: ref.irId });
       const reason = conversationReadOnlyReason(view, { projectId: ref.projectId, irId: ref.irId, srId: ref.srId, ...(ref.phase === "ir-acceptance" ? { irAcceptance: true } : ref.phase === "requirements" || ref.phase === "solution" ? { discussionPhase: ref.phase } : { stage: ref.phase, stageRound: ref.round }) }, { codeDevelopment: prototypeCodeDevelopmentAllowed(), proposalDiscussion: prototypeProposalDiscussionAllowed() });
       if (reason) throw new Error(reason);
       const proposal = getPrototypeWorkflow({ projectId: project.id, irId: ref.irId }).drafts.find(item => item.id === ref.irId);

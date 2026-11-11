@@ -216,6 +216,10 @@ export function irFinalPackageBlocker(view: DevWorkflowView, group: DevRequireme
 /** Display ownership hints only; a browser employee ID is never authorization. */
 export function conversationReadOnlyReason(view: DevWorkflowView | undefined, selection: DevSelection, access?: { proposalDiscussion?: boolean; codeDevelopment?: boolean }): string | undefined {
  if (!view || selection.freeSessionId) return;
+ // 首发前还没有 IR 编号，但它属于提案讨论，不能回落到正式需求的开发权限。
+ if (selection.proposalDraftId) return access?.proposalDiscussion === false
+  ? "提案由 j00808874 的 OMP 管理。当前 Web 只读，请进入 A 的 Web 讨论或修改。"
+  : undefined;
  const proposal = view.drafts.find(item => item.id === selection.irId);
  if (proposal) {
   if (access?.proposalDiscussion === false) return "提案由 j00808874 的 OMP 管理。当前 Web 只读，请进入 A 的 Web 讨论或修改。";
