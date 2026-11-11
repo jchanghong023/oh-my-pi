@@ -1,5 +1,5 @@
 import { useDev } from "@/dev/DevContext.js";
-import { DevCollabProjection } from "@/dev/DevCollabProjection.js";
+import { DevRequirementMenu } from "@/dev/DevRequirementMenu.js";
 import { WorkspaceEditorButtonGroup } from "@/WorkspaceEditorButtonGroup.js";
 import { WorkspaceSidePaneToggleButton } from "@/WorkspaceSidePaneToggleButton.js";
 import type { WorkspaceHeaderActionSectionProps } from "@/WorkspaceHeaderSections/shared.js";
@@ -20,7 +20,7 @@ export function WorkspaceHeaderActionSection({
   hideHelpMenu = false,
 }: WorkspaceHeaderActionSectionProps) {
   const dev = useDev();
-  const proposal = Boolean(!dev?.selection.srId && dev?.view?.drafts.some(item => item.id === dev.selection.irId));
+  const formal = !dev?.selection.freeSessionId ? dev?.view?.groups.find(item => item.id === dev.selection.irId && item.projectId === dev.selection.projectId) : undefined;
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       {variant === "task" ? (
@@ -31,7 +31,7 @@ export function WorkspaceHeaderActionSection({
           onSelectedEditorChange={onSelectedEditorChange}
         />
       ) : null}
-      {proposal ? <DevCollabProjection iconOnly /> : null}
+      {formal ? <DevRequirementMenu key={`${formal.projectId}:${formal.id}:${dev?.selection.srId ?? "ir"}`} group={formal} /> : null}
       {!simplifyForNarrowViewport && !hideHelpMenu ? <WorkspaceHelpMenuButton /> : null}
       {!isSidePaneOpen ? (
         <WorkspaceSidePaneToggleButton

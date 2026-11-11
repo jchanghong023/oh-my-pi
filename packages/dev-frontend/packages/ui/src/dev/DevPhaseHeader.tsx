@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Check, MoreHorizontal, RotateCcw } from "lucide-react";
+import { Check, RotateCcw } from "lucide-react";
 import { Progress } from "@/components/ui/progress.js";
 import { Button } from "@/components/ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
@@ -23,7 +23,6 @@ const srStages: DevWorkflowStage[] = ["planning", "executing", "pr"];
 export function DevPhaseHeader({ details, placement = "header" }: { details: ReactNode; placement?: "header" | "document" }) {
   const dev = useDev()!;
   const source = useDevDataSource();
-  const [more, setMore] = useState(false);
   const [back, setBack] = useState(false);
   const [reason, setReason] = useState("");
   const [backStage, setBackStage] = useState<DevWorkflowStage>("planning");
@@ -119,7 +118,10 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
         {guidance && <p className="mb-2 text-ui-sm leading-5 text-foreground-subtle" role="status" data-testid="dev-action-guidance">{guidance}</p>}
         <div className="flex w-full items-center justify-between gap-3" data-testid="dev-phase-actions">
           {canBack ? <Button size="sm" variant="outline" disabled={pending || running} onClick={() => { if (proposal && phase === 1) { dev.select({ ...selection, proposalEditing: true, proposalStep: "requirements", discussionPhase: "requirements" }); return; } setReason(""); setBackStage("planning"); setBack(true); }}><RotateCcw className="size-3" />{proposal && phase === 2 ? "退出方案，退回业务补充" : proposal ? "上一步：业务需求" : "回退"}</Button> : <span />}
-          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{action}</div>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            {source.mode === "prototype" && sr?.status === "developing" && !history && sr.developerEmployeeId === getEmployeeId() && materialIssue && <Button size="sm" variant="outline" disabled={pending || running} onClick={() => void dev.command({ type: "generateStageMaterials", stage: sr.stage!, round: sr.round })}>生成当前阶段材料（演示）</Button>}
+            {action}
+          </div>
         </div>
       </div>
       {backDialog}
@@ -128,8 +130,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
   }
   const actor = proposal && !(phase === 2 && hasCurrentProposalSolution(group)) ? proposalActorLabel(group) : undefined;
   const statusText = `${role} · ${status}${actor ? ` · ${actor}` : ""}`;
-  return <header className={`shrink-0 border-b border-border px-4 ${proposal ? "space-y-1 py-2" : "space-y-2 py-3"}`} data-testid="dev-phase-header">
-    {!proposal && <div className="flex min-w-0 items-center justify-between gap-2"><h2 className="truncate text-ui-base font-semibold" title={sr?.title ?? group.title}>{sr?.title ?? group.title}</h2><Button size="icon-sm" variant="ghost" aria-label="更多流程信息与操作" onClick={() => setMore(true)}><MoreHorizontal className="size-4" /></Button></div>}
+  return <header className="shrink-0 space-y-1 border-b border-border px-4 py-2" data-testid="dev-phase-header">
     <div className="flex min-w-0 justify-center" data-testid="dev-phase-toolbar">
       <nav className="min-w-0 rounded-lg border border-border bg-surface p-1" aria-label={proposal ? "提案阶段" : sr ? "SR 开发阶段": "IR 完成阶段"}>
         <div className="flex items-center gap-0.5">
@@ -147,9 +148,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
       </nav>
 
     </div>
-    <p className="truncate text-center text-ui-sm text-foreground-subtle" title={proposal && dev.error ? dev.error : statusText} role={proposal && dev.error ? "alert" : undefined} data-testid="dev-phase-agent">{proposal && dev.error ? `操作失败：${dev.error}` : statusText}</p>
-    {!proposal && dev.error && <p role="alert" className="text-ui-sm text-destructive">{dev.error}</p>}
-    {!proposal && <Dialog open={more} onOpenChange={setMore}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>流程详情与操作</DialogTitle><DialogDescription>人员、模型、路径、PR、操作记录和当前阶段的补充操作。原型动作只更新演示数据。</DialogDescription></DialogHeader>{details}</DialogContent></Dialog>}
+    <p className={`truncate text-center text-ui-sm ${dev.error ? "text-destructive" : "text-foreground-subtle"}`} title={dev.error ?? statusText} role={dev.error ? "alert" : undefined} data-testid="dev-phase-agent">{dev.error ? `操作失败：${dev.error}` : statusText}</p>
 
   </header>;
 }

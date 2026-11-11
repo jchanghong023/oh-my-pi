@@ -1,5 +1,5 @@
 import { useDev } from "@/dev/DevContext.js";
-import { DevProposalMenu } from "@/dev/DevProposalMenu.js";
+import { DevRequirementMenu } from "@/dev/DevRequirementMenu.js";
 import { useSessionRuntimeRestart } from "@/app-shell/useWorkspaceSessionReload.js";
 import { WorkspaceContextPath } from "@/WorkspaceHeaderSections/WorkspaceContextPath.js";
 import { WorkspaceLastActivity } from "@/WorkspaceHeaderSections/WorkspaceLastActivity.js";
@@ -80,6 +80,9 @@ export function WorkspaceHeaderTitleSection({
 }: WorkspaceHeaderTitleSectionProps) {
   const dev = useDev();
   const proposal = !dev?.selection.srId ? dev?.view?.drafts.find(item => item.id === dev.selection.irId) : undefined;
+  const formal = !dev?.selection.freeSessionId ? dev?.view?.groups.find(item => item.id === dev.selection.irId && item.projectId === dev.selection.projectId) : undefined;
+  const formalSr = formal ? dev?.view?.srs.find(item => item.id === dev?.selection.srId && item.irId === formal.id && item.projectId === formal.projectId) : undefined;
+  const title = formalSr?.title ?? formal?.title ?? activeTaskTitle;
   const { intl } = useZCodeIntl();
   const confirmDialog = useConfirmDialog();
   const services = useWorkspaceServices(workspaceAbsPath, remoteSessionId, workspaceIdentity);
@@ -379,9 +382,9 @@ export function WorkspaceHeaderTitleSection({
             simplifyForNarrowViewport && "max-md:max-w-[42vw]",
             compact ? "text-[0.92rem]" : "text-ui-base",
           )}
-          title={activeTaskTitle}
+          title={title}
         >
-          <span className="min-w-0 truncate">{activeTaskTitle}</span>
+          <span className="min-w-0 truncate">{title}</span>
           {/* {activeTaskChangeSummary ? (
           <>
             {activeTaskChangeSummary.added > 0 ? (
@@ -399,7 +402,7 @@ export function WorkspaceHeaderTitleSection({
         </h1>
       ) : null}
       <div className="flex min-w-0 shrink-0 items-center gap-1">
-        {proposal ? <DevProposalMenu group={proposal} /> : !isDraftNewTask ? (
+        {proposal ? <DevRequirementMenu group={proposal} /> : !formal && !isDraftNewTask ? (
           <DropdownMenu open={taskMenuOpen} onOpenChange={setTaskMenuOpen}>
             <DropdownMenuTrigger asChild>
               <Button

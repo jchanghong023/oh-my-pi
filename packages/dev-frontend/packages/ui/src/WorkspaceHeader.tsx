@@ -113,8 +113,8 @@ export function WorkspaceHeader({
   allowOpenWorkspace?: boolean;
 }) {
   const dev = useDev();
-  // 提案入库或只读时可能没有活动会话，标题仍统一放在原生头部。
-  const devProposal = Boolean(!dev?.selection.srId && dev?.view?.drafts.some(item => item.id === dev.selection.irId));
+  // 需求总览、入库或只读时可能没有活动会话，标题仍统一放在原生头部。
+  const devRequirement = Boolean(!dev?.selection.freeSessionId && [...(dev?.view?.drafts ?? []), ...(dev?.view?.groups ?? [])].some(item => item.id === dev?.selection.irId && item.projectId === dev?.selection.projectId));
   const [selectedEditor, setSelectedEditor] = useState<EditorInfo | null>(null);
   const headerLeadingPaddingClass = resolveTopOverlayLeadingPaddingClass({
     isSidebarVisible,
@@ -144,9 +144,9 @@ export function WorkspaceHeader({
           headerLeadingPaddingClass,
         )}
       >
-        {variant === "task" || devProposal ? (
+        {variant === "task" || devRequirement ? (
           <WorkspaceHeaderTitleSection
-            variant={devProposal ? "task" : variant}
+            variant={devRequirement ? "task" : variant}
             backendBusinessAvailable={backendBusinessAvailable}
             readOnlyReason={readOnlyReason}
             workspaceAbsPath={workspaceAbsPath}
