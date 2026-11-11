@@ -102,6 +102,9 @@ export function createPrototypeWorkflow(): DevWorkflowView {
     systemRequirement("demo-aurora", "draft-automation", "proposal-sr-trigger", "触发条件与执行范围"),
     systemRequirement("demo-aurora", "draft-automation", "proposal-sr-history", "执行记录与结果查看"),
     systemRequirement("demo-aurora", "draft-notification", "proposal-sr-notification", "通知范围与阅读状态"),
+    systemRequirement("demo-aurora", "draft-report-export", "proposal-sr-report-export", "报表导出范围与下载反馈"),
+    systemRequirement("demo-aurora", "draft-resource-booking", "proposal-sr-resource-booking", "资源预约时段与冲突提示"),
+    systemRequirement("demo-aurora", "draft-audit-subscription", "proposal-sr-audit-subscription", "审计订阅条件与投递记录"),
     systemRequirement("demo-mobile", "draft-mobile-search", "proposal-sr-search", "搜索条件与结果展示"),
     systemRequirement("demo-mobile", "ir-mobile-offline", "sr-mobile-offline", "离线提示与重新进入"),
   ];
@@ -135,13 +138,49 @@ export function createPrototypeWorkflow(): DevWorkflowView {
     group("demo-aurora", "ir-dashboard", "团队数据总览", srs.filter(sr => sr.irId === "ir-dashboard")),
     group("demo-mobile", "ir-mobile", "移动协作工作台", srs.filter(sr => sr.irId === "ir-mobile")),
     group("demo-mobile", "ir-mobile-offline", "移动端离线体验", srs.filter(sr => sr.irId === "ir-mobile-offline"))];
+  const reviewProposal = group("demo-aurora", "draft-report-export", "团队报表导出", srs.filter(sr => sr.irId === "draft-report-export"), true, "j00808875");
+  const readyProposal = group("demo-aurora", "draft-resource-booking", "共享资源预约", srs.filter(sr => sr.irId === "draft-resource-booking"), true, "j00808877");
+  const intakeProposal = group("demo-aurora", "draft-audit-subscription", "审计事件订阅", srs.filter(sr => sr.irId === "draft-audit-subscription"), true, "j00808875");
   const drafts = [group("demo-aurora", "draft-automation", "自动化工作流探索", srs.filter(sr => sr.irId === "draft-automation"), true),
     group("demo-aurora", "draft-notification", "团队通知与提醒", srs.filter(sr => sr.irId === "draft-notification"), true, "j00808876"),
-    group("demo-mobile", "draft-mobile-search", "移动搜索体验", srs.filter(sr => sr.irId === "draft-mobile-search"), true, "j00808875")];
+    group("demo-mobile", "draft-mobile-search", "移动搜索体验", srs.filter(sr => sr.irId === "draft-mobile-search"), true, "j00808875"),
+    reviewProposal, readyProposal, intakeProposal];
   drafts[1]!.proposalStage = "solution";
   drafts[1]!.sessions.push(sessionRef("demo-aurora", "draft-notification", "solution"));
   drafts[1]!.developerHandoff = { employeeId: "j00808876", submittedAt: "2026-11-10T09:30:00.000Z" };
   drafts[1]!.developerAcceptance = { employeeId: "j00808874", acceptedAt: "2026-11-10T09:35:00.000Z", round: 1 };
+  drafts[1]!.createdAt = "2026-11-07T09:00:00.000Z";
+  reviewProposal.createdAt = "2026-11-08T10:00:00.000Z";
+  readyProposal.createdAt = "2026-11-09T11:00:00.000Z";
+  intakeProposal.createdAt = "2026-11-06T08:00:00.000Z";
+  for (const [proposal, employeeId, acceptedAt, generatedAt] of [
+    [readyProposal, "j00808875", "2026-11-10T12:00:00.000Z", "2026-11-11T08:00:00.000Z"],
+    [intakeProposal, "j00808877", "2026-11-10T14:00:00.000Z", "2026-11-10T15:00:00.000Z"],
+  ] as const) {
+    proposal.proposalStage = "solution";
+    proposal.status = "solution-ready";
+    proposal.sessions.push(sessionRef(proposal.projectId, proposal.id, "solution"));
+    proposal.developerHandoff = { employeeId: proposal.proposalLocation!.employeeId, submittedAt: acceptedAt };
+    proposal.developerAcceptance = { employeeId, acceptedAt, round: proposal.proposalRound! };
+    const solution = prototypeProposalSolution(proposal);
+    proposal.proposalSolution = { path: solution.path, employeeId, generatedAt, round: proposal.proposalRound!, valid: true, requirementsDigest: proposal.snapshot!.digest };
+    proposal.files.push({ path: solution.path, sha256: solution.sha256, size: solution.size });
+  }
+  // Match the existing confirm → push → manual PR actions; compute the candidate only
+  // after all current requirement and solution file versions have been collected.
+  const candidate = "sample-proposal-draft-audit-subscription-round-1";
+  intakeProposal.proposalDelivery = {
+    candidate, version: proposalVersion(intakeProposal), files: structuredClone(intakeProposal.files),
+    confirmedBy: "j00808874", confirmedAt: "2026-11-10T16:00:00.000Z",
+    pushedCandidate: candidate, pushedAt: "2026-11-10T16:10:00.000Z", prCandidate: candidate,
+  };
+  intakeProposal.confirmation = { operationId: "sample-confirm-draft-audit-subscription", snapshotDigest: intakeProposal.snapshot!.digest, confirmedAt: intakeProposal.proposalDelivery.confirmedAt };
+  intakeProposal.requirementsPr = {
+    url: "https://example.invalid/demo/pulls/43", sourceBranch: readPrototypeProposalPrHandoff(intakeProposal).branch,
+    targetBranch: sharedSettings.projects.find(project => project.id === intakeProposal.projectId)!.defaultBranch,
+    recordedAt: "2026-11-11T09:00:00.000Z", platformVerified: false,
+  };
+  intakeProposal.status = "requirements-pr";
   for (const item of groups) {
     const rows = srs.filter(sr => sr.projectId === item.projectId && sr.irId === item.id);
     item.srDependencies = Object.fromEntries(rows.map(sr => [sr.id, sr.dependencySrIds ?? []]));
@@ -149,7 +188,11 @@ export function createPrototypeWorkflow(): DevWorkflowView {
   }
   for (const item of [...groups, ...drafts]) item.releaseId = readPrototypeProjectReleases(item.projectId)[0]?.id ?? "";
   const materials = [...groups, ...drafts].flatMap(item => requirementMaterials(item.projectId, item.id, item.title, srs.filter(sr => sr.irId === item.id)));
-  for (const item of [...groups, drafts[1]!]) item.review = createPrototypeRequirementsReview(item, "j00808874", true);
+  for (const item of [...groups, drafts[1]!, reviewProposal, readyProposal, intakeProposal]) item.review = createPrototypeRequirementsReview(item, "j00808874", true);
+  drafts[1]!.review!.createdAt = "2026-11-09T09:00:00.000Z";
+  reviewProposal.review!.createdAt = "2026-11-10T11:00:00.000Z";
+  readyProposal.review!.createdAt = "2026-11-10T11:30:00.000Z";
+  intakeProposal.review!.createdAt = "2026-11-10T13:00:00.000Z";
   for (const item of groups) {
     const solution = prototypeProposalSolution(item);
     item.files.push({ path: solution.path, sha256: solution.sha256, size: solution.size });
