@@ -13,7 +13,7 @@ import { deriveStageView, hasCurrentProposalSolution, proposalProgressIndex, pro
 import { DevProposalDeliveryControls } from "./DevProposalDeliveryControls.js";
 import { DevProposalMenu } from "./DevProposalMenu.js";
 import { DevRequirementsDecision } from "./DevRequirementsDecision.js";
-import { requirementsReviewCurrent } from "./domain.js";
+import { requirementsReviewCurrent, proposalActorLabel } from "./domain.js";
 import { DevSrDeliveryControls } from "./DevSrDeliveryControls.js";
 import { DevIrFinalPrControls } from "./DevIrFinalPrControls.js";
 import type { DevSelection, DevWorkflowStage } from "./types.js";
@@ -44,7 +44,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
   const stageView = sr ? deriveStageView(sr, selection) : undefined;
   const history = selected !== phase || Boolean(sr && !stageView?.isCurrent);
   const labels = proposal ? proposalSteps : sr ? ["开发计划", "开发与验证", "交付合并"] : ["SR 开发", "整体验收", "完成归档"];
-  const readOnly = proposal ? !source.capabilities.proposalDiscussion : !source.capabilities.codeDevelopment || Boolean(sr && sr.developerEmployeeId && sr.developerEmployeeId !== getEmployeeId());
+  const readOnly = proposal ? !source.capabilities.proposalDiscussion && !(phase >= 2 && hasCurrentProposalSolution(group) && source.capabilities.codeDevelopment) : !source.capabilities.codeDevelopment || Boolean(sr && sr.developerEmployeeId && sr.developerEmployeeId !== getEmployeeId());
   const running = view.running.some(item => item.sessionId === dev.session?.sessionId);
   const complete = sr?.status === "completed" || (!proposal && !sr && acceptance?.status === "completed");
   const role = proposal ? ["业务需求 Agent", "业务需求评审 Agent", "方案 Agent", "人工确认与 PR 合并"][selected]
@@ -69,13 +69,12 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
   if (history) action = <Button size="sm" variant="outline" onClick={current}>返回当前阶段</Button>;
   else if (readOnly || complete) action = null;
   else if (proposal) {
-    if (phase === 0) { if (!requirementsReviewInputs(group)) status = "需求文档待完成"; action = <Button size="sm" disabled={pending || running || !requirementsReviewInputs(group)} title={!requirementsReviewInputs(group) ? "请先在聊天中完成需求文档" : "检查右侧需求文件后，人工发起评审"} onClick={() => void dev.command({ type: "runRequirementsReview", ...target })}>发起需求评审</Button>; }
+    if (phase === 0) { if (group.returnFeedback && !group.returnFeedback.resumedAt) status = "待业务补充"; else if (!requirementsReviewInputs(group)) status = "需求文档待完成"; action = <Button size="sm" disabled={pending || running || !requirementsReviewInputs(group)} title={!requirementsReviewInputs(group) ? "请先在聊天中完成需求文档" : "检查右侧需求文件后，人工发起评审"} onClick={() => void dev.command({ type: "runRequirementsReview", ...target })}>发起需求评审</Button>; }
     else if (phase === 1) {
       if (reviewIssue) { status = "需求待补充"; action = <Button size="sm" variant="outline" disabled={pending} onClick={() => dev.select({ ...selection, proposalEditing: true, proposalStep: "requirements", discussionPhase: "requirements" })}>返回业务需求补充</Button>; }
-      else if (!group.developerHandoff) action = <Button size="sm" disabled={pending} onClick={() => void dev.command({ type: "submitProposalReview", ...target })}>交给开发</Button>;
-      else { status = "等待开发人员接手"; action = <Button size="sm" disabled={pending || !source.capabilities.codeDevelopment} title="由开发人员接手后进入方案阶段" onClick={() => void dev.command({ type: "acceptProposal", ...target })}>接手并进入技术方案</Button>; }
+      else { status = "评审通过 · 等待开发进入方案"; action = <Button size="sm" disabled={pending || running} onClick={() => void dev.command({ type: "acceptProposal", ...target })}>下一步：技术方案</Button>; }
     } else if (phase === 2) {
-      status = ownsSolution ? hasCurrentProposalSolution(group) ? "方案已完成 · 等待人工确认" : "等待完成技术设计" : "等待接手开发人处理";
+      status = hasCurrentProposalSolution(group) ? "方案已完成 · 待个人项目入库" : ownsSolution ? "等待完成技术设计" : "等待方案开发人处理";
       action = hasCurrentProposalSolution(group) ? <DevProposalDeliveryControls group={group} compact /> : <Button size="sm" disabled={pending || running || !ownsSolution || !!reviewIssue} title={reviewIssue} onClick={() => void dev.command({ type: "generateProposalSolution", ...target })}>生成技术方案</Button>;
     } else { status = group.status === "requirements-pr" ? "等待人工合并与核验" : group.proposalDelivery?.pushedCandidate === group.proposalDelivery?.candidate ? "等待人工创建并登记 PR" : "当前版本已确认 · 待提交推送"; action = <DevProposalDeliveryControls group={group} compact />; }
   } else if (sr) {
@@ -100,15 +99,17 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
   if (proposal && !history) {
     if (readOnly) guidance = "当前 Web 只能查看提案，请进入 j00808874 的 Web 讨论或修改。";
     else if (running || pending) guidance = running ? "Agent 正在工作，完成后再检查文档并操作。" : "正在更新，请稍候。";
-    else if (phase === 0) guidance = requirementsReviewInputs(group) ? "检查 proposal.md 与全部 SR 的 spec.md 后，发起需求评审。" : "请先在 IR 聊天中完善需求，生成 proposal.md 和 SR 规格。";
-    else if (phase === 1) guidance = reviewIssue ? reviewIssue : group.developerHandoff ? "等待开发人员接手；接手后进入方案阶段。" : "当前版本评审通过，检查需求文件后交给开发。";
-    else if (!ownsSolution) guidance = `由接手开发人 ${group.developerAcceptance?.employeeId ?? "（尚未接手）"} 处理；请使用其本人启动的 Web。`;
+    else if (phase === 0) guidance = group.returnFeedback && !group.returnFeedback.resumedAt ? "请与业务需求 Agent 讨论最新待处理意见，由 AI 补充 IR／SR；文件更新后再发起评审。" : requirementsReviewInputs(group) ? "检查 proposal.md 与全部 SR 的 spec.md 后，发起需求评审。" : "请先在 IR 聊天中完善需求，生成 proposal.md 和 SR 规格。";
+    else if (phase === 1) guidance = reviewIssue ?? "评审通过；开发人员点击下一步，在 A 的 OMP 与方案 Agent 对话，不要求个人开发项目。";
+    else if (hasCurrentProposalSolution(group) && !source.capabilities.codeDevelopment) guidance = "需求和方案已就绪。入库请进入自己启动的 OMP Web，并配置自己的开发项目；AI 负责复制草稿、提交及推送。";
+    else if (hasCurrentProposalSolution(group) && !source.projects?.readDevelopmentRoot(group.projectId)) guidance = "入库前，请先在设置中配置自己的 Git 开发项目；无需人工复制或编辑文件。";
+    else if (!ownsSolution && phase === 2 && !hasCurrentProposalSolution(group)) guidance = `方案由 ${group.developerAcceptance?.employeeId ?? "开发人员"} 在 A 的 OMP 处理，当前仅查看。`;
     else if (phase === 2) guidance = reviewIssue ?? (hasCurrentProposalSolution(group) ? "本轮方案已生成；检查 IR、全部 SR 与 design.md 后，逐文件确认进入入库。" : group.proposalSolution ? "已有 design.md 与本轮需求不匹配，请重新生成后确认。" : "尚未生成本轮有效方案；右侧已有的 design.md 是参考样例，请先生成技术方案。");
     else guidance = group.status === "requirements-pr" ? "等待人工评审合并；核验默认分支文件后才能转为正式需求。" : "按已确认版本继续提交、登记 PR 与合并核验。";
   }
-  const canBack = !history && !readOnly && !complete && (proposal ? (phase === 1 && !group.developerHandoff && !reviewIssue) || (phase === 2 && ownsSolution && group.status !== "requirements-pr") : Boolean(sr && sr.status === "developing" && phase > 0));
-  const backDialog = (<Dialog open={back} onOpenChange={setBack}><DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>{proposal ? "退回业务需求补充" : "回退开发阶段"}</DialogTitle><DialogDescription>{proposal && phase === 2 ? "填写需要业务澄清的问题。确认后回到业务需求阶段，保留文件和历史，旧方案失效；补充需求后必须重新评审、交接并生成方案。" : proposal ? "返回业务需求检查和补充；仅返回页面不会修改文件，修改后需重新评审。" : "保留已有文件、代码和历史记录。回退后重新检查所选阶段，旧批准及后续阶段材料不再用于当前推进。"}</DialogDescription></DialogHeader>
-      {proposal && phase === 2 ? <SettingsFormTextarea aria-label="需补充的业务问题" value={reason} onChange={event => setReason(event.target.value)} rows={3} placeholder="说明需要业务补充的问题" /> : !proposal ? <Select value={backStage} onValueChange={value => setBackStage(value as DevWorkflowStage)}><SelectTrigger aria-label="回退到"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="planning">开发计划</SelectItem>{phase === 2 && <SelectItem value="executing">开发与验证</SelectItem>}</SelectContent></Select> : null}
+  const canBack = !history && !readOnly && !complete && (proposal ? (phase === 1 && !group.developerHandoff && !reviewIssue) || (phase === 2 && source.capabilities.proposalDiscussion && ownsSolution && group.status !== "requirements-pr") : Boolean(sr && sr.status === "developing" && phase > 0));
+  const backDialog = (<Dialog open={back} onOpenChange={setBack}><DialogContent className={proposal && phase === 2 ? "flex max-h-[85dvh] flex-col sm:max-w-3xl" : "sm:max-w-md"}><DialogHeader><DialogTitle>{proposal ? "退出方案，退回业务补充" : "回退开发阶段"}</DialogTitle><DialogDescription>{proposal && phase === 2 ? "粘贴方案 Agent 提出、开发无法回答的问题，可自行编辑补充。确认后直接返回业务需求 Agent，意见会显示在讨论上方；旧方案失效，由 AI 补充文件后重评，再继续方案。" : proposal ? "返回业务需求检查和补充；仅返回页面不会修改文件，修改后需重新评审。" : "保留已有文件、代码和历史记录。回退后重新检查所选阶段，旧批准及后续阶段材料不再用于当前推进。"}</DialogDescription></DialogHeader>
+      {proposal && phase === 2 ? <SettingsFormTextarea autoFocus aria-label="粘贴需要业务处理的意见" className="min-h-64 max-h-[50dvh] overflow-y-auto" value={reason} onChange={event => setReason(event.target.value)} rows={12} placeholder="把方案 Agent 的问题粘贴到这里，也可以补充背景和说明。" /> : !proposal ? <Select value={backStage} onValueChange={value => setBackStage(value as DevWorkflowStage)}><SelectTrigger aria-label="回退到"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="planning">开发计划</SelectItem>{phase === 2 && <SelectItem value="executing">开发与验证</SelectItem>}</SelectContent></Select> : null}
       <DialogFooter><Button variant="outline" onClick={() => setBack(false)}>取消</Button><Button disabled={pending || (proposal && phase === 2 && !reason.trim())} onClick={async () => {
         if (proposal && phase === 1) { dev.select({ ...selection, proposalEditing: true, proposalStep: "requirements", discussionPhase: "requirements" }); setBack(false); return; }
         const result = proposal ? await dev.command({ type: "returnProposal", ...target, reason }) : await dev.command({ type: "backStage", stage: backStage, fromStage: sr!.stage!, round: sr!.round });
@@ -121,7 +122,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
       <div className="shrink-0 border-t border-border bg-background p-3" data-testid="dev-document-actions" aria-label="文档确认与阶段操作">
         {guidance && <p className="mb-2 text-ui-sm leading-5 text-foreground-subtle" role="status" data-testid="dev-action-guidance">{guidance}</p>}
         <div className="flex w-full items-center justify-between gap-3" data-testid="dev-phase-actions">
-          {canBack ? <Button size="sm" variant="outline" disabled={pending || running} onClick={() => { setReason(""); setBackStage("planning"); setBack(true); }}><RotateCcw className="size-3" />{proposal ? "退回业务需求补充" : "回退"}</Button> : <span />}
+          {canBack ? <Button size="sm" variant="outline" disabled={pending || running} onClick={() => { setReason(""); setBackStage("planning"); setBack(true); }}><RotateCcw className="size-3" />{proposal && phase === 2 ? "退出方案，退回业务补充" : proposal ? "返回业务需求补充" : "回退"}</Button> : <span />}
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{proposal && !history && phase === 1 && requirementsReviewCurrent(group) && <Button size="sm" variant="ghost" onClick={() => setDecision(true)}>处理业务争议</Button>}{action}</div>
         </div>
       </div>
@@ -148,7 +149,8 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
       </nav>
 
     </div>
-    <p className="truncate text-center text-ui-sm text-foreground-subtle" title={`${role} · ${status}`} data-testid="dev-phase-agent">{role} · {status}{proposal && group.developerAcceptance && selected >= 2 ? ` · 接手人 ${group.developerAcceptance.employeeId}` : ""}</p>
+    <p className="truncate text-center text-ui-sm text-foreground-subtle" title={`${role} · ${status}`} data-testid="dev-phase-agent">{role} · {status}</p>
+    {proposal && <p className="text-center text-ui-sm text-foreground-subtle" data-testid="proposal-current-actor">提出人 {group.proposalLocation?.employeeId ?? "未记录"} · 当前处理：{proposalActorLabel(group)}</p>}
     {dev.error && <p role="alert" className="text-ui-sm text-destructive">{dev.error}</p>}
     {!proposal && <Dialog open={more} onOpenChange={setMore}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>流程详情与操作</DialogTitle><DialogDescription>人员、模型、路径、PR、操作记录和当前阶段的补充操作。原型动作只更新演示数据。</DialogDescription></DialogHeader>{details}</DialogContent></Dialog>}
 

@@ -1,4 +1,4 @@
-import { proposalDeliveryCurrent, requirementsReviewCurrent } from "./domain.js";
+import { hasCurrentProposalSolution, proposalDeliveryCurrent, requirementsReviewCurrent } from "./domain.js";
 import { DevProposalStageBody } from "./DevPhaseHeader.js";
 import { DevFreeChatDraftComposer } from "./DevFreeChatDraftComposer.js";
 import { DevProposalDraftComposer } from "./DevProposalDraftComposer.js";
@@ -18,7 +18,7 @@ export function DevEmptyState() {
  if (dev.selection.freeDraftId && project && source.capabilities.freeChat) return <DevFreeChatDraftComposer key={dev.selection.freeDraftId} />;
  if (dev.selection.proposalDraftId && project && release && source.capabilities.workflowCommands.includes("createProposal")) return <DevProposalDraftComposer key={dev.selection.proposalDraftId} />;
  const proposal = dev.view?.drafts.find(item => item.id === dev.selection.irId);
- if (proposal && source.capabilities.proposalDiscussion === false) return <main className="flex h-full min-h-0 flex-1 items-center justify-center p-6" data-testid="dev-proposal-web-readonly"><section className="max-w-md space-y-3 text-center"><h2 className="text-ui-base font-medium">当前 Web 只读查看提案</h2><p className="text-ui-base leading-6 text-foreground-subtle">在右侧阅读需求和方案文件。讨论或修改请进入 j00808874 的 OMP Web；这里不加载提案聊天，也不提供流程操作。</p></section></main>;
+ if (proposal && source.capabilities.proposalDiscussion === false) return <main className="flex h-full min-h-0 flex-1 items-center justify-center p-6" data-testid="dev-proposal-web-readonly"><section className="max-w-md space-y-3 text-center"><h2 className="text-ui-base font-medium">{hasCurrentProposalSolution(proposal) && source.capabilities.codeDevelopment ? "需求与方案已就绪" : "当前 Web 只读查看提案"}</h2><p className="text-ui-base leading-6 text-foreground-subtle">{hasCurrentProposalSolution(proposal) && source.capabilities.codeDevelopment ? "检查右侧文件，配置自己的开发项目后，在右下角确认入库。AI 将复制草稿到项目、提交并推送，人工处理 PR。提案讨论仍在 A 的 OMP，这里不加载聊天。" : "在右侧阅读需求和方案文件。讨论或修改请进入 j00808874 的 OMP Web；方案完成后，入库才使用自己的 Web 和开发项目。"}</p></section></main>;
  if (proposal && (dev.selection.proposalStep === "requirements-review" || dev.selection.proposalStep === "intake" || (!dev.selection.proposalStep && !dev.selection.discussionPhase && (proposalDeliveryCurrent(proposal) || proposal.status === "requirements-pr" || (proposal.proposalStage !== "solution" && requirementsReviewCurrent(proposal)))))) return <DevProposalStageBody />;
  const missingSession = Boolean(dev.selection.irId);
  const title = missingSession ? "所选会话暂不可用" : !project ? "请选择项目" : !release ? "此项目尚无 Release" : "选择已有会话";

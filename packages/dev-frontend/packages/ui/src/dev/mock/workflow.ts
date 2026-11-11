@@ -29,7 +29,7 @@ import type {
   DevSelection, DevStageMaterial, DevSystemRequirement, DevWorkflowResult, DevWorkflowStage, DevWorkflowView,
 } from "../types.js";
 
-export const DEFAULT_SELECTION: DevSelection = prototypeRecoveryScenario === "sr-delivery" ? { projectId: "demo-aurora", irId: "ir-auth", srId: "sr-auth" } : prototypeRecoveryScenario === "requirements-review" ? { projectId: "demo-aurora", irId: "draft-automation" } : prototypeRecoveryScenario === "ir-acceptance" ? { projectId: "demo-aurora", irId: "ir-auth", irAcceptance: true } : prototypeRecoveryScenario === "empty-projects" ? {} : prototypeRecoveryScenario === "empty-releases" || prototypeRecoveryScenario === "empty-requirements" ? { projectId: "demo-aurora" } : prototypeRecoveryScenario === "missing-requirement" ? { projectId: "demo-aurora", irId: "removed-proposal" } : prototypeRecoveryScenario === "missing-sr" ? { projectId: "demo-aurora", irId: "ir-auth", srId: "removed-sr" } : { projectId: "demo-aurora", irId: "ir-auth", srId: "sr-auth" };
+export const DEFAULT_SELECTION: DevSelection = (prototypeRecoveryScenario === "proposal-intake" || prototypeRecoveryScenario === "proposal-feedback") ? { projectId: "demo-aurora", irId: "draft-notification" } : prototypeRecoveryScenario === "sr-delivery" ? { projectId: "demo-aurora", irId: "ir-auth", srId: "sr-auth" } : prototypeRecoveryScenario === "requirements-review" ? { projectId: "demo-aurora", irId: "draft-automation" } : prototypeRecoveryScenario === "ir-acceptance" ? { projectId: "demo-aurora", irId: "ir-auth", irAcceptance: true } : prototypeRecoveryScenario === "empty-projects" ? {} : prototypeRecoveryScenario === "empty-releases" || prototypeRecoveryScenario === "empty-requirements" ? { projectId: "demo-aurora" } : prototypeRecoveryScenario === "missing-requirement" ? { projectId: "demo-aurora", irId: "removed-proposal" } : prototypeRecoveryScenario === "missing-sr" ? { projectId: "demo-aurora", irId: "ir-auth", srId: "removed-sr" } : { projectId: "demo-aurora", irId: "ir-auth", srId: "sr-auth" };
 export const PROTOTYPE_WORKSPACE_IDENTITY = "dev-ui-prototype";
 export const PROTOTYPE_RELEASE_ID = "release-2026-11";
 const createdAt = "2026-11-10T09:00:00.000Z";
@@ -155,6 +155,20 @@ export function createPrototypeWorkflow(): DevWorkflowView {
     item.files.push({ path: solution.path, sha256: solution.sha256, size: solution.size });
     item.merge = { commit: `sample-merged-${item.id}`, branch: "main", checkedAt: createdAt, files: structuredClone(item.files) };
     if (item.developmentStartedAt) freezePrototypeRequirement(item, "j00808874", item.developmentStartedAt);
+  }
+  if (prototypeRecoveryScenario === "proposal-feedback") {
+    const proposal = drafts[1]!;
+    proposal.proposalStage = "requirements"; proposal.proposalRound = 2;
+    proposal.developerAcceptance = undefined; proposal.developerHandoff = undefined;
+    proposal.returnFeedback = { employeeId: "j00808875", returnedAt: createdAt, reason: "方案 Agent 提问，开发暂时无法回答：\n1. 通知发送失败后，是否自动重试？重试次数和间隔由谁确定？\n2. 用户取消后，已发送的通知是否保留？\n请业务补充上述规则和验收行为，由业务 Agent 更新 IR／SR。" };
+    proposal.sessions.push(sessionRef(proposal.projectId, proposal.id, "requirements", undefined, undefined, 2));
+  }
+  if (prototypeRecoveryScenario === "proposal-intake") {
+    const proposal = drafts[1]!;
+    const material = prototypeProposalSolution(proposal);
+    proposal.status = "solution-ready";
+    proposal.proposalSolution = { path: material.path, employeeId: "j00808874", generatedAt: createdAt, round: 1, valid: true, requirementsDigest: proposal.snapshot!.digest };
+    proposal.files.push({ path: material.path, sha256: material.sha256, size: material.size });
   }
   materials.push(...groups.map(prototypeProposalSolution), ...drafts.filter(item => item.proposalStage === "solution").map(prototypeProposalSolution));
   materials.push(...srs.filter(sr => sr.status !== "pending").flatMap(sr => developmentMaterials(sr.projectId, sr.irId, sr.id, sr.title).filter(item => sr.materials.some(file => file.path === item.path))));
@@ -305,9 +319,9 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
     if (blocker) throw new Error(blocker);
   }
   if (action.type === "runRequirementsReview" && targetProposal && !requirementsReviewInputs(targetProposal)) throw new Error("请先补齐 IR 与全部 SR 需求材料，不能对空提案生成通过记录。");
-  if (action.type === "acceptProposal" && (targetProposal?.proposalStage !== "requirements" || !targetProposal.developerHandoff || targetProposal.status !== "draft")) throw new Error("请先交给开发，再由开发人员接手当前轮次。");
+  if (action.type === "acceptProposal" && (targetProposal?.proposalStage !== "requirements" || targetProposal.status !== "draft")) throw new Error("请先完成当前需求版本的评审，再进入技术方案。");
   if (action.type === "acceptProposal" && targetProposal?.developerAcceptance?.round === (targetProposal?.proposalRound ?? 1)) throw new Error("本轮提案已有接手开发人员，不能重复接手或覆盖他人的记录。");
-  if (["generateProposalSolution", "returnProposal", "markRequirementsPrSubmitted"].includes(action.type) && (targetProposal?.developerAcceptance?.round !== (targetProposal?.proposalRound ?? 1) || targetProposal?.developerAcceptance?.employeeId !== getEmployeeId())) throw new Error("请先由当前工号明确接手本轮提案；其他同事可查看，不能代为生成方案、打回或提交 PR。");
+  if (["generateProposalSolution", "returnProposal"].includes(action.type) && (targetProposal?.developerAcceptance?.round !== (targetProposal?.proposalRound ?? 1) || targetProposal?.developerAcceptance?.employeeId !== getEmployeeId())) throw new Error("请先由当前工号明确接手本轮提案；其他同事可查看，不能代为生成方案、打回或提交 PR。");
   if (action.type === "runRequirementsReview" && targetProposal?.status === "requirements-pr") throw new Error("PR 已提交，本轮仅支持提交 PR 前的需求评审。");
   if ((action.type === "generateRequirements" || action.type === "supplementRequirements") && (targetProposal?.proposalStage !== "requirements" || targetProposal.status !== "draft" || !action.note.trim())) throw new Error("请在业务需求阶段填写明确的需求内容。");
   if (action.type === "generateRequirements" && targetProposal?.srIds.length) throw new Error("本提案已有 SR，请补充当前需求，不重复生成或覆盖已有拆分。");
@@ -420,6 +434,8 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       break;
     case "acceptProposal": {
       currentGroup!.proposalStage = "solution";
+      currentGroup!.developerHandoff ??= { employeeId: getEmployeeId(), submittedAt: new Date().toISOString() };
+      if (currentGroup!.returnFeedback) currentGroup!.returnFeedback.resumedAt = new Date().toISOString();
       currentGroup!.developerAcceptance = { employeeId: getEmployeeId(), acceptedAt: new Date().toISOString(), round: currentGroup!.proposalRound ?? 1 };
       if (!currentGroup!.sessions.some(item => item.phase === "solution" && item.round === (currentGroup!.proposalRound ?? 1))) {
         const session = sessionRef(projectId, currentGroup!.id, "solution", undefined, undefined, currentGroup!.proposalRound ?? 1);
@@ -500,10 +516,13 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       currentGroup!.proposalStage = "requirements"; currentGroup!.status = "draft";
       currentGroup!.proposalRound = (currentGroup!.proposalRound ?? 1) + 1;
       currentGroup!.developerAcceptance = undefined;
+      currentGroup!.developerHandoff = undefined;
+      currentGroup!.confirmation = undefined;
+      if (currentGroup!.returnFeedback) { currentGroup!.returnFeedbackHistory ??= []; currentGroup!.returnFeedbackHistory.push(structuredClone(currentGroup!.returnFeedback)); }
       currentGroup!.returnFeedback = { employeeId: getEmployeeId(), returnedAt: new Date().toISOString(), reason: action.reason.trim() };
       if (currentGroup!.proposalSolution) currentGroup!.proposalSolution.valid = false;
       state.materials.filter(item => item.projectId === projectId && item.irId === irId && item.kind === "solution").forEach(item => { item.valid = false; });
-      operation.type = "打回业务补充，旧方案失效（原型）";
+      operation.type = "开发粘贴待处理意见，直接返回业务 Agent 补充（原型）";
       break;
     }
     case "confirmProposal": {

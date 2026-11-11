@@ -12,7 +12,7 @@ export function validatePrototypeProposalDeliveryAction(view: DevWorkflowView, g
  const blocker = requirementsReviewBlocker(group);
  if (blocker) throw new Error(blocker);
  if (group.proposalStage !== "solution" || !hasCurrentProposalSolution(group)) throw new Error("请先完成当前需求版本的方案。");
- if (group.developerAcceptance?.employeeId !== getEmployeeId() || group.developerAcceptance.round !== (group.proposalRound ?? 1)) throw new Error("仅本轮接手开发人员可操作提案交付演示。");
+ if (proposalDeliveryCurrent(group) && group.proposalDelivery?.confirmedBy !== getEmployeeId()) throw new Error("当前入库候选属于其他开发人员，不能代为提交或合并。");
  const handoff = readPrototypeProposalPrHandoff(group);
  if (!handoff.ready) throw new Error(handoff.blockers.join("；"));
  if (!group.files.every(file => view.materials.some(material => material.projectId === group.projectId && material.irId === group.id && material.path === file.path && material.sha256 === file.sha256 && material.size === file.size && material.valid && material.content !== undefined && !material.error))) throw new Error("当前提案材料缺失、读取失败或版本不一致，不能确认、推送或核验合并。");

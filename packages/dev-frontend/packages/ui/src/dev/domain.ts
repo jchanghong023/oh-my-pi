@@ -230,7 +230,7 @@ export function conversationReadOnlyReason(view: DevWorkflowView | undefined, se
   const phase = proposal.proposalStage ?? "requirements";
   if (selection.discussionPhase && selection.discussionPhase !== phase) return "正在查看另一讨论阶段的历史，只读。";
   if (proposal.status === "requirements-pr") return "需求 PR 已提交，当前版本只读；合并核对后进入正式需求。";
-  if (phase === "solution" && access?.codeDevelopment !== false) {
+  if (phase === "solution") {
    const acceptance = proposal.developerAcceptance;
    if (!acceptance || acceptance.round !== (proposal.proposalRound ?? 1)) return "请先接手评审，再继续方案讨论。";
    if (acceptance.employeeId !== getEmployeeId()) return `方案由 ${acceptance.employeeId} 接手，当前仅查看。`;
@@ -265,6 +265,7 @@ export function irFinalPackageVersion(group: DevRequirementGroup): string {
 /** 原型展示节点不另建 Agent：需求评审和人工入库都有独立的只读查看状态。 */
 export function proposalProgressIndex(group: DevRequirementGroup, selection?: DevSelection): number {
  if (selection?.proposalEditing && group.proposalStage !== "solution") return 0;
+ if (group.proposalStage === "requirements" && group.returnFeedback && !group.returnFeedback.resumedAt && !requirementsReviewCurrent(group)) return 0;
  if (group.status === "requirements-pr" || proposalDeliveryCurrent(group)) return 3;
  if (group.proposalStage === "solution") return 2;
  return requirementsReviewCurrent(group) ? 1 : 0;
@@ -273,4 +274,12 @@ export function proposalViewedIndex(group: DevRequirementGroup, selection: DevSe
  if (selection.proposalStep) return ["requirements", "requirements-review", "solution", "intake"].indexOf(selection.proposalStep);
  if (selection.discussionPhase === "requirements" && proposalProgressIndex(group, selection) > 1) return 0;
  return proposalProgressIndex(group, selection);
+}
+
+/** 提出人固定，当前处理责任按阶段变化；不是权限或自动分派系统。 */
+export function proposalActorLabel(group: DevRequirementGroup): string {
+ if (group.status === "requirements-pr" || proposalDeliveryCurrent(group)) return `入库开发 ${group.proposalDelivery?.confirmedBy ?? "待确认"}`;
+ if (group.proposalStage === "solution") return hasCurrentProposalSolution(group) ? "具备个人 Web 和开发项目的开发人员入库" : `方案开发 ${group.developerAcceptance?.employeeId ?? "待确认"}`;
+ if (requirementsReviewCurrent(group) && !requirementsReviewBlocker(group)) return group.returnFeedback ? `开发 ${group.returnFeedback.employeeId} 继续方案` : "开发人员进入方案";
+ return `业务 ${group.proposalLocation?.employeeId ?? "提出人"} 补充需求`;
 }

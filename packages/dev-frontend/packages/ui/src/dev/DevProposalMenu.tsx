@@ -28,7 +28,7 @@ export function DevProposalMenu({ group }: { group: DevRequirementGroup }) {
    <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
     <DialogHeader><DialogTitle>{panel === "info" ? "提案信息" : "操作记录"}</DialogTitle><DialogDescription>{group.title} · 仅查看，不改变需求或阶段。</DialogDescription></DialogHeader>
     {panel === "info" ? <div className="space-y-4 text-ui-sm">
-     <dl className="space-y-3"><div><dt className="text-foreground-subtle">提交人</dt><dd>{group.developerHandoff?.employeeId ?? group.proposalLocation?.employeeId ?? "尚未提交评审"}</dd></div>
+     <dl className="space-y-3"><div><dt className="text-foreground-subtle">提出人</dt><dd>{group.proposalLocation?.employeeId ?? "未记录"}</dd></div>
       <div><dt className="text-foreground-subtle">接手开发人</dt><dd>{group.developerAcceptance?.employeeId ?? "尚未接手"}</dd></div>
       <div><dt className="text-foreground-subtle">提案临时目录</dt><dd className="break-all font-mono">{group.proposalLocation?.directory ?? "目录未记录"}</dd></div>
       {group.requirementsPr && <div><dt className="text-foreground-subtle">已登记需求 PR</dt><dd className="break-all">{group.requirementsPr.url}</dd></div>}
@@ -36,6 +36,7 @@ export function DevProposalMenu({ group }: { group: DevRequirementGroup }) {
      <DevAgentModelSummary binding={dev.session?.modelConfig ?? group.review?.modelConfig} />
     </div> : <div className="space-y-4 text-ui-sm" data-testid="proposal-operation-records">
      {operations.length ? operations.map(item => <section key={item.operationId} className="space-y-1 border-b border-border pb-3"><p>{operationLabels[item.type] ?? item.type} · {item.status === "completed" ? "已完成" : item.status === "running" ? "进行中" : "失败"}</p><time className="text-foreground-subtle" dateTime={item.startedAt}>{new Date(item.startedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</time>{item.steps.map((step, index) => <p key={index} className="text-foreground-subtle">{step.detail}</p>)}{item.error && <p className="text-destructive">{item.error}</p>}</section>) : <p className="text-foreground-subtle">暂无操作记录。</p>}
+     {[...(group.returnFeedbackHistory ?? []), ...(group.returnFeedback ? [group.returnFeedback] : [])].map((feedback, index) => <details key={`${feedback.returnedAt}:${index}`} data-testid="proposal-feedback-history"><summary className="cursor-pointer">第 {index + 1} 次退回意见 · {feedback.employeeId}{feedback.resumedAt ? " · 已继续方案" : " · 最近一次"}</summary><p className="mt-2 whitespace-pre-wrap break-words">{feedback.reason}</p></details>)}
      <DevRequirementsDecision group={group} readOnly />
      {(group.reviewHistory ?? []).map((review, index) => <details key={`${review.id}:${index}`}><summary className="cursor-pointer">历史需求评审 · 第 {review.round ?? 1} 轮 · {review.passed ? "通过" : "待补充"}</summary><MessageResponse>{review.report}</MessageResponse></details>)}
     </div>}

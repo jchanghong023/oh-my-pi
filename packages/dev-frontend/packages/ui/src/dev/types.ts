@@ -15,6 +15,7 @@ export interface DevProject {
 }
 export interface DevRelease { id: string; projectId: string; title: string; createdAt: string }
 export interface DevWorktree { path: string; branch: string; baseCommit: string }
+export interface DevProposalFeedbackNote { employeeId: string; returnedAt: string; reason: string; resumedAt?: string }
 export interface DevReview {
   id: string; snapshotDigest: string; passed: boolean; report: string; modelConfig?: DevAgentModelBinding;
   inputFiles?: DevFileVersion[];
@@ -100,7 +101,8 @@ export interface DevRequirementGroup {
   developerAcceptance?: { employeeId: string; acceptedAt: string; round: number };
   requirementSupplements?: { note: string; employeeId: string; createdAt: string; round?: number }[];
   proposalSolution?: { path: string; employeeId: string; generatedAt: string; round: number; valid: boolean; requirementsDigest?: string };
-  returnFeedback?: { employeeId: string; returnedAt: string; reason: string };
+  returnFeedback?: DevProposalFeedbackNote;
+  returnFeedbackHistory?: DevProposalFeedbackNote[];
   proposalLocation?: { projectName: string; employeeId: string; directory: string };
 }
 export interface DevOperationReceipt {

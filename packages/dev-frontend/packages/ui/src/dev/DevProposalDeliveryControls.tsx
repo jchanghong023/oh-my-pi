@@ -22,7 +22,7 @@ interface DeliveryDialog {
 }
 const stepTitles: Record<DeliveryStep, string> = {
  confirm: "人工确认需求与方案（演示）",
- push: "AI 提交并推送需求分支（演示）",
+ push: "AI 复制草稿、提交并推送需求分支（演示）",
  pr: "人工创建并登记需求 PR（演示）",
  merge: "核验需求 PR 合并（演示）",
 };
@@ -52,8 +52,7 @@ export function DevProposalDeliveryControls({ group, readOnly = false, compact =
  const version = proposalVersion(group);
  const pushed = !!delivery && current && delivery.pushedCandidate === delivery.candidate;
  const registered = !!group.requirementsPr && !!delivery && pushed && delivery.prCandidate === delivery.candidate;
- const accepted = group.developerAcceptance;
- const mine = accepted?.round === (group.proposalRound ?? 1) && accepted.employeeId === getEmployeeId();
+ const mine = Boolean(source.capabilities.codeDevelopment && (!current || delivery?.confirmedBy === getEmployeeId()));
  const active = !readOnly && (group.proposalStage ?? "requirements") === "solution" && (group.status === "solution-ready" || group.status === "requirements-pr");
  const handoff = source.prototype!.readPrHandoff(group, scenario);
  const boundCurrent = !!dialog && dialog.version === version && (dialog.step === "confirm" || (current && dialog.candidate === delivery?.candidate));
@@ -84,7 +83,7 @@ export function DevProposalDeliveryControls({ group, readOnly = false, compact =
   "合并后转为正式需求，保留 changes/，不自动归档，也不表示实现完成。",
  ].join("\n") : "";
  return <section className="space-y-2" data-testid="proposal-delivery-controls">
-  <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant={compact ? "default" : "outline"} data-testid="proposal-delivery-open" disabled={dev.pending} onClick={openDialog}>{readOnly || !active || !mine ? "查看需求交付（演示）" : !current ? compact ? "下一步：需求入库" : "确认需求与方案（演示）" : !pushed ? "AI 提交并推送（演示）" : !registered ? "人工创建需求 PR（演示）" : "核验 PR 合并（演示）"}</Button>{!compact && <span className="text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-status">{registered && group.merge ? "当前候选 PR 已合并并核验（演示），正式需求已入库。" : !current ? delivery || history.length ? "文件版本已变化，旧确认、推送与 PR 不可复用，请重新确认。" : "待人工确认当前 IR、全部 SR 与方案。" : !pushed ? "当前候选已确认，尚未推送。" : !registered ? "当前候选已推送（演示），等待人工创建并登记 PR。" : "当前候选 PR 已登记，等待人工合并与逐文件核验。"}</span>}</div>
+  <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant={compact ? "default" : "outline"} data-testid="proposal-delivery-open" disabled={dev.pending || (!readOnly && (!mine || !handoff.ready))} title={!mine ? "请使用自己启动的 OMP Web；当前入库候选不可由他人代操作。" : !handoff.ready ? handoff.blockers.join("；") : undefined} onClick={openDialog}>{readOnly ? "查看需求交付（演示）" : !mine ? "入库需自己的 Web" : !active ? "等待有效方案" : !current ? compact ? "下一步：需求入库" : "确认需求与方案（演示）" : !pushed ? "AI 提交并推送（演示）" : !registered ? "人工创建需求 PR（演示）" : "核验 PR 合并（演示）"}</Button>{!compact && <span className="text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-status">{registered && group.merge ? "当前候选 PR 已合并并核验（演示），正式需求已入库。" : !current ? delivery || history.length ? "文件版本已变化，旧确认、推送与 PR 不可复用，请重新确认。" : "待人工确认当前 IR、全部 SR 与方案。" : !pushed ? "当前候选已确认，尚未推送。" : !registered ? "当前候选已推送（演示），等待人工创建并登记 PR。" : "当前候选 PR 已登记，等待人工合并与逐文件核验。"}</span>}</div>
   {!compact && delivery && <p className="break-all text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-candidate">{current ? "当前候选" : "旧候选（失效）"}：{delivery.candidate} · 确认人：{delivery.confirmedBy} · {delivery.confirmedAt}</p>}
   {!compact && (history.length > 0 || (!!delivery && !current)) && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-history-summary">保留 {history.length + (delivery && !current ? 1 : 0)} 份历史交付记录，可在交付弹窗查看。</p>}
   <Dialog open={dialog !== null} onOpenChange={open => { if (!open) setDialog(null); }}>
@@ -100,14 +99,14 @@ export function DevProposalDeliveryControls({ group, readOnly = false, compact =
       await dev.command({ type: "markRequirementsMerged", ...target, candidate: dialog.candidate!, defaultBranchFilesConfirmed: allFilesChecked && acknowledged });
      if (result?.status === "completed") setDialog(null);
     }}>
-     {!active || !mine ? <p className="text-ui-sm text-foreground-subtle" role="status">只读：仅当前方案阶段、当前接手开发人可以操作交付。</p> : null}
+     {!active || !mine ? <p className="text-ui-sm text-foreground-subtle" role="status">只读：入库必须使用自己启动的 OMP Web 和个人开发项目，候选确认后由确认人继续提交。</p> : null}
      {!boundCurrent && <p className="text-ui-sm text-destructive" role="alert" data-testid="proposal-delivery-stale">弹窗绑定的文件版本或候选已变化，请关闭后重新打开并核对；旧操作不能继续。</p>}
      <DevProposalPrHandoff group={group} scenario={scenario} onScenarioChange={setScenario} />
      {delivery && <DeliveryRecord delivery={delivery} stale={!current} />}
      <div className="space-y-2 rounded-md border border-border p-3" data-testid="proposal-delivery-bound-version"><p className="text-ui-sm font-medium">本次操作绑定下方 {dialog.files.length} 份完整文件版本；材料变化后必须重新确认。</p><p className="break-all text-ui-sm">候选：{dialog.candidate ?? "人工确认成功后生成新的候选"}</p></div>
      <fieldset className="space-y-2" data-testid="proposal-delivery-files"><legend className="text-ui-sm font-medium">{dialog.step === "merge" ? "逐文件核验默认分支中的版本" : dialog.step === "confirm" ? "逐文件确认当前 IR、全部 SR 与 design.md" : "当前候选的完整文件版本"}（{dialog.files.length}）</legend><ul className="max-h-64 space-y-3 overflow-y-auto">{dialog.files.map(file => <li key={file.path} className="rounded-md border border-border p-2 text-ui-sm" data-testid="proposal-delivery-file"><label className="flex items-start gap-2">{(dialog.step === "confirm" || dialog.step === "merge") && <Checkbox data-testid="proposal-delivery-file-check" aria-label={`${dialog.step === "merge" ? "核验默认分支" : "确认"} ${file.path} ${file.sha256}`} checked={checkedFiles.includes(file.path)} disabled={!editable} onCheckedChange={checked => setCheckedFiles(previous => checked === true ? [...previous.filter(path => path !== file.path), file.path] : previous.filter(path => path !== file.path))} />}<span className="min-w-0 space-y-1"><span className="block break-all font-mono">{file.path}</span><span className="block break-all text-foreground-subtle">样例版本：{file.sha256} · {file.size} 字节</span></span></label></li>)}</ul></fieldset>
      {dialog.step === "confirm" && <label className="flex items-start gap-2 text-ui-sm"><Checkbox data-testid="proposal-delivery-confirm-all" checked={acknowledged} disabled={!editable} onCheckedChange={checked => setAcknowledged(checked === true)} />我已逐项确认上述当前 IR、全部 SR 与 design.md 的内容和版本；后续重新生成或修改文件必须重新确认。</label>}
-     {dialog.step === "push" && <p className="text-ui-sm text-foreground-subtle">AI 将按上方已确认候选演示 commit + push 到需求分支；不修改默认分支、不真实复制或提交文件，也不自动创建 PR。</p>}
+     {dialog.step === "push" && <p className="text-ui-sm text-foreground-subtle">AI 将按上方已确认候选演示复制草稿到自己的开发项目，再 commit + push 到需求分支；不修改默认分支、不真实复制或提交文件，也不自动创建 PR。</p>}
      {(dialog.step === "pr" || dialog.step === "merge") && <section className="space-y-3 rounded-md border border-border p-3" data-testid="proposal-delivery-pr-template"><p className="text-ui-sm text-foreground-subtle">请在代码平台手动创建 PR，使用下方标题和正文；本页不创建 PR。演示时只登记示例链接，登记不代表平台已验证。</p><div className="space-y-1"><Label htmlFor="proposal-pr-title">PR 标题</Label><Input id="proposal-pr-title" data-testid="proposal-pr-title" value={prTitle} readOnly /></div><div className="space-y-1"><Label htmlFor="proposal-pr-body">PR 正文与文件版本清单</Label><SettingsFormTextarea id="proposal-pr-body" data-testid="proposal-pr-body" value={prBody} readOnly rows={8} /></div></section>}
      {dialog.step === "pr" && <div className="space-y-2"><Label htmlFor="proposal-pr-url">人工创建的 PR 地址（演示登记）</Label><Input id="proposal-pr-url" data-testid="proposal-pr-url" type="url" value={url} disabled={!editable || !pushed} onChange={event => setUrl(event.target.value)} placeholder="https://git.example.com/project/pulls/123" required /></div>}
      {group.requirementsPr && <p className="break-all text-ui-sm text-foreground-subtle" data-testid="proposal-delivery-registered-pr">{registered ? "当前候选 PR" : "历史 PR，不可复用于当前候选"}：{group.requirementsPr.url} · {group.requirementsPr.recordedAt} · 仅演示记录，未查询平台</p>}

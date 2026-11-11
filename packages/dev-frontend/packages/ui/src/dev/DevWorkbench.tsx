@@ -1,3 +1,4 @@
+import { DevProposalFeedback } from "./DevProposalFeedback.js";
 import { DevPhaseHeader, DevDocumentPhaseActions } from "./DevPhaseHeader.js";
 import { useDevDataSource } from "./data-source.js";
 import { DevSrDeliveryControls } from "./DevSrDeliveryControls.js";
@@ -54,7 +55,7 @@ function copyMaterial(text: string): Promise<void> {
 }
 export { DevSidebar } from "./DevSidebar.js";
 export { DevProjectSettings } from "./DevProjectSettings.js";
-export function DevStageHeader() { return <DevPhaseHeader details={<DevFlowDetails />} />; }
+export function DevStageHeader() { return <><DevPhaseHeader details={<DevFlowDetails />} /><DevProposalFeedback /></>; }
 
 function DevFlowDetails() {
  const source = useDevDataSource();
