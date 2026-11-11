@@ -69,5 +69,5 @@ export function DevIrAcceptanceHeader({ group }: { group: DevRequirementGroup })
 }
 
 export function DevIrAcceptanceWelcome() {
-  return <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center" data-testid="ir-acceptance-welcome"><ClipboardCheck className="size-8 text-foreground-subtle" /><h2 className="text-ui-base font-medium">全部 SR 合并后，验收整个 IR</h2><p className="max-w-md text-ui-sm leading-6 text-foreground-subtle">从顶部明确开始验收，复用原聊天框讨论跨 SR 行为和实现问题。右侧可查看整组需求及方案，验收报告和 PR 详情在“更多”中查看。</p></div>;
+  return <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center" data-testid="ir-acceptance-welcome"><ClipboardCheck className="size-8 text-foreground-subtle" /><h2 className="text-ui-base font-medium">全部 SR 合并后，验收整个 IR</h2><p className="max-w-md text-ui-sm leading-6 text-foreground-subtle">在右侧文档底部明确开始验收，复用原聊天框讨论跨 SR 行为和实现问题。右侧可查看整组需求及方案，验收报告和 PR 详情在“更多”中查看。</p></div>;
 }

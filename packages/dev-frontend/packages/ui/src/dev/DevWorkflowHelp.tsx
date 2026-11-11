@@ -24,7 +24,7 @@ export function DevWorkflowHelp({ open, onOpenChange, returnFocusRef }: { open: 
         <DialogDescription>{zh ? "一项需求，从讨论到完成。IR 是整体需求，SR 是其中可分别开发的具体需求；PR 是交给人工评审、合并的申请。" : "From an idea to completion. An IR is the overall requirement, an SR is a specific deliverable within it, and a PR is a request for human review and merge."}</DialogDescription>
       </DialogHeader>
       <div className="min-h-0 overflow-y-auto px-6 pb-5" tabIndex={0} aria-label={zh ? "完整业务流程" : "Complete workflow"}>
-        <p className="mb-4 text-ui-sm leading-6 text-foreground-subtle">{zh ? "桌面聊天顶部：阶段进度在左，人工操作在右。点击阶段只查看记录；点击下一步、回退或 PR 确认才改变流程。工作中或文件不完整时不能进入下一步，回退保留代码和历史。" : "Desktop chat: stage progress on the left, human actions on the right. Stage clicks only view records. Next, Back and PR confirmations change the workflow. Work in progress or incomplete documents block advancement; Back preserves code and history."}</p><ol className="space-y-3">
+        <p className="mb-4 text-ui-sm leading-6 text-foreground-subtle">{zh ? "桌面聊天顶部：阶段进度居中。检查右侧文档后，在文档底部固定操作栏点击下一步、回退或 PR 确认；点击阶段只查看记录，不改变流程。工作中或文件不完整时不能进入下一步，回退保留代码和历史。" : "Desktop chat: stage progress is centered above the conversation. Review the document on the right, then use the fixed bottom action bar for Next, Back or PR confirmation. Stage clicks only view records. Work in progress or incomplete documents block advancement; Back preserves code and history."}</p><ol className="space-y-3">
           {steps.map((step, index) => <li key={step.title}>
             {step.section && <h3 className={`${index ? "pt-3" : ""} mb-3 text-ui-sm font-medium text-foreground-subtle`}>{zh ? step.section : step.sectionEn}</h3>}
             <div className="flex gap-3">

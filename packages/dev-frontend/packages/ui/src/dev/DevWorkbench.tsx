@@ -1,4 +1,4 @@
-import { DevPhaseHeader } from "./DevPhaseHeader.js";
+import { DevPhaseHeader, DevDocumentPhaseActions } from "./DevPhaseHeader.js";
 import { useDevDataSource } from "./data-source.js";
 import { DevSrDeliveryControls } from "./DevSrDeliveryControls.js";
 import { srStartBlocker } from "./domain.js";
@@ -400,6 +400,7 @@ export function DevMaterialsPane() {
 					</>
 				)}
 			</div>
+      <DevDocumentPhaseActions />
 		</aside>
 	);
 }
