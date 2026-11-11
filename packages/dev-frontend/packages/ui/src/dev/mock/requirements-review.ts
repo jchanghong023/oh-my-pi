@@ -33,10 +33,11 @@ export function createPrototypeRequirementsReview(group: DevRequirementGroup, em
   reviewer: {
    projectId: group.projectId,
    irId: group.id,
-   sessionId: `sample-requirements-reviewer:${group.id}:${round}`,
-   sessionFile: `/demo/sessions/requirements-review-${group.id}.jsonl`,
+   sessionId: `sample-requirements-reviewer:${group.id}:${round}:${group.revision}`,
+   sessionFile: `/demo/sessions/requirements-review-${group.id}-${round}-${group.revision}.jsonl`,
    role: "reviewer",
    phase: "requirements",
+   modelConfig: readPrototypeAgentModelBinding("requirements-review"),
    round,
   },
   createdAt: new Date().toISOString(),

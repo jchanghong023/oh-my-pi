@@ -34,15 +34,7 @@ export function requirementsReviewBlocker(group: DevRequirementGroup): string | 
  if (!files) return "请先补齐 IR 与至少一个 SR 的需求材料，再发起业务需求评审。";
  if (!group.review) return "尚未完成业务需求评审，请先检查当前需求版本。";
  if (!requirementsReviewCurrent(group)) return "需求版本已变化，旧评审已失效，请重新评审。";
- // 同材料重跑只产生新评审，不能解除尚未处理的争议或代替实际补充材料。
- const decisions = group.requirementsDecisions ?? [];
- let decision: DevRequirementsDecision | undefined;
- for (let index = decisions.length - 1; index >= 0; index--) {
-  if (sameFileVersions(files, decisions[index]!.inputFiles)) { decision = decisions[index]; break; }
- }
- if (decision?.outcome === "defer") return "业务争议暂缓处理，尚未解决；请记录新的明确处理结果，或更新需求材料后重新评审。相同材料重评不能解除暂缓。";
- if (decision?.outcome === "supplement") return "人工处理要求补充需求并重评；请先更新需求材料，再显式发起业务需求评审。相同材料重评不能替代补充。";
- if (!group.review.passed || group.review.findings?.some(item => item.level === "blocking")) return "业务需求评审未通过，请补充阻断问题并重新评审；业务争议交人工处理。";
+ if (!group.review.passed || group.review.findings?.some(item => item.level === "blocking")) return "只读评审报告了问题，可直接向评审 Agent 询问；需要补充时返回业务 Agent 修改需求后重评。";
 }
 
 /** Opaque in-memory version, not a real Git commit or content hash. */

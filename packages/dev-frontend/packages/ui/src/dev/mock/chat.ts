@@ -18,7 +18,7 @@ import { createPrototypeEvent, silentPrototypeEvent, unavailablePrototypeOperati
 import { PROTOTYPE_MODEL_SELECTION } from "./settings.js";
 import { prototypeConversationFileChanges } from "./files.js";
 import { resolvePrototypeWorkspace } from "./workspace.js";
-import { conversationReadOnlyReason } from "../domain.js";
+import { conversationReadOnlyReason, requirementsReviewCurrent } from "../domain.js";
 import { applyPrototypeAction, getPrototypeWorkflow, publishPrototypeProposalForSession } from "./workflow.js";
 import { prototypeSkillDesignReply, prototypeSkillDesignBinding } from "./skill-design.js";
 import { createPrototypeAutomationServices } from "./automations.js";
@@ -30,6 +30,8 @@ import proposalDiscussionPrompt from "./prompts/proposal-discussion.md?raw";
 import irAcceptanceRequest from "./ir-acceptance-request.md?raw";
 import irAcceptanceWelcome from "./ir-acceptance-welcome.md?raw";
 import skillDesignWelcome from "./skill-design-welcome.md?raw";
+import requirementsReviewPrompt from "./prompts/requirements-review.md?raw";
+import requirementsReviewDialogue from "./requirements-review-dialogue.md?raw";
 import requirementsGenerated from "./requirements-generated.md?raw";
 import requirementsSupplemented from "./requirements-supplemented.md?raw";
 
@@ -45,6 +47,7 @@ export interface PrototypeAttachment {
 
 export const PROTOTYPE_CHAT_DISCUSSIONS = {
   free: [[freeChatPrompt, freeChatDiscussion]],
+  "requirements-review": [],
   "ir-acceptance": [[irAcceptanceRequest, irAcceptanceWelcome]],
   requirements: [
     ["我们希望为 Aurora 企业协作控制台梳理统一登录与权限体验。首屏需要让用户快速找到当前项目，登录过期后要能清晰恢复。先讨论需求，不进入实现。", "可以。建议分成四个边界：统一登录、会话恢复、角色权限、操作审计。\n\n1. 登录支持企业邮箱与 SSO 入口，错误信息靠近字段。\n2. 会话过期后保留未发送草稿，重新进入时回到原项目。\n3. 权限不足时说明缺少的角色，不展示不可操作的危险按钮。\n4. 审计记录包含操作者、对象与时间，并提供空态和筛选。\n\n以上是阶段性前端原型的讨论样例，尚未连接真实认证或 OMP 后端。"],
@@ -127,8 +130,8 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     const free = readPrototypeFreeChat(sessionId);
     const sr = workflow.srs.find(item => item.id === ref?.srId);
     const group = [...workflow.groups, ...workflow.drafts].find(item => item.id === ref?.irId);
-    const stage = ref?.phase ?? stageFor(sessionId);
-    const title = free?.meta.title ?? (sessionId.startsWith("prototype-skill-design:") ? "Skill 设计 Agent · 独立会话（样例）" : `${sr?.title ?? group?.title ?? "需求讨论"} · ${stage === "ir-acceptance" ? "IR 验收" : stage === "requirements" ? "需求" : stage === "solution" ? "方案" : stage === "planning" ? "计划" : stage === "executing" ? "实施" : "交付"}（样例）`);
+    const stage = ref?.role === "reviewer" ? "requirements-review" : ref?.phase ?? stageFor(sessionId);
+    const title = free?.meta.title ?? (sessionId.startsWith("prototype-skill-design:") ? "Skill 设计 Agent · 独立会话（样例）" : `${sr?.title ?? group?.title ?? "需求讨论"} · ${stage === "ir-acceptance" ? "IR 验收" : stage === "requirements-review" ? "只读需求评审" : stage === "requirements" ? "需求" : stage === "solution" ? "方案" : stage === "planning" ? "计划" : stage === "executing" ? "实施" : "交付"}（样例）`);
     // 专属讨论只能绑定对应对象，不能因阶段相同而灌入新提案或新 SR。
     const sampleStage = stage === "free" || stage === "ir-acceptance"
       || (group?.id === "ir-auth" && !sr && stage === "requirements")
@@ -137,6 +140,12 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       || (group?.id === "ir-auth" && sr?.id === "sr-permissions" && stage === "executing")
       || (group?.id === "ir-auth" && sr?.id === "sr-audit" && stage === "pr");
     const snapshot = conversation(sessionId, stage, title, sampleStage ? PROTOTYPE_CHAT_DISCUSSIONS[stage] : []);
+    const boundReview = group && [group.review, ...(group.reviewHistory ?? [])].find(review => review?.reviewer.sessionId === sessionId);
+    if (stage === "requirements-review" && boundReview) {
+      snapshot.rows.window = [];
+      appendRows(snapshot.rows.window, sessionId, requirementsReviewPrompt, boundReview.report, initialTime);
+      snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
+    }
     if (ref && group && !group.proposalLocation && !sampleStage) {
       appendRows(snapshot.rows.window, sessionId, `请讨论「${sr?.title ?? group.title}」的${stage === "planning" ? "开发计划" : stage === "executing" ? "实施边界" : stage === "pr" ? "交付评审" : "需求"}。`, `**${sr?.title ?? group.title} · 对象专属演示**\n\n当前仅展示此对象的阶段讨论入口，没有已执行的模型、工具或验证记录。请围绕本对象补充目标、边界与验收条件；不会复用其他需求的历史。`, initialTime);
       snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
@@ -256,7 +265,8 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       const reason = conversationReadOnlyReason(view, { projectId: ref.projectId, irId: ref.irId, srId: ref.srId, ...(ref.phase === "ir-acceptance" ? { irAcceptance: true } : ref.phase === "requirements" || ref.phase === "solution" ? { discussionPhase: ref.phase } : { stage: ref.phase, stageRound: ref.round }) }, { codeDevelopment: prototypeCodeDevelopmentAllowed(), proposalDiscussion: prototypeProposalDiscussionAllowed() });
       if (reason) throw new Error(reason);
       const proposal = getPrototypeWorkflow({ projectId: project.id, irId: ref.irId }).drafts.find(item => item.id === ref.irId);
-      if (ref.phase === "requirements" && proposal && content.trim()) {
+      if (ref.role === "reviewer" && (!proposal || !requirementsReviewCurrent(proposal) || proposal.review?.reviewer.sessionId !== ref.sessionId)) throw new Error("当前为历史评审或需求版本已变化，仅供只读查看；请评审当前版本后再对话。");
+      if (ref.phase === "requirements" && ref.role !== "reviewer" && proposal && content.trim()) {
         generated = !proposal.srIds.length;
         applyPrototypeAction({ type: generated ? "generateRequirements" : "supplementRequirements", projectId: project.id, irId: proposal.id, note: content }, { projectId: project.id, irId: proposal.id, discussionPhase: "requirements" });
       }
@@ -264,7 +274,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     }
 
     if (value.stage === "free" && value.meta.title === "新建会话") { value.meta.title = content.trim().split("\n")[0]!.slice(0, 40) || "新建会话"; value.snapshot.meta.title = value.meta.title; }
-    appendRows(value.snapshot.rows.window, value.meta.taskId, content, generated !== undefined ? generated ? requirementsGenerated : requirementsSupplemented : value.meta.taskId.startsWith("prototype-skill-design:") ? prototypeSkillDesignReply(value.meta.taskId, content) : `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在本次浏览器会话中。当前${value.stage === "ir-acceptance" ? "IR 整体验收" : value.stage === "free" ? "项目自由会话" : value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。用户确认原型后再进入真实后端对接与验收阶段。`, Date.now(), commandId, refs, value.snapshot.config.model);
+    appendRows(value.snapshot.rows.window, value.meta.taskId, content, value.stage === "requirements-review" ? requirementsReviewDialogue : generated !== undefined ? generated ? requirementsGenerated : requirementsSupplemented : value.meta.taskId.startsWith("prototype-skill-design:") ? prototypeSkillDesignReply(value.meta.taskId, content) : `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在本次浏览器会话中。当前${value.stage === "ir-acceptance" ? "IR 整体验收" : value.stage === "free" ? "项目自由会话" : value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。用户确认原型后再进入真实后端对接与验收阶段。`, Date.now(), commandId, refs, value.snapshot.config.model);
     publishPrototypeProposalForSession(value.meta.taskId);
     value.snapshot.rows.totalCount = value.snapshot.rows.window.length; value.snapshot.rows.firstRowId = value.snapshot.rows.window[0]?.rowId ?? null; changed(value);
   };

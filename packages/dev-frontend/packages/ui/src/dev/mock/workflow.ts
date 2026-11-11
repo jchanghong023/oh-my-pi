@@ -15,7 +15,7 @@ import { readPrototypeAgentModelBinding } from "./agent-models.js";
 import { stageMaterialBlocker } from "../domain.js";
 import { readPrototypeProposalPrHandoff } from "./proposal-pr-handoff.js";
 import { createPrototypeRequirementsReview } from "./requirements-review.js";
-import { requirementsReviewBlocker, requirementsReviewCurrent, requirementsReviewInputs } from "../domain.js";
+import { requirementsReviewBlocker, requirementsReviewCurrent, requirementsReviewInputs, proposalViewedIndex } from "../domain.js";
 import { getEmployeeId, isEmployeeId } from "../identity.js";
 import { prototypeChangeRoot, prototypeSpecPath, prototypeProposalLocation } from "./proposal-storage.js";
 import { hasCurrentProposalSolution } from "../domain.js";
@@ -29,7 +29,7 @@ import type {
   DevSelection, DevStageMaterial, DevSystemRequirement, DevWorkflowResult, DevWorkflowStage, DevWorkflowView,
 } from "../types.js";
 
-export const DEFAULT_SELECTION: DevSelection = (prototypeRecoveryScenario === "proposal-intake" || prototypeRecoveryScenario === "proposal-feedback") ? { projectId: "demo-aurora", irId: "draft-notification" } : prototypeRecoveryScenario === "sr-delivery" ? { projectId: "demo-aurora", irId: "ir-auth", srId: "sr-auth" } : prototypeRecoveryScenario === "requirements-review" ? { projectId: "demo-aurora", irId: "draft-automation" } : prototypeRecoveryScenario === "ir-acceptance" ? { projectId: "demo-aurora", irId: "ir-auth", irAcceptance: true } : prototypeRecoveryScenario === "empty-projects" ? {} : prototypeRecoveryScenario === "empty-releases" || prototypeRecoveryScenario === "empty-requirements" ? { projectId: "demo-aurora" } : prototypeRecoveryScenario === "missing-requirement" ? { projectId: "demo-aurora", irId: "removed-proposal" } : prototypeRecoveryScenario === "missing-sr" ? { projectId: "demo-aurora", irId: "ir-auth", srId: "removed-sr" } : { projectId: "demo-aurora", irId: "ir-auth", srId: "sr-auth" };
+export const DEFAULT_SELECTION: DevSelection = (prototypeRecoveryScenario === "proposal-intake" || prototypeRecoveryScenario === "proposal-feedback") ? { projectId: "demo-aurora", irId: "draft-notification" } : prototypeRecoveryScenario === "sr-delivery" ? { projectId: "demo-aurora", irId: "ir-auth", srId: "sr-auth" } : (prototypeRecoveryScenario === "requirements-review" || prototypeRecoveryScenario === "review-chat") ? { projectId: "demo-aurora", irId: "draft-automation" } : prototypeRecoveryScenario === "ir-acceptance" ? { projectId: "demo-aurora", irId: "ir-auth", irAcceptance: true } : prototypeRecoveryScenario === "empty-projects" ? {} : prototypeRecoveryScenario === "empty-releases" || prototypeRecoveryScenario === "empty-requirements" ? { projectId: "demo-aurora" } : prototypeRecoveryScenario === "missing-requirement" ? { projectId: "demo-aurora", irId: "removed-proposal" } : prototypeRecoveryScenario === "missing-sr" ? { projectId: "demo-aurora", irId: "ir-auth", srId: "removed-sr" } : { projectId: "demo-aurora", irId: "ir-auth", srId: "sr-auth" };
 export const PROTOTYPE_WORKSPACE_IDENTITY = "dev-ui-prototype";
 export const PROTOTYPE_RELEASE_ID = "release-2026-11";
 const createdAt = "2026-11-10T09:00:00.000Z";
@@ -172,6 +172,11 @@ export function createPrototypeWorkflow(): DevWorkflowView {
   }
   materials.push(...groups.map(prototypeProposalSolution), ...drafts.filter(item => item.proposalStage === "solution").map(prototypeProposalSolution));
   materials.push(...srs.filter(sr => sr.status !== "pending").flatMap(sr => developmentMaterials(sr.projectId, sr.irId, sr.id, sr.title).filter(item => sr.materials.some(file => file.path === item.path))));
+  if (prototypeRecoveryScenario === "review-chat") drafts[0]!.review = createPrototypeRequirementsReview(drafts[0]!, "j00808876");
+  for (const group of [...groups, ...drafts]) {
+    const reviewer = group.review?.reviewer;
+    if (reviewer && "projectId" in reviewer) group.sessions.push(reviewer);
+  }
   const result: DevWorkflowView = { version: 1, revision: 12, ...sharedSettings, releases: readPrototypeProjectReleases(), currentProjectId: DEFAULT_SELECTION.projectId,
     groups, drafts, srs, materials, repositoryHeads: Object.fromEntries(sharedSettings.projects.map(project => [project.repositoryId, `sample-default-${project.repositoryId}`])), operations: [receipt("需求样例整理", 1, "ir-auth"), receipt("提案方案已随需求合入（样例）", 2, "ir-auth"),
       receipt("计划样例准备", 3, "ir-auth", "sr-session"), receipt("验证报告展示", 4, "ir-auth", "sr-permissions"),
@@ -217,7 +222,11 @@ export function resolvePrototypeSession(view: DevWorkflowView, selection: DevSel
   if (selection.srId && !sr) return;
   if (selection.irAcceptance) return view.groups.find(item => item.id === selection.irId)?.acceptance?.session;
   const proposal = view.drafts.find(item => item.projectId === projectId && item.id === selection.irId);
-  if (proposal) return proposal.sessions.filter(item => item.projectId === projectId && item.irId === proposal.id && !item.srId && item.phase === (selection.discussionPhase ?? proposal.proposalStage ?? "requirements")).sort((a, b) => b.round - a.round)[0];
+  if (proposal && !selection.srId && proposalViewedIndex(proposal, selection) === 1) {
+    const reviewer = proposal.review?.reviewer;
+    return reviewer && "projectId" in reviewer ? reviewer : undefined;
+  }
+  if (proposal) return proposal.sessions.filter(item => item.projectId === projectId && item.irId === proposal.id && !item.srId && item.role !== "reviewer" && item.phase === (selection.discussionPhase ?? proposal.proposalStage ?? "requirements")).sort((a, b) => b.round - a.round)[0];
   if (selection.srId && !sr?.stage) return;
   const phase = selection.stage ?? sr?.stage ?? "requirements";
   const candidates = view.sessions.filter(item => item.projectId === projectId && item.irId === selection.irId && item.srId === selection.srId && item.phase === phase);
@@ -448,7 +457,11 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       if (currentGroup!.review) { currentGroup!.reviewHistory ??= []; currentGroup!.reviewHistory.push(structuredClone(currentGroup!.review)); }
       currentGroup!.revision += 1;
       currentGroup!.review = createPrototypeRequirementsReview(currentGroup!, getEmployeeId());
-      operation.type = "需求评审 Agent 检查 OpenSpec 需求产物（静态演示）";
+      if ("projectId" in currentGroup!.review.reviewer) {
+        const reviewer = currentGroup!.review.reviewer;
+        currentGroup!.sessions.push(reviewer); state.sessions.push(reviewer);
+      }
+      operation.type = "只读需求评审 Agent 报告问题并进入评审对话（静态演示）";
       break;
     case "recordRequirementsDecision":
       currentGroup!.requirementsDecisions ??= [];

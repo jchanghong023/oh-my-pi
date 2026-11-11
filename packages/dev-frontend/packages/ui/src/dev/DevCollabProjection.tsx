@@ -9,7 +9,7 @@ import { useZCodeStore } from "@/store/StoreProvider.js";
 import { useDev } from "./DevContext.js";
 
 /** Reuses the existing collaboration dialog; no remote transport or extra chat surface. */
-export function DevCollabProjection() {
+export function DevCollabProjection({ iconOnly = false }: { iconOnly?: boolean }) {
  const source = useDevDataSource();
   const dev = useDev()!;
   const theme = useZCodeStore(state => state.theme);
@@ -24,8 +24,8 @@ export function DevCollabProjection() {
   const material = peer?.materials.find(item => item.path === materialPath) ?? peer?.materials[0];
   if (source.mode !== "prototype" || !source.collaboration) return null;
   return <>
-    <Button size="sm" variant="ghost" className="ml-auto shrink-0 gap-1.5" aria-label="协作成员与共享材料（样例）" data-testid="collab-open" onClick={() => setOpen(true)}>
-      <Users className="size-3.5" />协作<span className="text-foreground-subtle">{peers.length}</span>
+    <Button size={iconOnly ? "icon-sm" : "sm"} variant="ghost" className={iconOnly ? "shrink-0" : "ml-auto shrink-0 gap-1.5"} title="协作" aria-label="协作成员与共享材料（样例）" data-testid="collab-open" onClick={() => setOpen(true)}>
+      <Users className="size-3.5" />{!iconOnly && <>协作<span className="text-foreground-subtle">{peers.length}</span></>}
     </Button>
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="flex h-[90dvh] max-w-[min(1200px,96vw)] flex-col gap-0 p-0" data-testid="dev-collab-projection">

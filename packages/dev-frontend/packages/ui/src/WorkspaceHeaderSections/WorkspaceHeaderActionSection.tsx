@@ -1,3 +1,5 @@
+import { useDev } from "@/dev/DevContext.js";
+import { DevCollabProjection } from "@/dev/DevCollabProjection.js";
 import { WorkspaceEditorButtonGroup } from "@/WorkspaceEditorButtonGroup.js";
 import { WorkspaceSidePaneToggleButton } from "@/WorkspaceSidePaneToggleButton.js";
 import type { WorkspaceHeaderActionSectionProps } from "@/WorkspaceHeaderSections/shared.js";
@@ -17,6 +19,8 @@ export function WorkspaceHeaderActionSection({
   simplifyForNarrowViewport = false,
   hideHelpMenu = false,
 }: WorkspaceHeaderActionSectionProps) {
+  const dev = useDev();
+  const proposal = Boolean(!dev?.selection.srId && dev?.view?.drafts.some(item => item.id === dev.selection.irId));
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       {variant === "task" ? (
@@ -27,6 +31,7 @@ export function WorkspaceHeaderActionSection({
           onSelectedEditorChange={onSelectedEditorChange}
         />
       ) : null}
+      {proposal ? <DevCollabProjection iconOnly /> : null}
       {!simplifyForNarrowViewport && !hideHelpMenu ? <WorkspaceHelpMenuButton /> : null}
       {!isSidePaneOpen ? (
         <WorkspaceSidePaneToggleButton

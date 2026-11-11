@@ -1,3 +1,5 @@
+import { useDev } from "@/dev/DevContext.js";
+import { DevProposalMenu } from "@/dev/DevProposalMenu.js";
 import { useSessionRuntimeRestart } from "@/app-shell/useWorkspaceSessionReload.js";
 import { WorkspaceContextPath } from "@/WorkspaceHeaderSections/WorkspaceContextPath.js";
 import { WorkspaceLastActivity } from "@/WorkspaceHeaderSections/WorkspaceLastActivity.js";
@@ -76,6 +78,8 @@ export function WorkspaceHeaderTitleSection({
   simplifyForNarrowViewport = false,
   compact = false,
 }: WorkspaceHeaderTitleSectionProps) {
+  const dev = useDev();
+  const proposal = !dev?.selection.srId ? dev?.view?.drafts.find(item => item.id === dev.selection.irId) : undefined;
   const { intl } = useZCodeIntl();
   const confirmDialog = useConfirmDialog();
   const services = useWorkspaceServices(workspaceAbsPath, remoteSessionId, workspaceIdentity);
@@ -395,7 +399,7 @@ export function WorkspaceHeaderTitleSection({
         </h1>
       ) : null}
       <div className="flex min-w-0 shrink-0 items-center gap-1">
-        {!isDraftNewTask ? (
+        {proposal ? <DevProposalMenu group={proposal} /> : !isDraftNewTask ? (
           <DropdownMenu open={taskMenuOpen} onOpenChange={setTaskMenuOpen}>
             <DropdownMenuTrigger asChild>
               <Button

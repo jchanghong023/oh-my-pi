@@ -1,3 +1,4 @@
+import { useDev } from "@/dev/DevContext.js";
 import type {
   ZCodeProvider,
   ZCodeTaskMeta,
@@ -111,6 +112,9 @@ export function WorkspaceHeader({
   onOpenWorkspace: () => void;
   allowOpenWorkspace?: boolean;
 }) {
+  const dev = useDev();
+  // 提案入库或只读时可能没有活动会话，标题仍统一放在原生头部。
+  const devProposal = Boolean(!dev?.selection.srId && dev?.view?.drafts.some(item => item.id === dev.selection.irId));
   const [selectedEditor, setSelectedEditor] = useState<EditorInfo | null>(null);
   const headerLeadingPaddingClass = resolveTopOverlayLeadingPaddingClass({
     isSidebarVisible,
@@ -140,9 +144,9 @@ export function WorkspaceHeader({
           headerLeadingPaddingClass,
         )}
       >
-        {variant === "task" ? (
+        {variant === "task" || devProposal ? (
           <WorkspaceHeaderTitleSection
-            variant={variant}
+            variant={devProposal ? "task" : variant}
             backendBusinessAvailable={backendBusinessAvailable}
             readOnlyReason={readOnlyReason}
             workspaceAbsPath={workspaceAbsPath}
