@@ -25,7 +25,6 @@ import { DevProposalDeliveryControls } from "./DevProposalDeliveryControls.js";
 import { PROPOSAL_STATUS_LABELS } from "./domain.js";
 import { DevCollabProjection } from "./DevCollabProjection.js";
 import { DevDeleteRequirement } from "./DevDeleteRequirement.js";
-import { MATERIAL_KIND_LABELS } from "./domain.js";
 import { getEmployeeId } from "./identity.js";
 import { toast } from "@/components/ui/toast.js";
 function copyMaterial(text: string): Promise<void> {
@@ -361,6 +360,11 @@ export function DevMaterialsPane() {
 		preferred?.path,
 		preferred?.sha256,
 	]);
+  const displayPath = (filePath: string) => proposal
+    ? `${group?.proposalLocation?.directory ?? ""}${filePath}`
+    : group?.acceptance?.status === "completed"
+      ? group.acceptance.archive?.moves.find(move => move.sourcePath === filePath)?.path ?? filePath
+      : filePath;
 	const listed = materials.find(item => item.path === path);
 	const material = listed;
 	const error = listed?.error;
@@ -373,7 +377,6 @@ export function DevMaterialsPane() {
 			data-testid="materials-pane"
 		>
 			<div className="space-y-2 p-3">
-                {group && <p className="text-ui-sm text-foreground-subtle">{selection.srId ? "当前 SR 材料" : "IR 需求材料"} · {materials.length} 个文件</p>}
 				<Select value={path || "none"} onValueChange={value => setPath(value === "none" ? "" : value)}>
 					<SelectTrigger className="w-full min-w-0" data-testid="material-menu" aria-label={selection.srId ? "当前 SR 文件目录" : "IR 需求文件目录"}>
 						<SelectValue />
@@ -384,18 +387,11 @@ export function DevMaterialsPane() {
                         </SelectItem>}
 						{materials.map(item => (
 							<SelectItem key={item.path} value={item.path}>
-								{item.path.endsWith("/design.md") ? "IR 技术设计" : MATERIAL_KIND_LABELS[item.kind]} · {item.path.replace(/^openspec\/changes\/[^/]+\//, "")}
-								{item.round ? ` · 第 ${item.round} 轮` : ""}{!item.valid ? "（已失效）" : ""}
+                                {displayPath(item.path)}
 							</SelectItem>
 						))}
 					</SelectContent>
 				</Select>
-				{path && group && <p className="break-all text-ui-sm text-foreground-subtle" data-testid="material-source-path">{view?.drafts.some(item => item.id === group.id) ? `临时文件：${group.proposalLocation?.directory ?? ""}${path}` : group.acceptance?.status === "completed" && group.acceptance.archive?.moves.some(move => move.sourcePath === path) ? `归档文件（样例）：${group.acceptance.archive.moves.find(move => move.sourcePath === path)!.path}` : `仓库文件：${path}`}</p>}
-				{stage && (
-					<p className="text-ui-sm text-foreground-subtle">
-						查看：{DEV_STAGE_LABELS[stage]} · 当前：{sr?.stage ? DEV_STAGE_LABELS[sr.stage] : "未开始"}
-					</p>
-				)}
 
 			</div>
 			<div
@@ -418,11 +414,6 @@ export function DevMaterialsPane() {
 					</p>
 				) : (
 					<>
-						{!current.valid && (
-							<p role="status" className="mb-3 text-ui-base text-destructive">
-								材料已失效，需要重新生成或验证。以下仅供历史查看。
-							</p>
-						)}
 						<MessageResponse className="min-w-0 break-words" theme={theme} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "样例材料没有正文。"}</MessageResponse>
 					</>
 				)}
