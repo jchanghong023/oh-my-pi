@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
-import { Check, RotateCcw } from "lucide-react";
-import { Progress } from "@/components/ui/progress.js";
+import { RotateCcw } from "lucide-react";
+import { DevWorkflowTimeline } from "./DevWorkflowTimeline.js";
 import { Button } from "@/components/ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
@@ -132,20 +132,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
   const statusText = `${role} · ${status}${actor ? ` · ${actor}` : ""}`;
   return <header className="shrink-0 space-y-1 border-b border-border px-4 py-2" data-testid="dev-phase-header">
     <div className="flex min-w-0 justify-center" data-testid="dev-phase-toolbar">
-      <nav className="min-w-0 rounded-lg border border-border bg-surface p-1" aria-label={proposal ? "提案阶段" : sr ? "SR 开发阶段": "IR 完成阶段"}>
-        <div className="flex items-center gap-0.5">
-        {labels.map((label, index) => {
-          const entered = proposal ? index <= phase || (index === 1 && !!group.review) || (index === 2 && group.sessions.some(item => item.phase === "solution")) || (index === 3 && !!group.proposalDelivery) : sr ? index === 0 || sr.sessions.some(item => item.phase === srStages[index]) : index === 0 || Boolean(acceptance && index <= phase);
-          return <span key={label} className="inline-flex min-w-0 items-center gap-0.5">
-            {index > 0 && <span aria-hidden="true" className={`mx-0.5 h-px w-2 shrink-0 ${index <= phase ? "bg-foreground/60" : "bg-border"}`} />}
-            <Button size="sm" variant="ghost" disabled={!entered || (proposal ? !source.capabilities.proposalDiscussion : !source.capabilities.codeDevelopment)} aria-current={phase === index ? "step" : undefined} aria-pressed={selected === index} onClick={() => jump(index)} className={`h-8 gap-1.5 whitespace-nowrap rounded-md border px-1.5 text-ui-sm disabled:opacity-80 motion-safe:transition-colors motion-reduce:transition-none ${selected === index ? "border-border bg-selected font-semibold text-foreground shadow-sm" : "border-transparent text-foreground-subtle"}`} data-testid={`dev-phase-${index}`}>
-              <span aria-hidden="true" className={`flex size-5 shrink-0 items-center justify-center rounded-full border text-ui-xs font-medium ${phase === index ? "border-foreground bg-foreground text-background" : index < phase || complete ? "border-foreground/50 bg-selected text-foreground" : "border-border text-foreground-subtlest"} ${running && phase === index ? "motion-safe:animate-pulse" : ""}`}>{index < phase || complete ? <Check className="size-3" /> : index + 1}</span>{label}
-            </Button>
-          </span>;
-        })}
-        </div>
-        <Progress value={complete ? 100 : (phase / labels.length) * 100} aria-label="当前流程进度" aria-valuemin={0} aria-valuemax={labels.length} aria-valuenow={complete ? labels.length : phase} aria-valuetext={`${labels[phase]}${complete ? "，已完成" : ""}`} className="mt-1 h-0.5 bg-border" indicatorClassName="bg-foreground motion-reduce:transition-none" />
-      </nav>
+      <DevWorkflowTimeline labels={labels} phase={phase} selected={selected} complete={complete} running={running} proposal={proposal} sr={Boolean(sr)} rounds={labels.map((_, index) => proposal ? index === 0 ? group.proposalRound ?? 1 : index === 1 ? group.review?.round ?? 0 : index === 2 ? Math.max(0, ...group.sessions.filter(item => item.phase === "solution").map(item => item.round)) : 0 : sr?.round ?? 1)} returned={Boolean(proposal && group.returnFeedback)} canNavigate={proposal ? Boolean(source.capabilities.proposalDiscussion) : Boolean(source.capabilities.codeDevelopment)} entered={labels.map((_, index) => proposal ? index <= phase || (index === 1 && !!group.review) || (index === 2 && group.sessions.some(item => item.phase === "solution")) || (index === 3 && !!group.proposalDelivery) : sr ? index === 0 || sr.sessions.some(item => item.phase === srStages[index]) : index === 0 || Boolean(acceptance && index <= phase))} onSelect={jump} />
 
     </div>
     <p className={`truncate text-center text-ui-sm ${dev.error ? "text-destructive" : "text-foreground-subtle"}`} title={dev.error ?? statusText} role={dev.error ? "alert" : undefined} data-testid="dev-phase-agent">{dev.error ? `操作失败：${dev.error}` : statusText}</p>

@@ -67,14 +67,17 @@ export function StationHead({
       )}
     </>
   );
-  return onSelect === undefined ? (
+  return onSelect === undefined || station.selectable === false ? (
     <span
       className={cn(
         "wf-station flex h-6 min-w-0 shrink items-center gap-2 rounded-md text-left",
         foldClass,
+        station.selected && "bg-selected px-2 text-foreground ring-1 ring-border",
       )}
       data-testid="workflow-timeline-station-head"
       title={title}
+      aria-current={station.current ? "step" : undefined}
+      data-selected={station.selected ? "true" : undefined}
     >
       {head}
     </span>
@@ -83,9 +86,12 @@ export function StationHead({
       className={cn(
         "wf-station wf-station-open flex h-6 min-w-0 shrink cursor-pointer items-center gap-2 rounded-md text-left outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40",
         foldClass,
+        station.selected && "bg-selected px-2 text-foreground ring-1 ring-border",
       )}
       onClick={onSelect}
       title={title}
+      aria-current={station.current ? "step" : undefined}
+      data-selected={station.selected ? "true" : undefined}
       type="button"
     >
       {head}

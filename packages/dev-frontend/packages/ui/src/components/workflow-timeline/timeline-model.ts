@@ -101,6 +101,10 @@ export interface TimelinePill {
 }
 
 export interface TimelineStation {
+  /** Optional host navigation state; viewing a station never advances the workflow. */
+  current?: boolean;
+  selected?: boolean;
+  selectable?: boolean;
   id: string;
   naming: PhaseNaming;
   pills: TimelinePill[];
