@@ -1,5 +1,5 @@
 import { useDevDataSource } from "./data-source.js";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button.js";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -8,13 +8,13 @@ import {
 import { useDev } from "./DevContext.js";
 
 /** Removal is performed by the injected source; sample and host persistence remain isolated. */
-export function DevDeleteRequirement() {
+export function DevDeleteRequirement({ renderTrigger }: { renderTrigger?: (openDelete?: () => void, prohibition?: string) => ReactNode }) {
   const source = useDevDataSource();
   const dev = useDev()!;
   const [targetId, setTargetId] = useState<string>();
   const { selection, view } = dev;
   const group = [...(view?.groups ?? []), ...(view?.drafts ?? [])].find(item => item.id === selection.irId && item.projectId === selection.projectId);
-  if (!source.capabilities.workflowCommands.includes("deleteRequirement") || !group || selection.srId) return null;
+  if (!source.capabilities.workflowCommands.includes("deleteRequirement") || !group || selection.srId) return <>{renderTrigger?.()}</>;
   const started = view?.srs.some(sr => sr.irId === group.id && sr.status !== "pending");
   const prohibition = group.merge || group.proposalRevisions?.length || group.status === "frozen" || started ? "已入库的正式提案、修订及开发历史保留展示；只能移除允许删除的草稿。" : undefined;
   const remove = async () => {
@@ -23,7 +23,7 @@ export function DevDeleteRequirement() {
     if (result?.status === "completed") setTargetId(undefined);
   };
   return <>
-    <Button size="sm" variant="outline" data-testid="delete-requirement" disabled={!!prohibition} title={prohibition} onClick={() => setTargetId(group.id)}>删除需求</Button>
+    {renderTrigger ? renderTrigger(() => setTargetId(group.id), prohibition) : <Button size="sm" variant="outline" data-testid="delete-requirement" disabled={!!prohibition} title={prohibition} onClick={() => setTargetId(group.id)}>删除需求</Button>}
     <AlertDialog open={targetId === group.id} onOpenChange={open => { if (!open) setTargetId(undefined); }}>
       <AlertDialogContent>
         <AlertDialogHeader>

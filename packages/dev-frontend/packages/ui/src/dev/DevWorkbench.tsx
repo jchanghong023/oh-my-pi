@@ -21,7 +21,6 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover.js";
 import { MessageResponse } from "@/components/ai-elements/message.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
-import { DevProposalControls } from "./DevProposalControls.js";
 import { DevProposalDeliveryControls } from "./DevProposalDeliveryControls.js";
 import { PROPOSAL_STATUS_LABELS } from "./domain.js";
 import { DevCollabProjection } from "./DevCollabProjection.js";
@@ -142,7 +141,6 @@ function DevFlowDetails() {
 			{!proposal && sr?.developerEmployeeId && <p className="text-ui-sm text-foreground-subtle" data-testid="sr-developer">开发人：{sr.developerEmployeeId}{sr.status === "developing" ? ownsSr ? " · 我正在开发" : " · 当前仅查看，不操作其他同事的开发会话" : ""}</p>}
             {!proposal && sr?.worktree && <p className="break-all text-ui-sm text-foreground-subtle" data-testid="sr-workspace-context">{ownsSr && sr.status === "developing" ? "开发工作区" : "查看工作区"}：<code data-testid="sr-workspace-path">{sr.worktree.path}</code></p>}
             {viewingOtherSr && !sr?.developerEmployeeId && <p className="text-ui-sm text-foreground-subtle" data-testid="sr-developer">当前开发人待确认，仅查看已有记录。</p>}
-            {proposal && <DevProposalControls group={group} />}
 
 	            {!proposal && sr?.stage && <div className="flex flex-wrap items-center gap-2" data-testid="stage-view-context"><span className="text-ui-sm text-foreground-subtle">查看：{DEV_STAGE_LABELS[stageView!.stage!]} · 第 {stageView!.round} 轮{stageView!.isCurrent ? " · 当前阶段" : " · 历史只读"}</span>{sr.status === "developing" && !stageView!.isCurrent && <Button size="sm" variant="outline" data-testid="return-current-stage" onClick={() => dev.select({ ...selection, stage: undefined, stageRound: undefined })}>返回当前阶段</Button>}{sr.sessions.filter(item => item.phase === stageView?.stage).length > 1 && <Select value={String(stageView!.round)} onValueChange={value => dev.select({ ...selection, stageRound: Number(value) })}><SelectTrigger className="w-36" aria-label="查看阶段轮次"><SelectValue /></SelectTrigger><SelectContent>{sr.sessions.filter(item => item.phase === stageView?.stage).sort((a,b) => b.round - a.round).map(item => <SelectItem key={item.sessionId} value={String(item.round)}>第 {item.round} 轮{item.phase === sr.stage && item.round === sr.round ? "（当前）" : "（历史）"}</SelectItem>)}</SelectContent></Select>}</div>}
             {!proposal && sr && view?.repositoryDevelopment && <div className="space-y-1 text-ui-sm text-foreground-subtle" data-testid="sr-admission-summary">
@@ -325,7 +323,7 @@ export function DevMaterialsPane() {
       (!item.srId && item.kind === "solution" && item.path.endsWith("/design.md"));
   }) ?? [];
   const proposalSolutionView = proposal && (selection.discussionPhase ?? group?.proposalStage) === "solution";
-  const preferred = (selection.srId ? materials.find(item => item.path === sr?.documentPath)
+  const preferred = materials.find(item => item.path === selection.materialPath) ?? (selection.srId ? materials.find(item => item.path === sr?.documentPath)
     : proposalSolutionView ? materials.find(item => item.path.endsWith("/design.md"))
     : materials.find(item => item.path === group?.documentPath)) ?? materials[0];
 	useEffect(() => {
@@ -360,8 +358,8 @@ export function DevMaterialsPane() {
 		>
 			<div className="space-y-2 p-3">
 				<Select value={path || "none"} onValueChange={value => setPath(value === "none" ? "" : value)}>
-					<SelectTrigger className="w-full min-w-0" data-testid="material-menu" aria-label={selection.srId ? "当前 SR 文件目录" : "IR 需求文件目录"}>
-						<SelectValue />
+					<SelectTrigger className="h-auto min-h-8 w-full min-w-0 py-1.5" data-testid="material-menu" aria-label={selection.srId ? "当前 SR 文件目录" : "IR 需求文件目录"}>
+						<SelectValue><span className="block min-w-0 whitespace-normal break-all text-left text-ui-sm" title={path ? displayPath(path) : undefined}>{path ? displayPath(path) : awaitingRequirements ? "等待生成需求材料" : "选择文件"}</span></SelectValue>
 					</SelectTrigger>
 					<SelectContent position="popper" align="start">
                         {!materials.length && <SelectItem value="none">
@@ -396,7 +394,7 @@ export function DevMaterialsPane() {
 					</p>
 				) : (
 					<>
-						<MessageResponse className="min-w-0 break-words" theme={theme} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "样例材料没有正文。"}</MessageResponse>
+						<MessageResponse className="min-w-0 break-words [&_[data-markdown-table-toolbar]]:hidden [&_button]:hidden" theme={theme} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "样例材料没有正文。"}</MessageResponse>
 					</>
 				)}
 			</div>

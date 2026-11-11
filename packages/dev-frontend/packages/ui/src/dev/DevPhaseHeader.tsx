@@ -11,6 +11,9 @@ import { useDevDataSource } from "./data-source.js";
 import { getEmployeeId } from "./identity.js";
 import { deriveStageView, hasCurrentProposalSolution, proposalProgressIndex, proposalViewedIndex, irAcceptanceBlocker, irAcceptanceReportBlocker, irAcceptanceVersionBlocker, requirementsReviewBlocker, requirementsReviewInputs, srStartBlocker, stageMaterialBlocker } from "./domain.js";
 import { DevProposalDeliveryControls } from "./DevProposalDeliveryControls.js";
+import { DevProposalMenu } from "./DevProposalMenu.js";
+import { DevRequirementsDecision } from "./DevRequirementsDecision.js";
+import { requirementsReviewCurrent } from "./domain.js";
 import { DevSrDeliveryControls } from "./DevSrDeliveryControls.js";
 import { DevIrFinalPrControls } from "./DevIrFinalPrControls.js";
 import type { DevSelection, DevWorkflowStage } from "./types.js";
@@ -24,6 +27,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
   const dev = useDev()!;
   const source = useDevDataSource();
   const [more, setMore] = useState(false);
+  const [decision, setDecision] = useState(false);
   const [back, setBack] = useState(false);
   const [reason, setReason] = useState("");
   const [backStage, setBackStage] = useState<DevWorkflowStage>("planning");
@@ -47,10 +51,10 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
     : sr ? selected === 0 ? "计划 Agent" : "执行 Agent" : selected === 0 ? "各 SR 分别开发" : "IR 验收 Agent";
   const reviewIssue = requirementsReviewBlocker(group);
   const materialIssue = sr ? stageMaterialBlocker(sr, view.materials) : undefined;
-  const ownsSolution = group.developerAcceptance?.employeeId === getEmployeeId();
+  const ownsSolution = group.developerAcceptance?.round === (group.proposalRound ?? 1) && group.developerAcceptance.employeeId === getEmployeeId();
   const target = { projectId: group.projectId, irId: group.id };
   const jump = (index: number) => {
-    if (proposal) dev.select({ ...selection, proposalStep: proposalIds[index], discussionPhase: index > 1 ? "solution" : "requirements" });
+    if (proposal) dev.select({ ...selection, materialPath: undefined, proposalStep: proposalIds[index], discussionPhase: index > 1 ? "solution" : "requirements" });
     else if (sr) dev.select({ ...selection, stage: srStages[index], stageRound: undefined });
     else dev.select({ ...selection, irAcceptance: index > 0 });
   };
@@ -60,14 +64,15 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
     else dev.select({ ...selection, irAcceptance: phase > 0 });
   };
   let action: ReactNode;
+  let guidance: string | undefined;
   let status = complete ? "已完成 · 历史只读" : readOnly ? "只读查看" : history ? "历史只读" : running ? "工作中" : "等待人工确认";
   if (history) action = <Button size="sm" variant="outline" onClick={current}>返回当前阶段</Button>;
   else if (readOnly || complete) action = null;
   else if (proposal) {
-    if (phase === 0) { if (!requirementsReviewInputs(group)) status = "需求文档待完成"; action = <Button size="sm" disabled={pending || running || !requirementsReviewInputs(group)} title={!requirementsReviewInputs(group) ? "请先在聊天中完成需求文档" : "检查右侧需求文件后，人工发起评审"} onClick={() => void dev.command({ type: "runRequirementsReview", ...target })}>下一步：需求评审</Button>; }
+    if (phase === 0) { if (!requirementsReviewInputs(group)) status = "需求文档待完成"; action = <Button size="sm" disabled={pending || running || !requirementsReviewInputs(group)} title={!requirementsReviewInputs(group) ? "请先在聊天中完成需求文档" : "检查右侧需求文件后，人工发起评审"} onClick={() => void dev.command({ type: "runRequirementsReview", ...target })}>发起需求评审</Button>; }
     else if (phase === 1) {
-      if (reviewIssue) { status = "需求待补充"; action = <Button size="sm" variant="outline" disabled={pending} onClick={() => dev.select({ ...selection, proposalEditing: true, proposalStep: "requirements", discussionPhase: "requirements" })}>返回业务需求</Button>; }
-      else if (!group.developerHandoff) action = <Button size="sm" disabled={pending} onClick={() => void dev.command({ type: "submitProposalReview", ...target })}>下一步：交给开发</Button>;
+      if (reviewIssue) { status = "需求待补充"; action = <Button size="sm" variant="outline" disabled={pending} onClick={() => dev.select({ ...selection, proposalEditing: true, proposalStep: "requirements", discussionPhase: "requirements" })}>返回业务需求补充</Button>; }
+      else if (!group.developerHandoff) action = <Button size="sm" disabled={pending} onClick={() => void dev.command({ type: "submitProposalReview", ...target })}>交给开发</Button>;
       else { status = "等待开发人员接手"; action = <Button size="sm" disabled={pending || !source.capabilities.codeDevelopment} title="由开发人员接手后进入方案阶段" onClick={() => void dev.command({ type: "acceptProposal", ...target })}>接手并进入技术方案</Button>; }
     } else if (phase === 2) {
       status = ownsSolution ? hasCurrentProposalSolution(group) ? "方案已完成 · 等待人工确认" : "等待完成技术设计" : "等待接手开发人处理";
@@ -92,8 +97,17 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
     else if (acceptance.status === "passed") { status = "验收通过 · 等待人工确认"; action = <Button size="sm" disabled={pending || !owns || !!irAcceptanceReportBlocker(view, group)} onClick={() => void dev.command({ type: "prepareIrFinalPr" })}>下一步：准备归档 PR</Button>; }
     else if (["pr-ready", "pr-submitted"].includes(acceptance.status)) { status = "等待人工合并与核验"; action = <DevIrFinalPrControls group={group} compact />; }
   }
+  if (proposal && !history) {
+    if (readOnly) guidance = "当前 Web 只能查看提案，请进入 j00808874 的 Web 讨论或修改。";
+    else if (running || pending) guidance = running ? "Agent 正在工作，完成后再检查文档并操作。" : "正在更新，请稍候。";
+    else if (phase === 0) guidance = requirementsReviewInputs(group) ? "检查 proposal.md 与全部 SR 的 spec.md 后，发起需求评审。" : "请先在 IR 聊天中完善需求，生成 proposal.md 和 SR 规格。";
+    else if (phase === 1) guidance = reviewIssue ? reviewIssue : group.developerHandoff ? "等待开发人员接手；接手后进入方案阶段。" : "当前版本评审通过，检查需求文件后交给开发。";
+    else if (!ownsSolution) guidance = `由接手开发人 ${group.developerAcceptance?.employeeId ?? "（尚未接手）"} 处理；请使用其本人启动的 Web。`;
+    else if (phase === 2) guidance = reviewIssue ?? (hasCurrentProposalSolution(group) ? "本轮方案已生成；检查 IR、全部 SR 与 design.md 后，逐文件确认进入入库。" : group.proposalSolution ? "已有 design.md 与本轮需求不匹配，请重新生成后确认。" : "尚未生成本轮有效方案；右侧已有的 design.md 是参考样例，请先生成技术方案。");
+    else guidance = group.status === "requirements-pr" ? "等待人工评审合并；核验默认分支文件后才能转为正式需求。" : "按已确认版本继续提交、登记 PR 与合并核验。";
+  }
   const canBack = !history && !readOnly && !complete && (proposal ? (phase === 1 && !group.developerHandoff && !reviewIssue) || (phase === 2 && ownsSolution && group.status !== "requirements-pr") : Boolean(sr && sr.status === "developing" && phase > 0));
-  const backDialog = (<Dialog open={back} onOpenChange={setBack}><DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>{proposal ? "退回业务需求" : "回退开发阶段"}</DialogTitle><DialogDescription>保留已有文件、代码和历史记录。回退后重新检查所选阶段，旧批准及后续阶段材料不再用于当前推进。</DialogDescription></DialogHeader>
+  const backDialog = (<Dialog open={back} onOpenChange={setBack}><DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>{proposal ? "退回业务需求补充" : "回退开发阶段"}</DialogTitle><DialogDescription>{proposal && phase === 2 ? "填写需要业务澄清的问题。确认后回到业务需求阶段，保留文件和历史，旧方案失效；补充需求后必须重新评审、交接并生成方案。" : proposal ? "返回业务需求检查和补充；仅返回页面不会修改文件，修改后需重新评审。" : "保留已有文件、代码和历史记录。回退后重新检查所选阶段，旧批准及后续阶段材料不再用于当前推进。"}</DialogDescription></DialogHeader>
       {proposal && phase === 2 ? <SettingsFormTextarea aria-label="需补充的业务问题" value={reason} onChange={event => setReason(event.target.value)} rows={3} placeholder="说明需要业务补充的问题" /> : !proposal ? <Select value={backStage} onValueChange={value => setBackStage(value as DevWorkflowStage)}><SelectTrigger aria-label="回退到"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="planning">开发计划</SelectItem>{phase === 2 && <SelectItem value="executing">开发与验证</SelectItem>}</SelectContent></Select> : null}
       <DialogFooter><Button variant="outline" onClick={() => setBack(false)}>取消</Button><Button disabled={pending || (proposal && phase === 2 && !reason.trim())} onClick={async () => {
         if (proposal && phase === 1) { dev.select({ ...selection, proposalEditing: true, proposalStep: "requirements", discussionPhase: "requirements" }); setBack(false); return; }
@@ -105,16 +119,18 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
     if (readOnly || (complete && !history) || (!canBack && !action)) return null;
     return <>
       <div className="shrink-0 border-t border-border bg-background p-3" data-testid="dev-document-actions" aria-label="文档确认与阶段操作">
+        {guidance && <p className="mb-2 text-ui-sm leading-5 text-foreground-subtle" role="status" data-testid="dev-action-guidance">{guidance}</p>}
         <div className="flex w-full items-center justify-between gap-3" data-testid="dev-phase-actions">
-          {canBack ? <Button size="sm" variant="outline" disabled={pending || running} onClick={() => { setReason(""); setBackStage("planning"); setBack(true); }}><RotateCcw className="size-3" />回退</Button> : <span />}
-          <div className="ml-auto flex shrink-0 items-center gap-2">{action}</div>
+          {canBack ? <Button size="sm" variant="outline" disabled={pending || running} onClick={() => { setReason(""); setBackStage("planning"); setBack(true); }}><RotateCcw className="size-3" />{proposal ? "退回业务需求补充" : "回退"}</Button> : <span />}
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{proposal && !history && phase === 1 && requirementsReviewCurrent(group) && <Button size="sm" variant="ghost" onClick={() => setDecision(true)}>处理业务争议</Button>}{action}</div>
         </div>
       </div>
       {backDialog}
+      <Dialog open={decision} onOpenChange={setDecision}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl"><DialogHeader><DialogTitle>处理业务争议</DialogTitle><DialogDescription>人工意见独立保存，不代替 AI 评审，也不绕过当前版本门槛。</DialogDescription></DialogHeader><DevRequirementsDecision group={group} readOnly={history || readOnly || phase !== 1 || Boolean(group.developerHandoff)} /></DialogContent></Dialog>
     </>;
   }
   return <header className="shrink-0 space-y-2 border-b border-border px-4 py-3" data-testid="dev-phase-header">
-    <div className="flex min-w-0 items-center justify-between gap-2"><h2 className="truncate text-ui-base font-semibold" title={sr?.title ?? group.title}>{sr?.title ?? group.title}</h2><Button size="icon-sm" variant="ghost" aria-label="更多流程信息与操作" onClick={() => setMore(true)}><MoreHorizontal className="size-4" /></Button></div>
+    <div className="flex min-w-0 items-center justify-between gap-2"><h2 className="truncate text-ui-base font-semibold" title={sr?.title ?? group.title}>{sr?.title ?? group.title}</h2>{proposal ? <DevProposalMenu group={group} /> : <Button size="icon-sm" variant="ghost" aria-label="更多流程信息与操作" onClick={() => setMore(true)}><MoreHorizontal className="size-4" /></Button>}</div>
     <div className="flex min-w-0 justify-center" data-testid="dev-phase-toolbar">
       <nav className="min-w-0 rounded-lg border border-border bg-surface p-1" aria-label={proposal ? "提案阶段" : sr ? "SR 开发阶段": "IR 完成阶段"}>
         <div className="flex items-center gap-0.5">
@@ -132,20 +148,20 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
       </nav>
 
     </div>
-    <p className="truncate text-center text-ui-sm text-foreground-subtle" title={`${role} · ${status}`} data-testid="dev-phase-agent">{role} · {status}</p>
+    <p className="truncate text-center text-ui-sm text-foreground-subtle" title={`${role} · ${status}`} data-testid="dev-phase-agent">{role} · {status}{proposal && group.developerAcceptance && selected >= 2 ? ` · 接手人 ${group.developerAcceptance.employeeId}` : ""}</p>
     {dev.error && <p role="alert" className="text-ui-sm text-destructive">{dev.error}</p>}
-    <Dialog open={more} onOpenChange={setMore}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>流程详情与操作</DialogTitle><DialogDescription>人员、模型、路径、PR、操作记录和当前阶段的补充操作。原型动作只更新演示数据。</DialogDescription></DialogHeader>{details}</DialogContent></Dialog>
+    {!proposal && <Dialog open={more} onOpenChange={setMore}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>流程详情与操作</DialogTitle><DialogDescription>人员、模型、路径、PR、操作记录和当前阶段的补充操作。原型动作只更新演示数据。</DialogDescription></DialogHeader>{details}</DialogContent></Dialog>}
 
   </header>;
 }
 
-/** 评审与入库不伪装成新 Agent 聊天；展示已有结果，原确认流程保留在顶部操作中。 */
+/** 评审与入库不伪装成新 Agent 聊天；展示已有结果，原确认流程保留在文档底栏。 */
 export function DevProposalStageBody() {
   const dev = useDev()!;
   const group = dev.view?.drafts.find(item => item.id === dev.selection.irId);
   if (!group) return null;
   return <main className="min-h-0 flex-1 overflow-auto p-6" data-testid="dev-proposal-stage-body">
-    {(dev.selection.proposalStep === "requirements-review" || (!dev.selection.proposalStep && proposalProgressIndex(group, dev.selection) === 1)) ? <div className="space-y-4"><h3 className="text-ui-base font-medium">业务需求评审</h3>{group.review ? <MessageResponse>{group.review.report}</MessageResponse> : <p className="text-ui-sm text-foreground-subtle">尚未发起需求评审。先返回当前阶段完成需求文件，再由人工点击下一步。</p>}</div>
+    {(dev.selection.proposalStep === "requirements-review" || (!dev.selection.proposalStep && proposalProgressIndex(group, dev.selection) === 1)) ? <div className="space-y-4"><h3 className="text-ui-base font-medium">业务需求评审 · {requirementsReviewCurrent(group) ? group.review?.passed ? "已通过" : "需要补充" : "需要重新评审"}</h3>{Boolean(group.review?.findings?.length) && <ul className="space-y-3" data-testid="review-findings">{group.review?.findings?.map(item => <li key={item.id} className="space-y-2 border-b border-border pb-3"><p className="text-ui-base">{item.level === "blocking" ? "需补充" : "建议"}：{item.message}</p><Button size="sm" variant="outline" className="h-auto max-w-full whitespace-normal break-all text-left" onClick={() => dev.select({ ...dev.selection, materialPath: item.documentPath })}>查看 {item.documentPath}</Button></li>)}</ul>}{group.review ? <MessageResponse>{group.review.report}</MessageResponse> : <p className="text-ui-sm text-foreground-subtle">尚未发起需求评审。先返回当前阶段完成需求文件，再由人工点击下一步。</p>}</div>
       : <div className="space-y-3"><h3 className="text-ui-base font-medium">需求入库</h3><p className="text-ui-base leading-6 text-foreground-subtle">通过右侧文档底部的当前操作继续提交推送、登记人工创建的需求 PR，并等待人工评审合并。只有核验默认分支中的文件版本与已确认候选一致后，才转为正式需求。</p></div>}
   </main>;
 }
