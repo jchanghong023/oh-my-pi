@@ -1,7 +1,8 @@
 import { DevProposalFeedback } from "./DevProposalFeedback.js";
 import { DevPhaseHeader, DevDocumentPhaseActions } from "./DevPhaseHeader.js";
 import { useDevDataSource } from "./data-source.js";
-import { deriveStageView } from "./domain.js";
+import type { DevMaterialView } from "./types.js";
+import { MATERIAL_KIND_LABELS, deriveStageView } from "./domain.js";
 import { useEffect, useMemo, useState } from "react";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
@@ -73,6 +74,7 @@ export function DevReadonlyOverview() {
 	</div>;
 }
 export function DevMaterialsPane() {
+ const source = useDevDataSource();
 	const dev = useDev()!;
 	const theme = useZCodeStore(state => state.theme);
 	const { selection, view } = dev;
@@ -112,11 +114,19 @@ export function DevMaterialsPane() {
 		preferred?.path,
 		preferred?.sha256,
 	]);
-  const displayPath = (filePath: string) => proposal
-    ? `${group?.proposalLocation?.directory ?? ""}${filePath}`
-    : group?.acceptance?.status === "completed"
+  const workspace = source.resolveWorkspace(view, selection);
+  const displayPath = (filePath: string) => {
+    const storedPath = group?.acceptance?.status === "completed"
       ? group.acceptance.archive?.moves.find(move => move.sourcePath === filePath)?.path ?? filePath
       : filePath;
+    const root = proposal ? group?.proposalLocation?.directory : workspace.path;
+    return storedPath.startsWith("/") || !root ? storedPath : `${root.replace(/\/$/, "")}/${storedPath}`;
+  };
+  const materialLabel = (item: DevMaterialView) => {
+    const label = MATERIAL_KIND_LABELS[item.kind];
+    const requirement = !selection.srId && item.kind === "sr" ? view?.srs.find(sr => sr.id === item.srId && sr.irId === item.irId && sr.projectId === item.projectId) : undefined;
+    return requirement ? `${label} · ${requirement.title}` : label;
+  };
 	const listed = materials.find(item => item.path === path);
 	const material = listed;
 	const error = listed?.error;
@@ -130,8 +140,8 @@ export function DevMaterialsPane() {
 		>
 			<div className="space-y-2 p-3">
 				<Select value={path || "none"} onValueChange={value => setPath(value === "none" ? "" : value)}>
-					<SelectTrigger className="h-auto min-h-8 w-full min-w-0 py-1.5" data-testid="material-menu" aria-label={selection.srId ? "当前 SR 文件目录" : "IR 需求文件目录"}>
-						<SelectValue><span className="block min-w-0 whitespace-normal break-all text-left text-ui-sm" title={path ? displayPath(path) : undefined}>{path ? displayPath(path) : awaitingRequirements ? "等待生成需求材料" : "选择文件"}</span></SelectValue>
+					<SelectTrigger className="h-auto min-h-8 w-full min-w-0 py-1.5" data-testid="material-menu" aria-label="选择材料类型">
+						<SelectValue><span className="block min-w-0 whitespace-normal break-all text-left text-ui-sm">{current ? materialLabel(current) : awaitingRequirements ? "等待生成需求材料" : "选择材料类型"}</span></SelectValue>
 					</SelectTrigger>
 					<SelectContent position="popper" align="start">
                         {!materials.length && <SelectItem value="none">
@@ -139,7 +149,7 @@ export function DevMaterialsPane() {
                         </SelectItem>}
 						{materials.map(item => (
 							<SelectItem key={item.path} value={item.path}>
-                                {displayPath(item.path)}
+                                {materialLabel(item)}
 							</SelectItem>
 						))}
 					</SelectContent>
@@ -152,6 +162,7 @@ export function DevMaterialsPane() {
 				data-material-path={path}
 				data-material-valid={current?.valid}
 			>
+        {path && <p className="mb-5 whitespace-pre-wrap break-all font-mono text-ui-sm text-foreground-subtle select-text" data-testid="material-full-path">{displayPath(path)}</p>}
 				{error || current?.error ? (
 					<div className="space-y-3"><p role="alert" className="text-ui-base text-destructive">{error ?? current?.error}</p><Button size="sm" variant="outline" data-testid="material-retry" onClick={async () => { const recovered = await dev.retryMaterial(path); setReadFeedback(recovered ? "材料已重新读取。" : "仍无法读取，请恢复原文件；当前阶段可由开发人明确重新生成材料样例。"); }}>重新读取材料</Button>{readFeedback && <p role="status" className="text-ui-sm text-foreground-subtle">{readFeedback}</p>}</div>
 				) : !selection.irId ? (

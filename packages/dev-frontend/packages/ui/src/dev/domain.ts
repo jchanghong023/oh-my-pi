@@ -74,7 +74,7 @@ export function deriveStageView(sr: DevSystemRequirement, selection: DevSelectio
 export const PROPOSAL_STATUS_LABELS = { draft: "草稿", "solution-ready": "方案完成", "requirements-pr": "PR 待合并", formal: "正式提案", frozen: "开发已冻结", deleted: "已删除", reviewing: "评审中", confirmed: "已确认" };
 export const IR_ACCEPTANCE_LABELS = { reviewing: "验收中", issues: "待修复", passed: "验收通过", "pr-ready": "最终 PR 待创建", "pr-submitted": "最终 PR 待合并", completed: "已完成" };
 export const SR_DELIVERY_LABELS = { prepared: "待合并前验证", verified: "合并前验证通过", "implementation-issue": "验证未通过，待修复", "git-conflict": "Git 冲突，等待人工", "requirement-conflict": "需求冲突，等待人工" };
-export const MATERIAL_KIND_LABELS = { ir: "IR 业务需求", sr: "SR 系统需求", solution: "提案方案", plan: "开发计划", completion: "完成报告", ut: "UT 报告", st: "ST 报告", delivery: "交付说明", attachment: "附件", "ir-acceptance-report": "IR 验收报告", "ir-final-pr": "最终 PR", "sr-delivery-package": "SR 交付清单" };
+export const MATERIAL_KIND_LABELS = { ir: "IR 原始需求", sr: "SR 系统需求", solution: "IR 方案设计", plan: "开发计划", completion: "完成报告", ut: "UT 报告", st: "ST 报告", delivery: "交付说明", attachment: "附件", "ir-acceptance-report": "IR 验收报告", "ir-final-pr": "最终 PR", "sr-delivery-package": "SR 交付清单" };
 export function hasCurrentProposalSolution(group: DevRequirementGroup): boolean {
  const solution = group.proposalSolution;
  if (!solution?.valid || !group.snapshot?.digest || solution.round !== (group.proposalRound ?? 1) || solution.requirementsDigest !== group.snapshot.digest) return false;
