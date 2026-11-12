@@ -2,7 +2,7 @@
 
 behavior {
 	// OMP's built-in chat surface; non-chat runners and local inference remain available.
-	supported-chat-providers "company" "openai-codex" "codeagent" "ascend" "opencode-go" "deepseek"
+	supported-chat-providers "company" "openai-codex" "codeagent" "ascend" "opencode-go" "deepseek" "alibaba-token-plan"
 
 	// Hide these provider scopes in the model hub without disabling their models or credentials.
 	model-hub-hidden-providers "cloudflare-workers-ai" "deepinfra" "google" "google-antigravity" \

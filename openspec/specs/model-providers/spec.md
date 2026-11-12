@@ -8,7 +8,7 @@
 
 ### Requirement: 精简内置聊天 Provider
 
-OMP MUST 仅提供 `company`、`openai-codex`、`codeagent`、`ascend`、`opencode-go`、`deepseek` 六个聊天 Provider；名单在现有 KDL 策略中统一维护，不新增用户开关或发行变体。
+OMP MUST 仅提供 `company`、`openai-codex`、`codeagent`、`ascend`、`opencode-go`、`deepseek`、`alibaba-token-plan` 七个聊天 Provider；名单在现有 KDL 策略中统一维护，不新增用户开关或发行变体。
 
 #### Scenario: 生成目录和运行时准入一致
 
@@ -16,6 +16,7 @@ OMP MUST 仅提供 `company`、`openai-codex`、`codeagent`、`ascend`、`openco
 - **THEN** 不得构造或恢复名单外的聊天模型；生成过程仍可使用跨 Provider 参考数据，但输出目录须遵守同一范围。
 - **AND** `opencode-zen` 完全退出本 fork 的模型与登录目录，包括其原有 judge 模型，不由旧缓存或发现恢复。
 - **AND** `company`、CodeAgent 和 Ascend 仍遵守下述 offline、平台和认证条件；保留名单不等于所有环境下均可用。
+- **AND** `alibaba-token-plan` 恢复上游原生登录、模型发现及聊天请求；登录可选择中国北京区或国际新加坡区，发现与推理使用凭据所属区域端点，不恢复独立的 `alibaba-coding-plan` 或其他已裁剪 Provider。
 
 #### Scenario: 保留共用协议和非聊天能力
 

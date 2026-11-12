@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
-import { getAllOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthController } from "@oh-my-pi/pi-ai/oauth/types";
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -173,12 +173,9 @@ describe("QwenCloud Token Plan login", () => {
 		}
 	});
 
-	test("registers Token Plan separately from the legacy Alibaba Coding Plan", () => {
-		const providers = getAllOAuthProviders();
-		expect(providers.find(provider => provider.id === "alibaba-token-plan")).toMatchObject({
-			name: "QwenCloud Token Plan",
-			available: true,
-		});
-		expect(providers.some(provider => provider.id === "alibaba-coding-plan")).toBe(true);
+	test("offers Token Plan login without restoring the retired Coding Plan provider", () => {
+		const providers = getOAuthProviders();
+		expect(providers.some(provider => provider.id === "alibaba-token-plan")).toBe(true);
+		expect(providers.some(provider => provider.id === "alibaba-coding-plan")).toBe(false);
 	});
 });

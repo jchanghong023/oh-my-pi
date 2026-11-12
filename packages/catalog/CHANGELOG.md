@@ -12,6 +12,9 @@
 - Added `company/Deepseek-v4.1-Flash` to the offline intranet model catalog with the same configuration as `DeepSeek-V4-Flash-public`.
 
 ### Fixed
+
+- Restored Alibaba Token Plan login and chat models, including China (Beijing) and international (Singapore) regions.
+
 ## [18.19.0] - 2026-11-12
 
 ### Added

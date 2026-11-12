@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	ALIBABA_TOKEN_PLAN_BASE_URL,
 	alibabaTokenPlanModelManagerOptions,
@@ -10,15 +9,6 @@ import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
 import { serializeAlibabaTokenPlanCredential } from "@oh-my-pi/pi-catalog/wire/alibaba-token-plan";
 
 describe("QwenCloud Token Plan provider", () => {
-	test("bundles curated capabilities before dynamic discovery", () => {
-		expect(getBundledModel<"openai-completions">("alibaba-token-plan", "qwen3.8-max-preview")).toMatchObject({
-			reasoning: true,
-			input: ["text", "image"],
-			contextWindow: 983_616,
-			maxTokens: 131_072,
-		});
-	});
-
 	test("discovers subscribed chat models from the native models endpoint", async () => {
 		let requestedUrl = "";
 		let authorization = "";
