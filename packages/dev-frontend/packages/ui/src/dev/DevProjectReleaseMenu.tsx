@@ -15,7 +15,7 @@ export function DevProjectReleaseMenu({ onManage, onHelp }: { onManage(): void; 
 	const release = dev.view?.releases.find(item => item.id === dev.releaseId);
 	return <>
 		{identity && <><DropdownMenuItem disabled><UserRound className="size-4" />工号 {identity.employeeId}</DropdownMenuItem><DropdownMenuItem onSelect={identity.signOut}><LogOut className="size-4" />切换工号</DropdownMenuItem></>}
-		<DropdownMenuItem disabled>Web 所有者 {source.backend?.owner ?? "未提供"}{source.mode === "prototype" ? " · 演示" : ""}</DropdownMenuItem>
+		<DropdownMenuItem disabled>Web 所有者 {source.backend?.owner ?? "未提供"}{source.provenance.kind === "sample" ? " · 演示" : ""}</DropdownMenuItem>
 		<DropdownMenuSub>
 			<DropdownMenuSubTrigger data-testid="project-select"><FolderGit2 className="size-4" /><span className="shrink-0">项目</span><span className="ml-4 max-w-40 truncate text-foreground-subtle">{project?.name ?? "请选择项目"}</span></DropdownMenuSubTrigger>
 			<DropdownMenuSubContent className="max-h-[60vh] w-72 overflow-y-auto">

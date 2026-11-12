@@ -16,13 +16,14 @@ import { useServices } from "@/hooks/useServices.js";
 import { bindRemoteWorkspaceIdentity, registerRemoteWorkspaceSession, unregisterRemoteWorkspaceSession } from "@/store/remoteWorkspaceSessionStore.js";
 import { useDevDataSource } from "./data-source.js";
 import { useDev } from "./DevContext.js";
-import type { DevSkillDesignDraft } from "./types.js";
+import type { DevAgentModelBinding, DevSkillDesignDraft, DevSkillDesignPreview } from "./types.js";
+import type { SkillSummary } from "@zcode/shared";
 import { SKILL_DESIGN_FIELDS } from "./skill-design-fields.js";
 
 export function DevSkillDesignSettings() {
   const source = useDevDataSource();
   const dev = useDev();
-  if (source.mode !== "prototype" || !source.skillDesign) return <p className="text-ui-sm text-foreground-subtle">当前数据源尚未接入此功能。</p>;
+  if (!source.skillDesign) return <p className="text-ui-sm text-foreground-subtle">当前数据源尚未接入此功能。</p>;
   const project = dev?.view?.projects.find(item => item.id === dev.selection.projectId);
   const developmentRoot = project ? source.projects?.readDevelopmentRoot(project.id, source.backend?.owner) : undefined;
   return <div className="space-y-4"><DevPersonalConfigScope scopeLabel="Skill 设计所有人可用；使用共享 OMP 的模型配置，生成与保存不授予其他设置的修改权限。" /><SkillDesignEditor key={`${source.backend?.id}:${project?.id ?? "personal"}`} projectId={project?.id ?? "personal"} projectName={project?.name ?? "未选择项目"} workspacePath={developmentRoot ?? source.backend?.configDirectory ?? ""} developmentRoot={developmentRoot} /></div>;
@@ -31,18 +32,51 @@ export function DevSkillDesignSettings() {
 function SkillDesignEditor({ projectId, projectName, workspacePath, developmentRoot }: { projectId: string; projectName: string; workspacePath: string; developmentRoot?: string }) {
   const source = useDevDataSource();
   const design = source.skillDesign!;
+  const [session, setSession] = useState<{ id: string; binding: DevAgentModelBinding; identity: string }>();
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => {
+    let active = true;
+    setSession(undefined);
+    setLoadError("");
+    void (async () => {
+      try {
+        const id = await design.session(projectId);
+        const [binding, identity] = await Promise.all([design.binding(id), design.workspaceIdentity(projectId)]);
+        if (active) setSession({ id, binding, identity });
+      } catch (cause) {
+        if (active) setLoadError(cause instanceof Error ? cause.message : "加载技能设计会话失败。");
+      }
+    })();
+    return () => { active = false; };
+  }, [design, projectId]);
+  if (loadError) return <p role="alert" className="text-ui-sm text-destructive">{loadError}</p>;
+  if (!session) return <p role="status" className="text-ui-sm text-foreground-subtle">正在加载技能设计会话…</p>;
+  return <ReadySkillDesignEditor key={session.id} {...{ projectId, projectName, workspacePath, developmentRoot }} sessionId={session.id} modelBinding={session.binding} identity={session.identity} />;
+}
+
+function ReadySkillDesignEditor({ projectId, projectName, workspacePath, developmentRoot, sessionId, modelBinding, identity }: { projectId: string; projectName: string; workspacePath: string; developmentRoot?: string; sessionId: string; modelBinding: DevAgentModelBinding; identity: string }) {
+  const source = useDevDataSource();
+  const design = source.skillDesign!;
   const services = useServices();
-  const sessionId = design.session(projectId);
-  const [modelBinding] = useState(() => design.binding(sessionId));
-  const scope = useMemo(() => ({ workspacePath, workspaceIdentity: `${design.workspaceIdentity(projectId)}:skill-design` }), [design, workspacePath, projectId]);
+  const scope = useMemo(() => ({ workspacePath, workspaceIdentity: `${identity}:skill-design` }), [workspacePath, identity]);
   useEffect(() => {
     const registrationId = `dev-skill-designer:${source.clientId}:${crypto.randomUUID()}`;
     registerRemoteWorkspaceSession({ sessionId: registrationId, workspacePath: scope.workspacePath, workspaceIdentity: scope.workspaceIdentity, services });
     bindRemoteWorkspaceIdentity(scope.workspaceIdentity, registrationId);
     return () => unregisterRemoteWorkspaceSession(registrationId);
   }, [source, scope, services]);
-  const [draft, setDraft] = useState(() => design.read(sessionId));
-  const [preview, setPreview] = useState(() => design.readPreview(sessionId));
+  const [draft, setDraft] = useState<DevSkillDesignDraft>();
+  const [preview, setPreview] = useState<DevSkillDesignPreview>();
+  const [temporaryDirectory, setTemporaryDirectory] = useState("");
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [filling, setFilling] = useState(false);
+  const active = useRef(true);
+  const draftVersion = useRef(0);
+  const pendingDraftSaves = useRef(0);
+  const draftSave = useRef<Promise<void>>(Promise.resolve());
+  const draftSaveError = useRef<unknown>(undefined);
   const [tab, setTab] = useState("chat");
   const [optionalOpen, setOptionalOpen] = useState(false);
   const [insertRequest, setInsertRequest] = useState<ExternalTextInsertRequest | null>(null);
@@ -52,36 +86,77 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
   const [fillError, setFillError] = useState("");
   const [selectedFile, setSelectedFile] = useState("SKILL.md");
   const [saveTarget, setSaveTarget] = useState<"project" | "user">(developmentRoot ? "project" : "user");
-  const previewRevision = useRef(preview?.revision);
+  const previewRevision = useRef<number | undefined>(undefined);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [savedPath, setSavedPath] = useState("");
   const coreFields = SKILL_DESIGN_FIELDS.filter(field => field.required);
-  const completed = coreFields.filter(field => draft[field.id].trim()).length;
-  const temporaryDirectory = design.temporaryDirectory(sessionId);
+  const completed = coreFields.filter(field => draft?.[field.id].trim()).length;
   const targetName = preview?.name ?? "";
   const validName = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(targetName) && targetName.length <= 64;
   const targetDirectory = !preview ? undefined : saveTarget === "user" ? source.backend?.userSkillsDirectory ? `${source.backend.userSkillsDirectory}/${targetName}` : undefined : developmentRoot ? `${developmentRoot}/.omp/skills/${targetName}` : undefined;
-  const collision = design.listSkills(workspacePath).some(skill => skill.path === `${targetDirectory}/SKILL.md`);
+  const collision = skills.some(skill => skill.path === `${targetDirectory}/SKILL.md`);
   const file = preview?.files.find(item => item.path === selectedFile) ?? preview?.files[0];
   const generationStatus = savedPath
-    ? `第 ${preview?.revision} 版已保存（演示），未写入真实文件。`
-    : preview ? `已生成临时文件样例 · 第 ${preview.revision} 版，尚未保存。` : "尚未生成临时文件。";
-  const updateDraft = (next: DevSkillDesignDraft) => { setDraft(next); design.saveDraft(sessionId, next); setNotice(""); };
-  useEffect(() => {
-    const subscription = design.subscribe(id => {
-      if (id !== sessionId) return;
-      setDraft(design.read(sessionId));
-      const next = design.readPreview(sessionId);
-      if (previewRevision.current !== next?.revision) {
-        setSavedPath(""); setError(""); setNotice(""); setFillError("");
-        pendingInsert.current = null; setInsertRequest(null);
-      }
-      previewRevision.current = next?.revision;
-      setPreview(next);
+    ? `第 ${preview?.revision} 版已保存。`
+    : preview ? `已生成临时文件 · 第 ${preview.revision} 版，尚未保存。` : "尚未生成临时文件。";
+  const updateDraft = (next: DevSkillDesignDraft) => {
+    setDraft(next);
+    setNotice("");
+    const version = ++draftVersion.current;
+    pendingDraftSaves.current++;
+    const save = draftSave.current.then(async () => {
+      await design.saveDraft(sessionId, next);
     });
-    return () => subscription.dispose();
-  }, [design, sessionId]);
+    draftSave.current = save.catch(() => {});
+    return save.then(() => {
+      if (version === draftVersion.current) {
+        draftSaveError.current = undefined;
+        if (active.current) setError("");
+      }
+      return true;
+    }, cause => {
+      if (version === draftVersion.current) {
+        draftSaveError.current = cause;
+        if (active.current) setError(cause instanceof Error ? cause.message : "保存技能说明失败。");
+      }
+      return false;
+    }).finally(() => { pendingDraftSaves.current--; });
+  };
+  useEffect(() => {
+    active.current = true;
+    let disposed = false;
+    let revision = 0;
+    const refresh = async () => {
+      const request = ++revision;
+      const editVersion = draftVersion.current;
+      const canReadDraft = pendingDraftSaves.current === 0;
+      try {
+        const [nextDraft, next, directory, nextSkills] = await Promise.all([
+          design.read(sessionId), design.readPreview(sessionId),
+          design.temporaryDirectory(sessionId), design.listSkills(workspacePath),
+        ]);
+        if (disposed || request !== revision) return;
+        if (canReadDraft && pendingDraftSaves.current === 0 && editVersion === draftVersion.current) setDraft(nextDraft);
+        if (previewRevision.current !== next?.revision) {
+          setSavedPath(""); setNotice(""); setFillError("");
+          pendingInsert.current = null; setInsertRequest(null);
+        }
+        previewRevision.current = next?.revision;
+        setPreview(next);
+        setTemporaryDirectory(directory);
+        setSkills(nextSkills);
+        setLoading(false);
+      } catch (cause) {
+        if (disposed || request !== revision) return;
+        setError(cause instanceof Error ? cause.message : "加载技能设计数据失败。");
+        setLoading(false);
+      }
+    };
+    const subscription = design.subscribe(id => { if (id === sessionId) void refresh(); });
+    void refresh();
+    return () => { disposed = true; active.current = false; subscription.dispose(); };
+  }, [design, sessionId, workspacePath]);
   const handleInsertApplied = useCallback((appliedId: number) => {
     if (pendingInsert.current?.requestId !== appliedId) return;
     lastFilledText.current = pendingInsert.current.text;
@@ -90,13 +165,23 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
     setInsertRequest(null);
     setNotice("已将全部字段与临时路径填入右侧输入框，保留原有内容。可直接发送，也可继续补充。");
   }, []);
-  const fillComposer = () => {
+  const fillComposer = async () => {
     setTab("chat");
-    if (pendingInsert.current) return;
-    setNotice(""); setFillError("");
-    const request: ExternalTextInsertRequest = { requestId: ++requestId.current, text: design.prompt(sessionId, draft), mode: "append", replaceText: lastFilledText.current };
-    pendingInsert.current = request;
-    setInsertRequest(request);
+    if (pendingInsert.current || filling || !draft) return;
+    setNotice(""); setFillError(""); setFilling(true);
+    try {
+      await draftSave.current;
+      if (draftSaveError.current) throw draftSaveError.current;
+      const text = await design.prompt(sessionId, draft);
+      if (!active.current) return;
+      const request: ExternalTextInsertRequest = { requestId: ++requestId.current, text, mode: "append", replaceText: lastFilledText.current };
+      pendingInsert.current = request;
+      setInsertRequest(request);
+    } catch (cause) {
+      if (active.current) setFillError(cause instanceof Error ? cause.message : "生成聊天说明失败。");
+    } finally {
+      if (active.current) setFilling(false);
+    }
   };
   useEffect(() => {
     if (!insertRequest) return;
@@ -109,23 +194,39 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
     }, 8000);
     return () => window.clearTimeout(timer);
   }, [insertRequest]);
-  const fillExample = () => {
+  const fillExample = async () => {
+    if (!draft) return;
     const next = { ...draft };
     const sample = design.sample!;
     for (const field of SKILL_DESIGN_FIELDS) if (!next[field.id].trim()) next[field.id] = sample[field.id];
-    updateDraft(next); setOptionalOpen(true);
-    setNotice("已填入空白字段；尚未发送。");
+    const version = draftVersion.current + 1;
+    setOptionalOpen(true);
+    if (await updateDraft(next) && active.current && version === draftVersion.current) setNotice("已填入空白字段；尚未发送。");
   };
-  const save = () => {
-    if (!targetDirectory || !preview || !validName || collision || savedPath) return;
-    try { setSavedPath(design.savePreview(sessionId, developmentRoot ?? "", targetName, saveTarget)); setError(""); setNotice(""); setFillError(""); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "演示保存失败。"); }
+  const save = async () => {
+    if (!targetDirectory || !preview || !validName || collision || savedPath || saving) return;
+    const revision = preview.revision;
+    setSaving(true);
+    try {
+      await draftSave.current;
+      if (draftSaveError.current) throw draftSaveError.current;
+      const path = await design.savePreview(sessionId, developmentRoot ?? "", targetName, saveTarget);
+      if (!active.current || previewRevision.current !== revision) return;
+      setSavedPath(path); setError(""); setNotice(""); setFillError("");
+    } catch (cause) {
+      if (active.current) setError(cause instanceof Error ? cause.message : "保存失败。");
+    } finally {
+      if (active.current) setSaving(false);
+    }
   };
+  if (loading) return <p role="status" className="text-ui-sm text-foreground-subtle">正在加载技能设计数据…</p>;
+  if (!draft) return <p role="alert" className="text-ui-sm text-destructive">{error || "加载技能设计数据失败。"}</p>;
   return <div className="flex h-[calc(100dvh-9rem)] min-h-[34rem] flex-col gap-3" data-testid="dev-skill-design">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <p className="text-ui-sm text-foreground-subtle">填写说明 → 填入聊天并发送 → 预览临时文件 → 选择有效项目或共享 OMP profile 目标</p>
-      <div className="flex min-w-0 items-center gap-2 text-ui-sm"><FolderGit2 className="size-3.5 text-foreground-subtle" /><span className="truncate">{projectName}</span><Badge variant="outline">原型演示</Badge></div>
+      <div className="flex min-w-0 items-center gap-2 text-ui-sm"><FolderGit2 className="size-3.5 text-foreground-subtle" /><span className="truncate">{projectName}</span><Badge variant="outline">{source.provenance.kind === "sample" ? "原型演示" : "后台数据"}</Badge></div>
     </div>
+    {error && <p role="alert" className="text-ui-sm text-destructive">{error}</p>}
     <DevAgentModelSummary binding={modelBinding} />
     <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4">
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border" aria-labelledby="skill-design-brief-title">
@@ -143,13 +244,13 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
           {fillError && <p role="alert" className="text-ui-sm text-destructive">{fillError}</p>}
           {insertRequest && <p role="status" className="text-ui-sm text-foreground-subtle">正在填入聊天输入框…</p>}
           {notice && <p role="status" className="text-ui-sm text-foreground-subtle">{notice}</p>}
-          <Button className="w-full" disabled={Boolean(insertRequest)} onClick={fillComposer}><Copy className="size-3.5" />填入右侧聊天输入框</Button>
+          <Button className="w-full" disabled={Boolean(insertRequest) || filling} onClick={fillComposer}><Copy className="size-3.5" />填入右侧聊天输入框</Button>
         </div>
       </section>
       <Tabs value={tab} onValueChange={setTab} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2"><TabsList aria-label="技能设计工作区"><TabsTrigger value="chat"><MessageSquare className="size-3.5" />设计对话</TabsTrigger><TabsTrigger value="preview"><FileCode2 className="size-3.5" />临时文件预览</TabsTrigger></TabsList><span className="text-ui-sm text-foreground-subtle">{generationStatus}</span></div>
         <TabsContent forceMount value="chat" className={tab === "chat" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-          <p className="shrink-0 border-b border-border px-3 py-2 text-ui-sm text-foreground-subtle">发送前可编辑和补充。原型发送后展示固定文件样例，不调用真实模型。</p>
+          <p className="shrink-0 border-b border-border px-3 py-2 text-ui-sm text-foreground-subtle">发送前可编辑和补充。发送后在此查看生成的临时文件。</p>
           <div className="relative min-h-0 flex-1" data-testid="skill-design-chat">
             <V4PaneConversationProvider scope={scope} sessionId={sessionId}><SessionPane paneId={`skill-designer-${projectId}`} sessionId={sessionId} rootSessionId={sessionId} workspacePath={scope.workspacePath} workspaceIdentity={scope.workspaceIdentity} embedded focused={tab === "chat"} composerInsertRequest={insertRequest} onComposerInsertApplied={handleInsertApplied} /></V4PaneConversationProvider>
           </div>
@@ -157,23 +258,22 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
         <TabsContent forceMount value="preview" className={tab === "preview" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4" data-testid="skill-design-preview">
             {!preview ? <div className="flex h-full flex-col items-center justify-center gap-3 text-center"><FileCode2 className="size-6 text-foreground-subtle" /><p className="text-ui-base">尚未生成临时文件</p><p className="max-w-sm text-ui-sm text-foreground-subtle">先把说明填入聊天输入框，确认或补充后发送，再查看临时目录中的文件。填写或复制表单不会生成技能。</p><Button variant="outline" onClick={() => setTab("chat")}>返回设计对话</Button></div> : <>
-              <p className="text-ui-sm text-foreground-subtle">临时目录（内存演示）</p><p className="break-all font-mono text-ui-sm">{preview.directory}</p>
+              <p className="text-ui-sm text-foreground-subtle">临时目录</p><p className="break-all font-mono text-ui-sm">{preview.directory}</p>
               <div className="flex flex-wrap gap-2" role="group" aria-label="临时技能文件">{preview.files.map(item => <Button key={item.path} size="sm" variant={file?.path === item.path ? "secondary" : "ghost"} aria-pressed={file?.path === item.path} onClick={() => setSelectedFile(item.path)}><FileCode2 className="size-3.5" />{item.path}</Button>)}</div>
               <p className="break-all font-mono text-ui-sm text-foreground-subtle">{preview.directory}/{file?.path}</p>
               <pre className="whitespace-pre-wrap break-words rounded-lg border border-border p-4 font-mono text-ui-sm">{file?.content}</pre>
-              <p className="text-ui-sm text-foreground-subtle">这是固定文件样例，不代表真实模型生成或磁盘文件。继续发送修改要求后可再次预览。</p>
+              <p className="text-ui-sm text-foreground-subtle">{source.provenance.kind === "sample" ? "这是固定文件样例，不代表真实模型生成或磁盘文件。继续发送修改要求后可再次预览。" : "继续发送修改要求后可再次预览生成的临时文件。"}</p>
             </>}
           </div>
           <div className="shrink-0 space-y-2 border-t border-border p-3" data-testid="skill-design-save-target">
             <p className="text-ui-sm">技能标识（模型推荐）：<span className="font-mono">{preview?.name ?? "发送后由模型推荐"}</span></p>
-            <div className="space-y-1.5"><Label htmlFor="skill-save-scope">保存到</Label><Select value={saveTarget} disabled={Boolean(savedPath)} onValueChange={value => { setSaveTarget(value as "project" | "user"); setError(""); }}><SelectTrigger id="skill-save-scope" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="project">项目技能 · 当前有效项目</SelectItem><SelectItem value="user">Profile 技能 · 共享 OMP</SelectItem></SelectContent></Select></div>
+            <div className="space-y-1.5"><Label htmlFor="skill-save-scope">保存到</Label><Select value={saveTarget} disabled={Boolean(savedPath) || saving} onValueChange={value => { setSaveTarget(value as "project" | "user"); setError(""); }}><SelectTrigger id="skill-save-scope" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="project">项目技能 · 当前有效项目</SelectItem><SelectItem value="user">Profile 技能 · 共享 OMP</SelectItem></SelectContent></Select></div>
             <p className="text-ui-sm text-foreground-subtle">{saveTarget === "project" ? `当前项目：${projectName}` : `共享 OMP profile 归属：${source.backend?.owner ?? "Web 启动者"}，不是访问者的个人后端`}</p><p className="break-all font-mono text-ui-sm text-foreground-subtle">{targetDirectory ?? "发送并预览后显示保存路径；项目目标须有效可写，profile 目标无需绑定项目。"}</p>
-            {preview && <p className="text-ui-sm text-foreground-subtle">确认保存整个临时技能目录中的 {preview.files.length} 个文件；不会覆盖同名技能。当前只演示，不写磁盘。</p>}
+            {preview && <p className="text-ui-sm text-foreground-subtle">确认保存整个临时技能目录中的 {preview.files.length} 个文件；不会覆盖同名技能。</p>}
             {preview && !validName && <p role="alert" className="text-ui-sm text-destructive">标识只能包含小写字母、数字和连字符，最长 64 个字符。</p>}
             {collision && !savedPath && <p role="alert" className="text-ui-sm text-destructive">所选目标已有同名技能，请返回对话让模型推荐其他标识，再预览保存。</p>}
-            {error && <p role="alert" className="text-ui-sm text-destructive">{error}</p>}
-            {savedPath && <p role="status" className="break-all text-ui-sm text-foreground-subtle">已演示保存全部文件到 {targetDirectory}，未写入真实文件。</p>}
-            <div className="flex items-center justify-end gap-2"><Button variant="ghost" onClick={() => { setTab("chat"); }}>继续讨论修改</Button><Button disabled={!targetDirectory || !preview || collision || !validName || Boolean(savedPath)} onClick={save}>确认保存技能（演示）</Button></div>
+            {savedPath && <p role="status" className="break-all text-ui-sm text-foreground-subtle">已保存全部文件到 {targetDirectory}。</p>}
+            <div className="flex items-center justify-end gap-2"><Button variant="ghost" onClick={() => { setTab("chat"); }}>继续讨论修改</Button><Button disabled={!targetDirectory || !preview || collision || !validName || Boolean(savedPath) || saving} onClick={save}>确认保存技能</Button></div>
           </div>
         </TabsContent>
       </Tabs>

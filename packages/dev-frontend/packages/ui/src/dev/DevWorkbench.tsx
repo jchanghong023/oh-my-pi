@@ -5,7 +5,7 @@ import { DevPlanningSummary } from "./DevRequirementPlanning.js";
 import { DevSrDependencyGraph } from "./DevSrDependencyGraph.js";
 import { useDevDataSource } from "./data-source.js";
 import type { DevMaterialView } from "./types.js";
-import { MATERIAL_KIND_LABELS, deriveStageView, requirementMaterialName } from "./domain.js";
+import { MATERIAL_KIND_LABELS, requirementMaterialName } from "./domain.js";
 import { useEffect, useMemo, useState } from "react";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
@@ -87,15 +87,14 @@ export function DevMaterialsPane() {
   const sr = view?.srs.find(item => item.id === selection.srId && item.irId === selection.irId && item.projectId === selection.projectId);
   const group = [...(view?.groups ?? []), ...(view?.drafts ?? [])].find(item => item.id === selection.irId && item.projectId === selection.projectId);
   const stage = selection.stage ?? sr?.stage;
-  const stageView = sr ? deriveStageView(sr, selection) : undefined;
   const proposal = view?.drafts.some(item => item.id === group?.id);
-  // IR 只读需求文件；SR 只读自身规格与自身所选阶段／轮次，不能按 IR 混入开发产物。
+  // IR 只读需求文件；SR 只读自身规格，不能按 IR 混入开发产物。
   const materials = view?.materials.filter(item => {
     if (item.projectId !== selection.projectId || item.irId !== selection.irId) return false;
     if (selection.srId) {
       if (item.srId !== selection.srId) return false;
       if (item.kind === "sr" && item.path === sr?.documentPath) return true;
-      return !proposal && source.mode !== "prototype" && Boolean(stage && item.stage === stage && item.round === stageView?.round);
+      return false;
     }
     return item.path === group?.documentPath || (item.kind === "sr" && item.path.endsWith("/spec.md")) ||
       (!item.srId && item.kind === "solution" && (item.path.endsWith("/design.md") || item.path.endsWith("/sr-dependencies.json")));
@@ -119,13 +118,12 @@ export function DevMaterialsPane() {
 		preferred?.path,
 		preferred?.sha256,
 	]);
-  const workspace = source.resolveWorkspace(view, selection);
   const displayPath = (filePath: string) => {
     const storedPath = group?.acceptance?.status === "completed"
       ? group.acceptance.archive?.moves.find(move => move.sourcePath === filePath)?.path ?? filePath
       : filePath;
-    if (source.mode === "prototype" && !proposal) return storedPath;
-    const root = proposal ? group?.proposalLocation?.directory : workspace.path;
+    if (!proposal) return storedPath;
+    const root = group?.proposalLocation?.directory;
     return storedPath.startsWith("/") || !root ? storedPath : `${root.replace(/\/$/, "")}/${storedPath}`;
   };
   const materialLabel = (item: DevMaterialView) => requirementMaterialName(item.path, view?.srs) ?? MATERIAL_KIND_LABELS[item.kind];
@@ -175,9 +173,9 @@ export function DevMaterialsPane() {
 			>
         {!showPlanning && path && <details className="mb-4 text-ui-xs text-foreground-subtle"><summary className="cursor-pointer">文件路径与技术信息</summary><p className="mt-2 whitespace-pre-wrap break-all font-mono select-text" data-testid="material-full-path">{displayPath(path)}</p></details>}
         {showPlanning && proposalSolutionView && group ? <DevPlanningSummary group={group} rows={planningRows} editable /> : error || current?.error ? (
-					<div className="space-y-3"><p role="alert" className="text-ui-base text-destructive">{error ?? current?.error}</p><Button size="sm" variant="outline" data-testid="material-retry" onClick={async () => { const recovered = await dev.retryMaterial(path); setReadFeedback(recovered ? "材料已重新读取。" : "仍无法读取，请恢复原文件；当前阶段可由开发人明确重新生成材料样例。"); }}>重新读取材料</Button>{readFeedback && <p role="status" className="text-ui-sm text-foreground-subtle">{readFeedback}</p>}</div>
+					<div className="space-y-3"><p role="alert" className="text-ui-base text-destructive">{error ?? current?.error}</p><Button size="sm" variant="outline" data-testid="material-retry" onClick={async () => { const recovered = await dev.retryMaterial(path); setReadFeedback(recovered ? "材料已重新读取。" : "仍无法读取，请恢复原文件；当前阶段可由开发人明确重新生成材料。"); }}>重新读取材料</Button>{readFeedback && <p role="status" className="text-ui-sm text-foreground-subtle">{readFeedback}</p>}</div>
 				) : !selection.irId ? (
-          selection.proposalDraftId ? <section className="space-y-4" data-testid="proposal-material-empty"><h2 className="text-ui-base font-medium">从描述需求开始</h2><p className="text-ui-sm leading-6 text-foreground-subtle">先在对话输入框说明想解决的问题，再点击发送。可从下面三点开始，不必一次写完整：</p><ol className="list-decimal space-y-2 pl-5 text-ui-sm"><li>现在遇到了什么问题，希望达成什么目标？</li><li>谁会使用，在什么场景使用？</li><li>期望得到什么结果，怎样判断完成？</li></ol><p className="text-ui-sm leading-6 text-foreground-subtle">AI 会围绕缺失信息追问并整理需求；首次发送后，需求与拆分出的 SR 材料会在这里展示。当前原型使用固定回复演示，不调用真实模型。</p></section> : <p className="text-ui-base text-foreground-subtle">选择需求或新建提案后，在此查看只读材料。</p>
+          selection.proposalDraftId ? <section className="space-y-4" data-testid="proposal-material-empty"><h2 className="text-ui-base font-medium">从描述需求开始</h2><p className="text-ui-sm leading-6 text-foreground-subtle">先在对话输入框说明想解决的问题，再点击发送。可从下面三点开始，不必一次写完整：</p><ol className="list-decimal space-y-2 pl-5 text-ui-sm"><li>现在遇到了什么问题，希望达成什么目标？</li><li>谁会使用，在什么场景使用？</li><li>期望得到什么结果，怎样判断完成？</li></ol><p className="text-ui-sm leading-6 text-foreground-subtle">AI 会围绕缺失信息追问并整理需求；首次发送后，需求与拆分出的 SR 材料会在这里展示。</p></section> : <p className="text-ui-base text-foreground-subtle">选择需求或新建提案后，在此查看只读材料。</p>
 				) : awaitingRequirements ? (
           <section className="space-y-3"><h2 className="text-ui-base font-medium">继续讨论，完善需求</h2><p role="status" className="text-ui-sm leading-6 text-foreground-subtle">需求材料尚未生成。请在对话中说明目标、使用场景和期望结果，按追问补充；材料生成后将在此显示。</p></section>
 				) : !current ? (
@@ -188,11 +186,11 @@ export function DevMaterialsPane() {
 					</p>
 				) : (
 					<>
-						{path.endsWith("/sr-dependencies.json") && group && current ? <DevSrDependencyGraph group={group} material={current} rows={view?.srs.filter(item => item.irId === group.id && item.projectId === group.projectId) ?? []} /> : <MessageResponse className="h-auto min-w-0 break-words [&_[data-markdown-table-toolbar]]:hidden [&_button]:hidden" theme={theme} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "样例材料没有正文。"}</MessageResponse>}
+						{path.endsWith("/sr-dependencies.json") && group && current ? <DevSrDependencyGraph group={group} material={current} rows={view?.srs.filter(item => item.irId === group.id && item.projectId === group.projectId) ?? []} /> : <MessageResponse className="h-auto min-w-0 break-words [&_[data-markdown-table-toolbar]]:hidden [&_button]:hidden" theme={theme} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "材料没有正文。"}</MessageResponse>}
 					</>
 				)}
 			</div>
-      {!(source.mode === "prototype" && !proposal && group) && <DevDocumentPhaseActions />}
+      {(proposal || !group) && <DevDocumentPhaseActions />}
 		</aside>
 	);
 }

@@ -1,7 +1,7 @@
 import { useDevDataSource } from "./data-source.js";
 import type { DevWorkspace } from "./types.js";
 import { useTheme } from "@/useTheme.js";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { useDev } from "./DevContext.js";
@@ -16,7 +16,13 @@ export function DevWorkspaceRecovery({ workspace }: { workspace: DevWorkspace })
  const [showSettings, setShowSettings] = useState(!projects.length);
  const [projectId, setProjectId] = useState(projects.some(item => item.id === dev.selection.projectId) ? dev.selection.projectId! : "");
  const [retried, setRetried] = useState(false);
- const sampleDirectoryIssue = workspace.blockedPath && source.prototype?.directoryIssue(workspace.blockedPath);
+ const [sampleDirectoryIssue, setSampleDirectoryIssue] = useState<string>();
+ useEffect(() => {
+  let active = true;
+  setSampleDirectoryIssue(undefined);
+  if (workspace.blockedPath && source.prototype) void Promise.resolve(source.prototype.directoryIssue(workspace.blockedPath)).then(value => { if (active) setSampleDirectoryIssue(value); }, dev.report);
+  return () => { active = false; };
+ }, [source, workspace.blockedPath, dev.report]);
  return <main className="h-dvh overflow-x-hidden overflow-y-auto bg-background p-8 text-foreground" data-testid="dev-workspace-unavailable">
   <div className="mx-auto max-w-4xl space-y-6"><section className="space-y-4 rounded-lg border border-border p-6">
    <h1 className="text-ui-base font-semibold">{projects.length ? "当前工作区不可用" : "添加第一个项目"}</h1>
@@ -25,13 +31,13 @@ export function DevWorkspaceRecovery({ workspace }: { workspace: DevWorkspace })
    <p className="text-ui-sm text-foreground-subtle">{!projects.length ? "先添加已有 Git 项目，再选择项目及 Release；不会自动创建需求或会话。" : workspace.blockedPath ? "当前选择保持不变；重试只读取状态，不发送消息、不推进流程。恢复原目录后可读回已保存的会话草稿。" : "重新读取不会替换需求或新建会话。也可以返回项目，明确选择其他已有需求。"}</p>
    <div className="flex flex-wrap gap-2">
     <Button variant="outline" onClick={() => { setRetried(true); void dev.refresh(); }}>重试读取</Button>
-    {source.mode === "prototype" && sampleDirectoryIssue && <Button variant="outline" data-testid="restore-directory-sample" onClick={() => { source.prototype!.restoreDirectory(workspace.blockedPath!); void dev.refresh(); }}>恢复目录样例（演示）</Button>}
+    {sampleDirectoryIssue && <Button variant="outline" data-testid="restore-directory-sample" onClick={() => { void Promise.resolve(source.prototype!.restoreDirectory(workspace.blockedPath!)).then(() => dev.refresh(), dev.report); }}>恢复目录样例（演示）</Button>}
     {dev.selection.irId && projects.some(item => item.id === dev.selection.projectId) && <Button variant="outline" onClick={() => dev.select({ projectId: dev.selection.projectId })}>返回项目查看</Button>}
     <Button variant="outline" onClick={() => setShowSettings(value => !value)}>{showSettings ? "收起项目设置" : "项目与 Release 设置"}</Button>
    </div>
    {retried && <p role="status" className="text-ui-sm text-foreground-subtle">重新读取后仍不可用，请按上方原因恢复原目录或重新选择。</p>}
    {Boolean(projects.length) && <div className="flex flex-wrap items-center gap-2"><Select value={projectId || "none"} onValueChange={value => setProjectId(value === "none" ? "" : value)}><SelectTrigger className="w-72" aria-label="选择可查看项目"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">请选择项目</SelectItem>{projects.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select><Button disabled={!projectId} onClick={() => dev.select({ projectId })}>查看所选项目</Button></div>}
   </section>{showSettings && <section className="rounded-lg border border-border p-6" aria-label="项目与 Release 设置"><DevProjectSettings /></section>}
-  {source.mode === "prototype" && <p className="text-ui-sm text-foreground-subtle">Dev 原型 · 故障和恢复仅操作内存样例，不检查或修复真实目录。</p>}</div>
+  {source.provenance.kind === "sample" && <p className="text-ui-sm text-foreground-subtle">Dev 原型 · 故障和恢复仅操作内存样例，不检查或修复真实目录。</p>}</div>
  </main>;
 }

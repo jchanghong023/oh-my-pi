@@ -1,5 +1,5 @@
 import { useDevDataSource } from "./data-source.js";
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { ArrowRight, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
@@ -23,6 +23,14 @@ export function DevEntry({ children }: { children: ReactNode }) {
  const [employeeId, setEmployeeId] = useState(restoreIdentity);
  const [value, setValue] = useState("");
  const [error, setError] = useState("");
+ const [readyIdentity, setReadyIdentity] = useState("");
+ useEffect(() => {
+  let active = true;
+  setReadyIdentity("");
+  if (!employeeId) return () => { active = false; };
+  void Promise.resolve(source.refreshIdentity?.()).then(() => { if (active) setReadyIdentity(employeeId); }, cause => { if (active) setError(cause instanceof Error ? cause.message : String(cause)); });
+  return () => { active = false; };
+ }, [source, employeeId]);
  const enter = () => {
   const next = value.trim();
   if (!isEmployeeId(next)) { setError("请输入 a–z 中任一小写字母开头、后接 8 位数字的工号，例如 j00808874。"); return; }
@@ -34,6 +42,7 @@ export function DevEntry({ children }: { children: ReactNode }) {
   try { globalThis.__ompDevSessionStorage.removeItem(identityKey); } catch { /* 本页内存仍清除。 */ }
   setBrowserEmployeeId(""); setEmployeeId(""); setValue(""); setError("");
  };
+ if (employeeId && readyIdentity !== employeeId) return <main className="min-h-dvh bg-background p-8 text-foreground"><p role={error ? "alert" : "status"}>{error || "正在连接 Dev 后端…"}</p>{error && <Button onClick={signOut}>返回登录</Button>}</main>;
  if (employeeId) return <DevIdentityContext.Provider key={employeeId} value={{ employeeId, signOut }}>{children}</DevIdentityContext.Provider>;
  return <main className="dark theme-zai-dark flex min-h-dvh flex-col bg-background text-foreground" style={{ colorScheme: "dark" }} data-testid="dev-entry">
   <header className="flex items-center gap-2 px-8 py-6"><span className="text-ui-base font-semibold tracking-wide">OMP</span><span className="text-ui-sm text-foreground-subtle">Dev</span></header>
@@ -44,9 +53,9 @@ export function DevEntry({ children }: { children: ReactNode }) {
      <div className="space-y-2"><Label htmlFor="dev-employee-id">工号</Label><Input id="dev-employee-id" value={value} onChange={event => { setValue(event.target.value); setError(""); }} placeholder="例如 j00808874" autoFocus autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={32} className="h-10 w-full" aria-invalid={Boolean(error)} aria-describedby={error ? "dev-employee-help dev-employee-error" : "dev-employee-help"} /><p id="dev-employee-help" className="text-ui-sm text-foreground-subtle">a–z 中任一小写字母开头，后接 8 位数字；无需密码。</p>{error && <p id="dev-employee-error" role="alert" className="text-ui-sm text-destructive">{error}</p>}</div>
      <Button type="submit" className="h-10 w-full justify-center gap-2">进入工作台<ArrowRight className="size-4" /></Button>
     </form>
-    <p className="text-ui-sm leading-6 text-foreground-subtle">{source.mode === "prototype" ? "当前为本页内存样例，刷新恢复；不连接团队数据库。工号仅作操作标识，不验证身份，也不切换 Web 所有者或模型凭据。" : "工号仅作本浏览器显示标记，不验证员工身份，也不会改变 OMP 的服务账号、配置或权限。"}</p>
+    <p className="text-ui-sm leading-6 text-foreground-subtle">{source.provenance.kind === "sample" ? "当前为后端内存样例，刷新保留，后端重启恢复；不连接团队数据库。工号仅作操作标识，不验证身份，也不切换 Web 所有者或模型凭据。" : "工号仅作本浏览器显示标记，不验证员工身份，也不会改变 OMP 的服务账号、配置或权限。"}</p>
    </section>
   </div>
-  {source.mode === "prototype" && <footer className="px-8 py-5 text-center text-ui-sm text-foreground-subtlest">Dev 原型 · 数据仅作演示</footer>}
+  {source.provenance.kind === "sample" && <footer className="px-8 py-5 text-center text-ui-sm text-foreground-subtlest">Dev 原型 · 数据仅作演示</footer>}
  </main>;
 }

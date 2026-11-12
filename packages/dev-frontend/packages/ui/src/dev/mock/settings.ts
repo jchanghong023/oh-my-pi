@@ -26,7 +26,7 @@ export const PROTOTYPE_REGISTRY_MODEL: RegistryModelConfigObject = {
   optionSpecs: { reasoningLevel: { values: ["standard", "low", "medium", "high"], map: "{}" }, maxOutputTokens: { max: 8192, map: "{}" } },
 };
 
-/** 设置仅保存在本次页面生命周期；实际连接/连通性测试在后续对接阶段实现。 */
+/** Settings live in the backend scenario until server restart; no real provider connections. */
 export function createPrototypeSettingsServices(sessionWorkspaces: Map<string, string> = new Map()): Pick<IServiceAccessor, "settingService" | "providerSettingsService" | "modelSelectionService"> {
   let settings = structuredClone(PROTOTYPE_SETTINGS);
   let instructions = "请使用简体中文，先说明需求边界，再展示方案。当前为阶段性前端原型，不执行命令或真实验收。";

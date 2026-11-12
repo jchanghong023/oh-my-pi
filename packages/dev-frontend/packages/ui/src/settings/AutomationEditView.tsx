@@ -1214,7 +1214,8 @@ export function AutomationEditView({
   onOpenSession,
 }: AutomationEditViewProps) {
   const { intl } = useZCodeIntl();
-  const prototype = useOptionalDevDataSource()?.mode === "prototype";
+  const devSource = useOptionalDevDataSource();
+  const devAutomations = Boolean(devSource);
   const confirmDialog = useConfirmDialog();
   const [tab, setTab] = useState<AutomationSettingsHistoryTab>("settings");
   const [runsPage, setRunsPage] = useState(1);
@@ -2040,7 +2041,7 @@ export function AutomationEditView({
                       />
                     </span>
                     <span className="min-w-0 truncate">
-                      {prototype && editing
+                      {devAutomations && editing
                         ? PROTOTYPE_AUTOMATION_STATUS_LABELS[resolvePrototypeAutomationStatus(editing, runsEntry?.runs)]
                         : intl.formatMessage({ id: `automations.lifecycle.${editStatus}` })}
                     </span>

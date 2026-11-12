@@ -11,7 +11,7 @@ import type { DevRequirementGroup } from "./types.js";
 
 export function DevIrAcceptanceEntry({ group, compact = false, onNavigate }: { group: DevRequirementGroup; compact?: boolean; onNavigate?: () => void }) {
   const source = useDevDataSource();
-  if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
+  if (!source.capabilities.requirementManagement) return null;
   const dev = useDev()!;
   const blocker = dev.view ? irAcceptanceBlocker(dev.view, group) : "正在读取 SR 状态。";
   const title = group.acceptance ? `IR 验收 · ${dev.view && irAcceptanceVersionBlocker(dev.view, group) ? "待重新验收" : IR_ACCEPTANCE_LABELS[group.acceptance.status]}` : blocker ?? "全部 SR 已合并，可进入 IR 整体验收。";
@@ -26,7 +26,7 @@ export function DevIrAcceptanceEntry({ group, compact = false, onNavigate }: { g
 
 export function DevIrAcceptanceHeader({ group }: { group: DevRequirementGroup }) {
  const source = useDevDataSource();
-  if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness) return null;
+  if (!source.capabilities.requirementManagement) return null;
   const dev = useDev()!;
   const acceptance = group.acceptance;
   const blocker = irAcceptanceBlocker(dev.view!, group);
@@ -45,13 +45,13 @@ export function DevIrAcceptanceHeader({ group }: { group: DevRequirementGroup })
     <DevAgentModelSummary binding={acceptance?.session.modelConfig} />
     {acceptance && <p className="text-ui-sm text-foreground-subtle">验收开发人：{acceptance.employeeId} · 候选：{acceptance.candidate}{!owns ? " · 当前仅查看" : ""}</p>}
     <div className="flex flex-wrap gap-2">
-      {!acceptance && <Button size="sm" data-testid="ir-acceptance-start" disabled={!!blocker || !source.projects?.readDevelopmentRoot(group.projectId)} onClick={() => void dev.command({ type: "startIrAcceptance" })}>开始 IR 验收（演示）</Button>}
-      {owns && !versionIssue && acceptance?.status === "reviewing" && <Button size="sm" data-testid="ir-acceptance-pass" onClick={() => void dev.command({ type: "generateIrAcceptanceReport", outcome: "passed" })}>生成通过报告（演示）</Button>}
+      {!acceptance && <Button size="sm" data-testid="ir-acceptance-start" disabled={!!blocker || !source.projects?.readDevelopmentRoot(group.projectId)} onClick={() => void dev.command({ type: "startIrAcceptance" })}>开始 IR 验收</Button>}
+      {owns && !versionIssue && acceptance?.status === "reviewing" && <Button size="sm" data-testid="ir-acceptance-pass" onClick={() => void dev.command({ type: "generateIrAcceptanceReport", outcome: "passed" })}>生成通过报告</Button>}
 
-      {owns && !versionIssue && acceptance?.status === "passed" && <Button size="sm" data-testid="ir-final-pr-prepare" disabled={!ready} onClick={() => void dev.command({ type: "prepareIrFinalPr" })}>确认验收，准备最终 PR（演示）</Button>}
+      {owns && !versionIssue && acceptance?.status === "passed" && <Button size="sm" data-testid="ir-final-pr-prepare" disabled={!ready} onClick={() => void dev.command({ type: "prepareIrFinalPr" })}>确认验收，准备最终 PR</Button>}
     </div>
-    {versionIssue && <div className="space-y-2" data-testid="ir-acceptance-stale"><p role="status" className="text-ui-sm text-foreground-subtle">{versionIssue}</p>{owns && <Button size="sm" data-testid="ir-acceptance-restart" onClick={() => void dev.command({ type: "restartIrAcceptance" })}>重新对齐并验收（演示）</Button>}</div>}
-    {!versionIssue && reportIssue && acceptance?.status === "passed" && <div className="space-y-2"><p className="text-ui-sm text-foreground-subtle">{reportIssue}</p>{owns && <Button size="sm" onClick={() => void dev.command({ type: "restartIrAcceptance" })}>重新验收（演示）</Button>}</div>}
+    {versionIssue && <div className="space-y-2" data-testid="ir-acceptance-stale"><p role="status" className="text-ui-sm text-foreground-subtle">{versionIssue}</p>{owns && <Button size="sm" data-testid="ir-acceptance-restart" onClick={() => void dev.command({ type: "restartIrAcceptance" })}>重新对齐并验收</Button>}</div>}
+    {!versionIssue && reportIssue && acceptance?.status === "passed" && <div className="space-y-2"><p className="text-ui-sm text-foreground-subtle">{reportIssue}</p>{owns && <Button size="sm" onClick={() => void dev.command({ type: "restartIrAcceptance" })}>重新验收</Button>}</div>}
     {!acceptance && <p role="status" className="text-ui-sm text-foreground-subtle">{blocker ?? (!source.projects?.readDevelopmentRoot(group.projectId) ? "请先在设置中添加我的开发项目。" : "全部 SR 已合并核验（样例）；明确开始后创建独立 IR 验收会话及修复／归档工作区。")}</p>}
     {acceptance?.status === "issues" && <p role="status" className="text-ui-sm text-foreground-subtle">发现需求范围内的实现问题，请修复并重新整体验收；需求或方案有变化时，请在自己的开发项目中修改提交并重新核对影响。</p>}
     {owns && acceptance && ["pr-ready", "pr-submitted"].includes(acceptance.status) && <DevIrFinalPrControls key={`${group.id}:${acceptance.candidate}`} group={group} />}
@@ -60,7 +60,7 @@ export function DevIrAcceptanceHeader({ group }: { group: DevRequirementGroup })
     {Boolean(acceptance?.history?.length) && <details className="text-ui-xs text-foreground-subtle"><summary className="cursor-pointer">历史验收（{acceptance!.history!.length}）</summary><ul className="mt-2 space-y-1 break-all">{acceptance!.history!.map((item, index) => <li key={`${item.candidate}:${index}`}>{item.candidate} · {item.baseCommit} · {item.status} · 仅供历史查看</li>)}</ul></details>}
     {acceptance?.reportPath && <details className="space-y-3 text-ui-sm"><summary className="cursor-pointer">验收报告</summary><p className="break-all text-foreground-subtle">{acceptance.reportPath}</p><MessageResponse>{dev.view?.materials.find(item => item.path === acceptance.reportPath)?.content ?? "验收报告不可读，请恢复对应文件后重新核验。"}</MessageResponse></details>}
     {acceptance && <details className="text-ui-sm text-foreground-subtle"><summary className="cursor-pointer">工作区与验收基点</summary><p className="mt-2 break-all">{acceptance.worktree.path}</p><p>分支：{acceptance.worktree.branch} · 基点：{acceptance.baseCommit}</p></details>}
-    <p className="text-ui-xs text-foreground-subtle">简化原型：验收固定通过，不演示问题、返工或复验；报告与合并核验均为静态样例，不执行模型、测试、Git 或归档。人工 PR 合并与归档核验仍保留。</p>
+    <p className="text-ui-xs text-foreground-subtle">{source.provenance.kind === "sample" ? "简化原型：验收固定通过，不演示问题、返工或复验；报告与合并核验均为静态样例，不执行模型、测试、Git 或归档。人工 PR 合并与归档核验仍保留。" : "验收结论以报告与合并核验记录为准，人工 PR 合并与归档核验仍须完成。"}</p>
     {dev.error && <p role="alert" className="text-ui-sm text-destructive">{dev.error}</p>}
   </header>;
 }

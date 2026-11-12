@@ -671,7 +671,7 @@ export function SettingsPage({
                   <DialogFooter>
                     <Button variant="outline" onClick={() => setPendingNavigation(null)}>取消，继续编辑</Button>
                     <Button variant="ghost" onClick={() => { modelDraftActions?.discard(); setPendingNavigation(null); pendingNavigation?.(); }}>丢弃并离开</Button>
-                    <Button disabled={modelDraftActions?.canSave === false} onClick={() => { modelDraftActions?.save(); setPendingNavigation(null); pendingNavigation?.(); }}>保存并离开</Button>
+                    <Button disabled={modelDraftActions?.canSave === false} onClick={async () => { if (await modelDraftActions?.save()) { setPendingNavigation(null); pendingNavigation?.(); } }}>保存并离开</Button>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>

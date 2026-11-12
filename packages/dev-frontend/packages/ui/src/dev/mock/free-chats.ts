@@ -13,9 +13,10 @@ const seeded = new Set<string>();
 const hiddenProjects = new Set<string>();
 const pins = new Set<string>();
 const listeners = new Set<() => void>();
-// 当前页面查看范围，不是后端全局 current project 或项目登记权威。
-let viewedProjectId: string | undefined;
-export function setPrototypeFreeProject(projectId?: string): void { if (viewedProjectId !== projectId) { viewedProjectId = projectId; notify(); } }
+// Selection belongs to each request/socket, never to shared business state.
+let projectContext: { read(): string | undefined; write(projectId?: string): void } | undefined;
+export function setPrototypeProjectContext(context: { read(): string | undefined; write(projectId?: string): void }): void { projectContext = context; }
+export function setPrototypeFreeProject(projectId?: string): void { projectContext?.write(projectId); }
 function notify() { for (const listener of listeners) listener(); }
 export function subscribePrototypeFreeChats(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }
 export function freeProjectId(identity?: string): string | undefined { return identity?.startsWith(FREE_WORKSPACE_PREFIX) ? identity.slice(FREE_WORKSPACE_PREFIX.length).split(":")[0] : undefined; }
@@ -60,7 +61,7 @@ export function createPrototypeProjectServices(): Pick<IServiceAccessor, "projec
  const find = (id: string) => { const project = projects().find(item => item.id === id); if (!project) throw new Error("项目不存在。"); return project; };
  return { projectService: {
   readProjects: async params => projects().filter(item => params?.includeDeleted || !item.deleted),
-  readTree: async params => { const id = viewedProjectId ?? projects()[0]?.id; const rows = projects().filter(item => item.id === id && (params?.includeDeleted || !item.deleted)); return { projects: rows, tasks: rows.filter(item => !item.deleted).flatMap(project => readRecentFreeChats(project.id, FREE_CHAT_LIMIT)) }; },
+  readTree: async params => { const id = projectContext?.read() ?? projects()[0]?.id; const rows = projects().filter(item => item.id === id && (params?.includeDeleted || !item.deleted)); return { projects: rows, tasks: rows.filter(item => !item.deleted).flatMap(project => readRecentFreeChats(project.id, FREE_CHAT_LIMIT)) }; },
   readDirectory: async params => ({ path: params?.path ?? "/demo", entries: projects().map(project => ({ name: project.name, path: project.roots[0]!.rootPath, type: "directory" as const })) }),
   saveProject: async input => { if (!input.id) throw new Error("请在 Dev 项目与 Release 中添加已有 Git 项目。"); if (input.pinned !== undefined) input.pinned ? pins.add(input.id) : pins.delete(input.id); notify(); return find(input.id); },
   deleteProject: async id => { find(id); hiddenProjects.add(id); notify(); },

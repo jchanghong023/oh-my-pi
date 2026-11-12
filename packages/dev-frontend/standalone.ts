@@ -2,11 +2,55 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-// 第一阶段只运行现有复制版前端；依赖安装不进入祖先仓库的 workspace。
+// Dev 前后端独立启动；依赖安装不进入祖先仓库的 workspace。
 const root = import.meta.dirname;
 const modules = path.join(root, "node_modules");
 const vite = path.join(modules, "vite/bin/vite.js");
 const marker = path.join(modules, ".dev-frontend-install");
+
+if (!Bun.semver.satisfies(Bun.version, ">=1.4.4")) {
+	throw new Error("Dev 原型需要 Bun >= 1.4.4。");
+}
+
+const command = process.argv[2] ?? "start";
+if (process.argv.length > 3 || !["install", "start", "build", "backend"].includes(command)) {
+	throw new Error("用法：bun ./standalone.ts install | start | build | backend");
+}
+
+async function runChild(cmd: string[]): Promise<number> {
+	const child = Bun.spawn({
+		cmd,
+		cwd: root,
+		stdin: "inherit",
+		stdout: "inherit",
+		stderr: "inherit",
+	});
+	const stop = () => child.kill();
+	process.once("SIGINT", stop);
+	process.once("SIGTERM", stop);
+	process.once("exit", stop);
+	try {
+		return await child.exited;
+	} finally {
+		process.removeListener("SIGINT", stop);
+		process.removeListener("SIGTERM", stop);
+		process.removeListener("exit", stop);
+	}
+}
+
+if (command === "backend") {
+	process.exit(
+		await runChild([
+			process.execPath,
+			"--tsconfig-override",
+			path.join(root, "backend/tsconfig.json"),
+			"--preload",
+			path.join(root, "backend/register.ts"),
+			path.join(root, "backend/main.ts"),
+		]),
+	);
+}
+
 const manifest = (await Bun.file(path.join(root, "package.json")).json()) as {
 	name: string;
 	version: string;
@@ -17,15 +61,6 @@ const fingerprint = new Bun.CryptoHasher("sha256")
 	.update(JSON.stringify(manifest.dependencies))
 	.update(lock)
 	.digest("hex");
-
-if (!Bun.semver.satisfies(Bun.version, ">=1.4.4")) {
-	throw new Error("此阶段性前端原型需要 Bun >= 1.4.4。");
-}
-
-const command = process.argv[2] ?? "start";
-if (process.argv.length > 3 || !["install", "start", "build"].includes(command)) {
-	throw new Error("用法：bun ./standalone.ts install | start | build");
-}
 
 if (command === "install") {
 	const staging = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dev-frontend-install-"));
@@ -79,20 +114,11 @@ if (command === "install") {
 		throw new Error("请先在本包目录执行 bun ./standalone.ts install；不要在祖先仓库运行 bun install。");
 	}
 	const args = command === "build" ? ["build"] : [];
-	const child = Bun.spawn({
-		cmd: [process.execPath, vite, ...args, "--config", path.join(root, "preview/vite.config.ts")],
-		cwd: root,
-		stdin: "inherit",
-		stdout: "inherit",
-		stderr: "inherit",
-	});
-	const stop = () => child.kill();
-	process.once("SIGINT", stop);
-	process.once("SIGTERM", stop);
-	try {
-		process.exitCode = await child.exited;
-	} finally {
-		process.removeListener("SIGINT", stop);
-		process.removeListener("SIGTERM", stop);
-	}
+	process.exitCode = await runChild([
+		process.execPath,
+		vite,
+		...args,
+		"--config",
+		path.join(root, "preview/vite.config.ts"),
+	]);
 }

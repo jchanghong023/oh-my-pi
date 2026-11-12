@@ -57,7 +57,7 @@ function scopeProposalDraft(value: DevSelection, webId: string): DevSelection {
 /** One UI state controller; the entry point owns data and execution authority. */
 export function DevProvider({ children }: { children: ReactNode }) {
   const source = useDevDataSource();
-  const [selection, setSelection] = useState<DevSelection>(() => scopeProposalDraft(source.mode === "prototype" && window.history.state?.devSelection ? window.history.state.devSelection as DevSelection : { ...source.initialSelection }, source.backend?.id ?? source.clientId));
+  const [selection, setSelection] = useState<DevSelection>(() => scopeProposalDraft(window.history.state?.devBackendId === (source.backend?.id ?? source.clientId) && window.history.state?.devSelection ? window.history.state.devSelection as DevSelection : { ...source.initialSelection }, source.backend?.id ?? source.clientId));
   const selectionRef = useRef(selection);
   const [view, setView] = useState<DevWorkflowView>();
   const viewRef = useRef(view);
@@ -98,7 +98,7 @@ export function DevProvider({ children }: { children: ReactNode }) {
   const select = useCallback((value: DevSelection, addHistory = true) => {
     value = scopeProposalDraft(value, source.backend?.id ?? source.clientId);
     const projectChanged = selectionRef.current.projectId !== value.projectId;
-    if (source.mode === "prototype" && addHistory) window.history.pushState({ ...window.history.state, devSelection: value }, "");
+    if (addHistory) window.history.pushState({ ...window.history.state, devSelection: value, devBackendId: source.backend?.id ?? source.clientId }, "");
     source.selectProject(value.projectId);
     selectionRef.current = value;
     setSelection(value);
@@ -110,10 +110,9 @@ export function DevProvider({ children }: { children: ReactNode }) {
     }
   }, [source, load]);
   useEffect(() => {
-    if (source.mode !== "prototype") return;
-    window.history.replaceState({ ...window.history.state, devSelection: selectionRef.current }, "");
+    window.history.replaceState({ ...window.history.state, devSelection: selectionRef.current, devBackendId: source.backend?.id ?? source.clientId }, "");
     const restore = (event: PopStateEvent) => {
-      if (event.state?.devSelection) select(event.state.devSelection as DevSelection, false);
+      if (event.state?.devBackendId === (source.backend?.id ?? source.clientId) && event.state?.devSelection) select(event.state.devSelection as DevSelection, false);
     };
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);

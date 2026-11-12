@@ -1,15 +1,12 @@
 import { DevFormalWorkspace } from "@/dev/DevFormalProgress.js";
-import { DevFormalProgressBody } from "@/dev/DevPhaseHeader.js";
 import { proposalProgressIndex, proposalViewedIndex } from "@/dev/domain.js";
-import { DevFormalReadOnlyState } from "@/dev/DevFormalReadOnlyState.js";
 import { useOptionalDevDataSource } from "@/dev/data-source.js";
-import { DevIrAcceptanceWelcome } from "@/dev/DevIrAcceptance.js";
 import { DevEmptyState, DevProposalSrReadOnlyState } from "@/dev/DevEmptyState.js";
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useDev } from "@/dev/DevContext.js";
 import { conversationReadOnlyReason } from "@/dev/domain.js";
 import { DevAutomations } from "@/dev/DevAutomations.js";
-import { DevSidebar, DevStageHeader, DevReadonlyOverview } from "@/dev/DevWorkbench.js";
+import { DevSidebar, DevStageHeader } from "@/dev/DevWorkbench.js";
 import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
 import { useWorkbenchGroupStore } from "@/v4/workbenchGroupStore.js";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -337,13 +334,10 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const devGroup = [...(dev?.view?.groups ?? []), ...(dev?.view?.drafts ?? [])].find(item => item.id === dev?.selection.irId);
   const devProposalSr = Boolean(dev?.selection.srId && dev.view?.drafts.some(item => item.id === dev.selection.irId));
   const devProposalHistory = !!dev && !!devGroup && !!dev.view?.drafts.some(item => item.id === devGroup.id) && proposalViewedIndex(devGroup, dev.selection) !== proposalProgressIndex(devGroup, dev.selection);
-  const devOwnershipReadOnlyReason = devSource?.mode === "prototype" ? conversationReadOnlyReason(dev?.view, dev?.selection ?? {}, devSource.capabilities) : undefined;
+  const devOwnershipReadOnlyReason = devSource ? conversationReadOnlyReason(dev?.view, dev?.selection ?? {}, devSource.capabilities) : undefined;
   const devFrozen = !!dev && !dev.selection.irAcceptance && !dev.selection.srId && Boolean(devGroup?.freeze);
-  const devVisitorFormal = Boolean(dev && devSource?.capabilities.codeDevelopment === false && dev.view?.groups.some(item => item.id === dev.selection.irId));
-  const devFormalOverview = Boolean(dev && !dev.selection.srId && !dev.selection.irAcceptance && dev.view?.groups.some(item => item.id === dev.selection.irId));
   const devEmpty = Boolean(dev && !dev.selection.freeSessionId && (!dev.selection.irId || (!dev.session && devSr?.status !== "pending")));
-  const devReadOnly = !!dev && !!dev.selection.srId && !dev.session && !dev.view?.drafts.some(item => item.id === dev.selection.irId);
-  const devFormalMode = devSource?.mode === "prototype" && Boolean(dev?.selection.formalView || dev?.view?.groups.some(group => group.id === dev?.selection.irId));
+  const devFormalMode = Boolean(dev?.selection.formalView || dev?.view?.groups.some(group => group.id === dev?.selection.irId));
   const [formalNavigationOpen, setFormalNavigationOpen] = useState(false);
   // 自动化只切换主视图，不卸载工作台；离开时清除临时展开状态，返回正式需求才会默认收起。
   useEffect(() => {
@@ -1817,7 +1811,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   );
 
   const renderWorkspaceSidebar = (mobile?: { navigateToChat(): void }) => dev ? (
-    <DevSidebar projects={renderNativeProjectSidebar(mobile, true)} onNavigate={mobile?.navigateToChat ?? showChatMainView} onOpenAutomations={devSource?.mode === "prototype" ? () => { handleOpenAutomations(); mobile?.navigateToChat(); } : undefined} automationsActive={workspaceMainView === "automations"} />
+    <DevSidebar onNavigate={mobile?.navigateToChat ?? showChatMainView} onOpenAutomations={() => { handleOpenAutomations(); mobile?.navigateToChat(); }} automationsActive={workspaceMainView === "automations"} />
   ) : renderNativeProjectSidebar(mobile);
 
   // Reuse the responsive phone layout for browsers connected directly to local OMP.
@@ -1938,7 +1932,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 </div>
               </AutomationsMainBreadcrumbFrame>
             </main>
-          ) : devFormalMode ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={() => setFormalNavigationOpen(open => !open)} /> : devProposalSr ? <DevProposalSrReadOnlyState /> : devVisitorFormal ? <DevFormalReadOnlyState /> : devFormalOverview ? <DevFormalProgressBody /> : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
+          ) : devFormalMode ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={() => setFormalNavigationOpen(open => !open)} /> : devProposalSr ? <DevProposalSrReadOnlyState /> : devEmpty ? <DevEmptyState /> : (
             <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
               {/* Bugfix: 手机远控聊天页中间层必须继续提供 flex 高度链。
                 只有 h-full 的普通 block 会让 ChatView 的 flex-1 失效，草稿空态贴顶且内部滚动被外层裁掉。 */}
@@ -1975,7 +1969,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                   onRefreshGit={handleRefreshGit}
                   onOpenGitReview={handleOpenGitReview}
                   onOpenBrowserUrl={handleOpenBrowserUrl}
-                  onOpenAutomationsMain={!dev || devSource?.mode === "prototype" ? handleOpenAutomations : undefined}
+                  onOpenAutomationsMain={handleOpenAutomations}
                   onOpenCodeViewer={handleOpenCodeViewer}
                   onAutoOpenAssistantPptx={isDesktop ? handleAutoOpenAssistantPptx : undefined}
                   onOpenFileLink={handleOpenMarkdownFileLink}
@@ -2251,7 +2245,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                               </div>
                             </AutomationsMainBreadcrumbFrame>
                           </main>
-                        ) : devFormalMode ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={() => setFormalNavigationOpen(open => !open)} /> : devProposalSr ? <DevProposalSrReadOnlyState /> : devVisitorFormal ? <DevFormalReadOnlyState /> : devFormalOverview ? <DevFormalProgressBody /> : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
+                        ) : devFormalMode ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={() => setFormalNavigationOpen(open => !open)} /> : devProposalSr ? <DevProposalSrReadOnlyState /> : devEmpty ? <DevEmptyState /> : (
                           <main className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
                             {renderChatFindDialog()}
                             <ScopedErrorBoundary
@@ -2298,7 +2292,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                                 onOpenGitReview={handleOpenGitReview}
                                 onPaneActiveSessionChange={handlePaneActiveSessionChange}
                                 onOpenBrowserUrl={handleOpenBrowserUrl}
-                                onOpenAutomationsMain={!dev || devSource?.mode === "prototype" ? handleOpenAutomations : undefined}
+                                onOpenAutomationsMain={handleOpenAutomations}
                                 onOpenCodeViewer={handleOpenCodeViewer}
                                 onAutoOpenAssistantPptx={
                                   isDesktop ? handleAutoOpenAssistantPptx : undefined

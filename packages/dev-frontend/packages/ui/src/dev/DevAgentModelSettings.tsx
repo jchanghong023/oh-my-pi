@@ -6,7 +6,7 @@ import { SettingsGroupCard, SettingsRow } from "@/settings/SettingsPageParts.js"
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { DevPersonalConfigScope } from "./DevPersonalConfigScope.js";
 
-export interface DevModelDraftActions { save(): void; discard(): void; canSave?: boolean }
+export interface DevModelDraftActions { save(): boolean | Promise<boolean>; discard(): void; canSave?: boolean }
 
 export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActionsChange?: (actions: DevModelDraftActions | null) => void }) {
  const source = useDevDataSource();
@@ -18,9 +18,21 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 	const [message, setMessage] = useState("");
 	const canManage = source.capabilities.settingsWrite === true;
 	const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+ const [saving, setSaving] = useState(false);
+ const save = async () => {
+  if (!canManage || saving) return false;
+  setSaving(true);
+  try {
+   await source.models!.save(draft);
+   setSaved(structuredClone(source.models!.read()));
+   setMessage(zh ? "我的模型配置已保存" : "My model configuration saved");
+   return true;
+  } catch (cause) { setMessage(cause instanceof Error ? cause.message : String(cause)); return false; }
+  finally { setSaving(false); }
+ };
 	useEffect(() => {
 		onDraftActionsChange?.(dirty && canManage ? {
-			save: () => { source.models!.save(draft); setSaved(structuredClone(draft)); },
+			save,
 			discard: () => { setDraft(structuredClone(saved)); setMessage(""); },
 		} : null);
 		return () => onDraftActionsChange?.(null);
@@ -105,16 +117,16 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 				</p>
 			</section>
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				{source.mode === "prototype" && source.models!.samples && <Button variant="ghost" disabled={!canManage} onClick={() => { setDraft(source.models!.samples!()); setMessage(""); }}>{zh ? "恢复演示配置" : "Restore demo configuration"}</Button>}
+				{source.models!.samples && <Button variant="ghost" disabled={!canManage} onClick={() => { setDraft(source.models!.samples!()); setMessage(""); }}>{zh ? "恢复演示配置" : "Restore demo configuration"}</Button>}
 				<div className="flex items-center gap-2">
 					{dirty && <span className="text-ui-sm text-foreground-subtle">{zh ? "有未保存的更改" : "Unsaved changes"}</span>}
 					<Button variant="outline" disabled={!dirty || !canManage} onClick={() => { setDraft(structuredClone(saved)); setMessage(""); }}>{zh ? "取消" : "Cancel"}</Button>
-					<Button disabled={!dirty || !canManage} onClick={() => { source.models!.save(draft); setSaved(structuredClone(draft)); setMessage(zh ? "我的模型配置已保存" : "My model configuration saved"); }}>{zh ? "保存配置" : "Save configuration"}</Button>
+					<Button disabled={!dirty || !canManage || saving} onClick={() => { void save(); }}>{zh ? "保存配置" : "Save configuration"}</Button>
 				</div>
 			</div>
 			<p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
-			{source.mode === "prototype" && <p className="text-ui-sm leading-6 text-foreground-subtle">
-				{zh ? "原型演示：模型及思考强度为样例选项，未连接真实模型。保存仅在本页内存生效，刷新后恢复初始样例。" : "Prototype: models and reasoning levels are sample options with no live connection. Saved changes stay in page memory and reset on refresh."}
+			{source.provenance.kind === "sample" && <p className="text-ui-sm leading-6 text-foreground-subtle">
+				{zh ? "原型演示：模型及思考强度为样例选项，未连接真实模型。保存于后端内存，刷新保留，后端重启恢复初始样例。" : "Prototype: sample models only. Changes stay in backend memory across refreshes and reset when the backend restarts."}
 			</p>}
 		</div>
 	);

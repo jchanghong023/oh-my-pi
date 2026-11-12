@@ -64,7 +64,7 @@ export function developmentMaterials(projectId: string, irId: string, srId: stri
     completion: `## 样例变更摘要\n展示需求与阶段导航、只读资料、协作示例和本地设置。\n\n## 样例文件清单\n- ui/navigation/requirement-tree.tsx\n- ui/materials/material-pane.tsx\n- ui/session/discussion.tsx\n\n## 未执行事项\n未调用模型，未操作 Git，未运行构建、UT 或 ST，未提交真实 PR。\n\n## 真实完成判据\n需以后续阶段的实际代码审查、运行记录和用户验收为准。`,
     ut: `## UT 报告展示样例（未执行）\n| 用例 | 预期行为 | 样例展示 |\n| --- | --- | --- |\n| UT-01 | 切换项目只展示对应 IR | 通过（示例值） |\n| UT-02 | 复制材料保持正文完整 | 通过（示例值） |\n| UT-03 | 取消对话框不改变选择 | 通过（示例值） |\n| UT-04 | 带入讨论不自动发送 | 待真实验证 |\n\n运行命令：未执行。耗时与覆盖率：未采集。以上不是测试结果。`,
     st: `## ST 场景展示样例（未执行）\n1. 打开 Aurora 项目，选择 2026.11 Release。\n2. 从账号与权限 IR 进入不同阶段 SR。\n3. 在右侧阅读方案、计划与验证报告，返回需求对话。\n4. 选择移动端项目，检查列表与资料上下文。\n\n## 预期体验\n保留现有界面结构，导航与正文一致，操作可以取消，无真实网络或模型请求。\n\n## 验证状态\n这里仅提供报告排版和场景样例，尚未运行系统测试，不能据此宣称验收通过。`,
-    delivery: `## 交付展示样例\nRelease：release-2026-11\nSR：${srId}\n\n## 交付内容\n阶段性前端原型界面与独立样例数据，用于跨机器走查 UI/UX。\n\n## PR 信息\n示例 PR 链接和分支仅用于展示，不代表存在真实远端提交或合入。\n\n## 使用与反馈\n刷新后恢复初始样例。记录导航、文案、布局和材料体验反馈。\n\n## 下一阶段\n用户确认后对接真实 OMP，既有业务目标和真实验收标准不取消。`,
+    delivery: `## 交付展示样例\nRelease：release-2026-11\nSR：${srId}\n\n## 交付内容\n阶段性前端原型界面与独立样例数据，用于跨机器走查 UI/UX。\n\n## PR 信息\n示例 PR 链接和分支仅用于展示，不代表存在真实远端提交或合入。\n\n## 使用与反馈\n刷新或重新连接保留后端场景状态，服务重启恢复初始样例。记录导航、文案、布局和材料体验反馈。\n\n## 下一阶段\n用户确认后对接真实 OMP，既有业务目标和真实验收标准不取消。`,
   };
   return (Object.keys(stageByKind) as Exclude<DevStageMaterial["kind"], "solution">[]).map(kind => prototypeMaterial({
     projectId, irId, srId, kind, stage: stageByKind[kind], round, path: `development/${irId}/${srId}/round-${round}/${kind}.md`,

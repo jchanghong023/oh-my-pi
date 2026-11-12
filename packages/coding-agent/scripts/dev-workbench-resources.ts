@@ -165,13 +165,14 @@ async function collectBuildDeclarations(inputs: Map<string, Uint8Array>): Promis
 		"packages/dev-frontend/tsconfig.base.json",
 		"packages/coding-agent/package.json",
 		"packages/dev-frontend/vite.config.ts",
+		"packages/dev-frontend/backend/contract.ts",
 		"packages/coding-agent/scripts/dev-workbench-resources.ts",
 		"packages/coding-agent/src/dev-workbench/assets.ts",
 	]) {
 		const absolute = path.join(repoRoot, file);
 		inputs.set(absolute, await fs.readFile(absolute));
 	}
-	for (const directory of ["preview", "runtime", "app", "packages/web/public", "config"]) {
+	for (const directory of ["preview", "runtime", "app", "client", "packages/web/public", "config"]) {
 		await walkFiles(path.join(frontendDir, directory), async file => {
 			if (!inputs.has(file)) inputs.set(file, await fs.readFile(file));
 		});

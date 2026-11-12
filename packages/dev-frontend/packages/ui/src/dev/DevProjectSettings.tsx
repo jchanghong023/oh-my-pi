@@ -47,7 +47,7 @@ export function DevProjectSettings() {
   const openRelease = (id: string) => { setReleaseProjectId(id); setReleaseTitle(""); setReleaseError(""); setReleaseOpen(true); };
   return (
     <section className="space-y-6" data-testid="dev-project-settings">
-      <div className="space-y-2"><SettingsBadge>{source.mode === "prototype" ? "团队共享 · 演示数据" : "OMP 项目数据"}</SettingsBadge><p className="text-ui-sm leading-6 text-foreground-subtle">项目只配置 Git 仓库和默认分支。平台按需自动拉取仓库，内部工作目录由平台管理，无需配置本地目录或开发目录。保存设置不触发拉取、创建分支或推送。</p></div>
+      <div className="space-y-2"><SettingsBadge>{source.provenance.kind === "sample" ? "团队共享 · 演示数据" : "OMP 项目数据"}</SettingsBadge><p className="text-ui-sm leading-6 text-foreground-subtle">项目只配置 Git 仓库和默认分支。平台按需自动拉取仓库，内部工作目录由平台管理，无需配置本地目录或开发目录。保存设置不触发拉取、创建分支或推送。</p></div>
       <div className="flex flex-wrap items-start justify-between gap-3"><div className="space-y-1"><p className="text-ui-base text-foreground-subtle">所有人查看同一份项目与 Release。当前工号：{employeeId}。</p><p className="text-ui-sm text-foreground-subtle">{projects.length} 个项目 · {releaseCount} 个 Release</p></div>{canAdd && <Button onClick={() => openProject()}><Plus className="size-4" />添加项目</Button>}</div>
       {projectViews.map(({ project, view }) => (
         <SettingsGroupCard key={project.id}>
@@ -57,7 +57,7 @@ export function DevProjectSettings() {
               <div className="space-y-2">
                 <div className="space-y-1"><Label htmlFor={`repository-${project.id}`}>Git 仓库地址</Label><Input id={`repository-${project.id}`} value={project.repositoryUrl ?? "尚未配置"} readOnly className="font-mono text-ui-sm" /></div>
                 <p className="flex flex-wrap items-center gap-2 text-ui-sm text-foreground-subtle"><GitBranch className="size-3.5" /><span>默认分支：{project.defaultBranch}</span><span>· {view.releases.length} 个 Release</span></p>
-                {source.mode === "prototype" && <p className="text-ui-sm text-foreground-subtle" data-testid={`repository-check-${project.id}`}>仓库连接：未检查 · 默认分支：未检查（原型未接入 Git 检查，配置已记录不等于检查通过）。</p>}
+                {source.provenance.kind === "sample" && <p className="text-ui-sm text-foreground-subtle" data-testid={`repository-check-${project.id}`}>仓库连接：未检查 · 默认分支：未检查（原型未接入 Git 检查，配置已记录不等于检查通过）。</p>}
                 <p className="text-ui-sm text-foreground-subtle">仅启动此 OMP Web 的人（{source.backend?.owner ?? "当前宿主所有者"}）可修改项目与 Release 设置，其他账号只读。</p>
               </div>
               <Button variant="outline" disabled={!source.capabilities.workflowCommands.includes("createRelease")} onClick={() => openRelease(project.id)} aria-label={`为${project.name}添加 Release`}><Plus className="size-3.5" />添加 Release</Button>
@@ -73,7 +73,7 @@ export function DevProjectSettings() {
       ))}
       {!projects.length && <p className="text-ui-base text-foreground-subtle">还没有项目。配置 Git 仓库与默认分支后，即可创建 Release。</p>}
       <p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
-      {source.mode === "prototype" && <p className="text-ui-sm leading-6 text-foreground-subtle">原型演示：项目、Git 仓库配置和 Release 仅保存到当前页面内存，刷新后恢复。只检查输入格式，未验证仓库可访问或分支存在，不连接真实 Git、数据库或文件系统。</p>}
+      {source.provenance.kind === "sample" && <p className="text-ui-sm leading-6 text-foreground-subtle">原型演示：项目、Git 仓库配置和 Release 保存于后端内存，刷新保留、后端重启恢复。只检查输入格式，未验证仓库可访问或分支存在，不连接真实 Git、数据库或文件系统。</p>}
       <Dialog open={projectOpen} onOpenChange={open => { if (!saving) setProjectOpen(open); }}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader><DialogTitle>{projectId ? "修改仓库配置" : "添加项目"}</DialogTitle><DialogDescription>配置远程 Git 仓库与默认分支，Release 沿用所属项目配置。保存仅记录配置，不执行 Git 操作。</DialogDescription></DialogHeader>
@@ -83,14 +83,14 @@ export function DevProjectSettings() {
             setSaving(true); setProjectError("");
             try {
               await source.projects!.saveRepository!({ projectId, name, repositoryUrl, defaultBranch });
-              setProjectOpen(false); setMessage(source.mode === "prototype" ? `已将“${name.trim()}”的配置保存到当前页内存；仓库连接与默认分支未检查，未执行 Git 操作。` : `已保存“${name.trim()}”的仓库配置；未执行 Git 操作。`);
+              setProjectOpen(false); setMessage(source.provenance.kind === "sample" ? `已将“${name.trim()}”的配置保存到后端内存；仓库连接与默认分支未检查，未执行 Git 操作。` : `已保存“${name.trim()}”的仓库配置；未执行 Git 操作。`);
             } catch (cause) { setProjectError(cause instanceof Error ? cause.message : String(cause)); }
             finally { setSaving(false); }
           }}>
             <div className="space-y-2"><Label htmlFor="project-name">项目名称</Label><Input id="project-name" value={name} onChange={event => setName(event.target.value)} required disabled={saving || !canSave} /></div>
             <div className="space-y-2"><Label htmlFor="project-repository">Git 仓库地址</Label><Input id="project-repository" value={repositoryUrl} onChange={event => setRepositoryUrl(event.target.value)} placeholder="ssh://git@git.example.internal/team/project.git" required disabled={saving || !canSave} aria-describedby="project-repository-help" /><p id="project-repository-help" className="text-ui-sm text-foreground-subtle">填写 HTTP(S)、SSH 或 git@host:path 格式的远程地址，不填写本地路径。</p></div>
             <div className="space-y-2"><Label htmlFor="project-default-branch">默认分支</Label><Input id="project-default-branch" value={defaultBranch} onChange={event => setDefaultBranch(event.target.value)} placeholder="例如 main 或 master" required disabled={saving || !canSave} /></div>
-            {source.mode === "prototype" && <p className="text-ui-sm text-foreground-subtle">仅校验输入格式；保存不会检查仓库连接或默认分支。原型不提供真实连接检查。</p>}
+            {source.provenance.kind === "sample" && <p className="text-ui-sm text-foreground-subtle">仅校验输入格式；保存不会检查仓库连接或默认分支。原型不提供真实连接检查。</p>}
             {projectError && <p role="alert" className="text-ui-base text-destructive">{projectError}</p>}
             <DialogFooter><Button type="button" variant="outline" disabled={saving} onClick={() => setProjectOpen(false)}>取消</Button><Button type="submit" disabled={!canSave || saving || !name.trim() || !repositoryUrl.trim() || !defaultBranch.trim()}>{saving ? "保存中…" : projectId ? "保存配置" : "添加项目"}</Button></DialogFooter>
           </form>
@@ -101,10 +101,12 @@ export function DevProjectSettings() {
           <DialogHeader><DialogTitle>添加 Release</DialogTitle><DialogDescription>Release 属于所选项目，沿用其 Git 仓库和默认分支，不单独配置目录或仓库。</DialogDescription></DialogHeader>
           <form className="space-y-4" onSubmit={async event => {
             event.preventDefault();
-            if ((await source.readWorkflow({ projectId: releaseProjectId })).releases.some(release => release.title.toLowerCase() === releaseTitle.trim().toLowerCase())) { setReleaseError("此项目中已存在同名 Release，请使用其他名称。"); return; }
-            const result = await dev.command({ type: "createRelease", projectId: releaseProjectId, title: releaseTitle });
-            if (result?.status === "completed") { setReleaseOpen(false); setMessage(`已添加 Release“${releaseTitle.trim()}”。`); }
-            else setReleaseError("未能添加 Release，请检查名称和所属项目。");
+            try {
+              if ((await source.readWorkflow({ projectId: releaseProjectId })).releases.some(release => release.title.toLowerCase() === releaseTitle.trim().toLowerCase())) { setReleaseError("此项目中已存在同名 Release，请使用其他名称。"); return; }
+              const result = await dev.command({ type: "createRelease", projectId: releaseProjectId, title: releaseTitle });
+              if (result?.status === "completed") { setReleaseOpen(false); setMessage(`已添加 Release“${releaseTitle.trim()}”。`); }
+              else setReleaseError("未能添加 Release，请检查名称和所属项目。");
+            } catch (cause) { setReleaseError(cause instanceof Error ? cause.message : String(cause)); }
           }}>
             <div className="space-y-2"><Label htmlFor="release-project">所属项目</Label><Select value={releaseProjectId} onValueChange={value => { setReleaseProjectId(value); setReleaseError(""); }}><SelectTrigger id="release-project" size="lg" className="w-full"><SelectValue /></SelectTrigger><SelectContent>{projects.map(project => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></div>
             <div className="space-y-2 text-ui-sm text-foreground-subtle"><p className="break-all">Git 仓库：{projects.find(project => project.id === releaseProjectId)?.repositoryUrl ?? "尚未配置"}</p><p>默认分支：{projects.find(project => project.id === releaseProjectId)?.defaultBranch}</p></div>

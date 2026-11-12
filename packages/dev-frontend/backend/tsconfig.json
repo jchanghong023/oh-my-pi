@@ -1,0 +1,43 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@zcode/rpc": ["../packages/rpc/src/index.ts"],
+      "@zcode/services": ["../packages/services/src/index.ts"],
+      "@zcode/provider": ["../packages/provider/src/index.ts"],
+      "@zcode/model-option-map": ["../packages/model-option-map/src/index.ts"],
+      "@zcode/shared": ["../packages/shared/src/index.ts"],
+      "@zcode/shared/runtime-env": ["../packages/shared/src/runtimeEnv.ts"],
+      "@zcode/shared/test-ids": ["../packages/shared/src/test-ids.ts"],
+      "@zcode/shared/runtime-tool-runtime": ["../packages/shared/src/runtime-tool-runtime.ts"],
+      "@zcode/shared/node-repl-browser-broker": ["../packages/shared/src/browser-use/nodeReplBroker.ts"],
+      "@zcode/shared/process-diagnostic": ["../packages/shared/src/process-diagnostic.ts"],
+      "@zcode/shared/model-selection": ["../packages/shared/src/model-selection.ts"],
+      "@zcode/shared/account-provider-state": ["../packages/shared/src/account-provider-state.ts"],
+      "@zcode/shared/model-config": ["../packages/shared/src/model-config.ts"],
+      "@zcode/shared/config-schema": ["../packages/shared/src/config-schema.ts"],
+      "@zcode/shared/sqlite-migrations": ["../packages/shared/src/sqlite-migrations/index.ts"],
+      "@zcode/shared/zcodeEndpoint": ["../packages/shared/src/zcodeEndpoint.ts"],
+      "@zcode/shared/workspaceFileSearch": ["../packages/shared/src/workspaceFileSearch.ts"],
+      "@zcode/shared/workspaceFileEntriesCodec": ["../packages/shared/src/workspaceFileEntriesCodec.ts"],
+      "@zcode/shared/zcode-protocol-v4": ["../packages/shared/src/zcode-protocol-v4/index.ts"],
+      "@zcode/shared/mcp-apps": ["../packages/shared/src/mcp-apps/index.ts"],
+      "@zcode/shared/workspace-hook-discovery": ["../packages/shared/src/workspace-hook-discovery.ts"],
+      "@zcode/shared/workspace-hook-review-monotonicity": ["../packages/shared/src/workspace-hook-review-monotonicity.ts"],
+      "@zcode/shared/gen-ui": ["../packages/shared/src/gen-ui/index.ts"],
+      "@zcode/shared/web-remote-relay": ["../packages/shared/src/web-remote-relay/index.ts"],
+      "@zcode/zcode-cua": ["../packages/zcode-cua/index.js"],
+      "@zcode/zcode-cua/frame-contract": ["../packages/zcode-cua/frame-contract.js"],
+      "@zcode/zcode-cua/host-display-contract": ["../packages/zcode-cua/host-display-contract.js"],
+      "@zcode/zcode-cua/request-access-contract": ["../packages/zcode-cua/request-access-contract.js"],
+      "@zcode/zcode-cua/pip-session": ["../packages/zcode-cua/pip-session.js"],
+      "@zcode/zcode-cua/pip-session/node": ["../packages/zcode-cua/pip-session-node.js"],
+      "@zcode/zcode-cua/broker": ["../packages/zcode-cua/broker.js"],
+      "@zcode/zcode-cua/broker/server": ["../packages/zcode-cua/broker-server.js"],
+      "@zcode/zcode-cua/broker/ports": ["../packages/zcode-cua/broker-ports.js"],
+      "@zcode/zcode-cua/broker/socketPath": ["../packages/zcode-cua/broker-socket-path.js"],
+      "@zcode/zcode-cua/broker/helperConstants": ["../packages/zcode-cua/broker-helper-constants.js"],
+      "@zcode/zcode-cua/broker/helperHealth": ["../packages/zcode-cua/broker-helper-health.js"]
+    }
+  }
+}

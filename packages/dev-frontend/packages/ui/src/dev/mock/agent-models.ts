@@ -29,7 +29,7 @@ const sampleSettings: DevAgentModelSettings = {
 };
 
 // 模拟当前开发者后端自己的 OMP profile；不共享到团队 Web 或其他开发者，不随浏览器工号切换。
-// 原型配置只存在于本页内存，离开设置后可读回；刷新页面恢复样例。
+// 原型配置保存在后端场景内存，刷新及重新连接保留，服务重启恢复样例。
 let savedSettings = structuredClone(sampleSettings);
 // 本步仅替换设置；尚未改造的流程页面仍需原有静态会话配置，不能因打开设置而破坏样例。
 const historicalStageRoles = new Set(["planning", "execution", "ir-acceptance"]);

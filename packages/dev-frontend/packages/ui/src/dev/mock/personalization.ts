@@ -21,7 +21,7 @@ const samples: PrototypeAgentPrompts = {
 };
 
 // 与模型设置相同，属于当前开发者后端自己的 OMP profile；不进入共享业务数据库，不随浏览器工号切换。
-// 草稿跨设置分区保留；浏览器刷新会重新载入演示样例，不读写真实 OMP 文件。
+// 草稿和保存值保存在后端场景内存；刷新保留，服务重启恢复样例，不读写真实 OMP 文件。
 let saved = { ...samples };
 let draft = { ...samples };
 export function readPrototypeAgentPrompts() {

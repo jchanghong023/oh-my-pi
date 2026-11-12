@@ -15,7 +15,7 @@ import type { DevRequirementGroup } from "./types.js";
 
 export function DevProposalControls({ group }: { group: DevRequirementGroup }) {
  const source = useDevDataSource();
- if (source.mode !== "prototype" || !source.capabilities.prototypeBusiness || source.capabilities.proposalDiscussion === false) return null;
+ if (!source.capabilities.requirementManagement || source.capabilities.proposalDiscussion === false) return null;
  const dev = useDev()!;
  const [returnOpen, setReturnOpen] = useState(false);
  const [reason, setReason] = useState("");
@@ -44,7 +44,7 @@ export function DevProposalControls({ group }: { group: DevRequirementGroup }) {
 
    <div className="flex flex-wrap gap-2">
     {group.status !== "requirements-pr" && <>
-     <Button size="sm" data-testid="proposal-generate-solution" disabled={dev.pending || !group.srIds.length || !mine || !!reviewBlocker} title={reviewBlocker ?? (!group.srIds.length ? "请先完成 IR 与至少一个 SR" : undefined)} onClick={() => void dev.command({ type: "generateProposalSolution", ...target })}>{ready ? "重新生成方案（演示）" : "生成方案（演示）"}</Button>
+     <Button size="sm" data-testid="proposal-generate-solution" disabled={dev.pending || !group.srIds.length || !mine || !!reviewBlocker} title={reviewBlocker ?? (!group.srIds.length ? "请先完成 IR 与至少一个 SR" : undefined)} onClick={() => void dev.command({ type: "generateProposalSolution", ...target })}>{ready ? "重新生成方案" : "生成方案"}</Button>
      <Button size="sm" variant="outline" data-testid="proposal-return" disabled={!mine || dev.pending} onClick={() => { setReason(""); setReturnOpen(true); }}>打回业务补充</Button>
     </>}
    </div>

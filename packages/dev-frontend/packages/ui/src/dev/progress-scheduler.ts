@@ -32,16 +32,16 @@ export interface DevAnalysisSnapshot {
   irs: { projectId: string; id: string; title: string }[];
   tasksTotal: number; runsTotal: number; scaleDemo: boolean;
 }
-/** Prototype adapter only; production adapters must query real paginated storage. */
+/** Scheduler queries are paginated by the owning service. */
 export interface DevProgressScheduler {
-  read(): DevAnalysisSnapshot;
-  queryTasks(filter: DevAnalysisFilter, page: number, pageSize: number): DevAnalysisTaskPage;
-  queryRuns(filter: DevAnalysisHistoryFilter, page: number, pageSize: number): DevAnalysisPage<DevAnalysisRunSummary>;
-  readRun(id: string): DevAnalysisRun | undefined;
+  read(): DevAnalysisSnapshot | Promise<DevAnalysisSnapshot>;
+  queryTasks(filter: DevAnalysisFilter, page: number, pageSize: number): DevAnalysisTaskPage | Promise<DevAnalysisTaskPage>;
+  queryRuns(filter: DevAnalysisHistoryFilter, page: number, pageSize: number): DevAnalysisPage<DevAnalysisRunSummary> | Promise<DevAnalysisPage<DevAnalysisRunSummary>>;
+  readRun(id: string): DevAnalysisRun | undefined | Promise<DevAnalysisRun | undefined>;
   subscribe(listener: () => void): () => void;
-  setProjectEnabled(projectId: string, enabled: boolean): void;
-  configure(enabled: boolean, intervalMinutes: number): void;
-  runNow(filter: DevAnalysisFilter): void;
-  advance(): void;
+  setProjectEnabled(projectId: string, enabled: boolean): void | Promise<void>;
+  configure(enabled: boolean, intervalMinutes: number): void | Promise<void>;
+  runNow(filter: DevAnalysisFilter): void | Promise<void>;
+  advance(): void | Promise<void>;
   dispose(): void;
 }

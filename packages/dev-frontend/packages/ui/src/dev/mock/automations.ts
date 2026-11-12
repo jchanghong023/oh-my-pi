@@ -6,7 +6,7 @@ import reviewPrompt from "./prompts/automation-review.md?raw";
 import summaryPrompt from "./prompts/automation-summary.md?raw";
 import output from "./automation-output.md?raw";
 
-/** 只维护浏览器内存样例，不创建定时器、进程、模型请求或真实运行。 */
+/** 只维护后端场景内存样例，不创建真实调度、模型请求或业务文件。 */
 export function createPrototypeAutomationServices(): Pick<IServiceAccessor["zcodeAgentService"],
 	"listAutomations" | "listAllAutomations" | "createAutomation" | "updateAutomation" | "deleteAutomation" |
 	"setAutomationEnabled" | "restartAutomation" | "runAutomationNow" | "listAutomationRuns" | "deleteAutomationRun" |

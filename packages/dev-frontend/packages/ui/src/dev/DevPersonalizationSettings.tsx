@@ -28,12 +28,18 @@ export function DevPersonalizationSettings({ onDraftActionsChange }: { onDraftAc
 	const canManage = source.capabilities.settingsWrite === true;
 	const canSave = canManage && dirtyCount > 0 && oversized.length === 0;
 	const dirty = dirtyCount > 0;
+ const [saving, setSaving] = useState(false);
 	const draftActions = useRef<DevModelDraftActions | null>(null);
-	const save = () => {
-		if (!canSave) return;
-		source.prompts!.save(draft);
-		setSaved({ ...draft });
-		setMessage(zh ? "追加提示词已保存到我的 OMP 配置。" : "Appended instructions saved to my OMP configuration.");
+	const save = async () => {
+		if (!canSave || saving) return false;
+  setSaving(true);
+  try {
+   await source.prompts!.save(draft);
+   setSaved({ ...source.prompts!.read().saved });
+   setMessage(zh ? "追加提示词已保存到我的 OMP 配置。" : "Appended instructions saved to my OMP configuration.");
+   return true;
+  } catch (cause) { setMessage(cause instanceof Error ? cause.message : String(cause)); return false; }
+  finally { setSaving(false); }
 	};
 	draftActions.current = {
 		canSave,
@@ -43,7 +49,7 @@ export function DevPersonalizationSettings({ onDraftActionsChange }: { onDraftAc
 	useEffect(() => {
 		onDraftActionsChange?.(dirty && canManage ? {
 			canSave,
-			save: () => draftActions.current?.save(),
+			save: () => draftActions.current?.save() ?? false,
 			discard: () => draftActions.current?.discard(),
 		} : null);
 	}, [dirty, canManage, canSave, onDraftActionsChange]);
@@ -87,7 +93,7 @@ export function DevPersonalizationSettings({ onDraftActionsChange }: { onDraftAc
 				<Button variant="ghost" size="lg" disabled={!dirtyCount || !canManage} onClick={() => { setDraft({ ...saved }); source.prompts!.updateDraft(saved); setMessage(""); }}>{zh ? "取消" : "Cancel"}</Button>
 			</SettingsFormActions>
 			<p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
-			{source.mode === "prototype" && <p className="text-ui-sm leading-6 text-foreground-subtle">{zh ? "原型演示：保存仅改变本页内存，不写入真实 OMP 配置目录，也不启动 Agent。刷新后恢复样例。" : "Prototype: saving changes page memory only. It does not write real OMP configuration or start an Agent. Refreshing restores samples."}</p>}
+			{source.provenance.kind === "sample" && <p className="text-ui-sm leading-6 text-foreground-subtle">{zh ? "原型演示：保存于后端内存，不写入真实 OMP 配置目录，也不启动 Agent。刷新保留，后端重启恢复样例。" : "Prototype: saving changes backend memory only, across refreshes. Backend restart restores samples; no real OMP files or Agents are affected."}</p>}
 		</div>
 	);
 }

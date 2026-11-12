@@ -14,7 +14,7 @@ export function prototypeProposalSolution(group: DevRequirementGroup): DevMateri
  return prototypeMaterial({ projectId: group.projectId, irId: group.id, kind: "solution", stage: "solution", round: group.proposalRound ?? 1, path: `${prototypeChangeRoot(group.id)}/design.md`, content: `# ${group.title} · 技术设计 · design.md\n\n${solution}\n\n## SR 实现思路（样例）\n${group.srIds.map(id => {
   const analysis = prototypeSrSolutionAnalysis(group, id);
   return `### ${name(id)}\n\n实现思路：${analysis.approach}\n\n待确认事项：${analysis.uncertainties.join("；")}`;
- }).join("\n\n")}\n\n## 依赖权威与开发安排\n\n前置依赖与原因仅见同目录 [sr-dependencies.json](./sr-dependencies.json)，可并行关系由该依赖图推导，本文件不重复清单。两个方案产物同轮生成、失效、逐文件确认并随同一提案 PR 评审。人员分配与计划开始、结束时间属于数据库元数据，不写入方案文件；排期调整不改变依赖。原型材料仅保存在页面内存，不写入真实文件。` });
+ }).join("\n\n")}\n\n## 依赖权威与开发安排\n\n前置依赖与原因仅见同目录 [sr-dependencies.json](./sr-dependencies.json)，可并行关系由该依赖图推导，本文件不重复清单。两个方案产物同轮生成、失效、逐文件确认并随同一提案 PR 评审。人员分配与计划开始、结束时间属于数据库元数据，不写入方案文件；排期调整不改变依赖。原型材料仅保存在后端场景内存，不写入真实文件。` });
 }
 
 export function prototypeSrSolutionAnalysis(group: DevRequirementGroup, srId: string): DevSrSolutionAnalysis {

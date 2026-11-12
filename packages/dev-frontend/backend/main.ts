@@ -1,0 +1,19 @@
+import { isMainThread } from "node:worker_threads";
+import { createDevBackendServer } from "./server.js";
+import { startScope } from "./scope.js";
+
+if (!isMainThread && process.env.OMP_DEV_BACKEND_SCOPE === "1") {
+	startScope();
+} else if (isMainThread) {
+	const rawPort = process.env.OMP_DEV_BACKEND_PORT ?? "4174";
+	const port = Number(rawPort);
+	if (!/^\d+$/.test(rawPort) || !Number.isInteger(port) || port < 0 || port > 65535)
+		throw new Error("OMP_DEV_BACKEND_PORT must be an integer between 0 and 65535");
+	const backend = createDevBackendServer({ hostname: process.env.OMP_DEV_BACKEND_HOST ?? "127.0.0.1", port });
+	console.log(`Dev prototype backend listening at ${backend.url.href}`);
+	const shutdown = () => {
+		void backend.dispose().then(() => process.exit(0));
+	};
+	process.once("SIGINT", shutdown);
+	process.once("SIGTERM", shutdown);
+}

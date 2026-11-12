@@ -9,6 +9,7 @@
   "scripts": {
     "install:standalone": "bun ./standalone.ts install",
     "start": "bun ./standalone.ts start",
+    "backend": "bun ./standalone.ts backend",
     "build": "bun ./standalone.ts build"
   },
   "dependencies": {

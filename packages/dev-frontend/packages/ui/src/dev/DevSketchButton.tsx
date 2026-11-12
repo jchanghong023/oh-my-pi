@@ -38,7 +38,7 @@ export function DevSketchButton({ disabled, onAddFiles, onReturnToComposer }: De
     return () => window.removeEventListener("message", receive);
   }, [open, disabled, onAddFiles]);
 
-  if (source?.mode !== "prototype") return null;
+  if (!source) return null;
   return <Dialog open={open} onOpenChange={setOpen}>
     <DialogTrigger asChild>
       <Button type="button" variant="ghost" size="icon-sm" disabled={disabled} aria-label="画图" title="画图" data-testid="dev-sketch-open"><PencilRuler className="size-4" /></Button>

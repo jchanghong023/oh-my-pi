@@ -24,9 +24,9 @@ function BrowserApplication() {
   const workspace = source.resolveWorkspace(view, selection);
   const [connection, setConnection] = useState<{ key: string; services: IServiceAccessor }>();
   const [connectionError, setConnectionError] = useState<string>();
-  const formalProgress = source.mode === "prototype" && Boolean(selection.formalView || view?.groups.some(group => group.id === selection.irId));
+  const formalProgress = Boolean(selection.formalView || view?.groups.some(group => group.id === selection.irId));
   // 列表和同页报告复用工作区，保留表格筛选、展开与滚动位置。
-  const key = JSON.stringify([identity?.employeeId, workspace.identity, workspace.path, selection.projectId, formalProgress ? "formal-progress" : selection.irId, formalProgress ? undefined : selection.srId, selection.freeSessionId, session?.sessionId, session?.round]);
+  const key = JSON.stringify([source.backend?.id ?? source.clientId, identity?.employeeId, workspace.identity, workspace.path, selection.projectId, formalProgress ? "formal-progress" : selection.irId, formalProgress ? undefined : selection.srId, selection.freeSessionId, session?.sessionId, session?.round]);
 
   useEffect(() => {
     if (!view || !workspace.path) return;
@@ -63,15 +63,17 @@ function BrowserApplication() {
   }, [source, key]);
 
   if (!view) return <ConnectionStatus error={dev.error} retry={() => { void dev.retrySession(); }} />;
+  if (dev.pending && !workspace.path) return <ConnectionStatus error={dev.error} retry={() => { void dev.refresh(); }} />;
   if (!workspace.path) return <DevWorkspaceRecovery workspace={workspace} />;
   if (connectionError) return <ConnectionStatus error={connectionError} retry={() => window.location.reload()} />;
   if (!connection || connection.key !== key) return <ConnectionStatus />;
-  return <div className="contents" data-dev-connection-state={source.mode} data-dev-workspace-path={workspace.path} data-dev-workspace-identity={workspace.identity} data-dev-workspace-kind={workspace.kind}>
+  return <div className="contents" data-dev-connection-state="connected" data-dev-workspace-path={workspace.path} data-dev-workspace-identity={workspace.identity} data-dev-workspace-kind={workspace.kind}>
+    {dev.error && <p role="alert" className="fixed inset-x-0 top-0 z-50 bg-background p-3 text-destructive">{dev.error}</p>}
     <Root
       key={key}
       services={connection.services}
       platform={platform}
-      composerClientNamespace={`dev:${source.mode}:${identity?.employeeId ?? ""}`}
+      composerClientNamespace={`dev:${source.backend?.id ?? source.clientId}:${identity?.employeeId ?? ""}`}
       initialWorkspaceAbsPath={workspace.path}
       initialWorkspaceIdentity={workspace.identity}
       initialDirectoryPath={workspace.path}

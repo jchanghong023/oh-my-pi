@@ -18,7 +18,7 @@ export function DevSpeechInputButton({ disabled, onInsertText, onReturnToCompose
   const [text, setText] = useState("");
   const [error, setError] = useState("");
 
-  if (source?.mode !== "prototype") return null;
+  if (!source?.prototype) return null;
   return <Dialog open={open} onOpenChange={next => {
     setOpen(next);
     if (next) { setRecording(true); setText(""); setError(""); }

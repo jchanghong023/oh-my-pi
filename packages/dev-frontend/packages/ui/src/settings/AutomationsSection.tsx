@@ -371,7 +371,8 @@ export function AutomationsSection({
 }: AutomationsSectionProps) {
   const { intl, locale } = useZCodeIntl();
   const dev = useDev();
-  const prototype = useOptionalDevDataSource()?.mode === "prototype";
+  const devSource = useOptionalDevDataSource();
+  const devAutomations = Boolean(devSource);
   const { clientScenesService, zcodeAgentService } = useServices();
   const confirmDialog = useConfirmDialog();
   const { settings: sharedSettings, update: updateSharedSettings } = useSettings();
@@ -419,7 +420,7 @@ export function AutomationsSection({
   const workflowModelView =
     workflowModelRead.state.status === "ready" ? workflowModelRead.state.view :
       workflowModelRead.state.status === "loading" ? workflowModelRead.state.catalog : undefined;
-  const workflowDescription = dev ? "只读查看 task / workpool 运行、父子代理、消息与输出的结构样例，未执行真实任务。" : workflowModelView?.nativeSession !== undefined
+  const workflowDescription = devSource?.provenance.kind === "sample" ? "只读查看 task / workpool 运行、父子代理、消息与输出的结构样例，未执行真实任务。" : workflowModelView?.nativeSession !== undefined
     ? locale.startsWith("zh")
       ? "只读查看当前 OMP 会话真实的 task / workpool 运行、父子代理、消息与输出。"
       : "Read-only view of actual task / workpool runs, parent-child agents, messages and outputs in the current OMP session."
@@ -434,13 +435,13 @@ export function AutomationsSection({
   });
   const currentWorkspaceIsRemote = isRemoteAutomationWorkspace(activeWorkspaceTab);
   const hasAnyTasks = automations.length > 0;
-  const visibleAutomations = prototype
+  const visibleAutomations = devAutomations
     ? automations.filter(automation => statusFilter === "all" || resolvePrototypeAutomationStatus(automation, runsCache[automation.automationId]?.runs) === statusFilter)
     : filterAutomationsByStatus(automations, statusFilter as AutomationStatusFilter);
   useEffect(() => {
-    if (!prototype) return;
+    if (!devAutomations) return;
     for (const automation of automations) void loadRuns(automation.automationId, zcodeAgentService);
-  }, [prototype, automations, loadRuns, zcodeAgentService]);
+  }, [devAutomations, automations, loadRuns, zcodeAgentService]);
   const showTaskTemplateSeparator = hasAnyTasks;
   const [loadedWorkspaceKey, setLoadedWorkspaceKey] = useState<string | null>(null);
   // 相对时间基准;刷新列表时更新,避免频繁 setInterval。
@@ -723,7 +724,7 @@ export function AutomationsSection({
             (run) => run.trigger === "manual" && Boolean(run.sessionId),
           )?.sessionId;
         toast(
-          dev ? "已添加演示记录，未执行任务或后台调度。" : intl.formatMessage({ id: "scheduledPreview.toast.running" }, { title: automation.title }),
+          devSource?.provenance.kind === "sample" ? "已添加演示记录，未执行任务或后台调度。" : intl.formatMessage({ id: "scheduledPreview.toast.running" }, { title: automation.title }),
           {
             durationMs: 4000,
             position: "top-center",
@@ -895,7 +896,7 @@ export function AutomationsSection({
       {pageHeader}
       {createdAutomation && automations.some(item => item.automationId === createdAutomation.automationId) && (
         <div role="status" className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-border p-3">
-          <span className="text-ui-sm">{locale.startsWith("zh") ? `已创建「${createdAutomation.title}」${dev ? "（内存演示）" : ""}。当前筛选保持不变。` : `Created “${createdAutomation.title}”. Your filter is unchanged.`}</span>
+          <span className="text-ui-sm">{locale.startsWith("zh") ? `已创建「${createdAutomation.title}」${devSource?.provenance.kind === "sample" ? "（内存演示）" : ""}。当前筛选保持不变。` : `Created “${createdAutomation.title}”. Your filter is unchanged.`}</span>
           <Button size="sm" variant="outline" onClick={() => {
             const target = automations.find(item => item.automationId === createdAutomation.automationId);
             if (target) setView({ mode: "edit", automation: target });
@@ -939,7 +940,7 @@ export function AutomationsSection({
           className="mt-3 flex flex-wrap items-center gap-1.5"
           data-testid={TID_AUTOMATIONS_STATUS_FILTER}
         >
-          {(prototype ? PROTOTYPE_AUTOMATION_STATUS_FILTERS : AUTOMATION_STATUS_FILTERS).map((key) => (
+          {(devAutomations ? PROTOTYPE_AUTOMATION_STATUS_FILTERS : AUTOMATION_STATUS_FILTERS).map((key) => (
             <button
               key={key}
               type="button"
@@ -952,7 +953,7 @@ export function AutomationsSection({
               )}
               onClick={() => setStatusFilter(key)}
             >
-              {prototype ? PROTOTYPE_AUTOMATION_STATUS_LABELS[key] : intl.formatMessage({ id: `automations.statusFilter.${key}` })}
+              {devAutomations ? PROTOTYPE_AUTOMATION_STATUS_LABELS[key] : intl.formatMessage({ id: `automations.statusFilter.${key}` })}
             </button>
           ))}
         </div>
@@ -1094,7 +1095,7 @@ export function AutomationsSection({
                                     </>
                                   ) : status === "active" ? (
                                     <>
-                                      {prototype && <span className="text-ui-sm text-success">{PROTOTYPE_AUTOMATION_STATUS_LABELS[resolvePrototypeAutomationStatus(automation, runsCache[automation.automationId]?.runs)]}</span>}
+                                      {devAutomations && <span className="text-ui-sm text-success">{PROTOTYPE_AUTOMATION_STATUS_LABELS[resolvePrototypeAutomationStatus(automation, runsCache[automation.automationId]?.runs)]}</span>}
                                       <AutomationScheduleBadge
                                         text={scheduleCardText}
                                         icon={

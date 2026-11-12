@@ -171,8 +171,8 @@ export function SkillsSection({
   cacheAuthorityKey,
 }: SkillsSectionProps) {
   const devSource = useOptionalDevDataSource();
-  const prototypeSkills = devSource?.mode === "prototype" ? devSource.skills : undefined;
-  const readOnly = devSource?.capabilities.settingsWrite === false || Boolean(prototypeSkills);
+  const devSkills = devSource?.skills;
+  const readOnly = devSource?.capabilities.settingsWrite === false || Boolean(devSkills);
   const { intl, locale } = useZCodeIntl();
   const platform = usePlatform();
   const backendBusinessAvailable = useBackendBusinessAvailable();
@@ -203,17 +203,17 @@ export function SkillsSection({
     remoteTarget,
     { unscopedServices, forceUnscoped: Boolean(cacheAuthorityKey || unscopedServices) },
   );
-  const nativeCatalog = !prototypeSkills && targetServiceResolution.nativeCatalog;
-  const activeWorkspacePath = prototypeSkills
+  const nativeCatalog = !devSkills && targetServiceResolution.nativeCatalog;
+  const activeWorkspacePath = devSkills
     ? workspacePath ?? devSource?.backend?.userSkillsDirectory ?? null
     : nativeCatalog
       ? targetServiceResolution.nativeSession?.workspacePath ?? null
       : workspacePath ?? null;
   const activeWorkspaceIdentity = nativeCatalog ? undefined : workspaceIdentity;
-  const catalogReady = Boolean(prototypeSkills) || targetServiceResolution.catalogReady;
+  const catalogReady = Boolean(devSkills) || targetServiceResolution.catalogReady;
   // PluginsSection 已把 Scope target 传入，但 Skills 仍从当前 ServiceProvider
   // 取服务，导致跨远程 host 误路由。技能读写改用同一 target 解析结果。
-  const pluginManagementService = prototypeSkills ? undefined : targetServiceResolution.services.pluginManagementService;
+  const pluginManagementService = devSkills ? undefined : targetServiceResolution.services.pluginManagementService;
   const skillsService = targetServiceResolution.services.skillsService;
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [capability, setCapability] = useState<SkillsCapability | null>(null);
@@ -322,7 +322,7 @@ export function SkillsSection({
       setError(null);
       const requestId = ++latestRequestIdRef.current;
       try {
-        const result = await (prototypeSkills ?? skillsService).list({
+        const result = await (devSkills ?? skillsService).list({
           workspacePath: activeWorkspacePath,
           workspaceIdentity: activeWorkspaceIdentity,
           provider: ZCODE_AGENT_PROVIDER,
@@ -349,7 +349,7 @@ export function SkillsSection({
       activeWorkspacePath,
       cacheAuthorityKey,
       skillsService,
-      prototypeSkills,
+      devSkills,
       catalogReady,
       targetServiceResolution.catalogKey,
     ],
@@ -481,7 +481,7 @@ export function SkillsSection({
 
   const scopedProviderSkills = useMemo(() => {
     if (!catalogReady || !projectionMatchesTarget) return [];
-    const allProviderSkills = nativeCatalog || prototypeSkills ? skills : filterSkillsForProvider(skills, ZCODE_AGENT_PROVIDER);
+    const allProviderSkills = nativeCatalog || devSkills ? skills : filterSkillsForProvider(skills, ZCODE_AGENT_PROVIDER);
     if (nativeCatalog || !backendBusinessAvailable || !pluginManagementService) {
       // The resource list is authoritative without ZCode inventory. Plugin scope has no
       // user/workspace ownership field, so retain it rather than inventing membership.
@@ -503,7 +503,7 @@ export function SkillsSection({
     catalogReady,
     projectionMatchesTarget,
     nativeCatalog,
-    prototypeSkills,
+    devSkills,
     pluginManagementService,
     activeWorkspaceIdentity,
     activeWorkspacePath,
@@ -659,9 +659,9 @@ export function SkillsSection({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {prototypeSkills || nativeCatalog ? (
+          {devSkills || nativeCatalog ? (
             <span className="text-ui-sm text-foreground-subtle">
-              {prototypeSkills ? "样例 · 只读" : skill.enabled ? "Native · 只读" : "Native · 策略禁用"}
+              {devSkills ? devSource?.provenance.kind === "sample" ? "样例 · 只读" : "后台技能 · 只读" : skill.enabled ? "Native · 只读" : "Native · 策略禁用"}
             </span>
           ) : skill.scope === "plugin" ? null : (
             <>
@@ -701,11 +701,11 @@ export function SkillsSection({
 
   const skillHeaderActions = (
     <SettingsResourceHeaderActions
-      onRefresh={() => void (nativeCatalog || prototypeSkills
+      onRefresh={() => void (nativeCatalog || devSkills
         ? refresh()
         : Promise.all([refresh(), refreshSharedSkillStoreForCurrentWorkspace()]))}
-      onImport={nativeCatalog || prototypeSkills ? undefined : () => setImportDialogOpen(true)}
-      onNew={nativeCatalog || prototypeSkills ? undefined : handleCreateSkill}
+      onImport={nativeCatalog || devSkills ? undefined : () => setImportDialogOpen(true)}
+      onNew={nativeCatalog || devSkills ? undefined : handleCreateSkill}
       refreshing={loading}
       importDisabled={readOnly || !capability?.userScopeAvailable}
       newDisabled={readOnly}
@@ -717,9 +717,9 @@ export function SkillsSection({
   return (
     <div className="space-y-4">
       {devSource?.capabilities.settingsWrite === false && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可搜索、筛选并查看技能详情；平台技能配置由此共享 Web 的启动者维护，切换工号不改变配置归属。</p>}
-      {prototypeSkills ? (
+      {devSkills ? (
         <div className="rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle">
-          原型技能样例 · 只读演示。支持搜索和查看详情；来自本页内存，不绑定 Native 会话，不表示真实技能已安装或启用。创建、导入、开关与删除未接入真实能力。
+          {devSource?.provenance.kind === "sample" ? "原型技能样例 · 只读演示。支持搜索和查看详情；来自后端内存，不绑定 Native 会话，不表示真实技能已安装或启用。" : "后台技能目录 · 只读。支持搜索和查看详情。"}
         </div>
       ) : nativeCatalog ? (
         <div className="rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle">
@@ -798,9 +798,9 @@ export function SkillsSection({
         </div>
       ) : null}
 
-      {(projectionMatchesTarget && error) || (!prototypeSkills && targetServiceResolution.catalogError) ? (
+      {(projectionMatchesTarget && error) || (!devSkills && targetServiceResolution.catalogError) ? (
         <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-base text-destructive">
-          {(!prototypeSkills && targetServiceResolution.catalogError?.message) || error}
+          {(!devSkills && targetServiceResolution.catalogError?.message) || error}
           <Button type="button" variant="outline" size="sm" onClick={() => {
             if (catalogReady) void refresh();
             else targetServiceResolution.catalog.reload();
@@ -819,7 +819,7 @@ export function SkillsSection({
             {intl.formatMessage({ id: "common.refresh" })}
           </Button>
         </div>
-      ) : !prototypeSkills && targetServiceResolution.catalogError ? null : !catalogReady ? (
+      ) : !devSkills && targetServiceResolution.catalogError ? null : !catalogReady ? (
         <PluginLoadingState label={intl.formatMessage({ id: "common.connecting" })} />
       ) : loading || !projectionMatchesTarget ? (
         <PluginLoadingState label={intl.formatMessage({ id: "common.loading" })} />
@@ -980,8 +980,8 @@ export function SkillsSection({
                     mono
                     className="col-span-2"
                   />
-                  {prototypeSkills || nativeCatalog ? (
-                    <SkillDetailField label={prototypeSkills ? "样例路径（非本机文件）" : "Native 路径（只读）"} value={detailSkill.path} mono className="col-span-2" />
+                  {devSkills || nativeCatalog ? (
+                    <SkillDetailField label={devSkills ? devSource?.provenance.kind === "sample" ? "样例路径（非本机文件）" : "后台技能路径（只读）" : "Native 路径（只读）"} value={detailSkill.path} mono className="col-span-2" />
                   ) : (
                     <SkillPathDetailField
                       label={intl.formatMessage({ id: "settings.skills.detail.path" })}
@@ -991,9 +991,9 @@ export function SkillsSection({
                     />
                   )}
                 </div>
-                {prototypeSkills && detailSkill.body && (
+                {devSkills && detailSkill.body && (
                   <div className="space-y-2">
-                    <div className="text-ui-base font-medium text-foreground">技能内容（样例）</div>
+                    <div className="text-ui-base font-medium text-foreground">技能内容{devSource?.provenance.kind === "sample" ? "（样例）" : ""}</div>
                     <pre className="whitespace-pre-wrap break-words rounded-lg bg-background p-3 text-ui-sm text-foreground-subtle">{detailSkill.body}</pre>
                   </div>
                 )}

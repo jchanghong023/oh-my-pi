@@ -98,7 +98,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
     else if (running || pending) guidance = running ? "Agent 正在工作，完成后再检查文档并操作。" : "正在更新，请稍候。";
     else if (phase === 0) guidance = group.returnFeedback && !group.returnFeedback.resumedAt ? "请与业务需求 Agent 讨论最新待处理意见，由 AI 补充 IR／SR；文件更新后再发起评审。" : requirementsReviewInputs(group) ? "检查 proposal.md 与全部 SR 的 spec.md 后，发起需求评审。" : "请先在 IR 聊天中完善需求，生成 proposal.md 和 SR 规格。";
     else if (phase === 1) guidance = requirementsReviewReadyBlocker(group) ?? "请阅读综合意见，由你判断通过或返回业务补充；模型的建议与分歧不会自动判定结果。";
-    else if (phase === 2) guidance = reviewIssue ?? (hasCurrentProposalSolution(group) ? "本轮技术方案／SR依赖已生成；检查 IR、全部 SR 及技术方案／SR依赖后，逐文件确认进入入库。" : group.proposalSolution ? "技术方案／SR依赖缺失、无效或与本轮需求不匹配，请重新生成后确认。" : "尚未生成本轮有效技术方案／SR依赖；右侧已有材料是参考样例，请先生成技术方案。");
+    else if (phase === 2) guidance = reviewIssue ?? (hasCurrentProposalSolution(group) ? "本轮技术方案／SR依赖已生成；检查 IR、全部 SR 及技术方案／SR依赖后，逐文件确认进入入库。" : group.proposalSolution ? "技术方案／SR依赖缺失、无效或与本轮需求不匹配，请重新生成后确认。" : "尚未生成本轮有效技术方案／SR依赖；右侧已有材料是参考材料，请先生成技术方案。");
     else guidance = group.status === "requirements-pr" ? "等待人工评审合并；后台定时检查提案分支合入及文档完整性，满足后自动入库并创建 SR 分支。" : "按已确认版本创建提案分支、提交推送，随后由人工处理 PR，后台自动检查。";
   }
   const canBack = !history && !readOnly && !complete && (proposal ? (phase === 1) || (phase === 2 && source.capabilities.proposalDiscussion && group.status !== "requirements-pr") : Boolean(sr && sr.status === "developing" && phase > 0));
@@ -117,7 +117,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
         <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-2 [&_button]:h-auto [&_button]:min-h-6 [&_button]:max-w-full [&_button]:whitespace-normal" data-testid="dev-phase-actions">
           {canBack ? <Button size="sm" variant="outline" disabled={pending || running} onClick={() => { setReason(""); setBackStage("planning"); setBack(true); }}><RotateCcw className="size-3" />{proposal && phase === 2 ? "退出方案，退回业务补充" : proposal ? "返回业务补充" : "回退"}</Button> : <span />}
           <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
-            {source.mode === "prototype" && sr?.status === "developing" && !history && sr.developerEmployeeId === getEmployeeId() && materialIssue && <Button size="sm" variant="outline" disabled={pending || running} onClick={() => void dev.command({ type: "generateStageMaterials", stage: sr.stage!, round: sr.round })}>生成当前阶段材料（演示）</Button>}
+            {source.capabilities.workflowCommands.includes("generateStageMaterials") && sr?.status === "developing" && !history && sr.developerEmployeeId === getEmployeeId() && materialIssue && <Button size="sm" variant="outline" disabled={pending || running} onClick={() => void dev.command({ type: "generateStageMaterials", stage: sr.stage!, round: sr.round })}>生成当前阶段材料</Button>}
             {action}
           </div>
         </div>
