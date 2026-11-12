@@ -102,15 +102,13 @@ describe("write to file-backed internal URLs", () => {
 		const tool = new WriteTool(createSession(tmpDir));
 		const file = path.join(vaultRoot, "note.md");
 		const args = { path: "vault://Work/note.md", content: "Vault first marker\n" };
-		for (const [id, input, changed] of [
-			["created", args, true],
-			["unchanged", args, false],
-			["updated", { ...args, content: "Vault updated marker\n" }, true],
+		for (const [id, input] of [
+			["created", args],
+			["unchanged", args],
+			["updated", { ...args, content: "Vault updated marker\n" }],
 		] as const) {
 			const result = await tool.execute(id, input);
 			expect(await fs.readFile(file, "utf8")).toBe(input.content);
-			expect(result.details?.fileChanged).toBe(changed);
-			expect(result.details?.path).toBe(await fs.realpath(file));
 			expectWriteCard(input, result, true, input.content.trim());
 		}
 	});
@@ -128,10 +126,10 @@ describe("write to file-backed internal URLs", () => {
 		session.xdev = xdev;
 		const outer = new WriteTool(session);
 		const file = path.join(vaultRoot, "device.md");
-		for (const [id, content, changed] of [
-			["created", "Device first marker\n", true],
-			["unchanged", "Device first marker\n", false],
-			["updated", "Device updated marker\n", true],
+		for (const [id, content] of [
+			["created", "Device first marker\n"],
+			["unchanged", "Device first marker\n"],
+			["updated", "Device updated marker\n"],
 		] as const) {
 			const input = { path: "vault://Work/device.md", content };
 			const args = { path: "xd://write", content: JSON.stringify(input) };
@@ -141,7 +139,7 @@ describe("write to file-backed internal URLs", () => {
 				tool: "write",
 				mode: "execute",
 				args: input,
-				inner: { fileChanged: changed, path: await fs.realpath(file) },
+				inner: { resolvedPath: await fs.realpath(file) },
 			});
 			expectWriteCard(args, result, true);
 		}
@@ -187,7 +185,7 @@ describe("write to file-backed internal URLs", () => {
 			{ path: "vault://Work/note.md", content: "Unverified" },
 			{
 				content: [{ type: "text", text: "Unverified" }],
-				details: { op: "create", newText: "Unverified" },
+				details: {},
 			},
 			true,
 		);
@@ -195,7 +193,7 @@ describe("write to file-backed internal URLs", () => {
 			{ path: "vault://Work/note.md", content: "Preview" },
 			{
 				content: [{ type: "text", text: "Preview" }],
-				details: { fileChanged: true, path: "/tmp/file", resolvedPath: "/tmp/file" },
+				details: { resolvedPath: "/tmp/file" },
 			},
 			true,
 			undefined,
@@ -230,74 +228,10 @@ describe("write to file-backed internal URLs", () => {
 		]) {
 			expectWriteCard(
 				{ path: target, content: "replacement" },
-				{ content: [{ type: "text", text: "unchanged" }], details: { fileChanged: false } },
+				{ content: [{ type: "text", text: "unchanged" }] },
 				true,
 			);
 		}
-	});
-
-	it("returns exact bounded create and update checkpoints through the tool result", async () => {
-		const tool = new WriteTool(createSession(tmpDir));
-		const file = path.join(tmpDir, "checkpoint.txt");
-		const created = await tool.execute("create-checkpoint", { path: file, content: "\uFEFFbefore\r\n" });
-		expect(created.details).toMatchObject({
-			op: "create",
-			path: await fs.realpath(file),
-			oldText: "",
-			newText: "\uFEFFbefore\r\n",
-		});
-		const updated = await tool.execute("update-checkpoint", { path: file, content: "after\n" });
-		expect(updated.details).toMatchObject({
-			op: "update",
-			oldText: "\uFEFFbefore\r\n",
-			newText: await fs.readFile(file, "utf8"),
-		});
-		expect(JSON.parse(JSON.stringify(updated.details)).oldText).toBe("\uFEFFbefore\r\n");
-	});
-
-	it("distinguishes unchanged updates and creation of an empty file", async () => {
-		const tool = new WriteTool(createSession(tmpDir));
-		const existing = path.join(tmpDir, "unchanged.txt");
-		await fs.writeFile(existing, "same\n");
-		const same = await tool.execute("same-checkpoint", { path: existing, content: "same\n" });
-		expect(await fs.readFile(existing, "utf8")).toBe("same\n");
-		expect(same.details?.fileChanged).toBe(false);
-		const changed = await tool.execute("changed-checkpoint", { path: existing, content: "different\n" });
-		expect(await fs.readFile(existing, "utf8")).toBe("different\n");
-		expect(changed.details?.fileChanged).toBe(true);
-
-		const emptyPath = path.join(tmpDir, "empty.txt");
-		const created = await tool.execute("empty-checkpoint", { path: emptyPath, content: "" });
-		expect(await fs.readFile(emptyPath, "utf8")).toBe("");
-		expect(created.details?.fileChanged).toBe(true);
-	});
-
-	it("prunes oversized combined snapshots and binary or invalid UTF-8 prior bytes", async () => {
-		const tool = new WriteTool(createSession(tmpDir));
-		const file = path.join(tmpDir, "checkpoint.txt");
-		for (const prior of [Buffer.from([0xff]), Buffer.from([0, 1]), Buffer.from("a".repeat(32_768))]) {
-			await fs.writeFile(file, prior);
-			const result = await tool.execute("pruned-checkpoint", { path: file, content: "after\n" });
-			expect(result.details?.snapshotsPruned).toBe(true);
-			expect(result.details?.oldText).toBeUndefined();
-			expect(result.details?.newText).toBeUndefined();
-			expect(await fs.readFile(file, "utf8")).toBe("after\n");
-		}
-	});
-
-	it("retains snapshots at the budget boundary and prunes oversized new files", async () => {
-		const tool = new WriteTool(createSession(tmpDir));
-		const file = path.join(tmpDir, "budget.txt");
-		const kept = await tool.execute("budget-kept", { path: file, content: "a".repeat(32_768) });
-		expect(kept.details?.newText?.length).toBe(32_768);
-		expect(kept.details?.snapshotsPruned).toBeUndefined();
-		const oversized = await tool.execute("budget-pruned", {
-			path: path.join(tmpDir, "oversized.txt"),
-			content: "b".repeat(32_769),
-		});
-		expect(oversized.details).toMatchObject({ op: "create", snapshotsPruned: true });
-		expect(oversized.details?.oldText).toBeUndefined();
-		expect(oversized.details?.newText).toBeUndefined();
 	});
 
 	it("refuses vault:// writes while vault.enabled is off", async () => {

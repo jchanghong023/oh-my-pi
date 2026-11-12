@@ -645,16 +645,23 @@ export function getUpdateStateDir(): string {
 }
 
 /**
+ * Return a per-user directory (`<tmpdir>/<prefix>-<uid>`) under the OS temp dir
+ * so `bun test` state never collides across accounts sharing `/tmp`.
+ */
+export function getTestTempDir(prefix: string): string {
+	const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().username;
+	return path.join(os.tmpdir(), `${prefix}-${uid}`);
+}
+
+/**
  * Get the logs directory (~/.omp/logs). Unless an explicit OMP root owns the
- * path, `bun test` processes get `<tmpdir>/omp-test-logs-<uid>`
- * instead, so suites never write into the developer's real logs. The uid suffix
+ * path, `bun test` processes get `<tmpdir>/omp-test-logs-<uid>` instead. The uid suffix
  * keeps users of a shared `/tmp` from owning each other's directory.
  */
 export function getLogsDir(): string {
 	if (dirs.cacheRoot) return path.join(dirs.cacheRoot, "logs");
 	if (isBunTestRuntime() && !resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT)) {
-		const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().username;
-		return path.join(os.tmpdir(), `omp-test-logs-${uid}`);
+		return getTestTempDir("omp-test-logs");
 	}
 	return dirs.rootSubdir("logs", "state");
 }
@@ -770,6 +777,18 @@ export function getPythonGatewayDir(): string {
 /** Get the puppeteer sandbox directory (~/.omp/puppeteer). */
 export function getPuppeteerDir(): string {
 	return dirs.rootSubdir("puppeteer", "cache");
+}
+
+/**
+ * Get the WebKit engine's host executable. Explicit OMP roots keep the engine
+ * under `lib/abkit` in the selected cache/profile root; without relocation,
+ * retain upstream's `~/.o2/lib/abkit` location shared with Tern.
+ */
+export function getWebKitHostPath(platform: NodeJS.Platform = process.platform): string {
+	const root =
+		dirs.cacheRoot ||
+		(resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT) ? dirs.configRoot : path.join(os.homedir(), ".o2"));
+	return path.join(root, "lib", "abkit", platform === "win32" ? "ABHost.exe" : "ABHost");
 }
 
 /** Get the browser relay extension install directory (~/.omp/browser-relay). */

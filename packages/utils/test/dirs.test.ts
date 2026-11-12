@@ -22,6 +22,7 @@ import {
 	directoryIsMissing,
 	getLogPath,
 	getProjectDir,
+	getTestTempDir,
 	localDay,
 	relativePathWithinRoot,
 	setProfile,
@@ -272,5 +273,40 @@ describe("OMP_CONFIG_ROOT relocation", () => {
 		__resetDirsFromEnvForTests();
 
 		expect(getBaseConfigRoot()).toBe(root);
+	});
+});
+
+describe("getTestTempDir", () => {
+	it("scopes temp directories by numeric uid when available and falls back to username on platforms without getuid", () => {
+		const originalGetuid = Object.getOwnPropertyDescriptor(process, "getuid");
+		spyOn(os, "tmpdir").mockReturnValue("/tmp/shared");
+		spyOn(os, "userInfo").mockReturnValue({
+			username: "alice",
+			uid: -1,
+			gid: -1,
+			shell: null,
+			homedir: "/Users/alice",
+		});
+		try {
+			Object.defineProperty(process, "getuid", {
+				value: () => 1001,
+				configurable: true,
+				writable: true,
+			});
+			expect(getTestTempDir("omp-test-logs")).toBe(path.join("/tmp/shared", "omp-test-logs-1001"));
+
+			Object.defineProperty(process, "getuid", {
+				value: undefined,
+				configurable: true,
+				writable: true,
+			});
+			expect(getTestTempDir("omp-test-logs")).toBe(path.join("/tmp/shared", "omp-test-logs-alice"));
+		} finally {
+			if (originalGetuid) {
+				Object.defineProperty(process, "getuid", originalGetuid);
+			} else {
+				Reflect.deleteProperty(process, "getuid");
+			}
+		}
 	});
 });

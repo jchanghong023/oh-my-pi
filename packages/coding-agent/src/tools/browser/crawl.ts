@@ -374,11 +374,7 @@ export async function runCrawl(
 		try {
 			await runtime.output(`Crawling ${item.url}`);
 			signal.throwIfAborted();
-			await crawlBrowserRequest(
-				runtime.session,
-				{ action: "open", name, url: "about:blank", app: { relay: true } },
-				signal,
-			);
+			await crawlBrowserRequest(runtime.session, { action: "open", name, url: "about:blank", app: "relay" }, signal);
 			opened = true;
 			const navResult = await crawlBrowserRequest(
 				runtime.session,

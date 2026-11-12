@@ -116,6 +116,12 @@ export interface AsyncJob {
 	 * the `label`. Only tools whose call starts a single job set it.
 	 */
 	intent?: string;
+	/**
+	 * The user's request a `/tan` job carries out, verbatim. The owner never saw
+	 * that work, so its completion notice quotes the request and frames the
+	 * result as the user's tangent rather than the owner's own job.
+	 */
+	request?: string;
 	abortController: AbortController;
 	promise: Promise<void>;
 	resultText?: string;
@@ -297,6 +303,8 @@ export interface AsyncJobRegisterOptions {
 	process?: AsyncJobProcess;
 	/** See {@link AsyncJob.intent}. */
 	intent?: string;
+	/** See {@link AsyncJob.request}. */
+	request?: string;
 	/** See {@link AsyncJob.widgetInputs}. */
 	widgetInputs?: JobWidgetInputs;
 }
@@ -538,6 +546,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 				? { name: `${options?.ownerId ? `${options.ownerId} ` : ""}Bash ${this.#nextBashName++}` }
 				: {}),
 			...(options?.intent ? { intent: options.intent } : {}),
+			...(options?.request ? { request: options.request } : {}),
 			abortController,
 			promise: Promise.resolve(),
 			ownerId: options?.ownerId,

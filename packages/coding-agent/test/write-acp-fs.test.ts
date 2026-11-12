@@ -136,7 +136,7 @@ describe("write tool ACP fs routing", () => {
 		expect(text).not.toContain(`[formatted.ts#${hashlineFileHash(requested)}]`);
 	});
 
-	it("shows bridge writes only when the formatted disk content actually changes", async () => {
+	it("retains bridge write cards when formatted disk content is unchanged or changed", async () => {
 		const filePath = path.join(tmpDir, "formatted-existing.ts");
 		const original = "function f() {\n\treturn 1;\n}\n";
 		await fs.writeFile(filePath, original);
@@ -150,21 +150,15 @@ describe("write tool ACP fs routing", () => {
 		const same = { path: filePath, content: "function f() {\n    return 1;\n}\n" };
 		const unchanged = await tool.execute("bridge-unchanged", same);
 		expect(await fs.readFile(filePath, "utf8")).toBe(original);
-		expect(unchanged.details?.fileChanged).toBe(false);
-		expect(unchanged.details?.snapshotsPruned).toBe(true);
-		expect(unchanged.details?.oldText).toBeUndefined();
-		expect(unchanged.details?.newText).toBeUndefined();
-		expectWriteCard(same, unchanged, false);
+		expectWriteCard(same, unchanged, true);
 
 		const changedArgs = { path: filePath, content: "function f() {\n    return 2;\n}\n" };
 		const changed = await tool.execute("bridge-changed", changedArgs);
 		expect(await fs.readFile(filePath, "utf8")).toBe("function f() {\n\treturn 2;\n}\n");
-		expect(changed.details?.fileChanged).toBe(true);
-		expect(changed.details?.snapshotsPruned).toBe(true);
 		expectWriteCard(changedArgs, changed, true);
 	});
 
-	it("retains the original detailed card for oversized and file URL changes only", async () => {
+	it("retains the original detailed card for oversized and file URL writes", async () => {
 		const filePath = path.join(tmpDir, "large.txt");
 		const original = `before marker\n${`${"a".repeat(64)}\n`.repeat(510)}`;
 		await fs.writeFile(filePath, original);
@@ -173,19 +167,11 @@ describe("write tool ACP fs routing", () => {
 		const same = { path: filePath, content: original };
 		const unchanged = await tool.execute("large-unchanged", same);
 		expect(await fs.readFile(filePath, "utf8")).toBe(original);
-		expect(unchanged.details?.snapshotsPruned).toBe(true);
-		expect(unchanged.details?.fileChanged).toBe(false);
-		expect(unchanged.details?.oldText).toBeUndefined();
-		expect(unchanged.details?.newText).toBeUndefined();
-		expectWriteCard(same, unchanged, false);
+		expectWriteCard(same, unchanged, true);
 
 		const changedArgs = { path: filePath, content: `after_ marker\n${`${"b".repeat(64)}\n`.repeat(510)}` };
 		const changed = await tool.execute("large-changed", changedArgs);
 		expect(await fs.readFile(filePath, "utf8")).toBe(changedArgs.content);
-		expect(changed.details?.snapshotsPruned).toBe(true);
-		expect(changed.details?.fileChanged).toBe(true);
-		expect(changed.details?.oldText).toBeUndefined();
-		expect(changed.details?.newText).toBeUndefined();
 		expectWriteCard(changedArgs, changed, true);
 
 		const urlArgs = { path: "local://url.txt", content: "URL write marker\n" };
@@ -195,16 +181,13 @@ describe("write tool ACP fs routing", () => {
 		});
 		const created = await tool.execute("url-created", urlArgs);
 		expect(await fs.readFile(urlPath, "utf8")).toBe(urlArgs.content);
-		expect(created.details?.fileChanged).toBe(true);
 		expectWriteCard(urlArgs, created, true);
 		const sameUrl = await tool.execute("url-unchanged", urlArgs);
 		expect(await fs.readFile(urlPath, "utf8")).toBe(urlArgs.content);
-		expect(sameUrl.details?.fileChanged).toBe(false);
-		expectWriteCard(urlArgs, sameUrl, false);
+		expectWriteCard(urlArgs, sameUrl, true);
 		const updatedArgs = { ...urlArgs, content: "Updated URL write marker\n" };
 		const updated = await tool.execute("url-updated", updatedArgs);
 		expect(await fs.readFile(urlPath, "utf8")).toBe(updatedArgs.content);
-		expect(updated.details?.fileChanged).toBe(true);
 		expectWriteCard(updatedArgs, updated, true);
 	});
 

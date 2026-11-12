@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession, type CreateAgentSessionOptions } from "@oh-my-pi/pi-coding-agent/sdk";
@@ -16,6 +15,7 @@ import { cfgBashEnabled } from "@oh-my-pi/pi-coding-agent/exec/settings";
 import { cfgGithubEnabled, cfgGrepEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { pythonBackend } from "@oh-my-pi/pi-coding-agent/eval";
 import * as pyKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
+import { getTestModel } from "./helpers/model-fixtures";
 
 // Tool-gating settings (`grep.enabled`, `*.enabled`, ...) must reconcile a live
 // session's tools and prompt instead of waiting for the next session.
@@ -56,7 +56,7 @@ describe("settings-gated tools in a live session", () => {
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
 			settings,
-			model: getBundledModel("openai", "gpt-4o-mini"),
+			model: getTestModel("ascend"),
 			disableExtensionDiscovery: true,
 			enableMCP: false,
 			enableLsp: false,
@@ -114,25 +114,30 @@ describe("settings-gated tools in a live session", () => {
 		},
 	);
 
-	const GREP_POLICY = "NEVER shell `grep`/`rg`/`awk`";
+	/** Tool names on the system prompt's `# Tool Inventory` line. */
+	function promptToolNames(session: AgentSession): string[] {
+		const prompt = session.systemPrompt.join("\n");
+		return prompt.split("\n# Tool Inventory\n")[1]?.split("\n", 1)[0]?.split(", ") ?? [];
+	}
 
 	it("removes and restores grep in the request tools and system prompt", async () => {
 		const settings = Settings.isolated({});
 		const session = await startSession(settings);
 		expect(session.getActiveToolNames()).toContain("grep");
-		expect(session.systemPrompt.join("\n")).toContain(GREP_POLICY);
+		expect(promptToolNames(session)).toContain("grep");
 
 		cfgGrepEnabled.set(settings, false);
 		await settle(session);
 		expect(session.getActiveToolNames()).not.toContain("grep");
 		expect(session.getToolByName("grep")).toBeUndefined();
-		expect(session.systemPrompt.join("\n")).not.toContain(GREP_POLICY);
+		expect(promptToolNames(session)).not.toContain("grep");
+		expect(promptToolNames(session)).toContain("read");
 		expect(session.getActiveToolNames()).toContain("read");
 
 		cfgGrepEnabled.set(settings, true);
 		await settle(session);
 		expect(session.getActiveToolNames()).toContain("grep");
-		expect(session.systemPrompt.join("\n")).toContain(GREP_POLICY);
+		expect(promptToolNames(session)).toContain("grep");
 	});
 
 	it("edit.mode none swaps edit out and keeps bash despite bash.enabled", async () => {

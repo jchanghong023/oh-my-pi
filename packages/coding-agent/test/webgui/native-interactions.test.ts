@@ -1,10 +1,18 @@
-import { expect, test } from "bun:test";
+import { expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { setTerminalHeadless, TempDir } from "@oh-my-pi/pi-utils";
+import {
+	disposeProgramStatus,
+	holdBlockedStatus,
+	initProgramStatus,
+	setProgramStatusEnabled,
+	setRunStatus,
+} from "../../src/utils/run-status";
+import * as titleGenerator from "../../src/utils/title-generator";
 import { NativeWebGuiQuestions, withNativeWebGuiInteractionScope } from "../../src/webgui/native-interactions";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { getTestModel } from "../helpers/model-fixtures";
@@ -206,6 +214,92 @@ test("browser actions reject other clients, late and duplicate answers; disconne
 		a.questions.cancelPendingInteractions();
 		b.questions.cancelPendingInteractions();
 		await Promise.allSettled(waits);
+		try {
+			await a.close();
+		} finally {
+			await b.close();
+		}
+	}
+});
+
+test("only the borrowed TUI session holds blocked status until a browser question settles", async () => {
+	using temp = TempDir.createSync("@pi-native-question-status-");
+	const a = await fixture(temp, "a");
+	const b = await fixture(temp, "b").catch(async error => {
+		await a.close();
+		throw error;
+	});
+	const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+	const headless = setTerminalHeadless(false);
+	const reports: string[] = [];
+	const waits: Promise<unknown>[] = [];
+	try {
+		vi.spyOn(titleGenerator, "setTerminalTitleState").mockImplementation(() => {});
+		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			const text = String(chunk);
+			if (text.startsWith("\x1b]7501;")) reports.push(text);
+			return true;
+		});
+		initProgramStatus();
+		setProgramStatusEnabled(true);
+		setRunStatus({ state: "working" });
+		a.questions.install({ setToolUIContext: () => {}, holdBlockedStatus });
+		const question = a.questions.ui.input("Choose target");
+		waits.push(question);
+		expect(reports.at(-1)).toContain("state=blocked:kind=question");
+		const sibling = b.questions.ui.input("Independent session");
+		waits.push(sibling);
+		await a.questions.resolveInteraction(requestId(a.questions, "Choose target"), { freeText: "main" });
+		expect(await question).toBe("main");
+		expect(reports.at(-1)).toContain("state=working");
+		await b.questions.resolveInteraction(requestId(b.questions, "Independent session"), { freeText: "dev" });
+		expect(await sibling).toBe("dev");
+
+		const permission = a.questions.ui.confirm("Run command", "Continue?");
+		waits.push(permission);
+		expect(reports.at(-1)).toContain("state=blocked:kind=permission");
+		await a.questions.resolveInteraction(requestId(a.questions, "Run command\nContinue?"), { action: "decline" });
+		expect(await permission).toBe(false);
+		expect(reports.at(-1)).toContain("state=working");
+
+		const timed = a.questions.ui.input("Timed question", undefined, { timeout: 1 });
+		waits.push(timed);
+		expect(reports.at(-1)).toContain("state=blocked:kind=question");
+		expect(await timed).toBeUndefined();
+		expect(reports.at(-1)).toContain("state=working");
+
+		const controller = new AbortController();
+		const cancelled = a.questions.ui.input("Cancelled question", undefined, { signal: controller.signal });
+		waits.push(cancelled);
+		controller.abort(new Error("stop browser question"));
+		await expect(cancelled).rejects.toThrow("stop browser question");
+		expect(reports.at(-1)).toContain("state=working");
+
+		const origin = { connectionId: crypto.randomUUID() };
+		const action = withNativeWebGuiInteractionScope(origin, () =>
+			a.questions.browserAction({ action: "copyText", text: "copied" }),
+		);
+		waits.push(action);
+		expect(reports.at(-1)).toContain("state=working");
+		await a.questions.resolveInteraction(requestId(a.questions, "copyText"), { action: "accept" }, origin);
+		await action;
+
+		const restored = a.questions.ui.input("Question during restore");
+		waits.push(restored);
+		a.questions.restore();
+		await expect(restored).rejects.toThrow("cancelled");
+		expect(reports.at(-1)).toContain("state=working");
+	} finally {
+		a.questions.restore();
+		a.questions.cancelPendingInteractions();
+		b.questions.cancelPendingInteractions();
+		await Promise.allSettled(waits);
+		disposeProgramStatus();
+		vi.restoreAllMocks();
+		if (tty) Object.defineProperty(process.stdout, "isTTY", tty);
+		else Reflect.deleteProperty(process.stdout, "isTTY");
+		setTerminalHeadless(headless);
 		try {
 			await a.close();
 		} finally {

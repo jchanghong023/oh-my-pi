@@ -8,8 +8,6 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { applyBinaryPatch } from "@oh-my-pi/pi-natives";
 import {
 	$which,
@@ -35,7 +33,17 @@ import {
 	unsupportedProxyMessage,
 	withTimeoutSignal,
 } from "../utils/fetch-timeout";
-import { type BuildAnswer, type BuildPatch, type Fetch, fetchBuild, type UpdateChannel } from "./build-service";
+import {
+	BUILD_DOWNLOAD_TIMEOUT_MS,
+	type BuildAnswer,
+	type BuildPatch,
+	currentBuildHost,
+	downloadBuildFile,
+	type Fetch,
+	fetchBuild,
+	OMP_BUILD,
+	type UpdateChannel,
+} from "./build-service";
 import {
 	DEFAULT_NPM_REGISTRY,
 	loadNpmRegistryResolver,
@@ -57,7 +65,6 @@ const HOMEBREW_FORMULA = "can1357/tap/omp";
 const MISE_TOOL = `github:${REPO}`;
 const NIX_STORE_DIR = "/nix/store";
 const RELEASE_METADATA_TIMEOUT_MS = 30_000;
-const BINARY_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 
 function diagnosticVersion(version: string | undefined): string | undefined {
 	return version &&
@@ -736,7 +743,7 @@ export function warnOnPathConflict(targetPath: string, ompPath: string | undefin
 export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOptions): Promise<void> {
 	const fields: Record<string, unknown> = {
 		...updateDestination(options.url, "/<release-asset>"),
-		timeout_ms: BINARY_DOWNLOAD_TIMEOUT_MS,
+		timeout_ms: BUILD_DOWNLOAD_TIMEOUT_MS,
 		expected_bytes: options.expectedSize,
 		bytes: 0,
 		failure_stage: "temp_cleanup",
@@ -745,80 +752,41 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 		"binary_download",
 		async () => {
 			const fetchImpl = options.fetchImpl ?? fetch;
-			await observeUpdateStage("download_temp_cleanup", () => unlinkIfExists(options.targetPath));
-			fields.failure_stage = "request";
-
-			let response: Response;
-			try {
-				response = await fetchImpl(options.url, {
-					redirect: "follow",
-					signal: withTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS),
-				});
-			} catch (err) {
-				if (isTimeoutError(err)) {
-					throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
-				}
-				if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
-				throw err;
-			}
-			fields.status = response.status;
-			updateEvent(
-				"download_response",
-				response.ok ? "completed" : "failed",
-				{ status: response.status },
-				response.ok ? "info" : "error",
-			);
-			if (!response.ok) {
-				const detail = await responseBodyDetail(response);
-				throw new Error(`Download failed: HTTP ${httpStatusText(response)} for ${options.url}${detail}`);
-			}
-			if (!response.body) {
-				throw new Error(`Download failed: response has no body for ${options.url}`);
-			}
-
-			const hash = new Bun.SHA256();
-			let size = 0;
 			const progress = downloadProgressBar();
-			fields.failure_stage = "stream";
-			const verifier = new Transform({
-				transform(chunk, _encoding, callback) {
-					size += chunk.byteLength;
-					if (size > options.expectedSize) {
-						callback(
-							new Error(
-								`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received at least ${size}`,
-							),
-						);
-						return;
-					}
-					hash.update(chunk);
-					options.onProgress?.(size);
-					progress.update(size, options.expectedSize);
-					callback(null, chunk);
-				},
-			});
-
 			try {
-				await pipeline(response.body, verifier, fs.createWriteStream(options.targetPath, { mode: 0o600 }));
-				fields.bytes = size;
-				fields.failure_stage = "size_verification";
-				const digest = `sha256:${hash.digest("hex")}`;
-				fields.digest_match = digest === options.expectedDigest;
-				if (size !== options.expectedSize) {
-					throw new Error(
-						`Downloaded binary size mismatch: expected ${options.expectedSize} bytes, received ${size}`,
-					);
-				}
-				fields.failure_stage = "digest_verification";
-				if (digest !== options.expectedDigest) {
-					throw new Error(
-						`Downloaded binary digest mismatch: expected ${options.expectedDigest}, received ${digest}`,
-					);
-				}
+				await observeUpdateStage("download_temp_cleanup", () => unlinkIfExists(options.targetPath));
+				fields.failure_stage = "request";
+				await downloadBuildFile({
+					url: options.url,
+					targetPath: options.targetPath,
+					size: options.expectedSize,
+					sha256: options.expectedDigest.slice("sha256:".length),
+					fetchImpl: async (input, init) => {
+						const response = await fetchImpl(input, init);
+						fields.status = response.status;
+						updateEvent(
+							"download_response",
+							response.ok ? "completed" : "failed",
+							{ status: response.status },
+							response.ok ? "info" : "error",
+						);
+						if (!response.ok) {
+							const detail = await responseBodyDetail(response);
+							throw new Error(`Download failed: HTTP ${httpStatusText(response)} for ${options.url}${detail}`);
+						}
+						fields.failure_stage = "stream_verification";
+						return response;
+					},
+					onProgress: received => {
+						fields.bytes = received;
+						options.onProgress?.(received);
+						progress.update(received, options.expectedSize);
+					},
+				});
+				fields.digest_match = true;
 				fields.failure_stage = "chmod";
 				await fs.promises.chmod(options.targetPath, 0o755);
 			} catch (err) {
-				fields.bytes = size;
 				const cancelled = err instanceof Error && err.name === "AbortError" && !isTimeoutError(err);
 				updateEvent(
 					"download_data",
@@ -827,10 +795,6 @@ export async function downloadVerifiedBinary(options: VerifiedBinaryDownloadOpti
 					cancelled ? "info" : "error",
 				);
 				await observeUpdateStage("download_failure_cleanup", () => unlinkIfExists(options.targetPath));
-				if (isTimeoutError(err)) {
-					throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
-				}
-				if (isUnsupportedProxyError(err)) throw new Error(unsupportedProxyMessage(), { cause: err });
 				throw err;
 			} finally {
 				progress.finish();
@@ -1774,79 +1738,12 @@ async function pruneBunCacheAfterGlobalInstall(): Promise<BunInstallCachePruneRe
 	return await pruneBunInstallCache(cacheDir, packageNames.size === 0 ? undefined : packageNames);
 }
 
-/**
- * Detect a musl-libc Linux host (Alpine, Void-musl) so self-update replaces a
- * musl binary with the musl release asset instead of the glibc build, which
- * would fail to start on the next run. The loader file alone is not sufficient:
- * glibc hosts may have musl installed for cross-compilation.
- */
-interface MuslDetectionOptions {
-	platform?: NodeJS.Platform;
-	alpineRelease?: boolean;
-	lddOutput?: string;
-}
-
-function detectLddOutput(): string | undefined {
-	try {
-		const result = Bun.spawnSync(["ldd", "--version"], { stdout: "pipe", stderr: "pipe" });
-		return `${result.stdout.toString("utf-8")}\n${result.stderr.toString("utf-8")}`;
-	} catch {
-		return undefined;
+/** Use upstream host detection and asset naming while retaining fork platform support. */
+async function getBinaryName(): Promise<string> {
+	if (process.platform === "win32" && process.arch !== "x64") {
+		throw new Error(`Unsupported Windows architecture: ${process.arch}`);
 	}
-}
-
-function isMuslLinux(options: MuslDetectionOptions = {}): boolean {
-	if ((options.platform ?? process.platform) !== "linux") return false;
-	if (options.alpineRelease ?? fs.existsSync("/etc/alpine-release")) return true;
-	return /\bmusl\b/i.test(options.lddOutput ?? detectLddOutput() ?? "");
-}
-
-/** Test seam for libc detection. */
-export function isMuslLinuxForTest(options: Required<MuslDetectionOptions>): boolean {
-	return isMuslLinux(options);
-}
-
-/**
- * Get the appropriate binary name for this platform.
- */
-function getBinaryName(): string {
-	const platform = process.platform;
-	const arch = process.arch;
-
-	let os: string;
-	switch (platform) {
-		case "linux":
-			os = isMuslLinux() ? "linux-musl" : "linux";
-			break;
-		case "darwin":
-			os = "darwin";
-			break;
-		case "win32":
-			os = "windows";
-			break;
-		default:
-			throw new Error(`Unsupported platform: ${platform}`);
-	}
-
-	let archName: string;
-	switch (arch) {
-		case "x64":
-			archName = "x64";
-			break;
-		case "arm64":
-			archName = "arm64";
-			break;
-		default:
-			throw new Error(`Unsupported architecture: ${arch}`);
-	}
-	if (platform === "win32" && archName !== "x64") {
-		throw new Error(`Unsupported Windows architecture: ${arch}`);
-	}
-
-	if (os === "windows") {
-		return `${APP_NAME}-${os}-${archName}.exe`;
-	}
-	return `${APP_NAME}-${os}-${archName}`;
+	return OMP_BUILD.fileName(await currentBuildHost(), VERSION);
 }
 
 /**
@@ -2167,7 +2064,7 @@ export async function sweepStaleUpdateArtifacts(targetPath: string): Promise<voi
 						updateEvent("artifact_stat", "partial", logger.diagnosticError(error), "warn");
 						continue;
 					}
-					if (now - mtimeMs < BINARY_DOWNLOAD_TIMEOUT_MS) {
+					if (now - mtimeMs < BUILD_DOWNLOAD_TIMEOUT_MS) {
 						fields.retained_count = Number(fields.retained_count) + 1;
 						continue;
 					}
@@ -2945,11 +2842,11 @@ async function installFromPatch(
 	const from = patch.fromVersion ? ` from ${patch.fromVersion}` : "";
 	console.log(chalk.dim(`Downloading patch${from} (${formatBytes(patch.size)})…`));
 	try {
-		await downloadVerifiedBinary({
+		await downloadBuildFile({
 			url: patch.url,
 			targetPath: paths.patchPath,
-			expectedSize: patch.size,
-			expectedDigest: `sha256:${patch.sha256}`,
+			size: patch.size,
+			sha256: patch.sha256,
 			fetchImpl: options.fetchImpl,
 			onProgress: received =>
 				options.onProgress?.({ phase: "downloading", version: build.version, received, total: patch.size }),
@@ -2991,15 +2888,16 @@ async function downloadBuild(
 ): Promise<void> {
 	if (build.patch && (await installFromPatch(build, build.patch, paths, options))) return;
 	console.log(chalk.dim(`Downloading ${build.file.name} (${formatBytes(build.file.size)})…`));
-	await downloadVerifiedBinary({
+	await downloadBuildFile({
 		url: build.download,
 		targetPath: paths.tempPath,
-		expectedSize: build.file.size,
-		expectedDigest: `sha256:${build.file.sha256}`,
+		size: build.file.size,
+		sha256: build.file.sha256,
 		fetchImpl: options.fetchImpl,
 		onProgress: received =>
 			options.onProgress?.({ phase: "downloading", version: build.version, received, total: build.file.size }),
 	});
+	await fs.promises.chmod(paths.tempPath, 0o755);
 	console.log(chalk.dim(`Verified sha256:${build.file.sha256}`));
 }
 
@@ -3030,7 +2928,7 @@ export async function updateViaBinaryAt(
 			const backupPath = `${targetPath}.${attempt}.bak`;
 			let installedVersion: string;
 			if (typeof buildOrVersion === "string") {
-				const binaryName = options.binaryName ?? getBinaryName();
+				const binaryName = options.binaryName ?? (await getBinaryName());
 				warnOnPathConflict(targetPath, resolveOmpPath());
 				const githubToken = options.githubToken ?? (await resolveGitHubToken());
 				const asset = await getReleaseBinaryAsset(
@@ -3153,7 +3051,7 @@ export async function updateViaShimTakeover(
 			fields.candidate_state = "download_pending";
 			let installedVersion: string;
 			if (typeof buildOrVersion === "string") {
-				const binaryName = options.binaryName ?? getBinaryName();
+				const binaryName = options.binaryName ?? (await getBinaryName());
 				const githubToken = options.githubToken ?? (await resolveGitHubToken());
 				const asset = await getReleaseBinaryAsset(
 					buildOrVersion,

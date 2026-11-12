@@ -45,8 +45,8 @@
 
 ## Flow
 
-1. Registration requires `ask.enabled` and `AskTool.createIf()` requires `session.canPromptUser ?? session.hasUI`. A protocol session with a prompt-capable tool UI can receive it even without a local terminal UI; a session with no prompt surface cannot.
-2. `execute()` also requires `context.hasUI` and `context.ui`; if missing it aborts the context and throws `ToolAbortError("Ask tool requires interactive mode")`.
+1. Registration requires `ask.enabled` and `session.canPromptUser ?? session.hasUI`, or a headless fork advertising `ask`.
+2. `execute()` requires `context.hasUI` and `context.ui`; a headless fork receives a `ToolError` directing questions to its final answer, while another session aborts and throws `ToolAbortError("Ask tool requires interactive mode")`.
 3. It normalizes carriage-return runs in all supplied strings and rejects duplicate question IDs, duplicate option labels within a question, and reserved runtime-label collisions. It reads `ask.timeout`, converts seconds to milliseconds (`0` disables timeout), and disables timeout entirely while plan mode is enabled.
 4. If the session has a local UI and `ask.notify` is not `off`, it sends a terminal notification: `Waiting for input`. When `speech.enabled` is true, it also sends all question text to the vocalizer before opening the dialog.
 5. When the UI supplies `askDialog`, the tool opens one rich multi-question form. Rich options receive `header`, `description`, and `preview`; results may contain custom answers and notes with pasted images, or choose the dialog's `Chat about this` redirect.
@@ -81,7 +81,7 @@
    - Reads plan-mode state to disable timeouts.
    - Calls `context.abort()` on headless use or user cancellation.
 - Background work / cancellation
-   - Wraps UI waits in `untilAborted(...)` so abort signals interrupt pending dialogs.
+   - Wraps UI waits in `untilAborted(...)`. A queued user message interrupts the dialog without aborting the turn; peer/background events do not count as the user's answer.
 
 ## Limits & Caps
 
@@ -114,4 +114,4 @@
 - A genuine timeout consumed while goal-autopilot remains active returns `按原目标自主决定，全程授权你继续调查、实施、验证和修复，完成后再汇总`, empty selections and `timedOut`; explicit cancellation, refusal, abort, paused or budget-limited goals do not acquire that reply or approval.
 - Cancelling the rich dialog's custom-answer editor preserves its draft for reopening without changing the submitted answer. Notes target the currently displayed/highlighted answer, including after advancing to another question.
 - Extensions may independently use upstream's `ui.formDialog` HTML form API; it does not replace the `ask` tool or route WebGUI questions through an incompatible form handler.
-- 在 Tern 中，包含至少两个顶层 `<fieldset>` 的 HTML 表单为每组显示一个标签页，另设 Review 页；问题页底部固定显示 Hide／Cancel／Next，最后一个问题页和 Review 页均可 Submit，提交会校验整个表单并跳转到首个待修正答案。各页内容在底栏上方独立滚动，`app.ask.hide`（`Alt+H`）或 Hide 将表单收起为一行；此行为不改变 `ask` 的结构化问题协议。
+- In Tern, independent `ui.formDialog` HTML forms with at least two top-level fieldsets have question tabs and Review; a field outside fieldsets gets its own tab with its preceding context. Hide/Cancel/Next stay below scrolling question content; Submit lives only on Review. This does not change the `ask` tool's structured protocol.

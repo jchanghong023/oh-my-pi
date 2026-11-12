@@ -7,6 +7,7 @@ import type { InteractiveModeContext } from "../modes/types";
 import type { AgentSession } from "../session/agent-session";
 import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPathWithResult } from "../utils/open";
+import { holdBlockedStatus } from "../utils/run-status";
 import {
 	closeAllWebGuis,
 	releaseWebGuiBindingsAfterHandoff,
@@ -214,6 +215,7 @@ export class DevWorkbenchTuiMode {
 				});
 				const gui = await startWebGui(context.session, {
 					setToolUIContext: (ui, hasUI) => context.setToolUIContext(ui, hasUI),
+					holdBlockedStatus,
 					restoreToolUIContext: () => {
 						if (context.ownsToolUIContext?.(nativeWebGuiQuestions(context.session).ui))
 							context.setToolUIContext(originalToolUI, true);

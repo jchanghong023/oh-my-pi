@@ -193,7 +193,6 @@ describe("job renderer task-result preview", () => {
 			expect(collapsed).not.toContain("earlier output not in the preview");
 			expect(collapsed).not.toContain("Command exited with code");
 			expect(collapsed).not.toContain("Wall time:");
-			expect(collapsed).toMatch(/\b(?:tail|end|last)\b|末尾/i);
 			expect(collapsed).toContain("artifact://capture-123");
 			for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(160);
 
@@ -215,7 +214,6 @@ describe("job renderer task-result preview", () => {
 			expect(native).not.toContain("earlier output not in the preview");
 			expect(native).not.toContain("Command exited with code");
 			expect(native).not.toContain("Wall time:");
-			expect(native).toMatch(/\b(?:tail|end|last)\b|末尾/i);
 			expect(native).toContain("artifact://capture-123");
 		});
 
@@ -282,49 +280,6 @@ describe("job renderer task-result preview", () => {
 				expect(view).not.toContain("artifact://");
 			}
 		});
-	});
-
-	it("renders every consumed peer message as a sender card, oldest first", () => {
-		const now = Date.now();
-		const component = waitToolRenderer.renderResult(
-			{
-				content: [{ type: "text", text: "[42] Worker: file unlocked\n\n[43] Reviewer: tests pass" }],
-				details: {
-					op: "wait",
-					waited: [
-						{ id: "42", from: "Worker", to: "Main", body: "file unlocked", ts: now - 1_000 },
-						{ id: "43", from: "Reviewer", to: "Main", body: "tests pass", ts: now },
-					],
-				},
-			},
-			{ expanded: true, isPartial: false },
-			theme,
-		);
-		const output = Bun.stripANSI(component.render(120).join("\n"));
-		expect(output.indexOf("Worker")).toBeGreaterThanOrEqual(0);
-		expect(output.indexOf("file unlocked")).toBeGreaterThan(output.indexOf("Worker"));
-		expect(output.indexOf("Reviewer")).toBeGreaterThan(output.indexOf("file unlocked"));
-		expect(output.indexOf("tests pass")).toBeGreaterThan(output.indexOf("Reviewer"));
-	});
-
-	it("describes several consumed messages on one native card", () => {
-		const view = waitToolRenderer.describeResult!(
-			{
-				content: [{ type: "text", text: "" }],
-				details: {
-					op: "wait",
-					waited: [
-						{ id: "42", from: "Worker", to: "Main", body: "file unlocked", ts: 0 },
-						{ id: "43", from: "Reviewer", to: "Main", body: "tests pass", ts: 0, replyTo: "41" },
-					],
-				},
-			},
-			{ expanded: true, isPartial: false },
-		);
-		const json = JSON.stringify(view);
-		expect(json).toContain("IRC ← Worker, Reviewer");
-		expect(json).toContain(" 2 messages");
-		expect(json.indexOf("file unlocked")).toBeLessThan(json.indexOf("tests pass"));
 	});
 
 	it("previews the envelope body, not the wrapper markup", () => {

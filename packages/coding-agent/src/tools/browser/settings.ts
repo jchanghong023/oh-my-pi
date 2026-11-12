@@ -12,7 +12,7 @@ export const cfgBrowserEnabled = register({
 		tab: "tools",
 		group: "可用工具",
 		label: "浏览器",
-		description: "启用 browser eval 预置环境，通过脚本自动操控 Chromium（Puppeteer）",
+		description: "启用 browser eval 预置环境，通过脚本自动操控浏览器",
 	},
 });
 
@@ -25,7 +25,7 @@ export const cfgBrowserCdpUrl = register({
 		group: "Grep 与浏览器",
 		label: "浏览器 CDP URL",
 		description:
-			"默认连接的 HTTP CDP 发现端点（例如 http://127.0.0.1:9222），用于连接现有浏览器而非启动新浏览器。工具调用中显式指定的 app.cdp_url 或 app.path 优先。",
+			"默认连接的 HTTP CDP 发现端点（例如 http://127.0.0.1:9222），用于连接现有浏览器而非启动新浏览器。工具调用中显式指定的 app 优先。",
 	},
 });
 
@@ -62,7 +62,8 @@ export const cfgBrowserHeadless = register({
 		tab: "tools",
 		group: "Grep 与浏览器",
 		label: "无头浏览器",
-		description: "以无头模式启动浏览器（关闭后显示浏览器界面）",
+		description:
+			"无窗口运行浏览器（关闭后显示窗口）。OMP 的 WebKit 在提供查看器的平台（macOS）即时切换窗口；其他平台使用 Chromium，下次打开时应用新模式。",
 	},
 });
 
@@ -88,7 +89,33 @@ export const cfgBrowserTern = register({
 		group: "Grep 与浏览器",
 		label: "Tern 浏览器",
 		description:
-			"在 Tern 窗格中，将浏览器标签页以画中画形式打开在 omp 窗格上方（原生网页视图），而非使用无头 Chromium；没有可承载它们的 Tern 窗口时回退到 Chromium。显式 app 选项、中继和浏览器 CDP URL 优先；app.tern:false 可在单次打开时禁用此行为。设置 PI_BROWSER_TERN=0 或 PI_BROWSER_TERN=1 可覆盖此设置。",
+			'在 Tern 窗格中，将浏览器标签页以画中画形式打开在 omp 窗格上方（原生网页视图），而非使用 OMP 自有无头浏览器；没有可承载的 Tern 窗口时回退到自有浏览器。显式 app、中继和浏览器 CDP URL 优先；app "own" 可在单次打开时禁用此行为。设置 PI_BROWSER_TERN=0 或 PI_BROWSER_TERN=1 可覆盖此设置。',
+	},
+});
+
+export const cfgBrowserWebKit = register({
+	id: "browser.webkit",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "Grep 与浏览器",
+		label: "WebKit 浏览器",
+		description:
+			'已安装引擎时，使用 OMP 自有无头 WebKit 而非托管 Chromium（未安装浏览器时，OMP 会先下载此引擎，再尝试 Chrome for Testing；参见 WebKit 引擎路径）。不提供查看器的平台仍使用 Chromium 显示窗口，引擎启动失败的标签页也回退到 Chromium。显式 app、中继、浏览器 CDP URL、Tern 和 cmux 优先；app "chromium" 可在单次打开时禁用。设置 PI_BROWSER_WEBKIT=0 或 PI_BROWSER_WEBKIT=1 可覆盖此设置。',
+	},
+});
+
+export const cfgBrowserWebKitPath = register({
+	id: "browser.webkitPath",
+	type: "string",
+	default: undefined,
+	ui: {
+		tab: "tools",
+		group: "Grep 与浏览器",
+		label: "WebKit 引擎路径",
+		description:
+			"OMP WebKit 宿主可执行文件或 ABKit 引擎目录（内含 ABHost；Windows 为 ABHost.exe）。未设置时使用已安装引擎的默认路径。支持 ~；PI_BROWSER_WEBKIT_PATH 优先。",
 	},
 });
 
@@ -101,7 +128,7 @@ export const cfgBrowserFreezeOnTurnEnd = register({
 		group: "Grep 与浏览器",
 		label: "回合结束时冻结浏览器标签页",
 		description:
-			"回合结束后冻结 OMP 管理的无头浏览器标签页，避免动画页面在空闲时持续消耗 CPU/GPU。下次使用时自动解冻；打开时传入 persist:true 可排除此标签页。",
+			"回合结束后冻结 OMP 管理的无头 Chromium 标签页，避免动画页面在空闲时持续消耗 CPU/GPU（WebKit 仅在请求时绘制）。下次使用时自动解冻；打开时传入 persist:true 可排除此标签页。",
 	},
 });
 

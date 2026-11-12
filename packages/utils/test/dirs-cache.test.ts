@@ -23,6 +23,7 @@ import {
 	getPluginsDir,
 	getSessionsDir,
 	getStatsDbPath,
+	getWebKitHostPath,
 	setProfile,
 } from "@oh-my-pi/pi-utils/dirs";
 
@@ -102,6 +103,8 @@ describe("cache root", () => {
 		expect(getStatsDbPath()).toBe(path.join(selectedRoot, "stats.db"));
 		expect(getLogsDir()).toBe(path.join(selectedRoot, "logs"));
 		expect(getNativesDir()).toBe(path.join(selectedRoot, "natives"));
+		expect(getWebKitHostPath("linux")).toBe(path.join(selectedRoot, "lib", "abkit", "ABHost"));
+		expect(getWebKitHostPath("win32")).toBe(path.join(selectedRoot, "lib", "abkit", "ABHost.exe"));
 		expect(getNativeGrammarsDir()).toBe(path.join(selectedRoot, "natives", "grammars"));
 		expect(getKnowledgeDbPath()).toBe(path.join(selectedRoot, "knowledge.db"));
 		expect(getKnowledgeDbPath(path.join(temp, "other-agent"))).toBe(path.join(selectedRoot, "knowledge.db"));
@@ -120,6 +123,7 @@ describe("cache root", () => {
 		expect(getPluginCacheRoot()).toBe(path.join(profileRoot, "plugins", "cache"));
 		expect(getStatsDbPath()).toBe(path.join(profileRoot, "stats.db"));
 		expect(getNativesDir()).toBe(path.join(profileRoot, "natives"));
+		expect(getWebKitHostPath("linux")).toBe(path.join(profileRoot, "lib", "abkit", "ABHost"));
 		expect(getAgentDbPath()).toBe(path.join(temp, "persistent", "profiles", "work", "agent", "agent.db"));
 		setProfile(undefined);
 		expect(getAgentCacheDir()).toBe(path.join(selectedRoot, "agent", "cache"));
@@ -136,6 +140,18 @@ describe("cache root", () => {
 		expect(getPluginCacheRoot()).toBe(path.join(getPluginsDir(), "cache"));
 		expect(getStatsDbPath()).toBe(path.join(temp, "persistent", "stats.db"));
 		expect(getNativesDir()).toBe(path.join(temp, "persistent", "natives"));
+	});
+
+	it("relocates WebKit with the persistent root and preserves the shared default when unset", () => {
+		expect(getWebKitHostPath("linux")).toBe(path.join(temp, "persistent", "lib", "abkit", "ABHost"));
+		setProfile("work");
+		expect(getWebKitHostPath("linux")).toBe(
+			path.join(temp, "persistent", "profiles", "work", "lib", "abkit", "ABHost"),
+		);
+		setProfile(undefined);
+		delete process.env.OMP_CONFIG_ROOT;
+		__resetDirsFromEnvForTests();
+		expect(getWebKitHostPath("linux")).toBe(path.join(os.homedir(), ".o2", "lib", "abkit", "ABHost"));
 	});
 
 	it("preserves migrated XDG cache paths when no cache root is selected", () => {

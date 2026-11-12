@@ -167,7 +167,7 @@ _[观看录屏 ↗](https://omp.sh/clips/collab.mp4)_
 
 ### 08 · 直接读 arxiv 上的 pdf，有何不可？
 
-web_search 串联二十四个经过排序的 provider，把找到的 URL 直接交给 read。arxiv PDF、GitHub 页面、Stack Overflow 帖子都会以带完整锚点的结构化 markdown 返回——和你处理本地文件用的是同一套工具。可引用、可跟进、可摘录，永远不丢来路。
+web_search 串联二十五个经过排序的 provider，把找到的 URL 直接交给 read。arxiv PDF、GitHub 页面、Stack Overflow 帖子都会以带完整锚点的结构化 markdown 返回——和你处理本地文件用的是同一套工具。可引用、可跟进、可摘录，永远不丢来路。
 
 ![omp TUI：web_search 针对 inference-time compute scaling 返回 10 条排好序的 Perplexity 来源，agent 选中一篇 arxiv 论文，调用 read https://arxiv.org/pdf/2604.10739v1，并用真实数字总结该论文的核心结果。](https://omp.sh/clips/web-poster.webp)
 
@@ -370,13 +370,13 @@ modelRoles:
 
 完整的 provider 与路由参考见 [omp.sh/docs/providers](https://omp.sh/docs/providers)。
 
-## 二十四个后端。_一个 agent 早就会用的工具_。
+## 二十五个后端。_一个 agent 早就会用的工具_。
 
-`web_search` 是内置的，不是外挂上去的。`auto` 会依次走过一个二十四个 provider 组成的链路；如果你已经在为某家付费，可以按名字固定它。每一次命中背后，站点感知的抽取都会把 GitHub、各类 registry、arXiv、Stack Overflow 和文档转成结构化 markdown——锚点与链接目标都得以保留。
+`web_search` 是内置的，不是外挂上去的。`auto` 会依次走过一个二十五个 provider 组成的链路；如果你已经在为某家付费，可以按名字固定它。每一次命中背后，站点感知的抽取都会把 GitHub、各类 registry、arXiv、Stack Overflow 和文档转成结构化 markdown——锚点与链接目标都得以保留。
 
 ### 搜索 provider
 
-二十四个后端。固定其中一个，或让 `auto` 按顺序走完整条链路。
+二十五个后端。固定其中一个，或让 `auto` 按顺序走完整条链路。
 
 | provider     | 认证                                      |
 | ------------ | ----------------------------------------- |
@@ -390,6 +390,7 @@ modelRoles:
 | `exa`        | `EXA_API_KEY`（或 mcp）                   |
 | `tinyfish`   | `TINYFISH_API_KEY`                        |
 | `keenable`   | `KEENABLE_API_KEY`（无密钥回退）         |
+| `sofya`      | `SOFYA_API_KEY`                           |
 | `jina`       | `JINA_API_KEY`                            |
 | `kagi`       | `KAGI_API_KEY`                            |
 | `tavily`     | `TAVILY_API_KEY`                          |
@@ -484,11 +485,11 @@ agent 拿到的是结构化内容，而不是被剥光的 HTML。
 
 ### Interactive — 拿不准时，agent 会问你
 
-TUI 是默认界面。工具调用以卡片形式渲染，编辑在落地前先预览，语义不明时经由 `ask` 工具处理——那是 agent 可以在回合中途调用的结构化选项选择器。其余交给键盘。
+TUI 是默认界面。工具调用以卡片形式渲染，编辑在落地前先预览，语义不明时经由 `ask` 工具处理——那是 agent 可以在回合中途调用的表单，并预选推荐值。其余交给键盘。
 
-同一套 prompt 卡片也会出现在 ACP 上，因此编辑器无需自己实现就能拿到选择器。
+同一套表单也会通过 ACP 作为 elicitation 提供，因此编辑器无需自己实现对话框。
 
-![omp TUI 展示来自 ask 工具的多选问题。](assets/ask.webp)
+![omp TUI 展示 ask 表单中的多选字段。](assets/ask.webp)
 
 ### SDK — 嵌入 Node
 
@@ -621,6 +622,15 @@ bun run gen:nix
 ```sh
 bun dev -- --version
 ```
+
+#### Apple Silicon Nix 构建
+
+在 Apple Silicon 上，`nix build .#omp` 使用 nixpkgs 的 Swift 编译器和
+`apple-sdk_27` 编译 Apple Foundation Models bridge；不使用宿主 Xcode 或
+Command Line Tools，且构建会失败而不是在缺少 bridge 时继续交付。
+两者都仅为构建依赖。使用模型仍需要 macOS 27+、符合条件的设备以及已启用的
+Apple Intelligence。若要不带 bridge 构建，使用
+`omp.override { withAppleFm = false; }`。
 
 ### Debug 命令
 

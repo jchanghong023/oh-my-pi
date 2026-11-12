@@ -52,7 +52,7 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup().catch(() => {});
 });
 
-/** A headless Chromium on a CDP port, attached the way `app.cdp_url` attaches a user's browser. */
+/** A headless Chromium on a CDP port, attached the way an `app` CDP URL attaches a user's browser. */
 async function connectedBrowser(): Promise<PuppeteerBrowserHandle> {
 	const exe = await ensureChromiumExecutable();
 	if (!exe) throw new Error("Expected a Chromium executable");
@@ -88,27 +88,25 @@ async function connectedBrowser(): Promise<PuppeteerBrowserHandle> {
 }
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("browser screenshots of background tabs", () => {
-	it.skipIf(process.platform === "win32")(
-		"captures a targeted background tab without switching the user's visible tab",
-		async () => {
-			const handle = await connectedBrowser();
-			const agentPage = await handle.browser.newPage();
-			await agentPage.goto(page("agent-tab", "#0000ff"));
-			const userPage = await handle.browser.newPage();
-			await userPage.goto(page("user-tab", "#ffffff"));
-			await userPage.bringToFront();
-			const name = `background-target-${process.pid}`;
-			cleanups.push(async () => {
-				await releaseTab(name);
-			});
-			await acquireTab(name, handle, { target: "agent-tab", timeoutMs: 30_000 });
+	it("captures a targeted background tab without switching the user's visible tab", async () => {
+		const handle = await connectedBrowser();
+		const agentPage = await handle.browser.newPage();
+		await agentPage.goto(page("agent-tab", "#0000ff"));
+		const userPage = await handle.browser.newPage();
+		await userPage.goto(page("user-tab", "#ffffff"));
+		await userPage.bringToFront();
+		const name = `background-target-${process.pid}`;
+		cleanups.push(async () => {
+			await releaseTab(name);
+		});
+		await acquireTab(name, handle, { target: "agent-tab", timeoutMs: 30_000 });
+		// Focus emulation differs by platform; capturing must preserve its initial visibility.
+		const agentVisibility = await visibility(agentPage);
 
-			expect(await repaintAndCapture(name, "#00ff00")).toEqual([0, 255, 0]);
-			expect(await visibility(userPage)).toBe("visible");
-			expect(await visibility(agentPage)).toBe("hidden");
-		},
-		45_000,
-	);
+		expect(await repaintAndCapture(name, "#00ff00")).toEqual([0, 255, 0]);
+		expect(await visibility(userPage)).toBe("visible");
+		expect(await visibility(agentPage)).toBe(agentVisibility);
+	}, 45_000);
 
 	it("captures the adopted tab after the user switched away from it", async () => {
 		const handle = await connectedBrowser();

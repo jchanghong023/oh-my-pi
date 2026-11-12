@@ -12,6 +12,7 @@ import type {
 	ExtensionAskDialogResult,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUISelectItem,
 } from "../../extensibility/extensions/types";
 import { getExtensionUISelectOptionLabel, timedOutAskDialogResult } from "../../extensibility/extensions/types";
 import type { AgentSession } from "../../session/agent-session";
@@ -229,7 +230,12 @@ export class NativeWebGuiQuestions {
 			getToolsExpanded: unavailable,
 			setToolsExpanded: unavailable,
 		};
-		ui.select = (title, options, dialogOptions) => {
+		const select = (
+			title: string,
+			options: ExtensionUISelectItem[],
+			dialogOptions?: ExtensionUIDialogOptions,
+			approval = false,
+		) => {
 			const labels = options.map(getExtensionUISelectOptionLabel);
 			return this.#request(
 				{
@@ -246,9 +252,10 @@ export class NativeWebGuiQuestions {
 				},
 				dialogOptions,
 				undefined,
-				{ kind: "select", title, options },
+				{ kind: "select", title, options, ...(approval ? { approval: true } : {}) },
 			);
 		};
+		ui.select = select;
 		ui.confirm = (title, message, dialogOptions) =>
 			this.#request(
 				{
@@ -268,7 +275,7 @@ export class NativeWebGuiQuestions {
 				},
 				dialogOptions,
 				undefined,
-				{ kind: "select", title: `${title}\n${message}`, options: ["Yes", "No"] },
+				{ kind: "select", title: `${title}\n${message}`, options: ["Yes", "No"], approval: true },
 			);
 		ui.input = (title, placeholder, dialogOptions) =>
 			this.#request(
@@ -323,10 +330,11 @@ export class NativeWebGuiQuestions {
 				]),
 				{ label: "Deny", answer: "deny" },
 			];
-			const selected = await ui.select(
+			const selected = await select(
 				prompt.full,
 				choices.map(choice => choice.label),
 				options,
+				true,
 			);
 			return choices.find(choice => choice.label === selected)?.answer ?? "deny";
 		};

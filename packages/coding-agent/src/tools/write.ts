@@ -2,7 +2,6 @@ import type { WriteToolDetails } from "@oh-my-pi/pi-tui/tools/write";
 export type { WriteToolDetails } from "@oh-my-pi/pi-tui/tools/write";
 import { Database } from "bun:sqlite";
 import { assertNotHeldOpen } from "@oh-my-pi/pi-utils/held-file";
-import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -87,7 +86,7 @@ import {
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
 import { maybeWriteSnapshotHeader, stripWriteContent } from "./write-content";
-import { isReadOnlyIndexDevice } from "./xdev";
+import { docTopicsReadable, isReadOnlyIndexDevice } from "./xdev";
 
 import {
 	cfgLspDiagnosticsDeduplicate,
@@ -100,164 +99,6 @@ import {
 const EXECUTABLE_NOTICE = "[Notice: Made executable via chmod +x]";
 const URI_LIKE_WRITE_PATH_RE = /^([a-z][a-z0-9+.-]*):\/{1,2}(.*)$/i;
 const MISSING_DELIMITER_RE = /^([a-z][a-z0-9+.-]*)\/+(.*)$/i;
-
-// Match the edit result's combined oldText/newText journal budget.
-const MAX_WRITE_SNAPSHOT_TEXT_CHARS = 32_768;
-const MAX_WRITE_SNAPSHOT_BYTES = MAX_WRITE_SNAPSHOT_TEXT_CHARS * 4;
-type WriteCheckpointState = {
-	path: string;
-	op: "create" | "update";
-	text?: string;
-	identity?: Stats;
-	digest?: string;
-	verified?: boolean;
-};
-
-function sameWriteIdentity(a: Stats, b: Stats): boolean {
-	return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
-}
-
-async function canonicalWritePath(file: string): Promise<string> {
-	try {
-		return await fs.realpath(file);
-	} catch (error) {
-		if (!isEnoent(error) || path.dirname(file) === file) throw error;
-		// A dangling link is not evidence that the destination did not exist.
-		if (await fs.lstat(file).catch(() => undefined)) throw error;
-		return path.join(await canonicalWritePath(path.dirname(file)), path.basename(file));
-	}
-}
-
-async function captureWriteCheckpoint(
-	file: string,
-	compareBefore?: WriteCheckpointState,
-	requireText = true,
-): Promise<WriteCheckpointState | undefined> {
-	try {
-		const canonical = await canonicalWritePath(file);
-		const handle = await fs.open(file, "r").catch(async error => {
-			if (!isEnoent(error) || (await fs.lstat(file).catch(() => undefined))) throw error;
-			return undefined;
-		});
-		if (!handle) return { path: canonical, op: "create", text: "", verified: true };
-		try {
-			const identity = await handle.stat();
-			const state: WriteCheckpointState = { path: canonical, op: "update", identity };
-			if (!identity.isFile()) return state;
-			let text: string | undefined;
-			let digest: string | undefined;
-			// A creation or a size change needs no content comparison when no journal text is needed.
-			const identityOnly =
-				!requireText &&
-				compareBefore?.verified &&
-				(compareBefore.op === "create" || compareBefore.identity?.size !== identity.size);
-			if (!identityOnly && identity.size <= MAX_WRITE_SNAPSHOT_BYTES) {
-				const bytes = Buffer.allocUnsafe(identity.size);
-				let count = 0;
-				while (count < bytes.length) {
-					const read = await handle.read(bytes, count, bytes.length - count, count);
-					if (read.bytesRead === 0) break;
-					count += read.bytesRead;
-				}
-				if (count !== identity.size) return state;
-				try {
-					const decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-					if (decoded.length <= MAX_WRITE_SNAPSHOT_TEXT_CHARS && !decoded.includes("\0")) text = decoded;
-				} catch {
-					// Invalid UTF-8 cannot be restored as text.
-				}
-				if (text === undefined) digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-			} else if (!identityOnly) {
-				const chunk = Buffer.allocUnsafe(64 * 1024);
-				const hash = new Bun.CryptoHasher("sha256");
-				let count = 0;
-				while (count < identity.size) {
-					const read = await handle.read(chunk, 0, Math.min(chunk.length, identity.size - count), count);
-					if (read.bytesRead === 0) break;
-					hash.update(chunk.subarray(0, read.bytesRead));
-					count += read.bytesRead;
-				}
-				if (count !== identity.size) return state;
-				digest = hash.digest("hex");
-			}
-			if (!sameWriteIdentity(identity, await handle.stat())) return state;
-			if (!sameWriteIdentity(identity, await fs.stat(file)) || (await fs.realpath(file)) !== canonical) return state;
-			state.text = text;
-			state.digest = digest;
-			state.verified = true;
-			return state;
-		} finally {
-			await handle.close();
-		}
-	} catch {
-		// Checkpoint failures must not change write permissions or success behavior.
-		return undefined;
-	}
-}
-async function validateWriteCheckpoint(file: string, before: WriteCheckpointState | undefined): Promise<void> {
-	if (!before?.verified) return;
-	try {
-		if ((await canonicalWritePath(file)) !== before.path) throw new Error("Write target changed");
-		if (before.identity) {
-			const current = await fs.stat(file);
-			if (!sameWriteIdentity(before.identity, current)) throw new Error("Write target changed");
-		} else {
-			// A failed lookup other than ENOENT is not proof that a file is absent.
-			try {
-				await fs.lstat(file);
-				throw new Error("Write target appeared");
-			} catch (error) {
-				if (!isEnoent(error)) throw error;
-			}
-		}
-	} catch {
-		before.text = undefined;
-		before.verified = false;
-	}
-}
-
-function confirmedWriteChange(
-	before: WriteCheckpointState | undefined,
-	after: WriteCheckpointState | undefined,
-): boolean | undefined {
-	if (!before?.verified || !after?.verified || after.op !== "update" || after.path !== before.path) return undefined;
-	if (before.op === "create") return true;
-	if (before.identity?.size !== after.identity?.size) return true;
-	if (before.text !== undefined && after.text !== undefined) return before.text !== after.text;
-	const beforeDigest =
-		before.digest ??
-		(before.text === undefined ? undefined : new Bun.CryptoHasher("sha256").update(before.text).digest("hex"));
-	const afterDigest =
-		after.digest ??
-		(after.text === undefined ? undefined : new Bun.CryptoHasher("sha256").update(after.text).digest("hex"));
-	return beforeDigest === undefined || afterDigest === undefined ? undefined : beforeDigest !== afterDigest;
-}
-
-async function writeCheckpointDetails(
-	file: string,
-	before: WriteCheckpointState | undefined,
-	finalContent: string,
-): Promise<Pick<WriteToolDetails, "path" | "op" | "oldText" | "newText" | "snapshotsPruned" | "fileChanged">> {
-	const fits = before?.text !== undefined && before.text.length + finalContent.length <= MAX_WRITE_SNAPSHOT_TEXT_CHARS;
-	const after = await captureWriteCheckpoint(file, before, fits);
-	const fileChanged = confirmedWriteChange(before, after);
-	const unavailable = {
-		path: before?.path ?? file,
-		op: before?.op,
-		snapshotsPruned: true as const,
-		...(fileChanged === undefined ? {} : { fileChanged }),
-	};
-	if (!fits || !before || after?.op !== "update" || after.path !== before.path || after.text !== finalContent) {
-		return unavailable;
-	}
-	return {
-		path: before.path,
-		op: before.op,
-		oldText: before.text,
-		newText: after.text,
-		...(fileChanged === undefined ? {} : { fileChanged }),
-	};
-}
 
 /** True when `typo` is exactly one insertion, deletion, substitution, or adjacent swap away from `word`. */
 function isOneEditAway(typo: string, word: string): boolean {
@@ -791,7 +632,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	readonly label = "Write";
 	get description(): string {
 		const deviceOnly = this.session.deviceOnlyWrite === true && this.session.pendingFullWriteDescription !== true;
-		return prompt.render(deviceOnly ? writeDeviceOnlyDescription : writeDescription);
+		// The archive/SQLite target grammar lives in `xd://read/sources`; inline it when that doc is unreachable.
+		return prompt.render(deviceOnly ? writeDeviceOnlyDescription : writeDescription, {
+			readActive: docTopicsReadable(this.session),
+		});
 	}
 	readonly parameters = writeSchema;
 	readonly strict = true;
@@ -1340,8 +1184,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				batchRequest?.flush ? batchRequest.id : undefined,
 				async (): Promise<AgentToolResult<WriteToolDetails>> => {
 					signal?.throwIfAborted();
-					const bridgeBefore = editorOwnsFile ? await captureWriteCheckpoint(absolutePath) : undefined;
-					await validateWriteCheckpoint(absolutePath, bridgeBefore);
 					// Try ACP bridge first for editor-visible filesystem paths. Internal
 					// artifacts such as local:// plans are owned by OMP, not the editor.
 					const bridgeWrite = await routeWriteThroughBridge(
@@ -1358,8 +1200,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						// use it so a drifted write (e.g. client format-on-save) still
 						// hands back a tag that matches what's actually on disk.
 						const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, bridgeWrite.text);
-						const bridgeAfter = await captureWriteCheckpoint(absolutePath, bridgeBefore, false);
-						const fileChanged = confirmedWriteChange(bridgeBefore, bridgeAfter);
 						const header = maybeWriteSnapshotHeader(this.session, absolutePath, bridgeWrite.text, displayPath);
 						const writeLine = `Successfully wrote ${cleanBytes} bytes to ${displayPath}`;
 						let resultText = header ? `${header}\n${writeLine}` : writeLine;
@@ -1373,16 +1213,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 							content: [{ type: "text", text: resultText }],
 							details: {
 								resolvedPath: absolutePath,
-								path: absolutePath,
-								snapshotsPruned: true,
-								...(fileChanged === undefined ? {} : { fileChanged }),
 								madeExecutable: madeExecutable || undefined,
 							},
 						};
 					}
 
-					const before = await captureWriteCheckpoint(absolutePath);
-					await validateWriteCheckpoint(absolutePath, before);
 					const { writethrough, deferred } = this.#lspWritethrough();
 					const diagnostics = await writethrough(
 						absolutePath,
@@ -1398,7 +1233,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					}
 					const finalContent = diagnostics.finalContent;
 					const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, finalContent);
-					const checkpoint = await writeCheckpointDetails(absolutePath, before, finalContent);
 
 					const header = maybeWriteSnapshotHeader(this.session, absolutePath, finalContent, displayPath);
 					const finalBytes = finalContent === writeContent ? writeBytes : Buffer.byteLength(finalContent, "utf8");
@@ -1421,7 +1255,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 							content: [{ type: "text", text: resultText }],
 							details: {
 								resolvedPath: absolutePath,
-								...checkpoint,
 								madeExecutable: madeExecutable || undefined,
 							},
 						};
@@ -1431,7 +1264,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						content: [{ type: "text", text: resultText }],
 						details: {
 							resolvedPath: absolutePath,
-							...checkpoint,
 							diagnostics: diagnostics.diagnostics,
 							madeExecutable: madeExecutable || undefined,
 							meta: outputMeta()

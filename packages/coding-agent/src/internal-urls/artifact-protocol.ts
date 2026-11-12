@@ -37,8 +37,7 @@ async function scanArtifactIds(dirs: string[]): Promise<string[]> {
 	const listings = await Promise.all(
 		dirs.map(async dir => {
 			try {
-				const files = await fs.readdir(dir);
-				return files;
+				return await fs.readdir(dir);
 			} catch (err) {
 				if (isEnoent(err)) return [];
 				throw err;

@@ -971,18 +971,24 @@ export class CollabGuestLink {
 		if (this.#readOnly || this.#pendingUiRequests.has(request.reqId)) return;
 		const abort = new AbortController();
 		this.#pendingUiRequests.set(request.reqId, abort);
-		const dialog =
+		const dialogOptions =
 			request.kind === "select"
-				? (this.#native
-						? this.#native.ui.select.bind(this.#native.ui)
-						: this.#ctx.showHookSelector.bind(this.#ctx))(request.title, request.options, {
+				? {
 						signal: abort.signal,
 						initialIndex: request.initialIndex,
 						selectionMarker: request.selectionMarker,
 						checkedIndices: request.checkedIndices,
 						markableCount: request.markableCount,
 						helpText: request.helpText,
-					})
+					}
+				: undefined;
+		const dialog =
+			request.kind === "select"
+				? this.#native
+					? this.#native.ui.select(request.title, request.options, dialogOptions)
+					: this.#ctx.showHookSelector(request.title, request.options, dialogOptions, {
+							kind: request.approval ? "permission" : "question",
+						})
 				: (this.#native ? this.#native.ui.editor.bind(this.#native.ui) : this.#ctx.showHookEditor.bind(this.#ctx))(
 						request.title,
 						request.prefill,

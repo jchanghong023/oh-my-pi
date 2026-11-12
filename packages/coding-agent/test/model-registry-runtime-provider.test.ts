@@ -995,6 +995,45 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(getProviderModels(registry, "deepseek").length).toBeGreaterThan(0);
 	});
 
+	test("a provider lookup reflects another provider's catalog modifier once its OAuth login lands", async () => {
+		const config: ProviderConfigInput = {
+			api: "custom-gated-api",
+			baseUrl: "https://example.invalid/",
+			streamSimple,
+			models: [baseModel],
+			oauth: {
+				name: "Gated OAuth",
+				login: async () => ({ access: "a", refresh: "r", expires: Date.now() + 60_000 }),
+				refreshToken: async credentials => credentials,
+				getApiKey: credentials => credentials.access,
+				modifyModels: models =>
+					models.map(model =>
+						model.provider === "deepseek" ? { ...model, name: `${model.name} (gated)` } : model,
+					),
+			},
+		};
+		registry.registerProvider("gated-provider", config, "ext://oauth");
+		const deepseekNames = () => registry.getProviderModels("deepseek").map(model => model.name);
+
+		// Without credentials the hook cannot run, so the lookup stays provider-scoped and untouched.
+		const originalNames = deepseekNames();
+		expect(originalNames.some(name => name.endsWith(" (gated)"))).toBe(false);
+		authStorage.keys.setRuntime("deepseek", "test-deepseek-key");
+		const scoped = registry.getAvailableForProviders(new Set(["deepseek"]));
+		expect(scoped.map(model => model.name)).toEqual(originalNames);
+		expect(scoped.every(model => model.provider === "deepseek")).toBe(true);
+
+		await authStorage.credentials.set("gated-provider", {
+			type: "oauth",
+			access: "access-token",
+			refresh: "refresh-token",
+			expires: Date.now() + 60_000,
+		});
+		// The login flow refreshes only the authenticated provider; deepseek's lookup must still see the hook.
+		await registry.refreshProvider("gated-provider", "offline");
+		expect(deepseekNames()).toEqual(originalNames.map(name => `${name} (gated)`));
+	});
+
 	test("oauth.modifyModels output is materialized through buildModel", async () => {
 		await authStorage.credentials.set("deepseek", {
 			type: "oauth",

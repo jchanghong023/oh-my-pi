@@ -144,16 +144,21 @@ export interface EvalToolDetails {
 }
 
 /** Keep a real call-level diagnostic when no cell produced output. */
-function cellsWithFailureOutput(details: EvalToolDetails | undefined, output: string): EvalCellResult[] | undefined {
+function cellsWithFailureOutput(
+	details: EvalToolDetails | undefined,
+	readOutput: () => string,
+): EvalCellResult[] | undefined {
 	const cells = details?.cells;
-	if (!cells?.length || !output || cells.some(cell => cell.output)) return cells;
+	if (!cells?.length || cells.some(cell => cell.output)) return cells;
 	const index = cells.findLastIndex(
 		cell =>
 			cell.status === "error" ||
 			(cell.exitCode !== undefined && cell.exitCode !== 0) ||
 			(cell.status === "running" && details?.async?.state === "cancelled"),
 	);
-	return index < 0 ? cells : cells.map((cell, i) => (i === index ? { ...cell, output } : cell));
+	if (index < 0) return cells;
+	const output = readOutput();
+	return output ? cells.map((cell, i) => (i === index ? { ...cell, output } : cell)) : cells;
 }
 
 /** Default collapsed eval output preview height; kept as a named alias (consumed by chat/tool-execution). */
@@ -1027,6 +1032,10 @@ export const evalToolRenderer = {
 				bodies = undefined;
 				cached = undefined;
 			},
+			releaseRenderCaches: () => {
+				bodies = undefined;
+				cached = undefined;
+			},
 		});
 	},
 
@@ -1037,12 +1046,13 @@ export const evalToolRenderer = {
 		_args?: EvalRenderArgs,
 	): Component {
 		const details = result.details;
-
-		const rawOutput =
-			options.renderContext?.output ?? (result.content?.find(c => c.type === "text")?.text ?? "").trimEnd();
 		// Strip the LLM-facing notice (appended by wrappedExecute) before display;
 		// the styled `warningLine` below carries the same text in ⟨…⟩ form.
-		const output = stripOutputNotice(rawOutput, details?.meta).trimEnd();
+		const readOutput = (): string => {
+			const rawOutput =
+				options.renderContext?.output ?? (result.content?.find(c => c.type === "text")?.text ?? "").trimEnd();
+			return stripOutputNotice(rawOutput, details?.meta).trimEnd();
+		};
 
 		const timeoutSeconds = options.renderContext?.timeout;
 		const timeoutLine =
@@ -1059,7 +1069,7 @@ export const evalToolRenderer = {
 				? uiTheme.fg("dim", wrapBrackets(`Backgrounded: ${details.async.jobId}`, uiTheme))
 				: undefined;
 
-		const cellResults = cellsWithFailureOutput(details, output);
+		const cellResults = cellsWithFailureOutput(details, readOutput);
 		if (cellResults && cellResults.length > 0) {
 			const displayCells = cellResults.map(cell => {
 				const language = cell.language ?? details?.language ?? "python";
@@ -1186,9 +1196,14 @@ export const evalToolRenderer = {
 					bodies = undefined;
 					cached = undefined;
 				},
+				releaseRenderCaches: () => {
+					bodies = undefined;
+					cached = undefined;
+				},
 			});
 		}
 
+		const output = readOutput();
 		const statusEvents = details?.statusEvents ?? [];
 		const statusLines = renderStatusEvents(
 			statusEvents,
@@ -1230,16 +1245,14 @@ export const evalToolRenderer = {
 			return new Text(lines.join("\n"), 0, 0);
 		}
 
-		const styledOutput = output
-			.split("\n")
-			.map(line => uiTheme.fg("toolOutput", line))
-			.join("\n");
-		const textContent = `\n${styledOutput}`;
-
 		let cachedWidth: number | undefined;
-		let cachedLines: readonly string[] | undefined;
-		let cachedSkipped: number | undefined;
 		let cachedPreviewLines: number | undefined;
+		let cachedRows: readonly string[] | undefined;
+		const dropCache = () => {
+			cachedWidth = undefined;
+			cachedPreviewLines = undefined;
+			cachedRows = undefined;
+		};
 
 		return {
 			render: (width: number): readonly string[] => {
@@ -1247,23 +1260,26 @@ export const evalToolRenderer = {
 					options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES,
 					previewWindowRows(),
 				);
-				if (cachedLines === undefined || cachedWidth !== width || cachedPreviewLines !== previewLines) {
-					const result = truncateToVisualLines(textContent, previewLines, width);
-					cachedLines = result.visualLines;
-					cachedSkipped = result.skippedCount;
-					cachedWidth = width;
-					cachedPreviewLines = previewLines;
+				if (cachedRows !== undefined && cachedWidth === width && cachedPreviewLines === previewLines) {
+					return cachedRows;
 				}
+				// Styled from the result on each miss, never captured, so a retired
+				// card's released caches hold no copy of the output.
+				const styledOutput = readOutput()
+					.split("\n")
+					.map(line => uiTheme.fg("toolOutput", line))
+					.join("\n");
+				const result = truncateToVisualLines(`\n${styledOutput}`, previewLines, width);
 				const outputLines: string[] = [];
-				if (cachedSkipped && cachedSkipped > 0) {
+				if (result.skippedCount > 0) {
 					outputLines.push("");
 					const skippedLine = uiTheme.fg(
 						"dim",
-						`… (${cachedSkipped} earlier lines, showing ${cachedLines.length} of ${cachedSkipped + cachedLines.length}) (${expandKeyHint()} to expand)`,
+						`… (${result.skippedCount} earlier lines, showing ${result.visualLines.length} of ${result.skippedCount + result.visualLines.length}) (${expandKeyHint()} to expand)`,
 					);
 					outputLines.push(truncateToWidth(skippedLine, width));
 				}
-				outputLines.push(...cachedLines);
+				outputLines.push(...result.visualLines);
 				if (statusLines.length > 0) {
 					outputLines.push(truncateToWidth(uiTheme.fg("dim", "Status"), width));
 					for (const statusLine of statusLines) {
@@ -1282,14 +1298,13 @@ export const evalToolRenderer = {
 				if (warningLine) {
 					outputLines.push(truncateToWidth(warningLine, width));
 				}
+				cachedWidth = width;
+				cachedPreviewLines = previewLines;
+				cachedRows = outputLines;
 				return outputLines;
 			},
-			invalidate: () => {
-				cachedWidth = undefined;
-				cachedLines = undefined;
-				cachedSkipped = undefined;
-				cachedPreviewLines = undefined;
-			},
+			invalidate: dropCache,
+			releaseRenderCaches: dropCache,
 		};
 	},
 
@@ -1323,7 +1338,7 @@ export const evalToolRenderer = {
 		// The call's notice and truncation join the last run's foot facts (a background job is a head badge).
 		const callFacts = { facts: compact([details?.notice]), meta: details?.meta };
 		const rawOutput = options.renderContext?.output ?? resultText(result).trimEnd();
-		const cellResults = cellsWithFailureOutput(details, stripOutputNotice(rawOutput, details?.meta).trimEnd());
+		const cellResults = cellsWithFailureOutput(details, () => stripOutputNotice(rawOutput, details?.meta).trimEnd());
 		if (cellResults && cellResults.length > 0) {
 			const languages = cellResults.map(cell => cell.language ?? details?.language ?? "python");
 			const states = cellResults.map(cell =>

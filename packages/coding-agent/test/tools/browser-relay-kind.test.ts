@@ -51,9 +51,9 @@ describe("explicit browser relay", () => {
 			cwd: process.cwd(),
 			settings: Settings.isolated({ "browser.cdpUrl": "http://127.0.0.1:9333" }),
 		} as ToolSession;
-		expect(() =>
-			resolveBrowserKind({ action: "open", app: { relay: true } }, session, { PI_BROWSER_RELAY: "0" }),
-		).toThrow(/relay.*disabled.*PI_BROWSER_RELAY/i);
+		expect(() => resolveBrowserKind({ action: "open", app: "relay" }, session, { PI_BROWSER_RELAY: "0" })).toThrow(
+			/relay.*disabled.*PI_BROWSER_RELAY/i,
+		);
 	});
 });
 
@@ -101,11 +101,11 @@ describe("browser prelude relay guidance", () => {
 			const onRelay = resolveBrowserKind({ action: "open" }, session).kind === "relay";
 			const guidance = createBrowserPrelude(session).guidance;
 			expect(guidance !== undefined).toBe(onRelay);
-			if (onRelay) expect(guidance).toContain("`app: { relay: false }` for a throwaway managed browser");
+			if (onRelay) expect(guidance).toContain('`app: "auto"` for a throwaway managed browser');
 		}
 	});
 
-	it("names the browser app.relay:false falls through to", () => {
+	it('names the browser app: "auto" falls through to', () => {
 		const cases: {
 			settings: Record<string, unknown>;
 			env: Record<string, string>;
@@ -136,7 +136,7 @@ describe("browser prelude relay guidance", () => {
 			for (const key of ENV_KEYS) delete process.env[key];
 			Object.assign(process.env, env);
 			const session = sessionWith({ "browser.relay": true, ...settings });
-			expect(resolveBrowserKind({ action: "open", app: { relay: false } }, session).kind).toBe(kind);
+			expect(resolveBrowserKind({ action: "open", app: "auto" }, session).kind).toBe(kind);
 			const guidance = createBrowserPrelude(session).guidance;
 			expect(guidance).toContain(says);
 			expect(guidance).not.toContain("throwaway");

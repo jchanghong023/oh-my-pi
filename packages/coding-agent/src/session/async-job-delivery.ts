@@ -139,7 +139,8 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 		// Job output (a command's output, or a task's `<task-result>` around a
 		// subagent's output), a subagent's payload and its validation error are
 		// text the job controls: it must not close the `<system-notice>` it renders
-		// into or open a forged harness block. Neither may the label naming it.
+		// into or open a forged harness block. Neither may the label naming it
+		// or a /tan job's quoted user request.
 		// Keep the full command identity alongside the finite job's independent display name.
 		const command = entry.job?.type === "bash" ? entry.job.process?.command : undefined;
 		const identity = command === undefined ? entry.job?.label : commandIdentity(command);
@@ -156,6 +157,7 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 			label: entry.job?.label,
 			name: entry.job?.name,
 			headerLabel: headerLabel ? escapeHarnessTags(headerLabel) : undefined,
+			request: entry.job?.request === undefined ? undefined : escapeHarnessTags(entry.job.request),
 			namedByCommand: command !== undefined,
 			durationMs: entry.durationMs,
 			meta: entry.job?.latestDetails?.meta,

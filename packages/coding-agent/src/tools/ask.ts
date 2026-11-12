@@ -580,18 +580,12 @@ function formatSingleQuestionResponse(result: {
 
 type AskParams = AskToolInput;
 
-/**
- * Ask tool for interactive user prompting during execution.
- *
- * Allows gathering user preferences, clarifying instructions, and getting decisions
- * on implementation choices as the agent works.
- */
+/** Asks the user structured questions through the host's interactive surface. */
 export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly name = "ask";
 	readonly approval = "read" as const;
 	readonly label = "Ask";
 	readonly summary = "Ask the user a clarifying question";
-	readonly description: string;
 	readonly parameters = askSchema;
 	readonly strict = true;
 
@@ -610,17 +604,13 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			},
 		},
 	];
-	// Run alone in its tool batch. The interactive selector/editor is a single
-	// shared UI surface (`ExtensionUiController.showHookSelector` has no queue and
-	// overwrites `ctx.hookSelector` on each call), so two concurrent `ask` calls
-	// would clobber each other: the second steals focus and orphans the first,
-	// whose promise then hangs until the user aborts the whole turn.
+	// Run alone: concurrent dialogs share one UI surface and orphan the first wait.
 	readonly concurrency = "exclusive";
 	readonly loadMode = "discoverable";
 
-	constructor(private readonly session: ToolSession) {
-		this.description = prompt.render(askDescription);
-	}
+	constructor(private readonly session: ToolSession) {}
+
+	readonly description = prompt.render(askDescription);
 
 	static createIf(session: ToolSession): AskTool | null {
 		return (session.canPromptUser ?? session.hasUI) || session.advertiseHeadlessAsk ? new AskTool(session) : null;

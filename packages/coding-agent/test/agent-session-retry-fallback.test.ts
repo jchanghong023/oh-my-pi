@@ -1216,6 +1216,7 @@ describe("AgentSession retry fallback", () => {
 			releaseDisplay(turn) {
 				releases.push(turn);
 			},
+			async reset() {},
 			async close() {},
 		});
 		let asked: { turn: number | undefined; releases: number[] } | undefined;

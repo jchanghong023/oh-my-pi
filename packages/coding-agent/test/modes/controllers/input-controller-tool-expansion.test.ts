@@ -59,12 +59,10 @@ describe("InputController tool output expansion", () => {
 			ui,
 		);
 		const ordinary = { setExpanded: vi.fn() };
-		changed.updateResult({ content: [{ type: "text", text: "written" }], details: { fileChanged: true } }, false);
-		unchanged.updateResult(
-			{ content: [{ type: "text", text: "unchanged" }], details: { fileChanged: false } },
-			false,
-		);
+		changed.updateResult({ content: [{ type: "text", text: "written" }] }, false);
+		unchanged.updateResult({ content: [{ type: "text", text: "unchanged" }] }, false);
 		failed.updateResult({ content: [{ type: "text", text: "failed" }], isError: true }, false);
+		// Misleading change metadata cannot turn a non-file route into a file card.
 		nonfile.updateResult(
 			{ content: [{ type: "text", text: "message" }], details: { fileChanged: true, diff: "-old\n+new" } },
 			false,

@@ -6,10 +6,27 @@
 
 - Allow HTTP callers to choose a fixed retry delay instead of server hints or exponential backoff.
 - Retain warnings and errors by default in offline mode, and honor `OMP_LOG_LEVEL` overrides for troubleshooting without serializing filtered records.
+- Keep the WebKit engine under the selected OMP persistent or performance root, retaining the upstream shared location when no root is relocated.
 
 ### Fixed
 
+- Reuse upstream per-user test temp directories without overriding explicit persistent or performance roots for logs.
 - `ptree` commands spawned with `subreaper: true` no longer leave a descendant that ignores SIGTERM running after a graceful stop (an `AbortSignal`, `kill()` without a hard grace, or dispose); the subreaper stays alive through the grace period and the hard sweep then ends every descendant ([#18018](https://github.com/can1357/oh-my-pi/pull/18018) by [@sjawhar](https://github.com/sjawhar))
+
+## [18.19.0] - 2026-11-12
+
+### Added
+
+- Added browser utilities exposing trusted browser archive extraction limits and the installed WebKit host executable path.
+
+## [18.18.9] - 2026-11-11
+
+### Added
+
+- Added `prompt.renderTracked`: renders a template like `prompt.render` and reports where each `{{#each}}` iteration over a tracked item lands in the output ([#17971](https://github.com/can1357/oh-my-pi/pull/17971) by [@c-w-z](https://github.com/c-w-z))
+- Added `prompt.closeCodeFence`: closes a code fence a text leaves open, by the same rule `prompt.format` uses ([#17971](https://github.com/can1357/oh-my-pi/pull/17971) by [@c-w-z](https://github.com/c-w-z))
+
+## [18.18.8] - 2026-11-11
 
 ### Removed
 

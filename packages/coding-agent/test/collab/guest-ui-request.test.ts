@@ -1297,19 +1297,19 @@ describe("guest HTML form race", () => {
 
 			const db = await nextUiRequest(guest);
 			if (db.request.kind !== "select") throw new Error(`expected select, got ${db.request.kind}`);
-			expect(db.request.options).toEqual(["SQLite", "Postgres", "Other (type your own)"]);
 			expect(db.request.initialIndex).toBe(1);
 			guest.socket.send({ t: "ui-response", reqId: db.request.reqId, value: "SQLite" });
 
 			// A required group offers Next only once something is checked.
 			const extras = await nextUiRequest(guest);
 			if (extras.request.kind !== "select") throw new Error(`expected select, got ${extras.request.kind}`);
-			expect(extras.request.options).toEqual(["Cache", "Queue", "Other (type your own)"]);
 			guest.socket.send({ t: "ui-response", reqId: extras.request.reqId, value: "Queue" });
 			const extrasNext = await nextUiRequest(guest);
 			if (extrasNext.request.kind !== "select") throw new Error(`expected select, got ${extrasNext.request.kind}`);
 			expect(extrasNext.request.checkedIndices).toEqual([1]);
-			guest.socket.send({ t: "ui-response", reqId: extrasNext.request.reqId, value: "Next →" });
+			const next = extrasNext.request.options.at(-1)!;
+			expect(extras.request.options).not.toContain(next);
+			guest.socket.send({ t: "ui-response", reqId: extrasNext.request.reqId, value: next });
 
 			// A value the form rejects is asked again with the reason.
 			const workers = await nextUiRequest(guest);
@@ -1350,23 +1350,29 @@ describe("guest HTML form race", () => {
 					<label><input type="checkbox" name="extras" value="queue"> Queue</label>
 				</fieldset>
 			</form>`);
-			const answer = async (kind: "select" | "editor", value?: string) => {
+			const answer = async (kind: "select" | "editor", value?: string | number) => {
 				const frame = await nextUiRequest(guest);
 				if (frame.request.kind !== kind) throw new Error(`expected ${kind}, got ${frame.request.kind}`);
-				guest.socket.send({ t: "ui-response", reqId: frame.request.reqId, value });
+				const selected =
+					typeof value === "number" && frame.request.kind === "select"
+						? frame.request.options.at(value)
+						: typeof value === "string"
+							? value
+							: undefined;
+				guest.socket.send({ t: "ui-response", reqId: frame.request.reqId, value: selected });
 				return frame.request;
 			};
 
 			// A cancelled Other editor re-shows the options.
-			await answer("select", "Other (type your own)");
+			await answer("select", 2);
 			await answer("editor");
-			await answer("select", "Other (type your own)");
+			await answer("select", 2);
 			expect((await answer("editor", " MySQL 8 ")).title).toBe("Database");
 
 			await answer("select", "Cache");
-			await answer("select", "Other (type your own)");
+			await answer("select", 2);
 			await answer("editor", "terraform");
-			const done = await answer("select", "Next →");
+			const done = await answer("select", -1);
 			if (done.kind !== "select") throw new Error(`expected select, got ${done.kind}`);
 			expect(done.checkedIndices).toEqual([0, 2]);
 

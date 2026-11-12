@@ -28,7 +28,6 @@ import {
 	AgentBusyError,
 	type AgentEvent,
 	type AgentMessage,
-	type AgentUserMessage,
 	type AgentPromptOptions,
 	type AgentPreModelCallStop,
 	type AgentState,
@@ -123,6 +122,7 @@ import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager, type AsyncJobManagerApi } from "../async";
+import { planParallel } from "../auto-parallel/planner";
 import { classifyAutoPrewalk } from "../auto-prewalk/classifier";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -201,7 +201,7 @@ import { MAGIC_KEYWORDS, type MagicKeywordContext, type MagicKeywordId } from ".
 import { containsMagicKeyword } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
-import { computeNonMessageTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
+import { computeNonMessageTokens, type SystemPromptSources } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/approved-plan";
 import { listPlanFiles, readPlanFile, resolvePlanFilePath } from "../plan-mode/plan-files";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
@@ -246,7 +246,6 @@ import {
 import { isAttachmentOnlyTitleInput, isLowSignalTitleInput } from "../tiny/text";
 import type { ImageAttachmentEntry, ToolSession } from "../tools";
 import { resolveApproval } from "../tools/approval";
-import { type ApprovalGrantStore, getApprovalGrants } from "../tools/approval-cache";
 import { invokeCrawlBrowserWithSession, writeCrawlMarkdownWithSession } from "../tools/browser/crawl-access";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { type AskToolInput, recoverAskQuestions } from "../tools/ask";
@@ -539,6 +538,7 @@ const TITLE_FORK_TIMEOUT_MS = 15_000;
 const TITLE_DRIFT_JUDGE_TIMEOUT_MS = 15_000;
 
 import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-guards";
+import { AutoParallelCoordinator } from "./auto-parallel";
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE, TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
@@ -584,6 +584,7 @@ import {
 	cfgThemeDark,
 	cfgThemeLight,
 } from "../modes/settings";
+import type { PerCallModelAdvertisement } from "../task/model-approval";
 import { cfgTaskBatch, cfgTaskDisabledAgents, perCallModelEnabled } from "../task/settings";
 import {
 	cfgBranchSummaryReserveTokens,
@@ -1197,6 +1198,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#planModeReminderCount = 0;
 	#planModeReminderAwaitingProgress = false;
 	readonly #todo: TodoTracker;
+	readonly #autoParallel: AutoParallelCoordinator;
 	readonly #modelMentions: ModelMentionRegistry;
 	#workPoolYieldItems: readonly WorkPoolYieldItem[] = [];
 	/** Item set matching the last successfully rebuilt provider prompt. The base
@@ -2358,6 +2360,22 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			consumeLastServedToolChoiceLabel: () => this.#toolChoiceQueue.consumeLastServedLabel(),
 		};
 		this.#todo = new TodoTracker(todoHost);
+		this.#autoParallel = new AutoParallelCoordinator({
+			settings: this.settings,
+			planModeEnabled: () => this.#planModeState?.enabled === true,
+			getEnabledToolNames: () => this.getEnabledToolNames(),
+			toolRegistry: () => this.#tools.registry,
+			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
+			planParallel: (request, signal) =>
+				planParallel(request, {
+					settings: this.settings,
+					registry: this.#modelRegistry,
+					sessionId: this.sessionId,
+					signal,
+					onUsage: journalJudgmentUsage(this.sessionManager),
+					telemetry: this.agent.telemetry,
+				}),
+		});
 		this.#modelMentions = new ModelMentionRegistry({
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
@@ -2521,8 +2539,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			setHindsightSessionState: state => this.setHindsightSessionState(state),
 			getMnemopiSessionState: () => this.getMnemopiSessionState(),
 			takeMnemopiSessionState: () => setMnemopiSessionState(this, undefined),
-			setBaseSystemPrompt: prompt => {
-				this.#tools.setBaseSystemPrompt(prompt);
+			restoreBaseSystemPromptBeforeMemoryPromotion: prompt => {
+				this.#tools.restoreBaseSystemPrompt(prompt, this.#tools.systemPromptSources);
 				this.agent.setSystemPrompt(prompt);
 			},
 			refreshBaseSystemPrompt: () => this.#tools.refreshBaseSystemPrompt(),
@@ -2771,6 +2789,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			xdev: config.xdev,
 			setActiveToolNames: config.setActiveToolNames,
 			baseSystemPrompt: this.agent.state.systemPrompt,
+			systemPromptSources: config.systemPromptSources,
 			skills: config.skills,
 			skillWarnings: config.skillWarnings,
 			skillsSettings: config.skillsSettings,
@@ -6440,6 +6459,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					model: message.model,
 					usage: message.usage,
 					stopReason: message.stopReason,
+					errorMessage: message.errorMessage,
 					...(refresh ? { cacheRefresh: refresh } : {}),
 				},
 				{ sessionId: this.sessionId, parentId: this.sessionManager.getLeafId() },
@@ -7746,6 +7766,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.agent.state.systemPrompt;
 	}
 
+	/** Sources committed with the base prompt; the context viewer verifies them against {@link systemPrompt}. */
+	get systemPromptSources(): SystemPromptSources | undefined {
+		return this.#tools.systemPromptSources;
+	}
+
 	/** Base system prompt blocks the next turn builds on, before any `before_agent_start` override. */
 	get baseSystemPrompt(): string[] {
 		return this.#tools.baseSystemPrompt;
@@ -8041,6 +8066,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 */
 	getAdvertisedSessionAgents(): readonly AgentDefinition[] {
 		return this.#tools.advertisedSessionAgents;
+	}
+
+	/**
+	 * Per-call model roles frozen into the task/eval descriptions (see
+	 * {@link SessionTools.advertisedPerCallModel}). Another instance's role edit
+	 * leaves them untouched until the next base-prompt rebuild.
+	 */
+	getAdvertisedPerCallModel(): PerCallModelAdvertisement {
+		return this.#tools.advertisedPerCallModel;
 	}
 
 	/** Cancels the local rollout-memory startup owned by this session. */
@@ -9941,8 +9975,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// Steering amends the running task; only a follow-up starts a new one worth routing.
 		const preparation = !first
 			? undefined
-			: queue === "followUp" && userMessages.some(message => this.#isAutoPrewalkTask(message))
-				? this.#prepareQueuedAutoPrewalkTask(first, promptText, preparationImages, signal)
+			: queue === "followUp" && userMessages.some(message => this.#isUserTask(message))
+				? this.#prepareQueuedUserTask(first, promptText, preparationImages, signal)
 				: this.#prepareAgentStart(first, promptText, preparationImages, this.#promptGeneration, signal, "queued");
 		const relaxed = preparation ? this.#relaxOnDelivery(preparation, promptText) : undefined;
 		if (!hasInitialSource && !planMessage) return relaxed;
@@ -9988,10 +10022,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	/**
-	 * A queued follow-up starts a new task: leave the previous task's auto handoff, judge this one alongside its
-	 * preparation, and arm in the synchronous commit so the plan nudge is delivered with the task it belongs to.
+	 * A queued follow-up starts a new task: leave the previous task's auto handoff, judge this one (auto-prewalk,
+	 * and auto-parallel for a typed prompt) alongside its preparation, and apply both in the synchronous commit so
+	 * their nudges are delivered with the task they belong to.
 	 */
-	async #prepareQueuedAutoPrewalkTask(
+	async #prepareQueuedUserTask(
 		message: AgentMessage,
 		prompt: string,
 		images: ImageContent[] | undefined,
@@ -10000,20 +10035,24 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const generation = this.#promptGeneration;
 		await this.#prewalk.beginAutoTask();
 		const autoPrewalk = this.#prewalk.classifyAuto(prompt, signal);
+		const autoParallel = message.role === "user" ? this.#autoParallel.start(prompt, signal) : undefined;
 		const preparation = await this.#prepareAgentStart(message, prompt, images, generation, signal, "queued");
 		const decision = await autoPrewalk;
+		const plan = await autoParallel;
 		return {
 			commit: () => {
 				const additional = preparation.commit();
 				if (additional === undefined) return undefined;
-				const planMessage = this.#prewalk.applyAuto(decision);
-				return planMessage ? [...additional, planMessage] : additional;
+				const nudges = [this.#autoParallel.apply(plan), this.#prewalk.applyAuto(decision)].filter(
+					nudge => nudge !== undefined,
+				);
+				return nudges.length > 0 ? [...additional, ...nudges] : additional;
 			},
 		};
 	}
 
 	/** A new top-level task the user authored: a typed prompt or a user-invoked skill, never injected or delegated. */
-	#isAutoPrewalkTask(message: AgentMessage): boolean {
+	#isUserTask(message: AgentMessage): boolean {
 		if (this.#agentKind !== "main") return false;
 		if (message.role === "user") return !message.synthetic && message.attribution !== "agent";
 		return message.role === "custom" && isUserInvokedSkillPrompt(message);
@@ -10204,9 +10243,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 			// Auto-prewalk: return from the previous task's handoff before the usage preflight checks the model,
 			// then judge this task alongside the rest of setup; the decision is applied right before dispatch.
-			const autoPrewalkTask = this.#isAutoPrewalkTask(message);
-			if (autoPrewalkTask) await this.#prewalk.beginAutoTask();
-			const autoPrewalk = autoPrewalkTask ? this.#prewalk.classifyAuto(expandedText, setupAbort.signal) : undefined;
+			const userTask = this.#isUserTask(message);
+			if (userTask) await this.#prewalk.beginAutoTask();
+			const autoPrewalk = userTask ? this.#prewalk.classifyAuto(expandedText, setupAbort.signal) : undefined;
+			// Auto-parallel splits typed prompts only; a skill prompt's body is instructions, not a list of tasks.
+			const autoParallel =
+				userTask && message.role === "user" ? this.#autoParallel.start(expandedText, setupAbort.signal) : undefined;
 			if (!(await logger.time("prompt:usagePreflight", () => this.#runUsageAwarePreflightForNextModelCall())))
 				return false;
 			// A capped session hands the prompt back rather than start a run whose first request it refuses.
@@ -10355,6 +10397,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			);
 			if (this.#promptGeneration !== generation) {
 				return false;
+			}
+			if (autoParallel) {
+				const plan = await autoParallel;
+				if (this.#promptGeneration !== generation) {
+					return false;
+				}
+				const hint = this.#autoParallel.apply(plan);
+				if (hint) messages.push(hint);
 			}
 			if (autoPrewalk) {
 				const decision = await autoPrewalk;
@@ -14805,9 +14855,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	// IRC Delivery
 	// =========================================================================
 
-	/** Surfaces and consumes every pending IRC record before automatic injection (see {@link IrcBridge.drainInboxMessages}). */
-	drainPendingIrcInboxMessages(agentId: string, opts?: { ifAny?: (msg: IrcMessage) => boolean }): IrcMessage[] {
-		return this.#irc.drainInboxMessages(agentId, opts);
+	/** Whether a queued IRC message ends a `wait` (see {@link IrcBridge.hasInterrupts}). */
+	hasIrcInterrupts(): boolean {
+		return this.#irc.hasInterrupts();
 	}
 
 	/** Delivers an IRC message into this recipient session. */
@@ -15336,6 +15386,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const previousServiceTierByFamily = this.serviceTierByFamily;
 		const previousTools = [...this.agent.state.tools];
 		const previousBaseSystemPrompt = this.#tools.baseSystemPrompt;
+		const previousSystemPromptSources = this.#tools.systemPromptSources;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#memory.promotionSnapshot;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
@@ -15605,7 +15656,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#syncAgentSessionId(previousSessionState.sessionId, false);
 			this.#memory.rekeyForCurrentSessionId();
 			this.agent.setTools(previousTools);
-			this.#tools.setBaseSystemPrompt(previousBaseSystemPrompt);
+			this.#tools.restoreBaseSystemPrompt(previousBaseSystemPrompt, previousSystemPromptSources);
 			this.#memory.restorePromotionSnapshot(previousBaseSystemPromptBeforeMemoryPromotion);
 			this.agent.setSystemPrompt(previousSystemPrompt);
 			this.agent.replaceMessages(previousAgentMessages);
@@ -17653,16 +17704,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 */
 	get extensionRunner(): ExtensionRunner | undefined {
 		return this.#extensionRunner;
-	}
-
-	/** Whether the user approved approval scope `key` for the rest of this session (see {@link ExtensionRunner.hasSessionApproval}). */
-	hasSessionApproval(key: string): boolean {
-		return this.#extensionRunner?.hasSessionApproval(key) ?? false;
-	}
-
-	/** Remembered `always-ask-cached` grants this session's tool calls are checked against. */
-	getApprovalGrants(): ApprovalGrantStore {
-		return getApprovalGrants(this.settings.getAgentDir(), this.sessionManager.getSessionId());
 	}
 
 	/**

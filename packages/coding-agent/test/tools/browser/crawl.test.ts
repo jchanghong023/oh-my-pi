@@ -971,7 +971,7 @@ describe("crawl engine", () => {
 		const f = fixture({ "https://example.test/": {} });
 		await runCrawl(f.runtime, { ...options, recursive: false }, new AbortController().signal);
 		expect(f.requests.map(request => request.action)).toEqual(["open", "run", "close"]);
-		expect(f.requests[0]).toMatchObject({ url: "about:blank", app: { relay: true } });
+		expect(f.requests[0]).toMatchObject({ url: "about:blank", app: "relay" });
 		expect(new Set(f.requests.map(request => request.name)).size).toBe(1);
 		expect(f.requests[0]?.name).toMatch(/^crawl-/);
 		expect(f.written).toHaveLength(1);

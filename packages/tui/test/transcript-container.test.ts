@@ -2156,7 +2156,7 @@ describe("TranscriptContainer file changes", () => {
 
 			for (const view of views(root)) expect(view).toContain("wrapped.txt");
 			expectOriginalCards();
-			file.updateResult({ content: [{ type: "text", text: "unchanged" }], details: { fileChanged: false } }, false);
+			file.updateResult({ content: [{ type: "text", text: "unchanged" }] }, false);
 			wrapped.updateResult({ content: [{ type: "text", text: "write failed" }], isError: true }, false);
 			expect(wrapped.render(120).join("")).not.toBe("");
 			expectOriginalCards();

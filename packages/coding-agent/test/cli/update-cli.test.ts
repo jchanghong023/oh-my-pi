@@ -9,7 +9,7 @@ import {
 	getLatestRelease,
 	runUpdateCommand,
 } from "../../src/cli/update-cli";
-import { currentBuildHost } from "../../src/cli/build-service";
+import { currentBuildHost, OMP_BUILD } from "../../src/cli/build-service";
 import { cfgUpdateChannel } from "../../src/modes/settings";
 import { fixedNpmRegistry } from "../../src/cli/npm-registry";
 import { AgentStorage } from "../../src/session/agent-storage";
@@ -124,7 +124,9 @@ if (upstreamChild) {
 				await Bun.write(ompPath, "#!/bin/sh\necho omp/1.0.0\n");
 				await fs.chmod(ompPath, 0o755);
 				const next = "#!/bin/sh\necho omp/999.0.0\n";
-				const { target, fileName } = await currentBuildHost();
+				const host = await currentBuildHost();
+				const { target } = host;
+				const fileName = OMP_BUILD.fileName(host, "999.0.0");
 				process.env.PI_BUILD_URL = "https://build.test";
 				const check = `https://build.test/api/products/omp/latest/${target}?channel=stable&from_version=${VERSION}`;
 				const { logs } = quiet();

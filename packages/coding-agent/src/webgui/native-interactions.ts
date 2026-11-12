@@ -12,10 +12,12 @@ import type {
 	ExtensionAskDialogResult,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUISelectItem,
 } from "../extensibility/extensions/types";
 import { getExtensionUISelectOptionLabel, timedOutAskDialogResult } from "../extensibility/extensions/types";
 import type { AgentSession } from "../session/agent-session";
 import type { WebGuiBrowserAction } from "../slash-commands/types";
+import type { BlockedStatus } from "../utils/run-status";
 import type { NativeWebGuiCommandOwner } from "./native-command-host";
 
 export interface NativeWebGuiInteractionOrigin {
@@ -62,6 +64,7 @@ export interface NativeWebGuiInteractionBindings {
 	setToolUIContext: (ui: ExtensionUIContext, hasUI: boolean) => void;
 	restoreToolUIContext?: () => void;
 	commandHost?: NativeWebGuiCommandOwner;
+	holdBlockedStatus?: (status: BlockedStatus) => () => void;
 }
 
 interface PendingRequest {
@@ -96,6 +99,7 @@ export class NativeWebGuiQuestions {
 	readonly ui: ExtensionUIContext;
 	#restore: (() => void) | undefined;
 	#getGuestHost: (() => CollabHost | undefined) | undefined;
+	#holdBlockedStatus: ((status: BlockedStatus) => () => void) | undefined;
 
 	constructor(session: AgentSession) {
 		this.#session = session;
@@ -139,7 +143,12 @@ export class NativeWebGuiQuestions {
 			getToolsExpanded: unavailable,
 			setToolsExpanded: unavailable,
 		};
-		ui.select = (title, options, dialogOptions) => {
+		const select = (
+			title: string,
+			options: ExtensionUISelectItem[],
+			dialogOptions?: ExtensionUIDialogOptions,
+			approval = false,
+		) => {
 			const labels = options.map(getExtensionUISelectOptionLabel);
 			return this.#request(
 				{
@@ -156,9 +165,10 @@ export class NativeWebGuiQuestions {
 				},
 				dialogOptions,
 				undefined,
-				{ kind: "select", title, options },
+				{ kind: "select", title, options, ...(approval ? { approval: true } : {}) },
 			);
 		};
+		ui.select = select;
 		ui.confirm = (title, message, dialogOptions) =>
 			this.#request(
 				{
@@ -178,7 +188,7 @@ export class NativeWebGuiQuestions {
 				},
 				dialogOptions,
 				undefined,
-				{ kind: "select", title: `${title}\n${message}`, options: ["Yes", "No"] },
+				{ kind: "select", title: `${title}\n${message}`, options: ["Yes", "No"], approval: true },
 			);
 		ui.input = (title, placeholder, dialogOptions) =>
 			this.#request(
@@ -233,10 +243,11 @@ export class NativeWebGuiQuestions {
 				]),
 				{ label: "Deny", answer: "deny" },
 			];
-			const selected = await ui.select(
+			const selected = await select(
 				prompt.full,
 				choices.map(choice => choice.label),
 				options,
+				true,
 			);
 			return choices.find(choice => choice.label === selected)?.answer ?? "deny";
 		};
@@ -327,10 +338,18 @@ export class NativeWebGuiQuestions {
 		let timer: Timer | undefined;
 		const mirrorAbort = new AbortController();
 		const cancel = () => this.#remove(id, options?.signal?.reason ?? new Error("Native interaction cancelled"));
+		const release = origin
+			? undefined
+			: this.#holdBlockedStatus?.({
+					state: "blocked",
+					kind: guestDialog?.kind === "select" && guestDialog.approval ? "permission" : "question",
+					msg: payload.prompt,
+				});
 		const cleanup = () => {
 			if (timer !== undefined) clearTimeout(timer);
 			options?.signal?.removeEventListener("abort", cancel);
 			mirrorAbort.abort();
+			release?.();
 		};
 		this.#requests.set(id, {
 			interaction: { interactionId: id, kind: "userInput", anchorRowId: null, createdAt: Date.now(), payload },
@@ -506,14 +525,17 @@ export class NativeWebGuiQuestions {
 			);
 		});
 		try {
+			this.#holdBlockedStatus = bindings.holdBlockedStatus;
 			bindings.setToolUIContext(this.ui, true);
 		} catch (error) {
 			restoreExtensions?.();
 			restoreUsage();
+			this.#holdBlockedStatus = undefined;
 			throw error;
 		}
 		this.#restore = () => {
 			this.cancelPendingInteractions();
+			this.#holdBlockedStatus = undefined;
 			restoreExtensions?.();
 			restoreUsage();
 			bindings.restoreToolUIContext?.();
