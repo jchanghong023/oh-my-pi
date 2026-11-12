@@ -55,6 +55,7 @@ export function startScope(): void {
 		const sub = source.skillDesign.subscribe(sessionId => emit({ type: "skills", sessionId }));
 		disposers.push(() => sub.dispose());
 	}
+	if (source.issues) disposers.push(source.issues.subscribe(() => emit({ type: "issues" })));
 	const methods = new Map<string, { owner: object; method: (...args: unknown[]) => unknown }>();
 	const add = (owner: object | undefined, names: string[], prefix = "") => {
 		if (!owner) return;
@@ -73,6 +74,7 @@ export function startScope(): void {
 		"readRecentFreeChats",
 		"selectProject",
 	]);
+	add(source.issues, ["read", "create", "configure", "runNow", "confirm", "reopen"], "issues.");
 	add(source.progress, ["assignOwner", "updateSr"], "progress.");
 	add(source.planning, ["updateSr"], "planning.");
 	add(
@@ -118,6 +120,7 @@ export function startScope(): void {
 		"progressScheduler.",
 	);
 	const settingsWrites = new Set([
+		"issues.configure", "issues.runNow",
 		"projects.saveRepository",
 		"models.save",
 		"prompts.save",
@@ -128,6 +131,7 @@ export function startScope(): void {
 		"progressScheduler.advance",
 	]);
 	const mutationPaths = new Set([
+		"issues.create", "issues.configure", "issues.runNow", "issues.confirm", "issues.reopen",
 		"command",
 		"retryMaterial",
 		"retrySession",

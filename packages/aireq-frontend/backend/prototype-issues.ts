@@ -1,0 +1,113 @@
+import { ISSUE_TYPES, type AIReqIssue, type AIReqIssueInput, type AIReqIssueScope, type AIReqIssueServices, type AIReqIssueSnapshot } from "../packages/ui/src/aireq/issues.js";
+import { getPrototypeWorkflow } from "../packages/ui/src/aireq/mock/workflow.js";
+import { getEmployeeId, isEmployeeId } from "../packages/ui/src/aireq/identity.js";
+import { requirePrototypeSettingsWrite } from "../packages/ui/src/aireq/mock/backend.js";
+
+/** Shared backend memory, never a browser business store. No real Git/model calls. */
+export function createPrototypeIssues(): AIReqIssueServices {
+  const states = new Map<string, AIReqIssueSnapshot>();
+  const listeners = new Set<() => void>();
+  const emit = () => { for (const listener of listeners) listener(); };
+  const state = (scope: AIReqIssueScope) => {
+    const view = getPrototypeWorkflow({ projectId: scope.projectId });
+    if (!view.projects.some(project => project.id === scope.projectId) || !view.releases.some(release => release.id === scope.releaseId && release.projectId === scope.projectId)) throw new Error("请选择有效的项目与 Release。");
+    const key = JSON.stringify([scope.projectId, scope.releaseId]);
+    let value = states.get(key);
+    if (!value) {
+      const now = new Date().toISOString();
+      const samples: { title: string; type: AIReqIssue["type"]; status: AIReqIssue["status"]; percent: number; merged: boolean }[] = [
+        { title: "侧栏收起后内容区域未重新居中（样例）", type: "bug", status: "developing", percent: 65, merged: false },
+        { title: "整理重复的状态转换逻辑（样例）", type: "refactor", status: "merging", percent: 99, merged: false },
+        { title: "优化列表首次加载速度（样例）", type: "performance", status: "confirming", percent: 99, merged: true },
+      ];
+      value = { issues: samples.map<AIReqIssue>(sample => {
+        const id = `ISSUE-${String(++sequence).padStart(4, "0")}`;
+        return {
+          ...scope, ...sample, id, requestId: `sample:${id}`, priority: "normal", developerEmployeeId: "j00808874",
+          branch: `issue/${id.toLowerCase()}`, description: `原型样例：${sample.title}，用于展示独立 Issue 跟踪。`,
+          acceptance: "问题得到修复，相关改动合入默认分支后人工确认。",
+          report: sample.merged ? "样例合入记录：开发分支已合入默认分支，等待人工确认完成。未读取真实 Git。" : "样例代码证据与进度，仅用于展示。未读取真实分支或调用模型。",
+          remaining: sample.merged ? ["等待人工核对完成标准并确认"] : ["核对代码与完成标准", "等待开发分支合入默认分支"],
+          createdAt: now, updatedAt: now,
+        };
+      }), runs: [], enabled: false, intervalMinutes: 30 };
+      states.set(key, value);
+    }
+    return value;
+  };
+  const signedIn = () => { if (!isEmployeeId(getEmployeeId())) throw new Error("请先登录工号。"); };
+  const issueFor = (scope: AIReqIssueScope, id: string) => {
+    const issue = state(scope).issues.find(item => item.id === id);
+    if (!issue) throw new Error("Issue 不存在。");
+    return issue;
+  };
+  const analyze = (value: AIReqIssueSnapshot) => {
+    const startedAt = new Date().toISOString();
+    for (const issue of value.issues.filter(item => item.status !== "completed")) {
+      // 样例没有 Git 证据，不能随点击次数虚增进度或伪造合入事实。
+      issue.percent = Math.min(issue.percent, 99);
+      issue.report = "当前为后端内存样例，尚未读取真实开发分支、代码差异或合入记录。缺少代码证据，保持现有进度。";
+      issue.remaining = issue.merged ? ["样例分支已合入，等待人工确认"] : ["等待开发分支的代码证据", "等待合入默认分支后人工确认"];
+      issue.updatedAt = startedAt;
+      value.runs.unshift({ id: crypto.randomUUID(), issueId: issue.id, title: issue.title, startedAt, status: "succeeded", summary: issue.report });
+    }
+    value.runs = value.runs.slice(0, 200);
+    value.nextRunAt = value.enabled ? new Date(Date.now() + value.intervalMinutes * 60_000).toISOString() : undefined;
+    emit();
+  };
+  const timer = setInterval(() => {
+    for (const value of states.values()) if (value.enabled && value.nextRunAt && Date.parse(value.nextRunAt) <= Date.now()) analyze(value);
+  }, 5000);
+  let sequence = 0;
+  return {
+    async read(scope) { return structuredClone(state(scope)); },
+    async create(input: AIReqIssueInput) {
+      signedIn();
+      const value = state(input);
+      const duplicate = value.issues.find(issue => issue.requestId === input.requestId);
+      if (duplicate) return structuredClone(duplicate);
+      if (typeof input.requestId !== "string" || !input.requestId || typeof input.title !== "string" || !input.title.trim() || input.title.length > 200 || typeof input.description !== "string" || !input.description.trim() || typeof input.acceptance !== "string" || !input.acceptance.trim() || !Object.hasOwn(ISSUE_TYPES, input.type) || !["low", "normal", "high"].includes(input.priority) || !isEmployeeId(input.developerEmployeeId)) throw new Error("请填写标题、问题说明、完成标准及一位有效开发人员。");
+      if (!["j00808874", "j00808875", "j00808876", "j00808877"].includes(input.developerEmployeeId)) throw new Error("开发人员不在当前工号目录中。");
+      if (input.requirement) {
+        const view = getPrototypeWorkflow({ projectId: input.projectId });
+        const group = view.groups.find(item => item.id === input.requirement?.irId && item.projectId === input.projectId && item.releaseId === input.releaseId);
+        if (!group || (input.requirement.srId && !view.srs.some(sr => sr.id === input.requirement?.srId && sr.irId === group.id))) throw new Error("关联需求不属于当前项目与 Release。");
+      }
+      const id = `ISSUE-${String(++sequence).padStart(4, "0")}`;
+      const now = new Date().toISOString();
+      const issue: AIReqIssue = {
+        requestId: input.requestId, projectId: input.projectId, releaseId: input.releaseId,
+        title: input.title.trim(), type: input.type, priority: input.priority,
+        description: input.description.trim(), acceptance: input.acceptance.trim(),
+        developerEmployeeId: input.developerEmployeeId, requirement: input.requirement,
+        id, branch: `issue/${id.toLowerCase()}`, status: "pending", percent: 0,
+        remaining: ["等待开发与代码证据"], report: "尚未分析。", merged: false, createdAt: now, updatedAt: now,
+      };
+      value.issues.unshift(issue); emit(); return structuredClone(issue);
+    },
+    async configure(scope, enabled, intervalMinutes) {
+      requirePrototypeSettingsWrite();
+      if (typeof enabled !== "boolean" || !Number.isInteger(intervalMinutes) || intervalMinutes < 15 || intervalMinutes > 1440) throw new Error("分析间隔须为 15 至 1440 分钟。");
+      const value = state(scope);
+      value.enabled = enabled; value.intervalMinutes = intervalMinutes;
+      value.nextRunAt = enabled ? new Date(Date.now() + intervalMinutes * 60_000).toISOString() : undefined;
+      emit();
+    },
+    async runNow(scope) { requirePrototypeSettingsWrite(); analyze(state(scope)); },
+    async confirm(scope, id) {
+      signedIn();
+      const issue = issueFor(scope, id);
+      if (!issue.merged) throw new Error("尚未确认开发分支合入默认分支，不能完成 Issue。");
+      issue.status = "completed"; issue.percent = 100; issue.remaining = []; issue.confirmedBy = getEmployeeId(); issue.updatedAt = new Date().toISOString(); emit();
+    },
+    async reopen(scope, id, reason) {
+      signedIn();
+      const issue = issueFor(scope, id);
+      if (issue.status !== "completed" || typeof reason !== "string" || !reason.trim()) throw new Error("仅已完成的 Issue 可填写原因重新打开。");
+      issue.status = "developing"; issue.percent = Math.min(issue.percent, 99); issue.merged = false;
+      issue.confirmedBy = undefined; issue.remaining = [reason.trim()]; issue.updatedAt = new Date().toISOString(); emit();
+    },
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    dispose() { clearInterval(timer); listeners.clear(); },
+  };
+}

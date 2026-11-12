@@ -1,3 +1,4 @@
+import { createPrototypeIssues } from "./prototype-issues.js";
 import { proposalDeliveryCurrent } from "../packages/ui/src/aireq/domain.js";
 import {
 	PROTOTYPE_BACKEND,
@@ -83,6 +84,7 @@ import { createPrototypeProgressScheduler } from "../packages/ui/src/aireq/mock/
 /** One in-memory composition per backend scenario worker, never per browser. */
 export function createPrototypeDataSource(): AIReqDataSource {
 	const services = createPrototypeServices();
+	const issues = createPrototypeIssues();
 	const progressScheduler = createPrototypeProgressScheduler({
 		scaleDemo: process.env.OMP_AIREQ_BACKEND_SCENARIO === "analysis-scale",
 	});
@@ -272,9 +274,11 @@ export function createPrototypeDataSource(): AIReqDataSource {
 		dispose() {
 			clearInterval(mergeTimer);
 			progressScheduler.dispose();
+			issues.dispose();
 			for (const dispose of subscriptions) dispose();
 		},
 		progress: { assignOwner: assignPrototypeIrOwner, updateSr: updatePrototypeSrProgress },
+		issues,
 		progressScheduler,
 		employeeDirectory: {
 			kind: "sample",

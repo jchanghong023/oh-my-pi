@@ -1,3 +1,4 @@
+import type { AIReqIssueServices } from "./issues.js";
 import { createContext, createElement, useContext, type ReactNode } from "react";
 import type { IServiceAccessor } from "@zcode/services";
 import type { SkillSummary } from "@zcode/shared";
@@ -60,6 +61,7 @@ export interface AIReqEmployeeDirectory {
   entries: readonly { employeeId: string; name: string; department: string }[];
 }
 export interface AIReqDataSource {
+  issues?: AIReqIssueServices;
   employeeDirectory?: AIReqEmployeeDirectory;
   planning?: { updateSr(projectId: string, irId: string, srId: string, input: AIReqSrPlanningInput): Promise<void> };
   progressScheduler?: AIReqProgressScheduler;

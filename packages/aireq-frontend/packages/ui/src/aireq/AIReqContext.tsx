@@ -68,7 +68,7 @@ export function AIReqProvider({ children }: { children: ReactNode }) {
     const sameBackend = state?.aiReqBackendId === (source.backend?.id ?? source.clientId);
     const index = sameBackend && Number.isSafeInteger(state?.aiReqNavigationIndex) && state.aiReqNavigationIndex >= 0 ? state.aiReqNavigationIndex : 0;
     const extent = sameBackend && Number.isSafeInteger(state?.aiReqNavigationExtent) ? Math.max(index, state.aiReqNavigationExtent) : index;
-    const mainView: WorkspaceMainView = sameBackend && ["chat", "automations", "skillDesign", "requirementAnalysis"].includes(state?.aiReqMainView) ? state.aiReqMainView : "chat";
+    const mainView: WorkspaceMainView = sameBackend && ["chat", "automations", "skillDesign", "requirementAnalysis", "issueCreate", "issueAnalysis", "issueProgress"].includes(state?.aiReqMainView) ? state.aiReqMainView : "chat";
     return { index, extent, mainView };
   });
   const navigationRef = useRef(navigation);
@@ -138,7 +138,7 @@ export function AIReqProvider({ children }: { children: ReactNode }) {
     const restore = (event: PopStateEvent) => {
       if (event.state?.aiReqBackendId !== (source.backend?.id ?? source.clientId) || !event.state?.aiReqSelection) return;
       const index = Number.isSafeInteger(event.state.aiReqNavigationIndex) ? event.state.aiReqNavigationIndex : 0;
-      const mainView: WorkspaceMainView = ["chat", "automations", "skillDesign", "requirementAnalysis"].includes(event.state.aiReqMainView) ? event.state.aiReqMainView : "chat";
+      const mainView: WorkspaceMainView = ["chat", "automations", "skillDesign", "requirementAnalysis", "issueCreate", "issueAnalysis", "issueProgress"].includes(event.state.aiReqMainView) ? event.state.aiReqMainView : "chat";
       const next = { index, extent: navigationRef.current.extent, mainView };
       navigationRef.current = next;
       setNavigation(next);

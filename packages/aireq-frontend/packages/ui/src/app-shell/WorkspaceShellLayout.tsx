@@ -1,3 +1,4 @@
+import { AIReqIssuePages } from "@/aireq/AIReqIssuePages.js";
 import { WorkspaceSidebarToolbar } from "@/WorkspaceSidebarToolbar.js";
 import { AIReqFormalWorkspace } from "@/aireq/AIReqFormalProgress.js";
 import { proposalProgressIndex, proposalViewedIndex } from "@/aireq/domain.js";
@@ -1832,7 +1833,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   );
 
   const renderWorkspaceSidebar = (mobile?: { navigateToChat(): void }) => aireq ? (
-    <AIReqSidebar toolbar={sidebarNavigation} onNavigate={mobile?.navigateToChat ?? showChatMainView} onOpenAutomations={() => { handleOpenAutomations(); mobile?.navigateToChat(); }} automationsActive={workspaceMainView === "automations"} onOpenSkillDesign={() => { onWorkspaceMainViewChange("skillDesign"); mobile?.navigateToChat(); }} skillDesignActive={workspaceMainView === "skillDesign"} onOpenRequirementAnalysis={() => { onWorkspaceMainViewChange("requirementAnalysis"); mobile?.navigateToChat(); }} requirementAnalysisActive={workspaceMainView === "requirementAnalysis"} />
+    <AIReqSidebar onOpenIssue={page => { onWorkspaceMainViewChange(page); mobile?.navigateToChat(); }} issuePage={workspaceMainView.startsWith("issue") ? workspaceMainView : undefined} toolbar={sidebarNavigation} onNavigate={mobile?.navigateToChat ?? showChatMainView} onOpenAutomations={() => { handleOpenAutomations(); mobile?.navigateToChat(); }} automationsActive={workspaceMainView === "automations"} onOpenSkillDesign={() => { onWorkspaceMainViewChange("skillDesign"); mobile?.navigateToChat(); }} skillDesignActive={workspaceMainView === "skillDesign"} onOpenRequirementAnalysis={() => { onWorkspaceMainViewChange("requirementAnalysis"); mobile?.navigateToChat(); }} requirementAnalysisActive={workspaceMainView === "requirementAnalysis"} />
   ) : renderNativeProjectSidebar(mobile);
 
   // Reuse the responsive phone layout for browsers connected directly to local OMP.
@@ -1905,7 +1906,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
         }
         chatOverlay={workspaceMainView === "chat" ? renderChatFindDialog() : undefined}
         chatContent={
-          aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : workspaceMainView === "automations" ? (
+          aireq && (workspaceMainView === "issueCreate" || workspaceMainView === "issueAnalysis" || workspaceMainView === "issueProgress") ? <AIReqIssuePages page={workspaceMainView} /> : aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : workspaceMainView === "automations" ? (
             <main
               id={AUTOMATIONS_TOAST_ANCHOR_ID}
               className="flex h-full min-h-0 flex-1 flex-col bg-background"
@@ -2126,7 +2127,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
 
           </div>
         ) : null}
-          {aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : aiReqFormalMode && workspaceMainView === "chat" ? <AIReqFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : <ResizablePanelGroup
+          {aireq && (workspaceMainView === "issueCreate" || workspaceMainView === "issueAnalysis" || workspaceMainView === "issueProgress") ? <AIReqIssuePages page={workspaceMainView} /> : aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : aiReqFormalMode && workspaceMainView === "chat" ? <AIReqFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : <ResizablePanelGroup
             layoutId={aireq ? "aireq-workspace-body-layout-v2" : "workspace-body-layout"}
             panelIds={WORKSPACE_BODY_PANEL_IDS}
             className={cn(

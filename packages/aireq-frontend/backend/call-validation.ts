@@ -3,6 +3,12 @@ import type { AIReqRemoteCall, AIReqRemotePath } from "./contract.js";
 type ArgumentKind = "string" | "number" | "boolean" | "object" | "strings" | "optionalString";
 /** Shallow wire-shape checks only; domain rules stay with the owning operation. */
 const argumentsByPath = {
+  "issues.read": ["object"],
+  "issues.create": ["object"],
+  "issues.configure": ["object", "boolean", "number"],
+  "issues.runNow": ["object"],
+  "issues.confirm": ["object", "string"],
+  "issues.reopen": ["object", "string", "string"],
 	readWorkflow: ["object"],
 	command: ["object", "object", "number"],
 	retryMaterial: ["string", "object"],
