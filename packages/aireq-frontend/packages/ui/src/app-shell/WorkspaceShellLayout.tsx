@@ -1839,6 +1839,57 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
     />
   );
 
+  // 自动化在 AIReq 中独占内容区，避免隐藏的会话侧栏仍占用宽度；不改写需求页的布局偏好。
+  const automationsContent = (
+    <main
+      id={AUTOMATIONS_TOAST_ANCHOR_ID}
+      className="flex h-full min-h-0 flex-1 flex-col bg-background"
+    >
+      <AutomationsMainBreadcrumbFrame
+        sectionLabel={intl.formatMessage({
+          id: "settings.automations.title",
+        })}
+        ariaLabel={intl.formatMessage({
+          id: "automations.breadcrumbLabel",
+        })}
+      >
+        <div
+          // 修复原因：不同 Automations tab 的内容高度不同，滚动条出现/消失会改变
+          // mx-auto 内容列的可用宽度，造成整页左右弹动；预留稳定槽位保持居中基准不变。
+          className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+        >
+          <ScopedErrorBoundary
+            scope="automations-main"
+            resetKeys={workspaceOnlyResetKeys}
+            variant="panel"
+            className="min-h-full"
+          >
+            {/* AIReq 子页已使用原生 Settings 内容列；外层只保留顶部留白，避免重复居中和 padding。 */}
+            <div className={aireq ? "w-full py-4 md:py-6" : "mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6"}>
+              {aireq ? <AIReqAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
+                <AutomationsSection
+                  workspacePath={workspaceAbsPath}
+                  workspaceIdentity={workspaceIdentity}
+                  onCreateViaChat={handleCreateAutomationInChat}
+                  onNavigateToLaunchedRun={handleNavigateToLaunchedRun}
+                  onOpenWorkflowRun={handleOpenSavedWorkflowRun}
+                  onOpenWorkflowArtifact={handleOpenSavedWorkflowArtifact}
+                  openAutomationId={openAutomationId}
+                  openAutomationTab={openAutomationTab}
+                  onOpenAutomationConsumed={onOpenAutomationConsumed}
+                  openWorkflow={openWorkflow}
+                  onOpenWorkflowConsumed={onOpenWorkflowConsumed}
+                  onOpenSession={({ sessionId, workspacePath, workspaceIdentity }) =>
+                    handleSelectTaskInChat(workspacePath, sessionId, workspaceIdentity)
+                  }
+                />
+              )}
+            </div>
+          </ScopedErrorBoundary>
+        </div>
+      </AutomationsMainBreadcrumbFrame>
+    </main>
+  );
   const renderWorkspaceSidebar = (mobile?: { navigateToChat(): void }) => aireq ? (
     <AIReqSidebar onOpenIssue={page => { onWorkspaceMainViewChange(page); mobile?.navigateToChat(); }} issuePage={workspaceMainView.startsWith("issue") ? workspaceMainView : undefined} toolbar={sidebarNavigation} onNavigate={mobile?.navigateToChat ?? showChatMainView} onOpenAutomations={() => { handleOpenAutomations(); mobile?.navigateToChat(); }} automationsActive={workspaceMainView === "automations"} onOpenSkillDesign={() => { onWorkspaceMainViewChange("skillDesign"); mobile?.navigateToChat(); }} skillDesignActive={workspaceMainView === "skillDesign"} onOpenRequirementAnalysis={() => { onWorkspaceMainViewChange("requirementAnalysis"); mobile?.navigateToChat(); }} requirementAnalysisActive={workspaceMainView === "requirementAnalysis"} />
   ) : renderNativeProjectSidebar(mobile);
@@ -1913,56 +1964,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
         }
         chatOverlay={workspaceMainView === "chat" ? renderChatFindDialog() : undefined}
         chatContent={
-          aireq && (workspaceMainView === "issueCreate" || workspaceMainView === "issueAnalysis" || workspaceMainView === "issueProgress") ? <AIReqIssuePages page={workspaceMainView} /> : aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : workspaceMainView === "automations" ? (
-            <main
-              id={AUTOMATIONS_TOAST_ANCHOR_ID}
-              className="flex h-full min-h-0 flex-1 flex-col bg-background"
-            >
-              <AutomationsMainBreadcrumbFrame
-                sectionLabel={intl.formatMessage({
-                  id: "settings.automations.title",
-                })}
-                ariaLabel={intl.formatMessage({
-                  id: "automations.breadcrumbLabel",
-                })}
-              >
-                <div
-                  // 修复原因：不同 Automations tab 的内容高度不同，滚动条出现/消失会改变
-                  // mx-auto 内容列的可用宽度，造成整页左右弹动；预留稳定槽位保持居中基准不变。
-                  className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
-                >
-                  <ScopedErrorBoundary
-                    scope="automations-main"
-                    resetKeys={workspaceOnlyResetKeys}
-                    variant="panel"
-                    className="min-h-full"
-                  >
-                    {/* AIReq 子页已使用原生 Settings 内容列；外层只保留顶部留白，避免重复居中和 padding。 */}
-                    <div className={aireq ? "w-full py-4 md:py-6" : "mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6"}>
-                      {aireq ? <AIReqAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
-                        <AutomationsSection
-                          workspacePath={workspaceAbsPath}
-                          workspaceIdentity={workspaceIdentity}
-                          onCreateViaChat={handleCreateAutomationInChat}
-                          onNavigateToLaunchedRun={handleNavigateToLaunchedRun}
-                          onOpenWorkflowRun={handleOpenSavedWorkflowRun}
-                          onOpenWorkflowArtifact={handleOpenSavedWorkflowArtifact}
-                          openAutomationId={openAutomationId}
-                          openAutomationTab={openAutomationTab}
-                          onOpenAutomationConsumed={onOpenAutomationConsumed}
-                          openWorkflow={openWorkflow}
-                          onOpenWorkflowConsumed={onOpenWorkflowConsumed}
-                          onOpenSession={({ sessionId, workspacePath, workspaceIdentity }) =>
-                            handleSelectTaskInChat(workspacePath, sessionId, workspaceIdentity)
-                          }
-                        />
-                      )}
-                    </div>
-                  </ScopedErrorBoundary>
-                </div>
-              </AutomationsMainBreadcrumbFrame>
-            </main>
-          ) : aiReqFormalMode ? <AIReqFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : aiReqProposalSr ? <AIReqProposalSrReadOnlyState /> : aiReqEmpty ? <AIReqEmptyState /> : (
+          aireq && (workspaceMainView === "issueCreate" || workspaceMainView === "issueAnalysis" || workspaceMainView === "issueProgress") ? <AIReqIssuePages page={workspaceMainView} /> : aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : workspaceMainView === "automations" ? automationsContent : aiReqFormalMode ? <AIReqFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : aiReqProposalSr ? <AIReqProposalSrReadOnlyState /> : aiReqEmpty ? <AIReqEmptyState /> : (
             <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
               {/* Bugfix: 手机远控聊天页中间层必须继续提供 flex 高度链。
                 只有 h-full 的普通 block 会让 ChatView 的 flex-1 失效，草稿空态贴顶且内部滚动被外层裁掉。 */}
@@ -2134,7 +2136,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
 
           </div>
         ) : null}
-          {aireq && (workspaceMainView === "issueCreate" || workspaceMainView === "issueAnalysis" || workspaceMainView === "issueProgress") ? <AIReqIssuePages page={workspaceMainView} /> : aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : aiReqFormalMode && workspaceMainView === "chat" ? <AIReqFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : <ResizablePanelGroup
+          {aireq && (workspaceMainView === "issueCreate" || workspaceMainView === "issueAnalysis" || workspaceMainView === "issueProgress") ? <AIReqIssuePages page={workspaceMainView} /> : aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : aireq && workspaceMainView === "automations" ? automationsContent : aiReqFormalMode && workspaceMainView === "chat" ? <AIReqFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : <ResizablePanelGroup
             layoutId={aireq ? "aireq-workspace-body-layout-v2" : "workspace-body-layout"}
             panelIds={WORKSPACE_BODY_PANEL_IDS}
             className={cn(
@@ -2227,64 +2229,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                       ) : null}
                       {aireq && !aiReqFormalMode && !!aireq.selection.irId && !aireq.selection.freeSessionId && workspaceMainView === "chat" && <AIReqStageHeader />}
                       <div className="min-h-0 flex-1 overflow-hidden">
-                        {workspaceMainView === "automations" ? (
-                          <main
-                            id={AUTOMATIONS_TOAST_ANCHOR_ID}
-                            className="flex h-full min-h-0 flex-1 flex-col bg-background"
-                          >
-                            <AutomationsMainBreadcrumbFrame
-                              sectionLabel={intl.formatMessage({
-                                id: "settings.automations.title",
-                              })}
-                              ariaLabel={intl.formatMessage({
-                                id: "automations.breadcrumbLabel",
-                              })}
-                            >
-                              <div
-                                // 修复原因：不同 Automations tab 的内容高度不同，滚动条出现/消失会改变
-                                // mx-auto 内容列的可用宽度，造成整页左右弹动；预留稳定槽位保持居中基准不变。
-                                className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
-                              >
-                                <ScopedErrorBoundary
-                                  scope="automations-main"
-                                  resetKeys={workspaceOnlyResetKeys}
-                                  variant="panel"
-                                  className="min-h-full"
-                                >
-                                  {/* AIReq 子页已使用原生 Settings 内容列；外层只保留顶部留白，避免重复居中和 padding。 */}
-                                  <div className={aireq ? "w-full py-4 md:py-6" : "mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6"}>
-                                    {aireq ? <AIReqAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
-                                      <AutomationsSection
-                                        workspacePath={workspaceAbsPath}
-                                        workspaceIdentity={workspaceIdentity}
-                                        onCreateViaChat={handleCreateAutomationInChat}
-                                        onNavigateToLaunchedRun={handleNavigateToLaunchedRun}
-                                        onOpenWorkflowRun={handleOpenSavedWorkflowRun}
-                                        onOpenWorkflowArtifact={handleOpenSavedWorkflowArtifact}
-                                        openAutomationId={openAutomationId}
-                                        openAutomationTab={openAutomationTab}
-                                        onOpenAutomationConsumed={onOpenAutomationConsumed}
-                                        openWorkflow={openWorkflow}
-                                        onOpenWorkflowConsumed={onOpenWorkflowConsumed}
-                                        onOpenSession={({
-                                          sessionId,
-                                          workspacePath,
-                                          workspaceIdentity,
-                                        }) =>
-                                          handleSelectTaskInChat(
-                                            workspacePath,
-                                            sessionId,
-                                            workspaceIdentity,
-                                          )
-                                        }
-                                      />
-                                    )}
-                                  </div>
-                                </ScopedErrorBoundary>
-                              </div>
-                            </AutomationsMainBreadcrumbFrame>
-                          </main>
-                        ) : aiReqFormalMode ? <AIReqFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : aiReqProposalSr ? <AIReqProposalSrReadOnlyState /> : aiReqEmpty ? <AIReqEmptyState /> : (
+                        {workspaceMainView === "automations" ? automationsContent : aiReqProposalSr ? <AIReqProposalSrReadOnlyState /> : aiReqEmpty ? <AIReqEmptyState /> : (
                           <main className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
                             {renderChatFindDialog()}
                             <ScopedErrorBoundary

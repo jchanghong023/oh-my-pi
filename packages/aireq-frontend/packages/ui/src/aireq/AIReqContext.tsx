@@ -62,16 +62,12 @@ function scopeProposalDraft(value: AIReqSelection, webId: string): AIReqSelectio
 /** One UI state controller; the entry point owns data and execution authority. */
 export function AIReqProvider({ children }: { children: ReactNode }) {
   const source = useAIReqDataSource();
-  const [selection, setSelection] = useState<AIReqSelection>(() => scopeProposalDraft(window.history.state?.aiReqBackendId === (source.backend?.id ?? source.clientId) && window.history.state?.aiReqSelection ? window.history.state.aiReqSelection as AIReqSelection : { ...source.initialSelection }, source.backend?.id ?? source.clientId));
+  // 每次进入工作台都从需求分析开始，不恢复上一位用户或上次登录的页面／需求会话。
+  const [selection, setSelection] = useState<AIReqSelection>(() => ({ projectId: source.initialSelection.projectId }));
   const selectionRef = useRef(selection);
-  const [navigation, setNavigation] = useState(() => {
-    const state = window.history.state;
-    const sameBackend = state?.aiReqBackendId === (source.backend?.id ?? source.clientId);
-    const index = sameBackend && Number.isSafeInteger(state?.aiReqNavigationIndex) && state.aiReqNavigationIndex >= 0 ? state.aiReqNavigationIndex : 0;
-    const extent = sameBackend && Number.isSafeInteger(state?.aiReqNavigationExtent) ? Math.max(index, state.aiReqNavigationExtent) : index;
-    const mainView: WorkspaceMainView = sameBackend && ["chat", "automations", "skillDesign", "requirementAnalysis", "issueCreate", "issueAnalysis", "issueProgress"].includes(state?.aiReqMainView) ? state.aiReqMainView : "chat";
-    return { index, extent, mainView };
-  });
+  const [navigation, setNavigation] = useState<{ index: number; extent: number; mainView: WorkspaceMainView }>(() => ({
+    index: 0, extent: 0, mainView: "requirementAnalysis",
+  }));
   const navigationRef = useRef(navigation);
   const recordNavigation = useCallback((target: AIReqSelection, mainView: WorkspaceMainView) => {
     const previous = navigationRef.current;
