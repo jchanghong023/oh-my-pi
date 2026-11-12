@@ -984,7 +984,7 @@ AIReq MUST 提供模型设置及参照 WebGUI 风格的个性化页面，角色�
 
 ### Requirement: AIReq 自有多项目设置与浏览器选择
 
-AIReq MUST 在自有前端提供共享项目与 Release 设置，项目只登记名称、Git 远程仓库及默认分支，Release 登记所属项目和版本名称，继承项目仓库。MUST NOT 要求共享路径、个人开发目录、目录浏览或目录校验。唯一共享 Web 经固定 18321 端口的 `omp aireq_db` 服务访问业务数据库，不直接打开 NFS SQLite；平台按需自行拉取并管理内部工作副本，不改变原 WebGUI。
+AIReq MUST 在自有前端提供共享项目与 Release 设置，项目只登记名称、Git 远程仓库及默认分支，Release 登记所属项目和版本名称，继承项目仓库。MUST NOT 要求共享路径、个人开发目录、目录浏览或目录校验。唯一共享 `omp aireq_web` 由自身后端进程直接打开和读写 `/tmpdata/DFT_LAB/omp/omp_aireq_sqlite.db`，无需独立数据库服务或数据库端口，浏览器仍经现有 Web 接口访问业务数据；平台按需自行拉取并管理内部工作副本，不改变原 WebGUI。
 
 #### Scenario: 共享登记与同时查看
 - **WHEN** 保存项目或 Release 配置

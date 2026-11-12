@@ -73,7 +73,7 @@ export function AIReqProjectSettings() {
       ))}
       {!projects.length && <p className="text-ui-base text-foreground-subtle">还没有项目。配置 Git 仓库与默认分支后，即可创建 Release。</p>}
       <p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
-      {source.provenance.kind === "sample" && <p className="text-ui-sm leading-6 text-foreground-subtle">原型演示：项目、Git 仓库配置和 Release 保存于后端内存，刷新保留、后端重启恢复。只检查输入格式，未验证仓库可访问或分支存在，不连接真实 Git、数据库或文件系统。</p>}
+      {source.provenance.kind === "sample" && <p className="text-ui-sm leading-6 text-foreground-subtle">正式部署由 omp aireq_web 后端直接访问 SQLite，无需独立数据库服务。当前原型的项目、Git 仓库配置和 Release 仍保存于后端内存，刷新保留、后端重启恢复；只检查输入格式，不连接真实 Git、SQLite 或文件系统。</p>}
       <Dialog open={projectOpen} onOpenChange={open => { if (!saving) setProjectOpen(open); }}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader><DialogTitle>{projectId ? "修改仓库配置" : "添加项目"}</DialogTitle><DialogDescription>配置远程 Git 仓库与默认分支，Release 沿用所属项目配置。保存仅记录配置，不执行 Git 操作。</DialogDescription></DialogHeader>

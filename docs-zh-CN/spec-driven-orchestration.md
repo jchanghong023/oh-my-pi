@@ -139,7 +139,7 @@ Git URL 必须含主机；`https://`、`https:///` 不可保存，合法 URL 与
 
 | 项目 | 约定 |
 | --- | --- |
-| 业务数据 | `omp aireq_db` 固定端口 18321，统一管理 `/tmpdata/DFT_LAB/omp/omp_aireq_sqlite.db`；Web 经服务访问，不各自直接打开 NFS SQLite |
+| 业务数据 | 唯一共享 `omp aireq_web` 后端直接打开和读写 `/tmpdata/DFT_LAB/omp/omp_aireq_sqlite.db`；无需独立数据库服务或数据库端口，浏览器经现有 Web 接口访问 |
 | Web | 只启动一个共享 `omp aireq_web`，所有人访问同一地址；`--port <端口>` 指定端口，省略时选可用端口并输出地址，不按访问者启动个人 Web |
 | Token | 所有访问者使用启动者的 OMP Token／profile；切换浏览器工号不切换宿主或凭据 |
 | 工号 | 小写 `a`–`z` 字母加 8 位数字，保留前导零；仅格式检查，不是完整认证 |
