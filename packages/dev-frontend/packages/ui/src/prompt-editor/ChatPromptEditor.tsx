@@ -7,7 +7,7 @@ import type {
   MutableRefObject,
   ReactNode,
 } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { TID_CHAT_SEND_BUTTON } from "@zcode/shared/test-ids";
 import { ArrowUpIcon, Hand, XIcon } from "lucide-react";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
@@ -39,6 +39,12 @@ function runAfterFrame(callback: () => void) {
   callback();
 }
 
+/** 仅折叠与完整草稿逐字匹配的说明；修改或追加文字后自动恢复原编辑器。 */
+export interface ComposerInputPreview {
+  text: string;
+  summary: string;
+}
+
 export function ChatPromptEditor({
   workspacePath,
   workspaceIdentity,
@@ -47,6 +53,8 @@ export function ChatPromptEditor({
   initialValue,
   syncInitialValueOnMount = true,
   placeholder,
+  inputAriaLabel,
+  inputPreview,
   disabled = false,
   disabledReason,
   submitting = false,
@@ -104,6 +112,8 @@ export function ChatPromptEditor({
   initialValue?: string;
   syncInitialValueOnMount?: boolean;
   placeholder?: string;
+  inputAriaLabel?: string;
+  inputPreview?: ComposerInputPreview;
   disabled?: boolean;
   disabledReason?: string;
   submitting?: boolean;
@@ -178,6 +188,15 @@ export function ChatPromptEditor({
   const resolvedTriggerPanelContainer = triggerPanelContainer ?? internalTriggerPanelContainer;
   const latestTextRef = useRef(initialValue ?? "");
   const hasSyncedInitialValueRef = useRef(false);
+  const inputRegionId = useId();
+  const [previewMatches, setPreviewMatches] = useState(false);
+  const [previewExpanded, setPreviewExpanded] = useState(false);
+  useEffect(() => {
+    setPreviewMatches(Boolean(inputPreview && latestTextRef.current.trim() === inputPreview.text.trim()));
+    setPreviewExpanded(false);
+  }, [inputPreview]);
+  const showInputPreview = Boolean(inputPreview && previewMatches);
+
   const {
     externalFileDragging,
     internalDragging,
@@ -223,9 +242,10 @@ export function ChatPromptEditor({
   const handleTextChange = useCallback(
     (value: string) => {
       latestTextRef.current = value;
+      setPreviewMatches(Boolean(inputPreview && value.trim() === inputPreview.text.trim()));
       onChange?.(value);
     },
-    [onChange],
+    [inputPreview, onChange],
   );
 
   const handleSubmit: FormEventHandler<HTMLFormElement> = useCallback(
@@ -354,8 +374,20 @@ export function ChatPromptEditor({
   const editorNode = (
     // 单行时输入区至少占一半宽度，上下留白与 h-7 控件对齐；两行布局下 contents 不改变原有排版。
     <div className={isInline ? "min-w-1/2 flex-1 py-1 [&_[contenteditable]]:min-h-5" : "contents"}>
+      {showInputPreview && (
+        <div className="space-y-2" data-testid="composer-input-preview">
+          {!previewExpanded && <p className="line-clamp-2 text-ui-base text-foreground">{inputPreview?.summary}</p>}
+          <Button type="button" variant="ghost" size="sm" className="px-0 text-foreground-subtle"
+            aria-expanded={previewExpanded} aria-controls={inputRegionId}
+            onClick={() => setPreviewExpanded(open => !open)}>
+            {previewExpanded ? "收起完整内容" : "查看并编辑完整待发送内容"}
+          </Button>
+        </div>
+      )}
+      <div id={inputRegionId} className={showInputPreview && !previewExpanded ? "hidden" : "contents"}>
       <LexicalChatInput
         placeholder={placeholder}
+        ariaLabel={inputAriaLabel}
         disabled={disabled}
         submitDisabled={submitDisabled}
         allowSubmitWhenEmpty={allowSubmitWhenEmpty}
@@ -383,6 +415,7 @@ export function ChatPromptEditor({
         appSlashCommands={appSlashCommands}
         enableMentionPanel={enableMentionPanel}
       />
+      </div>
     </div>
   );
   const actionMenuNode = hasActionMenu ? (

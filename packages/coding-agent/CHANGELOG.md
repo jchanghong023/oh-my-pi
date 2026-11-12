@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Dev Skill design now offers collapsible briefs and draft summaries, clearer steps, and cleaner file previews with separate metadata.
 - Dev and WebGUI frontend resources are generated during preparation and packaging, kept out of Git, and included in offline release packages.
 - Integrated upstream v18.19.0 while retaining structured questions, blocked Goal tasks, and fork deployment defaults.
 - File writes no longer capture unused before-and-after snapshots for the retired compact display.

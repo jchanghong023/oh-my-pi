@@ -1426,6 +1426,7 @@ function EditorApiPlugin({
 }
 
 interface LexicalChatInputProps {
+  ariaLabel?: string;
   placeholder?: string;
   disabled?: boolean;
   submitDisabled?: boolean;
@@ -1463,6 +1464,7 @@ const EDITOR_THEME = {
 };
 
 export function LexicalChatInput({
+  ariaLabel,
   placeholder,
   disabled = false,
   submitDisabled = false,
@@ -1588,6 +1590,7 @@ export function LexicalChatInput({
         avoidIosInputFocusZoom,
       })} text-foreground outline-none`}
       data-testid={inputTestId}
+      aria-label={ariaLabel}
       onFocus={onFocus}
       {...contentEditableProps}
     />

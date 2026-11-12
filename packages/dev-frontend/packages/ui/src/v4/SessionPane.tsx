@@ -1,3 +1,4 @@
+import type { ComposerInputPreview } from "@/prompt-editor/ChatPromptEditor.js";
 import { useDev } from "@/dev/DevContext.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useSessionRuntimeRestart } from "@/app-shell/useWorkspaceSessionReload.js";
@@ -249,6 +250,10 @@ export interface SessionPaneProps {
   embedded?: boolean;
   /** 仅覆盖输入框展示文案，不写入草稿或发送正文。 */
   composerPlaceholder?: string;
+  composerAriaLabel?: string;
+  composerInputPreview?: ComposerInputPreview;
+  /** 功能页的空会话引导，不作为消息或发送内容。 */
+  conversationEmptyState?: ReactNode;
   /** 原型设计页向现有聊天输入框投递未发送草稿。 */
   composerInsertRequest?: ExternalTextInsertRequest | null;
   onComposerInsertApplied?: (requestId: number) => void;
@@ -480,6 +485,9 @@ export function useSessionPaneLease(sessionId: string | null, layer: object) {
 export function SessionPane({
   embedded = false,
   composerPlaceholder,
+  composerAriaLabel,
+  composerInputPreview,
+  conversationEmptyState,
   paneId,
   sessionId,
   rootSessionId,
@@ -4097,6 +4105,8 @@ export function SessionPane({
       // 完整视图浮窗默认是一条输入框：草稿项目栏不进入浮窗，切到对话 tab 再选择项目。
       contextHeader={isDraft && !isFloatingPresentation ? draftComposerHeader : undefined}
       placeholder={composerPlaceholder}
+      inputAriaLabel={composerAriaLabel}
+      inputPreview={composerInputPreview}
       centered={isDraft}
       layout={isFloatingPresentation ? "inline" : "stacked"}
       workingDurationMs={
@@ -4451,11 +4461,11 @@ export function SessionPane({
                     <div className="p-6 text-center text-ui-base text-foreground-subtle">
                       {intl.formatMessage({ id: "remote.conversation.placeholder" })}
                     </div>
-                  ) : isDraft ? (
+                  ) : conversationEmptyState ?? (isDraft ? (
                     <div data-testid={TID_CHAT_EMPTY} className="w-full">
                       <ConversationDraftEmptyState compactForRemoteControl={compactForRemoteControl} />
                     </div>
-                  ) : null
+                  ) : null)
                 }
                 // 浮窗形态只露出底部输入区，空会话也必须贴底，不能居中。
                 centerEmptyStateWithDock={isDraft && !isFloatingPresentation}

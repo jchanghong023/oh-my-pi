@@ -29,7 +29,6 @@ import proposalDiscussion from "./proposal-discussion.md?raw";
 import proposalDiscussionPrompt from "./prompts/proposal-discussion.md?raw";
 import irAcceptanceRequest from "./ir-acceptance-request.md?raw";
 import irAcceptanceWelcome from "./ir-acceptance-welcome.md?raw";
-import skillDesignWelcome from "./skill-design-welcome.md?raw";
 import independentReviewPrompt from "./requirements-review-independent-request.md?raw";
 import requirementsReviewPrompt from "./requirements-review-request.md?raw";
 import requirementsReviewDialogue from "./requirements-review-dialogue.md?raw";
@@ -181,9 +180,9 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
       snapshot.rows.window = []; snapshot.rows.totalCount = 0; snapshot.rows.firstRowId = null;
     }
     if (sessionId.startsWith("prototype-skill-design:")) {
+      // 新设计会话由前端空态引导，不伪造用户提问或 Agent 回复。
       snapshot.rows.window = [];
-      appendRows(snapshot.rows.window, sessionId, "我想设计一个可复用的项目技能。", skillDesignWelcome, initialTime);
-      snapshot.rows.totalCount = snapshot.rows.window.length; snapshot.rows.firstRowId = 1;
+      snapshot.rows.totalCount = 0; snapshot.rows.firstRowId = null;
     }
     const roleBinding = sessionId.startsWith("prototype-skill-design:") ? prototypeSkillDesignBinding(sessionId) : ref?.modelConfig;
     if (roleBinding) {
