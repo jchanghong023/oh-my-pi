@@ -9,6 +9,27 @@ export type PrototypeProposalDeliveryAction = Extract<AIReqAction, { type: "conf
 export function isPrototypeProposalDeliveryAction(action: AIReqAction): action is PrototypeProposalDeliveryAction {
  return ["confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markRequirementsMerged"].includes(action.type);
 }
+
+let mrNumber = 100;
+/** Backend memory only. The URL and MR result are samples, never a Git API call. */
+export function ensurePrototypeProposalMr(group: AIReqRequirementGroup): void {
+ const delivery = group.proposalDelivery;
+ if (!delivery?.pushedAt) throw new Error("推送当前材料后才能创建 MR。");
+ if (group.requirementsPr?.number && delivery.prCandidate === delivery.candidate) return;
+ const handoff = readPrototypeProposalPrHandoff(group);
+ const number = ++mrNumber;
+ group.requirementsPr = {
+  number, url: `https://git.example.invalid/mr/${number}`, status: "opened",
+  title: `[需求] ${group.title}`,
+  body: ["## 需求与方案", `IR：${group.id} · ${group.title}`, `候选：${delivery.candidate}`,
+   `来源分支：${handoff.branch}`, `目标分支：${handoff.targetBranch}`, "", "## 文档清单",
+   ...delivery.files.map(file => `- ${file.path}`), "",
+   "请人工评审并合并 MR；后台定时核验实际合入与材料完整性，满足后自动转正。"].join("\n"),
+  sourceBranch: handoff.branch, targetBranch: handoff.targetBranch,
+  recordedAt: delivery.pushedAt, platformVerified: false,
+ };
+ delivery.prCandidate = delivery.candidate;
+}
 export function validatePrototypeProposalDeliveryAction(view: AIReqWorkflowView, group: AIReqRequirementGroup, action: PrototypeProposalDeliveryAction): void {
  if (!prototypeProposalDiscussionAllowed()) throw new Error("当前 Web 仅支持只读查看提案，请使用团队 Web 进行需求确认与入库操作。");
  const blocker = requirementsReviewBlocker(group);
@@ -26,15 +47,11 @@ export function validatePrototypeProposalDeliveryAction(view: AIReqWorkflowView,
  const delivery = group.proposalDelivery;
  if (!delivery || !proposalDeliveryCurrent(group) || action.candidate !== delivery.candidate) throw new Error("提案版本已变化，旧确认、推送与 PR 已失效，请重新确认当前版本。");
  if (action.type === "publishProposal") {
-  if (group.status !== "solution-ready") throw new Error("请在登记人工 PR 前演示提交与推送。");
+  if (!["solution-ready", "requirements-pr"].includes(group.status)) throw new Error("请先确认当前材料，再提交推送并自动创建 MR。");
   return;
  }
- if (delivery.pushedCandidate !== action.candidate) throw new Error("请先演示提交并推送当前已确认候选，再登记人工 PR。");
- if (action.type === "markRequirementsPrSubmitted") {
-  if (group.status !== "requirements-pr") throw new Error("请先推送提案分支，再记录人工创建的 PR 地址。");
-  const url = new URL(action.url);
-  if (!["https:", "http:"].includes(url.protocol)) throw new Error("请输入有效 PR 地址。");
-  return;
- }
- if (group.status !== "requirements-pr" || !group.requirementsPr || delivery.prCandidate !== action.candidate || !action.defaultBranchFilesConfirmed) throw new Error("人工 PR 登记后，须按当前候选和完整文件版本演示核验合并，才能正式入库。");
+ if (action.type === "markRequirementsPrSubmitted") throw new Error("MR 由平台自动创建并记录，不接受手工登记地址。");
+ if (delivery.pushedCandidate !== action.candidate) throw new Error("请先提交推送并自动创建当前候选的 MR。");
+
+ if (group.status !== "requirements-pr" || !group.requirementsPr || delivery.prCandidate !== action.candidate || !action.defaultBranchFilesConfirmed) throw new Error("须按当前候选、MR 合入结果和完整文件版本定时核验，才能正式入库。");
 }

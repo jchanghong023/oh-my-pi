@@ -95,7 +95,7 @@ export function deriveStageView(sr: AIReqSystemRequirement, selection: AIReqSele
  return { stage, round, isCurrent: sr.status === "developing" && stage === sr.stage && round === sr.round };
 }
 
-export const PROPOSAL_STATUS_LABELS = { draft: "草稿", "solution-ready": "方案完成", "requirements-pr": "PR 待合并", formal: "正式提案", frozen: "开发已冻结", deleted: "已删除", reviewing: "评审中", confirmed: "已确认" };
+export const PROPOSAL_STATUS_LABELS = { draft: "草稿", "solution-ready": "方案完成", "requirements-pr": "MR 待合并", formal: "正式提案", frozen: "开发已冻结", deleted: "已删除", reviewing: "评审中", confirmed: "已确认" };
 export const IR_ACCEPTANCE_LABELS = { reviewing: "验收中", issues: "待修复", passed: "验收通过", "pr-ready": "最终 PR 待创建", "pr-submitted": "最终 PR 待合并", completed: "已完成" };
 export const SR_DELIVERY_LABELS = { prepared: "待合并前验证", verified: "合并前验证通过", "implementation-issue": "验证未通过，待修复", "git-conflict": "Git 冲突，等待人工", "requirement-conflict": "需求冲突，等待人工" };
 export const MATERIAL_KIND_LABELS = { ir: "IR 原始需求", sr: "SR 系统需求", solution: "IR 方案设计", plan: "开发计划", completion: "完成报告", ut: "UT 报告", st: "ST 报告", delivery: "交付说明", attachment: "附件", "ir-acceptance-report": "IR 验收报告", "ir-final-pr": "最终 PR", "sr-delivery-package": "SR 交付清单" };
@@ -264,7 +264,7 @@ export function conversationReadOnlyReason(view: AIReqWorkflowView | undefined, 
   if (access?.proposalDiscussion === false) return "提案由 j00808874 的 OMP 管理。当前 Web 只读，请进入 A 的 Web 讨论或修改。";
   const phase = proposal.proposalStage ?? "requirements";
   if (selection.discussionPhase && selection.discussionPhase !== phase) return "正在查看另一讨论阶段的历史，只读。";
-  if (proposal.status === "requirements-pr") return "需求 PR 已提交，当前版本只读；合并核对后进入正式需求。";
+  if (proposal.status === "requirements-pr") return "需求 MR 已自动创建，当前版本只读；人工合并后由后台定时核验并转正。";
   return;
  }
  if (access?.codeDevelopment === false) return "改代码须启动自己的 omp aireq_web，并配置自己的 Git 项目路径；此入口仅浏览正式需求。";
@@ -308,7 +308,7 @@ export function proposalViewedIndex(group: AIReqRequirementGroup, selection: AIR
 
 /** 提出人固定，当前处理责任按阶段变化；不是权限或自动分派系统。 */
 export function proposalActorLabel(group: AIReqRequirementGroup): string {
- if (group.status === "requirements-pr" || proposalDeliveryCurrent(group)) return "人工处理 PR · 后台自动检查";
+ if (group.status === "requirements-pr" || proposalDeliveryCurrent(group)) return "人工评审 MR · 后台定时核验";
  if (group.proposalStage === "solution") return hasCurrentProposalSolution(group) ? "方案已完成，可由平台创建提案分支并推送" : `方案开发 ${group.developerAcceptance?.employeeId ?? "待确认"}`;
  if (requirementsReviewCurrent(group) && !requirementsReviewReadyBlocker(group) && !group.review?.humanDecision) return "人工判断综合意见";
  if (requirementsReviewCurrent(group) && !requirementsReviewBlocker(group)) return group.returnFeedback ? `开发 ${group.returnFeedback.employeeId} 继续方案` : "开发人员进入方案";

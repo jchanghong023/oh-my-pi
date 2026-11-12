@@ -33,7 +33,10 @@ export interface AIReqRequirementSnapshot {
   version: 1; projectId: string; irId: string; title: string;
   srs: { id: string; title: string; documentPath: string }[]; documentPath: string; files: AIReqFileVersion[]; digest: string;
 }
-export interface AIReqPrFact { url: string; sourceBranch: string; targetBranch: string; recordedAt: string; platformVerified: false }
+export interface AIReqPrFact {
+  url: string; sourceBranch: string; targetBranch: string; recordedAt: string; platformVerified: false;
+  number?: number; title?: string; body?: string; status?: "opened" | "merged" | "closed";
+}
 export interface AIReqMergeFact { commit: string; branch: string; checkedAt: string; files: AIReqFileVersion[] }
 export interface AIReqProposalDelivery {
   candidate: string; version: string; files: AIReqFileVersion[];
@@ -43,7 +46,7 @@ export interface AIReqProposalDelivery {
   mergeScenario?: AIReqProposalMergeScenario;
   mergeCheck?: { status: "waiting" | "unmerged" | "incomplete" | "failed" | "merged"; checkedAt?: string; nextCheckAt?: string; message: string };
 }
-export type AIReqProposalMergeScenario = "unmerged" | "merged" | "incomplete" | "failed";
+export type AIReqProposalMergeScenario = "unmerged" | "merged" | "incomplete" | "failed" | "mr-closed";
 export interface AIReqRequirementsDecision {
   reviewId: string; snapshotDigest: string; inputFiles: AIReqFileVersion[];
   opinion: string; outcome: "supplement" | "maintain" | "defer"; result: string;

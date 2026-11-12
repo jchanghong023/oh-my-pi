@@ -2,7 +2,7 @@
 
 ## Context
 
-输入是本 change 的 proposal.md、全部 `specs/<capability>/spec.md` 与业务讨论。先在提案临时工作区生成方案；人确认当前 IR、全部 SR 和方案后，由平台创建提案分支、提交推送，再由人到 Git 网页创建、评审和合并需求 PR。方案参与记录不构成独占讨论权限。
+输入是本 change 的 proposal.md、全部 `specs/<capability>/spec.md` 与业务讨论。先在提案临时工作区生成方案；人确认当前 IR、全部 SR 和方案后，由平台创建提案分支、提交推送，自动创建需求 MR，人工评审合并后由后台定时核验并转正。方案参与记录不构成独占讨论权限。
 
 ## Goals / Non-Goals
 
@@ -49,7 +49,7 @@ openspec/changes/<change-id>/
 
 ## Migration Plan
 
-需求 PR 包含同一 change 的 proposal.md、全部 `specs/<capability>/spec.md`、有效 design.md 与 sr-dependencies.json。人工逐文件确认当前版本后，平台从最新默认分支创建提案分支、提交并推送，人工在 Git 网页创建、评审和合并 PR。后台检查提案分支已合入默认分支且上述文档完整、JSON 有效，便自动转正并创建、推送各 SR 分支；不要求个人目录、PR 链接或人工通知。转正保留 JSON 工期预估和依赖，随后再安排负责人、开发人员和起止日期，新 SR 进度为 0%；仍保留在 changes/，不归档、不标记代码完成。AIReq 仅跟踪后续代码证据，不执行开发、测试或修复。
+需求 PR 包含同一 change 的 proposal.md、全部 `specs/<capability>/spec.md`、有效 design.md 与 sr-dependencies.json。人工逐文件确认当前版本后，平台从最新默认分支创建提案分支、提交并推送，自动创建 MR，人工评审和合并。后台定时查询 MR 并检查提案分支已合入默认分支且上述文档完整、JSON 有效，便自动转正并创建、推送各 SR 分支；不要求个人目录、手填 MR 链接或人工通知。转正保留 JSON 工期预估和依赖，随后再安排负责人、开发人员和起止日期，新 SR 进度为 0%；仍保留在 changes/，不归档、不标记代码完成。AIReq 仅跟踪后续代码证据，不执行开发、测试或修复。
 
 ## Open Questions
 

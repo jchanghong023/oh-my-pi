@@ -2,7 +2,7 @@ import { PROTOTYPE_BACKEND } from "./backend.js";
 import { proposalVersion } from "../domain.js";
 import { proposalDependencyMaterialIssue } from "../sr-dependencies.js";
 import { proposalRevisionBlocker } from "../domain.js";
-import { isPrototypeProposalDeliveryAction, validatePrototypeProposalDeliveryAction } from "./proposal-delivery.js";
+import { ensurePrototypeProposalMr, isPrototypeProposalDeliveryAction, validatePrototypeProposalDeliveryAction } from "./proposal-delivery.js";
 import { createPrototypeEvent } from "./events.js";
 import { applyPrototypeSrDeliveryAction, isPrototypeSrDeliveryAction, prototypeSrDeliveryFiles, prototypeSrDefaultCommit, validatePrototypeSrDeliveryAction } from "./sr-delivery.js";
 
@@ -281,7 +281,8 @@ for (const group of state.drafts.filter(item => item.status === "requirements-pr
   const candidate = `sample-pushed-${group.id}`;
   group.proposalDelivery = { candidate, version: proposalVersion(group), files: structuredClone(group.files), confirmedBy: group.developerAcceptance?.employeeId ?? "j00808874", confirmedAt: createdAt,
     pushedCandidate: candidate, pushedAt: createdAt, branch: { name: `ir/${group.id}`, baseCommit: prototypeSrDefaultCommit(state, group.projectId), createdAt, pushedAt: createdAt },
-    mergeScenario: "unmerged", mergeCheck: { status: "waiting", message: "提案分支已推送（样例），等待后台检查。" } };
+    mergeScenario: "unmerged", mergeCheck: { status: "waiting", message: "MR 已自动创建，等待人工评审合并与后台定时核验。" } };
+  ensurePrototypeProposalMr(group);
 }
 export const prototypeWorkflowChanges = createPrototypeEvent<void>();
 export function notifyPrototypeProjectSettingsChanged(): void {
@@ -310,6 +311,7 @@ function completePrototypeProposal(group: AIReqRequirementGroup, checkedAt: stri
 export function setPrototypeProposalMergeScenario(projectId: string, irId: string, scenario: AIReqProposalMergeScenario): void {
   const group = state.drafts.find(item => item.projectId === projectId && item.id === irId);
   if (!group?.proposalDelivery?.pushedAt) throw new Error("请先完成方案并推送提案分支。");
+  if (!["unmerged", "merged", "incomplete", "failed", "mr-closed"].includes(scenario)) throw new Error("未知 MR 检查情景。");
   group.proposalDelivery.mergeScenario = scenario;
   prototypeWorkflowChanges.fire();
 }
@@ -325,13 +327,25 @@ export function pollPrototypeProposalMerges(): void {
     const nextCheckAt = new Date(Date.now() + 5000).toISOString();
     const scenario = delivery.mergeScenario ?? "unmerged";
     if (scenario === "failed") {
-      delivery.mergeCheck = { status: "failed", checkedAt: at, nextCheckAt, message: "获取默认分支失败（样例），保留提案，下一轮继续检查。" };
+      delivery.mergeCheck = { status: "failed", checkedAt: at, nextCheckAt, message: "查询 MR 或读取默认分支失败，保留最后结果，下一轮定时重试。" };
+      continue;
+    }
+    const mr = group.requirementsPr;
+    if (!mr?.number || delivery.prCandidate !== delivery.candidate) {
+      delivery.mergeCheck = { status: "failed", checkedAt: at, nextCheckAt, message: "当前候选缺少平台创建的 MR 记录，保留提案，不转正。" };
+      continue;
+    }
+    if (scenario === "mr-closed") {
+      mr.status = "closed";
+      delivery.mergeCheck = { status: "unmerged", checkedAt: at, nextCheckAt, message: "MR 已关闭且未合入，保留提案，不转正。" };
       continue;
     }
     if (scenario === "unmerged") {
-      delivery.mergeCheck = { status: "unmerged", checkedAt: at, nextCheckAt, message: "提案分支尚未合入默认分支（样例），等待人工创建、评审和合并 PR。" };
+      mr.status = "opened";
+      delivery.mergeCheck = { status: "unmerged", checkedAt: at, nextCheckAt, message: "MR 已创建，等待人工评审、合并；后台按计划核验合入与材料完整性。" };
       continue;
     }
+    mr.status = "merged";
     const expected = [group.documentPath, ...group.srIds.map(id => state.srs.find(sr => sr.projectId === group.projectId && sr.irId === group.id && sr.id === id)?.documentPath), group.proposalSolution?.path, group.srDependencyFile?.path];
     const complete = hasCurrentProposalSolution(group) && delivery.version === proposalVersion(group) && !proposalDependencyMaterialIssue(group, state.materials) && expected.length >= 4 && expected.every(path => path && state.materials.some(material => material.projectId === group.projectId && material.irId === group.id && material.path === path && material.valid && !material.error && Boolean(material.content?.trim())));
     if (scenario === "incomplete" || !complete) {
@@ -714,14 +728,19 @@ export function applyPrototypeAction(action: AIReqAction, selection: AIReqSelect
     case "publishProposal": {
       const group = currentGroup!;
       const delivery = group.proposalDelivery!;
+      if (delivery.pushedCandidate === action.candidate && group.requirementsPr?.number && delivery.prCandidate === action.candidate) {
+        operation.type = "当前候选已有 MR，复用既有记录，不重复创建（内存演示）";
+        break;
+      }
       const at = new Date().toISOString();
       delivery.branch ??= { name: readPrototypeProposalPrHandoff(group).branch, baseCommit: prototypeSrDefaultCommit(state, projectId), createdAt: at, pushedAt: at };
       delivery.pushedCandidate = action.candidate;
       delivery.pushedAt = at;
+      ensurePrototypeProposalMr(group);
       delivery.mergeScenario = "unmerged";
-      delivery.mergeCheck = { status: "waiting", nextCheckAt: new Date(Date.now() + 5000).toISOString(), message: "分支已推送（样例），后台将定时检查合入与文档完整性，无需登记 PR 地址或人工通知。" };
+      delivery.mergeCheck = { status: "waiting", nextCheckAt: new Date(Date.now() + 5000).toISOString(), message: "分支已推送并自动创建 MR，等待人工评审合并；后台定时核验，不需要登记地址或人工通知。" };
       group.status = "requirements-pr";
-      operation.type = "方案完成后创建提案分支、提交推送并开始后台检查（内存演示）";
+      operation.type = "确认材料后创建分支、提交推送、自动创建 MR 并开始后台定时核验（内存演示）";
       break;
     }
     case "markRequirementsPrSubmitted": case "markCodePrSubmitted": {

@@ -6,7 +6,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 
 <critical>
 - MUST 同轮维护 design.md 与同目录 sr-dependencies.json，后者是唯一依赖权威。
-- NEVER 编码、测试、执行开发计划、操作 Git 或自动创建、合并 PR。
+- NEVER 编码、测试、执行开发计划、操作 Git 或自行创建、合并 MR；材料确认后由平台负责建分支、提交推送与创建 MR。
 </critical>
 
 - MUST 优先复用项目能力，说明实现思路、取舍、接口与边界；只对已确认范围形成结论。
@@ -21,7 +21,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 - MUST 单独给出各 SR 建议起止时间与排期假设，结合依赖、计划起点及已有人员安排；缺少日历或可用性时明确说明，NEVER 编造开发者。
 - MUST 将人员、时间及人工调整作为文档外数据库元数据；NEVER 写入 JSON、design.md 或 spec.md，不单独维护工时。人工调整保留 AI 原建议，后台不直接覆盖；IR 时间取 SR 最早开始、最晚结束，不按日期计算进度。
 - MUST 由人逐文件确认 IR、全部 SR、design.md 与 sr-dependencies.json，再交平台创建独立提案分支、提交推送；无需个人开发目录。
-- MUST 由人在 Git 网页创建、评审、合并 PR；后台仅在提案分支已合入且当前全部文档完整有效时自动转正并创建推送 SR 分支，无需 PR 地址或人工确认合入。
+- MUST 由平台在确认材料并创建分支、提交推送后自动创建 MR，人工评审、合并；后台定时查询 MR 并核验提案分支实际合入且当前全部文档完整有效后转正、创建推送 SR 分支，无需手填 MR 地址或人工确认合入。
 - NEVER 将需求转正视为实现完成、自动 archive 或提升为已实现基线；本 Agent 不执行后台 Git 操作。
 
 <critical>

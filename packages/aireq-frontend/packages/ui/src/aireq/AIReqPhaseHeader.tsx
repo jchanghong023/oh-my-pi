@@ -42,7 +42,7 @@ export function AIReqPhaseHeader({ details, placement = "header" }: { details: R
   const readOnly = proposal ? !source.capabilities.proposalDiscussion : !source.capabilities.codeDevelopment || Boolean(sr && sr.developerEmployeeId && sr.developerEmployeeId !== getEmployeeId());
   const running = view.running.some(item => item.sessionId === aireq.session?.sessionId);
   const complete = sr?.status === "completed" || (!proposal && !sr && acceptance?.status === "completed");
-  const role = proposal ? ["业务需求 Agent", group.review?.agents?.find(agent => agent.id === (selection.reviewAgent ?? "summary"))?.name ?? "综合评审 Agent", "方案 Agent", "人工 PR · 后台检查"][selected]
+  const role = proposal ? ["业务需求 Agent", group.review?.agents?.find(agent => agent.id === (selection.reviewAgent ?? "summary"))?.name ?? "综合评审 Agent", "方案 Agent", "自动 MR · 定时核验"][selected]
     : sr ? selected === 0 ? "计划 Agent" : "执行 Agent" : selected === 0 ? "各 SR 分别开发" : "IR 验收 Agent";
   const reviewIssue = requirementsReviewBlocker(group);
   const reviewStartIssue = requirementsReviewStartBlocker(group);
@@ -99,7 +99,7 @@ export function AIReqPhaseHeader({ details, placement = "header" }: { details: R
     else if (phase === 0) guidance = group.returnFeedback && !group.returnFeedback.resumedAt ? "请与业务需求 Agent 讨论最新待处理意见，由 AI 补充 IR／SR；文件更新后再发起评审。" : requirementsReviewInputs(group) ? "检查 proposal.md 与全部 SR 的 spec.md 后，发起需求评审。" : "请先在 IR 聊天中完善需求，生成 proposal.md 和 SR 规格。";
     else if (phase === 1) guidance = requirementsReviewReadyBlocker(group) ?? "请阅读综合意见，由你判断通过或返回业务补充；模型的建议与分歧不会自动判定结果。";
     else if (phase === 2) guidance = reviewIssue ?? (hasCurrentProposalSolution(group) ? "本轮技术方案／SR依赖已生成；检查 IR、全部 SR 及技术方案／SR依赖后，逐文件确认进入入库。" : group.proposalSolution ? "技术方案／SR依赖缺失、无效或与本轮需求不匹配，请重新生成后确认。" : "尚未生成本轮有效技术方案／SR依赖；右侧已有材料是参考材料，请先生成技术方案。");
-    else guidance = group.status === "requirements-pr" ? "等待人工评审合并；后台定时检查提案分支合入及文档完整性，满足后自动入库并创建 SR 分支。" : "按已确认版本创建提案分支、提交推送，随后由人工处理 PR，后台自动检查。";
+    else guidance = group.status === "requirements-pr" ? "等待人工评审合并；后台定时检查提案分支合入及文档完整性，满足后自动入库并创建 SR 分支。" : "按已确认版本创建提案分支、提交推送，自动创建 MR，人工评审合并，后台定时核验。";
   }
   const canBack = !history && !readOnly && !complete && (proposal ? (phase === 1) || (phase === 2 && source.capabilities.proposalDiscussion && group.status !== "requirements-pr") : Boolean(sr && sr.status === "developing" && phase > 0));
   const backDialog = (<Dialog open={back} onOpenChange={setBack}><DialogContent className={proposal ? "flex max-h-[85dvh] flex-col sm:max-w-3xl" : "sm:max-w-md"}><DialogHeader><DialogTitle>{proposal ? phase === 1 ? "返回业务补充" : "退出方案，退回业务补充" : "回退开发阶段"}</DialogTitle><DialogDescription>{proposal && phase === 2 ? "粘贴方案 Agent 提出、开发无法回答的问题，可自行编辑补充。确认后直接返回业务需求 Agent，意见会显示在讨论上方；旧方案失效，由 AI 补充文件后重评，再继续方案。" : proposal ? "填写需业务补充的评审意见。确认后返回业务需求阶段，旧评审与方案失效；通过业务需求 Agent 更新 IR／SR 后才能重新评审。" : "保留已有文件、代码和历史记录。回退后重新检查所选阶段，旧批准及后续阶段材料不再用于当前推进。"}</DialogDescription></DialogHeader>
@@ -145,7 +145,7 @@ export function AIReqProposalStageBody() {
  const aireq = useAIReq()!;
  const group = aireq.view?.drafts.find(item => item.projectId === aireq.selection.projectId && item.id === aireq.selection.irId);
  // 以实际中栏宽度居中；侧栏开合或拖动时由 CSS 重新排版，不缓存窗口宽度。
- return <main className="h-full min-h-0 w-full min-w-0 overflow-y-auto p-6" data-testid="aireq-proposal-stage-body"><div className="mx-auto w-full min-w-0 max-w-3xl space-y-4 break-words"><h3 className="text-ui-base font-medium">需求入库</h3><p className="text-ui-base leading-6 text-foreground-subtle">方案完成后由平台创建提案独立分支并提交推送。人工创建、评审和合并 PR；后台只根据提案分支是否合入默认分支及需求文档是否完整自动更新状态。</p>{group && <AIReqProposalBackgroundStatus group={group} />}</div></main>;
+ return <main className="h-full min-h-0 w-full min-w-0 overflow-y-auto p-6" data-testid="aireq-proposal-stage-body"><div className="mx-auto w-full min-w-0 max-w-3xl space-y-4 break-words"><h3 className="text-ui-base font-medium">需求入库</h3><p className="text-ui-base leading-6 text-foreground-subtle">确认材料后由平台创建提案独立分支、提交推送并自动创建 MR。人工评审和合并后，后台定时查询 MR，并根据提案分支是否合入默认分支及需求文档是否完整自动更新状态。</p>{group && <AIReqProposalBackgroundStatus group={group} />}</div></main>;
 }
 
 /** 正式 IR 的 SR 开发是汇总节点，开发聊天分别属于每个 SR。 */

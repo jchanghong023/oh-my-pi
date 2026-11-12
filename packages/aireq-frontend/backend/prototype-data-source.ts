@@ -107,7 +107,7 @@ export function createPrototypeDataSource(): AIReqDataSource {
 	]);
 	const settingsActions = new Set<AIReqAction["type"]>(["registerProject", "createRelease", "setSharedProjectRoot"]);
 	const allowed = (type: AIReqAction["type"]) =>
-		type === "markRequirementsMerged"
+		(type === "markRequirementsMerged" || type === "markRequirementsPrSubmitted")
 			? false
 			: settingsActions.has(type)
 				? prototypeSettingsWriteAllowed()
