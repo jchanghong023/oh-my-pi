@@ -3,14 +3,12 @@ import type { ComposerInputPreview } from "@/prompt-editor/ChatPromptEditor.js";
 import { DevSkillFilePreview } from "./DevSkillFilePreview.js";
 import { createUuid } from "@zcode/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, FileCode2, FolderGit2, MessageSquare, ArrowRight, WandSparkles, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Check, ChevronDown, FileCode2, MessageSquare, ArrowRight, WandSparkles, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { ResizablePanel, ResizablePanelGroup, ResizableHandle } from "@/components/ui/resizable.js";
 import { Button } from "@/components/ui/button.js";
-import { Badge } from "@/components/ui/badge.js";
 import { Label } from "@/components/ui/label.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
-import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.js";
 import { SessionPane } from "@/v4/SessionPane.js";
@@ -20,7 +18,7 @@ import { useServices } from "@/hooks/useServices.js";
 import { bindRemoteWorkspaceIdentity, registerRemoteWorkspaceSession, unregisterRemoteWorkspaceSession } from "@/store/remoteWorkspaceSessionStore.js";
 import { useDevDataSource } from "./data-source.js";
 import { useDev } from "./DevContext.js";
-import type { DevAgentModelBinding, DevSkillDesignDraft, DevSkillDesignPreview } from "./types.js";
+import type { DevSkillDesignDraft, DevSkillDesignPreview } from "./types.js";
 import type { SkillSummary } from "@zcode/shared";
 import { SKILL_DESIGN_FIELDS } from "./skill-design-fields.js";
 
@@ -33,7 +31,6 @@ export function DevSkillDesignPage() {
   const project = dev?.view?.projects.find(item => item.id === dev.selection.projectId);
   const developmentRoot = project ? source.projects?.readDevelopmentRoot(project.id, source.backend?.owner) : undefined;
   return <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background" aria-label="Skill 设计">
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-5"><WandSparkles className="size-4 text-foreground-subtle" /><h1 className="text-ui-base font-semibold">Skill 设计</h1><span className="ml-auto text-ui-sm text-foreground-subtle">所有人可用 · 使用当前 Web 的模型配置</span></header>
     <div className="flex min-h-0 flex-1 flex-col p-4"><SkillDesignEditor key={`${source.backend?.id}:${project?.id ?? "personal"}`} projectId={project?.id ?? "personal"} projectName={project?.name ?? "未选择项目"} workspacePath={developmentRoot ?? source.backend?.configDirectory ?? ""} developmentRoot={developmentRoot} /></div>
   </main>;
 }
@@ -41,7 +38,7 @@ export function DevSkillDesignPage() {
 function SkillDesignEditor({ projectId, projectName, workspacePath, developmentRoot }: { projectId: string; projectName: string; workspacePath: string; developmentRoot?: string }) {
   const source = useDevDataSource();
   const design = source.skillDesign!;
-  const [session, setSession] = useState<{ id: string; binding: DevAgentModelBinding; identity: string }>();
+  const [session, setSession] = useState<{ id: string; identity: string }>();
   const [loadError, setLoadError] = useState("");
   useEffect(() => {
     let active = true;
@@ -50,8 +47,8 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
     void (async () => {
       try {
         const id = await design.session(projectId);
-        const [binding, identity] = await Promise.all([design.binding(id), design.workspaceIdentity(projectId)]);
-        if (active) setSession({ id, binding, identity });
+        const identity = await design.workspaceIdentity(projectId);
+        if (active) setSession({ id, identity });
       } catch (cause) {
         if (active) setLoadError(cause instanceof Error ? cause.message : "加载技能设计会话失败。");
       }
@@ -60,10 +57,10 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
   }, [design, projectId]);
   if (loadError) return <p role="alert" className="text-ui-sm text-destructive">{loadError}</p>;
   if (!session) return <p role="status" className="text-ui-sm text-foreground-subtle">正在加载技能设计会话…</p>;
-  return <ReadySkillDesignEditor key={session.id} {...{ projectId, projectName, workspacePath, developmentRoot }} sessionId={session.id} modelBinding={session.binding} identity={session.identity} />;
+  return <ReadySkillDesignEditor key={session.id} {...{ projectId, projectName, workspacePath, developmentRoot }} sessionId={session.id} identity={session.identity} />;
 }
 
-function ReadySkillDesignEditor({ projectId, projectName, workspacePath, developmentRoot, sessionId, modelBinding, identity }: { projectId: string; projectName: string; workspacePath: string; developmentRoot?: string; sessionId: string; modelBinding: DevAgentModelBinding; identity: string }) {
+function ReadySkillDesignEditor({ projectId, projectName, workspacePath, developmentRoot, sessionId, identity }: { projectId: string; projectName: string; workspacePath: string; developmentRoot?: string; sessionId: string; identity: string }) {
   const source = useDevDataSource();
   const design = source.skillDesign!;
   const services = useServices();
@@ -234,22 +231,7 @@ function ReadySkillDesignEditor({ projectId, projectName, workspacePath, develop
   if (loading) return <p role="status" className="text-ui-sm text-foreground-subtle">正在加载技能设计数据…</p>;
   if (!draft) return <p role="alert" className="text-ui-sm text-destructive">{error || "加载技能设计数据失败。"}</p>;
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3" data-testid="dev-skill-design">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <ol className="flex flex-wrap items-center gap-2 text-ui-sm" aria-label="技能设计步骤">
-        {["整理说明", "对话设计", savedPath ? "已保存" : "预览并保存"].map((label, index) => {
-          const current = preview ? 2 : composerInputPreview ? 1 : 0;
-          return <li key={index} aria-current={index === current ? "step" : undefined} className={index === current ? "font-medium text-foreground" : "text-foreground-subtle"}>
-            {index > 0 && <span className="mr-2" aria-hidden="true">›</span>}{index + 1}. {label}
-          </li>;
-        })}
-      </ol>
-      <div className="flex min-w-0 items-center gap-2 text-ui-sm"><FolderGit2 className="size-3.5 text-foreground-subtle" /><span className="truncate">{projectName}</span><Badge variant="outline">{source.provenance.kind === "sample" ? "原型演示" : "后台数据"}</Badge></div>
-    </div>
     {error && <p role="alert" className="text-ui-sm text-destructive">{error}</p>}
-    <Collapsible>
-      <CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="max-w-full justify-start px-0 text-foreground-subtle"><ChevronDown className="size-3" /><span className="truncate">会话模型 · {modelBinding.modelName}</span></Button></CollapsibleTrigger>
-      <CollapsibleContent className="pb-1"><DevAgentModelSummary binding={modelBinding} /></CollapsibleContent>
-    </Collapsible>
     <ResizablePanelGroup layoutId="dev-skill-design-layout-v1" panelIds={skillDesignPanels} className="min-h-0 flex-1">
       <ResizablePanel id="skill-brief" panelRef={briefPanel} defaultSize="40%" minSize="280px" maxSize="60%" collapsible collapsedSize="0px" onResize={size => setBriefOpen(size.asPercentage > 0)}>
       <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border" id="skill-design-brief" aria-labelledby="skill-design-brief-title" aria-hidden={!briefOpen} inert={!briefOpen}>
