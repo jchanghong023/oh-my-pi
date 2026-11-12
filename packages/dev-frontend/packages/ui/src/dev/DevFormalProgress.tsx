@@ -13,7 +13,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { MarkdownTableBody, MarkdownTableCell, MarkdownTableHead, MarkdownTableHeader, MarkdownTableRow } from "@/components/ai-elements/markdown-table.js";
 import { ResizablePanel, ResizablePanelGroup, ResizableHandle } from "@/components/ui/resizable.js";
-import { useAnimatedResizablePanel } from "@/app-shell/useAnimatedResizablePanel.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
 import { DevMaterialsPane } from "./DevWorkbench.js";
 import { useDev } from "./DevContext.js";
@@ -277,12 +276,11 @@ const formalDetailPanels = ["formal-table", "formal-inspector"];
 export function DevFormalWorkspace({ navigationOpen, onToggleNavigation, toolbar }: FormalNavigationProps) {
   const dev = useDev()!;
   const detail = dev.selection.formalView !== "list" && Boolean(dev.view?.groups.some(group => group.id === dev.selection.irId));
-  const { panelRef, panelElementRef } = useAnimatedResizablePanel({ open: detail, expandedSize: "380px" });
-  return <ResizablePanelGroup layoutId="dev-formal-progress-layout-v2" panelIds={detail ? formalDetailPanels : formalTablePanels} className="min-h-0 flex-1">
+  return <ResizablePanelGroup layoutId="dev-formal-progress-layout-v3" panelIds={detail ? formalDetailPanels : formalTablePanels} className="min-h-0 flex-1">
     <ResizablePanel id="formal-table" minSize="400px" defaultSize={detail ? undefined : "100%"}>
       <DevFormalTable key={dev.releaseId} navigationOpen={navigationOpen} onToggleNavigation={onToggleNavigation} toolbar={toolbar} />
     </ResizablePanel>
-    {detail && <><ResizableHandle /><ResizablePanel id="formal-inspector" panelRef={panelRef} elementRef={panelElementRef} minSize="320px" maxSize="480px" defaultSize="380px">
+    {detail && <><ResizableHandle /><ResizablePanel id="formal-inspector" minSize="360px" maxSize="50%" defaultSize="35%">
       <Tabs key={`${dev.selection.irId}:${dev.selection.srId}`} defaultValue="report" className="h-full min-h-0 gap-0 overflow-hidden rounded-xl border border-border bg-background">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
           <TabsList variant="line" aria-label="需求详情"><TabsTrigger value="report">进度报告</TabsTrigger><TabsTrigger value="materials"><FileText className="size-3.5" />需求材料</TabsTrigger></TabsList>

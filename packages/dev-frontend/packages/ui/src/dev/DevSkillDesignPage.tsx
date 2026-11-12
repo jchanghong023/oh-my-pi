@@ -1,6 +1,7 @@
 import { createUuid } from "@zcode/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, FileCode2, FolderGit2, MessageSquare, ArrowRight, WandSparkles } from "lucide-react";
+import { ResizablePanel, ResizablePanelGroup, ResizableHandle } from "@/components/ui/resizable.js";
 import { Button } from "@/components/ui/button.js";
 import { Badge } from "@/components/ui/badge.js";
 import { Label } from "@/components/ui/label.js";
@@ -22,6 +23,8 @@ import { useDev } from "./DevContext.js";
 import type { DevAgentModelBinding, DevSkillDesignDraft, DevSkillDesignPreview } from "./types.js";
 import type { SkillSummary } from "@zcode/shared";
 import { SKILL_DESIGN_FIELDS } from "./skill-design-fields.js";
+
+const skillDesignPanels = ["skill-brief", "skill-conversation"];
 
 export function DevSkillDesignPage() {
   const source = useDevDataSource();
@@ -236,8 +239,9 @@ function ReadySkillDesignEditor({ projectId, projectName, workspacePath, develop
     </div>
     {error && <p role="alert" className="text-ui-sm text-destructive">{error}</p>}
     <DevAgentModelSummary binding={modelBinding} />
-    <div className="grid min-h-0 flex-1 grid-cols-[minmax(280px,2fr)_minmax(0,3fr)] gap-3">
-      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border" aria-labelledby="skill-design-brief-title">
+    <ResizablePanelGroup layoutId="dev-skill-design-layout-v1" panelIds={skillDesignPanels} className="min-h-0 flex-1">
+      <ResizablePanel id="skill-brief" defaultSize="40%" minSize="280px" maxSize="60%">
+      <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border" aria-labelledby="skill-design-brief-title">
         <div className="shrink-0 space-y-2 border-b border-border p-4">
           <div className="flex items-center justify-between gap-2"><h3 id="skill-design-brief-title" className="text-ui-base font-medium">技能说明</h3><div className="flex items-center gap-2"><span className="text-ui-sm text-foreground-subtle">已填写 {completed}/{coreFields.length}</span>{design.sample && <Button variant="ghost" size="sm" onClick={fillExample}>填入示例</Button>}</div></div>
           <p className="text-ui-sm text-foreground-subtle">表单用于整理给模型的需求。信息不完整也可先讨论；技能标识由模型推荐，无需预先填写。</p>
@@ -254,6 +258,9 @@ function ReadySkillDesignEditor({ projectId, projectName, workspacePath, develop
           <Button className="w-full" disabled={Boolean(insertRequest) || filling} onClick={fillComposer}><ArrowRight className="size-3.5" />填入右侧聊天输入框</Button>
         </div>
       </section>
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel id="skill-conversation" defaultSize="60%" minSize="360px">
       <Tabs value={tab} onValueChange={setTab} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2"><TabsList aria-label="技能设计工作区"><TabsTrigger value="chat"><MessageSquare className="size-3.5" />设计对话</TabsTrigger><TabsTrigger value="preview"><FileCode2 className="size-3.5" />临时文件预览</TabsTrigger></TabsList><span className="text-ui-xs text-foreground-subtle" data-testid="skill-design-generation-status">{generationStatus}</span></div>
         <TabsContent forceMount value="chat" className={tab === "chat" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
@@ -283,6 +290,7 @@ function ReadySkillDesignEditor({ projectId, projectName, workspacePath, develop
           </div>
         </TabsContent>
       </Tabs>
-    </div>
+      </ResizablePanel>
+    </ResizablePanelGroup>
   </div>;
 }
