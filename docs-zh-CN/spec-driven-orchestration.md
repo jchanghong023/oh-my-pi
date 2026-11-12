@@ -177,7 +177,7 @@ flowchart LR
 
 **真实接入验收标准：只实现真实 OMP 后端并配置地址，不修改前端、不替换客户端、不迁移 runtime、不转换接口格式，即可使用相同浏览器代码完成业务。** 后端缺接口、版本不兼容及其他错误必须直接显示，不允许转旧协议或回退样例。
 
-当前源码已实施共享前端入口、同一客户端、原型后端及地址选择，不改变既有 UI、业务门禁及普通 OMP／WebGUI 的非干扰边界。安装后分别运行 `bun ./standalone.ts backend`（默认 `http://127.0.0.1:4174/`）与 `bun ./standalone.ts start`（前端 `http://127.0.0.1:4173/`）；无需 OMP、Git、数据库或模型。后端通过 `OMP_DEV_BACKEND_HOST`／`OMP_DEV_BACKEND_PORT` 配置监听，端口 `0` 可由系统分配，启动输出实际 URL。浏览器地址优先级为 URL 编码的 `?backend=<地址>`、`VITE_DEV_BACKEND_URL`、默认后端地址。完整安装步骤及示例见[前端 README](../packages/dev-frontend/README.md#当前实现独立启动)。
+当前源码已实施共享前端入口、同一客户端、原型后端及地址选择，不改变既有 UI、业务门禁及普通 OMP／WebGUI 的非干扰边界。安装后分别运行 `bun ./standalone.ts backend`（默认 `http://127.0.0.1:4174/`）与 `bun ./standalone.ts start`（前端 `http://127.0.0.1:4173/`）；无需 OMP、Git、数据库或模型。后端通过 `OMP_DEV_BACKEND_HOST`／`OMP_DEV_BACKEND_PORT` 配置监听，端口 `0` 可由系统分配，启动输出实际 URL。浏览器地址优先级为 URL 编码的 `?backend=<地址>`、`VITE_DEV_BACKEND_URL`、当前页面的同源挂载地址；默认由前端预览服务器把 HTTP／WS 原样代理到独立后端，不把访问者自己的 localhost 当作服务器。普通内网 IP 的 HTTP 访问及 `/xxx/xxx/` 挂载前缀按前端 README 配置，不要求 HTTPS；原生 runtime 继续保留宿主已有随机能力目录。完整安装步骤及示例见[前端 README](../packages/dev-frontend/README.md#当前实现独立启动)。
 
 ### 当前实现与既有演示边界
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
 import { Button } from "../ui/button.js";
 import {
@@ -327,13 +328,13 @@ export const StackTraceCopyButton = memo(
     const { raw } = useStackTrace();
 
     const copyToClipboard = useCallback(async () => {
-      if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
+      if (typeof window === "undefined" || typeof document === "undefined") {
         onError?.(new Error("Clipboard API not available"));
         return;
       }
 
       try {
-        await navigator.clipboard.writeText(raw);
+        await writeBrowserClipboardText(raw);
         setIsCopied(true);
         onCopy?.();
         timeoutRef.current = window.setTimeout(

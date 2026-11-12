@@ -8,7 +8,7 @@ const root = createRoot(document.getElementById("root")!);
 async function start() {
 	const query = new URLSearchParams(location.search);
 	const source = await createRemoteDevDataSource({
-		baseUrl: query.get("backend") ?? import.meta.env.VITE_DEV_BACKEND_URL ?? "http://127.0.0.1:4174/",
+		baseUrl: query.get("backend") ?? import.meta.env.VITE_DEV_BACKEND_URL ?? new URL(import.meta.env.BASE_URL, document.baseURI).href,
 		demo: query.get("demo") ?? undefined,
 	});
 	root.render(<DevApplication source={source} />);

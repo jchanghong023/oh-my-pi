@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { getLocalTtftObserver } from "@/v4/telemetry/local-ttft/contract.js";
 import { GenUiMessageResponse } from "@/gen-ui/index.js";
 import { ConversationUserInputBubble } from "@/v4/ConversationUserInputBubble.js";
@@ -191,10 +192,12 @@ const CopyRowAction = memo(function CopyRowAction({
 }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(() => {
-    if (!text || !navigator.clipboard) return;
-    void navigator.clipboard.writeText(text).then(() => {
+    if (!text) return;
+    void writeBrowserClipboardText(text).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
+    }).catch((error: unknown) => {
+      logger.warn("[v4-copy] copy row failed", error);
     });
   }, [text]);
   return (

@@ -1,3 +1,4 @@
+import { createUuid } from "@zcode/shared";
 import { connectViaWebSocket } from "@zcode/client";
 import {
 	DEV_CONTRACT_VERSION,
@@ -23,7 +24,7 @@ export async function createRemoteDevDataSource(options: RemoteDevDataSourceOpti
 	const base = new URL(options.baseUrl);
 	if (!base.pathname.endsWith("/")) base.pathname += "/";
 	if (base.protocol !== "http:" && base.protocol !== "https:") throw new Error("Dev backend requires an HTTP URL");
-	const clientId = crypto.randomUUID();
+	const clientId = createUuid();
 	const lifetime = new AbortController();
 	const connections = new Set<AbortController>();
 	const workflowListeners = new Set<() => void>();

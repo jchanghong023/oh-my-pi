@@ -31,7 +31,7 @@ function copiedFrontendPackages(): Plugin {
 
 export default defineConfig({
 	root: import.meta.dirname,
-	base: "./",
+	base: "/",
 	publicDir: path.join(packages, "web/public"),
 	plugins: [
 		copiedFrontendPackages(),

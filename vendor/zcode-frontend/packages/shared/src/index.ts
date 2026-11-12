@@ -319,3 +319,5 @@ export {
 export * from "./request-security-edition/verification-policy.js";
 
 export * from "./conversation-share-tool-presentation.js";
+
+export * from "./browser-crypto.js";

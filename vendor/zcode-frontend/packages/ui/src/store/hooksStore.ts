@@ -1,3 +1,4 @@
+import { createUuid } from "@zcode/shared";
 import { create } from "zustand";
 import type { Hook, HookConfig } from "@zcode/shared";
 import type { IHooksService } from "@zcode/services";
@@ -89,7 +90,7 @@ function isEditableHook(hook: Hook): boolean {
 
 function hookFromConfig(config: HookConfig, workspacePath: string): Hook {
   return {
-    id: `hook-${crypto.randomUUID()}`,
+    id: `hook-${createUuid()}`,
     event: config.event,
     matcher: config.matcher,
     type: config.type,
@@ -316,7 +317,7 @@ export const useHooksStore = create<HooksStoreState>((set, get) => ({
     if (!source || source.location?.source === "zcode") throw new Error("Hook is not importable");
     const imported: Hook = {
       ...source,
-      id: `hook-${crypto.randomUUID()}`,
+      id: `hook-${createUuid()}`,
       enabled: true,
       location: buildZCodeHookLocation(workspacePath, source.location?.scope ?? "user"),
     };

@@ -8,6 +8,7 @@
 // 仅有非空白正文才持久化；mode/modelSelection 随正文保存，删空后删除整个 scope。
 // 附件不入草稿（objectUrl/File 不可序列化，localPath 附件重启后归属难校验——
 // 与「v4 composer 不做附件草稿持久化」的裁决一致）。
+import { createUuid } from "@zcode/shared";
 import { logger } from "@/logger.js";
 import {
   modelSelectionSchema,
@@ -84,7 +85,7 @@ function writePendingTaskDraft(scope: ComposerScope, value: PendingTaskDraft | n
 export function ensurePendingTaskDraft(scope: ComposerScope): PendingTaskDraft {
   const current = readPendingTaskDraft(scope);
   if (current) return current;
-  const next = { draftId: crypto.randomUUID() };
+  const next = { draftId: createUuid() };
   writePendingTaskDraft(scope, next);
   return next;
 }

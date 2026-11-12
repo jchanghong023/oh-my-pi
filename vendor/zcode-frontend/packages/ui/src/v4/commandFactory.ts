@@ -1,6 +1,7 @@
 // Command 信封工厂。
 // commandId = uuid v7（时间有序，重试不变）；clientId 每个客户端实例稳定并持久化，
 // 服务端幂等表与 pendingCommands 展示都以它区分提交端。
+import { createUuid } from "@zcode/shared";
 import {
   COMMANDS_REQUIRING_BASE_REVISION,
   ROW_TARGETING_COMMANDS,
@@ -66,7 +67,7 @@ export function createCommandEnvelope<T extends CommandType>(
           ...input.payload,
           sessionId:
             (input.payload as CommandPayloadMap["createSession"]).sessionId ??
-            `sess_${crypto.randomUUID()}`,
+            `sess_${createUuid()}`,
         }
       : input.payload;
   return {

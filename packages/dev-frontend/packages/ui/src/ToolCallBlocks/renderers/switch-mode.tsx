@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { useState, type KeyboardEvent, type MouseEvent } from "react";
 import { MessageResponse } from "@/components/ai-elements/message.js";
 import { ToolOutput } from "@/components/ai-elements/tool.js";
@@ -59,8 +60,8 @@ export function SwitchModeToolCallBlock(context: ToolCallBlockRenderContext) {
   };
 
   const handleCopy = () => {
-    if (!markdown || typeof navigator === "undefined" || !navigator.clipboard?.writeText) return;
-    void navigator.clipboard.writeText(markdown).then(
+    if (!markdown || typeof navigator === "undefined" || typeof document === "undefined") return;
+    void writeBrowserClipboardText(markdown).then(
       () => setCopiedMarkdown(markdown),
       () => setCopiedMarkdown(null),
     );

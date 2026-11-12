@@ -1,3 +1,4 @@
+import { sha256Bytes } from "./browser-crypto.js";
 import { z } from "zod";
 import { projectTokenSuccessCodeSchema } from "./project-access-token-response.js";
 import type { ApiKeyCreationUsageScene } from "./api-key-usage-scene.js";
@@ -238,7 +239,7 @@ export class ProjectAccessTokenCache {
 
 /** 仅用于拒绝某一代 PAT 的比较，不作为账号身份，也不传给模型上游。 */
 export async function projectAccessTokenFingerprint(token: string): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  const digest = await sha256Bytes(new TextEncoder().encode(token));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

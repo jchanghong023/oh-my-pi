@@ -5,6 +5,8 @@
 // 单独成段、淡红底的 stderr、页脚 exit · 耗时 · 字节 + Copy）、清单（glob / grep /
 // changed-files，带行号、按行有界）、文本（read / diff，diff 按首字符着墨）。
 
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
+import { logger } from "@/logger.js";
 import { memo, useCallback, useState, type ReactNode } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { cn } from "@/components/lib/utils.js";
@@ -75,9 +77,11 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const copy = useCallback(() => {
     if (text.length === 0) return;
-    void navigator.clipboard?.writeText(text).then(() => {
+    void writeBrowserClipboardText(text).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
+    }).catch((error: unknown) => {
+      logger.warn("[workflow-workspace-copy] copy failed", error);
     });
   }, [text]);
   return (

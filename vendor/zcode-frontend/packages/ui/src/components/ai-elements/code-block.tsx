@@ -6,6 +6,7 @@
  */
 "use client";
 
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { Button } from "../ui/button.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.js";
 import { cn } from "../lib/utils.js";
@@ -489,14 +490,14 @@ export const CodeBlockCopyButton = ({
   const label = title ?? intl.formatMessage({ id: "codeBlock.copyCode" });
 
   const copyToClipboard = useCallback(async () => {
-    if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
+    if (typeof window === "undefined" || typeof document === "undefined") {
       onError?.(new Error("Clipboard API not available"));
       return;
     }
 
     try {
       if (!isCopied) {
-        await navigator.clipboard.writeText(code);
+        await writeBrowserClipboardText(code);
         setIsCopied(true);
         onCopy?.();
         timeoutRef.current = window.setTimeout(() => setIsCopied(false), timeout);

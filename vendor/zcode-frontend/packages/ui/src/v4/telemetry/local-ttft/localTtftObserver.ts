@@ -1,3 +1,4 @@
+import { createUuid } from "@zcode/shared";
 import { mergeLocalTtftFacts } from "@/v4/telemetry/local-ttft/localTtftFacts.js";
 import {
   buildLocalTtftRecord,
@@ -61,7 +62,7 @@ export class LocalTtftObserver {
     if (this.readForeground) this.visibility(this.readForeground());
     const context: LocalTtftContext = {
       version: 1,
-      observationId: crypto.randomUUID(),
+      observationId: createUuid(),
       ...(this.localOnly ? { localOnly: true as const } : {}),
     };
     const now = this.now();

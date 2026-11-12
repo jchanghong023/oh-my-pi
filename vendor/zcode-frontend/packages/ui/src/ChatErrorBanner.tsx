@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { resolveRequestSecurityErrorMessageId } from "@/request-security-edition/errors.js";
 import { getRemoteConnectionFailureCode } from "@/lib/remoteWorkspaceServiceError.js";
 import { formatRemoteConnectionError } from "@/lib/remoteConnectionPresentation.js";
@@ -202,7 +203,7 @@ export function ChatErrorBanner({
 
 
   const handleCopyError = async () => {
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    if (typeof navigator === "undefined" || typeof document === "undefined") {
       toast(
         intl.formatMessage({ id: "chat.error.copyFailed" }, { error: "clipboard-unavailable" }),
       );
@@ -212,7 +213,7 @@ export function ChatErrorBanner({
     try {
       // 错误横幅之前只能复制 TraceID，开发拿不到完整上下文。
       // 这里统一复制摘要、TraceID 和详情，方便用户一键转发完整报错信息。
-      await navigator.clipboard.writeText(
+      await writeBrowserClipboardText(
         buildErrorCopyText({
           message: localizedErrorMessage,
           detail: error.detail,

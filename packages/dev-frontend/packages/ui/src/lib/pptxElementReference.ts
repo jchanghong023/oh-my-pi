@@ -1,3 +1,4 @@
+import { sha256Bytes } from "@zcode/shared";
 import type { PresentationPageElement } from "@/presentation/types.js";
 
 export const PPTX_ELEMENT_REFERENCE_ADD_TO_CHAT_EVENT =
@@ -167,7 +168,7 @@ export async function sha256Fingerprint(
     typeof value === "string"
       ? new TextEncoder().encode(value)
       : new Uint8Array(value);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  const digest = await sha256Bytes(new Uint8Array(bytes));
   const hex = [...new Uint8Array(digest)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");

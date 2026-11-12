@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import type { IPlatformService } from "@zcode/shared";
 import { PROTOCOL_V4_LIMITS } from "@zcode/shared/zcode-protocol-v4";
 import { toast } from "@/components/ui/toast.js";
@@ -74,8 +75,8 @@ export async function executeNativeBrowserAction(
     throw new Error("The browser action does not belong to this session");
   switch (input.action) {
     case "copyText": {
-      if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable");
-      await navigator.clipboard.writeText(requiredString(input, "text"));
+      if (typeof document === "undefined") throw new Error("Clipboard access is unavailable");
+      await writeBrowserClipboardText(requiredString(input, "text"));
       return { copied: true };
     }
     case "openUrl":

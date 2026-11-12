@@ -1,3 +1,4 @@
+import { createUuid } from "@zcode/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, FileCode2, FolderGit2, MessageSquare, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
@@ -60,7 +61,7 @@ function ReadySkillDesignEditor({ projectId, projectName, workspacePath, develop
   const services = useServices();
   const scope = useMemo(() => ({ workspacePath, workspaceIdentity: `${identity}:skill-design` }), [workspacePath, identity]);
   useEffect(() => {
-    const registrationId = `dev-skill-designer:${source.clientId}:${crypto.randomUUID()}`;
+    const registrationId = `dev-skill-designer:${source.clientId}:${createUuid()}`;
     registerRemoteWorkspaceSession({ sessionId: registrationId, workspacePath: scope.workspacePath, workspaceIdentity: scope.workspaceIdentity, services });
     bindRemoteWorkspaceIdentity(scope.workspaceIdentity, registrationId);
     return () => unregisterRemoteWorkspaceSession(registrationId);

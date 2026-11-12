@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { useCallback } from "react";
 import type { OpenInEditorRemoteTarget } from "@zcode/shared";
 import { toast } from "@/components/ui/toast.js";
@@ -51,7 +52,7 @@ export function useFileContextActions(options: FileContextActionOptions = {}) {
   );
 
   const copyPathText = useCallback(async (path: string) => {
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    if (typeof navigator === "undefined" || typeof document === "undefined") {
       logger.warn("[FileContextActions] 复制文件路径失败", {
         path,
         error: "clipboard-unavailable",
@@ -59,7 +60,7 @@ export function useFileContextActions(options: FileContextActionOptions = {}) {
       return;
     }
     try {
-      await navigator.clipboard.writeText(path);
+      await writeBrowserClipboardText(path);
       logger.info("[FileContextActions] 文件路径已复制", { path });
     } catch (error) {
       logger.warn("[FileContextActions] 复制文件路径失败", {

@@ -41,20 +41,29 @@ bun ./standalone.ts backend
 bun ./standalone.ts start
 ```
 
-打开 **http://127.0.0.1:4173/**；后端默认 **http://127.0.0.1:4174/**，各终端按 `Ctrl+C` 停止对应进程。默认仅监听本机；默认端口占用时明确报错，不自动换端口。安装需访问 npm 包源；安装后运行原型不需要 OMP 服务、数据库、Git、模型/API 密钥、Rust、根仓库依赖、原始 vendor 前端或个人机器配置。
+打开 **http://127.0.0.1:4173/**，或从内网其他电脑打开 **http://服务器IP:4173/**。前端默认监听 `0.0.0.0:4173`，以同源 HTTP／WS 代理连接仅监听本机的后端 `http://127.0.0.1:4174/`；浏览器不再把访问者自己的 localhost 当作服务器。各终端按 `Ctrl+C` 停止对应进程；端口占用时明确报错，不自动换端口。安装需访问 npm 包源；安装后运行原型不需要 OMP 服务、数据库、Git、模型/API 密钥、Rust、根仓库依赖、原始 vendor 前端或个人机器配置。
 
 **即使在完整仓库内，也使用上述安装命令，不要直接运行 `bun install`。** 启动器在系统临时目录使用本包清单和 `bun.lock` 冻结安装并禁用安装脚本，再把依赖复制回本包并清理临时目录，不执行祖先 workspace 的安装脚本。重新安装前停止预览，安装会替换本包 `node_modules`；清单或锁文件变化后须重新安装。
 
 等价脚本为 `bun run install:standalone`、`bun run backend`、`bun run start`。可选静态构建命令为 `bun ./standalone.ts build`，输出 `build/dev`；静态页面仍需连接独立后端，不要用 `file://` 打开源码或页面。
 
-### 后端地址配置
+### 内网 HTTP、子路径与后端地址
 
+原型和正式共享前端支持普通内网 HTTP／WS，不要求 HTTPS 或浏览器“将不安全来源视为安全”设置。ID 复用共享 UUID 工具，附件保留原 SHA-256 校验值，HTTP 缺少 WebCrypto 时使用固定版本的纯 JavaScript SHA-256；复制文字由同一个工具在用户点击时兼容执行，失败不显示复制成功。浏览器麦克风仍受浏览器安全上下文限制，HTTP 下明确提示使用文字或上传音频。
+
+若入口固定挂载在 `http://10.242.201.214:4173/xxx/xxx/`，终端一仍按前文启动后端，终端二执行：
+
+```sh
+OMP_DEV_BASE_PATH=/xxx/xxx/ bun ./standalone.ts start
+```
+
+`OMP_DEV_BASE_PATH` 必须以 `/` 开始、以 `/` 结束。独立预览默认值为 `/`；原生 runtime 构建保留默认相对基址 `./`，用于宿主已有随机能力目录，不能改成绕过能力路径的根接口。配置的是资源与接口挂载前缀，不是项目或工作区目录。原型的 Vite 代理自动移除这个前缀，再将 `/api/dev/*` HTTP 与两个 WebSocket 请求原样交给独立后端，保持冻结契约不变。静态构建时使用相同环境变量；正式静态宿主需将该前缀下的资源交给前端，并将同前缀的 `api/dev/*` HTTP／WS 路由到真实后端，不在浏览器里加入转码或另一套接口。
+
+- 前端读取 `OMP_DEV_FRONTEND_HOST`（默认 `0.0.0.0`）和 `OMP_DEV_FRONTEND_PORT`（默认 `4173`）。仅本机预览可显式设置 `OMP_DEV_FRONTEND_HOST=127.0.0.1`。
 - 后端读取 `OMP_DEV_BACKEND_HOST`（默认 `127.0.0.1`）和 `OMP_DEV_BACKEND_PORT`（默认 `4174`，允许 `0` 由系统分配端口），启动后输出实际 URL。
-- 浏览器连接地址优先级为 **URL 查询参数 `backend` > `VITE_DEV_BACKEND_URL` > `http://127.0.0.1:4174/`**。`VITE_DEV_BACKEND_URL` 在启动前端／构建时设置；`backend` 的值须 URL 编码，例如 `http://127.0.0.1:4173/?backend=http%3A%2F%2F127.0.0.1%3A4184%2F`。可追加 `&demo=analysis-scale`。
-- 例如另起后端：`OMP_DEV_BACKEND_PORT=4184 bun ./standalone.ts backend`（Bash），再打开上述 URL。使用端口 `0` 时，按后端输出的实际地址填写 `backend`。
-- 后端不可达时页面显示连接失败并提供重试，不自动回落浏览器样例。`backend` 选择服务地址，不选择个人 Web 或身份。
-
-这是本机原型配置，不是生产部署方案。工号仅格式检查，不是认证；不要将该原型当作具备生产认证与安全隔离的公网／共享服务。
+- 前端开发／静态预览代理读取 `OMP_DEV_PROXY_TARGET`（默认 `http://127.0.0.1:4174`），只在预览服务器使用，不进入浏览器。例如后端改为 `4184` 时，分别执行 `OMP_DEV_BACKEND_PORT=4184 bun ./standalone.ts backend` 和 `OMP_DEV_PROXY_TARGET=http://127.0.0.1:4184 bun ./standalone.ts start`；动态端口按实际输出设置。
+- 浏览器地址优先级为 **URL 查询参数 `backend` > `VITE_DEV_BACKEND_URL` > 当前页面 origin 加构建 BASE_URL**。前两项仅用于显式连接另一个可达后端；内网同源部署无需填写，不能把服务器的 `127.0.0.1` 发给另一台电脑的浏览器。
+- 后端不可达时页面显示连接失败并提供重试，不自动回落浏览器样例。`backend` 选择服务地址，不选择个人 Web 或身份。原型工号仅作操作标识，不代表真实身份认证。
 
 ### HTTP 与实时接口契约
 

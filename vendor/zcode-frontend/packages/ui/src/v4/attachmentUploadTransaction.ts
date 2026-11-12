@@ -1,5 +1,5 @@
 import { BufferWriter, serialize } from "@zcode/rpc";
-import { ServiceChannels } from "@zcode/shared";
+import { createUuid, sha256Bytes, ServiceChannels } from "@zcode/shared";
 import {
   PROTOCOL_V4_LIMITS,
   type V4AttachmentBeginResult,
@@ -87,21 +87,13 @@ function encodeBase64(bytes: Uint8Array): string {
 }
 
 async function checksum(bytes: Uint8Array): Promise<string> {
-  if (!globalThis.crypto?.subtle) throw new Error("fault.attachment.checksumUnavailable");
-  // WebCrypto 的 BufferSource 要求 ArrayBuffer；复制也避免调用期间底层 view 被复用。
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", Uint8Array.from(bytes).buffer);
-  const hex = [...new Uint8Array(digest)]
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
+  const digest = await sha256Bytes(bytes);
+  const hex = [...digest].map(value => value.toString(16).padStart(2, "0")).join("");
   return `sha256:${hex}`;
 }
 
 function createUploadId(): string {
-  if (typeof globalThis.crypto.randomUUID === "function") {
-    return `upload-${globalThis.crypto.randomUUID()}`;
-  }
-  const words = globalThis.crypto.getRandomValues(new Uint32Array(4));
-  return `upload-${[...words].map((word) => word.toString(16).padStart(8, "0")).join("")}`;
+  return `upload-${createUuid()}`;
 }
 
 /** 用 production ChannelClient 相同的 serializer 计量完整 method+args physical request。 */

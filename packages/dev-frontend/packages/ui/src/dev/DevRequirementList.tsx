@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ProjectFolderIcon } from "@/project-sidebar/ProjectFolderIcon.js";
-import { ArrowDownWideNarrow, ListFilter, Search, X } from "lucide-react";
+import { ArrowDownWideNarrow, ListFilter, Search, TriangleAlert, X } from "lucide-react";
 import { WorkspacePurposeSection } from "@/WorkspaceSidebar/WorkspacePurposeSection.js";
 import { Button } from "@/components/ui/button.js";
 import { Badge } from "@/components/ui/badge.js";
@@ -73,18 +73,22 @@ export function DevRequirementList({ title, groups, onSearch, onNavigate, automa
     </>
    </DropdownMenuContent></DropdownMenu>
   </>}>
-  {filtered && <div className="flex items-center justify-between gap-1 px-4 pb-2 text-ui-sm text-foreground-subtle"><span className="min-w-0 break-words">{summary}</span><Button variant="ghost" size="sm" className="shrink-0 gap-1" aria-label={`清除${title}筛选`} onClick={clearFilters}><X className="size-3" />清除全部</Button></div>}
-  <div className="space-y-1 px-4 pb-2 text-ui-sm text-foreground-subtle" data-testid="proposal-intake-summary">
-   <p role="status" title="分类数量按当前阶段、提出人和负责人筛选统计，不受入库检查筛选影响。">显示 {visibleGroups.length}/{groups.length} 项 · 入库检查</p>
-   <div className="flex flex-wrap gap-1">{intakeOptions.filter(option => option.id === "failed" || option.id === "incomplete" || option.id === "unmerged" || option.id === "first-check").map(option => <Button key={option.id} variant={intake === option.id ? "secondary" : "ghost"} size="sm" className="h-6 min-w-0 px-1.5 text-ui-sm" aria-pressed={intake === option.id} aria-label={`入库检查：${option.title}，${option.count} 项`} onClick={() => setIntake(intake === option.id ? "all" : option.id)}>{option.title} {option.count}</Button>)}</div>
-  </div>
+  {filtered && <div className="flex items-center justify-between gap-2 px-4 pb-2 text-ui-sm text-foreground-subtle" data-testid="proposal-filter-summary">
+   <p role="status" className="min-w-0 truncate" title={summary}>找到 {visibleGroups.length} 项</p>
+   <ControlHintTooltip title={`清除筛选 · ${summary}`}><Button variant="ghost" size="sm" className="shrink-0 gap-1" aria-label={`清除${title}筛选`} onClick={clearFilters}><X className="size-3" />清除</Button></ControlHintTooltip>
+  </div>}
   <div className="px-2">
 					{visibleGroups.map(group => {
       const selected = !automationsActive && dev.selection.irId === group.id && !dev.selection.srId;
+      const intakeStatus = proposalIntakeStatus(group);
+      const intakeIssue = intakeStatus === "failed" || intakeStatus === "incomplete";
+      const processingHint = proposalProcessingHint(group, true);
+      const processingLabel = intakeIssue ? `${processingHint} · ${proposalPhaseLabel(group)}` : `${proposalPhaseLabel(group)} · ${processingHint}`;
+      const processingDescription = intakeIssue && group.proposalDelivery?.mergeCheck?.message ? `${processingLabel}：${group.proposalDelivery.mergeCheck.message}` : processingLabel;
       return <Button key={group.id} variant={selected ? "secondary" : "ghost"} className="mb-1 h-auto min-h-12 w-full min-w-0 justify-start gap-2 rounded-lg px-2.5 py-1.5 text-left font-normal focus-visible:ring-2 focus-visible:ring-ring/50" data-ir-id={group.id} aria-current={selected ? "page" : undefined} onClick={() => choose(group.id)}>
        <Badge variant="outline" className="h-4 min-w-5 justify-center rounded-sm border-border/70 bg-surface px-0.5 font-mono text-ui-xs font-medium text-foreground-subtle">IR</Badge>
        {/* 标题是可操作的主要内容；工号和阶段不能沿用最弱的 10px 装饰文字。 */}
-       <span className="min-w-0 flex-1"><span className={`block truncate text-ui-base text-foreground ${selected ? "font-medium" : "font-normal"}`} title={group.title}>{group.title}</span><span className="mt-0.5 flex items-center justify-between gap-1 text-ui-sm text-foreground-subtle"><span className="shrink-0" title="提案提出人">提出 {group.proposalLocation?.employeeId ?? "未记录"}</span><span className="truncate" title={`${proposalPhaseLabel(group)} · ${proposalProcessingHint(group, true)}`}>{`${proposalPhaseLabel(group)} · ${proposalProcessingHint(group, true)}`}</span></span></span>
+       <span className="min-w-0 flex-1"><span className="flex min-w-0 items-center gap-1.5"><span className={`min-w-0 flex-1 truncate text-ui-base text-foreground ${selected ? "font-medium" : "font-normal"}`} title={group.title}>{group.title}</span>{intakeIssue && <TriangleAlert aria-hidden="true" className={`size-3.5 shrink-0 ${intakeStatus === "failed" ? "text-destructive" : "text-warning-surface-foreground"}`} />}</span><span className="mt-0.5 flex items-center justify-between gap-1 text-ui-sm text-foreground-subtle"><span className="shrink-0" title="提案提出人">提出 {group.proposalLocation?.employeeId ?? "未记录"}</span><span className={`truncate ${intakeStatus === "failed" ? "text-destructive" : intakeStatus === "incomplete" ? "text-warning-surface-foreground" : ""}`} title={processingDescription}>{processingLabel}</span></span></span>
       </Button>;
 					})}
   {!visibleGroups.length && <p className="px-2.5 py-3 text-ui-sm text-foreground-subtle">{groups.length ? "没有符合筛选条件的内容。" : `当前 Release 暂无${title}。`}</p>}

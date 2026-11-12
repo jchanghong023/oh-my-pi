@@ -1,3 +1,5 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
+import { logger } from "@/logger.js";
 import { memo, type ReactNode, useEffect, useRef, useState } from "react";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible.js";
 import { Button } from "@/components/ui/button.js";
@@ -225,7 +227,7 @@ function ToolLayoutComponent({
       return;
     }
 
-    navigator.clipboard.writeText(statusTooltip).then(() => {
+    writeBrowserClipboardText(statusTooltip).then(() => {
       setIsFailureTooltipCopied(true);
       if (failureTooltipCopyResetRef.current !== null) {
         window.clearTimeout(failureTooltipCopyResetRef.current);
@@ -234,6 +236,8 @@ function ToolLayoutComponent({
         setIsFailureTooltipCopied(false);
         failureTooltipCopyResetRef.current = null;
       }, 1500);
+    }).catch((error: unknown) => {
+      logger.warn("[tool-layout-copy] copy failure details failed", error);
     });
   };
 

@@ -1,4 +1,5 @@
 import "../packages/ui/src/dev/browserStorage.js";
+import { createUuid } from "@zcode/shared";
 import { AppErrorBoundary, Root, ZCodeIntlProvider } from "@zcode/ui";
 import type { IServiceAccessor } from "@zcode/services";
 import { useEffect, useState } from "react";
@@ -37,7 +38,7 @@ function BrowserApplication() {
       dispose = undefined;
       if (release) void Promise.resolve(release()).catch(dev.report);
     };
-    const registrationId = `dev:${source.clientId}:${crypto.randomUUID()}`;
+    const registrationId = `dev:${source.clientId}:${createUuid()}`;
     setConnectionError(undefined);
     void source.connectWorkspace(workspace, selection, session).then(async opened => {
       if (!active) { await opened.dispose(); return; }
