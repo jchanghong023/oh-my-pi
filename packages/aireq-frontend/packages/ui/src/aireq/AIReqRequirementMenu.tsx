@@ -17,7 +17,7 @@ export function AIReqRequirementMenu({ group }: { group: AIReqRequirementGroup }
  const sr = formal ? aireq.view?.srs.find(item => item.id === aireq.selection.srId && item.irId === group.id && item.projectId === group.projectId) : undefined;
  const infoTitle = sr ? "SR 信息" : formal ? "需求信息" : "提案信息";
  const worktree = sr ? sr.worktree : group.acceptance?.worktree ?? group.worktree;
- const operationLabels: Record<string, string> = { createProposal: "创建提案", generateRequirements: "整理需求", supplementRequirements: "补充需求", runRequirementsReview: "需求评审", submitProposalReview: "交给开发", acceptProposal: "接手技术方案", generateProposalSolution: "生成技术方案", returnProposal: "退回业务补充", recordRequirementsDecision: "记录业务争议处理", confirmProposal: "确认需求与方案", publishProposal: "提交并推送", markRequirementsPrSubmitted: "登记需求 PR", markRequirementsMerged: "核验需求入库" };
+ const operationLabels: Record<string, string> = { createProposal: "创建提案", generateRequirements: "整理需求", supplementRequirements: "补充需求", runRequirementsReview: "需求评审", submitProposalReview: "交给开发", acceptProposal: "接手技术方案", generateProposalSolution: "方案 Agent 更新材料", returnProposal: "退回业务补充", recordRequirementsDecision: "记录业务争议处理", confirmProposal: "确认需求与方案", publishProposal: "提交并推送", markRequirementsPrSubmitted: "登记需求 PR", markRequirementsMerged: "核验需求入库" };
  const operations = aireq.view?.operations.filter(item => item.irId === group.id && (!sr || item.srId === sr.id)) ?? [];
  return <>
   {formal ? <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" aria-label="更多需求选项"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>

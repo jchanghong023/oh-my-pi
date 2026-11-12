@@ -71,8 +71,8 @@ export function AIReqPhaseHeader({ details, placement = "header" }: { details: R
       action = selection.reviewAgent && selection.reviewAgent !== "summary" ? <Button size="sm" variant="outline" onClick={() => aireq.select({ ...selection, reviewAgent: "summary" })}>查看综合意见</Button>
        : <Button size="sm" disabled={pending || running || !!readyIssue} title={readyIssue ?? "我已查看综合意见，由我判断本轮需求可以进入方案"} onClick={() => void aireq.command({ type: "acceptProposal", ...target, reviewId: group.review?.id, snapshotDigest: group.review?.snapshotDigest })}>通过，进入技术方案</Button>;
     } else if (phase === 2) {
-      status = hasCurrentProposalSolution(group) ? "方案已完成 · 可创建分支并推送" : "等待完成技术方案／SR依赖";
-      action = hasCurrentProposalSolution(group) ? <AIReqProposalDeliveryControls group={group} compact /> : <Button size="sm" disabled={pending || running || !!reviewIssue} title={reviewIssue} onClick={() => void aireq.command({ type: "generateProposalSolution", ...target })}>生成技术方案</Button>;
+      status = hasCurrentProposalSolution(group) ? "方案材料已就绪 · 可确认" : "与方案 Agent 对话，完善方案、依赖及工期";
+      action = hasCurrentProposalSolution(group) ? <AIReqProposalDeliveryControls group={group} compact /> : null;
     } else { status = group.proposalDelivery?.pushedAt ? "定时核验合入与文档完整性" : "当前版本已确认 · 待提交推送"; action = <AIReqProposalDeliveryControls group={group} compact />; }
   } else if (sr) {
     const owns = sr.developerEmployeeId === getEmployeeId();
@@ -98,7 +98,7 @@ export function AIReqPhaseHeader({ details, placement = "header" }: { details: R
     else if (running || pending) guidance = running ? "Agent 正在工作，完成后再检查文档并操作。" : "正在更新，请稍候。";
     else if (phase === 0) guidance = group.returnFeedback && !group.returnFeedback.resumedAt ? "请与业务需求 Agent 讨论最新待处理意见，由 AI 补充 IR／SR；文件更新后再发起评审。" : requirementsReviewInputs(group) ? "检查 proposal.md 与全部 SR 的 spec.md 后，发起需求评审。" : "请先在 IR 聊天中完善需求，生成 proposal.md 和 SR 规格。";
     else if (phase === 1) guidance = requirementsReviewReadyBlocker(group) ?? "请阅读综合意见，由你判断通过或返回业务补充；模型的建议与分歧不会自动判定结果。";
-    else if (phase === 2) guidance = reviewIssue ?? (hasCurrentProposalSolution(group) ? "本轮技术方案／SR依赖已生成；检查 IR、全部 SR 及技术方案／SR依赖后，逐文件确认进入入库。" : group.proposalSolution ? "技术方案／SR依赖缺失、无效或与本轮需求不匹配，请重新生成后确认。" : "尚未生成本轮有效技术方案／SR依赖；右侧已有材料是参考材料，请先生成技术方案。");
+    else if (phase === 2) guidance = reviewIssue ?? (hasCurrentProposalSolution(group) ? "方案 Agent 已更新技术方案、SR 依赖及工期预估；可继续对话完善，或检查当前材料后逐文件确认。" : group.proposalSolution ? "当前方案材料缺失、无效或与本轮需求不匹配，请在方案对话中让 AI 补齐或更新。" : "请与方案 Agent 讨论技术方案、SR 依赖和工期预估；AI 完成产出后，右侧材料会同步更新。");
     else guidance = group.status === "requirements-pr" ? "等待人工评审合并；后台定时检查提案分支合入及文档完整性，满足后自动入库并创建 SR 分支。" : "按已确认版本创建提案分支、提交推送，自动创建 MR，人工评审合并，后台定时核验。";
   }
   const canBack = !history && !readOnly && !complete && (proposal ? (phase === 1) || (phase === 2 && source.capabilities.proposalDiscussion && group.status !== "requirements-pr") : Boolean(sr && sr.status === "developing" && phase > 0));

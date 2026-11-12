@@ -1,3 +1,4 @@
+import proposalSolutionUpdated from "./proposal-solution-updated.md?raw";
 import { prototypeCodeDevelopmentAllowed, prototypeProposalDiscussionAllowed } from "./backend.js";
 import { consumePrototypeSendFailure } from "./recovery.js";
 import { prototypeAgentModelSelection } from "./agent-models.js";
@@ -264,6 +265,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
   };
   const append = (value: LocalSession, content: string, commandId?: string, refs?: AttachmentRef[]) => {
     let generated: boolean | undefined;
+    let solutionUpdated = false;
     // 与输入框共用同一归属规则，避免快捷发送绕过只读提示；不实现真实鉴权。
     for (const project of getPrototypeWorkflow().projects) {
       const index = getPrototypeWorkflow({ projectId: project.id });
@@ -279,11 +281,17 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
         generated = !proposal.srIds.length;
         applyPrototypeAction({ type: generated ? "generateRequirements" : "supplementRequirements", projectId: project.id, irId: proposal.id, note: content }, { projectId: project.id, irId: proposal.id, discussionPhase: "requirements" });
       }
+      if (ref.phase === "solution" && ref.role === "solution" && proposal && content.trim()) {
+        if (ref.round !== (proposal.proposalRound ?? 1)) throw new Error("历史方案会话仅供只读查看，请进入当前轮次的方案对话。");
+        applyPrototypeAction({ type: "generateProposalSolution", projectId: project.id, irId: proposal.id },
+          { projectId: project.id, irId: proposal.id, discussionPhase: "solution" }, content);
+        solutionUpdated = true;
+      }
       break;
     }
 
     if (value.stage === "free" && value.meta.title === "新建会话") { value.meta.title = content.trim().split("\n")[0]!.slice(0, 40) || "新建会话"; value.snapshot.meta.title = value.meta.title; }
-    appendRows(value.snapshot.rows.window, value.meta.taskId, content, value.stage === "requirements-review" ? requirementsReviewDialogue : generated !== undefined ? generated ? requirementsGenerated : requirementsSupplemented : value.meta.taskId.startsWith("prototype-skill-design:") ? prototypeSkillDesignReply(value.meta.taskId, content) : `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在后端场景内存中，刷新或重新连接会保留，服务重启恢复样例。当前${value.stage === "ir-acceptance" ? "IR 整体验收" : value.stage === "free" ? "项目自由会话" : value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。`, Date.now(), commandId, refs, value.snapshot.config.model);
+    appendRows(value.snapshot.rows.window, value.meta.taskId, content, value.stage === "requirements-review" ? requirementsReviewDialogue : generated !== undefined ? generated ? requirementsGenerated : requirementsSupplemented : solutionUpdated ? proposalSolutionUpdated : value.meta.taskId.startsWith("prototype-skill-design:") ? prototypeSkillDesignReply(value.meta.taskId, content) : `【阶段性前端原型 · 预置回复】\n\n已将你的补充保存在后端场景内存中，刷新或重新连接会保留，服务重启恢复样例。当前${value.stage === "ir-acceptance" ? "IR 整体验收" : value.stage === "free" ? "项目自由会话" : value.stage === "requirements" ? "需求讨论" : value.stage === "solution" ? "方案讨论" : value.stage === "planning" ? "计划评审" : value.stage === "executing" ? "实施状态演示" : "交付评审"}建议继续核对交互边界、空态、错误提示与可访问性。\n\n这不是模型生成或真实执行结果；没有调用 OMP、模型、Git、命令或测试。`, Date.now(), commandId, refs, value.snapshot.config.model);
     publishPrototypeProposalForSession(value.meta.taskId);
     value.snapshot.rows.totalCount = value.snapshot.rows.window.length; value.snapshot.rows.firstRowId = value.snapshot.rows.window[0]?.rowId ?? null; changed(value);
   };
