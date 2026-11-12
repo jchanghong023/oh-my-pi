@@ -6,9 +6,9 @@ import { DevEmptyState, DevProposalSrReadOnlyState } from "@/dev/DevEmptyState.j
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useDev } from "@/dev/DevContext.js";
 import { conversationReadOnlyReason } from "@/dev/domain.js";
-import { DevRequirementAnalysisPage } from "@/dev/DevRequirementAnalysisPage.js";
-import { DevSkillDesignPage } from "@/dev/DevSkillDesignPage.js";
-import { DevAutomations } from "@/dev/DevAutomations.js";
+import { DeferredDevRequirementAnalysisPage as DevRequirementAnalysisPage } from "@/app-shell/DeferredWorkspacePages.js";
+import { DeferredDevSkillDesignPage as DevSkillDesignPage } from "@/app-shell/DeferredWorkspacePages.js";
+import { DeferredDevAutomations as DevAutomations } from "@/app-shell/DeferredWorkspacePages.js";
 import { DevSidebar, DevStageHeader } from "@/dev/DevWorkbench.js";
 import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
 import { useWorkbenchGroupStore } from "@/v4/workbenchGroupStore.js";
@@ -58,7 +58,8 @@ import { usePlatform } from "@/hooks/usePlatform.js";
 import { GitBranchSwitcher } from "@/GitBranchSwitcher.js";
 import { ScopedErrorBoundary } from "@/ErrorBoundary.js";
 
-import { AUTOMATIONS_TOAST_ANCHOR_ID, AutomationsSection } from "@/settings/AutomationsSection.js";
+import { AUTOMATIONS_TOAST_ANCHOR_ID } from "@/settings/automationToastAnchor.js";
+import { DeferredAutomationsSection as AutomationsSection } from "@/app-shell/DeferredWorkspacePages.js";
 import type {
   SavedWorkflowLaunchTarget,
   SavedWorkflowsOpenArtifactParams,
@@ -1928,7 +1929,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                     variant="panel"
                     className="min-h-full"
                   >
-                    <div className="mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6">
+                    {/* Dev 子页已使用原生 Settings 内容列；外层只保留顶部留白，避免重复居中和 padding。 */}
+                    <div className={dev ? "w-full py-4 md:py-6" : "mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6"}>
                       {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
                         <AutomationsSection
                           workspacePath={workspaceAbsPath}
@@ -2241,7 +2243,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                                   variant="panel"
                                   className="min-h-full"
                                 >
-                                  <div className="mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6">
+                                  {/* Dev 子页已使用原生 Settings 内容列；外层只保留顶部留白，避免重复居中和 padding。 */}
+                                  <div className={dev ? "w-full py-4 md:py-6" : "mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6"}>
                                     {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
                                       <AutomationsSection
                                         workspacePath={workspaceAbsPath}

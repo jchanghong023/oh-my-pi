@@ -46,6 +46,14 @@ export default defineConfig({
 		},
 		dedupe: ["react", "react-dom"],
 	},
+	optimizeDeps: {
+		rolldownOptions: {
+			output: {
+				// 合并稳定图标依赖，避免开发模式逐图标发起请求；不预打包业务源码。
+				codeSplitting: { groups: [{ name: "lucide-icons", test: /node_modules[\\/]lucide-react[\\/]/ }] },
+			},
+		},
+	},
 	define: {
 		__ZCODE_VERSION__: JSON.stringify("3.17.2"),
 		__ZCODE_ENV__: JSON.stringify("production"),

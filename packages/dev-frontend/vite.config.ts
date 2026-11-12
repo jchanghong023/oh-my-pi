@@ -144,6 +144,14 @@ export function createDevFrontendConfig(entryRoot: string, outputDirectory: stri
 			],
 			dedupe: ["react", "react-dom"],
 		},
+		optimizeDeps: {
+			rolldownOptions: {
+				output: {
+					// 根图标入口与动态图标共用模块时，默认会拆出约两千个静态请求。
+					codeSplitting: { groups: [{ name: "lucide-icons", test: /node_modules[\\/]lucide-react[\\/]/ }] },
+				},
+			},
+		},
 		server: {
 			host,
 			port,

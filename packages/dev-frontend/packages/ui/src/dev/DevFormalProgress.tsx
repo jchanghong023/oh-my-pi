@@ -122,8 +122,9 @@ export function DevFormalTable({ navigationOpen, toolbar }: FormalNavigationProp
   });
   const latest = (rows: DevSystemRequirement[]) => rows.map(sr => sr.progress?.analysedAt ?? "").sort().at(-1);
   const date = (value?: string) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "尚未分析";
-  return <main className="flex h-full min-h-0 flex-col bg-background" data-testid="dev-formal-table">
-    <header className="shrink-0 space-y-3 border-b border-border px-4 py-3">
+  return <main className="flex h-full min-h-0 min-w-0 flex-col bg-background" data-testid="dev-formal-table">
+    <div className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-4 py-4 md:px-6 md:py-6">
+    <header className="shrink-0 space-y-3 border-b border-border pb-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">{!navigationOpen && <WorkspaceSidebarToolbar {...toolbar} />}<h1 className="shrink-0 text-ui-base font-semibold">正式需求</h1></div>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -149,7 +150,7 @@ export function DevFormalTable({ navigationOpen, toolbar }: FormalNavigationProp
         </div>
       </div>
     </header>
-    <div ref={scrollRef} id={scrollId} role="region" aria-label="正式需求表格横向滚动区域" aria-describedby={scrollDescriptionId} tabIndex={0} className="mx-4 min-h-0 flex-1 overflow-auto rounded-xl border border-border bg-background focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" data-testid="formal-table-scroll" onKeyDown={event => {
+    <div ref={scrollRef} id={scrollId} role="region" aria-label="正式需求表格横向滚动区域" aria-describedby={scrollDescriptionId} tabIndex={0} className="mt-3 min-h-0 flex-1 overflow-auto rounded-xl border border-border bg-background focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" data-testid="formal-table-scroll" onKeyDown={event => {
       if (event.target !== event.currentTarget) return;
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
@@ -201,8 +202,9 @@ export function DevFormalTable({ navigationOpen, toolbar }: FormalNavigationProp
       </table>
       {!visible.length && <p role="status" className="py-12 text-center text-ui-sm text-foreground-subtle">{groups.length ? "没有符合条件的需求。" : "当前版本尚无正式需求。"}</p>}
     </div>
-    <p role="status" aria-live="polite" className="shrink-0 px-4 text-ui-xs text-foreground-subtle">{copyMessage}</p>
-    <p className="shrink-0 border-t border-border px-4 py-2 text-ui-xs text-foreground-subtle">可横向滚动查看全部列，名称列固定。{source.provenance.kind === "sample" ? "原型分配与排期保存于后端内存，刷新保留、后端重启恢复；" : "人员与排期由后台保存；"}IR 时间由 SR 汇总，进度为 SR 平均值。</p>
+    <p role="status" aria-live="polite" className="shrink-0 text-ui-xs text-foreground-subtle">{copyMessage}</p>
+    <p className="shrink-0 py-2 text-ui-xs text-foreground-subtle">可横向滚动查看全部列，名称列固定。{source.provenance.kind === "sample" ? "原型分配与排期保存于后端内存，刷新保留、后端重启恢复；" : "人员与排期由后台保存；"}IR 时间由 SR 汇总，进度为 SR 平均值。</p>
+    </div>
   </main>;
 }
 
@@ -257,7 +259,7 @@ function DevFormalReport() {
   const hasAnalysis = rows.some(sr => sr.progress);
   const progressSource = manual ? percent === 100 ? "人工确认" : "人工调整" : selected ? hasAnalysis ? "AI 分析" : "尚未分析" : undefined;
   return <main className="h-full min-h-0 overflow-auto bg-background" data-testid="dev-formal-report">
-    <div className="space-y-6 px-6 py-5">
+    <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-4 md:px-6 md:py-6">
       <header className="space-y-3"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selected ? "SR" : "IR"}</Badge><span className="font-mono text-ui-xs text-foreground-subtle">{selected?.id ?? group.id}</span><ProgressStatusBadge status={status} /><Badge variant="outline">{hasAnalysis ? source.provenance.kind === "sample" ? "原型预置报告" : "进度分析报告" : "尚未分析"}</Badge></div><h1 className="text-ui-lg font-semibold">{title}</h1><div className="flex flex-wrap items-center gap-2 text-ui-sm"><span className="text-foreground-subtle">需求负责人</span><AssignOwner group={group} /></div><ProgressValue value={percent} label={title} status={status} source={progressSource} showStatus={false} /><p className="text-ui-sm text-foreground-subtle">{selected ? manual ? "当前百分比来自人工判断；下方 AI 报告为此前分析，不代表本次人工结论。" : hasAnalysis ? "进度分析 Agent 根据需求、验收标准与代码证据判断。" : "尚未分析；0% 为新需求的初始进度，不代表已有代码分析结论。" : `${all.length} 个 SR 的进度算术平均值；全部 SR 完成后 IR 才完成。`}</p>{manual && <p className="break-words text-ui-sm" data-testid="manual-progress-source">{progressSource}：{manual.employeeId} · {manual.reason} · {new Date(manual.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p>}</header>
       {selected && <ManualProgress key={selected.id} group={group} sr={selected} />}
       <ReportSection title={manual ? "此前 AI 报告的问题与不确定项" : "值得关注的问题与不确定项"}>{issues.length ? <ul className="space-y-4">{issues.map((issue, index) => <li key={`${issue.sr.id}:${index}`} className="space-y-1"><p className="text-ui-sm font-medium">{issue.title}{!selected && ` · ${issue.sr.title}`}</p><p className="text-ui-sm leading-6 text-foreground-subtle">{issue.detail}</p></li>)}</ul> : <p className="text-ui-sm text-foreground-subtle">{hasAnalysis ? "当前报告未发现需关注的遗留问题。" : "尚未分析，暂无问题判断。"}</p>}</ReportSection>

@@ -38,7 +38,7 @@ import type { AppSettings } from "@zcode/shared";
 import { useTabPersistence, type WorkspacePersistenceGate } from "@/hooks/useTabPersistence.js";
 import { bindNativeWorkspaceServices, useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { SettingsPage } from "@/SettingsPage.js";
+import { DeferredSettingsPage as SettingsPage } from "@/root/DeferredSettingsPage.js";
 import { ProviderSetupScreen } from "@/ProviderSetupScreen.js";
 import { setDefaultFileDisplayBasePath } from "@/lib/fileDisplay.js";
 import { areWorkspaceFilePathsEqual } from "@/workspace-file-tree/model.js";

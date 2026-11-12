@@ -23,8 +23,8 @@ export function DevWorkspaceRecovery({ workspace }: { workspace: DevWorkspace })
   if (workspace.blockedPath && source.prototype) void Promise.resolve(source.prototype.directoryIssue(workspace.blockedPath)).then(value => { if (active) setSampleDirectoryIssue(value); }, dev.report);
   return () => { active = false; };
  }, [source, workspace.blockedPath, dev.report]);
- return <main className="h-dvh overflow-x-hidden overflow-y-auto bg-background p-8 text-foreground" data-testid="dev-workspace-unavailable">
-  <div className="mx-auto max-w-4xl space-y-6"><section className="space-y-4 rounded-lg border border-border p-6">
+ return <main className="h-dvh overflow-x-hidden overflow-y-auto bg-background px-4 py-4 text-foreground md:px-6 md:py-6" data-testid="dev-workspace-unavailable">
+  <div className="mx-auto w-full min-w-0 max-w-4xl space-y-6"><section className="space-y-4 rounded-lg border border-border p-6">
    <h1 className="text-ui-base font-semibold">{projects.length ? "当前工作区不可用" : "添加第一个项目"}</h1>
    <p role={projects.length ? "alert" : "status"} className="text-ui-base leading-6">{workspace.error}</p>
    {workspace.blockedPath && <p className="break-all font-mono text-ui-sm text-foreground-subtle" data-testid="recovery-directory-path">{workspace.blockedPath}</p>}

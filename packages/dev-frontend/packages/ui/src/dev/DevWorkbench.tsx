@@ -70,7 +70,7 @@ export function DevReadonlyOverview() {
  const scope = useMemo(() => ({ workspacePath: workspace.path ?? "", workspaceIdentity: workspace.identity }), [workspace.path, workspace.identity]);
 	const sessionId = sr?.status === "completed" ? sr.sessions.find(session => session.phase === "pr")?.sessionId ?? null : null;
 	const reason = sr?.status === "completed" ? "该 SR 已完成，历史讨论只读。" : "该 SR 尚未开始开发，请通过顶部“开始开发”进入开发计划。";
-	if (!sr || !project) return <div className="p-6 text-ui-base text-foreground-subtle">所选 SR 当前不可用，请从导航选择已有需求。</div>;
+	if (!sr || !project) return <div className="mx-auto w-full min-w-0 max-w-4xl p-6 text-ui-base text-foreground-subtle">所选 SR 当前不可用，请从导航选择已有需求。</div>;
 	return <div className="relative flex h-full min-h-0 flex-1 flex-col" data-testid="dev-sr-readonly-chat">
 		<V4PaneConversationProvider key={sr.id} scope={scope} sessionId={sessionId}>
 			<SessionPane paneId={`dev-readonly-${sr.id}`} sessionId={sessionId} rootSessionId={sessionId ?? undefined} workspacePath={scope.workspacePath} workspaceIdentity={scope.workspaceIdentity} embedded readOnly readOnlyReason={reason} />
@@ -143,7 +143,7 @@ export function DevMaterialsPane() {
 			className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background"
 			data-testid="materials-pane"
 		>
-			<div className="space-y-2 p-3">
+			<div className="shrink-0 px-4 pt-4 pb-3 md:px-6 md:pt-6"><div className={`mx-auto w-full min-w-0 space-y-2 ${!showPlanning && path.endsWith("/sr-dependencies.json") ? "max-w-4xl" : "max-w-[72ch]"}`}>
         {proposalSolutionView && group && <nav aria-label="方案材料定位" className="flex gap-1" data-testid="proposal-material-navigation">
           <Button size="sm" variant={!showPlanning && path === solutionMaterial?.path ? "secondary" : "ghost"} className="min-w-0 flex-1" disabled={!solutionMaterial} aria-pressed={!showPlanning && path === solutionMaterial?.path} onClick={() => { setShowPlanning(false); setPath(solutionMaterial!.path); }}>技术方案</Button>
           <Button size="sm" variant={!showPlanning && path === dependencyMaterial?.path ? "secondary" : "ghost"} className="min-w-0 flex-1" disabled={!dependencyMaterial} aria-pressed={!showPlanning && path === dependencyMaterial?.path} onClick={() => { setShowPlanning(false); setPath(dependencyMaterial!.path); }}>SR 依赖</Button>
@@ -165,14 +165,15 @@ export function DevMaterialsPane() {
 					</SelectContent>
         </Select>}
 
-			</div>
+			</div></div>
 			<div
         key={`${selection.projectId}:${selection.irId}:${showPlanning ? "planning" : path}`}
-				className="min-h-0 flex-1 overflow-auto px-5 py-4"
+				className="min-h-0 flex-1 overflow-auto px-4 py-4 md:px-6 md:py-6"
 				data-testid="material"
         data-material-path={showPlanning ? undefined : path}
         data-material-valid={showPlanning ? undefined : current?.valid}
 			>
+        <div className={`mx-auto w-full min-w-0 ${!showPlanning && path.endsWith("/sr-dependencies.json") ? "max-w-4xl" : "max-w-[72ch]"}`}>
         {!showPlanning && path && <Collapsible className="mb-4">
           <CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="group/material-path gap-1 px-0 text-ui-sm text-foreground-subtle focus-visible:ring-2 focus-visible:ring-ring/50"><ChevronRight className="size-3.5 transition-transform group-data-[state=open]/material-path:rotate-90" />文件路径与技术信息</Button></CollapsibleTrigger>
           <CollapsibleContent><p className="pt-2 whitespace-pre-wrap break-all font-mono text-ui-sm text-foreground-subtle select-text" data-testid="material-full-path">{displayPath(path)}</p></CollapsibleContent>
@@ -196,6 +197,7 @@ export function DevMaterialsPane() {
             </article>}
 					</>
 				)}
+        </div>
 			</div>
       {(proposal || !group) && <DevDocumentPhaseActions />}
 		</aside>

@@ -42,7 +42,7 @@ export function DevEntry({ children }: { children: ReactNode }) {
   try { globalThis.__ompDevSessionStorage.removeItem(identityKey); } catch { /* 本页内存仍清除。 */ }
   setBrowserEmployeeId(""); setEmployeeId(""); setValue(""); setError("");
  };
- if (employeeId && readyIdentity !== employeeId) return <main className="min-h-dvh bg-background p-8 text-foreground"><p role={error ? "alert" : "status"}>{error || "正在连接 Dev 后端…"}</p>{error && <Button onClick={signOut}>返回登录</Button>}</main>;
+ if (employeeId && readyIdentity !== employeeId) return <main className="min-h-dvh bg-background px-4 py-4 text-foreground md:px-6 md:py-6"><div className="mx-auto w-full min-w-0 max-w-4xl space-y-4"><p role={error ? "alert" : "status"}>{error || "正在连接 Dev 后端…"}</p>{error && <Button onClick={signOut}>返回登录</Button>}</div></main>;
  if (employeeId) return <DevIdentityContext.Provider key={employeeId} value={{ employeeId, signOut }}>{children}</DevIdentityContext.Provider>;
  return <main className="dark theme-zai-dark flex min-h-dvh flex-col bg-background text-foreground" style={{ colorScheme: "dark" }} data-testid="dev-entry">
   <header className="flex items-center gap-2 px-8 py-6"><span className="text-ui-base font-semibold tracking-wide">OMP</span><span className="text-ui-sm text-foreground-subtle">Dev</span></header>

@@ -8,6 +8,7 @@ import { ResizablePanel, ResizablePanelGroup, ResizableHandle } from "@/componen
 import { Button } from "@/components/ui/button.js";
 import { Label } from "@/components/ui/label.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
+import { AutomationsMainBreadcrumbFrame } from "@/settings/AutomationsMainBreadcrumbFrame.js";
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.js";
@@ -31,7 +32,9 @@ export function DevSkillDesignPage() {
   const project = dev?.view?.projects.find(item => item.id === dev.selection.projectId);
   const developmentRoot = project ? source.projects?.readDevelopmentRoot(project.id, source.backend?.owner) : undefined;
   return <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background" aria-label="Skill 设计">
-    <div className="flex min-h-0 flex-1 flex-col p-4"><SkillDesignEditor key={`${source.backend?.id}:${project?.id ?? "personal"}`} projectId={project?.id ?? "personal"} projectName={project?.name ?? "未选择项目"} workspacePath={developmentRoot ?? source.backend?.configDirectory ?? ""} developmentRoot={developmentRoot} /></div>
+    <AutomationsMainBreadcrumbFrame sectionLabel="Skill 设计" ariaLabel="Skill 设计导航">
+    <div className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-4 py-4 md:px-6 md:py-6"><SkillDesignEditor key={`${source.backend?.id}:${project?.id ?? "personal"}`} projectId={project?.id ?? "personal"} projectName={project?.name ?? "未选择项目"} workspacePath={developmentRoot ?? source.backend?.configDirectory ?? ""} developmentRoot={developmentRoot} /></div>
+    </AutomationsMainBreadcrumbFrame>
   </main>;
 }
 

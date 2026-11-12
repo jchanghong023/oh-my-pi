@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { SettingsPage } from "@/SettingsPage.js";
+import { DeferredSettingsPage as SettingsPage } from "@/root/DeferredSettingsPage.js";
 import { ServiceProvider } from "@/hooks/useServices.js";
 import { logger } from "@/logger.js";
 import type { WorkspaceSettingsLayerProps } from "@/root/types.js";

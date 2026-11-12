@@ -47,7 +47,8 @@ import { usePlatform } from "@/hooks/usePlatform.js";
 import { GitBranchSwitcher } from "@/GitBranchSwitcher.js";
 import { ScopedErrorBoundary } from "@/ErrorBoundary.js";
 
-import { AUTOMATIONS_TOAST_ANCHOR_ID, AutomationsSection } from "@/settings/AutomationsSection.js";
+import { AUTOMATIONS_TOAST_ANCHOR_ID } from "@/settings/automationToastAnchor.js";
+import { DeferredAutomationsSection as AutomationsSection } from "@/app-shell/DeferredWorkspacePages.js";
 import type {
   SavedWorkflowLaunchTarget,
   SavedWorkflowsOpenArtifactParams,

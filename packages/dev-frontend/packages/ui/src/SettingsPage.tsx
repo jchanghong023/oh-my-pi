@@ -472,11 +472,11 @@ export function SettingsPage({
 
           <section
             data-settings-content-frame="true"
-            className="flex min-h-0 flex-col"
+            className="flex min-h-0 min-w-0 flex-col"
           >
             <div
               data-settings-panel-frame="true"
-              className="relative flex min-h-0 h-full flex-col rounded-xl border border-border bg-background"
+              className="relative flex min-h-0 min-w-0 h-full flex-col rounded-xl border border-border bg-background"
             >
                 <div
                   className={cn(
@@ -509,11 +509,12 @@ export function SettingsPage({
                     </div>
                   </div>
                   <>
-                    <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+                    <main className="min-h-0 min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
                       <div
                         className={cn(
                           SETTINGS_FRAME_CONTENT_CLASSNAME,
-                          "flex flex-col gap-8",
+                          // 内容相对设置面板居中，正文与顶部工具栏间保留呼吸空间。
+                          "flex min-w-0 flex-col gap-8 pt-6",
                         )}
                       >
                           <div>
@@ -539,7 +540,7 @@ export function SettingsPage({
                               </p>
                             ) : null}
                           </div>
-                        <div className="space-y-8">
+                        <div className="min-w-0 space-y-8">
                           {activeSection === "general" ? (
                             <DevProjectSettings />
                           ) : activeSection === "appearance" ? (

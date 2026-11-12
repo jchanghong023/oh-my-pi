@@ -112,7 +112,8 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
   if (placement === "document") {
     if (readOnly || (complete && !history) || (!canBack && !action)) return null;
     return <>
-      <div className="shrink-0 border-t border-border bg-background p-3" data-testid="dev-document-actions" aria-label="文档确认与阶段操作">
+      <div className="shrink-0 border-t border-border bg-background px-4 py-3 md:px-6" data-testid="dev-document-actions" aria-label="文档确认与阶段操作">
+        <div className="mx-auto w-full min-w-0 max-w-[72ch]">
         {guidance && <p className="mb-2 text-ui-sm leading-5 text-foreground-subtle" role="status" data-testid="dev-action-guidance">{guidance}</p>}
         <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-2 [&_button]:h-auto [&_button]:min-h-6 [&_button]:max-w-full [&_button]:whitespace-normal" data-testid="dev-phase-actions">
           {canBack ? <Button size="sm" variant="outline" disabled={pending || running} onClick={() => { setReason(""); setBackStage("planning"); setBack(true); }}><RotateCcw className="size-3" />{proposal && phase === 2 ? "退出方案，退回业务补充" : proposal ? "返回业务补充" : "回退"}</Button> : <span />}
@@ -120,6 +121,7 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
             {source.capabilities.workflowCommands.includes("generateStageMaterials") && sr?.status === "developing" && !history && sr.developerEmployeeId === getEmployeeId() && materialIssue && <Button size="sm" variant="outline" disabled={pending || running} onClick={() => void dev.command({ type: "generateStageMaterials", stage: sr.stage!, round: sr.round })}>生成当前阶段材料</Button>}
             {action}
           </div>
+        </div>
         </div>
       </div>
       {backDialog}

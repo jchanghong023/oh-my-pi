@@ -11,7 +11,7 @@ export function DevFreeChatDraftComposer() {
   const workspace = source.resolveWorkspace(dev.view, dev.selection);
   const scope = useMemo(() => ({ workspacePath: workspace.path ?? "", workspaceIdentity: workspace.identity }), [workspace.path, workspace.identity]);
   const onCreated = useCallback((sessionId: string) => dev.openFreeChat(sessionId, dev.selection.freeFiles), [dev.openFreeChat, dev.selection.freeFiles]);
-  if (!workspace.path) return <p className="p-6 text-ui-base text-foreground-subtle">{workspace.error ?? "请先配置自己的开发项目路径。"}</p>;
+  if (!workspace.path) return <p className="mx-auto w-full min-w-0 max-w-4xl p-6 text-ui-base text-foreground-subtle">{workspace.error ?? "请先配置自己的开发项目路径。"}</p>;
   return <div className="relative flex min-h-0 flex-1 flex-col" data-testid="dev-free-chat-draft">
     <V4PaneConversationProvider scope={scope} sessionId={null}>
       <SessionPane paneId="dev-new-free-chat" sessionId={null} workspacePath={scope.workspacePath} workspaceIdentity={scope.workspaceIdentity} onSessionCreated={onCreated} embedded focused />
