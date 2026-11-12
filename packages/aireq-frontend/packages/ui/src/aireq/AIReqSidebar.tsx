@@ -3,9 +3,9 @@ import type { WorkspaceSidebarToolbarProps } from "@/WorkspaceSidebarToolbar.js"
 import { useAIReqDataSource } from "./data-source.js";
 import { AIReqWorkflowHelp } from "./AIReqWorkflowHelp.js";
 import { useRef, useState } from "react";
-import { CalendarClock, MessageCirclePlus, TableProperties, UserRound, WandSparkles, FileSearch, CirclePlus, ListChecks } from "lucide-react";
+import { CalendarClock, MessageCirclePlus, TableProperties, WandSparkles, FileSearch, CirclePlus, ListChecks } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar.js";
+import { DefaultAvatar } from "@/components/DefaultAvatar.js";
 import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
@@ -63,7 +63,7 @@ function AIReqSidebarContent({ onOpenIssue, issuePage, onNavigate, onOpenAutomat
 				<AIReqRequirementList open={preferences.proposalSectionOpen} onOpenChange={proposalSectionOpen => updatePreferences({ proposalSectionOpen })} title="需求提案" groups={allDrafts} onSearch={() => { setSearchScope("proposals"); setSearchOpen(true); }} onNavigate={onNavigate} automationsActive={Boolean(issuePage) || automationsActive || skillDesignActive || requirementAnalysisActive} />
 			</div>
 			<AIReqRequirementSearch scope={searchScope} open={searchOpen} onOpenChange={setSearchOpen} query={preferences.query} onQueryChange={query => updatePreferences({ query })} onNavigate={onNavigate} />
-			<WorkspaceSidebarFooter menuTriggerRef={helpReturnFocusRef} className="px-4 pt-2 pb-4" menuContent={<AIReqProjectReleaseMenu onManage={manageProjects} onHelp={() => setHelpOpen(true)} />} menuIcon={<Avatar size="default"><AvatarFallback className="bg-background text-foreground"><UserRound className="size-4" /></AvatarFallback></Avatar>} menuDescription={<span className="flex min-w-0 flex-col text-left" data-testid="project-release-context"><span className="truncate text-ui-base font-semibold text-foreground" title={project?.name}>{project?.name ?? "请选择项目"}</span><span className="truncate text-ui-xs font-normal text-foreground-subtle" title={selectedRelease?.title}>Release · {selectedRelease?.title ?? "尚未选择"}</span></span>} theme={theme} onThemeChange={value => { if (value === "system" || value === "zai-dark" || value === "zai-light") setTheme(value); }} onSettingsButtonClick={openSettings} />
+			<WorkspaceSidebarFooter menuTriggerRef={helpReturnFocusRef} className="px-4 pt-2 pb-4" menuContent={<AIReqProjectReleaseMenu onManage={manageProjects} onHelp={() => setHelpOpen(true)} />} menuIcon={<DefaultAvatar />} menuDescription={<span className="flex min-w-0 flex-col text-left" data-testid="project-release-context"><span className="truncate text-ui-base font-semibold text-foreground" title={project?.name}>{project?.name ?? "请选择项目"}</span><span className="truncate text-ui-xs font-normal text-foreground-subtle" title={selectedRelease?.title}>Release · {selectedRelease?.title ?? "尚未选择"}</span></span>} theme={theme} onThemeChange={value => { if (value === "system" || value === "zai-dark" || value === "zai-light") setTheme(value); }} onSettingsButtonClick={openSettings} />
 			<AIReqWorkflowHelp open={helpOpen} onOpenChange={setHelpOpen} returnFocusRef={helpReturnFocusRef} />
 		</nav>
 	);

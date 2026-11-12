@@ -1,3 +1,4 @@
+import { DefaultAvatar } from "@/components/DefaultAvatar.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 /* oxlint-disable eslint(max-lines) -- footer 聚合账户、主题、模式和快捷键菜单。 */
 import { memo, useCallback, useEffect, useState, type ReactNode, type Ref } from "react";
@@ -120,7 +121,7 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
               className={cn("min-w-0 flex-1 justify-start gap-2 overflow-hidden rounded-tl-2xl rounded-bl-2xl border-0 pl-0", menuDescription && "h-auto py-1.5")}
               aria-label={menuDescription ? "项目与 Release 菜单" : intl.formatMessage({ id: "settings.title" })}
             >
-              {menuIcon ?? <Settings className="size-4" />}
+              {menuIcon ?? <DefaultAvatar />}
               <span className="flex min-w-0 flex-1 flex-col text-left">{menuDescription ?? <span className="truncate">OMP</span>}</span>
             </Button>
           </DropdownMenuTrigger>
