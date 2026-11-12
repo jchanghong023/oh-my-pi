@@ -12348,6 +12348,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		operation: "edit" | "delete" | "reorder" | "sendNow",
 		options: {
 			text?: string;
+			/** Omit to retain queued images; an explicit array replaces them, including [] to clear. */
+			images?: ImageContent[];
 			beforeInputId?: string | null;
 			/** Rebuilt and policy-checked by the host before atomically replacing this queued input. */
 			customMessage?: Pick<CustomMessage, "content" | "display" | "details"> & {
@@ -12380,9 +12382,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				const original = selected[index];
 				if (original.role !== "user" && original.role !== "custom") return false;
 				const images =
-					"content" in original && Array.isArray(original.content)
+					options.images ??
+					("content" in original && Array.isArray(original.content)
 						? original.content.filter(part => part.type === "image")
-						: [];
+						: []);
 				const replacement = options.customMessage
 					? {
 							role: "custom" as const,

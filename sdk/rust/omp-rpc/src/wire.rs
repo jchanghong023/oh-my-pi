@@ -2761,6 +2761,8 @@ pub enum TodoStatus {
 	Completed,
 	#[serde(rename = "abandoned")]
 	Abandoned,
+	#[serde(rename = "blocked")]
+	Blocked,
 }
 
 impl TodoStatus {
@@ -2771,6 +2773,7 @@ impl TodoStatus {
 			Self::InProgress => "in_progress",
 			Self::Completed => "completed",
 			Self::Abandoned => "abandoned",
+			Self::Blocked => "blocked",
 		}
 	}
 }
@@ -2933,6 +2936,8 @@ impl SubagentStatus {
 pub struct TodoItem {
 	pub content: String,
 	pub status: TodoStatus,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub blocker: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub details: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]

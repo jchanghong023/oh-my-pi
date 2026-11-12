@@ -15,12 +15,20 @@ import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
+import { SkillProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/skill-protocol";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { cfgContextPromotionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import {
+	bindSpecSkillPolicy,
+	checkSkillReadAccess,
+	SkillAccessDeniedError,
+} from "@oh-my-pi/pi-coding-agent/spec-driven/skill-policy";
+import { type ExecutorOptions, runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { localSession } from "../helpers/local-session";
@@ -100,7 +108,9 @@ function writeAndObserveLiveSettings(id: string): WeakRef<Settings> {
 }
 
 /** Runs `AGENT_ID` to a finished keep-alive state; `release` drops the mock's session-bound recordings. */
-async function runKeptAliveSubagent(): Promise<{ release(): void; close(): void }> {
+async function runKeptAliveSubagent(
+	options: Pick<ExecutorOptions, "skills" | "autoloadSkills" | "onSessionCreated"> = {},
+): Promise<{ release(): void; close(): void }> {
 	// Under the isolated HOME: project discovery walks up from cwd and stops at os.homedir(). On Windows
 	// os.tmpdir() lives under the real home, so a cwd outside the fake HOME would walk into the real
 	// ~/.omp and load the developer's installed plugins as project plugins.
@@ -147,6 +157,9 @@ async function runKeptAliveSubagent(): Promise<{ release(): void; close(): void 
 			enableLsp: false,
 			enableMCP: false,
 			enableIrc: false,
+			skills: options.skills,
+			autoloadSkills: options.autoloadSkills,
+			onSessionCreated: options.onSessionCreated,
 		});
 		expect(result.exitCode).toBe(0);
 	} catch (error) {
@@ -179,6 +192,59 @@ it("releases a parked keep-alive subagent's session while the agent stays reviva
 		run.close();
 	}
 }, 30_000);
+
+it("keeps an autoloaded exact Skill readable after its result and revokes it when the session parks", async () => {
+	const baseDir = path.join(root, "pinned-skill");
+	const otherDir = path.join(root, "same-name-skill");
+	const name = "subagent-driven-development";
+	const filePath = path.join(baseDir, "SKILL.md");
+	await Bun.write(filePath, `---\nname: ${name}\ndescription: Pinned resource\n---\nPinned instructions\n`);
+	await Bun.write(path.join(otherDir, "SKILL.md"), "Different resource\n");
+	const pinned: Skill = {
+		name,
+		description: "Pinned resource",
+		filePath,
+		baseDir,
+		source: "bundled-superpowers",
+		hide: true,
+	};
+	const substitute: Skill = { ...pinned, filePath: path.join(otherDir, "SKILL.md"), baseDir: otherDir };
+	const run = await runKeptAliveSubagent({
+		skills: [substitute],
+		autoloadSkills: [pinned],
+		onSessionCreated(session) {
+			session.addDisposer(
+				bindSpecSkillPolicy(session.sessionManager, { phase: "executing", allowedSkills: [name] }),
+			);
+		},
+	});
+	try {
+		const session = localSession(AgentRegistry.global().get(AGENT_ID)?.session);
+		const manager = session.sessionManager;
+		const context = {
+			session: {
+				cwd: manager.getCwd(),
+				hasUI: false,
+				getSessionFile: () => manager.getSessionFile() ?? null,
+				getSessionSpawns: () => "*",
+				settings: session.settings,
+				sessionManager: manager,
+			},
+			skills: [substitute],
+		};
+		const handler = new SkillProtocolHandler();
+		const url = parseInternalUrl(`skill://${name}`);
+		const resource = await handler.resolve(url, context);
+		expect(resource.sourcePath).toBe(filePath);
+		expect(resource.content).toContain("Pinned instructions");
+		expect(() => checkSkillReadAccess(substitute, { scope: manager })).toThrow(SkillAccessDeniedError);
+		await AgentLifecycleManager.global().park(AGENT_ID);
+		await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+	} finally {
+		run.release();
+		run.close();
+	}
+});
 
 it("parks without retaining the run's settings overlay and revives with the settings it wrote", async () => {
 	const run = await runKeptAliveSubagent();

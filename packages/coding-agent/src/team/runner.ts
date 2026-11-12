@@ -21,6 +21,7 @@ import type { Rule } from "../capability/rule";
 import type { Skill } from "../extensibility/skills";
 import type { WorkspaceTree } from "../workspace-tree";
 import { TEAM_ROLE_SYSTEM_PROMPTS } from "./prompts";
+import { getTeamTransportSchema } from "./schemas";
 import { runSubprocess } from "../task/executor";
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition } from "../task/types";
@@ -251,7 +252,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						parentActiveModelPattern: deps.parentActiveModelPattern,
 						id,
 						index: 0,
-						outputSchema: call.schema,
+						outputSchema: getTeamTransportSchema(call.schema),
 						outputSchemaMode: "strict",
 						outputSchemaSource: "caller",
 						outputSchemaOverridesAgent: true,

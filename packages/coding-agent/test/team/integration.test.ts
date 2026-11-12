@@ -28,6 +28,14 @@ import {
 	TEAM_PROPOSAL_SCHEMA,
 } from "@oh-my-pi/pi-coding-agent/team";
 import type { TeamSubagentCall } from "@oh-my-pi/pi-coding-agent/team";
+import {
+	parseTeamAlignment,
+	parseTeamRevision,
+	parseTeamReview,
+	parseTeamSynthesis,
+	TEAM_REVIEW_SCHEMA,
+} from "@oh-my-pi/pi-coding-agent/team/schemas";
+import { YieldTool } from "@oh-my-pi/pi-coding-agent/tools/yield";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -184,6 +192,14 @@ describe("team in-process integration", () => {
 			const outputSchemaMode = options.outputSchemaMode;
 			const sessionManager = inputOptions?.sessionManager;
 			const initialMessages = sessionManager?.buildSessionContext().messages ?? [];
+			const yieldTool = new YieldTool({
+				cwd: tempDir.path(),
+				hasUI: false,
+				settings,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				outputSchema: inputOptions?.outputSchema,
+			});
 			const listeners: Array<(event: AgentSessionEvent) => void> = [];
 			const session = {
 				...createSessionDefaults(),
@@ -194,6 +210,7 @@ describe("team in-process integration", () => {
 				sessionManager: { appendSessionInit: () => {} },
 				getActiveToolNames: () => ["yield"],
 				getEnabledToolNames: () => ["yield"],
+				getToolByName: (name: string) => (name === "yield" ? yieldTool : undefined),
 				subscribe: (listener: (event: AgentSessionEvent) => void) => {
 					listeners.push(listener);
 					return () => {};
@@ -219,12 +236,15 @@ describe("team in-process integration", () => {
 						toolNames,
 						outputSchemaMode,
 					});
+					const yieldResult = await yieldTool.execute(`yield-${recorded.length}`, {
+						data: script(stage, text),
+					});
 					for (const listener of listeners) {
 						listener({
 							type: "tool_execution_end",
 							toolCallId: `yield-${recorded.length}`,
 							toolName: "yield",
-							result: { content: [], details: { status: "success", data: script(stage, text) } },
+							result: yieldResult,
 							isError: false,
 						} as AgentSessionEvent);
 					}
@@ -545,6 +565,165 @@ describe("team in-process integration", () => {
 		expect(result.status).toBe("completed");
 		expect(result.reportMarkdown).toContain("【推荐】方案 A");
 	});
+
+	it("normalizes oversized narratives after real strict yield and before canonical Team consumption", async () => {
+		recorded.length = 0;
+		const marker = "…（超出输出预算，已截断）";
+		const capped = (character: string, budget: number) => character.repeat(budget - marker.length) + marker;
+		script = (stage, text) => {
+			const data = scriptedData(stage, text);
+			if (stage === "alignment") data.unifiedUnderstanding = "a".repeat(4000);
+			if (stage === "revision") {
+				data.revisedProposal = "v".repeat(5000);
+				data.revisionSummary = "c".repeat(2000);
+			}
+			if (stage === "review" && text?.includes(" recheck]")) {
+				expect(text).toContain(capped("v", 4000));
+				expect(text).not.toContain("v".repeat(4001));
+			}
+			if (stage === "synthesis") {
+				expect(text).toContain(capped("a", 3000));
+				expect(text).toContain(capped("c", 1500));
+				data.reportMarkdown = "s".repeat(14000);
+			}
+			return data;
+		};
+		const roster = resolveTeamParticipants({
+			configuredMembers: [PATTERN_OTHER],
+			sessionModel: MODEL_SESSION,
+			availableModels: [MODEL_SESSION, MODEL_OTHER],
+		});
+		if (!roster.ok) throw new Error(roster.error);
+		const strictRunner = createTeamSubagentRunner(runnerDeps());
+		const consumed = new Set<string>();
+		const result = await runTeamDiscussion({
+			question: "保持旧接口兼容。",
+			cwd: tempDir.path(),
+			participants: roster.participants,
+			sessionModelPattern: PATTERN_SESSION,
+			maxConcurrency: 2,
+			runner: async (call, signal) => {
+				const outcome = await strictRunner(call, signal);
+				expect(outcome.ok).toBe(true);
+				if (outcome.ok && call.role === "aligner") {
+					expect(outcome.data.unifiedUnderstanding).toHaveLength(4000);
+					expect(parseTeamAlignment(outcome.data)?.unifiedUnderstanding).toBe(capped("a", 3000));
+					consumed.add("alignment");
+				}
+				if (outcome.ok && call.role === "reviser") {
+					const ids = inputFindingIds(
+						call.task,
+						"## 本轮必须回应的完整问题集（最新审查问题与所有未解决阻断按 ID 合并）",
+					);
+					const revision = parseTeamRevision(outcome.data, ids);
+					expect(revision?.revisedProposal).toBe(capped("v", 4000));
+					expect(revision?.revisionSummary).toBe(capped("c", 1500));
+					consumed.add("revision");
+				}
+				if (outcome.ok && call.role === "synthesizer") {
+					expect(outcome.data.reportMarkdown).toHaveLength(14000);
+					expect(parseTeamSynthesis(outcome.data)?.reportMarkdown).toBe(capped("s", 12000));
+					consumed.add("synthesis");
+				}
+				return outcome;
+			},
+			signal: new AbortController().signal,
+		});
+		expect(result.status).toBe("completed");
+		expect(consumed).toEqual(new Set(["alignment", "revision", "synthesis"]));
+		expect(result.reportMarkdown).toContain(capped("s", 12000));
+		expect(result.candidates.every(candidate => candidate.adoptable)).toBe(true);
+	});
+
+	it("truncates only the review summary and still rejects an over-budget aggregate after strict yield", async () => {
+		const marker = "…（超出输出预算，已截断）";
+		for (const withFinding of [false, true]) {
+			script = () => ({
+				...scriptedData("review", "[team-stage:review]"),
+				noSubstantiveIssues: !withFinding,
+				reviewSummary: "r".repeat(2000),
+				...(withFinding ? {} : { findings: [] }),
+			});
+			const outcome = await createTeamSubagentRunner(runnerDeps())(
+				{
+					role: "reviewer",
+					modelPattern: PATTERN_SESSION,
+					label: "team-review-A",
+					task: "[team-stage:review]",
+					schema: TEAM_REVIEW_SCHEMA,
+				},
+				new AbortController().signal,
+			);
+			expect(outcome.ok).toBe(true);
+			if (!outcome.ok) throw new Error(outcome.error);
+			expect(outcome.data.reviewSummary).toHaveLength(2000);
+			const review = parseTeamReview(outcome.data);
+			if (withFinding) expect(review).toBeUndefined();
+			else expect(review?.reviewSummary).toBe("r".repeat(1500 - marker.length) + marker);
+		}
+	});
+
+	it.each(["malformed-flags", "unknown-finding", "proposal-budget"] as const)(
+		"keeps %s rejected through the strict executor and canonical consumer",
+		async fault => {
+			recorded.length = 0;
+			script = (stage, text) => {
+				const data = scriptedData(stage, text);
+				if (fault === "proposal-budget" && stage === "proposal") data.proposal = "p".repeat(4000);
+				if (stage === "revision") {
+					data.revisedProposal = "v".repeat(5000);
+					if (fault === "malformed-flags") data.reviewFlags = {};
+					if (fault === "unknown-finding") {
+						data.responses = [
+							{ findingId: "UNKNOWN-F1", disposition: "unresolved", explanation: "Missing evidence" },
+						];
+					}
+				}
+				return data;
+			};
+			const roster = resolveTeamParticipants({
+				configuredMembers: [PATTERN_OTHER],
+				sessionModel: MODEL_SESSION,
+				availableModels: [MODEL_SESSION, MODEL_OTHER],
+			});
+			if (!roster.ok) throw new Error(roster.error);
+			const result = await runTeamDiscussion({
+				question: "保持旧接口兼容。",
+				cwd: tempDir.path(),
+				participants: roster.participants,
+				sessionModelPattern: PATTERN_SESSION,
+				maxConcurrency: 2,
+				runner: createTeamSubagentRunner(runnerDeps()),
+				signal: new AbortController().signal,
+			});
+			expect(result.candidates.every(candidate => !candidate.adoptable)).toBe(true);
+			expect(result.reportMarkdown ?? "").not.toContain("【推荐】");
+			if (fault === "proposal-budget") {
+				expect(result.status).toBe("failed");
+				expect(recorded.every(call => call.stage === "proposal")).toBe(true);
+				const proposals = result.subagentResults!.filter(entry => entry.role === "proposer");
+				expect(proposals).toHaveLength(3);
+				for (const proposal of proposals) {
+					expect(proposal.outcome.ok).toBe(true);
+					if (proposal.outcome.ok) expect(proposal.outcome.data.proposal).toBe("p".repeat(4000));
+				}
+			} else {
+				expect(result.candidates).toHaveLength(3);
+				const revisions = result.subagentResults!.filter(entry => entry.role === "reviser");
+				expect(revisions.length).toBeGreaterThan(0);
+				for (const revision of revisions) {
+					expect(revision.outcome.ok).toBe(fault === "unknown-finding");
+					if (!revision.outcome.ok) expect(revision.outcome.error).toContain("schema");
+				}
+				for (const candidate of result.candidates) {
+					expect(candidate.unresolvedBlocking.map(finding => finding.id)).toEqual([
+						`${candidate.label}-F1`,
+						`${candidate.label}-F2`,
+					]);
+				}
+			}
+		},
+	);
 
 	for (const persisted of [false, true]) {
 		it(`isolates actual child filesystem consumers across ${persisted ? "persisted" : "temporary"} leases`, async () => {

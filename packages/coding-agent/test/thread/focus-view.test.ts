@@ -42,6 +42,7 @@ import { SubagentWorker } from "../../src/thread/subagent-worker";
 import { cfgTasksTodoClearDelay } from "../../src/tools/settings";
 import { TODO_HUD_STATE_CUSTOM_TYPE } from "../../src/tools/todo";
 import type { FocusProbe, FocusProbeGlobals } from "../fixtures/focus-view-worker";
+import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 const cleanups: Array<() => unknown> = [];

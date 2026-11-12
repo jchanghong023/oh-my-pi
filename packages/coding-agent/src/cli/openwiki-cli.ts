@@ -199,8 +199,8 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			}
 			throw new Error("OpenWiki chat is not supported by OMP; specify --init or --update.");
 		}
-		const plannerSelector = await resolveOpenWikiPlannerSelector(parsed.plannerModel ?? parsed.model);
 		if (parsed.dryRun) {
+			const plannerSelector = await resolveOpenWikiPlannerSelector(parsed.plannerModel ?? parsed.model);
 			const root = await resolveRepositoryRoot(process.cwd());
 			const [model, files] = await Promise.all([
 				previewOpenWikiModel(parsed.model),
@@ -258,9 +258,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 		let planner = selected;
 		try {
 			if (controller.signal.aborted) return 130;
-			if (plannerSelector !== undefined && plannerSelector !== parsed.model) {
-				planner = await createOpenWikiModel(plannerSelector);
-			}
+			planner = await selected.createPlannerModel(parsed.plannerModel ?? parsed.model);
 			if (controller.signal.aborted) return 130;
 			await updateOpenWikiAgentInstructions(root);
 			const wikiDir = path.join(root, "openwiki");

@@ -5,6 +5,7 @@ import type { ConversationComposerSendOptions } from "../v4/ConversationComposer
 import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog.js";
 import { getEmployeeId } from "./identity.js";
 import { useDevDataSource } from "./data-source.js";
+import { selectionForRelease } from "./domain.js";
 import type {
   DevAction, DevMaterialView, DevNativeSessionRef, DevSelection, DevWorkflowResult, DevWorkflowStage, DevWorkflowView,
 } from "./types.js";
@@ -186,8 +187,8 @@ export function DevProvider({ children }: { children: ReactNode }) {
       select({ projectId: current.projectId, proposalDraftId: key, proposalDraftReleaseId: id });
       return;
     }
-    const selected = [...data.groups, ...data.drafts].find(item => item.id === current.irId);
-    if (selected && selected.releaseId !== id) select({ projectId: current.projectId });
+    const next = selectionForRelease(current, data, id);
+    if (next !== current) select(next);
   }, [source, select]);
   const retryMaterial = useCallback(async (path: string) => {
     try {

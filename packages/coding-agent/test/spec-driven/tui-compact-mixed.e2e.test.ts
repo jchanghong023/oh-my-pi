@@ -507,7 +507,8 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				await waitingForChildren.promise;
 				await screen.checkpoint("waiting for child results");
 				// Release the children only after a real parent wait is in flight, so
-				// at least one post-compaction IRC message is consumed by wait.
+				// post-compaction IRC interrupts it and reaches the model as its own turn.
+				let collectingWaitId: string | undefined;
 				await eventually(
 					() => journal(file),
 					entries => {
@@ -524,10 +525,13 @@ test("compact mixed long session preserves input, tool effects and peer messages
 								: [],
 						);
 						const last = calls.at(-1);
-						return (
-							last?.type === "toolCall" &&
-							!current.some(message => message.role === "toolResult" && message.toolCallId === last.id)
-						);
+						if (
+							last?.type !== "toolCall" ||
+							current.some(message => message.role === "toolResult" && message.toolCallId === last.id)
+						)
+							return false;
+						collectingWaitId = last.id;
+						return true;
 					},
 				);
 				children.finishCompaction();
@@ -575,24 +579,57 @@ test("compact mixed long session preserves input, tool effects and peer messages
 					history.filter(message => message.role === "user" && contentText(message.content) === resume),
 				).toHaveLength(1);
 				expect(durable.filter(entry => entry.type === "compaction")).toHaveLength(1);
-				const consumedPeers = observed.flatMap((item, index) => {
-					if (item.name !== "wait" || index >= firstFollowup) return [];
-					const details = recordedResult(history, item.intent).details;
-					if (!isRecord(details) || !Array.isArray(details.waited)) return [];
-					return details.waited.flatMap((message: unknown) => {
-						if (!isRecord(message)) return [];
-						const { from, body } = message;
-						if (
-							typeof from !== "string" ||
-							typeof body !== "string" ||
-							!/^Mixed(?:Alpha|Beta)$/u.test(from) ||
-							body !== `MIXED_${from.slice("Mixed".length).toUpperCase()}_POST_COMPACT_PEER`
-						)
-							return [];
-						return [{ from, body }];
-					});
+				// Wait no longer embeds IRC in details.waited: it ends with interrupted=true,
+				// then the session persists and injects each incoming message separately.
+				const waitResultIndex = durable.findIndex(
+					entry =>
+						entry.type === "message" &&
+						isRecord(entry.message) &&
+						entry.message.role === "toolResult" &&
+						entry.message.toolCallId === collectingWaitId,
+				);
+				expect(waitResultIndex).toBeGreaterThan(durable.findIndex(entry => entry.type === "compaction"));
+				const waitEntry = durable[waitResultIndex]!;
+				expect(waitEntry.message).toMatchObject({ details: { op: "wait", interrupted: true } });
+				const nextAssistantIndex = durable.findIndex(
+					(entry, index) =>
+						index > waitResultIndex &&
+						entry.type === "message" &&
+						isRecord(entry.message) &&
+						entry.message.role === "assistant",
+				);
+				const consumedPeers = durable.flatMap((entry, index) => {
+					if (entry.type !== "custom_message" || entry.customType !== "irc:incoming" || !isRecord(entry.details))
+						return [];
+					const { from, message: body } = entry.details;
+					if (
+						typeof from !== "string" ||
+						typeof body !== "string" ||
+						!/^Mixed(?:Alpha|Beta)$/u.test(from) ||
+						body !== `MIXED_${from.slice("Mixed".length).toUpperCase()}_POST_COMPACT_PEER`
+					)
+						return [];
+					expect(index).toBeGreaterThan(waitResultIndex);
+					return [{ from, body, index }];
 				});
-				expect(consumedPeers.length).toBeGreaterThan(0);
+				expect(consumedPeers.map(peer => peer.from).sort()).toEqual(["MixedAlpha", "MixedBeta"]);
+				expect(consumedPeers.some(peer => peer.index < nextAssistantIndex)).toBe(true);
+				const validationRequest = provider.requests.find(request =>
+					request.messages.some(
+						message =>
+							message.role === "tool" && contentText(message.content).includes("MIXED_REAL_VALIDATION_OK"),
+					),
+				);
+				for (const peer of consumedPeers) {
+					expect(
+						validationRequest?.messages.some(
+							message =>
+								message.role === "user" &&
+								contentText(message.content).includes(peer.from) &&
+								contentText(message.content).includes(peer.body),
+						),
+					).toBe(true);
+				}
 				for (const marker of [
 					"MIXED_ALPHA_DURING_COMPACT",
 					"MIXED_BETA_DURING_COMPACT",

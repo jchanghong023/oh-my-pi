@@ -398,6 +398,7 @@ describe("per-call model advertisement", () => {
 			clientBridge: () => undefined,
 			agentKind: () => "main",
 			isDisposed: () => false,
+			sessionGeneration: () => 0,
 			isStreaming: () => false,
 			steeringArrivalSignal: () => new AbortController().signal,
 			steeringArrivalSeq: () => 0,

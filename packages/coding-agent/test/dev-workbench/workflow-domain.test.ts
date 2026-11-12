@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { SessionManager } from "../../src/session/session-manager";
 import {
 	buildRequirementSnapshot,
@@ -27,7 +28,7 @@ const roots: string[] = [];
 const nativeHistories: SessionManager[] = [];
 afterEach(async () => {
 	for (const manager of nativeHistories.splice(0)) await manager.close();
-	for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+	for (const root of roots.splice(0)) await removeWithRetries(root);
 });
 async function fixture() {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dev-domain-"));
@@ -496,6 +497,8 @@ describe("Dev workflow domain contracts", () => {
 		).toBe("completed");
 		expect(calls).toBe(2);
 	});
+	// Clone/import, two private-index publications/pushes and exact remote merge
+	// checks share one budget, matching the real-Git publication integration tests.
 	test("revised two-SR requirements publish owned deletion through private index, push and exact merge without foreign staging", async () => {
 		const owned = await importedFixture();
 		const { store, project, irId, repo, directory } = owned;
@@ -673,7 +676,7 @@ describe("Dev workflow domain contracts", () => {
 		expect(state.groups[0]!.merge!.files).toContainEqual({ path: retiredPath, sha256: sha256(""), size: -1 });
 		expect(await repo.lsTree("HEAD", [retiredPath])).toEqual([]);
 		expect(state.srs.map(sr => sr.id)).toEqual(["sr-one"]);
-	});
+	}, 120_000);
 	test("completed receipts replay no effect; conflicting operation IDs reject", async () => {
 		const { store, project } = await fixture();
 		let effects = 0;

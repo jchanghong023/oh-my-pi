@@ -2015,6 +2015,7 @@ const (
 	TodoStatusInProgress TodoStatus = "in_progress"
 	TodoStatusCompleted  TodoStatus = "completed"
 	TodoStatusAbandoned  TodoStatus = "abandoned"
+	TodoStatusBlocked    TodoStatus = "blocked"
 )
 
 func (v *TodoStatus) UnmarshalJSON(data []byte) error {
@@ -2023,7 +2024,7 @@ func (v *TodoStatus) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	switch value := TodoStatus(s); value {
-	case TodoStatusPending, TodoStatusInProgress, TodoStatusCompleted, TodoStatusAbandoned:
+	case TodoStatusPending, TodoStatusInProgress, TodoStatusCompleted, TodoStatusAbandoned, TodoStatusBlocked:
 		*v = value
 		return nil
 	}
@@ -2169,6 +2170,7 @@ func (v *SubagentStatus) UnmarshalJSON(data []byte) error {
 type TodoItem struct {
 	Content string     `json:"content"`
 	Status  TodoStatus `json:"status"`
+	Blocker *string    `json:"blocker,omitempty"`
 	Details *string    `json:"details,omitempty"`
 	Notes   []string   `json:"notes,omitempty"`
 }
@@ -2182,6 +2184,7 @@ func (v *TodoItem) decodeFrom(raw map[string]json.RawMessage) error {
 	d := fieldDecoder{raw: raw, owner: "TodoItem"}
 	d.required("content", &out.Content)
 	d.required("status", &out.Status)
+	d.optional("blocker", &out.Blocker)
 	d.optional("details", &out.Details)
 	d.optional("notes", &out.Notes)
 	if d.err != nil {

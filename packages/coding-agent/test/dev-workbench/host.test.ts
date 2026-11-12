@@ -21,6 +21,7 @@ import {
 	withNativeWebGuiInteractionScope,
 } from "../../src/dev-workbench/native/native-interactions";
 import { nativeChatRuntimeForSession } from "../../src/dev-workbench/native/native-chat";
+import { resolveNativeFileContexts } from "../../src/dev-workbench/native/native-attachments";
 import { devNativePredictionAction } from "../../src/dev-workbench/native/native-predictions";
 import type {
 	DevNativePredictionSnapshot,
@@ -426,6 +427,75 @@ describe("native workflow host", () => {
 			expect(f.provider.requests).toHaveLength(1);
 			expect(JSON.stringify(session.messages)).toEqual(beforeDenied);
 			expect(f.session.messages).toEqual([]);
+		} finally {
+			release.resolve();
+		}
+	}, 120_000);
+
+	test("native queued text and Skill edits replace image references rather than appending old bytes", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		await using f = await fixture({
+			skillCommands: true,
+			delay: async () => {
+				entered.resolve();
+				await release.promise;
+			},
+		});
+		const { session, context } = await conversation(f);
+		const chat = nativeChatRuntimeForSession(session);
+		const cwd = session.sessionManager.getCwd();
+		await fs.writeFile(
+			path.join(cwd, "a.png"),
+			Buffer.from(
+				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+				"base64",
+			),
+		);
+		await fs.writeFile(
+			path.join(cwd, "b.png"),
+			Buffer.from(
+				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1sAAAAASUVORK5CYII=",
+				"base64",
+			),
+		);
+		try {
+			await chat.submit(context, session.sessionId, "hold the native run", crypto.randomUUID(), "browser-a");
+			await entered.promise;
+			const a = (await resolveNativeFileContexts(context, "@a.png", session.sessionId)).images;
+			const b = (await resolveNativeFileContexts(context, "@b.png", session.sessionId)).images;
+			expect(a).toHaveLength(1);
+			expect(b).toHaveLength(1);
+			expect(a[0]!.data).not.toBe(b[0]!.data);
+			for (const prefix of ["queued text", "/skill:jch-grill-me queued arguments"]) {
+				const inputId = crypto.randomUUID();
+				expect(await chat.submit(context, session.sessionId, prefix, inputId, "browser-a")).toBe("queue");
+				const queued = () =>
+					session.getQueuedInputMessages().find(message => "inputId" in message && message.inputId === inputId)!;
+				const images = () => {
+					const message = queued();
+					return "content" in message && Array.isArray(message.content)
+						? message.content.filter(part => part.type === "image")
+						: [];
+				};
+				await chat.editQueued(context, inputId, `${prefix} @a.png`);
+				expect(images()).toEqual(a);
+				await chat.editQueued(context, inputId, `${prefix} @b.png`);
+				expect(images()).toEqual(b);
+				await chat.editQueued(context, inputId, prefix);
+				expect(images()).toEqual([]);
+				expect(queued()).toMatchObject({ inputId, attachments: [], inputClientId: "browser-a" });
+				if (prefix.startsWith("/skill:"))
+					expect(queued()).toMatchObject({
+						role: "custom",
+						customType: SKILL_PROMPT_MESSAGE_TYPE,
+						attribution: "user",
+						details: { prompt: prefix, args: "queued arguments" },
+					});
+				expect(session.mutateQueuedInput(inputId, "delete")).toBe(true);
+			}
+			release.resolve();
+			await session.waitForIdle();
 		} finally {
 			release.resolve();
 		}

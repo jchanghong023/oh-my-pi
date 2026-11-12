@@ -475,7 +475,9 @@ export interface PromptOptions {
 	toolDenylist?: readonly string[];
 	/** Input author identity supplied by an embedding host; not provider metadata. */
 	inputClientId?: string;
-	/** Immutable attachment references owned by the submitting host, retained in history. */
+	/** Immutable attachment references owned by the submitting host, retained in history.
+	 * Native hosts supply [] when no uploads exist, distinguishing resolved file-reference images
+	 * from inline images supplied by CLI/TUI callers that omit this metadata. */
 	attachments?: readonly {
 		ref: string;
 		fileName: string;

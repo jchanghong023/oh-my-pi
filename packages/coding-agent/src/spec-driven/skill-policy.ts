@@ -116,7 +116,7 @@ export function clearSpecSkillAccess(scope: object): void {
 	scopes.delete(scope);
 }
 
-/** Native controller capability, not a model tool. Dispose when its autoload/run ends. */
+/** Native controller capability, not a model tool. Bind task grants to their owning session's disposal. */
 export function grantSpecSkillAccess(scope: object, skill: Skill): () => void {
 	const state = stateFor(scope);
 	checkPhase(skill, state);

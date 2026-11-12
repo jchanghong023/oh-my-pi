@@ -1,5 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -14,6 +16,8 @@ import {
 	resolveNativeFileContexts,
 	type ResolvedAttachments,
 } from "../../src/webgui/native-attachments";
+import { nativeChatRuntime } from "../../src/webgui/native-chat";
+import { activateNativeWebGuiComposition } from "../../src/webgui/native-composition";
 import { acquireBrowserProject } from "../../src/webgui/project-registry";
 import type { WebGuiServiceContext } from "../../src/webgui/rpc-contract";
 import { readWebGuiSessionInfo } from "../../src/webgui/session-source";
@@ -77,6 +81,7 @@ async function fixture(temp: TempDir) {
 		};
 		const uploads = createNativeAttachmentMethods(context);
 		return {
+			authStorage,
 			cwd,
 			context,
 			controller,
@@ -167,6 +172,99 @@ test("real upload bytes decode into native text and images, reject forged metada
 		expect(reference.text).toContain("Native referenced file content");
 		await expect(resolveNativeFileContexts(f.context, "Read @../outside.txt")).rejects.toThrow(/escapes/);
 	} finally {
+		await f.close();
+	}
+});
+
+test("native queued edits replace referenced image bytes while retaining actual uploaded attachments", async () => {
+	using temp = TempDir.createSync("@pi-native-queued-images-");
+	const f = await fixture(temp);
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	let running: Promise<boolean> | undefined;
+	try {
+		activateNativeWebGuiComposition();
+		f.authStorage.keys.setRuntime(f.session.model!.provider, "queued-images-fixture");
+		const mock = createMockModel({ responses: [{ content: ["finished"] }] });
+		f.session.agent.streamFn = (model, context, options) => {
+			const stream = new AssistantMessageEventStream();
+			void (async () => {
+				entered.resolve();
+				await release.promise;
+				for await (const event of mock.stream(model, context, options)) stream.push(event);
+			})().catch(error => stream.fail(error));
+			return stream;
+		};
+		running = f.session.prompt("hold the native run");
+		await entered.promise;
+		await fs.writeFile(`${f.cwd}/a.png`, Buffer.from(PNG, "base64"));
+		await fs.writeFile(
+			`${f.cwd}/b.png`,
+			Buffer.from(
+				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1sAAAAASUVORK5CYII=",
+				"base64",
+			),
+		);
+		const a = (await resolveNativeFileContexts(f.context, "@a.png")).images;
+		const b = (await resolveNativeFileContexts(f.context, "@b.png")).images;
+		expect(a).toHaveLength(1);
+		expect(b).toHaveLength(1);
+		expect(a[0]!.data).not.toBe(b[0]!.data);
+		const upload = await f.stage("queued-upload", "upload.png", "image/png", Buffer.from(PNG, "base64"));
+		const uploaded = (await resolveNativeAttachments(f.context, [upload])).images;
+		const runtime = nativeChatRuntime(f.context);
+		for (const attachments of [undefined, [upload]]) {
+			const inputId = crypto.randomUUID();
+			const retained = attachments ? uploaded : [];
+			expect(
+				await runtime.submit(f.context, f.session.sessionId, "queued text", inputId, undefined, undefined, {
+					requestedDelivery: "queue",
+					attachments,
+				}),
+			).toBe("queue");
+			const queued = () =>
+				f.session.getQueuedInputMessages().find(message => "inputId" in message && message.inputId === inputId)!;
+			const images = () => {
+				const message = queued();
+				return "content" in message && Array.isArray(message.content)
+					? message.content.filter(part => part.type === "image")
+					: [];
+			};
+			expect(queued()).toMatchObject({ attachments: attachments ?? [] });
+			await runtime.editQueued(f.context, inputId, "add @a.png");
+			expect(images()).toEqual([...retained, ...a]);
+			await runtime.editQueued(f.context, inputId, "replace @b.png");
+			expect(images()).toEqual([...retained, ...b]);
+			await runtime.editQueued(f.context, inputId, "remove reference");
+			expect(images()).toEqual(retained);
+			expect(queued()).toMatchObject({ attachments: attachments ?? [] });
+			await expect(runtime.editQueued(f.context, inputId, "@../outside.png")).rejects.toThrow(/escapes/);
+			expect(images()).toEqual(retained);
+			expect(f.session.mutateQueuedInput(inputId, "delete")).toBe(true);
+		}
+		const inlineId = crypto.randomUUID();
+		await f.session.prompt("CLI inline upload", {
+			inputId: inlineId,
+			images: a,
+			streamingBehavior: "followUp",
+			queueOnly: true,
+		});
+		await runtime.editQueued(f.context, inlineId, "keep inline upload");
+		const inline = f.session
+			.getQueuedInputMessages()
+			.find(message => "inputId" in message && message.inputId === inlineId)!;
+		expect("attachments" in inline ? inline.attachments : undefined).toBeUndefined();
+		expect(
+			"content" in inline && Array.isArray(inline.content)
+				? inline.content.filter(part => part.type === "image")
+				: [],
+		).toEqual(a);
+		expect(f.session.mutateQueuedInput(inlineId, "delete")).toBe(true);
+		release.resolve();
+		await running;
+	} finally {
+		release.resolve();
+		await running;
 		await f.close();
 	}
 });

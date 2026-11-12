@@ -592,7 +592,7 @@ export class NativeChatRuntime {
 						session.joinActiveTurn(prompt, images, {
 							inputId,
 							inputClientId: clientId,
-							attachments: options.attachments,
+							attachments: options.attachments ?? [],
 							sourceCommand,
 							allowAutonomous: session.agent.state.isStreaming,
 							...(skillPrompt ? { customMessage: skillPrompt.message } : {}),
@@ -633,7 +633,7 @@ export class NativeChatRuntime {
 		const promptOptions: PromptOptions = {
 			inputId,
 			inputClientId: clientId,
-			attachments: options.attachments,
+			attachments: options.attachments ?? [],
 			images,
 			throwOnDrop: true,
 			...(goalAutoOrchestrateInitialId
@@ -754,7 +754,7 @@ export class NativeChatRuntime {
 		assertNativeChat(this.context(context));
 		const content = [newText, resolved.text, references.text].filter(Boolean).join("\n\n");
 		const images = [
-			...(attachments?.length
+			...(attachments !== undefined
 				? resolved.images
 				: "content" in input && isCustomMessageContent(input.content) && Array.isArray(input.content)
 					? input.content.filter((part): part is ImageContent => part.type === "image")
@@ -774,6 +774,7 @@ export class NativeChatRuntime {
 		if (
 			!session.mutateQueuedInput(inputId, "edit", {
 				text: skillPrompt ? newText : content,
+				images,
 				...(skillPrompt ? { customMessage: skillPrompt.message } : {}),
 			})
 		)

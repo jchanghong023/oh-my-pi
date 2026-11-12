@@ -81,36 +81,48 @@ function copiedFrontendPackages(): Plugin {
 }
 
 export function createDevFrontendConfig(entryRoot: string, outputDirectory: string, defaultBasePath = "/"): UserConfig {
-  const basePath = process.env.OMP_DEV_BASE_PATH ?? defaultBasePath;
-  if (basePath !== "./" && (!basePath.startsWith("/") || !basePath.endsWith("/") || basePath.includes("//") || /[?#\\]/u.test(basePath) || basePath.split("/").some(segment => segment === "." || segment === "..")))
-    throw new Error("OMP_DEV_BASE_PATH must be an absolute directory path ending in /, such as /xxx/xxx/");
-  // Runtime assets retain relative URLs for the native host's random capability directory.
-  const mountPath = basePath === "./" ? "/" : basePath;
-  const host = process.env.OMP_DEV_FRONTEND_HOST ?? "0.0.0.0";
-  const port = Number(process.env.OMP_DEV_FRONTEND_PORT ?? "4173");
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("OMP_DEV_FRONTEND_PORT must be between 1 and 65535");
-  // Browsers use the page's origin; only this dev/preview server connects to the backend.
-  const proxy = {
-    [`${mountPath}api/dev`]: {
-      target: process.env.OMP_DEV_PROXY_TARGET ?? "http://127.0.0.1:4174",
-      ws: true,
-      rewrite: (requestPath: string) => requestPath.slice(mountPath.length - 1),
-    },
-  };
-  const redirectDirectory = (request: IncomingMessage, response: ServerResponse, next: () => void) => {
-    const url = new URL(request.url ?? "/", "http://dev.local");
-    if (mountPath !== "/" && url.pathname === mountPath.slice(0, -1)) {
-      response.writeHead(302, { Location: mountPath + url.search });
-      response.end();
-      return;
-    }
-    next();
-  };
-  const mountedEntry: Plugin = {
-    name: "dev-mounted-entry",
-    configureServer(server) { server.middlewares.use(redirectDirectory); },
-    configurePreviewServer(server) { server.middlewares.use(redirectDirectory); },
-  };
+	const basePath = process.env.OMP_DEV_BASE_PATH ?? defaultBasePath;
+	if (
+		basePath !== "./" &&
+		(!basePath.startsWith("/") ||
+			!basePath.endsWith("/") ||
+			basePath.includes("//") ||
+			/[?#\\]/u.test(basePath) ||
+			basePath.split("/").some(segment => segment === "." || segment === ".."))
+	)
+		throw new Error("OMP_DEV_BASE_PATH must be an absolute directory path ending in /, such as /xxx/xxx/");
+	// Runtime assets retain relative URLs for the native host's random capability directory.
+	const mountPath = basePath === "./" ? "/" : basePath;
+	const host = process.env.OMP_DEV_FRONTEND_HOST ?? "0.0.0.0";
+	const port = Number(process.env.OMP_DEV_FRONTEND_PORT ?? "4173");
+	if (!Number.isInteger(port) || port < 1 || port > 65535)
+		throw new Error("OMP_DEV_FRONTEND_PORT must be between 1 and 65535");
+	// Browsers use the page's origin; only this dev/preview server connects to the backend.
+	const proxy = {
+		[`${mountPath}api/dev`]: {
+			target: process.env.OMP_DEV_PROXY_TARGET ?? "http://127.0.0.1:4174",
+			ws: true,
+			rewrite: (requestPath: string) => requestPath.slice(mountPath.length - 1),
+		},
+	};
+	const redirectDirectory = (request: IncomingMessage, response: ServerResponse, next: () => void) => {
+		const url = new URL(request.url ?? "/", "http://dev.local");
+		if (mountPath !== "/" && url.pathname === mountPath.slice(0, -1)) {
+			response.writeHead(302, { Location: mountPath + url.search });
+			response.end();
+			return;
+		}
+		next();
+	};
+	const mountedEntry: Plugin = {
+		name: "dev-mounted-entry",
+		configureServer(server) {
+			server.middlewares.use(redirectDirectory);
+		},
+		configurePreviewServer(server) {
+			server.middlewares.use(redirectDirectory);
+		},
+	};
 	return {
 		root: entryRoot,
 		base: basePath,
@@ -135,7 +147,7 @@ export function createDevFrontendConfig(entryRoot: string, outputDirectory: stri
 		server: {
 			host,
 			port,
-      proxy,
+			proxy,
 			strictPort: true,
 			fs: { strict: true, allow: [root] },
 		},

@@ -23,6 +23,7 @@ import {
 } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import { discoverAuthStorage, initializeOfflineModelCommand, loadCliExtensionProviders } from "../sdk";
+import type { AuthStorage } from "../session/auth-storage";
 
 export interface OpenWikiModelPreview {
 	/** Origin of the selector, or automatic runtime selection when none is configured. */
@@ -36,9 +37,12 @@ export interface OpenWikiModelPreview {
 }
 
 /** Keep explicit selectors; otherwise use the plan role only when configured. */
-export async function resolveOpenWikiPlannerSelector(selector?: string): Promise<string | undefined> {
+export async function resolveOpenWikiPlannerSelector(
+	selector?: string,
+	settings?: Settings,
+): Promise<string | undefined> {
 	if (selector !== undefined) return selector;
-	const settings = await Settings.loadReadOnly({ cwd: getProjectDir() });
+	settings ??= await Settings.loadReadOnly({ cwd: getProjectDir() });
 	return settings.getModelRole("plan") !== undefined ? "@plan" : undefined;
 }
 
@@ -74,24 +78,47 @@ export async function previewOpenWikiModel(selector?: string): Promise<OpenWikiM
 	};
 }
 
-/** Create an OMP-backed OpenWiki model with its own request lifetime. */
-export async function createOpenWikiModel(selector?: string): Promise<{
+export interface OpenWikiModel {
 	model: BaseChatModel;
 	modelId: string;
+	/** Resolve the planner after runtime defaults, sharing model discovery and credentials. */
+	createPlannerModel(selector?: string): Promise<OpenWikiModel>;
 	dispose(): void;
-}> {
+}
+
+interface OpenWikiModelRuntime {
+	settings: Settings;
+	storage: AuthStorage;
+	registry: ModelRegistry;
+}
+
+/** Create an OMP-backed OpenWiki model with its own request lifetime. */
+export async function createOpenWikiModel(selector?: string): Promise<OpenWikiModel> {
 	const cwd = getProjectDir();
 	const settings = await Settings.init({ cwd });
 	const offline = await initializeOfflineModelCommand(settings);
 	const storage = await discoverAuthStorage(settings.getAgentDir(), { settings, offline });
-	let router: AuthGatewayRouter | undefined;
-	const lifetime = new AbortController();
 	try {
 		const registry = new ModelRegistry(storage, path.join(settings.getAgentDir(), "models.yml"), { settings });
 		await registry.hydrateCredentialScopedModelCaches();
 		await loadCliExtensionProviders(registry, settings, cwd, { offline });
 		await registry.refresh(offline ? "offline" : "online-if-uncached");
+		return await createRuntimeModel(selector, { settings, storage, registry }, true);
+	} catch (error) {
+		storage.close();
+		throw error;
+	}
+}
 
+async function createRuntimeModel(
+	selector: string | undefined,
+	runtime: OpenWikiModelRuntime,
+	ownsStorage = false,
+): Promise<OpenWikiModel> {
+	const { settings, storage, registry } = runtime;
+	let router: AuthGatewayRouter | undefined;
+	const lifetime = new AbortController();
+	try {
 		const defaultRole = settings.getModelRole("default");
 		let selected: Model<Api> | undefined;
 		let thinkingLevel: ConfiguredThinkingLevel | undefined;
@@ -164,18 +191,22 @@ export async function createOpenWikiModel(selector?: string): Promise<{
 		return {
 			model,
 			modelId,
+			async createPlannerModel(plannerSelector?: string) {
+				const effectiveSelector = await resolveOpenWikiPlannerSelector(plannerSelector, settings);
+				if (effectiveSelector === undefined || effectiveSelector === selector) return this;
+				return createRuntimeModel(effectiveSelector, runtime);
+			},
 			dispose() {
 				if (disposed) return;
 				disposed = true;
 				lifetime.abort();
 				activeRouter.close();
-				storage.close();
+				if (ownsStorage) storage.close();
 			},
 		};
 	} catch (error) {
 		lifetime.abort();
 		router?.close();
-		storage.close();
 		throw error;
 	}
 }

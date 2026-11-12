@@ -29,6 +29,9 @@ import {
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
+import { closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { getProjectDir, isInteractiveHost, setInteractiveHost, setProjectDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./collab/helpers/in-memory-relay";
@@ -486,9 +489,10 @@ describe("outer startup collaboration gate", () => {
 					expect(network).not.toHaveBeenCalled();
 					expect(terminal.written).not.toMatch(/new version|update available|omp update/i);
 					const loaded = Object.keys(require.cache).map(file => file.replaceAll("\\", "/"));
+					// build-service is shared with explicit WebKit downloads, not update-only code.
 					expect(
 						loaded.filter(file =>
-							/\/(?:coding-agent\/src\/modes\/setup|tui\/src\/setup\/wizard|coding-agent\/src\/cli\/(?:update-cli|build-service)|coding-agent\/src\/extensibility\/plugins\/marketplace-auto-update)\.ts$/.test(
+							/\/(?:coding-agent\/src\/modes\/setup|tui\/src\/setup\/wizard|coding-agent\/src\/cli\/update-cli|coding-agent\/src\/extensibility\/plugins\/marketplace-auto-update)\.ts$/.test(
 								file,
 							),
 						),
@@ -515,11 +519,15 @@ describe("outer startup collaboration gate", () => {
 			mode?.stop();
 			stopPendingStartupComposer();
 			vi.restoreAllMocks();
-			uninstallInMemoryRelay();
 			authStorage.close();
 			// setProjectDir chdir'd into tempDir; Windows cannot delete the process cwd.
 			setProjectDir(originalProject);
 			await testSession.cleanup();
+			// The real startup opens exit-only global stores under the relay's temporary HOME.
+			closeSessionIndex();
+			HistoryStorage.close();
+			AgentStorage.close();
+			uninstallInMemoryRelay();
 			resetSettingsForTest();
 			Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
 			Object.defineProperty(process.stdout, "isTTY", { value: originalStdoutIsTTY, configurable: true });

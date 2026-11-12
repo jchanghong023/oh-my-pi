@@ -2,6 +2,16 @@ import type { DevFileVersion, DevMaterialView, DevStageMaterial, DevWorkflowStag
 import { getEmployeeId } from "./identity.js";
 import { readSrDependencies, srDependencyMap } from "./sr-dependencies.js";
 
+/** 切版本只清除不兼容的报告选择，正式需求不能退回提案工作区。 */
+export function selectionForRelease(selection: DevSelection, view: Pick<DevWorkflowView, "groups" | "drafts">, releaseId: string): DevSelection {
+ const formal = view.groups.find(group => group.id === selection.irId);
+ const selected = formal ?? view.drafts.find(group => group.id === selection.irId);
+ if (!selected || selected.releaseId === releaseId) return selection;
+ return selection.formalView || formal
+  ? { projectId: selection.projectId, formalView: "list" }
+  : { projectId: selection.projectId };
+}
+
 /** 业务评审只绑定 proposal 与全部增量 spec，技术 design 的生成不让业务评审过期。 */
 export function requirementsReviewInputs(group: DevRequirementGroup): DevFileVersion[] | undefined {
  const rows = group.snapshot?.srs ?? [];

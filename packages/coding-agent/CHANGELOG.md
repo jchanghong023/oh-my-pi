@@ -9,6 +9,11 @@
 
 ### Fixed
 
+- Editing queued Dev and WebGUI messages replaces referenced images while preserving uploaded attachments.
+- Offline OpenWiki planning now respects the effective plan model role after runtime defaults are applied.
+- Team truncates oversized narrative output before strict validation instead of aborting the discussion.
+- Native subagents retain access to their exact granted Skills until their session is released.
+- RPC clients retain blocked task status and blocker notes; ACP plans display blocked tasks as pending.
 - WebGUI questions and approvals keep the borrowed terminal session marked as waiting until they settle.
 - Provider-scoped model lookups no longer include unrelated runtime models before OAuth login.
 - WebKit browser shutdown waits for owned host and viewer processes and retains failed cleanup for retry.

@@ -1309,7 +1309,11 @@ describe("guest HTML form race", () => {
 			expect(extrasNext.request.checkedIndices).toEqual([1]);
 			const next = extrasNext.request.options.at(-1)!;
 			expect(extras.request.options).not.toContain(next);
-			guest.socket.send({ t: "ui-response", reqId: extrasNext.request.reqId, value: next });
+			guest.socket.send({
+				t: "ui-response",
+				reqId: extrasNext.request.reqId,
+				value: typeof next === "string" ? next : next.label,
+			});
 
 			// A value the form rejects is asked again with the reason.
 			const workers = await nextUiRequest(guest);
@@ -1359,7 +1363,11 @@ describe("guest HTML form race", () => {
 						: typeof value === "string"
 							? value
 							: undefined;
-				guest.socket.send({ t: "ui-response", reqId: frame.request.reqId, value: selected });
+				guest.socket.send({
+					t: "ui-response",
+					reqId: frame.request.reqId,
+					value: typeof selected === "object" ? selected.label : selected,
+				});
 				return frame.request;
 			};
 

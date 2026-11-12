@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockHandler, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { PromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
@@ -629,6 +630,41 @@ describe("AgentSession queued steer delivery", () => {
 			release.resolve();
 			await compaction;
 		}
+	});
+
+	it("replaces queued image bytes only when edit explicitly supplies images", async () => {
+		const { session } = await createSession([{ content: ["answer"] }]);
+		session.setQueueAutoDrain(false);
+		await session.prompt("original image", {
+			inputId: "image-edit",
+			images: [PATH_PASTED_IMAGE],
+			queueOnly: true,
+			streamingBehavior: "followUp",
+		});
+		const images = (): ImageContent[] => {
+			const message = session.getQueuedInputMessages()[0];
+			const result: ImageContent[] = [];
+			if ("content" in message && Array.isArray(message.content)) {
+				for (const part of message.content) {
+					if (part.type === "image") result.push(part);
+				}
+			}
+			return result;
+		};
+		const original = images();
+		expect(original).toHaveLength(1);
+		expect(session.mutateQueuedInput("image-edit", "edit", { text: "text-only edit" })).toBe(true);
+		expect(images()).toEqual(original);
+		const replacement = {
+			...PATH_PASTED_IMAGE,
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+		};
+		expect(session.mutateQueuedInput("image-edit", "edit", { text: "new image", images: [replacement] })).toBe(true);
+		expect(images()).toEqual([replacement]);
+		expect(session.mutateQueuedInput("image-edit", "edit", { text: "remove image", images: [] })).toBe(true);
+		expect(images()).toEqual([]);
+		expect(session.mutateQueuedInput("image-edit", "edit", { text: "add image", images: original })).toBe(true);
+		expect(images()).toEqual(original);
 	});
 
 	it("keeps initial Goal provenance through queued text replacement and a preserving stop, delivering it once", async () => {

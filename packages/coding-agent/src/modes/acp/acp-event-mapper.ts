@@ -390,6 +390,7 @@ function toSessionNotification(sessionId: string, update: SessionUpdate): Sessio
 const todoStatusMap: Record<TodoStatus, "pending" | "in_progress" | "completed"> = {
 	pending: "pending",
 	in_progress: "in_progress",
+	blocked: "pending",
 	completed: "completed",
 	abandoned: "completed",
 };

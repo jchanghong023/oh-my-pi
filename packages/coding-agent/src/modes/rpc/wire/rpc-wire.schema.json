@@ -2296,7 +2296,8 @@
 				"pending",
 				"in_progress",
 				"completed",
-				"abandoned"
+				"abandoned",
+				"blocked"
 			],
 			"type": "string"
 		},
@@ -2366,6 +2367,9 @@
 				},
 				"status": {
 					"$ref": "#/$defs/TodoStatus"
+				},
+				"blocker": {
+					"type": "string"
 				},
 				"details": {
 					"type": "string"

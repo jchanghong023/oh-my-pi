@@ -1,18 +1,15 @@
 /**
  * `/team` structured-output schemas and validators.
  *
- * Every stage yields schema-constrained output: the JSON Schemas below are
- * handed to the subagent yield tool (`outputSchemaMode: "strict"`), so the
- * provider-side tool schema and the post-mortem validator both enforce them.
- * The hand-rolled parsers double as the orchestrator's trust boundary — data
- * that bypassed the yield validation (schema override after retries) is still
- * shape-checked here; aggregate proposal and review text over budget is
- * rejected before any stage consumes it.
+ * Canonical schemas bound the data consumed by the orchestrator. The runner
+ * uses transport variants that accept unbounded text only for narratives the
+ * parsers explicitly truncate, so strict yield validation cannot reject those
+ * narratives before normalization. All other schema constraints stay intact.
  *
- * Proposal and review-summary fields have schema `maxLength` caps. The parser
- * also enforces 4000 characters across all proposal prose, without truncation,
- * and 1500 across review summary, findings and blocking-resolution bases after
- * summary truncation; findings and decisions are never silently truncated.
+ * Parsers remain the canonical trust boundary even after strict yield:
+ * proposal prose is rejected above 4000 aggregate characters, without
+ * truncation; review prose must fit 1500 after summary truncation. Findings
+ * and blocking-resolution decisions are never silently truncated.
  */
 import { validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema";
 import type {
@@ -303,6 +300,28 @@ export const TEAM_SYNTHESIS_SCHEMA = obj(
 		"hardConstraintViolations",
 	],
 );
+
+/** Relax only narratives whose canonical parsers normalize before validation. */
+function narrativeTransportSchema(schema: JsonSchema, textBudgets: Readonly<Record<string, number>>): JsonSchema {
+	const properties = { ...(schema.properties as Record<string, JsonSchema>) };
+	for (const field in textBudgets) {
+		const { maxLength: _maxLength, ...property } = properties[field];
+		properties[field] = property;
+	}
+	return { ...schema, properties };
+}
+
+const TEAM_TRANSPORT_SCHEMAS = new Map<unknown, JsonSchema>([
+	[TEAM_REVIEW_SCHEMA, narrativeTransportSchema(TEAM_REVIEW_SCHEMA, REVIEW_TEXT_BUDGETS)],
+	[TEAM_REVISION_SCHEMA, narrativeTransportSchema(TEAM_REVISION_SCHEMA, REVISION_TEXT_BUDGETS)],
+	[TEAM_ALIGNMENT_SCHEMA, narrativeTransportSchema(TEAM_ALIGNMENT_SCHEMA, ALIGNMENT_TEXT_BUDGETS)],
+	[TEAM_SYNTHESIS_SCHEMA, narrativeTransportSchema(TEAM_SYNTHESIS_SCHEMA, SYNTHESIS_TEXT_BUDGETS)],
+]);
+
+/** Proposal and unknown caller schemas retain every transport constraint. */
+export function getTeamTransportSchema(schema: unknown): unknown {
+	return TEAM_TRANSPORT_SCHEMAS.get(schema) ?? schema;
+}
 
 // ── Parsers ──────────────────────────────────────────────────────────────────
 

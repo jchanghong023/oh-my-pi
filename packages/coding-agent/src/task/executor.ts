@@ -4914,7 +4914,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 		let sessionOpenedAt: number | undefined;
 		let sessionCreatedAt: number | undefined;
 		let readyAt: number | undefined;
-		const skillAccessDisposers: Array<() => void> = [];
 		let disposeSessionObserver: (() => void) | undefined;
 
 		try {
@@ -5550,7 +5549,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				for (const skill of options.autoloadSkills) {
 					// Grant exact pinned identity, never the catalog winner for a colliding name.
 					if (isExplicitOnlySkill(skill)) {
-						skillAccessDisposers.push(grantSpecSkillAccess(sessionManager, skill));
+						session.addDisposer(grantSpecSkillAccess(sessionManager, skill));
 					}
 					const { message, details } = await buildSkillPromptMessage(skill, { args: "" }, "autoload", session, {
 						scope: sessionManager,
@@ -5601,8 +5600,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				}
 			}
 		} finally {
-			// Revoke before any awaited/deferred cleanup, including aborted startup.
-			for (const dispose of skillAccessDisposers.reverse()) dispose();
 			try {
 				disposeSessionObserver?.();
 			} catch (cleanupError) {

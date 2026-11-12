@@ -15,17 +15,29 @@ mock.module("../../src/openwiki/model", () => ({
 		throw new Error("Generation unexpectedly previewed a model");
 	},
 	resolveOpenWikiPlannerSelector: async (selector?: string) => selector ?? process.env.OPENWIKI_PROBE_PLAN,
-	createOpenWikiModel: async (selector?: string) => {
-		events.push({ type: "create", selector });
-		if (mode === "planner-error" && selector === "fixture/planner") throw new Error("planner unavailable");
-		const instance = ++nextInstance;
-		return {
-			modelId: selector ?? "fixture/default",
-			model: { instance },
-			dispose: () => events.push({ type: "dispose", instance }),
-		};
-	},
+	createOpenWikiModel: createFixtureModel,
 }));
+type FixtureModel = {
+	modelId: string;
+	model: { instance: number };
+	createPlannerModel(selector?: string): Promise<FixtureModel>;
+	dispose(): void;
+};
+async function createFixtureModel(selector?: string): Promise<FixtureModel> {
+	events.push({ type: "create", selector });
+	if (mode === "planner-error" && selector === "fixture/planner") throw new Error("planner unavailable");
+	const instance = ++nextInstance;
+	return {
+		modelId: selector ?? "fixture/default",
+		model: { instance },
+		async createPlannerModel(plannerSelector?: string) {
+			const effectiveSelector = plannerSelector ?? process.env.OPENWIKI_PROBE_PLAN;
+			if (effectiveSelector === undefined || effectiveSelector === selector) return this;
+			return createFixtureModel(effectiveSelector);
+		},
+		dispose: () => events.push({ type: "dispose", instance }),
+	};
+}
 mock.module("../../src/openwiki/resources", () => ({
 	materializeOpenWikiSkills: async () => path.join(root, "bundled-skills"),
 }));

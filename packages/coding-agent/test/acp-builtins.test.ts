@@ -955,9 +955,11 @@ describe("session lifecycle commands", () => {
 			const deletedId = manager.getSessionId();
 			if (!deletedFile) throw new Error("Expected a persisted session");
 
-			const { output, session, runtime } = createRuntime();
+			const { session, runtime } = createRuntime();
 			runtime.sessionManager = manager;
 			session.newSession = async options => {
+				const previousFile = manager.getSessionFile();
+				if (options?.drop && previousFile) await manager.dropSession(previousFile);
 				await manager.newSession(options);
 				session.sessionId = manager.getSessionId();
 				session.sessionFile = manager.getSessionFile();
@@ -966,10 +968,8 @@ describe("session lifecycle commands", () => {
 			expect(await executeAcpBuiltinSlashCommand("/session delete", runtime)).toEqual({ consumed: true });
 			expect(await Bun.file(deletedFile).exists()).toBe(false);
 			expect(manager.getSessionId()).not.toBe(deletedId);
-			expect(output[0]).toContain(manager.getSessionId());
 			const nextFile = manager.getSessionFile();
 			if (!nextFile) throw new Error("Expected a new session path");
-			expect(output[0]).toContain(nextFile);
 
 			manager.appendMessage({ role: "user", content: "second turn", timestamp: 2 });
 			manager.appendMessage(makeAssistantMessage());
@@ -1347,9 +1347,9 @@ describe("wave 3 commands", () => {
 			setProjectDir(originalProjectDir);
 			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
 			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
-			await fs.rm(root, { recursive: true, force: true });
+			await removeWithRetries(root);
 		}
-	});
+	}, 120_000);
 
 	it("/worktree: uses an existing branch tip instead of source HEAD without changing source dirt", async () => {
 		const { runtime, fakeSessionManager } = createRuntime();

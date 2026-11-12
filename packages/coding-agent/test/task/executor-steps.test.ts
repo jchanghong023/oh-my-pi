@@ -103,6 +103,9 @@ function stepSession(answer: (prompt: string, child: Child) => void, tools: stri
 		session: session as unknown as AgentSession,
 		extensionsResult: {} as unknown as LoadExtensionsResult,
 		setToolUIContext: () => {},
+		getToolContext: () => {
+			throw new Error("Stepped-spawn fixture does not provide a tool context");
+		},
 		eventBus: new EventBus(),
 	} as CreateAgentSessionResult);
 	return { prompts, entries };
