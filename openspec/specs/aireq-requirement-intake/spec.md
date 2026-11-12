@@ -46,9 +46,9 @@
 - **WHEN** 添加项目、Release 或个人开发 clone
 - **THEN** Release 只组织交付范围，不代替分支；同仓库的不同 clone／worktree 关联同一项目身份；共享项目身份不引入跨 OMP Web 的开发互斥
 
-### Requirement: 唯一共享 Web 与数据库服务部署
+### Requirement: 唯一共享 Web 直接访问 SQLite
 
-正式部署 MUST 只启动一个共享 `omp aireq_web`，所有访问者使用同一地址，不再启动各自的正式 Web。`omp aireq_db` MUST 以固定 18321 端口统一管理 `/tmpdata/DFT_LAB/omp/omp_aireq_sqlite.db`；Web 经服务访问，不直接并发打开 NFS 数据库。`omp aireq_web --port <端口>` 指定端口，省略时自动选择并显示实际地址。此唯一性不禁止独立启动原型后端；原型后端不连接正式业务库。这里规定目标行为，本轮不实现真实命令或单实例门禁。
+正式部署 MUST 只启动一个共享 `omp aireq_web`，所有访问者使用同一地址，不再启动各自的正式 Web。唯一共享 `omp aireq_web` MUST 由自身后端进程直接打开和读写 `/tmpdata/DFT_LAB/omp/omp_aireq_sqlite.db`，不需要独立数据库服务或数据库监听端口。浏览器仍通过现有 Web HTTP／WS 接口访问业务数据，不直接连接 SQLite。`omp aireq_web --port <端口>` 指定端口，省略时自动选择并显示实际地址。此唯一性不禁止独立启动原型后端；原型后端不连接正式业务库。这里规定目标行为，本轮只更新需求文档与原型说明，不实现真实 SQLite 连接、持久化、命令或单实例门禁。
 
 #### Scenario: 访问者与 Web 所有者分开
 - **WHEN** A 启动唯一共享 `omp aireq_web`，其他人通过浏览器访问该地址
@@ -63,7 +63,7 @@
 #### Scenario: 临时工作区与共享数据
 - **WHEN** 业务需求、评审或方案讨论生成材料
 - **THEN** 在 `/tmpdata/DFT_LAB/omp/{project_name}/{原提交人工号}/{提案id}/` 生成材料；共享项目代码及已实现规格只读。生成这些临时材料不等于修改项目或执行 Git
-- **AND** `omp aireq_db` 统一管理 `/tmpdata/DFT_LAB/omp/omp_aireq_sqlite.db`；所有访问者查看同一业务数据，聊天归共享 Web 宿主，不进入业务库；宿主不可用时不另启个人 Web 自动接管或重放
+- **AND** 共享 `omp aireq_web` 后端直接读写 `/tmpdata/DFT_LAB/omp/omp_aireq_sqlite.db`；所有访问者查看同一业务数据，聊天归共享 Web 宿主，不进入业务库；宿主不可用时不另启个人 Web 自动接管或重放
 
 ### Requirement: 共享前端与双后端契约
 
@@ -85,7 +85,7 @@ AIReq MUST 遵循 [aireq-browser-workbench 的界面与数据源边界](../aireq
 
 #### Scenario: 单个后端承载多人访问
 - **WHEN** 多名用户访问共享 OMP Web
-- **THEN** Web 经固定 18321 端口连接唯一 `omp aireq_db`，读取同一份项目、Release、需求、提案阶段、人员排期及进度，不按用户启动个人 Web 或复制数据库
+- **THEN** 唯一共享 Web 后端直接访问同一份 SQLite，读取项目、Release、需求、提案阶段、人员排期及进度；不另启数据库服务，不按用户启动个人 Web 或复制数据库
 - **AND** AIReq 不执行编码，不维护 SR 开发占用、并发名额、仓库单 IR 锁或依赖执行调度；依赖与人员冲突只作安排提醒
 - **AND** 所有访问者共用启动者的模型配置和 Token；配置、凭据、聊天正文及 Skill 设计临时产物不进入共享业务数据库，项目技能是否进入 Git 由显式提交决定
 
