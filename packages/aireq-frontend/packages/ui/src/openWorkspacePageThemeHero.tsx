@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/components/lib/utils.js";
-import { useZCodeStore } from "@/store/StoreProvider.js";
-import { resolveTheme } from "@/useTheme.js";
+import { useZCodeStoreWithDefault } from "@/store/StoreProvider.js";
+import { normalizeThemePreference, resolveTheme } from "@/useTheme.js";
 import type { Theme } from "@/useTheme.js";
 
 interface ThemeHeroPalette {
@@ -65,20 +65,22 @@ function getThemeHeroPalette(theme: Theme): ThemeHeroPalette {
   }
 }
 
-export function useResolvedThemeHeroPalette(): ThemeHeroPalette {
-  const theme = useZCodeStore((state) => state.theme);
-  const resolvedTheme =
-    theme === "system" ? (resolveTheme(theme) === "dark" ? "dark" : "light") : theme;
-
-  return getThemeHeroPalette(resolvedTheme);
+export function useResolvedThemeHeroPalette(fallbackTheme: Theme = "zai-dark"): ThemeHeroPalette {
+  // 登录入口位于工作台 StoreProvider 外，复用入口主题而不创建第二份 store。
+  const theme = useZCodeStoreWithDefault((state) => state.theme, fallbackTheme);
+  const appliedTheme = theme === "system"
+    ? (resolveTheme(theme) === "dark" ? "zai-dark" : "zai-light")
+    : normalizeThemePreference(theme);
+  return getThemeHeroPalette(appliedTheme);
 }
 
 export function ThemeHeroVisual(props: {
+  theme?: Theme;
   className?: string;
   contentClassName?: string;
   children?: ReactNode;
 }) {
-  const palette = useResolvedThemeHeroPalette();
+  const palette = useResolvedThemeHeroPalette(props.theme);
 
   return (
     <div className={cn("relative overflow-hidden", palette.panel, props.className)}>
