@@ -1,4 +1,5 @@
 import type { ChannelClient } from "@zcode/rpc";
+import { isFormalSelection } from "../packages/ui/src/aireq/domain.js";
 import { createUuid } from "@zcode/shared";
 import { connectViaWebSocket } from "@zcode/client";
 import {
@@ -34,7 +35,7 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 	const schedulerListeners = new Set<() => void>();
 	const freeChatListeners = new Set<() => void>();
 	const skillListeners = new Set<(sessionId: string) => void>();
-	const snapshots = new WeakMap<AIReqWorkflowView, { key: string; reviewScopeKey: string; value: AIReqRemoteWorkflow }>();
+	const snapshots = new WeakMap<AIReqWorkflowView, { key: string; reviewScopeKey: string; selection: AIReqSelection; value: AIReqRemoteWorkflow }>();
 	// 头像只切换同一已读取评审中的会话；不把异步刷新间隙当成工作区丢失。
 	const resolveSnapshot = (view: AIReqWorkflowView | undefined, target: AIReqSelection): AIReqRemoteWorkflow | undefined => {
 		const snapshot = view ? snapshots.get(view) : undefined;
@@ -197,7 +198,7 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 			if (eventError) throw eventError;
 			selection = { ...target };
 			const result = await call("readWorkflow", [target], target);
-			snapshots.set(result.view, { key: JSON.stringify(target), reviewScopeKey: JSON.stringify({ ...target, reviewAgent: undefined }), value: result });
+			snapshots.set(result.view, { key: JSON.stringify(target), reviewScopeKey: JSON.stringify({ ...target, reviewAgent: undefined }), selection: { ...target }, value: result });
 			return result.view;
 		},
 		subscribeWorkflow: listener => subscribe(workflowListeners, listener),
@@ -210,9 +211,20 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 			}
 			return result;
 		},
-		resolveSession: (view, target) => resolveSnapshot(view, target)?.session,
-		resolveWorkspace: (view, target) => resolveSnapshot(view, target)?.workspace
-			?? { identity: `aireq-remote:${clientId}`, kind: "unavailable" },
+		resolveSession: (view, target) => isFormalSelection(view, target) ? undefined : resolveSnapshot(view, target)?.session,
+		resolveWorkspace(view, target) {
+      const resolved = resolveSnapshot(view, target);
+      if (resolved) return resolved.workspace;
+      const snapshot = view ? snapshots.get(view) : undefined;
+      // 同项目正式需求切行时保留服务端已确认的只读工作区。
+      // 精确匹配优先，真实不可用结果不被旧缓存覆盖；提案、自由会话及跨项目不复用。
+      if (snapshot && snapshot.selection.projectId === target.projectId
+        && isFormalSelection(view, snapshot.selection) && isFormalSelection(view, target)
+        && snapshot.value.workspace.kind === "reference" && snapshot.value.workspace.path) {
+        return snapshot.value.workspace;
+      }
+      return { identity: `aireq-remote:${clientId}`, kind: "unavailable" };
+    },
 		retryMaterial: (path, target) => call("retryMaterial", [path, target], target),
 		retrySession: async target => {
 			await call("retrySession", [target], target);

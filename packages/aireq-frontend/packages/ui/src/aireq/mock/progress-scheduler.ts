@@ -113,7 +113,7 @@ export function createPrototypeProgressScheduler(options: { scaleDemo?: boolean 
 
   function report(input: Input): AIReqProgressAnalysis {
     const existing = input.sr.progress;
-    return { percent: existing?.percent ?? 0, merged: existing?.merged ?? false, certain: false,
+    return { percent: Math.min(existing?.percent ?? 0, 99), merged: existing?.merged ?? false, certain: false,
       branch: existing?.branch ?? input.sr.trackingBranch?.name ?? `sr/${input.sr.id}`, analysedAt: at(),
       codeVersion: existing?.codeVersion ?? "未记录", defaultVersion: existing?.defaultVersion ?? "未记录",
       implemented: existing?.implemented ?? [],
@@ -150,9 +150,11 @@ export function createPrototypeProgressScheduler(options: { scaleDemo?: boolean 
         const sr: AIReqSystemRequirement = { id: srId, projectId: project.id, irId, title: `系统需求 ${suffix} · ${project.name}`,
           documentPath: `memory-scale/${srId}.md`, status: percent === 100 ? "completed" : "pending", round: 0,
           sessions: [], approvals: [], materials: [],
+          trackingBranch: { name: `sr/${srId}`, baseCommit: "memory-scale-base", createdAt: at(), pushedAt: at() },
           progress: { percent, merged: percent === 100, certain: false, branch: `sr/${srId}`,
             analysedAt: at(), codeVersion: "未记录", defaultVersion: "未记录",
-            implemented: [], remaining: [], issues: [], activity: [] } };
+            implemented: [], remaining: [], issues: [], activity: [],
+            ...(percent === 100 ? { manual: { employeeId: "j00808874", reason: "AI 分析到 99% 后人工确认完成（样例）。", at: at() } } : {}) } };
         const input = { sr, fingerprint: `memory-scale-input:${project.id}:${srId}:1` };
         scaleInputs.set(JSON.stringify([project.id, irId, srId]), { input, irTitle: `需求 ${irIndex} · ${project.name}` });
       }

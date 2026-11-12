@@ -4,7 +4,7 @@ export const PROGRESS_STATUSES = ["待开发", "开发中", "待合入", "待验
 export type AIReqProgressStatus = (typeof PROGRESS_STATUSES)[number];
 
 export function srProgress(sr: AIReqSystemRequirement): number {
-  return Math.min(sr.progress?.percent ?? 0, sr.progress?.merged ? 100 : 99);
+  return Math.min(sr.progress?.percent ?? 0, sr.progress?.merged && sr.progress.manual ? 100 : 99);
 }
 export function progressLabel(percent: number): string {
   return `${percent === 100 ? 100 : Math.min(99.9, Math.round(percent * 10) / 10)}%`;
@@ -28,4 +28,14 @@ export function irProgressStatus(srs: AIReqSystemRequirement[]): AIReqProgressSt
   if (statuses.every(status => status === "已完成")) return "已完成";
   if (statuses.some(status => status === "待开发" || status === "开发中")) return "开发中";
   return statuses.includes("待合入") ? "待合入" : "待验收";
+}
+
+
+/** 人工只能确认由 AI 分析到 99% 且已合入的 SR，不能填写任意百分比。 */
+export function srCompletionBlocker(sr: AIReqSystemRequirement): string | undefined {
+  if (!sr.trackingBranch?.name?.trim()) return "开发分支缺失，属于异常，不能确认完成。";
+  if (!sr.progress) return "尚无 AI 代码分析报告，不能确认完成。";
+  if (srProgress(sr) === 100) return "当前 SR 已完成，无需重复确认。";
+  if (sr.progress.percent !== 99) return "仅当 AI 分析进度达到 99% 时，才可人工确认到 100%。";
+  if (!sr.progress.merged) return "代码尚未合入默认分支，不能确认完成。";
 }

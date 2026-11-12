@@ -98,6 +98,8 @@ export function createPrototypeIssues(): AIReqIssueServices {
     async confirm(scope, id) {
       signedIn();
       const issue = issueFor(scope, id);
+      if (!issue.branch?.trim()) throw new Error("开发分支缺失，属于异常，不能确认完成。");
+      if (issue.percent !== 99) throw new Error("只有 AI 分析到 99% 的 Issue 可以人工确认到 100%。");
       if (!issue.merged) throw new Error("尚未确认开发分支合入默认分支，不能完成 Issue。");
       issue.status = "completed"; issue.percent = 100; issue.remaining = []; issue.confirmedBy = getEmployeeId(); issue.updatedAt = new Date().toISOString(); emit();
     },

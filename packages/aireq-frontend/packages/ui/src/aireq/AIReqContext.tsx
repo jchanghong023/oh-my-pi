@@ -30,7 +30,7 @@ interface AIReqContextValue {
   canGoBack: boolean; canGoForward: boolean; goBack(): void; goForward(): void;
   startProposalDraft(): void;
   startFreeChat(projectId?: string, files?: boolean): void; openFreeChat(taskId: string, files?: boolean): void;
-  pending: boolean; error?: string; releaseId: string; setReleaseId(id: string): void;
+  pending: boolean; selectionReady: boolean; error?: string; releaseId: string; setReleaseId(id: string): void;
   switchProject(projectId: string): void;
   select(value: AIReqSelection): void; refresh(): Promise<void>; retryMaterial(path: string): Promise<boolean>; retrySession(): Promise<void>;
   command(value: AIReqAction): Promise<AIReqWorkflowResult | undefined>;
@@ -85,6 +85,7 @@ export function AIReqProvider({ children }: { children: ReactNode }) {
   }, [recordNavigation]);
 
   const [view, setView] = useState<AIReqWorkflowView>();
+  const [loadedSelection, setLoadedSelection] = useState<AIReqSelection>();
   const viewRef = useRef(view);
   const [error, setError] = useState<string>();
   const [ownWebNotice, setOwnWebNotice] = useState(false);
@@ -106,6 +107,7 @@ export function AIReqProvider({ children }: { children: ReactNode }) {
       for (const [key, item] of provisional.current) if (next.drafts.some(group => group.id === item.irId && group.projectId === item.projectId && !group.pendingFirstMessage)) provisional.current.delete(key);
       viewRef.current = next;
       setView(next);
+      setLoadedSelection({ ...target });
       setError(next.error);
       updateReleaseId(current => !projectChanged && next.releases.some(item => item.id === current) ? current : next.releases[0]?.id ?? "");
     } catch (cause) {
@@ -266,6 +268,7 @@ export function AIReqProvider({ children }: { children: ReactNode }) {
     if (cause !== undefined) report(cause);
   }, [report]);
   return <AIReqContext.Provider value={{ view, selection, session: view && source.resolveSession(view, selection), pending,
+    selectionReady: Boolean(view && loadedSelection && JSON.stringify(loadedSelection) === JSON.stringify(selection)),
     mainView: navigation.mainView, setMainView, canGoBack: navigation.index > 0, canGoForward: navigation.index < navigation.extent, goBack: () => { if (navigationRef.current.index > 0) window.history.back(); }, goForward: () => { if (navigationRef.current.index < navigationRef.current.extent) window.history.forward(); },
     error, releaseId, setReleaseId, switchProject, select, refresh, retryMaterial, retrySession, command, report, firstDiscussion, startProposalDraft, startFreeChat, openFreeChat,
     openFirstDiscussion, takeFirstDiscussion, finishFirstDiscussion }}>{children}

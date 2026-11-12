@@ -275,6 +275,12 @@ export function createPrototypeWorkflow(): AIReqWorkflowView {
   return result;
 }
 let state = createPrototypeWorkflow();
+// 正式 SR 的分支是平台已分配的必填映射；此处仅补齐初始内存样例，不在前端猜测。
+for (const group of state.groups) {
+  for (const sr of state.srs.filter(item => item.projectId === group.projectId && item.irId === group.id)) {
+    sr.trackingBranch ??= { name: `sr/${sr.id}`, baseCommit: prototypeSrDefaultCommit(state, group.projectId), createdAt, pushedAt: createdAt };
+  }
+}
 for (const sr of state.srs) if (sr.status === "developing") sr.ompWebId = "local-j00808874";
 for (const group of state.groups) if (group.developmentStartedAt) group.ompWebId ??= "local-j00808874";
 for (const group of state.drafts.filter(item => item.status === "requirements-pr" && hasCurrentProposalSolution(item))) {
