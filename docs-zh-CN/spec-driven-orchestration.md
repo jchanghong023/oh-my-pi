@@ -33,6 +33,8 @@ AIReq 是 AI 驱动的需求澄清、需求管理和开发进度跟踪平台。�
 
 ## 3. 方案、依赖与人员排期
 
+方案、SR 依赖和工期预估均由方案 Agent 通过对话生成及更新，界面不设生成或重新生成按钮。人负责补充信息、核对材料及逐文件确认；进入页面或切换会话不会生成方案。
+
 方案 Agent 与人讨论整体设计、各 SR 的实现思路、边界和取舍，在同一 OpenSpec Change 下同轮生成／更新共享 `design.md` 及同目录的 `sr-dependencies.json`。`design.md` 保留实现思路和技术取舍并引用 JSON，不重复依赖清单；SR `spec.md` 不再维护依赖。不编制编码任务执行计划。
 
 `sr-dependencies.json` 是依赖及原因的唯一权威，结构为 `{ "srs": [ { "srId": "...", "estimate": { "workingDays": 3, "assumptions": "估算依据与不确定项" }, "prerequisites": [ { "srId": "...", "reason": "..." } ] } ] }`。每个稳定 SR ID 唯一覆盖 IR 全部 SR，无依赖用空数组，前置项记录稳定 SR ID 与原因；不允许自依赖、未知 ID 或循环。界面读取 JSON 展示依赖及原因，可并行关系由依赖图推导，不在 JSON 重复存储。

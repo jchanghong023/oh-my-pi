@@ -409,7 +409,7 @@ export function getPrototypeMaterial(selection: AIReqSelection, path: string): A
   return getPrototypeWorkflow(selection).materials.find(item => item.irId === selection.irId && item.path === path && (!item.srId || item.srId === selection.srId));
 }
 /** Small UI-only transitions, not backend workflow approvals or an execution engine. */
-export function applyPrototypeAction(action: AIReqAction, selection: AIReqSelection): AIReqWorkflowResult {
+export function applyPrototypeAction(action: AIReqAction, selection: AIReqSelection, solutionDiscussion?: string): AIReqWorkflowResult {
   if (consumePrototypeOperationFailure(action.type)) throw new Error("操作未完成（一次性故障样例）。内容和当前状态已保留，请明确重试。");
   if (action.type === "createProposal") {
     const projectId = action.projectId ?? selection.projectId ?? DEFAULT_SELECTION.projectId;
@@ -689,17 +689,18 @@ export function applyPrototypeAction(action: AIReqAction, selection: AIReqSelect
       break;
     }
     case "generateProposalSolution": {
-      const dependencyFile = prototypeProposalDependencies(currentGroup!, state.srs.filter(sr => sr.projectId === projectId && sr.irId === irId));
+      const dependencyFile = prototypeProposalDependencies(currentGroup!, state.srs.filter(sr => sr.projectId === projectId && sr.irId === irId), solutionDiscussion);
       dependencyFile.sha256 = `sample:${dependencyFile.path}:revision-${state.revision}`;
       currentGroup!.srDependencyFile = dependencyFile;
-      const material = prototypeProposalSolution(currentGroup!);
+      const material = prototypeProposalSolution(currentGroup!, solutionDiscussion);
       material.sha256 = `sample:${material.path}:revision-${state.revision}`;
       currentGroup!.proposalSolution = { path: material.path, employeeId: getEmployeeId(), generatedAt: new Date().toISOString(), round: currentGroup!.proposalRound ?? 1, valid: true, requirementsDigest: currentGroup!.snapshot?.digest };
       currentGroup!.status = "solution-ready";
+      currentGroup!.confirmation = undefined;
       state.materials = state.materials.filter(item => item.projectId !== projectId || item.irId !== irId || item.kind !== "solution");
       state.materials.push(material, dependencyFile);
       currentGroup!.files = [...currentGroup!.files.filter(item => item.path !== material.path && item.path !== dependencyFile.path), ...[material, dependencyFile].map(({ path, sha256, size }) => ({ path, sha256, size }))];
-      operation.type = "开发人员完成提案方案（原型）";
+      operation.type = "方案 Agent 对话完成，同步技术方案、SR 依赖及工期预估（内存原型）";
       break;
     }
     case "returnProposal": {

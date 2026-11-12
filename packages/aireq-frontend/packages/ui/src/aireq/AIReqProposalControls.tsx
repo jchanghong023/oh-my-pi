@@ -40,15 +40,14 @@ export function AIReqProposalControls({ group }: { group: AIReqRequirementGroup 
   </div>}
   {!history && phase === "solution" && <div className="space-y-2">
    <p className="text-ui-sm text-foreground-subtle">提交评审人：{group.developerHandoff?.employeeId} · {accepted ? `接手开发人：${accepted.employeeId}` : "尚未接手，等待开发人员处理"}</p>
-   <p className="text-ui-sm text-foreground-subtle">{accepted && !mine ? "当前由其他同事接手，可查看需求与方案。" : "接手开发人员在临时工作区同轮完成 design.md 与 sr-dependencies.json；有业务卡点可打回补充。"}</p>
+   <p className="text-ui-sm text-foreground-subtle">{accepted && !mine ? "当前由其他同事接手，可查看需求与方案。" : "与方案 Agent 对话，由 AI 同轮生成或更新 design.md、SR 依赖与工期预估；有业务卡点可退回补充。"}</p>
 
    <div className="flex flex-wrap gap-2">
     {group.status !== "requirements-pr" && <>
-     <Button size="sm" data-testid="proposal-generate-solution" disabled={aireq.pending || !group.srIds.length || !mine || !!reviewBlocker} title={reviewBlocker ?? (!group.srIds.length ? "请先完成 IR 与至少一个 SR" : undefined)} onClick={() => void aireq.command({ type: "generateProposalSolution", ...target })}>{ready ? "重新生成方案" : "生成方案"}</Button>
      <Button size="sm" variant="outline" data-testid="proposal-return" disabled={!mine || aireq.pending} onClick={() => { setReason(""); setReturnOpen(true); }}>打回业务补充</Button>
     </>}
    </div>
-   {ready && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-solution-ready">design.md 与 sr-dependencies.json 已完成 · 开发人员：{group.proposalSolution?.employeeId}</p>}
+   {ready && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-solution-ready">AI 已同步方案、SR 依赖与工期预估 · 方案参与人：{group.proposalSolution?.employeeId}</p>}
   </div>}
   {viewing === "solution" && <AIReqProposalDeliveryControls group={group} readOnly={history} />}
   <Dialog open={returnOpen} onOpenChange={setReturnOpen}>
