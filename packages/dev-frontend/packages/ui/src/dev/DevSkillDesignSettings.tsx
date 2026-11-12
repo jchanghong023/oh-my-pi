@@ -3,7 +3,6 @@ import { Check, ChevronDown, FileCode2, FolderGit2, MessageSquare, Copy } from "
 import { Button } from "@/components/ui/button.js";
 import { Badge } from "@/components/ui/badge.js";
 import { Label } from "@/components/ui/label.js";
-import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
@@ -26,7 +25,7 @@ export function DevSkillDesignSettings() {
   if (source.mode !== "prototype" || !source.skillDesign) return <p className="text-ui-sm text-foreground-subtle">当前数据源尚未接入此功能。</p>;
   const project = dev?.view?.projects.find(item => item.id === dev.selection.projectId);
   const developmentRoot = project ? source.projects?.readDevelopmentRoot(project.id, source.backend?.owner) : undefined;
-  return <div className="space-y-4"><DevPersonalConfigScope /><SkillDesignEditor key={`${source.backend?.id}:${project?.id ?? "personal"}`} projectId={project?.id ?? "personal"} projectName={project?.name ?? "未选择项目"} workspacePath={developmentRoot ?? source.backend?.configDirectory ?? ""} developmentRoot={developmentRoot} /></div>;
+  return <div className="space-y-4"><DevPersonalConfigScope scopeLabel="Skill 设计所有人可用；使用共享 OMP 的模型配置，生成与保存不授予其他设置的修改权限。" /><SkillDesignEditor key={`${source.backend?.id}:${project?.id ?? "personal"}`} projectId={project?.id ?? "personal"} projectName={project?.name ?? "未选择项目"} workspacePath={developmentRoot ?? source.backend?.configDirectory ?? ""} developmentRoot={developmentRoot} /></div>;
 }
 
 function SkillDesignEditor({ projectId, projectName, workspacePath, developmentRoot }: { projectId: string; projectName: string; workspacePath: string; developmentRoot?: string }) {
@@ -46,7 +45,6 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
   const [preview, setPreview] = useState(() => design.readPreview(sessionId));
   const [tab, setTab] = useState("chat");
   const [optionalOpen, setOptionalOpen] = useState(false);
-  const [unsupportedOpen, setUnsupportedOpen] = useState(false);
   const [insertRequest, setInsertRequest] = useState<ExternalTextInsertRequest | null>(null);
   const requestId = useRef(0);
   const pendingInsert = useRef<ExternalTextInsertRequest | null>(null);
@@ -66,13 +64,19 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
   const targetDirectory = !preview ? undefined : saveTarget === "user" ? source.backend?.userSkillsDirectory ? `${source.backend.userSkillsDirectory}/${targetName}` : undefined : developmentRoot ? `${developmentRoot}/.omp/skills/${targetName}` : undefined;
   const collision = design.listSkills(workspacePath).some(skill => skill.path === `${targetDirectory}/SKILL.md`);
   const file = preview?.files.find(item => item.path === selectedFile) ?? preview?.files[0];
+  const generationStatus = savedPath
+    ? `第 ${preview?.revision} 版已保存（演示），未写入真实文件。`
+    : preview ? `已生成临时文件样例 · 第 ${preview.revision} 版，尚未保存。` : "尚未生成临时文件。";
   const updateDraft = (next: DevSkillDesignDraft) => { setDraft(next); design.saveDraft(sessionId, next); setNotice(""); };
   useEffect(() => {
     const subscription = design.subscribe(id => {
       if (id !== sessionId) return;
       setDraft(design.read(sessionId));
       const next = design.readPreview(sessionId);
-      if (previewRevision.current !== next?.revision) { setSavedPath(""); setError(""); }
+      if (previewRevision.current !== next?.revision) {
+        setSavedPath(""); setError(""); setNotice(""); setFillError("");
+        pendingInsert.current = null; setInsertRequest(null);
+      }
       previewRevision.current = next?.revision;
       setPreview(next);
     });
@@ -84,10 +88,9 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
     pendingInsert.current = null;
     setFillError("");
     setInsertRequest(null);
-    setNotice("已将全部字段与临时路径填入右侧输入框，保留原有内容。可直接发送，也可继续补充；尚未生成文件。");
+    setNotice("已将全部字段与临时路径填入右侧输入框，保留原有内容。可直接发送，也可继续补充。");
   }, []);
   const fillComposer = () => {
-    if (source.capabilities.settingsWrite !== true) { setUnsupportedOpen(true); return; }
     setTab("chat");
     if (pendingInsert.current) return;
     setNotice(""); setFillError("");
@@ -111,18 +114,16 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
     const sample = design.sample!;
     for (const field of SKILL_DESIGN_FIELDS) if (!next[field.id].trim()) next[field.id] = sample[field.id];
     updateDraft(next); setOptionalOpen(true);
-    setNotice("已填入空白字段；尚未发送，也未生成文件。");
+    setNotice("已填入空白字段；尚未发送。");
   };
   const save = () => {
-    if (source.capabilities.settingsWrite !== true) { setUnsupportedOpen(true); return; }
     if (!targetDirectory || !preview || !validName || collision || savedPath) return;
-    try { setSavedPath(design.savePreview(sessionId, developmentRoot ?? "", targetName, saveTarget)); setError(""); }
+    try { setSavedPath(design.savePreview(sessionId, developmentRoot ?? "", targetName, saveTarget)); setError(""); setNotice(""); setFillError(""); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "演示保存失败。"); }
   };
   return <div className="flex h-[calc(100dvh-9rem)] min-h-[34rem] flex-col gap-3" data-testid="dev-skill-design">
-    <AlertDialog open={unsupportedOpen} onOpenChange={setUnsupportedOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>当前访问方式不支持 Skill 设计</AlertDialogTitle><AlertDialogDescription>当前账号只支持查看技能，只有当前 Web 的所有者可设计或保存技能。请启动自己的 OMP Web 修改自己的技能。本次未填入或发送任何内容。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogAction>知道了</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <p className="text-ui-sm text-foreground-subtle">填写说明 → 填入聊天并发送 → 预览临时文件 → 选择保存到项目或个人技能目录</p>
+      <p className="text-ui-sm text-foreground-subtle">填写说明 → 填入聊天并发送 → 预览临时文件 → 选择有效项目或共享 OMP profile 目标</p>
       <div className="flex min-w-0 items-center gap-2 text-ui-sm"><FolderGit2 className="size-3.5 text-foreground-subtle" /><span className="truncate">{projectName}</span><Badge variant="outline">原型演示</Badge></div>
     </div>
     <DevAgentModelSummary binding={modelBinding} />
@@ -138,6 +139,7 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
         </div>
         <div className="shrink-0 space-y-2 border-t border-border p-3">
           <p className="text-ui-sm text-foreground-subtle">模型生成位置（临时目录）</p><p className="break-all font-mono text-ui-sm text-foreground-subtle">{temporaryDirectory}</p>
+          <p role="status" className="text-ui-sm text-foreground-subtle" data-testid="skill-design-generation-status">{generationStatus}</p>
           {fillError && <p role="alert" className="text-ui-sm text-destructive">{fillError}</p>}
           {insertRequest && <p role="status" className="text-ui-sm text-foreground-subtle">正在填入聊天输入框…</p>}
           {notice && <p role="status" className="text-ui-sm text-foreground-subtle">{notice}</p>}
@@ -145,7 +147,7 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
         </div>
       </section>
       <Tabs value={tab} onValueChange={setTab} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border">
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2"><TabsList aria-label="技能设计工作区"><TabsTrigger value="chat"><MessageSquare className="size-3.5" />设计对话</TabsTrigger><TabsTrigger value="preview"><FileCode2 className="size-3.5" />临时文件预览</TabsTrigger></TabsList>{preview && <span className="text-ui-sm text-foreground-subtle">{savedPath ? "已保存（演示）" : `临时文件样例 · 第 ${preview.revision} 版`}</span>}</div>
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2"><TabsList aria-label="技能设计工作区"><TabsTrigger value="chat"><MessageSquare className="size-3.5" />设计对话</TabsTrigger><TabsTrigger value="preview"><FileCode2 className="size-3.5" />临时文件预览</TabsTrigger></TabsList><span className="text-ui-sm text-foreground-subtle">{generationStatus}</span></div>
         <TabsContent forceMount value="chat" className={tab === "chat" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
           <p className="shrink-0 border-b border-border px-3 py-2 text-ui-sm text-foreground-subtle">发送前可编辑和补充。原型发送后展示固定文件样例，不调用真实模型。</p>
           <div className="relative min-h-0 flex-1" data-testid="skill-design-chat">
@@ -164,8 +166,8 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
           </div>
           <div className="shrink-0 space-y-2 border-t border-border p-3" data-testid="skill-design-save-target">
             <p className="text-ui-sm">技能标识（模型推荐）：<span className="font-mono">{preview?.name ?? "发送后由模型推荐"}</span></p>
-            <div className="space-y-1.5"><Label htmlFor="skill-save-scope">保存到</Label><Select value={saveTarget} disabled={Boolean(savedPath)} onValueChange={value => { setSaveTarget(value as "project" | "user"); setError(""); }}><SelectTrigger id="skill-save-scope" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="project">项目技能 · 我的开发项目</SelectItem><SelectItem value="user">个人技能 · 我的 OMP</SelectItem></SelectContent></Select></div>
-            <p className="text-ui-sm text-foreground-subtle">{saveTarget === "project" ? `我的开发项目：${projectName}` : `个人技能归属：${source.backend?.owner ?? "当前开发者"}，可用于自己的不同项目`}</p><p className="break-all font-mono text-ui-sm text-foreground-subtle">{targetDirectory ?? "发送并预览后显示保存路径；项目目标须登记“我的开发项目”，个人目标无需绑定项目。"}</p>
+            <div className="space-y-1.5"><Label htmlFor="skill-save-scope">保存到</Label><Select value={saveTarget} disabled={Boolean(savedPath)} onValueChange={value => { setSaveTarget(value as "project" | "user"); setError(""); }}><SelectTrigger id="skill-save-scope" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="project">项目技能 · 当前有效项目</SelectItem><SelectItem value="user">Profile 技能 · 共享 OMP</SelectItem></SelectContent></Select></div>
+            <p className="text-ui-sm text-foreground-subtle">{saveTarget === "project" ? `当前项目：${projectName}` : `共享 OMP profile 归属：${source.backend?.owner ?? "Web 启动者"}，不是访问者的个人后端`}</p><p className="break-all font-mono text-ui-sm text-foreground-subtle">{targetDirectory ?? "发送并预览后显示保存路径；项目目标须有效可写，profile 目标无需绑定项目。"}</p>
             {preview && <p className="text-ui-sm text-foreground-subtle">确认保存整个临时技能目录中的 {preview.files.length} 个文件；不会覆盖同名技能。当前只演示，不写磁盘。</p>}
             {preview && !validName && <p role="alert" className="text-ui-sm text-destructive">标识只能包含小写字母、数字和连字符，最长 64 个字符。</p>}
             {collision && !savedPath && <p role="alert" className="text-ui-sm text-destructive">所选目标已有同名技能，请返回对话让模型推荐其他标识，再预览保存。</p>}

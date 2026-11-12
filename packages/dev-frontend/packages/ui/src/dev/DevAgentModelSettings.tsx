@@ -6,7 +6,7 @@ import { SettingsGroupCard, SettingsRow } from "@/settings/SettingsPageParts.js"
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { DevPersonalConfigScope } from "./DevPersonalConfigScope.js";
 
-export interface DevModelDraftActions { save(): void; discard(): void }
+export interface DevModelDraftActions { save(): void; discard(): void; canSave?: boolean }
 
 export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActionsChange?: (actions: DevModelDraftActions | null) => void }) {
  const source = useDevDataSource();
@@ -42,7 +42,7 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 				{zh ? "为 Dev 核心 Agent 分别选择模型与思考强度。未单独指定模型时，跟随默认模型。" : "Choose a model and reasoning level for each core Dev Agent. Agents without a model override follow the default model."}
 			</p>
 			<DevPersonalConfigScope />
-      {!canManage && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可以查看全部模型和 Agent 配置；只有当前 Web 的所有者可修改。请启动自己的 OMP Web 修改自己的配置。</p>}
+      {!canManage && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可以查看全部模型和 Agent 配置；仅启动此 OMP Web 的人可修改。</p>}
             <p className="text-ui-sm leading-6 text-foreground-subtle" data-testid="agent-model-effective-scope">{zh ? "保存后用于之后新建的角色会话，包括新阶段和返工新轮次。已有会话与历史消息保留创建时的模型和思考强度；不会自动切换运行中的 Agent。自由会话沿用原模型设置方式。" : "Saved settings apply to newly created role sessions, including new stages and rework rounds. Existing sessions and history keep their original model and reasoning level. Free conversations retain their existing model controls."}</p>
 			<section className="space-y-3" aria-labelledby="agent-default-model-title">
 				<h3 id="agent-default-model-title" className="text-ui-base font-medium">{zh ? "默认模型" : "Default model"}</h3>
@@ -101,7 +101,7 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 					})}
 				</SettingsGroupCard>
 				<p className="text-ui-sm leading-6 text-foreground-subtle">
-					{zh ? "测试与代码审查按需复用 OMP 原生子代理，无需重复配置专有 Agent。IR 验收 Agent 负责全部 SR 合并后的整体验收，以及最终修复与归档 PR 材料。" : "Testing and code review reuse OMP native subagents without separate dedicated Agent settings. The IR Acceptance Agent verifies the integrated IR after all SRs merge and prepares the final fixes and archive PR materials."}
+					{zh ? "方案 Agent 负责提案技术方案、SR 依赖及建议排期；需求进度分析 Agent 根据代码证据报告进度、遗留问题与合入情况。两者均不编码、不修复代码；Dev 不提供 IR 验收或归档 PR 流水线，实际开发、测试与代码评审在平台外完成。" : "The Solution Agent handles proposal design, SR dependencies and suggested dates. The Requirement Progress Agent reports progress, outstanding issues and merge evidence. Neither writes or fixes code. Dev has no IR acceptance or archive-PR pipeline; development, testing and code review happen outside the platform."}
 				</p>
 			</section>
 			<div className="flex flex-wrap items-center justify-between gap-3">

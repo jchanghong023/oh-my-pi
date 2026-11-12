@@ -1,5 +1,5 @@
 import { useDevDataSource } from "./data-source.js";
-import { requirementsReviewBlocker, requirementsReviewCurrent, requirementsReviewInputs } from "./domain.js";
+import { requirementsReviewBlocker, requirementsReviewCurrent, requirementsReviewStartBlocker } from "./domain.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
 import { DevRequirementsDecision } from "./DevRequirementsDecision.js";
 import { useState } from "react";
@@ -22,7 +22,7 @@ export function DevRequirementReview({ group, readOnly = false }: { group: DevRe
  const review = group.review;
  const current = requirementsReviewCurrent(group);
  const blocker = requirementsReviewBlocker(group);
- const hasInputs = Boolean(requirementsReviewInputs(group));
+ const startBlocker = requirementsReviewStartBlocker(group);
  const editable = !readOnly && ["draft", "solution-ready"].includes(group.status);
  const canSupplement = editable && (group.proposalStage ?? "requirements") === "requirements";
  const target = { projectId: group.projectId, irId: group.id };
@@ -31,7 +31,7 @@ export function DevRequirementReview({ group, readOnly = false }: { group: DevRe
   if (result?.status === "completed") setOpen(true);
  };
  return <div className="flex flex-wrap items-center gap-2" data-testid="proposal-requirements-review">
-  <Button type="button" size="sm" variant="outline" data-testid="requirements-review-run" disabled={!editable || dev.pending || !hasInputs} onClick={() => void run()}><ClipboardCheck className="size-3.5" />{review ? "重新需求评审（演示）" : "需求评审（演示）"}</Button>
+  <Button type="button" size="sm" variant="outline" data-testid="requirements-review-run" disabled={!editable || dev.pending || !!startBlocker} title={startBlocker} onClick={() => void run()}><ClipboardCheck className="size-3.5" />{review ? "重新需求评审（演示）" : "需求评审（演示）"}</Button>
   {review && <Button type="button" size="sm" variant="ghost" data-testid="requirements-review-open" onClick={() => setOpen(true)}>查看评审意见{!current ? "（旧版本）" : ""}</Button>}
   <p className="w-full text-ui-sm text-foreground-subtle" data-testid="requirements-review-gate" role="status">{blocker ?? "当前版本业务需求评审通过（演示）；人工确认与 PR 评审仍不可省略。"}</p>
   <Dialog open={open} onOpenChange={setOpen}>
@@ -58,7 +58,7 @@ export function DevRequirementReview({ group, readOnly = false }: { group: DevRe
     </form>}
     {Boolean(group.reviewHistory?.length) && <details className="space-y-2 border-t border-border pt-3 text-ui-sm" data-testid="requirements-review-history"><summary className="cursor-pointer">历史 AI 评审（{group.reviewHistory!.length}）</summary>{group.reviewHistory!.map((item, index) => <details key={`${item.id}:${index}`} className="mt-2 space-y-2 rounded-md border border-border p-2"><summary className="cursor-pointer">第 {item.round ?? 1} 轮 · {item.passed ? "通过记录" : "待补充记录"} · 仅供历史查看</summary><DevAgentModelSummary binding={item.modelConfig} /><p className="break-all text-foreground-subtle">AI 原始评审：{item.id} · 绑定快照：{item.snapshotDigest}</p><p className="text-foreground-subtle">发起工号：{item.requestedBy ?? "样例未记录"} · <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</time>（北京时间）</p><details className="text-foreground-subtle"><summary className="cursor-pointer">绑定的需求文件版本（{item.inputFiles?.length ?? 0}）</summary><ul className="mt-1 space-y-1">{item.inputFiles?.map(file => <li key={file.path} className="break-all font-mono">{file.path} · {file.sha256} · {file.size} 字节</li>)}</ul></details>{Boolean(item.findings?.length) && <ul className="space-y-2">{item.findings?.map(finding => <li key={finding.id} className="rounded-md border border-border p-2"><p>{finding.level === "blocking" ? "需补充" : "建议"}：{finding.message}</p><p className="mt-1 break-all text-foreground-subtle">{finding.documentPath}</p></li>)}</ul>}<MessageResponse>{item.report}</MessageResponse></details>)}</details>}
     <p className="text-ui-sm text-foreground-subtle">反复不通过或存在业务争议时交人工处理；不会自动循环评审或把人工意见伪造成 Agent 通过。</p>
-    {editable && review && <div className="flex justify-end"><Button type="button" size="sm" data-testid="requirements-review-rerun" disabled={dev.pending || !hasInputs} onClick={() => void run()}>重新需求评审（演示）</Button></div>}
+    {editable && review && <div className="flex justify-end"><Button type="button" size="sm" data-testid="requirements-review-rerun" disabled={dev.pending || !!startBlocker} title={startBlocker} onClick={() => void run()}>重新需求评审（演示）</Button></div>}
     {dev.error && <p role="alert" className="text-ui-sm text-destructive">{dev.error}</p>}
    </DialogContent>
   </Dialog>

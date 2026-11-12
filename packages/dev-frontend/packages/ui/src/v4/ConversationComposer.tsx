@@ -417,6 +417,8 @@ export interface ConversationComposerProps {
   skillCatalogSessionId?: string | null;
   /** draft 态无 snapshot，但仍可 createSession 首发。 */
   draftMode?: boolean;
+  /** 仅覆盖普通输入提示；缺省保留原有文案，不参与发送正文。 */
+  placeholder?: string;
   /** renderer 当前草稿配置意图；只在 draftMode 下覆盖迟到的 prewarm projection。 */
   draftConfig?: Partial<SessionConfigState>;
   /** SessionPane 注入的完整 Draft owner；生产路径不再由编辑器直接覆盖持久记录。 */
@@ -560,6 +562,7 @@ function ConversationComposerImpl({
   sessionId = null,
   skillCatalogSessionId = sessionId,
   draftMode = false,
+  placeholder,
   draftConfig,
   composerDraft,
   composerDraftScopeToken,
@@ -1990,7 +1993,7 @@ function ConversationComposerImpl({
       ? ""
       : workingDurationLabel
         ? intl.formatMessage({ id: "chat.history.workingFor" }, { duration: workingDurationLabel })
-        : intl.formatMessage({
+        : placeholder ?? intl.formatMessage({
             id: resolveChatPlaceholderKey({
               hasHistoryMessages: (snapshot?.rows.totalCount ?? 0) > 0,
               isTaskProcessing: pending || inputPending || canStop,

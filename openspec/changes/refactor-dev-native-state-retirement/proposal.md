@@ -7,7 +7,7 @@
 ## What Changes
 
 - 本组 `spec-driven-orchestration` 共 10 项需求操作，配套见 [规格文件](specs/spec-driven-orchestration/spec.md)。
-- 统一采用同仓库单 IR、默认最多两个依赖就绪 SR 并行、首个 SR 启动冻结、人工提案 PR、SR 代码／测试／规格同 PR、IR 验收与最终修复／归档 PR；归档只移动目录，不再次同步规格。
+- 退役开发工作区、名额与冻结状态要求；当前 Dev 采用需求文档入 Git、人员排期及进度元数据入共享库，不管理编码会话或验收归档流水线。
 - 配套 REMOVED 标题仅保留旧条款替换清单；权威基线已按用户本次授权更新，不应重复删除或据此迁移旧状态。
 - 完整部署、目录、角色与流程见[最新 Dev 说明](../../../docs-zh-CN/spec-driven-orchestration.md)。
 
@@ -19,4 +19,4 @@
 
 ## Impact
 
-本轮仅更新文档，已同步用户确认的 `openspec/specs/` Dev 需求，不表示实现或验收通过。不改原型、代码、静态数据或运行状态；不执行 Git 提交／推送、OpenSpec 同步／归档或数据库迁移。原型未对齐项见[运行说明](../../../packages/dev-frontend/README.md)。
+本轮仅文档及独立原型，不修改正式后端或运行时，不执行真实 Git、OpenSpec 同步／归档或数据库迁移；退役清单不删除用户文件、不迁移历史状态，普通 OMP 能力保持原边界。

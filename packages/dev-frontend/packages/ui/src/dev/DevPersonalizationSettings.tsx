@@ -1,5 +1,5 @@
 import { useDevDataSource } from "./data-source.js";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { USER_INSTRUCTIONS_MAX_BYTES } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
 import { Label } from "@/components/ui/label.js";
@@ -8,8 +8,9 @@ import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { SettingsFormActions } from "@/settings/SettingsFormActions.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { DevPersonalConfigScope } from "./DevPersonalConfigScope.js";
+import type { DevModelDraftActions } from "./DevAgentModelSettings.js";
 
-export function DevPersonalizationSettings() {
+export function DevPersonalizationSettings({ onDraftActionsChange }: { onDraftActionsChange?: (actions: DevModelDraftActions | null) => void }) {
  const source = useDevDataSource();
  if (!source.prompts || !source.models) return <p className="text-ui-sm text-foreground-subtle">当前数据源尚未接入此功能。</p>;
 	const { locale } = useZCodeIntl();
@@ -26,17 +27,32 @@ export function DevPersonalizationSettings() {
 	const currentBytes = encoder.encode(draft[selected] ?? "").length;
 	const canManage = source.capabilities.settingsWrite === true;
 	const canSave = canManage && dirtyCount > 0 && oversized.length === 0;
+	const dirty = dirtyCount > 0;
+	const draftActions = useRef<DevModelDraftActions | null>(null);
 	const save = () => {
 		if (!canSave) return;
 		source.prompts!.save(draft);
 		setSaved({ ...draft });
 		setMessage(zh ? "追加提示词已保存到我的 OMP 配置。" : "Appended instructions saved to my OMP configuration.");
 	};
+	draftActions.current = {
+		canSave,
+		save,
+		discard: () => { setDraft({ ...saved }); source.prompts!.updateDraft(saved); setMessage(""); },
+	};
+	useEffect(() => {
+		onDraftActionsChange?.(dirty && canManage ? {
+			canSave,
+			save: () => draftActions.current?.save(),
+			discard: () => draftActions.current?.discard(),
+		} : null);
+	}, [dirty, canManage, canSave, onDraftActionsChange]);
+	useEffect(() => () => onDraftActionsChange?.(null), [onDraftActionsChange]);
 	return (
 		<div className="space-y-5" data-testid="dev-personalization-settings">
 			<p className="text-ui-base leading-6 text-foreground-subtle">{zh ? "为每个 Dev Agent 追加系统提示词，补充你自己的表达偏好和工作约定。追加内容不替换 Agent 内置指令。" : "Append system instructions for each Dev Agent to describe your own preferences and working conventions. These additions do not replace built-in instructions."}</p>
 			<DevPersonalConfigScope />
-      {!canManage && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可切换 Agent 查看并复制提示词；只有当前 Web 的所有者可修改。请启动自己的 OMP Web 修改自己的配置。</p>}
+      {!canManage && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可切换 Agent 查看并复制提示词；仅启动此 OMP Web 的人可修改。</p>}
 			<div className="space-y-2">
 				<Label htmlFor="personalization-agent">{zh ? "选择 Agent" : "Select Agent"}</Label>
 				<Select value={selected} onValueChange={value => { setSelected(value); setMessage(""); }}>

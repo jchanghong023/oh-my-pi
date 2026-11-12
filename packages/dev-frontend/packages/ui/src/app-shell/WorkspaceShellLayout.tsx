@@ -1,3 +1,4 @@
+import { DevFormalWorkspace } from "@/dev/DevFormalProgress.js";
 import { DevFormalProgressBody } from "@/dev/DevPhaseHeader.js";
 import { proposalProgressIndex, proposalViewedIndex } from "@/dev/domain.js";
 import { DevFormalReadOnlyState } from "@/dev/DevFormalReadOnlyState.js";
@@ -342,6 +343,12 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const devFormalOverview = Boolean(dev && !dev.selection.srId && !dev.selection.irAcceptance && dev.view?.groups.some(item => item.id === dev.selection.irId));
   const devEmpty = Boolean(dev && !dev.selection.freeSessionId && (!dev.selection.irId || (!dev.session && devSr?.status !== "pending")));
   const devReadOnly = !!dev && !!dev.selection.srId && !dev.session && !dev.view?.drafts.some(item => item.id === dev.selection.irId);
+  const devFormalMode = devSource?.mode === "prototype" && Boolean(dev?.selection.formalView || dev?.view?.groups.some(group => group.id === dev?.selection.irId));
+  const [formalNavigationOpen, setFormalNavigationOpen] = useState(false);
+  // 自动化只切换主视图，不卸载工作台；离开时清除临时展开状态，返回正式需求才会默认收起。
+  useEffect(() => {
+    if (devFormalMode && workspaceMainView !== "chat") setFormalNavigationOpen(false);
+  }, [devFormalMode, workspaceMainView]);
   const { intl } = useZCodeIntl();
   const nativeHostAvailable = useNativeHostAvailable();
   const platform = usePlatform();
@@ -647,7 +654,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const fullViewConversationTitle =
     activeTaskTitle?.trim() || intl.formatMessage({ id: "taskList.untitled" });
   // 完整视图保留左侧任务列表与左上角按钮组，侧栏显隐只由用户开关决定。
-  const isSidebarPanelVisible = isSidebarVisible;
+  const isSidebarPanelVisible = devFormalMode && workspaceMainView === "chat" ? formalNavigationOpen : isSidebarVisible;
   const {
     panelRef: sidePanePanelRef,
     panelElementRef: sidePanePanelElementRef,
@@ -1714,7 +1721,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
     />
   );
   const sidePanePanel = renderSidePanePanel();
-  const shouldRenderWorkspaceHeader = workspaceMainView === "chat";
+  const shouldRenderWorkspaceHeader = workspaceMainView === "chat" && !devFormalMode;
   // 修复原因：ErrorBoundary resetKeys 的数组如果每次 render 都重新创建，
   // 即使 workspace/task 没变化也会在 React DevTools Components 轨道里持续表现为子树 props 变化。
   const workspaceOnlyResetKeys = useMemo(() => [workspaceKey], [workspaceKey]);
@@ -1877,7 +1884,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 allowOpenWorkspace={allowOpenWorkspace}
               />
             </ScopedErrorBoundary>
-              {dev && !!dev.selection.irId && !dev.selection.freeSessionId && workspaceMainView === "chat" && <DevStageHeader />}
+              {dev && !devFormalMode && !!dev.selection.irId && !dev.selection.freeSessionId && workspaceMainView === "chat" && <DevStageHeader />}
             </>
           ) : null
         }
@@ -1931,7 +1938,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 </div>
               </AutomationsMainBreadcrumbFrame>
             </main>
-          ) : devProposalSr ? <DevProposalSrReadOnlyState /> : devVisitorFormal ? <DevFormalReadOnlyState /> : devFormalOverview ? <DevFormalProgressBody /> : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
+          ) : devFormalMode ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={() => setFormalNavigationOpen(open => !open)} /> : devProposalSr ? <DevProposalSrReadOnlyState /> : devVisitorFormal ? <DevFormalReadOnlyState /> : devFormalOverview ? <DevFormalProgressBody /> : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
             <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
               {/* Bugfix: 手机远控聊天页中间层必须继续提供 flex 高度链。
                 只有 h-full 的普通 block 会让 ChatView 的 flex-1 失效，草稿空态贴顶且内部滚动被外层裁掉。 */}
@@ -2095,7 +2102,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
             "p-0",
           )}
         >
-          <ResizablePanelGroup
+          {devFormalMode && workspaceMainView === "chat" ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={() => setFormalNavigationOpen(open => !open)} /> : <ResizablePanelGroup
             layoutId={dev ? "dev-workspace-body-layout-v2" : "workspace-body-layout"}
             panelIds={WORKSPACE_BODY_PANEL_IDS}
             className={cn(
@@ -2186,7 +2193,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                           />
                         </ScopedErrorBoundary>
                       ) : null}
-                      {dev && !!dev.selection.irId && !dev.selection.freeSessionId && workspaceMainView === "chat" && <DevStageHeader />}
+                      {dev && !devFormalMode && !!dev.selection.irId && !dev.selection.freeSessionId && workspaceMainView === "chat" && <DevStageHeader />}
                       <div className="min-h-0 flex-1 overflow-hidden">
                         {workspaceMainView === "automations" ? (
                           <main
@@ -2244,7 +2251,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                               </div>
                             </AutomationsMainBreadcrumbFrame>
                           </main>
-                        ) : devProposalSr ? <DevProposalSrReadOnlyState /> : devVisitorFormal ? <DevFormalReadOnlyState /> : devFormalOverview ? <DevFormalProgressBody /> : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
+                        ) : devFormalMode ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={() => setFormalNavigationOpen(open => !open)} /> : devProposalSr ? <DevProposalSrReadOnlyState /> : devVisitorFormal ? <DevFormalReadOnlyState /> : devFormalOverview ? <DevFormalProgressBody /> : dev?.selection.irAcceptance && !devGroup?.acceptance ? <DevIrAcceptanceWelcome /> : devEmpty ? <DevEmptyState /> : devReadOnly ? <DevReadonlyOverview /> : (
                           <main className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
                             {renderChatFindDialog()}
                             <ScopedErrorBoundary
@@ -2328,9 +2335,9 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
               </SidePaneFullViewConversationHost>
             </ResizablePanel>
             {sidePanePanel}
-          </ResizablePanelGroup>
+          </ResizablePanelGroup>}
         </div>
-        {!isSidebarVisible ? (
+        {!isSidebarVisible && !devFormalMode ? (
           <nav
             aria-label={intl.formatMessage({ id: "workspaceSidebar.toggleSidebar" })}
             className="absolute top-2 left-2 z-30 flex items-center gap-1 bg-background"

@@ -247,6 +247,8 @@ import {
 export interface SessionPaneProps {
   /** 嵌入设置页时只收起窗格标题，保留聊天、工具交互与审批能力。 */
   embedded?: boolean;
+  /** 仅覆盖输入框展示文案，不写入草稿或发送正文。 */
+  composerPlaceholder?: string;
   /** 原型设计页向现有聊天输入框投递未发送草稿。 */
   composerInsertRequest?: ExternalTextInsertRequest | null;
   onComposerInsertApplied?: (requestId: number) => void;
@@ -477,6 +479,7 @@ export function useSessionPaneLease(sessionId: string | null, layer: object) {
  */
 export function SessionPane({
   embedded = false,
+  composerPlaceholder,
   paneId,
   sessionId,
   rootSessionId,
@@ -4093,6 +4096,7 @@ export function SessionPane({
       createSubmissionFromComposer={createSubmissionFromComposer}
       // 完整视图浮窗默认是一条输入框：草稿项目栏不进入浮窗，切到对话 tab 再选择项目。
       contextHeader={isDraft && !isFloatingPresentation ? draftComposerHeader : undefined}
+      placeholder={composerPlaceholder}
       centered={isDraft}
       layout={isFloatingPresentation ? "inline" : "stacked"}
       workingDurationMs={
@@ -4102,7 +4106,7 @@ export function SessionPane({
       listenAddToChatEvents={focused}
       externalTextInsertRequest={focused ? composerInsertRequest ?? (sessionId === null ? composerTextInsertRequest : null) : null}
       onExternalTextInsertApplied={composerInsertRequest ? onComposerInsertApplied : handleExternalTextInsertApplied}
-      autoFocusEnabled={focused}
+      autoFocusEnabled={focused && dev?.session?.role !== "reviewer"}
       disabled={
         (sessionId !== null && modelSelectionDisplayView?.nativeSession !== undefined &&
           !nativeComposerBound) ||

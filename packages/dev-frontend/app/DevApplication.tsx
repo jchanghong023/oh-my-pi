@@ -24,7 +24,9 @@ function BrowserApplication() {
   const workspace = source.resolveWorkspace(view, selection);
   const [connection, setConnection] = useState<{ key: string; services: IServiceAccessor }>();
   const [connectionError, setConnectionError] = useState<string>();
-  const key = JSON.stringify([identity?.employeeId, workspace.identity, workspace.path, selection.projectId, selection.irId, selection.srId, selection.freeSessionId, session?.sessionId, session?.round]);
+  const formalProgress = source.mode === "prototype" && Boolean(selection.formalView || view?.groups.some(group => group.id === selection.irId));
+  // 列表和同页报告复用工作区，保留表格筛选、展开与滚动位置。
+  const key = JSON.stringify([identity?.employeeId, workspace.identity, workspace.path, selection.projectId, formalProgress ? "formal-progress" : selection.irId, formalProgress ? undefined : selection.srId, selection.freeSessionId, session?.sessionId, session?.round]);
 
   useEffect(() => {
     if (!view || !workspace.path) return;

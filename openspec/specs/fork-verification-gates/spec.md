@@ -126,8 +126,8 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 #### Scenario: 最新 Dev 规则的验证范围
 
 - **WHEN** 后续实现最新 Dev 需求或评估既有测试证据
-- **THEN** MUST 覆盖跨工号／clone 同仓库准入、默认两个独立 SR 的原子额度与依赖阻塞、首次开发冻结、规格与代码同 PR、默认分支真实合并事实、IR 最终候选复验和不重复同步规格的归档；旧四阶段／八阶段证据不代替这些验证
-- **AND** 本次仅更新需求文档，不执行或声称通过上述软件验证，当前原型与代码仍待对齐；普通 OMP／WebGUI 验证要求不变
+- **THEN** MUST 覆盖自然语言 IR／SR 澄清、同版三模型只读评审及综合意见、人工版本决定、方案与稳定 SR 依赖、人员排期元数据权限、平台托管提案分支、合入且文档完整两条件后台自动转正、SR 分支映射，以及代码证据进度和未合入最高 99%／全部条件满足才完成；不再要求单 IR 锁、SR 执行名额、个人开发目录、首个 SR 冻结、编码验证或验收归档流水线
+- **AND** 本轮仅文档和独立原型，未实现的真实模型、Git、数据库、后台服务及多人权限须明确未验证；旧四阶段／八阶段或现有执行测试不代替当前业务证据，普通 OMP／WebGUI 验证要求不变
 
 #### Scenario: Dev 工作台取代旧专属消费者
 
@@ -136,9 +136,9 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 
 | 有效合同 | 对应新消费者 |
 | --- | --- |
-| 材料 missing／malformed／unknown、版本、路径、原生校验／同步／归档及部分副作用 | `test/spec-driven/{orchestrator,controller,artifacts,resources}.test.ts`、`process-resources.e2e.test.ts` 及工作台公开流程 |
-| 真实工具／MCP／扩展、原生审批、阶段权限、只读 Scout、Team 可采用来源、Goal、取消与递归后代结清 | `test/spec-driven/{actors,actors-descendants,runtime,skill-policy}.test.ts` 及工作台 native／browser 消费者 |
-| 最新 Dev 共享提案与真实评审、单仓库单 IR／依赖就绪 SR 并行、固定 worktree、冻结、代码／测试／规格同 PR、IR 验收、最终修复／仅移动归档及人工合并核验 | `test/dev-workbench/{records,git,cancel,host,server,cli}.test.ts`、`browser.e2e.test.ts`、`process.e2e.test.ts` 及新增 native VCS 消费者 |
+| 材料 missing／malformed／unknown、版本、路径及部分副作用；独立 OpenSpec 校验／同步／归档不扩为 Dev 流水线 | 独立资源消费者保留；Dev 以当前公开需求流程消费者验证，不以旧执行门禁代替 |
+| 原生工具授权、只读评审及进度分析、取消与递归自有工作结清；普通 Team／Goal 独立规则 | 适用原生消费者及需求平台 native／browser 消费者；不据旧实施 Agent 用例恢复 Dev 编码权限 |
+| 共享提案、四 Agent 评审、方案／人员排期、自动转正、SR 分支关联及代码证据进度 | Dev 当前原型浏览器交互与后续真实服务消费者分别记录；旧 records／git／host 等消费者仅在符合当前合同范围内有效 |
 | 全部原生问答／审批、附件／草稿／队列、迟到事件、断线不停止及重连不重放、HTTP／WS offline Collab | `test/dev-workbench/{host,server,collab}.test.ts`、真实浏览器与精确选入的共享 TSX 组件消费者 |
 | 普通 TUI 输入／焦点／菜单／compact／Team／Goal 与双启动入口 | 保留的混合普通 TUI 消费者及原生 TUI PTY smoke；双启动入口另由启动敏感组的工作台 process 消费者覆盖 |
 

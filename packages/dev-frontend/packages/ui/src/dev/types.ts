@@ -11,7 +11,7 @@ export interface DevNativeSessionRef extends DevObjectRef {
 export interface DevFileVersion { path: string; sha256: string; size: number }
 export interface DevProject {
   id: string; name: string; storageName?: string; root: string; commonDir: string; revision: number;
-  createdAt: string; updatedAt: string; defaultBranch: string; remote?: string; repositoryId: string;
+  createdAt: string; updatedAt: string; defaultBranch: string; remote?: string; repositoryId: string; repositoryUrl?: string;
 }
 export interface DevRelease { id: string; projectId: string; title: string; createdAt: string }
 export interface DevWorktree { path: string; branch: string; baseCommit: string }
@@ -39,7 +39,11 @@ export interface DevProposalDelivery {
   candidate: string; version: string; files: DevFileVersion[];
   confirmedBy: string; confirmedAt: string;
   pushedCandidate?: string; pushedAt?: string; prCandidate?: string;
+  branch?: { name: string; baseCommit: string; createdAt: string; pushedAt: string };
+  mergeScenario?: DevProposalMergeScenario;
+  mergeCheck?: { status: "waiting" | "unmerged" | "incomplete" | "failed" | "merged"; checkedAt?: string; nextCheckAt?: string; message: string };
 }
+export type DevProposalMergeScenario = "unmerged" | "merged" | "incomplete" | "failed";
 export interface DevRequirementsDecision {
   reviewId: string; snapshotDigest: string; inputFiles: DevFileVersion[];
   opinion: string; outcome: "supplement" | "maintain" | "defer"; result: string;
@@ -64,6 +68,10 @@ export interface DevSrDelivery {
   pushedCandidate?: string; prCandidate?: string; humanResolution?: { note: string; employeeId: string; resolvedAt: string };
 }
 export interface DevSystemRequirement {
+  planning?: DevSrPlanning;
+  solutionAnalysis?: DevSrSolutionAnalysis;
+  progress?: DevProgressAnalysis;
+  trackingBranch?: { name: string; baseCommit: string; createdAt: string; pushedAt: string };
   ompWebId?: string;
   id: string; projectId: string; irId: string; title: string; documentPath: string;
   status: "pending" | "developing" | "completed"; stage?: DevWorkflowStage | "solution"; round: number;
@@ -85,7 +93,26 @@ export interface DevIrAcceptance {
   archiveResult?: { sourceAbsent: boolean; targetFiles: DevFileVersion[]; skipSpecs: boolean };
   merge?: DevMergeFact;
 }
+export interface DevSrSolutionAnalysis {
+  approach: string;
+  dependencyReason: string;
+  parallelSrIds: string[];
+  uncertainties: string[];
+}
+export interface DevSrPlanningInput {
+  developerEmployeeId?: string;
+  plannedStart?: string;
+  plannedEnd?: string;
+}
+export interface DevSrPlanning extends DevSrPlanningInput {
+  source: "ai" | "manual";
+  assumptions: string;
+  suggestion?: DevSrPlanningInput;
+  updatedBy?: string;
+  updatedAt?: string;
+}
 export interface DevRequirementGroup {
+  ownerEmployeeId?: string;
   pendingFirstMessage?: boolean; clientDraftId?: string;
   ompWebId?: string;
   id: string; projectId: string; releaseId: string; title: string; documentPath: string;
@@ -99,7 +126,7 @@ export interface DevRequirementGroup {
   deletion?: DevRequirementDeletion;
   freeze?: { frozenAt: string; frozenBy: string; title: string; snapshotDigest: string; files: DevFileVersion[]; srIds: string[]; dependencies: Record<string, string[]> };
   developmentStartedAt?: string;
-  srDependencies?: Record<string, string[]>;
+  srDependencyFile?: DevMaterialView;
   acceptance?: DevIrAcceptance;
   proposalStage?: "requirements" | "solution";
   proposalRound?: number;
@@ -185,7 +212,15 @@ export interface DevWorkflowResult {
   status: "completed" | "failed" | "running"; receipt: DevOperationReceipt; view?: DevWorkflowView;
   error?: string; deletion?: DevRequirementDeletion;
 }
-export interface DevSelection { reviewAgent?: DevReviewAgentId; materialPath?: string; proposalEditing?: boolean; proposalStep?: "requirements" | "requirements-review" | "solution" | "intake"; freeDraftId?: string; proposalDraftId?: string; proposalDraftReleaseId?: string; irAcceptance?: boolean; freeSessionId?: string; freeFiles?: boolean; projectId?: string; irId?: string; srId?: string; stage?: DevWorkflowStage; stageRound?: number; discussionPhase?: "requirements" | "solution" }
+export interface DevSelection { formalView?: "list" | "detail"; reviewAgent?: DevReviewAgentId; materialPath?: string; proposalEditing?: boolean; proposalStep?: "requirements" | "requirements-review" | "solution" | "intake"; freeDraftId?: string; proposalDraftId?: string; proposalDraftReleaseId?: string; irAcceptance?: boolean; freeSessionId?: string; freeFiles?: boolean; projectId?: string; irId?: string; srId?: string; stage?: DevWorkflowStage; stageRound?: number; discussionPhase?: "requirements" | "solution" }
+
+export interface DevProgressAnalysis {
+  percent: number; merged: boolean; certain: boolean; branch: string; analysedAt: string;
+  codeVersion: string; defaultVersion: string;
+  implemented: string[]; remaining: string[]; issues: { title: string; detail: string }[];
+  activity: { commit: string; message: string; at: string }[];
+  manual?: { employeeId: string; reason: string; at: string };
+}
 export interface DevNativeSurfaceTarget extends DevObjectRef {
   sessionId: string; phase: DevNativeSessionRef["phase"]; round: number; clientId: string;
 }
@@ -259,6 +294,7 @@ export interface DevPrHandoffFile {
  digest: string;
 }
 export interface DevPrHandoff {
+ repositoryUrl?: string;
  ready: boolean;
  blockers: string[];
  employeeId: string;

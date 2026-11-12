@@ -1,9 +1,11 @@
 import { DevReviewNavigation } from "./DevReviewNavigation.js";
 import { DevProposalFeedback } from "./DevProposalFeedback.js";
 import { DevPhaseHeader, DevDocumentPhaseActions } from "./DevPhaseHeader.js";
+import { DevPlanningSummary } from "./DevRequirementPlanning.js";
+import { DevSrDependencyGraph } from "./DevSrDependencyGraph.js";
 import { useDevDataSource } from "./data-source.js";
 import type { DevMaterialView } from "./types.js";
-import { MATERIAL_KIND_LABELS, deriveStageView } from "./domain.js";
+import { MATERIAL_KIND_LABELS, deriveStageView, requirementMaterialName } from "./domain.js";
 import { useEffect, useMemo, useState } from "react";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
@@ -81,6 +83,7 @@ export function DevMaterialsPane() {
 	const { selection, view } = dev;
 	const [path, setPath] = useState("");
     const [readFeedback, setReadFeedback] = useState("");
+  const [showPlanning, setShowPlanning] = useState(false);
   const sr = view?.srs.find(item => item.id === selection.srId && item.irId === selection.irId && item.projectId === selection.projectId);
   const group = [...(view?.groups ?? []), ...(view?.drafts ?? [])].find(item => item.id === selection.irId && item.projectId === selection.projectId);
   const stage = selection.stage ?? sr?.stage;
@@ -92,10 +95,10 @@ export function DevMaterialsPane() {
     if (selection.srId) {
       if (item.srId !== selection.srId) return false;
       if (item.kind === "sr" && item.path === sr?.documentPath) return true;
-      return !proposal && Boolean(stage && item.stage === stage && item.round === stageView?.round);
+      return !proposal && source.mode !== "prototype" && Boolean(stage && item.stage === stage && item.round === stageView?.round);
     }
     return item.path === group?.documentPath || (item.kind === "sr" && item.path.endsWith("/spec.md")) ||
-      (!item.srId && item.kind === "solution" && item.path.endsWith("/design.md"));
+      (!item.srId && item.kind === "solution" && (item.path.endsWith("/design.md") || item.path.endsWith("/sr-dependencies.json")));
   }) ?? [];
   const proposalSolutionView = proposal && (selection.discussionPhase ?? group?.proposalStage) === "solution";
   const preferred = materials.find(item => item.path === selection.materialPath) ?? (selection.srId ? materials.find(item => item.path === sr?.documentPath)
@@ -104,6 +107,7 @@ export function DevMaterialsPane() {
 	useEffect(() => {
 		setPath(preferred?.path ?? "");
         setReadFeedback("");
+    setShowPlanning(false);
 	}, [
 		selection.projectId,
 		selection.irId,
@@ -120,27 +124,32 @@ export function DevMaterialsPane() {
     const storedPath = group?.acceptance?.status === "completed"
       ? group.acceptance.archive?.moves.find(move => move.sourcePath === filePath)?.path ?? filePath
       : filePath;
+    if (source.mode === "prototype" && !proposal) return storedPath;
     const root = proposal ? group?.proposalLocation?.directory : workspace.path;
     return storedPath.startsWith("/") || !root ? storedPath : `${root.replace(/\/$/, "")}/${storedPath}`;
   };
-  const materialLabel = (item: DevMaterialView) => {
-    const label = MATERIAL_KIND_LABELS[item.kind];
-    const requirement = !selection.srId && item.kind === "sr" ? view?.srs.find(sr => sr.id === item.srId && sr.irId === item.irId && sr.projectId === item.projectId) : undefined;
-    return requirement ? `${label} · ${requirement.title}` : label;
-  };
+  const materialLabel = (item: DevMaterialView) => requirementMaterialName(item.path, view?.srs) ?? MATERIAL_KIND_LABELS[item.kind];
+  const solutionMaterial = materials.find(item => item.path.endsWith("/design.md"));
+  const dependencyMaterial = materials.find(item => item.path.endsWith("/sr-dependencies.json"));
+  const planningRows = view?.srs.filter(item => item.irId === group?.id && item.projectId === group?.projectId) ?? [];
 	const listed = materials.find(item => item.path === path);
 	const material = listed;
 	const error = listed?.error;
 	const current = material ?? listed;
 	const awaitingRequirements = !path && !selection.srId && group?.status === "draft" &&
-		!group.snapshot && !group.files.length && !materials.length;
+		(group.pendingFirstMessage || (!group.snapshot && !group.files.length && !materials.length));
 	return (
 		<aside
 			className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background"
 			data-testid="materials-pane"
 		>
 			<div className="space-y-2 p-3">
-				<Select value={path || "none"} onValueChange={value => setPath(value === "none" ? "" : value)}>
+        {proposalSolutionView && group && <nav aria-label="方案材料定位" className="flex gap-1" data-testid="proposal-material-navigation">
+          <Button size="sm" variant={!showPlanning && path === solutionMaterial?.path ? "secondary" : "ghost"} className="min-w-0 flex-1" disabled={!solutionMaterial} aria-pressed={!showPlanning && path === solutionMaterial?.path} onClick={() => { setShowPlanning(false); setPath(solutionMaterial!.path); }}>技术方案</Button>
+          <Button size="sm" variant={!showPlanning && path === dependencyMaterial?.path ? "secondary" : "ghost"} className="min-w-0 flex-1" disabled={!dependencyMaterial} aria-pressed={!showPlanning && path === dependencyMaterial?.path} onClick={() => { setShowPlanning(false); setPath(dependencyMaterial!.path); }}>SR 依赖</Button>
+          <Button size="sm" variant={showPlanning ? "secondary" : "ghost"} className="min-w-0 flex-1" aria-pressed={showPlanning} onClick={() => setShowPlanning(true)}>人员与排期</Button>
+        </nav>}
+        {!showPlanning && <Select value={path || "none"} onValueChange={value => { setShowPlanning(false); setPath(value === "none" ? "" : value); }}>
 					<SelectTrigger className="h-auto min-h-8 w-full min-w-0 py-1.5" data-testid="material-menu" aria-label="选择材料类型">
 						<SelectValue><span className="block min-w-0 whitespace-normal break-all text-left text-ui-sm">{current ? materialLabel(current) : awaitingRequirements ? "等待生成需求材料" : "选择材料类型"}</span></SelectValue>
 					</SelectTrigger>
@@ -154,22 +163,23 @@ export function DevMaterialsPane() {
 							</SelectItem>
 						))}
 					</SelectContent>
-				</Select>
+        </Select>}
 
 			</div>
 			<div
+        key={`${selection.projectId}:${selection.irId}:${showPlanning ? "planning" : path}`}
 				className="min-h-0 flex-1 overflow-auto p-4"
 				data-testid="material"
-				data-material-path={path}
-				data-material-valid={current?.valid}
+        data-material-path={showPlanning ? undefined : path}
+        data-material-valid={showPlanning ? undefined : current?.valid}
 			>
-        {path && <p className="mb-5 whitespace-pre-wrap break-all font-mono text-ui-sm text-foreground-subtle select-text" data-testid="material-full-path">{displayPath(path)}</p>}
-				{error || current?.error ? (
+        {!showPlanning && path && <details className="mb-4 text-ui-xs text-foreground-subtle"><summary className="cursor-pointer">文件路径与技术信息</summary><p className="mt-2 whitespace-pre-wrap break-all font-mono select-text" data-testid="material-full-path">{displayPath(path)}</p></details>}
+        {showPlanning && proposalSolutionView && group ? <DevPlanningSummary group={group} rows={planningRows} editable /> : error || current?.error ? (
 					<div className="space-y-3"><p role="alert" className="text-ui-base text-destructive">{error ?? current?.error}</p><Button size="sm" variant="outline" data-testid="material-retry" onClick={async () => { const recovered = await dev.retryMaterial(path); setReadFeedback(recovered ? "材料已重新读取。" : "仍无法读取，请恢复原文件；当前阶段可由开发人明确重新生成材料样例。"); }}>重新读取材料</Button>{readFeedback && <p role="status" className="text-ui-sm text-foreground-subtle">{readFeedback}</p>}</div>
 				) : !selection.irId ? (
-					<p className="text-ui-base text-foreground-subtle">选择需求或新建提案后，在此查看只读材料。</p>
+          selection.proposalDraftId ? <section className="space-y-4" data-testid="proposal-material-empty"><h2 className="text-ui-base font-medium">从描述需求开始</h2><p className="text-ui-sm leading-6 text-foreground-subtle">先在对话输入框说明想解决的问题，再点击发送。可从下面三点开始，不必一次写完整：</p><ol className="list-decimal space-y-2 pl-5 text-ui-sm"><li>现在遇到了什么问题，希望达成什么目标？</li><li>谁会使用，在什么场景使用？</li><li>期望得到什么结果，怎样判断完成？</li></ol><p className="text-ui-sm leading-6 text-foreground-subtle">AI 会围绕缺失信息追问并整理需求；首次发送后，需求与拆分出的 SR 材料会在这里展示。当前原型使用固定回复演示，不调用真实模型。</p></section> : <p className="text-ui-base text-foreground-subtle">选择需求或新建提案后，在此查看只读材料。</p>
 				) : awaitingRequirements ? (
-					<p role="status" className="text-ui-base text-foreground-subtle">需求材料尚未生成。可先在对话中讨论需求，生成后将在此显示。</p>
+          <section className="space-y-3"><h2 className="text-ui-base font-medium">继续讨论，完善需求</h2><p role="status" className="text-ui-sm leading-6 text-foreground-subtle">需求材料尚未生成。请在对话中说明目标、使用场景和期望结果，按追问补充；材料生成后将在此显示。</p></section>
 				) : !current ? (
 					<p role={path ? "alert" : "status"} className={`text-ui-base ${path ? "text-destructive" : "text-foreground-subtle"}`}>
 						{path
@@ -178,11 +188,11 @@ export function DevMaterialsPane() {
 					</p>
 				) : (
 					<>
-						<MessageResponse className="min-w-0 break-words [&_[data-markdown-table-toolbar]]:hidden [&_button]:hidden" theme={theme} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "样例材料没有正文。"}</MessageResponse>
+						{path.endsWith("/sr-dependencies.json") && group && current ? <DevSrDependencyGraph group={group} material={current} rows={view?.srs.filter(item => item.irId === group.id && item.projectId === group.projectId) ?? []} /> : <MessageResponse className="h-auto min-w-0 break-words [&_[data-markdown-table-toolbar]]:hidden [&_button]:hidden" theme={theme} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "样例材料没有正文。"}</MessageResponse>}
 					</>
 				)}
 			</div>
-      <DevDocumentPhaseActions />
+      {!(source.mode === "prototype" && !proposal && group) && <DevDocumentPhaseActions />}
 		</aside>
 	);
 }

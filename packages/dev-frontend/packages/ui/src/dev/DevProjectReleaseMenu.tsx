@@ -5,18 +5,21 @@ import {
 } from "@/components/ui/dropdown-menu.js";
 import { useDevIdentity } from "./DevEntry.js";
 import { useDev } from "./DevContext.js";
+import { useDevDataSource } from "./data-source.js";
 
 export function DevProjectReleaseMenu({ onManage, onHelp }: { onManage(): void; onHelp(): void }) {
 	const dev = useDev()!;
 	const identity = useDevIdentity();
+	const source = useDevDataSource();
 	const project = dev.view?.projects.find(item => item.id === dev.selection.projectId);
 	const release = dev.view?.releases.find(item => item.id === dev.releaseId);
 	return <>
 		{identity && <><DropdownMenuItem disabled><UserRound className="size-4" />工号 {identity.employeeId}</DropdownMenuItem><DropdownMenuItem onSelect={identity.signOut}><LogOut className="size-4" />切换工号</DropdownMenuItem></>}
+		<DropdownMenuItem disabled>Web 所有者 {source.backend?.owner ?? "未提供"}{source.mode === "prototype" ? " · 演示" : ""}</DropdownMenuItem>
 		<DropdownMenuSub>
 			<DropdownMenuSubTrigger data-testid="project-select"><FolderGit2 className="size-4" /><span className="shrink-0">项目</span><span className="ml-4 max-w-40 truncate text-foreground-subtle">{project?.name ?? "请选择项目"}</span></DropdownMenuSubTrigger>
 			<DropdownMenuSubContent className="max-h-[60vh] w-72 overflow-y-auto">
-				<DropdownMenuRadioGroup value={dev.selection.projectId} onValueChange={projectId => dev.select({ projectId })}>
+				<DropdownMenuRadioGroup value={dev.selection.projectId} onValueChange={projectId => dev.select({ projectId, ...(dev.selection.formalView ? { formalView: "list" as const } : {}) })}>
 					{dev.view?.projects.map(item => <DropdownMenuRadioItem key={item.id} value={item.id} className="min-w-0"><span className="truncate" title={item.name}>{item.name}</span></DropdownMenuRadioItem>)}
 				</DropdownMenuRadioGroup>
 				<DropdownMenuItem onSelect={onManage}><Plus className="size-4" />添加或管理项目</DropdownMenuItem>

@@ -1,9 +1,10 @@
 import type { Theme } from "@/useTheme.js";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { resolveTheme } from "@/useTheme.js";
 import { Card, CardContent } from "@/components/ui/card.js";
 import { Input } from "@/components/ui/input.js";
 import { Switch } from "@/components/ui/switch.js";
+import { Label } from "@/components/ui/label.js";
 import {
   Select,
   SelectContent,
@@ -94,6 +95,7 @@ export function AppearanceSectionContent({
   setUiFontSizePx: (fontSizePx: number) => void;
 }) {
   const { intl } = useZCodeIntl();
+  const appearanceId = useId();
   const activePreviewMode = resolveTheme(theme);
 
   return (
@@ -112,13 +114,13 @@ export function AppearanceSectionContent({
         <Card className="border border-border bg-card py-0 shadow-none">
           <CardContent className="space-y-0 px-0">
             <SettingsRow
-              label={intl.formatMessage({ id: "settings.themeMode" })}
-              description={intl.formatMessage({
+              label={<Label htmlFor={`${appearanceId}-theme`}>{intl.formatMessage({ id: "settings.themeMode" })}</Label>}
+              description={<span id={`${appearanceId}-theme-help`}>{intl.formatMessage({
                 id: "settings.themeModeDescription",
-              })}
+              })}</span>}
               control={
                 <Select value={theme} onValueChange={(value) => setTheme(value as Theme)}>
-                  <SelectTrigger size="lg" className="w-[260px] min-w-0 justify-between">
+                  <SelectTrigger id={`${appearanceId}-theme`} aria-describedby={`${appearanceId}-theme-help`} size="lg" className="w-[260px] min-w-0 justify-between">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -171,36 +173,42 @@ export function AppearanceSectionContent({
           <Card className="border border-border bg-card py-0 shadow-none [&_[data-slot=select-trigger]]:w-full">
             <CardContent className="space-y-0 px-0">
               <SettingsRow
-                label={intl.formatMessage({ id: "settings.lightTheme" })}
-                description={intl.formatMessage({
+                label={<Label htmlFor={`${appearanceId}-light-theme`}>{intl.formatMessage({ id: "settings.lightTheme" })}</Label>}
+                description={<span id={`${appearanceId}-light-theme-help`}>{intl.formatMessage({
                   id: "settings.lightThemeDescription",
-                })}
+                })}</span>}
                 control={
                   <ThemeSelect
+                    id={`${appearanceId}-light-theme`}
+                    descriptionId={`${appearanceId}-light-theme-help`}
                     value={codePreviewSettings.lightTheme}
                     onValueChange={(value) => setCodePreviewSettings({ lightTheme: value })}
                   />
                 }
               />
               <SettingsRow
-                label={intl.formatMessage({ id: "settings.darkTheme" })}
-                description={intl.formatMessage({
+                label={<Label htmlFor={`${appearanceId}-dark-theme`}>{intl.formatMessage({ id: "settings.darkTheme" })}</Label>}
+                description={<span id={`${appearanceId}-dark-theme-help`}>{intl.formatMessage({
                   id: "settings.darkThemeDescription",
-                })}
+                })}</span>}
                 control={
                   <ThemeSelect
+                    id={`${appearanceId}-dark-theme`}
+                    descriptionId={`${appearanceId}-dark-theme-help`}
                     value={codePreviewSettings.darkTheme}
                     onValueChange={(value) => setCodePreviewSettings({ darkTheme: value })}
                   />
                 }
               />
               <SettingsRow
-                label={intl.formatMessage({ id: "settings.showLineNumbers" })}
-                description={intl.formatMessage({
+                label={<Label htmlFor={`${appearanceId}-line-numbers`}>{intl.formatMessage({ id: "settings.showLineNumbers" })}</Label>}
+                description={<span id={`${appearanceId}-line-numbers-help`}>{intl.formatMessage({
                   id: "settings.showLineNumbersDescription",
-                })}
+                })}</span>}
                 control={
                   <Switch
+                    id={`${appearanceId}-line-numbers`}
+                    aria-describedby={`${appearanceId}-line-numbers-help`}
                     checked={codePreviewSettings.showLineNumbers}
                     onCheckedChange={(checked) =>
                       setCodePreviewSettings({ showLineNumbers: checked })
@@ -209,12 +217,14 @@ export function AppearanceSectionContent({
                 }
               />
               <SettingsRow
-                label={intl.formatMessage({ id: "settings.wrapLongLines" })}
-                description={intl.formatMessage({
+                label={<Label htmlFor={`${appearanceId}-wrap-lines`}>{intl.formatMessage({ id: "settings.wrapLongLines" })}</Label>}
+                description={<span id={`${appearanceId}-wrap-lines-help`}>{intl.formatMessage({
                   id: "settings.wrapLongLinesDescription",
-                })}
+                })}</span>}
                 control={
                   <Switch
+                    id={`${appearanceId}-wrap-lines`}
+                    aria-describedby={`${appearanceId}-wrap-lines-help`}
                     checked={codePreviewSettings.wrapLongLines}
                     onCheckedChange={(checked) =>
                       setCodePreviewSettings({ wrapLongLines: checked })

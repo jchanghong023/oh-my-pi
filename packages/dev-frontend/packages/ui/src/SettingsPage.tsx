@@ -3,6 +3,7 @@ import { DevPersonalConfigScope } from "@/dev/DevPersonalConfigScope.js";
 import { DevProjectSettings } from "@/dev/DevWorkbench.js";
 import { DevPersonalizationSettings } from "@/dev/DevPersonalizationSettings.js";
 import { DevSkillDesignSettings } from "@/dev/DevSkillDesignSettings.js";
+import { DevProgressAnalysisSettings } from "@/dev/DevProgressAnalysisSettings.js";
 import { DevAgentModelSettings, type DevModelDraftActions } from "@/dev/DevAgentModelSettings.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog.js";
 import { useDev } from "@/dev/DevContext.js";
@@ -514,7 +515,7 @@ export function SettingsPage({
                       <div
                         className={cn(
                           SETTINGS_FRAME_CONTENT_CLASSNAME,
-                          activeSection === "skillDesign" && "max-w-none",
+                          (activeSection === "skillDesign" || activeSection === "progressAnalysis") && "max-w-none",
                           "flex flex-col gap-8",
                         )}
                       >
@@ -544,6 +545,8 @@ export function SettingsPage({
                         <div className="space-y-8">
                           {activeSection === "general" ? (
                             <DevProjectSettings />
+                          ) : activeSection === "progressAnalysis" ? (
+                            <DevProgressAnalysisSettings />
                           ) : activeSection === "appearance" ? (
                             <AppearanceSectionContent
                               codePreviewSettings={codePreviewSettings}
@@ -574,7 +577,7 @@ export function SettingsPage({
                               />}
                             </ServiceProvider>
                           ) : activeSection === "personalization" ? (
-                            dev ? <DevPersonalizationSettings /> : isDesktop || nativeHostAvailable ? (
+                            dev ? <DevPersonalizationSettings onDraftActionsChange={setModelDraftActions} /> : isDesktop || nativeHostAvailable ? (
                               <PersonalizationSection
                                 settingService={localHostServices.settingService}
                                 isDesktop={Boolean(isDesktop)}
@@ -600,7 +603,7 @@ export function SettingsPage({
                           ) : activeSection === "skill" ? (
                             <div className="space-y-4">
                               {dev && <DevPersonalConfigScope />}
-                              {dev && <p className="text-ui-sm leading-6 text-foreground-subtle">以下为当前开发者个人技能与当前开发项目技能的样例，可搜索查看；不读取其他开发者或团队服务的技能，不执行真实安装或文件写入。</p>}
+                              {dev && <p className="text-ui-sm leading-6 text-foreground-subtle">以下为共享 OMP profile 与项目技能目录的内存样例，可搜索查看；切换访问工号不改变共享配置归属，不读取真实目录，不执行安装或文件写入。</p>}
                               <PluginsSection
                                 key={`skill:${settingsSectionNavigationVersion}`}
                                 mode="skill"
@@ -663,12 +666,12 @@ export function SettingsPage({
               </SettingsBreadcrumbProvider>
               <Dialog open={pendingNavigation !== null} onOpenChange={open => { if (!open) setPendingNavigation(null); }}>
                 <DialogContent>
-                  <DialogHeader><DialogTitle>模型设置有未保存的更改</DialogTitle></DialogHeader>
+                  <DialogHeader><DialogTitle>{activeSection === "personalization" ? "个性化有未保存的更改" : "模型设置有未保存的更改"}</DialogTitle></DialogHeader>
                   <p className="text-ui-base text-foreground-subtle">离开前保存配置，或明确丢弃本次修改。取消将继续编辑，不写入配置。</p>
                   <DialogFooter>
                     <Button variant="outline" onClick={() => setPendingNavigation(null)}>取消，继续编辑</Button>
                     <Button variant="ghost" onClick={() => { modelDraftActions?.discard(); setPendingNavigation(null); pendingNavigation?.(); }}>丢弃并离开</Button>
-                    <Button onClick={() => { modelDraftActions?.save(); setPendingNavigation(null); pendingNavigation?.(); }}>保存并离开</Button>
+                    <Button disabled={modelDraftActions?.canSave === false} onClick={() => { modelDraftActions?.save(); setPendingNavigation(null); pendingNavigation?.(); }}>保存并离开</Button>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>

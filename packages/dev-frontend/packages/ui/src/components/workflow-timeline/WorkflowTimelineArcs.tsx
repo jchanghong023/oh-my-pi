@@ -46,6 +46,7 @@ export function WorkflowTimelineArcs({
   markerId,
   stations,
   width,
+  stationPitch,
 }: {
   arcs: readonly TimelineArc[];
   bands: readonly TimelineBand[];
@@ -53,6 +54,8 @@ export function WorkflowTimelineArcs({
   stations: readonly TimelineStation[];
   layout: TimelineLayout;
   width: number;
+  /** Compact unbanded rows retain native arcs with responsive lamp positions. */
+  stationPitch?: number;
   height: number;
   markerId: string;
   children?: ReactNode;
@@ -61,6 +64,7 @@ export function WorkflowTimelineArcs({
   const { inset, rowY } = layout;
   const rowOf = (track: number): number => rowY[track] ?? rowY[0]!;
   const trackOf = (index: number): number => stations[index]?.track ?? 0;
+  const lampAt = (index: number): number => stationPitch === undefined ? lampX(index, inset) : (index + 0.5) * stationPitch;
   // 整层是装饰，不接指针。修复原因（2026-09-29 实测）：这层 SVG 铺满整张时间线、又画在补全的头之后，
   // 头那一行的悬停与点击全被它吞掉——框点不亮，点头也开不了侧板。站与药丸画在它之上，所以此前没人发现。
   return (
@@ -98,11 +102,11 @@ export function WorkflowTimelineArcs({
         const xa =
           fromBand && source !== undefined
             ? bandMergeX(source, inset)
-            : lampX(arc.from, inset) + terminals.takeoff[j]!;
+            : lampAt(arc.from) + terminals.takeoff[j]!;
         const xb =
           toBand && target !== undefined
             ? bandForkX(target, inset)
-            : lampX(arc.to, inset) + terminals.landing[j]!;
+            : lampAt(arc.to) + terminals.landing[j]!;
         const sign = xb < xa ? -1 : 1;
         // 起飞与落地都贴着**端点自己的行**：带是主线上的汇合点 / 分叉点，站是它的灯那一行。
         const ya = fromBand ? rowY[0]! - 3 : rowOf(trackOf(arc.from)) - 7;

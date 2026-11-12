@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GitFork } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
@@ -12,11 +12,26 @@ import { useDevDataSource } from "./data-source.js";
 import { proposalViewedIndex, requirementsReviewCurrent } from "./domain.js";
 import type { DevReviewAgentId } from "./types.js";
 
+// Switching review sessions remounts the workspace; retain only the pending keyboard focus handoff.
+let keyboardTarget: DevReviewAgentId | undefined;
+
 /** Native session navigation and native parallel graph, never a report editor or approval engine. */
 export function DevReviewNavigation() {
  const dev = useDev()!;
  const source = useDevDataSource();
  const [expanded, setExpanded] = useState(false);
+ const tabList = useRef<HTMLDivElement>(null);
+ useEffect(() => {
+  const id = keyboardTarget;
+  if (!id || id !== (dev.selection.reviewAgent ?? "summary")) return;
+  let frame = requestAnimationFrame(() => {
+   frame = requestAnimationFrame(() => {
+    tabList.current?.querySelector<HTMLButtonElement>(`[data-testid="review-avatar-${id}"]`)?.focus();
+    keyboardTarget = undefined;
+   });
+  });
+  return () => cancelAnimationFrame(frame);
+ }, [dev.selection.reviewAgent, dev.session?.sessionId]);
  const group = dev.view?.drafts.find(item => item.id === dev.selection.irId && item.projectId === dev.selection.projectId);
  if (!group || dev.selection.srId || proposalViewedIndex(group, dev.selection) !== 1 || !group.review?.agents || !source.capabilities.proposalDiscussion) return null;
  const review = group.review;
@@ -39,7 +54,16 @@ export function DevReviewNavigation() {
  };
  return <div className="shrink-0 space-y-2 border-b border-border px-4 py-2" data-testid="dev-review-navigation">
   <div className="flex items-center justify-between gap-2">
-   <Tabs value={selected} onValueChange={choose} className="min-w-0"><TabsList aria-label="评审 Agent 会话" className="h-11 gap-1 p-1 group-data-horizontal/tabs:h-11">{(["summary", "a", "b", "c"] as const).map(id => {
+   <Tabs value={selected} onValueChange={choose} className="min-w-0"><TabsList ref={tabList} aria-label="评审 Agent 会话" className="h-11 gap-1 p-1 group-data-horizontal/tabs:h-11" onKeyDownCapture={event => {
+    const ids = ["summary", "a", "b", "c"] as const;
+    const index = ids.indexOf(selected);
+    const next = event.key === "ArrowRight" ? ids[(index + 1) % ids.length] : event.key === "ArrowLeft" ? ids[(index + ids.length - 1) % ids.length] : event.key === "Home" ? ids[0] : event.key === "End" ? ids[ids.length - 1] : undefined;
+    if (!next) return;
+    event.preventDefault();
+    event.stopPropagation();
+    keyboardTarget = next;
+    choose(next);
+   }}>{(["summary", "a", "b", "c"] as const).map(id => {
     const agent = agents.find(item => item.id === id)!;
     const label = id === "summary" ? "综合意见" : agent.name;
     return <ControlHintTooltip key={id} title={`${label} · ${agent.session.modelConfig?.modelName ?? "模型未配置"}`}><span className="inline-flex"><TabsTrigger value={id} aria-label={label} className="h-9 w-9 flex-none p-1.5 data-[state=active]:bg-selected data-[state=active]:ring-1 data-[state=active]:ring-border" data-testid={`review-avatar-${id}`}><WorkflowAgentFace name={agent.name} avatarIndex={agents.findIndex(item => item.id === id) + 1} status={agent.status === "completed" ? "done" : agent.status} className="size-6" /></TabsTrigger></span></ControlHintTooltip>;

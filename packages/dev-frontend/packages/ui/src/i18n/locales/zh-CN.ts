@@ -1,6 +1,7 @@
 import { requestSecurityMessagesZhCN } from "@/request-security-edition/messages.js";
 /** 中文翻译 */
 const zhCN: Record<string, string> = {
+  "settings.progressAnalysis.title": "需求进度分析",
   "preview.image.copy": "复制图片",
   "preview.image.actions": "图片操作",
   "preview.image.added": "已添加到聊天",
@@ -2380,9 +2381,8 @@ const zhCN: Record<string, string> = {
   "settings.breadcrumbLabel": "设置路径",
   "settings.subtitle": "从左侧切换主要设置项，右侧查看详细配置。",
   "settings.navLabel": "主要项",
-  "settings.sidebar.group.basics": "基础设置",
-  "settings.sidebar.group.agentCapabilities": "Agent 能力",
-  "settings.sidebar.group.dataAndStats": "数据管理",
+  "settings.sidebar.group.personalTools": "个人工具",
+  "settings.sidebar.group.platformConfiguration": "平台配置",
   "settings.nav.generalDescription": "语言与当前窗口体验",
   "settings.nav.appearanceDescription": "主题、界面字号与代码显示",
   "settings.themeCardTitle": "主题",

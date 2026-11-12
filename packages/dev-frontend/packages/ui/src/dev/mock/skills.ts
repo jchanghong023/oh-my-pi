@@ -1,4 +1,3 @@
-import { requirePrototypeSettingsWrite } from "./backend.js";
 import type { SkillSummary } from "@zcode/shared";
 import { PROTOTYPE_BACKEND } from "./backend.js";
 import detail from "./skills-detail.md?raw";
@@ -15,7 +14,6 @@ export function readPrototypeSkills(workspacePath?: string): SkillSummary[] {
   return structuredClone([...PROTOTYPE_SKILLS, ...(designedSkills.get(PROTOTYPE_BACKEND.userSkillsDirectory) ?? []), ...(workspacePath && workspacePath !== PROTOTYPE_BACKEND.userSkillsDirectory ? designedSkills.get(workspacePath) ?? [] : [])]);
 }
 export function savePrototypeDesignedSkill(workspacePath: string, name: string, description: string, body: string, files: { path: string; content: string }[] = [], scope: "workspace" | "user" = "workspace"): string {
-  requirePrototypeSettingsWrite();
   const directory = scope === "user" ? `${PROTOTYPE_BACKEND.userSkillsDirectory}/${name}` : `${workspacePath}/.omp/skills/${name}`;
   const path = `${directory}/SKILL.md`;
   if (readPrototypeSkills(workspacePath).some(skill => skill.path === path)) throw new Error("目标目录已有同名技能，请修改保存标识。");

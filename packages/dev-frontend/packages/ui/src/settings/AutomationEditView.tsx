@@ -1,5 +1,7 @@
 /* eslint-disable max-lines -- 定时任务编辑整页集中维护 Settings/History 两个 tab、cron builder、项目/模型选择器与运行历史，集中更利于交互一致。 */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useOptionalDevDataSource } from "@/dev/data-source.js";
+import { PROTOTYPE_AUTOMATION_STATUS_LABELS, resolvePrototypeAutomationStatus } from "@/settings/automationStatusFilter.js";
 import { completeNewModelSelection } from "@zcode/provider";
 import {
   ArrowLeft,
@@ -1212,6 +1214,7 @@ export function AutomationEditView({
   onOpenSession,
 }: AutomationEditViewProps) {
   const { intl } = useZCodeIntl();
+  const prototype = useOptionalDevDataSource()?.mode === "prototype";
   const confirmDialog = useConfirmDialog();
   const [tab, setTab] = useState<AutomationSettingsHistoryTab>("settings");
   const [runsPage, setRunsPage] = useState(1);
@@ -2037,9 +2040,9 @@ export function AutomationEditView({
                       />
                     </span>
                     <span className="min-w-0 truncate">
-                      {intl.formatMessage({
-                        id: `automations.lifecycle.${editStatus}`,
-                      })}
+                      {prototype && editing
+                        ? PROTOTYPE_AUTOMATION_STATUS_LABELS[resolvePrototypeAutomationStatus(editing, runsEntry?.runs)]
+                        : intl.formatMessage({ id: `automations.lifecycle.${editStatus}` })}
                     </span>
                   </span>
                 </div>

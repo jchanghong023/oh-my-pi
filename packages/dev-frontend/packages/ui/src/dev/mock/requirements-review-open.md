@@ -1,6 +1,6 @@
 ## 需求评审意见（静态样例）
 
-本次只检查 `proposal.md` 与全部 `specs/<capability>/spec.md` 的业务覆盖和可验证性，不审查 `design.md` 或代码。
+本次只检查 `proposal.md` 与全部 `specs/<capability>/spec.md` 的业务覆盖和可验证性，不审查 `design.md`、`sr-dependencies.json` 或代码。
 
 ### 需要补充
 

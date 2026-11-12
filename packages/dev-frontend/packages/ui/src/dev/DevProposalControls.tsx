@@ -40,7 +40,7 @@ export function DevProposalControls({ group }: { group: DevRequirementGroup }) {
   </div>}
   {!history && phase === "solution" && <div className="space-y-2">
    <p className="text-ui-sm text-foreground-subtle">提交评审人：{group.developerHandoff?.employeeId} · {accepted ? `接手开发人：${accepted.employeeId}` : "尚未接手，等待开发人员处理"}</p>
-   <p className="text-ui-sm text-foreground-subtle">{accepted && !mine ? "当前由其他同事接手，可查看需求与方案。" : "接手开发人员在临时工作区完成 design.md；有业务卡点可打回补充。"}</p>
+   <p className="text-ui-sm text-foreground-subtle">{accepted && !mine ? "当前由其他同事接手，可查看需求与方案。" : "接手开发人员在临时工作区同轮完成 design.md 与 sr-dependencies.json；有业务卡点可打回补充。"}</p>
 
    <div className="flex flex-wrap gap-2">
     {group.status !== "requirements-pr" && <>
@@ -48,7 +48,7 @@ export function DevProposalControls({ group }: { group: DevRequirementGroup }) {
      <Button size="sm" variant="outline" data-testid="proposal-return" disabled={!mine || dev.pending} onClick={() => { setReason(""); setReturnOpen(true); }}>打回业务补充</Button>
     </>}
    </div>
-   {ready && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-solution-ready">design.md 已完成 · 开发人员：{group.proposalSolution?.employeeId}</p>}
+   {ready && <p className="text-ui-sm text-foreground-subtle" data-testid="proposal-solution-ready">design.md 与 sr-dependencies.json 已完成 · 开发人员：{group.proposalSolution?.employeeId}</p>}
   </div>}
   {viewing === "solution" && <DevProposalDeliveryControls group={group} readOnly={history} />}
   <Dialog open={returnOpen} onOpenChange={setReturnOpen}>

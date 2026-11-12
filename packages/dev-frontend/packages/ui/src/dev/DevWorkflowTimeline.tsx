@@ -22,11 +22,12 @@ export function DevWorkflowTimeline({ labels, phase, selected, complete, running
    const status: StepRunStatus = complete || index < phase ? "done" : index === phase && running ? "running" : "pending";
    const pills: TimelinePill[] = (agents[index] ?? []).map(agent => {
     const avatarIndex = agent === "业务需求 Agent" || agent === "计划 Agent" ? 0 : agent === "需求评审 Agent" || agent === "执行 Agent" ? 1 : 2;
-    return { key: `${index}:${agent}`, lane: { id: agent, name: agent, laneClass: "agent" }, laneClass: "agent", runtimeName: agent, avatarIndex, status, stepIds: [] };
+    return { key: `${index}:${agent}`, lane: { id: agent, name: agent, laneClass: "agent" }, laneClass: "agent", runtimeName: proposal ? index === 0 ? "需求" : index === 2 ? "方案" : "评审" : agent, avatarIndex, status, stepIds: [] };
    });
    if (proposal && index === 1 && review?.agents) {
     pills.splice(0, pills.length, ...review.agents.filter(agent => agent.id === (selected === 1 ? reviewAgent ?? "summary" : "summary")).map((agent): TimelinePill => ({
      key: `review:${agent.id}`, lane: { id: `review:${agent.id}`, name: `${agent.name} · ${agent.session.modelConfig?.modelName ?? "模型未配置"}`, laneClass: "agent" }, laneClass: "agent", avatarIndex: review.agents!.findIndex(item => item.id === agent.id) + 1,
+     runtimeName: agent.id === "summary" ? "综合" : `评审${agent.id.toUpperCase()}`,
      status: agent.status === "completed" ? "done" : agent.status === "failed" ? "failed" : agent.status,
      ...(canOpenReview ? { slot: { siteId: `review:${agent.id}`, ordinal: 1 } } : {}), stepIds: [],
     })));
@@ -36,10 +37,11 @@ export function DevWorkflowTimeline({ labels, phase, selected, complete, running
   return { stations, rails: labels.slice(1).map((_, index) => ({ from: index, to: index + 1, ink: complete || index < phase ? "strong" : "faint" })), arcs: loop ? [{ from: 2, to: 0, lane: 0, air: 0, ink: phase === 0 ? "strong" : "faint" }] : [], bands: [], runningIndex: running ? phase : undefined, live: true };
  }, [labels.join("|"), phase, selected, complete, running, proposal, sr, rounds, returned, canNavigate, entered.join("|"), review, reviewAgent, canOpenReview]);
  useEffect(() => {
+  if (proposal) return;
   const scroller = root.current?.querySelector<HTMLElement>('[data-testid="workflow-timeline-scroller"]');
   if (scroller) scroller.scrollTo({ left: Math.max(0, selected * 192 - scroller.clientWidth / 2 + 84), behavior: "instant" });
- }, [selected, labels.length, returned]);
+ }, [proposal, selected, labels.length, returned]);
  return <div ref={root} className="w-full min-w-0 max-w-3xl" data-testid="dev-workflow-timeline" aria-label={`当前阶段：${labels[phase]}；查看：${labels[selected]}`}>
-  <WorkflowTimeline model={model} onOpenPill={pill => { if (canOpenReview && pill.key.startsWith("review:")) onSelectReview(pill.key.slice(7) as DevReviewAgentId); }} onSelectStation={station => { const index = Number(station.id); if (canNavigate && entered[index]) onSelect(index); }} />
+  <WorkflowTimeline compact={proposal} model={model} onOpenPill={pill => { if (canOpenReview && pill.key.startsWith("review:")) onSelectReview(pill.key.slice(7) as DevReviewAgentId); }} onSelectStation={station => { const index = Number(station.id); if (canNavigate && entered[index]) onSelect(index); }} />
  </div>;
 }

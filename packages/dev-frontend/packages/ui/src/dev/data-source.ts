@@ -1,7 +1,8 @@
 import { createContext, createElement, useContext, type ReactNode } from "react";
 import type { IServiceAccessor } from "@zcode/services";
 import type { SkillSummary } from "@zcode/shared";
-import type { DevAction, DevSelection, DevWorkflowView, DevWorkflowResult, DevNativeSessionRef, DevPeer, DevAgentModelSettings, DevAgentModelBinding, DevSkillDesignDraft, DevSkillDesignPreview, DevPrHandoff, DevPrHandoffScenario, DevWorkspace } from "./types.js";
+import type { DevAction, DevSelection, DevWorkflowView, DevWorkflowResult, DevNativeSessionRef, DevPeer, DevAgentModelSettings, DevAgentModelBinding, DevSkillDesignDraft, DevSkillDesignPreview, DevPrHandoff, DevPrHandoffScenario, DevWorkspace, DevProposalMergeScenario, DevSrPlanningInput } from "./types.js";
+import type { DevProgressScheduler } from "./progress-scheduler.js";
 
 export interface DevBackendView {
   id: string; kind: "developer" | "team"; owner: string; name: string; configDirectory: string; userSkillsDirectory: string;
@@ -10,6 +11,7 @@ export interface DevBackendView {
 export interface DevDirectory { path: string; name: string; git: boolean; branch: string; repositoryRoot?: string }
 export type DevDirectoryCheck = { valid: false; error: string } | { valid: true; root: string; directory: DevDirectory };
 export interface DevProjectServices {
+  saveRepository?(input: { projectId?: string; name: string; repositoryUrl: string; defaultBranch: string }): Promise<void>;
   readDevelopmentRoot(projectId: string, employeeId?: string): string | undefined;
   listDirectories(): DevDirectory[];
   checkProjectDirectory(path: string, existingRoots: string[]): Promise<DevDirectoryCheck>;
@@ -45,11 +47,23 @@ export interface DevSkillDesignServices {
   sample?: DevSkillDesignDraft;
 }
 export interface DevPrototypeScenarios {
+  setProposalMergeScenario(projectId: string, irId: string, scenario: DevProposalMergeScenario): void;
   directoryIssue(path: string): string | undefined;
   restoreDirectory(path: string): void;
   readPrHandoff(group: DevWorkflowView["groups"][number], scenario?: DevPrHandoffScenario): DevPrHandoff;
 }
+export interface DevEmployeeDirectory {
+  kind: "sample";
+  entries: readonly { employeeId: string; name: string; department: string }[];
+}
 export interface DevDataSource {
+  employeeDirectory?: DevEmployeeDirectory;
+  planning?: { updateSr(projectId: string, irId: string, srId: string, input: DevSrPlanningInput): Promise<void> };
+  progressScheduler?: DevProgressScheduler;
+  progress?: {
+    assignOwner(projectId: string, irId: string, employeeId: string): Promise<void>;
+    updateSr(projectId: string, irId: string, srId: string, percent: number, reason: string): Promise<void>;
+  };
   mode: "prototype" | "omp";
   clientId: string;
   backend?: DevBackendView;
@@ -72,6 +86,7 @@ export interface DevDataSource {
   models?: DevModelServices;
   prompts?: DevPromptServices;
   skillDesign?: DevSkillDesignServices;
+  skills?: Pick<IServiceAccessor["skillsService"], "list">;
   collaboration?: { peers(projectId?: string): DevPeer[] };
   freeChats?: { subscribe(listener: () => void): () => void };
   prototype?: DevPrototypeScenarios;

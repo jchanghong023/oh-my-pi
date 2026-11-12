@@ -2,7 +2,7 @@ import { useDevDataSource } from "./data-source.js";
 import { DevWorkflowHelp } from "./DevWorkflowHelp.js";
 import { IR_ACCEPTANCE_LABELS, irAcceptanceVersionBlocker } from "./domain.js";
 import { useEffect, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
-import { CalendarClock, Plus, MessageCirclePlus } from "lucide-react";
+import { CalendarClock, Plus, MessageCirclePlus, TableProperties } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Badge } from "@/components/ui/badge.js";
 import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
@@ -57,11 +57,12 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
 	return (
 		<nav data-testid="dev-workflow-root" aria-label="Dev 需求导航" className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar text-ui-base">
 			<div className="shrink-0 space-y-3 px-2 pt-3 pb-4">
-				{source.capabilities.freeChat && <Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project} data-testid="dev-new-free-chat" onClick={() => { dev.startFreeChat(); onNavigate?.(); }}><MessageCirclePlus className="size-4" />新建会话</Button>}
+				{source.mode !== "prototype" && source.capabilities.freeChat && <Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project} data-testid="dev-new-free-chat" onClick={() => { dev.startFreeChat(); onNavigate?.(); }}><MessageCirclePlus className="size-4" />新建会话</Button>}
 				{source.capabilities.workflowCommands.includes("createProposal") && <Button variant="ghost" size="lg" className="w-full justify-start gap-2" disabled={pending || !project || !releaseId} data-testid="new-requirement" onClick={() => { dev.startProposalDraft(); onNavigate?.(); }}><Plus className="size-4" />新建需求提案</Button>}
 				{source.mode === "prototype" && onOpenAutomations && <Button variant="ghost" size="lg" className={`w-full justify-start gap-2 ${automationsActive ? "bg-selected text-foreground" : ""}`} aria-pressed={automationsActive ?? false} data-testid="dev-automations-open" onClick={onOpenAutomations}><CalendarClock className="size-4" />自动化</Button>}
+				{source.mode === "prototype" && <Button variant="ghost" size="lg" className={`w-full justify-start gap-2 ${!automationsActive && (selection.formalView || allGroups.some(group => group.id === selection.irId)) ? "bg-selected text-foreground" : ""}`} aria-pressed={!automationsActive && Boolean(selection.formalView || allGroups.some(group => group.id === selection.irId))} data-testid="dev-formal-open" disabled={!project} onClick={() => { select({ projectId: selection.projectId, formalView: "list" }); onNavigate?.(); }}><TableProperties className="size-4" />正式需求</Button>}
 			</div>
-            {(source.mode === "prototype" || activeSrs.length > 0) && <section className="shrink-0 space-y-1 border-t border-border/50 px-2 py-3" aria-label="仓库正在开发">
+            {source.mode !== "prototype" && activeSrs.length > 0 && <section className="shrink-0 space-y-1 border-t border-border/50 px-2 py-3" aria-label="仓库正在开发">
               <div className="flex items-center justify-between px-2.5 text-ui-sm text-foreground-subtle"><span>正在开发</span><span data-testid="repository-sr-capacity">{activeSrs.length}/{development?.limit ?? 2}{source.mode !== "prototype" ? " 个 SR" : ""}</span></div>
               {activeSrs.map(sr => {
                 const group = view?.groups.find(item => item.id === sr.irId && item.projectId === sr.projectId);
@@ -81,13 +82,13 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
                 </Button>;
               })}
             </section>}
-            {idleOwner && <section className="shrink-0 border-t border-border/50 px-2 py-3" aria-label="仓库当前 IR">
+            {source.mode !== "prototype" && idleOwner && <section className="shrink-0 border-t border-border/50 px-2 py-3" aria-label="仓库当前 IR">
               <p className="px-2.5 pb-1 text-ui-sm text-foreground-subtle">正在开发 · 仓库仍占用</p>
               <Button variant="ghost" className="h-auto w-full min-w-0 justify-start gap-2 px-2.5 py-2" data-testid="active-ir-awaiting-acceptance" onClick={() => { const complete = view!.srs.filter(sr => sr.irId === idleOwner.id).every(sr => sr.status === "completed"); select({ projectId: idleOwner.projectId, irId: idleOwner.id, ...(complete ? { irAcceptance: true } : {}) }); dev.setReleaseId(idleOwner.releaseId); onNavigate?.(); }}>
                 <Badge variant="outline" className="h-4 min-w-5 shrink-0 justify-center rounded-sm px-0.5 font-mono text-ui-xs">IR</Badge><span className="min-w-0 truncate">{idleOwner.title}</span>
               </Button>
             </section>}
-            {activeAcceptance && <section className="shrink-0 space-y-1 border-t border-border/50 px-2 py-3" aria-label="正在开发的 IR">
+            {source.mode !== "prototype" && activeAcceptance && <section className="shrink-0 space-y-1 border-t border-border/50 px-2 py-3" aria-label="正在开发的 IR">
               <p className="px-2.5 text-ui-sm text-foreground-subtle">正在开发</p>
               <Button variant={selection.irId === activeAcceptance.id && selection.irAcceptance ? "secondary" : "ghost"} className="h-auto w-full min-w-0 items-start justify-start gap-2 px-2.5 py-2" data-testid="active-ir-acceptance" onClick={() => { select({ projectId: activeAcceptance.projectId, irId: activeAcceptance.id, irAcceptance: true }); dev.setReleaseId(activeAcceptance.releaseId); onNavigate?.(); }}>
                 <Badge variant="outline" className="mt-0.5 h-4 min-w-5 shrink-0 justify-center rounded-sm border-border/70 bg-transparent px-0.5 font-mono text-ui-xs text-foreground-subtle">IR</Badge>
@@ -95,8 +96,8 @@ function DevSidebarContent({ projects, onNavigate, onOpenAutomations, automation
               </Button>
             </section>}
 			<div className="min-h-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto border-t border-border/50 py-3">
-				{source.capabilities.freeChat && <DevFreeProjectBoundary>{projects}</DevFreeProjectBoundary>}
-				<DevRequirementList open={preferences.formalSectionOpen} onOpenChange={formalSectionOpen => updatePreferences({ formalSectionOpen })} title="正式需求" groups={allGroups} expandedIrIds={preferences.expandedIrIds} onExpandedChange={expandedIrIds => updatePreferences({ expandedIrIds })} onSearch={() => { setSearchScope("formal"); setSearchOpen(true); }} onNavigate={onNavigate} automationsActive={automationsActive} />
+				{source.mode !== "prototype" && source.capabilities.freeChat && <DevFreeProjectBoundary>{projects}</DevFreeProjectBoundary>}
+				{source.mode !== "prototype" && <DevRequirementList open={preferences.formalSectionOpen} onOpenChange={formalSectionOpen => updatePreferences({ formalSectionOpen })} title="正式需求" groups={allGroups} expandedIrIds={preferences.expandedIrIds} onExpandedChange={expandedIrIds => updatePreferences({ expandedIrIds })} onSearch={() => { setSearchScope("formal"); setSearchOpen(true); }} onNavigate={onNavigate} automationsActive={automationsActive} />}
 				<DevRequirementList open={preferences.proposalSectionOpen} onOpenChange={proposalSectionOpen => updatePreferences({ proposalSectionOpen })} title="需求提案" groups={allDrafts} proposal expandedIrIds={preferences.expandedIrIds} onExpandedChange={expandedIrIds => updatePreferences({ expandedIrIds })} onSearch={() => { setSearchScope("proposals"); setSearchOpen(true); }} onNavigate={onNavigate} automationsActive={automationsActive} />
 			</div>
 			<DevRequirementSearch scope={searchScope} open={searchOpen} onOpenChange={setSearchOpen} query={preferences.query} onQueryChange={query => updatePreferences({ query })} onNavigate={onNavigate} />

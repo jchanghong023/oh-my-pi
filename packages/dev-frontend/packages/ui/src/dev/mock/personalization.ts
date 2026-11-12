@@ -4,10 +4,8 @@ import requirements from "./prompts/requirements.md?raw";
 import independentReview from "./prompts/requirements-review-independent.md?raw";
 import requirementsReview from "./prompts/requirements-review.md?raw";
 import solution from "./prompts/solution.md?raw";
-import planning from "./prompts/planning.md?raw";
-import execution from "./prompts/execution.md?raw";
 import skillDesign from "./prompts/skill-design.md?raw";
-import irAcceptance from "./prompts/ir-acceptance.md?raw";
+import progressAnalysis from "./prompts/progress-analysis.md?raw";
 
 export interface PrototypeAgentPrompts { [agentId: string]: string }
 
@@ -18,9 +16,7 @@ const samples: PrototypeAgentPrompts = {
   "requirements-review-b": independentReview,
   "requirements-review-c": independentReview,
 	solution,
-	planning,
-	execution,
-	"ir-acceptance": irAcceptance,
+	"progress-analysis": progressAnalysis,
   "skill-design": skillDesign,
 };
 

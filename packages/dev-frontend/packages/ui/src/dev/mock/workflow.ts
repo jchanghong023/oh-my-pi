@@ -1,5 +1,6 @@
 import { PROTOTYPE_BACKEND } from "./backend.js";
 import { proposalVersion } from "../domain.js";
+import { proposalDependencyMaterialIssue } from "../sr-dependencies.js";
 import { proposalRevisionBlocker } from "../domain.js";
 import { isPrototypeProposalDeliveryAction, validatePrototypeProposalDeliveryAction } from "./proposal-delivery.js";
 import { createPrototypeEvent } from "./events.js";
@@ -15,17 +16,17 @@ import { readPrototypeAgentModelBinding } from "./agent-models.js";
 import { stageMaterialBlocker } from "../domain.js";
 import { readPrototypeProposalPrHandoff } from "./proposal-pr-handoff.js";
 import { createPrototypeRequirementsReview, prototypeReviewSessions, prototypeReviewModelBindings } from "./requirements-review.js";
-import { requirementsReviewReadyBlocker, requirementsReviewBlocker, requirementsReviewCurrent, requirementsReviewInputs, proposalViewedIndex } from "../domain.js";
+import { requirementsReviewStartBlocker, requirementsReviewReadyBlocker, requirementsReviewBlocker, requirementsReviewCurrent, requirementsReviewInputs, proposalViewedIndex } from "../domain.js";
 import { getEmployeeId, isEmployeeId } from "../identity.js";
 import { prototypeChangeRoot, prototypeSpecPath, prototypeProposalLocation } from "./proposal-storage.js";
 import { hasCurrentProposalSolution } from "../domain.js";
-import { prototypeProposalSolution } from "./proposal-flow.js";
+import { prototypeProposalDependencies, prototypeProposalSolution } from "./proposal-flow.js";
 import { developmentMaterials, requirementMaterials } from "./materials.js";
 import { checkPrototypeProjectDirectory, checkPrototypeDevelopmentDirectory } from "./project-directories.js";
 import { readPrototypeProjectSettings, addPrototypeProject, updatePrototypeSharedProjectRoot, checkPrototypeSharedProjectDirectory, readPrototypeDevelopmentRoot, savePrototypeDevelopmentRoot } from "./project-settings.js";
 import { readPrototypeProjectReleases, addPrototypeRelease } from "./project-releases.js";
 import type {
-  DevAction, DevMaterialView, DevNativeSessionRef, DevOperationReceipt, DevRequirementGroup,
+  DevAction, DevMaterialView, DevNativeSessionRef, DevOperationReceipt, DevRequirementGroup, DevProposalMergeScenario,
   DevSelection, DevStageMaterial, DevSystemRequirement, DevWorkflowResult, DevWorkflowStage, DevWorkflowView,
 } from "../types.js";
 
@@ -107,11 +108,12 @@ export function createPrototypeWorkflow(): DevWorkflowView {
     systemRequirement("demo-aurora", "draft-notification", "proposal-sr-notification", "通知范围与阅读状态"),
     systemRequirement("demo-aurora", "draft-report-export", "proposal-sr-report-export", "报表导出范围与下载反馈"),
     systemRequirement("demo-aurora", "draft-resource-booking", "proposal-sr-resource-booking", "资源预约时段与冲突提示"),
+    systemRequirement("demo-aurora", "draft-resource-booking", "proposal-sr-booking-notification", "预约结果通知与失败反馈"),
     systemRequirement("demo-aurora", "draft-audit-subscription", "proposal-sr-audit-subscription", "审计订阅条件与投递记录"),
     systemRequirement("demo-mobile", "draft-mobile-search", "proposal-sr-search", "搜索条件与结果展示"),
     systemRequirement("demo-mobile", "ir-mobile-offline", "sr-mobile-offline", "离线提示与重新进入"),
   ];
-  for (const sr of srs) sr.dependencySrIds = sr.id === "sr-permissions" ? ["sr-auth"] : sr.id === "sr-audit" ? ["sr-permissions", "sr-session"] : [];
+  for (const sr of srs) sr.dependencySrIds = sr.id === "sr-permissions" ? ["sr-auth"] : sr.id === "sr-audit" ? ["sr-permissions", "sr-session"] : sr.id === "proposal-sr-booking-notification" ? ["proposal-sr-resource-booking"] : [];
   if (prototypeRecoveryScenario === "sr-delivery") {
     const index = srs.findIndex(sr => sr.id === "sr-auth");
     srs[index] = { ...systemRequirement("demo-aurora", "ir-auth", "sr-auth", "统一登录与会话管理", "pr"), dependencySrIds: [] };
@@ -168,9 +170,11 @@ export function createPrototypeWorkflow(): DevWorkflowView {
     proposal.sessions.push(sessionRef(proposal.projectId, proposal.id, "solution"));
     proposal.developerHandoff = { employeeId: proposal.proposalLocation!.employeeId, submittedAt: acceptedAt };
     proposal.developerAcceptance = { employeeId, acceptedAt, round: proposal.proposalRound! };
+    proposal.srDependencyFile = prototypeProposalDependencies(proposal, srs.filter(sr => sr.projectId === proposal.projectId && sr.irId === proposal.id));
     const solution = prototypeProposalSolution(proposal);
     proposal.proposalSolution = { path: solution.path, employeeId, generatedAt, round: proposal.proposalRound!, valid: true, requirementsDigest: proposal.snapshot!.digest };
     proposal.files.push({ path: solution.path, sha256: solution.sha256, size: solution.size });
+    proposal.files.push({ path: proposal.srDependencyFile.path, sha256: proposal.srDependencyFile.sha256, size: proposal.srDependencyFile.size });
   }
   // Match the existing confirm → push → manual PR actions; compute the candidate only
   // after all current requirement and solution file versions have been collected.
@@ -187,9 +191,8 @@ export function createPrototypeWorkflow(): DevWorkflowView {
     recordedAt: "2026-11-11T09:00:00.000Z", platformVerified: false,
   };
   intakeProposal.status = "requirements-pr";
-  for (const item of groups) {
+  for (const item of [...groups, ...drafts]) {
     const rows = srs.filter(sr => sr.projectId === item.projectId && sr.irId === item.id);
-    item.srDependencies = Object.fromEntries(rows.map(sr => [sr.id, sr.dependencySrIds ?? []]));
     if (rows.some(sr => sr.startedAt)) item.developmentStartedAt = createdAt;
   }
   for (const item of [...groups, ...drafts]) item.releaseId = readPrototypeProjectReleases(item.projectId)[0]?.id ?? "";
@@ -201,8 +204,10 @@ export function createPrototypeWorkflow(): DevWorkflowView {
   readyProposal.review!.createdAt = "2026-11-10T11:30:00.000Z";
   intakeProposal.review!.createdAt = "2026-11-10T13:00:00.000Z";
   for (const item of groups) {
+    item.srDependencyFile = prototypeProposalDependencies(item, srs.filter(sr => sr.projectId === item.projectId && sr.irId === item.id));
     const solution = prototypeProposalSolution(item);
     item.files.push({ path: solution.path, sha256: solution.sha256, size: solution.size });
+    item.files.push({ path: item.srDependencyFile.path, sha256: item.srDependencyFile.sha256, size: item.srDependencyFile.size });
     item.merge = { commit: `sample-merged-${item.id}`, branch: "main", checkedAt: createdAt, files: structuredClone(item.files) };
     if (item.developmentStartedAt) freezePrototypeRequirement(item, "j00808874", item.developmentStartedAt);
   }
@@ -215,12 +220,19 @@ export function createPrototypeWorkflow(): DevWorkflowView {
   }
   if (prototypeRecoveryScenario === "proposal-intake") {
     const proposal = drafts[1]!;
+    proposal.srDependencyFile = prototypeProposalDependencies(proposal, srs.filter(sr => sr.projectId === proposal.projectId && sr.irId === proposal.id));
     const material = prototypeProposalSolution(proposal);
     proposal.status = "solution-ready";
     proposal.proposalSolution = { path: material.path, employeeId: "j00808874", generatedAt: createdAt, round: 1, valid: true, requirementsDigest: proposal.snapshot!.digest };
     proposal.files.push({ path: material.path, sha256: material.sha256, size: material.size });
+    proposal.files.push({ path: proposal.srDependencyFile.path, sha256: proposal.srDependencyFile.sha256, size: proposal.srDependencyFile.size });
+  }
+  for (const proposal of drafts.filter(item => item.proposalStage === "solution" && !item.srDependencyFile)) {
+    proposal.srDependencyFile = prototypeProposalDependencies(proposal, srs.filter(sr => sr.projectId === proposal.projectId && sr.irId === proposal.id));
+    proposal.srDependencyFile.valid = false;
   }
   materials.push(...groups.map(prototypeProposalSolution), ...drafts.filter(item => item.proposalStage === "solution").map(prototypeProposalSolution));
+  materials.push(...[...groups, ...drafts].flatMap(item => item.srDependencyFile ? [item.srDependencyFile] : []));
   materials.push(...srs.filter(sr => sr.status !== "pending").flatMap(sr => developmentMaterials(sr.projectId, sr.irId, sr.id, sr.title).filter(item => sr.materials.some(file => file.path === item.path))));
   if (prototypeRecoveryScenario === "review-chat") drafts[0]!.review = createPrototypeRequirementsReview(drafts[0]!, "j00808876");
   for (const group of [...groups, ...drafts]) {
@@ -265,7 +277,76 @@ export function createPrototypeWorkflow(): DevWorkflowView {
 let state = createPrototypeWorkflow();
 for (const sr of state.srs) if (sr.status === "developing") sr.ompWebId = "local-j00808874";
 for (const group of state.groups) if (group.developmentStartedAt) group.ompWebId ??= "local-j00808874";
+for (const group of state.drafts.filter(item => item.status === "requirements-pr" && hasCurrentProposalSolution(item))) {
+  const candidate = `sample-pushed-${group.id}`;
+  group.proposalDelivery = { candidate, version: proposalVersion(group), files: structuredClone(group.files), confirmedBy: group.developerAcceptance?.employeeId ?? "j00808874", confirmedAt: createdAt,
+    pushedCandidate: candidate, pushedAt: createdAt, branch: { name: `ir/${group.id}`, baseCommit: prototypeSrDefaultCommit(state, group.projectId), createdAt, pushedAt: createdAt },
+    mergeScenario: "unmerged", mergeCheck: { status: "waiting", message: "提案分支已推送（样例），等待后台检查。" } };
+}
 export const prototypeWorkflowChanges = createPrototypeEvent<void>();
+export function notifyPrototypeProjectSettingsChanged(): void {
+  Object.assign(state, readPrototypeProjectSettings());
+  prototypeWorkflowChanges.fire();
+}
+/** 仅写入内存样例；合入证据与文档完整性是自动入库的两项条件。 */
+function completePrototypeProposal(group: DevRequirementGroup, checkedAt: string): void {
+  const project = state.projects.find(item => item.id === group.projectId)!;
+  const commit = `sample-proposal-merged-${state.revision}`;
+  group.status = "formal";
+  group.merge = { commit, branch: project.defaultBranch, checkedAt, files: structuredClone(group.files) };
+  state.drafts = state.drafts.filter(item => item.id !== group.id || item.projectId !== group.projectId);
+  if (!state.groups.some(item => item.id === group.id && item.projectId === group.projectId)) state.groups.push(group);
+  group.revising = false;
+  const revision = group.proposalRevisions?.at(-1);
+  if (revision && !revision.completedAt) revision.completedAt = checkedAt;
+  state.repositoryHeads ??= {};
+  state.repositoryHeads[project.repositoryId] = commit;
+  for (const sr of state.srs.filter(item => item.projectId === group.projectId && item.irId === group.id)) {
+    sr.trackingBranch ??= { name: `sr/${sr.id}`, baseCommit: commit, createdAt: checkedAt, pushedAt: checkedAt };
+  }
+  freezePrototypeRequirement(group, "platform", checkedAt);
+}
+
+export function setPrototypeProposalMergeScenario(projectId: string, irId: string, scenario: DevProposalMergeScenario): void {
+  const group = state.drafts.find(item => item.projectId === projectId && item.id === irId);
+  if (!group?.proposalDelivery?.pushedAt) throw new Error("请先完成方案并推送提案分支。");
+  group.proposalDelivery.mergeScenario = scenario;
+  prototypeWorkflowChanges.fire();
+}
+
+/** 原型五秒时钟只读取显式预置的 Git 结果，不连接 Git、PR API 或模型。 */
+export function pollPrototypeProposalMerges(): void {
+  let checked = false;
+  for (const group of [...state.drafts]) {
+    const delivery = group.proposalDelivery;
+    if (group.status !== "requirements-pr" || !delivery?.pushedAt || delivery.pushedCandidate !== delivery.candidate) continue;
+    checked = true;
+    const at = new Date().toISOString();
+    const nextCheckAt = new Date(Date.now() + 5000).toISOString();
+    const scenario = delivery.mergeScenario ?? "unmerged";
+    if (scenario === "failed") {
+      delivery.mergeCheck = { status: "failed", checkedAt: at, nextCheckAt, message: "获取默认分支失败（样例），保留提案，下一轮继续检查。" };
+      continue;
+    }
+    if (scenario === "unmerged") {
+      delivery.mergeCheck = { status: "unmerged", checkedAt: at, nextCheckAt, message: "提案分支尚未合入默认分支（样例），等待人工创建、评审和合并 PR。" };
+      continue;
+    }
+    const expected = [group.documentPath, ...group.srIds.map(id => state.srs.find(sr => sr.projectId === group.projectId && sr.irId === group.id && sr.id === id)?.documentPath), group.proposalSolution?.path, group.srDependencyFile?.path];
+    const complete = hasCurrentProposalSolution(group) && delivery.version === proposalVersion(group) && !proposalDependencyMaterialIssue(group, state.materials) && expected.length >= 4 && expected.every(path => path && state.materials.some(material => material.projectId === group.projectId && material.irId === group.id && material.path === path && material.valid && !material.error && Boolean(material.content?.trim())));
+    if (scenario === "incomplete" || !complete) {
+      delivery.mergeCheck = { status: "incomplete", checkedAt: at, nextCheckAt, message: "已发现合入，但 IR、SR 或方案文档不完整（样例），保留提案，下一轮继续检查。" };
+      continue;
+    }
+    delivery.mergeCheck = { status: "merged", checkedAt: at, message: "提案分支已合入且需求文档完整（样例），自动入库并创建、推送各 SR 分支。" };
+    const operation = receipt("后台核验提案合入与文档完整性，自动入库并推送 SR 分支（内存演示）", ++state.revision, group.id);
+    operation.startedAt = at; operation.completedAt = at;
+    completePrototypeProposal(group, at);
+    state.operations.push(operation);
+  }
+  if (checked) { state.revision += 1; prototypeWorkflowChanges.fire(); }
+}
+
 export function getPrototypeWorkflow(selection: DevSelection = DEFAULT_SELECTION): DevWorkflowView {
   const projectId = selection.projectId ?? DEFAULT_SELECTION.projectId;
   const sharedSettings = readPrototypeProjectSettings();
@@ -394,19 +475,21 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
     const blocker = action.type === "acceptProposal" ? requirementsReviewReadyBlocker(targetProposal) : requirementsReviewBlocker(targetProposal);
     if (blocker) throw new Error(blocker);
   }
-  if (action.type === "runRequirementsReview") prototypeReviewModelBindings();
+  if (action.type === "runRequirementsReview") {
+    const blocker = targetProposal && requirementsReviewStartBlocker(targetProposal);
+    if (blocker) throw new Error(blocker);
+    prototypeReviewModelBindings();
+  }
   if (action.type === "acceptProposal" && targetProposal?.review?.agents && (action.reviewId !== targetProposal.review.id || action.snapshotDigest !== targetProposal.review.snapshotDigest)) throw new Error("人工通过须绑定当前综合意见和需求版本，请刷新后重新判断。");
-  if (action.type === "runRequirementsReview" && targetProposal && !requirementsReviewInputs(targetProposal)) throw new Error("请先补齐 IR 与全部 SR 需求材料，不能对空提案生成通过记录。");
   if (action.type === "acceptProposal" && (targetProposal?.proposalStage !== "requirements" || targetProposal.status !== "draft")) throw new Error("请先完成当前需求版本的评审，再进入技术方案。");
   if (action.type === "acceptProposal" && targetProposal?.developerAcceptance?.round === (targetProposal?.proposalRound ?? 1)) throw new Error("本轮提案已有接手开发人员，不能重复接手或覆盖他人的记录。");
-  if (["generateProposalSolution", "returnProposal"].includes(action.type) && (targetProposal?.developerAcceptance?.round !== (targetProposal?.proposalRound ?? 1) || targetProposal?.developerAcceptance?.employeeId !== getEmployeeId())) throw new Error("请先由当前工号明确接手本轮提案；其他同事可查看，不能代为生成方案、打回或提交 PR。");
   if (action.type === "runRequirementsReview" && targetProposal?.status === "requirements-pr") throw new Error("PR 已提交，本轮仅支持提交 PR 前的需求评审。");
   if ((action.type === "generateRequirements" || action.type === "supplementRequirements") && (targetProposal?.proposalStage !== "requirements" || targetProposal.status !== "draft" || !action.note.trim())) throw new Error("请在业务需求阶段填写明确的需求内容。");
   if (action.type === "generateRequirements" && targetProposal?.srIds.length) throw new Error("本提案已有 SR，请补充当前需求，不重复生成或覆盖已有拆分。");
   if (action.type === "supplementRequirements" && !targetProposal?.srIds.length) throw new Error("请先生成 IR／SR，再补充需求。");
   if (action.type === "submitProposalReview" && (targetProposal?.status !== "draft" || targetProposal.proposalStage !== "requirements")) throw new Error("仅业务需求阶段的草稿可交给开发评审，无需预先生成方案。");
   if (action.type === "generateProposalSolution" && (!targetProposal?.srIds.length || targetProposal.proposalStage !== "solution" || !["draft", "solution-ready"].includes(targetProposal.status))) throw new Error("请先完成 IR／SR 并交给开发，在方案阶段生成方案。");
-  if (action.type === "returnProposal" && (targetProposal?.proposalStage !== "solution" || targetProposal.status === "requirements-pr" || !action.reason.trim())) throw new Error("请在提交 PR 前填写业务需补充的细节，再打回提案。");
+  if (action.type === "returnProposal" && (!targetProposal || targetProposal.status === "requirements-pr" || !["draft", "solution-ready"].includes(targetProposal.status) || !(targetProposal.proposalStage === "solution" || (targetProposal.proposalStage === "requirements" && requirementsReviewCurrent(targetProposal))) || !action.reason.trim())) throw new Error("请在当前需求评审或提交 PR 前的方案阶段填写业务需补充的细节，再打回提案。");
   if (isPrototypeProposalDeliveryAction(action) && targetProposal) validatePrototypeProposalDeliveryAction(getPrototypeWorkflow({ projectId: targetProjectId }), targetProposal, action);
   if (action.type === "recordRequirementsDecision") {
     if (targetProposal?.status !== "draft" || targetProposal.proposalStage !== "requirements" || !requirementsReviewCurrent(targetProposal) || targetProposal.review?.id !== action.reviewId || targetProposal.snapshot?.digest !== action.snapshotDigest) throw new Error("裁决页面对应旧评审或非当前业务需求阶段，请重新查看当前评审。");
@@ -464,7 +547,7 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       if (item.pendingFirstMessage) item.title = "未发送草稿";
       item.releaseId = action.releaseId;
       state.drafts.push(item); state.sessions.push(...item.sessions);
-      state.materials.push(...requirementMaterials(projectId, irId, item.title, []));
+      if (!item.pendingFirstMessage) state.materials.push(...requirementMaterials(projectId, irId, item.title, []));
       operation.irId = irId;
       break;
     }
@@ -515,7 +598,6 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       currentGroup!.review!.humanDecision = { employeeId: getEmployeeId(), decidedAt: new Date().toISOString(), reviewId: currentGroup!.review!.id };
       currentGroup!.proposalStage = "solution";
       currentGroup!.developerHandoff ??= { employeeId: getEmployeeId(), submittedAt: new Date().toISOString() };
-      if (currentGroup!.returnFeedback) currentGroup!.returnFeedback.resumedAt = new Date().toISOString();
       currentGroup!.developerAcceptance = { employeeId: getEmployeeId(), acceptedAt: new Date().toISOString(), round: currentGroup!.proposalRound ?? 1 };
       if (!currentGroup!.sessions.some(item => item.phase === "solution" && item.round === (currentGroup!.proposalRound ?? 1))) {
         const session = sessionRef(projectId, currentGroup!.id, "solution", undefined, undefined, currentGroup!.proposalRound ?? 1);
@@ -560,12 +642,14 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       if (action.type === "supplementRequirements") {
         proposal.requirementSupplements ??= [];
         proposal.requirementSupplements.push({ note, employeeId: getEmployeeId(), createdAt: new Date().toISOString(), round: proposal.proposalRound });
+        if (proposal.returnFeedback && !proposal.returnFeedback.resumedAt) proposal.returnFeedback.resumedAt = new Date().toISOString();
       }
       proposal.developerHandoff = undefined;
       proposal.developerAcceptance = undefined;
       proposal.confirmation = undefined;
       proposal.revision += 1;
       if (proposal.proposalSolution) proposal.proposalSolution.valid = false;
+      if (proposal.srDependencyFile) proposal.srDependencyFile.valid = false;
       const materials = state.materials.filter(item => item.projectId === projectId && item.irId === irId);
       for (const material of materials) {
         if (material.kind === "solution") material.valid = false;
@@ -578,20 +662,23 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       proposal.snapshot = {
         version: 1, projectId, irId: proposal.id, title: proposal.title, documentPath: proposal.documentPath,
         srs: state.srs.filter(row => row.projectId === projectId && row.irId === irId).map(({ id, title, documentPath }) => ({ id, title, documentPath })),
-        files: structuredClone(proposal.files.filter(file => file.path !== proposal.proposalSolution?.path)),
+        files: structuredClone(proposal.files.filter(file => file.path !== proposal.proposalSolution?.path && file.path !== proposal.srDependencyFile?.path)),
         digest: `sample-digest:${projectId}:${irId}:revision-${proposal.revision}`,
       };
       operation.type = action.type === "generateRequirements" ? "根据输入生成 IR 与两个 SR（固定模板演示，未调用模型）" : `由 ${getEmployeeId()} 补充 IR／SR，旧评审与方案需重新确认（原型）`;
       break;
     }
     case "generateProposalSolution": {
+      const dependencyFile = prototypeProposalDependencies(currentGroup!, state.srs.filter(sr => sr.projectId === projectId && sr.irId === irId));
+      dependencyFile.sha256 = `sample:${dependencyFile.path}:revision-${state.revision}`;
+      currentGroup!.srDependencyFile = dependencyFile;
       const material = prototypeProposalSolution(currentGroup!);
       material.sha256 = `sample:${material.path}:revision-${state.revision}`;
       currentGroup!.proposalSolution = { path: material.path, employeeId: getEmployeeId(), generatedAt: new Date().toISOString(), round: currentGroup!.proposalRound ?? 1, valid: true, requirementsDigest: currentGroup!.snapshot?.digest };
       currentGroup!.status = "solution-ready";
       state.materials = state.materials.filter(item => item.projectId !== projectId || item.irId !== irId || item.kind !== "solution");
-      state.materials.push(material);
-      currentGroup!.files = [...currentGroup!.files.filter(item => item.path !== material.path), { path: material.path, sha256: material.sha256, size: material.size }];
+      state.materials.push(material, dependencyFile);
+      currentGroup!.files = [...currentGroup!.files.filter(item => item.path !== material.path && item.path !== dependencyFile.path), ...[material, dependencyFile].map(({ path, sha256, size }) => ({ path, sha256, size }))];
       operation.type = "开发人员完成提案方案（原型）";
       break;
     }
@@ -604,6 +691,7 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       if (currentGroup!.returnFeedback) { currentGroup!.returnFeedbackHistory ??= []; currentGroup!.returnFeedbackHistory.push(structuredClone(currentGroup!.returnFeedback)); }
       currentGroup!.returnFeedback = { employeeId: getEmployeeId(), returnedAt: new Date().toISOString(), reason: action.reason.trim() };
       if (currentGroup!.proposalSolution) currentGroup!.proposalSolution.valid = false;
+      if (currentGroup!.srDependencyFile) currentGroup!.srDependencyFile.valid = false;
       state.materials.filter(item => item.projectId === projectId && item.irId === irId && item.kind === "solution").forEach(item => { item.valid = false; });
       operation.type = "开发粘贴待处理意见，直接返回业务 Agent 补充（原型）";
       break;
@@ -623,11 +711,19 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       operation.type = "人工确认当前 IR／全部 SR／方案版本（演示）";
       break;
     }
-    case "publishProposal":
-      currentGroup!.proposalDelivery!.pushedCandidate = action.candidate;
-      currentGroup!.proposalDelivery!.pushedAt = new Date().toISOString();
-      operation.type = "AI 提交并推送已确认的提案候选（仅内存演示）";
+    case "publishProposal": {
+      const group = currentGroup!;
+      const delivery = group.proposalDelivery!;
+      const at = new Date().toISOString();
+      delivery.branch ??= { name: readPrototypeProposalPrHandoff(group).branch, baseCommit: prototypeSrDefaultCommit(state, projectId), createdAt: at, pushedAt: at };
+      delivery.pushedCandidate = action.candidate;
+      delivery.pushedAt = at;
+      delivery.mergeScenario = "unmerged";
+      delivery.mergeCheck = { status: "waiting", nextCheckAt: new Date(Date.now() + 5000).toISOString(), message: "分支已推送（样例），后台将定时检查合入与文档完整性，无需登记 PR 地址或人工通知。" };
+      group.status = "requirements-pr";
+      operation.type = "方案完成后创建提案分支、提交推送并开始后台检查（内存演示）";
       break;
+    }
     case "markRequirementsPrSubmitted": case "markCodePrSubmitted": {
       const fact = { url: action.url, sourceBranch: action.type === "markRequirementsPrSubmitted" && currentGroup ? readPrototypeProposalPrHandoff(currentGroup).branch : sr?.worktree?.branch ?? currentGroup?.worktree?.branch ?? "demo/sample", targetBranch: state.projects.find(item => item.id === projectId)?.defaultBranch ?? "main", recordedAt: new Date().toISOString(), platformVerified: false as const };
       if (action.type === "markCodePrSubmitted" && sr) sr.codePr = fact;
@@ -635,14 +731,8 @@ export function applyPrototypeAction(action: DevAction, selection: DevSelection)
       break;
     }
     case "markRequirementsMerged": if (currentGroup) {
-      currentGroup.status = "formal";
-      currentGroup.merge = { commit: `sample-merge-${state.revision}`, branch: state.projects.find(item => item.id === projectId)?.defaultBranch ?? "main", checkedAt: new Date().toISOString(), files: structuredClone(currentGroup.files) };
-      state.drafts = state.drafts.filter(item => item.id !== currentGroup.id || item.projectId !== projectId);
-      state.groups.push(currentGroup);
-      currentGroup.revising = false;
-      const revision = currentGroup.proposalRevisions?.at(-1);
-      if (revision && !revision.completedAt) revision.completedAt = new Date().toISOString();
-      operation.type = "演示提案 PR 合并及文件版本核对，正式入库但尚未冻结";
+      completePrototypeProposal(currentGroup, new Date().toISOString());
+      operation.type = "提案合入且文档完整，转为正式需求并推送各 SR 分支（样例）";
     } break;
     case "markCodeMerged": if (sr) {
       sr.status = "completed";

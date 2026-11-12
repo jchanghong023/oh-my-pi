@@ -1,5 +1,6 @@
 import type { DevFileVersion, DevMaterialView, DevStageMaterial, DevWorkflowStage, DevRequirementGroup, DevRequirementsDecision, DevRepositoryDevelopment, DevSelection, DevSystemRequirement, DevWorkflowView } from "./types.js";
 import { getEmployeeId } from "./identity.js";
+import { readSrDependencies, srDependencyMap } from "./sr-dependencies.js";
 
 /** 业务评审只绑定 proposal 与全部增量 spec，技术 design 的生成不让业务评审过期。 */
 export function requirementsReviewInputs(group: DevRequirementGroup): DevFileVersion[] | undefined {
@@ -10,6 +11,11 @@ export function requirementsReviewInputs(group: DevRequirementGroup): DevFileVer
  const files = group.files.filter(file => file.path === group.documentPath || (file.path.startsWith(`${root}specs/`) && file.path.endsWith("/spec.md")));
  if (files.length !== required.size || new Set(files.map(file => file.path)).size !== required.size || !files.every(file => required.has(file.path))) return;
  return files.map(({ path, sha256, size }) => ({ path, sha256, size })).sort((a, b) => a.path.localeCompare(b.path));
+}
+/** 退回后必须先通过既有业务补充路径更新文件，不能用重跑评审跳过。 */
+export function requirementsReviewStartBlocker(group: DevRequirementGroup): string | undefined {
+ if (group.returnFeedback && !group.returnFeedback.resumedAt) return "请先与业务需求 Agent 处理待补充意见，更新 IR／SR 后再发起需求评审。";
+ if (!requirementsReviewInputs(group)) return "请先补齐 IR 与全部 SR 的需求材料，再发起需求评审。";
 }
 export function requirementsReviewCurrent(group: DevRequirementGroup): boolean {
  const review = group.review;
@@ -31,7 +37,8 @@ export function requirementsDecisionCurrent(group: DevRequirementGroup, decision
 }
 /** Human approval is separate from the models' recommendations. */
 export function requirementsReviewReadyBlocker(group: DevRequirementGroup): string | undefined {
- if (!requirementsReviewInputs(group)) return "请先补齐 IR 与至少一个 SR 的需求材料，再发起需求评审。";
+ const startIssue = requirementsReviewStartBlocker(group);
+ if (startIssue) return startIssue;
  if (!group.review) return "尚未发起当前需求版本的评审。";
  if (!requirementsReviewCurrent(group)) return "需求版本已变化，旧评审已失效，请重新评审。";
  const agents = group.review.agents;
@@ -47,6 +54,7 @@ export function requirementsReviewBlocker(group: DevRequirementGroup): string | 
 export function proposalVersion(group: DevRequirementGroup): string {
  return JSON.stringify({
   round: group.proposalRound ?? 1, digest: group.snapshot?.digest, title: group.title,
+  dependencyFile: group.srDependencyFile,
   srIds: [...group.srIds].sort(), solution: group.proposalSolution,
   files: [...group.files].sort((a, b) => a.path.localeCompare(b.path)),
  });
@@ -81,11 +89,23 @@ export const PROPOSAL_STATUS_LABELS = { draft: "草稿", "solution-ready": "方�
 export const IR_ACCEPTANCE_LABELS = { reviewing: "验收中", issues: "待修复", passed: "验收通过", "pr-ready": "最终 PR 待创建", "pr-submitted": "最终 PR 待合并", completed: "已完成" };
 export const SR_DELIVERY_LABELS = { prepared: "待合并前验证", verified: "合并前验证通过", "implementation-issue": "验证未通过，待修复", "git-conflict": "Git 冲突，等待人工", "requirement-conflict": "需求冲突，等待人工" };
 export const MATERIAL_KIND_LABELS = { ir: "IR 原始需求", sr: "SR 系统需求", solution: "IR 方案设计", plan: "开发计划", completion: "完成报告", ut: "UT 报告", st: "ST 报告", delivery: "交付说明", attachment: "附件", "ir-acceptance-report": "IR 验收报告", "ir-final-pr": "最终 PR", "sr-delivery-package": "SR 交付清单" };
+
+export function requirementMaterialName(path: string, srs: readonly DevSystemRequirement[] = []): string | undefined {
+ if (path.endsWith("/design.md")) return "技术方案";
+ if (path.endsWith("/sr-dependencies.json")) return "SR 依赖";
+ if (path.endsWith("/proposal.md")) return "业务需求";
+ if (path.endsWith("/spec.md")) {
+  const sr = srs.find(item => item.documentPath === path);
+  return sr ? `SR 需求 · ${sr.title}` : "SR 需求";
+ }
+}
+
 export function hasCurrentProposalSolution(group: DevRequirementGroup): boolean {
  const solution = group.proposalSolution;
  if (!solution?.valid || !group.snapshot?.digest || solution.round !== (group.proposalRound ?? 1) || solution.requirementsDigest !== group.snapshot.digest) return false;
  const root = group.documentPath.replace(/proposal\.md$/, "");
- return solution.path === `${root}design.md` && group.snapshot.srs.length === group.srIds.length && group.srIds.every(id => group.snapshot!.srs.some(sr => sr.id === id)) && [group.documentPath, ...group.snapshot.srs.map(sr => sr.documentPath), solution.path].every(path => group.files.some(file => file.path === path));
+ const dependencyFile = group.srDependencyFile;
+ return Boolean(dependencyFile && !readSrDependencies(group).issue && dependencyFile.round === solution.round && solution.path === `${root}design.md` && group.snapshot.srs.length === group.srIds.length && group.srIds.every(id => group.snapshot!.srs.some(sr => sr.id === id)) && [group.documentPath, ...group.snapshot.srs.map(sr => sr.documentPath), solution.path, dependencyFile.path].every(path => group.files.some(file => file.path === path && (path !== dependencyFile.path || (file.sha256 === dependencyFile.sha256 && file.size === dependencyFile.size)))));
 }
 export function srDefaultCommit(view: DevWorkflowView, projectId: string): string | undefined {
  const repositoryId = view.projects.find(project => project.id === projectId)?.repositoryId;
@@ -124,7 +144,7 @@ export function requirementConfirmationIssue(group: DevRequirementGroup): string
 export function requirementFreezeIssue(group: DevRequirementGroup): string | undefined {
   const freeze = group.freeze;
   if (!freeze) return group.status === "frozen" || group.developmentStartedAt ? "开发冻结记录缺失，请恢复原版本；不能重新生成快照覆盖历史。" : undefined;
-  if (group.status !== "frozen" || freeze.snapshotDigest !== group.snapshot?.digest || freeze.title !== group.title || fileVersions(freeze.files) !== fileVersions(group.files) || JSON.stringify(freeze.srIds) !== JSON.stringify(group.srIds) || dependencies(freeze.dependencies) !== dependencies(group.srDependencies ?? {})) return "冻结的 IR／SR、需求成员或确认方案已变化，请暂停并重新提案；不能沿用旧冻结版本推进。";
+  if (group.status !== "frozen" || freeze.snapshotDigest !== group.snapshot?.digest || freeze.title !== group.title || fileVersions(freeze.files) !== fileVersions(group.files) || JSON.stringify(freeze.srIds) !== JSON.stringify(group.srIds) || readSrDependencies(group).issue || dependencies(freeze.dependencies) !== dependencies(srDependencyMap(group))) return "冻结的 IR／SR、需求成员或确认方案已变化，请暂停并重新提案；不能沿用旧冻结版本推进。";
 }
 
 export function repositoryDevelopment(view: DevWorkflowView, projectId: string, limit = 2): DevRepositoryDevelopment {
@@ -136,6 +156,9 @@ export function repositoryDevelopment(view: DevWorkflowView, projectId: string, 
 }
 
 function dependencyGraphIssue(view: DevWorkflowView, group: DevRequirementGroup): string | undefined {
+  const materialIssue = readSrDependencies(group).issue;
+  if (materialIssue) return materialIssue;
+  const graph = srDependencyMap(group);
   const rows = view.srs.filter(sr => sr.projectId === group.projectId && sr.irId === group.id && (!view.ompWebId || !sr.ompWebId || sr.ompWebId === view.ompWebId));
   const byId = new Map(rows.map(sr => [sr.id, sr]));
   const visiting = new Set<string>();
@@ -146,7 +169,7 @@ function dependencyGraphIssue(view: DevWorkflowView, group: DevRequirementGroup)
     const sr = byId.get(id);
     if (!sr) return "SR 依赖引用了本 IR 之外或不存在的需求，请检查已确认方案。";
     visiting.add(id);
-    for (const dependency of sr.dependencySrIds ?? []) { if (!byId.has(dependency) && view.srs.some(item => item.id === dependency && item.ompWebId && item.ompWebId !== view.ompWebId)) continue; const issue = inspect(dependency); if (issue) return issue; }
+    for (const dependency of graph[sr.id] ?? []) { if (!byId.has(dependency) && view.srs.some(item => item.id === dependency && item.ompWebId && item.ompWebId !== view.ompWebId)) continue; const issue = inspect(dependency); if (issue) return issue; }
     visiting.delete(id); visited.add(id);
   }
   for (const sr of rows) { const issue = inspect(sr.id); if (issue) return issue; }
@@ -165,7 +188,7 @@ export function srStartBlocker(view: DevWorkflowView, group: DevRequirementGroup
   if (other) return `本 OMP Web 内同仓库当前由「${other.title}」占用，最终验收与归档 PR 合并核验后才能开始另一个 IR。`;
   const graphIssue = dependencyGraphIssue(view, group);
   if (graphIssue) return graphIssue;
-  const unresolved = (sr.dependencySrIds ?? []).map(id => view.srs.find(item => item.id === id && item.irId === group.id && item.projectId === group.projectId)).filter(item => !item || ((!view.ompWebId || !item.ompWebId || item.ompWebId === view.ompWebId) && !srMergeVerified(item, view.projects.find(project => project.id === item.projectId)?.defaultBranch)));
+  const unresolved = (srDependencyMap(group)[sr.id] ?? []).map(id => view.srs.find(item => item.id === id && item.irId === group.id && item.projectId === group.projectId)).filter(item => !item || ((!view.ompWebId || !item.ompWebId || item.ompWebId === view.ompWebId) && !srMergeVerified(item, view.projects.find(project => project.id === item.projectId)?.defaultBranch)));
   if (unresolved.length) return `等待前置 SR 合并并核验：${unresolved.map(item => item?.title ?? "缺失的 SR").join("、")}`;
   if (occupancy.activeSrs.length >= occupancy.limit) return `本 OMP Web 内并行名额已满（${occupancy.activeSrs.length}/${occupancy.limit}）；等待评审或合并的 SR 仍占用名额。`;
 }
@@ -232,11 +255,6 @@ export function conversationReadOnlyReason(view: DevWorkflowView | undefined, se
   const phase = proposal.proposalStage ?? "requirements";
   if (selection.discussionPhase && selection.discussionPhase !== phase) return "正在查看另一讨论阶段的历史，只读。";
   if (proposal.status === "requirements-pr") return "需求 PR 已提交，当前版本只读；合并核对后进入正式需求。";
-  if (phase === "solution") {
-   const acceptance = proposal.developerAcceptance;
-   if (!acceptance || acceptance.round !== (proposal.proposalRound ?? 1)) return "请先接手评审，再继续方案讨论。";
-   if (acceptance.employeeId !== getEmployeeId()) return `方案由 ${acceptance.employeeId} 接手，当前仅查看。`;
-  }
   return;
  }
  if (access?.codeDevelopment === false) return "改代码须启动自己的 omp dev_web，并配置自己的 Git 项目路径；此入口仅浏览正式需求。";
@@ -267,7 +285,7 @@ export function irFinalPackageVersion(group: DevRequirementGroup): string {
 /** 原型展示节点不另建 Agent：需求评审和人工入库都有独立的只读查看状态。 */
 export function proposalProgressIndex(group: DevRequirementGroup, selection?: DevSelection): number {
  if (selection?.proposalEditing && group.proposalStage !== "solution") return 0;
- if (group.proposalStage === "requirements" && group.returnFeedback && !group.returnFeedback.resumedAt && !requirementsReviewCurrent(group)) return 0;
+ if (group.proposalStage === "requirements" && group.returnFeedback && !group.returnFeedback.resumedAt) return 0;
  if (group.status === "requirements-pr" || proposalDeliveryCurrent(group)) return 3;
  if (group.proposalStage === "solution") return 2;
  return requirementsReviewCurrent(group) ? 1 : 0;
@@ -280,8 +298,8 @@ export function proposalViewedIndex(group: DevRequirementGroup, selection: DevSe
 
 /** 提出人固定，当前处理责任按阶段变化；不是权限或自动分派系统。 */
 export function proposalActorLabel(group: DevRequirementGroup): string {
- if (group.status === "requirements-pr" || proposalDeliveryCurrent(group)) return `入库开发 ${group.proposalDelivery?.confirmedBy ?? "待确认"}`;
- if (group.proposalStage === "solution") return hasCurrentProposalSolution(group) ? "具备个人 Web 和开发项目的开发人员入库" : `方案开发 ${group.developerAcceptance?.employeeId ?? "待确认"}`;
+ if (group.status === "requirements-pr" || proposalDeliveryCurrent(group)) return "人工处理 PR · 后台自动检查";
+ if (group.proposalStage === "solution") return hasCurrentProposalSolution(group) ? "方案已完成，可由平台创建提案分支并推送" : `方案开发 ${group.developerAcceptance?.employeeId ?? "待确认"}`;
  if (requirementsReviewCurrent(group) && !requirementsReviewReadyBlocker(group) && !group.review?.humanDecision) return "人工判断综合意见";
  if (requirementsReviewCurrent(group) && !requirementsReviewBlocker(group)) return group.returnFeedback ? `开发 ${group.returnFeedback.employeeId} 继续方案` : "开发人员进入方案";
  return `业务 ${group.proposalLocation?.employeeId ?? "提出人"} 补充需求`;

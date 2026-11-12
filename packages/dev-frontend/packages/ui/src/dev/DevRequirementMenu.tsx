@@ -61,7 +61,7 @@ export function DevRequirementMenu({ group }: { group: DevRequirementGroup }) {
       {sr.approvals.map(item => <p key={item.operationId}>{DEV_STAGE_LABELS[item.stage]} · 第 {item.round} 轮 · {item.valid === false ? "已失效" : "已确认"} · {new Date(item.approvedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p>)}
       {sr.codePrHistory?.map(item => <p key={item.url} className="break-all">历史代码 PR（不可用作本轮交付）：{item.url}</p>)}
      </> : <>
-      {[...(group.returnFeedbackHistory ?? []), ...(group.returnFeedback ? [group.returnFeedback] : [])].map((feedback, index) => <details key={`${feedback.returnedAt}:${index}`} data-testid="proposal-feedback-history"><summary className="cursor-pointer">第 {index + 1} 次退回意见 · {feedback.employeeId}{feedback.resumedAt ? " · 已继续方案" : " · 最近一次"}</summary><p className="mt-2 whitespace-pre-wrap break-words">{feedback.reason}</p></details>)}
+      {[...(group.returnFeedbackHistory ?? []), ...(group.returnFeedback ? [group.returnFeedback] : [])].map((feedback, index) => <details key={`${feedback.returnedAt}:${index}`} data-testid="proposal-feedback-history"><summary className="cursor-pointer">第 {index + 1} 次退回意见 · {feedback.employeeId}{feedback.resumedAt ? " · 已补充需求" : " · 最近一次"}</summary><p className="mt-2 whitespace-pre-wrap break-words">{feedback.reason}</p></details>)}
       {(group.reviewHistory ?? []).map((review, index) => <details key={`${review.id}:${index}`}><summary className="cursor-pointer">历史需求评审 · 第 {review.round ?? 1} 轮 · {review.passed ? "通过" : "待补充"}</summary><MessageResponse>{review.report}</MessageResponse></details>)}
      </>}
     </div>}

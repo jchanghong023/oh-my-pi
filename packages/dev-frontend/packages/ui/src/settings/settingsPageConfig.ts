@@ -34,7 +34,7 @@ export const THEME_MODES: Array<{
   { mode: "zai-light", icon: Sun },
 ];
 
-export type SettingsSectionGroupId = "basics" | "agentCapabilities" | "dataAndStats";
+export type SettingsSectionGroupId = "personalTools" | "platformConfiguration";
 
 interface SettingsSectionDefinition {
   id: SettingsSectionId;
@@ -49,12 +49,8 @@ const BASE_SETTINGS_SECTION_GROUPS: Array<{
   id: SettingsSectionGroupId;
   titleId: string;
 }> = [
-  { id: "basics", titleId: "settings.sidebar.group.basics" },
-  {
-    id: "agentCapabilities",
-    titleId: "settings.sidebar.group.agentCapabilities",
-  },
-  { id: "dataAndStats", titleId: "settings.sidebar.group.dataAndStats" },
+  { id: "personalTools", titleId: "settings.sidebar.group.personalTools" },
+  { id: "platformConfiguration", titleId: "settings.sidebar.group.platformConfiguration" },
 ];
 
 const BASE_SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
@@ -62,95 +58,101 @@ const BASE_SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     id: "general",
     icon: Settings2,
     titleId: "settings.systemTitle",
-    groupId: "basics",
+    groupId: "platformConfiguration",
   },
   {
     id: "appearance",
     icon: Palette,
     titleId: "settings.appearanceTitle",
-    groupId: "basics",
+    groupId: "personalTools",
   },
   {
     id: "modelProvider",
     icon: Package,
     titleId: "settings.modelProviderTitle",
-    groupId: "basics",
+    groupId: "platformConfiguration",
   },
   // Dev 个性化编辑各角色的个人追加提示词；沿用原设置导航与编辑器风格。
   {
     id: "personalization",
     icon: User,
     titleId: "settings.personalization.title",
-    groupId: "agentCapabilities",
+    groupId: "platformConfiguration",
   },
   {
     id: "memory",
     icon: Brain,
     titleId: "settings.memory",
-    groupId: "agentCapabilities",
+    groupId: "platformConfiguration",
   },
   {
     id: "subagents",
     icon: Bot,
     titleId: "settings.subagents.title",
-    groupId: "agentCapabilities",
+    groupId: "platformConfiguration",
   },
   {
     id: "skill",
     icon: WandSparkles,
     titleId: "settings.skills.title",
-    groupId: "agentCapabilities",
+    groupId: "platformConfiguration",
+  },
+  {
+    id: "progressAnalysis",
+    icon: FileSearch,
+    titleId: "settings.progressAnalysis.title",
+    groupId: "platformConfiguration",
   },
   {
     id: "skillDesign",
     icon: FileSearch,
     titleId: "settings.skillDesign.title",
-    groupId: "agentCapabilities",
+    groupId: "personalTools",
   },
   {
     id: "commands",
     icon: Terminal,
     titleId: "settings.commands.title",
-    groupId: "agentCapabilities",
+    groupId: "platformConfiguration",
   },
   {
     id: "automations",
     icon: AlarmClock,
     titleId: "settings.automations.title",
     titleBadgeId: "settings.automations.betaBadge",
-    groupId: "agentCapabilities",
+    groupId: "platformConfiguration",
   },
   {
     id: "hooks",
     icon: Anchor,
     titleId: "settings.hooks.title",
-    groupId: "agentCapabilities",
+    groupId: "platformConfiguration",
   },
   {
     id: "shortcuts",
     icon: Keyboard,
     titleId: "settings.shortcuts.title",
-    groupId: "basics",
+    groupId: "platformConfiguration",
   },
-  // 工作区搜索范围（.zcodeignore）：面向所有用户的基础工作区行为配置，收在基础设置末尾。
+  // 工作区搜索范围（.zcodeignore）属于平台配置。
   {
     id: "workspaceFileSearch",
     icon: FileSearch,
     titleId: "settings.workspaceFileSearch.title",
-    groupId: "basics",
+    groupId: "platformConfiguration",
   },
   // 项目管理排在归档管理之前（docs/superpowers/specs/2026-10-24-project-management.md）。
   {
     id: "projects",
     icon: Folders,
     titleId: "projectManagement.nav",
-    groupId: "dataAndStats",
+    groupId: "platformConfiguration",
   },
   {
     id: "archives",
     icon: Archive,
     titleId: "archives.nav",
-    groupId: "dataAndStats",
+    groupId: "platformConfiguration",
   },
 ];
 

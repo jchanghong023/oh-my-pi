@@ -9,14 +9,39 @@ export const PROPOSAL_PHASE_OPTIONS = [
  { id: "3", title: "需求入库" },
 ];
 
+export const PROPOSAL_INTAKE_OPTIONS = [
+ { id: "all", title: "不限入库状态" },
+ { id: "failed", title: "检查失败" },
+ { id: "incomplete", title: "文档不完整" },
+ { id: "unmerged", title: "等待合入" },
+ { id: "first-check", title: "等待首次检查" },
+ { id: "next-check", title: "等待下轮检查" },
+ { id: "not-pushed", title: "尚未推送" },
+ { id: "merged", title: "检查已合入" },
+] as const;
+
+export type ProposalIntakeStatus = Exclude<(typeof PROPOSAL_INTAKE_OPTIONS)[number]["id"], "all">;
+
+/** Only current intake facts count; drafts and unpushed deliveries never imply an outstanding merge. */
+export function proposalIntakeStatus(group: DevRequirementGroup): ProposalIntakeStatus | undefined {
+ if (proposalProgressIndex(group) !== 3) return undefined;
+ const delivery = group.proposalDelivery;
+ if (!delivery?.pushedAt) return "not-pushed";
+ const check = delivery.mergeCheck;
+ if (!check) return "first-check";
+ if (check.status === "waiting") return check.checkedAt ? "next-check" : "first-check";
+ return check.status;
+}
+
 /** Current presentation phase, independent of the selected historical discussion. */
 export function proposalPhaseLabel(group: DevRequirementGroup): string {
  return PROPOSAL_PHASE_OPTIONS[proposalProgressIndex(group) + 1]!.title;
 }
 
-export function proposalProcessingHint(group: DevRequirementGroup): string {
+export function proposalProcessingHint(group: DevRequirementGroup, intakeDetails = false): string {
  const phase = proposalProgressIndex(group);
- if (phase === 3) return "入库中";
+ if (phase === 3 && intakeDetails) return PROPOSAL_INTAKE_OPTIONS.find(option => option.id === proposalIntakeStatus(group))?.title ?? "待推送";
+ if (phase === 3) return group.proposalDelivery?.mergeCheck?.status === "failed" ? "后台检查失败" : group.proposalDelivery?.mergeCheck?.status === "incomplete" ? "文档待补齐" : group.proposalDelivery?.pushedAt ? "后台检查中" : "待推送";
  if (phase === 1) return group.review?.humanDecision ? "已人工通过" : "待人工判断";
  if (group.returnFeedback && !group.returnFeedback.resumedAt) return "待业务补充";
  if (phase === 2) return group.status === "solution-ready" ? "待入库" : "方案中";

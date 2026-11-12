@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- 定时任务主视图集中维护列表、创建/编辑整页路由与启停/删除操作，集中更利于交互一致。 */
 import { useDev } from "@/dev/DevContext.js";
+import { useOptionalDevDataSource } from "@/dev/data-source.js";
 import {
   useCallback,
   useEffect,
@@ -76,6 +77,10 @@ import {
   DEFAULT_AUTOMATION_STATUS_FILTER,
   filterAutomationsByStatus,
   type AutomationStatusFilter,
+  PROTOTYPE_AUTOMATION_STATUS_FILTERS,
+  PROTOTYPE_AUTOMATION_STATUS_LABELS,
+  resolvePrototypeAutomationStatus,
+  type PrototypeAutomationStatus,
 } from "@/settings/automationStatusFilter.js";
 import { isRemoteAutomationWorkspace } from "@/hooks/useAutomationProjectOptions.js";
 import {
@@ -366,6 +371,7 @@ export function AutomationsSection({
 }: AutomationsSectionProps) {
   const { intl, locale } = useZCodeIntl();
   const dev = useDev();
+  const prototype = useOptionalDevDataSource()?.mode === "prototype";
   const { clientScenesService, zcodeAgentService } = useServices();
   const confirmDialog = useConfirmDialog();
   const { settings: sharedSettings, update: updateSharedSettings } = useSettings();
@@ -391,7 +397,7 @@ export function AutomationsSection({
   const [refreshing, setRefreshing] = useState(false);
   const [view, setView] = useState<AutomationsView>({ mode: "list" });
   const [createdAutomation, setCreatedAutomation] = useState<ZCodeAutomation | null>(null);
-  const [statusFilter, setStatusFilter] = useState<AutomationStatusFilter>(
+  const [statusFilter, setStatusFilter] = useState<AutomationStatusFilter | PrototypeAutomationStatus>(
     DEFAULT_AUTOMATION_STATUS_FILTER,
   );
   // Standalone browser keeps Workflow navigation without a purchase/gray-policy request.
@@ -428,7 +434,13 @@ export function AutomationsSection({
   });
   const currentWorkspaceIsRemote = isRemoteAutomationWorkspace(activeWorkspaceTab);
   const hasAnyTasks = automations.length > 0;
-  const visibleAutomations = filterAutomationsByStatus(automations, statusFilter);
+  const visibleAutomations = prototype
+    ? automations.filter(automation => statusFilter === "all" || resolvePrototypeAutomationStatus(automation, runsCache[automation.automationId]?.runs) === statusFilter)
+    : filterAutomationsByStatus(automations, statusFilter as AutomationStatusFilter);
+  useEffect(() => {
+    if (!prototype) return;
+    for (const automation of automations) void loadRuns(automation.automationId, zcodeAgentService);
+  }, [prototype, automations, loadRuns, zcodeAgentService]);
   const showTaskTemplateSeparator = hasAnyTasks;
   const [loadedWorkspaceKey, setLoadedWorkspaceKey] = useState<string | null>(null);
   // 相对时间基准;刷新列表时更新,避免频繁 setInterval。
@@ -927,7 +939,7 @@ export function AutomationsSection({
           className="mt-3 flex flex-wrap items-center gap-1.5"
           data-testid={TID_AUTOMATIONS_STATUS_FILTER}
         >
-          {AUTOMATION_STATUS_FILTERS.map((key) => (
+          {(prototype ? PROTOTYPE_AUTOMATION_STATUS_FILTERS : AUTOMATION_STATUS_FILTERS).map((key) => (
             <button
               key={key}
               type="button"
@@ -940,7 +952,7 @@ export function AutomationsSection({
               )}
               onClick={() => setStatusFilter(key)}
             >
-              {intl.formatMessage({ id: `automations.statusFilter.${key}` })}
+              {prototype ? PROTOTYPE_AUTOMATION_STATUS_LABELS[key] : intl.formatMessage({ id: `automations.statusFilter.${key}` })}
             </button>
           ))}
         </div>
@@ -960,7 +972,7 @@ export function AutomationsSection({
         >
           <div className="flex w-full flex-col gap-4">
             {/* 全局运行期间保持唤醒开关。 */}
-            {hasAnyTasks ? (
+            {!dev && hasAnyTasks ? (
               <AutomationKeepAwakeNotice
                 checked={sharedSettings?.keepAwakeWhileRunning ?? false}
                 onChange={(value) =>
@@ -1081,16 +1093,19 @@ export function AutomationsSection({
                                       </span>
                                     </>
                                   ) : status === "active" ? (
-                                    <AutomationScheduleBadge
-                                      text={scheduleCardText}
-                                      icon={
-                                        <StatusIcon
-                                          className="size-4 shrink-0"
-                                          strokeWidth={1.33}
-                                          aria-hidden="true"
-                                        />
-                                      }
-                                    />
+                                    <>
+                                      {prototype && <span className="text-ui-sm text-success">{PROTOTYPE_AUTOMATION_STATUS_LABELS[resolvePrototypeAutomationStatus(automation, runsCache[automation.automationId]?.runs)]}</span>}
+                                      <AutomationScheduleBadge
+                                        text={scheduleCardText}
+                                        icon={
+                                          <StatusIcon
+                                            className="size-4 shrink-0"
+                                            strokeWidth={1.33}
+                                            aria-hidden="true"
+                                          />
+                                        }
+                                      />
+                                    </>
                                   ) : (
                                     <>
                                       <span
@@ -1179,7 +1194,7 @@ export function AutomationsSection({
             </div>
 
             {/* Figma 4798:2443：空态保持唤醒提示条位于大空卡之后。 */}
-            {!hasAnyTasks ? (
+            {!dev && !hasAnyTasks ? (
               <AutomationKeepAwakeNotice
                 checked={sharedSettings?.keepAwakeWhileRunning ?? false}
                 onChange={(value) =>

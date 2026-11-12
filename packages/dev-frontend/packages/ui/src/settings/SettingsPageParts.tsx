@@ -22,15 +22,19 @@ export const SETTINGS_FRAME_CONTENT_CLASSNAME =
   "mx-auto w-full max-w-4xl px-4 pb-8 pt-0 lg:px-8 lg:pb-10";
 
 export function ThemeSelect({
+  id,
+  descriptionId,
   value,
   onValueChange,
 }: {
+  id: string;
+  descriptionId: string;
   value: BundledTheme;
   onValueChange: (value: BundledTheme) => void;
 }) {
   return (
     <Select value={value} onValueChange={(nextValue) => onValueChange(nextValue as BundledTheme)}>
-      <SelectTrigger size="lg" className="w-full max-w-64 min-w-0 justify-between">
+      <SelectTrigger id={id} aria-describedby={descriptionId} size="lg" className="w-full max-w-64 min-w-0 justify-between">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

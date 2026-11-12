@@ -3,7 +3,7 @@ import { readPrototypeAgentModelBinding } from "./agent-models.js";
 import promptTemplate from "../skill-design-prompt.md?raw";
 import generatedSample from "./skill-design-generated.md?raw";
 import checklistSample from "./skill-design-checklist.md?raw";
-import { PROTOTYPE_BACKEND, prototypeSettingsWriteAllowed } from "./backend.js";
+import { PROTOTYPE_BACKEND } from "./backend.js";
 import { readPrototypeDevelopmentRoot } from "./project-settings.js";
 import { savePrototypeDesignedSkill } from "./skills.js";
 import chatTemplate from "./skill-design-chat.md?raw";
@@ -46,7 +46,6 @@ export function readPrototypeSkillDesignPreview(sessionId: string): DevSkillDesi
   return preview ? structuredClone(preview) : undefined;
 }
 export function prototypeSkillDesignReply(sessionId: string, message: string): string {
-  if (!prototypeSettingsWriteAllowed()) throw new Error("当前访问方式不支持 Skill 设计，请使用自己启动的 OMP Web。");
   const draft = readPrototypeSkillDesign(sessionId);
   const directory = prototypeSkillDesignDirectory(sessionId);
   // 完整表单消息已在会话历史中保留，避免再次填入时递归嵌套此前整份提示词。
@@ -70,13 +69,12 @@ export function prototypeSkillDesignReply(sessionId: string, message: string): s
   return chatTemplate.replaceAll("{{directory}}", directory).replaceAll("{{name}}", name);
 }
 export function savePrototypeSkillDesignPreview(sessionId: string, workspacePath: string, name: string, target: "project" | "user"): string {
-  if (!prototypeSettingsWriteAllowed()) throw new Error("当前访问方式不支持保存技能，请使用自己启动的 OMP Web。");
   const preview = previews.get(sessionId);
   if (!preview) throw new Error("请先发送设计需求，并预览生成的临时文件。");
   const prefix = `prototype-skill-design:${PROTOTYPE_BACKEND.id}:`;
-  if (!sessionId.startsWith(prefix)) throw new Error("请使用自己的 OMP Dev 技能设计会话。");
+  if (!sessionId.startsWith(prefix)) throw new Error("请使用当前共享 OMP 的技能设计会话。");
   const projectId = sessionId.slice(prefix.length);
-  if (target === "project" && (!workspacePath || readPrototypeDevelopmentRoot(projectId, PROTOTYPE_BACKEND.owner) !== workspacePath)) throw new Error("请先配置当前项目的我的开发项目，不能保存到共享目录。");
+  if (target === "project" && (!workspacePath || readPrototypeDevelopmentRoot(projectId, PROTOTYPE_BACKEND.owner) !== workspacePath)) throw new Error("当前项目没有有效可写目标，请选择共享 OMP profile；不能保存到共享只读目录。");
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64) throw new Error("模型推荐的技能标识无效，请返回对话调整推荐结果。");
   return savePrototypeDesignedSkill(target === "user" ? PROTOTYPE_BACKEND.userSkillsDirectory : workspacePath, name, "聊天生成技能的原型样例", preview.files.find(file => file.path === "SKILL.md")!.content.replace(/^name: .*$/m, `name: ${name}`), preview.files, target === "user" ? "user" : "workspace");
 }

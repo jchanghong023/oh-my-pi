@@ -11,6 +11,7 @@ function resolveRecordedWorkspace(view: DevWorkflowView | undefined, selection: 
  const project = view?.projects.find(item => item.id === selection.projectId);
  const identity = `dev-ui-prototype:${selection.projectId ?? "unselected"}`;
  if (!project) return { kind: "unavailable", identity, error: view?.projects.length ? "所选项目不存在，请重新选择项目。" : "尚未添加项目，请先登记已有 Git 项目。" };
+ if (selection.formalView || view?.groups.some(group => group.id === selection.irId)) return { kind: "reference", path: project.root, identity: `${identity}:formal-progress` };
  if (!prototypeCodeDevelopmentAllowed() && view?.groups.some(item => item.id === selection.irId)) return { kind: "reference", path: project.root, identity: `${identity}:formal-materials:${getEmployeeId()}` };
  if (selection.freeDraftId) {
   const root = readPrototypeDevelopmentRoot(project.id);

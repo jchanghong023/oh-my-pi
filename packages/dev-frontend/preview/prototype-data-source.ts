@@ -3,11 +3,11 @@ import { PROTOTYPE_BACKEND, prototypeProposalDiscussionAllowed, prototypeCodeDev
 import { getEmployeeId } from "../packages/ui/src/dev/identity.js";
 import type { DevAction } from "../packages/ui/src/dev/types.js";
 import type { DevDataSource } from "../packages/ui/src/dev/data-source.js";
-import { DEFAULT_SELECTION, getPrototypeWorkflow, applyPrototypeAction, resolvePrototypeSession, prototypeWorkflowChanges } from "../packages/ui/src/dev/mock/workflow.js";
+import { DEFAULT_SELECTION, getPrototypeWorkflow, applyPrototypeAction, resolvePrototypeSession, prototypeWorkflowChanges, notifyPrototypeProjectSettingsChanged, pollPrototypeProposalMerges, setPrototypeProposalMergeScenario } from "../packages/ui/src/dev/mock/workflow.js";
 import { createPrototypeFreeChat, readPrototypeFreeChat, readRecentFreeChats, setPrototypeFreeProject, subscribePrototypeFreeChats } from "../packages/ui/src/dev/mock/free-chats.js";
 import { resolvePrototypeWorkspace } from "../packages/ui/src/dev/mock/workspace.js";
 import { retryPrototypeMaterialRead, retryPrototypeSessionRead, prototypeDirectoryIssue, restorePrototypeDirectorySample } from "../packages/ui/src/dev/mock/recovery.js";
-import { readPrototypeDevelopmentRoot, checkPrototypeSharedProjectDirectory } from "../packages/ui/src/dev/mock/project-settings.js";
+import { readPrototypeDevelopmentRoot, checkPrototypeSharedProjectDirectory, savePrototypeRepository } from "../packages/ui/src/dev/mock/project-settings.js";
 import { prototypeProjectDirectories, checkPrototypeProjectDirectory, checkPrototypeDevelopmentDirectory } from "../packages/ui/src/dev/mock/project-directories.js";
 import { PROTOTYPE_AGENT_MODELS, readPrototypeAgentModels, savePrototypeAgentModels, createPrototypeAgentModelSamples, prototypeAgentModelConfigurationRevision, subscribePrototypeAgentModels, prototypeAgentModelBindingChanged } from "../packages/ui/src/dev/mock/agent-models.js";
 import { readPrototypeAgentPrompts, updatePrototypeAgentPromptDrafts, savePrototypeAgentPrompts } from "../packages/ui/src/dev/mock/personalization.js";
@@ -16,36 +16,41 @@ import { readPrototypeSkills } from "../packages/ui/src/dev/mock/skills.js";
 import { getPrototypePeers } from "../packages/ui/src/dev/mock/collaboration.js";
 import { readPrototypeProposalPrHandoff } from "../packages/ui/src/dev/mock/proposal-pr-handoff.js";
 import { createPrototypeServices } from "./mock-services.js";
+import { withPrototypeProgress, assignPrototypeIrOwner, updatePrototypeSrProgress } from "../packages/ui/src/dev/mock/progress.js";
+import { withPrototypePlanning, updatePrototypeSrPlanning } from "../packages/ui/src/dev/mock/planning.js";
+import { createPrototypeProgressScheduler } from "../packages/ui/src/dev/mock/progress-scheduler.js";
 
 /** The preview is the sole composition root allowed to instantiate sample business data. */
 export function createPrototypeDataSource(): DevDataSource {
   const services = createPrototypeServices();
+  const progressScheduler = createPrototypeProgressScheduler({ scaleDemo: new URLSearchParams(window.location.search).get("demo") === "analysis-scale" });
   const subscriptions = new Set<() => void>();
   const proposalActions = new Set<DevAction["type"]>(["createProposal", "submitProposalReview", "acceptProposal", "runRequirementsReview", "generateRequirements", "supplementRequirements", "generateProposalSolution", "returnProposal", "recordRequirementsDecision", "confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markRequirementsMerged"]);
-  const gitProposalActions = new Set<DevAction["type"]>(["confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markRequirementsMerged"]);
-  const allowed = (type: DevAction["type"]) => type === "setSharedProjectRoot" ? getEmployeeId() === "j00808874" : type === "deleteRequirement" ? prototypeProposalDiscussionAllowed() && prototypeCodeDevelopmentAllowed() : (type === "beginProposalRevision" || type === "recordRequirementsDecision") ? false : proposalActions.has(type) ? (gitProposalActions.has(type) ? prototypeCodeDevelopmentAllowed() : prototypeProposalDiscussionAllowed()) : prototypeCodeDevelopmentAllowed();
+  const settingsActions = new Set<DevAction["type"]>(["registerProject", "createRelease", "setSharedProjectRoot"]);
+  const allowed = (type: DevAction["type"]) => type === "markRequirementsMerged" ? false : settingsActions.has(type) ? prototypeSettingsWriteAllowed() : type === "deleteRequirement" ? prototypeProposalDiscussionAllowed() : (type === "beginProposalRevision" || type === "recordRequirementsDecision") ? false : proposalActions.has(type) ? prototypeProposalDiscussionAllowed() : prototypeCodeDevelopmentAllowed();
   return {
     mode: "prototype", backend: PROTOTYPE_BACKEND, clientId: crypto.randomUUID(), initialSelection: { ...DEFAULT_SELECTION },
     capabilities: { get settingsWrite() { return prototypeSettingsWriteAllowed(); }, get proposalDiscussion() { return prototypeProposalDiscussionAllowed(); }, get codeDevelopment() { return prototypeCodeDevelopmentAllowed(); }, get workflowCommands() { return (["registerProject", "createRelease", "setDevelopmentRoot", "setSharedProjectRoot", "createProposal", "deleteRequirement", "submitProposalReview", "acceptProposal", "runRequirementsReview", "generateRequirements", "supplementRequirements", "generateProposalSolution", "returnProposal", "confirmProposal", "publishProposal", "markRequirementsPrSubmitted", "markCodePrSubmitted", "markRequirementsMerged", "beginProposalRevision", "recordRequirementsDecision", "markCodeMerged", "prepareSrDelivery", "publishSrDelivery", "verifySrDelivery", "resolveSrDeliveryConflict", "simulateSrDefaultBranchUpdate", "startSr", "startIrAcceptance", "generateIrAcceptanceReport", "repairIrAcceptance", "prepareIrFinalPr", "restartIrAcceptance", "simulateIrDefaultBranchUpdate", "publishIrFinalPr", "markIrFinalPrSubmitted", "verifyIrFinalMerge", "generateStageMaterials", "approveStage", "backStage", "stop"] as DevAction["type"][]).filter(allowed); }, prototypeBusiness: true, freeChat: true, nativeChat: true, nativeSurface: false },
     readWorkflow: async selection => {
-      const view = getPrototypeWorkflow(selection);
+      const view = withPrototypePlanning(withPrototypeProgress(getPrototypeWorkflow(selection)));
       setPrototypeFreeProject(selection.projectId);
       if (selection.projectId && view.projects.some(project => project.id === selection.projectId)) readRecentFreeChats(selection.projectId);
       return view;
     },
     subscribeWorkflow(listener) {
+      const timer = window.setInterval(pollPrototypeProposalMerges, 5000);
       const subscription = prototypeWorkflowChanges.event(listener);
-      const dispose = () => { subscription.dispose(); subscriptions.delete(dispose); };
+      const dispose = () => { window.clearInterval(timer); subscription.dispose(); subscriptions.delete(dispose); };
       subscriptions.add(dispose); return dispose;
     },
     command: async (action, selection) => {
       if (!allowed(action.type)) throw new Error(proposalActions.has(action.type) ? "提案只读：请进入 j00808874 所有的 Web 讨论或修改。" : "改项目或执行 Git 须使用自己的 omp dev_web，并配置自己的 Git 项目路径。");
       const view = getPrototypeWorkflow(selection);
-      if (!["setSharedProjectRoot", "setDevelopmentRoot", "registerProject", "createRelease"].includes(action.type) && view.drafts.some(item => item.id === ("irId" in action ? action.irId ?? selection.irId : selection.irId)) && !prototypeProposalDiscussionAllowed() && !gitProposalActions.has(action.type)) throw new Error("提案讨论在本 Web 只读，请进入 j00808874 的 Web；入库须使用自己的 Web 和开发项目。");
-      if (gitProposalActions.has(action.type) && !readPrototypeDevelopmentRoot(selection.projectId ?? "", PROTOTYPE_BACKEND.owner)) throw new Error("执行 Git 前请先配置自己的开发项目路径。");
+      if (!["setSharedProjectRoot", "setDevelopmentRoot", "registerProject", "createRelease"].includes(action.type) && view.drafts.some(item => item.id === ("irId" in action ? action.irId ?? selection.irId : selection.irId)) && !prototypeProposalDiscussionAllowed()) throw new Error("提案在本 Web 只读，请进入 j00808874 的 Web 讨论、确认或提交推送。");
       return applyPrototypeAction(action, selection);
     },
     resolveSession: (view, selection) => {
+      if (selection.formalView || view.groups.some(group => group.id === selection.irId)) return undefined;
       if (selection.proposalStep === "intake") return undefined;
       const proposal = view.drafts.find(item => item.id === selection.irId);
       if (proposal && selection.srId) return undefined;
@@ -71,12 +76,25 @@ export function createPrototypeDataSource(): DevDataSource {
     selectProject: setPrototypeFreeProject,
     resolveWorkspace: resolvePrototypeWorkspace,
     connectWorkspace: async () => ({ services, dispose() { /* No external workspace resources in the in-memory preview. */ } }),
-    dispose() { for (const dispose of subscriptions) dispose(); },
-    projects: { readDevelopmentRoot: readPrototypeDevelopmentRoot, listDirectories: prototypeProjectDirectories, checkProjectDirectory: async (path, roots) => checkPrototypeProjectDirectory(path, roots), checkDevelopmentDirectory: async (path, root) => checkPrototypeDevelopmentDirectory(path, root), checkSharedProjectDirectory: async (path, projectId) => checkPrototypeSharedProjectDirectory(path, projectId) },
+    dispose() { progressScheduler.dispose(); for (const dispose of subscriptions) dispose(); },
+    progress: { assignOwner: assignPrototypeIrOwner, updateSr: updatePrototypeSrProgress },
+    progressScheduler,
+    employeeDirectory: {
+      kind: "sample",
+      entries: [
+        { employeeId: "j00808874", name: "林晨（样例）", department: "平台研发部（样例）" },
+        { employeeId: "j00808875", name: "陈宁（样例）", department: "平台研发部（样例）" },
+        { employeeId: "j00808876", name: "陈宁（样例）", department: "芯片验证部（样例）" },
+        { employeeId: "j00808877", name: "周敏（样例）", department: "芯片验证部（样例）" },
+      ],
+    },
+    planning: { updateSr: updatePrototypeSrPlanning },
+    projects: { saveRepository: async input => { if (!prototypeSettingsWriteAllowed()) throw new Error("仅启动此 OMP Web 的人可修改项目配置。"); savePrototypeRepository(input); notifyPrototypeProjectSettingsChanged(); }, readDevelopmentRoot: readPrototypeDevelopmentRoot, listDirectories: prototypeProjectDirectories, checkProjectDirectory: async (path, roots) => checkPrototypeProjectDirectory(path, roots), checkDevelopmentDirectory: async (path, root) => checkPrototypeDevelopmentDirectory(path, root), checkSharedProjectDirectory: async (path, projectId) => checkPrototypeSharedProjectDirectory(path, projectId) },
     models: { choices: PROTOTYPE_AGENT_MODELS, read: readPrototypeAgentModels, save: savePrototypeAgentModels, samples: createPrototypeAgentModelSamples, revision: prototypeAgentModelConfigurationRevision, subscribe: subscribePrototypeAgentModels, bindingChanged: prototypeAgentModelBindingChanged },
     prompts: { read: readPrototypeAgentPrompts, updateDraft: updatePrototypeAgentPromptDrafts, save: savePrototypeAgentPrompts },
+    skills: { list: params => services.skillsService.list(params) },
     skillDesign: { session: prototypeSkillDesignSession, binding: prototypeSkillDesignBinding, workspaceIdentity: projectId => `dev-ui-prototype:${PROTOTYPE_BACKEND.id}:${projectId}`,  read: readPrototypeSkillDesign, saveDraft: savePrototypeSkillDesignDraft, subscribe: onPrototypeSkillDesignSupplement, prompt: preparePrototypeSkillDesignPrompt, temporaryDirectory: prototypeSkillDesignDirectory, readPreview: readPrototypeSkillDesignPreview, listSkills: readPrototypeSkills, savePreview: savePrototypeSkillDesignPreview, sample: PROTOTYPE_SKILL_DESIGN_SAMPLE },
     collaboration: { peers: getPrototypePeers }, freeChats: { subscribe: subscribePrototypeFreeChats },
-    prototype: { directoryIssue: prototypeDirectoryIssue, restoreDirectory: restorePrototypeDirectorySample, readPrHandoff: readPrototypeProposalPrHandoff },
+    prototype: { setProposalMergeScenario: (projectId, irId, scenario) => { if (!prototypeProposalDiscussionAllowed()) throw new Error("当前 Web 只读，不能切换提案演示场景。"); setPrototypeProposalMergeScenario(projectId, irId, scenario); }, directoryIssue: prototypeDirectoryIssue, restoreDirectory: restorePrototypeDirectorySample, readPrHandoff: readPrototypeProposalPrHandoff },
   };
 }

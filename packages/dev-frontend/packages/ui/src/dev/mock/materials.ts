@@ -10,7 +10,7 @@ export function prototypeMaterial(input: Omit<DevMaterialView, "sha256" | "size"
   const content = input.content ?? "";
   return { ...input, sha256: `sample:${input.path}`, size: new TextEncoder().encode(content).length, valid: true };
 }
-export function requirementMaterials(projectId: string, irId: string, title: string, rows: { id: string; title: string }[]): DevMaterialView[] {
+export function requirementMaterials(projectId: string, irId: string, title: string, rows: { id: string; title: string; dependencySrIds?: string[] }[]): DevMaterialView[] {
   return [prototypeMaterial({ projectId, irId, kind: "ir", path: `${prototypeChangeRoot(irId)}/proposal.md`, content: `# ${title}
 
 ${disclaimer}
@@ -34,6 +34,8 @@ ${rows.map(row => `- ${prototypeCapabilityName(row.id)}: ${row.title}`).join("\n
   ...rows.map(row => prototypeMaterial({ projectId, irId, srId: row.id, kind: "sr", path: prototypeSpecPath(irId, row.id), content: `# ${row.title}
 
 ${disclaimer}
+
+稳定 SR ID：${row.id}
 
 ## ADDED Requirements
 

@@ -166,13 +166,13 @@ export function SkillsSection({
   onVisibleCountChange,
   onCreateTask,
   onDetailOpenChange,
-  onOpenProjectSettings,
   onReturnToUserScope,
   unscopedServices,
   cacheAuthorityKey,
 }: SkillsSectionProps) {
   const devSource = useOptionalDevDataSource();
-  const readOnly = devSource?.capabilities.settingsWrite === false;
+  const prototypeSkills = devSource?.mode === "prototype" ? devSource.skills : undefined;
+  const readOnly = devSource?.capabilities.settingsWrite === false || Boolean(prototypeSkills);
   const { intl, locale } = useZCodeIntl();
   const platform = usePlatform();
   const backendBusinessAvailable = useBackendBusinessAvailable();
@@ -203,15 +203,18 @@ export function SkillsSection({
     remoteTarget,
     { unscopedServices, forceUnscoped: Boolean(cacheAuthorityKey || unscopedServices) },
   );
-  const nativeCatalog = targetServiceResolution.nativeCatalog;
-  const activeWorkspacePath = nativeCatalog
-    ? targetServiceResolution.nativeSession?.workspacePath ?? null
-    : workspacePath ?? null;
+  const nativeCatalog = !prototypeSkills && targetServiceResolution.nativeCatalog;
+  const activeWorkspacePath = prototypeSkills
+    ? workspacePath ?? devSource?.backend?.userSkillsDirectory ?? null
+    : nativeCatalog
+      ? targetServiceResolution.nativeSession?.workspacePath ?? null
+      : workspacePath ?? null;
   const activeWorkspaceIdentity = nativeCatalog ? undefined : workspaceIdentity;
-  const catalogReady = targetServiceResolution.catalogReady;
+  const catalogReady = Boolean(prototypeSkills) || targetServiceResolution.catalogReady;
   // PluginsSection 已把 Scope target 传入，但 Skills 仍从当前 ServiceProvider
   // 取服务，导致跨远程 host 误路由。技能读写改用同一 target 解析结果。
-  const { pluginManagementService, skillsService } = targetServiceResolution.services;
+  const pluginManagementService = prototypeSkills ? undefined : targetServiceResolution.services.pluginManagementService;
+  const skillsService = targetServiceResolution.services.skillsService;
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [capability, setCapability] = useState<SkillsCapability | null>(null);
   const [loadedSkillTargetKey, setLoadedSkillTargetKey] = useState("");
@@ -319,7 +322,7 @@ export function SkillsSection({
       setError(null);
       const requestId = ++latestRequestIdRef.current;
       try {
-        const result = await skillsService.list({
+        const result = await (prototypeSkills ?? skillsService).list({
           workspacePath: activeWorkspacePath,
           workspaceIdentity: activeWorkspaceIdentity,
           provider: ZCODE_AGENT_PROVIDER,
@@ -346,6 +349,7 @@ export function SkillsSection({
       activeWorkspacePath,
       cacheAuthorityKey,
       skillsService,
+      prototypeSkills,
       catalogReady,
       targetServiceResolution.catalogKey,
     ],
@@ -477,7 +481,7 @@ export function SkillsSection({
 
   const scopedProviderSkills = useMemo(() => {
     if (!catalogReady || !projectionMatchesTarget) return [];
-    const allProviderSkills = nativeCatalog ? skills : filterSkillsForProvider(skills, ZCODE_AGENT_PROVIDER);
+    const allProviderSkills = nativeCatalog || prototypeSkills ? skills : filterSkillsForProvider(skills, ZCODE_AGENT_PROVIDER);
     if (nativeCatalog || !backendBusinessAvailable || !pluginManagementService) {
       // The resource list is authoritative without ZCode inventory. Plugin scope has no
       // user/workspace ownership field, so retain it rather than inventing membership.
@@ -499,6 +503,7 @@ export function SkillsSection({
     catalogReady,
     projectionMatchesTarget,
     nativeCatalog,
+    prototypeSkills,
     pluginManagementService,
     activeWorkspaceIdentity,
     activeWorkspacePath,
@@ -654,9 +659,9 @@ export function SkillsSection({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {nativeCatalog ? (
+          {prototypeSkills || nativeCatalog ? (
             <span className="text-ui-sm text-foreground-subtle">
-              {skill.enabled ? "Native · 只读" : "Native · 策略禁用"}
+              {prototypeSkills ? "样例 · 只读" : skill.enabled ? "Native · 只读" : "Native · 策略禁用"}
             </span>
           ) : skill.scope === "plugin" ? null : (
             <>
@@ -696,11 +701,11 @@ export function SkillsSection({
 
   const skillHeaderActions = (
     <SettingsResourceHeaderActions
-      onRefresh={() => void (nativeCatalog
+      onRefresh={() => void (nativeCatalog || prototypeSkills
         ? refresh()
         : Promise.all([refresh(), refreshSharedSkillStoreForCurrentWorkspace()]))}
-      onImport={nativeCatalog ? undefined : () => setImportDialogOpen(true)}
-      onNew={nativeCatalog ? undefined : handleCreateSkill}
+      onImport={nativeCatalog || prototypeSkills ? undefined : () => setImportDialogOpen(true)}
+      onNew={nativeCatalog || prototypeSkills ? undefined : handleCreateSkill}
       refreshing={loading}
       importDisabled={readOnly || !capability?.userScopeAvailable}
       newDisabled={readOnly}
@@ -711,8 +716,12 @@ export function SkillsSection({
 
   return (
     <div className="space-y-4">
-      {readOnly && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可搜索、筛选并查看技能详情；只有当前 Web 的所有者可修改技能。请启动自己的 OMP Web 修改自己的技能。</p>}
-      {nativeCatalog ? (
+      {devSource?.capabilities.settingsWrite === false && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可搜索、筛选并查看技能详情；平台技能配置由此共享 Web 的启动者维护，切换工号不改变配置归属。</p>}
+      {prototypeSkills ? (
+        <div className="rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle">
+          原型技能样例 · 只读演示。支持搜索和查看详情；来自本页内存，不绑定 Native 会话，不表示真实技能已安装或启用。创建、导入、开关与删除未接入真实能力。
+        </div>
+      ) : nativeCatalog ? (
         <div className="rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle">
           当前 Native 会话的有效技能目录（只读）：{activeWorkspacePath ?? "未绑定会话"}。
           策略禁用和资源读取失败见下方诊断；此处不支持启用、创建、导入或删除。
@@ -789,9 +798,9 @@ export function SkillsSection({
         </div>
       ) : null}
 
-      {(projectionMatchesTarget && error) || targetServiceResolution.catalogError ? (
+      {(projectionMatchesTarget && error) || (!prototypeSkills && targetServiceResolution.catalogError) ? (
         <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-base text-destructive">
-          {targetServiceResolution.catalogError?.message ?? error}
+          {(!prototypeSkills && targetServiceResolution.catalogError?.message) || error}
           <Button type="button" variant="outline" size="sm" onClick={() => {
             if (catalogReady) void refresh();
             else targetServiceResolution.catalog.reload();
@@ -802,16 +811,15 @@ export function SkillsSection({
       {nativeCatalog && !catalogReady && !targetServiceResolution.catalogError ? (
         <div className="space-y-2 text-foreground-subtle">
           <p>Native 会话未绑定，技能只读目录不可用。</p>
-          <p className="text-ui-sm leading-6">项目范围需要该项目的 Native 会话绑定；工作区中已打开的其他范围会话不会自动用于此项目。刷新不会创建或改绑会话。请在 Dev 项目与 Release 设置中检查对应项目的“我的开发项目”，再从工作区显式选择该项目的已有会话；原型不会自动绑定真实会话。</p>
+          <p className="text-ui-sm leading-6">当前 Dev 未接入此范围的 Native 会话绑定，无法读取有效技能目录。刷新不会创建或改绑会话；这里不提供开发目录配置或普通会话入口。</p>
           <div className="flex flex-wrap gap-2">
-            {onOpenProjectSettings && <Button variant="outline" onClick={onOpenProjectSettings}>打开 Dev 项目与 Release 设置</Button>}
             {onReturnToUserScope && <Button variant="outline" onClick={onReturnToUserScope}>返回用户范围</Button>}
           </div>
           <Button variant="outline" onClick={targetServiceResolution.catalog.reload}>
             {intl.formatMessage({ id: "common.refresh" })}
           </Button>
         </div>
-      ) : targetServiceResolution.catalogError ? null : !catalogReady ? (
+      ) : !prototypeSkills && targetServiceResolution.catalogError ? null : !catalogReady ? (
         <PluginLoadingState label={intl.formatMessage({ id: "common.connecting" })} />
       ) : loading || !projectionMatchesTarget ? (
         <PluginLoadingState label={intl.formatMessage({ id: "common.loading" })} />
@@ -972,8 +980,8 @@ export function SkillsSection({
                     mono
                     className="col-span-2"
                   />
-                  {nativeCatalog ? (
-                    <SkillDetailField label="Native 路径（只读）" value={detailSkill.path} mono />
+                  {prototypeSkills || nativeCatalog ? (
+                    <SkillDetailField label={prototypeSkills ? "样例路径（非本机文件）" : "Native 路径（只读）"} value={detailSkill.path} mono className="col-span-2" />
                   ) : (
                     <SkillPathDetailField
                       label={intl.formatMessage({ id: "settings.skills.detail.path" })}
@@ -983,6 +991,12 @@ export function SkillsSection({
                     />
                   )}
                 </div>
+                {prototypeSkills && detailSkill.body && (
+                  <div className="space-y-2">
+                    <div className="text-ui-base font-medium text-foreground">技能内容（样例）</div>
+                    <pre className="whitespace-pre-wrap break-words rounded-lg bg-background p-3 text-ui-sm text-foreground-subtle">{detailSkill.body}</pre>
+                  </div>
+                )}
               </div>
             </div>
           ) : null}

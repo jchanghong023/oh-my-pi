@@ -107,6 +107,8 @@ function pillName(pill: TimelinePill, format: Parameters<typeof laneDisplayName>
 export interface WorkflowTimelineProps {
   model: WorkflowTimelineModel;
   className?: string;
+  /** Fit simple stage headers into their pane without shrinking type or hiding stages. */
+  compact?: boolean;
   /** 点一个站；缺席即站头不是控件——点击冒泡给宿主（轮尾摘要的整块开关）。 */
   onSelectStation?: (station: TimelineStation) => void;
   /**
@@ -132,6 +134,7 @@ export interface WorkflowTimelineProps {
 export const WorkflowTimeline = memo(function WorkflowTimeline({
   className,
   model,
+  compact = false,
   onOpenFill,
   onOpenMore,
   onOpenPill,
@@ -168,9 +171,10 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
   const fills = (model.fills ?? []).filter((fill) => fill.to < n);
   const layout = timelineLayout(model.arcs, model.bands, fills.length > 0);
   const { banded, inset, pillsTop } = layout;
+  const compactRow = compact && !banded && !draft && fills.length === 0 && model.tailStub === undefined;
   const top = layout.rowY[0]! - RAIL_ROW / 2;
   const width = timelineWidth(n, inset, model.tailStub !== undefined);
-  const height = timelineHeight(draft ? { ...model, stations } : model);
+  const height = timelineHeight(draft ? { ...model, stations } : model) + (compactRow ? 48 : 0);
   const frames = timelineFrames({
     columnHeight: (i) => stationHeight(stations[i]!),
     fills,
@@ -201,11 +205,12 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
 
   // 视口：滚到哪、多宽、内容多宽。量不到（jsdom）时三者为 0，下面什么都不折。
   const viewport = useTimelineViewport(scroller, width);
+  const rowWidth = compactRow ? viewport.clientWidth || width : width;
   // 每次滚动采样后结算飞行：落地或偏离即结束。只由位置决定，不用计时器。
   useEffect(() => {
     setFlight((current) => flightAfterScroll(current, viewport.scrollLeft));
   }, [viewport.scrollLeft]);
-  const overflow = viewport.clientWidth > 0 && viewport.scrollWidth > viewport.clientWidth;
+  const overflow = !compactRow && viewport.clientWidth > 0 && viewport.scrollWidth > viewport.clientWidth;
   const fold = overflow
     ? foldStations(n, viewport.scrollLeft, viewport.clientWidth, flight?.index, inset)
     : NO_FOLD;
@@ -249,6 +254,7 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
   const focusIndex = draft ? (n > 0 ? n - 1 : undefined) : model.runningIndex;
   useEffect(() => {
     const element = scrollRef.current;
+    if (compactRow) return;
     if (element === null || focusIndex === undefined) return;
     if (element.scrollWidth <= element.clientWidth) return;
     const left = draft
@@ -259,7 +265,7 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
     const from = element.scrollLeft;
     setFlight(Math.abs(from - target) <= 1 ? undefined : { from, index: focusIndex, target });
     element.scrollTo({ behavior: prefersReducedMotion() ? "auto" : "smooth", left });
-  }, [draft, focusIndex, inset]);
+  }, [compactRow, draft, focusIndex, inset]);
 
   if (n === 0) return null;
 
@@ -277,6 +283,7 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
   const renderPill = (pill: TimelinePill) => {
     const enterDelayMs = nextDelay();
     const label = pillName(pill, format);
+    const fullLabel = compactRow ? laneDisplayName(pill.lane, format) : label;
     // 活的 run 里的子代理药丸一律可开：有会话开 transcript，还没启动的
     // 开同一个 tab 的占位——槽位身份（`pill.slot`）就是它的抓手。没有 run 就没有槽位。
     // 脚本药丸同一套打开语法：活的 run 里有抓手
@@ -284,7 +291,7 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
     const open =
       onOpenPill !== undefined && pill.slot !== undefined
         ? {
-            label: format({ id: "chat.toolCall.workflow.timeline.openAgent" }, { name: label }),
+            label: format({ id: "chat.toolCall.workflow.timeline.openAgent" }, { name: fullLabel }),
             onOpen: () => onOpenPill(pill),
             testId: "workflow-timeline-pill-open",
           }
@@ -305,6 +312,7 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
         avatarIndex={pill.avatarIndex}
         laneClass={pill.laneClass}
         name={label}
+        {...(compactRow ? { size: "row", title: laneDisplayName(pill.lane, format) } : {})}
         status={pill.status}
         {...(open === undefined ? {} : { open })}
       />
@@ -343,7 +351,7 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
           ref={attachScroller}
           style={mask}
         >
-          <div className="relative" style={{ height, width }}>
+          <div className="relative" style={{ height, width: compactRow ? "100%" : width }}>
             {/* 补全的框（在一切之下）与头（在头那一行）：docs/dynamic-workflow/presentation.md「Holes on the timeline」。 */}
             <WorkflowTimelineFills
               active={fillTarget.active}
@@ -362,7 +370,8 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
               layout={layout}
               markerId={markerId}
               stations={model.stations}
-              width={width}
+              width={rowWidth}
+              {...(compactRow ? { stationPitch: rowWidth / n } : {})}
             >
               {/* 有带时轨道也进这一层 SVG：分叉与汇合是曲线，DOM 的 border 画不出来。 */}
               {banded ? (
@@ -397,6 +406,7 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
             ) : (
               <WorkflowStationRow
                 draft={draft}
+                compact={compactRow}
                 folded={folded}
                 fresh={fresh}
                 fullNames={fullNames}
@@ -405,7 +415,7 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
                 stations={stations}
                 titleOf={stationTitle}
                 top={top}
-                width={width}
+                width={rowWidth}
                 {...(slide === undefined ? {} : { slide })}
                 {...(model.tailStub === undefined ? {} : { tailStub: model.tailStub })}
                 {...(onSelectStation === undefined ? {} : { onSelectStation })}
@@ -430,9 +440,9 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
                   style={{
                     ...slideStyle(i, slide),
                     gap: PILL_GAP,
-                    left: stationX(i, inset),
-                    top: pillsTop,
-                    width: STATION_WIDTH,
+                    left: compactRow ? `${i * 100 / n}%` : stationX(i, inset),
+                    top: pillsTop + (compactRow ? 48 : 0),
+                    width: compactRow ? `${100 / n}%` : STATION_WIDTH,
                   }}
                 >
                   {roster === undefined ? (

@@ -9,6 +9,7 @@ import {
 } from "@/v4/ConversationDraftSuggestedPrompts.js";
 import { resolveDraftSuggestedPromptText } from "@/v4/draftSuggestedPromptItems.js";
 import { featureSuggestedPrompts } from "@/v4/featureSuggestedPrompts.js";
+import { useDev } from "@/dev/DevContext.js";
 
 type Props = {
   className?: string;
@@ -24,6 +25,7 @@ export function ConversationDraftSuggestedPromptsContainer({
   onOpenAutomations,
 }: Props) {
   const { intl, locale } = useZCodeIntl();
+  const dev = useDev();
   const handleSelect = (item: DraftSuggestedPromptItem) => {
     useZCodeSessionStore
       .getState()
@@ -33,6 +35,8 @@ export function ConversationDraftSuggestedPromptsContainer({
         workspaceIdentity,
       );
   };
+  // 提案草稿用于澄清需求，不提供运行仓库、测试或编码调度快捷入口。
+  if (dev?.selection.proposalDraftId) return null;
 
   return (
     <div

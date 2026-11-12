@@ -34,8 +34,10 @@ export function StationHead({
   onSelect,
   station,
   title,
+  compact = false,
 }: {
   station: TimelineStation;
+  compact?: boolean;
   name: string;
   /** 草稿里跟着笔走的光标；其余时候 null。 */
   caret: ReactNode;
@@ -52,7 +54,7 @@ export function StationHead({
     <>
       <span
         className={cn(
-          "truncate text-ui-caption font-medium",
+          compact ? "whitespace-normal break-words text-center text-ui-caption font-medium" : "truncate text-ui-caption font-medium",
           pending ? "text-foreground-subtle" : "text-foreground",
         )}
       >
@@ -73,6 +75,7 @@ export function StationHead({
         "wf-station flex h-6 min-w-0 shrink items-center gap-2 rounded-md text-left",
         foldClass,
         station.selected && "bg-selected px-2 text-foreground ring-1 ring-border",
+        compact && "h-auto flex-col gap-0 px-1",
       )}
       data-testid="workflow-timeline-station-head"
       title={title}
@@ -87,6 +90,7 @@ export function StationHead({
         "wf-station wf-station-open flex h-6 min-w-0 shrink cursor-pointer items-center gap-2 rounded-md text-left outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40",
         foldClass,
         station.selected && "bg-selected px-2 text-foreground ring-1 ring-border",
+        compact && "h-auto flex-col gap-0 px-1",
       )}
       onClick={onSelect}
       title={title}
@@ -101,6 +105,7 @@ export function StationHead({
 
 interface RowProps {
   stations: readonly TimelineStation[];
+  compact?: boolean;
   /** 补全的生长（`use-fill-growth.ts`）：下标大于 `after` 的站带 `wf-slide`，从 −shift 滑到位。 */
   slide?: FillSlide;
   /** 站的全名，按下标；草稿里笔只写出前几个字。 */
@@ -116,6 +121,7 @@ interface RowProps {
  */
 export function WorkflowStationRow({
   draft,
+  compact = false,
   folded,
   fresh,
   fullNames,
@@ -142,7 +148,7 @@ export function WorkflowStationRow({
 }) {
   const n = stations.length;
   return (
-    <div className="absolute left-0 flex" style={{ height: RAIL_ROW, top, width }}>
+    <div className="absolute left-0 flex" style={{ height: compact ? 72 : RAIL_ROW, top, width }}>
       {stations.map((station, i) => {
         const rail = rails.get(railKey(i, i + 1));
         const stream = rail?.kind === "stream";
@@ -157,6 +163,7 @@ export function WorkflowStationRow({
             className={cn(
               "flex h-6 min-w-0 items-center",
               station.ghost && "wf-ghost",
+              compact && "relative h-auto flex-1 flex-col gap-2",
               slideClass(i, slide),
             )}
             data-fill={station.fill}
@@ -168,7 +175,7 @@ export function WorkflowStationRow({
             key={station.id}
             style={{
               ...slideStyle(i, slide),
-              width: !last
+              width: compact ? `${100 / n}%` : !last
                 ? STATION_PITCH
                 : STATION_WIDTH + (tailStub === undefined ? 0 : TAIL_STUB),
             }}
@@ -179,6 +186,7 @@ export function WorkflowStationRow({
                 stationLampClass(station.status, station.hole),
                 "mx-3",
                 foldClass,
+                compact && "mt-[7px]",
                 landing && "wf-land",
               )}
               data-lamp={
@@ -188,6 +196,7 @@ export function WorkflowStationRow({
               }
             />
             <StationHead
+              compact={compact}
               caret={
                 penHere ? (
                   // 光标跟着笔：写字时稳住，追上流时闪烁。
@@ -215,6 +224,7 @@ export function WorkflowStationRow({
                 aria-hidden
                 className={cn(
                   "wf-ink relative h-0 flex-1 rounded-full border-t border-foreground-subtlest",
+                  compact && "absolute top-3",
                   // 流轨（presentation.md「Stream rails」）：线在正中让出 chevron 的缺口（`::before`
                   // 画线、border 透明），至少 42px 宽，三枚两侧各留得下一段线；它从不叠行进的光。
                   stream ? "wf-rail-stream min-w-[42px]" : "min-w-3",
@@ -231,7 +241,7 @@ export function WorkflowStationRow({
                 data-rail-kind={rail?.kind}
                 data-rail-to={i + 1}
                 data-testid="workflow-timeline-rail"
-                style={{ marginLeft: 10, marginRight: -6 }}
+                style={compact ? { left: "calc(50% + 8px)", width: "calc(100% - 16px)" } : { marginLeft: 10, marginRight: -6 }}
               >
                 {stream ? (
                   <StreamChevronsBox ink={rail.ink} style={{ left: "50%", top: -0.5 }} />

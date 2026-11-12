@@ -6,6 +6,7 @@ import type { ProviderSettingsProviderView, RegistryModelConfigObject } from "@z
 import { createPrototypeModelSettingsView } from "./model-settings.js";
 import { createPrototypeEvent } from "./events.js";
 import { getPrototypeWorkflow } from "./workflow.js";
+import { prototypeSkillDesignBinding } from "./skill-design.js";
 
 export const PROTOTYPE_MODEL_SELECTION: ModelSelection = { providerId: "prototype-opencode-go", modelId: "Beam Free", options: { reasoningLevel: "standard" } };
 export const PROTOTYPE_SETTINGS: AppSettings = {
@@ -45,6 +46,7 @@ export function createPrototypeSettingsServices(sessionWorkspaces: Map<string, s
   };
   const bindingFor = (sessionId?: string) => {
     if (!sessionId) return undefined;
+    if (sessionId.startsWith("prototype-skill-design:")) return prototypeSkillDesignBinding(sessionId);
     for (const project of getPrototypeWorkflow().projects) {
       const binding = getPrototypeWorkflow({ projectId: project.id }).sessions.find(ref => ref.sessionId === sessionId)?.modelConfig;
       if (binding) return binding;

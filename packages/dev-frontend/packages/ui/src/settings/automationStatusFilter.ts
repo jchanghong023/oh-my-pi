@@ -1,4 +1,5 @@
 /* Automations 列表按卡片状态徽章分组筛选。 */
+import type { ZCodeAutomation, ZCodeAutomationRun } from "@zcode/shared";
 import {
   hasAutomationFailureState,
   resolveAutomationStatusKind,
@@ -38,5 +39,27 @@ export function filterAutomationsByStatus<T extends AutomationFilterLike>(
   return automations.filter(
     (automation) => resolveAutomationStatusFilterKind(automation) === filter,
   );
+}
+
+export type PrototypeAutomationStatus = "waiting" | "inProgress" | "paused" | "completed" | "failed";
+export const PROTOTYPE_AUTOMATION_STATUS_FILTERS = ["all", "waiting", "inProgress", "paused", "completed", "failed"] as const;
+export const PROTOTYPE_AUTOMATION_STATUS_LABELS = {
+  all: "全部",
+  waiting: "已启用 · 等待执行",
+  inProgress: "执行中",
+  paused: "已暂停",
+  completed: "已完成",
+  failed: "失败",
+} as const;
+
+/** 启用只表示允许调度；只有运行记录明确报告 running 才表示正在执行。 */
+export function resolvePrototypeAutomationStatus(
+  automation: ZCodeAutomation,
+  runs: readonly ZCodeAutomationRun[] = [],
+): PrototypeAutomationStatus {
+  const status = resolveAutomationStatusKind(automation);
+  if (hasAutomationFailureState(automation)) return "failed";
+  if (status === "paused" || status === "completed") return status;
+  return runs.some(run => run.outcome === "running") ? "inProgress" : "waiting";
 }
 
