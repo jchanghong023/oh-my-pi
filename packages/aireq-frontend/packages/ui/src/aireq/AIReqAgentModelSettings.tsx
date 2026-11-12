@@ -25,7 +25,7 @@ export function AIReqAgentModelSettings({ onDraftActionsChange }: { onDraftActio
   try {
    await source.models!.save(draft);
    setSaved(structuredClone(source.models!.read()));
-   setMessage(zh ? "我的模型配置已保存" : "My model configuration saved");
+   setMessage(zh ? "模型配置已保存" : "Model configuration saved");
    return true;
   } catch (cause) { setMessage(cause instanceof Error ? cause.message : String(cause)); return false; }
   finally { setSaving(false); }
@@ -51,11 +51,10 @@ export function AIReqAgentModelSettings({ onDraftActionsChange }: { onDraftActio
 	return (
 		<div className="space-y-6" data-testid="agent-model-settings">
 			<p className="text-ui-base leading-6 text-foreground-subtle">
-				{zh ? "为 AIReq 核心 Agent 分别选择模型与思考强度。未单独指定模型时，跟随默认模型。" : "Choose a model and reasoning level for each core AIReq Agent. Agents without a model override follow the default model."}
+				{zh ? "为各 Agent 设置模型与思考强度，选择“跟随默认”时使用默认模型。" : "Set a model and reasoning level for each Agent. Choose “Follow default” to use the default model."}
 			</p>
-			<AIReqPersonalConfigScope />
-      {!canManage && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可以查看全部模型和 Agent 配置；仅启动此 OMP Web 的人可修改。</p>}
-            <p className="text-ui-sm leading-6 text-foreground-subtle" data-testid="agent-model-effective-scope">{zh ? "保存后用于之后新建的角色会话，包括新阶段和返工新轮次。已有会话与历史消息保留创建时的模型和思考强度；不会自动切换运行中的 Agent。自由会话沿用原模型设置方式。" : "Saved settings apply to newly created role sessions, including new stages and rework rounds. Existing sessions and history keep their original model and reasoning level. Free conversations retain their existing model controls."}</p>
+			<AIReqPersonalConfigScope scopeLabel={zh ? "此配置由共享 Web 启动者管理，其他人只读。" : "The person who started this shared Web manages these settings. Others have read-only access."} />
+            <p className="text-ui-sm leading-6 text-foreground-subtle" data-testid="agent-model-effective-scope">{zh ? "保存后对新建会话生效，已有会话保留原配置。" : "Saved settings apply to new sessions. Existing sessions keep their original configuration."}</p>
 			<section className="space-y-3" aria-labelledby="agent-default-model-title">
 				<h3 id="agent-default-model-title" className="text-ui-base font-medium">{zh ? "默认模型" : "Default model"}</h3>
 				<SettingsGroupCard>
@@ -112,22 +111,12 @@ export function AIReqAgentModelSettings({ onDraftActionsChange }: { onDraftActio
 						);
 					})}
 				</SettingsGroupCard>
-				<p className="text-ui-sm leading-6 text-foreground-subtle">
-					{zh ? "方案 Agent 负责提案技术方案、SR 依赖及建议排期；需求分析 Agent 根据代码证据报告进度、遗留问题与合入情况。两者均不编码、不修复代码；AIReq 不提供 IR 验收或归档 PR 流水线，实际开发、测试与代码评审在平台外完成。" : "The Solution Agent handles proposal design, SR dependencies and suggested dates. The Requirement Analysis Agent reports progress, outstanding issues and merge evidence. Neither writes or fixes code. AIReq has no IR acceptance or archive-PR pipeline; development, testing and code review happen outside the platform."}
-				</p>
 			</section>
-			<div className="flex flex-wrap items-center justify-between gap-3">
-				{source.models!.samples && <Button variant="ghost" disabled={!canManage} onClick={() => { setDraft(source.models!.samples!()); setMessage(""); }}>{zh ? "恢复演示配置" : "Restore demo configuration"}</Button>}
-				<div className="flex items-center gap-2">
-					{dirty && <span className="text-ui-sm text-foreground-subtle">{zh ? "有未保存的更改" : "Unsaved changes"}</span>}
+			<div className="flex flex-wrap items-center justify-end gap-2">
 					<Button variant="outline" disabled={!dirty || !canManage} onClick={() => { setDraft(structuredClone(saved)); setMessage(""); }}>{zh ? "取消" : "Cancel"}</Button>
 					<Button disabled={!dirty || !canManage || saving} onClick={() => { void save(); }}>{zh ? "保存配置" : "Save configuration"}</Button>
-				</div>
 			</div>
 			<p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
-			{source.provenance.kind === "sample" && <p className="text-ui-sm leading-6 text-foreground-subtle">
-				{zh ? "原型演示：模型及思考强度为样例选项，未连接真实模型。保存于后端内存，刷新保留，后端重启恢复初始样例。" : "Prototype: sample models only. Changes stay in backend memory across refreshes and reset when the backend restarts."}
-			</p>}
 		</div>
 	);
 }

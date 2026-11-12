@@ -20,7 +20,6 @@ export function AIReqPersonalizationSettings({ onDraftActionsChange }: { onDraft
 	const [draft, setDraft] = useState(() => source.prompts!.read().draft);
 	const [selected, setSelected] = useState("requirements");
 	const [message, setMessage] = useState("");
-	const selectedAgent = agents.find(agent => agent.id === selected);
 	const dirtyCount = agents.filter(agent => draft[agent.id] !== saved[agent.id]).length;
 	const encoder = new TextEncoder();
 	const oversized = agents.filter(agent => encoder.encode(draft[agent.id] ?? "").length > USER_INSTRUCTIONS_MAX_BYTES);
@@ -36,7 +35,7 @@ export function AIReqPersonalizationSettings({ onDraftActionsChange }: { onDraft
   try {
    await source.prompts!.save(draft);
    setSaved({ ...source.prompts!.read().saved });
-   setMessage(zh ? "追加提示词已保存到我的 OMP 配置。" : "Appended instructions saved to my OMP configuration.");
+   setMessage(zh ? "追加提示词已保存。" : "Appended instructions saved.");
    return true;
   } catch (cause) { setMessage(cause instanceof Error ? cause.message : String(cause)); return false; }
   finally { setSaving(false); }
@@ -56,16 +55,14 @@ export function AIReqPersonalizationSettings({ onDraftActionsChange }: { onDraft
 	useEffect(() => () => onDraftActionsChange?.(null), [onDraftActionsChange]);
 	return (
 		<div className="space-y-5" data-testid="aireq-personalization-settings">
-			<p className="text-ui-base leading-6 text-foreground-subtle">{zh ? "为每个 AIReq Agent 追加系统提示词，补充你自己的表达偏好和工作约定。追加内容不替换 Agent 内置指令。" : "Append system instructions for each AIReq Agent to describe your own preferences and working conventions. These additions do not replace built-in instructions."}</p>
-			<AIReqPersonalConfigScope />
-      {!canManage && <p className="text-ui-sm text-foreground-subtle">当前账号只读，可切换 Agent 查看并复制提示词；仅启动此 OMP Web 的人可修改。</p>}
+			<p className="text-ui-base leading-6 text-foreground-subtle">{zh ? "为各 Agent 追加表达偏好和工作约定，不替换内置指令。" : "Add preferences and working conventions for each Agent without replacing built-in instructions."}</p>
+			<AIReqPersonalConfigScope scopeLabel={zh ? "此配置由共享 Web 启动者管理，其他人只读。" : "The person who started this shared Web manages these settings. Others have read-only access."} />
 			<div className="space-y-2">
 				<Label htmlFor="personalization-agent">{zh ? "选择 Agent" : "Select Agent"}</Label>
 				<Select value={selected} onValueChange={value => { setSelected(value); setMessage(""); }}>
-					<SelectTrigger id="personalization-agent" size="lg" className="w-full sm:w-72" aria-describedby="personalization-agent-description"><SelectValue /></SelectTrigger>
-					<SelectContent>{agents.map(agent => <SelectItem key={agent.id} value={agent.id}>{zh ? agent.name : agent.nameEn}{draft[agent.id] !== saved[agent.id] ? zh ? " · 未保存" : " · Unsaved" : ""}</SelectItem>)}</SelectContent>
+					<SelectTrigger id="personalization-agent" size="lg" className="w-full sm:w-72"><SelectValue /></SelectTrigger>
+					<SelectContent>{agents.map(agent => <SelectItem key={agent.id} value={agent.id}>{zh ? agent.name : agent.nameEn}</SelectItem>)}</SelectContent>
 				</Select>
-				<p id="personalization-agent-description" className="text-ui-sm leading-6 text-foreground-subtle">{zh ? selectedAgent?.description : selectedAgent?.descriptionEn}</p>
 			</div>
 			<div className="space-y-2">
 				<Label htmlFor="agent-system-prompt-append">{zh ? "追加系统提示词" : "Append system instructions"}</Label>
@@ -82,18 +79,16 @@ export function AIReqPersonalizationSettings({ onDraftActionsChange }: { onDraft
 					onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); save(); } }}
 				/>
 				<div className="flex flex-wrap items-start justify-between gap-2 text-ui-sm text-foreground-subtle">
-					<p id="agent-prompt-help">{zh ? "留空可清除你自己的追加内容，保留内置指令。" : "Leave empty to clear your own additions and retain built-in instructions."}</p>
+					<p id="agent-prompt-help">{zh ? "留空则不追加指令。" : "Leave empty to add no instructions."}</p>
 					<span id="agent-prompt-size">{(currentBytes / 1024).toFixed(1)} / {USER_INSTRUCTIONS_MAX_BYTES / 1024} KB</span>
 				</div>
 			</div>
 			{oversized.length > 0 && <p role="alert" className="text-ui-base text-destructive">{zh ? "以下 Agent 的追加提示词超过大小限制，请缩短后保存：" : "Shorten these Agents' appended instructions before saving: "}{oversized.map(agent => zh ? agent.name : agent.nameEn).join("、")}</p>}
 			<SettingsFormActions>
-				{dirtyCount > 0 && <span className="text-ui-sm text-foreground-subtle">{zh ? `${dirtyCount} 个 Agent 有未保存的更改` : `${dirtyCount} Agents have unsaved changes`}</span>}
 				<Button size="lg" disabled={!canSave} onClick={save}>{zh ? "保存" : "Save"}</Button>
 				<Button variant="ghost" size="lg" disabled={!dirtyCount || !canManage} onClick={() => { setDraft({ ...saved }); source.prompts!.updateDraft(saved); setMessage(""); }}>{zh ? "取消" : "Cancel"}</Button>
 			</SettingsFormActions>
 			<p role="status" className="text-ui-base text-foreground-subtle">{message}</p>
-			{source.provenance.kind === "sample" && <p className="text-ui-sm leading-6 text-foreground-subtle">{zh ? "原型演示：保存于后端内存，不写入真实 OMP 配置目录，也不启动 Agent。刷新保留，后端重启恢复样例。" : "Prototype: saving changes backend memory only, across refreshes. Backend restart restores samples; no real OMP files or Agents are affected."}</p>}
 		</div>
 	);
 }

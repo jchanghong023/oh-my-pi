@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label.js";
 import { Badge } from "@/components/ui/badge.js";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
-import { SettingsGroupCard, SettingsBadge } from "@/settings/SettingsPageParts.js";
+import { SettingsGroupCard } from "@/settings/SettingsPageParts.js";
 import type { AIReqProject, AIReqWorkflowView } from "./types.js";
 import { useAIReqDataSource } from "./data-source.js";
 import { getEmployeeId } from "./identity.js";
@@ -47,7 +47,7 @@ export function AIReqProjectSettings() {
   const openRelease = (id: string) => { setReleaseProjectId(id); setReleaseTitle(""); setReleaseError(""); setReleaseOpen(true); };
   return (
     <section className="space-y-6" data-testid="aireq-project-settings">
-      <div className="space-y-2"><SettingsBadge>{source.provenance.kind === "sample" ? "团队共享 · 演示数据" : "OMP 项目数据"}</SettingsBadge><p className="text-ui-sm leading-6 text-foreground-subtle">项目只配置 Git 仓库和默认分支。平台按需自动拉取仓库，内部工作目录由平台管理，无需配置本地目录或开发目录。保存设置不触发拉取、创建分支或推送。</p></div>
+      <p className="text-ui-sm leading-6 text-foreground-subtle">项目只配置 Git 仓库和默认分支。平台按需自动拉取仓库，内部工作目录由平台管理，无需配置本地目录或开发目录。保存设置不触发拉取、创建分支或推送。</p>
       <div className="flex flex-wrap items-start justify-between gap-3"><div className="space-y-1"><p className="text-ui-base text-foreground-subtle">所有人查看同一份项目与 Release。当前工号：{employeeId}。</p><p className="text-ui-sm text-foreground-subtle">{projects.length} 个项目 · {releaseCount} 个 Release</p></div>{canAdd && <Button onClick={() => openProject()}><Plus className="size-4" />添加项目</Button>}</div>
       {projectViews.map(({ project, view }) => (
         <SettingsGroupCard key={project.id}>
@@ -66,7 +66,7 @@ export function AIReqProjectSettings() {
               const groups = view.groups.filter(group => group.releaseId === release.id);
               const draftCount = view.drafts.filter(group => group.releaseId === release.id).length;
               const srCount = groups.reduce((count, group) => count + group.srIds.length, 0);
-              return <li key={release.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"><div className="min-w-0 space-y-1"><p className="break-words text-ui-base font-medium">{release.title}</p><p className="text-ui-sm text-foreground-subtle">{groups.length} 个 IR · {srCount} 个 SR{draftCount > 0 && ` · ${draftCount} 个草稿`}</p><p className="text-ui-sm text-foreground-subtle">沿用项目 Git 仓库 · 默认分支 {project.defaultBranch}</p></div><Badge variant="outline">{groups.length ? "已有需求" : "待规划"}</Badge></li>;
+              return <li key={release.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"><div className="min-w-0 space-y-1"><p className="break-words text-ui-base font-medium">{release.title}</p><p className="text-ui-sm text-foreground-subtle">{groups.length} 个 IR · {srCount} 个 SR{draftCount > 0 && ` · ${draftCount} 个需求提案`}</p><p className="text-ui-sm text-foreground-subtle">沿用项目 Git 仓库 · 默认分支 {project.defaultBranch}</p></div><Badge variant="outline">{groups.length ? "已有需求" : "待规划"}</Badge></li>;
             })}</ul> : <div className="space-y-2 px-4 py-6 text-ui-base text-foreground-subtle"><p>尚未添加 Release。创建第一个 Release，开始整理本项目的需求。</p><Button variant="outline" disabled={!source.capabilities.workflowCommands.includes("createRelease")} onClick={() => openRelease(project.id)}>添加第一个 Release</Button></div>}
           </article>
         </SettingsGroupCard>

@@ -4,7 +4,7 @@ import { AIReqPersonalConfigScope } from "@/aireq/AIReqPersonalConfigScope.js";
 import { AIReqProjectSettings } from "@/aireq/AIReqWorkbench.js";
 import { AIReqPersonalizationSettings } from "@/aireq/AIReqPersonalizationSettings.js";
 import { AIReqAgentModelSettings, type AIReqModelDraftActions } from "@/aireq/AIReqAgentModelSettings.js";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog.js";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog.js";
 import { useAIReq } from "@/aireq/AIReqContext.js";
 import { ArrowLeft, type LucideIcon } from "lucide-react";
 import {
@@ -661,12 +661,14 @@ export function SettingsPage({
                 </div>
               </SettingsBreadcrumbProvider>
               <Dialog open={pendingNavigation !== null} onOpenChange={open => { if (!open) setPendingNavigation(null); }}>
-                <DialogContent>
-                  <DialogHeader><DialogTitle>{activeSection === "personalization" ? "个性化有未保存的更改" : "模型设置有未保存的更改"}</DialogTitle></DialogHeader>
-                  <p className="text-ui-base text-foreground-subtle">离开前保存配置，或明确丢弃本次修改。取消将继续编辑，不写入配置。</p>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>保存更改？</DialogTitle>
+                    <DialogDescription>{activeSection === "personalization" ? "个性化设置尚未保存，离开前是否保存？" : "模型设置尚未保存，离开前是否保存？"}</DialogDescription>
+                  </DialogHeader>
                   <DialogFooter>
-                    <Button variant="outline" onClick={() => setPendingNavigation(null)}>取消，继续编辑</Button>
-                    <Button variant="ghost" onClick={() => { modelDraftActions?.discard(); setPendingNavigation(null); pendingNavigation?.(); }}>丢弃并离开</Button>
+                    <Button variant="outline" onClick={() => setPendingNavigation(null)}>取消</Button>
+                    <Button variant="ghost" onClick={() => { modelDraftActions?.discard(); setPendingNavigation(null); pendingNavigation?.(); }}>丢弃更改</Button>
                     <Button disabled={modelDraftActions?.canSave === false} onClick={async () => { if (await modelDraftActions?.save()) { setPendingNavigation(null); pendingNavigation?.(); } }}>保存并离开</Button>
                   </DialogFooter>
                 </DialogContent>

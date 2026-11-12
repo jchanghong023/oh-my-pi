@@ -210,3 +210,8 @@ Chromium151深色桌面实际核对Issue分析、Issue进度、新建Issue、需
 用户Firefox堆栈指向AnimatedSidePanePanel，错误为item不存在时访问id。入口生成器仍返回dev-materials，但入口定义及标签模型已改aireq-materials，产生undefined项；同时标签标题与图标判断也残留旧标识。统一三处共享前端文件中的标识为aireq-materials，不以过滤空项隐藏入口或改变业务权限。
 
 Chromium151深色桌面实际打开新建提案，点击右侧新增标签进入入口页，“只读材料”入口正确显示并可打开；浏览器pageerror为0，未出现区域错误边界，已查看入口截图。旧标识在AIReq前端源码中检索为0；宿主类型检查5903文件通过（不等同整个UI项目类型验收）。未运行测试套件，未在用户Windows／Firefox环境复测。
+
+
+## 插件设置的只读目录
+
+AIReq 和 WebGUI 的插件设置由空态恢复为 ZCode 3.18.0 内置插件静态目录，复用 PluginStoreAvatar／PluginIcon、40px 图标、原生字阶与单列管理行。条目来自固定官方提交 `b95ebaffeab641907b38652f45c1502bd762972d` 的公开 listing，静态展示名称、简介和数量，允许本地搜索；不调用市场、安装库存或后端。设计及交互视图使用同源本地图标，缺失图标保留原生兜底。所有修改、刷新、添加及浏览市场动作禁用，不恢复插件执行能力；子智能体保持原先纯展示空态。

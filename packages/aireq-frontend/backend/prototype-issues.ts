@@ -1,3 +1,4 @@
+import { readPrototypeAgentModelBinding } from "../packages/ui/src/aireq/mock/agent-models.js";
 import { ISSUE_TYPES, type AIReqIssue, type AIReqIssueInput, type AIReqIssueScope, type AIReqIssueServices, type AIReqIssueSnapshot } from "../packages/ui/src/aireq/issues.js";
 import { getPrototypeWorkflow } from "../packages/ui/src/aireq/mock/workflow.js";
 import { getEmployeeId, isEmployeeId } from "../packages/ui/src/aireq/identity.js";
@@ -49,7 +50,7 @@ export function createPrototypeIssues(): AIReqIssueServices {
       issue.report = "当前为后端内存样例，尚未读取真实开发分支、代码差异或合入记录。缺少代码证据，保持现有进度。";
       issue.remaining = issue.merged ? ["样例分支已合入，等待人工确认"] : ["等待开发分支的代码证据", "等待合入默认分支后人工确认"];
       issue.updatedAt = startedAt;
-      value.runs.unshift({ id: crypto.randomUUID(), issueId: issue.id, title: issue.title, startedAt, status: "succeeded", summary: issue.report });
+      value.runs.unshift({ modelConfig: readPrototypeAgentModelBinding("issue-analysis"), id: crypto.randomUUID(), issueId: issue.id, title: issue.title, startedAt, status: "succeeded", summary: issue.report });
     }
     value.runs = value.runs.slice(0, 200);
     value.nextRunAt = value.enabled ? new Date(Date.now() + value.intervalMinutes * 60_000).toISOString() : undefined;
