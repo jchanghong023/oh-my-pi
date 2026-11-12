@@ -40,6 +40,7 @@ export function DevReviewNavigation() {
  const current = agents.find(agent => agent.id === selected)!;
  const choose = (id: string) => dev.select({ ...dev.selection, reviewAgent: id as DevReviewAgentId });
  const independentDone = agents.filter(agent => agent.id !== "summary" && agent.status === "completed").length;
+ const reviewDescription = `${current.name} · ${current.session.modelConfig?.modelName ?? "模型未配置"} · 独立评审 ${independentDone}/3 · ${requirementsReviewCurrent(group) ? review.humanDecision ? `已由 ${review.humanDecision.employeeId} 人工通过` : "综合后由人工判断" : "旧版本，仅供历史查看"}`;
  const stations: TimelineStation[] = agents.map((agent, index) => ({
   id: agent.id, naming: { id: agent.id, name: agent.id === "summary" ? "综合意见" : agent.name }, visited: agent.status !== "pending", rounds: 1, onLoop: false, track: index < 3 ? index : 0,
   status: agent.status === "completed" ? "done" : agent.status === "failed" ? "failed" : agent.status,
@@ -66,11 +67,11 @@ export function DevReviewNavigation() {
    }}>{(["summary", "a", "b", "c"] as const).map(id => {
     const agent = agents.find(item => item.id === id)!;
     const label = id === "summary" ? "综合意见" : agent.name;
-    return <ControlHintTooltip key={id} title={`${label} · ${agent.session.modelConfig?.modelName ?? "模型未配置"}`}><span className="inline-flex"><TabsTrigger value={id} aria-label={label} className="h-9 w-9 flex-none p-1.5 data-[state=active]:bg-selected data-[state=active]:ring-1 data-[state=active]:ring-border" data-testid={`review-avatar-${id}`}><WorkflowAgentFace name={agent.name} avatarIndex={agents.findIndex(item => item.id === id) + 1} status={agent.status === "completed" ? "done" : agent.status} className="size-6" /></TabsTrigger></span></ControlHintTooltip>;
+    return <ControlHintTooltip key={id} title={`${label} · ${agent.session.modelConfig?.modelName ?? "模型未配置"}`}><span className="inline-flex"><TabsTrigger value={id} aria-label={label} className="h-9 w-9 flex-none p-1.5 data-[state=active]:bg-selected data-[state=active]:ring-1 data-[state=active]:ring-border" data-testid={`review-avatar-${id}`}><WorkflowAgentFace name={agent.name} avatarIndex={agents.findIndex(item => item.id === id) + 1} status={agent.status === "completed" ? "done" : agent.status} showCompletionMark={agent.status === "completed"} className="size-6" /></TabsTrigger></span></ControlHintTooltip>;
    })}</TabsList></Tabs>
    <Button variant="ghost" size="sm" className="shrink-0 gap-1.5" aria-label="展开评审工作流" title="展开评审工作流" onClick={() => setExpanded(true)}><GitFork className="size-4" />评审流程</Button>
   </div>
-  <p className="truncate text-ui-xs text-foreground-subtle" title={current.session.modelConfig?.modelName}>{current.name} · {current.session.modelConfig?.modelName} · 独立评审 {independentDone}/3 · {requirementsReviewCurrent(group) ? review.humanDecision ? `已由 ${review.humanDecision.employeeId} 人工通过` : "综合后由人工判断" : "旧版本，仅供历史查看"}</p>
+  <ControlHintTooltip title={reviewDescription}><p tabIndex={0} className="truncate rounded-sm text-ui-sm text-foreground-subtle outline-none focus-visible:ring-2 focus-visible:ring-ring/50" data-testid="review-session-description">{reviewDescription}</p></ControlHintTooltip>
   <Dialog open={expanded} onOpenChange={setExpanded}><DialogContent className="flex max-h-[85dvh] flex-col overflow-auto sm:max-w-6xl"><DialogHeader><DialogTitle>需求评审工作流</DialogTitle><DialogDescription>三个模型并行只读审查同一版需求 → 第四个 Agent 综合意见 → 人工决定。评审结论以当前版本的报告为准。</DialogDescription></DialogHeader>
    <WorkflowTimeline model={diagram} onOpenPill={pill => { choose(pill.key); setExpanded(false); }} onSelectStation={station => { if (station.id !== "human") { choose(station.id); setExpanded(false); } }} />
   </DialogContent></Dialog>

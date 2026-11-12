@@ -1,5 +1,7 @@
+import { WorkspaceSidebarToolbar } from "@/WorkspaceSidebarToolbar.js";
+import type { WorkspaceSidebarToolbarProps } from "@/WorkspaceSidebarToolbar.js";
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, FileText, PanelLeft, PanelRightClose, Search } from "lucide-react";
+import { CheckCircle2, CircleDashed, CircleDot, ClipboardCheck, GitMerge, ChevronDown, ChevronLeft, ChevronRight, FileText, PanelRightClose, Search } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Badge } from "@/components/ui/badge.js";
 import { Input } from "@/components/ui/input.js";
@@ -25,14 +27,29 @@ import type { DevRequirementGroup, DevSystemRequirement } from "./types.js";
 import { BranchCopy } from "./BranchCopy.js";
 import { DevEmployeePicker } from "./DevEmployeePicker.js";
 
-function ProgressValue({ value, label, status, source }: { value: number; label: string; status?: DevProgressStatus; source?: string }) {
-  const indicator = <Progress value={value} aria-label={`${label}进度`} aria-valuenow={value} aria-valuemin={0} aria-valuemax={100} aria-valuetext={progressLabel(value)} className="h-1 min-w-12 flex-1" />;
-  const percent = <span className="shrink-0 text-right text-ui-sm"><span className="font-mono tabular-nums">{progressLabel(value)}</span>{source && <span className="ml-2 text-ui-xs text-foreground-subtle">{source}</span>}</span>;
-  return status ? <div className="min-w-28 space-y-1.5"><div className="flex items-center justify-between gap-2"><Badge variant="outline" className="whitespace-nowrap">{status}</Badge>{percent}</div>{indicator}</div> : <div className="flex min-w-28 items-center gap-2">{indicator}{percent}</div>;
-}
-interface FormalNavigationProps { navigationOpen: boolean; onToggleNavigation(): void }
+// 复用主题语义色；待合入／待验收表示等待人工处理，不表示异常或失败。
+const progressAppearance = {
+  待开发: { badge: "bg-tag text-foreground-subtle", indicator: "bg-foreground-subtle", icon: CircleDashed },
+  开发中: { badge: "bg-progress-surface text-progress-surface-foreground", indicator: "bg-progress-surface-foreground", icon: CircleDot },
+  待合入: { badge: "bg-warning-surface text-warning-surface-foreground", indicator: "bg-warning", icon: GitMerge },
+  待验收: { badge: "bg-warning-surface text-warning-surface-foreground", indicator: "bg-warning", icon: ClipboardCheck },
+  已完成: { badge: "bg-success-surface text-success-surface-foreground", indicator: "bg-success", icon: CheckCircle2 },
+} satisfies Record<DevProgressStatus, { badge: string; indicator: string; icon: typeof CircleDot }>;
 
-export function DevFormalTable({ navigationOpen, onToggleNavigation }: FormalNavigationProps) {
+function ProgressStatusBadge({ status }: { status: DevProgressStatus }) {
+  const appearance = progressAppearance[status];
+  const Icon = appearance.icon;
+  return <Badge variant="secondary" className={`gap-1 whitespace-nowrap ${appearance.badge}`} data-progress-status={status}><Icon aria-hidden="true" />{status}</Badge>;
+}
+
+function ProgressValue({ value, label, status, source, showStatus = true }: { value: number; label: string; status: DevProgressStatus; source?: string; showStatus?: boolean }) {
+  const indicator = <Progress value={value} aria-label={`${label}进度`} aria-valuenow={value} aria-valuemin={0} aria-valuemax={100} aria-valuetext={`${status} · ${progressLabel(value)}`} className="h-1 min-w-12 flex-1" indicatorClassName={progressAppearance[status].indicator} />;
+  const percent = <span className="shrink-0 text-right text-ui-sm"><span className="font-mono tabular-nums">{progressLabel(value)}</span>{source && <span className="ml-2 text-ui-xs text-foreground-subtle">{source}</span>}</span>;
+  return showStatus ? <div className="min-w-28 space-y-1.5"><div className="flex items-center justify-between gap-2"><ProgressStatusBadge status={status} />{percent}</div>{indicator}</div> : <div className="flex min-w-28 items-center gap-2">{indicator}{percent}</div>;
+}
+interface FormalNavigationProps { navigationOpen: boolean; onToggleNavigation(): void; toolbar: WorkspaceSidebarToolbarProps }
+
+export function DevFormalTable({ navigationOpen, toolbar }: FormalNavigationProps) {
   const source = useDevDataSource();
   const dev = useDev()!;
   const [query, setQuery] = useState("");
@@ -109,7 +126,7 @@ export function DevFormalTable({ navigationOpen, onToggleNavigation }: FormalNav
   return <main className="flex h-full min-h-0 flex-col bg-background" data-testid="dev-formal-table">
     <header className="shrink-0 space-y-3 border-b border-border px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2"><Button type="button" variant="ghost" size="icon-sm" aria-label={navigationOpen ? "收起需求导航" : "展开需求导航"} aria-expanded={navigationOpen} aria-controls="sidebar" onClick={onToggleNavigation}><PanelLeft className="size-4" /></Button><h1 className="shrink-0 text-ui-base font-semibold">正式需求</h1></div>
+        <div className="flex min-w-0 items-center gap-2">{!navigationOpen && <WorkspaceSidebarToolbar {...toolbar} />}<h1 className="shrink-0 text-ui-base font-semibold">正式需求</h1></div>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Select value={dev.selection.projectId ?? ""} onValueChange={projectId => dev.select({ projectId, formalView: "list" })}><SelectTrigger className="h-7 w-40" aria-label="正式需求项目"><SelectValue placeholder="选择项目" /></SelectTrigger><SelectContent>{view.projects.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select>
           <Select value={dev.releaseId} onValueChange={dev.setReleaseId}><SelectTrigger className="h-7 w-44" aria-label="正式需求版本"><SelectValue placeholder="选择版本" /></SelectTrigger><SelectContent>{view.releases.map(item => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}</SelectContent></Select>
@@ -133,7 +150,7 @@ export function DevFormalTable({ navigationOpen, onToggleNavigation }: FormalNav
         </div>
       </div>
     </header>
-    <div ref={scrollRef} id={scrollId} role="region" aria-label="正式需求表格横向滚动区域" aria-describedby={scrollDescriptionId} tabIndex={0} className="mx-4 min-h-0 flex-1 overflow-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" data-testid="formal-table-scroll" onKeyDown={event => {
+    <div ref={scrollRef} id={scrollId} role="region" aria-label="正式需求表格横向滚动区域" aria-describedby={scrollDescriptionId} tabIndex={0} className="mx-4 min-h-0 flex-1 overflow-auto rounded-xl border border-border bg-background focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" data-testid="formal-table-scroll" onKeyDown={event => {
       if (event.target !== event.currentTarget) return;
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
@@ -143,7 +160,7 @@ export function DevFormalTable({ navigationOpen, onToggleNavigation }: FormalNav
         event.currentTarget.scrollTo({ left: event.key === "Home" ? 0 : event.currentTarget.scrollWidth });
       }
     }}>
-      <table ref={tableRef} className="w-full min-w-[1280px] table-fixed border-separate border-spacing-0 text-ui-sm" aria-label="正式需求 IR SR 开发进度表">
+      <table ref={tableRef} className="w-full min-w-[1280px] table-fixed border-separate border-spacing-0 text-ui-base" aria-label="正式需求 IR SR 开发进度表">
         <colgroup><col className="w-52" /><col className="w-36" /><col className="w-36" /><col className="w-56" /><col className="w-36" /><col className="w-32" /><col className="w-32" /><col className="w-16" /><col className="w-24" /></colgroup>
         <MarkdownTableHeader className="sticky top-0 z-20 bg-background"><MarkdownTableRow>{["需求", "状态与进度", "负责人 / 开发人员", "开发分支 · 点击复制", "依赖关系", "计划开始", "计划结束", "问题", "最近分析"].map((title, index) => <MarkdownTableHead key={title} scope="col" className={`whitespace-nowrap bg-background px-2 font-medium text-foreground-subtle ${index === 0 ? "sticky left-0 z-30" : ""}`}>{title}</MarkdownTableHead>)}</MarkdownTableRow></MarkdownTableHeader>
         <MarkdownTableBody>{visible.map(group => {
@@ -157,26 +174,27 @@ export function DevFormalTable({ navigationOpen, onToggleNavigation }: FormalNav
           const plan = irPlanning(srs);
           const developers = [...new Set(srs.flatMap(sr => sr.planning?.developerEmployeeId ? [sr.planning.developerEmployeeId] : []))];
           const dependencies = srs.reduce((count, sr) => count + srDependencies(view, sr).length, 0);
+          // 主题行色含透明度：固定列在不透明底色上叠加同一行色，避免滚动透字和双层选中色。
           return <Fragment key={group.id}>
-            <MarkdownTableRow data-ir-id={group.id} aria-selected={selected} className={`cursor-pointer ${selected ? "bg-selected" : "bg-surface/50"}`} onClick={() => open(group)}>
-              <MarkdownTableCell className="sticky left-0 z-10 bg-background px-2" style={{ backgroundImage: `linear-gradient(var(--color-${selected ? "selected" : "surface"}), var(--color-${selected ? "selected" : "surface"}))` }}><div className="flex items-start gap-2"><Button size="icon-sm" variant="ghost" aria-label={`${showChildren ? "收起" : "展开"}${group.title}的SR`} aria-expanded={showChildren} onClick={event => { event.stopPropagation(); if (filteringChildren) { setFilteredExpansion(current => ({ ...current, [expansionKey]: !showChildren })); } else { setExpanded(current => { const next = new Set(current); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); return next; }); } }}>{showChildren ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}</Button><div className="min-w-0"><Button variant="link" className="h-auto max-w-full justify-start p-0 text-left whitespace-normal" onClick={event => { event.stopPropagation(); open(group); }}>{group.title}</Button><p className="mt-1 font-mono text-ui-xs text-foreground-subtle">IR · {group.id} · {srs.filter(sr => srProgress(sr) === 100).length}/{srs.length} SR 完成</p></div></div></MarkdownTableCell>
+            <MarkdownTableRow data-ir-id={group.id} aria-selected={selected} className={`cursor-pointer ${selected ? "bg-selected hover:bg-selected [--formal-row-fill:var(--color-selected)]" : "bg-surface hover:bg-hover [--formal-row-fill:var(--color-surface)] hover:[--formal-row-fill:var(--color-hover)]"}`} onClick={() => open(group)}>
+              <MarkdownTableCell className="sticky left-0 z-10 bg-background px-2" style={{ backgroundImage: "linear-gradient(var(--formal-row-fill), var(--formal-row-fill))" }}><div className="flex items-start gap-2"><Button size="icon-sm" variant="ghost" aria-label={`${showChildren ? "收起" : "展开"}${group.title}的SR`} aria-expanded={showChildren} onClick={event => { event.stopPropagation(); if (filteringChildren) { setFilteredExpansion(current => ({ ...current, [expansionKey]: !showChildren })); } else { setExpanded(current => { const next = new Set(current); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); return next; }); } }}>{showChildren ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}</Button><div className="min-w-0"><Button variant="link" className="h-auto max-w-full justify-start p-0 text-left font-medium whitespace-normal" onClick={event => { event.stopPropagation(); open(group); }}>{group.title}</Button><p className="mt-1 font-mono text-ui-xs text-foreground-subtle">IR · {group.id} · {srs.filter(sr => srProgress(sr) === 100).length}/{srs.length} SR 完成</p></div></div></MarkdownTableCell>
               <MarkdownTableCell className="px-2"><ProgressValue value={irProgress(srs)} label={group.title} status={irProgressStatus(srs)} /></MarkdownTableCell>
               <MarkdownTableCell className="px-2"><AssignOwner group={group} /><p className="mt-1 text-ui-xs text-foreground-subtle" title={developers.join("、")}>{developers.length} 名开发人员</p></MarkdownTableCell>
-              <MarkdownTableCell className="px-2 text-ui-xs text-foreground-subtle">见各 SR 开发分支</MarkdownTableCell>
-              <MarkdownTableCell className="px-2 text-ui-xs text-foreground-subtle">{dependencies ? `${dependencies} 条依赖 · 见各 SR` : "无前置依赖"}</MarkdownTableCell>
-              <MarkdownTableCell className="px-2 text-ui-xs tabular-nums" title={plan.plannedStart?.replace("T", " ")}><p>{planningDate(plan.plannedStart)}</p>{plan.incomplete && <p className="mt-1 text-foreground-subtle">部分未排期</p>}</MarkdownTableCell>
-              <MarkdownTableCell className="px-2 text-ui-xs tabular-nums" title={plan.plannedEnd?.replace("T", " ")}>{planningDate(plan.plannedEnd)}</MarkdownTableCell>
+              <MarkdownTableCell className="px-2 text-ui-sm text-foreground-subtle">见各 SR 开发分支</MarkdownTableCell>
+              <MarkdownTableCell className="px-2 text-ui-sm text-foreground-subtle">{dependencies ? `${dependencies} 条依赖 · 见各 SR` : "无前置依赖"}</MarkdownTableCell>
+              <MarkdownTableCell className="px-2 text-ui-sm tabular-nums" title={plan.plannedStart?.replace("T", " ")}><p>{planningDate(plan.plannedStart)}</p>{plan.incomplete && <p className="mt-1 text-foreground-subtle">部分未排期</p>}</MarkdownTableCell>
+              <MarkdownTableCell className="px-2 text-ui-sm tabular-nums" title={plan.plannedEnd?.replace("T", " ")}>{planningDate(plan.plannedEnd)}</MarkdownTableCell>
               <MarkdownTableCell className="px-2 tabular-nums">{srs.reduce((count, sr) => count + (sr.progress?.issues.length ?? 0), 0)} 项</MarkdownTableCell>
               <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-xs text-foreground-subtle" title={latest(srs)}>{date(latest(srs))}</MarkdownTableCell>
             </MarkdownTableRow>
-            {showChildren && children.map(sr => <MarkdownTableRow key={sr.id} data-sr-id={sr.id} aria-selected={dev.selection.irId === group.id && dev.selection.srId === sr.id} className={`cursor-pointer ${dev.selection.irId === group.id && dev.selection.srId === sr.id ? "bg-selected" : ""}`} onClick={() => open(group, sr)}>
-              <MarkdownTableCell className="sticky left-0 z-10 bg-background pr-2 pl-9" style={dev.selection.irId === group.id && dev.selection.srId === sr.id ? { backgroundImage: "linear-gradient(var(--color-selected), var(--color-selected))" } : undefined}><Button variant="link" className="h-auto max-w-full p-0 text-left whitespace-normal" onClick={event => { event.stopPropagation(); open(group, sr); }}>{sr.title}</Button><p className="mt-1 font-mono text-ui-xs text-foreground-subtle">SR · {sr.id}</p></MarkdownTableCell>
+            {showChildren && children.map(sr => <MarkdownTableRow key={sr.id} data-sr-id={sr.id} aria-selected={dev.selection.irId === group.id && dev.selection.srId === sr.id} className={`cursor-pointer ${dev.selection.irId === group.id && dev.selection.srId === sr.id ? "bg-selected hover:bg-selected [--formal-row-fill:var(--color-selected)]" : "hover:bg-hover [--formal-row-fill:transparent] hover:[--formal-row-fill:var(--color-hover)]"}`} onClick={() => open(group, sr)}>
+              <MarkdownTableCell className="sticky left-0 z-10 bg-background pr-2 pl-9" style={{ backgroundImage: "linear-gradient(var(--formal-row-fill), var(--formal-row-fill))" }}><Button variant="link" className="h-auto max-w-full p-0 text-left whitespace-normal" onClick={event => { event.stopPropagation(); open(group, sr); }}>{sr.title}</Button><p className="mt-1 font-mono text-ui-xs text-foreground-subtle">SR · {sr.id}</p></MarkdownTableCell>
               <MarkdownTableCell className="px-2"><ProgressValue value={srProgress(sr)} label={sr.title} status={srProgressStatus(sr)} /></MarkdownTableCell>
               <MarkdownTableCell className="px-2"><DevEditPlanning group={group} sr={sr} compact /><p className="mt-1 text-ui-xs text-foreground-subtle">{sr.planning?.source === "manual" ? "人工调整" : sr.planning ? "AI 建议" : "待分析"}</p></MarkdownTableCell>
-              <MarkdownTableCell className="px-2">{sr.trackingBranch?.name || sr.progress?.branch ? <BranchCopy key={sr.trackingBranch?.name || sr.progress?.branch} branch={sr.trackingBranch?.name || sr.progress!.branch} onMessage={setCopyMessage} /> : <span className="text-ui-xs text-foreground-subtle">尚未关联分支</span>}</MarkdownTableCell>
+              <MarkdownTableCell className="px-2">{sr.trackingBranch?.name || sr.progress?.branch ? <BranchCopy key={sr.trackingBranch?.name || sr.progress?.branch} branch={sr.trackingBranch?.name || sr.progress!.branch} onMessage={setCopyMessage} /> : <span className="text-ui-sm text-foreground-subtle">尚未关联分支</span>}</MarkdownTableCell>
               <MarkdownTableCell className="px-2"><DevDependencies sr={sr} view={view} />{planningWarnings(view, sr).length > 0 && <p className="mt-1 text-ui-xs" title={planningWarnings(view, sr).join("\n")}>需协调排期</p>}</MarkdownTableCell>
-              <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-xs tabular-nums" title={sr.planning?.plannedStart?.replace("T", " ")}>{planningDate(sr.planning?.plannedStart)}</MarkdownTableCell>
-              <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-xs tabular-nums" title={sr.planning?.plannedEnd?.replace("T", " ")}>{planningDate(sr.planning?.plannedEnd)}</MarkdownTableCell>
+              <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-sm tabular-nums" title={sr.planning?.plannedStart?.replace("T", " ")}>{planningDate(sr.planning?.plannedStart)}</MarkdownTableCell>
+              <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-sm tabular-nums" title={sr.planning?.plannedEnd?.replace("T", " ")}>{planningDate(sr.planning?.plannedEnd)}</MarkdownTableCell>
               <MarkdownTableCell className="px-2 tabular-nums">{sr.progress?.issues.length ?? 0} 项</MarkdownTableCell><MarkdownTableCell className="whitespace-nowrap px-2 text-ui-xs text-foreground-subtle" title={sr.progress?.analysedAt}>{date(sr.progress?.analysedAt)}</MarkdownTableCell>
             </MarkdownTableRow>)}
           </Fragment>;
@@ -241,7 +259,7 @@ function DevFormalReport() {
   const progressSource = manual ? percent === 100 ? "人工确认" : "人工调整" : selected ? hasAnalysis ? "AI 分析" : "尚未分析" : undefined;
   return <main className="h-full min-h-0 overflow-auto bg-background" data-testid="dev-formal-report">
     <div className="space-y-6 px-6 py-5">
-      <header className="space-y-3"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selected ? "SR" : "IR"}</Badge><span className="font-mono text-ui-xs text-foreground-subtle">{selected?.id ?? group.id}</span><Badge variant="secondary">{status}</Badge><Badge variant="outline">{hasAnalysis ? source.provenance.kind === "sample" ? "原型预置报告" : "进度分析报告" : "尚未分析"}</Badge></div><h1 className="text-lg font-semibold">{title}</h1><div className="flex flex-wrap items-center gap-2 text-ui-sm"><span className="text-foreground-subtle">需求负责人</span><AssignOwner group={group} /></div><ProgressValue value={percent} label={title} source={progressSource} /><p className="text-ui-sm text-foreground-subtle">{selected ? manual ? "当前百分比来自人工判断；下方 AI 报告为此前分析，不代表本次人工结论。" : hasAnalysis ? "进度分析 Agent 根据需求、验收标准与代码证据判断。" : "尚未分析；0% 为新需求的初始进度，不代表已有代码分析结论。" : `${all.length} 个 SR 的进度算术平均值；全部 SR 完成后 IR 才完成。`}</p>{manual && <p className="break-words text-ui-sm" data-testid="manual-progress-source">{progressSource}：{manual.employeeId} · {manual.reason} · {new Date(manual.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p>}</header>
+      <header className="space-y-3"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selected ? "SR" : "IR"}</Badge><span className="font-mono text-ui-xs text-foreground-subtle">{selected?.id ?? group.id}</span><ProgressStatusBadge status={status} /><Badge variant="outline">{hasAnalysis ? source.provenance.kind === "sample" ? "原型预置报告" : "进度分析报告" : "尚未分析"}</Badge></div><h1 className="text-ui-lg font-semibold">{title}</h1><div className="flex flex-wrap items-center gap-2 text-ui-sm"><span className="text-foreground-subtle">需求负责人</span><AssignOwner group={group} /></div><ProgressValue value={percent} label={title} status={status} source={progressSource} showStatus={false} /><p className="text-ui-sm text-foreground-subtle">{selected ? manual ? "当前百分比来自人工判断；下方 AI 报告为此前分析，不代表本次人工结论。" : hasAnalysis ? "进度分析 Agent 根据需求、验收标准与代码证据判断。" : "尚未分析；0% 为新需求的初始进度，不代表已有代码分析结论。" : `${all.length} 个 SR 的进度算术平均值；全部 SR 完成后 IR 才完成。`}</p>{manual && <p className="break-words text-ui-sm" data-testid="manual-progress-source">{progressSource}：{manual.employeeId} · {manual.reason} · {new Date(manual.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p>}</header>
       {selected && <ManualProgress key={selected.id} group={group} sr={selected} />}
       <ReportSection title={manual ? "此前 AI 报告的问题与不确定项" : "值得关注的问题与不确定项"}>{issues.length ? <ul className="space-y-4">{issues.map((issue, index) => <li key={`${issue.sr.id}:${index}`} className="space-y-1"><p className="text-ui-sm font-medium">{issue.title}{!selected && ` · ${issue.sr.title}`}</p><p className="text-ui-sm leading-6 text-foreground-subtle">{issue.detail}</p></li>)}</ul> : <p className="text-ui-sm text-foreground-subtle">{hasAnalysis ? "当前报告未发现需关注的遗留问题。" : "尚未分析，暂无问题判断。"}</p>}</ReportSection>
       <ReportSection title="已实现内容">{rows.some(sr => sr.progress?.implemented.length) ? <ul className="list-disc space-y-2 pl-5 text-ui-sm">{evidence("implemented")}</ul> : <p className="text-ui-sm text-foreground-subtle">尚无已实现内容的代码证据。</p>}</ReportSection>
@@ -256,16 +274,16 @@ function DevFormalReport() {
 const formalTablePanels = ["formal-table"];
 const formalDetailPanels = ["formal-table", "formal-inspector"];
 
-export function DevFormalWorkspace({ navigationOpen, onToggleNavigation }: FormalNavigationProps) {
+export function DevFormalWorkspace({ navigationOpen, onToggleNavigation, toolbar }: FormalNavigationProps) {
   const dev = useDev()!;
   const detail = dev.selection.formalView !== "list" && Boolean(dev.view?.groups.some(group => group.id === dev.selection.irId));
   const { panelRef, panelElementRef } = useAnimatedResizablePanel({ open: detail, expandedSize: "380px" });
   return <ResizablePanelGroup layoutId="dev-formal-progress-layout-v2" panelIds={detail ? formalDetailPanels : formalTablePanels} className="min-h-0 flex-1">
     <ResizablePanel id="formal-table" minSize="400px" defaultSize={detail ? undefined : "100%"}>
-      <DevFormalTable key={dev.releaseId} navigationOpen={navigationOpen} onToggleNavigation={onToggleNavigation} />
+      <DevFormalTable key={dev.releaseId} navigationOpen={navigationOpen} onToggleNavigation={onToggleNavigation} toolbar={toolbar} />
     </ResizablePanel>
     {detail && <><ResizableHandle /><ResizablePanel id="formal-inspector" panelRef={panelRef} elementRef={panelElementRef} minSize="320px" maxSize="480px" defaultSize="380px">
-      <Tabs key={`${dev.selection.irId}:${dev.selection.srId}`} defaultValue="report" className="h-full min-h-0 gap-0 border-l border-border bg-background">
+      <Tabs key={`${dev.selection.irId}:${dev.selection.srId}`} defaultValue="report" className="h-full min-h-0 gap-0 overflow-hidden rounded-xl border border-border bg-background">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
           <TabsList variant="line" aria-label="需求详情"><TabsTrigger value="report">进度报告</TabsTrigger><TabsTrigger value="materials"><FileText className="size-3.5" />需求材料</TabsTrigger></TabsList>
           <Button variant="ghost" size="icon-sm" aria-label="收起需求详情" onClick={() => dev.select({ projectId: dev.selection.projectId, formalView: "list" })}><PanelRightClose className="size-4" /></Button>

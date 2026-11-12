@@ -113,7 +113,7 @@ export function DevAgentModelSettings({ onDraftActionsChange }: { onDraftActions
 					})}
 				</SettingsGroupCard>
 				<p className="text-ui-sm leading-6 text-foreground-subtle">
-					{zh ? "方案 Agent 负责提案技术方案、SR 依赖及建议排期；需求进度分析 Agent 根据代码证据报告进度、遗留问题与合入情况。两者均不编码、不修复代码；Dev 不提供 IR 验收或归档 PR 流水线，实际开发、测试与代码评审在平台外完成。" : "The Solution Agent handles proposal design, SR dependencies and suggested dates. The Requirement Progress Agent reports progress, outstanding issues and merge evidence. Neither writes or fixes code. Dev has no IR acceptance or archive-PR pipeline; development, testing and code review happen outside the platform."}
+					{zh ? "方案 Agent 负责提案技术方案、SR 依赖及建议排期；需求分析 Agent 根据代码证据报告进度、遗留问题与合入情况。两者均不编码、不修复代码；Dev 不提供 IR 验收或归档 PR 流水线，实际开发、测试与代码评审在平台外完成。" : "The Solution Agent handles proposal design, SR dependencies and suggested dates. The Requirement Analysis Agent reports progress, outstanding issues and merge evidence. Neither writes or fixes code. Dev has no IR acceptance or archive-PR pipeline; development, testing and code review happen outside the platform."}
 				</p>
 			</section>
 			<div className="flex flex-wrap items-center justify-between gap-3">

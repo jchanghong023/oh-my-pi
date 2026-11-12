@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Copy } from "lucide-react";
 import {
@@ -248,7 +249,7 @@ export function SavedWorkflowDetailView({
 
   const copyScript = useCallback(() => {
     if (!detail) return;
-    void navigator.clipboard?.writeText(detail.script).catch(() => undefined);
+    void writeBrowserClipboardText(detail.script).catch((error: unknown) => { logger.warn("[saved-workflow-copy] copy failed", error); });
   }, [detail]);
 
   // 「最近产物」条：**最近一次 completed run** 的

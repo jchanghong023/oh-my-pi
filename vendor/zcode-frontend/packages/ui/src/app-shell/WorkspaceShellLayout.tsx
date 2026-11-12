@@ -1,3 +1,4 @@
+import { WorkspaceSidebarToolbar } from "@/WorkspaceSidebarToolbar.js";
 import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
 import { useWorkbenchGroupStore } from "@/v4/workbenchGroupStore.js";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -8,7 +9,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
-import { ArrowLeft, ArrowRight, MessageCirclePlus, PanelLeft } from "lucide-react";
+import { MessageCirclePlus } from "lucide-react";
 import { V4ChatPane } from "@/v4/V4ChatPane.js";
 import { V4WorkspaceChatArea } from "@/v4/V4WorkspaceChatArea.js";
 import { V4SplitPaneEntryProvider } from "@/v4/splitPaneEntryContext.js";
@@ -60,6 +61,7 @@ import { WorkspaceSidebar, type SidebarFileTreeOpenRequest } from "@/WorkspaceSi
 import { AnimatedSidePanePanel } from "@/app-shell/AnimatedSidePanePanel.js";
 import { SIDE_PANE_DEFAULT_EXPANDED_SIZE } from "@/app-shell/sidePaneLayout.js";
 import { useAnimatedResizablePanel } from "@/app-shell/useAnimatedResizablePanel.js";
+import { resolveWorkspaceShellPanelRadiusPx, resolveWorkspaceShellResizeHandleInsetPx } from "@/app-shell/workspaceShellWindowChrome.js";
 import { ensureTaskNavigationWorkspace } from "@/app-shell/taskNavigationWorkspace.js";
 
 import { cn } from "@/components/lib/utils.js";
@@ -325,8 +327,9 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const baseServices = useBaseWorkspaceServices();
   const tabStoreApi = useTabStoreApi();
   const usesResponsiveLayout = responsiveBrowserLayout;
-  const workspacePanelRadiusPx = 0;
-  const workspaceResizeHandleInsetPx = 0;
+  // Browser shells keep the upstream panel shape without restoring desktop window chrome.
+  const workspacePanelRadiusPx = resolveWorkspaceShellPanelRadiusPx({});
+  const workspaceResizeHandleInsetPx = resolveWorkspaceShellResizeHandleInsetPx({});
   const collapsedSidebarWidthPx = 0;
   const [draftHeaderDropTargetController, setDraftHeaderDropTargetController] =
     useState<ConversationDropTargetController | null>(null);
@@ -2057,6 +2060,14 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
             "p-0",
           )}
         >
+        {!isSidebarVisible ? (
+          <div
+            className="flex shrink-0 items-center gap-1 border-b border-border bg-background"
+          >
+            <WorkspaceSidebarToolbar expanded={false} onCreate={() => handleCreateTaskInChat()} createDisabled={Boolean(workspaceReadOnlyReason)} onToggle={handleToggleSidebar} canGoBack={canTaskNavBack} canGoForward={canTaskNavForward} onGoBack={handleTaskNavBack} onGoForward={handleTaskNavForward} toggleShortcut={toggleSidebarShortcutLabel} backShortcut={goBackShortcutLabel} forwardShortcut={goForwardShortcutLabel} />
+
+          </div>
+        ) : null}
           <ResizablePanelGroup
             layoutId="workspace-body-layout"
             panelIds={WORKSPACE_BODY_PANEL_IDS}
@@ -2289,61 +2300,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
             {sidePanePanel}
           </ResizablePanelGroup>
         </div>
-        {!isSidebarVisible ? (
-          <nav
-            aria-label={intl.formatMessage({ id: "workspaceSidebar.toggleSidebar" })}
-            className="absolute top-2 left-2 z-30 flex items-center gap-1 bg-background"
-          >
-            <ControlHintTooltip
-              title={intl.formatMessage({ id: "workspaceSidebar.toggleSidebar" })}
-              shortcut={toggleSidebarShortcutLabel}
-            >
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={intl.formatMessage({ id: "workspaceSidebar.toggleSidebar" })}
-                aria-expanded={isSidebarVisible}
-                onClick={handleToggleSidebar}
-              >
-                <PanelLeft className="size-4" />
-              </Button>
-            </ControlHintTooltip>
-            <ControlHintTooltip title={intl.formatMessage({ id: "taskNav.back" })} shortcut={goBackShortcutLabel}>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={intl.formatMessage({ id: "taskNav.back" })}
-                disabled={!canTaskNavBack}
-                onClick={handleTaskNavBack}
-              >
-                <ArrowLeft className="size-4" />
-              </Button>
-            </ControlHintTooltip>
-            <ControlHintTooltip title={intl.formatMessage({ id: "taskNav.forward" })} shortcut={goForwardShortcutLabel}>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={intl.formatMessage({ id: "taskNav.forward" })}
-                disabled={!canTaskNavForward}
-                onClick={handleTaskNavForward}
-              >
-                <ArrowRight className="size-4" />
-              </Button>
-            </ControlHintTooltip>
-            <ControlHintTooltip title={intl.formatMessage({ id: "taskList.newThread" })}>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={intl.formatMessage({ id: "taskList.newThread" })}
-                data-testid="workspace-new-session"
-                disabled={Boolean(workspaceReadOnlyReason)}
-                onClick={() => handleCreateTaskInChat()}
-              >
-                <MessageCirclePlus className="size-4" />
-              </Button>
-            </ControlHintTooltip>
-          </nav>
-        ) : null}
+
       </div>
     </SavedWorkflowHubProvider>
   );

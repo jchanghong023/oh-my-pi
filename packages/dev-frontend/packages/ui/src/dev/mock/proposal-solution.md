@@ -1,4 +1,4 @@
-> 原型静态 design.md 样例。未调用模型、修改文件、提交 PR 或验证 Git。
+*技术方案样例 · 未读取真实项目代码。*
 
 ## Context
 
@@ -12,7 +12,18 @@
 
 ## Decisions
 
-采用 OpenSpec change 结构，proposal.md 映射 IR，每个能力 spec.md 映射一个 SR，design.md 覆盖整份 change 的实现思路与技术取舍。能力 spec.md 内可以有多条 Requirement 和 Scenario，不维护依赖。依赖及原因唯一记录在同目录 sr-dependencies.json；design.md 只引用，不重复清单。
+采用 OpenSpec change 结构，proposal.md 映射 IR，每个能力 spec.md 映射一个 SR，design.md 覆盖整份 change 的实现思路与技术取舍。能力 spec.md 内可以有多条 Requirement 和 Scenario，不维护依赖。工期预估、假设、依赖及原因唯一记录在同目录 sr-dependencies.json；design.md 只引用，不重复清单。
+
+## 材料目录（示意）
+
+```text
+openspec/changes/<change-id>/
+├── proposal.md           # IR 业务需求
+├── specs/
+│   └── <capability>/spec.md  # SR 规格
+├── design.md             # 当前技术方案
+└── sr-dependencies.json  # SR 依赖、工期预估及假设
+```
 
 ## 架构与模块
 
@@ -38,7 +49,7 @@
 
 ## Migration Plan
 
-需求 PR 包含同一 change 的 proposal.md、全部 `specs/<capability>/spec.md`、有效 design.md 与 sr-dependencies.json。人工逐文件确认当前版本后，平台从最新默认分支创建提案分支、提交并推送，人工在 Git 网页创建、评审和合并 PR。后台检查提案分支已合入默认分支且上述文档完整、JSON 有效，便自动转正并创建、推送各 SR 分支；不要求个人目录、PR 链接或人工通知。转正保留人员、排期和 JSON 依赖，新 SR 进度为 0%；仍保留在 changes/，不归档、不标记代码完成。Dev 仅跟踪后续代码证据，不执行开发、测试或修复。
+需求 PR 包含同一 change 的 proposal.md、全部 `specs/<capability>/spec.md`、有效 design.md 与 sr-dependencies.json。人工逐文件确认当前版本后，平台从最新默认分支创建提案分支、提交并推送，人工在 Git 网页创建、评审和合并 PR。后台检查提案分支已合入默认分支且上述文档完整、JSON 有效，便自动转正并创建、推送各 SR 分支；不要求个人目录、PR 链接或人工通知。转正保留 JSON 工期预估和依赖，随后再安排负责人、开发人员和起止日期，新 SR 进度为 0%；仍保留在 changes/，不归档、不标记代码完成。Dev 仅跟踪后续代码证据，不执行开发、测试或修复。
 
 ## Open Questions
 

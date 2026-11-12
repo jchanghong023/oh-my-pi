@@ -6,6 +6,7 @@
  */
 "use client";
 
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { Button } from "../ui/button.js";
 import { ButtonGroup, ButtonGroupText } from "../ui/button-group.js";
 import { cn } from "../lib/utils.js";
@@ -1040,10 +1041,10 @@ function MessageExternalLink({
   );
   const handleCopyLink = async () => {
     try {
-      if (!navigator.clipboard?.writeText) {
+      if (typeof document === "undefined") {
         throw new Error("clipboard-unavailable");
       }
-      await navigator.clipboard.writeText(href);
+      await writeBrowserClipboardText(href);
     } catch (error) {
       logger.warn("[MessageExternalLink] 复制链接失败", {
         error: error instanceof Error ? error.message : String(error),

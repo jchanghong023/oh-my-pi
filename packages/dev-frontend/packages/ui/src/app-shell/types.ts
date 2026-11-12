@@ -182,7 +182,7 @@ export interface GitChangeSummary {
   removed: number;
 }
 
-export type WorkspaceMainView = "chat" | "automations";
+export type WorkspaceMainView = "chat" | "automations" | "skillDesign" | "requirementAnalysis";
 
 export interface WorkspaceShellLayoutProps extends AppProps {
   workspaceReadOnlyReason?: string;

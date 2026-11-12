@@ -542,7 +542,7 @@ OMP MUST 提供会话内 `/dev` 和命令行 `omp dev` 两个工作台启动入�
 
 #### Scenario: 新界面与新流程
 - **WHEN** 用户进入新 Dev
-- **THEN** 使用 Dev 自有 WebGUI 风格界面，提案采用需求→四 Agent 评审→方案→入库三栏流程，正式需求采用大表格与同页代码证据报告；开发在平台外完成，不提供计划／执行／IR 验收 Agent、开发名额、冻结锁或最终归档流水线；原 WebGUI 保持不变
+- **THEN** 使用 Dev 自有 WebGUI 风格界面，提案采用需求→四 Agent 评审→方案→入库三栏流程，正式需求采用大表格与同页代码证据报告；开发在平台外完成，不提供计划／执行／IR 验收 Agent、开发名额、冻结锁或最终归档流水线；原 WebGUI 业务与后端保持不变，视觉基础仅按 [zcode-visual-baseline](../zcode-visual-baseline/spec.md) 的已授权范围对齐
 
 ### Requirement: 旧 Dev 终端交互退役但能力保留
 
@@ -603,6 +603,12 @@ OMP MUST 提供 `/webgui` 和 `omp webgui`，复用已迁入并精简后的 ZCod
 - **WHEN** 用户从电脑或手机浏览器访问局域网内 OMP WebGUI
 - **THEN** 直接使用 OMP HTTP／WS 与原有本地项目、会话和消息界面；删除的远程连接／远控能力不影响此访问路径，不要求配对、SSH、WSL、容器或桌面 Host
 - **AND** 插件页面裁剪保留 Skill 设置；不删除 OMP 自身 Skill、MCP、浏览器、计算机操作及真实授权流程，不改变 Dev 与普通 TUI 的能力
+
+#### Scenario: 普通内网 HTTP 与页面深链接
+- **WHEN** 使用者通过 OMP 输出的内网 HTTP 地址打开 WebGUI，或刷新同一服务下允许的 `/xxx/xxx` SPA 页面路径
+- **THEN** 前端资源使用该服务根路径，业务 HTTP 与 WebSocket 继续连接同源根接口 `/api/server-info`、`/api/omp/*` 与 `/ws`，不因页面路径层级或普通 HTTP 改连访问者的 localhost 或错误的相对资源地址
+- **AND** 前端 ID、附件摘要和文字复制必须兼容普通内网 HTTP 的非安全上下文；附件仍保留真实 SHA-256 校验与既有协议格式，不能跳过校验、伪造复制成功或要求浏览器安全策略豁免；浏览器麦克风不可用时明确反馈限制
+- **AND** 不改变同进程随机端口、项目／会话归属、网卡 Host／同源 Origin／实际对端准入及其他原生应用的随机能力路径；SPA 深链接不表示新增任意反向代理挂载前缀、端口重写或转发头信任能力，访问约定见[内网 HTTP 说明](../../../docs-zh-CN/webgui-http-access.md)
 
 #### Scenario: 删除已核实的原产品专属入口
 - **WHEN** 用户在 WebGUI 使用聊天、设置或帮助界面

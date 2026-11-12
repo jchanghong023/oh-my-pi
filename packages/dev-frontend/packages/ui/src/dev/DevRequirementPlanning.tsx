@@ -1,5 +1,8 @@
 import { useId, useState } from "react";
 import { UserRound } from "lucide-react";
+import { MessageResponse } from "@/components/ai-elements/message.js";
+import { buildMarkdownTableText } from "@/components/ai-elements/markdown-table.js";
+import { useZCodeStore } from "@/store/StoreProvider.js";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
 import { Label } from "@/components/ui/label.js";
@@ -38,8 +41,8 @@ export function DevDependencies({ sr, view }: { sr: DevSystemRequirement; view: 
   const dependencies = srDependencies(view, sr);
   const group = [...view.groups, ...view.drafts].find(item => item.id === sr.irId && item.projectId === sr.projectId);
   const result = group && readSrDependencies(group);
-  if (!result || result.issue) return <span className="text-ui-xs text-foreground-subtle">{result?.issue ?? "依赖材料不可用"}</span>;
-  return dependencies.length ? <ul className="space-y-1 text-ui-xs">{dependencies.map(id => <li key={id} className="break-words" title={id}>{view.srs.find(item => item.projectId === sr.projectId && item.id === id)?.title ?? id}<span className="block text-foreground-subtle">{result.document?.srs.find(row => row.srId === sr.id)?.prerequisites.find(item => item.srId === id)?.reason}</span></li>)}</ul> : <span className="text-ui-xs text-foreground-subtle">无前置依赖</span>;
+  if (!result || result.issue) return <span className="text-ui-sm text-foreground-subtle">{result?.issue ?? "依赖材料不可用"}</span>;
+  return dependencies.length ? <ul className="space-y-1 text-ui-sm text-foreground">{dependencies.map(id => <li key={id} className="break-words" title={id}>{view.srs.find(item => item.projectId === sr.projectId && item.id === id)?.title ?? id}<span className="block text-foreground-subtle">{result.document?.srs.find(row => row.srId === sr.id)?.prerequisites.find(item => item.srId === id)?.reason}</span></li>)}</ul> : <span className="text-ui-sm text-foreground-subtle">无前置依赖</span>;
 }
 
 export function DevEditPlanning({ group, sr, compact = false }: { group: DevRequirementGroup; sr: DevSystemRequirement; compact?: boolean }) {
@@ -50,11 +53,12 @@ export function DevEditPlanning({ group, sr, compact = false }: { group: DevRequ
   const [input, setInput] = useState<DevSrPlanningInput>({});
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const canEdit = source.planning && sr.planning && (getEmployeeId() === "j00808874" || getEmployeeId() === group.ownerEmployeeId);
-  if (!canEdit) return compact ? <span className="font-mono text-ui-xs">{sr.planning?.developerEmployeeId ?? "未分配"}</span> : null;
+  const proposal = dev.view?.drafts.some(item => item.projectId === group.projectId && item.id === group.id);
+  const canEdit = !proposal && source.planning && sr.planning && (getEmployeeId() === "j00808874" || getEmployeeId() === group.ownerEmployeeId);
+  if (!canEdit) return compact ? <span className="text-ui-sm">{sr.planning?.developerEmployeeId ?? "未分配"}</span> : null;
   const warnings = dev.view && open ? planningWarnings(dev.view, sr, { ...sr.planning!, ...input }) : [];
   return <span onClick={event => event.stopPropagation()}>
-    <Button size="sm" variant={compact ? "ghost" : "outline"} className={compact ? "h-auto max-w-full px-1 py-1 text-ui-xs" : undefined} aria-label={`调整${sr.title}开发安排`} onClick={() => { setInput({ developerEmployeeId: sr.planning?.developerEmployeeId, plannedStart: sr.planning?.plannedStart, plannedEnd: sr.planning?.plannedEnd }); setError(""); setOpen(true); }}>{compact ? sr.planning?.developerEmployeeId ?? "分配开发人员" : "调整开发安排"}</Button>
+    <Button size="sm" variant={compact ? "ghost" : "outline"} className={compact ? "max-w-full justify-start text-left focus-visible:ring-2 focus-visible:ring-ring/50" : undefined} aria-label={`调整${sr.title}开发安排`} onClick={() => { setInput({ developerEmployeeId: sr.planning?.developerEmployeeId, plannedStart: sr.planning?.plannedStart, plannedEnd: sr.planning?.plannedEnd }); setError(""); setOpen(true); }}>{compact ? sr.planning?.developerEmployeeId ?? "分配开发人员" : "调整开发安排"}</Button>
     <Dialog open={open} onOpenChange={setOpen}><DialogContent className="max-h-[85dvh] overflow-auto sm:max-w-lg"><DialogHeader><DialogTitle>调整开发安排</DialogTitle><DialogDescription>{sr.title} · 人员与排期属于数据库元数据，修改不会改写仓库需求或依赖关系。</DialogDescription></DialogHeader>
       <form className="space-y-4" onSubmit={async event => { event.preventDefault(); setSaving(true); setError(""); try { await source.planning!.updateSr(group.projectId, group.id, sr.id, input); setOpen(false); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } finally { setSaving(false); } }}>
         <div className="space-y-2"><Label htmlFor={`${id}-developer`}>开发人员工号</Label><Input id={`${id}-developer`} value={input.developerEmployeeId ?? ""} pattern="[a-z][0-9]{8}" title="一个小写英文字母后接 8 位数字，例如 j00808874；可留空表示未分配。" aria-describedby={`${id}-developer-hint`} onInvalid={event => { event.currentTarget.setCustomValidity("工号格式错误：须为一个小写英文字母后接 8 位数字，例如 j00808874。"); setError("工号格式错误：须为一个小写英文字母后接 8 位数字，例如 j00808874；留空表示未分配。"); }} onChange={event => { event.target.setCustomValidity(""); setError(""); setInput(current => ({ ...current, developerEmployeeId: event.target.value.trim() || undefined })); }} placeholder="留空表示未分配" /><p id={`${id}-developer-hint`} className="text-ui-xs text-foreground-subtle">一个小写英文字母后接 8 位数字，例如 j00808874；可留空表示未分配。</p></div>
@@ -72,13 +76,34 @@ export function DevEditPlanning({ group, sr, compact = false }: { group: DevRequ
 export function DevPlanningSummary({ group, rows, editable = false }: { group: DevRequirementGroup; rows: DevSystemRequirement[]; editable?: boolean }) {
   const dev = useDev()!;
   const view = dev.view;
+  const theme = useZCodeStore(state => state.theme);
+  const codePreviewSettings = useZCodeStore(state => state.codePreviewSettings);
   if (!view) return null;
   const proposal = view.drafts.some(item => item.id === group.id && item.projectId === group.projectId);
   const ready = hasCurrentProposalSolution(group);
+  if (proposal) {
+    // 阅读只要求当前 JSON 的依赖结构有效；缺少预估不能遮住其他 SR 的已有工期。
+    const result = readSrDependencies(group, group.srDependencyFile, false);
+    const table = result.document ? buildMarkdownTableText([
+      ["SR ID", "需求", "工期（工作日）", "估算假设"],
+      ...result.document.srs.map(row => {
+        const estimate = row.estimate;
+        const duration = estimate && Number.isFinite(estimate.workingDays) && estimate.workingDays > 0 ? String(estimate.workingDays) : "待预估";
+        const assumptions = typeof estimate?.assumptions === "string" && estimate.assumptions.trim() ? estimate.assumptions : "待补充";
+        return [row.srId, rows.find(sr => sr.id === row.srId)?.title ?? row.srId, duration, assumptions];
+      }),
+    ]) : "";
+    return <section className="min-w-0 space-y-4" data-testid="requirement-planning-summary">
+      <h2 className="text-ui-base font-medium">工期预估</h2>
+      {result.issue ? <p role="status" className="text-ui-sm">{result.issue}</p> : <MessageResponse className="min-w-0 break-words" theme={theme} codePreviewSettings={codePreviewSettings} showExportActions={false}>{table}</MessageResponse>}
+      <p className="text-ui-xs leading-5 text-foreground-subtle">预估与依赖共同读取 sr-dependencies.json；通过方案对话让 AI 更新。缺项标为待预估／待补充，提交前须补齐。</p>
+      <p className="text-ui-xs leading-5 text-foreground-subtle">工作日不代表承诺日期或实际用时，不直接相加为 IR 总工期。转正后再安排人员及起止时间。</p>
+    </section>;
+  }
+
   const summary = irPlanning(rows);
   return <section className="space-y-4" data-testid="requirement-planning-summary">
-    <div><h2 className="text-ui-base font-medium">{proposal ? "方案分析与开发安排" : "开发安排"}</h2><p className="mt-1 text-ui-xs leading-5 text-foreground-subtle">人员与排期：数据库元数据；实现思路与依赖：仓库文档。时间为计划，不代表实际开发活动。</p></div>
-    {proposal && <><div className="flex flex-wrap items-center gap-2 text-ui-sm"><span>IR 负责人</span><AssignOwner group={group} /></div><p className="text-ui-xs leading-5 text-foreground-subtle">管理员或 IR 负责人可调整下方 SR 的开发人员与时间；修改依赖请在方案讨论中提出，由方案文档更新后随提案提交。未分配人员或排期提醒不增加转正审批。</p></>}
+    <div><h2 className="text-ui-base font-medium">开发安排</h2><p className="mt-1 text-ui-xs leading-5 text-foreground-subtle">人员与排期：数据库元数据；实现思路与依赖：仓库文档。时间为计划，不代表实际开发活动。</p></div>
     {!ready && <p role="status" className="text-ui-sm">当前方案尚未完成或已失效，请在方案讨论中完成本轮分析；旧排期不作为当前建议。</p>}
     {rows.length > 1 && <p className="text-ui-sm">IR 汇总：{planningDate(summary.plannedStart)} → {planningDate(summary.plannedEnd)}{summary.incomplete ? "（部分 SR 未排期）" : ""}。调整下方 SR 后自动更新。</p>}
     <ul className="space-y-4">{rows.map(sr => <li key={sr.id} className="space-y-2 rounded-md border border-border p-3">

@@ -6,6 +6,8 @@ import {
   TID_TASK_SETTINGS_BUTTON,
 } from "@zcode/shared/test-ids";
 import { cn } from "@/components/lib/utils.js";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar.js";
+import { UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import {
   DropdownMenu,
@@ -115,8 +117,8 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
               className="min-w-0 flex-1 justify-start gap-2 overflow-hidden rounded-tl-2xl rounded-bl-2xl border-0 pl-0"
               aria-label={intl.formatMessage({ id: "settings.title" })}
             >
-              <Settings className="size-4" />
-              <span className="truncate">OMP</span>
+              <Avatar size="default"><AvatarFallback className="bg-background text-foreground"><UserRound className="size-4" /></AvatarFallback></Avatar>
+              <span className="min-w-0 truncate text-ui-base font-semibold text-foreground">OMP</span>
             </Button>
           </DropdownMenuTrigger>
           {/* Bugfix: 菜单内容保持挂载，避免每次点击头像菜单都重建 footer 内部状态。 */}

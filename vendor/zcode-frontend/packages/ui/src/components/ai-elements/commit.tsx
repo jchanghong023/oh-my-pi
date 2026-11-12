@@ -6,6 +6,7 @@
  */
 "use client";
 
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { Avatar, AvatarFallback } from "../ui/avatar.js";
 import { Button } from "../ui/button.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.js";
@@ -167,14 +168,14 @@ export const CommitCopyButton = ({
   const timeoutRef = useRef<number>(0);
 
   const copyToClipboard = useCallback(async () => {
-    if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
+    if (typeof window === "undefined" || typeof document === "undefined") {
       onError?.(new Error("Clipboard API not available"));
       return;
     }
 
     try {
       if (!isCopied) {
-        await navigator.clipboard.writeText(hash);
+        await writeBrowserClipboardText(hash);
         setIsCopied(true);
         onCopy?.();
         timeoutRef.current = window.setTimeout(() => setIsCopied(false), timeout);

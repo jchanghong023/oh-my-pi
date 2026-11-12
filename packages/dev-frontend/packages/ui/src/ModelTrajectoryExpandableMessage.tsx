@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import type { ZCodeModelTrajectoryMessage } from "@zcode/services";
 import { ArrowRightIcon, ChevronRightIcon, CircleAlertIcon, CopyIcon } from "lucide-react";
 import { useContext, useState } from "react";
@@ -85,8 +86,8 @@ export function ExpandableTrajectoryMessage({
   const open = userOpen || searchRevealed;
 
   const handleCopy = () => {
-    if (!copyText || typeof navigator === "undefined" || !navigator.clipboard?.writeText) return;
-    void navigator.clipboard.writeText(copyText).catch((error: unknown) => {
+    if (!copyText || typeof navigator === "undefined" || typeof document === "undefined") return;
+    void writeBrowserClipboardText(copyText).catch((error: unknown) => {
       logger.warn("[ModelTrajectory] copy expanded content failed", error);
     });
   };

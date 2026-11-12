@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { SidebarNativeTooltip, ControlHintTooltip } from "@/ControlHintTooltip.js";
 /* eslint-disable max-lines -- WorkspaceFileTree 需要集中编排数据、虚拟列表、吸顶和入口操作状态。 */
 import {
@@ -443,7 +444,7 @@ export function WorkspaceFileTree({
   ]);
 
   const handleCopyPath = useCallback(async () => {
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    if (typeof navigator === "undefined" || typeof document === "undefined") {
       logger.warn("[WorkspaceFileTree] 复制 workspace 路径失败", {
         path: workspacePath,
         error: "clipboard-unavailable",
@@ -451,7 +452,7 @@ export function WorkspaceFileTree({
       return;
     }
     try {
-      await navigator.clipboard.writeText(workspacePath);
+      await writeBrowserClipboardText(workspacePath);
       logger.info("[WorkspaceFileTree] workspace 路径已复制", {
         path: workspacePath,
       });

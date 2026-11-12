@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin, UserConfig } from "vite";
@@ -79,12 +80,42 @@ function copiedFrontendPackages(): Plugin {
 	};
 }
 
-export function createDevFrontendConfig(entryRoot: string, outputDirectory: string): UserConfig {
+export function createDevFrontendConfig(entryRoot: string, outputDirectory: string, defaultBasePath = "/"): UserConfig {
+  const basePath = process.env.OMP_DEV_BASE_PATH ?? defaultBasePath;
+  if (basePath !== "./" && (!basePath.startsWith("/") || !basePath.endsWith("/") || basePath.includes("//") || /[?#\\]/u.test(basePath) || basePath.split("/").some(segment => segment === "." || segment === "..")))
+    throw new Error("OMP_DEV_BASE_PATH must be an absolute directory path ending in /, such as /xxx/xxx/");
+  // Runtime assets retain relative URLs for the native host's random capability directory.
+  const mountPath = basePath === "./" ? "/" : basePath;
+  const host = process.env.OMP_DEV_FRONTEND_HOST ?? "0.0.0.0";
+  const port = Number(process.env.OMP_DEV_FRONTEND_PORT ?? "4173");
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("OMP_DEV_FRONTEND_PORT must be between 1 and 65535");
+  // Browsers use the page's origin; only this dev/preview server connects to the backend.
+  const proxy = {
+    [`${mountPath}api/dev`]: {
+      target: process.env.OMP_DEV_PROXY_TARGET ?? "http://127.0.0.1:4174",
+      ws: true,
+      rewrite: (requestPath: string) => requestPath.slice(mountPath.length - 1),
+    },
+  };
+  const redirectDirectory = (request: IncomingMessage, response: ServerResponse, next: () => void) => {
+    const url = new URL(request.url ?? "/", "http://dev.local");
+    if (mountPath !== "/" && url.pathname === mountPath.slice(0, -1)) {
+      response.writeHead(302, { Location: mountPath + url.search });
+      response.end();
+      return;
+    }
+    next();
+  };
+  const mountedEntry: Plugin = {
+    name: "dev-mounted-entry",
+    configureServer(server) { server.middlewares.use(redirectDirectory); },
+    configurePreviewServer(server) { server.middlewares.use(redirectDirectory); },
+  };
 	return {
 		root: entryRoot,
-		base: "./",
+		base: basePath,
 		publicDir: path.join(packages, "web/public"),
-		plugins: [copiedFrontendPackages(), react(), tailwindcss(), pdfJsCMapsPlugin()],
+		plugins: [mountedEntry, copiedFrontendPackages(), react(), tailwindcss(), pdfJsCMapsPlugin()],
 		resolve: {
 			alias: [
 				{ find: "@zcode/ui/styles.css", replacement: path.join(packages, "ui/src/styles.css") },
@@ -102,12 +133,13 @@ export function createDevFrontendConfig(entryRoot: string, outputDirectory: stri
 			dedupe: ["react", "react-dom"],
 		},
 		server: {
-			host: "127.0.0.1",
-			port: 4173,
+			host,
+			port,
+      proxy,
 			strictPort: true,
 			fs: { strict: true, allow: [root] },
 		},
-		preview: { host: "127.0.0.1", port: 4173, strictPort: true },
+		preview: { host, port, strictPort: true, proxy },
 		define: {
 			__ZCODE_VERSION__: JSON.stringify("3.17.2"),
 			__ZCODE_ENV__: JSON.stringify("production"),

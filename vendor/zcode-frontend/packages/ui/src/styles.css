@@ -63,6 +63,7 @@ body,
 body {
   margin: 0;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Bug 根因：窗口 hidden 时 CSS 动画无法结算，DocumentTimeline 会持有期间被移除的元素及整棵子树，
@@ -116,6 +117,25 @@ html[data-document-hidden] *::after {
     outline: none !important;
     box-shadow: none !important;
   }
+}
+
+/*
+ * 中日韩汉字共用码位，字形由字体决定：--font-mono 为中文在 monospace 前写死了 SC 字体，
+ * 日文/韩文界面会因此显示中文字形（如「直」「骨」）。<html lang> 由 ZCodeIntlProvider 跟随界面语言写入，
+ * 这里按 lang 把对应语言的字体排到 SC 前面；无衬线正文走 system-ui，浏览器会按 lang 自动选日/韩字形。
+ */
+:root:lang(ja) {
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", "Noto Sans CJK JP",
+    "Noto Sans JP", "Microsoft YaHei UI", "PingFang SC", monospace;
+}
+
+:root:lang(ko) {
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", "Noto Sans KR",
+    "Microsoft YaHei UI", "PingFang SC", monospace;
 }
 
 /* === 主题变量 === */
@@ -214,7 +234,7 @@ html[data-document-hidden] *::after {
   --color-progress-surface: var(--color-blue-50);
   --color-progress-surface-foreground: var(--color-blue-700);
   --color-foreground: var(--color-neutral-700);
-  --color-foreground-subtle: color-mix(in oklab, var(--color-neutral-700) 60%, transparent);
+  --color-foreground-subtle: color-mix(in oklab, var(--color-neutral-700) 70%, transparent);
   --color-remote-foreground-muted: #595959;
   --color-foreground-subtlest: color-mix(in oklab, var(--color-neutral-700) 40%, transparent);
   --lucide-subtlest-opacity: 0.4;
@@ -471,10 +491,10 @@ html[data-document-hidden] *::after {
   --color-success-surface-foreground: #166b32;
   --color-progress-surface: var(--color-blue-50);
   --color-progress-surface-foreground: var(--color-blue-700);
-  --color-foreground: var(--color-neutral-800);
-  --color-foreground-subtle: color-mix(in oklab, var(--color-neutral-800) 60%, transparent);
+  --color-foreground: var(--color-neutral-900);
+  --color-foreground-subtle: color-mix(in oklab, var(--color-neutral-900) 70%, transparent);
   --color-remote-foreground-muted: #595959;
-  --color-foreground-subtlest: color-mix(in oklab, var(--color-neutral-800) 40%, transparent);
+  --color-foreground-subtlest: color-mix(in oklab, var(--color-neutral-900) 40%, transparent);
   --lucide-subtlest-opacity: 0.4;
   --color-foreground-inverse: #ffffff;
   --color-success: #1e8a3e;
@@ -603,7 +623,7 @@ html[data-document-hidden] *::after {
   --color-success-surface-foreground: #87d9a4;
   --color-progress-surface: rgba(70, 130, 240, 0.16);
   --color-progress-surface-foreground: var(--color-blue-300);
-  --color-foreground: var(--color-neutral-300);
+  --color-foreground: var(--color-neutral-100);
   --color-foreground-subtle: color-mix(in oklab, var(--color-neutral-300) 60%, transparent);
   --color-remote-foreground-muted: #b3b3b3;
   --color-foreground-subtlest: color-mix(in oklab, var(--color-neutral-300) 30%, transparent);

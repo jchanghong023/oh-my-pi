@@ -1,3 +1,4 @@
+import { ZCodeStartupLogoBadge } from "@/root/RootStartupLoading.js";
 /* oxlint-disable eslint(max-lines) */
 import { ArrowLeft, type LucideIcon } from "lucide-react";
 import {
@@ -508,7 +509,7 @@ export function SettingsPage({
         >
           <aside className="min-w-0">
             <div className="flex h-full flex-col">
-              <div className="h-12 [app-region:drag]"></div>
+              <div className="flex h-12 shrink-0 items-center px-4"><span role="img" aria-label="ZCode" data-testid="settings-logo" className="pointer-events-none flex size-5 items-center justify-center select-none"><ZCodeStartupLogoBadge size="titlebar" animated={false} /></span></div>
               <div className="px-2 pb-3 pt-3">
                 {onBack ? (
                   <ControlHintTooltip

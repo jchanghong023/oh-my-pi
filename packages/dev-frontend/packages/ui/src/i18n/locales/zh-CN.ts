@@ -1,7 +1,7 @@
 import { requestSecurityMessagesZhCN } from "@/request-security-edition/messages.js";
 /** 中文翻译 */
 const zhCN: Record<string, string> = {
-  "settings.progressAnalysis.title": "需求进度分析",
+  "settings.progressAnalysis.title": "需求分析",
   "preview.image.copy": "复制图片",
   "preview.image.actions": "图片操作",
   "preview.image.added": "已添加到聊天",

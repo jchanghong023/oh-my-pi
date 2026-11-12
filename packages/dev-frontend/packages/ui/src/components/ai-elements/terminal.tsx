@@ -6,6 +6,7 @@
  */
 "use client";
 
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { Button } from "../ui/button.js";
 import { cn } from "../lib/utils.js";
 import RawAnsi from "ansi-to-react";
@@ -112,13 +113,13 @@ export const TerminalCopyButton = ({
   const { output } = useContext(TerminalContext);
 
   const copyToClipboard = useCallback(async () => {
-    if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
+    if (typeof window === "undefined" || typeof document === "undefined") {
       onError?.(new Error("Clipboard API not available"));
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(output);
+      await writeBrowserClipboardText(output);
       setIsCopied(true);
       onCopy?.();
       timeoutRef.current = window.setTimeout(() => setIsCopied(false), timeout);

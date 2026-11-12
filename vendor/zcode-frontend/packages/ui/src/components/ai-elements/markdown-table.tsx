@@ -1,5 +1,6 @@
 "use client";
 
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import type {
   ComponentProps,
   CSSProperties,
@@ -1103,7 +1104,7 @@ export function MarkdownTable({ className, children, node: _node, ...props }: Ma
   );
 
   const handleCopyMarkdown = useCallback(async () => {
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    if (typeof navigator === "undefined" || typeof document === "undefined") {
       toast(
         intl.formatMessage({ id: "markdownTable.copyFailed" }, { error: "clipboard-unavailable" }),
       );
@@ -1111,7 +1112,7 @@ export function MarkdownTable({ className, children, node: _node, ...props }: Ma
     }
 
     try {
-      await navigator.clipboard.writeText(buildMarkdownTableText(getRows()));
+      await writeBrowserClipboardText(buildMarkdownTableText(getRows()));
       toast(intl.formatMessage({ id: "markdownTable.copySucceeded" }));
     } catch (error) {
       toast(

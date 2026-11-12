@@ -1,3 +1,4 @@
+import { WorkspaceSidebarToolbar } from "@/WorkspaceSidebarToolbar.js";
 import { SidebarTooltipProvider } from "@/ControlHintTooltip.js";
 export { readProjectSidebarView } from "@/project-sidebar/view-preference.js";
 import { SortableProjects } from "@/project-sidebar/SortableProjects.js";
@@ -193,7 +194,7 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
     <ProjectTaskListContext.Provider value={taskPresentation}>
       <SidebarTooltipProvider>
         <aside data-testid={TID_SIDEBAR} className="flex h-full min-h-0 flex-col overflow-hidden">
-          <div className="h-12 shrink-0 max-md:hidden" />
+          <div className="shrink-0 max-md:hidden"><WorkspaceSidebarToolbar expanded={props.isSidebarVisible ?? true} onToggle={() => props.onToggleSidebar?.()} canGoBack={props.canGoBack} canGoForward={props.canGoForward} onGoBack={props.onGoBack} onGoForward={props.onGoForward} toggleShortcut={props.toggleSidebarShortcutLabel} backShortcut={props.goBackShortcutLabel} forwardShortcut={props.goForwardShortcutLabel} /></div>
           {/* 内联改名聚焦曾把 hidden 容器横向滚动，导致手机整栏左移；滑动面板只裁切，不允许焦点滚动。 */}
           <div className="relative min-h-0 flex-1 overflow-clip">
             <div

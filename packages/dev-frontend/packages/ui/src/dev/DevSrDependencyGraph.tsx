@@ -12,7 +12,7 @@ type DependencyEdge = Edge<{ reason: string }>;
 export function DevSrDependencyGraph({ group, material, rows }: { group: DevRequirementGroup; material: DevMaterialView; rows: DevSystemRequirement[] }) {
  const [selectedId, setSelectedId] = useState<string>();
  const graph = useMemo(() => {
-  const result = readSrDependencies(group, material);
+  const result = readSrDependencies(group, material, false);
   const nodes: Node<{ label: ReactNode }>[] = [];
   const edges: DependencyEdge[] = [];
   if (!result.document) return { nodes, edges, issue: result.issue };
@@ -37,10 +37,12 @@ export function DevSrDependencyGraph({ group, material, rows }: { group: DevRequ
    const column = columns.get(depth) ?? 0;
    columns.set(depth, column + 1);
    const title = rows.find(sr => sr.id === row.srId)?.title ?? row.srId;
+   const estimate = row.estimate;
+   const estimateLabel = estimate && Number.isFinite(estimate.workingDays) && estimate.workingDays > 0 && typeof estimate.assumptions === "string" && estimate.assumptions.trim() ? `预估 ${estimate.workingDays} 个工作日` : "待预估";
    nodes.push({ id: row.srId, position: { x: (column + (maxWidth - widths.get(depth)!) / 2) * 250, y: depth * 180 },
     sourcePosition: Position.Bottom, targetPosition: Position.Top,
     ariaLabel: `${row.srId}：${title}`, style: { width: 220, minHeight: 110, background: "var(--color-card)", color: "var(--color-foreground)", borderColor: "var(--color-border)", borderRadius: 8 },
-    data: { label: <div className="space-y-2 text-left"><p className="break-all font-mono text-ui-xs text-foreground-subtle">{row.srId}</p><p className="break-words text-ui-sm font-medium">{title}</p></div> } });
+    data: { label: <div className="space-y-2 text-left"><p className="break-all font-mono text-ui-xs text-foreground-subtle">{row.srId}</p><p className="break-words text-ui-sm font-medium">{title}</p><p className="text-ui-xs text-foreground-subtle">{estimateLabel}</p></div> } });
    for (const dependency of row.prerequisites) edges.push({ id: JSON.stringify([dependency.srId, row.srId]), source: dependency.srId, target: row.srId, type: "smoothstep", data: { reason: dependency.reason },
     ariaLabel: `${dependency.srId} → ${row.srId}：${dependency.reason}`, markerEnd: { type: MarkerType.ArrowClosed, color: "var(--color-foreground-subtle)" }, style: { stroke: "var(--color-foreground-subtle)", strokeWidth: 2 }, interactionWidth: 24 });
   }
@@ -50,7 +52,7 @@ export function DevSrDependencyGraph({ group, material, rows }: { group: DevRequ
  if (graph.issue) return <p role="alert" className="text-ui-sm text-destructive">{graph.issue}</p>;
  if (!graph.nodes.length) return <p className="text-ui-sm text-foreground-subtle">当前 IR 没有 SR。</p>;
  return <section className="space-y-3" aria-label="SR 依赖图" data-testid="sr-dependency-graph">
-  <p className="text-ui-xs text-foreground-subtle">箭头从前置 SR 指向依赖它的 SR。可缩放、平移；点击连线查看原因。{!graph.edges.length && "各 SR 无前置依赖，可独立安排。"}</p>
+  <p className="text-ui-xs text-foreground-subtle">箭头从前置 SR 指向依赖它的 SR。可缩放、平移；点击连线查看原因；缺少完整工期预估的节点标为“待预估”，请在方案对话中补齐。{!graph.edges.length && "各 SR 无前置依赖，可独立安排。"}</p>
   <div className="h-[420px] min-w-0 overflow-hidden rounded-md border border-border">
    <Canvas key={`${material.path}:${material.sha256}`} nodes={graph.nodes} edges={graph.edges} nodesDraggable={false} nodesConnectable={false} edgesReconnectable={false} deleteKeyCode={null} selectionOnDrag={false} panOnDrag minZoom={0.1} maxZoom={2} fitViewOptions={{ padding: 0.2, maxZoom: 1 }} onEdgeClick={(_event, edge) => setSelectedId(edge.id)} onPaneClick={() => setSelectedId(undefined)}>
     <Controls showInteractive={false} />

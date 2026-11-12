@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FileApplicationInfo, IPlatformService } from "@zcode/shared";
 import { ChevronDownIcon, CopyIcon, DownloadIcon, FolderOpenIcon } from "lucide-react";
@@ -162,7 +163,7 @@ function OpenAsFileSplitButton({
 
   const handleCopyPath = () => {
     void ensureLocalPath()
-      .then((localPath) => navigator.clipboard?.writeText(localPath))
+      .then((localPath) => writeBrowserClipboardText(localPath))
       .catch((error: unknown) => reportFailure("copy-path", error));
   };
 

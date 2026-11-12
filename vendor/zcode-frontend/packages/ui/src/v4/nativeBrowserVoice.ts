@@ -283,7 +283,7 @@ export function executeNativeBrowserVoiceAction(
     }
     if (owner?.current) return Promise.reject(new Error("This session already owns a browser voice connection or microphone request."));
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") {
-      return Promise.reject(new Error("Native live voice requires a secure browser context with microphone and WebRTC support."));
+      return Promise.reject(new Error(!window.isSecureContext ? "当前 HTTP 内网访问不支持浏览器麦克风，请使用文字输入或上传音频文件。" : "当前浏览器不支持麦克风或 WebRTC。"));
     }
     installPagehide();
     if (!owner) { owner = { consumedOffers: new Set() }; owners.set(key, owner); }

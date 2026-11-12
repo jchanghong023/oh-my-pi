@@ -2420,7 +2420,6 @@ function ConversationComposerImpl({
             {intl.formatMessage({ id: "remote.conversation.sendUnavailable" })}
           </span>
         ) : null}
-        <DevSketchButton disabled={disabled || runtimeBlocked} onAddFiles={attachmentsApi.addAttachmentFiles} onReturnToComposer={requestComposerFocus} />
         {remoteAvailable || modelSelectionView?.nativeSession !== undefined ? (
           <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden empty:hidden" title={devRoleModelBound ? "此会话使用创建时配置；在模型设置中调整后用于新会话。" : undefined}>
             <V4ComposerModelControls
@@ -2468,6 +2467,7 @@ function ConversationComposerImpl({
           </span>
         ) : null}
         <DevSpeechInputButton disabled={disabled || runtimeBlocked || pending} onInsertText={insertSpeechTranscript} onReturnToComposer={requestComposerFocus} />
+        <DevSketchButton disabled={disabled || runtimeBlocked} onAddFiles={attachmentsApi.addAttachmentFiles} onReturnToComposer={requestComposerFocus} />
         {showStopControl ? (
           <ControlHintTooltip title={stopTooltipTitle} shortcut="Esc">
             <Button

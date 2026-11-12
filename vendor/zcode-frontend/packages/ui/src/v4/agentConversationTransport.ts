@@ -1,3 +1,4 @@
+import { createUuid } from "@zcode/shared";
 import type { SessionLifecycleSnapshot } from "@zcode/shared";
 import { sendWithConversationDelayE2E } from "@/v4/conversationTransportDelayE2E.js";
 import { getLocalTtftObserver } from "@/v4/telemetry/local-ttft/contract.js";
@@ -111,7 +112,7 @@ export function createAgentConversationTransport(
     calibrationFlight = agentService
       .queryConversationCommandsV4({
         ...workspace,
-        commands: [{ sessionId: null, commandId: `ttft-clock-${crypto.randomUUID()}` }],
+        commands: [{ sessionId: null, commandId: `ttft-clock-${createUuid()}` }],
         clock: true,
       })
       .then((result) => {

@@ -1,4 +1,5 @@
 /* eslint-disable max-lines -- 顶部 Git 操作当前集中承载 trigger、commit dialog 和 push dialog；先按工作流边界收口，避免为了拆行数把状态机打散。 */
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import {
   useCallback,
   useEffect,
@@ -612,7 +613,7 @@ function GitPushDialog({
       return;
     }
 
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    if (typeof navigator === "undefined" || typeof document === "undefined") {
       toast(
         intl.formatMessage(
           { id: "git.actionMenu.pushDialog.error.copyFailed" },
@@ -622,7 +623,7 @@ function GitPushDialog({
       return;
     }
 
-    void navigator.clipboard.writeText(error).then(
+    void writeBrowserClipboardText(error).then(
       () => {
         setErrorCopied(true);
         window.setTimeout(() => {

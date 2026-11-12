@@ -1,5 +1,6 @@
 "use client";
 
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import type {
   ComponentProps,
   CSSProperties,
@@ -395,9 +396,12 @@ export function resolveMarkdownTableVirtualScrollMax({
   return Math.max(0, tableWidth - trackWidth);
 }
 
-export type MarkdownTableProps = ComponentProps<"table"> & MarkdownTableNodeProp;
+export type MarkdownTableProps = ComponentProps<"table"> & MarkdownTableNodeProp & {
+  /** Reading panes can retain preview/scroll without copy or download actions. */
+  showExportActions?: boolean;
+};
 
-export function MarkdownTable({ className, children, node: _node, ...props }: MarkdownTableProps) {
+export function MarkdownTable({ className, children, showExportActions = true, node: _node, ...props }: MarkdownTableProps) {
   const { intl } = useZCodeIntl();
   const [previewOpen, setPreviewOpen] = useState(false);
   const previewTriggerRef = useRef<HTMLButtonElement>(null);
@@ -1105,7 +1109,7 @@ export function MarkdownTable({ className, children, node: _node, ...props }: Ma
   );
 
   const handleCopyMarkdown = useCallback(async () => {
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    if (typeof navigator === "undefined" || typeof document === "undefined") {
       toast(
         intl.formatMessage({ id: "markdownTable.copyFailed" }, { error: "clipboard-unavailable" }),
       );
@@ -1113,7 +1117,7 @@ export function MarkdownTable({ className, children, node: _node, ...props }: Ma
     }
 
     try {
-      await navigator.clipboard.writeText(buildMarkdownTableText(getRows()));
+      await writeBrowserClipboardText(buildMarkdownTableText(getRows()));
       toast(intl.formatMessage({ id: "markdownTable.copySucceeded" }));
     } catch (error) {
       toast(
@@ -1191,6 +1195,7 @@ export function MarkdownTable({ className, children, node: _node, ...props }: Ma
   return (
     <div ref={rootRef} className="my-0 flex min-w-0 flex-col gap-2">
       <div className="flex items-center justify-end gap-1" data-markdown-table-toolbar="">
+        {showExportActions && <>
         <MarkdownTableActionButton
           label={copyLabel}
           onClick={() => {
@@ -1202,6 +1207,7 @@ export function MarkdownTable({ className, children, node: _node, ...props }: Ma
         <MarkdownTableActionButton label={downloadLabel} onClick={handleDownloadCsv}>
           <DownloadIcon className="size-3.5" />
         </MarkdownTableActionButton>
+        </>}
         <MarkdownTableActionButton buttonRef={previewTriggerRef} label={previewLabel} onClick={() => setPreviewOpen(true)}>
           <Maximize2Icon className="size-3.5" />
         </MarkdownTableActionButton>

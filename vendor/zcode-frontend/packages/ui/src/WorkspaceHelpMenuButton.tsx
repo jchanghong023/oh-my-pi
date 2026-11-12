@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { useState } from "react";
 import { DesktopCommandIds } from "@zcode/shared";
 import {
@@ -65,10 +66,10 @@ export function WorkspaceHelpMenuButton({
   const handleCopyDeviceMid = async () => {
     try {
       const deviceMid = platform.getDeviceId();
-      if (!deviceMid || typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      if (!deviceMid || typeof navigator === "undefined" || typeof document === "undefined") {
         throw new Error("clipboard unavailable");
       }
-      await navigator.clipboard.writeText(deviceMid);
+      await writeBrowserClipboardText(deviceMid);
       toast(intl.formatMessage({ id: "workspaceHeader.help.deviceMidCopied" }));
     } catch {
       toast(intl.formatMessage({ id: "workspaceHeader.help.deviceMidCopyFailed" }));

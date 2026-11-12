@@ -7,7 +7,7 @@ interface SidebarPreferences {
 	formalSectionOpen: boolean;
 	proposalSectionOpen: boolean;
 	expandedIrIds: string[];
-	proposalList: { phase: string; proposer: string; developer: string; intake: string; sort: string };
+	proposalList: { phase: string; proposer: string; intake: "all" | "attention"; sort: string };
 }
 // 仅在本页保留导航选择；刷新恢复默认筛选、排序、栏目展开及 IR 子项收起。
 const preferences = new Map<string, SidebarPreferences>();
@@ -16,7 +16,7 @@ export function readSidebarPreferences(key: string): SidebarPreferences {
  const scoped = storageKey(key);
  const cached = preferences.get(scoped);
  if (cached) return structuredClone(cached);
- const result: SidebarPreferences = { query: "", filter: "all", formalSectionOpen: true, proposalSectionOpen: true, expandedIrIds: [], proposalList: { phase: "all", proposer: "all", developer: "all", intake: "all", sort: "updated" } };
+ const result: SidebarPreferences = { query: "", filter: "all", formalSectionOpen: true, proposalSectionOpen: true, expandedIrIds: [], proposalList: { phase: "all", proposer: "all", intake: "all", sort: "updated" } };
  preferences.set(scoped, result);
  return structuredClone(result);
 }

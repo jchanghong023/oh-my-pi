@@ -20,7 +20,7 @@ export function withPrototypeProgress(view: DevWorkflowView): DevWorkflowView {
   return {
     ...view,
     groups: view.groups.map(group => ({ ...group, ownerEmployeeId: owners.get(`${group.projectId}:${group.id}`) })),
-    drafts: view.drafts.map(group => ({ ...group, ownerEmployeeId: owners.get(`${group.projectId}:${group.id}`) })),
+    drafts: view.drafts.map(group => ({ ...group, ownerEmployeeId: undefined })),
     srs: view.srs.map(sr => {
       if (!formal.has(sr.irId)) return sr;
       const key = `${sr.projectId}:${sr.id}`;
@@ -44,6 +44,7 @@ export function withPrototypeProgress(view: DevWorkflowView): DevWorkflowView {
   };
 }
 export async function assignPrototypeIrOwner(projectId: string, irId: string, employeeId: string): Promise<void> {
+  if (!getPrototypeWorkflow({ projectId }).groups.some(group => group.projectId === projectId && group.id === irId)) throw new Error("提案不设置负责人；转为正式需求后再分配。");
   if (getEmployeeId() !== "j00808874") throw new Error("只有管理员可分配需求负责人。");
   if (!isEmployeeId(employeeId)) throw new Error("工号须为一个小写字母后接 8 位数字。");
   const view = getPrototypeWorkflow({ projectId });

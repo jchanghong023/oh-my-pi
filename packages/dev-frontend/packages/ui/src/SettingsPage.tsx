@@ -1,9 +1,8 @@
+import { ZCodeStartupLogoBadge } from "@/root/RootStartupLoading.js";
 /* oxlint-disable eslint(max-lines) */
 import { DevPersonalConfigScope } from "@/dev/DevPersonalConfigScope.js";
 import { DevProjectSettings } from "@/dev/DevWorkbench.js";
 import { DevPersonalizationSettings } from "@/dev/DevPersonalizationSettings.js";
-import { DevSkillDesignSettings } from "@/dev/DevSkillDesignSettings.js";
-import { DevProgressAnalysisSettings } from "@/dev/DevProgressAnalysisSettings.js";
 import { DevAgentModelSettings, type DevModelDraftActions } from "@/dev/DevAgentModelSettings.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog.js";
 import { useDev } from "@/dev/DevContext.js";
@@ -365,7 +364,7 @@ export function SettingsPage({
         >
           <aside className="min-w-0">
             <div className="flex h-full flex-col">
-              <div className="h-12 [app-region:drag]"></div>
+              <div className="flex h-12 shrink-0 items-center px-4"><span role="img" aria-label="ZCode" data-testid="settings-logo" className="pointer-events-none flex size-5 items-center justify-center select-none"><ZCodeStartupLogoBadge size="titlebar" animated={false} /></span></div>
               <div className="px-2 pb-3 pt-3">
                 {onBack ? (
                   <ControlHintTooltip
@@ -515,7 +514,6 @@ export function SettingsPage({
                       <div
                         className={cn(
                           SETTINGS_FRAME_CONTENT_CLASSNAME,
-                          (activeSection === "skillDesign" || activeSection === "progressAnalysis") && "max-w-none",
                           "flex flex-col gap-8",
                         )}
                       >
@@ -545,8 +543,6 @@ export function SettingsPage({
                         <div className="space-y-8">
                           {activeSection === "general" ? (
                             <DevProjectSettings />
-                          ) : activeSection === "progressAnalysis" ? (
-                            <DevProgressAnalysisSettings />
                           ) : activeSection === "appearance" ? (
                             <AppearanceSectionContent
                               codePreviewSettings={codePreviewSettings}
@@ -598,8 +594,6 @@ export function SettingsPage({
                                 workspaceDisplayNames={memoryWorkspaceDisplayNames}
                               />
                             </ServiceProvider>
-                          ) : activeSection === "skillDesign" ? (
-                            <DevSkillDesignSettings />
                           ) : activeSection === "skill" ? (
                             <div className="space-y-4">
                               {dev && <DevPersonalConfigScope />}

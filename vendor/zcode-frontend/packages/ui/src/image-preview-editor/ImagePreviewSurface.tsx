@@ -1,3 +1,4 @@
+import { createUuid } from "@zcode/shared";
 import { useEffect, useEffectEvent, useRef, useState, type PointerEvent } from "react";
 import { MinusIcon, PlusIcon } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
@@ -199,7 +200,7 @@ export function ImagePreviewSurface({
     if (tool === "text") {
       if (textDraft?.text?.trim()) commit([...history.present, textDraft]);
       setTextDraft({
-        id: crypto.randomUUID(),
+        id: createUuid(),
         tool: "text",
         color,
         width: Math.max(2, 4 / fit),
@@ -220,7 +221,7 @@ export function ImagePreviewSurface({
       return;
     }
     const mark: Annotation = {
-      id: crypto.randomUUID(),
+      id: createUuid(),
       tool,
       color,
       width: Math.max(2, 3 / fit),

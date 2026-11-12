@@ -1,3 +1,4 @@
+import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import type { ZCodeProvider } from "@zcode/shared";
 import { useCallback } from "react";
 import { usePlatform } from "@/hooks/usePlatform.js";
@@ -124,7 +125,7 @@ export function useTaskListItemContextActions({
       }
 
       try {
-        await navigator.clipboard.writeText(value);
+        await writeBrowserClipboardText(value);
         logger.info(`[TaskListItem] ${label} 已复制: ${value}`);
       } catch (error) {
         logger.warn("[TaskListItem] 复制文本失败", {

@@ -5,7 +5,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import type { UniqueIdentifier } from "@dnd-kit/core";
 import { isCronTask } from "@zcode/shared";
-import { ArrowUpToLine, Clock, Folder, ListTree, LoaderIcon, X } from "lucide-react";
+import { ArrowUpToLine, Clock, Folder, ListTree, LoaderCircle, X } from "lucide-react";
 import { cn } from "@/components/lib/utils.js";
 import { Badge } from "@/components/ui/badge.js";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu.js";
@@ -188,7 +188,7 @@ function GroupedTaskRowComponent({
             )}
           >
             {leadingIndicator === "loading" ? (
-              <LoaderIcon className="size-3.5 animate-spin text-foreground-subtle" />
+              <LoaderCircle className="size-3.5 animate-spin text-foreground-subtle" />
             ) : statusDotClassName ? (
               <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center">
                 <span className={cn("size-1.5 rounded-full", statusDotClassName)} />
@@ -351,7 +351,7 @@ function GroupedTaskRowComponent({
           {!shouldSuppressTaskMetadata ? (
             <span className="flex shrink-0 items-center gap-1">
               {leadingIndicator === "loading" ? (
-                <LoaderIcon className="size-3.5 animate-spin text-foreground-subtle" />
+                <LoaderCircle className="size-3.5 animate-spin text-foreground-subtle" />
               ) : statusDotClassName ? (
                 <span
                   aria-hidden="true"
