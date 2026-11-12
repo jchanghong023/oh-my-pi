@@ -1,3 +1,4 @@
+import type { AIReqIssue, AIReqIssueInput, AIReqIssueScope, AIReqIssueSnapshot } from "../packages/ui/src/aireq/issues.js";
 import type { IServiceAccessor } from "@zcode/services";
 import type { SkillSummary, SkillsListResult, ZCodeProvider } from "@zcode/shared";
 import type {
@@ -89,6 +90,12 @@ interface Operation<A extends unknown[], R> {
 
 /** Frozen /api/aireq/call operations. Void/absent top-level results are JSON null. */
 export interface AIReqRemoteOperations {
+  "issues.read": Operation<[scope: AIReqIssueScope], AIReqIssueSnapshot>;
+  "issues.create": Operation<[input: AIReqIssueInput], AIReqIssue>;
+  "issues.configure": Operation<[scope: AIReqIssueScope, enabled: boolean, intervalMinutes: number], null>;
+  "issues.runNow": Operation<[scope: AIReqIssueScope], null>;
+  "issues.confirm": Operation<[scope: AIReqIssueScope, id: string], null>;
+  "issues.reopen": Operation<[scope: AIReqIssueScope, id: string, reason: string], null>;
 	readWorkflow: Operation<[selection: AIReqSelection], AIReqRemoteWorkflow>;
 	readPrHandoff: Operation<[group: AIReqWorkflowView["groups"][number]], AIReqPrHandoff>;
 	command: Operation<[action: AIReqAction, selection: AIReqSelection, revision: number], AIReqWorkflowResult>;
@@ -185,6 +192,7 @@ export interface AIReqRemoteBootstrap {
 }
 export type AIReqRemoteEvent =
 	| { type: "workflow" }
+	| { type: "issues" }
 	| { type: "models" }
 	| { type: "scheduler" }
 	| { type: "freeChats" }

@@ -29,6 +29,7 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 	const connections = new Set<AbortController>();
 	const workflowListeners = new Set<() => void>();
 	const modelListeners = new Set<() => void>();
+	const issueListeners = new Set<() => void>();
 	const schedulerListeners = new Set<() => void>();
 	const freeChatListeners = new Set<() => void>();
 	const skillListeners = new Set<(sessionId: string) => void>();
@@ -124,6 +125,7 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 					fail(new Error(frame.error?.message ?? "AIReq backend event error"));
 					return;
 				}
+				if (frame.type === "issues") emit(issueListeners);
 				if (frame.type === "scheduler") emit(schedulerListeners);
 				if (frame.type === "freeChats") emit(freeChatListeners);
 				if (frame.type === "skills") for (const listener of skillListeners) listener(frame.sessionId ?? "");
@@ -327,6 +329,16 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 		get prototype(): AIReqDataSource["prototype"] {
 			return metadata.scenarioOperations ? scenarios : undefined;
 		},
+    issues: {
+      read: (...args) => call("issues.read", args),
+      create: (...args) => call("issues.create", args),
+      configure: async (...args) => { await call("issues.configure", args); },
+      runNow: async (...args) => { await call("issues.runNow", args); },
+      confirm: async (...args) => { await call("issues.confirm", args); },
+      reopen: async (...args) => { await call("issues.reopen", args); },
+      subscribe: listener => subscribe(issueListeners, listener),
+      dispose: () => { issueListeners.clear(); },
+    },
 		progressScheduler: {
 			read: () => call("progressScheduler.read", []),
 			queryTasks: (...args) => call("progressScheduler.queryTasks", args),
