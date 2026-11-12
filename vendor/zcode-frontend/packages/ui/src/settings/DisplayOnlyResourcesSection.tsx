@@ -1,3 +1,4 @@
+import { ReadOnlyBuiltInPlugins } from "@/settings/ReadOnlyBuiltInPlugins.js";
 import { ChevronDown, Monitor, Plus, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -7,11 +8,9 @@ import { SettingsSearchInput } from "@/settings/SettingsSearchInput.js";
 /** 仅复用资源管理页外观，不挂载作用域、插件、模型或子智能体服务。 */
 export function DisplayOnlyResourcesSection({ kind }: { kind: "plugin" | "subagents" }) {
   const { intl } = useZCodeIntl();
-  const isPlugin = kind === "plugin";
-  const titleId = isPlugin ? "settings.plugins.title" : "settings.subagents.title";
-  const groups = isPlugin
-    ? ["settings.plugin.plugins.installed", "settings.plugin.plugins.builtIn"]
-    : ["settings.subagents.group.user", "settings.subagents.group.builtIn"];
+  if (kind === "plugin") return <ReadOnlyBuiltInPlugins />;
+  const titleId = "settings.subagents.title";
+  const groups = ["settings.subagents.group.user", "settings.subagents.group.builtIn"];
 
   return (
     <div className="space-y-6">
@@ -32,8 +31,8 @@ export function DisplayOnlyResourcesSection({ kind }: { kind: "plugin" | "subage
           containerClassName="w-full sm:ml-auto sm:w-64"
           value=""
           disabled
-          aria-label={intl.formatMessage({ id: isPlugin ? "settings.plugin.plugins.searchPlaceholder" : "settings.subagents.searchPlaceholder" })}
-          placeholder={intl.formatMessage({ id: isPlugin ? "settings.plugin.plugins.searchPlaceholder" : "settings.subagents.searchPlaceholder" })}
+          aria-label={intl.formatMessage({ id: "settings.subagents.searchPlaceholder" })}
+          placeholder={intl.formatMessage({ id: "settings.subagents.searchPlaceholder" })}
         />
       </div>
       <p className="text-ui-sm text-foreground-subtle">
@@ -51,14 +50,9 @@ export function DisplayOnlyResourcesSection({ kind }: { kind: "plugin" | "subage
                 <Button type="button" variant="outline" size="icon-md" disabled aria-label={intl.formatMessage({ id: "common.refresh" })}>
                   <RefreshCcw aria-hidden="true" />
                 </Button>
-                {isPlugin ? (
-                  <Button type="button" variant="outline" disabled>
-                    {intl.formatMessage({ id: "chat.plugins.browseMarketplace" })}
-                  </Button>
-                ) : null}
                 <Button type="button" disabled>
                   <Plus data-icon="inline-start" aria-hidden="true" />
-                  {intl.formatMessage({ id: isPlugin ? "pluginCreator.add" : "settings.create.action" })}
+                  {intl.formatMessage({ id: "settings.create.action" })}
                 </Button>
               </div>
             ) : null}

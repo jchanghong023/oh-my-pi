@@ -233,3 +233,7 @@ Chromium151、1440×1000深色桌面实际截图并查看主页及设置页；�
 共享组件另下载比对241份官方TSX，自有AIReq实际UI未发现额外硬编码色；mock演示源码中的色值、官方原有代码／图形专用尺寸不当作主题缺陷。WebGUI的useTheme与官方相同，AIReq只保留安全存储适配；浏览器根背景仍使用官方语义token。HTTP、Worker、权限、业务裁剪和个人配置语义不因视觉对齐改变。核对记录位于/workspace/work/primitive-audit/report.md、/workspace/work/zcode-platform-review/theme-token-audit.json及/workspace/work/shared-shell-audit/，不把这些源码核对称作全部界面逐像素验收。
 
 整合后两套前端生产构建通过（仅生成被忽略产物，未启动WebGUI），保留原有Office动态分包提示；宿主5903文件类型检查通过。AIReq在Chromium151、1440×1000深色桌面重新截图查看主页及设置页，外壳计算背景均为rgb(43,43,43)，正文面板继续使用官方背景；未运行测试套件，未核验Firefox、WebGUI运行画面或完整发行二进制。
+
+## 插件设置的只读目录
+
+AIReq 和 WebGUI 的插件设置由空态恢复为 ZCode 3.18.0 内置插件静态目录，复用 PluginStoreAvatar／PluginIcon、40px 图标、原生字阶与插件市场自适应网格。使用官方 `@container/plugin-store` 与 `@min-[40rem]/plugin-store:grid-cols-2`：内容区达到 640px 自动两列，否则一列，列间距 24px；随实际内容宽度及侧栏开合重排，名称和简介单行省略并保留完整悬停文本。条目来自固定官方提交 `b95ebaffeab641907b38652f45c1502bd762972d` 的公开 listing，静态展示名称、简介和数量，允许本地搜索；不调用市场、安装库存或后端。设计及交互视图使用同源本地图标，缺失图标保留原生兜底。所有修改、刷新、添加及浏览市场动作禁用，不恢复插件执行能力；子智能体保持原先纯展示空态。

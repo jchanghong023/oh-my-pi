@@ -260,7 +260,7 @@ export interface AIReqAgentModelSettings {
 	agents: AIReqAgentModel[];
 }
 
-export type AIReqAgentRole = "requirements" | "requirements-review-a" | "requirements-review-b" | "requirements-review-c" | "requirements-review" | "solution" | "planning" | "execution" | "ir-acceptance" | "skill-design";
+export type AIReqAgentRole = "requirements" | "requirements-review-a" | "requirements-review-b" | "requirements-review-c" | "requirements-review" | "solution" | "planning" | "execution" | "ir-acceptance" | "skill-design" | "progress-analysis" | "issue-analysis";
 export interface AIReqAgentModelBinding {
  role: AIReqAgentRole;
  roleName: string;
