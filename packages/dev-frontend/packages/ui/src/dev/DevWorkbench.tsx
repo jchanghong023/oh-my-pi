@@ -7,8 +7,9 @@ import { useDevDataSource } from "./data-source.js";
 import type { DevMaterialView } from "./types.js";
 import { MATERIAL_KIND_LABELS, requirementMaterialName } from "./domain.js";
 import { useEffect, useMemo, useState } from "react";
-import { Settings } from "lucide-react";
+import { ChevronRight, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { SessionPane } from "@/v4/SessionPane.js";
 import { V4PaneConversationProvider } from "@/v4/V4ConversationContext.js";
@@ -171,7 +172,10 @@ export function DevMaterialsPane() {
         data-material-path={showPlanning ? undefined : path}
         data-material-valid={showPlanning ? undefined : current?.valid}
 			>
-        {!showPlanning && path && <details className="mb-4 text-ui-xs text-foreground-subtle"><summary className="cursor-pointer">文件路径与技术信息</summary><p className="mt-2 whitespace-pre-wrap break-all font-mono select-text" data-testid="material-full-path">{displayPath(path)}</p></details>}
+        {!showPlanning && path && <Collapsible className="mb-4">
+          <CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="group/material-path gap-1 px-0 text-ui-sm text-foreground-subtle focus-visible:ring-2 focus-visible:ring-ring/50"><ChevronRight className="size-3.5 transition-transform group-data-[state=open]/material-path:rotate-90" />文件路径与技术信息</Button></CollapsibleTrigger>
+          <CollapsibleContent><p className="pt-2 whitespace-pre-wrap break-all font-mono text-ui-sm text-foreground-subtle select-text" data-testid="material-full-path">{displayPath(path)}</p></CollapsibleContent>
+        </Collapsible>}
         {showPlanning && proposalSolutionView && group ? <DevPlanningSummary group={group} rows={planningRows} editable /> : error || current?.error ? (
 					<div className="space-y-3"><p role="alert" className="text-ui-base text-destructive">{error ?? current?.error}</p><Button size="sm" variant="outline" data-testid="material-retry" onClick={async () => { const recovered = await dev.retryMaterial(path); setReadFeedback(recovered ? "材料已重新读取。" : "仍无法读取，请恢复原文件；当前阶段可由开发人明确重新生成材料。"); }}>重新读取材料</Button>{readFeedback && <p role="status" className="text-ui-sm text-foreground-subtle">{readFeedback}</p>}</div>
 				) : !selection.irId ? (
