@@ -73,8 +73,8 @@ export function AIReqReviewNavigation() {
    <Button variant="ghost" size="sm" className="shrink-0 gap-1.5" aria-label="展开评审工作流" title="展开评审工作流" onClick={() => setExpanded(true)}><GitFork className="size-4" />评审流程</Button>
   </div>
   <ControlHintTooltip title={reviewDescription}><p tabIndex={0} className="mx-auto flex max-w-full flex-wrap items-baseline justify-center gap-x-1.5 gap-y-1 rounded-sm text-center text-ui-sm text-foreground-subtle outline-none focus-visible:ring-2 focus-visible:ring-ring/50" data-testid="review-session-description">{reviewDescriptionParts.map((part, index) => <span key={index} className="inline-flex min-w-0 max-w-full items-baseline gap-1.5"><span className="min-w-0 break-words [overflow-wrap:anywhere]">{part}</span>{index < reviewDescriptionParts.length - 1 && <span aria-hidden="true" className="shrink-0">·</span>}</span>)}</p></ControlHintTooltip>
-  <Dialog open={expanded} onOpenChange={setExpanded}><DialogContent className="flex max-h-[85dvh] flex-col overflow-auto sm:max-w-6xl"><DialogHeader><DialogTitle>需求评审工作流</DialogTitle><DialogDescription>三个模型并行只读审查同一版需求 → 第四个 Agent 综合意见 → 人工决定。评审结论以当前版本的报告为准。</DialogDescription></DialogHeader>
-   <WorkflowTimeline model={diagram} onOpenPill={pill => { choose(pill.key); setExpanded(false); }} onSelectStation={station => { if (station.id !== "human") { choose(station.id); setExpanded(false); } }} />
+  <Dialog open={expanded} onOpenChange={setExpanded}><DialogContent className="flex max-h-[85dvh] w-[calc(100%-2rem)] flex-col gap-6 overflow-hidden p-6 sm:max-w-5xl"><DialogHeader className="shrink-0 pr-8"><DialogTitle>需求评审工作流</DialogTitle><DialogDescription>三个模型并行只读审查同一版需求 → 第四个 Agent 综合意见 → 人工决定。评审结论以当前版本的报告为准。</DialogDescription></DialogHeader>
+   <div className="min-h-0 overflow-y-auto"><WorkflowTimeline model={diagram} onOpenPill={pill => { choose(pill.key); setExpanded(false); }} onSelectStation={station => { if (station.id !== "human") { choose(station.id); setExpanded(false); } }} /></div>
   </DialogContent></Dialog>
  </div>;
 }
