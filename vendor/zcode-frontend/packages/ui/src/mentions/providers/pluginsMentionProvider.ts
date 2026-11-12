@@ -110,7 +110,9 @@ export function usePluginsMentionProvider(
   title: string,
 ): MentionCategoryResult {
   const { intl, locale } = useZCodeIntl();
-  const { order } = usePluginStoreOrder(enabled);
+  // 插件暂缓实现，不加载市场排序配置。
+  // const { order } = usePluginStoreOrder(enabled);
+  const { order } = usePluginStoreOrder(false);
   const isOfficeMode = useIsOfficeMode();
   const modeOrder = isOfficeMode ? order?.work : order?.code;
   const catalog = usePluginReferenceCatalog(workspacePath, workspaceIdentity, sessionId, enabled);

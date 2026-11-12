@@ -123,6 +123,7 @@ export function createPrototypeDataSource(): AIReqDataSource {
 		backend: PROTOTYPE_BACKEND,
 		clientId: crypto.randomUUID(),
 		initialSelection: { ...DEFAULT_SELECTION },
+		serviceManifest: Object.fromEntries(Object.entries(services).map(([key, service]) => [key, Object.keys(service ?? {}).filter(name => typeof (service as Record<string, unknown>)[name] === "function")])),
 		capabilities: {
 			get settingsWrite() {
 				return prototypeSettingsWriteAllowed();

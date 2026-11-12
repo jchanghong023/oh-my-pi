@@ -86,7 +86,20 @@ function releaseSessionCatalogRequestWhenSettled(
  * 异步结果按 `workspaceKey + sessionId + runtime restart 代次 + 请求序号` 校验：key 变化或新请求发出后，
  * 旧 workspace/session/进程代次的返回一律丢弃，不得回填到新目标。
  */
+/** 插件暂缓实现：引用面板与消息图标也不请求目录或订阅运行时。 */
 export function usePluginReferenceCatalog(
+  workspacePath: string,
+  workspaceIdentity: string | undefined,
+  sessionId: string | null,
+  enabled: boolean,
+  options?: PluginReferenceCatalogOptions,
+): PluginReferenceCatalogState {
+  // 恢复插件功能前，不调用原版 hook；不能用空成功后端冒充接通。
+  // return useDeferredPluginReferenceCatalog(workspacePath, workspaceIdentity, sessionId, enabled, options);
+  return EMPTY_STATE;
+}
+
+function useDeferredPluginReferenceCatalog(
   workspacePath: string,
   workspaceIdentity: string | undefined,
   sessionId: string | null,

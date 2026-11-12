@@ -1,3 +1,4 @@
+import type { ChannelClient } from "@zcode/rpc";
 import { createUuid } from "@zcode/shared";
 import { connectViaWebSocket } from "@zcode/client";
 import {
@@ -79,6 +80,9 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 		const incoming = await request<AIReqRemoteBootstrap>("api/aireq/bootstrap");
 		if (incoming.contractVersion !== AIREQ_CONTRACT_VERSION)
 			throw new Error(`Unsupported AIReq backend contract version: ${incoming.contractVersion}`);
+		if (!incoming.serviceManifest || typeof incoming.serviceManifest !== "object" || Array.isArray(incoming.serviceManifest) ||
+			Object.values(incoming.serviceManifest).some(members => !Array.isArray(members) || members.some(name => typeof name !== "string" || !name)))
+			throw new Error("AIReq backend returned an invalid service capability manifest");
 		return incoming;
 	};
 	let metadata = await readBootstrap();
@@ -165,6 +169,7 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 		get capabilities() {
 			return metadata.capabilities;
 		},
+		get serviceManifest() { return metadata.serviceManifest; },
 		get initialSelection() {
 			return metadata.initialSelection;
 		},
@@ -224,10 +229,17 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 			targetUrl.searchParams.set("selection", JSON.stringify(target));
 			if (session) targetUrl.searchParams.set("session", JSON.stringify(session));
 			try {
-				const services = await connectViaWebSocket(targetUrl.toString(), { signal: connection.signal });
+				let channelClient: ChannelClient | undefined;
+				const services = await connectViaWebSocket(targetUrl.toString(), {
+					signal: connection.signal, browserDirect: true, serviceManifest: metadata.serviceManifest,
+					onChannelClient: client => { channelClient = client; },
+				});
 				return {
 					services,
-					dispose() {
+					async dispose() {
+						// Let the old React subtree release subscriptions/watchers before closing its wire.
+						await Promise.resolve();
+						await channelClient?.whenIdle();
 						connection.abort();
 						connections.delete(connection);
 					},

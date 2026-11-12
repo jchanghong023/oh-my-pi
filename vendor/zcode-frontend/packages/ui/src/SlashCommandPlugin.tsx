@@ -22,7 +22,8 @@ import {
   KEY_ESCAPE_COMMAND,
   KEY_TAB_COMMAND,
 } from "lexical";
-import { useSubagents } from "@/hooks/useSubagents.js";
+// 暂不接入子智能体管理；恢复前须先明确 OMP 的功能与接口边界。
+// import { useSubagents } from "@/hooks/useSubagents.js";
 import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import { useSkills } from "@/hooks/useSkills.js";
 import { buildSlashApplyMentionPayload } from "@/lib/slashApplyMentionPayload.js";
@@ -43,7 +44,7 @@ import { MentionPanel } from "./mentions/components/MentionPanel.js";
 import {
   buildAppSlashCommandSuggestions,
   buildSkillSuggestions,
-  buildSubagentSuggestions,
+  // buildSubagentSuggestions,
   buildSlashSuggestions,
   getTextAroundCursor,
   isAppSlashCommandSuggestion,
@@ -76,11 +77,11 @@ export function SlashCommandPlugin({
   // 远程 workspace 的 slashCommands 写在 workspaceIdentity 桶。
   // 这里只按 workspacePath 读取会落到 path 桶，表现为 ZCode Agent 已收到 available_commands_update 但 / 面板为空。
   const commands = useSlashCommands(workspacePath, workspaceIdentity);
-  const {
-    agents,
-    loading: subagentsLoading,
-    error: subagentsError,
-  } = useSubagents(workspacePath, provider, workspaceIdentity);
+  // 子智能体设置只展示：输入框挂载也不能偷偷预加载目录或订阅服务。
+  // const { agents, loading: subagentsLoading, error: subagentsError } =
+  //   useSubagents(workspacePath, provider, workspaceIdentity);
+  const subagentsLoading = false;
+  const subagentsError = null;
   const {
     skills,
     loading: skillsLoading,
@@ -117,7 +118,8 @@ export function SlashCommandPlugin({
     );
     return [...commandSuggestions, ...appSuggestions];
   }, [appCommands, cliSuggestions, excludedCommandNames, nativeHostAvailable]);
-  const subagentSuggestions = useMemo(() => nativeHostAvailable ? [] : buildSubagentSuggestions(agents), [agents, nativeHostAvailable]);
+  // const subagentSuggestions = useMemo(() => buildSubagentSuggestions(agents), [agents]);
+  const subagentSuggestions = useMemo<PromptInputSuggestionItem[]>(() => [], []);
   const skillSuggestions = useMemo(() => {
     if (nativeHostAvailable) {
       // Keep canonical /skill:* insertion and command availability, but admit

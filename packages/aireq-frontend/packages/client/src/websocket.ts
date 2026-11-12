@@ -20,6 +20,7 @@ export interface WebSocketConnectionCloseEvent {
 
 export interface ProtocolConnectionOptions extends RemoteServiceAccessOptions {
   signal?: AbortSignal;
+  onChannelClient?: (client: ChannelClient) => void;
 }
 
 export interface WebSocketConnectionOptions extends ProtocolConnectionOptions {
@@ -180,5 +181,6 @@ export function connectViaProtocol(
   const dispose = () => client.dispose();
   if (options.signal?.aborted) dispose();
   else options.signal?.addEventListener("abort", dispose, { once: true });
+  options.onChannelClient?.(client);
   return new RemoteServiceAccess(client, options);
 }

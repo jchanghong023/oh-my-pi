@@ -1,3 +1,4 @@
+import { createWorkspaceServiceProjection } from "@/lib/workspaceServiceProjection.js";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import type { ComposerInputPreview } from "@/prompt-editor/ChatPromptEditor.js";
 import { AIReqSkillFilePreview } from "./AIReqSkillFilePreview.js";
@@ -65,7 +66,8 @@ function SkillDesignEditor({ projectId, projectName, workspacePath, developmentR
 function ReadySkillDesignEditor({ projectId, projectName, workspacePath, developmentRoot, sessionId, identity }: { projectId: string; projectName: string; workspacePath: string; developmentRoot?: string; sessionId: string; identity: string }) {
   const source = useAIReqDataSource();
   const design = source.skillDesign!;
-  const services = useServices();
+  const baseServices = useServices();
+  const services = useMemo(() => createWorkspaceServiceProjection(baseServices), [baseServices]);
   const scope = useMemo(() => ({ workspacePath, workspaceIdentity: `${identity}:skill-design` }), [workspacePath, identity]);
   useEffect(() => {
     const registrationId = `aireq-skill-designer:${source.clientId}:${createUuid()}`;

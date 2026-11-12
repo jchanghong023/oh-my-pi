@@ -1,3 +1,4 @@
+import { useNativeHostAvailable, useNativeWorkspaceSession } from "@/hooks/useBackendBusinessAvailability.js";
 /* eslint-disable max-lines */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -401,7 +402,12 @@ export function useGitRepository(options: {
     workspaceIdentity,
     remoteTarget,
   );
-  const workspaceRpcEnabled = shouldEnableWorkspaceRpc({
+  const nativeScope = useNativeWorkspaceSession();
+  const nativeHostAvailable = useNativeHostAvailable();
+  const nativeReady = !nativeHostAvailable || !nativeScope ||
+    (nativeScope.ready && nativeScope.workspacePath === workspacePath);
+  // Native file/Git ownership is asynchronous. Wait for it instead of treating that wait as a failed read.
+  const workspaceRpcEnabled = nativeReady && shouldEnableWorkspaceRpc({
     workspaceIdentity,
     remoteSessionId,
     remoteTarget,

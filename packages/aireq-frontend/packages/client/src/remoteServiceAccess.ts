@@ -1,3 +1,4 @@
+import type { ServiceCapabilityManifest } from "@zcode/services";
 import { IGenUiService } from "@zcode/services";
 import { ProxyChannel, type IChannelClient } from "@zcode/rpc";
 import {
@@ -47,7 +48,40 @@ import {
   type IServiceAccessor,
 } from "@zcode/services";
 
+type RequiredServiceName = {
+  [K in keyof IServiceAccessor]-?: {} extends Pick<IServiceAccessor, K> ? never : K;
+}[keyof IServiceAccessor];
+const requiredServices = {
+  fileService: true,
+  gitService: true,
+  gitCheckpointService: true,
+  systemService: true,
+  settingService: true,
+  credentialService: true,
+  broadcastService: true,
+  zcodeTaskService: true,
+  zcodeAgentService: true,
+  zcodeSessionService: true,
+  botsService: true,
+  fileWatcherService: true,
+  providerSettingsService: true,
+  modelSelectionService: true,
+  clientConfigService: true,
+  skillsService: true,
+  skillSyncService: true,
+  userConfigSyncService: true,
+  subagentsService: true,
+  commandsService: true,
+  hooksService: true,
+  memoryService: true,
+  outputStyleService: true,
+  settingsSyncService: true,
+  promptAttachmentTransferService: true,
+} satisfies Record<RequiredServiceName, true>;
+
 export interface RemoteServiceAccessOptions {
+  /** Explicit server exports; absent retains compatibility with older non-AIReq hosts. */
+  serviceManifest?: ServiceCapabilityManifest;
   sourceServerManagementService?: boolean;
   deviceSyncStateService?: boolean;
   windowProjectDirectory?: boolean;
@@ -276,5 +310,32 @@ export class RemoteServiceAccess implements IServiceAccessor {
     this.promptAttachmentTransferService = ProxyChannel.toService<IPromptAttachmentTransferService>(
       channelClient.getChannel(IPromptAttachmentTransferService.channelName),
     );
+    if (options.serviceManifest) {
+      for (const name of Object.keys(requiredServices) as RequiredServiceName[]) {
+        if (!options.serviceManifest[name]?.length) {
+          throw new Error(`The host did not advertise required service: ${name}`);
+        }
+      }
+      // A proxy exposes every property by default. Bind only advertised capabilities so optional
+      // services/events do not become truthy promises to channels the host never registered.
+      for (const [name, service] of Object.entries(this) as [keyof IServiceAccessor, object | undefined][]) {
+        if (!service || name === "windowProjectDirectory") continue;
+        const members = options.serviceManifest[name as keyof IServiceAccessor];
+        if (!members) {
+          Object.defineProperty(this, name, { value: undefined, enumerable: true });
+          continue;
+        }
+        const exported = new Set(members);
+        Object.defineProperty(this, name, {
+          value: new Proxy(service, {
+            get(target, property, receiver) {
+              return typeof property === "string" && !exported.has(property)
+                ? undefined : Reflect.get(target, property, receiver);
+            },
+          }),
+          enumerable: true,
+        });
+      }
+    }
   }
 }

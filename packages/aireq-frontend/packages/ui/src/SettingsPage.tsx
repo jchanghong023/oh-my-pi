@@ -43,6 +43,8 @@ import {
   ProjectManagement,
 } from "@/project-sidebar/index.js";
 import { ModelProviderSection } from "@/settings/ModelProviderSection.js";
+// 浏览器控制、电脑控制、快捷键、插件、子智能体暂缓实现，只挂载静态页。
+// 不恢复原版功能组件的接口请求、插件初始化、权限检查、配置读写或事件订阅。
 import { DisplayOnlyResourcesSection } from "@/settings/DisplayOnlyResourcesSection.js";
 import { AutomationsSection } from "@/settings/AutomationsSection.js";
 import { PluginsSection } from "@/settings/PluginsSection.js";

@@ -1,3 +1,4 @@
+import { createWorkspaceServiceProjection } from "../packages/ui/src/lib/workspaceServiceProjection.js";
 import "../packages/ui/src/aireq/browserStorage.js";
 import { createUuid } from "@zcode/shared";
 import { AppErrorBoundary, Root, ZCodeIntlProvider } from "@zcode/ui";
@@ -10,6 +11,7 @@ import { AIReqProvider, useAIReq } from "../packages/ui/src/aireq/AIReqContext.j
 import {
   bindRemoteWorkspaceIdentity,
   registerRemoteWorkspaceSession,
+  registerBaseWorkspaceServices,
   unregisterRemoteWorkspaceSession,
 } from "../packages/ui/src/store/remoteWorkspaceSessionStore.js";
 import { createWebPlatform } from "../packages/web/src/platform/index.js";
@@ -23,7 +25,7 @@ function BrowserApplication() {
   const identity = useAIReqIdentity();
   const { selection, session, view } = aireq;
   const workspace = source.resolveWorkspace(view, selection);
-  const [connection, setConnection] = useState<{ key: string; services: IServiceAccessor }>();
+  const [connection, setConnection] = useState<{ key: string; services: IServiceAccessor; attachment: { active: boolean } }>();
   const [connectionError, setConnectionError] = useState<string>();
   const formalProgress = Boolean(selection.formalView || view?.groups.some(group => group.id === selection.irId));
   // 列表和同页报告复用工作区，保留表格筛选、展开与滚动位置。
@@ -32,8 +34,10 @@ function BrowserApplication() {
   useEffect(() => {
     if (!view || !workspace.path) return;
     let active = true;
+    const attachment = { active: true };
     let dispose: (() => void | Promise<void>) | undefined;
     const close = () => {
+      attachment.active = false;
       const release = dispose;
       dispose = undefined;
       if (release) void Promise.resolve(release()).catch(aireq.report);
@@ -43,23 +47,29 @@ function BrowserApplication() {
     void source.connectWorkspace(workspace, selection, session).then(async opened => {
       if (!active) { await opened.dispose(); return; }
       dispose = opened.dispose;
+      registerBaseWorkspaceServices(opened.services);
+      const workspaceServices = createWorkspaceServiceProjection(opened.services);
       registerRemoteWorkspaceSession({
         sessionId: registrationId,
         workspacePath: workspace.path!,
         workspaceIdentity: workspace.identity,
-        services: opened.services,
+        services: workspaceServices,
         dispose: close,
       });
       bindRemoteWorkspaceIdentity(workspace.identity, registrationId);
-      setConnection({ key, services: opened.services });
+      setConnection({ key, services: opened.services, attachment });
     }).catch((cause: unknown) => {
       close();
       if (active) setConnectionError(cause instanceof Error ? cause.message : String(cause));
     });
     return () => {
       active = false;
-      unregisterRemoteWorkspaceSession(registrationId);
-      close();
+      attachment.active = false;
+      // Child effects issue unsubscribe/unwatch RPCs during the same cleanup pass.
+      queueMicrotask(() => {
+        unregisterRemoteWorkspaceSession(registrationId);
+        close();
+      });
     };
   }, [source, key]);
 
@@ -67,7 +77,7 @@ function BrowserApplication() {
   if (aireq.pending && !workspace.path) return <ConnectionStatus error={aireq.error} retry={() => { void aireq.refresh(); }} />;
   if (!workspace.path) return <AIReqWorkspaceRecovery workspace={workspace} />;
   if (connectionError) return <ConnectionStatus error={connectionError} retry={() => window.location.reload()} />;
-  if (!connection || connection.key !== key) return <ConnectionStatus />;
+  if (!connection || connection.key !== key || !connection.attachment.active) return <ConnectionStatus />;
   return <div className="contents" data-aireq-connection-state="connected" data-aireq-workspace-path={workspace.path} data-aireq-workspace-identity={workspace.identity} data-aireq-workspace-kind={workspace.kind}>
     {aireq.error && <p role="alert" className="fixed inset-x-0 top-0 z-50 bg-background p-3 text-destructive">{aireq.error}</p>}
     <Root

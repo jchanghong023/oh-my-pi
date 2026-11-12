@@ -1,6 +1,6 @@
 import type { AIReqIssueServices } from "./issues.js";
 import { createContext, createElement, useContext, type ReactNode } from "react";
-import type { IServiceAccessor } from "@zcode/services";
+import type { IServiceAccessor, ServiceCapabilityManifest } from "@zcode/services";
 import type { SkillSummary } from "@zcode/shared";
 import type { AIReqAction, AIReqSelection, AIReqWorkflowView, AIReqWorkflowResult, AIReqNativeSessionRef, AIReqPeer, AIReqAgentModelSettings, AIReqAgentModelBinding, AIReqSkillDesignDraft, AIReqSkillDesignPreview, AIReqPrHandoff, AIReqPrHandoffScenario, AIReqWorkspace, AIReqProposalMergeScenario, AIReqSrPlanningInput } from "./types.js";
 import type { AIReqProgressScheduler } from "./progress-scheduler.js";
@@ -73,6 +73,7 @@ export interface AIReqDataSource {
   clientId: string;
   backend?: AIReqBackendView;
   capabilities: { settingsWrite?: boolean; proposalDiscussion?: boolean; codeDevelopment?: boolean; workflowCommands: readonly AIReqAction["type"][]; requirementManagement: boolean; freeChat: boolean; nativeChat: boolean; nativeSurface: boolean };
+  serviceManifest: ServiceCapabilityManifest;
   initialSelection: AIReqSelection;
   refreshIdentity?(): Promise<void>;
   readWorkflow(selection: AIReqSelection): Promise<AIReqWorkflowView>;

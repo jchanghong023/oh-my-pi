@@ -24,7 +24,7 @@ export {
 } from "./memoryDiagnostics.js";
 
 // Accessor
-export type { IServiceAccessor } from "./accessor.js";
+export type { IServiceAccessor, ServiceCapabilityManifest } from "./accessor.js";
 export { IRuntimePolicyService } from "./runtime-policy/runtimePolicy.js";
 export * from "./client-scenes/clientScenes.js";
 

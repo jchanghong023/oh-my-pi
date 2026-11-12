@@ -167,6 +167,7 @@ export function startScope(): void {
 			provenance: source.provenance,
 			scenarioOperations: Boolean(source.prototype),
 			backend: source.backend,
+			serviceManifest: source.serviceManifest,
 			capabilities: identities.getStore()
 				? { ...source.capabilities }
 				: {

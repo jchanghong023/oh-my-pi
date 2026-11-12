@@ -96,3 +96,6 @@ export interface IServiceAccessor {
   readonly settingsSyncService: ISettingsSyncService;
   readonly promptAttachmentTransferService: IPromptAttachmentTransferService;
 }
+
+/** Registered RPC service names and their exported methods/events; no credentials or business data. */
+export type ServiceCapabilityManifest = Readonly<Partial<Record<keyof IServiceAccessor, readonly string[]>>>;

@@ -24,6 +24,7 @@ export class ChannelClient implements IChannelClient, IDisposable {
   // Promise 请求和事件监听共用 handlers，但只有前者需要在连接终结时 reject。
   // 单独维护 reject map，避免 dispose 把事件订阅误当成挂起的 RPC 请求。
   private pendingRejections = new Map<number, (error: Error) => void>();
+  #pendingPromises = new Set<Promise<unknown>>();
   private lastRequestId = 0;
   private protocolListener: IDisposable | null;
 
@@ -137,6 +138,9 @@ export class ChannelClient implements IChannelClient, IDisposable {
       this.whenInitialized().then(doRequest);
     }
 
+    this.#pendingPromises.add(result);
+    const settled = () => { this.#pendingPromises.delete(result); };
+    void result.then(settled, settled);
     return result.finally(() => {
       disposable?.dispose();
       if (disposable) {
@@ -273,6 +277,13 @@ export class ChannelClient implements IChannelClient, IDisposable {
       return Promise.resolve();
     }
     return Event.toPromise(this.onDidInitialize);
+  }
+
+  /** Wait for already issued cleanup/read calls before an intentional attachment release. */
+  async whenIdle(): Promise<void> {
+    while (!this.isDisposed && this.#pendingPromises.size) {
+      await Promise.allSettled([...this.#pendingPromises]);
+    }
   }
 
   dispose(reason?: Error): void {
