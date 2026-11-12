@@ -70,10 +70,10 @@ function AIReqLoginScreen({ value, error, onValueChange, onEnter }: {
       <div className="space-y-2">
        <Label htmlFor="aireq-employee-id" className="text-ui-base font-medium">工号</Label>
        <Input id="aireq-employee-id" size="lg" value={value} onChange={event => onValueChange(event.target.value)} placeholder="例如 j00808874" autoFocus autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={32} className="h-10 w-full text-ui-base" aria-invalid={Boolean(error)} aria-describedby={error ? "aireq-employee-help aireq-employee-error" : "aireq-employee-help"} />
-       <p id="aireq-employee-help" className="text-ui-sm text-foreground-subtle">a–z 中任一小写字母开头，后接 8 位数字；无需密码。</p>
+       <p id="aireq-employee-help" className="text-center text-ui-sm text-foreground-subtle">a–z 中任一小写字母开头，后接 8 位数字；无需密码。</p>
       </div>
       {error && <Alert variant="destructive" id="aireq-employee-error"><TriangleAlertIcon className="size-4" /><AlertDescription>{error}</AlertDescription></Alert>}
-      <div className="flex flex-col items-center gap-2"><Button type="submit" size="lg" disabled={!value.trim()} className="h-10 w-fit min-w-50 px-6 text-ui-base font-medium">进入工作台</Button></div>
+      <div className="flex flex-col items-center gap-2"><Button type="submit" size="lg" disabled={!value.trim()} className="h-10 w-full px-6 text-ui-base font-medium">进入工作台</Button></div>
      </form>
     </section>
    </div>
