@@ -561,8 +561,7 @@ export function devWorkbenchInputsChanged(
 			file =>
 				isDevFrontendInput(file) ||
 				file === "packages/coding-agent/scripts/dev-workbench-resources.ts" ||
-				file === "packages/coding-agent/src/dev-workbench/assets.ts" ||
-				file === "packages/coding-agent/src/dev-workbench/assets.generated.json",
+				file === "packages/coding-agent/src/dev-workbench/assets.ts",
 		)
 	);
 }

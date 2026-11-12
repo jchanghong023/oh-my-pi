@@ -87,6 +87,7 @@ test("Dev dynamic resource inputs select their consumers without selecting origi
 		"packages/dev-frontend/NOTICE.md",
 		"packages/dev-frontend/build/dev/assets/index.js",
 		"packages/dev-frontend/node_modules/react/index.js",
+		"packages/coding-agent/src/dev-workbench/assets.generated.json",
 		"vendor/zcode-frontend/preview/main.tsx",
 		"packages/collab-web/src/main.tsx",
 	]) {
@@ -96,7 +97,6 @@ test("Dev dynamic resource inputs select their consumers without selecting origi
 	for (const input of [
 		"packages/coding-agent/scripts/dev-workbench-resources.ts",
 		"packages/coding-agent/src/dev-workbench/assets.ts",
-		"packages/coding-agent/src/dev-workbench/assets.generated.json",
 	])
 		for (const consumer of consumers) expect(devWorkbenchInputsChanged(consumer, [input])).toBe(true);
 });
