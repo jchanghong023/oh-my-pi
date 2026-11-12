@@ -14,7 +14,7 @@ export function ReadOnlyBuiltInPlugins() {
   const [query, setQuery] = useState("");
   const search = query.trim().toLocaleLowerCase();
   const items = catalog.filter(item => [item.name, item.nameZh, item.description, item.descriptionZh].join(" ").toLocaleLowerCase().includes(search));
-  return <div className="space-y-6">
+  return <div className="@container/plugin-store space-y-6">
     <div className="flex min-w-0 flex-wrap items-center gap-3">
       <Button type="button" variant="outline" className="rounded-full pl-2.5 pr-1.5" disabled>
         <Monitor className="size-4" aria-hidden="true" />
@@ -46,12 +46,12 @@ export function ReadOnlyBuiltInPlugins() {
         </div>
       </div>
       <p className="text-ui-sm text-foreground-subtle">{zh ? "ZCode 内置插件目录，仅供查看。" : "ZCode built-in plugin catalog. View only."}</p>
-      {items.length ? <ul className="grid grid-cols-1 gap-y-1">
+      {items.length ? <ul className="grid grid-cols-1 gap-x-6 gap-y-1 @min-[40rem]/plugin-store:grid-cols-2">
         {items.map(item => <li key={item.id} className="flex min-w-0 items-center gap-3 rounded-xl px-2 py-3" data-plugin-id={item.id}>
           <PluginStoreAvatar item={{ id: item.id, name: item.name }} className="size-10" />
           <div className="min-w-0 flex-1">
-            <p className="text-ui-base font-medium leading-5 text-foreground">{zh ? item.nameZh : item.name}</p>
-            <p className="mt-0.5 text-ui-caption leading-5 text-foreground-subtle">{zh ? item.descriptionZh : item.description}</p>
+            <p className="truncate text-ui-base font-medium leading-5 text-foreground" title={zh ? item.nameZh : item.name}>{zh ? item.nameZh : item.name}</p>
+            <p className="mt-0.5 truncate text-ui-caption leading-5 text-foreground-subtle" title={zh ? item.descriptionZh : item.description}>{zh ? item.descriptionZh : item.description}</p>
           </div>
         </li>)}
       </ul> : <p role="status" className="py-8 text-center text-ui-base text-foreground-subtle">{zh ? "没有匹配的插件。" : "No matching plugins."}</p>}
