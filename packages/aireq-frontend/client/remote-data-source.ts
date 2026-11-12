@@ -34,7 +34,18 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 	const schedulerListeners = new Set<() => void>();
 	const freeChatListeners = new Set<() => void>();
 	const skillListeners = new Set<(sessionId: string) => void>();
-	const snapshots = new WeakMap<AIReqWorkflowView, { key: string; value: AIReqRemoteWorkflow }>();
+	const snapshots = new WeakMap<AIReqWorkflowView, { key: string; reviewScopeKey: string; value: AIReqRemoteWorkflow }>();
+	// 头像只切换同一已读取评审中的会话；不把异步刷新间隙当成工作区丢失。
+	const resolveSnapshot = (view: AIReqWorkflowView | undefined, target: AIReqSelection): AIReqRemoteWorkflow | undefined => {
+		const snapshot = view ? snapshots.get(view) : undefined;
+		if (!snapshot || !view) return undefined;
+		if (snapshot.key === JSON.stringify(target)) return snapshot.value;
+		if (snapshot.value.session?.role !== "reviewer" || snapshot.reviewScopeKey !== JSON.stringify({ ...target, reviewAgent: undefined })) return undefined;
+		const group = view.drafts.find(item => item.id === target.irId && item.projectId === target.projectId);
+		const review = [group?.review, ...(group?.reviewHistory ?? [])].find(item => item?.agents?.some(agent => agent.session.sessionId === snapshot.value.session?.sessionId));
+		const session = review?.agents?.find(agent => agent.id === (target.reviewAgent ?? "summary"))?.session;
+		return session ? { ...snapshot.value, session } : undefined;
+	};
 	let selection: AIReqSelection = {};
 	let disposed = false;
 	let eventError: Error | undefined;
@@ -186,7 +197,7 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 			if (eventError) throw eventError;
 			selection = { ...target };
 			const result = await call("readWorkflow", [target], target);
-			snapshots.set(result.view, { key: JSON.stringify(target), value: result });
+			snapshots.set(result.view, { key: JSON.stringify(target), reviewScopeKey: JSON.stringify({ ...target, reviewAgent: undefined }), value: result });
 			return result.view;
 		},
 		subscribeWorkflow: listener => subscribe(workflowListeners, listener),
@@ -199,16 +210,9 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 			}
 			return result;
 		},
-		resolveSession: (view, target) => {
-			const snapshot = snapshots.get(view);
-			return snapshot?.key === JSON.stringify(target) ? snapshot.value.session : undefined;
-		},
-		resolveWorkspace(view, target) {
-			const snapshot = view ? snapshots.get(view) : undefined;
-			return snapshot?.key === JSON.stringify(target)
-				? snapshot.value.workspace
-				: { identity: `aireq-remote:${clientId}`, kind: "unavailable" };
-		},
+		resolveSession: (view, target) => resolveSnapshot(view, target)?.session,
+		resolveWorkspace: (view, target) => resolveSnapshot(view, target)?.workspace
+			?? { identity: `aireq-remote:${clientId}`, kind: "unavailable" },
 		retryMaterial: (path, target) => call("retryMaterial", [path, target], target),
 		retrySession: async target => {
 			await call("retrySession", [target], target);

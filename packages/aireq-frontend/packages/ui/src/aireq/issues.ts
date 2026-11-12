@@ -2,7 +2,7 @@ import type { AIReqAgentModelBinding } from "./types.js";
 
 export const ISSUE_TYPES = { bug: "Bug", refactor: "重构", performance: "性能", security: "安全", maintenance: "维护 / 技术债", other: "其他" } as const;
 export const ISSUE_STATUSES = { pending: "待开发", developing: "开发中", merging: "待合入", confirming: "待确认", completed: "已完成" } as const;
-export interface AIReqIssueScope { projectId: string; releaseId: string }
+export interface AIReqIssueScope { projectId: string }
 export interface AIReqIssueInput extends AIReqIssueScope {
   requestId: string;
   title: string;

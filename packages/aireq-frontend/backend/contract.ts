@@ -40,7 +40,7 @@ import type {
  * Errors use non-2xx status plus a stable code/message, never a success fallback.
  * /api/aireq/events carries AIReqRemoteEvent as JSON WebSocket text frames.
  * Unknown operation names are rejected before invoking a service. */
-export const AIREQ_CONTRACT_VERSION = 2;
+export const AIREQ_CONTRACT_VERSION = 3;
 export type AIReqRemoteErrorCode =
 	| "NOT_FOUND"
 	| "METHOD_NOT_ALLOWED"

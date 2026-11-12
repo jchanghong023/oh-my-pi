@@ -11,8 +11,8 @@ export function createPrototypeIssues(): AIReqIssueServices {
   const emit = () => { for (const listener of listeners) listener(); };
   const state = (scope: AIReqIssueScope) => {
     const view = getPrototypeWorkflow({ projectId: scope.projectId });
-    if (!view.projects.some(project => project.id === scope.projectId) || !view.releases.some(release => release.id === scope.releaseId && release.projectId === scope.projectId)) throw new Error("请选择有效的项目与 Release。");
-    const key = JSON.stringify([scope.projectId, scope.releaseId]);
+    if (!view.projects.some(project => project.id === scope.projectId)) throw new Error("请选择有效的项目。");
+    const key = scope.projectId;
     let value = states.get(key);
     if (!value) {
       const now = new Date().toISOString();
@@ -24,7 +24,7 @@ export function createPrototypeIssues(): AIReqIssueServices {
       value = { issues: samples.map<AIReqIssue>(sample => {
         const id = `ISSUE-${String(++sequence).padStart(4, "0")}`;
         return {
-          ...scope, ...sample, id, requestId: `sample:${id}`, priority: "normal", developerEmployeeId: "j00808874",
+          projectId: scope.projectId, ...sample, id, requestId: `sample:${id}`, priority: "normal", developerEmployeeId: "j00808874",
           branch: `issue/${id.toLowerCase()}`, description: sample.description,
           acceptance: "问题得到修复，相关改动合入默认分支后人工确认。",
           report: sample.merged ? "开发分支已合入默认分支。请核对完成标准，确认后结束跟踪。" : sample.status === "merging" ? "状态转换入口已统一，开发分支待合入默认分支。" : "已完成主要布局调整，仍需核对导航开合及右侧面板拖动时的边界情况。",
@@ -71,13 +71,13 @@ export function createPrototypeIssues(): AIReqIssueServices {
       if (!["j00808874", "j00808875", "j00808876", "j00808877"].includes(input.developerEmployeeId)) throw new Error("开发人员不在当前工号目录中。");
       if (input.requirement) {
         const view = getPrototypeWorkflow({ projectId: input.projectId });
-        const group = view.groups.find(item => item.id === input.requirement?.irId && item.projectId === input.projectId && item.releaseId === input.releaseId);
-        if (!group || (input.requirement.srId && !view.srs.some(sr => sr.id === input.requirement?.srId && sr.irId === group.id))) throw new Error("关联需求不属于当前项目与 Release。");
+        const group = view.groups.find(item => item.id === input.requirement?.irId && item.projectId === input.projectId);
+        if (!group || (input.requirement.srId && !view.srs.some(sr => sr.id === input.requirement?.srId && sr.irId === group.id))) throw new Error("关联需求不属于当前项目。");
       }
       const id = `ISSUE-${String(++sequence).padStart(4, "0")}`;
       const now = new Date().toISOString();
       const issue: AIReqIssue = {
-        requestId: input.requestId, projectId: input.projectId, releaseId: input.releaseId,
+        requestId: input.requestId, projectId: input.projectId,
         title: input.title.trim(), type: input.type, priority: input.priority,
         description: input.description.trim(), acceptance: input.acceptance.trim(),
         developerEmployeeId: input.developerEmployeeId, requirement: input.requirement,

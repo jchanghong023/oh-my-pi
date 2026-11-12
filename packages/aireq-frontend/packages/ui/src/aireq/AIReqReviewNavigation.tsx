@@ -12,7 +12,7 @@ import { useAIReqDataSource } from "./data-source.js";
 import { proposalViewedIndex, requirementsReviewCurrent } from "./domain.js";
 import type { AIReqReviewAgentId } from "./types.js";
 
-// Switching review sessions remounts the workspace; retain only the pending keyboard focus handoff.
+// Retain the keyboard focus handoff while the selected review metadata refreshes.
 let keyboardTarget: AIReqReviewAgentId | undefined;
 
 /** Native session navigation and native parallel graph, never a report editor or approval engine. */

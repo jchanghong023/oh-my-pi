@@ -28,8 +28,12 @@ function BrowserApplication() {
   const [connection, setConnection] = useState<{ key: string; services: IServiceAccessor; attachment: { active: boolean } }>();
   const [connectionError, setConnectionError] = useState<string>();
   const formalProgress = Boolean(selection.formalView || view?.groups.some(group => group.id === selection.irId));
+  const proposal = view?.drafts.find(group => group.id === selection.irId && group.projectId === selection.projectId);
+  const review = session?.role === "reviewer" ? [proposal?.review, ...(proposal?.reviewHistory ?? [])].find(item => item?.agents?.some(agent => agent.session.sessionId === session.sessionId)) : undefined;
+  // 同轮评审共享工作区连接；四个会话由原生会话 store 切换，不重建整个 Root。
+  const sessionScope = review ? `requirements-review:${review.id}` : session?.sessionId;
   // 列表和同页报告复用工作区，保留表格筛选、展开与滚动位置。
-  const key = JSON.stringify([source.backend?.id ?? source.clientId, identity?.employeeId, workspace.identity, workspace.path, selection.projectId, formalProgress ? "formal-progress" : selection.irId, formalProgress ? undefined : selection.srId, selection.freeSessionId, session?.sessionId, session?.round]);
+  const key = JSON.stringify([source.backend?.id ?? source.clientId, identity?.employeeId, workspace.identity, workspace.path, selection.projectId, formalProgress ? "formal-progress" : selection.irId, formalProgress ? undefined : selection.srId, selection.freeSessionId, sessionScope, session?.round]);
 
   useEffect(() => {
     if (!view || !workspace.path) return;

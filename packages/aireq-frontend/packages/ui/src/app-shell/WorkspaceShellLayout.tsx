@@ -364,6 +364,12 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const [draftHeaderDropTargetController, setDraftHeaderDropTargetController] =
     useState<ConversationDropTargetController | null>(null);
   const workspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
+  const reviewSessionId = aireq?.session?.role === "reviewer" ? aireq.session.sessionId : undefined;
+  useLayoutEffect(() => {
+    if (!reviewSessionId || activeTaskId === reviewSessionId) return;
+    // 同轮评审只更新原生活跃会话；侧栏、材料、滚动和分栏不随头像重挂。
+    useZCodeSessionStore.getState().setActiveTaskId(workspaceAbsPath, reviewSessionId, workspaceIdentity);
+  }, [activeTaskId, reviewSessionId, workspaceAbsPath, workspaceIdentity]);
   const fileTreeOpenRequestIdRef = useRef(0);
   const [fileTreeOpenRequest, setFileTreeOpenRequest] = useState<SidebarFileTreeOpenRequest | null>(
     () =>
