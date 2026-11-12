@@ -6,8 +6,8 @@ import {
 	bunCleanBaseline,
 	budgetedParallel,
 	bunTestSelection,
-	devWorkbenchInputsChanged,
-	isDevFrontendInput,
+	aiReqWorkbenchInputsChanged,
+	isAIReqFrontendInput,
 	isIntegrationCommand,
 	isLimitedIntegrationCommand,
 	prioritizeLocalCommands,
@@ -35,7 +35,7 @@ test("Bun discovery keeps OMP consumers but excludes vendor and explicit package
 			'import { test } from "bun:test"; test("consumer runs", () => { console.log("OMP_CONSUMER_RAN"); });\n',
 		);
 		await Bun.write(
-			path.join(root, "packages/coding-agent/scripts/verify-dev-workbench-package.ts"),
+			path.join(root, "packages/coding-agent/scripts/verify-aireq-workbench-package.ts"),
 			'throw new Error("PACKAGED_VERIFICATION_RAN_WITHOUT_AUTHORIZATION");\n',
 		);
 		const child = Bun.spawn([process.execPath, "test"], { cwd: root, stdout: "pipe", stderr: "pipe" });
@@ -56,49 +56,49 @@ test("Bun discovery keeps OMP consumers but excludes vendor and explicit package
 test("Dev dynamic resource inputs select their consumers without selecting original WebGUI or upstream suites", () => {
 	const command = (cwd: string, file: string) => ({ cwd, command: ["bun", "test", file] });
 	const consumers = [
-		command("packages/coding-agent", "test/dev-workbench/resources.test.ts"),
-		command("packages/coding-agent", "test/dev-workbench/workflow-process.e2e.test.ts"),
-		command("packages/collab-web", "test/dev-workbench.test.tsx"),
+		command("packages/coding-agent", "test/aireq-workbench/resources.test.ts"),
+		command("packages/coding-agent", "test/aireq-workbench/workflow-process.e2e.test.ts"),
+		command("packages/collab-web", "test/aireq-workbench.test.tsx"),
 	];
 	for (const input of [
-		"packages/dev-frontend/preview/main.tsx",
-		"packages/dev-frontend/preview/vite.config.ts",
-		"packages/dev-frontend/packages/ui/src/styles.css",
-		"packages/dev-frontend/packages/ui/src/workers/fileSearch.worker.ts",
-		"packages/dev-frontend/packages/ui/vite/pdfJsCMapsPlugin.ts",
-		"packages/dev-frontend/packages/web/public/material-icons/dark/file.svg",
-		"packages/dev-frontend/packages/client/src/index.ts",
-		"packages/dev-frontend/package.json",
-		"packages/dev-frontend/bun.lock",
-		"packages/dev-frontend/copy-manifest.json",
-		"packages/dev-frontend/tsconfig.base.json",
+		"packages/aireq-frontend/preview/main.tsx",
+		"packages/aireq-frontend/preview/vite.config.ts",
+		"packages/aireq-frontend/packages/ui/src/styles.css",
+		"packages/aireq-frontend/packages/ui/src/workers/fileSearch.worker.ts",
+		"packages/aireq-frontend/packages/ui/vite/pdfJsCMapsPlugin.ts",
+		"packages/aireq-frontend/packages/web/public/material-icons/dark/file.svg",
+		"packages/aireq-frontend/packages/client/src/index.ts",
+		"packages/aireq-frontend/package.json",
+		"packages/aireq-frontend/bun.lock",
+		"packages/aireq-frontend/copy-manifest.json",
+		"packages/aireq-frontend/tsconfig.base.json",
 	]) {
-		expect(isDevFrontendInput(input)).toBe(true);
-		for (const consumer of consumers) expect(devWorkbenchInputsChanged(consumer, [input])).toBe(true);
+		expect(isAIReqFrontendInput(input)).toBe(true);
+		for (const consumer of consumers) expect(aiReqWorkbenchInputsChanged(consumer, [input])).toBe(true);
 		for (const unrelated of [
 			command("packages/coding-agent", "test/webgui/core-browser.e2e.test.ts"),
 			command("packages/coding-agent", "test/team/integration.test.ts"),
-			command("packages/coding-agent", "test/dev-workbench/workflow-store.test.ts"),
-			command("packages/natives", "test/dev-workbench-vcs.test.ts"),
+			command("packages/coding-agent", "test/aireq-workbench/workflow-store.test.ts"),
+			command("packages/natives", "test/aireq-workbench-vcs.test.ts"),
 		])
-			expect(devWorkbenchInputsChanged(unrelated, [input])).toBe(false);
+			expect(aiReqWorkbenchInputsChanged(unrelated, [input])).toBe(false);
 	}
 	for (const input of [
-		"packages/dev-frontend/NOTICE.md",
-		"packages/dev-frontend/build/dev/assets/index.js",
-		"packages/dev-frontend/node_modules/react/index.js",
-		"packages/coding-agent/src/dev-workbench/assets.generated.json",
+		"packages/aireq-frontend/NOTICE.md",
+		"packages/aireq-frontend/build/aireq/assets/index.js",
+		"packages/aireq-frontend/node_modules/react/index.js",
+		"packages/coding-agent/src/aireq-workbench/assets.generated.json",
 		"vendor/zcode-frontend/preview/main.tsx",
 		"packages/collab-web/src/main.tsx",
 	]) {
-		expect(isDevFrontendInput(input)).toBe(false);
-		for (const consumer of consumers) expect(devWorkbenchInputsChanged(consumer, [input])).toBe(false);
+		expect(isAIReqFrontendInput(input)).toBe(false);
+		for (const consumer of consumers) expect(aiReqWorkbenchInputsChanged(consumer, [input])).toBe(false);
 	}
 	for (const input of [
-		"packages/coding-agent/scripts/dev-workbench-resources.ts",
-		"packages/coding-agent/src/dev-workbench/assets.ts",
+		"packages/coding-agent/scripts/aireq-workbench-resources.ts",
+		"packages/coding-agent/src/aireq-workbench/assets.ts",
 	])
-		for (const consumer of consumers) expect(devWorkbenchInputsChanged(consumer, [input])).toBe(true);
+		for (const consumer of consumers) expect(aiReqWorkbenchInputsChanged(consumer, [input])).toBe(true);
 });
 
 test("affected selection needs a qualifying full TS baseline reachable in Git", async () => {
@@ -349,12 +349,12 @@ test("integration chunk classification matches coding-agent test paths only", ()
 		isIntegrationCommand(command("packages/coding-agent", ["test/unit.test.ts", "test/process.e2e.test.ts"])),
 	).toBe(true);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integration/session.test.ts"]))).toBe(true);
-	for (const file of ["test/dev-workbench/git.test.ts", "test/dev-workbench/workflow-domain.test.ts"]) {
+	for (const file of ["test/aireq-workbench/git.test.ts", "test/aireq-workbench/workflow-domain.test.ts"]) {
 		expect(isIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
 		expect(isLimitedIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
 		expect(isIntegrationCommand(command("packages/tui", [file]))).toBe(false);
 	}
-	expect(isIntegrationCommand(command("packages/coding-agent", ["test/dev-workbench/cancel-policy.test.ts"]))).toBe(
+	expect(isIntegrationCommand(command("packages/coding-agent", ["test/aireq-workbench/cancel-policy.test.ts"]))).toBe(
 		false,
 	);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integrationish.test.ts"]))).toBe(false);
@@ -364,8 +364,8 @@ test("integration chunk classification matches coding-agent test paths only", ()
 test("startup integration chunks bypass only the heavy integration limit", () => {
 	const command = (file: string) => ({ label: "chunk", cwd: "packages/coding-agent", command: ["bun", "test", file] });
 	for (const file of [
-		"test/dev-workbench/process.e2e.test.ts",
-		"test/dev-workbench/workflow-process.e2e.test.ts",
+		"test/aireq-workbench/process.e2e.test.ts",
+		"test/aireq-workbench/workflow-process.e2e.test.ts",
 		"test/spec-driven/tui-compact-mixed.e2e.test.ts",
 		"test/goals/goal-autopilot-tui.e2e.test.ts",
 		"test/goals/goal-ctrl-enter-tui.e2e.test.ts",
@@ -373,8 +373,8 @@ test("startup integration chunks bypass only the heavy integration limit", () =>
 		expect(isIntegrationCommand(command(file))).toBe(true);
 		expect(isLimitedIntegrationCommand(command(file))).toBe(false);
 	}
-	expect(isLimitedIntegrationCommand(command("test/dev-workbench/host.test.ts"))).toBe(false);
-	expect(isLimitedIntegrationCommand(command("test/dev-workbench/other.e2e.test.ts"))).toBe(true);
+	expect(isLimitedIntegrationCommand(command("test/aireq-workbench/host.test.ts"))).toBe(false);
+	expect(isLimitedIntegrationCommand(command("test/aireq-workbench/other.e2e.test.ts"))).toBe(true);
 	expect(isLimitedIntegrationCommand(command("test/integration/session.test.ts"))).toBe(true);
 });
 
@@ -398,9 +398,9 @@ test("bounded pool fills ordinary workers past the cap4 heavy queue and drains e
 					"bun",
 					"test",
 					item === "h1"
-						? "test/dev-workbench/git.test.ts"
+						? "test/aireq-workbench/git.test.ts"
 						: item === "h5"
-							? "test/dev-workbench/workflow-domain.test.ts"
+							? "test/aireq-workbench/workflow-domain.test.ts"
 							: item.startsWith("h")
 								? "test/integration/session.test.ts"
 								: "test/unit.test.ts",
@@ -480,7 +480,7 @@ test("startup file workers use the fulltest budget without exceeding CPU or comm
 				isLimitedIntegrationCommand({
 					label: "startup",
 					cwd: "packages/coding-agent",
-					command: ["bun", "test", "test/dev-workbench/process.e2e.test.ts"],
+					command: ["bun", "test", "test/aireq-workbench/process.e2e.test.ts"],
 				}),
 			4,
 			async file => {
@@ -819,8 +819,8 @@ test("local suites select fork consumers and drain failures without widening to 
 			`import { test } from "bun:test"; import { appendFileSync } from "node:fs"; test(${JSON.stringify(name)}, () => appendFileSync(process.env.MARKER!, ${JSON.stringify(`${name}\n`)}));\n`;
 		const selected = [
 			"packages/ai/test/proxy.test.ts",
-			"packages/natives/test/dev-workbench-vcs.test.ts",
-			"packages/collab-web/test/dev-workbench.test.tsx",
+			"packages/natives/test/aireq-workbench-vcs.test.ts",
+			"packages/collab-web/test/aireq-workbench.test.tsx",
 			"packages/collab-web/test/composer.test.tsx",
 			"packages/collab-web/test/transcript.test.tsx",
 			"packages/collab-web/test/tool-view.test.tsx",
@@ -838,7 +838,7 @@ test("local suites select fork consumers and drain failures without widening to 
 				"workflow-git",
 				"workflow-runtime",
 				"requirement-package",
-			].map(name => `packages/coding-agent/test/dev-workbench/${name}.test.ts`),
+			].map(name => `packages/coding-agent/test/aireq-workbench/${name}.test.ts`),
 			"packages/coding-agent/test/spec-driven/process.e2e.test.ts",
 			"packages/coding-agent/test/team/integration.test.ts",
 			"packages/coding-agent/test/goals/goal-runtime.test.ts",
@@ -877,7 +877,7 @@ test("local suites select fork consumers and drain failures without widening to 
 		];
 		for (const file of [...selected, ...excluded]) await put(file, fixture(file));
 		await put(
-			"packages/coding-agent/scripts/verify-dev-workbench-package.ts",
+			"packages/coding-agent/scripts/verify-aireq-workbench-package.ts",
 			'throw new Error("PACKAGED_VERIFICATION_RAN_WITHOUT_AUTHORIZATION");\n',
 		);
 		await put(
@@ -888,9 +888,9 @@ test("local suites select fork consumers and drain failures without widening to 
 		const dry = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--dry-run"]);
 		expect(await executed()).toEqual([]);
 		expect(dry).toContain(`scope=fork-features selected-files=${selected.length + 1} `);
-		expect(dry).not.toContain("verify-dev-workbench-package.ts");
+		expect(dry).not.toContain("verify-aireq-workbench-package.ts");
 		const fullDry = await run([process.execPath, "scripts/ci-test-ts.ts", "all", "--unsharded", "--dry-run"]);
-		expect(fullDry).not.toContain("verify-dev-workbench-package.ts");
+		expect(fullDry).not.toContain("verify-aireq-workbench-package.ts");
 		for (const file of excluded) expect(dry).not.toContain(file.replace("packages/coding-agent/", ""));
 		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts"], { OMP_TEST_SHARD: "1/20" });
 		const reportRoot = path.join(root, "runs/test-timing");
@@ -910,10 +910,10 @@ test("local suites select fork consumers and drain failures without widening to 
 			expect(producer.exitCode).toBe(0);
 			expect(producer.status).toBe("passed");
 		}
-		const collabProducer = bunProducers.find(producer => producer.command.includes("test/dev-workbench.test.tsx"));
+		const collabProducer = bunProducers.find(producer => producer.command.includes("test/aireq-workbench.test.tsx"));
 		expect(collabProducer?.command.filter(arg => arg.endsWith(".test.tsx")).sort()).toEqual([
 			"test/composer.test.tsx",
-			"test/dev-workbench.test.tsx",
+			"test/aireq-workbench.test.tsx",
 			"test/markdown.test.tsx",
 			"test/tool-view.test.tsx",
 			"test/transcript.test.tsx",
@@ -948,8 +948,8 @@ test("local suites select fork consumers and drain failures without widening to 
 			expect(await executed()).toEqual(fullMarkers);
 		}
 		const startupFiles = [
-			"test/dev-workbench/process.e2e.test.ts",
-			"test/dev-workbench/workflow-process.e2e.test.ts",
+			"test/aireq-workbench/process.e2e.test.ts",
+			"test/aireq-workbench/workflow-process.e2e.test.ts",
 			"test/spec-driven/tui-compact-mixed.e2e.test.ts",
 			"test/spec-driven/tui-resources.e2e.test.ts",
 			"test/spec-driven/tui-capabilities.e2e.test.ts",

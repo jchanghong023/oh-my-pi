@@ -78,7 +78,7 @@ omp
 | 想完成的任务 | 从这里开始 |
 | --- | --- |
 | 理解终端、桌面和核心的责任边界 | [系统分层](architecture/system-map.md) → [会话与持久化恢复](architecture/session-runtime.md)；非交互宿主看 [SDK、RPC、ACP 与扩展](integrations/headless-and-extension-surfaces.md) |
-| 规划并实现一个受控开发任务 | [Dev 四阶段、批准与恢复](workflows/dev-lifecycle.md)；多代理只读讨论看 [Team](workflows/team-discussion.md)，持续目标与预算看 [Goal](workflows/goal-autopilot.md)。三者不是同一开关。 |
+| 规划并实现一个受控开发任务 | [Dev 四阶段、批准与恢复](workflows/aireq-lifecycle.md)；多代理只读讨论看 [Team](workflows/team-discussion.md)，持续目标与预算看 [Goal](workflows/goal-autopilot.md)。三者不是同一开关。 |
 | 查询公司资料 | 先在 `/knowledge` 导入 Markdown，或在系统终端运行 `omp knowledge init "/path/to/company-markdown" --name "company-docs"`；终端和会话使用相同数据根及 profile。[Knowledge 文档证据索引](concepts/knowledge-document-index.md)解释快照、检索与引用。 |
 | 生成仓库知识页而非导入资料 | 查看 [OpenWiki 生成与内置资源集成](integrations/openwiki-generation.md)；生成的页面与 `/knowledge` 的文档数据库是不同流程。 |
 | 使用或修改技能、规范资源 | 查看 [技能发现、OpenSpec 与 Superpowers](integrations/skills-and-spec-resources.md)；扩展宿主或工具还应检查[扩展边界](integrations/headless-and-extension-surfaces.md)。 |

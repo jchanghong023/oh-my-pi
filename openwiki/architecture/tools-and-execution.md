@@ -118,7 +118,7 @@ stateDiagram-v2
 
 * **普通 task**：权限取决于 agent 定义、会话工具及继承限制。提示词中的“只读”本身不是守卫。
 * **Team 讨论**：[`team/runner.ts`](../../packages/coding-agent/src/team/runner.ts) 直接调用同一执行器，但明确列出只读工具并使用 `restrictToolNames`，不提供 bash、edit、write、task 等。Team 读取隔离还在真实路径解析后限制其他成员材料及其祖先搜索范围，而非仅隐藏 `agent://` 链接。详见 [Team 讨论](../workflows/team-discussion.md)。
-* **Dev 阶段**：执行确认前的 scout 使用显式只读工具名单、禁用 MCP 等，并由 spawn 钩子拒绝额外工具和 worktree；执行者阶段有不同授权，继承克隆的限制，协作仍拒绝创建 worktree。阶段约束来自程序钩子和会话配置，而非角色提示词。详见 [Dev 生命周期](../workflows/dev-lifecycle.md)。
+* **Dev 阶段**：执行确认前的 scout 使用显式只读工具名单、禁用 MCP 等，并由 spawn 钩子拒绝额外工具和 worktree；执行者阶段有不同授权，继承克隆的限制，协作仍拒绝创建 worktree。阶段约束来自程序钩子和会话配置，而非角色提示词。详见 [Dev 生命周期](../workflows/aireq-lifecycle.md)。
 
 ## 修改与验证
 

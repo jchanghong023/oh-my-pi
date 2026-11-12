@@ -34,7 +34,7 @@ export async function buildDeveloperTestAgentResources(): Promise<Buffer> {
 /** Embed gzip bytes once, with the existing cache digest computed at build time. */
 export function createDeveloperTestAgentArchivePlugin(archive: Buffer): BunPlugin {
 	const digest = createHash("sha256").update(archive.toString("base64")).digest("hex");
-	const namespace = "omp-developer-test-agent-archive";
+	const namespace = "omp-aireqeloper-test-agent-archive";
 	return {
 		name: namespace,
 		target: "bun",
@@ -46,11 +46,11 @@ export function createDeveloperTestAgentArchivePlugin(archive: Buffer): BunPlugi
 				return { path: "metadata", namespace };
 			});
 			build.onLoad({ filter: /^metadata$/, namespace }, () => ({
-				contents: `import archivePath from "omp-developer-test-agent-archive";
+				contents: `import archivePath from "omp-aireqeloper-test-agent-archive";
 export default { path: archivePath, digest: ${JSON.stringify(digest)} };`,
 				loader: "js",
 			}));
-			build.onResolve({ filter: /^omp-developer-test-agent-archive$/ }, () => ({
+			build.onResolve({ filter: /^omp-aireqeloper-test-agent-archive$/ }, () => ({
 				path: "developer-test-agent-resources.json.gz",
 				namespace,
 			}));

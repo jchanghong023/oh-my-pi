@@ -1,8 +1,8 @@
-# Dev 需求澄清、管理与开发进度跟踪
+# AIReq 需求澄清、管理与开发进度跟踪
 
-Dev 是 AI 驱动的需求澄清、需求管理和开发进度跟踪平台。人提供业务信息、检查材料并作决定；AI 整理需求、评审、分析方案与代码证据。**Dev 不参与实际编码，不安排编码执行 Agent，不执行开发计划、测试、代码交付或 IR 验收归档流程。** 实际开发与代码 PR 在平台之外完成。
+AIReq 是 AI 驱动的需求澄清、需求管理和开发进度跟踪平台。人提供业务信息、检查材料并作决定；AI 整理需求、评审、分析方案与代码证据。**AIReq 不参与实际编码，不安排编码执行 Agent，不执行开发计划、测试、代码交付或 IR 验收归档流程。** 实际开发与代码 PR 在平台之外完成。
 
-本文说明当前目标规则及独立原型边界，不是正式业务后端的实现或验证报告。原型已实施独立纯内存后端，预览与正式源码入口及网络客户端已统一；真实 OMP 业务后端尚未实现，后续只实现同一冻结合同的后端并配置地址，不修改前端或接口格式。可复现的启动、接口配置与已执行历史证据见 [前端 README](../packages/dev-frontend/README.md)。
+本文说明当前目标规则及独立原型边界，不是正式业务后端的实现或验证报告。原型已实施独立纯内存后端，预览与正式源码入口及网络客户端已统一；真实 OMP 业务后端尚未实现，后续只实现同一冻结合同的后端并配置地址，不修改前端或接口格式。可复现的启动、接口配置与已执行历史证据见 [前端 README](../packages/aireq-frontend/README.md)。
 
 ## 1. 从自然语言到 IR／SR
 
@@ -89,7 +89,7 @@ Dev 是 AI 驱动的需求澄清、需求管理和开发进度跟踪平台。人
 
 人工进度在百分比旁标明“人工调整”或“人工确认”，首屏显示工号、时间及依据，旧 AI 问题与代码证据标为此前报告。新转正 SR 首次分析前保持 0%／尚未分析，不预填历史分析时间、代码版本或实现结论；提案合入基点不等于 SR 代码分析版本。
 
-Dev 不控制开发启动、并发名额、worktree、编码会话或交付 PR，也不要求 IR 完成后再执行验收／归档 PR。代码开发、测试、评审及规格归档由外部开发流程负责，不能作为旧执行流程重新出现在 Dev 中。
+AIReq 不控制开发启动、并发名额、worktree、编码会话或交付 PR，也不要求 IR 完成后再执行验收／归档 PR。代码开发、测试、评审及规格归档由外部开发流程负责，不能作为旧执行流程重新出现在 AIReq 中。
 
 ### 需求分析与调度
 
@@ -139,8 +139,8 @@ Git URL 必须含主机；`https://`、`https:///` 不可保存，合法 URL 与
 
 | 项目 | 约定 |
 | --- | --- |
-| 业务数据 | `omp dev_db` 固定端口 18321，统一管理 `/tmpdata/DFT_LAB/omp/omp_dev_sqlite.db`；Web 经服务访问，不各自直接打开 NFS SQLite |
-| Web | 只启动一个共享 `omp dev_web`，所有人访问同一地址；`--port <端口>` 指定端口，省略时选可用端口并输出地址，不按访问者启动个人 Web |
+| 业务数据 | `omp aireq_db` 固定端口 18321，统一管理 `/tmpdata/DFT_LAB/omp/omp_aireq_sqlite.db`；Web 经服务访问，不各自直接打开 NFS SQLite |
+| Web | 只启动一个共享 `omp aireq_web`，所有人访问同一地址；`--port <端口>` 指定端口，省略时选可用端口并输出地址，不按访问者启动个人 Web |
 | Token | 所有访问者使用启动者的 OMP Token／profile；切换浏览器工号不切换宿主或凭据 |
 | 工号 | 小写 `a`–`z` 字母加 8 位数字，保留前导零；仅格式检查，不是完整认证 |
 | 共享查看 | 项目、Release、提案、正式需求及全部设置对所有人可见 |
@@ -152,7 +152,7 @@ Git URL 必须含主机；`https://`、`https:///` 不可保存，合法 URL 与
 
 个性化追加提示词与模型配置均在离开前提供保存／丢弃／取消；保存读取最新草稿，长文本连续输入不循环更新。每个 Agent 按 UTF-8 最多 100 KiB，超限保留内容但禁止普通保存、快捷键及保存并离开，缩短后恢复。技能管理提示共享 Web 启动者维护，不要求访问者另启个人 Web。
 
-Skill 设计从设置移至主页侧栏“自动化”下方，以独立工作页打开；设置中的技能管理、Skill 设计 Agent 模型与个性化配置保留。技能页及独立 Skill 设计保留为辅助能力，不代表 Dev 接管编码。所有访问者可填写 Skill 设计表单，把实际值及临时路径填入原聊天草稿，明确发送后预览并确认保存；不因此获得模型、提示词或技能管理的修改权。目标明确展示为共享 OMP 当前 profile 的 `skills/<name>/` 或有效项目 `.omp/skills/<name>/`，不冒充访问者的个人后端；没有项目绑定不阻止 profile 目标，不覆盖同名技能或写目标外目录。这不引入 Dev 个人开发目录要求；原型仅演示固定文件及内存保存状态。
+Skill 设计从设置移至主页侧栏“自动化”下方，以独立工作页打开；设置中的技能管理、Skill 设计 Agent 模型与个性化配置保留。技能页及独立 Skill 设计保留为辅助能力，不代表 AIReq 接管编码。所有访问者可填写 Skill 设计表单，把实际值及临时路径填入原聊天草稿，明确发送后预览并确认保存；不因此获得模型、提示词或技能管理的修改权。目标明确展示为共享 OMP 当前 profile 的 `skills/<name>/` 或有效项目 `.omp/skills/<name>/`，不冒充访问者的个人后端；没有项目绑定不阻止 profile 目标，不覆盖同名技能或写目标外目录。这不引入 AIReq 个人开发目录要求；原型仅演示固定文件及内存保存状态。
 
 Skill 左右两栏同步显示当前版本的生成／保存状态；重新生成后清除旧版保存标记和过期通知。通用定时任务列表与详情区分“已启用 · 等待执行”“执行中”“已暂停”，启用不代表正在执行，暂停任务不计入执行中筛选。
 
@@ -160,7 +160,7 @@ Skill 左右两栏同步显示当前版本的生成／保存状态；重新生�
 
 ### 架构目标与实施进度
 
-Dev 原型与正式版的源码入口已使用同一份前端代码、同一接口客户端及完全相同的浏览器代码，只通过配置的后端地址选择连接目标；不按 prototype／runtime 模式编写不同业务界面，也不注入两套前端业务数据源。原型通过网络客户端连接独立后端，开发、演示可持续使用；真实 OMP 业务后端尚未实现，源码统一不等于正式服务已接通。
+AIReq 原型与正式版的源码入口已使用同一份前端代码、同一接口客户端及完全相同的浏览器代码，只通过配置的后端地址选择连接目标；不按 prototype／runtime 模式编写不同业务界面，也不注入两套前端业务数据源。原型通过网络客户端连接独立后端，开发、演示可持续使用；真实 OMP 业务后端尚未实现，源码统一不等于正式服务已接通。
 
 ```mermaid
 flowchart LR
@@ -174,11 +174,11 @@ flowchart LR
 
 **真实接入验收标准：只实现真实 OMP 后端并配置地址，不修改前端、不替换客户端、不迁移 runtime、不转换接口格式，即可使用相同浏览器代码完成业务。** 后端缺接口、版本不兼容及其他错误必须直接显示，不允许转旧协议或回退样例。
 
-当前源码已实施共享前端入口、同一客户端、原型后端及地址选择，不改变既有 UI、业务门禁及普通 OMP／WebGUI 的非干扰边界。安装后分别运行 `bun ./standalone.ts backend`（默认 `http://127.0.0.1:4174/`）与 `bun ./standalone.ts start`（前端 `http://127.0.0.1:4173/`）；无需 OMP、Git、数据库或模型。后端通过 `OMP_DEV_BACKEND_HOST`／`OMP_DEV_BACKEND_PORT` 配置监听，端口 `0` 可由系统分配，启动输出实际 URL。浏览器地址优先级为 URL 编码的 `?backend=<地址>`、`VITE_DEV_BACKEND_URL`、当前页面的同源挂载地址；默认由前端预览服务器把 HTTP／WS 原样代理到独立后端，不把访问者自己的 localhost 当作服务器。普通内网 IP 的 HTTP 访问及 `/xxx/xxx/` 挂载前缀按前端 README 配置，不要求 HTTPS；原生 runtime 继续保留宿主已有随机能力目录。完整安装步骤及示例见[前端 README](../packages/dev-frontend/README.md#当前实现独立启动)。
+当前源码已实施共享前端入口、同一客户端、原型后端及地址选择，不改变既有 UI、业务门禁及普通 OMP／WebGUI 的非干扰边界。安装后分别运行 `bun ./standalone.ts backend`（默认 `http://127.0.0.1:4174/`）与 `bun ./standalone.ts start`（前端 `http://127.0.0.1:4173/`）；无需 OMP、Git、数据库或模型。后端通过 `OMP_AIREQ_BACKEND_HOST`／`OMP_AIREQ_BACKEND_PORT` 配置监听，端口 `0` 可由系统分配，启动输出实际 URL。浏览器地址优先级为 URL 编码的 `?backend=<地址>`、`VITE_AIREQ_BACKEND_URL`、当前页面的同源挂载地址；默认由前端预览服务器把 HTTP／WS 原样代理到独立后端，不把访问者自己的 localhost 当作服务器。普通内网 IP 的 HTTP 访问及 `/xxx/xxx/` 挂载前缀按前端 README 配置，不要求 HTTPS；原生 runtime 继续保留宿主已有随机能力目录。完整安装步骤及示例见[前端 README](../packages/aireq-frontend/README.md#当前实现独立启动)。
 
 ### 当前实现与既有演示边界
 
-`preview/main.tsx` 和 `runtime/main.tsx` 仅导入同一 `app/bootstrap.tsx`，统一由 `client/remote-data-source.ts` 执行网络 bootstrap；样例业务数据源和模拟服务位于 `backend/`。`backend/contract.ts` 固定 `DEV_CONTRACT_VERSION = 1`，`DevRemoteOperations` 显式定义每个 operation 的参数／返回类型，`DevRemoteCall` 为判别联合，真实后端直接实现这份 type map。服务提供 `GET /api/dev/bootstrap`、`POST /api/dev/call`（`{path,args,selection?}`），响应为 `{ok:true,value}` 或 `{ok:false,error:{code,message}}`；畸形 JSON 返回 400，无权修改返回 403，未知路径拒绝，错误不转旧协议、不回落样例。`/api/dev/events` WebSocket 发送 `workflow`／`models`／`skills`／`scheduler`／`freeChats`／`error` 类型事件；`/api/dev/services` 复用既有 zcode 二进制 RPC，通过 `workspace`／`selection`／`session` 查询参数绑定选择。请求和连接均通过 `clientId`／`employeeId`／`demo` 查询参数独立绑定访问者和样例，不使用跨浏览器共享的“当前工号”。
+`preview/main.tsx` 和 `runtime/main.tsx` 仅导入同一 `app/bootstrap.tsx`，统一由 `client/remote-data-source.ts` 执行网络 bootstrap；样例业务数据源和模拟服务位于 `backend/`。`backend/contract.ts` 固定 `AIREQ_CONTRACT_VERSION = 1`，`AIReqRemoteOperations` 显式定义每个 operation 的参数／返回类型，`AIReqRemoteCall` 为判别联合，真实后端直接实现这份 type map。服务提供 `GET /api/aireq/bootstrap`、`POST /api/aireq/call`（`{path,args,selection?}`），响应为 `{ok:true,value}` 或 `{ok:false,error:{code,message}}`；畸形 JSON 返回 400，无权修改返回 403，未知路径拒绝，错误不转旧协议、不回落样例。`/api/aireq/events` WebSocket 发送 `workflow`／`models`／`skills`／`scheduler`／`freeChats`／`error` 类型事件；`/api/aireq/services` 复用既有 zcode 二进制 RPC，通过 `workspace`／`selection`／`session` 查询参数绑定选择。请求和连接均通过 `clientId`／`employeeId`／`demo` 查询参数独立绑定访问者和样例，不使用跨浏览器共享的“当前工号”。
 
 bootstrap 包含 `contractVersion: 1`、`provenance: {kind: "sample" | "live", notice?}`、业务能力及辅助演示操作 `scenarioOperations`。`sample`／`live` 只表示数据来源，来源徽标或提示不能切换业务界面；合同没有业务 `mode` 或 `prototypeBusiness`。需求管理支持由 `capabilities.requirementManagement` 表达，`scenarioOperations` 只标识辅助演示可用性；主业务 `readPrHandoff(group)` 独立于演示接口。请求、结果、错误码／envelope、实时事件与二进制 services RPC 格式均保持不变。
 
@@ -186,18 +186,18 @@ bootstrap 包含 `contractVersion: 1`、`provenance: {kind: "sample" | "live", n
 
 真实共享数据库、AI 调用、Git／PR 集成或后台代码分析仍需真实 OMP 后端按同一冻结合同实现，不需要未来修改前端或增加宿主适配客户端。本轮未修改正式 OMP 服务、未重新生成发行内嵌资源，也未新增 build、浏览器或重启验证；既有证据不能证明本轮切换或正式后端可运行。原型按各请求工号检查写权限及记录操作者，但工号仅格式检查、可自行填写，不构成认证；本机原型不能视为生产安全部署。
 
-当前原型隐藏自由会话、新建会话和正在开发入口，不删除底层会话、草稿或原生能力，也不修改原 WebGUI；此处描述现状，不要求目标架构按运行模式区分界面。**Dev 只考虑电脑端浏览器：设计、原型及验收不覆盖手机、平板或触屏专用布局。** 电脑端窄窗口及拖窄分栏仍须可用，底部操作在栏内换行，不能裁切；外观控件关联可见标签并支持键盘操作。桌面 Firefox 128 兼容边界不变；本机 Chromium 的既有截图与交互记录见前端 README，Firefox 128、真实读屏软件及真实宿主仍需独立验证，不能互相代称通过，也不能作为新架构落地证据。
+当前原型隐藏自由会话、新建会话和正在开发入口，不删除底层会话、草稿或原生能力，也不修改原 WebGUI；此处描述现状，不要求目标架构按运行模式区分界面。**AIReq 只考虑电脑端浏览器：设计、原型及验收不覆盖手机、平板或触屏专用布局。** 电脑端窄窗口及拖窄分栏仍须可用，底部操作在栏内换行，不能裁切；外观控件关联可见标签并支持键盘操作。桌面 Firefox 128 兼容边界不变；本机 Chromium 的既有截图与交互记录见前端 README，Firefox 128、真实读屏软件及真实宿主仍需独立验证，不能互相代称通过，也不能作为新架构落地证据。
 
 当前可编辑聊天输入框保留两项原型辅助输入；以下描述原型后端能力，不是预览／正式入口专属界面的要求，本次不额外开发，真实接入只由后端实现同一合同：
 
 - **画图**：全屏覆盖现有 Sketch 页面，发送时只把完整画布 PNG 回填原输入框附件，不自动发送消息或推进阶段。取消不改变草稿；失败保留绘图。当前原型不连接真实 Sketch 服务。
 - **语音转文字**：麦克风入口演示录音及可编辑示例文字，确认后追加草稿，不自动发送；不申请麦克风权限、不采集音频、不调用识别服务。
 
-相关规格：[需求提案与入库](../openspec/specs/dev-requirement-intake/spec.md)、[工作台](../openspec/specs/dev-browser-workbench/spec.md)、[编排边界](../openspec/specs/spec-driven-orchestration/spec.md)、[命令与配置](../openspec/specs/personal-commands/spec.md)、[总提案](../openspec/changes/refactor-dev-webgui-requirement-intake/proposal.md)。实际后端接入和运行检查须单独提供证据，不能以原型样例状态替代。
+相关规格：[需求提案与入库](../openspec/specs/aireq-requirement-intake/spec.md)、[工作台](../openspec/specs/aireq-browser-workbench/spec.md)、[编排边界](../openspec/specs/spec-driven-orchestration/spec.md)、[命令与配置](../openspec/specs/personal-commands/spec.md)、[总提案](../openspec/changes/refactor-dev-webgui-requirement-intake/proposal.md)。实际后端接入和运行检查须单独提供证据，不能以原型样例状态替代。
 
 ## 视觉基线与功能布局边界
 
-WebGUI 与 Dev 的视觉基础统一对齐官方 ZCode 3.18，来源、原文和本地适配规则见[设计规范入口](../docs/design/omp-zcode-visual-adaptation.md)及 [OpenSpec 视觉基线](../openspec/specs/zcode-visual-baseline/spec.md)。本次只调整设计规范、主题、面板圆角、字阶、表格容器、控件用法、工作流头像和消息／材料样式；功能布局、表格列宽、四 Agent 人工评审及现有操作保持。Dev 原型和正式版仍共用同一 bootstrap、客户端和冻结契约，mock 只在独立后端；视觉同步不重新引入浏览器样例或另一套原型 UI，也不恢复原生编码执行流程。WebGUI 只在同一已授权视觉范围内适配，不改变业务或后端。
+WebGUI 与 AIReq 的视觉基础统一对齐官方 ZCode 3.18，来源、原文和本地适配规则见[设计规范入口](../docs/design/omp-zcode-visual-adaptation.md)及 [OpenSpec 视觉基线](../openspec/specs/zcode-visual-baseline/spec.md)。本次只调整设计规范、主题、面板圆角、字阶、表格容器、控件用法、工作流头像和消息／材料样式；功能布局、表格列宽、四 Agent 人工评审及现有操作保持。AIReq 原型和正式版仍共用同一 bootstrap、客户端和冻结契约，mock 只在独立后端；视觉同步不重新引入浏览器样例或另一套原型 UI，也不恢复原生编码执行流程。WebGUI 只在同一已授权视觉范围内适配，不改变业务或后端。
 
 工期预估缺失或字段不完整时，只要当前材料的 SR 依赖结构、版本及拓扑有效，仍展示只读依赖图，对应节点显示“待预估”。依赖本身缺失、无效、循环或材料过期仍报错，不绘制旧图。图可阅读不等于方案完整：确认、提交与自动转正仍须补齐每个 SR 的正数工作日和非空估算假设；人通过方案对话让 AI 更新同一 JSON，不手工改文件。
 

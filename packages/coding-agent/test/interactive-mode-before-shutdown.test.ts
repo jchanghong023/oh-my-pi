@@ -204,10 +204,10 @@ describe("InteractiveMode pre-quit extension gate", () => {
 	});
 
 	it("keeps operator quits inside the exclusive browser workbench", async () => {
-		mode.isDevWorkbenchModeActive = () => true;
-		mode.handleDevWorkbenchModeSubmit = vi.fn(async () => true);
+		mode.isAIReqWorkbenchModeActive = () => true;
+		mode.handleAIReqWorkbenchModeSubmit = vi.fn(async () => true);
 		await mode.shutdown();
-		expect(mode.handleDevWorkbenchModeSubmit).toHaveBeenCalledWith("/exit");
+		expect(mode.handleAIReqWorkbenchModeSubmit).toHaveBeenCalledWith("/exit");
 		expect(attempts).toBe(0);
 		expect(mode.isShuttingDown).toBe(false);
 		expect(session.isDisposed).toBe(false);
@@ -215,10 +215,10 @@ describe("InteractiveMode pre-quit extension gate", () => {
 	});
 
 	it("still tears down the host on a forced close during an exclusive browser workbench", async () => {
-		mode.isDevWorkbenchModeActive = () => true;
-		mode.handleDevWorkbenchModeSubmit = vi.fn(async () => true);
+		mode.isAIReqWorkbenchModeActive = () => true;
+		mode.handleAIReqWorkbenchModeSubmit = vi.fn(async () => true);
 		await mode.shutdown({ cancellable: false });
-		expect(mode.handleDevWorkbenchModeSubmit).not.toHaveBeenCalled();
+		expect(mode.handleAIReqWorkbenchModeSubmit).not.toHaveBeenCalled();
 		expect(attempts).toBe(0);
 		expect(session.isDisposed).toBe(true);
 		expect(shutdownEvents).toBe(1);

@@ -271,7 +271,7 @@ export async function runOpenSpec(
 	const resources = await ensureSpecDrivenResources();
 	const entry = await resolveSpecDrivenResourcePath(resources.openspecRoot, "bin/openspec.js");
 	const commandArgs = [...args];
-	const environment = { BUN_BE_BUN: "1", OMP_DEV_ARCHIVE_PLAN: internal?.archivePlan ?? "" };
+	const environment = { BUN_BE_BUN: "1", OMP_AIREQ_ARCHIVE_PLAN: internal?.archivePlan ?? "" };
 	if (commandArgs[0] === "init") {
 		const target = initTarget(commandArgs, cwd);
 		const hadConfig = await hasProjectConfig(target);
@@ -340,7 +340,7 @@ export async function runOpenSpecDirectory(
 }
 
 /** Refuse a project/user override instead of silently using a different Dev workflow. */
-export async function assertDevSpecSchema(cwd: string, signal?: AbortSignal): Promise<void> {
+export async function assertAIReqSpecSchema(cwd: string, signal?: AbortSignal): Promise<void> {
 	const resources = await ensureSpecDrivenResources();
 	const result = await runOpenSpec(["schema", "which", "omp-spec", "--json"], cwd, signal);
 	if (result.exitCode !== 0) throw new Error(`Cannot resolve the Dev schema: ${result.stdout}\n${result.stderr}`);

@@ -45,7 +45,7 @@ test("fork and full plans never schedule the independently authorized packaged w
 		const commands = fulltestCommands({ debug: false, full }, "/tmp/home");
 		expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
 		for (const command of commands) {
-			expect(command.argv.some(arg => arg.includes("verify-dev-workbench-package"))).toBe(false);
+			expect(command.argv.some(arg => arg.includes("verify-aireq-workbench-package"))).toBe(false);
 			expect(command.argv.some(arg => /(?:bundle-dist|build-binary|compile-binary)\.ts$/.test(arg))).toBe(false);
 		}
 	}

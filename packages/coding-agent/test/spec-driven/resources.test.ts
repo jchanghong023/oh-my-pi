@@ -410,10 +410,10 @@ describe("pinned upstream resources", () => {
 		await fs.mkdir(cwd);
 		const moduleUrl = pathToFileURL(path.resolve(import.meta.dir, "../../src/spec-driven/resources.ts")).href;
 		const script = `
-			const { assertDevSpecSchema, ensureSpecDrivenResources, runOpenSpec } = await import(${JSON.stringify(moduleUrl)});
+			const { assertAIReqSpecSchema, ensureSpecDrivenResources, runOpenSpec } = await import(${JSON.stringify(moduleUrl)});
 			const result = await runOpenSpec(["schema", "which", "omp-spec", "--json"], process.cwd());
 			let error = null;
-			try { await assertDevSpecSchema(process.cwd()); } catch (e) { error = String(e); }
+			try { await assertAIReqSpecSchema(process.cwd()); } catch (e) { error = String(e); }
 			console.log(JSON.stringify({ result, error, schemaPath: (await ensureSpecDrivenResources()).specSchemaPath }));
 		`;
 		async function resolve() {
@@ -672,7 +672,7 @@ it("embedded script launch preserves exact arguments and workspace runtime envir
 		expect(launch.env?.OMP_BUN_EXECUTABLE).toBe(process.execPath);
 		expect(launch.env?.PATH?.split(path.delimiter)[0]).toBe(path.join(resources.root, "omp-runtime"));
 		expect(launch.env?.BRAINSTORM_DIR).toBe(path.join(cwd, ".superpowers", "brainstorm"));
-		await expect(fs.stat(path.join(cwd, ".omp/dev/state.json"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(fs.stat(path.join(cwd, ".omp/aireq/state.json"))).rejects.toMatchObject({ code: "ENOENT" });
 		const shellArgs = ["missing plan Ω (not a command).md", "literal base", "literal head"];
 		let shell: SpecDrivenProcessResult | undefined;
 		try {

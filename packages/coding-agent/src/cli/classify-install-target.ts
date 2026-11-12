@@ -20,7 +20,7 @@ const NPM_DIST_TAGS = new Set([
 	"alpha",
 	"canary",
 	"rc",
-	"dev",
+	"aireq",
 	"stable",
 	"nightly",
 	"experimental",

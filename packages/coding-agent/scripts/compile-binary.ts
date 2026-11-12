@@ -7,10 +7,10 @@ import {
 	createDeveloperTestAgentArchivePlugin,
 } from "./developer-test-agent-resources";
 import {
-	buildDevWorkbenchAssets,
-	createDevWorkbenchAssetsPlugin,
-	writeDevWorkbenchAssets,
-} from "./dev-workbench-resources";
+	buildAIReqWorkbenchAssets,
+	createAIReqWorkbenchAssetsPlugin,
+	writeAIReqWorkbenchAssets,
+} from "./aireq-workbench-resources";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
@@ -71,8 +71,8 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 	try {
 		const webGuiResources = await prepareWebGuiResources(options.repoRoot);
 		const openWikiResources = await buildOpenWikiResources();
-		const workbenchAssets = await buildDevWorkbenchAssets();
-		await writeDevWorkbenchAssets(workbenchAssets);
+		const workbenchAssets = await buildAIReqWorkbenchAssets();
+		await writeAIReqWorkbenchAssets(workbenchAssets);
 		const buildOptions: Bun.BuildConfig = {
 			entrypoints: [options.entrypoint],
 			root: options.repoRoot,
@@ -107,7 +107,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				createOpenWikiVendorLoaderPlugin(),
 				await createLegacyPiVirtualModulePlugin(),
 				createSpecDrivenArchivePlugin(await buildSpecDrivenArchive()),
-				createDevWorkbenchAssetsPlugin(workbenchAssets),
+				createAIReqWorkbenchAssetsPlugin(workbenchAssets),
 			],
 			compile: {
 				// Bun's process-wide fetch User-Agent default. Any explicit

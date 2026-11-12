@@ -6,7 +6,7 @@ import inventory from "../../src/spec-driven/vendor/inventory.json";
 import { fixture, GATE_BUDGET, git, launch, listSkills, PublicPeer, run, test, textValues } from "./process-fixture";
 import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
 import { contentText, createProviderFixture, MARKER, rolePayload } from "./provider-fixture";
-import { workflowNativeContext } from "../dev-workbench/workflow-fixture";
+import { workflowNativeContext } from "../aireq-workbench/workflow-fixture";
 import { createWorkflowStage, successfulWorkflowReply } from "./tui-materials-cases";
 
 describe("spec-driven actual OMP public entry", () => {
@@ -28,8 +28,8 @@ describe("spec-driven actual OMP public entry", () => {
 					const context = workflowNativeContext(request);
 					if (context?.role === "requirements" && !linked) {
 						const binding = context.binding as { irId: string };
-						const cwd = path.join(project, ".git/omp-dev-worktrees/requirements", binding.irId);
-						const directory = path.join(cwd, `docs/dev/intake/${binding.irId}`);
+						const cwd = path.join(project, ".git/omp-aireq-worktrees/requirements", binding.irId);
+						const directory = path.join(cwd, `docs/aireq/intake/${binding.irId}`);
 						await fs.mkdir(path.dirname(directory), { recursive: true });
 						await fs.symlink(outside, directory, process.platform === "win32" ? "junction" : "dir");
 						linked = true;

@@ -3,11 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
-import { DevWorkflowStore } from "../../src/dev-workbench/workflow-store";
-import type { DevProject } from "../../src/dev-workbench/workflow-types";
+import { AIReqWorkflowStore } from "../../src/aireq-workbench/workflow-store";
+import type { AIReqProject } from "../../src/aireq-workbench/workflow-types";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 import { CompactScreenRecording } from "../helpers/compact-screen-recording";
-import { isolatedWorkflowEnvironment } from "../dev-workbench/workflow-fixture";
+import { isolatedWorkflowEnvironment } from "../aireq-workbench/workflow-fixture";
 import {
 	contentText,
 	createProviderFixture,
@@ -21,7 +21,7 @@ import {
 
 const tuiTest = Bun.which("tui-test");
 const repo = path.resolve(import.meta.dir, "../../../..");
-type State = { projects: DevProject[] };
+type State = { projects: AIReqProject[] };
 type Scenario = ProviderScenario & {
 	reply?: (request: ModelRequest) => Reply | Response | Promise<Reply | Response>;
 	setup?: (cwd: string, agentDir: string) => Promise<void>;
@@ -143,7 +143,7 @@ async function withTui(
 		open: (directory: string) => Promise<{ tui: (...args: string[]) => Promise<string>; close: () => Promise<void> }>;
 	}) => Promise<void>,
 ): Promise<void> {
-	await using root = await TempDir.create("@omp-dev-native-tui-");
+	await using root = await TempDir.create("@omp-aireq-native-tui-");
 	await using provider = createProviderFixture(scenario);
 	const cwd = root.join("project");
 	const home = root.join("home");
@@ -178,7 +178,7 @@ async function withTui(
 		TEMP: temp,
 		TMP: temp,
 		OMP_OFFLINE: "0",
-		OMP_DEV_NO_OPEN: "1",
+		OMP_AIREQ_NO_OPEN: "1",
 		PI_NO_TITLE: "1",
 		PI_TEST_RUNTIME: "",
 		NO_PROXY: "127.0.0.1,localhost",
@@ -310,7 +310,7 @@ async function withTui(
 		};
 	}
 	async function state(): Promise<State> {
-		return { projects: await new DevWorkflowStore(path.join(agentDir, "dev-projects-v1")).listProjects() };
+		return { projects: await new AIReqWorkflowStore(path.join(agentDir, "aireq-projects-v1")).listProjects() };
 	}
 	async function idle(): Promise<void> {
 		await tui("expect", "text", "等待输入", "--timeout", "60000");

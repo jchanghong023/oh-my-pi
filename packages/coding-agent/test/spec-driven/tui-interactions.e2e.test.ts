@@ -1,34 +1,34 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import { isRecord, parseImageMetadata } from "@oh-my-pi/pi-utils";
-import type { IModelSelectionService } from "../../../../packages/dev-frontend/packages/services/src/model-provider/providerFacadeServices";
-import type { IPromptAttachmentTransferService } from "../../../../packages/dev-frontend/packages/services/src/prompt-attachment-transfer/promptAttachmentTransfer";
+import type { IModelSelectionService } from "../../../../packages/aireq-frontend/packages/services/src/model-provider/providerFacadeServices";
+import type { IPromptAttachmentTransferService } from "../../../../packages/aireq-frontend/packages/services/src/prompt-attachment-transfer/promptAttachmentTransfer";
 import type {
 	IZCodeAgentService,
 	ZCodeAgentConversationCommandParams,
-} from "../../../../packages/dev-frontend/packages/services/src/zcode-agent/zcodeAgent";
-import { VSBuffer } from "../../../../packages/dev-frontend/packages/rpc/src/buffer";
-import { ChannelClient } from "../../../../packages/dev-frontend/packages/rpc/src/channelClient";
-import { Emitter, Event } from "../../../../packages/dev-frontend/packages/rpc/src/foundation";
-import { SocketProtocol } from "../../../../packages/dev-frontend/packages/rpc/src/protocol";
-import { ProxyChannel } from "../../../../packages/dev-frontend/packages/rpc/src/proxy-channel";
+} from "../../../../packages/aireq-frontend/packages/services/src/zcode-agent/zcodeAgent";
+import { VSBuffer } from "../../../../packages/aireq-frontend/packages/rpc/src/buffer";
+import { ChannelClient } from "../../../../packages/aireq-frontend/packages/rpc/src/channelClient";
+import { Emitter, Event } from "../../../../packages/aireq-frontend/packages/rpc/src/foundation";
+import { SocketProtocol } from "../../../../packages/aireq-frontend/packages/rpc/src/protocol";
+import { ProxyChannel } from "../../../../packages/aireq-frontend/packages/rpc/src/proxy-channel";
 import {
 	V4_WIRE_PROTOCOL_VERSION,
 	clientHelloSchema,
 	commandAckSchema,
 	helloMessageSchema,
 	v4ConversationRowsRangeResultSchema,
-} from "../../../../packages/dev-frontend/packages/shared/src/zcode-protocol-v4";
-import type { DevNativeSessionRef } from "../../src/dev-workbench/workflow-types";
+} from "../../../../packages/aireq-frontend/packages/shared/src/zcode-protocol-v4";
+import type { AIReqNativeSessionRef } from "../../src/aireq-workbench/workflow-types";
 import {
 	WORKFLOW_VISION_MODEL,
 	WorkflowConsumerFixture,
 	type WorkflowConsumerProcess,
 	pollWorkflow,
-} from "../dev-workbench/workflow-fixture";
+} from "../aireq-workbench/workflow-fixture";
 import { contentText } from "./provider-fixture";
 
-async function nativeConnection(process: WorkflowConsumerProcess, ref: DevNativeSessionRef) {
+async function nativeConnection(process: WorkflowConsumerProcess, ref: AIReqNativeSessionRef) {
 	const url = new URL("ws", process.url);
 	url.protocol = new URL(process.url).protocol === "https:" ? "wss:" : "ws:";
 	url.searchParams.set("clientId", process.clientId);
@@ -148,7 +148,7 @@ async function conversation(fixture: WorkflowConsumerFixture) {
 		}),
 	});
 	expect(response.ok).toBe(true);
-	const ref = ((await response.json()) as { session: DevNativeSessionRef }).session;
+	const ref = ((await response.json()) as { session: AIReqNativeSessionRef }).session;
 	await pollWorkflow(
 		async () => {
 			const current = await process.view(projectId);
@@ -373,7 +373,7 @@ test("forged native targets and a late UI answer cannot control a rebound browse
 	});
 	expect(forged.status).toBe(409);
 	expect(await forged.json()).toMatchObject({
-		category: "dev-workflow",
+		category: "aireq-workflow",
 		error: "Native session/round binding changed",
 	});
 	const rebound = await process.command({

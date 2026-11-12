@@ -4,17 +4,19 @@
 
 ### Changed
 
-- Dev Skill design opens directly to its content without the page heading, step strip, project badge, or model summary.
-- Dev Skill design now offers collapsible briefs and draft summaries, clearer steps, and cleaner file previews with separate metadata.
-- Dev and WebGUI frontend resources are generated during preparation and packaging, kept out of Git, and included in offline release packages.
+- Renamed OMP’s Dev workbench module to AIReq, including `/aireq`, `omp aireq`, module namespaces and frontend resources; OMP itself retains its name and command.
+
+- AIReq Skill design opens directly to its content without the page heading, step strip, project badge, or model summary.
+- AIReq Skill design now offers collapsible briefs and draft summaries, clearer steps, and cleaner file previews with separate metadata.
+- AIReq and WebGUI frontend resources are generated during preparation and packaging, kept out of Git, and included in offline release packages.
 - Integrated upstream v18.19.0 while retaining structured questions, blocked Goal tasks, and fork deployment defaults.
 - File writes no longer capture unused before-and-after snapshots for the retired compact display.
 
 ### Fixed
 
-- Dev proposal intake content centers within the available conversation column as the materials sidebar opens, closes, or resizes.
-- Dev and WebGUI restore ZCode browser control, computer control, and keyboard shortcut settings for display only, with all editing actions disabled.
-- Editing queued Dev and WebGUI messages replaces referenced images while preserving uploaded attachments.
+- AIReq proposal intake content centers within the available conversation column as the materials sidebar opens, closes, or resizes.
+- AIReq and WebGUI restore ZCode browser control, computer control, and keyboard shortcut settings for display only, with all editing actions disabled.
+- Editing queued AIReq and WebGUI messages replaces referenced images while preserving uploaded attachments.
 - Offline OpenWiki planning now respects the effective plan model role after runtime defaults are applied.
 - Team truncates oversized narrative output before strict validation instead of aborting the discussion.
 - Native subagents retain access to their exact granted Skills until their session is released.
@@ -150,12 +152,12 @@
 ### Added
 
 - Add `/loopgoal` to repeat a fixed goal prompt and stop on an exact `无` reply, retaining `/loop` parameters, context handling and controls.
-- Add an independently copied Dev frontend with three-column Release/IR/SR navigation, read-only materials, native chat/settings and multi-project registration; leave the original WebGUI unchanged.
+- Add an independently copied AIReq frontend with three-column Release/IR/SR navigation, read-only materials, native chat/settings and multi-project registration; leave the original WebGUI unchanged.
 - Add local-worktree and browser-only requirements intake, whole-group format checks, independent review and human confirmation, plus versioned, digest-checked ZIP handoff without source chat or credentials.
 - Revise imported requirements before merge in a fresh local native conversation; verified requirements merge freezes the complete IR/SR group.
 
 - Open WebGUI with `/webgui` or `omp webgui` from source or packaged OMP; enter `/webgui` again to close this instance's web service and restore terminal input.
-- Automatically copy complete localhost URLs when opening Dev, WebGUI or `/sketch` in offline Linux sessions.
+- Automatically copy complete localhost URLs when opening AIReq, WebGUI or `/sketch` in offline Linux sessions.
 - Connect desktop and phone browsers directly to OMP and view the copied interface without preview banners or debugging panels.
 - Select a real OMP model from the WebGUI chat composer for the bound session only, without changing the global default; refreshes retain the native session's current selection.
 - Create native development sessions from standalone WebGUI, choose or create projects, and run sessions independently without replacing ordinary OMP or TUI execution.
@@ -167,30 +169,30 @@
 
 ### Changed
 
-- Share one Dev UI between standalone prototype preview and embedded OMP startup, with separate data sources and no sample-data fallback in the native host.
+- Share one AIReq UI between standalone prototype preview and embedded OMP startup, with separate data sources and no sample-data fallback in the native host.
 
-- Keep Dev, WebGUI and `/sketch` browser launch manual in offline mode while retaining complete URLs and offline Linux clipboard requests.
+- Keep AIReq, WebGUI and `/sketch` browser launch manual in offline mode while retaining complete URLs and offline Linux clipboard requests.
 
 - Use a full-window `/sketch` workspace on Firefox 128, with cursor-centered zoom, pan controls and full-image PNG attachments independent of the current view.
 - Show `/sketch` controls, tooltips, accessibility labels and built-in status/error messages in Chinese.
-- Run Dev and WebGUI on one in-process web server per OMP instance, without a separate worker or development server; preserve project ownership exclusion and Dev capability URLs.
-- Run Dev SR development in four explicitly approved phases—solution, planning, executing and PR—with real UT/ST reports and one active SR per project across Releases and worktrees.
+- Run AIReq and WebGUI on one in-process web server per OMP instance, without a separate worker or development server; preserve project ownership exclusion and AIReq capability URLs.
+- Run AIReq SR development in four explicitly approved phases—solution, planning, executing and PR—with real UT/ST reports and one active SR per project across Releases and worktrees.
 - Separate scoped commit/push from manually created PRs and human status marks; release the project slot only after actual code-merge verification.
-- Preserve code and native history on Dev Back while settling recursive work and invalidating downstream approvals; keep workflow facts in shared atomic JSON outside Git-tracked formal documents.
+- Preserve code and native history on AIReq Back while settling recursive work and invalidating downstream approvals; keep workflow facts in shared atomic JSON outside Git-tracked formal documents.
 - Load WebGUI code/diff highlighting workers only when opening a viewer, instead of on the empty home page.
 - Use a Chinese-only WebGUI without language-switching resources or controls.
 - Continue historical conversations across working directories using native workspace rebinding and project ownership checks.
 - Ship fingerprint-checked WebGUI resources in binary and npm builds without a runtime source checkout, Vite server or download.
 
-- Target Firefox 128 for Dev and WebGUI builds, removing Firefox 68-specific polyfills, syntax rewrites and DOM/style fallbacks.
+- Target Firefox 128 for AIReq and WebGUI builds, removing Firefox 68-specific polyfills, syntax rewrites and DOM/style fallbacks.
 - Run Firefox acceptance through installed Selenium and geckodriver with isolated profiles; use `firefox` browser/platform arguments and `FIREFOX_EXECUTABLE`.
 
 ### Removed
 
-- Retire Dev's eight-stage workflow, loose-Markdown intake, old terminal sub-actions and old-state migration; remove automatic PR/rollback and post-merge repair/cleanup paths.
+- Retire AIReq's eight-stage workflow, loose-Markdown intake, old terminal sub-actions and old-state migration; remove automatic PR/rollback and post-merge repair/cleanup paths.
 
 - Remove added legacy-browser API, WASM and style fallbacks from WebGUI without changing its features or layout.
-- Remove WebGUI MCP settings, imports/sync and RPC adapters; native Agent, TUI and Dev MCP remain unchanged.
+- Remove WebGUI MCP settings, imports/sync and RPC adapters; native Agent, TUI and AIReq MCP remain unchanged.
 - Removed ZCode-only plugin, remote-workspace, remote-control, embedded-browser, computer-control settings and desktop-host interfaces from WebGUI; retained direct browser access and Skill pages.
 - Removed the original Coding Plan purchase dialogs, `.zcode/v2` data-directory migration setting, and desktop update menu from WebGUI.
 - Removed placeholder WebGUI RPC registrations for purchases, plugin management, remote workspaces and terminals; retained native chat, session history and temporary model selection.
@@ -206,22 +208,22 @@
 ### Fixed
 
 - Keep `/loopgoal` repeating after busy submissions, ignore unrelated completion replies while awaiting its goal, preserve target whitespace, and reuse `/loop` status displays and autocomplete.
-- Preserve queued prompt ownership and Dev/WebGUI isolation when restoring drafts, switching focused sessions, approving plans or requesting shutdown.
+- Preserve queued prompt ownership and AIReq/WebGUI isolation when restoring drafts, switching focused sessions, approving plans or requesting shutdown.
 - Preserve command-not-found handling for non-UTF-8 arguments when a Windows-style command has no matching executable in PATH.
 - Clear all matching Todo append error reminders after retrying with the required phase, without dropping unrelated failures.
-- Keep Dev resource generation compatible with independently installed frontend build tools.
+- Keep AIReq resource generation compatible with independently installed frontend build tools.
 
-- Preserve frozen Dev requirements and review evidence in new SR worktrees when Windows checkout filters change line endings.
-- Connect Dev native chat and model controls when selecting or restoring a workflow conversation.
-- Keep read-only Dev task descendants able to query indexed evidence and release their owned session resources cleanly.
-- Keep Dev remote-collaboration input bound to the native host after its browser tab closes, without changing the guest's local workflow.
-- Return to the Dev project overview after deleting a requirement without selecting another IR or removing retained files, Git worktrees or native history.
-- Keep Dev Skill access scoped to each role and its inherited grants; hidden catalog entries no longer authorize execution methods.
+- Preserve frozen AIReq requirements and review evidence in new SR worktrees when Windows checkout filters change line endings.
+- Connect AIReq native chat and model controls when selecting or restoring a workflow conversation.
+- Keep read-only AIReq task descendants able to query indexed evidence and release their owned session resources cleanly.
+- Keep AIReq remote-collaboration input bound to the native host after its browser tab closes, without changing the guest's local workflow.
+- Return to the AIReq project overview after deleting a requirement without selecting another IR or removing retained files, Git worktrees or native history.
+- Keep AIReq Skill access scoped to each role and its inherited grants; hidden catalog entries no longer authorize execution methods.
 - Keep OpenWiki browser resources valid across OMP version bumps, unrelated lockfile updates and checkout moves; still reject changed OpenWiki sources or installed resource dependencies.
 - Avoid false connection-close errors when navigating between WebGUI projects in Firefox.
 - Render streamed assistant replies and file references without a missing directive-parser function error.
-- Show the Dev host only once in participant counts and update the local roster when remote collaborators join or leave, preserving distinct same-name guests.
-- Fix coding-agent type checks for Dev workbench keyboard-focus verification.
+- Show the AIReq host only once in participant counts and update the local roster when remote collaborators join or leave, preserving distinct same-name guests.
+- Fix coding-agent type checks for AIReq workbench keyboard-focus verification.
 - Fix standalone binary builds when WebGUI's model-option workspace package is not locally linked.
 - Keep historical Ask recovery unchanged when a collaborator chooses to chat instead of answering; do not branch or resume the old conversation.
 - Show native WebGUI rejection details, including unsupported image inputs, instead of only generic guard identifiers.
@@ -239,10 +241,10 @@
 - Restore shared project navigation; retain Workflow navigation and native Skill/subagent lists without requests to removed product services.
 - Open WebGUI and render native assistant replies without a blank page or collapsed layout, using the same production resources as Chrome.
 - Restore WebGUI code highlighting, visible switches and hidden recommendation scrollbars without changing Chrome's native rendering or Workflow animations.
-- Restore the selected Dev requirement and viewed stage after refresh without replaying native work.
-- Serve the Dev favicon from the same embedded capability-scoped resources as the page.
+- Restore the selected AIReq requirement and viewed stage after refresh without replaying native work.
+- Serve the AIReq favicon from the same embedded capability-scoped resources as the page.
 
-- Select and copy complete Dev workbench URLs or Ctrl-click their links, and see blocked-input warnings immediately without leaving Dev.
+- Select and copy complete AIReq workbench URLs or Ctrl-click their links, and see blocked-input warnings immediately without leaving AIReq.
 
 ### Changed
 
@@ -456,7 +458,7 @@
 
 ### Breaking Changes
 
-- Replace Dev-only terminal mode with the eight-stage browser workbench opened by `/dev` or `omp dev`; old Dev subcommands/state are not migrated. In Dev, the current TUI accepts only another `/dev` to settle native work and restore the original session; ordinary work must settle before entry, and page closure does not exit Dev. Ordinary TUI and existing user files/history remain.
+- Replace AIReq-only terminal mode with the eight-stage browser workbench opened by `/dev` or `omp dev`; old AIReq subcommands/state are not migrated. In AIReq, the current TUI accepts only another `/dev` to settle native work and restore the original session; ordinary work must settle before entry, and page closure does not exit AIReq. Ordinary TUI and existing user files/history remain.
 - Removed the fork's Repo code index, `repo` tool, `/repo` panel and Python-symbol indexing; use existing file search, AST and LSP tools for code navigation. Existing user databases and project files are left untouched.
 - Limit chat providers to Company, OpenAI Codex, CodeAgent, Ascend, OpenCode Go and DeepSeek; remove OpenCode Zen while preserving other non-chat services and stored credential management.
 - Renamed the enterprise document search tool from `wiki` to `knowledge_search`, the panel to `/knowledge`, the CLI to `omp knowledge`, and reranker settings to `knowledge.reranker.*`. Update tool lists, `tools.approval.knowledge_search`, commands and settings; old names have no aliases. The profile database is `knowledge.db`; databases with the old name are no longer adopted.
@@ -474,13 +476,13 @@
 
 ### Removed
 
-- Removed the fork's ZCode desktop integration and `omp app-server` entrypoint. Native TUI, Dev, Team, Goal and Knowledge remain available; existing user configuration, credentials, sessions and databases are untouched. Upstream Z.ai OAuth is unchanged.
+- Removed the fork's ZCode desktop integration and `omp app-server` entrypoint. Native TUI, AIReq, Team, Goal and Knowledge remain available; existing user configuration, credentials, sessions and databases are untouched. Upstream Z.ai OAuth is unchanged.
 - Removed the built-in `/code-review-export` command.
 - Removed full-repository source fingerprint scans and gate failures caused by source or temporary-file changes during verification; Git revision reporting and affected-test selection remain available.
 
 ### Added
 
-- Get TUI word completions and next-message predictions, including alternative suggestions, in the Dev browser workbench; accepting a suggestion fills the draft without sending it.
+- Get TUI word completions and next-message predictions, including alternative suggestions, in the AIReq browser workbench; accepting a suggestion fills the draft without sending it.
 - Share offline TUI sessions directly by login username with `/collab` and `/join <username>` over plain intranet WS and same-server HTTP discovery, using the built-in `omp collab serve --host 0.0.0.0 --port 7466` relay with `OMP_OFFLINE=1`; one active room per username, with no certificates, proxy, authentication, or host approval required.
 - Use native TUI `/sketch` without installation or configuration to draw or annotate pasted images in a local offline browser canvas, then add a PNG attachment to your draft for manual sending.
 - Use `/forkreviewer [scope]` for read-only fork review, split into small functional shards with compact issue reports.
@@ -508,9 +510,9 @@
 - Preview OpenWiki initialization and updates with `--dry-run`, showing model selection and candidate paths without invoking a model or writing Wiki files.
 - Add built-in `omp openwiki` repository generation, incremental updates, workspace linking and offline visualization/static export, with read-only AI query tools. Generation uses the current OMP profile's default role or a per-run `--modelId`; it still requires a reachable tool-capable model. OpenWiki user data follows the OMP configuration root and profile without migrating standalone workspaces.
 - Run eligible affected fork fulltest stages when a complete clean baseline permits, accurately reporting unselected stages.
-- Move Dev acceptance to browser/native consumers while retaining material failures, permissions, cancellation, Team/Goal and ordinary TUI coverage within existing gate budgets; packaged acceptance remains an explicitly authorized separate program.
+- Move AIReq acceptance to browser/native consumers while retaining material failures, permissions, cancellation, Team/Goal and ordinary TUI coverage within existing gate budgets; packaged acceptance remains an explicitly authorized separate program.
 - Add `bun run fulltest --full` to run the current platform's full supported test suites without fork or changed-file selection.
-- Open the Dev browser workbench with eight material-driven stages and five native agent roles. ST, PR and tester completion are human marks with same-operation scoped Git confirmation; unmerged cancellation reverses owned changes, and merged fixes use linked requirements.
+- Open the AIReq browser workbench with eight material-driven stages and five native agent roles. ST, PR and tester completion are human marks with same-operation scoped Git confirmation; unmerged cancellation reverses owned changes, and merged fixes use linked requirements.
 - Reuse native chat, tools, MCP, extensions, approvals, attachments, Team and Goal; page closure does not stop host-owned work and reconnection does not replay actions. Offline workbench guests use native Collab over ordinary HTTP/WS without remote-browser WebCrypto; existing non-offline permissions remain.
 - Keep one development slot per existing Git root/branch without creating worktrees or branches, and store minimal requirement/decision/Git facts without copying chat into Git. The embedded UI uses the existing source/npm/binary resource chain; integration and platform/artifact acceptance remain pending.
 - Let `/dev` requirements and solution agents query existing Knowledge indexes directly while retaining their stage-specific file write restrictions.
@@ -537,7 +539,7 @@
 
 - Run real Rust workspace builds and restore Clippy in fastcheck and inherited fulltest/slowtest checks, rejecting Rust compiler and Clippy warnings without running tests in fastcheck.
 - Reduce standalone and npm bundle size by storing OpenWiki visual assets and Developer Test Agent resources as single compressed assets, preserving offline use and existing resource caches.
-- Keep task, IRC and background-job ownership isolated per root with worker-hosted subagents; native Dev host callbacks stay on their owning thread.
+- Keep task, IRC and background-job ownership isolated per root with worker-hosted subagents; native AIReq host callbacks stay on their owning thread.
 - Cycle thinking levels with `Alt+E` instead of `Shift+F1`.
 - Store Knowledge databases and WAL/SHM files directly in the selected `OMP_CACHE_DIR` performance root, without old-data migration, backup or recovery.
 - Reduce Knowledge search memory and repeated vector reads without changing recall, ranking, reranker inputs or continuation cursors.
@@ -608,10 +610,10 @@
 - Hide all bundled Superpowers skills from automatic discovery in ordinary sessions, their subagents and the first three `/dev` stages and their descendants; retain explicit user invocation and allow `/dev` executors and all recursive subagents to discover and read them. Preserve stage injection, permissions and same-name custom skill precedence, and retain the disabling frontmatter on future upstream updates.
 - Default standalone `omp openspec` to the requirements-only `mini` schema: proposals and delta specs can cover multiple capabilities, without generating design or tasks documents or implementing or validating software. Users carry out implementation and verification themselves, then explicitly request sync or archive.
 - Expose five OpenSpec core requirements skills and their `/opsx-*` commands in every workspace; remove `openspec-apply-change` and `/opsx-apply` from discovery. Adapt the workflows for requirements maintenance while retaining native sync and requiring only complete, natively valid requirements for archive, without bypassing validation.
-- Preserve the bundled OpenSpec 1.15.0 native parsing, validation, synchronization, archive and other CLI behavior, including the original `spec-driven` schema. Existing changes and explicitly selected schemas are not forcibly converted; Dev continues to use its separate `omp-spec` schema and unchanged four stages.
+- Preserve the bundled OpenSpec 1.15.0 native parsing, validation, synchronization, archive and other CLI behavior, including the original `spec-driven` schema. Existing changes and explicitly selected schemas are not forcibly converted; AIReq continues to use its separate `omp-spec` schema and unchanged four stages.
 - Keep `omp openspec init` from installing duplicate skills or commands, even when tools are detected or explicitly selected; use the built-in resources instead.
 - Track the vendored spec-driven resources, including OpenSpec's production `node_modules`, as checked-in source: builds only pack the tree and never install or regenerate dependencies.
-- Keep only the required OpenSpec runtime and skills, Superpowers skills and referenced runtime resources, and JCH/OMP resources as directly browsable files under `src/spec-driven/vendor/resources/`; package them at build time and extract them into a versioned offline cache at runtime rather than committing a large Base64 generated source. Generate MD5 on copying, reuse unchanged resources and replace the affected resource cache directory when its MD5 changes. No separate upstream installation is required; independent Dev stage boundaries remain intact.
+- Keep only the required OpenSpec runtime and skills, Superpowers skills and referenced runtime resources, and JCH/OMP resources as directly browsable files under `src/spec-driven/vendor/resources/`; package them at build time and extract them into a versioned offline cache at runtime rather than committing a large Base64 generated source. Generate MD5 on copying, reuse unchanged resources and replace the affected resource cache directory when its MD5 changes. No separate upstream installation is required; independent AIReq stage boundaries remain intact.
 
 - Restore bundled Superpowers skills and supporting prompts to their pinned upstream contents.
 - Restore the pinned upstream Superpowers plugins, extensions and runtime resources without rewriting their tool, agent or script instructions.
@@ -628,7 +630,7 @@
 - In `/dev`, direct all stage agents to use only available tools and never commit or push, and direct planners to omit Git submission steps and stray control tokens.
 - Keep `/dev` user-facing stage and descendant communication in Chinese while preserving code, commands, paths, protocol fields and original output.
 - Automatically inject the original stage skills in `/dev`: Grill-me for requirements, writing-plans for planning, and using-superpowers plus subagent-driven-development for execution. Requirements do not automatically inject Brainstorming; solutions receive no interview skill. Stage authorization boundaries remain unchanged.
-- Limit Dev to `/dev`, `/dev config`, `/dev new <requirements>`, `/dev next [solution-id]`, `/dev back` and `/dev drop`, without legacy aliases. New flows receive an automatic unique change ID; next checks actual artifacts and records each of the four explicit user decisions, while back returns one phase without automatically starting work or reverting files.
+- Limit AIReq to `/dev`, `/dev config`, `/dev new <requirements>`, `/dev next [solution-id]`, `/dev back` and `/dev drop`, without legacy aliases. New flows receive an automatic unique change ID; next checks actual artifacts and records each of the four explicit user decisions, while back returns one phase without automatically starting work or reverting files.
 - Hand complete original artifacts, all solution candidates, the selected ID, raw approvals and Team configuration directly to each entering stage without model summaries. Same-stage input continues the native session without reinjecting unchanged materials or rerunning Team. Formal-material version mismatches block dependent work without changing phase or scanning business code.
 - Make executor next the user's sole final acceptance: the program directly invokes native OpenSpec sync, validation and archive without a model or closing agent. Partial failure preserves the executor conversation and actual closing progress; ordinary questions stay read-only, explicitly requested fixes are limited to closing faults that do not change accepted content, and the user's next continues only remaining steps. A completed archive move does not hide failed retirement-backup cleanup; retry verifies that remaining cleanup without repeating sync or archive.
 - Settle owned native tasks before exit, drop or conflicting transitions. Exit saves minimal state and releases workspace ownership before restoring ordinary chat; explicit re-entry checks recovery without replaying input/tools or automatically starting Team/Goal. Missing chat alone does not discard valid business state, and cold history does not restore execution.
@@ -638,7 +640,7 @@
 - Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.
 - Disable LSP by default in main sessions and task subagents; preserve explicit settings and make automatic file formatting, diagnostics and LSP file notifications honor the LSP enable switch.
 
-- Keep standalone OpenSpec requirements maintenance independent of `/dev`; Dev workspace recovery does not change ordinary sessions or independent capabilities.
+- Keep standalone OpenSpec requirements maintenance independent of `/dev`; AIReq workspace recovery does not change ordinary sessions or independent capabilities.
 - Restore upstream automatic session-title behavior: `fork` is the default, with the title-model path available via `tiny`.
 - Offline processes coalesce cumulative streaming updates every 100ms and disable automatic table charts, terminal-title state animations, and replan title refresh through non-persistent runtime overrides, without changing word completion or normal launches.
 - Run fork verification gates and developer scripts directly through their Bun and Cargo primitives instead of the fork-only Bazel graph, adapters and cache; upstream explicit-target Bazel tooling remains available.
@@ -651,16 +653,16 @@
 ### Fixed
 
 - Keep requirement records readable during Windows atomic replacement retries, and preserve the previous record when a save fails.
-- Keep Dev scoped Git publication and cancellation tests within the existing shared heavy integration concurrency cap without extending their deadlines.
+- Keep AIReq scoped Git publication and cancellation tests within the existing shared heavy integration concurrency cap without extending their deadlines.
 - Fix Windows-only Rust warnings and Clippy failures in shell lifecycle, locale and system helpers, and Git process setup.
 - Reuse installed Chromium binaries during isolated fulltest runs without sharing browser profiles or application state.
-- Keep Dev browser stages, materials and conversation controls usable as windows resize; preserve local writing and explicit guest reconnect.
-- Keep image-only drafts intact when native input is dropped, and preserve attachments through Dev conversations.
-- Keep Dev's owner session running when local collaborators disconnect, without serializing runtime-only model state.
-- Publish completed Dev Team solutions and their native provenance before the next stage action.
+- Keep AIReq browser stages, materials and conversation controls usable as windows resize; preserve local writing and explicit guest reconnect.
+- Keep image-only drafts intact when native input is dropped, and preserve attachments through AIReq conversations.
+- Keep AIReq's owner session running when local collaborators disconnect, without serializing runtime-only model state.
+- Publish completed AIReq Team solutions and their native provenance before the next stage action.
 - Initialize `/dev` commands without an import-order crash.
 - Wait for bundled skill scripts to exit and be reaped before the CLI finishes SIGINT or SIGTERM shutdown.
-- Restore Linux fulltest coverage for compaction, SDK prompts, offline commits, plugin catalogs, IME recovery and native Dev TUI workflows.
+- Restore Linux fulltest coverage for compaction, SDK prompts, offline commits, plugin catalogs, IME recovery and native AIReq TUI workflows.
 - Read Goal state from the active history branch without leaking objectives or autopilot mode from sibling branches.
 - Return the unattended reply only for actual `ask` timeouts in active autopilot Goals; preserve ordinary timeout choices, cancellation and abort behavior.
 - Preserve an initial autopilot notice through Stop when its native queued objective is retained, delivering it once with that objective.
@@ -680,7 +682,7 @@
 - Refresh resident sessions immediately after user model-role configuration changes without switching their current model.
 - Explain unavailable background pipe streams instead of returning a missing resource.
 - Reject invalid known-unit `/loop` intervals instead of silently treating them as task text.
-- Keep existing Markdown requirements when advancing a confirmed Dev business document, and enforce stage-local edit and speculation settings on new and restored stage sessions.
+- Keep existing Markdown requirements when advancing a confirmed AIReq business document, and enforce stage-local edit and speculation settings on new and restored stage sessions.
 - Reject missing or unreadable configuration in explicit `config set` / `reset` commands, preserve unrelated configuration, and return the committed revision.
 - Keep Team configuration storage and run previews collapsed until explicitly opened, without displaying a chat session's main model.
 - Reject non-user model-role writes with the structured `scope_not_allowed` error.
@@ -741,23 +743,23 @@
 - Show actual diffs for conflict resolutions, including successful files when a bulk resolution partially fails.
 - Keep lazy llama.cpp and LM Studio metadata refresh cache-only in offline processes, including model selection and post-response refreshes.
 - Project and save global Team configuration without requiring a chat session; preserve ordered explicit members and defer default model selection until a discussion starts.
-- Use the visible Dev solution session's model and settings for Team participants, alignment and synthesis.
+- Use the visible AIReq solution session's model and settings for Team participants, alignment and synthesis.
 - Let users accept completion reports that honestly disclose incomplete work without a separate persisted worker/reviewer-success gate, while retaining report structure, version checks and read-only acceptance boundaries.
 - Preserve arrival order between custom messages and user prompts held by idle compaction without adding an unnecessary asynchronous generation check.
 - Exclude vendored dependency test files from fork test dispatch.
-- Reject symbolic links, Windows junctions and hard-linked targets in Dev requirements, solution and planning document writes, preventing an allowed document path from modifying business files while retaining normal document creation and editing.
-- Keep Dev command failures visible outside Dev, restore dropped stage input, and allow failed entry cleanup to be retried without advancing the saved phase or losing workspace ownership.
-- Closing a worker view or resuming a live root no longer stops its Dev flow, and malformed historical observations are skipped.
+- Reject symbolic links, Windows junctions and hard-linked targets in AIReq requirements, solution and planning document writes, preventing an allowed document path from modifying business files while retaining normal document creation and editing.
+- Keep AIReq command failures visible outside AIReq, restore dropped stage input, and allow failed entry cleanup to be retried without advancing the saved phase or losing workspace ownership.
+- Closing a worker view or resuming a live root no longer stops its AIReq flow, and malformed historical observations are skipped.
 - Reject formal materials changed between approval checks and handoff or acceptance, and stop executor work and collaboration when accepted materials become invalid.
 - Restore the pre-Goal tool set on completion and pause even when native Goal events have already disabled the mode, preventing the Goal tool from reappearing after completion.
-- Re-enter Dev using the root session's current workspace after native directory changes and preserve native subscription initialization while rebinding stage sessions.
+- Re-enter AIReq using the root session's current workspace after native directory changes and preserve native subscription initialization while rebinding stage sessions.
 - Let `/team` finish valid discussions that explicitly exclude an unavailable proposal, while still rejecting a later endorsement of it.
 - Preserve current `/dev` file revisions and original user replies across visible file/save failures without reusing stale model replies or generating model handoff summaries.
 - Prevent a new `/dev` run from replacing one whose cancellation or runtime cleanup has not settled, and expose actionable native model/provider failure details.
 - Reject missing or malformed `/dev` stage artifacts using their actual on-disk contents, and keep complete solution files and raw user confirmations available to the planner.
 - Prevent repeated company-configuration warnings from corrupting the TUI during session and subagent initialization, while retaining startup notifications and standalone CLI diagnostics.
-- Keep native Dev stopping, workspace ownership and actual archive locations observable without reviving completed acceptance, repeating completed closing steps or permitting Loop/desktop rewind bypasses.
-- Interrupt the current Dev solution's in-flight Team discussion on ordinary Escape, await owned work settling, and retain the flow without replaying the discussion, clearing native queued input or releasing stop ownership held by an in-progress exit/drop.
+- Keep native AIReq stopping, workspace ownership and actual archive locations observable without reviving completed acceptance, repeating completed closing steps or permitting Loop/desktop rewind bypasses.
+- Interrupt the current AIReq solution's in-flight Team discussion on ordinary Escape, await owned work settling, and retain the flow without replaying the discussion, clearing native queued input or releasing stop ownership held by an in-progress exit/drop.
 
 - Run bash commands without pipe stream taps when the loaded native addon predates `PipeStreams`, instead of failing every call with `undefined is not a constructor` and leaving `pty` retries the only path to output; `proc://<id>/streams` reports the missing taps, and a newer JS tree beside a previous release's addon no longer breaks plain commands.
 - Open the live background-jobs panel from `/jobs` in ordinary terminals too, showing continuously updated Bash output without a model call; `/jobs full` remains a full-command snapshot.
@@ -765,7 +767,7 @@
 - Avoid false local-gate failures when a bounded discovery probe times out before its child publishes a PID, while retaining timeout, cancellation and cleanup checks.
 - Preserve quoted Windows verification commands and external edits during failed specification publication.
 - Use `node:fs/promises` for native task isolation patch writes (including nested patches) and publication reads, avoiding Bun file I/O `ENOENT` failures on Windows session artifact paths longer than `MAX_PATH`.
-- Preserve native stage input, attachments and drafts when Dev admission or artifact checks fail; retain no-agent Dev mode after successful completion without manufacturing model replies.
+- Preserve native stage input, attachments and drafts when AIReq admission or artifact checks fail; retain no-agent AIReq mode after successful completion without manufacturing model replies.
 - Load bundled OpenSpec and Superpowers commands after profile selection, preserving profile-specific environment bootstrap and global profile flags.
 - Remove retired fork-only RPC dialog diagnostics and Goal RPC v3 acceptance fixtures while retaining SQLite failure-log and native Goal coverage and leaving upstream RPC behavior unchanged.
 - Route explicit Anthropic context-window exhaustion through the existing overflow recovery path instead of retrying unchanged history with an output-limit continuation.

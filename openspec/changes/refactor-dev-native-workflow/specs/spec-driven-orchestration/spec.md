@@ -2,17 +2,17 @@
 
 ## ADDED Requirements
 
-### Requirement: 新 Dev 模块与普通 OMP 的隔离
+### Requirement: 新 AIReq 模块与普通 OMP 的隔离
 
-Dev MUST 复用 OMP 原生会话、工具和生命周期，保持普通 OMP、原 WebGUI 和独立 OpenSpec／Superpowers 既有行为，不建立第二执行器、第二聊天库或旧流程兼容路径。
+AIReq MUST 复用 OMP 原生会话、工具和生命周期，保持普通 OMP、原 WebGUI 和独立 OpenSpec／Superpowers 既有行为，不建立第二执行器、第二聊天库或旧流程兼容路径。
 
 #### Scenario: 进入退出和资源归属
-- **WHEN** 显式进入或退出 Dev
+- **WHEN** 显式进入或退出 AIReq
 - **THEN** 沿用原生 TUI 独占和自有任务结清，关闭网页不退出真实服务，退出不撤销需求或 Git，不关闭其他实例；本轮只改文档和独立原型，不实现正式宿主或后端
 
 ### Requirement: 需求 Agent 与代码证据分析职责
 
-Dev MUST 只提供业务需求、需求评审 A／B／C、综合评审、方案及需求进度分析角色，独立 Skill 设计属于设置能力。MUST NOT 提供开发计划、执行、IR 验收或归档 Agent，不编码、运行测试或修复代码。
+AIReq MUST 只提供业务需求、需求评审 A／B／C、综合评审、方案及需求进度分析角色，独立 Skill 设计属于设置能力。MUST NOT 提供开发计划、执行、IR 验收或归档 Agent，不编码、运行测试或修复代码。
 
 #### Scenario: 四 Agent 评审
 - **WHEN** 提交当前 IR／全部 SR 评审
@@ -29,11 +29,11 @@ Agent MUST 读取完整 IR、全部 SR、当前方案及必要代码上下文，
 
 ### Requirement: 正式需求与平台外开发边界
 
-Dev MUST 仅展示正式需求大表格、同页代码证据报告与只读材料，不挂载开发聊天、阶段动作或执行入口。平台外开发使用开发者自己的工具，不要求个人 OMP Web 或个人 Git 目录。
+AIReq MUST 仅展示正式需求大表格、同页代码证据报告与只读材料，不挂载开发聊天、阶段动作或执行入口。平台外开发使用开发者自己的工具，不要求个人 OMP Web 或个人 Git 目录。
 
 #### Scenario: 不建立冻结和实施流水线
 - **WHEN** 平台外开发者修改仓库需求、方案或代码
-- **THEN** 以实际内容和版本为准，旧证据不能证明新版本；不因首个 SR 开始冻结 IR，不为代码／测试／规格 PR、IR 验收或归档建立 Dev 流水线；普通 OMP 和独立同步／归档能力保持原规则
+- **THEN** 以实际内容和版本为准，旧证据不能证明新版本；不因首个 SR 开始冻结 IR，不为代码／测试／规格 PR、IR 验收或归档建立 AIReq 流水线；普通 OMP 和独立同步／归档能力保持原规则
 
 ### Requirement: 仓库身份与需求分支关联
 
@@ -55,7 +55,7 @@ Dev MUST 仅展示正式需求大表格、同页代码证据报告与只读材�
 
 ### Requirement: 唯一共享数据库和业务边界
 
-各 Web MUST 经固定 18321 的 `omp dev_db` 服务访问 /tmpdata/DFT_LAB/omp/omp_dev_sqlite.db，不各自打开 NFS SQLite。`omp dev_web --port <端口>` 可选端口，省略自动选择并输出实际地址。上述真实命令及服务不在本轮实现。
+各 Web MUST 经固定 18321 的 `omp aireq_db` 服务访问 /tmpdata/DFT_LAB/omp/omp_aireq_sqlite.db，不各自打开 NFS SQLite。`omp aireq_web --port <端口>` 可选端口，省略自动选择并输出实际地址。上述真实命令及服务不在本轮实现。
 
 #### Scenario: 文档、依赖、元数据及个人配置分离
 - **WHEN** 保存需求数据
@@ -64,7 +64,7 @@ Dev MUST 仅展示正式需求大表格、同页代码证据报告与只读材�
 
 ### Requirement: 代码证据完成条件而非验收归档流水线
 
-Dev MUST 基于需求、验收标准及代码证据分析实现百分比、遗漏、问题、不确定项、活动、分析时间、版本、分支和默认分支合入依据，不编码或修复代码，不把百分比当置信度。
+AIReq MUST 基于需求、验收标准及代码证据分析实现百分比、遗漏、问题、不确定项、活动、分析时间、版本、分支和默认分支合入依据，不编码或修复代码，不把百分比当置信度。
 
 #### Scenario: SR 和 IR 完成
 - **WHEN** 后台分析或管理员／IR 负责人调整 SR 进度

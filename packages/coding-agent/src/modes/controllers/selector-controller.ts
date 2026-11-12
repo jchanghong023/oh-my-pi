@@ -1503,7 +1503,7 @@ export class SelectorController {
 		leafId: string | null,
 		draft: { text: string; images: ImageContent[] } | undefined,
 	): Promise<void> {
-		if (this.ctx.isDevWorkbenchModeActive?.()) return;
+		if (this.ctx.isAIReqWorkbenchModeActive?.()) return;
 		if (!leafId) return;
 		try {
 			const result = await this.ctx.session.navigateTree(leafId, { summarize: false });
@@ -1527,7 +1527,7 @@ export class SelectorController {
 	 * holding the conversation up to the message, the old one kept on disk.
 	 */
 	async runTurnAction(turn: TurnAct, message: TurnMessage): Promise<void> {
-		if (this.ctx.isDevWorkbenchModeActive?.()) return;
+		if (this.ctx.isAIReqWorkbenchModeActive?.()) return;
 		const branch = this.ctx.sessionManager.getBranch();
 		const index = branch.findLastIndex(
 			e => e.type === "message" && e.message.role === message.role && e.message.timestamp === message.at,

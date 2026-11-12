@@ -177,7 +177,7 @@ test("historical cwd stays read-only until explicit continuation admits an indep
 			reasonCode: "guard.nativeHistoryRequiresResume",
 		});
 		expect(await f.runtime.messages(f.context, f.targetInfo.id)).toHaveLength(2);
-		const unopened = await acquireBrowserProject(f.cwdB, "dev");
+		const unopened = await acquireBrowserProject(f.cwdB, "aireq");
 		await unopened.close();
 		expect(f.session.sessionManager).toBe(originalManager);
 		expect(f.session.sessionId).toBe(f.sourceInfo.id);
@@ -211,7 +211,7 @@ test("historical cwd stays read-only until explicit continuation admits an indep
 		await expect(f.runtime.submit(targetContext, f.sourceInfo.id, "Wrong session", "cross-project")).rejects.toThrow(
 			/not resident/,
 		);
-		for (const cwd of [f.cwdA, f.cwdB]) await expect(acquireBrowserProject(cwd, "dev")).rejects.toThrow(/占用/);
+		for (const cwd of [f.cwdA, f.cwdB]) await expect(acquireBrowserProject(cwd, "aireq")).rejects.toThrow(/占用/);
 	} finally {
 		historySpy.mockRestore();
 		try {
@@ -252,8 +252,8 @@ test("explicit native workspace recovery rebinds tools/settings and retains both
 		expect(await readMarker(f.session)).toContain("TARGET");
 		expect(process.cwd()).toBe(processCwd);
 		expect(readBrowserProject(f.lease.projectId)?.nativeSession).toBe(f.session);
-		await expect(acquireBrowserProject(f.cwdA, "dev")).rejects.toThrow(/占用/);
-		await expect(acquireBrowserProject(f.cwdB, "dev")).rejects.toThrow(/占用/);
+		await expect(acquireBrowserProject(f.cwdA, "aireq")).rejects.toThrow(/占用/);
+		await expect(acquireBrowserProject(f.cwdB, "aireq")).rejects.toThrow(/占用/);
 		await f.host.resume(f.sourceInfo.path, f.cwdA, f.sourceInfo.id, f.controller.signal, () => {
 			if (readBrowserProject(f.lease.projectId)?.nativeSession !== f.session)
 				throw new Error("Native fixture owner changed");
@@ -264,7 +264,7 @@ test("explicit native workspace recovery rebinds tools/settings and retains both
 		expect(f.settings.getCwd()).toBe(f.cwdA);
 		await f.host.close();
 		for (const cwd of [f.cwdA, f.cwdB]) {
-			const released = await acquireBrowserProject(cwd, "dev");
+			const released = await acquireBrowserProject(cwd, "aireq");
 			await released.close();
 		}
 	} finally {
@@ -275,7 +275,7 @@ test("explicit native workspace recovery rebinds tools/settings and retains both
 test("a target Dev lease rejects explicit workspace recovery before changing tools or configuration", async () => {
 	using temp = TempDir.createSync("@pi-native-cwd-conflict-");
 	const f = await fixture(temp);
-	const contender = await acquireBrowserProject(f.cwdB, "dev");
+	const contender = await acquireBrowserProject(f.cwdB, "aireq");
 	try {
 		await expect(
 			f.host.resume(f.targetInfo.path, f.cwdB, f.targetInfo.id, f.controller.signal, () => {
@@ -317,8 +317,8 @@ for (const failure of ["model", "cancel"] as const) {
 			expect(cfgTemperature.get(f.settings)).toBe(0.2);
 			expect(await readMarker(f.session)).toContain("SOURCE");
 			expect(f.session.isDisposed).toBe(false);
-			await expect(acquireBrowserProject(f.cwdA, "dev")).rejects.toThrow(/占用/);
-			const released = await acquireBrowserProject(f.cwdB, "dev");
+			await expect(acquireBrowserProject(f.cwdA, "aireq")).rejects.toThrow(/占用/);
+			const released = await acquireBrowserProject(f.cwdB, "aireq");
 			await released.close();
 		} finally {
 			await f.close();

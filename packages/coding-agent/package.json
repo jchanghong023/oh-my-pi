@@ -32,7 +32,7 @@
 	},
 	"files": [
 		"src",
-		"src/dev-workbench/assets.generated.json",
+		"src/aireq-workbench/assets.generated.json",
 		"!src/export/html/shell.html",
 		"!src/export/html/template.css",
 		"!src/export/html/template.js",
@@ -552,7 +552,7 @@
 		"fmt": "oxfmt --no-error-on-unmatched-pattern 'src/**/*.{ts,tsx}' '{test,bench,examples,scripts}/**/*.ts' '*.ts' && bun run format-prompts",
 		"format-prompts": "bun scripts/format-prompts.ts",
 		"gen:export-viewer": "bun --cwd=../collab-web run gen:export-viewer",
-		"gen:dev-workbench": "bun scripts/dev-workbench-resources.ts --write",
+		"gen:aireq-workbench": "bun scripts/aireq-workbench-resources.ts --write",
 		"gen:webgui": "bun ../../scripts/generate-webgui-resources.ts",
 		"gen:bundle": "bun scripts/bundle-dist.ts",
 		"gen:rpc": "bun scripts/gen-rpc/index.ts",

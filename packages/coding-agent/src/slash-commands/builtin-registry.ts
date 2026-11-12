@@ -2,7 +2,7 @@ import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
 import { JCH_SLASH_COMMANDS } from "../jch-commands";
-import { handleDevCommandTui } from "../modes/controllers/command-controller";
+import { handleAIReqCommandTui } from "../modes/controllers/command-controller";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import {
 	buildArgumentCompletions,
@@ -25,7 +25,7 @@ import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
 import { BUILTIN_SKETCH_SLASH_COMMANDS } from "./builtin-sketch";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
-import { BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS } from "./builtin-spec-driven";
+import { BUILTIN_AIREQ_SLASH_COMMANDS } from "./builtin-aireq";
 import { BUILTIN_WEBGUI_SLASH_COMMANDS } from "./builtin-webgui";
 import { parseSlashCommand } from "./helpers/parse";
 import type {
@@ -58,7 +58,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_LIFECYCLE_SLASH_COMMANDS,
 	...BUILTIN_MARKETPLACE_SLASH_COMMANDS,
 	...BUILTIN_SKILLS_SLASH_COMMANDS,
-	...BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS.map(command => ({ ...command, handleTui: handleDevCommandTui })),
+	...BUILTIN_AIREQ_SLASH_COMMANDS.map(command => ({ ...command, handleTui: handleAIReqCommandTui })),
 	...BUILTIN_WEBGUI_SLASH_COMMANDS,
 	...BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS,
 	...JCH_SLASH_COMMANDS,

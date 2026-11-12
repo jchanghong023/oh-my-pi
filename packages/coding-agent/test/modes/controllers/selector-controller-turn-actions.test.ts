@@ -66,7 +66,7 @@ function harness(draft = "") {
 describe("SelectorController turn actions", () => {
 	it("refuses turn actions while a browser workbench owns the terminal", async () => {
 		const h = harness();
-		h.ctx.isDevWorkbenchModeActive = () => true;
+		h.ctx.isAIReqWorkbenchModeActive = () => true;
 		await h.controller.runTurnAction("retry", { role: "user", at: 10 });
 		expect(h.navigateTree).not.toHaveBeenCalled();
 		expect(h.editor.submitted).toEqual([]);
@@ -75,7 +75,7 @@ describe("SelectorController turn actions", () => {
 	it("does not run an old rewind toast's Undo through an exclusive browser workbench", async () => {
 		const h = harness("half-typed");
 		await h.controller.runTurnAction("edit", { role: "user", at: 10 });
-		h.ctx.isDevWorkbenchModeActive = () => true;
+		h.ctx.isAIReqWorkbenchModeActive = () => true;
 		h.statuses.at(-1)![1]!.action!.run();
 		expect(h.navigateTree).toHaveBeenCalledTimes(1);
 		expect(h.editor.text).toBe("first prompt");

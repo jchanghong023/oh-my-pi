@@ -292,7 +292,7 @@ const nativeAndIntegrationPackages = [
 
 // Discover coding-agent tests at file granularity before chunking. Full mode
 // uses Bun's test filename conventions.
-const forkCodingAgentDirectories = ["test/spec-driven/", "test/dev-workbench/", "test/team/", "test/goals/"];
+const forkCodingAgentDirectories = ["test/spec-driven/", "test/aireq-workbench/", "test/team/", "test/goals/"];
 const forkCodingAgentFiles = new Set([
 	"test/acp-builtins.test.ts", // /wt consumer
 	"test/cli/collab-serve.test.ts",
@@ -506,9 +506,9 @@ const forkPackageFiles: Record<string, string[]> = {
 	],
 	"packages/utils": ["test/dirs-cache.test.ts", "test/logger-contract.test.ts"],
 	"packages/ai": ["test/proxy.test.ts"],
-	"packages/natives": ["test/dev-workbench-vcs.test.ts"],
+	"packages/natives": ["test/aireq-workbench-vcs.test.ts"],
 	"packages/collab-web": [
-		"test/dev-workbench.test.tsx",
+		"test/aireq-workbench.test.tsx",
 		"test/composer.test.tsx",
 		"test/transcript.test.tsx",
 		"test/tool-view.test.tsx",
@@ -534,34 +534,34 @@ const forkPackageFiles: Record<string, string[]> = {
 };
 
 /** Dev's Vite/public/worker inputs do not appear in Bun's static test import graph. */
-export function isDevFrontendInput(file: string): boolean {
-	if (!file.startsWith("packages/dev-frontend/")) return false;
-	const relative = file.slice("packages/dev-frontend/".length);
+export function isAIReqFrontendInput(file: string): boolean {
+	if (!file.startsWith("packages/aireq-frontend/")) return false;
+	const relative = file.slice("packages/aireq-frontend/".length);
 	return (
 		/^(?:preview|packages|public|config|third-party\/runtime)\//.test(relative) ||
 		/^(?:package\.json|bun\.lock|copy-manifest\.json|tsconfig\.base\.json)$/.test(relative)
 	);
 }
 
-export function devWorkbenchInputsChanged(
+export function aiReqWorkbenchInputsChanged(
 	command: Pick<TestCommand, "cwd" | "command">,
 	changed: readonly string[],
 ): boolean {
 	const consumesAssets =
-		(command.cwd === "packages/collab-web" && command.command.includes("test/dev-workbench.test.tsx")) ||
+		(command.cwd === "packages/collab-web" && command.command.includes("test/aireq-workbench.test.tsx")) ||
 		(command.cwd === "packages/coding-agent" &&
 			command.command.some(
 				file =>
-					/^test\/dev-workbench\/(?:resources|(?:workflow-)?(?:browser|process)\.e2e)\.test\.ts$/.test(file) ||
-					(file.startsWith("test/dev-workbench/") && isBrowserTest(file)),
+					/^test\/aireq-workbench\/(?:resources|(?:workflow-)?(?:browser|process)\.e2e)\.test\.ts$/.test(file) ||
+					(file.startsWith("test/aireq-workbench/") && isBrowserTest(file)),
 			));
 	return (
 		consumesAssets &&
 		changed.some(
 			file =>
-				isDevFrontendInput(file) ||
-				file === "packages/coding-agent/scripts/dev-workbench-resources.ts" ||
-				file === "packages/coding-agent/src/dev-workbench/assets.ts",
+				isAIReqFrontendInput(file) ||
+				file === "packages/coding-agent/scripts/aireq-workbench-resources.ts" ||
+				file === "packages/coding-agent/src/aireq-workbench/assets.ts",
 		)
 	);
 }
@@ -765,7 +765,7 @@ function consumesBrowserProcess(content: string): boolean {
 function isBrowserTest(file: string): boolean {
 	return (
 		browserConsumerTests.has(file) ||
-		/^test\/dev-workbench\/(?:[^/]*browser(?:\.e2e)?)\.test\.ts$/.test(file) ||
+		/^test\/aireq-workbench\/(?:[^/]*browser(?:\.e2e)?)\.test\.ts$/.test(file) ||
 		file === "test/webgui/core-browser.e2e.test.ts"
 	);
 }
@@ -804,8 +804,8 @@ function isIntegrationTest(testFile: string): boolean {
 		/(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile) ||
 		/^(?:\.\/)?test\/openwiki\/visualize-browser\.test\.ts$/.test(testFile) ||
 		// Scoped publication and workflow transitions exercise repeated native Git operations.
-		testFile === "test/dev-workbench/git.test.ts" ||
-		testFile === "test/dev-workbench/workflow-domain.test.ts" ||
+		testFile === "test/aireq-workbench/git.test.ts" ||
+		testFile === "test/aireq-workbench/workflow-domain.test.ts" ||
 		testFile === "test/goals/goal-recovery-public-wire.test.ts" ||
 		testFile === "test/goals/goal-sdk-auxiliary-consumers.test.ts" ||
 		testFile === "test/tools/browser/crawl.test.ts"
@@ -820,7 +820,7 @@ function isStartupTest(file: string): boolean {
 	return (
 		isBrowserTest(file) ||
 		/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
-		/^test\/dev-workbench\/(?:workflow-)?(?:browser|process)\.e2e\.test\.ts$/.test(file) ||
+		/^test\/aireq-workbench\/(?:workflow-)?(?:browser|process)\.e2e\.test\.ts$/.test(file) ||
 		file === "test/zero-config-terminal.test.ts" ||
 		file === "test/goals/goal-autopilot-tui.e2e.test.ts" ||
 		file === "test/goals/goal-ctrl-enter-tui.e2e.test.ts" ||
@@ -1908,7 +1908,7 @@ if (import.meta.main) {
 		changedPaths = await bunChangedPaths(repoRoot, selection.baseline ?? "HEAD");
 		if (
 			!changedArgs.length &&
-			(!changedPaths || bunRequiresFullSelection(changedPaths.filter(file => !isDevFrontendInput(file))))
+			(!changedPaths || bunRequiresFullSelection(changedPaths.filter(file => !isAIReqFrontendInput(file))))
 		) {
 			selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
 		}
@@ -1956,22 +1956,22 @@ if (import.meta.main) {
 			command.cwd === "packages/coding-agent" &&
 			command.command.includes("test/webgui/core-browser.e2e.test.ts") &&
 			(!changedPaths || bunCoreBrowserInputsChanged(changedPaths));
-		const devInputsChanged =
+		const aiReqInputsChanged =
 			selection.mode === "affected" &&
 			(!changedPaths
-				? devWorkbenchInputsChanged(command, ["packages/dev-frontend/preview/main.tsx"])
-				: devWorkbenchInputsChanged(command, changedPaths));
+				? aiReqWorkbenchInputsChanged(command, ["packages/aireq-frontend/preview/main.tsx"])
+				: aiReqWorkbenchInputsChanged(command, changedPaths));
 		command.selection =
-			browserInputsChanged || devInputsChanged
+			browserInputsChanged || aiReqInputsChanged
 				? {
 						...selection,
 						mode: "full",
-						reason: devInputsChanged
+						reason: aiReqInputsChanged
 							? "explicit Dev Vite/public/worker dependency mapping"
 							: "explicit browser Vite/fixture dependency mapping",
 					}
 				: selection;
-		if (selection.mode === "affected" && !browserInputsChanged && !devInputsChanged)
+		if (selection.mode === "affected" && !browserInputsChanged && !aiReqInputsChanged)
 			command.command.push(changedArgs[0] ?? `--changed=${selection.baseline}`);
 	}
 	// Prioritize within the selected shard, without changing shard membership.

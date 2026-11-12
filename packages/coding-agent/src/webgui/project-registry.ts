@@ -9,7 +9,7 @@ import type {
 } from "../../../../vendor/zcode-frontend/preview/session-info";
 import type { AgentSession } from "../session/agent-session";
 import { assertSpecWritePath } from "../spec-driven/artifacts";
-import { DevWorkspace } from "../spec-driven/workspace";
+import { AIReqWorkspace } from "../spec-driven/workspace";
 
 export interface BrowserProjectRecord {
 	readonly projectId: string;
@@ -55,11 +55,11 @@ function projectIdForRoot(root: string): string {
 }
 
 function projectLockPath(root: string): string {
-	return path.join(normalizePathForComparison(root), ".omp", "dev-workbench", "browser-mode");
+	return path.join(normalizePathForComparison(root), ".omp", "aireq-workbench", "browser-mode");
 }
 
 export async function resolveBrowserProjectRoot(cwd: string): Promise<string> {
-	return (await DevWorkspace.resolve(cwd)).root;
+	return (await AIReqWorkspace.resolve(cwd)).root;
 }
 
 /** One OS lease for the canonical project, regardless of mode, profile or native process. */
@@ -78,7 +78,7 @@ async function acquireResolvedProject(
 	reuseWebGuiOwner: boolean,
 ): Promise<BrowserProjectLease> {
 	const projectId = projectIdForRoot(root);
-	const relative = ".omp/dev-workbench/browser-mode";
+	const relative = ".omp/aireq-workbench/browser-mode";
 	await assertSpecWritePath(root, relative);
 	await fs.mkdir(path.dirname(projectLockPath(root)), { recursive: true });
 	await assertSpecWritePath(root, relative);
@@ -91,10 +91,10 @@ async function acquireResolvedProject(
 			existing.record.phase === "active"
 		)
 			return retainProjectLease(existing);
-		throw new Error(`项目已被 Dev 或 WebGUI 占用，请先退出原模式：${root}`);
+		throw new Error(`项目已被 AIReq 或 WebGUI 占用，请先退出原模式：${root}`);
 	}
 	const lock = tryAcquireFileLock(projectLockPath(root));
-	if (!lock) throw new Error(`项目已被 Dev 或 WebGUI 占用，请先退出原模式：${root}`);
+	if (!lock) throw new Error(`项目已被 AIReq 或 WebGUI 占用，请先退出原模式：${root}`);
 	try {
 		const owner: OwnedBrowserProject = {
 			record: {
@@ -178,13 +178,13 @@ export function markBrowserProjectExiting(projectId: string, ownerId: string): v
 }
 
 /** A settled native mode handoff retains the exact OS lock; there is no release/reacquire race. */
-export function transferBrowserProjectToDev(projectId: string, ownerId: string): BrowserProjectLease {
+export function transferBrowserProjectToAIReq(projectId: string, ownerId: string): BrowserProjectLease {
 	const owner = projects.get(projectId);
 	if (!owner || owner.record.ownerId !== ownerId || owner.record.mode !== "webgui" || owner.record.phase !== "exiting")
-		throw new Error("The WebGUI project has not settled for Dev handoff");
+		throw new Error("The WebGUI project has not settled for AIReq handoff");
 	owner.record = {
 		...owner.record,
-		mode: "dev",
+		mode: "aireq",
 		phase: "entering",
 		updatedAt: Date.now(),
 		readInfo: undefined,

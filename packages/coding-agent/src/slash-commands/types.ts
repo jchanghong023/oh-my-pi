@@ -269,7 +269,7 @@ export interface WebGuiCommandHost {
 	deleteCurrentSession(options?: { selectAfter?: boolean }): Promise<void>;
 	resumeSession(sessionFile: string, options?: { continuation?: SessionContinuation }): Promise<void>;
 	moveSession(cwd: string, operation: () => Promise<void>, recover?: () => Promise<void>): Promise<void>;
-	toggleMode(mode: "webgui" | "dev"): Promise<void>;
+	toggleMode(mode: "webgui" | "aireq"): Promise<void>;
 	browserAction(action: WebGuiBrowserAction, options?: ExtensionUIDialogOptions): Promise<Record<string, unknown>>;
 }
 

@@ -13,19 +13,19 @@ import { Settings } from "../../src/config/settings";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { ModelRegistry } from "../../src/config/model-registry";
 import {
-	createDevWorkflowRuntime,
-	assertDevFrozenAuthority,
-	type DevWorkflowBinding,
-	type DevWorkflowPreparation,
-	type DevWorkflowRuntime,
-} from "../../src/dev-workbench/workflow-runtime";
-import { buildRequirementSnapshot, sha256 } from "../../src/dev-workbench/requirement-package";
-import { DevWorkflowGit } from "../../src/dev-workbench/workflow-git";
+	createAIReqWorkflowRuntime,
+	assertAIReqFrozenAuthority,
+	type AIReqWorkflowBinding,
+	type AIReqWorkflowPreparation,
+	type AIReqWorkflowRuntime,
+} from "../../src/aireq-workbench/workflow-runtime";
+import { buildRequirementSnapshot, sha256 } from "../../src/aireq-workbench/requirement-package";
+import { AIReqWorkflowGit } from "../../src/aireq-workbench/workflow-git";
 import {
-	DEV_WORKFLOW_STAGES,
-	type DevNativeSessionRef,
-	type DevRequirementContent,
-} from "../../src/dev-workbench/workflow-types";
+	AIREQ_WORKFLOW_STAGES,
+	type AIReqNativeSessionRef,
+	type AIReqRequirementContent,
+} from "../../src/aireq-workbench/workflow-types";
 import type { AgentSession } from "../../src/session/agent-session";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
@@ -52,13 +52,13 @@ import {
 import { createAssistantMessage } from "../helpers/agent-session-setup";
 import { READONLY_TOOLS_MODE, TOOL_RESULT } from "../fixtures/instructions-mcp";
 import { createWorkflowStage, successfulWorkflowReply } from "./tui-materials-cases";
-import { workflowGit, workflowNativeContext } from "../dev-workbench/workflow-fixture";
+import { workflowGit, workflowNativeContext } from "../aireq-workbench/workflow-fixture";
 
 const exec = promisify(execFile);
 const projectId = "project-a";
 const irId = "ir-a";
 const srId = "sr-a";
-const requirementRoot = `docs/dev/requirements/${irId}`;
+const requirementRoot = `docs/aireq/requirements/${irId}`;
 
 test("native repair authorization distinguishes explicit execution from discussion", () => {
 	for (const text of ["Please fix the failing check", "请修复当前实现", "修复错误，不要修改已批准材料"])
@@ -81,10 +81,10 @@ async function consumer(
 	setup?: (cwd: string) => Promise<void>,
 	rootOptions: Partial<Parameters<typeof createAgentSession>[0]> = {},
 	runtimeOptions: Partial<
-		Pick<Parameters<typeof createDevWorkflowRuntime>[0], "assertCurrent" | "createInteractionUI">
+		Pick<Parameters<typeof createAIReqWorkflowRuntime>[0], "assertCurrent" | "createInteractionUI">
 	> = {},
 ) {
-	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dev-workflow-consumer-"));
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-aireq-workflow-consumer-"));
 	const cwd = path.join(directory, "repo");
 	const agentDir = path.join(directory, "agent");
 	await fs.mkdir(cwd);
@@ -95,7 +95,7 @@ async function consumer(
 	});
 	const authStorage = await AuthStorage.create(":memory:");
 	let root: AgentSession | undefined;
-	let runtime: DevWorkflowRuntime | undefined;
+	let runtime: AIReqWorkflowRuntime | undefined;
 	let registry: ModelRegistry | undefined;
 	const dispose = async () => {
 		try {
@@ -129,7 +129,7 @@ async function consumer(
 			{ cwd },
 		);
 		await setup?.(cwd);
-		const content: DevRequirementContent = {
+		const content: AIReqRequirementContent = {
 			title: "Order approval",
 			document: {
 				path: `${requirementRoot}/ir.md`,
@@ -220,21 +220,21 @@ async function consumer(
 			rootSession: root,
 			settings,
 			cwd,
-			assertCurrent: async (binding: DevWorkflowBinding) => {
+			assertCurrent: async (binding: AIReqWorkflowBinding) => {
 				if (binding.projectId !== projectId) throw new Error("Fixture admission project mismatch");
 			},
 			...runtimeOptions,
 		};
-		runtime = await createDevWorkflowRuntime(args);
+		runtime = await createAIReqWorkflowRuntime(args);
 		const preparation = (
-			phase: DevWorkflowBinding["phase"],
-			extra: Partial<DevWorkflowPreparation> = {},
-		): DevWorkflowPreparation => ({
+			phase: AIReqWorkflowBinding["phase"],
+			extra: Partial<AIReqWorkflowPreparation> = {},
+		): AIReqWorkflowPreparation => ({
 			binding: { projectId, irId, ...(phase === "requirements" ? {} : { srId }), phase, round: 1 },
 			outputPaths: [
 				phase === "requirements"
 					? "draft.json"
-					: `docs/dev/development/${srId}/${phase === "executing" ? "completion" : phase}.md`,
+					: `docs/aireq/development/${srId}/${phase === "executing" ? "completion" : phase}.md`,
 			],
 			...(phase === "requirements" ? {} : { authority }),
 			...extra,
@@ -257,10 +257,10 @@ async function consumer(
 			},
 			async reopen() {
 				await runtime!.dispose();
-				runtime = await createDevWorkflowRuntime(args);
+				runtime = await createAIReqWorkflowRuntime(args);
 				return runtime;
 			},
-			prepare: (phase: DevWorkflowBinding["phase"], extra?: Partial<DevWorkflowPreparation>) =>
+			prepare: (phase: AIReqWorkflowBinding["phase"], extra?: Partial<AIReqWorkflowPreparation>) =>
 				runtime!.prepare(preparation(phase, extra)),
 			[Symbol.asyncDispose]: dispose,
 		};
@@ -294,8 +294,8 @@ function toolNames(request: ModelRequest) {
 
 test("four-stage facade preparation is persistent, idempotent and model-free with exact object bindings", async () => {
 	await using fixture = await consumer();
-	const refs: DevNativeSessionRef[] = [];
-	for (const phase of ["requirements", ...DEV_WORKFLOW_STAGES] as const) {
+	const refs: AIReqNativeSessionRef[] = [];
+	for (const phase of ["requirements", ...AIREQ_WORKFLOW_STAGES] as const) {
 		const ref = await fixture.prepare(phase);
 		refs.push(ref);
 		expect(await fixture.prepare(phase)).toEqual(ref);
@@ -334,7 +334,7 @@ test("published and Git-merged requirements admit their own native SR with exact
 				reply.tool?.name.replace(/^_/u, "") === "write" &&
 				typeof reply.tool.args.content === "string"
 			) {
-				const content = JSON.parse(reply.tool.args.content) as DevRequirementContent;
+				const content = JSON.parse(reply.tool.args.content) as AIReqRequirementContent;
 				const root = path.posix.dirname(content.document.path);
 				content.srs.push({
 					id: "sibling-sr",
@@ -362,10 +362,10 @@ test("published and Git-merged requirements admit their own native SR with exact
 	expect(group.snapshot!.srs).toHaveLength(2);
 	expect(group.evidenceFiles!.length).toBeGreaterThan(0);
 	const versions = [...group.snapshot!.files, ...group.evidenceFiles!];
-	for (const phase of DEV_WORKFLOW_STAGES) {
+	for (const phase of AIREQ_WORKFLOW_STAGES) {
 		const contexts = fixture.provider.requests
 			.map(workflowNativeContext)
-			.filter(context => (context?.binding as DevWorkflowBinding | undefined)?.phase === phase);
+			.filter(context => (context?.binding as AIReqWorkflowBinding | undefined)?.phase === phase);
 		expect(contexts.length).toBeGreaterThan(0);
 		for (const context of contexts) {
 			const authority = context!.authority as {
@@ -409,7 +409,7 @@ test("native preparation preserves filesystem Buffer views and binary attachment
 			digest: file.sha256,
 		})),
 	);
-	const evidence = { path: "docs/dev/reviews/ir-a/confirmed.json", content: '{"exact":"review Ω"}\n' };
+	const evidence = { path: "docs/aireq/reviews/ir-a/confirmed.json", content: '{"exact":"review Ω"}\n' };
 	await fs.mkdir(path.dirname(path.join(fixture.cwd, evidence.path)), { recursive: true });
 	await fs.writeFile(path.join(fixture.cwd, evidence.path), evidence.content);
 	const authority = {
@@ -424,7 +424,7 @@ test("native preparation preserves filesystem Buffer views and binary attachment
 		],
 		roots: [requirementRoot, evidence.path],
 	};
-	for (const phase of DEV_WORKFLOW_STAGES) {
+	for (const phase of AIREQ_WORKFLOW_STAGES) {
 		const ref = await fixture.prepare(phase, { authority });
 		await fixture.runtime.assertAuthority(ref);
 		await fixture.runtime.submit(ref, `Read the complete fixed ${phase} authority without changing files.`);
@@ -482,7 +482,7 @@ test("frozen worktree materialization never repairs retries or substantively div
 	await workflowGit(fixture.cwd, ["remote", "add", "origin", remote]);
 	await workflowGit(fixture.cwd, ["push", "-u", "origin", "main"]);
 	await workflowGit(fixture.cwd, ["remote", "set-head", "origin", "main"]);
-	const git = new DevWorkflowGit();
+	const git = new AIReqWorkflowGit();
 	const project = {
 		...(await git.inspect(fixture.cwd)),
 		id: projectId,
@@ -494,7 +494,7 @@ test("frozen worktree materialization never repairs retries or substantively div
 	const frozen = { snapshot: fixture.snapshot };
 	const operationId = crypto.randomUUID();
 	const owned = await git.createWorktree(project, "development", srId, operationId, frozen);
-	await assertDevFrozenAuthority(owned.path, fixture.authority);
+	await assertAIReqFrozenAuthority(owned.path, fixture.authority);
 	const changed = "Substantive user change; never normalize over these bytes.\n";
 	const ownedFile = path.join(owned.path, fixture.content.document.path);
 	await fs.writeFile(ownedFile, changed);
@@ -502,7 +502,7 @@ test("frozen worktree materialization never repairs retries or substantively div
 		"Frozen requirement changed",
 	);
 	expect(await fs.readFile(ownedFile, "utf8")).toBe(changed);
-	await expect(assertDevFrozenAuthority(owned.path, fixture.authority)).rejects.toThrow("Frozen requirement changed");
+	await expect(assertAIReqFrozenAuthority(owned.path, fixture.authority)).rejects.toThrow("Frozen requirement changed");
 	const defaultFile = path.join(fixture.cwd, fixture.content.document.path);
 	await fs.writeFile(defaultFile, changed);
 	await workflowGit(fixture.cwd, ["add", "--", fixture.content.document.path]);
@@ -516,7 +516,7 @@ test("frozen worktree materialization never repairs retries or substantively div
 		await fs.readFile(
 			path.join(
 				project.commonDir,
-				"omp-dev-worktrees/development/sr-after-default-change",
+				"omp-aireq-worktrees/development/sr-after-default-change",
 				fixture.content.document.path,
 			),
 			"utf8",
@@ -545,7 +545,7 @@ test("complete fixed material bytes, versions and human decisions enter native c
 	expect(users).toContain(raw);
 	expect(users).toContain("  普通追问\n不重发材料  ");
 	const context = session.messages.filter(
-		message => message.role === "custom" && message.customType === "dev-workflow-context",
+		message => message.role === "custom" && message.customType === "aireq-workflow-context",
 	);
 	expect(context).toHaveLength(1);
 	const contextMessage = context[0];
@@ -642,7 +642,7 @@ for (const readonlyRecovery of [false, true])
 				}
 				if (defect === "journal") {
 					for (let index = rows.length - 1; index >= 0; index--)
-						if (JSON.parse(rows[index]!).customType === "dev-workflow-binding") rows.splice(index, 1);
+						if (JSON.parse(rows[index]!).customType === "aireq-workflow-binding") rows.splice(index, 1);
 				}
 				if (defect === "malformed") rows.push("{not valid native journal JSON");
 				await fs.writeFile(ref.sessionFile, `${rows.join("\n")}\n`);
@@ -656,7 +656,7 @@ for (const readonlyRecovery of [false, true])
 test("facade rejects another project root, foreign worktrees and unbound technical sessions", async () => {
 	await using fixture = await consumer();
 	await expect(
-		createDevWorkflowRuntime({
+		createAIReqWorkflowRuntime({
 			projectId: "other-project",
 			rootSession: fixture.root,
 			settings: fixture.settings,
@@ -668,7 +668,7 @@ test("facade rejects another project root, foreign worktrees and unbound technic
 	await fs.mkdir(foreign);
 	await exec("git", ["init", "--initial-branch=main"], { cwd: foreign });
 	await expect(
-		createDevWorkflowRuntime({
+		createAIReqWorkflowRuntime({
 			projectId,
 			rootSession: fixture.root,
 			settings: fixture.settings,
@@ -1037,14 +1037,14 @@ test("a frozen boundary first discovered during disposal stays invalid while rea
 	expect(await fixture.runtime.assertAuthority(ref).catch(error => error)).toBe(boundary);
 	await expect(fixture.runtime.submit(ref, "repaired bytes do not authorize new work")).rejects.toThrow();
 	expect(fixture.runtime.references()).toContainEqual(ref);
-	expect(await fs.readFile(ref.sessionFile, "utf8")).toContain("dev-workflow-binding");
+	expect(await fs.readFile(ref.sessionFile, "utf8")).toContain("aireq-workflow-binding");
 }, 120_000);
 
 test("native admission rechecks the exact object round before every turn and tool", async () => {
 	let current = true;
 	let retireBeforeTool = false;
-	const output = `docs/dev/development/${srId}/planning.md`;
-	const bindings: DevWorkflowBinding[] = [];
+	const output = `docs/aireq/development/${srId}/planning.md`;
+	const bindings: AIReqWorkflowBinding[] = [];
 	await using fixture = await consumer(
 		{
 			reply: () => {
@@ -1525,7 +1525,7 @@ test("completion retires autonomous executor writes without recreating the user-
 					tool: {
 						name: "write",
 						args: {
-							path: `docs/dev/development/${srId}/completion.md`,
+							path: `docs/aireq/development/${srId}/completion.md`,
 							content: "# Incomplete handoff\nUT: not run. ST: not run. Human decision required.\n",
 						},
 					},
@@ -1574,7 +1574,7 @@ test("back settles an actual in-flight native descendant, rejects late results a
 		},
 	});
 	const ref = await fixture.prepare("executing");
-	const output = "docs/dev/development/sr-a/executing.md";
+	const output = "docs/aireq/development/sr-a/executing.md";
 	await fs.mkdir(path.dirname(path.join(fixture.cwd, output)), { recursive: true });
 	await fs.writeFile(path.join(fixture.cwd, output), "preserved incomplete work");
 	const running = fixture.runtime.submit(ref, "start then back").catch(error => error);
@@ -1722,7 +1722,7 @@ test("explicit host authorization reopens execution writes but ordinary prepare 
 					tool: {
 						name: "write",
 						args: {
-							path: `docs/dev/development/${srId}/completion.md`,
+							path: `docs/aireq/development/${srId}/completion.md`,
 							content: `# Handoff ${++reportRevision}\nUT: not run. ST: not run. Verification remains explicitly incomplete.\n`,
 						},
 					},
@@ -1825,11 +1825,11 @@ test("technical context retains complete original specs and all supplied solutio
 	});
 	const contextFiles = [
 		{
-			path: "docs/dev/development/sr-a/solution.md",
+			path: "docs/aireq/development/sr-a/solution.md",
 			content: "# Current solution\nComplete selected rationale and tradeoffs Ω\n",
 		},
 		{
-			path: "docs/dev/development/sr-a/plan.md",
+			path: "docs/aireq/development/sr-a/plan.md",
 			content: "# Current plan\nEvery implementation and verification step Ω\n",
 		},
 	];
@@ -1837,7 +1837,7 @@ test("technical context retains complete original specs and all supplied solutio
 	await fixture.runtime.submit(ref, "implement against the exact approved materials");
 	const entry = fixture.runtime
 		.session(ref)
-		.messages.find(message => message.role === "custom" && message.customType === "dev-workflow-context");
+		.messages.find(message => message.role === "custom" && message.customType === "aireq-workflow-context");
 	if (entry?.role !== "custom") throw new Error("Technical native workflow context is missing");
 	const context = JSON.parse(contentText(entry.content)) as {
 		contextFiles: Array<{ path: string; content: string }>;
@@ -1849,18 +1849,18 @@ test("technical context retains complete original specs and all supplied solutio
 test("PR actors receive delivery-only instructions and complete real prior materials", async () => {
 	await using fixture = await consumer();
 	const contextFiles = ["solution", "plan", "completion", "ut", "st"].map(name => ({
-		path: `docs/dev/development/${srId}/${name}.md`,
+		path: `docs/aireq/development/${srId}/${name}.md`,
 		content: `# ${name}\nActual prior ${name} material Ω\n`,
 	}));
 	for (const file of contextFiles) {
 		await fs.mkdir(path.dirname(path.join(fixture.cwd, file.path)), { recursive: true });
 		await fs.writeFile(path.join(fixture.cwd, file.path), file.content);
 	}
-	const outputPath = `docs/dev/development/${srId}/delivery.md`;
+	const outputPath = `docs/aireq/development/${srId}/delivery.md`;
 	const ref = await fixture.prepare("pr", { outputPaths: [outputPath], contextFiles });
 	const entry = fixture.runtime
 		.session(ref)
-		.messages.find(message => message.role === "custom" && message.customType === "dev-workflow-context");
+		.messages.find(message => message.role === "custom" && message.customType === "aireq-workflow-context");
 	if (entry?.role !== "custom") throw new Error("PR native workflow context is missing");
 	const context = JSON.parse(contentText(entry.content)) as {
 		outputContract: string;
@@ -1979,7 +1979,7 @@ test("an idle real task descendant loses writable capability at its owner's comp
 					tool: {
 						name: "write",
 						args: {
-							path: `docs/dev/development/${srId}/completion.md`,
+							path: `docs/aireq/development/${srId}/completion.md`,
 							content: "# Descendant handoff\nUT: not run. ST: not run. No verification success claimed.\n",
 						},
 					},
@@ -2018,7 +2018,7 @@ test("ordinary executor discussion without a completion report keeps the current
 	next = { name: "write", args: { path: "ongoing.ts", content: "export const ongoing = true;\n" } };
 	await fixture.runtime.submit(ref, "continue the same authorized implementation");
 	expect(await fs.readFile(path.join(fixture.cwd, "ongoing.ts"), "utf8")).toBe("export const ongoing = true;\n");
-	await expect(fs.stat(path.join(fixture.cwd, `docs/dev/development/${srId}/completion.md`))).rejects.toMatchObject({
+	await expect(fs.stat(path.join(fixture.cwd, `docs/aireq/development/${srId}/completion.md`))).rejects.toMatchObject({
 		code: "ENOENT",
 	});
 }, 120_000);

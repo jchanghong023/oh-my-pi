@@ -227,19 +227,19 @@ export async function cancelSpecDescendantJobs(
 	}
 }
 
-export type DevNativeInputKind = "prompt" | "native-action";
+export type AIReqNativeInputKind = "prompt" | "native-action";
 
 /** Dev's replacement workflow actors retain the native SDK and recursively inherit one boundary. */
-export interface DevNativeActor {
+export interface AIReqNativeActor {
 	readonly id: string;
 	readonly session: AgentSession;
 	prompt(text: string): Promise<void>;
-	runInput<T>(operation: () => Promise<T>, kind?: DevNativeInputKind): Promise<T>;
+	runInput<T>(operation: () => Promise<T>, kind?: AIReqNativeInputKind): Promise<T>;
 	stop(): Promise<void>;
 	dispose(): Promise<void>;
 }
 
-export async function createDevNativeActor(args: {
+export async function createAIReqNativeActor(args: {
 	name: string;
 	options: CreateAgentSessionOptions;
 	context: string;
@@ -249,7 +249,7 @@ export async function createDevNativeActor(args: {
 	/** Validate settled cleanup and deferred shared-workspace release without authorizing live capture. */
 	afterStop?: () => Promise<void>;
 	uiForSession?: (session: AgentSession) => ExtensionUIContext;
-}): Promise<DevNativeActor> {
+}): Promise<AIReqNativeActor> {
 	const id = `dev-${args.name}-${crypto.randomUUID()}`;
 	const registry = args.options.agentRegistry ?? AgentRegistry.global();
 	const base =
@@ -362,7 +362,7 @@ export async function createDevNativeActor(args: {
 			},
 		});
 		await session.sendCustomMessage(
-			{ customType: "dev-workflow-context", display: false, content: args.context },
+			{ customType: "aireq-workflow-context", display: false, content: args.context },
 			{ triggerTurn: false },
 		);
 	} catch (error) {
@@ -382,9 +382,9 @@ export async function createDevNativeActor(args: {
 		await active?.catch(() => {});
 		await (args.afterStop ?? args.afterTool)();
 	};
-	const runInput = async <T>(input: () => Promise<T>, kind: DevNativeInputKind = "prompt"): Promise<T> => {
+	const runInput = async <T>(input: () => Promise<T>, kind: AIReqNativeInputKind = "prompt"): Promise<T> => {
 		assertOpen();
-		await args.check("dev-input", {});
+		await args.check("aireq-input", {});
 		assertOpen();
 		// Native follow-up/steer admission keeps its own queue semantics. The live
 		// owning input retains the final settlement and frozen-output barrier.
@@ -482,7 +482,7 @@ export async function createDevNativeActor(args: {
 }
 
 /** Build replacement Dev actors from the real project root, never from copied conversation state. */
-export async function devNativeSessionOptions(args: {
+export async function aiReqNativeSessionOptions(args: {
 	root: AgentSession;
 	settings: Settings;
 	cwd: string;

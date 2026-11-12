@@ -4,7 +4,7 @@ export const WEBGUI_UNAVAILABLE_CODE = "OMP_WEBGUI_NOT_IMPLEMENTED";
 export const WEBGUI_SESSION_INFO_PATH = "/api/omp/session-info";
 export const WEBGUI_PROJECTS_PATH = "/api/omp/projects";
 
-export type BrowserProjectMode = "dev" | "webgui";
+export type BrowserProjectMode = "aireq" | "webgui";
 export type BrowserProjectPhase = "entering" | "active" | "exiting";
 
 export interface WebGuiProject {

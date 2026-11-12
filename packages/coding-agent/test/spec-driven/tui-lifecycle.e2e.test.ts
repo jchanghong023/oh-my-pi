@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import { workflowNativeContext } from "../dev-workbench/workflow-fixture";
+import { workflowNativeContext } from "../aireq-workbench/workflow-fixture";
 import { createWorkflowStage } from "./tui-materials-cases";
 
 test("executor receives frozen whole-group bytes and explicit decisions while Goal remains opt-in", async () => {

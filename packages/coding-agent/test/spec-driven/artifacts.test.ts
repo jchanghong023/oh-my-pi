@@ -11,32 +11,32 @@ import {
 	safeMaterialPath,
 	sha256,
 	validateRequirementContent,
-} from "../../src/dev-workbench/requirement-package";
-import { assertSnapshotFiles } from "../../src/dev-workbench/workflow-git";
-import type { DevPackageManifest, DevRequirementContent } from "../../src/dev-workbench/workflow-types";
+} from "../../src/aireq-workbench/requirement-package";
+import { assertSnapshotFiles } from "../../src/aireq-workbench/workflow-git";
+import type { AIReqPackageManifest, AIReqRequirementContent } from "../../src/aireq-workbench/workflow-types";
 
-function content(): DevRequirementContent {
+function content(): AIReqRequirementContent {
 	const markdown = (title: string) =>
 		`# ${title}\n\n## Scenarios\nReturn the complete customer request Ω, preserving internal whitespace.\n\n## Rules and boundaries\nTrim outer whitespace, use world for empty names, do not alter unrelated behavior.\n\n## Acceptance\nBoth the CLI and API preserve internal whitespace; UT and ST remain separate evidence.\n`;
 	return {
 		title: "Greeting behavior",
-		document: { path: "docs/dev/requirements/ir-a/ir.md", content: markdown("Greeting behavior") },
+		document: { path: "docs/aireq/requirements/ir-a/ir.md", content: markdown("Greeting behavior") },
 		srs: [
 			{
 				id: "sr-a",
 				title: "Greeting API",
-				document: { path: "docs/dev/requirements/ir-a/srs/sr-a.md", content: markdown("Greeting API") },
+				document: { path: "docs/aireq/requirements/ir-a/srs/sr-a.md", content: markdown("Greeting API") },
 			},
 		],
 		attachments: [
-			{ path: "docs/dev/requirements/ir-a/context/design.bin", content: new Uint8Array([0, 255, 10, 128]) },
+			{ path: "docs/aireq/requirements/ir-a/context/design.bin", content: new Uint8Array([0, 255, 10, 128]) },
 		],
 	};
 }
 function bundle() {
 	const requirement = content();
 	requirement.attachments.push({
-		path: "docs/dev/requirements/ir-a/requirements.json",
+		path: "docs/aireq/requirements/ir-a/requirements.json",
 		content: canonicalJson({
 			version: 1,
 			irId: "ir-a",
@@ -52,8 +52,8 @@ function bundle() {
 			typeof document.content === "string" ? new TextEncoder().encode(document.content) : document.content,
 		]),
 	);
-	const manifest: DevPackageManifest = {
-		format: "omp-dev-requirements",
+	const manifest: AIReqPackageManifest = {
+		format: "omp-aireq-requirements",
 		version: 1,
 		packageId: "package-a",
 		sourceProjectId: "project-a",
@@ -81,7 +81,7 @@ function bundle() {
 }
 
 test("formal requirement package round-trips every byte and stable identity without native history copies", async () => {
-	await using root = await TempDir.create("@omp-dev-package-");
+	await using root = await TempDir.create("@omp-aireq-package-");
 	const { files, manifest } = bundle();
 	const target = root.join("requirements.zip");
 	await encodeRequirementPackage(target, manifest, files);
@@ -109,23 +109,23 @@ for (const invalid of ["missing", "malformed", "unknown"] as const) {
 test("snapshot versions bind titles, full nested member bytes and every SR membership", () => {
 	const { requirement, snapshot } = bundle();
 	for (const mutate of [
-		(value: DevRequirementContent) => {
+		(value: AIReqRequirementContent) => {
 			value.title += " changed";
 		},
-		(value: DevRequirementContent) => {
+		(value: AIReqRequirementContent) => {
 			value.srs[0]!.document.content += "\nChanged Ω original bytes.\n";
 		},
-		(value: DevRequirementContent) => {
+		(value: AIReqRequirementContent) => {
 			value.attachments.push({
-				path: "docs/dev/requirements/ir-a/context/nested/extra.md",
+				path: "docs/aireq/requirements/ir-a/context/nested/extra.md",
 				content: "New original context\n",
 			});
 		},
-		(value: DevRequirementContent) => {
+		(value: AIReqRequirementContent) => {
 			value.srs.push({
 				...value.srs[0]!,
 				id: "sr-b",
-				document: { ...value.srs[0]!.document, path: "docs/dev/requirements/ir-a/srs/sr-b.md" },
+				document: { ...value.srs[0]!.document, path: "docs/aireq/requirements/ir-a/srs/sr-b.md" },
 			});
 		},
 	]) {
@@ -136,7 +136,7 @@ test("snapshot versions bind titles, full nested member bytes and every SR membe
 });
 
 test("unknown versions, missing members, corruption and stale human/review versions are rejected by actual ZIP decoding", async () => {
-	await using root = await TempDir.create("@omp-dev-package-negative-");
+	await using root = await TempDir.create("@omp-aireq-package-negative-");
 	const { files, manifest } = bundle();
 	for (const kind of ["version", "missing", "corrupt", "unknown", "confirmation", "review"] as const) {
 		const submitted = structuredClone(manifest);
@@ -167,13 +167,13 @@ test("runtime, credential and unsafe filesystem paths cannot become formal packa
 	])
 		expect(() => safeMaterialPath(name)).toThrow();
 	for (const mutate of [
-		(value: DevRequirementContent) => {
+		(value: AIReqRequirementContent) => {
 			Object.assign(value, { sessionFile: "C:/private/native.jsonl" });
 		},
-		(value: DevRequirementContent) => {
+		(value: AIReqRequirementContent) => {
 			value.document.content += "\napi_key=private-secret-value\n";
 		},
-		(value: DevRequirementContent) => {
+		(value: AIReqRequirementContent) => {
 			value.srs[0]!.document.path = value.document.path.toUpperCase();
 		},
 	]) {
@@ -184,14 +184,14 @@ test("runtime, credential and unsafe filesystem paths cannot become formal packa
 });
 
 test("whole frozen set detects nested additions, missing files and changed bytes without deleting any material", async () => {
-	await using root = await TempDir.create("@omp-dev-frozen-set-");
+	await using root = await TempDir.create("@omp-aireq-frozen-set-");
 	const { files, snapshot } = bundle();
 	for (const [file, bytes] of files) {
 		await fs.mkdir(path.dirname(root.join(file)), { recursive: true });
 		await fs.writeFile(root.join(file), bytes);
 	}
 	await assertSnapshotFiles(root.path(), snapshot);
-	const nested = "docs/dev/requirements/ir-a/srs/nested/new-sr.md";
+	const nested = "docs/aireq/requirements/ir-a/srs/nested/new-sr.md";
 	await fs.mkdir(path.dirname(root.join(nested)), { recursive: true });
 	await fs.writeFile(root.join(nested), "unapproved nested member\n");
 	await expect(assertSnapshotFiles(root.path(), snapshot)).rejects.toThrow();

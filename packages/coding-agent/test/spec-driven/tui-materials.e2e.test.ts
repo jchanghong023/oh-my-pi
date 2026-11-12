@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
-import { WorkflowConsumerFixture } from "../dev-workbench/workflow-fixture";
+import { WorkflowConsumerFixture } from "../aireq-workbench/workflow-fixture";
 import {
 	registerMaterialFailureTests,
 	successfulWorkflowReply,

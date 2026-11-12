@@ -7,8 +7,8 @@ import {
 	WEBGUI_SESSION_INFO_PATH,
 } from "../../../../vendor/zcode-frontend/preview/session-info";
 import type { ServerRemoteInfo } from "../../../../vendor/zcode-frontend/packages/shared/src/server-remote";
-import type { DevWorkbenchHandle } from "../dev-workbench/host";
-import type { BrowserConnection, DevWorkbenchApplication } from "../dev-workbench/server";
+import type { AIReqWorkbenchHandle } from "../aireq-workbench/host";
+import type { BrowserConnection, AIReqWorkbenchApplication } from "../aireq-workbench/server";
 import { AgentRegistry, type AgentRegistryApi } from "../registry/agent-registry";
 import { getWorkbenchAddresses } from "../utils/browser-network";
 import type { OmpWebSocketData } from "./application";
@@ -65,10 +65,10 @@ function browserRequest(
 class ProcessWebServer {
 	#server: Bun.Server<OmpWebSocketData>;
 	#rpc = new WebGuiRpcHost();
-	#applications = new Map<string, DevWorkbenchApplication>();
-	#applicationRegistries = new WeakMap<DevWorkbenchApplication, AgentRegistryApi>();
-	#retiring = new Map<DevWorkbenchApplication, Promise<void>>();
-	#retired = new Set<DevWorkbenchApplication>();
+	#applications = new Map<string, AIReqWorkbenchApplication>();
+	#applicationRegistries = new WeakMap<AIReqWorkbenchApplication, AgentRegistryApi>();
+	#retiring = new Map<AIReqWorkbenchApplication, Promise<void>>();
+	#retired = new Set<AIReqWorkbenchApplication>();
 	#nativeSockets = new WeakSet<ServerWebSocket<OmpWebSocketData>>();
 	#assets: WebGuiStaticAssets | undefined;
 	readonly #standaloneWorkspacePath: string;
@@ -90,7 +90,7 @@ class ProcessWebServer {
 			perMessageDeflate: false,
 			open: socket => {
 				if (this.#stopping) return socket.close(1001, "OMP web server is stopping");
-				if (socket.data.kind === "dev") {
+				if (socket.data.kind === "aireq") {
 					const application = socket.data.application;
 					if (this.#applications.get(application.basePath) !== application)
 						return socket.close(1008, "Native workbench ownership has ended");
@@ -111,7 +111,7 @@ class ProcessWebServer {
 			},
 			message: (socket, message) => {
 				if (this.#stopping) return;
-				if (socket.data.kind === "dev") {
+				if (socket.data.kind === "aireq") {
 					const application = socket.data.application;
 					if (!this.#nativeSockets.has(socket) || this.#applications.get(application.basePath) !== application)
 						return socket.close(1008, "Native workbench ownership has ended");
@@ -121,7 +121,7 @@ class ProcessWebServer {
 				} else return this.#rpc.websocket.message(socket as ServerWebSocket<WebGuiSocketData>, message);
 			},
 			drain: socket => {
-				if (socket.data.kind === "dev") {
+				if (socket.data.kind === "aireq") {
 					const application = socket.data.application;
 					if (this.#nativeSockets.has(socket))
 						return this.#runApplication(application, () =>
@@ -131,7 +131,7 @@ class ProcessWebServer {
 			},
 			close: (socket, code, reason) => {
 				// A retired application's outstanding subscriptions still own their close callback.
-				if (socket.data.kind === "dev") {
+				if (socket.data.kind === "aireq") {
 					const application = socket.data.application;
 					if (this.#nativeSockets.delete(socket))
 						return this.#runApplication(application, () =>
@@ -247,7 +247,7 @@ class ProcessWebServer {
 						return json({ error: "WebSocket upgrade required" }, 426);
 					}
 					if (
-						/^\/(?:api|internal|dev)(?:\/|$)/.test(url.pathname) ||
+						/^\/(?:api|internal|aireq)(?:\/|$)/.test(url.pathname) ||
 						url.pathname.startsWith(`${WEBGUI_RPC_PATH}/`)
 					)
 						return json({ error: "Not found" }, 404);
@@ -303,12 +303,12 @@ class ProcessWebServer {
 		await this.#preparing;
 	}
 
-	#runApplication<T>(application: DevWorkbenchApplication, operation: () => T): T {
+	#runApplication<T>(application: AIReqWorkbenchApplication, operation: () => T): T {
 		const registry = this.#applicationRegistries.get(application);
 		return registry ? AgentRegistry.runScoped(registry, operation) : operation();
 	}
 
-	register(application: DevWorkbenchApplication): DevWorkbenchHandle {
+	register(application: AIReqWorkbenchApplication): AIReqWorkbenchHandle {
 		if (this.#stopping) throw new Error("OMP web server is stopping");
 		if (!application.basePath.startsWith("/") || !application.basePath.endsWith("/"))
 			throw new Error("Native workbench requires an absolute, slash-terminated base path");
@@ -327,7 +327,7 @@ class ProcessWebServer {
 		};
 	}
 
-	#retire(application: DevWorkbenchApplication): Promise<void> {
+	#retire(application: AIReqWorkbenchApplication): Promise<void> {
 		const pending = this.#retiring.get(application);
 		if (pending) return pending;
 		if (this.#applications.get(application.basePath) !== application && !this.#retired.has(application))
@@ -414,7 +414,7 @@ export async function ensureWebServer(options: { webgui?: boolean } = {}): Promi
 	return (await ensureRuntime(options.webgui === true)).handle;
 }
 
-export async function registerDevApplication(application: DevWorkbenchApplication): Promise<DevWorkbenchHandle> {
+export async function registerAIReqApplication(application: AIReqWorkbenchApplication): Promise<AIReqWorkbenchHandle> {
 	return (await ensureRuntime(false)).register(application);
 }
 

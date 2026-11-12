@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIReq 原型 · 沿用 WebGUI</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#151515;color:#e4e4e4;font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif}button,select,textarea,input{font:inherit;color:inherit}button,a,label[for]{cursor:pointer}button,select,input{background:#252525;border:1px solid #393939;border-radius:8px;padding:7px 11px}button:hover,a:hover{background:#2a2a2a}button:disabled{color:#707070;cursor:default}a{color:inherit;text-decoration:none}h1,h2,h3,p{margin:0 0 14px}h1{font-size:19px}h2{font-size:24px}h3{font-size:14px}small,.muted{color:#939393;font-size:12px}.row{display:flex;align-items:center;gap:9px}.between{justify-content:space-between}.wide{width:100%}.ghost{border:0;background:transparent}.pill{border:1px solid #3c3c3c;border-radius:5px;padding:2px 7px;font-size:11px;color:#bdbdbd}.shell{height:100vh;min-height:760px;display:grid;grid-template-columns:240px minmax(450px,1fr) 360px}.sidebar{background:#181818;border-right:1px solid #343434;padding:25px 13px 15px;display:flex;flex-direction:column;gap:23px}.nav-action{display:block;padding:7px 10px;border-radius:7px;width:100%;text-align:left;font-size:13px}.nav-caption{color:#939393;font-size:12px;margin:0 9px 8px}.nav-item{display:block;padding:9px 10px;border-radius:8px;margin:3px 0}.nav-item.active{background:#2a2a2a}.nav-item small{display:block;margin-top:2px;font-size:11px}.sidebar select{font-size:12px}.bottom{margin-top:auto}.project-select{margin-bottom:13px}.brand{font-size:12px;padding:4px 8px}.brand a{padding:5px 8px;border-radius:6px}.chat{min-width:0;display:flex;flex-direction:column}.chat-head{padding:19px 26px 15px;border-bottom:1px solid #303030}.chat-head h1{margin:7px 0}.chat-head .crumb{color:#999;font-size:12px}.stages{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:17px 0 10px;font-size:12px}.stages label{padding:8px 6px;border-radius:7px;background:#202020;text-align:center;color:#999;border:1px solid #303030}.stages .actual{background:#283240;border-color:#536680;color:#dfebff}.stages .viewing{border-color:#666;color:#ddd}.chat-body{flex:1;overflow:auto;padding:27px 30px}.chat-content{max-width:780px;margin:auto}.user{background:#262626;border:1px solid #303030;border-radius:14px;padding:14px 17px;margin:0 0 30px 65px}.assistant{padding:0 7px}.assistant p{margin:12px 0 20px}.tool{margin:15px 0;padding:11px 13px;border:1px solid #343434;border-radius:10px;color:#aaa;font-size:12px}.tool summary{cursor:pointer}.flow-action{padding:12px 0;margin-top:25px;border-top:1px solid #303030}.flow-action .row{flex-wrap:wrap}.flow-action button{font-size:12px}.composer-wrap{padding:15px 28px 23px}.composer{max-width:800px;margin:auto;background:#282828;border:1px solid #414141;border-radius:17px;padding:12px 14px}.composer-top{font-size:12px;color:#aaa;padding-bottom:7px}.composer textarea{width:100%;height:66px;resize:none;border:0;outline:none;background:transparent;padding:4px;color:#ddd}.composer textarea::placeholder{color:#888}.composer .send{border-radius:50%;padding:3px 10px;font-size:18px;background:#ddd;color:#222}.composer-hint{text-align:center;font-size:11px;color:#737373;margin-top:9px}.pane{border-left:1px solid #343434;display:flex;flex-direction:column;min-width:0}.pane-tabs{height:49px;padding:9px 12px;border-bottom:1px solid #303030;display:flex;gap:5px}.pane-tabs label{padding:4px 12px;border-radius:6px;color:#999;font-size:12px}.pane-controls{padding:16px 18px;border-bottom:1px solid #303030}.pane-controls select{margin:7px 0;width:100%;font-size:12px}.document,.pane-extra{padding:25px 22px;overflow:auto;flex:1}.document h2{font-size:20px}.document h3{margin-top:25px}.document p,.document li{font-size:13px;line-height:1.9;color:#c1c1c1}.document ul{padding-left:20px}.document .note{margin:23px 0;padding:12px;background:#222;border-radius:8px}.pane-foot{padding:12px 18px;border-top:1px solid #303030}.pane-foot button{font-size:12px}.prototype-note{font-size:10px;color:#777}.state-control{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}.pane-extra{display:none}.shell:has(#pane-files:checked) .material-view,.shell:has(#pane-review:checked) .material-view{display:none}.shell:has(#pane-files:checked) .files-view,.shell:has(#pane-review:checked) .review-view{display:block}.shell:has(#pane-material:checked) label[for="pane-material"],.shell:has(#pane-files:checked) label[for="pane-files"],.shell:has(#pane-review:checked) label[for="pane-review"]{background:#303030;color:#eee}.material-view{display:flex;flex-direction:column;flex:1;min-height:0}.tree{color:#aaa;line-height:2.5;font-size:13px}.settings{display:none;position:fixed;inset:0;background:#151515;grid-template-columns:240px 1fr;overflow:auto}.settings:target{display:grid}.settings-sidebar{background:#181818;padding:28px 13px 15px;border-right:1px solid #343434;display:flex;flex-direction:column;gap:22px}.settings-sidebar a,.settings-sidebar label{display:block;font-size:13px;padding:7px 11px;border-radius:8px}.settings-sidebar h3{font-size:11px;font-weight:400;color:#999;margin:0 10px 5px}.settings-content{padding:45px 6vw;overflow:auto}.settings-page{max-width:880px;display:none}.card{background:#262626;border:1px solid #333;border-radius:13px;margin:20px 0;overflow:hidden}.setting-row{padding:19px 21px;border-bottom:1px solid #333;display:flex;gap:25px;align-items:center;justify-content:space-between}.setting-row:last-child{border-bottom:0}.setting-row p{margin:5px 0 0;font-size:12px;color:#999}.setting-row .value{font-size:12px;white-space:nowrap;color:#ccc}.toggle{display:inline-block;width:29px;height:16px;border-radius:20px;background:#ddd;position:relative}.toggle:after{content:"";position:absolute;width:12px;height:12px;border-radius:50%;background:#252525;top:2px;right:2px}.off{background:#494949}.off:after{right:auto;left:2px}.settings:has(#set-general:checked) .general-page,.settings:has(#set-appearance:checked) .appearance-page,.settings:has(#set-projects:checked) .projects-page,.settings:has(#set-release:checked) .release-page{display:block}.settings:has(#set-general:checked) label[for="set-general"],.settings:has(#set-appearance:checked) label[for="set-appearance"],.settings:has(#set-projects:checked) label[for="set-projects"],.settings:has(#set-release:checked) label[for="set-release"]{background:#303030}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:13px;border-bottom:1px solid #363636}th{font-size:11px;color:#999;font-weight:400}.settings-footnote{font-size:12px;color:#888;margin-top:26px}.ir-only{display:none}.shell:has(#object-ir:checked) .sr-only{display:none}.shell:has(#object-ir:checked) .ir-only{display:block}.object-link{font-size:12px;color:#aaa;border-bottom:1px solid #555}.ir-members{margin-top:23px}.ir-members .nav-item{border:1px solid #353535;margin-top:9px}.settings-placeholder{display:none}.settings:has(#set-other:checked) .settings-placeholder{display:block}
+</style>
+</head>
+<body>
+<div class="shell">
+  <input class="state-control" type="radio" name="object" id="object-sr" checked>
+  <input class="state-control" type="radio" name="object" id="object-ir">
+  <aside class="sidebar" aria-label="AIReq 需求导航">
+    <div><button class="nav-action ghost">＋ 新建需求</button><button class="nav-action ghost">导入需求包</button></div>
+    <div><p class="nav-caption">Release</p><select class="wide" aria-label="当前 Release"><option>本期交付</option><option>下期交付</option></select></div>
+    <nav aria-label="需求列表">
+      <div class="row between nav-caption"><span>需求列表</span><span>搜索　筛选</span></div>
+      <label class="nav-item active" for="object-ir">测试报告自动汇总<small>2 个 SR · 1 个开发中</small></label>
+      <div class="nav-item">内网资料检索<small>待需求 PR 合入</small></div>
+      <div class="nav-item">批量任务结果导出<small>已完成</small></div>
+    </nav>
+    <div><p class="nav-caption">草稿</p><div class="nav-item">新的需求讨论<small>待确认需求与拆分</small></div></div>
+    <div class="bottom">
+      <select class="wide project-select" aria-label="当前项目"><option>芯片验证平台</option><option>内部工具集</option></select>
+      <div class="row between brand"><span>OMP · AIReq</span><a href="#settings">设置</a></div>
+    </div>
+  </aside>
+
+  <main class="chat">
+    <header class="chat-head">
+      <div class="row between"><span class="crumb">测试报告自动汇总</span><span class="prototype-note">静态布局原型 · 全部业务内容为示例</span></div>
+      <div class="sr-only">
+        <h1>汇总失败用例并生成报告</h1>
+        <div class="row between"><span class="muted">需求已合入并冻结 · 本项目当前开发 SR</span><label class="object-link" for="object-ir">返回 IR 讨论</label></div>
+        <div class="stages"><label class="viewing" for="pane-material">技术方案 · 已确认</label><label for="pane-material">开发计划 · 已确认</label><label class="actual" for="pane-material">开发与验证 · 当前</label><label for="pane-material">交付 PR · 未开始</label></div>
+        <small>当前进行：开发与验证　 /　 正在查看：技术方案</small>
+      </div>
+      <div class="ir-only"><h1>测试报告自动汇总</h1><span class="pill">需求已合入 · 整组已冻结</span><p class="muted" style="margin:10px 0 0">IR 用于需求讨论与拆分，不进入开发阶段。</p></div>
+    </header>
+    <section class="chat-body" aria-label="AI 会话">
+      <div class="chat-content sr-only">
+        <div class="user">按已确认的计划实现。分别记录 UT 和 ST 的真实结果，不要修改冻结需求。</div>
+        <div class="assistant"><strong>开发 Agent</strong><p>将在当前 SR 的 worktree 中完成开发与验证，保留工具过程和子代理记录。完成后提交报告，等待你明确确认进入交付。</p><details class="tool"><summary>工具过程与子代理</summary><p>沿用现有 WebGUI 的消息卡片与展开方式。原型不执行工具。</p></details><p>你可以在右侧查看技术方案，不影响当前会话。需要返工时，使用下方独立的返回动作。</p></div>
+        <div class="flow-action"><div class="row"><button>停止</button><button>返回方案</button><button>返回计划</button><button disabled>确认开发与验证，进入交付</button></div><small>完成报告尚未生成。阶段推进必须由人员明确确认。</small></div>
+      </div>
+      <div class="chat-content ir-only">
+        <div class="user">希望整理项目的失败用例，减少人工查看多份测试日志的时间。</div>
+        <div class="assistant"><strong>需求 Agent</strong><p>本需求整理为一个 IR 和两个 SR。整组需求经过确认、格式检查及独立 review，需求 PR 合入后已冻结。右侧可查看完整材料。</p></div>
+        <div class="ir-members"><h3>系统需求</h3><label class="nav-item" for="object-sr"><div class="row between"><span>汇总失败用例并生成报告</span><span class="pill">开发与验证 · 查看</span></div><small>已启动的 SR，查看其当前会话与阶段。</small></label><div class="nav-item"><div class="row between"><span>按项目导出历史报告</span><button disabled>开始开发</button></div><small>尚未开始。本项目已有一个 SR 开发中。</small></div></div>
+        <div class="flow-action"><button>下载需求包</button><p class="muted" style="margin-top:12px">未确认草稿在此显示“确认需求与拆分”；格式检查与 review 通过后才可下载。需求 PR 由人员提交、合入并明确登记。</p></div>
+      </div>
+    </section>
+    <footer class="composer-wrap">
+      <div class="composer"><div class="composer-top">芯片验证平台　 /　 <span class="sr-only">汇总失败用例并生成报告</span><span class="ir-only">需求讨论</span></div><textarea aria-label="消息输入" placeholder="继续对话，使用 @ 添加上下文，使用 / 选择命令或 Skill"></textarea><div class="row between"><span class="muted">＋　附件　　@ 文件</span><div class="row"><span class="muted">当前会话模型</span><button class="send" aria-label="发送">↑</button></div></div></div>
+      <p class="composer-hint">聊天与工具沿用原生能力；普通消息不会批准、推进或返回阶段。</p>
+    </footer>
+  </main>
+
+  <aside class="pane" aria-label="侧边面板">
+    <input class="state-control" type="radio" name="pane" id="pane-material" checked><input class="state-control" type="radio" name="pane" id="pane-files"><input class="state-control" type="radio" name="pane" id="pane-review">
+    <div class="pane-tabs"><label for="pane-material">材料</label><label for="pane-files">文件</label><label for="pane-review">审查</label></div>
+    <div class="material-view">
+      <div class="pane-controls sr-only"><div class="row between"><strong>阶段材料</strong><small>只读</small></div><select aria-label="选择 SR 材料"><option>技术方案 · 已确认</option><option>IR 完整需求</option><option>当前 SR 完整需求</option><option>开发计划</option><option>完成报告 · 尚未生成</option><option>UT / ST 记录 · 尚未生成</option><option>交付资料 · 尚未生成</option></select><small>查看历史材料不会切换实际阶段</small></div>
+      <div class="pane-controls ir-only"><div class="row between"><strong>需求材料</strong><small>只读</small></div><select aria-label="选择 IR 材料"><option>IR 完整需求</option><option>全部 SR</option><option>确认与 review 记录</option></select><small>整组需求已冻结 · 不展示开发阶段</small></div>
+      <article class="document sr-only"><h2>技术方案</h2><p class="muted">示例文档 · 历史阶段 · 已确认</p><h3>目标</h3><p>基于项目已有测试结果，生成失败用例汇总与可追溯报告。</p><h3>实现思路</h3><ul><li>复用现有结果解析与日志读取能力。</li><li>按失败原因分类，保留原始日志引用。</li><li>生成 Markdown 报告及必要索引。</li></ul><h3>理由与取舍</h3><p>不替换测试执行器，不另建数据库；在现有流程中增加报告生成步骤。</p><h3>验证安排</h3><p>UT 覆盖解析和分类边界；ST 验证真实结果文件及引用关系。</p><p class="note">材料不提供编辑器。通过当前会话提出修改；冻结的 IR / SR 不允许修改。</p></article>
+      <article class="document ir-only"><h2>测试报告自动汇总</h2><p class="muted">示例 IR · 已合入并冻结</p><h3>背景与目标</h3><p>测试结果分散在多份日志中。需要统一汇总失败用例，减少人工定位工作，并保留原始记录的追溯能力。</p><h3>范围与边界</h3><p>读取现有结果，生成失败汇总和历史导出。不改变测试执行器，不覆盖原始日志。</p><h3>系统需求</h3><ul><li>汇总失败用例并生成报告。</li><li>按项目导出历史报告。</li></ul><h3>验收原则</h3><p>汇总条目可定位原始结果；无失败用例和无法解析的记录分别明确呈现，不伪报成功。</p><p class="note">IR 不进入技术方案或开发流水。选择一个 SR 后才查看该 SR 的开发状态。</p></article>
+      <div class="pane-foot row"><button>复制</button><button>下载</button><button>带入讨论</button></div>
+    </div>
+    <section class="pane-extra files-view"><h3>文件</h3><p class="muted">保留原有文件树与预览入口。</p><div class="tree">▾ 当前 SR worktree<br>　▸ src<br>　▸ test<br>　▾ docs<br>　　技术方案.md<br>　　开发计划.md</div></section>
+    <section class="pane-extra review-view"><h3>审查</h3><p class="muted">保留原有代码变更与 Diff 查看，不代替需求 review 或人工 PR。</p><div class="tool">静态原型没有实际 Git 变更。</div></section>
+  </aside>
+</div>
+
+<section class="settings" id="settings" aria-label="设置页">
+  <input class="state-control" type="radio" name="setting" id="set-general" checked><input class="state-control" type="radio" name="setting" id="set-appearance"><input class="state-control" type="radio" name="setting" id="set-projects"><input class="state-control" type="radio" name="setting" id="set-release"><input class="state-control" type="radio" name="setting" id="set-other">
+  <aside class="settings-sidebar">
+    <a href="#">‹ 返回工作区</a>
+    <nav aria-label="基础设置"><h3>基础设置</h3><label for="set-general">常规</label><label for="set-appearance">外观</label><label for="set-other">模型设置</label><label for="set-other">键盘快捷键</label></nav>
+    <nav aria-label="Agent 能力"><h3>Agent 能力</h3><label for="set-other">个性化</label><label for="set-other">记忆</label><label for="set-other">子智能体</label><label for="set-other">技能</label><label for="set-other">命令</label><label for="set-other">钩子</label></nav>
+    <nav aria-label="数据管理"><h3>数据管理</h3><label for="set-projects">项目</label><label for="set-other">归档管理</label><label for="set-release">Release</label></nav>
+    <div class="bottom brand">OMP · AIReq　 <small>沿用原设置页结构</small></div>
+  </aside>
+  <main class="settings-content">
+    <section class="settings-page general-page"><h2>常规</h2><p class="muted">沿用 WebGUI 的设置页面及原有配置语义。</p><div class="card"><div class="setting-row"><div>界面模式<p>办公模式侧重摘要；编程模式显示命令、输出和代码变更。</p></div><span class="value">编程模式　⌄</span></div><div class="setting-row"><div>主动任务建议<p>控制新建聊天中的任务建议。</p></div><span class="toggle off"></span></div></div><div class="card"><div class="setting-row"><div>工具搜索<p>在原生或本地工具搜索之间选择。</p></div><span class="value">关闭　⌄</span></div><div class="setting-row"><div>增强 Find 和 Grep<p>当前会话保持原设置。</p></div><span class="toggle"></span></div></div><div class="card"><div class="setting-row"><div>HTTP 代理<p>保持现有设置方式与生效规则。</p></div><button disabled>保存</button></div><div class="setting-row"><input class="wide" placeholder="例如 http://127.0.0.1:7890" readonly></div><div class="setting-row"><div>自定义证书<p>配置 PEM 根证书路径。</p></div><button disabled>保存</button></div></div><div class="card"><div class="setting-row"><span>任务通知</span><span class="toggle"></span></div><div class="setting-row"><span>通知声音</span><span class="toggle"></span></div></div><p class="settings-footnote">本页仅画布局，未读取或写入真实配置。其余原有设置继续保留。</p></section>
+    <section class="settings-page appearance-page"><h2>外观</h2><p class="muted">保留原有主题、字号与代码预览设置，不为 AIReq 另画一套。</p><h3 style="margin-top:32px">界面设置</h3><div class="card"><div class="setting-row"><div>界面主题<p>浅色、深色或跟随系统。</p></div><span class="value">深色　⌄</span></div><div class="setting-row"><span>界面字号</span><span class="value">14 px</span></div></div><h3>代码设置</h3><div class="card"><div class="setting-row"><span>浅色代码主题</span><span class="value">GitHub Light　⌄</span></div><div class="setting-row"><span>深色代码主题</span><span class="value">GitHub Dark　⌄</span></div><div class="setting-row"><span>显示行号</span><span class="toggle"></span></div><div class="setting-row"><span>长行自动换行</span><span class="toggle off"></span></div><div class="setting-row"><span>代码字号</span><span class="value">12 px</span></div></div></section>
+    <section class="settings-page projects-page"><h2>项目</h2><p class="muted">沿用项目管理页，在 AIReq 副本中补充服务器已有仓库的登记与名称配置。</p><div class="row between" style="margin-top:30px"><input placeholder="搜索项目、文件夹或设备" readonly><button>登记已有 Git 项目</button></div><div class="card"><table><thead><tr><th>项目</th><th>服务器工作目录</th><th>状态</th></tr></thead><tbody><tr><td>芯片验证平台</td><td>/nfs/projects/verification</td><td>已登记</td></tr><tr><td>内部工具集</td><td>/nfs/projects/tools</td><td>已登记</td></tr></tbody></table></div><div class="card"><div class="setting-row"><span>项目名称</span><input value="芯片验证平台" readonly></div><div class="setting-row"><span>已有 Git 仓库目录</span><input value="/nfs/projects/verification" readonly></div></div><p class="settings-footnote">登记不创建目录、不 clone、不启动模型。项目移除与目录变更的未决流程不在原型中定义。</p></section>
+    <section class="settings-page release-page"><h2>Release</h2><p class="muted">AIReq 新增的设置项，沿用现有设置页样式。Release 不关联代码分支。</p><div class="row between" style="margin-top:30px"><span>当前项目：芯片验证平台</span><button>添加 Release</button></div><div class="card"><table><thead><tr><th>名称</th><th>当前选择</th><th>交付范围</th></tr></thead><tbody><tr><td>本期交付</td><td>当前</td><td>测试报告自动汇总等</td></tr><tr><td>下期交付</td><td>—</td><td>待安排</td></tr></tbody></table></div></section>
+    <section class="settings-placeholder"><h2>原有设置</h2><div class="card"><div class="setting-row"><div>复制后保留原页面与现有能力<p>本原型不重复绘制模型、快捷键、个性化、记忆、子智能体、技能、命令、钩子及归档页面；这些页面不会因 AIReq 重构被删掉或简化。</p></div></div></div><p class="muted">这里只展示适配范围，不代表真实业务已接入。</p></section>
+  </main>
+</section>
+</body>
+</html>

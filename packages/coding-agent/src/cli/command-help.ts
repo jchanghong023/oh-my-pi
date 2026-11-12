@@ -63,8 +63,8 @@ export const knowledgeHelp = {
 	description: "Manage persistent knowledge indexes (init/remove) or serve read-only queries over stdio (mcp)",
 } satisfies CommandMetadata;
 
-export const devHelp = {
-	description: "Open this project's exclusive native Dev workbench through the shared browser server",
+export const aiReqHelp = {
+	description: "Open this project's exclusive native AIReq workbench through the shared browser server",
 } satisfies CommandMetadata;
 
 export const webGuiHelp = {

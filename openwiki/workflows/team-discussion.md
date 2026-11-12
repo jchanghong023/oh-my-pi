@@ -91,7 +91,7 @@ flowchart TD
 ## Dev 与原生 task 的边界
 
 
-Dev 的方案阶段可显式启用 Team：Dev runtime 在 solution 入口检查已批准版本，复用成员解析、runner 和 orchestrator，再把成功且至少有一个可采用候选的结果交给方案角色。它由 Dev 的阶段上下文和取消信号拥有，而非独立 `/team` 的后台 job 或配置保存触发；批准版本变化或讨论无可采用候选会阻断该阶段。后续需求、方案、计划和实施的门槛见 [Dev 生命周期](dev-lifecycle.md)。原生 task 与 Team 共享底层子进程执行设施和并发设置，但 Team 自己拥有五阶段编排、只读工具集和审查门槛；一般工具执行边界见[工具与执行](../architecture/tools-and-execution.md)。
+Dev 的方案阶段可显式启用 Team：Dev runtime 在 solution 入口检查已批准版本，复用成员解析、runner 和 orchestrator，再把成功且至少有一个可采用候选的结果交给方案角色。它由 Dev 的阶段上下文和取消信号拥有，而非独立 `/team` 的后台 job 或配置保存触发；批准版本变化或讨论无可采用候选会阻断该阶段。后续需求、方案、计划和实施的门槛见 [Dev 生命周期](aireq-lifecycle.md)。原生 task 与 Team 共享底层子进程执行设施和并发设置，但 Team 自己拥有五阶段编排、只读工具集和审查门槛；一般工具执行边界见[工具与执行](../architecture/tools-and-execution.md)。
 
 ## 验证与维护线索
 

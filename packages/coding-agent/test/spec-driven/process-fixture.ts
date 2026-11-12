@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord, ptree, TempDir } from "@oh-my-pi/pi-utils";
 import { requireGit } from "@oh-my-pi/pi-natives/vcs";
-import { initializeRepository } from "../dev-workbench/fixture";
+import { initializeRepository } from "../aireq-workbench/fixture";
 import { RpcClient } from "../../src/modes/rpc/rpc-client";
 import type { SkillsCommandResult } from "../../src/cli/skill-list";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.

@@ -118,7 +118,7 @@ describe("InputController thinking visibility", () => {
 	}
 
 	it("does not let the native effort picker bypass the exclusive browser workbench", () => {
-		mode.isDevWorkbenchModeActive = () => true;
+		mode.isAIReqWorkbenchModeActive = () => true;
 		const setThinkingLevel = vi.spyOn(session, "setThinkingLevel");
 		controller.setupKeyHandlers();
 		mode.editor.onSetThinkingLevel?.("low");

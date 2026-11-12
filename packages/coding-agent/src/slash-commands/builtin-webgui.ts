@@ -1,4 +1,4 @@
-import { getDevWorkbenchTuiMode } from "../dev-workbench/tui-mode";
+import { getAIReqWorkbenchTuiMode } from "../aireq-workbench/tui-mode";
 import { restoreDetachedDraft } from "./helpers/draft";
 import type { SlashCommandResult, SlashCommandSpec } from "./types";
 
@@ -15,7 +15,7 @@ export const BUILTIN_WEBGUI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const consumed = !runtime.draftDetached && ctx.editor.getExpandedText() === command.text;
 			if (consumed) ctx.editor.setText("");
 			try {
-				await getDevWorkbenchTuiMode(ctx).toggle("webgui");
+				await getAIReqWorkbenchTuiMode(ctx).toggle("webgui");
 				if (runtime.draftDetached && runtime.input?.images?.length)
 					restoreDetachedDraft(ctx.editor, "", runtime.input.images, runtime.input.imageLinks);
 				return { consumed: true };

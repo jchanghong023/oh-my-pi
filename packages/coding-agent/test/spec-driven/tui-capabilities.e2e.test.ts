@@ -25,7 +25,7 @@ import {
 	type Reply,
 } from "./provider-fixture";
 import { tuiTest, withTui } from "./tui-harness";
-import { workflowGit, workflowNativeContext } from "../dev-workbench/workflow-fixture";
+import { workflowGit, workflowNativeContext } from "../aireq-workbench/workflow-fixture";
 import { createWorkflowStage, successfulWorkflowReply } from "./tui-materials-cases";
 
 function calls(request: ModelRequest) {
@@ -223,7 +223,7 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 				expect(await Bun.file(path.join(cwd, target)).text()).toBe(updated);
 				expect(await Bun.file(path.join(cwd, IMPLEMENTATION_PATH)).text()).toBe(IMPLEMENTATION);
 				expect((await state()).projects).toEqual([]);
-				expect(await Bun.file(path.join(cwd, ".omp/dev/state.json")).exists()).toBe(false);
+				expect(await Bun.file(path.join(cwd, ".omp/aireq/state.json")).exists()).toBe(false);
 				expect(provider.requests.every(request => !rolePayload(request) && !teamStage(request))).toBe(true);
 				expect(calls(completed).map(call => call.name)).toEqual(["read", "read", "write", "read"]);
 			},

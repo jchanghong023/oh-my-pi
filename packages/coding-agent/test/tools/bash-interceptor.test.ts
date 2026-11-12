@@ -185,7 +185,7 @@ describe("default echo/printf redirect rule", () => {
 	});
 
 	it("still blocks real paths that resemble /dev sinks", () => {
-		expect(checkBashInterception("echo data > ./dev/null", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
+		expect(checkBashInterception("echo data > ./aireq/null", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
 		expect(checkBashInterception("echo data > /devices/x", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
 	});
 

@@ -51,19 +51,19 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 | 入口 | 当前有效范围 | 非编译硬上限 | 总墙钟硬上限 |
 | --- | --- | --- | --- |
 | `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 360 秒 | 沿用非编译预算 |
-| `bun run fulltest` | 全部 fastcheck 检查 + 本机 fork 功能的 Bun、Cargo/Nextest 和适用 doctest、变更对应的仓库脚本自测、native 构建及隔离 Dev 浏览器／原生公开入口 E2E 与普通 TUI smoke；测试选择见下文，无跨 WSL | 1800 秒 | 1800 秒 |
+| `bun run fulltest` | 全部 fastcheck 检查 + 本机 fork 功能的 Bun、Cargo/Nextest 和适用 doctest、变更对应的仓库脚本自测、native 构建及隔离 AIReq 浏览器／原生公开入口 E2E 与普通 TUI smoke；测试选择见下文，无跨 WSL | 1800 秒 | 1800 秒 |
 | `bun run slowtest` | 本机 fulltest 一次 + 项目所需且现有兼容 WSL 可用时的 Linux fulltest；无适用 WSL 时保留本机 fulltest | 3000 秒 | 3000 秒 |
 
 表中列出必需的独立工作与适用套件；原生增量选测只说明本轮实际覆盖，不能声称整套测试均新执行。
 
 - 三层门禁及根脚本直接调用既有 Bun／Cargo 检查、构建与测试原语，保持平台限制和报告语义；fastcheck 不运行测试，保留既有工具及增量编译缓存，但不缓存门禁或完整命令结果以免执行。不建立 fork 专用 Bazel 验证图或自建结果缓存框架。上游原有显式目标 Bazel 工具及其 CI 原生产物不属于此门禁改动。
 - 日常门禁包含真实 Rust 编译和 Clippy：`check:rs` 依次运行 `cargo fmt --all -- --check`、`cargo build --workspace`（保留既有 vendored fork 排除）和与 `lint:rs` 相同的 workspace Clippy（保留既有第三方排除、`--no-deps` 与 `-D warnings`）。编译必须生成并链接产物，不能以 Clippy／`cargo check` 代替；fastcheck 及复用它的 fulltest／slowtest 均检查 Rust 编译器与 Clippy 警告并以非零退出阻断。固定工具链、显式 `lint:rs`／`fix:rs` 入口、其他检查和测试范围及预算保持不变。
-- 日常 `bun run test`、`test:ts`、`test:rs`、fulltest 和 slowtest 测试 fork 自有功能；父仓静态检查与测试发现排除 `vendor/openwiki` 子模块，构建和运行仍使用真实 fork。保留 Dev/OpenSpec 资源与原生编排、Team/Goal（包括取消与持久化）、Knowledge 索引、OpenWiki、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界；Dev 真实 E2E 不得省略。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
-- 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留。旧 Dev TUI 专属消费者 MUST 由新工作台网页及原生消费者替换。真实 PTY 中普通 TUI 的错误、状态和焦点边界保留；冷启动、准备失败／EOF、新流程冷读、owner／profile 隔离、权限、取消、Windows 句柄和公开打包资源等有效边界不得删减。四个开发角色的 missing／malformed／unknown 材料失败矩阵及现有平台条件转由工作台控制器、材料和公开网页／进程消费者承接，每例 provider／fixture 隔离不得共享。仅删除固定三行、旧模式 toggle、直接跳过业务检查、finish-business、执行 Next 终结、drop 留文件和旧状态恢复等已废止产品断言，不新增 skip、放宽时限或删减有效需求。本次 tui-presentation 允许清退的旧 compact 专属测试、fixture 和断言仍按原边界处理；上游、clean、detailed、共享布局或其他 fork 功能不在清退范围。
+- 日常 `bun run test`、`test:ts`、`test:rs`、fulltest 和 slowtest 测试 fork 自有功能；父仓静态检查与测试发现排除 `vendor/openwiki` 子模块，构建和运行仍使用真实 fork。保留 AIReq/OpenSpec 资源与原生编排、Team/Goal（包括取消与持久化）、Knowledge 索引、OpenWiki、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界；AIReq 真实 E2E 不得省略。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
+- 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留。旧 AIReq TUI 专属消费者 MUST 由新工作台网页及原生消费者替换。真实 PTY 中普通 TUI 的错误、状态和焦点边界保留；冷启动、准备失败／EOF、新流程冷读、owner／profile 隔离、权限、取消、Windows 句柄和公开打包资源等有效边界不得删减。四个开发角色的 missing／malformed／unknown 材料失败矩阵及现有平台条件转由工作台控制器、材料和公开网页／进程消费者承接，每例 provider／fixture 隔离不得共享。仅删除固定三行、旧模式 toggle、直接跳过业务检查、finish-business、执行 Next 终结、drop 留文件和旧状态恢复等已废止产品断言，不新增 skip、放宽时限或删减有效需求。本次 tui-presentation 允许清退的旧 compact 专属测试、fixture 和断言仍按原边界处理；上游、clean、detailed、共享布局或其他 fork 功能不在清退范围。
 - 默认 fulltest 的普通 Bun 测试在 fork 白名单内以原生 `--changed` 根据变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不能回退整个上游测试集。新 compact 的显示差异纳入普通 Bun 消费者范围，不再设始终完整运行的 compact 专属通道。显式选测及 `local`／`local-ts` 须如实报告范围，宿主 `CI` 或 `OMP_TEST_SHARD` 不改变本地范围；保留文件隔离、TSX 和共享并发预算。仓库脚本自测只在对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 保留。
-- Dev 工作台 source 测试 `packages/coding-agent/test/dev-workbench/` MUST 纳入 fork 白名单；`browser.e2e.test.ts` 与 `process.e2e.test.ts` 属于既有启动敏感组，不建立绕过共享预算的专属通道。collab-web 仅精确新增 `test/dev-workbench.test.tsx`、`test/composer.test.tsx`、`test/transcript.test.tsx`、`test/tool-view.test.tsx`、`test/markdown.test.tsx`，native 仅精确新增 `packages/natives/test/dev-workbench-vcs.test.ts`；不因此纳入整个 collab-web 或通用 VCS 套件。测试发现、文件计数、空选择探针和报告 MUST 同时识别 `.test.tsx`。
+- AIReq 工作台 source 测试 `packages/coding-agent/test/aireq-workbench/` MUST 纳入 fork 白名单；`browser.e2e.test.ts` 与 `process.e2e.test.ts` 属于既有启动敏感组，不建立绕过共享预算的专属通道。collab-web 仅精确新增 `test/aireq-workbench.test.tsx`、`test/composer.test.tsx`、`test/transcript.test.tsx`、`test/tool-view.test.tsx`、`test/markdown.test.tsx`，native 仅精确新增 `packages/natives/test/aireq-workbench-vcs.test.ts`；不因此纳入整个 collab-web 或通用 VCS 套件。测试发现、文件计数、空选择探针和报告 MUST 同时识别 `.test.tsx`。
 - Bun fork 套件版本 MUST 使用 `suiteRevision: 4`；完整基线与计时提示资格须匹配当前消费者范围，旧范围完整报告不作为新范围完整证据。WebGUI 按 `scripts/ci-test-ts.ts` 的显式文件白名单选入核心浏览器、聊天、原生子代理／任务、目录／文件／Git／Skill、MCP 关闭、平台前置与资源消费者；本次精确补入 `test/webgui/native-attachments.test.ts`、`native-interactions.test.ts`、`native-browser-release.test.ts`、`project-ownership.test.ts`，以及 `test/registry/agent-lifecycle.test.ts`、`agent-session-dispose-releases-memory.test.ts`、`sharpshooter-extract.test.ts` 与 `packages/agent/test/pause-gate.test.ts`，验证严格结清／重试、独立根暂停及原默认行为，不扩大整个上游 agent 或通用 browser 套件。单个 browser runner 复用既有启动敏感组及共享预算，动态 Vite 前端与夹具输入定向触发该 runner，其余可追踪变更继续使用 Bun 原生 affected 选测。affected、失败及未完成报告的原语义不变。
-- WebGUI 不再对接 MCP；移除 `test/webgui/native-mcp.test.ts`、`native-mcp-binding.test.ts` 及其白名单，精确保留 `test/webgui/mcp-disabled.test.ts` 验证真实 RPC 旧通道不可调用，核心浏览器消费者验证设置与 Skill 等保留页面正常。原生 Agent／TUI／Dev 的 MCP 测试与能力边界保持不变，不因浏览器清退删除原生覆盖或增加连接／授权验收。
+- WebGUI 不再对接 MCP；移除 `test/webgui/native-mcp.test.ts`、`native-mcp-binding.test.ts` 及其白名单，精确保留 `test/webgui/mcp-disabled.test.ts` 验证真实 RPC 旧通道不可调用，核心浏览器消费者验证设置与 Skill 等保留页面正常。原生 Agent／TUI／AIReq 的 MCP 测试与能力边界保持不变，不因浏览器清退删除原生覆盖或增加连接／授权验收。
 - 显示验证 MUST 围绕 clean 基线、按文件目标筛选且与上游 detailed 一致的 write／edit 原组件显示、固定两行活动区及隐藏独立模型处理忙碌提示的消费者契约，复用既有普通测试入口和必要的共享布局、渲染、恢复验证；不按文件名收集 compact 大套件。纯上下文压缩模式注册、算法、预算、队列和 `/compact` 参数派发不因名称相似纳入。
 - 旧 `compact_display` 命令、独立清单、执行通道、排除参数、专属报告和基线要求 MUST 移除，不保留兼容别名或用新名称重建同类通道。仍适用的显示消费者测试由普通选测机制发现，只执行一次，不再从普通组排除后另行执行。
 - 旧 compact 专属完成帧矩阵、随机旅程、截图回归与真实 CLI 场景仅为旧行为存在的部分 MUST 清退，不以改写预期保留旧套件。新需求优先复用现有消费者验证，以显示差异的实际可观察结果和必要状态切换为边界；共享上游布局与其他 fork 场景不因此删减。实际执行、采样、平台条件和未覆盖部分须如实区分，不新增 skip 或放宽时限掩盖失败。
@@ -88,24 +88,24 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 - 门禁的进程监督须在命令仍运行时回收已退出的孤儿后代，不得截获由运行器持有的主命令退出码；宿主直接退出或 IPC 断开时，监督进程仍须停止并回收普通自有后代，含逃逸的独立 session。跨 Windows/WSL 的取消命令须在强退前独立发起，不等待其收尾。Windows 隔离临时目录的正常清理须能解除带拒绝读取 ACL 的目录 junction，且不得遍历或删除其目标；清理失败不得降级成通过。
 - 独立且安全的检查/测试/Windows与WSL两端应并行；本机资源不足时可按共享预算调度重负载。改写共享生成文件的构建、打包或代码生成须先于其静态/测试读取者，避免共享文件竞争。编译项目必须保留正常增量缓存、固定同平台配置与路径；NEVER 在连续 fastcheck 之间清缓存、切换 target/profile/flags 或制造冷样本。Windows 与 WSL 使用各自稳定的原生缓存。
 - 真实 public process 测试的隔离环境 MUST 继承门禁显式配置的 `BUN_RUNTIME_TRANSPILER_CACHE_PATH`，避免每个临时 HOME／TEMP 都重建相同源码的 Bun 编译缓存；应用配置、凭据、会话、数据库、工作区及运行期临时文件仍逐例隔离，不缓存进程或测试结果。
-- native 生成后静态检查与测试按依赖安全调度：Rust 测试等待 Rust 静态检查完成；普通 Bun、Dev 工作台公开 process／browser 及保留的普通 TUI／RPC goal 启动敏感组尽早并行启动，各组按实测耗时长任务优先，不再让启动敏感长测试等待整个普通队列结束。时钟、watchdog、未知脚本和共享写入者的仓库自测须先隔离执行；明确允许的纯夹具脚本可在预留容量内最多两个并行，与重负载阶段重叠。移除独立 `test/compact_display` 调度及其专属环境／资源分配；仍适用的显示消费者测试随普通组或已有启动敏感组执行，共享原有 CPU 预算。全部静态、普通、启动敏感、Rust、仓库脚本及其余重负载工作结束后运行独立隔离的普通 TUI smoke。小预算机器串行，先完成静态检查，再优先运行启动敏感长测试。启动敏感测试文件内串行，保持各自独立的 HOME、工作区、端口及清理，不扩大用例时限或弱化业务断言。fastcheck 保留独立的 360 秒非编译预算；保留既有 target、profile、features 与 flags，不杀其他 Agent 的 Cargo 进程或放宽时限。
+- native 生成后静态检查与测试按依赖安全调度：Rust 测试等待 Rust 静态检查完成；普通 Bun、AIReq 工作台公开 process／browser 及保留的普通 TUI／RPC goal 启动敏感组尽早并行启动，各组按实测耗时长任务优先，不再让启动敏感长测试等待整个普通队列结束。时钟、watchdog、未知脚本和共享写入者的仓库自测须先隔离执行；明确允许的纯夹具脚本可在预留容量内最多两个并行，与重负载阶段重叠。移除独立 `test/compact_display` 调度及其专属环境／资源分配；仍适用的显示消费者测试随普通组或已有启动敏感组执行，共享原有 CPU 预算。全部静态、普通、启动敏感、Rust、仓库脚本及其余重负载工作结束后运行独立隔离的普通 TUI smoke。小预算机器串行，先完成静态检查，再优先运行启动敏感长测试。启动敏感测试文件内串行，保持各自独立的 HOME、工作区、端口及清理，不扩大用例时限或弱化业务断言。fastcheck 保留独立的 360 秒非编译预算；保留既有 target、profile、features 与 flags，不杀其他 Agent 的 Cargo 进程或放宽时限。
 - 测试运行器按当前可用核心数动态限制并发，任务不足时进一步缩小。Windows 本机 TS（包括初始完整轮、无合格计时提示及 fulltest 短任务池）、启动敏感测试和 Rust Nextest 均最多 `min(28, 当前可用核心数, 可运行任务数)`；Linux 等其他平台维持同一上限。Bun 的 chunk 池与每个 chunk 的文件 worker 共同分配预算，不能相乘后越过上限；显式配置仍可降低并发。fulltest 为静态检查和独立脚本预留容量，普通 Bun、启动敏感 Bun 与 Rust 测试池共享剩余 CPU 预算：普通 Bun 与 Rust 两端都有工作时，短 Rust 阶段最多分配 4 个 worker；并行的启动敏感阶段最多分配 4 个 worker，其余分配给普通 Bun。只有启动敏感阶段有工作时可使用剩余容量。没有选中 Rust 工作时不得继续为其预留测试 worker。容量不足时串行运行重负载。后置普通 TUI smoke 最多使用三个 PTY worker，仍受继承的外层额度约束。`--full` 同样受高成本 integration／E2E 子限制约束；调度不改变测试覆盖、隔离、超时、时间预算或计费。
 - fulltest MUST 将可用实测耗时最长的分块优先启动。排序提示可使用最近七天内同平台、架构、Bun 版本及 `suiteRevision: 4` 的 `fulltest: fork feature suites` 运行中已经完成的分块，即使整轮失败、部分完成或被中断；优先读取独立 producer 记录，每个精确分块取最新、有效且无歧义的实际命令墙钟耗时。当前运行、未完成分块、缺失报告、非法耗时或有歧义的同次测量不得提供提示；提示缺失不阻止必需工作，未知分块保留稳定顺序。允许历史报告来自不同的有效 Git 提交，但只有 label 与预算／报告参数以外的 argv 精确匹配的原分块才能复用，不拆分文件耗时或跨分块重组。历史耗时仅用于排序，不是测试结果缓存，不写成本轮新执行，也不改变分片、超时及结果合同；失败或未完成运行仍不能成为受影响选测的完整成功基线。
-- 本地高成本 integration／E2E chunk（包括 Dev 范围 Git 发布与撤销消费者 `test/dev-workbench/git.test.ts`、`test/dev-workbench/cancel.test.ts`）同时运行不得超过 4 个，且仍受上述 Bun 测试并发上限约束；达到此子限制时，空余并发 MUST 继续调度其他可运行工作，不得因等待高成本 chunk 而闲置，不因此增加普通全局并发。此子限制不改变超时、断言、覆盖及结果合同。
+- 本地高成本 integration／E2E chunk（包括 AIReq 范围 Git 发布与撤销消费者 `test/aireq-workbench/git.test.ts`、`test/aireq-workbench/cancel.test.ts`）同时运行不得超过 4 个，且仍受上述 Bun 测试并发上限约束；达到此子限制时，空余并发 MUST 继续调度其他可运行工作，不得因等待高成本 chunk 而闲置，不因此增加普通全局并发。此子限制不改变超时、断言、覆盖及结果合同。
 - Knowledge CLI 的既有真实消费者场景可在单个测试文件内最多两个并行，并遵守调用方单槽预算。每个场景须独立拥有 provider、查询状态、观测、子进程、配置、工作区及清理；只可共享只读的预备索引字节，再复制为各自的数据库／WAL，不共享可变应用状态或 CLI 进程。既有全部用例、分页正文、控制字符、错误、移除索引和真实至少 500ms 对外等待断言保持，不以减少矩阵或跳过实际启动加速。
 - 门禁只以轻量 Git 查询记录本轮开始时的 HEAD 和工作区状态，不遍历、读取或哈希全仓文件及子模块源码，不维护源码指纹、阶段快照或对应环境参数／报告字段。运行期间文件、未跟踪临时文件或 HEAD 变化 MUST NOT 触发整轮失败、取消或自动重跑，也不要求为本机门禁先提交或清空工作区。native 生成仍先于静态检查和测试读取者；版本记录不作为内容未变化的证明，受影响测试选择与实际失败报告保持独立。
 - Windows 测试子进程的 PATH 排除 WindowsApps 执行占位程序，复用已安装的真实 Python；Python 夹具的 UTF-8 标准流协议不依赖宿主 ANSI 代码页。环境覆盖遵循 Windows 变量名大小写不敏感语义，不修改系统 PATH 或宿主配置。测试使用隔离应用配置、HOME 和凭据，不读取用户真实配置。
-- 旧 Dev TUI E2E 的有效启动、输入、生命周期及 Team 报告持久化／取消场景 MUST 转由真实工作台 process／browser 和原生会话消费者承接，进入启动敏感组，不把普通 PTY smoke 冒充网页替代验收；保留隔离、超时、依赖顺序和业务断言，Goal 手动启动／停止、长任务断线和任意深度子代理结清继续覆盖。既有 PTY smoke 本身覆盖普通 CLI、`/team`、取消、输入和退出，不承担旧 Dev 模式场景；工作台 process 消费者验证 `/dev` 拒绝在普通任务未结清时进入、进入后当前 TUI 只接受再次 `/dev`、网页与普通 TUI 不同时操作、退出经 native settlement 恢复原会话但不取消需求或回滚，以及关页不停止。删除仅服务普通 `/new`／move／dispose 与 Dev 并存、快照或克隆的断言，不保留并发架构。普通 TUI 部分仍用既有 `tui-test`／TUI harness，不另造 PTY／ANSI 驱动；既有启动与 Team／取消独立分组仍受可用核心数与继承的 `OMP_TEST_CPU_BUDGET` 约束，最多两组并行，组内依赖顺序不变，全部自有进程须完成并回收。缺失 `tui-test` 按缺工具失败；网页验收使用已安装、可执行的 Chromium，缺失即前置失败，不自动下载、不用静态渲染替代真实 DOM。
-- Dev source 测试只依赖隔离源码服务及本地模型／Git／bare remote／既有 Relay fixture，不要求预构建 npm／binary。独立成品程序 `packages/coding-agent/scripts/verify-dev-workbench-package.ts` MUST 不被普通发现、全仓 Bun 或 `--full` 自动运行；只有当次明确授权并提供实际本次产物时，才以 `--npm-entry`、`--binary`、`--assets-manifest` 验证真实 CLI、完整内嵌 UI、载荷摘要和构建来源。缺产物、浏览器或来源不符必须失败，不回退源码、不自动 releasebuild，不以源码证据代表 npm／binary 或所有平台通过。
+- 旧 AIReq TUI E2E 的有效启动、输入、生命周期及 Team 报告持久化／取消场景 MUST 转由真实工作台 process／browser 和原生会话消费者承接，进入启动敏感组，不把普通 PTY smoke 冒充网页替代验收；保留隔离、超时、依赖顺序和业务断言，Goal 手动启动／停止、长任务断线和任意深度子代理结清继续覆盖。既有 PTY smoke 本身覆盖普通 CLI、`/team`、取消、输入和退出，不承担旧 AIReq 模式场景；工作台 process 消费者验证 `/aireq` 拒绝在普通任务未结清时进入、进入后当前 TUI 只接受再次 `/aireq`、网页与普通 TUI 不同时操作、退出经 native settlement 恢复原会话但不取消需求或回滚，以及关页不停止。删除仅服务普通 `/new`／move／dispose 与 AIReq 并存、快照或克隆的断言，不保留并发架构。普通 TUI 部分仍用既有 `tui-test`／TUI harness，不另造 PTY／ANSI 驱动；既有启动与 Team／取消独立分组仍受可用核心数与继承的 `OMP_TEST_CPU_BUDGET` 约束，最多两组并行，组内依赖顺序不变，全部自有进程须完成并回收。缺失 `tui-test` 按缺工具失败；网页验收使用已安装、可执行的 Chromium，缺失即前置失败，不自动下载、不用静态渲染替代真实 DOM。
+- AIReq source 测试只依赖隔离源码服务及本地模型／Git／bare remote／既有 Relay fixture，不要求预构建 npm／binary。独立成品程序 `packages/coding-agent/scripts/verify-aireq-workbench-package.ts` MUST 不被普通发现、全仓 Bun 或 `--full` 自动运行；只有当次明确授权并提供实际本次产物时，才以 `--npm-entry`、`--binary`、`--assets-manifest` 验证真实 CLI、完整内嵌 UI、载荷摘要和构建来源。缺产物、浏览器或来源不符必须失败，不回退源码、不自动 releasebuild，不以源码证据代表 npm／binary 或所有平台通过。
 - fastcheck 仅在具体需要且相关修改批次完成后由 Agent 选择，不能逐文件保存即运行。fulltest/slowtest 需要本次用户明确运行授权，授权不跨任务延续；不能通过直接执行内部阶段绕过权限。新/改门禁入口脚本可直接执行显式限定到该文件的非测试静态检查，不得扩大到目录/仓库或执行测试、打包、跨 WSL。
 - 三层 NEVER 调用或触发 CI/远端发布流水线、push、发布、部署、Computer Use、共享鼠标或抢前台焦点。独立构建发布 CI 仅手动触发，发布不属于门禁。真实桌面输入测试保留并另行明确授权，记 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`，不计为已通过；隔离的浏览器 DOM/协议、虚拟终端和 PTY 自动化可纳入本地测试。
 - 本项目支持 Windows/Linux x64，Windows→WSL 验证显式选定 **Ubuntu-24.04 WSL2**，不能替换目标；未指定目标的一般项目才优先合适的已安装 CentOS。无 WSL/无兼容发行版记 `SKIPPED_WSL_UNAVAILABLE`，项目不需要则 `SKIPPED_NOT_APPLICABLE`，此时 slowtest 仍覆盖本机 fulltest。其余发现、同步、脏源码、缺工具、执行或证据核验失败须使该端记为失败并使整轮最终非零退出，不得降级成跳过；本机与 WSL 并行阶段按失败汇总继续各自其余独立工作，不因单端失败提前终止另一端，也不得把单端结果表述为两端完成。不自动安装 WSL、发行版或缺失测试工具。
 - WSL 通过 `scripts/slowtest-wsl-stage.ts` 在 slowtest 内执行，源码只能经 **Windows → Git 网络远端 → root 身份的原生 `/root` 工作区** 同步并测试完整固定 SHA。禁止本地快照、bundle、复制、rsync、patch、stdin 传源码、本地 remote 及 `/mnt/*` 工作区；stdin/stdout 仅承载调度计划/参数与日志。门禁没有 commit/push/stash 授权：源码未提交或未推送须立即报告为该端失败，不能测试旧提交代表当前改动。既有固定提交同步 helper 的 plan 保留远端身份、fetch/固定 SHA 可达性、快进、工作区与子模块保护、未跟踪残留隔离和测试后状态检查；流式执行计划并观测嵌套 fulltest 的纯编译事件，无法可靠计时则 UNVERIFIED，不能整段豁免混合命令。helper 的 7200 秒墙钟防挂另行报告，不得放宽外层 3000 秒总墙钟上限。记录两端 HEAD、工作树、Linux 工具路径与版本；不同固定提交不得合并 PASS，不增加本地源码指纹扫描或运行期间不变性检查。取消只处理本次拥有的资源，不关闭发行版、不删除用户改动、残留证据或有效编译缓存。
 - WSL 验证使用已就绪的本机依赖，不自动执行 `bun install` 或安装缺失工具；依赖不足按原始准备／执行失败报告，不降级为不可用跳过，也不运行旧源码冒充当前固定提交。
 - WSL 原生仓库发现受 slowtest 同一累计非编译与总墙钟额度约束，不另设 25/30 秒的提前截止；宿主与 Linux 的有限防挂不能延长外层时限。完整发现须保留嵌套工作区与多匹配拒绝语义，不通过缩小遍历范围规避超时。
-- 本地门禁报告本平台适用工作和实际测试选择范围，不能把 affected 范围写成完整新执行，不能称全仓全量通过。保留现有 TS/Rust 静态检查、native 构建及 Dev 网页／原生、普通 TUI 集成边界；独立 SDK、安装发布、真实桌面、真实 Forge 和实际模型集成仍按各自授权执行。不得将平台跳过、尚未验收的成品或独立授权范围表述为通过。
+- 本地门禁报告本平台适用工作和实际测试选择范围，不能把 affected 范围写成完整新执行，不能称全仓全量通过。保留现有 TS/Rust 静态检查、native 构建及 AIReq 网页／原生、普通 TUI 集成边界；独立 SDK、安装发布、真实桌面、真实 Forge 和实际模型集成仍按各自授权执行。不得将平台跳过、尚未验收的成品或独立授权范围表述为通过。
 - 公开测试入口写入被 Git 忽略的 `runs/test-timing/<run-id>/`：本轮执行的 Bun、nextest 与可提供结构化结果的 rustdoc 各自输出独立 JUnit XML，CLI/PTY 场景按实际命令或场景计时；`run.json` 保存源码与环境、实际范围、原始退出码、每个 producer 的命令、报告路径及完成状态。默认 fulltest scope 为 `fulltest: fork feature suites`、控制台范围为 `fork-features`；`--full` 分别为 `fulltest: all test suites` 和 `all-tests`。原生选择元数据记录工具、`full`／`affected` 模式及可用的选中／排除数量、原因、基线和报告路径；区分实际执行、deselected、not-selected 与未运行，历史 testcase 和耗时不是本轮新执行。独立运行与重试不得覆盖前次报告；报告缺失、被取消、提前退出或仅有阶段耗时须标为部分覆盖，不能把阶段时间冒充单测时间。正常执行完所选用例但含失败的报告标为失败；JUnit 用例时间之和不是并行挂钟时间。
-- 普通 PTY smoke 的 fulltest label 为 `smoke/isolated native TUI PTY`，场景 JUnit classname 为 `native-tui/pty`、producer 为 `native-tui/<case>`、scope 为 `native TUI PTY smoke scenarios`；运行器阶段仍为 `ui-smoke/runner-stage`。这些报告只证明普通原生 TUI 场景，不代表 Dev 工作台 process／browser 或成品验收。
+- 普通 PTY smoke 的 fulltest label 为 `smoke/isolated native TUI PTY`，场景 JUnit classname 为 `native-tui/pty`、producer 为 `native-tui/<case>`、scope 为 `native TUI PTY smoke scenarios`；运行器阶段仍为 `ui-smoke/runner-stage`。这些报告只证明普通原生 TUI 场景，不代表 AIReq 工作台 process／browser 或成品验收。
 - 正常报告收尾由门禁生命周期跟踪，计入同一预算与总墙钟时限；验证失败须在预算内完成全量失败汇总报告后退出，发生超时、中断或阻断时立即退出优先于报告补写，不能为生成完整 `run.json` 延迟结束。强退可能留下缺失、未完成或临时报告；报告须结合门禁最终输出及进程退出码判读，非零退出时任何暂存的 complete/0 元数据均不代表通过。
 - `slowtest` 的 Linux JUnit/XML 与元数据留在 WSL 原生仓库，宿主运行的 `run.json` 标注未汇总范围并保持部分报告状态；即使门禁在两端通过，也不能把宿主 XML 当成两端完整测试报告。WSL 不可用时以门禁原有跳过状态为准。
 - 环境/工具缺失、平台不适用和检查失败须分别说明，不把缺失或跳过当通过。失败须先区分业务缺陷与测试适配，平台 fixture 应验证实际平台合同，不用手工白名单绕过失败；未运行的实际模型质量、公司内网、独立发布和桌面输入不属于本地 PASS 的证明。
@@ -123,23 +123,23 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 - **WHEN** 出现用例失败、命令错误、缺工具、取消或超时
 - **THEN** 显示对应失败和必要诊断，继续独立必需工作，并按原有规则给出最外层最终状态、耗时及退出码
 
-#### Scenario: 最新 Dev 规则的验证范围
+#### Scenario: 最新 AIReq 规则的验证范围
 
-- **WHEN** 后续实现最新 Dev 需求或评估既有测试证据
+- **WHEN** 后续实现最新 AIReq 需求或评估既有测试证据
 - **THEN** MUST 覆盖自然语言 IR／SR 澄清、同版三模型只读评审及综合意见、人工版本决定、方案与稳定 SR 依赖、人员排期元数据权限、平台托管提案分支、合入且文档完整两条件后台自动转正、SR 分支映射，以及代码证据进度和未合入最高 99%／全部条件满足才完成；不再要求单 IR 锁、SR 执行名额、个人开发目录、首个 SR 冻结、编码验证或验收归档流水线
 - **AND** 本轮仅文档和独立原型，未实现的真实模型、Git、数据库、后台服务及多人权限须明确未验证；旧四阶段／八阶段或现有执行测试不代替当前业务证据，普通 OMP／WebGUI 验证要求不变
 
-#### Scenario: Dev 工作台取代旧专属消费者
+#### Scenario: AIReq 工作台取代旧专属消费者
 
-- **WHEN** 清退旧 Dev TUI 验收或规划新工作台测试
+- **WHEN** 清退旧 AIReq TUI 验收或规划新工作台测试
 - **THEN** 按下表保留有效合同，不用源码字符串、文案回显、静态页面或接线存在代替行为证据：
 
 | 有效合同 | 对应新消费者 |
 | --- | --- |
-| 材料 missing／malformed／unknown、版本、路径及部分副作用；独立 OpenSpec 校验／同步／归档不扩为 Dev 流水线 | 独立资源消费者保留；Dev 以当前公开需求流程消费者验证，不以旧执行门禁代替 |
-| 原生工具授权、只读评审及进度分析、取消与递归自有工作结清；普通 Team／Goal 独立规则 | 适用原生消费者及需求平台 native／browser 消费者；不据旧实施 Agent 用例恢复 Dev 编码权限 |
-| 共享提案、四 Agent 评审、方案／人员排期、自动转正、SR 分支关联及代码证据进度 | Dev 当前原型浏览器交互与后续真实服务消费者分别记录；旧 records／git／host 等消费者仅在符合当前合同范围内有效 |
-| 全部原生问答／审批、附件／草稿／队列、迟到事件、断线不停止及重连不重放、HTTP／WS offline Collab | `test/dev-workbench/{host,server,collab}.test.ts`、真实浏览器与精确选入的共享 TSX 组件消费者 |
+| 材料 missing／malformed／unknown、版本、路径及部分副作用；独立 OpenSpec 校验／同步／归档不扩为 AIReq 流水线 | 独立资源消费者保留；AIReq 以当前公开需求流程消费者验证，不以旧执行门禁代替 |
+| 原生工具授权、只读评审及进度分析、取消与递归自有工作结清；普通 Team／Goal 独立规则 | 适用原生消费者及需求平台 native／browser 消费者；不据旧实施 Agent 用例恢复 AIReq 编码权限 |
+| 共享提案、四 Agent 评审、方案／人员排期、自动转正、SR 分支关联及代码证据进度 | AIReq 当前原型浏览器交互与后续真实服务消费者分别记录；旧 records／git／host 等消费者仅在符合当前合同范围内有效 |
+| 全部原生问答／审批、附件／草稿／队列、迟到事件、断线不停止及重连不重放、HTTP／WS offline Collab | `test/aireq-workbench/{host,server,collab}.test.ts`、真实浏览器与精确选入的共享 TSX 组件消费者 |
 | 普通 TUI 输入／焦点／菜单／compact／Team／Goal 与双启动入口 | 保留的混合普通 TUI 消费者及原生 TUI PTY smoke；双启动入口另由启动敏感组的工作台 process 消费者覆盖 |
 
 - **AND** 表中 coding-agent 测试路径以 `packages/coding-agent/` 为基准；纯组件测试不冒充真实浏览器，原生资源独立入口继续覆盖。普通 TUI、权限、Team／Goal、预算、并发、授权及跳过规则不因消费者替换而放松。
@@ -184,7 +184,7 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 | 11 | 当前 profile 用户 AGENTS | 展示当前进程有效 profile 的用户级 AGENTS 实际目标路径，读取、编辑、保存真实文件；不写项目 AGENTS 或 `~/.zcode`。未保存与保存失败均保留内容，切换上下文不写错 profile。 |
 | 12 | 文件及 Git 自动刷新 | 原生工具写入与外部修改均自动更新文件树、预览和 Git 状态，不依赖手工刷新；切换／退出清理订阅及 watcher，不新增 Git 写操作。 |
 | 13 | 多会话并行与隔离 | 独立原生会话实际并行执行，项目绑定、临时模型选择、草稿、问答、队列、取消及递归子代理均保持各自归属；切换或重连不让旧事件、连接及附件影响另一会话，关页不取消工作。 |
-| 14 | 全部内置命令与有效 Skills | 按当次原生 TUI 完整命令／Skill 目录逐项对应并执行，参数与执行语义一致；未知命令明确报错而不发给模型当普通文字，交互命令由网页完成对应交互，模式／退出类保持已有独占、结清及权限语义。不能将“全部支持”降为只展示目录、大部分可用或不可用兜底；原生 Agent／TUI／Dev 能力保留。 |
+| 14 | 全部内置命令与有效 Skills | 按当次原生 TUI 完整命令／Skill 目录逐项对应并执行，参数与执行语义一致；未知命令明确报错而不发给模型当普通文字，交互命令由网页完成对应交互，模式／退出类保持已有独占、结清及权限语义。不能将“全部支持”降为只展示目录、大部分可用或不可用兜底；原生 Agent／TUI／AIReq 能力保留。 |
 | 15 | 所有并行工作的退出结清 | 退出先禁止新工作，结清本实例全部并行 root 及任意深度子工作、在途问答、队列、上传和配置写入，再释放自有 socket、watcher、listener 与 lease；失败保持锁定且可重试，不影响其他进程，不错误 dispose 借用的 TUI 原会话。 |
 
 #### Scenario: 保留逐项证据与诚实的完成状态

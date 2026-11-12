@@ -889,7 +889,7 @@ dev-sentry e89f
 dev-sequelize e8a0
 dev-shopware e8a1
 dev-shotgrid e8a2
-dev-sketch e8a3
+aireq-sketch e8a3
 dev-slack e8a4
 dev-smashing_magazine e72d
 dev-socketio e8a5

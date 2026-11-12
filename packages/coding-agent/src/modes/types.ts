@@ -234,11 +234,11 @@ export interface InteractiveModeContext {
 	readonly rootSession: AgentSession;
 	/** Dispose long-lived native resources only during real host shutdown. */
 	registerHostShutdown(dispose: () => Promise<void>): () => void;
-	/** Installed by `/dev` or `/webgui`; both share the same exclusive browser-mode owner. */
-	isDevWorkbenchModeActive?: () => boolean;
-	handleDevWorkbenchModeInput?: (data: string) => boolean;
-	handleDevWorkbenchModeSubmit?: (text: string) => Promise<boolean>;
-	getDevWorkbenchEntryBlocker?: () => string | undefined;
+	/** Installed by `/aireq` or `/webgui`; both share the same exclusive browser-mode owner. */
+	isAIReqWorkbenchModeActive?: () => boolean;
+	handleAIReqWorkbenchModeInput?: (data: string) => boolean;
+	handleAIReqWorkbenchModeSubmit?: (text: string) => Promise<boolean>;
+	getAIReqWorkbenchEntryBlocker?: () => string | undefined;
 	/** Re-resolve the CLI/settings model scope after a successful OAuth login. */
 	refreshScopedModelsAfterLogin?: () => Promise<void>;
 	/** The current session display name / title. */

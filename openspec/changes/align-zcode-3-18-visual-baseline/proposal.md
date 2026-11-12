@@ -2,7 +2,7 @@
 
 ## Why
 
-WebGUI 和 Dev 复制了 ZCode 控件，但本地面板圆角、样式裁剪、旧主题字阶及 Dev 调用侧组合已产生视觉差异。用户于 2026-11-12 明确要求并行完成八项视觉还原，保留重构后的原型／正式共享前端架构及所有功能布局；本变更记录已授权范围，不构成合并官方完整 3.18 的许可。
+WebGUI 和 AIReq 复制了 ZCode 控件，但本地面板圆角、样式裁剪、旧主题字阶及 AIReq 调用侧组合已产生视觉差异。用户于 2026-11-12 明确要求并行完成八项视觉还原，保留重构后的原型／正式共享前端架构及所有功能布局；本变更记录已授权范围，不构成合并官方完整 3.18 的许可。
 
 ## What Changes
 
@@ -23,13 +23,13 @@ WebGUI 和 Dev 复制了 ZCode 控件，但本地面板圆角、样式裁剪、�
 
 ### Modified Capabilities
 
-- `dev-browser-workbench`：明确 WebGUI／Dev 视觉对齐例外，保留共享前端、冻结契约和所有业务边界。
+- `aireq-browser-workbench`：明确 WebGUI／AIReq 视觉对齐例外，保留共享前端、冻结契约和所有业务边界。
 - `personal-commands`：保留原 WebGUI 业务与后端，仅授权视觉基线范围内适配。
 
 ## Impact
 
-- 适用目录：`vendor/zcode-frontend` 与 `packages/dev-frontend` 的视觉层，以及设计文档／OpenSpec。
-- Dev preview/runtime 共用同一 bootstrap 和网络客户端，mock 仍仅在独立后端；请求、响应、错误、实时事件合同及后端地址机制保持。
+- 适用目录：`vendor/zcode-frontend` 与 `packages/aireq-frontend` 的视觉层，以及设计文档／OpenSpec。
+- AIReq preview/runtime 共用同一 bootstrap 和网络客户端，mock 仍仅在独立后端；请求、响应、错误、实时事件合同及后端地址机制保持。
 - 不改业务、权限、布局、模型策略或依赖；不恢复已裁剪的终端、市场、Highspeed、桌面壳或手机界面。
 - 本轮按用户要求不运行测试套件，由父任务统一构建并实际截图核对。只有真实完成的入口、浏览器与主题才可报告通过。
 

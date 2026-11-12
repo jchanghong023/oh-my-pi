@@ -7,11 +7,11 @@ import { AgentRegistry, MAIN_AGENT_ID, type AgentRef } from "../registry/agent-r
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../sdk";
 import type {
-	createDevWorkbenchHost,
-	getOrStartDevWorkbench,
-	DevWorkbenchHost,
-	DevWorkbenchHandle,
-} from "../dev-workbench/host";
+	createAIReqWorkbenchHost,
+	getOrStartAIReqWorkbench,
+	AIReqWorkbenchHost,
+	AIReqWorkbenchHandle,
+} from "../aireq-workbench/host";
 import type { AgentSession } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-events";
 import type { CollabGuestLink } from "../collab/guest";
@@ -33,7 +33,7 @@ import {
 	listBrowserProjects,
 	markBrowserProjectExiting,
 	readBrowserProject,
-	transferBrowserProjectToDev,
+	transferBrowserProjectToAIReq,
 	resolveBrowserProjectRoot,
 	type BrowserProjectLease,
 	type BrowserProjectRecord,
@@ -86,9 +86,9 @@ export interface WebGuiNativePorts {
 	closeAttachments(): Promise<void>;
 	closeSketches(): Promise<void>;
 	fetchSketch(request: Request): Promise<Response | undefined>;
-	createDevHost: typeof createDevWorkbenchHost;
-	startDevHost: typeof getOrStartDevWorkbench;
-	recoverDevHost(error: unknown): DevWorkbenchHost | undefined;
+	createAIReqHost: typeof createAIReqWorkbenchHost;
+	startAIReqHost: typeof getOrStartAIReqWorkbench;
+	recoverAIReqHost(error: unknown): AIReqWorkbenchHost | undefined;
 	beginHandoff(origin: NativeWebGuiInteractionOrigin, session: AgentSession): AbortSignal;
 	retireConnections(keepConnectionId: string): void;
 }
@@ -132,7 +132,7 @@ export function fetchWebGuiNativeSketch(request: Request): Promise<Response | un
 
 export function hasWebGuiNativeResources(): boolean {
 	return (
-		roots.size > 0 || leases.size > 0 || pending.size > 0 || devTransfers.size > 0 || workspaceRecoveries.size > 0
+		roots.size > 0 || leases.size > 0 || pending.size > 0 || aiReqTransfers.size > 0 || workspaceRecoveries.size > 0
 	);
 }
 
@@ -164,13 +164,13 @@ export function isWebGuiNativeSessionUnavailable(session: AgentSession): boolean
 	return workspaceRecoveries.has(session);
 }
 const sessionChanges = new Emitter<void>();
-const devTransfers = new Set<{ owned: OwnedRoot; lease: BrowserProjectLease; host?: DevWorkbenchHost }>();
-export interface WebGuiDevHandoff {
-	host: DevWorkbenchHost;
-	handle: DevWorkbenchHandle;
+const aiReqTransfers = new Set<{ owned: OwnedRoot; lease: BrowserProjectLease; host?: AIReqWorkbenchHost }>();
+export interface WebGuiAIReqHandoff {
+	host: AIReqWorkbenchHost;
+	handle: AIReqWorkbenchHandle;
 }
-let devHandoff: Promise<WebGuiDevHandoff> | undefined;
-let devHandoffAbort: AbortController | undefined;
+let aiReqHandoff: Promise<WebGuiAIReqHandoff> | undefined;
+let aiReqHandoffAbort: AbortController | undefined;
 
 export function subscribeWebGuiNativeSessions(listener: () => void): () => void {
 	const subscription = sessionChanges.event(listener);
@@ -249,7 +249,7 @@ async function openProject(directory: string): Promise<BrowserProjectRecord> {
 	const existing = listBrowserProjects().find(project => normalizePathForComparison(project.root) === key);
 	if (existing) {
 		if (existing.mode !== "webgui" || existing.phase !== "active")
-			throw new Error(`项目已被 Dev 占用或正在退出，请先结清原模式：${root}`);
+			throw new Error(`项目已被 AIReq 占用或正在退出，请先结清原模式：${root}`);
 		return existing;
 	}
 	const inFlight = openings.get(key);
@@ -741,12 +741,12 @@ async function settleOwnedRoot(owned: OwnedRoot): Promise<void> {
 
 /** Reject all new work immediately, then settle every root before any project lease is released. */
 export function closeWebGuiNativeSessions(): Promise<void> {
-	if (devHandoff) {
-		devHandoffAbort?.abort(new Error("Native mode handoff cancelled by exit"));
+	if (aiReqHandoff) {
+		aiReqHandoffAbort?.abort(new Error("Native mode handoff cancelled by exit"));
 		for (const root of roots) if (root.session) cancelPendingInteractions(root.session, "WebGUI is exiting");
-		for (const transfer of devTransfers)
+		for (const transfer of aiReqTransfers)
 			if (transfer.owned.session) cancelPendingInteractions(transfer.owned.session, "WebGUI is exiting");
-		return devHandoff.then(
+		return aiReqHandoff.then(
 			() => settleWebGuiNativeSessions(),
 			() => settleWebGuiNativeSessions(),
 		);
@@ -759,14 +759,14 @@ function settleWebGuiNativeSessions(preserveSession?: AgentSession): Promise<voi
 	exiting = true;
 	const operation = (async () => {
 		if (!preserveSession) {
-			for (const transfer of devTransfers) {
+			for (const transfer of aiReqTransfers) {
 				if (transfer.host) {
 					await runWebGuiSession(transfer.owned.session!, () => transfer.host!.close());
 				} else {
 					await settleOwnedRoot(transfer.owned);
 					await transfer.lease.close();
 				}
-				devTransfers.delete(transfer);
+				aiReqTransfers.delete(transfer);
 			}
 		}
 		const recoveries = await Promise.allSettled(
@@ -875,9 +875,9 @@ function settleWebGuiNativeSessions(preserveSession?: AgentSession): Promise<voi
 	return operation;
 }
 
-/** Transfer one settled standalone SDK root to the real Dev host under the same OS lease. */
-export function enterDevFromWebGuiNativeSession(session: AgentSession): Promise<WebGuiDevHandoff> {
-	if (devHandoff) return Promise.reject(new Error("A native mode handoff is already in progress"));
+/** Transfer one settled standalone SDK root to the real AIReq host under the same OS lease. */
+export function enterAIReqFromWebGuiNativeSession(session: AgentSession): Promise<WebGuiAIReqHandoff> {
+	if (aiReqHandoff) return Promise.reject(new Error("A native mode handoff is already in progress"));
 	const project = webGuiSessionProject(session);
 	const owned = [...roots].find(root => root.session === session && !root.settled);
 	const sourceLease = leases.get(project.projectId);
@@ -886,7 +886,7 @@ export function enterDevFromWebGuiNativeSession(session: AgentSession): Promise<
 		return Promise.reject(new Error("Native mode handoff requires its standalone session and originating browser"));
 	const originSignal = webGuiNativePorts().beginHandoff(origin, session);
 	const controller = new AbortController();
-	devHandoffAbort = controller;
+	aiReqHandoffAbort = controller;
 	const operation = (async () => {
 		await settleWebGuiNativeSessions(session);
 		await webGuiNativePorts().closeAttachments();
@@ -894,17 +894,17 @@ export function enterDevFromWebGuiNativeSession(session: AgentSession): Promise<
 		webGuiNativePorts().retireConnections(origin.connectionId);
 		controller.signal.throwIfAborted();
 		originSignal.throwIfAborted();
-		const targetLease = transferBrowserProjectToDev(owned.projectId, owned.ownerId);
-		const transfer: { owned: OwnedRoot; lease: BrowserProjectLease; host?: DevWorkbenchHost } = {
+		const targetLease = transferBrowserProjectToAIReq(owned.projectId, owned.ownerId);
+		const transfer: { owned: OwnedRoot; lease: BrowserProjectLease; host?: AIReqWorkbenchHost } = {
 			owned,
 			lease: targetLease,
 		};
-		devTransfers.add(transfer);
-		// Retain the old token as this instance's listener-settlement guard after Dev owns its new token.
+		aiReqTransfers.add(transfer);
+		// Retain the old token as this instance's listener-settlement guard after AIReq owns its new token.
 		restoreNativeWebGuiInteractions(session);
 		try {
 			transfer.host = await runWebGuiSession(session, () =>
-				webGuiNativePorts().createDevHost({
+				webGuiNativePorts().createAIReqHost({
 					session,
 					settings: session.settings,
 					cwd: session.sessionManager.getCwd(),
@@ -922,8 +922,8 @@ export function enterDevFromWebGuiNativeSession(session: AgentSession): Promise<
 			controller.signal.throwIfAborted();
 			originSignal.throwIfAborted();
 			roots.delete(owned);
-			const handle = await runWebGuiSession(session, () => webGuiNativePorts().startDevHost(transfer.host!));
-			process.stdout.write(`Dev 工作台：${handle.url}\n`);
+			const handle = await runWebGuiSession(session, () => webGuiNativePorts().startAIReqHost(transfer.host!));
+			process.stdout.write(`AIReq 工作台：${handle.url}\n`);
 			controller.signal.throwIfAborted();
 			originSignal.throwIfAborted();
 			await nativeWebGuiQuestions(session).browserAction(
@@ -932,7 +932,7 @@ export function enterDevFromWebGuiNativeSession(session: AgentSession): Promise<
 			);
 			return { host: transfer.host, handle };
 		} catch (error) {
-			const failedHost = webGuiNativePorts().recoverDevHost(error);
+			const failedHost = webGuiNativePorts().recoverAIReqHost(error);
 			if (failedHost) {
 				transfer.host = failedHost;
 				roots.delete(owned);
@@ -940,15 +940,15 @@ export function enterDevFromWebGuiNativeSession(session: AgentSession): Promise<
 			throw error;
 		}
 	})();
-	devHandoff = operation;
+	aiReqHandoff = operation;
 	void operation.then(
 		() => {
-			devHandoff = undefined;
-			devHandoffAbort = undefined;
+			aiReqHandoff = undefined;
+			aiReqHandoffAbort = undefined;
 		},
 		() => {
-			devHandoff = undefined;
-			devHandoffAbort = undefined;
+			aiReqHandoff = undefined;
+			aiReqHandoffAbort = undefined;
 		},
 	);
 	return operation;

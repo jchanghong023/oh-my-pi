@@ -4,10 +4,10 @@ import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { writeFileAtomically } from "../utils/atomic-file";
 import { assertSpecWritePath, containedSpecPath } from "./artifacts";
-import type { DevRequirementRecord, DevStoredRequirement } from "./types";
-import { DevWorkspace } from "./workspace";
+import type { AIReqRequirementRecord, AIReqStoredRequirement } from "./types";
+import { AIReqWorkspace } from "./workspace";
 
-const RECORD_DIRECTORY = "docs/dev-requirements";
+const RECORD_DIRECTORY = "docs/aireq-requirements";
 const ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const HASH = /^[a-f0-9]{64}$/;
 const SHA = /^[a-f0-9]{40,64}$/;
@@ -16,7 +16,7 @@ type Check = (value: unknown, location: string) => void;
 const RECORD_STAGES = ["business", "requirements", "solution", "planning", "executing", "st", "pr", "testing"] as const;
 
 function invalid(location: string, reason: string): never {
-	throw new Error(`Invalid Dev requirement record at ${location}: ${reason}`);
+	throw new Error(`Invalid AIReq requirement record at ${location}: ${reason}`);
 }
 const text: Check = (value, location) => {
 	if (typeof value !== "string" || !value.trim()) invalid(location, "expected nonempty string");
@@ -205,9 +205,9 @@ const recordCheck = object({
 });
 
 /** Reject unknown fields at every level so native state, bodies and tokens cannot leak into Git. */
-export function validateDevRequirementRecord(value: unknown): asserts value is DevRequirementRecord {
+export function validateAIReqRequirementRecord(value: unknown): asserts value is AIReqRequirementRecord {
 	recordCheck(value, "record");
-	const record = value as DevRequirementRecord;
+	const record = value as AIReqRequirementRecord;
 	for (const [name, ids] of [
 		["materials", record.materials.map(material => material.id)],
 		["gitOperations", record.gitOperations.map(operation => operation.operationId)],
@@ -228,44 +228,44 @@ export function validateDevRequirementRecord(value: unknown): asserts value is D
 	}
 }
 
-export function devRequirementPath(requirementId: string): string {
+export function aiReqRequirementPath(requirementId: string): string {
 	identifier(requirementId, "requirementId");
 	return `${RECORD_DIRECTORY}/${requirementId}.json`;
 }
 function digestBytes(bytes: Uint8Array): string {
 	return crypto.createHash("sha256").update(bytes).digest("hex");
 }
-function decode(bytes: Uint8Array, requirementId: string): DevStoredRequirement {
+function decode(bytes: Uint8Array, requirementId: string): AIReqStoredRequirement {
 	const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-	validateDevRequirementRecord(value);
+	validateAIReqRequirementRecord(value);
 	if (value.requirementId !== requirementId) invalid("record.requirementId", "does not match filename");
 	return { record: value, recordVersion: digestBytes(bytes) };
 }
 
 /** Preserve the existing workspace record serialization without mutating its input. */
-export function serializeDevRequirement(record: DevRequirementRecord): Uint8Array {
-	validateDevRequirementRecord(record);
+export function serializeAIReqRequirement(record: AIReqRequirementRecord): Uint8Array {
+	validateAIReqRequirementRecord(record);
 	return Buffer.from(`${JSON.stringify(record, null, 2)}\n`, "utf8");
 }
-async function readAtRoot(root: string, requirementId: string): Promise<DevStoredRequirement> {
-	const relative = devRequirementPath(requirementId);
+async function readAtRoot(root: string, requirementId: string): Promise<AIReqStoredRequirement> {
+	const relative = aiReqRequirementPath(requirementId);
 	await assertSpecWritePath(root, relative);
 	return decode(await fs.readFile(await containedSpecPath(root, relative)), requirementId);
 }
 
-export async function loadDevRequirements(cwd: string): Promise<DevStoredRequirement[]> {
-	const { root } = await DevWorkspace.resolve(cwd);
+export async function loadAIReqRequirements(cwd: string): Promise<AIReqStoredRequirement[]> {
+	const { root } = await AIReqWorkspace.resolve(cwd);
 	const directory = await containedSpecPath(root, RECORD_DIRECTORY);
 	let names: string[];
 	try {
 		const stat = await fs.lstat(path.join(root, RECORD_DIRECTORY));
-		if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Invalid Dev record directory: ${directory}`);
+		if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Invalid AIReq record directory: ${directory}`);
 		names = await fs.readdir(directory);
 	} catch (error) {
 		if (isEnoent(error)) return [];
 		throw error;
 	}
-	const records: DevStoredRequirement[] = [];
+	const records: AIReqStoredRequirement[] = [];
 	const errors: Error[] = [];
 	for (const name of names.sort()) {
 		if (!name.endsWith(".json")) continue;
@@ -283,38 +283,38 @@ export async function loadDevRequirements(cwd: string): Promise<DevStoredRequire
 	return records;
 }
 
-export function occupiesDevDevelopment(record: DevRequirementRecord): boolean {
+export function occupiesAIReqAIReqelopment(record: AIReqRequirementRecord): boolean {
 	if (record.lifecycle === "cancelled") return false;
 	return !(record.pr?.state === "merged" && record.marks["pr-merged"]);
 }
 
 /** Caller must retain the same canonical lease for the entire mutation. */
-export async function saveDevRequirementWithOwner(
-	owner: DevWorkspace,
-	record: DevRequirementRecord,
+export async function saveAIReqRequirementWithOwner(
+	owner: AIReqWorkspace,
+	record: AIReqRequirementRecord,
 	expectedRecordVersion: string | null,
-): Promise<DevStoredRequirement> {
+): Promise<AIReqStoredRequirement> {
 	await owner.assertCurrentBranch();
-	validateDevRequirementRecord(record);
-	if (!owner.branch) throw new Error("Dev records require an existing current Git branch");
+	validateAIReqRequirementRecord(record);
+	if (!owner.branch) throw new Error("AIReq records require an existing current Git branch");
 	if (expectedRecordVersion !== null) digest(expectedRecordVersion, "expectedRecordVersion");
-	let current: DevStoredRequirement | null = null;
+	let current: AIReqStoredRequirement | null = null;
 	try {
 		current = await readAtRoot(owner.root, record.requirementId);
 	} catch (error) {
 		if (!isEnoent(error)) throw error;
 	}
 	if ((current?.recordVersion ?? null) !== expectedRecordVersion)
-		throw new Error(`Dev record CAS conflict: ${record.requirementId}`);
+		throw new Error(`AIReq record CAS conflict: ${record.requirementId}`);
 	if (current?.record.lifecycle === "completed" || current?.record.lifecycle === "cancelled")
-		throw new Error(`Dev requirement is read-only: ${record.requirementId}`);
+		throw new Error(`AIReq requirement is read-only: ${record.requirementId}`);
 	if (current && (current.record.changeId !== record.changeId || current.record.branch !== record.branch))
-		throw new Error("Dev requirement identity cannot change");
-	if ((!current || occupiesDevDevelopment(current.record)) && record.branch !== owner.branch)
-		throw new Error("Dev record branch does not match the existing current branch");
-	if (occupiesDevDevelopment(record)) await owner.assertDevelopmentAvailable(record.requirementId);
+		throw new Error("AIReq requirement identity cannot change");
+	if ((!current || occupiesAIReqAIReqelopment(current.record)) && record.branch !== owner.branch)
+		throw new Error("AIReq record branch does not match the existing current branch");
+	if (occupiesAIReqAIReqelopment(record)) await owner.assertDevelopmentAvailable(record.requirementId);
 	if (!current) {
-		const records = await loadDevRequirements(owner.root);
+		const records = await loadAIReqRequirements(owner.root);
 		if (
 			records.some(
 				other =>
@@ -323,13 +323,13 @@ export async function saveDevRequirementWithOwner(
 					other.record.requirementId === record.changeId,
 			)
 		)
-			throw new Error(`Dev change identifier already exists: ${record.changeId}`);
+			throw new Error(`AIReq change identifier already exists: ${record.changeId}`);
 	}
-	const relative = devRequirementPath(record.requirementId);
+	const relative = aiReqRequirementPath(record.requirementId);
 	await assertSpecWritePath(owner.root, relative);
 	await fs.mkdir(path.join(owner.root, RECORD_DIRECTORY), { recursive: true });
 	await assertSpecWritePath(owner.root, relative);
-	const bytes = serializeDevRequirement(record);
+	const bytes = serializeAIReqRequirement(record);
 	const json = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
 	const result = decode(bytes, record.requirementId);
 	await owner.assertCurrentBranch();

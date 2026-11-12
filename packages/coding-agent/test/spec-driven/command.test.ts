@@ -10,10 +10,10 @@ import type { InteractiveModeContext } from "../../src/modes/types";
 import { AgentSession } from "../../src/session/agent-session";
 import { SessionManager } from "../../src/session/session-manager";
 import {
-	BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS,
-	handleDevCommand,
-	type DevLaunchContext,
-} from "../../src/slash-commands/builtin-spec-driven";
+	BUILTIN_AIREQ_SLASH_COMMANDS,
+	handleAIReqCommand,
+	type AIReqLaunchContext,
+} from "../../src/slash-commands/builtin-aireq";
 import {
 	BUILTIN_SLASH_COMMAND_DEFS,
 	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
@@ -23,7 +23,7 @@ import {
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 async function fixture() {
-	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dev-launch-command-"));
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-aireq-launch-command-"));
 	const auth = createInMemoryAuthStorage();
 	const settings = Settings.isolated();
 	const registry = new ModelRegistry(auth, path.join(cwd, "isolated-models.yml"), { settings });
@@ -36,7 +36,7 @@ async function fixture() {
 		modelRegistry: registry,
 	});
 	const output: string[] = [];
-	const context: DevLaunchContext = {
+	const context: AIReqLaunchContext = {
 		session,
 		settings,
 		cwd,
@@ -49,8 +49,8 @@ async function fixture() {
 		session,
 		output,
 		context,
-		invoke: (args: string, text = args ? `/dev ${args}` : "/dev") =>
-			handleDevCommand({ name: "dev", args, text }, context),
+		invoke: (args: string, text = args ? `/aireq ${args}` : "/aireq") =>
+			handleAIReqCommand({ name: "aireq", args, text }, context),
 		async [Symbol.asyncDispose]() {
 			await session.dispose();
 			await registry.awaitBackgroundRefresh();
@@ -60,12 +60,12 @@ async function fixture() {
 	};
 }
 
-describe("/dev exclusive native entry rejects retired terminal routing", () => {
-	test("registers ordinary commands and routes Dev through the native exclusive entry under this module load order", async () => {
+describe("/aireq exclusive native entry rejects retired terminal routing", () => {
+	test("registers ordinary commands and routes AIReq through the native exclusive entry under this module load order", async () => {
 		await using f = await fixture();
-		expect(BUILTIN_SLASH_COMMAND_DEFS.filter(command => command.name === "dev")).toHaveLength(1);
-		expect(BUILTIN_SLASH_COMMAND_RESERVED_NAMES.has("dev")).toBe(true);
-		expect(lookupBuiltinSlashCommand("dev")?.allowArgs).toBe(true);
+		expect(BUILTIN_SLASH_COMMAND_DEFS.filter(command => command.name === "aireq")).toHaveLength(1);
+		expect(BUILTIN_SLASH_COMMAND_RESERVED_NAMES.has("aireq")).toBe(true);
+		expect(lookupBuiltinSlashCommand("aireq")?.allowArgs).toBe(true);
 		let text = "/context";
 		let contextReports = 0;
 		let entryChecks = 0;
@@ -97,7 +97,7 @@ describe("/dev exclusive native entry rejects retired terminal routing", () => {
 				shutdowns.add(dispose);
 				return () => shutdowns.delete(dispose);
 			},
-			getDevWorkbenchEntryBlocker: () => {
+			getAIReqWorkbenchEntryBlocker: () => {
 				entryChecks++;
 				return "An ordinary native operation is still active";
 			},
@@ -106,30 +106,30 @@ describe("/dev exclusive native entry rejects retired terminal routing", () => {
 		expect(await executeBuiltinSlashCommand("/context", { ctx })).toBe(true);
 		expect(contextReports).toBe(1);
 		expect(text).toBe("");
-		text = "/dev next";
+		text = "/aireq next";
 		expect(await executeBuiltinSlashCommand(text, { ctx })).toBe(true);
 		expect(entryChecks).toBe(0);
 		expect(shutdowns.size).toBe(0);
-		expect(text).toBe("/dev next");
+		expect(text).toBe("/aireq next");
 
-		text = "/dev";
+		text = "/aireq";
 		expect(await executeBuiltinSlashCommand(text, { ctx })).toBe(true);
 		expect(entryChecks).toBe(1);
 		expect(shutdowns.size).toBe(1);
-		expect(ctx.isDevWorkbenchModeActive?.()).toBe(false);
+		expect(ctx.isAIReqWorkbenchModeActive?.()).toBe(false);
 		expect(editor.disableSubmit).toBe(false);
-		expect(text).toBe("/dev");
+		expect(text).toBe("/aireq");
 		expect(f.output).toHaveLength(2);
 		expect(f.output.every(message => message.length > 0)).toBe(true);
 
 		text = "new ordinary draft";
-		expect(await executeBuiltinSlashCommand("/dev", { ctx, draftDetached: true })).toBe(true);
+		expect(await executeBuiltinSlashCommand("/aireq", { ctx, draftDetached: true })).toBe(true);
 		expect(entryChecks).toBe(2);
 		expect(shutdowns.size).toBe(1);
 		expect(text).toBe("/dev\n\nnew ordinary draft");
 		expect(f.session.messages).toEqual([]);
 		expect(f.session.isBusyForSnapshot).toBe(false);
-		await expect(fs.stat(path.join(f.cwd, ".omp/dev-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(fs.stat(path.join(f.cwd, ".omp/aireq-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
 		for (const shutdown of shutdowns) await shutdown();
 	});
 
@@ -137,7 +137,7 @@ describe("/dev exclusive native entry rejects retired terminal routing", () => {
 		await using f = await fixture();
 		let toggles = 0;
 		let active = false;
-		f.context.toggleDevWorkbench = async () => {
+		f.context.toggleAIReqWorkbench = async () => {
 			toggles++;
 			active = !active;
 		};
@@ -147,16 +147,16 @@ describe("/dev exclusive native entry rejects retired terminal routing", () => {
 		expect(await f.invoke("next")).toEqual({ consumed: true, failed: true, errorCode: "invalid_params" });
 		expect(active).toBe(true);
 		expect(toggles).toBe(1);
-		expect(await f.invoke("", "/dev   ")).toEqual({ consumed: true });
+		expect(await f.invoke("", "/aireq   ")).toEqual({ consumed: true });
 		expect(active).toBe(false);
 		expect(toggles).toBe(2);
 		expect(f.session.messages).toEqual([]);
 		expect(f.session.isBusyForSnapshot).toBe(false);
 	});
 
-	test("consumes every retired verb without changing the ordinary session or creating Dev state", async () => {
+	test("consumes every retired verb without changing the ordinary session or creating AIReq state", async () => {
 		await using f = await fixture();
-		expect(BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS.map(command => command.name)).toEqual(["dev"]);
+		expect(BUILTIN_AIREQ_SLASH_COMMANDS.map(command => command.name)).toEqual(["aireq"]);
 		const ordinaryId = f.session.sessionId;
 		const ordinaryModel = f.session.model;
 		const ordinarySettings = f.session.settings;
@@ -183,18 +183,18 @@ describe("/dev exclusive native entry rejects retired terminal routing", () => {
 		expect(f.session.model).toBe(ordinaryModel);
 		expect(f.session.settings).toBe(ordinarySettings);
 		expect(f.session.getQueuedInputMessages()).toEqual(ordinaryQueue);
-		await expect(fs.stat(path.join(f.cwd, "docs/dev-requirements"))).rejects.toMatchObject({ code: "ENOENT" });
-		await expect(fs.stat(path.join(f.cwd, ".omp/dev-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(fs.stat(path.join(f.cwd, "docs/aireq-requirements"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(fs.stat(path.join(f.cwd, ".omp/aireq-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
 	});
 
 	test("checks the submitted text rather than letting stale parsed args smuggle an old action", async () => {
 		await using f = await fixture();
-		for (const text of ["/dev:next", "/dev next\n仍然是旧参数", "/dev\tnew raw request", "/dev config "]) {
+		for (const text of ["/dev:next", "/aireq next\n仍然是旧参数", "/dev\tnew raw request", "/aireq config "]) {
 			expect(await f.invoke("", text)).toEqual({ consumed: true, failed: true, errorCode: "invalid_params" });
 		}
 		expect(f.session.messages).toEqual([]);
 		expect(f.session.isBusyForSnapshot).toBe(false);
-		await expect(fs.stat(path.join(f.cwd, ".omp/dev-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(fs.stat(path.join(f.cwd, ".omp/aireq-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
 	});
 
 	test("a generic host without the native TUI toggle reports a consumed error without launching or calling a model", async () => {
@@ -203,7 +203,7 @@ describe("/dev exclusive native entry rejects retired terminal routing", () => {
 		const ordinaryModel = f.session.model;
 		const ordinarySettings = f.session.settings;
 		const ordinaryQueue = f.session.getQueuedInputMessages();
-		for (const text of ["/dev", "/dev   "]) {
+		for (const text of ["/aireq", "/aireq   "]) {
 			expect(await f.invoke("", text)).toEqual({ consumed: true, failed: true, errorCode: "execution_failed" });
 		}
 		expect(f.output.length).toBe(2);
@@ -215,7 +215,7 @@ describe("/dev exclusive native entry rejects retired terminal routing", () => {
 		expect(f.session.settings).toBe(ordinarySettings);
 		expect(f.session.getQueuedInputMessages()).toEqual(ordinaryQueue);
 		expect(f.session.sessionManager.getCwd()).toBe(f.cwd);
-		await expect(fs.stat(path.join(f.cwd, ".omp/dev-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
-		await expect(fs.stat(path.join(f.cwd, "docs/dev-requirements"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(fs.stat(path.join(f.cwd, ".omp/aireq-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(fs.stat(path.join(f.cwd, "docs/aireq-requirements"))).rejects.toMatchObject({ code: "ENOENT" });
 	});
 });

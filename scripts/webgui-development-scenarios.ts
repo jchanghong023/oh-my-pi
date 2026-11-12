@@ -472,7 +472,7 @@ async function assertNoModel(context: DevelopmentContext, evidence: Evidence[], 
 	if (unregistered) {
 		check(projects.length === 0, "Lazy startup/refresh registered an unrequested project");
 		check(
-			!(await fs.stat(path.join(context.root, ".omp", "dev-workbench", "browser-mode")).then(
+			!(await fs.stat(path.join(context.root, ".omp", "aireq-workbench", "browser-mode")).then(
 				() => true,
 				() => false,
 			)),
@@ -1656,7 +1656,7 @@ const COMMAND_CASES: Record<string, CommandCase> = {
 	plugins: { input: "/plugins list", result: /plugin|插件|No /i },
 	skills: { input: "/skills installed", result: /skill|技能|installed|No /i },
 	sketch: { input: "/sketch", result: /sketch|canvas|绘图|画布|http/i, destructive: true },
-	dev: { input: "/dev", result: /dev|workbench|工作台|独占|占用/i, destructive: true },
+	aireq: { input: "/aireq", result: /dev|workbench|工作台|独占|占用/i, destructive: true },
 	webgui: { input: "/webgui", result: /webgui|退出|关闭/i, destructive: true },
 	minimal: {
 		input: "/minimal Use native write to create command-minimal.txt with exactly minimal-native.",
@@ -1934,7 +1934,7 @@ async function commandCase(context: DevelopmentContext, name: string, spec: Comm
 			.flatMap(source => source.entries)
 			.filter(entry => !baseline.has(entry.id) && entry.message?.role !== "user");
 		const nativeMode =
-			name === "dev"
+			name === "aireq"
 				? (await publicProjects(context)).find(project => samePath(project.root, context.projectA))?.mode
 				: undefined;
 		return {
@@ -1959,9 +1959,9 @@ async function commandCase(context: DevelopmentContext, name: string, spec: Comm
 			if (result.error) throw new Error(`/${name} native command failed: ${context.redact(result.error)}`);
 			if (name === "open")
 				return browserActions.some(action => action.action === "openUrl" && action.result === "accepted");
-			if (name === "dev")
+			if (name === "aireq")
 				return (
-					result.nativeMode === "dev" &&
+					result.nativeMode === "aireq" &&
 					browserActions.some(action => action.action === "openUrl" && action.result === "accepted")
 				);
 			if (name === "new" || name === "fork")
@@ -2017,7 +2017,7 @@ async function commandCase(context: DevelopmentContext, name: string, spec: Comm
 			browserActions,
 		};
 	}
-	if (name === "dev") {
+	if (name === "aireq") {
 		const workbench = await observe(
 			async () => {
 				for (const candidate of await context.browser.pages()) {

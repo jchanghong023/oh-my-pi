@@ -48,7 +48,7 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 
 # 验证门禁与行为证据
 
-验证应从改动风险和具体验收场景出发，而不是从命令名称推断覆盖率。本页描述当前实现与[验证规格](../../openspec/specs/fork-verification-gates/spec.md)的合同；**不表示本次运行或通过了任何测试**。纯文档改动通常只需检查内容、差异和链接；不要为了验证文档而运行产品构建或测试。日常操作和授权边界另见[开发生命周期](../workflows/dev-lifecycle.md)与 [fork 维护](../operations/fork-maintenance.md)。
+验证应从改动风险和具体验收场景出发，而不是从命令名称推断覆盖率。本页描述当前实现与[验证规格](../../openspec/specs/fork-verification-gates/spec.md)的合同；**不表示本次运行或通过了任何测试**。纯文档改动通常只需检查内容、差异和链接；不要为了验证文档而运行产品构建或测试。日常操作和授权边界另见[开发生命周期](../workflows/aireq-lifecycle.md)与 [fork 维护](../operations/fork-maintenance.md)。
 
 ## 选择入口
 

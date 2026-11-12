@@ -17,7 +17,7 @@ import {
 	removeUserDataDir,
 } from "../packages/coding-agent/src/tools/browser/launch";
 import { findUserDataDirInArgs, gracefulKillTreeOnce } from "../packages/coding-agent/src/tools/browser/attach";
-import { initializeRepository } from "../packages/coding-agent/test/dev-workbench/fixture";
+import { initializeRepository } from "../packages/coding-agent/test/aireq-workbench/fixture";
 import {
 	PlatformPrerequisiteError,
 	validateDirectUrl,
@@ -307,7 +307,7 @@ async function withChrome<T>(
 	recordCleanup: (evidence: Evidence) => void,
 ): Promise<T> {
 	const executable = await installed(options.chrome, "chrome-executable");
-	const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-development-chrome-"));
+	const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-aireqelopment-chrome-"));
 	let browser: Browser | undefined;
 	let launchStarted = false;
 	let endpoint: string | undefined;

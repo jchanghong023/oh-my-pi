@@ -149,7 +149,7 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 						const denied = nativeReadResult(completed, deniedPaths.join(";"));
 						for (const other of manualOnly) expect(denied).toContain(`Skill access denied: ${other.name}`);
 						expect((await state()).projects).toEqual([]);
-						expect(await Bun.file(path.join(cwd, ".omp/dev/state.json")).exists()).toBe(false);
+						expect(await Bun.file(path.join(cwd, ".omp/aireq/state.json")).exists()).toBe(false);
 					}
 					// Explicit user invocations grant only the selected hidden packaged skill.
 					for (const name of ["systematic-debugging", "brainstorming"]) {

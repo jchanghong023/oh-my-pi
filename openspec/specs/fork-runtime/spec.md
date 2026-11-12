@@ -57,7 +57,7 @@ OMP MUST 仅在 offline 会话追加环境规则；CLI、SDK 和 task 子代理 
 
 ### Requirement: offline 网页入口不自动启动浏览器
 
-`OMP_OFFLINE` 按统一真值规则启用时，原生 TUI 的 `/dev`、`/webgui`、`/sketch` 以及独立 `omp dev`、`omp webgui` MUST 不自动启动浏览器；该规则适用于全部平台与 Shell，不要求额外设置跳过打开的环境变量。
+`OMP_OFFLINE` 按统一真值规则启用时，原生 TUI 的 `/aireq`、`/webgui`、`/sketch` 以及独立 `omp aireq`、`omp webgui` MUST 不自动启动浏览器；该规则适用于全部平台与 Shell，不要求额外设置跳过打开的环境变量。
 
 #### Scenario: offline 手动打开网页
 
@@ -68,17 +68,17 @@ OMP MUST 仅在 offline 会话追加环境规则；CLI、SDK 和 task 子代理 
 #### Scenario: 非 offline 与显式打开行为
 
 - **WHEN** 未启用 offline，或用户显式打开普通 OMP 链接／文件
-- **THEN** 沿用原系统打开方式；非 offline 的 Dev／WebGUI 仍尊重 `OMP_DEV_NO_OPEN=1`／`OMP_WEBGUI_NO_OPEN=1`，不将禁止自动启动扩大到普通链接／文件打开
+- **THEN** 沿用原系统打开方式；非 offline 的 AIReq／WebGUI 仍尊重 `OMP_AIREQ_NO_OPEN=1`／`OMP_WEBGUI_NO_OPEN=1`，不将禁止自动启动扩大到普通链接／文件打开
 
 ### Requirement: 内网网页入口自动复制本机地址
 
-仅在 Linux 且 `OMP_OFFLINE` 按统一真值规则启用时，原生 TUI 进入 Dev／WebGUI、独立 `omp webgui` 启动以及原生 `/sketch` 打开画布 MUST 自动请求复制对应的完整 `http://127.0.0.1:<port>/…` 地址；保留端口、随机能力路径和查询参数，不选择局域网地址，不改写系统剪贴板设置。
+仅在 Linux 且 `OMP_OFFLINE` 按统一真值规则启用时，原生 TUI 进入 AIReq／WebGUI、独立 `omp webgui` 启动以及原生 `/sketch` 打开画布 MUST 自动请求复制对应的完整 `http://127.0.0.1:<port>/…` 地址；保留端口、随机能力路径和查询参数，不选择局域网地址，不改写系统剪贴板设置。
 
 #### Scenario: 浏览器未打开页面时手动粘贴
 
 - **WHEN** 上述入口已成功取得可访问的本机地址
 - **THEN** 复用统一剪贴板写入能力，请求终端 OSC 52 与原生剪贴板复制；Linux X11 复用进程保活的 selection owner，不增加下载、安装或外部剪贴板服务
-- **AND** Dev／WebGUI 跳过自动打开浏览器时仍复制；复制故障不阻断服务、画布或退出，不改变草稿、模型调用及任务状态
+- **AND** AIReq／WebGUI 跳过自动打开浏览器时仍复制；复制故障不阻断服务、画布或退出，不改变草稿、模型调用及任务状态
 - **AND** 地址仍可手动选择复制；界面仅提示已尝试复制，不将无回执的终端请求冒充客户端剪贴板成功。SSH／X11 到 Windows 的粘贴取决于终端／Exceed 配置，复制回环地址不等于自动建立 SSH 端口转发
 - **AND** 非 offline 或非 Linux 保持原行为，不自动覆盖剪贴板；未显式进入这些入口不触发复制
 
@@ -119,7 +119,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - `PI_UPDATE_REPOSITORY` MUST 可覆盖 `omp update` 使用的更新仓库；未设置时固定为本 fork 仓库。该变量 MUST NOT 写入配置文件或构建产物。
 - 本地构建脚本 `packages/coding-agent/scripts/build-binary.ts` 同样注入本 fork 更新仓库：本地构建产物的 `omp update` 指向本 fork Release，不会回退官方渠道（版本号不注入，`--version` 无 `+fork.N` 后缀属预期）。
 - 本地二进制构建 MUST 向终端输出目标平台、资源生成、编译、适用的签名及生成文件恢复阶段；仅在全部步骤成功后输出构建完成、实际可执行文件路径和总耗时，避免把编译阶段的静默成功误判为未执行而重复构建。
-- Dev／WebGUI 前端资源 MUST 在资源准备或构建／打包阶段从当前前端源码生成，生成载荷及前端 `build/` 目录仅作为本地构建产物，不提交 Git。源码入口缺少资源时明确提示 `bun run gen:dev` 或 `bun run build:webgui`，不得在运行时编译、下载或安装依赖；npm／SDK 和发行二进制继续携带经过字节及指纹校验的完整资源，保持无需源码目录、Vite 或公网的离线运行能力。
+- AIReq／WebGUI 前端资源 MUST 在资源准备或构建／打包阶段从当前前端源码生成，生成载荷及前端 `build/` 目录仅作为本地构建产物，不提交 Git。源码入口缺少资源时明确提示 `bun run gen:aireq` 或 `bun run build:webgui`，不得在运行时编译、下载或安装依赖；npm／SDK 和发行二进制继续携带经过字节及指纹校验的完整资源，保持无需源码目录、Vite 或公网的离线运行能力。
 - `omp update` 先比较正常 SemVer，再比较同基线的 fork build counter；本地构建未带 `+fork.N` 时按 counter 0 比较，因此可取得同基线的新 fork Release，而不把更高上游基线降级。支持 `%2B` 编码的 `+` 版本 URL；GitHub 元数据和资产统一优先环境令牌，再尝试本机 `gh auth token`，无凭据才匿名请求。
 - `omp update` 下载二进制时，在交互终端显示下载百分比、速度与预计剩余时间；非 TTY 输出（如 CI、管道）不显示动态进度。若 `PATH` 中的 `omp` 与更新目标解析为不同文件，更新前警告并提示更新后运行 `omp --version` 核对实际生效的版本；指向同一文件的符号链接不视为冲突。
 - `update.channel=canary` 在 fork 二进制上不可用：显式执行 `omp update` 时提示该配置并指向 `omp update --stable`，不在启动时检查或提示更新渠道。

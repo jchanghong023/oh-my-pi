@@ -19,7 +19,7 @@ import { HistoryStorage } from "../../src/session/history-storage";
 import { closeSessionIndex } from "../../src/session/session-index";
 import { cfgCompactionThresholdTokens } from "../../src/session/context-settings";
 import { ToolRestrictions } from "../../src/session/tool-restrictions";
-import { createDevNativeActor } from "../../src/spec-driven/actors";
+import { createAIReqNativeActor } from "../../src/spec-driven/actors";
 import { ensureSpecDrivenResources, loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 import type { CustomTool } from "../../src/sdk";
 import { SessionManager } from "../../src/session/session-manager";
@@ -38,7 +38,7 @@ async function consumer(
 		reply?: (request: ModelRequest) => Reply;
 	} = {},
 ) {
-	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dev-native-actor-"));
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-aireq-native-actor-"));
 	const agentDir = path.join(cwd, "agent");
 	await fs.mkdir(agentDir);
 	let text = "prior ordinary reply";
@@ -113,7 +113,7 @@ async function consumer(
 	const registry = new AgentRegistry();
 	const jobs = new AsyncJobManager({});
 	const createActor = async (sessionFile?: string) =>
-		createDevNativeActor({
+		createAIReqNativeActor({
 			name: "requirements",
 			context: "Exact native actor context Ω",
 			check: options.check ?? (async () => {}),
@@ -636,7 +636,7 @@ test("canonical actor restrictions preserve embedding denylists and enforce the 
 		toolRestrictions: new ToolRestrictions({ denylist: ["write"] }),
 		async check(name) {
 			checked.push(name);
-			if (frozen && name !== "dev-input") throw new Error("whole group frozen");
+			if (frozen && name !== "aireq-input") throw new Error("whole group frozen");
 		},
 	});
 	fixture.setTool("write", { path: "denied.md", content: "must not land" });
@@ -646,7 +646,7 @@ test("canonical actor restrictions preserve embedding denylists and enforce the 
 	frozen = true;
 	fixture.setTool("read", { path: "existing.md" });
 	await fixture.actor.prompt("try frozen tool");
-	expect(checked).toContain("dev-input");
+	expect(checked).toContain("aireq-input");
 	expect(checked).toContain("read");
 	expect(JSON.stringify(fixture.actor.session.messages)).toContain("whole group frozen");
 	expect(await fs.readFile(path.join(fixture.cwd, "existing.md"), "utf8")).toBe("existing bytes");

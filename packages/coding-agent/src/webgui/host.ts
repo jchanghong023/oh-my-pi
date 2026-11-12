@@ -4,7 +4,7 @@ import { execReplace } from "@oh-my-pi/pi-natives";
 import { restartArgv } from "../cli/flag-tables";
 import { offlineFromEnv } from "../cli/args";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
-import type { DevWorkbenchHandle } from "../dev-workbench/host";
+import type { AIReqWorkbenchHandle } from "../aireq-workbench/host";
 import type { AgentSession } from "../session/agent-session";
 import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPathWithResult } from "../utils/open";
@@ -23,7 +23,7 @@ import {
 	assertWebGuiNativeAdmission,
 	closeWebGuiNativeSessions,
 	enableWebGuiNativeSessions,
-	enterDevFromWebGuiNativeSession,
+	enterAIReqFromWebGuiNativeSession,
 	releaseWebGuiNativeProjects,
 	hasWebGuiNativeResources,
 	webGuiNativePorts,
@@ -32,7 +32,7 @@ import { acquireBrowserProject, readBrowserProject } from "./project-registry";
 import { closeWebServer, ensureWebServer } from "./server";
 import { readWebGuiSessionInfo } from "./session-source";
 
-export interface WebGuiHandle extends DevWorkbenchHandle {
+export interface WebGuiHandle extends AIReqWorkbenchHandle {
 	readonly projectId: string;
 }
 
@@ -145,7 +145,7 @@ async function bindWebGui(session: AgentSession, bindings?: WebGuiBindings): Pro
 	}
 }
 
-/** A successful native mode transfer keeps its Dev owner; release only old terminal bindings. */
+/** A successful native mode transfer keeps its AIReq owner; release only old terminal bindings. */
 export async function releaseWebGuiBindingsAfterHandoff(): Promise<void> {
 	const results = await Promise.allSettled([...bindingClosures.values()].map(close => close()));
 	const failures = results.filter(result => result.status === "rejected");
@@ -231,8 +231,8 @@ export async function runWebGuiCommand(): Promise<void> {
 			await postmortem.quit(await child.exited);
 		},
 		toggleMode: async (mode, session) => {
-			if (mode === "dev") {
-				await enterDevFromWebGuiNativeSession(session);
+			if (mode === "aireq") {
+				await enterAIReqFromWebGuiNativeSession(session);
 			} else {
 				await closeAllWebGuis();
 				stop();

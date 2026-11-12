@@ -58,13 +58,13 @@ function createHarness(isStreaming: boolean, hasPendingDeferredExtensions = fals
 	return { ctx, controller, editor, prompt, showError, draft, pressFollowUp, loadDeferredExtensions };
 }
 
-describe("native main-session Ctrl+Enter after Dev entry retirement", () => {
+describe("native main-session Ctrl+Enter after AIReq entry retirement", () => {
 	afterEach(() => vi.restoreAllMocks());
 
 	for (const isStreaming of [false, true]) {
 		const state = isStreaming ? "streaming" : "idle";
 
-		it(`submits text and attachments to the ${state} native session without a Dev helper`, async () => {
+		it(`submits text and attachments to the ${state} native session without a AIReq helper`, async () => {
 			const { ctx, editor, prompt, showError, draft, pressFollowUp } = createHarness(isStreaming);
 			const sessionId = ctx.sessionManager.getSessionId();
 			draft("inspect this [Image #1]", originalImage, "local://original.png");
@@ -107,8 +107,8 @@ describe("native main-session Ctrl+Enter after Dev entry retirement", () => {
 		const { ctx, editor, prompt, draft, pressFollowUp, loadDeferredExtensions } = createHarness(true, true);
 		draft("keep this [Image #1]", originalImage, "local://original.png");
 		const consume = vi.fn(async (_text: string) => true);
-		ctx.isDevWorkbenchModeActive = () => true;
-		ctx.handleDevWorkbenchModeSubmit = consume;
+		ctx.isAIReqWorkbenchModeActive = () => true;
+		ctx.handleAIReqWorkbenchModeSubmit = consume;
 		const clearDraft = vi.spyOn(editor, "clearDraft");
 
 		await pressFollowUp();
@@ -127,8 +127,8 @@ describe("native main-session Ctrl+Enter after Dev entry retirement", () => {
 		controller.setupEditorSubmitHandler();
 		draft("keep this [Image #1]", originalImage, "local://original.png");
 		const consume = vi.fn(async (_text: string) => true);
-		ctx.isDevWorkbenchModeActive = () => true;
-		ctx.handleDevWorkbenchModeSubmit = consume;
+		ctx.isAIReqWorkbenchModeActive = () => true;
+		ctx.handleAIReqWorkbenchModeSubmit = consume;
 		const onSubmit = editor.onSubmit;
 		if (!onSubmit) throw new Error("Expected the native submit handler");
 		const submitted = vi.fn(onSubmit);
@@ -147,20 +147,20 @@ describe("native main-session Ctrl+Enter after Dev entry retirement", () => {
 		expect(editor.pendingImageLinks).toEqual(["local://original.png"]);
 	});
 
-	it("keeps /dev and its attachments when the workbench exit fails", async () => {
+	it("keeps /aireq and its attachments when the workbench exit fails", async () => {
 		const { ctx, editor, prompt, showError, draft, pressFollowUp } = createHarness(false);
-		draft("/dev", originalImage, "local://original.png");
-		ctx.isDevWorkbenchModeActive = () => true;
-		ctx.handleDevWorkbenchModeSubmit = vi.fn(async () => {
+		draft("/aireq", originalImage, "local://original.png");
+		ctx.isAIReqWorkbenchModeActive = () => true;
+		ctx.handleAIReqWorkbenchModeSubmit = vi.fn(async () => {
 			throw new Error("host close rejected");
 		});
 
 		await pressFollowUp();
 
-		expect(ctx.handleDevWorkbenchModeSubmit).toHaveBeenCalledWith("/dev");
+		expect(ctx.handleAIReqWorkbenchModeSubmit).toHaveBeenCalledWith("/aireq");
 		expect(showError).toHaveBeenCalledWith("host close rejected");
 		expect(prompt).not.toHaveBeenCalled();
-		expect(editor.getExpandedText()).toBe("/dev");
+		expect(editor.getExpandedText()).toBe("/aireq");
 		expect(editor.pendingImages).toEqual([originalImage]);
 		expect(editor.pendingImageLinks).toEqual(["local://original.png"]);
 	});
@@ -168,7 +168,7 @@ describe("native main-session Ctrl+Enter after Dev entry retirement", () => {
 	it("blocks direct hotkey and native actions without changing the workbench-owned draft", async () => {
 		const { ctx, controller, editor, prompt, draft } = createHarness(true);
 		draft("keep this [Image #1]", originalImage, "local://original.png");
-		ctx.isDevWorkbenchModeActive = () => true;
+		ctx.isAIReqWorkbenchModeActive = () => true;
 		const shutdown = vi.fn(async () => {});
 		ctx.shutdown = shutdown;
 		const clearDraft = vi.spyOn(editor, "clearDraft");
@@ -251,9 +251,9 @@ describe("native submission dispatch identity", () => {
 		const { ctx, editor, prompt, draft, pressFollowUp, loadDeferredExtensions } = createHarness(true, true);
 		draft("keep this [Image #1]", originalImage, "local://original.png");
 		const consume = vi.fn(async (_text: string) => true);
-		ctx.handleDevWorkbenchModeSubmit = consume;
+		ctx.handleAIReqWorkbenchModeSubmit = consume;
 		loadDeferredExtensions.mockImplementationOnce(async () => {
-			ctx.isDevWorkbenchModeActive = () => true;
+			ctx.isAIReqWorkbenchModeActive = () => true;
 		});
 
 		await pressFollowUp();

@@ -144,8 +144,8 @@
         "@types/react-dom": "catalog:",
       },
     },
-    "packages/dev-frontend": {
-      "name": "@oh-my-pi/dev-frontend",
+    "packages/aireq-frontend": {
+      "name": "@oh-my-pi/aireq-frontend",
       "version": "3.17.2",
       "dependencies": {
         "@aiden0z/pptx-renderer": "1.2.4",
@@ -218,13 +218,13 @@
         "zustand": "^5.0.12",
       },
     },
-    "packages/dev-frontend/packages/model-option-map": {
+    "packages/aireq-frontend/packages/model-option-map": {
       "name": "@zcode/model-option-map",
       "devDependencies": {
         "typescript": "^6.0.2",
       },
     },
-    "packages/dev-frontend/packages/provider": {
+    "packages/aireq-frontend/packages/provider": {
       "name": "@zcode/provider",
       "dependencies": {
         "@zcode/model-option-map": "workspace:*",
@@ -235,7 +235,7 @@
         "typescript": "^6.0.2",
       },
     },
-    "packages/dev-frontend/packages/rpc": {
+    "packages/aireq-frontend/packages/rpc": {
       "name": "@zcode/rpc",
       "version": "1.0.0",
       "devDependencies": {
@@ -243,7 +243,7 @@
         "typescript": "^5.9.3",
       },
     },
-    "packages/dev-frontend/packages/shared": {
+    "packages/aireq-frontend/packages/shared": {
       "name": "@zcode/shared",
       "dependencies": {
         "@zcode/model-option-map": "workspace:*",
@@ -1073,7 +1073,7 @@
 
     "@oh-my-pi/collab-web": ["@oh-my-pi/collab-web@workspace:packages/collab-web"],
 
-    "@oh-my-pi/dev-frontend": ["@oh-my-pi/dev-frontend@workspace:packages/dev-frontend"],
+    "@oh-my-pi/aireq-frontend": ["@oh-my-pi/aireq-frontend@workspace:packages/aireq-frontend"],
 
     "@oh-my-pi/omp-stats": ["@oh-my-pi/omp-stats@workspace:packages/stats"],
 
@@ -1653,13 +1653,13 @@
 
     "@xyflow/system": ["@xyflow/system@0.0.84", "", { "dependencies": { "@types/d3-drag": "^3.0.7", "@types/d3-interpolate": "^3.0.4", "@types/d3-selection": "^3.0.10", "@types/d3-transition": "^3.0.8", "@types/d3-zoom": "^3.0.8", "d3-drag": "^3.0.0", "d3-interpolate": "^3.0.1", "d3-selection": "^3.0.0", "d3-zoom": "^3.0.0" } }, "sha512-96zfGFjH3oZ3T0MRdH4gJ0SlXuCIxbBuHVevZ4xry5UTxqjzjt010+LRdholgepq7jhrcaz1JNtzrETscwnkEA=="],
 
-    "@zcode/model-option-map": ["@zcode/model-option-map@workspace:packages/dev-frontend/packages/model-option-map"],
+    "@zcode/model-option-map": ["@zcode/model-option-map@workspace:packages/aireq-frontend/packages/model-option-map"],
 
-    "@zcode/provider": ["@zcode/provider@workspace:packages/dev-frontend/packages/provider"],
+    "@zcode/provider": ["@zcode/provider@workspace:packages/aireq-frontend/packages/provider"],
 
-    "@zcode/rpc": ["@zcode/rpc@workspace:packages/dev-frontend/packages/rpc"],
+    "@zcode/rpc": ["@zcode/rpc@workspace:packages/aireq-frontend/packages/rpc"],
 
-    "@zcode/shared": ["@zcode/shared@workspace:packages/dev-frontend/packages/shared"],
+    "@zcode/shared": ["@zcode/shared@workspace:packages/aireq-frontend/packages/shared"],
 
     "accepts": ["accepts@2.0.0", "", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, "sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng=="],
 
@@ -3189,7 +3189,7 @@
 
     "@octokit/request/content-type": ["content-type@3.1.1", "", {}, "sha512-GW4qUsfFo59d0HbUibDlWv5wPz+vAAcaTWbKIuKCf0JkC7wWkSyf8f13IpXn5JkeMlB2P8iTSSIjwXljorg2vA=="],
 
-    "@oh-my-pi/dev-frontend/katex": ["katex@0.16.47", "", { "dependencies": { "commander": "^8.3.0" }, "bin": { "katex": "cli.js" } }, "sha512-Eeo8Ys1doU1z+x8AZsPpQu+p/QcZBI5PeOo7QGQdy2x2m0MU/hYagBbGOmXwr5KVbEfVuWv9LpnQWeehogurjg=="],
+    "@oh-my-pi/aireq-frontend/katex": ["katex@0.16.47", "", { "dependencies": { "commander": "^8.3.0" }, "bin": { "katex": "cli.js" } }, "sha512-Eeo8Ys1doU1z+x8AZsPpQu+p/QcZBI5PeOo7QGQdy2x2m0MU/hYagBbGOmXwr5KVbEfVuWv9LpnQWeehogurjg=="],
 
     "@oh-my-pi/pi-coding-agent/marked": ["marked@18.1.2", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-DfOnvLAQ6WYeWxWO1u4RyFOeqyHup6dks5PPqnoFiooU7ipRvidO/2j8plhAHIiZg574E9ZlzSjUiPMLAzFkgg=="],
 
@@ -3685,7 +3685,7 @@
 
     "@octokit/plugin-rest-endpoint-methods/@octokit/types/@octokit/openapi-types": ["@octokit/openapi-types@27.0.0", "", {}, "sha512-whrdktVs1h6gtR+09+QsNk2+FO+49j6ga1c55YZudfEG+oKJVvJLQi3zkOm5JjiUXAagWK2tI2kTGKJ2Ys7MGA=="],
 
-    "@oh-my-pi/dev-frontend/katex/commander": ["commander@8.3.0", "", {}, "sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww=="],
+    "@oh-my-pi/aireq-frontend/katex/commander": ["commander@8.3.0", "", {}, "sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww=="],
 
     "@radix-ui/react-checkbox/@radix-ui/react-use-size/@radix-ui/react-use-layout-effect": ["@radix-ui/react-use-layout-effect@1.1.4", "", { "peerDependencies": { "@types/react": "*", "react": "^16.8 || ^17.0 || ^18.0 || ^19.0 || ^19.0.0-rc" }, "optionalPeers": ["@types/react"] }, "sha512-K20DkRkUwDnxEYMBPcg3Y6voLkEy5p5QQmszZgLngKKiC7dzBR/aEuK3w1qlx2JWDUNH6FluahYdgR3BP+QbYw=="],
 

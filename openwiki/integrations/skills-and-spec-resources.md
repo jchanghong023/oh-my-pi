@@ -34,7 +34,7 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 
 # 技能发现、OpenSpec 与 Superpowers 资源
 
-OMP 同时提供普通会话可调用的技能和命令、独立的 `omp openspec` CLI，以及 [Dev 四阶段工作流](../workflows/dev-lifecycle.md)使用的固定方法。三者共享打包资源，但不共享同一种控制权：独立 OpenSpec 用于需求材料维护，不负责实施或软件验收，也不依赖 Dev 状态；Dev 的阶段推进与批准由自己的控制器管理。
+OMP 同时提供普通会话可调用的技能和命令、独立的 `omp openspec` CLI，以及 [Dev 四阶段工作流](../workflows/aireq-lifecycle.md)使用的固定方法。三者共享打包资源，但不共享同一种控制权：独立 OpenSpec 用于需求材料维护，不负责实施或软件验收，也不依赖 Dev 状态；Dev 的阶段推进与批准由自己的控制器管理。
 
 ## 固定来源和资源解析
 

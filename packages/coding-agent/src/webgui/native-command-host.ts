@@ -26,7 +26,7 @@ export function withNativeWebGuiCommandLifecycleGate<T>(
 export interface NativeWebGuiCommandOwner {
 	close(): Promise<void>;
 	restart(): Promise<void>;
-	toggleMode?: (mode: "webgui" | "dev", session: AgentSession) => Promise<void>;
+	toggleMode?: (mode: "webgui" | "aireq", session: AgentSession) => Promise<void>;
 }
 
 const hosts = new WeakMap<AgentSession, NativeWebGuiCommandOwner>();

@@ -6,8 +6,8 @@ import { ptree } from "@oh-my-pi/pi-utils";
 
 const registryModule = JSON.stringify(path.join(import.meta.dir, "../../src/webgui/project-registry.ts"));
 const serverModule = JSON.stringify(path.join(import.meta.dir, "../../src/webgui/server.ts"));
-const nativeServerModule = JSON.stringify(path.join(import.meta.dir, "../../src/dev-workbench/server.ts"));
-const workflowStoreModule = JSON.stringify(path.join(import.meta.dir, "../../src/dev-workbench/workflow-store.ts"));
+const nativeServerModule = JSON.stringify(path.join(import.meta.dir, "../../src/aireq-workbench/server.ts"));
+const workflowStoreModule = JSON.stringify(path.join(import.meta.dir, "../../src/aireq-workbench/workflow-store.ts"));
 const processTreeModule = JSON.stringify(path.join(import.meta.dir, "../../../utils/src/ptree.ts"));
 const nativeVcsModule = JSON.stringify(import.meta.resolve("@oh-my-pi/pi-natives/vcs"));
 
@@ -16,8 +16,8 @@ import * as bootstrapFs from "node:fs/promises";
 import * as bootstrapPath from "node:path";
 import * as bootstrapVcs from ${nativeVcsModule};
 import { closeWebServer, ensureWebServer } from ${serverModule};
-import { startDevWorkbenchServer } from ${nativeServerModule};
-import { DevWorkflowStore } from ${workflowStoreModule};
+import { startAIReqWorkbenchServer } from ${nativeServerModule};
+import { AIReqWorkflowStore } from ${workflowStoreModule};
 function metadataOnly(target, label) {
 	return new Proxy(target, {
 		get(value, key) {
@@ -45,7 +45,7 @@ async function startBootstrap(projectId) {
 	await bootstrapFs.writeFile(bootstrapPath.join(projectRoot, "existing.txt"), "owned bootstrap project\\n");
 	await repo.stageFiles(["existing.txt"]);
 	await repo.commitCreate("initial", {});
-	const store = new DevWorkflowStore(bootstrapPath.join(directory, "registry"));
+	const store = new AIReqWorkflowStore(bootstrapPath.join(directory, "registry"));
 	await store.registerProject(projectRoot, "Native ownership bootstrap");
 	// Only genuine registered Git metadata is admitted; native sessions, models and business callbacks remain forbidden.
 	const host = metadataOnly({
@@ -55,7 +55,7 @@ async function startBootstrap(projectId) {
 		}, "workflow"),
 	}, "host");
 	const html = new TextEncoder().encode("<!doctype html><title>Native bootstrap fixture</title>");
-	return startDevWorkbenchServer(host, {
+	return startAIReqWorkbenchServer(host, {
 		basePath: "/dev/" + projectId + "/",
 		offline: false,
 		asset: async assetPath => assetPath === "/" ? { bytes: html, contentType: "text/html; charset=utf-8" } : null,
@@ -67,7 +67,7 @@ interface OwnershipAttempt {
 	outcome: "acquired" | "rejected";
 	projectId?: string;
 	root?: string;
-	mode?: "dev" | "webgui";
+	mode?: "aireq" | "webgui";
 	error?: string;
 }
 
@@ -171,7 +171,7 @@ test("a live native owner excludes another mode across directory aliases, profil
 	const project = path.join(root, "project");
 	const alias = path.join(root, "alias");
 	const alternateConfig = { OMP_CONFIG_ROOT: path.join(root, "other-config"), OMP_PROFILE: "other", PI_PROFILE: "other" };
-	const owner = await acquireBrowserProject(project, "dev");
+	const owner = await acquireBrowserProject(project, "aireq");
 	try {
 		const aliasAttempt = await contend(alias, "webgui");
 		const profileAttempt = await contend(project, "webgui", { OMP_PROFILE: "other", PI_PROFILE: "other" });
@@ -219,14 +219,14 @@ test("projects retain independent process-local leases through exiting and close
 	let b;
 	try {
 		a = await acquireBrowserProject(path.join(root, "a"), "webgui");
-		b = await acquireBrowserProject(path.join(root, "b"), "dev");
+		b = await acquireBrowserProject(path.join(root, "b"), "aireq");
 		const summarize = records => records.map(({ root, mode }) => ({ root, mode }));
 		const projects = summarize(await listBrowserProjects());
 		await a.markExiting();
 		const exitingPhase = (await readBrowserProject(a.projectId))?.phase;
-		const whileExiting = await contend(a.root, "dev");
+		const whileExiting = await contend(a.root, "aireq");
 		await a.close();
-		const afterClose = await contend(a.root, "dev");
+		const afterClose = await contend(a.root, "aireq");
 		await a.close();
 		const otherProject = await contend(b.root, "webgui");
 		const released = await readBrowserProject(a.projectId);
@@ -241,14 +241,14 @@ test("projects retain independent process-local leases through exiting and close
 		const canonicalB = await fs.realpath(projectB);
 		expect(result.projects).toEqual([
 			{ root: canonicalA, mode: "webgui" },
-			{ root: canonicalB, mode: "dev" },
+			{ root: canonicalB, mode: "aireq" },
 		]);
 		expect(result.exitingPhase).toBe("exiting");
 		expectOccupied(result.whileExiting);
-		expect(result.afterClose).toMatchObject({ outcome: "acquired", root: canonicalA, mode: "dev" });
+		expect(result.afterClose).toMatchObject({ outcome: "acquired", root: canonicalA, mode: "aireq" });
 		expectOccupied(result.otherProject);
 		expect(result.released).toBeNull();
-		expect(result.remaining).toEqual([{ root: canonicalB, mode: "dev" }]);
+		expect(result.remaining).toEqual([{ root: canonicalB, mode: "aireq" }]);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
@@ -317,7 +317,7 @@ try {
 		const peerUrl = JSON.parse(ready.slice(0, ready.indexOf("\\n"))).url;
 		const server = await ensureWebServer();
 		const reused = (await ensureWebServer()).loopbackUrl === server.loopbackUrl;
-		a = await acquireBrowserProject(path.join(root, "a"), "dev");
+		a = await acquireBrowserProject(path.join(root, "a"), "aireq");
 		b = await acquireBrowserProject(path.join(root, "b"), "webgui");
 		native = await startBootstrap(a.projectId);
 		await a.activate(() => ({ bound: false }), { allowLan: false });
@@ -331,7 +331,7 @@ try {
 		const devInfo = await status(infoUrl(a));
 		const webInfo = await status(infoUrl(b));
 		const nativeUrl = new URL(native.loopbackUrl);
-		const publicDevBase = server.loopbackUrl + "dev/" + a.projectId + "/";
+		const publicDevBase = server.loopbackUrl + "aireq/" + a.projectId + "/";
 		const capability = nativeUrl.pathname.slice(new URL(publicDevBase).pathname.length, -1);
 		const browserHeaders = { Origin: nativeUrl.origin };
 		const missingCapability = await status(publicDevBase + "api/browser", { headers: browserHeaders });
@@ -361,7 +361,7 @@ try {
 		});
 		if (projectsResponse.status !== 200) throw new Error("Process project list is unavailable");
 		const publicProjects = await projectsResponse.json();
-		if (!publicProjects.projects.some(project => project.projectId === a.projectId && project.mode === "dev") ||
+		if (!publicProjects.projects.some(project => project.projectId === a.projectId && project.mode === "aireq") ||
 			!publicProjects.projects.some(project => project.projectId === b.projectId && project.mode === "webgui"))
 			throw new Error("Process project list omitted an owned mode");
 		const publicTargetHidden = !JSON.stringify(publicProjects).includes(capability);
@@ -434,10 +434,10 @@ try {
 test("failed native root cleanup retains real project locks until retry and never releases independent owners", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-project-strict-exit-"));
 	try {
-		await Promise.all(["a", "b", "dev", "peer"].map(name => fs.mkdir(path.join(root, name))));
+		await Promise.all(["a", "b", "aireq", "peer"].map(name => fs.mkdir(path.join(root, name))));
 		const peerScript = `
 import { acquireBrowserProject } from ${registryModule};
-const lease = await acquireBrowserProject(process.env.OWNERSHIP_PROJECT, "dev");
+const lease = await acquireBrowserProject(process.env.OWNERSHIP_PROJECT, "aireq");
 try {
 	console.log(JSON.stringify({ ready: true }));
 	await Bun.stdin.text();
@@ -477,7 +477,7 @@ try {
 		stdin: "pipe", timeout: 35_000, subreaper: true,
 	});
 	let peerDone;
-	let dev;
+	let aireq;
 	let nextOwner;
 	let closeSpy;
 	let failing = true;
@@ -498,7 +498,7 @@ try {
 		peerDone = peer.wait({ allowNonZero: true, allowAbort: true });
 		activateNativeWebGuiComposition();
 		enableWebGuiNativeSessions();
-		dev = await acquireBrowserProject(path.join(root, "dev"), "dev");
+		aireq = await acquireBrowserProject(path.join(root, "aireq"), "aireq");
 		const a = await openWebGuiNativeProject(path.join(root, "a"));
 		const b = await openWebGuiNativeProject(path.join(root, "b"));
 		const model = getTestModel("ascend");
@@ -542,17 +542,17 @@ try {
 			ref?.session === current && readBrowserProject(a.projectId)?.nativeSessions?.has(current);
 		const independentRootSettled = !sibling.agentRegistry.get(sibling.getAgentId());
 		const cleanupCallsAfterFailure = cleanupCalls;
-		const afterFailure = await contend(a.root, "dev");
-		const independentLeaseAfterFailure = await contend(dev.root, "webgui");
+		const afterFailure = await contend(a.root, "aireq");
+		const independentLeaseAfterFailure = await contend(aireq.root, "webgui");
 		const peerAfterFailure = await contend(path.join(root, "peer"), "webgui");
 		failing = false;
 		await closeAllWebGuis();
 		const cleanupCallsAfterRetry = cleanupCalls;
-		const afterRetry = await contend(a.root, "dev");
-		const independentLeaseAfterRetry = await contend(dev.root, "webgui");
+		const afterRetry = await contend(a.root, "aireq");
+		const independentLeaseAfterRetry = await contend(aireq.root, "webgui");
 		const peerAfterRetry = await contend(path.join(root, "peer"), "webgui");
 		const projectsAfterRetry = listBrowserProjects().map(({ root, mode }) => ({ root, mode }));
-		nextOwner = await acquireBrowserProject(a.root, "dev");
+		nextOwner = await acquireBrowserProject(a.root, "aireq");
 		await closeAllWebGuis();
 		const newOwnerAfterRepeatedExit = await contend(a.root, "webgui");
 		return {
@@ -566,7 +566,7 @@ try {
 		closeSpy?.mockRestore();
 		try {
 			await closeAllWebGuis();
-			await Promise.all([nextOwner?.close(), dev?.close()]);
+			await Promise.all([nextOwner?.close(), aireq?.close()]);
 			await closeWebServer();
 		} finally {
 			auth.close();
@@ -587,14 +587,14 @@ try {
 		expect(result.afterRetry).toMatchObject({
 			outcome: "acquired",
 			root: await fs.realpath(path.join(root, "a")),
-			mode: "dev",
+			mode: "aireq",
 		});
 		expectOccupied(result.independentLeaseAfterFailure);
 		expectOccupied(result.independentLeaseAfterRetry);
 		expectOccupied(result.peerAfterFailure);
 		expectOccupied(result.peerAfterRetry);
 		expectOccupied(result.newOwnerAfterRepeatedExit);
-		expect(result.projectsAfterRetry).toEqual([{ root: await fs.realpath(path.join(root, "dev")), mode: "dev" }]);
+		expect(result.projectsAfterRetry).toEqual([{ root: await fs.realpath(path.join(root, "aireq")), mode: "aireq" }]);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
@@ -691,10 +691,10 @@ test("borrowed native exit retries strict async cleanup without disposing the or
 		const pendingAfterFailure = current.hasUnsettledAsyncJobTree();
 		const routeRetained = registry.get(current.getAgentId()) === ref &&
 			ref?.session === current && readBrowserProject(handle.projectId)?.nativeSessions?.has(current);
-		const afterFailure = await contend(cwd, "dev");
+		const afterFailure = await contend(cwd, "aireq");
 		finishOwnedCleanup.resolve();
 		await closeAllWebGuis();
-		const afterRetry = await contend(cwd, "dev");
+		const afterRetry = await contend(cwd, "aireq");
 		const pendingAfterRetry = current.hasUnsettledAsyncJobTree();
 		const independentJobRunning = manager.getJob(independentJob)?.status === "running" &&
 			!manager.getJob(independentJob)?.abortController.signal.aborted;
@@ -733,7 +733,7 @@ test("borrowed native exit retries strict async cleanup without disposing the or
 		expect(result.pendingAfterFailure).toBe(true);
 		expect(result.routeRetained).toBe(true);
 		expectOccupied(result.afterFailure);
-		expect(result.afterRetry).toMatchObject({ outcome: "acquired", root: await fs.realpath(project), mode: "dev" });
+		expect(result.afterRetry).toMatchObject({ outcome: "acquired", root: await fs.realpath(project), mode: "aireq" });
 		expect(result.cleanupCalls).toBe(1);
 		expect(result.pendingAfterRetry).toBe(false);
 		expect(result.independentJobRunning).toBe(true);
@@ -857,10 +857,10 @@ test("failed child SDK startup remains owned by its WebGUI root until resource c
 		const exitErrors = exitFailure ? errors(exitFailure) : [];
 		const childRouteRetained = Boolean(childRef?.session) && registry.get(childId) === childRef;
 		const parentClosesAfterFailedExit = parentClose.mock.calls.length;
-		const afterFailure = await contend(cwd, "dev");
+		const afterFailure = await contend(cwd, "aireq");
 		failCleanup = false;
 		await closeAllWebGuis();
-		const afterRetry = await contend(cwd, "dev");
+		const afterRetry = await contend(cwd, "aireq");
 		return {
 			startupErrors, exitErrors, parentRouteRetained: Boolean(parentRouteRetained),
 			childRouteRetained, parentToolRead, parentClosesAfterChildFailure,
@@ -894,7 +894,7 @@ test("failed child SDK startup remains owned by its WebGUI root until resource c
 		expect(result.failedCleanupCalls).toBe(3);
 		expect(result.failedChildCloses).toBe(1);
 		expectOccupied(result.afterFailure);
-		expect(result.afterRetry).toMatchObject({ outcome: "acquired", root: await fs.realpath(project), mode: "dev" });
+		expect(result.afterRetry).toMatchObject({ outcome: "acquired", root: await fs.realpath(project), mode: "aireq" });
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}

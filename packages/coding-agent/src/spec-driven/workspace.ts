@@ -4,16 +4,16 @@ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { type FileLockHandle, isEnoent, tryAcquireFileLock } from "@oh-my-pi/pi-utils";
 import { writeFileAtomically } from "../utils/atomic-file";
 import { assertSpecWritePath } from "./artifacts";
-import { loadDevRequirements, occupiesDevDevelopment, saveDevRequirementWithOwner } from "./records";
-import type { DevRequirementRecord, DevStoredRequirement } from "./types";
+import { loadAIReqRequirements, occupiesAIReqAIReqelopment, saveAIReqRequirementWithOwner } from "./records";
+import type { AIReqRequirementRecord, AIReqStoredRequirement } from "./types";
 
-export interface DevWorkspaceIdentity {
+export interface AIReqWorkspaceIdentity {
 	root: string;
 	branch: string | null;
 }
 
 /** A process lease is not the development slot: the latter is derived from Git records. */
-export class DevWorkspace {
+export class AIReqWorkspace {
 	readonly localDirectory: string;
 	#lease: FileLockHandle | undefined;
 	#pending: Promise<void> = Promise.resolve();
@@ -23,47 +23,47 @@ export class DevWorkspace {
 		readonly branch: string | null,
 		lease: FileLockHandle,
 	) {
-		this.localDirectory = path.join(root, ".omp", "dev-workbench");
+		this.localDirectory = path.join(root, ".omp", "aireq-workbench");
 		this.#lease = lease;
 	}
 
 	/** Read-only identity discovery never takes ownership or creates local state. */
-	static async resolve(cwd: string): Promise<DevWorkspaceIdentity> {
+	static async resolve(cwd: string): Promise<AIReqWorkspaceIdentity> {
 		const entered = await fs.realpath(cwd);
 		const repo = vcs.git(entered);
 		const root = await fs.realpath(repo?.info().repoRoot ?? entered);
 		return { root, branch: repo ? ((await repo.currentBranch()) ?? null) : null };
 	}
 
-	static async acquire(cwd: string): Promise<DevWorkspace> {
-		const { root, branch } = await DevWorkspace.resolve(cwd);
-		const relative = ".omp/dev-workbench/owner";
+	static async acquire(cwd: string): Promise<AIReqWorkspace> {
+		const { root, branch } = await AIReqWorkspace.resolve(cwd);
+		const relative = ".omp/aireq-workbench/owner";
 		await assertSpecWritePath(root, relative);
-		await fs.mkdir(path.join(root, ".omp", "dev-workbench"), { recursive: true });
+		await fs.mkdir(path.join(root, ".omp", "aireq-workbench"), { recursive: true });
 		await assertSpecWritePath(root, relative);
 		const lease = tryAcquireFileLock(path.join(root, relative));
-		if (!lease) throw new Error(`Dev 工作区已被占用：${root}`);
-		return new DevWorkspace(root, branch, lease);
+		if (!lease) throw new Error(`AIReq 工作区已被占用：${root}`);
+		return new AIReqWorkspace(root, branch, lease);
 	}
 
 	assertOwned(): void {
-		if (!this.#lease) throw new Error("Dev 工作区控制权已释放");
+		if (!this.#lease) throw new Error("AIReq 工作区控制权已释放");
 	}
 
 	async assertCurrentBranch(): Promise<void> {
 		this.assertOwned();
-		const current = await DevWorkspace.resolve(this.root);
+		const current = await AIReqWorkspace.resolve(this.root);
 		if (current.root !== this.root || current.branch !== this.branch)
-			throw new Error("Dev 工作区分支已改变；请结清当前操作并重新准入");
+			throw new Error("AIReq 工作区分支已改变；请结清当前操作并重新准入");
 	}
 
 	async assertDevelopmentAvailable(requirementId?: string): Promise<void> {
 		await this.assertCurrentBranch();
 		if (!this.branch) throw new Error("开发需求需要 Git 仓库中的既有当前分支");
-		const records = await loadDevRequirements(this.root);
+		const records = await loadAIReqRequirements(this.root);
 		const occupant = records.find(
 			({ record }) =>
-				record.requirementId !== requirementId && record.branch === this.branch && occupiesDevDevelopment(record),
+				record.requirementId !== requirementId && record.branch === this.branch && occupiesAIReqAIReqelopment(record),
 		);
 		if (occupant) throw new Error(`开发名额已被占用：${occupant.record.requirementId}`);
 		await this.#assertCancellationJournalsSettled(records, requirementId);
@@ -85,8 +85,8 @@ export class DevWorkspace {
 		}
 	}
 
-	saveRequirement(record: DevRequirementRecord, expectedRecordVersion: string | null): Promise<DevStoredRequirement> {
-		return this.exclusive(() => saveDevRequirementWithOwner(this, record, expectedRecordVersion));
+	saveRequirement(record: AIReqRequirementRecord, expectedRecordVersion: string | null): Promise<AIReqStoredRequirement> {
+		return this.exclusive(() => saveAIReqRequirementWithOwner(this, record, expectedRecordVersion));
 	}
 
 	async readLocal<T>(name: string, validate: (value: unknown) => T): Promise<T | null> {
@@ -107,7 +107,7 @@ export class DevWorkspace {
 		return this.exclusive(async () => {
 			const file = this.#localFile(name);
 			const json = JSON.stringify(value);
-			if (json === undefined) throw new TypeError("Dev local metadata must be JSON serializable");
+			if (json === undefined) throw new TypeError("AIReq local metadata must be JSON serializable");
 			await assertSpecWritePath(this.root, file);
 			await writeFileAtomically(path.join(this.root, file), `${json}\n`);
 		});
@@ -118,8 +118,8 @@ export class DevWorkspace {
 		this.#lease = undefined;
 	}
 
-	async #assertCancellationJournalsSettled(records: DevStoredRequirement[], requirementId?: string): Promise<void> {
-		const directory = ".omp/dev-workbench/cancellations";
+	async #assertCancellationJournalsSettled(records: AIReqStoredRequirement[], requirementId?: string): Promise<void> {
+		const directory = ".omp/aireq-workbench/cancellations";
 		await assertSpecWritePath(this.root, `${directory}/admission`);
 		let names: string[];
 		try {
@@ -130,21 +130,21 @@ export class DevWorkspace {
 		}
 		const object = (value: unknown): Record<string, unknown> => {
 			if (value === null || typeof value !== "object" || Array.isArray(value))
-				throw new Error("Dev cancellation settlement journal is malformed");
+				throw new Error("AIReq cancellation settlement journal is malformed");
 			return value as Record<string, unknown>;
 		};
 		for (const name of names) {
 			if (!name.endsWith(".json")) continue;
-			if (!/^[a-zA-Z0-9_-]+\.json$/.test(name)) throw new Error("Unsafe Dev cancellation journal identity");
+			if (!/^[a-zA-Z0-9_-]+\.json$/.test(name)) throw new Error("Unsafe AIReq cancellation journal identity");
 			const relative = `${directory}/${name}`;
 			await assertSpecWritePath(this.root, relative);
 			const journal = object(JSON.parse(await fs.readFile(path.join(this.root, relative), "utf8")));
 			if (typeof journal.started !== "boolean" || typeof journal.complete !== "boolean")
-				throw new Error("Dev cancellation settlement journal lacks completion facts");
+				throw new Error("AIReq cancellation settlement journal lacks completion facts");
 			if (!journal.started || journal.complete) continue;
 			const binding = object(object(object(journal.plan).preview).binding);
 			if (typeof binding.requirementId !== "string")
-				throw new Error("Dev cancellation journal lacks requirement identity");
+				throw new Error("AIReq cancellation journal lacks requirement identity");
 			if (binding.requirementId === requirementId) continue;
 			const record = records.find(item => item.record.requirementId === binding.requirementId)?.record;
 			if (record && record.branch !== this.branch) continue;
@@ -152,8 +152,8 @@ export class DevWorkspace {
 		}
 	}
 
-	async #assertCancellationsSettled(records: DevStoredRequirement[], requirementId?: string): Promise<void> {
-		const directory = ".omp/dev-workbench/git-operations";
+	async #assertCancellationsSettled(records: AIReqStoredRequirement[], requirementId?: string): Promise<void> {
+		const directory = ".omp/aireq-workbench/git-operations";
 		await assertSpecWritePath(this.root, `${directory}/admission`);
 		let operations: string[];
 		try {
@@ -164,11 +164,11 @@ export class DevWorkspace {
 		}
 		const object = (value: unknown): Record<string, unknown> => {
 			if (value === null || typeof value !== "object" || Array.isArray(value))
-				throw new Error("Dev cancellation recovery metadata is malformed");
+				throw new Error("AIReq cancellation recovery metadata is malformed");
 			return value as Record<string, unknown>;
 		};
 		for (const operationId of operations) {
-			if (!/^[a-zA-Z0-9_-]+$/.test(operationId)) throw new Error("Unsafe Dev operation recovery identity");
+			if (!/^[a-zA-Z0-9_-]+$/.test(operationId)) throw new Error("Unsafe AIReq operation recovery identity");
 			const relative = `${directory}/${operationId}/receipt.json`;
 			await assertSpecWritePath(this.root, relative);
 			let content: string;
@@ -183,7 +183,7 @@ export class DevWorkspace {
 			if (preview.operation !== "cancel") continue;
 			const binding = object(preview.binding);
 			if (typeof binding.requirementId !== "string")
-				throw new Error("Dev cancellation recovery lacks requirement identity");
+				throw new Error("AIReq cancellation recovery lacks requirement identity");
 			if (binding.requirementId === requirementId) continue;
 			const record = records.find(item => item.record.requirementId === binding.requirementId)?.record;
 			if (record && record.branch !== this.branch) continue;
@@ -200,7 +200,7 @@ export class DevWorkspace {
 	}
 
 	#localFile(name: string): string {
-		if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name)) throw new Error(`Unsafe Dev local metadata name: ${name}`);
-		return `.omp/dev-workbench/${name}.json`;
+		if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name)) throw new Error(`Unsafe AIReq local metadata name: ${name}`);
+		return `.omp/aireq-workbench/${name}.json`;
 	}
 }

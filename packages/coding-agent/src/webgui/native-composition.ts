@@ -1,4 +1,4 @@
-import { createDevWorkbenchHost, DevWorkbenchStartError, getOrStartDevWorkbench } from "../dev-workbench/host";
+import { createAIReqWorkbenchHost, AIReqWorkbenchStartError, getOrStartAIReqWorkbench } from "../aireq-workbench/host";
 import { getAgentDir, getProjectDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
 import { createAgentSession } from "../sdk";
@@ -52,9 +52,9 @@ const ports: WebGuiNativePorts = {
 	closeAttachments: closeNativeAttachments,
 	closeSketches: closeNativeWebGuiSketches,
 	fetchSketch: fetchNativeWebGuiSketch,
-	createDevHost: createDevWorkbenchHost,
-	startDevHost: getOrStartDevWorkbench,
-	recoverDevHost: error => (error instanceof DevWorkbenchStartError ? error.host : undefined),
+	createAIReqHost: createAIReqWorkbenchHost,
+	startAIReqHost: getOrStartAIReqWorkbench,
+	recoverAIReqHost: error => (error instanceof AIReqWorkbenchStartError ? error.host : undefined),
 	beginHandoff: beginWebGuiConnectionHandoff,
 	retireConnections: retireWebGuiConnectionsForHandoff,
 };

@@ -21,28 +21,28 @@ export interface SpecApproval {
 	userReply: string;
 	candidateId?: string;
 }
-export type DevStage = "business" | "requirements" | "solution" | "planning" | "executing" | "st" | "pr" | "testing";
-export type DevHumanMark = "st-complete" | "pr-submitted" | "pr-merged" | "tested";
-export type DevLifecycle = "active" | "completed" | "cancelling" | "cancelled";
-export interface DevPerson {
+export type AIReqStage = "business" | "requirements" | "solution" | "planning" | "executing" | "st" | "pr" | "testing";
+export type AIReqHumanMark = "st-complete" | "pr-submitted" | "pr-merged" | "tested";
+export type AIReqLifecycle = "active" | "completed" | "cancelling" | "cancelled";
+export interface AIReqPerson {
 	name: string;
 	source: "local" | "collab";
 	peerId?: string;
 }
-export interface DevMaterialRef extends SpecFileVersion {
+export interface AIReqMaterialRef extends SpecFileVersion {
 	id: string;
 	kind: "business" | "proposal" | "delta" | "solution" | "plan" | "report";
 }
-export interface DevDecision {
+export interface AIReqDecision {
 	operationId: string;
-	stage: DevStage;
-	actor: DevPerson;
+	stage: AIReqStage;
+	actor: AIReqPerson;
 	at: string;
 	userReply: string;
 	files: SpecFileVersion[];
 	candidateId?: string;
 }
-export interface DevPrRef {
+export interface AIReqPrRef {
 	forge: "github" | "gitlab";
 	repository: string;
 	number: number;
@@ -50,15 +50,15 @@ export interface DevPrRef {
 	sourceRef: string;
 	baseRef: string;
 }
-export interface DevPrFact {
-	pr: DevPrRef;
+export interface AIReqPrFact {
+	pr: AIReqPrRef;
 	state: "open" | "closed" | "merged";
 	headSha: string;
 	baseSha: string;
 	mergeSha: string | null;
 	observedAt: string;
 }
-export interface DevGitTarget {
+export interface AIReqGitTarget {
 	localSourceRef: string;
 	sourceRepository: string;
 	sourceRef: string;
@@ -69,18 +69,18 @@ export interface DevGitTarget {
 	targetRef: string;
 	observedTip: string | null;
 }
-export type DevGitAction = DevHumanMark | "set-test-state" | "link-fix" | "commit" | "cancel";
-export interface DevGitOperation {
+export type AIReqGitAction = AIReqHumanMark | "set-test-state" | "link-fix" | "commit" | "cancel";
+export interface AIReqGitOperation {
 	operationId: string;
-	kind: DevGitAction;
-	actor: DevPerson;
+	kind: AIReqGitAction;
+	actor: AIReqPerson;
 	at: string;
 	files: SpecFileVersion[];
-	target: DevGitTarget;
+	target: AIReqGitTarget;
 	authorizedCommits: string[];
 	knownCommitShas: string[];
 }
-export interface DevSolutionBasis {
+export interface AIReqSolutionBasis {
 	solutionVersion: string;
 	candidateIds: string[];
 	usableCandidateIds: string[];
@@ -88,33 +88,33 @@ export interface DevSolutionBasis {
 	sourceSessionId: string;
 	sourceEntryIds: string[];
 }
-export interface DevSyncRevision {
+export interface AIReqSyncRevision {
 	operationId: string;
 	files: SpecFileVersion[];
 	mainSpecs: Array<{ path: string; version: string | null }>;
 	archivedChangePath: string | null;
 	progress: SpecCloseProgress;
 }
-export interface DevRequirementRecord {
+export interface AIReqRequirementRecord {
 	schemaVersion: 1;
 	requirementId: string;
 	changeId: string;
 	branch: string;
-	stage: DevStage;
-	lifecycle: DevLifecycle;
-	materials: DevMaterialRef[];
-	decisions: DevDecision[];
-	marks: Partial<Record<DevHumanMark, DevDecision>>;
-	solutionBasis: DevSolutionBasis | null;
+	stage: AIReqStage;
+	lifecycle: AIReqLifecycle;
+	materials: AIReqMaterialRef[];
+	decisions: AIReqDecision[];
+	marks: Partial<Record<AIReqHumanMark, AIReqDecision>>;
+	solutionBasis: AIReqSolutionBasis | null;
 	report: { development: SpecApproval | null; st: SpecFileVersion | null };
-	syncRevisions: DevSyncRevision[];
-	gitOperations: DevGitOperation[];
-	pr: DevPrFact | null;
+	syncRevisions: AIReqSyncRevision[];
+	gitOperations: AIReqGitOperation[];
+	pr: AIReqPrFact | null;
 	testing: "not-started" | "in-progress" | "failed" | "retest-pending" | "tested";
 	relatedRequirementIds: string[];
 }
-export interface DevStoredRequirement {
-	record: DevRequirementRecord;
+export interface AIReqStoredRequirement {
+	record: AIReqRequirementRecord;
 	/** SHA-256 of the actual JSON bytes; never stored inside that JSON. */
 	recordVersion: string;
 }

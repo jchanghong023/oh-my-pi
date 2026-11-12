@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
-import type { DevNativeSessionRef, DevRequirementContent } from "../../src/dev-workbench/workflow-types";
-import { WorkflowConsumerFixture, pollWorkflow, workflowNativeContext } from "../dev-workbench/workflow-fixture";
+import type { AIReqNativeSessionRef, AIReqRequirementContent } from "../../src/aireq-workbench/workflow-types";
+import { WorkflowConsumerFixture, pollWorkflow, workflowNativeContext } from "../aireq-workbench/workflow-fixture";
 import { createWorkflowStage, successfulWorkflowReply } from "./tui-materials-cases";
 
 test("cold workflow reads survive missing native history but exact recovery rejects without replay", async () => {
@@ -56,7 +56,7 @@ test("cold workflow reads survive missing native history but exact recovery reje
 		}),
 	});
 	expect(sent.ok).toBe(true);
-	const native = ((await sent.json()) as { session: DevNativeSessionRef }).session;
+	const native = ((await sent.json()) as { session: AIReqNativeSessionRef }).session;
 	await pollWorkflow(
 		() => process.view(projectId),
 		value =>
@@ -105,7 +105,7 @@ test("one active SR rejects a sibling start without reserving a second worktree 
 				reply.tool?.name.replace(/^_/u, "") === "write" &&
 				typeof reply.tool.args.content === "string"
 			) {
-				const content = JSON.parse(reply.tool.args.content) as DevRequirementContent;
+				const content = JSON.parse(reply.tool.args.content) as AIReqRequirementContent;
 				const first = content.srs[0]!;
 				const id = `${first.id}-sibling`;
 				content.srs.push({
@@ -113,7 +113,7 @@ test("one active SR rejects a sibling start without reserving a second worktree 
 					id,
 					title: `${first.title} sibling`,
 					document: {
-						path: `docs/dev/requirements/${(workflowNativeContext(request)!.binding as { irId: string }).irId}/srs/${id}.md`,
+						path: `docs/aireq/requirements/${(workflowNativeContext(request)!.binding as { irId: string }).irId}/srs/${id}.md`,
 						content: first.document.content,
 					},
 				});

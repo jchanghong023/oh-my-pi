@@ -1,27 +1,27 @@
-# Replace Dev TUI with Browser Workbench Implementation Plan
+# Replace AIReq TUI with Browser Workbench Implementation Plan
 
-> 历史实施记录：下文目标、约束、步骤及验收只对应当时版本，已被[最新 Dev 规则](../../../docs-zh-CN/spec-driven-orchestration.md)中冲突条款替代，不再作为新实现指令，也不证明新规则已验收。本次保留历史证据，仅更新文档，不执行本计划。
+> 历史实施记录：下文目标、约束、步骤及验收只对应当时版本，已被[最新 AIReq 规则](../../../docs-zh-CN/spec-driven-orchestration.md)中冲突条款替代，不再作为新实现指令，也不证明新规则已验收。本次保留历史证据，仅更新文档，不执行本计划。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 一次性以真实浏览器工作台替换 Dev 专属 TUI，完整交付新需求的八阶段、五类原生 Agent、offline Collab、需求级 Git／PR 操作和人工决定；保留普通 OMP TUI 与其他独立能力。
+**Goal:** 一次性以真实浏览器工作台替换 AIReq 专属 TUI，完整交付新需求的八阶段、五类原生 Agent、offline Collab、需求级 Git／PR 操作和人工决定；保留普通 OMP TUI 与其他独立能力。
 
-**Architecture:** 同一 OMP 宿主持有 `SpecDrivenController`、原生 runtime／AgentSession 和长寿命 Bun 工作台服务；浏览器只呈现快照、订阅原生事件、提交明确动作。业务逻辑留在 `spec-driven/`，传输、网页会话适配和宿主生命周期集中于 `dev-workbench/`；复用 collab-web React transcript、Markdown、工具卡及 Composer，不建立第二聊天／执行引擎。每需求最小业务记录纳入 Git，本地原生会话和操作恢复资料保持本地。使用现有 native VCS 和 Forge runner，不调用整 index 提交 TUI，不创建分支或 worktree。
+**Architecture:** 同一 OMP 宿主持有 `SpecDrivenController`、原生 runtime／AgentSession 和长寿命 Bun 工作台服务；浏览器只呈现快照、订阅原生事件、提交明确动作。业务逻辑留在 `spec-driven/`，传输、网页会话适配和宿主生命周期集中于 `aireq-workbench/`；复用 collab-web React transcript、Markdown、工具卡及 Composer，不建立第二聊天／执行引擎。每需求最小业务记录纳入 Git，本地原生会话和操作恢复资料保持本地。使用现有 native VCS 和 Forge runner，不调用整 index 提交 TUI，不创建分支或 worktree。
 
 **Tech Stack:** Bun、TypeScript、React、现有 `@oh-my-pi/pi-wire`／CollabSocket／native crypto、`@oh-my-pi/pi-natives/vcs`、Rust `pi-vcs`／N-API、包内 OpenSpec 1.15.0、Superpowers 7.0.1、既有 Team／Goal／权限与资源插件、Bun 定向测试及隔离 Chromium 消费者测试。
 
-**Spec:** `openspec/changes/replace-dev-tui-with-browser-workbench/proposal.md`；该变更下 `specs/dev-browser-workbench/spec.md`、`specs/spec-driven-orchestration/spec.md`、`specs/personal-commands/spec.md`；`docs-zh-CN/lander-sailor-six-stage-agent-workflow.md`，特别是 4.1、4.4—4.8 节。需求与既有主规格冲突时，以本次已批准变更的明确替代条款为准。
+**Spec:** `openspec/changes/replace-dev-tui-with-browser-workbench/proposal.md`；该变更下 `specs/aireq-browser-workbench/spec.md`、`specs/spec-driven-orchestration/spec.md`、`specs/personal-commands/spec.md`；`docs-zh-CN/lander-sailor-six-stage-agent-workflow.md`，特别是 4.1、4.4—4.8 节。需求与既有主规格冲突时，以本次已批准变更的明确替代条款为准。
 
 **Status:** 实施及 Win32 x64／Bun 1.4.4 定向验收完成。参考四区、默认深色、右侧原生命令／技能输入已由真实 Chrome 观察并执行；八阶段 PR／独立测试／关联修复／复测／只读、未合入取消与原生问答／权限／附件场景均已有有效通过证据。普通 TUI 独占进入退出、原生 Goal、普通会话历史、Collab及未受影响的 Git／native 结果复用；不重复跑已有效范围。源码、实际 npm CLI 与 Windows 独立二进制均已运行验证，具体来源和限制见账本。未执行 fulltest／slowtest、真实模型／外部 Forge 凭据／真实桌面 opener或其他平台验收；未 commit／push／发布，未执行 OpenSpec sync／archive。
 
 ## Global Constraints
 
-- 一次性切换，只接纳本次新流程。删除旧 Dev UI、终端子操作、旧状态恢复／迁移与兼容分支；不删除已有用户材料、代码或 Git 历史。内部依赖波次不是分期交付，不允许只交网页外壳或保留双轨。
+- 一次性切换，只接纳本次新流程。删除旧 AIReq UI、终端子操作、旧状态恢复／迁移与兼容分支；不删除已有用户材料、代码或 Git 历史。内部依赖波次不是分期交付，不允许只交网页外壳或保留双轨。
 - 八个业务阶段与五个 Agent 角色分开；ST／PR／测试复用执行会话辅助而非新增三个专有 Agent。导入业务材料时允许没有业务 Actor／recipient。读取记录、查看阶段、打开页面均不启动模型、Team 或 Goal。
 - 保留真实原生工具、MCP、扩展、模型设置、技能发现／按需授权、上下文、附件、队列、问答、审批、流式工具、子代理、Team 与 Goal；不能为浏览器采用裸 SDK 默认值、模拟 TUI context 或虚假的“执行成功”。当前资源发现规则按当前规格保留，不照搬旧计划示例中的过期发现集合。
-- `/dev` 进入独占模式：普通任务未结清时拒绝进入，不自动终止普通工作；进入后当前TUI只接受再次 `/dev` 退出，不与网页同时执行普通输入、命令或快捷操作。退出先按原生机制停止并结清Dev工作、关闭服务，再恢复原普通会话；不取消需求、不撤销Git。关页不退出。借用原root及Provider／MCP，删除只为普通 `/new`／`/move`／dispose并存新增的快照、克隆或线程桥。
-- Dev逻辑留在独立模块，公共层仅保留确实必需且默认不启用的接口；Collab通过网页适配器复用原引擎，普通调用恢复原接口。不新增网页全局Team／模型角色配置入口，继续原配置方式。仅完成明确需求和已证实直接缺陷，不顺带重构、扩展配置、抽象或兼容分支。
-- 呈现参考 `runs/dev-workbench-demo/index.html` 和用户参考图的信息层级，不逐像素复制：左需求列表、中央材料上方八阶段、中央只读材料、右共享AI会话及底部输入。Dev默认深色，不改变普通OMP默认主题；只呈现当前进行阶段适用的必要控制，确认／结果就近显示，不铺开所有动作，不提供原生命令下拉框、JSON参数／状态／调试面板或内部hash控制台。输入复用现有内置斜杠命令和技能，不增加配置／权限／聊天引擎。
+- `/aireq` 进入独占模式：普通任务未结清时拒绝进入，不自动终止普通工作；进入后当前TUI只接受再次 `/aireq` 退出，不与网页同时执行普通输入、命令或快捷操作。退出先按原生机制停止并结清AIReq工作、关闭服务，再恢复原普通会话；不取消需求、不撤销Git。关页不退出。借用原root及Provider／MCP，删除只为普通 `/new`／`/move`／dispose并存新增的快照、克隆或线程桥。
+- AIReq逻辑留在独立模块，公共层仅保留确实必需且默认不启用的接口；Collab通过网页适配器复用原引擎，普通调用恢复原接口。不新增网页全局Team／模型角色配置入口，继续原配置方式。仅完成明确需求和已证实直接缺陷，不顺带重构、扩展配置、抽象或兼容分支。
+- 呈现参考 `runs/aireq-workbench-demo/index.html` 和用户参考图的信息层级，不逐像素复制：左需求列表、中央材料上方八阶段、中央只读材料、右共享AI会话及底部输入。AIReq默认深色，不改变普通OMP默认主题；只呈现当前进行阶段适用的必要控制，确认／结果就近显示，不铺开所有动作，不提供原生命令下拉框、JSON参数／状态／调试面板或内部hash控制台。输入复用现有内置斜杠命令和技能，不增加配置／权限／聊天引擎。
 - 未选择需求时引导新建需求，不默认进入本地业务写作；本地写作须明确选择。无目标且未加入真实Collab会话时输入不可发送；打开页面不启动Agent或自动join。
 - 第一至第五阶段 Next 确认真实材料及其字节版本；方案多候选须明确选择，单候选自动采用唯一 ID。Back 只相邻退回并失效相关确认，不撤销 Git／文件、不自动调用模型。第五阶段只交 ST，只有第七阶段显式同步归档；归档成功不是终态。
 - 第六至第八阶段人员点击决定完成；测试失败、未运行、限制照实保留，不新增全部 ST 通过／AI 审核／独立审查程序门禁。人员原始决定不由聊天、AI、PR 查询或退出码代签。
@@ -64,35 +64,35 @@
 | `packages/coding-agent/src/spec-driven/actors.ts`、`runtime.ts`、`skill-policy.ts` | Modify；真实角色会话、历史／来源恢复、递归权限和原生交互，T04；技能规则只做新宿主绑定所需修改 |
 | `crates/pi-vcs/src/types.rs`、`crates/pi-vcs/src/git/{mutate.rs,cli.rs,patch.rs}`、`crates/pi-natives/src/vcs.rs` | Modify；scoped commit／index协调、真实remote ref查询、限定前像patch部分结果，复用原生实现，T05 |
 | `packages/natives/native/index.d.ts` | Modify generated；通过既有binding生成链同步声明，不手写声明代替native实现，T05 |
-| `packages/natives/test/dev-workbench-vcs.test.ts` | Create；只覆盖本次新增VCS消费者，精确接入fork选择，不将全部通用VCS套件纳入日常门禁，T05／T14；现有`vcs.test.ts`作为参考不扩大默认范围 |
+| `packages/natives/test/aireq-workbench-vcs.test.ts` | Create；只覆盖本次新增VCS消费者，精确接入fork选择，不将全部通用VCS套件纳入日常门禁，T05／T14；现有`vcs.test.ts`作为参考不扩大默认范围 |
 | `packages/coding-agent/src/spec-driven/git.ts` | Create；确认快照、归属范围、固定 SHA push、operation 部分成功，T06 |
 | `packages/coding-agent/src/spec-driven/forge.ts` | Create；复用 `utils/github.ts`、`utils/gitlab.ts`、`utils/forge-cli.ts` 的既有 runner，明确 PR 身份／事实／取消，T06；不新增 Forge 框架 |
 | `packages/coding-agent/src/spec-driven/cancel.ts` | Create；完整撤销、PR 竞态、补偿提交与取消 tombstone，T07 |
-| `packages/coding-agent/src/main.ts`、`packages/coding-agent/src/dev-workbench/host.ts` | Reuse restored ordinary main／Create independent Dev host；Dev bootstrap及宿主适配留在host模块，复用普通启动公共能力，持有root native session，不启动普通TUI，T08 |
-| `packages/coding-agent/src/dev-workbench/server.ts`、`native-ui.ts` | Create；同源 HTTP／WS、真实原生 UI 交互 seam、页面订阅生命周期，T08 |
-| `packages/collab-web/src/dev-workbench/{main.tsx,Workbench.tsx,client.ts,styles.css}`、`packages/collab-web/dev-workbench.html` | Create；独立工作台入口与四区 UI，T09 |
+| `packages/coding-agent/src/main.ts`、`packages/coding-agent/src/aireq-workbench/host.ts` | Reuse restored ordinary main／Create independent AIReq host；AIReq bootstrap及宿主适配留在host模块，复用普通启动公共能力，持有root native session，不启动普通TUI，T08 |
+| `packages/coding-agent/src/aireq-workbench/server.ts`、`native-ui.ts` | Create；同源 HTTP／WS、真实原生 UI 交互 seam、页面订阅生命周期，T08 |
+| `packages/collab-web/src/aireq-workbench/{main.tsx,Workbench.tsx,client.ts,styles.css}`、`packages/collab-web/aireq-workbench.html` | Create；独立工作台入口与四区 UI，T09 |
 | `packages/collab-web/src/components/shell/Composer.tsx`、`packages/collab-web/src/components/agents/AgentDrawer.tsx`、`packages/collab-web/src/app.tsx`、`packages/collab-web/src/lib/client.ts` | Modify；最小异步发送／agent端口、共享session面及生产帧reducer提取，普通Collab App保持既有边界，T09 |
-| `packages/coding-agent/src/dev-workbench/collab.ts` | Create；每浏览器薄 native guest transport，T10 |
+| `packages/coding-agent/src/aireq-workbench/collab.ts` | Create；每浏览器薄 native guest transport，T10 |
 | `packages/coding-agent/src/collab/host.ts`、`controller.ts` | Modify；只提取可供工作台绑定原生会话的最小宿主端口／业务动作 seam，T10；房间与 Relay 仍归现有 Collab |
 | `packages/coding-agent/src/commands/dev.ts` | Create；懒加载 CLI 入口、有效环境、长寿命宿主，T11 |
-| `packages/coding-agent/src/cli-commands.ts`、`cli/command-help.ts`、`slash-commands/builtin-spec-driven.ts`、`slash-commands/types.ts`、`utils/open.ts` | Modify；双启动入口、帮助／拒绝旧参数、可观察 opener，T11；旧模式方法由 T12 清除 |
-| `packages/coding-agent/src/modes/interactive-mode.ts`、`modes/types.ts`、`modes/controllers/input-controller.ts`、`command-controller.ts`、`session-focus-controller.ts`、`modes/utils/ui-helpers.ts` | Modify；只删除 Dev TUI 接线，保留普通输入、focus、compaction、菜单、widget 容器，T12 |
-| `packages/coding-agent/scripts/dev-workbench-resources.ts`、`packages/coding-agent/src/dev-workbench/assets.ts` | Create；单一 content-addressed UI 载荷与 Bun 插件，T13 |
+| `packages/coding-agent/src/cli-commands.ts`、`cli/command-help.ts`、`slash-commands/builtin-aireq.ts`、`slash-commands/types.ts`、`utils/open.ts` | Modify；双启动入口、帮助／拒绝旧参数、可观察 opener，T11；旧模式方法由 T12 清除 |
+| `packages/coding-agent/src/modes/interactive-mode.ts`、`modes/types.ts`、`modes/controllers/input-controller.ts`、`command-controller.ts`、`session-focus-controller.ts`、`modes/utils/ui-helpers.ts` | Modify；只删除 AIReq TUI 接线，保留普通输入、focus、compaction、菜单、widget 容器，T12 |
+| `packages/coding-agent/scripts/aireq-workbench-resources.ts`、`packages/coding-agent/src/aireq-workbench/assets.ts` | Create；单一 content-addressed UI 载荷与 Bun 插件，T13 |
 | `packages/coding-agent/scripts/{bundle-dist.ts,compile-binary.ts,build-binary.ts}`、`packages/coding-agent/package.json`、`packages/collab-web/package.json`、根`package.json` | Modify；source准备／postinstall与npm／binary共用资源生成链和白名单，T13 |
-| `packages/coding-agent/src/dev-workbench/assets.generated.json` | Create generated；同一生成器输出的内容寻址UI载荷，源码／SDK延迟读取，打包插件内嵌，T13 |
-| `packages/coding-agent/test/spec-driven/{orchestrator,controller,artifacts,runtime,actors,actors-descendants,workspace,command,skill-policy,resources}.test.ts`、`packages/coding-agent/test/spec-driven/{process,process-resources}.e2e.test.ts` | Modify；真实文件名的原生／独立资源消费者，Dev公开驱动迁移至原生消费者，T01—T04、T11、T14 |
-| `packages/coding-agent/test/dev-workbench/{records,git,cancel,host,server,collab,cli,resources}.test.ts` | Create；各片真实最小 fixture，T01、T06—T08、T10、T11、T13 |
-| `packages/coding-agent/test/dev-workbench/{browser,process}.e2e.test.ts`、`fixture.ts` | Create；source真实服务／浏览器／CLI消费者；不依赖npm／binary预构建产物，T14 |
-| `packages/coding-agent/scripts/verify-dev-workbench-package.ts` | Create；独立显式成品验收程序，非Bun test命名，默认发现及`--full`均不执行；必须提供本次产物及manifest，T14 |
-| `packages/collab-web/test/dev-workbench.test.tsx` | Create；工作台纯组件／输入归属合同，T09；不替代真实浏览器 |
+| `packages/coding-agent/src/aireq-workbench/assets.generated.json` | Create generated；同一生成器输出的内容寻址UI载荷，源码／SDK延迟读取，打包插件内嵌，T13 |
+| `packages/coding-agent/test/spec-driven/{orchestrator,controller,artifacts,runtime,actors,actors-descendants,workspace,command,skill-policy,resources}.test.ts`、`packages/coding-agent/test/spec-driven/{process,process-resources}.e2e.test.ts` | Modify；真实文件名的原生／独立资源消费者，AIReq公开驱动迁移至原生消费者，T01—T04、T11、T14 |
+| `packages/coding-agent/test/aireq-workbench/{records,git,cancel,host,server,collab,cli,resources}.test.ts` | Create；各片真实最小 fixture，T01、T06—T08、T10、T11、T13 |
+| `packages/coding-agent/test/aireq-workbench/{browser,process}.e2e.test.ts`、`fixture.ts` | Create；source真实服务／浏览器／CLI消费者；不依赖npm／binary预构建产物，T14 |
+| `packages/coding-agent/scripts/verify-aireq-workbench-package.ts` | Create；独立显式成品验收程序，非Bun test命名，默认发现及`--full`均不执行；必须提供本次产物及manifest，T14 |
+| `packages/collab-web/test/aireq-workbench.test.tsx` | Create；工作台纯组件／输入归属合同，T09；不替代真实浏览器 |
 | `packages/collab-web/test/{composer,transcript,tool-view,markdown}.test.tsx` | Modify only if interface affected；现有组件覆盖随最小端口改造保持，T09 |
-| `packages/coding-agent/test/spec-driven/tui*.ts`、`native-surface.test.ts` | Retire Dev-only expectations／helpers；已核实目录内旧 TUI E2E 转由 T14 网页／原生消费者承接；混合普通 TUI断言保留，T14 |
-| `scripts/{ci-test-ts.ts,fulltest.ts,fulltest-ui-smoke.ts,test-report-ui-smoke.ts,ci-test-ts.test.ts,fulltest.test.ts}` | Modify；旧 Dev专属 smoke／白名单／启动敏感选择替换为新消费者，普通 TUI覆盖保留，T14 |
-| `openspec/specs/fork-verification-gates/spec.md` | Modify；只替换旧 Dev TUI 特有合同及消费者，预算／跳过／授权规则不变，T15 |
+| `packages/coding-agent/test/spec-driven/tui*.ts`、`native-surface.test.ts` | Retire AIReq-only expectations／helpers；已核实目录内旧 TUI E2E 转由 T14 网页／原生消费者承接；混合普通 TUI断言保留，T14 |
+| `scripts/{ci-test-ts.ts,fulltest.ts,fulltest-ui-smoke.ts,test-report-ui-smoke.ts,ci-test-ts.test.ts,fulltest.test.ts}` | Modify；旧 AIReq专属 smoke／白名单／启动敏感选择替换为新消费者，普通 TUI覆盖保留，T14 |
+| `openspec/specs/fork-verification-gates/spec.md` | Modify；只替换旧 AIReq TUI 特有合同及消费者，预算／跳过／授权规则不变，T15 |
 | `openspec/specs/spec-driven-orchestration/spec.md`、`openspec/changes/replace-dev-tui-with-browser-workbench/specs/spec-driven-orchestration/spec.md` | Modify only retained provenance wording；把“仅本地历史确证”对齐为宿主从真实原生结果确证并持久化最小版本事实，历史可用仍核对；不放松方案来源和Team可采用合同，T04／T15 |
 | `docs-zh-CN/lander-sailor-six-stage-agent-workflow.md`、`packages/coding-agent/CHANGELOG.md`、`packages/collab-web/README.md` | Modify；最终八阶段、命令、资源／网络／失败边界与 Unreleased说明，T15；现有正确需求不重写 |
 
-**运行时数据约定（不是本轮创建的交付文件）：** 开发需求记录固定 `docs/dev-requirements/<requirementId>.json`；正式材料保持现有路径。新本地宿主状态使用 `.omp/dev-workbench/`，不读取 `.omp/dev/state.json` 作为新权威。原生 session 文件继续由既有 profile/session storage 拥有；只保存其引用，不把它们搬进新目录。取消保留最小同路径 tombstone。纯业务本地写作无 Git 需求记录，使用本地唯一业务 Markdown和原生会话；开发接手另建需求导入。
+**运行时数据约定（不是本轮创建的交付文件）：** 开发需求记录固定 `docs/aireq-requirements/<requirementId>.json`；正式材料保持现有路径。新本地宿主状态使用 `.omp/aireq-workbench/`，不读取 `.omp/aireq/state.json` 作为新权威。原生 session 文件继续由既有 profile/session storage 拥有；只保存其引用，不把它们搬进新目录。取消保留最小同路径 tombstone。纯业务本地写作无 Git 需求记录，使用本地唯一业务 Markdown和原生会话；开发接手另建需求导入。
 
 ## Shared Interfaces — Implementation Decisions
 
@@ -101,64 +101,64 @@
 ### A. 业务事实、动作版本与运行事实
 
 ```ts
-export type DevStage =
+export type AIReqStage =
   | "business" | "requirements" | "solution" | "planning"
   | "executing" | "st" | "pr" | "testing";
-export type DevHumanMark = "st-complete" | "pr-submitted" | "pr-merged" | "tested";
-export type DevLifecycle = "active" | "completed" | "cancelling" | "cancelled";
-export interface DevPerson { name: string; source: "local" | "collab"; peerId?: string }
-export interface DevMaterialRef extends SpecFileVersion {
+export type AIReqHumanMark = "st-complete" | "pr-submitted" | "pr-merged" | "tested";
+export type AIReqLifecycle = "active" | "completed" | "cancelling" | "cancelled";
+export interface AIReqPerson { name: string; source: "local" | "collab"; peerId?: string }
+export interface AIReqMaterialRef extends SpecFileVersion {
   id: string;
   kind: "business" | "proposal" | "delta" | "solution" | "plan" | "report";
 }
-export interface DevDecision {
-  operationId: string; stage: DevStage; actor: DevPerson; at: string;
+export interface AIReqDecision {
+  operationId: string; stage: AIReqStage; actor: AIReqPerson; at: string;
   userReply: string; files: SpecFileVersion[]; candidateId?: string;
 }
-export interface DevPrRef {
+export interface AIReqPrRef {
   forge: "github" | "gitlab"; repository: string; number: number; url: string;
   sourceRef: string; baseRef: string;
 }
-export interface DevPrFact {
-  pr: DevPrRef; state: "open" | "closed" | "merged";
+export interface AIReqPrFact {
+  pr: AIReqPrRef; state: "open" | "closed" | "merged";
   headSha: string; baseSha: string; mergeSha: string | null; observedAt: string;
 }
-export interface DevGitTarget {
+export interface AIReqGitTarget {
   localSourceRef: string; sourceRepository: string; sourceRef: string;
   baseRepository: string; baseRef: string;
   remote: string; remoteUrl: string; targetRef: string; observedTip: string | null;
 }
-export type DevGitAction = DevHumanMark | "set-test-state" | "link-fix" | "commit" | "cancel";
-export interface DevGitOperation {
-  operationId: string; kind: DevGitAction;
-  actor: DevPerson; at: string; files: SpecFileVersion[];
-  target: DevGitTarget; authorizedCommits: string[];
+export type AIReqGitAction = AIReqHumanMark | "set-test-state" | "link-fix" | "commit" | "cancel";
+export interface AIReqGitOperation {
+  operationId: string; kind: AIReqGitAction;
+  actor: AIReqPerson; at: string; files: SpecFileVersion[];
+  target: AIReqGitTarget; authorizedCommits: string[];
   knownCommitShas: string[];
 }
-export interface DevSolutionBasis {
+export interface AIReqSolutionBasis {
   solutionVersion: string; candidateIds: string[]; usableCandidateIds: string[];
   source: "single-agent" | "team"; sourceSessionId: string;
   sourceEntryIds: string[];
 }
-export interface DevSyncRevision {
+export interface AIReqSyncRevision {
   operationId: string; files: SpecFileVersion[];
   mainSpecs: Array<{ path: string; version: string | null }>; // null明确记录原生retirement后不存在
   archivedChangePath: string | null; progress: SpecCloseProgress;
 }
-export interface DevRequirementRecord {
+export interface AIReqRequirementRecord {
   schemaVersion: 1; requirementId: string; changeId: string;
-  branch: string; stage: DevStage; lifecycle: DevLifecycle;
-  materials: DevMaterialRef[]; decisions: DevDecision[];
-  marks: Partial<Record<DevHumanMark, DevDecision>>;
-  solutionBasis: DevSolutionBasis | null;
+  branch: string; stage: AIReqStage; lifecycle: AIReqLifecycle;
+  materials: AIReqMaterialRef[]; decisions: AIReqDecision[];
+  marks: Partial<Record<AIReqHumanMark, AIReqDecision>>;
+  solutionBasis: AIReqSolutionBasis | null;
   report: { development: SpecApproval | null; st: SpecFileVersion | null };
-  syncRevisions: DevSyncRevision[]; gitOperations: DevGitOperation[];
-  pr: DevPrFact | null;
+  syncRevisions: AIReqSyncRevision[]; gitOperations: AIReqGitOperation[];
+  pr: AIReqPrFact | null;
   testing: "not-started" | "in-progress" | "failed" | "retest-pending" | "tested";
   relatedRequirementIds: string[];
 }
 export interface DevActionBinding {
-  requirementId: string; expectedRecordVersion: string; expectedStage: DevStage;
+  requirementId: string; expectedRecordVersion: string; expectedStage: AIReqStage;
   files: SpecFileVersion[]; operationId: string; expectedGeneration: number | null;
 }
 export interface DevRuntimeState {
@@ -168,11 +168,11 @@ export interface DevRuntimeState {
   history: "available" | "unavailable" | "not-created";
   blockedReason?: string;
 }
-export interface DevStoredRequirement {
-  record: DevRequirementRecord;
+export interface AIReqStoredRequirement {
+  record: AIReqRequirementRecord;
   recordVersion: string; // 实际JSON文件字节的SHA-256；不写回JSON自身
 }
-export interface DevRequirementSnapshot extends DevStoredRequirement {
+export interface AIReqRequirementSnapshot extends AIReqStoredRequirement {
   runtime: DevRuntimeState | null;
   actions: Array<{ id: string; available: boolean; blockedReason?: string }>;
 }
@@ -180,11 +180,11 @@ export type DevActionIntent =
   | { kind: "next"; candidateId?: string }
   | { kind: "back" }
   | { kind: "sync-archive" }
-  | { kind: "mark"; mark: DevHumanMark }
+  | { kind: "mark"; mark: AIReqHumanMark }
   | { kind: "cancel" }
   | { kind: "set-test-state"; state: "in-progress" | "failed" | "retest-pending" }
   | { kind: "link-fix"; fixRequirementId: string };
-export type DevAction = DevActionIntent & {
+export type AIReqAction = DevActionIntent & {
   binding: DevActionBinding; previewId: string | null; userReply: string;
 };
 export interface DevActionPreview {
@@ -193,18 +193,18 @@ export interface DevActionPreview {
 }
 export type DevEffectStatus = "not-started" | "succeeded" | "failed" | "unknown";
 export interface DevActionResult {
-  snapshot: DevRequirementSnapshot;
+  snapshot: AIReqRequirementSnapshot;
   persistence: {
     save: DevEffectStatus;
     commit: { status: DevEffectStatus; sha: string | null; indexReconciled: boolean };
-    push: { status: DevEffectStatus; target: DevGitTarget | null };
+    push: { status: DevEffectStatus; target: AIReqGitTarget | null };
     error?: string;
   };
 }
 ```
 
-- `SpecStageRole` 保持业务／需求／方案／计划／执行五类既有值，不把 `DevStage` 强制赋给 role；删除旧 `SpecInputMode = "chat" | "dev"` 的 Dev产品路由，保留普通模式本身。
-- 记录不保存正文副本、聊天、运行 owner／锁、token、队列、busy、按钮状态、Team冻结副本或 Goal副本。`DevSolutionBasis` 只保存材料 hash及宿主从真实原生结果核实的候选可采用事实，不能信任模型自填或浏览器上传；原始历史可用时仍核对，缺失时据已持久化事实及正式材料继续。
+- `SpecStageRole` 保持业务／需求／方案／计划／执行五类既有值，不把 `AIReqStage` 强制赋给 role；删除旧 `SpecInputMode = "chat" | "dev"` 的 AIReq产品路由，保留普通模式本身。
+- 记录不保存正文副本、聊天、运行 owner／锁、token、队列、busy、按钮状态、Team冻结副本或 Goal副本。`AIReqSolutionBasis` 只保存材料 hash及宿主从真实原生结果核实的候选可采用事实，不能信任模型自填或浏览器上传；原始历史可用时仍核对，缺失时据已持久化事实及正式材料继续。
 - 同一 `operationId` 的本次 commit SHA 从实际 Git对象中该记录的 operation 内容解析；`knownCommitShas` 只写当时已知的历史SHA。不得为让 commit 包含自身SHA无限补交。push结果／锁／临时诊断保留本地 operation恢复资料，UI重开再从远端事实核实，不以 Git中的“pushed”缓存作真值。
 - `recordVersion: string`是实际记录字节的SHA-256、用于CAS；`schemaVersion`是格式版本、`generation`是原生运行代际，二者为number；材料`version`是现有`artifactVersion(bytes)`的SHA-256。记录摘要不存回自身JSON，避免自引用。所有接口只用`expectedRecordVersion: string`，不得混入计数版本。recipient用显式`null`，导入无Actor不是错误。
 - ST继续修改同一 completion Markdown。保留第五步 `report.development` 的原始批准／版本；第六步 `report.st` 记录后来合法报告字节，不能静默改写第五步批准。报告合法追加不会使业务／需求／方案／计划批准失效；报告中开发结论／范围被修正则撤销本轮报告资格，按范围Back／重确认，不以“ST”标签豁免任意变更。
@@ -213,10 +213,10 @@ export interface DevActionResult {
 
 ```ts
 // records.ts
-loadDevRequirements(cwd: string): Promise<DevStoredRequirement[]>;
-readDevRequirement(cwd: string, requirementId: string): Promise<DevStoredRequirement>;
-saveDevRequirement(cwd: string, record: DevRequirementRecord,
-  expectedRecordVersion: string | null): Promise<DevStoredRequirement>;
+loadAIReqRequirements(cwd: string): Promise<AIReqStoredRequirement[]>;
+readDevRequirement(cwd: string, requirementId: string): Promise<AIReqStoredRequirement>;
+saveDevRequirement(cwd: string, record: AIReqRequirementRecord,
+  expectedRecordVersion: string | null): Promise<AIReqStoredRequirement>;
 resolveDevOperationCommit(cwd: string, requirementId: string,
   operationId: string): Promise<string | null>;
 
@@ -224,20 +224,20 @@ resolveDevOperationCommit(cwd: string, requirementId: string,
 createRequirement(input: {
   source: "conversation" | "import"; request?: string;
   relatedRequirementIds?: string[];
-}): Promise<DevRequirementSnapshot>;
-listRequirements(): Promise<DevRequirementSnapshot[]>;
-getRequirement(requirementId: string): Promise<DevRequirementSnapshot>;
-dispatch(action: DevAction, actor: DevPerson): Promise<DevActionResult>;
-observe(listener: (snapshot: DevRequirementSnapshot) => void): () => void;
+}): Promise<AIReqRequirementSnapshot>;
+listRequirements(): Promise<AIReqRequirementSnapshot[]>;
+getRequirement(requirementId: string): Promise<AIReqRequirementSnapshot>;
+dispatch(action: AIReqAction, actor: AIReqPerson): Promise<DevActionResult>;
+observe(listener: (snapshot: AIReqRequirementSnapshot) => void): () => void;
 stop(requirementId: string): Promise<void>;
 prepareDevAction(input: {
-  requirementId: string; expectedRecordVersion: string; expectedStage: DevStage;
-  intent: DevActionIntent; gitTarget: DevGitTarget | null;
+  requirementId: string; expectedRecordVersion: string; expectedStage: AIReqStage;
+  intent: DevActionIntent; gitTarget: AIReqGitTarget | null;
 }): Promise<DevActionPreview>;
 confirmDevAction(input: { operationId: string; confirmationToken: string;
   userReply: string }): Promise<DevActionResult>;
 readDevAction(operationId: string): Promise<DevActionResult>;
-discoverDevGitTargets(requirementId: string): Promise<DevGitTarget[]>;
+discoverDevGitTargets(requirementId: string): Promise<AIReqGitTarget[]>;
 startLocalBusiness(request: string): Promise<{
   document: SpecDocument | null; recipient: SpecConversationRecipient;
 }>;
@@ -245,10 +245,10 @@ saveTeamConfiguration(input: { requirementId: string | null;
   expectedRecordVersion: string | null; useTeam: boolean }): Promise<{ useTeam: boolean }>;
 
 // artifacts.ts; ref.id 为逻辑身份，path 始终是真实当前位置
-resolveDevMaterials(cwd: string, record: DevRequirementRecord): Promise<DevMaterialRef[]>;
-readDevMaterial(cwd: string, record: DevRequirementRecord,
+resolveDevMaterials(cwd: string, record: AIReqRequirementRecord): Promise<AIReqMaterialRef[]>;
+readDevMaterial(cwd: string, record: AIReqRequirementRecord,
   materialId: string): Promise<SpecDocument>;
-importDevBusiness(cwd: string, record: DevRequirementRecord, source:
+importDevBusiness(cwd: string, record: AIReqRequirementRecord, source:
   | { kind: "upload"; name: string; bytes: Uint8Array }
   | { kind: "host-path"; path: string }): Promise<SpecDocument>;
 
@@ -256,12 +256,12 @@ importDevBusiness(cwd: string, record: DevRequirementRecord, source:
 syncDevRequirement(input: {
   cwd: string; changeId: string; changeDirectory: string;
   acceptedVersions: readonly SpecFileVersion[];
-  previous: DevSyncRevision | null; operationId: string;
+  previous: AIReqSyncRevision | null; operationId: string;
   onProgress: (progress: SpecCloseProgress) => Promise<void>;
-}, signal: AbortSignal): Promise<DevSyncRevision>;
+}, signal: AbortSignal): Promise<AIReqSyncRevision>;
 ```
 
-`saveDevRequirement`在canonical workspace写锁内比较实际记录字节摘要，临时文件加原子替换并返回新摘要；不得另建数据库。记录读取不获得runtime owner；写入／继续才申请现有`DevWorkspace.acquire`跨进程租约。开发占用由未合入且未完整取消的Git记录推导，不以进程锁消失释放。独立目录保持隔离；无需跨机器名额协调。
+`saveDevRequirement`在canonical workspace写锁内比较实际记录字节摘要，临时文件加原子替换并返回新摘要；不得另建数据库。记录读取不获得runtime owner；写入／继续才申请现有`AIReqWorkspace.acquire`跨进程租约。开发占用由未合入且未完整取消的Git记录推导，不以进程锁消失释放。独立目录保持隔离；无需跨机器名额协调。
 
 现有材料接口继续复用：`artifactVersion`、`containedSpecPath`、`assertSpecWritePath`、`formalMaterialPaths`、`parseSpecSolution`、`SpecArtifactStore.readBusiness/readRequirements/readSolution/readPlan/readReport/checkVersions/close`。实现中改为共同材料解析后再调用这些检查，不复制格式规则；`close`只用于第一次真实原生archive，不再代表需求结束。
 
@@ -270,34 +270,34 @@ syncDevRequirement(input: {
 ```ts
 export interface DevGitPreview {
   previewId: string; binding: DevActionBinding; headSha: string; indexVersion: string;
-  files: SpecFileVersion[]; patchHash: string; target: DevGitTarget;
+  files: SpecFileVersion[]; patchHash: string; target: AIReqGitTarget;
   proposedTree: string; commitsToPublish: string[];
-  operation: DevGitAction;
+  operation: AIReqGitAction;
 }
 export interface DevCancelPlan {
   preview: DevGitPreview; committedShas: string[];
   paths: string[]; conflicts: Array<{ path: string; reason: string }>;
-  pr: DevPrFact | null;
+  pr: AIReqPrFact | null;
 }
 // git.ts
-previewDevGitOperation(record: DevRequirementRecord,
-  input: { binding: DevActionBinding; operation: Exclude<DevGitAction, "cancel">;
-    target: DevGitTarget; files: SpecFileVersion[] },
+previewDevGitOperation(record: AIReqRequirementRecord,
+  input: { binding: DevActionBinding; operation: Exclude<AIReqGitAction, "cancel">;
+    target: AIReqGitTarget; files: SpecFileVersion[] },
   signal: AbortSignal): Promise<DevGitPreview>;
-executeDevGitOperation(preview: DevGitPreview, decision: DevDecision,
+executeDevGitOperation(preview: DevGitPreview, decision: AIReqDecision,
   signal: AbortSignal): Promise<DevActionResult>;
 resumeDevGitOperation(requirementId: string, operationId: string,
   signal: AbortSignal): Promise<DevActionResult>;
 // forge.ts
-observeDevPr(pr: DevPrRef, signal: AbortSignal): Promise<DevPrFact>;
-createDevPr(input: { requirementId: string; target: DevGitTarget;
-  title: string; body: string }, signal: AbortSignal): Promise<DevPrFact>;
-closeDevPr(pr: DevPrRef, signal: AbortSignal): Promise<DevPrFact>;
+observeDevPr(pr: AIReqPrRef, signal: AbortSignal): Promise<AIReqPrFact>;
+createDevPr(input: { requirementId: string; target: AIReqGitTarget;
+  title: string; body: string }, signal: AbortSignal): Promise<AIReqPrFact>;
+closeDevPr(pr: AIReqPrRef, signal: AbortSignal): Promise<AIReqPrFact>;
 // cancel.ts
-planDevCancellation(record: DevRequirementRecord,
-  binding: DevActionBinding, target: DevGitTarget,
+planDevCancellation(record: AIReqRequirementRecord,
+  binding: DevActionBinding, target: AIReqGitTarget,
   signal: AbortSignal): Promise<DevCancelPlan>;
-executeDevCancellation(plan: DevCancelPlan, decision: DevDecision,
+executeDevCancellation(plan: DevCancelPlan, decision: AIReqDecision,
   signal: AbortSignal): Promise<DevActionResult>;
 ```
 
@@ -333,15 +333,15 @@ scoped commit复用现有身份／signing和ref CAS，**新路径不恢复或执
 
 ```ts
 // host.ts
-export interface DevWorkbenchHandle {
+export interface AIReqWorkbenchHandle {
   url: string;
   close(): Promise<void>; // 仅宿主 shutdown 调用
 }
-getOrStartDevWorkbench(host: DevWorkbenchHost): Promise<DevWorkbenchHandle>;
-createDevWorkbenchHost(input: {
+getOrStartAIReqWorkbench(host: AIReqWorkbenchHost): Promise<AIReqWorkbenchHandle>;
+createAIReqWorkbenchHost(input: {
   session: AgentSession; settings: Settings; cwd: string;
-}): Promise<DevWorkbenchHost>;
-export interface DevWorkbenchHost {
+}): Promise<AIReqWorkbenchHost>;
+export interface AIReqWorkbenchHost {
   readonly cwd: string;
   readonly settings: Settings;
   readonly rootSession: AgentSession;
@@ -350,28 +350,28 @@ export interface DevWorkbenchHost {
   subscribeEntries(
     listener: NonNullable<AgentSession["sessionManager"]["onEntryAppended"]>,
   ): () => void;
-  respondNativeUi(input: Parameters<typeof respondDevNativeUi>[0]):
-    ReturnType<typeof respondDevNativeUi>;
+  respondNativeUi(input: Parameters<typeof respondAIReqNativeUi>[0]):
+    ReturnType<typeof respondAIReqNativeUi>;
   close(): Promise<void>;
 }
-// DevWorkbenchHost 持有 session、controller、原生 UI controller 与 Collab适配；
+// AIReqWorkbenchHost 持有 session、controller、原生 UI controller 与 Collab适配；
 // 不包含 bindMainSession，不接受伪造 SlashCommandRuntime。
 
 // native-ui.ts
-export interface DevNativeUiRequest {
+export interface AIReqNativeUiRequest {
   requestId: string; requirementId: string; sessionId: string; generation: number;
   kind: "select" | "editor" | "confirm";
   title: string; options?: Array<string | { label: string; description?: string }>;
   prefill?: string;
 }
-respondDevNativeUi(input: {
+respondAIReqNativeUi(input: {
   requestId: string; requirementId: string; sessionId: string; generation: number;
   value: string | boolean | null;
 }): Promise<{ accepted: boolean; reason?: string }>;
 // collab.ts；guest方法不拥有房主runtime
-joinDevCollab(input: { browserId: string; usernameOrLink: string; name: string },
+joinAIReqCollab(input: { browserId: string; usernameOrLink: string; name: string },
   signal: AbortSignal): Promise<{ peerId: string; roomId: string; canWrite: boolean }>;
-leaveDevCollab(browserId: string): Promise<void>;
+leaveAIReqCollab(browserId: string): Promise<void>;
 export type DevSubmitResult =
   | { kind: "accepted" }
   | { kind: "rejected"; message: string }
@@ -381,21 +381,21 @@ export interface DevComposerPort {
   sendUiResponse(reqId: number, value?: CollabUiResponseValue): Promise<DevSubmitResult>;
   sendAbort(): Promise<DevSubmitResult>;
 }
-export interface DevSessionTarget {
+export interface AIReqSessionTarget {
   requirementId: string | null; sessionId: string; generation: number;
 }
-prepareDevInput(target: DevSessionTarget): Promise<{ requestId: string }>;
+prepareDevInput(target: AIReqSessionTarget): Promise<{ requestId: string }>;
 submitDevInput(input: { requestId: string; text: string;
   images?: readonly ImageContent[] }): Promise<DevSubmitResult>;
 inspectDevInput(requestId: string): Promise<DevSubmitResult>;
-runDevNativeCommand(input: { target: DevSessionTarget; command: string;
+runDevNativeCommand(input: { target: AIReqSessionTarget; command: string;
   args: string[] }): Promise<DevSubmitResult>;
 // utils/open.ts
 openPathWithResult(urlOrPath: string): Promise<
   { opened: true } | { opened: false; reason: string }>;
 ```
 
-- `DevWorkbenchHost`的原生会话能力来自真实 `AgentSession`、原生 UI和既有 Collab宿主最小端口；实现者从当前 `SlashCommandRuntime`／`InteractiveModeContext` 中提取确实被runtime／host使用的成员，而不是造一份假的完整TUI对象。普通调用者的 `openPath(): void` 可继续保持其非 Dev行为；新结果方法共用底层 opener，不保留旧 Dev产品兼容。
+- `AIReqWorkbenchHost`的原生会话能力来自真实 `AgentSession`、原生 UI和既有 Collab宿主最小端口；实现者从当前 `SlashCommandRuntime`／`InteractiveModeContext` 中提取确实被runtime／host使用的成员，而不是造一份假的完整TUI对象。普通调用者的 `openPath(): void` 可继续保持其非 AIReq行为；新结果方法共用底层 opener，不保留旧 AIReq产品兼容。
 - 同源HTTP协议固定在实际服务URL的capability前缀下：`GET /api/requirements`、`GET /api/requirements/:id`、`POST /api/requirements`、`POST /api/action-preview`（prepare）、`POST /api/actions`（confirm）、`GET /api/operations/:operationId`、`GET /api/materials/:id`（只读材料元数据）、`GET /api/materials/:id/:materialId`（实际材料字节）、`POST /api/business/:id`、`POST /api/git-preview`、`POST /api/cancel-preview`、`POST /api/native-ui-response`、`POST /api/collab/join`、`POST /api/collab/leave`、`GET /api/events`（WebSocket upgrade）。`:id`为requirementId，不接受任意文件路径作为下载路由。材料元数据读取独立于批准：未批准材料也应按真实现状可见，读取不产生批准、模型调用或业务推进。
 - `POST /api/business/:id` 为 multipart上传或JSON宿主路径，两种输入都调用 `importDevBusiness`；下载返回实际Markdown字节及安全文件名。方案JSON用原有可读候选展示，原件可查看，不伪造新的正式Markdown方案。
 - 聊天／原生交互沿用现有wire快照、entries、events、agents、bus、ui-request／ui-request-end、bye／error形状；工作台WS只加明确业务snapshot envelope，不建立聊天正文存储。Composer用上述异步最小port；现有GuestClient通过适配器保留独立网页行为，不能将void发送后立即清草稿当作宿主已接收。完整原生操作通过实际已有端口绑定，不把slash文本变成业务批准。
@@ -420,12 +420,12 @@ openPathWithResult(urlOrPath: string): Promise<
 
 ## Task 01: Establish Records, Owner and Shared Action Contracts
 
-**Files:** Modify `types.ts`、`stages.ts`、`workspace.ts`、`controller.ts`（仅owner契约）；Create `records.ts`、`test/dev-workbench/records.test.ts`；Modify `test/spec-driven/workspace.test.ts`。
+**Files:** Modify `types.ts`、`stages.ts`、`workspace.ts`、`controller.ts`（仅owner契约）；Create `records.ts`、`test/aireq-workbench/records.test.ts`；Modify `test/spec-driven/workspace.test.ts`。
 
-**Interfaces:** Shared A/B；复用 `DevWorkspace.acquire` 的root realpath／文件锁，不复用旧单run state schema。
+**Interfaces:** Shared A/B；复用 `AIReqWorkspace.acquire` 的root realpath／文件锁，不复用旧单run state schema。
 
 - [x] 按共享类型建立八阶段、五角色、可空recipient、实际字节摘要`recordVersion: string`与native generation；业务事实和运行事实完全分开。配置仍是原工作区Team开关和原生成员设置，不新增Dev Goal／冻结副本。
-- [x] 在 `docs/dev-requirements/` 严格枚举新schema记录；未知／损坏新记录显示诊断且不删除，旧`.omp/dev/state.json`及历史材料不枚举为新需求、不迁移或清除。唯一ID沿用合法change命名，生成时检查活动、归档、计划、业务文档及取消记录冲突，跨日期不重分配。
+- [x] 在 `docs/aireq-requirements/` 严格枚举新schema记录；未知／损坏新记录显示诊断且不删除，旧`.omp/aireq/state.json`及历史材料不枚举为新需求、不迁移或清除。唯一ID沿用合法change命名，生成时检查活动、归档、计划、业务文档及取消记录冲突，跨日期不重分配。
 - [x] 使用 canonical Git root及实际current branch界定workspace。读取列表无需租约／Actor；修改在跨进程租约内CAS。目录别名／子目录同源；读到其他owner占用不抢占。进程退出不抹掉未合入业务记录的占用事实。
 - [x] 独立保存本地native session引用及operation恢复资料；读取Git记录无历史时显示history unavailable，不自动建会话。只在人员明确继续、准入成功后建立原生会话。占用名额在未完成取消时保持，合入后测试不占开发名额。
 - [x] 保存必要状态失败，禁止依赖它启动目标Actor或报告阶段成功；保留已发生文件和真实失败。`resolveDevOperationCommit` 读取真实commit中的record operation及父链，不仅匹配message；最终状态无自引用补交。
@@ -475,14 +475,14 @@ openPathWithResult(urlOrPath: string): Promise<
 
 **Files:** Modify `actors.ts`、`runtime.ts`、`skill-policy.ts`、`test/spec-driven/{actors,actors-descendants,runtime,skill-policy}.test.ts`；T08消费原生UI seam。
 
-**Interfaces:** 现有 `createSpecDrivenRuntime`、`SpecDrivenRuntime.stop/dispose`、`SpecDrivenPorts.agents`、`SpecConversationRecipient`；新增 `DevSolutionBasis`持久事实；Shared D原生UI request。
+**Interfaces:** 现有 `createSpecDrivenRuntime`、`SpecDrivenRuntime.stop/dispose`、`SpecDrivenPorts.agents`、`SpecConversationRecipient`；新增 `AIReqSolutionBasis`持久事实；Shared D原生UI request。
 
 - [x] business／requirements继续原Grill-me及固定职责、solution完整候选／推荐、planning原writing-plans裁掉Execution Handoff、execution原using-superpowers＋subagent-driven-development；不改包内技能原文／版本。保留只读scout、知识检索、MCP、扩展、原生task／reviewer／wait及模型／上下文设置。
 - [x] `runtime.originalRequest`对导入显式表达“无原业务访谈”，只交完整业务文件及当前人员决定，不能伪造原始对话。恢复可用历史保留各阶段自身选模；缺失／损坏历史保留同需求和批准，人员主动续聊才根据正式材料＋原批准＋当前输入建立真实新会话。
-- [x] `actors.checkSolutionCandidates`不再把本地聊天存在作为唯一恢复依据。生成正式方案时由宿主从真实native单Agent／Team结果核对候选可采用关系，保存绑定solution hash的 `DevSolutionBasis`；跨机器无历史时使用该必要事实，不复制聊天／Team全文，不放宽Team失败／不可采用方向检查。hash变化必须重建来源证明，不能信任任意JSON或模型自报。
+- [x] `actors.checkSolutionCandidates`不再把本地聊天存在作为唯一恢复依据。生成正式方案时由宿主从真实native单Agent／Team结果核对候选可采用关系，保存绑定solution hash的 `AIReqSolutionBasis`；跨机器无历史时使用该必要事实，不复制聊天／Team全文，不放宽Team失败／不可采用方向检查。hash变化必须重建来源证明，不能信任任意JSON或模型自报。
 - [x] 网页仅保留既有Team使用开关，成员与模型角色继续原有配置方式，不新增网页配置入口；Team只在进入solution时启动，普通追问、查看、恢复、Back不重跑；失败仍受阻、不自动降级单Agent。Goal只由用户对当前执行会话手动开启／设置／预算／暂停继续，报告后停止自主写，恢复不自动启动。
 - [x] 按阶段、报告资格、merge／completed事实、明确修复授权计算实际工具policy，覆盖直接工具、shell、eval、自定义／扩展工具、MCP写入、task注入与任意深度后代；旧accepted＝永远收尾的条件改为精确阶段授权，不为宿主commit放开早期Agent shell。
-- [x] testing只允许读和更新自身 `docs/dev-requirements/<id>.json` 的业务状态；记录结构仍由owner CAS保存，Agent不能任意写JSON绕过人工mark。可能写缓存／报告／电路／代码／Git的测试命令，只有现有受限执行能力能证明符合范围才运行，否则明确阻塞。不能以提示词、命令名看似test、执行后diff或允许所有bash替代写边界。completed拒绝新写及后台续轮。
+- [x] testing只允许读和更新自身 `docs/aireq-requirements/<id>.json` 的业务状态；记录结构仍由owner CAS保存，Agent不能任意写JSON绕过人工mark。可能写缓存／报告／电路／代码／Git的测试命令，只有现有受限执行能力能证明符合范围才运行，否则明确阻塞。不能以提示词、命令名看似test、执行后diff或允许所有bash替代写边界。completed拒绝新写及后台续轮。
 - [x] 保留原生deny／restrictedFolders／项目规则／安全路径／早期精确文档白名单。需求材料归档后白名单指向真实archive，不误放行旧源。普通询问只读，明确范围内修复才解除对应限制；未结清同步副作用只开放限定故障处理。
 - [x] 原生select/editor、confirm、tool approval、权限拒绝、原生命令／模型／推理设置、Team／Goal及子代理操作必须接到真实目标会话和既有pending promise，保留原生审批模式及默认deny；没有可用网页呈现的交互须实现其薄适配，不能要求回终端或自动批准。原生UI响应校验session／generation／reqId并首答结清；断线不等于取消／批准。
 - [x] stop／delete／host shutdown复用 `cancelSpecDescendantJobs`、AsyncJobManager lineage及runtime原有prepare／active屏障，等真实promise结清，保留失败halted，不影响无关owner；页面unsubscribe不调用这些方法。
@@ -492,7 +492,7 @@ openPathWithResult(urlOrPath: string): Promise<
 
 ## Task 05: Add the Minimal Native Scoped Commit Primitive
 
-**Files:** Modify `crates/pi-vcs/src/{types.rs,git/mutate.rs,git/cli.rs,git/patch.rs}`、实际N-API owner `crates/pi-natives/src/vcs.rs`；通过现有 `packages/natives/scripts/build-bindings.ts`生成 `packages/natives/native/index.d.ts`；Create `packages/natives/test/dev-workbench-vcs.test.ts`，不手改声明冒充ABI。
+**Files:** Modify `crates/pi-vcs/src/{types.rs,git/mutate.rs,git/cli.rs,git/patch.rs}`、实际N-API owner `crates/pi-natives/src/vcs.rs`；通过现有 `packages/natives/scripts/build-bindings.ts`生成 `packages/natives/native/index.d.ts`；Create `packages/natives/test/aireq-workbench-vcs.test.ts`，不手改声明冒充ABI。
 
 **Interfaces:** Shared C的 `commitCreateScoped/remoteRef/applyOwnedPatch`及已证实filter／hook缺陷所需的 `previewOwnedPatch/stageFilesIntoIndex/hookPath`；复用existing `commit_create`中的身份／`sign_commit`、index锁／read/write、ref CAS、网络runner及patch helper；新路径不调用`run_commit_hook`，普通API原语义保留。
 
@@ -507,7 +507,7 @@ openPathWithResult(urlOrPath: string): Promise<
 
 ## Task 06: Implement Scoped Git Operations and Actual PR Facts
 
-**Files:** Create `spec-driven/git.ts`、`forge.ts`、`test/dev-workbench/git.test.ts`；消费T01/T05，不调用 `commands/git.ts`、`commands/commit.ts`或 `commit/agentic`整index流程。
+**Files:** Create `spec-driven/git.ts`、`forge.ts`、`test/aireq-workbench/git.test.ts`；消费T01/T05，不调用 `commands/git.ts`、`commands/commit.ts`或 `commit/agentic`整index流程。
 
 **Interfaces:** Shared C；现有VCS `headSha/currentBranch/configGet/remoteList/remoteUrl/resolveRef/revListRange/mergeBase/showBlob/showCommit/commitDetails/diffText/diffTree/readTree/applyPatch/writeTree/push`；现有Forge runner。
 
@@ -526,7 +526,7 @@ openPathWithResult(urlOrPath: string): Promise<
 
 ## Task 07: Cancel Unmerged Requirements Without Losing Unrelated Work
 
-**Files:** Create `spec-driven/cancel.ts`、`test/dev-workbench/cancel.test.ts`；仅经T02 dispatch调用；复用T04真实stop与T06范围Git／Forge。
+**Files:** Create `spec-driven/cancel.ts`、`test/aireq-workbench/cancel.test.ts`；仅经T02 dispatch调用；复用T04真实stop与T06范围Git／Forge。
 
 **Interfaces:** `planDevCancellation/executeDevCancellation`；Shared C；既有 `canApplyPatch/applyPatch/diffTree/showCommit`。
 
@@ -543,29 +543,29 @@ openPathWithResult(urlOrPath: string): Promise<
 
 ## Task 08: Host Native Sessions and a Long-Lived Workbench Service
 
-**Files:** Reuse restored ordinary `main.ts`公共能力；Create独立 `dev-workbench/{host,server,native-ui}.ts`、`test/dev-workbench/{host,server}.test.ts`。
+**Files:** Reuse restored ordinary `main.ts`公共能力；Create独立 `aireq-workbench/{host,server,native-ui}.ts`、`test/aireq-workbench/{host,server}.test.ts`。
 
-**Interfaces:** Shared D；独立 `dev-workbench/host.ts`拥有Dev bootstrap，复用 `createSessionManager`、`buildSessionOptions`、原生SDK session初始化、controller observe、现有Bun.serve／capability路径模式；`main.ts`恢复普通启动职责，不照搬一次性Sketch关闭语义。
+**Interfaces:** Shared D；独立 `aireq-workbench/host.ts`拥有Dev bootstrap，复用 `createSessionManager`、`buildSessionOptions`、原生SDK session初始化、controller observe、现有Bun.serve／capability路径模式；`main.ts`恢复普通启动职责，不照搬一次性Sketch关闭语义。
 
-- [x] Dev bootstrap集中于独立 `dev-workbench/host.ts`，复用普通启动公共能力，使CLI dev沿用profile／cwd／模型／settings／auth／MCP／extensions／loadedProjectContext／asyncJobManager及原生审批策略；`main.ts`普通launch行为保持原职责。不要伪装interactive或无UI模式来吞掉pending请求。
-- [x] `/dev`宿主借用当前真实root能力，业务Actor独立持有；普通TUI主聊天不bind到Dev阶段。Dev活跃期间普通侧锁定，退出实际结清后释放服务但不dispose借用root；standalone仅释放自己创建的root。开发名额仍由workspace统一控制。
+- [x] AIReq bootstrap集中于独立 `aireq-workbench/host.ts`，复用普通启动公共能力，使CLI dev沿用profile／cwd／模型／settings／auth／MCP／extensions／loadedProjectContext／asyncJobManager及原生审批策略；`main.ts`普通launch行为保持原职责。不要伪装interactive或无UI模式来吞掉pending请求。
+- [x] `/aireq`宿主借用当前真实root能力，业务Actor独立持有；普通TUI主聊天不bind到AIReq阶段。AIReq活跃期间普通侧锁定，退出实际结清后释放服务但不dispose借用root；standalone仅释放自己创建的root。开发名额仍由workspace统一控制。
 - [x] 原生entries只安装一个真实 `sessionManager.onEntryAppended`发布者向网页／Collab扇出；当前Host设置／清空单槽不能让两者互相覆盖，拆卸只移除自身listener。复用原 `snapshotForReplication`／shrink／chunked welcome与native `getContextUsage()`，不复制第二套序列化或伪造context usage。Agent列表／transcript／kill／revive严格限当前owner及后代。
 - [x] 监听与URL策略固定：非offline绑定`127.0.0.1:0`；offline绑定`0.0.0.0:0`，就绪后打印实际`http://<宿主IPv4或主机名>:<port>/<capability>/`及本机loopback入口。地址取真实非loopback网卡，多个候选全部列出而不捏造唯一可达性；端口取server实际分配值。页面连接携带capability并校验Origin／Host，offline不额外要求证书／认证；非offline不放宽原远程控制边界。无法发现远端地址明确给本机可用地址和网络限制，不把0.0.0.0当可访问URL。
 - [x] 按Shared D实现真实requirements／actions／materials／import／Gitpreview／cancel-preview／native UI／Collab endpoints；错误按保存、业务准入、原生工具、Git、PR明确返回，不返回成功占位。文件读取只经已登记material，不暴露任意宿主文件下载。
 - [x] WS只呈现host事实和原生事件；连接close／unsubscribe最多释放listener和本browser guest，不调用controller.exit/stop/dispose。显式Stop通过owner结清；host close等待原生工作及持久化，失败真实呈现，不自动删除／归档／commit。
 - [x] native-ui映射真实select/editor/confirm／tool approval等待对象、权限模式和取消语义；reqId＋requirement＋session＋generation绑定，首个有效应答结清，旧页／旧代际拒绝。原生deny原样保留。未join房主也可在网页完成正常原生交互。
-- [x] prompt、附件、命令、模型／推理控制、原生队列、子代理详情绑定提交时target session；切列表不消费草稿、不把晚到结果投到新阶段。拒收／失败保留本次文本及附件各一次；不创建独立Dev消息队列或正文副本。
+- [x] prompt、附件、命令、模型／推理控制、原生队列、子代理详情绑定提交时target session；切列表不消费草稿、不把晚到结果投到新阶段。拒收／失败保留本次文本及附件各一次；不创建独立AIReq消息队列或正文副本。
 - [x] 写V08：双启动宿主复用、准备失败不输出假URL、普通聊天不换绑、无Actor快照、原生UI race、断开长任务继续、重连无重放、host shutdown真实结清、服务只能读取所属材料。
 
 **Verification:** V08。**Pass:** 宿主是唯一执行owner，页面不拥有任务，正常原生流程无需终端接力。
 
 ## Task 09: Build the Real Browser Workbench from Existing Components
 
-**Files:** Create collab-web工作台入口与`test/dev-workbench.test.tsx`；Modify `Composer.tsx`、`AgentDrawer.tsx`、`app.tsx`、`lib/client.ts`及受影响组件tests。
+**Files:** Create collab-web工作台入口与`test/aireq-workbench.test.tsx`；Modify `Composer.tsx`、`AgentDrawer.tsx`、`app.tsx`、`lib/client.ts`及受影响组件tests。
 
 **Interfaces:** Shared D HTTP／WS；Composer最小发送port；直接复用 `Transcript`、`Markdown`、`ToolCard`／ToolView、现有agents panel／drawer、原生wire状态。
 
-- [x] 按已批准原型／参考图的信息层级实现四区，不逐像素复制：左需求列表、中央材料上方固定八阶段、中央只读真实材料、右共享AI会话且输入在底部；Dev默认深色，普通App主题默认值不变。进行阶段／查看阶段分离。点击阶段／需求不发prompt、不启动Actor、不dispatch、不推进、不隐式join；缺失／不可读／未生成显示真实原因，无演示数据。
+- [x] 按已批准原型／参考图的信息层级实现四区，不逐像素复制：左需求列表、中央材料上方固定八阶段、中央只读真实材料、右共享AI会话且输入在底部；AIReq默认深色，普通App主题默认值不变。进行阶段／查看阶段分离。点击阶段／需求不发prompt、不启动Actor、不dispatch、不推进、不隐式join；缺失／不可读／未生成显示真实原因，无演示数据。
 - [x] 方案显示全部候选、完整Markdown内容及推荐／理由，保留正式方案JSON文件格式但不新增原始JSON查看面板；通过当前会话选择，Next消费实际选择。Markdown保持现有HTML转义与链接协议边界，不增加编辑器。
 - [x] 新建需求、显式本地业务写作、上传Markdown、宿主路径、下载及当前进行阶段适用的Next／Back、既有Team使用开关、ST／PR／tested人工标记、测试状态／修复关联和删除撤销预览接真实host；不把全部动作铺成控制台，不新增网页成员／模型角色配置入口。未选需求时引导新建，不默认本地写作、不自动启动Agent，无目标且未join时输入不可发送。按钮可用性来自owner，前端校验不代替后端门禁。
 - [x] 明确操作时才显示对应确认／结果：标记同次确认展示需求、原／新状态、实际文件／patch、既有source/base/remote、target ref、remote tip、全部待发布commit和风险；取消确认无副作用。saved／committed／pushed与真实错误／续办以可读结果区分，不把未同步画为全成功，不隐藏最后tested未推送事实；不展示JSON状态／参数、内部hash或调试面板。
@@ -578,7 +578,7 @@ openPathWithResult(urlOrPath: string): Promise<
 
 ## Task 10: Connect Offline Browsers to Existing Collab Rooms
 
-**Files:** Create `dev-workbench/collab.ts`、`test/dev-workbench/collab.test.ts`；Modify现有 `collab/host.ts`／`controller.ts`最小宿主端口；T09 join UI调用Shared D。
+**Files:** Create `aireq-workbench/collab.ts`、`test/aireq-workbench/collab.test.ts`；Modify现有 `collab/host.ts`／`controller.ts`最小宿主端口；T09 join UI调用Shared D。
 
 **Interfaces:** 复用 `resolveIntranetUsername`、现有 `CollabSocket`、native crypto、protocol／wire GuestFrame、房主现有snapshot／UI／prompt处理。新bridge只做browser peer与native guest transport映射。
 
@@ -593,43 +593,43 @@ openPathWithResult(urlOrPath: string): Promise<
 
 ## Task 11: Cut Over Both Launch Entrypoints and Observable Browser Opening
 
-**Files:** Create `commands/dev.ts`、`test/dev-workbench/cli.test.ts`；Modify `cli-commands.ts`、`cli/command-help.ts`、`slash-commands/builtin-spec-driven.ts`、`slash-commands/types.ts`、`utils/open.ts`、`test/spec-driven/command.test.ts`。
+**Files:** Create `commands/dev.ts`、`test/aireq-workbench/cli.test.ts`；Modify `cli-commands.ts`、`cli/command-help.ts`、`slash-commands/builtin-aireq.ts`、`slash-commands/types.ts`、`utils/open.ts`、`test/spec-driven/command.test.ts`。
 
-**Interfaces:** `getOrStartDevWorkbench`、`openPathWithResult`；既有CLI懒加载注册／有效profile环境解析；不在cli.ts加绕环境的独立启动分支。
+**Interfaces:** `getOrStartAIReqWorkbench`、`openPathWithResult`；既有CLI懒加载注册／有效profile环境解析；不在cli.ts加绕环境的独立启动分支。
 
-- [x] 在commands表注册dev，并把dev加入真实 `PROFILE_FLAG_COMMANDS`，使尾部profile在懒模块加载前生效；支持的launch-global参数按既有解析接入相应表，不能只新增commands项。`omp dev`不变成prompt或TUI，保留真实cwd／profile／模型／offline，help不宣传不存在的参数。
-- [x] `/dev`进入独占模式、输出完整ready URL并尝试打开；再次 `/dev` 停止并结清Dev运行后退出。普通工作未结清拒绝进入；Dev期间普通输入／命令／快捷操作不得执行，退出恢复原会话和草稿。不创建需求／Team／Goal，不设计普通session／cwd切换与Dev并存。
+- [x] 在commands表注册dev，并把dev加入真实 `PROFILE_FLAG_COMMANDS`，使尾部profile在懒模块加载前生效；支持的launch-global参数按既有解析接入相应表，不能只新增commands项。`omp aireq`不变成prompt或TUI，保留真实cwd／profile／模型／offline，help不宣传不存在的参数。
+- [x] `/aireq`进入独占模式、输出完整ready URL并尝试打开；再次 `/aireq` 停止并结清AIReq运行后退出。普通工作未结清拒绝进入；AIReq期间普通输入／命令／快捷操作不得执行，退出恢复原会话和草稿。不创建需求／Team／Goal，不设计普通session／cwd切换与AIReq并存。
 - [x] opener共用原跨Windows／macOS／Linux实现但返回可观察spawn／非零失败；服务失败与浏览器失败分开。浏览器启动失败仍打印实际可用URL及原因，不能保证OS opener成功就证明页面已实际显示。
 - [x] 删除subcommands声明／补全／帮助和终端new/business/finish-business/next/back/drop/config实现；有参数明确拒绝并列网页入口，不自动转换、不交模型。保留网页对应业务能力。
 - [x] CLI宿主常驻至显式退出／信号，shutdown走原生结清；网页close不退出进程。入口本身不自动git pull／写Git／接管其他机器session。
 - [x] 写V11源码public CLI及slash consumer：两入口完整URL、进入／退出互斥、普通忙碌拒绝进入、无桌面失败、service失败、旧参数拒绝、环境继承、退出恢复原会话及草稿，无新需求／模型副作用。
 
-**Verification:** V11及V14。**Pass:** 两真实入口同业务能力；新 `/dev` 仅切换独占模式，不恢复旧阶段TUI或子操作，地址真实完整可复制。
+**Verification:** V11及V14。**Pass:** 两真实入口同业务能力；新 `/aireq` 仅切换独占模式，不恢复旧阶段TUI或子操作，地址真实完整可复制。
 
-## Task 12: Remove Old Dev TUI Consumers Completely
+## Task 12: Remove Old AIReq TUI Consumers Completely
 
 **Files:** File Structure中的T12全部现有modes消费者；T11独占命令主体，T12统一清退其已无用runtime接口。
 
-**Interfaces:** 删除旧Dev专属 `bindMainSession/showDevCommandStatus/isDevInputRoute/handleDevInput/exitDevForSessionMove`及Dev input mode。
+**Interfaces:** 删除旧AIReq专属 `bindMainSession/showDevCommandStatus/isDevInputRoute/handleDevInput/exitDevForSessionMove`及Dev input mode。
 
-- [x] 删除interactive-mode中的Devobserver／状态字段、`native-dev-input`三行widget注册、空transcript视图、Dev详情前缀、stage主聊天切换／retry隐藏、退出／session／cwd切换隐式dispose。保留通用widget容器、普通状态栏、菜单、原生聊天及host shutdown真实资源清理。
-- [x] input-controller清除Dev专属Esc、draft detach／restore、target切换、retry／queue分支；command-controller清除shell cwd前旧Dev退出；session-focus移除无消费者专用包装。ui-helpers只删除Dev空视图接线，保留按session隔离compaction queue、迟到拒绝、Team draft恢复及普通focus。
-- [x] 更新所有旧类型import／registry消费者和混合tests；仅删除已无消费者的Dev专属文件／exports／注释，不保留deprecated别名／兼容shim。普通命令、模型、子代理、workflow、权限、TUI菜单／附件／compact都保持原行为。
-- [x] 普通TUI在Dev退出后retry／queue／cwd／focus无回归，不要求两模式并行。
+- [x] 删除interactive-mode中的Devobserver／状态字段、`native-aireq-input`三行widget注册、空transcript视图、AIReq详情前缀、stage主聊天切换／retry隐藏、退出／session／cwd切换隐式dispose。保留通用widget容器、普通状态栏、菜单、原生聊天及host shutdown真实资源清理。
+- [x] input-controller清除AIReq专属Esc、draft detach／restore、target切换、retry／queue分支；command-controller清除shell cwd前旧AIReq退出；session-focus移除无消费者专用包装。ui-helpers只删除AIReq空视图接线，保留按session隔离compaction queue、迟到拒绝、Team draft恢复及普通focus。
+- [x] 更新所有旧类型import／registry消费者和混合tests；仅删除已无消费者的AIReq专属文件／exports／注释，不保留deprecated别名／兼容shim。普通命令、模型、子代理、workflow、权限、TUI菜单／附件／compact都保持原行为。
+- [x] 普通TUI在AIReq退出后retry／queue／cwd／focus无回归，不要求两模式并行。
 
-**Verification:** T14覆盖迁移审查。**Pass:** 无旧Dev产品残留或双轨，普通功能保留。
+**Verification:** T14覆盖迁移审查。**Pass:** 无旧AIReq产品残留或双轨，普通功能保留。
 
 ## Task 13: Embed One UI Payload Across Source, Npm and Binary
 
-**Files:** Create `scripts/dev-workbench-resources.ts`、`src/dev-workbench/assets.ts`、生成载荷`src/dev-workbench/assets.generated.json`及`test/dev-workbench/resources.test.ts`；Modify现有 `scripts/{bundle-dist,compile-binary,build-binary}.ts`、coding-agent／collab-web／根package.json，复用spec资源archive链。
+**Files:** Create `scripts/aireq-workbench-resources.ts`、`src/aireq-workbench/assets.ts`、生成载荷`src/aireq-workbench/assets.generated.json`及`test/aireq-workbench/resources.test.ts`；Modify现有 `scripts/{bundle-dist,compile-binary,build-binary}.ts`、coding-agent／collab-web／根package.json，复用spec资源archive链。
 
-**Interfaces:** 新增 `buildDevWorkbenchAssets(): Promise<ReadonlyMap<string, { bytes: Uint8Array; contentType: string }>>`、`createDevWorkbenchAssetsPlugin(assets: ReadonlyMap<string, { bytes: Uint8Array; contentType: string }>): Bun.BunPlugin`；`getDevWorkbenchAsset(path: string): Promise<{ bytes: Uint8Array; contentType: string } | null>`。服务和构建共用同一asset manifest。
+**Interfaces:** 新增 `buildAIReqWorkbenchAssets(): Promise<ReadonlyMap<string, { bytes: Uint8Array; contentType: string }>>`、`createAIReqWorkbenchAssetsPlugin(assets: ReadonlyMap<string, { bytes: Uint8Array; contentType: string }>): Bun.BunPlugin`；`getAIReqWorkbenchAsset(path: string): Promise<{ bytes: Uint8Array; contentType: string } | null>`。服务和构建共用同一asset manifest。
 
-资源验收元数据也由同一生成器固定：`DevAssetManifest = { digest: string; sourceDigest: string; files: readonly { path: string; contentType: string; version: string }[] }`；`getDevWorkbenchAssetManifest(): Promise<DevAssetManifest>`，服务capability内`GET /api/assets-manifest`返回这个形状。`digest`覆盖实际UI载荷；`sourceDigest`在构建时对本工作台运行依赖、生成输入及所用包内资源的规范路径／实际字节排序取SHA-256，源码与成品同算法，运行时只读嵌入值、不重新扫描工作区。成品程序用本次生成manifest比对两个摘要，不能用相同版本号／旧dist文件的存在代替本次来源。此为验收身份而非运行遥测、聊天／业务状态或新发布系统。
+资源验收元数据也由同一生成器固定：`AIReqAssetManifest = { digest: string; sourceDigest: string; files: readonly { path: string; contentType: string; version: string }[] }`；`getAIReqWorkbenchAssetManifest(): Promise<AIReqAssetManifest>`，服务capability内`GET /api/assets-manifest`返回这个形状。`digest`覆盖实际UI载荷；`sourceDigest`在构建时对本工作台运行依赖、生成输入及所用包内资源的规范路径／实际字节排序取SHA-256，源码与成品同算法，运行时只读嵌入值、不重新扫描工作区。成品程序用本次生成manifest比对两个摘要，不能用相同版本号／旧dist文件的存在代替本次来源。此为验收身份而非运行遥测、聊天／业务状态或新发布系统。
 
-- [x] 从真实 `collab-web/dev-workbench.html`／React入口用Bun构建生产HTML／JS／CSS及需要的既有renderer资源，content-addressed manifest保存实际MIME与字节；不要把现有export-viewer生成器冒充完整工作台。
+- [x] 从真实 `collab-web/aireq-workbench.html`／React入口用Bun构建生产HTML／JS／CSS及需要的既有renderer资源，content-addressed manifest保存实际MIME与字节；不要把现有export-viewer生成器冒充完整工作台。
 - [x] 参照现有resource archive plugin在npm `bundleDist()`及binary `compileCodingAgent()`接入同一插件；`build-binary.ts`及所有调用compile helper的既有发行消费者自动得到工作台，不依赖某一wrapper先生成。
-- [x] 新生成器CLI固定`bun packages/coding-agent/scripts/dev-workbench-resources.ts --write`，写`assets.generated.json`（manifest／digest／MIME／base64字节）。源码准备接根`postinstall`及显式`gen:dev-workbench`脚本；`getDevWorkbenchAsset`只延迟读取／缓存已生成载荷，HTTP请求不编译、不联网／启动前端server。缺载荷明确报准备缺失，不回退运行时构建或演示页。
+- [x] 新生成器CLI固定`bun packages/coding-agent/scripts/aireq-workbench-resources.ts --write`，写`assets.generated.json`（manifest／digest／MIME／base64字节）。源码准备接根`postinstall`及显式`gen:aireq-workbench`脚本；`getAIReqWorkbenchAsset`只延迟读取／缓存已生成载荷，HTTP请求不编译、不联网／启动前端server。缺载荷明确报准备缺失，不回退运行时构建或演示页。
 - [x] npm prepack／`bundleDist()`和公共`compileCodingAgent()`调用同一生成器／插件，SDK源文件白名单包含生成载荷，不依赖同级collab-web checkout；root现有postinstall的OpenWiki准备保留。新UI生成不等于发布；保留stats／export-viewer／OpenWiki／spec链和仅自有输出清理，禁止CDN／远程字体／JS补取。
 - [x] 写V13 source资源fixture：clean manifest、所有HTML引用／MIME／完整依赖、无公网补取；缺asset明确失败。npm／binary实际消费者由T14独立成品程序执行，不在普通测试中要求成品路径，更不能以源码替代成品证据。
 
@@ -637,18 +637,18 @@ openPathWithResult(urlOrPath: string): Promise<
 
 ## Task 14: Replace Old UI Acceptance While Retaining Effective Native Coverage
 
-**Files:** Create `test/dev-workbench/{fixture.ts,browser.e2e.test.ts,process.e2e.test.ts}`和独立非test程序`packages/coding-agent/scripts/verify-dev-workbench-package.ts`；迁移列明旧spec-driven TUI／native-surface消费者；Modify既有选测／smoke／脚本自测文件。
+**Files:** Create `test/aireq-workbench/{fixture.ts,browser.e2e.test.ts,process.e2e.test.ts}`和独立非test程序`packages/coding-agent/scripts/verify-aireq-workbench-package.ts`；迁移列明旧spec-driven TUI／native-surface消费者；Modify既有选测／smoke／脚本自测文件。
 
 **Interfaces:** 复用provider／环境准备。fixture新增`resolveInstalledDevChromium(): Promise<string>`：先校验显式`PUPPETEER_EXECUTABLE_PATH`，否则只枚举现有`systemChromiumCandidatesForTest()`并用`chromiumExecutableProbeForTest(path)`做无下载版本探测；仅返回已存在且可执行的Chromium，缺失立即前置失败。随后固定该环境变量并给`loadPuppeteer().launch`明确`executablePath`，复用`closeLaunchedBrowser`清理。**不调用会走`browsers.install()`的未固定ensure路径**，不自动下载／安装。命名为ForTest的现有探测只在本测试fixture使用，不变更生产browser安装策略。
 
 - [x] 建立隔离HOME／profile／config／data／cache／TEMP、临时真实Git／bare remote、localhost模型、独立工作台端口和既有Relay的最小fixture；继承门禁Bun transpiler cache约定。所有进程／浏览器／端口／native任务在自有cleanup结清，不读取用户凭据、不访问真实模型／remote。
 - [x] 对旧 `tui.e2e`、business／materials／closing／lifecycle／interactions／capabilities／resources／compact-mixed等真实覆盖建立逐项去向表：材料缺失／格式／版本／路径失败矩阵进T02/T03，权限／停止／后代／Team／Goal进T04，交互／附件／draft／错误与生命周期进网页native consumer；只删除固定三行、旧toggle、直接requirements、finish-business、四次next终结、drop留文件和旧恢复这类废止产品断言。
 - [x] 精确保留两处四角色材料失败矩阵：`tui-materials-cases.ts`及`process-fixture.ts`的requirements／solution／planner／executor × missing／malformed／unknown迁到新公开消费者；每例独立provider，原阶段／批准／输入／历史不变、具体错误可见、无后继模型，原平台条件／时限不放宽。`tui-compact-mixed`普通长会话／工具／子代理／压缩、`tui-resources`普通技能、`tui-capabilities`普通工具错误／独立需求场景继续保留，不能因文件前缀退役。
-- [x] `native-surface.test.ts`不再验Dev三行和stage换绑；保留其普通TUI native surface、draft／附件／viewport／cwd相关有效断言到现有普通消费者。不删除TUI引擎或通用PTY smoke来让范围变小。
+- [x] `native-surface.test.ts`不再验AIReq三行和stage换绑；保留其普通TUI native surface、draft／附件／viewport／cwd相关有效断言到现有普通消费者。不删除TUI引擎或通用PTY smoke来让范围变小。
 - [x] `browser.e2e.test.ts`用实际headless Chromium和已服务的真实构建UI，不用renderToStaticMarkup替代DOM：完整八阶段、Markdown导入零对话、所有候选、只读导航、审批／工具／附件、Back／ST报告、同次Git标记及失败／续办、删除冲突、合入后修复／只读、刷新重连无重放；模型夹具只提供确定输入，断言真实工具／文件／Git／PR结果，不把模型回答当通过。
-- [x] 新`process.e2e.test.ts`经真实`src/cli.ts dev`及普通TUI `/dev`验证双入口／环境／聊天不换绑；普通TUI部分复用既有`tui-harness.ts`／`tui-test`，不另造PTY/ANSI驱动。保留真实Team持久化／取消、Goal手动／报告后停止及长任务断线消费者。
-- [x] `fulltest-ui-smoke.ts`按场景只替换真实旧Dev接线，保留普通CLI／`/team`／取消／输入／退出及真实JUnit。`test/dev-workbench/`仅放不依赖成品的source tests，并显式接fork白名单；新process/browser归既有启动敏感组，普通TUI／Goal保留，不开绕预算通道。成品程序在scripts下采用非`.test/.spec/.e2e`命名，普通发现、全仓Bun及`--full`均不会执行，不靠skip排除。
-- [x] 默认fork目前不含collab-web，精确新增`dev-workbench.test.tsx`、`composer.test.tsx`、`transcript.test.tsx`、`tool-view.test.tsx`、`markdown.test.tsx`，不加入整个包／Browser／upload／relay套件；native只加`test/dev-workbench-vcs.test.ts`。同步`:1839/:1852`一类文件计数／空选择探针识别`.test.tsx`，使执行与报告一致。
+- [x] 新`process.e2e.test.ts`经真实`src/cli.ts dev`及普通TUI `/aireq`验证双入口／环境／聊天不换绑；普通TUI部分复用既有`tui-harness.ts`／`tui-test`，不另造PTY/ANSI驱动。保留真实Team持久化／取消、Goal手动／报告后停止及长任务断线消费者。
+- [x] `fulltest-ui-smoke.ts`按场景只替换真实旧AIReq接线，保留普通CLI／`/team`／取消／输入／退出及真实JUnit。`test/aireq-workbench/`仅放不依赖成品的source tests，并显式接fork白名单；新process/browser归既有启动敏感组，普通TUI／Goal保留，不开绕预算通道。成品程序在scripts下采用非`.test/.spec/.e2e`命名，普通发现、全仓Bun及`--full`均不会执行，不靠skip排除。
+- [x] 默认fork目前不含collab-web，精确新增`aireq-workbench.test.tsx`、`composer.test.tsx`、`transcript.test.tsx`、`tool-view.test.tsx`、`markdown.test.tsx`，不加入整个包／Browser／upload／relay套件；native只加`test/aireq-workbench-vcs.test.ts`。同步`:1839/:1852`一类文件计数／空选择探针识别`.test.tsx`，使执行与报告一致。
 - [x] `ci-test-ts.ts`当前`suiteRevision:2`统一升为3并更新所有完整基线资格／脚本期望，旧完整报告不得冒充新消费者范围完整证据；affected／失败报告语义不变。新public process fixture声明对实际workbench启动／资源／tools registry的静态依赖，不仅字符串spawn CLI，也不import执行主入口造图。预算、并发、高成本chunk上限、skip／授权及平台时限完全不变。
 - [x] 独立成品程序参数固定`--npm-entry <path> --binary <path> --assets-manifest <path>`，必须提供实际本次构建产物，启动各自真实CLI dev并在浏览器验证完整内嵌UI；脚本读取manifest预期摘要，并核对服务`GET /api/assets-manifest`的实际载荷摘要及当前构建来源标识，旧产物不冒充本轮。缺产物／浏览器／来源不匹配立即失败，不回退源码／空通过／自动releasebuild；不注册到default fulltest／slowtest／`--full`，仅获得单独成品验收授权时显式调用。真实OS桌面、其他平台／CentOS产物不由headless结果冒充。
 - [x] 为31项建立可观察业务断言及实际文件／Git／runtime证据对应，统一执行V14；一项失败如实报告，不以选择更窄用例冒充完整交付。
@@ -677,22 +677,22 @@ openPathWithResult(urlOrPath: string): Promise<
 
 | ID | 精确命令／前置 | 可观察通过条件 |
 | --- | --- | --- |
-| V01 | `bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/records.test.ts packages/coding-agent/test/spec-driven/workspace.test.ts` | Git业务事实冷读、CAS和跨进程名额，无旧状态接管／模型副作用 |
+| V01 | `bun scripts/test-report-bun.ts packages/coding-agent/test/aireq-workbench/records.test.ts packages/coding-agent/test/spec-driven/workspace.test.ts` | Git业务事实冷读、CAS和跨进程名额，无旧状态接管／模型副作用 |
 | V02 | `bun scripts/test-report-bun.ts packages/coding-agent/test/spec-driven/orchestrator.test.ts packages/coding-agent/test/spec-driven/controller.test.ts` | 八阶段、零业务会话导入、五步批准／Back、ST版本、人工mark及终态 |
 | V03 | `bun scripts/test-report-bun.ts packages/coding-agent/test/spec-driven/artifacts.test.ts packages/coding-agent/test/spec-driven/resources.test.ts packages/coding-agent/test/spec-driven/process-resources.e2e.test.ts` | 真实native校验／归档／修订同步及资源桥，原生独立资源语义保留 |
 | V04 | `bun scripts/test-report-bun.ts packages/coding-agent/test/spec-driven/actors.test.ts packages/coding-agent/test/spec-driven/actors-descendants.test.ts packages/coding-agent/test/spec-driven/runtime.test.ts packages/coding-agent/test/spec-driven/skill-policy.test.ts` | 所有原生权限／技能／历史／Team／Goal及后代限制与实际结清 |
-| V05 | 已当次授权native生成／构建时，`bun --cwd packages/natives run build:bindings`（该现有脚本本身生成声明并安装host addon，无需再重复native build），然后 `bun scripts/test-report-bun.ts packages/natives/test/dev-workbench-vcs.test.ts` | 专属Bun native消费者覆盖scoped commit／index协调／remoteRef／guarded patch；ref成功index失败不重commit，hook未执行；不直接Cargo，不把全部VCS或test:rs知识范围纳入日常覆盖 |
-| V06 | `bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/git.test.ts` | 真实临时Git＋bare remote、同次保存／commit／push、SHA解析、未授权祖先拒推、部分失败幂等 |
-| V07 | `bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/cancel.test.ts` | 多commit＋暂存／未暂存＋归档完整撤销，PR竞态／冲突保留占用及无关内容 |
-| V08 | `bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/host.test.ts packages/coding-agent/test/dev-workbench/server.test.ts` | 长寿命host、真实native UI归属、断开不停止、重连不重放、实际URL／材料边界 |
-| V09 | `bun scripts/test-report-bun.ts packages/collab-web/test/dev-workbench.test.tsx packages/collab-web/test/composer.test.tsx packages/collab-web/test/transcript.test.tsx packages/collab-web/test/tool-view.test.tsx packages/collab-web/test/markdown.test.tsx` | 工作台只读导航、共享组件与输入合同；这些组件测试不冒充实际浏览器 |
-| V10 | `bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/collab.test.ts` | 真实既有Relay／Host、两个browser peer、普通HTTP/WS offline、非offline及deny不放宽 |
-| V11 | `bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/cli.test.ts packages/coding-agent/test/spec-driven/command.test.ts`；公开帮助探针 `bun packages/coding-agent/src/cli.ts dev --help` | dev确为注册命令、双入口真实语义／环境，旧参数拒绝、opener失败保留URL |
-| V13 | 新生成器实现且单独授权build后 `bun packages/coding-agent/scripts/dev-workbench-resources.ts --write`；`bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/resources.test.ts`；单独授权成品构建时 `bun packages/coding-agent/scripts/bundle-dist.ts`、`bun packages/coding-agent/scripts/build-binary.ts` | 同一预构建载荷进入source／npm／binary；source HTTP不编译，普通resources测试不依赖成品，不自动发布／releasebuild |
-| V14 | source消费者：`bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/browser.e2e.test.ts packages/coding-agent/test/dev-workbench/process.e2e.test.ts packages/coding-agent/test/spec-driven/native-surface.test.ts packages/coding-agent/test/spec-driven/tui-compact-mixed.e2e.test.ts packages/coding-agent/test/spec-driven/tui-resources.e2e.test.ts packages/coding-agent/test/spec-driven/tui-capabilities.e2e.test.ts`。**另行明确授权成品验收且V13生成实际产物后**，Windows：`bun packages/coding-agent/scripts/verify-dev-workbench-package.ts --npm-entry packages/coding-agent/dist/cli.js --binary packages/coding-agent/dist/omp.exe --assets-manifest packages/coding-agent/src/dev-workbench/assets.generated.json`；Linux同命令仅binary参数为`packages/coding-agent/dist/omp` | source／普通TUI与成品证据分开；成品非普通test，不会被fork／`--full`自动执行，不添加skip、空测试或下载；验本次真实资源／来源及无checkout／CDN依赖 |
-| V15 | `bun scripts/test-report-bun.ts scripts/ci-test-ts.test.ts scripts/fulltest.test.ts` | 旧Dev专属选测已替换，新消费者进入原预算／范围，普通TUI仍在，未扩大上游suite |
+| V05 | 已当次授权native生成／构建时，`bun --cwd packages/natives run build:bindings`（该现有脚本本身生成声明并安装host addon，无需再重复native build），然后 `bun scripts/test-report-bun.ts packages/natives/test/aireq-workbench-vcs.test.ts` | 专属Bun native消费者覆盖scoped commit／index协调／remoteRef／guarded patch；ref成功index失败不重commit，hook未执行；不直接Cargo，不把全部VCS或test:rs知识范围纳入日常覆盖 |
+| V06 | `bun scripts/test-report-bun.ts packages/coding-agent/test/aireq-workbench/git.test.ts` | 真实临时Git＋bare remote、同次保存／commit／push、SHA解析、未授权祖先拒推、部分失败幂等 |
+| V07 | `bun scripts/test-report-bun.ts packages/coding-agent/test/aireq-workbench/cancel.test.ts` | 多commit＋暂存／未暂存＋归档完整撤销，PR竞态／冲突保留占用及无关内容 |
+| V08 | `bun scripts/test-report-bun.ts packages/coding-agent/test/aireq-workbench/host.test.ts packages/coding-agent/test/aireq-workbench/server.test.ts` | 长寿命host、真实native UI归属、断开不停止、重连不重放、实际URL／材料边界 |
+| V09 | `bun scripts/test-report-bun.ts packages/collab-web/test/aireq-workbench.test.tsx packages/collab-web/test/composer.test.tsx packages/collab-web/test/transcript.test.tsx packages/collab-web/test/tool-view.test.tsx packages/collab-web/test/markdown.test.tsx` | 工作台只读导航、共享组件与输入合同；这些组件测试不冒充实际浏览器 |
+| V10 | `bun scripts/test-report-bun.ts packages/coding-agent/test/aireq-workbench/collab.test.ts` | 真实既有Relay／Host、两个browser peer、普通HTTP/WS offline、非offline及deny不放宽 |
+| V11 | `bun scripts/test-report-bun.ts packages/coding-agent/test/aireq-workbench/cli.test.ts packages/coding-agent/test/spec-driven/command.test.ts`；公开帮助探针 `bun packages/coding-agent/src/cli.ts dev --help` | dev确为注册命令、双入口真实语义／环境，旧参数拒绝、opener失败保留URL |
+| V13 | 新生成器实现且单独授权build后 `bun packages/coding-agent/scripts/aireq-workbench-resources.ts --write`；`bun scripts/test-report-bun.ts packages/coding-agent/test/aireq-workbench/resources.test.ts`；单独授权成品构建时 `bun packages/coding-agent/scripts/bundle-dist.ts`、`bun packages/coding-agent/scripts/build-binary.ts` | 同一预构建载荷进入source／npm／binary；source HTTP不编译，普通resources测试不依赖成品，不自动发布／releasebuild |
+| V14 | source消费者：`bun scripts/test-report-bun.ts packages/coding-agent/test/aireq-workbench/browser.e2e.test.ts packages/coding-agent/test/aireq-workbench/process.e2e.test.ts packages/coding-agent/test/spec-driven/native-surface.test.ts packages/coding-agent/test/spec-driven/tui-compact-mixed.e2e.test.ts packages/coding-agent/test/spec-driven/tui-resources.e2e.test.ts packages/coding-agent/test/spec-driven/tui-capabilities.e2e.test.ts`。**另行明确授权成品验收且V13生成实际产物后**，Windows：`bun packages/coding-agent/scripts/verify-aireq-workbench-package.ts --npm-entry packages/coding-agent/dist/cli.js --binary packages/coding-agent/dist/omp.exe --assets-manifest packages/coding-agent/src/aireq-workbench/assets.generated.json`；Linux同命令仅binary参数为`packages/coding-agent/dist/omp` | source／普通TUI与成品证据分开；成品非普通test，不会被fork／`--full`自动执行，不添加skip、空测试或下载；验本次真实资源／来源及无checkout／CDN依赖 |
+| V15 | `bun scripts/test-report-bun.ts scripts/ci-test-ts.test.ts scripts/fulltest.test.ts` | 旧AIReq专属选测已替换，新消费者进入原预算／范围，普通TUI仍在，未扩大上游suite |
 
-手动实际用户路径的最终业务验收包含：`omp dev`或`/dev`→上传现有Markdown→零业务会话Next→四开发阶段→ST失败／未执行如实记录但由人标记→第七步同步归档→PR已提交仍占用→评审修正／必要Back及重同步→人员标记真实合入→原需求测试与下一开发共存→失败关联修复→修复合入后原需求复测→已测试同次范围commit/push并只读。另一路为未合入分批提交需求完整取消。该路径应由V14隔离真实消费者自动化，不要求共享桌面／真实模型来代替程序断言；真实外部Forge、其他平台和桌面opener能力须另列实际验收证据。
+手动实际用户路径的最终业务验收包含：`omp aireq`或`/aireq`→上传现有Markdown→零业务会话Next→四开发阶段→ST失败／未执行如实记录但由人标记→第七步同步归档→PR已提交仍占用→评审修正／必要Back及重同步→人员标记真实合入→原需求测试与下一开发共存→失败关联修复→修复合入后原需求复测→已测试同次范围commit/push并只读。另一路为未合入分批提交需求完整取消。该路径应由V14隔离真实消费者自动化，不要求共享桌面／真实模型来代替程序断言；真实外部Forge、其他平台和桌面opener能力须另列实际验收证据。
 
 ### Actual Evidence Ledger — 2026-11-07 Handoff
 
@@ -703,15 +703,15 @@ openPathWithResult(urlOrPath: string): Promise<
 | 状态／范围 | 实际证据 | 结果与边界 |
 | --- | --- | --- |
 | 通过：原生构建／绑定 | 主代理实际native build，Win32 x64／Bun 1.4.4 | 已生成host addon及bindings；不是npm／binary成品构建或其他平台证明。 |
-| 通过：专属native VCS文件（V05） | `2026-11-07T07-17-04.834Z-21004-6fc32a51` | `packages/natives/test/dev-workbench-vcs.test.ts`文件汇总24 pass／0 fail／0 skip；该组合run本身exit 1、93 executed／4 fail，不能称整run通过。Git／cancel／controller使用下行后续结果，不重复累计。 |
+| 通过：专属native VCS文件（V05） | `2026-11-07T07-17-04.834Z-21004-6fc32a51` | `packages/natives/test/aireq-workbench-vcs.test.ts`文件汇总24 pass／0 fail／0 skip；该组合run本身exit 1、93 executed／4 fail，不能称整run通过。Git／cancel／controller使用下行后续结果，不重复累计。 |
 | 通过：Git／cancel／controller（V02／V06／V07） | `2026-11-07T08-00-47.528Z-34312-09b88c8b`，exit 0 | 三文件共70 pass／0 fail。临时Git／bare remote及Forge故障fixture不等于真实在线Forge凭据验收。 |
 | 通过：artifacts／orchestrator（V02／V03） | `2026-11-07T07-10-47.822Z-64820-4fa1a92d`，exit 0 | 两文件共92 pass／0 fail；不与其他含controller或artifacts的运行累计。 |
 | 通过：独立process-resources（V03） | `2026-11-07T08-00-47.543Z-108904-f21db053`，exit 0 | `spec-driven/process-resources.e2e.test.ts` 12 pass／0 fail。 |
-| 通过：Dev＋普通Collab／重连回归（V10及普通OMP） | `2026-11-07T07-17-04.834Z-110496-4dd354ed`，exit 0 | Dev Collab、普通Collab controller／read-only／relay-client-reconnect及mcp-reconnect共136 pass／0 fail；不代替完整网页流程。 |
+| 通过：AIReq＋普通Collab／重连回归（V10及普通OMP） | `2026-11-07T07-17-04.834Z-110496-4dd354ed`，exit 0 | AIReq Collab、普通Collab controller／read-only／relay-client-reconnect及mcp-reconnect共136 pass／0 fail；不代替完整网页流程。 |
 | 通过：native runtime／历史（V04） | `2026-11-07T08-00-47.530Z-81884-51626ca0`，exit 0；受影响历史由下方 source process 结果补足 | runtime 当时46 pass／0 fail；session 存放修正后的普通 `--continue`、真实 Goal 与退出恢复以 `2026-11-07T10-08-10.237Z-82052-a907e37e` 为准，不将旧历史结果重复累计。 |
 | 通过：选测gate（V15的实际子集） | `2026-11-07T07-10-47.818Z-77300-ff822704`，exit 0 | `scripts/ci-test-ts.test.ts`通过；原混合运行共68 pass／0 fail，不是该文件单独计数，也不是fulltest执行结果。 |
-| 通过：UI资源source消费者（V13） | `2026-11-07T07-41-23.300Z-108400-49f63cdd`，exit 0 | `dev-workbench/resources.test.ts` 2 pass／0 fail；不冒充npm／binary成品验收。 |
-| 历史通过：server／client／Composer／Workbench定向消费者（V08／V09的实际子集） | `2026-11-07T08-51-33.753Z-104040-4bbed1ee`，exit 0 | 当时server、collab-web client、composer、dev-workbench四文件共55 pass／0 fail；未受影响服务证据保留，前端直接受影响合同待最小复验，既有组件结果不证明新呈现或实际浏览器E2E通过。 |
+| 通过：UI资源source消费者（V13） | `2026-11-07T07-41-23.300Z-108400-49f63cdd`，exit 0 | `aireq-workbench/resources.test.ts` 2 pass／0 fail；不冒充npm／binary成品验收。 |
+| 历史通过：server／client／Composer／Workbench定向消费者（V08／V09的实际子集） | `2026-11-07T08-51-33.753Z-104040-4bbed1ee`，exit 0 | 当时server、collab-web client、composer、aireq-workbench四文件共55 pass／0 fail；未受影响服务证据保留，前端直接受影响合同待最小复验，既有组件结果不证明新呈现或实际浏览器E2E通过。 |
 | 通过：当前两package类型检查 | 主代理实际 `check:types` | coding-agent 5540 files、collab-web 142 files均通过；不代表浏览器完整流程通过。 |
 | 通过：当前资源生成与实际成品载荷 | 主代理生成及下方真实成品验收 | UI digest=`443e2c2626f845a66c6787bd8956a87cbe5876b7ca4ed66c741455c77a6f522e`；sourceDigest=`d8971ba7b3cf7dcf928f30108d43dbe48719bfb31a033e408f3d72742df40c27`。UI摘要不代表整个后端工作树身份。 |
 | 历史通过：真实Chrome定向smoke（V14的实际子集）；新呈现待验收 | 主代理真实Chromium消费当时已服务UI；截图 `F:/Temp/User/omp-sshots-15c49aa22a5a3f72.webp`、`F:/Temp/User/omp-sshots-15c49fdd605a3f73.webp` | 当时bootstrap的browser／team-config／requirements均HTTP 200，light主题文字可读，`browser.errors`为空。首次真实导入后服务facts为 `modelCalls=0`、stage business；Next后requirements真实生成proposal＋delta，批准前页面可读，业务record仍仅business已批准、stage requirements。该材料可见性及后端事实证据保留，但light主题和旧截图不满足本次默认深色参考布局；原先UI完成结论失效，不代表新呈现已通过，旧Browser E2E 2 pass／8 fail也仍须如实保留。 |
@@ -720,7 +720,7 @@ openPathWithResult(urlOrPath: string): Promise<
 | 通过：本轮宿主原生输入 | `2026-11-07T10-44-33.633Z-37568-3678fbce`，exit 0 | host文件14 pass／0 fail；controller／collab／actors复用同轮组合中已通过的范围，两个错误fixture断言已修。 |
 | 历史部分：呈现纠正中的 browser E2E | `2026-11-07T10-46-01.663Z-21880-29a4837e`，exit 1 | 6 pass／4 fail。图片fixture、bare HTTP fixture、取消后材料读取和拒绝按钮定位均已修；最终有效结果见下方，不将这次失败run称为通过。 |
 | 通过：当前深色参考布局定向观察 | 主代理真实Chrome；截图 `F:/Temp/User/omp-sshots-15c4aa8fb986c0a9.webp`、`F:/Temp/User/omp-sshots-15c4ab09ef06c0aa.webp` | 左需求、横向八阶段、中央只读材料、右共享会话与底部输入可见；无技术控制台面板，真实导入／Next／材料读取及输入框 `/queue list` 已行使。布局不再追求像素复刻；该观察不替代未结业务流程。 |
-| 通过：npm／Windows binary 实际构建与启动 | `bundle-dist.ts`、`build-binary.ts`及显式 `verify-dev-workbench-package.ts --npm-entry packages/coding-agent/dist/cli.js --binary packages/coding-agent/dist/omp.exe --assets-manifest packages/coding-agent/src/dev-workbench/assets.generated.json`，均 exit 0 | 两实际产物均为 `omp/18.17.0`，已在真实Chrome验证内嵌网页及新建需求，UI digest/sourceDigest与上行一致，无checkout／CDN回退。npm SHA256=`6ea927f3fe605fafe3edc3f204053ca49127cc6ccd9f13d7d5c8ae1ee991e679`；binary SHA256=`685f6f4cb1d4e507a59b9a138ff236d290af167d5c0f0c52d3af52466e4d6a30`。 |
+| 通过：npm／Windows binary 实际构建与启动 | `bundle-dist.ts`、`build-binary.ts`及显式 `verify-aireq-workbench-package.ts --npm-entry packages/coding-agent/dist/cli.js --binary packages/coding-agent/dist/omp.exe --assets-manifest packages/coding-agent/src/aireq-workbench/assets.generated.json`，均 exit 0 | 两实际产物均为 `omp/18.17.0`，已在真实Chrome验证内嵌网页及新建需求，UI digest/sourceDigest与上行一致，无checkout／CDN回退。npm SHA256=`6ea927f3fe605fafe3edc3f204053ca49127cc6ccd9f13d7d5c8ae1ee991e679`；binary SHA256=`685f6f4cb1d4e507a59b9a138ff236d290af167d5c0f0c52d3af52466e4d6a30`。 |
 | 通过：最终十个真实 browser 场景（V14） | `2026-11-07T11-23-54.633Z-57316-3d356969`全文件8 pass／2 fail；修正这两处fixture后 `2026-11-07T11-28-58.364Z-103452-54002cce`仅复验失败场景，2 pass／8 filtered out／0 fail，exit 0 | 八个未受影响场景复用前次有效通过；最后两项覆盖完整PR合入／独立失败测试／关联修复／复测／只读与真实deny／单次批准。不是一次十项全绿运行，也未新增永久skip或放宽断言。 |
 | 通过：取消读取生命周期（V02／V08） | `2026-11-07T11-06-50.389Z-52728-2a256e0c`，exit 0；server复用 `2026-11-07T11-04-30.865Z-110112-ff2bae75`文件级结果 | controller15 pass；server4 pass。取消／取消中不再重新解析已撤销归档，保留域状态；最终browser取消场景已通过。 |
 | 通过：显式本地业务写作 smoke（R11） | 主代理真实Chrome→开始本地写作→真实business原生write→读取文档→下载Markdown | 下载1327字节实际Markdown，存在标题及模板章节；宿主事实 `records=[]`、`gitUnchanged=true`，浏览器errors为空。仅模型回复由localhost夹具提供，不改变生产代码；自有临时脚本及进程清理。 |
@@ -733,9 +733,9 @@ openPathWithResult(urlOrPath: string): Promise<
 | ID | 已批准范围 | 实际任务 | 必须可观察的验收 |
 | --- | --- | --- | --- |
 | R01 | 一次性替换、无旧模式兼容 | T01、T11、T12、T14、T15 | 只新记录／新流程，旧入口拒绝，无双轨／迁移／删用户历史 |
-| R02 | 删除Dev阶段TUI、保留普通TUI | T08、T11、T12、T14 | `/dev`独占期间普通输入／命令被阻止；再次 `/dev`结清退出，恢复原普通会话／草稿／模型／菜单 |
+| R02 | 删除AIReq阶段TUI、保留普通TUI | T08、T11、T12、T14 | `/aireq`独占期间普通输入／命令被阻止；再次 `/aireq`结清退出，恢复原普通会话／草稿／模型／菜单 |
 | R03 | 复用五Agent／技能／工具／会话／Team／Goal | T02、T04、T08、T09、T14 | 真实原生工具流／问答／权限／模型／后代／Team／Goal消费者完整 |
-| R05 | 双入口与完整地址 | T08、T11、T13、T14 | `/dev`／`omp dev`真实ready URL；TUI再次 `/dev`退出，关页不退出；opener失败仍可复制 |
+| R05 | 双入口与完整地址 | T08、T11、T13、T14 | `/aireq`／`omp aireq`真实ready URL；TUI再次 `/aireq`退出，关页不退出；opener失败仍可复制 |
 | R06 | 参考四区／默认深色／当前阶段简洁控制 | T09、T14 | 实际左列表、中央材料上方八阶段、中央只读材料、右共享会话及底部输入；非像素复制，无JSON／命令下拉／调试控制台；已实际Chrome观察，见当前深色布局证据 |
 | R07 | 查看不推进、会话改文档、上传下载 | T03、T08、T09、T14 | 视图导航零副作用，中央只读，实际Markdown往返与会话修改 |
 | R08 | 业务检查必经八阶段 | T01、T02、T14 | 所有新开发需求business起步，无直接requirements产品入口 |
@@ -766,6 +766,6 @@ openPathWithResult(urlOrPath: string): Promise<
 ## Plan Completion Criteria
 
 - [ ] T01—T15全部实现，31项均有实际生产路径与对应消费者，不以内部波次、静态原型、类型声明或mock结果替代交付。
-- [ ] 所有旧Dev专属入口／类型／callsite／tests／文档合同完成cutover；普通TUI保留，没有新增worktree或旧兼容。
+- [ ] 所有旧AIReq专属入口／类型／callsite／tests／文档合同完成cutover；普通TUI保留，没有新增worktree或旧兼容。
 - [ ] 已授权验证的真实证据按source／npm／binary、平台、原生／浏览器、mock模型／真实外部能力分别报告；未运行不称通过。
 - [ ] 未授权commit／push／发布不执行；实施与验证状态据实际证据更新。

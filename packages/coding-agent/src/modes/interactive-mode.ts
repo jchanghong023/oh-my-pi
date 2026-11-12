@@ -1801,10 +1801,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	// session switches. While set, short replies like "c" are answers, not
 	// continue shortcuts.
 	#guidedGoalInterviewActive = false;
-	isDevWorkbenchModeActive?: () => boolean;
-	handleDevWorkbenchModeInput?: (data: string) => boolean;
-	handleDevWorkbenchModeSubmit?: (text: string) => Promise<boolean>;
-	#devWorkbenchInputUnsubscribe?: () => void;
+	isAIReqWorkbenchModeActive?: () => boolean;
+	handleAIReqWorkbenchModeInput?: (data: string) => boolean;
+	handleAIReqWorkbenchModeSubmit?: (text: string) => Promise<boolean>;
+	#aiReqWorkbenchInputUnsubscribe?: () => void;
 	readonly #rootSession: AgentSession;
 	readonly #hostShutdownCallbacks = new Set<() => Promise<void>>();
 	#sessionBindingUnsubscribers: Array<() => void> = [];
@@ -2615,8 +2615,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.setFocus(this.editor);
 		this.syncComposerShape();
 
-		this.#devWorkbenchInputUnsubscribe ??= this.ui.addInputListener(
-			data => (this.handleDevWorkbenchModeInput?.(data) ? { consume: true } : undefined),
+		this.#aiReqWorkbenchInputUnsubscribe ??= this.ui.addInputListener(
+			data => (this.handleAIReqWorkbenchModeInput?.(data) ? { consume: true } : undefined),
 			{ prepend: true },
 		);
 		this.#inputController.setupKeyHandlers();
@@ -2624,7 +2624,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Native transcript controls (user-message toolbar, error-frame actions)
 		// run the same commands as their key bindings.
 		setTranscriptActionHandler(action => {
-			if (this.isDevWorkbenchModeActive?.()) return;
+			if (this.isAIReqWorkbenchModeActive?.()) return;
 			switch (action.act) {
 				case "retry":
 					void this.#inputController.handleRetry();
@@ -3169,7 +3169,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * reflect `newCwd` before this is called.
 	 */
 	async applyCwdChange(newCwd: string): Promise<boolean> {
-		if (this.isDevWorkbenchModeActive?.()) return false;
+		if (this.isAIReqWorkbenchModeActive?.()) return false;
 		const previousCwd = getProjectDir();
 		try {
 			setProjectDir(newCwd);
@@ -3255,7 +3255,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return () => this.#hostShutdownCallbacks.delete(dispose);
 	}
 
-	getDevWorkbenchEntryBlocker(): string | undefined {
+	getAIReqWorkbenchEntryBlocker(): string | undefined {
 		if (this.#isShuttingDown) return "The native host is shutting down.";
 		if (!this.#modesRestored || this.#modeSetInFlight || this.#modeChangeHolds > 0)
 			return "Wait for the ordinary session's mode transition to settle.";
@@ -3300,7 +3300,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#assertOrdinaryTuiInputAllowed(): void {
-		if (this.isDevWorkbenchModeActive?.())
+		if (this.isAIReqWorkbenchModeActive?.())
 			throw new Error("Exit the active browser workbench with its exit command before using ordinary TUI commands.");
 	}
 
@@ -3420,7 +3420,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#scheduleLoopAutoSubmit(): void {
 		this.#cancelLoopAutoSubmit();
-		if (this.isDevWorkbenchModeActive?.()) return;
+		if (this.isAIReqWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
 		if (this.#loopIntervalMs !== undefined && isLoopLimitExhausted(this.loopLimit)) {
 			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
@@ -3441,7 +3441,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#loopAutoSubmitTimer = setTimeout(() => {
 			this.#loopAutoSubmitTimer = undefined;
 			try {
-				if (this.isDevWorkbenchModeActive?.()) return;
+				if (this.isAIReqWorkbenchModeActive?.()) return;
 				if (!this.loopModeEnabled || !this.onInputCallback || this.#isShuttingDown) return;
 				if (this.#loopIntervalMs !== undefined && isLoopDurationExpired(this.loopLimit)) {
 					this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
@@ -3486,7 +3486,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#scheduleGoalContinuation(): void {
 		this.#cancelGoalContinuation("rescheduled");
 		const stop = (reason: string) => this.#logGoalContinuation("suppressed", reason);
-		if (this.isDevWorkbenchModeActive?.()) return stop("dev_workbench_mode");
+		if (this.isAIReqWorkbenchModeActive?.()) return stop("aireq_workbench_mode");
 		if (this.loopModeEnabled) return stop("loop_mode");
 		if (!this.onInputCallback) return stop("not_waiting_for_input");
 		if (!cfgGoalContinuationModes.get(this.session.settings).includes("interactive"))
@@ -3520,7 +3520,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				const stopWaiting = (reason: string) =>
 					this.#logGoalContinuation("suppressed", reason, { ...elapsed(), stage: "idle_wait" });
 				if (!this.onInputCallback) return stopWaiting("not_waiting_for_input");
-				if (this.isDevWorkbenchModeActive?.()) return stopWaiting("dev_workbench_mode");
+				if (this.isAIReqWorkbenchModeActive?.()) return stopWaiting("aireq_workbench_mode");
 				if (this.session !== owner) return stopWaiting("session_changed");
 				if (!this.goalModeEnabled || this.goalModePaused) return stopWaiting("goal_disabled_or_paused");
 				// The idle timer can outlive its scheduling window; agent_end reschedules.
@@ -3607,12 +3607,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#isAutoSubmitBlocked(): boolean {
-		if (this.isDevWorkbenchModeActive?.()) return true;
+		if (this.isAIReqWorkbenchModeActive?.()) return true;
 		return this.session.isStreaming || this.session.isCompacting || this.session.hasPostPromptWork;
 	}
 
 	#submitLoopPromptWhenReady(prompt: string): void {
-		if (this.isDevWorkbenchModeActive?.()) return;
+		if (this.isAIReqWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
 		if (isLoopDurationExpired(this.loopLimit)) {
 			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
@@ -3637,7 +3637,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #loopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
-		if (this.isDevWorkbenchModeActive?.()) return;
+		if (this.isAIReqWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
 		if (this.#isAutoSubmitBlocked()) {
 			this.#deferLoopAutoSubmit(() => {
@@ -3794,7 +3794,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	armLoopAutoSubmit(promptPromise: Promise<unknown>): void {
 		this.#cancelLoopAutoSubmit();
-		if (this.isDevWorkbenchModeActive?.()) return;
+		if (this.isAIReqWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
 		if (this.#loopIntervalMs === undefined) {
 			this.#scheduleLoopAutoSubmit();
@@ -3944,7 +3944,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			message,
 			state: this.#getSessionModeState(),
 		});
-		if (this.isDevWorkbenchModeActive?.())
+		if (this.isAIReqWorkbenchModeActive?.())
 			return refuse("conflict", "Exit the active browser workbench before changing the ordinary session mode.");
 		if (!cfgExtensionHandlersModeControl.get(this.session.settings)) {
 			return refuse("disabled", "Extension mode control is disabled in settings (extensionHandlers.modeControl).");
@@ -8505,8 +8505,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	stop(): void {
 		this.#closeAttempt?.abort();
-		this.#devWorkbenchInputUnsubscribe?.();
-		this.#devWorkbenchInputUnsubscribe = undefined;
+		this.#aiReqWorkbenchInputUnsubscribe?.();
+		this.#aiReqWorkbenchInputUnsubscribe = undefined;
 		for (const unsubscribe of this.#sessionBindingUnsubscribers) unsubscribe();
 		this.#sessionBindingUnsubscribers = [];
 		for (const unsubscribe of this.#sessionEventBusUnsubscribers) unsubscribe();
@@ -8607,8 +8607,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * cancellable and first ask extensions through `session_before_shutdown`.
 	 */
 	async shutdown(options?: { cancellable?: boolean }): Promise<void> {
-		if (options?.cancellable !== false && this.isDevWorkbenchModeActive?.()) {
-			await this.handleDevWorkbenchModeSubmit?.("/exit");
+		if (options?.cancellable !== false && this.isAIReqWorkbenchModeActive?.()) {
+			await this.handleAIReqWorkbenchModeSubmit?.("/exit");
 			return;
 		}
 		if (this.#isShuttingDown) {
@@ -9643,7 +9643,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#vibeSessionTransitionBlocked(): boolean {
-		if (this.isDevWorkbenchModeActive?.()) return true;
+		if (this.isAIReqWorkbenchModeActive?.()) return true;
 		if (!this.vibeModeEnabled) return false;
 		this.session.emitNotice("warning", "Exit vibe mode first.");
 		return true;

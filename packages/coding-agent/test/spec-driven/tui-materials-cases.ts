@@ -2,25 +2,25 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type {
-	DevNativeSessionRef,
-	DevWorkflowCommand,
-	DevWorkflowStage,
-	DevWorkflowView,
-} from "../../src/dev-workbench/workflow-types";
+	AIReqNativeSessionRef,
+	AIReqWorkflowCommand,
+	AIReqWorkflowStage,
+	AIReqWorkflowView,
+} from "../../src/aireq-workbench/workflow-types";
 import {
 	WorkflowConsumerFixture,
 	type WorkflowConsumerProcess,
 	pollWorkflow,
 	workflowGit,
 	workflowNativeContext,
-} from "../dev-workbench/workflow-fixture";
+} from "../aireq-workbench/workflow-fixture";
 import { type FixtureRole, type ModelRequest, type Reply } from "./provider-fixture";
 
 export interface MaterialFailure {
 	role: FixtureRole;
 	kind: "missing" | "malformed" | "unknown";
 }
-const stageFor = (role: FixtureRole): "requirements" | DevWorkflowStage =>
+const stageFor = (role: FixtureRole): "requirements" | AIReqWorkflowStage =>
 	role === "planner" ? "planning" : role === "executor" ? "executing" : role;
 
 /** Native provider seam emits actual write calls; all authority and transition checks stay in production. */
@@ -28,7 +28,7 @@ export function successfulWorkflowReply(request: ModelRequest, failure?: Materia
 	const context = workflowNativeContext(request);
 	if (!context || !Array.isArray(context.outputPaths) || typeof context.binding !== "object" || !context.binding)
 		return { text: "Ordinary native dialogue; no workflow decision." };
-	const binding = context.binding as { irId: string; srId?: string; phase: "requirements" | DevWorkflowStage };
+	const binding = context.binding as { irId: string; srId?: string; phase: "requirements" | AIReqWorkflowStage };
 	const outputPaths = context.outputPaths as string[];
 	const applies = failure && binding.phase === stageFor(failure.role) && context.role !== "reviewer";
 	const completed = request.messages
@@ -68,13 +68,13 @@ export function successfulWorkflowReply(request: ModelRequest, failure?: Materia
 	else if (binding.phase === "requirements") {
 		const requirements = {
 			title: "Greeting behavior",
-			document: { path: `docs/dev/requirements/${binding.irId}/ir.md`, content: markdown("Greeting behavior") },
+			document: { path: `docs/aireq/requirements/${binding.irId}/ir.md`, content: markdown("Greeting behavior") },
 			srs: [
 				{
 					id: `sr-${binding.irId}`,
 					title: "Greeting API and CLI",
 					document: {
-						path: `docs/dev/requirements/${binding.irId}/srs/greeting.md`,
+						path: `docs/aireq/requirements/${binding.irId}/srs/greeting.md`,
 						content: markdown("Greeting API and CLI"),
 					},
 				},
@@ -108,7 +108,7 @@ export interface WorkflowStageFixture {
 	projectId: string;
 	irId: string;
 	srId: string;
-	view: DevWorkflowView;
+	view: AIReqWorkflowView;
 }
 export async function bindWorkflowObject(
 	process: WorkflowConsumerProcess,
@@ -123,30 +123,30 @@ export async function bindWorkflowObject(
 	});
 	if (!response.ok) throw new Error(`Workflow binding failed (${response.status}): ${await response.text()}`);
 }
-type ConsumerCommand = DevWorkflowCommand extends infer C
-	? C extends DevWorkflowCommand
+type ConsumerCommand = AIReqWorkflowCommand extends infer C
+	? C extends AIReqWorkflowCommand
 		? Omit<C, "operationId" | "expectedRevision">
 		: never
 	: never;
 export async function workflowCommand(
 	process: WorkflowConsumerProcess,
 	command: ConsumerCommand,
-): Promise<DevWorkflowView> {
+): Promise<AIReqWorkflowView> {
 	const current = await process.view(command.projectId);
 	const result = await process.command({
 		...command,
 		operationId: crypto.randomUUID(),
 		expectedRevision: current.revision,
-	} as DevWorkflowCommand);
+	} as AIReqWorkflowCommand);
 	if (!result.response.ok || result.result.status !== "completed")
 		throw new Error(`Workflow command ${command.type} failed: ${JSON.stringify(result.result)}`);
 	return process.view(command.projectId);
 }
 export async function submitWorkflowMaterial(
 	h: Omit<WorkflowStageFixture, "view">,
-	stage: "requirements" | DevWorkflowStage,
+	stage: "requirements" | AIReqWorkflowStage,
 	failing = false,
-): Promise<DevWorkflowView> {
+): Promise<AIReqWorkflowView> {
 	await bindWorkflowObject(h.process, h.projectId, h.irId, stage === "requirements" ? undefined : h.srId);
 	const before = await h.process.view(h.projectId);
 	const operationId = crypto.randomUUID();
@@ -168,7 +168,7 @@ export async function submitWorkflowMaterial(
 		});
 	const response = await request();
 	if (!response.ok) throw new Error(`Native material input failed (${response.status}): ${await response.text()}`);
-	const { session } = (await response.json()) as { session: DevNativeSessionRef };
+	const { session } = (await response.json()) as { session: AIReqNativeSessionRef };
 	const settled = await pollWorkflow(
 		async () => {
 			const response = await request();
@@ -222,7 +222,7 @@ export async function submitWorkflowMaterial(
 
 /** One shared real workflow setup; local Git merge is controlled test action, not platform PR verification. */
 export async function createWorkflowStage(
-	stage: "requirements" | DevWorkflowStage,
+	stage: "requirements" | AIReqWorkflowStage,
 	options: WorkflowStageOptions = {},
 ): Promise<WorkflowStageFixture> {
 	const fixture = await WorkflowConsumerFixture.create({

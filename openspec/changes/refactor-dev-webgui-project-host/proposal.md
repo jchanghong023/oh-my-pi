@@ -1,15 +1,15 @@
-# Proposal：Dev 最新需求对齐 — personal-commands
+# Proposal：AIReq 最新需求对齐 — personal-commands
 
 ## Why
 
-本文件属于[Dev 需求总提案](../refactor-dev-webgui-requirement-intake/proposal.md)，按用户最新确认的规则更新，替换冲突的旧流程表述。
+本文件属于[AIReq 需求总提案](../refactor-dev-webgui-requirement-intake/proposal.md)，按用户最新确认的规则更新，替换冲突的旧流程表述。
 
 ## What Changes
 
 - 本组 `personal-commands` 共 7 项需求操作，配套见 [规格文件](specs/personal-commands/spec.md)。
 - 仅保留需求管理角色、Web 所有者配置边界及远程仓库设置；平台托管提案分支，合入且文档完整后台自动转正，不要求个人目录、不提供计划／执行／IR 验收角色或开发名额。
 - 保留本能力不冲突的原生生命周期、会话、材料与设置边界；确切要求以配套规格和当前权威基线为准。
-- 完整部署、目录、角色与流程见[最新 Dev 说明](../../../docs-zh-CN/spec-driven-orchestration.md)。
+- 完整部署、目录、角色与流程见[最新 AIReq 说明](../../../docs-zh-CN/spec-driven-orchestration.md)。
 
 ## Capabilities
 
