@@ -1,4 +1,5 @@
 import { createWorkspaceServiceProjection } from "../packages/ui/src/lib/workspaceServiceProjection.js";
+import { isFormalSelection } from "../packages/ui/src/aireq/domain.js";
 import "../packages/ui/src/aireq/browserStorage.js";
 import { createUuid } from "@zcode/shared";
 import { AppErrorBoundary, Root, ZCodeIntlProvider } from "@zcode/ui";
@@ -27,9 +28,10 @@ function BrowserApplication() {
   const workspace = source.resolveWorkspace(view, selection);
   const [connection, setConnection] = useState<{ key: string; services: IServiceAccessor; attachment: { active: boolean } }>();
   const [connectionError, setConnectionError] = useState<string>();
-  const formalProgress = Boolean(selection.formalView || view?.groups.some(group => group.id === selection.irId));
+  const formalProgress = isFormalSelection(view, selection);
+  const workspaceSession = formalProgress ? undefined : session;
   // 列表和同页报告复用工作区，保留表格筛选、展开与滚动位置。
-  const key = JSON.stringify([source.backend?.id ?? source.clientId, identity?.employeeId, workspace.identity, workspace.path, selection.projectId, formalProgress ? "formal-progress" : selection.irId, formalProgress ? undefined : selection.srId, selection.freeSessionId, session?.sessionId, session?.round]);
+  const key = JSON.stringify([source.backend?.id ?? source.clientId, identity?.employeeId, workspace.identity, workspace.path, selection.projectId, formalProgress ? "formal-progress" : selection.irId, formalProgress ? undefined : selection.srId, selection.freeSessionId, workspaceSession?.sessionId, workspaceSession?.round]);
 
   useEffect(() => {
     if (!view || !workspace.path) return;
@@ -44,7 +46,7 @@ function BrowserApplication() {
     };
     const registrationId = `aireq:${source.clientId}:${createUuid()}`;
     setConnectionError(undefined);
-    void source.connectWorkspace(workspace, selection, session).then(async opened => {
+    void source.connectWorkspace(workspace, selection, workspaceSession).then(async opened => {
       if (!active) { await opened.dispose(); return; }
       dispose = opened.dispose;
       registerBaseWorkspaceServices(opened.services);
@@ -79,7 +81,7 @@ function BrowserApplication() {
   if (connectionError) return <ConnectionStatus error={connectionError} retry={() => window.location.reload()} />;
   if (!connection || connection.key !== key || !connection.attachment.active) return <ConnectionStatus />;
   return <div className="contents" data-aireq-connection-state="connected" data-aireq-workspace-path={workspace.path} data-aireq-workspace-identity={workspace.identity} data-aireq-workspace-kind={workspace.kind}>
-    {aireq.error && <p role="alert" className="fixed inset-x-0 top-0 z-50 bg-background p-3 text-destructive">{aireq.error}</p>}
+    {aireq.error && !formalProgress && <p role="alert" className="fixed inset-x-0 top-0 z-50 bg-background p-3 text-destructive">{aireq.error}</p>}
     <Root
       key={key}
       services={connection.services}
@@ -88,7 +90,7 @@ function BrowserApplication() {
       initialWorkspaceAbsPath={workspace.path}
       initialWorkspaceIdentity={workspace.identity}
       initialDirectoryPath={workspace.path}
-      initialTaskId={selection.freeSessionId ?? session?.sessionId}
+      initialTaskId={formalProgress ? undefined : selection.freeSessionId ?? workspaceSession?.sessionId}
       initialSidebarFileTreeOpen={selection.freeFiles}
       onOpenProject={async (path, _create, newSession, showFiles) => {
         const target = view.projects.find(item => item.root === path || source.projects?.readDevelopmentRoot(item.id, identity?.employeeId) === path);

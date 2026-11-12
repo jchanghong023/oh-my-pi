@@ -1,3 +1,4 @@
+import { srCompletionBlocker } from "../progress.js";
 import type { AIReqProgressAnalysis, AIReqWorkflowView } from "../types.js";
 import { getEmployeeId, isEmployeeId } from "../identity.js";
 import { getPrototypeWorkflow, prototypeWorkflowChanges } from "./workflow.js";
@@ -5,7 +6,7 @@ import { getPrototypeWorkflow, prototypeWorkflowChanges } from "./workflow.js";
 const samples: Record<string, { percent: number; merged?: boolean; certain?: boolean }> = {
   "sr-auth": { percent: 72 }, "sr-session": { percent: 99, certain: true },
   "sr-permissions": { percent: 35 }, "sr-onboarding": { percent: 100, merged: true, certain: true },
-  "sr-export": { percent: 94, merged: true },
+  "sr-export": { percent: 99, merged: true, certain: true },
   "sr-notification-inbox": { percent: 100, merged: true, certain: true },
   "sr-audit-retention": { percent: 100, merged: true, certain: true },
   "sr-mobile-navigation": { percent: 60 }, "sr-mobile-notifications": { percent: 40 },
@@ -30,6 +31,7 @@ export function withPrototypeProgress(view: AIReqWorkflowView): AIReqWorkflowVie
         if (!sample) return sr;
         const analysedAt = "2026-11-11T01:30:00.000Z";
         progress = {
+          ...(sample.percent === 100 ? { manual: { employeeId: "j00808874", reason: "AI 已分析到 99%，合入后人工确认完成（样例）。", at: analysedAt } } : {}),
           percent: sample.percent, merged: sample.merged ?? false, certain: sample.certain ?? false,
           branch: sr.trackingBranch?.name ?? `sr/${sr.id}`, analysedAt, codeVersion: `${sr.id}-head`, defaultVersion: "main-20261111",
           implemented: sample.percent > 0 ? [`${sr.title}：已覆盖主要处理路径。`] : [],
@@ -57,10 +59,12 @@ export async function updatePrototypeSrProgress(projectId: string, irId: string,
   const group = view.groups.find(item => item.id === irId);
   const sr = view.srs.find(item => item.id === srId && item.irId === irId);
   const employeeId = getEmployeeId();
-  if (employeeId !== "j00808874" && (!group?.ownerEmployeeId || employeeId !== group.ownerEmployeeId)) throw new Error("只有管理员或该 IR 负责人可以调整进度。");
+  if (employeeId !== "j00808874" && (!group?.ownerEmployeeId || employeeId !== group.ownerEmployeeId)) throw new Error("只有管理员或该 IR 负责人可以确认完成。");
   if (!sr?.progress) throw new Error("SR 分析记录不存在。");
-  if (!Number.isInteger(percent) || percent < 0 || percent > (sr.progress.merged ? 100 : 99)) throw new Error(sr.progress.merged ? "进度须为 0～100 的整数。" : "尚未合入默认分支，最高只能设为 99%，不能确认完成。");
-  if (!reason.trim()) throw new Error("请填写人工判断依据。");
+  if (percent !== 100) throw new Error("人工不能修改开发百分比，只能将 AI 已分析到 99% 的进度确认到 100%。");
+  const blocker = srCompletionBlocker(sr);
+  if (blocker) throw new Error(blocker);
+  if (typeof reason !== "string" || !reason.trim()) throw new Error("请填写完成确认依据。");
   reports.set(`${projectId}:${srId}`, { ...sr.progress, percent, manual: { employeeId, reason: reason.trim(), at: new Date().toISOString() } });
   prototypeWorkflowChanges.fire();
 }

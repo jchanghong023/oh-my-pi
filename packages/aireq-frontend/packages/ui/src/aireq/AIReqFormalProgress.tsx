@@ -1,7 +1,7 @@
 import { WorkspaceSidebarToolbar } from "@/WorkspaceSidebarToolbar.js";
 import type { WorkspaceSidebarToolbarProps } from "@/WorkspaceSidebarToolbar.js";
-import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { CheckCircle2, CircleDashed, CircleDot, ClipboardCheck, GitMerge, ChevronDown, ChevronLeft, ChevronRight, FileText, PanelRightClose, Search } from "lucide-react";
+import { Fragment, useId, useState, type ReactNode } from "react";
+import { CheckCircle2, CircleDashed, CircleDot, ClipboardCheck, GitMerge, ChevronDown, ChevronRight, FileText, PanelRightClose, Search } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Badge } from "@/components/ui/badge.js";
 import { Input } from "@/components/ui/input.js";
@@ -20,7 +20,7 @@ import { useAIReqDataSource } from "./data-source.js";
 import { getEmployeeId } from "./identity.js";
 import { AssignOwner, AIReqDependencies, AIReqEditPlanning, AIReqPlanningSummary } from "./AIReqRequirementPlanning.js";
 import { irPlanning, planningDate, planningWarnings, srDependencies } from "./planning.js";
-import { irProgress, irProgressStatus, irSrs, progressLabel, PROGRESS_STATUSES, srProgress, srProgressStatus } from "./progress.js";
+import { irProgress, irProgressStatus, irSrs, progressLabel, PROGRESS_STATUSES, srCompletionBlocker, srProgress, srProgressStatus } from "./progress.js";
 import type { AIReqProgressStatus } from "./progress.js";
 import type { AIReqRequirementGroup, AIReqSystemRequirement } from "./types.js";
 import { BranchCopy } from "./BranchCopy.js";
@@ -58,54 +58,6 @@ export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationPr
   const [filteredExpansion, setFilteredExpansion] = useState<Record<string, boolean>>({});
   const [copyMessage, setCopyMessage] = useState("");
   const view = aireq.view;
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const tableRef = useRef<HTMLTableElement>(null);
-  const scrollId = useId();
-  const scrollDescriptionId = useId();
-  const [columns, setColumns] = useState({ canLeft: false, canRight: false, hiddenLeft: 0, hiddenRight: 0 });
-  const ready = Boolean(view);
-  useEffect(() => {
-    const viewport = scrollRef.current;
-    const table = tableRef.current;
-    if (!viewport || !table) return;
-    const headers = Array.from(table.tHead?.rows[0]?.cells ?? []);
-    const measure = () => {
-      const bounds = viewport.getBoundingClientRect();
-      const stickyWidth = headers[0]?.getBoundingClientRect().width ?? 0;
-      let hiddenLeft = 0;
-      let hiddenRight = 0;
-      for (const header of headers.slice(1)) {
-        const cell = header.getBoundingClientRect();
-        if (cell.left < bounds.left + stickyWidth - 2) hiddenLeft++;
-        if (cell.right > bounds.right + 2) hiddenRight++;
-      }
-      const next = {
-        canLeft: viewport.scrollLeft > 2,
-        canRight: viewport.scrollWidth - viewport.clientWidth - viewport.scrollLeft > 2,
-        hiddenLeft,
-        hiddenRight,
-      };
-      setColumns(current => current.canLeft === next.canLeft && current.canRight === next.canRight &&
-        current.hiddenLeft === next.hiddenLeft && current.hiddenRight === next.hiddenRight ? current : next);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(viewport);
-    observer.observe(table);
-    viewport.addEventListener("scroll", measure, { passive: true });
-    window.addEventListener("resize", measure);
-    return () => {
-      observer.disconnect();
-      viewport.removeEventListener("scroll", measure);
-      window.removeEventListener("resize", measure);
-    };
-  }, [ready]);
-  const scrollColumns = (direction: -1 | 1) => {
-    const viewport = scrollRef.current;
-    if (!viewport) return;
-    const stickyWidth = tableRef.current?.tHead?.rows[0]?.cells[0]?.getBoundingClientRect().width ?? 208;
-    viewport.scrollBy({ left: direction * Math.max(160, viewport.clientWidth - stickyWidth - 32) });
-  };
   if (!view) return <p role="status" className="p-6">正在读取正式需求…</p>;
   const groups = view.groups.filter(group => group.releaseId === aireq.releaseId);
   const normalized = query.trim().toLocaleLowerCase();
@@ -123,7 +75,7 @@ export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationPr
   const date = (value?: string) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "尚未分析";
   return <main className="flex h-full min-h-0 min-w-0 flex-col bg-background" data-testid="aireq-formal-table">
     <div className="flex h-12 shrink-0 items-center">{!navigationOpen && <WorkspaceSidebarToolbar {...toolbar} />}</div>
-    <div className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-4 py-4 md:px-6 md:py-6">
+    <div className="flex min-h-0 w-full flex-1 flex-col px-3 py-4 md:px-4 md:py-6">
     <header className="shrink-0 space-y-3 border-b border-border pb-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="shrink-0 text-ui-settings-title font-semibold tracking-tight lg:text-ui-settings-title-lg">正式需求</h1>
@@ -140,29 +92,12 @@ export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationPr
         {owner === "specified" && <Popover><PopoverTrigger asChild><Button variant="outline" size="sm" className="h-7" aria-label="输入或选择 IR 负责人">{ownerEmployeeId.trim() || "输入或选择工号"}</Button></PopoverTrigger><PopoverContent align="end" className="max-h-[70dvh] w-96 overflow-y-auto" aria-label="筛选 IR 负责人"><AIReqEmployeePicker value={ownerEmployeeId} onChange={setOwnerEmployeeId} ownerIds={groups.flatMap(group => group.ownerEmployeeId ? [group.ownerEmployeeId] : [])} />{!ownerEmployeeId.trim() && <p role="status" className="mt-2 text-ui-xs text-foreground-subtle">选择后按工号精确筛选；当前尚未限定负责人。</p>}</PopoverContent></Popover>}
         {(normalized || status !== "all" || owner !== "all") && <Button variant="ghost" size="sm" onClick={() => { setQuery(""); setStatus("all"); setOwner("all"); setOwnerEmployeeId(""); }}>清除筛选</Button>}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p id={scrollDescriptionId} className="text-ui-sm text-foreground-subtle" title="名称列固定。聚焦表格后可按方向键横向查看，Home / End 跳到首尾。">
-          {columns.canLeft || columns.canRight ? `名称列固定 · ${columns.hiddenRight ? `右侧还有 ${columns.hiddenRight} 列` : `左侧还有 ${columns.hiddenLeft} 列`}` : "名称列固定 · 已显示全部列"}
-        </p>
-        <div className="flex shrink-0 items-center gap-1" role="group" aria-label="横向查看正式需求列">
-          <Button type="button" variant="outline" size="sm" aria-controls={scrollId} aria-label="向左查看前面的列" disabled={!columns.canLeft} onClick={() => scrollColumns(-1)}><ChevronLeft className="size-3.5" />前面的列</Button>
-          <Button type="button" variant="outline" size="sm" aria-controls={scrollId} aria-label="向右查看后面的列" disabled={!columns.canRight} onClick={() => scrollColumns(1)}>后面的列<ChevronRight className="size-3.5" /></Button>
-        </div>
-      </div>
+
     </header>
-    <div ref={scrollRef} id={scrollId} role="region" aria-label="正式需求表格横向滚动区域" aria-describedby={scrollDescriptionId} tabIndex={0} className="mt-3 min-h-0 flex-1 overflow-auto rounded-xl border border-border bg-background focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" data-testid="formal-table-scroll" onKeyDown={event => {
-      if (event.target !== event.currentTarget) return;
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        event.preventDefault();
-        scrollColumns(event.key === "ArrowLeft" ? -1 : 1);
-      } else if (event.key === "Home" || event.key === "End") {
-        event.preventDefault();
-        event.currentTarget.scrollTo({ left: event.key === "Home" ? 0 : event.currentTarget.scrollWidth });
-      }
-    }}>
-      <table ref={tableRef} className="w-full min-w-[1280px] table-fixed border-separate border-spacing-0 text-ui-base" aria-label="正式需求 IR SR 开发进度表">
-        <colgroup><col className="w-52" /><col className="w-36" /><col className="w-36" /><col className="w-56" /><col className="w-36" /><col className="w-32" /><col className="w-32" /><col className="w-16" /><col className="w-24" /></colgroup>
-        <MarkdownTableHeader className="sticky top-0 z-20 bg-background"><MarkdownTableRow>{["需求", "状态与进度", "负责人 / 开发人员", "开发分支 · 点击复制", "依赖关系", "计划开始", "计划结束", "问题", "最近分析"].map((title, index) => <MarkdownTableHead key={title} scope="col" className={`whitespace-nowrap bg-background px-2 font-medium text-foreground-subtle ${index === 0 ? "sticky left-0 z-30" : ""}`}>{title}</MarkdownTableHead>)}</MarkdownTableRow></MarkdownTableHeader>
+    <div role="region" aria-label="正式需求表格滚动区域" tabIndex={0} className="mt-3 min-h-0 flex-1 overflow-auto rounded-xl border border-border bg-background focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" data-testid="formal-table-scroll">
+      <table className="w-full min-w-[1168px] table-fixed border-separate border-spacing-0 text-ui-base" aria-label="正式需求 IR SR 开发进度表">
+        <colgroup><col /><col className="w-36" /><col className="w-36" /><col className="w-28" /><col className="w-36" /><col className="w-32" /><col className="w-32" /><col className="w-16" /><col className="w-24" /></colgroup>
+        <MarkdownTableHeader className="sticky top-0 z-20 bg-background"><MarkdownTableRow>{["需求", "状态与进度", "负责人 / 开发人员", "开发分支", "依赖关系", "计划开始", "计划结束", "问题", "最近分析"].map((title, index) => <MarkdownTableHead key={title} scope="col" className={`whitespace-nowrap bg-background px-2 font-medium text-foreground-subtle ${index === 0 ? "sticky left-0 z-30" : ""}`}>{title}</MarkdownTableHead>)}</MarkdownTableRow></MarkdownTableHeader>
         <MarkdownTableBody>{visible.map(group => {
           const srs = irSrs(view, group);
           const groupMatches = matches(group.id, group.title);
@@ -180,7 +115,7 @@ export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationPr
               <MarkdownTableCell className="sticky left-0 z-10 bg-background px-2" style={{ backgroundImage: "linear-gradient(var(--formal-row-fill), var(--formal-row-fill))" }}><div className="flex items-start gap-2"><Button size="icon-sm" variant="ghost" aria-label={`${showChildren ? "收起" : "展开"}${group.title}的SR`} aria-expanded={showChildren} onClick={event => { event.stopPropagation(); if (filteringChildren) { setFilteredExpansion(current => ({ ...current, [expansionKey]: !showChildren })); } else { setExpanded(current => { const next = new Set(current); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); return next; }); } }}>{showChildren ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}</Button><div className="min-w-0"><Button variant="link" className="h-auto max-w-full justify-start p-0 text-left font-medium whitespace-normal" onClick={event => { event.stopPropagation(); open(group); }}>{group.title}</Button><p className="mt-1 font-mono text-ui-xs text-foreground-subtle">IR · {group.id} · {srs.filter(sr => srProgress(sr) === 100).length}/{srs.length} SR 完成</p></div></div></MarkdownTableCell>
               <MarkdownTableCell className="px-2"><ProgressValue value={irProgress(srs)} label={group.title} status={irProgressStatus(srs)} /></MarkdownTableCell>
               <MarkdownTableCell className="px-2"><AssignOwner group={group} /><p className="mt-1 text-ui-xs text-foreground-subtle" title={developers.join("、")}>{developers.length} 名开发人员</p></MarkdownTableCell>
-              <MarkdownTableCell className="px-2 text-ui-sm text-foreground-subtle">见各 SR 开发分支</MarkdownTableCell>
+              <MarkdownTableCell className="px-2 text-ui-sm text-foreground-subtle">见各 SR</MarkdownTableCell>
               <MarkdownTableCell className="px-2 text-ui-sm text-foreground-subtle">{dependencies ? `${dependencies} 条依赖 · 见各 SR` : "无前置依赖"}</MarkdownTableCell>
               <MarkdownTableCell className="px-2 text-ui-sm tabular-nums" title={plan.plannedStart?.replace("T", " ")}><p>{planningDate(plan.plannedStart)}</p>{plan.incomplete && <p className="mt-1 text-foreground-subtle">部分未排期</p>}</MarkdownTableCell>
               <MarkdownTableCell className="px-2 text-ui-sm tabular-nums" title={plan.plannedEnd?.replace("T", " ")}>{planningDate(plan.plannedEnd)}</MarkdownTableCell>
@@ -190,8 +125,8 @@ export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationPr
             {showChildren && children.map(sr => <MarkdownTableRow key={sr.id} data-sr-id={sr.id} aria-selected={aireq.selection.irId === group.id && aireq.selection.srId === sr.id} className={`cursor-pointer ${aireq.selection.irId === group.id && aireq.selection.srId === sr.id ? "bg-selected hover:bg-selected [--formal-row-fill:var(--color-selected)]" : "hover:bg-hover [--formal-row-fill:transparent] hover:[--formal-row-fill:var(--color-hover)]"}`} onClick={() => open(group, sr)}>
               <MarkdownTableCell className="sticky left-0 z-10 bg-background pr-2 pl-9" style={{ backgroundImage: "linear-gradient(var(--formal-row-fill), var(--formal-row-fill))" }}><Button variant="link" className="h-auto max-w-full p-0 text-left whitespace-normal" onClick={event => { event.stopPropagation(); open(group, sr); }}>{sr.title}</Button><p className="mt-1 font-mono text-ui-xs text-foreground-subtle">SR · {sr.id}</p></MarkdownTableCell>
               <MarkdownTableCell className="px-2"><ProgressValue value={srProgress(sr)} label={sr.title} status={srProgressStatus(sr)} /></MarkdownTableCell>
-              <MarkdownTableCell className="px-2"><AIReqEditPlanning group={group} sr={sr} compact /><p className="mt-1 text-ui-xs text-foreground-subtle">{sr.planning?.source === "manual" ? "人工调整" : sr.planning ? "AI 建议" : "待分析"}</p></MarkdownTableCell>
-              <MarkdownTableCell className="px-2">{sr.trackingBranch?.name || sr.progress?.branch ? <BranchCopy key={sr.trackingBranch?.name || sr.progress?.branch} branch={sr.trackingBranch?.name || sr.progress!.branch} onMessage={setCopyMessage} /> : <span className="text-ui-sm text-foreground-subtle">尚未关联分支</span>}</MarkdownTableCell>
+              <MarkdownTableCell className="px-2"><AIReqEditPlanning group={group} sr={sr} compact /><p className="mt-1 text-ui-xs text-foreground-subtle">{sr.planning?.source === "manual" ? "人工确认" : sr.planning ? "AI 建议" : "待分析"}</p></MarkdownTableCell>
+              <MarkdownTableCell className="px-2">{sr.trackingBranch?.name?.trim() ? <BranchCopy compact key={sr.trackingBranch.name} branch={sr.trackingBranch.name} onMessage={setCopyMessage} /> : <span role="alert" className="text-ui-sm text-destructive" title="正式 SR 必须已有平台分配的开发分支；当前映射缺失属于数据异常。">开发分支缺失</span>}</MarkdownTableCell>
               <MarkdownTableCell className="px-2"><AIReqDependencies sr={sr} view={view} compact />{planningWarnings(view, sr).length > 0 && <p className="mt-1 text-ui-xs" title={planningWarnings(view, sr).join("\n")}>需协调排期</p>}</MarkdownTableCell>
               <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-sm tabular-nums" title={sr.planning?.plannedStart?.replace("T", " ")}>{planningDate(sr.planning?.plannedStart)}</MarkdownTableCell>
               <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-sm tabular-nums" title={sr.planning?.plannedEnd?.replace("T", " ")}>{planningDate(sr.planning?.plannedEnd)}</MarkdownTableCell>
@@ -202,7 +137,10 @@ export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationPr
       </table>
       {!visible.length && <p role="status" className="py-12 text-center text-ui-sm text-foreground-subtle">{groups.length ? "没有符合条件的需求。" : "当前版本尚无正式需求。"}</p>}
     </div>
-    <p role="status" aria-live="polite" className="h-5 shrink-0 truncate text-ui-sm text-foreground-subtle" title={copyMessage}>{copyMessage}</p>
+    <div className="flex h-8 shrink-0 items-center gap-2 text-ui-sm">
+      <p role={aireq.error ? "alert" : "status"} aria-live="polite" className={`min-w-0 flex-1 truncate ${aireq.error ? "text-destructive" : "text-foreground-subtle"}`} title={aireq.error ?? copyMessage}>{aireq.error ?? copyMessage}</p>
+      {aireq.error && <Button variant="outline" size="sm" disabled={aireq.pending} onClick={() => void aireq.refresh()}>重试</Button>}
+    </div>
     <p className="shrink-0 py-2 text-ui-sm text-foreground-subtle">IR 时间由 SR 计划汇总，进度为 SR 平均值。</p>
     </div>
   </main>;
@@ -211,28 +149,23 @@ export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationPr
 function ReportSection({ title, children }: { title: string; children: ReactNode }) {
   return <section className="space-y-3 border-t border-border pt-5"><h2 className="text-ui-base font-medium">{title}</h2>{children}</section>;
 }
-function ManualProgress({ group, sr }: { group: AIReqRequirementGroup; sr: AIReqSystemRequirement }) {
+function ConfirmProgress({ group, sr }: { group: AIReqRequirementGroup; sr: AIReqSystemRequirement }) {
   const source = useAIReqDataSource();
   const id = useId();
   const [open, setOpen] = useState(false);
-  const [value, setValue] = useState(String(srProgress(sr)));
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const canEdit = getEmployeeId() === "j00808874" || getEmployeeId() === group.ownerEmployeeId;
+  const canEdit = Boolean(source.progress) && (getEmployeeId() === "j00808874" || getEmployeeId() === group.ownerEmployeeId);
   if (!canEdit) return null;
-  const start = (percent: number) => { setValue(String(percent)); setReason(""); setError(""); setOpen(true); };
-  const completionBlocker = !sr.progress ? "尚无代码分析报告，无法确认合入状态与完成情况。"
-    : !sr.progress.merged ? "代码尚未合入默认分支，进度最高 99%，不能确认完成。"
-    : srProgress(sr) === 100 ? "当前 SR 已完成，无需重复确认。" : undefined;
+  const blocker = srCompletionBlocker(sr);
   return <>
-    <div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => start(srProgress(sr))}>调整进度</Button><Button variant="outline" size="sm" disabled={Boolean(completionBlocker)} aria-describedby={completionBlocker ? `${id}-completion-reason` : undefined} onClick={() => start(100)}>人工确认完成</Button>{completionBlocker && <p id={`${id}-completion-reason`} className="w-full text-ui-sm leading-5 text-foreground-subtle">{completionBlocker}</p>}</div>
-    <Dialog open={open} onOpenChange={setOpen}><DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>人工调整进度</DialogTitle><DialogDescription>{sr.title} · {sr.progress?.merged ? "已合入默认分支，可根据证据确认完成。" : "尚未合入默认分支，进度最高 99%，不能确认完成。"}</DialogDescription></DialogHeader>
-      <form className="space-y-4" onSubmit={async event => { event.preventDefault(); setSaving(true); setError(""); try { await source.progress!.updateSr(group.projectId, group.id, sr.id, Number(value), reason); setOpen(false); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } finally { setSaving(false); } }}>
-        <div className="space-y-2"><Label htmlFor={`${id}-percent`}>实现进度（%）</Label><Input id={`${id}-percent`} type="number" min={0} max={sr.progress?.merged ? 100 : 99} step={1} required value={value} onChange={event => setValue(event.target.value)} /></div>
-        <div className="space-y-2"><Label htmlFor={`${id}-reason`}>判断依据</Label><SettingsFormTextarea id={`${id}-reason`} required value={reason} onChange={event => setReason(event.target.value)} placeholder="说明调整进度或确认完成的依据" /></div>
+    <div className="space-y-2"><Button variant="outline" size="sm" disabled={Boolean(blocker)} aria-describedby={blocker ? `${id}-completion-reason` : undefined} onClick={() => { setReason(""); setError(""); setOpen(true); }}>人工确认完成</Button>{blocker && <p id={`${id}-completion-reason`} className="text-ui-sm leading-5 text-foreground-subtle">{blocker}</p>}</div>
+    <Dialog open={open} onOpenChange={setOpen}><DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>确认完成</DialogTitle><DialogDescription>{sr.title} · 仅将 AI 已分析到 99% 且已合入的进度确认为 100%。</DialogDescription></DialogHeader>
+      <form className="space-y-4" onSubmit={async event => { event.preventDefault(); if (saving || blocker || !reason.trim()) return; setSaving(true); setError(""); try { await source.progress!.updateSr(group.projectId, group.id, sr.id, 100, reason); setOpen(false); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); } finally { setSaving(false); } }}>
+        <div className="space-y-2"><Label htmlFor={`${id}-reason`}>完成确认依据</Label><SettingsFormTextarea id={`${id}-reason`} required value={reason} onChange={event => setReason(event.target.value)} placeholder="说明完成标准已满足的依据" /></div>
         {error && <p role="alert" className="text-ui-sm text-destructive">{error}</p>}
-        <DialogFooter><Button type="button" variant="outline" onClick={() => setOpen(false)}>取消</Button><Button disabled={saving || !reason.trim()} type="submit">{saving ? "保存中…" : "保存调整"}</Button></DialogFooter>
+        <DialogFooter><Button type="button" variant="outline" onClick={() => setOpen(false)}>取消</Button><Button disabled={saving || Boolean(blocker) || !reason.trim()} type="submit">{saving ? "确认中…" : "确认到 100%"}</Button></DialogFooter>
       </form>
     </DialogContent></Dialog>
   </>;
@@ -256,17 +189,17 @@ function AIReqFormalReport() {
   const evidence = (kind: "implemented" | "remaining") => rows.flatMap(sr => (sr.progress?.[kind] ?? []).map(text => <li key={`${sr.id}:${text}`} className="leading-6">{!selected && <span className="font-medium">{sr.title}： </span>}{text}</li>));
   const manual = selected?.progress?.manual;
   const hasAnalysis = rows.some(sr => sr.progress);
-  const progressSource = manual ? percent === 100 ? "人工确认" : "人工调整" : selected ? hasAnalysis ? "AI 分析" : "尚未分析" : undefined;
+  const progressSource = manual ? "人工确认" : selected ? hasAnalysis ? "AI 分析" : "尚未分析" : undefined;
   return <main className="h-full min-h-0 overflow-auto bg-background" data-testid="aireq-formal-report">
     <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-4 md:px-6 md:py-6">
-      <header className="space-y-3"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selected ? "SR" : "IR"}</Badge><span className="font-mono text-ui-xs text-foreground-subtle">{selected?.id ?? group.id}</span><ProgressStatusBadge status={status} /><Badge variant="outline">{hasAnalysis ? "进度分析报告" : "尚未分析"}</Badge></div><h1 className="text-ui-lg font-semibold">{title}</h1><div className="flex flex-wrap items-center gap-2 text-ui-sm"><span className="text-foreground-subtle">需求负责人</span><AssignOwner group={group} /></div><ProgressValue value={percent} label={title} status={status} source={progressSource} showStatus={false} /><p className="text-ui-sm text-foreground-subtle">{selected ? manual ? "当前百分比来自人工判断；下方 AI 报告为此前分析，不代表本次人工结论。" : hasAnalysis ? "进度分析 Agent 根据需求、验收标准与代码证据判断。" : "尚未分析；0% 为新需求的初始进度，不代表已有代码分析结论。" : `${all.length} 个 SR 的进度算术平均值；全部 SR 完成后 IR 才完成。`}</p>{manual && <p className="break-words text-ui-sm" data-testid="manual-progress-source">{progressSource}：{manual.employeeId} · {manual.reason} · {new Date(manual.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p>}</header>
-      {selected && <ManualProgress key={selected.id} group={group} sr={selected} />}
+      <header className="space-y-3"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selected ? "SR" : "IR"}</Badge><span className="font-mono text-ui-xs text-foreground-subtle">{selected?.id ?? group.id}</span><ProgressStatusBadge status={status} /><Badge variant="outline">{hasAnalysis ? "进度分析报告" : "尚未分析"}</Badge></div><h1 className="text-ui-lg font-semibold">{title}</h1><div className="flex flex-wrap items-center gap-2 text-ui-sm"><span className="text-foreground-subtle">需求负责人</span><AssignOwner group={group} /></div><ProgressValue value={percent} label={title} status={status} source={progressSource} showStatus={false} /><p className="text-ui-sm text-foreground-subtle">{selected ? manual ? "完成状态来自人工确认；下方保留此前 AI 分析及代码证据。" : hasAnalysis ? "进度分析 Agent 根据需求、验收标准与代码证据判断。" : "尚未分析；0% 为新需求的初始进度，不代表已有代码分析结论。" : `${all.length} 个 SR 的进度算术平均值；全部 SR 完成后 IR 才完成。`}</p>{manual && <p className="break-words text-ui-sm" data-testid="manual-progress-source">{progressSource}：{manual.employeeId} · {manual.reason} · {new Date(manual.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p>}</header>
+      {selected && <ConfirmProgress key={selected.id} group={group} sr={selected} />}
       <ReportSection title={manual ? "此前 AI 报告的问题与不确定项" : "值得关注的问题与不确定项"}>{issues.length ? <ul className="space-y-4">{issues.map((issue, index) => <li key={`${issue.sr.id}:${index}`} className="space-y-1"><p className="text-ui-sm font-medium">{issue.title}{!selected && ` · ${issue.sr.title}`}</p><p className="text-ui-sm leading-6 text-foreground-subtle">{issue.detail}</p></li>)}</ul> : <p className="text-ui-sm text-foreground-subtle">{hasAnalysis ? "当前报告未发现需关注的遗留问题。" : "尚未分析，暂无问题判断。"}</p>}</ReportSection>
       <ReportSection title="已实现内容">{rows.some(sr => sr.progress?.implemented.length) ? <ul className="list-disc space-y-2 pl-5 text-ui-sm">{evidence("implemented")}</ul> : <p className="text-ui-sm text-foreground-subtle">尚无已实现内容的代码证据。</p>}</ReportSection>
       <ReportSection title="尚未实现或待补充证据">{rows.some(sr => sr.progress?.remaining.length) ? <ul className="list-disc space-y-2 pl-5 text-ui-sm">{evidence("remaining")}</ul> : <p className="text-ui-sm text-foreground-subtle">{hasAnalysis ? "当前报告没有列出未实现项；仍须核对合入事实及完成条件。" : "尚未分析，暂无实现情况与代码版本结论。"}</p>}</ReportSection>
       <ReportSection title="人员与计划时间"><AIReqPlanningSummary group={group} rows={rows} editable /></ReportSection>
       <ReportSection title={manual ? "此前 AI 报告的代码活动与合入依据" : "代码活动与合入依据"}><ul className="space-y-5">{rows.map(sr => <li key={sr.id} className="space-y-2 text-ui-sm"><p className="font-medium">{sr.title}</p>{sr.trackingBranch && <p className="break-all text-ui-xs text-foreground-subtle" data-testid="sr-tracking-branch">提案自动入库后已创建并推送分支：{sr.trackingBranch.name} · 基点：{sr.trackingBranch.baseCommit}</p>}{sr.progress ? <><p className="break-all font-mono text-ui-xs text-foreground-subtle">{sr.progress.branch} → {project?.defaultBranch} · {sr.progress.merged ? "已合入" : "尚未确认合入，最高 99%"}</p><p className="break-all text-ui-xs text-foreground-subtle">分析版本：{sr.progress.codeVersion} · 默认分支版本：{sr.progress.defaultVersion} · {sr.progress.certain ? "实现判断确定" : "判断仍有不确定项"}</p>{sr.progress.activity.length ? sr.progress.activity.map(activity => <p key={activity.commit} className="break-all text-ui-sm">{activity.message}<span className="ml-2 font-mono text-ui-xs text-foreground-subtle">{activity.commit}</span></p>) : <p className="text-foreground-subtle">尚无独立开发提交。</p>}</> : <p className="text-foreground-subtle">尚未分析，暂无代码活动、分析版本或合入判断。</p>}</li>)}</ul></ReportSection>
-      <div className="space-y-1 text-ui-sm text-foreground-subtle"><p>最近分析 · {analysedAt ? new Date(analysedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "尚未分析"}</p><p className="break-all">仓库：{project?.repositoryUrl ?? "尚未配置"} · 默认分支：{project?.defaultBranch}</p><p>人工调整保留报告中的问题及代码依据。</p></div>
+      <div className="space-y-1 text-ui-sm text-foreground-subtle"><p>最近分析 · {analysedAt ? new Date(analysedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "尚未分析"}</p><p className="break-all">仓库：{project?.repositoryUrl ?? "尚未配置"} · 默认分支：{project?.defaultBranch}</p><p>0%～99% 由 AI 分析，人工只能在 99% 且已合入后确认到 100%。</p></div>
     </div>
   </main>;
 }
@@ -276,20 +209,26 @@ const formalDetailPanels = ["formal-table", "formal-inspector"];
 
 export function AIReqFormalWorkspace({ navigationOpen, onToggleNavigation, toolbar }: FormalNavigationProps) {
   const aireq = useAIReq()!;
-  const detail = aireq.selection.formalView !== "list" && Boolean(aireq.view?.groups.some(group => group.id === aireq.selection.irId));
-  return <ResizablePanelGroup layoutId="aireq-formal-progress-layout-v3" panelIds={detail ? formalDetailPanels : formalTablePanels} className="min-h-0 flex-1">
+  const detail = aireq.selection.formalView === "detail" || (aireq.selection.formalView !== "list" && Boolean(aireq.view?.groups.some(group => group.projectId === aireq.selection.projectId && group.id === aireq.selection.irId)));
+  return <ResizablePanelGroup layoutId="aireq-formal-progress-layout-v4" panelIds={detail ? formalDetailPanels : formalTablePanels} className="min-h-0 flex-1">
     <ResizablePanel id="formal-table" minSize="400px" defaultSize={detail ? undefined : "100%"}>
       <AIReqFormalTable key={aireq.releaseId} navigationOpen={navigationOpen} onToggleNavigation={onToggleNavigation} toolbar={toolbar} />
     </ResizablePanel>
-    {detail && <><ResizableHandle /><ResizablePanel id="formal-inspector" minSize="360px" maxSize="50%" defaultSize="35%">
-      <Tabs key={`${aireq.selection.irId}:${aireq.selection.srId}`} defaultValue="report" className="h-full min-h-0 gap-0 overflow-hidden rounded-xl border border-border bg-background">
+    {detail && <><ResizableHandle /><ResizablePanel id="formal-inspector" minSize="320px" maxSize="45%" defaultSize="30%">
+      <Tabs defaultValue="report" className="h-full min-h-0 gap-0 overflow-hidden rounded-xl border border-border bg-background">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
           <TabsList variant="line" aria-label="需求详情"><TabsTrigger value="report">进度报告</TabsTrigger><TabsTrigger value="materials"><FileText className="size-3.5" />需求材料</TabsTrigger></TabsList>
           <Button variant="ghost" size="icon-sm" aria-label="收起需求详情" onClick={() => aireq.select({ projectId: aireq.selection.projectId, formalView: "list" })}><PanelRightClose className="size-4" /></Button>
         </div>
-        <TabsContent value="report" className="min-h-0 flex-1 overflow-hidden"><AIReqFormalReport /></TabsContent>
-        <TabsContent value="materials" className="min-h-0 flex-1 overflow-hidden"><AIReqMaterialsPane /></TabsContent>
+        {aireq.error && <div role="alert" className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3 text-ui-sm text-destructive"><span className="min-w-0 flex-1 break-words">{aireq.error}</span><Button variant="outline" size="sm" disabled={aireq.pending} onClick={() => void aireq.refresh()}>重试</Button></div>}
+        <TabsContent value="report" className="min-h-0 flex-1 overflow-hidden">{aireq.selectionReady ? <AIReqFormalReport /> : <FormalDetailLoading failed={Boolean(aireq.error)} />}</TabsContent>
+        <TabsContent value="materials" className="min-h-0 flex-1 overflow-hidden">{aireq.selectionReady ? <AIReqMaterialsPane /> : <FormalDetailLoading failed={Boolean(aireq.error)} />}</TabsContent>
       </Tabs>
     </ResizablePanel></>}
   </ResizablePanelGroup>;
+}
+
+
+function FormalDetailLoading({ failed }: { failed: boolean }) {
+  return <p role="status" className="p-6 text-ui-sm text-foreground-subtle">{failed ? "所选需求读取失败，可重试或在表格选择其他需求。" : "正在读取所选需求…"}</p>;
 }

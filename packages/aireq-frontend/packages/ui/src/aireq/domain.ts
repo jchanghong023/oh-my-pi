@@ -2,6 +2,11 @@ import type { AIReqFileVersion, AIReqMaterialView, AIReqStageMaterial, AIReqWork
 import { getEmployeeId } from "./identity.js";
 import { readSrDependencies, srDependencyMap } from "./sr-dependencies.js";
 
+/** 正式需求是同一项目内的只读查看，不绑定提案或开发会话。 */
+export function isFormalSelection(view: AIReqWorkflowView | undefined, selection: AIReqSelection): boolean {
+ return Boolean(selection.formalView || view?.groups.some(group => group.projectId === selection.projectId && group.id === selection.irId));
+}
+
 /** 切版本只清除不兼容的报告选择，正式需求不能退回提案工作区。 */
 export function selectionForRelease(selection: AIReqSelection, view: Pick<AIReqWorkflowView, "groups" | "drafts">, releaseId: string): AIReqSelection {
  const formal = view.groups.find(group => group.id === selection.irId);

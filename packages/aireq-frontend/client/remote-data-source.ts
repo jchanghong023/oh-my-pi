@@ -1,4 +1,5 @@
 import type { ChannelClient } from "@zcode/rpc";
+import { isFormalSelection } from "../packages/ui/src/aireq/domain.js";
 import { createUuid } from "@zcode/shared";
 import { connectViaWebSocket } from "@zcode/client";
 import {
@@ -34,7 +35,7 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 	const schedulerListeners = new Set<() => void>();
 	const freeChatListeners = new Set<() => void>();
 	const skillListeners = new Set<(sessionId: string) => void>();
-	const snapshots = new WeakMap<AIReqWorkflowView, { key: string; value: AIReqRemoteWorkflow }>();
+	const snapshots = new WeakMap<AIReqWorkflowView, { key: string; selection: AIReqSelection; value: AIReqRemoteWorkflow }>();
 	let selection: AIReqSelection = {};
 	let disposed = false;
 	let eventError: Error | undefined;
@@ -186,7 +187,7 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 			if (eventError) throw eventError;
 			selection = { ...target };
 			const result = await call("readWorkflow", [target], target);
-			snapshots.set(result.view, { key: JSON.stringify(target), value: result });
+			snapshots.set(result.view, { key: JSON.stringify(target), selection: { ...target }, value: result });
 			return result.view;
 		},
 		subscribeWorkflow: listener => subscribe(workflowListeners, listener),
@@ -200,15 +201,22 @@ export async function createRemoteAIReqDataSource(options: RemoteAIReqDataSource
 			return result;
 		},
 		resolveSession: (view, target) => {
+      if (isFormalSelection(view, target)) return undefined;
 			const snapshot = snapshots.get(view);
 			return snapshot?.key === JSON.stringify(target) ? snapshot.value.session : undefined;
 		},
 		resolveWorkspace(view, target) {
-			const snapshot = view ? snapshots.get(view) : undefined;
-			return snapshot?.key === JSON.stringify(target)
-				? snapshot.value.workspace
-				: { identity: `aireq-remote:${clientId}`, kind: "unavailable" };
-		},
+      const snapshot = view ? snapshots.get(view) : undefined;
+      if (snapshot?.key === JSON.stringify(target)) return snapshot.value.workspace;
+      // 同项目正式需求切行时保留服务端已确认的只读工作区。
+      // 精确匹配优先，真实不可用结果不被旧缓存覆盖；提案、自由会话及跨项目不复用。
+      if (snapshot && snapshot.selection.projectId === target.projectId
+        && isFormalSelection(view, snapshot.selection) && isFormalSelection(view, target)
+        && snapshot.value.workspace.kind === "reference" && snapshot.value.workspace.path) {
+        return snapshot.value.workspace;
+      }
+      return { identity: `aireq-remote:${clientId}`, kind: "unavailable" };
+    },
 		retryMaterial: (path, target) => call("retryMaterial", [path, target], target),
 		retrySession: async target => {
 			await call("retrySession", [target], target);
