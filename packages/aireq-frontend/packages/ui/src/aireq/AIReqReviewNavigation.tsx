@@ -40,7 +40,8 @@ export function AIReqReviewNavigation() {
  const current = agents.find(agent => agent.id === selected)!;
  const choose = (id: string) => aireq.select({ ...aireq.selection, reviewAgent: id as AIReqReviewAgentId });
  const independentDone = agents.filter(agent => agent.id !== "summary" && agent.status === "completed").length;
- const reviewDescription = `${current.name} · ${current.session.modelConfig?.modelName ?? "模型未配置"} · 独立评审 ${independentDone}/3 · ${requirementsReviewCurrent(group) ? review.humanDecision ? `已由 ${review.humanDecision.employeeId} 人工通过` : "综合后由人工判断" : "旧版本，仅供历史查看"}`;
+ const reviewDescriptionParts = [current.name, current.session.modelConfig?.modelName ?? "模型未配置", `独立评审 ${independentDone}/3`, requirementsReviewCurrent(group) ? review.humanDecision ? `已由 ${review.humanDecision.employeeId} 人工通过` : "综合后由人工判断" : "旧版本，仅供历史查看"];
+ const reviewDescription = reviewDescriptionParts.join(" · ");
  const stations: TimelineStation[] = agents.map((agent, index) => ({
   id: agent.id, naming: { id: agent.id, name: agent.id === "summary" ? "综合意见" : agent.name }, visited: agent.status !== "pending", rounds: 1, onLoop: false, track: index < 3 ? index : 0,
   status: agent.status === "completed" ? "done" : agent.status === "failed" ? "failed" : agent.status,
@@ -54,7 +55,7 @@ export function AIReqReviewNavigation() {
   live: true, runningIndex: undefined,
  };
  return <div className="w-full min-w-0 shrink-0 space-y-2 border-b border-border px-4 py-2" data-testid="aireq-review-navigation">
-  <div className="flex items-center justify-between gap-2">
+  <div className="mx-auto flex w-fit max-w-full flex-wrap items-center justify-center gap-x-3 gap-y-2" data-testid="review-session-actions">
    <Tabs value={selected} onValueChange={choose} className="min-w-0"><TabsList ref={tabList} aria-label="评审 Agent 会话" className="h-11 gap-1 p-1 group-data-horizontal/tabs:h-11" onKeyDownCapture={event => {
     const ids = ["summary", "a", "b", "c"] as const;
     const index = ids.indexOf(selected);
@@ -71,7 +72,7 @@ export function AIReqReviewNavigation() {
    })}</TabsList></Tabs>
    <Button variant="ghost" size="sm" className="shrink-0 gap-1.5" aria-label="展开评审工作流" title="展开评审工作流" onClick={() => setExpanded(true)}><GitFork className="size-4" />评审流程</Button>
   </div>
-  <ControlHintTooltip title={reviewDescription}><p tabIndex={0} className="w-full min-w-0 truncate rounded-sm text-center text-ui-sm text-foreground-subtle outline-none focus-visible:ring-2 focus-visible:ring-ring/50" data-testid="review-session-description">{reviewDescription}</p></ControlHintTooltip>
+  <ControlHintTooltip title={reviewDescription}><p tabIndex={0} className="mx-auto flex max-w-full flex-wrap items-baseline justify-center gap-x-1.5 gap-y-1 rounded-sm text-center text-ui-sm text-foreground-subtle outline-none focus-visible:ring-2 focus-visible:ring-ring/50" data-testid="review-session-description">{reviewDescriptionParts.map((part, index) => <span key={index} className="inline-flex min-w-0 max-w-full items-baseline gap-1.5"><span className="min-w-0 break-words [overflow-wrap:anywhere]">{part}</span>{index < reviewDescriptionParts.length - 1 && <span aria-hidden="true" className="shrink-0">·</span>}</span>)}</p></ControlHintTooltip>
   <Dialog open={expanded} onOpenChange={setExpanded}><DialogContent className="flex max-h-[85dvh] flex-col overflow-auto sm:max-w-6xl"><DialogHeader><DialogTitle>需求评审工作流</DialogTitle><DialogDescription>三个模型并行只读审查同一版需求 → 第四个 Agent 综合意见 → 人工决定。评审结论以当前版本的报告为准。</DialogDescription></DialogHeader>
    <WorkflowTimeline model={diagram} onOpenPill={pill => { choose(pill.key); setExpanded(false); }} onSelectStation={station => { if (station.id !== "human") { choose(station.id); setExpanded(false); } }} />
   </DialogContent></Dialog>

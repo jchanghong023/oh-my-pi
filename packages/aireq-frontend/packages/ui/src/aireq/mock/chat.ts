@@ -61,7 +61,7 @@ export const PROTOTYPE_CHAT_DISCUSSIONS = {
 
 const initialTime = Date.parse("2026-11-10T09:00:00Z");
 const epoch = "prototype-browser-memory";
-const configOptions: ZCodeConfigOption[] = [{ id: "model", name: "演示模型", type: "select", currentValue: "Beam Free", options: [{ value: "Beam Free", name: "Beam Free（预置回复）", modelProviderId: "prototype-opencode-go", modelProviderName: "OpenCode Go" }] }];
+const configOptions: ZCodeConfigOption[] = [{ id: "model", name: "模型", type: "select", currentValue: "Beam Free", options: [{ value: "Beam Free", name: "Beam Free", modelProviderId: "prototype-opencode-go", modelProviderName: "OpenCode Go" }] }];
 const slashCommands = [{ name: "help", description: "阶段性前端原型：显示预置讨论，不执行真实命令", source: "builtin" as const }];
 type Stage = keyof typeof PROTOTYPE_CHAT_DISCUSSIONS;
 interface LocalSession { agentModelBound?: boolean; meta: ZCodeTaskMeta; stage: Stage; snapshot: ConversationSnapshot; archived: boolean; pinned: boolean; deleted: boolean; }
@@ -288,7 +288,7 @@ export function createPrototypeChatServices(attachments: Map<string, PrototypeAt
     value.snapshot.rows.totalCount = value.snapshot.rows.window.length; value.snapshot.rows.firstRowId = value.snapshot.rows.window[0]?.rowId ?? null; changed(value);
   };
   const assertModelMutable = (value: LocalSession) => { if (value.agentModelBound) throw new Error("此 Agent 会话保留创建时模型和思考强度，请在模型设置修改后用于新会话。"); };
-  const configOptionsFor = (value?: LocalSession): ZCodeConfigOption[] => value?.agentModelBound ? [{ id: "model", name: "Agent 模型（创建时）", type: "select", currentValue: value.snapshot.config.model, options: [{ value: value.snapshot.config.model, name: `${value.snapshot.config.model}（预置回复）`, modelProviderId: value.snapshot.config.provider, modelProviderName: "AIReq Agent 演示配置" }] }] : structuredClone(configOptions);
+  const configOptionsFor = (value?: LocalSession): ZCodeConfigOption[] => value?.agentModelBound ? [{ id: "model", name: "Agent 模型（创建时）", type: "select", currentValue: value.snapshot.config.model, options: [{ value: value.snapshot.config.model, name: value.snapshot.config.model, modelProviderId: value.snapshot.config.provider, modelProviderName: "Agent 模型配置" }] }] : structuredClone(configOptions);
   const updateModel = (value: LocalSession, model: ModelSelection) => { assertModelMutable(value); value.snapshot.config.modelSelection = model; value.snapshot.config.provider = model.providerId; value.snapshot.config.model = model.modelId; value.meta.model = model.modelId; changed(value); return legacy(value); };
   const read = async (params: ZCodeAgentSessionTarget) => legacy(target(params));
   const create = async (params: { workspacePath: string; workspaceIdentity?: string; sessionId?: string }) => {

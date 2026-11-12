@@ -35,7 +35,9 @@ export function readPrototypeSkillDesign(sessionId: string): AIReqSkillDesignDra
 export function savePrototypeSkillDesignDraft(sessionId: string, value: AIReqSkillDesignDraft): void { drafts.set(sessionId, structuredClone(value)); }
 const previews = new Map<string, AIReqSkillDesignPreview>();
 export function prototypeSkillDesignDirectory(sessionId: string): string {
-  return `/tmp/omp-aireq/skill-design/${PROTOTYPE_BACKEND.id}/${encodeURIComponent(sessionId)}`;
+  const prefix = `prototype-skill-design:${PROTOTYPE_BACKEND.id}:`;
+  const projectKey = sessionId.startsWith(prefix) ? sessionId.slice(prefix.length) : sessionId;
+  return `/tmp/omp-aireq/skill-design/${PROTOTYPE_BACKEND.id}/${encodeURIComponent(projectKey)}`;
 }
 export function preparePrototypeSkillDesignPrompt(sessionId: string, draft: AIReqSkillDesignDraft): string {
   const values: Record<string, string> = { ...draft, notes: draft.notes.join("\n\n"), directory: prototypeSkillDesignDirectory(sessionId) };
@@ -74,7 +76,7 @@ export function savePrototypeSkillDesignPreview(sessionId: string, workspacePath
   const prefix = `prototype-skill-design:${PROTOTYPE_BACKEND.id}:`;
   if (!sessionId.startsWith(prefix)) throw new Error("请使用当前共享 OMP 的技能设计会话。");
   const projectId = sessionId.slice(prefix.length);
-  if (target === "project" && (!workspacePath || readPrototypeDevelopmentRoot(projectId, PROTOTYPE_BACKEND.owner) !== workspacePath)) throw new Error("当前项目没有有效可写目标，请选择共享 OMP profile；不能保存到共享只读目录。");
+  if (target === "project" && (!workspacePath || readPrototypeDevelopmentRoot(projectId, PROTOTYPE_BACKEND.owner) !== workspacePath)) throw new Error("当前项目没有有效的开发路径，请先配置开发项目，或保存到个人技能目录。");
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64) throw new Error("模型推荐的技能标识无效，请返回对话调整推荐结果。");
-  return savePrototypeDesignedSkill(target === "user" ? PROTOTYPE_BACKEND.userSkillsDirectory : workspacePath, name, "聊天生成技能的原型样例", preview.files.find(file => file.path === "SKILL.md")!.content.replace(/^name: .*$/m, `name: ${name}`), preview.files, target === "user" ? "user" : "workspace");
+  return savePrototypeDesignedSkill(target === "user" ? PROTOTYPE_BACKEND.userSkillsDirectory : workspacePath, name, "接口变更评审：检查接口契约的向后兼容性", preview.files.find(file => file.path === "SKILL.md")!.content.replace(/^name: .*$/m, `name: ${name}`), preview.files, target === "user" ? "user" : "workspace");
 }

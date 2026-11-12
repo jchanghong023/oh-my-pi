@@ -7,7 +7,7 @@ const createdAt = "2026-11-10T09:00:00.000Z";
 const releasesByProject = new Map<string, AIReqRelease[]>([
 	["demo-aurora", [
 		{ id: "release-2026-11", projectId: "demo-aurora", title: "2026.11 · 体验优化", createdAt },
-		{ id: "release-2026-12", projectId: "demo-aurora", title: "2026.12 · 下一迭代（样例）", createdAt },
+		{ id: "release-2026-12", projectId: "demo-aurora", title: "2026.12 · 下一迭代", createdAt },
 	]],
 	["demo-mobile", [
 		{ id: "mobile-release-2026-11", projectId: "demo-mobile", title: "2026.11 · 移动端优化", createdAt },

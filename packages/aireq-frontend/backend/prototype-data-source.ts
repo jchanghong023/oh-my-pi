@@ -283,10 +283,10 @@ export function createPrototypeDataSource(): AIReqDataSource {
 		employeeDirectory: {
 			kind: "sample",
 			entries: [
-				{ employeeId: "j00808874", name: "林晨（样例）", department: "平台研发部（样例）" },
-				{ employeeId: "j00808875", name: "陈宁（样例）", department: "平台研发部（样例）" },
-				{ employeeId: "j00808876", name: "陈宁（样例）", department: "芯片验证部（样例）" },
-				{ employeeId: "j00808877", name: "周敏（样例）", department: "芯片验证部（样例）" },
+				{ employeeId: "j00808874", name: "林晨", department: "平台研发部" },
+				{ employeeId: "j00808875", name: "陈宁", department: "平台研发部" },
+				{ employeeId: "j00808876", name: "陈宁", department: "芯片验证部" },
+				{ employeeId: "j00808877", name: "周敏", department: "芯片验证部" },
 			],
 		},
 		planning: { updateSr: updatePrototypeSrPlanning },

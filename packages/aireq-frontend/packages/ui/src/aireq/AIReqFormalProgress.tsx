@@ -49,7 +49,6 @@ function ProgressValue({ value, label, status, source, showStatus = true }: { va
 interface FormalNavigationProps { navigationOpen: boolean; onToggleNavigation(): void; toolbar: WorkspaceSidebarToolbarProps }
 
 export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationProps) {
-  const source = useAIReqDataSource();
   const aireq = useAIReq()!;
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
@@ -123,14 +122,15 @@ export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationPr
   const latest = (rows: AIReqSystemRequirement[]) => rows.map(sr => sr.progress?.analysedAt ?? "").sort().at(-1);
   const date = (value?: string) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "尚未分析";
   return <main className="flex h-full min-h-0 min-w-0 flex-col bg-background" data-testid="aireq-formal-table">
+    <div className="flex h-12 shrink-0 items-center">{!navigationOpen && <WorkspaceSidebarToolbar {...toolbar} />}</div>
     <div className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-4 py-4 md:px-6 md:py-6">
     <header className="shrink-0 space-y-3 border-b border-border pb-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">{!navigationOpen && <WorkspaceSidebarToolbar {...toolbar} />}<h1 className="shrink-0 text-ui-base font-semibold">正式需求</h1></div>
+        <h1 className="shrink-0 text-ui-settings-title font-semibold tracking-tight lg:text-ui-settings-title-lg">正式需求</h1>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <Select value={aireq.selection.projectId ?? ""} onValueChange={projectId => aireq.select({ projectId, formalView: "list" })}><SelectTrigger className="h-7 w-40" aria-label="正式需求项目"><SelectValue placeholder="选择项目" /></SelectTrigger><SelectContent>{view.projects.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select>
+          <Select value={aireq.selection.projectId ?? ""} onValueChange={aireq.switchProject}><SelectTrigger className="h-7 w-40" aria-label="正式需求项目"><SelectValue placeholder="选择项目" /></SelectTrigger><SelectContent>{view.projects.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select>
           <Select value={aireq.releaseId} onValueChange={aireq.setReleaseId}><SelectTrigger className="h-7 w-44" aria-label="正式需求版本"><SelectValue placeholder="选择版本" /></SelectTrigger><SelectContent>{view.releases.map(item => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}</SelectContent></Select>
-          <span className="text-ui-xs text-foreground-subtle" data-testid="formal-counts"><span className="whitespace-nowrap font-medium text-foreground">当前筛选 {visible.length} 个 IR</span><span className="ml-3 inline-block">项目总计（当前版本）{groups.length} 个 IR · {groups.reduce((count, group) => count + irSrs(view, group).length, 0)} 个 SR</span></span>
+          <span className="text-ui-sm text-foreground-subtle" data-testid="formal-counts"><span className="whitespace-nowrap font-medium text-foreground">{visible.length} 个 IR</span><span className="ml-3 inline-block">当前 Release 共 {groups.length} 个 IR · {groups.reduce((count, group) => count + irSrs(view, group).length, 0)} 个 SR</span></span>
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -141,8 +141,8 @@ export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationPr
         {(normalized || status !== "all" || owner !== "all") && <Button variant="ghost" size="sm" onClick={() => { setQuery(""); setStatus("all"); setOwner("all"); setOwnerEmployeeId(""); }}>清除筛选</Button>}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p id={scrollDescriptionId} className="text-ui-xs text-foreground-subtle">
-          共 9 列 · 名称列固定。{columns.canLeft || columns.canRight ? `左侧 ${columns.hiddenLeft} 列、右侧 ${columns.hiddenRight} 列未完整显示；使用按钮或聚焦表格后按 ← / →，Home / End 到首尾。` : "全部列已显示；窗口变窄时可横向滚动。"}
+        <p id={scrollDescriptionId} className="text-ui-sm text-foreground-subtle" title="名称列固定。聚焦表格后可按方向键横向查看，Home / End 跳到首尾。">
+          {columns.canLeft || columns.canRight ? `名称列固定 · ${columns.hiddenRight ? `右侧还有 ${columns.hiddenRight} 列` : `左侧还有 ${columns.hiddenLeft} 列`}` : "名称列固定 · 已显示全部列"}
         </p>
         <div className="flex shrink-0 items-center gap-1" role="group" aria-label="横向查看正式需求列">
           <Button type="button" variant="outline" size="sm" aria-controls={scrollId} aria-label="向左查看前面的列" disabled={!columns.canLeft} onClick={() => scrollColumns(-1)}><ChevronLeft className="size-3.5" />前面的列</Button>
@@ -185,25 +185,25 @@ export function AIReqFormalTable({ navigationOpen, toolbar }: FormalNavigationPr
               <MarkdownTableCell className="px-2 text-ui-sm tabular-nums" title={plan.plannedStart?.replace("T", " ")}><p>{planningDate(plan.plannedStart)}</p>{plan.incomplete && <p className="mt-1 text-foreground-subtle">部分未排期</p>}</MarkdownTableCell>
               <MarkdownTableCell className="px-2 text-ui-sm tabular-nums" title={plan.plannedEnd?.replace("T", " ")}>{planningDate(plan.plannedEnd)}</MarkdownTableCell>
               <MarkdownTableCell className="px-2 tabular-nums">{srs.reduce((count, sr) => count + (sr.progress?.issues.length ?? 0), 0)} 项</MarkdownTableCell>
-              <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-xs text-foreground-subtle" title={latest(srs)}>{date(latest(srs))}</MarkdownTableCell>
+              <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-sm text-foreground-subtle" title={latest(srs)}>{date(latest(srs))}</MarkdownTableCell>
             </MarkdownTableRow>
             {showChildren && children.map(sr => <MarkdownTableRow key={sr.id} data-sr-id={sr.id} aria-selected={aireq.selection.irId === group.id && aireq.selection.srId === sr.id} className={`cursor-pointer ${aireq.selection.irId === group.id && aireq.selection.srId === sr.id ? "bg-selected hover:bg-selected [--formal-row-fill:var(--color-selected)]" : "hover:bg-hover [--formal-row-fill:transparent] hover:[--formal-row-fill:var(--color-hover)]"}`} onClick={() => open(group, sr)}>
               <MarkdownTableCell className="sticky left-0 z-10 bg-background pr-2 pl-9" style={{ backgroundImage: "linear-gradient(var(--formal-row-fill), var(--formal-row-fill))" }}><Button variant="link" className="h-auto max-w-full p-0 text-left whitespace-normal" onClick={event => { event.stopPropagation(); open(group, sr); }}>{sr.title}</Button><p className="mt-1 font-mono text-ui-xs text-foreground-subtle">SR · {sr.id}</p></MarkdownTableCell>
               <MarkdownTableCell className="px-2"><ProgressValue value={srProgress(sr)} label={sr.title} status={srProgressStatus(sr)} /></MarkdownTableCell>
               <MarkdownTableCell className="px-2"><AIReqEditPlanning group={group} sr={sr} compact /><p className="mt-1 text-ui-xs text-foreground-subtle">{sr.planning?.source === "manual" ? "人工调整" : sr.planning ? "AI 建议" : "待分析"}</p></MarkdownTableCell>
               <MarkdownTableCell className="px-2">{sr.trackingBranch?.name || sr.progress?.branch ? <BranchCopy key={sr.trackingBranch?.name || sr.progress?.branch} branch={sr.trackingBranch?.name || sr.progress!.branch} onMessage={setCopyMessage} /> : <span className="text-ui-sm text-foreground-subtle">尚未关联分支</span>}</MarkdownTableCell>
-              <MarkdownTableCell className="px-2"><AIReqDependencies sr={sr} view={view} />{planningWarnings(view, sr).length > 0 && <p className="mt-1 text-ui-xs" title={planningWarnings(view, sr).join("\n")}>需协调排期</p>}</MarkdownTableCell>
+              <MarkdownTableCell className="px-2"><AIReqDependencies sr={sr} view={view} compact />{planningWarnings(view, sr).length > 0 && <p className="mt-1 text-ui-xs" title={planningWarnings(view, sr).join("\n")}>需协调排期</p>}</MarkdownTableCell>
               <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-sm tabular-nums" title={sr.planning?.plannedStart?.replace("T", " ")}>{planningDate(sr.planning?.plannedStart)}</MarkdownTableCell>
               <MarkdownTableCell className="whitespace-nowrap px-2 text-ui-sm tabular-nums" title={sr.planning?.plannedEnd?.replace("T", " ")}>{planningDate(sr.planning?.plannedEnd)}</MarkdownTableCell>
-              <MarkdownTableCell className="px-2 tabular-nums">{sr.progress?.issues.length ?? 0} 项</MarkdownTableCell><MarkdownTableCell className="whitespace-nowrap px-2 text-ui-xs text-foreground-subtle" title={sr.progress?.analysedAt}>{date(sr.progress?.analysedAt)}</MarkdownTableCell>
+              <MarkdownTableCell className="px-2 tabular-nums">{sr.progress?.issues.length ?? 0} 项</MarkdownTableCell><MarkdownTableCell className="whitespace-nowrap px-2 text-ui-sm text-foreground-subtle" title={sr.progress?.analysedAt}>{date(sr.progress?.analysedAt)}</MarkdownTableCell>
             </MarkdownTableRow>)}
           </Fragment>;
         })}</MarkdownTableBody>
       </table>
       {!visible.length && <p role="status" className="py-12 text-center text-ui-sm text-foreground-subtle">{groups.length ? "没有符合条件的需求。" : "当前版本尚无正式需求。"}</p>}
     </div>
-    <p role="status" aria-live="polite" className="shrink-0 text-ui-xs text-foreground-subtle">{copyMessage}</p>
-    <p className="shrink-0 py-2 text-ui-xs text-foreground-subtle">可横向滚动查看全部列，名称列固定。{source.provenance.kind === "sample" ? "原型分配与排期保存于后端内存，刷新保留、后端重启恢复；" : "人员与排期由后台保存；"}IR 时间由 SR 汇总，进度为 SR 平均值。</p>
+    <p role="status" aria-live="polite" className="h-5 shrink-0 truncate text-ui-sm text-foreground-subtle" title={copyMessage}>{copyMessage}</p>
+    <p className="shrink-0 py-2 text-ui-sm text-foreground-subtle">IR 时间由 SR 计划汇总，进度为 SR 平均值。</p>
     </div>
   </main>;
 }
@@ -240,7 +240,6 @@ function ManualProgress({ group, sr }: { group: AIReqRequirementGroup; sr: AIReq
 
 function AIReqFormalReport() {
   const aireq = useAIReq()!;
-  const source = useAIReqDataSource();
   const view = aireq.view;
   const group = view?.groups.find(item => item.id === aireq.selection.irId);
   if (!view || !group) return <p role="status" className="p-6">所选正式需求不可用，请在表格重新选择。</p>;
@@ -260,14 +259,14 @@ function AIReqFormalReport() {
   const progressSource = manual ? percent === 100 ? "人工确认" : "人工调整" : selected ? hasAnalysis ? "AI 分析" : "尚未分析" : undefined;
   return <main className="h-full min-h-0 overflow-auto bg-background" data-testid="aireq-formal-report">
     <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-4 md:px-6 md:py-6">
-      <header className="space-y-3"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selected ? "SR" : "IR"}</Badge><span className="font-mono text-ui-xs text-foreground-subtle">{selected?.id ?? group.id}</span><ProgressStatusBadge status={status} /><Badge variant="outline">{hasAnalysis ? source.provenance.kind === "sample" ? "原型预置报告" : "进度分析报告" : "尚未分析"}</Badge></div><h1 className="text-ui-lg font-semibold">{title}</h1><div className="flex flex-wrap items-center gap-2 text-ui-sm"><span className="text-foreground-subtle">需求负责人</span><AssignOwner group={group} /></div><ProgressValue value={percent} label={title} status={status} source={progressSource} showStatus={false} /><p className="text-ui-sm text-foreground-subtle">{selected ? manual ? "当前百分比来自人工判断；下方 AI 报告为此前分析，不代表本次人工结论。" : hasAnalysis ? "进度分析 Agent 根据需求、验收标准与代码证据判断。" : "尚未分析；0% 为新需求的初始进度，不代表已有代码分析结论。" : `${all.length} 个 SR 的进度算术平均值；全部 SR 完成后 IR 才完成。`}</p>{manual && <p className="break-words text-ui-sm" data-testid="manual-progress-source">{progressSource}：{manual.employeeId} · {manual.reason} · {new Date(manual.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p>}</header>
+      <header className="space-y-3"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selected ? "SR" : "IR"}</Badge><span className="font-mono text-ui-xs text-foreground-subtle">{selected?.id ?? group.id}</span><ProgressStatusBadge status={status} /><Badge variant="outline">{hasAnalysis ? "进度分析报告" : "尚未分析"}</Badge></div><h1 className="text-ui-lg font-semibold">{title}</h1><div className="flex flex-wrap items-center gap-2 text-ui-sm"><span className="text-foreground-subtle">需求负责人</span><AssignOwner group={group} /></div><ProgressValue value={percent} label={title} status={status} source={progressSource} showStatus={false} /><p className="text-ui-sm text-foreground-subtle">{selected ? manual ? "当前百分比来自人工判断；下方 AI 报告为此前分析，不代表本次人工结论。" : hasAnalysis ? "进度分析 Agent 根据需求、验收标准与代码证据判断。" : "尚未分析；0% 为新需求的初始进度，不代表已有代码分析结论。" : `${all.length} 个 SR 的进度算术平均值；全部 SR 完成后 IR 才完成。`}</p>{manual && <p className="break-words text-ui-sm" data-testid="manual-progress-source">{progressSource}：{manual.employeeId} · {manual.reason} · {new Date(manual.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p>}</header>
       {selected && <ManualProgress key={selected.id} group={group} sr={selected} />}
       <ReportSection title={manual ? "此前 AI 报告的问题与不确定项" : "值得关注的问题与不确定项"}>{issues.length ? <ul className="space-y-4">{issues.map((issue, index) => <li key={`${issue.sr.id}:${index}`} className="space-y-1"><p className="text-ui-sm font-medium">{issue.title}{!selected && ` · ${issue.sr.title}`}</p><p className="text-ui-sm leading-6 text-foreground-subtle">{issue.detail}</p></li>)}</ul> : <p className="text-ui-sm text-foreground-subtle">{hasAnalysis ? "当前报告未发现需关注的遗留问题。" : "尚未分析，暂无问题判断。"}</p>}</ReportSection>
       <ReportSection title="已实现内容">{rows.some(sr => sr.progress?.implemented.length) ? <ul className="list-disc space-y-2 pl-5 text-ui-sm">{evidence("implemented")}</ul> : <p className="text-ui-sm text-foreground-subtle">尚无已实现内容的代码证据。</p>}</ReportSection>
       <ReportSection title="尚未实现或待补充证据">{rows.some(sr => sr.progress?.remaining.length) ? <ul className="list-disc space-y-2 pl-5 text-ui-sm">{evidence("remaining")}</ul> : <p className="text-ui-sm text-foreground-subtle">{hasAnalysis ? "当前报告没有列出未实现项；仍须核对合入事实及完成条件。" : "尚未分析，暂无实现情况与代码版本结论。"}</p>}</ReportSection>
       <ReportSection title="人员与计划时间"><AIReqPlanningSummary group={group} rows={rows} editable /></ReportSection>
       <ReportSection title={manual ? "此前 AI 报告的代码活动与合入依据" : "代码活动与合入依据"}><ul className="space-y-5">{rows.map(sr => <li key={sr.id} className="space-y-2 text-ui-sm"><p className="font-medium">{sr.title}</p>{sr.trackingBranch && <p className="break-all text-ui-xs text-foreground-subtle" data-testid="sr-tracking-branch">提案自动入库后已创建并推送分支：{sr.trackingBranch.name} · 基点：{sr.trackingBranch.baseCommit}</p>}{sr.progress ? <><p className="break-all font-mono text-ui-xs text-foreground-subtle">{sr.progress.branch} → {project?.defaultBranch} · {sr.progress.merged ? "已合入" : "尚未确认合入，最高 99%"}</p><p className="break-all text-ui-xs text-foreground-subtle">分析版本：{sr.progress.codeVersion} · 默认分支版本：{sr.progress.defaultVersion} · {sr.progress.certain ? "实现判断确定" : "判断仍有不确定项"}</p>{sr.progress.activity.length ? sr.progress.activity.map(activity => <p key={activity.commit} className="break-all text-ui-sm">{activity.message}<span className="ml-2 font-mono text-ui-xs text-foreground-subtle">{activity.commit}</span></p>) : <p className="text-foreground-subtle">尚无独立开发提交。</p>}</> : <p className="text-foreground-subtle">尚未分析，暂无代码活动、分析版本或合入判断。</p>}</li>)}</ul></ReportSection>
-      <div className="space-y-1 text-ui-xs text-foreground-subtle"><p>后台进度分析报告 · {analysedAt ? new Date(analysedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "尚未分析"}</p><p className="break-all">仓库：{project?.repositoryUrl ?? "尚未配置"} · 默认分支：{project?.defaultBranch}</p><p>{source.provenance.kind === "sample" ? "原型预置报告，尚未调用模型或 Git。人工调整保留报告中的问题及代码依据。" : "人工调整保留报告中的问题及代码依据。"}</p></div>
+      <div className="space-y-1 text-ui-sm text-foreground-subtle"><p>最近分析 · {analysedAt ? new Date(analysedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "尚未分析"}</p><p className="break-all">仓库：{project?.repositoryUrl ?? "尚未配置"} · 默认分支：{project?.defaultBranch}</p><p>人工调整保留报告中的问题及代码依据。</p></div>
     </div>
   </main>;
 }

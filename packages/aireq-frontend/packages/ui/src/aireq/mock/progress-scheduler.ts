@@ -10,12 +10,12 @@ interface Pending { run: AIReqAnalysisRun; input: Input }
 interface ScaleInput { input: Input; irTitle: string }
 
 const failureSamples: AIReqAnalysisFailure[] = [
-  { stage: "仓库读取", reason: "模拟：分析进程无法读取所选分支的仓库快照。", nextStep: "实际环境应由启动者检查仓库路径、分支与读取权限后重试；本演示直接重试即可，不访问 Git。", retryable: true },
-  { stage: "模型调用", reason: "模拟：模型请求超时，尚未生成分析结论。", nextStep: "实际环境应检查需求分析 Agent 的模型连接与服务状态后重试；本演示直接重试即可，不调用模型。", retryable: true },
-  { stage: "文档读取", reason: "模拟：当前 SR 的需求文档未能读取，分析依据不完整。", nextStep: "实际环境应检查 SR 文档路径、文件是否存在及读取权限后重试；本演示直接重试即可，不读取文件。", retryable: true },
+  { stage: "仓库读取", reason: "无法读取所选分支的代码。", nextStep: "请检查仓库地址、分支与读取权限后重试。", retryable: true },
+  { stage: "模型调用", reason: "模型请求超时，尚未生成分析结论。", nextStep: "请检查需求分析 Agent 的模型配置与服务状态后重试。", retryable: true },
+  { stage: "文档读取", reason: "当前 SR 的需求文档未能读取，分析依据不完整。", nextStep: "请检查 SR 文档路径、文件是否存在及读取权限后重试。", retryable: true },
 ];
 function failureMessage(failure: AIReqAnalysisFailure): string {
-  return `内存失败样例 · ${failure.stage}：${failure.reason} 仅影响此 SR，未执行真实后端操作。`;
+  return `${failure.stage}失败：${failure.reason}`;
 }
 
 /** One source-lifetime memory scheduler. No timer, Git access, model call or formal-report write. */
@@ -40,7 +40,7 @@ export function createPrototypeProgressScheduler(options: { scaleDemo?: boolean 
   const listeners = new Set<() => void>();
   const at = () => new Date(clock).toISOString();
   const requireTime = (value: number) => {
-    if (!Number.isFinite(new Date(value).getTime())) throw new Error("间隔超出原型可表示的日期范围，请使用更小的正整数分钟数。");
+    if (!Number.isFinite(new Date(value).getTime())) throw new Error("分析间隔过大，请使用更小的正整数分钟数。");
     return value;
   };
   const nextAt = () => new Date(clock + intervalMinutes * 60_000).toISOString();
@@ -48,7 +48,7 @@ export function createPrototypeProgressScheduler(options: { scaleDemo?: boolean 
   const emit = () => { for (const listener of listeners) listener(); };
   const requireWrite = () => {
     requirePrototypeSettingsWrite();
-    if (disposed) throw new Error("进度分析内存演示已释放。");
+    if (disposed) throw new Error("需求分析服务已关闭，请刷新页面后重试。");
   };
   const matches = (row: { projectId: string; irId: string; srId: string; srTitle: string }, filter: AIReqAnalysisFilter) => {
     const search = filter.srSearch?.trim().toLowerCase();
@@ -115,10 +115,10 @@ export function createPrototypeProgressScheduler(options: { scaleDemo?: boolean 
     const existing = input.sr.progress;
     return { percent: existing?.percent ?? 0, merged: existing?.merged ?? false, certain: false,
       branch: existing?.branch ?? input.sr.trackingBranch?.name ?? `sr/${input.sr.id}`, analysedAt: at(),
-      codeVersion: existing?.codeVersion ?? "memory-demo-code", defaultVersion: existing?.defaultVersion ?? "memory-demo-default",
-      implemented: ["固定内存展示样例：未检查真实代码，保留原有进度数值。"],
-      remaining: ["此报告仅用于调度交互演示，不代表真实分析结果，也未覆盖正式进度报告。"],
-      issues: [{ title: "内存演示 · 未调用模型", detail: "没有访问 Git、后端或模型；前后百分比相同，不推断真实完成度。" }], activity: [] };
+      codeVersion: existing?.codeVersion ?? "未记录", defaultVersion: existing?.defaultVersion ?? "未记录",
+      implemented: existing?.implemented ?? [],
+      remaining: existing?.remaining ?? ["尚无可用代码依据，暂时保持当前进度。"],
+      issues: existing?.issues ?? [], activity: existing?.activity ?? [] };
   }
 
   function admit(filter: AIReqAnalysisFilter, trigger: AIReqAnalysisRun["trigger"]): void {
@@ -128,7 +128,7 @@ export function createPrototypeProgressScheduler(options: { scaleDemo?: boolean 
       if (trigger === "schedule" && (!enabled || (task.nextRunAt && Date.parse(task.nextRunAt) > clock))) continue;
       const run: AIReqAnalysisRun = { id: `memory-demo-run-${++serial}`, batchId, taskId: task.id, projectId: task.projectId,
         irId: task.irId, srId: task.srId, srTitle: task.srTitle, branch: task.branch, trigger, status: "running", startedAt: at(),
-        message: "内存演示运行中；再次点击模拟时钟完成，不调用模型。", before: task.percent, after: task.percent };
+        message: "正在分析代码与需求文档。", before: task.percent, after: task.percent };
       runs.push(run);
       pending.set(task.id, { run, input: structuredClone(inputs.get(task.id)!) });
       task.state = "running"; task.error = undefined; task.nextRunAt = undefined; task.lastRunAt = at(); task.lastRunId = run.id;
@@ -147,14 +147,14 @@ export function createPrototypeProgressScheduler(options: { scaleDemo?: boolean 
         const srId = `scale-${project.id}-sr-${suffix}`;
         const irId = `scale-${project.id}-ir-${irIndex}`;
         const percent = index % 10 === 0 ? 100 : index % 100;
-        const sr: AIReqSystemRequirement = { id: srId, projectId: project.id, irId, title: `Scale SR ${suffix} · ${project.name}`,
+        const sr: AIReqSystemRequirement = { id: srId, projectId: project.id, irId, title: `系统需求 ${suffix} · ${project.name}`,
           documentPath: `memory-scale/${srId}.md`, status: percent === 100 ? "completed" : "pending", round: 0,
           sessions: [], approvals: [], materials: [],
-          progress: { percent, merged: percent === 100, certain: false, branch: `memory/${srId}`,
-            analysedAt: at(), codeVersion: `scale-code-${srId}`, defaultVersion: "scale-main",
+          progress: { percent, merged: percent === 100, certain: false, branch: `sr/${srId}`,
+            analysedAt: at(), codeVersion: "未记录", defaultVersion: "未记录",
             implemented: [], remaining: [], issues: [], activity: [] } };
         const input = { sr, fingerprint: `memory-scale-input:${project.id}:${srId}:1` };
-        scaleInputs.set(JSON.stringify([project.id, irId, srId]), { input, irTitle: `规模演示 IR ${irIndex} · ${project.name}` });
+        scaleInputs.set(JSON.stringify([project.id, irId, srId]), { input, irTitle: `需求 ${irIndex} · ${project.name}` });
       }
     }
     if (initialProjects[0]) projects.set(initialProjects[0].id, true);
@@ -171,7 +171,7 @@ export function createPrototypeProgressScheduler(options: { scaleDemo?: boolean 
       const detail = report(input);
       detail.analysedAt = timestamp;
       const failure = status === "failed" ? failureSamples[index % failureSamples.length]! : undefined;
-      const message = failure ? failureMessage(failure) : `规模内存历史 ${index + 1} · ${status}；未访问 Git、后端或模型。`;
+      const message = failure ? failureMessage(failure) : status === "skipped" ? "需求与代码未发生变化，已跳过重复分析。" : "分析完成，当前进度未发生变化。";
       runs.push({ id: `memory-scale-run-${String(index + 1).padStart(4, "0")}`, batchId: `memory-scale-batch-${Math.floor(index / 25) + 1}`,
         taskId: task.id, projectId: task.projectId, irId: task.irId, srId: task.srId, srTitle: task.srTitle, branch: task.branch,
         trigger: index % 2 ? "manual" : "schedule", status, startedAt: timestamp, endedAt: timestamp,
@@ -189,8 +189,8 @@ export function createPrototypeProgressScheduler(options: { scaleDemo?: boolean 
       if (!task || task.percent >= 100) continue;
       const input = inputs.get(task.id)!;
       const timestamp = new Date(clock - 60_000).toISOString();
-      const message = status === "succeeded" ? "预置内存成功样例：固定展示，进度未改变，未调用模型。"
-        : status === "skipped" ? "预置内存跳过样例：需求和代码指纹未变化，未调用模型。"
+      const message = status === "succeeded" ? "分析完成，当前进度未发生变化。"
+        : status === "skipped" ? "需求与代码未发生变化，已跳过重复分析。"
         : failureMessage(failureSamples[2]!);
       runs.push({ id: `memory-demo-fixture-${srId}`, batchId: "memory-demo-fixtures", taskId: task.id, projectId: task.projectId,
         irId: task.irId, srId, srTitle: task.srTitle, branch: task.branch, trigger: "schedule", status, startedAt: timestamp, endedAt: timestamp,
@@ -285,14 +285,14 @@ export function createPrototypeProgressScheduler(options: { scaleDemo?: boolean 
           run.endedAt = at();
           run.report = report(input);
           if (analysed.get(id) === input.fingerprint) {
-            run.status = "skipped"; run.message = "内存演示：需求及代码指纹未变化，跳过模型分析（未调用模型）。";
+            run.status = "skipped"; run.message = "需求与代码未发生变化，已跳过重复分析。";
           } else if (task.projectId === "demo-aurora" && task.srId === "sr-permissions" && !failedSamples.has(id)) {
             failedSamples.add(id); run.status = "failed";
             run.failure = failureSamples[0]; run.report = undefined;
             run.message = failureMessage(failureSamples[0]!);
             task.error = run.message;
           } else {
-            run.status = "succeeded"; run.message = "内存演示完成：固定报告，保留原进度；未调用模型，未覆盖正式报告。";
+            run.status = "succeeded"; run.message = "分析完成，当前进度未发生变化。";
             analysed.set(id, input.fingerprint);
           }
           task.nextRunAt = nextAt();

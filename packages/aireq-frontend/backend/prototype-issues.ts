@@ -17,17 +17,17 @@ export function createPrototypeIssues(): AIReqIssueServices {
     if (!value) {
       const now = new Date().toISOString();
       const samples: { title: string; type: AIReqIssue["type"]; status: AIReqIssue["status"]; percent: number; merged: boolean }[] = [
-        { title: "侧栏收起后内容区域未重新居中（样例）", type: "bug", status: "developing", percent: 65, merged: false },
-        { title: "整理重复的状态转换逻辑（样例）", type: "refactor", status: "merging", percent: 99, merged: false },
-        { title: "优化列表首次加载速度（样例）", type: "performance", status: "confirming", percent: 99, merged: true },
+        { title: "侧栏收起后内容区域未重新居中", description: "收起左侧导航后，内容区仍保留展开时的左偏移，大屏窗口下两侧留白不一致。", acceptance: "展开、收起导航或拖动右侧面板后，内容均在剩余区域居中，保留两侧最小间距。", type: "bug", status: "developing", percent: 65, merged: false },
+        { title: "整理重复的状态转换逻辑", description: "多个入口重复维护相同的状态转换，新增状态时容易遗漏校验或产生不一致结果。", acceptance: "统一状态转换入口和校验，现有合法操作保持一致，非法转换有明确提示。", type: "refactor", status: "merging", percent: 99, merged: false },
+        { title: "优化列表首次加载速度", description: "首次进入列表需要等待全部详情返回，条目增加后首屏加载明显变慢。", acceptance: "列表首屏按页加载，详情按需读取；搜索和切换筛选时保留清晰的反馈。", type: "performance", status: "confirming", percent: 99, merged: true },
       ];
       value = { issues: samples.map<AIReqIssue>(sample => {
         const id = `ISSUE-${String(++sequence).padStart(4, "0")}`;
         return {
           ...scope, ...sample, id, requestId: `sample:${id}`, priority: "normal", developerEmployeeId: "j00808874",
-          branch: `issue/${id.toLowerCase()}`, description: `原型样例：${sample.title}，用于展示独立 Issue 跟踪。`,
+          branch: `issue/${id.toLowerCase()}`, description: sample.description,
           acceptance: "问题得到修复，相关改动合入默认分支后人工确认。",
-          report: sample.merged ? "样例合入记录：开发分支已合入默认分支，等待人工确认完成。未读取真实 Git。" : "样例代码证据与进度，仅用于展示。未读取真实分支或调用模型。",
+          report: sample.merged ? "开发分支已合入默认分支。请核对完成标准，确认后结束跟踪。" : sample.status === "merging" ? "状态转换入口已统一，开发分支待合入默认分支。" : "已完成主要布局调整，仍需核对导航开合及右侧面板拖动时的边界情况。",
           remaining: sample.merged ? ["等待人工核对完成标准并确认"] : ["核对代码与完成标准", "等待开发分支合入默认分支"],
           createdAt: now, updatedAt: now,
         };
@@ -47,8 +47,8 @@ export function createPrototypeIssues(): AIReqIssueServices {
     for (const issue of value.issues.filter(item => item.status !== "completed")) {
       // 样例没有 Git 证据，不能随点击次数虚增进度或伪造合入事实。
       issue.percent = Math.min(issue.percent, 99);
-      issue.report = "当前为后端内存样例，尚未读取真实开发分支、代码差异或合入记录。缺少代码证据，保持现有进度。";
-      issue.remaining = issue.merged ? ["样例分支已合入，等待人工确认"] : ["等待开发分支的代码证据", "等待合入默认分支后人工确认"];
+      issue.report = issue.merged ? "开发分支已合入默认分支，等待人工核对完成标准。" : "本轮未获得足以确认新进展的证据，保留当前进度；请查看遗留问题后继续处理。";
+      issue.remaining = issue.merged ? ["开发分支已合入，等待人工确认"] : ["等待开发分支的代码证据", "等待合入默认分支后人工确认"];
       issue.updatedAt = startedAt;
       value.runs.unshift({ modelConfig: readPrototypeAgentModelBinding("issue-analysis"), id: crypto.randomUUID(), issueId: issue.id, title: issue.title, startedAt, status: "succeeded", summary: issue.report });
     }

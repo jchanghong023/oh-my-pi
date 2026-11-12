@@ -31,11 +31,11 @@ export function withPrototypeProgress(view: AIReqWorkflowView): AIReqWorkflowVie
         const analysedAt = "2026-11-11T01:30:00.000Z";
         progress = {
           percent: sample.percent, merged: sample.merged ?? false, certain: sample.certain ?? false,
-          branch: sr.trackingBranch?.name ?? `sr/${sr.id}`, analysedAt, codeVersion: `sample-${sr.id}-head`, defaultVersion: "sample-main-20261111",
-          implemented: sample.percent > 0 ? [`${sr.title}：样例差异已覆盖主要处理路径。`] : [],
+          branch: sr.trackingBranch?.name ?? `sr/${sr.id}`, analysedAt, codeVersion: `${sr.id}-head`, defaultVersion: "main-20261111",
+          implemented: sample.percent > 0 ? [`${sr.title}：已覆盖主要处理路径。`] : [],
           remaining: sample.percent === 100 || sample.certain ? [] : sample.percent === 0 ? ["尚无独立开发提交，等待开发者推送指定 SR 分支。"] : ["异常路径及部分验收行为仍缺少充分代码或测试证据。"],
-          issues: sample.percent === 100 ? [] : sample.percent === 0 ? [{ title: "尚未开始开发", detail: "当前没有可用于判断实现的新增提交证据。" }] : sample.certain ? [{ title: "等待合入默认分支", detail: "分支实现的样例审查已通过；尚未合入，进度最高 99%。" }] : [{ title: "验收证据待补充", detail: "需关注失败恢复和边界行为；当前证据不足以确认全部完成。" }],
-          activity: sample.percent > 0 ? [{ commit: `sample-${sr.id}-head`, message: `${sr.title}：最新代码活动（样例）`, at: "2026-11-11T01:00:00.000Z" }] : [],
+          issues: sample.percent === 100 ? [] : sample.percent === 0 ? [{ title: "尚未开始开发", detail: "当前没有可用于判断实现的新增提交证据。" }] : sample.certain ? [{ title: "等待合入默认分支", detail: "分支实现审查已通过；尚未合入，进度最高 99%。" }] : [{ title: "验收证据待补充", detail: "需关注失败恢复和边界行为；当前证据不足以确认全部完成。" }],
+          activity: sample.percent > 0 ? [{ commit: `${sr.id}-head`, message: `${sr.title}：最新代码活动`, at: "2026-11-11T01:00:00.000Z" }] : [],
         };
         reports.set(key, progress);
       }
