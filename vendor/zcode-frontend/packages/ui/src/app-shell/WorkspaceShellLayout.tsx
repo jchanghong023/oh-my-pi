@@ -60,6 +60,7 @@ import { WorkspaceSidebar, type SidebarFileTreeOpenRequest } from "@/WorkspaceSi
 import { AnimatedSidePanePanel } from "@/app-shell/AnimatedSidePanePanel.js";
 import { SIDE_PANE_DEFAULT_EXPANDED_SIZE } from "@/app-shell/sidePaneLayout.js";
 import { useAnimatedResizablePanel } from "@/app-shell/useAnimatedResizablePanel.js";
+import { resolveWorkspaceShellPanelRadiusPx, resolveWorkspaceShellResizeHandleInsetPx } from "@/app-shell/workspaceShellWindowChrome.js";
 import { ensureTaskNavigationWorkspace } from "@/app-shell/taskNavigationWorkspace.js";
 
 import { cn } from "@/components/lib/utils.js";
@@ -325,8 +326,9 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const baseServices = useBaseWorkspaceServices();
   const tabStoreApi = useTabStoreApi();
   const usesResponsiveLayout = responsiveBrowserLayout;
-  const workspacePanelRadiusPx = 0;
-  const workspaceResizeHandleInsetPx = 0;
+  // Browser shells keep the upstream panel shape without restoring desktop window chrome.
+  const workspacePanelRadiusPx = resolveWorkspaceShellPanelRadiusPx({});
+  const workspaceResizeHandleInsetPx = resolveWorkspaceShellResizeHandleInsetPx({});
   const collapsedSidebarWidthPx = 0;
   const [draftHeaderDropTargetController, setDraftHeaderDropTargetController] =
     useState<ConversationDropTargetController | null>(null);

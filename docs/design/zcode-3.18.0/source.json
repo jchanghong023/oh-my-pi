@@ -1,0 +1,21 @@
+{
+  "repository": "https://github.com/zai-org/ZCode",
+  "version": "3.18.0",
+  "commit": "b95ebaffeab641907b38652f45c1502bd762972d",
+  "copiedOn": "2026-11-12",
+  "scope": "Unmodified documentation snapshot, not a ZCode runtime or dependency upgrade.",
+  "files": {
+    "DESIGN.md": {
+      "sourcePath": "DESIGN.md",
+      "sha256": "6c2e28b767a89659b05cace6337514a52b617befdc3f716d02d519512d594e7a"
+    },
+    "CONTEXT.md": {
+      "sourcePath": "CONTEXT.md",
+      "sha256": "ad5d3b40c597c9a625580cfcc7278079b7f7a0107d20389193a4730a54819915"
+    },
+    "LICENSE": {
+      "sourcePath": "LICENSE",
+      "sha256": "606c36baf38b973227273df12a74930e4b4137280eea835c5cd623aa4553c13b"
+    }
+  }
+}

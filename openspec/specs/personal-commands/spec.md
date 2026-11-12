@@ -542,7 +542,7 @@ OMP MUST 提供会话内 `/dev` 和命令行 `omp dev` 两个工作台启动入�
 
 #### Scenario: 新界面与新流程
 - **WHEN** 用户进入新 Dev
-- **THEN** 使用 Dev 自有 WebGUI 风格界面，提案采用需求→四 Agent 评审→方案→入库三栏流程，正式需求采用大表格与同页代码证据报告；开发在平台外完成，不提供计划／执行／IR 验收 Agent、开发名额、冻结锁或最终归档流水线；原 WebGUI 保持不变
+- **THEN** 使用 Dev 自有 WebGUI 风格界面，提案采用需求→四 Agent 评审→方案→入库三栏流程，正式需求采用大表格与同页代码证据报告；开发在平台外完成，不提供计划／执行／IR 验收 Agent、开发名额、冻结锁或最终归档流水线；原 WebGUI 业务与后端保持不变，视觉基础仅按 [zcode-visual-baseline](../zcode-visual-baseline/spec.md) 的已授权范围对齐
 
 ### Requirement: 旧 Dev 终端交互退役但能力保留
 

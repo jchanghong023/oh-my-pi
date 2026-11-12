@@ -1,6 +1,6 @@
 import type { StepRunStatus } from "@/components/workflow-graph/types.js";
 
-export type FaceState = "waiting" | "scanning" | "content" | "sad";
+export type FaceState = "idle" | "waiting" | "scanning" | "content" | "sad";
 export type EyeExpression = "dots" | "pill" | "happy" | "sleepy" | "focused" | "sad" | "confused";
 export function faceState(status: StepRunStatus | undefined): FaceState {
   return status === "running"
@@ -12,12 +12,14 @@ export function faceState(status: StepRunStatus | undefined): FaceState {
         : "waiting";
 }
 export const BASE_EXPRESSION: Record<FaceState, EyeExpression> = {
+  idle: "pill",
   waiting: "dots",
   scanning: "pill",
   content: "happy",
   sad: "sad",
 };
 const SPECIAL: Record<FaceState, readonly EyeExpression[]> = {
+  idle: [],
   scanning: ["focused", "confused"],
   waiting: [],
   content: [],
@@ -27,14 +29,14 @@ const SPECIAL: Record<FaceState, readonly EyeExpression[]> = {
 /** 一张脸只有一个待执行计时器；DOM 动作不触发整个工作流的 React 重渲染。 */
 export function startFaceMotion(face: SVGSVGElement, state: FaceState): () => void {
   const media = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: number | undefined;
   let visible = true;
   let rounds = 0;
   let lookingLeft = false;
   let previous: EyeExpression | undefined;
   const random = (min: number, max: number) => min + Math.random() * (max - min);
   const later = (delay: number, action: () => void) => {
-    timer = setTimeout(action, delay);
+    timer = window.setTimeout(action, delay);
   };
   const motion = (value: string) => {
     face.dataset.motion = value;
@@ -51,7 +53,7 @@ export function startFaceMotion(face: SVGSVGElement, state: FaceState): () => vo
       state === "waiting"
         ? random(1500, 3000)
         : state === "scanning"
-          ? random(1500, 3500)
+          ? random(1000, 2000)
           : state === "sad"
             ? random(1800, 4000)
             : random(6000, 10000),
@@ -70,6 +72,11 @@ export function startFaceMotion(face: SVGSVGElement, state: FaceState): () => vo
     });
   };
   const maybeExpression = () => {
+    // 设置页的空闲头像只眨眼和巡视，不借用执行状态或随机切换任务表情。
+    if (state === "idle") {
+      pause();
+      return;
+    }
     rounds++;
     const probability = state === "scanning" ? 0.45 : 0.25;
     if (rounds < 2 || Math.random() >= probability) {
@@ -147,7 +154,7 @@ export function startFaceMotion(face: SVGSVGElement, state: FaceState): () => vo
     }
   }
   const restart = () => {
-    clearTimeout(timer);
+    window.clearTimeout(timer);
     timer = undefined;
     rounds = 0;
     lookingLeft = false;
@@ -169,7 +176,7 @@ export function startFaceMotion(face: SVGSVGElement, state: FaceState): () => vo
   media?.addEventListener?.("change", restart);
   restart();
   return () => {
-    clearTimeout(timer);
+    window.clearTimeout(timer);
     observer?.disconnect();
     document.removeEventListener("visibilitychange", restart);
     media?.removeEventListener?.("change", restart);

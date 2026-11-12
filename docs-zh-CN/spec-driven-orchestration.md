@@ -197,3 +197,7 @@ bootstrap 包含 `contractVersion: 1`、`provenance: {kind: "sample" | "live", n
 - **语音转文字**：麦克风入口演示录音及可编辑示例文字，确认后追加草稿，不自动发送；不申请麦克风权限、不采集音频、不调用识别服务。
 
 相关规格：[需求提案与入库](../openspec/specs/dev-requirement-intake/spec.md)、[工作台](../openspec/specs/dev-browser-workbench/spec.md)、[编排边界](../openspec/specs/spec-driven-orchestration/spec.md)、[命令与配置](../openspec/specs/personal-commands/spec.md)、[总提案](../openspec/changes/refactor-dev-webgui-requirement-intake/proposal.md)。实际后端接入和运行检查须单独提供证据，不能以原型样例状态替代。
+
+## 视觉基线与功能布局边界
+
+WebGUI 与 Dev 的视觉基础统一对齐官方 ZCode 3.18，来源、原文和本地适配规则见[设计规范入口](../docs/design/omp-zcode-visual-adaptation.md)及 [OpenSpec 视觉基线](../openspec/specs/zcode-visual-baseline/spec.md)。本次只调整设计规范、主题、面板圆角、字阶、表格容器、控件用法、工作流头像和消息／材料样式；功能布局、表格列宽、四 Agent 人工评审及现有操作保持。Dev 原型和正式版仍共用同一 bootstrap、客户端和冻结契约，mock 只在独立后端；视觉同步不重新引入浏览器样例或另一套原型 UI，也不恢复原生编码执行流程。WebGUI 只在同一已授权视觉范围内适配，不改变业务或后端。

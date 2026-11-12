@@ -66,7 +66,7 @@ export function DevReviewNavigation() {
    }}>{(["summary", "a", "b", "c"] as const).map(id => {
     const agent = agents.find(item => item.id === id)!;
     const label = id === "summary" ? "综合意见" : agent.name;
-    return <ControlHintTooltip key={id} title={`${label} · ${agent.session.modelConfig?.modelName ?? "模型未配置"}`}><span className="inline-flex"><TabsTrigger value={id} aria-label={label} className="h-9 w-9 flex-none p-1.5 data-[state=active]:bg-selected data-[state=active]:ring-1 data-[state=active]:ring-border" data-testid={`review-avatar-${id}`}><WorkflowAgentFace name={agent.name} avatarIndex={agents.findIndex(item => item.id === id) + 1} status={agent.status === "completed" ? "done" : agent.status} className="size-6" /></TabsTrigger></span></ControlHintTooltip>;
+    return <ControlHintTooltip key={id} title={`${label} · ${agent.session.modelConfig?.modelName ?? "模型未配置"}`}><span className="inline-flex"><TabsTrigger value={id} aria-label={label} className="h-9 w-9 flex-none p-1.5 data-[state=active]:bg-selected data-[state=active]:ring-1 data-[state=active]:ring-border" data-testid={`review-avatar-${id}`}><WorkflowAgentFace name={agent.name} avatarIndex={agents.findIndex(item => item.id === id) + 1} status={agent.status === "completed" ? "done" : agent.status} showCompletionMark={agent.status === "completed"} className="size-6" /></TabsTrigger></span></ControlHintTooltip>;
    })}</TabsList></Tabs>
    <Button variant="ghost" size="sm" className="shrink-0 gap-1.5" aria-label="展开评审工作流" title="展开评审工作流" onClick={() => setExpanded(true)}><GitFork className="size-4" />评审流程</Button>
   </div>
