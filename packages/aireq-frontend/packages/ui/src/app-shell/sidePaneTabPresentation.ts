@@ -52,7 +52,7 @@ export function getSidePaneTabSearchHint(tab: WorkspaceSidePaneTab): string {
     return `${tab.rootSessionId} ${tab.parentSessionId} subagent directory`;
   }
   if (tab.type === "new-tab") return "new tab launcher";
-  if (tab.type === "dev-materials") return "只读材料 readonly materials";
+  if (tab.type === "aireq-materials") return "只读材料 readonly materials";
   if (tab.type === "git") return "git diff";
   if (tab.type === "whiteboard") return `${tab.title} whiteboard canvas draw sketch`;
   if (tab.type === "model-trajectory") {
@@ -99,7 +99,7 @@ export function getSidePaneTabTypeLabel(
   labels: SidePaneTabPresentationLabels,
 ): string {
   if (tab.type === "new-tab") return labels.newTabTitle ?? "New tab";
-  if (tab.type === "dev-materials") return "只读材料";
+  if (tab.type === "aireq-materials") return "只读材料";
   if (tab.type === "plan-detail") return labels.planTitle;
   if (tab.type === "workflow-run") return labels.workflowRunTitle;
   if (tab.type === "workflow-directory") return labels.workflowDirectoryTitle;

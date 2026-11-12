@@ -4,7 +4,7 @@ export type OpenTabLauncherItemId =
   | "selection-side-conversation"
   | "files"
   | "review"
-  | "dev-materials"
+  | "aireq-materials"
   | "developer-tools";
 
 export function resolveOpenTabLauncherItemIds({
@@ -30,7 +30,7 @@ export function resolveOpenTabLauncherItemIds({
   }
 
   if (hasAIReqMaterials) {
-    itemIds.push("dev-materials");
+    itemIds.push("aireq-materials");
   }
 
   if (developerToolsEnabled) {

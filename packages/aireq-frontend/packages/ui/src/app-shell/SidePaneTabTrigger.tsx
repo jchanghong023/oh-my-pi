@@ -263,7 +263,7 @@ function isDiffPreviewTab(tab: WorkspaceSidePaneTab): boolean {
 
 export function SidePaneTabIcon({ tab }: { tab: WorkspaceSidePaneTab }) {
   if (tab.type === "file-manager") return <FolderOpenIcon className="size-3.5" />;
-  if (tab.type === "dev-materials") return <FileTextIcon className="size-3.5" />;
+  if (tab.type === "aireq-materials") return <FileTextIcon className="size-3.5" />;
   // plan-detail tab 由 switch-mode（ExitPlanMode）工具调用卡片打开，来源卡片
   // 用 NotepadTextIcon；tab 必须与来源一致，避免点击后图标跳变。不用 ListChecksIcon：
   // 那会与状态面板 Todo section 撞图标，语义上也偏向 todo 而非计划方案文档。
@@ -459,7 +459,7 @@ export function getSidePaneTabTitle(
   tab: WorkspaceSidePaneTab,
   formatMessage: (descriptor: { id: string }, values?: Record<string, string>) => string,
 ): string {
-  if (tab.type === "dev-materials") return "只读材料";
+  if (tab.type === "aireq-materials") return "只读材料";
   if (tab.type === "plan-detail") {
     return formatMessage({ id: "planTool.panel.planTab" });
   }
