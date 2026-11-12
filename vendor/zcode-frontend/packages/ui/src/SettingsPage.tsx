@@ -42,13 +42,15 @@ import {
   ProjectManagement,
 } from "@/project-sidebar/index.js";
 import { ModelProviderSection } from "@/settings/ModelProviderSection.js";
-import { SubagentsSection } from "@/settings/SubagentsSection.js";
+import { DisplayOnlyResourcesSection } from "@/settings/DisplayOnlyResourcesSection.js";
 import { AutomationsSection } from "@/settings/AutomationsSection.js";
 import { PluginsSection } from "@/settings/PluginsSection.js";
 import { HooksSection } from "@/settings/HooksSection.js";
 import { WorkspaceFileSearchSection } from "@/settings/WorkspaceFileSearchSection.js";
 import { MemorySettingsSection } from "@/settings/MemorySettingsSection.js";
 import { PersonalizationSection } from "@/settings/PersonalizationSection.js";
+import { ComputerUseSection } from "@/settings/ComputerUseSection.js";
+import { BrowserSettingsSection } from "@/settings/BrowserSettingsSection.js";
 import { ShortcutSettingsSection } from "@/settings/ShortcutSettingsSection.js";
 import { SETTINGS_FRAME_CONTENT_CLASSNAME } from "@/settings/SettingsPageParts.js";
 import {
@@ -188,9 +190,6 @@ export function SettingsPage({
     },
     [activeSection],
   );
-  const handleOpenModelProviderSettings = useCallback(() => {
-    setActiveSettingsSection("modelProvider");
-  }, [setActiveSettingsSection]);
   const activeWorkspacePath = useTabStore((state) => state.activeWorkspacePath);
   const tabs = useTabStore((state) => state.tabs);
   const workspaceTabs = useMemo(() => tabs.filter(isWorkspaceTab), [tabs]);
@@ -753,6 +752,10 @@ export function SettingsPage({
                                 setUiFontSizePx(fontSizePx)
                               }
                             />
+                          ) : activeSection === "browser" ? (
+                            <BrowserSettingsSection />
+                          ) : activeSection === "computerUse" ? (
+                            <ComputerUseSection />
                           ) : activeSection === "shortcuts" ? (
                             <ShortcutSettingsSection isDesktop={Boolean(isDesktop)} />
                           ) : activeSection === "modelProvider" ? (
@@ -815,12 +818,10 @@ export function SettingsPage({
                               />
                               <ArchiveManagement />
                             </div>
+                          ) : activeSection === "plugin" ? (
+                            <DisplayOnlyResourcesSection kind="plugin" />
                           ) : activeSection === "subagents" ? (
-                            <SubagentsSection
-                              onManageModels={handleOpenModelProviderSettings}
-                              workspacePath={activeWorkspacePath}
-                              workspaceIdentity={activeWorkspaceIdentity}
-                            />
+                            <DisplayOnlyResourcesSection kind="subagents" />
                           ) : activeSection === "automations" ? (
                             <AutomationsSection
                               workspacePath={activeWorkspacePath}

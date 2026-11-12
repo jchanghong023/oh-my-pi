@@ -4,6 +4,8 @@ import { logger } from "@/logger.js";
 export type SettingsSectionId =
   | "general"
   | "appearance"
+  | "browser"
+  | "computerUse"
   | "modelProvider"
   | "personalization"
   | "memory"
@@ -11,6 +13,7 @@ export type SettingsSectionId =
   | "projects"
   | "archives"
   | "subagents"
+  | "plugin"
   | "commands"
   | "hooks"
   | "workspaceFileSearch"
@@ -24,13 +27,18 @@ const SETTINGS_SECTION_INTENT_KEY = "zcode-settings-section-intent",
 const SETTINGS_MODEL_PROVIDER_ID_INTENT_KEY = "zcode-settings-model-provider-id-intent";
 const SETTINGS_SECTION_INTENT_EVENT = "zcode:settings-section-intent",
   SETTINGS_LAST_SECTION_STORAGE_KEY = "zcode-settings-last-section";
-// Dev 原型展示项目/Release、外观、模型、个人追加提示词和技能；其余分区保留原组件。
+// Dev 个人工具中的浏览器控制、电脑控制与键盘快捷键仅展示界面；其余分区沿用既有权限。
 const ENABLED_SETTINGS_SECTIONS = new Set<SettingsSectionId>([
   "general",
   "appearance",
+  "browser",
+  "computerUse",
+  "shortcuts",
   "modelProvider",
   "personalization",
   "skill",
+  "subagents",
+  "plugin",
 ]);
 
 export interface SettingsSectionIntentEventDetail {
@@ -47,6 +55,8 @@ function isSettingsSectionId(value: string): value is SettingsSectionId {
   return (
     value === "general" ||
     value === "appearance" ||
+    value === "browser" ||
+    value === "computerUse" ||
     value === "modelProvider" ||
     value === "personalization" ||
     value === "memory" ||
@@ -54,6 +64,7 @@ function isSettingsSectionId(value: string): value is SettingsSectionId {
     value === "projects" ||
     value === "archives" ||
     value === "subagents" ||
+    value === "plugin" ||
     value === "commands" ||
     value === "hooks" ||
     value === "workspaceFileSearch" ||

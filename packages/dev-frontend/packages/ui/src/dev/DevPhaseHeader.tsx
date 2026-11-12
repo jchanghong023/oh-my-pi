@@ -142,7 +142,8 @@ export function DevPhaseHeader({ details, placement = "header" }: { details: Rea
 export function DevProposalStageBody() {
  const dev = useDev()!;
  const group = dev.view?.drafts.find(item => item.projectId === dev.selection.projectId && item.id === dev.selection.irId);
- return <main className="min-h-0 flex-1 overflow-auto p-6" data-testid="dev-proposal-stage-body"><div className="space-y-4"><h3 className="text-ui-base font-medium">需求入库</h3><p className="text-ui-base leading-6 text-foreground-subtle">方案完成后由平台创建提案独立分支并提交推送。人工创建、评审和合并 PR；后台只根据提案分支是否合入默认分支及需求文档是否完整自动更新状态。</p>{group && <DevProposalBackgroundStatus group={group} />}</div></main>;
+ // 以实际中栏宽度居中；侧栏开合或拖动时由 CSS 重新排版，不缓存窗口宽度。
+ return <main className="h-full min-h-0 w-full min-w-0 overflow-y-auto p-6" data-testid="dev-proposal-stage-body"><div className="mx-auto w-full min-w-0 max-w-3xl space-y-4 break-words"><h3 className="text-ui-base font-medium">需求入库</h3><p className="text-ui-base leading-6 text-foreground-subtle">方案完成后由平台创建提案独立分支并提交推送。人工创建、评审和合并 PR；后台只根据提案分支是否合入默认分支及需求文档是否完整自动更新状态。</p>{group && <DevProposalBackgroundStatus group={group} />}</div></main>;
 }
 
 /** 正式 IR 的 SR 开发是汇总节点，开发聊天分别属于每个 SR。 */

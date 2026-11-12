@@ -1929,7 +1929,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                     className="min-h-full"
                   >
                     <div className="mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6">
-                      {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} onOpenRequirementAnalysis={() => onWorkspaceMainViewChange("requirementAnalysis")} /> : (
+                      {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
                         <AutomationsSection
                           workspacePath={workspaceAbsPath}
                           workspaceIdentity={workspaceIdentity}
@@ -2242,7 +2242,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                                   className="min-h-full"
                                 >
                                   <div className="mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6">
-                                    {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} onOpenRequirementAnalysis={() => onWorkspaceMainViewChange("requirementAnalysis")} /> : (
+                                    {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
                                       <AutomationsSection
                                         workspacePath={workspaceAbsPath}
                                         workspaceIdentity={workspaceIdentity}

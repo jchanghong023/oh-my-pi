@@ -4,6 +4,8 @@ import { logger } from "@/logger.js";
 export type SettingsSectionId =
   | "general"
   | "appearance"
+  | "browser"
+  | "computerUse"
   | "modelProvider"
   | "personalization"
   | "memory"
@@ -11,6 +13,7 @@ export type SettingsSectionId =
   | "projects"
   | "archives"
   | "subagents"
+  | "plugin"
   | "commands"
   | "hooks"
   | "workspaceFileSearch"
@@ -47,6 +50,8 @@ function isSettingsSectionId(value: string): value is SettingsSectionId {
   return (
     value === "general" ||
     value === "appearance" ||
+    value === "browser" ||
+    value === "computerUse" ||
     value === "modelProvider" ||
     value === "personalization" ||
     value === "memory" ||
@@ -54,6 +59,7 @@ function isSettingsSectionId(value: string): value is SettingsSectionId {
     value === "projects" ||
     value === "archives" ||
     value === "subagents" ||
+    value === "plugin" ||
     value === "commands" ||
     value === "hooks" ||
     value === "workspaceFileSearch" ||

@@ -53,7 +53,7 @@ export function DevReviewNavigation() {
   bands: [{ from: 0, to: 2, join: 3, tracks: [0, 1, 2].map(index => ({ stations: [index], entry: agents[index]!.status === "pending" ? "faint" : "strong", exit: agents[index]!.status === "completed" ? "strong" : "faint" })) }],
   live: true, runningIndex: undefined,
  };
- return <div className="shrink-0 space-y-2 border-b border-border px-4 py-2" data-testid="dev-review-navigation">
+ return <div className="w-full min-w-0 shrink-0 space-y-2 border-b border-border px-4 py-2" data-testid="dev-review-navigation">
   <div className="flex items-center justify-between gap-2">
    <Tabs value={selected} onValueChange={choose} className="min-w-0"><TabsList ref={tabList} aria-label="评审 Agent 会话" className="h-11 gap-1 p-1 group-data-horizontal/tabs:h-11" onKeyDownCapture={event => {
     const ids = ["summary", "a", "b", "c"] as const;
@@ -71,7 +71,7 @@ export function DevReviewNavigation() {
    })}</TabsList></Tabs>
    <Button variant="ghost" size="sm" className="shrink-0 gap-1.5" aria-label="展开评审工作流" title="展开评审工作流" onClick={() => setExpanded(true)}><GitFork className="size-4" />评审流程</Button>
   </div>
-  <ControlHintTooltip title={reviewDescription}><p tabIndex={0} className="truncate rounded-sm text-ui-sm text-foreground-subtle outline-none focus-visible:ring-2 focus-visible:ring-ring/50" data-testid="review-session-description">{reviewDescription}</p></ControlHintTooltip>
+  <ControlHintTooltip title={reviewDescription}><p tabIndex={0} className="w-full min-w-0 truncate rounded-sm text-center text-ui-sm text-foreground-subtle outline-none focus-visible:ring-2 focus-visible:ring-ring/50" data-testid="review-session-description">{reviewDescription}</p></ControlHintTooltip>
   <Dialog open={expanded} onOpenChange={setExpanded}><DialogContent className="flex max-h-[85dvh] flex-col overflow-auto sm:max-w-6xl"><DialogHeader><DialogTitle>需求评审工作流</DialogTitle><DialogDescription>三个模型并行只读审查同一版需求 → 第四个 Agent 综合意见 → 人工决定。评审结论以当前版本的报告为准。</DialogDescription></DialogHeader>
    <WorkflowTimeline model={diagram} onOpenPill={pill => { choose(pill.key); setExpanded(false); }} onSelectStation={station => { if (station.id !== "human") { choose(station.id); setExpanded(false); } }} />
   </DialogContent></Dialog>

@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Dev proposal intake content centers within the available conversation column as the materials sidebar opens, closes, or resizes.
+- Dev and WebGUI restore ZCode browser control, computer control, and keyboard shortcut settings for display only, with all editing actions disabled.
 - Editing queued Dev and WebGUI messages replaces referenced images while preserving uploaded attachments.
 - Offline OpenWiki planning now respects the effective plan model role after runtime defaults are applied.
 - Team truncates oversized narrative output before strict validation instead of aborting the discussion.

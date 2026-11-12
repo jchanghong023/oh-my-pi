@@ -1,6 +1,34 @@
 import { requestSecurityMessagesZhCN } from "@/request-security-edition/messages.js";
 /** 中文翻译 */
 const zhCN: Record<string, string> = {
+  "settings.displayOnly.description": "仅显示设置页面，不对接后端，不读取或保存配置。",
+  "settings.displayOnly.inventoryTitle": "未接入清单数据",
+  "settings.displayOnly.inventoryDescription": "此处仅展示列表布局，不代表实际已安装或内置资源。",
+  "settings.browser.title": "浏览器控制",
+  "settings.browser.control.title": "开启内置浏览器控制",
+  "settings.browser.control.description":
+    "启用 Browser Use 官方插件，让新会话可以通过内置浏览器访问和操作网页。",
+  "settings.browser.import.title": "导入 Chrome 登录状态",
+  "settings.browser.import.description":
+    "一次性把 Chrome 登录状态带到内置浏览器，AI 就能直接打开你已经登录的网站，操作更流畅。",
+  "settings.browser.import.action": "导入浏览器数据",
+  "settings.browser.open.section": "打开方式",
+  "settings.browser.htmlClickOpensBrowser": "单击 HTML 文件时在内置浏览器中打开",
+  "settings.browser.htmlClickOpensBrowserDescription":
+    "开启后，在文件树中单击本地 .html 文件会在内置浏览器中打开；关闭时打开源码预览。右键菜单的「打开」始终打开源码预览。",
+  "settings.browser.security.section": "安全",
+  "settings.embeddedBrowserAllowInsecureCertificates": "忽略证书校验",
+  "settings.embeddedBrowserAllowInsecureCertificatesDescription":
+    "开启后内置浏览器不再校验 HTTPS 证书，仅影响内置浏览器。修改后需重启生效。",
+  "settings.browser.data.section": "浏览器数据",
+  "settings.browser.clearCache.title": "清除内置浏览器缓存",
+  "settings.browser.clearCache.description":
+    "清除 HTTP 缓存、Cache Storage 和 Service Worker，保留 Cookie、本地站点数据和最近访问记录。",
+  "settings.browser.clearCache.action": "清除缓存",
+  "settings.browser.clearAll.title": "清除全部浏览器数据",
+  "settings.browser.clearAll.description":
+    "删除内置浏览器中的 Cookie、站点数据、缓存和最近访问记录。此操作不可撤销。",
+  "settings.browser.clearAll.action": "清除全部",
   "preview.image.copy": "复制图片",
   "preview.image.actions": "图片操作",
   "preview.image.added": "已添加到聊天",
