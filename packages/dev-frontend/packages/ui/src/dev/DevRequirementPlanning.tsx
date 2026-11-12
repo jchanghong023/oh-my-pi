@@ -50,7 +50,8 @@ export function DevEditPlanning({ group, sr, compact = false }: { group: DevRequ
   const [input, setInput] = useState<DevSrPlanningInput>({});
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const canEdit = source.planning && sr.planning && (getEmployeeId() === "j00808874" || getEmployeeId() === group.ownerEmployeeId);
+  const proposal = dev.view?.drafts.some(item => item.projectId === group.projectId && item.id === group.id);
+  const canEdit = !proposal && source.planning && sr.planning && (getEmployeeId() === "j00808874" || getEmployeeId() === group.ownerEmployeeId);
   if (!canEdit) return compact ? <span className="text-ui-sm">{sr.planning?.developerEmployeeId ?? "未分配"}</span> : null;
   const warnings = dev.view && open ? planningWarnings(dev.view, sr, { ...sr.planning!, ...input }) : [];
   return <span onClick={event => event.stopPropagation()}>
@@ -75,10 +76,25 @@ export function DevPlanningSummary({ group, rows, editable = false }: { group: D
   if (!view) return null;
   const proposal = view.drafts.some(item => item.id === group.id && item.projectId === group.projectId);
   const ready = hasCurrentProposalSolution(group);
+  if (proposal) {
+    const result = readSrDependencies(group);
+    return <section className="space-y-4" data-testid="requirement-planning-summary">
+      <div><h2 className="text-ui-base font-medium">工期预估</h2><p className="mt-1 text-ui-xs leading-5 text-foreground-subtle">预估与 SR 依赖共同保存在 sr-dependencies.json。修改请在方案对话中提出，由 AI 更新文件。</p></div>
+      {!ready || result.issue ? <p role="status" className="text-ui-sm">{result.issue ?? "当前方案尚未完成或已失效，请先完成本轮方案分析。"}</p> : <ul className="space-y-3">{rows.map(sr => {
+        const estimate = result.document?.srs.find(row => row.srId === sr.id)?.estimate;
+        return <li key={sr.id} className="space-y-2 rounded-md border border-border p-3">
+          <p className="text-ui-sm font-medium">{sr.title}</p>
+          <p className="break-all font-mono text-ui-xs text-foreground-subtle">{sr.id}</p>
+          <p className="text-ui-sm">预估工期：<strong>{estimate?.workingDays} 个工作日</strong></p>
+          <p className="text-ui-xs leading-5 text-foreground-subtle">预估假设：{estimate?.assumptions}</p>
+        </li>;
+      })}</ul>}
+      <p className="text-ui-xs leading-5 text-foreground-subtle">工期预估不代表承诺日期或实际用时；存在依赖及并行关系，不直接相加为 IR 总工期。转正后再安排人员及起止时间。</p>
+    </section>;
+  }
   const summary = irPlanning(rows);
   return <section className="space-y-4" data-testid="requirement-planning-summary">
-    <div><h2 className="text-ui-base font-medium">{proposal ? "方案分析与开发安排" : "开发安排"}</h2><p className="mt-1 text-ui-xs leading-5 text-foreground-subtle">人员与排期：数据库元数据；实现思路与依赖：仓库文档。时间为计划，不代表实际开发活动。</p></div>
-    {proposal && <><div className="flex flex-wrap items-center gap-2 text-ui-sm"><span>IR 负责人</span><AssignOwner group={group} /></div><p className="text-ui-xs leading-5 text-foreground-subtle">管理员或 IR 负责人可调整下方 SR 的开发人员与时间；修改依赖请在方案讨论中提出，由方案文档更新后随提案提交。未分配人员或排期提醒不增加转正审批。</p></>}
+    <div><h2 className="text-ui-base font-medium">开发安排</h2><p className="mt-1 text-ui-xs leading-5 text-foreground-subtle">人员与排期：数据库元数据；实现思路与依赖：仓库文档。时间为计划，不代表实际开发活动。</p></div>
     {!ready && <p role="status" className="text-ui-sm">当前方案尚未完成或已失效，请在方案讨论中完成本轮分析；旧排期不作为当前建议。</p>}
     {rows.length > 1 && <p className="text-ui-sm">IR 汇总：{planningDate(summary.plannedStart)} → {planningDate(summary.plannedEnd)}{summary.incomplete ? "（部分 SR 未排期）" : ""}。调整下方 SR 后自动更新。</p>}
     <ul className="space-y-4">{rows.map(sr => <li key={sr.id} className="space-y-2 rounded-md border border-border p-3">

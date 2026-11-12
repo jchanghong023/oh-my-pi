@@ -40,7 +40,7 @@ export function DevSrDependencyGraph({ group, material, rows }: { group: DevRequ
    nodes.push({ id: row.srId, position: { x: (column + (maxWidth - widths.get(depth)!) / 2) * 250, y: depth * 180 },
     sourcePosition: Position.Bottom, targetPosition: Position.Top,
     ariaLabel: `${row.srId}：${title}`, style: { width: 220, minHeight: 110, background: "var(--color-card)", color: "var(--color-foreground)", borderColor: "var(--color-border)", borderRadius: 8 },
-    data: { label: <div className="space-y-2 text-left"><p className="break-all font-mono text-ui-xs text-foreground-subtle">{row.srId}</p><p className="break-words text-ui-sm font-medium">{title}</p></div> } });
+    data: { label: <div className="space-y-2 text-left"><p className="break-all font-mono text-ui-xs text-foreground-subtle">{row.srId}</p><p className="break-words text-ui-sm font-medium">{title}</p><p className="text-ui-xs text-foreground-subtle">预估 {row.estimate.workingDays} 个工作日</p></div> } });
    for (const dependency of row.prerequisites) edges.push({ id: JSON.stringify([dependency.srId, row.srId]), source: dependency.srId, target: row.srId, type: "smoothstep", data: { reason: dependency.reason },
     ariaLabel: `${dependency.srId} → ${row.srId}：${dependency.reason}`, markerEnd: { type: MarkerType.ArrowClosed, color: "var(--color-foreground-subtle)" }, style: { stroke: "var(--color-foreground-subtle)", strokeWidth: 2 }, interactionWidth: 24 });
   }

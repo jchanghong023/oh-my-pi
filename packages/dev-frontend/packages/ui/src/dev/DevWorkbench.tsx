@@ -81,6 +81,7 @@ export function DevMaterialsPane() {
  const source = useDevDataSource();
 	const dev = useDev()!;
 	const theme = useZCodeStore(state => state.theme);
+ const codePreviewSettings = useZCodeStore(state => state.codePreviewSettings);
 	const { selection, view } = dev;
 	const [path, setPath] = useState("");
     const [readFeedback, setReadFeedback] = useState("");
@@ -146,7 +147,7 @@ export function DevMaterialsPane() {
         {proposalSolutionView && group && <nav aria-label="方案材料定位" className="flex gap-1" data-testid="proposal-material-navigation">
           <Button size="sm" variant={!showPlanning && path === solutionMaterial?.path ? "secondary" : "ghost"} className="min-w-0 flex-1" disabled={!solutionMaterial} aria-pressed={!showPlanning && path === solutionMaterial?.path} onClick={() => { setShowPlanning(false); setPath(solutionMaterial!.path); }}>技术方案</Button>
           <Button size="sm" variant={!showPlanning && path === dependencyMaterial?.path ? "secondary" : "ghost"} className="min-w-0 flex-1" disabled={!dependencyMaterial} aria-pressed={!showPlanning && path === dependencyMaterial?.path} onClick={() => { setShowPlanning(false); setPath(dependencyMaterial!.path); }}>SR 依赖</Button>
-          <Button size="sm" variant={showPlanning ? "secondary" : "ghost"} className="min-w-0 flex-1" aria-pressed={showPlanning} onClick={() => setShowPlanning(true)}>人员与排期</Button>
+          <Button size="sm" variant={showPlanning ? "secondary" : "ghost"} className="min-w-0 flex-1" aria-pressed={showPlanning} onClick={() => setShowPlanning(true)}>工期预估</Button>
         </nav>}
         {!showPlanning && <Select value={path || "none"} onValueChange={value => { setShowPlanning(false); setPath(value === "none" ? "" : value); }}>
 					<SelectTrigger className="h-auto min-h-8 w-full min-w-0 py-1.5" data-testid="material-menu" aria-label="选择材料类型">
@@ -167,7 +168,7 @@ export function DevMaterialsPane() {
 			</div>
 			<div
         key={`${selection.projectId}:${selection.irId}:${showPlanning ? "planning" : path}`}
-				className="min-h-0 flex-1 overflow-auto p-4"
+				className="min-h-0 flex-1 overflow-auto px-5 py-4"
 				data-testid="material"
         data-material-path={showPlanning ? undefined : path}
         data-material-valid={showPlanning ? undefined : current?.valid}
@@ -190,7 +191,9 @@ export function DevMaterialsPane() {
 					</p>
 				) : (
 					<>
-						{path.endsWith("/sr-dependencies.json") && group && current ? <DevSrDependencyGraph group={group} material={current} rows={view?.srs.filter(item => item.irId === group.id && item.projectId === group.projectId) ?? []} /> : <MessageResponse className="h-auto min-w-0 break-words [&_[data-markdown-table-toolbar]]:hidden [&_button]:hidden" theme={theme} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "材料没有正文。"}</MessageResponse>}
+						{path.endsWith("/sr-dependencies.json") && group && current ? <DevSrDependencyGraph group={group} material={current} rows={view?.srs.filter(item => item.irId === group.id && item.projectId === group.projectId) ?? []} /> : <article className="mx-auto w-full min-w-0 max-w-[72ch]" data-testid="material-document">
+              <MessageResponse className="h-auto min-w-0 break-words leading-[1.85] tracking-normal [&>p]:my-3 [&_[data-streamdown=heading-1]]:mb-4 [&_[data-streamdown=heading-2]]:mt-8 [&_[data-streamdown=heading-2]]:mb-3 [&_[data-streamdown=heading-3]]:mt-6 [&_[data-streamdown=heading-3]]:mb-2 [&_[data-streamdown=heading-4]]:mt-5 [&_[data-streamdown=heading-4]]:mb-2" theme={theme} codePreviewSettings={codePreviewSettings} showExportActions={false} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "材料没有正文。"}</MessageResponse>
+            </article>}
 					</>
 				)}
 			</div>

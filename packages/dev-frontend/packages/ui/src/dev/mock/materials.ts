@@ -2,7 +2,7 @@ import { MATERIAL_KIND_LABELS } from "../domain.js";
 import { prototypeChangeRoot, prototypeSpecPath, prototypeCapabilityName } from "./proposal-storage.js";
 import type { DevMaterialView, DevStageMaterial, DevWorkflowStage } from "../types.js";
 
-const disclaimer = "> 阶段性前端原型 · 以下全部为可纳入 Git 的样例数据，不代表代码执行、测试通过、审核或交付验收。后续经确认再对接真实 OMP。";
+const disclaimer = "*原型演示材料 · 未执行真实变更。*";
 const stageByKind: Record<Exclude<DevStageMaterial["kind"], "solution">, DevWorkflowStage> = {
   plan: "planning", completion: "executing", ut: "executing", st: "executing", delivery: "pr",
 };
@@ -16,7 +16,7 @@ export function requirementMaterials(projectId: string, irId: string, title: str
 ${disclaimer}
 
 ## Why
-团队需要清晰的需求讨论、可验证的行为与材料归属，减少跨页面寻找上下文。
+本需求围绕「${title}」，统一${rows.map(row => `「${row.title}」`).join("、")}的业务边界与反馈。使用者应能理解当前状态、下一步操作以及发生异常后的恢复方式。
 
 ## What Changes
 ${rows.map(row => `- ${row.title}：详见 specs/${prototypeCapabilityName(row.id)}/spec.md。`).join("\n")}
@@ -30,7 +30,9 @@ ${rows.map(row => `- ${prototypeCapabilityName(row.id)}: ${row.title}`).join("\n
 无。
 
 ## Impact
-当前项目 ${projectId} 的相关界面与会话能力。提案阶段先在共享临时工作区整理本 change；需求 PR 合并核对后才成为正式需求。仅内存演示，不写入项目。` }),
+- 影响范围：当前项目的相关界面与会话能力。
+- 提案材料先在共享临时工作区整理，需求 PR 合并后转为正式需求。
+- 不涉及真实代码执行；样例仅保存在后端内存。` }),
   ...rows.map(row => prototypeMaterial({ projectId, irId, srId: row.id, kind: "sr", path: prototypeSpecPath(irId, row.id), content: `# ${row.title}
 
 ${disclaimer}

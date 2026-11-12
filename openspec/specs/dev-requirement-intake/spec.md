@@ -8,36 +8,22 @@
 
 ## Requirements
 
-### Requirement: 自然语言拆分、实现依赖与建议排期
+### Requirement: 自然语言拆分、实现依赖与工期预估
 
-用户 MUST 能通过自然语言描述原始需求，经需求 Agent 澄清生成 IR、拆分一个或多个 SR 并明确验收条件。方案 Agent MUST 输出方案、每个 SR 的前置依赖及可并行关系，并结合计划起点、依赖和已知人员安排，给出建议计划开始、结束时间及假设。缺少人员日历、可用时间或人员未分配时 MUST 明示不确定项，不编造实际人员可用性；循环、自依赖或未知 SR MUST 作为待解决问题，不能伪造可行排期。
+用户 MUST 能通过自然语言描述原始需求，经需求 Agent 澄清生成 IR、拆分 SR 并明确验收条件。方案 Agent MUST 输出方案、逐 SR 前置依赖、工期预估及假设；可并行关系由依赖图推导。提案只有提交人，不设负责人、开发人员或计划起止时间。预估不是实际用时或承诺日期，不直接相加为 IR 总工期；IR 进度仍为各 SR 百分比的算术平均值。
 
-本次按用户最新简化决定，MUST NOT 单独维护或展示预估工时字段。计划开始、结束描述安排，不能当成实际用时或代码完成证据，IR 进度仍为各 SR 百分比的算术平均值。
+#### Scenario: 提案工期预估与依赖共同存储
+- **WHEN** 当前方案有效完成
+- **THEN** 方案 Agent 同轮维护 design.md 及同目录 sr-dependencies.json，JSON 结构为 `{ "srs": [ { "srId": "...", "estimate": { "workingDays": 3, "assumptions": "估算依据与不确定项" }, "prerequisites": [ { "srId": "...", "reason": "..." } ] } ] }`；覆盖全部稳定 SR ID，每个恰好一次，无依赖使用空数组
+- **AND** estimate.workingDays 为正数工作日，支持小数；estimate.assumptions 为非空估算依据、范围及不确定项；不允许未知 ID、自依赖或循环；可并行关系从图推导，不重复存储
+- **AND** “技术方案／SR 依赖／工期预估”可直接切换。预估逐 SR 只读展示，不提供人员、日期或预估编辑表单；人通过方案对话要求 AI 修改文件
+- **AND** 预估和依赖是同一 JSON 的仓库权威，不存数据库可编辑副本。design.md 引用 JSON，不重复清单；SR spec.md 不维护这些字段
+- **AND** 两个方案产物同轮生成、更新、失效与逐文件确认，任一变化使旧确认失效；JSON 缺失、无效或过期时禁止沿用旧确认、提交或自动转正，不回退旧文件
 
-#### Scenario: 提案方案分析与转正前排期调整
-- **WHEN** 当前版本技术方案已完成，用户在需求提案查看 design.md 和 sr-dependencies.json
-- **THEN** 同一三栏界面展示每个 SR 的实现思路，并从 sr-dependencies.json 读取前置依赖与原因、推导可并行关系，展示建议起止时间及假设；实现与依赖产物属于仓库材料，人员和排期在材料外单独展示
-- **AND** 管理员可沿用现有负责人分配控件设置提案 IR 负责人；管理员或该 IR 负责人使用与正式需求相同的弹窗调整每个 SR 的开发人员及起止时间，取消不保存；其他用户只读
-- **AND** 依赖与人员冲突、人员未定、日历或代码信息不足明确提示；修改依赖通过方案讨论更新文档，不在排期弹窗中编辑依赖，不把排期提醒或人员未分配设置为额外入库审批
-- **AND** 当前方案未完成或失效时不得把旧分析和旧建议作为本轮结果，完成本轮方案后才允许调整当前排期；修改元数据不改变需求／方案文档版本，不重新触发文档评审、创建 PR 或取消已有推送
-
-#### Scenario: 同一元数据随提案转正保留
-- **WHEN** 提案分支已合入默认分支且 IR、全部 SR、design.md 和有效 sr-dependencies.json 完整
-- **THEN** 自动转正保留相同项目、IR 和 SR ID，沿用提案阶段设置的 IR 负责人、SR 开发人员、人工排期、原 AI 建议与调整记录；仓库依赖在正式表格及材料中保持一致
-- **AND** 不按转正时间重新估算或覆盖人工排期，不要求再次分配人员、登记 PR 地址或批准入库；时间修改不改变开发进度，新 SR 仍为 0%
-
-#### Scenario: 仓库文档与数据库元数据分离
-- **WHEN** 方案完成，提案分支提交并推送
-- **THEN** IR、全部 SR、design.md 与同目录 sr-dependencies.json 一同 Git 提交并经过人工 PR 评审；sr-dependencies.json 是稳定 SR 依赖及原因的唯一权威，SR spec.md 不维护依赖，design.md 仅保留实现思路与技术取舍并引用 JSON，不重复依赖清单
-- **AND** IR 负责人、SR 开发人员、AI 建议计划时间、人工调整后的计划时间及调整人／时间属于共享业务数据库元数据，不写入需求或方案产物，不为调整人员和排期创建 PR；数据库可读取依赖投影，但不得成为另一依赖权威
-- **AND** 自动转正保留同一 IR／SR 的人员与排期，正式需求表格显示这些字段，不新增转正门槛：提案分支合入默认分支且文档完整仍是仅有的两个条件
-
-#### Scenario: 独立依赖产物与方案同轮有效
-- **WHEN** 方案 Agent 生成或更新当前方案
-- **THEN** 同轮生成／更新同一 Change 下与 design.md 同目录的 sr-dependencies.json，结构为 `{ "srs": [ { "srId": "...", "prerequisites": [ { "srId": "...", "reason": "..." } ] } ] }`；每个稳定 SR ID 唯一覆盖 IR 的全部 SR，无依赖使用空数组，前置项记录稳定 SR ID 和原因
-- **AND** 不允许自依赖、未知 ID 或循环；可并行关系只由依赖图推导，不在 JSON 重复存储
-- **AND** design.md 与 JSON 共用现有需求版本／方案轮次绑定，同轮生成、更新、失效，并纳入查看及人工逐文件确认；任一产物或需求变化使旧方案确认失效
-- **AND** JSON 缺失、无效或过期时明确显示原因，不回退 SR spec.md、design.md 或旧依赖，不沿用旧确认，不允许提交或自动转正；有效 JSON 属于文档完整性，不新增第三个转正条件
+#### Scenario: 转正后才安排人员和日期
+- **WHEN** 提案分支已合入默认分支且全部材料完整有效
+- **THEN** 自动转正保留相同项目、IR、SR ID 及仓库中的工期预估和依赖；不从预估自动生成负责人、开发者或计划起止时间，新 SR 进度仍为 0%
+- **AND** 正式需求由管理员分配 IR 负责人，管理员或负责人安排 SR 开发人员及起止时间；这些安排仍是数据库元数据，独立于 Git 内的工期预估，不新增入库审批条件
 
 #### Scenario: 人工调整与 IR 汇总
 - **WHEN** 管理员或 IR 负责人调整 SR 开发人员及计划开始、结束时间
@@ -54,7 +40,7 @@
 #### Scenario: 标准 OpenSpec 文件映射
 - **WHEN** 创建和拆分提案
 - **THEN** 使用 openspec/changes/<change-id>/proposal.md 表达 IR，specs/<capability>/spec.md 表达每个 SR，design.md 表达整份技术方案、架构、模块、文件及函数职责，并引用同目录 sr-dependencies.json 作为唯一依赖来源
-- **AND** 一个能力规格可以包含多条 Requirement／Scenario；不为每条 Requirement 再造 SR，不另发明 IR.md、SR.md 或替代 design.md 的方案 JSON 格式；sr-dependencies.json 只承载 SR 依赖；同名 Change 冲突交人处理，不覆盖
+- **AND** 一个能力规格可以包含多条 Requirement／Scenario；不为每条 Requirement 再造 SR，不另发明 IR.md、SR.md 或替代 design.md 的方案 JSON 格式；sr-dependencies.json 承载 SR 依赖、工期预估及假设；同名 Change 冲突交人处理，不覆盖
 
 #### Scenario: Release 和仓库身份
 - **WHEN** 添加项目、Release 或个人开发 clone

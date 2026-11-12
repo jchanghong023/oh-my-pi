@@ -170,6 +170,7 @@ export const CodeBlockContainer = ({
 
 export type CodeBlockHeaderProps = HTMLAttributes<HTMLDivElement> & {
   showWrapButton?: boolean;
+  showCopyButton?: boolean;
   displayFile?: string;
   language?: string;
 };
@@ -180,6 +181,7 @@ export const CodeBlockHeader = ({
   displayFile,
   language,
   showWrapButton = true,
+  showCopyButton = true,
   ...props
 }: CodeBlockHeaderProps) => {
   const { renderingMermaid } = useContext(CodeBlockContext);
@@ -210,7 +212,7 @@ export const CodeBlockHeader = ({
             ) : showWrapButton ? (
               <CodeBlockWrapButton />
             ) : null}
-            <CodeBlockCopyButton />
+            {showCopyButton && <CodeBlockCopyButton />}
           </CodeBlockActions>
         </>
       )}

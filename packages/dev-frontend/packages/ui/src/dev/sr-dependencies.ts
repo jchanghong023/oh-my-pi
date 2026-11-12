@@ -1,6 +1,6 @@
 import type { DevMaterialView, DevRequirementGroup } from "./types.js";
 
-export interface DevSrDependencyDocument { srs: { srId: string; prerequisites: { srId: string; reason: string }[] }[] }
+export interface DevSrDependencyDocument { srs: { srId: string; estimate: { workingDays: number; assumptions: string }; prerequisites: { srId: string; reason: string }[] }[] }
 
 /** Read the repository material, never the legacy group/SR dependency metadata. */
 export function readSrDependencies(group: DevRequirementGroup, material = group.srDependencyFile): { document?: DevSrDependencyDocument; issue?: string } {
@@ -9,6 +9,7 @@ export function readSrDependencies(group: DevRequirementGroup, material = group.
  let value: DevSrDependencyDocument;
  try { value = JSON.parse(material.content); } catch { return { issue: "sr-dependencies.json 不是有效 JSON。" }; }
  if (!value || !Array.isArray(value.srs) || value.srs.length !== group.srIds.length || new Set(value.srs.map(row => row?.srId)).size !== group.srIds.length || value.srs.some(row => !row || !group.srIds.includes(row.srId) || !Array.isArray(row.prerequisites) || row.prerequisites.some(item => !item || typeof item.srId !== "string" || !group.srIds.includes(item.srId) || typeof item.reason !== "string" || !item.reason.trim()) || new Set(row.prerequisites.map(item => item.srId)).size !== row.prerequisites.length)) return { issue: "sr-dependencies.json 必须覆盖全部 SR，并使用本 IR 的稳定 SR ID 和非空依赖原因。" };
+ if (value.srs.some(row => !row.estimate || !Number.isFinite(row.estimate.workingDays) || row.estimate.workingDays <= 0 || typeof row.estimate.assumptions !== "string" || !row.estimate.assumptions.trim())) return { issue: "sr-dependencies.json 中每个 SR 须包含正数工期预估（工作日）及预估假设。" };
  const visiting = new Set<string>(); const visited = new Set<string>();
  const inspect = (id: string): boolean => {
   if (visiting.has(id)) return true;

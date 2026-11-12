@@ -70,6 +70,7 @@ import {
   MarkdownTableHead,
   MarkdownTableHeader,
   MarkdownTableRow,
+  type MarkdownTableProps,
 } from "@/components/ai-elements/markdown-table.js";
 import {
   MarkdownImage,
@@ -367,6 +368,8 @@ export const MessageBranchPage = ({ className, ...props }: MessageBranchPageProp
 };
 
 export type MessageResponseProps = {
+  /** Hide copy/download in read-only material panes while keeping native reading controls. */
+  showExportActions?: boolean;
   /** 办公模式的正式回答固定换行，不覆盖用户保存的代码预览设置。 */
   forceCodeWrap?: boolean;
   className?: string;
@@ -1380,6 +1383,7 @@ export const messageResponsePropsAreEqual = (
   nextProps: Readonly<MessageResponseProps>,
 ): boolean =>
   prevProps.children === nextProps.children &&
+  prevProps.showExportActions === nextProps.showExportActions &&
   prevProps.forceCodeWrap === nextProps.forceCodeWrap &&
   nextProps.streaming === prevProps.streaming &&
   nextProps.streamingAnimationKey === prevProps.streamingAnimationKey &&
@@ -1400,6 +1404,7 @@ export const MessageResponse = memo(
   ({
     className,
     streaming = false,
+    showExportActions = true,
     forceCodeWrap = false,
     onOpenCodeViewer,
     onOpenFileLink,
@@ -1494,11 +1499,13 @@ export const MessageResponse = memo(
           workspaceIdentity,
           workspaceRemoteSessionId,
           wrapLongLines,
-        }) + (forceCodeWrap ? ":wrap-locked" : "")
+        }) + (forceCodeWrap ? ":wrap-locked" : "") + `:lines=${codePreviewSettings.showLineNumbers}:exports=${showExportActions}`
       );
     }, [
       codeBlockTheme,
       codePreviewSettings.fontSizePx,
+      codePreviewSettings.showLineNumbers,
+      showExportActions,
       wrapLongLines,
       forceCodeWrap,
       renderZCodeFileCitations,
@@ -1651,6 +1658,7 @@ export const MessageResponse = memo(
               // 高亮等消息完成后再启动，避免 async highlighter 和消息流更新叠加触发 React #185。
               enableSyntaxHighlighting={!renderStreaming}
               fontSizePx={codePreviewSettings.fontSizePx}
+              showLineNumbers={codePreviewSettings.showLineNumbers}
               language={language}
               renderMermaid={!renderStreaming}
               theme={codeBlockTheme}
@@ -1661,6 +1669,7 @@ export const MessageResponse = memo(
                 className="pl-3 pr-2 pt-2"
                 language={language}
                 showWrapButton={!forceCodeWrap}
+                showCopyButton={showExportActions}
               />
             </CodeBlock>
           );
@@ -1668,7 +1677,7 @@ export const MessageResponse = memo(
         blockquote: MarkdownBlockquote,
         li: MarkdownListItem,
         ol: MarkdownOrderedList,
-        table: MarkdownTable,
+        table: (tableProps: MarkdownTableProps) => <MarkdownTable {...tableProps} showExportActions={showExportActions} />,
         tbody: MarkdownTableBody,
         td: MarkdownTableCell,
         th: MarkdownTableHead,
@@ -1679,6 +1688,8 @@ export const MessageResponse = memo(
       [
         codeBlockTheme,
         codePreviewSettings.fontSizePx,
+        codePreviewSettings.showLineNumbers,
+        showExportActions,
         wrapLongLines,
         forceCodeWrap,
         onOpenFileLink,

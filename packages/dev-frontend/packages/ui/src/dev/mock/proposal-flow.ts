@@ -6,15 +6,15 @@ import solution from "./proposal-solution.md?raw";
 
 /** Fixture inputs seed the JSON once; every dependency consumer reads that material. */
 export function prototypeProposalDependencies(group: DevRequirementGroup, rows: DevSystemRequirement[]): DevMaterialView {
- return prototypeMaterial({ projectId: group.projectId, irId: group.id, kind: "solution", stage: "solution", round: group.proposalRound ?? 1, path: `${prototypeChangeRoot(group.id)}/sr-dependencies.json`, content: JSON.stringify({ srs: group.srIds.map(srId => ({ srId, prerequisites: (rows.find(row => row.id === srId)?.dependencySrIds ?? []).map(id => ({ srId: id, reason: "需要先稳定前置 SR 提供的业务结果与接口约定，再实现当前能力。" })) })) }, null, 2) });
+ return prototypeMaterial({ projectId: group.projectId, irId: group.id, kind: "solution", stage: "solution", round: group.proposalRound ?? 1, path: `${prototypeChangeRoot(group.id)}/sr-dependencies.json`, content: JSON.stringify({ srs: group.srIds.map(srId => ({ srId, estimate: { workingDays: srId === "proposal-sr-booking-notification" ? 2 : 3, assumptions: "按单个开发人员投入估算，复用现有接口；不含等待前置 SR、评审和外部联调时间，未核对真实代码，仅为原型样例。" }, prerequisites: (rows.find(row => row.id === srId)?.dependencySrIds ?? []).map(id => ({ srId: id, reason: "需要先稳定前置 SR 提供的业务结果与接口约定，再实现当前能力。" })) })) }, null, 2) });
 }
 
 export function prototypeProposalSolution(group: DevRequirementGroup): DevMaterialView {
  const name = (id: string) => `${id} · ${group.snapshot?.srs.find(sr => sr.id === id)?.title ?? id}`;
- return prototypeMaterial({ projectId: group.projectId, irId: group.id, kind: "solution", stage: "solution", round: group.proposalRound ?? 1, path: `${prototypeChangeRoot(group.id)}/design.md`, content: `# ${group.title} · 技术设计 · design.md\n\n${solution}\n\n## SR 实现思路（样例）\n${group.srIds.map(id => {
+ return prototypeMaterial({ projectId: group.projectId, irId: group.id, kind: "solution", stage: "solution", round: group.proposalRound ?? 1, path: `${prototypeChangeRoot(group.id)}/design.md`, content: `# ${group.title} · 技术方案\n\n${solution}\n\n## SR 实现思路（样例）\n${group.srIds.map(id => {
   const analysis = prototypeSrSolutionAnalysis(group, id);
   return `### ${name(id)}\n\n实现思路：${analysis.approach}\n\n待确认事项：${analysis.uncertainties.join("；")}`;
- }).join("\n\n")}\n\n## 依赖权威与开发安排\n\n前置依赖与原因仅见同目录 [sr-dependencies.json](./sr-dependencies.json)，可并行关系由该依赖图推导，本文件不重复清单。两个方案产物同轮生成、失效、逐文件确认并随同一提案 PR 评审。人员分配与计划开始、结束时间属于数据库元数据，不写入方案文件；排期调整不改变依赖。原型材料仅保存在后端场景内存，不写入真实文件。` });
+ }).join("\n\n")}\n\n## 依赖权威与开发安排\n\n各 SR 工期预估、预估假设与前置依赖及原因仅见同目录 [sr-dependencies.json](./sr-dependencies.json)，可并行关系由该依赖图推导，本文件不重复清单。两个方案产物同轮生成、失效、逐文件确认并随同一提案 PR 评审。提案仅提供工期预估，不分配负责人、开发人员或计划起止时间；预估由方案对话更新，同依赖一起评审。正式需求的人员及起止时间属于数据库元数据。原型材料仅保存在后端场景内存，不写入真实文件。` });
 }
 
 export function prototypeSrSolutionAnalysis(group: DevRequirementGroup, srId: string): DevSrSolutionAnalysis {
