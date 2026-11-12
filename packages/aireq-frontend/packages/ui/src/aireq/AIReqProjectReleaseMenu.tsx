@@ -19,7 +19,7 @@ export function AIReqProjectReleaseMenu({ onManage, onHelp }: { onManage(): void
 		<DropdownMenuSub>
 			<DropdownMenuSubTrigger data-testid="project-select"><FolderGit2 className="size-4" /><span className="shrink-0">项目</span><span className="ml-4 max-w-40 truncate text-foreground-subtle">{project?.name ?? "请选择项目"}</span></DropdownMenuSubTrigger>
 			<DropdownMenuSubContent className="max-h-[60vh] w-72 overflow-y-auto">
-				<DropdownMenuRadioGroup value={aireq.selection.projectId} onValueChange={projectId => aireq.select({ projectId, ...(aireq.selection.formalView ? { formalView: "list" as const } : {}) })}>
+				<DropdownMenuRadioGroup value={aireq.selection.projectId} onValueChange={aireq.switchProject}>
 					{aireq.view?.projects.map(item => <DropdownMenuRadioItem key={item.id} value={item.id} className="min-w-0"><span className="truncate" title={item.name}>{item.name}</span></DropdownMenuRadioItem>)}
 				</DropdownMenuRadioGroup>
 				<DropdownMenuItem onSelect={onManage}><Plus className="size-4" />添加或管理项目</DropdownMenuItem>

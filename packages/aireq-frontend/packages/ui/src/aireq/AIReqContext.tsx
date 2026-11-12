@@ -31,6 +31,7 @@ interface AIReqContextValue {
   startProposalDraft(): void;
   startFreeChat(projectId?: string, files?: boolean): void; openFreeChat(taskId: string, files?: boolean): void;
   pending: boolean; error?: string; releaseId: string; setReleaseId(id: string): void;
+  switchProject(projectId: string): void;
   select(value: AIReqSelection): void; refresh(): Promise<void>; retryMaterial(path: string): Promise<boolean>; retrySession(): Promise<void>;
   command(value: AIReqAction): Promise<AIReqWorkflowResult | undefined>;
   firstDiscussion?: AIReqFirstDiscussion;
@@ -119,10 +120,10 @@ export function AIReqProvider({ children }: { children: ReactNode }) {
     const unsubscribe = source.subscribeWorkflow(() => { void refresh(); });
     return () => { unsubscribe(); requestRevision.current += 1; };
   }, [source, refresh]);
-  const select = useCallback((value: AIReqSelection, addHistory = true) => {
+  const select = useCallback((value: AIReqSelection, addHistory = true, mainView: WorkspaceMainView = "chat") => {
     value = scopeProposalDraft(value, source.backend?.id ?? source.clientId);
     const projectChanged = selectionRef.current.projectId !== value.projectId;
-    if (addHistory && (JSON.stringify(value) !== JSON.stringify(selectionRef.current) || navigationRef.current.mainView !== "chat")) recordNavigation(value, "chat");
+    if (addHistory && (JSON.stringify(value) !== JSON.stringify(selectionRef.current) || navigationRef.current.mainView !== mainView)) recordNavigation(value, mainView);
     source.selectProject(value.projectId);
     selectionRef.current = value;
     setSelection(value);
@@ -133,6 +134,13 @@ export function AIReqProvider({ children }: { children: ReactNode }) {
       setFirstDiscussion(undefined);
     }
   }, [source, load, recordNavigation]);
+  const switchProject = useCallback((projectId: string) => {
+    const current = selectionRef.current;
+    if (current.projectId === projectId) return;
+    // 项目切换只改变数据范围；不能复用打开需求时强制返回聊天页的导航行为。
+    updateReleaseId("");
+    select({ projectId, ...(current.formalView ? { formalView: "list" as const } : {}) }, true, navigationRef.current.mainView);
+  }, [select]);
   useEffect(() => {
     window.history.replaceState({ ...window.history.state, aiReqSelection: selectionRef.current, aiReqBackendId: source.backend?.id ?? source.clientId, aiReqNavigationIndex: navigationRef.current.index, aiReqNavigationExtent: navigationRef.current.extent, aiReqMainView: navigationRef.current.mainView }, "");
     const restore = (event: PopStateEvent) => {
@@ -259,7 +267,7 @@ export function AIReqProvider({ children }: { children: ReactNode }) {
   }, [report]);
   return <AIReqContext.Provider value={{ view, selection, session: view && source.resolveSession(view, selection), pending,
     mainView: navigation.mainView, setMainView, canGoBack: navigation.index > 0, canGoForward: navigation.index < navigation.extent, goBack: () => { if (navigationRef.current.index > 0) window.history.back(); }, goForward: () => { if (navigationRef.current.index < navigationRef.current.extent) window.history.forward(); },
-    error, releaseId, setReleaseId, select, refresh, retryMaterial, retrySession, command, report, firstDiscussion, startProposalDraft, startFreeChat, openFreeChat,
+    error, releaseId, setReleaseId, switchProject, select, refresh, retryMaterial, retrySession, command, report, firstDiscussion, startProposalDraft, startFreeChat, openFreeChat,
     openFirstDiscussion, takeFirstDiscussion, finishFirstDiscussion }}>{children}
     <AlertDialog open={ownWebNotice} onOpenChange={setOwnWebNotice}>
       <AlertDialogContent>
