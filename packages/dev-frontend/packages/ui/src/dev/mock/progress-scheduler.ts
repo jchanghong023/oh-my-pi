@@ -11,7 +11,7 @@ interface ScaleInput { input: Input; irTitle: string }
 
 const failureSamples: DevAnalysisFailure[] = [
   { stage: "仓库读取", reason: "模拟：分析进程无法读取所选分支的仓库快照。", nextStep: "实际环境应由启动者检查仓库路径、分支与读取权限后重试；本演示直接重试即可，不访问 Git。", retryable: true },
-  { stage: "模型调用", reason: "模拟：模型请求超时，尚未生成分析结论。", nextStep: "实际环境应检查需求进度分析 Agent 的模型连接与服务状态后重试；本演示直接重试即可，不调用模型。", retryable: true },
+  { stage: "模型调用", reason: "模拟：模型请求超时，尚未生成分析结论。", nextStep: "实际环境应检查需求分析 Agent 的模型连接与服务状态后重试；本演示直接重试即可，不调用模型。", retryable: true },
   { stage: "文档读取", reason: "模拟：当前 SR 的需求文档未能读取，分析依据不完整。", nextStep: "实际环境应检查 SR 文档路径、文件是否存在及读取权限后重试；本演示直接重试即可，不读取文件。", retryable: true },
 ];
 function failureMessage(failure: DevAnalysisFailure): string {

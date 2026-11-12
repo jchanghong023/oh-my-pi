@@ -1,5 +1,7 @@
+import { WorkspaceSidebarToolbar } from "@/WorkspaceSidebarToolbar.js";
+import type { WorkspaceSidebarToolbarProps } from "@/WorkspaceSidebarToolbar.js";
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { CheckCircle2, CircleDashed, CircleDot, ClipboardCheck, GitMerge, ChevronDown, ChevronLeft, ChevronRight, FileText, PanelLeft, PanelRightClose, Search } from "lucide-react";
+import { CheckCircle2, CircleDashed, CircleDot, ClipboardCheck, GitMerge, ChevronDown, ChevronLeft, ChevronRight, FileText, PanelRightClose, Search } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Badge } from "@/components/ui/badge.js";
 import { Input } from "@/components/ui/input.js";
@@ -45,9 +47,9 @@ function ProgressValue({ value, label, status, source, showStatus = true }: { va
   const percent = <span className="shrink-0 text-right text-ui-sm"><span className="font-mono tabular-nums">{progressLabel(value)}</span>{source && <span className="ml-2 text-ui-xs text-foreground-subtle">{source}</span>}</span>;
   return showStatus ? <div className="min-w-28 space-y-1.5"><div className="flex items-center justify-between gap-2"><ProgressStatusBadge status={status} />{percent}</div>{indicator}</div> : <div className="flex min-w-28 items-center gap-2">{indicator}{percent}</div>;
 }
-interface FormalNavigationProps { navigationOpen: boolean; onToggleNavigation(): void }
+interface FormalNavigationProps { navigationOpen: boolean; onToggleNavigation(): void; toolbar: WorkspaceSidebarToolbarProps }
 
-export function DevFormalTable({ navigationOpen, onToggleNavigation }: FormalNavigationProps) {
+export function DevFormalTable({ navigationOpen, toolbar }: FormalNavigationProps) {
   const source = useDevDataSource();
   const dev = useDev()!;
   const [query, setQuery] = useState("");
@@ -124,7 +126,7 @@ export function DevFormalTable({ navigationOpen, onToggleNavigation }: FormalNav
   return <main className="flex h-full min-h-0 flex-col bg-background" data-testid="dev-formal-table">
     <header className="shrink-0 space-y-3 border-b border-border px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2"><Button type="button" variant="ghost" size="icon-sm" aria-label={navigationOpen ? "收起需求导航" : "展开需求导航"} aria-expanded={navigationOpen} aria-controls="sidebar" onClick={onToggleNavigation}><PanelLeft className="size-4" /></Button><h1 className="shrink-0 text-ui-base font-semibold">正式需求</h1></div>
+        <div className="flex min-w-0 items-center gap-2">{!navigationOpen && <WorkspaceSidebarToolbar {...toolbar} />}<h1 className="shrink-0 text-ui-base font-semibold">正式需求</h1></div>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Select value={dev.selection.projectId ?? ""} onValueChange={projectId => dev.select({ projectId, formalView: "list" })}><SelectTrigger className="h-7 w-40" aria-label="正式需求项目"><SelectValue placeholder="选择项目" /></SelectTrigger><SelectContent>{view.projects.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select>
           <Select value={dev.releaseId} onValueChange={dev.setReleaseId}><SelectTrigger className="h-7 w-44" aria-label="正式需求版本"><SelectValue placeholder="选择版本" /></SelectTrigger><SelectContent>{view.releases.map(item => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}</SelectContent></Select>
@@ -272,13 +274,13 @@ function DevFormalReport() {
 const formalTablePanels = ["formal-table"];
 const formalDetailPanels = ["formal-table", "formal-inspector"];
 
-export function DevFormalWorkspace({ navigationOpen, onToggleNavigation }: FormalNavigationProps) {
+export function DevFormalWorkspace({ navigationOpen, onToggleNavigation, toolbar }: FormalNavigationProps) {
   const dev = useDev()!;
   const detail = dev.selection.formalView !== "list" && Boolean(dev.view?.groups.some(group => group.id === dev.selection.irId));
   const { panelRef, panelElementRef } = useAnimatedResizablePanel({ open: detail, expandedSize: "380px" });
   return <ResizablePanelGroup layoutId="dev-formal-progress-layout-v2" panelIds={detail ? formalDetailPanels : formalTablePanels} className="min-h-0 flex-1">
     <ResizablePanel id="formal-table" minSize="400px" defaultSize={detail ? undefined : "100%"}>
-      <DevFormalTable key={dev.releaseId} navigationOpen={navigationOpen} onToggleNavigation={onToggleNavigation} />
+      <DevFormalTable key={dev.releaseId} navigationOpen={navigationOpen} onToggleNavigation={onToggleNavigation} toolbar={toolbar} />
     </ResizablePanel>
     {detail && <><ResizableHandle /><ResizablePanel id="formal-inspector" panelRef={panelRef} elementRef={panelElementRef} minSize="320px" maxSize="480px" defaultSize="380px">
       <Tabs key={`${dev.selection.irId}:${dev.selection.srId}`} defaultValue="report" className="h-full min-h-0 gap-0 overflow-hidden rounded-xl border border-border bg-background">

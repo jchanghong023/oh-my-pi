@@ -1,3 +1,4 @@
+import { useDev } from "@/dev/DevContext.js";
 /* eslint-disable max-lines -- App 当前集中编排 workspace 级状态、导航、Git 派生数据和 shell wiring；已将新增 side pane memory 桥接抽出，剩余拆分需要按 shell 边界单独重构。 */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -741,7 +742,10 @@ export function App({
     ],
   );
   useTestActions(testActions);
-  const [workspaceMainView, setWorkspaceMainView] = useState<WorkspaceMainView>("chat");
+  const devNavigation = useDev();
+  const [localMainView, setLocalMainView] = useState<WorkspaceMainView>("chat");
+  const workspaceMainView = devNavigation?.mainView ?? localMainView;
+  const setWorkspaceMainView = devNavigation?.setMainView ?? setLocalMainView;
   const [openAutomationId, setOpenAutomationId] = useState<string | null>(null);
   const [openAutomationTab, setOpenAutomationTab] = useState<NonNullable<
     AutomationsNavigationTarget["automationTab"]
@@ -848,8 +852,8 @@ export function App({
   const handleSelectNextConversation = useCallback(() => {
     handleSelectAdjacentConversation("next");
   }, [handleSelectAdjacentConversation]);
-  const handlePrimaryNavigationBack = handleTaskNavBack;
-  const canPrimaryNavigationBack = canTaskNavBack;
+  const handlePrimaryNavigationBack = devNavigation?.goBack ?? handleTaskNavBack;
+  const canPrimaryNavigationBack = devNavigation?.canGoBack ?? canTaskNavBack;
 
   useAppKeyboard({
     openCommandCenter: handleOpenQuickPick,
@@ -869,8 +873,8 @@ export function App({
     navigateBack: canPrimaryNavigationBack
       ? () => runVisibleWorkspaceCommand(handlePrimaryNavigationBack)
       : null,
-    navigateForward: canTaskNavForward
-      ? () => runVisibleWorkspaceCommand(handleTaskNavForward)
+    navigateForward: (devNavigation?.canGoForward ?? canTaskNavForward)
+      ? () => runVisibleWorkspaceCommand(devNavigation?.goForward ?? handleTaskNavForward)
       : null,
   });
 

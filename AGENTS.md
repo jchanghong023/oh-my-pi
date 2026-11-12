@@ -351,9 +351,9 @@ Fork releases require explicit user authorization and use the manual CI workflow
 - [个人命令](openspec/specs/personal-commands/spec.md)维护 fork 内置斜杠命令及其行为边界。
 - `/loopgoal` 复用 `/loop`，仅增加固定目标提示词包装及最终回复精确为 `无` 时停止；参数、上下文策略、首轮提交、调度与暂停恢复均沿用 Loop，不另设压缩阈值或准备流程，不接入 Goal 管理。提示词位于 `packages/coding-agent/src/prompts/loop-goal.md`，共享语义位于 `packages/coding-agent/src/modes/loop-goal.ts`，详见[个人命令](openspec/specs/personal-commands/spec.md)。
 - Dev 最新规则已由用户确认并同步到 [需求提案](openspec/specs/dev-requirement-intake/spec.md)、[工作台](openspec/specs/dev-browser-workbench/spec.md)及[原生编排](openspec/specs/spec-driven-orchestration/spec.md)；完整说明见 [Dev 流程](docs-zh-CN/spec-driven-orchestration.md)。同仓库单 IR、默认最多两个依赖就绪 SR 并行，首个 SR 启动冻结；SR 代码／测试／规格同 PR，IR 验收后最终修复／归档 PR，归档不再同步规格。旧计划冲突条款不再适用；本次仅文档更新，未改原型与代码，不代表实现完成。其他待定变更不因此获批。
-- Dev 新定位为需求澄清、需求管理与进度跟踪，不参与编码。本步仅调整文档和设置原型：项目只配置 Git 仓库及默认分支，Release 继承，不再要求本地／个人开发目录；删除计划／执行 Agent 设置，IR 验收设置替换为需求进度分析，方案 Agent 保留于提案。进度必须有百分比与遗留问题，未合入默认分支最高 99%，合入后 AI 或人工确认完成才能达到 100%。其他旧开发流程文档与原型待逐步对齐，不因设置改动实施真实 Git 或后端；详见[工作台设置规则](openspec/specs/dev-browser-workbench/spec.md)。
+- Dev 新定位为需求澄清、需求管理与进度跟踪，不参与编码。本步仅调整文档和设置原型：项目只配置 Git 仓库及默认分支，Release 继承，不再要求本地／个人开发目录；删除计划／执行 Agent 设置，IR 验收设置替换为需求分析，方案 Agent 保留于提案。进度必须有百分比与遗留问题，未合入默认分支最高 99%，合入后 AI 或人工确认完成才能达到 100%。其他旧开发流程文档与原型待逐步对齐，不因设置改动实施真实 Git 或后端；详见[工作台设置规则](openspec/specs/dev-browser-workbench/spec.md)。
 - Dev 正式需求原型在“自动化”下提供大表格入口，不再显示左侧正式需求树或 AI 会话；选中 IR／SR 仅在同页右侧展开报告／材料标签，不跳详情页，需求提案保持三栏。IR 进度为全部 SR 的算术平均值，管理员按工号分配唯一 IR 负责人；本轮仅文档与原型，复用 ZCode 控件，不接真实后端、Git 或模型。最新展示与进度规则见[工作台](openspec/specs/dev-browser-workbench/spec.md)。
-- Dev 正式需求表格 MUST 提供“开发分支”列，展开 IR 后所有访问者均可直接查看、点击或键盘复制各 SR 完整分支名；复用需求进度分析的复制及提示组件，成功／失败明确反馈，复制不触发行选择或 Git。优先使用平台 SR 分支映射，其次使用当前分析关联分支，NEVER 用执行历史或猜测名称；无关联明确显示，不提供空值复制。
+- Dev 正式需求表格 MUST 提供“开发分支”列，展开 IR 后所有访问者均可直接查看、点击或键盘复制各 SR 完整分支名；复用需求分析的复制及提示组件，成功／失败明确反馈，复制不触发行选择或 Git。优先使用平台 SR 分支映射，其次使用当前分析关联分支，NEVER 用执行历史或猜测名称；无关联明确显示，不提供空值复制。
 - Dev 网页工作台 MUST 一次性完成替换，只处理新建需求；保留并复用原生 Agent 和底层能力，NEVER 保留旧 Dev 模式、兼容入口、双轨运行或旧流程迁移／恢复。
 - Dev 提案仅有提交人，不设负责人、开发人员或计划起止时间。方案 Agent 逐 SR 生成工期预估及假设，与依赖共同放入同一 Change 的 `sr-dependencies.json`：每个稳定 SR ID 记录 `estimate: { workingDays: 正数工作日, assumptions: 非空依据与不确定项 }` 及 `prerequisites`，覆盖全部 SR，无依赖为空数组。可并行关系由图推导，预估不直接相加为 IR 总工期；人通过方案对话让 AI 修改，不编辑文件。JSON 与 `design.md` 同轮生成、更新、失效、确认并提交 Git；缺失、无效或过期时不沿用旧确认、提交或自动转正。`design.md` 仅引用 JSON，SR `spec.md` 不重复维护。转正保留 Git 内预估和依赖，再按正式规则安排负责人、SR 开发人员与起止时间；正式安排属数据库元数据，不从预估自动换算。本轮只改文档和内存原型，不代表真实文件生成或后端已实现。
 - Dev 右侧选中 `sr-dependencies.json` MUST 复用现有图画布及控件展示只读 SR 依赖图，不展示 JSON 正文；节点为稳定 ID／标题，箭头从前置 SR 指向依赖方，支持缩放、平移及点击连线查看原因，独立 SR 保留节点，缺失／无效／过期材料报错而不绘制旧图。
@@ -379,3 +379,5 @@ Fork releases require explicit user authorization and use the manual CI workflow
 
 This repository has a generated `openwiki/` knowledge base. Use it as optional context when investigating unfamiliar architecture or behavior, or when source inspection leaves an important uncertainty. Use `openwiki_search` and `openwiki_read` to find relevant sections; if those tools are unavailable, consult `openwiki/quickstart.md` and its links. Source code and tests are authoritative when the Wiki is outdated.
 <!-- OPENWIKI:END -->
+
+- Dev “需求分析”工作页（原“需求进度分析”）位于主页侧栏正式需求上方，不再作为设置分区；Skill 设计位于自动化下方。两页均复用原生导航及阅读／表格控件，模型与个性化中的 Agent 配置保留在设置中，业务权限和原生后台行为不因页面迁移改变；本轮只改文档及独立原型。

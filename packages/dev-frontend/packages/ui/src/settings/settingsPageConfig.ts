@@ -98,18 +98,6 @@ const BASE_SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     groupId: "platformConfiguration",
   },
   {
-    id: "progressAnalysis",
-    icon: FileSearch,
-    titleId: "settings.progressAnalysis.title",
-    groupId: "platformConfiguration",
-  },
-  {
-    id: "skillDesign",
-    icon: FileSearch,
-    titleId: "settings.skillDesign.title",
-    groupId: "personalTools",
-  },
-  {
     id: "commands",
     icon: Terminal,
     titleId: "settings.commands.title",

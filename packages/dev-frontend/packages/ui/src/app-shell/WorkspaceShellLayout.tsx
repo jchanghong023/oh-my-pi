@@ -1,3 +1,4 @@
+import { WorkspaceSidebarToolbar } from "@/WorkspaceSidebarToolbar.js";
 import { DevFormalWorkspace } from "@/dev/DevFormalProgress.js";
 import { proposalProgressIndex, proposalViewedIndex } from "@/dev/domain.js";
 import { useOptionalDevDataSource } from "@/dev/data-source.js";
@@ -5,6 +6,8 @@ import { DevEmptyState, DevProposalSrReadOnlyState } from "@/dev/DevEmptyState.j
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useDev } from "@/dev/DevContext.js";
 import { conversationReadOnlyReason } from "@/dev/domain.js";
+import { DevRequirementAnalysisPage } from "@/dev/DevRequirementAnalysisPage.js";
+import { DevSkillDesignPage } from "@/dev/DevSkillDesignPage.js";
 import { DevAutomations } from "@/dev/DevAutomations.js";
 import { DevSidebar, DevStageHeader } from "@/dev/DevWorkbench.js";
 import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
@@ -17,7 +20,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
-import { ArrowLeft, ArrowRight, MessageCirclePlus, PanelLeft } from "lucide-react";
+import { MessageCirclePlus } from "lucide-react";
 import { V4ChatPane } from "@/v4/V4ChatPane.js";
 import { V4WorkspaceChatArea } from "@/v4/V4WorkspaceChatArea.js";
 import { V4SplitPaneEntryProvider } from "@/v4/splitPaneEntryContext.js";
@@ -651,6 +654,21 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
     activeTaskTitle?.trim() || intl.formatMessage({ id: "taskList.untitled" });
   // 完整视图保留左侧任务列表与左上角按钮组，侧栏显隐只由用户开关决定。
   const isSidebarPanelVisible = devFormalMode && workspaceMainView === "chat" ? formalNavigationOpen : isSidebarVisible;
+  const sidebarNavigation = {
+    expanded: isSidebarPanelVisible,
+    onToggle: () => { if (devFormalMode && workspaceMainView === "chat") setFormalNavigationOpen(open => !open); else handleToggleSidebar(); },
+    canGoBack: dev ? dev.canGoBack : canTaskNavBack,
+    canGoForward: dev ? dev.canGoForward : canTaskNavForward,
+    onGoBack: dev ? dev.goBack : handleTaskNavBack,
+    onGoForward: dev ? dev.goForward : handleTaskNavForward,
+    toggleShortcut: devFormalMode && workspaceMainView === "chat" ? undefined : toggleSidebarShortcutLabel,
+    backShortcut: goBackShortcutLabel,
+    forwardShortcut: goForwardShortcutLabel,
+    onCreate: () => { if (dev) dev.startProposalDraft(); else handleCreateTaskInChat(); },
+    createLabel: dev ? "新建需求提案" : undefined,
+    createDisabled: dev ? dev.pending || !dev.selection.projectId || !dev.releaseId || !devSource?.capabilities.workflowCommands.includes("createProposal") : Boolean(workspaceReadOnlyReason),
+  };
+
   const {
     panelRef: sidePanePanelRef,
     panelElementRef: sidePanePanelElementRef,
@@ -1813,7 +1831,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   );
 
   const renderWorkspaceSidebar = (mobile?: { navigateToChat(): void }) => dev ? (
-    <DevSidebar onNavigate={mobile?.navigateToChat ?? showChatMainView} onOpenAutomations={() => { handleOpenAutomations(); mobile?.navigateToChat(); }} automationsActive={workspaceMainView === "automations"} />
+    <DevSidebar toolbar={sidebarNavigation} onNavigate={mobile?.navigateToChat ?? showChatMainView} onOpenAutomations={() => { handleOpenAutomations(); mobile?.navigateToChat(); }} automationsActive={workspaceMainView === "automations"} onOpenSkillDesign={() => { onWorkspaceMainViewChange("skillDesign"); mobile?.navigateToChat(); }} skillDesignActive={workspaceMainView === "skillDesign"} onOpenRequirementAnalysis={() => { onWorkspaceMainViewChange("requirementAnalysis"); mobile?.navigateToChat(); }} requirementAnalysisActive={workspaceMainView === "requirementAnalysis"} />
   ) : renderNativeProjectSidebar(mobile);
 
   // Reuse the responsive phone layout for browsers connected directly to local OMP.
@@ -1886,7 +1904,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
         }
         chatOverlay={workspaceMainView === "chat" ? renderChatFindDialog() : undefined}
         chatContent={
-          workspaceMainView === "automations" ? (
+          dev && workspaceMainView === "requirementAnalysis" ? <DevRequirementAnalysisPage /> : dev && workspaceMainView === "skillDesign" ? <DevSkillDesignPage /> : workspaceMainView === "automations" ? (
             <main
               id={AUTOMATIONS_TOAST_ANCHOR_ID}
               className="flex h-full min-h-0 flex-1 flex-col bg-background"
@@ -1911,7 +1929,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                     className="min-h-full"
                   >
                     <div className="mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6">
-                      {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
+                      {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} onOpenRequirementAnalysis={() => onWorkspaceMainViewChange("requirementAnalysis")} /> : (
                         <AutomationsSection
                           workspacePath={workspaceAbsPath}
                           workspaceIdentity={workspaceIdentity}
@@ -1934,7 +1952,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 </div>
               </AutomationsMainBreadcrumbFrame>
             </main>
-          ) : devFormalMode ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={() => setFormalNavigationOpen(open => !open)} /> : devProposalSr ? <DevProposalSrReadOnlyState /> : devEmpty ? <DevEmptyState /> : (
+          ) : devFormalMode ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : devProposalSr ? <DevProposalSrReadOnlyState /> : devEmpty ? <DevEmptyState /> : (
             <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
               {/* Bugfix: 手机远控聊天页中间层必须继续提供 flex 高度链。
                 只有 h-full 的普通 block 会让 ChatView 的 flex-1 失效，草稿空态贴顶且内部滚动被外层裁掉。 */}
@@ -2098,7 +2116,15 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
             "p-0",
           )}
         >
-          {devFormalMode && workspaceMainView === "chat" ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={() => setFormalNavigationOpen(open => !open)} /> : <ResizablePanelGroup
+        {!isSidebarPanelVisible && !(devFormalMode && workspaceMainView === "chat") ? (
+          <div
+            className="flex shrink-0 items-center gap-1 border-b border-border bg-background"
+          >
+            <WorkspaceSidebarToolbar {...sidebarNavigation} />
+
+          </div>
+        ) : null}
+          {dev && workspaceMainView === "requirementAnalysis" ? <DevRequirementAnalysisPage /> : dev && workspaceMainView === "skillDesign" ? <DevSkillDesignPage /> : devFormalMode && workspaceMainView === "chat" ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : <ResizablePanelGroup
             layoutId={dev ? "dev-workspace-body-layout-v2" : "workspace-body-layout"}
             panelIds={WORKSPACE_BODY_PANEL_IDS}
             className={cn(
@@ -2216,7 +2242,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                                   className="min-h-full"
                                 >
                                   <div className="mx-auto flex w-full max-w-5xl flex-col px-4 py-4 md:px-6 md:py-6">
-                                    {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} /> : (
+                                    {dev ? <DevAutomations workspacePath={workspaceAbsPath} workspaceIdentity={workspaceIdentity} onOpenRequirementAnalysis={() => onWorkspaceMainViewChange("requirementAnalysis")} /> : (
                                       <AutomationsSection
                                         workspacePath={workspaceAbsPath}
                                         workspaceIdentity={workspaceIdentity}
@@ -2247,7 +2273,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                               </div>
                             </AutomationsMainBreadcrumbFrame>
                           </main>
-                        ) : devFormalMode ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={() => setFormalNavigationOpen(open => !open)} /> : devProposalSr ? <DevProposalSrReadOnlyState /> : devEmpty ? <DevEmptyState /> : (
+                        ) : devFormalMode ? <DevFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : devProposalSr ? <DevProposalSrReadOnlyState /> : devEmpty ? <DevEmptyState /> : (
                           <main className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
                             {renderChatFindDialog()}
                             <ScopedErrorBoundary
@@ -2333,61 +2359,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
             {sidePanePanel}
           </ResizablePanelGroup>}
         </div>
-        {!isSidebarVisible && !devFormalMode ? (
-          <nav
-            aria-label={intl.formatMessage({ id: "workspaceSidebar.toggleSidebar" })}
-            className="absolute top-2 left-2 z-30 flex items-center gap-1 bg-background"
-          >
-            <ControlHintTooltip
-              title={intl.formatMessage({ id: "workspaceSidebar.toggleSidebar" })}
-              shortcut={toggleSidebarShortcutLabel}
-            >
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={intl.formatMessage({ id: "workspaceSidebar.toggleSidebar" })}
-                aria-expanded={isSidebarVisible}
-                onClick={handleToggleSidebar}
-              >
-                <PanelLeft className="size-4" />
-              </Button>
-            </ControlHintTooltip>
-            <ControlHintTooltip title={intl.formatMessage({ id: "taskNav.back" })} shortcut={goBackShortcutLabel}>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={intl.formatMessage({ id: "taskNav.back" })}
-                disabled={!canTaskNavBack}
-                onClick={handleTaskNavBack}
-              >
-                <ArrowLeft className="size-4" />
-              </Button>
-            </ControlHintTooltip>
-            <ControlHintTooltip title={intl.formatMessage({ id: "taskNav.forward" })} shortcut={goForwardShortcutLabel}>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={intl.formatMessage({ id: "taskNav.forward" })}
-                disabled={!canTaskNavForward}
-                onClick={handleTaskNavForward}
-              >
-                <ArrowRight className="size-4" />
-              </Button>
-            </ControlHintTooltip>
-            <ControlHintTooltip title={intl.formatMessage({ id: "taskList.newThread" })}>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={intl.formatMessage({ id: "taskList.newThread" })}
-                data-testid="workspace-new-session"
-                disabled={Boolean(workspaceReadOnlyReason)}
-                onClick={() => handleCreateTaskInChat()}
-              >
-                <MessageCirclePlus className="size-4" />
-              </Button>
-            </ControlHintTooltip>
-          </nav>
-        ) : null}
+
       </div>
     </SavedWorkflowHubProvider>
   );

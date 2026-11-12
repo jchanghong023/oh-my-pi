@@ -1,5 +1,8 @@
 import { useId, useState } from "react";
 import { UserRound } from "lucide-react";
+import { MessageResponse } from "@/components/ai-elements/message.js";
+import { buildMarkdownTableText } from "@/components/ai-elements/markdown-table.js";
+import { useZCodeStore } from "@/store/StoreProvider.js";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
 import { Label } from "@/components/ui/label.js";
@@ -73,25 +76,31 @@ export function DevEditPlanning({ group, sr, compact = false }: { group: DevRequ
 export function DevPlanningSummary({ group, rows, editable = false }: { group: DevRequirementGroup; rows: DevSystemRequirement[]; editable?: boolean }) {
   const dev = useDev()!;
   const view = dev.view;
+  const theme = useZCodeStore(state => state.theme);
+  const codePreviewSettings = useZCodeStore(state => state.codePreviewSettings);
   if (!view) return null;
   const proposal = view.drafts.some(item => item.id === group.id && item.projectId === group.projectId);
   const ready = hasCurrentProposalSolution(group);
   if (proposal) {
-    const result = readSrDependencies(group);
-    return <section className="space-y-4" data-testid="requirement-planning-summary">
-      <div><h2 className="text-ui-base font-medium">工期预估</h2><p className="mt-1 text-ui-xs leading-5 text-foreground-subtle">预估与 SR 依赖共同保存在 sr-dependencies.json。修改请在方案对话中提出，由 AI 更新文件。</p></div>
-      {!ready || result.issue ? <p role="status" className="text-ui-sm">{result.issue ?? "当前方案尚未完成或已失效，请先完成本轮方案分析。"}</p> : <ul className="space-y-3">{rows.map(sr => {
-        const estimate = result.document?.srs.find(row => row.srId === sr.id)?.estimate;
-        return <li key={sr.id} className="space-y-2 rounded-md border border-border p-3">
-          <p className="text-ui-sm font-medium">{sr.title}</p>
-          <p className="break-all font-mono text-ui-xs text-foreground-subtle">{sr.id}</p>
-          <p className="text-ui-sm">预估工期：<strong>{estimate?.workingDays} 个工作日</strong></p>
-          <p className="text-ui-xs leading-5 text-foreground-subtle">预估假设：{estimate?.assumptions}</p>
-        </li>;
-      })}</ul>}
-      <p className="text-ui-xs leading-5 text-foreground-subtle">工期预估不代表承诺日期或实际用时；存在依赖及并行关系，不直接相加为 IR 总工期。转正后再安排人员及起止时间。</p>
+    // 阅读只要求当前 JSON 的依赖结构有效；缺少预估不能遮住其他 SR 的已有工期。
+    const result = readSrDependencies(group, group.srDependencyFile, false);
+    const table = result.document ? buildMarkdownTableText([
+      ["SR ID", "需求", "工期（工作日）", "估算假设"],
+      ...result.document.srs.map(row => {
+        const estimate = row.estimate;
+        const duration = estimate && Number.isFinite(estimate.workingDays) && estimate.workingDays > 0 ? String(estimate.workingDays) : "待预估";
+        const assumptions = typeof estimate?.assumptions === "string" && estimate.assumptions.trim() ? estimate.assumptions : "待补充";
+        return [row.srId, rows.find(sr => sr.id === row.srId)?.title ?? row.srId, duration, assumptions];
+      }),
+    ]) : "";
+    return <section className="min-w-0 space-y-4" data-testid="requirement-planning-summary">
+      <h2 className="text-ui-base font-medium">工期预估</h2>
+      {result.issue ? <p role="status" className="text-ui-sm">{result.issue}</p> : <MessageResponse className="min-w-0 break-words" theme={theme} codePreviewSettings={codePreviewSettings} showExportActions={false}>{table}</MessageResponse>}
+      <p className="text-ui-xs leading-5 text-foreground-subtle">预估与依赖共同读取 sr-dependencies.json；通过方案对话让 AI 更新。缺项标为待预估／待补充，提交前须补齐。</p>
+      <p className="text-ui-xs leading-5 text-foreground-subtle">工作日不代表承诺日期或实际用时，不直接相加为 IR 总工期。转正后再安排人员及起止时间。</p>
     </section>;
   }
+
   const summary = irPlanning(rows);
   return <section className="space-y-4" data-testid="requirement-planning-summary">
     <div><h2 className="text-ui-base font-medium">开发安排</h2><p className="mt-1 text-ui-xs leading-5 text-foreground-subtle">人员与排期：数据库元数据；实现思路与依赖：仓库文档。时间为计划，不代表实际开发活动。</p></div>

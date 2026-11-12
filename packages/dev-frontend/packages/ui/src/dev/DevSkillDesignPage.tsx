@@ -1,13 +1,15 @@
 import { createUuid } from "@zcode/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, FileCode2, FolderGit2, MessageSquare, Copy } from "lucide-react";
+import { Check, ChevronDown, FileCode2, FolderGit2, MessageSquare, ArrowRight, WandSparkles } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Badge } from "@/components/ui/badge.js";
 import { Label } from "@/components/ui/label.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { DevAgentModelSummary } from "./DevAgentModelSummary.js";
-import { DevPersonalConfigScope } from "./DevPersonalConfigScope.js";
+import { MessageResponse } from "@/components/ai-elements/message.js";
+import { CodeBlock, CodeBlockHeader } from "@/components/ai-elements/code-block.js";
+import { useZCodeStore } from "@/store/StoreProvider.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.js";
 import { SessionPane } from "@/v4/SessionPane.js";
@@ -21,13 +23,16 @@ import type { DevAgentModelBinding, DevSkillDesignDraft, DevSkillDesignPreview }
 import type { SkillSummary } from "@zcode/shared";
 import { SKILL_DESIGN_FIELDS } from "./skill-design-fields.js";
 
-export function DevSkillDesignSettings() {
+export function DevSkillDesignPage() {
   const source = useDevDataSource();
   const dev = useDev();
   if (!source.skillDesign) return <p className="text-ui-sm text-foreground-subtle">当前数据源尚未接入此功能。</p>;
   const project = dev?.view?.projects.find(item => item.id === dev.selection.projectId);
   const developmentRoot = project ? source.projects?.readDevelopmentRoot(project.id, source.backend?.owner) : undefined;
-  return <div className="space-y-4"><DevPersonalConfigScope scopeLabel="Skill 设计所有人可用；使用共享 OMP 的模型配置，生成与保存不授予其他设置的修改权限。" /><SkillDesignEditor key={`${source.backend?.id}:${project?.id ?? "personal"}`} projectId={project?.id ?? "personal"} projectName={project?.name ?? "未选择项目"} workspacePath={developmentRoot ?? source.backend?.configDirectory ?? ""} developmentRoot={developmentRoot} /></div>;
+  return <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background" aria-label="Skill 设计">
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-5"><WandSparkles className="size-4 text-foreground-subtle" /><h1 className="text-ui-base font-semibold">Skill 设计</h1><span className="ml-auto text-ui-xs text-foreground-subtle">所有人可用 · 使用当前 Web 的模型配置</span></header>
+    <div className="flex min-h-0 flex-1 flex-col p-4"><SkillDesignEditor key={`${source.backend?.id}:${project?.id ?? "personal"}`} projectId={project?.id ?? "personal"} projectName={project?.name ?? "未选择项目"} workspacePath={developmentRoot ?? source.backend?.configDirectory ?? ""} developmentRoot={developmentRoot} /></div>
+  </main>;
 }
 
 function SkillDesignEditor({ projectId, projectName, workspacePath, developmentRoot }: { projectId: string; projectName: string; workspacePath: string; developmentRoot?: string }) {
@@ -59,6 +64,8 @@ function ReadySkillDesignEditor({ projectId, projectName, workspacePath, develop
   const source = useDevDataSource();
   const design = source.skillDesign!;
   const services = useServices();
+  const theme = useZCodeStore(state => state.theme);
+  const codePreviewSettings = useZCodeStore(state => state.codePreviewSettings);
   const scope = useMemo(() => ({ workspacePath, workspaceIdentity: `${identity}:skill-design` }), [workspacePath, identity]);
   useEffect(() => {
     const registrationId = `dev-skill-designer:${source.clientId}:${createUuid()}`;
@@ -222,36 +229,34 @@ function ReadySkillDesignEditor({ projectId, projectName, workspacePath, develop
   };
   if (loading) return <p role="status" className="text-ui-sm text-foreground-subtle">正在加载技能设计数据…</p>;
   if (!draft) return <p role="alert" className="text-ui-sm text-destructive">{error || "加载技能设计数据失败。"}</p>;
-  return <div className="flex h-[calc(100dvh-9rem)] min-h-[34rem] flex-col gap-3" data-testid="dev-skill-design">
+  return <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3" data-testid="dev-skill-design">
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <p className="text-ui-sm text-foreground-subtle">填写说明 → 填入聊天并发送 → 预览临时文件 → 选择有效项目或共享 OMP profile 目标</p>
+      <p className="text-ui-sm text-foreground-subtle">整理说明 → 对话设计 → 预览并保存</p>
       <div className="flex min-w-0 items-center gap-2 text-ui-sm"><FolderGit2 className="size-3.5 text-foreground-subtle" /><span className="truncate">{projectName}</span><Badge variant="outline">{source.provenance.kind === "sample" ? "原型演示" : "后台数据"}</Badge></div>
     </div>
     {error && <p role="alert" className="text-ui-sm text-destructive">{error}</p>}
     <DevAgentModelSummary binding={modelBinding} />
-    <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4">
-      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border" aria-labelledby="skill-design-brief-title">
+    <div className="grid min-h-0 flex-1 grid-cols-[minmax(280px,2fr)_minmax(0,3fr)] gap-3">
+      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border" aria-labelledby="skill-design-brief-title">
         <div className="shrink-0 space-y-2 border-b border-border p-4">
-          <div className="flex items-center justify-between gap-2"><h3 id="skill-design-brief-title" className="text-ui-base font-medium">技能说明</h3><div className="flex items-center gap-2"><span className="text-ui-sm text-foreground-subtle">核心说明 {completed}/{coreFields.length}</span>{design.sample && <Button variant="ghost" size="sm" onClick={fillExample}>填入示例</Button>}</div></div>
+          <div className="flex items-center justify-between gap-2"><h3 id="skill-design-brief-title" className="text-ui-base font-medium">技能说明</h3><div className="flex items-center gap-2"><span className="text-ui-sm text-foreground-subtle">已填写 {completed}/{coreFields.length}</span>{design.sample && <Button variant="ghost" size="sm" onClick={fillExample}>填入示例</Button>}</div></div>
           <p className="text-ui-sm text-foreground-subtle">表单用于整理给模型的需求。信息不完整也可先讨论；技能标识由模型推荐，无需预先填写。</p>
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4" data-testid="skill-design-fields">
-          {coreFields.map(field => <div key={field.id} className="space-y-1.5"><div className="flex items-center justify-between gap-2"><Label htmlFor={`skill-design-${field.id}`}>{field.label}</Label>{Boolean(draft[field.id].trim()) && <Check className="size-3.5 text-foreground-subtle" aria-label="已填写" />}</div><SettingsFormTextarea id={`skill-design-${field.id}`} rows={2} className="min-h-20 w-full" value={draft[field.id]} placeholder={field.placeholder} onChange={event => updateDraft({ ...draft, [field.id]: event.target.value })} /><p className="text-ui-sm text-foreground-subtle">{field.hint}</p></div>)}
+          {coreFields.map(field => <div key={field.id} className="space-y-1.5"><div className="flex items-center justify-between gap-2"><Label htmlFor={`skill-design-${field.id}`}>{field.label}</Label>{Boolean(draft[field.id].trim()) && <Check className="size-3.5 text-foreground-subtle" aria-label="已填写" />}</div><SettingsFormTextarea id={`skill-design-${field.id}`} rows={2} className="min-h-20 w-full resize-y" value={draft[field.id]} placeholder={field.placeholder} onChange={event => updateDraft({ ...draft, [field.id]: event.target.value })} /><p className="text-ui-sm text-foreground-subtle">{field.hint}</p></div>)}
           <Collapsible open={optionalOpen} onOpenChange={setOptionalOpen}><CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="px-0"><ChevronDown className={`size-3 transition-transform ${optionalOpen ? "" : "-rotate-90"}`} />补充字段（选填）</Button></CollapsibleTrigger><CollapsibleContent><div className="space-y-4 pt-3">{SKILL_DESIGN_FIELDS.filter(field => !field.required).map(field => <div key={field.id} className="space-y-1.5"><Label htmlFor={`skill-design-${field.id}`}>{field.label}</Label><SettingsFormTextarea id={`skill-design-${field.id}`} rows={3} className="w-full" value={draft[field.id]} placeholder={field.placeholder} onChange={event => updateDraft({ ...draft, [field.id]: event.target.value })} /><p className="text-ui-sm text-foreground-subtle">{field.hint}</p></div>)}</div></CollapsibleContent></Collapsible>
         </div>
         <div className="shrink-0 space-y-2 border-t border-border p-3">
-          <p className="text-ui-sm text-foreground-subtle">模型生成位置（临时目录）</p><p className="break-all font-mono text-ui-sm text-foreground-subtle">{temporaryDirectory}</p>
-          <p role="status" className="text-ui-sm text-foreground-subtle" data-testid="skill-design-generation-status">{generationStatus}</p>
+          <Collapsible><CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="px-0 text-foreground-subtle"><ChevronDown className="size-3" />临时生成路径</Button></CollapsibleTrigger><CollapsibleContent><p className="break-all font-mono text-ui-xs text-foreground-subtle">{temporaryDirectory}</p></CollapsibleContent></Collapsible>
           {fillError && <p role="alert" className="text-ui-sm text-destructive">{fillError}</p>}
           {insertRequest && <p role="status" className="text-ui-sm text-foreground-subtle">正在填入聊天输入框…</p>}
           {notice && <p role="status" className="text-ui-sm text-foreground-subtle">{notice}</p>}
-          <Button className="w-full" disabled={Boolean(insertRequest) || filling} onClick={fillComposer}><Copy className="size-3.5" />填入右侧聊天输入框</Button>
+          <Button className="w-full" disabled={Boolean(insertRequest) || filling} onClick={fillComposer}><ArrowRight className="size-3.5" />填入右侧聊天输入框</Button>
         </div>
       </section>
-      <Tabs value={tab} onValueChange={setTab} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border">
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2"><TabsList aria-label="技能设计工作区"><TabsTrigger value="chat"><MessageSquare className="size-3.5" />设计对话</TabsTrigger><TabsTrigger value="preview"><FileCode2 className="size-3.5" />临时文件预览</TabsTrigger></TabsList><span className="text-ui-sm text-foreground-subtle">{generationStatus}</span></div>
+      <Tabs value={tab} onValueChange={setTab} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2"><TabsList aria-label="技能设计工作区"><TabsTrigger value="chat"><MessageSquare className="size-3.5" />设计对话</TabsTrigger><TabsTrigger value="preview"><FileCode2 className="size-3.5" />临时文件预览</TabsTrigger></TabsList><span className="text-ui-xs text-foreground-subtle" data-testid="skill-design-generation-status">{generationStatus}</span></div>
         <TabsContent forceMount value="chat" className={tab === "chat" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-          <p className="shrink-0 border-b border-border px-3 py-2 text-ui-sm text-foreground-subtle">发送前可编辑和补充。发送后在此查看生成的临时文件。</p>
           <div className="relative min-h-0 flex-1" data-testid="skill-design-chat">
             <V4PaneConversationProvider scope={scope} sessionId={sessionId}><SessionPane paneId={`skill-designer-${projectId}`} sessionId={sessionId} rootSessionId={sessionId} workspacePath={scope.workspacePath} workspaceIdentity={scope.workspaceIdentity} embedded focused={tab === "chat"} composerInsertRequest={insertRequest} onComposerInsertApplied={handleInsertApplied} /></V4PaneConversationProvider>
           </div>
@@ -260,15 +265,15 @@ function ReadySkillDesignEditor({ projectId, projectName, workspacePath, develop
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4" data-testid="skill-design-preview">
             {!preview ? <div className="flex h-full flex-col items-center justify-center gap-3 text-center"><FileCode2 className="size-6 text-foreground-subtle" /><p className="text-ui-base">尚未生成临时文件</p><p className="max-w-sm text-ui-sm text-foreground-subtle">先把说明填入聊天输入框，确认或补充后发送，再查看临时目录中的文件。填写或复制表单不会生成技能。</p><Button variant="outline" onClick={() => setTab("chat")}>返回设计对话</Button></div> : <>
               <p className="text-ui-sm text-foreground-subtle">临时目录</p><p className="break-all font-mono text-ui-sm">{preview.directory}</p>
-              <div className="flex flex-wrap gap-2" role="group" aria-label="临时技能文件">{preview.files.map(item => <Button key={item.path} size="sm" variant={file?.path === item.path ? "secondary" : "ghost"} aria-pressed={file?.path === item.path} onClick={() => setSelectedFile(item.path)}><FileCode2 className="size-3.5" />{item.path}</Button>)}</div>
+              <Select value={file?.path} onValueChange={setSelectedFile}><SelectTrigger className="w-full" aria-label="选择临时技能文件"><SelectValue /></SelectTrigger><SelectContent>{preview.files.map(item => <SelectItem key={item.path} value={item.path}>{item.path}</SelectItem>)}</SelectContent></Select>
               <p className="break-all font-mono text-ui-sm text-foreground-subtle">{preview.directory}/{file?.path}</p>
-              <pre className="whitespace-pre-wrap break-words rounded-lg border border-border p-4 font-mono text-ui-sm">{file?.content}</pre>
+              {file && (file.path.endsWith(".md") ? <MessageResponse theme={theme} codePreviewSettings={codePreviewSettings} showExportActions={false} workspacePath={scope.workspacePath}>{file.content}</MessageResponse> : <CodeBlock code={file.content} language={file.path.endsWith(".json") ? "json" : "text"} appTheme={theme} wrapLongLines><CodeBlockHeader displayFile={file.path} showCopyButton={false} /></CodeBlock>)}
               <p className="text-ui-sm text-foreground-subtle">{source.provenance.kind === "sample" ? "这是固定文件样例，不代表真实模型生成或磁盘文件。继续发送修改要求后可再次预览。" : "继续发送修改要求后可再次预览生成的临时文件。"}</p>
             </>}
           </div>
           <div className="shrink-0 space-y-2 border-t border-border p-3" data-testid="skill-design-save-target">
             <p className="text-ui-sm">技能标识（模型推荐）：<span className="font-mono">{preview?.name ?? "发送后由模型推荐"}</span></p>
-            <div className="space-y-1.5"><Label htmlFor="skill-save-scope">保存到</Label><Select value={saveTarget} disabled={Boolean(savedPath) || saving} onValueChange={value => { setSaveTarget(value as "project" | "user"); setError(""); }}><SelectTrigger id="skill-save-scope" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="project">项目技能 · 当前有效项目</SelectItem><SelectItem value="user">Profile 技能 · 共享 OMP</SelectItem></SelectContent></Select></div>
+            <div className="space-y-1.5"><Label htmlFor="skill-save-scope">保存到</Label><Select value={saveTarget} disabled={Boolean(savedPath) || saving} onValueChange={value => { setSaveTarget(value as "project" | "user"); setError(""); }}><SelectTrigger id="skill-save-scope" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="project" disabled={!developmentRoot}>项目技能 · 当前有效项目</SelectItem><SelectItem value="user">Profile 技能 · 共享 OMP</SelectItem></SelectContent></Select></div>
             <p className="text-ui-sm text-foreground-subtle">{saveTarget === "project" ? `当前项目：${projectName}` : `共享 OMP profile 归属：${source.backend?.owner ?? "Web 启动者"}，不是访问者的个人后端`}</p><p className="break-all font-mono text-ui-sm text-foreground-subtle">{targetDirectory ?? "发送并预览后显示保存路径；项目目标须有效可写，profile 目标无需绑定项目。"}</p>
             {preview && <p className="text-ui-sm text-foreground-subtle">确认保存整个临时技能目录中的 {preview.files.length} 个文件；不会覆盖同名技能。</p>}
             {preview && !validName && <p role="alert" className="text-ui-sm text-destructive">标识只能包含小写字母、数字和连字符，最长 64 个字符。</p>}

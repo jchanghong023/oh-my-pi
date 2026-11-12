@@ -1,3 +1,4 @@
+import type { WorkspaceMainView } from "@/app-shell/types.js";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ComposerDraftHandoff } from "../v4/composer/composerDraftWorkspaceTransfer.js";
 import type { ConversationComposerSendOptions } from "../v4/ConversationComposer.js";
@@ -24,6 +25,8 @@ export interface DevFirstDiscussion {
 }
 interface DevContextValue {
   view?: DevWorkflowView; selection: DevSelection; session?: DevNativeSessionRef;
+  mainView: WorkspaceMainView; setMainView(value: WorkspaceMainView): void;
+  canGoBack: boolean; canGoForward: boolean; goBack(): void; goForward(): void;
   startProposalDraft(): void;
   startFreeChat(projectId?: string, files?: boolean): void; openFreeChat(taskId: string, files?: boolean): void;
   pending: boolean; error?: string; releaseId: string; setReleaseId(id: string): void;
@@ -59,6 +62,26 @@ export function DevProvider({ children }: { children: ReactNode }) {
   const source = useDevDataSource();
   const [selection, setSelection] = useState<DevSelection>(() => scopeProposalDraft(window.history.state?.devBackendId === (source.backend?.id ?? source.clientId) && window.history.state?.devSelection ? window.history.state.devSelection as DevSelection : { ...source.initialSelection }, source.backend?.id ?? source.clientId));
   const selectionRef = useRef(selection);
+  const [navigation, setNavigation] = useState(() => {
+    const state = window.history.state;
+    const sameBackend = state?.devBackendId === (source.backend?.id ?? source.clientId);
+    const index = sameBackend && Number.isSafeInteger(state?.devNavigationIndex) && state.devNavigationIndex >= 0 ? state.devNavigationIndex : 0;
+    const extent = sameBackend && Number.isSafeInteger(state?.devNavigationExtent) ? Math.max(index, state.devNavigationExtent) : index;
+    const mainView: WorkspaceMainView = sameBackend && ["chat", "automations", "skillDesign", "requirementAnalysis"].includes(state?.devMainView) ? state.devMainView : "chat";
+    return { index, extent, mainView };
+  });
+  const navigationRef = useRef(navigation);
+  const recordNavigation = useCallback((target: DevSelection, mainView: WorkspaceMainView) => {
+    const previous = navigationRef.current;
+    const next = { index: previous.index + 1, extent: previous.index + 1, mainView };
+    window.history.pushState({ ...window.history.state, devSelection: target, devBackendId: source.backend?.id ?? source.clientId, devNavigationIndex: next.index, devNavigationExtent: next.extent, devMainView: mainView }, "");
+    navigationRef.current = next;
+    setNavigation(next);
+  }, [source]);
+  const setMainView = useCallback((mainView: WorkspaceMainView) => {
+    if (mainView !== navigationRef.current.mainView) recordNavigation(selectionRef.current, mainView);
+  }, [recordNavigation]);
+
   const [view, setView] = useState<DevWorkflowView>();
   const viewRef = useRef(view);
   const [error, setError] = useState<string>();
@@ -98,7 +121,7 @@ export function DevProvider({ children }: { children: ReactNode }) {
   const select = useCallback((value: DevSelection, addHistory = true) => {
     value = scopeProposalDraft(value, source.backend?.id ?? source.clientId);
     const projectChanged = selectionRef.current.projectId !== value.projectId;
-    if (addHistory) window.history.pushState({ ...window.history.state, devSelection: value, devBackendId: source.backend?.id ?? source.clientId }, "");
+    if (addHistory && (JSON.stringify(value) !== JSON.stringify(selectionRef.current) || navigationRef.current.mainView !== "chat")) recordNavigation(value, "chat");
     source.selectProject(value.projectId);
     selectionRef.current = value;
     setSelection(value);
@@ -108,11 +131,18 @@ export function DevProvider({ children }: { children: ReactNode }) {
       firstDiscussionRef.current = undefined;
       setFirstDiscussion(undefined);
     }
-  }, [source, load]);
+  }, [source, load, recordNavigation]);
   useEffect(() => {
-    window.history.replaceState({ ...window.history.state, devSelection: selectionRef.current, devBackendId: source.backend?.id ?? source.clientId }, "");
+    window.history.replaceState({ ...window.history.state, devSelection: selectionRef.current, devBackendId: source.backend?.id ?? source.clientId, devNavigationIndex: navigationRef.current.index, devNavigationExtent: navigationRef.current.extent, devMainView: navigationRef.current.mainView }, "");
     const restore = (event: PopStateEvent) => {
-      if (event.state?.devBackendId === (source.backend?.id ?? source.clientId) && event.state?.devSelection) select(event.state.devSelection as DevSelection, false);
+      if (event.state?.devBackendId !== (source.backend?.id ?? source.clientId) || !event.state?.devSelection) return;
+      const index = Number.isSafeInteger(event.state.devNavigationIndex) ? event.state.devNavigationIndex : 0;
+      const mainView: WorkspaceMainView = ["chat", "automations", "skillDesign", "requirementAnalysis"].includes(event.state.devMainView) ? event.state.devMainView : "chat";
+      const next = { index, extent: navigationRef.current.extent, mainView };
+      navigationRef.current = next;
+      setNavigation(next);
+      window.history.replaceState({ ...event.state, devNavigationExtent: next.extent }, "");
+      select(event.state.devSelection as DevSelection, false);
     };
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);
@@ -227,6 +257,7 @@ export function DevProvider({ children }: { children: ReactNode }) {
     if (cause !== undefined) report(cause);
   }, [report]);
   return <DevContext.Provider value={{ view, selection, session: view && source.resolveSession(view, selection), pending,
+    mainView: navigation.mainView, setMainView, canGoBack: navigation.index > 0, canGoForward: navigation.index < navigation.extent, goBack: () => { if (navigationRef.current.index > 0) window.history.back(); }, goForward: () => { if (navigationRef.current.index < navigationRef.current.extent) window.history.forward(); },
     error, releaseId, setReleaseId, select, refresh, retryMaterial, retrySession, command, report, firstDiscussion, startProposalDraft, startFreeChat, openFreeChat,
     openFirstDiscussion, takeFirstDiscussion, finishFirstDiscussion }}>{children}
     <AlertDialog open={ownWebNotice} onOpenChange={setOwnWebNotice}>

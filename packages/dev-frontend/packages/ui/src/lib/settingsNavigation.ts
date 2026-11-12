@@ -8,8 +8,6 @@ export type SettingsSectionId =
   | "personalization"
   | "memory"
   | "skill"
-  | "skillDesign"
-  | "progressAnalysis"
   | "projects"
   | "archives"
   | "subagents"
@@ -33,8 +31,6 @@ const ENABLED_SETTINGS_SECTIONS = new Set<SettingsSectionId>([
   "modelProvider",
   "personalization",
   "skill",
-  "skillDesign",
-  "progressAnalysis",
 ]);
 
 export interface SettingsSectionIntentEventDetail {
@@ -55,8 +51,6 @@ function isSettingsSectionId(value: string): value is SettingsSectionId {
     value === "personalization" ||
     value === "memory" ||
     value === "skill" ||
-    value === "skillDesign" ||
-    value === "progressAnalysis" ||
     value === "projects" ||
     value === "archives" ||
     value === "subagents" ||

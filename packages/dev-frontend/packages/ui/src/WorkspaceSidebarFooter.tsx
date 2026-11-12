@@ -45,6 +45,7 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   className,
   menuContent,
   menuDescription,
+  menuIcon,
   menuTriggerRef,
 }: {
   theme: Theme;
@@ -55,6 +56,7 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   className?: string;
   menuContent?: ReactNode;
   menuDescription?: ReactNode;
+  menuIcon?: ReactNode;
   menuTriggerRef?: Ref<HTMLButtonElement>;
 }) {
   const { intl } = useZCodeIntl();
@@ -118,7 +120,7 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
               className={cn("min-w-0 flex-1 justify-start gap-2 overflow-hidden rounded-tl-2xl rounded-bl-2xl border-0 pl-0", menuDescription && "h-auto py-1.5")}
               aria-label={menuDescription ? "项目与 Release 菜单" : intl.formatMessage({ id: "settings.title" })}
             >
-              <Settings className="size-4" />
+              {menuIcon ?? <Settings className="size-4" />}
               <span className="flex min-w-0 flex-1 flex-col text-left">{menuDescription ?? <span className="truncate">OMP</span>}</span>
             </Button>
           </DropdownMenuTrigger>
