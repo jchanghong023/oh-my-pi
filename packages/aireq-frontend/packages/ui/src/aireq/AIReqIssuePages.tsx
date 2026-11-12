@@ -68,8 +68,12 @@ function ConnectedIssuePages({ page, scope, service }: { page: IssuePage; scope:
     finally { busy.current = false; if (active.current) setPending(false); }
   };
   return <>
-    {(error || message) && <div className="mx-auto w-full max-w-7xl px-4 pt-4 md:px-6">{error ? <div role="alert" className="flex items-center gap-3 text-destructive"><span>{error}</span><Button size="sm" variant="outline" onClick={refresh}>重新加载</Button></div> : <p role="status" className="text-foreground-subtle">{message}</p>}</div>}
     {!snapshot ? !error && <p role="status" className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6">正在加载 Issue…</p> : page === "issueCreate" ? <CreateIssue scope={scope} service={service} pending={pending} mutate={mutate} onMessage={setMessage} /> : page === "issueAnalysis" ? <IssueAnalysis scope={scope} service={service} snapshot={snapshot} pending={pending} mutate={mutate} /> : <IssueProgress scope={scope} service={service} snapshot={snapshot} pending={pending} mutate={mutate} onMessage={setMessage} />}
+    {/* 状态区始终占位，避免刷新错误或操作反馈挤动列表及其滚动区域。 */}
+    <div className="mx-auto flex h-10 w-full max-w-7xl shrink-0 items-center gap-3 px-4 md:px-6">
+      <p role={error ? "alert" : "status"} aria-live="polite" title={error || (pending ? "正在处理…" : message)} className={`min-w-0 flex-1 truncate text-ui-sm ${error ? "text-destructive" : "text-foreground-subtle"}`}>{error || (pending ? "正在处理…" : message)}</p>
+      {error && <Button size="sm" variant="outline" onClick={refresh}>重新加载</Button>}
+    </div>
   </>;
 }
 interface MutationProps { pending: boolean; mutate(action: () => Promise<void>, success: string): Promise<void> }
