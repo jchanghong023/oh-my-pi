@@ -58,6 +58,10 @@ body,
 :root {
   --shadow-composer-soft: 0 0 #0000;
   --ui-font-size: 14px;
+  --color-remote-continuity-panel: #202124;
+  --color-remote-continuity-panel-surface: #2c2d30;
+  --color-remote-continuity-panel-foreground: #f8f8f8;
+  --color-remote-continuity-panel-subtle: #a7a7ad;
 }
 
 body {
@@ -171,8 +175,12 @@ html[data-document-hidden] *::after {
   --color-background-win-alt: var(--color-neutral-200);
   --color-brand: var(--color-sky-400);
   --color-resize-handle: var(--color-sky-500);
-  --color-icon-blue: var(--color-sky-500);
-  --color-icon-purple: var(--color-fuchsia-500);
+  /* Composer 语音输入录音胶囊：按设计稿取 sky 色系十六进制值（浅色底色 Sky 100、波形 Sky 600）。
+     不引用 var(--color-sky-*)：Tailwind 4 的 sky 色板是 oklch，渲染值与设计稿有偏差（如 sky-600 为 #0084d1）。 */
+  --color-voice-input-surface: #e0f2fe;
+  --color-voice-input-wave: #0284c7;
+  --color-icon-blue: var(--color-terminal-bright-blue);
+  --color-icon-purple: var(--color-terminal-bright-magenta);
   --color-trajectory-user: #2563eb;
   --color-trajectory-assistant: #0f766e;
   --color-trajectory-reasoning: #7c3aed;
@@ -210,12 +218,49 @@ html[data-document-hidden] *::after {
   --color-input-border: var(--color-border);
   --color-input-border-hover: var(--color-border-hover);
   --color-input-border-focused: var(--color-brand);
+  --color-terminal-bg: var(--color-neutral-50);
+  --color-terminal-fg: var(--color-neutral-950);
+  --color-terminal-cursor: var(--color-neutral-950);
+  --color-terminal-cursor-accent: var(--color-neutral-50);
+  --color-terminal-selection: color-mix(in oklab, var(--color-sky-500) 32%, transparent);
+  --color-terminal-selection-inactive: color-mix(in oklab, var(--color-sky-500) 22%, transparent);
+  --color-terminal-black: var(--color-neutral-700);
+  --color-terminal-red: var(--color-red-500);
+  --color-terminal-green: var(--color-green-500);
+  --color-terminal-yellow: var(--color-yellow-500);
+  --color-terminal-blue: var(--color-sky-500);
+  --color-terminal-magenta: var(--color-fuchsia-500);
+  --color-terminal-cyan: var(--color-cyan-500);
+  --color-terminal-white: var(--color-neutral-500);
+  --color-terminal-bright-black: var(--color-neutral-500);
+  --color-terminal-bright-red: var(--color-red-500);
+  --color-terminal-bright-green: var(--color-green-500);
+  --color-terminal-bright-yellow: var(--color-yellow-500);
+  --color-terminal-bright-blue: var(--color-sky-500);
+  --color-terminal-bright-magenta: var(--color-fuchsia-500);
+  --color-terminal-bright-cyan: var(--color-cyan-500);
+  --color-terminal-bright-white: var(--color-neutral-950);
+  /* 应用用量图表使用独立色板，避免复用终端 ANSI 色造成红黄绿高饱和堆叠。 */
   --color-usage-chart-1: var(--color-sky-600);
   --color-usage-chart-2: var(--color-teal-600);
   --color-usage-chart-3: var(--color-violet-600);
   --color-usage-chart-4: var(--color-rose-500);
   --color-usage-chart-5: var(--color-indigo-500);
   --color-usage-chart-6: var(--color-cyan-600);
+  /* Context breakdown 使用接近参考 UI 的单一蓝色阶，避免小弹窗里出现高饱和彩虹色。 */
+  --color-context-breakdown-1: var(--color-sky-600);
+  --color-context-breakdown-2: var(--color-sky-500);
+  --color-context-breakdown-3: var(--color-sky-400);
+  --color-context-breakdown-4: var(--color-sky-300);
+  --color-context-breakdown-5: var(--color-sky-200);
+  --color-context-breakdown-6: var(--color-sky-100);
+  --color-context-breakdown-7: color-mix(in oklab, var(--color-sky-100) 72%, var(--color-white));
+  /* Bugfix: 热力图之前复用 brand 色，Zai 主题下 brand 是黑/白，无法保持 sky 语义。 */
+  --color-usage-heatmap-0: color-mix(in oklab, var(--color-sky-500) 0%, var(--color-surface));
+  --color-usage-heatmap-1: color-mix(in oklab, var(--color-sky-500) 18%, var(--color-surface));
+  --color-usage-heatmap-2: color-mix(in oklab, var(--color-sky-500) 36%, var(--color-surface));
+  --color-usage-heatmap-3: color-mix(in oklab, var(--color-sky-600) 58%, var(--color-surface));
+  --color-usage-heatmap-4: color-mix(in oklab, var(--color-sky-700) 82%, var(--color-surface));
   --color-tab: var(--color-neutral-100);
   --color-tab-active: var(--color-white);
   --color-tab-border: var(--color-border);
@@ -241,6 +286,8 @@ html[data-document-hidden] *::after {
   --color-foreground-inverse: var(--color-white);
   --color-success: var(--color-green-600);
   --color-success-foreground: var(--color-foreground-inverse);
+  --color-idle-task: var(--color-violet-600);
+  --color-idle-task-surface: var(--color-violet-50);
   --color-destructive: var(--color-red-600);
   --color-destructive-foreground: var(--color-foreground-inverse);
   --color-warning: var(--color-yellow-600);
@@ -268,6 +315,15 @@ html[data-document-hidden] *::after {
   --color-tooltip-tag: var(--color-neutral-200);
   --color-tooltip-tag-foreground: color-mix(in oklab, var(--color-neutral-950) 60%, transparent);
   --color-tag: var(--color-neutral-200);
+  --color-remote-ssh-surface: var(--color-sky-50);
+  --color-remote-ssh-foreground: var(--color-sky-700);
+  --color-remote-ssh-border: var(--color-sky-200);
+  --color-remote-wsl-surface: var(--color-green-50);
+  --color-remote-wsl-foreground: var(--color-green-700);
+  --color-remote-wsl-border: var(--color-green-200);
+  --color-remote-docker-surface: var(--color-violet-50);
+  --color-remote-docker-foreground: var(--color-violet-700);
+  --color-remote-docker-border: var(--color-violet-200);
   --color-file-node: color-mix(in oklab, var(--color-sky-600) 14%, transparent);
   --color-file-node-hover: color-mix(in oklab, var(--color-sky-600) 20%, transparent);
   --color-file-node-foreground: var(--color-sky-600);
@@ -286,6 +342,8 @@ html[data-document-hidden] *::after {
   --color-plugin-node: color-mix(in oklab, var(--color-amber-600) 14%, transparent);
   --color-plugin-node-hover: color-mix(in oklab, var(--color-amber-600) 20%, transparent);
   --color-plugin-node-foreground: var(--color-amber-600);
+  --color-plugin-paid-plan-badge: #ffe3c8;
+  --color-plugin-paid-plan-badge-foreground: #4b280f;
 }
 
 .dark {
@@ -296,6 +354,9 @@ html[data-document-hidden] *::after {
   --color-background-win-alt: var(--color-neutral-800);
   --color-brand: var(--color-sky-500);
   --color-resize-handle: var(--color-sky-400);
+  /* 深色主题：设计稿底色 Sky 950、波形 Sky 300 */
+  --color-voice-input-surface: #082f49;
+  --color-voice-input-wave: #7dd3fc;
   --color-trajectory-user: #60a5fa;
   --color-trajectory-assistant: #2dd4bf;
   --color-trajectory-reasoning: #a78bfa;
@@ -329,14 +390,50 @@ html[data-document-hidden] *::after {
   --color-input-border: var(--color-border);
   --color-input-border-hover: var(--color-border-hover);
   --color-input-border-focused: var(--color-brand);
-  --color-icon-blue: var(--color-sky-600);
-  --color-icon-purple: var(--color-fuchsia-600);
+  --color-terminal-bg: var(--color-neutral-950);
+  --color-terminal-fg: var(--color-neutral-50);
+  --color-terminal-cursor: var(--color-neutral-50);
+  --color-terminal-cursor-accent: var(--color-neutral-950);
+  --color-terminal-selection: color-mix(in oklab, var(--color-sky-500) 26%, transparent);
+  --color-terminal-selection-inactive: color-mix(
+    in oklab,
+    var(--color-neutral-50) 16%,
+    transparent
+  );
+  --color-terminal-black: var(--color-neutral-800);
+  --color-terminal-red: var(--color-red-600);
+  --color-terminal-green: var(--color-green-600);
+  --color-terminal-yellow: var(--color-yellow-600);
+  --color-terminal-blue: var(--color-sky-600);
+  --color-terminal-magenta: var(--color-fuchsia-600);
+  --color-terminal-cyan: var(--color-cyan-600);
+  --color-terminal-white: var(--color-neutral-200);
+  --color-terminal-bright-black: var(--color-neutral-500);
+  --color-terminal-bright-red: var(--color-red-600);
+  --color-terminal-bright-green: var(--color-green-600);
+  --color-terminal-bright-yellow: var(--color-yellow-600);
+  --color-terminal-bright-blue: var(--color-sky-600);
+  --color-terminal-bright-magenta: var(--color-fuchsia-600);
+  --color-terminal-bright-cyan: var(--color-cyan-600);
+  --color-terminal-bright-white: var(--color-neutral-50);
   --color-usage-chart-1: var(--color-sky-500);
   --color-usage-chart-2: var(--color-teal-400);
   --color-usage-chart-3: var(--color-violet-400);
   --color-usage-chart-4: var(--color-rose-400);
   --color-usage-chart-5: var(--color-indigo-400);
   --color-usage-chart-6: var(--color-cyan-400);
+  --color-context-breakdown-1: var(--color-sky-400);
+  --color-context-breakdown-2: var(--color-sky-300);
+  --color-context-breakdown-3: var(--color-sky-200);
+  --color-context-breakdown-4: color-mix(in oklab, var(--color-sky-200) 84%, var(--color-white));
+  --color-context-breakdown-5: color-mix(in oklab, var(--color-sky-200) 72%, var(--color-white));
+  --color-context-breakdown-6: color-mix(in oklab, var(--color-sky-200) 60%, var(--color-white));
+  --color-context-breakdown-7: color-mix(in oklab, var(--color-sky-200) 48%, var(--color-white));
+  --color-usage-heatmap-0: color-mix(in oklab, var(--color-sky-400) 0%, var(--color-surface));
+  --color-usage-heatmap-1: color-mix(in oklab, var(--color-sky-400) 24%, var(--color-surface));
+  --color-usage-heatmap-2: color-mix(in oklab, var(--color-sky-400) 42%, var(--color-surface));
+  --color-usage-heatmap-3: color-mix(in oklab, var(--color-sky-400) 62%, var(--color-surface));
+  --color-usage-heatmap-4: color-mix(in oklab, var(--color-sky-300) 78%, var(--color-surface));
   --color-tab: var(--color-neutral-800);
   --color-tab-active: var(--color-neutral-950);
   --color-tab-border: var(--color-border);
@@ -366,6 +463,8 @@ html[data-document-hidden] *::after {
   --color-foreground-inverse: var(--color-white);
   --color-success: var(--color-green-500);
   --color-success-foreground: var(--color-foreground-inverse);
+  --color-idle-task: var(--color-violet-400);
+  --color-idle-task-surface: color-mix(in oklab, var(--color-violet-950) 50%, transparent);
   --color-destructive: var(--color-red-500);
   --color-destructive-foreground: var(--color-foreground-inverse);
   --color-warning: var(--color-yellow-500);
@@ -393,6 +492,15 @@ html[data-document-hidden] *::after {
   --color-tooltip-tag: var(--color-neutral-800);
   --color-tooltip-tag-foreground: color-mix(in oklab, var(--color-neutral-50) 60%, transparent);
   --color-tag: var(--color-neutral-700);
+  --color-remote-ssh-surface: color-mix(in oklab, var(--color-sky-500) 18%, transparent);
+  --color-remote-ssh-foreground: var(--color-sky-300);
+  --color-remote-ssh-border: var(--color-sky-700);
+  --color-remote-wsl-surface: color-mix(in oklab, var(--color-green-500) 18%, transparent);
+  --color-remote-wsl-foreground: var(--color-green-300);
+  --color-remote-wsl-border: var(--color-green-700);
+  --color-remote-docker-surface: color-mix(in oklab, var(--color-violet-500) 18%, transparent);
+  --color-remote-docker-foreground: var(--color-violet-300);
+  --color-remote-docker-border: var(--color-violet-700);
   --color-file-node: color-mix(in oklab, var(--color-sky-400) 18%, transparent);
   --color-file-node-hover: color-mix(in oklab, var(--color-sky-400) 24%, transparent);
   --color-file-node-foreground: var(--color-sky-300);
@@ -411,6 +519,8 @@ html[data-document-hidden] *::after {
   --color-plugin-node: color-mix(in oklab, var(--color-amber-400) 18%, transparent);
   --color-plugin-node-hover: color-mix(in oklab, var(--color-amber-400) 24%, transparent);
   --color-plugin-node-foreground: var(--color-amber-300);
+  --color-plugin-paid-plan-badge: #5a341b;
+  --color-plugin-paid-plan-badge-foreground: #ffd8b8;
 }
 
 .theme-zai-light {
@@ -454,8 +564,28 @@ html[data-document-hidden] *::after {
   --color-input-border: var(--color-border);
   --color-input-border-hover: var(--color-border-hover);
   --color-input-border-focused: var(--color-border-hover);
-  --color-icon-blue: #0066dd;
-  --color-icon-purple: #9e77ed;
+  --color-terminal-bg: var(--color-background);
+  --color-terminal-fg: var(--color-foreground);
+  --color-terminal-cursor: #0d0d0d;
+  --color-terminal-cursor-accent: var(--color-background);
+  --color-terminal-selection: rgba(11, 127, 255, 0.22);
+  --color-terminal-selection-inactive: rgba(13, 13, 13, 0.1);
+  --color-terminal-black: #5c5c5c;
+  --color-terminal-red: #e03131;
+  --color-terminal-green: #1e8a3e;
+  --color-terminal-yellow: #e07b00;
+  --color-terminal-blue: #0b7fff;
+  --color-terminal-magenta: #9e77ed;
+  --color-terminal-cyan: #0aa7a7;
+  --color-terminal-white: #adadad;
+  --color-terminal-bright-black: #888888;
+  --color-terminal-bright-red: #e03131;
+  --color-terminal-bright-green: #1e8a3e;
+  --color-terminal-bright-yellow: #e07b00;
+  --color-terminal-bright-blue: #0066dd;
+  --color-terminal-bright-magenta: #9e77ed;
+  --color-terminal-bright-cyan: #0aa7a7;
+  --color-terminal-bright-white: #0d0d0d;
   --color-usage-chart-1: #0b7fff;
   --color-usage-chart-2: #1e8a3e;
   --color-usage-chart-3: #9e77ed;
@@ -499,6 +629,8 @@ html[data-document-hidden] *::after {
   --color-foreground-inverse: #ffffff;
   --color-success: #1e8a3e;
   --color-success-foreground: #ffffff;
+  --color-idle-task: #9e77ed;
+  --color-idle-task-surface: #f5f3ff;
   --color-destructive: #e03131;
   --color-destructive-foreground: #ffffff;
   --color-warning: #e07b00;
@@ -526,6 +658,15 @@ html[data-document-hidden] *::after {
   --color-tooltip-tag: #e6e6e6;
   --color-tooltip-tag-foreground: #5c5c5c;
   --color-tag: #e6e6e6;
+  --color-remote-ssh-surface: #ebf4ff;
+  --color-remote-ssh-foreground: #0867ce;
+  --color-remote-ssh-border: #bad9ff;
+  --color-remote-wsl-surface: #eaf7ee;
+  --color-remote-wsl-foreground: #166b32;
+  --color-remote-wsl-border: #b7e0c2;
+  --color-remote-docker-surface: #f2efff;
+  --color-remote-docker-foreground: #6047b4;
+  --color-remote-docker-border: #d4caff;
   --color-file-node: rgba(26, 112, 184, 0.1);
   --color-file-node-hover: rgba(26, 112, 184, 0.16);
   --color-file-node-foreground: #1a70b8;
@@ -544,6 +685,8 @@ html[data-document-hidden] *::after {
   --color-plugin-node: rgba(184, 122, 26, 0.1);
   --color-plugin-node-hover: rgba(184, 122, 26, 0.16);
   --color-plugin-node-foreground: #b87a1a;
+  --color-plugin-paid-plan-badge: #ffe3c8;
+  --color-plugin-paid-plan-badge-foreground: #4b280f;
 }
 
 .theme-zai-dark {
@@ -586,8 +729,28 @@ html[data-document-hidden] *::after {
   --color-input-border: var(--color-border);
   --color-input-border-hover: var(--color-border-hover);
   --color-input-border-focused: var(--color-border-hover);
-  --color-icon-blue: #80beff;
-  --color-icon-purple: #a888f2;
+  --color-terminal-bg: var(--color-background);
+  --color-terminal-fg: var(--color-foreground);
+  --color-terminal-cursor: #f8f8f8;
+  --color-terminal-cursor-accent: #161616;
+  --color-terminal-selection: rgba(64, 153, 255, 0.28);
+  --color-terminal-selection-inactive: rgba(255, 255, 255, 0.1);
+  --color-terminal-black: #363636;
+  --color-terminal-red: #ff5c5c;
+  --color-terminal-green: #46bf72;
+  --color-terminal-yellow: #ff8a30;
+  --color-terminal-blue: #4099ff;
+  --color-terminal-magenta: #7b5ce5;
+  --color-terminal-cyan: #42c8c8;
+  --color-terminal-white: #adadad;
+  --color-terminal-bright-black: #747474;
+  --color-terminal-bright-red: #ff9999;
+  --color-terminal-bright-green: #87d9a4;
+  --color-terminal-bright-yellow: #ffb26b;
+  --color-terminal-bright-blue: #80beff;
+  --color-terminal-bright-magenta: #a888f2;
+  --color-terminal-bright-cyan: #8ee5e5;
+  --color-terminal-bright-white: #f8f8f8;
   --color-usage-chart-1: #4099ff;
   --color-usage-chart-2: #46bf72;
   --color-usage-chart-3: #7b5ce5;
@@ -631,6 +794,8 @@ html[data-document-hidden] *::after {
   --color-foreground-inverse: #000000;
   --color-success: #46bf72;
   --color-success-foreground: #000000;
+  --color-idle-task: #7b5ce5;
+  --color-idle-task-surface: #160d38;
   --color-destructive: #ff5c5c;
   /* 修复原因：Zai Dark 曾把 destructive 前景设为黑色，与红色危险按钮的固定白字设计冲突。 */
   --color-destructive-foreground: #ffffff;
@@ -659,6 +824,15 @@ html[data-document-hidden] *::after {
   --color-tooltip-tag: #363636;
   --color-tooltip-tag-foreground: #adadad;
   --color-tag: #363636;
+  --color-remote-ssh-surface: rgba(64, 153, 255, 0.16);
+  --color-remote-ssh-foreground: #8fc0ff;
+  --color-remote-ssh-border: rgba(64, 153, 255, 0.42);
+  --color-remote-wsl-surface: rgba(70, 191, 114, 0.16);
+  --color-remote-wsl-foreground: #87d9a4;
+  --color-remote-wsl-border: rgba(70, 191, 114, 0.42);
+  --color-remote-docker-surface: rgba(159, 132, 255, 0.16);
+  --color-remote-docker-foreground: #bfaaff;
+  --color-remote-docker-border: rgba(159, 132, 255, 0.42);
   --color-file-node: rgba(112, 174, 224, 0.16);
   --color-file-node-hover: rgba(112, 174, 224, 0.22);
   --color-file-node-foreground: #8fc5ef;
@@ -677,6 +851,8 @@ html[data-document-hidden] *::after {
   --color-plugin-node: rgba(224, 174, 112, 0.16);
   --color-plugin-node-hover: rgba(224, 174, 112, 0.22);
   --color-plugin-node-foreground: #efc58f;
+  --color-plugin-paid-plan-badge: #5a341b;
+  --color-plugin-paid-plan-badge-foreground: #ffd8b8;
 }
 
 /*

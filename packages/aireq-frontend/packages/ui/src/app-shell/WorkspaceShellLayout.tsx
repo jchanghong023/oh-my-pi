@@ -1,3 +1,4 @@
+import { DesktopWindowFrame } from "@/DesktopWindowFrame.js";
 import { AIReqIssuePages } from "@/aireq/AIReqIssuePages.js";
 import { WorkspaceSidebarToolbar } from "@/WorkspaceSidebarToolbar.js";
 import { AIReqFormalWorkspace } from "@/aireq/AIReqFormalProgress.js";
@@ -2367,5 +2368,5 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       </div>
     </SavedWorkflowHubProvider>
   );
-  return renderResponsiveShell(wideContent);
+  return <DesktopWindowFrame title="AIReq">{renderResponsiveShell(wideContent)}</DesktopWindowFrame>;
 });

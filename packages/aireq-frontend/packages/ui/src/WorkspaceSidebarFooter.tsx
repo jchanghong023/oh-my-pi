@@ -122,7 +122,7 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
               aria-label={menuDescription ? "项目与 Release 菜单" : intl.formatMessage({ id: "settings.title" })}
             >
               {menuIcon ?? <DefaultAvatar />}
-              <span className="flex min-w-0 flex-1 flex-col text-left">{menuDescription ?? <span className="truncate">OMP</span>}</span>
+              <span className="flex min-w-0 flex-1 flex-col text-left">{menuDescription ?? <span className="min-w-0 truncate text-ui-base font-semibold text-foreground">OMP</span>}</span>
             </Button>
           </DropdownMenuTrigger>
           {/* Bugfix: 菜单内容保持挂载，避免每次点击头像菜单都重建 footer 内部状态。 */}

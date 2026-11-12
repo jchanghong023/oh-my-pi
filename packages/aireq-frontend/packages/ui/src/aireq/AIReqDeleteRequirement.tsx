@@ -30,7 +30,7 @@ export function AIReqDeleteRequirement({ renderTrigger }: { renderTrigger?: (ope
           <AlertDialogTitle>移除需求“{group.title}”？</AlertDialogTitle>
           <AlertDialogDescription>{source.provenance.kind === "sample" ? "从后端内存样例中移除需求；刷新页面保留，后端重启后恢复原始样例。" : "将向 OMP 提交当前需求的删除操作。历史记录及相关文件的处理以服务端结果为准。"}</AlertDialogDescription>
         </AlertDialogHeader>
-        {aireq.error && <p role="alert" className="text-sm text-destructive">{aireq.error}</p>}
+        {aireq.error && <p role="alert" className="text-ui-sm text-destructive">{aireq.error}</p>}
         <AlertDialogFooter>
           <AlertDialogCancel data-testid="delete-requirement-cancel">取消</AlertDialogCancel>
           <AlertDialogAction variant="destructive" data-testid="delete-requirement-confirm" onClick={event => { event.preventDefault(); void remove(); }}>{source.provenance.kind === "sample" ? "移除本地样例" : "确认删除"}</AlertDialogAction>

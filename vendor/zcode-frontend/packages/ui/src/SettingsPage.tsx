@@ -1,3 +1,4 @@
+import { DesktopWindowFrame } from "@/DesktopWindowFrame.js";
 import { ZCodeStartupLogoBadge } from "@/root/RootStartupLoading.js";
 /* oxlint-disable eslint(max-lines) */
 import { ArrowLeft, type LucideIcon } from "lucide-react";
@@ -500,7 +501,7 @@ export function SettingsPage({
   const showActiveSectionTitle = !hasVisibleSettingsBreadcrumb;
 
   return (
-    <>
+    <DesktopWindowFrame title={intl.formatMessage({ id: "settings.title" })}>
         <div
           data-testid={TID_SETTINGS_PAGE}
           data-active-section={activeSection}
@@ -855,6 +856,6 @@ export function SettingsPage({
             </div>
           </section>
         </div>
-    </>
+    </DesktopWindowFrame>
   );
 }

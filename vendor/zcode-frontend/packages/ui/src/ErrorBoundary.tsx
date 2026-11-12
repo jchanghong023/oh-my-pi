@@ -1,3 +1,4 @@
+import { DesktopWindowFrame } from "@/DesktopWindowFrame.js";
 import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import zhCN from "@/i18n/locales/zh-CN.js";
@@ -81,7 +82,8 @@ function ErrorFallback({
   const errorSummary = error.message.trim() || formatBoundaryMessage("appError.unknown");
 
   return (
-    <main className="flex h-dvh min-h-0 justify-center overflow-y-auto bg-background p-6 text-foreground">
+    <DesktopWindowFrame title={formatBoundaryMessage("appError.title")}>
+      <div className="flex h-full min-h-0 justify-center overflow-y-auto p-6">
         <div
           role="alert"
           // 错误信息和组件堆栈可能非常长，之前外层不可滚动会把内容挤出视口，
@@ -131,7 +133,8 @@ function ErrorFallback({
             </details>
           ) : null}
         </div>
-    </main>
+      </div>
+    </DesktopWindowFrame>
   );
 }
 

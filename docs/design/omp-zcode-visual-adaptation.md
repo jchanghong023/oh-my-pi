@@ -72,6 +72,11 @@ Skill 设计是主页工作能力，侧栏位于“自动化”下方，采用�
 
 “新建需求提案”入口沿用 ZCode 新建任务的 MessageCirclePlus（对话气泡加号）图标和原生 ghost／lg 导航按钮，左对齐、常规字重，悬停及键盘焦点使用原生主题反馈；名称、草稿创建及权限行为不变。
 
+
+## 当前统一约束：直接沿用 ZCode 的 UI 系统
+
+WebGUI 以固定官方源码界面为准，只保留必要的 OMP 平台、宿主与权限适配，不再设计另一套视觉。AIReq 复用的已有页面与控件同样沿用官方；AIReq 自有业务页面可以有需求管理所需的内容与交互，但外壳、布局组织、面板层次、居中与留白、字体字阶、颜色、图标及基础控件均采用 ZCode 的既有规则和组件。可用原生组件时不手工仿制，不自行定义替代色板、基础控件或主题。业务内容不同不构成重做基础视觉的理由，平台适配也不应删掉 Web 共用外壳。
+
 ## 侧栏导航恢复与源码对照
 
 AIReq 和 WebGUI 浏览器侧栏均提供 ZCode 顶栏的侧栏切换、后退和前进，采用 PanelLeftClose／PanelLeftOpen、ArrowLeft／ArrowRight、原生 ghost／icon-md Button、Tooltip 与主题反馈。展开时在侧栏顶部原 48px 标题区域显示，收起时进入内容区独立占位，不以绝对定位遮住标题或叠加重复按钮；没有历史的方向明确禁用。AIReq 正式需求在其原有标题栏复用同一按钮组，切换操作使用实际侧栏显隐状态。浏览器不伪造 macOS 窗口控制，不引入 Electron 依赖。
@@ -210,3 +215,21 @@ Chromium151深色桌面实际核对Issue分析、Issue进度、新建Issue、需
 用户Firefox堆栈指向AnimatedSidePanePanel，错误为item不存在时访问id。入口生成器仍返回dev-materials，但入口定义及标签模型已改aireq-materials，产生undefined项；同时标签标题与图标判断也残留旧标识。统一三处共享前端文件中的标识为aireq-materials，不以过滤空项隐藏入口或改变业务权限。
 
 Chromium151深色桌面实际打开新建提案，点击右侧新增标签进入入口页，“只读材料”入口正确显示并可打开；浏览器pageerror为0，未出现区域错误边界，已查看入口截图。旧标识在AIReq前端源码中检索为0；宿主类型检查5903文件通过（不等同整个UI项目类型验收）。未运行测试套件，未在用户Windows／Firefox环境复测。
+
+## 恢复官方 Web 外壳背景（纠正平台差异判断）
+
+用户实测官方远程控制地址在电脑浏览器与App一致。进一步核对官方3.18.0精确提交b95ebaffeab641907b38652f45c1502bd762972d，发现DesktopWindowFrame不仅是桌面宿主：官方Web／Windows／Linux均使用bg-background-win-alt（Zai Dark为#2b2b2b），内部内容面板使用bg-background（#161616）。原AIReq裁剪掉主界面与设置页外壳，又在自有导航强加bg-sidebar（#161616），才抹平侧栏与正文层次；不能用“浏览器没有磨砂”解释这一差异。
+
+本轮逐字节恢复该官方DesktopWindowFrame.tsx（cmp一致），在AIReq工作区及设置页复用其默认Web分支，删除AIReqSidebar覆盖背景的bg-sidebar。保留既有宽度、留白、圆角、导航及业务逻辑；不启用原生窗口、不假装Electron、不添加新色值或纹理，不修改WebGUI。文档根的浏览器不透明底色仍保留，实际工作页由官方外壳提供层次。
+
+Chromium151、1440×1000深色桌面实际截图并查看主页及设置页；计算样式确认两处外壳均为rgb(43,43,43)，正文仍为主题深色。宿主5903文件类型检查与补丁空白检查通过；未运行测试套件，不代表全部UI类型、Firefox或发行产物验收。截图保存在/workspace/work/sidebar-audit/restored-main.png及restored-settings.png。
+
+## 两套前端同步核对主题与基础控件
+
+本轮延续上述外壳修复，将逐字节相同的官方DesktopWindowFrame同步到WebGUI主页和设置页；两套全页错误恢复壳也恢复官方外壳，区域错误边界保留原行为。两套styles.css的首个:root、@theme、.dark、.theme-zai-light、.theme-zai-dark五块均恢复固定官方原文，补齐此前裁掉的语音、空闲任务、上下文、终端引用链等变量，消除用直接值替代官方引用的覆写。这里只恢复视觉token，不恢复任何已裁剪产品能力。
+
+对照官方50个基础组件文件（49个components/ui路径及MarkdownTable），每套本地48个UI文件中44个逐字节一致；4个差异为Worker、依赖及布局持久化适配，MarkdownTable另保留HTTP剪贴板、只读导出权限和预览尺寸行为。恢复两套Spinner和PPTX预览原生LoaderCircle图标，未另做基础组件。官方已退休Highspeed装饰的floating-particles不恢复。两份AssistantPreviewCards恢复原有独立bg-hover悬停层，修复后与官方原文相同；AIReq侧栏OMP名称恢复官方字重，删除需求弹窗改用官方text-ui-sm，预测候选及取消改用现有Button并保留原插入和焦点逻辑。
+
+共享组件另下载比对241份官方TSX，自有AIReq实际UI未发现额外硬编码色；mock演示源码中的色值、官方原有代码／图形专用尺寸不当作主题缺陷。WebGUI的useTheme与官方相同，AIReq只保留安全存储适配；浏览器根背景仍使用官方语义token。HTTP、Worker、权限、业务裁剪和个人配置语义不因视觉对齐改变。核对记录位于/workspace/work/primitive-audit/report.md、/workspace/work/zcode-platform-review/theme-token-audit.json及/workspace/work/shared-shell-audit/，不把这些源码核对称作全部界面逐像素验收。
+
+整合后两套前端生产构建通过（仅生成被忽略产物，未启动WebGUI），保留原有Office动态分包提示；宿主5903文件类型检查通过。AIReq在Chromium151、1440×1000深色桌面重新截图查看主页及设置页，外壳计算背景均为rgb(43,43,43)，正文面板继续使用官方背景；未运行测试套件，未核验Firefox、WebGUI运行画面或完整发行二进制。

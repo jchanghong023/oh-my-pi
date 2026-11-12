@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AIReqNativePredictionAction, AIReqNativePredictionSnapshot, AIReqNativeSurfaceTarget } from "./types.js";
 import { nativeSurfaceKey, sameNativeSurfaceTarget } from "./AIReqNativeSurface.js";
@@ -62,11 +63,11 @@ export function AIReqNativePredictions({ target, prediction, draft, disabled, on
     className="space-y-1 px-3 text-ui-sm empty:hidden">
     {visible ? <>
       <p className="text-foreground-subtle">Tab / → 插入，不发送 · ↑ / ↓ 选择 · Esc 取消</p>
-      {prediction?.choices.map((choice, index) => <button key={index} type="button"
+      {prediction?.choices.map((choice, index) => <Button key={index} type="button" variant="outline"
         data-testid="aireq-native-prediction" data-rank={index} aria-pressed={rank === index}
-        className="block w-full rounded-lg border border-card-border px-3 py-2 text-left hover:bg-hover aria-pressed:bg-selected"
-        onMouseDown={event => event.preventDefault()} onClick={() => void accept(index)}>{choice}</button>)}
-      <button type="button" data-testid="aireq-native-prediction-cancel" className="text-foreground-subtle" onClick={dismiss}>取消预测</button>
+        className="h-auto w-full justify-start whitespace-normal px-3 py-2 text-left font-normal aria-pressed:bg-selected"
+        onMouseDown={event => event.preventDefault()} onClick={() => void accept(index)}>{choice}</Button>)}
+      <Button type="button" variant="ghost" size="sm" data-testid="aireq-native-prediction-cancel" className="text-foreground-subtle" onClick={dismiss}>取消预测</Button>
     </> : null}
   </div>;
 }

@@ -49,7 +49,7 @@ function AIReqSidebarContent({ onOpenIssue, issuePage, onNavigate, onOpenAutomat
 
 	const manageProjects = () => { setPendingSettingsSectionIntent("general"); openSettings(); };
 	return (
-		<nav data-testid="aireq-workflow-root" aria-label="AIReq 工作台导航" className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar text-ui-base">
+		<nav data-testid="aireq-workflow-root" aria-label="AIReq 工作台导航" className="flex h-full min-h-0 flex-col overflow-hidden text-ui-base">
 			<WorkspaceSidebarToolbar {...toolbar} />
 			<div className="flex shrink-0 flex-col gap-1 px-2 py-3">
 				{source.capabilities.workflowCommands.includes("createProposal") && <Button variant="ghost" size="lg" className="w-full justify-start gap-2 text-ui-base font-normal" disabled={pending || !project || !releaseId} data-testid="new-requirement" onClick={() => { aireq.startProposalDraft(); onNavigate?.(); }}><MessageCirclePlus aria-hidden="true" className="size-4" /><span>新建需求提案</span></Button>}

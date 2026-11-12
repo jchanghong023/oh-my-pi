@@ -1,3 +1,4 @@
+import { DesktopWindowFrame } from "@/DesktopWindowFrame.js";
 import { WorkspaceSidebarToolbar } from "@/WorkspaceSidebarToolbar.js";
 import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
 import { useWorkbenchGroupStore } from "@/v4/workbenchGroupStore.js";
@@ -2305,5 +2306,5 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       </div>
     </SavedWorkflowHubProvider>
   );
-  return renderResponsiveShell(wideContent);
+  return <DesktopWindowFrame title="OMP">{renderResponsiveShell(wideContent)}</DesktopWindowFrame>;
 });
