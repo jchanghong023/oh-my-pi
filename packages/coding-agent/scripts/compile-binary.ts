@@ -1,5 +1,6 @@
 // Deep import: the pi-utils barrel loads the host native addon, which is
 // absent on cross-compiling release runners.
+import * as path from "node:path";
 import { USER_AGENT } from "@oh-my-pi/pi-utils/dirs";
 import { embeddedAddonFiles, type EmbedOptions } from "../../natives/scripts/embed-native";
 import {
@@ -8,16 +9,20 @@ import {
 } from "./developer-test-agent-resources";
 import {
 	buildAIReqWorkbenchAssets,
-	createAIReqWorkbenchAssetsPlugin,
+	resetAIReqWorkbenchAssets,
 	writeAIReqWorkbenchAssets,
 } from "./aireq-workbench-resources";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
-import { buildOpenWikiResources, createOpenWikiVisualArchivePlugin } from "./openwiki-resources";
+import { buildOpenWikiResources, resetOpenWikiResources, writeOpenWikiResources } from "./openwiki-resources";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
-import { prepareWebGuiResources } from "../../../scripts/generate-webgui-resources";
+import {
+	prepareWebGuiResources,
+	resetWebGuiResources,
+	writeWebGuiResources,
+} from "../../../scripts/generate-webgui-resources";
 import { withChargedActivity, withCompilerActivity } from "../../../scripts/test-gate-events";
 
 /**
@@ -70,9 +75,11 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 	}
 	try {
 		const webGuiResources = await prepareWebGuiResources(options.repoRoot);
-		const openWikiResources = await buildOpenWikiResources();
+		await writeWebGuiResources(path.resolve(import.meta.dir, "../src/webgui"), webGuiResources);
 		const workbenchAssets = await buildAIReqWorkbenchAssets();
 		await writeAIReqWorkbenchAssets(workbenchAssets);
+		const openWikiResources = await buildOpenWikiResources();
+		await writeOpenWikiResources(openWikiResources);
 		const buildOptions: Bun.BuildConfig = {
 			entrypoints: [options.entrypoint],
 			root: options.repoRoot,
@@ -80,9 +87,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			files: options.native ? await embeddedAddonFiles(options.native) : {},
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
-				"process.env.PI_OPENWIKI_SKILLS": JSON.stringify(JSON.stringify(openWikiResources.skills)),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
-				"process.env.PI_WEBGUI_EMBED": JSON.stringify(webGuiResources.embedded),
 				...(options.buildVersion ? { "process.env.PI_BUILD_VERSION": JSON.stringify(options.buildVersion) } : {}),
 				...(options.updateRepository
 					? { "process.env.PI_UPDATE_REPOSITORY": JSON.stringify(options.updateRepository) }
@@ -102,12 +107,10 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			},
 			plugins: [
 				createJsonParsePlugin(),
-				createOpenWikiVisualArchivePlugin(openWikiResources.visual),
 				createDeveloperTestAgentArchivePlugin(await buildDeveloperTestAgentResources()),
 				createOpenWikiVendorLoaderPlugin(),
 				await createLegacyPiVirtualModulePlugin(),
 				createSpecDrivenArchivePlugin(await buildSpecDrivenArchive()),
-				createAIReqWorkbenchAssetsPlugin(workbenchAssets),
 			],
 			compile: {
 				// Bun's process-wide fetch User-Agent default. Any explicit
@@ -139,6 +142,9 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			throw new Error(`Coding-agent binary bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
 		}
 	} finally {
+		await resetAIReqWorkbenchAssets();
+		await resetOpenWikiResources();
+		await resetWebGuiResources(path.resolve(import.meta.dir, "../src/webgui"));
 		if (previousCodesignSetting === undefined) {
 			delete Bun.env.BUN_NO_CODESIGN_MACHO_BINARY;
 		} else {

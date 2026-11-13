@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The embedded dashboard bundle now uses the shared archive helper; the served bytes and lazy loading behavior are unchanged.
+
 ## [18.18.9] - 2026-11-11
 
 ### Added

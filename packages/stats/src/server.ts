@@ -1,7 +1,13 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import {
+	decodeEmbeddedArchive,
+	extractEmbeddedArchive,
+	hasEmbeddedArchive,
+	isEnoent,
+	logger,
+} from "@oh-my-pi/pi-utils";
 import { $, type Server } from "bun";
 import {
 	getCostDashboardStats,
@@ -18,7 +24,6 @@ import {
 	getToolDashboardStats,
 } from "./aggregator";
 import { initDb } from "./db";
-import { decodeEmbeddedClientArchive, hasEmbeddedClientArchive } from "./embedded-client";
 import embeddedClientArchiveTxt from "./embedded-client.generated.txt";
 import {
 	cancelFrustrationRun,
@@ -65,14 +70,14 @@ const IS_BUN_COMPILED =
 const IS_PREBUILT = IS_BUN_COMPILED || Boolean(process.env.PI_BUNDLED || Bun.env.PI_BUNDLED);
 // Sniff the base64 gzip magic instead of decoding: importing this module (every
 // TUI start) must not pay for a multi-megabyte archive nobody may serve.
-const USE_EMBEDDED_CLIENT = hasEmbeddedClientArchive(embeddedClientArchiveTxt) || IS_PREBUILT;
+const USE_EMBEDDED_CLIENT = hasEmbeddedArchive(embeddedClientArchiveTxt) || IS_PREBUILT;
 
-let embeddedClientFilesPromise: Promise<Map<string, Blob>> | null = null;
+let embeddedClientFilesPromise: Promise<Map<string, File>> | null = null;
 
-async function getEmbeddedClientFiles(): Promise<Map<string, Blob>> {
+async function getEmbeddedClientFiles(): Promise<Map<string, File>> {
 	if (embeddedClientFilesPromise) return embeddedClientFilesPromise;
 
-	const archive = decodeEmbeddedClientArchive(embeddedClientArchiveTxt);
+	const archive = decodeEmbeddedArchive(embeddedClientArchiveTxt);
 	if (!archive) {
 		throw new Error(
 			"Embedded stats client bundle missing. Rebuild the omp binary or npm bundle with embedded stats assets.",
@@ -80,13 +85,7 @@ async function getEmbeddedClientFiles(): Promise<Map<string, Blob>> {
 	}
 
 	// Keep bundled assets in memory so OS temporary-file cleanup cannot break a live dashboard.
-	embeddedClientFilesPromise = new Bun.Archive(archive).files().then(files => {
-		for (const [name, file] of files) {
-			// Archive entries are untyped blobs; infer MIME types just as disk-backed Bun files do.
-			files.set(name, new File([file], name, { type: Bun.file(name).type }));
-		}
-		return files;
-	});
+	embeddedClientFilesPromise = extractEmbeddedArchive(archive);
 
 	return embeddedClientFilesPromise;
 }

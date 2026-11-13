@@ -3,24 +3,24 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildEmbeddedArchive } from "@oh-my-pi/pi-utils/embedded-archive";
 import { parse } from "acorn";
 import type { FunctionPluginHooks, OutputBundle } from "rolldown";
 import { build, loadConfigFromFile, type Plugin } from "vite";
 import { resolvePdfJsCMapsDirectory } from "../../aireq-frontend/packages/ui/vite/pdfJsCMapsPlugin";
 import { withCompilerActivity } from "../../../scripts/test-gate-events";
-import {
-	decodeAIReqWorkbenchAssets,
-	aiReqWorkbenchAssetDigest,
-	type AIReqAssetManifest,
-	type AIReqAssetPayload,
-	type AIReqWorkbenchAsset,
-} from "../src/aireq-workbench/assets";
+import type { AIReqWorkbenchAsset } from "../src/aireq-workbench/assets";
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 const frontendDir = path.join(repoRoot, "packages/aireq-frontend");
 const agentDir = path.join(repoRoot, "packages/coding-agent");
-const generatedPath = path.join(agentDir, "src/aireq-workbench/assets.generated.json");
-const manifests = new WeakMap<ReadonlyMap<string, AIReqWorkbenchAsset>, AIReqAssetManifest>();
+const generatedPath = path.join(agentDir, "src/aireq-workbench/assets.generated.txt");
+const archiveMetaEntry = "__omp_meta__.json";
+/** Build output shared by the generator, npm bundling and standalone compilation. */
+export interface AIReqWorkbenchBuildResult {
+	assets: ReadonlyMap<string, AIReqWorkbenchAsset>;
+	sourceDigest: string;
+}
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 function contentType(file: string): string {
@@ -323,7 +323,7 @@ export async function aiReqWorkbenchSourceDigest(inputs: ReadonlyMap<string, Uin
 }
 
 /** Build the complete copied Vite/React/Tailwind frontend, including module workers. */
-export async function buildAIReqWorkbenchAssets(): Promise<ReadonlyMap<string, AIReqWorkbenchAsset>> {
+export async function buildAIReqWorkbenchAssets(): Promise<AIReqWorkbenchBuildResult> {
 	const inputs = new Map<string, Uint8Array>();
 	await collectBuildDeclarations(inputs);
 	await collectBuildTools(inputs);
@@ -447,66 +447,48 @@ export async function buildAIReqWorkbenchAssets(): Promise<ReadonlyMap<string, A
 		if (!assets.has(`/${imported}`)) throw new Error(`Unbundled AIReq UI dependency: ${imported}`);
 	}
 	assertResourceClosure(assets);
-	const files = [...assets]
-		.sort(([a], [b]) => compare(a, b))
-		.map(([name, asset]) => ({
-			path: name,
-			contentType: asset.contentType,
-			version: Bun.SHA256.hash(asset.bytes, "hex"),
-		}));
-	const manifest: AIReqAssetManifest = {
-		digest: aiReqWorkbenchAssetDigest(files),
-		sourceDigest: await aiReqWorkbenchSourceDigest(inputs),
+	return { assets, sourceDigest: await aiReqWorkbenchSourceDigest(inputs) };
+}
+
+/** Archive entry names drop the leading slash; the metadata keeps the served paths. */
+function archiveEntries(result: AIReqWorkbenchBuildResult): Map<string, Uint8Array> {
+	const entries = new Map<string, Uint8Array>();
+	const files = [...result.assets.keys()].sort(compare).map(assetPath => {
+		const asset = result.assets.get(assetPath)!;
+		entries.set(assetPath.slice(1), asset.bytes);
+		return { path: assetPath, contentType: asset.contentType };
+	});
+	const meta: { sourceDigest: string; files: { path: string; contentType: string }[] } = {
+		sourceDigest: result.sourceDigest,
 		files,
 	};
-	manifests.set(assets, manifest);
-	decodeAIReqWorkbenchAssets(payload(assets));
-	return assets;
+	entries.set(archiveMetaEntry, new TextEncoder().encode(JSON.stringify(meta)));
+	return entries;
 }
 
-function payload(assets: ReadonlyMap<string, AIReqWorkbenchAsset>): AIReqAssetPayload {
-	const manifest = manifests.get(assets);
-	if (!manifest)
-		throw new Error("Workbench assets must come from buildAIReqWorkbenchAssets() to retain build provenance");
-	return {
-		schemaVersion: 1,
-		manifest,
-		files: manifest.files.map(file => ({
-			path: file.path,
-			contentType: file.contentType,
-			base64: Buffer.from(assets.get(file.path)!.bytes).toString("base64"),
-		})),
-	};
-}
-
-/** Atomically publish source/SDK resources from the very same generated payload. */
-export async function writeAIReqWorkbenchAssets(assets: ReadonlyMap<string, AIReqWorkbenchAsset>): Promise<void> {
+/** Atomically publish the single embedded archive consumed by every runtime. */
+export async function writeAIReqWorkbenchAssets(result: AIReqWorkbenchBuildResult): Promise<void> {
+	const text = await buildEmbeddedArchive(archiveEntries(result));
 	const temporary = `${generatedPath}.${crypto.randomUUID()}.tmp`;
 	await fs.mkdir(path.dirname(generatedPath), { recursive: true });
 	try {
-		await fs.writeFile(temporary, `${JSON.stringify(payload(assets))}\n`, { flag: "wx" });
+		await fs.writeFile(temporary, text, { flag: "wx" });
 		await fs.rename(temporary, generatedPath);
 	} finally {
 		await fs.rm(temporary, { force: true });
 	}
 }
 
-/** npm and standalone binaries embed this exact payload, with no file-system fallback. */
-export function createAIReqWorkbenchAssetsPlugin(assets: ReadonlyMap<string, AIReqWorkbenchAsset>): Bun.BunPlugin {
-	const serialized = JSON.stringify(payload(assets));
-	return {
-		name: "omp-aireq-workbench-assets",
-		target: "bun",
-		setup(build) {
-			build.config.define = { ...build.config.define, OMP_AIREQ_WORKBENCH_ASSETS: JSON.stringify(serialized) };
-		},
-	};
+/** Restore the checked-in placeholder so generated bytes are never committed. */
+export async function resetAIReqWorkbenchAssets(): Promise<void> {
+	await fs.mkdir(path.dirname(generatedPath), { recursive: true });
+	await Bun.write(generatedPath, "");
 }
 
 if (import.meta.main) {
 	if (process.argv.length !== 3 || process.argv[2] !== "--write")
 		throw new Error("Usage: bun packages/coding-agent/scripts/aireq-workbench-resources.ts --write");
-	const assets = await buildAIReqWorkbenchAssets();
-	await writeAIReqWorkbenchAssets(assets);
-	console.log(`Generated AIReq workbench assets: ${manifests.get(assets)!.digest} (${assets.size} files)`);
+	const result = await buildAIReqWorkbenchAssets();
+	await writeAIReqWorkbenchAssets(result);
+	console.log(`Generated AIReq workbench assets: ${result.sourceDigest} (${result.assets.size} files)`);
 }

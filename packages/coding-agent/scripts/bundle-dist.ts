@@ -9,16 +9,20 @@ import {
 } from "./developer-test-agent-resources";
 import {
 	buildAIReqWorkbenchAssets,
-	createAIReqWorkbenchAssetsPlugin,
+	resetAIReqWorkbenchAssets,
 	writeAIReqWorkbenchAssets,
 } from "./aireq-workbench-resources";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
-import { buildOpenWikiResources, createOpenWikiVisualArchivePlugin, writeOpenWikiResource } from "./openwiki-resources";
+import { buildOpenWikiResources, resetOpenWikiResources, writeOpenWikiResources } from "./openwiki-resources";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
-import { prepareWebGuiResources, writeWebGuiResources } from "../../../scripts/generate-webgui-resources";
+import {
+	prepareWebGuiResources,
+	resetWebGuiResources,
+	writeWebGuiResources,
+} from "../../../scripts/generate-webgui-resources";
 import { withCompilerActivity } from "../../../scripts/test-gate-events";
 
 const packageDir = path.join(import.meta.dir, "..");
@@ -117,8 +121,15 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 export async function bundleDist(outDir: string = defaultOutDir): Promise<void> {
 	const cliPath = path.join(outDir, "cli.js");
 	const start = Bun.nanoseconds();
-	const webGuiResources = await prepareWebGuiResources(path.resolve(packageDir, "../.."));
-	await writeWebGuiResources(outDir, webGuiResources);
+	const repoRoot = path.resolve(packageDir, "../..");
+	const webGuiResources = await prepareWebGuiResources(repoRoot);
+	await writeWebGuiResources(path.join(packageDir, "src/webgui"), webGuiResources);
+	const workbenchAssets = await buildAIReqWorkbenchAssets();
+	await writeAIReqWorkbenchAssets(workbenchAssets);
+	const openWikiResources = await buildOpenWikiResources();
+	await writeOpenWikiResources(openWikiResources);
+	const workbenchText = await Bun.file(path.join(packageDir, "src/aireq-workbench/assets.generated.txt")).text();
+	const openWikiText = await Bun.file(path.join(packageDir, "src/openwiki/openwiki-resources.generated.txt")).text();
 	await cleanBundleOutputs(outDir);
 	// The npm bundle ships no stats dashboard sources, so embed the dashboard
 	// archive the same way compiled binaries do (scripts/build-binary.ts). Reset
@@ -129,9 +140,6 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 	// SDK consumers importing `@oh-my-pi/pi-coding-agent/*` (TypeScript source, no
 	// build-time embed) can still resolve omp:// docs (see src/internal-urls/docs-index.ts).
 	try {
-		const openWikiResources = await buildOpenWikiResources();
-		const workbenchAssets = await buildAIReqWorkbenchAssets();
-		await writeAIReqWorkbenchAssets(workbenchAssets);
 		const vendorBundle = await withCompilerActivity(() =>
 			Bun.build({
 				entrypoints: [path.join(packageDir, "scripts/openwiki-vendor-entry.ts")],
@@ -169,20 +177,16 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 			target: "bun",
 			plugins: [
 				createJsonParsePlugin(),
-				createOpenWikiVisualArchivePlugin(openWikiResources.visual),
 				createDeveloperTestAgentArchivePlugin(await buildDeveloperTestAgentResources()),
 				createOpenWikiVendorLoaderPlugin(),
 				await createLegacyPiVirtualModulePlugin(),
 				createSpecDrivenArchivePlugin(specDrivenArchive),
-				createAIReqWorkbenchAssetsPlugin(workbenchAssets),
 				inlineNativeNoticesPlugin,
 			],
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
 			define: {
 				"process.env.PI_BUNDLED": JSON.stringify("true"),
 				"process.env.PI_DOCS_EMBED": JSON.stringify(docsPayload.payload),
-				"process.env.PI_OPENWIKI_SKILLS": JSON.stringify(JSON.stringify(openWikiResources.skills)),
-				"process.env.PI_WEBGUI_EMBED": JSON.stringify(webGuiResources.embedded),
 			},
 			minify: {
 				whitespace: true,
@@ -199,10 +203,14 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		await ensureShebang(cliPath);
 		await Bun.write(path.join(outDir, "docs-index.generated.txt"), docsPayload.payload);
 		await Bun.write(path.join(outDir, "spec-driven-resources.tar.gz"), specDrivenArchive);
-		await writeOpenWikiResource(path.join(outDir, "openwiki-resources/visual-assets.json"), openWikiResources.visual);
-		await writeOpenWikiResource(path.join(outDir, "openwiki-resources/skills.json"), openWikiResources.skills);
+		await Bun.write(path.join(outDir, "aireq-workbench-assets.txt"), workbenchText);
+		await Bun.write(path.join(outDir, "webgui-resources.generated.txt"), webGuiResources.text);
+		await Bun.write(path.join(outDir, "openwiki-resources.generated.txt"), openWikiText);
 	} finally {
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
+		await resetAIReqWorkbenchAssets();
+		await resetOpenWikiResources();
+		await resetWebGuiResources(path.join(packageDir, "src/webgui"));
 	}
 	const stat = await fs.stat(cliPath);
 	const elapsedMs = (Bun.nanoseconds() - start) / 1_000_000;

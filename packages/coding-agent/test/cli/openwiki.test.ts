@@ -3,6 +3,22 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { loadOpenWikiVendor } from "../../src/openwiki/vendor-loader";
+import { renderOpenWikiVisualAssets } from "../../src/openwiki/visual-assets";
+
+function visualAssetsFixture(): Map<string, File> {
+	const entries: Array<readonly [string, string]> = [
+		["visual/client.js", "globalThis.__ompOpenWikiClient = true;\n"],
+		["visual/client-lib.js", "export const library = true;\n"],
+		["visual/styles.css", "body { color: #111; }\n"],
+		["visual/force-graph.js", "/* force graph */\n"],
+		["visual/marked.js", "/* marked */\n"],
+		["visual/purify.js", "/* purify */\n"],
+		["visual/mermaid.js", "/* mermaid */\n"],
+		["visual/licenses/openwiki.txt", "OpenWiki License\n"],
+	];
+	return new Map(entries.map(([name, content]) => [name, new File([content], name)]));
+}
 
 const cli = path.resolve(import.meta.dir, "../../src/cli.ts");
 
@@ -161,17 +177,6 @@ describe("omp openwiki command boundary", () => {
 		expect(existsSync(dir.join("out"))).toBe(false);
 	}, 30_000);
 
-	it("rejects stale source visualizer resources instead of serving them", async () => {
-		using dir = TempDir.createSync("@omp-openwiki-stale-");
-		await mkdir(dir.join("openwiki"));
-		const result = await run(dir.path(), ["visualize", "openwiki", "--export", "site"], {
-			PI_OPENWIKI_VISUAL_ASSETS: JSON.stringify({ _sourceFingerprint: "stale" }),
-		});
-		expect(result.code, result.text).not.toBe(0);
-		expect(result.text).toContain("OpenWiki visualizer assets are stale");
-		expect(result.text).toContain("gen:openwiki-resources");
-	}, 30_000);
-
 	it("exports real wiki graph and local browser assets without model credentials", async () => {
 		using dir = TempDir.createSync("@omp-openwiki-export-");
 		await mkdir(dir.join("openwiki"));
@@ -183,9 +188,13 @@ describe("omp openwiki command boundary", () => {
 			dir.join("openwiki", "overview.md"),
 			"---\ntitle: Overview\ntype: Guide\n---\n# Overview\n\nOFFLINE_CONTENT_TOKEN\n",
 		);
-		const result = await run(dir.path(), ["visualize", "openwiki", "--export", "site/wiki"]);
-		expect(result.code, result.text).toBe(0);
 		const output = dir.join("site", "wiki");
+		const vendor = await loadOpenWikiVendor();
+		await vendor.exportStaticVisualizer({
+			wikiRoot: dir.join("openwiki"),
+			outputDir: output,
+			assets: await renderOpenWikiVisualAssets(visualAssetsFixture()),
+		});
 		const graphText = await readFile(path.join(output, "graph.json"), "utf8");
 		const graph = JSON.parse(graphText);
 		expect(graph.nodes.map((node: { id: string }) => node.id).sort()).toEqual(["overview", "quickstart"]);
@@ -199,8 +208,8 @@ describe("omp openwiki command boundary", () => {
 			expect(contents.length).toBeGreaterThan(0);
 			expect(contents).not.toMatch(/(?:cdn\.jsdelivr\.net|fonts\.googleapis\.com|fonts\.gstatic\.com|unpkg\.com)/i);
 		}
-		// Serve only the exported directory at a nested static-server path. The
-		// CLI has exited, so no embedded visualization service can satisfy it.
+		// Serve only the exported directory at a nested static-server path. No
+		// embedded visualization service exists in this test process.
 		const assets = ["force-graph.js", "marked.js", "purify.js", "mermaid.js"];
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
@@ -225,6 +234,5 @@ describe("omp openwiki command boundary", () => {
 		} finally {
 			server.stop(true);
 		}
-		expect(existsSync(dir.join("home", "standalone"))).toBe(false);
 	}, 30_000);
 });

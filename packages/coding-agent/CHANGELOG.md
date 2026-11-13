@@ -4,7 +4,7 @@
 
 ### Changed
 
-- WebGUI now ships a minimal chat and subagent-progress build: file/Git, uploads, commands, settings, PDF/Office/Mermaid/math rendering and their backend channels are gone, cutting frontend assets by about 72% for low-bandwidth mobile access.
+- AIReq, WebGUI and OpenWiki browser assets now use the same gzip archive pipeline as the stats dashboard, reducing embedded size and deferring decoding until the first request.
 - WebGUI’s sidebar groups sessions only under their projects; the separate “任务” section is gone, and the recently updated and unread views still list all history.
 - Renamed OMP’s Dev workbench module to AIReq, including `/aireq`, `omp aireq`, module namespaces and frontend resources; OMP itself retains its name and command.
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added shared embedded-archive helpers for deterministic tar/gzip browser bundles with lazy in-memory extraction.
+
 ### Changed
 
 - Allow HTTP callers to choose a fixed retry delay instead of server hints or exponential backoff.

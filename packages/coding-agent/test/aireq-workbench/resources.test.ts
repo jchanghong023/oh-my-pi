@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import {
+	buildEmbeddedArchive,
+	decodeEmbeddedArchive,
+	extractEmbeddedArchive,
+} from "@oh-my-pi/pi-utils/embedded-archive";
 import tailwindcss from "@tailwindcss/vite";
 import { build, type Plugin } from "vite";
 import {
@@ -8,73 +13,68 @@ import {
 	aiReqWorkbenchOutputReferences,
 	aiReqWorkbenchSourceDigest,
 } from "../../scripts/aireq-workbench-resources";
-import {
-	decodeAIReqWorkbenchAssets,
-	aiReqWorkbenchAssetDigest,
-	type AIReqAssetPayload,
-} from "../../src/aireq-workbench/assets";
+import { aiReqWorkbenchAssetDigest, decodeAIReqWorkbenchArchive } from "../../src/aireq-workbench/assets";
 
-async function publicFiles(directory: string, prefix = ""): Promise<string[]> {
-	const result: string[] = [];
-	for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-		const name = `${prefix}${entry.name}`;
-		if (entry.isDirectory()) result.push(...(await publicFiles(path.join(directory, entry.name), `${name}/`)));
-		else if (entry.isFile()) result.push(name);
-	}
-	return result.sort();
+const META_ENTRY = "__omp_meta__.json";
+const encoder = new TextEncoder();
+
+interface FixtureFile {
+	path: string;
+	contentType: string;
+	bytes: Uint8Array;
 }
 
-function fixturePayload(
-	files: AIReqAssetPayload["files"] = [
-		{
-			path: "/index.html",
-			contentType: "text/html; charset=utf-8",
-			base64: Buffer.from("<!doctype html>").toString("base64"),
-		},
-		{
-			path: "/entry.js",
-			contentType: "text/javascript; charset=utf-8",
-			base64: Buffer.from("export {};").toString("base64"),
-		},
-		{
-			path: "/style.css",
-			contentType: "text/css; charset=utf-8",
-			base64: Buffer.from("body {}").toString("base64"),
-		},
-		{
-			path: "/binary.dat",
-			contentType: "application/octet-stream",
-			base64: Buffer.from([0, 255, 128, 13, 10]).toString("base64"),
-		},
-	],
-): AIReqAssetPayload {
-	const entries = files
-		.map(file => ({
-			path: file.path,
-			contentType: file.contentType,
-			version: new Bun.CryptoHasher("sha256").update(Buffer.from(file.base64, "base64")).digest("hex"),
-		}))
-		.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-	return {
-		schemaVersion: 1,
-		manifest: {
-			digest: new Bun.CryptoHasher("sha256").update(JSON.stringify(entries)).digest("hex"),
-			sourceDigest: new Bun.CryptoHasher("sha256").update("isolated resource fixture").digest("hex"),
-			files: entries,
-		},
-		files,
-	};
+function fixtureFiles(): FixtureFile[] {
+	return [
+		{ path: "/index.html", contentType: "text/html; charset=utf-8", bytes: Buffer.from("<!doctype html>") },
+		{ path: "/entry.js", contentType: "text/javascript; charset=utf-8", bytes: Buffer.from("export {};") },
+		{ path: "/style.css", contentType: "text/css; charset=utf-8", bytes: Buffer.from("body {}") },
+		{ path: "/binary.dat", contentType: "application/octet-stream", bytes: new Uint8Array([0, 255, 128, 13, 10]) },
+	];
 }
 
-test("asset decoding preserves exact bytes, MIME types and the independently hashed manifest", () => {
-	const payload = fixturePayload();
-	const { assets, manifest } = decodeAIReqWorkbenchAssets({ ...payload, files: [...payload.files].reverse() });
-	expect(manifest).toEqual(payload.manifest);
-	expect(assets.size).toBe(payload.files.length);
-	for (const file of payload.files) {
+function metaFor(files: readonly FixtureFile[], sourceDigest = Bun.SHA256.hash("isolated archive fixture", "hex")) {
+	return { sourceDigest, files: files.map(file => ({ path: file.path, contentType: file.contentType })) };
+}
+
+function archiveEntries(
+	files: readonly FixtureFile[] = fixtureFiles(),
+	meta: unknown = metaFor(files),
+): Map<string, Uint8Array> {
+	const entries = new Map<string, Uint8Array>();
+	for (const file of files) entries.set(file.path.slice(1), file.bytes);
+	entries.set(META_ENTRY, encoder.encode(JSON.stringify(meta)));
+	return entries;
+}
+
+function asFiles(entries: ReadonlyMap<string, Uint8Array>): Map<string, File> {
+	return new Map([...entries].map(([name, bytes]) => [name, new File([bytes], name)]));
+}
+
+async function throughArchive(entries: ReadonlyMap<string, Uint8Array>) {
+	const archive = decodeEmbeddedArchive(await buildEmbeddedArchive(entries));
+	if (!archive) throw new Error("Fixture archive was not embedded");
+	return decodeAIReqWorkbenchArchive(await extractEmbeddedArchive(archive));
+}
+
+test("archive decoding preserves exact bytes, MIME types and the hashed manifest", async () => {
+	const files = fixtureFiles();
+	const sourceDigest = Bun.SHA256.hash("isolated archive fixture", "hex");
+	const { assets, manifest } = await throughArchive(archiveEntries([...files].reverse()));
+
+	expect(manifest.sourceDigest).toBe(sourceDigest);
+	expect(manifest.files.map(file => file.path)).toEqual(["/binary.dat", "/entry.js", "/index.html", "/style.css"]);
+	expect(manifest.files.map(file => file.contentType)).toEqual([
+		"application/octet-stream",
+		"text/javascript; charset=utf-8",
+		"text/html; charset=utf-8",
+		"text/css; charset=utf-8",
+	]);
+	for (const file of files) {
 		const asset = assets.get(file.path)!;
-		expect(new Uint8Array(asset.bytes)).toEqual(new Uint8Array(Buffer.from(file.base64, "base64")));
+		expect(Array.from(asset.bytes)).toEqual(Array.from(file.bytes));
 		expect(asset.contentType).toBe(file.contentType);
+		expect(manifest.files.find(entry => entry.path === file.path)!.version).toBe(Bun.SHA256.hash(file.bytes, "hex"));
 	}
 	expect([...assets.get("/binary.dat")!.bytes]).toEqual([0, 255, 128, 13, 10]);
 	expect(aiReqWorkbenchAssetDigest(manifest.files)).toBe(manifest.digest);
@@ -85,35 +85,42 @@ test("asset decoding preserves exact bytes, MIME types and the independently has
 	}
 });
 
-test("asset decoding rejects missing, extra, duplicate and corrupted payload bytes", () => {
-	const payload = fixturePayload();
-	for (const file of payload.files) {
-		expect(() =>
-			decodeAIReqWorkbenchAssets({ ...payload, files: payload.files.filter(entry => entry.path !== file.path) }),
-		).toThrow();
-		expect(() =>
-			decodeAIReqWorkbenchAssets({
-				...payload,
-				files: payload.files.map(entry =>
-					entry.path === file.path ? { ...entry, base64: Buffer.from("corrupt").toString("base64") } : entry,
-				),
-			}),
-		).toThrow();
-	}
-	const first = payload.files[0]!;
-	for (const extra of [first, { ...first, path: "/extra.html" }])
-		expect(() => decodeAIReqWorkbenchAssets({ ...payload, files: [...payload.files, extra] })).toThrow();
-	for (const path of ["/index.html", "/entry.js"])
-		expect(() =>
-			decodeAIReqWorkbenchAssets(fixturePayload(payload.files.filter(file => file.path !== path))),
-		).toThrow();
+test("archive decoding rejects missing metadata", async () => {
+	const entries = archiveEntries();
+	entries.delete(META_ENTRY);
+	await expect(decodeAIReqWorkbenchArchive(asFiles(entries))).rejects.toThrow(/metadata/u);
 });
 
-test("asset decoding rejects unsafe paths, MIME headers and noncanonical base64", () => {
-	const payload = fixturePayload();
-	const replaceEntry = (change: Partial<AIReqAssetPayload["files"][number]>): AIReqAssetPayload =>
-		fixturePayload([{ ...payload.files[0]!, ...change }, ...payload.files.slice(1)]);
-	for (const path of [
+test("archive decoding rejects metadata that does not match the archive entries", async () => {
+	const extra = archiveEntries();
+	extra.set("extra.html", Buffer.from("<html></html>"));
+	await expect(decodeAIReqWorkbenchArchive(asFiles(extra))).rejects.toThrow(/do not match/u);
+
+	const missing = archiveEntries();
+	missing.delete("style.css");
+	await expect(decodeAIReqWorkbenchArchive(asFiles(missing))).rejects.toThrow(/do not match/u);
+});
+
+test("archive decoding rejects an archive without an entry point", async () => {
+	const files = fixtureFiles().filter(file => file.path !== "/index.html");
+	await expect(decodeAIReqWorkbenchArchive(asFiles(archiveEntries(files)))).rejects.toThrow(/incomplete/u);
+});
+
+test("archive decoding requires at least one JavaScript asset", async () => {
+	const files = fixtureFiles().filter(file => !file.contentType.startsWith("text/javascript"));
+	await expect(decodeAIReqWorkbenchArchive(asFiles(archiveEntries(files)))).rejects.toThrow(/incomplete/u);
+});
+
+test("archive decoding rejects duplicate metadata paths", async () => {
+	const files = fixtureFiles();
+	const meta = metaFor(files);
+	meta.files.push({ ...meta.files[0]! });
+	await expect(decodeAIReqWorkbenchArchive(asFiles(archiveEntries(files, meta)))).rejects.toThrow(/archive entry/u);
+});
+
+test("archive decoding rejects invalid metadata paths", async () => {
+	const files = fixtureFiles();
+	for (const invalid of [
 		"index.html",
 		"/",
 		"/../outside",
@@ -123,35 +130,37 @@ test("asset decoding rejects unsafe paths, MIME headers and noncanonical base64"
 		"/index.html#fragment",
 		"/index\0.html",
 	]) {
-		expect(() => decodeAIReqWorkbenchAssets(replaceEntry({ path }))).toThrow();
+		const replaced = [{ ...files[0]!, path: invalid }, ...files.slice(1)];
+		await expect(decodeAIReqWorkbenchArchive(asFiles(archiveEntries(replaced)))).rejects.toThrow(/archive entry/u);
 	}
-	for (const contentType of ["", "text/html\r\nX-Injected: yes", "text/html; charset=latin1"])
-		expect(() => decodeAIReqWorkbenchAssets(replaceEntry({ contentType }))).toThrow();
-	for (const base64 of ["!", "YQ", "YQ==\n", "YR=="])
-		expect(() => decodeAIReqWorkbenchAssets(replaceEntry({ base64 }))).toThrow();
 });
 
-test("asset decoding rejects invalid schema, provenance and manifest hashes", () => {
-	const payload = fixturePayload();
-	for (const value of [
-		null,
-		{},
-		{ ...payload, schemaVersion: 0 },
-		{ ...payload, manifest: null },
-		{ ...payload, files: null },
-		{ ...payload, files: [null] },
-		{ ...payload, manifest: { ...payload.manifest, sourceDigest: "bad" } },
-		{ ...payload, manifest: { ...payload.manifest, digest: "0".repeat(64) } },
-		{ ...payload, manifest: { ...payload.manifest, files: [] } },
+test("archive decoding rejects invalid metadata content types and provenance", async () => {
+	const files = fixtureFiles();
+	for (const invalid of [
+		{ ...metaFor(files), sourceDigest: "bad" },
 		{
-			...payload,
-			manifest: {
-				...payload.manifest,
-				files: [{ ...payload.manifest.files[0]!, version: "0".repeat(64) }, ...payload.manifest.files.slice(1)],
-			},
+			...metaFor(files),
+			files: [{ ...metaFor(files).files[0]!, contentType: "" }, ...metaFor(files).files.slice(1)],
 		},
-	])
-		expect(() => decodeAIReqWorkbenchAssets(value)).toThrow();
+		{
+			...metaFor(files),
+			files: [
+				{ ...metaFor(files).files[0]!, contentType: "text/html; charset=latin1" },
+				...metaFor(files).files.slice(1),
+			],
+		},
+	]) {
+		await expect(decodeAIReqWorkbenchArchive(asFiles(archiveEntries(files, invalid)))).rejects.toThrow(
+			/archive metadata|archive entry/u,
+		);
+	}
+});
+
+test("archive decoding rejects corrupt metadata JSON", async () => {
+	const entries = archiveEntries();
+	entries.set(META_ENTRY, encoder.encode("{not json"));
+	await expect(decodeAIReqWorkbenchArchive(asFiles(entries))).rejects.toThrow(/corrupt/u);
 });
 
 test("compiler watch capture retains transitive CSS, Tailwind candidates and module-worker fingerprints", async () => {
@@ -289,3 +298,13 @@ test("source provenance rejects both original WebGUI trees", async () => {
 		).rejects.toThrow();
 	}
 });
+
+async function publicFiles(directory: string, prefix = ""): Promise<string[]> {
+	const result: string[] = [];
+	for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+		const name = `${prefix}${entry.name}`;
+		if (entry.isDirectory()) result.push(...(await publicFiles(path.join(directory, entry.name), `${name}/`)));
+		else if (entry.isFile()) result.push(name);
+	}
+	return result.sort();
+}

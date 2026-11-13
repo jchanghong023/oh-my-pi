@@ -11,7 +11,8 @@ import {
 	launchHeadlessBrowser,
 	removeUserDataDir,
 } from "../packages/coding-agent/src/tools/browser/launch";
-import { decodeAIReqWorkbenchAssets } from "../packages/coding-agent/src/aireq-workbench/assets";
+import { decodeAIReqWorkbenchArchive } from "../packages/coding-agent/src/aireq-workbench/assets";
+import { decodeEmbeddedArchive, extractEmbeddedArchive } from "@oh-my-pi/pi-utils/embedded-archive";
 import type { AIReqWorkflowView } from "../packages/coding-agent/src/aireq-workbench/workflow-types";
 import type { SessionEntry } from "../packages/coding-agent/src/session/session-entries";
 import {
@@ -630,7 +631,9 @@ async function verifyProductionResources(
 	process: WorkflowConsumerProcess,
 	payloadPath: string,
 ): Promise<BrowserReport["productionResources"]> {
-	const payload = decodeAIReqWorkbenchAssets(JSON.parse(await fs.readFile(payloadPath, "utf8")));
+	const archive = decodeEmbeddedArchive(await fs.readFile(payloadPath, "utf8"));
+	if (!archive) throw new Error("AIReq generated archive is missing or invalid");
+	const payload = await decodeAIReqWorkbenchArchive(await extractEmbeddedArchive(archive));
 	const resources: NonNullable<BrowserReport["productionResources"]> = [];
 	for (const [name, asset] of payload.assets) {
 		const response = await process.request(name === "/index.html" ? "" : name.slice(1));
@@ -724,9 +727,11 @@ export async function aiReqAcceptancePrerequisites(options: AIReqE2EOptions): Pr
 		result.python = await installed(process.env.PYTHON_EXECUTABLE, "Python with Selenium");
 	}
 	const payload = path.resolve(
-		options.assetsPayload ?? path.join(repository, "packages/coding-agent/src/aireq-workbench/assets.generated.json"),
+		options.assetsPayload ?? path.join(repository, "packages/coding-agent/src/aireq-workbench/assets.generated.txt"),
 	);
-	decodeAIReqWorkbenchAssets(JSON.parse(await fs.readFile(payload, "utf8")));
+	const archive = decodeEmbeddedArchive(await fs.readFile(payload, "utf8"));
+	if (!archive) throw new Error("AIReq generated archive is missing or invalid");
+	await decodeAIReqWorkbenchArchive(await extractEmbeddedArchive(archive));
 	result.productionPayload = payload;
 	return result;
 }
@@ -842,7 +847,7 @@ export async function runAIReqAIReqelopmentE2E(
 				native,
 				path.resolve(
 					options.assetsPayload ??
-						path.join(repository, "packages/coding-agent/src/aireq-workbench/assets.generated.json"),
+						path.join(repository, "packages/coding-agent/src/aireq-workbench/assets.generated.txt"),
 				),
 			);
 			const consumer = native;

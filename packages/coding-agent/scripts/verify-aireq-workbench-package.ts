@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { decodeAIReqWorkbenchAssets, type AIReqAssetManifest } from "../src/aireq-workbench/assets";
+import { decodeEmbeddedArchive, extractEmbeddedArchive } from "@oh-my-pi/pi-utils/embedded-archive";
+import { decodeAIReqWorkbenchArchive, type AIReqAssetManifest } from "../src/aireq-workbench/assets";
 import { chromiumExecutableProbeForTest, systemChromiumCandidatesForTest } from "../src/tools/browser/launch";
 import { WorkflowConsumerFixture, withWorkflowChromium } from "../test/aireq-workbench/workflow-fixture";
 
@@ -164,8 +165,9 @@ async function main(): Promise<void> {
 		console.log(`Explicit artifact: ${artifact}; sha256=${hasher.digest("hex")}`);
 	}
 	const chromium = await installedChromium();
-	const generated: unknown = JSON.parse(await fs.readFile(args.assetsManifest, "utf8"));
-	const { manifest } = decodeAIReqWorkbenchAssets(generated);
+	const archive = decodeEmbeddedArchive(await fs.readFile(args.assetsManifest, "utf8"));
+	if (!archive) throw new Error(`Generated AIReq workbench archive is empty or corrupt: ${args.assetsManifest}`);
+	const { manifest } = await decodeAIReqWorkbenchArchive(await extractEmbeddedArchive(archive));
 	await verifyArtifact("npm bundle", [process.execPath, args.npmEntry], manifest, chromium);
 	await verifyArtifact("standalone binary", [args.binary], manifest, chromium);
 }

@@ -225,7 +225,7 @@ mkdir -p "$TARBALL_APP_DIR"
    }
    # Import both published entrypoints from the isolated install, not the checkout.
    # In particular, missing OpenWiki sources must not be masked by repo-relative paths.
-   env -u PI_OPENWIKI_VISUAL_ASSETS HOME="$WORK_DIR/import-home" \
+   env HOME="$WORK_DIR/import-home" \
       OMP_CONFIG_ROOT="$WORK_DIR/import-config" bun -e '
       import { strict as assert } from "node:assert";
       import { realpathSync } from "node:fs";
@@ -257,9 +257,9 @@ mkdir -p "$TARBALL_APP_DIR"
    printf '%s\n' '---' 'title: Overview' 'type: Guide' '---' '# Overview' '' 'INSTALLED_OPENWIKI_CONTENT' > "$wiki_fixture/openwiki/overview.md"
    (
       cd "$wiki_fixture"
-      env -u PI_OPENWIKI_VISUAL_ASSETS HOME="$wiki_fixture/home" OMP_CONFIG_ROOT="$wiki_fixture/config" \
+      env HOME="$wiki_fixture/home" OMP_CONFIG_ROOT="$wiki_fixture/config" \
          OMP_OFFLINE=1 NO_COLOR=1 "$TARBALL_APP_DIR/node_modules/.bin/omp" openwiki visualize openwiki --export site
-      env -u PI_OPENWIKI_VISUAL_ASSETS HOME="$wiki_fixture/home" OMP_CONFIG_ROOT="$wiki_fixture/config" \
+      env HOME="$wiki_fixture/home" OMP_CONFIG_ROOT="$wiki_fixture/config" \
          OMP_OFFLINE=1 NO_COLOR=1 "$TARBALL_APP_DIR/node_modules/.bin/omp" --license > license.txt
       bun -e '
          import { strict as assert } from "node:assert";

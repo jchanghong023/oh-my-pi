@@ -599,7 +599,7 @@ export async function runCli(argv: string[]): Promise<void> {
 	if (resolvedArgv[0] === "--license") {
 		// Command boundary: bundled notices are read only when requested.
 		const { formatLicenseOutput } = await import("./cli/license");
-		process.stdout.write(formatLicenseOutput());
+		process.stdout.write(await formatLicenseOutput());
 		return;
 	}
 	const helpOrVersion =

@@ -139,9 +139,9 @@ flowchart TD
 
 资源分两条路径，不能仅因源码可读就断定交付物完整：
 
-- 根目录 `postinstall` 执行 `openwiki-resources.ts --if-present`；它读取当前 checkout 的 fork 技能和视觉源码，构建浏览器脚本，收集 CSS、图形、Markdown、净化和 Mermaid 依赖及许可声明，并以临时文件加 rename 发布 `dist/openwiki-resources/visual-assets.json`。输入生成前后指纹不同则失败。子模块缺失时删除旧视觉 map 并警告；初始化子模块后运行 `bun run gen:openwiki-resources`。
-- 技能在源码 checkout 直接使用 `vendor/openwiki/skills`；交付路径从 `PI_OPENWIKI_SKILLS` 或 `dist/openwiki-resources/skills.json` 读取映射，按 SHA-256 内容摘要原子发布到 profile 的 `openwiki/resources/<digest>/skills`，并拒绝路径穿越。bundle 和编译二进制的构建脚本将技能映射内嵌；不要误以为上述 postinstall 单独写出了 `skills.json`。
-- 可视化从 `PI_OPENWIKI_VISUAL_ASSETS` 或预构建 JSON 加载，检查必要资源；源码 checkout 下还核对输入指纹，缺失、无效或过期时明确报错并要求重新生成。编译或 bundle 交付可内嵌同一资源映射。
+- 根目录 `postinstall` 执行 `openwiki-resources.ts --if-present`；它读取当前 checkout 的 fork 技能和视觉源码，构建浏览器脚本，收集 CSS、图形、Markdown、净化和 Mermaid 依赖及许可声明，并把 `skills/`、`visual/` 与 `__omp_meta__.json` 打成确定性的 tar + gzip，以 base64 写入 `src/openwiki/openwiki-resources.generated.txt`。输入生成前后指纹不同则失败。子模块缺失时清空旧 archive 并警告；初始化子模块后运行 `bun run gen:openwiki-resources`。
+- 技能与可视化共用同一 archive：技能从 `skills/` 读取，按 SHA-256 内容摘要原子发布到 profile 的 `openwiki/resources/<digest>/skills`，并拒绝路径穿越；可视化从 `visual/` 读取 `client.js`、`client-lib.js`、`styles.css`、浏览器库和许可声明。源码 checkout 下还核对 `__omp_meta__.json` 的 `sourceFingerprint`，缺失、无效或过期时明确报错并要求重新生成。
+- 运行时只 sniff archive 前缀，首次使用才解码并解压到内存；bundle 和编译二进制在构建时重新生成同一 archive，构建结束后清空源码占位。交付包另有 `dist/openwiki-resources.generated.txt` 供源码/SDK 消费者回退。
 
 `visualize` 把资源和 Wiki 根目录交给 fork 的嵌入式服务，停止时关闭服务；`--export` 则生成可由静态 HTTP 服务托管的页面和图，不承诺 `file://` 直接打开。离线可视化所需浏览器库随资源提供，但**离线不等于离线生成自动可用**：仍需已交付资源、可用的工具调用模型和对应凭据及可达端点。内置路径的遥测禁用；显式 `--telemetry-file` 只写本地禁用状态。参见[内网与离线](../operations/intranet-offline.md)和 [fork 维护](../operations/fork-maintenance.md)。
 

@@ -87,7 +87,7 @@ test("Dev dynamic resource inputs select their consumers without selecting origi
 		"packages/aireq-frontend/NOTICE.md",
 		"packages/aireq-frontend/build/aireq/assets/index.js",
 		"packages/aireq-frontend/node_modules/react/index.js",
-		"packages/coding-agent/src/aireq-workbench/assets.generated.json",
+		"packages/coding-agent/src/aireq-workbench/assets.generated.txt",
 		"vendor/zcode-frontend/preview/main.tsx",
 		"packages/collab-web/src/main.tsx",
 	]) {

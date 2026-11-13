@@ -270,7 +270,6 @@ export async function createAIReqWorkbenchApplication(
 	options: AIReqWorkbenchApplicationOptions = {},
 ): Promise<AIReqWorkbenchApplication> {
 	const asset = options.asset ?? getAIReqWorkbenchAsset;
-	if (!(await asset("/"))) throw new Error("AIReq production HTML is unavailable");
 	const launchCommonDir = await fs.realpath(vcs.requireGit(host.cwd).info().commonDir);
 	const launchProject = (await host.workflow.store.listProjects()).find(
 		project => project.commonDir === launchCommonDir,

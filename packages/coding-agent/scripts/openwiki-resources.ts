@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import type { BunPlugin } from "bun";
+import { buildEmbeddedArchive } from "@oh-my-pi/pi-utils/embedded-archive";
 import {
 	openWikiLicensedPackages as licensedPackages,
 	openWikiPackageDirectory as packageDirectory,
@@ -11,8 +11,8 @@ import { openWikiResourceFingerprint } from "../src/openwiki/resource-fingerprin
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 const vendorRoot = path.join(repoRoot, "vendor/openwiki");
-const outputDir = path.join(repoRoot, "packages/coding-agent/dist/openwiki-resources");
 const packageDir = path.join(repoRoot, "packages/coding-agent");
+const generatedFile = path.join(packageDir, "src/openwiki/openwiki-resources.generated.txt");
 
 async function filesUnder(root: string, prefix = ""): Promise<Record<string, string>> {
 	const entries: Record<string, string> = {};
@@ -70,8 +70,8 @@ async function browserScript(entry: string): Promise<string> {
 }
 
 export interface OpenWikiResources {
-	skills: Record<string, string>;
-	visual: Record<string, string>;
+	files: ReadonlyMap<string, Uint8Array>;
+	sourceFingerprint: string;
 }
 
 /** Read the checked-out fork; local uncommitted changes are intentionally respected. */
@@ -90,55 +90,44 @@ export async function buildOpenWikiResources(): Promise<OpenWikiResources> {
 		"mermaid.js": await readFile(path.join(packageDirectory("mermaid", packageDir), "dist/mermaid.min.js"), "utf8"),
 		"licenses/openwiki.txt": await readFile(path.join(vendorRoot, "LICENSE"), "utf8"),
 		...(await browserLicenses()),
-		_sourceFingerprint: fingerprint,
 	};
 	const skills = await filesUnder(path.join(vendorRoot, "skills"));
 	if (fingerprint !== openWikiResourceFingerprint(repoRoot)) {
 		throw new Error("OpenWiki resource inputs changed during generation; regenerate the resources.");
 	}
-	return { skills, visual };
+	const files = new Map<string, Uint8Array>();
+	for (const [name, content] of Object.entries(skills)) files.set(`skills/${name}`, Buffer.from(content));
+	for (const [name, content] of Object.entries(visual)) files.set(`visual/${name}`, Buffer.from(content));
+	files.set("__omp_meta__.json", Buffer.from(JSON.stringify({ sourceFingerprint: fingerprint })));
+	return { files, sourceFingerprint: fingerprint };
 }
 
-/** Keep the visualizer map out of JavaScript source and bytecode string tables. */
-export function createOpenWikiVisualArchivePlugin(visual: Record<string, string>): BunPlugin {
-	const archive = Bun.zstdCompressSync(JSON.stringify(visual));
-	return {
-		name: "omp-openwiki-visual-archive",
-		target: "bun",
-		setup(build) {
-			build.onResolve({ filter: /^\.\/visual-archive$/ }, ({ importer }) => {
-				if (!importer.replaceAll("\\", "/").endsWith("/openwiki/visual-assets.ts")) return undefined;
-				return { path: "openwiki-visual-assets.json.zst", namespace: "omp-openwiki-visual-archive" };
-			});
-			build.onLoad({ filter: /.*/, namespace: "omp-openwiki-visual-archive" }, () => ({
-				contents: archive,
-				loader: "file",
-			}));
-		},
-	};
-}
-
-/** Publish a complete JSON resource in one rename, never a partially written file. */
-export async function writeOpenWikiResource(file: string, value: Record<string, string>): Promise<void> {
-	await mkdir(path.dirname(file), { recursive: true });
-	const temporary = `${file}.${randomUUID()}.tmp`;
+/** Publish the archive text in one rename, never a partially written file. */
+export async function writeOpenWikiResources(resources: OpenWikiResources): Promise<void> {
+	const archive = await buildEmbeddedArchive(resources.files);
+	await mkdir(path.dirname(generatedFile), { recursive: true });
+	const temporary = `${generatedFile}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(temporary, JSON.stringify(value), { flag: "wx" });
-		await rename(temporary, file);
+		await writeFile(temporary, archive, { flag: "wx" });
+		await rename(temporary, generatedFile);
 	} finally {
 		await rm(temporary, { force: true });
 	}
 }
 
+/** Restore the checked-in placeholder so stale resources cannot masquerade as current. */
+export async function resetOpenWikiResources(): Promise<void> {
+	await mkdir(path.dirname(generatedFile), { recursive: true });
+	await writeFile(generatedFile, "");
+}
+
 if (import.meta.main) {
 	if (!existsSync(path.join(vendorRoot, "package.json")) && process.argv.includes("--if-present")) {
-		// A previously generated map must not masquerade as the current checkout.
-		await rm(path.join(outputDir, "visual-assets.json"), { force: true });
+		await resetOpenWikiResources();
 		console.warn(
 			"OpenWiki submodule absent; initialize it and run bun run gen:openwiki-resources before using OpenWiki.",
 		);
 	} else {
-		const resources = await buildOpenWikiResources();
-		await writeOpenWikiResource(path.join(outputDir, "visual-assets.json"), resources.visual);
+		await writeOpenWikiResources(await buildOpenWikiResources());
 	}
 }

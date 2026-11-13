@@ -1,38 +1,45 @@
 import { describe, expect, it } from "bun:test";
+import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { openWikiLicensedPackages } from "../../src/openwiki/resource-dependencies";
 import { openWikiResourceFingerprint } from "../../src/openwiki/resource-fingerprint";
-import { materializeOpenWikiSkills } from "../../src/openwiki/resources";
+import { materializeOpenWikiSkillsFromFiles } from "../../src/openwiki/resources";
+import {
+	assertOpenWikiArchiveFresh,
+	isOpenWikiArchiveStale,
+	renderOpenWikiVisualAssets,
+} from "../../src/openwiki/visual-assets";
+
+function fileMap(entries: ReadonlyMap<string, string>): Map<string, File> {
+	return new Map([...entries].map(([name, content]) => [name, new File([content], name)]));
+}
+
+function skillsFixture(skills: Record<string, string>): Map<string, File> {
+	return fileMap(new Map(Object.entries(skills).map(([name, content]) => [`skills/${name}`, content])));
+}
 
 describe("OpenWiki embedded generation resources", () => {
-	// Exercise the packaged branch even when running from a source checkout.
 	it("materializes the real bundled Mermaid skill into an isolated profile and reuses immutable content", async () => {
 		using dir = TempDir.createSync("@omp-openwiki-resources-");
 		const name = "mermaid-diagrams/SKILL.md";
 		const content = await readFile(path.resolve(import.meta.dir, "../../../../vendor/openwiki/skills", name), "utf8");
-		const previous = process.env.PI_OPENWIKI_SKILLS;
-		process.env.PI_OPENWIKI_SKILLS = JSON.stringify({ [name]: content });
-		try {
-			const [first, concurrent] = await Promise.all([
-				materializeOpenWikiSkills(dir.join("profile-a")),
-				materializeOpenWikiSkills(dir.join("profile-a")),
-			]);
-			expect(first).toBe(concurrent);
-			expect(first.startsWith(dir.join("profile-a", "openwiki", "resources"))).toBe(true);
-			expect(await readFile(path.join(first, name), "utf8")).toBe(content);
-			expect(await materializeOpenWikiSkills(dir.join("profile-a"))).toBe(first);
-			const other = await materializeOpenWikiSkills(dir.join("profile-b"));
-			expect(other).not.toBe(first);
-			expect(await readFile(path.join(other, name), "utf8")).toBe(content);
-			expect(
-				(await readdir(dir.join("profile-a", "openwiki", "resources"))).some(name => name.startsWith(".skills-")),
-			).toBe(false);
-		} finally {
-			if (previous === undefined) delete process.env.PI_OPENWIKI_SKILLS;
-			else process.env.PI_OPENWIKI_SKILLS = previous;
-		}
+		const files = skillsFixture({ [name]: content });
+		const [first, concurrent] = await Promise.all([
+			materializeOpenWikiSkillsFromFiles(dir.join("profile-a"), files),
+			materializeOpenWikiSkillsFromFiles(dir.join("profile-a"), files),
+		]);
+		expect(first).toBe(concurrent);
+		expect(first.startsWith(dir.join("profile-a", "openwiki", "resources"))).toBe(true);
+		expect(await readFile(path.join(first, name), "utf8")).toBe(content);
+		expect(await materializeOpenWikiSkillsFromFiles(dir.join("profile-a"), files)).toBe(first);
+		const other = await materializeOpenWikiSkillsFromFiles(dir.join("profile-b"), files);
+		expect(other).not.toBe(first);
+		expect(await readFile(path.join(other, name), "utf8")).toBe(content);
+		expect(
+			(await readdir(dir.join("profile-a", "openwiki", "resources"))).some(name => name.startsWith(".skills-")),
+		).toBe(false);
 	});
 
 	// Reject unsafe package entries atomically, with no partial skills left behind.
@@ -40,21 +47,53 @@ describe("OpenWiki embedded generation resources", () => {
 		"rejects unsafe embedded path %s without publishing resources",
 		async name => {
 			using dir = TempDir.createSync("@omp-openwiki-resource-path-");
-			const previous = process.env.PI_OPENWIKI_SKILLS;
-			process.env.PI_OPENWIKI_SKILLS = JSON.stringify({
-				"mermaid-diagrams/SKILL.md": "valid skill",
-				[name]: "escape",
-			});
-			try {
-				await expect(materializeOpenWikiSkills(dir.path())).rejects.toThrow("Invalid embedded OpenWiki skill path");
-				expect(await readdir(dir.join("openwiki", "resources"))).toEqual([]);
-				expect(await Bun.file(dir.join("escape.md")).exists()).toBe(false);
-			} finally {
-				if (previous === undefined) delete process.env.PI_OPENWIKI_SKILLS;
-				else process.env.PI_OPENWIKI_SKILLS = previous;
-			}
+			const files = skillsFixture({ "mermaid-diagrams/SKILL.md": "valid skill", [name]: "escape" });
+			await expect(materializeOpenWikiSkillsFromFiles(dir.path(), files)).rejects.toThrow(
+				"Invalid embedded OpenWiki skill path",
+			);
+			expect(existsSync(dir.join("openwiki", "resources"))).toBe(false);
+			expect(await Bun.file(dir.join("escape.md")).exists()).toBe(false);
 		},
 	);
+
+	it("renders visualizer assets from an archive file map", async () => {
+		const files = fileMap(
+			new Map([
+				["visual/client.js", "client"],
+				["visual/client-lib.js", "library"],
+				["visual/styles.css", "styles"],
+				["visual/force-graph.js", "force"],
+				["visual/marked.js", "marked"],
+				["visual/purify.js", "purify"],
+				["visual/mermaid.js", "mermaid"],
+				["visual/licenses/openwiki.txt", "openwiki license"],
+				["visual/licenses/zod@1.0.0.txt", "zod license"],
+			]),
+		);
+		const assets = await renderOpenWikiVisualAssets(files);
+		expect(assets.clientJs).toBe("client");
+		expect(assets.clientLibJs).toBe("library");
+		expect(assets.stylesCss).toBe("styles");
+		expect(assets.browserAssets).toEqual({
+			"force-graph.js": "force",
+			"marked.js": "marked",
+			"purify.js": "purify",
+			"mermaid.js": "mermaid",
+		});
+		expect(assets.licenseAssets).toEqual({
+			"licenses/openwiki.txt": "openwiki license",
+			"licenses/zod@1.0.0.txt": "zod license",
+		});
+	});
+
+	it("rejects stale source fingerprints and accepts unknown or matching ones", () => {
+		expect(isOpenWikiArchiveStale("generated", "current")).toBe(true);
+		expect(isOpenWikiArchiveStale("generated", "generated")).toBe(false);
+		expect(isOpenWikiArchiveStale("generated", undefined)).toBe(false);
+		expect(() => assertOpenWikiArchiveFresh("generated", "current")).toThrow("OpenWiki visualizer assets are stale");
+		expect(() => assertOpenWikiArchiveFresh("generated", "current")).toThrow("gen:openwiki-resources");
+		expect(() => assertOpenWikiArchiveFresh("generated", "generated")).not.toThrow();
+	});
 });
 
 async function fingerprintFixture(root: string): Promise<void> {

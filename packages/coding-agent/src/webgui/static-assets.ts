@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isCompiledBinary, isEnoent } from "@oh-my-pi/pi-utils";
+import {
+	decodeEmbeddedArchive,
+	extractEmbeddedArchive,
+	hasEmbeddedArchive,
+	isCompiledBinary,
+	isEnoent,
+} from "@oh-my-pi/pi-utils";
 import { getPackageDir } from "../config";
+import archiveText from "./webgui-resources.generated.txt";
 
 const MIME_TYPES: Readonly<Record<string, string>> = {
 	".html": "text/html; charset=utf-8",
@@ -27,6 +34,9 @@ const MIME_TYPES: Readonly<Record<string, string>> = {
 	".bcmap": "application/octet-stream",
 	".mp3": "audio/mpeg",
 };
+
+const META_FILE = "__omp_meta__.json";
+const MODULE_SCRIPT_SRC = /<script\b[^>]*\btype=["']module["'][^>]*\bsrc=["']([^"']+)["']/gi;
 
 export interface WebGuiStaticAssets {
 	fetch(request: Request): Promise<Response>;
@@ -59,60 +69,80 @@ function record(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function sha256(bytes: Uint8Array): string {
+	return createHash("sha256").update(bytes).digest("hex");
+}
+
+function resourcesFingerprint(entries: ReadonlyArray<readonly [string, number, string]>): string {
+	return sha256(Buffer.from(JSON.stringify(entries)));
+}
+
+/** Reject traversal, absolute and hidden entries before any byte becomes reachable. */
+function safeResourcePath(name: string): boolean {
+	return (
+		name.length > 0 &&
+		!name.startsWith("/") &&
+		!name.includes("\\") &&
+		!name.includes("\0") &&
+		name.split("/").every(part => part.length > 0 && !part.startsWith("."))
+	);
+}
+
+function moduleScriptPath(src: string): string {
+	return src.replace(/^\.\//, "").replace(/^\//, "");
+}
+
 /** Validate every byte before exposing a release payload; never fall back to a runtime build. */
-function bundledResources(archive: Uint8Array): Map<string, StaticResource> {
-	const manifest: unknown = JSON.parse(Bun.zstdDecompressSync(archive).toString("utf8"));
-	if (
-		!record(manifest) ||
-		manifest.version !== 1 ||
-		typeof manifest.fingerprint !== "string" ||
-		!Array.isArray(manifest.files) ||
-		manifest.files.length === 0
-	) {
+async function archivedResources(archive: Uint8Array): Promise<Map<string, StaticResource>> {
+	const extracted = await extractEmbeddedArchive(archive);
+	let meta: unknown;
+	try {
+		meta = JSON.parse((await extracted.get(META_FILE)?.text()) ?? "");
+	} catch {
+		throw new Error("WebGUI resource manifest is invalid.");
+	}
+	if (!record(meta) || typeof meta.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(meta.fingerprint)) {
 		throw new Error("WebGUI resource manifest is invalid.");
 	}
 	const resources = new Map<string, StaticResource>();
-	const fingerprints: Array<[string, number, string]> = [];
-	for (const entry of manifest.files) {
-		if (
-			!record(entry) ||
-			typeof entry.path !== "string" ||
-			typeof entry.data !== "string" ||
-			typeof entry.sha256 !== "string" ||
-			typeof entry.size !== "number" ||
-			!Number.isSafeInteger(entry.size) ||
-			entry.size < 0 ||
-			!/^[a-f0-9]{64}$/.test(entry.sha256) ||
-			!entry.path ||
-			entry.path.startsWith("/") ||
-			entry.path.includes("\\") ||
-			entry.path.includes("\0") ||
-			entry.path.split("/").some(part => !part || part.startsWith(".")) ||
-			resources.has(entry.path)
-		) {
-			throw new Error("WebGUI resource entry is invalid.");
+	const entries: Array<[string, number, string]> = [];
+	const sizes = new Map<string, number>();
+	let indexHtml: string | undefined;
+	for (const [name, file] of [...extracted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+		if (name === META_FILE) continue;
+		if (!safeResourcePath(name) || resources.has(name)) {
+			throw new Error(`WebGUI resource entry is invalid: ${name}`);
 		}
-		const bytes = Buffer.from(entry.data, "base64");
-		if (bytes.length !== entry.size || createHash("sha256").update(bytes).digest("hex") !== entry.sha256) {
-			throw new Error(`WebGUI resource integrity check failed: ${entry.path}`);
-		}
-		fingerprints.push([entry.path, entry.size, entry.sha256]);
-		resources.set(entry.path, { body: bytes, etag: `"${entry.sha256}"` });
+		const bytes = Buffer.from(await file.arrayBuffer());
+		const digest = sha256(bytes);
+		entries.push([name, bytes.length, digest]);
+		sizes.set(name, bytes.length);
+		resources.set(name, { body: bytes, etag: `"${digest}"` });
+		if (name === "index.html") indexHtml = bytes.toString("utf8");
 	}
+	const moduleScripts = indexHtml ? [...indexHtml.matchAll(MODULE_SCRIPT_SRC)] : [];
 	if (
-		createHash("sha256").update(JSON.stringify(fingerprints)).digest("hex") !== manifest.fingerprint ||
-		!fingerprints.some(([name, size]) => name === "index.html" && size > 0) ||
-		!fingerprints.some(([name, size]) => /\.(?:m?js)$/.test(name) && size > 0)
+		resourcesFingerprint(entries) !== meta.fingerprint ||
+		!sizes.get("index.html") ||
+		!moduleScripts.length ||
+		moduleScripts.some(match => {
+			const name = moduleScriptPath(match[1]!);
+			return !sizes.get(name) || !/\.(?:m?js)$/.test(name);
+		})
 	) {
 		throw new Error("WebGUI resource fingerprint or production entrypoint is invalid.");
 	}
 	return resources;
 }
 
-/** Load the same compressed manifest shipped by standalone and npm releases. */
+/**
+ * Serve a packaged archive. Decoding and validation stay deferred until the
+ * first fetch so importing the generated text costs only the magic-byte sniff.
+ */
 export async function prepareWebGuiAssetsFromArchive(archive: Uint8Array): Promise<WebGuiStaticAssets> {
-	const resources = bundledResources(archive);
-	return prepareStaticAssets(relative => resources.get(relative));
+	let pending: Promise<Map<string, StaticResource>> | undefined;
+	const resources = () => (pending ??= archivedResources(archive));
+	return prepareStaticAssets(async relative => (await resources()).get(relative));
 }
 
 let embeddedAssets: Promise<WebGuiStaticAssets> | undefined;
@@ -120,11 +150,16 @@ let embeddedAssets: Promise<WebGuiStaticAssets> | undefined;
 /** Checkout builds stay file-backed; standalone and npm builds use only their own packaged resources. */
 export async function prepareWebGuiAssets(): Promise<WebGuiStaticAssets> {
 	const packageDir = getPackageDir();
+	if (hasEmbeddedArchive(archiveText)) {
+		return (embeddedAssets ??= (async () => {
+			const archive = decodeEmbeddedArchive(archiveText);
+			if (!archive)
+				throw new Error("Embedded WebGUI resources are corrupt; rebuild OMP with bundled WebGUI assets.");
+			return prepareWebGuiAssetsFromArchive(archive);
+		})());
+	}
 	let find: ((relative: string) => StaticResource | undefined | Promise<StaticResource | undefined>) | undefined;
-	const embeddedArchive = process.env.PI_WEBGUI_EMBED;
-	if (embeddedArchive) {
-		return (embeddedAssets ??= prepareWebGuiAssetsFromArchive(Buffer.from(embeddedArchive, "base64")));
-	} else if (
+	if (
 		!isCompiledBinary() &&
 		!process.env.PI_BUNDLED &&
 		packageDir &&
@@ -149,15 +184,14 @@ export async function prepareWebGuiAssets(): Promise<WebGuiStaticAssets> {
 			};
 		}
 	}
-	if (!find && packageDir && !isCompiledBinary()) {
-		const file = path.join(packageDir, "dist/webgui-resources.json.zst");
-		let archive: Buffer | undefined;
+	if (!find) {
 		try {
-			archive = await fs.readFile(file);
+			const packaged = await Bun.file(new URL("../../dist/webgui-resources.generated.txt", import.meta.url)).text();
+			const archive = decodeEmbeddedArchive(packaged);
+			if (archive) return prepareWebGuiAssetsFromArchive(archive);
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
 		}
-		if (archive) return prepareWebGuiAssetsFromArchive(archive);
 	}
 	if (!find) {
 		throw new Error(
@@ -170,8 +204,13 @@ export async function prepareWebGuiAssets(): Promise<WebGuiStaticAssets> {
 async function prepareStaticAssets(
 	resourceFor: (relative: string) => StaticResource | undefined | Promise<StaticResource | undefined>,
 ): Promise<WebGuiStaticAssets> {
-	const index = await resourceFor("index.html");
-	if (!index) throw new Error("WebGUI production HTML is unavailable.");
+	let indexPromise: Promise<StaticResource> | undefined;
+	const index = () =>
+		(indexPromise ??= (async () => {
+			const resource = await resourceFor("index.html");
+			if (!resource) throw new Error("WebGUI production HTML is unavailable.");
+			return resource;
+		})());
 	return {
 		async fetch(request) {
 			const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
@@ -196,15 +235,16 @@ async function prepareStaticAssets(
 				(extension === ".html" && relative !== "index.html")
 			)
 				return new Response(null, { status: 404, headers });
-			let file = relative ? await resourceFor(relative) : index;
+			const indexResource = await index();
+			let file = relative ? await resourceFor(relative) : indexResource;
 			let mime = extension ? MIME_TYPES[extension] : MIME_TYPES[".html"];
 			if (!file && !extension && request.headers.get("accept")?.includes("text/html")) {
-				file = index;
+				file = indexResource;
 				mime = MIME_TYPES[".html"];
 			}
 			if (!file) return new Response(null, { status: 404, headers });
 			// Unknown extensionless build files are not public resources.
-			if (!extension && file !== index) return new Response(null, { status: 404, headers });
+			if (!extension && file !== indexResource) return new Response(null, { status: 404, headers });
 			const immutable = relative.startsWith("assets/") && /[-.][\w-]{8,}\.[a-z0-9]+$/i.test(relative);
 			return new Response(request.method === "HEAD" ? null : file.body, {
 				headers: {
