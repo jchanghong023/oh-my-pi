@@ -13,7 +13,7 @@ import {
 	setRunStatus,
 } from "../../src/utils/run-status";
 import * as titleGenerator from "../../src/utils/title-generator";
-import { NativeWebGuiQuestions, withNativeWebGuiInteractionScope } from "../../src/webgui/native-interactions";
+import { NativeWebGuiQuestions } from "../../src/webgui/native-interactions";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { getTestModel } from "../helpers/model-fixtures";
 
@@ -159,69 +159,6 @@ test("native select, askDialog and editor answers release only their matching se
 	}
 });
 
-test("browser actions reject other clients, late and duplicate answers; disconnect and abort release native waiters", async () => {
-	using temp = TempDir.createSync("@pi-native-action-scope-");
-	const a = await fixture(temp, "a");
-	const b = await fixture(temp, "b").catch(async error => {
-		await a.close();
-		throw error;
-	});
-	const origin = { connectionId: crypto.randomUUID(), clientId: "tab-a" };
-	const waits: Promise<unknown>[] = [];
-	try {
-		const first = withNativeWebGuiInteractionScope(origin, () =>
-			a.questions.browserAction({ action: "copyText", text: "first" }),
-		);
-		waits.push(first);
-		const firstId = requestId(a.questions, "copyText");
-		expect(a.questions.pendingInteractionsFor({ ...origin, clientId: "tab-b" })).toEqual([]);
-		await expect(b.questions.resolveInteraction(firstId, { action: "accept" }, origin)).rejects.toThrow(
-			/expired|another session/,
-		);
-		await expect(
-			a.questions.resolveInteraction(firstId, { action: "accept" }, { ...origin, clientId: "tab-b" }),
-		).rejects.toThrow(/expired|another session/);
-		await expect(
-			a.questions.resolveInteraction(firstId, { action: "accept" }, { ...origin, connectionId: "other-connection" }),
-		).rejects.toThrow(/expired|another session/);
-		await a.questions.resolveInteraction(firstId, { action: "accept", content: { applied: true } }, origin);
-		await first;
-		const second = withNativeWebGuiInteractionScope(origin, () =>
-			a.questions.browserAction({ action: "copyText", text: "second" }),
-		);
-		waits.push(second);
-		const secondId = requestId(a.questions, "copyText");
-		await expect(a.questions.resolveInteraction(firstId, { action: "accept" }, origin)).rejects.toThrow(
-			/expired|already answered/,
-		);
-		a.questions.cancelConnectionActions(origin.connectionId);
-		await expect(second).rejects.toThrow(/connection closed/);
-		await expect(a.questions.resolveInteraction(secondId, { action: "accept" }, origin)).rejects.toThrow(
-			/expired|already answered/,
-		);
-
-		const controller = new AbortController();
-		const editor = a.questions.ui.editor("Abort edit", "draft", { signal: controller.signal });
-		waits.push(editor);
-		const editorId = requestId(a.questions, "Abort edit");
-		controller.abort(new Error("Editor cancelled"));
-		await expect(editor).rejects.toThrow("Editor cancelled");
-		await expect(a.questions.resolveInteraction(editorId, { freeText: "too late" })).rejects.toThrow(
-			/expired|cancelled/,
-		);
-		expect(a.questions.pendingInteractions).toEqual([]);
-	} finally {
-		a.questions.cancelPendingInteractions();
-		b.questions.cancelPendingInteractions();
-		await Promise.allSettled(waits);
-		try {
-			await a.close();
-		} finally {
-			await b.close();
-		}
-	}
-});
-
 test("only the borrowed TUI session holds blocked status until a browser question settles", async () => {
 	using temp = TempDir.createSync("@pi-native-question-status-");
 	const a = await fixture(temp, "a");
@@ -275,15 +212,6 @@ test("only the borrowed TUI session holds blocked status until a browser questio
 		controller.abort(new Error("stop browser question"));
 		await expect(cancelled).rejects.toThrow("stop browser question");
 		expect(reports.at(-1)).toContain("state=working");
-
-		const origin = { connectionId: crypto.randomUUID() };
-		const action = withNativeWebGuiInteractionScope(origin, () =>
-			a.questions.browserAction({ action: "copyText", text: "copied" }),
-		);
-		waits.push(action);
-		expect(reports.at(-1)).toContain("state=working");
-		await a.questions.resolveInteraction(requestId(a.questions, "copyText"), { action: "accept" }, origin);
-		await action;
 
 		const restored = a.questions.ui.input("Question during restore");
 		waits.push(restored);

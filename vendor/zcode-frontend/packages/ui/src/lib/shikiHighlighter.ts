@@ -1,5 +1,7 @@
-import type { BundledLanguage, BundledTheme, HighlighterGeneric, ThemedToken } from "shiki";
-import { bundledLanguages, bundledLanguagesInfo, createHighlighter } from "shiki";
+import type { BundledTheme, HighlighterCore, LanguageRegistration, ThemedToken } from "shiki";
+import { createHighlighterCore } from "shiki/core";
+import type { ThemeRegistrationAny } from "shiki/core";
+import { createOnigurumaEngine } from "shiki/engine/oniguruma";
 import { logger } from "@/logger.js";
 import { uiMemoryDiagnosticsRegistry } from "@/lib/memoryDiagnostics.js";
 
@@ -9,13 +11,59 @@ export interface TokenizedCode {
   bg: string;
 }
 
-const bundledLanguageIds = new Set(Object.keys(bundledLanguages));
-const bundledLanguageAliases = new Map(
-  bundledLanguagesInfo.flatMap((info) =>
-    (info.aliases ?? []).map((alias) => [alias, info.id] as const),
-  ),
-);
-const FALLBACK_CODE_LANGUAGE: BundledLanguage = "log";
+// WebGUI 需要跑在窄带的移动中继上（~3 MB/s），Shiki 的全量语言包（~19 MB）是
+// 首屏和更新的最大负担。这里只保留聊天/工具卡片里真正会出现的 17 种语言，
+// 每种语言一个动态 import，未列出的语言一律走 raw tokens。
+const LANGUAGE_LOADERS = {
+  bash: () => import("shiki/langs/bash.mjs"),
+  c: () => import("shiki/langs/c.mjs"),
+  cpp: () => import("shiki/langs/cpp.mjs"),
+  css: () => import("shiki/langs/css.mjs"),
+  diff: () => import("shiki/langs/diff.mjs"),
+  go: () => import("shiki/langs/go.mjs"),
+  html: () => import("shiki/langs/html.mjs"),
+  java: () => import("shiki/langs/java.mjs"),
+  javascript: () => import("shiki/langs/javascript.mjs"),
+  json: () => import("shiki/langs/json.mjs"),
+  markdown: () => import("shiki/langs/markdown.mjs"),
+  python: () => import("shiki/langs/python.mjs"),
+  rust: () => import("shiki/langs/rust.mjs"),
+  sql: () => import("shiki/langs/sql.mjs"),
+  tsx: () => import("shiki/langs/tsx.mjs"),
+  typescript: () => import("shiki/langs/typescript.mjs"),
+  yaml: () => import("shiki/langs/yaml.mjs"),
+} satisfies Record<string, () => Promise<{ default: LanguageRegistration[] }>>;
+
+type CodeLanguage = keyof typeof LANGUAGE_LOADERS;
+
+const LANGUAGE_ALIASES = {
+  sh: "bash",
+  shell: "bash",
+  zsh: "bash",
+  js: "javascript",
+  ts: "typescript",
+  py: "python",
+  md: "markdown",
+  yml: "yaml",
+} satisfies Record<string, CodeLanguage>;
+
+// 设置页可选的代码主题（见 codePreviewPreferences.CODE_PREVIEW_THEME_OPTIONS）。
+// 主题同样按需加载，避免带入 Shiki 的全量主题包。
+const THEME_LOADERS = {
+  "github-light": () => import("shiki/themes/github-light.mjs"),
+  "github-dark": () => import("shiki/themes/github-dark.mjs"),
+  "vitesse-light": () => import("shiki/themes/vitesse-light.mjs"),
+  "vitesse-dark": () => import("shiki/themes/vitesse-dark.mjs"),
+  "min-light": () => import("shiki/themes/min-light.mjs"),
+  "min-dark": () => import("shiki/themes/min-dark.mjs"),
+  "github-light-high-contrast": () => import("shiki/themes/github-light-high-contrast.mjs"),
+  "github-dark-high-contrast": () => import("shiki/themes/github-dark-high-contrast.mjs"),
+  "catppuccin-latte": () => import("shiki/themes/catppuccin-latte.mjs"),
+  "catppuccin-mocha": () => import("shiki/themes/catppuccin-mocha.mjs"),
+} satisfies Record<string, () => Promise<{ default: ThemeRegistrationAny }>>;
+
+type CodeTheme = keyof typeof THEME_LOADERS;
+
 const PLAIN_TEXT_CODE_LANGUAGES = new Set([
   "",
   "text",
@@ -26,37 +74,31 @@ const PLAIN_TEXT_CODE_LANGUAGES = new Set([
   "output",
 ]);
 
+const isCodeLanguage = (language: string): language is CodeLanguage =>
+  Object.hasOwn(LANGUAGE_LOADERS, language);
+
 export function shouldUseSyntaxHighlighting(language: string): boolean {
   const candidate = language.trim().toLowerCase();
   if (PLAIN_TEXT_CODE_LANGUAGES.has(candidate)) {
     return false;
   }
 
-  return bundledLanguageIds.has(candidate) || bundledLanguageAliases.has(candidate);
+  return isCodeLanguage(candidate) || Object.hasOwn(LANGUAGE_ALIASES, candidate);
 }
 
-function normalizeCodeLanguage(language: string): BundledLanguage {
+function normalizeCodeLanguage(language: string): CodeLanguage | null {
   const candidate = language.trim().toLowerCase();
-  if (!candidate) {
-    return FALLBACK_CODE_LANGUAGE;
+  if (isCodeLanguage(candidate)) {
+    return candidate;
   }
 
-  const alias = bundledLanguageAliases.get(candidate);
-  if (alias && bundledLanguageIds.has(alias)) {
-    return alias as BundledLanguage;
-  }
-
-  if (bundledLanguageIds.has(candidate)) {
-    return candidate as BundledLanguage;
-  }
-
-  return FALLBACK_CODE_LANGUAGE;
+  const alias = Object.hasOwn(LANGUAGE_ALIASES, candidate)
+    ? LANGUAGE_ALIASES[candidate as keyof typeof LANGUAGE_ALIASES]
+    : null;
+  return alias ?? null;
 }
 
-const highlighterCache = new Map<
-  string,
-  Promise<HighlighterGeneric<BundledLanguage, BundledTheme>>
->();
+const highlighterCache = new Map<string, Promise<HighlighterCore>>();
 const tokensCache = new Map<string, TokenizedCode>();
 const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>();
 // 内存诊断计数器：tokensCache 目前无淘汰，是审计里
@@ -66,41 +108,49 @@ uiMemoryDiagnosticsRegistry.register("shiki", () => ({
   highlighters: highlighterCache.size,
 }));
 
-const getResolvedCodeTheme = (theme?: BundledTheme): BundledTheme => {
-  if (theme) {
+const prefersDarkDocument = () =>
+  typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+
+const isCodeTheme = (theme: string): theme is CodeTheme => Object.hasOwn(THEME_LOADERS, theme);
+
+const getResolvedCodeTheme = (theme?: BundledTheme): CodeTheme => {
+  if (theme && isCodeTheme(theme)) {
     return theme;
   }
 
-  if (typeof document !== "undefined" && document.documentElement.classList.contains("dark")) {
-    return "github-dark";
-  }
-
-  return "github-light";
+  return prefersDarkDocument() ? "github-dark" : "github-light";
 };
 
-const getCodeTokensCacheKey = (
-  code: string,
-  language: BundledLanguage,
-  theme: BundledTheme,
-) => {
+const getCodeTokensCacheKey = (code: string, language: CodeLanguage, theme: CodeTheme) => {
   const start = code.slice(0, 100);
   const end = code.length > 100 ? code.slice(-100) : "";
   return `${theme}:${language}:${code.length}:${start}:${end}`;
 };
-const getHighlighter = (
-  language: BundledLanguage,
-  theme: BundledTheme,
-): Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> => {
+
+let enginePromise: ReturnType<typeof createOnigurumaEngine> | undefined;
+const getEngine = () => (enginePromise ??= createOnigurumaEngine(import("shiki/wasm")));
+
+const getHighlighter = (language: CodeLanguage, theme: CodeTheme): Promise<HighlighterCore> => {
   const cacheKey = `${theme}:${language}`;
   const cached = highlighterCache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
-  const highlighterPromise = createHighlighter({
-    langs: [language],
-    themes: [theme],
-  });
+  const highlighterPromise = (async () => {
+    const [languageModule, themeModule, engine] = await Promise.all([
+      LANGUAGE_LOADERS[language](),
+      THEME_LOADERS[theme](),
+      getEngine(),
+    ]);
+
+    // 显式传入注册表，避免 createHighlighter 的 bundledLanguages 把全部语言打进产物。
+    return createHighlighterCore({
+      langs: languageModule.default,
+      themes: [themeModule.default],
+      engine,
+    });
+  })();
 
   highlighterCache.set(cacheKey, highlighterPromise);
   return highlighterPromise;
@@ -129,7 +179,8 @@ export const highlightCode = (
   // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-callbacks)
   callback?: (result: TokenizedCode) => void,
 ): TokenizedCode | null => {
-  if (!shouldUseSyntaxHighlighting(language)) {
+  const resolvedLanguage = normalizeCodeLanguage(language);
+  if (!shouldUseSyntaxHighlighting(language) || !resolvedLanguage) {
     // 文本/日志代码块没有语法高亮收益，却会在聊天流式渲染和历史恢复时进入
     // Shiki 的异步状态机。之前修掉了 render 阶段 setState，但这条纯文本路径仍可能把
     // CodeViewer 拖进 React #185；这里直接返回 raw tokens，避免启动高亮副作用。
@@ -137,7 +188,6 @@ export const highlightCode = (
   }
 
   const resolvedTheme = getResolvedCodeTheme(theme);
-  const resolvedLanguage = normalizeCodeLanguage(language);
   const tokensCacheKey = getCodeTokensCacheKey(code, resolvedLanguage, resolvedTheme);
 
   const cached = tokensCache.get(tokensCacheKey);
@@ -161,13 +211,8 @@ export const highlightCode = (
   getHighlighter(resolvedLanguage, resolvedTheme)
     // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then)
     .then((highlighter) => {
-      const availableLangs = highlighter.getLoadedLanguages();
-      const langToUse = availableLangs.includes(resolvedLanguage)
-        ? resolvedLanguage
-        : FALLBACK_CODE_LANGUAGE;
-
       const result = highlighter.codeToTokens(code, {
-        lang: langToUse,
+        lang: resolvedLanguage,
         theme: resolvedTheme,
       });
 

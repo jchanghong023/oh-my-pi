@@ -1,6 +1,5 @@
 import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { getLocalTtftObserver } from "@/v4/telemetry/local-ttft/contract.js";
-import { GenUiMessageResponse } from "@/gen-ui/index.js";
 import { ConversationUserInputBubble } from "@/v4/ConversationUserInputBubble.js";
 import { expandTopicInputMessages } from "@/v4/topicInputMessages.js";
 import { ConnectedBotGroupDeliveryAction } from "@/v4/BotGroupDeliveryAction.js";
@@ -20,7 +19,6 @@ import {
   ArchiveIcon,
   ArrowRightLeftIcon,
   CheckIcon,
-  Clock,
   CopyIcon,
   FileClockIcon,
   FileIcon,
@@ -33,7 +31,6 @@ import {
   TrendingUpDownIcon,
   XIcon,
 } from "lucide-react";
-import { parseAutomationRunId } from "@zcode/shared";
 import {
   TID_V4_EDIT,
   TID_V4_EDIT_ATTACHMENT_REMOVE,
@@ -47,6 +44,7 @@ import {
   TID_V4_RETRY,
   TID_V4_ROW,
   TID_V4_ROW_ATTACHMENTS,
+  TID_V4_SUBAGENT_OPEN_SIDE_PANE,
   testId,
 } from "@zcode/shared/test-ids";
 import type {
@@ -80,7 +78,7 @@ import {
   type ChatMediaAttachmentPreviewTarget,
 } from "@/ChatMediaAttachmentPreviewDialog.js";
 import type { PdfViewerRangeSource } from "@/components/ui/pdf-viewer.js";
-import { MessageAction, MessageActions } from "@/components/ai-elements/message.js";
+import { MessageAction, MessageActions, MessageResponse } from "@/components/ai-elements/message.js";
 import {
   Reasoning,
   ReasoningContent,
@@ -89,20 +87,7 @@ import {
 import { cn } from "@/components/lib/utils.js";
 import { Button } from "@/components/ui/button.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
-import { WorkflowToolSummary } from "@/v4/WorkflowToolSummary.js";
-import {
-  readWorkflowName,
-  readWorkflowRetuneCall,
-} from "@/ToolCallBlocks/renderers/createWorkflowInput.js";
-import { WorkflowRetuneRow } from "@/ToolCallBlocks/renderers/WorkflowRetuneRow.js";
-import { workflowRunDefaultConcurrency } from "@/components/workflow-timeline/workflowRunSettings.js";
-import { isAmendWorkflowToolCall, isFillWorkflowHoleToolCall } from "@/lib/workflowToolNames.js";
-import {
-  readWorkflowHoleTarget,
-  workflowFillCounts,
-} from "@/ToolCallBlocks/renderers/createWorkflowHoleInput.js";
 import { ToolCallBlock } from "@/ToolCallBlocks.js";
-import { resolveWorkflowRunOpenToolCallId } from "@/v4/workflowRunCardJoin.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { logger } from "@/logger.js";
 import type { AssistantPreviewCard } from "@/lib/assistantPreviewCards.js";
@@ -124,6 +109,7 @@ import {
   type ConversationRowRenderContext,
 } from "@/v4/conversationRowContext.js";
 import { toolCallRowToLegacyNode } from "@/v4/toolCallRowAdapter.js";
+import { openSubagentSessionFromSummary } from "@/v4/ConversationAgentToolCallRow.js";
 import { CodeCommentAttachmentChip } from "@/v4/composer/CodeCommentAttachmentChip.js";
 import {
   countComposerPromptContexts,
@@ -1039,7 +1025,6 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
     (!row.botGroupSource && conversationSelections.length > 0);
   // Bug 根因：旧逻辑只接受 schedule runId，导致用户点击「立即运行」产生的 manual run
   // 没有来源标识。两种合法 automation runId 都应展示；普通会话输入仍因解析失败而不展示。
-  const isScheduledAutomationPrompt = parseAutomationRunId(row.sourceCommandId ?? "") !== null;
   const openPptxElementReference = useOpenPptxElementReference({
     workspacePath: context.workspacePath,
     workspaceIdentity: context.workspaceIdentity,
@@ -1322,15 +1307,6 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
 
   return (
     <RowShell rowId={row.rowId} className="group/user-row flex flex-col items-end">
-      {isScheduledAutomationPrompt ? (
-        <div
-          data-v4-user-input-automation-origin="schedule"
-          className="mb-1 flex max-w-xl items-center gap-1 text-ui-sm text-foreground-subtle"
-        >
-          <Clock data-cron-task-icon="true" aria-hidden="true" className="size-3.5 shrink-0" />
-          <span>{intl.formatMessage({ id: "chat.message.sentByScheduledTask" })}</span>
-        </div>
-      ) : null}
       {row.botGroupSource ? (
         // 群来源原先插在材料与正文之间，割裂同一输入；统一放在材料之前。
         <div data-v4-user-input-source="true" className="mb-2 flex min-w-0 max-w-full">
@@ -1781,9 +1757,7 @@ const AssistantTextRowView = memo(function AssistantTextRowView({
           导致 assistant 正文虽然在 JSX 上标了 selectable，框选逻辑却永远找不到该区域。
           selectable 语义必须放在稳定的 DOM 包装层上，完成态和 streaming 共用同一路径。 */}
       <div ref={textElement} data-conversation-selectable="true" className="w-full text-ui-base">
-        <GenUiMessageResponse
-          completed={row.state === "complete"}
-          messageKey={`${row.rowId}:${row.entityId ?? ""}`}
+        <MessageResponse
           renderZCodeFileCitations
           streaming={streaming}
           workspacePath={context.workspacePath}
@@ -1799,7 +1773,7 @@ const AssistantTextRowView = memo(function AssistantTextRowView({
           readAttachment={context.readAttachment}
         >
           {visibleText}
-        </GenUiMessageResponse>
+        </MessageResponse>
       </div>
       {codeCommentCardsEnabled && codeCommentCards && codeCommentCards.length > 0 ? (
         <div className="mt-3">
@@ -2183,133 +2157,6 @@ const ToolCallRowView = memo(function ToolCallRowView({
   // toolCall 行回接 ToolCallBlocks（execute/read/edit/... renderer 按
   // tool identity 分流）。适配 memo 按 row 引用：row.delta/upserted 换新对象才重建。
   const toolCallNode = useMemo(() => toolCallRowToLegacyNode(row), [row]);
-  // workflow run 详情入口的门控：run 身份走 workflowRuns 投影（schema 里 toolCallId 就是
-  // 「工具卡 → 详情页的关联键」），不从工具输出里读——v4 行的 output 只剩一句散文。
-  // 命中的摘要同时决定卡片形态：有 run 就是紧凑可点卡，没有就是可展开卡。
-  const workflowRun =
-    context.workflowRunByToolCallId?.get(row.toolCallId) ??
-    // ResumeWorkflowRun 行按 runId 联接：display 载荷带 runId（≡ backgroundTaskId），而投影
-    // 的 run.toolCallId 跨 resume 沿用原始 CreateWorkflow 行——resume 行按 toolCallId 永远
-    // 查不到。命中后 onOpenWorkflowRun 的收窄走同一条路径，tab 身份 runId 键、幂等。
-    (row.display?.kind === "resume_workflow_run"
-      ? context.workflowRunByRunId?.get(row.display.runId)
-      : undefined);
-  // 已接进 run 的补全行（docs/dynamic-workflow/presentation.md「The fill row」）：「留白已补全 · {name} ·
-  // {k} 个阶段 · {m} 个子代理 ↗」。按入参的 `run_id` 联接投影（补全行的 toolCallId 不是发起行的），只认成功
-  // 且编过的行——编不过的补全走下面的编译反馈行，什么都没接进 run。卡下方随之长出新的站（轮尾摘要
-  // 取的是这一行的图）。
-  // 名字来自 display 的 `fill` 块（行的入参没有名字——transcript 只存模型自己的入参）。
-  const fillTarget = isFillWorkflowHoleToolCall(row)
-    ? readWorkflowHoleTarget(
-        row.input,
-        row.display?.kind === "create_workflow" ? row.display.fill : undefined,
-      )
-    : undefined;
-  const fillRun =
-    fillTarget?.runId === undefined ? undefined : context.workflowRunByRunId?.get(fillTarget.runId);
-  if (
-    fillTarget !== undefined &&
-    fillTarget.holeId !== undefined &&
-    fillRun !== undefined &&
-    row.status === "success" &&
-    row.display?.kind === "create_workflow" &&
-    row.display.ok
-  ) {
-    const sessionId = context.sessionId;
-    const counts = workflowFillCounts(row.display.causalityGraph, fillTarget.holeId);
-    return (
-      <RowShell rowId={row.rowId} className="py-0">
-        <WorkflowToolSummary
-          toolCallId={row.toolCallId}
-          summary={fillRun}
-          fill={{
-            name: fillTarget.name ?? fillTarget.holeId,
-            ...counts,
-          }}
-          onOpen={
-            context.onOpenWorkflowRun && sessionId
-              ? () =>
-                  context.onOpenWorkflowRun?.({
-                    parentSessionId: sessionId,
-                    toolCallId: resolveWorkflowRunOpenToolCallId(row.toolCallId, fillRun),
-                    runId: fillRun.runId,
-                  })
-              : undefined
-          }
-        />
-      </RowShell>
-    );
-  }
-  // 原因：已启动的工具卡与轮尾摘要重复画同一条实时进度；上方改为普通摘要入口。
-  // 只替换成功关联的发起行，编译诊断及 Resume 等其他工具仍走原有渲染。
-  if (
-    workflowRun &&
-    context.workflowRunByToolCallId?.has(row.toolCallId) &&
-    row.status !== "error"
-  ) {
-    const workflowName = readWorkflowName(row.input);
-    const sessionId = context.sessionId;
-    return (
-      <RowShell rowId={row.rowId} className="py-0">
-        <WorkflowToolSummary
-          toolCallId={row.toolCallId}
-          summary={workflowRun}
-          amend={isAmendWorkflowToolCall(row)}
-          onOpen={
-            context.onOpenWorkflowRun && sessionId
-              ? () =>
-                  context.onOpenWorkflowRun?.({
-                    parentSessionId: sessionId,
-                    toolCallId: resolveWorkflowRunOpenToolCallId(row.toolCallId, workflowRun),
-                    runId: workflowRun.runId,
-                    ...(workflowName === undefined ? {} : { workflowName }),
-                  })
-              : undefined
-          }
-        />
-      </RowShell>
-    );
-  }
-  // 就地生效的修订（docs/dynamic-workflow/concurrency.md）：只改并发上限、run 又在飞时这次调用
-  // 不编译、不铸新 run，结果只有一句话。判据全在已经上线的字段上——入参的形状、**没有** display、
-  // 成功且非错误；工具的结构化输出不过 v4，而三处 create_workflow display schema 都是冻结字段集
-  // 的 `.strict()`，多一个键会让旧端把整条工具结果丢掉，所以这条路不新增任何协议字段。
-  // 退回真修订的那一条（run 已结算）两条判据都不成立：它有 display，也铸出一条按 toolCallId
-  // 联接得上的 run，上面那个分支先接走它。
-  const retune = isAmendWorkflowToolCall(row) ? readWorkflowRetuneCall(row.input) : undefined;
-  if (
-    retune !== undefined &&
-    row.status === "success" &&
-    (row.output?.display ?? row.display) === undefined &&
-    !context.workflowRunByToolCallId?.has(row.toolCallId)
-  ) {
-    const sessionId = context.sessionId;
-    // 被调整那条 run 的投影：只为两件事——默认并发（措辞据它把「等于默认」念成「恢复为默认」）与
-    // 打开请求里那条 run 的发起行 id。它不进上面的 `workflowRun`：那个变量回答的是「这一行是不是
-    // 某条 run 的发起行」，而这一行不是。
-    const retuned = context.workflowRunByRunId?.get(retune.runId);
-    const defaultConcurrency =
-      retuned?.run === undefined ? undefined : workflowRunDefaultConcurrency(retuned.run);
-    return (
-      <RowShell rowId={row.rowId} className="py-0">
-        <WorkflowRetuneRow
-          requested={retune.requested}
-          runId={retune.runId}
-          {...(defaultConcurrency === undefined ? {} : { defaultConcurrency })}
-          {...(context.onOpenWorkflowRun && sessionId
-            ? {
-                onOpen: () =>
-                  context.onOpenWorkflowRun?.({
-                    parentSessionId: sessionId,
-                    toolCallId: resolveWorkflowRunOpenToolCallId(row.toolCallId, retuned),
-                    runId: retune.runId,
-                  }),
-              }
-            : {})}
-        />
-      </RowShell>
-    );
-  }
   // 工具行去掉纵向内边距（对齐 z-code-2 无 per-tool padding）；连续工具间距由
   // ConversationAssistantWorkItems 的 gap-4 组容器统一给。
   return (
@@ -2324,7 +2171,6 @@ const ToolCallRowView = memo(function ToolCallRowView({
           onOpenCodeViewer={context.onOpenCodeViewer}
           onOpenFileLink={context.onOpenFileLink}
           onOpenBrowserUrl={context.onOpenBrowserUrl}
-          onOpenAutomationsMain={context.onOpenAutomationsMain}
           onOpenPlanDetail={
             context.onOpenPlanDetail && context.sessionId
               ? (request) =>
@@ -2334,74 +2180,35 @@ const ToolCallRowView = memo(function ToolCallRowView({
                   })
               : undefined
           }
-          onOpenWorkflowRun={
-            context.onOpenWorkflowRun && context.sessionId && workflowRun
-              ? (request) =>
-                  context.onOpenWorkflowRun?.({
-                    ...request,
-                    parentSessionId: context.sessionId!,
-                    // 打开请求的关联键是发起行（CreateWorkflow）id，不是点中行的 id——
-                    // resume 行点开时两者不同，详情页拿它找 causalityGraph/脚本。
-                    toolCallId: resolveWorkflowRunOpenToolCallId(row.toolCallId, workflowRun),
-                    runId: workflowRun.runId,
-                  })
-              : undefined
-          }
-          onOpenWorkflowActor={
-            context.onOpenWorkflowActor && context.sessionId && workflowRun
-              ? (request) =>
-                  context.onOpenWorkflowActor?.({ ...request, parentSessionId: context.sessionId! })
-              : undefined
-          }
-          // 脚本药丸 → 脚本 transcript：关联键同 onOpenWorkflowRun（发起行 id + runId）。
-          onOpenWorkflowWorkspace={
-            context.onOpenWorkflowWorkspace && context.sessionId && workflowRun
-              ? (request) =>
-                  context.onOpenWorkflowWorkspace?.({
-                    ...request,
-                    parentSessionId: context.sessionId!,
-                    toolCallId: resolveWorkflowRunOpenToolCallId(row.toolCallId, workflowRun),
-                    runId: workflowRun.runId,
-                  })
-              : undefined
-          }
-          onResumeWorkflowRun={
-            context.onResumeWorkflowRun && workflowRun?.resumable
-              ? (request) => context.onResumeWorkflowRun?.(workflowRun.runId, request.workflowName)
-              : undefined
-          }
-          // 产物药丸 → 产物 tab：与通知行的 chips 同一条打开路径（不带版本号，打开即最新版）。
-          onOpenWorkflowArtifact={
-            context.onOpenWorkflowArtifact && context.sessionId && workflowRun
-              ? (artifactId) => {
-                  // 活投影的产物摘要带最新版的 `contentType`（宿主据它把 html 产物直接开成
-                  // 浏览器 tab）；`sourcePath` 那份摘要刻意不带，缺席时宿主自己查 journal。
-                  const artifact = workflowRun.run?.artifacts?.find(
-                    (candidate) => candidate.id === artifactId,
-                  );
-                  context.onOpenWorkflowArtifact?.({
-                    parentSessionId: context.sessionId!,
-                    runId: workflowRun.runId,
-                    artifactId,
-                    ...(artifact?.title === undefined ? {} : { title: artifact.title }),
-                    ...(artifact?.contentType === undefined
-                      ? {}
-                      : { contentType: artifact.contentType }),
-                  });
-                }
-              : undefined
-          }
-          workflowRun={workflowRun}
-          workflowDraft={context.workflowDraftByToolCallId?.get(row.toolCallId)}
         />
       </div>
     </RowShell>
   );
 });
 
-const SubagentRowView = memo(function SubagentRowView({ row }: { row: SubagentRow }) {
-  // subagent 行已经和 Agent/Task 工具行配对渲染；裸行只保留异常兜底摘要，
-  // 避免再生成一个“子会话”卡片或第二套下钻入口。
+const SubagentRowView = memo(function SubagentRowView({
+  row,
+  context,
+}: {
+  row: SubagentRow;
+  context: ConversationRowRenderContext;
+}) {
+  const { intl } = useZCodeIntl();
+  // 一次 task 派发多个子智能体时，只有第一行能和 Agent 工具行配对；其余裸行
+  // 必须自己承接下钻，否则多子代理场景里只有第一个能点开子会话。
+  const childSessionId = row.childSessionId;
+  const canOpen = Boolean(childSessionId && context.sessionId && context.onOpenSubagentSession);
+  const openChildSession = useCallback(() => {
+    if (!childSessionId) {
+      return;
+    }
+    openSubagentSessionFromSummary({
+      childSessionId,
+      context,
+      subagentType: row.subagentType,
+      title: row.summaryText || row.subagentType,
+    });
+  }, [childSessionId, context, row.subagentType, row.summaryText]);
   const summary = (
     <>
       {row.subagentType} · {row.status}
@@ -2410,7 +2217,21 @@ const SubagentRowView = memo(function SubagentRowView({ row }: { row: SubagentRo
   );
   return (
     <RowShell rowId={row.rowId}>
-      <div className="text-ui-sm text-[var(--color-foreground-subtle)]">{summary}</div>
+      <div className="group relative inline-flex max-w-full items-center">
+        {canOpen ? (
+          // 文字保持与工具行左对齐；命中区向四周外扩，不靠行内 padding 制造缩进。
+          <button
+            type="button"
+            data-testid={childSessionId ? testId(TID_V4_SUBAGENT_OPEN_SIDE_PANE, childSessionId) : undefined}
+            aria-label={intl.formatMessage({ id: "chat.toolCall.agent.openInSidePane" })}
+            onClick={openChildSession}
+            className="absolute -inset-x-2 -inset-y-1 z-0 rounded-lg group-hover:bg-[var(--color-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-input-border-focused)]"
+          />
+        ) : null}
+        <span className="pointer-events-none relative z-[1] truncate text-ui-sm text-[var(--color-foreground-subtle)]">
+          {summary}
+        </span>
+      </div>
     </RowShell>
   );
 });
@@ -2490,7 +2311,7 @@ function ConversationRowViewImpl({
       return <ToolCallRowView row={row} context={context} />;
     case "subagent":
       if (context.nativeDisplayMode === "clean" || context.nativeDisplayMode === "compact") return null;
-      return <SubagentRowView row={row} />;
+      return <SubagentRowView row={row} context={context} />;
     case "artifact":
       return <ArtifactRowView row={row} />;
     default:

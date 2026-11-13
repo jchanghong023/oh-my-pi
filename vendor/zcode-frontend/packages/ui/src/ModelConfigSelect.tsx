@@ -133,7 +133,6 @@ interface ModelConfigSelectProps {
   triggerLabelPrefix?: string;
   triggerLabelValue?: string;
   triggerLabelPrefixClassName?: string;
-  showManageModelsAction: boolean;
   lockReasonMessage: string;
   isItemLocked: (candidateValue: string) => boolean;
   onValueChange: (value: string) => void;
@@ -163,8 +162,6 @@ interface ModelConfigSelectProps {
   /** 覆盖 provider 二级模型菜单样式；缺省按内容扩展并保留最小宽度。 */
   providerSubmenuClassName?: string;
   footerActions?: readonly ModelSelectFooterAction[];
-  manageModelsLabel?: string;
-  onManageModels?: () => void;
   focusSelectorOnClose?: string | null;
   contentSide?: "top" | "bottom" | "left" | "right";
   contentAlign?: "start" | "center" | "end";
@@ -185,7 +182,6 @@ export const ModelConfigSelect = memo(function ModelConfigSelectComponent({
   triggerLabelPrefix,
   triggerLabelValue,
   triggerLabelPrefixClassName,
-  showManageModelsAction,
   lockReasonMessage,
   isItemLocked,
   onValueChange,
@@ -212,8 +208,6 @@ export const ModelConfigSelect = memo(function ModelConfigSelectComponent({
   showProviderLevel,
   providerSubmenuClassName,
   footerActions = EMPTY_MODEL_SELECT_FOOTER_ACTIONS,
-  manageModelsLabel,
-  onManageModels,
   focusSelectorOnClose = '[data-testid="chat-input"]',
   contentSide = "top",
   contentAlign = "start",
@@ -412,17 +406,10 @@ export const ModelConfigSelect = memo(function ModelConfigSelectComponent({
     [],
   );
 
-  const renderedFooterActions = useMemo<ModelSelectFooterAction[]>(() => {
-    const actions = [...footerActions];
-    if (!composerOptions && showManageModelsAction && manageModelsLabel) {
-      actions.push({
-        key: "manage-models",
-        label: manageModelsLabel,
-        onSelect: onManageModels,
-      });
-    }
-    return actions;
-  }, [composerOptions, footerActions, manageModelsLabel, onManageModels, showManageModelsAction]);
+  const renderedFooterActions = useMemo<ModelSelectFooterAction[]>(
+    () => [...footerActions],
+    [footerActions],
+  );
 
   const triggerContents = showSelectionLabel ? (
     <>
@@ -606,20 +593,6 @@ export const ModelConfigSelect = memo(function ModelConfigSelectComponent({
               isItemLocked={isItemLocked}
               onSelectModel={handleModelValueChange}
               renderItems={renderModelItems}
-              providerFooter={
-                showManageModelsAction && manageModelsLabel ? (
-                  <DropdownMenuItem
-                    className="min-h-8 gap-2 px-2"
-                    data-model-footer-action="manage-models"
-                    onSelect={() => {
-                      handlePopoverOpenChange(false);
-                      onManageModels?.();
-                    }}
-                  >
-                    {manageModelsLabel}
-                  </DropdownMenuItem>
-                ) : null
-              }
             />
           ) : hasSelectableModel && shouldShowProviderLevel ? (
             modelGroups.map((group, index) => {

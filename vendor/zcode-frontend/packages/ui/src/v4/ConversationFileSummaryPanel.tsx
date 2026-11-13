@@ -20,7 +20,6 @@ import { toWorkspaceRelativePath } from "@/lib/taskChangeSummary.js";
 import { buildChangeSummaryFilePreviewSource } from "@/messageChangeSummaryPreview.js";
 import { OpenSplitButton } from "@/OpenSplitButton.js";
 import { logger } from "@/logger.js";
-import { collectGenUiSourcePaths, matchesGenUiSourcePath } from "@/gen-ui/contract.js";
 import { ConversationFileRewindDialog } from "@/v4/ConversationFileRewindDialog.js";
 import type {
   ConversationFileChangesRequestOptions,
@@ -32,7 +31,6 @@ type FileChangeItem = V4ConversationFileChangesResult["items"][number];
 interface ConversationFileSummaryPanelProps {
   header: TurnHeaderRow;
   context: ConversationRowRenderContext;
-  assistantText?: string;
 }
 
 function formatPatch(path: string, patches: FileChangeItem["patches"]): string {
@@ -72,11 +70,8 @@ function openDiff(
 export function ConversationFileSummaryPanel({
   header,
   context,
-  assistantText = "",
 }: ConversationFileSummaryPanelProps) {
   const { intl } = useZCodeIntl();
-  const genUiSources = useMemo(() => collectGenUiSourcePaths(assistantText), [assistantText]);
-  const filtersSources = genUiSources.length > 0;
   const [open, setOpen] = useState(false);
   const [loadedDetails, setLoadedDetails] = useState<{
     key: string;
@@ -104,10 +99,7 @@ export function ConversationFileSummaryPanel({
   ]);
   const settled = loadedDetails?.key === requestKey;
   const details = settled ? loadedDetails.result : null;
-  const items = useMemo(
-    () => details?.items.filter((item) => !matchesGenUiSourcePath(item.path, genUiSources)) ?? [],
-    [details, genUiSources],
-  );
+  const items = useMemo(() => details?.items ?? [], [details]);
   const summary =
     details && items.length !== details.items.length && header.fileChanges
       ? {
@@ -136,7 +128,7 @@ export function ConversationFileSummaryPanel({
     () => (header.entityId ? { rowId: header.rowId, entityId: header.entityId } : null),
     [header.entityId, header.rowId],
   );
-  const needsDetails = open || filtersSources;
+  const needsDetails = open;
 
   useEffect(() => {
     if (!needsDetails || !context.fetchFileChanges || !target) return;
@@ -231,8 +223,6 @@ export function ConversationFileSummaryPanel({
     });
   }, [details, header.rowId, header.turnId, header.fileChanges]);
 
-  // 在明细到达前不闪现源文件的聚合统计；读取失败后恢复原摘要，仍可展开重试。
-  if (filtersSources && context.fetchFileChanges && target && !settled) return null;
   if (!summary || summary.files <= 0) return null;
 
   return (

@@ -18,10 +18,6 @@ export interface TaskNavEntry extends WorkspaceNavEntryBase {
 /** 自动化管理页的定时任务与顶级工作流导航目标。 */
 export type AutomationsNavigationTab = "scheduled" | "workflow";
 
-export type OpenAutomationsMain = (
-  automationId?: string,
-  automationTab?: AutomationsNavigationTab,
-) => void;
 
 export interface AutomationsNavEntry extends WorkspaceNavEntryBase {
   kind: "automations";

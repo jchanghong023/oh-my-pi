@@ -2,7 +2,11 @@ import type { Subprocess } from "bun";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AIReqWorkflowCommand, AIReqWorkflowResult, AIReqWorkflowView } from "../../src/aireq-workbench/workflow-types";
+import type {
+	AIReqWorkflowCommand,
+	AIReqWorkflowResult,
+	AIReqWorkflowView,
+} from "../../src/aireq-workbench/workflow-types";
 import {
 	createProviderFixture,
 	contentText,
@@ -226,7 +230,7 @@ export class WorkflowConsumerProcess {
 		if (this.child.exitCode === null) {
 			const stdin = this.child.stdin;
 			if (!stdin) throw new Error("AIReq process stdin pipe is unavailable for explicit /aireq exit");
-			stdin.write("/dev\n");
+			stdin.write("/aireq\n");
 			await stdin.flush();
 		}
 		const timeout = Promise.withResolvers<never>();
@@ -265,6 +269,10 @@ export class WorkflowConsumerFixture {
 	static async create(scenario: WorkflowMockScenario = {}): Promise<WorkflowConsumerFixture> {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-aireq-workflow-consumer-"));
 		await fs.writeFile(path.join(root, ".owned-aireq-fixture"), root);
+		// Git for Windows maps MSYS /tmp through TMP/TMPDIR; the env below points both at root/tmp.
+		// Create it before any child process so bash.exe does not emit a startup warning that the
+		// workflow treats as a failed operation.
+		await fs.mkdir(path.join(root, "tmp"), { recursive: true });
 		const env = isolatedWorkflowEnvironment(root);
 		env.OMP_OFFLINE = "1";
 		const provider = createProviderFixture({

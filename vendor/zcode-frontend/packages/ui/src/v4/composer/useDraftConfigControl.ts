@@ -1002,7 +1002,25 @@ export function useDraftConfigControl(params: {
 
   const handleDraftSelectThought = useCallback(
     (thought: string) => {
-      if (nativeModelView?.nativeSession !== undefined) return;
+      const nativeSession = nativeModelView?.nativeSession;
+      if (nativeSession !== undefined) {
+        // 原生会话：思考等级由原生状态持有，只改当前会话，不写草稿或全局默认。
+        if (!nativeSession?.chatAvailable || !modelSessionId ||
+            nativeSession.sessionId !== modelSessionId ||
+            nativeSession.workspacePath !== workspacePath ||
+            modelSelectionRead.state.status !== "ready" ||
+            !modelSelectionService?.setSessionThinkingLevel) {
+          logger.warn("[v4-draft-config] thinking level change ignored for unavailable native session");
+          return;
+        }
+        void modelSelectionService
+          .setSessionThinkingLevel({ sessionId: modelSessionId, thinkingLevel: thought })
+          .then(() => modelSelectionRead.refresh())
+          .catch((error: unknown) => {
+            logger.warn("[v4-draft-config] setSessionThinkingLevel failed", { error: String(error) });
+          });
+        return;
+      }
       updateDraftConfig((current) => {
         const providerId = current.modelSelection?.providerId ?? current.provider?.trim();
         const modelId = current.modelSelection?.modelId ?? current.model?.trim();
@@ -1026,7 +1044,15 @@ export function useDraftConfigControl(params: {
         };
       });
     },
-    [nativeModelView, updateDraftConfig],
+    [
+      modelSelectionRead.state.status,
+      modelSelectionRead.refresh,
+      modelSelectionService,
+      modelSessionId,
+      nativeModelView,
+      updateDraftConfig,
+      workspacePath,
+    ],
   );
 
   const handleDraftSwitchMode = useCallback(

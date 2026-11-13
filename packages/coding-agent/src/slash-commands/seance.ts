@@ -8,7 +8,6 @@ import { SEANCE_AGENT_NAME } from "../task/seance-policy";
 import seanceCommandPrompt from "../prompts/system/seance-command.md" with { type: "text" };
 import seanceCommandSolutionSpace from "../prompts/system/seance-command-solution-space.md" with { type: "text" };
 import { parseCommandArgs } from "../utils/command-args";
-import { runNativeSeance } from "../webgui/native-command-seance";
 import { clearSubmittedText } from "./helpers/draft";
 import type { SlashCommandSpec } from "./types";
 import type { InteractiveModeContext } from "../modes/types";
@@ -155,14 +154,6 @@ export const SEANCE_SLASH_COMMAND: SlashCommandSpec = {
 	description: "Consult a saved session without resuming it",
 	inlineHint: "[session id|path] [--model selector]",
 	allowArgs: true,
-	handleWebGui: async (command, runtime) => {
-		const parsed = parseSeanceArgs(command.args);
-		if ("error" in parsed) {
-			await runtime.output(sanitizeErrorLine(parsed.error));
-			return { consumed: true, failed: true, errorCode: "invalid_params" };
-		}
-		return runNativeSeance(runtime, parsed);
-	},
 	handleTui: async (command, runtime) => {
 		clearSubmittedText(runtime);
 		const parsed = parseSeanceArgs(command.args);

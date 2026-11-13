@@ -126,7 +126,7 @@ describe("/aireq exclusive native entry rejects retired terminal routing", () =>
 		expect(await executeBuiltinSlashCommand("/aireq", { ctx, draftDetached: true })).toBe(true);
 		expect(entryChecks).toBe(2);
 		expect(shutdowns.size).toBe(1);
-		expect(text).toBe("/dev\n\nnew ordinary draft");
+		expect(text).toBe("/aireq\n\nnew ordinary draft");
 		expect(f.session.messages).toEqual([]);
 		expect(f.session.isBusyForSnapshot).toBe(false);
 		await expect(fs.stat(path.join(f.cwd, ".omp/aireq-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
@@ -189,7 +189,7 @@ describe("/aireq exclusive native entry rejects retired terminal routing", () =>
 
 	test("checks the submitted text rather than letting stale parsed args smuggle an old action", async () => {
 		await using f = await fixture();
-		for (const text of ["/dev:next", "/aireq next\n仍然是旧参数", "/dev\tnew raw request", "/aireq config "]) {
+		for (const text of ["/aireq:next", "/aireq next\n仍然是旧参数", "/aireq\tnew raw request", "/aireq config "]) {
 			expect(await f.invoke("", text)).toEqual({ consumed: true, failed: true, errorCode: "invalid_params" });
 		}
 		expect(f.session.messages).toEqual([]);

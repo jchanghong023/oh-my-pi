@@ -66,9 +66,9 @@ test("frozen snapshot must include every declared root member and every supplied
 	const { cwd, authority } = await frozen();
 	const outside = { path: "outside.md", content: "not covered", digest: sha256("not covered") };
 	await fs.writeFile(path.join(cwd, outside.path), outside.content);
-	await expect(assertAIReqFrozenAuthority(cwd, { ...authority, files: [...authority.files, outside] })).rejects.toThrow(
-		"missing from whole-set authority",
-	);
+	await expect(
+		assertAIReqFrozenAuthority(cwd, { ...authority, files: [...authority.files, outside] }),
+	).rejects.toThrow("missing from whole-set authority");
 });
 
 test("recursive stop waits actual cleanup after cancellation and discovers late descendants beyond three passes", async () => {

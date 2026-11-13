@@ -101,6 +101,11 @@ export interface IModelSelectionService {
     providerId: string;
     modelId: string;
   }): Promise<ModelSelectionView>;
+  /** OMP only: change the bound session thinking level; temporary unless the caller persists it. */
+  setSessionThinkingLevel?(input: {
+    sessionId: string;
+    thinkingLevel: string;
+  }): Promise<ModelSelectionView>;
 }
 
 export interface ModelSelectionConfiguredDefaultSource {

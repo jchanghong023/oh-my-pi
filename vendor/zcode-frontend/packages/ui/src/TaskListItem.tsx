@@ -2,12 +2,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
-  Clock,
   LoaderIcon,
-  ListTree,
   Pin,
 } from "lucide-react";
-import { isCronTask, type ZCodeTaskMeta } from "@zcode/shared";
+import type { ZCodeTaskMeta } from "@zcode/shared";
 import { TID_TASK_ARCHIVE, TID_TASK_ITEM, testId } from "@zcode/shared/test-ids";
 import { Badge } from "@/components/ui/badge.js";
 import { Button } from "@/components/ui/button.js";
@@ -23,7 +21,6 @@ import { getTaskListAttention, getTaskListRowActivity } from "@/v4/taskListRowAc
 import { TaskListItemContextMenu } from "@/TaskListItemContextMenu.js";
 import { TaskInteractionBadge } from "@/TaskInteractionBadge.js";
 import { useTaskListItemContextActions } from "@/useTaskListItemContextActions.js";
-import { useModelTrajectoryStore } from "@/store/modelTrajectoryStore.js";
 import { toast } from "@/components/ui/toast.js";
 import { buildTaskWorkspaceKey } from "@/lib/taskQueryCache.js";
 import { useV4SplitPaneEntry } from "@/v4/splitPaneEntryContext.js";
@@ -41,7 +38,6 @@ import { TaskTitleOverflowText } from "@/components/TaskTitleOverflowText.js";
 import { createTaskWorkbenchDragPreview } from "@/lib/taskWorkbenchDragPreview.js";
 import { logger } from "@/logger.js";
 import { TaskRowActionButton } from "@/workspace-grouped-tasks/task-row-action-button.js";
-import { TaskWorkflowRunLines } from "@/components/workflow-run-line/TaskWorkflowRunLines.js";
 
 type TaskListItemIntl = {
   formatMessage: (desc: { id: string }, values?: Record<string, string>) => string;
@@ -144,7 +140,6 @@ export const MemoTaskItem = memo(function TaskListItem({
   isArchiveConfirming,
   onTogglePinTask,
   onOpenTaskContextMenu,
-  onOpenFileTree,
   variant = "default",
   showPinAction = true,
   intl,
@@ -335,7 +330,6 @@ export const MemoTaskItem = memo(function TaskListItem({
     () => deriveTaskLeadingIndicator(task, taskActivity),
     [task, taskActivity],
   );
-  const isTaskCron = isCronTask(task);
   const showPinnedState = isPinned && leadingIndicator === "none";
   // 修复原因：手机会在 click 前合成 mouseenter/focus；此时切换内容会让首次点击只进入 hover。
   // Touch layouts keep metadata and actions stable; pointer layouts use hover/focus presentation.
@@ -355,21 +349,6 @@ export const MemoTaskItem = memo(function TaskListItem({
   const taskTitleWithChanges = formatTaskTitleWithChanges(taskTitle, taskChangeSummary, intl);
   const workspaceLabel = getPathLeaf(task.workspacePath);
   const taskItemKey = `${buildTaskWorkspaceKey(task.workspacePath, task.workspaceIdentity)}:${task.taskId}`;
-  // 工作流运行行：标题下的第二条通道，
-  // 与前置 16px 槽（error > unread > spinner）互不占位。只在会话带 run 摘要时挂组件。
-  const hasWorkflowRunLines = taskActivity?.workflowActivity !== undefined;
-  const workflowRunLinesNode = hasWorkflowRunLines ? (
-    <TaskWorkflowRunLines
-      activity={taskActivity.workflowActivity}
-      isActive={isActive}
-      intl={intl}
-      session={{
-        workspacePath: task.workspacePath,
-        ...(task.workspaceIdentity ? { workspaceIdentity: task.workspaceIdentity } : {}),
-        sessionId: task.taskId,
-      }}
-    />
-  ) : null;
   const changeSummaryNode =
     !hasPendingInteraction && taskChangeSummary ? (
       <span className="shrink-0 text-ui-base">
@@ -422,32 +401,9 @@ export const MemoTaskItem = memo(function TaskListItem({
       )}
     </div>
   ) : null;
-  // 原因：置顶任务常跨项目，查看文件必须保留独立入口；复用共享 action，避免点击选择任务。
-  const fileTreeActionNode =
-    onOpenFileTree &&
-    !workspaceActionsDisabled &&
-    !hasPendingInteraction &&
-    shouldMountWorkspaceTaskActions ? (
-      <TaskRowActionButton
-        label={intl.formatMessage({ id: "git.action.showTree" })}
-        showTooltip
-        testId={`task-files-${task.taskId}`}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          void (async () => onOpenFileTree?.())().catch((cause) => {
-            logger.error("[task-list] 查看文件失败", cause);
-            toast(String(cause));
-          });
-        }}
-      >
-        <ListTree className="size-3.5" />
-      </TaskRowActionButton>
-    ) : null;
   const taskActionGroupNode =
-    fileTreeActionNode || archiveActionNode ? (
+    archiveActionNode ? (
       <span data-task-row-actions="true" className="flex shrink-0 items-center gap-0.5">
-        {fileTreeActionNode}
         {archiveActionNode}
       </span>
     ) : null;
@@ -505,12 +461,7 @@ export const MemoTaskItem = memo(function TaskListItem({
       }}
       className={cn(
         "group/task-item flex cursor-pointer gap-2 rounded-lg pl-2.5 pr-1 py-1 transition-[background-color,border-color,box-shadow]",
-        // 默认行 32px 时前置槽整行居中；长出工作流运行行后行体是两行的纵向列，槽改为对齐首行。
-        variant === "timeline"
-          ? "items-start py-1.5"
-          : hasWorkflowRunLines
-            ? "items-start"
-            : "items-center",
+        variant === "timeline" ? "items-start py-1.5" : "items-center",
         isActive ? "bg-selected" : hoverEnabled && "hover:bg-surface-hover",
       )}
     >
@@ -521,8 +472,7 @@ export const MemoTaskItem = memo(function TaskListItem({
       <div
         className={cn(
           "relative flex size-4 shrink-0 items-center justify-center",
-          // 行体是纵向列（标题行 + 运行行）时前置槽对齐首行而不是整行：默认 24px 首行居中 = 上留 4px。
-          variant === "timeline" ? "mt-0.5" : hasWorkflowRunLines ? "mt-1" : undefined,
+          variant === "timeline" ? "mt-0.5" : undefined,
         )}
       >
         <span
@@ -605,24 +555,12 @@ export const MemoTaskItem = memo(function TaskListItem({
                       ·
                     </span>
                   ) : null}
-                  {isTaskCron ? (
-                    // Bugfix: 定时任务 icon 不能占用左侧状态槽；未读、运行中、置顶 hover 都会接管那里。
-                    // 放在时间前面，与其它元信息同列，状态变化时也不会丢。
-                    <Clock
-                      data-cron-task-icon="true"
-                      aria-label={intl.formatMessage({
-                        id: "taskList.cronTaskLabel",
-                      })}
-                      className="size-3.5 shrink-0"
-                    />
-                  ) : null}
                   <span className="mr-1">{taskTimeLabel}</span>
                 </span>
               ) : null}
               {taskActionGroupNode}
             </div>
           </div>
-          {workflowRunLinesNode}
         </div>
       ) : (
         <div className="flex min-w-0 flex-1 flex-col">
@@ -669,23 +607,12 @@ export const MemoTaskItem = memo(function TaskListItem({
                   isArchiveConfirming || shouldSuppressWorkspaceTaskMetadata ? "hidden" : undefined,
                 )}
               >
-                {isTaskCron ? (
-                  // 定时任务 icon 归属时间元信息，而不是左侧状态位；否则 unread/loading 会把 icon 顶掉。
-                  <Clock
-                    data-cron-task-icon="true"
-                    aria-label={intl.formatMessage({
-                      id: "taskList.cronTaskLabel",
-                    })}
-                    className="size-3.5 shrink-0"
-                  />
-                ) : null}
                 {taskTimeLabel}
               </span>
             ) : null}
 
             {taskActionGroupNode}
           </div>
-          {workflowRunLinesNode}
         </div>
       )}
     </li>
@@ -802,14 +729,6 @@ export function TaskListItemContextMenuContent({
       }}
       onCopySessionId={() => {
         void handleCopyText(intl.formatMessage({ id: "appHeader.copySessionId" }), task.taskId);
-      }}
-      onViewModelTrajectory={() => {
-        // 通过单例 store 把“打开轨迹”请求交给所属 workspace 的侧边栏控制器（useAppPanels）。
-        useModelTrajectoryStore.getState().requestOpen({
-          taskId: task.taskId,
-          workspaceKey: task.workspaceIdentity?.trim() || workspacePath,
-          title: taskTitle,
-        });
       }}
       onOpenProviderConfig={() => {
         void handleOpenProviderConfig();

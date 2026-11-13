@@ -495,13 +495,21 @@ async function waitGroup(context: AIReqJourneyContext, projectId: string, id: st
 	);
 	return [...view.groups, ...view.drafts].find(group => group.id === id)!;
 }
-async function currentGroup(context: AIReqJourneyContext, projectId: string, irId: string): Promise<AIReqRequirementGroup> {
+async function currentGroup(
+	context: AIReqJourneyContext,
+	projectId: string,
+	irId: string,
+): Promise<AIReqRequirementGroup> {
 	const view = await context.view(projectId, irId);
 	const group = [...view.groups, ...view.drafts].find(item => item.id === irId);
 	demand(group, "Selected requirement group disappeared");
 	return group;
 }
-async function currentSr(context: AIReqJourneyContext, projectId: string, srId: string): Promise<AIReqSystemRequirement> {
+async function currentSr(
+	context: AIReqJourneyContext,
+	projectId: string,
+	srId: string,
+): Promise<AIReqSystemRequirement> {
 	const sr = (await context.view(projectId)).srs.find(item => item.id === srId);
 	demand(sr, "Selected SR disappeared");
 	return sr;
@@ -1458,7 +1466,10 @@ export async function runAIReqJourney(context: AIReqJourneyContext): Promise<AIR
 		await waitVisible(context, `header[data-sr-id=${quoted(imported.srId)}][data-stage=${quoted(before.stage!)}]`);
 		await waitVisible(context, `${selector("stage-solution")}[aria-pressed="true"]`);
 		await waitVisible(context, `${selector("material")}[data-material-path=${quoted(solution.path)}]`);
-		await waitVisible(context, `[data-testid="aireq-native-surface"][data-session-id=${quoted(activeRef.sessionId)}]`);
+		await waitVisible(
+			context,
+			`[data-testid="aireq-native-surface"][data-session-id=${quoted(activeRef.sessionId)}]`,
+		);
 		const surfaceReloaded = await nativeSurface(context);
 		demand(
 			surfaceReloaded.target.projectId === surfaceBefore.target.projectId &&

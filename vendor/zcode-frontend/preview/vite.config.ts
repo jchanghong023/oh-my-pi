@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { pdfJsCMapsPlugin } from "../packages/ui/vite/pdfJsCMapsPlugin.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const packages = path.join(root, "packages");
@@ -13,6 +12,28 @@ function copiedFrontendPackages(): Plugin {
 		name: "copied-frontend-packages",
 		enforce: "pre",
 		resolveId(source: string, importer: string | undefined) {
+			// Exact match only: shiki/langs/<lang>.mjs must keep resolving to the real language module.
+			if (source === "shiki/langs") return path.join(root, "preview/shiki-langs-subset.ts");
+			// @pierre/theming imports every Shiki theme by subpath. Keep only the themes the WebGUI
+			// highlighter can select and collapse the rest to one fallback module.
+			if (source.startsWith("@shikijs/themes/")) {
+				const name = source.slice("@shikijs/themes/".length);
+				const supported = new Set([
+					"github-light",
+					"github-dark",
+					"vitesse-light",
+					"vitesse-dark",
+					"min-light",
+					"min-dark",
+					"github-light-high-contrast",
+					"github-dark-high-contrast",
+					"catppuccin-latte",
+					"catppuccin-mocha",
+				]);
+				return supported.has(name)
+					? path.join(root, "node_modules/@shikijs/themes/dist", `${name}.mjs`)
+					: path.join(root, "preview/shiki-theme-fallback.ts");
+			}
 			if (source.startsWith("#src/") && importer) {
 				const packageName = path.relative(packages, importer).split(path.sep)[0];
 				return this.resolve(path.join(packages, packageName, "src", source.slice(5)), importer, { skipSelf: true });
@@ -37,14 +58,13 @@ export default defineConfig({
 		copiedFrontendPackages(),
 		react(),
 		tailwindcss(),
-		pdfJsCMapsPlugin(),
 	],
 	resolve: {
 		alias: {
 			"@zcode/ui/styles.css": path.join(packages, "ui/src/styles.css"),
 			"@": path.join(packages, "ui/src"),
 		},
-		dedupe: ["react", "react-dom"],
+		dedupe: ["react", "react-dom", "shiki", "@shikijs/core", "@shikijs/engine-oniguruma", "@shikijs/themes", "@shikijs/langs"],
 	},
 	optimizeDeps: {
 		rolldownOptions: {

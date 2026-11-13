@@ -15,7 +15,7 @@ export interface ConfirmDialogRequest {
   /** E2E/可访问性使用的稳定业务语义，不依赖本地化标题文本。 */
   intent?: string;
   /** 特定业务弹框的稳定视觉规范；默认确认框不受影响。 */
-  presentation?: "automation-confirmation" | "source-server-boundary" | "yolo-confirmation";
+  presentation?: "source-server-boundary" | "yolo-confirmation";
   confirmLabel?: string;
   cancelLabel?: string;
   confirmVariant?: "default" | "destructive";

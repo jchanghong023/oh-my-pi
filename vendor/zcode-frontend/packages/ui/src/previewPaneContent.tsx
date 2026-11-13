@@ -1,10 +1,10 @@
 import type { MarkdownSelectionTarget } from "@/lib/conversationSelectionReference.js";
-/* eslint-disable max-lines -- PreviewPane 内容路由同时承载文本、图片、媒体、Office、PDF 和 PPTX 渲染。 */
+/* eslint-disable max-lines -- PreviewPane 内容路由同时承载文本、图片与媒体渲染。 */
 import type { BundledTheme } from "shiki";
 import { useMemo, type Ref, type SyntheticEvent, type UIEventHandler } from "react";
-import type { FileBinaryPreview, FileMediaPreview, FileTextSlice } from "@zcode/shared";
+import type { FileMediaPreview, FileTextSlice } from "@zcode/shared";
 import { inferCodeLanguage } from "@/lib/codeViewer.js";
-import type { CodeViewerSource } from "@/lib/codeViewer.js";
+import type { CodeViewerSource, MediaCodeViewerSource } from "@/lib/codeViewer.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import type { CodePreviewSettings } from "@/store/index.js";
 import type { CodeCommentLabels } from "@/components/ui/code-viewer.js";
@@ -13,18 +13,10 @@ import { CodeContent } from "@/previewPaneCodeContent.js";
 import { ImagePreviewContent, SvgPreviewContent } from "@/previewPaneImageContent.js";
 import type { WorkspaceFileDragPayload } from "@/lib/workspaceFileDrag.js";
 import { PreviewPaneMediaContent } from "@/previewPaneMediaContent.js";
-import { PdfPreviewContent } from "@/previewPanePdfContent.js";
-import { PptxPreviewContent } from "@/previewPanePptxContent.js";
 import { PatchFallbackContent } from "@/previewPanePatchFallbackContent.js";
 import { DiffViewer } from "@/components/ui/diff-viewer.js";
-import type { PdfViewerLabels, PdfViewerSource } from "@/components/ui/pdf-viewer.js";
-import type { PptxPreviewViewerLabels } from "@/components/ui/pptx-preview-viewer.js";
 import type { CodeCommentPreview, CodeCommentRange } from "@/lib/codeCommentContext.js";
 import type { Theme } from "@/useTheme.js";
-import type { OfficeFilePreviewKind } from "@/lib/officeFilePreview.js";
-import { PreviewPaneOfficeContent } from "@/previewPaneOfficeContent.js";
-import type { PptxElementReferenceSource } from "@/lib/pptxElementReference.js";
-import type { MediaCodeViewerSource, PptxReferencePreviewNavigation } from "@/lib/codeViewer.js";
 import { resolveCodeReviewContentProjection } from "@/previewPaneCodeReview.js";
 
 interface PreviewPaneContentProps {
@@ -41,18 +33,6 @@ interface PreviewPaneContentProps {
   mediaPreviewUrl: string | null;
   onMediaError: (event: SyntheticEvent<HTMLMediaElement>) => void;
   onMediaLoadedMetadata: (event: SyntheticEvent<HTMLMediaElement>) => void;
-  loadingPdfPreview: boolean;
-  pdfViewerSource: PdfViewerSource | null;
-  pdfViewerLabels: PdfViewerLabels;
-  loadingOfficePreview: boolean;
-  officePreview: FileBinaryPreview | null;
-  officePreviewKind: OfficeFilePreviewKind | null;
-  loadingPptxPreview: boolean;
-  pptxPreviewData: ArrayBuffer | null;
-  pptxViewerLabels: PptxPreviewViewerLabels;
-  pptxReferenceSource: PptxElementReferenceSource | null;
-  pptxReferenceNavigation: PptxReferencePreviewNavigation | null;
-  pptxReferenceNavigationReady: boolean;
   error: string | null;
   codePreviewSettings: CodePreviewSettings;
   codeTheme: BundledTheme;
@@ -77,6 +57,13 @@ interface PreviewPaneContentProps {
   onDeleteCodeComment?: (commentId: string) => void;
   onScroll?: UIEventHandler<HTMLDivElement>;
   scrollContainerRef?: Ref<HTMLDivElement>;
+}
+
+/** WebGUI 只保留文本/代码/markdown/图片/媒体/PDF；Office 与 PPTX 直接给出说明。 */
+const UNSUPPORTED_PREVIEW_EXTENSIONS = /\.(?:docx?|xlsx?|pptx?)$/iu;
+
+function isUnsupportedPreviewPath(path?: string): boolean {
+  return path ? UNSUPPORTED_PREVIEW_EXTENSIONS.test(path) : false;
 }
 
 function isSvgPath(path?: string): boolean {
@@ -104,18 +91,6 @@ export function PreviewPaneContent({
   mediaPreviewUrl,
   onMediaError,
   onMediaLoadedMetadata,
-  loadingPdfPreview,
-  pdfViewerSource,
-  pdfViewerLabels,
-  loadingOfficePreview,
-  officePreview,
-  officePreviewKind,
-  loadingPptxPreview,
-  pptxPreviewData,
-  pptxViewerLabels,
-  pptxReferenceSource,
-  pptxReferenceNavigation,
-  pptxReferenceNavigationReady,
   error,
   codePreviewSettings,
   codeTheme,
@@ -297,77 +272,11 @@ export function PreviewPaneContent({
     );
   }
 
-  if (source.type === "pdf") {
-    if (loadingPdfPreview || (!error && !pdfViewerSource)) {
-      return (
-        <div className="p-3 text-ui-base text-foreground-subtle">
-          {intl.formatMessage({ id: "codeViewer.loadingPdf" })}
-        </div>
-      );
-    }
-
-    if (error || !pdfViewerSource) {
-      const errorMessage = error ?? intl.formatMessage({ id: "codeViewer.pdfUnavailable" });
-      return (
-        <div
-          className={`p-3 text-ui-base ${
-            error ? getPreviewPaneErrorTextClass(error, fileMissingMessage) : "text-destructive"
-          }`}
-        >
-          {errorMessage}
-        </div>
-      );
-    }
-
-    return <PdfPreviewContent source={pdfViewerSource} labels={pdfViewerLabels} />;
-  }
-
-  if (source.type === "file" && officePreviewKind) {
+  if (source.type === "pptx" || (source.type === "file" && isUnsupportedPreviewPath(source.path))) {
     return (
-      <PreviewPaneOfficeContent
-        error={error}
-        kind={officePreviewKind}
-        loading={loadingOfficePreview}
-        onOpenBrowserUrl={onOpenBrowserUrl}
-        preview={officePreview}
-        resolvedTheme={resolvedTheme}
-        sourcePath={source.path}
-      />
-    );
-  }
-
-  if (source.type === "pptx") {
-    if (loadingPptxPreview || (!error && !pptxPreviewData)) {
-      return (
-        <div className="p-3 text-ui-base text-foreground-subtle">
-          {intl.formatMessage({ id: "codeViewer.loadingPptx" })}
-        </div>
-      );
-    }
-
-    if (error || !pptxPreviewData) {
-      const errorMessage = error ?? intl.formatMessage({ id: "codeViewer.pptxUnavailable" });
-      return (
-        <div
-          className={`p-3 text-ui-base ${
-            error ? getPreviewPaneErrorTextClass(error, fileMissingMessage) : "text-destructive"
-          }`}
-        >
-          {errorMessage}
-        </div>
-      );
-    }
-
-    return (
-      <PptxPreviewContent
-        data={pptxPreviewData}
-        labels={pptxViewerLabels}
-        fileName={source.path}
-        onOpenBrowserUrl={onOpenBrowserUrl}
-        {...(pptxReferenceSource ? { referenceSource: pptxReferenceSource } : {})}
-        {...(pptxReferenceNavigation ? { referenceNavigation: pptxReferenceNavigation } : {})}
-        referenceNavigationReady={pptxReferenceNavigationReady}
-      />
+      <div className="p-3 text-ui-base text-foreground-subtle">
+        {intl.formatMessage({ id: "codeViewer.previewUnsupported" })}
+      </div>
     );
   }
 

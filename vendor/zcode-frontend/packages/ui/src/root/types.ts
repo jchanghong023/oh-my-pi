@@ -9,7 +9,7 @@ import type {
 } from "@zcode/shared";
 import type { IServiceAccessor } from "@zcode/services";
 import type { ReactNode } from "react";
-import type { CreateTaskOptions, CreateTaskRequest } from "@/app-shell/types.js";
+import type { CreateTaskOptions } from "@/app-shell/types.js";
 
 export interface WebRemoteControlWorkspaceSwitcherApi {
   /** 账号级设备导航由 Web 入口注入，不通过 workspace bridge/RPC 访问。 */
@@ -87,12 +87,3 @@ export interface RootProps {
   assistantCodeCommentCardsEnabled?: boolean;
 }
 
-export interface WorkspaceSettingsLayerProps {
-  workspaceScopedServices?: IServiceAccessor;
-  isDesktop?: boolean;
-  captionWorkspacePath?: string | null;
-  onBack?: () => void;
-  onCreateTask?: (request?: CreateTaskRequest) => void;
-  onOpenWorkspace?: () => void;
-  allowOpenWorkspace?: RootProps["allowOpenWorkspace"];
-}

@@ -118,7 +118,7 @@ AIReq 与 WebGUI MUST 保留 ZCode 侧栏切换、后退和前进的可见入口
 
 ### Requirement: 开发加载保留原生热更新
 
-AIReq 与 WebGUI 的开发 Vite 配置 MUST 合并稳定的 Lucide 图标预构建分组，避免逐图标静态请求；不预打包本地业务源码或关闭 HMR，不为性能更换已有图标组件或改写生产分包。
+AIReq 的开发 Vite 配置 MUST 合并稳定的 Lucide 图标预构建分组，避免逐图标静态请求；不预打包本地业务源码或关闭 HMR。WebGUI 最小聊天构建 MUST 使用静态图标子集或按需单图标，不保留全量 `lucide-react/dynamic` 图标表；不为视觉对齐恢复已删除的非聊天面板或图标。
 
 #### Scenario: 非首屏页面按需加载
 - **WHEN** 用户首次进入设置、自动化，或 AIReq 的 Skill 设计、需求分析
@@ -145,7 +145,7 @@ AIReq 自有页面 MUST 在左右侧栏之间的剩余内容面板内自动适�
 - **AND** 此后续授权仅解除上一轮对Skill设计的排除，不扩大到WebGUI、真实后端或业务流程
 
 #### Scenario: AIReq 与 WebGUI 恢复官方 Web 外壳背景层次
-- **WHEN** 在桌面浏览器打开AIReq或WebGUI的主页或设置页
+- **WHEN** 在桌面浏览器打开 AIReq 的主页或设置页，或 WebGUI 的聊天主页
 - **THEN** 复用官方3.18.0提交b95ebaffeab641907b38652f45c1502bd762972d的DesktopWindowFrame，使用官方Web分支bg-background-win-alt；导航透明呈现该外壳背景，内部内容面板继续使用bg-background
 - **AND** 深色外壳由原有主题变量取#2b2b2b、内容取#161616，不新增色值、纹理或桌面磨砂模拟；不以bg-sidebar覆盖外壳，不改变现有页面布局、导航或业务权限
 

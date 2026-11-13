@@ -502,7 +502,9 @@ test("frozen worktree materialization never repairs retries or substantively div
 		"Frozen requirement changed",
 	);
 	expect(await fs.readFile(ownedFile, "utf8")).toBe(changed);
-	await expect(assertAIReqFrozenAuthority(owned.path, fixture.authority)).rejects.toThrow("Frozen requirement changed");
+	await expect(assertAIReqFrozenAuthority(owned.path, fixture.authority)).rejects.toThrow(
+		"Frozen requirement changed",
+	);
 	const defaultFile = path.join(fixture.cwd, fixture.content.document.path);
 	await fs.writeFile(defaultFile, changed);
 	await workflowGit(fixture.cwd, ["add", "--", fixture.content.document.path]);

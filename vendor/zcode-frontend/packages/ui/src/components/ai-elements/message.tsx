@@ -11,9 +11,6 @@ import { Button } from "../ui/button.js";
 import { ButtonGroup, ButtonGroupText } from "../ui/button-group.js";
 import { cn } from "../lib/utils.js";
 import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
-import { createMathPlugin } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
 import type { EditorInfo, FileStat, OpenInEditorOptions } from "@zcode/shared";
 import type { UIMessage } from "ai";
 import {
@@ -411,10 +408,6 @@ export interface MessageFileLinkTarget {
   workspaceRemoteSessionId?: string;
 }
 
-// @streamdown/math 默认不解析 `$...$` 行内公式，导致客户消息里块级 `$$...$$`
-// 能渲染而 `$c(\mathbf{r})$` 会原样显示；聊天消息需要兼容常见 Markdown/LaTeX 输出。
-const messageMathPlugin = createMathPlugin({ singleDollarTextMath: true });
-
 function disableSingleTilde(plugin: Pluggable): Pluggable {
   if (!Array.isArray(plugin)) {
     return typeof plugin === "function" ? [plugin, { singleTilde: false }] : plugin;
@@ -439,7 +432,7 @@ const messageCjkPlugin: typeof cjk = {
   remarkPlugins: [...cjk.remarkPluginsBefore, ...messageCjkRemarkPluginsAfter],
   remarkPluginsAfter: messageCjkRemarkPluginsAfter,
 };
-const streamdownPlugins = { cjk: messageCjkPlugin, code, math: messageMathPlugin, mermaid };
+const streamdownPlugins = { cjk: messageCjkPlugin };
 const messageLinkSafety = { enabled: false } as const;
 // `decoration-dashed` 会把原有的细圆点下划线绘制成短线段；这里只改变下划线的
 // 出现时机，继续使用 `dotted` 保留原视觉形态。
@@ -1652,9 +1645,7 @@ export const MessageResponse = memo(
               enableSyntaxHighlighting={!renderStreaming}
               fontSizePx={codePreviewSettings.fontSizePx}
               language={language}
-              renderMermaid={!renderStreaming}
               theme={codeBlockTheme}
-              appTheme={theme}
               wrapLongLines={wrapLongLines}
             >
               <CodeBlockHeader

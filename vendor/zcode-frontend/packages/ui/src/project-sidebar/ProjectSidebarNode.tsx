@@ -7,10 +7,8 @@ import type {
 } from "@/project-sidebar/contract.js";
 import { ProjectNode } from "@/project-sidebar/ProjectNode.js";
 import type { ProjectNodeProps } from "@/project-sidebar/ProjectNodeContent.js";
-import { useTabStoreApi } from "@/store/TabStoreProvider.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { toast } from "@/components/ui/toast.js";
 import { logger } from "@/logger.js";
 
@@ -54,21 +52,12 @@ export const ProjectSidebarNode = memo(
   }: Props) {
     const { intl } = useZCodeIntl();
     const confirm = useConfirmDialog();
-    const tabStore = useTabStoreApi();
     const msg = (id: string) => intl.formatMessage({ id: `project.${id}` });
     const { refresh } = display;
     return (
       <ProjectNode
         {...display}
         project={project}
-        onManageProjects={
-          isDesktop
-            ? () => {
-                setPendingSettingsSectionIntent("projects");
-                tabStore.getState().openSettingsTab();
-              }
-            : undefined
-        }
         onExpandedChange={(expanded) => onExpandedChange(project, expanded)}
         onCreate={() =>
           runProjectAction(async () => {

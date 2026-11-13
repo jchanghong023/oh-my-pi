@@ -29,6 +29,12 @@ import type {
 import { ModelConfigSelect, type ModelSelectGroup } from "@/ModelConfigSelect.js";
 import type { ComposerModelOptions } from "@/chat-input-toolbar/ComposerModelMenu.js";
 import { Button } from "@/components/ui/button.js";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu.js";
 import { toast } from "@/components/ui/toast.js";
 import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import {
@@ -37,12 +43,8 @@ import {
 } from "@/chat-input-toolbar/thoughtLevelOptions.js";
 import type { V4ComposerConfigPicker } from "@/v4/composer/configPickerState.js";
 import { useToolbarShortcutBindings } from "@/v4/composer/toolbarShortcuts.js";
-import {
-  resolveModelSelectTriggerDisplay,
-  shouldShowManageModelsAction,
-} from "@/chat-input-toolbar/modelSelection.js";
+import { resolveModelSelectTriggerDisplay } from "@/chat-input-toolbar/modelSelection.js";
 import { resolveV4ModelTriggerDisplay } from "@/v4/composer/modelTriggerDisplay.js";
-import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import type { ModelSelectionView } from "@zcode/services";
 import type {
@@ -147,7 +149,6 @@ function V4ComposerModelControlsImpl({
     null,
     workspaceIdentity,
   );
-  const openSettingsTab = useTabStore((state) => state.openSettingsTab);
   const modelTriggerRef = useRef<HTMLSpanElement | null>(null);
   // Ctrl+M 热键：递增 openRequestKey 请求 ModelConfigSelect 打开菜单（旧 handleOpenModelMenuShortcut 语义）。
   const [modelMenuOpenRequestKey, setModelMenuOpenRequestKey] = useState(0);
@@ -209,16 +210,6 @@ function V4ComposerModelControlsImpl({
     return buildRegistryModelSelectGroups(displayProvider, modelSelectionView, modelGroupLabels);
   }, [displayProvider, modelGroupLabels, modelSelectionView]);
 
-  // 修复：恢复「管理模型」入口（老版 onManageModels = 打开设置页并定位模型供应商区）。
-  const handleOpenModelProviderSettings = useCallback(() => {
-    setPendingSettingsSectionIntent("modelProvider");
-    openSettingsTab();
-  }, [openSettingsTab]);
-  const showManageModelsAction =
-    !isNativeModelSelection && shouldShowManageModelsAction(handleOpenModelProviderSettings);
-  const manageModelsLabel = intl.formatMessage({
-    id: "chat.toolbar.model.manageModels",
-  });
 
   // 当前投影模型的编码值：provider 命中目录则按自定义模型编码，否则回落裸 model id。
   const rawModelValue = useMemo(() => {
@@ -240,13 +231,8 @@ function V4ComposerModelControlsImpl({
   // 模型 id。复用存活的 resolveModelSelectTriggerDisplay。
   const triggerDisplay = useMemo(
     () =>
-      resolveModelSelectTriggerDisplay(
-        rawModelValue,
-        modelSelectGroups,
-        showManageModelsAction,
-        manageModelsLabel,
-      ),
-    [manageModelsLabel, modelSelectGroups, rawModelValue, showManageModelsAction],
+      resolveModelSelectTriggerDisplay(rawModelValue, modelSelectGroups),
+    [modelSelectGroups, rawModelValue],
   );
   const normalizedModelValue = isNativeModelSelection ? rawModelValue : (triggerDisplay.value ?? "");
 
@@ -378,17 +364,28 @@ function V4ComposerModelControlsImpl({
   );
 
 
-  const draftModelThoughtOption = useMemo(
-    () =>
-      effectiveConfig && !isNativeModelSelection
-        ? resolveDraftModelThoughtOption(
-            effectiveConfig.provider,
-            effectiveConfig.model,
-            modelSelectionView,
-          )
-        : null,
-    [effectiveConfig, isNativeModelSelection, modelSelectionView],
-  );
+  const draftModelThoughtOption = useMemo(() => {
+    if (!effectiveConfig) return null;
+    if (!isNativeModelSelection) {
+      return resolveDraftModelThoughtOption(
+        effectiveConfig.provider,
+        effectiveConfig.model,
+        modelSelectionView,
+      );
+    }
+    // 原生会话：档位来自绑定会话的真实可选集合，当前值来自会话的实际思考等级。
+    const native = modelSelectionView?.nativeSession;
+    const levels = native?.thinkingLevels ?? [];
+    if (!levels.length) return null;
+    return {
+      id: "thought_level",
+      name: "思考等级",
+      category: "thought_level",
+      type: "select",
+      currentValue: native.thinkingLevel ?? levels[0]!,
+      options: levels.map(value => ({ value, name: value, origin: "native" as const })),
+    };
+  }, [effectiveConfig, isNativeModelSelection, modelSelectionView]);
 
   // 候选档位只来自目标 Host 的 ModelSelectionView，已选档位只来自 Composer。
   const thoughtOption = useMemo<ZCodeConfigOption | null>(() => {
@@ -473,7 +470,7 @@ function V4ComposerModelControlsImpl({
   // 模式循环（Ctrl+Shift+M）由 V4ComposerModeSwitch 单独绑定（modeOption 在彼处）。
   // 模型留空是正常的待选择状态，包括已有会话；不能因为没有已选模型隐藏重选入口。
   // 有可选组时正常显示；无组但有「管理模型」入口时也显示，避免用户零模型入口。
-  const modelMenuVisible = modelSelectGroups.length > 0 || showManageModelsAction;
+  const modelMenuVisible = modelSelectGroups.length > 0;
   const modelPickerDisabled =
     disabled ||
     (isNativeModelSelection &&
@@ -561,17 +558,6 @@ function V4ComposerModelControlsImpl({
                 : "chat.toolbar.model.targetMissing",
           })}
         </span>
-      ) : modelMenuVisible && !isNativeModelSelection && modelSelectGroups.length === 0 ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-ui-sm"
-          data-testid="chat-model-select-trigger"
-          onClick={handleOpenModelProviderSettings}
-        >
-          {manageModelsLabel}
-        </Button>
       ) : modelMenuVisible ? (
         <ModelConfigSelect
           key={JSON.stringify([
@@ -586,9 +572,6 @@ function V4ComposerModelControlsImpl({
             sessionConfigPending && !effectiveConfig?.model ? "" : modelTriggerDisplay.modelLabel
           }
           composerOptions={isNativeModelSelection ? undefined : composerOptions}
-          showManageModelsAction={showManageModelsAction}
-          manageModelsLabel={manageModelsLabel}
-          onManageModels={handleOpenModelProviderSettings}
           lockReasonMessage={intl.formatMessage({
             id: "chat.toolbar.modelSwitch.lockedByRunningTask",
           })}
@@ -615,6 +598,37 @@ function V4ComposerModelControlsImpl({
           focusSelectorOnClose={V4_COMPOSER_INPUT_SELECTOR}
           providerSubmenuClassName={providerSubmenuClassName}
         />
+      ) : null}
+      {isNativeModelSelection && thoughtOption?.type === "select" && thoughtOption.options?.length ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-ui-sm"
+              data-testid="native-thought-trigger"
+              aria-label={intl.formatMessage({ id: "chat.toolbar.combined.effort" })}
+            >
+              {String(
+                modelSelectionView?.nativeSession?.thinkingLevel ??
+                  thoughtOption.currentValue ??
+                  "",
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="center" className="min-w-32">
+            {thoughtOption.options.map(entry => (
+              <DropdownMenuItem
+                key={entry.value}
+                data-testid={`native-thought-option-${entry.value}`}
+                onSelect={() => handleThoughtValueChange(entry.value)}
+              >
+                {entry.name || entry.value}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       ) : null}
     </>
   );

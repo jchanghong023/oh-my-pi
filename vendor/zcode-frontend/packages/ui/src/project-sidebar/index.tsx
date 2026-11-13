@@ -2,8 +2,6 @@ import { WorkspaceSidebarToolbar } from "@/WorkspaceSidebarToolbar.js";
 import { SidebarTooltipProvider } from "@/ControlHintTooltip.js";
 export { readProjectSidebarView } from "@/project-sidebar/view-preference.js";
 import { SortableProjects } from "@/project-sidebar/SortableProjects.js";
-export { ArchiveManagement } from "@/project-sidebar/ArchiveManagement.js";
-export { ProjectManagement } from "@/project-sidebar/ProjectManagement.js";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { ScrollFadeViewport } from "@/components/ui/scroll-fade-viewport.js";
 import { TID_SIDEBAR } from "@zcode/shared/test-ids";
@@ -45,7 +43,6 @@ import { ProjectSidebarNavigation } from "@/project-sidebar/ProjectSidebarNaviga
 import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useNativeHostAvailable, useNativeProjectNavigation } from "@/hooks/useBackendBusinessAvailability.js";
-import { useTabStoreApi } from "@/store/TabStoreProvider.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 export { attachRemoteProjectWorkspace } from "@/project-sidebar/remote-navigation.js";
@@ -74,7 +71,6 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
   const { intl } = useZCodeIntl();
   const nativeHostAvailable = useNativeHostAvailable();
   const navigateNativeProject = useNativeProjectNavigation();
-  const tabStore = useTabStoreApi();
   const setTheme = useZCodeStore((state) => state.setTheme);
   const { view, setView } = preferences;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -186,9 +182,6 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
       onViewFiles={openProjectFiles}
     />
   );
-  const openSettings = useCallback(() => {
-    tabStore.getState().openSettingsTab();
-  }, [tabStore]);
   const changeTheme = useCallback((value: string) => setTheme(value as Theme), [setTheme]);
   return (
     <ProjectTaskListContext.Provider value={taskPresentation}>
@@ -208,7 +201,6 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
                 className="flex min-h-0 flex-1 flex-col border-t border-border/50 pt-3 [anchor-name:--sidebar-task-list-divider]"
               >
                 <ProjectSidebarListHeader
-                  onOpenCommandCenter={props.onOpenCommandCenter}
                   view={view}
                   onViewChange={setView}
                   groupedActionsRef={setGroupedToolbar}
@@ -233,15 +225,9 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
                             onReorder={reorder}
                           />
                           <ProjectSections
-                            tree={tree}
                             projects={projects}
-                            directory={directory}
                             renderProject={renderProject}
                             onReorder={reorder}
-                            loading={loading}
-                            onSelect={onSelectTask}
-                            refresh={refresh}
-                            onCreate={() => action(() => start())}
                             onAddProject={() => nativeHostAvailable
                               ? props.onOpenFolderFromWorkspaceMenu()
                               : setCreating(true)}
@@ -303,7 +289,6 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
                 className="pr-3"
                 theme={props.theme}
                 onThemeChange={changeTheme}
-                onSettingsButtonClick={openSettings}
                 isDesktop={props.isDesktop}
               />
             </div>

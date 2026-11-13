@@ -131,8 +131,12 @@ export class AIReqWorkflowHost {
 					throw new Error("Native session is not active in this AIReq host");
 			},
 			prepare: context => this.prepareContext(context),
-			runInput: <T>(session: AgentSession, operation: () => Promise<T>, text?: string, kind?: AIReqNativeInputKind) =>
-				this.runNativeInput(session, operation, text, kind),
+			runInput: <T>(
+				session: AgentSession,
+				operation: () => Promise<T>,
+				text?: string,
+				kind?: AIReqNativeInputKind,
+			) => this.runNativeInput(session, operation, text, kind),
 			stop: session => this.stopNativeInput(session),
 		};
 		this.collab = new AIReqNativeCollabProjection({
@@ -339,7 +343,8 @@ export class AIReqWorkflowHost {
 		const session = ref.sessionId
 			? sessions.find(item => item.sessionId === ref.sessionId && item.round === ref.round)
 			: sessions.at(-1);
-		if (ref.sessionId && !session) throw new Error("Native session/round does not belong to the selected AIReq object");
+		if (ref.sessionId && !session)
+			throw new Error("Native session/round does not belong to the selected AIReq object");
 		// Re-reading the exact target is not a new ownership epoch. In particular,
 		// observing a session prepared by this page must not revoke its live socket.
 		if (
@@ -751,7 +756,8 @@ export class AIReqWorkflowHost {
 					uiForSession: (session, owner) =>
 						nativeWebGuiQuestions(this.#interactionUiOwner(projectId, runtime, owner, session)).ui,
 					createInteractionUI: (origin, owner) => {
-						if (owner.projectId !== projectId) throw new Error("Native descendant has another AIReq project owner");
+						if (owner.projectId !== projectId)
+							throw new Error("Native descendant has another AIReq project owner");
 						const session = runtime.session(owner);
 						if (session.isDisposed) throw new Error("Native descendant owner ended");
 						if (origin.parentSessionId !== owner.sessionId) {
@@ -1581,7 +1587,8 @@ export class AIReqWorkflowHost {
 		}
 		while (this.#work.size) await Promise.allSettled(this.#work);
 		await Promise.all(this.#ingesting.values());
-		if (failures.length) throw new AggregateError(failures, "AIReq native work remains unsettled; ownership retained");
+		if (failures.length)
+			throw new AggregateError(failures, "AIReq native work remains unsettled; ownership retained");
 		for (const dispose of this.#disposers) dispose();
 		for (const [id, owner] of nativeOwners)
 			if (owner === this) {

@@ -2,9 +2,6 @@ import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 /* oxlint-disable eslint(max-lines) -- footer 聚合账户、主题、模式和快捷键菜单。 */
 import { memo, useCallback, useEffect, useState } from "react";
 import { DesktopCommandIds } from "@zcode/shared";
-import {
-  TID_TASK_SETTINGS_BUTTON,
-} from "@zcode/shared/test-ids";
 import { cn } from "@/components/lib/utils.js";
 import { DefaultAvatar } from "@/components/DefaultAvatar.js";
 import { Button } from "@/components/ui/button.js";
@@ -21,10 +18,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.js";
 import {
-  PencilRuler,
   Maximize,
   Palette,
-  Settings,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -32,7 +27,6 @@ import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useShortcutCommandLabel } from "@/shortcuts/useShortcutBindings.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
-import { normalizeInterfaceMode } from "@/lib/interfaceMode.js";
 import type { Theme } from "@/useTheme.js";
 
 const DESKTOP_ZOOM_MIN_LEVEL = -3;
@@ -42,29 +36,19 @@ const DESKTOP_ZOOM_MAX_LEVEL = 5;
 export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterComponent({
   theme,
   onThemeChange,
-  onSettingsButtonClick,
-  settingsButtonMode = "settings",
   isDesktop = false,
   className,
 }: {
   theme: Theme;
   onThemeChange: (value: string) => void;
-  onSettingsButtonClick?: () => void;
-  settingsButtonMode?: "settings" | "back";
   isDesktop?: boolean;
   className?: string;
 }) {
   const { intl } = useZCodeIntl();
   const platform = usePlatform();
-  const interfaceMode = useZCodeStore((state) => state.interfaceMode);
-  const setInterfaceMode = useZCodeStore((state) => state.setInterfaceMode);
   const zoomInShortcutLabel = useShortcutCommandLabel("zoomIn");
   const zoomOutShortcutLabel = useShortcutCommandLabel("zoomOut");
   const resetZoomShortcutLabel = useShortcutCommandLabel("resetZoom");
-  const settingsButtonLabel =
-    settingsButtonMode === "back"
-      ? intl.formatMessage({ id: "workspace.backToWorkspace" })
-      : intl.formatMessage({ id: "settings.title" });
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [desktopZoomLevel, setDesktopZoomLevel] = useState(0);
   const runDesktopZoomCommand = useCallback(
@@ -104,7 +88,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   const canZoomOut = desktopZoomLevel > DESKTOP_ZOOM_MIN_LEVEL;
 
   return (
-    // footer 被 Settings 复用，页面专属边距由调用方传入，避免修改共享默认样式。
     <footer className={cn("flex shrink-0 flex-col gap-2.5 px-4 pt-2 pb-4", className)}>
       <div className="flex min-w-0 gap-2">
         <DropdownMenu open={profileMenuOpen} onOpenChange={setProfileMenuOpen}>
@@ -151,25 +134,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <PencilRuler className="size-4" />
-                {intl.formatMessage({ id: "settings.interfaceMode" })}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-48">
-                <DropdownMenuRadioGroup
-                  value={interfaceMode}
-                  onValueChange={(value) => setInterfaceMode(normalizeInterfaceMode(value))}
-                >
-                  <DropdownMenuRadioItem value="coding">
-                    {intl.formatMessage({ id: "settings.interfaceMode.coding" })}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="office">
-                    {intl.formatMessage({ id: "settings.interfaceMode.office" })}
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
             {/* 快捷键设置（a58fdef 一系）：缩放子菜单 label 读生效表，设置页改绑后即时跟随 */}
             {isDesktop ? (
               <DropdownMenuSub>
@@ -207,21 +171,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <ControlHintTooltip title={settingsButtonLabel}>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-lg"
-              data-testid={TID_TASK_SETTINGS_BUTTON}
-              aria-label={settingsButtonLabel}
-              disabled={!onSettingsButtonClick}
-              onClick={onSettingsButtonClick}
-            >
-              <Settings className="size-4" />
-            </Button>
-          </ControlHintTooltip>
-        </div>
       </div>
     </footer>
   );

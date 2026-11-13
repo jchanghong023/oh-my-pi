@@ -137,11 +137,8 @@ export interface ProjectSidebarProps {
   onGoForward?: () => void;
   goBackShortcutLabel?: string;
   goForwardShortcutLabel?: string;
-  onOpenCommandCenter: () => void;
   onOpenRepoWiki?: () => void;
   repoWikiActive?: boolean;
-  onOpenAutomations?: () => void;
-  automationsActive?: boolean;
   onFileTreeOpenChange?: (open: boolean) => void;
   onWebRemoteTaskOpen?: (options: { crossWorkspace: boolean }) => void;
   onWebRemoteTaskSwitchingChange?: (switching: boolean) => void;

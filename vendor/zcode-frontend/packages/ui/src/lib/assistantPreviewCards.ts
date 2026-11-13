@@ -18,7 +18,6 @@ import {
 } from "@/lib/assistantFileReferences.js";
 import { decodeFilePathUriEscapes, getPathLeaf, toFileUrl } from "@/lib/path.js";
 import type { CodeViewerSource } from "@/lib/codeViewer.js";
-import { collectGenUiSourcePaths, matchesGenUiSourcePath } from "@/gen-ui/contract.js";
 
 export {
   extractAssistantFileReferences,
@@ -300,7 +299,6 @@ export function buildAssistantPreviewCardsFromReferences(
   if (!content.trim()) return [];
 
   const changedFilePaths = options.changedFilePaths ?? [];
-  const genUiSources = collectGenUiSourcePaths(content);
   const positionedCards: PositionedCard[] = [];
   let hasLocalHttpPreview = false;
 
@@ -312,7 +310,6 @@ export function buildAssistantPreviewCardsFromReferences(
     const filePath = resolveLocalhostHtmlChangedPath(url, workspacePath, changedFilePaths, {
       homePath: options.homePath,
     });
-    if (filePath && matchesGenUiSourcePath(filePath, genUiSources)) continue;
     hasLocalHttpPreview = true;
     positionedCards.push({
       position: match.index ?? 0,
@@ -341,8 +338,6 @@ export function buildAssistantPreviewCardsFromReferences(
       if (!changedPath) continue;
       resolvedReference = { ...reference, path: changedPath };
     }
-    // 可视化已在正文展示；通用文件引用识别会再次命中其 HTML 路径，需在候选限额前去重。
-    if (matchesGenUiSourcePath(resolvedReference.path, genUiSources)) continue;
     fileReferences.push(resolvedReference);
   }
 

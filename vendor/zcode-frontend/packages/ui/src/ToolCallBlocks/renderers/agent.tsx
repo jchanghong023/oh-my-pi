@@ -32,7 +32,6 @@ function AgentChildToolList({
   onOpenCodeViewer,
   onOpenFileLink,
   onOpenBrowserUrl,
-  onOpenAutomationsMain,
   onLoadFullToolCallFields,
 }: {
   nestedToolRenderer: ToolCallBlockRenderContext["nestedToolRenderer"];
@@ -43,7 +42,6 @@ function AgentChildToolList({
   onOpenCodeViewer?: ToolCallBlockRenderContext["onOpenCodeViewer"];
   onOpenFileLink?: ToolCallBlockRenderContext["onOpenFileLink"];
   onOpenBrowserUrl?: ToolCallBlockRenderContext["onOpenBrowserUrl"];
-  onOpenAutomationsMain?: ToolCallBlockRenderContext["onOpenAutomationsMain"];
   onLoadFullToolCallFields?: ToolCallBlockRenderContext["onLoadFullToolCallFields"];
 }) {
   if (childToolCalls.length === 0) {
@@ -65,7 +63,6 @@ function AgentChildToolList({
           onOpenCodeViewer={onOpenCodeViewer}
           onOpenFileLink={onOpenFileLink}
           onOpenBrowserUrl={onOpenBrowserUrl}
-          onOpenAutomationsMain={onOpenAutomationsMain}
           onLoadFullToolCallFields={onLoadFullToolCallFields}
           suppressSourceLabel
         />
@@ -312,7 +309,6 @@ export function AgentToolCallBlock(context: ToolCallBlockRenderContext) {
           onOpenCodeViewer={context.onOpenCodeViewer}
           onOpenFileLink={context.onOpenFileLink}
           onOpenBrowserUrl={context.onOpenBrowserUrl}
-          onOpenAutomationsMain={context.onOpenAutomationsMain}
           onLoadFullToolCallFields={context.onLoadFullToolCallFields}
         />
       </div>

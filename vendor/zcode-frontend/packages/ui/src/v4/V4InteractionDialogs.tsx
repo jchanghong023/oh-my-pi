@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ZCodeElicitationRequest, ZCodePermissionOption, ZCodeProvider } from "@zcode/shared";
+import type { ZCodeElicitationRequest, ZCodeProvider } from "@zcode/shared";
 import type { ConversationSnapshot } from "@zcode/shared/zcode-protocol-v4";
 import { ElicitationDialog } from "@/ElicitationDialog.js";
-import { PermissionDialog } from "@/PermissionDialog.js";
-import { workflowSessionModelOf } from "@/components/workflow-timeline/workflowRunSettings.js";
 import { useOptionalPlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { usePendingInteractionTaskNotifications } from "@/hooks/useTaskNotifications.js";
@@ -116,11 +114,6 @@ export function V4InteractionDialogs({
   // task 切换时 sessionId 会先更新，旧 task snapshot 可能再保留一帧。
   // 若直接使用旧 snapshot，会把当前 task 的 renderer-local 问答草稿误判为过期并清理。
   const currentSnapshot = getCurrentSessionInteractionSnapshot(sessionId, snapshot);
-  // 工作流确认窗里「会话模型」那一项的名字（与 run 卡「配置」弹层同一个来源）。
-  const workflowSessionModel = useMemo(
-    () => workflowSessionModelOf(currentSnapshot?.config),
-    [currentSnapshot?.config],
-  );
   // Bug 根因：workspaceHookReview 是 Settings/Hooks 处理的特殊交互，不能由通用 Dialog 渲染；
   // 但它可以和 permission/userInput 共存，固定读取 [0] 会遮挡后续真正需要弹窗的交互。
   // 这里只选择本组件可渲染的首个交互，同时保留 permission/userInput 的队列顺序。
@@ -193,11 +186,6 @@ export function V4InteractionDialogs({
   ]);
   const autoResolutionIntentRef = useRef(createInteractionAutoResolutionIntentTracker());
   const loggedSnoozeSourceIdsRef = useRef(new Set<string>());
-  const [permissionResponse, setPermissionResponse] = useState<{
-    interactionId: string;
-    pending: boolean;
-    failed: boolean;
-  } | null>(null);
   const permissionResponseFlight = useRef<string | null>(null);
   const [interactionFailure, setInteractionFailure] = useState<{ interactionId: string; message: string } | null>(null);
   const [questionSubmitting, setQuestionSubmitting] = useState<string | null>(null);
@@ -325,6 +313,23 @@ export function V4InteractionDialogs({
     }
   }, [pending?.autoResolution, pending?.interactionId, sendSnoozeOnce]);
 
+  // WebGUI 没有审批界面（宿主以 yolo 运行）：万一仍收到权限请求，自动按「允许一次」应答，避免会话停住。
+  useEffect(() => {
+    if (pending?.payload.kind !== "permission") return;
+    if (permissionResponseFlight.current === pending.interactionId) return;
+    const request = pendingPermissionToLegacyRequest(sessionId, {
+      ...pending,
+      payload: pending.payload,
+    });
+    const option =
+      request.options.find((candidate) => candidate.kind === "allow") ??
+      request.options.find((candidate) => candidate.kind === "allowAlways") ??
+      request.options[0];
+    if (!option) return;
+    permissionResponseFlight.current = pending.interactionId;
+    void resolveInteraction(pending.interactionId, { optionId: option.optionId });
+  }, [pending, resolveInteraction, sessionId]);
+
   if (!pending) {
     return null;
   }
@@ -334,51 +339,6 @@ export function V4InteractionDialogs({
     return null;
   }
 
-  if (pending.payload.kind === "permission") {
-    const request = pendingPermissionToLegacyRequest(sessionId, {
-      ...pending,
-      payload: pending.payload,
-    });
-    return (
-      // 连续 permission 会复用输入框焦点状态，按 interaction 重建。
-      <PermissionDialog
-        key={pending.interactionId}
-        request={request}
-        permissionMode={currentSnapshot?.config?.mode}
-        workspacePath={workspacePath}
-        {...(workspaceIdentity === undefined ? {} : { workspaceIdentity })}
-        {...(remoteSessionId === undefined ? {} : { remoteSessionId })}
-        {...(workflowSessionModel === undefined ? {} : { workflowSessionModel })}
-        isWebRemoteControl={isWebRemoteControl}
-        provider={provider}
-        responding={
-          permissionResponse?.interactionId === pending.interactionId && permissionResponse.pending
-        }
-        responseError={
-          permissionResponse?.interactionId === pending.interactionId && permissionResponse.failed
-            ? intl.formatMessage({ id: "chat.permission.responseFailed" })
-            : undefined
-        }
-        onRespond={(_requestId, option: ZCodePermissionOption, feedback, content) => {
-          if (permissionResponseFlight.current === pending.interactionId) return;
-          const interactionId = pending.interactionId;
-          permissionResponseFlight.current = interactionId;
-          setPermissionResponse({ interactionId, pending: true, failed: false });
-          // content：工作流确认窗里改过的设置，只在放行应答上（docs/dynamic-workflow/launch.md
-          // 「Adjusting the settings in the window」）。
-          void resolveInteraction(interactionId, {
-            optionId: option.optionId,
-            ...(feedback ? { freeText: feedback } : {}),
-            ...(content === undefined ? {} : { content }),
-          }).then((accepted) => {
-            if (permissionResponseFlight.current !== interactionId) return;
-            permissionResponseFlight.current = null;
-            setPermissionResponse({ interactionId, pending: false, failed: !accepted });
-          });
-        }}
-      />
-    );
-  }
   const browserAction = pending.payload.toolName === "webgui-command" &&
     pending.interactionId.startsWith("webgui-question:")
     ? nativeBrowserActionInput(pending.payload.input) : null;

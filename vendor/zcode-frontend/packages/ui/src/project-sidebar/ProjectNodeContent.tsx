@@ -3,7 +3,6 @@ import { memo } from "react";
 import type { useSortable } from "@dnd-kit/sortable";
 import {
   Ellipsis,
-  Folders,
   ListTree,
   Pin,
   PinOff,
@@ -61,7 +60,6 @@ export type ProjectNodeProps = {
   refresh(): Promise<void>;
   availability?: ProjectAvailability;
   /** Open local project management in settings. */
-  onManageProjects?(): void;
 };
 
 // 原因：useSortable 的激活/测量/落点更新曾让 41 个项目的菜单和 Tooltip 连续重渲染。
@@ -78,7 +76,6 @@ export const ProjectNodeContent = memo(function ProjectNodeContent({
   onSelect,
   refresh,
   availability = DEFAULT_AVAILABILITY,
-  onManageProjects,
   additionalActions = EMPTY_ADDITIONAL_ACTIONS,
   editable,
   isOpen,
@@ -116,17 +113,6 @@ export const ProjectNodeContent = memo(function ProjectNodeContent({
             run: onPin,
           },
           { id: "delete", label: msg("delete"), icon: Trash2, run: onDelete, destructive: true },
-        ]
-      : []),
-    ...(onManageProjects
-      ? [
-          {
-            id: "manage-projects",
-            label: intl.formatMessage({ id: "projectManagement.manage" }),
-            icon: Folders,
-            run: onManageProjects,
-            separatorBefore: true,
-          },
         ]
       : []),
   ];
@@ -254,41 +240,6 @@ export const ProjectNodeContent = memo(function ProjectNodeContent({
                 </DropdownMenu>
                 {availability.online ? (
                   <>
-                    {/* 主目录失效时多 root 也复用禁用按钮，避免菜单仍能打开附加目录。 */}
-                    {files.length > 1 && !primaryRootDisabledReason ? (
-                      <DropdownMenu modal={false}>
-                        <ControlHintTooltip title={showFiles}>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              data-testid="virtual-project-files"
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label={showFiles}
-                              className="text-foreground-subtle hover:text-foreground"
-                            >
-                              <ListTree className="size-3.5" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                        </ControlHintTooltip>
-                        <DropdownMenuContent align="end">
-                          <ProjectMenuItems actions={files} />
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    ) : (
-                      <TaskRowActionButton
-                        testId="virtual-project-files"
-                        label={showFiles}
-                        showTooltip
-                        disabledReason={
-                          primaryRootDisabledReason ??
-                          (!files.length || !onViewFiles ? msg("noFolders") : undefined)
-                        }
-                        className="text-foreground-subtle hover:text-foreground"
-                        onClick={() => files[0]?.run()}
-                      >
-                        <ListTree className="size-3.5" />
-                      </TaskRowActionButton>
-                    )}
                     <TaskRowActionButton
                       testId="virtual-project-create-task"
                       label={msg("createTask")}

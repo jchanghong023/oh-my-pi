@@ -70,8 +70,15 @@ const SUBAGENT_TOOL_NAMES = new Set(["Agent", "Task", "subagent"]);
 
 const isToolCallRow = (row: AssistantWorkRow): row is ToolCallRow => row.kind === "toolCall";
 
-const isAgentToolCallRow = (row: AssistantWorkRow): row is ToolCallRow =>
-  isToolCallRow(row) && SUBAGENT_TOOL_NAMES.has(row.toolName);
+const isAgentToolCallRow = (row: AssistantWorkRow): row is ToolCallRow => {
+  if (!isToolCallRow(row)) {
+    return false;
+  }
+  // OMP 原生 session 的 subagent 工具名是小写 `task`（ZCode 用的是 `Task`），
+  // 大小写敏感的字面量集合会让 subagent 行配不上宿主工具行，退化成不可点击的裸摘要。
+  // 工具身份归一化是唯一映射表，字面量集合只补充它未登记的名字。
+  return SUBAGENT_TOOL_NAMES.has(row.toolName) || resolveToolCallIdentity(row).family === "agent";
+};
 
 function isExploreToolCallRow(row: AssistantWorkRow): row is ToolCallRow {
   if (!isToolCallRow(row)) {

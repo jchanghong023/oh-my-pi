@@ -21,7 +21,6 @@ import {
 	loadPuppeteer,
 	systemChromiumCandidatesForTest,
 } from "../../src/tools/browser/launch";
-import { NativeCwdHost } from "../../src/webgui/native-cwd";
 import { activateNativeWebGuiComposition } from "../../src/webgui/native-composition";
 import {
 	cancelPendingInteractions,
@@ -255,7 +254,7 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 				await page.goto(`${baseUrl}/components?case=${kind}`, { waitUntil: "load" });
 				return page;
 			},
-			async nativeCase(options = {}) {
+			async nativeCase() {
 				if (cases.size)
 					throw new Error("Native browser cases must close sequentially before the history spy can be replaced");
 				const cwd = temp.join(`native-${nativeIndex++}`);
@@ -268,7 +267,6 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 				);
 				let session: AgentSession | undefined;
 				let lease: BrowserProjectLease | undefined;
-				let cwdHost: NativeCwdHost | undefined;
 				let page: Page | undefined;
 				let reply: ControlledReply | undefined;
 				const replies = new Set<ControlledReply>();
@@ -298,8 +296,7 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 							await closeWebGuiNativeSessions();
 						},
 						async () => {
-							if (cwdHost) await cwdHost.close();
-							else await lease?.close();
+							await lease?.close();
 							await releaseWebGuiNativeProjects();
 						},
 						async () => {
@@ -336,13 +333,6 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 					enableWebGuiNativeSessions();
 					const model = getTestModel("ascend");
 					auth.keys.setRuntime(model.provider, "test-key");
-					const skillFile = path.join(cwd, "skills", "webgui-retained-skill", "SKILL.md");
-					if (options.withSkill) {
-						await Bun.write(
-							skillFile,
-							"---\nname: webgui-retained-skill\ndescription: Retained native skill\n---\nRead-only fixture instructions.\n",
-						);
-					}
 					const isolatedOptions = (): CreateAgentSessionOptions => ({
 						agentDir: cwd,
 						authStorage: auth,
@@ -360,17 +350,7 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 						bindProcessState: false,
 						offline: true,
 						agentRegistry: new AgentRegistry(),
-						skills: options.withSkill
-							? [
-									{
-										name: "webgui-retained-skill",
-										description: "Retained native skill",
-										filePath: skillFile,
-										baseDir: path.dirname(skillFile),
-										source: "user",
-									},
-								]
-							: [],
+						skills: [],
 						contextFiles: [],
 						promptTemplates: [],
 						slashCommands: [],
@@ -393,7 +373,6 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 						throw new Error("Scenario must install a controlled reply before sending");
 					};
 					lease = await acquireBrowserProject(cwd, "webgui");
-					cwdHost = new NativeCwdHost(activeSession, lease);
 					await lease.activate(() => readWebGuiSessionInfo(activeSession), {
 						allowLan: false,
 						nativeSession: activeSession,

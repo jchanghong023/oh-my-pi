@@ -10,8 +10,6 @@ import type {
   SourceServerUpdateTarget,
 } from "@zcode/shared";
 import type { IServiceAccessor } from "@zcode/services";
-import type { SavedWorkflowsOpenTarget } from "@/settings/saved-workflows/SavedWorkflowsSection.js";
-import type { SavedWorkflowHubTarget } from "@/v4/savedWorkflowHubContext.js";
 import type { RecentClosedSidePaneTab } from "@/hooks/useAppPanels.js";
 import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import type { AssistantPreviewCardsAutoOpenRequest } from "@/lib/assistantPreviewCards.js";
@@ -20,10 +18,6 @@ import type {
   OpenBackgroundBashSideTabRequest,
   OpenSelectionSideChatRequest,
   OpenScopedPlanDetailSideTabRequest,
-  OpenScopedWorkflowRunSideTabRequest,
-  OpenScopedWorkflowActorSessionSideTabRequest,
-  OpenScopedWorkflowArtifactSideTabRequest,
-  OpenScopedWorkflowWorkspaceSideTabRequest,
   WorkspaceSidePaneState,
 } from "@/lib/workspaceSidePane.js";
 import type { WorkspaceZCodeUIState } from "@/store/zcodeSessionStore.js";
@@ -36,7 +30,6 @@ import type {
 } from "@/v4/legacyChatViewTypes.js";
 import type { ComposerMentionPrefill } from "@/store/zcodeSessionStoreTypes.js";
 import type { TaskFindDialogProps } from "@/quickpick/TaskFindDialog.js";
-import type { AutomationsNavigationTab, OpenAutomationsMain } from "@/lib/taskNavigationHistory.js";
 import type { SidePaneFullViewController } from "@/side-pane-full-view/contract.js";
 import type { ProjectSidebarProps } from "@/project-sidebar/contract.js";
 
@@ -182,24 +175,8 @@ export interface GitChangeSummary {
   removed: number;
 }
 
-export type WorkspaceMainView = "chat" | "automations";
-
 export interface WorkspaceShellLayoutProps extends AppProps {
   workspaceReadOnlyReason?: string;
-  workspaceMainView: WorkspaceMainView;
-  openAutomationId: string | null;
-  openAutomationTab: AutomationsNavigationTab | null;
-  /** 中枢深链：落到某个已保存工作流的详情页；定位后由 `onOpenWorkflowConsumed` 清空。 */
-  openWorkflow: SavedWorkflowsOpenTarget | null;
-  onOpenWorkflowConsumed: () => void;
-  /**
-   * 完成卡「已保存」芯片 → 中枢那一页（docs/dynamic-workflow/transcript-and-notifications.md
-   * 「Saving the run, and running it again」）：切到自动化主视图的「工作流」标签并设深链。
-   */
-  onOpenSavedWorkflowInHub: (target: SavedWorkflowHubTarget) => void;
-  onWorkspaceMainViewChange: (view: WorkspaceMainView) => void;
-  onOpenAutomationConsumed: () => void;
-  handleOpenAutomations: OpenAutomationsMain;
   workspaceShellZCodeState: WorkspaceShellZCodeState;
   theme: Theme;
   sidebarContainerRef: RefObject<HTMLElement | null>;
@@ -283,11 +260,8 @@ export interface WorkspaceShellLayoutProps extends AppProps {
     targetWorkspaceIdentity?: string,
     targetWorkspacePurpose?: import("@zcode/shared").WorkspacePurpose,
   ) => void;
-  handleOpenCommandCenter: () => void;
   handleRefreshGit: () => void;
   handleToggleSidebar: () => void;
-  handleOpenWhiteboard: () => void;
-  handleOpenDeveloperTools: () => void;
   handleOpenFileManager: (target?: FileManagerTarget) => void;
   handleNavigateFileManager: (tabId: string, source: CodeViewerSource) => void;
   handleToggleGit: () => void;
@@ -306,16 +280,8 @@ export interface WorkspaceShellLayoutProps extends AppProps {
   ) => void;
   handleOpenSelectionSideChat: (request: OpenSelectionSideChatRequest) => void;
   handleOpenPlanDetail: (request: OpenScopedPlanDetailSideTabRequest) => void;
-  handleOpenWorkflowRun: (request: OpenScopedWorkflowRunSideTabRequest) => void;
-  handleOpenWorkflowRunDirectory: (
-    request: import("@/lib/workspaceSidePane.js").OpenScopedWorkflowRunDirectorySideTabRequest,
-  ) => void;
-  handleOpenWorkflowActorSession: (request: OpenScopedWorkflowActorSessionSideTabRequest) => void;
-  handleOpenWorkflowWorkspace: (request: OpenScopedWorkflowWorkspaceSideTabRequest) => void;
-  handleOpenWorkflowArtifact: (request: OpenScopedWorkflowArtifactSideTabRequest) => void;
   handleCloseCodeViewer: () => void;
   handleCloseGit: () => void;
-  handleOpenNewSidePaneTab: () => void;
   handleActivateSidePaneTab: (tabId: string) => void;
   handleReorderSidePaneTab: (activeTabId: string, overTabId: string) => void;
   handleCloseSidePaneTab: (tabId: string) => void;

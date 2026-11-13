@@ -277,7 +277,8 @@ class BrowserAgentAttachment {
 			return;
 		}
 		const project = readBrowserProject(this.#context.projectId);
-		if (!project || project.mode !== "aireq" || project.phase !== "active" || project.ownerId !== this.#ownerId) return;
+		if (!project || project.mode !== "aireq" || project.phase !== "active" || project.ownerId !== this.#ownerId)
+			return;
 		for (const session of await listWebGuiNativeSessions(this.#context)) {
 			const runtime = nativeChatRuntimeForSession(session);
 			if (!this.#residents.has(runtime)) this.#residents.set(runtime, runtime.retain());

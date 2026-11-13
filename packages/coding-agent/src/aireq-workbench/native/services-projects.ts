@@ -47,7 +47,8 @@ export function createProjectServices(context: WebGuiServiceContext): readonly W
 		return (
 			listBrowserProjects().find(
 				project =>
-					project.mode === "aireq" && normalizePathForComparison(project.root) === normalizePathForComparison(root),
+					project.mode === "aireq" &&
+					normalizePathForComparison(project.root) === normalizePathForComparison(root),
 			)?.projectId ?? null
 		);
 	};

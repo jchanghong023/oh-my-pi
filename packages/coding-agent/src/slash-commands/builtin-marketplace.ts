@@ -17,10 +17,9 @@ import {
 import { MCPCommandController } from "../modes/controllers/mcp-command-controller";
 import type { InteractiveModeContext } from "../modes/types";
 import { refreshAgentDiscovery } from "../task";
-import { createMarketplaceManager, resolveMarketplaceSource } from "./helpers/marketplace-manager";
+import { createMarketplaceManager } from "./helpers/marketplace-manager";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "./marketplace-install-parser";
-import { handleNativeWebGuiMarketplace, showNativeWebGuiPluginSettings } from "../webgui/native-command-marketplace";
 import type { ParsedSlashCommand, SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 /**
@@ -42,7 +41,7 @@ export async function reloadTuiPluginState(ctx: InteractiveModeContext): Promise
 	}
 }
 
-async function handleMarketplaceCommand(command: ParsedSlashCommand, runtime: SlashCommandRuntime, browser = false) {
+async function handleMarketplaceCommand(command: ParsedSlashCommand, runtime: SlashCommandRuntime) {
 	const { verb, rest } = parseSubcommand(command.args);
 	if (!verb) {
 		try {
@@ -87,13 +86,12 @@ async function handleMarketplaceCommand(command: ParsedSlashCommand, runtime: Sl
 	if ((verb === "install" || verb === "uninstall") && !rest) {
 		return usage("Interactive plugin pickers are TUI-only. Pass an explicit name@marketplace argument.", runtime);
 	}
-	let failedMutationMayNeedRefresh = false;
 	try {
 		const manager = await createMarketplaceManager(runtime);
 		switch (verb) {
 			case "add": {
 				if (!rest) return usage("Usage: /marketplace add <source>", runtime);
-				const entry = await manager.addMarketplace(browser ? resolveMarketplaceSource(rest, runtime.cwd) : rest);
+				const entry = await manager.addMarketplace(rest);
 				await runtime.output(`Added marketplace: ${entry.name}`);
 				return commandConsumed();
 			}
@@ -149,9 +147,7 @@ async function handleMarketplaceCommand(command: ParsedSlashCommand, runtime: Sl
 				const atIndex = parsed.installSpec.lastIndexOf("@");
 				const pluginName = parsed.installSpec.slice(0, atIndex);
 				const marketplace = parsed.installSpec.slice(atIndex + 1);
-				failedMutationMayNeedRefresh = browser;
 				await manager.installPlugin(pluginName, marketplace, { force: parsed.force, scope: parsed.scope });
-				failedMutationMayNeedRefresh = false;
 				await runtime.reloadPlugins();
 				await runtime.output(`Installed ${pluginName} from ${marketplace}`);
 				return commandConsumed();
@@ -162,9 +158,7 @@ async function handleMarketplaceCommand(command: ParsedSlashCommand, runtime: Sl
 					"Usage: /marketplace uninstall [--scope user|project] <name@marketplace>",
 				);
 				if ("error" in parsed) return usage(parsed.error, runtime);
-				failedMutationMayNeedRefresh = browser;
 				await manager.uninstallPlugin(parsed.pluginId, parsed.scope);
-				failedMutationMayNeedRefresh = false;
 				await runtime.reloadPlugins();
 				await runtime.output(`Uninstalled ${parsed.pluginId}`);
 				return commandConsumed();
@@ -188,16 +182,12 @@ async function handleMarketplaceCommand(command: ParsedSlashCommand, runtime: Sl
 						"Usage: /marketplace upgrade [--scope user|project] <name@marketplace>",
 					);
 					if ("error" in parsed) return usage(parsed.error, runtime);
-					failedMutationMayNeedRefresh = browser;
 					const result = await manager.upgradePlugin(parsed.pluginId, parsed.scope);
-					failedMutationMayNeedRefresh = false;
 					await runtime.reloadPlugins();
 					await runtime.output(`Upgraded ${parsed.pluginId} to ${result.version}`);
 					return commandConsumed();
 				}
-				failedMutationMayNeedRefresh = browser;
 				const results = await manager.upgradeAllPlugins();
-				failedMutationMayNeedRefresh = false;
 				if (results.length === 0) {
 					await runtime.output("All marketplace plugins are up to date");
 				} else {
@@ -214,19 +204,11 @@ async function handleMarketplaceCommand(command: ParsedSlashCommand, runtime: Sl
 				);
 		}
 	} catch (err) {
-		const result = await usage(`Marketplace error: ${errorMessage(err)}`, runtime);
-		if (failedMutationMayNeedRefresh) {
-			try {
-				await runtime.reloadPlugins();
-			} catch (refreshError) {
-				await runtime.output(`Plugin reload failed: ${errorMessage(refreshError)}`);
-			}
-		}
-		return result;
+		return usage(`Marketplace error: ${errorMessage(err)}`, runtime);
 	}
 }
 
-async function handlePluginsCommand(command: ParsedSlashCommand, runtime: SlashCommandRuntime, browser = false) {
+async function handlePluginsCommand(command: ParsedSlashCommand, runtime: SlashCommandRuntime) {
 	const { verb, rest } = parseSubcommand(command.args);
 	try {
 		if (verb === "enable" || verb === "disable") {
@@ -239,22 +221,15 @@ async function handlePluginsCommand(command: ParsedSlashCommand, runtime: SlashC
 				scope: parsed.scope,
 				marketplaceIds,
 				marketplace,
-				npm: new PluginManager(browser ? runtime.cwd : undefined),
+				npm: new PluginManager(),
 			});
 			await runtime.reloadPlugins();
 			await runtime.output(`${verb === "enable" ? "Enabled" : "Disabled"} ${parsed.pluginId}`);
 			return commandConsumed();
 		}
-		if (browser && verb === "settings") return showNativeWebGuiPluginSettings(runtime, rest || undefined);
-		if (browser && ((verb && verb !== "list") || rest)) {
-			return usage(
-				"Usage: /plugins [list|settings [plugin]|enable|disable [--scope user|project] <plugin>]",
-				runtime,
-			);
-		}
 		// Default: list
 		const lines: string[] = [];
-		const npmManager = new PluginManager(browser ? runtime.cwd : undefined);
+		const npmManager = new PluginManager();
 		const npmPlugins = await npmManager.list();
 		if (npmPlugins.length > 0) {
 			lines.push("npm plugins:");
@@ -309,8 +284,6 @@ export const BUILTIN_MARKETPLACE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec>
 		],
 		allowArgs: true,
 		handle: handleMarketplaceCommand,
-		handleWebGui: (command, runtime) =>
-			handleNativeWebGuiMarketplace(command, runtime, (next, host) => handleMarketplaceCommand(next, host, true)),
 		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
 			const args = command.args.trim().split(/\s+/);
@@ -513,7 +486,6 @@ export const BUILTIN_MARKETPLACE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec>
 		],
 		allowArgs: true,
 		handle: handlePluginsCommand,
-		handleWebGui: (command, runtime) => handlePluginsCommand(command, runtime, true),
 	},
 	{
 		name: "reload-plugins",

@@ -11,7 +11,11 @@ import {
 	encodeRequirementPackage,
 	sha256,
 } from "../../src/aireq-workbench/requirement-package";
-import type { AIReqAttachment, AIReqPackageManifest, AIReqRequirementContent } from "../../src/aireq-workbench/workflow-types";
+import type {
+	AIReqAttachment,
+	AIReqPackageManifest,
+	AIReqRequirementContent,
+} from "../../src/aireq-workbench/workflow-types";
 
 interface PackageFixture {
 	content: AIReqRequirementContent;

@@ -7,7 +7,6 @@ import type {
 } from "@zcode/shared";
 import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import type { AssistantPreviewCardsAutoOpenRequest } from "@/lib/assistantPreviewCards.js";
-import type { OpenAutomationsMain } from "@/lib/taskNavigationHistory.js";
 import type { MessageFileLinkTarget } from "@/components/ai-elements/message.js";
 import type {
   OpenScopedPlanDetailSideTabRequest,
@@ -54,7 +53,6 @@ export interface V4ChatPaneProps {
   onRefreshGit?: () => void;
   onOpenGitReview?: (sourceId?: GitChangeSourceId) => void;
   onOpenBrowserUrl?: (url: string) => void;
-  onOpenAutomationsMain?: OpenAutomationsMain;
   onOpenCodeViewer?: (source: CodeViewerSource) => void;
   onAutoOpenAssistantPptx?: (request: AssistantPreviewCardsAutoOpenRequest) => void;
   onOpenFileLink?: (target: MessageFileLinkTarget) => void;
@@ -102,7 +100,6 @@ export function V4ChatPane({
   onRefreshGit,
   onOpenGitReview,
   onOpenBrowserUrl,
-  onOpenAutomationsMain,
   onOpenCodeViewer,
   onAutoOpenAssistantPptx,
   onOpenFileLink,
@@ -152,7 +149,6 @@ export function V4ChatPane({
         onRefreshGit={onRefreshGit}
         onOpenGitReview={onOpenGitReview}
         onOpenBrowserUrl={onOpenBrowserUrl}
-        onOpenAutomationsMain={onOpenAutomationsMain}
         onOpenCodeViewer={onOpenCodeViewer}
         onAutoOpenAssistantPptx={onAutoOpenAssistantPptx}
         onOpenFileLink={onOpenFileLink}

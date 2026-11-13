@@ -1,8 +1,7 @@
-import { Fragment, memo, useCallback, useContext, useMemo, useState } from "react";
+import { Fragment, memo, useCallback, useContext, useMemo } from "react";
 import type { ProjectTask, ProjectSidebarProps } from "@/project-sidebar/contract.js";
 import { TaskGroupTaskMenu } from "@/project-sidebar/TaskGroupTaskMenu.js";
 import { TaskList } from "@/TaskList.js";
-import { Button } from "@/components/ui/button.js";
 import { useProjectTaskActions } from "@/project-sidebar/useProjectTaskActions.js";
 import { ProjectTaskListContext } from "@/project-sidebar/ProjectTaskListContext.js";
 import { compareProjectTaskRows } from "@/project-sidebar/view.js";
@@ -63,7 +62,6 @@ export const ProjectTaskRow = memo(function Row({
             : undefined
         }
         showCreateButton={false}
-        showFooter={false}
         showEmptyState={false}
         // 原因：旧接线只传排序，遗漏 timeline 样式，导致目录信息和空闲灰点消失。
         taskRowVariant={variant}
@@ -95,16 +93,12 @@ export function ProjectTaskRows({
 }) {
   const { intl, locale } = useZCodeIntl();
   const chronological = kind === "timeline" || kind === "unread";
-  const pageSize = chronological ? 20 : 5;
-  const [limit, setLimit] = useState(pageSize);
-  const [showAll, setShowAll] = useState(false);
   const ordered = useMemo(
     () => [...tasks].sort((a, b) => compareProjectTaskRows(a, b, kind)),
     [tasks, kind],
   );
-  const visible =
-    kind === "pinned" ? (showAll ? ordered : ordered.slice(0, 20)) : ordered.slice(0, limit);
-  const hasMore = kind === "pinned" ? ordered.length > 20 : ordered.length > limit;
+  // 手机远程场景只保留最近 5 条会话，避免长历史拖慢首屏与滚动。
+  const visible = ordered.slice(0, 5);
   const headings = chronological
     ? timelineDateHeadings(
         visible.map((task) => task.updatedAt),
@@ -167,22 +161,6 @@ export function ProjectTaskRows({
           />
         </Fragment>
       ))}
-      {hasMore ? (
-        <Button
-          data-task-list-show-more="true"
-          variant="ghost"
-          size="sm"
-          // 原因：分页入口误用辅助字号和次级颜色，与任务标题及空态不一致；仅交互时提亮。
-          className="ml-8.5 h-auto p-0 text-ui-base text-foreground-subtlest hover:bg-transparent focus-visible:text-foreground"
-          onClick={() =>
-            kind === "pinned" ? setShowAll((value) => !value) : setLimit((n) => n + pageSize)
-          }
-        >
-          {intl.formatMessage({
-            id: kind === "pinned" && showAll ? "taskList.showLess" : "taskList.showMore",
-          })}
-        </Button>
-      ) : null}
     </div>
   );
 }

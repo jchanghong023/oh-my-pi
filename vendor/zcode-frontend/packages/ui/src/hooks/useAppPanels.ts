@@ -20,20 +20,10 @@ import {
   isSidePaneTabVisibleInScope,
   closeGitSidePane,
   closeCodeViewerSidePane,
-  openWhiteboardSidePane,
-  openModelTrajectorySidePane,
   openSubagentSessionSidePane,
   openSubagentDirectorySidePane,
   openSelectionSideChatPane,
   openPlanDetailSidePane,
-  openWorkflowRunSidePane,
-  replaceWorkflowRunSidePane,
-  openWorkflowRunDirectorySidePane,
-  openWorkflowActorSessionSidePane,
-  openWorkflowWorkspaceSidePane,
-  openWorkflowArtifactSidePane,
-  activateDeveloperToolsSidePane,
-  activateNewTabSidePane,
   openCodeViewerSidePane,
   openCodeViewerSidePanes,
   activateGitSidePane,
@@ -53,17 +43,10 @@ import {
   type OpenScopedSubagentDirectorySideTabRequest,
   type OpenSelectionSideChatRequest,
   type OpenScopedPlanDetailSideTabRequest,
-  type OpenScopedWorkflowRunSideTabRequest,
-  type OpenScopedWorkflowRunDirectorySideTabRequest,
-  type OpenScopedWorkflowActorSessionSideTabRequest,
-  type OpenScopedWorkflowArtifactSideTabRequest,
-  type OpenScopedWorkflowWorkspaceSideTabRequest,
   type WorkspaceSidePaneState,
   type WorkspaceSidePaneTab,
 } from "@/lib/workspaceSidePane.js";
 import { logger } from "@/logger.js";
-import { useWhiteboardStore } from "@/store/whiteboardStore.js";
-import { useModelTrajectoryOpenBridge } from "@/hooks/useModelTrajectoryOpenBridge.js";
 import { useServices } from "@/hooks/useServices.js";
 import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
 import { clearSelectionSideChat } from "@/lib/selectionSideChatRuntime.js";
@@ -86,7 +69,6 @@ export function useAppPanels(options: {
   activeTaskId: string | null;
   /** 草稿态与正式任务共用稳定 id，作为侧栏对话隔离边界。 */
   sidePaneOwnerId: string | null;
-  defaultWhiteboardNamePrefix: string;
 }) {
   const {
     workspaceAbsPath,
@@ -94,7 +76,6 @@ export function useAppPanels(options: {
     workspaceRemoteSessionId,
     activeTaskId,
     sidePaneOwnerId,
-    defaultWhiteboardNamePrefix,
   } = options;
   const activeWorkspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
   const { zcodeSessionService } = useServices();
@@ -418,66 +399,6 @@ export function useAppPanels(options: {
     });
   }, [isOfficeMode, commitOpenedSidePaneState, revealSidePaneForCurrentOwner, workspaceAbsPath]);
 
-  const handleOpenWhiteboard = useCallback(() => {
-    const board = useWhiteboardStore.getState().createBoard({
-      defaultNamePrefix: defaultWhiteboardNamePrefix,
-      workspaceIdentity,
-      workspacePath: workspaceAbsPath,
-    });
-    revealSidePaneForCurrentOwner();
-    commitOpenedSidePaneState((current) => {
-      const next = openWhiteboardSidePane(current, {
-        boardId: board.id,
-        title: board.name,
-      });
-      logger.info(
-        `[App] 打开右侧面板 mode=whiteboard workspace=${workspaceAbsPath} board=${board.id} tabs=${next.tabs.length}`,
-      );
-      return next;
-    });
-  }, [
-    commitOpenedSidePaneState,
-    defaultWhiteboardNamePrefix,
-    revealSidePaneForCurrentOwner,
-    workspaceAbsPath,
-    workspaceIdentity,
-  ]);
-
-  const handleOpenNewSidePaneTab = useCallback(() => {
-    revealSidePaneForCurrentOwner();
-    commitOpenedSidePaneState(activateNewTabSidePane);
-  }, [commitOpenedSidePaneState, revealSidePaneForCurrentOwner]);
-
-
-  const handleOpenDeveloperTools = useCallback(() => {
-    revealSidePaneForCurrentOwner();
-    commitOpenedSidePaneState((current) => {
-      const next = activateDeveloperToolsSidePane(current);
-      logger.info(
-        `[App] 打开右侧面板 mode=developer-tools workspace=${workspaceAbsPath} tabs=${next.tabs.length}`,
-      );
-      return next;
-    });
-  }, [commitOpenedSidePaneState, revealSidePaneForCurrentOwner, workspaceAbsPath]);
-
-
-  const handleOpenModelTrajectory = useCallback(
-    (params: { taskId: string; title?: string | null }) => {
-      if (!params.taskId) {
-        return;
-      }
-      revealSidePaneForCurrentOwner();
-      commitOpenedSidePaneState((current) => {
-        const next = openModelTrajectorySidePane(current, params);
-        logger.info(
-          `[App] 打开右侧面板 mode=model-trajectory workspace=${workspaceAbsPath} taskId=${params.taskId} tabs=${next.tabs.length}`,
-        );
-        return next;
-      });
-    },
-    [commitOpenedSidePaneState, revealSidePaneForCurrentOwner, workspaceAbsPath],
-  );
-
   const handleOpenBackgroundBash = useCallback(
     (request: OpenBackgroundBashSideTabRequest) => {
       revealSidePaneForCurrentOwner();
@@ -591,96 +512,6 @@ export function useAppPanels(options: {
   );
 
 
-  const handleOpenWorkflowRun = useCallback(
-    (request: OpenScopedWorkflowRunSideTabRequest) => {
-      const workspaceKey = request.workspaceIdentity?.trim() || request.workspacePath;
-      // 「配置」之后的原地替换不是一次打开：收起的侧栏保持收起。
-      const replaceRunId = request.replaceRunId;
-      if (replaceRunId === undefined) setIsSidePaneCollapsed(false);
-      commitOpenedSidePaneState((current) =>
-        replaceRunId === undefined
-          ? openWorkflowRunSidePane(current, { ...request, workspaceKey })
-          : replaceWorkflowRunSidePane(current, { ...request, workspaceKey, replaceRunId }),
-      );
-      logger.debug("[App] 打开工作流运行详情右侧 tab", {
-        parentSessionId: request.parentSessionId,
-        runId: request.runId,
-        toolCallId: request.toolCallId,
-        workspaceKey,
-      });
-    },
-    [commitOpenedSidePaneState],
-  );
-
-  const handleOpenWorkflowRunDirectory = useCallback(
-    (request: OpenScopedWorkflowRunDirectorySideTabRequest) => {
-      const workspaceKey = request.workspaceIdentity?.trim() || request.workspacePath;
-      setIsSidePaneCollapsed(false);
-      commitOpenedSidePaneState((current) =>
-        openWorkflowRunDirectorySidePane(current, {
-          ...request,
-          workspaceKey,
-        }),
-      );
-      logger.debug("[App] 打开工作流运行目录右侧 tab", {
-        parentSessionId: request.parentSessionId,
-        workspaceKey,
-      });
-    },
-    [commitOpenedSidePaneState],
-  );
-
-  const handleOpenWorkflowActorSession = useCallback(
-    (request: OpenScopedWorkflowActorSessionSideTabRequest) => {
-      const workspaceKey = request.workspaceIdentity?.trim() || request.workspacePath;
-      setIsSidePaneCollapsed(false);
-      commitOpenedSidePaneState((current) =>
-        openWorkflowActorSessionSidePane(current, {
-          ...request,
-          workspaceKey,
-        }),
-      );
-      logger.debug("[App] 打开工作流 actor 会话右侧 tab", {
-        actorSessionId: request.actorSessionId,
-        parentSessionId: request.parentSessionId,
-        runId: request.runId,
-        workspaceKey,
-      });
-    },
-    [commitOpenedSidePaneState],
-  );
-
-  const handleOpenWorkflowWorkspace = useCallback(
-    (request: OpenScopedWorkflowWorkspaceSideTabRequest) => {
-      const workspaceKey = request.workspaceIdentity?.trim() || request.workspacePath;
-      setIsSidePaneCollapsed(false);
-      commitOpenedSidePaneState((current) =>
-        openWorkflowWorkspaceSidePane(current, {
-          ...request,
-          workspaceKey,
-        }),
-      );
-      logger.debug("[App] 打开工作流工作区右侧 tab", {
-        parentSessionId: request.parentSessionId,
-        phaseId: request.phaseId,
-        runId: request.runId,
-        workspaceKey,
-      });
-    },
-    [commitOpenedSidePaneState],
-  );
-
-  const handleOpenWorkflowArtifact = useCallback(
-    (request: OpenScopedWorkflowArtifactSideTabRequest) => {
-      const workspaceKey = request.workspaceIdentity?.trim() || request.workspacePath;
-      setIsSidePaneCollapsed(false);
-      commitOpenedSidePaneState((current) =>
-        openWorkflowArtifactSidePane(current, { ...request, workspaceKey }),
-      );
-    },
-    [commitOpenedSidePaneState],
-  );
-
   const closeSelectionSideChatRuntime = useCallback(
     (tab: Extract<WorkspaceSidePaneTab, { type: "selection-side-chat" }>) => {
       clearSelectionSideChat(tab.childSessionId);
@@ -737,13 +568,6 @@ export function useAppPanels(options: {
     workspaceAbsPath,
     workspaceIdentity,
   ]);
-
-  // 订阅“打开模型调用轨迹”请求：菜单深处通过单例 store 发起，这里按 workspaceKey 匹配后消费。
-  useModelTrajectoryOpenBridge(
-    workspaceIdentity?.trim() || workspaceAbsPath,
-    handleOpenModelTrajectory,
-  );
-
 
   const handleToggleSidebar = useCallback(() => {
     setIsSidebarVisible((visible) => !visible);
@@ -958,21 +782,12 @@ export function useAppPanels(options: {
     handleOpenBrowserUrl,
     handleToggleGit,
     handleOpenGit,
-    handleOpenWhiteboard,
-    handleOpenDeveloperTools,
-    handleOpenNewSidePaneTab,
-    handleOpenModelTrajectory,
     handleOpenSubagentSession,
     handleOpenBackgroundBash,
     handleOpenSubagentDirectory,
     handleSyncSubagentSessionTabs,
     handleOpenSelectionSideChat,
     handleOpenPlanDetail,
-    handleOpenWorkflowRun,
-    handleOpenWorkflowRunDirectory,
-    handleOpenWorkflowActorSession,
-    handleOpenWorkflowWorkspace,
-    handleOpenWorkflowArtifact,
     handleToggleSidebar,
     handleToggleSidePaneCollapse,
     handleCloseCodeViewer,

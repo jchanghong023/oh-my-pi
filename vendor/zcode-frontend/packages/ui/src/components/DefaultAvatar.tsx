@@ -1,11 +1,10 @@
 import { UserRound } from "lucide-react";
-import defaultAvatar from "@/assets/avatars/default-programmer.png";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar.js";
 
-/** Local default avatar; an explicit user image takes precedence. */
+/** Local default avatar; an explicit user image takes precedence. 内置头像用图标，避免首屏下载大图。 */
 export function DefaultAvatar({ src }: { src?: string }) {
   return <Avatar size="default">
-    <AvatarImage src={src || defaultAvatar} alt="" />
+    {src ? <AvatarImage src={src} alt="" /> : null}
     <AvatarFallback className="bg-background text-foreground"><UserRound className="size-4" /></AvatarFallback>
   </Avatar>;
 }

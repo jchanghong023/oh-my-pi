@@ -87,7 +87,15 @@ describe("fork provider boundaries", () => {
 
 	// Generated output, not rule text, must exclude retired and unsupported chat rows.
 	test("bundled output contains only retained chat lanes while retaining non-chat models", () => {
-		const allowed = ["company", "openai-codex", "codeagent", "ascend", "opencode-go", "deepseek"];
+		const allowed = [
+			"company",
+			"openai-codex",
+			"codeagent",
+			"ascend",
+			"opencode-go",
+			"deepseek",
+			"alibaba-token-plan",
+		];
 		const models = getBundledProviders().flatMap(provider => getBundledModels(provider));
 		expect(models.length).toBeGreaterThan(0);
 		const chatProviders = [

@@ -310,7 +310,8 @@ export function getOrStartAIReqWorkbench(
 ): Promise<AIReqWorkbenchHandle> {
 	let pending = services.get(host);
 	if (!pending) {
-		if (host.stopping) return Promise.reject(new AIReqWorkbenchStartError([new Error("AIReq host is exiting")], host));
+		if (host.stopping)
+			return Promise.reject(new AIReqWorkbenchStartError([new Error("AIReq host is exiting")], host));
 		const opening = (async () => {
 			const endpoint = await startAIReqWorkbenchServer(host, {
 				...options,
@@ -522,7 +523,9 @@ export async function runAIReqWorkbenchCommand(parsedArgs: Args, _rawArgs: strin
 					break;
 				} catch (error) {
 					shutdown = Promise.withResolvers<void>();
-					process.stderr.write(`AIReq 尚未结清，项目占用保持；输入 /aireq 或按 Ctrl+C 重试退出：${message(error)}\n`);
+					process.stderr.write(
+						`AIReq 尚未结清，项目占用保持；输入 /aireq 或按 Ctrl+C 重试退出：${message(error)}\n`,
+					);
 					await shutdown.promise;
 				}
 			}

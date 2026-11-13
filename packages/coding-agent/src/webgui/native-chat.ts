@@ -11,10 +11,6 @@ import type {
 	ZCodeSessionStateSnapshot,
 	ZCodeSessionSubagentsResult,
 } from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol";
-import {
-	attachmentRefSchema,
-	type AttachmentRef,
-} from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol-v4/attachment-ref";
 import type { ConversationRow } from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol-v4/rows";
 import {
 	conversationSnapshotSchema,
@@ -40,17 +36,13 @@ import { SessionManager } from "../session/session-manager";
 import { sessionDisplayName, type SessionInfo } from "../session/session-listing";
 import { NativeChildDirectory, type OwnedNativeChild } from "./native-subagents";
 import { listBrowserProjects, readBrowserProject } from "./project-registry";
-import { resolveNativeAttachments, resolveNativeFileContexts } from "./native-attachments";
-import { buildNativeWebGuiSkillPrompt } from "./native-commands";
 import { nativeWebGuiQuestions, withNativeWebGuiInteractionScope } from "./native-interactions";
 import {
 	assertWebGuiNativeAdmission,
-	isWebGuiNativeSessionUnavailable,
 	listWebGuiNativeSessions,
 	resolveWebGuiSession,
 	resumeWebGuiNativeSession,
 	runWebGuiSession,
-	webGuiNativePorts,
 } from "./native-session-host";
 import { WebGuiNotImplementedError, type WebGuiServiceContext } from "./rpc-contract";
 
@@ -62,7 +54,6 @@ export function assertNativeChat(context: WebGuiServiceContext): AgentSession {
 	if (
 		!session ||
 		session.isDisposed ||
-		isWebGuiNativeSessionUnavailable(session) ||
 		!project ||
 		(project.nativeSession !== session && !project.nativeSessions?.has(session)) ||
 		project.mode !== "webgui" ||
@@ -101,19 +92,6 @@ function nativeInputText(message: AgentMessage | undefined): string {
 			: "";
 	}
 	return text(message.content);
-}
-
-function projectNativeAttachments(attachments: PromptOptions["attachments"]): AttachmentRef[] | undefined {
-	return attachments?.map(attachment => {
-		const { sourceKind, ...reference } = attachment;
-		const source = attachmentRefSchema.shape.sourceKind.safeParse(sourceKind);
-		// Older native history may contain other provenance labels. Keep the owned file
-		// reference without inventing a supported V4 source for that display metadata.
-		return attachmentRefSchema.parse({
-			...reference,
-			...(source.success && source.data !== undefined ? { sourceKind: source.data } : {}),
-		});
-	});
 }
 
 function liveSessionInfo(session: AgentSession): SessionInfo {
@@ -180,7 +158,6 @@ export class NativeChatRuntime {
 		return (
 			this.hasSession &&
 			(this.session.isStreaming ||
-				!!webGuiNativePorts().collabGuest(this.session)?.state?.isStreaming ||
 				this.session.isSessionTransitioning ||
 				this.session.isRetrying ||
 				this.session.isCompacting ||
@@ -191,16 +168,6 @@ export class NativeChatRuntime {
 		);
 	}
 
-	browserActions(context: WebGuiServiceContext, clientId?: string) {
-		return this.#session
-			? nativeWebGuiQuestions(this.#session)
-					.pendingInteractionsFor({ connectionId: context.connectionId, clientId })
-					.filter(
-						interaction =>
-							interaction.payload.kind === "userInput" && interaction.payload.toolName === "webgui-command",
-					)
-			: [];
-	}
 	#references = 0;
 	#unsubscribe?: () => void;
 	#unsubscribeRunState?: () => void;
@@ -221,7 +188,6 @@ export class NativeChatRuntime {
 	#history = new Map<string, SessionInfo>();
 	#children?: NativeChildDirectory;
 	#unsubscribeChildren?: () => void;
-	#taskRunAdapters = 0;
 	#retryState: ApiRetryState | null = null;
 	#notices = new Map<
 		string,
@@ -247,17 +213,6 @@ export class NativeChatRuntime {
 			});
 		}
 		return this.#children;
-	}
-
-	get taskRunsAvailable(): boolean {
-		return this.#taskRunAdapters > 0;
-	}
-
-	registerTaskRuns(): () => void {
-		this.#taskRunAdapters++;
-		return () => {
-			this.#taskRunAdapters--;
-		};
 	}
 
 	async #withChildren<T>(read: (directory: NativeChildDirectory | undefined) => Promise<T>): Promise<T> {
@@ -315,11 +270,6 @@ export class NativeChatRuntime {
 	constructor(session?: AgentSession) {
 		this.#session = session;
 		this.#lastSessionId = session?.sessionId ?? "";
-		if (session)
-			webGuiNativePorts().bindCollabProjection(session, {
-				emit: event => this.acceptEvent(event),
-				refresh: () => this.notify(),
-			});
 	}
 
 	context(context: WebGuiServiceContext): WebGuiServiceContext {
@@ -495,87 +445,38 @@ export class NativeChatRuntime {
 		commandId?: string,
 		options: {
 			requestedDelivery?: "startNow" | "queue" | "guide";
-			attachments?: PromptOptions["attachments"];
 			heldQueueDisposition?: "clearQueueAndSend" | "keepQueueAndSend";
 			expectedHeldQueueItemIds?: string[];
-			prepared?: { text: string; images: ImageContent[] };
+			images?: ImageContent[];
 		} = {},
 	): Promise<"startNow" | "queue" | "guide"> {
 		if (await this.child(context, id)) throw new Error("Native child conversations are read-only.");
 		const session = await resolveWebGuiSession(context, id);
 		const owner = nativeChatRuntimeForSession(session);
 		if (owner !== this) return owner.submit(context, id, content, inputId, clientId, commandId, options);
-		if (!content.trim() && !options.attachments?.length) throw new TypeError("A message or attachment is required.");
-		if (session.isSessionTransitioning || this.#stopping || (this.#editing && !options.prepared))
-			throw new Error("The native session is transitioning.");
+		if (!content.trim()) throw new TypeError("A message is required.");
+		if (session.isSessionTransitioning || this.#stopping) throw new Error("The native session is transitioning.");
 		if (!session.isStreaming && nativeWebGuiQuestions(session).pendingInteractions.length)
 			throw new Error("Resolve the pending native interaction before submitting another input.");
 		const inputEpoch = this.#inputEpoch;
 		const stopGeneration = this.#stopGeneration;
 		const busy = this.isBusy;
-		let delivery = options.requestedDelivery ?? (busy ? this.#followupMode : "startNow");
+		const delivery = options.requestedDelivery ?? (busy ? this.#followupMode : "startNow");
 		if (delivery === "guide" && !busy) throw new Error("Guide requires a running native session.");
 		context = this.context(context);
-		const attachments = options.prepared ?? (await resolveNativeAttachments(context, options.attachments ?? [], id));
-		const references = options.prepared
-			? { text: "", images: [] }
-			: await resolveNativeFileContexts(context, content, id);
-		const images = [...attachments.images, ...references.images];
+		const images = options.images ?? [];
 		if (images.length && !session.model?.input.includes("image"))
 			throw new Error("The selected native model does not accept image inputs.");
 		assertNativeChat(context);
-		const guest = webGuiNativePorts().collabGuest(session);
-		let goalAutoOrchestrateInitialId: string | undefined;
 		const origin = {
 			connectionId: context.connectionId,
 			clientId,
 			sessionId: id,
-			input: { images },
-			onPromptMetadata: (metadata: { goalAutoOrchestrateInitialId?: string }) => {
-				goalAutoOrchestrateInitialId = metadata.goalAutoOrchestrateInitialId;
-			},
 		};
-		const command = await runWebGuiSession(session, () =>
-			webGuiNativePorts().executeCommand(session, content, origin),
-		);
-		if (command === true) {
-			this.notify();
-			return "startNow";
-		}
-		if (session.sessionId !== id) {
-			if (typeof command !== "string") throw new Error("The native session changed before input admission.");
-			id = session.sessionId;
-		}
-		if (goalAutoOrchestrateInitialId) delivery = busy ? "guide" : "startNow";
-		const prompt = [typeof command === "string" ? command : content, attachments.text, references.text]
-			.filter(Boolean)
-			.join("\n\n");
-		const skillPrompt = guest
-			? undefined
-			: await runWebGuiSession(session, () =>
-					buildNativeWebGuiSkillPrompt(
-						session,
-						prompt,
-						delivery === "guide" || goalAutoOrchestrateInitialId ? "steer" : "followUp",
-						images,
-					),
-				);
-		if (skillPrompt) skillPrompt.message.details.prompt = content;
+		const prompt = content;
 		assertNativeChat(context);
 		if (inputEpoch !== this.#inputEpoch || this.#stopping)
 			throw new Error("The input was cancelled before native admission.");
-		if (guest) {
-			if (guest.readOnly) throw new Error("This collaboration guest is read-only.");
-			if (webGuiNativePorts().collabGuest(session) !== guest || !guest.state)
-				throw new Error("The native collaboration guest is no longer connected.");
-			if (options.requestedDelivery === "queue")
-				throw new Error("Native collaboration guests deliver running input through host steering, not follow-up.");
-			if (options.requestedDelivery === "startNow" && guest.state.isStreaming) await this.stop(context);
-			if (webGuiNativePorts().collabGuest(session) !== guest)
-				throw new Error("The native collaboration binding changed.");
-			guest.sendPrompt(prompt, images);
-			return options.requestedDelivery === "startNow" ? "startNow" : guest.state.isStreaming ? "guide" : "startNow";
-		}
 		const sourceCommand = commandId
 			? {
 					sessionId: id,
@@ -583,27 +484,18 @@ export class NativeChatRuntime {
 					fingerprint: JSON.stringify({ content, inputId }),
 				}
 			: undefined;
-		if (delivery === "guide" && !goalAutoOrchestrateInitialId) {
-			const unregisterOrigin = webGuiNativePorts().registerInputOrigin(session, inputId, origin);
-			let accepted: boolean;
-			try {
-				accepted = await withNativeWebGuiInteractionScope(origin, () =>
-					runWebGuiSession(session, () =>
-						session.joinActiveTurn(prompt, images, {
-							inputId,
-							inputClientId: clientId,
-							attachments: options.attachments ?? [],
-							sourceCommand,
-							allowAutonomous: session.agent.state.isStreaming,
-							...(skillPrompt ? { customMessage: skillPrompt.message } : {}),
-						}),
-					),
-				);
-				if (!accepted) throw new Error("The native run ended before the guide could be admitted.");
-			} catch (error) {
-				unregisterOrigin();
-				throw error;
-			}
+		if (delivery === "guide") {
+			const accepted = await withNativeWebGuiInteractionScope(origin, () =>
+				runWebGuiSession(session, () =>
+					session.joinActiveTurn(prompt, images, {
+						inputId,
+						inputClientId: clientId,
+						sourceCommand,
+						allowAutonomous: session.agent.state.isStreaming,
+					}),
+				),
+			);
+			if (!accepted) throw new Error("The native run ended before the guide could be admitted.");
 			this.notify();
 			return "guide";
 		}
@@ -615,12 +507,8 @@ export class NativeChatRuntime {
 		}
 		assertNativeChat(context);
 		if (stopGeneration !== this.#stopGeneration) throw new Error("The input was cancelled before native admission.");
-		if (options.heldQueueDisposition) {
+		if (options.heldQueueDisposition)
 			session.disposeHeldQueue(options.expectedHeldQueueItemIds ?? [], options.heldQueueDisposition);
-			if (options.heldQueueDisposition === "clearQueueAndSend")
-				for (const queuedId of options.expectedHeldQueueItemIds ?? [])
-					webGuiNativePorts().forgetInputOrigin(session, queuedId);
-		}
 		this.state(id).error = undefined;
 		if (!session.isStreaming) this.#executionId = undefined;
 		this.#submitting++;
@@ -629,21 +517,15 @@ export class NativeChatRuntime {
 		let actualDelivery = delivery;
 		const admission = Promise.withResolvers<void>();
 		let admitted = false;
-		const unregisterOrigin = webGuiNativePorts().registerInputOrigin(session, inputId, origin);
 		const promptOptions: PromptOptions = {
 			inputId,
 			inputClientId: clientId,
-			attachments: options.attachments ?? [],
 			images,
 			throwOnDrop: true,
-			...(goalAutoOrchestrateInitialId
-				? { goalAutoOrchestrateInitialId, streamingBehavior: "steer" as const }
-				: delivery === "queue"
-					? { streamingBehavior: "followUp" as const, queueOnly: busy }
-					: {}),
+			...(delivery === "queue" ? { streamingBehavior: "followUp" as const, queueOnly: busy } : {}),
 			sourceCommand,
 			onPromptQueued: () => {
-				actualDelivery = goalAutoOrchestrateInitialId ? "guide" : "queue";
+				actualDelivery = "queue";
 			},
 			onPromptAdmitted: () => {
 				admitted = true;
@@ -651,26 +533,16 @@ export class NativeChatRuntime {
 			},
 		};
 		const operation = withNativeWebGuiInteractionScope(origin, () =>
-			runWebGuiSession(session, () =>
-				skillPrompt
-					? session.promptCustomMessage(skillPrompt.message, {
-							...skillPrompt.options,
-							...promptOptions,
-							queueChipText: content,
-						})
-					: session.prompt(prompt, promptOptions),
-			),
+			runWebGuiSession(session, () => session.prompt(prompt, promptOptions)),
 		);
 		void operation
 			.then(
 				() => {
 					if (!admitted) {
-						unregisterOrigin();
 						admission.reject(new Error("The native prompt completed without admitting this input."));
 					}
 				},
 				error => {
-					if (!admitted) unregisterOrigin();
 					this.state(id).error = {
 						message: error instanceof Error ? error.message : String(error),
 						at: Date.now(),
@@ -679,7 +551,6 @@ export class NativeChatRuntime {
 				},
 			)
 			.finally(() => {
-				if (actualDelivery === "startNow") unregisterOrigin();
 				this.#submitting--;
 				this.indexVersion++;
 				this.notify();
@@ -700,31 +571,9 @@ export class NativeChatRuntime {
 		this.notify();
 		try {
 			nativeWebGuiQuestions(session).cancelPendingInteractions("Native session stopped.");
-			const guest = webGuiNativePorts().collabGuest(session);
-			if (guest) {
-				if (guest.readOnly) throw new Error("This collaboration guest is read-only.");
-				const idle = Promise.withResolvers<void>();
-				const changed = this.changes.event(() => {
-					if (webGuiNativePorts().collabGuest(session) !== guest)
-						idle.reject(new Error("The native collaboration connection changed while stopping."));
-					else if (!guest.state?.isStreaming) idle.resolve();
-				});
-				try {
-					guest.sendAbort();
-					if (!guest.state?.isStreaming) idle.resolve();
-					await idle.promise;
-				} finally {
-					changed.dispose();
-				}
-			} else {
-				await runWebGuiSession(session, async () => {
-					const commands = webGuiNativePorts().cancelCommandInputs(session);
-					await Promise.all([
-						session.abort({ reason: USER_INTERRUPT_LABEL, preserveQueuedInputs: true }),
-						commands,
-					]);
-				});
-			}
+			await runWebGuiSession(session, () =>
+				session.abort({ reason: USER_INTERRUPT_LABEL, preserveQueuedInputs: true }),
+			);
 		} catch (error) {
 			this.state(session.sessionId).error = {
 				message: error instanceof Error ? error.message : String(error),
@@ -748,34 +597,16 @@ export class NativeChatRuntime {
 			.getQueuedInputMessages()
 			.find(message => (message as AgentMessage & { inputId?: string }).inputId === inputId);
 		if (!input) throw new Error("The queued input is no longer editable.");
-		const attachments = (input as AgentMessage & { attachments?: PromptOptions["attachments"] }).attachments;
-		const resolved = await resolveNativeAttachments(this.context(context), attachments ?? [], session.sessionId);
-		const references = await resolveNativeFileContexts(this.context(context), newText, session.sessionId);
 		assertNativeChat(this.context(context));
-		const content = [newText, resolved.text, references.text].filter(Boolean).join("\n\n");
-		const images = [
-			...(attachments !== undefined
-				? resolved.images
-				: "content" in input && isCustomMessageContent(input.content) && Array.isArray(input.content)
-					? input.content.filter((part): part is ImageContent => part.type === "image")
-					: []),
-			...references.images,
-		];
-		const skillPrompt = await runWebGuiSession(session, () =>
-			buildNativeWebGuiSkillPrompt(
-				session,
-				content,
-				session.agent.peekSteeringQueue().includes(input) ? "steer" : "followUp",
-				images,
-			),
-		);
-		if (skillPrompt) skillPrompt.message.details.prompt = newText;
+		const images =
+			"content" in input && isCustomMessageContent(input.content) && Array.isArray(input.content)
+				? input.content.filter((part): part is ImageContent => part.type === "image")
+				: [];
 		assertNativeChat(this.context(context));
 		if (
 			!session.mutateQueuedInput(inputId, "edit", {
-				text: skillPrompt ? newText : content,
+				text: newText,
 				images,
-				...(skillPrompt ? { customMessage: skillPrompt.message } : {}),
 			})
 		)
 			throw new Error("The queued input was consumed before the edit.");
@@ -806,7 +637,6 @@ export class NativeChatRuntime {
 			const admission = Promise.withResolvers<void>();
 			let admitted = false;
 			const origin = { connectionId: context.connectionId, clientId, sessionId: session.sessionId };
-			const unregisterOrigin = webGuiNativePorts().registerInputOrigin(session, inputId, origin);
 			const operation = withNativeWebGuiInteractionScope(origin, () =>
 				runWebGuiSession(session, () =>
 					reservation.prompt({
@@ -824,7 +654,6 @@ export class NativeChatRuntime {
 				.then(
 					() => {
 						if (!admitted) {
-							unregisterOrigin();
 							reservation.restore();
 							admission.reject(new Error("The queued input was cancelled before native admission."));
 						} else admission.resolve();
@@ -834,13 +663,11 @@ export class NativeChatRuntime {
 							message: error instanceof Error ? error.message : String(error),
 							at: Date.now(),
 						};
-						unregisterOrigin();
 						reservation.restore();
 						admission.reject(error);
 					},
 				)
 				.finally(() => {
-					if (admitted) unregisterOrigin();
 					this.notify();
 				});
 			await admission.promise;
@@ -871,7 +698,6 @@ export class NativeChatRuntime {
 		newText: string,
 		inputId: string,
 		clientId: string,
-		attachments?: PromptOptions["attachments"],
 	): Promise<string> {
 		if (
 			this.session.isStreaming ||
@@ -905,10 +731,6 @@ export class NativeChatRuntime {
 							text(candidate.content) === text(message.content)),
 				);
 			if (!entry) throw new Error("The native branch entry is no longer available.");
-			const retained =
-				attachments ?? (message as AgentMessage & { attachments?: PromptOptions["attachments"] }).attachments;
-			const resolved = await resolveNativeAttachments(this.context(context), retained ?? [], this.session.sessionId);
-			const references = await resolveNativeFileContexts(this.context(context), newText, this.session.sessionId);
 			if (inputEpoch !== this.#inputEpoch || this.#stopping)
 				throw new Error("The native branch request was cancelled.");
 			assertNativeChat(this.context(context));
@@ -918,11 +740,7 @@ export class NativeChatRuntime {
 				throw new Error("The native branch input was cancelled before admission.");
 			this.notify();
 			await this.submit(context, this.session.sessionId, newText, inputId, clientId, inputId, {
-				attachments: retained,
-				prepared: {
-					text: [resolved.text, references.text].filter(Boolean).join("\n\n"),
-					images: [...(retained?.length ? resolved.images : branch.selectedImages), ...references.images],
-				},
+				images: branch.selectedImages,
 			});
 			return this.session.sessionId;
 		} finally {
@@ -982,50 +800,6 @@ export class NativeChatRuntime {
 
 	async snapshot(context: WebGuiServiceContext, id: string, clientId?: string): Promise<ConversationSnapshot> {
 		context.signal.throwIfAborted();
-		const retained = this.conversations.get(id)?.snapshot;
-		const browserActions = this.browserActions(context, clientId);
-		const project = context.projectId ? readBrowserProject(context.projectId) : undefined;
-		let draining = false;
-		try {
-			assertWebGuiNativeAdmission();
-		} catch {
-			draining = true;
-		}
-		if (
-			retained &&
-			browserActions.length &&
-			(!this.hasSession ||
-				this.session.sessionId !== id ||
-				draining ||
-				project?.mode !== "webgui" ||
-				project.phase !== "active")
-		) {
-			const latest = this.#session?.messages.findLast(message => message.role === "assistant");
-			const executing =
-				this.hasSession &&
-				this.session.sessionId === id &&
-				(this.session.isStreaming || this.session.isRetrying || this.session.isCompacting);
-			return {
-				...retained,
-				seq: this.state(id).seq,
-				revision: this.state(id).seq,
-				control: {
-					...retained.control,
-					phase: executing
-						? "running"
-						: latest?.role === "assistant" && latest.stopReason === "error"
-							? "error"
-							: latest?.role === "assistant" && latest.stopReason === "aborted"
-								? "completedInterrupted"
-								: retained.control.phase,
-					canStop: false,
-					stopState: "idle",
-					sessionEnded: !executing && retained.control.sessionEnded,
-					activeWorks: [],
-				},
-				pendingInteractions: browserActions,
-			};
-		}
 		const owner = await resolveNativeChatRuntime(context, id);
 		if (owner !== this) return owner.snapshot(context, id, clientId);
 		context = this.context(context);
@@ -1033,7 +807,6 @@ export class NativeChatRuntime {
 		const seq = state.seq;
 		const child = await this.child(context, id);
 		const active = this.hasSession && id === this.session.sessionId;
-		const guest = active ? webGuiNativePorts().collabGuest(this.session) : undefined;
 		if (active && state.snapshot?.seq === state.seq)
 			return {
 				...state.snapshot,
@@ -1092,7 +865,6 @@ export class NativeChatRuntime {
 					inputId?: string;
 					sourceCommand?: { commandId: string };
 					inputClientId?: string;
-					attachments?: PromptOptions["attachments"];
 				};
 				rows.push({
 					...rowBase(`${index}:turn`, at),
@@ -1110,10 +882,9 @@ export class NativeChatRuntime {
 					kind: "userInput",
 					text: nativeInputText(message),
 					origin: "realUser",
-					...(active && !guest && !busy && !this.#editing
+					...(active && !busy && !this.#editing
 						? { actions: { canEdit: true as const, editDisposition: "fork" as const } }
 						: {}),
-					...(attribution.attachments ? { attachments: projectNativeAttachments(attribution.attachments) } : {}),
 					...(message.role === "user" && message.steering ? { guided: true as const } : {}),
 					...(attribution.sourceCommand ? { sourceCommandId: attribution.sourceCommand.commandId } : {}),
 					...(attribution.inputClientId ? { clientId: attribution.inputClientId } : {}),
@@ -1138,7 +909,7 @@ export class NativeChatRuntime {
 							(message.stopReason === "error" ? "Native model request failed." : "Native response interrupted."),
 						state: message.stopReason === "error" ? "failed" : "interrupted",
 						model: message.model,
-						...(active && !guest && !busy && !this.#editing && message === lastAssistant
+						...(active && !busy && !this.#editing && message === lastAssistant
 							? { actions: { canRetry: true as const } }
 							: {}),
 					});
@@ -1160,7 +931,6 @@ export class NativeChatRuntime {
 										: "complete",
 							model: message.model,
 							...(active &&
-							!guest &&
 							!busy &&
 							!this.#editing &&
 							message === lastAssistant &&
@@ -1238,14 +1008,12 @@ export class NativeChatRuntime {
 			(lastAssistant?.role === "assistant" && lastAssistant.stopReason === "error" ? lastAssistantError : undefined);
 		const denied = { allowed: false as const, reasonCode: "guard.nativeChatOnly" };
 		const model = active
-			? guest
-				? guest.state?.model
-				: this.session.model
+			? this.session.model
 			: (child?.session?.model ??
 				(lastAssistant?.role === "assistant"
 					? { provider: lastAssistant.provider, id: lastAssistant.model }
 					: undefined));
-		const canContinue = !child && active && !guest?.readOnly;
+		const canContinue = !child && active;
 		const pendingInteractions = active
 			? nativeWebGuiQuestions(this.session).pendingInteractionsFor({ connectionId: context.connectionId, clientId })
 			: [];
@@ -1259,7 +1027,6 @@ export class NativeChatRuntime {
 				inputClientId?: string;
 				inputAdmissionSeq?: number;
 				sourceCommand?: { commandId: string };
-				attachments?: PromptOptions["attachments"];
 			};
 			if (!input.inputId) return [];
 			const guided =
@@ -1272,7 +1039,8 @@ export class NativeChatRuntime {
 					clientId: input.inputClientId ?? "native",
 					kind: "sendText",
 					text: nativeInputText(message),
-					attachments: input.attachments ?? [],
+					// The minimal browser input carries text only; legacy attachment metadata is not projected.
+					attachments: [],
 					delivery: { requested: guided ? "guide" : "queue", admitted: guided ? "guide" : "queue" },
 					order: { admissionSeq: input.inputAdmissionSeq ?? index, queuePosition: index },
 					steer: { state: guided ? "steering" : "notRequested" },
@@ -1287,26 +1055,19 @@ export class NativeChatRuntime {
 		const activeWorks: ActiveWorkSummary[] = [];
 		if (active && this.session.isCompacting && this.#maintenanceStartedAt !== undefined)
 			activeWorks.push({ kind: "compact", startedAt: this.#maintenanceStartedAt });
-		else if (
-			active &&
-			(this.session.agent.state.isStreaming || guest?.state?.isStreaming) &&
-			this.#executionStartedAt > 0
-		)
+		else if (active && this.session.agent.state.isStreaming && this.#executionStartedAt > 0)
 			activeWorks.push({
 				kind: "primaryTurn",
 				foregroundExecutionId: this.#executionId,
 				startedAt: this.#executionStartedAt,
 			});
-		// Read the selected owner's native estimate, never the root's estimate for
-		// child/history views or the guest replica's local prompt overhead.
+		// Use the selected owner's estimate, never the root estimate for child/history views.
 		const contextSession = active
-			? guest
-				? undefined
-				: this.session
+			? this.session
 			: child?.session && isAgentViewSession(child.session)
 				? child.session
 				: undefined;
-		const contextUsage = guest ? guest.state?.contextUsage : contextSession?.getContextUsage();
+		const contextUsage = contextSession?.getContextUsage();
 		const compactionSettings = contextSession
 			? resolveModelCompactionSettings(contextSession.settings, contextSession.model)
 			: undefined;
@@ -1363,10 +1124,10 @@ export class NativeChatRuntime {
 			availability: {
 				fork: denied,
 				compact: denied,
-				switchModelConfig: active && !guest ? { allowed: true } : denied,
-				setFollowupMode: active && !guest ? { allowed: true } : denied,
-				queueEdit: active && !guest ? { allowed: true } : denied,
-				sendQueuedNow: active && !guest ? { allowed: true } : denied,
+				switchModelConfig: active ? { allowed: true } : denied,
+				setFollowupMode: active ? { allowed: true } : denied,
+				queueEdit: active ? { allowed: true } : denied,
+				sendQueuedNow: active ? { allowed: true } : denied,
 				pauseGoal: denied,
 				resumeGoal: denied,
 			},
@@ -1380,7 +1141,7 @@ export class NativeChatRuntime {
 						  (!this.session.isStreaming && pendingInteractions.length > 0)
 						? { mode: "reject", reasonCode: "guard.nativeSessionTransition" }
 						: busy
-							? { mode: guest || this.#followupMode === "guide" ? "guide" : "enqueue" }
+							? { mode: this.#followupMode === "guide" ? "guide" : "enqueue" }
 							: queue.length && !queueAutoDrain
 								? { mode: "choice" }
 								: { mode: "startNow" },
@@ -1389,7 +1150,7 @@ export class NativeChatRuntime {
 				provider: model?.provider ?? "",
 				model: model?.id ?? "",
 				thought: active ? (this.session.thinkingLevel ?? "off") : (child?.session?.thinkingLevel ?? "off"),
-				followupMode: guest ? "guide" : this.#followupMode,
+				followupMode: this.#followupMode,
 				mode: active && this.session.getPlanModeState()?.enabled ? "plan" : "build",
 				...(model ? { modelSelection: { providerId: model.provider, modelId: model.id } } : {}),
 			},
@@ -1602,6 +1363,5 @@ export async function legacySnapshot(context: WebGuiServiceContext, id: string):
 			pendingRequestIds: [],
 		},
 		messages: await legacyMessages(context, id),
-		slashCommands: runtime.hasSession ? await webGuiNativePorts().listCommands(runtime.session) : [],
 	};
 }

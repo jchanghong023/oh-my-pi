@@ -10,7 +10,7 @@ import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { Button } from "../ui/button.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.js";
 import { cn } from "../lib/utils.js";
-import { CheckIcon, CopyIcon, Maximize2Icon, WrapTextIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, WrapTextIcon } from "lucide-react";
 import type { ComponentProps, CSSProperties, HTMLAttributes } from "react";
 import {
   createContext,
@@ -25,16 +25,7 @@ import type { BundledTheme } from "shiki";
 import { CodeViewer } from "@/components/ui/code-viewer.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { FileDisplayIcon, resolveFileDisplayDescriptor } from "@/lib/fileDisplay.js";
-import { isMermaidLanguage, shouldRenderMermaidCodeBlock } from "@/lib/mermaidLanguage.js";
-import {
-  getCurrentMermaidDocumentVisibility,
-  resolveMermaidAutoRenderDecision,
-} from "@/lib/mermaidRenderBudget.js";
-import { MermaidBlock } from "@/components/ai-elements/mermaid-block.js";
-import { DiagramPreviewDialog } from "@/components/ai-elements/diagram-preview-dialog.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { logger } from "@/logger.js";
-import type { Theme } from "@/useTheme.js";
 
 // Types
 type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
@@ -43,14 +34,8 @@ type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   enableSyntaxHighlighting?: boolean;
   showLineNumbers?: boolean;
   theme?: BundledTheme;
-  /**
-   * 应用主题（store 耦合剥离）：仅透传给 Mermaid 渲染分支；
-   * `theme` 已被 shiki 高亮主题占用，故另起名 appTheme。缺省时 Mermaid 按 "system" 兜底。
-   */
-  appTheme?: Theme;
   wrapLongLines?: boolean;
   fontSizePx?: number;
-  renderMermaid?: boolean;
   /** 正文独立限高，避免滚动时把 Header 的复制/换行按钮一起卷走。 */
   contentClassName?: string;
   /**
@@ -65,9 +50,6 @@ type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
 
 interface CodeBlockContextType {
   code: string;
-  renderingMermaid: boolean;
-  mermaidPreviewAvailable: boolean;
-  openMermaidPreview: () => void;
   toggleWrapLongLines: () => void;
   wrapLongLines: boolean;
 }
@@ -84,8 +66,6 @@ const LANGUAGE_DISPLAY_FILE_BY_LANGUAGE: Record<string, string> = {
   json: "data.json",
   markdown: "README.md",
   md: "README.md",
-  mermaid: "diagram.mmd",
-  mmd: "diagram.mmd",
   mjs: "index.mjs",
   python: "main.py",
   py: "main.py",
@@ -111,38 +91,9 @@ function resolveCodeBlockDisplayFile(language: string, displayFile?: string) {
   );
 }
 
-function useDocumentVisibilityRevision(enabled: boolean): number {
-  const [revision, setRevision] = useState(0);
-
-  useEffect(() => {
-    // 普通代码块数量和消息流同量级，不能为非 Mermaid 块批量注册页面可见性监听。
-    if (!enabled) {
-      return;
-    }
-
-    if (typeof document === "undefined" || typeof document.addEventListener !== "function") {
-      return;
-    }
-
-    const handleVisibilityChange = () => {
-      setRevision((current) => current + 1);
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [enabled]);
-
-  return revision;
-}
-
 // Context
 const CodeBlockContext = createContext<CodeBlockContextType>({
   code: "",
-  renderingMermaid: false,
-  mermaidPreviewAvailable: false,
-  openMermaidPreview: () => {},
   toggleWrapLongLines: () => {},
   wrapLongLines: false,
 });
@@ -182,7 +133,6 @@ export const CodeBlockHeader = ({
   showWrapButton = true,
   ...props
 }: CodeBlockHeaderProps) => {
-  const { renderingMermaid } = useContext(CodeBlockContext);
   const languageLabel = language?.trim() || "text";
   const descriptor = resolveFileDisplayDescriptor(
     resolveCodeBlockDisplayFile(languageLabel, displayFile),
@@ -198,18 +148,12 @@ export const CodeBlockHeader = ({
     >
       {children ?? (
         <>
-          {renderingMermaid ? null : (
-            <CodeBlockTitle className="min-w-0">
-              <FileDisplayIcon src={descriptor.fileIconSrc} size={16} className="shrink-0" />
-              <CodeBlockFilename className="truncate lowercase">{languageLabel}</CodeBlockFilename>
-            </CodeBlockTitle>
-          )}
+          <CodeBlockTitle className="min-w-0">
+            <FileDisplayIcon src={descriptor.fileIconSrc} size={16} className="shrink-0" />
+            <CodeBlockFilename className="truncate lowercase">{languageLabel}</CodeBlockFilename>
+          </CodeBlockTitle>
           <CodeBlockActions className="ml-auto">
-            {isMermaidLanguage(languageLabel) ? (
-              <CodeBlockMermaidPreviewButton />
-            ) : showWrapButton ? (
-              <CodeBlockWrapButton />
-            ) : null}
+            {showWrapButton ? <CodeBlockWrapButton /> : null}
             <CodeBlockCopyButton />
           </CodeBlockActions>
         </>
@@ -254,10 +198,8 @@ export const CodeBlock = ({
   language,
   showLineNumbers = false,
   theme,
-  appTheme,
   wrapLongLines = false,
   fontSizePx = 14,
-  renderMermaid = true,
   focusedRange = null,
   focusRequestId,
   markedLines,
@@ -266,23 +208,7 @@ export const CodeBlock = ({
   contentClassName,
   ...props
 }: CodeBlockProps) => {
-  const { intl } = useZCodeIntl();
   const [isWrapped, setIsWrapped] = useState(wrapLongLines);
-  const [mermaidPreviewSvg, setMermaidPreviewSvg] = useState<string | null>(null);
-  const [mermaidPreviewOpen, setMermaidPreviewOpen] = useState(false);
-  const canRenderMermaidCode = renderMermaid && shouldRenderMermaidCodeBlock(language, code);
-  const documentVisibilityRevision = useDocumentVisibilityRevision(canRenderMermaidCode);
-  const mermaidAutoRenderDecision = useMemo(() => {
-    if (!canRenderMermaidCode) {
-      return null;
-    }
-
-    return resolveMermaidAutoRenderDecision(code, {
-      documentVisibilityState: getCurrentMermaidDocumentVisibility(),
-    });
-  }, [canRenderMermaidCode, code, documentVisibilityRevision]);
-  const shouldRenderMermaid =
-    canRenderMermaidCode && mermaidAutoRenderDecision?.shouldRender === true;
 
   useEffect(() => {
     setIsWrapped(wrapLongLines);
@@ -292,102 +218,44 @@ export const CodeBlock = ({
     setIsWrapped((current) => !current);
   }, []);
 
-  const openMermaidPreview = useCallback(() => {
-    setMermaidPreviewOpen(true);
-  }, []);
-
-  useEffect(() => {
-    if (!shouldRenderMermaid) {
-      setMermaidPreviewSvg(null);
-      setMermaidPreviewOpen(false);
-    }
-  }, [shouldRenderMermaid]);
-
-  useEffect(() => {
-    if (!mermaidAutoRenderDecision || mermaidAutoRenderDecision.shouldRender) {
-      return;
-    }
-
-    logger.debug("[CodeBlock] Mermaid 自动渲染跳过", {
-      reason: mermaidAutoRenderDecision.reason,
-      ...mermaidAutoRenderDecision.metrics,
-    });
-  }, [mermaidAutoRenderDecision]);
-
   const contextValue = useMemo(
     () => ({
       code,
-      renderingMermaid: shouldRenderMermaid,
-      mermaidPreviewAvailable: Boolean(mermaidPreviewSvg),
-      openMermaidPreview,
       toggleWrapLongLines,
       wrapLongLines: isWrapped,
     }),
-    [
-      code,
-      isWrapped,
-      mermaidPreviewSvg,
-      openMermaidPreview,
-      shouldRenderMermaid,
-      toggleWrapLongLines,
-    ],
+    [code, isWrapped, toggleWrapLongLines],
   );
 
   return (
     <CodeBlockContext.Provider value={contextValue}>
-      <CodeBlockContainer
-        className={cn(
-          className,
-          // Mermaid 直接融入消息背景，不能继承普通代码块的底板。
-          shouldRenderMermaid && "rounded-none border-0 bg-transparent",
-        )}
-        language={language}
-        {...props}
-      >
+      <CodeBlockContainer className={className} language={language} {...props}>
         {children}
         <div className={cn("p-2 pt-0 pb-3", contentClassName)}>
-          {shouldRenderMermaid ? (
-            <MermaidBlock
-              code={code}
-              theme={appTheme}
-              onOpenPreview={openMermaidPreview}
-              onPreviewSvgChange={setMermaidPreviewSvg}
-              // className={cn(children ? "border-t border-border" : null)}
-            />
-          ) : (
-            <CodeViewer
-              code={code}
-              enableSyntaxHighlighting={enableSyntaxHighlighting}
-              language={language}
-              showLineNumbers={showLineNumbers}
-              theme={theme}
-              wrapLongLines={isWrapped}
-              focusedRange={focusedRange}
-              focusRequestId={focusRequestId}
-              markedLines={markedLines}
-              className="bg-transparent"
-              fontSizePx={fontSizePx}
-              // markdown 代码块外层是 bg-card，但 CodeViewer 默认把 @pierre/diffs 背景设成 background。
-              // 这里仅覆盖 markdown CodeBlock 入口，避免侧边栏文件预览的背景层级被一起改掉。
-              style={
-                {
-                  "--diffs-bg": "var(--color-card)",
-                  "--diffs-light-bg": "var(--color-card)",
-                  "--diffs-dark-bg": "var(--color-card)",
-                  "--diffs-gap-block": "0px",
-                } as CSSProperties
-              }
-            />
-          )}
-        </div>
-        {shouldRenderMermaid && mermaidPreviewSvg ? (
-          <DiagramPreviewDialog
-            open={mermaidPreviewOpen}
-            onOpenChange={setMermaidPreviewOpen}
-            svg={mermaidPreviewSvg}
-            title={intl.formatMessage({ id: "codeBlock.mermaid.ariaLabel" })}
+          <CodeViewer
+            code={code}
+            enableSyntaxHighlighting={enableSyntaxHighlighting}
+            language={language}
+            showLineNumbers={showLineNumbers}
+            theme={theme}
+            wrapLongLines={isWrapped}
+            focusedRange={focusedRange}
+            focusRequestId={focusRequestId}
+            markedLines={markedLines}
+            className="bg-transparent"
+            fontSizePx={fontSizePx}
+            // markdown 代码块外层是 bg-card，但 CodeViewer 默认把 @pierre/diffs 背景设成 background。
+            // 这里仅覆盖 markdown CodeBlock 入口，避免侧边栏文件预览的背景层级被一起改掉。
+            style={
+              {
+                "--diffs-bg": "var(--color-card)",
+                "--diffs-light-bg": "var(--color-card)",
+                "--diffs-dark-bg": "var(--color-card)",
+                "--diffs-gap-block": "0px",
+              } as CSSProperties
+            }
           />
-        ) : null}
+        </div>
       </CodeBlockContainer>
     </CodeBlockContext.Provider>
   );
@@ -425,43 +293,6 @@ export const CodeBlockWrapButton = ({
         {...props}
       >
         {children ?? <WrapTextIcon className="size-3.5" />}
-      </Button>
-    </ControlHintTooltip>
-  );
-};
-
-export type CodeBlockMermaidPreviewButtonProps = ComponentProps<typeof Button>;
-
-export const CodeBlockMermaidPreviewButton = ({
-  "aria-label": ariaLabel,
-  children,
-  className,
-  onClick,
-  title,
-  ...props
-}: CodeBlockMermaidPreviewButtonProps) => {
-  const { intl } = useZCodeIntl();
-  const { mermaidPreviewAvailable, openMermaidPreview } = useContext(CodeBlockContext);
-  const label = title ?? intl.formatMessage({ id: "codeBlock.mermaid.openPreview" });
-
-  return (
-    <ControlHintTooltip title={label} side="top">
-      <Button
-        aria-label={ariaLabel ?? label}
-        className={cn("shrink-0", className)}
-        disabled={!mermaidPreviewAvailable}
-        onClick={(event) => {
-          onClick?.(event);
-          if (!event.defaultPrevented) {
-            openMermaidPreview();
-          }
-        }}
-        size="icon-md"
-        type="button"
-        variant="ghost"
-        {...props}
-      >
-        {children ?? <Maximize2Icon className="size-3.5" />}
       </Button>
     </ControlHintTooltip>
   );

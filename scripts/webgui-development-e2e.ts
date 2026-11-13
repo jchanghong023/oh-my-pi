@@ -1062,11 +1062,9 @@ export async function runDevelopmentE2E(
 			sources: [
 				"packages/coding-agent/test/webgui/native-interactions.test.ts",
 				"packages/coding-agent/test/webgui/native-attachments.test.ts",
-				"packages/coding-agent/test/webgui/native-files.test.ts",
 				"packages/agent/test/pause-gate.test.ts",
 				"packages/coding-agent/test/webgui/core-browser.e2e.test.ts",
 				"packages/coding-agent/test/webgui/project-ownership.test.ts",
-				"packages/coding-agent/test/webgui/native-cwd.test.ts",
 			],
 		};
 		let owned: NativeDevelopmentContextHandle | undefined;

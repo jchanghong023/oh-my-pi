@@ -210,6 +210,12 @@ export interface ModelSelectionView extends Partial<EffectiveModelSelectionResul
     readonly workspacePath?: string;
     readonly chatAvailable?: boolean;
     readonly taskRunsAvailable?: boolean;
+    /** Current effective thinking level of the bound native session. */
+    readonly thinkingLevel?: string;
+    /** Highest thinking level the selected model allows; absent means provider default. */
+    readonly thinkingLevelCeiling?: string;
+    /** Levels the bound native session accepts for setSessionThinkingLevel. */
+    readonly thinkingLevels?: readonly string[];
     readonly models: readonly {
       readonly providerId: string;
       readonly modelId: string;

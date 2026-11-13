@@ -1,12 +1,8 @@
 import { writeBrowserClipboardText } from "@/lib/browserClipboard.js";
 import { useState } from "react";
 import { DesktopCommandIds } from "@zcode/shared";
+import { TID_WORKSPACE_HELP_MENU_TRIGGER } from "@zcode/shared/test-ids";
 import {
-  TID_WORKSPACE_HELP_MENU_RESOURCE_MANAGER,
-  TID_WORKSPACE_HELP_MENU_TRIGGER,
-} from "@zcode/shared/test-ids";
-import {
-  ActivityIcon,
   BookOpenIcon,
   CircleHelpIcon,
   CopyIcon,
@@ -54,9 +50,6 @@ export function WorkspaceHelpMenuButton({
   });
   const handleOpenCommunity = () => {
     void platform.openCommunity();
-  };
-  const handleOpenResourceManager = () => {
-    void platform.executeDesktopCommand(DesktopCommandIds.OpenResourceManager);
   };
 
   const handleShowAbout = () => {
@@ -136,13 +129,6 @@ export function WorkspaceHelpMenuButton({
             <DropdownMenuItem onSelect={handleCopyDeviceMid}>
               <CopyIcon className="size-4" />
               {intl.formatMessage({ id: "workspaceHeader.help.copyDeviceMid" })}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              data-testid={TID_WORKSPACE_HELP_MENU_RESOURCE_MANAGER}
-              onSelect={handleOpenResourceManager}
-            >
-              <ActivityIcon className="size-4" />
-              {intl.formatMessage({ id: "titleBar.menu.help.resourceManager" })}
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={handleShowAbout}>
               <InfoIcon className="size-4" />

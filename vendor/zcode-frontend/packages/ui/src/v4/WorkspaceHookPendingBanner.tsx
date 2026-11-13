@@ -10,11 +10,7 @@ import { Anchor } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import {
-  setPendingSettingsSectionIntent,
-} from "@/lib/settingsNavigation.js";
 import { logger } from "@/logger.js";
-import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
 import {
   findWorkspaceHookCommandBinding,
   useWorkspaceHookReviewStore,
@@ -59,7 +55,6 @@ export const WorkspaceHookPendingIndicator = memo(function WorkspaceHookPendingI
   admission,
 }: WorkspaceHookPendingIndicatorProps) {
   const { intl } = useZCodeIntl();
-  const openSettingsTab = useOptionalTabStore((state) => state.openSettingsTab);
   const commandBindings = useWorkspaceHookReviewStore((state) => state.commandBindings);
   const [open, setOpen] = useState(false);
   const reminderKey = JSON.stringify([sessionId, admission?.bundleDigest]);
@@ -73,10 +68,6 @@ export const WorkspaceHookPendingIndicator = memo(function WorkspaceHookPendingI
 
   const handleReview = useCallback(() => {
     setOpen(false);
-    // 两行式打开设置页：设置 intent 再 open tab（仿 V4ComposerToolbar 的 handleOpenModelProviderSettings）
-    setPendingSettingsSectionIntent("hooks");
-    openSettingsTab?.();
-
     // 通过 command binding 发送 requestWorkspaceHookReview 命令。
     // 该通道正是为无 pending review interaction 时保留命令通道而设。
     const binding = findWorkspaceHookCommandBinding(
@@ -96,7 +87,7 @@ export const WorkspaceHookPendingIndicator = memo(function WorkspaceHookPendingI
         "requestWorkspaceHookReview",
         payload,
       ).catch((error) => {
-        // 命令发送失败不阻断导航（容错）——用户已到达设置页，可手动操作。
+        // 命令发送失败不阻断其他恢复路径（容错）。
         logger.warn("[workspace-hook-pending] requestWorkspaceHookReview 发送失败", {
           sessionId,
           bundleDigest: admission.bundleDigest,
@@ -104,7 +95,7 @@ export const WorkspaceHookPendingIndicator = memo(function WorkspaceHookPendingI
         });
       });
     }
-  }, [admission, commandBindings, openSettingsTab, sessionId, workspaceIdentity, workspacePath]);
+  }, [admission, commandBindings, sessionId, workspaceIdentity, workspacePath]);
 
   const handleDismiss = useCallback(() => {
     if (admission) {

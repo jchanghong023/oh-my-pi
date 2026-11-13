@@ -63,7 +63,9 @@ export class AIReqWorkspace {
 		const records = await loadAIReqRequirements(this.root);
 		const occupant = records.find(
 			({ record }) =>
-				record.requirementId !== requirementId && record.branch === this.branch && occupiesAIReqAIReqelopment(record),
+				record.requirementId !== requirementId &&
+				record.branch === this.branch &&
+				occupiesAIReqAIReqelopment(record),
 		);
 		if (occupant) throw new Error(`开发名额已被占用：${occupant.record.requirementId}`);
 		await this.#assertCancellationJournalsSettled(records, requirementId);
@@ -85,7 +87,10 @@ export class AIReqWorkspace {
 		}
 	}
 
-	saveRequirement(record: AIReqRequirementRecord, expectedRecordVersion: string | null): Promise<AIReqStoredRequirement> {
+	saveRequirement(
+		record: AIReqRequirementRecord,
+		expectedRecordVersion: string | null,
+	): Promise<AIReqStoredRequirement> {
 		return this.exclusive(() => saveAIReqRequirementWithOwner(this, record, expectedRecordVersion));
 	}
 

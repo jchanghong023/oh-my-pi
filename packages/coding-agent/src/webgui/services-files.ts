@@ -1,21 +1,7 @@
 import * as os from "node:os";
-import type { IFileService } from "../../../../vendor/zcode-frontend/packages/services/src/file/file";
-import type { IFileWatcherService } from "../../../../vendor/zcode-frontend/packages/services/src/fileWatcher/fileWatcher";
-import type { IGitService } from "../../../../vendor/zcode-frontend/packages/services/src/git/git";
-import type { IGitCheckpointService } from "../../../../vendor/zcode-frontend/packages/services/src/git/gitCheckpoint";
-import type { IMediaPreviewService } from "../../../../vendor/zcode-frontend/packages/services/src/media-preview/mediaPreview";
-import type { IPromptAttachmentTransferService } from "../../../../vendor/zcode-frontend/packages/services/src/prompt-attachment-transfer/promptAttachmentTransfer";
 import type { ISystemService } from "../../../../vendor/zcode-frontend/packages/services/src/system/system";
 import { ServiceChannels } from "../../../../vendor/zcode-frontend/packages/shared/src/channels";
-import type {
-	GitRefreshResult,
-	GitRepositorySummary,
-	GitWorkspaceRepositoryInfo,
-} from "../../../../vendor/zcode-frontend/packages/shared/src/git";
 import type { SystemInfo } from "../../../../vendor/zcode-frontend/packages/shared/src/protocol";
-import { createNativeAttachmentMethods } from "./native-attachments";
-import { createNativeFileMethods, createNativeFileWatcherMethods } from "./native-files";
-import { createNativeGitMethods } from "./native-git";
 import {
 	type WebGuiMethod,
 	WebGuiNotImplementedError,
@@ -30,42 +16,16 @@ function unavailable(feature: string): WebGuiMethod {
 	};
 }
 
-export function createFileServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
-	const watchers = createNativeFileWatcherMethods(context);
-	const attachments = createNativeAttachmentMethods(context);
-	// Unbound attachments retain unavailable reads without scanning any native workspace.
-	const repositorySummary = (): GitRepositorySummary => ({
-		workspacePath: context.workspacePath ?? "",
-		repoRoot: "",
-		workspaceInRepoPath: "",
-		autoRefreshWatchPaths: [],
-		branchName: null,
-		trackingBranchName: null,
-		// Required discriminator is inactive while isGitAvailable/isRepository are false.
-		headRefType: "detached",
-		ahead: 0,
-		behind: 0,
-		isDirty: false,
-		isGitAvailable: false,
-		isRepository: false,
-	});
-	const repositoryInfo = (): GitWorkspaceRepositoryInfo => ({
-		workspacePath: context.workspacePath ?? "",
-		// The kind is inactive while the Git capability is unavailable.
-		kind: "not-repository",
-		isGitAvailable: false,
-	});
-	const refresh = (): GitRefreshResult => ({
-		summary: repositorySummary(),
-		identity: null,
-		unstagedChanges: [],
-		stagedChanges: [],
-		branchComparison: null,
-	});
-
+/** Host identity only; workspace files, Git, watchers, media and attachments are not exposed to the browser. */
+export function createSystemServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
+	context.signal.throwIfAborted();
 	return [
+		createWebGuiService(ServiceChannels.System, {
+			info: (): SystemInfo => ({ homedir: os.homedir(), platform: process.platform }),
+			// Intranet probing is not part of the minimal browser surface.
+			probeIntranet: unavailable("system.probeIntranet"),
+		} satisfies Record<keyof ISystemService, WebGuiMethod>),
 		createWebGuiService(ServiceChannels.File, {
-			// Workspace creation, unsupported previews and ignore-file edits remain unavailable.
 			searchWorkspaceFiles: unavailable("file.searchWorkspaceFiles"),
 			readdir: unavailable("file.readdir"),
 			stat: unavailable("file.stat"),
@@ -83,72 +43,19 @@ export function createFileServices(context: WebGuiServiceContext): readonly WebG
 			readWorkspaceFileSearchIgnore: unavailable("file.readWorkspaceFileSearchIgnore"),
 			applyWorkspaceFileSearchIgnoreTransform: unavailable("file.applyWorkspaceFileSearchIgnoreTransform"),
 			writeWorkspaceFileSearchIgnore: unavailable("file.writeWorkspaceFileSearchIgnore"),
-			...createNativeFileMethods(context),
-		} satisfies Record<keyof IFileService, WebGuiMethod>),
-		createWebGuiService(ServiceChannels.MediaPreview, {
-			// TODO(omp-media): Connect native media authorization, bytes and URL lifecycle.
-			prepare: unavailable("media-preview.prepare"),
-			refreshPlaybackUrl: unavailable("media-preview.refreshPlaybackUrl"),
-			release: unavailable("media-preview.release"),
-		} satisfies Record<keyof IMediaPreviewService, WebGuiMethod>),
+		}),
 		createWebGuiService(ServiceChannels.Git, {
-			getRepositorySummary: repositorySummary,
-			getWorkspaceRepositoryInfo: repositoryInfo,
-			refresh,
-			// Unsupported reads and all Git mutations remain unavailable.
+			summary: unavailable("git.summary"),
+			refresh: unavailable("git.refresh"),
+			getChanges: unavailable("git.getChanges"),
+			getIdentity: unavailable("git.getIdentity"),
 			getLocalBranches: unavailable("git.getLocalBranches"),
 			getCommitGraph: unavailable("git.getCommitGraph"),
-			switchBranch: unavailable("git.switchBranch"),
-			createBranchAndSwitch: unavailable("git.createBranchAndSwitch"),
-			getChanges: unavailable("git.getChanges"),
-			getIgnoredPaths: unavailable("git.getIgnoredPaths"),
-			getDiff: unavailable("git.getDiff"),
-			getBranchComparison: unavailable("git.getBranchComparison"),
 			stagePaths: unavailable("git.stagePaths"),
-			unstagePaths: unavailable("git.unstagePaths"),
-			discardPaths: unavailable("git.discardPaths"),
-			generateCommitMessage: unavailable("git.generateCommitMessage"),
 			commit: unavailable("git.commit"),
 			push: unavailable("git.push"),
-			getIdentity: unavailable("git.getIdentity"),
-			...(context.projectId ? createNativeGitMethods(context) : {}),
-		} satisfies Record<keyof IGitService, WebGuiMethod>),
-		createWebGuiService(ServiceChannels.GitCheckpoint, {
-			// TODO(omp-git-checkpoints): Connect native checkpoint storage/diff/restore.
-			createCheckpoint: unavailable("git-checkpoint.createCheckpoint"),
-			diffCheckpoints: unavailable("git-checkpoint.diffCheckpoints"),
-			restoreBetweenCheckpoints: unavailable("git-checkpoint.restoreBetweenCheckpoints"),
-			deleteCheckpoint: unavailable("git-checkpoint.deleteCheckpoint"),
-		} satisfies Record<keyof IGitCheckpointService, WebGuiMethod>),
-		createWebGuiService(ServiceChannels.System, {
-			info: (): SystemInfo => ({ homedir: os.homedir(), platform: process.platform }),
-			// TODO(omp-system): Connect native network probes.
-			probeIntranet: unavailable("system.probeIntranet"),
-		} satisfies Record<keyof ISystemService, WebGuiMethod>),
-		createWebGuiService(
-			ServiceChannels.FileWatcher,
-			{
-				watch: watchers.methods.watch,
-				unwatch: watchers.methods.unwatch,
-				disposeAll: watchers.methods.disposeAll,
-			} satisfies Record<Exclude<keyof IFileWatcherService, "onDynamicChange">, WebGuiMethod>,
-			{
-				dynamicEvents: watchers.dynamicEvents,
-				dispose: watchers.dispose,
-			},
-		),
-		createWebGuiService(
-			ServiceChannels.PromptAttachmentTransfer,
-			{
-				stage: attachments.methods.stage,
-				adopt: attachments.methods.adopt,
-				cancel: attachments.methods.cancel,
-				cleanup: attachments.methods.cleanup,
-			} satisfies Record<Exclude<keyof IPromptAttachmentTransferService, "onDynamicProgress">, WebGuiMethod>,
-			{
-				dynamicEvents: attachments.dynamicEvents,
-				dispose: attachments.dispose,
-			},
-		),
+			createBranchAndSwitch: unavailable("git.createBranchAndSwitch"),
+			generateCommitMessage: unavailable("git.generateCommitMessage"),
+		}),
 	];
 }

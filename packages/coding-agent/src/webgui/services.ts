@@ -1,8 +1,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
 import { createAgentServices } from "./services-agent";
-import { createExtensionServices } from "./services-extensions";
-import { createFileServices } from "./services-files";
+import { createSystemServices } from "./services-files";
 import { createProjectServices } from "./services-projects";
 import { createUiServices } from "./services-ui";
 
@@ -11,13 +10,7 @@ export function createWebGuiServices(context: WebGuiServiceContext): readonly We
 	const services: WebGuiServiceDefinition[] = [];
 	const names = new Set<string>();
 	try {
-		for (const factory of [
-			createUiServices,
-			createProjectServices,
-			createAgentServices,
-			createFileServices,
-			createExtensionServices,
-		]) {
+		for (const factory of [createUiServices, createProjectServices, createAgentServices, createSystemServices]) {
 			const catalog = factory(context);
 			services.push(...catalog);
 			for (const service of catalog) {

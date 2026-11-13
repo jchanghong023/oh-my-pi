@@ -37,7 +37,6 @@ import {
 } from "@zcode/shared/zcode-protocol-v4";
 import type { ConversationTransport } from "@/v4/transport.js";
 import { ensureAgentV4ConnectionHandshake } from "@/v4/agentV4ConnectionHandshake.js";
-import { createWorkflowRunTransportMethods } from "@/v4/agentConversationTransportWorkflowRuns.js";
 import { createAckActivationBarrier } from "@/v4/ackActivationBarrier.js";
 import { createTopicWireDecoder } from "@/v4/topicWireDecoder.js";
 import { logger } from "@/logger.js";
@@ -440,8 +439,6 @@ export function createAgentConversationTransport(
         sessionId: params.sessionId,
       });
     },
-    // dwf journal 的两个只读查询拆在 agentConversationTransportWorkflowRuns.ts（max-lines 边界）。
-    ...createWorkflowRunTransportMethods({ agentService, ensureHandshake, workspace }),
     async fileChanges(
       params: V4ConversationFileChangesParams,
     ): Promise<V4ConversationFileChangesResult> {

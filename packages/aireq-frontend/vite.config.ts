@@ -80,7 +80,11 @@ function copiedFrontendPackages(): Plugin {
 	};
 }
 
-export function createAIReqFrontendConfig(entryRoot: string, outputDirectory: string, defaultBasePath = "/"): UserConfig {
+export function createAIReqFrontendConfig(
+	entryRoot: string,
+	outputDirectory: string,
+	defaultBasePath = "/",
+): UserConfig {
 	const basePath = process.env.OMP_AIREQ_BASE_PATH ?? defaultBasePath;
 	if (
 		basePath !== "./" &&

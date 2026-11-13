@@ -60,7 +60,11 @@ function groupFor(state: AIReqProjectState, irId: string | undefined): AIReqRequ
 	if (group.status === "deleted") throw new Error("IR was deleted; retained materials and history are not active");
 	return group;
 }
-function srFor(state: AIReqProjectState, group: AIReqRequirementGroup, srId: string | undefined): AIReqSystemRequirement {
+function srFor(
+	state: AIReqProjectState,
+	group: AIReqRequirementGroup,
+	srId: string | undefined,
+): AIReqSystemRequirement {
 	const sr = state.srs.find(s => s.id === required(srId, "srId") && s.irId === group.id);
 	if (!sr) throw new Error("Unknown SR or mismatched IR");
 	return sr;

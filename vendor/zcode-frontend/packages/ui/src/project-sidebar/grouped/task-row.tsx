@@ -4,8 +4,7 @@ import { memo, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import type { UniqueIdentifier } from "@dnd-kit/core";
-import { isCronTask } from "@zcode/shared";
-import { ArrowUpToLine, Clock, Folder, ListTree, LoaderCircle, X } from "lucide-react";
+import { ArrowUpToLine, Folder, ListTree, LoaderCircle, X } from "lucide-react";
 import { cn } from "@/components/lib/utils.js";
 import { Badge } from "@/components/ui/badge.js";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu.js";
@@ -28,7 +27,6 @@ import {
   TASK_GROUP_ROW_LINE_CLASS,
   type TaskGroupMenuItem,
 } from "@/project-sidebar/grouped/types.js";
-import { TaskWorkflowRunLines } from "@/components/workflow-run-line/TaskWorkflowRunLines.js";
 import { useTaskInteractionAutoResolutionSnooze } from "@/hooks/useTaskInteractionAutoResolutionSnooze.js";
 import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
 import { isWorkspaceReadOnly } from "@/store/tabStore.js";
@@ -116,7 +114,6 @@ function GroupedTaskRowComponent({
     });
   const taskChangeParts = formatGroupedTaskHoverChangeParts(getTaskChangeSummary(task));
   const taskTimeLabel = formatTaskRelativeTime(task.updatedAt, intl);
-  const isTaskCron = isCronTask(task);
   const statusDotClassName =
     leadingIndicator === "error"
       ? "bg-destructive"
@@ -125,21 +122,6 @@ function GroupedTaskRowComponent({
           "bg-sky-500 dark:bg-sky-400"
         : null;
   const canShowHoverActions = !dragOverlay;
-  // 工作流运行行：分组行同样长在标题下；
-  // drag overlay 只是纯展示，不挂确认副作用与点击入口。
-  const workflowRunLinesNode =
-    taskActivity?.workflowActivity && !dragOverlay ? (
-      <TaskWorkflowRunLines
-        activity={taskActivity.workflowActivity}
-        isActive={isActive}
-        intl={intl}
-        session={{
-          workspacePath: task.workspacePath,
-          ...(task.workspaceIdentity ? { workspaceIdentity: task.workspaceIdentity } : {}),
-          sessionId: task.taskId,
-        }}
-      />
-    ) : null;
 
   const taskRow = (
     <div
@@ -193,14 +175,6 @@ function GroupedTaskRowComponent({
               <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center">
                 <span className={cn("size-1.5 rounded-full", statusDotClassName)} />
               </span>
-            ) : null}
-            {!hasPendingInteraction && isTaskCron ? (
-              // drag overlay 也复用 grouped row 元信息；clock 放时间前面，不能跟未读点互斥。
-              <Clock
-                data-cron-task-icon="true"
-                aria-label={intl.formatMessage({ id: "taskList.cronTaskLabel" })}
-                className="size-3.5 shrink-0"
-              />
             ) : null}
             {!hasPendingInteraction ? <span className="mr-1">{taskTimeLabel}</span> : null}
           </span>
@@ -360,15 +334,6 @@ function GroupedTaskRowComponent({
                   <span className={cn("size-1.5 rounded-full", statusDotClassName)} />
                 </span>
               ) : null}
-              {!hasPendingInteraction && isTaskCron ? (
-                // 可交互 grouped row 之前漏渲染 clock，导致 Projects 分组里的定时任务没有 icon。
-                // 这里和普通 task list 一样放在时间前面，同时不再被未读/运行状态顶掉。
-                <Clock
-                  data-cron-task-icon="true"
-                  aria-label={intl.formatMessage({ id: "taskList.cronTaskLabel" })}
-                  className="size-3.5 shrink-0"
-                />
-              ) : null}
               {!hasPendingInteraction ? <span className="mr-1">{taskTimeLabel}</span> : null}
             </span>
           ) : null}
@@ -404,7 +369,6 @@ function GroupedTaskRowComponent({
           ) : null}
         </span>
       </span>
-      {workflowRunLinesNode}
     </div>
   );
 

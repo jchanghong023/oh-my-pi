@@ -1,19 +1,10 @@
 import { createInterface } from "node:readline";
-import { getActiveProfile, logger, postmortem } from "@oh-my-pi/pi-utils";
-import { execReplace } from "@oh-my-pi/pi-natives";
-import { restartArgv } from "../cli/flag-tables";
+import { logger } from "@oh-my-pi/pi-utils";
 import { offlineFromEnv } from "../cli/args";
-import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import type { AIReqWorkbenchHandle } from "../aireq-workbench/host";
 import type { AgentSession } from "../session/agent-session";
 import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPathWithResult } from "../utils/open";
-import { NativeCwdHost } from "./native-cwd";
-import {
-	bindNativeWebGuiCommandHost,
-	configureNativeWebGuiCommandHost,
-	type NativeWebGuiCommandOwner,
-} from "./native-command-host";
 import {
 	installNativeWebGuiInteractions,
 	restoreNativeWebGuiInteractions,
@@ -23,10 +14,8 @@ import {
 	assertWebGuiNativeAdmission,
 	closeWebGuiNativeSessions,
 	enableWebGuiNativeSessions,
-	enterAIReqFromWebGuiNativeSession,
 	releaseWebGuiNativeProjects,
 	hasWebGuiNativeResources,
-	webGuiNativePorts,
 } from "./native-session-host";
 import { acquireBrowserProject, readBrowserProject } from "./project-registry";
 import { closeWebServer, ensureWebServer } from "./server";
@@ -42,9 +31,7 @@ const openings = new Set<Promise<WebGuiHandle>>();
 let settling: Promise<void> | undefined;
 let activated = false;
 
-export type WebGuiBindings = NativeWebGuiInteractionBindings & {
-	commandHost?: NativeWebGuiCommandOwner;
-};
+export type WebGuiBindings = NativeWebGuiInteractionBindings;
 
 /** Keep failed startup settlement reachable by the terminal's exit/retry flow. */
 export class WebGuiStartError extends AggregateError {
@@ -71,25 +58,14 @@ export function startWebGui(session: AgentSession, bindings?: WebGuiBindings): P
 
 async function bindWebGui(session: AgentSession, bindings?: WebGuiBindings): Promise<WebGuiHandle> {
 	const lease = await acquireBrowserProject(session.sessionManager.getCwd(), "webgui", { reuseWebGuiOwner: true });
-	let cwdHost: NativeCwdHost;
-	try {
-		cwdHost = new NativeCwdHost(session, lease);
-	} catch (error) {
-		await lease.close();
-		throw error;
-	}
 	let closing: Promise<void> | undefined;
 	let exiting = false;
-	let restoreCommandHost: (() => void) | undefined;
-	let restoreDefaultHost: (() => void) | undefined;
 	const closeBinding = (): Promise<void> => {
 		exiting = true;
 		if (!closing) {
 			const pending = (async () => {
 				restoreNativeWebGuiInteractions(session);
-				restoreCommandHost?.();
-				restoreDefaultHost?.();
-				await cwdHost.close();
+				await lease.close();
 				handles.delete(handle);
 				bindingClosures.delete(handle);
 			})();
@@ -121,10 +97,6 @@ async function bindWebGui(session: AgentSession, bindings?: WebGuiBindings): Pro
 			{ allowLan: true, nativeSession: session },
 		);
 		if (bindings) installNativeWebGuiInteractions(session, bindings);
-		if (bindings?.commandHost) {
-			restoreCommandHost = bindNativeWebGuiCommandHost(session, bindings.commandHost);
-			restoreDefaultHost = configureNativeWebGuiCommandHost(bindings.commandHost);
-		}
 		if (exiting) throw new Error("WebGUI exited during project activation");
 		const selected = (address: string): string => {
 			const url = new URL(address);
@@ -145,17 +117,6 @@ async function bindWebGui(session: AgentSession, bindings?: WebGuiBindings): Pro
 	}
 }
 
-/** A successful native mode transfer keeps its AIReq owner; release only old terminal bindings. */
-export async function releaseWebGuiBindingsAfterHandoff(): Promise<void> {
-	const results = await Promise.allSettled([...bindingClosures.values()].map(close => close()));
-	const failures = results.filter(result => result.status === "rejected");
-	if (failures.length)
-		throw new AggregateError(
-			failures.map(result => result.reason),
-			"WebGUI terminal binding handoff remains unsettled",
-		);
-}
-
 /** Settle every GUI binding owned by this process before stopping its listener. */
 export function closeAllWebGuis(): Promise<void> {
 	if (!activated && !handles.size && !openings.size && !hasWebGuiNativeResources()) return Promise.resolve();
@@ -166,8 +127,6 @@ export function closeAllWebGuis(): Promise<void> {
 		const native = settlements[1];
 		if (native.status === "rejected") throw native.reason;
 		logger.debug("WebGUI shutdown stage", { stage: "native-settled" });
-		await webGuiNativePorts().closeAttachments();
-		await webGuiNativePorts().closeSketches();
 		// Keep leases until watcher/socket/listener teardown has also succeeded.
 		await closeWebServer();
 		await releaseWebGuiNativeProjects();
@@ -203,42 +162,6 @@ export async function runWebGuiCommand(): Promise<void> {
 	let input: Promise<void> | undefined;
 	let inputError: unknown;
 	let settled = false;
-	const restoreCommandOwner = configureNativeWebGuiCommandHost({
-		close: async () => {
-			await closeAllWebGuis();
-			stop();
-		},
-		restart: async () => {
-			await closeAllWebGuis();
-			inputLines?.close();
-			await input;
-			const profile = getActiveProfile();
-			const command = [
-				...resolveCliEntryCmd(),
-				...restartArgv(process.argv.slice(2), undefined, profile ? { "--profile": true } : undefined),
-			];
-			if (profile) command.push("--profile", profile);
-			await postmortem.cleanup();
-			await postmortem.drainStdout();
-			if (process.platform !== "win32") {
-				try {
-					execReplace(command);
-				} catch (error) {
-					process.stderr.write(`Restart exec failed: ${error instanceof Error ? error.message : String(error)}\n`);
-				}
-			}
-			const child = Bun.spawn(command, { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-			await postmortem.quit(await child.exited);
-		},
-		toggleMode: async (mode, session) => {
-			if (mode === "aireq") {
-				await enterAIReqFromWebGuiNativeSession(session);
-			} else {
-				await closeAllWebGuis();
-				stop();
-			}
-		},
-	});
 	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, stop);
 	try {
 		const server = await ensureWebServer({ webgui: true });
@@ -294,7 +217,6 @@ export async function runWebGuiCommand(): Promise<void> {
 		await input;
 		logger.debug("WebGUI shutdown stage", { stage: "input-closed" });
 		for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.off(signal, stop);
-		restoreCommandOwner();
 		if (!settled) {
 			await closeAllWebGuis();
 			await closeWebServer();

@@ -177,23 +177,6 @@ export function markBrowserProjectExiting(projectId: string, ownerId: string): v
 	if (owner?.record.ownerId === ownerId) owner.record = { ...owner.record, phase: "exiting" };
 }
 
-/** A settled native mode handoff retains the exact OS lock; there is no release/reacquire race. */
-export function transferBrowserProjectToAIReq(projectId: string, ownerId: string): BrowserProjectLease {
-	const owner = projects.get(projectId);
-	if (!owner || owner.record.ownerId !== ownerId || owner.record.mode !== "webgui" || owner.record.phase !== "exiting")
-		throw new Error("The WebGUI project has not settled for AIReq handoff");
-	owner.record = {
-		...owner.record,
-		mode: "aireq",
-		phase: "entering",
-		updatedAt: Date.now(),
-		readInfo: undefined,
-		nativeSession: undefined,
-		nativeSessions: new Set(),
-	};
-	return retainProjectLease(owner);
-}
-
 /** Attach only to the generation that admitted SDK startup. */
 export function attachBrowserProjectSession(projectId: string, ownerId: string, session: AgentSession): void {
 	const owner = projects.get(projectId);

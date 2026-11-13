@@ -371,7 +371,8 @@ export class NativeWebGuiQuestions {
 		Object.defineProperty(ui, "theme", { get: () => portable.theme });
 		this.#surface.observe(event => {
 			if (event.t !== "native-ui-state") return;
-			if (event.method === "setEditorText" || event.method === "pasteToEditor") cancelAIReqNativePredictions(session);
+			if (event.method === "setEditorText" || event.method === "pasteToEditor")
+				cancelAIReqNativePredictions(session);
 			for (const listener of this.#surfaceListeners) {
 				try {
 					listener(event);

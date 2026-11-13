@@ -8,7 +8,9 @@ import { launchHelp } from "./launch-help";
 export function parseAIReqArgs(argv: string[]): Args {
 	const parsed = parseArgs(argv);
 	if (parsed.messages.length || parsed.fileArgs.length) {
-		throw new CliUsageError("omp aireq takes no prompt or subcommands. Open omp aireq and use the browser workbench.");
+		throw new CliUsageError(
+			"omp aireq takes no prompt or subcommands. Open omp aireq and use the browser workbench.",
+		);
 	}
 	if (parsed.invalidFlagValues.length) throw new CliUsageError(parsed.invalidFlagValues.join("\n"));
 	if (parsed.unrecognizedFlags.length) {

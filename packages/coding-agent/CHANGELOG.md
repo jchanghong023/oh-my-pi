@@ -4,6 +4,8 @@
 
 ### Changed
 
+- WebGUI now ships a minimal chat and subagent-progress build: file/Git, uploads, commands, settings, PDF/Office/Mermaid/math rendering and their backend channels are gone, cutting frontend assets by about 72% for low-bandwidth mobile access.
+- WebGUI’s sidebar groups sessions only under their projects; the separate “任务” section is gone, and the recently updated and unread views still list all history.
 - Renamed OMP’s Dev workbench module to AIReq, including `/aireq`, `omp aireq`, module namespaces and frontend resources; OMP itself retains its name and command.
 
 - AIReq Skill design opens directly to its content without the page heading, step strip, project badge, or model summary.
@@ -14,6 +16,7 @@
 
 ### Fixed
 
+- WebGUI subagent summaries open their child transcript again: native lowercase `task` tool calls pair with their subagent rows, and every child of a multi-subagent dispatch stays clickable.
 - AIReq proposal intake content centers within the available conversation column as the materials sidebar opens, closes, or resizes.
 - AIReq and WebGUI restore ZCode browser control, computer control, and keyboard shortcut settings for display only, with all editing actions disabled.
 - Editing queued AIReq and WebGUI messages replaces referenced images while preserving uploaded attachments.

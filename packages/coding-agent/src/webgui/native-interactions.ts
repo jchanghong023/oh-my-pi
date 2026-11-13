@@ -4,8 +4,6 @@ import type {
 	UserInputRequestPayload,
 } from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol-v4/snapshot";
 import { theme } from "@oh-my-pi/pi-tui/theme";
-import type { CollabUiRequestDraft } from "@oh-my-pi/pi-wire";
-import type { CollabHost } from "../collab/host";
 import type {
 	ExtensionApprovalAnswer,
 	ExtensionAskDialogQuestion,
@@ -16,9 +14,7 @@ import type {
 } from "../extensibility/extensions/types";
 import { getExtensionUISelectOptionLabel, timedOutAskDialogResult } from "../extensibility/extensions/types";
 import type { AgentSession } from "../session/agent-session";
-import type { WebGuiBrowserAction } from "../slash-commands/types";
 import type { BlockedStatus } from "../utils/run-status";
-import type { NativeWebGuiCommandOwner } from "./native-command-host";
 
 export interface NativeWebGuiInteractionOrigin {
 	connectionId: string;
@@ -32,26 +28,6 @@ export function withNativeWebGuiInteractionScope<T>(
 ): Promise<T> {
 	return interactionOrigin.run(origin, task);
 }
-export function nativeWebGuiInteractionOrigin(): NativeWebGuiInteractionOrigin | undefined {
-	return interactionOrigin.getStore();
-}
-const localDialogs = new AsyncLocalStorage<boolean>();
-export function withNativeWebGuiLocalDialogs<T>(task: () => Promise<T>): Promise<T> {
-	return localDialogs.run(true, task);
-}
-
-let admitHandoff:
-	| ((origin: NativeWebGuiInteractionOrigin, interactionId: string, session: AgentSession) => boolean)
-	| undefined;
-export function configureNativeWebGuiHandoffAdmission(
-	admit: (origin: NativeWebGuiInteractionOrigin, interactionId: string, session: AgentSession) => boolean,
-): () => void {
-	const previous = admitHandoff;
-	admitHandoff = admit;
-	return () => {
-		if (admitHandoff === admit) admitHandoff = previous;
-	};
-}
 
 export interface NativeWebGuiInteractionAnswer {
 	optionId?: string;
@@ -63,7 +39,6 @@ export interface NativeWebGuiInteractionAnswer {
 export interface NativeWebGuiInteractionBindings {
 	setToolUIContext: (ui: ExtensionUIContext, hasUI: boolean) => void;
 	restoreToolUIContext?: () => void;
-	commandHost?: NativeWebGuiCommandOwner;
 	holdBlockedStatus?: (status: BlockedStatus) => () => void;
 }
 
@@ -77,20 +52,6 @@ interface PendingRequest {
 	cleanup: () => void;
 }
 
-function isNativeNavigation(payload: PendingInteraction["payload"]): boolean {
-	if (payload.kind !== "userInput") return false;
-	const input = payload.input;
-	return (
-		payload.toolName === "webgui-command" &&
-		typeof input === "object" &&
-		input !== null &&
-		"kind" in input &&
-		input.kind === "webgui-browser-action" &&
-		"action" in input &&
-		input.action === "openSession"
-	);
-}
-
 /** One broker per actual native session, never per browser tab or global current cwd. */
 export class NativeWebGuiQuestions {
 	readonly #session: AgentSession;
@@ -98,7 +59,6 @@ export class NativeWebGuiQuestions {
 	readonly #listeners = new Set<() => void>();
 	readonly ui: ExtensionUIContext;
 	#restore: (() => void) | undefined;
-	#getGuestHost: (() => CollabHost | undefined) | undefined;
 	#holdBlockedStatus: ((status: BlockedStatus) => () => void) | undefined;
 
 	constructor(session: AgentSession) {
@@ -165,7 +125,7 @@ export class NativeWebGuiQuestions {
 				},
 				dialogOptions,
 				undefined,
-				{ kind: "select", title, options, ...(approval ? { approval: true } : {}) },
+				approval,
 			);
 		};
 		ui.select = select;
@@ -188,7 +148,7 @@ export class NativeWebGuiQuestions {
 				},
 				dialogOptions,
 				undefined,
-				{ kind: "select", title: `${title}\n${message}`, options: ["Yes", "No"], approval: true },
+				true,
 			);
 		ui.input = (title, placeholder, dialogOptions) =>
 			this.#request(
@@ -205,8 +165,6 @@ export class NativeWebGuiQuestions {
 					return answer.freeText;
 				},
 				dialogOptions,
-				undefined,
-				dialogOptions?.secret ? undefined : { kind: "editor", title },
 			);
 		ui.editor = (title, prefill, options) =>
 			this.#request(
@@ -223,34 +181,8 @@ export class NativeWebGuiQuestions {
 					return answer.freeText;
 				},
 				options,
-				undefined,
-				options?.secret ? undefined : { kind: "editor", title, prefill },
 			);
-		Object.defineProperty(ui, "askDialog", {
-			get: () =>
-				this.#getGuestHost?.()
-					? undefined
-					: (questions: ExtensionAskDialogQuestion[], options?: ExtensionUIDialogOptions) =>
-							this.#ask(questions, options),
-		});
-		ui.approve = async (prompt, options): Promise<ExtensionApprovalAnswer> => {
-			const choices: Array<{ label: string; answer: ExtensionApprovalAnswer }> = [
-				{ label: "Approve once", answer: "once" },
-				...(prompt.session ? [{ label: prompt.session, answer: "session" as const }] : []),
-				...(prompt.grants ?? []).flatMap(grant => [
-					{ label: grant.label, answer: { grant: grant.scope, always: false } },
-					{ label: grant.alwaysLabel, answer: { grant: grant.scope, always: true } },
-				]),
-				{ label: "Deny", answer: "deny" },
-			];
-			const selected = await select(
-				prompt.full,
-				choices.map(choice => choice.label),
-				options,
-				true,
-			);
-			return choices.find(choice => choice.label === selected)?.answer ?? "deny";
-		};
+		ui.askDialog = (questions, options) => this.#ask(questions, options);
 		ui.notify = notify;
 		this.ui = ui;
 	}
@@ -276,41 +208,6 @@ export class NativeWebGuiQuestions {
 		}
 	}
 
-	async browserAction(
-		action: WebGuiBrowserAction,
-		options?: ExtensionUIDialogOptions,
-	): Promise<Record<string, unknown>> {
-		const origin = interactionOrigin.getStore();
-		if (!origin) throw new Error("Browser command action has no originating connection");
-		return this.#request(
-			{
-				kind: "userInput",
-				toolName: "webgui-command",
-				prompt: action.action,
-				freeText: false,
-				sensitive: action.action === "openUrl",
-				input: {
-					kind: "webgui-browser-action",
-					...action,
-					originSessionId: origin.sessionId ?? this.#session.sessionId,
-					connectionId: origin.connectionId,
-					clientId: origin.clientId,
-				},
-			},
-			answer => {
-				if (answer.action !== "accept") throw new Error("Browser command action was not applied");
-				return answer.content ?? {};
-			},
-			{
-				...options,
-				timeout:
-					options?.timeout ??
-					(action.action === "recordStop" || action.action === "liveStop" ? 15_000 : undefined),
-			},
-			origin,
-		);
-	}
-
 	subscribe(listener: () => void): () => void {
 		this.#listeners.add(listener);
 		return () => {
@@ -327,28 +224,25 @@ export class NativeWebGuiQuestions {
 		answer: (answer: NativeWebGuiInteractionAnswer) => T,
 		options?: ExtensionUIDialogOptions,
 		origin?: NativeWebGuiInteractionOrigin,
-		guestDialog?: CollabUiRequestDraft,
+		approval = false,
 		timeoutAnswer?: () => T,
 	): Promise<T> {
 		options?.signal?.throwIfAborted();
-		if (this.#session.isDisposed && !(origin && isNativeNavigation(payload)))
-			throw new Error("Native session has closed");
+		if (this.#session.isDisposed) throw new Error("Native session has closed");
 		const id = `webgui-question:${crypto.randomUUID()}`;
 		const pending = Promise.withResolvers<unknown>();
 		let timer: Timer | undefined;
-		const mirrorAbort = new AbortController();
 		const cancel = () => this.#remove(id, options?.signal?.reason ?? new Error("Native interaction cancelled"));
 		const release = origin
 			? undefined
 			: this.#holdBlockedStatus?.({
 					state: "blocked",
-					kind: guestDialog?.kind === "select" && guestDialog.approval ? "permission" : "question",
+					kind: approval ? "permission" : "question",
 					msg: payload.prompt,
 				});
 		const cleanup = () => {
 			if (timer !== undefined) clearTimeout(timer);
 			options?.signal?.removeEventListener("abort", cancel);
-			mirrorAbort.abort();
 			release?.();
 		};
 		this.#requests.set(id, {
@@ -360,37 +254,6 @@ export class NativeWebGuiQuestions {
 			reject: pending.reject,
 			cleanup,
 		});
-		if (
-			origin &&
-			payload.toolName === "webgui-command" &&
-			typeof payload.input === "object" &&
-			payload.input !== null &&
-			"action" in payload.input &&
-			payload.input.action === "openUrl"
-		)
-			admitHandoff?.(origin, id, this.#session);
-		const mirrored =
-			guestDialog && !localDialogs.getStore()
-				? this.#getGuestHost?.()?.requestGuestUi(guestDialog, mirrorAbort.signal, { retainOnReconnect: true })
-				: null;
-		if (mirrored)
-			void mirrored
-				.then(async result => {
-					if (result.kind !== "answered" || !this.#requests.has(id)) return;
-					const selected =
-						result.value === undefined
-							? undefined
-							: payload.options?.find(option => option.label === result.value);
-					await this.resolveInteraction(
-						id,
-						result.value === undefined
-							? { action: "cancel" }
-							: { freeText: result.value, optionId: selected?.optionId },
-					);
-				})
-				.catch(error => {
-					this.#session.emitNotice("warning", String(error), "webgui-collab-ui");
-				});
 		options?.signal?.addEventListener("abort", cancel, { once: true });
 		if (options?.timeout && options.timeout > 0) {
 			options.onTimeoutStart?.();
@@ -432,15 +295,11 @@ export class NativeWebGuiQuestions {
 		if (
 			!request ||
 			request.sessionId !== this.#session.sessionId ||
-			(this.#session.isDisposed && !(request.origin && isNativeNavigation(request.interaction.payload))) ||
+			this.#session.isDisposed ||
 			(request.origin &&
 				(request.origin.connectionId !== origin?.connectionId || request.origin.clientId !== origin?.clientId))
 		) {
 			throw new Error("Native interaction is expired, cancelled, already answered, or belongs to another session");
-		}
-		if (request.origin && (answer.action === "cancel" || answer.action === "decline")) {
-			this.#remove(id, new Error("Browser command action cancelled"));
-			return;
 		}
 		// Validate before removing the waiter so a rejected response preserves the form and native wait.
 		const value = request.answer(answer);
@@ -546,14 +405,6 @@ export class NativeWebGuiQuestions {
 		this.#restore?.();
 		this.#restore = undefined;
 	}
-
-	bindGuestUI(getHost: () => CollabHost | undefined): () => void {
-		const previous = this.#getGuestHost;
-		this.#getGuestHost = getHost;
-		return () => {
-			if (this.#getGuestHost === getHost) this.#getGuestHost = previous;
-		};
-	}
 }
 
 const brokers = new WeakMap<AgentSession, NativeWebGuiQuestions>();
@@ -576,7 +427,4 @@ export function restoreNativeWebGuiInteractions(session: AgentSession): void {
 }
 export function cancelPendingInteractions(session: AgentSession, reason?: string): void {
 	brokers.get(session)?.cancelPendingInteractions(reason);
-}
-export function bindNativeWebGuiGuestUI(session: AgentSession, getHost: () => CollabHost | undefined): () => void {
-	return nativeWebGuiQuestions(session).bindGuestUI(getHost);
 }

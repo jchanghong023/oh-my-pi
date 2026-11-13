@@ -13,7 +13,7 @@ import { AgentRegistry, type AgentRegistryApi } from "../registry/agent-registry
 import { getWorkbenchAddresses } from "../utils/browser-network";
 import type { OmpWebSocketData } from "./application";
 import { browserProjectSummary, listBrowserProjects, readBrowserProject } from "./project-registry";
-import { assertWebGuiNativeAdmission, fetchWebGuiNativeSketch, openWebGuiNativeProject } from "./native-session-host";
+import { assertWebGuiNativeAdmission, openWebGuiNativeProject } from "./native-session-host";
 import { resolveWebGuiProject, WebGuiRequestError, WebGuiRpcHost, type WebGuiSocketData } from "./rpc-server";
 import { prepareWebGuiAssets, type WebGuiStaticAssets } from "./static-assets";
 
@@ -157,17 +157,6 @@ class ProcessWebServer {
 				}
 				if (!browserRequest(request, address, server.port!, hosts)) return json({ error: "Forbidden" }, 403);
 				try {
-					if (url.pathname.startsWith("/sketch/")) {
-						if (request.method !== "GET") {
-							try {
-								assertWebGuiNativeAdmission();
-							} catch (error) {
-								return json({ error: error instanceof Error ? error.message : String(error) }, 409);
-							}
-						}
-						const sketch = await fetchWebGuiNativeSketch(request);
-						return sketch ?? json({ error: "Sketch not found" }, 404);
-					}
 					if (
 						url.pathname === WEBGUI_SERVER_INFO_PATH ||
 						url.pathname === WEBGUI_RPC_PATH ||

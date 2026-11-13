@@ -67,11 +67,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
-import {
-  ChatErrorBanner,
-  shouldSuppressChatErrorBanner,
-  type ChatErrorBannerModelConfigTarget,
-} from "@/ChatErrorBanner.js";
+import { ChatErrorBanner, shouldSuppressChatErrorBanner } from "@/ChatErrorBanner.js";
 import {
   Attachment,
   Attachments,
@@ -500,9 +496,6 @@ export interface ConversationComposerProps {
   /** v4 会话级错误（snapshot.control.lastError），展示在输入框上方。 */
   error?: ZCodeUiError | null;
   onDismissError?: () => void;
-  /** 无可用模型横幅的恢复动作；由 SessionPane 注入壳层导航，组件不直接操作 tab。 */
-  onOpenModelSettings?: () => void;
-  modelConfigTarget?: ChatErrorBannerModelConfigTarget;
   onOpenCodeViewer?: (source: CodeViewerSource) => void;
   /**
    * 是否监听全局「加入对话」事件（workspace file tree / 画板按钮）。
@@ -590,8 +583,6 @@ function ConversationComposerImpl({
   onRecoverCustomModelSelection,
   error,
   onDismissError,
-  onOpenModelSettings,
-  modelConfigTarget = "local",
   onOpenCodeViewer,
   listenAddToChatEvents = true,
   externalTextInsertRequest = null,
@@ -2304,6 +2295,16 @@ function ConversationComposerImpl({
             ))}
           </span>
         ) : null}
+        {pending && sessionId === null ? (
+          <span
+            data-testid="composer-creating-session"
+            className="px-1 text-ui-sm text-foreground-subtle"
+            role="status"
+            aria-live="polite"
+          >
+            正在创建会话…
+          </span>
+        ) : null}
         {showStopControl ? (
           <ControlHintTooltip title={stopTooltipTitle} shortcut="Esc">
             <Button
@@ -2477,8 +2478,6 @@ function ConversationComposerImpl({
             error={visibleError}
             onRetry={onRetryError}
             onDismiss={onDismissError}
-            onOpenModelSettings={onOpenModelSettings}
-            modelConfigTarget={modelConfigTarget}
           />
         </div>
       ) : null}
@@ -2588,8 +2587,7 @@ function ConversationComposerImpl({
           onChange={handleEditorChange}
           onUserInputPresenceChange={handleUserInputPresenceChange}
           onSubmit={handleEditorSubmit}
-          onWhiteboardMentionSelected={attachmentsApi.handleWhiteboardMentionSelected}
-          onPaste={attachmentsApi.handlePaste}
+            onPaste={attachmentsApi.handlePaste}
         />
         {attachmentsApi.attachmentError ? (
           <p className="flex items-start gap-2 p-3 text-ui-base text-warning">

@@ -124,7 +124,6 @@ function CuaGroupChildren({
               onOpenCodeViewer={context.onOpenCodeViewer}
               onOpenFileLink={context.onOpenFileLink}
               onOpenBrowserUrl={context.onOpenBrowserUrl}
-              onOpenAutomationsMain={context.onOpenAutomationsMain}
               onLoadFullToolCallFields={context.onLoadFullToolCallFields}
             />
           ) : event.kind === "assistantMessage" ? (

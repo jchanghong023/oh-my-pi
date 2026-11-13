@@ -18,7 +18,7 @@ import {
   TID_CHAT_ERROR_BANNER,
   TID_CHAT_ERROR_HOOK_ICON,
 } from "@zcode/shared/test-ids";
-import { AnchorIcon, CopyIcon, InfoIcon, SettingsIcon, X } from "lucide-react";
+import { AnchorIcon, CopyIcon, InfoIcon, X } from "lucide-react";
 import { useZCodeIntl } from "./i18n/IntlProvider.js";
 import type { IntlInstance } from "./i18n/IntlProvider.js";
 import { Button } from "./components/ui/button.js";
@@ -86,16 +86,9 @@ function parseClaudeUnknownCommandMessage(message: string): {
   };
 }
 
-/**
- * 缺模型横幅的措辞目标。远端 workspace 的模型目录来自远端 Registry，但本机配置保存后
- * 会由 Provisioning 自动下发到远端，因此只区分措辞，配置动作始终指向本机。
- */
-export type ChatErrorBannerModelConfigTarget = "local" | "remote";
-
 export function resolveChatErrorBannerDisplayMessage(
   error: ZCodeUiError,
   intl: IntlInstance,
-  modelConfigTarget: ChatErrorBannerModelConfigTarget = "local",
 ): string {
   const remoteCode = getRemoteConnectionFailureCode(error);
   if (remoteCode)
@@ -105,12 +98,7 @@ export function resolveChatErrorBannerDisplayMessage(
       formatMessage: intl.formatMessage,
     });
   if (isModelConfigMissingError(error)) {
-    return intl.formatMessage({
-      id:
-        modelConfigTarget === "remote"
-          ? "chat.error.remoteNoAvailableModel"
-          : "chat.error.noAvailableModel",
-    });
+    return intl.formatMessage({ id: "chat.error.noAvailableModel" });
   }
 
   if (error.code === "CLAUDE_UNKNOWN_COMMAND") {
@@ -169,8 +157,6 @@ export function ChatErrorBanner({
   retryLabel,
   retryDisabled,
   onDismiss,
-  onOpenModelSettings,
-  modelConfigTarget = "local",
   onReconnect,
   remoteKind,
 }: {
@@ -181,19 +167,13 @@ export function ChatErrorBanner({
   retryLabel?: string;
   retryDisabled?: boolean;
   onDismiss?: () => void;
-  onOpenModelSettings?: () => void;
-  modelConfigTarget?: ChatErrorBannerModelConfigTarget;
 }) {
   const { intl } = useZCodeIntl();
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const actionButtonClassName = "shrink-0";
   const requestConfigError = Boolean(resolveRequestSecurityErrorMessageId(error));
   const iconButtonClassName = "shrink-0";
-  const localizedErrorMessage = resolveChatErrorBannerDisplayMessage(
-    error,
-    intl,
-    modelConfigTarget,
-  );
+  const localizedErrorMessage = resolveChatErrorBannerDisplayMessage(error, intl);
   const remoteConnectionFailure = Boolean(getRemoteConnectionFailureCode(error));
   const modelConfigMissing = isModelConfigMissingError(error);
   const hookBlocked = error.code === "fault.runtime.hookBlocked";
@@ -269,22 +249,6 @@ export function ChatErrorBanner({
             {localizedErrorMessage}
           </div>
         </div>
-
-        {modelConfigMissing ? (
-          <>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onOpenModelSettings}
-              className={cn(actionButtonClassName, "gap-1.5")}
-              aria-label={intl.formatMessage({ id: "chat.error.setModels" })}
-            >
-              <SettingsIcon className="size-3.5" />
-              {intl.formatMessage({ id: "chat.error.setModels" })}
-            </Button>
-          </>
-        ) : null}
 
         {!modelConfigMissing && error.detail ? (
           <>

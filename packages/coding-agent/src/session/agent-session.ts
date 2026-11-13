@@ -7631,6 +7631,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#models.thinkingLevel;
 	}
 
+	/** Highest thinking level the active model allows, when the provider declares one. */
+	get thinkingLevelCeiling(): Effort | undefined {
+		return this.#models.thinkingLevelCeiling;
+	}
+
 	/** The selector the user configured: `auto` when auto mode is active, else the effective level. */
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined {
 		return this.#models.configuredThinkingLevel();

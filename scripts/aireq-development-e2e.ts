@@ -309,7 +309,12 @@ async function prepareControlledGit(
 		],
 		{
 			cwd: repository,
-			env: { ...env, OMP_AIREQ_PROBE_ROOT: root, OMP_AIREQ_PROBE_REMOTE: remote, OMP_AIREQ_PROBE_BRANCH: defaultBranch },
+			env: {
+				...env,
+				OMP_AIREQ_PROBE_ROOT: root,
+				OMP_AIREQ_PROBE_REMOTE: remote,
+				OMP_AIREQ_PROBE_BRANCH: defaultBranch,
+			},
 			stdin: "ignore",
 			stdout: "pipe",
 			stderr: "pipe",
@@ -783,7 +788,11 @@ export async function runAIReqAIReqelopmentE2E(
 					env[key] = gitEnvironment[key];
 			const secondary = path.join(browserRoot, "secondary-project");
 			await fs.mkdir(secondary);
-			await workflowGit(secondary, ["init", `--initial-branch=omp-aireq-acceptance/${runId}/${name}/secondary`], env);
+			await workflowGit(
+				secondary,
+				["init", `--initial-branch=omp-aireq-acceptance/${runId}/${name}/secondary`],
+				env,
+			);
 			await fs.writeFile(path.join(secondary, "project-isolation.txt"), `Only secondary project ${runId}\n`);
 			await workflowGit(secondary, ["add", "--", "project-isolation.txt"], env);
 			await workflowGit(secondary, ["commit", "-m", "Isolated secondary project"], env);

@@ -356,7 +356,7 @@ test("forged native targets and a late UI answer cannot control a rebound browse
 	const agent = rpc.agent;
 	const count = fixture.provider.requests.length;
 	await expect(agent.getSessionLifecycle({ workspacePath, sessionId: "unrelated-native-session" })).rejects.toThrow(
-		"Native history does not belong to this exact Dev object/session",
+		"Native history does not belong to this exact AIReq object/session",
 	);
 	const forged = await process.request("workflow/input", {
 		method: "POST",

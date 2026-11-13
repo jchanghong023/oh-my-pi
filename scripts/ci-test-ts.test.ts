@@ -848,7 +848,6 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/lsp/edits.test.ts",
 			"packages/coding-agent/test/slash-commands/shared-skills.test.ts",
 			"packages/coding-agent/test/acp-builtins.test.ts",
-			"packages/coding-agent/test/webgui/mcp-disabled.test.ts",
 			"packages/tui/test/composer-inline-shrink.test.ts",
 			"packages/tui/test/composer-welcome-scrollback.test.ts",
 			"packages/tui/test/transcript-container.test.ts",
@@ -911,13 +910,15 @@ test("local suites select fork consumers and drain failures without widening to 
 			expect(producer.status).toBe("passed");
 		}
 		const collabProducer = bunProducers.find(producer => producer.command.includes("test/aireq-workbench.test.tsx"));
-		expect(collabProducer?.command.filter(arg => arg.endsWith(".test.tsx")).sort()).toEqual([
-			"test/composer.test.tsx",
-			"test/aireq-workbench.test.tsx",
-			"test/markdown.test.tsx",
-			"test/tool-view.test.tsx",
-			"test/transcript.test.tsx",
-		]);
+		expect(collabProducer?.command.filter(arg => arg.endsWith(".test.tsx")).sort()).toEqual(
+			[
+				"test/composer.test.tsx",
+				"test/aireq-workbench.test.tsx",
+				"test/markdown.test.tsx",
+				"test/tool-view.test.tsx",
+				"test/transcript.test.tsx",
+			].sort(),
+		);
 		expect(await executed()).toEqual(fullMarkers);
 		await clear();
 		const emptyStartup = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--only-startup"]);

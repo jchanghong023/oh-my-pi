@@ -8,17 +8,9 @@ import type { AgentSession } from "../session/agent-session";
 import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPathWithResult } from "../utils/open";
 import { holdBlockedStatus } from "../utils/run-status";
-import {
-	closeAllWebGuis,
-	releaseWebGuiBindingsAfterHandoff,
-	startWebGui,
-	WebGuiStartError,
-	type WebGuiHandle,
-} from "../webgui/host";
+import { closeAllWebGuis, startWebGui, WebGuiStartError, type WebGuiHandle } from "../webgui/host";
 import { closeWebServer } from "../webgui/server";
-import { bindNativeWebGuiCommandEnvironment } from "../webgui/native-command-host";
 import { nativeWebGuiQuestions } from "../webgui/native-interactions";
-import { enterAIReqFromWebGuiNativeSession } from "../webgui/native-session-host";
 import {
 	closeAllAIReqWorkbenches,
 	createAIReqWorkbenchHost,
@@ -210,37 +202,12 @@ export class AIReqWorkbenchTuiMode {
 				const originalToolUI = context.getToolUIContext();
 				if (!originalToolUI) throw new Error("The native tool UI has not initialized");
 				context.initializeWebGuiNativeHost();
-				const restoreEnvironment = bindNativeWebGuiCommandEnvironment(context.session, {
-					mcpManager: context.mcpManager,
-				});
 				const gui = await startWebGui(context.session, {
 					setToolUIContext: (ui, hasUI) => context.setToolUIContext(ui, hasUI),
 					holdBlockedStatus,
 					restoreToolUIContext: () => {
 						if (context.ownsToolUIContext?.(nativeWebGuiQuestions(context.session).ui))
 							context.setToolUIContext(originalToolUI, true);
-						restoreEnvironment();
-					},
-					commandHost: {
-						close: () => this.close(),
-						restart: async () => {
-							await this.close();
-							await context.restart();
-						},
-						toggleMode: async (mode, session) => {
-							if (mode === "webgui") return this.close();
-							if (session !== context.session) {
-								const transferred = await enterAIReqFromWebGuiNativeSession(session);
-								await releaseWebGuiBindingsAfterHandoff();
-								this.#host = transferred.host;
-								this.#mode = "aireq";
-								this.#phase = "active";
-								this.#showAddress(transferred.handle);
-								return;
-							}
-							await this.close();
-							await this.toggle("aireq");
-						},
 					},
 				});
 				this.#host = gui;

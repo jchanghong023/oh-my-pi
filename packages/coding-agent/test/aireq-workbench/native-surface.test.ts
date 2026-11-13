@@ -192,7 +192,9 @@ describe("retained AIReq native surface", () => {
 			],
 		};
 		await expect(
-			respondAIReqNativeSurface(f.session, { ...f.target, round: 2 }, request.interactionId, { content: { result } }),
+			respondAIReqNativeSurface(f.session, { ...f.target, round: 2 }, request.interactionId, {
+				content: { result },
+			}),
 		).rejects.toThrow();
 		await expect(
 			respondAIReqNativeSurface(foreign.session, foreign.target, request.interactionId, { content: { result } }),

@@ -40,12 +40,6 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible.js";
 import { ToolCallBlock } from "@/ToolCallBlocks.js";
-import {
-  CronCreateAutomationCard,
-  isCronAutomationCardToolCall,
-  readCronCreateAutomationSummary,
-  type CronCreateAutomationSummary,
-} from "@/ToolCallBlocks/renderers/cron-create.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import type { AssistantPreviewCard } from "@/lib/assistantPreviewCards.js";
 import { useAssistantCodeCommentFeatureEnabled } from "@/AssistantCodeCommentFeatureProvider.js";
@@ -67,15 +61,6 @@ import {
 import type { ConversationCuaGroupEvent } from "@/v4/conversationCuaGroups.js";
 import { ConversationAgentToolCallRow } from "@/v4/ConversationAgentToolCallRow.js";
 import { ConversationFileSummaryPanel } from "@/v4/ConversationFileSummaryPanel.js";
-import {
-  WorkflowNotificationToolRow,
-  workflowRowNotification,
-  type WorkflowRowNotification,
-} from "@/v4/WorkflowNotificationToolRow.js";
-import { ConversationWorkflowDigests } from "@/v4/ConversationWorkflowDigests.js";
-import { ConversationWorkflowCompletion } from "@/v4/ConversationWorkflowCompletion.js";
-import { resolveWorkflowTurnDigests } from "@/v4/workflowTurnDigests.js";
-import { resolveWorkflowTurnCompletion } from "@/v4/workflowTurnCompletion.js";
 import { ConversationAssistantTextActions, ConversationRetryAction } from "@/v4/ConversationRowView.js";
 import { readAssistantFeedback } from "@/v4/ConversationRowView.js";
 import type {
@@ -114,12 +99,6 @@ interface ConversationTurnGroupProps {
   ) => Promise<CommandAck | boolean | void> | CommandAck | boolean | void;
   /** 会话首轮：顶部留白由 Timeline 的状态胶囊 inset 提供，本轮不再留顶部 padding。 */
   topClearedByTimeline?: boolean;
-}
-
-interface CronAutomationTurnCard {
-  rowId: number;
-  toolCallId: string;
-  automation: CronCreateAutomationSummary;
 }
 
 const MIN_VISIBLE_API_RETRY_ATTEMPT = 3;
@@ -199,7 +178,6 @@ function ConversationExploreGroupRow({
         onOpenCodeViewer={context.onOpenCodeViewer}
         onOpenFileLink={context.onOpenFileLink}
         onOpenBrowserUrl={context.onOpenBrowserUrl}
-        onOpenAutomationsMain={context.onOpenAutomationsMain}
       />
     </div>
   );
@@ -258,7 +236,6 @@ function ConversationToolGroupRow({
         onOpenCodeViewer={context.onOpenCodeViewer}
         onOpenFileLink={context.onOpenFileLink}
         onOpenBrowserUrl={context.onOpenBrowserUrl}
-        onOpenAutomationsMain={context.onOpenAutomationsMain}
         // history/background 兼容路径只传虚拟父节点时，已被分组投影消费的
         // Assistant message / reasoning 没有交给 renderer，展开后会永久丢失。
         cuaGroupEvents={visibleCuaEvents}
@@ -316,7 +293,6 @@ function ConversationCuaGroupRow({
         onOpenCodeViewer={context.onOpenCodeViewer}
         onOpenFileLink={context.onOpenFileLink}
         onOpenBrowserUrl={context.onOpenBrowserUrl}
-        onOpenAutomationsMain={context.onOpenAutomationsMain}
         cuaGroupEvents={visibleCuaEvents}
         renderCuaAssistantMessage={renderAssistantMessage}
         renderCuaReasoning={renderReasoning}
@@ -440,101 +416,6 @@ function ConversationAssistantWorkItems({
     >
       <div className="pt-5">{content}</div>
     </CollapsibleContent>
-  );
-}
-
-function resolveCronAutomationTurnCards(
-  rows: readonly AssistantWorkRow[],
-): CronAutomationTurnCard[] {
-  let cards: CronAutomationTurnCard[] = [];
-
-  for (const row of rows) {
-    if (row.kind !== "toolCall" || row.status !== "success") {
-      continue;
-    }
-
-    const normalizedToolName = row.toolName.toLowerCase().replace(/[^a-z0-9]/gu, "");
-    if (normalizedToolName === "crondelete") {
-      const deletedAutomationId = readCronDeleteAutomationId(row);
-      if (deletedAutomationId) {
-        // 只累计本轮成功的 Create/Update 会忽略后续 CronDelete，导致已经
-        // 撤销的中间结果仍被提升成轮尾成功卡片。
-        cards = cards.filter((card) => card.automation.automationId !== deletedAutomationId);
-      }
-      continue;
-    }
-
-    const node = toolCallRowToLegacyNode(row);
-    if (!isCronAutomationCardToolCall(node.toolCall)) {
-      continue;
-    }
-
-    const automation = readCronCreateAutomationSummary(node.toolCall);
-    if (!automation) {
-      continue;
-    }
-
-    if (automation.automationId) {
-      cards = cards.filter((card) => card.automation.automationId !== automation.automationId);
-    }
-    cards.push({
-      rowId: row.rowId,
-      toolCallId: row.toolCallId,
-      automation,
-    });
-  }
-
-  return cards;
-}
-
-function parseJsonRecord(value: unknown): Record<string, unknown> | null {
-  let candidate = value;
-  if (typeof candidate === "string") {
-    try {
-      candidate = JSON.parse(candidate) as unknown;
-    } catch {
-      return null;
-    }
-  }
-  return typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
-    ? (candidate as Record<string, unknown>)
-    : null;
-}
-
-function readCronDeleteAutomationId(
-  row: Extract<AssistantWorkRow, { kind: "toolCall" }>,
-): string | undefined {
-  for (const candidate of [row.output?.text, row.input, row.inputText]) {
-    const record = parseJsonRecord(candidate);
-    const id = record?.id;
-    if (typeof id === "string" && id.trim()) {
-      return id.trim();
-    }
-  }
-  return undefined;
-}
-
-function CronAutomationTurnCards({
-  cards,
-  context,
-}: {
-  cards: readonly CronAutomationTurnCard[];
-  context: ConversationRowRenderContext;
-}) {
-  if (cards.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      {cards.map((card) => (
-        <CronCreateAutomationCard
-          key={`${card.rowId}:${card.toolCallId}`}
-          automation={card.automation}
-          onOpenAutomationsMain={context.onOpenAutomationsMain}
-        />
-      ))}
-    </div>
   );
 }
 
@@ -917,20 +798,6 @@ function resolveBackgroundResultTitle(unit: ConversationTurnRenderUnit): string 
   return originMeta.title.trim();
 }
 
-/**
- * 该轮是否以 workflow 通知卡（ToolLayout 行）开头。
- *
- * 用于两处：`ConversationBackgroundResultWork` 决定渲染通知行还是裸标题行；轮容器决定是否
- * 去掉轮顶 `pt-14`。后台结果轮没有可见的 user 行，通知卡就是轮内第一个节点——若照常保留
- * 轮顶 padding，卡片上方会叠出 56px + 上一轮 pb-5 共约 76px 的空白，用户判为多余。
- */
-function resolveWorkflowNotification(
-  unit: ConversationTurnRenderUnit,
-): WorkflowRowNotification | undefined {
-  if (unit.header?.origin !== "backgroundResult") return undefined;
-  return workflowRowNotification(unit.header.originMeta);
-}
-
 function ConversationBackgroundResultWork({
   unit,
   apiRetry,
@@ -993,57 +860,6 @@ function ConversationBackgroundResultWork({
 
   // 后台唤醒轮与普通回复使用相同的完成态折叠；耗时只统计本次唤醒轮。
   //
-  // workflow run 的 workflow 通知带结构化载荷时改渲染既有工具卡语法的通知行（替换裸标题行）；
-  // 载荷缺席（批量轮、旧 transcript、bash/subagent）→ 原样退回标题行。
-  const workflowNotification = resolveWorkflowNotification(unit);
-  const workflowRunId = unit.header?.originMeta?.workId;
-  // 打开 run 详情：宿主注入 onOpenWorkflowRun + 联查到 toolCallId 才可点；冷恢复查不到时
-  // 展开体内不渲染链接。toolCallId 走投影/journal 联查表，与 CreateWorkflow 工具卡同一条打开路径。
-  const workflowRunSummary =
-    workflowNotification && workflowRunId
-      ? context.workflowRunByRunId?.get(workflowRunId)
-      : undefined;
-  const openWorkflowRun =
-    workflowNotification &&
-    workflowRunId &&
-    context.onOpenWorkflowRun &&
-    context.sessionId &&
-    workflowRunSummary?.toolCallId
-      ? () =>
-          context.onOpenWorkflowRun?.({
-            parentSessionId: context.sessionId!,
-            toolCallId: workflowRunSummary.toolCallId!,
-            runId: workflowRunId,
-            workflowName: title,
-          })
-      : undefined;
-  const workflowPendingQids =
-    workflowNotification && workflowRunId
-      ? context.workflowRunPendingQuestionsByRunId?.get(workflowRunId)
-      : undefined;
-  // 产物 chip → 全尺寸查看 tab。门比 `openWorkflowRun` 松一格：产物 tab 只需要
-  // (parentSessionId, runId, artifactId)，**不需要** toolCallId——它不画因果图，也就不必
-  // 回到那条 CreateWorkflow 工具行。冷恢复后联查不到 toolCallId 的通知行因此仍能开产物。
-  const openWorkflowArtifact =
-    workflowNotification && workflowRunId && context.onOpenWorkflowArtifact && context.sessionId
-      ? (artifactId: string) => {
-          // 载荷里那一枚的 `contentType`（终态通知才有产物清单）：宿主据它决定 html 产物
-          // 直接开浏览器 tab 还是开产物 tab，所以这里带得到就带上。载荷刻意不带 `sourcePath`
-          // （状态帧体积），宿主缺席时自己查 journal 补。
-          const contentType =
-            workflowNotification.kind === "terminal"
-              ? workflowNotification.artifacts?.find((candidate) => candidate.id === artifactId)
-                  ?.contentType
-              : undefined;
-          context.onOpenWorkflowArtifact?.({
-            parentSessionId: context.sessionId!,
-            runId: workflowRunId,
-            artifactId,
-            ...(contentType === undefined ? {} : { contentType }),
-          });
-        }
-      : undefined;
-
   return (
     <Collapsible
       open={open}
@@ -1057,31 +873,14 @@ function ConversationBackgroundResultWork({
           sourceCommandIds={unit.header?.sourceCommandId ? [unit.header.sourceCommandId] : []}
         />
       ) : null}
-      {workflowNotification ? (
-        <WorkflowNotificationToolRow
-          notification={workflowNotification}
-          runName={title}
-          testIdKey={unit.key}
-          theme={context.theme}
-          onOpenRun={openWorkflowRun}
-          onOpenArtifact={openWorkflowArtifact}
-          pendingQids={workflowPendingQids}
-          // 留白行的三态（docs/dynamic-workflow/transcript-and-notifications.md「The hole row's live state」）：
-          // run 在活投影里就递它的留白表（可能为空 = 已补全 / 没记录），不在场即 undefined → 中性词。
-          holes={
-            workflowRunSummary?.run === undefined ? undefined : (workflowRunSummary.run.holes ?? [])
-          }
-        />
-      ) : (
-        <div className="flex w-full">
-          <div
-            data-testid={testId(TID_CHAT_BACKGROUND_RESULT_TITLE, unit.key)}
-            className="min-w-0 whitespace-pre-wrap break-words text-left text-ui-base text-[var(--color-foreground-subtle)]"
-          >
-            {title}
-          </div>
+      <div className="flex w-full">
+        <div
+          data-testid={testId(TID_CHAT_BACKGROUND_RESULT_TITLE, unit.key)}
+          className="min-w-0 whitespace-pre-wrap break-words text-left text-ui-base text-[var(--color-foreground-subtle)]"
+        >
+          {title}
         </div>
-      )}
+      </div>
       <CollapsibleContent data-testid={testId(TID_CHAT_ASSISTANT_HISTORY_CONTENT, unit.key)}>
         <div className="flex flex-col gap-5">
           {hasHistory ? (
@@ -1163,10 +962,6 @@ function ConversationTurnGroupImpl({
     () => resolveAssistantCopyText(unit),
     [unit.assistantTextRows, unit.assistantWorkRows, unit.latestAssistantTextRow],
   );
-  const assistantFileSummaryText = useMemo(
-    () => unit.assistantTextRows.map((row) => row.text).join("\n\n"),
-    [unit.assistantTextRows],
-  );
   const assistantCopyText = useMemo(
     () =>
       assistantCodeCommentProjectionEnabled && assistantRawCopyText !== undefined
@@ -1195,42 +990,6 @@ function ConversationTurnGroupImpl({
       context.workspacePath,
       latestAssistantTextRow?.state,
     ],
-  );
-  const cronAutomationTurnCards = useMemo(
-    () => (unit.isRunning ? [] : resolveCronAutomationTurnCards(unit.assistantWorkRows)),
-    [unit.assistantWorkRows, unit.isRunning],
-  );
-  // 上方已是工具摘要；下方运行卡在联接到 run 后立即显示，不能再等主代理回复结束。
-  // 依赖联接表保持实时更新，并由解析器按 runId 去重。直接启动轮
-  // 的 run 卡也从这里出：那一轮没有用户气泡、没有助手内容，run 卡就是它的全部呈现。
-  const workflowRunByToolCallId = context.workflowRunByToolCallId;
-  const workflowRunByRunId = context.workflowRunByRunId;
-  const workflowGraphByToolCallId = context.workflowGraphByToolCallId;
-  const workflowFillGraphByRunId = context.workflowFillGraphByRunId;
-  const workflowTurnDigests = useMemo(
-    () =>
-      resolveWorkflowTurnDigests(unit, {
-        byToolCallId: workflowRunByToolCallId,
-        byRunId: workflowRunByRunId,
-        graphByToolCallId: workflowGraphByToolCallId,
-        fillGraphByRunId: workflowFillGraphByRunId,
-      }),
-    [
-      unit,
-      workflowFillGraphByRunId,
-      workflowGraphByToolCallId,
-      workflowRunByRunId,
-      workflowRunByToolCallId,
-    ],
-  );
-  // 完成卡：主代理消化 completed 通知的那一轮，轮尾落卡。
-  // 同一条门（轮结束）；联接只认 byRunId——通知轮里没有 CreateWorkflow 行可按 toolCallId 联。
-  const workflowTurnCompletion = useMemo(
-    () =>
-      unit.isRunning
-        ? undefined
-        : resolveWorkflowTurnCompletion(unit.header, { byRunId: workflowRunByRunId }),
-    [unit.header, unit.isRunning, workflowRunByRunId],
   );
   const canRenderAssistantActions =
     !unit.timelineOnly &&
@@ -1264,8 +1023,7 @@ function ConversationTurnGroupImpl({
     Boolean(unit.header?.fileChanges) ||
     canRenderAssistantActions ||
     Boolean(retryRow) ||
-    hasHookActions ||
-    workflowTurnDigests.length > 0;
+    hasHookActions;
   const editWorkspaceRewindAvailability = useMemo<EditWorkspaceRewindAvailability>(() => {
     const fileChanges = unit.header?.fileChanges;
     if (!fileChanges || fileChanges.files <= 0) return { enabled: false, reason: "noFiles" };
@@ -1277,17 +1035,7 @@ function ConversationTurnGroupImpl({
     return { enabled: true, reason: "available" };
   }, [unit.header?.actions?.canRewindFiles, unit.header?.fileChanges, unit.isRunning]);
 
-  // workflow 通知卡开头的轮去掉轮顶 padding：卡片只贴上一轮 pb-5 的常规流内间距。
-  const startsWithWorkflowNotificationCard =
-    backgroundResultTitle !== undefined && resolveWorkflowNotification(unit) !== undefined;
-  // 同一条规则的另外两个来源：中枢直接启动轮与「配置」的设置轮（docs/dynamic-workflow/presentation.md
-  // 「The run card」）。它们的用户行是写给模型的规范句，conversationTurnRenderUnits 会裁掉，
-  // 卡 / 「已调整设置」那一行于是成了轮内第一个节点。
-  //
-  // Bug 根因：`pt-14` 是给用户气泡留的呼吸，判据却一直是「有没有轮」而不是「有没有气泡」；
-  // 没有气泡时这 56px 叠上一轮的 pb-5，在行上方堆出约 76px 空白（设置轮总落在对话中段，最显眼）。
-  const startsWithoutUserBubble =
-    startsWithWorkflowNotificationCard || unit.workflowLaunch !== undefined;
+  const startsWithoutUserBubble = false;
 
   return (
     <section
@@ -1355,29 +1103,8 @@ function ConversationTurnGroupImpl({
               }
             />
           )}
-          {/* 完成卡：这一轮消化的那条 run 做了什么、花了多少，紧跟最后一段正文。 */}
-          {workflowTurnCompletion === undefined ? null : (
-            <ConversationWorkflowCompletion
-              completion={workflowTurnCompletion}
-              context={context}
-              turnKey={unit.key}
-            />
-          )}
-          {/* 轮尾摘要：这一轮留下在跑的 run，排在完成卡之后、其余轮尾块之前。 */}
-          <ConversationWorkflowDigests
-            context={context}
-            digests={workflowTurnDigests}
-            turnKey={unit.key}
-          />
-          {/* 修复原因：CronCreate/CronUpdate 工具本身仍按普通工具行展示；成功卡片属于整轮
-              完成后的结果摘要，必须等回复结束再跟随最终 assistant 正文收尾。 */}
-          <CronAutomationTurnCards cards={cronAutomationTurnCards} context={context} />
           {!isOfficeMode && unit.header?.fileChanges ? (
-            <ConversationFileSummaryPanel
-              header={unit.header}
-              context={context}
-              assistantText={assistantFileSummaryText}
-            />
+            <ConversationFileSummaryPanel header={unit.header} context={context} />
           ) : null}
           {unit.browserTurnEndRows.length > 0 ? (
             // 自动截图表达轮次结束时页面最终状态；放在 assistant work 内会

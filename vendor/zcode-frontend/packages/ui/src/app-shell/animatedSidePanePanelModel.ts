@@ -1,35 +1,18 @@
 export const MIN_PREVIEW_PANE_HEAVY_CONTENT_VISIBLE_INLINE_SIZE_PX = 96;
 
-export type OpenTabLauncherItemId =
-  | "selection-side-conversation"
-  | "files"
-  | "review"
-  | "developer-tools";
+export type OpenTabLauncherItemId = "selection-side-conversation";
 
 export function resolveOpenTabLauncherItemIds({
-  developerToolsEnabled,
   hasReviewTab,
   canOpenSelectionSideConversation = false,
 }: {
-  developerToolsEnabled: boolean;
   hasReviewTab: boolean;
   canOpenSelectionSideConversation?: boolean;
 }): OpenTabLauncherItemId[] {
-  const itemIds: OpenTabLauncherItemId[] = ["files"];
-
-
-  if (!hasReviewTab) {
-    itemIds.push("review");
-  }
-
+  const itemIds: OpenTabLauncherItemId[] = [];
   if (canOpenSelectionSideConversation) {
     itemIds.push("selection-side-conversation");
   }
-
-  if (developerToolsEnabled) {
-    itemIds.push("developer-tools");
-  }
-
   return itemIds;
 }
 

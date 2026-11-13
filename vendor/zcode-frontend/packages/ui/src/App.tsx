@@ -30,13 +30,10 @@ import {
   createTaskFindNavigationState,
   navigateTaskFindSelection,
 } from "@/quickpick/taskFindNavigationState.js";
-import { createQuickPickCommands } from "@/quickpick/quickPickCommands.js";
-import { CommandCenterDialog } from "@/command-center/CommandCenterDialog.js";
 import {
   resolveQuickPickConversationNavigation,
   selectQuickPickConversationTaskIds,
 } from "@/lib/quickPickConversationNavigation.js";
-import { setPendingSettingsPluginIntent } from "@/lib/settingsNavigation.js";
 import { runWorkspaceVisibleCommand } from "@/lib/workspaceVisibleCommand.js";
 import { ZCODE_PRODUCT_DOCS_URL } from "@/lib/productDocs.js";
 import { resolveTheme } from "@/useTheme.js";
@@ -44,16 +41,12 @@ import { WorkspaceShellLayout } from "@/app-shell/WorkspaceShellLayout.js";
 import { useWorkspaceSessionReload } from "@/app-shell/useWorkspaceSessionReload.js";
 import { useWorkspaceShellLifecycle } from "@/app-shell/useWorkspaceShellLifecycle.js";
 import { useWorkspaceShellZCodeState } from "@/app-shell/useWorkspaceShellZCodeState.js";
-import { useWorkspaceMainViewSettingsExit } from "@/app-shell/useWorkspaceMainViewSettingsExit.js";
-import {
-  useWorkspaceTaskNavigation,
-  type AutomationsNavigationTarget,
-} from "@/app-shell/useWorkspaceTaskNavigation.js";
+import { useWorkspaceTaskNavigation } from "@/app-shell/useWorkspaceTaskNavigation.js";
 import { useTaskSidePaneMemoryBridge } from "@/app-shell/useTaskSidePaneMemoryBridge.js";
 import { resolveAppWorkspaceRpcTarget } from "@/app-shell/workspaceRpcTarget.js";
 import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
 import { useWorkspaceTerminalTaskNotifications } from "@/hooks/useTaskNotifications.js";
-import type { AppProps, WorkspaceMainView } from "@/app-shell/types.js";
+import type { AppProps } from "@/app-shell/types.js";
 import type {
   ChatSearchResultHighlightRequest,
   ChatViewSummaryPanelVariant,
@@ -67,8 +60,6 @@ import {
 } from "@/lib/closeActiveContext.js";
 import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
 import { useWorkbenchGroupStore } from "@/v4/workbenchGroupStore.js";
-import type { SavedWorkflowHubTarget } from "@/v4/savedWorkflowHubContext.js";
-import type { SavedWorkflowsOpenTarget } from "@/settings/saved-workflows/SavedWorkflowsSection.js";
 import type { AssistantPreviewCardsAutoOpenRequest } from "@/lib/assistantPreviewCards.js";
 import { startMemoryDiagnosticsLogger } from "@/lib/memoryDiagnostics.js";
 
@@ -190,8 +181,6 @@ export function App({
     handleOpenBrowserUrl,
     handleToggleGit,
     handleOpenGit,
-    handleOpenWhiteboard,
-    handleOpenDeveloperTools,
     handleOpenFileManager,
     handleNavigateFileManager,
     handleOpenSubagentSession,
@@ -200,17 +189,11 @@ export function App({
     handleSyncSubagentSessionTabs,
     handleOpenSelectionSideChat,
     handleOpenPlanDetail,
-    handleOpenWorkflowRun,
-    handleOpenWorkflowRunDirectory,
-    handleOpenWorkflowActorSession,
-    handleOpenWorkflowWorkspace,
-    handleOpenWorkflowArtifact,
     handleToggleSidebar,
     handleToggleSidePaneCollapse,
     handleCloseCodeViewer,
     handleCloseGit,
     handleActivateSidePaneTab,
-    handleOpenNewSidePaneTab,
     handleReorderSidePaneTab,
     handleCloseSidePaneTab,
     handleCloseOtherSidePaneTabs,
@@ -222,9 +205,6 @@ export function App({
     workspaceRemoteSessionId,
     activeTaskId,
     sidePaneOwnerId,
-    defaultWhiteboardNamePrefix: intl.formatMessage({
-      id: "whiteboard.defaultName",
-    }),
   });
   const workspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
   const nativeHostAvailable = useNativeHostAvailable();
@@ -292,7 +272,6 @@ export function App({
     workspaceKey,
   ]);
   const [testMessages, setTestMessages] = useState<TestChatMessage[] | null>(null);
-  const [isQuickPickOpen, setIsQuickPickOpen] = useState(false);
   const [isTaskFindOpen, setIsTaskFindOpen] = useState(false);
   const [taskFindFocusRequestId, setTaskFindFocusRequestId] = useState(0);
   const [conversationFindState, setConversationFindState] = useState(createTaskFindNavigationState);
@@ -302,7 +281,6 @@ export function App({
     useState<ChatSearchResultHighlightRequest | null>(null);
   const [fileChangeFindState, setFileChangeFindState] = useState(createTaskFindNavigationState);
   const [fileChangeFindMatchCount, setFileChangeFindMatchCount] = useState(0);
-  const [canOpenCommunityFromQuickPick, setCanOpenCommunityFromQuickPick] = useState(false);
   const [gitSelectedSourceId, setGitSelectedSourceId] = useState<GitChangeSourceId>("unstaged");
   const [gitRefreshVersion, setGitRefreshVersion] = useState(0);
   useTaskSidePaneMemoryBridge({
@@ -358,12 +336,10 @@ export function App({
       })),
     [tabs],
   );
-  const commandCenterWorkspaceTabs = useMemo(() => tabs.filter(isWorkspaceTab), [tabs]);
   const hasGitTab = sidePaneState?.tabs.some((tab) => tab.type === "git") ?? false;
   const handleRefreshGit = useCallback(() => {
     setGitRefreshVersion((value) => value + 1);
   }, []);
-  const openSettingsTab = useTabStore((state) => state.openSettingsTab);
   const gitState = useGitRepository({
     workspacePath: workspaceAbsPath,
     activeTaskId,
@@ -609,9 +585,6 @@ export function App({
     // 文件变更范围也可能只有一个命中；重复导航必须重新展开并聚焦同一处。
     setFileChangeFindState((state) => navigateTaskFindSelection(state, query, activeIndex));
   }, []);
-  const handleOpenQuickPick = useCallback(() => {
-    setIsQuickPickOpen((open) => !open);
-  }, []);
   const handleOpenCommunity = useCallback(() => platform.openCommunity(), [platform]);
   const handleOpenProductDocs = useCallback(() => {
     platform.openExternal(ZCODE_PRODUCT_DOCS_URL);
@@ -740,34 +713,8 @@ export function App({
     ],
   );
   useTestActions(testActions);
-  const [workspaceMainView, setWorkspaceMainView] = useState<WorkspaceMainView>("chat");
-  const [openAutomationId, setOpenAutomationId] = useState<string | null>(null);
-  const [openAutomationTab, setOpenAutomationTab] = useState<NonNullable<
-    AutomationsNavigationTarget["automationTab"]
-  > | null>(null);
-  const handleNavigateToTaskMain = useCallback(() => {
-    setWorkspaceMainView("chat");
-  }, []);
-  useWorkspaceMainViewSettingsExit({
-    isWorkspaceVisible,
-    workspaceMainView,
-    onExitSettings: handleNavigateToTaskMain,
-  });
-  const handleNavigateToAutomationsMain = useCallback((target: AutomationsNavigationTarget) => {
-    setOpenAutomationId(target.automationId ?? null);
-    setOpenAutomationTab(target.automationTab ?? null);
-    setWorkspaceMainView("automations");
-  }, []);
-  const handleOpenAutomationConsumed = useCallback(() => {
-    setOpenAutomationId(null);
-    setOpenAutomationTab(null);
-  }, []);
-  // 中枢深链（「已保存」芯片 → 那个工作流的详情页）：中枢定位后由它回调清空。
-  const [openWorkflow, setOpenWorkflow] = useState<SavedWorkflowsOpenTarget | null>(null);
-  const handleOpenWorkflowConsumed = useCallback(() => setOpenWorkflow(null), []);
   const {
     handleSelectTask,
-    handleOpenAutomations,
     handleTaskNavBack,
     handleTaskNavForward,
     canTaskNavBack,
@@ -775,34 +722,8 @@ export function App({
   } = useWorkspaceTaskNavigation({
     intl,
     workspaceAbsPath,
-    workspaceIdentity,
     activateTabByPath,
-    onNavigateToTask: handleNavigateToTaskMain,
-    onNavigateToAutomations: handleNavigateToAutomationsMain,
   });
-  // 完成卡「已保存」芯片的落点（docs/dynamic-workflow/transcript-and-notifications.md「Saving the
-  // run, and running it again」）：走「自动化」入口的同一条导航（进历史、切主视图），落在「工作流」
-  // 标签，再由深链把中枢定位到那一页。项目档按 workspaceKey 找组，全局档只要名字。
-  const handleOpenSavedWorkflowInHub = useCallback(
-    (target: SavedWorkflowHubTarget) => {
-      setOpenWorkflow(
-        target.scope === "global"
-          ? { scope: "global", name: target.name }
-          : {
-              scope: "project",
-              name: target.name,
-              workspaceKey: resolveWorkspaceKey({
-                workspacePath: target.workspacePath,
-                ...(target.workspaceIdentity
-                  ? { workspaceIdentity: target.workspaceIdentity }
-                  : {}),
-              }),
-            },
-      );
-      handleOpenAutomations(undefined, "workflow");
-    },
-    [handleOpenAutomations],
-  );
   const handleSelectAdjacentConversation = useCallback(
     (direction: "previous" | "next") => {
       runVisibleWorkspaceCommand(() => {
@@ -851,9 +772,6 @@ export function App({
   const canPrimaryNavigationBack = canTaskNavBack;
 
   useAppKeyboard({
-    openCommandCenter: handleOpenQuickPick,
-    // 打开设置页：与设置入口按钮共用 tabStore.openSettingsTab；默认 ⌘,/Ctrl+,（系统惯例）
-    openSettings: openSettingsTab,
     findInTask: handleOpenTaskFind,
     toggleSidebar: () => runVisibleWorkspaceCommand(handleToggleSidebar),
     switchTheme: handleSwitchTheme,
@@ -873,80 +791,7 @@ export function App({
       : null,
   });
 
-  useEffect(() => {
-    if (!backendBusinessAvailable) {
-      // TODO: 接入 OMP 帮助配置后再探测社区入口，不请求原 ZCode 后端。
-      setCanOpenCommunityFromQuickPick(false);
-      return;
-    }
-    let disposed = false;
 
-    void platform.canOpenCommunity(locale).then(
-      (visible) => {
-        if (!disposed) {
-          setCanOpenCommunityFromQuickPick(visible);
-        }
-      },
-      () => {
-        if (!disposed) {
-          setCanOpenCommunityFromQuickPick(false);
-        }
-      },
-    );
-
-    return () => {
-      disposed = true;
-    };
-  }, [backendBusinessAvailable, locale, platform]);
-
-  const quickPickCommands = useMemo(
-    () =>
-      createQuickPickCommands({
-        supportsReview: !isOfficeMode,
-        allowOpenWorkspace,
-        canOpenCommunity: canOpenCommunityFromQuickPick,
-        isSidebarVisible,
-        themeTarget,
-        shortcuts: {
-          newTask: newTaskShortcutLabel,
-          openWorkspace: openWorkspaceShortcutLabel,
-          toggleSidebar: toggleSidebarShortcutLabel,
-        },
-        handlers: {
-          createTask: () => runVisibleWorkspaceCommand(() => handleCreateTaskIfWritable()),
-          openWorkspace: () => runVisibleWorkspaceCommand(onOpenWorkspace),
-          openSettings: openSettingsTab,
-          openSkillsSettings: () => {
-            setPendingSettingsPluginIntent("skills");
-            openSettingsTab();
-          },
-          switchTheme: handleSwitchTheme,
-          openCommunity: handleOpenCommunity,
-          openProductDocs: handleOpenProductDocs,
-          toggleSidebar: () => runVisibleWorkspaceCommand(handleToggleSidebar),
-          openReviewTab: () => runVisibleWorkspaceCommand(handleOpenGitIfWritable),
-        },
-      }),
-    [
-      allowOpenWorkspace,
-      isOfficeMode,
-      canOpenCommunityFromQuickPick,
-      handleOpenCommunity,
-      handleOpenProductDocs,
-      handleSwitchTheme,
-      handleOpenGitIfWritable,
-      handleToggleSidebar,
-      isSidebarVisible,
-      newTaskShortcutLabel,
-      handleCreateTaskIfWritable,
-      onOpenWorkspace,
-      runVisibleWorkspaceCommand,
-      openSettingsTab,
-      openWorkspaceShortcutLabel,
-      toggleSidebarShortcutLabel,
-      themeTarget,
-    ],
-  );
   const taskFindDialogProps = useMemo<TaskFindDialogProps>(
     () => ({
       open: isTaskFindOpen,
@@ -980,31 +825,9 @@ export function App({
 
   return (
     <>
-      <CommandCenterDialog
-        open={isQuickPickOpen}
-        commands={quickPickCommands}
-        workspaceAbsPath={workspaceAbsPath}
-        workspaceIdentity={workspaceIdentity}
-        activeTaskId={activeTaskId}
-        activeTaskChangeSummary={activeTaskChangeSummary}
-        workspaceTabs={commandCenterWorkspaceTabs}
-        onOpenChange={setIsQuickPickOpen}
-        onSelectTask={handleSelectTask}
-        onSearchResultHighlightRequest={handleSearchResultHighlightRequest}
-        onOpenCodeViewer={handleOpenCodeViewerIfWritable}
-      />
         <WorkspaceShellLayout
           services={services}
           workspaceReadOnlyReason={workspaceReadOnlyReason}
-          workspaceMainView={workspaceMainView}
-          openAutomationId={openAutomationId}
-          openAutomationTab={openAutomationTab}
-          openWorkflow={openWorkflow}
-          onOpenWorkflowConsumed={handleOpenWorkflowConsumed}
-          onOpenSavedWorkflowInHub={handleOpenSavedWorkflowInHub}
-          onWorkspaceMainViewChange={setWorkspaceMainView}
-          onOpenAutomationConsumed={handleOpenAutomationConsumed}
-          handleOpenAutomations={handleOpenAutomations}
           onCreateTask={handleCreateTaskIfWritable}
           onCreateConversationTask={onCreateConversationTask}
           onResolveConversationWorkspace={onResolveConversationWorkspace}
@@ -1077,12 +900,9 @@ export function App({
           handleTaskNavBack={handleTaskNavBack}
           handleTaskNavForward={handleTaskNavForward}
           handleStartDraftInWorkspace={handleStartDraftInWorkspace}
-          handleOpenCommandCenter={handleOpenQuickPick}
           handleRefreshGit={handleRefreshGit}
           handleOpenGitReview={handleOpenGitReview}
           handleToggleSidebar={handleToggleSidebar}
-          handleOpenWhiteboard={handleOpenWhiteboard}
-          handleOpenDeveloperTools={handleOpenDeveloperTools}
           handleOpenFileManager={handleOpenFileManager}
           handleNavigateFileManager={handleNavigateFileManager}
           handleToggleGit={handleToggleGitIfWritable}
@@ -1096,15 +916,9 @@ export function App({
           handleSyncSubagentSessionTabs={handleSyncSubagentSessionTabs}
           handleOpenSelectionSideChat={handleOpenSelectionSideChat}
           handleOpenPlanDetail={handleOpenPlanDetail}
-          handleOpenWorkflowRun={handleOpenWorkflowRun}
-          handleOpenWorkflowRunDirectory={handleOpenWorkflowRunDirectory}
-          handleOpenWorkflowActorSession={handleOpenWorkflowActorSession}
-          handleOpenWorkflowWorkspace={handleOpenWorkflowWorkspace}
-          handleOpenWorkflowArtifact={handleOpenWorkflowArtifact}
           handleCloseCodeViewer={handleCloseCodeViewer}
           handleCloseGit={handleCloseGit}
           handleActivateSidePaneTab={handleActivateSidePaneTab}
-          handleOpenNewSidePaneTab={handleOpenNewSidePaneTab}
           handleReorderSidePaneTab={handleReorderSidePaneTab}
           handleCloseSidePaneTab={handleCloseSidePaneTab}
           handleCloseOtherSidePaneTabs={handleCloseOtherSidePaneTabs}

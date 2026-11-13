@@ -8,6 +8,7 @@ import {
 	testId,
 	TID_TASK_ITEM,
 	TID_V4_COMPOSER_BACKGROUND_WORK_TRIGGER,
+	TID_V4_SUBAGENT_OPEN_SIDE_PANE,
 	TID_CHAT_SUMMARY_PANEL,
 } from "../../../../vendor/zcode-frontend/packages/shared/src/test-ids";
 import { Settings } from "../../src/config/settings";
@@ -259,6 +260,28 @@ export async function parallelSubagentScenario(native: NativeBrowserCase): Promi
 		});
 		expect(new Set(children.map(child => child.session.sessionId)).size).toBe(3);
 		expect(root.sessionId).toBe(rootId);
+		// 原生 task 工具名是小写；配对失败时 Agent 摘要行会退化成不可点击的裸摘要。
+		// 同一次 task 派发 3 个子代理时只有第一条摘要能和工具行配对，其余裸 subagent 行
+		// 也必须能各自下钻——所以逐个子代理点开并读到它自己的正文，而不是只断言 id 存在。
+		for (const child of children) {
+			const openChild = `[data-testid=${JSON.stringify(
+				testId(TID_V4_SUBAGENT_OPEN_SIDE_PANE, child.session.sessionId),
+			)}]`;
+			await page.waitForSelector(openChild, { visible: true });
+			await page.locator(openChild).click();
+			await page.waitForFunction(
+				text => {
+					const { document } = globalThis as BrowserGlobals;
+					// forceMount 会保留非活动 tab，必须只看当前活动面板，否则读到上一个子会话。
+					const active = document.querySelector(
+						'[data-side-pane-content-slot] [role="tabpanel"][data-state="active"]',
+					);
+					return (active?.textContent ?? "").includes(text);
+				},
+				{},
+				`Finished ${child.id}`,
+			);
+		}
 	} finally {
 		for (const child of children) child.finish();
 		if (withheld) await fs.rename(withheld.temporary, withheld.original);

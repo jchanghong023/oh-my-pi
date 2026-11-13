@@ -15,7 +15,11 @@ import {
 	validateRequirementContent,
 } from "../../src/aireq-workbench/requirement-package";
 import { AIReqWorkflowGit } from "../../src/aireq-workbench/workflow-git";
-import { AIReqWorkflowService, AIReqWorkflowStore, type AIReqWorkflowPorts } from "../../src/aireq-workbench/workflow-store";
+import {
+	AIReqWorkflowService,
+	AIReqWorkflowStore,
+	type AIReqWorkflowPorts,
+} from "../../src/aireq-workbench/workflow-store";
 import type {
 	AIReqNativeSessionRef,
 	AIReqPackageManifest,

@@ -2,7 +2,7 @@ import { connectViaWebSocket } from "@zcode/client";
 import type { IServiceAccessor } from "@zcode/services";
 import { serverRemoteInfoSchema, type ServerRemoteWorkspaceInfo } from "@zcode/shared";
 import { AppErrorBoundary, Root, ZCodeIntlProvider } from "@zcode/ui";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { createWebPlatform } from "../packages/web/src/platform/index.js";
 import "../packages/web/src/styles.css";
@@ -11,7 +11,7 @@ import { WEBGUI_PROJECTS_PATH, WEBGUI_RPC_PATH, WEBGUI_SERVER_INFO_PATH } from "
 const serverInfoSchema = serverRemoteInfoSchema.pick({ workspaces: true });
 
 async function openProject(
-  path: string, create = false, newSession = false, showFiles = false,
+  path: string, create = false, newSession = false,
 ): Promise<void> {
   const response = await fetch(WEBGUI_PROJECTS_PATH, {
     method: "POST",
@@ -36,12 +36,11 @@ async function openProject(
   // Reopening this project must not reset the selected resident session or its draft.
   const current = new URLSearchParams(window.location.search);
   if (current.get("project") === result.projectId) {
-    if (!newSession && !showFiles) return;
+    if (!newSession) return;
     const sessionId = current.get("session");
     if (sessionId && !newSession) target.searchParams.set("session", sessionId);
   }
   if (newSession) target.searchParams.set("newSession", "1");
-  if (showFiles) target.searchParams.set("files", "1");
   // A document navigation tears down every old service, subscription and project-local pane.
   window.location.assign(target.href);
 }
@@ -70,6 +69,7 @@ function createBrowserClientId(): string {
 }
 
 function BrowserApplication() {
+  const autoOpenRef = useRef(false);
   const [state, setState] = useState<BrowserState>({ status: "connecting" });
   const [clientId] = useState(() => {
     const key = "omp-webgui-client-id";
@@ -176,6 +176,19 @@ function BrowserApplication() {
   if (state.status === "failed") throw state.error;
   if (state.status === "connecting") return null;
 
+  // 独立 Web 服务启动时直接进入当前工作目录，不再让手机用户填写路径。
+  const unbound = new URLSearchParams(window.location.search).get("project") === null;
+  if (unbound && state.directoryPath) {
+    if (!autoOpenRef.current) {
+      autoOpenRef.current = true;
+      void openProject(state.directoryPath).catch((error: unknown) => {
+        autoOpenRef.current = false;
+        console.error("[webgui] auto-open project failed", error);
+      });
+    }
+    return null;
+  }
+
   return (
     <ZCodeIntlProvider>
       <Root
@@ -186,7 +199,6 @@ function BrowserApplication() {
         initialWorkspaceIdentity={state.workspace?.workspaceIdentity}
         initialTaskId={state.initialTaskId}
         initialDirectoryPath={state.directoryPath}
-        initialSidebarFileTreeOpen={new URLSearchParams(window.location.search).get("files") === "1"}
         nativeHostAvailable
         onOpenProject={openProject}
         restoreSession={false}

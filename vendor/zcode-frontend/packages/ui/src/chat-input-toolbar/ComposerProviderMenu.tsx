@@ -2,7 +2,7 @@ import { useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import type { ModelSelectGroup } from "@/ModelConfigSelect.js";
-import { ProviderLogo } from "@/settings/model-provider-section/ProviderLogo.js";
+import { ProviderLogo } from "@/components/ProviderLogo.js";
 import {
   DropdownMenuItem,
   DropdownMenuRadioGroup,

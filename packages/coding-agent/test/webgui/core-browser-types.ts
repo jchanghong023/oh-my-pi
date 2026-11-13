@@ -2,7 +2,7 @@ import type { AgentSession } from "../../src/session/agent-session";
 import type { Browser, Page } from "puppeteer-core";
 import type { WebGuiServiceContext } from "../../src/webgui/rpc-contract";
 
-export type CoreUiCase = "subagent" | "workflow";
+export type CoreUiCase = "subagent";
 
 export interface SeededHistory {
 	readonly sessionId: string;
@@ -36,7 +36,7 @@ export interface NativeBrowserCase {
 
 export interface CoreBrowserFixture {
 	readonly browser: Browser;
-	nativeCase(options?: { withSkill?: boolean }): Promise<NativeBrowserCase>;
+	nativeCase(): Promise<NativeBrowserCase>;
 	componentPage(kind: CoreUiCase): Promise<Page>;
 	close(): Promise<void>;
 }

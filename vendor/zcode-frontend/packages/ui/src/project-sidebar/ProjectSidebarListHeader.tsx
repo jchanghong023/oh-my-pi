@@ -1,9 +1,8 @@
 import type { Ref } from "react";
-import { Bell, Clock, Folder, Hash, ListFilter, Search } from "lucide-react";
+import { Bell, Clock, Folder, Hash, ListFilter } from "lucide-react";
 import type { ProjectSidebarProps, ProjectSidebarView } from "@/project-sidebar/contract.js";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { formatCommandShortcutLabel } from "@/lib/keyboardShortcuts.js";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -15,12 +14,10 @@ import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 
 /** 列表头部独立于导航和滚动内容，搜索与视图仍使用现有 owner。 */
 export function ProjectSidebarListHeader({
-  onOpenCommandCenter,
   view,
   onViewChange,
   groupedActionsRef,
 }: {
-  onOpenCommandCenter: ProjectSidebarProps["onOpenCommandCenter"];
   view: ProjectSidebarView;
   onViewChange(view: ProjectSidebarView): void;
   groupedActionsRef?: Ref<HTMLDivElement>;
@@ -41,22 +38,6 @@ export function ProjectSidebarListHeader({
         ref={groupedActionsRef}
         className={view === "grouped" ? "flex items-center gap-1" : "hidden"}
       />
-      <ControlHintTooltip
-        // 原因：快捷键拼入标题会继承标题样式；用独立 shortcut 复用标准键帽。
-        title={intl.formatMessage({ id: "commandCenter.open" })}
-        shortcut={formatCommandShortcutLabel("k")}
-      >
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="shrink-0 text-foreground-subtle hover:text-foreground"
-          data-testid="sidebar-search-open"
-          aria-label={intl.formatMessage({ id: "commandCenter.open" })}
-          onClick={onOpenCommandCenter}
-        >
-          <Search className="size-3.5" />
-        </Button>
-      </ControlHintTooltip>
       <DropdownMenu>
         <ControlHintTooltip title={intl.formatMessage({ id: "project.view" })}>
           <DropdownMenuTrigger asChild>

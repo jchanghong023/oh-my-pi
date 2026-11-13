@@ -23,15 +23,7 @@ import {
 } from "@/lib/workspaceExpansionPreference.js";
 import { isSameWorkspaceTab } from "@/store/tabWorkspaceIdentity.js";
 
-export const SETTINGS_TAB_ID = "__settings__" satisfies TabId;
-
 export type WorkspaceAvailability = "available" | "unavailable-local-directory";
-
-export interface SettingsTabState {
-  id: typeof SETTINGS_TAB_ID;
-  kind: "settings";
-  label: "settings";
-}
 
 export interface WorkspaceTabState extends TabState {
   kind: "workspace";
@@ -71,7 +63,7 @@ export interface RestorableWorkspaceTab {
   workspacePurpose?: WorkspacePurpose;
 }
 
-export type WindowTabState = WorkspaceTabState | SettingsTabState;
+export type WindowTabState = WorkspaceTabState;
 
 export function isWorkspaceTab(tab: WindowTabState): tab is WorkspaceTabState {
   return tab.kind === "workspace";
@@ -94,10 +86,6 @@ export function isWorkspaceReadOnly(
       isWorkspaceTabReadOnly(tab) &&
       (tab.workspaceIdentity?.trim() || tab.workspacePath) === workspaceKey,
   );
-}
-
-export function isSettingsTab(tab: WindowTabState): tab is SettingsTabState {
-  return tab.kind === "settings";
 }
 
 // ============================================================================
@@ -137,8 +125,6 @@ export interface TabStoreState {
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   /** 仅按 workspace 子序列重排，保留设置页等非 workspace tab 的位置槽位 */
   reorderWorkspaceTabs: (fromIndex: number, toIndex: number) => void;
-  /** 打开设置标签页（窗口内唯一） */
-  openSettingsTab: () => void;
   /** 通过 workspace 路径激活 tab（跨窗口 focus 用），返回是否找到 */
   activateTabByPath: (path: string, options?: { workspaceIdentity?: string }) => boolean;
   /** 切换 workspace 的展开/收起态 */
@@ -216,14 +202,6 @@ function normalizeRestorableWorkspaceTab(
   }
 
   return tab;
-}
-
-function createSettingsTab(): SettingsTabState {
-  return {
-    id: SETTINGS_TAB_ID,
-    kind: "settings",
-    label: "settings",
-  };
 }
 
 function moveItem<T>(items: readonly T[], fromIndex: number, toIndex: number): T[] {
@@ -586,20 +564,6 @@ export function createTabStore(storage: StorageLike | null | undefined = undefin
 
         return { tabs: newTabs };
       });
-    },
-
-    openSettingsTab: () => {
-      const existing = get().tabs.find(isSettingsTab);
-      if (existing) {
-        set({ activeTabId: existing.id });
-        return;
-      }
-
-      const settingsTab = createSettingsTab();
-      set((state) => ({
-        tabs: [...state.tabs, settingsTab],
-        activeTabId: settingsTab.id,
-      }));
     },
 
     toggleWorkspaceExpanded: (path: string) => {

@@ -66,11 +66,6 @@ export {
 } from "./hooks/index.js";
 
 export { ZCodeIntlProvider, useZCodeIntl } from "./i18n/index.js";
-export { ResourceManagerApp } from "./resource-manager/ResourceManagerApp.js";
-export type {
-  ResourceManagerAppProps,
-  ResourceManagerTab,
-} from "./resource-manager/ResourceManagerApp.js";
 export type { IntlInstance } from "./i18n/index.js";
 export {
   FileDisplayInline,

@@ -305,8 +305,6 @@ export interface ToolCallBlockRenderContext {
   onOpenCodeViewer?: (source: CodeViewerSource) => void;
   onOpenFileLink?: (target: MessageFileLinkTarget) => void;
   onOpenBrowserUrl?: (url: string) => void;
-  /** 定时任务工具卡片跳转到管理页；automationId 存在时直接打开详情。 */
-  onOpenAutomationsMain?: (automationId?: string) => void;
   onLoadFullToolCallFields?: (toolId: string) => Promise<boolean | void> | boolean | void;
 }
 

@@ -4,12 +4,7 @@ import { ServiceChannels } from "../../../../vendor/zcode-frontend/packages/shar
 import { cfgEnabledModels } from "../config/model-settings";
 import type { AgentSession } from "../session/agent-session";
 import { assertNativeChat, nativeChatChanges, nativeChatRuntimeForSession } from "./native-chat";
-import {
-	listWebGuiNativeSessions,
-	resolveWebGuiSession,
-	runWebGuiSession,
-	webGuiNativePorts,
-} from "./native-session-host";
+import { listWebGuiNativeSessions, resolveWebGuiSession, runWebGuiSession } from "./native-session-host";
 import { readBrowserProject } from "./project-registry";
 import type { WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
 import { createWebGuiService } from "./service-channel";
@@ -53,21 +48,20 @@ export function createModelSelectionService(context: WebGuiServiceContext): WebG
 	};
 	const view = (session: AgentSession | undefined): ModelSelectionView => {
 		if (!session || session.isDisposed) return { revision, providers: [], nativeSession: null };
-		const guest = webGuiNativePorts().collabGuest(session);
-		const current = guest ? guest.state?.model : session.model;
+		const current = session.model;
 		return {
 			revision,
 			providers: [],
 			nativeSession: {
 				sessionId: session.sessionId,
 				workspacePath: session.sessionManager.getCwd(),
-				chatAvailable: !guest?.readOnly,
-				taskRunsAvailable: !guest && !!session.agentRegistry,
-				models: guest
-					? []
-					: session
-							.getAvailableModels()
-							.map(model => ({ providerId: model.provider, modelId: model.id, name: model.name })),
+				chatAvailable: true,
+				thinkingLevel: session.thinkingLevel,
+				thinkingLevelCeiling: session.thinkingLevelCeiling,
+				thinkingLevels: session.getAvailableEffortSelectors(),
+				models: session
+					.getAvailableModels()
+					.map(model => ({ providerId: model.provider, modelId: model.id, name: model.name })),
 			},
 			...(current ? { preferredSelection: { providerId: current.provider, modelId: current.id } } : {}),
 		};
@@ -124,8 +118,6 @@ export function createModelSelectionService(context: WebGuiServiceContext): WebG
 				assertOpen();
 				const input = sessionModelInput(value);
 				const session = await resolveWebGuiSession(context, input.sessionId);
-				if (webGuiNativePorts().collabGuest(session))
-					throw new Error("The native collaboration host controls its model.");
 				if (session.isSessionTransitioning) throw new Error("The native session is transitioning");
 				const generation = session.sessionGeneration;
 				const model = session
@@ -151,6 +143,40 @@ export function createModelSelectionService(context: WebGuiServiceContext): WebG
 					throw new Error("The native session did not retain the selected model");
 				if (!selectedId || selectedId === input.sessionId) {
 					selectedId = input.sessionId;
+					observe(session);
+					publish();
+				}
+				return view(session);
+			},
+			setSessionThinkingLevel: async (value: unknown): Promise<ModelSelectionView> => {
+				assertOpen();
+				if (
+					typeof value !== "object" ||
+					value === null ||
+					!("sessionId" in value) ||
+					typeof value.sessionId !== "string" ||
+					!value.sessionId.trim() ||
+					!("thinkingLevel" in value) ||
+					typeof value.thinkingLevel !== "string"
+				)
+					throw new TypeError("Session thinking selection requires sessionId and thinkingLevel");
+				const session = await resolveWebGuiSession(context, value.sessionId);
+				if (session.isSessionTransitioning) throw new Error("The native session is transitioning");
+				const generation = session.sessionGeneration;
+				const level = session.getAvailableEffortSelectors().find(candidate => candidate === value.thinkingLevel);
+				if (level === undefined) throw new Error(`Unknown thinking level: ${value.thinkingLevel}`);
+				assertNativeChat({ ...context, nativeSession: session });
+				await runWebGuiSession(session, () => session.setThinkingLevel(level, false));
+				assertOpen();
+				if (
+					(await resolveWebGuiSession(context, value.sessionId)) !== session ||
+					session.sessionGeneration !== generation
+				)
+					throw new Error("The native session changed; refresh the thinking selection");
+				if (session.configuredThinkingLevel() !== level)
+					throw new Error("The native session did not retain the selected thinking level");
+				if (!selectedId || selectedId === value.sessionId) {
+					selectedId = value.sessionId;
 					observe(session);
 					publish();
 				}

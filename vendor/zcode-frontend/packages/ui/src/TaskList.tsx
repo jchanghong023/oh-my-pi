@@ -1,15 +1,12 @@
 /* eslint-disable max-lines -- TaskList 同时承接 workspace 列表渲染、行内操作和外部数据源兼容，先集中收口避免 UI 结构漂移。 */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Settings2 } from "lucide-react";
 import type { ZCodeTaskMeta } from "@zcode/shared";
-import { TID_TASK_LIST, TID_TASK_EMPTY, TID_TASK_SETTINGS_BUTTON } from "@zcode/shared/test-ids";
-import { Button } from "@/components/ui/button.js";
+import { TID_TASK_LIST, TID_TASK_EMPTY } from "@zcode/shared/test-ids";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu.js";
 import { toast } from "@/components/ui/toast.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { NewTaskButtonGroup } from "@/NewTaskButtonGroup.js";
-import { useTabStore } from "@/store/TabStoreProvider.js";
 import { MemoTaskItem, TaskListItemContextMenuContent } from "@/TaskListItem.js";
 import { TaskListLoadingHint } from "@/TaskListLoadingHint.js";
 import { TaskRenameDialog } from "@/TaskRenameDialog.js";
@@ -37,7 +34,6 @@ export const TaskList = memo(function TaskList({
   isWorkspaceActive = true,
   onSelectTask,
   showCreateButton = true,
-  showFooter = true,
   showEmptyState = true,
   taskRowVariant = "default",
   hoverEnabled = true,
@@ -65,7 +61,6 @@ export const TaskList = memo(function TaskList({
   isWorkspaceActive?: boolean;
   onSelectTask: (taskId: string) => void;
   showCreateButton?: boolean;
-  showFooter?: boolean;
   showEmptyState?: boolean;
   taskRowVariant?: "default" | "timeline";
   hoverEnabled?: boolean;
@@ -88,7 +83,6 @@ export const TaskList = memo(function TaskList({
   );
   const taskLookup = useMemo(() => [...tasks, ...pinnedTasks], [pinnedTasks, tasks]);
   const startDraft = useZCodeSessionStore((state) => state.startDraft);
-  const openSettingsTab = useTabStore((state) => state.openSettingsTab);
   const [pendingArchiveTaskId, setPendingArchiveTaskId] = useState<string | null>(null);
   const [renamingTaskId, setRenamingTaskId] = useState<string | null>(null);
   const [contextMenuTaskId, setContextMenuTaskId] = useState<string | null>(null);
@@ -502,21 +496,6 @@ export const TaskList = memo(function TaskList({
         ) : null}
       </div>
 
-      {showFooter ? (
-        <div className="border-t border-outline/40 p-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={openSettingsTab}
-            data-testid={TID_TASK_SETTINGS_BUTTON}
-            className="w-full justify-center"
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-            {intl.formatMessage({ id: "taskList.openSettings" })}
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 });

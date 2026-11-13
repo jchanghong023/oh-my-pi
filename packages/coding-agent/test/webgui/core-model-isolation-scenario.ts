@@ -8,6 +8,7 @@ import {
 	TID_CHAT_MODEL_SELECT_TRIGGER,
 	TID_CHAT_MODEL_SELECT_GROUP,
 	TID_CHAT_MODEL_SELECT_ITEM,
+	TID_TOOL_SUMMARY_TRIGGER,
 } from "../../../../vendor/zcode-frontend/packages/shared/src/test-ids";
 import { SessionManager } from "../../src/session/session-manager";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
@@ -70,6 +71,9 @@ export async function modelIsolationScenario(native: NativeBrowserCase): Promise
 			await manager.close();
 		}
 	}
+	// A history in another directory can appear in the sidebar only after its project is
+	// admitted; the browser proves selection, not that a native admission refreshes the tree.
+	await native.resumeHistory(b.sessionId);
 	await page.goto(native.url, { waitUntil: "domcontentloaded" });
 
 	const chooseHistory = async (history: SeededHistory) => {
@@ -175,29 +179,11 @@ export async function modelIsolationScenario(native: NativeBrowserCase): Promise
 	const residentA = current;
 	await chooseHistory(b);
 	expect(current.sessionManager.getCwd()).toBe(crossCwd);
-	await page.locator('[data-testid="automations-open"]').click();
-	await page.locator('[data-testid="automations-page-tab-workflow"]').click();
-	await page.waitForFunction(() => {
-		const { document } = globalThis as BrowserGlobals;
-		return document.querySelector("[data-automations-content]")?.textContent?.includes("cross-scope-task");
-	});
-	const outputButtons = await page.$$("[data-automations-content] button");
-	try {
-		let opened = false;
-		for (const button of outputButtons) {
-			if ((await button.evaluate(node => node.textContent?.trim())) !== "task tool result") continue;
-			await button.click();
-			opened = true;
-			break;
-		}
-		if (!opened) throw new Error("Cross-directory native task result has no output button");
-	} finally {
-		await Promise.all(outputButtons.map(button => button.dispose()));
-	}
-	await page.waitForFunction(() => {
-		const { document } = globalThis as BrowserGlobals;
-		return document.querySelector("[data-automations-content]")?.textContent?.includes("CROSS_SCOPE_NATIVE_OUTPUT");
-	});
+	// The trimmed WebGUI has no automations page; this history's own transcript is the
+	// retained surface that must project its task dispatch.
+	const taskRow = `[data-session-id="${b.sessionId}"] [data-testid="${testId(TID_TOOL_SUMMARY_TRIGGER, "cross-scope-task")}"]`;
+	await page.waitForSelector(taskRow, { visible: true });
+	expect(await page.$eval(taskRow, element => element.textContent ?? "")).toContain("general-purpose");
 	await chooseHistory(b);
 	await send(b, primary, "B initial continuation");
 	await chooseModel(alternate);
