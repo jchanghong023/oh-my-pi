@@ -1,3 +1,5 @@
+import { useOptionalAIReqDataSource } from "@/aireq/data-source.js";
+import { readSidebarVisibility, saveSidebarVisibility } from "@/aireq/navigation.js";
 import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
 import {
   openFileManagerSidePane,
@@ -106,6 +108,8 @@ export function useAppPanels(options: {
   const isOfficeMode = useIsOfficeMode();
   const aireq = useAIReq();
   const isDev = aireq !== null;
+  const aiReqSource = useOptionalAIReqDataSource();
+  const sidebarPreferenceScope = isDev ? aiReqSource?.backend?.id ?? "default" : undefined;
   const isAIReqFree = Boolean(aireq?.selection.freeSessionId || aireq?.selection.freeDraftId);
   const isMobileCompactViewport = useIsMobileCompactViewport();
   const sidePaneMemoryKey = useMemo(
@@ -130,8 +134,14 @@ export function useAppPanels(options: {
   // 交互说明：侧栏显隐按钮放在 App 外层，而不是 Sidebar 内部。
   // 这样即使侧栏被隐藏，入口也仍然留在左上角，不会出现"收起后没有地方再展开"的问题；
   // 同时这里统一处理 macOS 红绿灯安全区，避免按钮和系统窗口控件重叠。
-  // AIReq 首次进入默认收起导航，各功能页共用用户的开合选择，不因进入正式需求而重置。
-  const [isSidebarVisible, setIsSidebarVisible] = useState(() => !isDev);
+  // 只在没有本地偏好时默认收起；刷新和重新进入沿用手动选择，普通 WebGUI 保持原默认。
+  const [isSidebarVisible, setIsSidebarVisible] = useState(() => sidebarPreferenceScope === undefined ? true : readSidebarVisibility(sidebarPreferenceScope));
+  const sidebarVisibleRef = useRef(isSidebarVisible);
+  useEffect(() => {
+    const visible = sidebarPreferenceScope === undefined ? true : readSidebarVisibility(sidebarPreferenceScope);
+    sidebarVisibleRef.current = visible;
+    setIsSidebarVisible(visible);
+  }, [sidebarPreferenceScope]);
   const [allRecentClosedSidePaneTabs, setAllRecentClosedSidePaneTabs] = useState<
     RecentClosedSidePaneTab[]
   >([]);
@@ -788,8 +798,11 @@ export function useAppPanels(options: {
 
 
   const handleToggleSidebar = useCallback(() => {
-    setIsSidebarVisible((visible) => !visible);
-  }, []);
+    const visible = !sidebarVisibleRef.current;
+    sidebarVisibleRef.current = visible;
+    setIsSidebarVisible(visible);
+    if (sidebarPreferenceScope !== undefined) saveSidebarVisibility(sidebarPreferenceScope, visible);
+  }, [sidebarPreferenceScope]);
 
   const handleToggleSidePaneCollapse = useCallback(() => {
     const nextCollapsed = !latestSidePaneMemoryRef.current.isSidePaneCollapsed;

@@ -24,3 +24,21 @@ export function updateSidebarPreferences(key: string, patch: Partial<SidebarPref
  const next = { ...readSidebarPreferences(key), ...patch };
  preferences.set(storageKey(key), next);
 }
+
+
+// 整体导航开合独立于列表筛选；按后端及工号保存，浏览器外观偏好不写业务库。
+const sidebarVisibility = new Map<string, boolean>();
+export function readSidebarVisibility(backendId: string): boolean {
+ const key = storageKey(`visible:${backendId}`);
+ const cached = sidebarVisibility.get(key);
+ if (cached !== undefined) return cached;
+ let visible = false;
+ try { visible = globalThis.__ompAIReqLocalStorage.getItem(key) === "true"; } catch { /* 存储不可用时默认收起。 */ }
+ sidebarVisibility.set(key, visible);
+ return visible;
+}
+export function saveSidebarVisibility(backendId: string, visible: boolean): void {
+ const key = storageKey(`visible:${backendId}`);
+ sidebarVisibility.set(key, visible);
+ try { globalThis.__ompAIReqLocalStorage.setItem(key, String(visible)); } catch { /* 本页及重新挂载仍保留内存选择。 */ }
+}
