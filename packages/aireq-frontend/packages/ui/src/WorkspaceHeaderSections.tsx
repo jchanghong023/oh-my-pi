@@ -166,7 +166,7 @@ export function WorkspaceHeaderTitleSection({
     intl,
   });
   const workspaceContextLabel = projectName;
-  const workspaceBranchLabel = gitSummary.isRepository
+  const workspaceBranchLabel = gitSummary?.isRepository
     ? resolveGitBranchTriggerLabel({
         headRefType: gitSummary.headRefType,
         currentBranchName: gitSummary.branchName,

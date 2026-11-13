@@ -48,7 +48,6 @@ interface QuickPickCommandHandlers {
   openCommunity: () => void | Promise<void>;
   openProductDocs: () => void | Promise<void>;
   toggleSidebar: () => void;
-  openReviewTab: () => void;
 }
 
 interface CreateQuickPickCommandsOptions {
@@ -112,14 +111,6 @@ export function createQuickPickCommands({
       run: handlers.toggleSidebar,
     },
     {
-      id: "add-review-tab",
-      sectionId: "panels",
-      titleId: "quickPick.command.addReviewTab",
-      icon: "diff",
-      keywords: ["add", "review", "diff", "changes", "添加审查", "审查标签", "变更"],
-      run: handlers.openReviewTab,
-    },
-    {
       id: "settings",
       sectionId: "configure",
       titleId: "quickPick.command.settings",
@@ -168,5 +159,5 @@ export function createQuickPickCommands({
     run: handlers.openProductDocs,
   });
 
-  return commands.filter((command) => supportsReview || command.id !== "add-review-tab");
+  return commands;
 }

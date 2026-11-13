@@ -7,7 +7,6 @@ import { buildEmbeddedArchive } from "@oh-my-pi/pi-utils/embedded-archive";
 import { parse } from "acorn";
 import type { FunctionPluginHooks, OutputBundle } from "rolldown";
 import { build, loadConfigFromFile, type Plugin } from "vite";
-import { resolvePdfJsCMapsDirectory } from "../../aireq-frontend/packages/ui/vite/pdfJsCMapsPlugin";
 import { withCompilerActivity } from "../../../scripts/test-gate-events";
 import type { AIReqWorkbenchAsset } from "../src/aireq-workbench/assets";
 
@@ -435,10 +434,6 @@ export async function buildAIReqWorkbenchAssets(): Promise<AIReqWorkbenchBuildRe
 		await walkFiles(outdir, async file => {
 			const relative = path.relative(outdir, file).replaceAll("\\", "/");
 			assets.set(`/${relative}`, { bytes: await fs.readFile(file), contentType: contentType(relative) });
-		});
-		// CMaps are read by the copied emission plugin rather than Vite's module loader.
-		await walkFiles(resolvePdfJsCMapsDirectory(), async file => {
-			if (file.endsWith(".bcmap")) inputs.set(file, await fs.readFile(file));
 		});
 	} finally {
 		await fs.rm(outdir, { recursive: true, force: true });

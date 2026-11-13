@@ -129,7 +129,6 @@ function BrowserApplication() {
       initialWorkspaceIdentity={connection.workspace.identity}
       initialDirectoryPath={connection.workspace.path}
       initialTaskId={connection.taskId}
-      initialSidebarFileTreeOpen={selection.freeFiles}
       onOpenProject={async (path, _create, newSession, showFiles) => {
         const target = view.projects.find(item => item.root === path || source.projects?.readDevelopmentRoot(item.id, identity?.employeeId) === path);
         if (!target) throw new Error("请先在 AIReq 设置中添加已有 Git 项目。");

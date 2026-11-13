@@ -169,7 +169,6 @@ export interface AppProps extends WorkspaceRemoteNavigationProps {
   allowOpenWorkspace?: boolean;
   responsiveBrowserLayout?: boolean;
   backendBusinessAvailable?: boolean;
-  initialSidebarFileTreeOpen?: boolean;
   workspaceAbsPath: string;
   workspaceRemoteSessionId?: string;
   workspaceIdentity?: string;
@@ -241,10 +240,6 @@ export interface WorkspaceShellLayoutProps extends AppProps {
   activeTaskChangeSummary: ReturnType<
     typeof import("@/lib/taskChangeSummary.js").getTaskChangeSummary
   >;
-  gitWorktreeReviewSourceId: GitChangeSourceId | null;
-  gitWorktreeChangeSummary: GitChangeSummary;
-  activeGitSourceId: GitChangeSourceId;
-  gitState: ReturnType<typeof import("@/hooks/useGitRepository.js").useGitRepository>;
   providerConfigFile: ReturnType<
     typeof import("@/hooks/useWorkspaceProviderConfigFile.js").useWorkspaceProviderConfigFile
   >;
@@ -260,10 +255,6 @@ export interface WorkspaceShellLayoutProps extends AppProps {
   onConversationFindMatchStateChange: (state: ConversationFindMatchState) => void;
   searchResultHighlightRequest?: ChatSearchResultHighlightRequest | null;
   onSearchResultHighlightDone?: (requestId: number) => void;
-  fileChangeFindActiveIndex: number;
-  fileChangeFindNavigationRequestId: number;
-  fileChangeFindQuery: string;
-  onFileChangeFindMatchCountChange: (count: number) => void;
   reloadSessionDisabled: boolean;
   reloadSessionPending: boolean;
   handleReloadSession: (options?: {
@@ -284,18 +275,10 @@ export interface WorkspaceShellLayoutProps extends AppProps {
     targetWorkspacePurpose?: import("@zcode/shared").WorkspacePurpose,
   ) => void;
   handleOpenCommandCenter: () => void;
-  handleRefreshGit: () => void;
   handleToggleSidebar: () => void;
-  handleOpenWhiteboard: () => void;
   handleOpenDeveloperTools: () => void;
-  handleOpenFileManager: (target?: FileManagerTarget) => void;
-  handleNavigateFileManager: (tabId: string, source: CodeViewerSource) => void;
-  handleToggleGit: () => void;
-  handleOpenGitReview: (sourceId?: GitChangeSourceId) => void;
   handleToggleSidePane: () => void;
   handleOpenBrowserUrl: (url: string) => void;
-  handleOpenCodeViewer: (source: CodeViewerSource) => void;
-  handleAutoOpenAssistantPptx: (request: AssistantPreviewCardsAutoOpenRequest) => void;
   handleOpenBackgroundBash: (request: OpenBackgroundBashSideTabRequest) => void;
   handleOpenSubagentSession: (request: OpenScopedSubagentSideTabRequest) => void;
   handleOpenSubagentDirectory: (
@@ -313,8 +296,6 @@ export interface WorkspaceShellLayoutProps extends AppProps {
   handleOpenWorkflowActorSession: (request: OpenScopedWorkflowActorSessionSideTabRequest) => void;
   handleOpenWorkflowWorkspace: (request: OpenScopedWorkflowWorkspaceSideTabRequest) => void;
   handleOpenWorkflowArtifact: (request: OpenScopedWorkflowArtifactSideTabRequest) => void;
-  handleCloseCodeViewer: () => void;
-  handleCloseGit: () => void;
   handleOpenNewSidePaneTab: () => void;
   handleOpenAIReqMaterialsSidePane: () => void;
   handleActivateSidePaneTab: (tabId: string) => void;
@@ -323,6 +304,5 @@ export interface WorkspaceShellLayoutProps extends AppProps {
   handleCloseOtherSidePaneTabs: (tabId: string) => void;
   handleCloseAllSidePaneTabs: () => void;
   handleReopenClosedSidePaneTab: (tabId: string) => void;
-  setGitSelectedSourceId: (value: GitChangeSourceId) => void;
   taskFindDialogProps: TaskFindDialogProps;
 }

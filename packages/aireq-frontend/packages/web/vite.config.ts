@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { pdfJsCMapsPlugin } from "../ui/vite/pdfJsCMapsPlugin.js";
 import { thirdPartyNoticesVitePlugin } from "./vite/thirdPartyNotices.js";
 import { resolveRemoteFrontendVersion } from "./vite/remoteFrontendVersion.mjs";
 // Bugfix: Vite 配置在 Node 加载期执行，不能导入 @zcode/shared 根入口。
@@ -45,7 +44,7 @@ export default defineConfig(({ mode }) => {
   const zaiOAuthClientId = resolveZaiOAuthClientId(endpointEnv);
 
   return {
-    plugins: [pdfJsCMapsPlugin(), react(), tailwindcss(), thirdPartyNoticesVitePlugin()],
+    plugins: [react(), tailwindcss(), thirdPartyNoticesVitePlugin()],
     resolve: {
       alias: {
         // 修复 UI 组件库中的 @ 别名解析失败。

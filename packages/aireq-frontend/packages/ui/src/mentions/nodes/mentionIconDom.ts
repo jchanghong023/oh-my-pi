@@ -40,20 +40,6 @@ export const SUBAGENT_MENTION_ICON_NODE = [
   ["path", { d: "M9 13v2" }],
 ] as const satisfies MentionLucideIconNode;
 
-export const WHITEBOARD_MENTION_LUCIDE_ICON_NAME = "Palette";
-export const WHITEBOARD_MENTION_ICON_NODE = [
-  [
-    "path",
-    {
-      d: "M12 22a8 8 0 0 1-8-8 8.5 8.5 0 0 1 8.5-8.5H16a4 4 0 0 1 0 8h-1.5a2 2 0 0 0 0 4H16a6 6 0 0 1-4 4.5Z",
-    },
-  ],
-  ["path", { d: "M7.5 14h.01" }],
-  ["path", { d: "M9.5 10h.01" }],
-  ["path", { d: "M14.5 9h.01" }],
-  ["path", { d: "M17 12h.01" }],
-] as const satisfies MentionLucideIconNode;
-
 export const GOAL_COMMAND_MENTION_LUCIDE_ICON_NAME = "Goal";
 export const GOAL_COMMAND_MENTION_ICON_NODE = [
   ["path", { d: "M12 13V2l8 4-8 4" }],

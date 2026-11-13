@@ -1,5 +1,15 @@
-import type { BundledLanguage, BundledTheme, HighlighterGeneric, ThemedToken } from "shiki";
-import { bundledLanguages, bundledLanguagesInfo, createHighlighter } from "shiki";
+import type {
+  BundledLanguage,
+  BundledTheme,
+  HighlighterCore,
+  LanguageRegistration,
+  ThemeRegistrationAny,
+  ThemedToken,
+} from "shiki";
+import { createHighlighterCore } from "shiki/core";
+import { createOnigurumaEngine } from "shiki/engine/oniguruma";
+import { bundledLanguages, bundledLanguagesInfo } from "shiki/langs";
+import { bundledThemes } from "shiki/themes";
 import { logger } from "@/logger.js";
 import { uiMemoryDiagnosticsRegistry } from "@/lib/memoryDiagnostics.js";
 
@@ -53,10 +63,7 @@ function normalizeCodeLanguage(language: string): BundledLanguage {
   return FALLBACK_CODE_LANGUAGE;
 }
 
-const highlighterCache = new Map<
-  string,
-  Promise<HighlighterGeneric<BundledLanguage, BundledTheme>>
->();
+const highlighterCache = new Map<string, Promise<HighlighterCore>>();
 const tokensCache = new Map<string, TokenizedCode>();
 const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>();
 // 内存诊断计数器：tokensCache 目前无淘汰，是审计里
@@ -90,16 +97,24 @@ const getCodeTokensCacheKey = (
 const getHighlighter = (
   language: BundledLanguage,
   theme: BundledTheme,
-): Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> => {
+): Promise<HighlighterCore> => {
   const cacheKey = `${theme}:${language}`;
   const cached = highlighterCache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
-  const highlighterPromise = createHighlighter({
-    langs: [language],
-    themes: [theme],
+  // 只导入当前语言与主题；禁止走 `shiki` 根入口的全量语料 bundle。
+  const highlighterPromise = Promise.all([
+    bundledLanguages[language]?.(),
+    bundledThemes[theme]?.(),
+  ]).then(([lang, themeModule]) => {
+    if (!lang || !themeModule) throw new Error(`Unsupported shiki pair: ${language}/${theme}`);
+    return createHighlighterCore({
+      engine: createOnigurumaEngine(import("shiki/wasm")),
+      langs: [lang.default as LanguageRegistration],
+      themes: [themeModule.default as ThemeRegistrationAny],
+    });
   });
 
   highlighterCache.set(cacheKey, highlighterPromise);

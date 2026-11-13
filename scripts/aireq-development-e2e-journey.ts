@@ -105,7 +105,7 @@ export const DEV_JOURNEY_STEPS = [
 	"execution-real-ut-st",
 	"material-menu-readonly-download",
 	"material-discuss-unsent-native-draft",
-	"native-file-git-readonly",
+	"file-git-launchers-removed",
 	"history-not-transition",
 	"code-preserving-back",
 	"invalidated-material-history",
@@ -1365,10 +1365,10 @@ export async function runAIReqJourney(context: AIReqJourneyContext): Promise<AIR
 			}
 		}
 	});
-	await step("native-file-git-readonly", async () => {
+	await step("file-git-launchers-removed", async () => {
 		const before = await context.view(projectId, imported.irId, imported.srId);
 		const sr = before.srs.find(item => item.id === imported.srId)!;
-		demand(sr.worktree, "File/Git inspection needs the real owned SR worktree");
+		demand(sr.worktree, "Launcher check needs the real owned SR worktree");
 		const worktree = sr.worktree.path;
 		const bytes = await trackedWorktreeBytes(worktree);
 		const gitBefore = {
@@ -1376,7 +1376,6 @@ export async function runAIReqJourney(context: AIReqJourneyContext): Promise<AIR
 			index: await workflowGit(worktree, ["ls-files", "--stage", "-z"]),
 			status: await workflowGit(worktree, ["status", "--porcelain=v1", "--untracked-files=all"]),
 		};
-		const surface = await nativeSurface(context);
 		await click(context, "material-collapse");
 		const sidePaneWasOpen = await context.browser.page.evaluate<boolean>(
 			`Boolean(document.querySelector('[data-workspace-side-frame][aria-hidden="false"]'))`,
@@ -1384,31 +1383,10 @@ export async function runAIReqJourney(context: AIReqJourneyContext): Promise<AIR
 		if (!sidePaneWasOpen) await click(context, "side-pane-toggle");
 		await waitVisible(context, "[data-side-pane-add-tab-trigger]");
 		await context.browser.page.click("[data-side-pane-add-tab-trigger]");
-		await click(context, "side-pane-launcher-files");
-		const fileRow =
-			'[data-workspace-side-frame][aria-hidden="false"] [data-state="active"] [data-testid="workspace-file-tree-panel"] [data-testid^="workspace-file-tree-row-"][title="machine_info.py"]';
-		await waitVisible(context, fileRow);
-		await context.browser.page.click(fileRow);
-		const source = await fs.readFile(path.join(worktree, "machine_info.py"), "utf8");
-		const line = source.split(/\r?\n/u).find(text => text.trim().length >= 16 && !text.trim().startsWith("#"));
-		demand(line, "Owned Python application has no substantive preview line");
-		const preview = await pollWorkflow(
-			() =>
-				context.browser.page.evaluate<string>(
-					`document.querySelector('[data-testid="preview-pane"]')?.innerText||''`,
-				),
-			text => text.includes(line.trim()),
-			"Real owned-worktree file appears in native file preview",
-			context.timeoutMs,
-		);
-		await context.browser.page.click("[data-side-pane-add-tab-trigger]");
-		await click(context, "side-pane-launcher-review");
-		const git = await pollWorkflow(
-			() =>
-				context.browser.page.evaluate<string>(`document.querySelector('[data-testid="git-pane"]')?.innerText||''`),
-			text => text.includes("machine_info.py"),
-			"Actual modified application appears in native Git review",
-			context.timeoutMs,
+		demand(
+			!(await context.browser.page.$("[data-testid=side-pane-launcher-files]")) &&
+				!(await context.browser.page.$("[data-testid=side-pane-launcher-review]")),
+			"Removed file and Git launchers are still offered",
 		);
 		if (!sidePaneWasOpen) await click(context, "side-pane-toggle");
 		await click(context, "material-reopen");
@@ -1417,12 +1395,10 @@ export async function runAIReqJourney(context: AIReqJourneyContext): Promise<AIR
 			JSON.stringify([...afterBytes]) === JSON.stringify([...bytes]) &&
 				(await requireGit(worktree).headSha()) === gitBefore.head &&
 				(await workflowGit(worktree, ["ls-files", "--stage", "-z"])) === gitBefore.index &&
-				(await workflowGit(worktree, ["status", "--porcelain=v1", "--untracked-files=all"])) === gitBefore.status &&
-				workflowAuthority(await context.view(projectId, imported.irId, sr.id)) === workflowAuthority(before) &&
-				JSON.stringify((await nativeSurface(context)).target) === JSON.stringify(surface.target),
-			"Readonly native file/Git panels changed host bytes, Git, workflow or native binding",
+				(await workflowGit(worktree, ["status", "--porcelain=v1", "--untracked-files=all"])) === gitBefore.status,
+			"Opening the launcher changed host bytes or Git",
 		);
-		return { worktree, path: "machine_info.py", sourceLine: line, preview, git, gitBefore, noWrites: true };
+		return { worktree, noWrites: true };
 	});
 	await step("history-not-transition", async () => {
 		const before = await currentSr(context, projectId, imported.srId);

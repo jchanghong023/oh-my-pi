@@ -3,17 +3,15 @@ export type MentionCategory =
   | "skills"
   | "commands"
   | "subagents"
-  | "whiteboards"
   | "sessions"
   | "plugins";
 
 export interface MentionItemData {
-  kind?: "file" | "directory" | "whiteboard";
+  kind?: "file" | "directory";
   path?: string;
   relativePath?: string;
   /** 只用于候选展示；执行路径与 canonical 链接不依赖 root 名。 */
   rootName?: string;
-  boardId?: string;
   scope?: "built-in" | "workspace" | "user" | "plugin";
   source?: "built-in" | "user" | "plugin";
   model?: string;

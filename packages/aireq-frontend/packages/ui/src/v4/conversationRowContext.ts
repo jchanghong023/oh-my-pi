@@ -206,9 +206,6 @@ export interface ConversationRowRenderContext {
   readAttachment?: (
     params: ConversationAttachmentReadParams,
   ) => ReturnType<ConversationTransport["attachmentRead"]>;
-  readAttachmentRange?: (
-    params: Parameters<ConversationTransport["attachmentReadRange"]>[0],
-  ) => ReturnType<ConversationTransport["attachmentReadRange"]>;
 }
 
 export interface ConversationFileChangesRequestOptions {

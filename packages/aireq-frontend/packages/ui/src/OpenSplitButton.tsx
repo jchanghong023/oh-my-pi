@@ -44,8 +44,7 @@ import { useWorkspaceOpenInEditorTarget } from "@/hooks/useWorkspaceOpenInEditor
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { persistLastSelectedEditorId } from "@/lib/editorPreference.js";
 import type { CodeViewerSource } from "@/lib/codeViewer.js";
-import { getFileManagerLabel } from "@/workspace-file-tree/helpers.js";
-import { getWorkspaceFileRelativePath } from "@/workspace-file-tree/model.js";
+import { getFileManagerLabel, getWorkspaceFileRelativePath } from "@/lib/path.js";
 import { resolveWorkspaceEditorSelection } from "@/lib/workspaceEditorSelection.js";
 import { logger } from "@/logger.js";
 

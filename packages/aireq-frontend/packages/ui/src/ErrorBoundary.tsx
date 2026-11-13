@@ -1,4 +1,3 @@
-import { DesktopWindowFrame } from "@/DesktopWindowFrame.js";
 import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import zhCN from "@/i18n/locales/zh-CN.js";
@@ -82,7 +81,7 @@ function ErrorFallback({
   const errorSummary = error.message.trim() || formatBoundaryMessage("appError.unknown");
 
   return (
-    <DesktopWindowFrame title={formatBoundaryMessage("appError.title")}>
+    <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
       <div className="flex h-full min-h-0 justify-center overflow-y-auto p-6">
         <div
           role="alert"
@@ -134,7 +133,7 @@ function ErrorFallback({
           ) : null}
         </div>
       </div>
-    </DesktopWindowFrame>
+    </div>
   );
 }
 

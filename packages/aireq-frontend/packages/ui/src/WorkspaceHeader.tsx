@@ -58,7 +58,7 @@ export function WorkspaceHeader({
   providerWorkspaceConfigLoading,
   workspaceHeaderState,
   gitSummary,
-  gitDirtyFileCount,
+  gitDirtyFileCount = 0,
   simplifyForNarrowViewport = false,
   isSidebarVisible,
   isSidePaneOpen,
@@ -94,12 +94,12 @@ export function WorkspaceHeader({
   providerWorkspaceConfigExists: boolean;
   providerWorkspaceConfigLoading: boolean;
   workspaceHeaderState: WorkspaceHeaderState;
-  gitSummary: GitRepositorySummary;
-  gitDirtyFileCount: number;
+  gitSummary?: GitRepositorySummary | null;
+  gitDirtyFileCount?: number;
   simplifyForNarrowViewport?: boolean;
   isSidebarVisible: boolean;
   isSidePaneOpen: boolean;
-  onRefreshGit: () => void;
+  onRefreshGit?: () => void;
   onToggleSidePane: () => void;
   toggleSidePaneShortcutLabel?: string;
   onReloadSession: (options?: {

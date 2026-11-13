@@ -90,3 +90,47 @@ export function toFileUrl(path: string): string {
 
   return encodeUriPathForFileUrl(normalizedPath);
 }
+
+function normalizeForPathComparison(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/** Compare workspace-relative or absolute paths without trailing separators or slash style. */
+export function areWorkspaceFilePathsEqual(leftPath: string, rightPath: string): boolean {
+  return normalizeForPathComparison(leftPath) === normalizeForPathComparison(rightPath);
+}
+
+/** Workspace-relative label for a file path, falling back to the leaf outside the workspace. */
+export function getWorkspaceFileRelativePath(workspacePath: string, filePath: string): string {
+  const normalizedWorkspacePath = normalizeForPathComparison(workspacePath);
+  const normalizedFilePath = normalizeForPathComparison(filePath);
+  if (normalizedWorkspacePath === normalizedFilePath) {
+    return ".";
+  }
+  const prefix = `${normalizedWorkspacePath}/`;
+  return normalizedFilePath.startsWith(prefix)
+    ? normalizedFilePath.slice(prefix.length)
+    : getPathLeaf(filePath);
+}
+
+/** Platform-native "open in file manager" label. */
+export function getFileManagerLabel(intl: {
+  formatMessage: (descriptor: { id: string }) => string;
+}): string {
+  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  if (/mac/i.test(userAgent)) {
+    return intl.formatMessage({ id: "appHeader.openInFinder" });
+  }
+  if (/windows/i.test(userAgent)) {
+    return intl.formatMessage({ id: "appHeader.openInFileExplorer" });
+  }
+  return intl.formatMessage({ id: "appHeader.openInFileManager" });
+}
+
+/** Native "reveal in folder" editor id for the current browser platform. */
+export function getSystemFileLocatorEditorId(): "finder" | "explorer" | null {
+  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  if (/mac/i.test(userAgent)) return "finder";
+  if (/windows/i.test(userAgent)) return "explorer";
+  return null;
+}

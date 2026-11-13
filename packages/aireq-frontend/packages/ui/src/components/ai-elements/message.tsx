@@ -92,13 +92,8 @@ import {
   resolveMarkdownFileLink,
 } from "@/lib/markdownFileLink.js";
 import { stripBalancedAssistantPathQuotes } from "@/lib/assistantPathQuotes.js";
-import { getPathLeaf } from "@/lib/path.js";
-import { getWorkspaceFileRelativePath } from "@/workspace-file-tree/model.js";
+import { getFileManagerLabel, getPathLeaf, getWorkspaceFileRelativePath } from "@/lib/path.js";
 import { resolveWorkspaceEditorSelection } from "@/lib/workspaceEditorSelection.js";
-import {
-  getFileManagerLabel,
-  sortInstalledEditorsForFileTree,
-} from "@/workspace-file-tree/helpers.js";
 import type { CodePreviewSettings } from "@/lib/codePreviewSettings.js";
 import { DEFAULT_CODE_PREVIEW_SETTINGS } from "@/lib/codePreviewSettings.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
@@ -1582,10 +1577,7 @@ export const MessageResponse = memo(
           }
 
           return (
-            <span
-              className={cn(messageLinkClassName, linkClassName)}
-              title={resolvedHref || undefined}
-            >
+            <span className={linkClassName} title={resolvedHref || undefined}>
               {children}
             </span>
           );

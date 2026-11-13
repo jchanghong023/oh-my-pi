@@ -527,7 +527,7 @@ export function normalizeWorkspaceSidePaneState(
   // 已移除的界面不从旧版面板记忆恢复。
   const filteredTabs = current.tabs.filter(
     (tab) =>
-      !["treemapping", "terminal", "deploy", "browser", "browser-use", "browser-permissions", "plugin-market", "plugin-ui", "workspace-plugin-preview"].includes(
+      !["treemapping", "terminal", "deploy", "browser", "browser-use", "browser-permissions", "plugin-market", "plugin-ui", "workspace-plugin-preview", "git", "whiteboard", "file-manager", "code-viewer"].includes(
         tab.type,
       ),
   );

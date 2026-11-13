@@ -79,7 +79,6 @@ import {
   ChatMediaAttachmentPreviewDialog,
   type ChatMediaAttachmentPreviewTarget,
 } from "@/ChatMediaAttachmentPreviewDialog.js";
-import type { PdfViewerRangeSource } from "@/components/ui/pdf-viewer.js";
 import { MessageAction, MessageActions } from "@/components/ai-elements/message.js";
 import {
   Reasoning,
@@ -132,8 +131,6 @@ import {
 } from "@/v4/composer/composerPromptContexts.js";
 import { WebElementContextAttachmentChip } from "@/v4/composer/WebElementContextAttachmentChip.js";
 import { ConversationSelectionReferenceChip } from "@/v4/composer/ConversationSelectionReferenceChip.js";
-import { PptxElementReferenceChip } from "@/v4/composer/PptxElementReferenceChip.js";
-import { useOpenPptxElementReference } from "@/v4/composer/useOpenPptxElementReference.js";
 import { ConversationFileRewindDialog } from "@/v4/ConversationFileRewindDialog.js";
 import { BotGroupSourceLabel } from "@/v4/BotGroupSourceLabel.js";
 import { splitUserInputEpilogue } from "@/v4/ConversationUserInputEpilogue.js";
@@ -301,7 +298,6 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
   rowId,
   sessionId,
   readAttachment,
-  readAttachmentRange,
 }: {
   attachments: readonly AttachmentRef[] | undefined;
   /** 编辑态删除附件后仍保留其在持久 FilePart 列表中的原序号。 */
@@ -313,7 +309,6 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
   rowId: number;
   sessionId?: string;
   readAttachment?: NonNullable<ConversationRowRenderContext["readAttachment"]>;
-  readAttachmentRange?: NonNullable<ConversationRowRenderContext["readAttachmentRange"]>;
 }) {
   const { intl } = useZCodeIntl();
   const [previewIndex, setPreviewIndex] = useState(0);
@@ -369,13 +364,6 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
       if (!controller.signal.aborted) setTextLoading(false);
     }
   };
-  const [pdfPreview, setPdfPreview] = useState<ChatMediaAttachmentPreviewTarget | null>(null);
-  const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
-  const [pdfPreviewError, setPdfPreviewError] = useState(false);
-  const [pdfPreviewRef, setPdfPreviewRef] = useState<string | null>(null);
-  const pdfPreviewUrlRef = useRef<string | null>(null);
-  const pdfPreviewRequestRef = useRef(0);
-  const pdfPreviewAbortRef = useRef<AbortController | null>(null);
   const videoPreviewUrlRef = useRef<string | null>(null);
   const videoPreviewRequestRef = useRef(0);
   const videoPreviewAbortRef = useRef<AbortController | null>(null);
@@ -386,9 +374,6 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
   });
   const previewVideoOpenLabel = intl.formatMessage({
     id: "chat.attachments.preview.openVideo",
-  });
-  const previewPdfOpenLabel = intl.formatMessage({
-    id: "chat.attachments.preview.openPdf",
   });
   const previewUnavailableLabel = intl.formatMessage({
     id: "chat.attachments.preview.unavailable",
@@ -524,25 +509,6 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
     setVideoPreviewError(false);
   }, [cancelVideoPreviewRead, releaseVideoPreviewUrl]);
 
-  const closePdfPreview = useCallback(() => {
-    pdfPreviewRequestRef.current += 1;
-    pdfPreviewAbortRef.current?.abort();
-    pdfPreviewAbortRef.current = null;
-    if (pdfPreviewUrlRef.current) URL.revokeObjectURL(pdfPreviewUrlRef.current);
-    pdfPreviewUrlRef.current = null;
-    setPdfPreview(null);
-    setPdfPreviewRef(null);
-    setPdfPreviewLoading(false);
-    setPdfPreviewError(false);
-  }, []);
-
-  useEffect(
-    () => () => {
-      closePdfPreview();
-    },
-    [closePdfPreview],
-  );
-
   const openVideoPreview = useCallback(
     async (attachment: AttachmentRef, attachmentIndex: number, galleryIndex: number) => {
       if (!sessionId || !readAttachment) return;
@@ -616,89 +582,6 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
       }
     },
     [cancelVideoPreviewRead, entityId, readAttachment, releaseVideoPreviewUrl, rowId, sessionId],
-  );
-
-  const openPdfPreview = useCallback(
-    async (attachment: AttachmentRef, attachmentIndex: number) => {
-      if (!sessionId || (!readAttachment && !readAttachmentRange)) return;
-      const ref = attachment.previewRef ?? attachment.ref;
-      pdfPreviewRequestRef.current += 1;
-      const requestId = pdfPreviewRequestRef.current;
-      pdfPreviewAbortRef.current?.abort();
-      const abortController = new AbortController();
-      pdfPreviewAbortRef.current = abortController;
-      if (pdfPreviewUrlRef.current) URL.revokeObjectURL(pdfPreviewUrlRef.current);
-      pdfPreviewUrlRef.current = null;
-      setPdfPreviewRef(ref);
-      setPdfPreview({ filename: attachment.fileName, mediaType: "application/pdf" });
-      setPdfPreviewLoading(true);
-      setPdfPreviewError(false);
-      try {
-        const target = entityId ? { target: { rowId, entityId }, attachmentIndex } : {};
-        if (readAttachmentRange) {
-          const firstRange = await readAttachmentRange({
-            sessionId,
-            ref,
-            ...target,
-            offset: 0,
-            limit: 256 * 1024,
-            signal: abortController.signal,
-          });
-          const source: PdfViewerRangeSource = {
-            totalBytes: firstRange.totalBytes,
-            initialData: firstRange.bytes,
-            requestRange: async (offset, limit) => {
-              const range = await readAttachmentRange({
-                sessionId,
-                ref,
-                ...target,
-                offset,
-                limit,
-                signal: abortController.signal,
-              });
-              return range.bytes;
-            },
-          };
-          if (pdfPreviewRequestRef.current !== requestId) return;
-          setPdfPreview({
-            filename: attachment.fileName,
-            mediaType: firstRange.mediaType,
-            pdfSource: source,
-          });
-          return;
-        }
-        if (!readAttachment) return;
-        const result = await readAttachment({
-          sessionId,
-          ref,
-          ...target,
-          signal: abortController.signal,
-        });
-        if (pdfPreviewRequestRef.current !== requestId) return;
-        const url =
-          "url" in result
-            ? result.url
-            : URL.createObjectURL(
-                new Blob([Uint8Array.from(result.bytes)], { type: result.mediaType }),
-              );
-        if (!("url" in result)) pdfPreviewUrlRef.current = url;
-        setPdfPreview({
-          filename: attachment.fileName,
-          mediaType: result.mediaType,
-          url,
-        });
-      } catch (error) {
-        if (pdfPreviewRequestRef.current !== requestId) return;
-        setPdfPreviewError(true);
-        logger.warn("[v4-attachment-preview] failed to read sent PDF", error);
-      } finally {
-        if (pdfPreviewRequestRef.current === requestId) {
-          pdfPreviewAbortRef.current = null;
-          setPdfPreviewLoading(false);
-        }
-      }
-    },
-    [entityId, readAttachment, readAttachmentRange, rowId, sessionId],
   );
 
   const visibleAttachments = (attachments ?? [])
@@ -780,8 +663,7 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
     const canOpen =
       (isTextMaterial && Boolean(sessionId && readAttachment)) ||
       (isImage && !isUnavailable && previewItemIndex >= 0) ||
-      (isVideo && Boolean(sessionId && readAttachment)) ||
-      (isPdf && Boolean(sessionId && (readAttachment || readAttachmentRange)));
+      (isVideo && Boolean(sessionId && readAttachment));
     return (
       <Attachment
         key={`${attachment.ref}-${index}`}
@@ -815,9 +697,7 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
             ? () =>
                 isTextMaterial
                   ? void openTextPreview(attachment, attachmentIndices?.[index] ?? index)
-                  : isPdf
-                    ? void openPdfPreview(attachment, attachmentIndices?.[index] ?? index)
-                    : selectPreviewItem(previewItemIndex)
+                  : selectPreviewItem(previewItemIndex)
             : undefined
         }
         openLabel={
@@ -826,9 +706,7 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
               ? intl.formatMessage({ id: "chat.attachments.preview.openText" })
               : isVideo
                 ? previewVideoOpenLabel
-                : isPdf
-                  ? previewPdfOpenLabel
-                  : previewOpenLabel
+                : previewOpenLabel
             : undefined
         }
         title={isUnavailable ? previewUnavailableLabel : undefined}
@@ -934,15 +812,6 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
         }}
         open={previewOpen}
       />
-      <ChatMediaAttachmentPreviewDialog
-        attachment={pdfPreview}
-        open={pdfPreviewRef !== null}
-        loading={pdfPreviewLoading}
-        error={pdfPreviewError}
-        onOpenChange={(open) => {
-          if (!open) closePdfPreview();
-        }}
-      />
     </>
   );
 });
@@ -1010,7 +879,6 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
   const visibleText = parsedPrompt.visibleContent;
   const codeCommentContexts = parsedPrompt.codeComments;
   const webElementContexts = parsedPrompt.webElements;
-  const pptxElementReferences = parsedPrompt.pptxElements;
   const conversationSelections = parsedPrompt.conversationSelections;
   const hasAttachments = (row.attachments?.length ?? 0) > 0;
   const hasMediaAttachments =
@@ -1028,24 +896,16 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
   const hasContextReferences =
     codeCommentContexts.length > 0 ||
     webElementContexts.length > 0 ||
-    pptxElementReferences.length > 0 ||
     conversationSelections.length > 0;
   const hasAttachmentArea = hasAttachments || hasContextReferences;
   const hasAttachmentPills =
     hasFileAttachments ||
     codeCommentContexts.length > 0 ||
     webElementContexts.length > 0 ||
-    pptxElementReferences.length > 0 ||
     (!row.botGroupSource && conversationSelections.length > 0);
   // Bug 根因：旧逻辑只接受 schedule runId，导致用户点击「立即运行」产生的 manual run
   // 没有来源标识。两种合法 automation runId 都应展示；普通会话输入仍因解析失败而不展示。
   const isScheduledAutomationPrompt = parseAutomationRunId(row.sourceCommandId ?? "") !== null;
-  const openPptxElementReference = useOpenPptxElementReference({
-    workspacePath: context.workspacePath,
-    workspaceIdentity: context.workspaceIdentity,
-    remoteSessionId: context.workspaceRemoteSessionId,
-    onOpenCodeViewer: context.onOpenCodeViewer,
-  });
 
   useEffect(() => {
     if (!editing) {
@@ -1194,7 +1054,6 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
                     onRemove={handleRemoveEditAttachment}
                     sessionId={context.sessionId ?? undefined}
                     readAttachment={context.readAttachment}
-                    readAttachmentRange={context.readAttachmentRange}
                   />
                 ) : null}
                 {editContextCount > 0 ? (
@@ -1229,22 +1088,6 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
                         setEditPromptContexts((current) => ({
                           ...current,
                           webElements: [],
-                        }))
-                      }
-                    />
-                    <PptxElementReferenceChip
-                      references={editPromptContexts.pptxElements}
-                      onOpen={context.onOpenCodeViewer ? openPptxElementReference : undefined}
-                      onRemove={(id) =>
-                        setEditPromptContexts((current) => ({
-                          ...current,
-                          pptxElements: current.pptxElements.filter((item) => item.id !== id),
-                        }))
-                      }
-                      onRemoveAll={() =>
-                        setEditPromptContexts((current) => ({
-                          ...current,
-                          pptxElements: [],
                         }))
                       }
                     />
@@ -1365,7 +1208,6 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
                 rowId={row.rowId}
                 sessionId={context.sessionId ?? undefined}
                 readAttachment={context.readAttachment}
-                readAttachmentRange={context.readAttachmentRange}
               />
             </div>
           ) : null}
@@ -1385,16 +1227,10 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
                   rowId={row.rowId}
                   sessionId={context.sessionId ?? undefined}
                   readAttachment={context.readAttachment}
-                  readAttachmentRange={context.readAttachmentRange}
-                />
+                  />
               ) : null}
               <CodeCommentAttachmentChip comments={codeCommentContexts} contentAlign="end" />
               <WebElementContextAttachmentChip contexts={webElementContexts} contentAlign="end" />
-              <PptxElementReferenceChip
-                references={pptxElementReferences}
-                contentAlign="end"
-                onOpen={context.onOpenCodeViewer ? openPptxElementReference : undefined}
-              />
               {!row.botGroupSource ? (
                 <ConversationSelectionReferenceChip
                   references={conversationSelections}

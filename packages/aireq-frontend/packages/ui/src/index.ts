@@ -60,8 +60,6 @@ export {
   useRecentProjects,
   useConfirmDialog,
   useCredentials,
-  useGitRepository,
-  useGitActions,
 } from "./hooks/index.js";
 
 export { ZCodeIntlProvider, useZCodeIntl } from "./i18n/index.js";

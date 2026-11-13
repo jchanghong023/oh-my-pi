@@ -1,9 +1,4 @@
 import { ProjectDirectoryProvider } from "@/project-sidebar/ProjectDirectoryProvider.js";
-import {
-  RequestSecurityHost,
-  RequestSecurityWorkspaceBridge,
-  setRequestSecurityReporter,
-} from "@/request-security-edition/index.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LucideProvider, RefreshCw } from "lucide-react";
 import {
@@ -20,12 +15,8 @@ import {
   NativeWorkspaceSessionProvider,
   type NativeWorkspaceSessionScope,
 } from "@/hooks/useBackendBusinessAvailability.js";
-import { RemoteProjectPresentationProvider } from "@/hooks/RemoteProjectPresentationContext.js";
 import {
-  readComposerWorkspaceScope,
-  readV4ComposerDraft,
   persistV4ComposerDraft,
-  V4_DRAFT_SCOPE_ROOT,
 } from "@/v4/composer/composerDraftStore.js";
 import {
   captureV4ComposerDraftHandoff,
@@ -33,15 +24,12 @@ import {
 } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
 import { selectWorkbenchSession } from "@/v4/workbenchSessionPlacement.js";
 import { DirectoryBrowser } from "@/DirectoryBrowser.js";
-import { restorePersistedRemoteWorkspaceSessions } from "@/root/remoteWorkspaceSessionPersistence.js";
-import type { AppSettings } from "@zcode/shared";
-import { useTabPersistence, type WorkspacePersistenceGate } from "@/hooks/useTabPersistence.js";
 import { bindNativeWorkspaceServices, useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { DeferredSettingsPage as SettingsPage } from "@/root/DeferredSettingsPage.js";
 import { ProviderSetupScreen } from "@/ProviderSetupScreen.js";
 import { setDefaultFileDisplayBasePath } from "@/lib/fileDisplay.js";
-import { areWorkspaceFilePathsEqual } from "@/workspace-file-tree/model.js";
+import { areWorkspaceFilePathsEqual } from "@/lib/path.js";
 import {
   shouldEnableProviderAvailabilityLoginEntryGuard,
   shouldResolveProviderStartupState,
@@ -124,8 +112,7 @@ export function Root(props: RootProps) {
                     <AssistantCodeCommentFeatureProvider
                       enabled={props.assistantCodeCommentCardsEnabled}
                     >
-                        <RequestSecurityHost />
-                        <RootInner {...props} />
+                                        <RootInner {...props} />
                     </AssistantCodeCommentFeatureProvider>
                 </ProjectDirectoryProvider>
               </TabStoreProvider>
@@ -143,7 +130,6 @@ function RootInner({
   services,
   platform,
   initialWorkspaceAbsPath,
-  unavailableWorkspacePath,
   initialWorkspaceIdentity,
   initialWorkspacePurpose,
   initialTaskId,
@@ -154,22 +140,11 @@ function RootInner({
   nativeHostAvailable = false,
   initialDirectoryPath,
   onOpenProject,
-  restoreSession = true,
   supportsSettings = true,
   allowOpenWorkspace = true,
   preferDirectoryBrowser,
-  initialSidebarFileTreeOpen,
   initialWorkspaceLoadingFallback,
 }: RootProps) {
-  useEffect(() => {
-    setRequestSecurityReporter(platform);
-    return () => {
-      setRequestSecurityReporter(null);
-    };
-  }, [isDesktop, platform]);
-
-
-
   const { intl } = useZCodeIntl();
   const {
     settings: appSettings,
@@ -427,7 +402,6 @@ function RootInner({
   );
 
   const addTab = useTabStore((state) => state.addTab);
-  const activateTabByPath = useTabStore((state) => state.activateTabByPath);
   const tabStoreApi = useTabStoreApi();
   const refreshProviderState = useRootProviderStateRefresh(services);
   useRootProviderSettingsSnapshot(services);
@@ -477,11 +451,6 @@ function RootInner({
   const canRestoreWorkspaceSession =
     !isResolvingProviderStartupState &&
     !isStartupProviderLoginEntryOpen;
-  const workspacePersistenceGate = useMemo<WorkspacePersistenceGate>(
-    () => ({ canPersist: false, restoreFailed: false }),
-    [],
-  );
-
   useEffect(() => {
     // 跨 workspace 任务列表需要一个稳定的“本地/root services”入口。
     // 桌面端 renderer 启动时会注册一次，但 Web 和测试入口也会直接挂 Root；
@@ -495,13 +464,6 @@ function RootInner({
     setDirectoryBrowserOpen(true);
   }, []);
   const {
-    handleConnectRemote,
-    handleSelectRemoteProject,
-    handleCancelRemoteProject,
-    handleReconnectRemoteWorkspace,
-    reconnectingRemoteWorkspaceKeys,
-    remoteWorkspaceRecoveryByWorkspaceKey,
-    remoteWorkspaceErrorByWorkspaceKey,
     setWorkspaceActionError,
     startDraftInWorkspace,
     startNewTaskFromActiveWorkspace,
@@ -681,97 +643,9 @@ function RootInner({
     setWorkspaceActionError(null);
   }, [activeWorkspacePath, setWorkspaceActionError]);
 
-  const restorePersistedSession = useCallback(
-    async (settings: AppSettings) => {
-      const conversationWorkspace =
-        isDesktop && restoreSession && !initialWorkspaceIdentity
-          ? await services.fileService.ensureConversationWorkspace()
-          : undefined;
-      const restored = restorePersistedRemoteWorkspaceSessions({
-        settings,
-        tabStoreApi,
-        allowRemoteWorkspaceRestore: false,
-        unavailableWorkspacePath,
-        conversationWorkspacePath: conversationWorkspace?.path,
-        restoreMode:
-          isDesktop && restoreSession && !initialWorkspaceIdentity ? "active-first" : "all",
-      });
-      const restoreDraftIntents = () => {
-        // 桌面刷新通过历史 tab 恢复，不经过 initialWorkspace 入口。先恢复项目意图，
-        // 再打开首屏门禁，避免 Composer 按未归类范围读取并预热同目录的项目草稿。
-        for (const tab of tabStoreApi.getState().tabs) {
-          if (!isWorkspaceTab(tab)) continue;
-          const workspace = useZCodeSessionStore
-            .getState()
-            .getWorkspaceState(tab.workspacePath, tab.workspaceIdentity);
-          if (workspace.activeTaskId || workspace.draftProjectId !== undefined) continue;
-          const scope = readComposerWorkspaceScope(
-            tab.workspacePath,
-            tab.workspaceIdentity,
-            composerClientNamespace,
-          );
-          if (!scope) continue;
-          const draft = readV4ComposerDraft(
-            tab.workspacePath,
-            tab.workspaceIdentity,
-            V4_DRAFT_SCOPE_ROOT,
-            scope,
-          );
-          useZCodeSessionStore
-            .getState()
-            .startDraft(tab.workspacePath, undefined, tab.workspaceIdentity, {
-              projectId: scope.projectId,
-              taskGroupId: draft?.taskGroupId,
-            });
-          logger.info("[Root] 已恢复新建草稿归属", {
-            workspacePath: tab.workspacePath,
-            workspaceIdentity: tab.workspaceIdentity,
-            projectId: scope.projectId,
-          });
-        }
-      };
-      restoreDraftIntents();
-      return {
-        excludedRecentProjectPaths: conversationWorkspace ? [conversationWorkspace.path] : [],
-        ...(restored?.deferredRestore
-          ? {
-              deferredRestore: () => {
-                restored.deferredRestore!();
-                restoreDraftIntents();
-              },
-            }
-          : {}),
-      };
-    },
-    [
-      composerClientNamespace,
-      initialWorkspaceIdentity,
-      isDesktop,
-      restoreSession,
-      services.fileService,
-      tabStoreApi,
-      unavailableWorkspacePath,
-    ],
-  );
-
-  const { isRestoring, hasCompletedInitialRestore, hasCompletedFullRestore } = useTabPersistence({
-    settingService: supportsSettings ? services.settingService : undefined,
-    // 首次安装未连接账号时，provider 登录入口判定会晚于 workspace 恢复。
-    // 如果这里先恢复 workspace，ChatView mount 会触发草稿 session 预热并在登录页背后报错。
-    restoreSession: restoreSession && canRestoreWorkspaceSession,
-    persistSession: backendBusinessAvailable && restoreSession && canRestoreWorkspaceSession,
-    persistenceGate: workspacePersistenceGate,
-    restorePersistedSession,
-  });
-
-
-  // Bug 原因（2026-08-16 web 远控卡死）：官方版本请求安全校验应答方曾只随桌面正在展示的
-  // session pane 挂载，web 远控新建会话时桌面没有对应 pane、web 端无应答方，
-  // headers 请求永远滞留 pending，任务永久「工作中」。应答方必须常驻桌面窗口、
-  // 覆盖每个打开的 workspace tab，与展示状态解耦；Web 端保持零订阅，桌面仍是唯一权威。
-  const requestSecurityBridgeNode = isDesktop ? (
-    <RequestSecurityWorkspaceBridge workspaceTabs={windowWorkspaceTabs} />
-  ) : null;
+  // AIReq 是浏览器单工作区应用：不恢复桌面窗口 tabs，也不持久化窗口会话。
+  const isRestoring = false;
+  const hasCompletedInitialRestore = true;
 
   // 启动阻塞是桌面窗口保护期，手机 Web 远控在进入 Root 前已有配对/加载页。
   // Web 端继续使用该 gate 会在 workspace tab 注入前渲染空 RootShell，露出浏览器白底。
@@ -790,26 +664,14 @@ function RootInner({
     initialWorkspacePurpose,
     initialTaskId,
     initialTaskDraft,
-    // Bugfix: 系统右键/Service 冷启动传入 initialWorkspacePath 时，必须先恢复历史 tabs，
-    // 再把目标 workspace 合并并激活。否则先 addTab 会被 restoreTabs 整体替换掉；
-    // 直接禁用 restoreSession 又会让其他 workspace 全部消失。
     canBootstrapInitialWorkspace: canRestoreWorkspaceSession && hasCompletedInitialRestore,
     addTab,
     setIsBootstrappingInitialWorkspace,
-    platform,
-    activateTabByPath,
     startDraftInWorkspace,
     startNewTaskFromActiveWorkspace: nativeHostAvailable
       ? () => { void handleCreateTask(); }
       : startNewTaskFromActiveWorkspace,
     openWorkspace: handleOpenWorkspace,
-    openWorkspacePath: handleSelectProject,
-    setWorkspaceActionError,
-    allowOpenWorkspace,
-    isDesktop,
-    tabs,
-    hasCompletedFullTabRestore: hasCompletedFullRestore,
-    intl,
   });
 
 
@@ -988,8 +850,7 @@ function RootInner({
     return (
       <RootShell>
         {rootModelSelectionErrorNode}
-        {requestSecurityBridgeNode}
-        {directoryBrowserDialog}
+          {directoryBrowserDialog}
         {/* 修复原因：HTML 启动壳已经展示 ZCode SVG，但 React 接管 root 后旧壳会被整棵替换。
             之前阻塞恢复 tab / 初始 workspace 注入时重新渲染纯文字“加载中...”，所以启动被拆成两套 loading。
             这里复用同一套 SVG 启动画面，只把文案保留到 aria-label，保证视觉始终连续且不牺牲可访问性。 */}
@@ -1002,8 +863,7 @@ function RootInner({
     return (
       <RootShell>
         {rootModelSelectionErrorNode}
-        {requestSecurityBridgeNode}
-        {directoryBrowserDialog}
+          {directoryBrowserDialog}
         <ProviderSetupScreen onComplete={handleWelcomeScreenComplete} />
       </RootShell>
     );
@@ -1038,8 +898,7 @@ function RootInner({
     return (
       <RootShell>
         {rootModelSelectionErrorNode}
-        {requestSecurityBridgeNode}
-        {initialWorkspaceLoadingFallback}
+          {initialWorkspaceLoadingFallback}
         {directoryBrowserDialog}
       </RootShell>
     );
@@ -1057,14 +916,7 @@ function RootInner({
   return (
     <RootShell>
       {rootModelSelectionErrorNode}
-      {requestSecurityBridgeNode}
       {directoryBrowserDialog}
-              <RemoteProjectPresentationProvider
-                reconnectingKeys={reconnectingRemoteWorkspaceKeys}
-                errors={remoteWorkspaceErrorByWorkspaceKey}
-                recovery={remoteWorkspaceRecoveryByWorkspaceKey}
-                onReconnect={handleReconnectRemoteWorkspace}
-              >
               <NativeWorkspaceSessionProvider scope={nativeWorkspaceScope}>
               <RootWorkspaceContent
                 workspaceScopedServices={nativeScopedWorkspaceServices}
@@ -1073,13 +925,6 @@ function RootInner({
                 workspaceRemoteSessionId={workspaceShellRemoteSessionId}
                 activeWorkspacePath={activeWorkspacePath}
                 isSettingsTabActive={isSettingsTabActive}
-                onConnectRemote={handleConnectRemote}
-                onSelectRemoteProject={handleSelectRemoteProject}
-                onCancelRemoteProject={handleCancelRemoteProject}
-                onReconnectRemoteWorkspace={handleReconnectRemoteWorkspace}
-                reconnectingRemoteWorkspaceKeys={reconnectingRemoteWorkspaceKeys}
-                remoteWorkspaceRecoveryByWorkspaceKey={remoteWorkspaceRecoveryByWorkspaceKey}
-                remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
                 handleCreateTask={handleCreateTask}
                 handleCreateConversationTask={handleCreateConversationTask}
                 handleResolveConversationWorkspace={handleResolveConversationWorkspaceForShell}
@@ -1089,11 +934,9 @@ function RootInner({
                 allowOpenWorkspace={allowOpenWorkspace}
                 responsiveBrowserLayout={responsiveBrowserLayout}
                 backendBusinessAvailable={backendBusinessAvailable}
-                initialSidebarFileTreeOpen={initialSidebarFileTreeOpen}
                 isDesktop={isDesktop}
               />
               </NativeWorkspaceSessionProvider>
-              </RemoteProjectPresentationProvider>
         {onboardingDialog}
     </RootShell>
   );

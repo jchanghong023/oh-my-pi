@@ -29,7 +29,7 @@ import {
 import { joinFilePath } from "@/lib/path.js";
 import type { WorkflowArtifactSidePaneTab } from "@/lib/workspaceSidePane.js";
 import { useZCodeStoreWithDefault } from "@/store/StoreProvider.js";
-import { resolveTheme, type Theme } from "@/useTheme.js";
+import type { Theme } from "@/useTheme.js";
 import type { PaneWorkspaceScope } from "@/v4/paneLayoutStore.js";
 import type { SessionLease } from "@/v4/sessionDataLayer.js";
 import { useConversationProjection } from "@/v4/useConversationProjection.js";
@@ -313,7 +313,6 @@ function WorkflowArtifactView({
       <div className="min-h-0 flex-1">
         <WorkflowArtifactBody
           artifact={artifact}
-          blob={bytesState.blob}
           bytes={bytesState.bytes}
           error={bytesState.error}
           isLatestVersion={isLatestVersion}
@@ -321,7 +320,6 @@ function WorkflowArtifactView({
           loading={bytesState.loading}
           metadataLoading={metadataLoading}
           objectUrl={bytesState.objectUrl}
-          resolvedTheme={resolveTheme(theme)}
           theme={theme}
           version={version}
           {...(localSourcePath === undefined ? {} : { localSourcePath })}

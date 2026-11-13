@@ -65,7 +65,7 @@ test("Dev dynamic resource inputs select their consumers without selecting origi
 		"packages/aireq-frontend/preview/vite.config.ts",
 		"packages/aireq-frontend/packages/ui/src/styles.css",
 		"packages/aireq-frontend/packages/ui/src/workers/fileSearch.worker.ts",
-		"packages/aireq-frontend/packages/ui/vite/pdfJsCMapsPlugin.ts",
+		"packages/aireq-frontend/preview/shiki-langs-subset.ts",
 		"packages/aireq-frontend/packages/web/public/material-icons/dark/file.svg",
 		"packages/aireq-frontend/packages/client/src/index.ts",
 		"packages/aireq-frontend/package.json",

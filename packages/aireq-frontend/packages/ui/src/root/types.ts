@@ -80,7 +80,6 @@ export interface RootProps {
   /** 是否优先使用服务端目录浏览器，Web 普通模式不能依赖系统目录选择框 */
   preferDirectoryBrowser?: boolean;
   /** Initial responsive sidebar file-tree state. */
-  initialSidebarFileTreeOpen?: boolean;
   /** Loading content shown while the initial workspace is being injected. */
   initialWorkspaceLoadingFallback?: ReactNode;
   /** Assistant code-comment 卡片灰度；默认关闭，关闭时保留原始 directive。 */

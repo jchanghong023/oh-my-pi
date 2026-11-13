@@ -6,7 +6,7 @@ import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { getContainingDirectoryPath } from "@/lib/path.js";
 import { logger } from "@/logger.js";
-import { getSystemFileLocatorEditorId } from "@/workspace-file-tree/helpers.js";
+import { getSystemFileLocatorEditorId } from "@/lib/path.js";
 
 interface FileContextActionOptions {
   canOpenLocalFileManager?: boolean;

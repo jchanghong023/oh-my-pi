@@ -18,7 +18,7 @@ import {
 import { getLocalTtftObserver } from "@/v4/telemetry/local-ttft/contract.js";
 import { BotGroupDeliveryProvider } from "@/v4/BotGroupDeliveryAction.js";
 /* oxlint-disable eslint(max-lines) -- SessionPane 是单 pane 竖切的命令编排收口（订阅/发送/停止/fork/edit/retry/queue/slash 全集），与旧 ChatView 同粒度；HEAD 已超限（693 行计数），拆散命令组会打散 dispatchCommand/snapshotRef 的闭包纪律。 */
-import { useOptionalProjectDirectoryActions } from "@/project-sidebar/index.js";
+import { useOptionalProjectDirectoryActions } from "@/project-sidebar/ProjectDirectoryProvider.js";
 import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
 import {
   useCallback,
@@ -551,7 +551,6 @@ export function SessionPane({
     sendCommand,
     attachmentPut,
     attachmentRead,
-    attachmentReadRange,
     onRuntimeRestart,
     onRuntimeLifecycle,
     fileChanges,
@@ -2249,7 +2248,6 @@ export function SessionPane({
       applyFileRewind:
         runtimeReady && workspaceFileRewindEnabled ? handleApplyFileRewind : undefined,
       readAttachment: runtimeReady ? attachmentRead : undefined,
-      readAttachmentRange: runtimeReady ? attachmentReadRange : undefined,
     }),
     [
       workspacePath,
@@ -2311,8 +2309,7 @@ export function SessionPane({
       handlePreviewFileRewind,
       handleApplyFileRewind,
       attachmentRead,
-      attachmentReadRange,
-    ],
+      ],
   );
 
   // ── 草稿态 v4 draft session 预热（m5）──

@@ -4,7 +4,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin, UserConfig } from "vite";
-import { pdfJsCMapsPlugin } from "./packages/ui/vite/pdfJsCMapsPlugin.js";
 
 const root = import.meta.dirname;
 const packages = path.join(root, "packages");
@@ -28,6 +27,34 @@ function copiedFrontendPackages(): Plugin {
 		name: "copied-frontend-packages",
 		enforce: "pre",
 		async resolveId(source: string, importer: string | undefined) {
+			// @pierre/diffs 动态 import("shiki/langs") 取全量语言表；只暴露聊天/工具实际用到的语言。
+			if (source === "shiki/langs") return path.join(root, "preview/shiki-langs-subset.ts");
+			// shiki 根入口与 bundle-full 直接引用内部 langs-bundle-full；别名到同一子集，
+			// 避免只为拿到 bundledLanguages 就把全部语法动态块打进产物。
+			if (
+				source.startsWith("./langs-bundle-full-") &&
+				importer?.replace(/\\/g, "/").includes("/shiki/dist/")
+			)
+				return path.join(root, "preview/shiki-langs-subset.ts");
+			// @pierre/diffs 与 shiki/themes 会列出全部主题；只保留 UI 可选主题，其余回退。
+			if (source.startsWith("@shikijs/themes/")) {
+				const name = source.slice("@shikijs/themes/".length);
+				const supported = new Set([
+					"github-light",
+					"github-dark",
+					"vitesse-light",
+					"vitesse-dark",
+					"min-light",
+					"min-dark",
+					"github-light-high-contrast",
+					"github-dark-high-contrast",
+					"catppuccin-latte",
+					"catppuccin-mocha",
+				]);
+				return supported.has(name)
+					? path.join(root, "node_modules/@shikijs/themes/dist", `${name}.mjs`)
+					: path.join(root, "preview/shiki-theme-fallback.ts");
+			}
 			if (source.startsWith("#src/")) {
 				if (!importer) throw new Error(`Dev package-local import has no importer: ${source}`);
 				const relative = path.relative(packages, importer.split("?")[0]!);
@@ -131,9 +158,13 @@ export function createAIReqFrontendConfig(
 		root: entryRoot,
 		base: basePath,
 		publicDir: path.join(packages, "web/public"),
-		plugins: [mountedEntry, copiedFrontendPackages(), react(), tailwindcss(), pdfJsCMapsPlugin()],
+		plugins: [mountedEntry, copiedFrontendPackages(), react(), tailwindcss()],
 		resolve: {
 			alias: [
+				{
+					find: /^\.\/langs-bundle-full-.*\.mjs$/,
+					replacement: path.join(root, "preview/shiki-langs-subset.ts"),
+				},
 				{ find: "@zcode/ui/styles.css", replacement: path.join(packages, "ui/src/styles.css") },
 				{ find: "@", replacement: path.join(packages, "ui/src") },
 				{ find: /^tailwindcss$/, replacement: dependencyFile("tailwindcss", "index.css") },
@@ -146,7 +177,7 @@ export function createAIReqFrontendConfig(
 				{ find: "katex/dist/katex.min.css", replacement: dependencyFile("katex", "dist/katex.min.css") },
 				{ find: "@tailwindcss/typography", replacement: dependencyFile("@tailwindcss/typography", "src/index.js") },
 			],
-			dedupe: ["react", "react-dom"],
+			dedupe: ["react", "react-dom", "shiki", "@shikijs/core", "@shikijs/themes", "@shikijs/langs", "@shikijs/engine-oniguruma"],
 		},
 		optimizeDeps: {
 			rolldownOptions: {

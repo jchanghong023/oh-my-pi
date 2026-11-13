@@ -428,7 +428,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
   onSearchResultHighlightRequest?: (
     request: Omit<ChatSearchResultHighlightRequest, "requestId">,
   ) => void;
-  onOpenCodeViewer: (source: CodeViewerSource) => void;
+  onOpenCodeViewer?: (source: CodeViewerSource) => void;
 }) {
   const { fileService } = useServices();
   const { intl } = useZCodeIntl();
@@ -676,7 +676,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
   const selectFile = useCallback(
     (entry: WorkspaceFileEntry) => {
       rememberSearch("files");
-      onOpenCodeViewer({
+      onOpenCodeViewer?.({
         type: "file",
         title: entry.name,
         path: entry.path,
@@ -690,7 +690,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     (file: TaskChangedFileSummary) => {
       closeDialog();
       const relativePath = toWorkspaceRelativePath(workspaceAbsPath, file.path);
-      onOpenCodeViewer({
+      onOpenCodeViewer?.({
         type: "file",
         title: getPathLeaf(relativePath) || relativePath,
         path: file.path,
@@ -719,7 +719,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
 
   const shouldShowCommandSection = activeScope === "all" || activeScope === "commands";
   const shouldShowConversationSection = activeScope === "all" || activeScope === "conversations";
-  const shouldShowFileSection = activeScope === "all" || activeScope === "files";
+  const shouldShowFileSection = Boolean(onOpenCodeViewer) && (activeScope === "all" || activeScope === "files");
   const showHistory = !hasSearchQuery && historyEntries.length > 0;
 
   const renderMoreRow = (sectionId: CommandCenterSectionId, count: number) => {
@@ -746,7 +746,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     rows?: TaskChangedFileSummary[];
     showEmpty?: boolean;
   } = {}) => {
-    if (hasSearchQuery || (rows.length === 0 && !showEmpty)) {
+    if (!onOpenCodeViewer || hasSearchQuery || (rows.length === 0 && !showEmpty)) {
       return null;
     }
 
@@ -787,7 +787,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
     rows?: ZCodeTaskMeta[];
     showEmpty?: boolean;
   } = {}) => {
-    if (hasSearchQuery || (rows.length === 0 && !showEmpty)) {
+    if (!onOpenCodeViewer || hasSearchQuery || (rows.length === 0 && !showEmpty)) {
       return null;
     }
 
@@ -1040,13 +1040,15 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
             >
               <MessagesSquareIcon className="size-3" />
             </CommandCenterScopeButton>
-            <CommandCenterScopeButton
-              active={activeScope === "files"}
-              label={intl.formatMessage({ id: "commandCenter.scope.files" })}
-              onClick={() => setScope("files")}
-            >
-              <FileIcon className="size-3" />
-            </CommandCenterScopeButton>
+            {onOpenCodeViewer ? (
+              <CommandCenterScopeButton
+                active={activeScope === "files"}
+                label={intl.formatMessage({ id: "commandCenter.scope.files" })}
+                onClick={() => setScope("files")}
+              >
+                <FileIcon className="size-3" />
+              </CommandCenterScopeButton>
+            ) : null}
           </div>
         </div>
         <CommandList className={commandCenterListClassName}>

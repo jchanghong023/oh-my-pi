@@ -7,7 +7,7 @@ import type { SessionLifecycleSnapshot } from "@zcode/shared";
 import {
   WorkspaceHookPendingIndicator,
 } from "@/v4/WorkspaceHookPendingBanner.js";
-import { ComposerSubmissionPendingContext } from "@/project-sidebar/index.js";
+import { ComposerSubmissionPendingContext } from "@/project-sidebar/ComposerSubmissionPendingContext.js";
 /* oxlint-disable eslint(max-lines) -- composer 集中收口输入区 wiring（附件/草稿/历史/mention），拆分会打散收口粒度。 */
 import { useRemoteConversationAvailable } from "@/v4/RemoteConversationAvailability.js";
 import { getLocalTtftObserver } from "@/v4/telemetry/local-ttft/contract.js";
@@ -95,10 +95,6 @@ import {
 } from "@/components/ui/dialog.js";
 import { Spinner } from "@/components/ui/spinner.js";
 import { ImagePreviewDialog } from "@/components/ai-elements/image-preview-dialog.js";
-import {
-  ChatMediaAttachmentPreviewDialog,
-  type ChatMediaAttachmentPreviewTarget,
-} from "@/ChatMediaAttachmentPreviewDialog.js";
 import type { LexicalChatInputHandle } from "@/LexicalChatInput.js";
 import { ChatPromptEditor, type ComposerInputPreview } from "@/prompt-editor/ChatPromptEditor.js";
 import { usePromptEditorDragState } from "@/prompt-editor/usePromptEditorDragState.js";
@@ -174,9 +170,6 @@ import {
 } from "@/v4/composer/composerPromptContexts.js";
 import { useCodeCommentContexts } from "@/v4/composer/useCodeCommentContexts.js";
 import { useWebElementContexts } from "@/v4/composer/useWebElementContexts.js";
-import { usePptxElementReferences } from "@/v4/composer/usePptxElementReferences.js";
-import { PptxElementReferenceChip } from "@/v4/composer/PptxElementReferenceChip.js";
-import { useOpenPptxElementReference } from "@/v4/composer/useOpenPptxElementReference.js";
 import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import { useConversationSelectionReferences } from "@/v4/composer/useConversationSelectionReferences.js";
 import { ConversationBackgroundWorkTrigger } from "@/v4/composer/ConversationBackgroundWorkTrigger.js";
@@ -842,9 +835,6 @@ function ConversationComposerImpl({
   }, [dropTargetController, onDropTargetControllerChange]);
   const [attachmentPreviewIndex, setAttachmentPreviewIndex] = useState(0);
   const [attachmentPreviewOpen, setAttachmentPreviewOpen] = useState(false);
-  const [pdfAttachmentPreview, setPdfAttachmentPreview] =
-    useState<ChatMediaAttachmentPreviewTarget | null>(null);
-  const [pdfAttachmentPreviewOpen, setPdfAttachmentPreviewOpen] = useState(false);
   const attachmentPreviewTitle = intl.formatMessage({
     id: "chat.attachments.preview.open",
   });
@@ -864,24 +854,6 @@ function ConversationComposerImpl({
     // 写入网页上下文，避免权威删除成功后撞上 ACK 窗口内的新草稿。
     listenAddToChatEvents: listenAddToChatEvents && !disabled,
     scopeId: draftScopeId,
-  });
-  const {
-    references: pptxElementReferences,
-    hasReferences: hasPptxElementReferences,
-    removeReference: removePptxElementReference,
-    clearReferences: clearPptxElementReferences,
-  } = usePptxElementReferences({
-    workspacePath,
-    workspaceIdentity,
-    remoteSessionId,
-    listenAddToChatEvents: listenAddToChatEvents && !disabled,
-    scopeId: draftScopeId,
-  });
-  const openPptxElementReference = useOpenPptxElementReference({
-    workspacePath,
-    workspaceIdentity,
-    remoteSessionId,
-    onOpenCodeViewer,
   });
   const {
     references: conversationSelectionReferences,
@@ -1080,8 +1052,7 @@ function ConversationComposerImpl({
           attachmentsApi.attachments.length > 0 ||
           codeCommentContexts.length > 0 ||
           webElementContexts.length > 0 ||
-          pptxElementReferences.length > 0 ||
-          conversationSelectionReferences.length > 0,
+            conversationSelectionReferences.length > 0,
         inputApi: inputApiRef.current,
         request: composerRestoreRequest,
         requestFocus: requestComposerFocus,
@@ -1122,7 +1093,6 @@ function ConversationComposerImpl({
     sessionId,
     updateText,
     webElementContexts.length,
-    pptxElementReferences.length,
     workspaceKey,
   ]);
 
@@ -1392,14 +1362,12 @@ function ConversationComposerImpl({
     hasAttachments ||
     hasCodeCommentContexts ||
     hasWebElementContexts ||
-    hasPptxElementReferences ||
     hasConversationSelectionReferences;
   const hasComposerDraftContent =
     textPresence.raw ||
     hasAttachments ||
     hasCodeCommentContexts ||
     hasWebElementContexts ||
-    hasPptxElementReferences ||
     hasConversationSelectionReferences;
   useEffect(() => {
     onDraftStateChange?.({
@@ -1422,7 +1390,6 @@ function ConversationComposerImpl({
     !hasAttachments &&
     !hasCodeCommentContexts &&
     !hasWebElementContexts &&
-    !hasPptxElementReferences &&
     !hasConversationSelectionReferences;
   const canReload = recoveryAllowed && reloadText && remoteAvailable;
   const canSend =
@@ -1456,8 +1423,6 @@ function ConversationComposerImpl({
       const hasPendingCodeCommentContexts = currentCodeCommentContexts.length > 0;
       const currentWebElementContexts = webElementContexts;
       const hasPendingWebElementContexts = currentWebElementContexts.length > 0;
-      const currentPptxElementReferences = pptxElementReferences;
-      const hasPendingPptxElementReferences = currentPptxElementReferences.length > 0;
       const currentConversationSelections = conversationSelectionReferences;
       const hasPendingConversationSelections = currentConversationSelections.length > 0;
       // /reload 是本地操作，在模型配置、队列和消息历史处理之前截获；参数和附件不发给模型。
@@ -1504,9 +1469,9 @@ function ConversationComposerImpl({
         if (pendingRef.current || targetSelectionPendingRef.current || !remoteAvailable ||
             !submissionReady || runtimeBlocked || (!trimmed && !hasPendingAttachments &&
               !hasPendingCodeCommentContexts && !hasPendingWebElementContexts &&
-              !hasPendingPptxElementReferences && !hasPendingConversationSelections)) return;
+              !hasPendingConversationSelections)) return;
         if (hasPendingCodeCommentContexts || hasPendingWebElementContexts ||
-            hasPendingPptxElementReferences || hasPendingConversationSelections) {
+            hasPendingConversationSelections) {
           aireq.report(new Error("请先打开需求会话再发送引用上下文；正文和引用已保留。"));
           return;
         }
@@ -1529,7 +1494,6 @@ function ConversationComposerImpl({
           attachmentsApi.clearAttachments(submittedAttachmentIds);
           currentCodeCommentContexts.forEach(removeCodeCommentContext);
           currentWebElementContexts.forEach((context) => removeWebElementContext(context.id));
-          currentPptxElementReferences.forEach((reference) => removePptxElementReference(reference.id));
           currentConversationSelections.forEach((reference) => removeConversationSelectionReference(reference.id));
         } catch (cause) { aireq.report(cause); }
         finally { pendingRef.current = false; setPending(false); }
@@ -1540,7 +1504,6 @@ function ConversationComposerImpl({
           !hasPendingAttachments &&
           !hasPendingCodeCommentContexts &&
           !hasPendingWebElementContexts &&
-          !hasPendingPptxElementReferences &&
           !hasPendingConversationSelections) ||
         pendingRef.current ||
         targetSelectionPendingRef.current ||
@@ -1635,9 +1598,6 @@ function ConversationComposerImpl({
         attachmentsApi.clearAttachments(submittedAttachmentIds);
         currentCodeCommentContexts.forEach(removeCodeCommentContext);
         currentWebElementContexts.forEach((context) => removeWebElementContext(context.id));
-        currentPptxElementReferences.forEach((reference) =>
-          removePptxElementReference(reference.id),
-        );
         currentConversationSelections.forEach((reference) =>
           removeConversationSelectionReference(reference.id),
         );
@@ -1697,14 +1657,14 @@ function ConversationComposerImpl({
           codeComments: currentCodeCommentContexts,
           conversationSelections: [],
           webElements: currentWebElementContexts,
-          pptxElements: currentPptxElementReferences,
+          pptxElements: [],
         });
         const contextAttachmentCount =
           countComposerPromptContexts({
             codeComments: currentCodeCommentContexts,
             conversationSelections: currentConversationSelections,
             webElements: currentWebElementContexts,
-            pptxElements: currentPptxElementReferences,
+            pptxElements: [],
           });
         if (trimmed) {
           promptHistoryBeforeSend = readPromptHistoryEntries(workspacePath);
@@ -1819,15 +1779,13 @@ function ConversationComposerImpl({
       persistDraftNow,
       removeCodeCommentContext,
       removeConversationSelectionReference,
-      removePptxElementReference,
       removeWebElementContext,
       sessionId,
       snapshotDraftOfEditor,
       updateText,
       updateComposerContent,
       webElementContexts,
-      pptxElementReferences,
-      workspaceIdentity,
+        workspaceIdentity,
       workspacePath,
     ],
   );
@@ -2064,7 +2022,6 @@ function ConversationComposerImpl({
       composerAttachments.length === 0 &&
       codeCommentContexts.length === 0 &&
       webElementContexts.length === 0 &&
-      pptxElementReferences.length === 0 &&
       conversationSelectionReferences.length === 0
     ) {
       return null;
@@ -2090,7 +2047,6 @@ function ConversationComposerImpl({
               const canPreviewImageAttachment =
                 Boolean(attachment.objectUrl) && isImageChatComposerAttachment(attachment);
               const canPreviewVideoAttachment = Boolean(attachment.objectUrl) && isVideoAttachment;
-              const canPreviewPdfAttachment = Boolean(attachment.objectUrl) && isPdfAttachment;
               const fileDisplayDescriptor = resolveFileDisplayDescriptor(
                 attachment.localPath ?? attachment.filename,
               );
@@ -2155,10 +2111,8 @@ function ConversationComposerImpl({
                     url: attachment.objectUrl ?? "",
                   }}
                   onRemove={() => attachmentsApi.removeAttachment(attachment.id)}
-                  // 附件支持非图片格式，PDF 走独立 PdfViewer，
+                  // 附件支持非图片格式；PDF 预览引擎已移除，仅图片与视频进入发送前 gallery，
                   // 其他文件展示类型图标和文件名，避免 doc 等普通文件被当成图片渲染失败。
-                  // 图片与视频统一按添加顺序进入发送前 gallery，
-                  // 保证同一组媒体可以连续导航。
                   onOpen={
                     canPreviewImageAttachment || canPreviewVideoAttachment
                       ? () => {
@@ -2169,25 +2123,14 @@ function ConversationComposerImpl({
                           setAttachmentPreviewIndex(previewIndex);
                           setAttachmentPreviewOpen(true);
                         }
-                      : canPreviewPdfAttachment
-                        ? () => {
-                            setPdfAttachmentPreview({
-                              filename: attachment.filename,
-                              mediaType: "application/pdf",
-                              url: attachment.objectUrl,
-                            });
-                            setPdfAttachmentPreviewOpen(true);
-                          }
-                        : undefined
+                      : undefined
                   }
                   openLabel={
                     canPreviewVideoAttachment
                       ? videoAttachmentPreviewTitle
                       : canPreviewImageAttachment
                         ? attachmentPreviewTitle
-                        : canPreviewPdfAttachment
-                          ? intl.formatMessage({ id: "chat.attachments.preview.openPdf" })
-                          : undefined
+                        : undefined
                   }
                 >
                   <div
@@ -2337,7 +2280,6 @@ function ConversationComposerImpl({
         ) : null}
         {codeCommentContexts.length > 0 ||
         webElementContexts.length > 0 ||
-        pptxElementReferences.length > 0 ||
         conversationSelectionReferences.length > 0 ? (
           <div
             className="flex max-w-full flex-wrap items-center gap-2"
@@ -2352,12 +2294,6 @@ function ConversationComposerImpl({
               contexts={webElementContexts}
               onRemove={removeWebElementContext}
               onRemoveAll={clearWebElementContexts}
-            />
-            <PptxElementReferenceChip
-              references={pptxElementReferences}
-              onOpen={onOpenCodeViewer ? openPptxElementReference : undefined}
-              onRemove={removePptxElementReference}
-              onRemoveAll={clearPptxElementReferences}
             />
             <ConversationSelectionReferenceChip
               references={conversationSelectionReferences}
@@ -2374,7 +2310,6 @@ function ConversationComposerImpl({
     clearCodeCommentContexts,
     clearConversationSelectionReferences,
     clearWebElementContexts,
-    clearPptxElementReferences,
     codeCommentContexts,
     composerAttachments,
     composerMediaPreviewItems,
@@ -2384,12 +2319,9 @@ function ConversationComposerImpl({
     removeCodeCommentContext,
     removeConversationSelectionReference,
     removeWebElementContext,
-    removePptxElementReference,
     conversationSelectionReferences,
     webElementContexts,
-    pptxElementReferences,
     onOpenCodeViewer,
-    openPptxElementReference,
   ]);
 
   // 发送/停止控制簇（对齐旧 ChatViewComposer.submitControlNode 结构：
@@ -2707,7 +2639,7 @@ function ConversationComposerImpl({
         <AIReqNativePredictions target={nativeSurface.target} prediction={nativeSurface.snapshot?.prediction}
           draft={nativeDraft.scope === `${workspaceIdentity ?? workspacePath}:${sessionId ?? ""}` ? nativeDraft.text : ""}
           disabled={disabled || runtimeBlocked || pending || canStop || hasAttachments || hasCodeCommentContexts ||
-            hasWebElementContexts || hasPptxElementReferences || hasConversationSelectionReferences || isBlockedByInteraction || !sessionId}
+            hasWebElementContexts || hasConversationSelectionReferences || isBlockedByInteraction || !sessionId}
           onAction={nativeSurface.predictionAction} onInsert={insertNativePrediction} />
         <ChatPromptEditor
           inputAriaLabel={inputAriaLabel}
@@ -2734,8 +2666,7 @@ function ConversationComposerImpl({
             hasCodeCommentContexts ||
             hasAttachments ||
             hasWebElementContexts ||
-            hasPptxElementReferences ||
-            hasConversationSelectionReferences
+                    hasConversationSelectionReferences
           }
           enterSubmits={enterSubmits}
           onModifiedSubmit={modifiedEnterSubmits ? handleModifiedEditorSubmit : undefined}
@@ -2769,7 +2700,6 @@ function ConversationComposerImpl({
           onChange={handleEditorChange}
           onUserInputPresenceChange={handleUserInputPresenceChange}
           onSubmit={handleEditorSubmit}
-          onWhiteboardMentionSelected={attachmentsApi.handleWhiteboardMentionSelected}
           onPaste={attachmentsApi.handlePaste}
         />
         {attachmentsApi.attachmentError ? (
@@ -2784,14 +2714,6 @@ function ConversationComposerImpl({
         items={composerMediaPreviewItems}
         onOpenChange={setAttachmentPreviewOpen}
         open={attachmentPreviewOpen}
-      />
-      <ChatMediaAttachmentPreviewDialog
-        attachment={pdfAttachmentPreview}
-        open={pdfAttachmentPreviewOpen}
-        onOpenChange={(open) => {
-          setPdfAttachmentPreviewOpen(open);
-          if (!open) setPdfAttachmentPreview(null);
-        }}
       />
       <Dialog
         open={heldQueueConfirmation !== null}

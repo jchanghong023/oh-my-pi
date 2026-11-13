@@ -43,18 +43,12 @@ import {
   ProjectManagement,
 } from "@/project-sidebar/index.js";
 import { ModelProviderSection } from "@/settings/ModelProviderSection.js";
-// 浏览器控制、电脑控制、快捷键、插件、子智能体暂缓实现，只挂载静态页。
-// 不恢复原版功能组件的接口请求、插件初始化、权限检查、配置读写或事件订阅。
-import { DisplayOnlyResourcesSection } from "@/settings/DisplayOnlyResourcesSection.js";
 import { AutomationsSection } from "@/settings/AutomationsSection.js";
 import { PluginsSection } from "@/settings/PluginsSection.js";
 import { HooksSection } from "@/settings/HooksSection.js";
 import { WorkspaceFileSearchSection } from "@/settings/WorkspaceFileSearchSection.js";
 import { MemorySettingsSection } from "@/settings/MemorySettingsSection.js";
 import { PersonalizationSection } from "@/settings/PersonalizationSection.js";
-import { ComputerUseSection } from "@/settings/ComputerUseSection.js";
-import { BrowserSettingsSection } from "@/settings/BrowserSettingsSection.js";
-import { ShortcutSettingsSection } from "@/settings/ShortcutSettingsSection.js";
 import { SETTINGS_FRAME_CONTENT_CLASSNAME } from "@/settings/SettingsPageParts.js";
 import {
   SettingsBreadcrumbProvider,
@@ -557,12 +551,6 @@ export function SettingsPage({
                                 setUiFontSizePx(fontSizePx)
                               }
                             />
-                          ) : activeSection === "browser" ? (
-                            <BrowserSettingsSection />
-                          ) : activeSection === "computerUse" ? (
-                            <ComputerUseSection />
-                          ) : activeSection === "shortcuts" ? (
-                            <ShortcutSettingsSection isDesktop={Boolean(isDesktop)} />
                           ) : activeSection === "modelProvider" ? (
                             <ServiceProvider services={localHostServices}>
                               {/* 模型配置属于本机全局事实源；激活远端 workspace 时也不能注入远端 Host。 */}
@@ -629,10 +617,6 @@ export function SettingsPage({
                               />
                               <ArchiveManagement />
                             </div>
-                          ) : activeSection === "plugin" ? (
-                            <DisplayOnlyResourcesSection kind="plugin" />
-                          ) : activeSection === "subagents" ? (
-                            <DisplayOnlyResourcesSection kind="subagents" />
                           ) : activeSection === "automations" ? (
                             <AutomationsSection
                               workspacePath={activeWorkspacePath}

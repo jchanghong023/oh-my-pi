@@ -36,7 +36,6 @@ export function normalizePromptMentionDisplayLabel(
   } else if (
     (category === "files" ||
       category === "subagents" ||
-      category === "whiteboards" ||
       category === "plugins") &&
     displayLabel.startsWith("@")
   ) {

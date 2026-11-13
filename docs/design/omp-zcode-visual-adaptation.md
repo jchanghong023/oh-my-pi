@@ -98,7 +98,7 @@ WebGUI 继续使用现有任务导航历史；AIReq 将主页（自动化、Skil
 
 侧栏展开时固定三个按钮：侧栏收起、后退、前进；收起时固定四个：原生 ZCode Z 标志（点击展开，悬停显示侧栏展开图标）、后退、前进、新建。三个／四个入口由同一个 Toolbar 组件渲染，AIReq 正式需求标题栏也使用这套规则；WebGUI 新建会话，AIReq 新建需求提案，各自沿用已有权限及草稿行为。
 
-AIReq 与 WebGUI 设置页左上角复用官方 ZCodeStartupLogoBadge 的 titlebar 尺寸及静态 Z 标志，替换原 48px 空白占位。与官方设置页一致，此处为品牌标识；原“返回工作区”按钮及未保存草稿离开确认保持不变，不增加导航入口或绕过草稿保护。
+AIReq 设置页左上角复用官方 ZCodeStartupLogoBadge 的 titlebar 尺寸及静态 Z 标志，替换原 48px 空白占位。与官方设置页一致，此处为品牌标识；原“返回工作区”按钮及未保存草稿离开确认保持不变，不增加导航入口或绕过草稿保护。
 
 ## 正式需求与 Skill 设计的布局比例
 
@@ -107,24 +107,6 @@ AIReq 与 WebGUI 设置页左上角复用官方 ZCodeStartupLogoBadge 的 titleb
 正式需求优先保留表格，同时改善报告／Markdown 的阅读宽度：右栏初始占扣除导航后的内容区 30%，最小 320px、最大 45%，中间表格最小 400px；边界优先满足桌面可用空间的约束。采用原生分栏持久化，切换对象和重新打开沿用记录，不再通过动画 resize 强制恢复 380px。使用新的 v4 布局键建立比例默认值，原 v2／v3 存储不删除、不套用，避免旧 35% 记录覆盖新默认；之后的拖拽调整仍独立保存。
 
 Skill 设计维持 2:3 默认比例，改用原生可拖拽分栏：说明列默认 40%、最小 280px、最大 60%；对话／预览列默认 60%、最小 360px。复用原生键盘拖拽、主题及手柄，不另写拖拽逻辑，左右独立滚动；各页比例独立记忆，调整不触发发送、生成或保存技能。
-
-
-## 浏览器控制设置恢复（仅界面）
-
-WebGUI 与 AIReq 的“浏览器控制”设置按 `/workspace/ZCode` 的 ZCode 3.18.0 源码恢复，参考 `packages/ui/src/settings/BrowserSettingsSection.tsx`、`FileTreeHtmlOpenSetting.tsx` 和中文文案。两套前端均复用现有设置框架、Globe2 图标、SettingsGroupCard、SettingsRow、Switch 和 Button，不另写配色、卡片或布局。WebGUI 位于基础设置，AIReq 位于个人工具的外观之后。
-
-保留控制开关及 Chrome 登录状态导入卡片、打开方式、安全和浏览器数据分组。三个开关固定关闭且禁用，导入与两种清理按钮禁用；不接入插件、平台服务、设置保存、浏览器数据或任何后端，不提供成功提示。此为已裁剪设置页面的明确展示例外，不恢复内嵌浏览器工作区、Browser Use 或权限接口。
-
-本次仅修改文档与前端源码，未运行测试、构建、浏览器验证或生成发行资源，不代表后端能力和发行产物已完成。
-
-
-## 电脑控制与键盘快捷键恢复（仅界面）
-
-WebGUI 基础设置与 AIReq 个人工具均按“浏览器控制 → 电脑控制 → 键盘快捷键”排序，使用 ZCode 原有 Monitor／Keyboard 图标及设置框架。电脑控制参照官方 `ComputerUseSection.tsx` 的关闭状态，只展示两个关闭且禁用的开关，不引入权限查询、系统授权、Helper 或插件运行链。
-
-键盘快捷键沿用原表头、ShortcutBindingRow、键帽、作用域和按钮样式；从本地现有命令表展示源码默认键位，保留可见命令过滤，不读取用户配置。搜索框、组合键搜索、改键、清空与恢复默认均禁用，不注册键盘捕获或独占，也不修改实际快捷键。原有全局快捷键继续按既有方式运行；静态表不是当前用户生效配置。
-
-两页均只恢复前端展示，不调用设置服务、平台或后端。AIReq 原型与正式入口共用相同页面；本次仅修改文档与前端，未测试、构建、浏览器验证或生成发行资源。
 
 
 ## Skill 设计阅读与操作优化
@@ -226,17 +208,13 @@ Chromium151、1440×1000深色桌面实际截图并查看主页及设置页；�
 
 ## 两套前端同步核对主题与基础控件
 
-本轮延续上述外壳修复，将逐字节相同的官方DesktopWindowFrame同步到WebGUI主页和设置页；两套全页错误恢复壳也恢复官方外壳，区域错误边界保留原行为。两套styles.css的首个:root、@theme、.dark、.theme-zai-light、.theme-zai-dark五块均恢复固定官方原文，补齐此前裁掉的语音、空闲任务、上下文、终端引用链等变量，消除用直接值替代官方引用的覆写。这里只恢复视觉token，不恢复任何已裁剪产品能力。
+本轮延续上述外壳修复，将逐字节相同的官方DesktopWindowFrame同步到AIReq主页和设置页；全页错误恢复壳也恢复官方外壳，区域错误边界保留原行为。两套styles.css的首个:root、@theme、.dark、.theme-zai-light、.theme-zai-dark五块均恢复固定官方原文，补齐此前裁掉的语音、空闲任务、上下文、终端引用链等变量，消除用直接值替代官方引用的覆写。这里只恢复视觉token，不恢复任何已裁剪产品能力。
 
 对照官方50个基础组件文件（49个components/ui路径及MarkdownTable），每套本地48个UI文件中44个逐字节一致；4个差异为Worker、依赖及布局持久化适配，MarkdownTable另保留HTTP剪贴板、只读导出权限和预览尺寸行为。恢复两套Spinner和PPTX预览原生LoaderCircle图标，未另做基础组件。官方已退休Highspeed装饰的floating-particles不恢复。两份AssistantPreviewCards恢复原有独立bg-hover悬停层，修复后与官方原文相同；AIReq侧栏OMP名称恢复官方字重，删除需求弹窗改用官方text-ui-sm，预测候选及取消改用现有Button并保留原插入和焦点逻辑。
 
 共享组件另下载比对241份官方TSX，自有AIReq实际UI未发现额外硬编码色；mock演示源码中的色值、官方原有代码／图形专用尺寸不当作主题缺陷。WebGUI的useTheme与官方相同，AIReq只保留安全存储适配；浏览器根背景仍使用官方语义token。HTTP、Worker、权限、业务裁剪和个人配置语义不因视觉对齐改变。核对记录位于/workspace/work/primitive-audit/report.md、/workspace/work/zcode-platform-review/theme-token-audit.json及/workspace/work/shared-shell-audit/，不把这些源码核对称作全部界面逐像素验收。
 
 整合后两套前端生产构建通过（仅生成被忽略产物，未启动WebGUI），保留原有Office动态分包提示；宿主5903文件类型检查通过。AIReq在Chromium151、1440×1000深色桌面重新截图查看主页及设置页，外壳计算背景均为rgb(43,43,43)，正文面板继续使用官方背景；未运行测试套件，未核验Firefox、WebGUI运行画面或完整发行二进制。
-
-## 插件设置的只读目录
-
-AIReq 和 WebGUI 的插件设置由空态恢复为 ZCode 3.18.0 内置插件静态目录，复用 PluginStoreAvatar／PluginIcon、40px 图标、原生字阶与插件市场自适应网格。使用官方 `@container/plugin-store` 与 `@min-[40rem]/plugin-store:grid-cols-2`：内容区达到 640px 自动两列，否则一列，列间距 24px；随实际内容宽度及侧栏开合重排，名称和简介单行省略并保留完整悬停文本。条目来自固定官方提交 `b95ebaffeab641907b38652f45c1502bd762972d` 的公开 listing，静态展示名称、简介和数量，允许本地搜索；不调用市场、安装库存或后端。设计及交互视图使用同源本地图标，缺失图标保留原生兜底。所有修改、刷新、添加及浏览市场动作禁用，不恢复插件执行能力；子智能体保持原先纯展示空态。
 
 ## 六个主页入口的 UI／UX 与正式文案审查
 

@@ -2,9 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { PencilRuler } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog.js";
-import { decodeBase64ToArrayBuffer } from "@/lib/officeFilePreview.js";
 import { useOptionalAIReqDataSource } from "./data-source.js";
 import sketchHtml from "./sketch.html?raw";
+
+function decodeBase64ToArrayBuffer(dataBase64: string): ArrayBuffer {
+  const binary = atob(dataBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes.buffer;
+}
 
 interface AIReqSketchButtonProps {
   disabled: boolean;

@@ -1,29 +1,13 @@
 import { stageV4ComposerDraftAttachments } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
-import { readProjectSidebarView } from "@/project-sidebar/index.js";
+import { readProjectSidebarView } from "@/project-sidebar/view-preference.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  remoteHostIdFromWorkspaceIdentity,
-  type IPlatformService,
-  type ZCodeTaskClientMode,
-} from "@zcode/shared";
+import type { IPlatformService, ZCodeTaskClientMode } from "@zcode/shared";
 import type { IServiceAccessor } from "@zcode/services";
 import type { IntlInstance } from "@/i18n/IntlProvider.js";
 import type {
   CreateTaskOptions,
   CreateTaskRequest,
 } from "@/app-shell/types.js";
-import { useConnectRemote } from "@/hooks/usePlatform.js";
-import type { WorkspaceRemoteNavigationProps, RemoteWorkspaceRecoveryStatus } from "@/app-shell/types.js";
-import { attachRemoteProjectWorkspace } from "@/project-sidebar/remote-navigation.js";
-import {
-  bindRemoteWorkspaceIdentity,
-  bindRemoteWorkspacePath,
-  clearRemoteWorkspaceConnectionState,
-  getRemoteWorkspaceSession,
-  setRemoteWorkspaceConnectionState,
-  unregisterRemoteWorkspaceSession,
-  useRemoteWorkspaceSessionStore,
-} from "@/store/remoteWorkspaceSessionStore.js";
 import { isWorkspaceTab } from "@/store/tabStore.js";
 import { isRendererReloadNavigation } from "@/lib/rendererNavigation.js";
 import { logger } from "@/logger.js";
@@ -119,203 +103,6 @@ export function useRootWorkspaceActions({
 }) {
   const navigationSequence = useRef(0);
   const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null);
-  const handleConnectRemote = useConnectRemote();
-  const [remoteWorkspaceRecoveryByWorkspaceKey, setRemoteWorkspaceRecovery] = useState<
-    Record<string, RemoteWorkspaceRecoveryStatus>
-  >({});
-  const [remoteWorkspaceErrorByWorkspaceKey, setRemoteWorkspaceErrors] = useState<
-    Record<string, string>
-  >({});
-  const reconnectingRemoteWorkspaceKeys = useMemo(
-    () => Object.keys(remoteWorkspaceRecoveryByWorkspaceKey),
-    [remoteWorkspaceRecoveryByWorkspaceKey],
-  );
-  const reconnectFlights = useRef(new Map<string, Promise<void>>());
-  const clearRemoteRecovery = useCallback((workspaceKey: string) => {
-    clearRemoteWorkspaceConnectionState(workspaceKey);
-    setRemoteWorkspaceRecovery((current) => {
-      const next = { ...current };
-      delete next[workspaceKey];
-      return next;
-    });
-    setRemoteWorkspaceErrors((current) => {
-      const next = { ...current };
-      delete next[workspaceKey];
-      return next;
-    });
-  }, []);
-  const handleCancelRemoteProject = useCallback(async (sessionId: string) => {
-    try {
-      await platform.disposeRemoteSession(sessionId);
-    } finally {
-      unregisterRemoteWorkspaceSession(sessionId);
-    }
-  }, [platform]);
-  const handleSelectRemoteProject = useCallback<
-    WorkspaceRemoteNavigationProps["onSelectRemoteProject"]
-  >(async (sessionId, path, localWorkspacePath, preparedWorkspaceIdentity, isCurrent) => {
-    const assertCurrent = async () => {
-      if (isCurrent && !(await isCurrent())) throw new Error("project.navigation-cancelled");
-    };
-    await assertCurrent();
-    const session = getRemoteWorkspaceSession(sessionId);
-    if (!session) throw new Error(`Remote workspace session not found: ${sessionId}`);
-    const canonicalPath = await session.services.fileService.resolvePath({ path });
-    await assertCurrent();
-    const previousTab = tabStoreApi.getState().tabs.find(
-      (tab) => isWorkspaceTab(tab) && tab.workspacePath === path &&
-        tab.workspaceIdentity === preparedWorkspaceIdentity,
-    );
-    const workspacePurpose =
-      (previousTab && isWorkspaceTab(previousTab) ? previousTab.workspacePurpose : undefined) ??
-      session.workspacePurpose ?? "project";
-    const binding = await platform.bindRemoteWorkspaceSessionContext?.({
-      remoteSessionId: sessionId,
-      workspacePath: canonicalPath,
-      workspaceIdentity: preparedWorkspaceIdentity,
-      workspacePurpose,
-    });
-    await assertCurrent();
-    // Binding replaces the transport; never keep the pre-bind service accessor.
-    const bound = getRemoteWorkspaceSession(sessionId);
-    const workspaceIdentity = binding?.workspaceIdentity?.trim() || bound?.workspaceIdentity?.trim();
-    if (!bound || !workspaceIdentity)
-      throw new Error(`Remote workspace bind did not return an authoritative identity: ${sessionId}`);
-    const workspacePath = binding?.workspacePath ?? bound.workspacePath ?? canonicalPath;
-    bindRemoteWorkspaceIdentity(workspaceIdentity, sessionId);
-    bindRemoteWorkspacePath(workspacePath, sessionId);
-    tabStoreApi.getState().ensureWorkspaceTab(workspacePath, {
-      remoteSessionId: sessionId,
-      workspaceIdentity,
-      previousWorkspaceIdentity: binding?.previousWorkspaceIdentity,
-      remoteTarget: bound.target ?? session.target,
-      workspacePurpose: binding?.workspacePurpose ?? bound.workspacePurpose ?? workspacePurpose,
-      localWorkspacePath,
-    });
-    clearRemoteRecovery(workspaceIdentity);
-  }, [clearRemoteRecovery, platform, tabStoreApi]);
-  const handleReconnectRemoteWorkspace = useCallback((workspaceKey: string): Promise<void> => {
-    const running = reconnectFlights.current.get(workspaceKey);
-    if (running) return running;
-    const reconnect = async () => {
-      const tab = tabStoreApi.getState().tabs.find(
-        (entry) => isWorkspaceTab(entry) &&
-          (entry.workspaceIdentity?.trim() || entry.workspacePath) === workspaceKey,
-      );
-      if (!tab || !isWorkspaceTab(tab) || !tab.workspaceIdentity)
-        throw new Error(`Remote workspace not found: ${workspaceKey}`);
-      const hostId = remoteHostIdFromWorkspaceIdentity(tab.workspaceIdentity);
-      const directory = services.windowProjectDirectory ?? services;
-      const remoteService = directory.remoteProjectService;
-      if (!hostId || !remoteService) throw new Error("project.connection-unavailable");
-      const isCurrent = () => tabStoreApi.getState().tabs.some(
-        (entry) => isWorkspaceTab(entry) && entry.id === tab.id &&
-          entry.workspaceIdentity === tab.workspaceIdentity,
-      );
-      setRemoteWorkspaceRecovery((current) => ({ ...current, [workspaceKey]: { mode: "manual" } }));
-      setRemoteWorkspaceConnectionState(workspaceKey, "reconnecting");
-      try {
-        await attachRemoteProjectWorkspace({
-          hostId,
-          workspacePath: tab.workspacePath,
-          workspaceIdentity: tab.workspaceIdentity,
-          remoteService,
-          isCurrent,
-          findSession: (identity) => Object.values(useRemoteWorkspaceSessionStore.getState().sessionsById)
-            .find((session) => session.workspaceIdentity === identity),
-          connect: handleConnectRemote,
-          bind: (sessionId, path, guard) =>
-            handleSelectRemoteProject(sessionId, path, tab.localWorkspacePath, tab.workspaceIdentity, guard),
-          cancel: handleCancelRemoteProject,
-        });
-        clearRemoteRecovery(workspaceKey);
-      } catch (error) {
-        setRemoteWorkspaceConnectionState(workspaceKey, "disconnected");
-        setRemoteWorkspaceErrors((current) => ({
-          ...current,
-          [workspaceKey]: error instanceof Error ? error.message : String(error),
-        }));
-        throw error;
-      } finally {
-        setRemoteWorkspaceRecovery((current) => {
-          const next = { ...current };
-          delete next[workspaceKey];
-          return next;
-        });
-      }
-    };
-    const flight = reconnect().finally(() => reconnectFlights.current.delete(workspaceKey));
-    reconnectFlights.current.set(workspaceKey, flight);
-    return flight;
-  }, [clearRemoteRecovery, handleCancelRemoteProject, handleConnectRemote, handleSelectRemoteProject, services, tabStoreApi]);
-
-  useEffect(() => {
-    const stopClosed = platform.onRemoteSessionClosed((event) => {
-      const affected = tabStoreApi.getState().tabs.filter(
-        (tab) => isWorkspaceTab(tab) && tab.remoteSessionId === event.sessionId,
-      );
-      unregisterRemoteWorkspaceSession(event.sessionId);
-      if (!event.recoverable) tabStoreApi.setState((state) => ({
-        tabs: state.tabs.map((tab) =>
-          isWorkspaceTab(tab) && tab.remoteSessionId === event.sessionId
-            ? { ...tab, remoteSessionId: undefined }
-            : tab,
-        ),
-      }));
-      for (const tab of affected) {
-        if (!isWorkspaceTab(tab)) continue;
-        const key = tab.workspaceIdentity?.trim() || tab.workspacePath;
-        setRemoteWorkspaceConnectionState(key, event.recoverable ? "reconnecting" : "disconnected");
-        setRemoteWorkspaceRecovery((current) => {
-          const next = { ...current };
-          if (event.recoverable) next[key] = {
-            mode: "automatic", attempt: event.recoveryAttempt, limit: event.recoveryLimit,
-          };
-          else delete next[key];
-          return next;
-        });
-        if (event.recoverable) continue;
-        const message = event.recoveryBudgetExhausted
-          ? intl.formatMessage({ id: "remote.error.recoveryBudgetExhausted" }, {
-              attempt: event.recoveryAttempt ?? "?", limit: event.recoveryLimit ?? "?",
-            })
-          : event.error || event.reasonCode ||
-            ((event.exitCode != null && event.exitCode !== 0) || event.signal
-              ? intl.formatMessage({ id: "remote.error.connectionClosed" })
-              : undefined);
-        setRemoteWorkspaceErrors((current) => {
-          const next = { ...current };
-          if (message) next[key] = message;
-          else delete next[key];
-          return next;
-        });
-      }
-    });
-    const stopReconnected = platform.onRemoteSessionReconnected?.((event) => {
-      const tab = tabStoreApi.getState().tabs.find(
-        (entry) => isWorkspaceTab(entry) &&
-          entry.workspacePath === event.workspacePath &&
-          entry.workspaceIdentity === event.workspaceIdentity &&
-          (!entry.remoteSessionId || entry.remoteSessionId === event.previousSessionId),
-      );
-      if (!tab || !isWorkspaceTab(tab)) return;
-      unregisterRemoteWorkspaceSession(event.previousSessionId);
-      tabStoreApi.getState().ensureWorkspaceTab(event.workspacePath, {
-        remoteSessionId: event.sessionId,
-        workspaceIdentity: event.workspaceIdentity,
-        previousWorkspaceIdentity: tab.workspaceIdentity,
-      });
-      bindRemoteWorkspaceIdentity(event.workspaceIdentity, event.sessionId);
-      bindRemoteWorkspacePath(event.workspacePath, event.sessionId);
-      clearRemoteRecovery(tab.workspaceIdentity?.trim() || tab.workspacePath);
-      clearRemoteRecovery(event.workspaceIdentity);
-    });
-    return () => {
-      stopClosed();
-      stopReconnected?.();
-    };
-  }, [clearRemoteRecovery, intl, platform, tabStoreApi]);
-
   useEffect(() => {
     useWorkbenchGroupStore.getState().configureClientMode(workbenchGroupClientMode);
     if (workbenchGroupClientMode === "desktop-continuous" && !isRendererReloadNavigation()) {
@@ -795,13 +582,6 @@ export function useRootWorkspaceActions({
   }, [activeWorkspaceIdentity, activeWorkspacePath, tabStoreApi]);
 
   return {
-    handleConnectRemote,
-    handleSelectRemoteProject,
-    handleCancelRemoteProject,
-    handleReconnectRemoteWorkspace,
-    reconnectingRemoteWorkspaceKeys,
-    remoteWorkspaceRecoveryByWorkspaceKey,
-    remoteWorkspaceErrorByWorkspaceKey,
     workspaceActionError,
     setWorkspaceActionError,
     startDraftInWorkspace,
