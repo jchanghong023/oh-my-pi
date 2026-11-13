@@ -100,7 +100,7 @@ OMP MUST 通过 `omp superpowers <relative-script> [args...]` 提供包内技能
 
 #### Scenario: AIReq 使用 OpenSpec
 - **WHEN** AIReq 新建提案或分析正式需求进度
-- **THEN** 提案先在固定临时目录生成 openspec/changes/<change-id>/proposal.md、specs/<capability>/spec.md，以及同目录的 design.md 与 sr-dependencies.json 两个方案产物；正式需求读取仓库中的实际需求、JSON 依赖和代码版本，旧 docs-zh-CN/requirements、docs/requirements 或 requirements 可只读参考，不是并列权威、不要求存在
+- **THEN** 提案在所属 OMP 项目的固定 dir 下生成 openspec/changes/<change-id>/proposal.md、specs/<capability>/spec.md，以及同目录的 design.md 与 sr-dependencies.json 两个方案产物；正式需求读取仓库中的实际需求、JSON 依赖和代码版本，旧 docs-zh-CN/requirements、docs/requirements 或 requirements 可只读参考，不是并列权威、不要求存在
 
 #### Scenario: 普通 OMP 资料探测
 - **WHEN** 普通 OMP 独立文档流程沿用旧 Markdown 目录探测
@@ -270,3 +270,8 @@ AIReq MUST 根据代码证据报告 SR 实现百分比、遗漏、问题、不�
 - **WHEN** 材料经人工确认，平台已创建分支并提交推送
 - **THEN** 使用公司 offline 内网已实测可用的 Git API 自动创建 MR、自动关联其编号和 URL，人工评审并合并；后台定时查询 MR、核验默认分支中的实际合入与完整材料后转正
 - **AND** 同一候选复用 MR，MR 创建／查询失败或关闭未合入不误转正；不引入自动合并、编码或验收流水线。本轮只更新需求文档与内存原型，不接真实 API，不运行测试
+
+
+### Requirement: 固定项目目录与原生会话引用
+
+提案的业务需求、独立评审 A／B／C、综合评审和技术方案 MUST 使用同一 OMP 项目 dir，各自会话 ID 由 OMP 提供，AIReq 按 IR、Agent 和轮次保存引用。切换 IR／Agent 不切换 dir，不新建 workspace 或重新连接；不同 IR 的文件以 change-id 区分。需求入库是确认、分支、MR 和后台核验的状态流程，不创建独立 Agent 会话。完整会话归属与场景见 [aireq-requirement-intake](../aireq-requirement-intake/spec.md#requirement-omp-按项目维护会话aireq-记录-ir-引用)。

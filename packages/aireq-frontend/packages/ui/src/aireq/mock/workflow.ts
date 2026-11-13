@@ -52,7 +52,7 @@ function group(projectId: string, id: string, title: string, rows: AIReqSystemRe
   const requirementsSession = sessionRef(projectId, id, "requirements", undefined,
     projectId === "demo-aurora" && id === "ir-auth" ? "demo-requirements" : undefined);
   return { id, projectId, releaseId: PROTOTYPE_RELEASE_ID, title, documentPath: `${prototypeChangeRoot(id)}/proposal.md`,
-    ...(draft ? { proposalLocation: prototypeProposalLocation(projectId, id, proposerId), proposalStage: "requirements" as const, proposalRound: 1 } : {
+    ...(draft ? { proposalLocation: prototypeProposalLocation(projectId, proposerId), proposalStage: "requirements" as const, proposalRound: 1 } : {
       proposalRound: 1, proposalSolution: { path: `${prototypeChangeRoot(id)}/design.md`, employeeId: "j00808874", generatedAt: createdAt, round: 1, valid: true, requirementsDigest: digest },
     }),
     origin: "local", status: draft ? "draft" : rows.some(row => row.startedAt) ? "frozen" : "formal", revision: 1, srIds: rows.map(row => row.id), files,
@@ -592,7 +592,7 @@ export function applyPrototypeAction(action: AIReqAction, selection: AIReqSelect
       proposal.developerHandoff = undefined; proposal.developerAcceptance = undefined;
       if (proposal.proposalSolution) proposal.proposalSolution.valid = false;
       state.materials.filter(item => item.projectId === projectId && item.irId === irId && item.kind === "solution").forEach(item => { item.valid = false; });
-      proposal.proposalLocation ??= prototypeProposalLocation(projectId, proposal.id, getEmployeeId());
+      proposal.proposalLocation ??= prototypeProposalLocation(projectId, getEmployeeId());
       const session = sessionRef(projectId, proposal.id, "requirements", undefined, undefined, proposal.proposalRound);
       proposal.sessions.push(session); state.sessions.push(session);
       state.groups = state.groups.filter(item => item.projectId !== projectId || item.id !== irId);

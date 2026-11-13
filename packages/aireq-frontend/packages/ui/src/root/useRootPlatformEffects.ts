@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useAIReq } from "@/aireq/AIReqContext.js";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import type { CreateTaskOptions } from "@/app-shell/types.js";
 import type { IPlatformService, ZCodeTaskClientMode, WorkspacePurpose } from "@zcode/shared";
@@ -71,6 +72,23 @@ export function useRootPlatformEffects({
 }) {
   const composerClientNamespace = useComposerClientNamespace();
   const didBootstrapInitialWorkspaceRef = useRef(false);
+  const aireq = useAIReq();
+  const aiReqTargetRef = useRef("");
+  const aiReqWorkspaceRef = useRef(JSON.stringify([initialWorkspaceIdentity, initialWorkspaceAbsPath]));
+  useLayoutEffect(() => {
+    if (!aireq?.selectionReady || !canBootstrapInitialWorkspace || !didBootstrapInitialWorkspaceRef.current || !initialWorkspaceAbsPath) return;
+    const target = JSON.stringify([initialWorkspaceAbsPath, initialWorkspaceIdentity, initialTaskId]);
+    if (aiReqTargetRef.current === target) return;
+    aiReqTargetRef.current = target;
+    // 同项目提案共用 dir，只更新 OMP 原生活跃会话；不为 IR 再建 tab 或切目录。
+    const previous = aiReqWorkspaceRef.current;
+    if (previous !== JSON.stringify([initialWorkspaceIdentity, initialWorkspaceAbsPath])) {
+      addTab(initialWorkspaceAbsPath, { workspaceIdentity: initialWorkspaceIdentity });
+      aiReqWorkspaceRef.current = JSON.stringify([initialWorkspaceIdentity, initialWorkspaceAbsPath]);
+    }
+    useZCodeSessionStore.getState().setActiveTaskId(initialWorkspaceAbsPath, initialTaskId ?? null, initialWorkspaceIdentity);
+  }, [aireq?.selectionReady, canBootstrapInitialWorkspace, initialWorkspaceAbsPath, initialWorkspaceIdentity, initialTaskId, addTab]);
+
 
   useEffect(() => {
     if (!canBootstrapInitialWorkspace || didBootstrapInitialWorkspaceRef.current) {

@@ -14,7 +14,8 @@ export function derivePrototypeProposalPrHandoff(input: AIReqPrHandoffInput): AI
  const reviewBlocker = requirementsReviewBlocker(group);
  if (reviewBlocker) blockers.push(reviewBlocker);
  if (!project || project.id !== group.projectId || !project.repositoryUrl || !project.defaultBranch) blockers.push("请先配置提案所属项目的 Git 仓库和默认分支。");
- if (!sourceDirectory) blockers.push("提案临时工作区记录缺失。");
+ if (!sourceDirectory) blockers.push("提案所属 OMP 项目目录记录缺失。");
+ else if (project && sourceDirectory !== project.root) blockers.push("提案记录的 OMP 项目目录与所属项目不匹配。");
  if (scenario === "wrong-repository") blockers.push("目标仓库与提案所属项目不匹配，不能推送。");
  if (!hasCurrentProposalSolution(group) || scenario === "stale-version") blockers.push("请先完成当前需求版本的方案设计，再创建提案分支并提交推送。");
  if (scenario === "change-conflict") blockers.push(`目标仓库存在同名 ${changeRoot}，不能覆盖其他提案。`);

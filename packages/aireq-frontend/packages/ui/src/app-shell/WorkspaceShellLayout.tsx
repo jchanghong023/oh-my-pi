@@ -109,7 +109,6 @@ import {
 import type { WorkspaceShellLayoutProps } from "@/app-shell/types.js";
 import { isWorkspaceTab } from "@/store/tabStore.js";
 import { useTabStore, useTabStoreApi } from "@/store/TabStoreProvider.js";
-import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 
 const MOBILE_VIEWPORT_QUERY = "(max-width: 767px)";
 const WORKSPACE_SIDEBAR_DEFAULT_WIDTH_PX = 264;
@@ -341,15 +340,12 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const aiReqGroup = [...(aireq?.view?.groups ?? []), ...(aireq?.view?.drafts ?? [])].find(item => item.id === aireq?.selection.irId);
   const aiReqProposalSr = Boolean(aireq?.selection.srId && aireq.view?.drafts.some(item => item.id === aireq.selection.irId));
   const aiReqProposalHistory = !!aireq && !!aiReqGroup && !!aireq.view?.drafts.some(item => item.id === aiReqGroup.id) && proposalViewedIndex(aiReqGroup, aireq.selection) !== proposalProgressIndex(aiReqGroup, aireq.selection);
-  const aiReqOwnershipReadOnlyReason = aiReqSource ? conversationReadOnlyReason(aireq?.view, aireq?.selection ?? {}, aiReqSource.capabilities) : undefined;
+  const aiReqTargetWorkspace = aireq && aiReqSource ? aiReqSource.resolveWorkspace(aireq.view, aireq.selection) : undefined;
+  const aiReqSwitching = !!aireq && (!aireq.selectionReady || aiReqTargetWorkspace?.path !== workspaceAbsPath || aiReqTargetWorkspace?.identity !== workspaceIdentity || (!!aireq.session && aireq.session.sessionId !== activeTaskId));
+  const aiReqOwnershipReadOnlyReason = aiReqSwitching ? "正在切换需求，请等待当前会话就绪。" : aiReqSource ? conversationReadOnlyReason(aireq?.view, aireq?.selection ?? {}, aiReqSource.capabilities) : undefined;
   const aiReqFrozen = !!aireq && !aireq.selection.irAcceptance && !aireq.selection.srId && Boolean(aiReqGroup?.freeze);
   const aiReqEmpty = Boolean(aireq && !aireq.selection.freeSessionId && (!aireq.selection.irId || (!aireq.session && aiReqSr?.status !== "pending")));
   const aiReqFormalMode = Boolean(aireq?.selection.formalView || aireq?.view?.groups.some(group => group.id === aireq?.selection.irId));
-  const [formalNavigationOpen, setFormalNavigationOpen] = useState(false);
-  // 自动化只切换主视图，不卸载工作台；离开时清除临时展开状态，返回正式需求才会默认收起。
-  useEffect(() => {
-    if (aiReqFormalMode && workspaceMainView !== "chat") setFormalNavigationOpen(false);
-  }, [aiReqFormalMode, workspaceMainView]);
   const { intl } = useZCodeIntl();
   const nativeHostAvailable = useNativeHostAvailable();
   const platform = usePlatform();
@@ -364,12 +360,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const [draftHeaderDropTargetController, setDraftHeaderDropTargetController] =
     useState<ConversationDropTargetController | null>(null);
   const workspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
-  const reviewSessionId = aireq?.session?.role === "reviewer" ? aireq.session.sessionId : undefined;
-  useLayoutEffect(() => {
-    if (!reviewSessionId || activeTaskId === reviewSessionId) return;
-    // 同轮评审只更新原生活跃会话；侧栏、材料、滚动和分栏不随头像重挂。
-    useZCodeSessionStore.getState().setActiveTaskId(workspaceAbsPath, reviewSessionId, workspaceIdentity);
-  }, [activeTaskId, reviewSessionId, workspaceAbsPath, workspaceIdentity]);
   const fileTreeOpenRequestIdRef = useRef(0);
   const [fileTreeOpenRequest, setFileTreeOpenRequest] = useState<SidebarFileTreeOpenRequest | null>(
     () =>
@@ -662,15 +652,15 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const fullViewConversationTitle =
     activeTaskTitle?.trim() || intl.formatMessage({ id: "taskList.untitled" });
   // 完整视图保留左侧任务列表与左上角按钮组，侧栏显隐只由用户开关决定。
-  const isSidebarPanelVisible = aiReqFormalMode && workspaceMainView === "chat" ? formalNavigationOpen : isSidebarVisible;
+  const isSidebarPanelVisible = isSidebarVisible;
   const sidebarNavigation = {
     expanded: isSidebarPanelVisible,
-    onToggle: () => { if (aiReqFormalMode && workspaceMainView === "chat") setFormalNavigationOpen(open => !open); else handleToggleSidebar(); },
+    onToggle: handleToggleSidebar,
     canGoBack: aireq ? aireq.canGoBack : canTaskNavBack,
     canGoForward: aireq ? aireq.canGoForward : canTaskNavForward,
     onGoBack: aireq ? aireq.goBack : handleTaskNavBack,
     onGoForward: aireq ? aireq.goForward : handleTaskNavForward,
-    toggleShortcut: aiReqFormalMode && workspaceMainView === "chat" ? undefined : toggleSidebarShortcutLabel,
+    toggleShortcut: toggleSidebarShortcutLabel,
     backShortcut: goBackShortcutLabel,
     forwardShortcut: goForwardShortcutLabel,
     onCreate: () => { if (aireq) aireq.startProposalDraft(); else handleCreateTaskInChat(); },
@@ -1964,7 +1954,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
         }
         chatOverlay={workspaceMainView === "chat" ? renderChatFindDialog() : undefined}
         chatContent={
-          aireq && (workspaceMainView === "issueCreate" || workspaceMainView === "issueAnalysis" || workspaceMainView === "issueProgress") ? <AIReqIssuePages page={workspaceMainView} /> : aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : workspaceMainView === "automations" ? automationsContent : aiReqFormalMode ? <AIReqFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : aiReqProposalSr ? <AIReqProposalSrReadOnlyState /> : aiReqEmpty ? <AIReqEmptyState /> : (
+          aireq && (workspaceMainView === "issueCreate" || workspaceMainView === "issueAnalysis" || workspaceMainView === "issueProgress") ? <AIReqIssuePages page={workspaceMainView} /> : aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : workspaceMainView === "automations" ? automationsContent : aiReqFormalMode ? <AIReqFormalWorkspace navigationOpen={isSidebarPanelVisible} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : aiReqProposalSr ? <AIReqProposalSrReadOnlyState /> : aiReqEmpty ? <AIReqEmptyState /> : (
             <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
               {/* Bugfix: 手机远控聊天页中间层必须继续提供 flex 高度链。
                 只有 h-full 的普通 block 会让 ChatView 的 flex-1 失效，草稿空态贴顶且内部滚动被外层裁掉。 */}
@@ -2136,7 +2126,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
 
           </div>
         ) : null}
-          {aireq && (workspaceMainView === "issueCreate" || workspaceMainView === "issueAnalysis" || workspaceMainView === "issueProgress") ? <AIReqIssuePages page={workspaceMainView} /> : aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : aireq && workspaceMainView === "automations" ? automationsContent : aiReqFormalMode && workspaceMainView === "chat" ? <AIReqFormalWorkspace navigationOpen={formalNavigationOpen} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : <ResizablePanelGroup
+          {aireq && (workspaceMainView === "issueCreate" || workspaceMainView === "issueAnalysis" || workspaceMainView === "issueProgress") ? <AIReqIssuePages page={workspaceMainView} /> : aireq && workspaceMainView === "requirementAnalysis" ? <AIReqRequirementAnalysisPage /> : aireq && workspaceMainView === "skillDesign" ? <AIReqSkillDesignPage /> : aireq && workspaceMainView === "automations" ? automationsContent : aiReqFormalMode && workspaceMainView === "chat" ? <AIReqFormalWorkspace navigationOpen={isSidebarPanelVisible} onToggleNavigation={sidebarNavigation.onToggle} toolbar={sidebarNavigation} /> : <ResizablePanelGroup
             layoutId={aireq ? "aireq-workspace-body-layout-v2" : "workspace-body-layout"}
             panelIds={WORKSPACE_BODY_PANEL_IDS}
             className={cn(

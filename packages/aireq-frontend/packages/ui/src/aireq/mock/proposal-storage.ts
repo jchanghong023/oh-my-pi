@@ -9,10 +9,10 @@ export function prototypeChangeRoot(irId: string): string { return `openspec/cha
 export function prototypeCapabilityName(srId: string): string { return srId.replace(/^(proposal-)?sr-/, ""); }
 export function prototypeSpecPath(irId: string, srId: string): string { return `${prototypeChangeRoot(irId)}/specs/${prototypeCapabilityName(srId)}/spec.md`; }
 
-// 仅用于路径展示，不连接数据库、不创建目录或文件。
-export function prototypeProposalLocation(projectId: string, proposalId: string, employeeId: string) {
+// 每个 IR 记录同一 OMP 项目 dir；材料以 change-id 区分，不创建每提案目录。仅内存样例。
+export function prototypeProposalLocation(projectId: string, employeeId: string) {
  const project = readPrototypeProjectSettings().projects.find(item => item.id === projectId);
  if (!project) throw new Error("提案所属项目不存在。");
  return { projectName: project.storageName ?? project.name, employeeId,
-  directory: `/tmpdata/DFT_LAB/omp/${project.storageName}/${employeeId}/${proposalId}/` };
+  directory: project.root };
 }

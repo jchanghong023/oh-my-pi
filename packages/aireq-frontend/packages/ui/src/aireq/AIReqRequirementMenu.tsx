@@ -50,7 +50,7 @@ export function AIReqRequirementMenu({ group }: { group: AIReqRequirementGroup }
       </> : <>
        <div><dt className="text-foreground-subtle">提出人</dt><dd>{group.proposalLocation?.employeeId ?? "未记录"}</dd></div>
        <div><dt className="text-foreground-subtle">接手开发人</dt><dd>{group.developerAcceptance?.employeeId ?? "尚未接手"}</dd></div>
-       <div><dt className="text-foreground-subtle">提案临时目录</dt><dd className="break-all font-mono">{group.proposalLocation?.directory ?? "目录未记录"}</dd></div>
+       <div><dt className="text-foreground-subtle">OMP 项目目录</dt><dd className="break-all font-mono">{group.proposalLocation?.directory ?? "目录未记录"}</dd></div>
       </>}
       {!sr && group.requirementsPr && <div><dt className="text-foreground-subtle">已登记需求 PR</dt><dd className="break-all">{group.requirementsPr.url}</dd></div>}
      </dl>

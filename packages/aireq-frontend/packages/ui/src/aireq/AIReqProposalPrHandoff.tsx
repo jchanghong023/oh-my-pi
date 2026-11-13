@@ -47,7 +47,7 @@ export function AIReqProposalPrHandoff({ group, scenario, onScenarioChange }: {
   {!currentResult && <p role="status" className="text-ui-sm text-foreground-subtle">正在加载需求 MR 材料准备…</p>}
   {currentResult?.error !== undefined && <p role="alert" className="text-ui-sm text-destructive">加载需求 MR 材料准备失败：{currentResult.error}</p>}
   {handoff && <><dl className="space-y-2 text-ui-sm">
-   <div><dt className="text-foreground-subtle">来源 · 提案固定临时工作区</dt><dd className="mt-0.5 break-all font-mono" data-testid="proposal-pr-source">{handoff.sourceDirectory || "来源未确定"}</dd></div>
+   <div><dt className="text-foreground-subtle">来源 · OMP 项目目录</dt><dd className="mt-0.5 break-all font-mono" data-testid="proposal-pr-source">{handoff.sourceDirectory || "来源未确定"}</dd></div>
    <div><dt className="text-foreground-subtle">目标 · 平台托管 Git 仓库</dt><dd className="mt-0.5 break-all font-mono" data-testid="proposal-pr-target">{handoff.repositoryUrl ?? "尚未配置"}</dd></div>
    <div className="grid grid-cols-2 gap-3"><div><dt className="text-foreground-subtle">提案分支（提交推送时创建）</dt><dd className="mt-0.5 break-all font-mono" data-testid="proposal-pr-source-branch">{handoff.branch}</dd></div><div><dt className="text-foreground-subtle">MR 目标分支</dt><dd className="mt-0.5 break-all font-mono">{handoff.targetBranch}</dd></div></div>
   </dl>

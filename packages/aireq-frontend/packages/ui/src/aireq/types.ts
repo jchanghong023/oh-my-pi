@@ -139,6 +139,7 @@ export interface AIReqRequirementGroup {
   proposalSolution?: { path: string; employeeId: string; generatedAt: string; round: number; valid: boolean; requirementsDigest?: string };
   returnFeedback?: AIReqProposalFeedbackNote;
   returnFeedbackHistory?: AIReqProposalFeedbackNote[];
+  /** directory 是 IR 所属 OMP 项目 dir，不是每提案临时目录；会话历史由 OMP 管理。 */
   proposalLocation?: { projectName: string; employeeId: string; directory: string };
 }
 export interface AIReqOperationReceipt {

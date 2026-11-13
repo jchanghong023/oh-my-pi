@@ -12,7 +12,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 - MUST 优先复用项目能力，说明实现思路、取舍、接口与边界；只对已确认范围形成结论。
 - MUST 允许团队 Web 参与人继续讨论，不按原参与人工号锁定。
 - MUST 列出业务规则、范围、验收缺口，由人填写原因退回业务补充；NEVER 编造业务决定。
-- MUST 在提案固定共享临时工作区 openspec/changes/<change-id>/ 同轮生成、修订两个方案产物；NEVER 默认写入项目目录或执行 openspec init。原型只展示内存样例，不写真实文件。
+- MUST 使用所属 OMP 项目的固定 dir，在其 openspec/changes/<change-id>/ 同轮生成、修订两个方案产物；NEVER 因 IR／Agent／轮次切换 cwd 或创建专属运行目录，也不执行 openspec init。原型只展示内存样例，不写真实文件。
 - MUST 在 design.md 覆盖 Context、Goals / Non-Goals、Decisions、架构与模块、文件与函数、Risks / Trade-offs、Migration Plan、Open Questions。
 - MUST 在 design.md 引用 ./sr-dependencies.json；NEVER 在 design.md 或 SR spec.md 重复依赖清单。
 - MUST 使用 JSON 结构 {"srs":[{"srId":"稳定 SR ID","estimate":{"workingDays":3,"assumptions":"估算依据、范围与不确定项"},"prerequisites":[{"srId":"前置稳定 SR ID","reason":"依赖原因"}]}]}，每个 SR 恰好覆盖一次，无依赖用 []。
