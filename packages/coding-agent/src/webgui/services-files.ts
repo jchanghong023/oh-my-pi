@@ -16,7 +16,7 @@ function unavailable(feature: string): WebGuiMethod {
 	};
 }
 
-/** Host identity only; workspace files, Git, watchers, media and attachments are not exposed to the browser. */
+/** Host identity and explicit capability errors for the browser surface. */
 export function createSystemServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
 	context.signal.throwIfAborted();
 	return [
@@ -43,19 +43,6 @@ export function createSystemServices(context: WebGuiServiceContext): readonly We
 			readWorkspaceFileSearchIgnore: unavailable("file.readWorkspaceFileSearchIgnore"),
 			applyWorkspaceFileSearchIgnoreTransform: unavailable("file.applyWorkspaceFileSearchIgnoreTransform"),
 			writeWorkspaceFileSearchIgnore: unavailable("file.writeWorkspaceFileSearchIgnore"),
-		}),
-		createWebGuiService(ServiceChannels.Git, {
-			summary: unavailable("git.summary"),
-			refresh: unavailable("git.refresh"),
-			getChanges: unavailable("git.getChanges"),
-			getIdentity: unavailable("git.getIdentity"),
-			getLocalBranches: unavailable("git.getLocalBranches"),
-			getCommitGraph: unavailable("git.getCommitGraph"),
-			stagePaths: unavailable("git.stagePaths"),
-			commit: unavailable("git.commit"),
-			push: unavailable("git.push"),
-			createBranchAndSwitch: unavailable("git.createBranchAndSwitch"),
-			generateCommitMessage: unavailable("git.generateCommitMessage"),
 		}),
 	];
 }

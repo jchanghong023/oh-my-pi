@@ -3,7 +3,6 @@ import { memo } from "react";
 import type { useSortable } from "@dnd-kit/sortable";
 import {
   Ellipsis,
-  ListTree,
   Pin,
   PinOff,
   Pencil,
@@ -51,7 +50,6 @@ export type ProjectNodeProps = {
   hasUnread?: boolean;
   additionalActions?: ProjectRowAction[];
   onCreate(): void;
-  onViewFiles?(rootPath: string): void;
   onEdit(): void;
   onDelete(): void;
   onPin(): void;
@@ -69,7 +67,6 @@ export const ProjectNodeContent = memo(function ProjectNodeContent({
   tasks,
   hasUnread = false,
   onCreate,
-  onViewFiles,
   onEdit,
   onDelete,
   onPin,
@@ -98,7 +95,6 @@ export const ProjectNodeContent = memo(function ProjectNodeContent({
       : project.primaryRootStatus === "unavailable"
         ? msg("primaryRootUnavailable")
         : undefined;
-  const showFiles = intl.formatMessage({ id: "workspaceSidebar.showFileTree" });
   const more = intl.formatMessage({ id: "common.more" });
   // 原因：右键是快捷入口的补充；与更多菜单共用操作定义，避免再次删掉 hover 功能。
   const management: ProjectRowAction[] = [
@@ -116,13 +112,6 @@ export const ProjectNodeContent = memo(function ProjectNodeContent({
         ]
       : []),
   ];
-  const files: ProjectRowAction[] = project.roots.map((root, index) => ({
-    id: `files-${index}`,
-    label: project.roots.length > 1 ? `${showFiles} · ${root.rootPath}` : showFiles,
-    icon: ListTree,
-    run: () => onViewFiles?.(root.rootPath),
-    disabled: Boolean(primaryRootDisabledReason) || !onViewFiles,
-  }));
   const contextActions = [
     ...(availability.online
       ? [
@@ -133,7 +122,6 @@ export const ProjectNodeContent = memo(function ProjectNodeContent({
             run: onCreate,
             disabled: Boolean(primaryRootDisabledReason),
           },
-          ...files,
         ]
       : []),
     ...management,
@@ -285,7 +273,7 @@ function ProjectMenuItems({
     <Item
       key={action.id}
       disabled={action.disabled}
-      data-testid={`virtual-project-${context && (action.id.startsWith("files-") || action.id === "create-task") ? "context-" : ""}${action.id}`}
+      data-testid={`virtual-project-${context ? "context-" : ""}${action.id}`}
       className={action.destructive ? "text-destructive" : undefined}
       onSelect={action.run}
     >

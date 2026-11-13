@@ -8,17 +8,6 @@ export {
 } from "./AssistantCodeCommentFeatureProvider.js";
 export { Root } from "./Root.js";
 export { ConfirmDialogHost } from "./ConfirmDialog.js";
-export { GitGraphPane } from "./git-graph/GitGraphPane.js";
-export { layoutGitGraph } from "./git-graph/layout.js";
-export type {
-  GitGraphCommit,
-  GitGraphLayout,
-  GitGraphLayoutEdge,
-  GitGraphLayoutOptions,
-  GitGraphLayoutRow,
-  GitGraphRef,
-  GitGraphRefKind,
-} from "./git-graph/layout.js";
 export { useTheme } from "./useTheme.js";
 export type { Theme } from "./useTheme.js";
 export { useTestActions } from "./test-actions.js";
@@ -53,7 +42,6 @@ export {
   usePlatform,
   useSelectDirectory,
   useConnectRemote,
-  useReaddir,
   useSystemInfo,
   useIntranetProbe,
   useSettings,
@@ -61,8 +49,6 @@ export {
   useConfirmDialog,
   useCredentials,
   useAuthToken,
-  useGitRepository,
-  useGitActions,
 } from "./hooks/index.js";
 
 export { ZCodeIntlProvider, useZCodeIntl } from "./i18n/index.js";

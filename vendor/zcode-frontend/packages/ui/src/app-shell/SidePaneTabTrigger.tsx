@@ -9,15 +9,11 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu.js";
 import { TabsTrigger } from "@/components/ui/tabs.js";
-import { FileDisplayIcon, resolveFileDisplayDescriptor } from "@/lib/fileDisplay.js";
 import type { WorkspaceSidePaneTab } from "@/lib/workspaceSidePane.js";
 import { Button } from "@/components/ui/button.js";
 import {
   BotIcon,
-  FileCode2Icon,
-  FileDiffIcon,
   FileIcon,
-  FolderOpenIcon,
   ListTreeIcon,
   MessageSquareTextIcon,
   NotepadTextIcon,
@@ -237,24 +233,12 @@ function SidePaneTabItemContent({
       <span data-side-pane-tab-title="" className="shrink-0 whitespace-nowrap">
         {title}
       </span>
-      {isDiffPreviewTab(tab) ? (
-        <span className="ml-0.5 shrink-0 rounded-full border border-border bg-surface px-1 py-0 text-ui-xs leading-3 text-foreground-subtle">
-          {diffBadgeLabel}
-        </span>
-      ) : null}
     </span>
   );
 }
 
-function isDiffPreviewTab(tab: WorkspaceSidePaneTab): boolean {
-  return (
-    tab.type === "code-viewer" &&
-    (tab.source.type === "patch" || tab.source.type === "multi-file-diff")
-  );
-}
 
 export function SidePaneTabIcon({ tab }: { tab: WorkspaceSidePaneTab }) {
-  if (tab.type === "file-manager") return <FolderOpenIcon className="size-3.5" />;
   // plan-detail tab 由 switch-mode（ExitPlanMode）工具调用卡片打开，来源卡片
   // 用 NotepadTextIcon；tab 必须与来源一致，避免点击后图标跳变。不用 ListChecksIcon：
   // 那会与状态面板 Todo section 撞图标，语义上也偏向 todo 而非计划方案文档。
@@ -272,143 +256,14 @@ export function SidePaneTabIcon({ tab }: { tab: WorkspaceSidePaneTab }) {
     return <ListTreeIcon className="size-3.5" />;
   }
 
-  if (tab.type === "git") {
-    return <FileDiffIcon className="size-3.5" />;
-  }
-
   if (tab.type === "new-tab") return <FileIcon className="size-3.5" />;
 
   if (tab.type === "bash-output") {
     return <SquareTerminalIcon className="size-3.5" />;
   }
-  if (tab.source.type === "patch") {
-    const fileDisplayTarget = getPatchFileDisplayTarget(tab.source);
-    if (fileDisplayTarget) {
-      const descriptor = resolveFileDisplayDescriptor(fileDisplayTarget);
-      return <FileDisplayIcon src={descriptor.fileIconSrc} size={14} className="shrink-0" />;
-    }
 
-    return <FileDiffIcon className="size-3.5" />;
-  }
-
-  if (tab.source.type === "multi-file-diff") {
-    if (tab.source.path) {
-      const descriptor = resolveFileDisplayDescriptor(tab.source.path);
-      return <FileDisplayIcon src={descriptor.fileIconSrc} size={14} className="shrink-0" />;
-    }
-
-    return <FileDiffIcon className="size-3.5" />;
-  }
-
-  if (tab.source.path) {
-    const descriptor = resolveFileDisplayDescriptor(tab.source.path);
-    return <FileDisplayIcon src={descriptor.fileIconSrc} size={14} className="shrink-0" />;
-  }
-
-  return <FileCode2Icon className="size-3.5" />;
-}
-
-function isUsablePatchFileTarget(target: string | null | undefined): target is string {
-  const trimmedTarget = target?.trim();
-  return Boolean(trimmedTarget && trimmedTarget !== "/dev/null");
-}
-
-function unquoteDiffPath(path: string): string {
-  const trimmedPath = path.trim();
-  if (trimmedPath.length >= 2 && trimmedPath.startsWith('"') && trimmedPath.endsWith('"')) {
-    return trimmedPath.slice(1, -1);
-  }
-
-  return trimmedPath;
-}
-
-function stripDiffPathPrefix(path: string): string {
-  const unquotedPath = unquoteDiffPath(path);
-  if (unquotedPath.startsWith("a/") || unquotedPath.startsWith("b/")) {
-    return unquotedPath.slice(2);
-  }
-
-  return unquotedPath;
-}
-
-function parseDiffHeaderPath(headerValue: string): string | null {
-  const trimmedValue = headerValue.trim();
-  if (!trimmedValue) {
-    return null;
-  }
-
-  if (trimmedValue.startsWith('"')) {
-    const quotedPathMatch = trimmedValue.match(/^"((?:\\.|[^"\\])+)"/);
-    return quotedPathMatch?.[1] ? stripDiffPathPrefix(quotedPathMatch[1]) : null;
-  }
-
-  const pathWithoutTimestamp = trimmedValue.split("\t", 1)[0]?.trim();
-  return pathWithoutTimestamp ? stripDiffPathPrefix(pathWithoutTimestamp) : null;
-}
-
-function parseDiffGitLinePath(line: string): string | null {
-  const gitPathMatch = line.match(
-    /^diff --git (?:"((?:\\.|[^"\\])*)"|(\S+)) (?:"((?:\\.|[^"\\])*)"|(\S+))$/,
-  );
-  const nextPath = gitPathMatch?.[3] ?? gitPathMatch?.[4];
-  const previousPath = gitPathMatch?.[1] ?? gitPathMatch?.[2];
-  const normalizedNextPath = nextPath ? stripDiffPathPrefix(nextPath) : null;
-  if (isUsablePatchFileTarget(normalizedNextPath)) {
-    return normalizedNextPath;
-  }
-
-  const normalizedPreviousPath = previousPath ? stripDiffPathPrefix(previousPath) : null;
-  return isUsablePatchFileTarget(normalizedPreviousPath) ? normalizedPreviousPath : null;
-}
-
-function getPatchHeaderFileDisplayTarget(patch: string): string | null {
-  for (const line of patch.split(/\r?\n/)) {
-    const diffGitTarget = parseDiffGitLinePath(line);
-    if (diffGitTarget) {
-      return diffGitTarget;
-    }
-
-    if (line.startsWith("+++ ")) {
-      const nextFileTarget = parseDiffHeaderPath(line.slice(4));
-      if (isUsablePatchFileTarget(nextFileTarget)) {
-        // 部分 file diff source 没有带 path，title 也可能只是“Diff”。
-        // 这里从 unified diff 的文件头里取真实文件名，再交给 fileDisplay 解析文件类型图标。
-        return nextFileTarget;
-      }
-    }
-  }
-
-  for (const line of patch.split(/\r?\n/)) {
-    if (!line.startsWith("--- ")) {
-      continue;
-    }
-
-    const previousFileTarget = parseDiffHeaderPath(line.slice(4));
-    if (isUsablePatchFileTarget(previousFileTarget)) {
-      return previousFileTarget;
-    }
-  }
-
-  return null;
-}
-
-export function getPatchFileDisplayTarget(source: {
-  path?: string;
-  title: string;
-  patch: string;
-}): string | null {
-  if (isUsablePatchFileTarget(source.path)) {
-    return source.path;
-  }
-
-  const patchHeaderTarget = getPatchHeaderFileDisplayTarget(source.patch);
-  if (patchHeaderTarget) {
-    return patchHeaderTarget;
-  }
-
-  // 新增/删除文件的 diff 有时会把 source.path 传成 /dev/null。
-  // /dev/null 不是业务文件名，直接用于图标识别会固定落到 document；这里只在路径无效时回退 title。
-  return isUsablePatchFileTarget(source.title) ? source.title : null;
+  const exhaustive: never = tab;
+  return exhaustive;
 }
 
 export function getSidePaneTabTitle(
@@ -428,16 +283,11 @@ export function getSidePaneTabTitle(
   if (tab.type === "subagent-directory") {
     return formatMessage({ id: "sidePane.subagentDirectory" });
   }
-  if (tab.type === "git") {
-    return formatMessage({ id: "sidePane.review" });
-  }
-
   if (tab.type === "new-tab") return formatMessage({ id: "sidePane.newTab" });
 
   if (tab.type === "bash-output") {
     return tab.title || formatMessage({ id: "terminal.title" });
   }
-  if (tab.type === "file-manager")
-    return tab.source?.title || formatMessage({ id: "fileManager.title" });
-  return tab.source.title || formatMessage({ id: "codeViewer.title" });
+  const exhaustive: never = tab;
+  return exhaustive;
 }

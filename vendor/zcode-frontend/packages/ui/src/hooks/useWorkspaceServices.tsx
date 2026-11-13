@@ -25,10 +25,6 @@ const NATIVE_FILE_READ_METHODS = new Set<PropertyKey>([
   "readTextFile", "readMediaPreview", "readFileRange", "readBinaryPreview",
   "listWorkspaceFilesLength", "listWorkspaceFilesRange", "readWorkspaceFileSearchIgnore",
 ]);
-const NATIVE_GIT_READ_METHODS = new Set<PropertyKey>([
-  "getRepositorySummary", "getChanges", "getDiff", "getCommitGraph",
-  "getLocalBranches", "refresh",
-]);
 const NATIVE_WATCH_METHODS = new Set<PropertyKey>(["watch"]);
 const NATIVE_CATALOG_READ_METHODS = new Set<PropertyKey>(["list"]);
 
@@ -78,14 +74,12 @@ export function bindNativeWorkspaceServices(
   };
   const fileService = scopedService(owner.fileService, NATIVE_FILE_READ_METHODS);
   const fileWatcherService = scopedService(owner.fileWatcherService, NATIVE_WATCH_METHODS);
-  const gitService = scopedService(owner.gitService, NATIVE_GIT_READ_METHODS);
   const skillsService = scopedService(owner.skillsService, NATIVE_CATALOG_READ_METHODS, true);
   const commandsService = scopedService(owner.commandsService, NATIVE_CATALOG_READ_METHODS, true);
   const bound = new Proxy(owner, {
     get(target, key) {
       if (key === "fileService") return fileService;
       if (key === "fileWatcherService") return fileWatcherService;
-      if (key === "gitService") return gitService;
       if (key === "skillsService") return skillsService;
       if (key === "commandsService") return commandsService;
       return Reflect.get(target, key);

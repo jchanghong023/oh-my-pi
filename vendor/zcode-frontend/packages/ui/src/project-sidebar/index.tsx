@@ -21,7 +21,6 @@ export {
 } from "@/project-sidebar/ProjectDirectoryProvider.js";
 export { ProjectComposerMenu } from "@/project-sidebar/ProjectComposerMenu.js";
 import { useProjectTaskNavigation } from "@/project-sidebar/useProjectTaskNavigation.js";
-import { useProjectFileTree } from "@/project-sidebar/useProjectFileTree.js";
 import {
   selectProjectRows,
   selectSortedProjects,
@@ -48,7 +47,6 @@ import { useZCodeStore } from "@/store/StoreProvider.js";
 export { attachRemoteProjectWorkspace } from "@/project-sidebar/remote-navigation.js";
 export { resolveEntryProject } from "@/project-sidebar/view.js";
 export type {
-  SidebarFileTreeOpenRequest,
   ProjectSidebarProps,
 } from "@/project-sidebar/contract.js";
 
@@ -86,36 +84,17 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
       state.workspaces[props.workspaceIdentity.trim() || props.workspacePath]?.activeTaskId,
     ),
   );
-  const { openFiles, openTaskFiles } = useProjectFileTree(props, directory, remoteService);
-  const openProjectFiles = useCallback(async (project: VirtualProject, rootPath: string) => {
-    if (nativeHostAvailable && rootPath !== props.workspacePath) {
-      if (!navigateNativeProject) throw new Error("Project navigation is unavailable.");
-      await navigateNativeProject(rootPath, false, false, true);
-      return;
-    }
-    await openFiles(project, rootPath);
-  }, [nativeHostAvailable, navigateNativeProject, props.workspacePath, openFiles]);
-  const openNativeTaskFiles: typeof openTaskFiles = useCallback(async (task, remoteSessionId) => {
-    if (nativeHostAvailable && task.workspacePath !== props.workspacePath) {
-      if (!navigateNativeProject) throw new Error("Project navigation is unavailable.");
-      await navigateNativeProject(task.workspacePath, false, false, true);
-      return;
-    }
-    await openTaskFiles(task, remoteSessionId);
-  }, [nativeHostAvailable, navigateNativeProject, props.workspacePath, openTaskFiles]);
   const taskPresentation = useMemo(
     () => ({
       isWebRemoteControl: props.isWebRemoteControl,
       activeWorkspaceKey: props.workspaceIdentity?.trim() || props.workspacePath,
       onPin: pin,
-      onOpenTaskFiles: openNativeTaskFiles,
     }),
     [
       props.isWebRemoteControl,
       props.workspacePath,
       props.workspaceIdentity,
       pin,
-      openNativeTaskFiles,
     ],
   );
   const msg = (id: string) => intl.formatMessage({ id: `project.${id}` });
@@ -179,7 +158,6 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
       isWebRemoteControl={props.isWebRemoteControl}
       onCreateTask={props.onCreateTask}
       onEdit={setEditor}
-      onViewFiles={openProjectFiles}
     />
   );
   const changeTheme = useCallback((value: string) => setTheme(value as Theme), [setTheme]);

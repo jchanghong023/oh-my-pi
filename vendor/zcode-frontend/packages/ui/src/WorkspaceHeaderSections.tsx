@@ -12,7 +12,7 @@ import { useMemo, useRef, useState } from "react";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { cn } from "@/components/lib/utils.js";
 import { Button } from "@/components/ui/button.js";
-import { Ellipsis, Folder, GitBranch, LoaderIcon } from "lucide-react";
+import { Ellipsis, Folder, LoaderIcon } from "lucide-react";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useGlobalTaskList } from "@/hooks/useGlobalTaskList.js";
 import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
@@ -28,7 +28,6 @@ import {
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { resolveWorkspaceHeaderProvider } from "@/lib/workspaceHeaderProvider.js";
 import { toast } from "@/components/ui/toast.js";
-import { resolveGitBranchTriggerLabel } from "@/git-branch-switcher/display.js";
 import type {
   WorkspaceHeaderState,
   WorkspaceHeaderTitleSectionProps,
@@ -58,8 +57,6 @@ export function WorkspaceHeaderTitleSection({
   activeSessionId,
   activeTaskProvider,
   resolvedActiveTaskMeta,
-  gitSummary,
-  gitDirtyFileCount: _gitDirtyFileCount,
   sessionLogPath: _sessionLogPath,
   nativeSessionLogProvider: _nativeSessionLogProvider,
   nativeSessionLogPath: _nativeSessionLogPath,
@@ -70,7 +67,6 @@ export function WorkspaceHeaderTitleSection({
   providerWorkspaceConfigLoading: _providerWorkspaceConfigLoading,
   reloadSessionPending,
   workspaceHeaderState,
-  onRefreshGit: _onRefreshGit,
   selectedEditor: _selectedEditor,
   simplifyForNarrowViewport = false,
   compact = false,
@@ -158,14 +154,6 @@ export function WorkspaceHeaderTitleSection({
     intl,
   });
   const workspaceContextLabel = projectName;
-  const workspaceBranchLabel = gitSummary.isRepository
-    ? resolveGitBranchTriggerLabel({
-        headRefType: gitSummary.headRefType,
-        currentBranchName: gitSummary.branchName,
-        detachedLabel: intl.formatMessage({ id: "git.head.detached" }),
-        fallbackLabel: intl.formatMessage({ id: "git.branchSwitcher.label" }),
-      })
-    : null;
   const workspaceActionLoading = reloadSessionPending;
   const workspaceActionLoadingTitle = intl.formatMessage({
     id: "appHeader.workspaceSessionActionLoading",
@@ -339,14 +327,6 @@ export function WorkspaceHeaderTitleSection({
                   task={activeTaskMeta?.taskId === activeTaskId ? activeTaskMeta : null}
                 />
               ) : null}
-              {workspaceBranchLabel ? (
-                <span className="flex min-w-0 items-center gap-2 border-t border-border/50 pt-3 font-normal">
-                  <GitBranch className="size-4 shrink-0" />
-                  <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-                    {workspaceBranchLabel}
-                  </span>
-                </span>
-              ) : null}
             </span>
           }
         >
@@ -359,7 +339,7 @@ export function WorkspaceHeaderTitleSection({
             // 是 e2e 判定“header 属于哪个工作区”的唯一锚点（aria-label 只有显示名），
             // 因此单独用数据属性暴露，避免和 tooltip 争抢原生提示。
             data-workspace-abs-path={workspaceAbsPath}
-            aria-label={[workspaceContextLabel, workspaceBranchLabel].filter(Boolean).join(" · ")}
+            aria-label={workspaceContextLabel}
             onClick={() => setWorkspaceContextOpen(true)}
           >
             <Folder className="size-4 text-foreground-subtle" />

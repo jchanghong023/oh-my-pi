@@ -35,10 +35,6 @@ export const ProjectTaskRow = memo(function Row({
       onSelect(task.workspacePath, task.taskId, task.workspaceIdentity, undefined, task.unreadAt),
     [onSelect, task],
   );
-  const openFiles = useCallback(
-    () => presentation.onOpenTaskFiles?.(task, remoteSessionId ?? undefined),
-    [presentation.onOpenTaskFiles, task, remoteSessionId],
-  );
   // 原因：内联 JSX 每次都会创建新引用，导致 TaskList 的 memo 比较失效。
   const organizationActions = useMemo(() => <TaskGroupTaskMenu task={task} />, [task]);
   return (
@@ -54,13 +50,6 @@ export const ProjectTaskRow = memo(function Row({
         pinnedTasks={task.pinned ? rows : EMPTY}
         activeTaskId={activeId}
         isWorkspaceActive={presentation.activeWorkspaceKey === workspaceKey}
-        onOpenFileTree={
-          presentation.onOpenTaskFiles &&
-          showFiles &&
-          (!task.workspaceIdentity?.trim() || remoteSessionId)
-            ? openFiles
-            : undefined
-        }
         showCreateButton={false}
         showEmptyState={false}
         // 原因：旧接线只传排序，遗漏 timeline 样式，导致目录信息和空闲灰点消失。

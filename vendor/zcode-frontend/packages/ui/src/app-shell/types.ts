@@ -1,18 +1,14 @@
-import type { FileManagerTarget } from "@/lib/workspaceSidePane.js";
 import type { ComposerDraftHandoff } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
 import type { RefObject } from "react";
 import type {
   ZCodeProvider,
   ZCodeTaskRuntimeStatus,
   ZCodeTaskMeta,
-  GitChangeSourceId,
   RemoteTarget,
   SourceServerUpdateTarget,
 } from "@zcode/shared";
 import type { IServiceAccessor } from "@zcode/services";
 import type { RecentClosedSidePaneTab } from "@/hooks/useAppPanels.js";
-import type { CodeViewerSource } from "@/lib/codeViewer.js";
-import type { AssistantPreviewCardsAutoOpenRequest } from "@/lib/assistantPreviewCards.js";
 import type {
   OpenScopedSubagentSideTabRequest,
   OpenBackgroundBashSideTabRequest,
@@ -162,17 +158,11 @@ export interface AppProps extends WorkspaceRemoteNavigationProps {
   allowOpenWorkspace?: boolean;
   responsiveBrowserLayout?: boolean;
   backendBusinessAvailable?: boolean;
-  initialSidebarFileTreeOpen?: boolean;
   workspaceAbsPath: string;
   workspaceRemoteSessionId?: string;
   workspaceIdentity?: string;
   isWorkspaceVisible?: boolean;
   isDesktop?: boolean;
-}
-
-export interface GitChangeSummary {
-  added: number;
-  removed: number;
 }
 
 export interface WorkspaceShellLayoutProps extends AppProps {
@@ -218,10 +208,6 @@ export interface WorkspaceShellLayoutProps extends AppProps {
   activeTaskChangeSummary: ReturnType<
     typeof import("@/lib/taskChangeSummary.js").getTaskChangeSummary
   >;
-  gitWorktreeReviewSourceId: GitChangeSourceId | null;
-  gitWorktreeChangeSummary: GitChangeSummary;
-  activeGitSourceId: GitChangeSourceId;
-  gitState: ReturnType<typeof import("@/hooks/useGitRepository.js").useGitRepository>;
   providerConfigFile: ReturnType<
     typeof import("@/hooks/useWorkspaceProviderConfigFile.js").useWorkspaceProviderConfigFile
   >;
@@ -237,10 +223,6 @@ export interface WorkspaceShellLayoutProps extends AppProps {
   onConversationFindMatchStateChange: (state: ConversationFindMatchState) => void;
   searchResultHighlightRequest?: ChatSearchResultHighlightRequest | null;
   onSearchResultHighlightDone?: (requestId: number) => void;
-  fileChangeFindActiveIndex: number;
-  fileChangeFindNavigationRequestId: number;
-  fileChangeFindQuery: string;
-  onFileChangeFindMatchCountChange: (count: number) => void;
   reloadSessionDisabled: boolean;
   reloadSessionPending: boolean;
   handleReloadSession: (options?: {
@@ -260,16 +242,9 @@ export interface WorkspaceShellLayoutProps extends AppProps {
     targetWorkspaceIdentity?: string,
     targetWorkspacePurpose?: import("@zcode/shared").WorkspacePurpose,
   ) => void;
-  handleRefreshGit: () => void;
   handleToggleSidebar: () => void;
-  handleOpenFileManager: (target?: FileManagerTarget) => void;
-  handleNavigateFileManager: (tabId: string, source: CodeViewerSource) => void;
-  handleToggleGit: () => void;
-  handleOpenGitReview: (sourceId?: GitChangeSourceId) => void;
   handleToggleSidePane: () => void;
   handleOpenBrowserUrl: (url: string) => void;
-  handleOpenCodeViewer: (source: CodeViewerSource) => void;
-  handleAutoOpenAssistantPptx: (request: AssistantPreviewCardsAutoOpenRequest) => void;
   handleOpenBackgroundBash: (request: OpenBackgroundBashSideTabRequest) => void;
   handleOpenSubagentSession: (request: OpenScopedSubagentSideTabRequest) => void;
   handleOpenSubagentDirectory: (
@@ -280,14 +255,11 @@ export interface WorkspaceShellLayoutProps extends AppProps {
   ) => void;
   handleOpenSelectionSideChat: (request: OpenSelectionSideChatRequest) => void;
   handleOpenPlanDetail: (request: OpenScopedPlanDetailSideTabRequest) => void;
-  handleCloseCodeViewer: () => void;
-  handleCloseGit: () => void;
   handleActivateSidePaneTab: (tabId: string) => void;
   handleReorderSidePaneTab: (activeTabId: string, overTabId: string) => void;
   handleCloseSidePaneTab: (tabId: string) => void;
   handleCloseOtherSidePaneTabs: (tabId: string) => void;
   handleCloseAllSidePaneTabs: () => void;
   handleReopenClosedSidePaneTab: (tabId: string) => void;
-  setGitSelectedSourceId: (value: GitChangeSourceId) => void;
   taskFindDialogProps: TaskFindDialogProps;
 }

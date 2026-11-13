@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/dialog.js";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
-import { DirectoryBrowser } from "@/DirectoryBrowser.js";
 import { useProjectDirectoryServices } from "@/project-sidebar/useProjectDirectoryServices.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useOptionalPlatform } from "@/hooks/usePlatform.js";
@@ -98,7 +97,6 @@ export function ProjectEditor({
       "",
   );
   const [legacyDeviceId, setLegacyDeviceId] = useState<string | null>(null);
-  const [browsing, setBrowsing] = useState(false);
   const directory = useProjectDirectoryServices(service, hostId);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -135,13 +133,11 @@ export function ProjectEditor({
       : [...new Set([...roots, ...values.filter(Boolean)])];
     setRoots(next);
     if (remote || !roots.length) setPrimary(next[0] ?? "");
-    setBrowsing(false);
   };
   const browse = async () => {
     const request = ++epoch.current;
-    // 本地曾统一走 Host 文件列表，绕过系统多选；按项目 Host 与平台能力选入口，不能借当前 tab 判定。
-    if ((hostId && hostId !== "local") || !platform?.selectDirectories) {
-      if (current(request) && !suspendedRef.current) setBrowsing(true);
+    if (!platform?.selectDirectories) {
+      setError(intl.formatMessage({ id: "project.directoryPickerUnavailable" }));
       return;
     }
     setBusy(true);
@@ -279,7 +275,6 @@ export function ProjectEditor({
       setBusy(false);
     }
   };
-  const browserEpoch = epoch.current;
   return (
     <Dialog
       open={!suspended}
@@ -297,30 +292,9 @@ export function ProjectEditor({
         onKeyDown={fixedFolder ? (event) => event.stopPropagation() : undefined}
       >
             <DialogTitle>
-              {browsing ? msg("browse") : project ? msg("edit") : msg("create")}
+              {project ? msg("edit") : msg("create")}
             </DialogTitle>
             <DialogDescription className="sr-only">{msg("description")}</DialogDescription>
-            {browsing ? (
-              <div
-                className="flex h-96 min-h-0 flex-col gap-2"
-                data-testid="virtual-project-directory-browser"
-              >
-                <DirectoryBrowser
-                  embedded
-                  showSelectionActions
-                  selectLabel={msg("browse")}
-                  services={directory.services}
-                  onSelect={(path) => {
-                    if (current(browserEpoch)) addRoots([path]);
-                  }}
-                  onCancel={() => {
-                    epoch.current++;
-                    setBrowsing(false);
-                  }}
-                />
-              </div>
-            ) : (
-              <>
                 <div className="grid min-w-0 gap-1.5">
                   <label htmlFor="project-name" className={FIELD_LABEL}>
                     {msg("name")}
@@ -472,8 +446,6 @@ export function ProjectEditor({
                     {project ? msg("save") : msg("create")}
                   </Button>
                 </DialogFooter>
-              </>
-            )}
         {/* 确认框须留在父弹层的 React 树内；兄弟节点的触摸取消会被延迟判为外部点击，连带关闭草稿。 */}
         {folderTrust && !suspended ? (
           <ProjectFolderTrustDialog

@@ -18,10 +18,8 @@ export {
 } from "./usePlatform.js";
 
 // 文件服务
-export { useReaddir } from "./useFileService.js";
 
 // 文件监视服务
-export { useWatchedReaddir } from "./useFileWatcherService.js";
 
 // 系统服务
 export { useSystemInfo, useIntranetProbe } from "./useSystemService.js";
@@ -42,9 +40,6 @@ export { useCredentials, useAuthToken } from "./useCredentials.js";
 export { useZCodeAgentService } from "./useZCodeAgentService.js";
 
 // Git pane
-export { useGitAutoRefresh } from "./useGitAutoRefresh.js";
-export { useGitRepository } from "./useGitRepository.js";
-export { useGitActions } from "./useGitActions.js";
 // workspace provider 配置路径
 export { useWorkspaceProviderConfigFile } from "./useWorkspaceProviderConfigFile.js";
 export { useTaskNativeSessionLogFile } from "./useTaskNativeSessionLogFile.js";

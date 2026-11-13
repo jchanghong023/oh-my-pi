@@ -14,9 +14,6 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { horizontalListSortingStrategy, SortableContext } from "@dnd-kit/sortable";
-import type { GitChangeSourceId } from "@zcode/shared";
-import { FileManagerPane } from "@/WorkspaceFileTree.js";
-import type { FileManagerTarget } from "@/lib/workspaceSidePane.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { composerScopeKey, resolveComposerScope } from "@/v4/composer/composerDraftStore.js";
 import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
@@ -28,7 +25,6 @@ import {
   type SidePaneFullViewSurface,
 } from "@/side-pane-full-view/index.js";
 import { ScopedErrorBoundary } from "@/ErrorBoundary.js";
-import { GitPane } from "@/GitPane.js";
 import { cn } from "@/components/lib/utils.js";
 import { Button } from "@/components/ui/button.js";
 
@@ -53,10 +49,7 @@ import {
   resolveSidePaneTabsOverflow,
   SIDE_PANE_DEFAULT_EXPANDED_RATIO,
 } from "@/app-shell/sidePaneLayout.js";
-import {
-  resolveAnimatedSidePanePanelLayout,
-  shouldRenderPreviewPaneHeavyContent,
-} from "@/app-shell/animatedSidePanePanelModel.js";
+import { resolveAnimatedSidePanePanelLayout } from "@/app-shell/animatedSidePanePanelModel.js";
 import type { RecentClosedSidePaneTab } from "@/hooks/useAppPanels.js";
 import { useIsMobileTextInputViewport } from "@/lib/mobileTextInput.js";
 import { formatTaskRelativeTime } from "@/lib/taskListItemPresentation.js";
@@ -66,7 +59,7 @@ import {
   type OpenBackgroundBashSideTabRequest,
   type WorkspaceSidePaneState,
 } from "@/lib/workspaceSidePane.js";
-import { inferMediaPreview, type CodeViewerSource } from "@/lib/codeViewer.js";
+import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import type { MessageFileLinkTarget } from "@/components/ai-elements/message.js";
 import { getVisibleSidePaneTabs } from "@/lib/workspaceSidePane.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -77,7 +70,6 @@ import {
 } from "lucide-react";
 
 const SIDE_PANE_CONTENT_WIDTH_LOCK_DURATION_MS = 200;
-const PREVIEW_PANE_RESIZE_SETTLE_DELAY_MS = 220;
 type TabsScrollMaskEdges = {
   left: boolean;
   right: boolean;
@@ -87,129 +79,6 @@ const EMPTY_TABS_SCROLL_MASK_EDGES: TabsScrollMaskEdges = {
   left: false,
   right: false,
 };
-function readViewportInlineIntersectionSize(element: HTMLElement | null) {
-  if (!element || typeof window === "undefined") {
-    return null;
-  }
-
-  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-  if (viewportWidth <= 0) {
-    return null;
-  }
-
-  const rect = element.getBoundingClientRect();
-  const visibleLeft = Math.max(0, rect.left);
-  const visibleRight = Math.min(viewportWidth, rect.right);
-  return Math.max(0, Math.round(visibleRight - visibleLeft));
-}
-
-function useViewportInlineIntersectionSize<TElement extends HTMLElement>(
-  elementRef: RefObject<TElement | null>,
-  enabled: boolean,
-) {
-  const [visibleInlineSizePx, setVisibleInlineSizePx] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!enabled || typeof window === "undefined") {
-      setVisibleInlineSizePx(null);
-      return;
-    }
-
-    const element = elementRef.current;
-    if (!element) {
-      setVisibleInlineSizePx(null);
-      return;
-    }
-
-    let frameId: number | null = null;
-    const update = () => {
-      frameId = null;
-      const next = readViewportInlineIntersectionSize(element);
-      setVisibleInlineSizePx((current) => (current === next ? current : next));
-    };
-    const scheduleUpdate = () => {
-      if (frameId !== null) {
-        return;
-      }
-
-      if (typeof window.requestAnimationFrame !== "function") {
-        update();
-        return;
-      }
-
-      frameId = window.requestAnimationFrame(update);
-    };
-
-    update();
-    window.addEventListener("resize", scheduleUpdate, { passive: true });
-    window.addEventListener("scroll", scheduleUpdate, {
-      capture: true,
-      passive: true,
-    });
-
-    const resizeObserver =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleUpdate);
-    resizeObserver?.observe(element);
-
-    return () => {
-      window.removeEventListener("resize", scheduleUpdate);
-      window.removeEventListener("scroll", scheduleUpdate, { capture: true });
-      resizeObserver?.disconnect();
-      if (frameId !== null) {
-        window.cancelAnimationFrame(frameId);
-      }
-    };
-  }, [elementRef, enabled]);
-
-  return visibleInlineSizePx;
-}
-
-function useWindowResizeSettling(enabled: boolean) {
-  const [isResizeSettling, setIsResizeSettling] = useState(false);
-  const resizeSettleTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!enabled || typeof window === "undefined") {
-      setIsResizeSettling(false);
-      return;
-    }
-
-    const finishSettling = () => {
-      resizeSettleTimerRef.current = null;
-      setIsResizeSettling(false);
-    };
-
-    const markSettling = () => {
-      // 窗口 resize 期间，大文件 PreviewPane 的千行 Shadow DOM 会在每帧参与
-      // React commit + Layout。这里只把 resize 视为短暂的不稳定阶段，等尺寸停止抖动后再恢复重内容。
-      setIsResizeSettling((current) => (current ? current : true));
-      if (resizeSettleTimerRef.current !== null) {
-        window.clearTimeout(resizeSettleTimerRef.current);
-      }
-      resizeSettleTimerRef.current = window.setTimeout(
-        finishSettling,
-        PREVIEW_PANE_RESIZE_SETTLE_DELAY_MS,
-      );
-    };
-
-    window.addEventListener("resize", markSettling, { passive: true });
-    window.visualViewport?.addEventListener("resize", markSettling, {
-      passive: true,
-    });
-
-    return () => {
-      window.removeEventListener("resize", markSettling);
-      window.visualViewport?.removeEventListener("resize", markSettling);
-      if (resizeSettleTimerRef.current !== null) {
-        window.clearTimeout(resizeSettleTimerRef.current);
-        resizeSettleTimerRef.current = null;
-      }
-    };
-  }, [enabled]);
-
-  return isResizeSettling;
-}
-
 export function AnimatedSidePanePanel({
   services,
   isDesktop,
@@ -221,33 +90,20 @@ export function AnimatedSidePanePanel({
   workspaceRemoteSessionId,
   activeTaskId,
   sidePaneOwnerId,
-  gitState,
-  activeGitSourceId,
   panelRef,
   panelElementRef,
-  fileChangeFindActiveIndex,
-  fileChangeFindNavigationRequestId,
-  fileChangeFindQuery,
-  onFileChangeFindMatchCountChange,
-  onCloseGit,
   onActivateTab,
   onReorderTab,
   onCloseTab,
   onCloseOtherTabs,
   onCloseAllTabs,
   onReopenClosedTab,
-  onOpenFileManager,
-  onNavigateFileManager,
-  onOpenReviewTab,
   onOpenSelectionSideConversation,
-  onRevealGitFileInTree,
   onOpenBrowserUrl,
   onOpenCodeViewer,
   onOpenFileLink,
   onOpenSubagentSession,
   onOpenBackgroundBash,
-  onRefreshGit,
-  onSelectGitSource,
   frameClassName = "rounded-xl border border-border",
   captionControlsStyle,
   onCloseSidePane,
@@ -284,27 +140,16 @@ export function AnimatedSidePanePanel({
   workspaceRemoteSessionId?: string;
   activeTaskId: string | null;
   sidePaneOwnerId: string | null;
-  gitState: ReturnType<typeof import("@/hooks/useGitRepository.js").useGitRepository>;
-  activeGitSourceId: GitChangeSourceId;
   panelRef: RefObject<PanelImperativeHandle | null>;
   panelElementRef: RefObject<HTMLDivElement | null>;
-  fileChangeFindActiveIndex: number;
-  fileChangeFindNavigationRequestId: number;
-  fileChangeFindQuery: string;
-  onFileChangeFindMatchCountChange: (count: number) => void;
   onCloseCodeViewer: () => void;
-  onCloseGit: () => void;
   onActivateTab: (tabId: string) => void;
   onReorderTab: (activeTabId: string, overTabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onCloseOtherTabs: (tabId: string) => void;
   onCloseAllTabs: () => void;
   onReopenClosedTab: (tabId: string) => void;
-  onOpenFileManager: (target?: FileManagerTarget) => void;
-  onNavigateFileManager: (tabId: string, source: CodeViewerSource) => void;
-  onOpenReviewTab: () => void;
   onOpenSelectionSideConversation: () => void;
-  onRevealGitFileInTree?: (path: string) => void;
   onOpenBrowserUrl: (url: string) => void;
   onOpenCodeViewer: (source: CodeViewerSource) => void;
   onOpenFileLink?: (target: MessageFileLinkTarget) => void;
@@ -314,8 +159,6 @@ export function AnimatedSidePanePanel({
   /** run 详情页里点脚本行 → 打开该 run 的脚本 transcript tab，落到那一站。 */
   /** run 详情页里点一张产物卡 → 打开那个产物的全尺寸查看 tab。 */
   /** run 目录页里点一行 → 打开那个 run 的详情页 tab（目录 → 详情是这一页存在的理由）。 */
-  onRefreshGit: () => void;
-  onSelectGitSource: (value: GitChangeSourceId) => void;
   mobileOverlay?: boolean;
   mobileStacked?: boolean;
 }) {
@@ -365,15 +208,9 @@ export function AnimatedSidePanePanel({
     right: false,
   });
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
-  const sidePaneVisibleInlineSizePx = useViewportInlineIntersectionSize(
-    panelElementRef,
-    hasRenderedSidePane,
-  );
-  const isWindowResizeSettling = useWindowResizeSettling(hasRenderedSidePane);
   const widthUnlockTimerRef = useRef<number | null>(null);
   const previousIsVisibleRef = useRef(isVisible);
   const panelLayout = resolveAnimatedSidePanePanelLayout({ mobileOverlay });
-  const hasReviewTab = visibleTabs.some((tab) => tab.type === "git");
 
   const tabDragSensors = useSensors(
     useSensor(PointerSensor, {
@@ -880,67 +717,6 @@ export function AnimatedSidePanePanel({
                             onOpenBrowserUrl={onOpenBrowserUrl}
                             onOpenCodeViewer={onOpenCodeViewer}
                             onOpenFileLink={onOpenFileLink}
-                          />
-                        ) : tab.type === "code-viewer" || tab.type === "file-manager" ? (
-                          <FileManagerPane
-                            markdownSelectionTarget={{
-                              sessionId: activeTaskId,
-                              workspaceKey,
-                              draftScopeKey,
-                            }}
-                            source={tab.source}
-                            target={
-                              tab.type === "file-manager"
-                                ? tab.target
-                                : {
-                                    workspacePath: tab.source.workspacePath ?? workspaceAbsPath,
-                                    workspaceIdentity: tab.source.workspacePath
-                                      ? tab.source.workspaceIdentity
-                                      : workspaceIdentity,
-                                    workspaceRemoteSessionId: tab.source.workspacePath
-                                      ? tab.source.workspaceRemoteSessionId
-                                      : workspaceRemoteSessionId,
-                                  }
-                            }
-                            mobileOverlay={mobileOverlay}
-                            canOpenLocalFileManager={Boolean(isDesktop)}
-                            onNavigate={(source) => onNavigateFileManager(tab.id, source)}
-                            onClose={() => onCloseTab(tab.id)}
-                            workspacePath={workspaceAbsPath}
-                            onOpenBrowserUrl={onOpenBrowserUrl}
-                            onOpenCodeViewer={onOpenCodeViewer}
-                            // inactive/窄条/resize 中的 code preview 不应继续让
-                            // @pierre/diffs 的千行 Shadow DOM 参与布局；这里只裁剪 body，保留 tab/source/file state。
-                            renderHeavyContent={shouldRenderPreviewPaneHeavyContent({
-                              isActiveTab: tab.id === contentActiveTabId,
-                              // video/audio 原生全屏会触发 resize，resize settling
-                              // 期间必须保持当前媒体节点挂载，否则浏览器会立即退出全屏。
-                              isMediaPreview:
-                                tab.source?.type === "media" ||
-                                (tab.source?.type === "file" &&
-                                  inferMediaPreview(tab.source.path) !== null),
-                              isMobileOverlay: mobileOverlay,
-                              isResizeSettling: isWindowResizeSettling,
-                              isSidePaneVisible: isVisible,
-                              visibleInlineSizePx: sidePaneVisibleInlineSizePx,
-                            })}
-                          />
-                        ) : tab.type === "git" ? (
-                          <GitPane
-                            workspacePath={workspaceAbsPath}
-                            workspaceIdentity={workspaceIdentity}
-                            workspaceRemoteSessionId={workspaceRemoteSessionId}
-                            gitState={gitState}
-                            isDesktop={isDesktop}
-                            selectedSourceId={activeGitSourceId}
-                            fileChangeFindActiveIndex={fileChangeFindActiveIndex}
-                            fileChangeFindNavigationRequestId={fileChangeFindNavigationRequestId}
-                            fileChangeFindQuery={fileChangeFindQuery}
-                            onFileChangeFindMatchCountChange={onFileChangeFindMatchCountChange}
-                            onSelectSource={onSelectGitSource}
-                            onClose={onCloseGit}
-                            onRefresh={onRefreshGit}
-                            onRevealFileInTree={onRevealGitFileInTree}
                           />
                         ) : tab.type === "new-tab" ? (
                           null

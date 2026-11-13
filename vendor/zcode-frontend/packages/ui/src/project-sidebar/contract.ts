@@ -5,7 +5,6 @@ import type {
   CreateTaskRequest,
   RemoteWorkspaceRecoveryStatus,
 } from "@/app-shell/types.js";
-import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import type { Theme } from "@/useTheme.js";
 export { LEGACY_SINGLE_ROOT_PROJECT_PREFIX } from "@zcode/services";
 export type { WebRemoteControlMobileTaskView, WebRemoteControlStatus } from "@zcode/shared";
@@ -69,25 +68,11 @@ export interface ProjectAvailability {
 }
 export type { Locale, Theme };
 export type ProjectSidebarView = "projects" | "grouped" | "timeline" | "unread";
-export interface SidebarFileTreeTarget {
-  workspacePath: string;
-  workspaceName: string;
-  workspaceIdentity?: string;
-  workspaceRemoteSessionId?: string;
-  revealPath?: string;
-  temporaryExternalDirectory?: boolean;
-}
-export interface SidebarFileTreeOpenRequest {
-  id: number;
-  target: SidebarFileTreeTarget;
-}
 /** 项目、时间线共用同一 Host 行集合；回调只负责现有导航，不维护组织状态。 */
 export interface ProjectSidebarProps {
   workspacePath: string;
   workspaceIdentity?: string;
   workspaceRemoteSessionId?: string;
-  activePreviewPath?: string | null;
-  onOpenFileManager?: (target: SidebarFileTreeTarget) => void;
   onSelectTask: (
     targetWorkspacePath: string,
     taskId: string,
@@ -96,9 +81,7 @@ export interface ProjectSidebarProps {
     expectedUnreadAt?: number,
   ) => void;
   onStartDraftInWorkspace: (targetWorkspacePath: string, targetWorkspaceIdentity?: string) => void;
-  onOpenCodeViewer?: (source: CodeViewerSource) => void;
   onOpenBrowserUrl?: (url: string) => void;
-  fileTreeOpenRequest?: SidebarFileTreeOpenRequest | null;
   onCreateTask: (request?: CreateTaskRequest) => void;
   onCreateConversationTask: () => void;
   onCreateConversationTaskOnSource?: (sourceServerId: string) => void;

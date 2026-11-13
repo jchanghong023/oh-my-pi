@@ -66,7 +66,6 @@ export interface RootProps {
   /** Native OMP host operations, independent of ZCode account/cloud capabilities. */
   nativeHostAvailable?: boolean;
   /** Display-only starting location for the project chooser, not an opened workspace. */
-  initialDirectoryPath?: string;
   /** Opens/adopts a real project and reconnects its browser binding; create is explicit only. */
   onOpenProject?: (
     path: string, create?: boolean, newSession?: boolean, showFiles?: boolean,
@@ -78,7 +77,6 @@ export interface RootProps {
   /** 是否允许在当前壳层里切换/新开工作区 */
   allowOpenWorkspace?: boolean;
   /** 是否优先使用服务端目录浏览器，Web 普通模式不能依赖系统目录选择框 */
-  preferDirectoryBrowser?: boolean;
   /** Initial responsive sidebar file-tree state. */
   initialSidebarFileTreeOpen?: boolean;
   /** Loading content shown while the initial workspace is being injected. */

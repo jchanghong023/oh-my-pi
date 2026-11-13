@@ -1,12 +1,6 @@
 import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
-import {
-  openFileManagerSidePane,
-  navigateFileManagerSidePane,
-  type FileManagerTarget,
-} from "@/lib/workspaceSidePane.js";
 /* eslint-disable max-lines */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import {
   buildTaskSidePaneMemoryKey,
   getSidePaneCollapsedPreference,
@@ -18,15 +12,10 @@ import {
   ensureSidePaneTab,
   closeSidePaneTabs,
   isSidePaneTabVisibleInScope,
-  closeGitSidePane,
-  closeCodeViewerSidePane,
   openSubagentSessionSidePane,
   openSubagentDirectorySidePane,
   openSelectionSideChatPane,
   openPlanDetailSidePane,
-  openCodeViewerSidePane,
-  openCodeViewerSidePanes,
-  activateGitSidePane,
   getActiveSidePaneTab,
   getVisibleSidePaneTabs,
   sidePaneOwnerKey,
@@ -35,7 +24,6 @@ import {
   restoreSidePaneTab,
   setActiveSidePaneTab,
   syncSubagentSessionSidePaneTabs,
-  toggleGitSidePane,
   stampSidePaneTabsOwnership,
   type OpenScopedSubagentSideTabRequest,
   type OpenBackgroundBashSideTabRequest,
@@ -277,127 +265,9 @@ export function useAppPanels(options: {
     sidePaneOwnerId,
   ]);
 
-  const pendingFileManagerTarget = useOptionalTabStore((state) => state.pendingFileManagerTarget);
-  const requestFileManager = useOptionalTabStore((state) => state.requestFileManager);
-  const consumeFileManager = useOptionalTabStore((state) => state.consumeFileManager);
-  const handleOpenFileManager = useCallback(
-    (target?: FileManagerTarget) => {
-      if (
-        target &&
-        !target.temporaryExternalDirectory &&
-        (target.workspaceIdentity?.trim() || target.workspacePath) !== activeWorkspaceKeyRef.current
-      ) {
-        requestFileManager(target);
-        return;
-      }
-      revealSidePaneForCurrentOwner();
-      commitOpenedSidePaneState((current) =>
-        openFileManagerSidePane(
-          current,
-          target ?? {
-            workspacePath: workspaceAbsPath,
-            ...(workspaceIdentity ? { workspaceIdentity } : {}),
-            ...(workspaceRemoteSessionId ? { workspaceRemoteSessionId } : {}),
-          },
-        ),
-      );
-    },
-    [
-      requestFileManager,
-      commitOpenedSidePaneState,
-      revealSidePaneForCurrentOwner,
-      workspaceAbsPath,
-      workspaceIdentity,
-      workspaceRemoteSessionId,
-    ],
-  );
-
-  useEffect(() => {
-    if (!pendingFileManagerTarget) return;
-    const targetKey =
-      pendingFileManagerTarget.workspaceIdentity?.trim() || pendingFileManagerTarget.workspacePath;
-    if (targetKey !== activeWorkspaceKey) return;
-    // 必须在本 hook 恢复目标 workspace 的 pane memory 和 owner 之后消费，不能由子 Shell effect 抢先写入旧桶。
-    if (!consumeFileManager(pendingFileManagerTarget)) return;
-    logger.debug("[FileManager] 在目标工作区打开目录", {
-      workspaceKey: targetKey,
-      ownerTaskId: sidePaneOwnerIdRef.current,
-    });
-    handleOpenFileManager(pendingFileManagerTarget);
-  }, [pendingFileManagerTarget, activeWorkspaceKey, consumeFileManager, handleOpenFileManager]);
-
-  const handleNavigateFileManager = useCallback(
-    (tabId: string, source: CodeViewerSource) => {
-      commitSidePaneState((current) => navigateFileManagerSidePane(current, tabId, source));
-    },
-    [commitSidePaneState],
-  );
-
-  const handleOpenCodeViewer = useCallback(
-    (source: CodeViewerSource) => {
-      revealSidePaneForCurrentOwner();
-      commitOpenedSidePaneState((current) => {
-        const next = openCodeViewerSidePane(current, source, sidePaneOwnerIdRef.current);
-        const activeTab = getActiveSidePaneTab(next);
-        const activePath =
-          activeTab?.type === "code-viewer" ? (activeTab.source.path ?? "none") : "none";
-        logger.info(
-          `[App] 切换右侧面板 mode=code-viewer workspace=${workspaceAbsPath} title=${source.title} path=${activePath} tabs=${next.tabs.length}`,
-        );
-        return next;
-      });
-    },
-    [commitOpenedSidePaneState, revealSidePaneForCurrentOwner, workspaceAbsPath],
-  );
-
-  const handleOpenCodeViewers = useCallback(
-    (sources: readonly CodeViewerSource[]) => {
-      if (sources.length === 0) return;
-      revealSidePaneForCurrentOwner();
-      commitOpenedSidePaneState((current) => {
-        const next = openCodeViewerSidePanes(current, sources, sidePaneOwnerIdRef.current, 0);
-        logger.info(
-          `[App] 批量打开右侧预览 workspace=${workspaceAbsPath} sources=${sources.length} tabs=${next.tabs.length}`,
-        );
-        return next;
-      });
-    },
-    [commitOpenedSidePaneState, revealSidePaneForCurrentOwner, workspaceAbsPath],
-  );
-
   const handleOpenBrowserUrl = useCallback((url: string) => {
     window.open(url, "_blank", "noopener,noreferrer");
   }, []);
-
-  const handleToggleGit = useCallback(() => {
-    commitOpenedSidePaneState((current) => {
-      if (isOfficeMode && !current?.tabs.some((tab) => tab.type === "git")) return current;
-      const closingActiveGit = getActiveSidePaneTab(current)?.type === "git";
-      const next = toggleGitSidePane(current);
-      if (!closingActiveGit) {
-        revealSidePaneForCurrentOwner();
-      }
-      const activeTab = getActiveSidePaneTab(next);
-      logger.info(
-        `[App] 切换右侧面板 mode=${activeTab?.type ?? "none"} workspace=${workspaceAbsPath} tabs=${next?.tabs.length ?? 0}`,
-      );
-      return next;
-    });
-  }, [isOfficeMode, commitOpenedSidePaneState, revealSidePaneForCurrentOwner, workspaceAbsPath]);
-
-  const handleOpenGit = useCallback(() => {
-    commitOpenedSidePaneState((current) => {
-      if (isOfficeMode && !current?.tabs.some((tab) => tab.type === "git")) return current;
-      const next = activateGitSidePane(current);
-      // 文件变更查找只需要“确保 Git 面板打开”，不能复用 toggle。
-      // 如果当前已经在 Git tab 上，toggle 会把它关掉，导致切到文件变更范围反而看不到内容。
-      revealSidePaneForCurrentOwner();
-      logger.info(
-        `[App] 打开右侧面板 mode=git workspace=${workspaceAbsPath} tabs=${next.tabs.length}`,
-      );
-      return next;
-    });
-  }, [isOfficeMode, commitOpenedSidePaneState, revealSidePaneForCurrentOwner, workspaceAbsPath]);
 
   const handleOpenBackgroundBash = useCallback(
     (request: OpenBackgroundBashSideTabRequest) => {
@@ -589,22 +459,6 @@ export function useAppPanels(options: {
     );
   }, [commitSidePaneState, currentSidePaneScope, setIsSidePaneCollapsed, workspaceAbsPath]);
 
-  const handleCloseCodeViewer = useCallback(() => {
-    logger.info(`[App] 关闭右侧面板 mode=code-viewer workspace=${workspaceAbsPath}`);
-    commitSidePaneState((current) => {
-      const next = closeCodeViewerSidePane(current);
-      return next;
-    });
-  }, [commitSidePaneState, currentSidePaneScope, setIsSidePaneCollapsed, workspaceAbsPath]);
-
-  const handleCloseGit = useCallback(() => {
-    logger.info(`[App] 关闭右侧面板 mode=git workspace=${workspaceAbsPath}`);
-    commitSidePaneState((current) => {
-      const next = closeGitSidePane(current);
-      return next;
-    });
-  }, [commitSidePaneState, currentSidePaneScope, setIsSidePaneCollapsed, workspaceAbsPath]);
-
   const handleActivateSidePaneTab = useCallback(
     (tabId: string) => {
       commitSidePaneState((current) => {
@@ -723,8 +577,7 @@ export function useAppPanels(options: {
       const item = allRecentClosedSidePaneTabs.find((entry) => entry.tab.id === tabId);
       if (
         !item ||
-        !isSidePaneTabVisibleInScope(item.tab, currentSidePaneScope()) ||
-        (isOfficeMode && item.tab.type === "git")
+        !isSidePaneTabVisibleInScope(item.tab, currentSidePaneScope())
       )
         return;
 
@@ -745,7 +598,6 @@ export function useAppPanels(options: {
       logger.info(`[App] 重新打开最近关闭右侧面板 tab=${tabId} workspace=${workspaceAbsPath}`);
     },
     [
-      isOfficeMode,
       allRecentClosedSidePaneTabs,
       currentSidePaneScope,
       commitSidePaneState,
@@ -762,8 +614,7 @@ export function useAppPanels(options: {
           isSidePaneTabVisibleInScope(item.tab, {
             workspaceKey: activeWorkspaceKey,
             ownerTaskId: sidePaneOwnerId,
-          }) &&
-          (!isOfficeMode || item.tab.type !== "git"),
+          }),
       ),
     [activeWorkspaceKey, sidePaneOwnerId, allRecentClosedSidePaneTabs, isOfficeMode],
   );
@@ -774,14 +625,8 @@ export function useAppPanels(options: {
     isSidePaneCollapsed,
     setIsSidePaneCollapsed,
     isSidebarVisible,
-    handleOpenFileManager,
-    handleNavigateFileManager,
     // 回调
-    handleOpenCodeViewer,
-    handleOpenCodeViewers,
     handleOpenBrowserUrl,
-    handleToggleGit,
-    handleOpenGit,
     handleOpenSubagentSession,
     handleOpenBackgroundBash,
     handleOpenSubagentDirectory,
@@ -790,8 +635,6 @@ export function useAppPanels(options: {
     handleOpenPlanDetail,
     handleToggleSidebar,
     handleToggleSidePaneCollapse,
-    handleCloseCodeViewer,
-    handleCloseGit,
     handleActivateSidePaneTab,
     handleReorderSidePaneTab,
     handleCloseSidePaneTab,

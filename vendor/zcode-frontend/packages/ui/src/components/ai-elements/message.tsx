@@ -11,15 +11,13 @@ import { Button } from "../ui/button.js";
 import { ButtonGroup, ButtonGroupText } from "../ui/button-group.js";
 import { cn } from "../lib/utils.js";
 import { cjk } from "@streamdown/cjk";
-import type { EditorInfo, FileStat, OpenInEditorOptions } from "@zcode/shared";
+import type { FileStat, OpenInEditorOptions } from "@zcode/shared";
 import type { UIMessage } from "ai";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
   ExternalLinkIcon,
-  FolderOpenIcon,
-  PanelRightIcon,
 } from "lucide-react";
 import remarkCjkFriendlyGfmStrikethrough from "remark-cjk-friendly-gfm-strikethrough";
 import type {
@@ -89,22 +87,11 @@ import {
 } from "@/lib/markdownFileLink.js";
 import { stripBalancedAssistantPathQuotes } from "@/lib/assistantPathQuotes.js";
 import { getPathLeaf } from "@/lib/path.js";
-import { getWorkspaceFileRelativePath } from "@/workspace-file-tree/model.js";
-import { resolveWorkspaceEditorSelection } from "@/lib/workspaceEditorSelection.js";
-import {
-  getFileManagerLabel,
-  sortInstalledEditorsForFileTree,
-} from "@/workspace-file-tree/helpers.js";
+import { getWorkspaceFileRelativePath } from "@/lib/path.js";
 import type { CodePreviewSettings } from "@/lib/codePreviewSettings.js";
 import { DEFAULT_CODE_PREVIEW_SETTINGS } from "@/lib/codePreviewSettings.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
-import { usePlatform } from "@/hooks/usePlatform.js";
-import { FileApplicationChoices, FileSaveAsMenuItem } from "@/file-menu/index.js";
-import { useFileApplications } from "@/file-menu/index.js";
-import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
-import { useFileContextActions } from "@/hooks/useFileContextActions.js";
-import { useWorkspaceOpenInEditorTarget } from "@/hooks/useWorkspaceOpenInEditorTarget.js";
 import { useOptionalServices } from "@/hooks/useServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { logger } from "@/logger.js";
@@ -1120,217 +1107,13 @@ function MessageFileLink(props: MessageFileLinkProps) {
 }
 
 function ScopedMessageFileLink({ className, fileIconSrc, fileLink, onOpen }: MessageFileLinkProps) {
-  const { intl } = useZCodeIntl();
-  const platform = usePlatform();
-  const services = useWorkspaceServices(
-    fileLink.workspacePath,
-    fileLink.workspaceRemoteSessionId,
-    fileLink.workspaceIdentity,
-  );
-  const [pathKind, setPathKind] = useState<"file" | "directory" | null>(null);
-  const openInEditorContext = useWorkspaceOpenInEditorTarget({
-    workspacePath: fileLink.workspacePath,
-    workspaceIdentity: fileLink.workspaceIdentity,
-    workspaceRemoteSessionId: fileLink.workspaceRemoteSessionId,
-  });
-  const isRemote = Boolean(
-    fileLink.workspaceIdentity ||
-    fileLink.workspaceRemoteSessionId ||
-    openInEditorContext.isRemoteWorkspace,
-  );
-  // 与 OpenSplitButton 的「在 Finder / 资源管理器中打开」同源：本机或 WSL 才能定位，SSH 等远程不显示。
-  const fileActions = useFileContextActions({
-    canOpenLocalFileManager: Boolean(platform.canOpenLocalFiles),
-    isRemoteWorkspace: isRemote,
-    remoteTarget: openInEditorContext.remoteTarget,
-    workspaceIdentity: fileLink.workspaceIdentity,
-  });
-  const canReveal = fileActions.canRevealInFileManager({ path: fileLink.path });
-  const fileApplications = useFileApplications(
-    { path: fileLink.path, pathKind: "file", workspaceIdentity: fileLink.workspaceIdentity },
-    isRemote,
-  );
-  const [editors, setEditors] = useState<EditorInfo[]>([]);
-  const [loadingEditors, setLoadingEditors] = useState(false);
-  const sortedEditors: Array<EditorInfo & { isDefault?: boolean }> = useMemo(
-    () =>
-      pathKind === "file" && !isRemote
-        ? fileApplications.apps.map((app) => ({ ...app, iconDataUrl: app.iconDataUrl ?? "" }))
-        : isRemote && !openInEditorContext.remoteTarget
-          ? []
-          : resolveWorkspaceEditorSelection({
-              installedEditors: editors,
-              selectedEditorId: null,
-              remoteTarget: openInEditorContext.remoteTarget,
-            }).availableEditors,
-    [editors, openInEditorContext, pathKind, isRemote, fileApplications.apps],
-  );
-  const query = useRef(0);
-  const queryKey = `${fileLink.path}\u0000${fileLink.workspaceIdentity ?? ""}\u0000${fileLink.workspaceRemoteSessionId ?? ""}`;
-  const currentQueryKey = useRef(queryKey);
-  currentQueryKey.current = queryKey;
-  useEffect(() => {
-    setPathKind(null);
-    setEditors([]);
-    setLoadingEditors(false);
-    query.current += 1;
-    return () => {
-      query.current += 1;
-    };
-  }, [queryKey]);
-
-  const loadEditors = useCallback(async () => {
-    if (loadingEditors) return;
-    const request = ++query.current;
-    setLoadingEditors(true);
-    try {
-      const stat = await services.fileService.stat({ path: fileLink.path });
-      if (request !== query.current || currentQueryKey.current !== queryKey) return;
-      setPathKind(stat.type);
-      if (stat.type === "file" && !isRemote) {
-        await fileApplications.load();
-        return;
-      }
-      const installedEditors = await platform.getInstalledEditors();
-      if (request === query.current && currentQueryKey.current === queryKey)
-        setEditors(installedEditors);
-    } catch (error) {
-      logger.warn("[MessageResponse] 获取 markdown 链接打开方式失败", {
-        path: fileLink.path,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      if (request === query.current) setLoadingEditors(false);
-    }
-  }, [
-    fileLink.path,
-    loadingEditors,
-    platform,
-    services,
-    isRemote,
-    fileApplications.load,
-    queryKey,
-  ]);
-
-  const hasDefaultShortcut =
-    pathKind === "file" &&
-    !isRemote &&
-    Boolean(platform.canOpenLocalFiles && platform.openExternalFile);
-
-  const handleOpenInEditor = (editor: EditorInfo) => {
-    if (pathKind === "file" && !isRemote) {
-      void fileApplications.open({ ...editor, isDefault: false });
-      return;
-    }
-    if (!services) {
-      logger.warn("[MessageResponse] 无法确认 markdown 链接文件类型", {
-        editorId: editor.id,
-        path: fileLink.path,
-        error: "workspace-file-service-unavailable",
-      });
-      return;
-    }
-
-    persistLastSelectedEditorId(editor.id);
-    void openMessageFileLinkInEditor({
-      editorId: editor.id,
-      fileLink,
-      openInEditor: (editorId, path, options) => platform.openInEditor(editorId, path, options),
-      remoteTarget: openInEditorContext.remoteTarget,
-      statFile: (params) => services.fileService.stat(params),
-    })
-      .then((result) => {
-        if (result.success) {
-          return;
-        }
-
-        logger.warn("[MessageResponse] 第三方 App 打开 markdown 文件链接失败", {
-          editorId: editor.id,
-          path: fileLink.path,
-          error: result.error ?? "unknown-error",
-        });
-      })
-      .catch((error) => {
-        logger.warn("[MessageResponse] 无法确认 markdown 链接文件类型", {
-          editorId: editor.id,
-          path: fileLink.path,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-  };
-
   return (
-    <ContextMenu onOpenChange={(open) => open && void loadEditors()}>
-      <ContextMenuTrigger asChild>
-        <MessageFileLinkButton
-          className={className}
-          fileIconSrc={fileIconSrc}
-          fileLink={fileLink}
-          onOpen={onOpen}
-        >
-          {fileLink.label}
-        </MessageFileLinkButton>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-64 max-w-[calc(100vw-1rem)]">
-        <ContextMenuItem onSelect={onOpen}>
-          <PanelRightIcon aria-hidden="true" className="size-4" />
-          {intl.formatMessage({ id: "common.open" })}
-        </ContextMenuItem>
-        {platform.canOpenLocalFiles && (!isRemote || openInEditorContext.remoteTarget) && (
-          <FileApplicationChoices
-            variant="context"
-            applications={sortedEditors}
-            loading={loadingEditors}
-            onOpenDefault={
-              hasDefaultShortcut ? () => void fileApplications.openDefault() : undefined
-            }
-            onSelect={handleOpenInEditor}
-          />
-        )}
-        <ContextMenuSeparator />
-        {canReveal && (
-          <ContextMenuItem
-            onSelect={() =>
-              // 文件：打开所在目录并选中；目录：直接打开该目录。stat 未返回前按链接提示判断。
-              void fileActions.revealFileInFileManager({
-                path: fileLink.path,
-                kind: (pathKind ?? fileLink.pathKind) === "directory" ? "directory" : "file",
-              })
-            }
-          >
-            <FolderOpenIcon className="size-4" />
-            {getFileManagerLabel(intl)}
-          </ContextMenuItem>
-        )}
-        {pathKind === "file" && (
-          <FileSaveAsMenuItem
-            variant="context"
-            path={fileLink.path}
-            workspacePath={fileLink.workspacePath}
-            workspaceIdentity={fileLink.workspaceIdentity}
-            workspaceRemoteSessionId={fileLink.workspaceRemoteSessionId}
-          />
-        )}
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          onSelect={() => void fileActions.copyAbsolutePath({ path: fileLink.path })}
-        >
-          <CopyIcon className="size-4" />
-          {intl.formatMessage({ id: "fileActions.copyAbsolutePath" })}
-        </ContextMenuItem>
-        <ContextMenuItem
-          onSelect={() =>
-            void fileActions.copyRelativePath({
-              path: fileLink.path,
-              relativePath: fileLink.relativePath ?? fileLink.label,
-            })
-          }
-        >
-          <CopyIcon className="size-4" />
-          {intl.formatMessage({ id: "fileActions.copyRelativePath" })}
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+    <MessageFileLinkButton
+      className={className}
+      fileIconSrc={fileIconSrc}
+      fileLink={fileLink}
+      onOpen={onOpen}
+    />
   );
 }
 

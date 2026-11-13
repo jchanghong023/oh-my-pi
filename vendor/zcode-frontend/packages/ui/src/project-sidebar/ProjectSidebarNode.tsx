@@ -33,7 +33,6 @@ type Props = Pick<
     service?: IProjectService;
     onExpandedChange(project: VirtualProject, expanded: boolean): void;
     onEdit(value: { project: VirtualProject }): void;
-    onViewFiles(project: VirtualProject, rootPath: string): Promise<void>;
   };
 
 // Bug 根因：任务活动每秒更新目录，父组件随之重建所有项目的菜单与回调，穿透内容层 memo。
@@ -47,7 +46,6 @@ export const ProjectSidebarNode = memo(
     onCreateTask,
     onExpandedChange,
     onEdit,
-    onViewFiles,
     ...display
   }: Props) {
     const { intl } = useZCodeIntl();
@@ -69,7 +67,6 @@ export const ProjectSidebarNode = memo(
           })
         }
         onEdit={() => onEdit({ project })}
-        onViewFiles={(rootPath) => runProjectAction(() => onViewFiles(project, rootPath))}
         onDelete={() =>
           runProjectAction(async () => {
             await service!.deleteProject(project.id, project.hostId);

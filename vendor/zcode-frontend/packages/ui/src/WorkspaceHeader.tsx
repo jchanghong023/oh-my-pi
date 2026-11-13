@@ -3,7 +3,6 @@ import type {
   ZCodeTaskMeta,
   ZCodeTaskChangeSummary,
   EditorInfo,
-  GitRepositorySummary,
   UserInfo,
 } from "@zcode/shared";
 import { useState } from "react";
@@ -56,12 +55,9 @@ export function WorkspaceHeader({
   providerWorkspaceConfigExists,
   providerWorkspaceConfigLoading,
   workspaceHeaderState,
-  gitSummary,
-  gitDirtyFileCount,
   simplifyForNarrowViewport = false,
   isSidebarVisible,
   isSidePaneOpen,
-  onRefreshGit,
   onToggleSidePane,
   toggleSidePaneShortcutLabel,
   onReloadSession,
@@ -93,12 +89,9 @@ export function WorkspaceHeader({
   providerWorkspaceConfigExists: boolean;
   providerWorkspaceConfigLoading: boolean;
   workspaceHeaderState: WorkspaceHeaderState;
-  gitSummary: GitRepositorySummary;
-  gitDirtyFileCount: number;
   simplifyForNarrowViewport?: boolean;
   isSidebarVisible: boolean;
   isSidePaneOpen: boolean;
-  onRefreshGit: () => void;
   onToggleSidePane: () => void;
   toggleSidePaneShortcutLabel?: string;
   onReloadSession: (options?: {
@@ -156,8 +149,6 @@ export function WorkspaceHeader({
             activeSessionId={activeSessionId}
             activeTaskProvider={activeTaskProvider}
             resolvedActiveTaskMeta={resolvedActiveTaskMeta}
-            gitSummary={gitSummary}
-            gitDirtyFileCount={gitDirtyFileCount}
             sessionLogPath={sessionLogPath}
             nativeSessionLogProvider={nativeSessionLogProvider}
             nativeSessionLogPath={nativeSessionLogPath}
@@ -172,7 +163,6 @@ export function WorkspaceHeader({
             onReloadSession={onReloadSession}
             reloadSessionDisabled={reloadSessionDisabled}
             reloadSessionPending={reloadSessionPending}
-            onRefreshGit={onRefreshGit}
           />
         ) : (
           <div className="min-w-0 flex-1" aria-hidden="true" />

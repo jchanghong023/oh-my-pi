@@ -1,4 +1,3 @@
-import type { GitChangeSourceId } from "@zcode/shared";
 import type { SidePaneFullViewState } from "@/side-pane-full-view/contract.js";
 import {
   normalizeWorkspaceSidePaneState,
@@ -12,7 +11,6 @@ export interface TaskSidePaneMemoryState {
   sidePaneCollapsedByOwner: Record<string, boolean>;
   /** 对话级完整视图状态（docs/ui/side-pane-full-view.md）；缺省表示普通视图。 */
   sidePaneFullViewByOwner: Record<string, SidePaneFullViewState>;
-  activeGitSourceId: GitChangeSourceId;
 }
 
 const DEFAULT_TASK_SIDE_PANE_MEMORY_STATE: TaskSidePaneMemoryState = {
@@ -20,7 +18,6 @@ const DEFAULT_TASK_SIDE_PANE_MEMORY_STATE: TaskSidePaneMemoryState = {
   isSidePaneCollapsed: true,
   sidePaneCollapsedByOwner: {},
   sidePaneFullViewByOwner: {},
-  activeGitSourceId: "unstaged",
 };
 
 export const TASK_SIDE_PANE_MEMORY_MAX_ENTRIES = 50;

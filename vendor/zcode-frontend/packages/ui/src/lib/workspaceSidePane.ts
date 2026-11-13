@@ -1,45 +1,6 @@
 /* eslint-disable max-lines -- Side pane tab 状态集中维护文件、Git 和对话工作流面板。 */
 import { createUuid } from "@zcode/shared";
-import { inferMediaPreview, isPptxPreviewPath, type CodeViewerSource } from "@/lib/codeViewer.js";
-import { normalizeCodeViewerSource } from "@/lib/codeViewerSource.js";
 
-
-export interface GitSidePaneTab {
-  id: "git";
-  type: "git";
-  ownerTaskId?: string | null;
-  workspaceKey?: string | null;
-  openedAt?: number;
-}
-
-export interface FileManagerTarget {
-  workspacePath: string;
-  workspaceName?: string;
-  workspaceIdentity?: string;
-  workspaceRemoteSessionId?: string;
-  revealPath?: string;
-  temporaryExternalDirectory?: boolean;
-}
-
-export interface FileManagerSidePaneTab {
-  id: string;
-  type: "file-manager";
-  ownerTaskId?: string | null;
-  workspaceKey?: string | null;
-  openedAt?: number;
-  target: FileManagerTarget;
-  source: CodeViewerSource | null;
-}
-
-export interface CodeViewerSidePaneTab {
-  id: string;
-  type: "code-viewer";
-  ownerTaskId?: string | null;
-  workspaceKey?: string | null;
-  openedAt?: number;
-  source: CodeViewerSource;
-  sourceKey: string | null;
-}
 
 
 
@@ -182,11 +143,8 @@ export interface NewTabSidePaneTab {
 }
 
 export type WorkspaceSidePaneTab =
-  | FileManagerSidePaneTab
   | NewTabSidePaneTab
   | BackgroundBashSidePaneTab
-  | GitSidePaneTab
-  | CodeViewerSidePaneTab
   | SubagentSessionSidePaneTab
   | SubagentDirectorySidePaneTab
   | SelectionSideChatPaneTab
@@ -216,7 +174,7 @@ export function normalizeWorkspaceSidePaneState(
   // 已移除的界面不从旧版面板记忆恢复。
   const filteredTabs = current.tabs.filter(
     (tab) =>
-      !["treemapping", "terminal", "deploy", "browser", "browser-use", "browser-permissions", "plugin-market", "plugin-ui", "workspace-plugin-preview"].includes(
+      !["treemapping", "terminal", "deploy", "browser", "browser-use", "browser-permissions", "plugin-market", "plugin-ui", "workspace-plugin-preview", "git", "file-manager", "code-viewer"].includes(
         tab.type,
       ),
   );
@@ -271,9 +229,6 @@ export function normalizeWorkspaceSidePaneState(
 
 
 
-function createGitSidePaneTab(): GitSidePaneTab {
-  return { id: "git", type: "git", openedAt: Date.now() };
-}
 
 
 export function encodeSidePaneTabIdPart(value: string): string {
@@ -388,70 +343,8 @@ export function createPlanDetailSidePaneTab(
   };
 }
 
-function getCodeViewerTabSourceKey(source: CodeViewerSource): string | null {
-  const workspaceScope = source.workspaceIdentity?.trim()
-    ? source.workspaceIdentity.trim()
-    : (source.workspacePath ?? "");
-  const scopedKeyPrefix = workspaceScope ? `${workspaceScope}:` : "";
-  // 文件树把 PPTX 表示为通用 `file` source，引用反向打开则使用带导航意图的
-  // `pptx` source。旧 key 直接包含 source.type，导致同一 workspace 路径被拆成两个 tab。
-  // source type 只是入口表示，不是文件身份；这里只归一 PPTX，避免扩大其它预览类型的语义。
-  const resourceType =
-    source.type === "pptx" || (source.type === "file" && isPptxPreviewPath(source.path))
-      ? "pptx"
-      : source.type === "media" || (source.type === "file" && inferMediaPreview(source.path))
-        ? "media"
-        : source.type;
 
-  if (
-    source.type === "file" ||
-    source.type === "code-review" ||
-    source.type === "image" ||
-    source.type === "media" ||
-    source.type === "pdf" ||
-    source.type === "pptx"
-  ) {
-    return `${scopedKeyPrefix}${resourceType}:${source.path}`;
-  }
 
-  if (source.type === "text" && source.path) {
-    return `${scopedKeyPrefix}${source.type}:${source.path}`;
-  }
-
-  if (source.type === "patch") {
-    // file diff 之前只按 path 复用 tab，导致同一个文件在不同轮次产生的不同 patch
-    // 会互相覆盖，看起来像“diff 面板只能打开一个 tab”。这里把 patch 内容摘要纳入 key，
-    // 让不同 diff 可以并排保留，同时同一份 diff 重复点击仍然复用已有 tab。
-    return `${scopedKeyPrefix}patch:${source.path ?? source.title}:${hashCodeViewerContent(source.patch)}`;
-  }
-
-  if (source.type === "multi-file-diff") {
-    return `${scopedKeyPrefix}multi-file-diff:${source.path ?? source.title}:${hashCodeViewerContent(`${source.beforeContent}\0${source.afterContent}`)}`;
-  }
-
-  return null;
-}
-
-function hashCodeViewerContent(content: string): string {
-  let hash = 0;
-  for (let index = 0; index < content.length; index += 1) {
-    hash = (hash * 31 + content.charCodeAt(index)) | 0;
-  }
-
-  return Math.abs(hash).toString(36);
-}
-
-function createCodeViewerSidePaneTab(source: CodeViewerSource): CodeViewerSidePaneTab {
-  const normalizedSource = normalizeCodeViewerSource(source);
-  const sourceKey = getCodeViewerTabSourceKey(normalizedSource);
-  return {
-    id: sourceKey ? `code-viewer:${sourceKey}` : `code-viewer:${createUuid()}`,
-    type: "code-viewer",
-    openedAt: Date.now(),
-    source: normalizedSource,
-    sourceKey,
-  };
-}
 
 function findTabIndexById(tabs: WorkspaceSidePaneTab[], tabId: string): number {
   return tabs.findIndex((tab) => tab.id === tabId);
@@ -543,8 +436,6 @@ export function isSidePaneTabVisibleInScope(
 ): boolean {
   if (!sidePaneTabMatchesWorkspace(tab, scope.workspaceKey)) return false;
   switch (tab.type) {
-    case "git":
-      return true;
     case "subagent-session":
     case "subagent-directory":
     case "bash-output":
@@ -552,8 +443,6 @@ export function isSidePaneTabVisibleInScope(
     case "selection-side-chat":
     case "plan-detail":
       return tab.parentSessionId === scope.ownerTaskId;
-    case "file-manager":
-    case "code-viewer":
     case "new-tab":
       return sidePaneOwnerKey(tab.ownerTaskId) === sidePaneOwnerKey(scope.ownerTaskId);
   }
@@ -623,73 +512,8 @@ export function restoreSidePaneTab(
   });
 }
 
-export function openFileManagerSidePane(
-  current: WorkspaceSidePaneState | null,
-  target: FileManagerTarget,
-): WorkspaceSidePaneState {
-  return activateSidePaneTab(current, {
-    id: `file-manager:${createUuid()}`,
-    type: "file-manager",
-    target,
-    source: null,
-    openedAt: Date.now(),
-  });
-}
 
-export function navigateFileManagerSidePane(
-  current: WorkspaceSidePaneState | null,
-  tabId: string,
-  source: CodeViewerSource,
-): WorkspaceSidePaneState | null {
-  if (!current) return current;
-  const normalizedSource = normalizeCodeViewerSource(source);
-  return {
-    ...current,
-    // 导航只更新目标实例，不激活其他 Tab，也不改变实例 id 和任务归属。
-    tabs: current.tabs.map((tab) => {
-      if (tab.id !== tabId) return tab;
-      if (tab.type === "file-manager") return { ...tab, source: normalizedSource };
-      if (tab.type === "code-viewer") {
-        return {
-          ...tab,
-          source: normalizedSource,
-          sourceKey: getCodeViewerTabSourceKey(normalizedSource),
-        };
-      }
-      return tab;
-    }),
-  };
-}
 
-export function openCodeViewerSidePane(
-  current: WorkspaceSidePaneState | null,
-  source: CodeViewerSource,
-  ownerTaskId?: string | null,
-): WorkspaceSidePaneState {
-  // 同一个文件/图片在消息里被重复点击时，不能把右侧面板整块替换，
-  // 用户刚在别的 pane 里看的内容会直接丢掉。这里按稳定 sourceKey 复用已有 code viewer tab，
-  // 既避免重复开一排同名 tab，也能在再次打开时刷新到最新 source。
-  const nextTab = createCodeViewerSidePaneTab(source);
-  if (!current || nextTab.sourceKey === null) {
-    return activateSidePaneTab(current, nextTab);
-  }
-
-  const ownerKey = sidePaneOwnerKey(ownerTaskId);
-  const matchedTab = current.tabs.find(
-    (tab): tab is CodeViewerSidePaneTab =>
-      tab.type === "code-viewer" &&
-      tab.sourceKey === nextTab.sourceKey &&
-      sidePaneOwnerKey(tab.ownerTaskId) === ownerKey,
-  );
-  // 文件导航后旧实例仍持有原 id；重新打开原路径时必须分配新 id，避免覆盖正在看的文件。
-  if (!matchedTab && current.tabs.some((tab) => tab.id === nextTab.id)) {
-    nextTab.id = `code-viewer:${createUuid()}`;
-  }
-  return activateSidePaneTab(
-    current,
-    matchedTab ? { ...matchedTab, source: nextTab.source } : nextTab,
-  );
-}
 
 /**
  * 一次性打开一组代码预览 Tab。
@@ -698,50 +522,7 @@ export function openCodeViewerSidePane(
  * 面板经历多次中间状态，并且最后一张会意外成为 active。这里复用单文件
  * 的 sourceKey/owner 规则批量收口，最后按调用方指定的顺序激活一张 Tab。
  */
-export function openCodeViewerSidePanes(
-  current: WorkspaceSidePaneState | null,
-  sources: readonly CodeViewerSource[],
-  ownerTaskId?: string | null,
-  activeIndex = 0,
-): WorkspaceSidePaneState {
-  if (sources.length === 0) {
-    return current ?? { tabs: [], activeTabId: "" };
-  }
 
-  let next: WorkspaceSidePaneState | null = current;
-  const openedTabIds: string[] = [];
-  const seenSourceKeys = new Set<string>();
-
-  for (const source of sources) {
-    const normalizedSource = normalizeCodeViewerSource(source);
-    const sourceKey = getCodeViewerTabSourceKey(normalizedSource);
-    // sourceKey 是 workspace-scoped 的稳定身份；同一批次重复路径只打开一次。
-    if (sourceKey !== null && seenSourceKeys.has(sourceKey)) continue;
-    if (sourceKey !== null) seenSourceKeys.add(sourceKey);
-
-    next = openCodeViewerSidePane(next, normalizedSource, ownerTaskId);
-    const activeTab = getActiveSidePaneTab(next);
-    if (activeTab?.type === "code-viewer") {
-      openedTabIds.push(activeTab.id);
-    }
-  }
-
-  if (!next || openedTabIds.length === 0) {
-    return next ?? { tabs: [], activeTabId: "" };
-  }
-
-  const safeIndex = Math.min(Math.max(activeIndex, 0), openedTabIds.length - 1);
-  return {
-    ...next,
-    activeTabId: openedTabIds[safeIndex]!,
-  };
-}
-
-export function activateGitSidePane(
-  current: WorkspaceSidePaneState | null,
-): WorkspaceSidePaneState {
-  return activateSidePaneTab(current, createGitSidePaneTab());
-}
 
 
 export function openSubagentSessionSidePane(
@@ -1046,29 +827,8 @@ export function reorderSidePaneTab(
 
 
 
-export function toggleGitSidePane(
-  current: WorkspaceSidePaneState | null,
-): WorkspaceSidePaneState | null {
-  const activeTab = getActiveSidePaneTab(current);
-  if (activeTab?.type === "git") {
-    return closeSidePaneTab(current, activeTab.id);
-  }
 
-  return activateGitSidePane(current);
-}
 
-export function closeCodeViewerSidePane(
-  current: WorkspaceSidePaneState | null,
-): WorkspaceSidePaneState | null {
-  const activeTab = getActiveSidePaneTab(current);
-  return activeTab?.type === "code-viewer" ? closeSidePaneTab(current, activeTab.id) : current;
-}
-
-export function closeGitSidePane(
-  current: WorkspaceSidePaneState | null,
-): WorkspaceSidePaneState | null {
-  return closeSidePaneTab(current, "git");
-}
 
 export function openBackgroundBashSidePane(
   current: WorkspaceSidePaneState | null,

@@ -90,3 +90,33 @@ export function toFileUrl(path: string): string {
 
   return encodeUriPathForFileUrl(normalizedPath);
 }
+
+export function areWorkspaceFilePathsEqual(leftPath: string, rightPath: string): boolean {
+  return (
+    normalizeWorkspaceFilePath(leftPath) === normalizeWorkspaceFilePath(rightPath)
+  );
+}
+
+function normalizeWorkspaceFilePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+export function getWorkspaceFileRelativePath(workspacePath: string, filePath: string): string {
+  const normalizedWorkspacePath = normalizeWorkspaceFilePath(workspacePath);
+  const normalizedFilePath = normalizeWorkspaceFilePath(filePath);
+  if (normalizedWorkspacePath === normalizedFilePath) return ".";
+  const prefix = `${normalizedWorkspacePath}/`;
+  if (normalizedFilePath.startsWith(prefix)) {
+    return normalizedFilePath.slice(prefix.length);
+  }
+  return getPathLeaf(filePath);
+}
+
+export function isWorkspaceFilePathInside(workspacePath: string, filePath: string): boolean {
+  const normalizedWorkspacePath = normalizeWorkspaceFilePath(workspacePath);
+  const normalizedFilePath = normalizeWorkspaceFilePath(filePath);
+  return (
+    normalizedFilePath === normalizedWorkspacePath ||
+    normalizedFilePath.startsWith(`${normalizedWorkspacePath}/`)
+  );
+}

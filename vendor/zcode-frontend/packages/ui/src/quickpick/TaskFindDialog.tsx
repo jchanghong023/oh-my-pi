@@ -2,8 +2,6 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import {
   ArrowDownIcon,
   ArrowUpIcon,
-  FileDiffIcon,
-  MessageCircleIcon,
   SearchIcon,
   XIcon,
 } from "lucide-react";
@@ -18,14 +16,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
 import {
   getConversationFindState,
   resolveConversationFindNavigationSelection,
   resolveConversationFindNavigationDirection,
 } from "@/quickpick/conversationFindSearch.js";
-
-type TaskFindScope = "conversation" | "changes";
 
 export type TaskFindDialogProps = {
   open: boolean;
@@ -36,14 +31,9 @@ export type TaskFindDialogProps = {
   isLinuxDesktop?: boolean;
   conversationMatchCount: number;
   conversationMatchIndex: number;
-  fileChangeMatchCount: number;
-  fileChangeMatchIndex: number;
   onOpenChange: (open: boolean) => void;
   onConversationFindChange: (query: string, activeIndex: number) => void;
   onConversationFindNavigate: (query: string, activeIndex: number) => void;
-  onFileChangeFindChange: (query: string, activeIndex: number) => void;
-  onFileChangeFindNavigate: (query: string, activeIndex: number) => void;
-  onOpenFileChanges: () => void;
 };
 
 export function TaskFindDialog({
@@ -55,44 +45,30 @@ export function TaskFindDialog({
   isLinuxDesktop,
   conversationMatchCount,
   conversationMatchIndex,
-  fileChangeMatchCount,
-  fileChangeMatchIndex,
   onOpenChange,
   onConversationFindChange,
   onConversationFindNavigate,
-  onFileChangeFindChange,
-  onFileChangeFindNavigate,
-  onOpenFileChanges,
 }: TaskFindDialogProps) {
-  const isOfficeMode = useIsOfficeMode();
   const { intl } = useZCodeIntl();
   const titleId = useId();
   const descriptionId = useId();
   const [query, setQuery] = useState("");
-  const [scope, setScope] = useState<TaskFindScope>("conversation");
   const inputRef = useRef<HTMLInputElement | null>(null);
   const conversationState = useMemo(
     () =>
       getConversationFindState(query.trim() ? conversationMatchCount : 0, conversationMatchIndex),
     [conversationMatchCount, conversationMatchIndex, query],
   );
-  const fileChangeState = useMemo(
-    () => getConversationFindState(query.trim() ? fileChangeMatchCount : 0, fileChangeMatchIndex),
-    [fileChangeMatchCount, fileChangeMatchIndex, query],
-  );
-  const activeFindState = scope === "conversation" ? conversationState : fileChangeState;
+  const activeFindState = conversationState;
 
   useEffect(() => {
     if (!open) {
       setQuery("");
-      setScope("conversation");
-      onConversationFindChange("", -1);
-      onFileChangeFindChange("", -1);
       return;
     }
 
     window.requestAnimationFrame(() => inputRef.current?.focus());
-  }, [onConversationFindChange, onFileChangeFindChange, open]);
+  }, [onConversationFindChange, open]);
 
   useEffect(() => {
     if (!open) {
@@ -103,14 +79,6 @@ export function TaskFindDialog({
     // 这里监听显式 focus 请求，让重复触发快捷键时总能把焦点带回搜索输入框。
     window.requestAnimationFrame(() => inputRef.current?.focus());
   }, [focusRequestId, open]);
-
-  useEffect(() => {
-    if (!open || scope !== "changes") {
-      return;
-    }
-
-    onOpenFileChanges();
-  }, [onOpenFileChanges, open, scope]);
 
   useEffect(() => {
     if (!open || placement !== "chat") {
@@ -133,38 +101,12 @@ export function TaskFindDialog({
   }, [onOpenChange, open, placement]);
 
   useEffect(() => {
-    if (!open || scope !== "conversation") {
+    if (!open) {
       return;
     }
 
-    onFileChangeFindChange("", -1);
     onConversationFindChange(query, conversationState.currentIndex);
-  }, [
-    conversationState.currentIndex,
-    onConversationFindChange,
-    onFileChangeFindChange,
-    open,
-    query,
-    scope,
-  ]);
-
-  useEffect(() => {
-    if (!open || scope !== "changes") {
-      return;
-    }
-
-    // 切到“文件变更”范围后，旧的对话搜索高亮不应该继续留在聊天区。
-    // 两个范围使用独立高亮 root，这里显式清空另一边，避免用户误以为两个范围同时生效。
-    onConversationFindChange("", -1);
-    onFileChangeFindChange(query, fileChangeState.currentIndex);
-  }, [
-    fileChangeState.currentIndex,
-    onConversationFindChange,
-    onFileChangeFindChange,
-    open,
-    query,
-    scope,
-  ]);
+  }, [conversationState.currentIndex, onConversationFindChange, open, query]);
 
   const moveSelection = useCallback(
     (direction: "previous" | "next") => {
@@ -179,51 +121,19 @@ export function TaskFindDialog({
         activeFindState,
         direction,
       );
-      if (scope === "conversation") {
-        onConversationFindNavigate(selection.query, selection.activeIndex);
-        return;
-      }
-
-      onFileChangeFindNavigate(selection.query, selection.activeIndex);
+      onConversationFindNavigate(selection.query, selection.activeIndex);
     },
-    [activeFindState, onConversationFindNavigate, onFileChangeFindNavigate, query, scope],
+    [activeFindState, onConversationFindNavigate, query],
   );
 
   const handleQueryChange = useCallback(
     (nextQuery: string) => {
       setQuery(nextQuery);
-      const nextIndex = nextQuery.trim() ? 0 : -1;
-      if (scope === "conversation") {
-        // 输入新的查找词时应从第一个命中开始滚动。
-        // 如果沿用旧 activeIndex，新关键词也可能直接跳到第 N 个结果，和系统查找行为不一致。
-        onConversationFindChange(nextQuery, nextIndex);
-        return;
-      }
-
-      onFileChangeFindChange(nextQuery, nextIndex);
+      // 输入新的查找词时应从第一个命中开始滚动。
+      onConversationFindChange(nextQuery, nextQuery.trim() ? 0 : -1);
     },
-    [onConversationFindChange, onFileChangeFindChange, scope],
+    [onConversationFindChange],
   );
-
-  const handleScopeChange = useCallback(
-    (nextScope: TaskFindScope) => {
-      setScope(nextScope);
-      if (nextScope === "changes") {
-        onOpenFileChanges();
-        onConversationFindChange("", -1);
-        onFileChangeFindChange(query, query.trim() ? 0 : -1);
-        return;
-      }
-
-      onFileChangeFindChange("", -1);
-      onConversationFindChange(query, query.trim() ? 0 : -1);
-    },
-    [onConversationFindChange, onFileChangeFindChange, onOpenFileChanges, query],
-  );
-
-  const handleToggleScope = useCallback(() => {
-    handleScopeChange(scope === "conversation" ? "changes" : "conversation");
-  }, [handleScopeChange, scope]);
 
   const handleInputKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -236,16 +146,8 @@ export function TaskFindDialog({
     [moveSelection],
   );
 
-  const placeholderId = `quickPick.find.placeholder.${scope}`;
-  const ScopeIcon = scope === "conversation" ? MessageCircleIcon : FileDiffIcon;
-  const nextScopeLabelId =
-    scope === "conversation" ? "quickPick.find.scope.changes" : "quickPick.find.scope.conversation";
   const previousLabel = intl.formatMessage({ id: "quickPick.find.previous" });
   const nextLabel = intl.formatMessage({ id: "quickPick.find.next" });
-  const nextScopeLabel = intl.formatMessage({ id: nextScopeLabelId });
-  const scopeTooltipLabel = intl.formatMessage({
-    id: "quickPick.find.scope.tooltip",
-  });
   const closeLabel = intl.formatMessage({ id: "common.close" });
   const renderFindIconButton = ({
     label,
@@ -283,7 +185,7 @@ export function TaskFindDialog({
         value={query}
         onChange={(event) => handleQueryChange(event.target.value)}
         onKeyDown={handleInputKeyDown}
-        placeholder={intl.formatMessage({ id: placeholderId })}
+        placeholder={intl.formatMessage({ id: "quickPick.find.placeholder.conversation" })}
         className="min-w-0 flex-1 bg-transparent text-ui-base font-medium text-foreground outline-none placeholder:text-foreground-subtlest"
       />
       <div className="w-8 shrink-0 text-center text-ui-xs font-medium text-foreground-subtle tabular-nums">
@@ -304,13 +206,6 @@ export function TaskFindDialog({
           onClick: () => moveSelection("next"),
           children: <ArrowDownIcon className="size-3.5" />,
         })}
-        {(!isOfficeMode || scope === "changes") &&
-          renderFindIconButton({
-            label: nextScopeLabel,
-            tooltipLabel: scopeTooltipLabel,
-            onClick: handleToggleScope,
-            children: <ScopeIcon className="size-3.5" />,
-          })}
       </div>
       <div className="ml-0.5 flex shrink-0 border-l border-border pl-1.5">
         {renderFindIconButton({

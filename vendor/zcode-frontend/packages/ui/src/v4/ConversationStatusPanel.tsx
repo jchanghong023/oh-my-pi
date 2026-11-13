@@ -22,7 +22,6 @@ import {
   CircleCheckBigIcon,
   CircleIcon,
   EllipsisIcon,
-  FileDiffIcon,
   GoalIcon,
   ListChecksIcon,
   Maximize2Icon,
@@ -38,8 +37,6 @@ import {
   testId,
 } from "@zcode/shared/test-ids";
 import type {
-  GitChangeSourceId,
-  GitRepositorySummary,
   ZCodeSessionRunningSubagent,
   ZCodeTaskChangeSummary,
 } from "@zcode/shared";
@@ -66,8 +63,6 @@ import {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { formatBackgroundTaskElapsedLabel } from "@/BackgroundTaskElapsedLabel.js";
-import { GitActionMenu } from "@/GitActionMenu.js";
-import { GitBranchSwitcher } from "@/GitBranchSwitcher.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import type {
   OpenPlanDetailSideTabRequest,
@@ -90,10 +85,6 @@ import {
 export interface ConversationStatusPanelProps {
   workspacePath: string;
   workspaceIdentity?: string;
-  gitSummary?: GitRepositorySummary | null;
-  gitDirtyFileCount?: number;
-  gitWorktreeReviewSourceId?: GitChangeSourceId | null;
-  gitWorktreeChangeSummary?: { added: number; removed: number } | null;
   activeTaskChangeSummary?: ZCodeTaskChangeSummary | null;
   goal?: GoalState | null;
   sessionPlans?: readonly ToolCallRow[];
@@ -114,8 +105,6 @@ export interface ConversationStatusPanelProps {
   onTerminalSectionOpenChange?: (open: boolean) => void;
   agentSectionOpen?: boolean;
   onAgentSectionOpenChange?: (open: boolean) => void;
-  onRefreshGit?: () => void;
-  onOpenGitReview?: (sourceId?: GitChangeSourceId) => void;
   onPauseGoal?: () => void;
   onResumeGoal?: () => void;
   onOpenPlanDetail?: (request: OpenPlanDetailSideTabRequest) => void;
@@ -326,106 +315,6 @@ function StatusSection({
         </CollapsibleContent>
       </section>
     </Collapsible>
-  );
-}
-
-function GitStatusSection({
-  activeTaskChangeSummary,
-  gitSummary,
-  gitWorktreeReviewSourceId,
-  model,
-  onOpenGitReview,
-  onRefreshGit,
-  separated,
-  workspaceIdentity,
-  workspacePath,
-  useVerticalFloatingPanels,
-}: {
-  activeTaskChangeSummary?: ZCodeTaskChangeSummary | null;
-  gitSummary: GitRepositorySummary | null | undefined;
-  gitWorktreeReviewSourceId?: GitChangeSourceId | null;
-  model: ConversationStatusPanelModel;
-  onOpenGitReview?: (sourceId?: GitChangeSourceId) => void;
-  onRefreshGit?: () => void;
-  separated: boolean;
-  workspaceIdentity?: string;
-  workspacePath: string;
-  useVerticalFloatingPanels: boolean;
-}) {
-  const { intl } = useZCodeIntl();
-  const git = model.git;
-  if (!git || !gitSummary || !onRefreshGit) {
-    return null;
-  }
-  const hasChanges = git.added + git.removed > 0;
-  const canOpenReview = Boolean(onOpenGitReview && gitSummary.isRepository);
-
-  return (
-    <StatusSection
-      section="environment"
-      separated={separated}
-      title={intl.formatMessage({ id: "chat.statusPanel.environment" })}
-      trailing={(isOpen) =>
-        isOpen ? null : (
-          <span className="shrink-0 font-mono text-ui-sm tabular-nums">
-            <span className={cn("text-[var(--color-diff-added)]", !hasChanges && "opacity-50")}>
-              +{git.added}
-            </span>{" "}
-            <span className={cn("text-[var(--color-diff-removed)]", !hasChanges && "opacity-50")}>
-              -{git.removed}
-            </span>
-          </span>
-        )
-      }
-    >
-      <div className="space-y-0">
-        {/* Bug 原因：V4 状态面板迁移时只保留了 Changes 的静态展示，
-            没有继续透传旧版 Git review 回调，导致规范中的审阅入口不可点击。 */}
-        <button
-          type="button"
-          disabled={!canOpenReview}
-          className={cn(
-            "flex h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left text-ui-base text-[var(--color-foreground)] transition-colors",
-            canOpenReview
-              ? "hover:bg-[var(--color-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-input-border-focused)]"
-              : "cursor-default opacity-50",
-          )}
-          onClick={() => {
-            onOpenGitReview?.(gitWorktreeReviewSourceId ?? undefined);
-          }}
-        >
-          <FileDiffIcon className="size-4 shrink-0 text-[var(--color-foreground)]" />
-          <span className="min-w-0 flex-1 truncate">
-            {intl.formatMessage({ id: "chat.statusPanel.changes" })}
-          </span>
-          <span className="shrink-0 font-mono tabular-nums">
-            <span className="text-[var(--color-diff-added)]">+{git.added}</span>{" "}
-            <span className="text-[var(--color-diff-removed)]">-{git.removed}</span>
-          </span>
-        </button>
-        <GitBranchSwitcher
-          workspacePath={workspacePath}
-          gitSummary={gitSummary}
-          dirtyFileCount={git.dirtyFileCount}
-          onRefreshGit={onRefreshGit}
-          className="w-full px-0 pt-0"
-          triggerClassName="flex h-8 w-full min-w-0 justify-start gap-2 rounded-lg px-2 text-left text-ui-base text-[var(--color-foreground)] hover:bg-[var(--color-hover)] hover:text-[var(--color-foreground)] [&>span]:max-w-[calc(100%-3.5rem)] [&_svg:first-child]:text-[var(--color-foreground)]"
-          popoverClassName="w-72 max-w-[calc(100vw-2rem)]"
-          branchListClassName="max-h-56"
-          popoverSide={useVerticalFloatingPanels ? "bottom" : "left"}
-          showFooterActions
-        />
-        <GitActionMenu
-          workspacePath={workspacePath}
-          workspaceIdentity={workspaceIdentity}
-          gitSummary={gitSummary}
-          activeTaskChangeSummary={activeTaskChangeSummary ?? null}
-          onRefreshGit={onRefreshGit}
-          triggerLayout="status-row"
-          className="w-full"
-        />
-      </div>
-    </StatusSection>
   );
 }
 
@@ -1329,11 +1218,9 @@ function getCompletedPlanItem(plan: ConversationStatusPanelModel["plan"]) {
 }
 
 function StatusSummaryRow({
-  gitWorktreeChangeSummary,
   model,
   onVariantChange,
 }: {
-  gitWorktreeChangeSummary?: { added: number; removed: number } | null;
   model: ConversationStatusPanelModel;
   onVariantChange?: (variant: ChatViewSummaryPanelVariant | null) => void;
 }) {
@@ -1353,9 +1240,6 @@ function StatusSummaryRow({
     goalStatus === "paused" ||
     goalStatus === "verifying";
   const isDoneGoal = goalStatus === "verified";
-  const added = gitWorktreeChangeSummary?.added ?? 0;
-  const removed = gitWorktreeChangeSummary?.removed ?? 0;
-  const hasGitMiniSummary = Boolean(model.git && added + removed > 0);
 
   // 胶囊摘要过去把所有后台任务都写死成 Activity，纯 Subagent 因而没有复用
   // Running 明细的 Bot 语义。**恰好一类**沿用该类图标，混合才是 Activity。在跑的工作流不进这条
@@ -1378,14 +1262,6 @@ function StatusSummaryRow({
   ) : goalTitle && isActiveGoal ? (
     <StatusSummaryMetric icon={<GoalIcon className="size-4 text-[var(--color-foreground)]" />}>
       <span className="min-w-0 truncate">{goalTitle}</span>
-    </StatusSummaryMetric>
-  ) : hasGitMiniSummary ? (
-    <StatusSummaryMetric icon={<FileDiffIcon className="size-4 text-[var(--color-foreground)]" />}>
-      <span className="min-w-0 truncate">
-        {intl.formatMessage({ id: "chat.statusPanel.changes" })}
-      </span>
-      <span className="shrink-0 text-[var(--color-diff-added)]">+{added}</span>
-      <span className="shrink-0 text-[var(--color-diff-removed)]">-{removed}</span>
     </StatusSummaryMetric>
   ) : goalTitle && isDoneGoal ? (
     <StatusSummaryMetric icon={<GoalIcon className="size-4 text-[var(--color-foreground)]" />}>
@@ -1451,10 +1327,6 @@ function StatusSummaryRow({
 function ConversationStatusPanelImpl({
   workspacePath,
   workspaceIdentity,
-  gitSummary,
-  gitDirtyFileCount = 0,
-  gitWorktreeReviewSourceId,
-  gitWorktreeChangeSummary,
   activeTaskChangeSummary,
   goal,
   sessionPlans,
@@ -1473,8 +1345,6 @@ function ConversationStatusPanelImpl({
   onTerminalSectionOpenChange,
   agentSectionOpen,
   onAgentSectionOpenChange,
-  onRefreshGit,
-  onOpenGitReview,
   onPauseGoal,
   onResumeGoal,
   onOpenPlanDetail,
@@ -1489,9 +1359,6 @@ function ConversationStatusPanelImpl({
     () =>
       buildConversationStatusPanelModel({
         isOfficeMode,
-        gitSummary,
-        gitDirtyFileCount,
-        gitWorktreeChangeSummary,
         goal,
         sessionPlans,
         workspacePath,
@@ -1502,9 +1369,6 @@ function ConversationStatusPanelImpl({
     [
       isOfficeMode,
       backgroundWorks,
-      gitDirtyFileCount,
-      gitSummary,
-      gitWorktreeChangeSummary,
       goal,
       sessionPlans,
       plan,
@@ -1525,7 +1389,6 @@ function ConversationStatusPanelImpl({
   const panelMenuLabel = intl.formatMessage({
     id: "chat.summaryPanel.displayMode",
   });
-  const canRenderGit = Boolean(model.git && gitSummary && onRefreshGit);
   const canRenderGoal = Boolean(model.goal);
   const canRenderSessionPlans = Boolean(model.sessionPlans);
   const canRenderPlan = Boolean(model.plan);
@@ -1659,24 +1522,10 @@ function ConversationStatusPanelImpl({
               variant === "auto" ? "hidden @min-[1280px]/conversation:flex" : "flex",
             )}
           >
-            {canRenderGit ? (
-              <GitStatusSection
-                model={model}
-                gitSummary={gitSummary}
-                gitWorktreeReviewSourceId={gitWorktreeReviewSourceId}
-                workspacePath={workspacePath}
-                workspaceIdentity={workspaceIdentity}
-                activeTaskChangeSummary={activeTaskChangeSummary}
-                onRefreshGit={onRefreshGit}
-                onOpenGitReview={onOpenGitReview}
-                separated={false}
-                useVerticalFloatingPanels={useVerticalFloatingPanels}
-              />
-            ) : null}
             {canRenderGoal ? (
               <GoalStatusSection
                 model={model}
-                separated={canRenderGit}
+                separated={false}
                 onPauseGoal={onPauseGoal}
                 onResumeGoal={onResumeGoal}
               />
@@ -1686,14 +1535,14 @@ function ConversationStatusPanelImpl({
                 model={model}
                 parentSessionId={parentSessionId}
                 onOpenPlanDetail={onOpenPlanDetail}
-                separated={canRenderGit || canRenderGoal}
+                separated={canRenderGoal}
               />
             ) : null}
             {canRenderPlan ? (
               <PlanStatusSection
                 model={model}
                 popoverSide={useVerticalFloatingPanels ? "bottom" : "left"}
-                separated={canRenderGit || canRenderGoal || canRenderSessionPlans}
+                separated={canRenderGoal || canRenderSessionPlans}
               />
             ) : null}
             {canRenderTerminals ? (
@@ -1704,7 +1553,7 @@ function ConversationStatusPanelImpl({
                 works={model.runningBashWorks}
                 open={terminalSectionOpen}
                 onOpenChange={onTerminalSectionOpenChange}
-                separated={canRenderGit || canRenderGoal || canRenderSessionPlans || canRenderPlan}
+                separated={canRenderGoal || canRenderSessionPlans || canRenderPlan}
                 onCancelBackgroundWork={onCancelBackgroundWork}
               />
             ) : null}
@@ -1717,7 +1566,6 @@ function ConversationStatusPanelImpl({
                 open={agentSectionOpen}
                 onOpenChange={onAgentSectionOpenChange}
                 separated={
-                  canRenderGit ||
                   canRenderGoal ||
                   canRenderSessionPlans ||
                   canRenderPlan ||
@@ -1744,7 +1592,6 @@ function ConversationStatusPanelImpl({
         >
           <StatusSummaryRow
             model={model}
-            gitWorktreeChangeSummary={gitWorktreeChangeSummary}
             onVariantChange={onVariantChange}
           />
         </div>

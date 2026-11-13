@@ -99,8 +99,6 @@ export function useRootWorkspaceActions({
   supportsSettings,
   isDesktop = false,
   allowOpenWorkspace,
-  preferDirectoryBrowser,
-  openDirectoryBrowser,
   workbenchGroupClientMode = "desktop-continuous",
 }: {
   intl: IntlInstance;
@@ -113,8 +111,6 @@ export function useRootWorkspaceActions({
   supportsSettings: boolean;
   isDesktop?: boolean;
   allowOpenWorkspace: NonNullable<RootProps["allowOpenWorkspace"]>;
-  preferDirectoryBrowser: boolean;
-  openDirectoryBrowser?: () => void;
   workbenchGroupClientMode?: ZCodeTaskClientMode;
 }) {
   const navigationSequence = useRef(0);
@@ -681,18 +677,6 @@ export function useRootWorkspaceActions({
     }
     setWorkspaceActionError(null);
 
-    if (preferDirectoryBrowser) {
-      void openFolderFromWorkspaceEntry({
-        preferDirectoryBrowser,
-        openDirectoryBrowser,
-        selectDirectory: () => platform.selectDirectory(),
-        onSelectProject: (path) => {
-          void handleSelectProject(path);
-        },
-      });
-      return;
-    }
-
     // 打开工作区中间页作为“新标签页”会在启动空态、Cmd/Ctrl+O
     // 和菜单打开工作区时抢占整页。现在打开工作区只保留为动作：本地优先直接弹系统目录选择，
     // 不再进入中间页面；不支持系统目录选择的壳层由启动兜底负责创建默认 workspace。
@@ -713,9 +697,7 @@ export function useRootWorkspaceActions({
     allowOpenWorkspace,
     handleEnsureConversationWorkspace,
     handleSelectProject,
-    openDirectoryBrowser,
     platform,
-    preferDirectoryBrowser,
     supportsSettings,
   ]);
 
@@ -727,18 +709,6 @@ export function useRootWorkspaceActions({
 
     // 空态 workspace 菜单的 Open folder 需要复用根级打开工作区动作。
     // 因此这里调用同一个入口函数，只把 Root 里的 selectDirectory 与项目选择回调注入进去。
-    if (preferDirectoryBrowser) {
-      void openFolderFromWorkspaceEntry({
-        preferDirectoryBrowser,
-        openDirectoryBrowser,
-        selectDirectory: () => platform.selectDirectory(),
-        onSelectProject: (path) => {
-          void handleSelectProject(path);
-        },
-      });
-      return;
-    }
-
     if (!supportsSettings) {
       void handleEnsureConversationWorkspace().catch((error) => {
         logger.error("[Root] 从空态菜单创建对话 workspace 失败", { error });
@@ -756,9 +726,7 @@ export function useRootWorkspaceActions({
     allowOpenWorkspace,
     handleEnsureConversationWorkspace,
     handleSelectProject,
-    openDirectoryBrowser,
     platform,
-    preferDirectoryBrowser,
     supportsSettings,
   ]);
 

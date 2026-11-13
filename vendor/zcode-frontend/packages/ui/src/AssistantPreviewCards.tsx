@@ -374,7 +374,6 @@ function AssistantPreviewCardRow({
             }
       }
       onOpenBrowserUrl={onOpenBrowserUrl}
-      onOpenFileLink={onOpenFileLink}
       onOpenCodeViewer={onOpenCodeViewer}
     />
   );

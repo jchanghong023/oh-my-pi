@@ -3,7 +3,6 @@ import type {
   ZCodeProvider,
   ZCodeTaskChangeSummary,
   EditorInfo,
-  GitRepositorySummary,
   UserInfo,
 } from "@zcode/shared";
 
@@ -33,8 +32,6 @@ export interface WorkspaceHeaderTitleSectionProps {
   activeSessionId: string | null;
   activeTaskProvider: ZCodeProvider | null;
   resolvedActiveTaskMeta?: ZCodeTaskMeta | null;
-  gitSummary: GitRepositorySummary;
-  gitDirtyFileCount: number;
   sessionLogPath: string | null;
   nativeSessionLogProvider: ZCodeProvider | null;
   nativeSessionLogPath: string | null;
@@ -46,7 +43,6 @@ export interface WorkspaceHeaderTitleSectionProps {
   onReloadSession?: (options?: WorkspaceHeaderReloadSessionOptions) => void | Promise<void>;
   reloadSessionDisabled?: boolean;
   reloadSessionPending?: boolean;
-  onRefreshGit: () => void;
   workspaceHeaderState: WorkspaceHeaderState;
   simplifyForNarrowViewport?: boolean;
   selectedEditor: EditorInfo | null;

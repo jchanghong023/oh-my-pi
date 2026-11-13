@@ -32,14 +32,13 @@ import {
   stageV4ComposerDraftAttachments,
 } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
 import { selectWorkbenchSession } from "@/v4/workbenchSessionPlacement.js";
-import { DirectoryBrowser } from "@/DirectoryBrowser.js";
 import { restorePersistedRemoteWorkspaceSessions } from "@/root/remoteWorkspaceSessionPersistence.js";
 import type { AppSettings } from "@zcode/shared";
 import { useTabPersistence, type WorkspacePersistenceGate } from "@/hooks/useTabPersistence.js";
 import { bindNativeWorkspaceServices, useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { setDefaultFileDisplayBasePath } from "@/lib/fileDisplay.js";
-import { areWorkspaceFilePathsEqual } from "@/workspace-file-tree/model.js";
+import { areWorkspaceFilePathsEqual } from "@/lib/path.js";
 import {
   shouldBlockRootRender,
   shouldShowRootStartupLoading,
@@ -142,12 +141,10 @@ function RootInner({
   responsiveBrowserLayout = false,
   backendBusinessAvailable = true,
   nativeHostAvailable = false,
-  initialDirectoryPath,
   onOpenProject,
   restoreSession = true,
   supportsSettings = true,
   allowOpenWorkspace = true,
-  preferDirectoryBrowser,
   initialSidebarFileTreeOpen,
   initialWorkspaceLoadingFallback,
 }: RootProps) {
@@ -180,9 +177,6 @@ function RootInner({
         </Button>
       </div>
     ) : null;
-  const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false);
-  const [projectOpening, setProjectOpening] = useState(false);
-  const [projectOpenError, setProjectOpenError] = useState<string | null>(null);
   const nativeCreationRef = useRef<Promise<void> | null>(null);
   const [isCreatingFallbackWorkspace, setIsCreatingFallbackWorkspace] = useState(false);
   const [isBootstrappingInitialWorkspace, setIsBootstrappingInitialWorkspace] = useState(
@@ -391,7 +385,6 @@ function RootInner({
   const activateTabByPath = useTabStore((state) => state.activateTabByPath);
   const tabStoreApi = useTabStoreApi();
 
-  const shouldPreferDirectoryBrowser = Boolean(preferDirectoryBrowser);
   const workspacePersistenceGate = useMemo<WorkspacePersistenceGate>(
     () => ({ canPersist: false, restoreFailed: false }),
     [],
@@ -406,9 +399,6 @@ function RootInner({
 
   useBotBroadcastEffects(services, tabStoreApi);
 
-  const handleOpenDirectoryBrowser = useCallback(() => {
-    setDirectoryBrowserOpen(true);
-  }, []);
   const {
     handleConnectRemote,
     handleSelectRemoteProject,
@@ -439,32 +429,13 @@ function RootInner({
     supportsSettings,
     isDesktop,
     allowOpenWorkspace,
-    preferDirectoryBrowser: shouldPreferDirectoryBrowser,
-    openDirectoryBrowser: handleOpenDirectoryBrowser,
   });
-
-  const handleSelectBrowserProject = useCallback(async (path: string, create = false) => {
-    if (!onOpenProject || projectOpening) return;
-    setProjectOpening(true);
-    setProjectOpenError(null);
-    try {
-      await onOpenProject(path, create);
-      setDirectoryBrowserOpen(false);
-    } catch (error) {
-      setProjectOpenError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setProjectOpening(false);
-    }
-  }, [onOpenProject, projectOpening]);
 
   const composerClientNamespace = useComposerClientNamespace();
   const handleCreateTask = useCallback((request?: CreateTaskRequest) => {
     if (!nativeHostAvailable) return handleCreateZCodeTask(request);
     if (nativeCreationRef.current) return nativeCreationRef.current;
-    if (!workspaceShellPath) {
-      setDirectoryBrowserOpen(true);
-      return;
-    }
+    if (!workspaceShellPath) return;
     const options = typeof request === "object" ? request : undefined;
     const originState = useZCodeSessionStore.getState()
       .getWorkspaceState(workspaceShellPath, workspaceShellIdentity);
@@ -789,35 +760,6 @@ function RootInner({
   ]);
 
 
-  const directoryBrowserDialog = directoryBrowserOpen ||
-    (nativeHostAvailable && !workspaceShellPath) ? (
-    <ScopedErrorBoundary
-      scope="directory-browser"
-      resetKeys={["directory-browser"]}
-      variant="silent"
-    >
-      <DirectoryBrowser
-        services={services}
-        initialPath={initialDirectoryPath ?? workspaceShellPath ?? undefined}
-        directoriesOnly={nativeHostAvailable}
-        selecting={projectOpening}
-        selectionError={projectOpenError ?? undefined}
-        onCancel={() => {
-          if (!projectOpening) setDirectoryBrowserOpen(false);
-        }}
-        onSelect={(path) => {
-          if (onOpenProject) void handleSelectBrowserProject(path);
-          else {
-            setDirectoryBrowserOpen(false);
-            void handleSelectProject(path);
-          }
-        }}
-        onCreate={onOpenProject ? (path) => {
-          void handleSelectBrowserProject(path, true);
-        } : undefined}
-      />
-    </ScopedErrorBoundary>
-  ) : null;
 
 
   if (isStartupRenderBlocked) {
@@ -826,7 +768,6 @@ function RootInner({
       <RootShell>
         {rootModelSelectionErrorNode}
         {requestSecurityBridgeNode}
-        {directoryBrowserDialog}
         {/* 修复原因：HTML 启动壳已经展示 ZCode SVG，但 React 接管 root 后旧壳会被整棵替换。
             之前阻塞恢复 tab / 初始 workspace 注入时重新渲染纯文字“加载中...”，所以启动被拆成两套 loading。
             这里复用同一套 SVG 启动画面，只把文案保留到 aria-label，保证视觉始终连续且不牺牲可访问性。 */}
@@ -848,16 +789,14 @@ function RootInner({
         {rootModelSelectionErrorNode}
         {requestSecurityBridgeNode}
         {initialWorkspaceLoadingFallback}
-        {directoryBrowserDialog}
       </RootShell>
     );
   }
 
   if (!workspaceShellPath) {
-    return directoryBrowserDialog || rootModelSelectionErrorNode ? (
+    return rootModelSelectionErrorNode ? (
       <RootShell>
         {rootModelSelectionErrorNode}
-        {directoryBrowserDialog}
       </RootShell>
     ) : null;
   }
@@ -866,7 +805,6 @@ function RootInner({
     <RootShell>
       {rootModelSelectionErrorNode}
       {requestSecurityBridgeNode}
-      {directoryBrowserDialog}
               <RemoteProjectPresentationProvider
                 reconnectingKeys={reconnectingRemoteWorkspaceKeys}
                 errors={remoteWorkspaceErrorByWorkspaceKey}
