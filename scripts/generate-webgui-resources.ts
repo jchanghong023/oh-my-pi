@@ -96,9 +96,7 @@ async function buildResources(repoRoot: string): Promise<WebGuiResources> {
 	const fingerprint = createHash("sha256")
 		.update(JSON.stringify(files.map(file => [file.path, file.size, file.sha256])))
 		.digest("hex");
-	// Level 19 shrinks the embedded WebGUI archive by ~20% at build time (no runtime cost);
-	// level 22 gains only ~1% more and is noticeably slower to regenerate.
-	const archive = await Bun.zstdCompress(JSON.stringify({ version: 1, fingerprint, files }), { level: 19 });
+	const archive = await Bun.zstdCompress(JSON.stringify({ version: 1, fingerprint, files }));
 	return { archive, embedded: Buffer.from(archive).toString("base64"), fingerprint };
 }
 
