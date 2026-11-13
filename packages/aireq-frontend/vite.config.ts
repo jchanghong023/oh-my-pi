@@ -174,7 +174,6 @@ export function createAIReqFrontendConfig(
 					replacement: dependencyFile("tailwind-scrollbar-hide", "src/styles.css"),
 				},
 				{ find: "shadcn/tailwind.css", replacement: dependencyFile("shadcn", "dist/tailwind.css") },
-				{ find: "katex/dist/katex.min.css", replacement: dependencyFile("katex", "dist/katex.min.css") },
 				{ find: "@tailwindcss/typography", replacement: dependencyFile("@tailwindcss/typography", "src/index.js") },
 			],
 			dedupe: ["react", "react-dom", "shiki", "@shikijs/core", "@shikijs/themes", "@shikijs/langs", "@shikijs/engine-oniguruma"],

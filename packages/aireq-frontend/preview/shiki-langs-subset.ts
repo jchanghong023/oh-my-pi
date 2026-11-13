@@ -6,7 +6,6 @@
 export const bundledLanguages = {
   bash: () => import("shiki/langs/bash.mjs"),
   c: () => import("shiki/langs/c.mjs"),
-  cpp: () => import("shiki/langs/cpp.mjs"),
   css: () => import("shiki/langs/css.mjs"),
   diff: () => import("shiki/langs/diff.mjs"),
   go: () => import("shiki/langs/go.mjs"),
@@ -30,7 +29,6 @@ export const bundledLanguagesInfo: readonly {
 }[] = [
   { id: "bash", aliases: ["sh", "shell", "zsh"] },
   { id: "c" },
-  { id: "cpp", aliases: ["c++", "cc", "cxx"] },
   { id: "css" },
   { id: "diff", aliases: ["patch"] },
   { id: "go" },

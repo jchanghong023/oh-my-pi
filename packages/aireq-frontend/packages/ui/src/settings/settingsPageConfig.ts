@@ -1,6 +1,4 @@
 import {
-  Archive,
-  Folders,
   Monitor,
   Moon,
   Settings,
@@ -8,12 +6,7 @@ import {
   Package,
   Palette,
   Sun,
-  Terminal,
-  AlarmClock,
-  Anchor,
-  Brain,
   WandSparkles,
-  FileSearch,
   User,
 } from "lucide-react";
 import {
@@ -78,54 +71,9 @@ const BASE_SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     groupId: "platformConfiguration",
   },
   {
-    id: "memory",
-    icon: Brain,
-    titleId: "settings.memory",
-    groupId: "platformConfiguration",
-  },
-  {
     id: "skill",
     icon: WandSparkles,
     titleId: "settings.skills.title",
-    groupId: "platformConfiguration",
-  },
-  {
-    id: "commands",
-    icon: Terminal,
-    titleId: "settings.commands.title",
-    groupId: "platformConfiguration",
-  },
-  {
-    id: "automations",
-    icon: AlarmClock,
-    titleId: "settings.automations.title",
-    titleBadgeId: "settings.automations.betaBadge",
-    groupId: "platformConfiguration",
-  },
-  {
-    id: "hooks",
-    icon: Anchor,
-    titleId: "settings.hooks.title",
-    groupId: "platformConfiguration",
-  },
-  // 工作区搜索范围（.zcodeignore）属于平台配置。
-  {
-    id: "workspaceFileSearch",
-    icon: FileSearch,
-    titleId: "settings.workspaceFileSearch.title",
-    groupId: "platformConfiguration",
-  },
-  // 项目管理排在归档管理之前（docs/superpowers/specs/2026-10-24-project-management.md）。
-  {
-    id: "projects",
-    icon: Folders,
-    titleId: "projectManagement.nav",
-    groupId: "platformConfiguration",
-  },
-  {
-    id: "archives",
-    icon: Archive,
-    titleId: "archives.nav",
     groupId: "platformConfiguration",
   },
 ];

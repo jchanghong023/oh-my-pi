@@ -16,7 +16,6 @@ import {
   type ButtonHTMLAttributes,
   type ReactNode,
 } from "react";
-import type { AppSettings } from "@zcode/shared";
 import {
   TID_SETTINGS_BACK_BUTTON,
   TID_SETTINGS_PAGE,
@@ -26,7 +25,6 @@ import {
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
-import { getPathLeaf } from "@/lib/path.js";
 import {
   addPendingSettingsSectionListener,
   clearPendingSettingsPluginScopeKey,
@@ -38,16 +36,8 @@ import {
   writeLastSettingsSectionPreference,
   type SettingsModelProviderTarget,
 } from "@/lib/settingsNavigation.js";
-import {
-  ArchiveManagement,
-  ProjectManagement,
-} from "@/project-sidebar/index.js";
 import { ModelProviderSection } from "@/settings/ModelProviderSection.js";
-import { AutomationsSection } from "@/settings/AutomationsSection.js";
 import { PluginsSection } from "@/settings/PluginsSection.js";
-import { HooksSection } from "@/settings/HooksSection.js";
-import { WorkspaceFileSearchSection } from "@/settings/WorkspaceFileSearchSection.js";
-import { MemorySettingsSection } from "@/settings/MemorySettingsSection.js";
 import { PersonalizationSection } from "@/settings/PersonalizationSection.js";
 import { SETTINGS_FRAME_CONTENT_CLASSNAME } from "@/settings/SettingsPageParts.js";
 import {
@@ -65,13 +55,11 @@ import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { cn } from "@/components/lib/utils.js";
 import { ServiceProvider, useServices } from "@/hooks/useServices.js";
-import { useSettings } from "@/hooks/useSettingService.js";
 import type { CreateTaskRequest } from "@/app-shell/types.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { resolveModelProviderConnectivityWorkspacePath } from "@/lib/modelProviderConnectivityTarget.js";
 import {
   createSettingsPageConfig,
-  TaskAutoArchiveSettings,
   resolveSettingsSectionForPlatform,
 } from "@/settingsPageHelpers.js";
 import { AppearanceSectionContent } from "./settingsCodePreview.js";
@@ -232,28 +220,6 @@ export function SettingsPage({
   const localHostServices = useBaseWorkspaceServices();
   // SettingsPage 可能挂在远端 workspace 的 ServiceProvider 下；共享设置属于本机 Host，
   // 读写必须固定走本机 settingService，否则会写进远端 setting。
-  const { settings: sharedSettings, update: updateSharedSettings } = useSettings({
-    services: localHostServices,
-  });
-  const memoryWorkspaceDisplayNames = useMemo(() => {
-    const names = new Set<string>();
-    // Memory Scope 的项目顺序以 settings.json recentProjects 为准；打开中的
-    // Workspace 只补充尚未持久化的项目，不能抢占最近项目排序。
-    for (const path of sharedSettings?.recentProjects ?? []) {
-      const name = getPathLeaf(path).trim();
-      if (name) names.add(name);
-    }
-    for (const tab of workspaceTabs) {
-      const name = tab.label.trim() || getPathLeaf(tab.workspacePath).trim();
-      if (name) names.add(name);
-    }
-    return [...names];
-  }, [sharedSettings?.recentProjects, workspaceTabs]);
-  const memoryEnabled = sharedSettings?.memoryEnabled === true;
-  const [taskAutoArchiveEnabled, setTaskAutoArchiveEnabled] = useState(false);
-  const [taskAutoArchiveOlderThanDays, setTaskAutoArchiveOlderThanDays] = useState(30);
-
-
   useEffect(
     () =>
       addPendingSettingsSectionListener((section, detail) => {
@@ -274,42 +240,6 @@ export function SettingsPage({
   );
 
 
-  useEffect(() => {
-    let active = true;
-    // 任务归档由目标 Environment 消费，仍读 Source；切换后丢弃旧响应。
-    services.settingService
-      .get()
-      .then((settings: AppSettings) => {
-        if (!active) return;
-        setTaskAutoArchiveEnabled(settings.taskAutoArchiveEnabled ?? false);
-        setTaskAutoArchiveOlderThanDays(settings.taskAutoArchiveOlderThanDays ?? 30);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [services.settingService]);
-
-  const handleMemoryEnabledChange = useCallback(
-    async (enabled: boolean) => {
-      await updateSharedSettings({ memoryEnabled: enabled });
-    },
-    [updateSharedSettings],
-  );
-  const handleTaskAutoArchiveEnabledChange = useCallback(
-    async (enabled: boolean) => {
-      await services.settingService.update({ taskAutoArchiveEnabled: enabled });
-      setTaskAutoArchiveEnabled(enabled);
-    },
-    [services.settingService],
-  );
-  const handleTaskAutoArchiveOlderThanDaysChange = useCallback(
-    async (days: number) => {
-      await services.settingService.update({ taskAutoArchiveOlderThanDays: days });
-      setTaskAutoArchiveOlderThanDays(days);
-    },
-    [services.settingService],
-  );
   const handleFooterThemeChange = useCallback(
     (value: string) => {
       if (
@@ -578,17 +508,6 @@ export function SettingsPage({
                                 {intl.formatMessage({ id: "settings.personalization.localOnly" })}
                               </p>
                             )
-                          ) : activeSection === "memory" ? (
-                            <ServiceProvider services={localHostServices}>
-                              {/* Memory catalog 始终使用本地 Host，避免远程 workspace 误读本机数据。 */}
-                              <MemorySettingsSection
-                                memoryEnabled={memoryEnabled}
-                                memoryService={localHostServices.memoryService}
-                                onMemoryEnabledChange={handleMemoryEnabledChange}
-                                projectMemoryViewerAvailable={Boolean(isDesktop)}
-                                workspaceDisplayNames={memoryWorkspaceDisplayNames}
-                              />
-                            </ServiceProvider>
                           ) : activeSection === "skill" ? (
                             <div className="space-y-4">
                               {aireq && <AIReqPersonalConfigScope />}
@@ -603,43 +522,6 @@ export function SettingsPage({
                                 onOpenProjectSettings={aireq ? () => setActiveSettingsSection("general") : undefined}
                               />
                             </div>
-                          ) : activeSection === "projects" ? (
-                            <ProjectManagement />
-                          ) : activeSection === "archives" ? (
-                            <div className="min-w-0 space-y-6">
-                              <TaskAutoArchiveSettings
-                                taskAutoArchiveEnabled={taskAutoArchiveEnabled}
-                                taskAutoArchiveOlderThanDays={taskAutoArchiveOlderThanDays}
-                                onTaskAutoArchiveEnabledChange={handleTaskAutoArchiveEnabledChange}
-                                onTaskAutoArchiveOlderThanDaysChange={
-                                  handleTaskAutoArchiveOlderThanDaysChange
-                                }
-                              />
-                              <ArchiveManagement />
-                            </div>
-                          ) : activeSection === "automations" ? (
-                            <AutomationsSection
-                              workspacePath={activeWorkspacePath}
-                              workspaceIdentity={activeWorkspaceIdentity}
-                            />
-                          ) : activeSection === "commands" ? (
-                            <PluginsSection
-                              mode="command"
-                              initialScopeKey={pluginScopeKey}
-                              workspacePath={activeWorkspacePath}
-                              workspaceIdentity={activeWorkspaceIdentity}
-                              onCreateTask={onCreateTask}
-                            />
-                          ) : activeSection === "hooks" ? (
-                            <HooksSection
-                              workspacePath={activeWorkspacePath}
-                              workspaceIdentity={activeWorkspaceIdentity}
-                            />
-                          ) : activeSection === "workspaceFileSearch" ? (
-                            <WorkspaceFileSearchSection
-                              workspacePath={activeWorkspacePath}
-                              workspaceIdentity={activeWorkspaceIdentity}
-                            />
                           ) : null}
                         </div>
                       </div>
