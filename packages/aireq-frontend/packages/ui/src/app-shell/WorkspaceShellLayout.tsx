@@ -335,6 +335,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   taskFindDialogProps,
 }: WorkspaceShellLayoutProps) {
   const aireq = useAIReq();
+  const fixedSidebar = aireq !== null;
   const aiReqSource = useOptionalAIReqDataSource();
   const aiReqSr = aireq?.view?.srs.find(item => item.id === aireq.selection.srId);
   const aiReqGroup = [...(aireq?.view?.groups ?? []), ...(aireq?.view?.drafts ?? [])].find(item => item.id === aireq?.selection.irId);
@@ -652,15 +653,16 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   const fullViewConversationTitle =
     activeTaskTitle?.trim() || intl.formatMessage({ id: "taskList.untitled" });
   // 完整视图保留左侧任务列表与左上角按钮组，侧栏显隐只由用户开关决定。
-  const isSidebarPanelVisible = isSidebarVisible;
+  const isSidebarPanelVisible = fixedSidebar || isSidebarVisible;
   const sidebarNavigation = {
     expanded: isSidebarPanelVisible,
+    collapsible: !fixedSidebar,
     onToggle: handleToggleSidebar,
     canGoBack: aireq ? aireq.canGoBack : canTaskNavBack,
     canGoForward: aireq ? aireq.canGoForward : canTaskNavForward,
     onGoBack: aireq ? aireq.goBack : handleTaskNavBack,
     onGoForward: aireq ? aireq.goForward : handleTaskNavForward,
-    toggleShortcut: toggleSidebarShortcutLabel,
+    toggleShortcut: fixedSidebar ? undefined : toggleSidebarShortcutLabel,
     backShortcut: goBackShortcutLabel,
     forwardShortcut: goForwardShortcutLabel,
     onCreate: () => { if (aireq) aireq.startProposalDraft(); else handleCreateTaskInChat(); },
@@ -710,6 +712,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       conversationPanelElementRef.current?.getBoundingClientRect().width ?? null;
 
     const collapseSidebarIfStillNarrow = () => {
+      if (fixedSidebar) return;
       const widthPx = readConversationWidthPx();
       if (widthPx === null) {
         return;
@@ -787,7 +790,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       }
       window.removeEventListener("resize", handleWindowResize);
     };
-  }, [workspaceMainView]);
+  }, [workspaceMainView, fixedSidebar]);
 
   useEffect(() => {
     workspaceSidebarPanelWidthPxRef.current = workspaceSidebarPanelWidthPx;
