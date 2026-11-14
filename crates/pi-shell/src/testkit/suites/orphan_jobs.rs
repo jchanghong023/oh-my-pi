@@ -237,3 +237,31 @@ fn without_the_knob_orphaned_jobs_run_on() {
 	assert_eq!(run(&mut r, "(while :; do :; done &)"), 0);
 	assert_eq!(settle(&mut r, 50), Settled::Busy);
 }
+
+#[test]
+fn cancel_signals_current_externals_but_spares_prior_jobs() {
+	for started in [false, true] {
+		let signals = Signals::default();
+		let mut r = rig(true, &signals);
+		assert_eq!(run(&mut r, "/fake/sleeper &"), 0);
+		assert_eq!(settle(&mut r, 1_000), Settled::Blocked);
+		let id = r.shell().submit(Script::command(&b"/fake/sleeper"[..]));
+		if started {
+			assert_eq!(settle(&mut r, 1_000), Settled::Blocked);
+		}
+		r.shell().control().cancel(Signal::Term);
+		let (shell, host, store) = r.parts();
+		loop {
+			match advance(shell, host, store, id, Budget::default()) {
+				Stop::Done(status) => {
+					assert_eq!(status, 143);
+					break;
+				},
+				Stop::Yield => {},
+				other => panic!("cancelled run stopped unexpectedly: {other:?}"),
+			}
+		}
+		assert_eq!(signals.lock().as_slice(), if started { &[Signal::Term][..] } else { &[] });
+		assert_eq!(r.shell().live_external_jobs(), 1, "the prior external survives");
+	}
+}

@@ -41,6 +41,7 @@ import "./skillshare";
 import "./developer-test-agent";
 import "./spec-driven";
 import "./ssh";
+import "./ssh-config";
 import "./vscode";
 import "./windsurf";
 

@@ -8,7 +8,6 @@
  * ask toolResults).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
-import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -38,13 +37,8 @@ function askResultEntry(id: string): SessionEntry {
 			role: "toolResult",
 			toolCallId: "call-1",
 			toolName: "ask",
-			content: [{ type: "text", text: "User selected: staging" }],
-			details: {
-				question: "Which deploy target?",
-				options: ["staging", "production"],
-				multi: false,
-				selectedOptions: ["staging"],
-			},
+			content: [{ type: "text", text: 'User answers:\n{\n  "deploy_target": "staging"\n}' }],
+			details: { answers: [{ name: "deploy_target", question: "Which deploy target?", answer: "staging" }] },
 			isError: false,
 			timestamp: Date.now(),
 		},
@@ -153,15 +147,10 @@ describe("SelectorController.showTreeSelector re-answering the active ask leaf",
 
 	it("falls through to navigateTree with allowAskReopen when the active leaf is an ask toolResult", async () => {
 		const entry = askResultEntry("leaf-ask");
-		const reopenQuestions = [
-			{
-				id: "deploy_target",
-				question: "Which deploy target?",
-				options: [{ label: "staging" }, { label: "production" }],
-			},
-		];
+		const reopenHtml =
+			'<form><label><input type="radio" name="deploy_target" value="staging" checked> staging</label></form>';
 		const { ctx, editorContainer, navigateTree, showStatus, showError } = createCtx(entry, {
-			reopenAsk: { questions: reopenQuestions },
+			reopenAsk: { toolCallId: "call-1", html: reopenHtml },
 		});
 		const controller = new SelectorController(ctx);
 
@@ -177,44 +166,6 @@ describe("SelectorController.showTreeSelector re-answering the active ask leaf",
 		expect(navigateTree).toHaveBeenCalledWith("leaf-ask", expect.objectContaining({ allowAskReopen: true }));
 		expect(showError).toHaveBeenCalledWith("Ask tool UI is not ready");
 		expect(showStatus).toHaveBeenCalledWith("Re-answer cancelled");
-	});
-
-	it("does not commit or resume a historical answer when a guest redirects to chat", async () => {
-		const entry = askResultEntry("leaf-ask");
-		const { ctx, editorContainer, navigateTree, showError, resumeAfterAskReanswer } = createCtx(entry, {
-			reopenAsk: {
-				questions: [
-					{ id: "deploy", question: "Deploy where?", options: [{ label: "staging" }, { label: "production" }] },
-				],
-			},
-		});
-		const dialog = vi.fn(async () => ({ kind: "chat" as const }));
-		const context = {
-			hasUI: true,
-			ui: { askDialog: dialog },
-			abort: vi.fn(),
-		} as unknown as AgentToolContext;
-		Object.assign(ctx, {
-			settings: Settings.isolated({ "ask.notify": "off" }),
-			getToolUIContext: () => context.ui,
-		});
-		Object.assign(ctx.sessionManager, {
-			getCwd: () => process.cwd(),
-			getSessionFile: () => undefined,
-		});
-		Object.assign(ctx.session, {
-			getPlanModeState: () => undefined,
-			buildAskReanswerContext: () => context,
-		});
-		const controller = new SelectorController(ctx);
-
-		controller.showTreeSelector();
-		await pickEntry(editorContainer, "leaf-ask");
-
-		expect(dialog).toHaveBeenCalledTimes(1);
-		expect(navigateTree).toHaveBeenCalledTimes(1);
-		expect(resumeAfterAskReanswer).not.toHaveBeenCalled();
-		expect(showError).toHaveBeenCalledWith(expect.stringContaining("Chat about this"));
 	});
 
 	it("resumes the agent only after rebuilding the transcript when navigateTree reports a committed re-answer", async () => {

@@ -1,4 +1,6 @@
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
+import { fieldQuestions } from "@oh-my-pi/pi-tui/html-form/data";
+import { parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { editToolRenderer, getEditInputPaths } from "@oh-my-pi/pi-tui/tools/edit";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
@@ -84,12 +86,15 @@ function editTarget(fields: Fields): string | undefined {
 }
 
 function questionTarget(value: unknown): string | undefined {
-	if (!Array.isArray(value) || !value.length) return undefined;
-	for (const question of value) {
-		const label = short(text(fieldsOf(question).question));
-		if (label) return value.length > 1 ? `${label} (${value.length} questions)` : label;
-	}
-	return undefined;
+	if (typeof value !== "string" || !value.trim()) return undefined;
+	const form = parseHtmlForm(value);
+	const questions = fieldQuestions(form);
+	const labels = form.fields
+		.filter(field => field.name)
+		.map(field => questions.get(field))
+		.filter(Boolean);
+	const label = short(labels[0]);
+	return label ? (labels.length > 1 ? `${label} (${labels.length} questions)` : label) : undefined;
 }
 
 function location(fields: Fields): string | undefined {
@@ -162,7 +167,7 @@ function fallback(name: string, fields: Fields): string {
 				? String(fields.key)
 				: "";
 		case "ask":
-			return questionTarget(fields.questions) ?? "";
+			return questionTarget(fields.html) ?? "";
 		case "context_notes":
 			return fields.text === undefined
 				? "read"

@@ -1370,13 +1370,13 @@ export const cfgErrorNotify = register({
 export const cfgAskTimeout = register({
 	id: "ask.timeout",
 	type: "number",
-	default: 60,
+	default: 0,
 	ui: {
 		tab: "interaction",
 		group: "通知",
 		label: "提问超时",
 		description:
-			"未回答的 ask 问题在此秒数后自动回复（0 表示关闭）。也限制 cfg:// 授权确认提示的等待时间；未回答的授权确认将拒绝写入",
+			"在此秒数后提交 ask 表单的当前值（预选答案；0 表示关闭）。也限制 cfg:// 授权确认提示的等待时间；未回答的授权确认将拒绝写入",
 		options: [
 			{ value: "0", label: "关闭" },
 			{ value: "15", label: "15 秒" },

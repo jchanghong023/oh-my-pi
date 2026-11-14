@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
+import { isJsonSchemaValueValid, toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { procmgr, setProcessName, TempDir } from "@oh-my-pi/pi-utils";
@@ -244,7 +245,7 @@ describe("proc:// background jobs", () => {
 					expect(message).toContain("stdin and persist/session/detached modes are services-only");
 					expect(message).toContain("Start long-lived work as a named service");
 					expect(message).toContain("lifetime controls");
-					expect(message).toContain(JSON.stringify({ path: `proc://${id}/kill` }));
+					expect(message).toContain(JSON.stringify({ path: `proc://${id}/kill`, content: "" }));
 					expect(message).not.toContain("not found");
 
 					const missing = await rejectionMessage(
@@ -322,7 +323,7 @@ describe("proc:// background jobs", () => {
 		try {
 			const kill = await rejectionMessage(protocol.resolve(parseInternalUrl(`proc://${id}/kill`), { session }));
 			expect(kill).toContain("call write with");
-			expect(kill).toContain(JSON.stringify({ path: "proc://bg_12/kill" }));
+			expect(kill).toContain(JSON.stringify({ path: "proc://bg_12/kill", content: "" }));
 			expect(kill).toContain("read proc://bg_12 for its status");
 			expect(manager.getJob(id)?.status).toBe("running");
 			const mode = await rejectionMessage(protocol.resolve(parseInternalUrl(`proc://${id}/mode`), { session }));
@@ -335,7 +336,7 @@ describe("proc:// background jobs", () => {
 		}
 	});
 
-	it("kills without content and never interprets bare job writes as cancellation", async () => {
+	it("kills via /kill and never interprets bare job writes as cancellation", async () => {
 		const manager = new AsyncJobManager({});
 		const pending = Promise.withResolvers<string>();
 		const id = manager.register(
@@ -358,11 +359,8 @@ describe("proc:// background jobs", () => {
 			await expect(write.execute("empty-stdin", { path: `proc://${id}`, content: "" })).rejects.toThrow(
 				"in-process job",
 			);
-			await expect(
-				write.execute("missing-stdin", write.parameters.assert({ path: `proc://${id}` })),
-			).rejects.toThrow("content is required");
 			expect(manager.getJob(id)?.status).toBe("running");
-			const result = await write.execute("kill", write.parameters.assert({ path: `proc://${id}/kill` }));
+			const result = await write.execute("kill", { path: `proc://${id}/kill`, content: "" });
 			await manager.getJob(id)?.promise;
 			expect(result.details?.proc).toMatchObject({ op: "cancel", cancelled: [{ id, status: "cancelled" }] });
 			expect(manager.getJob(id)?.status).toBe("cancelled");
@@ -400,7 +398,7 @@ describe("proc:// background jobs", () => {
 				deviceOnlyWrite ? "limited to the xd:// device transport" : "Plan mode",
 			);
 			expect(manager.getJob(id)?.status).toBe("running");
-			const result = await write.execute("kill", write.parameters.assert({ path: `proc://${id}/kill` }));
+			const result = await write.execute("kill", { path: `proc://${id}/kill`, content: "" });
 			await manager.getJob(id)?.promise;
 			expect(result.details?.proc).toMatchObject({ op: "cancel", cancelled: [{ id, status: "cancelled" }] });
 			expect(manager.getJob(id)?.status).toBe("cancelled");
@@ -465,10 +463,10 @@ describe("proc:// background jobs", () => {
 				expect(message).toContain("named service");
 				expect(registry.get("Worker")?.status).toBe("running");
 			}
-			const denied = await write.execute("foreign", { path: "proc://Foreign/kill" });
+			const denied = await write.execute("foreign", { path: "proc://Foreign/kill", content: "" });
 			expect(denied.details?.proc).toMatchObject({ cancelled: [{ id: "Foreign", status: "not_found" }] });
 			expect(registry.get("Foreign")?.status).toBe("running");
-			const killed = await write.execute("worker", { path: "proc://Worker/kill" });
+			const killed = await write.execute("worker", { path: "proc://Worker/kill", content: "" });
 			expect(killed.details?.proc).toMatchObject({ cancelled: [{ id: "Worker", status: "cancelled" }] });
 			expect(registry.get("Worker")).toBeUndefined();
 		} finally {
@@ -575,6 +573,13 @@ describe("proc:// background jobs", () => {
 		expect(await Bun.file(file).text()).toBe("keep this");
 		await write.execute("empty-file", { path: file, content: "" });
 		expect(await Bun.file(file).text()).toBe("");
+	});
+
+	it("keeps optional content for internal targets without accepting null", () => {
+		const write = new WriteTool(toolSession(process.cwd(), undefined, { launch: false }));
+		const schema = toolWireSchema(write);
+		expect(isJsonSchemaValueValid(schema, { path: "proc://bg_1/kill" })).toBe(true);
+		expect(isJsonSchemaValueValid(schema, { path: "keep.txt", content: null })).toBe(false);
 	});
 
 	it("shows a running task's progress in the proc:// listing and its own read, but not a bash job's", async () => {
@@ -832,12 +837,12 @@ describe("bash services via proc://", () => {
 				await manager.getJob(collisionId)?.promise;
 				await manager.dispose({ timeoutMs: 1_000 });
 				session.asyncJobManager = undefined;
-				const sent = await proc.write(parseInternalUrl("proc://echo-service"), "hello", { session });
+				const write = new WriteTool(session);
+				const sent = await write.execute("stdin", { path: "proc://echo-service", content: "hello" });
 				expect(sent.content[0]?.type === "text" ? sent.content[0].text : "").toContain("Sent input");
-				expect(sent.details?.proc).toMatchObject({
-					action: "stdin",
-					daemon: { name: "echo-service" },
-					input: "hello",
+				expect(sent.details).toMatchObject({
+					proc: { action: "stdin", daemon: { name: "echo-service" }, input: "hello" },
+					touchesNoFiles: true,
 				});
 				const observed = await client.request({
 					op: "wait",
@@ -889,7 +894,6 @@ describe("bash services via proc://", () => {
 					async: false,
 				});
 				expect(restarted.content[0]?.type === "text" ? restarted.content[0].text : "").toContain("REPLACED");
-				const write = new WriteTool(session);
 				const stopped = await write.execute("kill", write.parameters.assert({ path: "proc://echo-service/kill" }));
 				expect(stopped.details?.proc).toMatchObject({ action: "stop", daemon: { name: "echo-service" } });
 				const background = await bash.execute("detach-candidate", {

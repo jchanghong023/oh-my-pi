@@ -330,6 +330,29 @@ describe("streamPiNative request shape", () => {
 		});
 	});
 
+	it("keeps request-local credentials out of wire options after streamSimple merges headers", async () => {
+		const captured: { init?: RequestInit } = {};
+		const fetchImpl: FetchImpl = (async (_input, init) => {
+			captured.init = init;
+			return fakeResponse([{ type: "done", reason: "stop", message: baseAssistant() }]);
+		}) as FetchImpl;
+		await streamSimple(fakeModel(), baseContext, {
+			requestAuth: { apiKey: "gateway-bearer", headers: { "X-Auth-Token": "request-secret" } },
+			headers: { "x-auth-token": "old-secret", "User-Agent": "caller-agent" },
+			fetch: fetchImpl,
+			maxTokens: 128,
+		}).result();
+
+		const body = JSON.parse(captured.init?.body as string);
+		expect(body.options.requestAuth).toBeUndefined();
+		expect(body.options.apiKey).toBeUndefined();
+		expect(body.options.headers).toEqual({ "User-Agent": "caller-agent" });
+		expect(body.options.maxTokens).toBe(128);
+		expect(captured.init?.body).not.toContain("request-secret");
+		expect(captured.init?.body).not.toContain("old-secret");
+		expect(captured.init?.body).not.toContain("gateway-bearer");
+	});
+
 	it("normalizes trailing slashes on `baseUrl` so the endpoint never double-slashes", async () => {
 		const captured: { url?: string } = {};
 		const fetchImpl: FetchImpl = (async (input, _init) => {

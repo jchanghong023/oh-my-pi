@@ -101,6 +101,7 @@ OMP MUST Git 钩子保持禁用，提交和推送不自动运行检查。
   - 服务日志读取失败和 Web Search 未配置模型／所有候选失败沿用上游失败传播及回执，不增加服务日志失败专用回执或 Web Search `isError` 标记。日志读取失败不撤销已启动服务；服务参数校验及 native PipeStreams 降级要求保持不变。
   - Robomp 的 PR 元数据解析、PR 审查、review 处理及 PR 对话处理中的 GitHub 请求遇到 `GitHubError` 时，沿用上游捕获、记录 warning 后返回的行为；其他异常和路径保持既有行为。
   - 归档编码沿用上游接口，不增加 `AbortSignal` 编码取消接口或检查；其他归档读写、工具协议及权限边界保持不变。
+  - `ask` 完整沿用上游 HTML `<form>` 输入、答案结构、默认值、超时、取消和宿主回退；不维护 fork 专属工具协议、Goal 自动超时答复、推荐项／首项超时选择、回答图片、备注或聊天重定向。TUI、WebGUI、RPC、ACP 与测试消费者同步使用原生协议，不保留双轨或兼容层。
 
 #### Scenario: 保留 JTD 转换约束
 

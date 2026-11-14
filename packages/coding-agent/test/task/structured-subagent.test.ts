@@ -21,6 +21,8 @@ import {
 	isProviderEnabled,
 	setDisabledProviders,
 } from "@oh-my-pi/pi-coding-agent/capability";
+import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentCompactionThresholdOverride } from "@oh-my-pi/pi-coding-agent/config/compaction-threshold";
@@ -68,7 +70,7 @@ import type { AgentDefinition, NativeSubagentHooks } from "@oh-my-pi/pi-coding-a
 import type { SingleResult, TaskParams } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
-import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { createSessionDefaults } from "../helpers/session-defaults";
 
@@ -2806,5 +2808,71 @@ describe("per-call model preflight", () => {
 			expect(policy.modelOverride).toEqual(["mock/target"]);
 			expect(policy.perCallModelGrants?.agentName).toBe("seance");
 		});
+	});
+});
+
+describe("session upstream routing inheritance", () => {
+	it("preserves @upstream provider pinning on inherited subagent models", async () => {
+		const baseModel = buildModel({
+			provider: "openrouter",
+			id: "z-ai/glm-4.7",
+			name: "Upstream routing protocol fixture",
+			api: "openai-completions",
+			baseUrl: "https://routing-fixture.invalid/v1",
+			reasoning: true,
+			input: ["text"],
+			contextWindow: 128_000,
+			maxTokens: 8192,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		});
+		const routedModel = parseModelPattern("openrouter/z-ai/glm-4.7@cerebras", [baseModel]).model;
+		if (!routedModel) throw new Error("Expected @cerebras routed model");
+
+		using dir = TempDir.createSync("@omp-subagent-upstream-");
+		const authStorage = await AuthStorage.create(dir.join("auth.db"));
+		authStorage.keys.setRuntime("openrouter", "test-key");
+		const settings = Settings.isolated({ "task.isolation.enabled": false, "async.enabled": false });
+		const { session: parentSession } = await sdkModule.createAgentSession({
+			cwd: dir.path(),
+			authStorage,
+			settings,
+			sessionManager: SessionManager.inMemory(dir.path()),
+			model: routedModel,
+			enableMCP: false,
+			enableLsp: false,
+			hasUI: false,
+		});
+
+		try {
+			const runSpy = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue({
+				index: 0,
+				id: "task-1",
+				agent: "task",
+				agentSource: "bundled",
+				task: "do work",
+				exitCode: 0,
+				output: '{"done":true}',
+				stderr: "",
+				truncated: false,
+				durationMs: 1,
+				tokens: 0,
+				requests: 1,
+			});
+
+			const taskTool = parentSession.getToolByName("task");
+			if (!taskTool) throw new Error("Expected task tool on parent session");
+			const result = await taskTool.execute("call-1", {
+				i: "run worker",
+				context: "test",
+				tasks: [{ name: "Worker", solutionSpace: "single", steps: ["do work"] }],
+			});
+			expect(result.isError).toBeFalsy();
+			expect(runSpy).toHaveBeenCalledTimes(1);
+			const spawnOptions = runSpy.mock.calls[0]?.[0];
+			expect(spawnOptions?.modelOverride).toEqual(["openrouter/z-ai/glm-4.7@cerebras"]);
+			expect(spawnOptions?.parentActiveModelPattern).toBe("openrouter/z-ai/glm-4.7@cerebras");
+		} finally {
+			await parentSession.dispose();
+		}
 	});
 });

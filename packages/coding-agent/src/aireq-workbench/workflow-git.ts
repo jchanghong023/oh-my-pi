@@ -229,7 +229,9 @@ export class AIReqWorkflowGit {
 		if (!project.remote) throw new Error("Requirement merge cannot be registered without a company remote");
 		const latest = await this.latestDefault(project);
 		const repo = vcs.requireGit(project.root);
-		const names = (await repo.lsTree(latest.commit, [`docs/aireq/requirements/${snapshot.irId}`])).sort();
+		const names = (await repo.lsTree(latest.commit, [`docs/aireq/requirements/${snapshot.irId}`]))
+			.map(entry => entry.path)
+			.sort();
 		if (canonicalJson(names) !== canonicalJson(snapshot.files.map(f => f.path).sort()))
 			throw new Error("Default branch does not contain exact confirmed IR/SR set");
 		await assertTreeFiles(project.root, latest.commit, [...snapshot.files, ...evidenceFiles, ...retiredFiles]);
@@ -293,7 +295,7 @@ export class AIReqWorkflowGit {
 			safeMaterialPath(file);
 			if (await repo.hasDiff({ base: head, head: latest.commit, files: [file] }))
 				throw new Error(`Default branch content/mode mismatch: ${file}`);
-			const exists = (await repo.lsTree(head, [file])).includes(file);
+			const exists = (await repo.lsTree(head, [file])).some(entry => entry.path === file);
 			if (!exists) {
 				files.push({ path: file, sha256: sha256(""), size: -1 });
 				continue;
@@ -440,7 +442,7 @@ async function assertTreeFiles(root: string, tree: string, files: AIReqFileVersi
 	const repo = vcs.requireGit(root);
 	for (const file of files) {
 		if (file.size === -1) {
-			if ((await repo.lsTree(tree, [file.path])).includes(file.path))
+			if ((await repo.lsTree(tree, [file.path])).some(entry => entry.path === file.path))
 				throw new Error(`Committed retired material remains: ${file.path}`);
 			continue;
 		}

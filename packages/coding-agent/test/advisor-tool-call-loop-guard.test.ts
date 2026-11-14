@@ -22,7 +22,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { AdvisorLoopGuard } from "../src/advisor/loop-guard";
 import { cfgAdvisorReviewInterval } from "../src/advisor/settings";
-import { activateTodoTool, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { activateTodoTool, createInMemoryAuthStorage, fixedAdvisorTools } from "./helpers/agent-session-setup";
 
 const zeroUsage = {
 	input: 0,
@@ -184,7 +184,7 @@ describe("advisor tool-call loop guard", () => {
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			settings,
 			modelRegistry,
-			advisorTools: [failingReadTool],
+			advisorTools: fixedAdvisorTools(failingReadTool),
 			advisorStreamFn,
 			advisorGetToolContext: toolCall => primaryToolContext(toolCall),
 			advisorConfigs:
@@ -270,7 +270,16 @@ describe("advisor tool-call loop guard", () => {
 		const mock = createMockModel({
 			provider: "anthropic",
 			responses: [
-				{ content: [{ type: "toolCall", id: "cancel", name: "ask", arguments: {} }] },
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "cancel",
+							name: "ask",
+							arguments: { html: '<form><label>Proceed? <input name="proceed"></label></form>' },
+						},
+					],
+				},
 				{ content: ["done"] },
 			],
 		});
@@ -280,7 +289,7 @@ describe("advisor tool-call loop guard", () => {
 				name: "ask",
 				label: "Ask",
 				description: "Stands in for a dialog the user cancels",
-				parameters: type({}),
+				parameters: type({ html: "string" }),
 				approval: "read",
 				async execute(_id, _args, _signal, _update, context) {
 					seenToolNames = context?.toolNames;
@@ -322,6 +331,52 @@ describe("advisor tool-call loop guard", () => {
 		expect(redirects).toHaveLength(1);
 		expect(advisor.state.messages.filter(message => message.role === "custom")).toHaveLength(0);
 		expect(advisor.state.error).toBeUndefined();
+	});
+
+	it.each([
+		{ device: "mcp__peers_wait", exempt: "mcp__peers_wait", redirects: 0 },
+		{ device: "mcp__other_tool", exempt: "mcp__peers_wait", redirects: 1 },
+		{ device: "mcp__peers_wait", exempt: "write", redirects: 0 },
+	])("applies advisor exemption $exempt to writes to $device", ({ device, exempt, redirects }) => {
+		const messages: AgentMessage[] = [];
+		const guard = new AdvisorLoopGuard({
+			settings: Settings.isolated({
+				"model.toolCallLoopGuard.enabled": true,
+				"model.toolCallLoopGuard.threshold": 2,
+				"model.toolCallLoopGuard.exemptTools": [exempt],
+			}),
+			name: "test",
+			liveMessages: () => messages,
+			appendMessage: message => messages.push(message),
+			abort: () => {
+				throw new Error("Unexpected advisor abort");
+			},
+		});
+		for (let index = 0; index < 2; index++) {
+			guard.recordTurn(messages, {
+				message: {
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: `call-${index}`,
+							name: "write",
+							arguments: { path: `xd://${device}`, content: "{}" },
+						},
+					],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "test",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [],
+				willContinue: true,
+			});
+		}
+		expect(messages).toHaveLength(redirects);
+		if (redirects > 0) expect(JSON.stringify(messages[0])).toContain("tool_call_loop_detected");
 	});
 
 	it("starts repetition counting fresh after an advisor context reset", () => {
@@ -834,7 +889,6 @@ describe("advisor tool-call loop guard", () => {
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			settings,
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
-			advisorTools: [],
 			advisorStreamFn,
 			advisorConfigs: [
 				{ name: "Parked reviewer", syncBacklog: "off", instructions: "parked-reviewer-marker" },
@@ -895,7 +949,6 @@ describe("advisor tool-call loop guard", () => {
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			settings,
 			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
-			advisorTools: [],
 			advisorStreamFn,
 			advisorConfigs: [{ name: "Final reviewer", reviewMode: "agent-end", reviewInterval: 2 }],
 		});

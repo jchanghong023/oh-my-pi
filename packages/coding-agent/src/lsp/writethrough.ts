@@ -7,7 +7,6 @@ import { isPermissionDeniedError, writeFileWithFallback } from "../tools/file-wr
 import {
 	beginPendingDiskWrite,
 	endPendingDiskWrite,
-	FileChangeType,
 	getActiveOrPendingClient,
 	getOrCreateClient,
 	notifyWorkspaceWatchedFiles,
@@ -29,7 +28,7 @@ import {
 } from "./diagnostics";
 import { type FileDiagnosticsResult, FileFormatResult } from "@oh-my-pi/pi-tui/tools/lsp";
 import { notifyFileSaved, splitServers, syncFileContent } from "./servers";
-import type { LspClient, ServerConfig } from "./types";
+import { FileChangeType, type LspClient, type ServerConfig } from "./types";
 import { summarizeDiagnosticMessages } from "./utils";
 
 const TSSERVER_REQUEST_COMMAND = "typescript.tsserverRequest";
@@ -123,6 +122,14 @@ export interface WritethroughResult {
 	finalContent: string;
 }
 
+/**
+ * Runs at most once per writethrough call: after the call's final bytes reach disk, before
+ * `didSave` reaches language servers and before diagnostics are collected for those bytes,
+ * deferred fetches included. `write` sets a shebang's execute bits here, since linters read
+ * them (Ruff's EXE001). Receives the final bytes.
+ */
+export type WritethroughCommitHook = (finalContent: string) => Promise<void>;
+
 /** Callback type for the LSP writethrough */
 export type WritethroughCallback = (
 	dst: string,
@@ -131,6 +138,7 @@ export type WritethroughCallback = (
 	file?: BunFile,
 	batch?: LspWritethroughBatchRequest,
 	getDeferred?: (dst: string) => WritethroughDeferredHandle | undefined,
+	onCommitted?: WritethroughCommitHook,
 ) => Promise<WritethroughResult>;
 
 /** No-op writethrough callback */
@@ -141,8 +149,10 @@ export async function writethroughNoop(
 	file?: BunFile,
 	_batch?: LspWritethroughBatchRequest,
 	_getDeferred?: (dst: string) => WritethroughDeferredHandle | undefined,
+	onCommitted?: WritethroughCommitHook,
 ): Promise<WritethroughResult> {
 	await writeFileWithFallback(dst, content, file);
+	await onCommitted?.(content);
 	return { finalContent: content };
 }
 
@@ -160,6 +170,7 @@ interface PendingWritethrough {
 
 interface RunLspWritethroughOptions {
 	contentAlreadyWritten?: boolean;
+	onCommitted?: WritethroughCommitHook;
 }
 
 interface LspWritethroughBatchRequest {
@@ -496,6 +507,16 @@ async function runLspWritethrough(
 		writeSignal?.throwIfAborted();
 		if (diskContent !== finalContent) await writeContent(finalContent, writeSignal);
 	};
+	let committed: Promise<void> | undefined;
+	/**
+	 * Commit the final bytes, then run the caller's `onCommitted` hook on them, once. A budget
+	 * timeout that interrupts the hook leaves the catch path awaiting this same run.
+	 */
+	const commitFinalWrite = async (writeSignal?: AbortSignal) => {
+		await commitWrite(writeSignal);
+		const onCommitted = runOptions?.onCommitted;
+		if (onCommitted) await (committed ??= onCommitted(finalContent));
+	};
 	let writeNotified = false;
 	const notifyWriteCommitted = async (notifySignal: AbortSignal | undefined = signal) => {
 		if (writeNotified) return;
@@ -514,7 +535,7 @@ async function runLspWritethrough(
 		}
 	};
 	if (!enableFormat && !enableDiagnostics) {
-		await commitWrite();
+		await commitFinalWrite();
 		await notifyWriteCommitted();
 		return { finalContent, diagnostics: undefined };
 	}
@@ -523,7 +544,7 @@ async function runLspWritethrough(
 	const servers = getServersForFile(config, dst);
 
 	if (servers.length === 0) {
-		await commitWrite();
+		await commitFinalWrite();
 		await notifyWriteCommitted();
 		return { finalContent, diagnostics: undefined };
 	}
@@ -585,7 +606,7 @@ async function runLspWritethrough(
 				} else {
 					formatter = finalContent !== content ? FileFormatResult.FORMATTED : FileFormatResult.UNCHANGED;
 				}
-				await commitWrite(operationSignal);
+				await commitFinalWrite(operationSignal);
 				await notifyWriteCommitted(operationSignal);
 				if (changeType === FileChangeType.Created) {
 					await reloadTypeScriptProjectsAfterCreate(cwd, lspServers, operationSignal, {
@@ -627,8 +648,8 @@ async function runLspWritethrough(
 				}
 
 				// 4. Write to disk. A formatter-altered body is the only thing left to
-				// commit when the create already landed above.
-				await commitWrite(operationSignal);
+				// commit when the create already landed above; the hook runs either way.
+				await commitFinalWrite(operationSignal);
 				await notifyWriteCommitted(operationSignal);
 			}
 
@@ -651,6 +672,7 @@ async function runLspWritethrough(
 				// The fallback commit below reports write failures.
 			}
 		}
+		await commitFinalWrite(signal);
 		if (timedOut) {
 			formatter = undefined;
 			diagnostics = undefined;
@@ -668,7 +690,6 @@ async function runLspWritethrough(
 				});
 			}
 		}
-		await commitWrite();
 		// The write above committed even though the operation budget elapsed:
 		// announce it on the caller's signal — the dead `operationSignal` would
 		// abort the notify before it ever reaches the server.
@@ -715,6 +736,7 @@ async function flushWritethroughBatch(
 	options: ResolvedWritethroughOptions,
 	signal?: AbortSignal,
 	getDeferred?: (dst: string) => WritethroughDeferredHandle | undefined,
+	onCommitted?: WritethroughCommitHook,
 ): Promise<WritethroughResult> {
 	if (batch.length === 0) {
 		return { finalContent: "" };
@@ -758,7 +780,8 @@ async function flushWritethroughBatch(
 			signal,
 			entry.file,
 			deferredInner,
-			{ contentAlreadyWritten: true },
+			// Earlier entries ran their own calls' hooks when those calls wrote them.
+			{ contentAlreadyWritten: true, onCommitted: entry.dst === requestedDst ? onCommitted : undefined },
 		);
 		finalContents.set(entry.dst, diag.finalContent);
 		bundle?.finalize(diag.diagnostics);
@@ -788,6 +811,7 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 		file?: BunFile,
 		batch?: LspWritethroughBatchRequest,
 		getDeferred?: (dst: string) => WritethroughDeferredHandle | undefined,
+		onCommitted?: WritethroughCommitHook,
 	) => {
 		const changeType = (await Bun.file(dst).exists()) ? FileChangeType.Changed : FileChangeType.Created;
 		if (!batch) {
@@ -807,6 +831,7 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 				signal,
 				file,
 				deferredInner,
+				{ onCommitted },
 			);
 			bundle?.finalize(diagnostics.diagnostics);
 			return diagnostics;
@@ -843,7 +868,12 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 
 		const state = getOrCreateWritethroughBatch(batch.id, resolvedOptions);
 		state.entries.set(dst, { dst, file, changeType, content });
-		if (!batch.flush) return { finalContent: content };
+		if (!batch.flush) {
+			// The flush formats and diagnoses this entry after this call returns, so
+			// these bytes are the call's result: run its hook on them now.
+			await onCommitted?.(content);
+			return { finalContent: content };
+		}
 		deleteWritethroughBatch(batch.id);
 		const result = await flushWritethroughBatch(
 			Array.from(state.entries.values()),
@@ -852,16 +882,17 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 			state.options,
 			signal,
 			getDeferred,
+			onCommitted,
 		);
 		return result;
 	};
-	return (dst, content, signal, file, batch, getDeferred) => {
+	return (dst, content, signal, file, batch, getDeferred, onCommitted) => {
 		const scope = mutationScope.getStore();
 		if (scope?.active && scope.files.includes(dst)) {
-			return run(dst, content, signal, file, batch, getDeferred);
+			return run(dst, content, signal, file, batch, getDeferred, onCommitted);
 		}
 		return withWritethroughMutationLocks([dst], batch?.flush ? batch.id : undefined, () =>
-			run(dst, content, signal, file, batch, getDeferred),
+			run(dst, content, signal, file, batch, getDeferred, onCommitted),
 		);
 	};
 }

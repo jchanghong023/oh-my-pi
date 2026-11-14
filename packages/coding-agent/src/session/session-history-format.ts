@@ -8,7 +8,7 @@
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
-import { countNewlines, escapeXmlText } from "@oh-my-pi/pi-utils";
+import { countNewlines, escapeXmlText, isRecord } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import type {
 	BashExecutionMessage,
@@ -314,25 +314,12 @@ function expandedAskDetails(
 	result: ToolResultMessage | undefined,
 	transform?: (text: string) => string,
 ): string | undefined {
-	if (!result?.details || typeof result.details !== "object") return undefined;
-	const details = result.details as {
-		question?: unknown;
-		questions?: unknown;
-		results?: unknown;
-	};
-	const questions = Array.isArray(details.results)
-		? details.results
-				.map(item =>
-					item && typeof item === "object" && typeof (item as { question?: unknown }).question === "string"
-						? (item as { question: string }).question
-						: undefined,
-				)
-				.filter((question): question is string => question !== undefined)
-		: Array.isArray(details.questions)
-			? details.questions.filter((question): question is string => typeof question === "string")
-			: typeof details.question === "string"
-				? [details.question]
-				: [];
+	const details = result?.details;
+	if (!isRecord(details)) return undefined;
+	const answers = details.answers;
+	const questions = Array.isArray(answers)
+		? answers.flatMap(item => (isRecord(item) && typeof item.question === "string" ? [item.question] : []))
+		: [];
 	return questions.length > 0 ? boundedAskJson({ questions }, transform) : undefined;
 }
 

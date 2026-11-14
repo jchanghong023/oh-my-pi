@@ -762,6 +762,7 @@ export class ToolExecutionComponent extends Container {
 			this.#shellPreferences,
 			this.#shellTrace,
 			this.#result ? resultText(this.#result) : undefined,
+			!this.#shellTrace && !this.#argsComplete,
 		);
 		this.#shellPresentationKey = key;
 		return this.#shellPresentation;

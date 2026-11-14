@@ -1,6 +1,6 @@
 import type { AgentOptions, AgentTelemetryConfig, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
-import type { EditStore } from "@oh-my-pi/pi-natives";
 import type { EditMode } from "@oh-my-pi/pi-tui/tools/edit";
+import type { ToolConversationState } from "./tool-state";
 import type { FetchImpl, ImageContent, Message, Model, ServiceTierByFamily, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManagerApi } from "../async/job-manager";
@@ -168,6 +168,7 @@ export type {
 export * from "./security-scan";
 export * from "./think";
 export * from "./todo";
+export * from "./tool-state";
 export * from "./tts";
 export * from "./vibe";
 export * from "./wait";
@@ -215,6 +216,19 @@ export interface DeferredDiagnosticsEntry {
 	 * sees diagnostics for stale content.
 	 */
 	isStale(): boolean;
+}
+
+/** A file write reported through {@link ToolSession.recordFileChange}. */
+export interface FileChangeReport {
+	/** Absolute path. */
+	path: string;
+	/** Reporting tool (`edit`, `write`, `ast_edit`, `task`). */
+	tool: string;
+	before: string | null;
+	after: string | null;
+	beforeMtimeMs?: number;
+	/** Agent whose work this is, when not the reporting session's own (isolated subagent merge-back). */
+	agent?: { agent: string; parent?: string };
 }
 
 /** Session context for tool factories */
@@ -577,18 +591,13 @@ export interface ToolSession {
 	/** Get the most recent completed rewind, if this session just rewound a checkpoint. */
 	getLastCompletedRewind?: () => CompletedRewindState | undefined;
 
-	/** Native snapshots, clipboard registers, and no-op guard shared by edit calls. */
-	editStore?: EditStore;
-
-	/** Per-session log of unresolved git merge conflict regions surfaced by
-	 *  `read`. Each entry gets a stable id N referenced by `write conflict://N`
-	 *  to splice the recorded region with replacement content. Lazily initialized
-	 *  by `getConflictHistory`. */
-	conflictHistory?: import("./conflict-detect").ConflictHistory;
-
-	/** Per-session ledger of post-edit LSP diagnostics already surfaced to the
-	 *  model for each file. Lazily initialized by `getDiagnosticsLedger`. */
-	diagnosticsLedger?: import("../lsp/diagnostics-ledger").DiagnosticsLedger;
+	/**
+	 * What this conversation accumulated through its tools (snapshots, conflict
+	 * history, diagnostics already shown, repeat-read counts). Created on first
+	 * use by {@link getToolConversationState}; a session copied from another MUST
+	 * set its own so the two never share it.
+	 */
+	state?: ToolConversationState;
 
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
@@ -607,6 +616,12 @@ export interface ToolSession {
 	bumpFileMutationVersion?(path: string): number;
 	/** Read the current session-global mutation counter for `path` (0 if never mutated). */
 	getFileMutationVersion?(path: string): number;
+	/**
+	 * Journal a file write made by this agent's edit tools (full contents; `null` = file absent),
+	 * so selective commits (`/commit`, the eval `commit` namespace) can attribute its lines.
+	 * `beforeMtimeMs` is the file's mtime before the write. Never throws.
+	 */
+	recordFileChange?(change: FileChangeReport): void;
 	/** Get the active OpenTelemetry config so subagent dispatch can forward
 	 *  the parent's tracer/hooks with the subagent's own identity stamped. */
 	getTelemetry?: () => AgentTelemetryConfig | undefined;
@@ -1030,7 +1045,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	return tools;
 }
 
-export type { AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
+export type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 // Issue #12680: extensions that shadow the built-in ask tool reach the native
 // renderer through the injected pi.pi namespace (the root barrel of this
 // package). Re-export it so the pi-tui renderer migration doesn't drop it.

@@ -20,7 +20,6 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - `recap.enabled=false`
 - `debug.enabled=false`、`ida.enabled=false`、`archive.enabled=false`（普通与 offline 启动均默认关闭；已有配置和用户显式开启仍优先，不改写配置文件）。
 - `eval.js=false`：所有平台、普通与 offline 启动均默认关闭 JavaScript Eval。默认工具 schema 和对应运行时说明只声明 Python；显式开启 JavaScript 后恢复该后端。未开启时拒绝 JavaScript 执行，显式开启后可实际执行。
-- `ask.timeout=60` 秒；Goal 自动编排的超时答复见 [Goal 自动编排](../goal-autopilot/spec.md)。
 - `async.maxJobs=32`；后台任务的硬上限及计数边界见下文。
 - 欢迎界面的使用提示、字体提醒与提示／新功能标签采用简体中文，展示边界见[简体中文用户界面](../tui-presentation/spec.md)。
 - `startup.setupWizard=false`：不因 setupVersion 落后于当前版本而自动运行或加载完整设置向导；全平台启动减负与取消自动更新检查的边界见[全平台轻量启动](../fork-runtime/spec.md#requirement-全平台轻量启动)。

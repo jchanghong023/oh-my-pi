@@ -25,7 +25,6 @@ const defaults = {
 	"ida.enabled": false,
 	"archive.enabled": false,
 	"eval.js": false,
-	"ask.timeout": 60,
 	"async.maxJobs": 32,
 	"startup.setupWizard": false,
 	"statusLine.compactThinkingLevel": false,
@@ -96,7 +95,6 @@ describe("fork runtime defaults", () => {
 			fs.mkdirSync(agentDir);
 			const settings = await Settings.loadReadOnly({ cwd: root.path(), agentDir });
 			for (const [id, expected] of Object.entries(defaults)) expect(value(settings, id), id).toEqual(expected);
-			expect(askTimeoutMs(settings)).toBe(60_000);
 			expect(cfgTerminalProgramStatus.get(settings)).toBe(mode === "ordinary");
 			expect(fs.existsSync(path.join(agentDir, "config.yml"))).toBe(false);
 

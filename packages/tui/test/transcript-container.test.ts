@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
@@ -820,11 +820,105 @@ describe("TranscriptContainer", () => {
 		const blocks = Array.from({ length: 40 }, (_, index) => new CountingBlock([`row ${index}`]));
 		for (const block of blocks) transcript.addChild(block);
 
-		expect(transcript.renderViewport(80, 4, frame)).toEqual(["row 36", "row 37", "row 38", "row 39"]);
+		// The settled backlog retires into scrollback, so the tail paints at full height with its separators.
+		expect(transcript.renderViewport(80, 4, frame)).toEqual(["", "row 38", "", "row 39"]);
 		// Only the viewport tail, plus the one block that proves the overflow,
 		// costs a render; a resumed session's backlog never does.
 		expect(blocks.slice(0, 34).map(block => block.renders)).toEqual(blocks.slice(0, 34).map(() => 0));
 		expect(blocks[39]!.renders).toBeGreaterThan(0);
+	});
+
+	it("paints a draining backlog as the screen it converges to", () => {
+		const build = () => {
+			const transcript = new TranscriptContainer();
+			for (let index = 0; index < 30; index++) {
+				const rows = Array.from({ length: 1 + (index % 4) }, (_, row) => `b${index}r${row}`);
+				transcript.addChild(new Block(rows, true));
+			}
+			// Still streaming at the bottom: visible, so it does not pin retirement.
+			transcript.addChild(new Block(["live"], false));
+			return transcript;
+		};
+		const capacity = 9;
+
+		// A session switch hands over the whole settled ledger before any of it retired.
+		const first = build().renderViewport(80, capacity, frame);
+
+		const drained = build();
+		const history: string[] = [];
+		for (
+			let batch = drained.peekFinalizedBatch(80, capacity);
+			batch;
+			batch = drained.peekFinalizedBatch(80, capacity)
+		) {
+			history.push(...batch.rows);
+			drained.acknowledgeFinalizedBatch(batch.id);
+		}
+		const settled = drained.renderViewport(80, capacity, frame);
+
+		expect(first).toHaveLength(capacity);
+		expect(first).toEqual([...history, ...settled].slice(-capacity));
+	});
+
+	it("compacts instead of clipping when a running block would scroll out of view", () => {
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Block(["run1", "run2", "run3"], false));
+		transcript.addChild(new Block(["done1", "done2"], true));
+
+		// Clipping would hide the running block, which cannot retire to scrollback.
+		expect(transcript.renderViewport(80, 3, frame)).toEqual(["run3", "done1", "done2"]);
+	});
+
+	it("clips replayed history above a finished block whose figure is still rendering", () => {
+		class PendingFigureBlock extends Block {
+			isTranscriptBlockPending(): boolean {
+				return true;
+			}
+		}
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Block(["older"], true));
+		// Finalized text with an async figure render in flight: retirement waits for it, but nothing on it changes.
+		transcript.addChild(new PendingFigureBlock(["figure1", "figure2"], true));
+		transcript.addChild(new Block(["done1", "done2"], true));
+
+		expect(transcript.renderViewport(80, 4, frame)).toEqual(["figure2", "", "done1", "done2"]);
+	});
+
+	describe("clipped head with an inline image", () => {
+		// Two text rows, an image's three reserved rows and the row that draws it upward over them, two text rows.
+		const imageRows = [
+			"above 1",
+			"above 2",
+			"\x1b[0m",
+			"\x1b[0m",
+			"\x1b[0m",
+			"\x1b7\x1b[3A\x1b]1337;File=inline=1;width=10;height=4:AAAA\x07\x1b8",
+			"below 1",
+			"below 2",
+		];
+
+		for (const [protocol, capacity, painted] of [
+			// The cut lands inside an image iTerm2 would draw over the rows above the viewport: only its row blanks.
+			[ImageProtocol.Iterm2, 7, [...imageRows.slice(3, 5), "", ...imageRows.slice(6), "", "tail"]],
+			// The image sits wholly below the cut, so nothing draws above the viewport.
+			[ImageProtocol.Iterm2, 9, [...imageRows.slice(1), "", "tail"]],
+			// Kitty draws the visible part of a cut image.
+			[ImageProtocol.Kitty, 7, [...imageRows.slice(3), "", "tail"]],
+		] as const) {
+			it(`blanks a clipped image row only where the terminal cannot draw it in part (${protocol}, ${capacity} rows)`, () => {
+				const previous = TERMINAL.imageProtocol;
+				setTerminalImageProtocol(protocol);
+				try {
+					const transcript = new TranscriptContainer();
+					transcript.addChild(new Block([...imageRows], true));
+					transcript.addChild(new Block(["tail"], true));
+
+					expect(transcript.renderViewport(80, capacity, frame)).toEqual(painted);
+				} finally {
+					setTerminalImageProtocol(previous);
+				}
+			});
+		}
 	});
 
 	it("keeps an emergency row from a block behind the bounded viewport walk", () => {
@@ -850,17 +944,33 @@ describe("TranscriptContainer", () => {
 		expect(transcript.renderViewport(80, 2, frame)).toEqual(["settled 2", "settled 3"]);
 	});
 
+	it("excludes empty blocks so pressure never emits blank rows (issue 9483)", () => {
+		const transcript = new TranscriptContainer();
+		// Text blocks interleaved with empty (hidden tool-activity) blocks that
+		// render nothing but stay live until retired.
+		for (let i = 0; i < 6; i++) {
+			// The first block is still running, so nothing can retire and the overflow must compact.
+			transcript.addChild(new Block([`t${i}a`, `t${i}b`, `t${i}c`], i > 0));
+			for (let j = 0; j < 8; j++) transcript.addChild(new Block([], true));
+		}
+		// Emergency path: more non-empty blocks than rows. Every row carries real
+		// text — no block's tail is dropped as blank padding.
+		const out = transcript.renderViewport(80, 12, frame);
+		expect(out).toHaveLength(12);
+		expect(out.every(row => /\S/.test(row))).toBe(true);
+	});
 	it("empty blocks do not reserve capacity from real text under pressure (issue 9483)", () => {
 		const transcript = new TranscriptContainer();
-		transcript.addChild(new Block(["A1", "A2", "A3", "A4"], true));
+		// Still running: retirement is pinned, so the allocator has to fit everything.
+		transcript.addChild(new Block(["A1", "A2", "A3", "A4"], false));
 		transcript.addChild(new Block([], true));
 		transcript.addChild(new Block(["B1", "B2", "B3", "B4"], true));
 		transcript.addChild(new Block([], true));
 		transcript.addChild(new Block(["C1", "C2", "C3", "C4"], true));
-		// Capacity 12 fits ten content rows and two separators; empty blocks
-		// must not steal any of those rows.
+		// Under pressure ordinary inter-block decoration gives way to content;
+		// empty blocks must not steal any of the twelve available content rows.
 		const out = transcript.renderViewport(80, 12, frame);
-		expect(out).toEqual(["A3", "A4", "", "B1", "B2", "B3", "B4", "", "C1", "C2", "C3", "C4"]);
+		expect(out).toEqual(["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4"]);
 	});
 
 	it("renders user message text in emergency layout and omits OSC 133 prompt markers (issue 13835)", () => {
@@ -978,10 +1088,10 @@ describe("TranscriptContainer", () => {
 		const tool = new ToolBlock(["T1", "T2", "T3", "T4"], false);
 		transcript.addChild(assistant);
 		transcript.addChild(tool);
-		// Capacity 6 reserves a separator and gives three surplus content rows
-		// to the assistant before growing the tool card.
+		// Capacity 6 gives the assistant its complete four rows before
+		// spending the remaining two content rows on the growing tool card.
 		const out = transcript.renderViewport(80, 6, frame);
-		expect(out).toEqual(["A1", "A2", "A3", "A4", "", "T4"]);
+		expect(out).toEqual(["A1", "A2", "A3", "A4", "T3", "T4"]);
 	});
 
 	it("keeps the first visible content row when live blocks exceed the viewport", () => {
@@ -999,8 +1109,8 @@ describe("TranscriptContainer", () => {
 		transcript.addChild(new Block(["latest 1", "latest 2", "latest 3", "latest 4"], false));
 
 		expect(transcript.renderViewport(80, 8, frame, 6)).toEqual([
+			"older 3",
 			"older 4",
-			"",
 			"latest 1",
 			"latest 2",
 			"latest 3",
@@ -1210,6 +1320,15 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 	beforeAll(async () => {
 		await initTheme(false);
 	});
+
+	let previousPreferences: typeof chatTranscriptDisplayPreferences;
+	beforeEach(() => {
+		previousPreferences = { ...chatTranscriptDisplayPreferences };
+		// These upstream cases publish thinking before prose. A host in another
+		// test may have selected clean/compact, where thinking is intentionally hidden.
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	});
+	afterEach(() => setChatTranscriptDisplayPreferences(previousPreferences));
 
 	/** With `observe`, the transcript composes every update; otherwise only the block renders. */
 	function apply(
@@ -1748,9 +1867,9 @@ describe("TranscriptContainer viewport click spans", () => {
 		transcript.addChild(first);
 		transcript.addChild(second);
 
-		expect(transcript.renderViewport(80, 6, frame)).toEqual(["a4", "", "b1", "b2", "b3", "b4"]);
+		expect(transcript.renderViewport(80, 6, frame)).toEqual(["a3", "a4", "b1", "b2", "b3", "b4"]);
 		expect(transcript.getLastViewportSpans()).toEqual([
-			{ component: first, start: 0, end: 1 },
+			{ component: first, start: 0, end: 2 },
 			{ component: second, start: 2, end: 6 },
 		]);
 	});

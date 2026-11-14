@@ -21,10 +21,12 @@ memchr = "2.7.4"
 parking_lot.workspace = true
 pi-vfs.workspace = true
 regex.workspace = true
+serde.workspace = true
 tokio.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

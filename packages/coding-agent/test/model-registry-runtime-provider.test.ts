@@ -373,6 +373,36 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(registry.find(providerName, "fallback-model")).toBeDefined();
 	});
 
+	test("retryUnavailableDiscovery recovers models a failed discovery left out", async () => {
+		const providerName = "deepseek";
+		let failing = true;
+		let dynamicFetches = 0;
+		registry.registerProvider(
+			providerName,
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-completions",
+				models: [{ ...baseModel, id: "fallback-model" }],
+				fetchDynamicModels: async () => {
+					dynamicFetches++;
+					if (failing) throw new Error("transient discovery failure");
+					return [{ ...baseModel, id: "dynamic-model" }];
+				},
+			},
+			"ext://runtime",
+		);
+		await registry.refreshRuntimeProviders("online");
+		expect(registry.find(providerName, "dynamic-model")).toBeUndefined();
+		expect(dynamicFetches).toBe(1);
+
+		failing = false;
+		await registry.retryUnavailableDiscovery();
+
+		expect(registry.find(providerName, "dynamic-model")).toBeDefined();
+		expect(dynamicFetches).toBe(2);
+	});
+
 	test("configured discovery suppresses extension fetchDynamicModels for the same provider", async () => {
 		const providerName = "deepseek";
 		fs.writeFileSync(

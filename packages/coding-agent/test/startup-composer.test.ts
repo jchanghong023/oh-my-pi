@@ -1107,6 +1107,7 @@ describe("Composer prepaint", () => {
 			spellingTypoDetection: cfgSpellingTypoDetection.get(settings),
 			spellingAutocomplete: cfgSpellingAutocomplete.get(settings),
 			spellingAutocorrect: cfgSpellingAutocorrect.get(settings),
+			programStatus: false,
 			theme: {},
 		});
 		await terminal.waitForRender();
@@ -1144,7 +1145,7 @@ describe("Composer prepaint", () => {
 		expect(terminal.startOptions?.deferInput).toBeTrue();
 		expect(terminal.inputEnables).toBe(0);
 
-		applyStartupComposerPreferences({ ...config, theme: {} });
+		applyStartupComposerPreferences({ ...config, theme: {}, programStatus: false });
 		expect(terminal.inputEnables).toBe(1);
 
 		// Adoption after preferences must not double-enable…

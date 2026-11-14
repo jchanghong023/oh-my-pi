@@ -64,7 +64,7 @@ export default function (pi) {
 			const stream = createAssistantMessageEventStream();
 			const last = context.messages.findLast(entry => entry.role === "user" || entry.role === "toolResult");
 			const text = last?.role === "user" ? last.content.map(part => part.text ?? "").join("") : "";
-			const argsAt = text.indexOf('{"questions"');
+			const argsAt = text.indexOf('{"html"');
 			const message = {
 				role: "assistant",
 				api: model.api,
@@ -326,6 +326,35 @@ await runRpcMode(session);
 
 		respond(pendingRequests, request.id, { value: "Deploy" });
 		expect(await result).toBe("Deploy");
+	});
+
+	it("carries checkbox state so hosts can show which options are already checked", async () => {
+		const pendingRequests = new Map<string, PendingExtensionRequest>();
+		const output = vi.fn<(frame: object) => void>();
+		const checkedIndices = [0, 1];
+		const result = requestRpcSelect(
+			pendingRequests,
+			output,
+			"(2 selected) Choose enabled jobs",
+			["pytest", "go-quality", "lint", "Other (type your own)", "Done selecting"],
+			{ initialIndex: 2, selectionMarker: "checkbox", checkedIndices, markableCount: 4 },
+		);
+		const request = requireRequest(output.mock.calls[0]?.[0]);
+
+		expect(JSON.parse(JSON.stringify(output.mock.calls[0]?.[0]))).toEqual({
+			type: "extension_ui_request",
+			id: request.id,
+			method: "select",
+			title: "(2 selected) Choose enabled jobs",
+			options: ["pytest", "go-quality", "lint", "Other (type your own)", "Done selecting"],
+			initialIndex: 2,
+			selectionMarker: "checkbox",
+			checkedIndices: [0, 1],
+			markableCount: 4,
+		});
+
+		respond(pendingRequests, request.id, { value: "lint" });
+		expect(await result).toBe("lint");
 	});
 
 	it("cancels the remote dialog when its signal aborts", async () => {
@@ -717,7 +746,7 @@ describe("RPC ask dialog", () => {
 		expect(onTimeout).not.toHaveBeenCalled();
 	});
 
-	it("keeps select prompts until the host opts in, then sends each ask as one dialog", async () => {
+	it("keeps native form select/input fallback independent of extension ask-dialog opt-in", async () => {
 		await using temp = await TempDir.create("@rpc-ask-dialog-");
 		const extensionPath = temp.join("scripted-ask.ts");
 		await Bun.write(extensionPath, scriptedAskProvider);
@@ -757,6 +786,14 @@ describe("RPC ask dialog", () => {
 			await child.stdin.flush();
 		};
 		const selectRequests: Record<string, unknown>[] = [];
+		const inputRequests: Record<string, unknown>[] = [];
+		let featurePick = 0;
+		const dbHtml =
+			'<form><p>Which database?</p><label><input type="radio" name="db" value="postgres"> Postgres</label><label><input type="radio" name="db" value="sqlite" checked> SQLite</label></form>';
+		const fullHtml = dbHtml.replace(
+			"</form>",
+			'<fieldset><legend>Which features?</legend><label><input type="checkbox" name="features" value="auth"> Auth</label><label><input type="checkbox" name="features" value="billing"> Billing</label><label><input type="checkbox" name="features" value="search"> Search</label></fieldset></form>',
+		);
 		const askRequests: Record<string, unknown>[] = [];
 		const toolResults: unknown[] = [];
 		let optInResponse: unknown;
@@ -769,10 +806,21 @@ describe("RPC ask dialog", () => {
 				if (!isRecord(frame)) continue;
 				if (frame.type === "response" && frame.id === "model") {
 					if (frame.success !== true) throw new Error(`Scripted model unavailable: ${JSON.stringify(frame)}`);
-					await send({ type: "prompt", id: "fallback", message: JSON.stringify({ questions: [dbQuestion] }) });
+					await send({ type: "prompt", id: "fallback", message: JSON.stringify({ html: dbHtml }) });
 				} else if (frame.type === "extension_ui_request" && frame.method === "select") {
 					selectRequests.push(frame);
-					await send({ type: "extension_ui_response", id: frame.id, value: "Postgres" });
+					const rows = (frame.options as string[]) ?? [];
+					const suffix = String(frame.title).includes("Which features?")
+						? ["Auth", "Search", "Done selecting"][featurePick++]!
+						: optInResponse
+							? "Other (type your own)"
+							: "Postgres";
+					const value = rows.find(row => row.endsWith(suffix));
+					if (!value) throw new Error(`Missing native form choice ${suffix}: ${JSON.stringify(rows)}`);
+					await send({ type: "extension_ui_response", id: frame.id, value });
+				} else if (frame.type === "extension_ui_request" && frame.method === "input") {
+					inputRequests.push(frame);
+					await send({ type: "extension_ui_response", id: frame.id, value: "DuckDB" });
 				} else if (frame.type === "extension_ui_request" && frame.method === "ask") {
 					askRequests.push(frame);
 					await send({
@@ -792,7 +840,7 @@ describe("RPC ask dialog", () => {
 					await send({
 						type: "prompt",
 						id: "dialog",
-						message: JSON.stringify({ questions: [dbQuestion, featuresQuestion] }),
+						message: JSON.stringify({ html: fullHtml }),
 					});
 				} else if (frame.type === "prompt_result" && frame.id === "dialog") {
 					finished = true;
@@ -807,7 +855,8 @@ describe("RPC ask dialog", () => {
 
 		if (!finished) throw new Error(`RPC ask fixture did not finish: ${await stderr}`);
 		await stderr;
-		expect(selectRequests).toHaveLength(1);
+		expect(selectRequests).toHaveLength(5);
+		expect(inputRequests).toHaveLength(1);
 		expect(selectRequests[0]).toMatchObject({ method: "select", title: "Which database?" });
 		expect(optInResponse).toEqual({
 			id: "opt-in",
@@ -816,24 +865,20 @@ describe("RPC ask dialog", () => {
 			success: true,
 			data: { enabled: true },
 		});
-		expect(askRequests).toEqual([
-			{
-				type: "extension_ui_request",
-				id: expect.any(String),
-				method: "ask",
-				questions: [dbQuestion, featuresQuestion],
-				timeout: 60_000,
-			},
-		]);
+		expect(askRequests).toEqual([]);
 		expect(toolResults).toEqual([
-			expect.objectContaining({ details: expect.objectContaining({ selectedOptions: ["Postgres"] }) }),
 			expect.objectContaining({
-				details: {
-					results: [
-						expect.objectContaining({ id: "db", selectedOptions: [], customInput: "DuckDB" }),
-						expect.objectContaining({ id: "features", selectedOptions: ["Auth", "Search"] }),
+				details: expect.objectContaining({
+					answers: [{ name: "db", question: "Which database?", answer: "Postgres" }],
+				}),
+			}),
+			expect.objectContaining({
+				details: expect.objectContaining({
+					answers: [
+						{ name: "db", question: "Which database?", answer: "DuckDB" },
+						{ name: "features", question: "Which features?", answer: "Auth, Search" },
 					],
-				},
+				}),
 			}),
 		]);
 	}, 60_000);

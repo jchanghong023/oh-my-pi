@@ -157,17 +157,10 @@ test("compact mixed long session preserves input, tool effects and peer messages
 							{
 								name: "ask",
 								args: {
-									questions: [
-										{
-											id: "continue",
-											question: "MIXED_DECISION",
-											options: [{ label: "Proceed" }, { label: "Cancel" }],
-											recommended: 0,
-										},
-									],
+									html: '<form><p>MIXED_DECISION</p><label><input type="radio" name="continue" value="proceed" checked> Proceed</label><label><input type="radio" name="continue" value="cancel"> Cancel</label></form>',
 								},
 								intent: "Confirming mixed session continuation",
-								verify: contains("Proceed"),
+								verify: contains('"continue": "proceed"'),
 							},
 						],
 						[
@@ -429,7 +422,9 @@ test("compact mixed long session preserves input, tool effects and peer messages
 					expect(frame.screen).toContain("MIXED_DECISION");
 					expect(frame.screen).toContain("Proceed");
 				});
-				await tui("key", "press", "Down", "Enter");
+				// Hand the draft's input focus to the form, choose Proceed, then
+				// submit from the HTML form's separate Submit stop.
+				await tui("key", "press", "Down", "Enter", "Enter");
 				// Leave room for the transcript beside the long draft and both child docks.
 				await tui("resize", "120", "48");
 				await screen.waitForVisualHandoff();

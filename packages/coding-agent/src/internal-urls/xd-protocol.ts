@@ -48,8 +48,8 @@ function deviceWriteTier(
 		// retain the existing fallback to `tools.approval.write`.
 		return {
 			tier: resolveToolTier(inst, parsed),
-			policyKey: name,
-			...(isReadOnlyIndexDevice(session?.xdev, name) ? { fallbackToToolPolicy: false } : {}),
+			policyKey: inst.name,
+			...(isReadOnlyIndexDevice(session?.xdev, inst.name) ? { fallbackToToolPolicy: false } : {}),
 		};
 	} catch {
 		return "exec";
@@ -104,6 +104,11 @@ export class XdProtocolHandler implements ProtocolHandler {
 		if (!name) throw new ToolError(`Cannot write to xd:// itself — pick a device:\n${xdevListing(xdev)}`);
 		const toolCall = context.toolCall;
 		if (!toolCall) throw new ToolError(`xd://${name} can only be written by the write tool.`);
+		// The write tool's gate already resolved approval at this device's tier and
+		// under its canonical tool's `tools.approval` key (see `deviceWriteTier`) —
+		// record that key so a wrapped inner tool does not ask the same question
+		// again, whichever spelling the URL used.
+		const xdevPolicyKey = resolveXdevTool(xdev, name)?.name ?? name;
 		const { result, xdev: dispatch } = await dispatchXdevTool(
 			xdev,
 			name,
@@ -111,10 +116,7 @@ export class XdProtocolHandler implements ProtocolHandler {
 			toolCall.id,
 			context.signal,
 			toolCall.onUpdate,
-			// The write tool's gate already resolved approval at this device's tier
-			// and under `tools.approval.<device>` (see `deviceWriteTier`) — record the
-			// key so a wrapped inner tool does not ask the same question again.
-			toolCall.context ? { ...toolCall.context, xdevPolicyKey: name } : undefined,
+			toolCall.context ? { ...toolCall.context, xdevPolicyKey } : undefined,
 		);
 		// Carry the pagination guarantee across the transport wrapper without
 		// re-appending the inner tool's already-rendered notices.

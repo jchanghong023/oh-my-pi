@@ -28,6 +28,114 @@ async fn run(command: String, cwd: &Path) -> (Option<i32>, String) {
 	(result.exit_code, rx.drain().collect())
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_foreground_preserves_previous_background_external() {
+	use std::time::Duration;
+
+	use pi_shell::{
+		proctree::{Process, ProcessStatus},
+		session::{RunOptions, RunStdio, Session, SessionConfig},
+		sys::StdFs,
+	};
+	use tokio_util::sync::CancellationToken;
+	// Re-enter this test binary as the real external, without an extra fixture
+	// test that would otherwise be counted as a successful no-op.
+	if let Ok(path) = std::env::var("PI_SHELL_CANCEL_FIXTURE") {
+		fs::write(path, std::process::id().to_string()).unwrap();
+		std::future::pending::<()>().await;
+	}
+
+	async fn ready(path: &Path) -> Process {
+		tokio::time::timeout(Duration::from_secs(10), async {
+			loop {
+				if let Ok(text) = fs::read_to_string(path)
+					&& let Ok(pid) = text.parse::<i32>()
+					&& let Some(process) = Process::from_pid(pid)
+				{
+					return process;
+				}
+				tokio::time::sleep(Duration::from_millis(10)).await;
+			}
+		})
+		.await
+		.expect("external test child must start")
+	}
+
+	let dir = tempfile::tempdir().unwrap();
+	let mut session = Session::new(SessionConfig {
+		env:             std::env::vars()
+			.map(|(key, value)| (key.into(), value.into()))
+			.collect(),
+		cwd:             dir.path().to_str().unwrap().into(),
+		fs:              Box::new(StdFs::default()),
+		vfs:             None,
+		runtime:         tokio::runtime::Handle::current(),
+		output_decoding: None,
+	})
+	.unwrap();
+	let executable = std::env::current_exe().unwrap();
+	let child = format!(
+		"{} --exact cancelling_foreground_preserves_previous_background_external --nocapture",
+		quote(executable.to_str().unwrap())
+	);
+	let background = session
+		.run_with(
+			RunOptions {
+				env: vec![("PI_SHELL_CANCEL_FIXTURE".into(), "prior.pid".into())],
+				..RunOptions::new(format!("{child} > prior.log 2>&1 &"))
+			},
+			RunStdio::default(),
+			CancellationToken::new(),
+		)
+		.await
+		.unwrap();
+	assert_eq!(background.status, 0);
+	let prior = ready(&dir.path().join("prior.pid")).await;
+	assert_eq!(session.live_external_jobs().await.unwrap(), 1);
+	let cancel = CancellationToken::new();
+	let probe = async {
+		let foreground = ready(&dir.path().join("foreground.pid")).await;
+		cancel.cancel();
+		foreground
+	};
+	let (outcome, foreground) = tokio::time::timeout(Duration::from_secs(15), async {
+		tokio::join!(
+			session.run_with(
+				RunOptions {
+					env: vec![("PI_SHELL_CANCEL_FIXTURE".into(), "foreground.pid".into())],
+					..RunOptions::new(child)
+				},
+				RunStdio::default(),
+				cancel.clone(),
+			),
+			probe,
+		)
+	})
+	.await
+	.expect("foreground cancellation must finish");
+	assert!(outcome.unwrap().cancelled);
+	assert_eq!(prior.status(), ProcessStatus::Running, "the previous job must survive");
+	assert_ne!(foreground.status(), ProcessStatus::Running, "the foreground child must exit");
+	assert_eq!(session.live_external_jobs().await.unwrap(), 1);
+	assert_eq!(
+		session
+			.run(":", RunStdio::default(), CancellationToken::new())
+			.await
+			.unwrap()
+			.status,
+		0,
+		"the session remains usable"
+	);
+	drop(session);
+	tokio::time::timeout(Duration::from_secs(10), async {
+		while prior.status() == ProcessStatus::Running {
+			tokio::time::sleep(Duration::from_millis(10)).await;
+		}
+	})
+	.await
+	.expect("closing the session must terminate its previous background job");
+}
+
 /// A normal drive path and its explicit verbatim equivalent must both scan
 /// files and load inherited filters; confinement must not relocate the dest.
 #[tokio::test(flavor = "multi_thread")]

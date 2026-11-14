@@ -24,6 +24,7 @@ import { missingGrammarsNote, rerunWithGrammars } from "../utils/grammars";
 import type { ToolSession } from ".";
 import { resolveToolTier, strictestApproval, truncateForPrompt } from "./approval";
 import { parseReadUrlTarget } from "./fetch";
+import { type FileSnapshot, readSnapshot } from "../commit/selective/journal";
 import { createFileRecorder, formatResultPath, resultSnapshotPath } from "./file-recorder";
 import { invalidateFsScanAfterUncertainWrites, invalidateFsScanAfterWrites } from "./fs-cache-invalidation";
 import { formatGroupedFiles } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
@@ -615,20 +616,48 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 													})),
 												)
 											: undefined;
-										const applyResult = await runAstEditOnce(
-											applyTargets,
-											resolvedSearchPath,
-											applyIsDirectory,
-											globFilter,
-											{
-												rewrites: normalizedRewrites,
-												dryRun: false,
-												maxFiles,
-												failOnParseError: false,
-												filesystem: applyFilesystem.shellFilesystem(),
-											},
-											this.nativeAstEdit,
-										);
+										const journaled: Array<{ path: string; before: FileSnapshot }> = [];
+										if (this.session.recordFileChange) {
+											for (const relativePath of fileList) {
+												const absolute = await resultSnapshotPath(
+													relativePath,
+													this.session.cwd,
+													applyContext,
+												);
+												const before = absolute === undefined ? undefined : await readSnapshot(absolute);
+												if (absolute !== undefined && before) journaled.push({ path: absolute, before });
+											}
+										}
+										const applyResult = await (async () => {
+											try {
+												return await runAstEditOnce(
+													applyTargets,
+													resolvedSearchPath,
+													applyIsDirectory,
+													globFilter,
+													{
+														rewrites: normalizedRewrites,
+														dryRun: false,
+														maxFiles,
+														failOnParseError: false,
+														filesystem: applyFilesystem.shellFilesystem(),
+													},
+													this.nativeAstEdit,
+												);
+											} finally {
+												for (const { path: file, before } of journaled) {
+													const after = await readSnapshot(file);
+													if (!after || after.text === before.text) continue;
+													this.session.recordFileChange?.({
+														path: file,
+														tool: "ast_edit",
+														before: before.text,
+														after: after.text,
+														beforeMtimeMs: before.mtimeMs,
+													});
+												}
+											}
+										})();
 										reportedWrittenCount = applyResult.applied ? applyResult.fileChanges.length : 0;
 										applyStage = "render_apply_result";
 										const formatAppliedPath = (filePath: string): string =>

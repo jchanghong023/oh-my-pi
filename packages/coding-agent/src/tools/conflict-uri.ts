@@ -9,6 +9,7 @@ import type { EditToolPerFileResult } from "@oh-my-pi/pi-tui/tools/edit";
 import { type ConflictEntry, renderConflictRegion } from "@oh-my-pi/pi-tui/tools/conflict-detect";
 import { PREVIEW_LIMITS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { stripBom } from "../edit/normalize";
 import { getEditStore } from "../edit/store";
 import type { InternalWriteResult } from "../internal-urls/types";
 import { writethroughNoop } from "../lsp/writethrough";
@@ -150,7 +151,8 @@ async function resolveConflict(
 	}
 
 	const expanded = expandContentTokens(replacementContent, entry);
-	const originalText = await Bun.file(absolutePath).text();
+	// `Bun.file().text()` drops a leading UTF-8 BOM; decode verbatim so the write keeps it.
+	const { bom, text: originalText } = stripBom(await fs.readFile(absolutePath, "utf8"));
 	const splice = spliceConflict(originalText, entry, expanded);
 	const newContent = splice.text;
 	const change: EditToolPerFileResult = {
@@ -158,11 +160,17 @@ async function resolveConflict(
 		...editDiffString(originalText, newContent, absolutePath),
 	};
 
-	await writethroughNoop(absolutePath, newContent, signal);
+	await writethroughNoop(absolutePath, bom + newContent, signal);
 	invalidateFsScanAfterWrite(absolutePath);
 	session.bumpFileMutationVersion?.(absolutePath);
+	session.recordFileChange?.({
+		path: absolutePath,
+		tool: "edit",
+		before: bom + originalText,
+		after: bom + newContent,
+	});
 	getEditStore(session).invalidate(absolutePath);
-	const history = session.conflictHistory;
+	const history = session.state?.conflictHistory;
 	history?.invalidate(entry.id);
 	history?.reconcilePath(absolutePath, { blocks: scanConflictLines(newContent.split("\n"), 1) });
 
@@ -378,11 +386,14 @@ async function resolveAllConflicts(
 
 		fileEntries.sort((a, b) => b.startLine - a.startLine);
 
+		let bom: string;
 		let text: string;
+		let original: string;
 		const resolvedEntries: ConflictEntry[] = [];
 		let failure: string | undefined;
 		try {
-			text = await Bun.file(absolutePath).text();
+			({ bom, text } = stripBom(await fs.readFile(absolutePath, "utf8")));
+			original = text;
 		} catch (error) {
 			failedFiles.push({
 				displayPath: sample.displayPath,
@@ -414,10 +425,11 @@ async function resolveAllConflicts(
 		}
 
 		const change: EditToolPerFileResult = { path: absolutePath, ...editDiffString(originalText, text, absolutePath) };
-		await writethroughNoop(absolutePath, text, signal);
+		await writethroughNoop(absolutePath, bom + text, signal);
 		conflictChanges.push(change);
 		invalidateFsScanAfterWrite(absolutePath);
 		session.bumpFileMutationVersion?.(absolutePath);
+		session.recordFileChange?.({ path: absolutePath, tool: "edit", before: bom + original, after: bom + text });
 		getEditStore(session).invalidate(absolutePath);
 		for (const entry of resolvedEntries) history.invalidate(entry.id);
 		history.reconcilePath(absolutePath, { blocks: scanConflictLines(text.split("\n"), 1) });

@@ -790,6 +790,11 @@ export class TranscriptContainer extends Container {
 		const blocks: (readonly string[])[] = [];
 		const measuredImages: boolean[] = [];
 		let unrendered = 0;
+		// Rows the collected blocks fill at full height, separators between them included.
+		let filled = 0;
+		let compactBelow: boolean | undefined;
+		let clipDecided = false;
+		let clip = false;
 		for (let cursor = live.length - 1; cursor >= 0; cursor--) {
 			if (shown.length > capacity) {
 				unrendered = cursor + 1;
@@ -801,6 +806,22 @@ export class TranscriptContainer extends Container {
 			shown.push(candidate);
 			blocks.push(block.rows);
 			measuredImages.push(block.images);
+			const compact = isCompact(candidate.entry.component);
+			filled += block.rows.length + (compactBelow === undefined ? 0 : separatorRows(compact, compactBelow));
+			compactBelow = compact;
+			// The newest blocks fill the screen. When pressure retirement will take
+			// everything above them, show them at full height and clip the rest off
+			// the top: that is the layout retirement converges to, so a resumed or
+			// refocused ledger still draining into scrollback over several budgeted
+			// frames paints its final tail at once instead of one-row stubs.
+			if (!clipDecided && filled >= capacity) {
+				clipDecided = true;
+				clip = this.#retiresThrough(live, cursor, filled > capacity);
+				if (clip) {
+					this.#viewportHistoryAdjacent = cursor === 0 && filled === capacity;
+					break;
+				}
+			}
 		}
 		shown.reverse();
 		blocks.reverse();
@@ -809,7 +830,7 @@ export class TranscriptContainer extends Container {
 			this.#lastViewportSpans = [];
 			return EMPTY_ROWS;
 		}
-		if (shown.length > capacity) {
+		if (!clip && shown.length > capacity) {
 			this.#viewportHistoryAdjacent = false;
 			// Blocks the walk never reached are still transcript state: the
 			// emergency layout consults them only where it must.
@@ -840,39 +861,51 @@ export class TranscriptContainer extends Container {
 			above = compact;
 		}
 		// Settled content follows its natural tail while finalized prefixes enter
-		// history. Reallocating it between batches makes existing file cards grow
-		// and shrink even though no visible content changed.
-		if (total <= capacity || !hasActive) {
+		// history. Open groups with no visible work retain that layout too.
+		if (clip || total <= capacity || !hasActive) {
 			const output: string[] = [];
 			const owners: (Component | undefined)[] = [];
-			let skip = Math.max(0, total - capacity);
-			if (skip > 0) this.#viewportHistoryAdjacent = false;
+			if (total > capacity) this.#viewportHistoryAdjacent = false;
 			for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
 				if (gaps[blockIndex]! > 0) {
-					if (skip > 0) skip--;
-					else {
-						output.push("");
-						owners.push(undefined);
-					}
+					output.push("");
+					owners.push(undefined);
 				}
 				const component = shown[blockIndex]!.entry.component;
-				const block = blocks[blockIndex]!;
-				const start = Math.min(skip, block.length);
-				skip -= start;
-				for (let line = start; line < block.length; line++) {
-					output.push(block[line]!);
+				for (const line of blocks[blockIndex]!) {
+					output.push(line);
 					owners.push(component);
 				}
 			}
-			this.#commitViewportSpans(owners, output.length);
-			return output;
+			let drop = Math.max(0, output.length - capacity);
+			// A clipped notice's predecessor no longer owes its semantic gap.
+			// Ordinary retirement clipping keeps the upstream tail projection.
+			if (drop > 0 && owners[drop] === undefined && owners[drop + 1] instanceof StatusNotice) drop++;
+			// A terminal that cannot draw part of an image (iTerm2) draws the whole
+			// picture upward from its image row, so a clip through its reserved rows
+			// would paint it over whatever sits above the viewport. Blank that row
+			// until the split retires the image whole into scrollback.
+			const headClipped = drop - gaps[0]!;
+			if (headClipped > 0) {
+				const below = cutBelowWholeImage(blocks[0]!, headClipped);
+				if (below > headClipped) output[gaps[0]! + below - 1] = "";
+			}
+			this.#commitViewportSpans(owners.slice(drop), output.length - drop);
+			return drop > 0 ? output.slice(drop) : output;
 		}
 		this.#viewportHistoryAdjacent = false;
+		// Under pressure upstream spends rows on content rather than ordinary
+		// decoration. Status notices keep their semantic boundary on every path.
+		gapRows = 0;
+		for (let index = 0; index < shown.length; index++) {
+			gaps[index] = index > 0 && shown[index]!.entry.component instanceof StatusNotice ? gaps[index]! : 0;
+			gapRows += gaps[index]!;
+		}
 		if (shown.length + gapRows > capacity) {
 			return this.#renderEmergency(shown, live.slice(0, unrendered), width, capacity, frame);
 		}
 
-		// Boundaries consume viewport rows even when content must be compressed.
+		// Semantic notice boundaries consume rows even when content is compressed.
 		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 		const allocation: number[] = new Array(shown.length).fill(1);
 		let surplus = capacity - shown.length - gapRows;
@@ -914,6 +947,26 @@ export class TranscriptContainer extends Container {
 		const drop = Math.max(0, output.length - capacity);
 		this.#commitViewportSpans(owners.slice(drop), output.length - drop);
 		return drop > 0 ? output.slice(drop) : output;
+	}
+
+	/**
+	 * Whether every live block older than `live[cursor]`, and that block itself
+	 * (as a split) when `clipped`, is finalized, so pressure retirement takes it
+	 * into scrollback once it settles. A finalized block still pending (an async
+	 * figure render or image conversion in replayed history) may still swap a
+	 * placeholder for its figure, but it is off screen and not yet in scrollback,
+	 * so it retires with its final rows; a block still streaming or running
+	 * would stay pinned out of view instead.
+	 */
+	#retiresThrough(live: ReadonlyArray<{ entry: TranscriptEntry }>, cursor: number, clipped: boolean): boolean {
+		const end = clipped ? cursor + 1 : cursor;
+		for (let index = 0; index < end; index++) {
+			const { entry } = live[index]!;
+			if (entry.state === "settled") continue;
+			const block = entry.component as Component & FinalizableBlock;
+			if (block.isTranscriptBlockFinalized?.() === false) return false;
+		}
+		return true;
 	}
 
 	/**

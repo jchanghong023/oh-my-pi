@@ -89,6 +89,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"可用工具",
 		"待办",
 		"Grep 与浏览器",
+		"查找",
 		"计算机",
 		"IDA Pro",
 		"GitHub",

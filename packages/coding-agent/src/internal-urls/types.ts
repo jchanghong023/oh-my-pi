@@ -29,7 +29,7 @@ import type { XdevRenderDispatch } from "@oh-my-pi/pi-tui/tools/xdev";
 import type { EditToolPerFileResult } from "@oh-my-pi/pi-tui/tools/edit";
 import type { SchemeWriteScope } from "@oh-my-pi/pi-tui/tools/url-scheme-host";
 
-/** Transcript-only render state a handler write attaches to the `write` tool result. */
+/** Render state and prewalk facts a handler write attaches to the `write` tool result. */
 export interface InternalWriteDetails {
 	message?: CoordinationDetails;
 	proc?: ProcWriteDetails;
@@ -38,6 +38,12 @@ export interface InternalWriteDetails {
 	conflictChanges?: EditToolPerFileResult[];
 	/** Absolute file the write landed in, for the transcript card's file link (conflict://). */
 	resolvedPath?: string;
+	/**
+	 * The write changed no files (process stdin, service mode), so the prewalk gate must not read
+	 * it as implementation work. Unlike {@link SchemeWritePolicy.cancels}, the plan-mode and
+	 * device-only gates still apply.
+	 */
+	touchesNoFiles?: true;
 }
 
 /**
@@ -93,14 +99,14 @@ export interface SchemeWritePolicy {
 	tier(url: InternalUrl, content: string | undefined, session: ToolSession | undefined): ToolApprovalDecision;
 	/** Largest payload in UTF-8 bytes the scheme accepts; the shell refuses writes past it (EFBIG). Default: unbounded. */
 	maxBytes?: number;
-	/** True when `write` may omit `content` for this URL (`proc://<id>/kill`). */
-	contentOptional?(url: InternalUrl): boolean;
 	/**
 	 * True when this URL's write only cancels background work (`proc://<id>/kill`), so it
 	 * passes the plan-mode and device-only gates like a `coordination`-scoped write. Approval
 	 * still follows {@link SchemeWritePolicy.tier}.
 	 */
 	cancels?(url: InternalUrl): boolean;
+	/** True when this target accepts an omitted write body (for example, process cancellation). */
+	contentOptional?(url: InternalUrl): boolean;
 }
 
 /**
@@ -195,6 +201,13 @@ export interface InternalResource {
 	 * Default `document`.
 	 */
 	shape?: "document" | "value";
+	/**
+	 * The JSON path named no stored value (`agent://id/missing`). `content` stays
+	 * the read sentinel `"null"`, and readers still see that sentinel. Only the
+	 * search-list split probe treats this as not found, so a `;` list is not
+	 * kept whole on it.
+	 */
+	absent?: boolean;
 	/**
 	 * True when the resolved content cannot be edited by the agent (e.g. sealed
 	 * artifacts, harness docs, machine-generated memory summaries). Hashline

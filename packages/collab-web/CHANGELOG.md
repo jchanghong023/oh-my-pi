@@ -5,6 +5,12 @@
 ### Added
 
 - Added the native-session browser development workbench with eight-stage materials, explicit Git confirmations, Markdown import, and offline Collab participation.
+## [18.20.1] - 2026-11-14
+
+### Fixed
+
+- Fixed guests retaining stale agents, tool cards, and working state after a failed rejoin; guests now reliably restore the current session state when reconnecting.
+
 ## [18.19.0] - 2026-11-12
 
 ### Fixed

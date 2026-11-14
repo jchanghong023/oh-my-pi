@@ -470,7 +470,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6bf601cccedfffec598ec2db1f9d6745885458bccc0e8916d7023f017c94b3d0"
 dependencies = [
  "atspi-common",
- "atspi-connection",
  "atspi-proxies",
  "zbus",
 ]
@@ -489,18 +488,6 @@ dependencies = [
  "zbus-lockstep-macros",
  "zbus_names",
  "zvariant",
-]
-
-[[package]]
-name = "atspi-connection"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fab8e4f574f5a7d3af280b38eff25fb6f47a537dac9ae39ce152f52b19fb10b"
-dependencies = [
- "atspi-common",
- "atspi-proxies",
- "futures-lite",
- "zbus",
 ]
 
 [[package]]
@@ -6373,7 +6360,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -6415,7 +6402,7 @@ dependencies = [
 
 [[package]]
 name = "pi-builtins"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "ansi-width",
  "anyhow",
@@ -6501,11 +6488,11 @@ dependencies = [
 
 [[package]]
 name = "pi-diff"
-version = "18.19.0"
+version = "18.20.2"
 
 [[package]]
 name = "pi-edit"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -6524,7 +6511,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "async-trait",
  "libc",
@@ -6536,7 +6523,7 @@ dependencies = [
 
 [[package]]
 name = "pi-knowledge"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "base64 0.23.1",
  "grep-matcher",
@@ -6560,7 +6547,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6659,7 +6646,7 @@ dependencies = [
 
 [[package]]
 name = "pi-predict"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -6677,7 +6664,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6715,7 +6702,7 @@ dependencies = [
 
 [[package]]
 name = "pi-vcs"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "futures",
  "gix",
@@ -6732,7 +6719,7 @@ dependencies = [
 
 [[package]]
 name = "pi-vfs"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "async-trait",
  "libc",
@@ -6746,7 +6733,7 @@ dependencies = [
 
 [[package]]
 name = "pi-voice"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "bytes",
  "flume",
@@ -6760,7 +6747,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "18.19.0"
+version = "18.20.2"
 dependencies = [
  "async-trait",
  "flume",
@@ -6776,6 +6763,8 @@ dependencies = [
  "parking_lot",
  "pi-vfs",
  "regex",
+ "serde",
+ "serde_json",
  "tokio",
  "windows-sys 0.61.2",
 ]

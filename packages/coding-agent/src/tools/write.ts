@@ -44,6 +44,7 @@ import {
 	sessionResolveContext,
 	sessionWriteContext,
 } from "../internal-urls";
+import { readSnapshot } from "../commit/selective/journal";
 import { createLspWritethrough, type WritethroughCallback, writethroughNoop } from "../lsp";
 
 import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
@@ -221,7 +222,10 @@ const writeSchema = type({
 	"content?": "string",
 });
 
-/** Write arguments; `content` may be omitted only where the target scheme's write policy allows it. */
+/**
+ * Write arguments. `content` is required even where it is ignored (`proc://<id>/kill`): strict-mode
+ * providers turn an optional property into a nullable one, and models then send `content: null`.
+ */
 export type WriteToolInput = typeof writeSchema.infer;
 
 /**
@@ -1184,6 +1188,18 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				batchRequest?.flush ? batchRequest.id : undefined,
 				async (): Promise<AgentToolResult<WriteToolDetails>> => {
 					signal?.throwIfAborted();
+					const before = this.session.recordFileChange ? await readSnapshot(absolutePath) : undefined;
+					const journal = (after: string) => {
+						if (!before) return;
+						this.session.recordFileChange?.({
+							path: absolutePath,
+							tool: "write",
+							before: before.text,
+							after,
+							beforeMtimeMs: before.mtimeMs,
+						});
+					};
+
 					// Try ACP bridge first for editor-visible filesystem paths. Internal
 					// artifacts such as local:// plans are owned by OMP, not the editor.
 					const bridgeWrite = await routeWriteThroughBridge(
@@ -1194,6 +1210,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						signal,
 					);
 					if (bridgeWrite) {
+						journal(bridgeWrite.text);
 						// `write` always replaces the whole file, so (unlike hashline's
 						// hunk-scoped diff) there's no size cost to keying the header/
 						// executable-bit check on the verified post-write content —
@@ -1211,14 +1228,14 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						}
 						return {
 							content: [{ type: "text", text: resultText }],
-							details: {
-								resolvedPath: absolutePath,
-								madeExecutable: madeExecutable || undefined,
-							},
+							details: { resolvedPath: absolutePath, madeExecutable: madeExecutable || undefined },
 						};
 					}
 
 					const { writethrough, deferred } = this.#lspWritethrough();
+					// Linters read a shebang's execute bits (Ruff's EXE001), so they are set once the final
+					// bytes land, before the writethrough collects diagnostics for them.
+					let madeExecutable = false;
 					const diagnostics = await writethrough(
 						absolutePath,
 						writeContent,
@@ -1226,13 +1243,16 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						undefined,
 						batchRequest,
 						dst => deferred?.begin(dst),
+						async committed => {
+							madeExecutable = await maybeMarkExecutableForShebang(absolutePath, committed);
+						},
 					);
-					invalidateFsScanAfterWrite(absolutePath);
 					if (!deferred || batchRequest?.flush === false) {
 						this.session.bumpFileMutationVersion?.(absolutePath);
 					}
 					const finalContent = diagnostics.finalContent;
-					const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, finalContent);
+					journal(finalContent);
+					invalidateFsScanAfterWrite(absolutePath);
 
 					const header = maybeWriteSnapshotHeader(this.session, absolutePath, finalContent, displayPath);
 					const finalBytes = finalContent === writeContent ? writeBytes : Buffer.byteLength(finalContent, "utf8");

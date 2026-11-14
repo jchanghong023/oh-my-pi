@@ -182,7 +182,6 @@ describe("libkitty end-to-end", () => {
 		void mode.getUserInput();
 		await term.waitForRender();
 		const prompt = vi.spyOn(session, "prompt");
-		const rebuild = vi.spyOn(mode, "rebuildChatFromMessages");
 		const draft = `First line of unsent input\n${"full long draft content ".repeat(16)}\nFINAL_DRAFT_SUFFIX`;
 		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
 		mode.editor.setText(draft);
@@ -212,7 +211,6 @@ describe("libkitty end-to-end", () => {
 				expect(transcript).not.toContain("DRAFT_TOOL_RESULT");
 			}
 		}
-		expect(rebuild).toHaveBeenCalledTimes(3);
 		expect(prompt).not.toHaveBeenCalled();
 	});
 

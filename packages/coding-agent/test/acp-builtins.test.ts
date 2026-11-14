@@ -970,6 +970,9 @@ describe("session lifecycle commands", () => {
 			expect(manager.getSessionId()).not.toBe(deletedId);
 			const nextFile = manager.getSessionFile();
 			if (!nextFile) throw new Error("Expected a new session path");
+			// The successor stays lazy: deleting must not leave an empty listed session behind.
+			expect(await Bun.file(nextFile).exists()).toBe(false);
+			expect(await SessionManager.list(tempDir.path(), tempDir.path())).toEqual([]);
 
 			manager.appendMessage({ role: "user", content: "second turn", timestamp: 2 });
 			manager.appendMessage(makeAssistantMessage());

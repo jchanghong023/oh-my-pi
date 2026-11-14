@@ -59,7 +59,9 @@ describe("compact tool parameter summaries", () => {
 		},
 		{
 			name: "ask",
-			args: { questions: [{ id: "storage", question: "Database?", options: [{ label: "SQLite" }] }] },
+			args: {
+				html: '<form><p>Database?</p><label><input type="radio" name="storage" value="sqlite"> SQLite</label></form>',
+			},
 			visible: ["Database?"],
 		},
 		{

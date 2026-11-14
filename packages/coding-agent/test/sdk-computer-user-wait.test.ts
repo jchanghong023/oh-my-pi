@@ -113,7 +113,9 @@ describe("SDK session dialogs and the computer display hold", () => {
 
 	it("ends the hold while `ask` waits for an answer", async () => {
 		const target = await createSession({ "ask.timeout": 0 }, [
-			call("ask", { questions: [{ id: "go", question: "Go on?", options: [{ label: "Yes" }, { label: "No" }] }] }),
+			call("ask", {
+				html: '<form><p>Go on?</p><label><input type="radio" name="go" value="Yes"> Yes</label><label><input type="radio" name="go" value="No"> No</label></form>',
+			}),
 			{ content: ["done"] },
 		]);
 		const running = target.prompt("go");
@@ -127,7 +129,9 @@ describe("SDK session dialogs and the computer display hold", () => {
 
 	it("keeps the hold while an `ask` with an `ask.timeout` deadline waits, since the turn goes on unattended", async () => {
 		const target = await createSession({ "ask.timeout": 30 }, [
-			call("ask", { questions: [{ id: "go", question: "Go on?", options: [{ label: "Yes" }, { label: "No" }] }] }),
+			call("ask", {
+				html: '<form><p>Go on?</p><label><input type="radio" name="go" value="Yes"> Yes</label><label><input type="radio" name="go" value="No"> No</label></form>',
+			}),
 			{ content: ["done"] },
 		]);
 		const running = target.prompt("go");

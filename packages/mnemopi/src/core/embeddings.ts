@@ -57,6 +57,7 @@ let providerOverride: EmbeddingProvider | null = null;
 // encoder instead of reusing whichever model happened to initialize first. A failed
 // init evicts only that model's entry so other models' encoders stay warm.
 const localModelPromises = new Map<string, Promise<LocalEmbeddingModel>>();
+const readyLocalModels = new Set<string>();
 let localModelInitializer: LocalModelInitializer = defaultLocalModelInitializer;
 let apiCallCount = 0;
 const queryCache = new LRUCache<string, Vector>({ max: QUERY_CACHE_MAX });
@@ -340,9 +341,10 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 	}
 
 	const modelName = fastembedModelName(configuredModel);
-	if (modelName === null) {
+	if (modelName === null || activeEmbeddingOptions()?.allowLocal?.() === false) {
 		return null;
 	}
+	if (activeEmbeddingOptions()?.allowLocalLoad?.() === false && !readyLocalModels.has(modelName)) return null;
 	const cached = localModelPromises.get(modelName);
 	if (cached !== undefined) {
 		return cached;
@@ -357,7 +359,9 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 	});
 	localModelPromises.set(modelName, loading);
 	try {
-		return await loading;
+		const model = await loading;
+		if (localModelPromises.get(modelName) === loading) readyLocalModels.add(modelName);
+		return model;
 	} catch (error) {
 		logger[mnemopiDebugEnabled() ? "warn" : "debug"]("mnemopi: local embedding model failed to load", {
 			model: modelName,
@@ -430,6 +434,8 @@ async function embedApiBatch(texts: readonly string[]): Promise<EmbeddingMatrix 
 			const retryTimeouts = activeEmbeddingOptions()?.retryTimeouts === true;
 			callerSignal?.throwIfAborted();
 			const baseUrl = embeddingBaseUrl();
+			const allowRemote = activeEmbeddingOptions()?.allowRemote;
+			if (allowRemote?.(baseUrl) === false) return null;
 			const url = `${baseUrl.replace(/\/+$/, "")}/embeddings`;
 			const model = defaultModel();
 			const fields = {
@@ -519,20 +525,19 @@ async function embedApiBatch(texts: readonly string[]): Promise<EmbeddingMatrix 
 											return { signal: requestSignal };
 										}
 									: undefined,
-								fetch: retryTimeouts
-									? async (input, requestInit) => {
-											const response = await fetch(input, requestInit);
-											if (!response.ok || response.status === 204 || response.status === 205)
-												return response;
-											// Read the complete body inside the shared retry boundary. Invalid
-											// JSON/schema is still rejected below without replaying the request.
-											return new Response(await response.arrayBuffer(), {
-												status: response.status,
-												statusText: response.statusText,
-												headers: response.headers,
-											});
-										}
-									: undefined,
+								fetch: async (input, requestInit) => {
+									if (allowRemote?.(baseUrl) === false)
+										throw new Error("Remote embedding provider is not allowed");
+									const response = await fetch(input, requestInit);
+									if (!retryTimeouts || !response.ok || response.status === 204 || response.status === 205)
+										return response;
+									// Keep complete-body timeout retries inside the shared retry boundary.
+									return new Response(await response.arrayBuffer(), {
+										status: response.status,
+										statusText: response.statusText,
+										headers: response.headers,
+									});
+								},
 							}),
 						);
 						status = res.status;
@@ -664,6 +669,7 @@ export const setEmbeddingProvider = setEmbeddingProviderForTests;
 export function setLocalModelInitializerForTests(initializer: LocalModelInitializer | null | undefined): void {
 	localModelInitializer = initializer ?? defaultLocalModelInitializer;
 	localModelPromises.clear();
+	readyLocalModels.clear();
 	queryCache.clear();
 }
 
@@ -680,6 +686,7 @@ export const setLocalModelInitializer = setLocalModelInitializerForTests;
 export function resetEmbeddingProviderForTests(): void {
 	providerOverride = null;
 	localModelPromises.clear();
+	readyLocalModels.clear();
 	localModelInitializer = defaultLocalModelInitializer;
 	apiCallCount = 0;
 	queryCache.clear();
@@ -694,22 +701,24 @@ export async function available(): Promise<boolean> {
 	const active = activeEmbeddingOptions();
 	const activeProvider = resolveEmbeddingProvider(active?.provider);
 	if (activeProvider !== undefined) {
-		return providerAvailable(activeProvider);
+		return active?.allowRemote?.("") === false ? false : providerAvailable(activeProvider);
 	}
 	if (providerOverride !== null) {
-		return providerAvailable(providerOverride);
+		return active?.allowRemote?.("") === false ? false : providerAvailable(providerOverride);
 	}
 	if (isApiModel(defaultModel())) {
+		if (active?.allowRemote?.(embeddingBaseUrl()) === false) return false;
 		const baseUrl = active?.apiUrl ?? ($env.MNEMOPI_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL);
 		if (baseUrl !== undefined && baseUrl !== "" && !isOpenRouterEmbeddingUrl(baseUrl)) {
 			return true;
 		}
 		return embeddingKeyConfigured();
 	}
-	if (inTestRuntime()) {
+	if (inTestRuntime() || active?.allowLocal?.() === false) {
 		return false;
 	}
-	return fastembedModelName(defaultModel()) !== null;
+	const model = fastembedModelName(defaultModel());
+	return model !== null && (active?.allowLocalLoad?.() !== false || readyLocalModels.has(model));
 }
 
 export function availableApi(): boolean {
@@ -738,8 +747,10 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 		return null;
 	}
 	texts = capInputs(texts);
-	const activeProvider = resolveEmbeddingProvider(activeEmbeddingOptions()?.provider);
+	const options = activeEmbeddingOptions();
+	const activeProvider = resolveEmbeddingProvider(options?.provider);
 	if (activeProvider !== undefined) {
+		if (options?.allowRemote?.("") === false) return null;
 		try {
 			return await collectMatrix(await activeProvider.embed(texts));
 		} catch {
@@ -747,6 +758,7 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 		}
 	}
 	if (providerOverride !== null) {
+		if (options?.allowRemote?.("") === false) return null;
 		try {
 			return await collectMatrix(await providerOverride.embed(texts));
 		} catch {
@@ -764,7 +776,7 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 		}
 	}
 	const model = await getLocalModel();
-	if (model === null) {
+	if (model === null || activeEmbeddingOptions()?.allowLocal?.() === false) {
 		return null;
 	}
 	try {

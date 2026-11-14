@@ -375,7 +375,7 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 				}
 				return {
 					text:
-						consumer === "compaction"
+						consumer === "compaction" || consumer === "handoff"
 							? "## Goal\nContinue inspecting the saved work.\n\n## Progress\nThe previous inspection finished."
 							: "GOAL_AUXILIARY_FINISHED",
 				};
@@ -408,7 +408,7 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 					break;
 				case "handoff":
 					expect((await h.run(() => h.session.handoff(undefined, { signal: h.signal })))?.document).toBe(
-						"GOAL_AUXILIARY_FINISHED",
+						"## Goal\nContinue inspecting the saved work.\n\n## Progress\nThe previous inspection finished.",
 					);
 					break;
 				case "advisor":

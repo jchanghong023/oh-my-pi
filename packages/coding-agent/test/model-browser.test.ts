@@ -131,7 +131,12 @@ describe("createModelMentionSource", () => {
 		const settings = Settings.isolated({ modelRoles: { default: "b/example-2" } });
 		const candidates = createModelMentionSource({
 			source: createModelBrowserSource(settings),
-			registry: { getError: () => undefined, getAvailable: () => [...available], getAll: () => [...available] },
+			registry: {
+				getError: () => undefined,
+				getAvailable: () => [...available],
+				getAll: () => [...available],
+				retryUnavailableDiscovery: () => undefined,
+			},
 			scopedModels: () => [],
 		});
 		const selectors = (query: string) => candidates(query).map(item => item.selector);
@@ -163,7 +168,12 @@ describe("createModelMentionSource", () => {
 		const glmMax = makeModel("a", "glm:max");
 		const candidates = createModelMentionSource({
 			source: createModelBrowserSource(Settings.isolated()),
-			registry: { getError: () => undefined, getAvailable: () => [glm, glmMax], getAll: () => [glm, glmMax] },
+			registry: {
+				getError: () => undefined,
+				getAvailable: () => [glm, glmMax],
+				getAll: () => [glm, glmMax],
+				retryUnavailableDiscovery: () => undefined,
+			},
 			scopedModels: () => [glm],
 		});
 

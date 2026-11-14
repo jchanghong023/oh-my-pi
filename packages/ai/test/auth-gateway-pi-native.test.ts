@@ -119,6 +119,7 @@ describe("pi-native parseRequest", () => {
 				temperature: 0.2,
 				cachedContent: "cachedContents/caller-owned-corpus",
 				apiKey: "should-be-stripped",
+				requestAuth: { apiKey: "caller-key", headers: { "x-auth-token": "caller-token" } },
 				signal: {},
 				fetch: () => {},
 				onPayload: () => {},
@@ -131,6 +132,7 @@ describe("pi-native parseRequest", () => {
 		});
 		expect(parsed.options).toEqual({ temperature: 0.2, cachedContent: "cachedContents/caller-owned-corpus" });
 		expect("apiKey" in parsed.options).toBe(false);
+		expect("requestAuth" in parsed.options).toBe(false);
 		expect("signal" in parsed.options).toBe(false);
 		expect("fetch" in parsed.options).toBe(false);
 		expect("onPayload" in parsed.options).toBe(false);

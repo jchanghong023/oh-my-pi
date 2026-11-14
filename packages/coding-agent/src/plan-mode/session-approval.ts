@@ -10,7 +10,7 @@
  * and the synthetic plan-approved prompt dispatch.
  */
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { $env, prompt } from "@oh-my-pi/pi-utils";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { autosaveApprovedPlan } from "./plan-autosave";
@@ -75,10 +75,10 @@ export async function dispatchApprovedPlan(session: AgentSession, options: Appro
 
 	// Approved plans land in a fresh (or compacted) session whose first
 	// user-visible turn is the synthetic plan-approved prompt. Seed an auto
-	// name from the plan title (`setSessionName("auto")` is a no-op when the
-	// user already named the session).
+	// name from the plan title unless automatic titling is disabled
+	// (`--no-title` / PI_NO_TITLE); user-chosen names remain unchanged.
 	const seededName = humanizePlanTitle(options.title);
-	if (seededName && !session.sessionManager.getSessionName()) {
+	if (!$env.PI_NO_TITLE && seededName && !session.sessionManager.getSessionName()) {
 		await session.sessionManager.setSessionName(seededName, "auto");
 	}
 	assertCurrentSession();

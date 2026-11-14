@@ -408,13 +408,7 @@ export async function parallelInputScenario(native: NativeBrowserCase): Promise<
 								type: "toolCall",
 								name: "ask",
 								arguments: {
-									questions: [
-										{
-											id: "deployment",
-											question: "Choose the native deployment target",
-											options: [{ label: "staging" }, { label: "production" }],
-										},
-									],
+									html: '<form><p>Choose the native deployment target</p><label><input type="radio" name="deployment" value="staging"> staging</label><label><input type="radio" name="deployment" value="production"> production</label></form>',
 								},
 							},
 						],

@@ -209,13 +209,11 @@ export async function handleWebGuiBranch(
 		try {
 			const answer = await tool.execute(
 				"tree-reanswer",
-				{ questions: result.reopenAsk.questions },
+				{ html: result.reopenAsk.html },
 				runtime.signal,
 				undefined,
 				runtime.session.buildAskReanswerContext(runtime.ui),
 			);
-			if (answer.details?.chatRedirect)
-				return usage("Choose an answer instead of Chat about this when navigating the tree.", runtime);
 			result = await runtime.session.navigateTree(target.id, { ...options, reanswerAskResult: answer });
 		} catch (error) {
 			if (error instanceof ToolAbortError) return commandConsumed();

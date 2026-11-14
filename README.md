@@ -266,7 +266,7 @@ Eval 的 `computer` 辅助方法——`computer.window(...)`、`win.screenshot()
 - `task` — 并行展开子 agent，可选工作区隔离。
 - `wait` — 阻塞到下一个后台结果、同伴消息或转向中断；通过 `agent://` 与 `proc://` 给同伴发消息并控制任务。
 - `todo` — 对会话 todo 列表做有序变更，并跟踪阶段。
-- `ask` — 面向交互式运行的结构化追问。
+- `ask` — 面向交互式运行的 HTML 表单追问（单选、多选、下拉与文本）。
 
 **桌面与 Web**
 
@@ -321,7 +321,7 @@ Eval 的 `computer` 辅助方法——`computer.window(...)`、`win.screenshot()
 
 直连 API 与网关。可按角色混用 provider。
 
-Anthropic `oauth` · OpenAI · OpenAI Codex `oauth` · Google Gemini · Google Vertex · Google Antigravity `oauth` · xAI · SuperGrok `oauth` · DeepSeek · Mistral · Groq · Cerebras · SambaNova · Fireworks · Together · Modular · Baseten · DeepInfra · Hugging Face · NVIDIA · Meta · Inception · Amazon Bedrock · Azure OpenAI · SiliconFlow · GMI Cloud · CoreWeave · Sakana AI · Command Code · Charm Hyper · StepFun · Helmcode · OpenRouter · Synthetic · Vercel AI Gateway · Cloudflare AI Gateway · Wafer Serverless · Scaleway · Otari
+Anthropic `oauth` · OpenAI · OpenAI Codex `oauth` · Google Gemini · Google Vertex · Google Antigravity `oauth` · xAI · SuperGrok `oauth` · DeepSeek · Mistral · Groq · Cerebras · SambaNova · Fireworks · Together · Modular · Baseten · Chutes · DeepInfra · Hugging Face · NVIDIA · Meta · Inception · Amazon Bedrock · Azure OpenAI · SiliconFlow · GMI Cloud · CoreWeave · Sakana AI · Command Code · Charm Hyper · StepFun · Helmcode · OpenRouter · Synthetic · Vercel AI Gateway · Cloudflare AI Gateway · Wafer Serverless · Scaleway · Otari
 
 ### 编码套餐
 

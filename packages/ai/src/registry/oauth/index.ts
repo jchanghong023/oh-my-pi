@@ -38,18 +38,52 @@ const builtInOAuthProviders: OAuthProviderInfo[] = PROVIDER_REGISTRY.filter(
 
 const customOAuthProviders = new Map<string, OAuthProviderInterface>();
 
+/** Paused provider ids the end user turned back on (see {@link setUnpausedProviders}). */
+let unpausedProviders: ReadonlySet<string> = new Set();
+
+/** Bumped whenever {@link providerPauseReason} may answer differently for some id. */
+let pauseRevision = 0;
+
+/**
+ * Counter that moves whenever which providers are paused may have changed: the
+ * unpaused list, or an extension login taking or releasing a paused id. Caches
+ * that filter on {@link providerPauseReason} compare it to know when to refilter.
+ */
+export function providerPauseRevision(): number {
+	return pauseRevision;
+}
+
+/** Bumps {@link pauseRevision} when `provider` is one the auth rules pause. */
+function notePauseOverride(provider: string): void {
+	if (providerDisabledReason(provider) !== undefined) pauseRevision++;
+}
+
+/**
+ * Turns paused providers back on: each listed id ignores its `disabled "<reason>"`
+ * auth rule, so it is a login choice again and its stored or env credentials resolve.
+ * Replaces the previous list; ids that are not paused are ignored. Loaded credential
+ * pools pick the change up on their next read.
+ */
+export function setUnpausedProviders(providers: Iterable<string>): void {
+	const next = new Set(providers);
+	if (next.size === unpausedProviders.size && [...next].every(provider => unpausedProviders.has(provider))) return;
+	unpausedProviders = next;
+	pauseRevision++;
+}
+
 /**
  * Register a custom OAuth provider.
  */
 export function registerOAuthProvider(provider: OAuthProviderInterface): void {
 	customOAuthProviders.set(provider.id, provider);
+	notePauseOverride(provider.id);
 }
 
 /**
  * Remove a custom OAuth provider by ID.
  */
 export function unregisterOAuthProvider(id: string): void {
-	customOAuthProviders.delete(id);
+	if (customOAuthProviders.delete(id)) notePauseOverride(id);
 }
 
 /**
@@ -62,10 +96,12 @@ export function getOAuthProvider(id: OAuthProviderId): OAuthProviderInterface | 
 /**
  * Why `provider` is paused by its auth rules (`disabled "<reason>"`), or
  * undefined when it may be reached. An extension that registers its own OAuth
- * login under the paused id takes the id back: that is the end user's choice.
+ * login under the paused id, or listing it in {@link setUnpausedProviders},
+ * takes the id back: that is the end user's choice.
  */
 export function providerPauseReason(provider: string): string | undefined {
-	return customOAuthProviders.has(provider) ? undefined : providerDisabledReason(provider);
+	if (customOAuthProviders.has(provider) || unpausedProviders.has(provider)) return undefined;
+	return providerDisabledReason(provider);
 }
 
 /** Throws {@link AIError.ProviderDisabledError} when {@link providerPauseReason} pauses `provider`. */
@@ -90,6 +126,7 @@ export function unregisterOAuthProviders(sourceId: string): void {
 	for (const [id, provider] of customOAuthProviders.entries()) {
 		if (provider.sourceId === sourceId) {
 			customOAuthProviders.delete(id);
+			notePauseOverride(id);
 		}
 	}
 }
@@ -214,8 +251,9 @@ export function getAllOAuthProviders(): OAuthProviderInfo[] {
 		available: true,
 		storeCredentialsAs: provider.storeCredentialsAs,
 	}));
-	// A built-in entry an extension took over is listed once, as the extension's.
-	return [...builtInOAuthProviders.filter(provider => !customOAuthProviders.has(provider.id)), ...customProviders];
+	// Credential management includes paused targets; only login choices filter them.
+	const builtIns = builtInOAuthProviders.filter(provider => !customOAuthProviders.has(provider.id));
+	return [...builtIns, ...customProviders];
 }
 
 /**

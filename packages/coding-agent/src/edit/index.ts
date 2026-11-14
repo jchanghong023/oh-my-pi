@@ -25,10 +25,12 @@ import {
 	type EditWriteResponse,
 } from "@oh-my-pi/pi-natives";
 import { isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
+import { type FileSnapshot, readSnapshot } from "../commit/selective/journal";
 import { extractUriScheme, InternalUrlRouter, type ResolveContext, sessionResolveContext } from "../internal-urls";
 import { createLspWritethrough, flushLspWritethroughBatch, type WritethroughCallback, writethroughNoop } from "../lsp";
 import { type FileDiagnosticsResult } from "@oh-my-pi/pi-tui/tools/lsp";
-import { FileChangeType, notifyWorkspaceWatchedFiles } from "../lsp/client";
+import { notifyWorkspaceWatchedFiles } from "../lsp/client";
+import { FileChangeType } from "../lsp/types";
 import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
 import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import type { ToolSession } from "../tools";
@@ -758,9 +760,22 @@ export class EditTool implements AgentTool<TInput> {
 	}
 
 	async #writeLocked(request: EditWriteRequest, signal?: AbortSignal): Promise<EditWriteResponse> {
+		const journaled = this.session.recordFileChange !== undefined;
+		const before = journaled ? await readSnapshot(request.path) : undefined;
+		const journal = (file: string, after: string | null, snapshot: FileSnapshot | undefined = before) => {
+			if (!snapshot) return;
+			this.session.recordFileChange?.({
+				path: file,
+				tool: "edit",
+				before: snapshot.text,
+				after,
+				beforeMtimeMs: snapshot.mtimeMs,
+			});
+		};
 		if (request.op === "delete") {
 			await deleteFileWithFallback(request.path, Bun.file(request.path));
 			invalidateFsScanAfterDelete(request.path);
+			journal(request.path, null);
 			if ((this.session.enableLsp ?? true) && cfgLspEnabled.get(this.session.settings)) {
 				await notifyWorkspaceWatchedFiles(
 					this.session.cwd,
@@ -788,11 +803,14 @@ export class EditTool implements AgentTool<TInput> {
 				throw new ToolError("Native edit move request omitted destination", { path: request.path });
 			}
 			const mode = await movedFileMode(request.path);
+			const destination = journaled ? await readSnapshot(request.moveTo) : undefined;
 			await mkdirAllowingFallback(path.dirname(request.moveTo));
 			await writeFileWithFallback(request.moveTo, request.content);
 			if (mode !== undefined) await chmodMovedFile(request.moveTo, mode);
 			await deleteFileWithFallback(request.path, Bun.file(request.path));
 			invalidateFsScanAfterRename(request.path, request.moveTo);
+			journal(request.path, null);
+			journal(request.moveTo, request.content, destination);
 			if ((this.session.enableLsp ?? true) && cfgLspEnabled.get(this.session.settings)) {
 				await notifyWorkspaceWatchedFiles(
 					this.session.cwd,
@@ -822,7 +840,10 @@ export class EditTool implements AgentTool<TInput> {
 			request.content,
 			signal,
 		);
-		if (bridge) return { written: bridge.text };
+		if (bridge) {
+			journal(request.path, bridge.text);
+			return { written: bridge.text };
+		}
 
 		// The pre-image is the only way to tell "the write never landed" from
 		// "something else rewrote the file"; a stat cannot (coarse mtimes).
@@ -878,6 +899,7 @@ export class EditTool implements AgentTool<TInput> {
 
 		invalidateFsScanAfterWrite(request.path);
 		if (!began) this.session.bumpFileMutationVersion?.(request.path);
+		journal(request.path, diagnostics.finalContent);
 		return {
 			written: diagnostics.finalContent,
 			diagnosticsJson: diagnostics.diagnostics ? JSON.stringify(diagnostics.diagnostics) : undefined,

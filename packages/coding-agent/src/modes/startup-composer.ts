@@ -25,6 +25,7 @@ export interface PrepaintComposerOptions {
 /** Final settings pushed into the live composer after Settings and the theme resolve. */
 export interface PrepaintComposerPreferences extends ComposerPreferences {
 	readonly theme: ComposerThemePreferences;
+	readonly programStatus: boolean;
 }
 
 interface PendingComposer {
@@ -124,6 +125,7 @@ export function applyStartupComposerPreferences(update: PrepaintComposerPreferen
 		spellingAutocorrect: update.spellingAutocorrect,
 	};
 	pending.composer.setPreferences(preferences);
+	pending.composer.ui.terminal.setProgramStatusProbeEnabled?.(update.programStatus);
 	// Settings resolved means the module graph is loaded and the event loop is
 	// responsive again: take raw-input ownership now. The kernel echoed (and
 	// buffered) everything typed during the load; the editor replays it here.

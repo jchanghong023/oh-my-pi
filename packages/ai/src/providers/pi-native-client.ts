@@ -47,6 +47,7 @@ import { notifyProviderResponse } from "../utils/provider-response";
 const NON_WIRE_KEYS = new Set<keyof SimpleStreamOptions>([
 	"signal",
 	"apiKey",
+	"requestAuth",
 	"fetch",
 	"onPayload",
 	"onResponse",
@@ -70,7 +71,16 @@ function buildWireOptions(options: SimpleStreamOptions | undefined): Record<stri
 	for (const [k, v] of Object.entries(options)) {
 		if (v === undefined) continue;
 		if (NON_WIRE_KEYS.has(k as keyof SimpleStreamOptions)) continue;
-		wire[k] = v;
+		if (k === "headers" && options.requestAuth?.headers) {
+			// streamSimple merges request-local credentials into headers before dispatch.
+			// Those credentials must not become the gateway's upstream request options.
+			const authNames = new Set(Object.keys(options.requestAuth.headers).map(name => name.toLowerCase()));
+			wire[k] = Object.fromEntries(
+				Object.entries(v as Record<string, string>).filter(([name]) => !authNames.has(name.toLowerCase())),
+			);
+		} else {
+			wire[k] = v;
+		}
 	}
 	return wire;
 }

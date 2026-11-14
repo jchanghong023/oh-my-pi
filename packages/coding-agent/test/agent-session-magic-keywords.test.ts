@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { Effort } from "@oh-my-pi/pi-ai";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { personalCommandProtocolModel } from "./helpers/personal-command-model";
 import * as autoThinkingClassifier from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
@@ -74,6 +75,7 @@ describe("AgentSession magic keyword settings", () => {
 		authRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-magic-keywords-auth-"));
 		authStorage = await AuthStorage.create(path.join(authRoot, "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
+		authStorage.keys.setRuntime("openai-codex", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(authRoot, "models.yml"));
 	});
 
@@ -300,15 +302,20 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it.each([
-		["takes per-message effort", "claude-sonnet-5-5", Effort.Low],
-		["needs a stable effort", "claude-sonnet-4-5", Effort.High],
+		["takes per-message effort", "anthropic", "claude-sonnet-5-5", Effort.Low],
+		["takes configuration updates", "openai-codex", "gpt-6-astra", Effort.Low],
+		["needs a stable effort", "anthropic", "claude-sonnet-4-5", Effort.High],
 	] as const)(
 		"a chillax steer mid-turn on a model that %s sets the next request's effort",
-		async (_label, id, next) => {
+		async (_label, provider, id, next) => {
 			const mock = createMockModel({ responses: [{ content: ["working"] }, { content: ["relaxed"] }] });
 			const agent = new Agent({
 				getApiKey: () => "test-key",
-				initialState: { model: personalCommandProtocolModel(id), systemPrompt: ["Test"], tools: [] },
+				initialState: {
+					model: provider === "anthropic" ? personalCommandProtocolModel(id) : getBundledModel(provider, id),
+					systemPrompt: ["Test"],
+					tools: [],
+				},
 				convertToLlm,
 				streamFn: mock.stream,
 			});

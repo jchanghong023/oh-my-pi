@@ -39,6 +39,7 @@ import {
 import { type Tool as AiTool, jsonSchemaToTypeScript, toolWireSchema } from "@oh-my-pi/pi-ai";
 import { schemaDeclaresIntentField } from "../utils/tool-schema";
 import { isXdHelpContent, stripXdUrlPrefix, XD_URL_PREFIX } from "@oh-my-pi/pi-tui/tools/xd-url";
+import { resolveToolWireName } from "../utils/tool-wire-name";
 import { truncateHeadBytes } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { resolveToolTier, type ToolTier } from "./approval";
 import type { Tool, ToolSession } from "./index";
@@ -259,11 +260,16 @@ export const XDEV_DOCS_PER_DEVICE_CAP = 10_000;
 /** Description cap for external mounted tools; their full docs remain readable on demand. */
 export const XDEV_EXTERNAL_DESCRIPTION_CAP = 200;
 
-/** Resolve any enabled tool through the canonical session map. */
+/** Resolve enabled canonical names or unambiguous wire aliases through the session map. */
 export function resolveXdevTool(state: XdevState, name: string): Tool | undefined {
-	if (state.isAllowed?.(name) === false) return undefined;
-	if (!state.mountedNames.has(name) && !state.isActive(name)) return undefined;
-	return state.tools.get(name);
+	const resolved = resolveToolWireName(state.tools, name);
+	if (
+		!resolved ||
+		state.isAllowed?.(resolved.name) === false ||
+		(!state.mountedNames.has(resolved.name) && !state.isActive(resolved.name))
+	)
+		return undefined;
+	return resolved;
 }
 
 /** Index queries retain native read-only policy and scheduling through the write transport. */

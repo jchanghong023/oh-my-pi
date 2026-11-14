@@ -382,7 +382,8 @@ export const cfgModelToolCallLoopGuardExemptTools = register({
 		tab: "model",
 		group: "思考",
 		label: "工具调用循环豁免工具",
-		description: "允许连续重复调用而不触发跨轮次循环防护的工具名称",
+		description:
+			"允许连续重复调用而不触发跨轮次循环防护的工具名称或 write 分发的 xd:// 设备名称（例如 mcp__peers_wait）",
 	},
 });
 
@@ -480,6 +481,19 @@ export const cfgIncludeWorkspaceTree = register({
 		group: "Prompt",
 		label: "包含工作区目录树",
 		description: "在系统 Prompt 中渲染工作区目录树。警告：文件修改时可能使跨会话 Prompt 缓存失效。",
+	},
+});
+
+/** Whether the system prompt carries a critical rule making `edit` mandatory for file edits; off omits edit guidance. */
+export const cfgEncourageEdits = register({
+	id: "encourageEdits",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "model",
+		group: "Prompt",
+		label: "Encourage Edits",
+		description: "Require the edit tool for file edits and forbid sed/perl/python edits",
 	},
 });
 
