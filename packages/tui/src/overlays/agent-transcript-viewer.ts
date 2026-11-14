@@ -235,10 +235,10 @@ export class AgentTranscriptViewer implements Component {
 		this.#pollTimer.unref?.();
 	}
 
-	/** Advisor transcripts are read-only; every other agent revives on send. */
+	/** Advisors and retained execution records are read-only; ordinary parked agents revive on send. */
 	get #sendable(): boolean {
 		const ref = this.#deps.registry.get(this.#deps.agentId);
-		if (!ref || ref.kind === "advisor") return false;
+		if (!ref || ref.kind === "advisor" || ref.history?.executionEnded) return false;
 		return Boolean(this.#deps.remote || this.#deps.lifecycle);
 	}
 
@@ -525,11 +525,17 @@ export class AgentTranscriptViewer implements Component {
 
 	#rebuild(entries: SessionMessageEntryLike[]): void {
 		this.#builder.rebuild(entries);
+		// Explicit execution inspection must not inherit the live compact HUD's
+		// hidden tool activity. Expansion still controls each tool's output depth.
+		if (this.#deps.registry.get(this.#deps.agentId)?.history?.executionEnded)
+			this.#builder.container.setToolActivityVisible(true);
 		this.#deps.requestRender();
 	}
 
 	#append(entries: SessionMessageEntryLike[]): void {
 		this.#builder.append(entries);
+		if (this.#deps.registry.get(this.#deps.agentId)?.history?.executionEnded)
+			this.#builder.container.setToolActivityVisible(true);
 		this.#deps.requestRender();
 	}
 
@@ -538,6 +544,7 @@ export class AgentTranscriptViewer implements Component {
 	// ========================================================================
 
 	handleInput(data: string): void {
+		if (!this.#sendable) this.#editor = undefined;
 		if (data.startsWith("\x1b[<")) {
 			routeSgrMouseInput(data, event => {
 				if (event.wheel !== null) {
@@ -607,6 +614,11 @@ export class AgentTranscriptViewer implements Component {
 		const trimmed = text.trim();
 		this.#editor?.setText("");
 		if (!trimmed) return;
+		if (!this.#sendable) {
+			this.#notice = "This transcript is read-only.";
+			this.#deps.requestRender();
+			return;
+		}
 		this.#notice = undefined;
 		const id = this.#deps.agentId;
 		if (this.#deps.remote) {
@@ -620,6 +632,7 @@ export class AgentTranscriptViewer implements Component {
 			try {
 				// Revives a parked agent; returns the live session for running/idle.
 				const session = await lifecycle().ensureLive(id);
+				if (!this.#sendable) throw new Error("This transcript is read-only.");
 				// Steers a mid-turn agent; sends a normal prompt to an idle one.
 				await session.prompt(trimmed, { streamingBehavior: "steer" });
 			} catch (error) {
@@ -635,6 +648,7 @@ export class AgentTranscriptViewer implements Component {
 	// ========================================================================
 
 	render(width: number): readonly string[] {
+		if (!this.#sendable) this.#editor = undefined;
 		const lines = this.#browser.render(width);
 		if (this.#initialEntryId && this.#browser.hasAnchored(this.#initialEntryId)) {
 			this.#initialEntryId = undefined;

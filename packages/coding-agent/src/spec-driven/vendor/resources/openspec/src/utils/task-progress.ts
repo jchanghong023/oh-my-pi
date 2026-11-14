@@ -28,7 +28,7 @@ import { resolveSchemaForChange } from './change-metadata.js';
  *
  * Permissive on purpose, and safe to keep that way: any character class
  * tightened here drops lines that used to count, and a task this parser drops
- * is a task `openspec archive` stops warning about. The cost of the wide class
+ * is a task `omp openspec archive` stops warning about. The cost of the wide class
  * is over-counting - `- [1] ...` in a tasks file now reads as one unfinished
  * task - which is a loud, correctable false positive, unlike the silent loss.
  *
@@ -118,7 +118,7 @@ const HARD_BREAK_PATTERN = /(?<!\\)(?:\\\\)*\\$/;
  * A task's text is its whole first paragraph, the way Markdown renders a
  * wrapped list item: each following line that does not end the paragraph is
  * joined onto the description with a single space. Reading the checkbox line
- * alone cut a wrapped task off at its first newline, so `openspec instructions
+ * alone cut a wrapped task off at its first newline, so `omp openspec instructions
  * apply` handed the agent half a sentence while the count still looked right
  * (#2227). A hard line break's trailing `\` is dropped before the join.
  * Counting is unaffected: a continuation line is never itself a task.
@@ -226,7 +226,7 @@ export interface TaskProgressDetail extends TaskProgress {
    * Task files that exist but could not be read (any error other than ENOENT).
    * `getTaskProgressForChange` discards this list to preserve its behavior;
    * callers that must fail loudly on an unreadable tasks file — e.g.
-   * `openspec validate --archived` — read it so an unreadable file is never
+   * `omp openspec validate --archived` — read it so an unreadable file is never
    * silently counted as "no tasks" (#205).
    */
   unreadable: string[];
@@ -252,7 +252,7 @@ async function countTaskFile(file: string, unreadable: string[]): Promise<TaskPr
 /**
  * Computes a change's task progress by resolving its tracked-tasks artifact and
  * counting checkboxes across every file matched by that artifact's `generates`
- * glob — the same file-resolution `openspec status` uses to detect the tasks
+ * glob — the same file-resolution `omp openspec status` uses to detect the tasks
  * artifact (`resolveArtifactOutputs`) — so progress is no longer blind to nested
  * `tasks.md` files (#1202). Falls back to a single top-level `tasks.md` (exactly
  * as before) when the schema is unresolvable, no tracked-tasks artifact is found,

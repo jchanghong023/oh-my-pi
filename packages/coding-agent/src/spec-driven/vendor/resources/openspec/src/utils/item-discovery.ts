@@ -8,8 +8,8 @@ import { discoverSpecFiles } from './spec-discovery.js';
  *
  * A change is resolved by its directory alone - the same rule `list`,
  * `status`, `instructions` and `validate` use (`getAvailableChanges`).
- * Requiring proposal.md here made `openspec show` and shell completion miss
- * changes those commands resolve: `openspec new change <name>` scaffolds only
+ * Requiring proposal.md here made `omp openspec show` and shell completion miss
+ * changes those commands resolve: `omp openspec new change <name>` scaffolds only
  * `.openspec.yaml`, and a custom schema need not define a proposal artifact at
  * all (#1161).
  */

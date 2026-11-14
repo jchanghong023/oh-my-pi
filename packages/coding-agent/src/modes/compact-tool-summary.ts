@@ -200,7 +200,9 @@ export function summarizeCompactTool(
 	if (name === "read") {
 		const path = text(fields.path);
 		if (path) {
-			return { detail: description && comparable(description) !== comparable(path) ? join(description, path) : path };
+			return {
+				detail: description && comparable(description) !== comparable(path) ? join(description, path) : path,
+			};
 		}
 	}
 	const command = firstText(operation, fields.command, name === "eval" ? fields.code : undefined);

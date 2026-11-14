@@ -14,7 +14,7 @@
  * - OPENSPEC_NO_COMPLETIONS=1
  * - completions are already installed, or the shell is one the installer would
  *   reject
- * - the caller passes `silent` — JSON runs, `openspec completion ...`, and
+ * - the caller passes `silent` — JSON runs, `omp openspec completion ...`, and
  *   non-TTY runs, which are deferred rather than consumed (see `silent`)
  */
 import * as fs from 'node:fs';
@@ -24,7 +24,7 @@ import { isCiEnvironment } from '../utils/ci.js';
 import { detectShell } from '../utils/shell-detection.js';
 
 export const COMPLETION_TIP_MESSAGE =
-  "Tip: Run 'openspec completion install' for shell completions";
+  "Tip: Run 'omp openspec completion install' for shell completions";
 
 export interface CompletionTipOptions {
   /**
@@ -45,7 +45,7 @@ function isSuppressedByEnv(): boolean {
  * Whether the tip is worth showing, once we know it is owed and readable.
  *
  * "retire" consumes the tip without printing: the user either already has
- * completions, or is on a shell `openspec completion install` would refuse.
+ * completions, or is on a shell `omp openspec completion install` would refuse.
  *
  * Without the installed check the tip tells people to install completions they
  * installed long ago — including on the run right after `completion install`,

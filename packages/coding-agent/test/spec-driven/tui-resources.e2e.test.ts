@@ -24,7 +24,7 @@ function nativeReadResult(request: ModelRequest, target: string): string {
 
 for (const location of ["directory", "absent", "file", "parent-only"] as const) {
 	test.skipIf(!tuiTest || (process.platform === "win32" && location === "absent"))(
-		`ordinary TUI discovers core OpenSpec in any directory and scopes manual resource grants (${location})`,
+		`ordinary TUI discovers all OpenSpec skills in any directory and scopes manual resource grants (${location})`,
 		async () => {
 			const { manifest: inventory } = await collectSpecDrivenResources(
 				path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
@@ -50,11 +50,18 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 				[120, 36],
 				async ({ cwd, provider, tui, state }) => {
 					const coreOpenSpec = [
+						"openspec-apply-change",
 						"openspec-archive-change",
+						"openspec-bulk-archive-change",
+						"openspec-continue-change",
 						"openspec-explore",
+						"openspec-ff-change",
+						"openspec-new-change",
+						"openspec-onboard",
 						"openspec-propose",
 						"openspec-sync-specs",
 						"openspec-update-change",
+						"openspec-verify-change",
 					];
 					const openSpec = inventory.skills.filter(
 						skill => skill.source === "openspec" && coreOpenSpec.includes(skill.name),
@@ -70,11 +77,6 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 					for (const skill of openSpec) {
 						expect(ordinaryContext).toContain(skill.name);
 						expect(ordinaryContext).not.toContain(`name: ${skill.name}`);
-					}
-					for (const skill of inventory.skills.filter(
-						skill => skill.source === "openspec" && !coreOpenSpec.includes(skill.name),
-					)) {
-						expect(ordinaryContext).not.toContain(skill.name);
 					}
 					const superpowers = inventory.skills.filter(skill => skill.source === "superpowers");
 					for (const skill of superpowers) expect(ordinaryContext).not.toContain(skill.name);

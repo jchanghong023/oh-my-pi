@@ -110,7 +110,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				createDeveloperTestAgentArchivePlugin(await buildDeveloperTestAgentResources()),
 				createOpenWikiVendorLoaderPlugin(),
 				await createLegacyPiVirtualModulePlugin(),
-				createSpecDrivenArchivePlugin(await buildSpecDrivenArchive()),
+				await createSpecDrivenArchivePlugin(await buildSpecDrivenArchive()),
 			],
 			compile: {
 				// Bun's process-wide fetch User-Agent default. Any explicit

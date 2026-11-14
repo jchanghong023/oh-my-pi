@@ -9,49 +9,9 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
     positionals: [{ name: 'path', type: 'path', optional: true }],
     flags: [
       {
-        name: 'tools',
-        description: 'Configure AI tools non-interactively (e.g., "all", "none", or comma-separated tool IDs)',
-        takesValue: true,
-      },
-      {
         name: 'language',
         description: 'Write new OpenSpec artifacts in this language',
         takesValue: true,
-      },
-      {
-        name: 'force',
-        description: 'Auto-cleanup legacy files without prompting',
-      },
-      {
-        name: 'profile',
-        description: 'Override global config profile (core or custom)',
-        takesValue: true,
-        values: ['core', 'custom'],
-      },
-      {
-        name: 'no-animation',
-        description: 'Show a static welcome screen instead of the animated one',
-      },
-    ],
-  },
-  {
-    name: 'update',
-    description: 'Update OpenSpec instruction files',
-    acceptsPositional: true,
-    positionalType: 'path',
-    positionals: [{ name: 'path', type: 'path', optional: true }],
-    flags: [
-      {
-        name: 'force',
-        description: 'Force update even when tools are up to date',
-      },
-      {
-        name: 'dry-run',
-        description: 'Report what the update would change without writing anything',
-      },
-      {
-        name: 'json',
-        description: 'With --dry-run, print the planned changes as JSON',
       },
     ],
   },

@@ -19,7 +19,7 @@ export class FishGenerator implements CompletionGenerator {
     for (const cmd of commands) {
       topLevelLines.push(`# ${cmd.name} command`);
       topLevelLines.push(
-        `complete -c openspec -n '__fish_openspec_no_subcommand' -f -a '${cmd.name}' -d '${this.escapeDescription(cmd.description)}'`
+        `complete -c omp -n '__fish_openspec_no_subcommand' -f -a '${cmd.name}' -d '${this.escapeDescription(cmd.description)}'`
       );
     }
     const topLevelCommands = topLevelLines.join('\n');
@@ -39,7 +39,8 @@ export class FishGenerator implements CompletionGenerator {
 
 ${helperFunctions}
 ${dynamicHelpers}
-complete -c openspec -l no-color -f -d 'Disable color output'
+complete -c omp -n 'test (count (commandline -opc)) -eq 1' -f -a openspec -d 'Spec-driven development'
+complete -c omp -n '__fish_openspec_using_command_path' -l no-color -f -d 'Disable color output'
 ${topLevelCommands}
 
 ${commandCompletions}`;
@@ -59,7 +60,7 @@ ${commandCompletions}`;
         .join('; and ');
       for (const subcmd of cmd.subcommands) {
         lines.push(
-          `complete -c openspec -n '${commandCondition}; and ${noSubcommandCondition}' -f -a '${subcmd.name}' -d '${this.escapeDescription(subcmd.description)}'`
+          `complete -c omp -n '${commandCondition}; and ${noSubcommandCondition}' -f -a '${subcmd.name}' -d '${this.escapeDescription(subcmd.description)}'`
         );
       }
       lines.push('');
@@ -71,7 +72,7 @@ ${commandCompletions}`;
       for (const subcmd of cmd.subcommands) {
         const subcommandCondition = this.commandPathCondition([cmd.name, subcmd.name], parentValueFlags);
         lines.push(`# ${cmd.name} ${subcmd.name} flags`);
-        lines.push(`complete -c openspec -n '${subcommandCondition}' -f`);
+        lines.push(`complete -c omp -n '${subcommandCondition}' -f`);
         for (const flag of subcmd.flags) {
           lines.push(...this.generateFlagCompletion(flag, subcommandCondition));
         }
@@ -96,7 +97,7 @@ ${commandCompletions}`;
       }
     } else {
       lines.push(`# ${cmd.name} flags`);
-      lines.push(`complete -c openspec -n '__fish_openspec_using_command_path ${cmd.name}' -f`);
+      lines.push(`complete -c omp -n '__fish_openspec_using_command_path ${cmd.name}' -f`);
       for (const flag of cmd.flags) {
         lines.push(...this.generateFlagCompletion(flag, `__fish_openspec_using_command_path ${cmd.name}`));
       }
@@ -130,24 +131,24 @@ ${commandCompletions}`;
     if (flag.takesValue && flag.values) {
       for (const value of flag.values) {
         lines.push(
-          `complete -c openspec -n '${condition}' ${flagOptions} -r -f -a '${value}' -d '${description}'`
+          `complete -c omp -n '${condition}' ${flagOptions} -r -f -a '${value}' -d '${description}'`
         );
       }
     } else if (flag.takesValue) {
-      lines.push(`complete -c openspec -n '${condition}' ${flagOptions} -r -f -d '${description}'`);
+      lines.push(`complete -c omp -n '${condition}' ${flagOptions} -r -f -d '${description}'`);
       if (flag.completionType === 'path') {
         const optionNames = [`--${flag.name}`, ...(flag.short ? [`-${flag.short}`] : [])];
         lines.push(
-          `complete -c openspec -n '${condition}; and __fish_openspec_completing_option_value ${optionNames.join(' ')}' ${flagOptions} -r -F -d '${description}'`
+          `complete -c omp -n '${condition}; and __fish_openspec_completing_option_value ${optionNames.join(' ')}' ${flagOptions} -r -F -d '${description}'`
         );
         if (flag.short) {
           lines.push(
-            `complete -c openspec -n '${condition}' ${flagOptions} -r -f -a '(__fish_openspec_complete_attached_short_path -${flag.short})' -d '${description}'`
+            `complete -c omp -n '${condition}' ${flagOptions} -r -f -a '(__fish_openspec_complete_attached_short_path -${flag.short})' -d '${description}'`
           );
         }
       }
     } else {
-      lines.push(`complete -c openspec -n '${condition}' ${flagOptions} -f -d '${description}'`);
+      lines.push(`complete -c omp -n '${condition}' ${flagOptions} -f -d '${description}'`);
     }
 
     return lines;
@@ -161,27 +162,27 @@ ${commandCompletions}`;
 
     switch (positionalType) {
       case 'change-id':
-        lines.push(`complete -c openspec -n '${condition}' -a '(__fish_openspec_changes)' -f`);
+        lines.push(`complete -c omp -n '${condition}' -a '(__fish_openspec_changes)' -f`);
         break;
       case 'spec-id':
-        lines.push(`complete -c openspec -n '${condition}' -a '(__fish_openspec_specs)' -f`);
+        lines.push(`complete -c omp -n '${condition}' -a '(__fish_openspec_specs)' -f`);
         break;
       case 'change-or-spec-id':
-        lines.push(`complete -c openspec -n '${condition}' -a '(__fish_openspec_items)' -f`);
+        lines.push(`complete -c omp -n '${condition}' -a '(__fish_openspec_items)' -f`);
         break;
       case 'schema-name':
-        lines.push(`complete -c openspec -n '${condition}' -a '(__fish_openspec_schemas)' -f`);
+        lines.push(`complete -c omp -n '${condition}' -a '(__fish_openspec_schemas)' -f`);
         break;
       case 'shell':
-        lines.push(`complete -c openspec -n '${condition}' -a 'zsh bash fish powershell' -f`);
+        lines.push(`complete -c omp -n '${condition}' -a 'zsh bash fish powershell' -f`);
         break;
       case 'path':
         // -F re-enables filesystem completion: sibling rules in the same
         // context carry -f, and Fish never restores files without --force-files.
-        lines.push(`complete -c openspec -n '${condition}' -F`);
+        lines.push(`complete -c omp -n '${condition}' -F`);
         break;
       default:
-        lines.push(`complete -c openspec -n '${condition}' -f`);
+        lines.push(`complete -c omp -n '${condition}' -f`);
         break;
     }
 

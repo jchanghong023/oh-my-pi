@@ -1,7 +1,6 @@
 # OpenSpec Documentation
 
-> [!WARNING]
-> These pages are legacy and some are out of date. The current docs are at **[openspec.dev/docs](https://openspec.dev/docs)**. This offline copy keeps only the legacy tree.
+This offline documentation describes OpenSpec 2.0 bundled with OMP. Upstream documentation may include standalone installation and other-Agent delivery that are not part of this integration.
 
 Welcome. This is the home for everything OpenSpec.
 
@@ -9,22 +8,22 @@ OpenSpec helps you and your AI coding assistant **agree on what to build before 
 
 If you read nothing else, read these two pages:
 
-1. [Getting Started](getting-started.md): install, initialize, and ship your first change.
-2. [How Commands Work](how-commands-work.md): where you actually type `/opsx:propose` (hint: in your AI chat, not the terminal). This trips up almost everyone once.
+1. [Getting Started](getting-started.md): initialize a project explicitly and ship your first change.
+2. [How Commands Work](how-commands-work.md): where you actually type `/skill:openspec-propose` (hint: in your AI chat, not the terminal). This trips up almost everyone once.
 
 That second one matters more than it looks. OpenSpec has two halves: a command line tool you run in your terminal, and slash commands you give to your AI assistant. Knowing which is which saves you the most common moment of confusion.
 
-> **The best habit to build first: when you're not sure what to build, start with `/opsx:explore`.** It's a no-stakes thinking partner that reads your code, weighs options, and sharpens a fuzzy idea into a concrete plan before any code gets written. The [Explore First](explore.md) guide makes the case.
+> **The best habit to build first: when you're not sure what to build, start with `/skill:openspec-explore`.** It's a no-stakes thinking partner that reads your code, weighs options, and sharpens a fuzzy idea into a concrete plan before any code gets written. The [Explore First](explore.md) guide makes the case.
 
 ## Pick your path
 
 **I'm brand new.** Start with [Getting Started](getting-started.md), then skim the [Core Concepts at a Glance](overview.md). When something feels mysterious, the [FAQ](faq.md) and [Glossary](glossary.md) are nearby.
 
-**I have a problem but not a plan.** This is the common case, and it has a dedicated answer: [Explore First](explore.md). Use `/opsx:explore` to think it through with the AI before committing to anything.
+**I have a problem but not a plan.** This is the common case, and it has a dedicated answer: [Explore First](explore.md). Use `/skill:openspec-explore` to think it through with the AI before committing to anything.
 
 **I have a big existing codebase.** You don't document all of it. [Using OpenSpec in an Existing Project](existing-projects.md) shows how to start on real, brownfield code without boiling the ocean.
 
-**I just want to get it working.** [Install](installation.md), run `openspec init`, then read [How Commands Work](how-commands-work.md) so your first slash command lands in the right place. Or hand the setup to your assistant with the [AI-assisted install prompt](installation.md#install-with-your-ai-assistant).
+**I just want to get it working.** OMP already includes the CLI and all 12 Skills. Read [Project setup](installation.md), explicitly initialize the intended project with `omp openspec init`, then use native `/skill:<name>` invocations as described in [How Commands Work](how-commands-work.md).
 
 **I learn by example.** The [Examples & Recipes](examples.md) page walks through real changes start to finish: a small feature, a bug fix, a refactor, an exploration.
 
@@ -44,11 +43,11 @@ That second one matters more than it looks. OpenSpec has two halves: a command l
 
 | Doc | What it gives you |
 |-----|-------------------|
-| [Getting Started](getting-started.md) | Install, initialize, and run your first change end to end |
-| [Explore First](explore.md) | Use `/opsx:explore` to think through an idea before you commit |
+| [Getting Started](getting-started.md) | Initialize explicitly and run your first change end to end |
+| [Explore First](explore.md) | Use `/skill:openspec-explore` to think through an idea before you commit |
 | [How Commands Work](how-commands-work.md) | Where slash commands run, what "interactive mode" means, terminal vs chat |
 | [Core Concepts at a Glance](overview.md) | The whole mental model on one page: specs, changes, deltas, archive |
-| [Installation](installation.md) | npm, pnpm, yarn, bun, Nix, a prompt that hands setup to your AI assistant, and how to verify it worked |
+| [Project setup](installation.md) | Bundled resources, native discovery, initialization, and OMP upgrades |
 
 ### Use it day to day
 
@@ -61,8 +60,8 @@ That second one matters more than it looks. OpenSpec has two halves: a command l
 | [OpenSpec on a Team](team-workflow.md) | How changes fit branches, pull requests, and review |
 | [Using OpenSpec in an Existing Project](existing-projects.md) | Adopting OpenSpec on a large brownfield codebase |
 | [Editing & Iterating on a Change](editing-changes.md) | Update artifacts, go back, reconcile manual edits |
-| [Commands](commands.md) | Reference for every `/opsx:*` slash command |
-| [CLI](cli.md) | Reference for every `openspec` terminal command |
+| [Commands](commands.md) | Reference for every `/skill:openspec-*` slash command |
+| [CLI](cli.md) | Reference for `omp openspec ...` terminal operations |
 
 ### Understand it deeply
 
@@ -78,7 +77,7 @@ That second one matters more than it looks. OpenSpec has two halves: a command l
 |-----|-------------------|
 | [Customization](customization.md) | Project config, custom schemas, shared context |
 | [Multi-Language](multi-language.md) | Generate artifacts in languages other than English |
-| [Supported Tools](supported-tools.md) | The 30+ AI tools OpenSpec integrates with, and where files land |
+| [Supported interface](supported-tools.md) | All 12 native OMP Skill names and invocation rules |
 | [Community Showcase](community.md) | Projects and resources built with and for OpenSpec |
 
 ### When you need help
@@ -99,20 +98,19 @@ That second one matters more than it looks. OpenSpec has two halves: a command l
 ## The thirty-second version
 
 ```text
-1. Install        npm install -g @fission-ai/openspec@latest
-2. Initialize     cd your-project && openspec init
-3. Explore        (in your AI chat)  /opsx:explore           ← optional, but a great habit
-4. Propose        (in your AI chat)  /opsx:propose add-dark-mode
-5. Build          (in your AI chat)  /opsx:apply
-6. Archive        (in your AI chat)  /opsx:archive
+1. Initialize     cd your-project && omp openspec init
+2. Explore        (in OMP chat)  /skill:openspec-explore       (optional)
+3. Propose        (in OMP chat)  /skill:openspec-propose add-dark-mode
+4. Build          (in OMP chat)  /skill:openspec-apply-change
+5. Archive        (in OMP chat)  /skill:openspec-archive-change
 ```
 
-Steps 1 and 2 happen in your terminal (for Windows or npm, see [Installation](installation.md)). The rest happen in your AI assistant's chat. That split is the one thing worth memorizing, and [How Commands Work](how-commands-work.md) explains exactly why. Step 3 is optional, but starting with `/opsx:explore` when you're unsure is the habit most worth forming.
+Initialization happens in the terminal only after explicit authorization and does not install or clean user Skills or commands. The remaining steps happen in OMP chat. All 12 Skills are discoverable in any directory, support native completion and `skill://<name>` reads, and preserve project/user same-name override precedence. No separate Node/OpenSpec install is needed; resources update with OMP releases, not CLI `update`. Legacy `opsx` file commands are removed.
 
 ## Where else to get help
 
 - **Discord:** [discord.gg/YctCnvvshC](https://discord.gg/YctCnvvshC) for questions, ideas, and help.
 - **GitHub Issues:** [github.com/Fission-AI/OpenSpec/issues](https://github.com/Fission-AI/OpenSpec/issues) for bugs and feature requests.
-- **`openspec feedback "your message"`** sends feedback straight from your terminal (it opens a GitHub issue).
+- **`omp openspec feedback "your message"`** sends feedback straight from your terminal (it opens a GitHub issue).
 
 Found something in these docs that's wrong, stale, or confusing? That's a bug — open a [docs issue](https://github.com/Fission-AI/OpenSpec/issues/new?template=docs.yml).

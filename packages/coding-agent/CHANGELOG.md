@@ -2,8 +2,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- Run Markdown and Superpowers Step plans with `/todoloop`, with inferred heading groups, live progress, read-only checks, and file-based resume.
+
 ### Changed
 
+- OpenSpec source preparation (`bun run gen:spec-driven-resources`), npm packaging and binary builds now share a runtime archive built from vendored source and locked production dependencies using Bun.
+- Legacy OpenSpec resource archives are rejected with a preparation command instead of being reused solely because the file exists.
+- Source OpenSpec execution now rejects intermediate archives whose build inputs have changed and points to the resource preparation command.
+- OpenSpec archive preparation now rejects missing runtime files, templates, skills and unresolved production dependencies before packaging.
+- OpenSpec runtime archives omit development sources, installation locks and documentation screenshots while retaining all skills, templates and production dependencies.
+- OpenSpec resource manifests now distinguish the upstream source revision from the SHA-256 of the adapted runtime instead of labeling it as npm package integrity.
+- OpenSpec bundles now pin the target build fingerprint and archive digest; missing or damaged runtime files are rejected before cached resources can be reused.
+- Missing OpenSpec source resources now report the preparation command and its working directory instead of a bare file-not-found error; runtime loading never installs or builds them automatically.
+- OpenSpec initialization now rejects external store-pointer repositories at their root as well as in subdirectories, without installing integrations or creating a second planning root.
+- OpenSpec initialization now creates only project planning files and configuration, leaving existing skills, commands, legacy tool folders and global delivery settings untouched.
+- OpenSpec init help and completion now expose only the language option; removed tools, profile, force and animation flags fail as unknown options instead of being silently ignored.
+- Removed the obsolete OpenSpec experimental setup alias; it now fails as an unknown command instead of initializing a project through a hidden entrypoint.
+- Removed OpenSpec update and its configuration-side delivery path; bundled skills update with OMP rather than through project refreshes or CLI self-upgrades.
+- OpenSpec init and new change now preserve native arguments, output and the spec-driven default instead of injecting tools=none or the private mini schema.
+- Removed unused private OpenSpec directory bridges, the forced omp-spec schema API and archive-plan injection; ordinary commands use the upstream CLI directly.
+- OpenSpec commands now accept real terminal input and stream output when all standard streams are TTYs; SDK and non-TTY calls retain isolated captured output.
+- Offline OpenSpec calls now suppress registry requests even for explicit version --check commands; telemetry remains disabled.
+- All 12 bundled OpenSpec skills are now discoverable without the former five-skill filter; removed bundled opsx file commands in favor of native skill invocation.
+- Bundled OpenSpec 2.0 workflows now use omp openspec throughout and update only with OMP; retired the unused skill installation and template-generation chain.
+- This repository now uses the native spec-driven schema; existing custom mini/omp-spec projects require explicit migration and any missing design/tasks remain incomplete (see docs-zh-CN/openspec-schema-migration.md).
 - Compact mode's two-line activity area now shows fixed-width Chinese action states (正在思考/读取/执行/写入/调用) with a gray detail that never shifts; only running action words shimmer, thinking completion shows elapsed seconds, and tool elapsed timers are removed.
 - Compact mode's tool output preview is now a bordered card with padding and a color-coded Chinese status header that keeps both ends of long commands; finished grep/glob results show their matching rows first instead of only the output tail.
 
@@ -19,6 +43,7 @@
 
 ### Fixed
 
+- AIReq now reports unavailable entry assets before publishing its shared HTTP application.
 - Compact mode's read activity now appends the target path after the intent instead of hiding it.
 - Compact mode now shows thinking across successive messages, refreshes tools that finish between paints, and stops thinking timers before reply generation.
 - Compact mode's tool output preview no longer repaints the previous turn's finished output when a new turn starts; it stays closed until the new turn produces output, while still-running background output keeps showing.

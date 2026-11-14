@@ -31,17 +31,8 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			const baseline = await git(config.cwd, config.env, ["rev-parse", "HEAD"]);
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
 			await peer.start();
-			const coreOpenSpec = new Set([
-				"openspec-propose",
-				"openspec-explore",
-				"openspec-update-change",
-				"openspec-sync-specs",
-				"openspec-archive-change",
-			]);
-			const isHiddenOpenSpec = (entry: { source: string; name: string }) =>
-				entry.source === "openspec" && !coreOpenSpec.has(entry.name);
 			const defaultSkills: Record<string, true> = {};
-			for (const entry of inventory.skills.filter(entry => coreOpenSpec.has(entry.name)))
+			for (const entry of inventory.skills.filter(entry => entry.source === "openspec"))
 				defaultSkills[entry.name] = true;
 			let events = await peer.promptAndWait(
 				`${MARKER} ordinary greeting, no skills requested`,
@@ -61,14 +52,6 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			const resourceMetadata = new Map<string, { name: string; description: string }>();
 			for (const entry of inventory.skills) {
 				const skill = catalog.skills.find(item => item.name === entry.name);
-				if (isHiddenOpenSpec(entry)) {
-					expect(skill).toBeUndefined();
-					for (const request of ordinaryRequests)
-						expect(request.messages.map(message => contentText(message.content)).join("\n")).not.toContain(
-							entry.name,
-						);
-					continue;
-				}
 				if (!skill) throw new Error(`Public packaged skill missing: ${entry.name}`);
 				const canonical = await fs.realpath(skill.filePath);
 				expect(path.relative(config.root, canonical).startsWith("..")).toBe(false);
@@ -121,7 +104,7 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 				expect(unauthorizedResults).toContain(`Skill access denied: ${entry.name}`);
 				expect(unauthorizedResults).not.toContain(resourceMetadata.get(entry.name)!.description);
 			}
-			for (const entry of inventory.skills.filter(entry => !isHiddenOpenSpec(entry))) {
+			for (const entry of inventory.skills) {
 				expect((await peer.newSession()).cancelled).toBe(false);
 				const requestStart = provider.requests.length;
 				const turn = entry.name;

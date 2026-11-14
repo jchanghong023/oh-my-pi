@@ -137,6 +137,8 @@ interface ReopeningAgent {
 export interface AgentReleaseOptions {
 	/** Reject failed cleanup and retain the exact owned generation for retry. */
 	strict?: boolean;
+	/** Strict disposal retaining a detached, non-resumable transcript row, without a kill marker. */
+	retainRecord?: boolean;
 	/** Explicit kill: keep a terminal `aborted` row and persist the kill marker. */
 	tombstone?: boolean;
 	/** Forwarded to the live session's dispose (e.g. the reason its `session_exit` record carries). */
@@ -169,9 +171,9 @@ export interface AgentLifecycleApi {
 	isParking(id: string, expected?: AgentRefExpectation): boolean;
 	/** Dispose the live session of an adopted agent and mark it `parked`. */
 	park(id: string): Promise<void>;
-	/** Return the live session, reviving it if parked or killed. */
+	/** Return the live session, reviving if parked or killed; retained execution records reject. */
 	ensureLive(id: string): Promise<AgentSessionHandle>;
-	/** Dispose if live and drop timers; `tombstone` keeps a terminal `aborted` row. */
+	/** Dispose and drop timers; opt-in `retainRecord` keeps a strictly cleaned read-only transcript row. */
 	release(id: string, expected?: AgentRefExpectation, options?: AgentReleaseOptions): Promise<boolean>;
 	/** Release this root's descendants; strict cleanup applies to every descendant state. */
 	releaseDescendants(root: AgentRef, deadlineAt?: number, options?: AgentReleaseOptions): Promise<void>;
@@ -549,6 +551,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				`Unknown agent "${id}" — it was never registered or has been released. If a transcript exists, read history://${id}.`,
 			);
 		}
+		if (ref.history?.executionEnded) throw new Error(`Agent "${id}" is a read-only execution record.`);
 		if (ref.status === "aborted") ref = await this.#reopen(id, ref);
 		// A revive attaches its session before it finishes initializing it: join the revive rather
 		// than hand out a session whose extensions have not re-registered their tools yet.
@@ -689,7 +692,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	 * reopens the transcript.
 	 */
 	async release(id: string, expected?: AgentRefExpectation, options?: AgentReleaseOptions): Promise<boolean> {
-		if (options?.strict) return this.#releaseStrict(id, expected, options);
+		if (options?.strict || options?.retainRecord) return this.#releaseStrict(id, expected, options);
 		const adopted = this.#adopted.get(id);
 		const current = this.#registry.get(id);
 		const currentMatches =
@@ -803,6 +806,13 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			const revival = this.#revivals.get(id);
 			if (revival?.ref === ref) await Promise.allSettled([revival.promise]);
 			owned.live ??= this.#registry.get(id) === ref ? ref.session : null;
+			if (options.retainRecord && this.#registry.get(id) === ref) {
+				// Detach before SDK disposal so it preserves this native transcript route.
+				// The strict owner remains retryable until disposal and resource hooks succeed.
+				this.#registry.setHistory(id, { executionEnded: true }, ref.sessionFile ?? undefined);
+				this.#registry.detachSession(id, ref);
+				if (ref.status !== "aborted") this.#registry.setStatus(id, "parked", ref);
+			}
 			if (options.tombstone && this.#registry.get(id) === ref) {
 				// SDK disposal preserves detached terminal rows. The captured live
 				// handle remains in this entry if strict cleanup must be retried.
@@ -836,7 +846,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 					this.#registry.detachSession(id, ref);
 					this.#registry.setStatus(id, "aborted", ref);
 				}
-			} else {
+			} else if (!options.retainRecord) {
 				this.#registry.unregister(id, ref);
 			}
 			// Account for a finalizer synchronously handing off an adoption from
@@ -864,6 +874,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS,
 		options?: AgentReleaseOptions,
 	): Promise<void> {
+		if (options?.retainRecord) options = { ...options, strict: true };
 		const registeredRoot = this.#registry.get(root.id);
 		const currentRoot = registeredRoot === root;
 		if (!currentRoot && !options?.strict) return;
@@ -906,7 +917,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				const errors = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
 				if (errors.length) throw new AggregateError(errors, `Failed releasing descendants of ${parent.id}`);
 				if (parent === root) return;
-				const childOptions = parent.status === "running" ? options : { strict: true };
+				const childOptions = parent.status === "running" || options.retainRecord ? options : { strict: true };
 				const release = this.release(parent.id, parent, childOptions).then(() => {});
 				try {
 					await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), () => release);

@@ -1,19 +1,21 @@
-# OpenSpec skills for skills.sh
+# OMP built-in OpenSpec skills
 
-Install the OpenSpec workflow skills into any [skills.sh](https://skills.sh)-compatible agent:
+OMP discovers all 12 `openspec-*/SKILL.md` workflows natively. No standalone
+OpenSpec CLI, skill installation, or generated slash-command files are required.
+The bundled skills and OpenSpec implementation update with OMP releases.
+
+Invoke a workflow with `/skill:openspec-propose` (or another bundled skill).
+Executable OpenSpec commands use `omp openspec ...`; `openspec/` remains the
+project artifact directory.
+
+For a project that has not initialized OpenSpec, explicitly request:
 
 ```bash
-npx skills add Fission-AI/OpenSpec
+omp openspec init
 ```
 
-Each `openspec-*/SKILL.md` here is the same skill `openspec init` writes into a
-project. The skills drive the `openspec` CLI, so for the full setup (CLI +
-`openspec/` project scaffolding + slash commands) run:
+Initialization creates project configuration only; it does not install skills.
+Workflows check for an existing project root and never initialize implicitly.
 
-```bash
-npx openspec@latest init
-```
-
-> These files are generated from the skill templates — do not edit by hand. Run
-> `pnpm build && pnpm generate:skills` after changing a template;
-> `skillssh-parity.test.ts` fails if they drift.
+These bundled skill files are the sole workflow-body source. OMP loads them
+directly; there is no skill installer or parallel generated template body.

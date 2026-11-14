@@ -180,7 +180,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 				createDeveloperTestAgentArchivePlugin(await buildDeveloperTestAgentResources()),
 				createOpenWikiVendorLoaderPlugin(),
 				await createLegacyPiVirtualModulePlugin(),
-				createSpecDrivenArchivePlugin(specDrivenArchive),
+				await createSpecDrivenArchivePlugin(specDrivenArchive),
 				inlineNativeNoticesPlugin,
 			],
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],

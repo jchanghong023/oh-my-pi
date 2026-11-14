@@ -1035,10 +1035,19 @@ test("retained real edit does not move when the next assistant stream is empty o
 				expect(cleanAfterToggle.screen).not.toContain("retained-read.txt");
 				await tui("submit", "/display compact");
 				await tui("expect", "text", "compact", "--timeout", "30000");
-				await eventually(
-					() => screen.checkpoint("compact edit restored"),
-					frame => frame.screen.includes("EDIT_CLI_01") && !frame.screen.includes("retained-read.txt"),
+				const restored = await eventually(
+					() => screen.checkpoint("compact edit restored after transient output closes"),
+					frame =>
+						frame.screen.includes("EDIT_CLI_01") &&
+						!frame.screen.includes("EDIT_CLI_46") &&
+						!frame.screen.includes("CLI_READ_RESULT"),
 				);
+				// After the bounded output preview closes, only the completed read activity remains.
+				const readRows = restored.screen.split("\n").filter(line => line.includes("retained-read.txt"));
+				expect(readRows).toHaveLength(1);
+				expect(readRows[0]).toContain("读取完成");
+				expect(readRows[0]).toContain("Reading retained evidence");
+				expect(restored.screen).not.toContain("retained-search.txt");
 				expect(provider.requests).toHaveLength(requests);
 				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(`${edited}\n`);
 				await screen.stop();

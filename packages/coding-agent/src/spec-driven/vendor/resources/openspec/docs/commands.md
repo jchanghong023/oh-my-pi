@@ -4,46 +4,46 @@ This is the reference for OpenSpec's slash commands. This copy invokes them in O
 
 For workflow patterns and when to use each command, see [Workflows](workflows.md). For CLI commands, see [CLI](cli.md).
 
-This copy configures Oh My Pi only. Invoke workflows by skill name, such as
-`/openspec-propose`; see [How To Invoke](supported-tools.md#how-to-invoke).
+All 12 workflows are bundled OMP Skills. Invoke them by name, such as
+`/skill:openspec-propose`; see [How To Invoke](supported-tools.md#how-to-invoke).
 
 ## Quick Reference
 
-### Default Quick Path (`core` profile)
+### Quick Path (all Skills bundled)
 
 | Command | Purpose |
 |---------|---------|
-| `/opsx:propose` | Create a change and generate planning artifacts in one step |
-| `/opsx:explore` | Think through ideas before committing to a change |
-| `/opsx:apply` | Implement tasks from the change |
-| `/opsx:update` | Revise a change's planning artifacts and keep them coherent |
-| `/opsx:sync` | Merge delta specs into main specs |
-| `/opsx:archive` | Archive a completed change |
+| `/skill:openspec-propose` | Create a change and generate planning artifacts in one step |
+| `/skill:openspec-explore` | Think through ideas before committing to a change |
+| `/skill:openspec-apply-change` | Implement tasks from the change |
+| `/skill:openspec-update-change` | Revise a change's planning artifacts and keep them coherent |
+| `/skill:openspec-sync-specs` | Merge delta specs into main specs |
+| `/skill:openspec-archive-change` | Archive a completed change |
 
-### Expanded Workflow Commands (custom workflow selection)
+### Incremental Workflow Skills (already bundled)
 
 | Command | Purpose |
 |---------|---------|
-| `/opsx:new` | Start a new change scaffold |
-| `/opsx:continue` | Create the next artifact based on dependencies |
-| `/opsx:ff` | Fast-forward: create all planning artifacts at once |
-| `/opsx:verify` | Validate implementation matches artifacts |
-| `/opsx:bulk-archive` | Archive multiple changes at once |
-| `/opsx:onboard` | Guided tutorial through the complete workflow |
+| `/skill:openspec-new-change` | Start a new change scaffold |
+| `/skill:openspec-continue-change` | Create the next artifact based on dependencies |
+| `/skill:openspec-ff-change` | Fast-forward: create all planning artifacts at once |
+| `/skill:openspec-verify-change` | Validate implementation matches artifacts |
+| `/skill:openspec-bulk-archive-change` | Archive multiple changes at once |
+| `/skill:openspec-onboard` | Guided tutorial through the complete workflow |
 
-The default global profile is `core`. To enable expanded workflow commands, run `openspec config profile`, select workflows, then run `openspec update` in your project.
+All 12 OpenSpec Skills are bundled with OMP and use native discovery, completion, on-demand `skill://<name>` reads, and path authorization in any directory. Project/user same-name overrides keep their existing precedence. No profile selection or duplicate Skill installation is needed. Skill discovery does not authorize project initialization.
 
 ---
 
 ## Command Reference
 
-### `/opsx:propose`
+### `/skill:openspec-propose`
 
 Create a new change and generate planning artifacts in one step. This is the default start command in the `core` profile.
 
 **Syntax:**
 ```text
-/opsx:propose [change-name-or-description]
+/skill:openspec-propose [change-name-or-description]
 ```
 
 **Arguments:**
@@ -54,35 +54,35 @@ Create a new change and generate planning artifacts in one step. This is the def
 **What it does:**
 - Creates `openspec/changes/<change-name>/`
 - Generates artifacts needed before implementation (for `spec-driven`: proposal, specs, design, tasks)
-- Stops when the change is ready for `/opsx:apply`
+- Stops when the change is ready for `/skill:openspec-apply-change`
 
 **Example:**
 ```text
-You: /opsx:propose add-dark-mode
+You: /skill:openspec-propose add-dark-mode
 
 AI:  Created openspec/changes/add-dark-mode/
      ✓ proposal.md
      ✓ specs/ui/spec.md
      ✓ design.md
      ✓ tasks.md
-     Ready for implementation. Run /opsx:apply.
+     Ready for implementation. Run /skill:openspec-apply-change.
 ```
 
 **Tips:**
 - Use this for the fastest end-to-end path
-- If you want step-by-step artifact control, enable expanded workflows and use `/opsx:new` + `/opsx:continue`
+- If you want step-by-step artifact control, enable expanded workflows and use `/skill:openspec-new-change` + `/skill:openspec-continue-change`
 
 ---
 
-### `/opsx:explore`
+### `/skill:openspec-explore`
 
-> **Start here when you're unsure.** Explore is a no-stakes thinking partner: it reads your codebase, compares options, and sharpens a fuzzy idea into a concrete plan before any code gets written. It ships in the default profile. For the full case and more examples, see the [Explore First](explore.md) guide.
+> **Start here when you're unsure.** Explore is a no-stakes thinking partner: it reads your codebase, compares options, and sharpens a fuzzy idea into a concrete plan before any code gets written. It ships among the bundled Skills. For the full case and more examples, see the [Explore First](explore.md) guide.
 
 Think through ideas, investigate problems, and clarify requirements before committing to a change.
 
 **Syntax:**
 ```
-/opsx:explore [topic]
+/skill:openspec-explore [topic]
 ```
 
 **Arguments:**
@@ -95,12 +95,12 @@ Think through ideas, investigate problems, and clarify requirements before commi
 - Investigates the codebase to answer questions
 - Compares options and approaches
 - Creates visual diagrams to clarify thinking
-- Captures the exploration when you ask, or when you say yes to its offer: scaffolds a change with `openspec new change` and writes the planning artifacts you name, or updates an existing change's artifacts
-- Can transition to `/opsx:propose` (default) or `/opsx:new` (expanded workflow) when insights crystallize
+- Captures the exploration when you ask, or when you say yes to its offer: scaffolds a change with `omp openspec new change` and writes the planning artifacts you name, or updates an existing change's artifacts
+- Can transition to `/skill:openspec-propose` (default) or `/skill:openspec-new-change` (incremental workflow) when insights crystallize
 
 **Example:**
 ```text
-You: /opsx:explore
+You: /skill:openspec-explore
 
 AI:  What would you like to explore?
 
@@ -137,15 +137,15 @@ AI:  Started openspec/changes/add-jwt-auth/. Say the word and I'll
 
 ---
 
-### `/opsx:new`
+### `/skill:openspec-new-change`
 
-Start a new change scaffold. Creates the change folder and waits for you to generate artifacts with `/opsx:continue` or `/opsx:ff`.
+Start a new change scaffold. Creates the change folder and waits for you to generate artifacts with `/skill:openspec-continue-change` or `/skill:openspec-ff-change`.
 
 This command is part of the expanded workflow set (not included in the default `core` profile).
 
 **Syntax:**
 ```
-/opsx:new [change-name] [--schema <schema-name>]
+/skill:openspec-new-change [change-name] [--schema <schema-name>]
 ```
 
 **Arguments:**
@@ -168,13 +168,13 @@ openspec/changes/<change-name>/
 
 **Example:**
 ```
-You: /opsx:new add-dark-mode
+You: /skill:openspec-new-change add-dark-mode
 
 AI:  Created openspec/changes/add-dark-mode/
      Schema: spec-driven
 
      Ready to create: proposal
-     Use /opsx:continue to create it, or /opsx:ff to create all artifacts.
+     Use /skill:openspec-continue-change to create it, or /skill:openspec-ff-change to create all artifacts.
 ```
 
 **Tips:**
@@ -184,13 +184,13 @@ AI:  Created openspec/changes/add-dark-mode/
 
 ---
 
-### `/opsx:continue`
+### `/skill:openspec-continue-change`
 
 Create the next artifact in the dependency chain. Creates one artifact at a time for incremental progress.
 
 **Syntax:**
 ```
-/opsx:continue [change-name]
+/skill:openspec-continue-change [change-name]
 ```
 
 **Arguments:**
@@ -207,7 +207,7 @@ Create the next artifact in the dependency chain. Creates one artifact at a time
 
 **Example:**
 ```
-You: /opsx:continue
+You: /skill:openspec-continue-change
 
 AI:  Change: add-dark-mode
 
@@ -224,7 +224,7 @@ AI:  Change: add-dark-mode
      ✓ Created openspec/changes/add-dark-mode/specs/ui/spec.md
 
      Now available: design
-     Run /opsx:continue to create the next artifact.
+     Run /skill:openspec-continue-change to create the next artifact.
 ```
 
 **Tips:**
@@ -235,13 +235,13 @@ AI:  Change: add-dark-mode
 
 ---
 
-### `/opsx:ff`
+### `/skill:openspec-ff-change`
 
 Fast-forward through artifact creation. Creates all planning artifacts at once.
 
 **Syntax:**
 ```
-/opsx:ff [change-name]
+/skill:openspec-ff-change [change-name]
 ```
 
 **Arguments:**
@@ -257,7 +257,7 @@ Fast-forward through artifact creation. Creates all planning artifacts at once.
 
 **Example:**
 ```
-You: /opsx:ff add-dark-mode
+You: /skill:openspec-ff-change add-dark-mode
 
 AI:  Fast-forwarding add-dark-mode...
 
@@ -267,24 +267,24 @@ AI:  Fast-forwarding add-dark-mode...
      ✓ Creating tasks.md
 
      All planning artifacts complete!
-     Ready for implementation. Run /opsx:apply to begin.
+     Ready for implementation. Run /skill:openspec-apply-change to begin.
 ```
 
 **Tips:**
 - Use when you have a clear picture of what you're building
-- Faster than `/opsx:continue` for straightforward changes
+- Faster than `/skill:openspec-continue-change` for straightforward changes
 - You can still edit artifacts afterward
 - Good for small to medium features
 
 ---
 
-### `/opsx:apply`
+### `/skill:openspec-apply-change`
 
 Implement tasks from the change. Works through the task list, writing code and checking off items.
 
 **Syntax:**
 ```
-/opsx:apply [change-name]
+/skill:openspec-apply-change [change-name]
 ```
 
 **Arguments:**
@@ -300,7 +300,7 @@ Implement tasks from the change. Works through the task list, writing code and c
 
 **Example:**
 ```
-You: /opsx:apply
+You: /skill:openspec-apply-change
 
 AI:  Implementing add-dark-mode...
 
@@ -328,14 +328,14 @@ AI:  Implementing add-dark-mode...
 
 ---
 
-### `/opsx:update`
+### `/skill:openspec-update-change`
 
 Revise a change's existing planning artifacts and keep them coherent with one another. Planning artifacts only - it never edits code.
 
 **Syntax:**
 
 ```text
-/opsx:update [change-name]
+/skill:openspec-update-change [change-name]
 ```
 
 **Arguments:**
@@ -346,22 +346,22 @@ Revise a change's existing planning artifacts and keep them coherent with one an
 
 **What it does:**
 
-- Reads the change's artifacts via `openspec status --change <name> --json`
+- Reads the change's artifacts via `omp openspec status --change <name> --json`
 - Applies your requested revision, or reviews the artifacts for contradictions if you didn't name one
 - Reconciles the other existing artifacts in any direction (a design edit may ripple back to the proposal)
 - Confirms every edit with you before writing, one artifact at a time
-- Ends by recommending the next step: `/opsx:continue` (unstarted artifacts), `/opsx:apply` (carry a revised plan into code), or `/opsx:archive` (all done)
+- Ends by recommending the next step: `/skill:openspec-continue-change` (unstarted artifacts), `/skill:openspec-apply-change` (carry a revised plan into code), or `/skill:openspec-archive-change` (all done)
 
 **Missing files:**
 
 - For a glob artifact such as `specs/**/*.md` with at least one existing file, update can propose a missing companion file. It uses the schema's instructions and asks you to confirm the concrete path before creating it.
-- Artifacts with no files yet remain with `/opsx:continue`. Intentionally skipped artifacts stay untouched.
+- Artifacts with no files yet remain with `/skill:openspec-continue-change`. Intentionally skipped artifacts stay untouched.
 - New files must stay inside the change directory. If a file appears at the confirmed path before creation, update stops instead of overwriting it.
 
 **Example:**
 
 ```text
-You: /opsx:update add-dark-mode - we're storing the theme in a cookie now, not localStorage
+You: /skill:openspec-update-change add-dark-mode - we're storing the theme in a cookie now, not localStorage
 
 AI:  Reading add-dark-mode artifacts...
 
@@ -377,19 +377,19 @@ AI:  Reading add-dark-mode artifacts...
 
 **Tips:**
 
-- It won't start an artifact with no existing files. Enable `/opsx:continue` for that, or use `openspec status` and `openspec instructions` if that optional workflow isn't installed.
-- If the change was already implemented, follow up with `/opsx:apply` so the code matches the revised plan
+- It won't start an artifact with no existing files. Enable `/skill:openspec-continue-change` for that, or use `omp openspec status` and `omp openspec instructions` if that optional workflow isn't installed.
+- If the change was already implemented, follow up with `/skill:openspec-apply-change` so the code matches the revised plan
 - If your revision changes the *intent* of the change, start fresh with a new change instead (see [When to Update vs. Start Fresh](opsx.md#when-to-update-vs-start-fresh))
 
 ---
 
-### `/opsx:verify`
+### `/skill:openspec-verify-change`
 
 Validate that implementation matches your change artifacts. Checks completeness, correctness, and coherence.
 
 **Syntax:**
 ```
-/opsx:verify [change-name]
+/skill:openspec-verify-change [change-name]
 ```
 
 **Arguments:**
@@ -413,7 +413,7 @@ Validate that implementation matches your change artifacts. Checks completeness,
 
 **Example:**
 ```
-You: /opsx:verify
+You: /skill:openspec-verify-change
 
 AI:  Verifying add-dark-mode...
 
@@ -451,13 +451,13 @@ AI:  Verifying add-dark-mode...
 
 ---
 
-### `/opsx:sync`
+### `/skill:openspec-sync-specs`
 
 **Optional command.** Merge delta specs from a change into main specs. Archive will prompt to sync if needed, so you typically don't need to run this manually.
 
 **Syntax:**
 ```
-/opsx:sync [change-name]
+/skill:openspec-sync-specs [change-name]
 ```
 
 **Arguments:**
@@ -474,7 +474,7 @@ AI:  Verifying add-dark-mode...
 
 **Example:**
 ```text
-You: /opsx:sync
+You: /skill:openspec-sync-specs
 
 AI:  Syncing add-dark-mode delta specs...
 
@@ -488,7 +488,7 @@ AI:  Syncing add-dark-mode delta specs...
      Merging...
      ✓ openspec/specs/ui/spec.md updated
 
-     Change remains active. Run /opsx:archive when ready to complete.
+     Change remains active. Run /skill:openspec-archive-change when ready to complete.
 ```
 
 **When to use manually:**
@@ -508,13 +508,13 @@ AI:  Syncing add-dark-mode delta specs...
 
 ---
 
-### `/opsx:archive`
+### `/skill:openspec-archive-change`
 
 Archive a completed change. Finalizes the change and moves it to the archive folder.
 
 **Syntax:**
 ```
-/opsx:archive [change-name]
+/skill:openspec-archive-change [change-name]
 ```
 
 **Arguments:**
@@ -531,7 +531,7 @@ Archive a completed change. Finalizes the change and moves it to the archive fol
 
 **Example:**
 ```text
-You: /opsx:archive
+You: /skill:openspec-archive-change
 
 AI:  Archiving add-dark-mode...
 
@@ -556,17 +556,17 @@ AI:  ✓ Synced specs to openspec/specs/ui/spec.md
 - Archive won't block on incomplete tasks, but will warn
 - Delta specs can be synced during archive or beforehand
 - Archived changes are preserved for history
-- Use `/opsx:verify` first to catch issues
+- Use `/skill:openspec-verify-change` first to catch issues
 
 ---
 
-### `/opsx:bulk-archive`
+### `/skill:openspec-bulk-archive-change`
 
 Archive multiple completed changes at once. Handles spec conflicts between changes.
 
 **Syntax:**
 ```
-/opsx:bulk-archive [change-names...]
+/skill:openspec-bulk-archive-change [change-names...]
 ```
 
 **Arguments:**
@@ -583,7 +583,7 @@ Archive multiple completed changes at once. Handles spec conflicts between chang
 
 **Example:**
 ```
-You: /opsx:bulk-archive
+You: /skill:openspec-bulk-archive-change
 
 AI:  Found 3 completed changes:
      - add-dark-mode (8/8 tasks complete)
@@ -616,13 +616,13 @@ AI:  ✓ Archived add-dark-mode
 
 ---
 
-### `/opsx:onboard`
+### `/skill:openspec-onboard`
 
 Guided onboarding through the complete OpenSpec workflow. An interactive tutorial using your actual codebase.
 
 **Syntax:**
 ```
-/opsx:onboard
+/skill:openspec-onboard
 ```
 
 **What it does:**
@@ -636,19 +636,19 @@ Guided onboarding through the complete OpenSpec workflow. An interactive tutoria
 **Phases:**
 1. Welcome and codebase analysis
 2. Finding an improvement opportunity
-3. Creating a change (`/opsx:new`)
+3. Creating a change (`/skill:openspec-new-change`)
 4. Writing the proposal
 5. Creating specs
 6. Writing the design
 7. Creating tasks
-8. Implementing tasks (`/opsx:apply`)
+8. Implementing tasks (`/skill:openspec-apply-change`)
 9. Verifying implementation
 10. Archiving the change
 11. Summary and next steps
 
 **Example:**
 ```
-You: /opsx:onboard
+You: /skill:openspec-onboard
 
 AI:  Welcome to OpenSpec!
 
@@ -678,35 +678,13 @@ AI:  Welcome to OpenSpec!
 
 ## Command Syntax by AI Tool
 
-Different AI tools use slightly different command syntax. Use the format that matches your tool:
+All 12 OpenSpec Skills are bundled with OMP and use native discovery, completion, on-demand `skill://<name>` reads, and path authorization in any directory. Project/user same-name overrides keep their existing precedence. No profile selection or duplicate Skill installation is needed. Skill discovery does not authorize project initialization.
 
-| Tool | How you type it |
-|------|-----------------|
-| Oh My Pi | `/openspec-propose` |
-
-This vendored copy configures Oh My Pi only; it reads the shared skills directly, so invoke workflows as `/openspec-<workflow>`. [How To Invoke](supported-tools.md#how-to-invoke) is authoritative.
-
----
+Use `/skill:<name>` in OMP chat; see [all Skill names](supported-tools.md#how-to-invoke).
 
 ## Legacy Commands
 
-These commands use the older "all-at-once" workflow. They still work but OPSX commands are recommended.
-
-| Command | What it does |
-|---------|--------------|
-| `/openspec:proposal` | Create all artifacts at once (proposal, specs, design, tasks) |
-| `/openspec:apply` | Implement the change |
-| `/openspec:archive` | Archive the change |
-
-**When to use legacy commands:**
-- Existing projects using the old workflow
-- Simple changes where you don't need incremental artifact creation
-- Preference for the all-or-nothing approach
-
-**Migrating to OPSX:**
-Legacy changes can be continued with OPSX commands. The artifact structure is compatible.
-
----
+Legacy file-based commands are not registered in OMP. Use the native Skills documented above. Initialization does not remove existing user or legacy files.
 
 ## Troubleshooting
 
@@ -715,8 +693,8 @@ Legacy changes can be continued with OPSX commands. The artifact structure is co
 The command couldn't identify which change to work on.
 
 **Solutions:**
-- Specify the change name explicitly: `/opsx:apply add-dark-mode`
-- Check that the change folder exists: `openspec list`
+- Specify the change name explicitly: `/skill:openspec-apply-change add-dark-mode`
+- Check that the change folder exists: `omp openspec list`
 - Verify you're in the right project directory
 
 ### "No artifacts ready"
@@ -724,7 +702,7 @@ The command couldn't identify which change to work on.
 All artifacts are either complete or blocked by missing dependencies.
 
 **Solutions:**
-- Run `openspec status --change <name>` to see what's blocking
+- Run `omp openspec status --change <name>` to see what's blocking
 - Check if required artifacts exist
 - Create missing dependency artifacts first
 
@@ -733,19 +711,13 @@ All artifacts are either complete or blocked by missing dependencies.
 The specified schema doesn't exist.
 
 **Solutions:**
-- List available schemas: `openspec schemas`
+- List available schemas: `omp openspec schemas`
 - Check spelling of schema name
-- Create the schema if it's custom: `openspec schema init <name>`
+- Create the schema if it's custom: `omp openspec schema init <name>`
 
 ### Commands not recognized
 
-The AI tool doesn't recognize OpenSpec commands.
-
-**Solutions:**
-- Ensure OpenSpec is initialized: `openspec init`
-- Regenerate skills: `openspec update`
-- Check that `.claude/skills/` directory exists (for Claude Code)
-- Restart your AI tool to pick up new skills
+Check OMP native Skill settings, bundled-resource availability, and same-name project/user overrides. Upgrade OMP if resources are absent or outdated; do not use initialization to regenerate Skill or command files. See [Troubleshooting](troubleshooting.md).
 
 ### Artifacts not generating properly
 
@@ -755,7 +727,7 @@ The AI creates incomplete or incorrect artifacts.
 - Add project context in `openspec/config.yaml`
 - Add per-artifact rules for specific guidance
 - Provide more detail in your change description
-- Use `/opsx:continue` instead of `/opsx:ff` for more control
+- Use `/skill:openspec-continue-change` instead of `/skill:openspec-ff-change` for more control
 
 ---
 

@@ -1351,6 +1351,10 @@ export class ToolExecutionComponent extends Container {
 		this.#previewReady?.resolve();
 	}
 
+	isExpanded(): boolean {
+		return this.#expanded;
+	}
+
 	setExpanded(expanded: boolean): void {
 		if (this.#expanded !== expanded) this.#blockVersion++;
 		this.#expanded = expanded;

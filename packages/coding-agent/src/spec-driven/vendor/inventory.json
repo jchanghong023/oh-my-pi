@@ -1,7 +1,7 @@
 {
   "openspec": {
     "version": "2.0.0",
-    "integrity": "git:ea635dd255f8686dcf48626bbcbe0e3fd59b6067"
+    "revision": "ea635dd255f8686dcf48626bbcbe0e3fd59b6067"
   },
   "superpowers": {
     "version": "7.0.1",

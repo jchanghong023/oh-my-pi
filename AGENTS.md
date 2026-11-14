@@ -348,6 +348,9 @@ Fork releases require explicit user authorization and use the manual CI workflow
 ## Fork Requirements and Additional Runbooks
 
 - [已批准需求](openspec/specs/)是 fork 的权威需求目录；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-product-scope/spec.md)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证门禁](openspec/specs/fork-verification-gates/spec.md)和[上游基线](openspec/specs/fork-upstream-baseline/spec.md)分别维护相关约束；适用的 fork 约束优先于上游通用约定。
+- OpenSpec 2.0 随 OMP 内置全部 12 项 Skill；任意目录原生发现／补全，使用 `/skill:<name>` 调用及 `skill://<name>` 按需读取，MUST 保留项目／用户同名覆盖机制及 Superpowers／JCH 原有规则。所有执行入口 MUST 使用 `omp openspec ...`，NEVER 要求独立安装 OpenSpec／Node。
+- `omp openspec init` MUST 只初始化项目目录与配置，默认 `spec-driven`；未初始化项目 MUST 先取得显式初始化授权。NEVER 安装、更新或清理用户 Skill、其他 Agent 配置或旧命令；资源仅随 OMP 升级。CLI `update` 与 `opsx` 文件命令已删除，`openspec-update-change` 是保留的变更材料 Skill。
+- 旧 `mini`／`omp-spec` 自定义 schema MUST 由用户显式迁移，NEVER 恢复包内别名或私有 bridge。缺少 `design.md`／`tasks.md` MUST 如实记录待完成，NEVER 仅改 schema 名称宣称完成；历史归档不批量改写。普通 OpenSpec 适配 NEVER 视为 AIReq 接入完成。
 - [个人命令](openspec/specs/personal-commands/spec.md)维护 fork 内置斜杠命令及其行为边界。
 - `/loopgoal` 复用 `/loop`，仅增加固定目标提示词包装及最终回复精确为 `无` 时停止；参数、上下文策略、首轮提交、调度与暂停恢复均沿用 Loop，不另设压缩阈值或准备流程，不接入 Goal 管理。提示词位于 `packages/coding-agent/src/prompts/loop-goal.md`，共享语义位于 `packages/coding-agent/src/modes/loop-goal.ts`，详见[个人命令](openspec/specs/personal-commands/spec.md)。
 - AIReq 最新规则已由用户确认并同步到 [需求提案](openspec/specs/aireq-requirement-intake/spec.md)、[工作台](openspec/specs/aireq-browser-workbench/spec.md)及[原生编排](openspec/specs/spec-driven-orchestration/spec.md)；完整说明见 [AIReq 流程](docs-zh-CN/spec-driven-orchestration.md)。同仓库单 IR、默认最多两个依赖就绪 SR 并行，首个 SR 启动冻结；SR 代码／测试／规格同 PR，IR 验收后最终修复／归档 PR，归档不再同步规格。旧计划冲突条款不再适用；本次仅文档更新，未改原型与代码，不代表实现完成。其他待定变更不因此获批。
@@ -389,3 +392,5 @@ This repository has a generated `openwiki/` knowledge base. Use it as optional c
 - 正式SR必须已有平台分配的非空开发分支，缺失属于异常，前端不得以分析分支、旧执行分支或猜测名称兜底。正式需求表格只提供固定112px复制入口；删除“名称列固定／隐藏列数”和前后列按钮整行，正文铺满剩余面板并保留12／16px左右间距。人工进度只允许99%且已合入时确认到100%，IR仍为SR平均；原型后端同样校验。
 
 - AIReq 技术方案、SR 依赖与工期预估均由方案 Agent 在对话中生成及更新，不提供生成／重新生成按钮；人只讨论补充、核对及逐文件确认。材料更新使旧确认失效，保留确认后建分支、推送、自动建 MR 的流程。本轮仅需求文档和原型，不实现真实模型／Git 接入，不运行测试。
+
+- 原生 TUI `/todoloop <Markdown 路径> [--check]` 支持首个 checkbox 前置标题层级推断及 Superpowers Step，采用组级编排和组内连续执行；实现位于 `packages/coding-agent/src/todoloop/`，命令入口位于 `packages/coding-agent/src/slash-commands/builtin-modes.ts`；唯一需求见 [TodoLoop](openspec/changes/add-todoloop-command/specs/personal-commands/spec.md)，使用说明见[内网快速指南](docs-zh-CN/quick-start-intranet.md)。

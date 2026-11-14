@@ -1043,11 +1043,11 @@ export async function schemaInitCommand(
           console.log(JSON.stringify({
             created: false,
             error: `Schema '${name}' already exists`,
-            suggestion: 'Use --force to overwrite or "openspec schema fork" to copy',
+            suggestion: 'Use --force to overwrite or "omp openspec schema fork" to copy',
           }, null, 2));
         } else {
           console.error(`Error: Schema '${name}' already exists at ${schemaDir}`);
-          console.error('Use --force to overwrite or "openspec schema fork" to copy');
+          console.error('Use --force to overwrite or "omp openspec schema fork" to copy');
         }
         process.exitCode = 1;
         return;
@@ -1369,7 +1369,7 @@ export async function schemaInitCommand(
       console.log(`\nNext steps:`);
       console.log(`  1. Edit ${schemaDir}/schema.yaml to customize artifacts`);
       console.log(`  2. Modify templates in the schema directory`);
-      console.log(`  3. Use with: openspec new --schema ${name}`);
+      console.log(`  3. Use with: omp openspec new --schema ${name}`);
     }
   } catch (error) {
     if (spinner) spinner.fail(`Creation failed`);

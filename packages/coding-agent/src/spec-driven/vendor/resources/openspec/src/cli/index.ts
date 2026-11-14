@@ -3,7 +3,6 @@ import { createRequire } from 'module';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, promises as fs } from 'fs';
-import { AI_TOOLS } from '../core/config.js';
 import type { ArchiveOptions } from '../core/archive.js';
 import { registerSpecCommand } from './commands/spec.js';
 import { registerConfigCommand } from './commands/config.js';
@@ -36,7 +35,7 @@ const STORE_OPTION_DESCRIPTION = COMMON_FLAGS.store.description;
 function hiddenStorePathOption(): Option {
   return new Option(
     '--store-path <path>',
-    'Not supported; register the path with "openspec store register <path>" and use --store <id>'
+    'Not supported; register the path with "omp openspec store register <path>" and use --store <id>'
   ).hideHelp();
 }
 
@@ -82,8 +81,8 @@ export function getCommandPath(command: Command): string {
 
   while (current) {
     const name = current.name();
-    // Skip the root 'openspec' command
-    if (name && name !== 'openspec') {
+    // Skip the root command when building telemetry paths.
+    if (name && current.parent) {
       names.unshift(name);
     }
     current = current.parent;
@@ -97,11 +96,11 @@ export function getCommandPath(command: Command): string {
  * first-run telemetry notice so stdout stays a single valid JSON document.
  *
  * `--json` reaches commands three ways, so a single parsed option is not enough:
- * - declared on the leaf (`openspec status --json`) → `opts().json`
- * - declared on a parent group and read via globals (`openspec workset --json list`)
+ * - declared on the leaf (`omp openspec status --json`) → `opts().json`
+ * - declared on a parent group and read via globals (`omp openspec workset --json list`)
  *   → `optsWithGlobals().json`
  * - a residual arg on a permissive group that never declares the option
- *   (`openspec store --json`, which detects it from `command.args`) → `args`
+ *   (`omp openspec store --json`, which detects it from `command.args`) → `args`
  *
  * Suppressing is always safe: the disclosure is only deferred to the next
  * non-JSON run, never lost, whereas printing it on a JSON run corrupts stdout.
@@ -115,7 +114,7 @@ export function isJsonRun(command: Command): boolean {
 
 /**
  * True for the commands that exist to serve shell completions: the user-facing
- * `openspec completion ...` group and the hidden `__complete` resolver that
+ * `omp openspec completion ...` group and the hidden `__complete` resolver that
  * generated completion scripts call on every Tab press. Tipping either about
  * completions is noise, and `__complete` would burn the one-shot tip invisibly.
  */
@@ -145,7 +144,7 @@ export function shouldDeferCompletionTip(command: Command, stderrIsTty: boolean)
 }
 
 program
-  .name('openspec')
+  .name('omp openspec')
   .description('AI-native system for spec-driven development')
   .version(version);
 
@@ -235,7 +234,7 @@ program.hook('postAction', async (_thisCommand, actionCommand) => {
   // clean). postAction, not preAction: the tip trails the command's own output
   // instead of pushing an error message or `init`'s setup summary down the
   // screen. Deferred — not consumed — whenever nobody would read it: JSON runs,
-  // `openspec completion ...`, and a stderr that is not a terminal (agents and
+  // `omp openspec completion ...`, and a stderr that is not a terminal (agents and
   // pipes would otherwise silently burn the user's one-shot tip).
   try {
     const { maybeShowCompletionTip } = await import('../core/completion-tip.js');
@@ -250,20 +249,11 @@ program.hook('postAction', async (_thisCommand, actionCommand) => {
   }
 });
 
-const availableToolIds = AI_TOOLS
-  .filter((tool) => tool.skillsDir)
-  .map((tool) => tool.value);
-const toolsOptionDescription = `Configure AI tools non-interactively. Use "all", "none", or a comma-separated list of: ${availableToolIds.join(', ')}`;
-
 program
   .command('init [path]')
   .description('Initialize OpenSpec in your project')
-  .option('--tools <tools>', toolsOptionDescription)
   .option('--language <language>', 'Write new OpenSpec artifacts in this language')
-  .option('--force', 'Auto-cleanup legacy files without prompting')
-  .option('--profile <profile>', 'Override global config profile (core or custom)')
-  .option('--no-animation', 'Show a static welcome screen instead of the animated one')
-  .action(async (targetPath = '.', options?: { tools?: string; language?: string; force?: boolean; profile?: string; animation?: boolean }) => {
+  .action(async (targetPath = '.', options?: { language?: string }) => {
     try {
       // Validate that the path is a valid directory
       const resolvedPath = path.resolve(targetPath);
@@ -286,11 +276,7 @@ program
 
       const { InitCommand } = await import('../core/init.js');
       const initCommand = new InitCommand({
-        tools: options?.tools,
         language: options?.language,
-        force: options?.force,
-        profile: options?.profile,
-        animation: options?.animation,
       });
       await initCommand.execute(targetPath);
     } catch (error) {
@@ -298,147 +284,6 @@ program
       process.exit(1);
     }
   });
-
-// Hidden alias: 'experimental' -> 'init' for backwards compatibility
-program
-  .command('experimental', { hidden: true })
-  .description('Alias for init (deprecated)')
-  .option('--tool <tool-id>', 'Target AI tool (maps to --tools)')
-  .option('--no-interactive', 'Disable interactive prompts')
-  .action(async (options?: { tool?: string; noInteractive?: boolean }) => {
-    try {
-      console.log('Note: "openspec experimental" is deprecated. Use "openspec init" instead.');
-      const { InitCommand } = await import('../core/init.js');
-      const initCommand = new InitCommand({
-        tools: options?.tool,
-        interactive: options?.noInteractive === true ? false : undefined,
-      });
-      await initCommand.execute('.');
-    } catch (error) {
-      await failWithError(error);
-      process.exit(1);
-    }
-  });
-
-program
-  .command('update [path]')
-  .description('Update OpenSpec instruction files')
-  .option('--force', 'Force update even when tools are up to date')
-  .option('--dry-run', 'Report what the update would change without writing anything')
-  .option('--json', 'With --dry-run, print the planned changes as JSON')
-  .action(
-    async (
-      targetPath = '.',
-      options?: { force?: boolean; dryRun?: boolean; json?: boolean }
-    ) => {
-    try {
-      if (options?.json && !options?.dryRun) {
-        console.error('--json is only available with --dry-run.');
-        process.exitCode = 1;
-        return;
-      }
-
-      // A dry run reports the plan and nothing else: no network check, no
-      // upgrade prompt, no output that would break --json.
-      if (options?.dryRun) {
-        const [{ UpdateCommand }, { formatUpdatePlan }] = await Promise.all([
-          import('../core/update.js'),
-          import('../core/update-plan.js'),
-        ]);
-        const plan = await new UpdateCommand({
-          force: options?.force,
-          dryRun: true,
-        }).plan(targetPath);
-        console.log(options?.json ? JSON.stringify(plan, null, 2) : formatUpdatePlan(plan));
-        return;
-      }
-
-      const [
-        {
-          getInstallDir,
-          isSourceCheckout,
-          getAvailableCliUpdate,
-          shouldOfferUpgrade,
-          displayCliUpdateNote,
-          offerCliUpgrade,
-          rerunUpdateWithUpgradedCli,
-          displayUpgradeCommand,
-        },
-        { isInteractive },
-        { UpdateCommand },
-      ] = await Promise.all([
-        import('../core/version-check.js'),
-        import('../utils/interactive.js'),
-        import('../core/update.js'),
-      ]);
-      const installDir = getInstallDir();
-      // Running from a clone: the version is whatever the branch says, so any
-      // upgrade advice would be noise. Decided before the request, so a
-      // contributor never waits on an answer that gets thrown away.
-      const latestVersion = isSourceCheckout(installDir) ? null : await getAvailableCliUpdate();
-      const announce = latestVersion !== null;
-      // Offer to upgrade first: this process generates files from its own
-      // templates, so upgrading afterwards would leave the old ones on disk.
-      // Both streams must be a terminal — with stdout redirected the question
-      // lands in the file and the user waits at a blank screen forever.
-      const canOffer =
-        announce &&
-        shouldOfferUpgrade({
-          installDir,
-          projectPath: targetPath,
-          interactive: isInteractive(),
-          stdoutIsTty: Boolean(process.stdout.isTTY),
-        });
-
-      let declined = false;
-      if (latestVersion && canOffer) {
-        displayCliUpdateNote(latestVersion, targetPath, { withCommand: false });
-        const outcome = await offerCliUpgrade(latestVersion);
-
-        // Set the code and return rather than process.exit: exiting here would
-        // skip commander's postAction hook, killing the telemetry flush
-        // mid-request.
-        if (outcome === 'cancelled') {
-          // Ctrl-C means stop the command, not fall through to more prompts.
-          process.exitCode = 130;
-          return;
-        }
-        if (outcome === 'upgraded') {
-          process.exitCode = await rerunUpdateWithUpgradedCli(targetPath, {
-            force: options?.force,
-          });
-          return;
-        }
-        // Declined, failed, or upgraded-but-unreachable: fall through to the
-        // update, then leave the command on screen underneath it.
-        declined = true;
-      }
-
-      const updateCommand = new UpdateCommand({ force: options?.force });
-      await updateCommand.execute(targetPath);
-
-      if (declined) {
-        // The headline was printed before the prompt; only the manual route is
-        // still owed, and it belongs where the user is looking now.
-        displayUpgradeCommand(targetPath);
-      } else if (latestVersion) {
-        displayCliUpdateNote(latestVersion, targetPath);
-      }
-    } catch (error) {
-      // The --json dry run follows the agent contract: exactly one JSON
-      // document on stdout, even on failure.
-      // failWithError sets the exit code. Returning instead of process.exit()
-      // lets piped stdout drain - an exit can cut the JSON document short where
-      // pipes are asynchronous (macOS, Windows) - and keeps commander's
-      // postAction telemetry flush, as the upgrade paths above already do.
-      await failWithError(error, {
-        enabled: options?.dryRun && options?.json,
-        payload: { changes: [], notes: [], failures: [] },
-        fallbackCode: 'update_error',
-      });
-    }
-    }
-  );
 
 program
   .command('list')
@@ -523,7 +368,7 @@ const changeCmd = program
 
 // Deprecation notice for noun-based commands
 changeCmd.hook('preAction', () => {
-  console.error('Warning: The "openspec change ..." commands are deprecated. Prefer verb-first commands (e.g., "openspec list", "openspec validate --changes").');
+  console.error('Warning: The "omp openspec change ..." commands are deprecated. Prefer verb-first commands (e.g., "omp openspec list", "omp openspec validate --changes").');
 });
 
 changeCmd
@@ -547,12 +392,12 @@ changeCmd
 
 changeCmd
   .command('list')
-  .description('List all active changes (DEPRECATED: use "openspec list" instead)')
+  .description('List all active changes (DEPRECATED: use "omp openspec list" instead)')
   .option('--json', 'Output as JSON')
   .option('--long', 'Show id and title with counts')
   .action(async (options?: { json?: boolean; long?: boolean }) => {
     try {
-      console.error('Warning: "openspec change list" is deprecated. Use "openspec list".');
+      console.error('Warning: "omp openspec change list" is deprecated. Use "omp openspec list".');
       const { ChangeCommand } = await import('../commands/change.js');
       const changeCommand = new ChangeCommand();
       await changeCommand.list(options);

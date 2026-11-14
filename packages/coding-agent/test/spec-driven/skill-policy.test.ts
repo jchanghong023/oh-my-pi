@@ -74,11 +74,18 @@ async function fixture(): Promise<Skill> {
 describe("pinned skill discovery and access", () => {
 	it("catalogs Superpowers without exposing them to ordinary model discovery", async () => {
 		const ordinaryNames = [
+			"openspec-apply-change",
 			"openspec-archive-change",
+			"openspec-bulk-archive-change",
+			"openspec-continue-change",
 			"openspec-explore",
+			"openspec-ff-change",
+			"openspec-new-change",
+			"openspec-onboard",
 			"openspec-propose",
 			"openspec-sync-specs",
 			"openspec-update-change",
+			"openspec-verify-change",
 		];
 		const isHidden = (skill: CapabilitySkill) =>
 			skill.frontmatter?.hide === true || skill.frontmatter?.disableModelInvocation === true;
@@ -94,13 +101,7 @@ describe("pinned skill discovery and access", () => {
 			cwd,
 			providers: [SPEC_DRIVEN_SKILL_PROVIDER],
 		});
-		expect(commands.all.map(command => command.name).sort()).toEqual([
-			"opsx-archive",
-			"opsx-explore",
-			"opsx-propose",
-			"opsx-sync",
-			"opsx-update",
-		]);
+		expect(commands.all).toEqual([]);
 		expect(
 			discovered.all
 				.filter(skill => skill._source.pluginName === "superpowers")
@@ -113,9 +114,7 @@ describe("pinned skill discovery and access", () => {
 				.sort(),
 		);
 		for (const entry of resources.manifest.skills.filter(entry => entry.source !== "superpowers")) {
-			expect(discovered.all.some(skill => skill.name === entry.name)).toBe(
-				entry.source !== "openspec" || ordinaryNames.includes(entry.name),
-			);
+			expect(discovered.all.some(skill => skill.name === entry.name)).toBe(true);
 		}
 		expect(
 			discovered.all
@@ -414,44 +413,68 @@ describe("pinned skill discovery and access", () => {
 		expect(() => checkSkillReadAccess(exposed, { scope })).toThrow(SkillAccessDeniedError);
 	});
 
-	it("keeps personal collision precedence while retaining direct bundled resource loading", async () => {
-		const original = await loadSpecDrivenSkill("superpowers", "writing-plans");
-		const override = await fixture();
-		const overridePath = path.join(override.baseDir, "writing-plans", "SKILL.md");
-		await fs.mkdir(path.dirname(overridePath));
-		await fs.writeFile(
+	it.each(["superpowers", "openspec"] as const)(
+		"keeps %s personal collision precedence and direct bundled loading",
+		async source => {
+			const name = source === "superpowers" ? "writing-plans" : "openspec-propose";
+			const original = await loadSpecDrivenSkill(source, name);
+			const override = await fixture();
+			const overridePath = path.join(override.baseDir, name, "SKILL.md");
+			await fs.mkdir(path.dirname(overridePath));
+			await fs.writeFile(
+				overridePath,
+				`---\nname: ${name}\ndescription: local override\n---\nLocal authored instructions\n`,
+			);
+			const { skills } = await loadSkills({
+				cwd: override.baseDir,
+				customDirectories: [override.baseDir],
+				enablePiUser: false,
+				enablePiProject: false,
+			});
+			expect(skills.find(skill => skill.name === name)?.filePath).toBe(overridePath);
+			const selected = skills.find(skill => skill.name === name)!;
+			expect((await buildSkillPromptMessage(selected, { args: "" }, "user")).details.path).toBe(overridePath);
+			const url = parseInternalUrl(`skill://${name}`);
+			expect((await handler.resolve(url, { skills })).sourcePath).toBe(overridePath);
+			expect(await handler.locate(url, { skills })).toBe(overridePath);
+			const session: ToolSession = {
+				cwd: override.baseDir,
+				hasUI: false,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				settings: Settings.isolated(),
+			};
+			const revoke = grantSpecExecutionSkills(session, [original]);
+			try {
+				expect(
+					(await handler.resolve(url, { session, skills: [selected, exposeSpecExecutionSkill(original)] }))
+						.sourcePath,
+				).toBe(overridePath);
+			} finally {
+				revoke();
+			}
+			expect((await loadSpecDrivenSkill(source, name)).filePath).toBe(original.filePath);
+		},
+	);
+
+	it("selects project OpenSpec skills before builtins without initializing the project", async () => {
+		const project = await fixture();
+		const name = "openspec-propose";
+		const overridePath = path.join(project.baseDir, ".omp", "skills", name, "SKILL.md");
+		await Bun.write(
 			overridePath,
-			"---\nname: writing-plans\ndescription: local override\n---\nLocal authored instructions\n",
+			`---\nname: ${name}\ndescription: project authored workflow\n---\nProject instructions\n`,
 		);
 		const { skills } = await loadSkills({
-			cwd: override.baseDir,
-			customDirectories: [override.baseDir],
+			cwd: project.baseDir,
 			enablePiUser: false,
-			enablePiProject: false,
+			enablePiProject: true,
 		});
-		expect(skills.find(skill => skill.name === "writing-plans")?.filePath).toBe(overridePath);
-		const selected = skills.find(skill => skill.name === "writing-plans")!;
-		expect((await buildSkillPromptMessage(selected, { args: "" }, "user")).details.path).toBe(overridePath);
-		const url = parseInternalUrl("skill://writing-plans");
+		const selected = skills.find(skill => skill.name === name)!;
+		expect(selected.filePath).toBe(overridePath);
+		const url = parseInternalUrl(`skill://${name}`);
 		expect((await handler.resolve(url, { skills })).sourcePath).toBe(overridePath);
-		expect(await handler.locate(url, { skills })).toBe(overridePath);
-		const session: ToolSession = {
-			cwd: override.baseDir,
-			hasUI: false,
-			getSessionFile: () => null,
-			getSessionSpawns: () => "*",
-			settings: Settings.isolated(),
-		};
-		const revoke = grantSpecExecutionSkills(session, [original]);
-		try {
-			expect(
-				(await handler.resolve(url, { session, skills: [selected, exposeSpecExecutionSkill(original)] }))
-					.sourcePath,
-			).toBe(overridePath);
-		} finally {
-			revoke();
-		}
-		expect((await loadSpecDrivenSkill("superpowers", "writing-plans")).filePath).toBe(original.filePath);
+		expect(await Bun.file(path.join(project.baseDir, "openspec", "config.yaml")).exists()).toBe(false);
 	});
 
 	it("denies known resources in resolve and locate before filesystem or MCP side effects", async () => {

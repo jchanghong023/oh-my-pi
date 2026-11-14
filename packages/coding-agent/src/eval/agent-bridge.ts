@@ -56,6 +56,8 @@ export interface EvalAgentBridgeOptions {
 	session: ToolSession;
 	signal?: AbortSignal;
 	emitStatus?: (event: JsStatusEvent) => void;
+	/** Keep program-owned executions out of the owner's model delivery queue. */
+	suppressDelivery?: boolean;
 }
 
 /** Handle returned immediately after an eval subagent job is registered. */
@@ -253,7 +255,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 					throw error;
 				}
 			},
-			{ id, agentId: id, ownerId },
+			{ id, agentId: id, ownerId, suppressDelivery: options.suppressDelivery },
 		);
 		return { id, agent: policy.agentName };
 	} catch (error) {

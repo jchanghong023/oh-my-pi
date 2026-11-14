@@ -308,9 +308,9 @@ function rerunCommand(
   // goes last, behind the `--` that ends option parsing. The store flag has
   // to stay in front of that `--` to still be read as an option.
   if (changeName.startsWith('-')) {
-    return `${withStoreFlag(root, `openspec archive ${flags}`)} -- ${quoteChangeName(changeName)}`;
+    return `${withStoreFlag(root, `omp openspec archive ${flags}`)} -- ${quoteChangeName(changeName)}`;
   }
-  return withStoreFlag(root, `openspec archive ${quoteChangeName(changeName)} ${flags}`);
+  return withStoreFlag(root, `omp openspec archive ${quoteChangeName(changeName)} ${flags}`);
 }
 
 /**
@@ -1388,7 +1388,7 @@ export class ArchiveCommand {
         throw new ArchiveBlockedError(
           'archive_change_name_required',
           'A change name is required: archive --json is non-interactive.',
-          withStoreFlag(root, 'openspec archive <change-name> --json')
+          withStoreFlag(root, 'omp openspec archive <change-name> --json')
         );
       }
       const selectedChange = await this.selectChange(changesDir, root, options);
@@ -1567,7 +1567,7 @@ export class ArchiveCommand {
           throw new ArchiveBlockedError(
             'archive_validation_failed',
             `Validation failed for change '${changeName}'.`,
-            `Run ${withStoreFlag(root, `openspec validate ${changeName}`)} for details, fix the errors, or rerun with --no-validate.`
+            `Run ${withStoreFlag(root, `omp openspec validate ${changeName}`)} for details, fix the errors, or rerun with --no-validate.`
           );
         }
         console.log(chalk.red('\nValidation failed. Please fix the errors before archiving.'));
@@ -1580,7 +1580,7 @@ export class ArchiveCommand {
         throw new ArchiveBlockedError(
           'archive_confirmation_required',
           'Skipping validation requires confirmation: rerun with --yes.',
-          withStoreFlag(root, 'openspec archive <change-name> --json --no-validate --yes')
+          withStoreFlag(root, 'omp openspec archive <change-name> --json --no-validate --yes')
         );
       }
     } else {
@@ -1770,7 +1770,7 @@ export class ArchiveCommand {
             throw new ArchiveBlockedError(
               'archive_confirmation_required',
               `Updating ${specUpdates.length} spec(s) requires confirmation: rerun with --yes.`,
-              withStoreFlag(root, 'openspec archive <change-name> --json --yes')
+              withStoreFlag(root, 'omp openspec archive <change-name> --json --yes')
             );
           }
           shouldUpdateSpecs = await confirmOrBlock(
@@ -1950,7 +1950,7 @@ export class ArchiveCommand {
                     refusalReason ??
                       retirementHint ??
                       blockedRetirementHint ??
-                      `Run ${withStoreFlag(root, `openspec validate ${specName}`)} after fixing the change deltas.`
+                      `Run ${withStoreFlag(root, `omp openspec validate ${specName}`)} after fixing the change deltas.`
                   );
                 }
                 console.log(chalk.red(`\nValidation errors in rebuilt spec for ${specName} (will not write changes):`));
@@ -2370,7 +2370,7 @@ export class ArchiveCommand {
       throw new ArchiveBlockedError(
         'archive_change_name_required',
         'A change name is required: no terminal is available to choose one from a list.',
-        withStoreFlag(root, `openspec archive <change-name> ${rerunFlags(options).join(' ')}`)
+        withStoreFlag(root, `omp openspec archive <change-name> ${rerunFlags(options).join(' ')}`)
       );
     }
 
@@ -2410,7 +2410,7 @@ export class ArchiveCommand {
         throw new ArchiveBlockedError(
           'archive_change_name_required',
           'A change name is required: no answer could be read from stdin.',
-          withStoreFlag(root, `openspec archive <change-name> ${rerunFlags(options).join(' ')}`)
+          withStoreFlag(root, `omp openspec archive <change-name> ${rerunFlags(options).join(' ')}`)
         );
       }
       // User cancelled (Ctrl+C)

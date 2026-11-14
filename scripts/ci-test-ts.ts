@@ -292,7 +292,13 @@ const nativeAndIntegrationPackages = [
 
 // Discover coding-agent tests at file granularity before chunking. Full mode
 // uses Bun's test filename conventions.
-const forkCodingAgentDirectories = ["test/spec-driven/", "test/aireq-workbench/", "test/team/", "test/goals/"];
+const forkCodingAgentDirectories = [
+	"test/spec-driven/",
+	"test/aireq-workbench/",
+	"test/team/",
+	"test/goals/",
+	"test/todoloop/",
+];
 const forkCodingAgentFiles = new Set([
 	"test/acp-builtins.test.ts", // /wt consumer
 	"test/cli/collab-serve.test.ts",
@@ -483,6 +489,7 @@ const forkCodingAgentFiles = new Set([
 	"test/webgui/native-browser-release.test.ts",
 	"test/webgui/project-ownership.test.ts",
 	"test/registry/agent-lifecycle.test.ts",
+	"test/agent-hub-activate.test.ts",
 	"test/agent-session-dispose-releases-memory.test.ts",
 	"test/sharpshooter-extract.test.ts",
 	"test/webgui/native-subagents.test.ts",

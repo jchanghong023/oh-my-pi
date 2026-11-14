@@ -54,6 +54,8 @@ export interface AgentHistorySummary {
 	/** Cumulative own-session assistant and model_usage cost, excluding nested task results. */
 	directCost?: number;
 	readOnly?: boolean;
+	/** Retained execution transcript only: never attach or resume this generation. */
+	executionEnded?: boolean;
 	/** Durable task output artifact, when the executor wrote one. */
 	outputPath?: string;
 	/** Captured isolated-worktree patch, when patch capture succeeded. */
@@ -100,6 +102,7 @@ export function isMintedAgentRef(value: unknown): value is AgentRef {
  * parent to resume a stopped agent instead of redoing its work.
  */
 export function isResumable(ref: AgentRef | undefined): boolean {
+	if (ref?.history?.executionEnded) return false;
 	if (ref?.status === "idle") return true;
 	return (ref?.status === "parked" || ref?.status === "aborted") && ref.sessionFile !== null;
 }
@@ -264,7 +267,9 @@ export class AgentRegistry implements AgentRegistryApi {
 	registerIfAvailable(input: RegisterInput, expected: AgentRef | null): AgentRef | undefined {
 		const current = this.#refs.get(input.id);
 		if (expected === null) return current ? undefined : this.register(input);
-		return current === expected && current.status === "parked" && !current.session ? current : undefined;
+		return current === expected && !current.history?.executionEnded && current.status === "parked" && !current.session
+			? current
+			: undefined;
 	}
 
 	/**
@@ -276,7 +281,8 @@ export class AgentRegistry implements AgentRegistryApi {
 	 */
 	reopen(id: string, expected: AgentRef): AgentRef | undefined {
 		const current = this.#refs.get(id);
-		if (current !== expected || current.status !== "aborted" || current.session) return undefined;
+		if (current !== expected || current.history?.executionEnded || current.status !== "aborted" || current.session)
+			return undefined;
 		return this.register({
 			id,
 			displayName: current.displayName,
@@ -323,6 +329,9 @@ export class AgentRegistry implements AgentRegistryApi {
 		if (!ref) return this.#rejectStatusUpdate(id, status, "missing-ref");
 		if (!this.#matchesExpected(ref, expected)) {
 			return this.#rejectStatusUpdate(id, status, "session-ownership-changed");
+		}
+		if (ref.history?.executionEnded && status !== "parked" && status !== "aborted") {
+			return this.#rejectStatusUpdate(id, status, "execution-ended");
 		}
 		// `aborted` is terminal for its generation: delayed progress/revival work
 		// from the killed ref must never transition it back to a live status. A
@@ -428,7 +437,8 @@ export class AgentRegistry implements AgentRegistryApi {
 		// Never attach a late-created session to a hard-killed tombstone. This
 		// closes the race between a parked reviver claiming the ref and finishing
 		// createAgentSession after an explicit kill.
-		if (!ref || ref.status === "aborted" || !this.#matchesExpected(ref, expected)) return false;
+		if (!ref || ref.history?.executionEnded || ref.status === "aborted" || !this.#matchesExpected(ref, expected))
+			return false;
 		ref.session = session;
 		if (sessionFile !== undefined) {
 			// A replacement transcript starts a new cumulative-cost identity.

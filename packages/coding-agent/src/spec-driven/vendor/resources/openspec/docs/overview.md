@@ -49,16 +49,16 @@ Two folders. `specs/` is what's true. `changes/` is what you're proposing. Archi
 In the default setup, your day looks like this. Optionally think it through first; then one command drafts the plan, you read it, the next builds it, and the last files it away.
 
 ```text
-/opsx:explore                   →  (optional) think it through with the AI first
-/opsx:propose add-dark-mode     →  AI drafts proposal, specs, design, tasks
+/skill:openspec-explore                   →  (optional) think it through with the AI first
+/skill:openspec-propose add-dark-mode     →  AI drafts proposal, specs, design, tasks
         (you read and adjust the plan)
-/opsx:apply                     →  AI builds it, checking off tasks
-/opsx:archive                   →  specs updated, change archived
+/skill:openspec-apply-change                     →  AI builds it, checking off tasks
+/skill:openspec-archive-change                   →  specs updated, change archived
 ```
 
-**When in doubt, start by exploring.** `/opsx:explore` is a no-stakes thinking partner: it reads your code, lays out options, and turns a fuzzy idea into a concrete plan before any code gets written. It's the best antidote to an AI that will otherwise build *something* from a vague prompt. Already know exactly what you want? Skip straight to `/opsx:propose`. Either way, explore ships in the default profile, so it's always there. See the [Explore guide](explore.md).
+**When in doubt, start by exploring.** `/skill:openspec-explore` is a no-stakes thinking partner: it reads your code, lays out options, and turns a fuzzy idea into a concrete plan before any code gets written. It's the best antidote to an AI that will otherwise build *something* from a vague prompt. Already know exactly what you want? Skip straight to `/skill:openspec-propose`. Either way, explore ships among the bundled Skills, so it's always there. See the [Explore guide](explore.md).
 
-Those are slash commands, typed in your AI assistant's chat. Setup (`openspec init`) happens in your terminal. If that split is new to you, read [How Commands Work](how-commands-work.md) first; it's the most common point of confusion.
+Those are slash commands, typed in your AI assistant's chat. Setup (`omp openspec init`) happens in your terminal. If that split is new to you, read [How Commands Work](how-commands-work.md) first; it's the most common point of confusion.
 
 ## "Enablers, not gates"
 

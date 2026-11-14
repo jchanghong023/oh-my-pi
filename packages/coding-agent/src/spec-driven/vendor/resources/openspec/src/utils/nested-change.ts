@@ -13,7 +13,7 @@ import { hasAnyFileUnder } from './spec-discovery.js';
  * directory directly under `changes/` and nothing else (#1846).
  *
  * The list is deliberately short. Every entry is written by OpenSpec itself for
- * the default schema - `.openspec.yaml` by `openspec new change` for *every*
+ * the default schema - `.openspec.yaml` by `omp openspec new change` for *every*
  * schema. A custom schema whose root artifacts are named differently can still
  * be missed when the directory was created by hand rather than by the CLI; that
  * misses the diagnostic and behaves exactly as it did before, which is the safe
@@ -64,7 +64,7 @@ async function hasChangeRootMarker(dir: string): Promise<boolean> {
  * covers the CLI-created change and the hand-made one that starts from a
  * proposal. A populated `specs/` covers the change that starts from its delta
  * specs - the case that arrives here most often, since a nested change is
- * always hand-made (`openspec new change` rejects a name with a separator) and
+ * always hand-made (`omp openspec new change` rejects a name with a separator) and
  * "mkdir the tree, write the deltas" is how someone gets there.
  *
  * The `specs/` signal is what keeps a custom schema safe. A schema may generate
@@ -82,7 +82,7 @@ async function looksLikeChange(dir: string, projectRoot: string): Promise<boolea
 
 /**
  * Whether `dir` already holds a file exactly where the schema it resolves to
- * would generate one - the signal `openspec status` itself uses to call an
+ * would generate one - the signal `omp openspec status` itself uses to call an
  * artifact done. It covers the subdirectory-rooted custom schema before any
  * delta spec exists, when neither other signal can. A schema that cannot be
  * resolved gives no signal, which leaves the other two in charge.

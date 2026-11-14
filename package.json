@@ -177,6 +177,7 @@
 		"gen:aireq-workbench": "bun packages/coding-agent/scripts/aireq-workbench-resources.ts --write",
 		"gen:aireq": "bun run gen:aireq-workbench",
 		"gen:openwiki-resources": "bun packages/coding-agent/scripts/openwiki-resources.ts",
+		"gen:spec-driven-resources": "bun packages/coding-agent/scripts/spec-driven-resources.ts",
 		"postinstall": "bun packages/coding-agent/scripts/openwiki-resources.ts --if-present && bun packages/coding-agent/scripts/aireq-workbench-resources.ts --write",
 		"gen:bundle": "bun --cwd=packages/coding-agent run gen:bundle",
 		"gen:rpc": "bun --cwd=packages/coding-agent run gen:rpc",

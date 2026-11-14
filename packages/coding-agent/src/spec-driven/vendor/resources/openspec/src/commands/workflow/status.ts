@@ -90,7 +90,7 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
     const planningHome = toPlanningHome(root);
     const projectRoot = root.path;
     const rootOutput = toRootOutput(root);
-    const newChangeHint = withStoreFlag(root, 'openspec new change <name>');
+    const newChangeHint = withStoreFlag(root, 'omp openspec new change <name>');
 
     // One store-flag decision serves the JSON `nextSteps` sentence and the text
     // `Next:` line, so a store-selected root can never carry `--store` in one

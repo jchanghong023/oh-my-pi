@@ -171,7 +171,7 @@ export class ShowCommand {
       if (isStoreSelectedRoot(root)) {
         console.error('Pass --type change|spec.');
       } else {
-        console.error('Pass --type change|spec, or use: openspec change show / openspec spec show');
+        console.error('Pass --type change|spec, or use: omp openspec change show / openspec spec show');
       }
       process.exitCode = 1;
       return;
@@ -189,13 +189,13 @@ export class ShowCommand {
 
   private printNonInteractiveHint(root: ResolvedOpenSpecRoot): void {
     console.error('Nothing to show. Try one of:');
-    console.error(`  ${withStoreFlag(root, 'openspec show <item>')}`);
+    console.error(`  ${withStoreFlag(root, 'omp openspec show <item>')}`);
     if (isStoreSelectedRoot(root)) {
       // The noun-form commands are cwd-based and cannot reach a selected store.
-      console.error(`  ${withStoreFlag(root, 'openspec show <item> --type change')}`);
-      console.error(`  ${withStoreFlag(root, 'openspec show <item> --type spec')}`);
+      console.error(`  ${withStoreFlag(root, 'omp openspec show <item> --type change')}`);
+      console.error(`  ${withStoreFlag(root, 'omp openspec show <item> --type spec')}`);
     } else {
-      console.error('  openspec change show');
+      console.error('  omp openspec change show');
       console.error('  openspec spec show');
     }
     console.error('Or run in an interactive terminal.');

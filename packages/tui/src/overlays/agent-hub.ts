@@ -940,7 +940,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 	#agentPickerProps(): PickerBody {
 		const selected = this.#rows[this.#selectedRow];
-		const readOnly = selected?.kind === "advisor" ? "Read-only advisor transcript" : undefined;
+		const readOnly = selected?.history?.executionEnded
+			? "Read-only execution record"
+			: selected?.kind === "advisor"
+				? "Read-only advisor transcript"
+				: undefined;
 		const actions: TspPickerAction[] = [
 			{
 				id: "open",
@@ -1027,7 +1031,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			const info = this.#getRoleInfo(modelRole);
 			badges.push({ text: sanitizeDisplaySingleLine(info.tag ?? info.name ?? modelRole), title: "Model role" });
 		}
-		if (ref.kind === "advisor") badges.push({ text: "read-only", tone: "warning" });
+		if (ref.kind === "advisor" || ref.history?.executionEnded) badges.push({ text: "read-only", tone: "warning" });
 		const unread = this.#irc.unreadCount(ref.id);
 		if (unread > 0) badges.push({ text: `${unread} unread`, tone: "warning" });
 		if (this.#viewMode === "roster" && ref.parentId && ref.parentId !== MAIN_AGENT_ID) {
@@ -1345,7 +1349,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		if (showParent && ref.parentId && ref.parentId !== MAIN_AGENT_ID) {
 			label.push(span(`  ↳ ${sanitizeDisplaySingleLine(ref.parentId)}`, "dim"));
 		}
-		if (ref.kind === "advisor") label.push(span("  read-only", "warning"));
+		if (ref.kind === "advisor" || ref.history?.executionEnded) label.push(span("  read-only", "warning"));
 		const unread = this.#irc.unreadCount(ref.id);
 		if (unread > 0) label.push(span(`  ⧉ ${unread}`, "warning"));
 		return label;
@@ -2279,7 +2283,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		if (this.#viewMode === "roster" && ref.parentId && ref.parentId !== MAIN_AGENT_ID) {
 			fields.push(theme.fg("dim", `↳ ${sanitizeDisplaySingleLine(ref.parentId)}`));
 		}
-		if (ref.kind === "advisor") {
+		if (ref.kind === "advisor" || ref.history?.executionEnded) {
 			fields.push(theme.fg("warning", "read-only"));
 		}
 		const unread = this.#irc.unreadCount(ref.id);
@@ -2615,9 +2619,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#activateAgent(ref: TRecord): void {
 		this.#notice = undefined;
 		const focusAgent = this.#focusAgent;
-		// Advisor refs are read-only transcripts with no revivable session; open
-		// the in-hub viewer instead of failing ensureLive.
-		if (ref.kind === "advisor" || this.#remote || !focusAgent) {
+		// Advisor and ended-execution refs are read-only transcripts, not sessions
+		// to revive or focus. Keep their inspection inside the native hub viewer.
+		if (ref.kind === "advisor" || ref.history?.executionEnded || this.#remote || !focusAgent) {
 			this.openChat(ref.id);
 			return;
 		}
@@ -2635,6 +2639,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#reviveSelected(): void {
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
+		if (ref.history?.executionEnded) {
+			this.#notice = `"${ref.id}" is a read-only execution record — nothing to revive.`;
+			this.#requestRender();
+			return;
+		}
 		if (ref.kind === "advisor") {
 			this.#notice = `"${ref.id}" is a read-only advisor transcript — nothing to revive.`;
 			this.#requestRender();
@@ -2664,6 +2673,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#killSelected(): void {
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
+		if (ref.history?.executionEnded) {
+			this.#notice = `"${ref.id}" is a read-only execution record — cannot be killed.`;
+			this.#requestRender();
+			return;
+		}
 		if (ref.kind === "advisor") {
 			this.#notice = `"${ref.id}" is a read-only advisor transcript — cannot be killed.`;
 			this.#requestRender();

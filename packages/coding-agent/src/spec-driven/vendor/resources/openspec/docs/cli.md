@@ -1,12 +1,12 @@
 # CLI Reference
 
-The OpenSpec CLI (`openspec`) provides terminal commands for project setup, validation, status inspection, and management. These commands complement the AI slash commands (like `/opsx:propose`) documented in [Commands](commands.md).
+The OpenSpec CLI (`openspec`) provides terminal commands for project setup, validation, status inspection, and management. These commands complement the native OMP Skills (like `/skill:openspec-propose`) documented in [Commands](commands.md).
 
 ## Summary
 
 | Category | Commands | Purpose |
 |----------|----------|---------|
-| **Setup** | `init`, `update` | Initialize and update OpenSpec in your project |
+| **Setup** | `init` | Initialize project structure and configuration |
 | **Stores (standalone OpenSpec repos)** | `store setup`, `store register`, `store unregister`, `store remove`, `store list`, `store doctor` | Manage stores — standalone OpenSpec repos you've registered |
 | **Health** | `doctor` | Report relationship health for the resolved root |
 | **Working context** | `context` | Assemble the working set (root + referenced stores) |
@@ -17,7 +17,7 @@ The OpenSpec CLI (`openspec`) provides terminal commands for project setup, vali
 | **Workflow** | `new change`, `status`, `instructions`, `templates`, `schemas` | Artifact-driven workflow support |
 | **Schemas** | `schema init`, `schema fork`, `schema validate`, `schema which` | Create and manage custom workflows |
 | **Config** | `config` | View and modify settings |
-| **Utility** | `feedback`, `completion` | Feedback and shell integration |
+| **Utility** | `feedback` | Feedback |
 
 ---
 
@@ -31,12 +31,11 @@ These commands are interactive and designed for terminal use:
 
 | Command | Purpose |
 |---------|---------|
-| `openspec init` | Initialize project (interactive prompts) |
-| `openspec view` | Interactive dashboard |
-| `openspec workset open <name>` | Open a saved workset (editor window or terminal agent session) |
-| `openspec config edit` | Open config in editor |
-| `openspec feedback` | Submit feedback via GitHub |
-| `openspec completion install` | Install shell completions |
+| `omp openspec init` | Initialize project (interactive prompts) |
+| `omp openspec view` | Interactive dashboard |
+| `omp openspec workset open <name>` | Open a saved workset (editor window or terminal agent session) |
+| `omp openspec config edit` | Open config in editor |
+| `omp openspec feedback` | Submit feedback via GitHub |
 
 ### Agent-Compatible Commands
 
@@ -44,23 +43,23 @@ These commands support `--json` output for programmatic use by AI agents and scr
 
 | Command | Human Use | Agent Use |
 |---------|-----------|-----------|
-| `openspec list` | Browse changes/specs | `--json` for structured data |
-| `openspec show <item>` | Read content | `--json` for parsing |
-| `openspec validate` | Check for issues | `--all --json` for bulk validation |
-| `openspec status` | See artifact progress | `--json` for structured status |
-| `openspec instructions` | Get next steps | `--json` for agent instructions |
-| `openspec templates` | Find template paths | `--json` for path resolution |
-| `openspec schemas` | List available schemas | `--json` for schema discovery; `--store <id>` to select a registered root |
-| `openspec store setup <id>` | Create and register a local store | `--json` with explicit inputs for structured setup output |
-| `openspec store register <path>` | Register an existing store | `--json` for structured registration output |
-| `openspec store unregister <id>` | Forget a local store registration | `--json` for structured cleanup output |
-| `openspec store remove <id>` | Delete a registered local store folder | `--yes --json` for non-interactive deletion |
-| `openspec store list` | Browse registered stores | `--json` for structured registrations |
-| `openspec store doctor` | Check local store setup | `--json` for structured diagnostics |
-| `openspec new change <id>` | Create repo-local change scaffolding | `--json`, plus `--store <id>` to use a registered store as the OpenSpec root |
-| `openspec workset create [name]` | Compose a personal working view | `--member <path> --json` for non-interactive composition |
-| `openspec workset list` | Browse saved worksets | `--json` for structured views |
-| `openspec workset remove <name>` | Delete a saved view | `--yes --json` for non-interactive removal |
+| `omp openspec list` | Browse changes/specs | `--json` for structured data |
+| `omp openspec show <item>` | Read content | `--json` for parsing |
+| `omp openspec validate` | Check for issues | `--all --json` for bulk validation |
+| `omp openspec status` | See artifact progress | `--json` for structured status |
+| `omp openspec instructions` | Get next steps | `--json` for agent instructions |
+| `omp openspec templates` | Find template paths | `--json` for path resolution |
+| `omp openspec schemas` | List available schemas | `--json` for schema discovery; `--store <id>` to select a registered root |
+| `omp openspec store setup <id>` | Create and register a local store | `--json` with explicit inputs for structured setup output |
+| `omp openspec store register <path>` | Register an existing store | `--json` for structured registration output |
+| `omp openspec store unregister <id>` | Forget a local store registration | `--json` for structured cleanup output |
+| `omp openspec store remove <id>` | Delete a registered local store folder | `--yes --json` for non-interactive deletion |
+| `omp openspec store list` | Browse registered stores | `--json` for structured registrations |
+| `omp openspec store doctor` | Check local store setup | `--json` for structured diagnostics |
+| `omp openspec new change <id>` | Create repo-local change scaffolding | `--json`, plus `--store <id>` to use a registered store as the OpenSpec root |
+| `omp openspec workset create [name]` | Compose a personal working view | `--member <path> --json` for non-interactive composition |
+| `omp openspec workset list` | Browse saved worksets | `--json` for structured views |
+| `omp openspec workset remove <name>` | Delete a saved view | `--yes --json` for non-interactive removal |
 
 ---
 
@@ -78,187 +77,26 @@ These options work with all commands:
 
 ## Setup Commands
 
-### `openspec init`
+### `omp openspec init`
 
-Initialize OpenSpec in your project. Creates the folder structure and configures AI tool integrations.
-
-Default behavior uses global config defaults: profile `core`, delivery `both`, workflows `propose, explore, apply, update, sync, archive`.
-
-```
-openspec init [path] [options]
-```
-
-Use `--language <language>` to add a language instruction to a new project's
-`openspec/config.yaml`. For an existing project, edit the config's `context`
-field so OpenSpec never overwrites project-specific guidance.
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `path` | No | Target directory (default: current directory) |
-
-**Options:**
-
-| Option | Description |
-|--------|-------------|
-| `--tools <list>` | Configure AI tools non-interactively. Use `all`, `none`, or comma-separated list |
-| `--language <language>` | Write artifacts in this language when creating a new config |
-| `--force` | Auto-cleanup legacy files without prompting |
-| `--profile <profile>` | Override global profile for this init run (`core` or `custom`) |
-| `--no-animation` | Show a static welcome screen instead of the animated one |
-
-`--profile custom` uses whatever workflows are currently selected in global config (`openspec config profile`).
-
-The welcome animation is also skipped when the `OPENSPEC_NO_ANIMATION` environment variable is set (any value, including empty), when `NO_COLOR` is set to a non-empty value, or when the OS reduced-motion preference is enabled (macOS Reduce Motion, GNOME animations disabled).
-
-**Supported tool IDs (`--tools`)** — `oh-my-pi` (this vendored copy ships no other targets)
-
-> This list mirrors `AI_TOOLS` in `src/core/config.ts`. See [Supported Tools](supported-tools.md) for each tool's skill and command paths.
-
-**Examples:**
+Initialize the explicitly selected project, not Skill delivery. No standalone OpenSpec/Node installation is required.
 
 ```bash
-# Interactive initialization
-openspec init
-
-# Initialize in a specific directory
-openspec init ./my-project
-
-# Non-interactive: configure Oh My Pi
-openspec init --tools oh-my-pi
-
-# Configure for all supported tools
-openspec init --tools all
-
-# Override profile for this run
-openspec init --profile core
-
-# Skip prompts and auto-cleanup legacy files
-openspec init --force
+omp openspec init [path] [--language <language>]
 ```
 
-**What it creates:**
+The target defaults to the current directory. Initialization creates project structure and configuration with `spec-driven` as the default schema. Existing configuration is preserved; a conflicting language request fails rather than overwriting context. Store pointers are not converted into local planning roots. Obtain explicit authorization before initializing an uninitialized project.
 
-```
-openspec/
-├── specs/              # Your specifications (source of truth)
-├── changes/            # Proposed changes
-└── config.yaml         # Project configuration
-
-.claude/skills/         # Claude Code skills (if claude selected)
-.cursor/skills/         # Cursor skills (if cursor selected)
-.cursor/commands/       # Cursor OPSX commands (if delivery includes commands)
-.agents/skills/         # Shared skills for AGENTS.md-compatible tools (if agents selected)
-... (other tool configs)
-```
-
----
-
-### `openspec update`
-
-Update OpenSpec instruction files after upgrading the CLI. Re-generates AI tool configuration files using your current global profile, selected workflows, and delivery mode.
-
-```
-openspec update [path] [options]
-```
-
-**Arguments:**
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `path` | No | Target directory (default: current directory) |
-
-**Options:**
-
-| Option | Description |
-|--------|-------------|
-| `--force` | Force update even when files are up to date |
-| `--dry-run` | Report what the update would change and write nothing |
-| `--json` | With `--dry-run`, print the planned changes as JSON |
-
-**Example:**
-
-```bash
-# Update instruction files after npm upgrade
-npm install -g @fission-ai/openspec@latest
-openspec update
-```
-
-**Previewing an update:**
-
-`--dry-run` reports the files an update would add, change or delete, and writes
-nothing. Paths are relative to the project; files outside it (skills in your
-home directory) are shown with a `~/` prefix.
-
-```bash
-openspec update --dry-run --json
-```
-
-```json
-{
-  "changes": [
-    { "path": ".claude/skills/openspec-explore/SKILL.md", "action": "update", "tool": "claude" },
-    { "path": "~/.minimax/skills/openspec-propose/SKILL.md", "action": "add", "tool": "minimax-code" }
-  ],
-  "notes": [],
-  "failures": []
-}
-```
-
-The plan is what a non-interactive run does, and lists every file it would
-touch: the global config save for an install from before profiles and, with
-`--force`, legacy-artifact cleanup. Files that belong to OpenSpec itself rather
-than one tool have `tool: "openspec"`. `notes` flags steps a terminal user
-would be asked about, each with a stable `code`: `legacy-tool-directories` (a
-move listed as made) and `legacy-artifacts` (old-layout files the update leaves
-alone without `--force`). `failures` lists tools the real update would fail on,
-including writes it cannot make (a directory in a file's place, no write
-permission); for that tool the plan stops where the update would, and one
-broken tool does not cost you the rest of the plan. Both are empty for
-an ordinary refresh.
-The full reference is [openspec.dev/docs/cli](https://openspec.dev/docs/cli).
-
-A `--dry-run --json` failure still prints exactly one JSON document, the empty
-plan plus a `status` array, and exits non-zero.
-
-Upgrade the package first. Instruction files are generated by the installed CLI, so running `openspec update` against a stale install reports everything up to date without adding the workflows newer releases ship.
-
-To make that visible, `openspec update` asks the npm registry whether a newer CLI has been published. When yours is behind, it offers to upgrade:
+It does not create, update, or remove user Skills, Agent directories, legacy command files, or global prompts. All 12 Skills are already bundled with OMP and discoverable in any directory. There are no `--tools`, `--profile`, or cleanup options.
 
 ```text
-A newer OpenSpec CLI is available (v1.6.0 → v1.7.0).
-  Running from: /usr/local/lib/node_modules/@fission-ai/openspec
-? Upgrade to v1.7.0 now? (Y/n)
+openspec/
+├── specs/
+├── changes/
+└── config.yaml
 ```
 
-Answer yes and it runs `npm install -g @fission-ai/openspec@latest`, then re-runs the update with the new CLI so the new workflows land in the same command. It confirms the upgrade by asking the installed binary its version rather than trusting npm's exit code, so if another install earlier on your `PATH` is still answering, it tells you instead of claiming success. Answer no and it prints the command and updates with the CLI you have. Ctrl-C stops the command.
-
-The offer appears only in an interactive terminal, and only when npm owns the install — the one case `npm install -g` actually fixes. Everything else gets the command that matches how it was installed instead:
-
-| How OpenSpec is installed | What you get |
-|---------------------------|--------------|
-| Global npm install | The prompt, and the upgrade run for you — in an interactive terminal; piped output gets the printed command instead |
-| Global pnpm, bun, yarn, or volta install | That manager's own command: `pnpm add -g …@latest`, `bun add -g …@latest`, `yarn global add …@latest`, or `volta install …@latest` |
-| A dependency of the project | A note to update the dependency, since its package manager owns the lockfile |
-| An `npx` / `dlx` cache | `npx @fission-ai/openspec@latest update` — that command is the update, so there is no second step |
-| A git clone | Nothing — your version is whatever the branch says |
-
-Whenever anything is printed, it names the directory the running CLI was loaded from — the thing to check when you did upgrade but a stale shim still owns your `PATH`.
-
-It asks the registry in `npm_config_registry` when npm exports it, and `https://registry.npmjs.org` otherwise. No `.npmrc` is read: letting file contents choose where an outbound request goes is a flow worth avoiding, and a project's `.npmrc` travels with the repository. On a private mirror, export `npm_config_registry` — or set `OPENSPEC_NO_UPDATE_CHECK` to skip the check entirely. The check is skipped when `CI` is set to anything but an explicit off-value (`false`, `0`, `no`, `off`, or empty), under `NODE_ENV=test`, and whenever `OPENSPEC_NO_UPDATE_CHECK` (any value), `DO_NOT_TRACK=1`, or `OPENSPEC_TELEMETRY=0` is set. It runs before the update and can delay it by at most 1.5 seconds — it gives up after that even when the network drops packets silently, and stays quiet when the registry is unreachable.
-
-**How "up to date" is decided:** skill files record the version that generated
-them, so OpenSpec compares that against the installed CLI. Command files carry no
-version stamp, so for a tool that has commands but no skills (delivery
-`commands`), OpenSpec compares the file contents against what it would generate
-now — edits to those files count as drift and are overwritten. With delivery
-`skills` or `both`, only the recorded version is checked, so a hand-edited file
-whose version still matches is left alone; use `--force` to rewrite it. Either
-way, generated files are OpenSpec's to own — keep your own instructions
-elsewhere.
-
----
+Upgrade OMP to update resources. CLI `update` and file-based `opsx` commands are removed; `openspec-update-change` remains the planning-material editing Skill.
 
 ## Stores (standalone OpenSpec repos)
 
@@ -266,14 +104,14 @@ elsewhere.
 
 A store is a standalone OpenSpec repo you've registered on this machine — for example a planning repo or a contracts repo. Registering a store lets normal commands (`list`, `show`, `status`, `validate`, `new change`, `archive`, ...) act in it from anywhere by passing `--store <id>`.
 
-### `openspec store setup`
+### `omp openspec store setup`
 
 Create and register a local store. With no arguments in a terminal,
 OpenSpec guides the user through setup. Agents and scripts should pass explicit
 inputs and use `--json`.
 
 ```bash
-openspec store setup [id] [options]
+omp openspec store setup [id] [options]
 ```
 
 **Options:**
@@ -291,13 +129,13 @@ Non-interactive runs (`--json`, scripts, agents) must pass both the store id and
 Examples:
 
 ```bash
-openspec store setup
-openspec store setup team-context
-openspec store setup team-context --path ~/openspec/team-context --no-init-git
-openspec store setup team-context --path ~/openspec/team-context --no-init-git --json
+omp openspec store setup
+omp openspec store setup team-context
+omp openspec store setup team-context --path ~/openspec/team-context --no-init-git
+omp openspec store setup team-context --path ~/openspec/team-context --no-init-git --json
 ```
 
-### `openspec store register`
+### `omp openspec store register`
 
 Register an existing local store folder. During the stores beta, a root may be
 registered before any changes exist, specs have been applied, or changes have
@@ -307,7 +145,7 @@ A config-only repo that declares `store: <id>` remains a pointer to another
 store and is not registered as a store root unless that pointer is removed.
 
 ```bash
-openspec store register [path] [options]
+omp openspec store register [path] [options]
 ```
 
 **Options:**
@@ -318,23 +156,23 @@ openspec store register [path] [options]
 | `--yes` | Confirm creating store identity metadata for a healthy OpenSpec root |
 | `--json` | Output JSON |
 
-### `openspec store unregister`
+### `omp openspec store unregister`
 
 Forget a local store registration without deleting files.
 
 ```bash
-openspec store unregister <id> [--json]
+omp openspec store unregister <id> [--json]
 ```
 
 Use this when a store was moved, cloned somewhere else, or should no longer be
 shown by OpenSpec on this machine.
 
-### `openspec store remove`
+### `omp openspec store remove`
 
 Forget a local store registration and delete its local folder.
 
 ```bash
-openspec store remove <id> [--yes] [--json]
+omp openspec store remove <id> [--yes] [--json]
 ```
 
 `remove` shows the exact folder before deleting in an interactive terminal.
@@ -342,21 +180,21 @@ Agents, scripts, and JSON callers must pass `--yes` to confirm deletion.
 OpenSpec refuses to delete a folder that does not contain matching
 store metadata.
 
-### `openspec store list`
+### `omp openspec store list`
 
 List locally registered stores.
 
 ```bash
-openspec store list [--json]
-openspec store ls [--json]
+omp openspec store list [--json]
+omp openspec store ls [--json]
 ```
 
-### `openspec store doctor`
+### `omp openspec store doctor`
 
 Check local store registration, metadata, and Git presence.
 
 ```bash
-openspec store doctor [id] [--json]
+omp openspec store doctor [id] [--json]
 ```
 
 Doctor is diagnostic-only; it reports missing roots, metadata mismatches, and invalid local registry state without modifying the store.
@@ -371,22 +209,22 @@ references:
   - team-context
 ```
 
-From then on, `openspec instructions` output in that repo (both the per-artifact and `apply` surfaces, JSON and human modes) carries an index of each referenced store's specs — spec ids, a one-line summary from each spec's Purpose section, and the fetch command (`openspec show <spec-id> --type spec --store <id>`). The index is built live from the registered checkout on every run; spec content is never copied into the output.
+From then on, `omp openspec instructions` output in that repo (both the per-artifact and `apply` surfaces, JSON and human modes) carries an index of each referenced store's specs — spec ids, a one-line summary from each spec's Purpose section, and the fetch command (`omp openspec show <spec-id> --type spec --store <id>`). The index is built live from the registered checkout on every run; spec content is never copied into the output.
 
-References are read-only context. They never change where commands act: work stays in the repo's own root, and writing to a referenced store remains an explicit `--store` action. A reference that cannot be resolved (for example, a store not registered on this machine) degrades to a warning in the index with the exact fix, and instructions still generate. `openspec doctor` reports reference health in one place.
+References are read-only context. They never change where commands act: work stays in the repo's own root, and writing to a referenced store remains an explicit `--store` action. A reference that cannot be resolved (for example, a store not registered on this machine) degrades to a warning in the index with the exact fix, and instructions still generate. `omp openspec doctor` reports reference health in one place.
 
 ### Recording where a store is cloned from
 
 A store can record its canonical clone source in its committed identity file, so onboarding never dead-ends at "register the store":
 
 ```bash
-openspec store setup team-context --path ~/openspec/team-context \
+omp openspec store setup team-context --path ~/openspec/team-context \
   --remote git@github.com:acme/team-context.git
 ```
 
 The remote lands in `.openspec-store/store.yaml` inside the initial commit, so every clone is born knowing it. For an existing store, edit `store.yaml` by hand and commit. `store doctor` shows the recorded remote (and the checkout's observed Git origin); setup/register sharing guidance names it; and register records the checkout's origin in the machine-local registry.
 
-A reference declaration can carry the clone source too, so a teammate who doesn't have the store yet gets a complete, pasteable fix (`git clone <remote> <path> && openspec store register <path> --id <id>`):
+A reference declaration can carry the clone source too, so a teammate who doesn't have the store yet gets a complete, pasteable fix (`git clone <remote> <path> && omp openspec store register <path> --id <id>`):
 
 ```yaml
 references:
@@ -404,31 +242,31 @@ A repo whose planning is fully externalized — no local `openspec/specs/` or `o
 store: team-context
 ```
 
-Normal commands then resolve to the declared store automatically; the root banner and JSON `root` block report `source: "declared"` with the store id, and printed hints still carry `--store <id>`. The declaration is a fallback, never an override: explicit `--store` always wins, and a directory with real planning folders ignores the pointer (with a warning). To convert a pointer repo into a local OpenSpec root, remove the `store:` line and run `openspec init` — init refuses to scaffold while the declaration is present.
+Normal commands then resolve to the declared store automatically; the root banner and JSON `root` block report `source: "declared"` with the store id, and printed hints still carry `--store <id>`. The declaration is a fallback, never an override: explicit `--store` always wins, and a directory with real planning folders ignores the pointer (with a warning). To convert a pointer repo into a local OpenSpec root, remove the `store:` line and run `omp openspec init` — init refuses to scaffold while the declaration is present.
 
-A machine-level variant covers every repo at once: `openspec config set defaultStore <id>` (see Configuration). It is consulted only after `--store`, a local root, and a project pointer have all failed to resolve; the root banner and JSON `root` block then report `source: "global_default"`.
+A machine-level variant covers every repo at once: `omp openspec config set defaultStore <id>` (see Configuration). It is consulted only after `--store`, a local root, and a project pointer have all failed to resolve; the root banner and JSON `root` block then report `source: "global_default"`.
 
 ## Doctor (relationship health)
 
 One read-only question, one place: is the OpenSpec root healthy, and are the stores it references available on this machine?
 
 ```bash
-openspec doctor [--store <id>] [--json]
+omp openspec doctor [--store <id>] [--json]
 ```
 
-The report separates root health, store metadata health (including a note when the recorded remote and the checkout's origin diverge, and a note when the store checkout has drifted behind its last-fetched upstream tracking ref), and reference health (the same diagnostics instructions show, with clone fixes for unresolved references). Health findings of any severity exit 0 — agents read the `status` arrays; only command failures (no root, unknown store) exit 1. Doctor never clones, syncs, or repairs. To get the assembled set itself rather than its health, use `openspec context`.
+The report separates root health, store metadata health (including a note when the recorded remote and the checkout's origin diverge, and a note when the store checkout has drifted behind its last-fetched upstream tracking ref), and reference health (the same diagnostics instructions show, with clone fixes for unresolved references). Health findings of any severity exit 0 — agents read the `status` arrays; only command failures (no root, unknown store) exit 1. Doctor never clones, syncs, or repairs. To get the assembled set itself rather than its health, use `omp openspec context`.
 
 ## Working context (the assembled set)
 
 Everything this work relates to through OpenSpec declarations, in one working set: the OpenSpec root and the stores it references.
 
 ```bash
-openspec context [--store <id>] [--json] [--code-workspace <path> [--force]]
+omp openspec context [--store <id>] [--json] [--code-workspace <path> [--force]]
 ```
 
 The JSON brief is agent-consumable (each available referenced store carries its fetch recipe; unresolved members carry the same fixes instructions and doctor show). `--code-workspace` additionally writes a VS Code workspace file containing the root plus the available referenced stores (`ref:<id>` folders) — the one write this command performs, refused without `--force` if the file exists. Unavailable members are reported, never guessed at.
 
-"Working context" is the assembled set; the `context:` field in `openspec/config.yaml` is project background injected into instructions — two different things. `openspec doctor` answers whether the set is healthy; `openspec context` answers what the set is.
+"Working context" is the assembled set; the `context:` field in `openspec/config.yaml` is project background injected into instructions — two different things. `omp openspec doctor` answers whether the set is healthy; `omp openspec context` answers what the set is.
 
 ## Personal worksets
 
@@ -437,15 +275,15 @@ The JSON brief is agent-consumable (each available referenced store carries its 
 A workset is a personal, named view of the folders you work on together — a planning root plus whatever else you choose — kept on your machine and reopened by name in your tool. It is purely local: never committed, never shared, never derived from declarations, and removing one never touches a member folder.
 
 ```bash
-openspec workset create [name] [--member <path> | --member <name>=<path>]... [--tool <id>] [--json]
-openspec workset list [--json]
-openspec workset open <name> [--tool <id>]
-openspec workset remove <name> [--yes] [--json]
+omp openspec workset create [name] [--member <path> | --member <name>=<path>]... [--tool <id>] [--json]
+omp openspec workset list [--json]
+omp openspec workset open <name> [--tool <id>]
+omp openspec workset remove <name> [--yes] [--json]
 ```
 
 `create` runs a short guided flow (or takes `--member` flags non-interactively; the first member is the primary — sessions start there). `open` launches the chosen tool: editors (VS Code, Cursor) open a window with every member and return; CLI agents (Claude Code, codex) take over this terminal as a session with every member attached and no prompt pre-filled, ending when you exit. A member folder missing at open time is skipped with a note; the rest opens. The saved tool preference is overridable per open with `--tool`.
 
-Supporting a new tool is configuration, not code. Every tool is one of two launch styles — `workspace-file` (launched with the generated `.code-workspace`) or `attach-dirs` (one attach flag per member) — and the `openers` key in the global `config.json` (open it with `openspec config edit`) adds tools or adjusts built-ins per field:
+Supporting a new tool is configuration, not code. Every tool is one of two launch styles — `workspace-file` (launched with the generated `.code-workspace`) or `attach-dirs` (one attach flag per member) — and the `openers` key in the global `config.json` (open it with `omp openspec config edit`) adds tools or adjusts built-ins per field:
 
 ```json
 {
@@ -462,12 +300,12 @@ All workset state lives under the global data dir's `worksets/` folder (the save
 
 ## Browsing Commands
 
-### `openspec list`
+### `omp openspec list`
 
 List changes or specs in your project.
 
 ```
-openspec list [options]
+omp openspec list [options]
 ```
 
 **Options:**
@@ -483,13 +321,13 @@ openspec list [options]
 
 ```bash
 # List all active changes
-openspec list
+omp openspec list
 
 # List all specs
-openspec list --specs
+omp openspec list --specs
 
 # JSON output for scripts
-openspec list --json
+omp openspec list --json
 ```
 
 **Output (text):**
@@ -501,24 +339,24 @@ Changes:
 
 ---
 
-### `openspec view`
+### `omp openspec view`
 
 Display an interactive dashboard for exploring specs and changes.
 
 ```
-openspec view
+omp openspec view
 ```
 
 Opens a terminal-based interface for navigating your project's specifications and changes.
 
 ---
 
-### `openspec show`
+### `omp openspec show`
 
 Display details of a change or spec.
 
 ```
-openspec show [item-name] [options]
+omp openspec show [item-name] [options]
 ```
 
 **Arguments:**
@@ -553,28 +391,28 @@ openspec show [item-name] [options]
 
 ```bash
 # Interactive selection
-openspec show
+omp openspec show
 
 # Show a specific change
-openspec show add-dark-mode
+omp openspec show add-dark-mode
 
 # Show a specific spec
-openspec show auth --type spec
+omp openspec show auth --type spec
 
 # JSON output for parsing
-openspec show add-dark-mode --json
+omp openspec show add-dark-mode --json
 ```
 
 ---
 
 ## Validation Commands
 
-### `openspec validate`
+### `omp openspec validate`
 
 Validate changes and specs for structural issues, and check a change's MODIFIED requirements against the main specs they would replace.
 
 ```
-openspec validate [item-name] [options]
+omp openspec validate [item-name] [options]
 ```
 
 A change with zero spec deltas fails validation unless its `.openspec.yaml` declares `skip_specs: true` (for pure refactors, tooling, or docs work — see [Recipe 5](examples.md#recipe-5-a-refactor-with-no-behavior-change)).
@@ -605,22 +443,22 @@ A change with zero spec deltas fails validation unless its `.openspec.yaml` decl
 
 ```bash
 # Interactive validation
-openspec validate
+omp openspec validate
 
 # Validate a specific change
-openspec validate add-dark-mode
+omp openspec validate add-dark-mode
 
 # Validate all changes
-openspec validate --changes
+omp openspec validate --changes
 
 # Validate everything with JSON output (for CI/scripts)
-openspec validate --all --json
+omp openspec validate --all --json
 
 # Strict validation with increased parallelism
-openspec validate --all --strict --concurrency 12
+omp openspec validate --all --strict --concurrency 12
 
 # Fail if any archived change still has unchecked tasks
-openspec validate --archived
+omp openspec validate --archived
 ```
 
 **Output (text):**
@@ -660,12 +498,12 @@ Validating add-dark-mode...
 
 ## Lifecycle Commands
 
-### `openspec archive`
+### `omp openspec archive`
 
 Archive a completed change and merge delta specs into main specs.
 
 ```
-openspec archive [change-name] [options]
+omp openspec archive [change-name] [options]
 ```
 
 **Arguments:**
@@ -686,16 +524,16 @@ openspec archive [change-name] [options]
 
 ```bash
 # Interactive archive (asks which change, then confirms)
-openspec archive
+omp openspec archive
 
 # Archive specific change
-openspec archive add-dark-mode
+omp openspec archive add-dark-mode
 
 # Archive without prompts (agents, CI, scripts)
-openspec archive add-dark-mode --yes
+omp openspec archive add-dark-mode --yes
 
 # Archive a tooling change that doesn't affect specs
-openspec archive update-ci-config --skip-specs
+omp openspec archive update-ci-config --skip-specs
 ```
 
 **Retire a capability:** Add the retirement marker to the change metadata:
@@ -709,11 +547,11 @@ retire_capabilities: true
 Then archive the change normally:
 
 ```bash
-openspec archive retire-legacy --yes
+omp openspec archive retire-legacy --yes
 ```
 
 **Keep your own metadata:** a top-level key starting with a lowercase `x-` is
-yours. OpenSpec never reads, writes or reports it, so `openspec validate
+yours. OpenSpec never reads, writes or reports it, so `omp openspec validate
 --strict` stays green on a change that carries tool-specific data:
 
 ```yaml
@@ -746,7 +584,7 @@ tells you to add it.
 
 **Without a terminal:** an AI agent, a CI job, or any run with stdin closed cannot
 answer step 2, so archive stops before touching anything, exits 1, and names the
-command to rerun — `openspec archive <name> --yes`, carrying whatever other flags
+command to rerun — `omp openspec archive <name> --yes`, carrying whatever other flags
 you passed. Pass `--yes` (and the change name) up front to skip the round trip.
 
 ---
@@ -755,12 +593,12 @@ you passed. Pass `--yes` (and the change name) up front to skip the round trip.
 
 These commands support the artifact-driven OPSX workflow. They're useful for both humans checking progress and agents determining next steps.
 
-### `openspec new change`
+### `omp openspec new change`
 
 Create a change directory and optional checked-in metadata in the resolved OpenSpec root.
 
 ```bash
-openspec new change <name> [options]
+omp openspec new change <name> [options]
 ```
 
 Change names must use lowercase kebab-case: lowercase letters, numbers, and
@@ -782,16 +620,16 @@ or `00001-add-auth`.
 Examples:
 
 ```bash
-openspec new change add-billing-api
-openspec new change add-billing-api --store team-context --json
+omp openspec new change add-billing-api
+omp openspec new change add-billing-api --store team-context --json
 ```
 
-### `openspec status`
+### `omp openspec status`
 
 Display artifact completion status for a change.
 
 ```
-openspec status [options]
+omp openspec status [options]
 ```
 
 **Options:**
@@ -806,13 +644,13 @@ openspec status [options]
 
 ```bash
 # Interactive status check
-openspec status
+omp openspec status
 
 # Status for specific change
-openspec status --change add-dark-mode
+omp openspec status --change add-dark-mode
 
 # JSON for agent use
-openspec status --change add-dark-mode --json
+omp openspec status --change add-dark-mode --json
 ```
 
 **Output (text):**
@@ -861,12 +699,12 @@ is the artifact to write next.
 
 ---
 
-### `openspec instructions`
+### `omp openspec instructions`
 
 Get enriched instructions for creating an artifact or applying tasks. Used by AI agents to understand what to create next.
 
 ```
-openspec instructions [artifact] [options]
+omp openspec instructions [artifact] [options]
 ```
 
 **Arguments:**
@@ -891,19 +729,19 @@ openspec instructions [artifact] [options]
 
 ```bash
 # Get instructions for next artifact
-openspec instructions --change add-dark-mode
+omp openspec instructions --change add-dark-mode
 
 # Get specific artifact instructions
-openspec instructions design --change add-dark-mode
+omp openspec instructions design --change add-dark-mode
 
 # Get apply/implementation instructions
-openspec instructions apply --change add-dark-mode
+omp openspec instructions apply --change add-dark-mode
 
 # Get current archive operation inputs without archiving
-openspec instructions archive --change add-dark-mode --json
+omp openspec instructions archive --change add-dark-mode --json
 
 # JSON for agent consumption
-openspec instructions design --change add-dark-mode --json
+omp openspec instructions design --change add-dark-mode --json
 ```
 
 **Output includes:**
@@ -930,12 +768,12 @@ For an artifact skipped via `skip_specs: true`, the output is a warning only (JS
 
 ---
 
-### `openspec templates`
+### `omp openspec templates`
 
 Show resolved template paths for all artifacts in a schema.
 
 ```
-openspec templates [options]
+omp openspec templates [options]
 ```
 
 **Options:**
@@ -949,13 +787,13 @@ openspec templates [options]
 
 ```bash
 # Show template paths for default schema
-openspec templates
+omp openspec templates
 
 # Show templates for custom schema
-openspec templates --schema my-workflow
+omp openspec templates --schema my-workflow
 
 # JSON for programmatic use
-openspec templates --json
+omp openspec templates --json
 ```
 
 **Output (text):**
@@ -972,12 +810,12 @@ Templates:
 
 ---
 
-### `openspec schemas`
+### `omp openspec schemas`
 
 List available workflow schemas with their descriptions and artifact flows.
 
 ```
-openspec schemas [options]
+omp openspec schemas [options]
 ```
 
 **Options:**
@@ -990,7 +828,7 @@ openspec schemas [options]
 **Example:**
 
 ```bash
-openspec schemas
+omp openspec schemas
 ```
 
 **Output:**
@@ -1013,12 +851,12 @@ Available schemas:
 
 Commands for creating and managing custom workflow schemas.
 
-### `openspec schema init`
+### `omp openspec schema init`
 
 Create a new project-local schema.
 
 ```
-openspec schema init <name> [options]
+omp openspec schema init <name> [options]
 ```
 
 **Arguments:**
@@ -1042,10 +880,10 @@ openspec schema init <name> [options]
 
 ```bash
 # Interactive schema creation
-openspec schema init research-first
+omp openspec schema init research-first
 
 # Non-interactive with specific artifacts
-openspec schema init rapid \
+omp openspec schema init rapid \
   --description "Rapid iteration workflow" \
   --artifacts "proposal,tasks" \
   --default
@@ -1065,12 +903,12 @@ openspec/schemas/<name>/
 
 ---
 
-### `openspec schema fork`
+### `omp openspec schema fork`
 
 Copy an existing schema to your project for customization.
 
 ```
-openspec schema fork <source> [name] [options]
+omp openspec schema fork <source> [name] [options]
 ```
 
 **Arguments:**
@@ -1091,17 +929,17 @@ openspec schema fork <source> [name] [options]
 
 ```bash
 # Fork the built-in spec-driven schema
-openspec schema fork spec-driven my-workflow
+omp openspec schema fork spec-driven my-workflow
 ```
 
 ---
 
-### `openspec schema validate`
+### `omp openspec schema validate`
 
 Validate a schema's structure and templates.
 
 ```
-openspec schema validate [name] [options]
+omp openspec schema validate [name] [options]
 ```
 
 **Arguments:**
@@ -1121,20 +959,20 @@ openspec schema validate [name] [options]
 
 ```bash
 # Validate a specific schema
-openspec schema validate my-workflow
+omp openspec schema validate my-workflow
 
 # Validate all schemas
-openspec schema validate
+omp openspec schema validate
 ```
 
 ---
 
-### `openspec schema which`
+### `omp openspec schema which`
 
 Show where a schema resolves from (useful for debugging precedence).
 
 ```
-openspec schema which [name] [options]
+omp openspec schema which [name] [options]
 ```
 
 **Arguments:**
@@ -1154,7 +992,7 @@ openspec schema which [name] [options]
 
 ```bash
 # Check where a schema comes from
-openspec schema which spec-driven
+omp openspec schema which spec-driven
 ```
 
 **Output:**
@@ -1174,12 +1012,12 @@ spec-driven resolves from: package
 
 ## Configuration Commands
 
-### `openspec config`
+### `omp openspec config`
 
 View and modify global OpenSpec configuration.
 
 ```
-openspec config <subcommand> [options]
+omp openspec config <subcommand> [options]
 ```
 
 **Subcommands:**
@@ -1199,80 +1037,50 @@ openspec config <subcommand> [options]
 
 ```bash
 # Show config file path
-openspec config path
+omp openspec config path
 
 # List all settings
-openspec config list
+omp openspec config list
 
 # Get a specific value
-openspec config get telemetry.enabled
+omp openspec config get telemetry.enabled
 
 # Set a value (disable anonymous usage telemetry)
-openspec config set telemetry.enabled false
+omp openspec config set telemetry.enabled false
 
 # Set a string value explicitly
-openspec config set user.name "My Name" --string
+omp openspec config set user.name "My Name" --string
 
 # Remove a custom setting
-openspec config unset user.name
+omp openspec config unset user.name
 
 # Set a machine-level default store (fallback root when no --store,
 # local root, or project store: pointer resolves)
-openspec config set defaultStore team-plans
+omp openspec config set defaultStore team-plans
 
 # Reset all configuration
-openspec config reset --all --yes
+omp openspec config reset --all --yes
 
 # Edit config in your editor
-openspec config edit
+omp openspec config edit
 
 # Configure profile with action-based wizard
-openspec config profile
+omp openspec config profile
 
 # Fast preset: switch workflows to core (keeps delivery mode)
-openspec config profile core
+omp openspec config profile core
 ```
 
-**Telemetry opt-out:** `telemetry.enabled` defaults to on when unset (opt-out model).
-Set it to `false` to disable anonymous usage stats and the `openspec update` version check.
-Environment variables take precedence over config: `OPENSPEC_TELEMETRY=0`, `DO_NOT_TRACK=1`,
-and a truthy `CI` value (e.g. `true`/`1`/`yes`) always disable telemetry regardless of the config value.
-
-`openspec config profile` starts with a current-state summary, then lets you choose:
-- Change delivery + workflows
-- Change delivery only
-- Change workflows only
-- Keep current settings (exit)
-
-If you keep current settings, no changes are written and no update prompt is shown.
-If there are no config changes but the current project files are out of sync with your global profile/delivery, OpenSpec will show a warning and suggest `openspec update`.
-Pressing `Ctrl+C` also cancels the flow cleanly (no stack trace) and exits with code `130`.
-In the workflow checklist, `[x]` means the workflow is selected in global config. To apply those selections to project files, run `openspec update` (or choose `Apply changes to this project now?` when prompted inside a project).
-
-**Interactive examples:**
-
-```bash
-# Delivery-only update
-openspec config profile
-# choose: Change delivery only
-# choose delivery: Skills only
-
-# Workflows-only update
-openspec config profile
-# choose: Change workflows only
-# toggle workflows in the checklist, then confirm
-```
-
----
+**OMP privacy and profiles:** OMP forces telemetry off for bundled OpenSpec execution. Offline mode also disables explicit version-update checks. Global configuration remains available for supported settings, but delivery/profile settings do not install or filter OMP's 12 bundled Skills. There is no project-file refresh or update prompt to apply. Resources update only with OMP releases.
 
 ## Utility Commands
 
-### `openspec feedback`
+### `omp openspec feedback`
 
 Submit feedback about OpenSpec. Creates a GitHub issue.
 
 ```
-openspec feedback <message> [options]
+omp openspec feedback <message> [options]
 ```
 
 **Arguments:**
@@ -1292,51 +1100,34 @@ openspec feedback <message> [options]
 **Example:**
 
 ```bash
-openspec feedback "Add support for custom artifact types" \
+omp openspec feedback "Add support for custom artifact types" \
   --body "I'd like to define my own artifact types beyond the built-in ones."
 ```
 
 ---
 
-### `openspec completion`
+### `omp openspec completion`
 
-Manage shell completions for the OpenSpec CLI.
+The upstream completion surface is not an installer for OMP Skills. Use OMP native Skill completion for `/skill:<name>`, and `omp openspec --help` or command-specific `--help` for terminal syntax. Do not install a standalone `openspec` launcher or its shell hooks to use this integration.
 
-```
-openspec completion <subcommand> [shell]
-```
-
-**Subcommands:**
-
-| Subcommand | Description |
-|------------|-------------|
-| `generate [shell]` | Output completion script to stdout |
-| `install [shell]` | Install completion for your shell |
-| `uninstall [shell]` | Remove installed completions |
-
-**Supported shells:** `bash`, `zsh`, `fish`, `powershell`
-
-**Examples:**
-
-```bash
 # Install completions (auto-detects shell)
-openspec completion install
+omp openspec completion install
 
 # Install for specific shell
-openspec completion install zsh
+omp openspec completion install zsh
 
 # Generate script for manual installation (bash)
-openspec completion generate bash > ~/.bash_completion.d/openspec
+omp openspec completion generate bash > ~/.bash_completion.d/openspec
 
 # Uninstall
-openspec completion uninstall
+omp openspec completion uninstall
 ```
 
 **Windows (PowerShell):** Install completions for the current PowerShell host:
 
 ```powershell
 $env:PROFILE = $PROFILE
-openspec completion install powershell
+omp openspec completion install powershell
 . $PROFILE
 ```
 
@@ -1348,7 +1139,7 @@ To uninstall from the current host, run:
 
 ```powershell
 $env:PROFILE = $PROFILE
-openspec completion uninstall powershell
+omp openspec completion uninstall powershell
 ```
 
 Restart PowerShell after uninstalling to clear completions from the current session.
@@ -1376,9 +1167,9 @@ suppress that tip entirely.
 | `OPENSPEC_TELEMETRY` | Set to `0` to disable telemetry and the `openspec update` version check (overrides `telemetry.enabled` in global config) |
 | `DO_NOT_TRACK` | Set to `1` to disable telemetry and the `openspec update` version check (standard DNT signal; overrides config) |
 | `OPENSPEC_CONCURRENCY` | Default concurrency for bulk validation (default: 6) |
-| `EDITOR` or `VISUAL` | Editor for `openspec config edit` |
+| `EDITOR` or `VISUAL` | Editor for `omp openspec config edit` |
 | `NO_COLOR` | Disable color output when set |
-| `OPENSPEC_NO_ANIMATION` | Disable the `openspec init` welcome animation when set |
+| `OPENSPEC_NO_ANIMATION` | Disable the `omp openspec init` welcome animation when set |
 | `OPENSPEC_NO_COMPLETIONS` | Set to `1` to suppress the one-time tip about shell completions |
 | `OPENSPEC_NO_UPDATE_CHECK` | Disable the `openspec update` check for a newer published CLI when set (any value, including empty). Also skipped when `CI` is set (unless `false`/`0`/`no`/`off`) or `NODE_ENV=test` |
 | `npm_config_registry` | Registry the `openspec update` version check asks. Must be an `http(s)` URL or it falls back to `https://registry.npmjs.org`. No `.npmrc` file is read |
@@ -1387,7 +1178,7 @@ suppress that tip entirely.
 
 ## Related Documentation
 
-- [Commands](commands.md) - AI slash commands (`/opsx:propose`, `/opsx:apply`, etc.)
+- [Commands](commands.md) - AI slash commands (`/skill:openspec-propose`, `/skill:openspec-apply-change`, etc.)
 - [Workflows](workflows.md) - Common patterns and when to use each command
 - [Customization](customization.md) - Create custom schemas and templates
 - [Getting Started](getting-started.md) - First-time setup guide

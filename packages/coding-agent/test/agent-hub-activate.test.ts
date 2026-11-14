@@ -9,6 +9,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model, Usage } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import type { AgentTranscriptViewer } from "@oh-my-pi/pi-tui/overlays/agent-transcript-viewer";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
@@ -117,7 +119,7 @@ function makeHub(focusAgent: (id: string) => Promise<void>) {
 		irc: new IrcBus(agents),
 		focusAgent,
 	});
-	return { hub, doneCalls: () => doneCalls, done: done.promise, renderRequested: renderRequested.promise };
+	return { hub, agents, doneCalls: () => doneCalls, done: done.promise, renderRequested: renderRequested.promise };
 }
 
 const ROSTER_ENTRY_PATTERN = /^(❯| ) (?:(?:(?:│ {3}| {4})*)(?:├── |└── ))?(\S+) (\S+)/u;
@@ -184,6 +186,170 @@ describe("Agent hub Enter activation", () => {
 		expect(focusedIds).toEqual([AGENT_ID]);
 		expect(doneCalls()).toBe(1);
 		hub.dispose();
+	});
+
+	it("Enter still focuses an ordinary parked task rather than opening a read-only viewer", async () => {
+		const focusAgent = vi.fn(async (_id: string) => {});
+		const { hub, agents, done } = makeHub(focusAgent);
+		agents.detachSession(AGENT_ID);
+		agents.setStatus(AGENT_ID, "parked");
+		try {
+			hub.handleInput("\r");
+			await done;
+			expect(focusAgent).toHaveBeenCalledWith(AGENT_ID);
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	for (const outcome of ["done", "failed", "cancelled"] as const) {
+		it(`Enter opens the retained ${outcome} native transcript without revival or send`, async () => {
+			await using temp = await TempDir.create("@omp-hub-readonly-record-");
+			const manager = SessionManager.create(temp.path(), temp.join("sessions"));
+			const model = createMockModel({ handler: () => ({ content: ["unexpected model execution"] }) });
+			const output = `${outcome} persisted tool output`;
+			const error = `${outcome} persisted diagnostic`;
+			manager.appendMessage({ role: "user", content: "Inspect execution evidence", timestamp: 1 });
+			manager.appendMessage({
+				...assistantTurn(model, 0, 2),
+				content: [{ type: "toolCall", id: "evidence", name: "record_evidence", arguments: { outcome } }],
+				stopReason: "toolUse",
+			});
+			manager.appendMessage({
+				role: "toolResult",
+				toolCallId: "evidence",
+				toolName: "record_evidence",
+				content: [{ type: "text", text: output }],
+				isError: outcome !== "done",
+				timestamp: 3,
+			});
+			manager.appendMessage({
+				...assistantTurn(model, 0, 4),
+				content: [{ type: "text", text: error }],
+				stopReason: outcome === "done" ? "stop" : "error",
+				errorMessage: outcome === "done" ? undefined : error,
+			});
+			await manager.ensureOnDisk();
+			await manager.close();
+			const agents = new AgentRegistry();
+			agents.register({
+				id: AGENT_ID,
+				displayName: AGENT_ID,
+				kind: "sub",
+				parentId: "Main",
+				session: null,
+				sessionFile: manager.getSessionFile() ?? null,
+				status: "parked",
+				history: { executionEnded: true },
+			});
+			const focusAgent = vi.fn(async (_id: string) => {});
+			const ensureLive = vi.fn(async (_id: string) => {
+				throw new Error("Must not revive");
+			});
+			const release = vi.fn(async () => true);
+			const onDone = vi.fn();
+			let viewer!: AgentTranscriptViewer;
+			const hub = new AgentHubOverlayComponent({
+				...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
+				observers: new SessionObserverRegistry(),
+				hubKeys: [],
+				expandKeys: ["ctrl+o"],
+				onDone,
+				requestRender: () => {},
+				registry: agents,
+				irc: new IrcBus(agents),
+				lifecycle: () => ({ ensureLive, release }),
+				focusAgent,
+				ui: {
+					terminal: { rows: 80 },
+					requestRender: () => {},
+					requestComponentRender: () => {},
+					setFocus: () => {},
+					showOverlay: (component: AgentTranscriptViewer) => {
+						viewer = component;
+						return { hide: () => {} };
+					},
+				} as never,
+			});
+			try {
+				hub.handleInput("r");
+				expect(Bun.stripANSI(hub.render(140).join("\n"))).toContain("read-only execution record");
+				hub.handleInput("x");
+				expect(release).not.toHaveBeenCalled();
+				hub.handleInput("\r");
+				expect(viewer).toBeDefined();
+				viewer.handleInput("\x0f");
+				const rendered = Bun.stripANSI(viewer.render(140).join("\n"));
+				expect(rendered).toContain("record_evidence");
+				expect(rendered).toContain(output);
+				expect(rendered).toContain(error);
+				expect(rendered).not.toContain(":send");
+				viewer.handleInput("Resume this execution");
+				viewer.handleInput("\r");
+				expect(focusAgent).not.toHaveBeenCalled();
+				expect(ensureLive).not.toHaveBeenCalled();
+				expect(model.calls).toHaveLength(0);
+				expect(onDone).not.toHaveBeenCalled();
+			} finally {
+				hub.dispose();
+			}
+		});
+	}
+
+	it("rejects send if an already-open ordinary task becomes an ended record during revival", async () => {
+		const agents = new AgentRegistry();
+		agents.register({
+			id: AGENT_ID,
+			displayName: AGENT_ID,
+			kind: "sub",
+			session: null,
+			sessionFile: null,
+			status: "parked",
+		});
+		const prompt = vi.fn(async () => {});
+		const live = Promise.withResolvers<{ prompt: typeof prompt }>();
+		const ensureLive = vi.fn(() => live.promise);
+		const settled = Promise.withResolvers<void>();
+		let viewer!: AgentTranscriptViewer;
+		const hub = new AgentHubOverlayComponent({
+			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
+			observers: new SessionObserverRegistry(),
+			hubKeys: [],
+			onDone: () => {},
+			requestRender: () => {
+				if (agents.get(AGENT_ID)?.history?.executionEnded) settled.resolve();
+			},
+			registry: agents,
+			irc: new IrcBus(agents),
+			lifecycle: () => ({ ensureLive, release: async () => true }),
+			ui: {
+				terminal: { rows: 40 },
+				requestRender: () => {},
+				requestComponentRender: () => {},
+				setFocus: () => {},
+				showOverlay: (component: AgentTranscriptViewer) => {
+					viewer = component;
+					return { hide: () => {} };
+				},
+			} as never,
+		});
+		try {
+			hub.openChat(AGENT_ID);
+			viewer.handleInput("Continue task");
+			viewer.handleInput("\r");
+			expect(ensureLive).toHaveBeenCalledWith(AGENT_ID);
+			agents.setHistory(AGENT_ID, { executionEnded: true });
+			live.resolve({ prompt });
+			await settled.promise;
+			expect(prompt).not.toHaveBeenCalled();
+			expect(Bun.stripANSI(viewer.render(120).join("\n"))).toContain("read-only");
+			viewer.handleInput("Try another continuation");
+			viewer.handleInput("\r");
+			expect(ensureLive).toHaveBeenCalledTimes(1);
+		} finally {
+			live.resolve({ prompt });
+			hub.dispose();
+		}
 	});
 
 	it("a focus failure keeps the hub open and shows the error as a notice", async () => {

@@ -484,13 +484,15 @@ AIReq 最新权威需求为长期共享 Web：A 的账号与 Token 运行服务�
 
 ### 4.9 OpenSpec：独立需求闭环
 
-内置 OpenSpec 与 `/aireq` 是独立功能，不依赖 `/aireq` 的运行或批准。OMP 提供包内五项核心 `openspec-*` 技能，可通过 `/skill:openspec-explore`、`/skill:openspec-propose` 等入口调用；可按原生发现规则按需读取。技能原文及完整名称沿用上游，实际操作仍受用户授权和项目规则约束。
+内置 OpenSpec 2.0 与 `/aireq` 是独立功能，不依赖 `/aireq` 的运行或批准。全部 12 项 `openspec-*` Skill 在任意目录按 OMP 原生机制发现和补全，可用 `/skill:<name>` 显式调用、通过 `skill://<name>` 按需读取；项目／用户同名 Skill 继续沿用原有覆盖优先级。实际操作仍受用户授权和项目规则约束，发现 Skill 不会自动初始化项目。
 
-终端使用 `omp openspec --help` 查看上游 CLI 能力；`omp openspec init` 由封装层固定 `--tools=none`，默认使用 `mini` schema，已有或显式选择的 schema 不强制转换。内置技能无需通过初始化额外安装。需求同步或归档不等于软件实现及验收，未结束的 `/aireq` 不允许借独立技能绕过阶段权限。
+所有 CLI 操作统一使用 `omp openspec ...`，无需独立安装 OpenSpec 或 Node；`omp openspec --help` 查看能力。经用户明确要求后运行 `omp openspec init [项目路径]`，仅初始化项目目录和配置，默认 schema 为 `spec-driven`，不安装、更新或清理任何用户 Skill、Agent 配置或旧命令。CLI `update` 与 `opsx` 文件命令入口已移除；`openspec-update-change` Skill 用于修改变更材料，仍然保留。
+
+已有 `mini`／`omp-spec` 等自定义 schema 不会自动迁移，也不再提供包内兼容别名；用户需显式选择迁移并核对产物。仅改 schema 名称不能补齐 `design.md`／`tasks.md`，缺失材料必须如实保持待完成，历史归档不批量改写。本仓库的迁移记录见 [schema 迁移说明](openspec-schema-migration.md)。需求同步或归档不等于软件实现及验收，未结束的 `/aireq` 不允许借独立技能绕过阶段权限；本说明不代表 AIReq 已接入新的 OpenSpec 合同。
 
 系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI，不是前三个节点可执行命令的模型工具。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
 
-包内资源清单固定为 OpenSpec **1.15.0**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据，不要求内网运行时在线安装或另行克隆 JCH。现有共享命令消费者使用同一原生控制器。
+包内资源清单固定为 OpenSpec **2.0.0**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据。OpenSpec CLI、schema 与全部 Skill 随 OMP 发行升级，离线运行不下载、安装或自更新这些资源，也不要求另行克隆 JCH。现有共享命令消费者使用同一原生控制器。
 
 此流程预期增加请求、token、费用和等待，不承诺降本或把弱模型变强。实际投入依可取得证据报告，未知费用仍为未知，调用数不等于账单。本地模拟模型只验证编排，不代表真实 Provider 的任务质量、计费或服务可用性已验收；源码入口、打包产物、各平台及桌面 UI 的验收范围须分别报告，不能互相代替。完整门禁与验收条件见[规格驱动编排需求](../openspec/specs/spec-driven-orchestration/spec.md)，各项证据边界见[历史验证记录](verification-history.md)。
 
@@ -563,6 +565,25 @@ omp collab serve --host 0.0.0.0 --port 7466
 按 `Esc` 会中断正在执行的本轮并暂停循环。暂停后发送新任务会继续循环，输入 `/loop` 才会关闭。
 
 循环已开启时，再次输入 `/loop ...` 会关闭它，不会改成新的轮数。上述例子不会因“没有问题”而自动提前终止循环。
+
+**按有编号的 Markdown 清单串行执行（仅原生 TUI）：**
+
+```text
+/todoloop "todo with spaces.md" --check
+/todoloop "todo with spaces.md"
+```
+
+`--check` 只校验文件并按组列出任务，不启动代理、调用模型或改文件。支持 `- [ ] 1 ...`、`- [ ] 1.1 ...` 等数字任务，以及 Superpowers 原生的 `- [ ] **Step 1: 描述**`，无需改写计划格式。数字编号全文件唯一；Step 编号只要求组内唯一，不同组可以都从 Step 1 开始，程序按组区分身份。
+
+分组层级取自文件中第一个真实 checkbox（包括已完成项）前面最近的 ATX 标题：前面是 `##` 就按二级标题分组，是 `###` 就按三级标题分组，其他层级同理；其余层级只作背景、不额外拆组。代码块中的标题和 checkbox 不参与判断，空组不派发。首个 checkbox 没有前置标题时，整份文件作为一组，之后的标题不重新分组；不会改用首个未完成项推断，所以逐项勾选和续做不会改变分组。
+
+程序从首个未完成组开始，创建一个原生 `task`，在同一上下文中按顺序连续处理该组剩余项。完成并验证一项就立即勾选，TUI 随原生执行进度刷新；代理及其归属工作实际结清后，程序重读并检查整组，全部勾选才进入下一组。未完成则新建代理，只接续该组剩余项；每组总计最多三个代理（首次及两次接续），部分完成不重置次数，第三个仍未完成就停止。
+
+这是固定程序编排，不依赖主 AI 规划或总结；组间及每次接续使用干净代理上下文，组内连续任务复用同一个代理。真实工作区及已有修改始终保留，失败或取消不会回滚产物，不禁止原生 `task` 的正常工具和派生能力。再次运行只从文件首个未完成组的剩余项继续，每组重新计算本次最多三次。
+
+代理读取完整清单及明确引用的材料；识别到 OpenSpec Change 时补充提案、已有设计和相关增量规格，仅作为文件上下文，不自动 apply、同步规格或归档。组和任务的身份／正文／顺序、已有勾选及其他组状态不可改动；checkbox 是推进依据，不代表独立质量验收通过。
+
+按 `Esc` 停止后，等待本轮及其派生工作实际结清才显示已停止；结清失败会明确报错。进度及各次原生任务记录保留在当前 TUI。完整规则见 [TodoLoop 唯一需求](../openspec/changes/add-todoloop-command/specs/personal-commands/spec.md)。
 
 **按方案实现、测试并独立复审（先确认项目里有 `a.md`）：**
 

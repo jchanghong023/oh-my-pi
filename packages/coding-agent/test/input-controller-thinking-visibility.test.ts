@@ -168,7 +168,7 @@ describe("InputController thinking visibility", () => {
 		expect(session.agent.state.messages).toEqual([original]);
 	});
 
-	it("applies prose filtering before clipping inline reasoning without modifying its source", async () => {
+	it("filters prose before selecting the latest thinking line without modifying its source", async () => {
 		const prose = Array.from({ length: 7 }, (_, index) => `preview-prose-${index + 1}`);
 		const code = Array.from({ length: 7 }, (_, index) => `preview-code-${index + 1}`);
 		const message = assistant([{ type: "thinking", thinking: [...prose, "```ts", ...code, "```"].join("\n") }]);
@@ -179,10 +179,15 @@ describe("InputController thinking visibility", () => {
 		expect(render()).not.toContain("preview-code-");
 		cfgProseOnlyThinking.set(session.settings, false);
 		await Promise.resolve();
-		expect(render()).toContain("preview-code-7");
+		// With filtering disabled, the closing fence is the latest non-empty line.
+		expect(render()).toContain("```");
+		expect(render()).not.toContain("preview-code-");
 		expect(render()).not.toContain("preview-prose-");
-		controller.toggleThinkingBlockVisibility();
 		cfgProseOnlyThinking.set(session.settings, true);
+		await Promise.resolve();
+		expect(render()).toContain("preview-prose-7");
+		expect(render()).not.toContain("```");
+		controller.toggleThinkingBlockVisibility();
 		await Promise.resolve();
 		expect(render()).not.toContain("preview-prose-");
 		expect(render()).not.toContain("preview-code-");

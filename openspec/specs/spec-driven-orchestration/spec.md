@@ -20,14 +20,22 @@ OMP MUST 复用既有发现、补全、按需读取与资源授权，不因 AIRe
 | 范围                                               | 技能                                                                                                                                                    | 规则                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 普通会话及其子代理、AIReq 全部 Agent 及其后代仅手动调用 | 所有包内固定上游 Superpowers 技能，包括 `using-superpowers` | 不出现在模型自动发现索引，保留用户显式调用；AIReq 不设计划、执行或 IR 验收会话，不因进入 AIReq 自动获得实施技能或写代码权限 |
-| 普通模型可发现                                     | 固定上游 OpenSpec `core` 中五项技能：`openspec-propose`、`openspec-explore`、`openspec-update-change`、`openspec-sync-specs`、`openspec-archive-change` | 以包内固定上游 `init --tools oh-my-pi --profile core` 在隔离默认配置下生成的 `SKILL.md` 为基准，生成时按 core 集合解析可选工作流分支；CLI 调用统一写为 `omp openspec ...`，同步工具声明及兼容性说明，并仅为独立需求流程适配正文和描述。同步保留原生行为，归档只检查需求完整性及原生格式，不要求实施或软件验证。任意目录提供名称与描述，正文按需读取，通过原生 `/skill:<name>` 调用；`openspec-apply-change` 及其他非所列技能不注册、不提供手动调用 |
+| 普通会话及其子代理可通过原生机制发现与调用 | 随 OMP 内置的 OpenSpec 2.0 Skill | 任意工作目录均 MUST 通过既有发现与补全提供技能名称及描述，正文按需读取，通过原生 `/skill:<name>` 显式调用并沿用资源授权和同名用户／项目资源覆盖机制，无须先安装 Skill。实际 CLI 调用统一为 `omp openspec ...`，工具声明及兼容性说明使用同一入口；仅适配宿主交付、发现与执行入口，不将正文改写为需求专用工作流，不限制为旧五项或排除 apply，不改变上游通用工作流、artifact 依赖、校验、同步及归档语义 |
 | 普通会话仅手动调用                                 | `jch-grill-me`                                                                                                                                          | 保留原资源和显式调用，不默认发现；AIReq 业务需求 Agent 必须自动注入，业务需求评审 Agent 依独立检查职责读取确认材料，固定职责及访谈停止规则置于技能正文之后                                                                                                                                                                                                                                                                                                                                                         |
+
+普通会话及其子代理 MUST 通过原生机制提供全部 12 项内置 OpenSpec Skill：`openspec-apply-change`、`openspec-archive-change`、`openspec-bulk-archive-change`、`openspec-continue-change`、`openspec-explore`、`openspec-ff-change`、`openspec-new-change`、`openspec-onboard`、`openspec-propose`、`openspec-sync-specs`、`openspec-update-change`、`openspec-verify-change`。全部技能均适用上述发现、补全、按需读取、路径授权及 `/skill:<name>` 调用规则，MUST NOT 再施加旧五项白名单。可发现或可读取不等于获准执行，模型实际使用仍 MUST 遵循原生调用授权与当前工具权限；本轮 MUST NOT 新增 AIReq 专用 Skill 过滤或阶段策略绑定。
 
 包内 Superpowers 的发现范围仅适用于包内资源；同名非包内自定义技能继续遵循既有发现、调用与优先级规则，不被此例外覆盖。用户显式调用包内技能仍沿用原生调用及授权规则；AIReq 阶段技能注入、资源授权和工具权限不因发现范围变化而扩大，打开 `/aireq` 网页本身不授予阶段资源权限。
 
-配套五项 `/opsx-propose`、`/opsx-explore`、`/opsx-update`、`/opsx-sync`、`/opsx-archive` MUST 在任意工作目录通过既有文件 slash-command 发现、补全及执行链路提供。五份命令文件以同一次固定上游 `init --tools oh-my-pi --profile core` 在隔离默认配置下生成的 `.omp/commands/opsx-*.md` 为基准，CLI 调用统一写为 `omp openspec ...`，正文和描述仅按独立需求流程适配；同步保留原生行为，归档只检查需求完整性及原生格式。命令使用既有参数展开、扩展禁用及同名用户／项目命令覆盖机制；不另建分发表、不自动执行 init、不向用户项目复制文件，不注册 `/opsx-apply` 或其他可选工作流命令，也不改变 `/aireq` 的阶段权限或批准边界。
+普通 OpenSpec MUST 复用上述原生 Skill 入口，不再交付或注册包内 `commands/opsx-*` 文件命令，不保留 `/opsx-*` 别名，不另建命令分发表。任意目录可发现技能不等于获准自动初始化项目；项目尚未初始化时仍遵循上游前置条件，请求用户显式运行 `omp openspec init`，不得因发现或读取 Skill 自动创建 `openspec/` 目录。本条仅更新普通 OpenSpec 的需求合同，不新增 AIReq 专用技能过滤、阶段策略或业务接入要求；实现、资源生成与验收状态须分别记录，不因本次规格更新视为已完成。
 
-独立 `omp openspec init` MUST 复用固定上游初始化实现，但由 OMP 封装层固定使用 `--tools=none`：技能和命令已内置，不再交互选择工具，也不在用户项目或全局目录生成技能和命令；显式传入 `--tools` 也不得重新启用生成。目录、配置、目标路径、语言及原生错误处理保持不变，不主动删除已有技能和命令。独立 OpenSpec 默认 schema 为 `mini`；现有 change 及显式选择的 schema 不强制转换，原生 `spec-driven` 资源仍保留。`update` 及其余 CLI 能力遵循固定上游；`omp-spec` 是供 AIReq 使用的独立需求 schema，AIReq 业务需求阶段只生成获授权的 proposal／增量规格，技术方案阶段同轮生成共享 design.md 与同目录 sr-dependencies.json，前者保留实现思路及技术取舍并引用后者，不生成编码执行计划或自动归档流水线。
+独立 `omp openspec init [path]` MUST 仅负责项目初始化与配置，不向项目或用户目录安装、复制、链接、更新或清理 Skill／旧命令，也不迁移或删除用户已有 Skill、命令及其他 Agent 目录。该边界 MUST 由初始化实现本身保证，不依赖宿主强制追加 `--tools=none`；仅服务交付的工具探测、工具选择及参数不再属于初始化合同。项目路径校验、必要目录结构、配置与语言上下文、目标路径解析、重复初始化及已有配置保护、store 指针拒绝规则与原生错误语义 MUST 保留。新项目默认 schema MUST 为上游 `spec-driven`，MUST NOT 注入 mini；已有配置及 change 不自动覆盖、转换或迁移，显式 schema 选择仍遵循原生规则。内置 Skill 不以初始化为安装前提，随 OMP 版本交付。
+
+普通 `omp openspec ...` 入口 MUST 使用上游通用 `spec-driven` 工作流及其原生产物依赖和校验语义，显式选择 schema 时仍遵循原生解析规则；MUST NOT 因 AIReq 旧需求而要求包内 `omp-spec`、验证其固定来源、注入私有 schema／context 或使用需求专用目录桥接。AIReq 旧有的材料范围、会话、阶段权限及归档假设 MUST NOT 约束普通 OpenSpec，也不得据此删减通用工作流要求的 design／tasks 等产物。现有用户配置及 change 不因本条自动转换或迁移。
+
+内置 OpenSpec 的 Skill 与运行资源 MUST 随 OMP 发行版本更新，不通过 `omp openspec update` 安装、刷新或迁移。经职责核对，撤销 Skill／命令交付、profile 同步、旧产物迁移及独立安装升级链后，update 没有必须保留的独立项目职责，因此 MUST 移除该 CLI 入口及专属实现；同步清除公开导出、补全、帮助、配置侧自动应用调用和更新提示中的旧入口，不保留兼容别名、无操作成功或“已是最新”响应。调用 `omp openspec update` MUST 按正常未知命令返回非零退出码，不修改用户已有 Skill、命令、配置或 change；不得为替代它新增运行时自动下载或自升级机制。共享配置、模板及安全工具仅在确无剩余消费者时删除，不因本条改变其他通用 CLI 业务语义。`openspec-update-change` 是维护需求材料的业务 Skill，MUST 保留，不属于被移除的安装更新命令。
+
+`omp-spec` 是供 AIReq 使用的独立需求 schema，AIReq 业务需求阶段只生成获授权的 proposal／增量规格，技术方案阶段同轮生成共享 design.md 与同目录 sr-dependencies.json，前者保留实现思路及技术取舍并引用后者，不生成编码执行计划或自动归档流水线。
 
 Superpowers 的技能、上游插件及扩展保留固定版本原始文件，所有包内 Superpowers `SKILL.md` 均增加 `disable-model-invocation: true`；未来同步或更新上游资源时同样保留该字段。不为 OMP 改写工具名称、子代理名称或脚本调用。依赖宿主提供的能力及实际可用性不改变上游基线。
 
@@ -44,11 +52,15 @@ Superpowers 的技能、上游插件及扩展保留固定版本原始文件，�
 
 #### Scenario: 初始化不重复安装内置资源
 
-- **WHEN** 用户运行 `omp openspec init [path]`，包括已检测到工具、显式指定工具或重复初始化
-- **THEN** 仅执行原生项目初始化，建立必要的 `openspec/` 目录及配置，不生成技能和命令；保留已有自定义命令及配置，仍支持 `--language` 和 `--` 后的目标路径
+- **WHEN** 用户运行 `omp openspec init [path]`，包括非 TTY、已检测到工具或重复初始化
+- **THEN** 仅建立原生初始化所需的 `openspec/` 目录及配置，新项目默认使用 `spec-driven`，不因检测到工具而选择或交付 Skill／命令，不触碰已有 Skill、自定义命令或其他 Agent 目录
+- **AND** 保留 `--language`、`--` 后目标路径、已有配置保护及重复初始化语义；遇到不允许初始化的 store 指针 MUST 按原生规则拒绝，不覆盖或迁移既有内容
+- **AND** 非 TTY 不要求选择交付工具；必要业务输入沿用现有配置／显式参数或返回明确错误，不擅自选择语言、覆盖配置或改变原生错误语义
 
 
 ### Requirement: AIReq 需求 schema 固定为包内 omp-spec
+
+> 适用范围：本节保留的旧条款仅记录 AIReq 专属需求，不适用于普通 OpenSpec，不构成本轮恢复包内 `omp-spec` 或私有桥接的依据。AIReq 后续需求另行确定；本轮不重新定义、删除或实现其专属 schema、流程、会话或权限，也不将其接入、兼容或隔离作为普通 OpenSpec 适配的完成条件。
 
 OMP MUST 把 `omp-spec` 的唯一来源固定为随包内置 schema；项目或用户同名覆盖 MUST 被拒绝，不得静默改用另一套 AIReq 工作流。
 

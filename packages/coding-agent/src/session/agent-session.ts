@@ -122,6 +122,8 @@ import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager, type AsyncJobManagerApi } from "../async";
+import { TodoLoopNative } from "../todoloop/native";
+import { runTodoLoop as runTodoLoopProgram, type TodoLoopRunOptions, type TodoLoopState } from "../todoloop/runner";
 import { planParallel } from "../auto-parallel/planner";
 import { classifyAutoPrewalk } from "../auto-prewalk/classifier";
 import { reset as resetCapabilities } from "../capability";
@@ -1242,6 +1244,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	readonly #eval: EvalRunner;
 	readonly #evalToolSession: ToolSession | undefined;
+	#todoLoopController: AbortController | undefined;
 	/** Manager owned by this top-level session; subagents borrow but never dispose it. */
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	readonly #releaseOwnedAsyncJobManager: ((options?: { strict?: boolean }) => Promise<boolean | void>) | undefined;
@@ -6488,6 +6491,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#beginSessionTransition(): Disposable {
+		this.#cancelTodoLoop(true);
 		// Before anything awaits: a reload keeps the session id, so only the transition itself can supersede
 		// a pending idle check or an in-flight recap that belong to the transcript being replaced.
 		this.#idleMaintenance?.invalidate();
@@ -6783,6 +6787,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * gap slips past the disposal guards.
 	 */
 	beginDispose(options?: { strict?: boolean }): void {
+		this.#cancelTodoLoop(true);
 		this.#isDisposed = true;
 		this.#abortCustomCommands("Session disposed");
 		if (!options?.strict) for (const dispose of this.#disposers.splice(0)) dispose();
@@ -14824,6 +14829,52 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#eval.assertExecutionAllowed();
 	}
 
+	#cancelTodoLoop(revokeOwnership = false): void {
+		const controller = this.#todoLoopController;
+		if (revokeOwnership) this.#todoLoopController = undefined;
+		controller?.abort(new DOMException("TodoLoop session execution stopped", "AbortError"));
+	}
+
+	/** Run file-only scheduling without sending any prompt or summary to the primary model. */
+	async runTodoLoop(options: Omit<TodoLoopRunOptions, "cwd">): Promise<TodoLoopState> {
+		this.assertEvalExecutionAllowed();
+		if (this.#isDisposed || this.#sessionTransitionDepth > 0) throw new Error("TodoLoop requires an active session");
+		if (this.#todoLoopController) throw new Error("TodoLoop is already running");
+		const session = this.#evalToolSession;
+		if (!session) throw new Error("TodoLoop requires a live eval tool session");
+		const controller = new AbortController();
+		this.#todoLoopController = controller;
+		const abort = (): void => controller.abort(options.signal?.reason);
+		options.signal?.addEventListener("abort", abort, { once: true });
+		if (options.signal?.aborted) abort();
+		const unsubscribe = this.subscribe(event => {
+			if (event.type === "session_abort") controller.abort(event.reason);
+		});
+		try {
+			return await this.trackEvalExecution(
+				runTodoLoopProgram(
+					{
+						...options,
+						cwd: session.cwd,
+						signal: controller.signal,
+						onState: state => {
+							if (this.#todoLoopController === controller) options.onState?.(state);
+						},
+						onAttempt: event => {
+							if (this.#todoLoopController === controller) options.onAttempt?.(event);
+						},
+					},
+					new TodoLoopNative(session),
+				),
+				controller,
+			);
+		} finally {
+			unsubscribe();
+			options.signal?.removeEventListener("abort", abort);
+			if (this.#todoLoopController === controller) this.#todoLoopController = undefined;
+		}
+	}
+
 	/**
 	 * Track Python work started outside AgentSession.executePython so dispose can await and abort it too.
 	 */
@@ -14842,6 +14893,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * Cancel running Python execution.
 	 */
 	abortEval(): void {
+		this.#cancelTodoLoop();
 		this.#eval.abort();
 	}
 

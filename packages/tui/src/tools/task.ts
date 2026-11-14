@@ -745,6 +745,7 @@ function renderAgentProgress(
 	nestedDepth = 0,
 	nowMs = Date.now(),
 	maxWidth = Number.POSITIVE_INFINITY,
+	showExecutionTrace = false,
 ): string[] {
 	const lines: string[] = [];
 
@@ -941,8 +942,14 @@ function renderAgentProgress(
 		}
 	}
 
+	if (expanded && showExecutionTrace) {
+		for (const entry of executionTools(progress)) {
+			lines.push(`${continuePrefix}${theme.fg(entry.error ? "error" : "muted", entry.text)}`);
+		}
+	}
+
 	// Expanded view: recent output and tools
-	if (expanded && progress.status === "running") {
+	if (expanded && (progress.status === "running" || showExecutionTrace)) {
 		const previewRows = previewWindowRows();
 		lines.push(
 			...memoBySnapshot(recentOutputMemo, progress.recentOutput, [continuePrefix, theme, previewRows], () => {
@@ -1426,14 +1433,15 @@ export function renderResult(
 	const aborted = abortedCount > 0;
 	const failed = failCount > 0;
 	const mergeFailed = mergeFailedCount > 0;
-	const isError = aborted || failed;
+	const isError = aborted || failed || (details.showExecutionTrace === true && result.isError === true);
 	const agentCount = hasResults ? details.results.length : (details.progress?.length ?? 0);
 	const icon: ToolUIStatus = options.isPartial ? "running" : isError ? "error" : mergeFailed ? "warning" : "success";
 	// Header meta is the spawn count only; each row carries its own ⟨agent⟩
 	// badge, so a joined type list here would repeat them. Before anything
 	// spawns, fall back to the flat form's agent type from the call args.
 	const countLabel = agentCount > 0 ? `${agentCount} ${agentCount === 1 ? "agent" : "agents"}` : undefined;
-	const metaLabel = countLabel ?? agentLabel;
+	const executionLabel = details.showExecutionTrace ? taskSummary(args?.tasks?.[0]?.task ?? "") : undefined;
+	const metaLabel = executionLabel || countLabel || agentLabel;
 	const header = renderStatusLine(
 		{
 			// While agents are in flight the header shows the dispatch glyph, not a
@@ -1500,6 +1508,7 @@ export function renderResult(
 						0,
 						nowMs,
 						contentWidth,
+						details.showExecutionTrace,
 					),
 				);
 			}
@@ -1546,6 +1555,7 @@ export function renderResult(
 						0,
 						nowMs,
 						contentWidth,
+						details.showExecutionTrace,
 					),
 				);
 			}
@@ -1577,7 +1587,12 @@ export function renderResult(
 				sections: [
 					...(contextSection ? [contextSection(width)] : []),
 					...(assignmentSection ? [assignmentSection(width)] : []),
-					{ separator: true, content: [theme.fg("dim", truncateToWidth(text, width))] },
+					{
+						separator: true,
+						content: (details.showExecutionTrace ? text.split("\n") : [text]).map(line =>
+							theme.fg("dim", truncateToWidth(line, width)),
+						),
+					},
 				],
 				phase,
 				borderColor,
@@ -1848,6 +1863,7 @@ interface AgentDescribeState {
 	readonly background: boolean;
 	/** The host draws the `json` kind. */
 	readonly json: boolean;
+	readonly showExecutionTrace?: boolean;
 }
 
 /** Settled and in-flight child snapshots a subagent carries, as nested agent nodes. */
@@ -1886,6 +1902,25 @@ function agentNode(
 ): NativeNode {
 	const props: TspProps<"agent"> = assignment ? { ...p, hovercard: propNode(assignment) } : p;
 	return node("agent", props, compact(children), key);
+}
+
+/** Real bridge tool snapshots; no subprocess results are synthesized for eval jobs. */
+function executionTools(progress: AgentProgress): { text: string; error: boolean }[] {
+	const tools = progress.recentTools.map(tool => ({
+		text: replaceTabs(
+			sanitizeText(`${tool.tool}${tool.args ? `: ${tool.args}` : ""}${tool.isError ? " (error)" : ""}`),
+		),
+		error: tool.isError === true,
+	}));
+	if (progress.currentTool) {
+		tools.unshift({
+			text: replaceTabs(
+				sanitizeText(`${progress.currentTool}${progress.currentToolArgs ? `: ${progress.currentToolArgs}` : ""}`),
+			),
+			error: false,
+		});
+	}
+	return tools;
 }
 
 function describeProgressAgent(progress: AgentProgress, state: AgentDescribeState, depth: number): NativeNode {
@@ -1957,6 +1992,19 @@ function describeProgressAgent(progress: AgentProgress, state: AgentDescribeStat
 						{ wrap: "word", role: "omp.tool.error" },
 					)
 				: undefined,
+			...(state.showExecutionTrace
+				? [
+						...executionTools(progress).map(tool =>
+							text([span(tool.text, tool.error ? "error" : "muted")], { wrap: "word", role: "omp.task.tool" }),
+						),
+						...progress.recentOutput
+							.slice()
+							.reverse()
+							.map(output =>
+								text([span(replaceTabs(sanitizeText(output)))], { wrap: "word", role: "omp.task.output" }),
+							),
+					]
+				: []),
 			...describeNestedTasks(progress, state, depth),
 		],
 		progress.id,
@@ -2127,6 +2175,7 @@ function describeTaskResult(
 			expanded: options.expanded,
 			background,
 			json: options.json === true,
+			showExecutionTrace: details.showExecutionTrace,
 		},
 		0,
 	);
@@ -2164,7 +2213,8 @@ function describeTaskResult(
 					.filter(line => line.trim())
 					.join("\n")
 			: "";
-	const target = count > 0 ? agentCountLabel(count) : agentLabel;
+	const executionLabel = details.showExecutionTrace ? taskSummary(args?.tasks?.[0]?.task ?? "") : undefined;
+	const target = executionLabel || (count > 0 ? agentCountLabel(count) : agentLabel);
 	return {
 		tool: {
 			title: "Task",
@@ -2173,7 +2223,7 @@ function describeTaskResult(
 			meta: summary.length > 0 ? [summary.join(" · ")] : undefined,
 			badges: background ? [{ text: "background" }] : undefined,
 		},
-		tone: aborted + failed > 0 ? "error" : undefined,
+		tone: aborted + failed > 0 || (details.showExecutionTrace && result.isError) ? "error" : undefined,
 		preview: "none",
 		body: compact([
 			context,
@@ -2582,6 +2632,8 @@ export interface TaskToolDetails {
 	usage?: Usage;
 	outputPaths?: string[];
 	progress?: AgentProgress[];
+	/** Explicit command cards can disclose real bridge tools/output after settlement as well as while running. */
+	showExecutionTrace?: boolean;
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;

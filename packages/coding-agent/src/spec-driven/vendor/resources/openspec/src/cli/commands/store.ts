@@ -119,8 +119,8 @@ export function registerStoreCommand(program: Command): void {
     if (operands.includes('--json')) {
       const message =
         attempted.length > 0
-          ? `Unknown command '${attempted[0]}' for 'openspec store'. Store subcommands: ${storeSubcommandsLine}.`
-          : `Missing subcommand for 'openspec store'. Store subcommands: ${storeSubcommandsLine}.`;
+          ? `Unknown command '${attempted[0]}' for 'omp openspec store'. Store subcommands: ${storeSubcommandsLine}.`
+          : `Missing subcommand for 'omp openspec store'. Store subcommands: ${storeSubcommandsLine}.`;
       printJson({
         status: [
           {
@@ -134,19 +134,19 @@ export function registerStoreCommand(program: Command): void {
       process.exitCode = 1;
       return;
     }
-    let example = 'openspec new change <change-id> --store <id>';
+    let example = 'omp openspec new change <change-id> --store <id>';
     if (!hasFlagLikeToken && attempted.length > 0 && lifecycleRedirects.has(attempted[0])) {
       if (attempted[0] === 'new') {
         const changeId = attempted[1] === 'change' && attempted[2] ? attempted[2] : '<change-id>';
-        example = `openspec new change ${changeId} --store <id>`;
+        example = `omp openspec new change ${changeId} --store <id>`;
       } else {
         example = `openspec ${attempted.join(' ')} --store <id>`;
       }
     }
     console.error(
       attempted.length > 0
-        ? `Error: unknown command '${attempted[0]}' for 'openspec store'.`
-        : "Error: missing subcommand for 'openspec store'."
+        ? `Error: unknown command '${attempted[0]}' for 'omp openspec store'.`
+        : "Error: missing subcommand for 'omp openspec store'."
     );
     console.error(
       `Store subcommands manage store registration: ${storeSubcommandsLine}.`

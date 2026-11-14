@@ -17,11 +17,3 @@ export {
 
 // File system utilities
 export { FileSystemUtils, removeMarkerBlock } from './file-system.js';
-
-// Command reference utilities
-export {
-  transformCommandInvocations,
-  transformToSkillReferences,
-  getSkillReferenceTransformer,
-  getTransformerForTool,
-} from './command-references.js';

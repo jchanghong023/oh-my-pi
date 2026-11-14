@@ -355,7 +355,7 @@ export function readRetireCapabilitiesMarker(changeDir: string): MetadataMarker 
  *
  * Every reason quotes something the author wrote - a schema name, a parser
  * message carrying one, a filesystem error carrying a path - and callers print
- * it straight to a terminal (`openspec archive`, `openspec validate`). A raw CR
+ * it straight to a terminal (`omp openspec archive`, `omp openspec validate`). A raw CR
  * could forge a line of its own and an ESC could redraw the screen, so control
  * characters never leave this function.
  */

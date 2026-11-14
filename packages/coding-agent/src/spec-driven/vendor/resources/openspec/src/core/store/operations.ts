@@ -349,7 +349,7 @@ function resolveSetupRoot(id: string, inputPath: string | undefined): string {
       'store_setup_path_required',
       {
         target: 'store.root',
-        fix: `openspec store setup ${id} --path ~/openspec/${id}`,
+        fix: `omp openspec store setup ${id} --path ~/openspec/${id}`,
       }
     );
   }
@@ -361,7 +361,7 @@ function resolveRegisterRoot(inputPath: string | undefined): string {
   if (inputPath === undefined || inputPath.trim().length === 0) {
     throw new StoreError('Pass a store path.', 'store_path_required', {
       target: 'store.root',
-      fix: 'openspec store register /path/to/store',
+      fix: 'omp openspec store register /path/to/store',
     });
   }
 
@@ -596,7 +596,7 @@ export async function setupPreparedStore(
       'store_setup_path_changed',
       {
         target: 'store.root',
-        fix: 'Rerun openspec store setup to re-evaluate the directory.',
+        fix: 'Rerun omp openspec store setup to re-evaluate the directory.',
       }
     );
   }
@@ -783,7 +783,7 @@ export async function registerExistingStore(
         target: 'openspec.root',
         fix: isEmptyCloneSuspect
           ? 'If this is a store clone: commit and push the origin store, pull it into this clone, then rerun register.'
-          : 'Run openspec store setup for a new store, or point register at a checkout whose openspec/ files are present.',
+          : 'Run omp openspec store setup for a new store, or point register at a checkout whose openspec/ files are present.',
       }
     );
   }
@@ -805,7 +805,7 @@ export async function registerExistingStore(
       {
         target: 'store.id',
         fix: registeredElsewhere
-          ? `One checkout per store id is supported, and '${metadata.id}' is already registered. Run openspec store unregister ${metadata.id} first to register this checkout instead.`
+          ? `One checkout per store id is supported, and '${metadata.id}' is already registered. Run omp openspec store unregister ${metadata.id} first to register this checkout instead.`
           : `Use --id ${metadata.id} or register a different folder.`,
       }
     );
@@ -918,7 +918,7 @@ async function assertSafeToDeleteStoreRoot(storeRoot: string, id: string): Promi
       'store_remove_path_not_directory',
       {
         target: 'store.root',
-        fix: 'Run "openspec store unregister <id>" if you only want to forget this local registry entry.',
+        fix: 'Run "omp openspec store unregister <id>" if you only want to forget this local registry entry.',
       }
     );
   }
@@ -930,7 +930,7 @@ async function assertSafeToDeleteStoreRoot(storeRoot: string, id: string): Promi
       'store_remove_metadata_missing',
       {
         target: 'store.metadata',
-        fix: 'Run "openspec store unregister <id>" if you only want to forget this local registry entry.',
+        fix: 'Run "omp openspec store unregister <id>" if you only want to forget this local registry entry.',
       }
     );
   }
@@ -972,13 +972,13 @@ function assertNoRegisteredStoreInside(
   if (nested.length === 0) return;
 
   const listed = nested.map((other) => `'${other.id}' (${other.storeRoot})`).join(', ');
-  const unregister = nested.map((other) => `openspec store unregister ${other.id}`).join(', then ');
+  const unregister = nested.map((other) => `omp openspec store unregister ${other.id}`).join(', then ');
   throw new StoreError(
     `Store remove refuses to delete ${storeRoot}: it contains ${nested.length === 1 ? 'another registered store' : 'other registered stores'}: ${listed}.`,
     'store_remove_contains_registered_store',
     {
       target: 'store.root',
-      fix: `Unregister or remove ${nested.length === 1 ? 'that store' : 'those stores'} first (${unregister}), or run "openspec store unregister ${id}" to forget '${id}' without deleting files.`,
+      fix: `Unregister or remove ${nested.length === 1 ? 'that store' : 'those stores'} first (${unregister}), or run "omp openspec store unregister ${id}" to forget '${id}' without deleting files.`,
     }
   );
 }
@@ -1108,7 +1108,7 @@ async function inspectStore(entry: {
       'Store location does not exist.',
       {
         target: 'store.root',
-        fix: `Run openspec store register /path/to/${entry.id} --id ${entry.id}.`,
+        fix: `Run omp openspec store register /path/to/${entry.id} --id ${entry.id}.`,
       }
     ));
   } else if (kind !== 'directory') {
@@ -1237,7 +1237,7 @@ export async function doctorStores(id?: string): Promise<StoreDoctorResult> {
     if (selectedId !== undefined) {
       throw new StoreError(`Unknown store '${selectedId}'.`, 'store_not_found', {
         target: 'store.id',
-        fix: 'Run openspec store list to see registered stores.',
+        fix: 'Run omp openspec store list to see registered stores.',
       });
     }
 
@@ -1252,7 +1252,7 @@ export async function doctorStores(id?: string): Promise<StoreDoctorResult> {
   if (selectedId && selected.length === 0) {
     throw new StoreError(`Unknown store '${selectedId}'.`, 'store_not_found', {
       target: 'store.id',
-      fix: 'Run openspec store list to see registered stores.',
+      fix: 'Run omp openspec store list to see registered stores.',
     });
   }
 

@@ -57,6 +57,15 @@ _openspec_completion() {
     cword=$COMP_CWORD
   fi
 
+  # Scope this completer to the OpenSpec subcommand of omp.
+  if [[ $cword -eq 1 ]]; then
+    COMPREPLY=($(compgen -W "openspec" -- "$cur"))
+    return 0
+  fi
+  [[ "\${words[1]}" == openspec ]] || return 0
+  words=("\${words[0]}" "\${words[@]:2}")
+  ((cword--))
+
   local cmd="\${words[1]}"
   local subcmd="\${words[2]}"
 
@@ -76,7 +85,7 @@ ${commandCases}
 }
 
 ${helpers}
-complete -F _openspec_completion openspec
+complete -F _openspec_completion omp
 `;
   }
 

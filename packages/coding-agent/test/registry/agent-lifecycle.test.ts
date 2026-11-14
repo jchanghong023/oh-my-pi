@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { type AgentLifecycleApi, AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import { AgentRegistry, type AgentRegistryApi, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import {
+	AgentRegistry,
+	type AgentRegistryApi,
+	isResumable,
+	MAIN_AGENT_ID,
+} from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { registerPersistedSubagents } from "@oh-my-pi/pi-coding-agent/registry/persisted-agents";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AgentSessionHandle } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
@@ -1080,6 +1085,71 @@ describe("AgentLifecycleManager strict owned release", () => {
 	function cleanupErrors(error: unknown): unknown[] {
 		return error instanceof AggregateError ? error.errors.flatMap(cleanupErrors) : [error];
 	}
+
+	it("strictly retains read-only records, retries failed cleanup, and never revives or kills a completed worker", async () => {
+		const registry = new AgentRegistry();
+		const lifecycle = new AgentLifecycleManager(registry);
+		const root = registry.register({ id: "root", displayName: "root", kind: "main", session: null });
+		let fail = true;
+		const dispose = makeSessionStub(async () => {
+			if (fail) throw new Error("dispose remains pending");
+		});
+		const child = registry.register({
+			id: "child",
+			displayName: "child",
+			kind: "sub",
+			parentId: root.id,
+			session: dispose.session,
+			sessionFile: "/transcripts/child.jsonl",
+			status: "idle",
+		});
+		const siblingSession = makeSessionStub();
+		const sibling = registry.register({
+			id: "sibling",
+			displayName: "sibling",
+			kind: "sub",
+			session: siblingSession.session,
+			status: "running",
+		});
+		const revive = vi.fn(async () => makeSessionStub().session);
+		const onRelease = vi.fn(async () => {});
+		const onReviverDropped = vi.fn(() => {});
+		lifecycle.adopt(child.id, { idleTtlMs: 0, revive, onRelease, onReviverDropped }, child);
+		lifecycle.setPersistedSubagentReviverFactory(
+			async () => revive,
+			() => 0,
+		);
+		try {
+			await expect(lifecycle.releaseDescendants(root, undefined, { retainRecord: true })).rejects.toThrow();
+			expect(lifecycle.has(child.id, child)).toBe(true);
+			expect(onRelease).not.toHaveBeenCalled();
+			expect(onReviverDropped).not.toHaveBeenCalled();
+			await expect(lifecycle.ensureLive(child.id)).rejects.toThrow("being released");
+			fail = false;
+			await lifecycle.releaseDescendants(root, undefined, { retainRecord: true });
+			expect(registry.get(child.id)).toBe(child);
+			expect(child.status).toBe("parked");
+			expect(child.session).toBeNull();
+			expect(child.sessionFile).toBe("/transcripts/child.jsonl");
+			expect(isResumable(child)).toBe(false);
+			expect(lifecycle.has(child.id, child)).toBe(false);
+			expect(dispose.disposeCalls()).toBe(2);
+			expect(onRelease).toHaveBeenCalledTimes(1);
+			expect(onReviverDropped).toHaveBeenCalledTimes(1);
+			await expect(lifecycle.ensureLive(child.id)).rejects.toThrow("read-only execution record");
+			expect(revive).not.toHaveBeenCalled();
+			expect(registry.attachSession(child.id, makeSessionStub().session, undefined, child)).toBe(false);
+			expect(registry.setStatus(child.id, "running", child)).toBe(false);
+			expect(registry.get(sibling.id)).toBe(sibling);
+			expect(siblingSession.disposeCalls()).toBe(0);
+			// Explicit session teardown still removes retained records.
+			await lifecycle.releaseDescendants(root, undefined, { strict: true });
+			expect(registry.get(child.id)).toBeUndefined();
+		} finally {
+			fail = false;
+			await lifecycle.dispose();
+		}
+	});
 
 	it("retains failed nested cleanup routes, settles independent branches, and retries only unfinished resources", async () => {
 		const registry = new AgentRegistry();

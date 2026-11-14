@@ -4,7 +4,6 @@ import https from 'https';
 import path from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
-import chalk from 'chalk';
 import { isCiEnvironment } from '../utils/ci.js';
 import { isTelemetryOptedOutByEnv } from '../telemetry/opt-out.js';
 import { FileSystemUtils } from '../utils/file-system.js';
@@ -16,7 +15,6 @@ const { name: PACKAGE_NAME, version: OPENSPEC_VERSION } = require('../../package
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
 const REQUEST_TIMEOUT_MS = 1500;
 const MAX_RESPONSE_BYTES = 256 * 1024;
-const VERSION_PROBE_TIMEOUT_MS = 5000;
 const MAX_REDIRECTS = 3;
 
 /**
@@ -33,7 +31,7 @@ const SAFE_VERSION = /^\d{1,10}\.\d{1,10}\.\d{1,10}(?:-[0-9A-Za-z.-]{1,64})?(?:\
  * same privacy signals telemetry already honors — a user who set DO_NOT_TRACK
  * or telemetry.enabled false did not agree to a different outbound request.
  *
- * `requested` is an explicit `openspec version --check`: the user asked for
+ * `requested` is an explicit `omp openspec version --check`: the user asked for
  * this one request, so neither the telemetry signals nor CI detection apply
  * to it. Only the update-check opt-out and the test guard still stop it.
  */
@@ -335,14 +333,6 @@ export async function checkForCliUpdate(
   }
 }
 
-/**
- * Returns the published version when the installed CLI is behind it, otherwise
- * null. Kept as the compatibility surface used by `openspec update`.
- */
-export async function getAvailableCliUpdate(): Promise<string | null> {
-  const result = await checkForCliUpdate();
-  return result.status === 'available' ? result.latest : null;
-}
 
 /**
  * Directory the running CLI was loaded from, or null when it cannot be
@@ -362,7 +352,7 @@ export function getInstallDir(): string | null {
  * True when the running CLI resolves from a `node_modules` belonging to the
  * project being updated or any ancestor of it — the hoisted-root layout npm and
  * pnpm workspaces produce. Anchored on the target path rather than the working
- * directory, since `openspec update <path>` and running from a sub-package are
+ * directory, since `omp openspec update <path>` and running from a sub-package are
  * both normal. Never throws: process.cwd() fails when the directory has been
  * deleted, and a wrong upgrade hint must not take down a successful update.
  */
@@ -638,66 +628,6 @@ export function buildVersionReportLines(
   return lines;
 }
 
-/**
- * Builds the hint, with the upgrade command chosen for how this copy of the CLI
- * was installed. Pure so every branch is assertable.
- */
-export function buildCliUpdateLines(
-  latestVersion: string,
-  installDir: string | null,
-  projectPath: string,
-  options: { withCommand?: boolean } = {}
-): string[] {
-  const lines = [`A newer OpenSpec CLI is available (v${OPENSPEC_VERSION} → v${latestVersion}).`];
-
-  // Omitted when we are about to offer to run it — printing a command and then
-  // asking to run that same command reads like the user has to do both.
-  if (options.withCommand !== false) {
-    lines.push(...buildUpgradeCommandLines(installDir, projectPath));
-  }
-  if (installDir) {
-    lines.push(`  Running from: ${installDir}`);
-  }
-
-  return lines;
-}
-
-/**
- * The upgrade command for however this copy was installed, plus the reminder
- * that instruction files come from the CLI and so need a second pass.
- */
-export function buildUpgradeCommandLines(
-  installDir: string | null,
-  projectPath: string
-): string[] {
-  const lines: string[] = [];
-
-  if (isEphemeralRunnerInstall(installDir)) {
-    // That command *is* the update, so there is nothing to run afterwards.
-    lines.push(`  npx ${PACKAGE_NAME}@latest update`);
-    return lines;
-  }
-
-  if (isProjectLocalInstall(installDir, projectPath)) {
-    // Its package manager owns the lockfile; naming npm could be wrong.
-    lines.push(`  Update the ${PACKAGE_NAME} dependency in this project.`);
-  } else {
-    lines.push(`  ${GLOBAL_UPGRADE_COMMANDS[detectPackageManager(installDir)]}`);
-  }
-
-  lines.push('  Then run "openspec update" again to pick up new workflows.');
-  return lines;
-}
-
-// cross-spawn resolves npm's shim on Windows, where spawning "npm" directly
-// fails. Loaded lazily so ordinary runs skip its module graph.
-let cachedSpawn: typeof import('child_process').spawn | undefined;
-function loadSpawn(): typeof import('child_process').spawn {
-  if (cachedSpawn === undefined) {
-    cachedSpawn = require('cross-spawn') as typeof import('child_process').spawn;
-  }
-  return cachedSpawn;
-}
 
 /**
  * Whether we can run the upgrade for the user instead of only printing it.
@@ -717,273 +647,10 @@ export function canSelfUpgrade(installDir: string | null, projectPath: string): 
   if (!installDir) return false;
   if (!isDefaultRegistry()) return false;
   if (isEphemeralRunnerInstall(installDir)) return false;
-  // Both anchors matter: `openspec update ../other` from a project that owns
-  // the CLI as a dependency is still a project-local install.
+  // Both the target project and current project must not own this install.
   if (isProjectLocalInstall(installDir, projectPath)) return false;
   if (isProjectLocalInstall(installDir)) return false;
   if (isSourceCheckout(installDir)) return false;
   return isNpmGlobalInstall(installDir);
 }
 
-/**
- * Whether to offer the upgrade rather than just print the command. Kept here,
- * as a pure function of the environment, because the interesting mistakes live
- * in this decision: offering where `npm install -g` cannot help, or asking a
- * question no one can answer.
- */
-export function shouldOfferUpgrade(params: {
-  installDir: string | null;
-  projectPath: string;
-  interactive: boolean;
-  stdoutIsTty: boolean;
-}): boolean {
-  // A prompt written to a redirected stdout is a question the user never sees
-  // and the command waits on forever.
-  if (!params.interactive || !params.stdoutIsTty) return false;
-  return canSelfUpgrade(params.installDir, params.projectPath);
-}
-
-/**
- * Runs `npm install -g <pkg>@latest`, inheriting stdio so npm's own output —
- * including any auth or permission prompt — reaches the user directly.
- * Resolves true only on a clean exit.
- */
-async function runGlobalUpgrade(): Promise<boolean> {
-  const spawn = loadSpawn();
-
-  return new Promise((resolve) => {
-    const child = spawn('npm', ['install', '-g', `${PACKAGE_NAME}@latest`], {
-      stdio: 'inherit',
-    });
-    child.on('error', () => resolve(false));
-    child.on('close', (code) => resolve(code === 0));
-  });
-}
-
-/**
- * The `openspec` npm installs alongside its global package, so the upgrade can
- * be handed to the copy npm just wrote rather than to whatever PATH resolves.
- * Null when it cannot be found, in which case PATH is the only option left.
- */
-export function upgradedBinPath(
-  roots: string[] = npmGlobalRoots(),
-  installDir: string | null = getInstallDir()
-): string | null {
-  // The copy npm just replaced tells us exactly which prefix it wrote to;
-  // a root derived from the node binary can point at an unrelated install.
-  const ownPrefix = npmPrefixFromInstallDir(installDir);
-  const ordered = ownPrefix
-    ? [
-        process.platform === 'win32'
-          ? path.join(ownPrefix, 'node_modules')
-          : path.join(ownPrefix, 'lib', 'node_modules'),
-        ...roots,
-      ]
-    : roots;
-
-  for (const root of ordered) {
-    // npm writes the shim beside the global root on Windows
-    // (%APPDATA%\\npm\\openspec.cmd) and in <prefix>/bin on POSIX.
-    const candidates =
-      process.platform === 'win32'
-        ? [path.join(path.dirname(root), 'openspec.cmd')]
-        : [path.resolve(root, '..', '..', 'bin', 'openspec')];
-
-    for (const candidate of candidates) {
-      try {
-        if (fs.existsSync(candidate)) return candidate;
-      } catch {
-        // Unreadable candidate; try the next one.
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Asks a CLI binary its version. Used to confirm an upgrade actually landed:
- * `npm install -g` exits 0 even when it installed nothing, so its exit code
- * alone cannot justify telling the user they are on a new version.
- */
-export function readCliVersion(binPath: string): Promise<string | null> {
-  const spawn = loadSpawn();
-
-  return new Promise((resolve) => {
-    let output = '';
-    let child;
-    try {
-      child = spawn(binPath, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
-    } catch {
-      resolve(null);
-      return;
-    }
-
-    // Never let a probe hold the CLI open: a wrapper that traps SIGTERM would
-    // otherwise keep the process alive for as long as it runs.
-    child.unref();
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      resolve(null);
-    }, VERSION_PROBE_TIMEOUT_MS);
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    child.on('error', () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
-    child.on('close', () => {
-      clearTimeout(timer);
-      // A line that is only a version, not the first version-shaped token
-      // anywhere: a wrapper banner ("Node.js v25.8.1 | OpenSpec") would
-      // otherwise be read as the answer.
-      const version = output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => SAFE_VERSION.test(line.replace(/^v/, '')))
-        .pop();
-      resolve(version ? version.replace(/^v/, '') : null);
-    });
-  });
-}
-
-export type UpgradeOutcome = 'upgraded' | 'declined' | 'failed' | 'cancelled' | 'not-on-path';
-
-function isPromptCancellation(error: unknown): boolean {
-  const name = (error as { name?: string } | undefined)?.name;
-  return name === 'ExitPromptError' || name === 'AbortPromptError';
-}
-
-/**
- * Offers to run the upgrade and reports what actually happened. The version is
- * read back from the installed binary rather than assumed, so "upgraded" is a
- * fact and a PATH that still answers with the old copy is caught here instead
- * of silently doing nothing.
- */
-export async function offerCliUpgrade(latestVersion: string): Promise<UpgradeOutcome> {
-  const { confirm } = await import('@inquirer/prompts');
-
-  let accepted = false;
-  try {
-    accepted = await confirm({
-      message: `Upgrade to v${latestVersion} now?`,
-      default: true,
-    });
-  } catch (error) {
-    // Ctrl-C means stop, not "no thanks, carry on with everything else".
-    return isPromptCancellation(error) ? 'cancelled' : 'declined';
-  }
-  if (!accepted) return 'declined';
-
-  console.log();
-  const installed = await runGlobalUpgrade();
-  console.log();
-
-  if (!installed) {
-    console.log(chalk.yellow('The upgrade did not complete. A global install may need'));
-    console.log(chalk.yellow('elevated permissions, or a different package manager.'));
-    return 'failed';
-  }
-
-  const binPath = upgradedBinPath();
-  const version = await readCliVersion(binPath ?? 'openspec');
-
-  if (!version) {
-    console.log(chalk.yellow('Upgrade finished, but no "openspec" could be run to confirm it.'));
-    return 'not-on-path';
-  }
-  if (compareVersions(version, OPENSPEC_VERSION) <= 0) {
-    console.log(chalk.yellow(`Upgrade finished, but "openspec" still reports v${version}.`));
-    console.log(
-      chalk.dim(
-        binPath
-          ? // We asked the installed copy directly, so PATH is not the story.
-            `  npm reported success, but ${binPath} did not change.`
-          : '  Another install earlier on your PATH is answering first.'
-      )
-    );
-    return 'not-on-path';
-  }
-
-  console.log(chalk.green(`✓ Upgraded to v${version}.`));
-  return 'upgraded';
-}
-
-/**
- * Runs `openspec update` again with the CLI that was just installed — this
- * process is still the old code, so it cannot write the new workflows itself.
- * Resolves the exit code to pass along; when no `openspec` is on PATH the
- * upgrade still landed but nothing was regenerated, so it says so and
- * resolves 0 rather than reporting a failure the upgrade did not have.
- */
-export async function rerunUpdateWithUpgradedCli(
-  projectPath: string,
-  options: { force?: boolean; binPath?: string } = {}
-): Promise<number> {
-  const spawn = loadSpawn();
-  const binPath = options.binPath ?? upgradedBinPath() ?? 'openspec';
-  // The re-run stands in for the command the user typed, so it has to carry
-  // the flags they typed with it.
-  const args = ['update'];
-  if (options.force) args.push('--force');
-  // `--` so a path that looks like a flag stays a path.
-  args.push('--', projectPath);
-
-  return new Promise((resolve) => {
-    const child = spawn(binPath, args, {
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        // The child must not offer the upgrade again: if PATH still resolves
-        // to the old binary, prompting would loop forever.
-        OPENSPEC_NO_UPDATE_CHECK: '1',
-        // This is a continuation of the command the user already ran, and the
-        // parent recorded it; counting it twice would overstate usage.
-        OPENSPEC_TELEMETRY: '0',
-      },
-    });
-    child.on('error', () => {
-      // Nothing to hand off to: the upgrade landed but the instruction files
-      // are still the old ones, so this run did not do what was asked.
-      console.log(chalk.yellow('Instruction files were not regenerated.'));
-      console.log(chalk.dim('  Run "openspec update" to pick up the new workflows.'));
-      resolve(1);
-    });
-    // A child killed by a signal reports no code; that is not success.
-    child.on('close', (code) => resolve(code ?? 1));
-  });
-}
-
-/**
- * Prints the upgrade hint. Instruction files are generated by the installed
- * CLI, so "up to date" only ever means "matches this CLI" — without this note
- * a stale install looks like a successful update.
- */
-export function displayCliUpdateNote(
-  latestVersion: string,
-  projectPath: string = '.',
-  options: { withCommand?: boolean } = {}
-): void {
-  const [headline, ...rest] = buildCliUpdateLines(
-    latestVersion,
-    getInstallDir(),
-    projectPath,
-    options
-  );
-
-  console.log();
-  console.log(chalk.yellow(headline));
-  for (const line of rest) {
-    console.log(chalk.dim(line));
-  }
-}
-
-/**
- * Prints just the manual command, for when the offer was declined or failed.
- */
-export function displayUpgradeCommand(projectPath: string = '.'): void {
-  for (const line of buildUpgradeCommandLines(getInstallDir(), projectPath)) {
-    console.log(chalk.dim(line));
-  }
-}

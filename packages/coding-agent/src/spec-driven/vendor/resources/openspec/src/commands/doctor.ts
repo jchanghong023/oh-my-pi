@@ -1,5 +1,5 @@
 /**
- * `openspec doctor` (slice 3.6): the root-scoped relationship-health
+ * `omp openspec doctor` (slice 3.6): the root-scoped relationship-health
  * report. Read-only — it answers "are the roots this work relates to
  * available on this machine?" and never clones, syncs, or repairs.
  */

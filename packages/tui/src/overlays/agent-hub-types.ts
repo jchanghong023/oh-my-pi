@@ -56,6 +56,8 @@ export interface AgentRecordLike {
 		/** Cumulative own-session assistant and model_usage cost, excluding nested task results. */
 		directCost?: number;
 		readOnly?: boolean;
+		/** Ended execution retained solely for transcript inspection, never revival. */
+		executionEnded?: boolean;
 		outputPath?: string;
 		patchPath?: string;
 		branchName?: string;

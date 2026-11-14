@@ -554,6 +554,7 @@
 		"gen:export-viewer": "bun --cwd=../collab-web run gen:export-viewer",
 		"gen:aireq-workbench": "bun scripts/aireq-workbench-resources.ts --write",
 		"gen:webgui": "bun ../../scripts/generate-webgui-resources.ts",
+		"gen:spec-driven-resources": "bun scripts/spec-driven-resources.ts",
 		"gen:bundle": "bun scripts/bundle-dist.ts",
 		"gen:rpc": "bun scripts/gen-rpc/index.ts",
 		"prepack": "bun run gen:export-viewer && bun run gen:bundle",

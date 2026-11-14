@@ -66,7 +66,7 @@ export function inspectRelationships(input: InspectRelationshipsInput): Relation
       warning(
         'relationship_registry_unreadable',
         'The store registry is unreadable; reference health cannot be checked.',
-        'Run: openspec store doctor'
+        'Run: omp openspec store doctor'
       )
     );
   }

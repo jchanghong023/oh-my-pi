@@ -89,7 +89,7 @@ function validateRequiresReferences(artifacts: Artifact[]): void {
  * match any `generates` value (a hand-written `TODO.md`, or `tasks/main.md`
  * under a glob `generates: tasks/*.md` that really does produce it) works
  * today, and failing the load would break every command on it.
- * `openspec schema validate` reports that case as a warning instead
+ * `omp openspec schema validate` reports that case as a warning instead
  * (see `findApplyTracksWarning`).
  */
 function validateApplyReferences(schema: SchemaYaml): void {
@@ -115,7 +115,7 @@ function validateApplyReferences(schema: SchemaYaml): void {
  * produces the file: a glob `generates: tasks/*.md` really does generate
  * `tracks: tasks/main.md`, yet the strings differ, so the lookup still misses.
  * Either way apply keeps working (it reads the path directly), but `openspec
- * list` and `openspec status` fall back to counting the top-level `tasks.md`,
+ * list` and `omp openspec status` fall back to counting the top-level `tasks.md`,
  * and apply's remedy cannot name an artifact to build. A typo such as
  * `task.md` is the other usual cause.
  */

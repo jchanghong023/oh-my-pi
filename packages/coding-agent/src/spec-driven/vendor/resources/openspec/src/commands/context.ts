@@ -1,5 +1,5 @@
 /**
- * `openspec context` (slice 4.1): the working set a root's declarations
+ * `omp openspec context` (slice 4.1): the working set a root's declarations
  * describe, as an agent brief (JSON), a human listing, or an editor
  * view (`--code-workspace`). Assembly is presentation over the Phase 3
  * relationship data; doctor is the health surface. The only write this

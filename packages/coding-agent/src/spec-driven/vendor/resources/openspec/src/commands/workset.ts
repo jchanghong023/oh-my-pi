@@ -104,7 +104,7 @@ function worksetCliOpenerDisabledError(
     'workset_cli_opener_disabled',
     {
       target: 'workset.tool',
-      fix: `Open in VS Code or Cursor: openspec workset open ${name} --tool code`,
+      fix: `Open in VS Code or Cursor: omp openspec workset open ${name} --tool code`,
     }
   );
 }
@@ -250,7 +250,7 @@ export class WorksetCommand {
       }
 
       console.log(
-        `Open it any time with: openspec workset open ${workset.name}`
+        `Open it any time with: omp openspec workset open ${workset.name}`
       );
     } catch (error) {
       emitFailure(options.json, { workset: null, status: [] }, error, 'workset_error');
@@ -264,7 +264,7 @@ export class WorksetCommand {
     if (!name) {
       throw new StoreError('Pass a workset name.', 'workset_name_required', {
         target: 'workset.name',
-        fix: 'openspec workset create <name> --member <path>',
+        fix: 'omp openspec workset create <name> --member <path>',
       });
     }
 
@@ -277,7 +277,7 @@ export class WorksetCommand {
         'workset_members_required',
         {
           target: 'workset.member',
-          fix: `openspec workset create ${name} --member <path> --member <name>=<path>`,
+          fix: `omp openspec workset create ${name} --member <path> --member <name>=<path>`,
         }
       );
     }
@@ -307,7 +307,7 @@ export class WorksetCommand {
 
       if (worksets.length === 0) {
         console.log(
-          'No worksets saved. Create one with: openspec workset create'
+          'No worksets saved. Create one with: omp openspec workset create'
         );
         return;
       }
@@ -341,7 +341,7 @@ export class WorksetCommand {
           'workset_open_json_unsupported',
           {
             target: 'workset.tool',
-            fix: 'Inspect worksets with: openspec workset list --json',
+            fix: 'Inspect worksets with: omp openspec workset list --json',
           }
         );
       }
@@ -373,7 +373,7 @@ export class WorksetCommand {
             'workset_no_members_available',
             {
               target: 'workset.member',
-              fix: `Recompose it: openspec workset remove ${name} --yes && openspec workset create ${name} --member <path>`,
+              fix: `Recompose it: omp openspec workset remove ${name} --yes && omp openspec workset create ${name} --member <path>`,
             }
           );
         }
@@ -422,7 +422,7 @@ export class WorksetCommand {
             'workset_tool_required',
             {
               target: 'workset.tool',
-              fix: `openspec workset open ${name} --tool <id>`,
+              fix: `omp openspec workset open ${name} --tool <id>`,
             }
           );
         }
@@ -470,7 +470,7 @@ export class WorksetCommand {
           if (alternative !== null) {
             throw new StoreError(error.message, 'workset_launch_failed', {
               target: 'workset.tool',
-              fix: `Run: openspec workset open ${name} --tool ${alternative}`,
+              fix: `Run: omp openspec workset open ${name} --tool ${alternative}`,
             });
           }
         }
@@ -520,7 +520,7 @@ export class WorksetCommand {
             'workset_remove_confirmation_required',
             {
               target: 'workset.name',
-              fix: `openspec workset remove ${name} --yes`,
+              fix: `omp openspec workset remove ${name} --yes`,
             }
           );
         }

@@ -7,7 +7,7 @@ Configure OpenSpec to generate artifacts in languages other than English.
 For a new project, set the language during initialization:
 
 ```bash
-openspec init --language "Portuguese (pt-BR)"
+omp openspec init --language "Portuguese (pt-BR)"
 ```
 
 This writes the language instruction to `openspec/config.yaml`. If the project
@@ -121,7 +121,7 @@ To verify your language config is working:
 
 ```bash
 # Check the instructions - should show your language context
-openspec instructions proposal --change my-change
+omp openspec instructions proposal --change my-change
 
 # Output will include your language context
 ```

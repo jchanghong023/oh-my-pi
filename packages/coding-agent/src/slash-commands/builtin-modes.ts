@@ -46,6 +46,13 @@ import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
 import { cfgPlanEnabled } from "../plan-mode/settings";
+import { readTodoLoop } from "../todoloop/parser";
+import { TodoLoopPresentation, TodoLoopStatusBlock } from "../todoloop/presentation";
+import type { TodoLoopState } from "../todoloop/runner";
+import { parseCommandArgs } from "../utils/command-args";
+
+const activeTodoLoops = new WeakSet<AgentSession>();
+const TODOLOOP_USAGE = "Usage: /todoloop <path> [--check]";
 
 export function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
@@ -292,6 +299,128 @@ const GOAL_MODE_SLASH_COMMAND: SlashCommandSpec = {
 };
 
 export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
+	{
+		name: "todoloop",
+		icon: "loop",
+		description: "Run Markdown task groups serially; --check only reads the groups and tasks (TUI only)",
+		inlineHint: "<path> [--check]",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const ctx = runtime.ctx;
+			const session = ctx.session;
+			const ownerId = session.sessionId;
+			const generation = session.sessionGeneration;
+			const isOwner = () =>
+				ctx.session === session &&
+				session.sessionId === ownerId &&
+				session.sessionGeneration === generation &&
+				!session.isDisposed;
+			const args = parseCommandArgs(command.args);
+			const check = args.at(-1) === "--check";
+			const paths = check ? args.slice(0, -1) : args;
+			clearSubmittedText(runtime);
+			if (
+				paths.length !== 1 ||
+				!paths[0] ||
+				paths[0].startsWith("-") ||
+				paths[0].startsWith('"') ||
+				paths[0].startsWith("'")
+			) {
+				ctx.showError(TODOLOOP_USAGE);
+				return;
+			}
+			if (activeTodoLoops.has(session) || (!check && session.isEvalRunning)) {
+				ctx.showError("TodoLoop or eval is already running in this session.");
+				return;
+			}
+			if (ctx.isShuttingDown || session.isDisposed || session.isSessionTransitioning) {
+				ctx.showError("TodoLoop cannot start while the session is closing or changing.");
+				return;
+			}
+			const filePath = path.resolve(ctx.sessionManager.getCwd(), paths[0]);
+			if (check) {
+				try {
+					const snapshot = await readTodoLoop(filePath);
+					if (!isOwner()) return;
+					ctx.present(
+						new TodoLoopStatusBlock(
+							{
+								phase: "checking",
+								filePath,
+								completed: snapshot.tasks.filter(task => task.done).length,
+								total: snapshot.tasks.length,
+								completedGroups: snapshot.groups.filter(group => group.tasks.every(task => task.done)).length,
+								totalGroups: snapshot.groups.length,
+								attempt: 0,
+							},
+							snapshot,
+						),
+					);
+					ctx.ui.requestRender();
+				} catch (error) {
+					if (isOwner())
+						ctx.present(
+							new TodoLoopStatusBlock({
+								phase: "file_error",
+								filePath,
+								completed: 0,
+								total: 0,
+								completedGroups: 0,
+								totalGroups: 0,
+								attempt: 0,
+								reason: errorMessage(error),
+							}),
+						);
+				}
+				return;
+			}
+			activeTodoLoops.add(session);
+			const initial: TodoLoopState = {
+				phase: "checking",
+				filePath,
+				completed: 0,
+				total: 0,
+				completedGroups: 0,
+				totalGroups: 0,
+				attempt: 0,
+			};
+			const presentation = new TodoLoopPresentation(ctx, initial);
+			const controller = new AbortController();
+			let completion: Promise<void> = Promise.resolve();
+			const unregister = ctx.registerHostShutdown(async () => {
+				presentation.dispose();
+				controller.abort();
+				try {
+					await session.abortEval();
+				} finally {
+					await completion;
+				}
+			});
+			// Do not hold editor submission open: the normal Esc -> abortEval path must remain available.
+			completion = session
+				.runTodoLoop({
+					filePath,
+					signal: controller.signal,
+					onState: state => {
+						if (isOwner()) presentation.onState(state);
+					},
+					onAttempt: event => {
+						if (isOwner()) presentation.onAttempt(event);
+					},
+				})
+				.then(state => {
+					if (isOwner()) presentation.onState(state);
+				})
+				.catch(error => {
+					if (isOwner()) presentation.onState({ ...initial, phase: "failed", reason: errorMessage(error) });
+				})
+				.finally(() => {
+					presentation.finish();
+					activeTodoLoops.delete(session);
+					unregister();
+				});
+		},
+	},
 	{
 		name: "security",
 		icon: "shield",

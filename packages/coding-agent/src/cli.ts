@@ -524,7 +524,8 @@ export async function runCli(argv: string[]): Promise<void> {
 		process.once("SIGTERM", abort);
 		try {
 			const { runOpenSpec } = await import("./spec-driven/resources");
-			const result = await runOpenSpec(resolvedArgv.slice(1), process.cwd(), controller.signal);
+			const io = process.stdin.isTTY && process.stdout.isTTY && process.stderr.isTTY ? "terminal" : "capture";
+			const result = await runOpenSpec(resolvedArgv.slice(1), process.cwd(), controller.signal, io);
 			process.stdout.write(result.stdout);
 			process.stderr.write(result.stderr);
 			process.exitCode = result.exitCode;

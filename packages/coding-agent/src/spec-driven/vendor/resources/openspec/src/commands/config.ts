@@ -23,7 +23,6 @@ import {
   DEFAULT_CONFIG,
 } from '../core/config-schema.js';
 import { CORE_WORKFLOWS, ALL_WORKFLOWS, getProfileWorkflows } from '../core/profiles.js';
-import { OPENSPEC_DIR_NAME } from '../core/config.js';
 import { asErrorMessage, isPromptCancellationError } from './shared-output.js';
 
 type EditorOutcome =
@@ -159,7 +158,7 @@ function refuseUnreadableConfig(): boolean {
     return false;
   }
   console.error(`Error: ${getGlobalConfigPath()} could not be parsed, so it was left unchanged.`);
-  console.error('Fix it with "openspec config edit", or reset it with "openspec config reset --all".');
+  console.error('Fix it with "omp openspec config edit", or reset it with "omp openspec config reset --all".');
   process.exitCode = 1;
   return true;
 }
@@ -323,27 +322,6 @@ export function diffProfileState(before: ProfileState, after: ProfileState): Pro
   };
 }
 
-async function maybeWarnProjectConfigDrift(
-  projectDir: string,
-  state: ProfileState,
-  colorize: (message: string) => string
-): Promise<void> {
-  const openspecDir = path.join(projectDir, OPENSPEC_DIR_NAME);
-  if (!fs.existsSync(openspecDir)) {
-    return;
-  }
-  // Loaded here, not at the top: it pulls in every tool's command adapter,
-  // which `config path` and `config list` never need.
-  const { hasProjectConfigDrift } = await import('../core/profile-sync-drift.js');
-  if (!hasProjectConfigDrift(projectDir, state.workflows, state.delivery)) {
-    return;
-  }
-  console.log(colorize('Warning: Global config is not applied to this project. Run `openspec update` to sync.'));
-}
-
-function printConfigProfileApplyGuidance(): void {
-  console.log('Config updated. Run `openspec update` in your projects to apply.');
-}
 
 export function configPathCommand(): void {
   console.log(getGlobalConfigPath());
@@ -412,7 +390,7 @@ export function configSetCommand(key: string, value: string, options: { string?:
   if (!keyValidation.valid && (!allowUnknown || unsafeKey)) {
     const reason = keyValidation.reason ? ` ${keyValidation.reason}.` : '';
     console.error(`Error: Invalid configuration key "${key}".${reason}`);
-    console.error('Use "openspec config list" to see available keys.');
+    console.error('Use "omp openspec config list" to see available keys.');
     if (!allowUnknown && !unsafeKey) {
       console.error('Pass --allow-unknown to bypass this check.');
     }
@@ -447,8 +425,6 @@ export function configSetCommand(key: string, value: string, options: { string?:
     typeof coercedValue === 'string' ? `"${coercedValue}"` : String(coercedValue);
   console.log(`Set ${key} = ${displayValue}`);
   if (key === 'delivery') {
-    // Still accepted, so `config set delivery skills && openspec update` from
-    // the 1.x notice keeps working.
     console.log(DELIVERY_RETIRED_NOTE);
   }
 }
@@ -476,7 +452,7 @@ export function configUnsetCommand(key: string): void {
 export async function configResetCommand(options: { all?: boolean; yes?: boolean }): Promise<void> {
   if (!options.all) {
     console.error('Error: --all flag is required for reset');
-    console.error('Usage: openspec config reset --all [-y]');
+    console.error('Usage: omp openspec config reset --all [-y]');
     process.exitCode = 1;
     return;
   }
@@ -562,14 +538,13 @@ export async function configProfileCommand(preset?: string): Promise<void> {
     return;
   }
 
-  // Preset shortcut: `openspec config profile core`
+  // Preset shortcut: `omp openspec config profile core`
   if (preset === 'core') {
     const config = getGlobalConfig();
     config.profile = 'core';
     config.workflows = [...CORE_WORKFLOWS];
     // Preserve delivery setting
     saveGlobalConfig(config);
-    printConfigProfileApplyGuidance();
     return;
   }
 
@@ -581,13 +556,13 @@ export async function configProfileCommand(preset?: string): Promise<void> {
 
   // Non-interactive check
   if (!process.stdout.isTTY) {
-    console.error('Interactive mode required. Use `openspec config profile core` or set config via environment/flags.');
+    console.error('Interactive mode required. Use `omp openspec config profile core` or set config via environment/flags.');
     process.exitCode = 1;
     return;
   }
 
   // Interactive picker
-  const { select, checkbox, confirm } = await import('@inquirer/prompts');
+  const { select, checkbox } = await import('@inquirer/prompts');
   const chalk = (await import('chalk')).default;
 
   try {
@@ -617,7 +592,6 @@ export async function configProfileCommand(preset?: string): Promise<void> {
 
     if (action === 'keep') {
       console.log('No config changes.');
-      await maybeWarnProjectConfigDrift(process.cwd(), currentState, chalk.yellow);
       return;
     }
 
@@ -670,7 +644,6 @@ export async function configProfileCommand(preset?: string): Promise<void> {
     const diff = diffProfileState(currentState, nextState);
     if (!diff.hasChanges) {
       console.log('No config changes.');
-      await maybeWarnProjectConfigDrift(process.cwd(), nextState, chalk.yellow);
       return;
     }
 
@@ -687,30 +660,7 @@ export async function configProfileCommand(preset?: string): Promise<void> {
     }
     saveGlobalConfig(config);
 
-    // Check if inside an OpenSpec project
-    const projectDir = process.cwd();
-    const openspecDir = path.join(projectDir, OPENSPEC_DIR_NAME);
-    if (fs.existsSync(openspecDir)) {
-      const applyNow = await confirm({
-        message: 'Apply changes to this project now?',
-        default: true,
-      });
-
-      if (applyNow) {
-        try {
-          const { UpdateCommand } = await import('../core/update.js');
-          await new UpdateCommand().execute(projectDir);
-          console.log('Run `openspec update` in your other projects to apply.');
-        } catch (error) {
-          console.error(`\`openspec update\` failed: ${asErrorMessage(error)}`);
-          console.error('Please run it manually to apply the profile changes.');
-          process.exitCode = 1;
-        }
-        return;
-      }
-    }
-
-    printConfigProfileApplyGuidance();
+    console.log('Config updated.');
   } catch (error) {
     if (isPromptCancellationError(error)) {
       console.log('Config profile cancelled.');

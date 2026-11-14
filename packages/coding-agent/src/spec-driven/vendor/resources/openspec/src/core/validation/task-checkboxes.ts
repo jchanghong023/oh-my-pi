@@ -88,9 +88,9 @@ const COMMENT_CLOSE = '-->';
  * instead of checkboxes (#354).
  *
  * Progress counts checkboxes and nothing else, so a tasks file written as a
- * bare list is worse than an empty one: `openspec list` prints "No tasks",
- * `openspec status` treats the change as having no work left, and
- * `openspec archive` has no incomplete task to warn about. The file looks
+ * bare list is worse than an empty one: `omp openspec list` prints "No tasks",
+ * `omp openspec status` treats the change as having no work left, and
+ * `omp openspec archive` has no incomplete task to warn about. The file looks
  * finished to the tool and unfinished to the reader.
  *
  * Reported only when the change's *whole* tracked set has zero checkboxes.
@@ -121,7 +121,7 @@ export function findMissingTaskCheckboxIssues(
       line,
       message:
         'This change counts as 0 tasks: no line in its tracked task files is a checkbox, ' +
-        'so "openspec list" and "openspec status" report no work and "openspec archive" ' +
+        'so "omp openspec list" and "omp openspec status" report no work and "omp openspec archive" ' +
         'has nothing to flag as incomplete. Write each task as "- [ ] 1.1 Description".',
     });
   }

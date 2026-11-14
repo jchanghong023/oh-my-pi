@@ -1,54 +1,30 @@
-# Supported Tools
+# Supported OMP interface
 
-This vendored OpenSpec copy configures one AI coding tool: **Oh My Pi** (`oh-my-pi`). `openspec init` offers that target only; other assistant integrations from upstream are not bundled.
-
-## How It Works
-
-`openspec init` writes OpenSpec's skills to the shared Agent Skills folder:
-
-```text
-.agents/skills/
-├── .openspec-target              # records the tools set up in this project
-└── openspec-<workflow>/SKILL.md
-```
-
-Oh My Pi reads `.agents/skills/` directly, so no tool-specific command files or links are created. `openspec update` reads `.openspec-target` and refreshes the same files in place.
-
-By default, OpenSpec uses the `core` profile, which includes:
-
-- `propose`
-- `explore`
-- `apply`
-- `update`
-- `sync`
-- `archive`
-
-Enable the expanded workflows (`new`, `continue`, `ff`, `verify`, `bulk-archive`, `onboard`) with `openspec config profile`, then run `openspec update`.
+This vendored OpenSpec 2.0 integration uses OMP native Skills, not per-Agent installers or generated command files.
 
 ## How To Invoke
 
-Skills are invoked by name:
+All 12 Skills are bundled and discoverable in any directory:
 
-```text
-/openspec-propose "your idea"
-/openspec-apply-change
-/openspec-archive-change
-```
+| OMP chat invocation | Purpose |
+|---|---|
+| `/skill:openspec-explore` | Explore ideas and requirements |
+| `/skill:openspec-propose` | Draft a complete change plan |
+| `/skill:openspec-new-change` | Scaffold a change |
+| `/skill:openspec-continue-change` | Create the next ready artifact |
+| `/skill:openspec-ff-change` | Create planning artifacts together |
+| `/skill:openspec-update-change` | Revise existing planning artifacts |
+| `/skill:openspec-apply-change` | Implement tasks |
+| `/skill:openspec-verify-change` | Compare implementation and artifacts |
+| `/skill:openspec-sync-specs` | Sync delta specifications |
+| `/skill:openspec-archive-change` | Archive a change |
+| `/skill:openspec-bulk-archive-change` | Archive multiple changes |
+| `/skill:openspec-onboard` | Guided workflow tutorial |
 
-The exact hint printed after `openspec init` is authoritative for the current project.
+OMP handles native discovery, completion, path authorization, and on-demand reads via `skill://<name>` (for example `skill://openspec-explore`). Project/user same-name overrides keep their existing precedence. No `core`/expanded profile selection is required to expose these Skills. Superpowers and JCH keep their own discovery rules.
 
-## Tool Directory Reference
+## Project and terminal interface
 
-| Tool (ID) | Skills path | Command files |
-|---|---|---|
-| Oh My Pi (`oh-my-pi`) | `.agents/skills/openspec-*/SKILL.md` | Not generated (skills-only) |
+Run terminal operations through `omp openspec ...`. `omp openspec init [path]` initializes project structure and configuration only; it does not install, update, or clean any user Skill or command. Skill availability does not implicitly authorize project initialization. Resources update with OMP releases, without standalone Node/OpenSpec installation.
 
-## Tool Selection
-
-`openspec init --tools <ids>` accepts:
-
-- `oh-my-pi`
-- `all` (currently the same single target)
-- `none` (create `openspec/` only)
-
-Any other tool id is rejected with an explicit `Invalid tool(s)` error; it is not mapped to Oh My Pi.
+Legacy `opsx` file commands and CLI `update` are removed. Use the Skill names above; `openspec-update-change` revises planning materials and remains supported.

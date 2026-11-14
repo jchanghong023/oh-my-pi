@@ -54,6 +54,14 @@ $openspecCompleter = {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     $tokens = $commandAst.ToString() -split "\\s+"
+    if ($tokens.Count -le 2) {
+        if ("openspec" -like "$wordToComplete*") {
+            [System.Management.Automation.CompletionResult]::new("openspec", "openspec", "ParameterValue", "Spec-driven development")
+        }
+        return
+    }
+    if ($tokens[1] -ne "openspec") { return }
+    $tokens = @($tokens[0]) + @($tokens | Select-Object -Skip 2)
     $commandCount = ($tokens | Measure-Object).Count
 
     # Top-level commands
@@ -74,7 +82,7 @@ ${commandCases}
     }
 }
 
-Register-ArgumentCompleter -CommandName openspec -ScriptBlock $openspecCompleter
+Register-ArgumentCompleter -Native -CommandName omp -ScriptBlock $openspecCompleter
 `;
   }
 

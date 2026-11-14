@@ -8,7 +8,7 @@ export function registerSpecCommand(rootProgram: Command) {
 
   // Deprecation notice for noun-based commands
   specCommand.hook('preAction', () => {
-    console.error('Warning: The "openspec spec ..." commands are deprecated. Prefer verb-first commands (e.g., "openspec show", "openspec validate --specs").');
+    console.error('Warning: The "openspec spec ..." commands are deprecated. Prefer verb-first commands (e.g., "omp openspec show", "omp openspec validate --specs").');
   });
 
   specCommand

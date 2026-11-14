@@ -1,9 +1,9 @@
 ---
 name: openspec-onboard
 description: Guided onboarding for OpenSpec - walk through a complete workflow cycle with narration and real codebase work. Also use when the user says "openspec onboard" or "opsx onboard".
-allowed-tools: Bash(openspec:*)
+allowed-tools: Bash(omp openspec:*)
 license: MIT
-compatibility: Requires openspec CLI.
+compatibility: Requires OMP with built-in OpenSpec; skills are discovered natively and updated with OMP releases.
 metadata:
   author: openspec
   version: "1.0"
@@ -11,36 +11,24 @@ metadata:
 
 Guide the user through their first complete OpenSpec workflow cycle. This is a teaching experience—you'll do real work in their codebase while explaining each step.
 
-**Store selection:** If the user names a store (a store is a standalone OpenSpec repo registered on this machine) or the work lives in one, run `openspec store list --json` to discover registered store ids, then pass `--store <id>` on the commands that read or write specs and changes (`new change`, `status`, `instructions`, `list`, `show`, `validate`, `archive`, `doctor`, `context`, `schemas`, `view`). Once selected, treat `--store <id>` as sticky for the rest of the workflow. Every unscoped example of those commands below is shorthand: before running it, append the flag. For example, run `openspec status --change "<name>" --json --store "<id>"`, not the unscoped form shown below. Other commands do not take the flag. Hints printed by commands already carry the flag; keep it on follow-ups. Without a store, commands act on the nearest local `openspec/` root.
+**Store selection:** If the user names a store (a store is a standalone OpenSpec repo registered on this machine) or the work lives in one, run `omp openspec store list --json` to discover registered store ids, then pass `--store <id>` on the commands that read or write specs and changes (`new change`, `status`, `instructions`, `list`, `show`, `validate`, `archive`, `doctor`, `context`, `schemas`, `view`). Once selected, treat `--store <id>` as sticky for the rest of the workflow. Every unscoped example of those commands below is shorthand: before running it, append the flag. For example, run `omp openspec status --change "<name>" --json --store "<id>"`, not the unscoped form shown below. Other commands do not take the flag. Hints printed by commands already carry the flag; keep it on follow-ups. Without a store, commands act on the nearest local `openspec/` root.
 
-**Project check:** These steps expect a project that already uses OpenSpec. Before the first step that writes anything (`new change`, `archive`, `sync specs`, or authoring an artifact file), confirm the project has a root: run `openspec list --json` (with `--store <id>` when a store is selected, since the store is then the root) and read `root`. A root object means the project is set up. `"root": null` means it is not - there is no `openspec/` directory here, and a write such as `openspec new change` would create one as a side effect. The command also exits non-zero, which is that answer rather than a broken CLI, so read the JSON instead of retrying or working around it.
+**Project check:** These steps expect a project that already uses OpenSpec. Before the first step that writes anything (`new change`, `archive`, `sync specs`, or authoring an artifact file), confirm the project has a root: run `omp openspec list --json` (with `--store <id>` when a store is selected, since the store is then the root) and read `root`. A root object means the project is set up. `"root": null` means it is not - there is no `openspec/` directory here, and a write such as `omp openspec new change` would create one as a side effect. The command also exits non-zero, which is that answer rather than a broken CLI, so read the JSON instead of retrying or working around it.
 
 One `"root": null` is not about setup: when a `status` error message starts with `Declared in` or `Invalid store declaration in` and names this project's `openspec/config.yaml` (or `config.yml`), the project does use OpenSpec through a store it declares, which this machine cannot resolve (the store is not registered, or the `store:` line is malformed). Do not treat it as uninitialized and skip the branches below: stop before writing and show the user that error's `message` and `fix`.
 
 Otherwise, with no root, what happens next depends on how this workflow was reached:
 
-- **Auto-selected**: you chose this workflow yourself, without the user naming OpenSpec, naming this skill, or invoking this skill by name. Stop using OpenSpec and answer the request normally, as you would with no OpenSpec installed. Do not ask them to set anything up and do not mention OpenSpec setup.
-- **Explicit OpenSpec request**: the user named OpenSpec, named this skill, or invoked this skill by name. Stop before writing and ask how to proceed: set this project up (`openspec init`), target a store they already have (`--store <id>`), or continue without OpenSpec for this request. Wait for their answer.
+- **Auto-selected**: you chose this workflow yourself, without the user naming OpenSpec, naming this skill, or invoking this skill by name. Stop using OpenSpec and answer the request normally, as you would in a project without OpenSpec. Do not ask them to set anything up and do not mention OpenSpec setup.
+- **Explicit OpenSpec request**: the user named OpenSpec, named this skill, or invoked this skill by name. Stop before writing and ask how to proceed: set this project up (`omp openspec init`), target a store they already have (`--store <id>`), or continue without OpenSpec for this request. Wait for their answer.
 
-In both branches, never create the root as a side effect: do not run `openspec init` until the user asks for it, do not hand-create `openspec/` files, and do not let a command create it.
+In both branches, never create the root as a side effect: do not run `omp openspec init` until the user asks for it, do not hand-create `openspec/` files, and do not let a command create it.
 
 ---
 
 ## Preflight
 
-Before starting, check if the OpenSpec CLI is installed:
-
-```bash
-# Unix/macOS
-openspec --version 2>&1 || echo "CLI_NOT_INSTALLED"
-# Windows (PowerShell)
-# if (Get-Command openspec -ErrorAction SilentlyContinue) { openspec --version } else { echo "CLI_NOT_INSTALLED" }
-```
-
-**If CLI not installed:**
-> OpenSpec CLI is not installed. Install it first, then come back to `/openspec-onboard`.
-
-Stop here if not installed.
+OpenSpec and all 12 workflow skills are built into OMP and updated with OMP releases. Do not install a standalone CLI or skills. Follow the **Project check** above before writing: initialization is explicit (`omp openspec init`) and creates only project configuration, not skill or command files.
 
 ---
 
@@ -165,7 +153,7 @@ Spend 1-2 minutes investigating the relevant code:
 │   [Optional: ASCII diagram if helpful]  │
 └─────────────────────────────────────────┘
 
-Explore mode (`/openspec-explore`) is for this kind of thinking—investigating before implementing. You can use it anytime you need to think through a problem.
+Explore mode (`/skill:openspec-explore`) is for this kind of thinking—investigating before implementing. You can use it anytime you need to think through a problem.
 
 Now let's create a change to hold our work.
 ```
@@ -180,14 +168,14 @@ Now let's create a change to hold our work.
 ```
 ## Creating a Change
 
-A "change" in OpenSpec is a container for all the thinking and planning around a piece of work. It lives at the `changeRoot` reported by `openspec status --change "<name>" --json` and holds your artifacts—proposal, specs, design, tasks.
+A "change" in OpenSpec is a container for all the thinking and planning around a piece of work. It lives at the `changeRoot` reported by `omp openspec status --change "<name>" --json` and holds your artifacts—proposal, specs, design, tasks.
 
 Let me create one for our task.
 ```
 
 **DO:** Create the change with a derived kebab-case name:
 ```bash
-openspec new change "<derived-name>"
+omp openspec new change "<derived-name>"
 ```
 
 **SHOW:**
@@ -264,9 +252,9 @@ Does this capture the intent? I can adjust before we save it.
 
 After approval, save the proposal:
 ```bash
-openspec instructions proposal --change "<name>" --json
+omp openspec instructions proposal --change "<name>" --json
 ```
-Then write the content to the `resolvedOutputPath` from `openspec instructions proposal --change "<name>" --json`.
+Then write the content to the `resolvedOutputPath` from `omp openspec instructions proposal --change "<name>" --json`.
 
 ```
 Proposal saved. This is your "why" document—you can always come back and refine it as understanding evolves.
@@ -289,7 +277,7 @@ For a small task like this, we might only need one spec file.
 
 **DO:** Resolve where the spec file should be created:
 ```bash
-openspec instructions specs --change "<name>" --json
+omp openspec instructions specs --change "<name>" --json
 # Use resolvedOutputPath from the JSON. If it is a glob, choose the concrete file path using the schema instruction and the change's context.
 ```
 
@@ -366,7 +354,7 @@ Here's the design:
 For a small task, this captures the key decisions without over-engineering.
 ```
 
-Save to the `resolvedOutputPath` from `openspec instructions design --change "<name>" --json`.
+Save to the `resolvedOutputPath` from `omp openspec instructions design --change "<name>" --json`.
 
 ---
 
@@ -406,7 +394,7 @@ Each checkbox becomes a unit of work in the apply phase. Does this task breakdow
 
 **PAUSE** - Wait for user approval/feedback.
 
-After approval, save to the `resolvedOutputPath` from `openspec instructions tasks --change "<name>" --json`.
+After approval, save to the `resolvedOutputPath` from `omp openspec instructions tasks --change "<name>" --json`.
 
 Then ask:
 > "Tasks are saved. Ready to implement?"
@@ -462,7 +450,7 @@ Archived changes become your project's decision history—you can always find th
 
 **DO:** Archive the change (`--yes` answers the confirmation prompts, which you cannot answer from a tool call):
 ```bash
-openspec archive "<name>" --yes
+omp openspec archive "<name>" --yes
 ```
 
 **SHOW:**
@@ -496,24 +484,24 @@ This same rhythm works for any size change—a small fix or a major feature.
 
 ## Skill Reference
 
-**The skills you have installed:**
+**The skills OMP discovers natively:**
 
  | Skill            | What it does                               |
  |------------------|--------------------------------------------|
- | `/openspec-propose` | Create a change and generate all artifacts |
- | `/openspec-explore` | Think through problems before/during work  |
- | `/openspec-apply-change`   | Implement tasks from a change              |
- | `/openspec-archive-change` | Archive a completed change                 |
- | `/openspec-new-change`     | Start a new change, one artifact at a time |
- | `/openspec-continue-change` | Continue working on an existing change    |
- | `/openspec-ff-change`      | Fast-forward: create all artifacts at once |
- | `/openspec-verify-change`  | Verify implementation matches artifacts    |
+ | `/skill:openspec-propose` | Create a change and generate all artifacts |
+ | `/skill:openspec-explore` | Think through problems before/during work  |
+ | `/skill:openspec-apply-change`   | Implement tasks from a change              |
+ | `/skill:openspec-archive-change` | Archive a completed change                 |
+ | `/skill:openspec-new-change`     | Start a new change, one artifact at a time |
+ | `/skill:openspec-continue-change` | Continue working on an existing change    |
+ | `/skill:openspec-ff-change`      | Fast-forward: create all artifacts at once |
+ | `/skill:openspec-verify-change`  | Verify implementation matches artifacts    |
 
 ---
 
 ## What's Next?
 
-Try `/openspec-propose` on something you actually want to build. You've got the rhythm now!
+Try `/skill:openspec-propose` on something you actually want to build. You've got the rhythm now!
 ```
 
 ---
@@ -525,11 +513,11 @@ Try `/openspec-propose` on something you actually want to build. You've got the 
 If the user says they need to stop, want to pause, or seem disengaged:
 
 ```
-No problem! Your change is saved at the `changeRoot` reported by `openspec status --change "<name>" --json`.
+No problem! Your change is saved at the `changeRoot` reported by `omp openspec status --change "<name>" --json`.
 
-To pick up where we left off later, `openspec status --change "<name>" --json` shows exactly where the change stands.
-- `/openspec-continue-change <name>` - Resume artifact creation
-- `/openspec-apply-change <name>` - Jump to implementation (if tasks exist)
+To pick up where we left off later, `omp openspec status --change "<name>" --json` shows exactly where the change stands.
+- `/skill:openspec-continue-change <name>` - Resume artifact creation
+- `/skill:openspec-apply-change <name>` - Jump to implementation (if tasks exist)
 
 The work won't be lost. Come back whenever you're ready.
 ```
@@ -543,20 +531,20 @@ If the user says they just want to see the skills or skip the tutorial:
 ```
 ## OpenSpec Quick Reference
 
-**The skills you have installed:**
+**The skills OMP discovers natively:**
 
  | Skill                    | What it does                               |
  |--------------------------|--------------------------------------------|
- | `/openspec-propose <idea>`  | Create a change and generate all artifacts |
- | `/openspec-explore`         | Think through problems (no code changes)   |
- | `/openspec-apply-change <name>`    | Implement tasks                            |
- | `/openspec-archive-change <name>`  | Archive when done                          |
- | `/openspec-new-change <name>`      | Start a new change, step by step           |
- | `/openspec-continue-change <name>` | Continue an existing change                |
- | `/openspec-ff-change <name>`       | Fast-forward: all artifacts at once        |
- | `/openspec-verify-change <name>`   | Verify implementation                      |
+ | `/skill:openspec-propose <idea>`  | Create a change and generate all artifacts |
+ | `/skill:openspec-explore`         | Think through problems (no code changes)   |
+ | `/skill:openspec-apply-change <name>`    | Implement tasks                            |
+ | `/skill:openspec-archive-change <name>`  | Archive when done                          |
+ | `/skill:openspec-new-change <name>`      | Start a new change, step by step           |
+ | `/skill:openspec-continue-change <name>` | Continue an existing change                |
+ | `/skill:openspec-ff-change <name>`       | Fast-forward: all artifacts at once        |
+ | `/skill:openspec-verify-change <name>`   | Verify implementation                      |
 
-Try `/openspec-propose` to start your first change.
+Try `/skill:openspec-propose` to start your first change.
 ```
 
 Exit gracefully.

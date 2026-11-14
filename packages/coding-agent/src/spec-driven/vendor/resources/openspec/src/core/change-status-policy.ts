@@ -120,12 +120,12 @@ export function resolveNextStep(input: ChangeNextStepsInput): ChangeNextStep | u
   const storeFlag = input.storeId ? ` --store ${input.storeId}` : '';
 
   if (readyArtifact) {
-    const command = `openspec instructions ${readyArtifact.id} --change "${input.changeName}"${storeFlag} --json`;
+    const command = `omp openspec instructions ${readyArtifact.id} --change "${input.changeName}"${storeFlag} --json`;
     return { command, sentence: `Run ${command} before writing that artifact.` };
   }
 
   if (input.allArtifactsComplete) {
-    const command = `openspec instructions apply --change "${input.changeName}"${storeFlag} --json`;
+    const command = `omp openspec instructions apply --change "${input.changeName}"${storeFlag} --json`;
     return {
       command,
       sentence: `All planning artifacts are complete. Run ${command} to inspect implementation progress.`,

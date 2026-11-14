@@ -10,16 +10,16 @@ This guide shows how to start on day one without boiling the ocean.
 
 ```bash
 $ cd your-existing-project
-$ openspec init          # adds openspec/ and your AI tool's commands
+$ omp openspec init          # initializes project structure/configuration only (explicit authorization required)
 ```
 
 Then, in your AI chat:
 
 ```text
-/opsx:explore            # optional: have the AI read the area you'll touch
-/opsx:propose <a real, small change you actually need>
-/opsx:apply
-/opsx:archive
+/skill:openspec-explore            # optional: have the AI read the area you'll touch
+/skill:openspec-propose <a real, small change you actually need>
+/skill:openspec-apply-change
+/skill:openspec-archive-change
 ```
 
 Your specs now describe exactly the part of the system that change touched, and nothing more. That's correct. You're done worrying about the other 80,000 lines.
@@ -38,10 +38,10 @@ If you want the deeper mechanics, see [Concepts: Delta Specs](concepts.md#delta-
 
 Pick something small and real. Not a toy, not a rewrite. A change you were going to make this week anyway. Small first changes teach you the workflow with low stakes.
 
-**Step 1: Let the AI read the relevant area.** This is where `/opsx:explore` earns its keep on an unfamiliar or large codebase. Point it at the part you're about to touch and let it map how things work before proposing anything.
+**Step 1: Let the AI read the relevant area.** This is where `/skill:openspec-explore` earns its keep on an unfamiliar or large codebase. Point it at the part you're about to touch and let it map how things work before proposing anything.
 
 ```text
-You: /opsx:explore
+You: /skill:openspec-explore
 
 AI:  What would you like to explore?
 
@@ -59,29 +59,24 @@ Notice the AI now understands your actual structure, so the proposal it writes w
 **Step 2: Propose the change.** The proposal and its delta spec capture just this change.
 
 ```text
-You: /opsx:propose add-api-rate-limiting
+You: /skill:openspec-propose add-api-rate-limiting
 ```
 
-**Step 3: Build and archive** with `/opsx:apply` and `/opsx:archive`, same as any change. After archiving, you have a real spec for your rate-limiting behavior, born from a change you needed anyway.
+**Step 3: Build and archive** with `/skill:openspec-apply-change` and `/skill:openspec-archive-change`, same as any change. After archiving, you have a real spec for your rate-limiting behavior, born from a change you needed anyway.
 
 ## Prefer a guided tour? Use onboard
 
-If you'd rather watch the whole loop happen on your own code with narration, the expanded command `/opsx:onboard` does exactly that: it scans your codebase for a small, safe improvement, then walks you through proposing, building, and archiving it, explaining each step.
+If you'd rather watch the whole loop happen on your own code with narration, the expanded command `/skill:openspec-onboard` does exactly that: it scans your codebase for a small, safe improvement, then walks you through proposing, building, and archiving it, explaining each step.
 
-Turn on the expanded commands first:
-
-```bash
-$ openspec config profile      # select the expanded workflows
-$ openspec update              # apply them to this project
-```
+All incremental planning Skills are already bundled; no profile switch or resource installation is needed.
 
 Then in chat:
 
 ```text
-/opsx:onboard
+/skill:openspec-onboard
 ```
 
-It's the gentlest possible introduction on a real project, and it leaves you with a genuine (small) change you can keep or discard. See [Commands: `/opsx:onboard`](commands.md#opsxonboard).
+It's the gentlest possible introduction on a real project, and it leaves you with a genuine (small) change you can keep or discard. See [Commands: `/skill:openspec-onboard`](commands.md#skillopenspec-onboard).
 
 ## "But I already have requirements docs"
 
@@ -92,12 +87,12 @@ Treat existing docs as **source material for exploration**, not as specs to conv
 The honest reason: OpenSpec specs are deliberately behavior-first and scoped to changes. A 40-page PRD is a different artifact with a different job. Forcing a one-time bulk conversion tends to produce a large, stale spec nobody trusts. Letting specs grow from real changes keeps them accurate.
 
 ```text
-You: /opsx:explore
+You: /skill:openspec-explore
 You: Here's the section of our PRD about checkout. I'm implementing the
      "guest checkout" requirement next.
      [paste the relevant requirement]
 AI:  [reads it, asks clarifying questions, then helps scope a change]
-You: /opsx:propose add-guest-checkout
+You: /skill:openspec-propose add-guest-checkout
 ```
 
 ## Organizing specs in a big codebase

@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 const MAX_TITLE_LENGTH = 72;
 const TITLE_PREFIX = 'Feedback: ';
 const REPRO_PROMPT =
-  '_Not provided — filed with `openspec feedback`. If this is a bug, please add the shortest steps that reproduce it from a fresh project._';
+  '_Not provided — filed with `omp openspec feedback`. If this is a bug, please add the shortest steps that reproduce it from a fresh project._';
 
 /**
  * Check if gh CLI is installed and available in PATH

@@ -37,12 +37,11 @@ Our philosophy:
   Follow <a href="https://x.com/0xTab">@0xTab on X</a> for updates · Join the <a href="https://discord.gg/YctCnvvshC">OpenSpec Discord</a> for help and questions.
 </p>
 
-<!-- TODO: Add GIF demo of /openspec-propose → /openspec-archive-change workflow -->
 
 ## See it in action
 
 ```text
-You: /openspec-explore
+You: /skill:openspec-explore
 AI:  What would you like to explore?
 You: I want dark mode but I'm not sure how to do it cleanly.
 AI:  Let me look at your styling setup...
@@ -50,7 +49,7 @@ AI:  Let me look at your styling setup...
      with system-preference detection. No new dependencies. Scope it?
 You: Yes, let's do it.
 
-You: /openspec-propose add-dark-mode
+You: /skill:openspec-propose add-dark-mode
 AI:  Created openspec/changes/add-dark-mode/
      ✓ proposal.md — why we're doing this, what's changing
      ✓ specs/       — requirements and scenarios
@@ -58,7 +57,7 @@ AI:  Created openspec/changes/add-dark-mode/
      ✓ tasks.md     — implementation checklist
      Ready for implementation!
 
-You: /openspec-apply-change
+You: /skill:openspec-apply-change
 AI:  Implementing tasks...
      ✓ 1.1 Add theme context provider
      ✓ 1.2 Create toggle component
@@ -66,7 +65,7 @@ AI:  Implementing tasks...
      ✓ 2.2 Wire up localStorage
      All tasks complete!
 
-You: /openspec-archive-change
+You: /skill:openspec-archive-change
 AI:  Archived to openspec/changes/archive/2025-01-23-add-dark-mode/
      Specs updated. Ready for the next feature.
 ```
@@ -117,44 +116,27 @@ Solo, OpenSpec keeps you and your AI honest on a single repo. On a team, the har
 
 ## Quick Start
 
-Install OpenSpec with npm (needs Node.js 22.12.0 or higher), or with the official [Homebrew formula](https://formulae.brew.sh/formula/openspec):
-
-```bash
-npm install -g @fission-ai/openspec@latest
-# or: brew install openspec
-```
-
-Then navigate to your project directory and initialize:
+OMP bundles OpenSpec 2.0.0; no standalone OpenSpec or Node installation is required. After explicitly choosing to initialize your project:
 
 ```bash
 cd your-project
-openspec init
+omp openspec init
 ```
 
-> **Want your AI to do it?** Paste the [setup prompt](https://openspec.dev/docs/installation#install-with-your-ai-assistant) into your coding assistant — it installs the CLI, runs `openspec init`, and verifies the result.
+Initialization creates project structure and configuration only, defaulting to `spec-driven`. It does not install, update, or clean user Skills, Agent settings, or legacy commands.
 
-Now talk to your AI:
+All 12 OpenSpec Skills are bundled with OMP and use native discovery, completion, on-demand `skill://<name>` reads, and path authorization in any directory. Project/user same-name overrides keep their existing precedence. No profile selection or duplicate Skill installation is needed. Skill discovery does not authorize project initialization.
 
-- **Not sure what to build yet?** Start with `/openspec-explore`, a no-stakes thinking partner that reads your code, weighs options, and shapes a plan before any code gets written. ([Quickstart](https://openspec.dev/docs/quickstart))
-- **Already know what you want?** Go straight to `/openspec-propose <what-you-want-to-build>`.
-
-Both are in the default profile. If you want the expanded workflow (`openspec-new-change`, `openspec-continue-change`, `openspec-ff-change`, `openspec-verify-change`, `openspec-bulk-archive-change`, `openspec-onboard`), select it with `openspec config profile` and apply with `openspec update`.
-
-These are skills. Most tools invoke them as `/openspec-propose` and Codex as `$openspec-propose`, or you can ask for the work in plain words. `openspec init` prints the right form for the tools you picked — see [Supported Tools](https://openspec.dev/docs/supported-tools). Coming from 1.x and its `/opsx:*` commands? See [Upgrade to 2.0](https://openspec.dev/docs/upgrade-to-2).
-
-> [!NOTE]
-> Not sure if your tool is supported? [View the full list](https://openspec.dev/docs/supported-tools) – we support 30+ tools and growing.
->
-> Also works with npm, Homebrew, pnpm, yarn, bun, and Nix. [See installation options](https://openspec.dev/docs/installation).
+In OMP chat, start with `/skill:openspec-explore` or `/skill:openspec-propose <goal>`. All terminal operations use `omp openspec ...`. See the local [Skill reference](docs/commands.md) and [setup guide](docs/installation.md), not upstream per-Agent installation instructions.
 
 ## Docs
 
-Full documentation lives at **[openspec.dev/docs](https://openspec.dev/docs)**.
+This bundled guide documents the OMP interface. Upstream documentation describes additional standalone integrations that are not shipped here.
 
 → **[Quickstart](https://openspec.dev/docs/quickstart)**: your first change, start to finish<br>
-→ **[Set up your project](https://openspec.dev/docs/setup)**: what `openspec init` installs<br>
-→ **[CLI](https://openspec.dev/docs/cli)**: terminal reference<br>
-→ **[Supported Tools](https://openspec.dev/docs/supported-tools)**: tool integrations & install paths<br>
+→ **[Set up your project](docs/installation.md)**: what `omp openspec init` creates<br>
+→ **[CLI](docs/cli.md)**: terminal reference<br>
+→ **[Supported interface](docs/supported-tools.md)**: native OMP Skill invocation<br>
 → **[Customize](https://openspec.dev/docs/customize)**: profiles, project config, and schemas<br>
 → **[Stores](https://openspec.dev/docs/stores)**: plan in a separate repo, shared across your team (beta)<br>
 → **[Community Showcase](docs/community.md)**: projects and resources built with and for OpenSpec
@@ -173,7 +155,7 @@ AI coding assistants are powerful but unpredictable when requirements live only 
 - **Agree before you build** — human and AI align on specs before code gets written
 - **Stay organized** — each change gets its own folder with proposal, specs, design, and tasks
 - **Work fluidly** — update any artifact anytime, no rigid phase gates
-- **Use your tools** — works with 30+ AI assistants via skills
+- **Use your tools** — uses OMP native Skills
 
 ### How we compare
 
@@ -185,27 +167,7 @@ AI coding assistants are powerful but unpredictable when requirements live only 
 
 ## Updating OpenSpec
 
-**Upgrade the CLI**
-
-If you installed with npm:
-
-```bash
-npm install -g @fission-ai/openspec@latest
-```
-
-If you installed OpenSpec with Homebrew:
-
-```bash
-brew upgrade openspec
-```
-
-**Refresh agent instructions**
-
-Run this inside each project to regenerate AI guidance and refresh the installed skills:
-
-```bash
-openspec update
-```
+Upgrade OMP to update the bundled CLI, schema, and Skills. There is no standalone CLI update or per-project Skill refresh; CLI `update` and legacy `opsx` file commands are removed. `openspec-update-change` remains a Skill for editing planning artifacts. Existing custom schemas such as `mini` and `omp-spec` need an explicit [migration](docs/migration-guide.md); missing design/tasks remain incomplete, and historical archives are preserved.
 
 ## Usage Notes
 
@@ -229,7 +191,7 @@ OpenSpec collects anonymous usage stats.
 We collect only command names and version to understand usage patterns. No arguments, paths, content, or PII. Automatically disabled in CI.
 
 **Opt-out (any one is enough):**
-- `openspec config set telemetry.enabled false` (global config; unset means on)
+- `omp openspec config set telemetry.enabled false` (global config; unset means on)
 - `export OPENSPEC_TELEMETRY=0` or `export DO_NOT_TRACK=1` (env overrides config)
 
 </details>

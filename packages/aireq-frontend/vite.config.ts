@@ -31,10 +31,7 @@ function copiedFrontendPackages(): Plugin {
 			if (source === "shiki/langs") return path.join(root, "shared/shiki/langs-subset.ts");
 			// shiki 根入口与 bundle-full 直接引用内部 langs-bundle-full；别名到同一子集，
 			// 避免只为拿到 bundledLanguages 就把全部语法动态块打进产物。
-			if (
-				source.startsWith("./langs-bundle-full-") &&
-				importer?.replace(/\\/g, "/").includes("/shiki/dist/")
-			)
+			if (source.startsWith("./langs-bundle-full-") && importer?.replace(/\\/g, "/").includes("/shiki/dist/"))
 				return path.join(root, "shared/shiki/langs-subset.ts");
 			// @pierre/diffs 与 shiki/themes 会列出全部主题；只保留 UI 可选主题，其余回退。
 			if (source.startsWith("@shikijs/themes/")) {
@@ -176,7 +173,15 @@ export function createAIReqFrontendConfig(
 				{ find: "shadcn/tailwind.css", replacement: dependencyFile("shadcn", "dist/tailwind.css") },
 				{ find: "@tailwindcss/typography", replacement: dependencyFile("@tailwindcss/typography", "src/index.js") },
 			],
-			dedupe: ["react", "react-dom", "shiki", "@shikijs/core", "@shikijs/themes", "@shikijs/langs", "@shikijs/engine-oniguruma"],
+			dedupe: [
+				"react",
+				"react-dom",
+				"shiki",
+				"@shikijs/core",
+				"@shikijs/themes",
+				"@shikijs/langs",
+				"@shikijs/engine-oniguruma",
+			],
 		},
 		optimizeDeps: {
 			rolldownOptions: {

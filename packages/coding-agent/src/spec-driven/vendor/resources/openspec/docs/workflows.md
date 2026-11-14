@@ -35,17 +35,17 @@ you can update planning artifacts whenever implementation reveals something new.
 
 ```mermaid
 flowchart TD
-    Idea["Idea or problem"] --> Explore["/opsx:explore<br/>(optional)"]
-    Idea --> Propose["/opsx:propose"]
+    Idea["Idea or problem"] --> Explore["/skill:openspec-explore<br/>(optional)"]
+    Idea --> Propose["/skill:openspec-propose"]
     Explore --> Propose
     Propose --> Review{"Planning artifacts<br/>ready?"}
-    Review -->|"Refine"| Update["/opsx:update"]
+    Review -->|"Refine"| Update["/skill:openspec-update-change"]
     Update --> Review
-    Review -->|"Implement"| Apply["/opsx:apply"]
+    Review -->|"Implement"| Apply["/skill:openspec-apply-change"]
     Apply -->|"Plan changed"| Update
-    Apply --> Archive["/opsx:archive"]
-    Apply --> Verify["/opsx:verify<br/>(optional, custom selection)"]
-    Apply --> Sync["/opsx:sync<br/>(optional before archive)"]
+    Apply --> Archive["/skill:openspec-archive-change"]
+    Apply --> Verify["/skill:openspec-verify-change<br/>(optional, custom selection)"]
+    Apply --> Sync["/skill:openspec-sync-specs<br/>(optional before archive)"]
     Verify --> Verified{"Ready to archive?"}
     Verified -->|"Fix implementation"| Apply
     Verified -->|"Revise plan"| Update
@@ -64,21 +64,21 @@ sequenceDiagram
     participant CLI as OpenSpec CLI
     participant Files as Planning and implementation files
 
-    Human->>Assistant: /opsx:propose "change"
-    Assistant->>CLI: openspec new change
+    Human->>Assistant: /skill:openspec-propose "change"
+    Assistant->>CLI: omp openspec new change
     CLI->>Files: Scaffold change metadata
     Assistant->>CLI: Request status and artifact instructions
     CLI-->>Assistant: Build order, paths, and templates
     Assistant->>Files: Write schema-defined planning artifacts
     Assistant-->>Human: Present artifacts for review
 
-    Human->>Assistant: /opsx:apply
+    Human->>Assistant: /skill:openspec-apply-change
     Assistant->>CLI: Request apply instructions
     CLI-->>Assistant: Context files and task state
     Assistant->>Files: Implement tasks and update checkboxes
     Assistant-->>Human: Report implementation status
 
-    Human->>Assistant: /opsx:archive
+    Human->>Assistant: /skill:openspec-archive-change
     Assistant->>CLI: Request archive inputs and artifact status
     CLI-->>Assistant: Planning paths and artifact completion
     Assistant->>Files: Read task state and compare delta specs
@@ -94,34 +94,34 @@ sequenceDiagram
     Assistant->>Files: Move the change into the archive
     Assistant-->>Human: Report archive location and sync result
 
-    Note over Human,CLI: CLI alternative: openspec archive change-name --yes skips confirmation prompts. It still validates, then applies any delta specs and archives
+    Note over Human,CLI: CLI alternative: omp openspec archive change-name --yes skips confirmation prompts. It still validates, then applies any delta specs and archives
 ```
 
 ## Two Modes
 
-### Default Quick Path (`core` profile)
+### Quick Path (all Skills bundled)
 
-New installs default to `core`, which provides:
-- `/opsx:explore`
-- `/opsx:propose`
-- `/opsx:apply`
-- `/opsx:update`
-- `/opsx:sync`
-- `/opsx:archive`
+The quick path uses these already bundled Skills:
+- `/skill:openspec-explore`
+- `/skill:openspec-propose`
+- `/skill:openspec-apply-change`
+- `/skill:openspec-update-change`
+- `/skill:openspec-sync-specs`
+- `/skill:openspec-archive-change`
 
 Typical flow:
 
 ```text
-/opsx:explore ──► /opsx:propose ──► /opsx:apply ──► /opsx:sync ──► /opsx:archive
+/skill:openspec-explore ──► /skill:openspec-propose ──► /skill:openspec-apply-change ──► /skill:openspec-sync-specs ──► /skill:openspec-archive-change
   (optional)
 ```
 
 #### Start by exploring (the habit worth forming)
 
-`/opsx:explore` is part of the default profile, not an advanced add-on. It's the move to make whenever you have a problem but not yet a plan, which, with an AI assistant, is most of the time.
+`/skill:openspec-explore` is bundled alongside all other OpenSpec Skills, not a profile-gated add-on. Use it whenever you have a problem but not yet a plan.
 
 ```text
-You: /opsx:explore
+You: /skill:openspec-explore
 
 AI:  What would you like to explore?
 
@@ -137,19 +137,14 @@ AI:  Let me look... [reads the search service and cache layer]
 
 You: Yes.
 
-You: /opsx:propose rebuild-search-index-on-write
+You: /skill:openspec-propose rebuild-search-index-on-write
 ```
 
-Explore never writes code, and writes nothing else unless you ask, or say yes when it offers. It's a free, no-stakes conversation that turns a vague worry into a precise change, so the proposal that follows is sharp. Already know exactly what you want? Skip it and go straight to `/opsx:propose`. Full guide: [Explore First](explore.md).
+Explore never writes code, and writes nothing else unless you ask, or say yes when it offers. It's a free, no-stakes conversation that turns a vague worry into a precise change, so the proposal that follows is sharp. Already know exactly what you want? Skip it and go straight to `/skill:openspec-propose`. Full guide: [Explore First](explore.md).
 
 ### Expanded/Full Workflow (custom selection)
 
-If you want explicit scaffold-and-build commands (`/opsx:new`, `/opsx:continue`, `/opsx:ff`, `/opsx:verify`, `/opsx:bulk-archive`, `/opsx:onboard`), enable them with:
-
-```bash
-openspec config profile
-openspec update
-```
+All incremental workflows (`new`, `continue`, `ff`, `verify`, `bulk-archive`, `onboard`) are already bundled as native OMP Skills. Use `/skill:openspec-new-change` or another full Skill name; no profile switch or resource refresh is needed.
 
 ## Workflow Patterns (Expanded Mode)
 
@@ -158,18 +153,18 @@ openspec update
 When you know what you want to build and just need to execute:
 
 ```text
-/opsx:new ──► /opsx:ff ──► /opsx:apply ──► /opsx:verify ──► /opsx:archive
+/skill:openspec-new-change ──► /skill:openspec-ff-change ──► /skill:openspec-apply-change ──► /skill:openspec-verify-change ──► /skill:openspec-archive-change
 ```
 
 **Example conversation:**
 
 ```text
-You: /opsx:new add-logout-button
+You: /skill:openspec-new-change add-logout-button
 
 AI:  Created openspec/changes/add-logout-button/
      Ready to create: proposal
 
-You: /opsx:ff
+You: /skill:openspec-ff-change
 
 AI:  Creating all planning artifacts...
      ✓ proposal.md
@@ -178,7 +173,7 @@ AI:  Creating all planning artifacts...
      ✓ tasks.md
      Ready for implementation!
 
-You: /opsx:apply
+You: /skill:openspec-apply-change
 
 AI:  Working through tasks...
      ✓ Added logout button to header
@@ -186,7 +181,7 @@ AI:  Working through tasks...
      ✓ Added confirmation dialog
      All tasks complete!
 
-You: /opsx:archive
+You: /skill:openspec-archive-change
 
 AI:  ✓ Merged specs
      ✓ Archived change
@@ -199,13 +194,13 @@ AI:  ✓ Merged specs
 When requirements are unclear or you need to investigate first:
 
 ```text
-/opsx:explore ──► /opsx:new ──► /opsx:continue ──► ... ──► /opsx:apply
+/skill:openspec-explore ──► /skill:openspec-new-change ──► /skill:openspec-continue-change ──► ... ──► /skill:openspec-apply-change
 ```
 
 **Example conversation:**
 
 ```text
-You: /opsx:explore
+You: /skill:openspec-explore
 
 AI:  What would you like to explore?
 
@@ -225,11 +220,11 @@ AI:  Let me help investigate...
 
 You: Let's tackle the data fetching issue.
 
-You: /opsx:new optimize-product-list-fetching
+You: /skill:openspec-new-change optimize-product-list-fetching
 
 AI:  Created change. Ready to create: proposal
 
-You: /opsx:continue
+You: /skill:openspec-continue-change
 
 AI:  Creating proposal based on our exploration...
      [Writes proposal incorporating investigation insights]
@@ -237,7 +232,7 @@ AI:  Creating proposal based on our exploration...
      Ready to create: specs, design
      Which would you like next?
 
-You: /opsx:continue
+You: /skill:openspec-continue-change
 
 AI:  Creating specs...
 ```
@@ -249,11 +244,11 @@ AI:  Creating specs...
 Work on multiple changes at once:
 
 ```text
-Change A: /opsx:new ──► /opsx:ff ──► /opsx:apply (in progress)
+Change A: /skill:openspec-new-change ──► /skill:openspec-ff-change ──► /skill:openspec-apply-change (in progress)
                                          │
                                     context switch
                                          │
-Change B: /opsx:new ──► /opsx:ff ──────► /opsx:apply
+Change B: /skill:openspec-new-change ──► /skill:openspec-ff-change ──────► /skill:openspec-apply-change
 ```
 
 **Example conversation:**
@@ -261,27 +256,27 @@ Change B: /opsx:new ──► /opsx:ff ──────► /opsx:apply
 ```text
 You: I'm working on add-dark-mode but got pulled into a bug fix
 
-You: /opsx:new fix-login-redirect
+You: /skill:openspec-new-change fix-login-redirect
 
 AI:  Created openspec/changes/fix-login-redirect/
 
-You: /opsx:ff
+You: /skill:openspec-ff-change
 
 AI:  ✓ Created planning artifacts
 
-You: /opsx:apply
+You: /skill:openspec-apply-change
 
 AI:  Working on fix-login-redirect...
      [Implements the fix]
      All tasks complete!
 
-You: /opsx:archive
+You: /skill:openspec-archive-change
 
 AI:  ✓ Archived fix-login-redirect
 
 You: Let's get back to dark mode
 
-You: /opsx:apply add-dark-mode
+You: /skill:openspec-apply-change add-dark-mode
 
 AI:  Resuming add-dark-mode...
      Picking up at task 2.3: Update Header...
@@ -289,10 +284,10 @@ AI:  Resuming add-dark-mode...
 
 **Best for:** Parallel work streams, urgent interrupts, team collaboration.
 
-When you have multiple completed changes, use `/opsx:bulk-archive`:
+When you have multiple completed changes, use `/skill:openspec-bulk-archive-change`:
 
 ```text
-You: /opsx:bulk-archive
+You: /skill:openspec-bulk-archive-change
 
 AI:  Found 3 completed changes:
      - add-dark-mode (all tasks done)
@@ -322,7 +317,7 @@ Bulk archive detects when multiple changes touch the same specs and resolves con
 The recommended completion flow:
 
 ```text
-/opsx:apply ──► /opsx:verify ──► /opsx:archive
+/skill:openspec-apply-change ──► /skill:openspec-verify-change ──► /skill:openspec-archive-change
                     │                 │
               validates          prompts to sync
               implementation     if needed
@@ -330,10 +325,10 @@ The recommended completion flow:
 
 #### Verify: Check Your Work
 
-`/opsx:verify` validates implementation against your artifacts across three dimensions:
+`/skill:openspec-verify-change` validates implementation against your artifacts across three dimensions:
 
 ```text
-You: /opsx:verify
+You: /skill:openspec-verify-change
 
 AI:  Verifying add-auth...
 
@@ -375,10 +370,10 @@ Verify won't block archive, but it surfaces issues you might want to address fir
 
 #### Archive: Finalize the Change
 
-`/opsx:archive` completes the change and moves it to the archive:
+`/skill:openspec-archive-change` completes the change and moves it to the archive:
 
 ```text
-You: /opsx:archive
+You: /skill:openspec-archive-change
 
 AI:  Archiving add-auth...
 
@@ -403,17 +398,17 @@ Archive will prompt if specs aren't synced. It won't block on incomplete tasks, 
 
 ## When to Use What
 
-### `/opsx:ff` vs `/opsx:continue`
+### `/skill:openspec-ff-change` vs `/skill:openspec-continue-change`
 
 | Situation | Use |
 |-----------|-----|
-| Clear requirements, ready to build | `/opsx:ff` |
-| Exploring, want to review each step | `/opsx:continue` |
-| Want to iterate on proposal before specs | `/opsx:continue` |
-| Time pressure, need to move fast | `/opsx:ff` |
-| Complex change, want control | `/opsx:continue` |
+| Clear requirements, ready to build | `/skill:openspec-ff-change` |
+| Exploring, want to review each step | `/skill:openspec-continue-change` |
+| Want to iterate on proposal before specs | `/skill:openspec-continue-change` |
+| Time pressure, need to move fast | `/skill:openspec-ff-change` |
+| Complex change, want control | `/skill:openspec-continue-change` |
 
-**Rule of thumb:** If you can describe the full scope upfront, use `/opsx:ff`. If you're figuring it out as you go, use `/opsx:continue`.
+**Rule of thumb:** If you can describe the full scope upfront, use `/skill:openspec-ff-change`. If you're figuring it out as you go, use `/skill:openspec-continue-change`.
 
 ### When to Update vs Start Fresh
 
@@ -471,12 +466,12 @@ One logical unit of work per change. If you're doing "add feature X and also ref
 - Can ship independently
 - Simpler rollback if needed
 
-### Use `/opsx:explore` for Unclear Requirements
+### Use `/skill:openspec-explore` for Unclear Requirements
 
 Before committing to a change, explore the problem space:
 
 ```text
-You: /opsx:explore
+You: /skill:openspec-explore
 
 AI:  What would you like to explore?
 
@@ -497,10 +492,10 @@ Exploration clarifies thinking before any code gets written.
 
 ### Verify Before Archiving
 
-Use `/opsx:verify` to check implementation matches artifacts:
+Use `/skill:openspec-verify-change` to check implementation matches artifacts:
 
 ```text
-You: /opsx:verify
+You: /skill:openspec-verify-change
 
 AI:  Verifying add-dark-mode...
 
@@ -515,7 +510,7 @@ Catches mismatches before you close out the change.
 
 ### Name Changes Clearly
 
-Good names make `openspec list` useful:
+Good names make `omp openspec list` useful:
 
 ```text
 Good:                          Avoid:
@@ -531,16 +526,16 @@ For full command details and options, see [Commands](commands.md).
 
 | Command | Purpose | When to Use |
 |---------|---------|-------------|
-| `/opsx:propose` | Create change + planning artifacts | Fast default path (`core` profile) |
-| `/opsx:explore` | Think through ideas with the AI | Start here when unsure: unclear requirements, investigation, comparing options |
-| `/opsx:new` | Start a change scaffold | Expanded mode, explicit artifact control |
-| `/opsx:continue` | Create next artifact | Expanded mode, step-by-step artifact creation |
-| `/opsx:ff` | Create all planning artifacts | Expanded mode, clear scope |
-| `/opsx:apply` | Implement tasks | Ready to write code |
-| `/opsx:verify` | Validate implementation | Expanded mode, before archiving |
-| `/opsx:sync` | Merge delta specs | Expanded mode, optional |
-| `/opsx:archive` | Complete the change | All work finished |
-| `/opsx:bulk-archive` | Archive multiple changes | Expanded mode, parallel work |
+| `/skill:openspec-propose` | Create change + planning artifacts | Fast default path (`core` profile) |
+| `/skill:openspec-explore` | Think through ideas with the AI | Start here when unsure: unclear requirements, investigation, comparing options |
+| `/skill:openspec-new-change` | Start a change scaffold | Expanded mode, explicit artifact control |
+| `/skill:openspec-continue-change` | Create next artifact | Expanded mode, step-by-step artifact creation |
+| `/skill:openspec-ff-change` | Create all planning artifacts | Expanded mode, clear scope |
+| `/skill:openspec-apply-change` | Implement tasks | Ready to write code |
+| `/skill:openspec-verify-change` | Validate implementation | Expanded mode, before archiving |
+| `/skill:openspec-sync-specs` | Merge delta specs | Expanded mode, optional |
+| `/skill:openspec-archive-change` | Complete the change | All work finished |
+| `/skill:openspec-bulk-archive-change` | Archive multiple changes | Expanded mode, parallel work |
 
 ## Next Steps
 

@@ -189,7 +189,7 @@ export class ValidateCommand {
 
   /**
    * Resolve change IDs by directory existence within the resolved root — the
-   * same rule `openspec status`/`instructions` use (`getAvailableChanges`) —
+   * same rule `omp openspec status`/`instructions` use (`getAvailableChanges`) —
    * rather than requiring `proposal.md`. This lets `validate` resolve a
    * scaffolded or still-authoring change that the sibling commands already
    * resolve (#1182). Sorted to preserve the prior `getActiveChangeIds` ordering.
@@ -231,10 +231,10 @@ export class ValidateCommand {
 
   private printNonInteractiveHint(root: ResolvedOpenSpecRoot): void {
     console.error('Nothing to validate. Try one of:');
-    console.error(`  ${withStoreFlag(root, 'openspec validate --all')}`);
-    console.error(`  ${withStoreFlag(root, 'openspec validate --changes')}`);
-    console.error(`  ${withStoreFlag(root, 'openspec validate --specs')}`);
-    console.error(`  ${withStoreFlag(root, 'openspec validate <item-name>')}`);
+    console.error(`  ${withStoreFlag(root, 'omp openspec validate --all')}`);
+    console.error(`  ${withStoreFlag(root, 'omp openspec validate --changes')}`);
+    console.error(`  ${withStoreFlag(root, 'omp openspec validate --specs')}`);
+    console.error(`  ${withStoreFlag(root, 'omp openspec validate <item-name>')}`);
     console.error('Or run in an interactive terminal.');
   }
 
@@ -291,7 +291,7 @@ export class ValidateCommand {
       if (isStoreSelectedRoot(root)) {
         console.error('Pass --type change|spec.');
       } else {
-        console.error('Pass --type change|spec, or use: openspec change validate / openspec spec validate');
+        console.error('Pass --type change|spec, or use: omp openspec change validate / openspec spec validate');
       }
       process.exitCode = 1;
       return;
@@ -422,7 +422,7 @@ export class ValidateCommand {
     } else if (type === 'change') {
       bullets.push('- Ensure change has deltas in specs/: use headers ## ADDED/MODIFIED/REMOVED/RENAMED Requirements');
       bullets.push('- Each requirement MUST include at least one #### Scenario: block');
-      bullets.push(`- Debug parsed deltas: ${withStoreFlag(root, `openspec show ${id} --json --deltas-only`)}`);
+      bullets.push(`- Debug parsed deltas: ${withStoreFlag(root, `omp openspec show ${id} --json --deltas-only`)}`);
     } else {
       bullets.push('- Ensure spec includes ## Purpose and ## Requirements sections');
       bullets.push('- Each requirement MUST include at least one #### Scenario: block');
@@ -458,7 +458,7 @@ export class ValidateCommand {
     if (firstFailure) {
       const storeFlag = isStoreSelectedRoot(root) ? ` --store ${root.storeId}` : '';
       console.log(
-        `Details: openspec validate ${firstFailure.id} --type ${firstFailure.type}${storeFlag}`
+        `Details: omp openspec validate ${firstFailure.id} --type ${firstFailure.type}${storeFlag}`
       );
     }
   }

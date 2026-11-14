@@ -23,7 +23,7 @@ export function registerWorksetCommand(program: Command): void {
     COMMAND_REGISTRY.find((entry) => entry.name === 'workset')?.description ??
     'Compose, keep, and open personal working views (purely local)';
   const workset = program.command('workset').description(groupDescription);
-  // Parsed at the group level so `openspec workset --json` keeps the
+  // Parsed at the group level so `omp openspec workset --json` keeps the
   // one-JSON-document contract instead of a raw Commander error. The
   // parent option matches anywhere; actions read optsWithGlobals().
   workset.addOption(new Option('--json', 'Output as JSON').hideHelp());
@@ -99,8 +99,8 @@ export function registerWorksetCommand(program: Command): void {
     );
     const message =
       attempted.length > 0
-        ? `Unknown command '${attempted[0]}' for 'openspec workset'. Workset subcommands: ${subcommandsLine}.`
-        : `Missing subcommand for 'openspec workset'. Workset subcommands: ${subcommandsLine}.`;
+        ? `Unknown command '${attempted[0]}' for 'omp openspec workset'. Workset subcommands: ${subcommandsLine}.`
+        : `Missing subcommand for 'omp openspec workset'. Workset subcommands: ${subcommandsLine}.`;
     if (workset.opts().json) {
       printJson({
         status: [

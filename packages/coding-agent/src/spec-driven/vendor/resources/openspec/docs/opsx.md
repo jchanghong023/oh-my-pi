@@ -58,14 +58,17 @@ You're "in planning phase", then "in implementation phase", then "done". But rea
 
 ## Setup
 
-```bash
+Use bundled `omp openspec init [path]` only after explicit authorization to initialize the project. It creates project structure/configuration, defaulting to `spec-driven`, without installing or cleaning Skills, Agent settings, or commands. No separate OpenSpec/Node installation is needed.
+
+All 12 OpenSpec Skills are bundled with OMP and use native discovery, completion, on-demand `skill://<name>` reads, and path authorization in any directory. Project/user same-name overrides keep their existing precedence. No profile selection or duplicate Skill installation is needed. Skill discovery does not authorize project initialization.
+
 # Make sure you have openspec installed — skills are automatically generated
-openspec init
+omp openspec init
 ```
 
 This creates skills in `.claude/skills/` (or equivalent) that AI coding assistants auto-detect.
 
-By default, OpenSpec uses the `core` workflow profile (`propose`, `explore`, `apply`, `update`, `sync`, `archive`). If you want the expanded workflow commands (`new`, `continue`, `ff`, `verify`, `bulk-archive`, `onboard`), configure them with `openspec config profile` and apply with `openspec update`.
+By default, OpenSpec uses the `core` workflow profile (`propose`, `explore`, `apply`, `update`, `sync`, `archive`). If you want the expanded workflow commands (`new`, `continue`, `ff`, `verify`, `bulk-archive`, `onboard`), configure them with `omp openspec config profile` and apply with `openspec update`.
 
 During setup, you'll be prompted to create a **project config** (`openspec/config.yaml`). This is optional but recommended.
 
@@ -75,7 +78,7 @@ Project config lets you set defaults and inject project-specific context into al
 
 ### Creating Config
 
-Config is created during `openspec init`, or manually:
+Config is created during `omp openspec init`, or manually:
 
 ```yaml
 # openspec/config.yaml
@@ -142,7 +145,7 @@ rules:
 
 **"Unknown artifact ID in rules: X"**
 - Check artifact IDs match your schema (see list above)
-- Run `openspec schemas --json` to see artifact IDs for each schema
+- Run `omp openspec schemas --json` to see artifact IDs for each schema
 
 **Config not being applied:**
 - Ensure file is at `openspec/config.yaml` (not `.yml`)
@@ -157,75 +160,75 @@ rules:
 
 | Command | What it does |
 |---------|--------------|
-| `/opsx:propose` | Create a change and generate planning artifacts in one step (default quick path) |
-| `/opsx:explore` | Think through ideas, investigate problems, clarify requirements |
-| `/opsx:new` | Start a new change scaffold (expanded workflow) |
-| `/opsx:continue` | Create the next artifact (expanded workflow) |
-| `/opsx:ff` | Fast-forward planning artifacts (expanded workflow) |
-| `/opsx:apply` | Implement tasks, updating artifacts as needed |
-| `/opsx:update` | Revise a change's planning artifacts and keep them coherent |
-| `/opsx:verify` | Validate implementation against artifacts (expanded workflow) |
-| `/opsx:sync` | Merge delta specs into main specs (optional) |
-| `/opsx:archive` | Archive when done |
-| `/opsx:bulk-archive` | Archive multiple completed changes (expanded workflow) |
-| `/opsx:onboard` | Guided walkthrough of an end-to-end change (expanded workflow) |
+| `/skill:openspec-propose` | Create a change and generate planning artifacts in one step (default quick path) |
+| `/skill:openspec-explore` | Think through ideas, investigate problems, clarify requirements |
+| `/skill:openspec-new-change` | Start a new change scaffold (incremental workflow) |
+| `/skill:openspec-continue-change` | Create the next artifact (incremental workflow) |
+| `/skill:openspec-ff-change` | Fast-forward planning artifacts (incremental workflow) |
+| `/skill:openspec-apply-change` | Implement tasks, updating artifacts as needed |
+| `/skill:openspec-update-change` | Revise a change's planning artifacts and keep them coherent |
+| `/skill:openspec-verify-change` | Validate implementation against artifacts (incremental workflow) |
+| `/skill:openspec-sync-specs` | Merge delta specs into main specs (optional) |
+| `/skill:openspec-archive-change` | Archive when done |
+| `/skill:openspec-bulk-archive-change` | Archive multiple completed changes (incremental workflow) |
+| `/skill:openspec-onboard` | Guided walkthrough of an end-to-end change (incremental workflow) |
 
 ## Usage
 
 ### Explore an idea
 ```
-/opsx:explore
+/skill:openspec-explore
 ```
-Think through ideas, investigate problems, compare options. No structure required - just a thinking partner. When insights crystallize, transition to `/opsx:propose` (default) or `/opsx:new`/`/opsx:ff` (expanded).
+Think through ideas, investigate problems, compare options. No structure required - just a thinking partner. When insights crystallize, transition to `/skill:openspec-propose` (default) or `/skill:openspec-new-change`/`/skill:openspec-ff-change` (expanded).
 
 ### Start a new change
 ```
-/opsx:propose
+/skill:openspec-propose
 ```
 Creates the change and generates planning artifacts needed before implementation.
 
 If you've enabled expanded workflows, you can instead use:
 
 ```text
-/opsx:new        # scaffold only
-/opsx:continue   # create one artifact at a time
-/opsx:ff         # create all planning artifacts at once
+/skill:openspec-new-change        # scaffold only
+/skill:openspec-continue-change   # create one artifact at a time
+/skill:openspec-ff-change         # create all planning artifacts at once
 ```
 
 ### Create artifacts
 ```
-/opsx:continue
+/skill:openspec-continue-change
 ```
 Shows what's ready to create based on dependencies, then creates one artifact. Use repeatedly to build up your change incrementally.
 
 ```
-/opsx:ff add-dark-mode
+/skill:openspec-ff-change add-dark-mode
 ```
 Creates all planning artifacts at once. Use when you have a clear picture of what you're building.
 
 ### Implement (the fluid part)
 ```
-/opsx:apply
+/skill:openspec-apply-change
 ```
-Works through tasks, checking them off as you go. If you're juggling multiple changes, you can run `/opsx:apply <name>`; otherwise it should infer from the conversation and prompt you to choose if it can't tell.
+Works through tasks, checking them off as you go. If you're juggling multiple changes, you can run `/skill:openspec-apply-change <name>`; otherwise it should infer from the conversation and prompt you to choose if it can't tell.
 
 ### Updating a change
 ```
-/opsx:update add-dark-mode - we're storing the theme in a cookie now
+/skill:openspec-update-change add-dark-mode - we're storing the theme in a cookie now
 ```
-Revises the change's existing planning artifacts and keeps them coherent in any direction (a design edit may ripple back to the proposal). It never edits code. Every edit is confirmed with you first. See [the update reference](commands.md#opsxupdate) for how it handles missing files without starting a new artifact.
+Revises the change's existing planning artifacts and keeps them coherent in any direction (a design edit may ripple back to the proposal). It never edits code. Every edit is confirmed with you first. See [the update reference](commands.md#skillopenspec-update-change) for how it handles missing files without starting a new artifact.
 
-If the change was already implemented, it recommends `/opsx:apply` so the code catches up with the revised plan. If your revision changes the change's *intent*, start fresh instead. See [When to Update vs. Start Fresh](#when-to-update-vs-start-fresh).
+If the change was already implemented, it recommends `/skill:openspec-apply-change` so the code catches up with the revised plan. If your revision changes the change's *intent*, start fresh instead. See [When to Update vs. Start Fresh](#when-to-update-vs-start-fresh).
 
 ### Sync delta specs
 ```text
-/opsx:sync
+/skill:openspec-sync-specs
 ```
 Merges the current change's delta specs into your main `openspec/specs/` without archiving — the change stays active. It applies the whole delta: a requirement under `## REMOVED` is deleted from the main spec and a renamed one is retitled in place, while content the delta doesn't mention is left untouched. Syncing is optional — archive prompts you to sync first if you haven't. Reach for it when you want main specs updated before archiving, when a parallel change needs to build on specs this one just added, or when you want to review the merged main spec before archiving.
 
 ### Finish up
 ```
-/opsx:archive   # Move to archive when done (prompts to sync specs if needed)
+/skill:openspec-archive-change   # Move to archive when done (prompts to sync specs if needed)
 ```
 
 ## When to Update vs. Start Fresh
@@ -316,7 +319,7 @@ Think of it like git branches:
 
 ## What's Different?
 
-| | Legacy (`/openspec:proposal`) | OPSX (`/opsx:*`) |
+| | Legacy (`/openspec:proposal`) | OPSX (`/skill:openspec-*`) |
 |---|---|---|
 | **Structure** | One big proposal document | Discrete artifacts with dependencies |
 | **Workflow** | Linear phases: plan → implement → archive | Fluid actions — do anything anytime |
@@ -499,13 +502,13 @@ Artifacts form a directed acyclic graph (DAG). Dependencies are **enablers**, no
 **OPSX** — agent queries for rich context:
 
 ```
-  User: "/opsx:continue"
+  User: "/skill:openspec-continue-change"
            │
            ▼
   ┌──────────────────────────────────────────────────────────────────────────┐
   │  Step 1: Query current state                                             │
   │  ┌────────────────────────────────────────────────────────────────────┐  │
-  │  │  $ openspec status --change "add-auth" --json                      │  │
+  │  │  $ omp openspec status --change "add-auth" --json                      │  │
   │  │                                                                    │  │
   │  │  {                                                                 │  │
   │  │    "artifacts": [                                                  │  │
@@ -520,7 +523,7 @@ Artifacts form a directed acyclic graph (DAG). Dependencies are **enablers**, no
   │                                                                          │
   │  Step 2: Get rich instructions for ready artifact                        │
   │  ┌────────────────────────────────────────────────────────────────────┐  │
-  │  │  $ openspec instructions specs --change "add-auth" --json          │  │
+  │  │  $ omp openspec instructions specs --change "add-auth" --json          │  │
   │  │                                                                    │  │
   │  │  {                                                                 │  │
   │  │    "template": "# Specification\n\n## ADDED Requirements...",      │  │
@@ -557,7 +560,7 @@ Artifacts form a directed acyclic graph (DAG). Dependencies are **enablers**, no
 **OPSX** — natural iteration:
 
 ```
-  /opsx:new ───► /opsx:continue ───► /opsx:apply ───► /opsx:archive
+  /skill:openspec-new-change ───► /skill:openspec-continue-change ───► /skill:openspec-apply-change ───► /skill:openspec-archive-change
       │                │                  │
       │                │                  ├── "The design is wrong"
       │                │                  │
@@ -566,7 +569,7 @@ Artifacts form a directed acyclic graph (DAG). Dependencies are **enablers**, no
       │                │            and continue!
       │                │                  │
       │                │                  ▼
-      │                │         /opsx:apply picks up
+      │                │         /skill:openspec-apply-change picks up
       │                │         where you left off
       │                │
       │                └── Creates ONE artifact, shows what's unlocked
@@ -580,16 +583,16 @@ Create custom workflows using the schema management commands:
 
 ```bash
 # Create a new schema from scratch (interactive)
-openspec schema init my-workflow
+omp openspec schema init my-workflow
 
 # Or fork an existing schema as a starting point
-openspec schema fork spec-driven my-workflow
+omp openspec schema fork spec-driven my-workflow
 
 # Validate your schema structure
-openspec schema validate my-workflow
+omp openspec schema validate my-workflow
 
 # See where a schema resolves from (useful for debugging)
-openspec schema which my-workflow
+omp openspec schema which my-workflow
 ```
 
 Schemas are stored in `openspec/schemas/` (project-local, version controlled) or `~/.local/share/openspec/schemas/` (user global).
@@ -645,28 +648,28 @@ Schemas define what artifacts exist and their dependencies. Currently available:
 
 ```bash
 # List available schemas
-openspec schemas
+omp openspec schemas
 
 # See all schemas with their resolution sources
-openspec schema which --all
+omp openspec schema which --all
 
 # Create a new schema interactively
-openspec schema init my-workflow
+omp openspec schema init my-workflow
 
 # Fork an existing schema for customization
-openspec schema fork spec-driven my-workflow
+omp openspec schema fork spec-driven my-workflow
 
 # Validate schema structure before use
-openspec schema validate my-workflow
+omp openspec schema validate my-workflow
 ```
 
 ## Tips
 
-- Use `/opsx:explore` to think through an idea before committing to a change
-- `/opsx:ff` when you know what you want, `/opsx:continue` when exploring
-- During `/opsx:apply`, if something's wrong — fix the artifact, then continue
+- Use `/skill:openspec-explore` to think through an idea before committing to a change
+- `/skill:openspec-ff-change` when you know what you want, `/skill:openspec-continue-change` when exploring
+- During `/skill:openspec-apply-change`, if something's wrong — fix the artifact, then continue
 - Tasks track progress via checkboxes in `tasks.md`
-- Check status anytime: `openspec status --change "name"`
+- Check status anytime: `omp openspec status --change "name"`
 
 ## Feedback
 

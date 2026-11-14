@@ -1,429 +1,292 @@
-# OpenSpec 内置副本裁剪计划
+# OpenSpec 2.0 最终 OMP 适配与文档同步
 
-## 目标与边界
+## 本次操作与后续执行边界
 
-保留 OpenSpec 在 OMP 中需要的业务实现、全部通用工作流、Skill、schema、模板、有用文档及必要构建输入；删除独立上游仓库的工程管理材料、上游自身需求与历史计划、上游测试，以及其他 Agent 专用适配和安装能力。
+**本轮剩余工作已完成，默认 fastcheck／fulltest 均通过。** OpenSpec 2.0 内置适配、12 Skill、文档、用户文件保护、本仓库 schema 迁移及验收已完成；源码／npm／Windows 二进制与真实 TUI 已验证。迁移不代表既有业务材料已补齐，其他平台未实测；详细证据、备份位置与门禁范围见下方。此前逐轮说明属于历史过程。
 
-- 唯一裁剪根目录：`packages/coding-agent/src/spec-driven/vendor/resources/openspec/`，下文路径均相对此目录。
-- 上游参考：`C:\Users\jiang\Documents\OpenSpec`，只读，不改动。
-- 仅更新执行计划，未执行本文件中的删除、源码修改、构建或测试。
-- 不修改 OMP 根目录的 `openspec/`、规则、用户需求或 `packages/coding-agent/test/`，不裁剪 Superpowers、JCH 等兄弟资源。
-- 这次是有边界的内置业务裁剪，不再追求与上游整仓文件集合相同；除明确列出的裁剪依赖外，不重写 OpenSpec 业务语义，不恢复 mini／omp-spec 等旧魔改。
+前置状态由用户确认：上游业务还原和无关材料裁剪已完成。本轮不重做整仓导入，不恢复其他 Agent 支持、独立安装器或旧魔改。
 
-## 1. 执行前保护
+### 已确认合同
 
-- [x] 固定实际来源提交、版本，记录目标已有改动；既有来源记录只作背景，不将旧比对结果当作本轮已完成证明。
-  - 来源实测（`C:\Users\jiang\Documents\OpenSpec`）：`main` @ `ea635dd255f8686dcf48626bbcbe0e3fd59b6067`（2026-11-13 22:09:16 +0000，`fix(binaries): label the Windows executables as OpenSpec (#2246)`），`git describe` 为 `@fission-ai/openspec@2.0.0-1-gea635dd2`，`package.json` 版本 `2.0.0`，工作区干净（0 修改／未跟踪），`git ls-files` 1378 个文件。
-  - 目标实测：同路径 1378 个文件，与来源无任何单侧独有文件；`diff -rq --strip-trailing-cr` 无差异，唯一差异是换行（目标 1372 个含 LF 的文本文件、5 个二进制、1 个空文件 `AGENTS.md`；来源工作区为 CRLF）。结论：目标无内容层面的既有改动，仅有检出换行差异。
-  - `vendor/inventory.json` 中 `openspec.version=2.0.0`、`integrity=git:ea635dd255f8686dcf48626bbcbe0e3fd59b6067` 与本次实测一致，仅作背景，不作为完成依据。
-  - OMP 仓库对该路径及目标树无未提交改动；本轮开始时唯一未提交文件为 `todo.md` 自身。
-- [x] 将当前目标完整备份到仓库外，记录恢复位置；备份不能放进 vendor 资源树。
-  - 备份位置：`F:\code2026\_backup\openspec-vendor-preTrim-ea635dd-20261114`（OMP 仓库根 `F:\code2026\oh-my-pi` 的同级目录，`git status` 未出现该路径）。
-  - 方式与范围：`cp -a` 整树复制（含空文件与二进制），1378 个文件、11 MB；目标与备份的全量文件 sha256 清单哈希均为 `a2615a10e307c7dfe170009c3197292bff65bc2093fe2613a11f470ad928a83d`，`diff -rq` 0 差异。
-  - 恢复方式：将备份目录内容复制回 `packages/coding-agent/src/spec-driven/vendor/resources/openspec/` 覆盖即可；清单哈希不一致时以备份为准重新复制。
-- [x] 生成按相对路径列出的删除／修改清单。核对真实根目录，不经 junction／符号链接递归删除，不使用全仓文件名匹配。
-  - 根目录核对：`packages\coding-agent\src\spec-driven\vendor\resources\openspec` 的 `realpath` 仍为同一仓库内路径；根目录及上级 `resources`／`vendor`／`spec-driven`／`src` 均非符号链接、非 reparse point。
-  - 链接扫描：目标树内 0 个 symlink／junction（`os.walk(followlinks=False)` 全树检查）。后续删除只用清单中的显式相对路径，不做文件名通配递归。
-  - 清单见文末“附录 A”，按当前实测树（来源 `ea635dd`）逐项列出，共 1022 个目录内文件 + 12 个根文件 + 15 个脚本 + 33 个 adapter + 2 个独立源码文件待删，另有 12 个源码／配置文件的修改点。
-- [x] 保存保留文件的路径及内容摘要；本轮结束按“明确删除、明确修改、原样保留”三类核对。
-  - 清单文件：`F:\code2026\_backup\openspec-vendor-retained-sha256-ea635dd.txt`（仓库外，与备份同目录），294 行，格式 `sha256<TAB>相对路径`；文件自身 sha256 为 `606631d7f47c23312817c9c056d3c0b54ab64ed9e0bfc05ed5e3a258c2ee8e87`。
-  - 分类基数（合计 1378，与来源 `git ls-files` 一致）：明确删除 1084（A.1 目录 1022 + A.2 根文件 12 + A.3 脚本 15 + A.4 源码 35）；明确修改候选 18（A.5 展开到文件：`adapters/index.ts`、`registry.ts`、`config.ts`、`available-tools.ts`、`shared-skill-target.ts`、`shared/skill-paths.ts`、`shared/tool-detection.ts`、`shared/shared-skill-install.ts`、`shared/skill-links.ts`、`retired-tools.ts`、`legacy-cleanup.ts`、`released-output-sweep.ts`、`init.ts`、`update.ts`、`cli/index.ts`、`package.json`、`pnpm-lock.yaml`、`docs/supported-tools.md`，均已确认存在）；原样保留 276。
-  - 保留分布：`src/` 189（224 − 35）、`docs/` 27、`docs-lab/` 43、`skills/` 13、`schemas/` 5、`assets/` 4、`bin/` 1、根文件 12。
-  - 收尾核对方式：对实际保留文件重算 sha256，与清单逐行比对；不在 18 个修改候选内的文件必须哈希一致，删除项不得存在。
+1. OpenSpec 随 OMP 内置，任意项目可发现、读取和显式调用 Skill，不要求先安装 Skill。
+2. 所有实际调用入口为 `omp openspec ...`，不依赖外部 `openspec`／Node 安装，不新增裸命令启动器或 PATH 注入。
+3. `init` 只负责项目初始化与配置，不向项目或用户目录安装、复制、链接、更新或清理 Skill／旧命令。
+4. 内置 Skill 随 OMP 版本更新。`update` 不再管理 Skill；若移除交付职责后没有独立有效职责，删除命令与死代码，不保留无操作成功入口。
+5. 适配交付、发现、执行及文档，不改变通用工作流、artifact 依赖、默认 spec-driven schema、校验、同步或归档语义，不恢复 mini／omp-spec 注入、私有目录桥接、需求专用版正文或旧五项白名单。
+6. 不自动删除或迁移用户已有 Skill、命令、项目配置及 change；普通 OMP、Superpowers、JCH 的既有行为保持。
+7. AIReq 需求尚未确定，完全不纳入本轮：不设计、修改或验证其会话、Skill 策略、权限、schema 或业务后端，也不将 AIReq 兼容／隔离作为 OpenSpec 适配的完成条件。共享代码仅按普通 OpenSpec 的实际需要修改，不承诺本轮完成 AIReq 接入。
 
-## 2. 原样保留业务与构建输入
+---
 
-- [x] 保留 `src/` 的通用业务：CLI、根目录／store 解析、需求管理、artifact graph、schema、模板、提示词、校验、同步、归档、完整工作流。仅按第 5 节裁掉特定外部工具集成。
-  - 逐项核对（保留清单 189 个 `src/` 文件全部命中；本步未删任何文件）：CLI `src/cli/index.ts` + `src/cli/commands/`（7）；根目录／store `src/core/openspec-root.ts`、`root-selection.ts`、`project-config.ts`、`global-config.ts`、`src/core/store/`（6）；需求管理 `src/core/list.ts`、`view.ts`、`specs-apply.ts`、`change-status-policy.ts`、`relationship-health.ts` + `src/commands/{change,spec,show,validate}.ts`；artifact graph `src/core/artifact-graph/`（8）；schema `src/core/schemas/`（4）+ `config-schema.ts` + 根 `schemas/`（5）；模板 `src/core/templates/`（19）；提示词 `src/prompts/searchable-multi-select.ts` + workflow 模板；校验 `src/core/validation/`（6）+ `validate.ts`；同步 `src/core/archive.ts`（归档时重建／同步 specs）与 `specs-apply.ts`；归档 `src/core/archive.ts` + `archive [change-name]` 注册（L612）；完整工作流 `src/commands/workflow/`（8）+ `command-surface.ts`、`profiles.ts`、`src/core/init.ts`、`update.ts`。
-  - 裁剪边界：`src/` 内仅 A.4 的 33 个 adapter、`github-copilot/cloud-agent.ts`、`commands/install-standalone.ts` 待删（其余为 A.5 修改），通用业务目录均不在删除清单中。
-  - 备注：上游无独立 `sync` 命令，“同步”由 `archive` 的 delta→specs 重建承担；`src/commands/archive.ts` 不存在，归档实现位于 `src/core/archive.ts`。
-- [x] 保留 `bin/`、`schemas/`、`skills/` 及全部通用 Skill，不按默认 profile 删掉 apply、verify、onboard 等可选工作流。
-  - `bin/`（1）：`bin/openspec.js`（79 字节，导入 `../dist/cli/index.js` 后调用 `runCli()`），不在删除清单。
-  - `schemas/`（5）：`schemas/spec-driven/schema.yaml` 与 `templates/{proposal,spec,design,tasks}.md`，全部保留。
-  - `skills/`（13）：`README.md` + 12 个 `openspec-*/SKILL.md`，与 `ALL_WORKFLOWS` 的 12 个 id 一一对应（propose、explore、new、continue、apply、update、ff、sync、archive、bulk-archive、verify、onboard），apply／verify／onboard 均在列。
-  - 说明：`CORE_WORKFLOWS`（默认 profile）只含 propose／explore／apply／update／sync／archive，这是运行时装配策略；裁剪不据此删除其余 6 个可选工作流的 Skill 文件。`skills/README.md` 声明其内容由模板生成（`generate:skills`），本轮仅保留现成文件与模板，不因删除该脚本而删除 Skill 数据。
-  - 三者均完整出现在保留清单（`bin/` 1 + `schemas/` 5 + `skills/` 13），本步未改动任何文件。
-- [x] 保留 `LICENSE`、`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`tsconfig.json`、`build.js`、`.gitattributes`、`.gitignore`。
-  - 8 个文件全部存在且均在保留清单中，不在 A.2 删除范围：`LICENSE`（1072 B，MIT）、`package.json`（2253 B，`version 2.0.0`、`type: module`、`bin.openspec=./bin/openspec.js`、`files=[dist,bin,schemas,…]`、`engines.node>=22.12.0`）、`pnpm-lock.yaml`（88647 B，`pnpm@10.34.5`）、`pnpm-workspace.yaml`（2662 B，`packages: ['.']` + `allowBuilds.esbuild` + 8 组安全 overrides）、`tsconfig.json`（530 B，`rootDir src`／`outDir dist`／`include src/**/*`、`exclude test`）、`build.js`（836 B，仅依赖本地 `typescript/bin/tsc` 清理并编译到 `dist`）、`.gitattributes`（652 B）、`.gitignore`（2466 B）。
-  - 构建链核对：`build.js` → `tsc` → `dist`，`bin/openspec.js` 导入 `../dist/cli/index.js`；无对 `scripts/`、`test/` 的构建依赖，删除这些目录不破坏构建入口。
-  - 需注意但不属于本项：`.gitattributes` 仍保留 `test/fixtures/released-output/**` 的 `-text` 规则，`test/` 删除后会成为失效规则；`package.json` 的 `files` 含 `dist/**/*.test.js` 等排除项同理。留待第 4 节清理时按“仅为已移除材料服务”处理，不在本步改动。
-- [x] `pnpm-workspace.yaml` 含实际依赖 overrides，不因其名称为 workspace 而删除。package.json 也被 CLI 用于读取版本，不可删除。
-  - `pnpm-workspace.yaml` 是 overrides 的唯一声明处：`packages: ['.']`、`allowBuilds.esbuild=true`，9 条安全覆盖（brace-expansion、postcss、js-yaml×2、nanoid、fflate、shell-quote、launch-editor、minimatch），与 `pnpm-lock.yaml` 的 `overrides:` 段逐条一致；`package.json` 无 `pnpm.overrides`（注释说明 pnpm 10 会用 workspace 文件替代而非合并，故不能迁入 package.json）。
-  - `package.json` 版本读取消费者实测 6 处：`src/cli/index.ts:73`、`src/core/init.ts:95`、`src/core/update.ts:93`、`src/core/version-check.ts:15`（并 L441 以 URL 读取）、`src/core/shared/own-skill-texts.ts:16`、`src/commands/feedback.ts:44`；删除 `package.json` 会直接破坏 `openspec version`、初始化与技能文本。
-  - 结论：两个文件都必须保留，且本轮不改 overrides 内容；第 4 节只清理 devDependencies 与脚本时须保留该 overrides 块不动。
-- [x] 保留业务源码中的内嵌说明、历史格式识别和通用迁移安全检查；“历史指纹”不等于“上游历史研发档案”，不能不看消费者便整文件删除。
-  - 历史指纹（`src/core/shared/released-generated-fingerprints.ts`，4010 行：2867 条内容指纹 + 1 组 `RELEASED_GENERATED_PATHS`）是“哪些旧版本产物可以安全删除”的白名单，不是上游计划档案。消费者链：`generated-fingerprint.ts`（`isReleasedGeneratedContent`／`hasReleasedOpenSpecBlock`／`normalizeGeneratedContent`）→ `legacy-cleanup.ts`（L563/591/1055/1059）、`released-output-sweep.ts`（L18/217）、`shared-skill-target.ts`（L97）、`shared/command-reconcile.ts`（L122）、`shared/skill-content-equivalence.ts`。无该数据会把用户改过的文件误判为可删。
-  - 历史格式识别：`legacy-cleanup.ts`（1376 行）保留 `LEGACY_CONFIG_FILES`（8 个根配置文件）、`LEGACY_SLASH_COMMAND_PATHS`（目录式／文件式旧命令）、`LEGACY_GLOBAL_SLASH_COMMAND_PATHS`、marker 块解析与 `cleanupLegacyArtifacts`；`migration.ts`（715 行）保留 profile 迁移、`migrateLegacyToolDirs`、`needsConsent` 等安全检查；`retired-tools.ts`（109 行）保留退役目标清点；`released-output-sweep.ts`（243 行）保留旧产物清理与 `pruneEmptyParents`。
-  - 调用方实测：`init.ts` L46/67/78/274/779/980 与 `update.ts` L40/46/48/49 均依赖上述模块；它们是 init/update 通用安全网，不能按名称命中整文件删除。
-  - 第 5 节裁剪约束：A.5 对 `legacy-cleanup.ts`／`retired-tools.ts`／`released-output-sweep.ts` 只移除“遍历、迁移、删除其他 Agent 用户目录”的分支，必须保留 OMP 自身旧输出识别、marker 解析、指纹判定与防误删检查；`LEGACY_CONFIG_FILES` 中的其他 Agent 文件名属于“被管理产物清单”数据，不是待删除适配代码。
-  - 内嵌说明：`generated-fingerprint.ts` 的归一化注释（BOM／CRLF／`generatedBy` 版本）与 `legacy-cleanup.ts` 的“只删自己写的文件、目录空才删”注释均说明安全性设计，随源码保留，不清理注释。
+## 1. 固定当前状态及明确实施文件
 
-## 3. 保留有用文档及引用资源
+- [x] 读取当前裁剪结果及相关源码，不把前一阶段已完成记录当作本轮验证结果；保全无关改动，备份本轮确需迁移的配置和元数据。
+  - 本轮只读确认：vendor `package.json` 与 `inventory.json` 均记录 OpenSpec 2.0.0，inventory 来源为 `git:ea635dd255f8686dcf48626bbcbe0e3fd59b6067`；现存 schema 目录包含 `spec-driven/`，根 `openspec/config.yaml` 仍为 `schema: omp-spec`。
+  - 已读取 `src/spec-driven/resources.ts`、`resource-inventory.ts`、`scripts/spec-driven-resources.ts` 及 vendor `src/core/init.ts`：宿主仍引用私有 `omp-spec` schema，资源收集仍遍历 vendor 树，打包入口仍假设已有运行树与依赖；vendor init 仍保留工具选择、Skill 安装及旧产物迁移相关代码。这里只记录源码现状，不代表运行、构建或完整调用链已验证。
+  - 本轮不迁移任何配置或元数据，故无须创建迁移备份；仅修改 todo.md，其他现有内容及改动未触碰。后续实际迁移前仍须备份对应文件。
+- [x] 核对实际调用链：`src/cli.ts` → `src/spec-driven/resources.ts` → vendor OpenSpec；Skill discovery → manifest → 内置正文；源码、npm、二进制的资源生成及加载入口。
+  - CLI：`src/cli.ts:520-535` 将 `openspec` 后的参数、真实 cwd 和中止信号交给 `runOpenSpec`；后者经 `ensureSpecDrivenResources` 解析缓存中的 `openspec/bin/openspec.js`，使用 `process.execPath` 与 `BUN_BE_BUN=1` 执行。vendor bin 导入 `../dist/cli/index.js` 的 `runCli`，对应源码 `src/cli/index.ts:878-879` 调用 Commander `program.parse`。宿主捕获 stdout／stderr／退出码，当前 stdin 为 ignore，保留禁用遥测、中止及子进程结清逻辑；init／new change 仍有宿主改写，尚非完全透传。
+  - Skill：`src/discovery/index.ts` 注册 `./spec-driven`，`src/extensibility/skills.ts` 经 `skillCapability` 加载；provider 从 `ensureSpecDrivenResources().manifest.skills` 逐项扫描正文目录，当前仍过滤为五项 OpenSpec Skill，并另行注册旧 opsx 文件命令。manifest 由 `resource-inventory.ts` 遍历资源树，将 `<source>/skills/<name>/SKILL.md` 登记为 Skill；`skill://` 经 `skill-protocol.ts` 名称解析、访问检查与 containment 后由 `readSkillTarget` 读取实际文件，`loadSpecDrivenSkill` 另提供按 manifest 查找及正文摘要核对的直接加载入口。
+  - 源码：`resource-archive.ts` 默认为 undefined；加载器仅以 vendor `openspec/node_modules` 是否为目录决定读取本地树，否则读取 `dist/spec-driven-resources.tar.gz`。本地树通过 `collectSpecDrivenResources` 生成 manifest／entries；归档读取 manifest；两者均经锁、文件摘要与路径检查解出到内容摘要缓存。当前未比较目标源码指纹，也未检查完整运行依赖闭包；vendor `build.js` 单独负责清理并编译 dist，宿主资源打包函数不调用它或安装依赖。
+  - npm／二进制：`package.json` 的 `prepack` → `gen:bundle` → `scripts/bundle-dist.ts`，与 `scripts/compile-binary.ts` 共用 `buildSpecDrivenArchive` 和 `createSpecDrivenArchivePlugin`；前者生成 `dist/cli.js`、固定名归档及 file-loader 资源并定义 `PI_BUNDLED`，后者通过 Bun compile 内嵌资源并定义 `PI_COMPILED`。两种构建均替换 `./resource-archive`，运行时读取该 asset；npm 的源码／SDK 导入还可走固定名归档回退，package files 包含该归档。
+  - 完成范围仅为上述源码调用链核对，未运行 CLI、构建、打包或 TUI，不代表源码／npm／二进制运行资源已准备完毕或验收通过；未修改实现、配置或测试，其余待办不勾选。
+- [x] 检索旧定制与调用方：`mini`、`omp-spec`、`runOpenSpecDirectory`、`assertAIReqSpecSchema`、`specSchemaPath`、`archivePlan`、OMP 私有归档环境变量、`OPEN_SPEC_CORE_*`、`opsx-*`、`loadSpecDrivenCommands`。按运行代码、测试、文档、现存用户数据分类，不全局替换。
+  - 运行代码：`src/spec-driven/resources.ts` 仍写入／注入 mini、导出 `specSchemaPath`／`runOpenSpecDirectory`／`assertAIReqSpecSchema`，并由 `archivePlan` 设置 `OMP_AIREQ_ARCHIVE_PLAN`。本次仓库文本检索未发现这三个 API 在定义文件外的生产调用方，消费者仅见 `test/spec-driven/resources.test.ts`；未发现 `archivePlan` 的外部传入方或 `OMP_DEV_ARCHIVE_PLAN` 的代码引用，不据此宣称仓外消费者不存在。`src/discovery/spec-driven.ts` 保留两个 `OPEN_SPEC_CORE_*` 集合及 `loadSpecDrivenCommands` provider；vendor 仍有 oh-my-pi 命令 adapter、命令引用转换、migration 和 released-generated-fingerprints 中的 opsx 路径，不能将这些上游交付代码误判为全部属于 OMP 私有桥接。
+  - 测试：`test/spec-driven/resources.test.ts` 覆盖 mini 图、固定 1.15.0、omp-spec 来源／覆盖拒绝及 directory bridge；`process-resources.e2e.test.ts` 使用 `/opsx-propose` 并断言 mini，`skill-policy.test.ts` 固定五项 opsx 命令。`process-packaged-skills-fixture.ts`／`process.e2e.test.ts` 的 `@omp-spec-*` 是临时目录前缀，不是 schema；模型名、mini UI 描述及其他包同名文本不属于本次迁移对象。
+  - 文档：权威 `openspec/specs/spec-driven-orchestration/spec.md` 与 `docs-zh-CN/quick-start-intranet.md` 仍有旧五项／mini／omp-spec 合同；vendor `install.md`、`docs/{faq,glossary,how-commands-work,installation,troubleshooting}.md` 有 opsx 说明。宿主／vendor CHANGELOG 的历史条目保留；`openwiki/` 及 `.claims/` 命中属于生成知识，不手工修改。根项目规则中的相关约定已在加载上下文提供，不另行搜索规则文件。
+  - 现存项目数据：对仓库 `openspec/` 的 YAML／JSON（含隐藏、忽略文件）检索发现根配置及 30 份 change 元数据仍为 `schema: omp-spec`，其中 12 份非归档、18 份归档；未发现 mini 元数据。非归档为 `add-{fork-review-workflow,intranet-username-collab,todoloop-command}`、`refactor-dev-{native-stage-retirement,native-state-retirement,native-workflow,webgui-project-host,webgui-requirement-intake,webgui-workbench-retirement,webgui-workbench}`、`refine-compact-output-preview`、`revamp-compact-activity-dock`。这里只分类既有数据，未执行第 7 节逐项材料核对或迁移；AIReq 相关遗留仅记录，不改其业务。
+  - 范围与结果：只读检索仓库源码、测试、文档和项目元数据，未访问仓外个人配置／Skill，未解包旧构建资源，未运行测试或构建；仅更新本条状态与证据，不全局替换、不删除文件、不推进下一项。
+- [x] 确定 `update` 剩余职责。当前 vendor `src/core/update.ts` 主要是 Skill／命令交付、profile 同步及迁移；删除这些后若没有与交付无关且必须保留的项目操作，则本计划采用删除 `update` CLI 入口及专属实现。任何确需保留的独立职责先写明实际消费者，不能凭函数名保留整套旧交付链。
+  - 结论：采用删除 `update` CLI 入口及专属实现。`src/core/update.ts:177-182` 的 plan 只记录同一个 execute；`:209-630` 的主流程及辅助方法负责工具目录／profile 迁移、交付版本与内容漂移检测、Skill 生成与共享安装、旧命令对账、取消选择的 Skill／历史产物／全局提示词清理，以及交付结果提示。全局配置写入用于交付 profile 迁移，并非独立的项目配置升级；未发现更新业务 artifacts、schema、store 或项目数据的独立必要操作。
+  - 额外职责已核对：`src/cli/index.ts:356-425` 还包含上游 CLI 版本探测、交互自升级及升级后重跑 update，不仅是文件刷新。但内置 OpenSpec 随 OMP 发行升级，合同禁止新增自动更新／下载机制，因此该入口的独立安装升级链不是必须保留的项目职责，也不能据此保留 update；本轮未执行网络检查或升级。
+  - 实际消费者：vendor `src/cli/index.ts:324-438` 注册普通及 dry-run／JSON 路径；`src/commands/config.ts:690-713` 在 profile 修改后可直接实例化 UpdateCommand 应用交付配置，`:341-345` 等位置给出 update 指引；`src/core/completions/command-registry.ts:38-56` 注册补全；宿主 `test/spec-driven/resources.test.ts:215` 仍断言 update 成功。配置侧直接调用也是旧交付旁路，后续必须与入口一起清除，不能仅删除命令注册。
+  - 后续删除边界：清除 update 注册／专属实现、补全、调用方及过时提示，按实际剩余消费者处理公开导出和 version-check 的专属升级／重跑辅助函数；共享 `update-plan`、migration、配置、模板及安全工具不能按名称整文件删除，init 等仍有消费者。保留 `openspec-update-change` 业务 Skill；不改原生同步／归档语义，不清理用户旧 Skill／命令。
+  - 本项只完成源码职责判定及删除决策，未实施删除、未更新权威规格、未运行测试或构建；仅更新 todo.md，其他未完成事项保持原状态。
 
-- [x] 保留根 `README.md`、`CHANGELOG.md`、`SECURITY.md`、`install.md`；它们提供使用入口、版本变化、安全说明及安装背景，不因不是可执行代码而删除。
-  - 4 个文件均在保留清单：`README.md`（255 行，项目入口、工作流说明、仪表盘预览）、`CHANGELOG.md`（1520 行，版本历史，最新 2.0.0）、`SECURITY.md`（62 行，报告渠道／支持版本／威胁模型与发布包边界）、`install.md`（83 行，面向 Agent 的安装与初始化步骤）。
-  - 本地引用核对：`README.md` 引用 `assets/openspec_bg.png`（L4/5）与 `assets/openspec_dashboard.png`（L101），两张图均在保留清单，故 `assets/` 不能整删；`CHANGELOG.md` 中的 `./doc.md` 仅是示例文本，不是失效链接；`SECURITY.md`、`install.md` 无本地文件链接。
-  - `README.md` 的 CI 徽章指向 `github.com/.../actions/workflows/ci.yml`（外链，不依赖被删的 `.github/` 本地文件）。
-  - 待随第 5.3 节处理：`install.md` 仍描述 `openspec install` 独立二进制安装；删除独立安装能力后该段落会成为失效说明，届时按“文档链接指向已删除能力”规则改写，不影响本步保留决定。
-- [x] 保留 `docs/`、`docs-lab/` 中的使用指南、CLI、工作流、配置、schema 定制、store、多仓使用、格式规范、排错和示例。
-  - 全量保留：`docs/` 27 个文件、`docs-lab/` 43 个文件，全部命中保留清单；本步未删改任何文档。
-  - 主题覆盖实测：使用指南 `docs/{getting-started,overview,concepts,existing-projects}.md` + `docs-lab/start/{installation,overview,quickstart,setup}.md`；CLI `docs/{cli,commands,how-commands-work,opsx}.md` + `docs-lab/reference/cli.md`；工作流 `docs/{workflows,team-workflow,explore,reviewing-changes,editing-changes}.md` + `docs-lab/guides/{apply,change-course,explore,review-the-plan,teams}.md`；配置 `docs/customization.md` + `docs-lab/customize/{overview,profiles,project-config,skills}` + `docs-lab/reference/configuration/{index,config-json,config-yaml,change-metadata,environment-variables,stores}.md`；schema 定制 `docs-lab/customize/schemas.md` + `docs-lab/reference/schemas/{index,schema-yaml,spec-driven/index}.md`；store／多仓 `docs/stores-beta/user-guide.md` + `docs-lab/multi-repo/{stores,worksets}.md`；格式规范 `docs/writing-specs.md`、`docs/agent-contract.md`、`docs-lab/reference/glossary.md`、`message-map.md`；排错 `docs/troubleshooting.md`、`docs/faq.md`、`docs-lab/help/{faq,troubleshooting,legacy/migration,upgrade-to-2}.md`；示例 `docs/examples.md`、`docs-lab/guides/examples.md`；安装 `docs/installation.md`、`docs-lab/start/installation.md`。
-  - `docs/supported-tools.md` 与 `docs-lab/reference/supported-tools.md` 保留，其中“其他 Agent 用法”按下一项规则处理，不按名称整篇删除。
-  - 待下一项分类：`docs-lab/Notes.md`、`docs-lab/sources.md`、`docs-lab/README.md` 及 `docs-lab/reference/architecture/*` 需按内容判定是否纯工程管理，本步不作删除决定。
-- [x] 文档中包含其他 Agent 的用法，不单凭名称命中就整篇删除；共用业务说明保留，纯其他 Agent 安装教程可单独移除。历史上游用法不等于 OMP 已支持，不能用文档存在宣称功能可用。
-  - 命中范围：23 个文档提及其他 Agent（按提及数排序：`docs/supported-tools.md` 40、`docs-lab/reference/supported-tools.md` 27、`docs/migration-guide.md` 22、`docs-lab/reference/cli.md` 21、`docs/how-commands-work.md` 12、`docs/cli.md` 12、`docs-lab/start/setup.md` 9、`docs/installation.md` 8、`docs/commands.md` 7、`docs-lab/help/upgrade-to-2.md` 6、`docs/troubleshooting.md` 4、`docs/opsx.md` 4、`docs-lab/start/installation.md` 4、`docs/faq.md` 3、`docs/customization.md` 3、`docs/community.md` 2、`docs-lab/multi-repo/{worksets,stores}.md`、`docs/stores-beta/user-guide.md`、`docs-lab/help/legacy/migration.md`、`docs-lab/Notes.md`、`docs-lab/README.md`、`docs-lab/reference/configuration/config-json.md`）。
-  - 内容性质判定：全部是 OpenSpec 自身业务说明（支持矩阵、按工具生成 Skill／命令的路径、迁移与升级、CLI 参数、配置字段），没有“如何安装 Claude Code／Cursor／Codex”的第三方教程；唯一的 `install Claude Code integration files` 出现在 `docs-lab/reference/cli.md` 的 `openspec init --tools` 示例注释中，属业务示例。
-  - 结论：本步不删除任何文档。按规则保留共用业务说明；第 5 节裁剪 AI_TOOLS 后再同步支持矩阵与工具目录，避免“文档列出 XX 目标”被误读为 OMP 已支持（`docs/supported-tools.md`、`docs-lab/reference/supported-tools.md`、`docs-lab/start/setup.md`、`docs/cli.md`、`docs-lab/reference/cli.md` 为首批受影响文档，归入 A.5 文档行）。
-- [x] 对 `docs-lab/` 中的研究笔记、网站维护说明或内部计划按内容分类，只删除纯工程管理内容；不把整个 docs-lab 视为无用。
-  - 分类结果：纯工程管理 7 个文件，已删除；其余 36 个文件保留（原 43）。删除项：`docs-lab/README.md`（文档并行重建项目计划、站点映射规则）、`docs-lab/Notes.md`（个人评审笔记）、`docs-lab/sources.md`（旧→新迁移映射与站点切换重定向清单）、`docs-lab/message-map.md`（Answered／Skeleton／Gap 状态跟踪表）、`docs-lab/reference/architecture/{index,workflow-runs,design-decisions}.md`（仅 WIP 注释、零正文，且注释声明“未上线、待写”）。
-  - 删除前摘要：`README.md` `806a2bf6…`、`Notes.md` `65139179…`、`sources.md` `bba9adf0…`、`message-map.md` `27106f8d…`、`architecture/index.md` `2ec13eb0…`、`workflow-runs.md` `e35edc32…`、`design-decisions.md` `d726673d…`；空目录 `docs-lab/reference/architecture/` 一并移除。
-  - 保留判定：`start/`、`guides/`、`customize/`、`multi-repo/`、`reference/{cli,configuration,schemas,skills,supported-tools,glossary}.md`、`help/` 等 36 个文件是实际使用文档（部分仍为骨架），不属于工程管理，未删除。
-  - 悬空引用核对：删除后无 markdown 链接指向被删文件；`docs/getting-started.md` 的 `README.md` 指向仍存在的 `docs/README.md`。`docs-lab/start/overview.md`、`guides/teams.md`、`reference/skills.md` 的 HTML 注释中仍有 `Notes.md`／`message-map.md`／`sources.md` 字样，属作者备注，按后续文档链接清理项处理。
-- [x] 保留 `assets/` 中被保留文档引用的图片等文件；没有引用且仅用于网站展示／构建的资源再删除。先核对相对链接及源码资源引用，不能整删 assets。
-  - `assets/` 共 4 个文件，引用实测（全树搜索，排除 `.git`）：`openspec_bg.png` ← `README.md` L4/5；`openspec_dashboard.png` ← `README.md` L101（README_OLD 亦引用）；`openspec_pixel_dark.svg`、`openspec_pixel_light.svg` ← 仅 `README_OLD.md` L4/5/6。
-  - `src/`、`skills/`、`schemas/`、`docs/`、`docs-lab/` 均无 `assets/` 引用；`website/` 不引用根 `assets/`，其图标用自带 `website/public/docs/openspec-pixel.svg`。
-  - 本步判定：`openspec_bg.png`、`openspec_dashboard.png` 由保留的 `README.md` 引用，必须保留；两张 pixel SVG 当前由 `README_OLD.md` 引用，暂不删除。待第 4 节核对 `README_OLD.md` 内容覆盖并删除后，两张 SVG 即失去唯一引用，届时一并删除（归入 `README_OLD.md` 的删除动作）。
-  - 结论：本步零删除，`assets/` 保持 4 个文件；不存在“仅网站使用”的资产（网站资源在 `website/public/docs/`，随 `website/` 一起删除）。
-- [x] 删除 `website/` 工程前，先检查其中是否有 `docs/`、`docs-lab/` 没有的实际使用文档或示例。有则将正文和必要引用资源按主题移入保留文档目录、修正本地链接，再删除网站运行、组件、部署、依赖及构建文件。不能直接删掉独有的有用正文。
-  - 内容核对（42 个文件、229 KB）：`README.md` 自述“doc pages are generated, not authored here”，`docs.sync.config.mjs` 的 37 个 `source` 全部指向 `docs-lab/`（`start/`、`guides/`、`customize/`、`multi-repo/`、`reference/`、`help/`）；`app/` 仅有路由与布局，`app/page.tsx` 是跳转到 `/docs` 的 meta-refresh 占位，`app/llms*.txt` 从生成内容输出，`lib/`、`components/` 为站点运行代码，`public/docs/*` 为站点图标，`cloudflare/router` 与 `scripts/` 为部署／同步工具。
-  - 提取判定：无 `docs/`、`docs-lab/` 缺失的正文或示例，无需搬运；`docs-lab` 中 36 个保留文档即站点唯一内容源。`website/README.md` 描述的是站点自身构建／部署流程，属工程材料，不并入产品文档。
-  - 已删除整个 `website/`（42 个文件），含 Next.js 运行代码、组件、搜索与 og 路由、Cloudflare Worker、`docs.sync.config.mjs`、`scripts/{sync-docs,preview}.mjs`、独立 `package.json`／`pnpm-lock.yaml`／`pnpm-workspace.yaml`、`public/docs` 图标。
-  - 引用核对：保留文档中仅有 HTML 注释提到 `website/docs.sync.config.mjs`（`docs-lab/help/{faq,troubleshooting,legacy/migration}.md`）与 `CHANGELOG.md` 的历史发布说明；无 markdown 链接指向 `website/`。`test/` 中的 `website/` 断言随 `test/` 整体删除。
-  - 备注：第 4 节“`website/`：仅在第 3 节完成有用内容提取后删除”已由本步完成，待该行执行时标记。
-- [x] 文档链接指向已删除的本地研发文件时，删除无用导航或改为固定来源的上游链接；保留业务示例，不伪造 OMP 支持状态，不把检查扩展为全站联网链接审计。
-  - 范围：`README.md`、`install.md`、`SECURITY.md`、`docs/**/*.md`、`docs-lab/**/*.md` 的相对链接全量解析（不联网、不扩展为外链审计），修改后 0 断链。
-  - `README.md:93` 原指向本地 `openspec/specs`、`openspec/changes`（第 4 节将删除的上游自身需求），已改为固定提交的 GitHub 链接：`.../tree/ea635dd255f8686dcf48626bbcbe0e3fd59b6067/openspec/{specs,changes}`，保留“真实示例”价值。
-  - 清理已删 `docs-lab` 文件的内部引用：`docs-lab/start/overview.md` 删除指向 `Notes.md` 的句子、"README rules" 改为 "earlier authoring rules"；`guides/teams.md` 去掉 "in message-map.md"；`reference/skills.md` 去掉 "per sources.md"。
-  - 保留业务示例与正文，无导航页需要删除；未新增 OMP 支持声明。`docs/supported-tools.md` 等仍描述上游全部工具，待第 5 节裁剪 `AI_TOOLS` 后同步（已记录于 A.5 文档行）。
+## 2. 先同步相关权威需求
 
-## 4. 删除上游独立工程管理与测试材料
+本节按待办逐项同步规格；勾选仅表示对应需求文档已更新，不代表实现、资源生成或验收已完成。
 
-以下删除均限于裁剪根目录内部：
+- [x] 更新 `openspec/specs/spec-driven-orchestration/spec.md` 的“包内技能发现与资源兼容”：改为内置 OpenSpec 2.0 Skill、任意目录通过原生发现／补全／按需读取／调用使用，CLI 统一 `omp openspec`；删除五项限制、排除 apply、仅需求版正文和旧 opsx 文件命令交付条款。
+  - 已替换该章节 OpenSpec 表格行及旧 opsx 交付段落：规定内置 Skill 的原生发现、补全、按需读取、显式调用与授权，统一宿主 CLI，撤销五项／apply 限制、需求专用正文及旧文件命令入口要求，保留上游工作流语义、同名覆盖及显式初始化边界。
+  - 仅修改上述需求条款并核对编辑结果；Superpowers／JCH 与 AIReq 专属条款未改，12 项完整清单、init／schema／update 等后续待办保持未完成。本轮未改实现、配置或测试，未运行测试或构建，不宣称新合同已实现。
+- [x] 明确内置全部 12 项 Skill 均通过原生机制可用；普通会话不再施加旧五项过滤。模型实际使用仍遵循原生授权；本轮不增加 AIReq 专用 Skill 过滤或阶段策略绑定。
+  - 已按 vendor `skills/` 实际目录核对 12 项名称，并在 `openspec/specs/spec-driven-orchestration/spec.md` 的“包内技能发现与资源兼容”中逐项列明；统一适用原生发现、补全、按需读取、路径授权及显式调用，禁止旧五项白名单，明确可发现／读取不授予执行权限，不新增 AIReq 专用过滤或阶段绑定。
+  - 仅完成需求文档同步并核对编辑结果，不代表发现实现已放开全部技能；未改实现、配置或测试，未运行测试或构建，其余待办不变。
+- [x] 将初始化要求改为“不交付 Skill／命令，不触碰已有文件”，保留上游项目路径、配置、语言、重复初始化保护、store 指针与错误语义；删除强制追加 tools=none 和默认 mini 的条款。
+  - 已更新 `openspec/specs/spec-driven-orchestration/spec.md` 的初始化合同及对应场景：init 自身保证不安装、复制、链接、更新或清理 Skill／旧命令，不依赖宿主强制注入 tools 参数；新项目默认上游 `spec-driven`，保留项目路径、语言、已有配置／重复初始化保护、store 指针拒绝和原生错误语义，非 TTY 不要求选择交付工具。
+  - 已核对编辑结果；原 update 及 AIReq 专属条款保留给后续对应待办，本项不进行普通 OpenSpec 与 AIReq 的完整解绑。仅修改需求文档及本文件，未改实现、项目配置或测试，未执行测试／构建，不代表 init 实现已完成适配。
+- [x] 将普通 OpenSpec 与旧包内 omp-spec 技术约束解绑，明确普通入口使用上游 spec-driven，不受 AIReq 旧假设约束。AIReq 专属需求暂不重新定义、删除或实现；若同一规格文件中仍保留其旧条款，明确其不约束普通 OpenSpec，后续由 AIReq 需求另行确定。
+  - 已在 `openspec/specs/spec-driven-orchestration/spec.md` 明确普通入口沿用上游通用 `spec-driven`、原生产物依赖与校验及显式 schema 解析，不以 AIReq 旧假设要求固定包内 omp-spec、私有注入或目录桥接，不删减 design／tasks，不自动迁移用户配置或 change。
+  - 已为保留的 AIReq 旧 schema 章节添加专属适用范围：不约束普通 OpenSpec、不要求本轮恢复旧资源，AIReq 后续需求另定；原专属条款未重写、删除或实现，不将接入／兼容／隔离作为本轮验收条件。
+  - 已核对编辑结果；本次仅同步需求与待办，未修改实现、配置或测试，未运行测试或构建，不代表运行代码已完成解绑；update 等其余待办保持未完成。
+- [x] 依据第 1 步确定的实际职责写明 update 的保留或移除结果，不继续要求通过 update 升级内置 Skill。
+  - 已更新 `openspec/specs/spec-driven-orchestration/spec.md`：根据第 1 节职责结论规定移除 update 入口及专属实现，清除导出／补全／帮助／配置侧自动应用及旧更新提示；调用按正常未知命令非零退出，不保留别名、无操作成功或“已是最新”。
+  - 明确 Skill 与运行资源仅随 OMP 发行更新，不通过 update 或新增运行时自动下载／自升级替代；保留 `openspec-update-change` 业务 Skill、仍有消费者的共享能力及用户已有文件，AIReq 专属正文未改。
+  - 已核对编辑结果；仅完成需求同步，未实际删除 CLI 或代码，未修改配置或测试，未运行测试或构建；实现与验收及其余待办保持未完成。
+- [x] 按实际关联检查 `openspec/specs/model-and-skill-discovery/spec.md`、`openspec/specs/fork-runtime/spec.md`、`openspec/specs/personal-commands/spec.md`，只修改与本次内置发现、入口、离线交付直接冲突的条款；无冲突不改。保留其他已批准能力。
+  - `model-and-skill-discovery/spec.md`：核对 Codex 用户技能、共享目录单层发现／同名优先级、来源启停／刷新及 managed-skills 根链接管理边界；均不要求安装 OpenSpec Skill、不规定五项白名单或 opsx 入口，与复用原生发现及授权的合同无直接冲突，未改。
+  - `fork-runtime/spec.md`：核对 offline 不访问公网／不回退下载源、统一数据根与缓存、发行资源及现有 `omp update` 规则；未规定独立 OpenSpec 安装或旧 schema／入口。`omp update` 是 OMP 本体更新，不是拟移除的 `omp openspec update`，其既有能力保持；AIReq／WebGUI／OpenWiki 专属资源约束不扩写为本轮适配，未改。
+  - `personal-commands/spec.md`：核对原生命令派发门禁与 Developer Test Agent 的独立资源／显式调用规则；检索 OpenSpec／opsx／omp-spec／旧版本与参数引用，仅发现 AIReq 提案场景中的 OpenSpec 材料称谓，不涉及普通 OpenSpec 交付。其他功能的“五个技能”不属于旧 OpenSpec 五项限制；无直接冲突，未改。
+  - 本项仅完成相关条款检查，三份规格均保持原样；未将文档检查表述为实现或发行验收，未运行测试或构建，未推进下一项失效约束清理。
+- [x] 删除规格中已失效的具体实现约束，不把“文档已更新”写成实现已完成，不用旧需求迫使新实现恢复魔改。
+  - 已检索并核对 `openspec/specs/spec-driven-orchestration/spec.md` 的普通 OpenSpec 合同：前述同步已撤销固定 core 五项及 init 生成正文基准、排除 apply、需求专用正文、opsx 文件命令交付、宿主强制 tools=none、默认 mini 和沿用上游 update 的旧要求；本轮未发现需要额外删除的普通 OpenSpec 失效约束，故不为完成待办重复修改规格。
+  - 当前 mini／tools／opsx 等引用是禁止恢复旧行为的负向合同，不是继续依赖旧实现；保留的 omp-spec 固定来源与目录比较属于明确限定范围的 AIReq 旧条款，按已确认边界不删除、不实现，也不据此恢复普通入口的私有 schema 或桥接。Superpowers／JCH 的既有约束保留。
+  - 规格已明确需求更新不代表实现、资源生成或验收完成；本轮仅完成文档清理结果核对并更新状态，未宣称运行代码已适配，未改实现／配置／测试，未运行测试或构建，不推进第 3 节资源实现。
 
-### 直接删除的目录
+## 3. 准备可发行的内置运行资源
 
-- [x] `test/`：上游 UT、集成测试、fixtures 和文档声明测试。
-  - 已删除整个 `test/`：293 个文件、约 3.9 MB，含 `cli-e2e/`、`core/`（artifact-graph、command-generation、commands、completions、converters、parsers、shared、store、templates）、`fixtures/{released-output,tmp-init}`、`helpers/`、`prompts/`、`specs/`、`telemetry/`、`ui/`、`utils/`。
-  - 依赖核对：`src/`、`bin/`、`build.js` 无任何指向 `test/` 的 import（`tsconfig.json` 本就把 `test` 列入 `exclude`）；`test/fixtures/released-output` 仅被测试读取，运行时代码使用的是 `src/core/shared/released-generated-fingerprints.ts` 内嵌指纹。
-  - 连带待清理（第 4 节后续项）：`package.json` 的 `test*` 脚本与 vitest 依赖、`.gitattributes` 的 `test/fixtures/released-output/**` 规则、根 `vitest.config.ts`／`vitest.setup.ts`。
-- [x] `openspec/`：上游自身需求规格、变更及归档、explorations、initiatives、work 和相关配置；不是 OMP 根目录的需求。
-  - 已删除整个 `openspec/`：663 个文件、约 2.9 MB，含 `specs/`（上游自身能力规格）、`changes/`（`add-global-install-scope`、`add-tool-command-surface-capabilities`、`share-skills-in-agents-folder`、`simplify-skill-installation` 及 `archive/`）、`explorations/`、`initiatives/`、`work/`（含 `AGENTS.md`、`README.md`、`simplify-context-and-workspace-model`）与 `config.yaml`（schema: spec-driven 及上游项目上下文）。
-  - 依赖核对：`src/`、`bin/`、`build.js` 无指向该目录的 import；运行时 `openspec/` 路径由 cwd／store 解析动态确定（`openspec-root.ts`、`root-selection.ts`），不读取 vendored 仓库自带的这份数据。
-  - 区分：OMP 仓库根自身的 `openspec/` 未受影响（本步只作用于 vendor 资源根内部）。
-- [x] `.github/`：上游 CI、Issue／PR 模板和维护配置。
-  - 已删除整个 `.github/`：12 个文件，含 `CODEOWNERS`、`dependabot.yml`、`PULL_REQUEST_TEMPLATE.md`、`ISSUE_TEMPLATE/{bug_report,config,docs,feature_request}.yml`、`workflows/{README.md,binaries.yml,ci.yml,release-prepare.yml,security.yml}`。
-  - 依赖核对：`src/` 中出现的 `.github/` 均为 OMP 用户项目内的目标路径（Copilot 集成、`--tools` 产物）或注释，不是对本仓库 `.github/` 的导入；`package.json` 无指向该目录的脚本。
-  - 遗留注释（不阻塞）：`src/commands/feedback.ts:116` 注释说明其标题镜像已删的 `bug_report.yml`；`src/core/github-copilot/cloud-agent.ts`、`src/core/init.ts` 的 `.github/` 字样属用户项目产物路径，不是本地文件引用。
-- [x] `.changeset/`：上游发布管理。
-  - 已删除 `.changeset/config.json`、`.changeset/README.md`（2 个文件）。
-  - 消费方核对：仅 `package.json` 的 `release:ci`／`changeset` 脚本与 `@changesets/*` devDependencies 使用；这些在“维护脚本与包配置”项一并清理，源码与构建入口不依赖。
-- [x] `.devcontainer/`：上游开发容器。
-  - 已删除 `.devcontainer/devcontainer.json`、`.devcontainer/README.md`（2 个文件）：TypeScript Node 22 镜像、VS Code 扩展、pnpm 安装命令与 SSH 挂载。
-  - 依赖核对：`src/`、`build.js`、`bin/`、`package.json` 均无 devcontainer 引用；不影响 Node 构建入口。
-- [x] `.agents/`：上游仓库开发用的 Agent 配置／技能副本；保留根 `skills/` 的产品资源。
-  - 已删除 `.agents/` 8 个文件：`skills/{draft-openspec-docs,release-openspec,verify-openspec-docs,write-openspec-docs}/SKILL.md` 及 `release-openspec/{agents/openai.yaml,references/release-notes.md}`、`write-openspec-docs/{full-process.md,writing.md}`。
-  - 保留核对：根 `skills/` 13 个文件（README + 12 个 `openspec-*` 产品 Skill）未受影响。文档中的 `.agents/skills/` 字样均为用户项目目标路径，不是对本地目录的引用；原先引用 `.agents/skills/write-openspec-docs/writing.md` 的 `docs-lab/README.md` 已在第 3 节删除。
-- [x] `website/`：仅在第 3 节完成有用内容提取后删除。
-  - 第 3 节已完成内容核对（无独有正文、37 个 `source` 全指向 `docs-lab/`）并删除整个目录 42 个文件；本步复核 `website/` 不存在，工作区无残留。
+重点文件：`packages/coding-agent/scripts/spec-driven-resources.ts`、`src/spec-driven/resource-inventory.ts`、`src/spec-driven/resource-archive.ts`、`src/spec-driven/vendor/inventory.json` 及实际 binary／npm 构建调用方。
 
-### 直接删除的根文件
+- [x] 保留 vendor 源码作为维护基线，构建阶段从当前裁剪源码准备运行产物及所需生产依赖；不手改 dist，也不要求目标用户运行 pnpm、安装 Node 或访问上游源码目录。
+  - 在 `packages/coding-agent/scripts/spec-driven-resources.ts` 实现 `prepareOpenSpecRuntime()`，返回调用方持有并清理的 TempDir：用 Bun 转译当前 vendor src 到独立 dist，保留模块相对布局，复制 bin／schemas／skills／assets／LICENSE；vendor 源码与原有 dist 均不改写。
+  - 构建主机使用 Bun 从 pnpm 锁迁移并冻结安装生产依赖，staging package 同步锁中的 overrides；禁用生命周期脚本，不运行 vendor 的 Node／pnpm／tsc 构建。异常清理自有临时目录，运行使用 OMP 自带 Bun，不需要用户单独安装 OpenSpec、Node 或 pnpm。依赖准备允许构建阶段使用包缓存或注册源，不在运行阶段安装。
+  - Windows Bun 1.4.4 的隔离验证通过：准备后将运行树移到另一临时目录，清空运行 PATH 并隔离 HOME／配置／数据／缓存；真实执行 --version（2.0.0）、schema which（包内 spec-driven）、new change、status（proposal／specs／design／tasks 原生图）、instructions proposal（读取模板）；确认运行树没有 src 或 TypeScript 开发依赖，临时项目与运行树已自动清理。未运行全仓测试、类型检查、npm 或二进制构建。
+  - 已更新包 CHANGELOG。仅完成运行树准备能力；接入现有资源生成／发行构建、旧归档清理、完整闭包检查、清单指纹与宿主加载失效规则仍属后续未完成项，不宣称当前 omp openspec 已切换到新资源或完成最终适配。
+- [x] 接入已有构建链，复用相同资源生成入口；源码开发的资源准备、npm 打包、编译二进制都必须取得同一版本的运行文件，不各写一套 OpenSpec 构建器。
+  - `buildSpecDrivenArchive()` 现在调用 `prepareOpenSpecRuntime()`，将运行树移入自有 staging，与原有 Superpowers／JCH／omp-runtime 一同收集、打包；临时树自动清理。既有 `bundle-dist.ts` 和 `compile-binary.ts` 的调用直接复用此入口，无须另写构建器。
+  - 根及 coding-agent package 增加 `gen:spec-driven-resources`，脚本直接执行时通过同一个归档生成器写入 `dist/spec-driven-resources.tar.gz`。`resources.ts` 的源码／SDK 路径统一读取准备归档，不再因 vendor/node_modules 存在而绕过；打包路径仍由同一个 file-loader 插件提供归档，保留原摘要、路径及锁定提取逻辑。同步更新 `resource-archive.ts` 说明和包 CHANGELOG。
+  - 实际执行 `bun run gen:spec-driven-resources` 成功；隔离 HOME／配置／缓存后，真实源码 CLI `openspec --version` 返回 2.0.0。另以现有插件构建临时 Bun bundle，验证其真实加载结果与源码准备归档 manifest 完全一致、版本 2.0.0 且包含全部 12 项 OpenSpec Skill；临时 bundle／缓存已清理。
+  - 本轮未执行完整 npm 打包或二进制编译，未宣称两种发行产物验收通过；旧同类归档清理、指纹失效、完整依赖闭包门禁及后续 vendor／Skill 适配仍未完成。生成归档仅为当前源码的中间产物，后续修改后必须重新准备；仅勾选本项，不推进其余待办。
+- [x] 在使用源码入口前，核对并移除仅属于本功能的旧生成归档 `packages/coding-agent/dist/spec-driven-resources.tar.gz` 及实际使用的同类旧产物，保留无关 dist 文件；接入重新生成流程，禁止存在旧归档就自动将其当作有效资源。
+  - 核对 dist 中本功能归档：固定名 `spec-driven-resources.tar.gz` 为前轮准备的 2.0.0，散列名 `spec-driven-resources.tar-29519j9k.gz` 为 1.15.0；两者均无新运行格式标记。仅移除这两个已确认生成文件，未删除其他 dist 内容；固定名归档随后由 `bun run gen:spec-driven-resources` 重新生成，旧散列名归档不再存在。
+  - `resource-inventory.ts` 为新 manifest 写入 `runtimeFormat: 1`，`resources.ts` 在读取 manifest 后、缓存命中及提取／执行前拒绝无标记或不支持格式的归档，明确提示重新运行准备命令；不以文件存在或旧缓存标记作为接受依据。
+  - 隔离配置／HOME／缓存下真实源码 CLI 验证通过：分别放入旧 1.15.0 与前轮无格式标记的 2.0.0 归档，均非零退出并提示准备入口；移除归档后同样失败、不回退；经既有命令重建后 manifest 格式为 1、版本 2.0.0，`openspec --version` 成功输出 2.0.0。临时验证目录已清理，已更新包 CHANGELOG。
+  - 本项仅建立旧格式切断及清理／重建路径；同格式下源码／Skill／依赖锁指纹比较、完整依赖闭包门禁与最终资源验收仍未完成，不勾选后续事项，不把此中间归档当作最终适配产物。
+- [x] 第 3 步先建立资源生成、就绪检查及失效规则；第 4～6 步完成后再从最终源码和 Skill 重新生成运行资源供第 9 步验收。不得在后续源码修改后继续使用第 3 步的旧中间产物。
+  - 新增 `src/spec-driven/resource-fingerprint.ts`：对 OpenSpec 源码、bin／schema／Skill／assets、许可证、package／依赖锁、inventory 及宿主生成／加载／格式相关源码计算确定性 SHA-256，排除生成 dist 与安装依赖目录，避免产物自我失效。
+  - 共用生成器在准备前记录指纹，打包前再次核对，准备期间输入变化则拒绝交付；manifest 携带 sourceFingerprint。源码／SDK 加载在缓存命中前比较当前输入指纹，不匹配或缺失则报错并提示 `bun run gen:spec-driven-resources`，不继续用同版本旧中间归档。既有旧格式拒绝和字节摘要提取规则保留。
+  - Windows 隔离验证通过：上轮无指纹中间归档被拒绝；重新准备后真实 CLI 输出 2.0.0；篡改为旧指纹时即便已有热缓存仍拒绝。临时输入树分别修改源码、Skill、锁、生成器及加载器均改变指纹，写入 dist 产物不改变指纹；验证归档已恢复，临时材料已清理。已更新包 CHANGELOG。
+  - 本勾选表示第 3 步的阶段规则已建立，不代表第 4～6 步或最终重建已执行。后续 vendor／Skill 修改将使源码归档失效，必须在这些步骤完成后通过共用入口重新生成再进入第 9 步验收；本轮生成物仍是中间产物。完整 staging／依赖闭包门禁、发行嵌入预期指纹核对及最终形态验收保留给后续未完成项，未运行完整 npm／二进制构建或全仓测试。
+- [x] 打包前检查实际 staging 根的 `dist/cli/index.js`、`bin/openspec.js`、package.json、schema、Skill 和生产依赖闭包齐全；沿用 node_modules 交付时必须检查该目录及必要依赖可解析，不能只判断目录存在。不允许生成摘要自洽但启动必失败的归档。
+  - 在共用生成器中新增 `assertOpenSpecRuntime()`，于实际 staging 的 openspec 根、收集摘要及打包之前执行；检查 CLI／bin／package／许可证文件、node_modules 目录、vendor 清单中的全部 Skill、各 schema 及其声明模板，复用 canonical containment 校验，不以目录存在代替资源完整。
+  - 复用既有 package-directory 定位工具递归检查生产 dependencies 及存在的 optionalDependencies，核对每层 manifest 的实际包含边界；再用 Bun 对真实 CLI 及其静态可解析的惰性模块图执行内存构建，拒绝缺失入口、导出或传递模块。未运行用户项目、模型或联网业务命令，不将任意动态字符串加载宣称为静态可证明。
+  - 首轮门禁发现原转译器保留了仅用于类型的 Spec／Change 等导入，导致 parser 模块缺失导出；已启用 Bun 的 trimUnusedImports，与上游 TypeScript 类型导入消除语义保持一致，未改 vendor 业务源码。
+  - Windows 隔离验证通过：完整生产运行树通过；逐项移走 CLI、bin、package、schema、模板、Skill、node_modules、必需包及依赖真实入口共九类情况均拒绝。真实 validate 命令可加载 parser 图，不再出现类型导出错误；执行 `bun run gen:spec-driven-resources` 已通过新门禁并重新生成中间归档。验证修改仅发生在自有临时树，已恢复并清理。
+  - 已更新包 CHANGELOG，仅勾选本项；未运行完整 npm／二进制构建、全仓测试或最终业务验收，其余资源裁剪、路径交付与发行指纹待办保持未完成。
+- [x] 不将完整 vendor 开发树直接打入运行归档。归档包含实际 CLI 运行产物、package.json、schema／模板、全部内置 Skill、生产依赖及许可证；保留文档在仓库中，不因打包排除而删除文档源文件。
+  - 运行树保持显式交付范围：bin、转译 dist、package.json、schemas（含模板）、skills、生产 node_modules 及 LICENSE；在自有 staging 安装后移除 pnpm／Bun 锁文件，不复制无 CLI／schema／Skill 消费者的 assets 文档截图。vendor src、README、install、docs、构建配置及依赖锁均留在仓库，不删除文档源文件，不裁剪 Superpowers／JCH。
+  - 同步资源输入指纹，移除不再参与运行交付的 assets 截图目录；依赖锁仍是生成输入，但不作为运行文件交付。
+  - `bun run gen:spec-driven-resources` 成功；检查真实归档的 openspec 根恰为上述七类、包含全部 12 项 Skill，并确认 README／install／docs／原始依赖锁与截图仍在 vendor。隔离目录解包后清空 PATH，真实 CLI 输出 2.0.0，new change 与 instructions proposal 成功读取包内模板；临时目录已清理，已更新包 CHANGELOG。
+  - 仅完成运行归档裁剪；未运行完整 npm／二进制构建或最终业务验收，后续独立路径、缓存、来源元数据及发行指纹待办保持未完成。
+- [x] 保持 bin／dist／package.json／schemas 的相对路径满足上游解析；生产依赖不得链接到仓库外的 pnpm store 或个人开发目录。
+  - 核对现有运行树保留原生模块布局；staging 检查复用真实路径 containment 校验，归档收集同样拒绝指向资源根以外的链接，不依赖开发机 pnpm store 或个人目录。已有实现满足本项，本轮未添加重复逻辑。
+  - Windows 隔离验证通过：将真实归档解包到含空格及中文的新路径，从另一项目 cwd、空 PATH 执行 CLI，版本为 2.0.0；schema which 的真实路径严格等于新运行树 schemas/spec-driven，new change 和 instructions proposal 成功读取模板。遍历解包生产 node_modules 未发现符号链接，运行不需源码目录或外部依赖树。
+  - 在自有临时树将必需包 commander 改为指向运行根外开发目录的 junction，staging 门禁与归档收集均明确拒绝；随后恢复并自动清理临时材料。仅完成本项验证并更新状态，未改实现／配置／测试，其余待办保持未完成。
+- [x] 保留清单摘要校验、资源 containment、锁及内容摘要缓存切换；不靠手工清空全局缓存生效，不回退旧归档掩盖新资源缺失。
+  - 已核对 `resources.ts`：manifest 内容决定缓存目录，既有文件锁包围提取与切换；临时树逐文件做 canonical containment 和 SHA-256 校验，全部通过后才写完成标记并切换缓存，失败不进入旧资源回退。本轮未修改现有实现。
+  - Windows 隔离场景通过：两个进程并发冷提取收敛到同一完成目录；修改 fixture 内容及对应摘要后自动选择新缓存目录并读到新字节，无须清空全局缓存；损坏快照被摘要校验拒绝且保留此前完成缓存；归档缺失时即便已有缓存也失败、不回退；父目录穿越路径明确拒绝。链接 containment 的实际 junction 拒绝证据沿用上一项。
+  - 首次验证 fixture 误用未压缩 tar，已改为符合实际格式的 gzip tar 后完成上述验证，未为 fixture 错误修改实现。归档原始字节在 finally 中恢复，隔离缓存及临时目录已清理；仅勾选本项，未改代码／用户配置／现有测试，未执行完整发行构建。
+- [x] 区分源码来源 revision 与实际运行资源摘要，修正 inventory／manifest 的记录及必要类型；不能把裁剪、适配后的字节宣称为未修改的官方 npm 包 integrity。
+  - `vendor/inventory.json` 将 OpenSpec 的 `integrity: git:...` 改为真实含义的 `revision`，保留原来源提交；manifest 类型与生成器同步删除旧 integrity 字段，不留兼容别名。
+  - manifest.openspec 新增 `runtimeSha256`：对按路径排序的 OpenSpec 运行文件记录（相对路径、实际字节 SHA-256、可执行标志）计算 SHA-256。来源 revision、生成输入 sourceFingerprint、运行树摘要及逐文件摘要分别表达不同信息，不冒充官方 npm 包 integrity。
+  - `runtimeFormat` 升为 2，加载器拒绝旧格式；通过既有准备入口重新生成。Windows 隔离验证通过：从真实归档字节逐文件复算再汇总的摘要与 runtimeSha256 一致；临时 fixture 改变运行字节只改变运行摘要、不改变来源 revision，恢复字节后摘要恢复；真实源码 CLI 输出 2.0.0。临时材料已清理，已更新包 CHANGELOG。
+  - 仅完成本项元数据切换，未运行完整 npm／二进制构建、全仓测试或最终业务验收；下一项发行预期指纹与不完整资源加载门禁保持未完成。
+- [x] 加载本地运行树或 dist 归档前，将其生成指纹与当前目标源码／Skill／依赖锁及宿主资源格式对应的预期指纹比较；旧格式、陈旧指纹或不完整资源必须明确报错并提示准备入口，不能静默回退。只核对版本 2.0.0 不足以区分同版本适配前后的产物。
+  - 源码／SDK 继续仅使用准备归档，并在缓存命中前比较当前目标输入指纹。共用发行插件改为异步，独立计算当前构建目标的 sourceFingerprint 并嵌入归档 SHA-256；npm／二进制构建调用方同步 await。加载时同时核对内嵌字节摘要与预期来源指纹，不再跳过发行模式的指纹比较，也不以归档自身声明作为发行预期值。
+  - 加载器在命中完成缓存前检查必要 CLI／bin／package／默认 schema 记录、Skill 记录及所有已声明文件的实际归档字节与 SHA-256；无 manifest、损坏 manifest、缺少文件或摘要不符均明确提示准备入口。保留提取时的路径 containment、摘要复核及锁定切换，不增加本地 vendor 回退或运行时安装／构建。
+  - Windows Bun 1.4.4 隔离验证：重新准备后源码 CLI 为 2.0.0；已有热缓存时，无格式／旧格式、同版本旧指纹、缺 CLI、缺 commander 依赖文件及缺 manifest 均被拒绝。临时真实 bundle 使用同一插件可运行 2.0.0；替换 asset 被固定字节摘要拒绝，构建时传入同版本旧指纹归档也被独立目标指纹拒绝；归档已恢复，恢复后的源码 CLI 成功。
+  - 验证脚本初次使用无效 outfile 参数、随后临时 bundle 缺少原生库；仅修正自有验证器的输出路径并携带现有本机原生库后通过，未为这些验证环境错误改产品逻辑。临时脚本、bundle／隔离缓存及自有根目录输出已清理；已更新包 CHANGELOG。未执行完整 npm／二进制构建或全仓测试，只勾选本项，下一项仍未完成。
+- [x] 明确源码检出缺少准备资源时的准备入口与可操作错误；运行时不偷偷联网安装或构建，不引入依赖用户机器路径的回退。
+  - `resources.ts` 对源码／SDK 固定 dist 归档读取的 ENOENT 使用既有 isEnoent 判断，改为说明缺少运行资源、归档位置、`bun run gen:spec-driven-resources` 及其 coding-agent 执行目录；保留原异常 cause，其他读取错误原样传播，不以存在性预检查或自动准备替代读取。
+  - 未增加联网、安装、构建、vendor/node_modules 或个人目录回退。准备仍只由显式现有命令执行，已同步包 CHANGELOG。
+  - Windows Bun 1.4.4：显式重新准备成功；隔离 HOME／配置／缓存、空 PATH、仓外 cwd 下，真实源码 CLI `openspec --version` 输出 2.0.0。随后暂存归档，已有热缓存时仍非零退出，错误含准备命令及准确执行目录，不输出旧版本成功结果，也未重新生成归档；finally 已恢复归档，临时脚本及隔离目录已清理。
+  - 仅勾选本项；未修改 vendor 初始化／更新逻辑，未运行完整 npm／二进制构建或全仓测试，第 4 节及以后保持未完成。
 
-- [x] `vitest.config.ts`、`vitest.setup.ts`、`eslint.config.js`：上游测试／lint 配置。
-  - 已删除 3 个根文件（`vitest.config.ts` 2488 B、`vitest.setup.ts` 529 B、`eslint.config.js` 1339 B）。
-  - 依赖核对：`build.js` 与 `src/` 无 vitest／eslint 引用；`tsc` 构建不读这些配置。`package.json` 的 `lint`／`test*` 脚本与相关 devDependencies 在后续“维护脚本与包配置”项清理。
-- [x] `.actrc`、`.coderabbit.yaml`：CI 模拟和评审机器人配置。
-  - 已删除 `.actrc`（48 B，act 容器镜像映射）、`.coderabbit.yaml`（281 B，评审机器人配置）。
-  - 依赖核对：全树搜索无 coderabbit／`.actrc` 引用；与 Node 构建和 CLI 运行无关。
-- [x] `flake.nix`、`flake.lock`：独立 Nix 环境，不属于现有 Node build 入口依赖。
-  - 已删除 `flake.nix`（3940 B）、`flake.lock`（567 B）。
-  - 依赖核对：`src/`、`build.js`、`bin/`、`package.json` 无 `flake` 引用；Node 构建链只依赖 `tsc`，Nix 环境不参与。
-- [x] `AGENTS.md`、`CONTRIBUTING.md`、`MAINTAINERS.md`：复制来的上游开发规范及协作管理文件。
-  - 已删除 `AGENTS.md`（0 B 空文件）、`CONTRIBUTING.md`（4268 B）、`MAINTAINERS.md`（687 B）。
-  - 引用修复：`README.md` 的贡献流程与维护者段落原链接本地文件，已改为固定提交 `ea635dd…` 的上游 URL（`.../blob/ea635dd…/CONTRIBUTING.md`、`.../MAINTAINERS.md`）；其余文档无引用。
-  - 复检：README／install／SECURITY／`docs/`／`docs-lab/` 的相对链接 0 断链。
-- [x] `openspec-parallel-merge-plan.md`：上游内部研发计划。
-  - 已删除 `openspec-parallel-merge-plan.md`（98 行，上游并行 delta 合并问题的内部整改计划）。
-  - 依赖核对：全树无引用；属工程管理材料，不影响源码或构建。
-- [x] `README_OLD.md`：核对有用内容已被当前文档覆盖后删除；若有独有且仍适用的说明，先合入对应主题文档，不保留整份旧入口。
-  - 内容比对：`README_OLD.md` 475 行对应 1.x 流程（`openspec/project.md`、`/openspec:proposal` 等旧命令），当前版本已改为 `config.yaml` 上下文与 Skill 工作流。逐节核对后，仍适用的主题均已被现有文档覆盖：支持工具 → `docs/supported-tools.md`；安装与初始化 → `docs/installation.md`、`docs/getting-started.md`；命令参考 → `docs/commands.md`、`docs/cli.md`；delta 格式与示例 → `docs/writing-specs.md`、`docs/examples.md`；团队采用 → `docs/team-workflow.md`；OPSX 实验特性与动机 → `docs/opsx.md`；遥测 → 当前 `README.md` 的 Usage Notes。
-  - 结论：无独有且仍适用的说明需要合入，删除 `README_OLD.md`（475 行）。
-  - 连带资产：`assets/openspec_pixel_dark.svg`、`assets/openspec_pixel_light.svg` 仅被 `README_OLD.md` 引用，随之一并删除；`assets/` 由 4 个文件降为 2 个（`openspec_bg.png`、`openspec_dashboard.png`，均被 `README.md` 引用）。
-  - 复检：README／install／SECURITY／`docs/`／`docs-lab/` 相对链接 0 断链，README 的图片引用均存在。
+## 4. 先将 vendor init/update 收敛为内置交付模型
 
-### 维护脚本与包配置
+以下 vendor 路径均相对 `src/spec-driven/vendor/resources/openspec/`。本步先于第 5 步移除宿主参数注入，避免 vendor 仍能安装 Skill 时宿主提前放开旧交付路径；两步作为同一完整变更交付，中间态不作为可运行成果。
 
-- [x] 删除 `scripts/` 中上游独立发布、二进制安装器、安装 smoke／E2E、指纹再生成、Nix 更新及仅供网站／外部技能平台分发的脚本；保留的业务源码和 build 不能再导入它们。当前 `build.js` 是根文件，不在本项删除范围。
-  - 已删除整个 `scripts/`（15 个文件）：`README.md`；`binary/{build.mjs,entry.mjs,install.sh,install.ps1,install-check.sh,smoke.sh,e2e.sh}`；`capture-released-fingerprints.mjs`、`generate-skillssh.mjs`、`pack-version-check.mjs`、`parity-hash-shared.mjs`、`regen-parity-hashes.mjs`、`skillssh-shared.mjs`、`update-flake.sh`。
-  - 依赖核对：`src/` 无 import 这些模块；仅 `src/commands/install-standalone.ts:21` 以字符串形式引用 `scripts/binary` 的远程下载 URL（该文件将在 5.3 删除），`released-generated-fingerprints.ts` 仅注释提及生成脚本，数据本身保留。`build.js` 为根文件、只调 `tsc`，未受影响。
-  - 待清理消费方：`package.json` 的 `generate:skills`／`regen:parity-hashes`／`check:pack-version`／`release:ci` 脚本（下一项处理）；`.github/` 工作流引用已随目录删除失效。
-- [x] 核对 `scripts/generate-skillssh.mjs` 等维护脚本不属于产品运行依赖后，删除；保留现成 `skills/` 及运行源码中的模板／指纹，不为删脚本而删对应业务数据。
-  - 运行依赖核对：`src/` 中仅 `skill-generation.ts:47`、`command-references.ts:137` 的注释提到 skills.sh 分发，无 import 或读取已删脚本；运行时代码不执行这些 `.mjs`。
-  - 业务数据保留：根 `skills/` 13 个文件（README + 12 个 `openspec-*`）完整；生成源 `src/core/templates/workflows/`（19 个文件，含 apply-change、archive-change、onboard 等）完整；`src/core/shared/released-generated-fingerprints.ts`（114958 B）指纹数据完整。
-  - 结论：维护脚本已随 `scripts/` 删除，产品运行所需的 Skill 文件、模板与指纹均保留，未因删脚本删数据。
-- [x] 删除完成后，清理 package.json 中指向已删除材料的 test／lint／release／changeset／资源维护脚本，保留 build、prepare 和仍有效的开发入口。不得保留确定失效的脚本并宣称本副本构建完整。
-  - 已移除 11 个失效脚本：`lint`（eslint 配置已删）、`generate:skills`、`regen:parity-hashes`、`test`、`test:watch`、`test:ui`、`test:coverage`、`check:pack-version`、`release`、`release:ci`、`changeset`。
-  - 保留 5 个仍有效入口：`build`（`node build.js`）、`dev`（`tsc --watch`）、`dev:cli`（`pnpm build && node bin/openspec.js`）、`prepare`（`node build.js`）、`prepublishOnly`（`pnpm run build`）；均只依赖 `build.js`／`bin/openspec.js`／`typescript`。
-  - 复检：`package.json` 仍为合法 JSON，`name`／`version` 可读（CLI 版本消费者不受影响）。devDependencies 清理见下一项。
-- [x] 删除只服务已移除测试／发布／lint 的 devDependencies；保留 TypeScript、实际构建所需类型及仍被保留脚本使用的依赖。以真实使用关系判断，不直接清空 devDependencies。
-  - 已移除 8 个：`@changesets/changelog-github`、`@changesets/cli`（release／changeset 已删）、`@vitest/ui`、`vitest`、`vite`（测试已删）、`eslint`、`typescript-eslint`（lint 配置已删）、`smol-toml`（全树无 import，仅旧维护脚本使用）。
-  - 保留 3 个：`typescript`（`build.js` 直接调用 `typescript/bin/tsc`）、`@types/node`、`@types/picomatch`（`src/core/artifact-graph/outputs.ts` 使用 `picomatch`，构建需其类型）。
-  - 运行依赖 `dependencies` 未改动（zod、yaml、commander、picomatch 等仍被 `src/` 使用）。锁文件同步见下一项。
-- [x] 使用来源声明的包管理器更新锁文件，保留仍有效的安全 overrides，不升级无关依赖、不手改锁文件。同步去掉仅为已移除依赖服务且已无用途的配置。
-  - 使用 `pnpm@10.34.5`（`packageManager` 声明）执行 `pnpm install --lockfile-only --ignore-scripts` 更新锁文件；未手改。
-  - 结果：`pnpm-lock.yaml` 由 88647 B／约 2600 行降为 21930 B／679 行；diff 为 2000 行删除、0 行新增，说明只移除已删 devDependencies 的传递树，未升级或改动任何保留依赖的版本（如 commander 14.0.3、yaml 2.9.1、zod 4.6.7、typescript 6.0.3 保持不变）。
-  - overrides 保留：`brace-expansion`、`postcss`、`js-yaml`×2、`nanoid`、`fflate`、`shell-quote`、`launch-editor`、`minimatch` 共 9 条与 `pnpm-workspace.yaml` 一致。
-  - 无用途配置清理：`package.json` 的 `files` 去掉 `!dist/**/*.test.js`、`!dist/**/__tests__`（测试已删），保留 `dist`、`bin`、`schemas`、`!dist/**/*.map`；`.gitattributes` 删除已失效的 `test/fixtures/released-output/**` 两条规则，保留 `skills/** text eol=lf` 与指纹文件的 `linguist-generated`，并更新注释去除已删 parity 测试引用。`publishConfig`、`packageManager`、`engines`、`bin` 保持有效。
+- [x] 在 `src/core/init.ts` 保留项目校验、目录结构、默认 spec-driven 配置、语言上下文、目标路径、重复初始化／已有配置保护、store 指针拒绝规则。
+  - 保留现有路径规范化、写权限校验、specs／changes／archive 目录及锚点创建、默认 spec-driven、语言校验与 context 写入、重复初始化及 config.yaml／config.yml 保护；不重新实现这些已有职责。
+  - 将有效 store 指针根目录原“仅安装 integrations”分支改为与子目录同样拒绝，提示在 store 根目录初始化；继续拒绝无效指针，在交付迁移／提示／规划文件写入之前退出。移除失去用途的 integrationsOnly 分支及 resolveOpenSpecRoot 导入，不改 store 解析或其他命令。
+  - Windows Bun 1.4.4 隔离临时运行树验证通过：中文／空格目标目录、完整规划目录、默认 spec-driven 和语言 context；重复初始化保留配置及已有材料；config.yml 不覆盖、不另建 config.yaml；冲突及空白语言拒绝；有效／无效 store 指针在根及子目录均非零退出且配置与目录内容不变。
+  - 验证直接运行准备后的 vendor CLI，使用现有 tools=none 避免调用尚未移除的交付链；不将此参数作为最终合同。临时运行树／项目／脚本已清理，包 CHANGELOG 已更新；未重建发行归档或执行完整 npm／二进制构建、全仓测试。源码修改会使前轮归档指纹失效，后续按第 3 节规则重建；仅勾选本项，不推进 Skill 安装链清理或宿主改写移除。
+- [x] 从 init 执行链移除工具探测与选择、Skill 生成／复制／链接、profile 交付选择、旧命令对账、旧产物清理、用户全局目录迁移、写入前确认等仅服务 Skill 安装的分支。
+  - `src/core/init.ts` 执行链仅保留项目校验、store 指针拒绝、语言保护、规划目录／锚点及配置创建；删除工具探测／选择、profile 解析、欢迎／写入确认、Skill 生成及共享安装、命令对账、旧产物清理与迁移的调用和本类专属方法、类型及 imports，不保留禁用分支或空实现。
+  - 删除交付专用结果统计／失败报告／profile 引导及 IDE 重启提示，成功输出仅报告项目配置。InitCommand 构造参数只保留 language，普通 init 与 experimental 调用方同步不再传递已删除的交付参数；未删除共享模块或 update 的仍存消费者。CLI 旧参数注册／帮助及 experimental 入口删除仍按后续独立待办处理，本项不宣称全部入口合同完成。
+  - Windows Bun 1.4.4 隔离临时运行树中真实执行 vendor init：不传 tools，预置项目 Skill、旧 opsx 命令、旧工具目录及带旧标记的项目说明、用户全局 prompt／profile 后，首次及重复初始化均只创建／保留正确 spec-driven 项目配置，全部预置文件字节和相关目录集合不变；空项目仅新增 openspec/。实际输出已观察，不再显示工具安装或清理结果。
+  - 首次验证将 Bun 自身转译缓存新增误计为 HOME 业务变更；仅把验证器转译缓存重定向到独立临时路径后通过，未为此修改产品逻辑。临时脚本／运行树／项目均已清理，已更新包 CHANGELOG；未重建发行归档、运行完整 npm／二进制构建或全仓测试。仅勾选本项，其余待办保持原状态。
+- [x] 同步 `src/cli/index.ts` 的 init 选项／类型／帮助：删除仅服务交付的 tools、profile 等参数；force 等参数按剩余真实用途决定是否保留，不能给已移除参数保留兼容别名或静默忽略。
+  - init 仅保留业务语言参数及 Commander 自带帮助；tools／profile 仅服务已删除交付链，force 仅用于已删除的旧产物自动清理，no-animation 仅用于已删除欢迎界面，因此全部移除，不提供兼容别名或忽略逻辑。同步缩减 action 参数类型，删除无消费者的工具列表及说明生成。
+  - 同步 `src/core/completions/command-registry.ts` 的 init flags，避免补全继续推荐已拒绝参数；其他命令的同名参数及 experimental 入口不在本项删除范围。
+  - Windows Bun 1.4.4 隔离临时运行树验证通过：真实 init --help 只显示 language 与 help；真实生成的 Fish 补全不再提供上述四项 init 参数。逐项传入旧参数均返回正常 unknown option 非零退出，目标目录保持空；language 仍生成 spec-driven 配置并记录指定语言 context。
+  - 已清理临时脚本／运行树／项目并更新包 CHANGELOG。未重建发行归档或运行完整 npm／二进制构建、全仓测试；宿主强制 tools=none 仍按第 5 节后续任务移除，本轮不把中间态宣称为完整 omp openspec init 验收。只勾选本项，其余任务保持未完成。
+- [x] 空项目非 TTY 执行 `omp openspec init` 不再要求选择工具；需要业务输入时使用现有配置／显式参数或给出明确错误，不以自动选语言、覆盖配置等新默认值替代上游约束。
+  - 现有 init 执行链已无工具选择或交付提示，宿主也已撤销 tools=none 与 mini 改写；无语言参数时保留原生未指定语言状态，显式 language 通过原有校验写入 context，已有 config.yaml／config.yml 不覆盖，语言冲突明确失败。本轮核对相关源码，没有增加默认输入、特殊分支或配置写入。
+  - 复用上一轮实际验证：隔离 HOME／配置／缓存、stdin ignore 下，真实源码 OMP 空项目 init 非零工具依赖已消除，成功输出 spec-driven、项目仅新增 openspec/、无虚构语言 context；同轮宿主窄回归为 1 pass、19 filtered、0 fail，覆盖显式中文语言、含空格目标路径、冲突语言拒绝及原配置字节保持。
+  - 上述相关实现与通过结果对应的版本未变化，本轮不重复构建或测试，不将既有结果描述为本轮新运行。仅更新本项及顶部状态，其他未完成项不勾选；完整发行与集中验收仍未完成。
+- [x] 按第 1 步职责结论处理 update。无独立职责时，从 CLI 注册、实现、公开导出、补全 registry、帮助、提示、配置刷新建议及调用方中完整删除；未知命令按正常错误退出，不返回“已是最新”等假成功。
+  - 删除 vendor CLI 的 update 注册及普通／dry-run／JSON 分支，删除 core/update.ts（含 UpdateCommand、选项类型及仅供本类使用的 scanInstalledWorkflows 包装导出），移除补全 registry 条目；不保留别名、无操作成功或“已是最新”。
+  - config profile 仍保存原有配置，但不再询问应用到当前项目、不调用 UpdateCommand、不输出 update 应用指引或交付漂移警告；删除仅服务该旁路的函数及 imports，修正过时引导注释。保留实际仍被配置／版本命令使用的共享能力，未按名称删除 migration／update-plan 等共享模块。
+  - version-check.ts 删除 update 专属版本包装、升级提示、交互安装、自升级版本探测及升级后重跑函数，清理专属依赖；原生 version 报告及仍有消费者的版本检查／安装归属判定保留。不影响 OMP 本体 update，也不删除 openspec-update-change 业务 Skill；Skill 正文及其他文档更新仍按第 6、8 节独立待办处理。
+  - 将旧“安装并更新集成”测试替换为移除合同回归：普通 update 与 dry-run JSON 均未知命令非零退出、stdout 为空且已有 Skill 不变；config profile core 实际保存配置、不创建项目规划或改写 Skill。显式重新生成资源成功，隔离窄测试结果为 1 pass、19 filtered、0 fail；真实 OMP 源码 CLI 同样拒绝 update，帮助与实际生成的 Fish 补全不再提供该命令，version --json 仍返回 2.0.0。
+  - 帮助验证器首次把 version 描述换行中的“update availability”误判为命令；只修正命令行缩进匹配后通过，未为验证器错误修改产品。临时脚本／隔离目录已清理，已更新包 CHANGELOG；未执行完整 npm／二进制构建、全仓测试或完整交互 profile 验收。仅勾选本项，其他待办保持原状态；本次归档仍是待后续源码／Skill 修改后重建的中间产物。
+- [x] 沿调用图清理失去用途的安装／对账／迁移／profile drift／旧产物指纹辅助代码。只删确已无消费者的部分；保留仍被核心业务使用的配置、profile、模板生成和安全工具。
+- [x] 检查 `experimental` 等旧别名是否仍可触发安装；无独立必要职责则随旧链路删除，不保留旁路。
+  - 检索 vendor src 的 experimental 引用，唯一初始化别名注册位于 `src/cli/index.ts`，仅输出弃用提示并调用 InitCommand，没有独立业务职责；前轮已移除 init 安装链，但该别名仍会创建规划目录与配置，因此完整删除注册、专属选项及 action，不保留兼容入口或无操作成功。
+  - 其他命中是 schema 的实验性说明、工作流标签／历史说明及未使用欢迎界面描述，不属于初始化入口，保持原样；不按单词全局删除，不改通用工作流或 schema。
+  - Windows Bun 1.4.4 隔离临时运行树实测：experimental、experimental --tool oh-my-pi、experimental --no-interactive 均正常 unknown command 非零退出，stdout 为空，目标项目目录保持空。临时运行树／脚本／项目已清理，已更新包 CHANGELOG。
+  - 仅勾选此项；前面的非 TTY 宿主初始化因仍有 tools=none 注入未宣称完成，update 及共享交付死代码清理保持未完成。未重建发行归档、运行完整 npm／二进制构建或全仓测试。
+- [x] 全部路径均不得创建／修改／删除 `.omp/skills`、`.agents/skills`、其他 Agent 目录、旧命令及用户自定义 Skill。内置资源更新只由 OMP 发行升级承担。
 
-## 5. 删除其他 Agent 专用适配与安装能力
+## 5. 再缩减宿主 CLI 包装，移除旧定制
 
-这一步涉及源码依赖，必须先改调用方和注册项再删文件；不能直接删除整个 `command-generation/`、`shared/`、`init.ts` 或 `update.ts`。
+重点文件：`src/spec-driven/resources.ts`、`src/cli.ts`。完成第 4 步 vendor 交付逻辑移除后，再去掉下面的宿主参数注入。
 
-### 5.1 支持范围
+- [x] 保留 `omp openspec` 分派、内置 Bun 执行、当前真实 cwd、参数／输出／退出码传递、中止与子进程结清。
+  - 本轮源码核对：cli.ts 的 openspec 分派把原剩余参数、process.cwd() 和 AbortSignal 交给 runOpenSpec；按返回值分别写 stdout／stderr 并设置真实 exitCode，finally 移除 SIGINT／SIGTERM 监听。runOpenSpec 解析受信归档入口，使用 process.execPath 及 BUN_BE_BUN=1，不启动外部 openspec／Node。
+  - 统一执行器保留 cwd、原参数和分流捕获，启动前检查已中止信号；运行中 abort 杀死自有子进程，postmortem 清理同样杀死并等待退出。输出读取与 child.exited 一起等待，中止后不返回成功，finally 移除信号监听、等待子进程并注销清理回调。本轮没有改动这些生命周期代码。
+  - 普通入口的实际成功／失败证据沿用已记录的宿主 init、schema 查询及未知 update 非零退出结果；资源／指令窄回归最近为 1 pass、17 filtered、0 fail。中止与结清本轮仅核对源码，不声称新增了运行中信号验收，不重复运行未变化的场景。
+  - 仅勾选本项；当前 stdin ignore 属于下一项交互 CLI／捕获输出 I/O 拆分的未完成问题，本项不把它描述为已解决。未执行完整 npm／二进制构建或全仓测试，其他任务保持原状态。
+- [x] 删除 init 的 tools=none 强制注入、`setNewDefaultSchema`、mini 配置及输出改写；删除 new change 前的私有 context 探测和 schema 参数注入。
+  - `runOpenSpec` 对 init／new change 不再特判、复制和修改参数，不预跑 context；直接将原参数交给包内 CLI，原样返回输出及退出码。删除 initTarget、hasProjectConfig、setNewDefaultSchema 及全部 mini 注入／输出改写逻辑，不改 vendor 的原生初始化／规划行为，也不新增参数解析或兼容分支。
+  - 前置安全条件已由第 4 节已完成的 init 安装链及 update 移除满足；本项不恢复交付入口。archivePlan 环境、私有目录桥接及其他无关包装按后续各自待办处理，不在本次顺带删除。
+  - 将旧 mini 图测试改为宿主原生默认合同：含空格目标路径及显式中文语言初始化成功，配置与输出均为 spec-driven；冲突语言非零退出且不覆盖原配置；无配置规划根执行 new change 后沿用原生 spec-driven 四产物图及默认配置。首次断言错误假设原生命令不创建缺省配置，核对 openspec-root.ts 后改为验证真实缺省配置内容，未修改 vendor 业务。
+  - 重新生成资源成功；Windows Bun 1.4.4 隔离窄回归为 1 pass、19 filtered、0 fail。真实源码 OMP 非 TTY 空项目 init 成功，只创建 openspec/、默认 spec-driven、不虚构语言 context，已观察实际输出。临时脚本／项目／缓存已清理，已更新包 CHANGELOG；未运行完整 npm／二进制构建或全仓测试，只勾选本项。当前资源仍是后续源码／Skill 改动后须重建的中间归档。
+- [x] 删除 `archivePlan` 私有参数、`OMP_AIREQ_ARCHIVE_PLAN`／`OMP_DEV_ARCHIVE_PLAN` 私有行为及无生产消费者的 `runOpenSpecDirectory`、`assertAIReqSpecSchema`、`specSchemaPath`；清理其测试引用。若发现实际消费者，明确记录影响，不借此扩展为 AIReq 适配或保留旧桥接。
+  - 核对 coding-agent src／test／scripts 及跨包引用，实际消费者仅旧 resources.test.ts；未发现生产调用者。删除 runOpenSpec 的第四参数及 OMP_AIREQ_ARCHIVE_PLAN 注入，执行仅保留 BUN_BE_BUN；删除 runOpenSpecDirectory、assertAIReqSpecSchema 及资源类型／返回值中的 specSchemaPath，不保留 shim。未发现 OMP_DEV_ARCHIVE_PLAN 的运行代码消费者，不新增环境变量处理。
+  - 删除仅约束已撤销私有 API 的固定包内 omp-spec／覆盖拒绝及目录桥接测试与专属 import。原“需求专用”指令测试改为上游 spec-driven，保留真实用户 context、proposal／specs instructions 和未知 change 的错误合同，不再要求两产物图或禁止 tasks；未修改 AIReq 会话、schema 或业务。
+  - 显式重新准备资源成功；Windows Bun 1.4.4 隔离窄测试为 1 pass、17 filtered、0 fail。真实 OMP 源码 CLI schema which spec-driven --json 返回包内 schema；继承指向不存在文件的两项旧归档环境变量仍正常运行。未访问用户实际 change，临时脚本／目录／缓存已清理，已更新包 CHANGELOG。
+  - 仅勾选本项；未运行完整 npm／二进制构建、全仓测试或 AIReq 验证，其余待办保持原状态。当前运行资源仍须在后续源码／Skill 修改后重新生成，不宣称最终发行验收完成。
+- [x] 不以 init 参数特判替代第 4 步的干净项目初始化。其余命令尽量原样委托 vendor CLI，不额外解析上游业务参数。
+  - 本轮核对 resources.ts：runOpenSpec 对所有命令使用同一路径，只解析可信运行入口，将原 args、cwd、signal 交给统一执行器，额外环境仅 BUN_BE_BUN；不存在 init／new change 分支、context 预探测、业务参数重解析、配置或输出重写。
+  - vendor InitCommand 自身完成项目校验、store 指针拒绝、语言保护、目录／锚点与配置创建，已无工具选择及 Skill 交付链；不依赖宿主插入 tools=none 才避免安装。第 4 节尚未完成的共享死代码清理和完整文件保护检查保持原状态，不据本项宣称其全部完成。
+  - 复用前轮已记录的真实证据：宿主 init／无配置根 new change 的 spec-driven 默认与冲突语言保护窄回归通过；最新私有桥接清理后的 context／proposal／specs instructions 窄测试为 1 pass、17 filtered、0 fail，真实宿主 schema 查询返回包内 spec-driven。核对结果足够，本轮没有实现变化，不重复构建或测试，不把既有结果表述为本轮新运行。
+  - 仅更新本项与顶部状态，未勾选其他任务；交互 I/O、共享死代码及后续集中验收仍待完成。
+- [x] 拆清交互 CLI 与捕获输出调用的 I/O：真实终端需要交互时不能继续忽略 stdin；工具／非 TTY 调用按明确非交互规则工作。不得让两种路径互相污染协议输出。
+  - resources.ts 增加明确的 capture／terminal I/O 模式，runOpenSpec 默认 capture；公共执行器仅在 terminal 模式继承 stdin／stdout／stderr，避免子进程提示被捕获直到退出或无法接收键盘。继承模式不再次返回已输出的字节，捕获模式保留 stdin ignore、分流输出及真实退出码；中止与等待子进程逻辑不变，Superpowers 调用继续沿用默认捕获。
+  - cli.ts 仅在自身 stdin／stdout／stderr 全部为真实 TTY 时显式选择 terminal，否则选择 capture。不按上游业务命令名特判，不让 SDK／工具因宿主恰有终端而自动进入交互模式。
+  - Windows Bun 1.4.4：重新准备资源成功；隔离 API 捕获 config profile 的交互要求错误并以返回数据提供，非 TTY 真实 OMP CLI 同命令非零退出且 stdout 为空，version --json 仍可直接解析为 2.0.0。
+  - 真实 PTY 中启动隔离配置下的 OMP openspec config profile，实际观察到原生选项界面，发送下箭头与回车后选中 Keep current settings (exit)，显示 No config changes 并正常退出 0；证明键盘输入已到达真实子进程，不是只检查浏览器或命令启动。终端会话、临时脚本／项目／缓存已清理，已更新包 CHANGELOG。
+  - 仅勾选本项；未修改用户实际配置、AIReq 或其他入口行为，未运行完整 npm／二进制构建或全仓测试。当前归档仍为后续源码／Skill 更新后须重建的中间资源，不宣称完整发行验收通过。
+- [x] 保留原有禁用遥测与 offline 运行边界，不擅自开启遥测，不增加新的自动更新／下载机制。
+  - 核对统一执行器：capture／terminal 均强制 OPENSPEC_TELEMETRY=0、DO_NOT_TRACK=1；资源加载仍只读准备归档，缺失／失效报错，不在运行期安装、下载或构建。保留这些既有边界，不修改 Superpowers／JCH 或 AIReq。
+  - 发现 vendor version --check 的 requested 路径会绕过遥测 opt-out，原宿主没有把 offline 传递给更新检查门禁。runOpenSpec 现复用 offlineFromEnv，仅在 offline 时设置既有 OPENSPEC_NO_UPDATE_CHECK=1；普通在线调用不额外设置，用户已有禁查变量仍继承。不改 vendor 通用语义，不增加自动检查或升级。
+  - 新增隔离子进程回归 offline.test.ts：SDK 与真实源码 CLI 的显式 version --check --json 均返回 disabled，受控本机注册源连接为零；在线对照仍尝试同一本机注册源并返回 offline，连接为一。继承环境与配置均主动开启遥测时，宿主调用仍不创建匿名 ID 或改写全局配置。验证只用临时配置及本机回环，不访问公网注册源。
+  - Windows Bun 1.4.4：bun run gen:spec-driven-resources 成功；bun test packages/coding-agent/test/spec-driven/offline.test.ts 最终 1 pass、0 fail、9 expect。首轮受继承的 TLS 禁验环境警告干扰，只在测试子进程恢复证书验证后通过，未修改用户环境或为警告改变产品行为。临时目录由测试自动清理，已更新包 CHANGELOG。
+  - 仅勾选本项；未运行全仓测试、完整 npm／二进制构建或最终发行验收，其余未完成事项保持原状态。
 
-- [x] 外部工具目标仅保留上游已有 `oh-my-pi`。`pi`、`zcode` 是独立目标，不因名称与当前宿主有关就保留。通用共享 Skill 协议／格式保留，但不以通用目标为借口继续支持其他 Agent 安装。
-  - 支持范围实测：`AI_TOOLS` 现有 49 个条目（含 `oh-my-pi`、`pi`、`zcode` 与通用目标 `agents`），`command-generation/adapters/` 有 34 个 `toolId`，`TOOL_ID_ALIASES` 有 `windsurf→devin`，`RETIRED_TOOLS` 有 `amazon-q`。
-  - 保留目标唯一为 `oh-my-pi`：沿用上游现有 `AI_TOOLS` 条目（`skillsDir: '.omp'`）、`adapters/oh-my-pi.ts` 与其命令注册，不新增 OMP 启动器、PATH 注入、TUI 适配或兼容层。
-  - 待删除目标：其余 48 个 `AI_TOOLS` 条目（包括独立的 `pi`、`zcode`，以及通用 `agents`）、33 个非 `oh-my-pi` adapter、`windsurf` 别名、`amazon-q` 退役条目及其专用清理分支。
-  - 通用共享 Skill 协议／格式保留：`skills/` 下 SKILL.md、模板生成、frontmatter、路径安全检查等与具体目标无关的能力不删；`agents` 作为“可安装目标”不保留，共享目录逻辑仅在 OMP 自身仍需要时保留。
-  - 该决定在 5.2 各项落到调用链：先清点引用再改注册／导出，最后删 adapter 文件，不静默把未知目标映射为 OMP。
-- [x] 保留 OpenSpec 自身的项目初始化、配置、需求操作和 Skill 材料更新；删除的是其他 Agent 的发现、安装、链接、配置改写及专用服务，不是全部 init/update 业务。
-  - 保留的业务模块：`src/core/init.ts`（1452 行，init 编排、选择器、配置写入、Skill 生成、legacy 清理）、`src/core/update.ts`（1710 行，刷新、profile 同步、Skill 安装、dry-run 计划）、`project-config.ts`（692 行）、`global-config.ts`（281 行）、`available-tools.ts`、`shared/{skill-generation,own-skill-texts,skill-content-equivalence,command-reconcile}.ts`、`migration.ts`、`update-plan.ts`，以及需求操作 `src/commands/*` 与 `src/core/{list,view,archive,specs-apply,validation,artifact-graph}`。
-  - 仅删除其他 Agent 专属部分：`AI_TOOLS` 其余目标、`command-generation/adapters/*`、`SKILL_LINKED_TOOL_IDS` 的链接安装（claude/continue/…/hermes 共 14 个）、`globalSkillsDir`（minimax 的 HOME 写入）、各目标的 `detectionPaths` 探测、`TOOL_ID_ALIASES`／`RETIRED_TOOLS`（amazon-q）、Copilot 云 Agent。
-  - 边界确认：`oh-my-pi` 走 `usesSharedSkills()` → 项目 Skill 写入共享 `.agents/skills/`，且不在 `SKILL_LINKED_TOOL_IDS`，因此“共享目录 + 路径安全”逻辑必须保留；其 `skillsDir: '.omp'` 与上游条目原样沿用。技能材料生成（模板、frontmatter、own-skill 文本、指纹判定）与 init/update 编排均不因删目标而删除。
-- [x] 不增加新的 OMP 启动器、PATH 注入、TUI 适配或兼容层；保留下来的 OMP 目标仅沿用上游现有实现。
-  - 现有 OMP 实现即上游自带的：`adapters/oh-my-pi.ts`（`.omp/commands/opsx-<id>.md` + description frontmatter + `$@` 注入）与 `AI_TOOLS` 中的 `oh-my-pi` 条目（`skillsDir: '.omp'`）；未新增任何文件或代码。
-  - 全树核对：无 OMP 专用启动脚本（`bin/` 仅 `openspec.js`）、无 OMP PATH 注入、无 TUI 适配或兼容层；搜索 `oh-my-pi`／`.omp` 仅命中 adapter、注册、`config.ts` 条目与指纹数据中的历史产物路径。
-  - shell completion 的 `.bashrc`／`.zshrc` 写入属 OpenSpec 自身补全功能（5.3 明确不顺带删除），不是 OMP 启动器或 PATH 注入，本步不动。
+## 6. 接入全部内置 Skill，统一命令正文
 
-### 5.2 配置、注册及导出联动清理
+重点文件：`src/discovery/spec-driven.ts`、`src/spec-driven/skill-policy.ts`、`src/internal-urls/skill-protocol.ts`，vendor `skills/` 及实际生成正文的模板。
 
-- [x] 在 `src/core/config.ts` 裁掉非 `oh-my-pi` 的 `AI_TOOLS` 条目，以及只服务被删除目标的别名、退役目标、专用链接集合、提示及字段消费者。先清点实际引用，不盲删共享接口。
-  - `AI_TOOLS`：49 → 1，仅保留 `{ name: 'Oh My Pi', value: 'oh-my-pi', available: true, skillsDir: '.omp' }`。
-  - 删除只服务被删目标的 API：`UNIVERSAL_TOOL_ID`／`getUniversalTool`／`universalToolFallbackHint`、`TOOL_ID_ALIASES`／`resolveToolIdAlias`、`RetiredTool`／`RETIRED_TOOLS`／`findRetiredTool`／`formatRetiredToolError`；`SKILL_LINKED_TOOL_IDS` 保留为空集合（共享路径逻辑仍引用）。
-  - 消费者联动：`init.ts` 移除 universal 提示、alias 归一化、retired 报错与 retired 清理循环、linked-from 提示；`update.ts` 移除 retired 清理步骤；`legacy-cleanup.ts` 去掉 retired 过滤；`cli/index.ts` 移除 alias 帮助文本。
-  - 因已无退役目标，`src/core/retired-tools.ts`（原 109 行）整体删除，避免留下空实现；A.5 中该项由“修改”调整为“删除”，第 5.2 节清理链条目执行时复核。
-  - 共享接口保留：`AIToolOption` 字段、`OPENSPEC_SKILL_NAMES`、`OPENSPEC_MARKERS`、`usesSharedSkills`/`SKILL_LINKED_TOOL_IDS` 等仍被 OMP 路径使用，不做无依据删除。
-- [x] 清理 `src/core/command-generation/registry.ts` 中其他 Agent adapter 的 imports 和注册；同步清理 `adapters/index.ts` 的导出，再删除对应 adapter 文件，仅保留 `oh-my-pi.ts` 及其仍需的公共基础模块。
-  - `registry.ts`：34 个 import／register → 仅 `ohMyPiAdapter`；注释改为“vendored copy ships only the host's adapter”。
-  - `adapters/index.ts`：仅导出 `ohMyPiAdapter`；`command-generation/index.ts` 的 `claudeAdapter, cursorAdapter, devinAdapter` 导出改为 `ohMyPiAdapter`。
-  - 已删除 33 个 adapter 文件（`amazon-q`、`antigravity`、`atomcode`、`auggie`、`bob`、`claude`、`cline`、`codeassistant`、`codebuddy`、`codestudio`、`command-code`、`continue`、`costrict`、`crush`、`cursor`、`devin`、`easycode`、`factory`、`gemini`、`gigacode`、`github-copilot`、`iflow`、`junie`、`kilocode`、`kiro`、`lingma`、`opencode`、`pi`、`qoder`、`qwen`、`roocode`、`trae`、`zcode`）；`adapters/` 只剩 `index.ts`、`oh-my-pi.ts`。
-  - 静态核对：全树无对已删 adapter 的 import／导出引用；`generator.ts`、`invocation.ts`、`types.ts` 等公共基础模块未改动。
-- [x] 同步 CLI 的 tools 参数帮助、校验、可选项及初始化选择器，不再列出或接受被删除的其他 Agent。未知目标应沿用明确错误处理，不静默映射为 OMP。
-  - 帮助文本由 `AI_TOOLS` 派生（`availableToolIds = AI_TOOLS.filter(skillsDir || globalSkillsDir).map(value)`），裁剪后自动只剩 `oh-my-pi`；`init` 与 `update --tool` 共用同一 `tools` 值。
-  - 校验：`resolveToolsArg` 用 `getToolsWithSkillsDir()` 构造 `availableSet`，未知 token 进入 `invalidTokens` 并抛出 `Invalid tool(s): … Available values: all, none, oh-my-pi`；不静默映射为 OMP。`all` 现在只返回 `oh-my-pi`，`none` 仍为空。
-  - 初始化选择器：`validTools` 仅 1 项，searchable multi-select 仍要求至少选择 1 项；通用目标提示已随 config 清理移除。
-  - 无新增代码：本项由 `config.ts` 的 `AI_TOOLS` 裁剪自动生效；`--copilot-cloud` 选项属 Copilot 集成，留待“检查 `github-copilot/`”项处理。
-- [x] 检查 `available-tools.ts`、`shared/skill-paths.ts`、`shared/tool-detection.ts`、`shared-skill-target.ts`、`shared/shared-skill-install.ts`、`shared/skill-links.ts` 的调用链，删除非 OMP 专属的探测／全局 HOME 写入／软链接安装分支和失效 import；共享路径安全及 OMP 仍使用的逻辑保留。
-  - `available-tools.ts`：删除 `detectionPaths` 探测与 `globalSkillsDir` HOME 扫描，OMP 只按自身 `.omp` 目录或被 `.openspec-target` 列出判定。
-  - `skill-paths.ts`：删除 `hasGlobalSkillTarget`、`resolveToolSkillsDir` 的 HOME 分支、`resolveSkillLinkDir` 与 `SKILL_LINKED_TOOL_IDS` 依赖；`SkillCapableTool` 仅要求 `skillsDir`。
-  - `tool-detection.ts`：删除 `hasSkillLinks` 及 `isListedToolPresent` 的链接目录判定，保留命令/列表与共享目录检查。
-  - `shared-skill-install.ts`：删除链接创建（`ops.linkSkill`）与“linksWanted”分支，旧自有目录清理只保留：缺失跳过、用户文件保留、非链接的旧副本/发行副本删除；`ownSkillFolderNeedsWork` 同样只判断旧副本。
-  - `skill-links.ts`：删除 `skillLinkText`、`createSkillLink`、`isSymlink`，保留链接分类（`classifySkillLinkSpot` 等）与用户链接保护，OMP 旧 `.omp/skills` 迁移仍需判断链接归属。
-  - `update-plan.ts`：移除 `linkSkill` ops 与计划内链接记录；dry-run 仍按真实写入/删除/移动生成计划。
-  - `config.ts`：删除 `globalSkillsDir`、`detectionPaths` 字段；`init.ts`/`update.ts`/`migration.ts`/`released-output-sweep.ts`/`cli/index.ts` 的对应全局路径分支同步移除。
-  - 保留：`legacySkillsDirs`（OMP 旧自有目录迁移检查仍读取）、`searchAliases`/`setupNote`/`requiresIdeRestart` 字段（当前唯一目标不赋值，属通用展示能力，不属其他 Agent 安装）。共享路径安全 `assertPathWithin`、链接分类与用户文件保护全部保留。
-  - 静态核对：全树无 `resolveSkillLinkDir`／`SKILL_LINKED_TOOL_IDS`／`hasSkillLinks`／`hasGlobalSkillTarget`／`linkSkill` 引用；相对 import 全部可解析。
-- [x] 检查 `retired-tools.ts`、`legacy-cleanup.ts`、`released-output-sweep.ts` 等清理链，不再遍历、迁移或删除其他 Agent 的用户目录。保留 OMP 自身旧输出识别及通用防误删检查；历史指纹数据只有在明确无消费者后才删除。
-  - `retired-tools.ts`：已在前项整体删除（无退役目标）。
-  - `legacy-cleanup.ts`：`LEGACY_SLASH_COMMAND_PATHS` 与 `LEGACY_GLOBAL_SLASH_COMMAND_PATHS` 置空，不再扫描 claude/cursor/codex/kilo 等其他 Agent 的命令目录或全局 prompt 目录；删除仅服务于这些条目的常量（`LEGACY_DIRECTORY_COMMAND_FILES`、`LEGACY_THREE_COMMAND_NAMES`、`LEGACY_KILOCODE_COMMAND_FILES`、`LEGACY_GLOBAL_CODEX_WORKFLOWS`、`getCodexPromptDir`）及失效 import。`LEGACY_CONFIG_FILES` 保留（8 个根文件名，仅删除带 OpenSpec marker 或已发布指纹的块，属防误删检查，§2 已说明为被管理产物清单数据）。
-  - `migration.ts`：`LEGACY_TOOL_ROOTS` 置空，不再迁移 `.kimi`／`.windsurf`／`.codex`／`.agent` 等他人目录；迁移实现与 `needsConsent` 检查保留。
-  - `released-output-sweep.ts`：所有路径推导均以 `AI_TOOLS`（现仅 `oh-my-pi`）为入口，`formerRoots` 为空，不再枚举其他工具目录；指纹判定与 `currentGeneratablePaths` 防误删逻辑保留。
-  - 历史指纹保留：`released-generated-fingerprints.ts` 仍有 7 个消费者（`legacy-cleanup`、`released-output-sweep`、`shared-skill-target`、`shared/command-reconcile`、`generated-fingerprint`、`skill-content-equivalence`、`skill-links`），非零引用，故不删除。
-- [x] 检查 `src/core/github-copilot/` 的实际入口；删除 Copilot 专用云 Agent 集成及全部注册、导出和调用，不替换为空实现。
-  - 入口：`src/core/github-copilot/cloud-agent.ts` 被 `init.ts`（8 个符号）与 `update.ts`（7 个符号）引用，另有 CLI `--copilot-cloud`／`--no-copilot-cloud` 与 shell completion 条目。
-  - 已整体删除 `src/core/github-copilot/`（`cloud-agent.ts`），并移除全部调用：`init.ts` 的决定/持久化/清理/报告与 `writeCopilotCloud` 参数；`update.ts` 的 `syncCopilotCloudFiles` 及三处调用、`CopilotCloudFileOps`；`project-config.ts` 的 `githubCopilot.cloudAgent` schema 与解析；`cli/index.ts` 的两个选项、选项类型与传参；`core/completions/command-registry.ts` 的两个补全条目。
-  - 静态核对：`src/` 内已无 `copilot` 代码引用（仅 `command-generation/invocation.ts` 的历史注释以其他工具举例）；未以空文件、no-op 或兼容别名替代。
-  - 遗留：`docs/customization.md`、`docs/supported-tools.md` 仍有 `githubCopilot.cloudAgent` 说明，按 A.5 文档行在第 6 节前同步。
-- [x] 搜索其他 Agent 名称时区分代码分支、示例、字符串指纹和普通业务文本；不得全局替换模型／工具名称或删除通用提示词。
-  - 代码分支清理：`command-surface.ts` 的 `codex`/`warp` 特判；`shared-skill-target.ts` 的 `$openspec-`→codex 推断（改为通用 `/openspec-`→`oh-my-pi`）；`utils/command-references.ts` 的 `SKILL_INVOCATION_PREFIX`（kimi/codex）、`NATURAL_LANGUAGE_SKILL_TOOLS` 与 codex 专用 transformer；`init.ts` 的 codex 首轮提示；`update.ts` 的 codex workflow 推断/覆盖；`migration.ts` 的 devin/windsurf 专用提示。全树已无 `'codex'` 等目标 id 分支。
-  - 保留的普通业务文本：`openers.ts` 的编辑器/终端启动器（VS Code、Cursor、Claude Code、codex）是 `workset open` 的用户功能，不是 Agent 安装能力；`command-generation/{index,types,invocation}.ts`、`migration.ts` 的注释示例；`onboarding-commands.ts`/templates 中的 `continue` 等是工作流 id，不是 Agent 名。
-  - 保留的数据：`released-generated-fingerprints.ts` 中的历史产物路径（含其他 Agent 目录）是防误删白名单，不按名称删除。
-  - 文档：`docs/`、`docs-lab/` 中的其他 Agent 用法按第 3 节结论保留；已移除功能的描述（`githubCopilot.cloudAgent`、多目标支持矩阵）仍待同步，避免文档宣称已删除能力。
-  - 未做全局替换：模型/工具通用名称与提示词未改动。
+- [x] 删除旧 OpenSpec 五项白名单和旧 `commands/opsx-*` 文件命令 provider／注册；清理 import 与测试消费者。不恢复 `/opsx-*` 别名或新增第二套命令分发表。
+  - discovery/spec-driven.ts 删除 OPEN_SPEC_CORE_SKILLS／OPEN_SPEC_CORE_COMMANDS、OpenSpec 专属过滤、loadSpecDrivenCommands 及 slash-command provider 注册，移除其专属 imports。Skill 继续按 manifest 逐项扫描与 containment 边界进入原生能力目录，不新增别名或分发表；Superpowers／JCH 发现及访问策略保持。
+  - skill-policy.test.ts 将普通目录合同从五项改为完整 12 项，旧命令 provider 结果改为不存在；保留现有模型可见性、skill:// 补全／读取和隐藏 Superpowers 的合同。process-resources.e2e.test.ts 唯一旧 /opsx-propose 调用改为 /skill:openspec-propose，保留带空格／中文参数进入真实模型请求、无业务阶段注入及项目无改动的断言，没有删除宿主 E2E。
+  - Windows Bun 1.4.4，隔离 HOME／配置／数据／转译缓存执行上述两个现有窄测试：2 pass、24 filtered、0 fail、219 expect。真实 OMP 进程经本机模型 fixture 完成原生 Skill 调用，参数到达模型请求；未运行 AIReq 测试或进入其会话。本次发现改动不在资源指纹输入内，复用有效准备归档，不重复重建。
+  - 已删除临时验证脚本与隔离目录并更新包 CHANGELOG。只勾选本项；同名覆盖、其余原生发现／调用与真实 TUI 的完整验收、正文／模板改写及最终发行验证仍按各自未完成项处理，不据本次窄验证宣称全部接入完成。
+- [x] 内置全部 12 项 Skill 走原生发现、补全、按需读取、路径授权和调用流程，支持 `/skill:<name>`；保留项目／用户同名资源的原有覆盖机制，不干预 Superpowers／JCH 的发现规则。
+- [x] 将实际 Skill 正文、allowed-tools、compatibility 和安装前提中的可执行 `openspec ...` 改为 `omp openspec ...`；只改宿主入口与已撤销交付行为，不重新写成需求专用工作流。
+- [x] 同步仍会产生这些正文的静态模板及声明源，避免以后生成又恢复裸命令；不在加载时叠加第二层字符串重写，不保留旧／新两套正文来源。
+- [x] 区分文件路径、包名、项目目录 `openspec/`、协议字段和可执行命令，不全局替换单词 openspec。
+- [x] 处理 Skill 中要求运行已删除 update／安装命令的步骤，改为实际内置交付说明，不误删名为 `openspec-update-change` 的业务 Skill；后者是更新需求材料，不是更新安装文件。
+- [x] 未初始化项目仍按上游条件检查并请求显式初始化；“任意项目可发现 Skill”不意味着可以自动创建 openspec 目录。
+- [x] 不为本轮接入修改 AIReq 会话创建、阶段策略、技能目录或权限绑定；共享发现规则按普通 OpenSpec 合同工作，AIReq 接入留待其需求确定，不将其作为验收门槛。
 
-### 5.3 独立安装与分发
+## 7. 处理本仓库的旧 schema 引用
 
-- [x] 删除 OpenSpec 独立发行安装能力：在 `src/cli/index.ts` 取消 `install [version]` 命令注册，再删除 `src/commands/install-standalone.ts` 及无消费者的专用辅助代码。
-  - `src/cli/index.ts`：删除 `install [version]` 命令块（含 `installStandalone` 动态 import）。
-  - 删除 `src/commands/install-standalone.ts`（原约 190 行；导出 `InstallTarget`、`resolveInstallTarget`、`removeCommandFor`、`checkSource`、`installerBase`、`installStandalone`，无其他消费者）。
-  - `core/completions/command-registry.ts`：删除顶层 `install` 命令的补全条目；`completion install [shell]` 子命令条目保留（shell completion 功能，非独立安装）。
-  - 当时保留：`version-check.ts` 的 `getCliInstallInfo`／`getStandaloneBinaryPath` 与 `utils/executable-path.ts` 仍被 `version` 命令、`standalone-tip.ts` 使用；下一项确认 standalone 提示为唯一消费者后一并删除。
-  - 待下一项：版本提示与帮助中的 `openspec install` 文案。
-- [x] 核对版本提示、首次运行提示、帮助中对独立安装命令的引用并去掉失效入口；保留必要版本读取，不顺带重写版本查询或其他联网政策。
-  - 首次运行提示：删除 `src/core/standalone-tip.ts`（`STANDALONE_TIP_MESSAGE`／`maybeShowStandaloneTip`）及 `src/cli/index.ts` update 命令末尾的调用块；同步删除 `global-config.ts` 的 `standaloneTipSeen` 字段与 `config-schema.ts` 的 schema 项。
-  - 版本提示：`version-check.ts` 删除 `standaloneBinaryPath` 状态、`markStandaloneBinary`／`getStandaloneBinaryPath`、`standaloneUpgradeCommand`（`openspec install`／`<path> install` 文案）、`fetchLatestStandaloneRelease` 与 `RELEASES_URL`，以及 `checkForCliUpdate`／`getInstallDir`／`getCliInstallInfo`／`getCliUpdateCommand`／`buildUpgradeCommandLines` 中的 standalone 分支和 `InstallScope` 的 `'standalone'`。npm registry 查询、opt-out、超时与响应校验未改。
-  - 帮助：顶层 `install [version]` 已无注册与补全条目，`openspec --help` 不再出现；`completion install [shell]` 保留。
-  - 无消费者辅助代码：`utils/executable-path.ts`（`findCopiesOnPath`／`samePath`）仅服务已删的 standalone 升级命令，整体删除；`version-check.ts` 对应 import 移除。
-  - 文档同步失效安装说明：`README.md` 更新段去掉 standalone 句子；`install.md` 去掉 standalone 安装优先流程与安装器命令，改为包管理器安装（步骤重排 1–4）；`docs/installation.md` 顶部安装段落改为指向 Package Managers、删除“Switch from npm to the standalone install”整节与 uninstall 的 binary-schemas 说明、AI 提示词去掉 standalone 分支；`docs/troubleshooting.md` 删除 standalone binary 建议。
-  - 静态核对：`src/` 已无 `standaloneTipSeen`／`standalone-tip`／`executable-path`／standalone 升级符号引用；剩余 `standalone` 字样均为 store（独立仓库）或注释语义，与安装能力无关。未运行构建（该副本无 `node_modules`／`dist`）。
-- [x] 删除其他 Agent 的安装流程和上游独立二进制发行脚本，不删除 `bin/openspec.js` 或用于 OMP 集成的源码入口。
-  - 其他 Agent 安装流程已无残留：`AI_TOOLS` 仅 `oh-my-pi`；`command-generation/adapters/` 仅 `index.ts`、`oh-my-pi.ts`；`available-tools.ts`／`shared/*` 不再探测其他目标或创建链接；`--tools` 校验只接受 `oh-my-pi`／`all`／`none`。
-  - 二进制发行脚本：`scripts/` 已整目录删除（含 `binary/{build.mjs,entry.mjs,install.sh,install.ps1,install-check.sh,smoke.sh,e2e.sh}`）；根目录仅剩 `build.js`（`tsc` 构建）；`.github/workflows/binaries.yml` 已随 `.github/` 删除；`package.json` 无发布／打包脚本，`files` 仅 `dist`、`bin`、`schemas`。
-  - `bin/openspec.js` 保留且未改动：shebang + `import { runCli } from '../dist/cli/index.js'` + `runCli()`；`package.json` 的 `bin.openspec` 与 `dev:cli` 仍指向它，属 OMP 集成所需 CLI 入口。
-  - OMP 集成源码入口保留：`src/cli/index.ts` 的 `runCli`、`src/core/init.ts`／`update.ts`、`src/core/command-generation/`（仅 OMP adapter）与 `src/core/config.ts` 的唯一 `oh-my-pi` 目标。
-  - 剩余“install”文件均为保留功能：`src/core/completions/installers/*`（shell completion）、`src/core/shared/shared-skill-install.ts`（OMP 共享 Skill 安装）、`released-output-sweep.ts`／`released-generated-fingerprints.ts`（旧产物清理）。
-  - 文档中的独立二进制安装命令已移除：`README.md`（Quick Start 改 npm/Homebrew）、`docs/README.md`、`docs/getting-started.md`、`docs/installation.md`（Uninstalling）、`docs-lab/start/installation.md`（删除 Install options／Download by hand／Verify a download／standalone switch 节）、`docs-lab/help/upgrade-to-2.md`、`docs-lab/reference/cli.md`（删除 `openspec install` 条目与节、standalone 版本/更新说明）。剩余 `standalone` 均为 store（独立仓库）或 sync 语义。
-  - 未运行构建（该副本无 `node_modules`／`dist`）。
-- [x] shell completion 不是其他 Agent 安装功能，本轮不顺带删除；其他不属于上述范围的业务也不因“安装”关键词被误删。
-  - 保留完整：`src/commands/completion.ts`；`src/core/completions/`（`command-registry.ts`、`completion-provider.ts`、`factory.ts`、`shared-flags.ts`、`types.ts`、`generators/`、`templates/`、`installers/{bash,fish,powershell,zsh}-installer.ts`、`installers/shell-quote.ts`）；`src/core/completion-tip.ts`。
-  - CLI 注册未动：`completion generate [shell]`、`completion install [shell] --verbose`、`completion uninstall [shell] -y,--yes` 与隐藏 `__complete <type>` 均在 `src/cli/index.ts`；仅删除了已不存在的顶层 `install [version]` 注册与其在 `command-registry.ts` 的顶层条目。
-  - 补全命令表中的 `install` 条目现仅剩 `completion install` 子命令（L632 附近）及 `uninstall`，属 shell completion 自身。
-  - 消费者核对：`context.ts`、`doctor.ts`、`store.ts`、`workset.ts`、`completion-tip.ts` 仍引用 `completions/`；相对 import 全树可解析（唯一疑似为 `command-generation/index.ts` 文档注释中的示例路径，非实际 import）。
-  - 未按“安装”关键词误删：剩余的 `installers/` 是 shell 补全安装器；`shared-skill-install.ts` 是 OMP 共享 Skill 安装；`released-output-sweep.ts`／指纹文件是旧产物清理。三者均保留并通过静态引用检查。
-  - 未运行构建（副本无 `node_modules`／`dist`）。
+- [x] 清点 OMP 根 `openspec/config.yaml` 和活动 change 元数据中实际存在的 mini／omp-spec 引用，逐项记录受影响产物；迁移前根配置为 `schema: omp-spec`。
+- [x] 将本仓库默认配置迁移为上游 `spec-driven`，并逐个核对活动 change 后再更新其 schema 引用。不能只改名称就宣称原有 proposal／specs 已满足 design／tasks 等完整产物图。
+- [x] 已有内容保留；缺少的设计／任务材料如实呈现为待完成，不伪造完成状态、不自动生成业务方案、不为了通过校验禁用 schema 校验。
+- [x] 历史归档不批量改写；其他用户项目不自动迁移。文档说明旧自定义 schema 的影响，不恢复包内兼容 schema 或别名。
+- [x] 本步骤仅处理 OMP 仓库自身作为 OpenSpec 项目的配置与活动材料，不修改 AIReq 专属配置、schema、流程或生产消费者；遇到相关遗留依赖记录事实，不提供兼容桥接或新业务实现。
 
-## 6. 最小必要验证
+## 8. 同步全部相关用户文档与项目约定
 
-- [x] 将路径／内容变化与清单比对：管理／测试目录已删除，业务文档、图片引用、Skill、schema、许可证和构建入口仍在。
-  - 对照面：仓库外完整备份 `F:\code2026\_backup\openspec-vendor-preTrim-ea635dd-20261114`（1378 个文件）；逐文件 `rglob` 比对。
-  - 结果：当前 282 个文件；删除 1096、修改 50、新增 0。无残留空目录。
-  - 删除分类全部可归属：A.1 目录 1022（`test/` 293、`openspec/` 663、`.github/` 12、`.changeset/` 2、`.devcontainer/` 2、`.agents/` 8、`website/` 42）；A.2 根文件 12；A.3 `scripts/` 15；A.4 adapter／集成 35；另加已执行的 docs-lab 工程材料 7、失去引用的 assets 2（`openspec_pixel_*.svg`）、无消费者源码 3（`retired-tools.ts`、`standalone-tip.ts`、`utils/executable-path.ts`）。
-  - 计划删除项逐一复核：A.2 的 12 个根文件、A.3 的 15 个脚本、A.4 的 `cloud-agent.ts`／`install-standalone.ts` 均不存在；`command-generation/adapters/` 仅 `index.ts`、`oh-my-pi.ts`；`src/core/github-copilot/` 不存在。
-  - 管理／测试目录：`test/`、`openspec/`、`.github/`、`.changeset/`、`.devcontainer/`、`.agents/`、`website/`、`scripts/` 全部不存在。
-  - 业务保留：`docs/` 27、`docs-lab/` 36、`skills/` 13、`schemas/` 5、`assets/` 2、`bin/` 1、`src/` 186。关键入口存在：`README.md`、`CHANGELOG.md`、`SECURITY.md`、`LICENSE`、`bin/openspec.js`、`build.js`、`tsconfig.json`、`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.gitattributes`、`.gitignore`、`docs/README.md`、`docs/getting-started.md`、`docs/supported-tools.md`、`docs/workflows.md`、`assets/openspec_bg.png`、`assets/openspec_dashboard.png`、`skills/README.md`、`schemas/spec-driven/schema.yaml`。
-  - 50 个修改文件均属既定动作：21 个文档（原 12 个 + 7.1 支持矩阵同步新增 9 个）（§3 链接清理 3：`docs-lab/{guides/teams,reference/skills,start/overview}.md`；§4 `README.md`；§5.3 安装说明 8：`docs/{README,getting-started,installation,troubleshooting}.md`、`docs-lab/{help/upgrade-to-2,reference/cli,start/installation}.md`、`install.md`）；3 个包／仓库配置（`package.json`、`pnpm-lock.yaml`、`.gitattributes`）；26 个源码（A.5 目标 14 + 连锁裁剪 12：`config-schema`、`global-config`、`version-check`、`completions/command-registry`、`command-generation/index`、`command-surface`、`migration`、`profile-sync-drift`、`shared/index`、`utils/command-references`、`project-config`、`update-plan`）。
-  - `docs/supported-tools.md` 文件仍在且本步未改；其内容同步（移除已删目标／`githubCopilot.cloudAgent`）仍按既有记录留待 A.5 文档行，不在本项宣称完成。
-- [x] 对不在修改清单中的保留业务文件核对摘要，确认未附带改写；有意裁剪过的源码、包配置、锁文件及调整过的文档逐项说明，不能再要求它们与原版逐字相同。
-  - 对照文件：`F:\code2026\_backup\openspec-vendor-retained-sha256-ea635dd.txt`（294 条 `sha256<TAB>相对路径`，文件自身 sha256 `606631d7…`）。
-  - 路径核对：当前 282 个文件全部存在于清单，无清单外新增；清单中 12 条现缺失，均为已记录的后续有意删除：`docs-lab/` 工程材料 7（`README.md`、`Notes.md`、`sources.md`、`message-map.md`、`reference/architecture/{index,workflow-runs,design-decisions}.md`）、只剩 `README_OLD.md` 引用的 `assets/openspec_pixel_{dark,light}.svg` 2、无消费者源码 3（`src/core/retired-tools.ts`、`src/core/standalone-tip.ts`、`src/utils/executable-path.ts`）。
-  - 摘要核对：232 个文件 sha256 与清单逐字节一致，全部属于“不在 50 个修改集内”的保留业务文件；未发现附带改写、换行或编码漂移（比对按原始字节）。
-  - 50 个有意修改项逐类说明（原 41 项见上；新增 9 个支持矩阵／FAQ 文档由 7.1 说明）：
-    - A.5 计划内源码 14：`config.ts`（AI_TOOLS→1）、`available-tools.ts`（删探测）、`command-generation/{adapters/index,registry}.ts`（仅 OMP）、`shared/{skill-paths,tool-detection,shared-skill-install,skill-links,shared-skill-target}.ts`（删链接／全局分支）、`legacy-cleanup.ts`／`released-output-sweep.ts`（清空其他 Agent 路径遍历，保留防误删）、`init.ts`／`update.ts`（移除 Copilot／退役／链接逻辑）、`cli/index.ts`（删 `install` 命令）。
-    - 连锁裁剪源码 12：`project-config.ts`／`config-schema.ts`／`global-config.ts`（删 `githubCopilot.cloudAgent`、`standaloneTipSeen`）、`version-check.ts`（删 standalone 状态与更新命令）、`completions/command-registry.ts`（删顶层 install 条目）、`command-generation/index.ts`（导出 OMP adapter）、`command-surface.ts`（删 codex/warp 特判）、`migration.ts`（清空 `LEGACY_TOOL_ROOTS`、删 devin 文案）、`profile-sync-drift.ts`／`update-plan.ts`／`shared/index.ts`（删链接参数与导出）、`utils/command-references.ts`（删其他工具前缀／自然语言推断）。
-    - 包／仓库配置 3：`package.json`（删测试／发布／lint 脚本与 devDependencies、files 清理）、`pnpm-lock.yaml`（pnpm 重新生成，仅删已移除依赖树）、`.gitattributes`（删已失效 test 规则）。
-    - 文档 12：§3 死链清理 3（`docs-lab/{guides/teams,reference/skills,start/overview}.md`）、§4 `README.md`（上游贡献／维护链接改固定提交）、§5.3 安装说明 8（`docs/{README,getting-started,installation,troubleshooting}.md`、`docs-lab/{help/upgrade-to-2,reference/cli,start/installation}.md`、`install.md`），均为删除独立安装／其他目标说明或失效链接，不改 OpenSpec 业务语义。
-  - 结论：保留文件除上述 41 项外摘要一致；修改均对应已执行章节，无计划外改写。
-- [x] 完成静态导入、导出及 CLI 注册引用核对，无指向已删 adapter、Copilot 或 standalone installer 的调用；不得用空文件、no-op 或兼容别名掩盖悬空引用。
-  - 已删模块引用：全树搜索 `github-copilot`、`install-standalone`、`retired-tools`、`standalone-tip`、`executable-path`、`adapters/<已删 33 个>`，`src/` 内 0 命中。
-  - 已删符号引用：`claudeAdapter`／`cursorAdapter`／`devinAdapter`、`markStandaloneBinary`／`getStandaloneBinaryPath`／`maybeShowStandaloneTip`、`syncCopilotCloudFiles`／`CopilotCloudFileOps`、`installStandalone`／`resolveInstallTarget`／`findCopiesOnPath`、`hasGlobalSkillTarget`／`resolveSkillLinkDir`／`hasSkillLinks`／`linkSkill` 全部 0 命中。
-  - 相对及动态 import：`src/**/*.ts` 的 `from './…'` 与 `import('./…')` 逐条解析，目标均存在（唯一疑似为 `command-generation/index.ts` 的文档注释示例，非 import）。
-  - 导出面：`adapters/index.ts` 仅 `ohMyPiAdapter`；`command-generation/index.ts` 仅 `ohMyPiAdapter`；`registry.ts` 仅注册 `ohMyPiAdapter`；`shared/index.ts` 的导出（`getSkillCapableTools`、`resolveToolSkillsDir` 等）均在 `skill-paths.ts` 有定义；`adapters/` 仅 `index.ts`、`oh-my-pi.ts`。
-  - CLI 注册：顶层命令为 `version`、`init`、`update`、`list`、`view`、`change`、`show`、`archive`、`validate`、`feedback`、`completion`、`status`、`instructions`、`templates`、`schemas`、`new` 等；无顶层 `install [version]`。`completion` 下仅 `generate`／`install [shell]`／`uninstall [shell]` 与隐藏 `__complete`。补全命令表顶层同样无 `install`。
-  - 目标约束：`AI_TOOLS` 仅一个 `value: 'oh-my-pi'`；`--tools` 帮助由该数组派生，校验用 `getToolsWithSkillsDir()`，未知 id 走 `Invalid tool(s)` 分支（`init.ts:575` 起），不映射到 OMP；`all` 只返回 OMP。
-  - 无空文件（`find src -type f -size 0` 为空）、无新增 no-op／占位导出；`src/` 中剩余 `copilot` 仅为 `command-generation/invocation.ts` 的历史注释示例，`standalone` 仅为 store／sync 语义与注释。
-  - 本项为静态核对，未执行构建；构建与类型检查在下一项进行。
-- [x] 在隔离工作目录使用保留的构建入口及锁定依赖进行一次最小构建验证，证明源码裁剪没有留下导入／类型错误。使用项目允许的构建命令，不直接调用 tsc；不安装或构建到用户上游目录。
-  - 隔离目录：`F:\code2026\_build\openspec-vendor-build-20261114`（OMP 仓库外、上游目录外）；从裁剪后的 vendor 根完整复制 282 个文件，未在源树执行安装或构建。
-  - 依赖：`npx pnpm@10.34.5 install --frozen-lockfile --ignore-scripts`，按 `pnpm-lock.yaml` 安装（typescript 6.0.3、@types/node 22.20.5、zod 4.6.7、commander 14.0.3、yaml 2.9.1、picomatch 4.0.7 等），未改动锁文件。
-  - 首次 `pnpm build`（即 `node build.js`）失败：`src/core/update.ts` 4 处调用 `this.planLegacyToolMoves(...)`，但该方法在裁剪时被误删（`planLegacyToolMigrations` import 仍在）。已从备份恢复该方法（原逻辑：按 `recorder.view` 计划旧工具根迁移并记录 `needsConsent` 备注），不恢复任何其他 Agent 根（`LEGACY_TOOL_ROOTS` 仍为空）。
-  - 复跑 `pnpm build` 成功：TypeScript 6.0.3 编译完成，`dist/` 生成；无导入／类型错误。
-  - 结论：构建入口与锁定依赖可用；裁剪引入的 1 个真实编译错误已修复。未直接调用 tsc，未构建到上游或用户目录。
-  - 保留隔离目录供下一项 CLI 行为验证使用（`dist/cli/index.js` 已生成）。
-- [x] 用新生成的 CLI 验证 help 不再提供独立 install／其他 Agent 目标，在临时项目中验证 OMP 初始化及一次 status／instructions；被移除的 tools 目标明确拒绝，不写入其他 Agent 目录。需要安装／更新的用例隔离 HOME、配置根与项目目录。
-  - CLI：上一项隔离构建产物 `F:\code2026\_build\openspec-vendor-build-20261114\bin\openspec.js`（`dist/` 由裁剪源码生成），全部命令经 `HOME`／`USERPROFILE`／`XDG_CONFIG_HOME`／`XDG_DATA_HOME` 指向 `F:\code2026\_build\openspec-cli-e2e-20261114\{home,xdg-config,xdg-data}`，并设 `OPENSPEC_NO_UPDATE_CHECK=1`、`CI=1`。
-  - help：顶层 `--help` 中 `install` 匹配数为 0（无独立 `install [version]`）；`init --help` 的 tools 值仅为 `all, none, oh-my-pi`；`update --help` 无其他 Agent 选项。
-  - 初始化：`node bin/openspec.js init <project> --tools oh-my-pi --no-animation` 退出 0；创建 `openspec/{config.yaml,specs,changes}` 与 `.agents/skills/openspec-*`（6 个 Skill + `.openspec-target`）；输出 “Setup complete for Oh My Pi”。
-  - 写入边界：项目内无 `.claude`／`.cursor`／`.codex`／`.windsurf`／`.devin`／`.gemini`／`.qwen`／`.kimi`／`.opencode`／`.zcode`／`.pi` 等目录；隔离 `home`／`xdg-config`／`xdg-data` 在 init 后仍为空。
-  - 被移除目标：`init <project-bad> --tools claude` 退出 1，报 `Invalid tool(s): claude. Available values: all, none, oh-my-pi`，目标目录保持为空。
-  - 业务命令：`new change demo-change` 退出 0；`status --change demo-change` 退出 0（`Progress: 0/4 artifacts complete`，proposal ready，其余 blocked）；`instructions proposal --change demo-change` 退出 0（输出 `<artifact id="proposal">` 及写入路径）。
-  - 版本／更新：`version` 输出 `OpenSpec 2.0.0`；`update --dry-run --json` 退出 0，唯一变更是在隔离 `xdg-config/openspec/config.json` 执行 `add`（tool `openspec`），未写入项目外其他 Agent 目录。
-  - 未出现 OMP 宿主适配失败；被删功能未恢复，未扩大到全链路适配。临时目录保留作证据。
-- [x] 若 CLI 的最小验证因尚未完成的 OMP 宿主适配失败，记录具体失败与层次，不恢复被删除功能、不转而扩大为 OMP 全链路适配，也不把“文件清理完成”写成“功能验收通过”。
-  - 未触发：上一项 CLI 验证全部成功（help、init、new/status/instructions、version、update dry-run 均退出 0；移除的 `claude` 目标按预期退出 1）。无 OMP 宿主适配失败需要记录。
-  - 未恢复任何被删除功能，未新增宿主适配；本项不额外宣称功能验收通过，结论仍限于本轮裁剪与最小验证范围。
-- [x] 不运行已删除的上游测试，不新增整套测试体系，不运行 OMP 全仓 fulltest、Rust、浏览器或发行验证。
-  - 上游测试：`test/` 已删除，本轮未运行、未恢复，也未从上游目录借用测试。
-  - 未新增测试文件或测试框架；`package.json` 中测试脚本与 vitest／eslint 依赖已移除，未重新引入。
-  - 未运行 OMP 全仓命令：无 `bun run fulltest`／`fastcheck`、无 Rust 测试（`bun run test:rs`／`cargo test`）、无浏览器／Selenium、无 release 或发行产物验证。
-  - 实际执行仅限：裁剪树静态检查、仓库外隔离目录的 `pnpm install --frozen-lockfile` 与 `pnpm build`、以及该构建产物在临时项目中的 CLI 命令（help／init／new／status／instructions／version／update --dry-run）。
+在实现和需求合同确定后执行，不能继续保留互相矛盾的说明。
 
-## 7. 交付与停止条件
+- [x] 更新 `docs-zh-CN/quick-start-intranet.md` 中版本、内置资源、Skill 使用、初始化和离线说明：无需额外安装 OpenSpec，命令统一 omp openspec，Skill 随 OMP 升级。
+- [x] 按当前源码实际行为更新根 `AGENTS.md` 中 OpenSpec 相关约定；保留其他已批准规则，不改用户全局规则文件。
+- [x] 更新保留的 vendor `README.md`、`install.md`、`docs/` 及仍保留的有用文档：去掉独立安装、其他 Agent 设置、重复安装 Skill、已移除 update／opsx 入口；保留 schema、store、配置、工作流及排错内容。
+- [x] 文档、CLI help、错误提示、completion 及 Skill 使用同一真实入口，不出现“代码已删除但文档仍要求执行”的步骤；历史 CHANGELOG 原发布内容不改写。
+- [x] 检查 `docs-zh-CN/` 及仓库中实际引用旧五项、mini、omp-spec 和 opsx 的维护说明，按用途更新。生成式 OpenWiki 不手改陈旧生成正文；如需刷新按既有生成流程处理，不能将它列为额外人工规格来源。
+- [x] 在 `packages/coding-agent/CHANGELOG.md` 的 Unreleased 简要记录 OpenSpec 2.0 内置适配、Skill 随包交付、旧入口移除及自定义 schema 迁移影响；不修改已发布条目。
 
-### 7.1 文档残留同步
+## 9. 集中执行最小验收
 
-- [x] 清理权威文档中已删除工具与 Copilot 云 Agent 的支持声明。
-  - `docs/supported-tools.md`、`docs-lab/reference/supported-tools.md` 重写为仅 `oh-my-pi`：skills 写入 `.agents/skills/`、不生成命令文件、`--tools` 仅接受 `oh-my-pi`／`all`／`none`，其他 id 明确报错。
-  - `docs/customization.md`：删除 `githubCopilot.cloudAgent` 配置示例与集成选项条目。
-  - `docs/cli.md`：删除 `--copilot-cloud`／`--no-copilot-cloud` 选项行；工具 ID 列表改为 `oh-my-pi`；示例改为 `--tools oh-my-pi`；dry-run 说明去掉 Copilot 文件。
-  - `docs-lab/reference/cli.md`：删除 Copilot 云文件同步条目。
-  - `docs/faq.md`：移除“30+ assistants”支持声明，改为本副本仅配置 Oh My Pi。
-  - `docs/how-commands-work.md`、`docs/commands.md`：工具语法表收缩为 Oh My Pi，删除其他工具的 `/opsx`／`$openspec-*` 行与 Devin 双行说明。
-  - 修改统计：文档修改由 12 增至 21；当前总数 282、删除 1096、修改 50、未修改摘要一致 232。
-  - 未全面重写：仍保留上游历史 `/opsx` 旧命令说明与迁移背景；这些不再被作为本副本当前支持范围声明。未运行构建（文档变更不影响已完成的隔离构建与 CLI 验证）。
+先更新与新合同冲突的现有测试，再集中验证；只重试失败且确受修复影响的项，不增加无关全仓检查。
 
+- [x] 更新 `test/spec-driven/resources.test.ts`：删除旧 mini／omp-spec 固定来源、私有 bridge、固定 1.15.0、强制 tools 参数等旧合同；保留资源摘要、路径约束、取消、真实退出码和离线加载覆盖。
+- [x] 更新 discovery／`skill-policy.test.ts` 中与普通 OpenSpec 有关的五项限制和旧命令断言，验证全部内置 Skill 可达及同名覆盖规则；不新增或运行 AIReq 隔离测试，不以旧全局白名单恢复其限制，不检查源码或提示词固定措辞。
+- [x] 将 `test/spec-driven/process-resources.e2e.test.ts` 等真实 `/opsx-propose` 入口改为原生 Skill 调用，保留参数透传和实际请求行为验证，不能简单删除整套宿主 E2E。
+- [x] 在隔离 HOME／配置根／空项目中验证 init：生成正确项目配置，默认 spec-driven；不安装 Skill、不创建 Agent 专用目录、不触碰预置自定义 Skill／命令。覆盖非 TTY 默认路径及必要的已有配置保护。
+- [x] 验证 update 的最终合同：已删除则 help／补全不再提供、调用返回正常未知命令错误；如保留真实职责则验证其实际状态变化，不能只断言“不抛错”。
+- [x] 在无全局 openspec／Node 的环境，经 OMP 工具真实执行 Skill 中的 `omp openspec` 命令；完成临时项目 new change → status／instructions → validate → archive 的最小真实路径，保留设计／任务产物的原生约束，不触碰用户实际 change。
+- [x] 用真实 TUI 观察任意目录 Skill 发现、补全及显式调用，覆盖普通主会话和实际子代理使用；确认不再加载旧 opsx 命令。此次不进入 AIReq 或验证其行为。
+- [x] 分别对源码入口、npm 产物、二进制验证资源自包含及一致版本；移开源码资源、阻断运行时下载后仍使用内置资源。未实际验证的平台或形态明确列为未验证，不互相代称通过。
+- [x] 验证资源失效路径：存在旧 1.15.0 归档、同版本旧指纹归档、缺 dist 或必要依赖时明确拒绝，不执行旧产物；重新准备后确认最终 manifest、运行版本及资源内容一致，运行归档不含旧 mini／omp-spec 私有资源。
+- [x] 使用现有窄范围检查／类型检查／构建及测试入口，命令默认参数不随意变更；按用户本轮明确要求运行默认 `bun run fastcheck` 与 `bun run fulltest`，不直接运行 tsc，不另加独立 Rust、AIReq 浏览器或无关发布门禁。
 
-- [x] 记录实际删除／修改清单、保留文档类别、来源版本／提交、备份位置及已执行验证结果。
-  - 来源：`C:\Users\jiang\Documents\OpenSpec`，`main` @ `ea635dd255f8686dcf48626bbcbe0e3fd59b6067`，版本 `2.0.0`；目标原树 1378 个文件，与本轮开始时无内容差异（仅检出换行）。
-  - 备份／对照：`F:\code2026\_backup\openspec-vendor-preTrim-ea635dd-20261114`（1378 文件、11 MB，清单哈希 `a2615a10…`）；保留摘要 `F:\code2026\_backup\openspec-vendor-retained-sha256-ea635dd.txt`（294 条）。
-  - 结果：当前 282 个文件；删除 1096、修改 50、新增 0、未修改且摘要一致 232。
-  - 删除清单：A.1 目录 1022（`test/` 293、`openspec/` 663、`.github/` 12、`.changeset/` 2、`.devcontainer/` 2、`.agents/` 8、`website/` 42）；A.2 根文件 12；A.3 `scripts/` 15；A.4 adapter／集成 35；追加删除 docs-lab 工程材料 7、失去引用的 SVG 2、无消费者源码 3（`retired-tools.ts`、`standalone-tip.ts`、`executable-path.ts`）。
-  - 修改清单：源码 26（A.5 目标 14 + 连锁 12，含验证阶段恢复的 `update.ts` `planLegacyToolMoves`）、包／配置 3（`package.json`、`pnpm-lock.yaml`、`.gitattributes`）、文档 21（原 12 + 7.1 支持矩阵／FAQ 同步 9）；逐项原因见第 6 节与 7.1。
-  - 保留类别与数量：业务源码 `src/` 186；文档 `docs/` 27、`docs-lab/` 36（使用指南、CLI、工作流、配置、schema、store、排错、示例等）；Skill `skills/` 13；schema `schemas/` 5；图片 `assets/` 2（README 引用）；CLI 入口 `bin/` 1；根构建／许可／包配置完整。
-  - 已执行验证：静态路径／摘要比对；隔离目录 `pnpm@10.34.5 install --frozen-lockfile` + `pnpm build` 成功（修复 1 个裁剪导致的编译错误）；隔离 HOME／XDG 的临时项目 `init --tools oh-my-pi`、`new change`、`status`、`instructions`、`version`、`update --dry-run` 成功；`--tools claude` 明确拒绝且无写入。
-  - 未执行：上游测试（已删除）、OMP 全仓 fulltest／Rust／浏览器／发行验证；未提交、未推送。
-- [x] 明确区分：非业务文件清理、其他 Agent／独立安装源码裁剪、最小构建／CLI 验证各自是否完成；没有执行或失败的项如实保留。
-  - 非业务文件清理：**完成**。A.1–A.3（`test/`、`openspec/`、`.github/`、`.changeset/`、`.devcontainer/`、`.agents/`、`website/`、12 个根文件、`scripts/`）已删除；docs-lab 工程材料 7 个与失去引用的 SVG 2 个已删除；无空目录、无新增文件。
-  - 其他 Agent／独立安装源码裁剪：**代码完成**。A.4 的 33 个 adapter、Copilot 云集成、standalone installer 已删；`AI_TOOLS` 仅 OMP；链接／全局路径／探测分支与退役目标已清；CLI 无 `install [version]`，`--tools` 仅接受 `oh-my-pi`。源码 26 个修改文件通过静态引用核对与隔离构建。
-  - 最小构建／CLI 验证：**完成**。隔离目录 `pnpm build` 成功（修复 `update.ts` 缺失方法）；临时项目 `init`／`new`／`status`／`instructions`／`version`／`update --dry-run` 成功，`--tools claude` 明确拒绝，未写其他 Agent 目录。
-  - 原记录的文档残留已由 7.1 处理：权威支持矩阵、Copilot 云配置与显式支持声明已同步；历史 `/opsx` 旧命令说明仍保留为上游参考，不再作为当前支持范围声明。
-  - 未执行／不适用：上游测试、OMP 全仓 fulltest／Rust／浏览器／发行验证；无失败项需要恢复被删功能。
-- [x] 上游核心业务不因旧需求被改写，用户资料和其他 OMP 资源无附带改动。完成上述范围后停止，不追加宿主适配、规格迁移、提交、推送或发布。
-  - 核心业务：保留的 CLI、init/update、需求操作、artifact graph、schema、模板、校验、归档、Skill 生成与文档正文未被重写；改动仅为删除其他目标分支、清理引用及失效安装说明。验证：隔离构建成功，CLI 的 init／new／status／instructions／version／update 流程可用。
-  - 附带范围：`git status` 显示仓库内除 `todo.md` 外，改动全部位于 `packages/coding-agent/src/spec-driven/vendor/resources/openspec/`；OMP 根 `openspec/`、`packages/coding-agent/test/`、`AGENTS.md` 无改动；Superpowers／JCH 兄弟资源未触碰。
-  - 上游只读：`C:\Users\jiang\Documents\OpenSpec` 仍为 `ea635dd…`，`git status` 0 条。
-  - 未追加：无 OMP 宿主适配、无规格迁移、无提交、无推送、无发布；未安装或写入用户上游目录。隔离构建目录与临时项目仅位于 `F:\code2026\_build\`。
-  - 停止条件：按用户指令停止于此。代码裁剪、最小验证与 7.1 文档残留同步均已完成；历史 `/opsx` 说明保留为上游参考，不作为当前支持范围声明。
+## 10. 交付与停止
 
-## 执行提醒
+- [x] 汇总新合同、变更文件、实际验证及未验证项，确认需求、代码、Skill、CLI help 与文档一致。
+- [x] 明确列出本仓库 schema 迁移结果及仍待完成的既有业务材料，不宣称旧需求因此自动实现；AIReq 不在本轮适配或验收范围，不能声称其兼容性或权限隔离已完成。
+- [x] 清除本轮 throwaway fixture／验证脚本，不删除用户备份或无关文件；不留下旧兼容导出、空实现、双轨正文或失效入口。
+- [x] 完成后停止；不提交、不推送、不发布，除非另有明确授权。
 
-前版 todo 中整删 docs／docs-lab／assets／README／CHANGELOG 的方案已撤销；也不再使用“只保留四个目录和八个文件”的白名单。文件清理可以按明确目录执行，但第 5 节是有调用链约束的源码修改，不能用批量文件删除命令代替。
+### 本轮实施与直接验证证据
 
-## 附录 A：删除／修改清单（基准 `ea635dd`，2026-11-14）
+- 删除 vendor 的交付闭环：migration／legacy-cleanup／update-plan／profile-sync-drift／released-output-sweep／shared-skill-target、core/shared、command-generation、旧欢迎 UI 及无消费者导出。配置、profile、schema 模板解析、store、校验／归档和安全工具保留；无消费者的 core/templates 同时退役，12 份实际 Skill 为唯一正文源，无二次加载改写。
+- 12 份 Skill 的 executable／allowed-tools／compatibility 已统一宿主入口，保留项目路径／协议字段和业务工作流。README／install／vendor docs、内网指南、根项目规则与 Unreleased 同步；未修改用户全局规则、OpenWiki 生成正文或历史 CHANGELOG。
+- 根配置及 12 份活动元数据已备份到 `openspec/.migration-backup/openspec-2.0/` 后迁移；原有材料 SHA-256 验证保持，逐项清单与缺失项见 `docs-zh-CN/openspec-schema-migration.md`。真实 CLI 对全部 13 个活动 change 返回 spec-driven 且 isComplete=false，未伪造 design／tasks 或业务完成状态。
+- 隔离窄测试：23 pass、1 skip、0 fail，4438 expect；跳过为现有 Windows 条件下的原始脚本公共入口测试。其余覆盖资源摘要／路径、原生四产物与归档、12 Skill 发现／读取／补全、个人与项目同名覆盖、普通调用和 init 的预置 `.omp/skills`／`.agents/skills`／其他 Agent 命令及用户 Skill 保护。不把该跳过称为通过。
+- 真实发行构建：调用既有 bundleDist 与 compileCodingAgent；源码、npm bundle、Windows x64-modern binary 均运行 OpenSpec 2.0.0。运行 npm／binary 时临时移走整个 vendor resources，PATH 只含验证安装的 omp.exe，仍可 init／new／status／instructions／schema 查询；源码资源已在 finally 恢复。npm 使用已安装的声明外部依赖（验证目录通过 junction 指向依赖树），未发布或安装全局包；不宣称 npm 无需声明依赖。
+- 真实 BashTool 在仅含 omp.exe 的 PATH 下拒绝 node／裸 openspec，成功执行 omp openspec 的初始化、规划、status／instructions、严格校验及归档同步，断言主规格与归档状态；材料与项目全在临时目录。
+- 最终资源检查：manifest runtimeFormat=2、版本 2.0.0、12 Skill、sourceFingerprint 与最终输入一致，无 mini／omp-spec schema。热缓存下，模拟 1.15.0 旧格式、同版本旧指纹、缺 CLI dist、缺 commander 依赖及归档缺失五种场景均明确拒绝并指向准备入口；恢复最终归档后真实 CLI 再次成功。未以 fixture 冒称取得并执行历史官方发行包。
+- 实际生成 Bash／Zsh／Fish／PowerShell 补全均使用 omp openspec；help 不列 update，普通／dry-run JSON update 均未知命令非零退出。仅验证生成输出，不声称在未安装的四种 Shell 内完成交互验收。
+- 真实 PTY 中观察 `/skill:openspec-` 补全首项到第 12 项 verify，`/opsx-` 无补全；主会话显式 `/skill:openspec-propose` 后，由真实 task 子代理读取 skill://openspec-propose，主会话消费子代理结果并正常退出 0。fixture 核验真实工具返回、提供模型响应的本机服务无失败、项目仍未初始化。两次前置 fixture 分别补齐 task context 与本机模型列表接口后最终通过，未为 fixture 限制修改产品。
+- 平台范围：本机 Windows 10 x64、Bun 1.4.4；Windows baseline、Linux、macOS 产物未实测，不由当前 Windows modern 结果代称通过。未进入 AIReq 业务会话或新增其专项验收；用户明确要求的 fulltest 保持既有默认范围。
+- 五个本轮 throwaway 验证脚本、实际 npm／binary 临时产物与项目、TUI fixture／终端会话已清理；仅保留明确要求的迁移原始备份和材料摘要。不提交、不推送、不发布。
+- fast 首轮发现四个文件格式不合规及离线回归的闭包地址类型未收窄；仅对报告文件应用格式化，并在地址校验后捕获 port 常量。`packages/aireq-frontend/vite.config.ts` 与 `compact-tool-summary.ts` 仅为既有格式失败作格式化，不改业务行为；资源生成输入格式变化后已重新准备。最终默认 fast 通过，不把原有 lint 警告称为已消除。
+- fulltest 首轮暴露遗漏的 TUI 五项旧合同、未准备的 OpenWiki 资源、入口资源未就绪仍可发布服务及旧 Compact 显示断言。已补齐 OpenWiki／AIReq 官方资源准备，仅修复共享 HTTP 应用发布前读取首页资源的既有就绪缺口，不改 AIReq 业务流程、会话、schema、Skill 策略或权限。思考测试按已批准的最新单行语义验证；保留编辑卡的测试等待合法的三秒临时预览结束后再核验完成活动行，保留逐帧稳定性与真实文件内容断言，没有放宽超时、增加 skip 或调整门禁。
+- 首轮 Git 子进程超时没有确定的业务缺陷证据，未作猜测性改动或延长超时；最终默认门禁相关用例通过。中间失败均保留在各次测试报告中，不覆盖为成功。
 
-路径均相对 `packages/coding-agent/src/spec-driven/vendor/resources/openspec/`。删除单位是显式路径，不做文件名通配；第 5 节源码项必须先改调用方再删文件。
+### 最终默认门禁
 
-### A.1 目录级删除（1022 个文件）
+|命令|实际结果|总耗时|
+|---|---|---|
+|`bun run fastcheck`|PASS，exit=0|21.3 秒|
+|`bun run fulltest`|PASS，exit=0|312.5 秒|
 
-| 相对路径 | 文件数 | 依据 |
-|---|---:|---|
-| `test/` | 293 | 第 4 节：上游 UT／集成／fixtures |
-| `openspec/` | 663 | 第 4 节：上游自身需求、change、archive、explorations、initiatives |
-| `.github/` | 12 | 第 4 节：上游 CI／Issue／PR 模板 |
-| `.changeset/` | 2 | 第 4 节：上游发布管理 |
-| `.devcontainer/` | 2 | 第 4 节：上游开发容器 |
-| `.agents/` | 8 | 第 4 节：上游仓库开发用 Agent 配置副本（保留根 `skills/`） |
-| `website/` | 42 | 第 3 节完成内容提取后已删除 |
-
-### A.2 根文件删除（12 个）
-
-`.actrc`、`.coderabbit.yaml`、`flake.nix`、`flake.lock`、`vitest.config.ts`、`vitest.setup.ts`、`eslint.config.js`、`AGENTS.md`（0 字节）、`CONTRIBUTING.md`、`MAINTAINERS.md`、`openspec-parallel-merge-plan.md`、`README_OLD.md`（最后一项须先核对内容已被当前文档覆盖）。
-
-### A.3 `scripts/` 删除（15 个，均须先确认无保留代码导入）
-
-`scripts/README.md`、`scripts/binary/build.mjs`、`scripts/binary/entry.mjs`、`scripts/binary/install.sh`、`scripts/binary/install.ps1`、`scripts/binary/install-check.sh`、`scripts/binary/smoke.sh`、`scripts/binary/e2e.sh`、`scripts/capture-released-fingerprints.mjs`、`scripts/generate-skillssh.mjs`、`scripts/pack-version-check.mjs`、`scripts/parity-hash-shared.mjs`、`scripts/regen-parity-hashes.mjs`、`scripts/skillssh-shared.mjs`、`scripts/update-flake.sh`。
-
-已知消费者：`package.json` 的 `generate:skills`／`regen:parity-hashes`／`check:pack-version`／`release:ci`；`.github/` 工作流（随 A.1 删除）；`src/commands/install-standalone.ts` 仅以字符串引用 `scripts/binary` 下载地址（该文件在 A.5 删除）；`src/core/shared/released-generated-fingerprints.ts` 仅注释提及生成脚本，数据本身保留。
-
-### A.4 adapter 与专用集成删除（35 个文件）
-
-- `src/core/command-generation/adapters/` 中除 `oh-my-pi.ts`、`index.ts` 外的 33 个文件：`amazon-q.ts`、`antigravity.ts`、`atomcode.ts`、`auggie.ts`、`bob.ts`、`claude.ts`、`cline.ts`、`codeassistant.ts`、`codebuddy.ts`、`codestudio.ts`、`command-code.ts`、`continue.ts`、`costrict.ts`、`crush.ts`、`cursor.ts`、`devin.ts`、`easycode.ts`、`factory.ts`、`gemini.ts`、`gigacode.ts`、`github-copilot.ts`、`iflow.ts`、`junie.ts`、`kilocode.ts`、`kiro.ts`、`lingma.ts`、`opencode.ts`、`pi.ts`、`qoder.ts`、`qwen.ts`、`roocode.ts`、`trae.ts`、`zcode.ts`。
-- `src/core/github-copilot/cloud-agent.ts`（Copilot 云 Agent 集成，调用方见 A.5）。
-- `src/commands/install-standalone.ts`（CLI 独立安装实现）。
-
-### A.5 源码／配置修改点（12 个文件）
-
-| 相对路径 | 修改内容 |
-|---|---|
-| `src/core/command-generation/adapters/index.ts` | 仅保留 `oh-my-pi` 导出 |
-| `src/core/command-generation/registry.ts` | 仅保留 `ohMyPiAdapter` 的 import 与注册 |
-| `src/core/config.ts` | `AI_TOOLS`（L102 起）仅留 `oh-my-pi`；移除 `pi`（L145）、`zcode`（L155）及其余条目、`UNIVERSAL_TOOL_ID`／`getUniversalTool`／`universalToolFallbackHint`、`TOOL_ID_ALIASES`、`retired-tools` 相关提示的失效消费者 |
-| `src/core/available-tools.ts` | 移除非 OMP 探测分支，保留路径安全 |
-| `src/core/shared-skill-target.ts`、`src/core/shared/skill-paths.ts`、`src/core/shared/tool-detection.ts`、`src/core/shared/shared-skill-install.ts`、`src/core/shared/skill-links.ts` | 清除非 OMP 专属探测／全局 HOME 写入／软链接安装分支与失效 import |
-| `src/core/retired-tools.ts`、`src/core/legacy-cleanup.ts`、`src/core/released-output-sweep.ts` | 不再遍历／迁移／删除其他 Agent 用户目录；保留 OMP 旧输出识别与防误删检查 |
-| `src/core/init.ts` | 移除 `cloud-agent` import（L92）、Copilot 选择与 `--copilot-cloud` 分支（L346/409/415/1048/1309），改接裁剪后的工具集 |
-| `src/core/update.ts` | 同上去除 Copilot 集成与已删目标引用 |
-| `src/cli/index.ts` | 取消 `install [version]` 命令注册（L455–460）；同步 tools 参数帮助／校验／选择器 |
-| `package.json` | 删除测试／lint／release／changeset／资源维护脚本与对应 devDependencies，保留 `build`、`prepare`、仍有效入口 |
-| `pnpm-lock.yaml` | 用 `pnpm@10.34.5` 按裁剪后的 `package.json` 更新，保留有效 overrides |
-| `docs/supported-tools.md` 等文档 | 移除被删目标与失效本地链接（随第 3、4 节执行时为待定项） |
-
-### A.6 保留基线（摘要核对的对照面）
-
-`src/` 224 个文件（减去 A.4 的 2 个）、`docs/` 27、`docs-lab/` 43、`assets/` 4、`skills/` 13、`schemas/` 5、`bin/` 1，以及 `LICENSE`、`README.md`、`CHANGELOG.md`、`SECURITY.md`、`install.md`、`package.json`、`pnpm-workspace.yaml`、`tsconfig.json`、`build.js`、`.gitattributes`、`.gitignore`、`pnpm-lock.yaml`。
-
-## 后续变更记录（2026-11-14）
-
-- [x] 删除 `docs-lab/`（36 个文件），仅保留 `docs/`（27 个文件）。
-  - 依据：`docs-lab/` 是上游并行重写的新站文档源，删除前 18/36 页仍为骨架（含 `TODO`／空页），其唯一引用者 `website/docs.sync.config.mjs` 已在本轮第 4 节删除；`docs/` 正文完整，作为离线参考。
-  - 同步修改：`docs/README.md` 移除指向 `../docs-lab/` 的失效链接（原提示语改为“本离线副本仅保留 legacy 树”）。
-  - 验证：调用 `buildSpecDrivenArchive()` 解包核对，`openspec/docs/` 27 项、`docs-lab` 0 项；文档内相对链接扫描无新增断链。
+完整报告：`runs/test-timing/2026-11-14T17-02-43.446Z-66340-4974396a/run.json`。fulltest 为既有默认 fork-features 范围，覆盖 TypeScript／Rust fork 用例、关联脚本、全项目静态检查、native 构建与 native-TUI smoke；不冒称运行 Python／Robomp、上游专属套件、真实桌面输入、凭据联网集成或独立 Go／Rust SDK。最终门禁后仅更新本状态文件，不再改实现、测试或资源。

@@ -18,7 +18,7 @@ Use whichever fits the moment. Small wording tweak? Edit the file. Substantive r
 
 Just update it. Same change, refined.
 
-If you're using the expanded commands, the natural flow is: edit the artifact, then run `/opsx:continue` to pick up from the new state, or `/opsx:apply` to keep implementing against the updated plan. If you're on the default `core` commands, edit the artifact and run `/opsx:apply`; it reads the current files, so it builds against whatever the artifacts now say.
+All planning Skills are bundled. After editing, use `/skill:openspec-continue-change` to create the next ready artifact, or `/skill:openspec-apply-change` to continue implementation against the current files. Use `/skill:openspec-update-change` when you want the AI to revise related planning materials coherently; no installation profile switch is needed.
 
 The mental model: artifacts are the live plan, not a signed contract. The AI always works from their current contents, so editing them steers the work.
 
@@ -30,20 +30,20 @@ You: [edit design.md, or tell the AI:]
 
 AI:  Updated design.md. The task list still fits; want me to continue applying?
 
-You: /opsx:apply
+You: /skill:openspec-apply-change
 ```
 
-This answers a very common question: there's no separate "update proposal" command because you don't need one. The file is the source of truth, and editing it (by hand or via the AI) is the update.
+The file is the source of truth. Direct edits and `/skill:openspec-update-change` both revise the current plan; the latter is not the removed CLI resource-update command.
 
 ## "How do I go back to review after implementing?"
 
 You don't have to "go back," because you never left. The workflow is fluid: review, edit, and implementation aren't sequential phases you're trapped in.
 
-Concretely, after some `/opsx:apply` work:
+Concretely, after some `/skill:openspec-apply-change` work:
 
-- Want to re-examine the plan? Open the artifacts and read them, or run `openspec show <change>` in your terminal for a consolidated view.
+- Want to re-examine the plan? Open the artifacts and read them, or run `omp openspec show <change>` in your terminal for a consolidated view.
 - Found something to change? Edit the artifact (or ask the AI to), then continue.
-- Want a structured check that the code matches the plan? Run `/opsx:verify` (expanded command). It reports completeness, correctness, and coherence without blocking anything. See [Workflows: Verify](workflows.md#verify-check-your-work).
+- Want a structured check that the code matches the plan? Run `/skill:openspec-verify-change` (bundled Skill). It reports completeness, correctness, and coherence without blocking anything. See [Workflows: Verify](workflows.md#verify-check-your-work).
 
 There's no "review phase" to return to, because review is something you can do at any point, including after implementation.
 
@@ -54,7 +54,7 @@ This happens constantly and it's fine. You tweaked something in your editor, and
 - **The code is now correct, the spec is stale.** Update the delta spec (and tasks, if relevant) to describe the behavior you actually shipped. The spec should match reality before you archive, because archiving merges the spec into your source of truth.
 - **The spec is correct, the code drifted.** Keep building or fixing until the code matches the spec.
 
-A fast way to surface mismatches is `/opsx:verify`: it reads your artifacts and your code and tells you where they diverge. Treat its output as a to-do list for reconciliation, then archive once they agree.
+A fast way to surface mismatches is `/skill:openspec-verify-change`: it reads your artifacts and your code and tells you where they diverge. Treat its output as a to-do list for reconciliation, then archive once they agree.
 
 The principle: at archive time, your specs become the truth of record. So before you archive, make the specs honest about what the code does. Manual edits are welcome; just don't let them quietly desync the spec.
 
@@ -63,7 +63,7 @@ The principle: at archive time, your specs become the truth of record. So before
 If a generated proposal misses the mark, you have three good moves:
 
 - **Iterate in place.** Tell the AI what's off ("the scope is too broad, drop the admin features") and let it revise. Cheapest and usually right.
-- **Explore first, then re-propose.** If the problem is that the idea itself is unclear, step back to `/opsx:explore`, think it through, and let a sharper proposal come out of that. See [Explore First](explore.md).
+- **Explore first, then re-propose.** If the problem is that the idea itself is unclear, step back to `/skill:openspec-explore`, think it through, and let a sharper proposal come out of that. See [Explore First](explore.md).
 - **Start fresh.** If the intent has fundamentally changed, a new change can be clearer than patching the old one.
 
 That last move has its own decision guide, next.
@@ -80,12 +80,12 @@ There's a full flowchart and worked examples in [Workflows: When to Update vs St
 
 ## A note on tasks
 
-`tasks.md` is a living checklist, not a frozen plan. As you implement, you can add tasks you discover, remove ones that turned out unnecessary, or reorder them. The AI checks items off as it completes them during `/opsx:apply`, and it resumes from the first unchecked task if you come back later. Editing the list mid-flight is expected.
+`tasks.md` is a living checklist, not a frozen plan. As you implement, you can add tasks you discover, remove ones that turned out unnecessary, or reorder them. The AI checks items off as it completes them during `/skill:openspec-apply-change`, and it resumes from the first unchecked task if you come back later. Editing the list mid-flight is expected.
 
 ## Where to go next
 
 - [Workflows](workflows.md) - patterns, plus the update-vs-new decision guide
 - [Reviewing a Change](reviewing-changes.md) - the two-minute pass on a plan before you build it
 - [Explore First](explore.md) - the place to step back to when an idea needs rethinking
-- [Commands](commands.md) - `/opsx:continue`, `/opsx:apply`, and `/opsx:verify` in detail
+- [Commands](commands.md) - `/skill:openspec-continue-change`, `/skill:openspec-apply-change`, and `/skill:openspec-verify-change` in detail
 - [Concepts: Artifacts](concepts.md#artifacts) - what each artifact is for

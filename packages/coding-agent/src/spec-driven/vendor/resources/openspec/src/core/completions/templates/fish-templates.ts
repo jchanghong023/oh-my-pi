@@ -21,7 +21,9 @@ function __fish_openspec_using_command_path
     end
 
     set -l tokens (commandline -opc)
-    set -e tokens[1]
+    test "$tokens[2]" = openspec; or return 1
+    set -e tokens[1..2]
+    test (count $expected) -gt 0; or return 0
     set -l path
     set -l skip 0
     for token in $tokens
@@ -53,7 +55,8 @@ end
 
 function __fish_openspec_no_subcommand
     set -l tokens (commandline -opc)
-    set -e tokens[1]
+    test "$tokens[2]" = openspec; or return 1
+    set -e tokens[1..2]
     for token in $tokens
         if test "$token" != --no-color
             return 1
@@ -89,7 +92,8 @@ function __fish_openspec_positional_index
     set -l depth $argv[2]
     set -l value_flags $argv[3..]
     set -l tokens (commandline -opc)
-    set -e tokens[1]
+    test "$tokens[2]" = openspec; or return 1
+    set -e tokens[1..2]
     set -l count 0
     set -l options 1
     set -l skip 0
@@ -120,13 +124,13 @@ end`;
 export const FISH_DYNAMIC_HELPERS = `# Dynamic completion helpers
 
 function __fish_openspec_changes
-    openspec __complete changes 2>/dev/null | while read -l id desc
+    omp openspec __complete changes 2>/dev/null | while read -l id desc
         printf '%s\\t%s\\n' "$id" "$desc"
     end
 end
 
 function __fish_openspec_specs
-    openspec __complete specs 2>/dev/null | while read -l id desc
+    omp openspec __complete specs 2>/dev/null | while read -l id desc
         printf '%s\\t%s\\n' "$id" "$desc"
     end
 end
@@ -137,7 +141,7 @@ function __fish_openspec_items
 end
 
 function __fish_openspec_schemas
-    openspec __complete schemas 2>/dev/null | while read -l id desc
+    omp openspec __complete schemas 2>/dev/null | while read -l id desc
         printf '%s\\t%s\\n' "$id" "$desc"
     end
 end`;

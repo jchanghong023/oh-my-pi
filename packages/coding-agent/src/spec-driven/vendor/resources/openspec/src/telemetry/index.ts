@@ -5,7 +5,7 @@
  * - Only tracks command name and version
  * - No arguments, file paths, or content
  * - Opt-out via OPENSPEC_TELEMETRY=0, DO_NOT_TRACK=1, or
- *   `openspec config set telemetry.enabled false`
+ *   `omp openspec config set telemetry.enabled false`
  * - Auto-disabled in CI environments
  * - Anonymous ID is a random UUID with no relation to the user
  *
@@ -213,7 +213,7 @@ export async function maybeShowTelemetryNotice(
     // Display notice on stderr, not stdout: stdout is reserved for command
     // output (raw passthrough text, JSON, etc.) and must stay parser/pipe-safe.
     console.error(
-      'Note: OpenSpec collects anonymous usage stats. Opt out: OPENSPEC_TELEMETRY=0 or openspec config set telemetry.enabled false'
+      'Note: OpenSpec collects anonymous usage stats. Opt out: OPENSPEC_TELEMETRY=0 or omp openspec config set telemetry.enabled false'
     );
 
     // Mark as seen

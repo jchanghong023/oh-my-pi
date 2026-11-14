@@ -206,7 +206,7 @@ export function isConfigRootObject(parsed: unknown): boolean {
 export function unreadableGlobalConfigMessage(configPath: string): string {
   return (
     `Refusing to overwrite ${configPath}: it could not be parsed, so saving would replace every setting in it. ` +
-    'Fix it with "openspec config edit", or reset it with "openspec config reset --all".'
+    'Fix it with "omp openspec config edit", or reset it with "omp openspec config reset --all".'
   );
 }
 

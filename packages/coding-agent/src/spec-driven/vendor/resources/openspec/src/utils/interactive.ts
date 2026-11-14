@@ -42,7 +42,7 @@ export function isInteractive(value?: boolean | InteractiveOptions): boolean {
  * - It is not a substitute for `isInteractive()`. This classifies a prompt
  *   that has *already failed*, so piped answers are unaffected: an answer
  *   that arrives resolves the prompt and never reaches this check. Refusing
- *   to prompt up front would break `printf 'y\n' | openspec archive ...`,
+ *   to prompt up front would break `printf 'y\n' | omp openspec archive ...`,
  *   which works today.
  * - It is not a cancellation check. Ctrl-C raises the same error class, and
  *   it reaches a process whose stdin is a pipe just as easily as one at a
@@ -53,7 +53,7 @@ export function isInteractive(value?: boolean | InteractiveOptions): boolean {
  * and `--no-interactive` count even when a runner allocated a pty. It also
  * counts a redirected stdout: `confirmPrompt` drops to the plain reader whenever
  * *either* stream is not a TTY, so a stdin-TTY-but-stdout-redirected run
- * (`openspec archive x > log.txt` from a terminal) that hits EOF must classify
+ * (`omp openspec archive x > log.txt` from a terminal) that hits EOF must classify
  * the same way the prompt was selected — otherwise it would leak the raw
  * `ExitPromptError` instead of the `--yes` guidance.
  */
@@ -84,7 +84,7 @@ export type ConfirmPrompt = {
  * sequences are noise, and in some non-TTY hosts the render loop never settles
  * and repeats `ESC[NNG` cursor moves until the disk fills (#1526). Reading
  * the answer ourselves keeps the single piped answer @inquirer ever supported
- * working (`printf 'y\n' | openspec archive ...`) without emitting any escapes.
+ * working (`printf 'y\n' | omp openspec archive ...`) without emitting any escapes.
  *
  * `io` overrides the streams; it exists for tests and mirrors @inquirer's own
  * `{ input, output }` context. Production callers pass only the prompt.

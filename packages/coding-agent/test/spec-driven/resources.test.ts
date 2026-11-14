@@ -3,17 +3,16 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import {
 	ensureSpecDrivenResources,
 	loadSpecDrivenSkill,
 	resolveSpecDrivenResourcePath,
 	runOpenSpec,
-	runOpenSpecDirectory,
 	runSuperpowersScript,
 	type SpecDrivenProcessResult,
 } from "../../src/spec-driven/resources";
+import inventory from "../../src/spec-driven/vendor/inventory.json";
 
 const upstreamOpenSpecSkills = [
 	"openspec-apply-change",
@@ -85,7 +84,7 @@ afterAll(async () => {
 describe("pinned upstream resources", () => {
 	it("loads all exact trusted skill identities with their complete relative trees", async () => {
 		const resources = await ensureSpecDrivenResources();
-		expect(resources.manifest.openspec.version).toBe("1.15.0");
+		expect(resources.manifest.openspec.version).toBe(inventory.openspec.version);
 		expect(resources.manifest.superpowers.revision).toBe("2ce8aa15d05bd57213e6f746f953aafb7ded7a8b");
 		expect(
 			resources.manifest.skills
@@ -162,11 +161,11 @@ describe("pinned upstream resources", () => {
 		}
 	});
 
-	it("initializes the native default schema without tool integrations when requested", async () => {
+	it("initializes the native default schema without installing tool integrations", async () => {
 		const project = path.join(temporary, "native-init");
 		await fs.mkdir(project);
 		const cli = await isolatedOpenSpec(project);
-		expect((await cli(["init", "--tools", "none"])).exitCode).toBe(0);
+		expect((await cli(["init"])).exitCode).toBe(0);
 		const config = await fs.readFile(path.join(project, "openspec", "config.yaml"), "utf8");
 		expect(config).toMatch(/^schema:\s*spec-driven\s*$/m);
 		for (const directory of ["specs", "changes", "changes/archive"]) {
@@ -175,52 +174,67 @@ describe("pinned upstream resources", () => {
 		expect((await fs.readdir(project)).sort()).toEqual([".consumer-home", "openspec"]);
 	}, 30_000);
 
-	it("defaults the public wrapper to the mini graph and keeps native archive validation", async () => {
-		const project = path.join(temporary, "mini-wrapper");
+	it("preserves native defaults through the public init and schema-less change wrapper", async () => {
+		const project = path.join(temporary, "native-wrapper");
 		await fs.mkdir(project);
-		const cli = (args: string[]) => runOpenSpec(args, project);
-		expect((await cli(["init"])).exitCode).toBe(0);
-		expect((await cli(["schema", "validate", "mini", "--json"])).exitCode).toBe(0);
-		expect((await cli(["new", "change", "mini-change"])).exitCode).toBe(0);
-		const change = path.join(project, "openspec", "changes", "mini-change");
-		const initial = JSON.parse((await cli(["status", "--change", "mini-change", "--json"])).stdout);
-		expect(initial.schemaName).toBe("mini");
-		expect(initial.artifacts.map((entry: { id: string }) => entry.id).sort()).toEqual(["proposal", "specs"]);
-		for (const artifact of ["proposal", "specs"]) {
-			const instructions = await cli(["instructions", artifact, "--change", "mini-change", "--json"]);
-			expect(instructions.exitCode).toBe(0);
-			expect(JSON.parse(instructions.stdout).artifactId).toBe(artifact);
-		}
-		await fs.writeFile(path.join(change, "proposal.md"), proposalContent);
-		const specDir = path.join(change, "specs", "offline-resources");
-		await fs.mkdir(specDir, { recursive: true });
-		await fs.writeFile(path.join(specDir, "spec.md"), deltaContent.slice(0, deltaContent.indexOf("#### Scenario:")));
-		expect((await cli(["archive", "mini-change", "--yes"])).exitCode).not.toBe(0);
-		expect(await Bun.file(path.join(change, "proposal.md")).exists()).toBe(true);
-		await fs.writeFile(path.join(specDir, "spec.md"), deltaContent);
-		expect((await cli(["validate", "mini-change", "--strict", "--json"])).exitCode).toBe(0);
-		expect(JSON.parse((await cli(["status", "--change", "mini-change", "--json"])).stdout).isComplete).toBe(true);
-		expect((await cli(["archive", "mini-change", "--yes"])).exitCode).toBe(0);
-		const spec = await fs.readFile(path.join(project, "openspec", "specs", "offline-resources", "spec.md"), "utf8");
-		expect(spec).toContain("#### Scenario: Read requirements offline");
-	}, 60_000);
+		const target = path.join(project, "target with spaces");
+		const initialized = await runOpenSpec(["init", "--language", "Chinese", target], project);
+		expect(initialized.exitCode).toBe(0);
+		const configPath = path.join(target, "openspec", "config.yaml");
+		const config = await Bun.file(configPath).text();
+		expect(config).toMatch(/^schema:\s*spec-driven\s*$/m);
+		expect(config).toContain("Language: Chinese");
+		expect(initialized.stdout).toContain("schema: spec-driven");
+		const conflicting = await runOpenSpec(["init", target, "--language", "English"], project);
+		expect(conflicting.exitCode).not.toBe(0);
+		expect(await Bun.file(configPath).text()).toBe(config);
 
-	it("installs and updates native tool integrations", async () => {
-		const project = path.join(temporary, "native-tool-integration");
+		const schemaLess = path.join(project, "schema-less");
+		await fs.mkdir(path.join(schemaLess, "openspec", "changes"), { recursive: true });
+		const created = await runOpenSpec(["new", "change", "native-change"], schemaLess);
+		expect(created.exitCode).toBe(0);
+		const status = await runOpenSpec(["status", "--change", "native-change", "--json"], schemaLess);
+		expect(status.exitCode).toBe(0);
+		const graph = JSON.parse(status.stdout);
+		expect(graph.schemaName).toBe("spec-driven");
+		expect(graph.artifacts.map((entry: { id: string }) => entry.id).sort()).toEqual([
+			"design",
+			"proposal",
+			"specs",
+			"tasks",
+		]);
+		expect(await Bun.file(path.join(schemaLess, "openspec", "config.yaml")).text()).toMatch(
+			/^schema:\s*spec-driven\s*$/m,
+		);
+	}, 30_000);
+
+	it("rejects the removed update command without changing project integrations", async () => {
+		const project = path.join(temporary, "removed-update");
 		await fs.mkdir(project);
 		const cli = await isolatedOpenSpec(project);
-		expect((await cli(["init", "--tools", "claude", "--profile", "core"])).exitCode).toBe(0);
-		const applySkill = path.join(project, ".claude", "skills", "openspec-apply-change", "SKILL.md");
-		expect(await Bun.file(applySkill).exists()).toBe(true);
-		expect((await cli(["update"])).exitCode).toBe(0);
-		expect(await Bun.file(applySkill).exists()).toBe(true);
+		const skill = path.join(project, ".omp", "skills", "custom", "SKILL.md");
+		await Bun.write(skill, "User-owned integration\n");
+		for (const args of [["update"], ["update", "--dry-run", "--json"]]) {
+			const result = await cli(args);
+			expect(result.exitCode).not.toBe(0);
+			expect(result.stderr).toContain("unknown command 'update'");
+			expect(result.stdout).toBe("");
+			expect(await Bun.file(skill).text()).toBe("User-owned integration\n");
+		}
+		const profile = await cli(["config", "profile", "core"]);
+		expect(profile.exitCode).toBe(0);
+		const config = await Bun.file(path.join(project, ".consumer-home", "config", "openspec", "config.json")).json();
+		expect(config.profile).toBe("core");
+		expect(await Bun.file(skill).text()).toBe("User-owned integration\n");
+		expect(await Bun.file(path.join(project, "openspec", "config.yaml")).exists()).toBe(false);
+		expect(profile.stdout).not.toContain("openspec update");
 	}, 30_000);
 
 	it("uses the native four-artifact default schema through planning and archive", async () => {
 		const project = path.join(temporary, "native-default");
 		await fs.mkdir(project);
 		const cli = await isolatedOpenSpec(project);
-		expect((await cli(["init", "--tools", "none"])).exitCode).toBe(0);
+		expect((await cli(["init"])).exitCode).toBe(0);
 		expect((await cli(["new", "change", "native-change"])).exitCode).toBe(0);
 		const changeDir = path.join(project, "openspec", "changes", "native-change");
 		const initial = await cli(["status", "--change", "native-change", "--json"]);
@@ -294,7 +308,7 @@ describe("pinned upstream resources", () => {
 		const project = path.join(temporary, "invalid-delta-archive");
 		await fs.mkdir(project);
 		const cli = await isolatedOpenSpec(project);
-		expect((await cli(["init", "--tools", "none"])).exitCode).toBe(0);
+		expect((await cli(["init"])).exitCode).toBe(0);
 		expect((await cli(["new", "change", "invalid-delta"])).exitCode).toBe(0);
 		const changeDir = path.join(project, "openspec", "changes", "invalid-delta");
 		await fs.writeFile(path.join(changeDir, "proposal.md"), proposalContent);
@@ -404,91 +418,16 @@ describe("pinned upstream resources", () => {
 		await expect(runSuperpowersScript("skills/../package.json", [], temporary)).rejects.toThrow();
 	});
 
-	it("resolves the bundled Dev schema and rejects a project override", async () => {
-		const cwd = path.join(temporary, "dev-schema");
-		const home = path.join(cwd, ".consumer-home");
-		await fs.mkdir(cwd);
-		const moduleUrl = pathToFileURL(path.resolve(import.meta.dir, "../../src/spec-driven/resources.ts")).href;
-		const script = `
-			const { assertAIReqSpecSchema, ensureSpecDrivenResources, runOpenSpec } = await import(${JSON.stringify(moduleUrl)});
-			const result = await runOpenSpec(["schema", "which", "omp-spec", "--json"], process.cwd());
-			let error = null;
-			try { await assertAIReqSpecSchema(process.cwd()); } catch (e) { error = String(e); }
-			console.log(JSON.stringify({ result, error, schemaPath: (await ensureSpecDrivenResources()).specSchemaPath }));
-		`;
-		async function resolve() {
-			const child = Bun.spawn([process.execPath, "--eval", script], {
-				cwd,
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
-				env: {
-					...process.env,
-					BUN_BE_BUN: "1",
-					NODE_PATH: "",
-					HOME: home,
-					USERPROFILE: home,
-					APPDATA: path.join(home, "appdata"),
-					LOCALAPPDATA: path.join(home, "localappdata"),
-					XDG_CONFIG_HOME: path.join(home, "config"),
-					XDG_DATA_HOME: path.join(home, "data"),
-					XDG_CACHE_HOME: path.join(home, "cache"),
-					DO_NOT_TRACK: "1",
-					OPENSPEC_TELEMETRY: "0",
-				},
-			});
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(child.stdout).text(),
-				new Response(child.stderr).text(),
-				child.exited,
-			]);
-			if (exitCode !== 0) throw new Error(stderr);
-			return JSON.parse(stdout);
-		}
-
-		const bundled = await resolve();
-		expect(bundled.result.exitCode).toBe(0);
-		const resolution = JSON.parse(bundled.result.stdout);
-		expect(resolution.source).toBe("package");
-		expect(await fs.realpath(resolution.path)).toBe(await fs.realpath(path.dirname(bundled.schemaPath)));
-		expect(bundled.error).toBeNull();
-
-		const override = path.join(cwd, "openspec", "schemas", "omp-spec");
-		await fs.mkdir(path.dirname(override), { recursive: true });
-		await fs.cp(path.dirname(bundled.schemaPath), override, { recursive: true });
-		const shadowed = await resolve();
-		expect(shadowed.result.exitCode).toBe(0);
-		expect(JSON.parse(shadowed.result.stdout).source).toBe("project");
-		expect(shadowed.error).toContain("an external schema shadows it");
-		await fs.rm(override, { recursive: true });
-		const userOverride = path.join(home, "data", "openspec", "schemas", "omp-spec");
-		await fs.mkdir(path.dirname(userOverride), { recursive: true });
-		await fs.cp(path.dirname(bundled.schemaPath), userOverride, { recursive: true });
-		const userShadowed = await resolve();
-		expect(userShadowed.result.exitCode).toBe(0);
-		expect(JSON.parse(userShadowed.result.stdout).source).toBe("user");
-		expect(userShadowed.error).toContain("an external schema shadows it");
-		await expect(fs.stat(path.join(cwd, "openspec/changes"))).rejects.toMatchObject({ code: "ENOENT" });
-	}, 30_000);
-
-	it("uses the real CLI for requirements-only status and proposal/spec instructions", async () => {
-		const resources = await ensureSpecDrivenResources();
+	it("preserves project context through native proposal and spec instructions", async () => {
 		const cwd = path.join(temporary, "real-project");
-		await fs.mkdir(path.join(cwd, "openspec", "schemas"), { recursive: true });
-		await fs.cp(path.dirname(resources.specSchemaPath), path.join(cwd, "openspec", "schemas", "omp-spec"), {
-			recursive: true,
-		});
+		await fs.mkdir(path.join(cwd, "openspec"), { recursive: true });
 		const userContext = "Literal user data: openspec new change user-data";
 		await fs.writeFile(
 			path.join(cwd, "openspec", "config.yaml"),
-			`schema: omp-spec\ncontext: ${JSON.stringify(userContext)}\n`,
+			`schema: spec-driven\ncontext: ${JSON.stringify(userContext)}\n`,
 		);
-		const created = await runOpenSpec(["new", "change", "resource-probe", "--schema", "omp-spec"], cwd);
+		const created = await runOpenSpec(["new", "change", "resource-probe", "--schema", "spec-driven"], cwd);
 		expect(created.exitCode).toBe(0);
-		const initial = await runOpenSpec(["status", "--change", "resource-probe", "--json"], cwd);
-		expect(initial.exitCode).toBe(0);
-		const status = JSON.parse(initial.stdout);
-		expect(status.artifacts.map((artifact: { id: string }) => artifact.id).sort()).toEqual(["proposal", "specs"]);
 		const proposal = await runOpenSpec(["instructions", "proposal", "--change", "resource-probe", "--json"], cwd);
 		expect(proposal.exitCode).toBe(0);
 		expect(JSON.parse(proposal.stdout).artifactId).toBe("proposal");
@@ -500,10 +439,6 @@ describe("pinned upstream resources", () => {
 		const specs = await runOpenSpec(["instructions", "specs", "--change", "resource-probe", "--json"], cwd);
 		expect(specs.exitCode).toBe(0);
 		expect(JSON.parse(specs.stdout).artifactId).toBe("specs");
-		const forbidden = await runOpenSpec(["instructions", "tasks", "--change", "resource-probe", "--json"], cwd);
-		expect(forbidden.exitCode).not.toBe(0);
-		expect(await Bun.file(path.join(cwd, "openspec/changes/resource-probe/tasks.md")).exists()).toBe(false);
-		expect(await Bun.file(path.join(cwd, "openspec/changes/resource-probe/design.md")).exists()).toBe(false);
 		const invalid = await runOpenSpec(["status", "--change", "not-a-change", "--json"], cwd);
 		expect(invalid.exitCode).not.toBe(0);
 	});
@@ -535,7 +470,7 @@ describe("pinned upstream resources", () => {
 			child.exited,
 		]);
 		expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
-		expect(stdout.trim()).toBe("1.15.0");
+		expect(stdout.trim()).toBe(inventory.openspec.version);
 		const templates = Bun.spawn([process.execPath, entry, "templates", "--json"], {
 			cwd: isolatedCwd,
 			stdin: "ignore",
@@ -801,35 +736,3 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 		}
 	}, 30_000);
 }
-
-it("the packaged directory bridge validates real archived deltas without rebuilding an active change", async () => {
-	const cwd = path.join(temporary, "native-directory-bridge");
-	await fs.mkdir(cwd);
-	expect((await runOpenSpec(["new", "change", "directory-bridge", "--schema", "omp-spec"], cwd)).exitCode).toBe(0);
-	const active = path.join(cwd, "openspec/changes/directory-bridge");
-	await fs.writeFile(path.join(active, "proposal.md"), proposalContent);
-	const capability = path.join(active, "specs/offline-resources");
-	await fs.mkdir(capability, { recursive: true });
-	await fs.writeFile(path.join(capability, "spec.md"), deltaContent);
-	const archived = await runOpenSpec(["archive", "directory-bridge", "--yes", "--json"], cwd);
-	expect(archived.exitCode).toBe(0);
-	const archives = await fs.readdir(path.join(cwd, "openspec/changes/archive"));
-	const name = archives.find(entry => entry.endsWith("-directory-bridge"));
-	if (!name) throw new Error("Native archive did not publish the change");
-	const actual = path.join(cwd, "openspec/changes/archive", name);
-	const input = { projectRoot: cwd, changeDir: actual };
-	const valid = await runOpenSpecDirectory("validate-directory", input, cwd);
-	expect(valid.exitCode).toBe(0);
-	expect(JSON.parse(valid.stdout).valid).toBe(true);
-	const main = await fs.readFile(path.join(cwd, "openspec/specs/offline-resources/spec.md"));
-	await fs.writeFile(
-		path.join(actual, "specs/offline-resources/spec.md"),
-		"## ADDED Requirements\n\n### Requirement: Broken\nThe system SHALL work.\n",
-	);
-	const invalid = await runOpenSpecDirectory("validate-directory", input, cwd);
-	expect(invalid.exitCode).not.toBe(0);
-	expect(JSON.parse(invalid.stdout).valid).toBe(false);
-	expect(await fs.readFile(path.join(cwd, "openspec/specs/offline-resources/spec.md"))).toEqual(main);
-	await expect(fs.stat(active)).rejects.toMatchObject({ code: "ENOENT" });
-	expect(await fs.readdir(path.join(cwd, "openspec/changes/archive"))).toEqual(archives);
-}, 120_000);

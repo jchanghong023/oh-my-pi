@@ -49,10 +49,22 @@ export class ZshGenerator implements CompletionGenerator {
     const helpers = ZSH_DYNAMIC_HELPERS;
 
     // Assemble final script with template literal
-    return `#compdef openspec
+    return `#compdef omp
 
 # Zsh completion script for OpenSpec CLI
 # Auto-generated - do not edit manually
+
+_omp_openspec() {
+  if (( CURRENT == 2 )); then
+    local -a commands=('openspec:Spec-driven development')
+    _describe "omp command" commands
+    return
+  fi
+  [[ $words[2] == openspec ]] || return
+  words=("\${words[1]}" "\${words[@]:2}")
+  (( CURRENT-- ))
+  _openspec "$@"
+}
 
 _openspec() {
   local context state line
@@ -81,7 +93,7 @@ ${commandCases}
 
 ${commandFunctions}
 ${helpers}
-compdef _openspec openspec
+compdef _omp_openspec omp
 `;
   }
 

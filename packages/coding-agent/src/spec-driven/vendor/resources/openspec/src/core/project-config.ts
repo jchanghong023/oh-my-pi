@@ -576,7 +576,7 @@ export interface StorePointerRead {
 /**
  * Warning-silent targeted read of the `store:` pointer. Used by root
  * resolution (which must not re-emit the resilient parser's field
- * warnings) and by `openspec init`'s pointer guard. Unlike
+ * warnings) and by `omp openspec init`'s pointer guard. Unlike
  * `readProjectConfig`, a malformed value is REPORTED, not dropped —
  * a dropped pointer would silently flip where work lands.
  */

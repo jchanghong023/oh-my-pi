@@ -58,6 +58,7 @@ import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
 import { isTinyLocalModelKey } from "../../tiny/models";
 import { tinyTitleClient } from "../../tiny/title-client";
+import { TodoLoopTaskCard } from "../../todoloop/presentation";
 import { resolveReadPath } from "../../tools/path-utils";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { vocalizer } from "../../tts/vocalizer";
@@ -3317,14 +3318,17 @@ export class InputController {
 		this.ctx.showStatus(`Display: ${mode}`);
 	}
 
-	/** Restore compact diff expansion after replay without expanding unrelated transcript blocks. */
+	/** Restore compact diffs and explicit command task cards without expanding ambient tool activity. */
 	restoreCompactDiffExpansion(): void {
 		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
 			this.#compactDiffExpanded = false;
 			return;
 		}
 		for (const child of this.ctx.chatContainer.children) {
-			if (child instanceof ToolExecutionComponent && child.isCompactFileOperation()) {
+			if (
+				child instanceof TodoLoopTaskCard ||
+				(child instanceof ToolExecutionComponent && child.isCompactFileOperation())
+			) {
 				child.setExpanded(this.#compactDiffExpanded);
 			}
 		}

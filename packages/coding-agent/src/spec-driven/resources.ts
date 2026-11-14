@@ -1,14 +1,15 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { extractArchive } from "@oh-my-pi/pi-utils/ar";
 import { getDocumentConversionCacheDir } from "@oh-my-pi/pi-utils/dirs";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
+import { offlineFromEnv } from "../cli/args";
 import type { Skill } from "../extensibility/skills";
-import { collectSpecDrivenResources } from "./resource-inventory";
-import bundledArchivePath from "./resource-archive";
+import bundledArchive from "./resource-archive";
+import { specDrivenSourceFingerprint } from "./resource-fingerprint";
 
 export type SpecDrivenResourceSource = "openspec" | "superpowers" | "jch";
 export interface SpecDrivenSkillEntry {
@@ -17,7 +18,14 @@ export interface SpecDrivenSkillEntry {
 	path: string;
 }
 export interface SpecDrivenResourceManifest {
-	openspec: { version: string; integrity: string };
+	runtimeFormat: 2;
+	sourceFingerprint?: string;
+	openspec: {
+		version: string;
+		revision: string;
+		/** SHA-256 of the sorted OpenSpec runtime file records (path, byte hash, executable flag). */
+		runtimeSha256: string;
+	};
 	superpowers: { version: string; revision: string };
 	jch: { revision: string };
 	skills: readonly SpecDrivenSkillEntry[];
@@ -30,13 +38,15 @@ export interface SpecDrivenResources {
 	superpowersRoot: string;
 	jchRoot: string;
 	manifest: SpecDrivenResourceManifest;
-	specSchemaPath: string;
 }
 export interface SpecDrivenProcessResult {
 	exitCode: number;
 	stdout: string;
 	stderr: string;
 }
+
+/** SDK/tool calls capture by default; only the standalone CLI selects terminal inheritance. */
+export type SpecDrivenProcessIO = "capture" | "terminal";
 
 function inside(root: string, target: string): boolean {
 	const relative = path.relative(root, target);
@@ -73,37 +83,82 @@ export function ensureSpecDrivenResources(): Promise<SpecDrivenResources> {
 
 async function extractResources(): Promise<SpecDrivenResources> {
 	const compiled = process.env.PI_COMPILED === "true" || process.env.PI_BUNDLED === "true";
-	const localRoot = path.join(import.meta.dir, "vendor", "resources");
-	// npm excludes nested node_modules even when the vendored tree is in "files".
-	// Its prepack bundle therefore also carries a complete fixed-name archive for SDK imports.
-	const localAvailable =
-		!compiled &&
-		(await fs
-			.stat(path.join(localRoot, "openspec", "node_modules"))
-			.then(stat => stat.isDirectory())
-			.catch(() => false));
-	let bytes: Uint8Array | undefined;
-	let entries: Record<string, Uint8Array> | undefined;
-	let manifest: SpecDrivenResourceManifest;
+	// Source and SDK imports use the same archive as npm and binary builds.
+	let bytes: Uint8Array;
 	if (compiled) {
-		if (!bundledArchivePath) throw new Error("Bundled resource archive asset is missing");
+		if (!bundledArchive) throw new Error("Bundled resource archive asset is missing");
 		const assetPath =
-			path.isAbsolute(bundledArchivePath) || path.win32.isAbsolute(bundledArchivePath)
-				? bundledArchivePath
-				: path.resolve(import.meta.dir, bundledArchivePath);
+			path.isAbsolute(bundledArchive.path) || path.win32.isAbsolute(bundledArchive.path)
+				? bundledArchive.path
+				: path.resolve(import.meta.dir, bundledArchive.path);
 		bytes = await Bun.file(assetPath).bytes();
-	} else if (!localAvailable) {
-		bytes = await Bun.file(path.resolve(import.meta.dir, "../../dist/spec-driven-resources.tar.gz")).bytes();
-	}
-	if (bytes) {
-		const archiveFiles = await new Bun.Archive(bytes).files();
-		const manifestFile = archiveFiles.get("manifest.json");
-		if (!manifestFile) throw new Error("Bundled resource archive has no manifest");
-		manifest = JSON.parse(await manifestFile.text()) as SpecDrivenResourceManifest;
+		if (crypto.createHash("sha256").update(bytes).digest("hex") !== bundledArchive.sha256) {
+			throw new Error(
+				"Stale or damaged bundled spec-driven archive; rebuild with bun run gen:spec-driven-resources.",
+			);
+		}
 	} else {
-		const snapshot = await collectSpecDrivenResources(localRoot);
-		manifest = snapshot.manifest;
-		entries = snapshot.entries;
+		const packageRoot = path.resolve(import.meta.dir, "../..");
+		const archivePath = path.join(packageRoot, "dist/spec-driven-resources.tar.gz");
+		try {
+			bytes = await Bun.file(archivePath).bytes();
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			throw new Error(
+				`OpenSpec runtime resources are not prepared (${archivePath}). From ${packageRoot}, run bun run gen:spec-driven-resources. Resources are never installed or built automatically at runtime.`,
+				{ cause: error },
+			);
+		}
+	}
+	const archiveFiles = await new Bun.Archive(bytes).files().catch(error => {
+		throw new Error("Invalid spec-driven archive; run bun run gen:spec-driven-resources.", { cause: error });
+	});
+	const manifestFile = archiveFiles.get("manifest.json");
+	if (!manifestFile) {
+		throw new Error("Spec-driven archive has no manifest; run bun run gen:spec-driven-resources.");
+	}
+	const manifest = (await manifestFile.json().catch(error => {
+		throw new Error("Invalid spec-driven manifest; run bun run gen:spec-driven-resources.", { cause: error });
+	})) as SpecDrivenResourceManifest;
+	if (manifest.runtimeFormat !== 2) {
+		throw new Error(
+			"Unsupported spec-driven resource archive; run bun run gen:spec-driven-resources to prepare it again.",
+		);
+	}
+	const expectedFingerprint = compiled ? bundledArchive?.sourceFingerprint : await specDrivenSourceFingerprint();
+	if (!expectedFingerprint || manifest.sourceFingerprint !== expectedFingerprint) {
+		throw new Error("Stale spec-driven resource archive; run bun run gen:spec-driven-resources to prepare it again.");
+	}
+	if (!Array.isArray(manifest.files) || !Array.isArray(manifest.skills)) {
+		throw new Error("Incomplete spec-driven manifest; run bun run gen:spec-driven-resources.");
+	}
+	const declaredPaths = new Set(manifest.files.map(file => file.path));
+	for (const required of [
+		"openspec/bin/openspec.js",
+		"openspec/dist/cli/index.js",
+		"openspec/package.json",
+		"openspec/schemas/spec-driven/schema.yaml",
+	]) {
+		if (!declaredPaths.has(required)) {
+			throw new Error(`Incomplete spec-driven archive (${required}); run bun run gen:spec-driven-resources.`);
+		}
+	}
+	for (const skill of manifest.skills) {
+		if (!declaredPaths.has(skill.path)) {
+			throw new Error(`Incomplete spec-driven skill (${skill.path}); run bun run gen:spec-driven-resources.`);
+		}
+	}
+	for (const file of manifest.files) {
+		const archived = archiveFiles.get(file.path);
+		if (
+			!archived ||
+			crypto
+				.createHash("sha256")
+				.update(await archived.bytes())
+				.digest("hex") !== file.sha256
+		) {
+			throw new Error(`Damaged spec-driven resource (${file.path}); run bun run gen:spec-driven-resources.`);
+		}
 	}
 	const digest = crypto.createHash("md5").update(JSON.stringify(manifest)).digest("hex");
 	const cache = path.join(path.dirname(getDocumentConversionCacheDir()), "spec-driven");
@@ -116,15 +171,7 @@ async function extractResources(): Promise<SpecDrivenResources> {
 			if ((await Bun.file(complete).exists()) && (await Bun.file(complete).text()) === digest) return;
 			const temporary = await fs.mkdtemp(path.join(path.dirname(cache), ".spec-driven-"));
 			try {
-				if (bytes) {
-					await extractArchive({ bytes, format: "tar.gz" }, temporary);
-				} else {
-					for (const file of manifest.files) {
-						const target = path.join(temporary, ...file.path.split("/"));
-						await fs.mkdir(path.dirname(target), { recursive: true });
-						await fs.writeFile(target, entries![file.path]!);
-					}
-				}
+				await extractArchive({ bytes, format: "tar.gz" }, temporary);
 				for (const file of manifest.files) {
 					const target = await resolveSpecDrivenResourcePath(temporary, file.path);
 					if (
@@ -152,7 +199,6 @@ async function extractResources(): Promise<SpecDrivenResources> {
 		superpowersRoot: path.join(root, "superpowers"),
 		jchRoot: path.join(root, "jch"),
 		manifest,
-		specSchemaPath: path.join(root, "openspec", "schemas", "omp-spec", "schema.yaml"),
 	};
 }
 
@@ -188,13 +234,15 @@ async function run(
 	cwd: string,
 	signal?: AbortSignal,
 	extraEnv: Record<string, string> = {},
+	io: SpecDrivenProcessIO = "capture",
 ): Promise<SpecDrivenProcessResult> {
 	signal?.throwIfAborted();
+	const terminal = io === "terminal";
 	const child = Bun.spawn(command, {
 		cwd,
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
+		stdin: terminal ? "inherit" : "ignore",
+		stdout: terminal ? "inherit" : "pipe",
+		stderr: terminal ? "inherit" : "pipe",
 		env: { ...process.env, OPENSPEC_TELEMETRY: "0", DO_NOT_TRACK: "1", ...extraEnv },
 	});
 	// The CLI's process-wide signal handler exits after postmortem cleanup.
@@ -211,8 +259,8 @@ async function run(
 	if (signal?.aborted) abort();
 	try {
 		const [stdout, stderr, exitCode] = await Promise.all([
-			new Response(child.stdout).text(),
-			new Response(child.stderr).text(),
+			terminal ? "" : new Response(child.stdout).text(),
+			terminal ? "" : new Response(child.stderr).text(),
 			child.exited,
 		]);
 		signal?.throwIfAborted();
@@ -224,146 +272,21 @@ async function run(
 	}
 }
 
-/** Locate the native init target without treating option values as paths. */
-function initTarget(args: readonly string[], cwd: string): string {
-	let positionalOnly = false;
-	for (let i = 1; i < args.length; i++) {
-		const arg = args[i]!;
-		if (!positionalOnly && arg === "--") {
-			positionalOnly = true;
-		} else if (!positionalOnly && ["--tools", "--language", "--profile"].includes(arg)) {
-			i++;
-		} else if (positionalOnly || !arg.startsWith("-")) {
-			return path.resolve(cwd, arg);
-		}
-	}
-	return cwd;
-}
-
-async function hasProjectConfig(root: string): Promise<boolean> {
-	for (const name of ["config.yaml", "config.yml"]) {
-		try {
-			await fs.lstat(path.join(root, "openspec", name));
-			return true;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		}
-	}
-	return false;
-}
-
-async function setNewDefaultSchema(root: string): Promise<void> {
-	const config = path.join(root, "openspec", "config.yaml");
-	if (!(await Bun.file(config).exists()))
-		throw new Error("OpenSpec did not create a project config; cannot set the default schema");
-	const contents = await fs.readFile(config, "utf8");
-	const updated = contents.replace(/^schema:[ \t]*spec-driven[ \t]*$/m, "schema: mini");
-	if (updated === contents) throw new Error("Cannot set the default schema in the new OpenSpec config");
-	await fs.writeFile(config, updated);
-}
-
 export async function runOpenSpec(
 	args: readonly string[],
 	cwd: string,
 	signal?: AbortSignal,
-	internal?: { archivePlan?: string },
+	io: SpecDrivenProcessIO = "capture",
 ): Promise<SpecDrivenProcessResult> {
 	const resources = await ensureSpecDrivenResources();
 	const entry = await resolveSpecDrivenResourcePath(resources.openspecRoot, "bin/openspec.js");
-	const commandArgs = [...args];
-	const environment = { BUN_BE_BUN: "1", OMP_AIREQ_ARCHIVE_PLAN: internal?.archivePlan ?? "" };
-	if (commandArgs[0] === "init") {
-		const target = initTarget(commandArgs, cwd);
-		const hadConfig = await hasProjectConfig(target);
-		// OMP already supplies these surfaces; keep native project setup without installing duplicate files.
-		const positionalOnly = commandArgs.indexOf("--");
-		commandArgs.splice(positionalOnly < 0 ? commandArgs.length : positionalOnly, 0, "--tools=none");
-		const result = await run([process.execPath, entry, ...commandArgs], cwd, signal, environment);
-		if (result.exitCode === 0 && !hadConfig && !commandArgs.includes("--help") && !commandArgs.includes("-h")) {
-			await setNewDefaultSchema(target);
-			result.stdout = result.stdout.replace("schema: spec-driven", "schema: mini");
-		}
-		return result;
-	}
-	if (
-		commandArgs[0] === "new" &&
-		commandArgs[1] === "change" &&
-		!commandArgs.includes("--help") &&
-		!commandArgs.includes("-h")
-	) {
-		// Ask the native resolver which project/store owns this command, rather than
-		// guessing from cwd. Existing configs and explicitly chosen schemas win.
-		const storeArgs: string[] = [];
-		for (let i = 2; i < commandArgs.length && commandArgs[i] !== "--"; i++) {
-			const arg = commandArgs[i]!;
-			if (arg === "--store" || arg === "--store-path") storeArgs.push(arg, commandArgs[++i]!);
-			else if (arg.startsWith("--store=") || arg.startsWith("--store-path=")) storeArgs.push(arg);
-			else if (["--description", "--goal", "--schema", "--initiative", "--areas"].includes(arg)) i++;
-		}
-		const context = await run([process.execPath, entry, "context", "--json", ...storeArgs], cwd, signal, environment);
-		let root: string | undefined;
-		let implicit = false;
-		try {
-			const value = JSON.parse(context.stdout);
-			if (typeof value.root?.path === "string") root = value.root.path;
-			else if (
-				Array.isArray(value.status) &&
-				value.status.some((item: { code?: string }) => item.code === "no_openspec_root")
-			)
-				implicit = true;
-		} catch {
-			// Preserve native error handling if context cannot be resolved.
-		}
-		if ((root && !(await hasProjectConfig(root))) || implicit) {
-			if (!commandArgs.some(arg => arg === "--schema" || arg.startsWith("--schema="))) {
-				const positionalOnly = commandArgs.indexOf("--");
-				commandArgs.splice(positionalOnly < 0 ? commandArgs.length : positionalOnly, 0, "--schema=mini");
-			}
-			const result = await run([process.execPath, entry, ...commandArgs], cwd, signal, environment);
-			if (result.exitCode === 0) await setNewDefaultSchema(root ?? cwd);
-			return result;
-		}
-	}
-	return run([process.execPath, entry, ...commandArgs], cwd, signal, environment);
-}
-
-/** Internal-only native directory bridge, shipped through the same verified resource archive as CLI. */
-export async function runOpenSpecDirectory(
-	action: "validate-directory" | "sync-directory" | "instructions-directory" | "plan-directory",
-	input: Record<string, unknown>,
-	cwd: string,
-	signal?: AbortSignal,
-): Promise<SpecDrivenProcessResult> {
-	const resources = await ensureSpecDrivenResources();
-	const entry = await resolveSpecDrivenResourcePath(resources.openspecRoot, "dist/core/omp-sync.js");
-	return run([process.execPath, entry, action, JSON.stringify(input)], cwd, signal, { BUN_BE_BUN: "1" });
-}
-
-/** Refuse a project/user override instead of silently using a different Dev workflow. */
-export async function assertAIReqSpecSchema(cwd: string, signal?: AbortSignal): Promise<void> {
-	const resources = await ensureSpecDrivenResources();
-	const result = await runOpenSpec(["schema", "which", "omp-spec", "--json"], cwd, signal);
-	if (result.exitCode !== 0) throw new Error(`Cannot resolve the Dev schema: ${result.stdout}\n${result.stderr}`);
-	let resolution: unknown;
-	try {
-		resolution = JSON.parse(result.stdout);
-	} catch {
-		throw new Error(`Invalid Dev schema resolution: ${result.stdout}`);
-	}
-	if (
-		!resolution ||
-		typeof resolution !== "object" ||
-		!("source" in resolution) ||
-		resolution.source !== "package" ||
-		!("path" in resolution) ||
-		typeof resolution.path !== "string" ||
-		(await fs.realpath(resolution.path)) !==
-			(await fs.realpath(path.join(resources.openspecRoot, "schemas", "omp-spec")))
-	) {
-		throw new Error(
-			`Dev requires the bundled omp-spec schema; an external schema shadows it. Resolve the conflict without modifying existing changes. ${result.stdout}`,
-		);
-	}
+	return run(
+		[process.execPath, entry, ...args],
+		cwd,
+		signal,
+		{ BUN_BE_BUN: "1", ...(offlineFromEnv() ? { OPENSPEC_NO_UPDATE_CHECK: "1" } : {}) },
+		io,
+	);
 }
 
 async function findBash(): Promise<string> {

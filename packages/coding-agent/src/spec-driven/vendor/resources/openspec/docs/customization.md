@@ -22,7 +22,7 @@ The `openspec/config.yaml` file is the easiest way to customize OpenSpec for you
 ### Quick Setup
 
 ```bash
-openspec init
+omp openspec init
 ```
 
 This walks you through creating a config interactively. Or create one manually:
@@ -60,10 +60,10 @@ operations:
 
 ```bash
 # Without config
-openspec new change my-feature --schema spec-driven
+omp openspec new change my-feature --schema spec-driven
 
 # With config - schema is automatic
-openspec new change my-feature
+omp openspec new change my-feature
 ```
 
 **Context and rules injection:**
@@ -99,8 +99,8 @@ and artifact rules are never relabeled as operation guidance.
 Apply and archive fetch these inputs at execution time:
 
 ```bash
-openspec instructions apply --change my-feature --json
-openspec instructions archive --change my-feature --json
+omp openspec instructions apply --change my-feature --json
+omp openspec instructions archive --change my-feature --json
 ```
 
 Both surfaces return current project `context` and matching
@@ -125,13 +125,13 @@ artifacts, or summaries unless the user separately requests that content.
 **Archive and spec-sync input safety:**
 
 Archive, bulk archive, and standalone sync use
-`artifactPaths.specs.existingOutputPaths` from `openspec status --json` as the
+`artifactPaths.specs.existingOutputPaths` from `omp openspec status --json` as the
 only delta-spec source. A schema without a `specs` artifact, or a change whose
 concrete output list is empty, has nothing to sync; other artifacts are not used
 to infer delta specs.
 
 Before a semantic merge writes a main spec, the workflow consumes current
-`openspec instructions specs --change <name> --json` output. The returned
+`omp openspec instructions specs --change <name> --json` output. The returned
 `specs` rules constrain only the main specs produced by that merge. Single archive
 passes that snapshot into inline sync, standalone sync fetches it directly, and
 bulk archive obtains every required snapshot before its first spec write. A
@@ -140,7 +140,7 @@ not an empty input: the workflow stops before the affected spec write or change
 move (for bulk archive, before any batch write or move).
 
 This configuration does not change archive execution phases, user prompts,
-filesystem operations, semantic merge ownership, the direct `openspec archive`
+filesystem operations, semantic merge ownership, the direct `omp openspec archive`
 command, or the structure and output of artifact `rules`.
 
 ### Schema Resolution Order
@@ -175,7 +175,7 @@ your-project/
 The fastest way to customize is to fork a built-in schema:
 
 ```bash
-openspec schema fork spec-driven my-workflow
+omp openspec schema fork spec-driven my-workflow
 ```
 
 This copies the entire `spec-driven` schema to `openspec/schemas/my-workflow/` where you can edit it freely.
@@ -200,10 +200,10 @@ For a completely fresh workflow:
 
 ```bash
 # Interactive
-openspec schema init research-first
+omp openspec schema init research-first
 
 # Non-interactive
-openspec schema init rapid \
+omp openspec schema init rapid \
   --description "Rapid iteration workflow" \
   --artifacts "proposal,tasks" \
   --default
@@ -293,7 +293,7 @@ Templates can include:
 Before using a custom schema, validate it:
 
 ```bash
-openspec schema validate my-workflow
+omp openspec schema validate my-workflow
 ```
 
 This checks:
@@ -308,7 +308,7 @@ Once created, use your schema with:
 
 ```bash
 # Specify on command
-openspec new change feature --schema my-workflow
+omp openspec new change feature --schema my-workflow
 
 # Or set as default in config.yaml
 schema: my-workflow
@@ -320,10 +320,10 @@ Not sure which schema is being used? Check with:
 
 ```bash
 # See where a specific schema resolves from
-openspec schema which my-workflow
+omp openspec schema which my-workflow
 
 # List all available schemas
-openspec schema which --all
+omp openspec schema which --all
 ```
 
 Output shows whether it's from your project, user directory, or the package:
@@ -378,7 +378,7 @@ apply:
 Fork the default and add a review step:
 
 ```bash
-openspec schema fork spec-driven with-review
+omp openspec schema fork spec-driven with-review
 ```
 
 Then edit `schema.yaml` to add:

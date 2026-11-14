@@ -275,6 +275,7 @@ export async function createAIReqWorkbenchApplication(
 		project => project.commonDir === launchCommonDir,
 	);
 	if (!launchProject) throw new Error("Launch project is not registered in the AIReq workflow");
+	if (!(await asset("/"))) throw new Error("AIReq workbench entry asset is unavailable");
 	const allowLan = options.offline ?? offlineFromEnv();
 	const allowedAddresses = getWorkbenchAddresses(allowLan);
 	const capability = randomBytes(32).toString("hex");

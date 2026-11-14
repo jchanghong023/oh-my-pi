@@ -40,7 +40,7 @@ export interface AIToolOption {
 export const AI_TOOLS: AIToolOption[] = [
   // The vendored copy supports only the host it ships with. Other assistants'
   // targets, adapters, aliases, and retired ids were removed with the upstream
-  // tree; `openspec init` offers this single entry.
+  // tree; `omp openspec init` offers this single entry.
   { name: 'Oh My Pi', value: 'oh-my-pi', available: true, successLabel: 'Oh My Pi', skillsDir: '.omp' }
 ];
 

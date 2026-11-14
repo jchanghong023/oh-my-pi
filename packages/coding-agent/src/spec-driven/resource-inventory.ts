@@ -5,7 +5,10 @@ import type { SpecDrivenResourceManifest, SpecDrivenSkillEntry } from "./resourc
 import baseline from "./vendor/inventory.json";
 
 /** Snapshot actual vendored files, not the historical inventory's file hashes. */
-export async function collectSpecDrivenResources(root: string): Promise<{
+export async function collectSpecDrivenResources(
+	root: string,
+	sourceFingerprint?: string,
+): Promise<{
 	manifest: SpecDrivenResourceManifest;
 	entries: Record<string, Uint8Array>;
 }> {
@@ -40,8 +43,20 @@ export async function collectSpecDrivenResources(root: string): Promise<{
 	const comparePath = (a: { path: string }, b: { path: string }) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 	files.sort(comparePath);
 	skills.sort(comparePath);
+	const runtimeSha256 = crypto
+		.createHash("sha256")
+		.update(JSON.stringify(files.filter(file => file.path.startsWith("openspec/"))))
+		.digest("hex");
 	return {
-		manifest: { openspec: baseline.openspec, superpowers: baseline.superpowers, jch: baseline.jch, skills, files },
+		manifest: {
+			runtimeFormat: 2,
+			sourceFingerprint,
+			openspec: { ...baseline.openspec, runtimeSha256 },
+			superpowers: baseline.superpowers,
+			jch: baseline.jch,
+			skills,
+			files,
+		},
 		entries,
 	};
 }
