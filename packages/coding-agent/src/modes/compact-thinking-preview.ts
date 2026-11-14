@@ -1,14 +1,14 @@
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { type Component, visibleWidth } from "@oh-my-pi/pi-tui";
+import { type Component } from "@oh-my-pi/pi-tui";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import { registerSpinnerBlock, unregisterSpinnerBlock } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { col, elapsed, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
+import { col, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
+import { replaceTabs, truncateMiddleToWidth, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { describeShimmer, type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
@@ -16,16 +16,31 @@ import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
 import { isXdHelpContent, parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { getPaddingX, padding } from "@oh-my-pi/pi-tui/utils";
-import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
-import { lexShellCommand } from "../tools/shell-tokenize";
 import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
 import { summarizeCompactTool } from "./compact-tool-summary";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
 import type { InteractiveModeContext } from "./types";
 
 const EMPTY_ROWS: readonly string[] = ["", ""];
-const THINKING_SHIMMER_PALETTE: ShimmerPalette = { low: "dim", mid: "muted", high: "success", bold: true };
+/** Same sweep style and palette as the previous whole-row dock animation. */
+const ACTION_SHIMMER_PALETTE: ShimmerPalette = { low: "dim", mid: "muted", high: "success", bold: true };
+/** Four CJK characters occupy eight terminal columns; the detail starts two spaces later. */
+const ACTION_WIDTH = 8;
+const ACTION_GAP = "  ";
+
+type ActionCategory = "thinking" | "read" | "exec" | "write" | "call";
+type ActionState = "running" | "done" | "failed";
+
+const ACTION_WORDS: Record<ActionCategory, Record<ActionState, string>> = {
+	thinking: { running: "正在思考", done: "思考完成", failed: "思考失败" },
+	read: { running: "正在读取", done: "读取完成", failed: "读取失败" },
+	exec: { running: "正在执行", done: "执行完成", failed: "执行失败" },
+	write: { running: "正在写入", done: "写入完成", failed: "写入失败" },
+	call: { running: "正在调用", done: "调用完成", failed: "调用失败" },
+};
+
 type Call = {
 	id: string;
 	name: string;
@@ -36,25 +51,27 @@ type Call = {
 	intent?: string;
 	startedAt?: number;
 	endedAt?: number;
-	backgroundJobId?: string;
+	failed?: boolean;
 };
-type ToolRow = {
+type Action = {
 	id: string;
-	name: string;
-	semanticName?: string;
+	category: ActionCategory;
+	running: boolean;
+	failed: boolean;
 	detail: string;
-	command?: string;
-	duration?: number;
-	preparing?: boolean;
-	backgroundJobId?: string;
+	isPath: boolean;
+	startedAt?: number;
 };
-type Snapshot = { kind: "thinking"; rows: readonly string[] } | { kind: "tool"; rows: ToolRow[] };
 type SessionMemory = {
 	calls: Call[];
-	snapshot?: Snapshot;
+	/** Thinking phases keyed by content index; one record per independent phase. */
+	thinking: Map<number, { startedAt: number; endedAt?: number; failed?: boolean; text: string }>;
+	/** Arrival order of action ids; the earliest undisplayed runner fills a vacancy. */
+	order: string[];
+	/** Persistent two-slot layout (top, bottom); running actions keep their slot. */
+	slots: [string | undefined, string | undefined];
+	snapshot?: Action[];
 	latestStart?: number;
-	undisplayedDispatch?: boolean;
-	turnDispatched?: boolean;
 };
 
 // One bounded projection per viewed logical session; never persisted or reconstructed from ended calls.
@@ -62,28 +79,6 @@ const memories = new Map<string, SessionMemory>();
 
 function clean(value: string): string {
 	return replaceTabs(sanitizeText(plainText(value))).replace(/[\r\n]+/g, " ");
-}
-
-/** Keep shell spelling intact; only shorten flat command lists with an unambiguous boundary. */
-function shellPreview(command: string): string {
-	if (/[()`]/u.test(command) || /(?:^|\s)(?:for|while|until|if|case|select|function)\s/u.test(command)) return command;
-	let offset = 0;
-	for (const token of lexShellCommand(command)) {
-		if (token.kind === "separator") {
-			const operator = /&&|\|\||[;|&\n]/u.exec(token.raw);
-			if (operator) {
-				const index = offset + operator.index;
-				if (command[index] === "&" && /[<>]/u.test(command[index - 1] ?? "")) {
-					offset += token.raw.length;
-					continue;
-				}
-				const first = command.slice(0, index).trimEnd();
-				if (first && command.slice(index + operator[0].length).trim()) return `${first} ${operator[0]} …`;
-			}
-		}
-		offset += token.raw.length;
-	}
-	return command;
 }
 
 function fields(value: unknown): Record<string, unknown> {
@@ -174,73 +169,73 @@ function streamedArgs(block: ToolCall): unknown {
 		: decodeStreamedToolArgs(partial, { rawInput: block.customWireName !== undefined });
 }
 
-function duration(call: Call, now: number): number | undefined {
-	return call.startedAt === undefined ? undefined : Math.max(0, (call.endedAt ?? now) - call.startedAt);
+function categoryOf(semanticName: string): ActionCategory {
+	switch (semanticName) {
+		case "read":
+			return "read";
+		case "bash":
+			return "exec";
+		case "write":
+		case "edit":
+		case "apply_patch":
+		case "ast_edit":
+			return "write";
+		default:
+			return "call";
+	}
 }
 
-/** Fit one call independently, reserving the duration before truncating its description. */
-function toolLine(
-	item: ToolRow,
-	width: number,
-	historical: boolean,
-): { body: string; suffix: string; timerPrefix?: string } {
-	const identity = clean(item.name);
-	const prefix = !historical && item.preparing ? `${identity} · 准备中` : identity;
-	const timerPrefix = item.backgroundJobId
-		? ` · ${clean(item.backgroundJobId)} · 提交 `
-		: (item.semanticName ?? item.name) === "wait"
-			? " · 等待 "
-			: " · ";
-	const suffix = item.duration === undefined ? "" : `${timerPrefix}${formatDuration(item.duration)}`;
-	if (visibleWidth(prefix) + visibleWidth(suffix) >= width) {
-		if (visibleWidth(suffix) >= width) return { body: truncateToWidth(prefix + suffix, width), suffix: "" };
-		return { body: truncateToWidth(prefix, width - visibleWidth(suffix)), suffix, timerPrefix };
+/** One-line detail for a tool action: command text, or a target summary, or the real tool name. */
+function toolDetail(call: Call): { detail: string; isPath: boolean } {
+	const category = categoryOf(call.semanticName ?? call.name);
+	if (call.command) return { detail: clean(call.command), isPath: false };
+	const target = clean(call.detail).trim();
+	if (category === "read" || category === "write") {
+		return { detail: target || call.name, isPath: true };
 	}
-	const available = width - visibleWidth(prefix) - visibleWidth(suffix);
-	let detail = clean(item.detail).trim();
-	if (item.command) {
-		const semanticName = item.semanticName ?? item.name;
-		const shell = semanticName === "bash" || (semanticName === "wait" && item.command.startsWith("[bash] "));
-		const raw = clean(shell ? shellPreview(item.command) : item.command).trim();
-		const command = shell ? truncateToWidth(raw, TRUNCATE_LENGTHS.SHORT) : raw;
-		const intentWidth = Math.min(TRUNCATE_LENGTHS.SHORT, Math.floor((available - 6) / 3));
-		detail = detail && intentWidth > 0 ? `${truncateToWidth(detail, intentWidth)} · ${command}` : command;
-	}
-	const body = detail && available > 3 ? `${prefix} · ${truncateToWidth(detail, available - 3)}` : prefix;
-	return { body, suffix, timerPrefix };
+	if (category === "exec") return { detail: target || call.name, isPath: false };
+	// Unmapped tools must name themselves AND keep the short parameter summary; never mislabel them.
+	const name =
+		call.semanticName && call.semanticName !== call.name ? `${call.name} (${call.semanticName})` : call.name;
+	return { detail: target ? `${name} ${target}` : name, isPath: false };
 }
 
-/** Composer-only projection of actual dispatches and the last displayed content. */
+function thinkingSeconds(ms: number): string {
+	return ms < 100 ? "用时 <0.1 秒" : `用时 ${(ms / 1000).toFixed(1)} 秒`;
+}
+
+/** Latest non-blank display line of the real thinking fragment; empty when none is displayable. */
+function thinkingDetail(text: string, proseOnly: boolean): string {
+	const formatted = formatThinkingForDisplay(text, proseOnly);
+	if (!hasDisplayableThinking(text, formatted)) return "";
+	const lines = formatted
+		.split(/\r?\n/)
+		.map(line => clean(line).trim())
+		.filter(line => line.length > 0);
+	return lines.at(-1) ?? "";
+}
+
+/** Composer-only projection of action records and the last displayed content. */
 export class CompactThinkingPreview implements Component {
 	#session?: InteractiveModeContext["viewSession"];
 	#sessionId?: string;
 	#memory?: SessionMemory;
-	#nativeRows: { body: string; suffix: string; timerPrefix?: string; duration?: number; running: boolean }[] = [];
-	#workingActive = false;
+	#rows: (Action | undefined)[] = [];
 
 	constructor(
 		private readonly ctx: Pick<
 			InteractiveModeContext,
-			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "statusLine"
+			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking"
 		> &
 			Partial<Pick<InteractiveModeContext, "ui">>,
 	) {}
 
 	clear(): void {
-		const snapshot = this.#memory?.snapshot;
-		if (snapshot?.kind === "tool" && this.#session) {
-			const now = Date.now();
-			for (const item of snapshot.rows) {
-				const call = this.#memory!.calls.find(candidate => candidate.id === item.id);
-				if (call && (call.endedAt !== undefined || this.#session.agent.state.pendingToolCalls.has(call.id))) {
-					item.duration = duration(call, now);
-				}
-			}
-		}
 		unregisterSpinnerBlock(this);
 		this.#session = undefined;
 		this.#sessionId = undefined;
 		this.#memory = undefined;
+		this.#rows = [];
 	}
 
 	#syncSession(): void {
@@ -252,7 +247,7 @@ export class CompactThinkingPreview implements Component {
 		this.#sessionId = id;
 		let memory = memories.get(id);
 		if (!memory) {
-			memory = { calls: [] };
+			memory = { calls: [], thinking: new Map(), order: [], slots: [undefined, undefined] };
 			memories.set(id, memory);
 		}
 		this.#memory = memory;
@@ -261,7 +256,7 @@ export class CompactThinkingPreview implements Component {
 		const branch = session.sessionManager.getBranch();
 		const diagnostics = collectPendingToolCalls(branch);
 		const existing = memory.calls.length > 0;
-		const markerIndex = (id: string): number =>
+		const markerIndex = (callId: string): number =>
 			branch.findLastIndex(
 				entry =>
 					entry.type === "custom" &&
@@ -269,15 +264,15 @@ export class CompactThinkingPreview implements Component {
 					!!entry.data &&
 					typeof entry.data === "object" &&
 					"toolCallId" in entry.data &&
-					entry.data.toolCallId === id,
+					entry.data.toolCallId === callId,
 			);
 		const cutoff = Math.max(-1, ...memory.calls.map(call => markerIndex(call.id)));
 		const stream = session.agent.state.streamMessage;
 		const messages = stream ? [...session.agent.state.messages, stream] : session.agent.state.messages;
-		for (const id of pending) {
-			if (memory.calls.some(call => call.id === id)) continue;
-			const diagnostic = diagnostics.find(item => item.toolCallId === id);
-			const index = markerIndex(id);
+		for (const callId of pending) {
+			if (memory.calls.some(call => call.id === callId)) continue;
+			const diagnostic = diagnostics.find(item => item.toolCallId === callId);
+			const index = markerIndex(callId);
 			const entry = branch[index];
 			const marker =
 				entry?.type === "custom" && entry.data && typeof entry.data === "object"
@@ -299,9 +294,9 @@ export class CompactThinkingPreview implements Component {
 			for (let index = messages.length - 1; index >= 0 && !block; index--) {
 				const message = messages[index];
 				if (message?.role !== "assistant") continue;
-				block = message.content.find((item): item is ToolCall => item.type === "toolCall" && item.id === id);
+				block = message.content.find((item): item is ToolCall => item.type === "toolCall" && item.id === callId);
 			}
-			const update = session.activeToolExecutionUpdates().find(item => item.toolCallId === id);
+			const update = session.activeToolExecutionUpdates().find(item => item.toolCallId === callId);
 			const name =
 				block?.name ??
 				diagnostic?.toolName ??
@@ -310,7 +305,7 @@ export class CompactThinkingPreview implements Component {
 			if (!name) continue;
 			const args = block ? streamedArgs(block) : (diagnostic?.args ?? marker?.args ?? update?.args);
 			const intent = diagnostic?.intent ?? (typeof marker?.intent === "string" ? marker.intent : undefined);
-			const call: Call = { id, name, detail: "", intent, startedAt };
+			const call: Call = { id: callId, name, detail: "", intent, startedAt };
 			updateCall(call, args);
 			if (update) updateCall(call, update.args, update.partialResult);
 			this.#appendCall(call);
@@ -320,9 +315,30 @@ export class CompactThinkingPreview implements Component {
 	#appendCall(call: Call): void {
 		const memory = this.#memory!;
 		memory.calls.push(call);
-		if (memory.calls.length > 2) memory.calls.shift();
+		// Bound the record set; the visible two slots are chosen by running-first selection.
+		if (memory.calls.length > 16) memory.calls.shift();
+		memory.order.push(call.id);
 		if (call.startedAt !== undefined)
 			memory.latestStart = Math.max(memory.latestStart ?? call.startedAt, call.startedAt);
+	}
+
+	#thinkingId(contentIndex: number): string {
+		return `thinking:${contentIndex}`;
+	}
+
+	#startThinking(contentIndex: number, now: number): void {
+		const memory = this.#memory!;
+		if (memory.thinking.has(contentIndex)) return;
+		memory.thinking.set(contentIndex, { startedAt: now, text: "" });
+		memory.order.push(this.#thinkingId(contentIndex));
+	}
+
+	#endThinking(contentIndex: number, now: number, failed: boolean): void {
+		const memory = this.#memory!;
+		const phase = memory.thinking.get(contentIndex);
+		if (!phase || phase.endedAt !== undefined) return;
+		phase.endedAt = now;
+		phase.failed = failed;
 	}
 
 	observe(event: AgentSessionEvent): void {
@@ -334,10 +350,7 @@ export class CompactThinkingPreview implements Component {
 		this.#syncSession();
 		const memory = this.#memory!;
 		const calls = memory.calls;
-		if (event.type === "turn_start") {
-			memory.turnDispatched = false;
-		} else if (event.type === "tool_execution_start") {
-			memory.turnDispatched = true;
+		if (event.type === "tool_execution_start") {
 			const call = calls.find(item => item.id === event.toolCallId);
 			if (call) {
 				call.name = event.toolName;
@@ -355,33 +368,51 @@ export class CompactThinkingPreview implements Component {
 				updateCall(next, event.args);
 				this.#appendCall(next);
 			}
-			memory.undisplayedDispatch = true;
 		} else if (event.type === "tool_execution_end") {
 			const call = calls.find(item => item.id === event.toolCallId);
 			if (call && call.endedAt === undefined) {
 				updateCall(call, undefined, event.result);
 				call.endedAt = now;
-				if (call.semanticName === "bash") {
-					const details = fields(event.result.details);
-					const inner = call.name === "write" ? fields(fields(details.xdev).inner) : details;
-					const async = fields(inner.async);
-					if (async.state === "running" && typeof async.jobId === "string") call.backgroundJobId = async.jobId;
-				}
+				call.failed = event.isError === true || event.result?.isError === true;
 			}
 		} else if (event.type === "tool_execution_update") {
 			const call = calls.find(item => item.id === event.toolCallId);
 			if (call && call.endedAt === undefined) updateCall(call, event.args, event.partialResult);
 		} else if (event.type === "message_update" && event.message.role === "assistant") {
+			const delta = event.assistantMessageEvent;
+			if (delta.type === "thinking_start") {
+				this.#startThinking(delta.contentIndex, now);
+			} else if (delta.type === "thinking_delta") {
+				this.#startThinking(delta.contentIndex, now);
+				const phase = memory.thinking.get(delta.contentIndex);
+				if (phase && phase.endedAt === undefined) {
+					const block = event.message.content[delta.contentIndex];
+					if (block?.type === "thinking") phase.text = block.thinking;
+				}
+			} else if (delta.type === "thinking_end") {
+				this.#startThinking(delta.contentIndex, now);
+				this.#endThinking(delta.contentIndex, now, false);
+			} else if (delta.type === "error") {
+				for (const [index, phase] of memory.thinking) {
+					if (phase.endedAt === undefined) this.#endThinking(index, now, delta.reason === "error");
+				}
+			}
 			for (const block of event.message.content) {
 				if (block.type !== "toolCall") continue;
 				const call = calls.find(item => item.id === block.id && item.endedAt === undefined);
 				if (!call) continue;
 				updateCall(call, streamedArgs(block));
 			}
+		} else if (event.type === "message_end" && event.message.role === "assistant") {
+			// A stream that ends without thinking_end (abort/error) still settles its open phase.
+			const failed = event.message.stopReason === "error";
+			for (const [index, phase] of memory.thinking) {
+				if (phase.endedAt === undefined) this.#endThinking(index, now, failed);
+			}
 		}
 	}
 
-	/** Reuse the shared tool animation ticker for ANSI elapsed and thinking repaint. */
+	/** Reuse the shared tool animation ticker; only visible running actions drive repaints. */
 	tickSpinner(_frame: number): void {
 		this.ctx.ui?.requestComponentRender(this);
 	}
@@ -398,184 +429,189 @@ export class CompactThinkingPreview implements Component {
 		return [rows[0] ? left + rows[0] : "", rows[1] ? left + rows[1] : "", ""];
 	}
 
+	/** Reconcile the active thinking phase from live state so focus restoration shows it without a fresh event. */
+	#syncLiveThinking(): void {
+		const memory = this.#memory!;
+		const state = this.ctx.viewSession.agent.state;
+		const stream = state.streamMessage;
+		const index = state.activeThinkingIndex;
+		if (stream?.role === "assistant" && index !== undefined) {
+			const block = stream.content[index];
+			if (block?.type === "thinking") {
+				this.#startThinking(index, Date.now());
+				const phase = memory.thinking.get(index);
+				if (phase && phase.endedAt === undefined) phase.text = block.thinking;
+			}
+		}
+	}
+
+	/** Build the action records currently eligible for the two slots. */
+	#actions(): Action[] {
+		this.#syncLiveThinking();
+		const memory = this.#memory!;
+		const state = this.ctx.viewSession.agent.state;
+		const hideThinking = this.ctx.effectiveHideThinkingBlock;
+		const proseOnly = this.ctx.proseOnlyThinking;
+		const actions: Action[] = [];
+		for (const [index, phase] of memory.thinking) {
+			if (hideThinking) continue;
+			const running = phase.endedAt === undefined;
+			const detail = running
+				? thinkingDetail(phase.text, proseOnly)
+				: thinkingSeconds(Math.max(0, (phase.endedAt ?? 0) - phase.startedAt));
+			actions.push({
+				id: this.#thinkingId(index),
+				category: "thinking",
+				running,
+				failed: phase.failed === true,
+				detail,
+				isPath: false,
+				startedAt: phase.startedAt,
+			});
+		}
+		for (const call of memory.calls) {
+			const running = call.endedAt === undefined && state.pendingToolCalls.has(call.id);
+			const { detail, isPath } = toolDetail(call);
+			actions.push({
+				id: call.id,
+				category: categoryOf(call.semanticName ?? call.name),
+				running,
+				failed: call.failed === true,
+				detail,
+				isPath,
+				startedAt: call.startedAt,
+			});
+		}
+		return actions;
+	}
+
+	/** Running-first selection with stable slots; at most two visible actions, no carousel. */
+	#select(actions: Action[]): (Action | undefined)[] {
+		const memory = this.#memory!;
+		const byId = new Map(actions.map(action => [action.id, action]));
+		memory.order = memory.order.filter(id => byId.has(id));
+		for (const action of actions) if (!memory.order.includes(action.id)) memory.order.push(action.id);
+		const slots = memory.slots;
+		const held = (index: 0 | 1): Action | undefined => {
+			const id = slots[index];
+			return id === undefined ? undefined : byId.get(id);
+		};
+		const displayed = new Set(slots.filter((id): id is string => id !== undefined));
+		const queuedRunner = (): Action | undefined => {
+			for (const id of memory.order) {
+				const action = byId.get(id);
+				if (action?.running && !displayed.has(id)) return action;
+			}
+			return undefined;
+		};
+		const place = (index: 0 | 1, action: Action | undefined): void => {
+			slots[index] = action?.id;
+			if (action) displayed.add(action.id);
+			else if (slots[index] !== undefined) displayed.delete(slots[index]!);
+		};
+		// A running action keeps its slot; vacancies fill bottom-first so the current runner stays below.
+		for (const index of [1, 0] as const) {
+			const current = held(index);
+			if (current?.running) continue;
+			const next = queuedRunner();
+			if (next) place(index, next);
+		}
+		const runningCount = actions.filter(action => action.running).length;
+		if (runningCount === 0) {
+			// No runners: keep ended actions in place and fill remaining slots with the latest ended.
+			const ended = memory.order.map(id => byId.get(id)!).filter(action => action && !action.running);
+			for (const index of [1, 0] as const) {
+				if (held(index)) continue;
+				const candidate = [...ended].reverse().find(action => !displayed.has(action.id));
+				if (candidate) place(index, candidate);
+			}
+		} else if (runningCount === 1) {
+			// A lone serial runner sits on the bottom row; the latest ended action always takes the top.
+			const runner = actions.find(action => action.running)!;
+			if (held(0)?.running) place(0, undefined);
+			if (!held(1)?.running) place(1, runner);
+			const ended = memory.order.map(id => byId.get(id)!).filter(action => action && !action.running);
+			const latest = ended.at(-1);
+			if (latest && held(0)?.id !== latest.id) place(0, latest);
+		}
+		return [held(0), held(1)];
+	}
+
 	#renderRows(width: number, paint: boolean): readonly string[] {
-		this.#nativeRows = [];
-		this.#workingActive = false;
+		this.#rows = [];
 		if (!displayPreferences.compactToolActivity) {
 			this.clear();
 			return [];
 		}
 		this.#syncSession();
 		if (width < 1) return EMPTY_ROWS;
-		const session = this.ctx.viewSession;
-		const state = session.agent.state;
-		this.#workingActive = this.ctx.statusLine.getTurnElapsedMs() !== null;
-		const stream = state.streamMessage;
 		const memory = this.#memory!;
-		let thinkingRows: string[] | undefined;
-		if (
-			!this.ctx.effectiveHideThinkingBlock &&
-			stream?.role === "assistant" &&
-			state.activeThinkingIndex !== undefined
-		) {
-			const block = stream.content[state.activeThinkingIndex];
-			if (block?.type === "thinking") {
-				const formatted = formatThinkingForDisplay(block.thinking, this.ctx.proseOnlyThinking);
-				if (hasDisplayableThinking(block.thinking, formatted)) {
-					// Only visible, nonblank display rows may replace previously displayed activity.
-					const rows = wrapTextWithAnsi(replaceTabs(sanitizeText(plainText(formatted))), width)
-						.filter(row => row.trim().length > 0)
-						.slice(-2);
-					if (rows.length > 0) thinkingRows = rows;
-				}
-			}
-		}
-		const now = Date.now();
-		const running = (call: Call) => call.endedAt === undefined && state.pendingToolCalls.has(call.id);
-		const displayDuration = (call: Call): number | undefined => {
-			if (running(call) || call.endedAt !== undefined) return duration(call, now);
-			return memory.snapshot?.kind === "tool"
-				? memory.snapshot.rows.find(item => item.id === call.id)?.duration
-				: undefined;
-		};
-		const activeCalls = memory.calls.some(running);
-		let rows: string[];
-		if (thinkingRows) {
-			rows = thinkingRows;
-			while (rows.length < 2) rows.push("");
-			memory.snapshot = { kind: "thinking", rows: [...rows] };
-			memory.undisplayedDispatch = false;
-		} else if (activeCalls) {
-			const items = memory.calls.map(call => ({
-				id: call.id,
-				name: call.name,
-				semanticName: call.semanticName,
-				detail: call.detail,
-				command: call.command,
-				duration: displayDuration(call),
-				backgroundJobId: call.backgroundJobId,
-			}));
-			memory.snapshot = { kind: "tool", rows: items.map(item => ({ ...item })) };
-			memory.undisplayedDispatch = false;
-			this.#nativeRows = items.map((item, index) => ({
-				...toolLine(item, width, false),
-				duration: item.duration,
-				running: running(memory.calls[index]!),
-			}));
-			rows = this.#nativeRows.map(item => item.body + item.suffix);
-		} else if (
-			!memory.turnDispatched &&
-			session.isStreaming &&
-			stream?.role === "assistant" &&
-			stream.content.some(block => block.type === "toolCall" && !memory.calls.some(call => call.id === block.id))
-		) {
-			const block = stream.content.findLast(
-				(item): item is ToolCall => item.type === "toolCall" && !memory.calls.some(call => call.id === item.id),
-			)!;
-			const call: Call = { id: block.id, name: block.name, detail: "" };
-			updateCall(call, streamedArgs(block));
-			const item: ToolRow = {
-				id: call.id,
-				name: call.name,
-				semanticName: call.semanticName,
-				detail: call.detail,
-				command: call.command,
-				preparing: true,
-			};
-			memory.snapshot = { kind: "tool", rows: [{ ...item }] };
-			this.#nativeRows = [{ ...toolLine(item, width, false), running: true }];
-			rows = [this.#nativeRows[0]!.body, ""];
-		} else {
-			if (memory.undisplayedDispatch) {
-				memory.snapshot = {
-					kind: "tool",
-					rows: memory.calls.map(call => ({
-						id: call.id,
-						name: call.name,
-						semanticName: call.semanticName,
-						detail: call.detail,
-						command: call.command,
-						duration: displayDuration(call),
-						backgroundJobId: call.backgroundJobId,
-					})),
-				};
-				memory.undisplayedDispatch = false;
-			}
-			const snapshot = memory.snapshot;
-			if (!snapshot || (snapshot.kind === "thinking" && this.ctx.effectiveHideThinkingBlock)) rows = [...EMPTY_ROWS];
-			else if (snapshot.kind === "thinking")
-				rows = [truncateToWidth(snapshot.rows[0] ?? "", width), truncateToWidth(snapshot.rows[1] ?? "", width)];
-			else {
-				for (const item of snapshot.rows) {
-					const call = memory.calls.find(candidate => candidate.id === item.id && candidate.endedAt !== undefined);
-					if (call) {
-						item.detail = call.detail;
-						item.command = call.command;
-						item.semanticName = call.semanticName;
-						item.duration = duration(call, now);
-						item.backgroundJobId = call.backgroundJobId;
-					}
-				}
-				this.#nativeRows = snapshot.rows.map(item => ({
-					...toolLine(item, width, true),
-					duration: item.duration,
-					running: false,
-				}));
-				rows = this.#nativeRows.map(item => item.body + item.suffix);
-			}
-		}
-		while (rows.length < 2) rows.push("");
-		const needsTick =
-			!isNativeRendering() &&
-			!!this.ctx.ui &&
-			(activeCalls || (this.#workingActive && rows.some(Boolean) && shimmerEnabled()));
+		const slots = this.#select(this.#actions());
+		const visible = slots.filter((action): action is Action => action !== undefined);
+		if (visible.length > 0) memory.snapshot = visible.map(action => ({ ...action }));
+		const animate = shimmerEnabled();
+		const rows = slots.map(action => {
+			this.#rows.push(action);
+			if (!action) return "";
+			const row = this.#buildRow(action, width);
+			return this.#paintAnsi(row, paint && animate);
+		});
+		const needsTick = !isNativeRendering() && !!this.ctx.ui && animate && visible.some(action => action.running);
 		if (needsTick) registerSpinnerBlock(this);
 		else unregisterSpinnerBlock(this);
-		if (!paint) return rows;
-		if (!this.#workingActive) return rows.map(value => (value ? theme.fg("dim", value) : value));
-		if (!shimmerEnabled()) return rows;
-		return rows.map(value => (value ? shimmerText(value, theme, THINKING_SHIMMER_PALETTE) : value));
+		return rows;
+	}
+
+	/** Fixed action area + two spaces + gray detail; the detail origin never moves on state change. */
+	#buildRow(action: Action, width: number): { action: Action; word: string; detail: string; gap: string } {
+		const full = ACTION_WORDS[action.category][action.running ? "running" : action.failed ? "failed" : "done"];
+		// Normally the action area is eight columns; an extremely narrow terminal clips it safely too.
+		const actionWidth = Math.min(ACTION_WIDTH, width);
+		const word = truncateToWidth(full, actionWidth);
+		const detailWidth = width - actionWidth - ACTION_GAP.length;
+		let detail = "";
+		if (detailWidth > 0 && action.detail) {
+			detail = action.isPath
+				? truncateMiddleToWidth(action.detail, detailWidth)
+				: truncateToWidth(action.detail, detailWidth);
+		}
+		return { action, word, detail, gap: detail ? ACTION_GAP : "" };
+	}
+
+	#paintAnsi(row: { action: Action; word: string; detail: string; gap: string }, animate: boolean): string {
+		const { action, word, detail, gap } = row;
+		const paintedAction = action.running
+			? animate
+				? shimmerText(word, theme, ACTION_SHIMMER_PALETTE)
+				: theme.fg("muted", word)
+			: action.failed
+				? theme.fg("error", word)
+				: theme.fg("text", word);
+		return paintedAction + gap + (detail ? theme.fg("dim", detail) : "");
 	}
 
 	describe(cx: DescribeContext): NativeNode {
-		const rows = this.#layoutRows(cx.cols, false);
-		if (this.#nativeRows.length) {
-			const inset = padding(Math.min(getPaddingX(1), Math.max(0, cx.cols - 1)));
-			const children = this.#nativeRows.map(item => {
-				const body = inset + item.body;
-				const label =
-					this.#workingActive && shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer")
-						? describeShimmer([{ text: body, palette: THINKING_SHIMMER_PALETTE }])
-						: this.#workingActive
-							? text(body)
-							: text([span(body, "dim")]);
-				if (!item.suffix || item.duration === undefined) return label;
-				const timer = elapsed(item.duration, !item.running);
-				return this.#workingActive
-					? row([label, text(item.timerPrefix ?? " · "), timer])
-					: row([
-							label,
-							text([span(item.timerPrefix ?? " · ", "dim")]),
-							node(timer.k, { ...timer.p, tone: "muted" }, timer.c),
-						]);
-			});
-			while (children.length < 3) children.push(node("rows", { cols: cx.cols, lines: [""] }));
-			return col(children);
-		}
-		if (!this.#workingActive) {
-			return col(
-				rows.map(value => (value ? text([span(value, "dim")]) : node("rows", { cols: cx.cols, lines: [""] }))),
-			);
-		}
-		if (!shimmerEnabled() || cx.reduceMotion || !cx.supports("shimmer")) {
-			return { k: "rows", p: { cols: cx.cols, lines: rows } };
-		}
-		return col(
-			rows.map(value =>
-				value
-					? describeShimmer([{ text: value, palette: THINKING_SHIMMER_PALETTE }])
-					: node("rows", { cols: cx.cols, lines: [""] }),
-			),
-		);
+		const inset = Math.min(getPaddingX(1), Math.max(0, cx.cols - 1));
+		this.#renderRows(cx.cols - inset, false);
+		const left = padding(inset);
+		const animate = shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer");
+		const children = this.#rows.map(action => {
+			if (!action) return node("rows", { cols: cx.cols, lines: [""] });
+			const built = this.#buildRow(action, cx.cols - inset);
+			const label = action.running
+				? animate
+					? describeShimmer([{ text: built.word, palette: ACTION_SHIMMER_PALETTE }])
+					: text([span(built.word, "muted")])
+				: action.failed
+					? text([span(built.word, "error")])
+					: text([span(built.word, "text")]);
+			const parts = built.detail
+				? [text(left), label, text(built.gap), text([span(built.detail, "dim")])]
+				: [text(left), label];
+			return row(parts);
+		});
+		while (children.length < 2) children.push(node("rows", { cols: cx.cols, lines: [""] }));
+		children.push(node("rows", { cols: cx.cols, lines: [""] }));
+		return col(children);
 	}
 }

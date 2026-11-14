@@ -190,7 +190,13 @@ test("compact mixed long session preserves input, tool effects and peer messages
 							{
 								name: "bash",
 								args: {
-									command: `bun -e ${JSON.stringify("console.error('MIXED_COMMAND_FAILURE_ONE');console.error('MIXED_COMMAND_FAILURE_TWO');process.exit(7)")}`,
+									// Build the markers from char codes so the command argument (shown verbatim by the
+									// compact dock) does not contain them; only the real stderr output may leak them.
+									command: `bun -e ${JSON.stringify(
+										`console.error(String.fromCharCode(${Array.from("MIXED_COMMAND_FAILURE_ONE", c => c.charCodeAt(0)).join(",")}));` +
+											`console.error(String.fromCharCode(${Array.from("MIXED_COMMAND_FAILURE_TWO", c => c.charCodeAt(0)).join(",")}));` +
+											"process.exit(7)",
+									)}`,
 								},
 								intent: "Exercising real command failure",
 								verify: contains("MIXED_COMMAND_FAILURE_TWO"),

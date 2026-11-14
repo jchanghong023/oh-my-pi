@@ -171,7 +171,7 @@ async function collectBuildDeclarations(inputs: Map<string, Uint8Array>): Promis
 		const absolute = path.join(repoRoot, file);
 		inputs.set(absolute, await fs.readFile(absolute));
 	}
-	for (const directory of ["preview", "runtime", "app", "client", "packages/web/public", "config"]) {
+	for (const directory of ["preview", "shared", "runtime", "app", "client", "packages/web/public", "config"]) {
 		await walkFiles(path.join(frontendDir, directory), async file => {
 			if (!inputs.has(file)) inputs.set(file, await fs.readFile(file));
 		});

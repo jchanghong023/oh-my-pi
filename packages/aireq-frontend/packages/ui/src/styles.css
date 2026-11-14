@@ -3,6 +3,7 @@
 @import "tailwind-scrollbar-hide/v4";
 @import "shadcn/tailwind.css";
 @import "./nativeMediaControls.css";
+@import "./github-markdown.css";
 @source "../../../node_modules/streamdown/dist/*.js";
 
 @plugin "@tailwindcss/typography";

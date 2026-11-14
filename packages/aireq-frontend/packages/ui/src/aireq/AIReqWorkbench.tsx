@@ -15,7 +15,7 @@ import { SessionPane } from "@/v4/SessionPane.js";
 import { V4PaneConversationProvider } from "@/v4/V4ConversationContext.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import { useAIReq } from "./AIReqContext.js";
-import { MessageResponse } from "@/components/ai-elements/message.js";
+import { AIReqMarkdownDocument } from "./AIReqMarkdownDocument.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { AIReqDeleteRequirement } from "./AIReqDeleteRequirement.js";
 export { AIReqSidebar } from "./AIReqSidebar.js";
@@ -193,7 +193,7 @@ export function AIReqMaterialsPane() {
 				) : (
 					<>
 						{path.endsWith("/sr-dependencies.json") && group && current ? <AIReqSrDependencyGraph group={group} material={current} rows={view?.srs.filter(item => item.irId === group.id && item.projectId === group.projectId) ?? []} /> : <article className="mx-auto w-full min-w-0 max-w-[72ch]" data-testid="material-document">
-              <MessageResponse className="h-auto min-w-0 break-words leading-[1.85] tracking-normal [&>p]:my-3 [&_[data-streamdown=heading-1]]:mb-4 [&_[data-streamdown=heading-2]]:mt-8 [&_[data-streamdown=heading-2]]:mb-3 [&_[data-streamdown=heading-3]]:mt-6 [&_[data-streamdown=heading-3]]:mb-2 [&_[data-streamdown=heading-4]]:mt-5 [&_[data-streamdown=heading-4]]:mb-2" theme={theme} codePreviewSettings={codePreviewSettings} showExportActions={false} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "材料没有正文。"}</MessageResponse>
+              <AIReqMarkdownDocument className="h-auto min-w-0 break-words" theme={theme} codePreviewSettings={codePreviewSettings} showExportActions={false} workspacePath={view?.projects.find(project => project.id === selection.projectId)?.root}>{material?.content ?? "材料没有正文。"}</AIReqMarkdownDocument>
             </article>}
 					</>
 				)}

@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Compact mode's two-line activity area now shows fixed-width Chinese action states (正在思考/读取/执行/写入/调用) with a gray detail that never shifts; only running action words shimmer, thinking completion shows elapsed seconds, and tool elapsed timers are removed.
+
 - AIReq, WebGUI and OpenWiki browser assets now use the same gzip archive pipeline as the stats dashboard, reducing embedded size and deferring decoding until the first request.
 - WebGUI’s sidebar groups sessions only under their projects; the separate “任务” section is gone, and the recently updated and unread views still list all history.
 - Renamed OMP’s Dev workbench module to AIReq, including `/aireq`, `omp aireq`, module namespaces and frontend resources; OMP itself retains its name and command.

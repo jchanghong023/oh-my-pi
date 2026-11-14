@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button.js";
 import { Label } from "@/components/ui/label.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.js";
-import { MessageResponse } from "@/components/ai-elements/message.js";
+import { AIReqMarkdownDocument } from "./AIReqMarkdownDocument.js";
 import { SettingsFormTextarea } from "@/settings/SettingsFormTextarea.js";
 import { AIReqAgentModelSummary } from "./AIReqAgentModelSummary.js";
 import { useAIReq } from "./AIReqContext.js";
@@ -69,7 +69,7 @@ export function AIReqRequirementsDecision({ group, readOnly = false }: { group: 
      <p className="whitespace-pre-wrap break-words" data-testid="requirements-decision-record-opinion">业务争议意见：{decision.opinion}</p>
      <p className="whitespace-pre-wrap break-words" data-testid="requirements-decision-record-result">处理结果：{decision.result}</p>
      <p className="break-all text-foreground-subtle">记录绑定：{decision.reviewId} · {decision.snapshotDigest}</p>
-     <details className="space-y-2" data-testid="requirements-decision-original-review"><summary className="cursor-pointer">查看处理时的原始 AI 评审（未改写）</summary><ReviewBinding review={decision.review} /><AIReqAgentModelSummary binding={decision.review.modelConfig} />{Boolean(decision.review.findings?.length) && <ul className="space-y-2">{decision.review.findings?.map(finding => <li key={finding.id} className="rounded-md border border-border p-2"><p>{finding.level === "blocking" ? "需补充" : "建议"}：{finding.message}</p><p className="mt-1 break-all text-foreground-subtle">{finding.documentPath}</p></li>)}</ul>}<MessageResponse>{decision.review.report}</MessageResponse></details>
+     <details className="space-y-2" data-testid="requirements-decision-original-review"><summary className="cursor-pointer">查看处理时的原始 AI 评审（未改写）</summary><ReviewBinding review={decision.review} /><AIReqAgentModelSummary binding={decision.review.modelConfig} />{Boolean(decision.review.findings?.length) && <ul className="space-y-2">{decision.review.findings?.map(finding => <li key={finding.id} className="rounded-md border border-border p-2"><p>{finding.level === "blocking" ? "需补充" : "建议"}：{finding.message}</p><p className="mt-1 break-all text-foreground-subtle">{finding.documentPath}</p></li>)}</ul>}<AIReqMarkdownDocument>{decision.review.report}</AIReqMarkdownDocument></details>
     </div>
    </details>;
   })}</div>}

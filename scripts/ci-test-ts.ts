@@ -530,7 +530,7 @@ export function isAIReqFrontendInput(file: string): boolean {
 	if (!file.startsWith("packages/aireq-frontend/")) return false;
 	const relative = file.slice("packages/aireq-frontend/".length);
 	return (
-		/^(?:preview|packages|public|config|third-party\/runtime)\//.test(relative) ||
+		/^(?:preview|shared|packages|public|config|third-party\/runtime)\//.test(relative) ||
 		/^(?:package\.json|bun\.lock|copy-manifest\.json|tsconfig\.base\.json)$/.test(relative)
 	);
 }

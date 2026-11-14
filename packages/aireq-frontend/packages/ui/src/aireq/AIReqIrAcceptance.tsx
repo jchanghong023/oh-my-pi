@@ -1,4 +1,4 @@
-import { MessageResponse } from "@/components/ai-elements/message.js";
+import { AIReqMarkdownDocument } from "./AIReqMarkdownDocument.js";
 import { useAIReqDataSource } from "./data-source.js";
 import { AIReqIrFinalPrControls } from "./AIReqIrFinalPrControls.js";
 import { ArrowLeft, ClipboardCheck } from "lucide-react";
@@ -58,7 +58,7 @@ export function AIReqIrAcceptanceHeader({ group }: { group: AIReqRequirementGrou
     {acceptance?.status === "completed" && <p role="status" className="text-ui-sm text-foreground-subtle">最终 PR 已合并并核验（样例），IR 已完成，仓库占用已释放。验收历史只读，未删除 worktree 或分支。</p>}
 
     {Boolean(acceptance?.history?.length) && <details className="text-ui-xs text-foreground-subtle"><summary className="cursor-pointer">历史验收（{acceptance!.history!.length}）</summary><ul className="mt-2 space-y-1 break-all">{acceptance!.history!.map((item, index) => <li key={`${item.candidate}:${index}`}>{item.candidate} · {item.baseCommit} · {item.status} · 仅供历史查看</li>)}</ul></details>}
-    {acceptance?.reportPath && <details className="space-y-3 text-ui-sm"><summary className="cursor-pointer">验收报告</summary><p className="break-all text-foreground-subtle">{acceptance.reportPath}</p><MessageResponse>{aireq.view?.materials.find(item => item.path === acceptance.reportPath)?.content ?? "验收报告不可读，请恢复对应文件后重新核验。"}</MessageResponse></details>}
+    {acceptance?.reportPath && <details className="space-y-3 text-ui-sm"><summary className="cursor-pointer">验收报告</summary><p className="break-all text-foreground-subtle">{acceptance.reportPath}</p><AIReqMarkdownDocument>{aireq.view?.materials.find(item => item.path === acceptance.reportPath)?.content ?? "验收报告不可读，请恢复对应文件后重新核验。"}</AIReqMarkdownDocument></details>}
     {acceptance && <details className="text-ui-sm text-foreground-subtle"><summary className="cursor-pointer">工作区与验收基点</summary><p className="mt-2 break-all">{acceptance.worktree.path}</p><p>分支：{acceptance.worktree.branch} · 基点：{acceptance.baseCommit}</p></details>}
     <p className="text-ui-xs text-foreground-subtle">{source.provenance.kind === "sample" ? "简化原型：验收固定通过，不演示问题、返工或复验；报告与合并核验均为静态样例，不执行模型、测试、Git 或归档。人工 PR 合并与归档核验仍保留。" : "验收结论以报告与合并核验记录为准，人工 PR 合并与归档核验仍须完成。"}</p>
     {aireq.error && <p role="alert" className="text-ui-sm text-destructive">{aireq.error}</p>}

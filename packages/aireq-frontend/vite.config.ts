@@ -28,14 +28,14 @@ function copiedFrontendPackages(): Plugin {
 		enforce: "pre",
 		async resolveId(source: string, importer: string | undefined) {
 			// @pierre/diffs 动态 import("shiki/langs") 取全量语言表；只暴露聊天/工具实际用到的语言。
-			if (source === "shiki/langs") return path.join(root, "preview/shiki-langs-subset.ts");
+			if (source === "shiki/langs") return path.join(root, "shared/shiki/langs-subset.ts");
 			// shiki 根入口与 bundle-full 直接引用内部 langs-bundle-full；别名到同一子集，
 			// 避免只为拿到 bundledLanguages 就把全部语法动态块打进产物。
 			if (
 				source.startsWith("./langs-bundle-full-") &&
 				importer?.replace(/\\/g, "/").includes("/shiki/dist/")
 			)
-				return path.join(root, "preview/shiki-langs-subset.ts");
+				return path.join(root, "shared/shiki/langs-subset.ts");
 			// @pierre/diffs 与 shiki/themes 会列出全部主题；只保留 UI 可选主题，其余回退。
 			if (source.startsWith("@shikijs/themes/")) {
 				const name = source.slice("@shikijs/themes/".length);
@@ -53,7 +53,7 @@ function copiedFrontendPackages(): Plugin {
 				]);
 				return supported.has(name)
 					? path.join(root, "node_modules/@shikijs/themes/dist", `${name}.mjs`)
-					: path.join(root, "preview/shiki-theme-fallback.ts");
+					: path.join(root, "shared/shiki/theme-fallback.ts");
 			}
 			if (source.startsWith("#src/")) {
 				if (!importer) throw new Error(`Dev package-local import has no importer: ${source}`);
@@ -163,7 +163,7 @@ export function createAIReqFrontendConfig(
 			alias: [
 				{
 					find: /^\.\/langs-bundle-full-.*\.mjs$/,
-					replacement: path.join(root, "preview/shiki-langs-subset.ts"),
+					replacement: path.join(root, "shared/shiki/langs-subset.ts"),
 				},
 				{ find: "@zcode/ui/styles.css", replacement: path.join(packages, "ui/src/styles.css") },
 				{ find: "@", replacement: path.join(packages, "ui/src") },

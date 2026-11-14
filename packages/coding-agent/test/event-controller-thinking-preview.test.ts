@@ -59,29 +59,8 @@ function nativeRows(node: NativeNode): readonly string[] {
 	});
 }
 
-function nativeElapsed(node: NativeNode): Array<{ age: number; stopped?: number }> {
-	const found: Array<{ age: number; stopped?: number }> = [];
-	const visit = (current: NativeNode) => {
-		if (current.k === "elapsed" && current.p) found.push({ age: current.p.age, stopped: current.p.stopped });
-		for (const child of current.c ?? []) if ("k" in child) visit(child);
-	};
-	visit(node);
-	return found;
-}
-
 function hasNativeKind(node: NativeNode, kind: string): boolean {
 	return node.k === kind || (node.c ?? []).some(child => "k" in child && hasNativeKind(child, kind));
-}
-
-function activityRows(dock: CompactThinkingPreview, width = 120): string[][] {
-	const context: DescribeContext = {
-		cols: width,
-		reduceMotion: false,
-		dark: true,
-		supports: () => true,
-		feature: () => true,
-	};
-	return [dock.render(width), nativeRows(dock.describe(context))].map(rows => rows.map(row => Bun.stripANSI(row)));
 }
 
 type MessageUpdate = Extract<AgentSessionEvent, { type: "message_update" }>;
@@ -288,202 +267,89 @@ afterEach(() => {
 	resetSettingsForTest();
 });
 
-describe("compact thinking dock focus restoration", () => {
-	it("reserves two content rows and a bottom gap through idle, thinking, completion, hiding, cancellation, and session switching", async () => {
-		const h = focusFixture();
-		expect(h.rows()).toEqual(["", "", ""]);
-		const message = thinkingMessage("old\nfirst\nlatest");
-		const live = liveSession(message, 0);
-		h.register("Thinking", live);
-		await h.focus.focusAgent("Thinking");
-		expect(h.rows()).toHaveLength(3);
-		expect(h.rows()[2]).toBe("");
-		expect(h.rendered()).toContain("latest");
-		expect(h.rendered()).toContain("first");
-		expect(h.rendered()).not.toContain("old");
-
-		live.session.agent.state.activeThinkingIndex = undefined;
-		await live.emit(update(message, "thinking_end"));
-		expect(h.rendered()).toContain("latest");
-		live.session.agent.state.activeThinkingIndex = 0;
-		await live.emit(update(message, "thinking_delta"));
-		h.ctx.hideThinkingBlock = true;
-		h.ctx.eventController.refreshThinkingVisibility();
-		expect(h.rows()).toEqual(["", "", ""]);
-		h.ctx.hideThinkingBlock = false;
-		h.ctx.eventController.refreshThinkingVisibility();
-		expect(h.rendered()).toContain("latest");
-		await h.focus.focusAgent(MAIN_AGENT_ID);
-		expect(h.rows()).toEqual(["", "", ""]);
-
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-		expect(h.rows()).toEqual([]);
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
-		expect(h.rows()).toEqual(["", "", ""]);
+describe("compact action dock", () => {
+	const cx = (cols = 60): DescribeContext => ({
+		cols,
+		reduceMotion: false,
+		dark: true,
+		supports: () => true,
+		feature: () => true,
 	});
+	const plain = (rows: readonly string[]) => rows.map(row => Bun.stripANSI(row));
 
-	it("ignores late delta and end callbacks from the previously focused session", async () => {
+	it("lays out a fixed eight-column action area, two spaces and a gray detail that never shifts", async () => {
 		const h = focusFixture();
-		const oldMessage = thinkingMessage("OLD_SESSION");
-		const newMessage = thinkingMessage("NEW_SESSION", 2);
-		const old = liveSession(oldMessage, 0);
-		const current = liveSession(newMessage, 0);
-		h.register("Old", old);
-		h.register("Current", current);
-
-		await h.focus.focusAgent("Old");
-		expect(h.rendered()).toContain("OLD_SESSION");
-		await h.focus.focusAgent("Current");
-		expect(h.nativeRendered()).toContain("NEW_SESSION");
-		expect(h.rendered()).toContain("NEW_SESSION");
-
-		// The fixture intentionally retains unsubscribed callbacks to model delivery already in flight.
-		await old.emit(update(oldMessage, "thinking_delta"));
-		old.session.agent.state.activeThinkingIndex = undefined;
-		await old.emit(update(oldMessage, "thinking_end"));
-		await old.emit({ type: "message_end", message: oldMessage });
-		expect(h.rendered()).toContain("NEW_SESSION");
-		expect(h.rendered()).not.toContain("OLD_SESSION");
-		expect(h.nativeRendered()).toContain("NEW_SESSION");
-		expect(h.nativeRendered()).not.toContain("OLD_SESSION");
-	});
-
-	it("retains only the rendered thought and respects hiding after completion", async () => {
-		const h = focusFixture();
-		const message = thinkingMessage("VISIBLE_THOUGHT");
-		const live = liveSession(message, 0);
-		h.register("Thinking", live);
-		await h.focus.focusAgent("Thinking");
-		expect(h.rendered()).toContain("VISIBLE_THOUGHT");
-		message.content = [{ type: "thinking", thinking: "UNSEEN_FINAL_THOUGHT" }];
-		live.session.agent.state.activeThinkingIndex = undefined;
-		live.session.agent.state.streamMessage = null;
-		await live.emit({ type: "message_end", message });
-		await live.emit({ type: "agent_end", messages: [] });
-		expect(h.rendered()).toContain("VISIBLE_THOUGHT");
-		expect(h.rendered()).not.toContain("UNSEEN_FINAL_THOUGHT");
-		h.ctx.hideThinkingBlock = true;
-		h.ctx.eventController.refreshThinkingVisibility();
-		expect(h.rendered()).toBe("");
-		h.ctx.hideThinkingBlock = false;
-		h.ctx.eventController.refreshThinkingVisibility();
-		expect(h.rendered()).toContain("VISIBLE_THOUGHT");
-	});
-
-	it("follows thinking visibility and display preferences without replaying history into the dock", async () => {
-		const h = focusFixture();
-		const message = thinkingMessage("VISIBLE_DOCK_THOUGHT");
-		const live = liveSession(message, 0);
-		h.register("Thinking", live);
-		await h.focus.focusAgent("Thinking");
-		expect(h.rendered()).toContain("VISIBLE_DOCK_THOUGHT");
-
-		h.ctx.hideThinkingBlock = true;
-		h.ctx.eventController.refreshThinkingVisibility();
-		expect(h.rendered()).toBe("");
-		h.ctx.hideThinkingBlock = false;
-		h.ctx.eventController.refreshThinkingVisibility();
-		expect(h.rendered()).toContain("VISIBLE_DOCK_THOUGHT");
-
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-		expect(h.rendered()).toBe("");
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true, compactToolActivity: true });
-		expect(h.rendered()).toContain("VISIBLE_DOCK_THOUGHT");
-	});
-
-	it("selects the latest two dispatches despite returns, output, and argument updates", async () => {
-		const h = focusFixture();
-		const message = thinkingMessage("reasoning first\nreasoning second");
-		const live = liveSession(message, 0);
+		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
 		await live.emit({
 			type: "tool_execution_start",
 			toolCallId: "a",
-			toolName: "lookup",
-			args: { i: "FIRST_INTENT" },
+			toolName: "read",
+			args: { path: "src/config.ts" },
 		});
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "b",
-			toolName: "lookup",
-			args: { i: "SECOND_INTENT" },
-		});
-		expect(h.rendered()).toContain("reasoning second");
-		expect(h.rendered()).not.toContain("SECOND_INTENT");
-		live.session.agent.state.activeThinkingIndex = undefined;
-		await live.emit(update(message, "thinking_end"));
-		const expectPair = (first: string, second: string) => {
-			for (const rows of [h.rows(), h.nativeRendered().split("\n")]) {
-				expect(Bun.stripANSI(rows[0]!)).toContain(first);
-				expect(Bun.stripANSI(rows[1]!)).toContain(second);
-			}
-		};
-		expectPair("FIRST_INTENT", "SECOND_INTENT");
-		await live.emit({
-			type: "tool_execution_end",
-			toolCallId: "b",
-			toolName: "lookup",
-			result: { content: [{ type: "text", text: "B_RESULT" }] },
-			isError: false,
-		});
-		expectPair("FIRST_INTENT", "SECOND_INTENT");
-		const native = h.dock.describe({
-			cols: 60,
-			reduceMotion: false,
-			dark: true,
-			supports: () => true,
-			feature: () => true,
-		});
-		const firstRow = native.c?.[0];
-		const secondRow = native.c?.[1];
-		if (native.k !== "col" || !firstRow || !secondRow || !("k" in firstRow) || !("k" in secondRow)) {
-			throw new Error("Expected two native tool rows");
-		}
-		expect(hasNativeKind(firstRow, "shimmer")).toBe(true);
-		expect(hasNativeKind(secondRow, "shimmer")).toBe(true);
-		const preparing = { type: "toolCall" as const, id: "c", name: "preparing", arguments: { title: "PREPARING" } };
-		message.content.push(preparing);
-		await live.emit({
-			type: "message_update",
-			message,
-			assistantMessageEvent: { type: "toolcall_start", contentIndex: 1, partial: message },
-		});
-		expectPair("FIRST_INTENT", "SECOND_INTENT");
-		expect(h.rendered()).not.toContain("PREPARING");
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "c",
-			toolName: "lookup",
-			args: { i: "THIRD_INTENT" },
-		});
-		expectPair("SECOND_INTENT", "THIRD_INTENT");
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "a",
-			toolName: "lookup",
-			args: { i: "LATE_FIRST" },
-			partialResult: { content: [{ type: "text", text: "LATE_OUTPUT" }] },
-		});
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "b",
-			toolName: "lookup",
-			args: { i: "SECOND_INTENT" },
-			partialResult: { content: [{ type: "text", text: "BACKGROUND_OUTPUT" }] },
-		});
+		const running = plain(h.rows());
+		expect(running[0]).toBe("");
+		expect(running[1]).toBe(" 正在读取  src/config.ts");
+		expect(running[2]).toBe("");
+		expect(Bun.stringWidth("正在读取")).toBe(8);
 		await live.emit({
 			type: "tool_execution_end",
 			toolCallId: "a",
-			toolName: "lookup",
+			toolName: "read",
 			result: { content: [] },
 			isError: false,
 		});
-		expectPair("SECOND_INTENT", "THIRD_INTENT");
-		expect(h.rendered()).not.toMatch(/LATE_FIRST|LATE_OUTPUT|BACKGROUND_OUTPUT|B_RESULT/);
+		const done = plain(h.rows());
+		expect(done[1]).toBe(" 读取完成  src/config.ts");
+		// The detail origin (action area + two spaces) is identical across the state change.
+		expect(done[1]!.indexOf("src/config.ts")).toBe(running[1]!.indexOf("src/config.ts"));
+		for (const rows of [h.rows(), nativeRows(h.dock.describe(cx()))]) {
+			expect(rows).toHaveLength(3);
+			expect(rows[2]).toBe("");
+		}
 	});
 
-	it("retains the last rendered tool snapshot after return or cancellation without inventing a canceled result", async () => {
+	it("maps each tool category to its four-character action words and falls back to 调用 for unknown tools", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		const cases: Array<{ name: string; args: Record<string, unknown>; running: string; done: string }> = [
+			{ name: "read", args: { path: "a.ts" }, running: "正在读取", done: "读取完成" },
+			{ name: "bash", args: { command: "echo hi" }, running: "正在执行", done: "执行完成" },
+			{ name: "write", args: { path: "a.ts", content: "x" }, running: "正在写入", done: "写入完成" },
+			{ name: "edit", args: { path: "a.ts", input: "*** Begin Patch" }, running: "正在写入", done: "写入完成" },
+			{ name: "mystery_tool", args: { query: "target" }, running: "正在调用", done: "调用完成" },
+		];
+		for (const [index, c] of cases.entries()) {
+			const id = `cat-${index}`;
+			await live.emit({ type: "tool_execution_start", toolCallId: id, toolName: c.name, args: c.args });
+			expect(plain(h.rows())[1]).toStartWith(` ${c.running}  `);
+			await live.emit({
+				type: "tool_execution_end",
+				toolCallId: id,
+				toolName: c.name,
+				result: { content: [] },
+				isError: false,
+			});
+			expect(plain(h.rows())[1]).toStartWith(` ${c.done}  `);
+		}
+		// An unmapped tool keeps its real name in the detail and is never labeled read/exec.
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "unknown",
+			toolName: "mystery_tool",
+			args: { query: "target" },
+		});
+		const row = plain(h.rows())[1]!;
+		expect(row).toContain("mystery_tool");
+		expect(row).toContain("target");
+		expect(row).not.toContain("正在读取");
+		expect(row).not.toContain("正在执行");
+	});
+
+	it("shows failure from isError without rejudging results, and keeps the object in the detail", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -491,692 +357,369 @@ describe("compact thinking dock focus restoration", () => {
 		await live.emit({
 			type: "tool_execution_start",
 			toolCallId: "a",
-			toolName: "custom_tool",
-			args: { title: "VISIBLE_TARGET" },
-		});
-		expect(h.rendered()).toContain("VISIBLE_TARGET");
-		await live.emit({ type: "session_abort" });
-		expect(h.rendered()).toContain("custom_tool");
-		expect(h.rendered()).not.toMatch(/已取消|cancelled|canceled/i);
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "a",
-			toolName: "custom_tool",
-			args: {},
-			partialResult: { content: [{ type: "text", text: "UNSEEN_UPDATE" }] },
+			toolName: "bash",
+			args: { command: "false" },
 		});
 		await live.emit({
 			type: "tool_execution_end",
 			toolCallId: "a",
-			toolName: "custom_tool",
-			result: { content: [{ type: "text", text: "UNSEEN_RESULT" }] },
+			toolName: "bash",
+			result: { content: [{ type: "text", text: "boom" }] },
+			isError: true,
+		});
+		const row = plain(h.rows())[1]!;
+		expect(row).toStartWith(" 执行失败  ");
+		expect(row).toContain("false");
+		expect(row).not.toContain("boom");
+		expect(h.rows()[1]).toContain(theme.getFgAnsi("error"));
+		// A fresh call is a separate record; while it runs, the failed action stays above as the latest ended.
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "b",
+			toolName: "bash",
+			args: { command: "true" },
+		});
+		expect(plain(h.rows())[0]).toStartWith(" 执行失败  ");
+		expect(plain(h.rows())[1]).toStartWith(" 正在执行  ");
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "b",
+			toolName: "bash",
+			result: { content: [] },
 			isError: false,
 		});
-		await live.emit({ type: "agent_end", messages: [] });
-		expect(h.rendered()).toContain("VISIBLE_TARGET");
-		expect(h.rendered()).not.toContain("UNSEEN_UPDATE");
-		expect(h.rendered()).not.toContain("UNSEEN_RESULT");
-		expect(h.rendered()).not.toMatch(/已取消|cancelled|canceled/i);
-		await live.emit({ type: "message_start", message: { role: "user", content: "new turn", timestamp: 2 } });
-		expect(h.rendered()).toContain("VISIBLE_TARGET");
+		// Both ended actions are retained (latest two): the failure stays above, the success below.
+		expect(plain(h.rows())[0]).toStartWith(" 执行失败  ");
+		expect(plain(h.rows())[1]).toStartWith(" 执行完成  ");
 	});
 
-	it("shows intent before the raw command without letting long intent hide the command or showing output", async () => {
-		const h = focusFixture();
-		const live = liveSession();
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "a",
-			toolName: "bash",
-			args: { i: "THE_INTENT", command: "THE_COMMAND", path: "THE_TARGET" },
-		});
-		for (const rows of [h.rows(), h.nativeRendered().split("\n")]) {
-			expect(Bun.stripANSI(rows[0]!)).toContain("bash");
-			expect(Bun.stripANSI(rows[0]!)).toContain("THE_INTENT · THE_COMMAND");
-			expect(rows[1] ?? "").toBe("");
-		}
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "a",
-			toolName: "bash",
-			args: { i: "THE_INTENT", command: "THE_COMMAND", path: "THE_TARGET" },
-			partialResult: { content: [{ type: "text", text: "OUTPUT_MUST_NOT_APPEAR" }] },
-		});
-		expect(h.rendered()).toContain("THE_INTENT · THE_COMMAND");
-		expect(h.rendered()).not.toMatch(/THE_TARGET|OUTPUT_MUST_NOT_APPEAR/);
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "a",
-			toolName: "bash",
-			args: { i: `核对${"很长的说明".repeat(20)}`, command: "echo begin; git diff --stat" },
-			partialResult: { content: [] },
-		});
-		for (const text of [h.rendered(), h.nativeRendered()]) {
-			expect(text.indexOf("核对")).toBeLessThan(text.indexOf("echo begin"));
-			expect(text).toContain("echo begin ; …");
-			expect(text).not.toContain("git diff");
-		}
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "a",
-			toolName: "bash",
-			args: { i: "检查", command: `printf 'a;b' 2>&1 && echo hidden` },
-			partialResult: { content: [] },
-		});
-		for (const text of [h.rendered(), h.nativeRendered()]) {
-			expect(text).toContain("printf 'a;b' 2>&1 && …");
-			expect(text).not.toContain("echo hidden");
-		}
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "a",
-			toolName: "bash",
-			args: { i: "检查", command: `find /${"long-directory/".repeat(8)}target` },
-			partialResult: { content: [] },
-		});
-		for (const text of [h.rendered(), h.nativeRendered()]) {
-			expect(text).toContain("find /long-directory/");
-			expect(text).toContain("…");
-			expect(text).not.toContain("target");
-		}
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "b",
-			toolName: "bash",
-			args: { i: 42, intent: {}, title: "", command: "RAW_COMMAND", path: "OTHER_TARGET" },
-		});
-		expect(h.rendered()).toContain("RAW_COMMAND");
-		expect(h.rendered()).not.toContain("OTHER_TARGET");
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "b",
-			toolName: "bash",
-			args: { command: "RAW_COMMAND" },
-			partialResult: { content: [{ type: "text", text: "COMMAND_OUTPUT" }] },
-		});
-		expect(h.rendered()).toContain("RAW_COMMAND");
-		expect(h.rendered()).not.toContain("COMMAND_OUTPUT");
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "c",
-			toolName: "extension_probe",
-			args: { title: 42, command: {}, query: "TARGET_QUERY" },
-		});
-		expect(h.rendered()).toContain("TARGET_QUERY");
-		expect(h.nativeRendered()).toContain("TARGET_QUERY");
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "d",
-			toolName: "identity_only",
-			args: { i: [], title: 7, command: false, path: {} },
-		});
-		expect(h.rendered()).toContain("identity_only");
-		expect(h.nativeRendered()).toContain("identity_only");
-	});
-
-	it("links wait to the running job and distinguishes frozen submission time from waiting time", async () => {
-		const h = focusFixture();
-		const live = liveSession();
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
+	it("records thinking as one action, shows the latest nonblank line, then replaces it with elapsed seconds", async () => {
 		setSystemTime(10_000);
+		const h = focusFixture();
+		const message = thinkingMessage("older\nfirst\nlatest");
+		const live = liveSession(message, 0);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message },
+		});
+		expect(plain(h.rows())).toEqual(["", " 正在思考  latest", ""]);
+		setSystemTime(15_000);
+		live.session.agent.state.activeThinkingIndex = undefined;
+		await live.emit(update(message, "thinking_end"));
+		expect(plain(h.rows())).toEqual(["", " 思考完成  用时 5.0 秒", ""]);
+		expect(h.rendered()).not.toContain("latest");
+	});
+
+	it("formats sub-0.1s thinking as <0.1 and keeps seconds past a minute", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const message = thinkingMessage("quick");
+		const live = liveSession(message, 0);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message },
+		});
+		setSystemTime(10_050);
+		live.session.agent.state.activeThinkingIndex = undefined;
+		await live.emit(update(message, "thinking_end"));
+		expect(plain(h.rows())[1]).toBe(" 思考完成  用时 <0.1 秒");
+
+		const slow = thinkingMessage("slow", 2);
+		const live2 = liveSession(slow, 0);
+		h.register("Slow", live2);
+		await h.focus.focusAgent("Slow");
+		await live2.emit({
+			type: "message_update",
+			message: slow,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: slow },
+		});
+		setSystemTime(80_000);
+		live2.session.agent.state.activeThinkingIndex = undefined;
+		await live2.emit(update(slow, "thinking_end"));
+		expect(plain(h.rows())[1]).toBe(" 思考完成  用时 70.0 秒");
+	});
+
+	it("orders serial actions as latest-ended above and current-running below", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const message = thinkingMessage("reasoning");
+		const live = liveSession(message, 0);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message },
+		});
+		setSystemTime(15_000);
+		live.session.agent.state.activeThinkingIndex = undefined;
+		await live.emit(update(message, "thinking_end"));
 		await live.emit({
 			type: "tool_execution_start",
-			toolCallId: "shell",
-			toolName: "bash",
-			args: { i: "检查", command: "bun run fulltest" },
+			toolCallId: "r",
+			toolName: "read",
+			args: { path: "src/config.ts" },
 		});
-		h.rows();
-		setSystemTime(10_002);
+		expect(plain(h.rows())).toEqual([" 思考完成  用时 5.0 秒", " 正在读取  src/config.ts", ""]);
 		await live.emit({
 			type: "tool_execution_end",
-			toolCallId: "shell",
-			toolName: "bash",
-			result: { content: [], details: { async: { state: "running", jobId: "bg_1", type: "bash" } } },
+			toolCallId: "r",
+			toolName: "read",
+			result: { content: [] },
+			isError: false,
 		});
-		for (const text of [h.rendered(), h.nativeRendered()]) {
-			expect(text).toContain("bun run fulltest");
-			expect(text).toContain(`bg_1 · 提交 ${formatDuration(2)}`);
-		}
+		expect(plain(h.rows())).toEqual([" 思考完成  用时 5.0 秒", " 读取完成  src/config.ts", ""]);
 		await live.emit({
 			type: "tool_execution_start",
-			toolCallId: "waiting",
-			toolName: "wait",
-			args: { i: "等待检查" },
+			toolCallId: "x",
+			toolName: "bash",
+			args: { command: "rg compact packages/" },
 		});
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "waiting",
-			toolName: "wait",
-			args: { i: "等待检查" },
-			partialResult: {
-				content: [{ type: "text", text: "OUTPUT_MUST_NOT_APPEAR" }],
-				details: {
-					op: "wait",
-					jobs: [
-						{ id: "old", type: "bash", status: "completed", label: "OLD_COMMAND", durationMs: 1 },
-						{ id: "bg_1", type: "bash", status: "running", label: "bun run fulltest", durationMs: 0 },
-					],
-				},
-			},
-		});
-		setSystemTime(15_002);
-		for (const rows of [h.rows(), h.nativeRendered().split("\n")]) {
-			expect(Bun.stripANSI(rows[0]!)).toContain(`bg_1 · 提交 ${formatDuration(2)}`);
-			const waiting = Bun.stripANSI(rows[1]!);
-			expect(waiting).toContain("wait · 等待检查 · [bash] bg_1 bun run fulltest");
-			expect(waiting).toContain(" · 等待 ");
-			expect(waiting).toEndWith(formatDuration(5000));
-			expect(waiting).not.toMatch(/OLD_COMMAND|OUTPUT_MUST_NOT_APPEAR/);
-		}
+		expect(plain(h.rows())).toEqual([" 读取完成  src/config.ts", " 正在执行  rg compact packages/", ""]);
 	});
 
-	it("keeps wide multiline tool details and elapsed within their own ANSI and native rows", async () => {
+	it("keeps two running actions in stable slots, fills vacancies without a carousel, and never hides a runner", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		setSystemTime(10_000);
+		const start = (id: string) =>
+			live.emit({ type: "tool_execution_start", toolCallId: id, toolName: "bash", args: { command: id } });
+		const end = (id: string) =>
+			live.emit({
+				type: "tool_execution_end",
+				toolCallId: id,
+				toolName: "bash",
+				result: { content: [] },
+				isError: false,
+			});
+		await start("A");
+		await start("B");
+		await start("C");
+		// Bottom-first: A holds the bottom slot, B the top; C waits without rotating them.
+		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  A", ""]);
+		await end("A");
+		// A finished and a queued runner exists: C immediately fills A's bottom slot.
+		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  C", ""]);
+		await end("B");
+		// No queued runner remains: B stays static in place, C keeps running.
+		expect(plain(h.rows())).toEqual([" 执行完成  B", " 正在执行  C", ""]);
+		await end("C");
+		expect(plain(h.rows())).toEqual([" 执行完成  B", " 执行完成  C", ""]);
+	});
+
+	it("animates only the running action word, stops it on end, and keeps the detail static", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		setShimmerMode("classic");
 		await live.emit({
 			type: "tool_execution_start",
 			toolCallId: "a",
-			toolName: "wide_tool",
+			toolName: "bash",
+			args: { command: "sleep 1" },
+		});
+		const native = h.dock.describe(cx());
+		expect(hasNativeKind(native, "shimmer")).toBe(true);
+		// The shimmer node carries only the four-character action word, not the detail.
+		const shimmerTexts: string[] = [];
+		const visit = (node: NativeNode) => {
+			if (node.k === "shimmer") shimmerTexts.push(node.p?.spans?.map(s => s.t).join("") ?? "");
+			for (const child of node.c ?? []) if ("k" in child) visit(child);
+		};
+		visit(native);
+		expect(shimmerTexts).toEqual(["正在执行"]);
+		setSystemTime(500);
+		const first = h.rows();
+		setSystemTime(1000);
+		expect(h.rows()).not.toEqual(first);
+		expect(plain(h.rows())).toEqual(plain(first));
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "a",
+			toolName: "bash",
+			result: { content: [] },
+			isError: false,
+		});
+		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
+		const stopped = h.rows();
+		setSystemTime(1500);
+		expect(h.rows()).toEqual(stopped);
+	});
+
+	it("honors disabled shimmer with static readable state words", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		setShimmerMode("disabled");
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "a",
+			toolName: "read",
+			args: { path: "a.ts" },
+		});
+		const first = h.rows();
+		setSystemTime(500);
+		expect(h.rows()).toEqual(first);
+		expect(plain(first)[1]).toBe(" 正在读取  a.ts");
+		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
+	});
+
+	it("shows the actual command folded to one line and tail-truncated, without output or elapsed", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "a",
+			toolName: "bash",
+			args: { i: "THE_INTENT", command: "echo begin\ngit diff --stat" },
+		});
+		const row = plain(h.rows())[1]!;
+		expect(row).toStartWith(" 正在执行  ");
+		expect(row).toContain("echo begin git diff --stat");
+		expect(row).not.toContain("THE_INTENT");
+		expect(row).not.toMatch(/\d+(?:\.\d+)?(?:ms|s|m)\b/);
+		await live.emit({
+			type: "tool_execution_update",
+			toolCallId: "a",
+			toolName: "bash",
+			args: { command: "echo begin\ngit diff --stat" },
+			partialResult: { content: [{ type: "text", text: "OUTPUT_MUST_NOT_APPEAR" }] },
+		});
+		expect(h.rendered()).not.toContain("OUTPUT_MUST_NOT_APPEAR");
+	});
+
+	it("middle-ellipsizes long read and write paths while keeping the file name", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		const long = `src/${"nested/".repeat(20)}config.ts`;
+		await live.emit({ type: "tool_execution_start", toolCallId: "a", toolName: "read", args: { path: long } });
+		const row = plain(h.dock.render(40))[1]!;
+		expect(row).toContain("…");
+		expect(row).toContain("config.ts");
+		expect(Bun.stringWidth(row)).toBeLessThanOrEqual(40);
+	});
+
+	it("keeps wide, multiline and styled details inside one row at narrow widths without leaking color", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "a",
+			toolName: "mystery_tool",
 			args: { i: "\u001b[31m宽字符多行意图宽字符多行意图\u001b[0m\n下一行\t内容" },
 		});
 		await live.emit({
 			type: "tool_execution_start",
 			toolCallId: "b",
-			toolName: "other",
+			toolName: "bash",
 			args: { command: "printf hello" },
 		});
-		setSystemTime(15_000);
-		const cx: DescribeContext = {
-			cols: 32,
-			reduceMotion: false,
-			dark: true,
-			supports: () => true,
-			feature: () => true,
-		};
-		for (const rows of [h.dock.render(32), nativeRows(h.dock.describe(cx))]) {
-			expect(rows).toHaveLength(3);
-			expect(rows[2]).toBe("");
-			expect(Bun.stripANSI(rows[0]!)).toStartWith(" wide_tool");
-			expect(Bun.stripANSI(rows[1]!)).toStartWith(" other");
-			expect(Bun.stripANSI(rows[0]!)).toContain("宽字符");
-			expect(Bun.stripANSI(rows[1]!)).toContain("printf hello");
-			expect(Bun.stripANSI(rows[0]!).trimEnd()).toEndWith(formatDuration(5000));
-			expect(Bun.stripANSI(rows[1]!).trimEnd()).toEndWith(formatDuration(5000));
-			expect(rows.every(row => Bun.stringWidth(row) <= 32)).toBe(true);
-		}
-		for (const width of [0, 1]) {
-			for (const rows of [h.dock.render(width), nativeRows(h.dock.describe({ ...cx, cols: width }))]) {
-				expect(rows.every(row => Bun.stringWidth(row) <= width)).toBe(true);
+		for (const width of [32, 12, 8, 4, 1, 0]) {
+			for (const rows of [h.dock.render(width), nativeRows(h.dock.describe(cx(width)))]) {
+				expect(rows.every(row => Bun.stringWidth(row) <= Math.max(width, 0))).toBe(true);
 			}
 		}
+		const narrow = plain(h.dock.render(32));
+		expect(narrow[0]).toContain("printf hello");
+		expect(narrow[1]).toContain("宽字符");
+		expect(narrow[2]).toBe("");
 	});
 
-	it("ages each execution independently, freezes actual returns, and preserves origin across focus and rebuild", async () => {
+	it("updates one record on incremental content without duplicating it or restarting thinking time", async () => {
 		setSystemTime(10_000);
-		setShimmerMode("disabled");
+		const h = focusFixture();
+		const message = thinkingMessage("first");
+		const live = liveSession(message, 0);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message },
+		});
+		setSystemTime(12_000);
+		message.content = [{ type: "thinking", thinking: "first\nsecond" }];
+		await live.emit(update(message, "thinking_delta"));
+		expect(plain(h.rows())).toEqual(["", " 正在思考  second", ""]);
+		setSystemTime(15_000);
+		live.session.agent.state.activeThinkingIndex = undefined;
+		await live.emit(update(message, "thinking_end"));
+		// Elapsed is measured from the original phase start, not the last delta.
+		expect(plain(h.rows())[1]).toBe(" 思考完成  用时 5.0 秒");
+	});
+
+	it("retains static content across loop end and session switch without reviving animation", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		await live.emit({ type: "tool_execution_start", toolCallId: "a", toolName: "bash", args: { i: "CLOCK_A" } });
-		setSystemTime(12_000);
-		await live.emit({ type: "tool_execution_start", toolCallId: "b", toolName: "bash", args: { i: "CLOCK_B" } });
-		setSystemTime(15_000);
-		const check = (first: number, second: number) => {
-			for (const rows of [h.rows(), h.nativeRendered().split("\n")]) {
-				expect(Bun.stripANSI(rows[0]!).trimEnd()).toEndWith(formatDuration(first));
-				expect(Bun.stripANSI(rows[1]!).trimEnd()).toEndWith(formatDuration(second));
-			}
-		};
-		check(5000, 3000);
-		await live.emit({ type: "session_abort" });
-		setSystemTime(16_000);
-		check(6000, 4000);
 		await live.emit({
-			type: "tool_execution_end",
-			toolCallId: "b",
-			toolName: "bash",
-			result: { content: [{ type: "text", text: "background job bg_1" }] },
-			isError: false,
+			type: "tool_execution_start",
+			toolCallId: "a",
+			toolName: "read",
+			args: { path: "keep.ts" },
 		});
-		setSystemTime(19_000);
-		check(9000, 4000);
-		const cx: DescribeContext = {
-			cols: 60,
-			reduceMotion: false,
-			dark: true,
-			supports: () => true,
-			feature: () => true,
-		};
-		expect(nativeElapsed(h.dock.describe(cx))).toEqual([
-			{ age: 9000, stopped: undefined },
-			{ age: 4000, stopped: 4000 },
-		]);
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "b",
-			toolName: "bash",
-			args: {},
-			partialResult: { content: [{ type: "text", text: "background still running" }] },
-		});
-		check(9000, 4000);
-		await h.focus.focusAgent(MAIN_AGENT_ID);
-		setSystemTime(21_000);
-		await h.focus.focusAgent("Worker");
-		check(11000, 4000);
-		const rebuilt = new CompactThinkingPreview(h.ctx);
-		expect(Bun.stripANSI(rebuilt.render(60)[0]!).trimEnd()).toEndWith(formatDuration(11000));
 		await live.emit({
 			type: "tool_execution_end",
 			toolCallId: "a",
-			toolName: "bash",
-			result: { content: [] },
-			isError: false,
-		});
-		await live.emit({ type: "agent_end", messages: [] });
-		const retained = h.rows().map(row => Bun.stripANSI(row));
-		setSystemTime(30_000);
-		expect(h.rows().map(row => Bun.stripANSI(row))).toEqual(retained);
-	});
-
-	it("does not invent execution time for a recovered pending call with no start fact", async () => {
-		const h = focusFixture();
-		const message = thinkingMessage("");
-		message.content = [{ type: "toolCall", id: "unknown", name: "probe", arguments: { i: "NO_CLOCK" } }];
-		const live = liveSession(message);
-		live.session.agent.emitExternalEvent(
-			{ type: "tool_execution_start", toolCallId: "unknown", toolName: "probe", args: { i: "NO_CLOCK" } },
-			{ stateOnly: true },
-		);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		const first = h.rows().map(row => Bun.stripANSI(row));
-		expect(first[0]).toContain("NO_CLOCK");
-		setSystemTime(Date.now() + 10_000);
-		expect(h.rows().map(row => Bun.stripANSI(row))).toEqual(first);
-		expect(h.nativeRendered()).not.toMatch(/\b\d+(?:\.\d+)?(?:ms|s|m)\b/);
-		const cx: DescribeContext = {
-			cols: 60,
-			reduceMotion: false,
-			dark: true,
-			supports: () => true,
-			feature: () => true,
-		};
-		expect(nativeElapsed(h.dock.describe(cx))).toEqual([]);
-	});
-
-	it("isolates retained content by logical session even across reconstructed session objects", async () => {
-		const h = focusFixture();
-		const message = thinkingMessage("OLD_LOGICAL_SESSION");
-		const old = liveSession(message, 0);
-		const restored = liveSession();
-		const untouched = liveSession();
-		untouched.session.agent.state.messages.push(thinkingMessage("UNSEEN_TRANSCRIPT"));
-		vi.spyOn(restored.session.sessionManager, "getSessionId").mockReturnValue(
-			old.session.sessionManager.getSessionId(),
-		);
-		h.register("Old", old);
-		h.register("Restored", restored);
-		h.register("Untouched", untouched);
-		await h.focus.focusAgent("Old");
-		expect(h.rendered()).toContain("OLD_LOGICAL_SESSION");
-		old.session.agent.state.activeThinkingIndex = undefined;
-		old.session.agent.state.streamMessage = null;
-		await old.emit({ type: "agent_end", messages: [] });
-		await h.focus.focusAgent("Untouched");
-		expect(h.rows()).toEqual(["", "", ""]);
-		await old.emit(update(message, "thinking_delta"));
-		expect(h.rows()).toEqual(["", "", ""]);
-		await h.focus.focusAgent("Restored");
-		expect(h.nativeRendered()).toContain("OLD_LOGICAL_SESSION");
-		const reconstructed = new CompactThinkingPreview(h.ctx);
-		expect(Bun.stripANSI(reconstructed.render(60).join("\n"))).toContain("OLD_LOGICAL_SESSION");
-		await h.focus.focusAgent("Untouched");
-		expect(h.rows()).toEqual(["", "", ""]);
-	});
-
-	it("keeps thinking animated through the loop and freezes it only after the loop ends", async () => {
-		const h = focusFixture();
-		const live = liveSession(thinkingMessage("older\nfirst original line\nlatest original line"), 0);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		setShimmerMode("classic");
-		setSystemTime(0);
-		const first = h.rows();
-		expect(first.map(row => Bun.stripANSI(row))).toEqual([" first original line", " latest original line", ""]);
-		setSystemTime(500);
-		expect(h.rows()).not.toEqual(first);
-		expect(
-			h.dock.describe({
-				cols: 60,
-				reduceMotion: false,
-				dark: true,
-				supports: () => true,
-				feature: () => true,
-			}).k,
-		).toBe("col");
-		setShimmerMode("disabled");
-		const disabled = h.rows();
-		setSystemTime(1000);
-		expect(h.rows()).toEqual(disabled);
-		setShimmerMode("classic");
-		live.session.agent.state.activeThinkingIndex = undefined;
-		const retainedDuringLoop = h.rows();
-		setSystemTime(1250);
-		expect(h.rows().map(row => Bun.stripANSI(row))).toEqual(retainedDuringLoop.map(row => Bun.stripANSI(row)));
-		expect(h.rows()).not.toEqual(retainedDuringLoop);
-		live.session.agent.state.streamMessage = null;
-		await live.emit({ type: "agent_end", messages: [] });
-		const retained = h.rows();
-		setSystemTime(1500);
-		expect(h.rows()).toEqual(retained);
-		expect(h.rendered()).toContain("latest original line");
-	});
-
-	it("keeps the last two nonblank wrapped thinking rows through whitespace updates and completion", async () => {
-		const h = focusFixture();
-		const message = thinkingMessage("older\n\nfirst\n \t \nlatest\n\n");
-		const live = liveSession(message, 0);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		const check = (expected: string[], cols = 60) => {
-			const cx: DescribeContext = {
-				cols,
-				reduceMotion: false,
-				dark: true,
-				supports: () => true,
-				feature: () => true,
-			};
-			for (const rows of [h.dock.render(cols), nativeRows(h.dock.describe(cx))]) {
-				expect(rows.map(row => Bun.stripANSI(row))).toEqual(expected);
-			}
-		};
-		check([" first", " latest", ""]);
-
-		message.content = [{ type: "thinking", thinking: "older\n\nfirst\n \t \nlatest\n\n \t \n" }];
-		await live.emit(update(message, "thinking_delta"));
-		check([" first", " latest", ""]);
-
-		message.content = [{ type: "thinking", thinking: "older\n\nabcdefghijklmnopqr\n \t \n\n" }];
-		await live.emit(update(message, "thinking_delta"));
-		check([" abcdefghi", " jklmnopqr", ""], 10);
-
-		message.content = [{ type: "thinking", thinking: "only\n \t \n\n" }];
-		await live.emit(update(message, "thinking_delta"));
-		check([" only", "", ""]);
-		live.session.agent.state.activeThinkingIndex = undefined;
-		live.session.agent.state.streamMessage = null;
-		await live.emit({ type: "agent_end", messages: [] });
-		check([" only", "", ""]);
-	});
-
-	it("never clears displayed activity on empty thinking, tool transitions, or loop completion", async () => {
-		setSystemTime(10_000);
-		const h = focusFixture();
-		const message = thinkingMessage("PERSIST_THOUGHT");
-		const live = liveSession(message, 0);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		const cx: DescribeContext = {
-			cols: 60,
-			reduceMotion: false,
-			dark: true,
-			supports: () => true,
-			feature: () => true,
-		};
-		const check = (content: string, running = true) => {
-			expect(h.rendered()).toContain(content);
-			expect(h.nativeRendered()).toContain(content);
-			expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(running);
-		};
-		check("PERSIST_THOUGHT");
-		message.content = [{ type: "thinking", thinking: "\x1b[31m\x1b[0m" }];
-		await live.emit(update(message, "thinking_delta"));
-		check("PERSIST_THOUGHT");
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "persistent",
-			toolName: "read",
-			args: { i: "PERSIST_TOOL", path: "source.ts" },
-		});
-		check("read · PERSIST_TOOL");
-		await live.emit({
-			type: "tool_execution_end",
-			toolCallId: "persistent",
 			toolName: "read",
 			result: { content: [] },
 			isError: false,
 		});
-		check("read · PERSIST_TOOL");
-		await live.emit({ type: "message_start", message: thinkingMessage("", 2) });
-		check("read · PERSIST_TOOL");
 		await live.emit({ type: "agent_end", messages: [] });
-		check("read · PERSIST_TOOL", false);
-		expect(h.rows()[0]).toContain(theme.getFgAnsi("dim"));
-	});
-
-	it("reserves the left inset before wrapping and does not duplicate it on retained content", async () => {
-		const h = focusFixture();
-		const live = liveSession(thinkingMessage("abcdefghijklmnopqr"), 0);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		const cx: DescribeContext = {
-			cols: 10,
-			reduceMotion: false,
-			dark: true,
-			supports: () => true,
-			feature: () => true,
-		};
-		for (const rows of [h.dock.render(10), nativeRows(h.dock.describe(cx))]) {
-			expect(rows.map(row => Bun.stripANSI(row).trimEnd())).toEqual([" abcdefghi", " jklmnopqr", ""]);
-		}
-		live.session.agent.state.activeThinkingIndex = undefined;
-		live.session.agent.state.streamMessage = null;
-		await live.emit({ type: "agent_end", messages: [] });
-		for (const rows of [h.dock.render(60), nativeRows(h.dock.describe({ ...cx, cols: 60 }))]) {
-			expect(rows.map(row => Bun.stripANSI(row))).toEqual([" abcdefghi", " jklmnopqr", ""]);
-		}
-		for (const width of [0, 1]) {
-			for (const rows of [h.dock.render(width), nativeRows(h.dock.describe({ ...cx, cols: width }))]) {
-				expect(rows.every(row => Bun.stringWidth(row) <= width)).toBe(true);
-			}
-		}
-	});
-
-	it("keeps returned tool text animated until loop end without advancing its frozen elapsed time", async () => {
-		const h = focusFixture();
-		const live = liveSession(thinkingMessage(""));
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		setSystemTime(10_000);
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "animated",
-			toolName: "bash",
-			args: { i: "animated tool" },
-		});
-		setShimmerMode("classic");
-		const cx: DescribeContext = {
-			cols: 60,
-			reduceMotion: false,
-			dark: true,
-			supports: () => true,
-			feature: () => true,
-		};
-		expect(h.dock.describe(cx).k).toBe("col");
-		setSystemTime(80_000);
-		const first = h.rows();
-		setSystemTime(80_500);
-		expect(h.rows().map(row => Bun.stripANSI(row))).toEqual(first.map(row => Bun.stripANSI(row)));
-		expect(h.rows()).not.toEqual(first);
-		setShimmerMode("disabled");
-		const disabled = h.rows();
-		setSystemTime(82_000);
-		expect(h.rows()).not.toEqual(disabled);
-		setShimmerMode("classic");
-		await live.emit({
-			type: "tool_execution_end",
-			toolCallId: "animated",
-			toolName: "bash",
-			result: { content: [] },
-			isError: false,
-		});
-		const returned = h.rows();
-		setSystemTime(82_500);
-		expect(h.rows().map(row => Bun.stripANSI(row))).toEqual(returned.map(row => Bun.stripANSI(row)));
-		expect(h.rows()).not.toEqual(returned);
-		const native = h.dock.describe(cx);
-		expect(hasNativeKind(native, "shimmer")).toBe(true);
-		expect(nativeElapsed(native)).toEqual([{ age: 72_000, stopped: 72_000 }]);
-		const firstRow = native.c?.[0];
-		if (!firstRow || !("k" in firstRow)) throw new Error("Expected native tool row");
-		const label = firstRow.c?.[0];
-		if (!label || !("k" in label) || label.k !== "shimmer") throw new Error("Expected tool shimmer");
-		expect(label.p?.palette).toEqual({ low: "dim", mid: "muted", high: "success" });
-		await live.emit({ type: "agent_end", messages: [] });
-		const history = h.rows();
-		expect(history[0]).toContain(theme.getFgAnsi("dim"));
-		const retainedRow = h.dock.describe(cx).c?.[0];
-		if (!retainedRow || !("k" in retainedRow)) throw new Error("Expected retained tool row");
-		const retainedLabel = retainedRow.c?.[0];
-		if (!retainedLabel || !("k" in retainedLabel) || retainedLabel.k !== "text") {
-			throw new Error("Expected gray tool text");
-		}
-		expect(retainedLabel.p?.spans?.[0]?.s).toBe("dim");
-		setSystemTime(83_000);
-		expect(h.rows()).toEqual(history);
-		expect(h.nativeRendered()).toContain("animated tool");
-	});
-
-	it("does not reactivate retained activity on late async results, but does on a new loop in that session", async () => {
-		const h = focusFixture();
-		const worker = liveSession(thinkingMessage("ASYNC_WORKER_THOUGHT"), 0);
-		const idle = liveSession(thinkingMessage("IDLE_SESSION_THOUGHT"), 0);
-		h.register("Worker", worker);
-		h.register("Idle", idle);
-		const cx: DescribeContext = {
-			cols: 60,
-			reduceMotion: false,
-			dark: true,
-			supports: () => true,
-			feature: () => true,
-		};
-		await h.focus.focusAgent("Idle");
-		h.rows();
-		await idle.emit({ type: "agent_end", messages: [] });
-		await h.focus.focusAgent("Worker");
-		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(true);
-		await h.focus.focusAgent("Idle");
 		const retained = h.rows();
+		expect(plain(retained)[1]).toBe(" 读取完成  keep.ts");
+		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
 		setSystemTime(Date.now() + 500);
 		expect(h.rows()).toEqual(retained);
-		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(false);
-
-		const lateResult: AgentSessionEvent = {
-			type: "tool_execution_end",
-			toolCallId: "late-async-result",
-			toolName: "task",
-			result: { content: [{ type: "text", text: "ASYNC_RESULT" }] },
-			isError: false,
-		};
-		await idle.emit(lateResult);
-		expect(h.rows()).toEqual(retained);
-		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(false);
-		await idle.emit({ type: "agent_start" });
-		const restarted = h.rows();
-		setSystemTime(Date.now() + 500);
-		expect(h.rows().map(row => Bun.stripANSI(row))).toEqual(restarted.map(row => Bun.stripANSI(row)));
-		expect(h.rows()).not.toEqual(restarted);
-		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(true);
-		await idle.emit({ type: "agent_end", messages: [] });
-		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(false);
+		await h.focus.focusAgent(MAIN_AGENT_ID);
+		expect(h.rows()).toEqual(["", "", ""]);
 		await h.focus.focusAgent("Worker");
-		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(true);
-		expect(h.rendered()).toContain("ASYNC_WORKER_THOUGHT");
+		expect(plain(h.rows())[1]).toBe(" 读取完成  keep.ts");
 	});
 
-	it("shows raw streamed targets immediately and preserves preparation ordering", async () => {
+	it("does not display parameter generation as a running action", async () => {
 		const h = focusFixture();
 		const message = thinkingMessage("");
-		const first = { type: "toolCall" as const, id: "first", name: "read", arguments: {} };
-		setStreamingPartialJson(first, '{"path":"src/宽字符.ts"');
-		message.content = [first];
-		const live = liveSession(message);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		// Focus recovery reads the same raw prefix even before another event.
-		expect(h.rendered()).toContain("src/宽字符.ts");
-
-		const emitDelta = async (contentIndex: number) =>
-			live.emit({
-				type: "message_update",
-				message,
-				assistantMessageEvent: { type: "toolcall_delta", contentIndex, delta: "", partial: message },
-			});
-		await emitDelta(0);
-		expect(first.arguments).toEqual({});
-		expect(h.rendered()).toContain("src/宽字符.ts");
-
-		const second = { type: "toolCall" as const, id: "second", name: "extension_search", arguments: {} };
-		setStreamingPartialJson(second, '{"query":"查找目标');
-		message.content.push(second);
-		await emitDelta(1);
-		expect(h.rendered()).toContain("extension_search");
-		expect(h.rendered()).toContain("查找目标");
-		setStreamingPartialJson(first, '{"path":"newer-first.ts"');
-		await emitDelta(0);
-		expect(h.rendered()).toContain("查找目标");
-		expect(h.rendered()).not.toContain("newer-first.ts");
-
-		const rows = h.dock.render(24);
-		expect(rows).toHaveLength(3);
-		expect(rows.every(row => Bun.stringWidth(row) <= 24)).toBe(true);
-	});
-
-	it("uses only actual string fields from incomplete tool JSON", async () => {
-		const h = focusFixture();
-		const message = thinkingMessage("");
-		const call = {
-			type: "toolCall" as const,
-			id: "streamed",
-			name: "extension_probe",
-			arguments: { title: "stale title" },
-		};
-		setStreamingPartialJson(call, '{"title":42');
+		const call = { type: "toolCall" as const, id: "prep", name: "read", arguments: {} };
+		setStreamingPartialJson(call, '{"path":"src/宽字符.ts"');
 		message.content = [call];
 		const live = liveSession(message);
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		const emitDelta = async () =>
-			live.emit({
-				type: "message_update",
-				message,
-				assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: message },
-			});
-		await emitDelta();
-		expect(h.rendered()).toContain("extension_probe");
-		setStreamingPartialJson(call, '{"title":');
-		await emitDelta();
-		expect(h.rendered()).toContain("extension_probe");
-		setStreamingPartialJson(call, '{"title":{"nested":"not a target"}');
-		await emitDelta();
-		expect(h.rendered()).toContain("extension_probe");
-		setStreamingPartialJson(call, "not json");
-		await emitDelta();
-		expect(h.rendered()).toContain("extension_probe");
-		setStreamingPartialJson(call, '{"title":"检查\\u5bbd字符');
-		await emitDelta();
-		expect(h.rendered()).toContain("检查宽字符");
-		expect(h.rendered()).not.toContain("stale title");
+		await live.emit({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: message },
+		});
+		expect(h.rendered()).not.toContain("正在读取");
+		expect(h.rendered()).not.toContain("准备中");
+		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "prep",
+			toolName: "read",
+			args: { path: "src/宽字符.ts" },
+		});
+		expect(plain(h.rows())[1]).toBe(" 正在读取  src/宽字符.ts");
 	});
 
-	it("uses valid inner device arguments without treating wrong-type titles as intent", async () => {
+	it("projects device inner targets without leaking the transport URI or private payloads", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -1185,435 +728,20 @@ describe("compact thinking dock focus restoration", () => {
 			type: "tool_execution_start",
 			toolCallId: "device",
 			toolName: "write",
-			args: {
-				path: "xd://eval",
-				content: JSON.stringify({
-					title: { invalid: true },
-					command: "DEVICE_RAW_COMMAND",
-					query: "DEVICE_TARGET",
-				}),
-			},
+			args: { path: "xd://bash", content: JSON.stringify({ command: "pwd && echo done" }) },
 		});
-		for (const text of [h.rendered(), h.nativeRendered()]) {
-			expect(text).toContain("write");
-			expect(text).toContain("DEVICE_RAW_COMMAND");
-			expect(text).not.toContain("DEVICE_TARGET");
-		}
-	});
-
-	// A device is transport: summaries use the inner tool semantics but keep the actual write identity.
-	it.each([
-		{ name: "knowledge_search", args: { query: "mbist simulation" }, visible: ["mbist simulation"] },
-		{ name: "openwiki_search", args: { query: "job retry" }, visible: ["job retry"] },
-		{ name: "ast_grep", args: { pat: "oldApi($$$)", path: "src" }, visible: ["oldApi($$$)", "src"] },
-		{
-			name: "ast_edit",
-			args: { paths: ["src/**/*.ts"], ops: [{ pat: "old($$$)", out: "new($$$)" }] },
-			visible: ["src/**/*.ts"],
-		},
-		{ name: "lsp", args: { action: "references", file: "app.ts" }, visible: ["references", "app.ts"] },
-		{ name: "openwiki_read", args: { page: "architecture/jobs.md" }, visible: ["architecture/jobs.md"] },
-		{ name: "todo", args: { op: "done", task: "修复解析器" }, visible: ["done", "修复解析器"] },
-		{ name: "task", args: { tasks: [{ name: "Parser" }, { name: "Renderer" }] }, visible: ["Parser", "2"] },
-		{
-			name: "eval",
-			args: { code: '%load "scripts/setup.py"', title: "加载脚本" },
-			visible: ["加载脚本", '%load "scripts/setup.py"'],
-		},
-		{
-			name: "apply_patch",
-			args: { input: "*** Begin Patch\n*** Add File: hello.txt\n+PRIVATE_PATCH\n*** End Patch\n" },
-			visible: ["hello.txt"],
-		},
-	])("renders equivalent direct and device $name targets in ANSI and native rows", async ({ name, args, visible }) => {
-		const h = focusFixture();
-		const live = liveSession();
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({ type: "tool_execution_start", toolCallId: "direct", toolName: name, args });
+		const row = plain(h.rows())[1]!;
+		expect(row).toStartWith(" 正在执行  ");
+		// The full inner command is shown (new spec replaces the old first-segment preview); no transport URI.
+		expect(row).toContain("pwd && echo done");
+		expect(row).not.toMatch(/xd:\/\//);
 		await live.emit({
 			type: "tool_execution_start",
-			toolCallId: "device",
+			toolCallId: "private",
 			toolName: "write",
-			args: { path: `xd://${name}`, content: JSON.stringify(args) },
+			args: { path: "xd://think", content: '{"thoughts":"PRIVATE_THOUGHTS"}' },
 		});
-		for (const rows of activityRows(h.dock)) {
-			expect(rows).toHaveLength(3);
-			expect(rows[0]).toStartWith(` ${name} · `);
-			expect(rows[1]).toStartWith(" write · ");
-			for (const target of visible) {
-				expect(rows[0]).toContain(target);
-				expect(rows[1]).toContain(target);
-			}
-			expect(rows[1]).not.toContain(`xd://${name}`);
-			expect(rows.join("\n")).not.toContain("PRIVATE_PATCH");
-			expect(rows[2]).toBe("");
-		}
-	});
-
-	// Hashline URL normalization must happen before shell semantics and command-width selection.
-	it.each(["xd://bash", "[xd://bash#ABCD]", "XD://bash"])(
-		"keeps write identity and shell previews for %s",
-		async path => {
-			const h = focusFixture();
-			const live = liveSession();
-			h.register("Worker", live);
-			await h.focus.focusAgent("Worker");
-			await live.emit({
-				type: "tool_execution_start",
-				toolCallId: "device",
-				toolName: "write",
-				intent: "检查环境",
-				args: {
-					i: "OUTER_ARGUMENT_INTENT",
-					path,
-					content: JSON.stringify({ i: "INNER_INTENT", command: "pwd && echo HIDDEN_COMMAND" }),
-				},
-			});
-			for (const rows of activityRows(h.dock)) {
-				expect(rows[0]).toContain("write · 检查环境 · pwd && …");
-				expect(rows[0]).not.toMatch(/HIDDEN_COMMAND|OUTER_ARGUMENT_INTENT|INNER_INTENT|xd:\/\//i);
-				expect(rows[1]).toBe("");
-				expect(rows[2]).toBe("");
-			}
-			await live.emit({
-				type: "tool_execution_update",
-				toolCallId: "device",
-				toolName: "write",
-				args: { path, content: JSON.stringify({ command: `find /${"目录/".repeat(30)}HIDDEN_END` }) },
-				partialResult: { content: [{ type: "text", text: "PRIVATE_OUTPUT" }] },
-			});
-			for (const rows of activityRows(h.dock)) {
-				expect(rows[0]).toContain("find /目录/");
-				expect(rows[0]).toContain("…");
-				expect(rows[0]).not.toMatch(/HIDDEN_END|PRIVATE_OUTPUT/);
-				expect(Bun.stringWidth(rows[0]!)).toBeLessThanOrEqual(120);
-				expect(Bun.stringWidth(rows[0]!.split(" · ")[2] ?? "")).toBeLessThanOrEqual(40);
-			}
-		},
-	);
-
-	// Partial outer and inner JSON must use the same safe semantic projection during preparation.
-	it("decodes partially streamed device commands and raw patch targets before dispatch", async () => {
-		const h = focusFixture();
-		const message = thinkingMessage("");
-		const call = { type: "toolCall" as const, id: "device", name: "write", arguments: {} };
-		setStreamingPartialJson(
-			call,
-			JSON.stringify({
-				path: "[xd://bash#ABCD]",
-				content: '{"title":42,"command":"pwd && echo HIDDEN_COMMAND',
-			}).slice(0, -1),
-		);
-		message.content = [call];
-		const live = liveSession(message);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		for (const rows of activityRows(h.dock)) {
-			expect(rows[0]).toContain("write · 准备中");
-			expect(rows[0]).toContain("pwd && …");
-			expect(rows[0]).not.toContain("HIDDEN_COMMAND");
-		}
-		const patch = {
-			type: "toolCall" as const,
-			id: "patch",
-			name: "apply_patch",
-			customWireName: "apply_patch",
-			arguments: {},
-		};
-		setStreamingPartialJson(patch, "*** Begin Patch\n*** Add File: preview.txt\n+PRIVATE_PATCH\n*** End Patch\n");
-		message.content = [patch];
-		await live.emit({
-			type: "message_update",
-			message,
-			assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: message },
-		});
-		for (const rows of activityRows(h.dock)) {
-			expect(rows[0]).toContain("apply_patch · 准备中");
-			expect(rows[0]).toContain("preview.txt");
-			expect(rows.join("\n")).not.toContain("PRIVATE_PATCH");
-		}
-		expect(call.arguments).toEqual({});
-		expect(patch.arguments).toEqual({});
-	});
-
-	// Only structured nested details can mark a device submission as background or identify waited jobs.
-	it("projects device bash submission and wait updates without leaking result bodies", async () => {
-		setSystemTime(10_000);
-		const h = focusFixture();
-		const live = liveSession();
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		const shellArgs = { command: "bun run fulltest" };
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "shell",
-			toolName: "write",
-			args: { path: "xd://bash", content: JSON.stringify(shellArgs) },
-		});
-		h.rows();
-		setSystemTime(10_002);
-		await live.emit({
-			type: "tool_execution_end",
-			toolCallId: "shell",
-			toolName: "write",
-			result: {
-				content: [{ type: "text", text: "PRIVATE_SUBMISSION_OUTPUT" }],
-				details: {
-					xdev: {
-						tool: "bash",
-						mode: "execute",
-						args: shellArgs,
-						inner: { async: { state: "running", jobId: "bg_9", type: "bash" } },
-					},
-				},
-			},
-		});
-		const waitArgs = { i: "等待检查" };
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "waiting",
-			toolName: "write",
-			args: { path: "xd://wait", content: JSON.stringify(waitArgs) },
-		});
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "waiting",
-			toolName: "write",
-			args: {},
-			partialResult: {
-				content: [{ type: "text", text: "PRIVATE_WAIT_OUTPUT" }],
-				details: {
-					xdev: {
-						tool: "wait",
-						mode: "execute",
-						args: waitArgs,
-						inner: {
-							op: "wait",
-							jobs: [
-								{ id: "old", type: "bash", status: "completed", label: "OLD_COMMAND", durationMs: 1 },
-								{
-									id: "bg_9",
-									type: "bash",
-									status: "running",
-									label: "bun run fulltest && echo HIDDEN_COMMAND",
-									durationMs: 0,
-								},
-							],
-						},
-					},
-				},
-			},
-		});
-		setSystemTime(15_002);
-		for (const rows of activityRows(h.dock)) {
-			expect(rows[0]).toContain("write · bun run fulltest");
-			expect(rows[0]).toEndWith(`bg_9 · 提交 ${formatDuration(2)}`);
-			expect(rows[1]).toContain("write · 等待检查 · [bash] bg_9 bun run fulltest && …");
-			expect(rows[1]).toEndWith(`等待 ${formatDuration(5000)}`);
-			expect(rows.join("\n")).not.toMatch(
-				/PRIVATE_SUBMISSION_OUTPUT|PRIVATE_WAIT_OUTPUT|OLD_COMMAND|HIDDEN_COMMAND/,
-			);
-			expect(rows[2]).toBe("");
-		}
-		await live.emit({
-			type: "tool_execution_end",
-			toolCallId: "waiting",
-			toolName: "write",
-			result: { content: [{ type: "text", text: "PRIVATE_FINISHED_OUTPUT" }] },
-		});
-		setSystemTime(30_000);
-		for (const rows of activityRows(h.dock)) {
-			expect(rows[0]).toEndWith(`提交 ${formatDuration(2)}`);
-			expect(rows[1]).toEndWith(`等待 ${formatDuration(5000)}`);
-			expect(rows.join("\n")).not.toContain("PRIVATE_FINISHED_OUTPUT");
-		}
-	});
-
-	// async:true is a request, not proof that a background job was actually accepted.
-	it("does not invent background submission metadata from requested async mode or output text", async () => {
-		setSystemTime(10_000);
-		const h = focusFixture();
-		const live = liveSession();
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "foreground",
-			toolName: "write",
-			args: { path: "xd://bash", content: '{"command":"echo done","async":true}' },
-		});
-		h.rows();
-		setSystemTime(12_000);
-		await live.emit({
-			type: "tool_execution_end",
-			toolCallId: "foreground",
-			toolName: "write",
-			result: { content: [{ type: "text", text: "background job bg_FAKE is running" }] },
-		});
-		for (const rows of activityRows(h.dock)) {
-			expect(rows[0]).toContain("write · echo done");
-			expect(rows[0]).toEndWith(formatDuration(2000));
-			expect(rows[0]).not.toMatch(/bg_FAKE|提交/);
-		}
-	});
-
-	// Freshly focused pending devices use canonical arguments and structured job snapshots, not cached cards.
-	it("recovers pending device wait semantics and its original timer on focus", async () => {
-		setSystemTime(10_000);
-		const h = focusFixture();
-		const message = thinkingMessage("");
-		const args = { path: "[xd://wait#ABCD]", content: '{"i":"等待恢复"}' };
-		message.content = [{ type: "toolCall", id: "recover", name: "write", arguments: args }];
-		const live = liveSession(message);
-		live.session.agent.emitExternalEvent(
-			{ type: "tool_execution_start", toolCallId: "recover", toolName: "write", args },
-			{ stateOnly: true },
-		);
-		live.session.sessionManager.appendCustomEntry("tool_execution_start", {
-			toolCallId: "recover",
-			toolName: "write",
-			startedAt: new Date(5000).toISOString(),
-		});
-		vi.spyOn(live.session, "activeToolExecutionUpdates").mockReturnValue([
-			{
-				type: "tool_execution_update",
-				toolCallId: "recover",
-				toolName: "write",
-				args,
-				partialResult: {
-					content: [{ type: "text", text: "PRIVATE_RECOVERY_OUTPUT" }],
-					details: {
-						xdev: {
-							tool: "wait",
-							mode: "execute",
-							args: { i: "等待恢复" },
-							inner: {
-								op: "wait",
-								jobs: [{ id: "bg_7", type: "bash", status: "running", label: "echo recovered", durationMs: 0 }],
-							},
-						},
-					},
-				},
-			},
-		]);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		for (const rows of activityRows(h.dock)) {
-			expect(rows[0]).toContain("write · 等待恢复 · [bash] bg_7 echo recovered");
-			expect(rows[0]).toEndWith(`等待 ${formatDuration(5000)}`);
-			expect(rows[0]).not.toContain("PRIVATE_RECOVERY_OUTPUT");
-			expect(rows[1]).toBe("");
-		}
-	});
-
-	// Text devices, help requests, and private tool payloads have no inferred command or leaked body.
-	it.each([
-		{ path: "xd://resolve", content: "PRIVATE_REASON", summary: "write" },
-		{ path: "xd://reject", content: "PRIVATE_REASON", summary: "write" },
-		{ path: "xd://propose", content: "PRIVATE_PLAN", summary: "write" },
-		{ path: "xd://bash", content: "?", summary: "write" },
-		{ path: "xd://think", content: '{"thoughts":"PRIVATE_THOUGHTS"}', summary: "write" },
-		{
-			path: "xd://yield",
-			content: '{"key":1,"data":"PRIVATE_PAYLOAD","error":"PRIVATE_ERROR"}',
-			summary: "write · 1",
-		},
-	])("does not promote $path content into public activity", async ({ summary, ...args }) => {
-		const h = focusFixture();
-		const live = liveSession();
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({ type: "tool_execution_start", toolCallId: "private", toolName: "write", args });
-		for (const rows of activityRows(h.dock)) {
-			expect(rows[0]).toStartWith(` ${summary}`);
-			expect(rows.join("\n")).not.toMatch(
-				/PRIVATE_REASON|PRIVATE_PLAN|PRIVATE_THOUGHTS|PRIVATE_PAYLOAD|PRIVATE_ERROR/,
-			);
-			expect(rows[1]).toBe("");
-			expect(rows[2]).toBe("");
-		}
-	});
-
-	it("keeps live thinking ahead of raw streamed tool activity", async () => {
-		const h = focusFixture();
-		const message = thinkingMessage("still thinking");
-		const call = { type: "toolCall" as const, id: "call", name: "read", arguments: {} };
-		setStreamingPartialJson(call, '{"path":"target.ts"');
-		message.content.push(call);
-		const live = liveSession(message, 0);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({
-			type: "message_update",
-			message,
-			assistantMessageEvent: { type: "toolcall_delta", contentIndex: 1, delta: "", partial: message },
-		});
-		expect(h.rendered()).toContain("still thinking");
-		expect(h.rendered()).not.toContain("target.ts");
-		live.session.agent.state.activeThinkingIndex = undefined;
-		await live.emit(update(message, "thinking_end"));
-		expect(h.rendered()).toContain("target.ts");
-	});
-
-	it("handles different streamed tools and treats custom raw input as opaque", async () => {
-		for (const { name, raw, detail, customWireName } of [
-			{ name: "write", raw: '{"i":"保存目标","path":"file.ts","content":"not output', detail: "保存目标" },
-			{ name: "bash", raw: '{"command":"git status', detail: "git status" },
-			{ name: "mcp_lookup", raw: '{"url":"https://example.test', detail: "https://example.test" },
-			{ name: "native_custom", raw: '{"path":"not a JSON argument"}', detail: "", customWireName: "native_custom" },
-		]) {
-			const h = focusFixture();
-			const message = thinkingMessage("");
-			const call = { type: "toolCall" as const, id: name, name, arguments: {}, customWireName };
-			setStreamingPartialJson(call, raw);
-			message.content = [call];
-			const live = liveSession(message);
-			h.register("Worker", live);
-			await h.focus.focusAgent("Worker");
-			await live.emit({
-				type: "message_update",
-				message,
-				assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: message },
-			});
-			expect(h.rendered()).toContain(name);
-			if (detail) expect(h.rendered()).toContain(detail);
-			expect(h.rendered()).not.toContain("not output");
-		}
-	});
-
-	it("updates a streamed unknown tool from incomplete arguments without inventing a result", async () => {
-		const h = focusFixture();
-		const message = thinkingMessage("");
-		message.content = [{ type: "toolCall", id: "streamed", name: "extension_probe", arguments: { title: 42 } }];
-		const live = liveSession(message);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({
-			type: "message_update",
-			message,
-			assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: message },
-		});
-		expect(h.rendered()).toContain("extension_probe");
-		message.content = [
-			{
-				type: "toolCall",
-				id: "streamed",
-				name: "extension_probe",
-				arguments: { title: "检查宽字符目标\n下一行" },
-			},
-		];
-		await live.emit({
-			type: "message_update",
-			message,
-			assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: message },
-		});
-		const rows = h.dock.render(24);
-		expect(rows).toHaveLength(3);
-		expect(h.rendered()).toContain("检查宽字符目标");
-		expect(Bun.stripANSI(rows[0]!)).toContain("extension_probe");
-		expect(rows[1]).toBe("");
-		expect(rows.every(row => Bun.stringWidth(row) <= 24)).toBe(true);
+		expect(h.rendered()).not.toContain("PRIVATE_THOUGHTS");
 	});
 });
 

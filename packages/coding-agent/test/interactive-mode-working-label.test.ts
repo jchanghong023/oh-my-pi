@@ -15,7 +15,7 @@ import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
 import {
 	chatTranscriptDisplayPreferences,
@@ -129,7 +129,7 @@ describe("InteractiveMode live working label", () => {
 		expect(Bun.stringWidth(rows[0] ?? "")).toBeLessThanOrEqual(COLUMNS);
 	});
 
-	it("keeps compact activity synchronized with the status-bar running marker, not the hidden loader", async () => {
+	it("drives compact animation from visible running actions, not the whole-turn marker", async () => {
 		const terminal = new VirtualTerminal(100, 29);
 		const composer = new Composer({ terminal, tuiOptions: { renderScheduler: new VirtualRenderScheduler() } });
 		const current = new AgentSession({
@@ -149,25 +149,52 @@ describe("InteractiveMode live working label", () => {
 			current.agent.state.streamMessage = thought;
 			current.agent.state.activeThinkingIndex = 0;
 			const activity = () => live.compactThinkingPreview.render(COLUMNS);
-			const shimmering = () =>
-				live.compactThinkingPreview
-					.describe(nativeContext)
-					.c?.some(child => "k" in child && child.k === "shimmer") ?? false;
-			expect(current.isStreaming).toBe(false);
+			const shimmering = () => {
+				const visit = (node: { k?: string; c?: readonly unknown[] }): boolean =>
+					node.k === "shimmer" ||
+					(node.c ?? []).some(
+						child =>
+							typeof child === "object" &&
+							child !== null &&
+							visit(child as { k?: string; c?: readonly unknown[] }),
+					);
+				return visit(live.compactThinkingPreview.describe(nativeContext));
+			};
+			// A live thinking action animates even though the whole-turn marker has not started.
 			expect(live.statusLine.getTurnElapsedMs()).toBeNull();
-			expect(shimmering()).toBe(false);
-			expect(activity()[0]).toContain(theme.getFgAnsi("dim"));
-			setSystemTime(10_000);
-			live.statusLine.markActivityStart();
-			expect(live.statusLine.getTurnElapsedMs()).toBe(0);
 			expect(shimmering()).toBe(true);
+			expect(Bun.stripANSI(activity()[1]!)).toContain("正在思考");
+			expect(Bun.stripANSI(activity()[1]!)).toContain("WORKING_LIFETIME_THOUGHT");
+			setSystemTime(10_000);
 			const running = activity();
 			setSystemTime(10_500);
 			expect(activity().map(line => Bun.stripANSI(line))).toEqual(running.map(line => Bun.stripANSI(line)));
 			expect(activity()).not.toEqual(running);
+
+			// Ending the thinking action stops its animation immediately, even while the turn marker runs.
+			live.statusLine.markActivityStart();
+			expect(live.statusLine.getTurnElapsedMs()).toBe(0);
+			current.agent.state.activeThinkingIndex = undefined;
+			await live.eventController.handleEvent({
+				type: "message_update",
+				message: thought,
+				assistantMessageEvent: {
+					type: "thinking_end",
+					contentIndex: 0,
+					content: "WORKING_LIFETIME_THOUGHT",
+					partial: thought,
+				},
+			});
+			expect(shimmering()).toBe(false);
+			const stopped = activity();
+			expect(Bun.stripANSI(stopped[1]!)).toContain("思考完成");
+			expect(Bun.stripANSI(stopped[1]!)).toContain("用时");
+			setSystemTime(11_000);
+			expect(activity()).toEqual(stopped);
+
+			// compact still hides the independent working row; clean/detailed restore it.
 			const ansi = () => Bun.stripANSI(live.statusContainer.render(COLUMNS).join("\n"));
 			const roles = () => nativeRoles(live.statusContainer.describe(nativeContext)!);
-
 			expect(live.statusContainer.render(COLUMNS)).toEqual([]);
 			expect(roles()).not.toContain("omp.working");
 			for (const displayMode of ["clean", "detailed"] as const) {
@@ -180,34 +207,6 @@ describe("InteractiveMode live working label", () => {
 			await Promise.resolve();
 			expect(live.statusContainer.render(COLUMNS)).toEqual([]);
 			expect(roles()).not.toContain("omp.working");
-
-			// The error path removes the original loader without closing the status-bar window.
-			current.agent.state.isStreaming = true;
-			expect(live.statusLine.getTurnElapsedMs()).not.toBeNull();
-			live.showError("WORKING_LIFETIME_ERROR");
-			expect(current.isStreaming).toBe(true);
-			expect(live.statusLine.getTurnElapsedMs()).not.toBeNull();
-			expect(live.loadingAnimation).toBeUndefined();
-			expect(shimmering()).toBe(true);
-			const withoutLoader = activity();
-			setSystemTime(11_000);
-			expect(activity().map(line => Bun.stripANSI(line))).toEqual(withoutLoader.map(line => Bun.stripANSI(line)));
-			expect(activity()).not.toEqual(withoutLoader);
-
-			live.ensureLoadingAnimation();
-			live.statusLine.markActivityEnd();
-			expect(live.loadingAnimation).toBeDefined();
-			expect(current.isStreaming).toBe(true);
-			expect(live.statusLine.getTurnElapsedMs()).toBeNull();
-			expect(shimmering()).toBe(false);
-			const stopped = activity();
-			expect(stopped[0]).toContain(theme.getFgAnsi("dim"));
-			const retained = live.compactThinkingPreview.describe(nativeContext).c?.[0];
-			if (!retained || !("k" in retained) || retained.k !== "text") throw new Error("Expected gray thinking text");
-			expect(retained.p?.spans).toEqual([{ t: " WORKING_LIFETIME_THOUGHT", s: "dim" }]);
-			setSystemTime(11_500);
-			expect(activity()).toEqual(stopped);
-			expect(live.statusContainer.render(COLUMNS)).toEqual([]);
 		} finally {
 			live.stop();
 			setSystemTime();
@@ -215,7 +214,7 @@ describe("InteractiveMode live working label", () => {
 		}
 	});
 
-	it("repaints an idle tool's elapsed time with shimmer disabled and the compact working row hidden", async () => {
+	it("shows no tool elapsed time and stays static with shimmer disabled", async () => {
 		const terminal = new VirtualTerminal(100, 29);
 		const scheduler = new VirtualRenderScheduler();
 		const composer = new Composer({ terminal, tuiOptions: { renderScheduler: scheduler } });
@@ -243,14 +242,17 @@ describe("InteractiveMode live working label", () => {
 				type: "tool_execution_start" as const,
 				toolCallId: "idle-clock",
 				toolName: "bash",
-				args: { i: "IDLE_CLOCK_MARKER" },
+				args: { command: "IDLE_CLOCK_MARKER" },
 			};
 			current.agent.emitExternalEvent(dispatch, { stateOnly: true });
 			await live.eventController.handleEvent(dispatch);
 			await scheduler.settle(terminal);
+			const dockRows = () => live.compactThinkingPreview.render(COLUMNS).map(line => Bun.stripANSI(line));
 			const before = contract.observe("idle start", terminal).viewport.join("\n");
 			expect(before).toContain("IDLE_CLOCK_MARKER");
+			expect(before).toContain("正在执行");
 			expect(before).not.toContain("处理中…");
+			const dockBefore = dockRows();
 			for (let tick = 0; tick < 20; tick++) {
 				vi.advanceTimersByTime(125);
 				await scheduler.advance(terminal, 125);
@@ -258,8 +260,9 @@ describe("InteractiveMode live working label", () => {
 			const after = contract.observe("idle later", terminal).viewport.join("\n");
 			expect(after).toContain("IDLE_CLOCK_MARKER");
 			expect(after).not.toContain("处理中…");
-			expect(after).not.toEqual(before);
-			expect(after).toMatch(/IDLE_CLOCK_MARKER[^\n]*2\.5s/);
+			// The dock row itself stays static with no tool elapsed timer (the status bar keeps its own clock).
+			expect(dockRows()).toEqual(dockBefore);
+			expect(dockRows().join("\n")).not.toMatch(/\d+(?:\.\d+)?(?:ms|s|m)\b/);
 			contract.assertHealthy();
 		} finally {
 			live.stop();
