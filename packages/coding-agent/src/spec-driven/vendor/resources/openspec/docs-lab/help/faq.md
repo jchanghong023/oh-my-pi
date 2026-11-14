@@ -15,11 +15,8 @@ once the prose lands. -->
 
 ## Does OpenSpec work with my tool?
 
-If it has a row in the [support matrix](../reference/supported-tools.md), yes.
-Pick its id at init. If it isn't listed but reads the shared `.agents/skills/`
-folder, pick **Other / Universal** (`--tools agents`), covered by the support
-matrix's Other / Universal section. If it reads only its own folder, point that
-folder at `.agents/skills/` with one link
-([Link another tool](../reference/supported-tools.md#link-another-tool)).
+This copy supports Oh My Pi only. Pick `oh-my-pi` (or `all`) at init; other
+targets are rejected and no tool-specific directories are written.
+([Supported tools](../reference/supported-tools.md).)
 
 ## Where did the old /openspec:* commands go?

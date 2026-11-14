@@ -9,7 +9,6 @@ import { isCiEnvironment } from '../utils/ci.js';
 import { isTelemetryOptedOutByEnv } from '../telemetry/opt-out.js';
 import { FileSystemUtils } from '../utils/file-system.js';
 import { getGlobalConfig, isGlobalConfigUnreadable } from './global-config.js';
-import { findCopiesOnPath, samePath } from '../utils/executable-path.js';
 
 const require = createRequire(import.meta.url);
 const { name: PACKAGE_NAME, version: OPENSPEC_VERSION } = require('../../package.json');
@@ -27,36 +26,6 @@ const MAX_REDIRECTS = 3;
  * one could smuggle ANSI cursor controls and repaint the lines around it.
  */
 const SAFE_VERSION = /^\d{1,10}\.\d{1,10}\.\d{1,10}(?:-[0-9A-Za-z.-]{1,64})?(?:\+[0-9A-Za-z.-]{1,64})?$/;
-
-let standaloneBinaryPath: string | null = null;
-
-/**
- * Called by the standalone binary's entry point. That copy has no package
- * manager behind it, so a package-manager command is the wrong upgrade advice.
- */
-export function markStandaloneBinary(executablePath: string): void {
-  standaloneBinaryPath = executablePath;
-}
-
-/** The standalone binary's own path, or null when running from a package. */
-export function getStandaloneBinaryPath(): string | null {
-  return standaloneBinaryPath;
-}
-
-/**
- * `openspec install` reinstalls the standalone binary where it already is,
- * under its own name, so the new copy cannot end up shadowed by the old one.
- * Spelled with the full path when `openspec` on PATH is some other copy.
- * Null when this is not the binary.
- */
-function standaloneUpgradeCommand(): string | null {
-  if (!standaloneBinaryPath) return null;
-  const first = findCopiesOnPath()[0];
-  if (first && samePath(first, standaloneBinaryPath)) return 'openspec install';
-  return process.platform === 'win32'
-    ? `& '${standaloneBinaryPath.replace(/'/g, "''")}' install`
-    : `'${standaloneBinaryPath.replace(/'/g, `'\\''`)}' install`;
-}
 
 /**
  * The check is opt-out and must never get in the way: no network in CI or
@@ -335,54 +304,6 @@ async function fetchLatestVersion(): Promise<string | null> {
   }
 }
 
-/**
- * Where `openspec install` gets the standalone binary: install.sh and
- * install.ps1 default to this releases page.
- */
-const RELEASES_URL = 'https://github.com/Fission-AI/OpenSpec/releases';
-
-/**
- * The release `openspec install` would install, found the way install.sh and
- * install.ps1 find it: stable tags from the releases feed, newest first, and
- * the first one whose SHA256SUMS (uploaded last) exists. npm's `latest` is not
- * the answer here: it is published minutes before the standalone files are
- * attached to the GitHub release (and for good, if that job fails), and
- * offering a version the installer cannot get makes `openspec install`
- * quietly reinstall the old one.
- *
- * Stops at the first tag that is not newer than this CLI, since nothing from
- * there on is an update, so an up-to-date binary costs only the feed request.
- * Null when the answer is not known: the feed or a probe failed or ran out of
- * time, or every listed newer release is still incomplete.
- */
-async function fetchLatestStandaloneRelease(): Promise<string | null> {
-  // The same total budget as the registry check, across every request.
-  const deadline = Date.now() + REQUEST_TIMEOUT_MS;
-  const feed = await httpsGet(new URL(`${RELEASES_URL}.atom`), { deadline, followRedirects: true });
-  if (!feed || feed.status !== 200) return null;
-
-  const versions = [
-    ...new Set(Array.from(feed.body.matchAll(/\/releases\/tag\/v(\d+\.\d+\.\d+)"/g), (m) => m[1])),
-  ].filter((version) => SAFE_VERSION.test(version));
-
-  for (const version of versions) {
-    if (compareVersions(version, OPENSPEC_VERSION) <= 0) return version;
-    // GitHub answers for an attached file with a redirect to its storage, so
-    // the file itself never needs downloading.
-    const probe = await httpsGet(new URL(`${RELEASES_URL}/download/v${version}/SHA256SUMS`), {
-      deadline,
-      followRedirects: false,
-    });
-    if (!probe) return null;
-    if (probe.status === 200 || (probe.status >= 300 && probe.status < 400)) return version;
-    // Still being prepared: the installer moves on to the next release too.
-    if (probe.status === 404) continue;
-    // Rate-limited or failing: not knowing beats a wrong answer.
-    return null;
-  }
-  return null;
-}
-
 export type CliUpdateStatus = 'available' | 'current' | 'disabled' | 'offline';
 
 export interface CliUpdateCheck {
@@ -398,15 +319,12 @@ export interface CliUpdateCheck {
 export async function checkForCliUpdate(
   options: { requested?: boolean } = {}
 ): Promise<CliUpdateCheck> {
-  // The standalone binary updates from GitHub releases, not npm, so the
-  // registry neither answers for it nor can disable its check.
-  const standalone = standaloneBinaryPath !== null;
-  if (!isCheckEnabled(options.requested === true) || (!standalone && registryUrl() === null)) {
+  if (!isCheckEnabled(options.requested === true) || registryUrl() === null) {
     return { status: 'disabled', latest: null };
   }
 
   try {
-    const latest = standalone ? await fetchLatestStandaloneRelease() : await fetchLatestVersion();
+    const latest = await fetchLatestVersion();
     if (!latest) return { status: 'offline', latest: null };
     return {
       status: compareVersions(latest, OPENSPEC_VERSION) > 0 ? 'available' : 'current',
@@ -433,8 +351,6 @@ export async function getAvailableCliUpdate(): Promise<string | null> {
  * which copy is actually answering.
  */
 export function getInstallDir(): string | null {
-  // The binary is not a package install, so no package-manager logic applies.
-  if (standaloneBinaryPath) return null;
   // Resolved at runtime from this module's own (symlink-resolved) location.
   // require.resolve would be resolved by the binary's bundler at build time,
   // baking the build machine's path into it.
@@ -603,7 +519,7 @@ export function isSourceCheckout(installDir: string | null): boolean {
 }
 
 export type PackageManager = 'npm' | 'pnpm' | 'bun' | 'yarn' | 'volta';
-export type InstallScope = 'global' | 'project' | 'temporary' | 'source' | 'standalone';
+export type InstallScope = 'global' | 'project' | 'temporary' | 'source';
 
 export interface CliInstallInfo {
   location: string | null;
@@ -663,9 +579,6 @@ export function getCliInstallInfo(
   installDir: string | null = getInstallDir(),
   projectPath: string = '.'
 ): CliInstallInfo {
-  if (standaloneBinaryPath) {
-    return { location: path.dirname(standaloneBinaryPath), packageManager: null, scope: 'standalone' };
-  }
   if (!installDir) {
     return { location: null, packageManager: null, scope: null };
   }
@@ -697,7 +610,6 @@ export function getCliInstallInfo(
 
 /** Returns a safe update command only for an install with known global ownership. */
 export function getCliUpdateCommand(install: CliInstallInfo): string | null {
-  if (install.scope === 'standalone') return standaloneUpgradeCommand();
   if (install.scope !== 'global' || install.packageManager === null) return null;
   return GLOBAL_UPGRADE_COMMANDS[install.packageManager];
 }
@@ -759,13 +671,6 @@ export function buildUpgradeCommandLines(
   projectPath: string
 ): string[] {
   const lines: string[] = [];
-
-  const standalone = standaloneUpgradeCommand();
-  if (standalone) {
-    lines.push(`  ${standalone}`);
-    lines.push('  Then run "openspec update" again to pick up new workflows.');
-    return lines;
-  }
 
   if (isEphemeralRunnerInstall(installDir)) {
     // That command *is* the update, so there is nothing to run afterwards.

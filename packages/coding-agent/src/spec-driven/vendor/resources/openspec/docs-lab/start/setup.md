@@ -21,8 +21,8 @@ Init asks which AI tools you use, writes the workflow files for the ones you pic
 ```
 OpenSpec Setup Complete
 
-Created: Claude Code
-6 skills in .agents/skills/ (linked from .claude/skills/)
+Created: Oh My Pi
+6 skills in .agents/skills/
 Config: openspec/config.yaml (schema: spec-driven)
 ```
 
@@ -93,9 +93,9 @@ These are the OpenSpec workflows, the actions you'll use as you work. Here they 
 
 This is the default set plus two optional workflows. [Profiles](../customize/profiles.md) lists all twelve.
 
-Each skill is written once, here, no matter how many tools you set up. A tool that doesn't read `.agents/skills/` (Claude Code, Kiro, and others) gets a link to each skill in its own folder, such as `.claude/skills/openspec-propose`. MiniMax Code is the one exception: its skills go to `~/.minimax/skills/` in your home folder. [Supported tools](../reference/supported-tools.md#where-skills-go) shows the layout and which tools get links.
+Each skill is written once here. Oh My Pi reads `.agents/skills/` directly, so this copy creates no per-tool links or command files. [Supported tools](../reference/supported-tools.md#where-skills-go) shows the layout.
 
-Each workflow is a **skill**: instructions your agent picks up when you ask for the work, or that you invoke by name (`/openspec-apply-change` in Claude Code, `$openspec-apply-change` in Codex). [Supported tools](../reference/supported-tools.md#support-matrix) shows the spelling for each tool.
+Each workflow is a **skill**: instructions your agent picks up when you ask for the work, or that you invoke by name (`/openspec-apply-change`).
 
 OpenSpec 1.x also wrote a command file per workflow (`/opsx:apply`). OpenSpec 2.0 installs skills only. [Upgrade to 2.0](../help/upgrade-to-2.md) covers what changes.
 
@@ -109,9 +109,10 @@ openspec config profile
 
 Answering yes to "Apply changes to this project now?" applies it on the spot. Other projects pick it up on their next `openspec update`. The setting is global, per machine.
 
-#### Claude Code doesn't show the workflows
+#### Oh My Pi doesn't show the workflows
 
-Claude Code loads OpenSpec skills from `.claude/skills/openspec-*`, which link to `.agents/skills/openspec-*`. If they are missing, refresh the project. In your terminal:
+Oh My Pi loads OpenSpec skills from `.agents/skills/openspec-*`. If they are
+missing, refresh the project:
 
 ```bash
 openspec update

@@ -118,7 +118,7 @@ Without these, each link checks out as a small text file. `openspec update` repl
 
 ## Link a tool that OpenSpec doesn't
 
-Most tools read `.agents/skills/` directly. If yours reads only its own folder, [Link another tool](../reference/supported-tools.md#link-another-tool) shows the one command to point it at the shared copy.
+This copy configures Oh My Pi, which reads `.agents/skills/` directly. No per-tool links or command files are generated.
 
 ## Stay on 1.x
 
@@ -130,17 +130,5 @@ On npm, in your terminal:
 npm install -g @fission-ai/openspec@1
 ```
 
-With the standalone install, name the release ([Install options](../start/installation.md#install-options)):
-
-```bash
-curl -fsSL https://openspec.dev/cli/install.sh | OPENSPEC_VERSION=v1.17.0 sh
-```
-
-On Windows (PowerShell):
-
-```powershell
-$env:OPENSPEC_VERSION = 'v1.17.0'
-irm https://openspec.dev/cli/install.ps1 | iex
-```
 
 When `openspec update` offers to upgrade the CLI, decline. To stop the offer, set `OPENSPEC_NO_UPDATE_CHECK=1`.

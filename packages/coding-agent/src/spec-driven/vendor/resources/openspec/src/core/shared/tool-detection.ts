@@ -15,14 +15,12 @@ import {
   getSkillCapableTools,
   resolveFormerOwnSkillsDir,
   resolveSharedSkillsDir,
-  resolveSkillLinkDir,
   resolveToolSkillsDir,
   toolSupportsSkills,
   usesSharedSkills,
   type SkillCapableTool,
 } from './skill-paths.js';
 import { DISK_VIEW, type FileView } from '../file-view.js';
-import { classifySkillLinkSpot, isCheckedOutLink } from './skill-links.js';
 import { FileSystemUtils } from '../../utils/file-system.js';
 
 /**
@@ -101,32 +99,7 @@ export function isListedToolPresent(projectRoot: string, toolId: string, view: F
   const tool = AI_TOOLS.find((t) => t.value === toolId);
   if (!tool || !usesSharedSkills(tool) || !isToolListed(projectRoot, toolId, view)) return false;
   if (!readListedToolsWithOwnFiles(projectRoot, view).has(toolId)) return true;
-  if (toolHasAnyConfiguredCommand(projectRoot, toolId, view)) return true;
-  const linkDir = resolveSkillLinkDir(projectRoot, tool);
-  return (
-    (linkDir !== undefined && OPENSPEC_SKILL_NAMES.some((name) => view.exists(path.join(linkDir, name, 'SKILL.md')))) ||
-    hasSkillLinks(projectRoot, tool, view)
-  );
-}
-
-/**
- * Whether a linked tool's own folder still holds OpenSpec's links to the
- * shared copy, even ones that point nowhere now (`.agents/` deleted, or
- * gitignored in this clone), or what git checks a link out as without link
- * support (a small file holding its target). Either way the tool is set up,
- * and update rebuilds what the links need.
- */
-export function hasSkillLinks(projectRoot: string, tool: AIToolOption, view: FileView = DISK_VIEW): boolean {
-  const linkDir = resolveSkillLinkDir(projectRoot, tool);
-  if (!linkDir) return false;
-  const sharedDir = resolveSharedSkillsDir(projectRoot);
-  return OPENSPEC_SKILL_NAMES.some((name) => {
-    const spot = path.join(linkDir, name);
-    const target = path.join(sharedDir, name);
-    const linked = view.linkTarget?.(spot);
-    if (linked !== undefined) return classifySkillLinkSpot(spot, target, [], view) === 'link';
-    return view.exists(spot) && !view.isDirectory(spot) && isCheckedOutLink(spot, target, view);
-  });
+  return toolHasAnyConfiguredCommand(projectRoot, toolId, view);
 }
 
 /**
@@ -334,7 +307,7 @@ export function getToolVersionStatus(
 
   // Configured from any of its skills; current only from those found above.
   const commandConfigured = toolHasAnyConfiguredCommand(projectRoot, toolId, view);
-  const markerConfigured = isListedToolPresent(projectRoot, toolId, view) || hasSkillLinks(projectRoot, tool, view);
+  const markerConfigured = isListedToolPresent(projectRoot, toolId, view);
   const configured =
     getToolSkillStatus(projectRoot, toolId, view).configured || commandConfigured || markerConfigured;
   // Every skill of the tool's present is the user's own (kept): there is no
@@ -404,8 +377,7 @@ export function getConfiguredTools(projectRoot: string, view: FileView = DISK_VI
           resolveCommandSurfaceCapability(t.value) === 'adapter-backed' &&
           (hasLegacySkills(projectRoot, t, view) || hasLegacyCommands(projectRoot, t.value, view))
         ) ||
-        isListedToolPresent(projectRoot, t.value, view) ||
-        hasSkillLinks(projectRoot, t, view)
+        isListedToolPresent(projectRoot, t.value, view)
       );
     })
     .map((tool) => tool.value);

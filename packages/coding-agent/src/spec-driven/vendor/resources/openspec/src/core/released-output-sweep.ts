@@ -9,7 +9,7 @@
  */
 import path from 'path';
 import { promises as fs } from 'fs';
-import { AI_TOOLS, SKILL_LINKED_TOOL_IDS } from './config.js';
+import { AI_TOOLS } from './config.js';
 import { CommandAdapterRegistry } from './command-generation/index.js';
 import { ALL_WORKFLOWS } from './profiles.js';
 import { WORKFLOW_TO_SKILL_DIR } from './profile-sync-drift.js';
@@ -37,13 +37,7 @@ function toolSpecificPathsForTool(toolId: string): string[] {
   const tool = AI_TOOLS.find((t) => t.value === toolId);
   if (!tool) return [];
   const paths: string[] = [];
-  const ownSkillsRoot = !tool.skillsDir || tool.globalSkillsDir
-    ? undefined
-    : !usesSharedSkills(tool)
-      ? tool.skillsDir
-      : SKILL_LINKED_TOOL_IDS.has(tool.value) && tool.skillsDir !== SHARED_SKILLS_ROOT
-        ? tool.skillsDir
-        : undefined;
+  const ownSkillsRoot = !tool.skillsDir || usesSharedSkills(tool) ? undefined : tool.skillsDir;
   if (ownSkillsRoot) {
     for (const workflow of ALL_WORKFLOWS) {
       const skillDir = `${ownSkillsRoot}/skills/${WORKFLOW_TO_SKILL_DIR[workflow]}`;
@@ -86,7 +80,7 @@ export function currentGeneratablePaths(): Set<string> {
   paths.add(`${SHARED_SKILLS_ROOT}/skills/${SHARED_TARGET_MARKER}`);
   for (const tool of AI_TOOLS) {
     // Releases before 2.0 kept this file in every shared skills root.
-    if (tool.skillsDir && !tool.globalSkillsDir && !usesSharedSkills(tool)) {
+    if (tool.skillsDir && !usesSharedSkills(tool)) {
       paths.add(`${tool.skillsDir}/skills/${SHARED_TARGET_MARKER}`);
     }
   }

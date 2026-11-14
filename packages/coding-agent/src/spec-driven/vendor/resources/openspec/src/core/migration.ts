@@ -43,23 +43,8 @@ export interface LegacyToolRoot {
  * current skillsDir. User files are never touched.
  */
 export const LEGACY_TOOL_ROOTS: Record<string, LegacyToolRoot[]> = {
-  // Kimi CLI became Kimi Code and moved from .kimi to .kimi-code.
-  kimi: [{ root: '.kimi', needsConsent: false }],
-  // Windsurf was rebranded to Devin Desktop on 2026-06-02 and its config
-  // directory moved to .devin/. Devin Desktop reads .windsurf/ only as a
-  // fallback and Devin Local does not read it at all, so moving is the right
-  // default — but a pre-rebrand Windsurf build reads ONLY .windsurf/, and
-  // nothing on disk tells that user apart, so the move is offered, not taken.
-  devin: [{ root: '.windsurf', needsConsent: true }],
-  // Codex now reads the canonical shared .agents root. Generate the current
-  // replacement first so a divergent legacy file is preserved, not overwritten.
-  codex: [{ root: '.codex', needsConsent: false, timing: 'after-generation' }],
-  // Antigravity v1.20.5 moved workspace skills and workflows to `.agents` and
-  // reads the old `.agent` root only as a fallback, so leaving a copy there
-  // just gives the agent two of everything. Same after-generation timing as
-  // Codex: the replacement is written first, so a divergent legacy file is
-  // reported and kept rather than overwritten.
-  antigravity: [{ root: '.agent', needsConsent: false, timing: 'after-generation' }],
+  // No supported target has a former root: only oh-my-pi is set up, and its
+  // folder has not moved. Other assistants' former directories are not scanned.
 };
 
 export interface LegacyToolMigration {
@@ -463,13 +448,6 @@ export function hasMovableContent(migration: LegacyToolMigration): boolean {
  * Keyed by tool so the reason is specific rather than a generic "files moved".
  */
 export function legacyMigrationNotice(migration: LegacyToolMigration): string {
-  if (migration.toolId === 'devin') {
-    return (
-      `Windsurf is now Devin Desktop, and its config directory moved from ` +
-      `${migration.from}/ to ${migration.to}/. Devin Desktop reads ${migration.from}/ ` +
-      `only as a fallback, and Devin Local does not read it at all.`
-    );
-  }
   return `${migration.from}/ is the former location for this tool; ${migration.to}/ is current.`;
 }
 
@@ -531,9 +509,7 @@ function scanInstalledWorkflowArtifacts(
     if (!toolSupportsSkills(tool)) continue;
 
     const skillsDirs: string[] = [];
-    if (tool.globalSkillsDir) {
-      skillsDirs.push(resolveToolSkillsDir(projectPath, tool));
-    } else if (!usesSharedSkills(tool)) {
+    if (!usesSharedSkills(tool)) {
       skillsDirs.push(resolveToolSkillsDir(projectPath, tool));
     } else {
       // The shared copy is this tool's when it is listed; its own folder holds

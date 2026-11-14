@@ -63,42 +63,6 @@ const COMMAND_TO_SKILL_NAME: Record<string, string> = {
   'propose': 'openspec-propose',
 };
 
-/**
- * Tools whose skill invocation uses a non-default prefix. The default is `/`
- * (e.g. `/openspec-propose`); Kimi Code invokes skills as `/skill:<name>` and
- * Codex CLI as `$<name>` — a `/<name>` form Codex does not recognize
- * (see docs/supported-tools.md).
- */
-const SKILL_INVOCATION_PREFIX: Record<string, string> = {
-  kimi: '/skill:',
-  codex: '$',
-};
-
-/**
- * Tools with no documented slash invocation for skills: use automatic
- * matching or natural-language prompts instead. SourceCraft Code Assistant
- * supports separate command files, but its skills use description matching.
- * Rovo Dev's `/skills` only manages skills (see docs/supported-tools.md).
- * Skill references for these tools are spelled as prose ("the openspec-propose
- * skill") so skills-only delivery does not advertise unregistered commands.
- */
-const NATURAL_LANGUAGE_SKILL_TOOLS = new Set<string>(['gsd', 'rovodev', 'codeassistant']);
-
-/**
- * Whether a tool references skills by natural language rather than a slash
- * command (see NATURAL_LANGUAGE_SKILL_TOOLS).
- */
-export function usesNaturalLanguageSkillReferences(toolId: string): boolean {
-  return NATURAL_LANGUAGE_SKILL_TOOLS.has(toolId);
-}
-
-function replaceCommandsWithNaturalLanguageSkillReferences(text: string): string {
-  return text.replace(/\/opsx:([a-z-]+)/g, (match, commandId: string) => {
-    const skillName = COMMAND_TO_SKILL_NAME[commandId];
-    return skillName === undefined ? match : `the ${skillName} skill`;
-  });
-}
-
 function replaceCommandsWithSkillReferences(text: string, prefix: string): string {
   return text.replace(/\/opsx:([a-z-]+)/g, (match, commandId: string) => {
     const skillName = COMMAND_TO_SKILL_NAME[commandId];
@@ -107,23 +71,8 @@ function replaceCommandsWithSkillReferences(text: string, prefix: string): strin
 }
 
 /**
- * Keeps Codex's `$<name>` spelling first while making its canonical shared
- * `.agents` tree usable by agents that invoke the same skills with `/<name>`.
- */
-export function transformToCodexCompatibleSkillReferences(text: string): string {
-  return text.replace(/\/opsx:([a-z-]+)/g, (match, commandId: string) => {
-    const skillName = COMMAND_TO_SKILL_NAME[commandId];
-    return skillName === undefined
-      ? match
-      : `$${skillName} (Codex) or /${skillName} (other agents)`;
-  });
-}
-
-/**
- * The wording of the one shared copy in `.agents/skills/`, which every tool
+ * The wording of the one shared copy in `.agents/skills/`, which the target
  * reads: `/opsx:<command>` becomes the bare skill name (`openspec-propose`).
- * Each tool invokes a skill by name in its own syntax (`/`, `$`, `/skill:`, or
- * by asking), so the name alone is the one form that is right in all of them.
  */
 export function transformToSharedSkillReferences(text: string): string {
   return replaceCommandsWithSkillReferences(text, '');
@@ -133,9 +82,7 @@ export function transformToSharedSkillReferences(text: string): string {
  * Transforms command references to skill references using the default `/`
  * invocation prefix. Converts `/opsx:<command>` patterns to
  * `/openspec-<skill>` so that generated skills do not reference commands
- * that were never generated. Used for channels that are not tied to one
- * tool (e.g. the skills.sh distribution); tool-targeted generation should
- * go through getSkillReferenceTransformer instead.
+ * that were never generated.
  *
  * Unknown command references are left unchanged.
  *
@@ -150,36 +97,19 @@ export function transformToSkillReferences(text: string): string {
   return replaceCommandsWithSkillReferences(text, '/');
 }
 
-/**
- * Returns the skill-reference transformer for a specific tool, honoring the
- * tool's documented skill invocation syntax (e.g. Kimi Code's
- * `/skill:openspec-propose`). Tools with no slash surface (e.g. Rovo Dev) get
- * natural-language references ("the openspec-propose skill"); everything else
- * falls back to the default `/openspec-*` form.
- *
- * @param toolId - The AI tool identifier (e.g. 'kimi', 'vibe', 'rovodev')
- * @returns A transformer converting `/opsx:*` references to skill invocations
- */
-export function getSkillReferenceTransformer(toolId: string): (text: string) => string {
-  if (usesNaturalLanguageSkillReferences(toolId)) {
-    return replaceCommandsWithNaturalLanguageSkillReferences;
-  }
-  const prefix = SKILL_INVOCATION_PREFIX[toolId];
-  if (prefix === undefined) {
-    return transformToSkillReferences;
-  }
-  return (text: string) => replaceCommandsWithSkillReferences(text, prefix);
+/** The vendored copy has one target, which invokes skills as `/openspec-*`. */
+export function getSkillReferenceTransformer(_toolId: string): (text: string) => string {
+  return transformToSkillReferences;
 }
 
 /**
  * Selects the command-reference transformer for a skill generation target.
  *
  * OpenSpec 2.0 generates no command files, so every skill refers to the other
- * workflows as skills, in the spelling the tool invokes skills with (Codex's
- * `$openspec-*`, a slash name elsewhere). A skill never points at an `/opsx:*`
- * command that does not exist.
+ * workflows as skills. A skill never points at an `/opsx:*` command that does
+ * not exist.
  *
- * @param toolId - The AI tool identifier (e.g. 'claude', 'opencode', 'pi')
+ * @param toolId - The AI tool identifier (e.g., 'oh-my-pi')
  * @param _delivery - The `delivery` setting, which no longer changes anything
  * @param _capability - The tool's command surface capability, likewise
  * @param _invocation - How the tool's commands were invoked, likewise
@@ -191,7 +121,5 @@ export function getTransformerForTool(
   _capability: CommandSurfaceCapability,
   _invocation: CommandInvocation | undefined
 ): ((text: string) => string) | undefined {
-  return toolId === 'codex'
-    ? transformToCodexCompatibleSkillReferences
-    : getSkillReferenceTransformer(toolId);
+  return getSkillReferenceTransformer(toolId);
 }

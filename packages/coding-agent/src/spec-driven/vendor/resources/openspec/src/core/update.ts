@@ -19,7 +19,6 @@ import {
   getSkillTemplates,
   generateSkillContent,
   getToolsWithSkillsDir,
-  hasGlobalSkillTarget,
   resolveToolSkillsDir,
   toolSupportsSkills,
   type ToolVersionStatus,
@@ -35,7 +34,6 @@ import {
   formatDetectionSummary,
   findEditedLegacyGlobalPrompts,
   getLegacyGlobalPromptMatches,
-  getLegacyWorkflowIdsForTool,
   getToolsFromLegacyArtifacts,
   legacyCleanupDeletesOnlyReleasedOutput,
   hasRepoLocalLegacyRemovals,
@@ -46,7 +44,6 @@ import {
 } from './legacy-cleanup.js';
 import { isInteractive } from '../utils/interactive.js';
 import { findStaleReleasedFiles, pruneEmptyParents } from './released-output-sweep.js';
-import { cleanUpRetiredTools, formatRetiredToolCleanup } from './retired-tools.js';
 import { getGlobalConfig, getGlobalConfigPath, serializeGlobalConfig, type Delivery, type Profile } from './global-config.js';
 import { getProfileWorkflows, ALL_WORKFLOWS, CORE_WORKFLOWS } from './profiles.js';
 import { formatOptionalWorkflowsNote, getOnboardingCommands } from './onboarding-commands.js';
@@ -87,7 +84,6 @@ import {
   type UpdateFileOps,
   type UpdatePlan,
 } from './update-plan.js';
-import { includesGitHubCopilot, writeCopilotCloudFiles, removeCopilotCloudFiles, isCopilotCloudEnabled, readCopilotCloudOptIn, findUnmanagedCloudFiles, type CopilotCloudFileOps } from './github-copilot/cloud-agent.js';
 
 const require = createRequire(import.meta.url);
 const { version: OPENSPEC_VERSION } = require('../../package.json');
@@ -289,22 +285,6 @@ export class UpdateCommand {
       failedTools: legacyUpgradeFailures = [],
     } = legacyUpgrade;
 
-    // 4b. Tools OpenSpec no longer supports: remove what earlier releases
-    //     generated for them, keep what the user edited, and say so.
-    for (const retired of await cleanUpRetiredTools(resolvedProjectPath, {
-      view: this.view,
-      remove: (fullPath) => this.ops.removeFile(fullPath, 'openspec'),
-      prune: !this.dryRun,
-    })) {
-      // Said when something was removed (or on --force); a project whose only
-      // retired-tool files are edited ones isn't told again on every run.
-      if (retired.removed.length === 0 && !this.force) continue;
-      const successorSetUp = getConfiguredToolsForProfileSync(resolvedProjectPath, this.view).includes(retired.tool.successor);
-      const [headline, ...detail] = formatRetiredToolCleanup(retired, successorSetUp);
-      this.log(chalk.yellow(headline));
-      for (const line of detail) this.log(chalk.dim(line));
-    }
-
     // 5. Find configured tools
     const configuredTools = getConfiguredToolsForProfileSync(resolvedProjectPath, this.view);
     const configuredAndNewTools = [...new Set([...configuredTools, ...newlyConfiguredTools])];
@@ -330,7 +310,6 @@ export class UpdateCommand {
         }
         return;
       }
-      await this.syncCopilotCloudFiles(resolvedProjectPath, configuredAndNewTools);
       this.log(chalk.yellow('No configured tools found.'));
       this.log(chalk.dim('Run "openspec init" to set up tools.'));
       return;
@@ -387,7 +366,6 @@ export class UpdateCommand {
       );
       // All tools are up to date
       this.displayUpToDateMessage(toolStatuses);
-      await this.syncCopilotCloudFiles(resolvedProjectPath, configuredAndNewTools);
 
       // Still check for new tool directories and extra workflows
       this.detectNewTools(resolvedProjectPath, configuredTools);
@@ -448,7 +426,7 @@ export class UpdateCommand {
 
       try {
         const skillsDir = resolveToolSkillsDir(resolvedProjectPath, tool);
-        const skillsRoot = hasGlobalSkillTarget(tool) ? skillsDir : resolvedProjectPath;
+        const skillsRoot = resolvedProjectPath;
         // Shared-folder skills were written once above.
         const writesSkills = !usesSharedSkills(tool);
         const toolWorkflows = legacyWorkflowOverrides[tool.value] ?? desiredWorkflows;
@@ -628,7 +606,6 @@ export class UpdateCommand {
       this.log(`Learn more: ${chalk.cyan('https://github.com/Fission-AI/OpenSpec')}`);
     }
 
-    await this.syncCopilotCloudFiles(resolvedProjectPath, configuredAndNewTools);
 
     // 13. Detect new tool directories not currently configured
     this.detectNewTools(resolvedProjectPath, configuredAndNewTools);
@@ -748,7 +725,7 @@ export class UpdateCommand {
   }
 
   /** The update's write seam, in the shape modules with their own writers take. */
-  private fileOps(tool: string): LegacyCleanupOps & CopilotCloudFileOps {
+  private fileOps(tool: string): LegacyCleanupOps {
     return {
       writeFile: (filePath, content) => this.ops.writeFile(filePath, content, tool),
       removeFile: (filePath) => this.ops.removeFile(filePath, tool),
@@ -789,59 +766,7 @@ export class UpdateCommand {
     }
   }
 
-  private async syncCopilotCloudFiles(projectPath: string, configuredTools: string[]): Promise<void> {
-    const ops = this.fileOps('github-copilot');
-    try {
-      if (includesGitHubCopilot(configuredTools)) {
-        // Cloud files are opt-in (see cloud-agent.ts). `update` never prompts,
-        // so it only refreshes files the user has already opted into (via
-        // `openspec init` or a `githubCopilot.cloudAgent: true` config), or that
-        // a pre-opt-in project already has. Opting in is a deliberate init/config
-        // step, never a silent side effect of running update.
-        if (await isCopilotCloudEnabled(projectPath)) {
-          await writeCopilotCloudFiles(projectPath, ops);
-          const collisions = await findUnmanagedCloudFiles(projectPath);
-          if (collisions.length > 0) {
-            this.log(
-              chalk.dim(
-                `Left your existing ${collisions.join(' and ')} untouched — add the OpenSpec ` +
-                  `install step by hand so the Copilot cloud agent can run openspec.`
-              )
-            );
-          }
-          return;
-        }
 
-        // Explicit opt-out (githubCopilot.cloudAgent: false) means "not here":
-        // remove any managed files a prior opt-in left behind (customized files
-        // are preserved). If the user simply never decided, stay quiet unless
-        // we're at an interactive terminal, where a one-line hint aids discovery.
-        if (readCopilotCloudOptIn(projectPath) === false) {
-          const removed = await removeCopilotCloudFiles(projectPath, ops);
-          if (removed > 0) {
-            this.log(
-              chalk.dim(`Removed: ${removed} Copilot cloud agent file(s) (opted out of cloud files)`)
-            );
-          }
-        } else if (isInteractive()) {
-          this.log(
-            chalk.dim(
-              "GitHub Copilot cloud coding-agent files are available (opt-in). Enable with 'openspec init --copilot-cloud'."
-            )
-          );
-        }
-        return;
-      }
-
-      const removed = await removeCopilotCloudFiles(projectPath, ops);
-      if (removed > 0) {
-        this.log(chalk.dim(`Removed: ${removed} Copilot cloud agent file(s) (github-copilot not configured)`));
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`Warning: failed to sync Copilot cloud agent files: ${message}`);
-    }
-  }
 
   /**
    * Tools whose SKILL.md bodies no longer match what this CLI generates.
@@ -1463,7 +1388,7 @@ export class UpdateCommand {
     // Read the tree as planned: a dry run has not written the replacement
     // skills this check looks for.
     const availableCodexWorkflows = new Set(
-      scanInstalledWorkflows(projectPath, ['codex'], this.view)
+      scanInstalledWorkflows(projectPath, ['oh-my-pi'], this.view)
     );
     const removableMatches = getLegacyGlobalPromptMatches(detection)
       .filter((prompt) => prompt.workflowIds.every((workflowId) => availableCodexWorkflows.has(workflowId)));
@@ -1611,20 +1536,12 @@ export class UpdateCommand {
       }
     }
 
-    const inferredCodexWorkflows = getProfileWorkflows(
-      'custom',
-      getLegacyWorkflowIdsForTool(detection, 'codex')
-    ).filter((workflow): workflow is (typeof ALL_WORKFLOWS)[number] =>
-      (ALL_WORKFLOWS as readonly string[]).includes(workflow)
-    );
-
     // Create skills/commands for selected tools using effective profile+delivery.
     const newlyConfigured: string[] = [];
     const skippedSharedSkillTools: string[] = [];
     const failedTools: ToolFailure[] = [];
     const workflowOverrides: LegacyUpgradeResult['workflowOverrides'] = {};
-    const workflowsForLegacyTool = (toolId: string) =>
-      toolId === 'codex' && inferredCodexWorkflows.length > 0 ? inferredCodexWorkflows : desiredWorkflows;
+    const workflowsForLegacyTool = (_toolId: string) => desiredWorkflows;
     // The shared copy for every tool set up so far and every tool being added,
     // before any tool's former-root move (which needs it in place).
     const sharedInstall = await this.installSharedSkillsForRun(
@@ -1642,15 +1559,12 @@ export class UpdateCommand {
 
       try {
         const skillsDir = resolveToolSkillsDir(projectPath, tool);
-        const skillsRoot = hasGlobalSkillTarget(tool) ? skillsDir : projectPath;
+        const skillsRoot = projectPath;
         // Shared-folder skills were written once above.
         const writesSkills = !usesSharedSkills(tool);
         const ownFolderError = sharedInstall.toolFailures.get(tool.value);
         if (ownFolderError) throw ownFolderError;
         const toolWorkflows = workflowsForLegacyTool(tool.value);
-        if (tool.value === 'codex' && inferredCodexWorkflows.length > 0) {
-          workflowOverrides[tool.value] = inferredCodexWorkflows;
-        }
         const skillTemplates = getSkillTemplates(toolWorkflows);
 
         // Create skill files when delivery includes skills

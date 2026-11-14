@@ -73,31 +73,13 @@ The strength of this design: you learn the workflow once and carry it across too
 
 The intent is identical everywhere. The spelling follows the file your tool loads.
 
-| Your tool's command file | How you type it | Example tools |
-|--------------------------|-----------------|---------------|
-| `.../commands/opsx/<id>.*` | `/opsx:propose` | Claude Code, Gemini CLI, Crush |
-| `.../opsx-<id>.*` | `/opsx-propose` | Cursor, GitHub Copilot (IDE), Devin Desktop, Trae, Oh My Pi |
-| `.amazonq/prompts/opsx-<id>.md` | `@opsx-propose` | Amazon Q Developer |
-| none — skills only | `/openspec-propose` | CodeArts, ForgeCode, Hermes, Mistral Vibe, Zed Agent, shared `.agents` |
-| none — Kimi Code | `/skill:openspec-propose` | Kimi Code |
-| none — Codex CLI | `$openspec-propose` | Codex |
+| Tool | How you type it |
+|------|-----------------|
+| Oh My Pi | `/openspec-propose` |
 
-Devin is the one tool that spans two rows. Devin Desktop reads
-`.devin/workflows/`, so `/opsx-propose` works there; [Devin Local does
-not](https://docs.devin.ai/desktop/devin-local), so on that agent use the
-`/openspec-propose` skill instead. The skills OpenSpec writes to
-`.devin/skills/` work on both, which is why they reference each other by skill
-name.
-
-Every tool is listed in [How To Invoke](supported-tools.md#how-to-invoke) — that
-table is the authoritative one. Two rows are not slash commands at all: Amazon Q
-loads its files into a prompt library invoked with `@`, and the last three rows
-use the *skill* name, which is not the command id (`/opsx:apply` is the
-`openspec-apply-change` skill).
-
-When in doubt, read the "Getting started" line `openspec init` printed: it already
-uses the form your tools registered. Typing a slash and watching the autocomplete
-works too, for the tools that surface slash commands at all.
+Oh My Pi reads the shared skills directly, so `/openspec-propose` and the other
+skill names are the invocation form. The "Getting started" line `openspec init`
+prints is authoritative.
 
 ## How the commands got there: skills and commands
 

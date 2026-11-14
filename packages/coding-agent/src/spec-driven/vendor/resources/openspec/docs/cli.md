@@ -107,14 +107,12 @@ field so OpenSpec never overwrites project-specific guidance.
 | `--force` | Auto-cleanup legacy files without prompting |
 | `--profile <profile>` | Override global profile for this init run (`core` or `custom`) |
 | `--no-animation` | Show a static welcome screen instead of the animated one |
-| `--copilot-cloud` | Set up GitHub Copilot [cloud coding-agent files](supported-tools.md#github-copilot-cloud-coding-agent) without prompting |
-| `--no-copilot-cloud` | Skip GitHub Copilot cloud coding-agent files without prompting |
 
 `--profile custom` uses whatever workflows are currently selected in global config (`openspec config profile`).
 
 The welcome animation is also skipped when the `OPENSPEC_NO_ANIMATION` environment variable is set (any value, including empty), when `NO_COLOR` is set to a non-empty value, or when the OS reduced-motion preference is enabled (macOS Reduce Motion, GNOME animations disabled).
 
-**Supported tool IDs (`--tools`)** — `windsurf` is also accepted, as an alias for `devin`: `amazon-q`, `antigravity`, `auggie`, `bob`, `claude`, `cline`, `command-code`, `codeartsagent`, `codex`, `devin`, `forgecode`, `codebuddy`, `continue`, `costrict`, `crush`, `cursor`, `factory`, `gemini`, `github-copilot`, `hermes`, `iflow`, `junie`, `kilocode`, `kimi`, `kiro`, `lingma`, `minimax-code`, `vibe`, `oh-my-pi`, `opencode`, `pi`, `codeassistant`, `qoder`, `qwen`, `rovodev`, `roocode`, `trae`, `zed`, `zcode`, `agents`
+**Supported tool IDs (`--tools`)** — `oh-my-pi` (this vendored copy ships no other targets)
 
 > This list mirrors `AI_TOOLS` in `src/core/config.ts`. See [Supported Tools](supported-tools.md) for each tool's skill and command paths.
 
@@ -127,11 +125,8 @@ openspec init
 # Initialize in a specific directory
 openspec init ./my-project
 
-# Non-interactive: configure for Claude and Cursor
-openspec init --tools claude,cursor
-
-# Non-interactive: configure global MiniMax Code skills
-openspec init --tools minimax-code
+# Non-interactive: configure Oh My Pi
+openspec init --tools oh-my-pi
 
 # Configure for all supported tools
 openspec init --tools all
@@ -212,8 +207,7 @@ openspec update --dry-run --json
 ```
 
 The plan is what a non-interactive run does, and lists every file it would
-touch: moves out of a tool's former directory, the global config save for an
-install from before profiles, the Copilot cloud agent files, and, with
+touch: the global config save for an install from before profiles and, with
 `--force`, legacy-artifact cleanup. Files that belong to OpenSpec itself rather
 than one tool have `tool: "openspec"`. `notes` flags steps a terminal user
 would be asked about, each with a stable `code`: `legacy-tool-directories` (a

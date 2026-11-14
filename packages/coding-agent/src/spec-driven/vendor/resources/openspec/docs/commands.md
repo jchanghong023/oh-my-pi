@@ -1,13 +1,11 @@
 # Commands
 
-This is the reference for OpenSpec's slash commands. These commands are invoked in your AI coding assistant's chat interface (e.g., Claude Code, Cursor, Devin Desktop).
+This is the reference for OpenSpec's slash commands. This copy invokes them in Oh My Pi.
 
 For workflow patterns and when to use each command, see [Workflows](workflows.md). For CLI commands, see [CLI](cli.md).
 
-These pages use `/opsx:<command>` as the canonical name. Some tools spell it
-differently — Cursor and GitHub Copilot register `/opsx-propose`, Codex uses
-`$openspec-propose` — so check [How To Invoke](supported-tools.md#how-to-invoke)
-for your tool. The files OpenSpec generates already use the right form.
+This copy configures Oh My Pi only. Invoke workflows by skill name, such as
+`/openspec-propose`; see [How To Invoke](supported-tools.md#how-to-invoke).
 
 ## Quick Reference
 
@@ -682,22 +680,11 @@ AI:  Welcome to OpenSpec!
 
 Different AI tools use slightly different command syntax. Use the format that matches your tool:
 
-| Your tool's command file | Syntax example | Example tools |
-|--------------------------|----------------|---------------|
-| `.../commands/opsx/<id>.*` | `/opsx:propose`, `/opsx:apply` | Claude Code, Gemini CLI, Crush |
-| `.../opsx-<id>.*` | `/opsx-propose`, `/opsx-apply` | Cursor, Devin Desktop, Copilot (IDE), Trae, Oh My Pi |
-| none — skills only | `/openspec-propose`, `/openspec-apply-change` | CodeArts, ForgeCode, Hermes, MiniMax Code, Mistral Vibe, Zed Agent, shared `.agents` |
-| none — Kimi Code | `/skill:openspec-propose` | Kimi Code |
-| none — Codex CLI | `$openspec-propose` | Codex |
+| Tool | How you type it |
+|------|-----------------|
+| Oh My Pi | `/openspec-propose` |
 
-> **Devin Desktop vs Devin Local:** the `.devin/workflows/opsx-*.md` files give
-> Devin Desktop `/opsx-propose`. Devin Local has no workflows — use the skills
-> OpenSpec writes to `.devin/skills/`, e.g. `/openspec-propose`, which work on
-> both agents.
-
-The intent is the same across tools, but how commands are surfaced can differ by integration. [How To Invoke](supported-tools.md#how-to-invoke) lists every supported tool; this table shows only examples of each shape.
-
-> **Note:** GitHub Copilot commands (`.github/prompts/*.prompt.md`) are only available in IDE extensions (VS Code, JetBrains, Visual Studio). GitHub Copilot CLI does not currently support custom prompt files — see [Supported Tools](supported-tools.md) for details and workarounds.
+This vendored copy configures Oh My Pi only; it reads the shared skills directly, so invoke workflows as `/openspec-<workflow>`. [How To Invoke](supported-tools.md#how-to-invoke) is authoritative.
 
 ---
 

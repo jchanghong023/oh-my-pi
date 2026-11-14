@@ -90,7 +90,7 @@ defaulting to the system preference.
 
 Your AI writes these; you review the plan before any code is written.
 
-OpenSpec is built with OpenSpec — browse this repo's live [specs](openspec/specs) and in-flight [changes](openspec/changes) for real examples at scale.
+OpenSpec is built with OpenSpec — browse the upstream [specs](https://github.com/Fission-AI/OpenSpec/tree/ea635dd255f8686dcf48626bbcbe0e3fd59b6067/openspec/specs) and in-flight [changes](https://github.com/Fission-AI/OpenSpec/tree/ea635dd255f8686dcf48626bbcbe0e3fd59b6067/openspec/changes) for real examples at scale.
 
 </details>
 
@@ -117,19 +117,12 @@ Solo, OpenSpec keeps you and your AI honest on a single repo. On a team, the har
 
 ## Quick Start
 
-Install OpenSpec. On macOS or Linux, in your terminal:
+Install OpenSpec with npm (needs Node.js 22.12.0 or higher), or with the official [Homebrew formula](https://formulae.brew.sh/formula/openspec):
 
 ```bash
-curl -fsSL https://openspec.dev/cli/install.sh | sh
+npm install -g @fission-ai/openspec@latest
+# or: brew install openspec
 ```
-
-On Windows, in PowerShell:
-
-```powershell
-irm https://openspec.dev/cli/install.ps1 | iex
-```
-
-Prefer a package manager? `npm install -g @fission-ai/openspec@latest` (needs Node.js 22.12.0 or higher) or the official [Homebrew formula](https://formulae.brew.sh/formula/openspec), `brew install openspec`.
 
 Then navigate to your project directory and initialize:
 
@@ -194,7 +187,7 @@ AI coding assistants are powerful but unpredictable when requirements live only 
 
 **Upgrade the CLI**
 
-With the standalone install, run `openspec install`. If you installed with npm:
+If you installed with npm:
 
 ```bash
 npm install -g @fission-ai/openspec@latest
@@ -224,7 +217,7 @@ openspec update
 
 Every change starts as an issue. We discuss it there, and if we agree to pursue it, a maintainer implements the change or invites you to build it with us.
 
-→ **[CONTRIBUTING.md](CONTRIBUTING.md)**: the full process, from first issue to merged PR
+→ **[CONTRIBUTING.md](https://github.com/Fission-AI/OpenSpec/blob/ea635dd255f8686dcf48626bbcbe0e3fd59b6067/CONTRIBUTING.md)**: the full process, from first issue to merged PR
 
 ## Other
 
@@ -244,7 +237,7 @@ We collect only command names and version to understand usage patterns. No argum
 <details>
 <summary><strong>Maintainers & Advisors</strong></summary>
 
-See [MAINTAINERS.md](MAINTAINERS.md) for the list of core maintainers and advisors who help guide the project.
+See [MAINTAINERS.md](https://github.com/Fission-AI/OpenSpec/blob/ea635dd255f8686dcf48626bbcbe0e3fd59b6067/MAINTAINERS.md) for the list of core maintainers and advisors who help guide the project.
 
 </details>
 

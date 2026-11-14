@@ -4,14 +4,13 @@
  */
 
 import path from 'path';
-import os from 'os';
 import { promises as fs, constants as fsConstants } from 'fs';
 import type { FileHandle } from 'fs/promises';
 import chalk from 'chalk';
 import { FileSystemUtils, removeMarkerBlock as removeMarkerBlockUtil } from '../utils/file-system.js';
-import { OPENSPEC_MARKERS, findRetiredTool } from './config.js';
+import { OPENSPEC_MARKERS } from './config.js';
 import { hasReleasedOpenSpecBlock, isReleasedGeneratedContent } from './shared/generated-fingerprint.js';
-import { ALL_WORKFLOWS, type WorkflowId } from './profiles.js';
+import type { WorkflowId } from './profiles.js';
 
 /**
  * Legacy config file names from the old ToolRegistry.
@@ -28,123 +27,21 @@ export const LEGACY_CONFIG_FILES = [
   'QWEN.md',
 ] as const;
 
-/** The three commands the old SlashCommandRegistry wrote into each directory. */
-const LEGACY_DIRECTORY_COMMAND_FILES = ['proposal.md', 'apply.md', 'archive.md'] as const;
-
-/** The three commands every pre-opsx release wrote. */
-const LEGACY_THREE_COMMAND_NAMES = ['proposal', 'apply', 'archive'] as const;
-
-/** Exact Kilo workflow files written by OpenSpec before the command path moved. */
-const LEGACY_KILOCODE_COMMAND_FILES = [
-  ...ALL_WORKFLOWS.map(workflow => `.kilocode/workflows/opsx-${workflow}.md`),
-  '.kilocode/workflows/openspec-proposal.md',
-  '.kilocode/workflows/openspec-apply.md',
-  '.kilocode/workflows/openspec-archive.md',
-];
-
 /**
  * Legacy slash command patterns from the old SlashCommandRegistry.
  * These map toolId to the path pattern where legacy commands were created.
  * Some tools used a directory structure, others used individual files.
  */
 export const LEGACY_SLASH_COMMAND_PATHS: Record<string, LegacySlashCommandPattern> = {
-  // Directory-based: .tooldir/commands/openspec/. Each entry names the files
-  // OpenSpec wrote there, because users keep their own commands in the same
-  // folder: only those files are deleted, and the folder only once it is empty.
-  'claude': { type: 'directory', path: '.claude/commands/openspec', managedFileNames: LEGACY_DIRECTORY_COMMAND_FILES },
-  'codebuddy': { type: 'directory', path: '.codebuddy/commands/openspec', managedFileNames: LEGACY_DIRECTORY_COMMAND_FILES },
-  'qoder': { type: 'directory', path: '.qoder/commands/openspec', managedFileNames: LEGACY_DIRECTORY_COMMAND_FILES },
-  // Lingma support arrived after the opsx rename and has always written to
-  // `.lingma/commands/opsx/`, so OpenSpec never put a file here: only an empty
-  // leftover folder is removed.
-  'lingma': { type: 'directory', path: '.lingma/commands/openspec', managedFileNames: [] },
-  'crush': { type: 'directory', path: '.crush/commands/openspec', managedFileNames: LEGACY_DIRECTORY_COMMAND_FILES },
-  'gemini': { type: 'directory', path: '.gemini/commands/openspec', managedFileNames: ['proposal.toml', 'apply.toml', 'archive.toml'] },
-
-  // File-based: individual openspec-*.md files in a commands/workflows/prompts folder
-  'cursor': { type: 'files', pattern: '.cursor/commands/openspec-*.md' },
-  // Keyed by the tool id these map back to, so the pre-opsx Windsurf files
-  // belong to `devin` — the id Windsurf became. Only `.windsurf/` is listed:
-  // `.devin/` postdates the opsx rename and never held `openspec-*` files.
-  'devin': { type: 'files', pattern: '.windsurf/workflows/openspec-*.md' },
-  // Kilo now writes commands under `.kilo/command/`. Clean up both generations
-  // of OpenSpec workflows from Kilo's legacy `.kilocode/workflows/` folder.
-  'kilocode': {
-    type: 'files',
-    pattern: LEGACY_KILOCODE_COMMAND_FILES,
-  },
-  'kiro': { type: 'files', pattern: '.kiro/prompts/openspec-*.prompt.md' },
-  'github-copilot': { type: 'files', pattern: '.github/prompts/openspec-*.prompt.md' },
-  'amazon-q': { type: 'files', pattern: '.amazonq/prompts/openspec-*.md' },
-  // Before 0.15, Cline's and Qwen's three commands sat one level up, as
-  // Markdown. `.clinerules/` also holds the user's own rules, so those
-  // releases' exact filenames are listed rather than a wildcard.
-  'cline': {
-    type: 'files',
-    pattern: [
-      '.clinerules/workflows/openspec-*.md',
-      ...LEGACY_THREE_COMMAND_NAMES.map((name) => `.clinerules/openspec-${name}.md`),
-    ],
-  },
-  'roocode': { type: 'files', pattern: '.roo/commands/openspec-*.md' },
-  'auggie': { type: 'files', pattern: '.augment/commands/openspec-*.md' },
-  'factory': { type: 'files', pattern: '.factory/commands/openspec-*.md' },
-  'opencode': { type: 'files', pattern: ['.opencode/command/opsx-*.md', '.opencode/command/openspec-*.md'] },
-  'continue': { type: 'files', pattern: '.continue/prompts/openspec-*.prompt' },
-  // Scoped to the pre-opsx filenames under Antigravity's former `.agent` root.
-  // The current `.agents/workflows/opsx-*.md` files postdate that rename, and
-  // the `.agent` copies of them are relocated by LEGACY_TOOL_ROOTS, which
-  // preserves a customized file instead of deleting it. These patterns are
-  // matched in every project, so a shared root like `.agents` is not listed:
-  // OpenSpec never wrote `openspec-*` files there, and a user might have.
-  'antigravity': { type: 'files', pattern: '.agent/workflows/openspec-*.md' },
-  'iflow': { type: 'files', pattern: '.iflow/commands/openspec-*.md' },
-  'qwen': {
-    type: 'files',
-    pattern: [
-      '.qwen/commands/opsx-*.toml',
-      '.qwen/commands/openspec-*.toml',
-      ...LEGACY_THREE_COMMAND_NAMES.map((name) => `.qwen/commands/openspec-${name}.md`),
-    ],
-  },
-  'codex': { type: 'files', pattern: '.codex/prompts/openspec-*.md' },
-  // Keep this file-scoped: the CoStrict adapter writes `opsx-*.md` into the
-  // same folder, so a directory entry removes the live command files — and
-  // anything else the user keeps there — on every run.
-  'costrict': { type: 'files', pattern: '.cospec/openspec/commands/openspec-*.md' },
+  // The vendored copy supports only oh-my-pi, which has no pre-opsx command
+  // directory of its own. Other assistants' legacy folders are not scanned.
 };
 
 /**
- * Final OpenSpec-managed global Codex prompt filenames mapped to the workflows
- * they represented before Codex moved to skills-only delivery.
+ * Global legacy prompt locations outside the project tree. Empty: no supported
+ * target has one, and other assistants' prompt homes are not scanned.
  */
-const LEGACY_GLOBAL_CODEX_WORKFLOWS: Record<string, readonly WorkflowId[]> = {
-  'opsx-propose.md': ['propose'],
-  'opsx-explore.md': ['explore'],
-  'opsx-new.md': ['new'],
-  'opsx-continue.md': ['continue'],
-  'opsx-apply.md': ['apply'],
-  'opsx-update.md': ['update'],
-  'opsx-ff.md': ['ff'],
-  'opsx-sync.md': ['sync'],
-  'opsx-archive.md': ['archive'],
-  'opsx-bulk-archive.md': ['bulk-archive'],
-  'opsx-verify.md': ['verify'],
-  'opsx-onboard.md': ['onboard'],
-};
-
-/**
- * Global legacy prompt locations that live outside the project tree and require
- * allowlisted matching instead of broad glob-based cleanup.
- */
-export const LEGACY_GLOBAL_SLASH_COMMAND_PATHS: Record<string, LegacyGlobalPromptPattern> = {
-  'codex': {
-    managedFileNames: Object.keys(LEGACY_GLOBAL_CODEX_WORKFLOWS),
-    workflowIdsByFileName: LEGACY_GLOBAL_CODEX_WORKFLOWS,
-    resolvePromptDir: getCodexPromptDir,
-    replacementLabel: 'Codex skills',
-  },
-};
+export const LEGACY_GLOBAL_SLASH_COMMAND_PATHS: Record<string, LegacyGlobalPromptPattern> = {};
 
 /**
  * Pattern types for legacy slash commands
@@ -178,13 +75,6 @@ export interface LegacyGlobalPromptMatch {
   managedFileName: string;
   workflowIds: readonly WorkflowId[];
   replacementLabel?: string;
-}
-
-// Resolve the Codex global prompts directory, respecting CODEX_HOME if set.
-export function getCodexPromptDir(): string {
-  const envHome = process.env.CODEX_HOME?.trim();
-  const codexHome = envHome ? envHome : path.join(os.homedir(), '.codex');
-  return path.join(path.resolve(codexHome), 'prompts');
 }
 
 // Convert a simple glob pattern (only * wildcards) into an anchored RegExp.
@@ -1178,9 +1068,7 @@ export function getToolsFromLegacyArtifacts(detection: LegacyDetectionResult): s
     tools.add(prompt.toolId);
   }
 
-  // A retired tool's old files are still cleaned up, but the tool is not set
-  // up again (src/core/retired-tools.ts).
-  return Array.from(tools).filter((toolId) => !findRetiredTool(toolId));
+  return Array.from(tools);
 }
 
 /** The tool that owns a repo-local legacy slash-command directory, if any. */

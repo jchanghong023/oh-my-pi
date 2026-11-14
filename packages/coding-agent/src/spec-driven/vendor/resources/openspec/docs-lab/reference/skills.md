@@ -27,7 +27,7 @@ excluded, each with an owner elsewhere: per-tool command spellings and syntax
 (reference/supported-tools.md), example transcripts (quickstart and guides), tips and
 when-to-use judgment (guides own it), troubleshooting (help/troubleshooting.md),
 legacy /openspec:* commands (help/legacy/migration.md). Source: old docs/commands.md
-maps here per sources.md; its unsupported claims (apply "runs tests", bulk-archive
+maps here; its unsupported claims (apply "runs tests", bulk-archive
 name arguments, fixed tasks.md filename) were checked against templates and dropped.
 Skill names from WORKFLOW_TO_SKILL_DIR (src/core/profile-sync-drift.ts) and the
 templates in src/core/templates/workflows/; core set src/core/profiles.ts:14. "Optional"

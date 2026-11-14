@@ -78,8 +78,8 @@ export function readKeptSharedSkills(projectPath: string, view: FileView = DISK_
 
 /**
  * Infers the tool that rendered a shared folder written before any list file
- * existed, from its invocation syntax. Preserves generic `.agents` trees and
- * Codex trees users moved there by hand.
+ * existed, from its invocation syntax. The vendored copy has one target, so a
+ * generic `/openspec-` tree is attributed to it.
  */
 function inferPreListTool(projectPath: string, view: FileView): string | undefined {
   // Asked for every tool on every check: leave early, before any path
@@ -95,13 +95,12 @@ function inferPreListTool(projectPath: string, view: FileView): string | undefin
       // Only a release's own output says which tool wrote the folder; a skill
       // the user wrote (or `npx skills` installed) says nothing.
       if (!isReleasedGeneratedContent(content)) continue;
-      if (content.includes('$openspec-')) return 'codex';
       if (content.includes('/openspec-')) foundGenericReference = true;
     } catch {
       // Missing, unreadable, or out-of-project files give no signal.
     }
   }
-  return foundGenericReference ? 'agents' : undefined;
+  return foundGenericReference ? 'oh-my-pi' : undefined;
 }
 
 /** The known tools the list file names, or none when there is no such file. */

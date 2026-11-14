@@ -115,10 +115,7 @@ export function hasToolProfileOrDeliveryDrift(
     // The shared copy is common to every set-up tool, so only this tool's own
     // part is checked here: being listed, and its own skills folder.
     if (!listed) return true;
-    const linked = new Set<string>(
-      knownDesiredWorkflows.map((workflow) => WORKFLOW_TO_SKILL_DIR[workflow])
-    );
-    if (ownSkillFolderNeedsWork(projectPath, tool, linked, view)) return true;
+    if (ownSkillFolderNeedsWork(projectPath, tool, view)) return true;
   }
 
   // A skill the user keeps in the shared folder is theirs: OpenSpec neither

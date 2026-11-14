@@ -14,30 +14,14 @@ DONE WHEN:
 
 TODO:
 
-- [ ] Install the standalone CLI, with the user's confirmation (npm only as a fallback)
+- [ ] Install the CLI with a package manager, with the user's confirmation
 - [ ] Verify `openspec` is on PATH
 - [ ] Confirm which folder to set up, then run `openspec init --tools <ids>` there
 - [ ] Report what init actually created and how to invoke it
 
-## 1. Install
+## 1. Install with a package manager
 
-Run `openspec --version` first. If it already prints a version, the CLI is installed: say so, run `openspec version --check` (it prints the update command for how OpenSpec was installed when it can tell; otherwise update it the way it was installed, e.g. `brew upgrade openspec`), offer to run that command, and skip ahead to step 3. If it was installed with npm or another package manager, mention once that `openspec install` switches to the standalone install. Only offer it: the user may have chosen npm on purpose, so don't repeat it or switch unless they ask. Never switch an install to a different method on your own; that leaves two copies competing on PATH.
-
-Install the standalone OpenSpec binary (on Alpine Linux, `apk add libstdc++ libgcc` first). Show the command for the user's OS and run it only once they confirm, then skip to step 3:
-
-```bash
-# macOS / Linux
-curl -fsSL https://openspec.dev/cli/install.sh | sh
-```
-
-```powershell
-# Windows (PowerShell)
-irm https://openspec.dev/cli/install.ps1 | iex
-```
-
-If the user would rather use a package manager, or the installer fails, continue with step 2.
-
-## 2. Package manager (only if step 1 did not install it)
+Run `openspec --version` first. If it already prints a version, the CLI is installed: say so, run `openspec version --check` (it prints the update command for how OpenSpec was installed when it can tell; otherwise update it the way it was installed, e.g. `brew upgrade openspec`), offer to run that command, and skip ahead to step 2.
 
 Run `node --version`. Installing with a package manager needs Node.js 22.12.0 or higher. If Node is missing or older, don't install Node, switch versions, or reconfigure the user's version manager yourself; stop and leave them with their next move: https://nodejs.org, or, if they use a version manager like nvm, the command that would switch to a newer version.
 
@@ -56,11 +40,11 @@ Show the exact command and get confirmation before running it; this installs sof
 
 Stop and ask again if the install needs sudo or admin rights, fails with a permissions error, or reports that its global bin directory is missing or unconfigured. Never edit shell startup files (.bashrc, .zshrc, .profile, fish, PowerShell profile), and never run a setup command that edits them; show the change and let the user make it.
 
-## 3. PATH
+## 2. PATH
 
-Run `openspec --version`. If the command isn't found, it may only be missing from this shell: say where it was installed (the standalone installer prints the folder, `~/.local/bin` by default; a package manager has its own global bin folder) and how to add that folder to PATH for the user's shell and OS, then stop until they confirm. On Windows the standalone installer adds its folder to the user PATH itself; a new terminal picks it up. If it prints an older version than the one the install just reported, an earlier copy is shadowing it on PATH; report both versions instead of continuing. If the user uses a version manager, say so rather than editing PATH around it: with nvm or fnm the CLI is tied to the Node version that was active at install time, and with asdf or volta a shim may need regenerating.
+Run `openspec --version`. If the command isn't found, it may only be missing from this shell: say where it was installed (the package manager's global bin folder) and how to add that folder to PATH for the user's shell and OS, then stop until they confirm. If it prints an older version than the one the install just reported, an earlier copy is shadowing it on PATH; report both versions instead of continuing. If the user uses a version manager, say so rather than editing PATH around it: with nvm or fnm the CLI is tied to the Node version that was active at install time, and with asdf or volta a shim may need regenerating.
 
-## 4. Initialize
+## 3. Initialize
 
 Work out where `openspec/` should go, and lead with your best guess rather than an open question: the root of the project the user is working in is almost always right. Name the folder you picked and let them correct it, for example "you're in ~/code/acme-api, so I'll set OpenSpec up there". Prefer the version control root over the current directory, and in a monorepo say which package you chose and why. To target a folder other than the current one, pass it: `openspec init <path> --tools <ids>`.
 
@@ -72,7 +56,7 @@ Then work out which AI coding tools the user works with, and again lead with an 
 
 Then run: `openspec init --tools <ids>`, adding the path when it isn't the current folder.
 
-## 5. Report
+## 4. Report
 
 Don't assume what should exist; relay what init actually printed: how many skills it created and where, the config file line, any "Setup required" note, and what to restart or reload. OpenSpec installs skills only, so zero command files is expected, not a failure.
 

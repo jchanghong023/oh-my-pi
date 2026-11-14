@@ -18,7 +18,7 @@ import { formatSkillToolList, hasSkillToolList, readKeptSharedSkills, skillToolL
 import { everySkillRendering, generateSkillContent, getSkillTemplates } from './skill-generation.js';
 import { sharedSkillTexts } from './own-skill-texts.js';
 import { classifySkillFile, classifySkillLinkSpot } from './skill-links.js';
-import { resolveFormerOwnSkillsDir, resolveSharedSkillsDir, resolveSkillLinkDir, usesSharedSkills } from './skill-paths.js';
+import { resolveFormerOwnSkillsDir, resolveSharedSkillsDir, usesSharedSkills } from './skill-paths.js';
 
 /**
  * The shared copy's content for each skill of the given workflows (every
@@ -223,39 +223,31 @@ export async function installSharedSkills(input: SharedSkillInstallInput): Promi
   const listPath = skillToolListPath(projectPath);
   // Kept as long as it records a skill of the user's in the shared folder.
   if (wanted.size > 0 || keptShared.size > 0) {
-    // Tools that get files of their own this run: links.
-    const withOwnFiles = new Set(
-      tools
-        .filter((tool) => resolveSkillLinkDir(projectPath, tool) !== undefined)
-        .map((tool) => tool.value)
-    );
-    await ops.writeFile(listPath, formatSkillToolList(tools.map((tool) => tool.value), keptShared, withOwnFiles), 'openspec');
+    await ops.writeFile(listPath, formatSkillToolList(tools.map((tool) => tool.value), keptShared), 'openspec');
   } else if (view.exists(listPath)) {
     // No workflows selected and nothing of the user's to record.
     await ops.removeFile(listPath, 'openspec');
   }
 
-  // 2. Each tool's own skills folder: links for the tools that need them, and
-  //    old copies out of the way everywhere else.
+  // 2. Each tool's own skills folder: old copies out of the way.
   for (const tool of tools) {
-    const linkDir = resolveSkillLinkDir(projectPath, tool);
-    const ownDir = linkDir ?? resolveFormerOwnSkillsDir(projectPath, tool);
+    const ownDir = resolveFormerOwnSkillsDir(projectPath, tool);
     if (!ownDir) continue;
     // A tool whose own skills folder is the shared one (a link the user made
     // in 1.x to share skills) already reads the shared copy through it.
     if (isSameFolderTree(ownDir, sharedDir)) continue;
     try {
-      await settleOwnSkillsFolder(tool, ownDir, linkDir);
+      await settleOwnSkillsFolder(tool, ownDir);
     } catch (error) {
       result.toolFailures.set(tool.value, error instanceof Error ? error : new Error(String(error)));
     }
   }
 
-  async function settleOwnSkillsFolder(tool: AIToolOption, ownDir: string, linkDir: string | undefined) {
+  async function settleOwnSkillsFolder(tool: AIToolOption, ownDir: string) {
     // The folder itself must stay in the project: one linked elsewhere is
     // refused, as every other write is. A single skill's link is the user's
     // business and is classified (and kept) below.
-    if (!linkDir && !ownFolderInProject(projectPath, ownDir)) {
+    if (!ownFolderInProject(projectPath, ownDir)) {
       // A tool that reads `.agents/skills` needs nothing here; an old folder
       // linked out of the project is left alone, not a failure. Old OpenSpec
       // skills in it are reported, since the tool may load them twice.
@@ -271,21 +263,15 @@ export async function installSharedSkills(input: SharedSkillInstallInput): Promi
       return;
     }
     FileSystemUtils.assertPathWithin(projectPath, ownDir);
-    const linksWanted = linkDir !== undefined;
     for (const skillName of OPENSPEC_SKILL_NAMES) {
       const spotPath = path.join(ownDir, skillName);
       const spot = classifySkillLinkSpot(spotPath, path.join(sharedDir, skillName), oursFor(skillName), view);
-      if (spot === 'missing') {
-        if (linksWanted && wanted.has(skillName)) {
-          await ops.linkSkill(spotPath, path.join(sharedDir, skillName), tool.value);
-        }
-        continue;
-      }
+      if (spot === 'missing') continue;
       if (spot === 'user') {
         // A tool that reads `.agents/skills` would load an untouched old
         // SKILL.md here a second time; the user's other files stay.
         const skillFile = classifySkillFile(spotPath, oursFor(skillName), view);
-        if (!linkDir && (skillFile === 'copy' || skillFile === 'released')) {
+        if (skillFile === 'copy' || skillFile === 'released') {
           await ops.removeFile(path.join(spotPath, 'SKILL.md'), tool.value);
           if (skillFile === 'released') result.replacedOldCopyCount += 1;
           continue;
@@ -293,28 +279,8 @@ export async function installSharedSkills(input: SharedSkillInstallInput): Promi
         result.kept.push(relative(spotPath));
         continue;
       }
-      if (linksWanted && wanted.has(skillName)) {
-        // A link already in place stays, and so does a fallback copy equal to
-        // the shared copy (made where links can't be). An old copy becomes a
-        // link.
-        if (
-          spot === 'copy' &&
-          !sharedSpotIsUsers(skillName) &&
-          readOr(path.join(spotPath, 'SKILL.md')) === contents.get(skillName)
-        ) {
-          continue;
-        }
-        if (spot !== 'link') {
-          await ops.linkSkill(spotPath, path.join(sharedDir, skillName), tool.value);
-          if (spot === 'released') result.replacedOldCopyCount += 1;
-        }
-        continue;
-      }
-      // Not wanted here: a tool that reads `.agents/skills` would load an old
-      // copy twice, and a deselected skill's link points at nothing.
-      if (spot === 'link' && !linkDir) continue; // someone else's link; not ours to remove
-      // A link to a skill kept as the user's points at their skill, not ours.
-      if (spot === 'link' && sharedSpotIsUsers(skillName)) continue;
+      // A link in a former own folder is the user's; this copy never makes one.
+      if (spot === 'link') continue;
       await ops.removeDirectory(spotPath, tool.value);
       if (spot === 'released') result.replacedOldCopyCount += 1;
     }
@@ -453,17 +419,15 @@ function removeIfEmpty(dir: string): void {
 export function ownSkillFolderNeedsWork(
   projectPath: string,
   tool: AIToolOption,
-  linkedSkillNames: ReadonlySet<string>,
   view: FileView
 ): boolean {
   if (!usesSharedSkills(tool)) return false;
-  const linkDir = resolveSkillLinkDir(projectPath, tool);
-  const ownDir = linkDir ?? resolveFormerOwnSkillsDir(projectPath, tool);
+  const ownDir = resolveFormerOwnSkillsDir(projectPath, tool);
   if (!ownDir) return false;
   const sharedDir = resolveSharedSkillsDir(projectPath);
   if (isSameFolderTree(ownDir, sharedDir)) return false;
   // An old folder linked out of the project is left alone (and reported).
-  if (!linkDir && !ownFolderInProject(projectPath, ownDir)) return false;
+  if (!ownFolderInProject(projectPath, ownDir)) return false;
   const kept = readKeptSharedSkills(projectPath, view);
   for (const skillName of OPENSPEC_SKILL_NAMES) {
     let sharedContent = '';
@@ -481,28 +445,12 @@ export function ownSkillFolderNeedsWork(
     const spot = classifySkillLinkSpot(spotPath, path.join(sharedDir, skillName), ours, view);
     if (spot === 'user') {
       const skillFile = classifySkillFile(spotPath, ours, view);
-      if (!linkDir && (skillFile === 'copy' || skillFile === 'released')) return true;
+      if (skillFile === 'copy' || skillFile === 'released') return true;
       continue;
     }
-    // A link to a skill kept as the user's stays, wanted or not.
-    const keptSpot = path.join(sharedDir, skillName);
-    if (spot === 'link' && kept.has(skillName) && (view.exists(keptSpot) || view.linkTarget?.(keptSpot) !== undefined)) {
-      continue;
-    }
-    const wanted = linkDir !== undefined && linkedSkillNames.has(skillName);
-    // A fallback copy stays only while it equals the shared copy.
-    if (wanted && spot === 'copy' && !kept.has(skillName)) {
-      let copied: string | undefined;
-      try {
-        copied = view.read(path.join(spotPath, 'SKILL.md'));
-      } catch {
-        copied = undefined;
-      }
-      if (copied !== sharedContent) return true;
-    }
-    if (wanted ? spot === 'missing' || spot === 'released' : spot !== 'missing' && !(spot === 'link' && !linkDir)) {
-      return true;
-    }
+    // A link in a former own folder is the user's; this copy never makes one.
+    if (spot === 'link') continue;
+    if (spot !== 'missing') return true;
   }
   return false;
 }

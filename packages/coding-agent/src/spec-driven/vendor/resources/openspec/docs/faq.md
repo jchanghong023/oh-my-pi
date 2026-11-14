@@ -22,7 +22,7 @@ Existing codebases are the main event. OpenSpec is brownfield-first: you do not 
 
 ### Is it tied to one AI tool?
 
-No. OpenSpec works with 30+ assistants, including Claude Code, Cursor, Devin Desktop, GitHub Copilot, Gemini CLI, Codex, and more. The full list and per-tool details are in [Supported Tools](supported-tools.md).
+This vendored copy configures Oh My Pi only. The upstream project supports other assistants, but their integrations are not bundled here; see [Supported Tools](supported-tools.md).
 
 ## Running commands
 
@@ -40,7 +40,9 @@ Most likely you typed it in the terminal instead of your AI chat, you used a spe
 
 ### Why is the syntax `/opsx:propose` in one tool and `/opsx-propose` in another?
 
-Each AI tool surfaces custom commands a little differently, and OpenSpec spells them the way your tool loads the file it wrote. A command file named `opsx-propose.md` is typed `/opsx-propose`; one filed under `commands/opsx/` is typed `/opsx:propose`. Tools that take skills instead of commands use the skill name — Codex needs `$openspec-propose`, Kimi Code `/skill:openspec-propose`. The `openspec init` "Getting started" line already prints the right form for the tools you picked; the full table is in [How To Invoke](supported-tools.md#how-to-invoke).
+This copy configures Oh My Pi, which reads the shared skills directly. Invoke a
+workflow as `/openspec-propose`, `/openspec-apply-change`, and so on. The
+"Getting started" line `openspec init` prints is authoritative.
 
 ### What's the difference between a skill and a command?
 

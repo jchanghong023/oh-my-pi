@@ -28,18 +28,6 @@ export type SkillLinkSpot = 'missing' | 'link' | 'copy' | 'released' | 'user';
 const OS_JUNK = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
 const isOsJunk = (name: string) => OS_JUNK.has(name) || name.startsWith('._');
 
-/**
- * The text of the link OpenSpec makes at `linkPath` to `targetDir` (always
- * `<project>/.agents/skills/<skill>`): relative to the real folder the link
- * sits in, and through `.agents` as written rather than where `.agents`
- * itself may point, so a linked `.agents` can move without breaking it.
- */
-export function skillLinkText(linkPath: string, targetDir: string): string {
-  const projectRoot = path.dirname(path.dirname(path.dirname(targetDir)));
-  const target = path.join(realOrSelf(projectRoot), path.relative(projectRoot, targetDir));
-  return path.relative(realOrSelf(path.dirname(linkPath)), target);
-}
-
 function realOrSelf(p: string): string {
   try {
     return fs.realpathSync(p);
@@ -149,39 +137,4 @@ export function classifySkillFile(
   }
   if (matchesAny(content, sharedContent)) return 'copy';
   return isReleasedGeneratedContent(content) ? 'released' : 'user';
-}
-
-/**
- * Makes `linkPath` a relative link to `targetDir`, replacing a `copy` or
- * `released` spot, or a plain copy when the link can't be made. Callers must
- * classify first: this never replaces a `user` spot.
- */
-export function createSkillLink(
-  linkPath: string,
-  targetDir: string,
-  symlink: (target: string, linkPath: string, type: 'dir') => void = fs.symlinkSync
-): 'link' | 'copy' {
-  const parent = path.dirname(linkPath);
-  fs.mkdirSync(parent, { recursive: true });
-  if (fs.existsSync(linkPath) || isSymlink(linkPath)) {
-    fs.rmSync(linkPath, { recursive: true, force: true });
-  }
-  try {
-    symlink(skillLinkText(linkPath, targetDir), linkPath, 'dir');
-    return 'link';
-  } catch {
-    // Only the skill itself: anything else in the shared folder (OS junk, a
-    // user's notes) is not OpenSpec's to copy.
-    fs.mkdirSync(linkPath, { recursive: true });
-    fs.copyFileSync(path.join(targetDir, 'SKILL.md'), path.join(linkPath, 'SKILL.md'));
-    return 'copy';
-  }
-}
-
-function isSymlink(filePath: string): boolean {
-  try {
-    return fs.lstatSync(filePath).isSymbolicLink();
-  } catch {
-    return false;
-  }
 }

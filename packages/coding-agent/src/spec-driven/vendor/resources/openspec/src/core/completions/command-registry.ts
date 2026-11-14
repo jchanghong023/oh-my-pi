@@ -32,14 +32,6 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         name: 'no-animation',
         description: 'Show a static welcome screen instead of the animated one',
       },
-      {
-        name: 'copilot-cloud',
-        description: 'Generate GitHub Copilot cloud coding-agent files (opt-in; default: prompt)',
-      },
-      {
-        name: 'no-copilot-cloud',
-        description: 'Skip generating GitHub Copilot cloud coding-agent files',
-      },
     ],
   },
   {
@@ -62,13 +54,6 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         description: 'With --dry-run, print the planned changes as JSON',
       },
     ],
-  },
-  {
-    name: 'install',
-    description: 'Install the standalone openspec, which runs without Node.js (latest release unless [version] is given)',
-    acceptsPositional: true,
-    positionals: [{ name: 'version', optional: true }],
-    flags: [],
   },
   {
     name: 'version',

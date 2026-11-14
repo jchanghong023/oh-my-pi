@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, promises as fs } from 'fs';
-import { AI_TOOLS, TOOL_ID_ALIASES } from '../core/config.js';
+import { AI_TOOLS } from '../core/config.js';
 import type { ArchiveOptions } from '../core/archive.js';
 import { registerSpecCommand } from './commands/spec.js';
 import { registerConfigCommand } from './commands/config.js';
@@ -251,12 +251,9 @@ program.hook('postAction', async (_thisCommand, actionCommand) => {
 });
 
 const availableToolIds = AI_TOOLS
-  .filter((tool) => tool.skillsDir || tool.globalSkillsDir)
+  .filter((tool) => tool.skillsDir)
   .map((tool) => tool.value);
-const toolAliasNote = Object.entries(TOOL_ID_ALIASES)
-  .map(([retired, current]) => `${retired} (now ${current})`)
-  .join(', ');
-const toolsOptionDescription = `Configure AI tools non-interactively. Use "all", "none", or a comma-separated list of: ${availableToolIds.join(', ')}. Also accepted: ${toolAliasNote}`;
+const toolsOptionDescription = `Configure AI tools non-interactively. Use "all", "none", or a comma-separated list of: ${availableToolIds.join(', ')}`;
 
 program
   .command('init [path]')
@@ -266,9 +263,7 @@ program
   .option('--force', 'Auto-cleanup legacy files without prompting')
   .option('--profile <profile>', 'Override global config profile (core or custom)')
   .option('--no-animation', 'Show a static welcome screen instead of the animated one')
-  .option('--copilot-cloud', 'Set up GitHub Copilot cloud coding-agent files without prompting')
-  .option('--no-copilot-cloud', 'Skip GitHub Copilot cloud coding-agent files without prompting')
-  .action(async (targetPath = '.', options?: { tools?: string; language?: string; force?: boolean; profile?: string; animation?: boolean; copilotCloud?: boolean }) => {
+  .action(async (targetPath = '.', options?: { tools?: string; language?: string; force?: boolean; profile?: string; animation?: boolean }) => {
     try {
       // Validate that the path is a valid directory
       const resolvedPath = path.resolve(targetPath);
@@ -296,7 +291,6 @@ program
         force: options?.force,
         profile: options?.profile,
         animation: options?.animation,
-        copilotCloud: options?.copilotCloud,
       });
       await initCommand.execute(targetPath);
     } catch (error) {
@@ -430,11 +424,6 @@ program
       } else if (latestVersion) {
         displayCliUpdateNote(latestVersion, targetPath);
       }
-
-      // Once per machine, a package-manager user hears the standalone install
-      // exists. Offered, never pushed; deferred when stderr is not a terminal.
-      const { maybeShowStandaloneTip } = await import('../core/standalone-tip.js');
-      await maybeShowStandaloneTip({ silent: !process.stderr.isTTY });
     } catch (error) {
       // The --json dry run follows the agent contract: exactly one JSON
       // document on stdout, even on failure.
@@ -450,19 +439,6 @@ program
     }
     }
   );
-
-program
-  .command('install [version]')
-  .description('Install the standalone openspec, which runs without Node.js (latest release unless [version] is given)')
-  .action(async (version?: string) => {
-    try {
-      const { installStandalone } = await import('../commands/install-standalone.js');
-      await installStandalone({ version });
-    } catch (error) {
-      await failWithError(error);
-      process.exit(1);
-    }
-  });
 
 program
   .command('list')
