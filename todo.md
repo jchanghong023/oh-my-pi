@@ -420,3 +420,10 @@
 ### A.6 保留基线（摘要核对的对照面）
 
 `src/` 224 个文件（减去 A.4 的 2 个）、`docs/` 27、`docs-lab/` 43、`assets/` 4、`skills/` 13、`schemas/` 5、`bin/` 1，以及 `LICENSE`、`README.md`、`CHANGELOG.md`、`SECURITY.md`、`install.md`、`package.json`、`pnpm-workspace.yaml`、`tsconfig.json`、`build.js`、`.gitattributes`、`.gitignore`、`pnpm-lock.yaml`。
+
+## 后续变更记录（2026-11-14）
+
+- [x] 删除 `docs-lab/`（36 个文件），仅保留 `docs/`（27 个文件）。
+  - 依据：`docs-lab/` 是上游并行重写的新站文档源，删除前 18/36 页仍为骨架（含 `TODO`／空页），其唯一引用者 `website/docs.sync.config.mjs` 已在本轮第 4 节删除；`docs/` 正文完整，作为离线参考。
+  - 同步修改：`docs/README.md` 移除指向 `../docs-lab/` 的失效链接（原提示语改为“本离线副本仅保留 legacy 树”）。
+  - 验证：调用 `buildSpecDrivenArchive()` 解包核对，`openspec/docs/` 27 项、`docs-lab` 0 项；文档内相对链接扫描无新增断链。

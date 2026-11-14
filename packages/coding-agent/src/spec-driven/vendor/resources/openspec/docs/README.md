@@ -1,7 +1,7 @@
 # OpenSpec Documentation
 
 > [!WARNING]
-> These pages are legacy and some are out of date. The current docs are at **[openspec.dev/docs](https://openspec.dev/docs)** (source: [`docs-lab/`](../docs-lab/)).
+> These pages are legacy and some are out of date. The current docs are at **[openspec.dev/docs](https://openspec.dev/docs)**. This offline copy keeps only the legacy tree.
 
 Welcome. This is the home for everything OpenSpec.
 
