@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Compact mode's read activity now appends the target path after the intent instead of hiding it.
 - Compact mode now shows thinking across successive messages, refreshes tools that finish between paints, and stops thinking timers before reply generation.
 - Compact mode's tool output preview no longer repaints the previous turn's finished output when a new turn starts; it stays closed until the new turn produces output, while still-running background output keeps showing.
 - WebGUI subagent summaries open their child transcript again: native lowercase `task` tool calls pair with their subagent rows, and every child of a multi-subagent dispatch stays clickable.

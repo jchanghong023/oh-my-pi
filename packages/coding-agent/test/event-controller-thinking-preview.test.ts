@@ -317,11 +317,12 @@ describe("compact action dock", () => {
 			type: "tool_execution_start",
 			toolCallId: "a",
 			toolName: "read",
-			args: { path: "src/config.ts" },
+			args: { path: "src/config.ts", i: "Reading raw preset table" },
+			intent: "Reading raw preset table",
 		});
 		const running = plain(h.rows());
 		expect(running[0]).toBe("");
-		expect(running[1]).toBe(" 正在读取  src/config.ts");
+		expect(running[1]).toBe(" 正在读取  Reading raw preset table · src/config.ts");
 		expect(running[2]).toBe("");
 		expect(Bun.stringWidth("正在读取")).toBe(8);
 		await live.emit({
@@ -332,12 +333,13 @@ describe("compact action dock", () => {
 			isError: false,
 		});
 		const done = plain(h.rows());
-		expect(done[1]).toBe(" 读取完成  src/config.ts");
+		expect(done[1]).toBe(" 读取完成  Reading raw preset table · src/config.ts");
 		// The detail origin (action area + two spaces) is identical across the state change.
 		expect(done[1]!.indexOf("src/config.ts")).toBe(running[1]!.indexOf("src/config.ts"));
 		for (const rows of [h.rows(), nativeRows(h.dock.describe(cx()))]) {
 			expect(rows).toHaveLength(3);
 			expect(rows[2]).toBe("");
+			expect(Bun.stripANSI(rows[1]!)).toBe(done[1]!);
 		}
 	});
 

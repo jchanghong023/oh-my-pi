@@ -197,6 +197,12 @@ export function summarizeCompactTool(
 ): CompactToolSummary {
 	const fields = fieldsOf(args);
 	const description = firstText(intent, fields.i, fields.intent, fields.title);
+	if (name === "read") {
+		const path = text(fields.path);
+		if (path) {
+			return { detail: description && comparable(description) !== comparable(path) ? join(description, path) : path };
+		}
+	}
 	const command = firstText(operation, fields.command, name === "eval" ? fields.code : undefined);
 	if (command)
 		return { detail: description && comparable(description) !== comparable(command) ? description : "", command };
