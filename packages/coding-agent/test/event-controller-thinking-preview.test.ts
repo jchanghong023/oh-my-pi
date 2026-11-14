@@ -898,7 +898,7 @@ describe("compact latest live Output consumers", () => {
 		observe(outputCall("shell", 1, "SHELL_OUTPUT"));
 		observe(todo);
 		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("bash · completed · echo shell");
+			expect(rows[0]).toContain("completed · bash · echo shell");
 			expect(rows.slice(1).map(row => row.trim())).toEqual(["SHELL_OUTPUT"]);
 		}
 	});
@@ -913,7 +913,7 @@ describe("compact latest live Output consumers", () => {
 		h.register("OutputWorker", live);
 		await h.focus.focusAgent("OutputWorker");
 		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("bash · running · echo first");
+			expect(rows[0]).toContain("running · bash · echo first");
 			expect(rows.join("\n")).toContain("first output");
 		}
 		calls = [
@@ -991,7 +991,7 @@ describe("compact latest live Output consumers", () => {
 				partialResult: frame.result!,
 			});
 			for (const rows of h.outputRows()) {
-				expect(rows[0]).toContain("bash · BuildPackage · bg_1 · running");
+				expect(rows[0]).toContain("running · bash · BuildPackage · bg_1");
 				expect(rows.join("\n")).toContain(`tick ${second}`);
 			}
 		}
@@ -1166,10 +1166,175 @@ describe("compact latest live Output consumers", () => {
 		h.register("ReadOutput", live);
 		await h.focus.focusAgent("ReadOutput");
 		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("read · running · second.txt");
+			expect(rows[0]).toContain("running · read · second.txt");
 			expect(rows.join("\n")).toContain("second body");
 			expect(rows.join("\n")).not.toContain("first body");
 			expect(rows.join("\n")).not.toContain("assistant reply");
+		}
+	});
+
+	it("prefers grep hit rows after terminal and tails while running", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const text = [
+			"# src/",
+			" 10│context before",
+			"*12│alpha hit one",
+			" 13│context middle",
+			"*14│alpha hit two",
+			" 15│context after",
+			"*16│alpha hit three",
+			"*17│alpha hit four",
+			"*18│alpha hit five",
+			"*19│alpha hit six",
+		].join("\n");
+		let call = outputCall("search", 1, text, { toolName: "grep", args: { pattern: "alpha" } });
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => [call]);
+		h.register("GrepOutput", live);
+		await h.focus.focusAgent("GrepOutput");
+		for (const rows of h.outputRows()) {
+			expect(rows[0]).toContain("running · grep");
+			expect(rows.slice(1).map(row => row.trim())).toEqual([
+				"15│context after",
+				"*16│alpha hit three",
+				"*17│alpha hit four",
+				"*18│alpha hit five",
+				"*19│alpha hit six",
+			]);
+		}
+		call = { ...call, terminalAt: Date.now() };
+		for (const rows of h.outputRows()) {
+			expect(rows[0]).toContain("completed · grep");
+			expect(rows.slice(1).map(row => row.trim())).toEqual([
+				"*12│alpha hit one",
+				"*14│alpha hit two",
+				"*16│alpha hit three",
+				"*17│alpha hit four",
+				"*18│alpha hit five",
+			]);
+		}
+	});
+
+	it("fills remaining rows with context when grep hits are fewer than the budget", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const text = ["# src/", " 10│context one", "*12│only hit", " 13│context two", " 14│context three"].join("\n");
+		const call = outputCall("search", 1, text, {
+			toolName: "grep",
+			args: { pattern: "only" },
+			terminalAt: Date.now(),
+		});
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
+		h.register("GrepFill", live);
+		await h.focus.focusAgent("GrepFill");
+		for (const rows of h.outputRows()) {
+			expect(rows.slice(1).map(row => row.trim())).toEqual([
+				"*12│only hit",
+				"# src/",
+				"10│context one",
+				"13│context two",
+				"14│context three",
+			]);
+		}
+	});
+
+	it("prefers glob file rows over directory headings and device-wrapped grep keeps its inner identity", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const globText = ["# src/", "a.ts", "## sub/", "b.ts", "c.ts", "d.ts", "e.ts"].join("\n");
+		const glob = outputCall("glob", 1, globText, {
+			toolName: "glob",
+			args: { pattern: "**/*.ts" },
+			terminalAt: Date.now(),
+		});
+		const wrapped = outputCall("wrapped", 2, "# src/\n 10│context\n*12│wrapped hit\n 13│context after", {
+			toolName: "write",
+			args: { path: "xd://grep", content: '{"pattern":"wrapped"}' },
+			result: {
+				content: [{ type: "text", text: "# src/\n 10│context\n*12│wrapped hit\n 13│context after" }],
+				details: { xdev: { tool: "grep", mode: "execute", inner: { matchCount: 1 } } },
+			},
+			terminalAt: Date.now(),
+		});
+		let calls = [glob];
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		h.register("GlobOutput", live);
+		await h.focus.focusAgent("GlobOutput");
+		for (const rows of h.outputRows()) {
+			expect(rows[0]).toContain("completed · glob");
+			expect(rows.slice(1).map(row => row.trim())).toEqual(["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+		}
+		calls = [glob, wrapped];
+		for (const rows of h.outputRows()) {
+			expect(rows.slice(1).map(row => row.trim())).toEqual([
+				"*12│wrapped hit",
+				"# src/",
+				"10│context",
+				"13│context after",
+			]);
+		}
+	});
+
+	it("keeps tail selection for terminal bash and zero-hit grep without error heuristics", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const failed = outputCall(
+			"failed",
+			1,
+			"line one\nError: boom at step 2\nline three\nline four\nline five\nline six",
+			{
+				terminalAt: Date.now(),
+				result: {
+					content: [
+						{ type: "text", text: "line one\nError: boom at step 2\nline three\nline four\nline five\nline six" },
+					],
+					isError: true,
+				},
+			},
+		);
+		const empty = outputCall("empty", 2, "No matches found", {
+			toolName: "grep",
+			args: { pattern: "missing" },
+			terminalAt: Date.now(),
+			result: {
+				content: [{ type: "text", text: "No matches found" }],
+				details: { matchCount: 0, fileCount: 0 },
+			},
+		});
+		let calls = [failed];
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		h.register("FallbackOutput", live);
+		await h.focus.focusAgent("FallbackOutput");
+		for (const rows of h.outputRows()) {
+			expect(rows[0]).toContain("failed · bash");
+			expect(rows.slice(1).map(row => row.trim())).toEqual([
+				"Error: boom at step 2",
+				"line three",
+				"line four",
+				"line five",
+				"line six",
+			]);
+		}
+		calls = [failed, empty];
+		for (const rows of h.outputRows()) {
+			expect(rows[0]).toContain("completed · grep");
+			expect(rows.slice(1).map(row => row.trim())).toEqual(["No matches found"]);
+		}
+	});
+
+	it("middle-truncates long commands so the header keeps both ends", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const command = `rg -n "backdrop-filter" ${"packages/coding-agent/src/modes/".repeat(3)}styles.css`;
+		const call = outputCall("long", 1, "hit", { args: { command } });
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
+		h.register("LongCommand", live);
+		await h.focus.focusAgent("LongCommand");
+		for (const rows of h.outputRows(60)) {
+			expect(rows[0]).toContain("running · bash · rg -n");
+			expect(rows[0]).toContain("…");
+			expect(rows[0]).toContain("styles.css");
+			expect(Bun.stringWidth(rows[0]!)).toBeLessThanOrEqual(60);
 		}
 	});
 });

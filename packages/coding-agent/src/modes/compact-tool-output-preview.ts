@@ -4,12 +4,13 @@ import { card } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { plainText, rowsText, styledBackground } from "@oh-my-pi/pi-tui/native/spans";
 import { backgroundChrome } from "@oh-my-pi/pi-tui/native/tone";
-import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
+import { replaceTabs, truncateMiddleToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getStateBgColor, padToWidth } from "@oh-my-pi/pi-tui/render/utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { isGroupedHeader, isMatchRow } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
 import { toolOutputText } from "@oh-my-pi/pi-tui/tools/output-preview";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
-import { getPaddingX, padding } from "@oh-my-pi/pi-tui/utils";
+import { getPaddingX, padding, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { LiveToolOutputSnapshot } from "../session/agent-session-handle";
@@ -26,6 +27,34 @@ function compactOutputText(output: string): string {
 	let indent = Number.POSITIVE_INFINITY;
 	for (const line of lines) indent = Math.min(indent, line.length - line.trimStart().length);
 	return lines.map(line => line.slice(indent)).join("\n");
+}
+
+/** Inner tool identity and details behind an existing device dispatch; direct calls pass through. */
+function effectiveTool(
+	toolName: string,
+	result: ToolRenderResult<unknown> | undefined,
+): { name: string; details: Record<string, unknown> | undefined } {
+	const details = isRecord(result?.details) ? result.details : undefined;
+	const dispatch = isRecord(details?.xdev) ? details.xdev : undefined;
+	if (toolName === "write" && typeof dispatch?.tool === "string" && dispatch.mode !== "help")
+		return { name: dispatch.tool, details: isRecord(dispatch.inner) ? dispatch.inner : undefined };
+	return { name: toolName, details };
+}
+
+/**
+ * Terminal selection for structured native searches: hit rows first (original order), then the
+ * remaining rows fill the budget. No hit rows falls back to the tail window; other tools tail.
+ */
+function selectOutputRows(rows: readonly string[], budget: number, toolName: string, terminal: boolean): string[] {
+	if (terminal && (toolName === "grep" || toolName === "glob")) {
+		const isHit =
+			toolName === "grep"
+				? (row: string) => isMatchRow(row)
+				: (row: string) => row.trim() !== "" && !isGroupedHeader(row);
+		const hits = rows.filter(isHit);
+		if (hits.length > 0) return [...hits, ...rows.filter(row => !isHit(row))].slice(0, budget);
+	}
+	return rows.slice(-budget);
 }
 
 /** A text-only projection of session execution facts, independent of transcript tool cards. */
@@ -115,9 +144,8 @@ export class CompactToolOutputPreview implements Component {
 		const innerWidth = width - inset;
 		const { call, output } = selected;
 		const info = compactToolPreviewInfo(call.toolName, call.args, call.intent, call.result);
-		let details = isRecord(call.result?.details) ? call.result.details : undefined;
-		if (call.toolName === "write" && isRecord(details?.xdev) && isRecord(details.xdev.inner))
-			details = details.xdev.inner;
+		const effective = effectiveTool(call.toolName, call.result);
+		const details = effective.details;
 		const job = isRecord(details?.async) ? details.async : undefined;
 		const state =
 			call.terminalAt === undefined
@@ -128,20 +156,24 @@ export class CompactToolOutputPreview implements Component {
 						? "failed"
 						: "completed";
 		const identity = [
+			state,
 			info.name,
 			typeof job?.name === "string" ? job.name : undefined,
 			typeof job?.jobId === "string" ? job.jobId : undefined,
-			state,
 		];
 		const header = identity.filter(Boolean).join(" · ");
-		const target = info.command || info.detail;
-		const rows = [truncateToWidth(singleLine(target ? `${header} · ${target}` : header), innerWidth)];
-		if (height > 1)
-			rows.push(
-				...wrapTextWithAnsi(output, innerWidth)
-					.filter(row => /[\p{L}\p{N}]/u.test(row))
-					.slice(-(height - 1)),
-			);
+		const target = singleLine(info.command || info.detail);
+		const headerWidth = visibleWidth(header);
+		const targetBudget = target ? innerWidth - headerWidth - 3 : 0;
+		const rows = [
+			targetBudget >= 1
+				? `${header} · ${truncateMiddleToWidth(target, targetBudget)}`
+				: truncateMiddleToWidth(header, innerWidth),
+		];
+		if (height > 1) {
+			const wrapped = wrapTextWithAnsi(output, innerWidth).filter(row => /[\p{L}\p{N}]/u.test(row));
+			rows.push(...selectOutputRows(wrapped, height - 1, effective.name, call.terminalAt !== undefined));
+		}
 		const left = padding(inset);
 		const background = getStateBgColor(
 			state === "running" ? "running" : state === "failed" ? "error" : state === "cancelled" ? "pending" : "success",
