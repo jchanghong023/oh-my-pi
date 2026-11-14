@@ -1,0 +1,642 @@
+import { describe, it, expect } from 'vitest';
+import { MarkdownParser } from '../../../src/core/parsers/markdown-parser.js';
+
+describe('MarkdownParser', () => {
+  describe('parseSpec', () => {
+    it('should parse a valid spec', () => {
+      const content = `# User Authentication Spec
+
+## Purpose
+This specification defines the requirements for user authentication.
+
+## Requirements
+
+### The system SHALL provide secure user authentication
+Users need to be able to log in securely.
+
+#### Scenario: Successful login
+Given a user with valid credentials
+When they submit the login form
+Then they are authenticated
+
+### The system SHALL handle invalid login attempts
+The system must handle incorrect credentials.
+
+#### Scenario: Invalid credentials
+Given a user with invalid credentials
+When they submit the login form
+Then they see an error message`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('user-auth');
+      
+      expect(spec.name).toBe('user-auth');
+      expect(spec.overview).toContain('requirements for user authentication');
+      expect(spec.requirements).toHaveLength(2);
+      
+      const firstReq = spec.requirements[0];
+      expect(firstReq.text).toBe('Users need to be able to log in securely.');
+      expect(firstReq.scenarios).toHaveLength(1);
+      
+      const scenario = firstReq.scenarios[0];
+      expect(scenario.rawText).toContain('Given a user with valid credentials');
+      expect(scenario.rawText).toContain('When they submit the login form');
+      expect(scenario.rawText).toContain('Then they are authenticated');
+    });
+
+    it('should handle multi-line scenarios', () => {
+      const content = `# Test Spec
+
+## Purpose
+Test overview
+
+## Requirements
+
+### The system SHALL handle complex scenarios
+This requirement has content.
+
+#### Scenario: Multi-line scenario
+Given a user with valid credentials
+  and the user has admin privileges
+  and the system is in maintenance mode
+When they attempt to login
+  and provide their MFA token
+Then they are authenticated
+  and redirected to admin dashboard
+  and see a maintenance warning`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+      
+      const scenario = spec.requirements[0].scenarios[0];
+      expect(scenario.rawText).toContain('Given a user with valid credentials');
+      expect(scenario.rawText).toContain('and the user has admin privileges');
+      expect(scenario.rawText).toContain('When they attempt to login');
+      expect(scenario.rawText).toContain('and provide their MFA token');
+      expect(scenario.rawText).toContain('Then they are authenticated');
+      expect(scenario.rawText).toContain('and see a maintenance warning');
+    });
+
+    it('should throw error for missing overview', () => {
+      const content = `# Test Spec
+
+## Requirements
+
+### The system SHALL do something
+
+#### Scenario: Test
+Given test
+When action
+Then result`;
+
+      const parser = new MarkdownParser(content);
+      expect(() => parser.parseSpec('test')).toThrow('must have a Purpose section');
+    });
+
+    it('should throw error for missing requirements', () => {
+      const content = `# Test Spec
+
+## Purpose
+This is a test spec`;
+
+      const parser = new MarkdownParser(content);
+      expect(() => parser.parseSpec('test')).toThrow('must have a Requirements section');
+    });
+
+    it('should ignore headings that appear inside fenced code blocks', () => {
+      const content = `# Test Spec
+
+## Purpose
+This spec documents delta syntax with a fenced example.
+
+## Requirements
+
+### Requirement: Explain delta syntax
+The system SHALL allow quoted markdown examples without changing parsed structure.
+
+\`\`\`markdown
+## ADDED Requirements
+
+### Requirement: Example
+The system SHALL ...
+\`\`\`
+
+#### Scenario: reader follows the example
+- **WHEN** a reader reviews the documentation
+- **THEN** the fenced heading stays part of the example`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+
+      expect(spec.requirements).toHaveLength(1);
+      expect(spec.requirements[0].text).toBe(
+        'The system SHALL allow quoted markdown examples without changing parsed structure.'
+      );
+      expect(spec.requirements[0].scenarios).toHaveLength(1);
+      expect(spec.requirements[0].scenarios[0].rawText).toContain('- **WHEN** a reader reviews the documentation');
+    });
+
+    it('should not treat fence-like lines with trailing content as closing fences', () => {
+      const content = `# Test Spec
+
+## Purpose
+This spec includes a fence-like line with trailing content inside a fenced block.
+
+## Requirements
+
+### Requirement: Explain fence parsing
+The system SHALL keep fenced examples isolated until a real closing fence appears.
+
+\`\`\`markdown
+\`\`\` still inside the example
+## ADDED Requirements
+
+### Requirement: Example
+The system SHALL remain part of the example.
+\`\`\`
+
+#### Scenario: reader follows the example
+- **WHEN** a reader reviews the documentation
+- **THEN** the parser ignores headings until the real closing fence`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+
+      expect(spec.requirements).toHaveLength(1);
+      expect(spec.requirements[0].scenarios).toHaveLength(1);
+      expect(spec.requirements[0].scenarios[0].rawText).toContain('parser ignores headings until the real closing fence');
+    });
+  });
+
+  describe('parseChange', () => {
+    it('should parse a valid change', () => {
+      const content = `# Add User Authentication
+
+## Why
+We need to implement user authentication to secure the application and protect user data from unauthorized access.
+
+## What Changes
+- **user-auth:** Add new user authentication specification
+- **api-endpoints:** Modify to include authentication endpoints
+- **database:** Remove old session management tables`;
+
+      const parser = new MarkdownParser(content);
+      const change = parser.parseChange('add-user-auth');
+      
+      expect(change.name).toBe('add-user-auth');
+      expect(change.why).toContain('secure the application');
+      expect(change.whatChanges).toContain('user-auth');
+      expect(change.deltas).toHaveLength(3);
+      
+      expect(change.deltas[0].spec).toBe('user-auth');
+      expect(change.deltas[0].operation).toBe('ADDED');
+      expect(change.deltas[0].description).toContain('Add new user authentication');
+      
+      expect(change.deltas[1].spec).toBe('api-endpoints');
+      expect(change.deltas[1].operation).toBe('MODIFIED');
+      
+      expect(change.deltas[2].spec).toBe('database');
+      expect(change.deltas[2].operation).toBe('REMOVED');
+    });
+
+    it('should throw error for missing why section', () => {
+      const content = `# Test Change
+
+## What Changes
+- **test:** Add test`;
+
+      const parser = new MarkdownParser(content);
+      expect(() => parser.parseChange('test')).toThrow('must have a Why section');
+    });
+
+    it('should throw error for missing what changes section', () => {
+      const content = `# Test Change
+
+## Why
+Because we need it`;
+
+      const parser = new MarkdownParser(content);
+      expect(() => parser.parseChange('test')).toThrow('must have a What Changes section');
+    });
+
+    it('should handle changes without deltas', () => {
+      const content = `# Test Change
+
+## Why
+We need to make some changes for important reasons that justify this work.
+
+## What Changes
+Some general description of changes without specific deltas`;
+
+      const parser = new MarkdownParser(content);
+      const change = parser.parseChange('test');
+      
+      expect(change.deltas).toHaveLength(0);
+    });
+
+    it('parses change documents saved with CRLF line endings', () => {
+      const crlfContent = [
+        '# CRLF Change',
+        '',
+        '## Why',
+        'Reasons on Windows editors should parse like POSIX environments.',
+        '',
+        '## What Changes',
+        '- **alpha:** Add cross-platform parsing coverage',
+      ].join('\r\n');
+
+      const parser = new MarkdownParser(crlfContent);
+      const change = parser.parseChange('crlf-change');
+
+      expect(change.why).toContain('Windows editors should parse');
+      expect(change.deltas).toHaveLength(1);
+      expect(change.deltas[0].spec).toBe('alpha');
+    });
+  });
+
+  describe('section parsing', () => {
+    it('finds Purpose and Requirements headings written with a closing # run', () => {
+      const content = `# Test Spec
+
+## Purpose ##
+This spec covers closed ATX headings in detail.
+
+## Requirements #
+
+### Requirement: Closed headings
+The system SHALL read closed headings.
+
+#### Scenario: Closed
+- **WHEN** a heading ends in #
+- **THEN** it is read`;
+
+      const spec = new MarkdownParser(content).parseSpec('test');
+
+      expect(spec.overview).toBe('This spec covers closed ATX headings in detail.');
+      expect(spec.requirements.map((r) => r.name)).toEqual(['Closed headings']);
+    });
+
+    it('finds Why and What Changes headings written with a closing # run', () => {
+      const content = `# Change
+
+## Why ##
+Because closed headings are valid Markdown and must be read.
+
+## What Changes ##
+- **auth:** Add closed heading support`;
+
+      const change = new MarkdownParser(content).parseChange('closed');
+
+      expect(change.why).toBe('Because closed headings are valid Markdown and must be read.');
+      expect(change.deltas).toHaveLength(1);
+    });
+
+    it('should handle nested sections correctly', () => {
+      const content = `# Test Spec
+
+## Purpose
+This is the overview section for testing nested sections.
+
+## Requirements
+
+### The system SHALL handle nested sections
+
+#### Scenario: Test nested
+Given a nested structure
+When parsing sections
+Then handle correctly
+
+### Another requirement SHALL work
+
+#### Scenario: Another test
+Given another test
+When running
+Then success`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+      
+      // Should find the correct sections at different levels
+      expect(spec).toBeDefined();
+      expect(spec.overview).toContain('testing nested sections');
+      expect(spec.requirements).toHaveLength(2);
+    });
+
+    it('should preserve content between headers', () => {
+      const content = `# Test
+
+## Purpose
+This is the overview.
+It has multiple lines.
+
+Some more content here.
+
+## Requirements
+
+### Requirement 1
+Content for requirement 1`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+      
+      expect(spec.overview).toContain('multiple lines');
+      expect(spec.overview).toContain('more content');
+    });
+
+    it('should use requirement heading as fallback when no content is provided', () => {
+      const content = `# Test Spec
+
+## Purpose
+Test overview
+
+## Requirements
+
+### The system SHALL use heading text when no content
+
+#### Scenario: Test
+Given test
+When action
+Then result`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+      
+      expect(spec.requirements[0].text).toBe('The system SHALL use heading text when no content');
+    });
+
+    it('should extract the full requirement body, not only the first content line', () => {
+      const content = `# Test Spec
+
+## Purpose
+Test overview
+
+## Requirements
+
+### Requirement heading
+
+This is the actual requirement text.
+This is additional description.
+
+#### Scenario: Test
+Given test
+When action
+Then result`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+
+      // Body spans both lines up to the first scenario (the #361 fix); the
+      // reader no longer drops everything after line one.
+      expect(spec.requirements[0].text).toBe(
+        'This is the actual requirement text.\nThis is additional description.'
+      );
+    });
+  });
+
+  describe('requirement body reading fidelity', () => {
+    it('captures a normative keyword that wraps onto a later body line (#361)', () => {
+      const content = `# Test Spec
+
+## Purpose
+Test overview for wrapped keyword handling.
+
+## Requirements
+
+### Requirement: Wrapped keyword
+The system performs the described behavior and it
+continues onto a second line where SHALL appears.
+
+#### Scenario: Test
+Given test
+When action
+Then result`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+
+      expect(spec.requirements[0].text).toContain('SHALL appears');
+      expect(spec.requirements[0].text).toContain('The system performs the described behavior');
+    });
+
+    it('skips **metadata**: lines before the description (#418)', () => {
+      const content = `# Test Spec
+
+## Purpose
+Test overview for metadata-first requirements.
+
+## Requirements
+
+### Requirement: Metadata first
+**ID**: REQ-FILE-001
+**Priority**: P1 (High)
+The system MUST persist the uploaded file.
+
+#### Scenario: Test
+Given test
+When action
+Then result`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+
+      expect(spec.requirements[0].text).toBe('The system MUST persist the uploaded file.');
+    });
+
+    it('keeps a metadata-only body as the requirement text', () => {
+      const content = `# Test Spec
+
+## Purpose
+Test overview for metadata-only requirement bodies.
+
+## Requirements
+
+### Requirement: Constraint style
+**Constraint**: The system MUST respond within the configured deadline.
+
+#### Scenario: Test
+Given test
+When action
+Then result`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+
+      // Metadata lines are skipped only when other body text remains; when the
+      // whole body is metadata, the metadata IS the body.
+      expect(spec.requirements[0].text).toBe(
+        '**Constraint**: The system MUST respond within the configured deadline.'
+      );
+    });
+
+    it('ignores a fenced code block that precedes the prose line (#312)', () => {
+      const content = `# Test Spec
+
+## Purpose
+Test overview for fence-before-prose handling.
+
+## Requirements
+
+### Requirement: Fence first
+\`\`\`bash
+# this is a shell comment, not the requirement text
+echo hello
+\`\`\`
+The system SHALL handle fenced examples before the prose line.
+
+#### Scenario: Test
+Given test
+When action
+Then result`;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+
+      expect(spec.requirements[0].text).toBe(
+        'The system SHALL handle fenced examples before the prose line.'
+      );
+      expect(spec.requirements[0].scenarios).toHaveLength(1);
+    });
+
+    it('does not count a #### Scenario inside a fenced example as a real scenario', () => {
+      const content = `# Test Spec
+
+## Purpose
+Test overview for fenced scenario handling.
+
+## Requirements
+
+### Requirement: Fenced scenario only
+The system SHALL do something real.
+
+\`\`\`markdown
+#### Scenario: not a real scenario
+- **WHEN** a reader studies the example
+- **THEN** it stays inside the fence
+\`\`\``;
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+
+      expect(spec.requirements[0].text).toBe('The system SHALL do something real.');
+      expect(spec.requirements[0].scenarios).toHaveLength(0);
+    });
+
+    it('reads a wrapped body the same way under CRLF line endings', () => {
+      const content = [
+        '# Test Spec',
+        '',
+        '## Purpose',
+        'Test overview for CRLF body extraction.',
+        '',
+        '## Requirements',
+        '',
+        '### Requirement: Wrapped keyword',
+        'The system performs the described behavior and it',
+        'continues onto a second line where SHALL appears.',
+        '',
+        '#### Scenario: Test',
+        'Given test',
+        'When action',
+        'Then result',
+      ].join('\r\n');
+
+      const parser = new MarkdownParser(content);
+      const spec = parser.parseSpec('test');
+
+      expect(spec.requirements[0].text).toBe(
+        'The system performs the described behavior and it\ncontinues onto a second line where SHALL appears.'
+      );
+    });
+  });
+  // Every packaged template now opens the artifact with an `# ` title (#1138).
+  // A title changes the section tree - `## Purpose` becomes a child of the
+  // title rather than a root - so pin that the parsers read the document the
+  // same either way. Main specs have carried a title all along; this says the
+  // change artifacts can too.
+  describe('an artifact title is inert (#1138)', () => {
+    const SPEC_BODY = `## Purpose
+Lets users assemble widgets from parts in a repeatable way.
+
+## Requirements
+
+### Requirement: User can build a widget
+The system SHALL let a user build a widget.
+
+#### Scenario: Successful build
+- **WHEN** a user requests a widget
+- **THEN** the system builds it
+`;
+
+    const PROPOSAL_BODY = `## Why
+Widgets are the one thing this product cannot assemble today.
+
+## What Changes
+- Add the widget capability.
+`;
+
+    it('parses a spec the same with and without one', () => {
+      const untitled = new MarkdownParser(SPEC_BODY).parseSpec('widget');
+      const titled = new MarkdownParser(`# widget Specification\n\n${SPEC_BODY}`).parseSpec(
+        'widget'
+      );
+
+      expect(titled).toEqual(untitled);
+    });
+
+    it('parses a proposal the same with and without one', () => {
+      const untitled = new MarkdownParser(PROPOSAL_BODY).parseChange('add-widget');
+      const titled = new MarkdownParser(`# Proposal\n\n${PROPOSAL_BODY}`).parseChange(
+        'add-widget'
+      );
+
+      expect(titled).toEqual(untitled);
+    });
+  });
+
+  describe('requirement and scenario names', () => {
+    const spec = (requirements: string) =>
+      `## Purpose\nNames for JSON readers.\n\n## Requirements\n\n${requirements}`;
+
+    it('names a requirement and its scenarios without the header prefixes', () => {
+      const parsed = new MarkdownParser(spec(`### Requirement: User Login
+The system SHALL log users in.
+
+#### Scenario: Valid credentials
+- **WHEN** a user signs in
+- **THEN** a session starts
+
+#### Scenario: Wrong password
+- **WHEN** the password is wrong
+- **THEN** no session starts`)).parseSpec('auth');
+
+      expect(parsed.requirements[0].name).toBe('User Login');
+      expect(parsed.requirements[0].scenarios.map((s) => s.name)).toEqual([
+        'Valid credentials',
+        'Wrong password',
+      ]);
+    });
+
+    it('drops a closing # run the way archive does, but keeps a # inside the name', () => {
+      const parsed = new MarkdownParser(spec(`### Requirement: Supports C# ###
+The system SHALL compile C#.
+
+#### Scenario: Builds a C# project ##
+- **WHEN** a project is built
+- **THEN** it compiles`)).parseSpec('lang');
+
+      expect(parsed.requirements[0].name).toBe('Supports C#');
+      expect(parsed.requirements[0].scenarios[0].name).toBe('Builds a C# project');
+    });
+
+    it('names a level-4 header without the Scenario: prefix by its text', () => {
+      const parsed = new MarkdownParser(spec(`### Requirement: Retries
+The system SHALL retry failed calls.
+
+#### Edge case: zero retries
+- **WHEN** retries are set to 0
+- **THEN** the call runs once`)).parseSpec('net');
+
+      expect(parsed.requirements[0].scenarios[0].name).toBe('Edge case: zero retries');
+    });
+  });
+});
