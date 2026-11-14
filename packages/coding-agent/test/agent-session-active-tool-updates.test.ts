@@ -127,7 +127,7 @@ describe("AgentSession.activeToolExecutionUpdates cache lifecycle", () => {
 			session.agent.emitExternalEvent(taskEnd("running"));
 			preview.restore();
 			const rows = preview.render(100).map(row => Bun.stripANSI(row));
-			expect(rows[0]).toContain("completed");
+			expect(rows[0]).toContain("已完成");
 			expect(rows.join("\n")).toContain("Task completed");
 			expect(rows.join("\n")).not.toContain("Task running");
 			preview.clear();

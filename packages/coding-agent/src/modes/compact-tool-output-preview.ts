@@ -1,16 +1,18 @@
 import type { Component } from "@oh-my-pi/pi-tui";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { card } from "@oh-my-pi/pi-tui/native/describe";
+import type { TspSpan } from "@oh-my-pi/pi-wire";
+import { span } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { plainText, rowsText, styledBackground } from "@oh-my-pi/pi-tui/native/spans";
-import { backgroundChrome } from "@oh-my-pi/pi-tui/native/tone";
+import { plainText, rowsText } from "@oh-my-pi/pi-tui/native/spans";
+import { describeOutputBlock, outputBlockContentWidth, renderOutputBlock } from "@oh-my-pi/pi-tui/render/output-block";
 import { replaceTabs, truncateMiddleToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
-import { getStateBgColor, padToWidth } from "@oh-my-pi/pi-tui/render/utils";
+import type { State } from "@oh-my-pi/pi-tui/render/types";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import type { ThemeColor } from "@oh-my-pi/pi-tui/theme/theme";
 import { isGroupedHeader, isMatchRow } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
 import { toolOutputText } from "@oh-my-pi/pi-tui/tools/output-preview";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
-import { getPaddingX, padding, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { LiveToolOutputSnapshot } from "../session/agent-session-handle";
@@ -56,6 +58,32 @@ function selectOutputRows(rows: readonly string[], budget: number, toolName: str
 	}
 	return rows.slice(-budget);
 }
+
+/** Preview lifecycle state derived from the real terminal facts. */
+type PreviewState = "running" | "completed" | "failed" | "cancelled";
+
+/** Chinese status word shown in the frame header, aligned with the activity dock vocabulary. */
+const PREVIEW_STATE_WORD: Record<PreviewState, string> = {
+	running: "运行中",
+	completed: "已完成",
+	failed: "失败",
+	cancelled: "已取消",
+};
+
+const PREVIEW_STATE_COLOR: Record<PreviewState, ThemeColor> = {
+	running: "accent",
+	completed: "success",
+	failed: "error",
+	cancelled: "warning",
+};
+
+/** Map the preview lifecycle onto the shared output-block visual state. */
+const PREVIEW_BLOCK_STATE: Record<PreviewState, State> = {
+	running: "running",
+	completed: "success",
+	failed: "error",
+	cancelled: "pending",
+};
 
 /** A text-only projection of session execution facts, independent of transcript tool cards. */
 export class CompactToolOutputPreview implements Component {
@@ -142,19 +170,18 @@ export class CompactToolOutputPreview implements Component {
 		return deadline !== undefined && deadline <= Date.now() ? undefined : selected;
 	}
 
-	render(width: number): readonly string[] {
+	/** Shared ANSI/native projection of the selected source within the row budget. */
+	#projection(width: number): { state: PreviewState; head: string; headSpans: TspSpan[]; body: string[] } | undefined {
 		const selected = this.#source();
-		if (!displayPreferences.compactToolActivity || !selected || width < 1) return [];
+		if (!displayPreferences.compactToolActivity || !selected || width < 1) return undefined;
 		const height = Math.max(0, Math.min(6, Math.floor(this.availableRows())));
-		if (height === 0) return [];
-		const inset = Math.min(getPaddingX(1), Math.max(0, width - 1));
-		const innerWidth = width - inset;
+		if (height === 0) return undefined;
 		const { call, output } = selected;
 		const info = compactToolPreviewInfo(call.toolName, call.args, call.intent, call.result);
 		const effective = effectiveTool(call.toolName, call.result);
 		const details = effective.details;
 		const job = isRecord(details?.async) ? details.async : undefined;
-		const state =
+		const state: PreviewState =
 			call.terminalAt === undefined
 				? "running"
 				: job?.state === "cancelled" || details?.cancelled === true
@@ -163,40 +190,63 @@ export class CompactToolOutputPreview implements Component {
 						? "failed"
 						: "completed";
 		const identity = [
-			state,
 			info.name,
 			typeof job?.name === "string" ? job.name : undefined,
 			typeof job?.jobId === "string" ? job.jobId : undefined,
-		];
-		const header = identity.filter(Boolean).join(" · ");
+		]
+			.filter(Boolean)
+			.join(" · ");
 		const target = singleLine(info.command || info.detail);
-		const headerWidth = visibleWidth(header);
-		const targetBudget = target ? innerWidth - headerWidth - 3 : 0;
-		const rows = [
-			targetBudget >= 1
-				? `${header} · ${truncateMiddleToWidth(target, targetBudget)}`
-				: truncateMiddleToWidth(header, innerWidth),
+		// The frame's top bar embeds the header: ╭─── + " label " + ───╮.
+		const labelRoom = Math.max(0, width - 10);
+		const word = PREVIEW_STATE_WORD[state];
+		const identityRoom = Math.max(0, labelRoom - visibleWidth(word) - 3);
+		const identityText = truncateMiddleToWidth(identity, identityRoom);
+		const targetRoom = target ? labelRoom - visibleWidth(word) - visibleWidth(identityText) - 6 : 0;
+		const targetText = target && targetRoom >= 1 ? truncateMiddleToWidth(target, targetRoom) : "";
+		const headParts = [word, identityText, targetText].filter(Boolean);
+		const head = headParts.join(" · ");
+		const headSpans = [
+			span(word, PREVIEW_STATE_COLOR[state]),
+			...(identityText ? [span(" · "), span(identityText, "muted")] : []),
+			...(targetText ? [span(" · "), span(targetText, "dim")] : []),
 		];
-		if (height > 1) {
-			const wrapped = wrapTextWithAnsi(output, innerWidth).filter(row => /[\p{L}\p{N}]/u.test(row));
-			rows.push(...selectOutputRows(wrapped, height - 1, effective.name, call.terminalAt !== undefined));
-		}
-		const left = padding(inset);
-		const background = getStateBgColor(
-			state === "running" ? "running" : state === "failed" ? "error" : state === "cancelled" ? "pending" : "success",
-		);
-		return rows.map((row, index) =>
-			padToWidth(
-				left + (index === 0 ? theme.fg("toolTitle", theme.bold(row)) : theme.fg("toolOutput", row)),
+		// Two border rows leave the rest for output; the frame owns left/right padding.
+		const bodyBudget = Math.max(0, height - 2);
+		const contentWidth = outputBlockContentWidth(width);
+		const body =
+			bodyBudget > 0
+				? selectOutputRows(
+						wrapTextWithAnsi(output, contentWidth).filter(row => /[\p{L}\p{N}]/u.test(row)),
+						bodyBudget,
+						effective.name,
+						call.terminalAt !== undefined,
+					)
+				: [];
+		return { state, head, headSpans, body };
+	}
+
+	render(width: number): readonly string[] {
+		const projection = this.#projection(width);
+		if (!projection) return [];
+		return renderOutputBlock(
+			{
+				header: projection.head,
+				state: PREVIEW_BLOCK_STATE[projection.state],
+				sections: [{ lines: projection.body }],
 				width,
-				value => theme.bgFill(background, value),
-			),
+			},
+			theme,
 		);
 	}
 
 	describe(cx: DescribeContext): NativeNode {
-		const lines = this.render(cx.cols);
-		if (lines.length === 0) return { k: "rows", p: { cols: cx.cols, lines } };
-		return card({ ...backgroundChrome(styledBackground(lines[0]!)), inset: true }, [rowsText(lines)]);
+		const projection = this.#projection(cx.cols);
+		if (!projection) return { k: "rows", p: { cols: cx.cols, lines: [] } };
+		return describeOutputBlock({
+			head: projection.headSpans,
+			state: PREVIEW_BLOCK_STATE[projection.state],
+			sections: [{ body: [rowsText(projection.body)] }],
+		});
 	}
 }

@@ -5,7 +5,7 @@
 ### Changed
 
 - Compact mode's two-line activity area now shows fixed-width Chinese action states (正在思考/读取/执行/写入/调用) with a gray detail that never shifts; only running action words shimmer, thinking completion shows elapsed seconds, and tool elapsed timers are removed.
-- Compact mode's tool output preview now leads its header with the status and keeps both ends of long commands, and finished grep/glob results show their matching rows first instead of only the output tail.
+- Compact mode's tool output preview is now a bordered card with padding and a color-coded Chinese status header that keeps both ends of long commands; finished grep/glob results show their matching rows first instead of only the output tail.
 
 - AIReq, WebGUI and OpenWiki browser assets now use the same gzip archive pipeline as the stats dashboard, reducing embedded size and deferring decoding until the first request.
 - WebGUI’s sidebar groups sessions only under their projects; the separate “任务” section is gone, and the recently updated and unread views still list all history.

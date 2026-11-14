@@ -59,6 +59,19 @@ function nativeRows(node: NativeNode): readonly string[] {
 	});
 }
 
+/** Strip the framed block's vertical borders and uniform one-column padding, keeping relative indent. */
+function frameBody(rows: readonly string[]): string[] {
+	return rows.filter(row => row.startsWith("│") && row.endsWith("│")).map(row => row.slice(2, -2).trimEnd());
+}
+
+/** The native card's head text, joined from its spans. */
+function nativeHead(node: NativeNode): string {
+	if (node.k !== "card") throw new Error("Expected a native preview card");
+	const head = node.p?.head;
+	if (typeof head === "string") return head;
+	return head?.map(part => part.t).join("") ?? "";
+}
+
 function hasNativeKind(node: NativeNode, kind: string): boolean {
 	return node.k === kind || (node.c ?? []).some(child => "k" in child && hasNativeKind(child, kind));
 }
@@ -217,6 +230,24 @@ function focusFixture() {
 					}),
 				),
 			].map(rows => rows.map(row => Bun.stripANSI(row).trimEnd())),
+		previewView: (width = 120) => {
+			const cx: DescribeContext = {
+				cols: width,
+				reduceMotion: false,
+				dark: true,
+				supports: () => true,
+				feature: () => true,
+			};
+			const ansi = output.render(width).map(row => Bun.stripANSI(row).trimEnd());
+			const node = output.describe(cx);
+			return {
+				ansi,
+				head: ansi[0] ?? "",
+				body: frameBody(ansi),
+				nativeHead: nativeHead(node),
+				nativeBody: nativeRows(node).map(row => Bun.stripANSI(row).trimEnd()),
+			};
+		},
 		register(id: string, live: { session: typeof main.session }) {
 			registry.register({
 				id,
@@ -897,10 +928,11 @@ describe("compact latest live Output consumers", () => {
 		output.clear();
 		observe(outputCall("shell", 1, "SHELL_OUTPUT"));
 		observe(todo);
-		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("completed · bash · echo shell");
-			expect(rows.slice(1).map(row => row.trim())).toEqual(["SHELL_OUTPUT"]);
-		}
+		const view = h.previewView();
+		expect(view.head).toContain("已完成 · bash · echo shell");
+		expect(view.body).toEqual(["SHELL_OUTPUT"]);
+		expect(view.nativeHead).toContain("已完成 · bash · echo shell");
+		expect(view.nativeBody).toEqual(["SHELL_OUTPUT"]);
 	});
 
 	it("selects by dispatch order only after real Output and replaces cumulative frames", async () => {
@@ -912,10 +944,10 @@ describe("compact latest live Output consumers", () => {
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
 		h.register("OutputWorker", live);
 		await h.focus.focusAgent("OutputWorker");
-		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("running · bash · echo first");
-			expect(rows.join("\n")).toContain("first output");
-		}
+		const view = h.previewView();
+		expect(view.head).toContain("运行中 · bash · echo first");
+		expect(view.body).toEqual(["first output"]);
+		expect(view.nativeHead).toContain("运行中 · bash · echo first");
 		calls = [
 			first,
 			{
@@ -925,7 +957,7 @@ describe("compact latest live Output consumers", () => {
 				},
 			},
 		];
-		for (const rows of h.outputRows()) expect(rows[0]).toContain("echo first");
+		expect(h.previewView().head).toContain("echo first");
 		calls = [
 			first,
 			{
@@ -936,27 +968,17 @@ describe("compact latest live Output consumers", () => {
 				},
 			},
 		];
-		for (const rows of h.outputRows()) expect(rows[0]).toContain("echo first");
+		expect(h.previewView().head).toContain("echo first");
 		const newer = outputCall("second", 2, "one\ntwo");
 		calls = [newer, outputCall("first", 1, "late first output")];
-		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("echo second");
-			expect(
-				rows
-					.slice(1)
-					.filter(Boolean)
-					.map(row => row.trim()),
-			).toEqual(["one", "two"]);
-		}
+		const newerView = h.previewView();
+		expect(newerView.head).toContain("echo second");
+		expect(newerView.body).toEqual(["one", "two"]);
+		expect(newerView.nativeBody).toEqual(["one", "two"]);
 		calls = [outputCall("first", 1, "even later"), outputCall("second", 2, "one\ntwo\nthree")];
-		for (const rows of h.outputRows()) {
-			expect(
-				rows
-					.slice(1)
-					.filter(Boolean)
-					.map(row => row.trim()),
-			).toEqual(["one", "two", "three"]);
-		}
+		const threeView = h.previewView();
+		expect(threeView.body).toEqual(["one", "two", "three"]);
+		expect(threeView.nativeBody).toEqual(["one", "two", "three"]);
 	});
 
 	it("keeps background Output live after loop completion without retained tool cards", async () => {
@@ -990,10 +1012,10 @@ describe("compact latest live Output consumers", () => {
 				args: frame.args,
 				partialResult: frame.result!,
 			});
-			for (const rows of h.outputRows()) {
-				expect(rows[0]).toContain("running · bash · BuildPackage · bg_1");
-				expect(rows.join("\n")).toContain(`tick ${second}`);
-			}
+			const view = h.previewView();
+			expect(view.head).toContain("运行中 · bash · BuildPackage · bg_1");
+			expect(view.body).toEqual([`tick ${second}`]);
+			expect(view.nativeHead).toContain("运行中 · bash · BuildPackage · bg_1");
 		}
 		expect(h.ctx.pendingTools.size).toBe(0);
 	});
@@ -1076,7 +1098,7 @@ describe("compact latest live Output consumers", () => {
 		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("replacement");
 	});
 
-	it("shows the latest five meaningful display rows without changing the original Output", async () => {
+	it("shows the latest four meaningful display rows without changing the original Output", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		const text = `discard\nfirst\n \nsecond\n\t\nthird\n${" ".repeat(150)}\nfourth\n\x1b[31m  \x1b[0m\nfifth\n{}\n---\n\x1b[31m╰──╯\x1b[0m\n✅\n\n`;
@@ -1084,24 +1106,25 @@ describe("compact latest live Output consumers", () => {
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
 		h.register("NonblankOutput", live);
 		await h.focus.focusAgent("NonblankOutput");
-		for (const rows of h.outputRows()) {
-			expect(rows.slice(1).map(row => row.trim())).toEqual(["first", "second", "third", "fourth", "fifth"]);
-		}
+		const view = h.previewView();
+		expect(view.body).toEqual(["second", "third", "fourth", "fifth"]);
+		expect(view.nativeBody).toEqual(["second", "third", "fourth", "fifth"]);
 		expect(call.result?.content).toEqual([{ type: "text", text }]);
 	});
 
-	it("aligns output with its header, preserves relative indentation and never pads short output", async () => {
+	it("frames output with borders and padding while preserving relative indentation", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		const call = outputCall("aligned", 1, "\n    根节点\n      child 42\n    ---\n    {}\n");
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
 		h.register("AlignedOutput", live);
 		await h.focus.focusAgent("AlignedOutput");
-		for (const rows of h.outputRows()) {
-			expect(rows).toHaveLength(3);
-			const inset = rows[0]!.length - rows[0]!.trimStart().length;
-			expect(rows.slice(1)).toEqual([`${" ".repeat(inset)}根节点`, `${" ".repeat(inset + 2)}child 42`]);
-		}
+		const view = h.previewView();
+		expect(view.ansi).toHaveLength(4);
+		expect(view.ansi[0]!.startsWith("╭")).toBe(true);
+		expect(view.ansi.at(-1)!.startsWith("╰")).toBe(true);
+		expect(view.body).toEqual(["根节点", "  child 42"]);
+		expect(view.nativeBody).toEqual(["根节点", "  child 42"]);
 	});
 
 	it("does not open or replace meaningful output for symbol-only frames", async () => {
@@ -1113,10 +1136,10 @@ describe("compact latest live Output consumers", () => {
 		await h.focus.focusAgent("SymbolOutput");
 		expect(h.outputRows()).toEqual([[], []]);
 		calls = [outputCall("content", 1, "0"), ...calls];
-		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("echo content");
-			expect(rows.slice(1).map(row => row.trim())).toEqual(["0"]);
-		}
+		const view = h.previewView();
+		expect(view.head).toContain("echo content");
+		expect(view.body).toEqual(["0"]);
+		expect(view.nativeBody).toEqual(["0"]);
 	});
 
 	it("wraps safe output before its tail window and keeps ANSI/native text identical", async () => {
@@ -1130,14 +1153,15 @@ describe("compact latest live Output consumers", () => {
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
 		h.register("WrappedOutput", live);
 		await h.focus.focusAgent("WrappedOutput");
-		const [ansi, native] = h.outputRows(18);
-		expect(ansi).toEqual(native);
-		expect(ansi).toHaveLength(6);
-		for (const row of ansi!) expect(Bun.stringWidth(row)).toBeLessThanOrEqual(18);
-		expect(ansi!.join("\n")).not.toContain("discarded");
-		expect(ansi!.join("\n")).not.toContain("line2");
-		expect(ansi!.join("\n")).not.toContain("\t");
-		expect(ansi!.join("\n")).toContain("尾部中文");
+		const view = h.previewView(18);
+		expect(view.ansi).toHaveLength(6);
+		for (const row of view.ansi) expect(Bun.stringWidth(row)).toBeLessThanOrEqual(18);
+		expect(view.body).toEqual(view.nativeBody);
+		const text = view.ansi.join("\n");
+		expect(text).not.toContain("discarded");
+		expect(text).not.toContain("line2");
+		expect(text).not.toContain("\t");
+		expect(text).toContain("尾部中文");
 		let budget = 3;
 		const small = new CompactToolOutputPreview(h.ctx, () => budget);
 		outputPreviews.push(small);
@@ -1165,12 +1189,12 @@ describe("compact latest live Output consumers", () => {
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([first, second, reply]);
 		h.register("ReadOutput", live);
 		await h.focus.focusAgent("ReadOutput");
-		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("running · read · second.txt");
-			expect(rows.join("\n")).toContain("second body");
-			expect(rows.join("\n")).not.toContain("first body");
-			expect(rows.join("\n")).not.toContain("assistant reply");
-		}
+		const view = h.previewView();
+		expect(view.head).toContain("运行中 · read · second.txt");
+		expect(view.body).toEqual(["second body"]);
+		expect(view.nativeHead).toContain("运行中 · read · second.txt");
+		expect(view.ansi.join("\n")).not.toContain("first body");
+		expect(view.ansi.join("\n")).not.toContain("assistant reply");
 	});
 
 	it("prefers grep hit rows after terminal and tails while running", async () => {
@@ -1192,27 +1216,25 @@ describe("compact latest live Output consumers", () => {
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => [call]);
 		h.register("GrepOutput", live);
 		await h.focus.focusAgent("GrepOutput");
-		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("running · grep");
-			expect(rows.slice(1).map(row => row.trim())).toEqual([
-				"15│context after",
-				"*16│alpha hit three",
-				"*17│alpha hit four",
-				"*18│alpha hit five",
-				"*19│alpha hit six",
-			]);
-		}
+		const running = h.previewView();
+		expect(running.head).toContain("运行中 · grep");
+		expect(running.body).toEqual([
+			"*16│alpha hit three",
+			"*17│alpha hit four",
+			"*18│alpha hit five",
+			"*19│alpha hit six",
+		]);
+		expect(running.nativeBody).toEqual(running.body);
 		call = { ...call, terminalAt: Date.now() };
-		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("completed · grep");
-			expect(rows.slice(1).map(row => row.trim())).toEqual([
-				"*12│alpha hit one",
-				"*14│alpha hit two",
-				"*16│alpha hit three",
-				"*17│alpha hit four",
-				"*18│alpha hit five",
-			]);
-		}
+		const terminal = h.previewView();
+		expect(terminal.head).toContain("已完成 · grep");
+		expect(terminal.body).toEqual([
+			"*12│alpha hit one",
+			"*14│alpha hit two",
+			"*16│alpha hit three",
+			"*17│alpha hit four",
+		]);
+		expect(terminal.nativeBody).toEqual(terminal.body);
 	});
 
 	it("fills remaining rows with context when grep hits are fewer than the budget", async () => {
@@ -1227,15 +1249,9 @@ describe("compact latest live Output consumers", () => {
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
 		h.register("GrepFill", live);
 		await h.focus.focusAgent("GrepFill");
-		for (const rows of h.outputRows()) {
-			expect(rows.slice(1).map(row => row.trim())).toEqual([
-				"*12│only hit",
-				"# src/",
-				"10│context one",
-				"13│context two",
-				"14│context three",
-			]);
-		}
+		const view = h.previewView();
+		expect(view.body).toEqual(["*12│only hit", "# src/", " 10│context one", " 13│context two"]);
+		expect(view.nativeBody).toEqual(view.body);
 	});
 
 	it("prefers glob file rows over directory headings and device-wrapped grep keeps its inner identity", async () => {
@@ -1260,19 +1276,14 @@ describe("compact latest live Output consumers", () => {
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
 		h.register("GlobOutput", live);
 		await h.focus.focusAgent("GlobOutput");
-		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("completed · glob");
-			expect(rows.slice(1).map(row => row.trim())).toEqual(["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
-		}
+		const globView = h.previewView();
+		expect(globView.head).toContain("已完成 · glob");
+		expect(globView.body).toEqual(["a.ts", "b.ts", "c.ts", "d.ts"]);
+		expect(globView.nativeBody).toEqual(globView.body);
 		calls = [glob, wrapped];
-		for (const rows of h.outputRows()) {
-			expect(rows.slice(1).map(row => row.trim())).toEqual([
-				"*12│wrapped hit",
-				"# src/",
-				"10│context",
-				"13│context after",
-			]);
-		}
+		const wrappedView = h.previewView();
+		expect(wrappedView.body).toEqual(["*12│wrapped hit", "# src/", " 10│context", " 13│context after"]);
+		expect(wrappedView.nativeBody).toEqual(wrappedView.body);
 	});
 
 	it("keeps tail selection for terminal bash and zero-hit grep without error heuristics", async () => {
@@ -1305,21 +1316,15 @@ describe("compact latest live Output consumers", () => {
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
 		h.register("FallbackOutput", live);
 		await h.focus.focusAgent("FallbackOutput");
-		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("failed · bash");
-			expect(rows.slice(1).map(row => row.trim())).toEqual([
-				"Error: boom at step 2",
-				"line three",
-				"line four",
-				"line five",
-				"line six",
-			]);
-		}
+		const failedView = h.previewView();
+		expect(failedView.head).toContain("失败 · bash");
+		expect(failedView.body).toEqual(["line three", "line four", "line five", "line six"]);
+		expect(failedView.nativeBody).toEqual(failedView.body);
 		calls = [failed, empty];
-		for (const rows of h.outputRows()) {
-			expect(rows[0]).toContain("completed · grep");
-			expect(rows.slice(1).map(row => row.trim())).toEqual(["No matches found"]);
-		}
+		const emptyView = h.previewView();
+		expect(emptyView.head).toContain("已完成 · grep");
+		expect(emptyView.body).toEqual(["No matches found"]);
+		expect(emptyView.nativeBody).toEqual(emptyView.body);
 	});
 
 	it("middle-truncates long commands so the header keeps both ends", async () => {
@@ -1330,12 +1335,12 @@ describe("compact latest live Output consumers", () => {
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
 		h.register("LongCommand", live);
 		await h.focus.focusAgent("LongCommand");
-		for (const rows of h.outputRows(60)) {
-			expect(rows[0]).toContain("running · bash · rg -n");
-			expect(rows[0]).toContain("…");
-			expect(rows[0]).toContain("styles.css");
-			expect(Bun.stringWidth(rows[0]!)).toBeLessThanOrEqual(60);
-		}
+		const view = h.previewView(60);
+		expect(view.head).toContain("运行中 · bash · rg -n");
+		expect(view.head).toContain("…");
+		expect(view.head).toContain("styles.css");
+		expect(Bun.stringWidth(view.ansi[0]!)).toBeLessThanOrEqual(60);
+		expect(view.nativeHead).toContain("运行中 · bash · rg -n");
 	});
 
 	it("does not revive a finished preview when the next turn starts", async () => {
