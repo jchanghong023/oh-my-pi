@@ -1,91 +1,196 @@
-# OMP 内置 OpenSpec：完整还原上游文件
+# 清理内置 OpenSpec 的非业务文件
 
-## 当前范围
+## 目标与范围
 
-先完整还原用户指定上游的全部版本化文件，不做 OMP 适配，不评估是否满足已有需求，不以兼容性问题阻止文件还原。
+只清理此前整仓复制时带入的上游研发、测试、文档、网站和发布管理材料。保留完整上游业务代码、运行资源、许可证及必要构建输入，不修改业务实现，不做 OMP 适配。
 
-- 来源：`C:\Users\jiang\Documents\OpenSpec`。
-- 目标：`packages/coding-agent/src/spec-driven/vendor/resources/openspec/`。
-- 已读取的来源 `package.json` 版本为 `2.0.0`；实施时以固定快照为准，不将此版本号等同于已核验的远端最新状态。
-- 本次已完成文件还原与校验（15/15）；仅 `inventory.json` 来源记录按实际快照更正，未实施 OMP 适配。
+- 唯一清理目录：`F:\code2026\oh-my-pi\packages\coding-agent\src\spec-driven\vendor\resources\openspec`。
+- 上游参考目录：`C:\Users\jiang\Documents\OpenSpec`，只读，不删除或修改。
+- 此文件是执行计划，以下任务均未由本次编写操作执行。
+- 之前“目标必须与上游整个仓库文件集合完全一致”的标准作废；现在仅要求保留文件与固定来源一致，删除项符合明确清单。
 
-## 1. 固定完整上游快照
+## 1. 保留清单
 
-- [x] 记录来源仓库完整提交 SHA 及版本，检查是否存在已跟踪文件的本地改动；以该提交的完整版本化文件树作为还原基准，本地未提交内容不自动视为上游。
-- [x] 导出全部版本化文件，包含隐藏文件、源码、测试、文档、配置、脚本、全部 Skill、schema、网站及上游自身的 `openspec/` 等，不按 npm 发布清单或 core profile 裁剪。
-- [x] 保持原始相对路径、内容及文件类型；符号链接保留链接目标，不跟随链接复制仓库外内容。若快照包含子模块，记录其固定 revision 并完整取得对应内容，不能以空目录冒充完成。
-- [x] 不复制来源 `.git` 管理数据、未跟踪的个人文件、缓存、依赖安装目录或本地生成产物；这些不属于固定提交的上游文件树。提交中本身包含的文件不得仅因属于隐藏目录或生成文件而被排除。
+下列目录整树保留，不根据文件名称继续裁剪其内部模块：
 
-## 2. 干净替换内置 OpenSpec 文件树
+| 路径 | 用途 |
+|---|---|
+| `src/` | 完整业务实现，含 CLI、工作流、提示词、工具适配、校验、迁移和历史指纹数据 |
+| `bin/` | 原生 CLI 启动入口 |
+| `schemas/` | 内置 schema 和模板，运行时按相对路径读取 |
+| `skills/` | 全部原版 Skill 资源，不仅是默认 core 五／六项 |
 
-- [x] 核对目标目录及其中已有改动，保留可恢复副本；删除前生成仅限该目录的替换清单。
-- [x] 在独立临时目录准备完整上游快照，准备完成后再替换目标，不先删空再下载，不采用覆盖复制留下旧文件。
-- [x] 目标文件集合必须与固定上游快照完全一致；删除所有仅存在于旧目标中的文件，不保留 OMP 添加或修改的副本。
-- [x] 旧 `schemas/mini/`、`schemas/omp-spec/`、`dist/core/omp-sync.js`、定制 `dist/`、旧 `commands/` 和旧依赖目录，凡不在固定上游文件树中，全部随干净替换移除；不另存回目标作为兼容资源。
-- [x] 原样保留上游全部 Skill、模板、说明、frontmatter、命令示例和工具声明，不改为 `omp openspec`，不加入仅需求流程限制，不补写上游没有的文件。
-- [x] 只替换上述目标子树。上游自身的 `openspec/` 位于目标子树内，不覆盖 OMP 仓库根目录的 `openspec/`。
-- [x] 不改动 Superpowers、JCH、共享运行时、其他 OMP 源码及无关用户改动；不修改来源仓库。
+下列根文件原样保留：
 
-## 3. 仅校验文件还原结果
+| 路径 | 用途 |
+|---|---|
+| `package.json` | ESM、依赖、版本、入口及构建声明；CLI 实际读取其版本 |
+| `pnpm-lock.yaml` | 上游锁定依赖输入 |
+| `pnpm-workspace.yaml` | 单包工作区及依赖 overrides；不能误当多仓管理材料删除 |
+| `tsconfig.json` | src → dist 的上游构建配置 |
+| `build.js` | 上游 build／prepare 使用的构建入口 |
+| `LICENSE` | 上游许可声明 |
+| `.gitattributes` | 保留原文件属性及换行约定 |
+| `.gitignore` | 避免后续生成的依赖／构建文件被意外纳入版本管理 |
 
-- [x] 对固定快照与目标逐项比对相对路径、文件类型、普通文件内容摘要及链接目标：缺失文件、额外文件和内容差异均为零。
-- [x] 确认隐藏目录及非发布文件未漏拷，没有遗留旧 OpenSpec 私有文件，也没有混入来源 `.git`、个人配置或本地依赖。
-- [x] 记录来源路径、提交 SHA、版本、还原目录和比对结果；版本及完整性记录放在目标树外，不向上游文件树添加自有清单。
-- [x] 如需更新 `packages/coding-agent/src/spec-driven/vendor/inventory.json` 的来源记录，只记录实际固定快照的信息，不冒用旧 npm integrity；不得为维护旧清单格式扩展成宿主适配或构建工作。
+注意：
 
-## 明确不做
+- `src/core/templates/`、`src/prompts/`、`src/core/command-generation/` 和历史迁移／指纹模块都是业务源码，不是待删除的文档或旧测试。
+- 上游源码中提到用户项目的 `.agents/skills/`、`openspec/` 或在线安装器 URL，不代表依赖 vendor 根下同名研发目录；不因此保留上游自己的需求档案，也不删掉对应业务实现。
+- 当前 package.json 包含测试、发布和资源维护脚本。此次保持其原文，不连带裁剪 devDependencies 或重写锁文件；这些独立仓库维护命令不再属于本副本的可执行承诺。保留的 build／prepare 入口使用 build.js，不依赖下列 scripts/ 维护目录。
 
-- 不修改 `src/spec-driven/resources.ts`、CLI、发现 provider、Skill 权限策略或 AIReq 调用方。
-- 不处理裸 `openspec` 的 PATH、启动器、stdin／TTY、命令补全或重复 Skill 发现。
-- 不迁移 `mini`／`omp-spec` 项目配置、活动 change 或用户需求资料，不为旧调用保留兼容 schema。
-- 不修改既有需求规格以要求它们适配本轮文件还原，不评估 AIReq 或其他现有功能是否满足需求。
-- 不安装依赖、不运行构建、不生成 dist 或默认 profile 资源、不调整 npm／二进制打包及缓存机制。
-- 不运行功能测试、TUI／浏览器验收或全仓检查，不为通过旧测试而修改上游文件。
-- 不提交、不推送、不发布。
+## 2. 明确删除清单
 
-## 固定快照记录（目标树外）
+只删除目标根下列出的项，不使用全仓名称匹配或“凡不在白名单就删”的命令。
 
-- 来源路径：`C:\Users\jiang\Documents\OpenSpec`
-- 提交 SHA：`ea635dd255f8686dcf48626bbcbe0e3fd59b6067`（`main`，2026-11-13 22:09:16 +0000，`fix(binaries): label the Windows executables as OpenSpec (#2246)`）
-- 包名／版本：`@fission-ai/openspec` `2.0.0`
-- 本地状态：已跟踪改动 0、已暂存改动 0、未跟踪文件 0；工作区干净，`HEAD` 即快照基准。
-- 子模块：无（`git submodule status` 为空）；符号链接：无（无 mode `120000` 条目）。
-- 版本化文件数：1378（`git ls-tree -r --name-only HEAD`，含隐藏文件与上游自身 `openspec/`）。
-- 提交时 HEAD 无 tag 指向。
-- 导出方式与位置：`git archive --format=tar <SHA>` → `F:/tmp-omp/snap.tar`，解包至 `F:/tmp-omp/openspec-src`（仓库外独立临时目录）。
-- 导出结果：1378 个文件、638 个目录；与 `git ls-tree -r --name-only <SHA>` 的路径集合逐一 `diff` 无差异；目录清单含 `src`、`test`、`docs`、`docs-lab`、`website`、`skills`、`schemas`、`scripts`、`bin`、`openspec`（663 个文件）及 `.github`／`.agents`／`.changeset`／`.devcontainer` 等隐藏目录；无 `.git`、`node_modules`、日志文件，无子模块与符号链接条目。
-- 内容一致性：对快照 1378 个文件逐个 `git hash-object --no-filters`，与 `git ls-tree -r` 的 blob SHA 逐行比对，差异 0（含 1 个空文件）。相对路径一致（见上条 `diff`）。
-- 文件类型：上游全部为普通文件（1373 个 `100644`、5 个 `100755`），无 `120000` 符号链接、无 `160000` gitlink 子模块，故无需保留链接目标或子模块 revision。5 个可执行文件：`bin/openspec.js`、`scripts/binary/e2e.sh`、`scripts/binary/install-check.sh`、`scripts/binary/smoke.sh`、`scripts/update-flake.sh`（Windows 挂载统一报 777，执行位不可由文件系统区分，替换后按此清单核对）。
-- 来源仓库复核：操作后 `git status --porcelain --untracked-files=all` 仍为 0 行，未修改来源。
-- 排除审计：快照中 `.git`／`node_modules`／`.cache`／`.turbo`／`.next`／`coverage`／`.pnpm-store`／`*.log`／`*.tsbuildinfo`／`dist`／`.venv`／`__pycache__` 命中数为 0；来源工作区 `git status --ignored=matching -uall` 为空（来源本无未跟踪／忽略文件），故快照 = 固定提交树，与来源工作目录顶层仅差 `.git`。
-- 未误排隐藏／生成文件：`.actrc`、`.coderabbit.yaml`、`.gitattributes`、`.gitignore` 及 `.github/`、`.agents/`、`.changeset/`、`.devcontainer/`、`website/.gitignore` 均在快照内；`pnpm-lock.yaml`、`flake.lock`、`package.json`、`tsconfig.json`、`vitest.config.ts` 均存在。分组计数：`src` 224、`test` 293、`openspec` 663、`docs-lab` 43、`website` 42、`docs` 27、`scripts` 15、`skills` 13、`schemas` 5、`bin` 1。
+### 目录
 
-## 目标现状与替换清单（目标树外）
+- [ ] `test/`：上游测试及 fixtures，不是 OMP 宿主测试。
+- [ ] `docs/`、`docs-lab/`：文档及文档站材料。
+- [ ] `website/`：上游网站工程及其依赖配置。
+- [ ] `assets/`：上游 README／网站展示图片；此次已检查的业务源码、bin 和 build.js 未发现对该目录的本地资源依赖。
+- [ ] `openspec/`：上游自身的需求、变更、探索及计划档案。
+- [ ] `.agents/`：用于开发上游仓库的项目级技能副本，不是根 `skills/` 的业务资源。
+- [ ] `.github/`：上游 CI、Issue／PR 模板和维护配置。
+- [ ] `.changeset/`：上游发布版本管理材料。
+- [ ] `.devcontainer/`：上游开发容器配置。
+- [ ] `scripts/`：上游独立二进制发行、安装验证、技能文档生成和维护脚本。本轮不运行这些维护命令，也不删除 src 内的安装／更新业务实现。
 
-- 目标目录：`packages/coding-agent/src/spec-driven/vendor/resources/openspec/`，旧文件 2237 个、237 个目录、14 MB。
-- 已有改动：`git status --porcelain -uall -- <目标>` 为 0 行；2237 个文件全部被 git 跟踪（含 `node_modules/`、`dist/`），工作区与 `HEAD` 一致，无未提交改动。
-- 可恢复副本：`F:/tmp-omp/target-backup`（`cp -a` 全量 2237 文件；与原目录逐文件 SHA-256 比对差异 0）。
-- 替换清单：`F:/tmp-omp/replacement-manifest.txt`（仅覆盖该目录）。分类：删除 2215（`node_modules/` 1770、`dist/` 433、`commands/` 6、`schemas/mini/` 3、`schemas/omp-spec/` 3）、覆盖 16（`LICENSE`、`README.md`、`package.json`、`schemas/spec-driven/schema.yaml`、12 个 `skills/*/SKILL.md`）、新增 1356（`openspec/` 663、`test/` 293、`src/` 224、`docs-lab/` 43、`website/` 42、`docs/` 27、`scripts/` 15、`.github/` 12、`.agents/` 8 等）、保持不变 0。
-- 旧目标中 `dist/core/` 共 317 个文件（含 `omp-sync.js` 与定制产物）全部在删除清单内。
-- 替换执行：快照先在 `F:/tmp-omp/openspec-src` 完整解包并三证核验（路径／blob SHA／文件类型）后才动目标；随后删除旧目录并整树复制快照（非覆盖复制）。`snap.tar` 与 `F:/tmp-omp/target-backup` 均保留。
-- 替换结果：目标目录 1378 文件 / 638 目录；与快照逐文件 SHA-256 比对差异 0；`node_modules`、`dist`、`commands`、`schemas/mini`、`schemas/omp-spec` 均不存在。
-- 文件集合等式：`目标 - 快照 = 0`、`快照 - 目标 = 0`、同路径内容差异 = 0；旧目标独有文件（2215）在新目标中存活数 = 0。
-- OMP 私有修改清理：旧目标 22 个上游同路径文件中 16 个内容被 OMP 改动过（`LICENSE`、`README.md`、`package.json`、`schemas/spec-driven/schema.yaml`、12 个 `skills/*/SKILL.md`），现已全部回到快照内容；其余 6 个（`bin/openspec.js`、`schemas/spec-driven/templates/{design,proposal,spec,tasks}.md`、`skills/README.md`）与上游本来就相同。
-- git 视角：该子树 `2215 D / 16 M / 1356 ??`，无其他状态；未 `git add`，无暂存。
-- 旧私有路径移除核验：`node_modules`、`dist`、`dist/core/omp-sync.js`、`commands`、`schemas/mini`、`schemas/omp-spec` 在目标中均不存在，且均不在上游快照路径集合内（`schemas/` 现仅 `spec-driven/` 的 5 个文件）。目标目录集合 637 个，与快照推导目录集合 637 个完全一致（多余 0、缺失 0），未以改名／嵌套方式另存兼容资源；名称含 `mini` 的 3 处命中均为上游自身文件（`openspec/changes/archive/2025-09-29-improve-deterministic-tests/*`、`openspec/initiatives/.../06-add-minimal-context-store-ux/*`、`src/core/command-generation/adapters/gemini.ts`）。
-- 内容原样性：1378/1378 文件 SHA-256 与快照一致，Skill（`skills/` 13 文件，12 个 `SKILL.md` 均带 `name:` frontmatter）、模板（`schemas/spec-driven/templates/` 4 个）、`skills/README.md`、`.agents/` 8 个上游工具声明文件、`openspec/` 内 663 个说明与变更档案全部为上游原文。
-- 未注入 OMP 改写：目标中 `AIReq`、`omp-sync`、`omp openspec`、`schemas/mini`、`omp-spec` 出现文件数均为 0，与快照一致；无补写文件（`目标 - 快照 = 0`）。上游文中出现的 `Oh My Pi`／`.omp` 属其自身 tool 支持（`openspec/specs/oh-my-pi-tool`、`cli-init`），非 OMP 改动。
-- 作用域核验：全仓 `git status -uall` 除去目标子树后仅剩 `?? todo.md`（本任务计划文件，用户提供、按指示更新；未被 git 跟踪），其余改动全部落在目标子树内；OMP 仓库根 `openspec/`（138 文件）状态 0 行改动；`vendor/` 仅 `inventory.json` 与 `resources/`，`resources/` 下 `jch`、`omp-runtime`、`superpowers` 三个兄弟资源状态 0 行。目标子树内自带上游 `openspec/`（663 文件：`changes`、`specs`、`explorations`、`initiatives`、`work`、`config.yaml`）。
-- 无附带改动：OMP 仓库中目标子树外的已跟踪差异 0、暂存 0、未跟踪仅 `todo.md`；`vendor/resources/{superpowers,jch,omp-runtime}`、`vendor/inventory.json`、`src/spec-driven/resources.ts` 及整个 `src/` 均为 0 行状态。
-- 来源仓库：`git status -uall` 0 行、`HEAD` 仍为 `ea635dd255f8686dcf48626bbcbe0e3fd59b6067`、无 stash，未修改。
-- 最终独立比对（重新 `git archive` 出 `F:/tmp-omp/v-src`，不依赖先前的 `openspec-src`）：canonical 1378 文件／638 目录 vs 目标 1378 文件／638 目录；缺失 0、额外 0、内容差异 0（双向 `sha256sum` 全表比对）；canonical 与目标符号链接条目均为 0，目标非常规文件 0；类型分布 `100644`=1373、`100755`=5（执行位在 Windows 挂载不可表达，按路径清单记录）。报告：`F:/tmp-omp/verification-report.txt`，结论 PASS。
-- 隐藏文件与私有内容审计：目标隐藏文件 72 个，与 canonical 的 72 个路径逐一 `diff` 完全一致；隐藏目录 13 个；非发布目录文件数 `test` 293、`docs` 27、`docs-lab` 43、`website` 42、`.github` 12、`.agents` 8、`.changeset` 2、`.devcontainer` 2（canonical 对应 429 个全部到位）。目标中无 `.git`、`node_modules`、`.env*`、`.npmrc`、`.DS_Store`、`*.local`、`.venv`、`__pycache__`、`*.log`；无旧私有 `schemas/mini`、`schemas/omp-spec`、`omp-sync*`、`dist/`、顶层 `commands/` 残留（命中的 `commands` 路径均为上游 `src/cli/commands`、`src/commands`、`test/commands`、`test/core/commands`，共 81 个，已在 canonical 内）。
-- 来源记录归档：`F:/tmp-omp/verification-report.txt` 已整合为单一完整记录（来源路径、分支 `main`、SHA、提交时间与标题、包名版本 `@fission-ai/openspec 2.0.0`、还原目录、还原与三种比对方法、canonical/目标计数、缺失/额外/差异全 0、隐藏文件 72=72、模式分布、执行位说明、结论 PASS、留存物清单）。目标树内无本记录或自有清单：`extra = 0`，仅存上游自身 `test/core/templates/spec-inventory.test.ts`（canonical 内文件）。
-- `vendor/inventory.json` 更新：`openspec` 记录由 `version: 1.15.0` + npm `sha512-…` 改为 `version: 2.0.0` + `integrity: "git:ea635dd255f8686dcf48626bbcbe0e3fd59b6067"`；未冒用旧 npm integrity，未新增字段（保持 `resources.ts` 声明的 `{version: string; integrity: string}` 形状，因此无需改动 `resources.ts` 或任何消费代码）；`superpowers`、`jch` 记录未动。校验：JSON 可解析，`openspec` 键仍为 `version,integrity`，两者均为字符串。
+### 根文件
 
-## 完成标准与已接受边界
+- [ ] `README.md`、`README_OLD.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`MAINTAINERS.md`、`SECURITY.md`、`install.md`：上游展示与维护说明；许可证单独保留。
+- [ ] `openspec-parallel-merge-plan.md`：上游研发计划。
+- [ ] `AGENTS.md`：复制进来的上游仓库开发规则文件，不是 OMP 根规则。
+- [ ] `vitest.config.ts`、`vitest.setup.ts`、`eslint.config.js`：上游专用测试／lint 配置。
+- [ ] `.actrc`、`.coderabbit.yaml`：上游 CI 本地模拟和评审配置。
+- [ ] `flake.nix`、`flake.lock`：上游独立 Nix 环境配置，不参与当前 package.json 的 Node 构建入口。
 
-- 目标目录完整、原样对应固定上游文件树，无 OMP 私有增删改；文件比对通过即完成本轮还原。
-- 本轮只保证文件还原，不保证 OMP 能加载或运行新文件，不保证源码入口、Skill、AIReq、npm 或二进制可用。
-- 旧宿主包装代码和既有配置可能仍依赖已移除的资源，构建或运行可能失败；这些不在本轮修复和验收范围内，也不因此恢复旧魔改。
-- 交付只报告实际还原及文件校验结果，不能宣称已完成 OMP 功能升级或运行验证。
+## 3. PowerShell 执行步骤
+
+### 3.1 固定路径、备份并预览
+
+- [ ] 在 PowerShell 执行以下整段。若目录不符或保留项缺失，停止，不扩大清理范围。
+- [ ] 备份完成后检查打印的删除列表。备份放在仓库外，便于恢复，不写入 vendor 资源树。
+
+```powershell
+$repo = 'F:\code2026\oh-my-pi'
+$relative = 'packages\coding-agent\src\spec-driven\vendor\resources\openspec'
+$root = (Resolve-Path -LiteralPath (Join-Path $repo $relative) -ErrorAction Stop).Path
+$expected = [IO.Path]::GetFullPath((Join-Path $repo $relative)).TrimEnd('\')
+if ($root.TrimEnd('\') -ne $expected) { throw "目标路径不符：$root" }
+if ((Get-Item -LiteralPath $root).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    throw '目标是链接或 junction，停止清理'
+}
+
+$keepDirs = @('src', 'bin', 'schemas', 'skills')
+$keepFiles = @(
+    'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml',
+    'tsconfig.json', 'build.js', 'LICENSE', '.gitattributes', '.gitignore'
+)
+foreach ($name in ($keepDirs + $keepFiles)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $root $name))) {
+        throw "保留项缺失：$name"
+    }
+}
+
+$removeDirs = @(
+    'test', 'docs', 'docs-lab', 'website', 'assets', 'openspec',
+    '.agents', '.github', '.changeset', '.devcontainer', 'scripts'
+)
+$removeFiles = @(
+    'README.md', 'README_OLD.md', 'CHANGELOG.md', 'CONTRIBUTING.md',
+    'MAINTAINERS.md', 'SECURITY.md', 'install.md', 'openspec-parallel-merge-plan.md',
+    'AGENTS.md', 'vitest.config.ts', 'vitest.setup.ts', 'eslint.config.js',
+    '.actrc', '.coderabbit.yaml', 'flake.nix', 'flake.lock'
+)
+$deleteNames = $removeDirs + $removeFiles
+$knownNames = $keepDirs + $keepFiles + $deleteNames
+$unexpected = @(Get-ChildItem -LiteralPath $root -Force |
+    Where-Object { $_.Name -notin $knownNames })
+if ($unexpected.Count -gt 0) {
+    $unexpected | Select-Object Name, FullName
+    throw '发现清单外项目，先核对用途，不自动删除'
+}
+
+# 本次已知快照无符号链接。若执行时出现链接，停止并核对，避免递归越界。
+$links = @(Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction Stop |
+    Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint })
+if ($links.Count -gt 0) { throw '目录内存在链接，先核对链接范围再清理' }
+
+$backup = Join-Path ([IO.Path]::GetTempPath()) ('omp-openspec-prune-' + [Guid]::NewGuid())
+New-Item -ItemType Directory -Path $backup -ErrorAction Stop | Out-Null
+Copy-Item -LiteralPath $root -Destination (Join-Path $backup 'openspec') -Recurse -Force -ErrorAction Stop
+
+# 记录清理前全目录文件内容，清理后对保留文件逐项核对。
+$prefix = $root.TrimEnd('\') + '\'
+$before = @(Get-ChildItem -LiteralPath $root -File -Recurse -Force -ErrorAction Stop |
+    ForEach-Object {
+        [PSCustomObject]@{
+            Path = $_.FullName.Substring($prefix.Length)
+            Hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+        }
+    })
+$before | Export-Csv -LiteralPath (Join-Path $backup 'before.csv') -NoTypeInformation -Encoding UTF8
+$deleteNames | ForEach-Object {
+    $p = Join-Path $root $_
+    if (Test-Path -LiteralPath $p) { Get-Item -LiteralPath $p -Force }
+} | Select-Object Name, FullName
+Write-Host "备份位置：$backup"
+```
+
+### 3.2 执行清理
+
+- [ ] 确认上述预览只涉及 vendor 中的 OpenSpec 副本后，在同一个 PowerShell 会话执行：
+
+```powershell
+foreach ($name in $deleteNames) {
+    $target = Join-Path $root $name
+    if (Test-Path -LiteralPath $target) {
+        Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
+    }
+}
+```
+
+### 3.3 一次性文件校验
+
+- [ ] 在同一个 PowerShell 会话执行以下检查：删除项不存在，保留项齐全，保留文件内容未变化，没有新文件混入。
+
+```powershell
+foreach ($name in $deleteNames) {
+    if (Test-Path -LiteralPath (Join-Path $root $name)) { throw "删除项仍存在：$name" }
+}
+foreach ($name in ($keepDirs + $keepFiles)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $root $name))) { throw "保留项丢失：$name" }
+}
+$expectedFiles = @($before | Where-Object {
+    $top = ($_.Path -split '\\', 2)[0]
+    $top -in ($keepDirs + $keepFiles)
+})
+$actualFiles = @(Get-ChildItem -LiteralPath $root -File -Recurse -Force -ErrorAction Stop |
+    ForEach-Object {
+        [PSCustomObject]@{
+            Path = $_.FullName.Substring($prefix.Length)
+            Hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+        }
+    })
+$diff = @(Compare-Object -ReferenceObject $expectedFiles -DifferenceObject $actualFiles -Property Path, Hash)
+if ($diff.Count -gt 0) { $diff | Format-Table; throw '保留文件集合或内容发生非预期变化' }
+$extra = @(Get-ChildItem -LiteralPath $root -Force |
+    Where-Object { $_.Name -notin ($keepDirs + $keepFiles) })
+if ($extra.Count -gt 0) { throw '存在清单外项目' }
+Write-Host "PASS：清理完成，保留文件内容未变；备份：$backup"
+```
+
+## 4. 边界与交付
+
+- [ ] 不修改 `C:\Users\jiang\Documents\OpenSpec`；不清理 OMP 根目录的 `openspec/`、`test/` 或其他目录。
+- [ ] 不修改 OMP 自有 `packages/coding-agent/test/spec-driven/`；其中旧定制测试和对应宿主代码的处置不属于本次第三方文件裁剪。
+- [ ] 不裁剪 `src/` 的业务模块，不修改 Skill、schema、package.json 或锁文件，不恢复任何 OMP 魔改。
+- [ ] 不安装依赖、不运行构建或测试、不执行上游发布／资源维护脚本、不提交、不推送。
+- [ ] 将完成项勾选并记录实际备份路径和文件校验结果。已有完整还原记录属于前一阶段，不能作为本次清理已完成的证明。
+
+## 完成标准
+
+目标顶层仅保留第 1 节的 4 个目录和 8 个文件；内部业务文件集合及内容与清理前相同。文件校验通过后结束，不追加宿主适配。
+
+本计划中的 PowerShell 为按当前目录与源码编写的待执行步骤，编写时未运行。校验只证明本次删除没有改动保留代码，不证明 OMP 已能加载或运行 OpenSpec；当前副本没有 dist／运行依赖时，本次也不补建。
