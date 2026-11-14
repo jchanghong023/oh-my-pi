@@ -694,6 +694,86 @@ describe("compact action dock", () => {
 		expect(plain(h.rows())[1]).toBe(" 思考完成  用时 5.0 秒");
 	});
 
+	it("shows a new message's thinking when its content index repeats", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const first = thinkingMessage("first phase", 1);
+		const live = liveSession(first, 0);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit(update(first, "thinking_delta"));
+		expect(h.rendered()).toContain("正在思考");
+		setSystemTime(12_000);
+		await live.emit(update(first, "thinking_end"));
+		await live.emit({ type: "message_end", message: first });
+
+		const second = thinkingMessage("second phase", 2);
+		setSystemTime(20_000);
+		await live.emit({ type: "message_start", message: second });
+		await live.emit(update(second, "thinking_delta"));
+		expect(h.rendered()).toContain("正在思考  second phase");
+		expect(h.nativeRendered()).toBe(h.rendered());
+		setSystemTime(23_000);
+		await live.emit(update(second, "thinking_end"));
+		expect(plain(h.rows())).toEqual([" 思考完成  用时 2.0 秒", " 思考完成  用时 3.0 秒", ""]);
+		expect(h.nativeRendered()).toBe(h.rendered());
+	});
+
+	it("replaces old completed rows when new tools start and finish between paints", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		const run = async (id: string) => {
+			await live.emit({ type: "tool_execution_start", toolCallId: id, toolName: "read", args: { path: id } });
+			await live.emit({
+				type: "tool_execution_end",
+				toolCallId: id,
+				toolName: "read",
+				result: { content: [] },
+				isError: false,
+			});
+		};
+		await run("old-a.ts");
+		await run("old-b.ts");
+		expect(plain(h.rows())).toEqual([" 读取完成  old-a.ts", " 读取完成  old-b.ts", ""]);
+		await run("new-a.ts");
+		await run("new-b.ts");
+		expect(plain(h.rows())).toEqual([" 读取完成  new-a.ts", " 读取完成  new-b.ts", ""]);
+		expect(h.nativeRendered()).toBe(h.rendered());
+	});
+
+	it("settles thinking before coalesced reply updates and excludes reply time from its duration", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const message = thinkingMessage("reasoning", 1);
+		const live = liveSession(message, 0);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit(update(message, "thinking_delta"));
+		expect(h.rendered()).toContain("正在思考");
+
+		setSystemTime(12_000);
+		const end = update(message, "thinking_end");
+		live.session.agent.emitExternalEvent(end, { stateOnly: true });
+		await h.ctx.eventController.dispatchSessionEvent(end);
+		setSystemTime(20_000);
+		const reply: AssistantMessage = {
+			...message,
+			content: [...message.content, { type: "text", text: "reply" }],
+		};
+		const textStart: MessageUpdate = {
+			type: "message_update",
+			message: reply,
+			assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: reply },
+		};
+		live.session.agent.emitExternalEvent(textStart, { stateOnly: true });
+		await h.ctx.eventController.dispatchSessionEvent(textStart);
+		await h.ctx.eventController.dispatchSessionEvent({ type: "message_end", message: reply });
+		expect(plain(h.rows())).toEqual(["", " 思考完成  用时 2.0 秒", ""]);
+		expect(h.nativeRendered()).toBe(h.rendered());
+	});
+
 	it("retains static content across loop end and session switch without reviving animation", async () => {
 		const h = focusFixture();
 		const live = liveSession();

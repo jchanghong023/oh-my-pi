@@ -933,7 +933,12 @@ export class EventController {
 	 */
 	async dispatchSessionEvent(event: AgentSessionEvent): Promise<void> {
 		const generation = this.#dispatchGeneration;
-		if (event.type === "message_update") {
+		// Thinking boundaries carry phase timing, not just a cumulative snapshot.
+		if (
+			event.type === "message_update" &&
+			event.assistantMessageEvent.type !== "thinking_start" &&
+			event.assistantMessageEvent.type !== "thinking_end"
+		) {
 			this.#enqueueMessageUpdate(event);
 			return;
 		}

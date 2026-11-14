@@ -64,8 +64,8 @@ type Action = {
 };
 type SessionMemory = {
 	calls: Call[];
-	/** Thinking phases keyed by content index; one record per independent phase. */
-	thinking: Map<number, { startedAt: number; endedAt?: number; failed?: boolean; text: string }>;
+	/** Thinking phases keyed by message timestamp and content index. */
+	thinking: Map<string, { startedAt: number; endedAt?: number; failed?: boolean; text: string }>;
 	/** Arrival order of action ids; the earliest undisplayed runner fills a vacancy. */
 	order: string[];
 	/** Persistent two-slot layout (top, bottom); running actions keep their slot. */
@@ -322,20 +322,19 @@ export class CompactThinkingPreview implements Component {
 			memory.latestStart = Math.max(memory.latestStart ?? call.startedAt, call.startedAt);
 	}
 
-	#thinkingId(contentIndex: number): string {
-		return `thinking:${contentIndex}`;
+	#startThinking(messageTimestamp: number, contentIndex: number, now: number): string {
+		const memory = this.#memory!;
+		const id = `thinking:${messageTimestamp}:${contentIndex}`;
+		if (!memory.thinking.has(id)) {
+			memory.thinking.set(id, { startedAt: now, text: "" });
+			memory.order.push(id);
+		}
+		return id;
 	}
 
-	#startThinking(contentIndex: number, now: number): void {
+	#endThinking(id: string, now: number, failed: boolean): void {
 		const memory = this.#memory!;
-		if (memory.thinking.has(contentIndex)) return;
-		memory.thinking.set(contentIndex, { startedAt: now, text: "" });
-		memory.order.push(this.#thinkingId(contentIndex));
-	}
-
-	#endThinking(contentIndex: number, now: number, failed: boolean): void {
-		const memory = this.#memory!;
-		const phase = memory.thinking.get(contentIndex);
+		const phase = memory.thinking.get(id);
 		if (!phase || phase.endedAt !== undefined) return;
 		phase.endedAt = now;
 		phase.failed = failed;
@@ -381,17 +380,17 @@ export class CompactThinkingPreview implements Component {
 		} else if (event.type === "message_update" && event.message.role === "assistant") {
 			const delta = event.assistantMessageEvent;
 			if (delta.type === "thinking_start") {
-				this.#startThinking(delta.contentIndex, now);
+				this.#startThinking(event.message.timestamp, delta.contentIndex, now);
 			} else if (delta.type === "thinking_delta") {
-				this.#startThinking(delta.contentIndex, now);
-				const phase = memory.thinking.get(delta.contentIndex);
+				const id = this.#startThinking(event.message.timestamp, delta.contentIndex, now);
+				const phase = memory.thinking.get(id);
 				if (phase && phase.endedAt === undefined) {
 					const block = event.message.content[delta.contentIndex];
 					if (block?.type === "thinking") phase.text = block.thinking;
 				}
 			} else if (delta.type === "thinking_end") {
-				this.#startThinking(delta.contentIndex, now);
-				this.#endThinking(delta.contentIndex, now, false);
+				const id = this.#startThinking(event.message.timestamp, delta.contentIndex, now);
+				this.#endThinking(id, now, false);
 			} else if (delta.type === "error") {
 				for (const [index, phase] of memory.thinking) {
 					if (phase.endedAt === undefined) this.#endThinking(index, now, delta.reason === "error");
@@ -438,8 +437,8 @@ export class CompactThinkingPreview implements Component {
 		if (stream?.role === "assistant" && index !== undefined) {
 			const block = stream.content[index];
 			if (block?.type === "thinking") {
-				this.#startThinking(index, Date.now());
-				const phase = memory.thinking.get(index);
+				const id = this.#startThinking(stream.timestamp, index, Date.now());
+				const phase = memory.thinking.get(id);
 				if (phase && phase.endedAt === undefined) phase.text = block.thinking;
 			}
 		}
@@ -453,14 +452,14 @@ export class CompactThinkingPreview implements Component {
 		const hideThinking = this.ctx.effectiveHideThinkingBlock;
 		const proseOnly = this.ctx.proseOnlyThinking;
 		const actions: Action[] = [];
-		for (const [index, phase] of memory.thinking) {
+		for (const [id, phase] of memory.thinking) {
 			if (hideThinking) continue;
 			const running = phase.endedAt === undefined;
 			const detail = running
 				? thinkingDetail(phase.text, proseOnly)
 				: thinkingSeconds(Math.max(0, (phase.endedAt ?? 0) - phase.startedAt));
 			actions.push({
-				id: this.#thinkingId(index),
+				id,
 				category: "thinking",
 				running,
 				failed: phase.failed === true,
@@ -518,12 +517,12 @@ export class CompactThinkingPreview implements Component {
 		}
 		const runningCount = actions.filter(action => action.running).length;
 		if (runningCount === 0) {
-			// No runners: keep ended actions in place and fill remaining slots with the latest ended.
+			// Keep settled slots stable unless newer actions completed between paints.
 			const ended = memory.order.map(id => byId.get(id)!).filter(action => action && !action.running);
-			for (const index of [1, 0] as const) {
-				if (held(index)) continue;
-				const candidate = [...ended].reverse().find(action => !displayed.has(action.id));
-				if (candidate) place(index, candidate);
+			const latest = ended.slice(-2);
+			if (latest.some(action => !displayed.has(action.id))) {
+				place(0, latest.length === 2 ? latest[0] : undefined);
+				place(1, latest.at(-1));
 			}
 		} else if (runningCount === 1) {
 			// A lone serial runner sits on the bottom row; the latest ended action always takes the top.
