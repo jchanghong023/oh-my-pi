@@ -1174,6 +1174,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		return this.#meter().lastActivityEndAt;
 	}
 
+	/** Original start time of the currently-open active window, or null while idle. */
+	getTurnStartedAt(): number | null {
+		return this.#meter().activeStartedAt;
+	}
+
 	/**
 	 * Return (lazily creating) the meter for the currently-attached
 	 * session. Detects an in-place session-file swap under the same

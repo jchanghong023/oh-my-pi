@@ -111,8 +111,14 @@ export class CompactToolOutputPreview implements Component {
 			if (output.trim()) selected = { call, output };
 		}
 		const terminalAt = selected?.call.terminalAt;
+		const turnRunning = this.ctx.statusLine.getTurnElapsedMs() !== null;
+		// A new run does not inherit the previous run's finished preview: a source
+		// terminal before the open window started is no longer retained. Running
+		// sources (no terminalAt) keep their cross-run retention.
+		const supersededByNewRun =
+			terminalAt !== undefined && turnRunning && terminalAt < (this.ctx.statusLine.getTurnStartedAt() ?? 0);
 		const deadline =
-			terminalAt === undefined || this.ctx.statusLine.getTurnElapsedMs() !== null
+			terminalAt === undefined || turnRunning
 				? undefined
 				: Math.max(terminalAt, this.ctx.statusLine.getLastActivityEndAt() ?? terminalAt) + 3000;
 		if (this.#deadline !== deadline) {
@@ -132,6 +138,7 @@ export class CompactToolOutputPreview implements Component {
 				this.#timer.unref?.();
 			}
 		}
+		if (supersededByNewRun) return undefined;
 		return deadline !== undefined && deadline <= Date.now() ? undefined : selected;
 	}
 

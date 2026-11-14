@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Compact mode's tool output preview no longer repaints the previous turn's finished output when a new turn starts; it stays closed until the new turn produces output, while still-running background output keeps showing.
 - WebGUI subagent summaries open their child transcript again: native lowercase `task` tool calls pair with their subagent rows, and every child of a multi-subagent dispatch stays clickable.
 - AIReq proposal intake content centers within the available conversation column as the materials sidebar opens, closes, or resizes.
 - AIReq and WebGUI restore ZCode browser control, computer control, and keyboard shortcut settings for display only, with all editing actions disabled.

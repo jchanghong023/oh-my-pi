@@ -235,6 +235,7 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 			markActivityEnd: vi.fn(),
 			getTurnElapsedMs: vi.fn(() => null),
 			getLastActivityEndAt: vi.fn(() => null),
+			getTurnStartedAt: vi.fn(() => null),
 			setSession: vi.fn(),
 		},
 		session,

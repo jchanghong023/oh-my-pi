@@ -1337,4 +1337,44 @@ describe("compact latest live Output consumers", () => {
 			expect(Bun.stringWidth(rows[0]!)).toBeLessThanOrEqual(60);
 		}
 	});
+
+	it("does not revive a finished preview when the next turn starts", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const live = liveSession();
+		const done = outputCall("done", 1, "previous turn output", { terminalAt: 10_000 });
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([done]);
+		h.register("TurnBoundary", live);
+		await h.focus.focusAgent("TurnBoundary");
+		await live.emit({ type: "agent_start" });
+		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("previous turn output");
+		await live.emit({ type: "agent_end", messages: [] });
+		// Idle: the three-second retention still applies.
+		vi.advanceTimersByTime(1000);
+		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("previous turn output");
+		// A new run opens before any new Output: the finished preview must not repaint.
+		setSystemTime(12_000);
+		await live.emit({ type: "agent_start" });
+		expect(h.outputRows()).toEqual([[], []]);
+		// The new turn's own terminal Output opens the preview again.
+		const fresh = outputCall("fresh", 2, "new turn output", { terminalAt: 12_500 });
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([fresh]);
+		setSystemTime(12_500);
+		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("new turn output");
+	});
+
+	it("keeps a still-running background source across the turn boundary", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const live = liveSession();
+		const running = outputCall("bg", 1, "background progress");
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([running]);
+		h.register("RunningBoundary", live);
+		await h.focus.focusAgent("RunningBoundary");
+		await live.emit({ type: "agent_start" });
+		await live.emit({ type: "agent_end", messages: [] });
+		setSystemTime(20_000);
+		await live.emit({ type: "agent_start" });
+		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("background progress");
+	});
 });
