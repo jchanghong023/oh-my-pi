@@ -20,13 +20,6 @@ Failure — e.g., `old_string` absent or multiple matches without `replace_all: 
 <bash-alternatives>
 Replace content-addressed — identify change by text.
 
-Pattern-addressed bulk changes: bash more efficient:
-
-|Operation|Command|
-|---|---|
-|Regex replace|`sed -E -i 's/pattern/replacement/g' file`|
-|Same replace in several files|`sed -E -i 's/pattern/replacement/g' a.ts b.ts`|
-
 Use Replace when content identifies location; `ast_edit` for structure-aware codemods.
 For in-place edits prefer Replace or `write` — diff preview and fuzzy matching.
 </bash-alternatives>
