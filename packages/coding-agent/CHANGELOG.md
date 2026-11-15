@@ -4,6 +4,7 @@
 
 ### Added
 
+- Design simpler module interfaces with the discoverable `jch-codebase-design` skill or `/skill:jch-codebase-design`, retaining upstream descriptions and design references.
 - Use `/skill:jch-grill-todo` to confirm agreement through the original Grill-me interview, then ask whether to generate a self-contained `.todo.md` Markdown task file without executing the tasks.
 - Run Markdown and Superpowers Step plans with `/todoloop`, with inferred heading groups, live progress, read-only checks, and file-based resume.
 

@@ -243,6 +243,16 @@ OMP MUST 内置仅显式调用的 `/skill:jch-grill-todo`，访谈正文保留 `
 - **AND** 确认文件写入并按上述 Markdown 格式检查结构，交付实际路径及实际检查结果，不将生成文件视为任务已实施或验收通过
 - **AND** 不自动实施任务或创建执行会话；本技能为模型提示词约束，不新增运行时权限机制
 
+### Requirement: Codebase Design 内置技能
+
+OMP MUST 内置 `/skill:jch-codebase-design`，通过既有 JCH 资源打包、原生发现、补全及 `skill://` 授权链路提供模块与接口设计原则。来源为 `mattpocock/skills` 的 `skills/engineering/codebase-design/`，仅适配技能名称，正文、描述及 Agent 元数据保持上游内容，保留完整配套材料与许可；不添加只能手动调用的元数据，不新增执行器、命令别名或权限机制。
+
+#### Scenario: 自动发现、原生调用与相对材料
+
+- **WHEN** 普通会话及其子代理发现技能、按需读取正文或配套材料，或用户显式调用 `/skill:jch-codebase-design`
+- **THEN** 通过原生机制提供名称和上游描述，模型可自动发现并按需读取，无须用户先显式调用；加载包内正文并保留 `DEEPENING.md`、`DESIGN-IT-TWICE.md` 及其相对引用、子代理全新上下文要求，源码与发行资源使用同一打包链路
+- **AND** 同名用户／项目技能仍遵循既有覆盖规则，不因可读取而自动获准重构、测试或其他变更；其他 JCH 技能保持原有调用规则
+
 ### Requirement: `/clear` 在非 TUI 宿主的上下文重置
 
 OMP MUST 在非 TUI 宿主原地重置上下文并保留会话身份，重置竞态时明确报告且不清空数据。

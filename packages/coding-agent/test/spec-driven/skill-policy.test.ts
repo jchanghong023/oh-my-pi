@@ -74,6 +74,7 @@ async function fixture(): Promise<Skill> {
 describe("pinned skill discovery and access", () => {
 	it("catalogs Superpowers without exposing them to ordinary model discovery", async () => {
 		const ordinaryNames = [
+			"jch-codebase-design",
 			"openspec-apply-change",
 			"openspec-archive-change",
 			"openspec-bulk-archive-change",
@@ -165,6 +166,16 @@ describe("pinned skill discovery and access", () => {
 				const resolved = await handler.resolve(url, context);
 				expect(resolved.sourcePath).toBe(skill.filePath);
 				expect(await handler.locate(url, context)).toBe(skill.filePath);
+				if (skill.name === "jch-codebase-design") {
+					for (const resource of ["agents/openai.yaml", "DEEPENING.md", "DESIGN-IT-TWICE.md"]) {
+						const resourceUrl = parseInternalUrl(`skill://${skill.name}/${resource}`);
+						const resourcePath = path.join(skill.baseDir, resource);
+						expect(await handler.locate(resourceUrl, context)).toBe(resourcePath);
+						expect((await handler.resolve(resourceUrl, context)).content).toBe(
+							await fs.readFile(resourcePath, "utf8"),
+						);
+					}
+				}
 			} else {
 				expect(rendered).not.toContain(skill.name);
 				await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
@@ -292,23 +303,30 @@ describe("pinned skill discovery and access", () => {
 	});
 
 	it.each(["jch-grill-me", "jch-grill-todo"])(
-		"opens hidden %s and its metadata only after explicit current-branch invocation",
+		"opens hidden %s and its resources only after explicit current-branch invocation",
 		async name => {
 			const skill = await loadSpecDrivenSkill("jch", name);
 			setActiveSkills([skill]);
 			expect(await handler.complete()).toEqual([]);
 			const url = parseInternalUrl(`skill://${name}`);
-			const metadataUrl = parseInternalUrl(`skill://${name}/agents/openai.yaml`);
+			const resources = ["agents/openai.yaml"];
 			const context = { skills: [skill], getSessionBranch: () => [] };
 			await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
-			await expect(handler.locate(metadataUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+			for (const resource of resources) {
+				await expect(handler.locate(parseInternalUrl(`skill://${name}/${resource}`), context)).rejects.toBeInstanceOf(
+					SkillAccessDeniedError,
+				);
+			}
 			const invoked = await buildSkillPromptMessage(skill, { args: "" }, "user");
 			const authorized = { skills: [skill], getSessionBranch: () => [provenance(skill, invoked.details)] };
 			expect((await handler.resolve(url, authorized)).sourcePath).toBe(skill.filePath);
-			const metadataPath = path.join(skill.baseDir, "agents", "openai.yaml");
-			expect(await handler.locate(metadataUrl, authorized)).toBe(metadataPath);
-			expect((await handler.resolve(metadataUrl, authorized)).content).toBe(await fs.readFile(metadataPath, "utf8"));
-			await expect(handler.resolve(metadataUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+			for (const resource of resources) {
+				const resourceUrl = parseInternalUrl(`skill://${name}/${resource}`);
+				const resourcePath = path.join(skill.baseDir, resource);
+				expect(await handler.locate(resourceUrl, authorized)).toBe(resourcePath);
+				expect((await handler.resolve(resourceUrl, authorized)).content).toBe(await fs.readFile(resourcePath, "utf8"));
+				await expect(handler.resolve(resourceUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+			}
 		},
 	);
 
