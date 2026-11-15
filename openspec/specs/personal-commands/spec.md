@@ -911,6 +911,16 @@ WebGUI 只保留手机低带宽远程聊天与查看子代理进度所需的能�
 - **AND** 删除前端页面、导航、路由、RPC 方法与后端实现，包括 File／Git／Attachment／MediaPreview／FileWatcher／PromptAttachmentTransfer／Credential／Broadcast／ProviderSettings／ClientConfig／Bots／task-groups／插件市场与 seance 浏览器桥等通道；不以空实现、隐藏入口或统一不可用提示代替
 - **AND** 保留聊天、项目／历史、子代理、补充问答／审批、会话临时选模与思考等级、主题／语言设置及退出结清所需的真实原生能力，不删除共享 OMP／TUI／AIReq 能力
 
+### Requirement: `/todoloop` 支持无编号 Markdown 任务
+
+OMP MUST 支持无编号的 `[ ]`、`[x]`、`[X]` checkbox，与已有数字／点分数字编号及 Superpowers Step 任务混用，保持标题分组及文件顺序。无编号任务 MUST 有非空正文，按包含已完成项的全文件 checkbox 顺序生成独立 `auto:N` 内部身份并显示顺序号，不改写原文件或要求用户补编号；数字编号仍全文件唯一，Step 编号仍组内唯一，无效 Step 格式仍报错。
+
+#### Scenario: 组内任务不带编号
+
+- **WHEN** 组内包含 `- [ ] 待办任务`、`- [x] 已完成任务`，并与数字或 Step 任务混用
+- **THEN** 预检及执行均接受无编号任务，自动身份不与数字或 Step 身份冲突，勾选及合法追加说明不改变身份
+- **AND** 执行期间保留任务数量、身份、正文、顺序与分组校验，增删、重排或修改任务正文仍报错
+
 ### Requirement: `/todoloop` 一次公共背景准备的启动边界
 
 OMP MUST 在有效默认执行确认存在未完成组后、首个组执行代理启动前，由 TodoLoop 程序调用已有 scout 做公共背景调研。同一个 todo 文件、同一次任务，程序全程最多直接发起一次该调研，不因换组、部分完成、重试、内部恢复或调研失败再次派发。该上限不作用于执行 task 或其派生工作，不改变它们调用 scout 的原生行为。调研不计入组执行次数，命令参数及原生 TUI 宿主边界保持不变。

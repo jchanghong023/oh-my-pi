@@ -1,6 +1,6 @@
 export interface TodoLoopTask {
 	id: string;
-	/** Human-readable identity for canonical Superpowers steps. */
+	/** Human-readable identity for Superpowers steps and unnumbered tasks. */
 	label?: string;
 	text: string;
 	done: boolean;
@@ -159,11 +159,19 @@ function parseDocument(content: string): ParsedDocument {
 				};
 			} else {
 				const identity = body.match(/^(\d+(?:\.\d+)*)(?:[ \t]+(.*)|$)/);
-				if (!identity) throw new Error(`TodoLoop: missing or invalid task number at line ${index + 1}`);
-				const id = identity[1];
+				if (!identity && /^\*\*Step\b/.test(body)) {
+					throw new Error(`TodoLoop: invalid Step task at line ${index + 1}`);
+				}
+				const id = identity?.[1] ?? `auto:${located.length + 1}`;
 				if (ids.has(id)) throw new Error(`TodoLoop: duplicate task number ${id} at line ${index + 1}`);
 				ids.add(id);
-				task = { id, text: identity[2] ?? "", done: checkbox[1] !== " ", line: index + 1 };
+				task = {
+					id,
+					label: identity ? undefined : String(located.length + 1),
+					text: identity ? (identity[2] ?? "") : body,
+					done: checkbox[1] !== " ",
+					line: index + 1,
+				};
 			}
 			current = { task, bodyEnd: index + 1, section: sections.length - 1 };
 			section.tasks.push(task);
