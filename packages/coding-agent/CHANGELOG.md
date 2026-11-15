@@ -9,6 +9,7 @@
 
 ### Changed
 
+- Bundled `jch-grill-me` and `jch-grill-todo` now instruct research subagents to start with a fresh context window.
 - TodoLoop now accepts unnumbered Markdown checkboxes without rewriting the task file.
 - TodoLoop now researches shared background once per run and reuses it across groups and continuations without restricting native task capabilities.
 - Bundled Superpowers 7.0.2 asks fewer unnecessary brainstorming questions and fixes helper repository selection, task extraction and Windows paths while retaining manual-only skill invocation.
