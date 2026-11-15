@@ -8,6 +8,8 @@
 
 ### Changed
 
+- Bundled Superpowers 7.0.2 asks fewer unnecessary brainstorming questions and fixes helper repository selection, task extraction and Windows paths while retaining manual-only skill invocation.
+- Bundled Superpowers now omits other hosts' plugins, bootstrap hooks and branding assets while retaining all skills and their runtime resources.
 - OpenSpec source preparation (`bun run gen:spec-driven-resources`), npm packaging and binary builds now share a runtime archive built from vendored source and locked production dependencies using Bun.
 - Legacy OpenSpec resource archives are rejected with a preparation command instead of being reused solely because the file exists.
 - Source OpenSpec execution now rejects intermediate archives whose build inputs have changed and points to the resource preparation command.

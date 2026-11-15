@@ -3,7 +3,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { isEnoent, parseFrontmatter, TempDir } from "@oh-my-pi/pi-utils";
 import {
 	ensureSpecDrivenResources,
 	loadSpecDrivenSkill,
@@ -13,6 +13,7 @@ import {
 	type SpecDrivenProcessResult,
 } from "../../src/spec-driven/resources";
 import inventory from "../../src/spec-driven/vendor/inventory.json";
+import { initializeRepository } from "../aireq-workbench/fixture";
 
 const upstreamOpenSpecSkills = [
 	"openspec-apply-change",
@@ -85,7 +86,7 @@ describe("pinned upstream resources", () => {
 	it("loads all exact trusted skill identities with their complete relative trees", async () => {
 		const resources = await ensureSpecDrivenResources();
 		expect(resources.manifest.openspec.version).toBe(inventory.openspec.version);
-		expect(resources.manifest.superpowers.revision).toBe("2ce8aa15d05bd57213e6f746f953aafb7ded7a8b");
+		expect(resources.manifest.superpowers.revision).toBe("22f0b463e7a5e579904dd6211a520321035526f7");
 		expect(
 			resources.manifest.skills
 				.filter(entry => String(entry.source) === "openspec")
@@ -574,6 +575,75 @@ describe("pinned upstream resources", () => {
 		const abort = new AbortController();
 		abort.abort();
 		await expect(runOpenSpec(["--version"], temporary, abort.signal)).rejects.toThrow();
+	});
+});
+
+describe("bundled Superpowers helper regressions", () => {
+	it("rejects a non-repository cwd and honors -C without choosing the plan's directory", async () => {
+		await using root = await TempDir.create("@superpowers-repository-");
+		const project = root.join("working tree Ω");
+		const outside = root.join("outside");
+		await initializeRepository(project);
+		await fs.mkdir(outside);
+		const plan = path.join(outside, "plan.md");
+		await Bun.write(plan, "# Plan\n");
+		const script = "skills/subagent-driven-development/scripts/sdd-workspace";
+		const rejected = await runSuperpowersScript(script, [plan], outside);
+		expect(rejected.exitCode).toBe(2);
+		expect(rejected.stderr).toContain("SDD scripts must run from inside the git working tree");
+		await expect(fs.stat(path.join(outside, ".superpowers"))).rejects.toMatchObject({ code: "ENOENT" });
+
+		const selected = await runSuperpowersScript(script, ["-C", project, plan], outside);
+		expect(selected.exitCode).toBe(0);
+		const workspace = selected.stdout.trim();
+		// Native callers must be able to open the printed path, including on Windows.
+		expect(path.isAbsolute(workspace)).toBe(true);
+		expect(await fs.realpath(workspace)).toBe(await fs.realpath(path.join(project, ".superpowers/sdd/plan")));
+		expect(await Bun.file(path.join(workspace, "plan-path")).text()).toContain("plan.md");
+
+		const uncommitted = await runSuperpowersScript("skills/executing-plans/scripts/task-start", [plan, "1"], project);
+		expect(uncommitted.exitCode).toBe(2);
+		expect(uncommitted.stderr).toContain("with at least one commit");
+	});
+
+	it("extracts letter-first, suffixed and dotted task IDs without swallowing a neighboring task", async () => {
+		await using root = await TempDir.create("@superpowers-task-ids-");
+		await initializeRepository(root.path());
+		await Bun.write(
+			root.join("plan.md"),
+			"### Task A1: Setup\nSet up the project.\n### Task 6: Main\nImplement the main path.\n### Task 6b: Edge\nHandle the edge case.\n### Task 2.1: Nested ID\nCheck the nested identifier.\n",
+		);
+		for (const [id, expected] of [
+			["A1", "### Task A1: Setup\nSet up the project.\n"],
+			["6", "### Task 6: Main\nImplement the main path.\n"],
+			["6b", "### Task 6b: Edge\nHandle the edge case.\n"],
+			["2.1", "### Task 2.1: Nested ID\nCheck the nested identifier.\n"],
+		]) {
+			const result = await runSuperpowersScript(
+				"skills/subagent-driven-development/scripts/task-brief",
+				["plan.md", id!],
+				root.path(),
+			);
+			expect(result.exitCode).toBe(0);
+			expect(await Bun.file(root.join(`.superpowers/sdd/plan/task-${id}-brief.md`)).text()).toBe(expected!);
+		}
+	});
+
+	it("rejects an unclosed fence rather than giving an implementer multiple tasks", async () => {
+		await using root = await TempDir.create("@superpowers-task-fence-");
+		await initializeRepository(root.path());
+		await Bun.write(
+			root.join("plan.md"),
+			"### Task 1: First\n```typescript\nconst value = 1;\n### Task 2: Second\nDo not include this task.\n",
+		);
+		const result = await runSuperpowersScript(
+			"skills/subagent-driven-development/scripts/task-brief",
+			["plan.md", "1"],
+			root.path(),
+		);
+		expect(result.exitCode).toBe(4);
+		expect(result.stderr).toContain("never closes");
+		expect(await Bun.file(root.join(".superpowers/sdd/plan/task-1-brief.md")).exists()).toBe(false);
 	});
 });
 

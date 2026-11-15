@@ -395,3 +395,5 @@ This repository has a generated `openwiki/` knowledge base. Use it as optional c
 - AIReq 技术方案、SR 依赖与工期预估均由方案 Agent 在对话中生成及更新，不提供生成／重新生成按钮；人只讨论补充、核对及逐文件确认。材料更新使旧确认失效，保留确认后建分支、推送、自动建 MR 的流程。本轮仅需求文档和原型，不实现真实模型／Git 接入，不运行测试。
 
 - 原生 TUI `/todoloop <Markdown 路径> [--check]` 支持首个 checkbox 前置标题层级推断及 Superpowers Step，采用组级编排和组内连续执行；实现位于 `packages/coding-agent/src/todoloop/`，命令入口位于 `packages/coding-agent/src/slash-commands/builtin-modes.ts`；唯一需求见 [TodoLoop](openspec/changes/add-todoloop-command/specs/personal-commands/spec.md)，使用说明见[内网快速指南](docs-zh-CN/quick-start-intranet.md)。
+
+- 内置 Superpowers 仅保留完整 `skills/`、`LICENSE` 与 ESM／版本读取所需的根 `package.json`；同步时 NEVER 恢复其他宿主插件、扩展、hooks、安装入口或品牌图片。技能正文及脚本保留上游内容，全部 `SKILL.md` 持续保留 `disable-model-invocation: true`；根包元数据不保留指向已删除资源的 `main`／`pi` 注册，详见[原生资源边界](openspec/specs/spec-driven-orchestration/spec.md)。
