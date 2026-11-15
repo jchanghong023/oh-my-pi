@@ -591,6 +591,16 @@ omp collab serve --host 0.0.0.0 --port 7466
 
 按 `Esc` 停止后，等待本轮及其派生工作实际结清才显示已停止；结清失败会明确报错。进度及 scout／各次执行的原生记录保留在当前 TUI。完整规则见 [TodoLoop 基础需求](../openspec/changes/add-todoloop-command/specs/personal-commands/spec.md)及[公共背景主规格](../openspec/specs/personal-commands/spec.md)。
 
+**先澄清方案，再生成 Markdown 任务清单：**
+
+```text
+/skill:jch-grill-todo 需要讨论并形成执行清单的任务
+```
+
+该内置技能保留 `jch-grill-me` 的访谈正文，仅调整结束语以衔接 Todo 生成，并追加 Markdown 生成规则，不改原技能。用户确认达成一致后，另行询问是否在当前工作目录生成 `.todo.md`；已有文件需单独同意覆盖，生成许可前只读。
+
+清单包含目标、边界、决策、相关材料、依赖有序的任务组及最小充分验收，不依赖原访谈记录。采用 `##` 分组和 `- [ ]` 任务，细节为缩进延续正文，不嵌套 checkbox。技能只生成文件、检查 Markdown 结构并报告实际路径和检查结果，不依赖执行器知识、不提供运行器启动指令或自动实施任务；确认与生成由模型遵循技能正文完成，不是程序级拦截。
+
 **按方案实现、测试并独立复审（先确认项目里有 `a.md`）：**
 
 ```text

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Grill Todo"
+  short_description: "Interview to agreement, then optionally generate a self-contained Markdown task file"
+  default_prompt: "Use $jch-grill-todo to interview me to shared understanding, then separately ask whether to generate a complete .todo.md Markdown task file. Do not execute the tasks."
+
+policy:
+  allow_implicit_invocation: false

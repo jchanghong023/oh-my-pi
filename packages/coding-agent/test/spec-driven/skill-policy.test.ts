@@ -291,23 +291,26 @@ describe("pinned skill discovery and access", () => {
 		expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
 	});
 
-	it("opens hidden Grill-me and its metadata only after explicit current-branch invocation", async () => {
-		const skill = await loadSpecDrivenSkill("jch", "jch-grill-me");
-		setActiveSkills([skill]);
-		expect(await handler.complete()).toEqual([]);
-		const url = parseInternalUrl("skill://jch-grill-me");
-		const metadataUrl = parseInternalUrl("skill://jch-grill-me/agents/openai.yaml");
-		const context = { skills: [skill], getSessionBranch: () => [] };
-		await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
-		await expect(handler.locate(metadataUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
-		const invoked = await buildSkillPromptMessage(skill, { args: "" }, "user");
-		const authorized = { skills: [skill], getSessionBranch: () => [provenance(skill, invoked.details)] };
-		expect((await handler.resolve(url, authorized)).sourcePath).toBe(skill.filePath);
-		const metadataPath = path.join(skill.baseDir, "agents", "openai.yaml");
-		expect(await handler.locate(metadataUrl, authorized)).toBe(metadataPath);
-		expect((await handler.resolve(metadataUrl, authorized)).content).toBe(await fs.readFile(metadataPath, "utf8"));
-		await expect(handler.resolve(metadataUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
-	});
+	it.each(["jch-grill-me", "jch-grill-todo"])(
+		"opens hidden %s and its metadata only after explicit current-branch invocation",
+		async name => {
+			const skill = await loadSpecDrivenSkill("jch", name);
+			setActiveSkills([skill]);
+			expect(await handler.complete()).toEqual([]);
+			const url = parseInternalUrl(`skill://${name}`);
+			const metadataUrl = parseInternalUrl(`skill://${name}/agents/openai.yaml`);
+			const context = { skills: [skill], getSessionBranch: () => [] };
+			await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+			await expect(handler.locate(metadataUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+			const invoked = await buildSkillPromptMessage(skill, { args: "" }, "user");
+			const authorized = { skills: [skill], getSessionBranch: () => [provenance(skill, invoked.details)] };
+			expect((await handler.resolve(url, authorized)).sourcePath).toBe(skill.filePath);
+			const metadataPath = path.join(skill.baseDir, "agents", "openai.yaml");
+			expect(await handler.locate(metadataUrl, authorized)).toBe(metadataPath);
+			expect((await handler.resolve(metadataUrl, authorized)).content).toBe(await fs.readFile(metadataPath, "utf8"));
+			await expect(handler.resolve(metadataUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		},
+	);
 
 	it("resolves Dev-granted skill resources while denying another ungranted skill", async () => {
 		const skill = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
