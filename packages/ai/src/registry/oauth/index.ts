@@ -3,13 +3,6 @@
 // ============================================================================
 
 import { authPolicyFor, providerDisabledReason, providerLoginWarning } from "@oh-my-pi/pi-catalog/compat/auth";
-import {
-	hasProviderModelRules,
-	isRetiredProvider,
-	isSupportedChatProvider,
-} from "@oh-my-pi/pi-catalog/compat/behavior";
-import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
-import { getBundledModels, isGeneratedProvider } from "@oh-my-pi/pi-catalog/models";
 import * as AIError from "../../error";
 import { jwtExpiryMs, NEVER_EXPIRES } from "../engine/common";
 import { getProviderDefinition, PROVIDER_REGISTRY } from "../registry";
@@ -226,20 +219,6 @@ export async function getOAuthApiKey(
 	return { newCredentials: creds, apiKey };
 }
 
-/** Whether a login target is admitted for chat, another model kind, or a service. */
-export function isOAuthLoginSupported(providerId: string): boolean {
-	const definition = getProviderDefinition(providerId) ?? getOAuthProvider(providerId);
-	const target = definition?.storeCredentialsAs ?? providerId;
-	if (isRetiredProvider(target)) return false;
-	if (isSupportedChatProvider(target)) return true;
-	const entry = providerEntry(target);
-	if (entry?.kindApis && Object.keys(entry.kindApis).length > 0) return true;
-	if (isGeneratedProvider(target) && getBundledModels(target).some(model => model.kind && model.kind !== "chat")) {
-		return true;
-	}
-	return entry === undefined && !hasProviderModelRules(target);
-}
-
 /**
  * Get all OAuth providers, including ones no longer offered for login. This
  * list is used for managing credentials that were stored by earlier versions.
@@ -260,9 +239,7 @@ export function getAllOAuthProviders(): OAuthProviderInfo[] {
  * Get the OAuth providers currently offered for login.
  */
 export function getOAuthProviders(): OAuthProviderInfo[] {
-	return getAllOAuthProviders().filter(
-		provider => providerPauseReason(provider.id) === undefined && isOAuthLoginSupported(provider.id),
-	);
+	return getAllOAuthProviders().filter(provider => providerPauseReason(provider.id) === undefined);
 }
 
 /** Provider id that stores `providerId`'s credentials: login aliases (`openai-codex-device`) map to their target (`openai-codex`). */

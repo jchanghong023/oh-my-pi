@@ -13,6 +13,7 @@ import { type BranchVariantPath, RewindSelectorComponent } from "@oh-my-pi/pi-tu
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
+import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
@@ -109,16 +110,22 @@ function makeSelector(
 }
 
 describe("RewindSelectorComponent", () => {
+	let displayPreferences: typeof chatTranscriptDisplayPreferences;
 	beforeAll(async () => {
 		await initTheme();
 	});
 	beforeEach(async () => {
+		displayPreferences = { ...chatTranscriptDisplayPreferences };
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
+		// Exercise tool exchange inspection and filtering with tool cards visible.
+		chatTranscriptDisplayPreferences.hideToolActivity = false;
+		chatTranscriptDisplayPreferences.compactToolActivity = false;
 		setKeybindings(KeybindingsManager.inMemory());
 	});
 	afterEach(() => {
 		setKeybindings(KeybindingsManager.inMemory());
 		resetSettingsForTest();
+		Object.assign(chatTranscriptDisplayPreferences, displayPreferences);
 	});
 
 	it("steps past the startup tail into earlier history without splitting the cutoff tool exchange", () => {

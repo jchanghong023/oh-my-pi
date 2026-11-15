@@ -1221,7 +1221,7 @@ class RpcClientTests(unittest.TestCase):
     def test_set_todos_rejects_unknown_status(self) -> None:
         with self.make_client() as client:
             with self.assertRaises(RpcError):
-                client.set_todos([{"content": "Ship", "status": "blocked"}])
+                client.set_todos([{"content": "Ship", "status": "unknown"}])
 
     def test_predict_word_outlasts_request_timeout(self) -> None:
         with self.make_client(request_timeout=0.3) as client:

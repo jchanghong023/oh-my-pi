@@ -1,26 +1,26 @@
 /**
  * Shared test isolation for stats Bun tests.
  *
- * The default profile's stats.db is redirected to `$XDG_DATA_HOME/omp/stats.db`
- * by {@link DirResolver} whenever `agentDirOverride === defaultAgent`. Tests
- * that only set `PI_CONFIG_DIR` + `setAgentDir(<home>/<config>/agent)` resolve
- * to that default and silently share `stats.db` across files when an XDG
- * variable is set (e.g. CI's `XDG_DATA_HOME`), producing the cross-test row
- * pollution that fails `db-range`, `behavior-backfill`, `priority-premium-*`,
- * and `agent-type` runs.
+ * Each test owns an absolute `OMP_CONFIG_ROOT` and agent directory, so neither
+ * inherited roots nor XDG defaults can redirect stats.db outside its TempDir.
+ * Absolute roots also work when the temporary directory and home are on
+ * different Windows drives; `PI_CONFIG_DIR` retains its home-relative meaning.
  *
- * `installStatsTestIsolation` snapshots and clears `XDG_*_HOME` plus
- * `PI_CONFIG_DIR` for the test, points the agent directory at a fresh
- * `TempDir`, closes the stats DB handle, and tears everything back down in the
- * matching `afterEach`.
+ * Snapshot directory state when each test starts, close its stats DB before
+ * removing the temporary root, and restore the prior environment and agent.
  */
 import { afterEach, beforeEach } from "bun:test";
-import * as os from "node:os";
-import * as path from "node:path";
 import { closeDb } from "@oh-my-pi/omp-stats/db";
-import { getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import {
+	__resetProfileSnapshotForTests,
+	getActiveProfile,
+	getAgentDir,
+	setAgentDir,
+	setProfile,
+	TempDir,
+} from "@oh-my-pi/pi-utils";
 
-const XDG_KEYS = ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
+const ENV_KEYS = ["OMP_CONFIG_ROOT", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
 
 export interface StatsTestIsolation {
 	/** Active per-test `TempDir`. Null between tests. */
@@ -28,36 +28,38 @@ export interface StatsTestIsolation {
 }
 
 export function installStatsTestIsolation(prefix: string): StatsTestIsolation {
-	const originalAgentDir = getAgentDir();
-	let originalConfigDir: string | undefined;
-	const originalXdg: Record<string, string | undefined> = {};
+	let originalAgentDir: string;
+	let originalProfile: string | undefined;
+	const originalEnv: Record<string, string | undefined> = {};
 	let tempDir: TempDir | null = null;
 
 	beforeEach(() => {
-		tempDir = TempDir.createSync(prefix);
-		originalConfigDir = process.env.PI_CONFIG_DIR;
-		for (const key of XDG_KEYS) {
-			originalXdg[key] = process.env[key];
-			delete process.env[key];
+		originalAgentDir = getAgentDir();
+		originalProfile = getActiveProfile();
+		for (const key of ENV_KEYS) {
+			originalEnv[key] = process.env[key];
 		}
-		const configDir = path.relative(os.homedir(), tempDir.join("config"));
-		process.env.PI_CONFIG_DIR = configDir;
-		setAgentDir(path.join(os.homedir(), configDir, "agent"));
+		tempDir = TempDir.createSync(prefix);
+		process.env.OMP_CONFIG_ROOT = tempDir.join("config");
+		setAgentDir(tempDir.join("config", "agent"));
 	});
 
 	afterEach(() => {
 		closeDb();
-		if (originalConfigDir === undefined) {
-			delete process.env.PI_CONFIG_DIR;
-		} else {
-			process.env.PI_CONFIG_DIR = originalConfigDir;
-		}
-		for (const key of XDG_KEYS) {
-			const prior = originalXdg[key];
+		for (const key of ENV_KEYS) {
+			const prior = originalEnv[key];
 			if (prior === undefined) delete process.env[key];
 			else process.env[key] = prior;
 		}
 		setAgentDir(originalAgentDir);
+		if (originalProfile !== undefined) setProfile(originalProfile);
+		// The setters also write env vars; restore their exact original presence.
+		for (const key of ENV_KEYS) {
+			const prior = originalEnv[key];
+			if (prior === undefined) delete process.env[key];
+			else process.env[key] = prior;
+		}
+		__resetProfileSnapshotForTests();
 		tempDir?.removeSync();
 		tempDir = null;
 	});

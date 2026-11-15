@@ -8,6 +8,7 @@ import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-messa
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -85,6 +86,7 @@ describe("issue #3656 /shake mid-stream preserves the in-flight assistant turn",
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
+		cfgDisplayMode.set(session.settings, "detailed");
 		mode = new InteractiveMode(session, "test");
 		mode.ui.requestRender = vi.fn();
 	});
@@ -219,10 +221,12 @@ describe("issue #3656 /shake mid-stream preserves the in-flight assistant turn",
 		const updateArgs = vi.spyOn(pendingTool, "updateArgs");
 
 		mode.rebuildChatFromMessages();
+		const message = assistantWithBash("echo after");
 		await mode.eventController.handleEvent({
 			type: "message_update",
-			message: assistantWithBash("echo after"),
-		} as AgentSessionEvent);
+			message,
+			assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "echo after", partial: message },
+		});
 
 		expect(mode.pendingTools.get("call-1")).toBe(pendingTool);
 		expect(updateArgs).toHaveBeenCalledWith({ command: "echo after" }, "call-1");
@@ -249,7 +253,11 @@ describe("issue #3656 /shake mid-stream preserves the in-flight assistant turn",
 		Object.defineProperty(session, "isStreaming", { configurable: true, get: () => true });
 		Object.defineProperty(session.agent.state, "streamMessage", { configurable: true, value: reply });
 		await mode.eventController.handleEvent({ type: "message_start", message: reply } as AgentSessionEvent);
-		await mode.eventController.handleEvent({ type: "message_update", message: reply } as AgentSessionEvent);
+		await mode.eventController.handleEvent({
+			type: "message_update",
+			message: reply,
+			assistantMessageEvent: { type: "text_delta", contentIndex: 2, delta: "After the call.", partial: reply },
+		});
 		const drawsAfter = (child: unknown) =>
 			child instanceof AssistantMessageComponent &&
 			Bun.stripANSI(child.render(80).join("\n")).includes("After the call.");

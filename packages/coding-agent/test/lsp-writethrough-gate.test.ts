@@ -33,7 +33,12 @@ function createSession(cwd: string, overrides: Record<string, unknown> = {}): To
 		getArtifactsDir,
 		getSessionId,
 		localProtocolOptions: { getArtifactsDir, getSessionId },
-		settings: Settings.isolated({ "lsp.diagnosticsOnWrite": true, "lsp.formatOnWrite": false, ...overrides }),
+		settings: Settings.isolated({
+			"lsp.enabled": true,
+			"lsp.diagnosticsOnWrite": true,
+			"lsp.formatOnWrite": false,
+			...overrides,
+		}),
 	} as unknown as ToolSession;
 }
 

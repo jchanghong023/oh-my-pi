@@ -151,7 +151,7 @@ describe("Spotlight needed lines", () => {
 		shapedRead(b, "src/x.ts", { lines: 10, kept: [[1, 3]], artifact: 3 });
 		call(b, "read", { path: "src/x.ts:5-6" });
 		call(b, "read", { path: "src/other.ts:1-2" });
-		edit(b, "/repo/src/x.ts", ["line 7", "line 8"]);
+		edit(b, path.resolve("/repo", "src/x.ts"), ["line 7", "line 8"]);
 		// After the file's first edit: new content, not the original's lines.
 		call(b, "read", { path: "src/x.ts:9-10" });
 		await write("main/Sub.jsonl", b);

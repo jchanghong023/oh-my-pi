@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import { getAgentDbPath } from "@oh-my-pi/pi-utils/dirs";
 import {
 	type CfgAppliedChange,
 	type CfgChangeRequest,
@@ -241,8 +243,10 @@ describe("CfgProtocolHandler", () => {
 
 	it("reports a saved bash.patterns list as applied under project rules that prepend to it", async () => {
 		const dir = TempDir.createSync("@omp-cfg-merged-list-");
+		const originalCwd = process.cwd();
+		const agentDir = path.join(dir.path(), "agent");
+		const loadedSettings: Settings[] = [];
 		try {
-			const agentDir = path.join(dir.path(), "agent");
 			const projectDir = path.join(dir.path(), "project");
 			const resetDir = path.join(dir.path(), "reset");
 			await Bun.write(
@@ -259,6 +263,7 @@ describe("CfgProtocolHandler", () => {
 				});
 
 			const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+			loadedSettings.push(settings);
 			approveAll(settings);
 			const saved = await write("cfg://bash/patterns/save", '[{"match":"git *","approval":"allow"}]', settings);
 			expect(asked[0]?.shadowedBy).toBeUndefined();
@@ -271,12 +276,17 @@ describe("CfgProtocolHandler", () => {
 
 			// A project `[]` resets the list, so the saved global rules do not take effect there.
 			const reset = await Settings.loadIsolated({ cwd: resetDir, agentDir });
+			loadedSettings.push(reset);
 			approveAll(reset);
 			const shadowed = await write("cfg://bash/patterns/save", '[{"match":"ls *","approval":"allow"}]', reset);
 			expect(asked[1]?.shadowedBy).toContain("project config");
 			expect(textOf(shadowed)).toContain("project config takes precedence");
 			expect(cfgBashPatterns.get(reset)).toEqual([]);
 		} finally {
+			setCfgApprovalHost(null);
+			for (const settings of loadedSettings) await settings.flush();
+			AgentStorage.close(getAgentDbPath(agentDir));
+			process.chdir(originalCwd);
 			await dir.remove();
 		}
 	});

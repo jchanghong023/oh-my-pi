@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -30,8 +30,13 @@ import type {
 
 const roots: string[] = [];
 const nativeHistories: SessionManager[] = [];
+let originalCwd: string;
+beforeEach(() => {
+	originalCwd = process.cwd();
+});
 afterEach(async () => {
 	for (const manager of nativeHistories.splice(0)) await manager.close();
+	process.chdir(originalCwd);
 	for (const root of roots.splice(0)) await removeWithRetries(root);
 });
 async function fixture() {
@@ -144,7 +149,7 @@ async function localDraft() {
 		settle: async ref => {
 			for (const session of sessions)
 				if (session.ref.irId === ref.irId) {
-					await session.manager.flush();
+					await session.manager.close();
 				}
 		},
 	};

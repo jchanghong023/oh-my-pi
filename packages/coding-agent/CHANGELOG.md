@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Restored the upstream Provider catalog, login choices, custom providers and runtime discovery while retaining the fork's intranet providers.
 - OpenSpec 在所有新旧项目的产物生成指令中内置中文正文要求，保留项目上下文及必需的英文结构，无须修改项目配置。
 - Bundled `jch-grill-me` and `jch-grill-todo` now instruct research subagents to start with a fresh context window.
 - TodoLoop now accepts unnumbered Markdown checkboxes without rewriting the task file.
@@ -34,7 +35,7 @@
 - Removed unused private OpenSpec directory bridges, the forced omp-spec schema API and archive-plan injection; ordinary commands use the upstream CLI directly.
 - OpenSpec commands now accept real terminal input and stream output when all standard streams are TTYs; SDK and non-TTY calls retain isolated captured output.
 - Offline OpenSpec calls now suppress registry requests even for explicit version --check commands; telemetry remains disabled.
-- All 12 bundled OpenSpec skills are now discoverable without the former five-skill filter; removed bundled opsx file commands in favor of native skill invocation.
+- All 12 bundled OpenSpec skills remain available through native skill invocation and completion; only the six core workflows appear in automatic model discovery, with the other six requiring manual invocation.
 - Bundled OpenSpec 2.0 workflows now use omp openspec throughout and update only with OMP; retired the unused skill installation and template-generation chain.
 - This repository now uses the native spec-driven schema; existing custom mini/omp-spec projects require explicit migration and any missing design/tasks remain incomplete (see docs-zh-CN/openspec-schema-migration.md).
 - Compact mode's two-line activity area now shows fixed-width Chinese action states (正在思考/读取/执行/写入/调用) with a gray detail that never shifts; only running action words shimmer, thinking completion shows elapsed seconds, and tool elapsed timers are removed.
@@ -53,6 +54,13 @@
 
 ### Fixed
 
+- Grill Todo now requires sequentially completable groups, keeping shared acceptance with the work it gates instead of blocking earlier groups on later verification.
+- Default startup restores `/review`, `/annotate`, and `/green` without enabling external command discovery.
+- TodoLoop no longer skips nested tasks after tab-padded list markers and preserves task text in CR-only Markdown files.
+- Cancelling a command blocked on piped input now interrupts the read on Windows.
+- Tool help now reports the fork's disabled-by-default LSP and debugger accurately.
+- JavaScript evaluation retains queued text and display output when its subprocess is cancelled.
+- Disabled project configuration providers remain discoverable when settings reload explicitly includes them.
 - AIReq now reports unavailable entry assets before publishing its shared HTTP application.
 - Compact mode's read activity now appends the target path after the intent instead of hiding it.
 - Compact mode now shows thinking across successive messages, refreshes tools that finish between paints, and stops thinking timers before reply generation.

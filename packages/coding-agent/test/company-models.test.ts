@@ -32,7 +32,7 @@ interface CompanyProbe {
 	ignoredPolicyWarnings: string[];
 	gatewayResolverKey: string;
 	gatewayCustomId: string;
-	gatewayRejectedId: unknown;
+	gatewayCustomProviderId: string;
 	requests: number;
 }
 
@@ -139,8 +139,9 @@ function runCompanyProbe(): CompanyProbe {
 				};
 				gateway.registerProvider("deepseek", gatewayConfig, "broker://fixture");
 				result.gatewayCustomId = gateway.find("deepseek", "broker-custom-model")?.id;
-				gateway.registerProvider("custom-gateway", gatewayConfig, "broker://unsupported");
-				result.gatewayRejectedId = gateway.find("custom-gateway", "broker-custom-model")?.id;
+				// Broker-supplied providers are not restricted to the bundled catalog.
+				gateway.registerProvider("custom-gateway", gatewayConfig, "broker://custom-fixture");
+				result.gatewayCustomProviderId = gateway.find("custom-gateway", "broker-custom-model")?.id;
 				const { rmSync, writeFileSync } = await import("node:fs");
 				const ignoredFile = ${JSON.stringify(path.join(home, "ignored-models.json"))};
 				writeFileSync(ignoredFile, JSON.stringify({ providers: {
@@ -236,7 +237,7 @@ describe("company runtime catalog and request auth", () => {
 		expect(result.gatewayProviderKey).toBe(result.gatewayModelKey);
 		expect(result.gatewayResolverKey).toBe(result.gatewayModelKey);
 		expect(result.gatewayCustomId).toBe("broker-custom-model");
-		expect(result.gatewayRejectedId).toBeUndefined();
+		expect(result.gatewayCustomProviderId).toBe("broker-custom-model");
 		expect(result.ignoredPolicyError).toBeUndefined();
 		expect(result.ignoredPolicyWarnings).toHaveLength(1);
 	}, 30_000);

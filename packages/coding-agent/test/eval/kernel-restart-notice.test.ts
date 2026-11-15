@@ -17,7 +17,7 @@ function makeSession(evalSessionId: string): ToolSession {
 	return {
 		cwd: process.cwd(),
 		hasUI: false,
-		settings: Settings.isolated({ "async.enabled": false }),
+		settings: Settings.isolated({ "async.enabled": false, "eval.js": true }),
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
 		getEvalSessionId: () => evalSessionId,

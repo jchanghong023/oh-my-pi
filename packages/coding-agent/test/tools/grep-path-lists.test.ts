@@ -412,6 +412,9 @@ describe("tool path arrays", () => {
 			status: "parked",
 		});
 
+		const previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+		chatTranscriptDisplayPreferences.hideToolActivity = false;
+		chatTranscriptDisplayPreferences.compactToolActivity = false;
 		const viewer = new AgentTranscriptViewer({
 			transcript: agentTranscriptSource,
 			agentId: "search-overlay-session",
@@ -425,20 +428,16 @@ describe("tool path arrays", () => {
 			onClose: () => {},
 			onHubClose: () => {},
 		});
-		const previousCompact = chatTranscriptDisplayPreferences.compactToolActivity;
 		let rendered: string;
 		try {
-			chatTranscriptDisplayPreferences.compactToolActivity = false;
 			rendered = Bun.stripANSI(viewer.render(120).join("\n"));
 		} finally {
-			chatTranscriptDisplayPreferences.compactToolActivity = previousCompact;
+			Object.assign(chatTranscriptDisplayPreferences, previousDisplayPreferences);
 			viewer.dispose();
 		}
 
-		// The hub chat now renders through grepToolRenderer.renderCall; the
-		// single-string `paths` arg shows up as the "in <paths>" scope of the
-		// header subject on the pending call line (a completed result merges the call line away).
-		expect(rendered).toContain("in folder with spaces/");
+		// The detailed hub card must preserve a single-string scope, including spaces.
+		expect(rendered).toContain("folder with spaces/");
 		await removeWithRetries(tmp);
 	});
 

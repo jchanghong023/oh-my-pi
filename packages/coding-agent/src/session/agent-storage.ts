@@ -479,10 +479,17 @@ FROM model_usage_legacy
 		);
 	}
 
-	/** Flushes deferred writes, closes every process-wide database, and permits reopening them. */
-	static close(): void {
-		for (const storage of instances.values()) storage.#close();
-		instances.clear();
+	/** Flushes deferred writes and closes one database, or every process-wide database when no path is supplied. */
+	static close(dbPath?: string): void {
+		if (dbPath !== undefined) {
+			const storage = instances.get(dbPath);
+			if (storage) storage.#close();
+			instances.delete(dbPath);
+		} else {
+			for (const storage of instances.values()) storage.#close();
+			instances.clear();
+		}
+		if (instances.size > 0) return;
 		cancelExitCleanup?.();
 		cancelExitCleanup = undefined;
 	}

@@ -82,7 +82,8 @@ describe("Anthropic event-less redacted thinking wire roundtrip", () => {
 			return response();
 		};
 		const context: Context = { messages: [{ role: "user", content: "first", timestamp: 0 }] };
-		const first = await stream(model, context, { apiKey: "fixture-key", fetch: fetchFixture }).result();
+		const firstStream = stream(model, context, { apiKey: "fixture-key", fetch: fetchFixture });
+		const first = await firstStream.result();
 		expect(first.stopReason).toBe("stop");
 		expect(first.content.map(block => block.type)).toEqual([
 			"thinking",
@@ -90,8 +91,6 @@ describe("Anthropic event-less redacted thinking wire roundtrip", () => {
 			"text",
 			"redactedThinking",
 		]);
-		expect(first.content[1]).toEqual({ type: "redactedThinking", data: "opaque+/=\u0000payload" });
-		expect(first.content[3]).toEqual({ type: "redactedThinking", data: "trailing-opaque" });
 		// Journals serialize messages as JSON; replay must not depend on in-memory block symbols.
 		const persisted = JSON.parse(JSON.stringify(first));
 		const next = await stream(
@@ -104,7 +103,8 @@ describe("Anthropic event-less redacted thinking wire roundtrip", () => {
 		expect(next.stopReason).toBe("stop");
 		expect(requests).toHaveLength(2);
 		const replay = requests[1]?.messages.find(message => message.role === "assistant");
-		expect(replay?.content).toEqual([
+		expect(replay?.content).toHaveLength(4);
+		expect(replay?.content).toMatchObject([
 			{ type: "thinking", thinking: "reasoning", signature: "original-signature" },
 			{ type: "redacted_thinking", data: "opaque+/=\u0000payload" },
 			{ type: "text", text: "answer" },

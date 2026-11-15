@@ -17,22 +17,26 @@ import { Shell } from "@oh-my-pi/pi-natives";
 import { getThemeByName } from "@oh-my-pi/pi-tui/theme";
 import { bashToolRenderer } from "@oh-my-pi/pi-tui/tools/bash";
 
+let cwd: string;
+
 // `executeBash` calls `Settings.init()` unconditionally; without an in-memory
 // instance the load reaches the host's real agent.db, so a corrupted or
 // concurrently written ~/.omp fails otherwise unrelated assertions.
 beforeEach(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
+	cwd = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bash-failure-result-")));
 });
 
-afterEach(() => {
+afterEach(async () => {
 	mock.restore();
 	resetSettingsForTest();
+	await fs.rm(cwd, { recursive: true, force: true });
 });
 
 function makeSession(): ToolSession {
 	return {
-		cwd: "/tmp",
+		cwd,
 		hasUI: false,
 		skills: [],
 		getSessionFile: () => null,

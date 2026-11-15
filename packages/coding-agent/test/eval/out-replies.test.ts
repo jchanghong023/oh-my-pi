@@ -44,6 +44,7 @@ function makeSession(): ToolSession {
 		skills: [],
 		settings: Settings.isolated({
 			"async.enabled": false,
+			"eval.js": true,
 			"eval.autoProvision": false,
 			"bash.autoBackground.enabled": false,
 			"bashInterceptor.enabled": false,

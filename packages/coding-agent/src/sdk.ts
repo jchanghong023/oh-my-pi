@@ -2623,9 +2623,13 @@ async function createAgentSessionScoped(
 			: logger.time("discoverSlashCommands", discoverSlashCommands, cwd);
 		slashCommandsPromise.catch(() => {});
 		const customCommandsPromise =
-			options.disableExtensionDiscovery || options.restrictToolNames === true
+			options.restrictToolNames === true
 				? Promise.resolve<CustomCommandsLoadResult>({ commands: [], errors: [] })
-				: logger.time("discoverCustomCommands", loadCustomCommandsInternal, { cwd, agentDir });
+				: logger.time("discoverCustomCommands", loadCustomCommandsInternal, {
+						cwd,
+						agentDir,
+						discover: !options.disableExtensionDiscovery,
+					});
 		customCommandsPromise.catch(() => {});
 		const skillsSettings = cfgSkills.get(settings);
 		const disabledExtensionIds = cfgDisabledExtensions.get(settings);

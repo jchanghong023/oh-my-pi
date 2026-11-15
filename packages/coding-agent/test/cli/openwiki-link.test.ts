@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
@@ -106,11 +106,25 @@ describe("OMP OpenWiki interactive link consumer", () => {
 			await tui("key", "press", "Down");
 			await tui("key", "press", "Space");
 			await selected(["repo-a", "repo-b"]);
-			await tui("key", "press", "Down", "Enter");
-			await tui("expect", "text", "Edit wikis", "--timeout", "30000");
-			await tui("key", "press", "Down", "Down", "Down", "Enter");
-			await tui("expect", "text", "Create workspace", "--timeout", "30000");
-			await tui("key", "press", "Down", "Down", "Enter");
+			// Wait for each cursor move to render before submitting: sending arrow
+			// and Enter together can submit the previous row in Ink.
+			await tui("key", "press", "Down");
+			await tui("expect", "text", "› Save workspace", "--timeout", "30000");
+			await tui("key", "press", "Enter");
+			await tui("expect", "text", "› Edit wikis", "--timeout", "30000");
+			await tui("key", "press", "Down");
+			await tui("expect", "text", "› Rename", "--timeout", "30000");
+			await tui("key", "press", "Down");
+			await tui("expect", "text", "› Delete", "--timeout", "30000");
+			await tui("key", "press", "Down");
+			await tui("expect", "text", "› Back", "--timeout", "30000");
+			await tui("key", "press", "Enter");
+			await tui("expect", "text", "› Interactive Links", "--timeout", "30000");
+			await tui("key", "press", "Down");
+			await tui("expect", "text", "› Create workspace", "--timeout", "30000");
+			await tui("key", "press", "Down");
+			await tui("expect", "text", "› Finish", "--timeout", "30000");
+			await tui("key", "press", "Enter");
 			await tui("wait", "exit");
 			expect(await tui("state")).toMatch(/^exited: 0\r?$/mu);
 			const agent = path.join(config, "agent");
@@ -119,6 +133,12 @@ describe("OMP OpenWiki interactive link consumer", () => {
 			expect(registry.workspaces[0].name).toBe("Interactive Links");
 			expect(registry.workspaces[0].wikis).toHaveLength(2);
 			expect(registry.wikis.map((wiki: { name: string }) => wiki.name).sort()).toEqual(["repo-a", "repo-b"]);
+			expect(registry.wikis.map((wiki: { root: string }) => wiki.root).sort()).toEqual(
+				(await Promise.all([first, second].map(root => realpath(root)))).sort(),
+			);
+			expect([...registry.workspaces[0].wikis].sort()).toEqual(
+				registry.wikis.map((wiki: { id: string }) => wiki.id).sort(),
+			);
 			const settings = Settings.isolated({});
 			settings.getAgentDir = () => agent;
 			const search = new OpenWikiSearchTool({
@@ -131,7 +151,7 @@ describe("OMP OpenWiki interactive link consumer", () => {
 			const result = await search.execute("linked-query", { query: "INTERACTIVE_LINK_repo-b_BEACON" });
 			const data = JSON.parse(result.content[0].text);
 			expect(data.results[0].wiki).toBe("repo-b");
-			expect(data.results[0].content).toContain("INTERACTIVE_LINK_repo-b_BEACON");
+			expect(data.results[0].content).toMatch(/INTERACTIVE[ _]LINK[ _]repo-b[ _]BEACON/);
 		} finally {
 			await tui("close");
 		}

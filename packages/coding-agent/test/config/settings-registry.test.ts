@@ -4,7 +4,9 @@ import * as path from "node:path";
 import { orderedSettings } from "@oh-my-pi/pi-coding-agent/config/all-settings";
 import { all, bindEffects, combine, effect, lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath } from "@oh-my-pi/pi-utils/dirs";
 import { YAML } from "bun";
 
 import {
@@ -468,8 +470,10 @@ describe("settings registry", () => {
 
 	it("resolves path-scoped object entries in bash.patterns and bashInterceptor.patterns across cwd changes", async () => {
 		const dir = TempDir.createSync("@omp-path-scoped-bash-");
+		const originalCwd = process.cwd();
+		const agentDir = path.join(dir.path(), "agent");
+		let settings: Settings | undefined;
 		try {
-			const agentDir = path.join(dir.path(), "agent");
 			const repoA = path.join(dir.path(), "repo-a");
 			const repoASub = path.join(repoA, "packages", "sub");
 			const repoB = path.join(dir.path(), "repo-b");
@@ -508,7 +512,7 @@ describe("settings registry", () => {
 				}),
 			);
 
-			const settings = await Settings.loadIsolated({ cwd: repoASub, agentDir });
+			settings = await Settings.loadIsolated({ cwd: repoASub, agentDir });
 			expect(cfgBashPatterns.get(settings)).toEqual([
 				{ match: "make lint*", approval: "allow" },
 				{ match: "rm -rf *", approval: "deny" },
@@ -526,14 +530,19 @@ describe("settings registry", () => {
 			]);
 			expect(cfgBashInterceptorPatterns.get(settings)).toEqual(DEFAULT_BASH_INTERCEPTOR_RULES);
 		} finally {
+			await settings?.flush();
+			AgentStorage.close(getAgentDbPath(agentDir));
+			process.chdir(originalCwd);
 			await dir.remove();
 		}
 	});
 
 	it("keeps every bash.patterns rule a path-scoped entry carries inside its scope", async () => {
 		const dir = TempDir.createSync("@omp-path-scoped-bash-deny-");
+		const originalCwd = process.cwd();
+		const agentDir = path.join(dir.path(), "agent");
+		let settings: Settings | undefined;
 		try {
-			const agentDir = path.join(dir.path(), "agent");
 			const repoA = path.join(dir.path(), "repo-a");
 			const prod = path.join(repoA, "prod");
 			const other = path.join(dir.path(), "other");
@@ -562,7 +571,7 @@ describe("settings registry", () => {
 				].join("\n"),
 			);
 
-			const settings = await Settings.loadIsolated({ cwd: prod, agentDir });
+			settings = await Settings.loadIsolated({ cwd: prod, agentDir });
 			expect(cfgBashPatterns.get(settings)).toMatchObject([
 				{ match: "rm -rf *", approval: "deny" },
 				{ match: "make*", approval: "allow" },
@@ -580,6 +589,9 @@ describe("settings registry", () => {
 			await settings.reloadForCwd(other);
 			expect(cfgBashPatterns.get(settings)).toMatchObject([{ match: "curl *", approval: "prompt" }]);
 		} finally {
+			await settings?.flush();
+			AgentStorage.close(getAgentDbPath(agentDir));
+			process.chdir(originalCwd);
 			await dir.remove();
 		}
 	});

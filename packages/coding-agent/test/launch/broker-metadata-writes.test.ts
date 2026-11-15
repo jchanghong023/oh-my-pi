@@ -1,4 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { PsScope } from "@oh-my-pi/pi-tui/apps/ps-data";
@@ -187,19 +188,21 @@ describe("daemon metadata writes", () => {
 		await fs.mkdir(projectDir);
 		const client = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 5_000 });
 		const broker = startBroker(projectDir, runtimeDir);
-		const rename = fs.rename;
-		const platform = Object.getOwnPropertyDescriptor(process, "platform");
-		let denials = 0;
-		const renameSpy = spyOn(fs, "rename").mockImplementation(async (source, target) => {
+		// The atomic writer calls node:fs.promises, not the separate ESM
+		// namespace exported by node:fs/promises.
+		const rename = nodeFs.promises.rename;
+		let denied = false;
+		const renameSpy = spyOn(nodeFs.promises, "rename").mockImplementation(async (source, target) => {
 			if (
-				denials < 2 &&
+				process.platform === "win32" &&
+				!denied &&
 				target === metadataPath &&
 				(await fs.readFile(source, "utf8")).includes('"state":"exited"')
 			) {
-				// Simulate Windows replacement semantics for this broker's final write.
-				Object.defineProperty(process, "platform", { value: "win32" });
-				const code = denials++ === 0 ? "EEXIST" : "EPERM";
-				throw Object.assign(new Error("rename denied by reader"), { code });
+				// Only Windows retries replacement denials. Keep other platforms'
+				// real publication path rather than mutating process-wide platform.
+				denied = true;
+				throw Object.assign(new Error("rename denied by reader"), { code: "EPERM" });
 			}
 			return rename(source, target);
 		});
@@ -228,11 +231,10 @@ describe("daemon metadata writes", () => {
 				client.close();
 				await broker.finished;
 			} finally {
-				if (platform) Object.defineProperty(process, "platform", platform);
 				renameSpy.mockRestore();
 			}
 		}
-		expect(denials).toBe(2);
+		if (process.platform === "win32") expect(denied).toBe(true);
 		expect(await Bun.file(metadataPath).json()).toMatchObject({ daemon: { state: "exited" } });
 	}, 20_000);
 

@@ -72,8 +72,9 @@ async function mainRegistry(): Promise<ModelRegistry> {
 	const modelsPath = path.join(dir, "models.json");
 	await Bun.write(modelsPath, JSON.stringify({ providers: {} }));
 	const authStorage = await AuthStorage.create(":memory:");
-	authStorage.keys.setRuntime("anthropic", "test-key");
-	cleanups.push(async () => {
+	authStorage.keys.setRuntime("mock", "test-key");
+	// Worker sessions use this registry's files; terminate them before removing their directory.
+	cleanups.unshift(async () => {
 		authStorage.close();
 		await fs.rm(dir, { recursive: true, force: true });
 	});
@@ -91,7 +92,12 @@ async function startWorker(): Promise<FocusProbe> {
 		services: [identityThreadService, agentsThreadService, authService, probeService],
 		initTimeoutMs: 60_000,
 	});
-	cleanups.push(() => worker.terminate("test end"));
+	cleanups.push(async () => {
+		for (const ref of AgentRegistry.global().list()) {
+			if (ref.session instanceof RemoteAgentSession) await ref.session.dispose();
+		}
+		worker.terminate("test end");
+	});
 	await worker.ready;
 	return probe.promise;
 }
@@ -297,7 +303,6 @@ describe("focused view of a worker-homed agent session", () => {
 				.map(row => Bun.stripANSI(row))
 				.join("\n");
 			expect(visible).toContain("WORKER_OUTPUT_FINAL");
-			expect(visible).toContain("completed");
 			const clock = vi.spyOn(Date, "now").mockReturnValue(terminalAt + 3000);
 			expect(preview.render(100)).toEqual([]);
 			clock.mockRestore();

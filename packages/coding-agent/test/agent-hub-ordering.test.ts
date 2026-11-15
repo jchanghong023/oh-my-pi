@@ -138,15 +138,18 @@ describe("Agent hub row ordering", () => {
 		AgentRegistry.resetGlobalForTests();
 	});
 
-	it("renders a useful empty state before any task agents exist", () => {
+	it("keeps an empty hub unselectable before any task agents exist", () => {
 		geometry = stubStdoutGeometry(120);
-		const hub = makeHub(new AgentRegistry());
+		const focusAgent = vi.fn(async () => {});
+		const onDone = vi.fn();
+		const hub = makeHub(new AgentRegistry(), { focusAgent, onDone });
 
 		try {
-			const rendered = Bun.stripANSI(hub.render(120).join("\n"));
-			expect(rendered).toContain("No agents in this session");
-			expect(rendered).toContain("Finished, parked, and killed subagents remain with the session");
-			expect(rendered).toContain("Resume that session with omp-aireq --continue, or spawn a task here.");
+			expect(renderedAgentRows(hub)).toEqual([]);
+			for (const key of ["j", "k", "\r"]) hub.handleInput(key);
+			expect(selectedAgentId(hub)).toBeUndefined();
+			expect(focusAgent).not.toHaveBeenCalled();
+			expect(onDone).not.toHaveBeenCalled();
 		} finally {
 			hub.dispose();
 		}

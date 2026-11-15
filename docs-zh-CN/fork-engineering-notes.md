@@ -22,6 +22,37 @@
 - `python/robomp/src/tasks.py`：GitHub 元数据读取失败须向 delivery 执行器传播，保留重试机会，不能把未执行的 PR 审查、review 或 conversation 当作已成功处理；映射缺失或 branch 缺失时查询 PR 的失败同样不得吞掉。Robomp 测试保留手动入口，不纳入默认 fork 门禁；Windows 原生不支持。
 - `scripts/ci-release-build-binaries.ts`：上游基线 `b0756921` 的 Linux x64 musl baseline target 写成 `bun-linux-x64-musl-baseline`，不符合 Bun 的 `SIMD-Libc` 顺序；改为 `bun-linux-x64-baseline-musl`，保留 musl 与 baseline CPU 兼容目标，不改成 glibc 或 modern。
 
+### 本轮 fulltest 的待提 PR 缺陷（2026-11-15）
+
+归属核对基线为 [`can1357/oh-my-pi@7c49c11aa5bbaf3f418406583096168ad5b8c6dc`](https://github.com/can1357/oh-my-pi/tree/7c49c11aa5bbaf3f418406583096168ad5b8c6dc)。以下缺陷路径已在该基线源码中确认；失败与修复验证来自 Windows x64、Bun 1.4.4 的本 fork 工作树，并非单独运行干净上游的结果。尚未核对更晚的上游 main，也未创建 PR；提交前须在当时上游复核并拆分最小补丁，不能把本次整个工作树作为上游修复提交。
+
+#### 1. Windows：阻塞的 builtin stdin 不响应取消
+
+- **上游证据：** [`host.rs` 的 `pollable_fd`／`Stdin::read`](https://github.com/can1357/oh-my-pi/blob/7c49c11aa5bbaf3f418406583096168ad5b8c6dc/crates/pi-builtins/src/host.rs#L1854-L1885)只在 Unix 等待可读并轮询取消；非 Unix 返回 `None`，随后直接阻塞在 `self.file.read(buf)`。
+- **真实影响与复现：** Windows 管道写端保持打开但不写数据，builtin 开始读取后再取消；开始读取前的 token 检查不能唤醒已经阻塞的读取，abort／timeout 无法及时结清。现有回归为 `pi-builtins` 的 `extras::tests::cancelling_a_blocked_read_returns_130`。
+- **最小修复范围：** `crates/pi-builtins/src/host.rs`、该 crate 的 `Cargo.toml`；仅 Windows pipe 使用 `PeekNamedPipe` 等待数据并检查取消，保留 broken pipe 的 EOF、非 pipe 及 Unix 行为。
+- **已执行验证：** `bun run test:rs --full` 完成，现有取消回归通过；Nextest 与 workspace doctest 均 exit=0。报告：`runs/test-timing/2026-11-15T09-08-50.519Z-41764-12232413/run.json`。未据此声称 Linux 或发布二进制通过。
+
+#### 2. JavaScript subprocess：硬取消丢失已经产生的输出
+
+- **上游证据：** [`process-entry.ts`](https://github.com/can1357/oh-my-pi/blob/7c49c11aa5bbaf3f418406583096168ad5b8c6dc/packages/coding-agent/src/eval/js/process-entry.ts)将输出直接交给异步 IPC；[`spawnJsProcess().terminate()`](https://github.com/can1357/oh-my-pi/blob/7c49c11aa5bbaf3f418406583096168ad5b8c6dc/packages/coding-agent/src/eval/js/context-manager.ts#L1039-L1087)先终止进程，再等待 disconnect。disconnect 只能结清已越过通道的数据，不能恢复仍在被杀子进程发送队列中的输出。
+- **真实影响与复现：** cell 已打印，父线程暂时同步阻塞，使消息尚未派发时触发 abort；调用者收到取消结果，却收不到此前输出。现有 `test/eval/js-cancel-output.test.ts` 的 “keeps that output, before the run settles, in subprocess mode” 确定性覆盖此窗口。
+- **最小修复范围：** `src/eval/js/{process-entry,worker-protocol,context-manager}.ts` 及 `src/cli.ts` 的对应协议类型；仅 subprocess text／display 使用自有临时 outbox 同步原子发布，IPC 通知序号，进程退出后顺序排空并去重、清理。不改变其他 worker 或 thread-mode 协议。
+- **已执行验证：** `bun test packages/coding-agent/test/eval/js-cancel-output.test.ts` 对应的完整 TS producer 四项通过，包含 subprocess／worker-thread 取消输出及 bridge 未完成时死亡的错误传播，无跳过。报告：`runs/test-timing/2026-11-15T09-25-19.657Z-36216-762b9182/run.json`；该整轮另有其他失败，不能写成整轮通过。
+
+#### 3. vendored jaq-core：公开示例缺少可编译依赖
+
+- **上游证据：** [`src/lib.rs` 的公开 doctest](https://github.com/can1357/oh-my-pi/blob/7c49c11aa5bbaf3f418406583096168ad5b8c6dc/crates/vendor/jaq-core/src/lib.rs#L9-L42)使用 `jaq_json` 和 `jaq_std`，但该基线的 [`Cargo.toml`](https://github.com/can1357/oh-my-pi/blob/7c49c11aa5bbaf3f418406583096168ad5b8c6dc/crates/vendor/jaq-core/Cargo.toml)没有相应 dependency／dev-dependency，workspace doctest 无法解析这两个 crate。这是文档／构建缺陷，不是 jaq 查询结果错误。
+- **最小修复范围：** `crates/vendor/jaq-core/{Cargo.toml,src/lib.rs}`、生成的 `Cargo.lock` 及 `jaq-std/src/lib.rs` 的嵌入说明；补示例依赖，使用不要求宿主 `debug`／`halt_error` 函数的嵌入组合，保留实际编译、排序、遍历和输出断言。Windows 示例使用独立栈，不将 doctest 改为忽略或仅编译。
+- **已执行验证：** 上述 `bun run test:rs --full` 的真实 workspace doctest 完成，jaq-core 示例通过；同一 Rust 报告可查。是否应同时向原 jaq 仓库提交须另核对其当前清单，不能仅凭 OMP 的 vendored 快照认定原仓库现状。
+
+#### 不混入上游 bug PR 的变更
+
+- 恢复完整 Provider／模型目录是本次明确选择的 fork 策略回退；退役模型 ID、中文／compact 默认值、原生表单、`blocked` Todo 状态及测试缺失 settings／认证／运行所有权上下文，分别属于过期 fixture 或本地合同对齐。
+- capability 的禁用 Provider item 二次过滤条件是 fork 差异：上述上游基线没有该条件，不能将本次 `includeDisabledProviders` 修正报为上游缺陷。
+- MCP 初始自签名证书被接受由继承的 `NODE_TLS_REJECT_UNAUTHORIZED=0` 导致；修正的是测试环境隔离，不是上游 TLS 漏洞。
+- stats Windows 端口查询合并了重复的 `tasklist`／CIM 信息读取；完整 stats 套件已通过，但旧用例超时与串行查询耗时的精确因果未独立量化。暂记为性能补丁候选，不列为已证实上游功能 bug，也不宣称解决总超时。
+
 ## 使用与验证参考
 
 以下材料仅供查找实现和验证入口，不构成需求基线，也不表示本次已运行或通过。

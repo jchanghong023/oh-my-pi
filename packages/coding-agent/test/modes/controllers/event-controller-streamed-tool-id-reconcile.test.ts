@@ -289,7 +289,7 @@ describe("EventController reconciles streamed tool-call ids at message_end", () 
 			}
 			const renderedHistory = Bun.stripANSI(history.join("\n"));
 			expect(renderedHistory).toContain("Following final answer");
-			expect(renderedHistory).toContain("Recovered attempt");
+			expect(renderedHistory).toContain("recovered.ts");
 			expect(renderedHistory).not.toContain("First attempt");
 			expect(renderedHistory).not.toContain("stale.ts");
 			expect(ctx.chatContainer.children).not.toContain(staleCard);

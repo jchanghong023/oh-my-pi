@@ -350,10 +350,6 @@ export interface CompiledBehavior {
 	planRequirements: CompiledPlanRequirement[];
 	pricingPeers: CompiledPricingPeer[];
 	retryResetTimezones: CompiledRetryResetTimezone[];
-	/** Providers retained for OMP chat models; non-chat runners are unaffected. */
-	supportedChatProviders: string[];
-	/** Provider scopes hidden from the model hub, without changing model availability. */
-	modelHubHiddenProviders: string[];
 	retiredProviders: string[];
 	/** Hosts whose prefix caches benefit from a stable append-only conversation. */
 	appendOnlyContextProviders: string[];

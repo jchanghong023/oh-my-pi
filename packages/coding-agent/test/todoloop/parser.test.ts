@@ -86,6 +86,18 @@ describe("TodoLoop file parsing", () => {
 		expect((await readTodoLoop(path)).tasks.map(task => task.id)).toEqual(["8", "2", "2.7", "1"]);
 	});
 
+	it("retains nested tasks after tab-padded list markers at different tab stops", () => {
+		const snapshot = parseTodoLoop(
+			"-\t[x] 1 Parent\n      - [ ] 2 Child\n123.\t[x] 3 Ordered parent\n          - [ ] 4 Ordered child\n",
+		);
+		expect(snapshot.tasks).toEqual([
+			{ id: "1", text: "Parent", done: true, line: 1 },
+			{ id: "2", text: "Child", done: false, line: 2 },
+			{ id: "3", text: "Ordered parent", done: true, line: 3 },
+			{ id: "4", text: "Ordered child", done: false, line: 4 },
+		]);
+	});
+
 	it("keeps deeply indented first-paragraph prose instead of treating it as a note", () => {
 		const snapshot = parseTodoLoop("- [ ] 1 Work\n        must preserve this requirement\n\n  Execution note");
 		expect(snapshot.tasks[0].text).toBe("Work\nmust preserve this requirement");

@@ -107,6 +107,7 @@ let extensionState;
 const { session } = await createAgentSession({
   cwd: process.cwd(),
   toolNames: [],
+  skills: [],
   enableMCP: false,
   enableLsp: false,
   disableExtensionDiscovery: true,
@@ -166,7 +167,7 @@ await runRpcMode(session, {
 					}
 				}
 			} finally {
-				child.stdin.end();
+				await child.stdin.end();
 				await child.exited;
 			}
 			expect(result, await stderr).toEqual({
@@ -193,6 +194,7 @@ globalThis.fetch = async () => { throw new Error("Offline UI fixture refuses net
 const { session } = await createAgentSession({
   cwd: process.cwd(),
   toolNames: [],
+  skills: [],
   enableMCP: false,
   enableLsp: false,
   disableExtensionDiscovery: true,
@@ -215,6 +217,8 @@ await runRpcMode(session);
 			env: {
 				PATH: Bun.env.PATH,
 				HOME: temp.join("home"),
+				USERPROFILE: temp.join("home"),
+				OMP_CONFIG_ROOT: temp.join("home", ".omp"),
 				PI_CODING_AGENT_DIR: temp.join("agent"),
 				XDG_CONFIG_HOME: temp.join("config"),
 				XDG_DATA_HOME: temp.join("data"),
@@ -259,7 +263,7 @@ await runRpcMode(session);
 				} else if (frame.type === "response" && typeof frame.id === "string" && /^(s\d|p)$/.test(frame.id)) {
 					seen.push(`${frame.id}:${frame.success}`);
 					// Drain stdout to its end: closing the reader early would break the child's output pipe.
-					if (frame.id === "s3") child.stdin.end();
+					if (frame.id === "s3") await child.stdin.end();
 				}
 			}
 			await child.exited;
@@ -279,7 +283,9 @@ await runRpcMode(session);
 		const stderr = new Response(child.stderr).text();
 		// Read to the end of stdout: closing it early would fail the child's output, not exercise the EOF.
 		for await (const frame of readJsonl<unknown>(child.stdout)) {
-			if (isRecord(frame) && frame.type === "extension_ui_request" && frame.method === "confirm") child.stdin.end();
+			if (isRecord(frame) && frame.type === "extension_ui_request" && frame.method === "confirm") {
+				await child.stdin.end();
+			}
 		}
 		const exitCode = await child.exited;
 		expect({ exitCode, signal: child.signalCode }, await stderr).toEqual({ exitCode: 0, signal: null });
@@ -765,6 +771,8 @@ describe("RPC ask dialog", () => {
 				env: {
 					PATH: Bun.env.PATH,
 					HOME: temp.join("home"),
+					USERPROFILE: temp.join("home"),
+					OMP_CONFIG_ROOT: temp.join("home", ".omp"),
 					PI_CODING_AGENT_DIR: temp.join("agent"),
 					XDG_CONFIG_HOME: temp.join("config"),
 					XDG_DATA_HOME: temp.join("data"),
@@ -868,14 +876,23 @@ describe("RPC ask dialog", () => {
 		expect(askRequests).toEqual([]);
 		expect(toolResults).toEqual([
 			expect.objectContaining({
+				content: [{ type: "text", text: expect.stringContaining(JSON.stringify({ db: "postgres" }, null, 2)) }],
 				details: expect.objectContaining({
 					answers: [{ name: "db", question: "Which database?", answer: "Postgres" }],
 				}),
 			}),
 			expect.objectContaining({
+				content: [
+					{
+						type: "text",
+						text: expect.stringContaining(
+							JSON.stringify({ db: "DuckDB", features: ["auth", "search"] }, null, 2),
+						),
+					},
+				],
 				details: expect.objectContaining({
 					answers: [
-						{ name: "db", question: "Which database?", answer: "DuckDB" },
+						{ name: "db", question: "Which database?", answer: "Other: DuckDB" },
 						{ name: "features", question: "Which features?", answer: "Auth, Search" },
 					],
 				}),

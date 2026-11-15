@@ -24,7 +24,7 @@ function nativeReadResult(request: ModelRequest, target: string): string {
 
 for (const location of ["directory", "absent", "file", "parent-only"] as const) {
 	test.skipIf(!tuiTest || (process.platform === "win32" && location === "absent"))(
-		`ordinary TUI discovers all OpenSpec skills in any directory and scopes manual resource grants (${location})`,
+		`ordinary TUI discovers core OpenSpec and scopes manual resource grants (${location})`,
 		async () => {
 			const { manifest: inventory } = await collectSpecDrivenResources(
 				path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
@@ -52,16 +52,10 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 					const coreOpenSpec = [
 						"openspec-apply-change",
 						"openspec-archive-change",
-						"openspec-bulk-archive-change",
-						"openspec-continue-change",
 						"openspec-explore",
-						"openspec-ff-change",
-						"openspec-new-change",
-						"openspec-onboard",
 						"openspec-propose",
 						"openspec-sync-specs",
 						"openspec-update-change",
-						"openspec-verify-change",
 					];
 					const openSpec = inventory.skills.filter(
 						skill => skill.source === "openspec" && coreOpenSpec.includes(skill.name),
@@ -83,7 +77,7 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 					// Exercise native completion once, including on Windows without a planning directory.
 					if (location === "file") {
 						const requestCount = provider.requests.length;
-						for (const skill of openSpec) {
+						for (const skill of inventory.skills.filter(skill => skill.source === "openspec")) {
 							const command = `/skill:${skill.name}`;
 							// The popup clips long labels at this viewport width. Only
 							// require a selected skill row here; the exact unique draft
@@ -112,7 +106,9 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 					}
 					const manualOnly = inventory.skills.filter(
 						skill =>
-							(skill.source === "jch" && skill.name !== "jch-codebase-design") || skill.source === "superpowers",
+							(skill.source === "jch" && skill.name !== "jch-codebase-design") ||
+							skill.source === "superpowers" ||
+							(skill.source === "openspec" && !coreOpenSpec.includes(skill.name)),
 					);
 					const deniedPaths = manualOnly.map(skill => `skill://${skill.name}:raw`);
 					let previousReply = `${MARKER}_CHAT_READY`;
@@ -198,7 +194,11 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 						expect(await Bun.file(path.join(cwd, ".omp/aireq/state.json")).exists()).toBe(false);
 					}
 					// Explicit user invocations grant only the selected hidden packaged skill.
-					for (const name of ["systematic-debugging", "brainstorming"]) {
+					for (const name of [
+						"systematic-debugging",
+						"brainstorming",
+						...manualOnly.filter(skill => skill.source === "openspec").map(skill => skill.name),
+					]) {
 						await newBranch();
 						const selectedPath = `skill://${name}:raw`;
 						const remaining = deniedPaths.filter(target => target !== selectedPath);

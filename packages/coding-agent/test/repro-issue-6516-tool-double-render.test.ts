@@ -5,6 +5,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -84,6 +85,7 @@ describe("issue #6516 — tool output appears twice", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
+		cfgDisplayMode.set(session.settings, "detailed");
 		mode = new InteractiveMode(session, "test");
 		mode.ui.requestRender = vi.fn();
 	});

@@ -179,6 +179,7 @@ it("keeps a snapshot appended by an in-process history rewrite across resume", a
 	await seed.flush();
 	const file = seed.getSessionFile();
 	if (!file) throw new Error("Expected a persisted session");
+	await seed.close();
 
 	const live = await openProcess(file, sessionDir, registry, "live");
 	await promptOnce(live, "Reply OK 1.");
@@ -189,6 +190,7 @@ it("keeps a snapshot appended by an in-process history rewrite across resume", a
 		(message, index) => index > 0 && liveRequest[index - 1]?.role === "toolResult" && message.role === "developer",
 	);
 	expect(snapshot).toBeGreaterThan(0);
+	await live.session.dispose();
 
 	const resumed = await openProcess(file, sessionDir, registry, "resumed");
 	const resumedRequest = await promptOnce(resumed, "Reply OK 3.");
@@ -209,6 +211,7 @@ it("adds no snapshot entries when the tree revisits a node", async () => {
 	await seed.flush();
 	const file = seed.getSessionFile();
 	if (!file) throw new Error("Expected a persisted session");
+	await seed.close();
 
 	const live = await openProcess(file, sessionDir, registry, "tree");
 	await promptOnce(live, "Reply OK 1.");
@@ -245,6 +248,8 @@ it("writes no snapshot into the target of a failed session switch", async () => 
 	const currentFile = current.getSessionFile();
 	if (!targetFile || !currentFile) throw new Error("Expected persisted sessions");
 	const before = await Bun.file(targetFile).text();
+	await target.close();
+	await current.close();
 
 	const live = await openProcess(currentFile, sessionDir, registry, "switch");
 	const reset = spyOn(SessionMemory.prototype, "resetContextForNewTranscript").mockRejectedValueOnce(

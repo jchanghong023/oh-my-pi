@@ -109,7 +109,9 @@ function parseDocument(content: string): ParsedDocument {
 		const list = line.match(LIST_PATTERN);
 		if (list) {
 			current = undefined;
-			lists.push({ indent, contentIndent: indent + list[2].length + list[3].length });
+			let contentIndent = indent + list[2].length;
+			for (const char of list[3]) contentIndent += char === "\t" ? 4 - (contentIndent % 4) : 1;
+			lists.push({ indent, contentIndent });
 			const listFence = list[4].match(/^(`{3,}|~{3,})(.*)$/);
 			if (listFence && !(listFence[1][0] === "`" && listFence[2].includes("`"))) {
 				fence = {

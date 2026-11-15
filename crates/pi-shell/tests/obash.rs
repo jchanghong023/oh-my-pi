@@ -186,15 +186,26 @@ fn externals_start_where_read_stopped() {
 	let file = dir.path().join("lines");
 	let text: String = (1..=5000).map(|i| format!("line {i}\n")).collect();
 	fs::write(&file, text).unwrap();
-	let script = r#"{ read -r a; /usr/bin/true; read -r b; /usr/bin/wc -l | /usr/bin/tr -d ' '; } < "$1"
+	// Use the binary under test as an actual external on every platform;
+	// `/usr/bin/wc` and `/usr/bin/tr` are not Windows executable paths.
+	let script = r#"count='n=0; while IFS= read -r line; do n=$((n+1)); done; echo "$n"'
+copy='while IFS= read -r line; do echo "$line"; done'
+{ read -r a; "$2" -c :; read -r b; "$2" -c "$count" | "$2" -c "$copy"; } < "$1"
 exec 3< "$1"
 read -r -u3 x
-/usr/bin/wc -l <&3 | /usr/bin/tr -d ' '
+"$2" -c "$count" <&3 | "$2" -c "$copy"
 read -r -u3 y || echo eof
 echo "$a|$b|$x"
 "#;
-	let out = output(obash().args(["-c", script, "sh"]).arg(&file));
+	let out = output(
+		obash()
+			.args(["-c", script, "sh"])
+			.arg(&file)
+			.arg(env!("CARGO_BIN_EXE_obash")),
+	);
 	assert_eq!(String::from_utf8_lossy(&out.stdout), "4998\n4999\neof\nline 1|line 2|line 1\n");
+	assert!(out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
+	assert!(out.status.success());
 }
 
 #[test]

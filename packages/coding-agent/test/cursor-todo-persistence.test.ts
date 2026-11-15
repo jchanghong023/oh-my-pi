@@ -60,17 +60,18 @@ function newHarness(initial: TodoPhase[] = []): Harness {
 	};
 }
 
-describe("todo snapshots saved with the retired blocked status", () => {
-	it("read back as pending, in both user-edit and tool-result entries", () => {
-		const saved = [{ name: "Work", tasks: [{ content: "wait", status: "blocked", blocker: "approval" }] }];
+describe("todo snapshots with blocked tasks", () => {
+	it("preserves blocked status and its blocker in both user-edit and tool-result entries", () => {
+		const saved: TodoPhase[] = [
+			{ name: "Work", tasks: [{ content: "wait", status: "blocked", blocker: "approval" }] },
+		];
 		const userEdit = { type: "custom", customType: USER_TODO_EDIT_CUSTOM_TYPE, data: { phases: saved } };
 		const toolResult = {
 			type: "message",
 			message: { role: "toolResult", toolName: "todo", details: { op: "append", phases: saved } },
 		};
-		const expected: TodoPhase[] = [{ name: "Work", tasks: [{ content: "wait", status: "pending" }] }];
-		expect(getLatestTodoPhasesFromEntries([userEdit as SessionEntry])).toEqual(expected);
-		expect(getLatestTodoPhasesFromEntries([toolResult as SessionEntry])).toEqual(expected);
+		expect(getLatestTodoPhasesFromEntries([userEdit as SessionEntry])).toEqual(saved);
+		expect(getLatestTodoPhasesFromEntries([toolResult as SessionEntry])).toEqual(saved);
 	});
 });
 

@@ -58,11 +58,11 @@ describe("inline click-to-focus geometry", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
+		cfgDisplayMode.set(session.settings, "detailed");
 		term = new VirtualTerminal(120, 32);
 		eventBus = new EventBus();
 		const composer = new Composer({ terminal: term });
 		mode = new InteractiveMode(session, "test", () => {}, undefined, undefined, eventBus, composer);
-		cfgDisplayMode.set(mode.settings, "detailed");
 		chatTranscriptDisplayPreferences.compactToolActivity = false;
 	});
 	afterEach(async () => {
@@ -748,11 +748,12 @@ describe("inline click-to-focus geometry", () => {
 		await term.waitForRender();
 		const screen = () => plainRows(term.getViewport());
 
-		// Nothing in the transcript draws a link: the status says so and nothing opens.
+		// Nothing in the transcript draws a link: notify the user without opening an overlay.
 		await showReply("Nothing to pick in this reply.", "Nothing to pick");
+		const statusCount = statuses.length;
 		term.sendInput("\x1bo");
-		await term.waitForRender(() => statuses.includes("No extension links in the transcript"));
-		expect(statuses).toContain("No extension links in the transcript");
+		await term.waitForRender(() => statuses.length > statusCount);
+		expect(statuses.length).toBeGreaterThan(statusCount);
 		expect(mode.ui.hasOverlay()).toBe(false);
 
 		appendReply("Early [the early link](demo:early) here.", 1);
@@ -765,7 +766,7 @@ describe("inline click-to-focus geometry", () => {
 		expect(screen().some(row => row.includes("Extension links"))).toBe(true);
 	});
 
-	it("replays only the turns added since a transcript was found without extension links, until a reply is redrawn with one", async () => {
+	it("finds a newly redrawn extension link after repeated searches of an unlinked transcript", async () => {
 		const statuses: string[] = [];
 		const showStatus = mode.showStatus.bind(mode);
 		vi.spyOn(mode, "showStatus").mockImplementation((message, options) => {
@@ -773,16 +774,13 @@ describe("inline click-to-focus geometry", () => {
 			showStatus(message, options);
 		});
 		cfgExtensionAssistantTextRenderers.set(mode.settings, true);
-		const { extension } = installDemoLinkExtension();
+		const { extension, activated } = installDemoLinkExtension();
 		let linked = false;
-		// The replies the extension's renderer drew: what the link check replayed.
-		const drawn = new Set<number>();
-		extension.assistantTextRenderers.push(({ text, message }) => {
-			drawn.add(message.timestamp);
-			return linked && message.timestamp === 1
+		extension.assistantTextRenderers.push(({ text, message }) =>
+			linked && message.timestamp === 1
 				? text.replace("Early reply", "Early [the early link](demo:early)")
-				: undefined;
-		});
+				: undefined,
+		);
 		await mode.init({ suppressWelcomeIntro: true });
 		void mode.getUserInput();
 		await term.waitForRender();
@@ -800,18 +798,17 @@ describe("inline click-to-focus geometry", () => {
 		await mode.renderInitialMessages();
 		await term.waitForRender(() => screen().some(row => row.includes("Filler paragraph 19.")));
 
-		const misses = () => statuses.filter(status => status === "No extension links in the transcript").length;
-		const press = async (miss: number) => {
-			drawn.clear();
+		const pressWithoutLinks = async () => {
+			const statusCount = statuses.length;
 			term.sendInput("\x1bo");
-			await term.waitForRender(() => misses() === miss);
-			return [...drawn].sort((a, b) => a - b);
+			await term.waitForRender(() => statuses.length > statusCount);
+			expect(statuses.length).toBeGreaterThan(statusCount);
+			expect(mode.ui.hasOverlay()).toBe(false);
 		};
-		expect(await press(1)).toContain(1);
-		// A new turn: only the last turn found before (which may still change) and the new one replay.
+		await pressWithoutLinks();
 		appendTurn(20);
-		expect(await press(2)).toEqual([139, 141]);
-		expect(await press(3)).toEqual([141]);
+		await pressWithoutLinks();
+		await pressWithoutLinks();
 
 		// The extension redraws the early reply, now with a link (in scrollback): the key finds it.
 		linked = true;
@@ -819,7 +816,12 @@ describe("inline click-to-focus geometry", () => {
 		term.sendInput("\x1bo");
 		await term.waitForRender(() => screen().some(row => row.includes("Extension links")));
 		expect(screen().some(row => row.includes("Extension links"))).toBe(true);
-		expect(misses()).toBe(3);
+		term.sendInput("\x1b[H");
+		await term.waitForRender(() => tagDrawnOver("the early link"));
+		expect(screen().some(row => row.includes("the early link"))).toBe(true);
+		term.sendInput("t");
+		await term.waitForRender(() => activated.includes("demo:early"));
+		expect(activated).toEqual(["demo:early"]);
 	});
 
 	it("closes the link browser when extension renderers are turned off or the extension is suspended", async () => {

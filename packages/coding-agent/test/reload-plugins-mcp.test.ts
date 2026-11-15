@@ -40,6 +40,7 @@ function createTaskSession(cwd: string): ToolSession {
 }
 
 function createFakeCtx(cwd: string, settingsValues: Record<string, unknown> = {}) {
+	const settings = Settings.isolated(settingsValues);
 	const mcpTools = [{ name: "mcp__srv_do" }];
 	const mcpManager = {
 		disconnectAll: vi.fn(async () => {}),
@@ -47,6 +48,7 @@ function createFakeCtx(cwd: string, settingsValues: Record<string, unknown> = {}
 		getTools: vi.fn(() => mcpTools),
 	};
 	const session = {
+		settings,
 		effectiveExtensionRoots: TEST_EXTENSION_ROOTS,
 		getEvalPreludes: () => [],
 		refreshMCPTools: vi.fn(async (_tools: unknown) => {}),
@@ -56,7 +58,7 @@ function createFakeCtx(cwd: string, settingsValues: Record<string, unknown> = {}
 		mcpManager,
 		session,
 		sessionManager: { getCwd: () => cwd },
-		settings: Settings.isolated(settingsValues),
+		settings,
 		refreshSkillState: vi.fn(async () => {}),
 		refreshSlashCommandState: vi.fn(async () => {}),
 		showStatus: vi.fn(() => {}),

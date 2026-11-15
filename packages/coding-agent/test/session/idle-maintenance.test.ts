@@ -885,7 +885,7 @@ describe("AgentSession idle maintenance", () => {
 			expect(h.recaps).toHaveLength(1);
 		});
 
-		it("recaps on schedule while background work that can still wake the session runs", async () => {
+		it("waits for background work to settle before starting the recap delay", async () => {
 			const h = await startSession({ backgroundJobs: true });
 			h.enable();
 			const job = startBackgroundJob(h);
@@ -894,15 +894,18 @@ describe("AgentSession idle maintenance", () => {
 			expect(h.session.hasPendingAsyncWork()).toBe(true);
 			await elapse(RECAP_DELAY_MS - 1);
 			expect(sideCalls(h)).toBe(0);
-			vi.advanceTimersByTime(1);
-			await until(() => h.recaps.length === 1, "the recap");
-			await flush();
 			await elapse(3 * RECAP_DELAY_MS);
-
 			expect(h.session.hasPendingAsyncWork()).toBe(true);
+			expect(sideCalls(h)).toBe(0);
+
+			await job.finishWithoutWake();
+			expect(h.session.hasPendingAsyncWork()).toBe(false);
+			await elapse(RECAP_DELAY_MS - 1);
+			expect(sideCalls(h)).toBe(0);
+			vi.advanceTimersByTime(1);
+			await until(() => h.recaps.length === 1, "the recap after settlement");
 			expect(sideCalls(h)).toBe(1);
 			expect(h.recaps).toEqual([RECAP]);
-			await job.finishWithoutWake();
 		});
 
 		it("holds idle compaction while background work can still wake the session, then compacts once it drains without a wake", async () => {

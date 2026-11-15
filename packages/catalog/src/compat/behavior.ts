@@ -10,18 +10,6 @@ import rules from "./rules.json";
 import type { CompiledMatchList } from "./types";
 
 const behavior = rules.behavior;
-const supportedChatProviders = new Set(behavior.supportedChatProviders);
-const modelHubHiddenProviders = new Set(behavior.modelHubHiddenProviders);
-
-/** Whether OMP retains this chat provider; protocol and non-chat support are separate. */
-export function isSupportedChatProvider(provider: string): boolean {
-	return supportedChatProviders.has(provider);
-}
-
-/** Whether the provider's sidebar scope is hidden in the model hub. */
-export function isModelHubHiddenProvider(provider: string): boolean {
-	return modelHubHiddenProviders.has(provider);
-}
 
 /** Whether the model-policy cascade declares this provider, including runtime-only catalogs. */
 export function hasProviderModelRules(provider: string): boolean {

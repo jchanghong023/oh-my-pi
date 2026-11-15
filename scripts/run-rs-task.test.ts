@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testTimeoutMs } from "./ci-test-ts";
+import { testConcurrencyLimit } from "./test-gate-scheduler";
 
 interface Producer {
 	producer: string;
@@ -28,10 +29,21 @@ async function runWorkspace(
 ) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-rust-workspace-"));
 	try {
-		fs.cpSync(import.meta.dir, path.join(root, "scripts"), {
-			recursive: true,
-			filter: source => fs.statSync(source).isDirectory() || source.endsWith(".ts"),
-		});
+		const scripts = path.join(root, "scripts");
+		fs.mkdirSync(scripts);
+		for (const name of [
+			"run-rs-task.ts",
+			"windows-test-temp.ts",
+			"test-gate-failure-events.ts",
+			"test-gate-native-events.ts",
+			"test-gate-scheduler.ts",
+			"test-reporting.ts",
+			"test-gate-events.ts",
+			"test-gate-clock.ts",
+			"test-gate-libc.ts",
+		]) {
+			fs.copyFileSync(path.join(import.meta.dir, name), path.join(scripts, name));
+		}
 		fs.symlinkSync(path.join(import.meta.dir, "..", "node_modules"), path.join(root, "node_modules"), "junction");
 		fs.symlinkSync(path.join(import.meta.dir, "..", "packages"), path.join(root, "packages"), "junction");
 		fs.copyFileSync(path.join(import.meta.dir, "..", "rust-toolchain.toml"), path.join(root, "rust-toolchain.toml"));
@@ -66,7 +78,10 @@ mod shell { #[test] fn excluded_case() { ${options.full ? "" : 'panic!("must be 
 			);
 		}
 		const env = { ...process.env };
-		for (const key of Object.keys(env)) if (key.startsWith("OMP_")) delete env[key];
+		// Isolate gate/report/selection state without discarding the caller's CPU allocation.
+		for (const key of Object.keys(env)) {
+			if (key.startsWith("OMP_") && key !== "OMP_TEST_CPU_BUDGET" && key !== "OMP_TEST_CONCURRENCY") delete env[key];
+		}
 		Object.assign(env, {
 			CI: "0",
 			// Legacy delta cannot suppress any selected fork feature tests.
@@ -128,6 +143,7 @@ describe("Rust fork feature CLI", () => {
 			for (const run of [result, repeated!]) {
 				expect(run.exitCode, run.stderr).toBe(0);
 				const nextest = run.producers.find(producer => producer.producer === "cargo nextest run")!;
+				expect(nextest.command).toContain(`--test-threads=${testConcurrencyLimit()}`);
 				expect(nextest.scope).toBe("rust-fork-features");
 				expect(nextest.selection).toMatchObject({
 					tool: "cargo-nextest",

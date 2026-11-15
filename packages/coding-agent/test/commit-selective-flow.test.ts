@@ -138,6 +138,7 @@ describe("selective commit flow", () => {
 		await fs.rm(path.join(root, "tool.sh"));
 		await write("Main", undefined, "plain.txt", "plain\nmore\n");
 		await fs.chmod(path.join(root, "plain.txt"), 0o755);
+		const executableMode = (await fs.stat(path.join(root, "plain.txt"))).mode & 0o111 ? "100755" : "100644";
 		await Bun.write(path.join(root, "latin1.txt"), latin1("caf\xe9\nna\xefve\n"));
 		await fs.symlink("plain.txt", path.join(root, "link"));
 		await journal.flush();
@@ -157,7 +158,12 @@ describe("selective commit flow", () => {
 					return [file, meta.split(" ")[0]];
 				}),
 		);
-		expect(modes).toEqual({ "latin1.txt": "100644", link: "120000", "plain.txt": "100755", "run.sh": "100644" });
+		expect(modes).toEqual({
+			"latin1.txt": "100644",
+			link: "120000",
+			"plain.txt": executableMode,
+			"run.sh": "100644",
+		});
 	});
 
 	it("makes the first commit of a repository without commits", async () => {

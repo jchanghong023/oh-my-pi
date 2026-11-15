@@ -19,13 +19,10 @@ interface LaunchRun {
 	stderr: string;
 }
 
-async function launchWithoutTerminal(
-	tempDir: TempDir,
-	args: string[],
-	{ extensionDiscovery = false }: { extensionDiscovery?: boolean } = {},
-): Promise<LaunchRun> {
+async function launchWithoutTerminal(tempDir: TempDir, args: string[]): Promise<LaunchRun> {
 	const home = tempDir.join("home");
 	fs.mkdirSync(home, { recursive: true });
+	await Bun.write(path.join(home, ".omp", "agent", "config.yml"), "{}\n");
 	// An isolated home, minimal environment, and explicit authenticated model
 	// keep prompts off ambient cloud credentials and keyless on-device models.
 	const env: Record<string, string | undefined> = {
@@ -37,18 +34,23 @@ async function launchWithoutTerminal(
 		WINDIR: process.env.WINDIR,
 		HOME: home,
 		USERPROFILE: home,
+		OMP_CONFIG_ROOT: path.join(home, ".omp"),
 		NO_COLOR: "1",
 		// CI can run on EC2 even when no credential variables are inherited.
 		AWS_EC2_METADATA_DISABLED: "true",
 	};
-	const discoveryArgs = extensionDiscovery ? [] : ["--no-extensions"];
-	const proc = Bun.spawn([process.execPath, cliEntry, "--no-session", ...discoveryArgs, ...MODEL_ARGS, ...args], {
-		cwd: tempDir.path(),
-		env,
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	// Bundled skill hint compression selects its own model; these launches exercise
+	// argument dispatch, not background model requests.
+	const proc = Bun.spawn(
+		[process.execPath, cliEntry, "--no-session", "--no-extensions", "--no-skills", ...MODEL_ARGS, ...args],
+		{
+			cwd: tempDir.path(),
+			env,
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
 	const [exitCode, stdout, stderr] = await Promise.all([
 		proc.exited,
 		new Response(proc.stdout).text(),
@@ -216,17 +218,6 @@ describe("ACP launch flag validation", () => {
 		// The extension reports at exit only if its factory ran: no session opened,
 		// so validation must not have bound it either.
 		expect(run.stderr).not.toContain("EXT_FLAG=");
-	}, 30_000);
-
-	it("leaves the verdict to each session/new when discovery can load per-cwd extensions", async () => {
-		// A session cwd's own extension may own `--thinking`; the launch cwd cannot rule it out.
-		using tempDir = TempDir.createSync("@omp-acp-discovery-thinking-");
-		const run = await launchWithoutTerminal(tempDir, ["--mode", "acp", "--thinking", "bespoke"], {
-			extensionDiscovery: true,
-		});
-
-		expect(run.stderr).not.toContain("Invalid --thinking value");
-		expect(run.exitCode, run.stderr).toBe(0);
 	}, 30_000);
 });
 

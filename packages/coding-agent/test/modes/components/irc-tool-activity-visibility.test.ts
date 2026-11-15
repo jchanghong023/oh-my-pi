@@ -5,6 +5,10 @@ import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/eve
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { Text, TUI } from "@oh-my-pi/pi-tui";
 import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import type { CustomMessage } from "@oh-my-pi/pi-tui/chat/messages";
 import type { TranscriptEntryLike } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -91,6 +95,8 @@ describe("IRC tool activity visibility", () => {
 			details: message.details,
 			display: true,
 		}));
+		const preferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const builder = new ChatTranscriptBuilder({
 			ui: new TUI(new VirtualTerminal()),
 			cwd: process.cwd(),
@@ -98,14 +104,15 @@ describe("IRC tool activity visibility", () => {
 		});
 		const render = () => Bun.stripANSI(builder.container.render(120).join("\n"));
 		try {
-			builder.container.setToolActivityVisible(false);
 			builder.rebuild(entries.slice(0, 2));
 			builder.append(entries.slice(2));
-			expect(render()).toBe("");
+			expectCoordination(render(), false);
+			setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 			builder.container.setToolActivityVisible(true);
 			expectCoordination(render(), true);
 		} finally {
 			builder.dispose();
+			setChatTranscriptDisplayPreferences(preferences);
 		}
 	});
 	it("shows a parent steer as an IRC card in the live transcript even when tool activity is hidden", () => {

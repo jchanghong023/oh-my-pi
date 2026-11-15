@@ -324,8 +324,6 @@ export function compileBehavior(source: { file: string; text: string } | undefin
 		modelLimits: [],
 		excludeDiscoveryModes: [],
 		excludeModels: [],
-		supportedChatProviders: [],
-		modelHubHiddenProviders: [],
 		retiredProviders: [],
 		referenceIsolatedProviders: [],
 		appendOnlyContextProviders: [],
@@ -404,20 +402,6 @@ export function compileBehavior(source: { file: string; text: string } | undefin
 			case "pricing-peer":
 				behavior.pricingPeers.push(parsePricingPeer(node));
 				break;
-			case "supported-chat-providers": {
-				ensureLeaf(node, []);
-				const values = positionalStrings(node);
-				if (values.length === 0 || values.some(value => !value)) malformed(node);
-				behavior.supportedChatProviders.push(...values);
-				break;
-			}
-			case "model-hub-hidden-providers": {
-				ensureLeaf(node, []);
-				const values = positionalStrings(node);
-				if (values.length === 0 || values.some(value => !value)) malformed(node);
-				behavior.modelHubHiddenProviders.push(...values);
-				break;
-			}
 			case "retired-providers": {
 				ensureLeaf(node, []);
 				const values = positionalStrings(node);

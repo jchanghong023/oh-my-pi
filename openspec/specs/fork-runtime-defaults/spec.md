@@ -32,7 +32,7 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - `terminal.programStatus`：所有平台的 offline（`OMP_OFFLINE`）进程默认 `false`，避免不兼容终端把 OSC 7501 程序状态序列显示为文本；普通模式仍默认 `true`。用户显式配置优先，不改写已有配置文件。
 - 界面显示默认采用 `compact`，完整行为与验收见[界面显示模式](../tui-presentation/spec.md)。
 - **CLI 默认 `--no-lsp`**：所有平台、普通与 offline 的 CLI 启动均按 `--no-lsp` 语义执行，即使已保存 `lsp.enabled=true`，本次会话仍禁用 LSP 工具、自动格式化、诊断、文件通知及启动预热，不改写配置文件。`lsp.enabled` 的缺省值仍为 `false`；SDK 等非 CLI 宿主的显式 LSP 控制保持原有语义，不新增开关或别名。
-- **CLI 默认 `--no-extensions`**：所有平台、普通与 offline 的 CLI 启动均跳过扩展自动发现，不加载用户、项目或插件中自动发现的扩展。显式 `-e`／`--extension`、`--hook` 和可信扩展白名单仍按现有规则加载；Skills、规则、上下文文件和 MCP 不因本默认值被一并关闭，不改写用户配置。
+- **CLI 默认 `--no-extensions`**：所有平台、普通与 offline 的 CLI 启动均跳过扩展自动发现，不加载用户、项目或插件中自动发现的扩展。默认或显式关闭扩展自动发现时仍加载全部 bundled TypeScript custom commands（含 `/review`、`/annotate`、`/green`），不探测或遍历用户／项目 custom command 目录；`restrictToolNames === true` 的限制会话仍不加载任何 custom commands。显式 `-e`／`--extension`、`--hook` 和可信扩展白名单仍按现有规则加载；Skills、规则、上下文文件和 MCP 不因本默认值被一并关闭，不改写用户配置。
 - **默认不扫描 Claude 插件**：所有平台、普通与 offline 启动默认跳过 Claude 插件注册表及插件缓存发现，不为插件发现读取 `enabledPlugins`；沿用现有来源启用机制显式恢复，OMP 原生插件和明确指定的插件目录不受影响，完整边界见下文。
 - `mnemopi.embeddingVariant=multilingual`
 - `stt.language=zh-CN`；本地 Whisper 与云端转录的区域标签归一化为基语言，如 `zh-CN`→`zh`。
@@ -76,6 +76,22 @@ OMP CLI MUST 在首次参数解析和扩展参数重新解析中默认应用 `--
 
 - **WHEN** CLI 不携带 `--no-extensions` 启动，存在用户或项目自动扩展，并显式指定 `-e <path>`
 - **THEN** 不扫描或执行自动扩展，仅加载明确指定的扩展；扩展参数重新解析、工具和命令注册沿用现有行为，不丢失显式路径。
+
+#### Scenario: 关闭自动发现仍保留内置命令
+
+- **WHEN** 普通或 offline CLI 默认启动，或显式关闭扩展自动发现
+- **THEN** 真实 RPC 命令广告与 TUI 补全均可见 `/review`、`/annotate`、`/green`，RPC 来源为 `custom`。
+- **AND** 不探测或遍历用户／项目 TypeScript custom command 目录，不执行其中的模块；不因恢复内置命令而启用其他自动扩展。
+
+#### Scenario: 限制会话不加载 custom commands
+
+- **WHEN** SDK 以 `restrictToolNames === true` 创建会话
+- **THEN** 无论扩展自动发现是否关闭，custom commands 均为空，不执行外部命令模块。
+
+#### Scenario: 非 CLI 宿主保留原有命令发现与覆盖语义
+
+- **WHEN** 非限制宿主调用现有 custom command loader，省略 `discover` 或传入 `true`
+- **THEN** 沿用原有外部目录发现、用户／项目覆盖 bundled 命令及外部同名冲突处理；公开 `discoverCustomTSCommands()` 保留默认发现语义。
 
 ### Requirement: Claude 插件发现默认关闭
 

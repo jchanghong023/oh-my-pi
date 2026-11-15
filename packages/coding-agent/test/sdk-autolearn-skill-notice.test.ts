@@ -48,13 +48,16 @@ function noticeCount(body: string): number {
 
 describe("auto-learn skill notice", () => {
 	const sessions: AgentSession[] = [];
+	const authStorages: AuthStorage[] = [];
 	let tempHome: string;
 	let tempCwd: string;
+	let originalCwd: string;
 	let originalAgentDir: string;
 	let originalClaudeConfigDir: string | undefined;
 	let bodies: string[];
 
 	beforeEach(async () => {
+		originalCwd = process.cwd();
 		// Keep the developer's own skills out of discovery: only the managed skill under the fake home exists.
 		originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 		delete process.env.CLAUDE_CONFIG_DIR;
@@ -77,15 +80,18 @@ describe("auto-learn skill notice", () => {
 
 	afterEach(async () => {
 		for (const session of sessions.splice(0)) await session.dispose();
+		for (const authStorage of authStorages.splice(0)) authStorage.close();
 		vi.restoreAllMocks();
 		restoreEnvValue("CLAUDE_CONFIG_DIR", originalClaudeConfigDir);
 		setAgentDir(originalAgentDir);
+		process.chdir(originalCwd);
 		await removeWithRetries(tempHome);
 	});
 
 	async function startSession(sessionManager: SessionManager, toolNames?: string[]): Promise<AgentSession> {
 		const model = getBundledModel("venice", "deepseek-v4-1-flash");
 		const authStorage = await AuthStorage.create(path.join(tempHome, "auth.db"));
+		authStorages.push(authStorage);
 		authStorage.keys.setRuntime(model.provider, "test-key");
 		const { session } = await createAgentSession({
 			cwd: tempCwd,

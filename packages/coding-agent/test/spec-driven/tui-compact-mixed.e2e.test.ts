@@ -712,11 +712,28 @@ test("resumed compact transcript stays in place while successive tools finish an
 			{
 				screenDiagnostics: true,
 				configuration: { display: { mode: "compact" }, read: { toolResultPreview: true } },
-				setup: async cwd => {
+				setup: async (cwd, _agentDir, env) => {
 					await Promise.all([
 						Bun.write(path.join(cwd, "jump-first.txt"), "JUMP_FIRST_EVIDENCE\n"),
 						Bun.write(path.join(cwd, "jump-second.txt"), "JUMP_EVIDENCE\n"),
 					]);
+					// This regression measures resumed rendering, not cold resource
+					// extraction. Prepare only its own isolated profile via the real CLI.
+					const preparation = Bun.spawn(
+						[
+							Bun.which("bun") ?? process.execPath,
+							path.resolve(import.meta.dir, "../../src/cli.ts"),
+							"openspec",
+							"--version",
+						],
+						{ cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+					);
+					const [stdout, stderr, code] = await Promise.all([
+						new Response(preparation.stdout).text(),
+						new Response(preparation.stderr).text(),
+						preparation.exited,
+					]);
+					if (code !== 0) throw new Error(`Native resource preparation exited ${code}:\n${stdout}\n${stderr}`);
 				},
 				async reply(request) {
 					if (!request.tools?.some(tool => tool.function?.name.replace(/^_/u, "") === "read"))
@@ -794,7 +811,19 @@ test("resumed compact transcript stays in place while successive tools finish an
 						() => screen.checkpoint(`tool ${index + 1} awaiting model`),
 						value => value.screen.includes(current.intent),
 					);
-					expect(frame.screen).not.toContain("JUMP_TS_LINE_");
+					const transcript = await tui("text", "--full");
+					expect(transcript).toContain("JUMP_OLD_ASSISTANT_REPLY");
+					expect(transcript).toContain("JUMP_NEW_PROMPT");
+					expectVisibleDraft(frame, "", 100, 40);
+					const history = messages(await journal(file));
+					expect(recordedResult(history, current.intent).isError).toBe(false);
+					expect(
+						history.filter(
+							message =>
+								message.role === "assistant" &&
+								contentText(message.content).includes("JUMP_OLD_ASSISTANT_REPLY"),
+						),
+					).toHaveLength(1);
 					release[index]!.resolve();
 				}
 				await tui("expect", "text", "JUMP_DONE", "--timeout", "30000");

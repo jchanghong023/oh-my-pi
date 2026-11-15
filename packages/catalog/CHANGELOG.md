@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Restored the complete upstream model catalog alongside the fork's company, CodeAgent and Ascend models.
 - Default company GLM-5.3 to medium thinking, offer low/medium/xhigh/max, and send xhigh as the gateway's ultra effort instead of exposing unreliable high or unverified minimal.
 - Replaced the built-in CodeAgent model with `deepseek-v4.1-flash-1017` and increased its context window to 409,600 tokens.
 

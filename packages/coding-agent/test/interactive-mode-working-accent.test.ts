@@ -9,7 +9,7 @@ import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-comm
 import * as sessionColor from "@oh-my-pi/pi-tui/theme/session-color";
 import { adjustHsv, TempDir } from "@oh-my-pi/pi-utils";
 
-import { cfgStatusLineSessionAccent } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode, cfgStatusLineSessionAccent } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 type Harness = {
 	mode: InteractiveMode;
@@ -47,6 +47,7 @@ async function createHarness(sessionName: string): Promise<Harness> {
 	// Settings.init keeps an instance an earlier file loaded (e.g. from the user's config).
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true, cwd: tempDir.path() });
+	cfgDisplayMode.set(settings, "detailed");
 	await initTheme(false);
 	const sessionManager = SessionManager.inMemory(tempDir.path());
 	await sessionManager.setSessionName(sessionName, "user");
@@ -84,16 +85,6 @@ function renderLoader(mode: InteractiveMode): string {
 	return mode.statusContainer.render(120).join("\n");
 }
 
-function shadowAccentSurfaceLuminance(value: number | undefined): () => void {
-	Object.defineProperty(theme, "accentSurfaceLuminance", {
-		configurable: true,
-		get: () => value,
-	});
-	return () => {
-		delete (theme as unknown as { accentSurfaceLuminance?: number }).accentSurfaceLuminance;
-	};
-}
-
 afterEach(() => {
 	vi.restoreAllMocks();
 });
@@ -105,89 +96,37 @@ afterAll(() => {
 	resetSettingsForTest();
 });
 
-describe("InteractiveMode working-message session accent cache", () => {
-	it("reuses one computed accent across loader spinner and message colorizers", async () => {
-		const { mode } = await createHarness("Cached session");
-		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
-		const getAnsi = vi.spyOn(sessionColor, "getSessionAccentAnsi");
-
-		// Colorizers run lazily at render time (loader layout cache); the accent
-		// computation is observable only after a render.
-		startStableLoader(mode);
-		renderLoader(mode);
-		expect(getHex).toHaveBeenCalledTimes(1);
-		expect(getAnsi).toHaveBeenCalledTimes(2);
-
-		mode.loadingAnimation?.setMessage("Still working");
-		renderLoader(mode);
-		expect(getHex).toHaveBeenCalledTimes(1);
-		expect(getAnsi).toHaveBeenCalledTimes(2);
-	});
-
-	it("recomputes for session renames and repaints the loader glyph with the new accent", async () => {
+describe("InteractiveMode working-message session accent", () => {
+	it("repaints the loader glyph after a session rename", async () => {
 		const initialName = "Alpha session";
 		const renamedName = "Beta session";
 		const { mode, sessionManager } = await createHarness(initialName);
 		const initialAnsi = accentGlyphAnsi(initialName);
 		const renamedAnsi = accentGlyphAnsi(renamedName);
-		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
 
 		startStableLoader(mode);
 		expect(renderLoader(mode)).toContain(initialAnsi);
-		expect(getHex).toHaveBeenCalledTimes(1);
 
 		await sessionManager.setSessionName(renamedName, "user");
 		mode.loadingAnimation?.setMessage("Renamed session");
 		expect(renderLoader(mode)).toContain(renamedAnsi);
-		expect(getHex).toHaveBeenCalledTimes(2);
 	});
 
-	it("keys cached accents by theme accent-surface luminance", async () => {
-		const sessionName = "Luminance session";
-		const { mode } = await createHarness(sessionName);
-		const restoreInitial = shadowAccentSurfaceLuminance(undefined);
-		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
-
-		try {
-			startStableLoader(mode);
-			renderLoader(mode);
-			expect(getHex).toHaveBeenCalledTimes(1);
-			expect(getHex.mock.calls[0]).toEqual([sessionName, theme.sessionAccentInputs]);
-
-			restoreInitial();
-			const restoreLight = shadowAccentSurfaceLuminance(0.72);
-			try {
-				mode.loadingAnimation?.setMessage("Light theme");
-				renderLoader(mode);
-				expect(getHex).toHaveBeenCalledTimes(2);
-				expect(getHex.mock.calls[1]).toEqual([sessionName, theme.sessionAccentInputs]);
-			} finally {
-				restoreLight();
-			}
-		} finally {
-			restoreInitial();
-		}
-	});
-
-	it("caches disabled session accents and recomputes when the setting is enabled again", async () => {
+	it("toggles the visible session accent with the setting", async () => {
 		const sessionName = "Toggle session";
 		const { mode } = await createHarness(sessionName);
 		const accentAnsi = accentGlyphAnsi(sessionName);
-		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
 
 		startStableLoader(mode);
 		expect(renderLoader(mode)).toContain(accentAnsi);
-		expect(getHex).toHaveBeenCalledTimes(1);
 
 		cfgStatusLineSessionAccent.set(settings, false);
 		mode.loadingAnimation?.setMessage("Accent disabled");
 		expect(renderLoader(mode)).not.toContain(accentAnsi);
-		expect(getHex).toHaveBeenCalledTimes(1);
 
 		cfgStatusLineSessionAccent.set(settings, true);
 		mode.loadingAnimation?.setMessage("Accent enabled");
 		expect(renderLoader(mode)).toContain(accentAnsi);
-		expect(getHex).toHaveBeenCalledTimes(2);
 	});
 });
 
@@ -241,7 +180,6 @@ describe("InteractiveMode working activity", () => {
 			mode.clearTransientSessionUi();
 			mode.ensureLoadingAnimation();
 
-			expect(specs).toHaveLength(2);
 			expect(specs.map(spec => spec().startedAt)).toEqual([runStartedAt, runStartedAt]);
 		} finally {
 			mode.loadingAnimation?.stop();

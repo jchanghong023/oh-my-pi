@@ -151,6 +151,8 @@ export interface LoadCustomCommandsOptions {
 	cwd?: string;
 	/** Agent config directory. Default: from getAgentDir() */
 	agentDir?: string;
+	/** Discover external commands. Default: true. Bundled commands are always loaded. */
+	discover?: boolean;
 }
 
 /**
@@ -189,7 +191,7 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 	const cwd = options.cwd ?? getProjectDir();
 	const agentDir = options.agentDir ?? getAgentDir();
 
-	const { paths } = await discoverCustomCommands({ cwd, agentDir });
+	const paths = options.discover === false ? [] : (await discoverCustomCommands({ cwd, agentDir })).paths;
 
 	const commands: LoadedCustomCommand[] = [];
 	const errors: Array<{ path: string; error: string }> = [];

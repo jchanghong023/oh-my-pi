@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { runConfigCommand } from "@oh-my-pi/pi-coding-agent/cli/config-cli";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -77,6 +78,8 @@ describe("config list output", () => {
 	beforeEach(() => {
 		resetSettingsForTest();
 		agentDir = TempDir.createSync("@omp-config-credentials-");
+		// Explicit credential edits operate on an existing user configuration.
+		fs.writeFileSync(agentDir.join("config.yml"), "{}\n");
 		setAgentDir(agentDir.path());
 	});
 

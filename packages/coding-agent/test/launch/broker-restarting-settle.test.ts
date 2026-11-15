@@ -4,6 +4,7 @@
 // process-exit promise or the unix-socket RPC the broker relies on. The embedded broker uses a
 // shorter real backoff here; proving the absence of resurrection still requires crossing it.
 import { describe, expect, it, spyOn } from "bun:test";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Process } from "@oh-my-pi/pi-natives";
@@ -135,7 +136,7 @@ describe("daemon broker restart settling", () => {
 		const metadataPath = path.join(runtimeDir, "daemons", name, "meta.json");
 		const writingExit = Promise.withResolvers<void>();
 		const releaseWrite = Promise.withResolvers<void>();
-		const rename = fs.rename;
+		const rename = nodeFs.promises.rename;
 		let blocked = false;
 		let restoreRename: (() => void) | undefined;
 		try {
@@ -154,7 +155,7 @@ describe("daemon broker restart settling", () => {
 				},
 			});
 			await waitForState(client, name, "restarting", 5_000);
-			const renameSpy = spyOn(fs, "rename").mockImplementation(async (from, to) => {
+			const renameSpy = spyOn(nodeFs.promises, "rename").mockImplementation(async (from, to) => {
 				if (to === metadataPath && !blocked && (await fs.readFile(from, "utf8")).includes('"state":"exited"')) {
 					blocked = true;
 					writingExit.resolve();

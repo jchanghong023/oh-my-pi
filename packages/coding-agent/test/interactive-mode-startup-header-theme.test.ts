@@ -111,7 +111,7 @@ describe("InteractiveMode startup header after the terminal reports a light back
 		await mode.init();
 		mode.showStartupChangelog(startupChangelog);
 		const darkAccent = fgPrefix("accent");
-		const headingText = Bun.stripANSI(headers.mock.calls[0]![1]![1]!.render(120).join("\n")).trim();
+		const headingText = Bun.stripANSI(headers.mock.lastCall![1]![1]!.render(120).join("\n")).trim();
 		expect(renderedLine(headingText)).toContain(darkAccent);
 
 		await switchTerminalToLight();

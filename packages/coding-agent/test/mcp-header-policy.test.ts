@@ -58,6 +58,7 @@ describe("setGeneratedHeader", () => {
 describe("MCP transport header policy", () => {
 	it("trusts a CA loaded after startup for HTTP requests and origin-locked redirects", async () => {
 		const originalCa = Bun.env.NODE_EXTRA_CA_CERTS;
+		const originalTlsRejectUnauthorized = Bun.env.NODE_TLS_REJECT_UNAUTHORIZED;
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-ca-"));
 		const caFile = path.join(dir, "ca.pem");
 		const server = Bun.serve({
@@ -73,6 +74,8 @@ describe("MCP transport header policy", () => {
 		});
 		try {
 			delete Bun.env.NODE_EXTRA_CA_CERTS;
+			// This trust-boundary fixture must validate certificates even if the caller opted out.
+			Bun.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
 			const direct = new HttpTransport({
 				type: "http",
 				url: `https://127.0.0.1:${server.port}/mcp`,
@@ -104,6 +107,8 @@ describe("MCP transport header policy", () => {
 			server.stop(true);
 			if (originalCa === undefined) delete Bun.env.NODE_EXTRA_CA_CERTS;
 			else Bun.env.NODE_EXTRA_CA_CERTS = originalCa;
+			if (originalTlsRejectUnauthorized === undefined) delete Bun.env.NODE_TLS_REJECT_UNAUTHORIZED;
+			else Bun.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsRejectUnauthorized;
 			await fs.rm(dir, { recursive: true, force: true });
 		}
 	});

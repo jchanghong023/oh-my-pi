@@ -6,6 +6,10 @@
 
 - The embedded dashboard bundle now uses the shared archive helper; the served bytes and lazy loading behavior are unchanged.
 
+### Fixed
+
+- Windows stats startup avoids a redundant process lookup when the requested port is occupied.
+
 ## [18.20.1] - 2026-11-14
 
 ### Fixed

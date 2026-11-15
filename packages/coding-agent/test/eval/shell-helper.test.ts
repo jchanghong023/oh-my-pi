@@ -38,6 +38,7 @@ function makeSession(): ToolSession {
 		hasUI: false,
 		skills: [],
 		settings: Settings.isolated({
+			"eval.js": true,
 			"eval.autoProvision": false,
 			"bash.autoBackground.enabled": true,
 			"bash.autoBackground.thresholdMs": 10,

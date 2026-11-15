@@ -8,7 +8,6 @@ import type { BunPlugin } from "bun";
 import { getTemplate } from "../src/export/html/index";
 import viewerAsset from "../src/export/html/viewer.generated.json" with { type: "json" };
 
-const bundleDistUrl = new URL("../scripts/bundle-dist.ts", import.meta.url).href;
 const probePath = path.resolve(import.meta.dir, "fixtures", "html-export-template-probe.ts");
 const packageDir = path.resolve(import.meta.dir, "..");
 const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-html-template-"));
@@ -157,28 +156,6 @@ describe("HTML export template", () => {
 	});
 
 	test("npm packages keep the tiny loader and metadata but omit hosted viewer source assets", async () => {
-		const productionDir = path.join(tempRoot, "production-bundle");
-		const staleAsset = path.join(productionDir, "template-stale.css");
-		await Bun.write(staleAsset, "obsolete viewer sidecar");
-		const runner = path.join(tempRoot, "bundle-dist-runner.ts");
-		await Bun.write(
-			runner,
-			`import { bundleDist } from ${JSON.stringify(bundleDistUrl)};\nawait bundleDist(${JSON.stringify(productionDir)});\n`,
-		);
-		const proc = Bun.spawn([process.execPath, runner], {
-			cwd: packageDir,
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const [stdout, stderr, exitCode] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
-		expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
-		expect(await Bun.file(staleAsset).exists()).toBe(false);
-
 		const repoRoot = path.resolve(packageDir, "../..");
 		const packWorkspace = path.join(tempRoot, "pack-workspace");
 		const packageRel = path.relative(repoRoot, packageDir).split(path.sep).join("/");
@@ -188,7 +165,12 @@ describe("HTML export template", () => {
 		await Bun.write(path.join(packWorkspace, "bun.lock"), Bun.file(path.join(repoRoot, "bun.lock")));
 		const packDir = path.join(packWorkspace, packageRel);
 		await Bun.write(path.join(packDir, "package.json"), Bun.file(path.join(packageDir, "package.json")));
-		await fs.cp(productionDir, path.join(packDir, "dist"), { recursive: true });
+		// Use the focused loader bundle, not a full release build (which also
+		// generates unrelated web GUI, wiki, workbench, stats and docs assets).
+		await Bun.write(path.join(packDir, "dist", "cli.js"), Bun.file(bundlePath));
+		for (const name of ["template-stale.css", "tool-views.generated.js", "marked.min.js", "highlight.min.js"]) {
+			await Bun.write(path.join(packDir, "dist", name), "excluded hosted viewer sidecar");
+		}
 		await fs.cp(path.join(packageDir, "src/export/html"), path.join(packDir, "src/export/html"), { recursive: true });
 		const pack = Bun.spawn([process.execPath, "pm", "pack", "--dry-run", "--ignore-scripts"], {
 			cwd: packDir,
@@ -203,6 +185,7 @@ describe("HTML export template", () => {
 		]);
 		expect(packExit, packErr).toBe(0);
 		const packed = Array.from(packOut.matchAll(/^packed \S+ (.+)$/gm), match => match[1]);
+		expect(packed).toContain("dist/cli.js");
 		expect(packed).toContain("src/export/html/template.html.txt");
 		expect(packed).toContain("src/export/html/viewer.generated.json");
 		for (const name of ["shell.html", "template.css", "template.js", "share-loader.js"]) {

@@ -11,6 +11,7 @@ import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensi
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { CREDENTIAL_DISABLED_NOTICE_SOURCE } from "@oh-my-pi/pi-coding-agent/session/credential-disabled-notice";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
@@ -531,7 +532,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 		return notices;
 	};
 
-	it("does not recommend login for a cropped provider's disabled account", async () => {
+	it("warns the live session, without the provider's text, when a signed-in account is disabled", async () => {
 		const dirs = makeDirs("notice");
 		const authStorage = await createAuthStorage(path.join(dirs.agentDir, "agent.db"));
 		const { session } = await createAgentSession(baseOptions(dirs, authStorage));
@@ -542,8 +543,16 @@ describe("createAgentSession credential_disabled subscription", () => {
 
 			await authStorage.keys.get("anthropic", "session-notice");
 
-			expect(getOAuthProviders().some(provider => provider.id === "anthropic")).toBe(false);
-			expect(notices).toEqual([]);
+			const name = getOAuthProviders().find(provider => provider.id === "anthropic")?.name;
+			expect(name).toBeDefined();
+			expect(notices).toEqual([
+				{
+					type: "notice",
+					level: "warning",
+					source: CREDENTIAL_DISABLED_NOTICE_SOURCE,
+					message: `${name} account alice@example.com was signed out automatically. Run /login to sign in again.`,
+				},
+			]);
 		} finally {
 			await session.dispose();
 		}

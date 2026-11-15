@@ -56,6 +56,14 @@ MUST write a real, self-contained Markdown file, usable without the interview tr
 
 MUST use same-level `##` task groups and ordinary `- [ ]` tasks. First checkbox immediately follows its group's heading; shared context contains no checkboxes. Details use indented continuation text, not nested checkboxes or code-fenced tasks. MUST state dependencies between groups.
 
-MUST verify the file was written and follows the Markdown structure above. File generation does not prove the tasks were implemented or their acceptance checks passed.
+## Sequentially completable groups
+
+- MUST treat file order as sequential: finish and verify every task in one group before starting the next. Group prerequisites MUST come only from shared preconditions or fully completed earlier groups.
+- MUST make each group a completion boundary, not merely a work-type boundary. Keep implementation, required tests, documentation and acceptance needed to check its tasks in that group; NEVER make an earlier checkbox wait for a later group's work or verification.
+- Shared acceptance required before several tasks can be checked? MUST merge those tasks and their prerequisites into one group. A single agreed verification batch MUST stay with all work whose completion depends on it; NEVER split into implementation, test-writing and acceptance groups that require returning to earlier checkboxes.
+- A later integration/final acceptance group MAY verify broader outcomes only when earlier groups have sufficient independent completion evidence. NEVER waive required verification, duplicate checks or mark unverified tasks complete to preserve a split.
+- MUST include sequential completion and no-forward-dependency rules in the generated shared context. Before delivery, walk groups in file order: can every checkbox be truthfully checked using only shared preconditions, completed earlier groups and work/verification in this group? If not, reorder or merge groups before writing; NEVER rely on skipping an unchecked group or returning later.
+
+MUST verify the file was written, follows the Markdown structure above and passes the sequential group-completion walkthrough. File generation does not prove the tasks were implemented or their acceptance checks passed.
 
 MUST deliver the actual file path and checks performed, then stop. NEVER execute the tasks or launch another session automatically.

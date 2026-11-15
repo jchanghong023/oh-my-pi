@@ -152,7 +152,8 @@ fn scans_list_the_held_terminal() {
 	assert_eq!(status, 0);
 }
 
-/// `TERM=dumb`: no `cup`, no `colors`; the screen size fallback (`lines` 24).
+/// `TERM=dumb`: no `cup`, no `colors`; Unix loads the database's entry,
+/// while Windows has no database or console fallback for non-xterm names.
 #[test]
 fn dumb_terminal() {
 	let (out, err, status) = zsh(
@@ -160,6 +161,21 @@ fn dumb_terminal() {
 		 -- ${(kv)terminfo[(I)co*]}; print -r -- ${#terminfo} ${#termcap} ${+terminfo[colors]} \
 		 ${+terminfo[bw]}; print -r -- ${(qqqq)${(kv)terminfo}}; print -r -- ${(qqqq)${(kv)termcap}}",
 	);
+	#[cfg(windows)]
+	{
+		assert_eq!(
+			out,
+			"1\n1\n1\n\n0 44 0 0\n$''\n$'bw' $'no' $'am' $'no' $'xb' $'no' $'xs' $'no' $'xn' $'no' \
+			 $'eo' $'no' $'gn' $'no' $'hc' $'no' $'km' $'no' $'hs' $'no' $'in' $'no' $'da' $'no' \
+			 $'db' $'no' $'mi' $'no' $'ms' $'no' $'os' $'no' $'es' $'no' $'xt' $'no' $'hz' $'no' \
+			 $'ul' $'no' $'xo' $'no' $'nx' $'no' $'5i' $'no' $'HC' $'no' $'NR' $'no' $'NP' $'no' \
+			 $'ND' $'no' $'cc' $'no' $'ut' $'no' $'hl' $'no' $'YA' $'no' $'YB' $'no' $'YC' $'no' \
+			 $'YD' $'no' $'YE' $'no' $'YF' $'no' $'YG' $'no' $'bs' $'no' $'ns' $'no' $'nc' $'no' \
+			 $'MT' $'no' $'NL' $'no' $'pt' $'no' $'xr' $'no'\n"
+		);
+		assert_eq!(err, "");
+	}
+	#[cfg(not(windows))]
 	assert_eq!(
 		out,
 		"1\n1\n80\n0\ncols 80\n50 50 0 1\n$'bw' $'no' $'am' $'yes' $'xsb' $'no' $'xhp' $'no' \
@@ -178,6 +194,7 @@ fn dumb_terminal() {
 		 $'YG' $'no' $'bs' $'no' $'ns' $'no' $'nc' $'no' $'MT' $'no' $'NL' $'no' $'pt' $'no' $'xr' \
 		 $'no' $'co' $'80' $'li' $'24' $'bl' $'\\a' $'cr' $'\\r' $'do' $'\\n' $'sf' $'\\n'\n"
 	);
+	#[cfg(not(windows))]
 	assert_eq!(
 		err,
 		"zsh:echoti:1: no such terminfo capability: cup\nzsh:echoti:1: no such terminfo capability: \

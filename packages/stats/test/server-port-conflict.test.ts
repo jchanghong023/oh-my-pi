@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { networkInterfaces } from "node:os";
 import { connect, type Subprocess } from "bun";
-import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import {
 	STATS_DASHBOARD_HEADER,
 	STATS_DASHBOARD_HOSTNAME,
@@ -11,22 +10,7 @@ import {
 import { startServer } from "../src/server";
 import { installStatsTestIsolation } from "./helpers/temp-agent";
 
-const originalAgentDir = getAgentDir();
-const isolation = installStatsTestIsolation("@pi-stats-port-conflict-");
-let originalConfigRoot: string | undefined;
-
-beforeEach(() => {
-	originalConfigRoot = process.env.OMP_CONFIG_ROOT;
-	const root = isolation.current()!.join("config");
-	process.env.OMP_CONFIG_ROOT = root;
-	setAgentDir(isolation.current()!.join("config", "agent"));
-});
-
-afterEach(() => {
-	if (originalConfigRoot === undefined) delete process.env.OMP_CONFIG_ROOT;
-	else process.env.OMP_CONFIG_ROOT = originalConfigRoot;
-	setAgentDir(originalAgentDir);
-});
+installStatsTestIsolation("@pi-stats-port-conflict-");
 
 /**
  * Directly probe a TCP endpoint, bypassing any configured HTTP proxy so the

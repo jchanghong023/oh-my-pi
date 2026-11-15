@@ -72,21 +72,15 @@ async function fixture(): Promise<Skill> {
 }
 
 describe("pinned skill discovery and access", () => {
-	it("catalogs Superpowers without exposing them to ordinary model discovery", async () => {
+	it("exposes only core OpenSpec and Codebase Design while retaining manual access to hidden skills", async () => {
 		const ordinaryNames = [
 			"jch-codebase-design",
 			"openspec-apply-change",
 			"openspec-archive-change",
-			"openspec-bulk-archive-change",
-			"openspec-continue-change",
 			"openspec-explore",
-			"openspec-ff-change",
-			"openspec-new-change",
-			"openspec-onboard",
 			"openspec-propose",
 			"openspec-sync-specs",
 			"openspec-update-change",
-			"openspec-verify-change",
 		];
 		const isHidden = (skill: CapabilitySkill) =>
 			skill.frontmatter?.hide === true || skill.frontmatter?.disableModelInvocation === true;
@@ -180,6 +174,12 @@ describe("pinned skill discovery and access", () => {
 				expect(rendered).not.toContain(skill.name);
 				await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 				await expect(handler.locate(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+				if (skill.source === "bundled-openspec") {
+					const invoked = await buildSkillPromptMessage(skill, { args: "" }, "user");
+					const explicitContext = { skills, getSessionBranch: () => [provenance(skill, invoked.details)] };
+					expect((await handler.resolve(url, explicitContext)).sourcePath).toBe(skill.filePath);
+					await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+				}
 			}
 		}
 	});

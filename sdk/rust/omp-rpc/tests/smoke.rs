@@ -174,6 +174,7 @@ fn smoke_real_server() {
 					status:  TodoStatus::InProgress,
 					details: None,
 					notes:   None,
+					blocker: None,
 				}],
 			}],
 		})

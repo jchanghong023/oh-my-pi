@@ -3,6 +3,9 @@
 OMP discovers all 12 `openspec-*/SKILL.md` workflows natively. No standalone
 OpenSpec CLI, skill installation, or generated slash-command files are required.
 The bundled skills and OpenSpec implementation update with OMP releases.
+Only the core workflows (`propose`, `explore`, `apply`, `update`, `sync`, `archive`)
+appear in the model's automatic skill listing. The other six workflows require
+explicit `/skill:<name>` invocation; all 12 remain available in slash completion.
 
 Invoke a workflow with `/skill:openspec-propose` (or another bundled skill).
 Executable OpenSpec commands use `omp openspec ...`; `openspec/` remains the

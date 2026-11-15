@@ -14,11 +14,10 @@ import { parseArgs } from "node:util";
 import { discoverAuthStorage } from "@oh-my-pi/pi-ai/auth-broker/discover";
 import type { OAuthAccess } from "@oh-my-pi/pi-ai/auth-storage";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
-import { getGitLabDuoModels } from "@oh-my-pi/pi-ai/providers/gitlab-duo";
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
 import { $env } from "@oh-my-pi/pi-utils";
 import { buildModel } from "../src/build";
-import { isRetiredProvider, isSupportedChatProvider } from "../src/compat/behavior";
+import { isRetiredProvider } from "../src/compat/behavior";
 import { collapseVariants } from "../src/compat/collapse";
 import { providerEntries, providerEntry, seedModels } from "../src/compat/providers";
 import type { CompiledProvider } from "../src/compat/types";
@@ -48,8 +47,12 @@ import {
 	projectOpenAIProReasoningAliases,
 	stripFireworksDeepSeekThinkingToggle,
 } from "../src/provider-models/openai-compat";
-import { type OpenAICodexAccount, openaiCodexModelManagerOptions } from "../src/provider-models/special";
-import { type Api, type Model, modelKind, type ModelSpec } from "../src/types";
+import {
+	getGitLabDuoModels,
+	type OpenAICodexAccount,
+	openaiCodexModelManagerOptions,
+} from "../src/provider-models/special";
+import type { Api, Model, ModelSpec } from "../src/types";
 import { cleanModelName } from "../src/utils";
 import { mergeCopilotApiHeaders } from "../src/wire/github-copilot";
 import {
@@ -607,9 +610,7 @@ async function generateModels(selectedProvider?: string) {
 	const bundledModelsDevModels = modelsDevModels.filter(model => !authoritativeCatalogProviders.has(model.provider));
 	// getGitLabDuoModels returns built models; project back to spec stage for the bundle.
 	const gitLabDuoModels =
-		selectedProvider === undefined || selectedProvider === "gitlab-duo"
-			? getGitLabDuoModels().map(model => toModelSpec(model))
-			: [];
+		selectedProvider === undefined || selectedProvider === "gitlab-duo" ? getGitLabDuoModels().map(toModelSpec) : [];
 	// Combine models. stencil.so has priority unless a provider's successful endpoint
 	// discovery is authoritative; those endpoint snapshots replace stencil.so rows.
 	let allModels = applyGlobalModelsDevFallback(
@@ -773,22 +774,12 @@ async function generateModels(selectedProvider?: string) {
 		);
 	}
 
-	// Trim only the output; cross-provider reference inputs above remain intact.
-	for (const [provider, models] of Object.entries(MODELS)) {
-		for (const [id, model] of Object.entries(models)) {
-			if (
-				isRetiredProvider(provider) ||
-				(modelKind(model) === "chat" && model.api !== "local-inference" && !isSupportedChatProvider(provider))
-			)
-				delete models[id];
-		}
-		if (Object.keys(models).length === 0) delete MODELS[provider];
-	}
+	// Generate JSON file
 	await Bun.write(path.join(packageRoot, "src/models.json"), encodeModelCatalog(sortObj(MODELS)));
 	console.log("Generated src/models.json");
 
 	// Print statistics for the rows this run regenerated.
-	const writtenModels = Object.values(MODELS).flatMap(models => Object.values(models));
+	const writtenModels = selectedProvider === undefined ? allModels : Object.values(MODELS[selectedProvider] ?? {});
 	const totalModels = writtenModels.length;
 	const reasoningModels = writtenModels.filter(m => m.reasoning).length;
 

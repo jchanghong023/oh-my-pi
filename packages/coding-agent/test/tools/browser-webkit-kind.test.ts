@@ -12,16 +12,17 @@ let engineDir: string;
 let executable: string;
 /** An engine directory without one. */
 let emptyDir: string;
+const hostName = process.platform === "win32" ? "ABHost.exe" : "ABHost";
 
 beforeAll(async () => {
 	// Real path: the kind names the host by its real path (macOS's tmpdir is a link).
 	root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "webkit-kind-")));
 	engineDir = path.join(root, "engine");
 	emptyDir = path.join(root, "empty");
-	executable = path.join(engineDir, "ABHost");
+	executable = path.join(engineDir, hostName);
 	await fs.mkdir(emptyDir);
 	await Bun.write(executable, "#!/bin/sh\n");
-	await fs.chmod(executable, 0o755);
+	if (process.platform !== "win32") await fs.chmod(executable, 0o755);
 });
 
 afterAll(async () => {
@@ -30,7 +31,7 @@ afterAll(async () => {
 
 function session(settings: Record<string, unknown> = {}): ToolSession {
 	return {
-		cwd: "/tmp",
+		cwd: root,
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
@@ -52,15 +53,16 @@ describe("resolveBrowserKind with omp's WebKit host", () => {
 		).toBe("headless");
 	});
 
-	it("opens Chromium when no host executable resolves", async () => {
+	it("falls back for missing hosts and respects the platform's executable-access contract", async () => {
 		expect(resolveBrowserKind({ action: "open" }, session(), { PI_BROWSER_WEBKIT_PATH: emptyDir }).kind).toBe(
 			"headless",
 		);
 		const plainFile = path.join(root, "not-executable");
 		await Bun.write(plainFile, "");
-		await fs.chmod(plainFile, 0o644);
+		if (process.platform !== "win32") await fs.chmod(plainFile, 0o644);
+		// Windows checks file accessibility, not POSIX execute bits or the file extension.
 		expect(resolveBrowserKind({ action: "open" }, session(), { PI_BROWSER_WEBKIT_PATH: plainFile }).kind).toBe(
-			"headless",
+			process.platform === "win32" ? "webkit" : "headless",
 		);
 	});
 
@@ -80,16 +82,16 @@ describe("resolveBrowserKind with omp's WebKit host", () => {
 
 	it("runs the host a link leads to by its real path, with the viewer that ships beside it", async () => {
 		const shown = path.join(root, "engine-with-viewer");
-		const host = path.join(shown, "ABHost");
+		const host = path.join(shown, hostName);
 		const viewer = path.join(shown, "ABView");
 		for (const file of [host, viewer]) {
 			await Bun.write(file, "#!/bin/sh\n");
-			await fs.chmod(file, 0o755);
+			if (process.platform !== "win32") await fs.chmod(file, 0o755);
 		}
 		// The executable may be named through a link (Tern links ~/.o2/lib/abkit to a version): the host
 		// runs from the link's target, so it keeps its own version's helpers when the link moves on.
 		const link = path.join(root, "abhost");
-		await fs.symlink(host, link);
+		await fs.symlink(shown, link, process.platform === "win32" ? "junction" : "dir");
 		const env = { PI_BROWSER_WEBKIT_PATH: link };
 		const webkit: WebKitKind = { kind: "webkit", path: host, viewer };
 		expect(resolveBrowserKind({ action: "open", headed: true }, session(), env)).toEqual(webkit);
@@ -149,12 +151,20 @@ describe("resolveBrowserKind with omp's WebKit host", () => {
 		const windowsEngine = path.join(root, "windows-engine");
 		const windowsHost = path.join(windowsEngine, "ABHost.exe");
 		await Bun.write(windowsHost, "");
-		await fs.chmod(windowsHost, 0o755);
+		if (process.platform !== "win32") await fs.chmod(windowsHost, 0o755);
+		const posixEngine = path.join(root, "posix-engine");
+		const posixHost = path.join(posixEngine, "ABHost");
+		await Bun.write(posixHost, "");
+		if (process.platform !== "win32") await fs.chmod(posixHost, 0o755);
 		const inDirectory = { PI_BROWSER_WEBKIT_PATH: windowsEngine };
 		expect(resolveWebKitKind(null, inDirectory, "win32")).toEqual({ kind: "webkit", path: windowsHost });
 		// The same directory holds no host for another platform, and a POSIX engine directory none for Windows.
 		expect(resolveWebKitKind(null, inDirectory, "linux")).toBeNull();
-		expect(resolveWebKitKind(null, { PI_BROWSER_WEBKIT_PATH: engineDir }, "win32")).toBeNull();
+		expect(resolveWebKitKind(null, { PI_BROWSER_WEBKIT_PATH: posixEngine }, "win32")).toBeNull();
+		expect(resolveWebKitKind(null, { PI_BROWSER_WEBKIT_PATH: posixEngine }, "linux")).toEqual({
+			kind: "webkit",
+			path: posixHost,
+		});
 		// A file is the executable whatever it is called and whatever the platform.
 		expect(resolveWebKitKind(null, { PI_BROWSER_WEBKIT_PATH: windowsHost }, "linux")).toEqual({
 			kind: "webkit",

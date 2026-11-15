@@ -186,17 +186,18 @@ async fn rmdir_final_dot_components_under_a_file_report_not_a_directory() {
 	}
 }
 
-/// Even a safe-looking relative operand must be refused if its resolved
-/// directory crosses a trailing-dot component inherited from the cwd.
+/// A verbatim cwd preserves literal trailing dots, so a normal relative
+/// operand can remove its child without Win32 component normalization.
 #[tokio::test(flavor = "multi_thread")]
-async fn rmdir_checks_resolved_components_not_only_the_operand() {
+async fn rmdir_preserves_verbatim_cwd_components() {
 	let dir = tempfile::tempdir().unwrap();
 	let cwd = fs::canonicalize(dir.path()).unwrap().join("literal.");
 	fs::create_dir_all(cwd.join("victim")).unwrap();
 	let (status, output) = run("rmdir victim".into(), &cwd).await;
-	assert_eq!(status, Some(1), "{output}");
-	assert!(output.contains("Invalid argument"), "{output}");
-	assert!(cwd.join("victim").is_dir(), "resolved trailing-dot path must never delete victim");
+	assert_eq!(status, Some(0), "{output}");
+	assert!(output.is_empty(), "{output}");
+	assert!(!cwd.join("victim").exists(), "the literal directory's child must be removed");
+	assert!(cwd.is_dir(), "the literal cwd must be preserved");
 }
 
 /// Observe actual native removals without translating NT names into Win32

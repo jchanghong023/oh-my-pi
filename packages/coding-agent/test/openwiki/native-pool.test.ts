@@ -14,7 +14,7 @@ async function repository(root: string) {
 	async function git(...args: string[]) {
 		const child = Bun.spawn(["git", ...args], {
 			cwd: root,
-			stdout: "pipe",
+			stdout: "ignore",
 			stderr: "pipe",
 			env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: root, GIT_CONFIG_NOSYSTEM: "1" },
 		});
@@ -40,12 +40,18 @@ async function scenario(
 		| "instructions"
 		| "verification"
 		| "partial-baseline",
+	instructionCase?: "changed" | "emptied" | "legacy-nonempty" | "legacy-root",
 ) {
 	// Instruction invalidation needs one page; pool scenarios retain all workers.
 	const pages = mode === "instructions" ? [poolPages.at(-1)!] : poolPages;
 	using dir = TempDir.createSync("@omp-openwiki-native-pool-");
 	const root = dir.join("repo");
 	const git = await repository(root);
+	const instructions = path.join(root, "openwiki", "INSTRUCTIONS.md");
+	if (instructionCase === "emptied") {
+		await mkdir(path.dirname(instructions), { recursive: true });
+		await writeFile(instructions, "Prioritize useful source-grounded examples.\n");
+	}
 	const starts: string[] = [];
 	const requests: string[] = [];
 	const activeRateWorkers = new Set<string>();
@@ -245,45 +251,39 @@ async function scenario(
 		}
 		if (mode === "resume-drift") expect(plans).toBe(2);
 		if (mode === "instructions") {
-			const instructions = path.join(root, "openwiki", "INSTRUCTIONS.md");
 			const metadata = path.join(root, "openwiki", ".last-update.json");
 			const update = () => execute(AbortSignal.timeout(20_000), "update");
 			const commitWiki = async (message: string) => {
 				await git("add", "openwiki");
 				await git("commit", "--quiet", "-m", message);
 			};
-			// The native no-op gate requires a clean worktree apart from metadata
-			// and covered instructions. Commit generated pages/Claims so they do
-			// not independently force planning during these instruction checks.
+			// Each instruction case owns its baseline and native update. Chaining
+			// every case also chains all real Git snapshots under one test deadline.
+			// Commit generated pages/Claims so only instructions invalidate the run.
 			await commitWiki("record generated wiki baseline");
-			await writeFile(instructions, "Prioritize useful source-grounded examples.\n");
-			const changedInstructions = await update();
-			expect(changedInstructions.skipped).toBe(false);
-			expect(changedInstructions.partialFailure).toBeUndefined();
-			expect(plans).toBe(2);
-			expect(JSON.parse(await readFile(metadata, "utf8")).status).toBe("complete");
-			await commitWiki("record covered wiki instructions");
-			expect((await update()).skipped).toBe(true);
-			expect(plans).toBe(2);
-			await writeFile(instructions, "");
-			expect((await update()).skipped).toBe(false);
-			expect(plans).toBe(3);
-			await commitWiki("record cleared wiki instructions");
-			const removeBaseline = async () => {
+			if (instructionCase === "legacy-nonempty" || instructionCase === "legacy-root") {
 				const saved = JSON.parse(await readFile(metadata, "utf8"));
 				delete saved.instructionBaseline;
 				await writeFile(metadata, JSON.stringify(saved));
-			};
-			await removeBaseline();
-			await writeFile(instructions, "Legacy instruction changes must not be hidden.\n");
-			expect((await update()).skipped).toBe(false);
-			expect(plans).toBe(4);
-			await commitWiki("record legacy wiki instruction update");
-			await removeBaseline();
-			await writeFile(instructions, "");
-			await writeFile(path.join(root, "AGENTS.md"), "# Visible root instructions\nDocument the public API.\n");
-			expect((await update()).skipped).toBe(false);
-			expect(plans).toBe(5);
+			}
+			if (instructionCase === "legacy-root") {
+				await writeFile(path.join(root, "AGENTS.md"), "# Visible root instructions\nDocument the public API.\n");
+			} else {
+				await writeFile(
+					instructions,
+					instructionCase === "emptied" ? "" : "Prioritize useful source-grounded examples.\n",
+				);
+			}
+			const updated = await update();
+			expect(updated.skipped).toBe(false);
+			expect(updated.partialFailure).toBeUndefined();
+			expect(plans).toBe(2);
+			expect(JSON.parse(await readFile(metadata, "utf8")).status).toBe("complete");
+			if (instructionCase === "changed") {
+				await commitWiki("record covered wiki instructions");
+				expect((await update()).skipped).toBe(true);
+				expect(plans).toBe(2);
+			}
 		}
 		if (mode === "verification") {
 			await writeFile(path.join(root, "README.md"), "Stable source for pool tests.\nAdditional source context.\n");
@@ -351,11 +351,18 @@ describe("OpenWiki native pool through the OMP host boundary", () => {
 		async () => scenario("resume-drift"),
 		30_000,
 	);
-	it(
-		"detects changed and emptied instructions and legacy nonempty or Git-visible root instruction changes",
-		async () => scenario("instructions"),
-		45_000,
-	);
+	it("detects changed wiki instructions and skips their covered baseline", async () => {
+		await scenario("instructions", "changed");
+	}, 45_000);
+	it("detects emptied wiki instructions", async () => {
+		await scenario("instructions", "emptied");
+	}, 45_000);
+	it("detects nonempty wiki instructions without a legacy instruction baseline", async () => {
+		await scenario("instructions", "legacy-nonempty");
+	}, 45_000);
+	it("detects Git-visible root instructions without a legacy instruction baseline", async () => {
+		await scenario("instructions", "legacy-root");
+	}, 45_000);
 	it(
 		"does not mutate an in-flight page or its verification when another page commits",
 		async () => scenario("verification"),

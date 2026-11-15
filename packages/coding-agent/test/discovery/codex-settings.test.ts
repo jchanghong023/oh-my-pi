@@ -18,9 +18,11 @@ describe("Codex config.toml settings", () => {
 	let root = "";
 	let home = "";
 	let project = "";
+	let originalCwd: string;
 	let originalHome: string | undefined;
 
 	beforeEach(async () => {
+		originalCwd = process.cwd();
 		clearFsCache();
 		resetSettingsForTest();
 		originalHome = process.env.HOME;
@@ -40,6 +42,7 @@ describe("Codex config.toml settings", () => {
 		vi.restoreAllMocks();
 		if (originalHome === undefined) delete process.env.HOME;
 		else process.env.HOME = originalHome;
+		process.chdir(originalCwd);
 		await removeWithRetries(root);
 	});
 

@@ -38,7 +38,6 @@ try {
 		"session.maxCost": 1,
 		// Metered mode's 1.25 response crosses this, so the gate's warning marks the moment it was recorded.
 		"session.warnCost": 1,
-		"marketplace.autoUpdate": "off",
 		"providers.maxInFlightRequests": mode === "queued" ? { denied: 1 } : {},
 	});
 	settings.setModelRole("default", "denied/probe");

@@ -95,7 +95,7 @@ describe("prepared extension rebinding", () => {
 			agentDir: directory,
 			authStorage,
 			modelRegistry: new ModelRegistry(authStorage, path.join(directory, "models.yml")),
-			settings: Settings.isolated({ "marketplace.autoUpdate": "off", "compaction.enabled": false }),
+			settings: Settings.isolated({ "compaction.enabled": false }),
 			disableExtensionDiscovery: true,
 			skills: [],
 			contextFiles: [],

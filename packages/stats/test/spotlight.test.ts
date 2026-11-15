@@ -118,7 +118,7 @@ describe("Spotlight recovery detection", () => {
 			cacheRead: 12_000,
 			cacheWrite: 300,
 			calls: [
-				{ name: "read", args: { path: "/repo/src/a.ts:150-160" } },
+				{ name: "read", args: { path: `${path.resolve("/repo", "src/a.ts")}:150-160` } },
 				{ name: "eval", args: { language: "py", code: "print(1)" } },
 			],
 		});

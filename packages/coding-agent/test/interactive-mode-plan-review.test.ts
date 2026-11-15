@@ -2461,7 +2461,7 @@ describe("InteractiveMode plan review rendering", () => {
 
 				await mode.handlePlanModeCommand();
 
-				vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and execute");
+				vi.spyOn(mode, "showPlanReview").mockImplementation(async (_plan, _title, options) => options[0]);
 				vi.spyOn(mode, "handleClearCommand").mockResolvedValue();
 				vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
@@ -2591,14 +2591,20 @@ describe("InteractiveMode plan review rendering", () => {
 
 		await mode.handlePlanModeCommand();
 		expect(session.model?.id).toBe(planModel.id);
-		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and compact context");
-		const compactSpy = vi.spyOn(mode, "handleCompactCommand").mockResolvedValue("ok");
+		vi.spyOn(mode, "showPlanReview").mockImplementation(async (_plan, _title, options) => options[1]);
+		const compactSpy = vi
+			.spyOn(mode, "handleCompactCommand")
+			.mockImplementation(async (_instructions, _mode, beforeFlush) => {
+				await beforeFlush?.("ok");
+				return "ok";
+			});
 		vi.spyOn(session, "prompt").mockResolvedValue(true);
 
 		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
 
 		// The summary is written for the model execution runs on, not the plan model.
 		expect(compactSpy.mock.calls[0]?.[3]?.readerModel?.id).toBe(prePlanModel.id);
+		expect(session.model?.id).toBe(prePlanModel.id);
 	});
 
 	it("persists approval in the shared dispatch used by non-TUI hosts", async () => {

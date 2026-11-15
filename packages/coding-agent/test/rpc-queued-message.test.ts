@@ -100,7 +100,7 @@ describe("RPC queued-message editing", () => {
 		});
 	});
 
-	test("queue_update mirrors get_state.queuedMessages, matches the removal invariant, and never repeats", async () => {
+	test("queue_update mirrors get_state.queuedMessages and preserves snapshot removal and delivery", async () => {
 		await client.start();
 
 		const updates: Array<{ steering: readonly string[]; followUp: readonly string[]; liveSteered: number }> = [];
@@ -111,9 +111,9 @@ describe("RPC queued-message editing", () => {
 
 		try {
 			await client.followUp("first");
+			expect(updates.at(-1)).toEqual({ steering: [], followUp: ["first"], liveSteered: 0 });
 			await client.followUp("second");
-			expect(updates.map(update => update.followUp)).toEqual([["first"], ["first", "second"]]);
-			expect(updates.every(update => update.steering.length === 0)).toBe(true);
+			expect(updates.at(-1)).toEqual({ steering: [], followUp: ["first", "second"], liveSteered: 0 });
 
 			expect(await client.removeQueuedMessage("first", "followUp")).toEqual({ removed: true });
 			expect(updates.at(-1)?.followUp).toEqual(["second"]);
@@ -149,11 +149,11 @@ describe("RPC queued-message editing", () => {
 			expect(updates.at(-1)).toEqual({ steering: [], followUp: [], liveSteered: 0 });
 			expect((await client.getState()).queuedMessages).toEqual({ steering: [], followUp: [], liveSteered: 0 });
 
-			// No duplicate identical consecutive events: every emitted snapshot
-			// differs from the one immediately before it.
-			for (let i = 1; i < updates.length; i++) {
-				expect(updates[i]).not.toEqual(updates[i - 1]);
-			}
+			const messages = await client.getMessages();
+			expect(messages.filter(message => message.role === "user").map(message => message.content)).toEqual([
+				[{ type: "text", text: "go" }],
+				[{ type: "text", text: "delivered" }],
+			]);
 		} finally {
 			unsubscribe();
 		}

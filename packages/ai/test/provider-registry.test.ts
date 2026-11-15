@@ -60,11 +60,15 @@ describe("provider registry auth surface", () => {
 		expect(getEnvApiKey("coreweave")).toBe("coreweave-env");
 	});
 
-	test("login list contains supported logins and non-chat services", () => {
+	test("login list contains loginable providers and excludes env-only model providers", () => {
 		const ids = getOAuthProviders().map(provider => provider.id);
-		expect(ids).toContain("openai-codex-device");
+		expect(ids).toContain("zenmux");
 		expect(ids).toContain("kagi");
-		expect(ids).not.toContain("zenmux");
+		expect(ids).toContain("exa");
+		expect(ids).toContain("umans");
+		expect(ids).toContain("llama.cpp");
+		// openai has no interactive login flow.
+		expect(ids).not.toContain("openai");
 	});
 
 	test("paste-code login set is derived from pasteCodeFlow", () => {
@@ -126,5 +130,15 @@ describe("provider registry auth surface", () => {
 		await storage.oauth.login("fixture-x", { onAuth: () => {}, onPrompt: async () => "" });
 
 		expect(store.getApiKey("fixture-x")).toBe("fixture-key");
+	});
+
+	test("llama.cpp login stores a local no-auth token when no key is entered", async () => {
+		const store = new SqliteAuthCredentialStore(new Database(":memory:"));
+		const storage = new AuthStorage(store);
+		await storage.credentials.reload();
+
+		await storage.oauth.login("llama.cpp", { onAuth: () => {}, onPrompt: async () => "" });
+
+		expect(store.getApiKey("llama.cpp")).toBe("llama-cpp-local");
 	});
 });

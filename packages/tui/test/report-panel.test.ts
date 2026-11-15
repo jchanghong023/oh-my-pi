@@ -28,7 +28,7 @@ async function mountReport(bodyRows: number) {
 	const composer = new Composer({
 		terminal,
 		tuiOptions: { renderScheduler: scheduler },
-		preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+		preferences: { ...COMPOSER_DEFAULTS, quiet: true, completeScrollback: false },
 	});
 	const transcript = new TranscriptContainer();
 	for (let i = 0; i < 60; i++) {
@@ -38,7 +38,7 @@ async function mountReport(bodyRows: number) {
 	const dock = new Container();
 	const editor = new Container();
 	editor.addChild(new Text("EDITOR", 0, 0));
-	composer.setRuntimeChildren([transcript, dock, editor]);
+	composer.setRuntimeChildren([transcript, dock, editor], { transientChrome: [dock, editor] });
 	composer.start({ playWelcomeIntro: false });
 	await scheduler.settle(terminal);
 	const panel = new ReportPanel({
@@ -110,23 +110,21 @@ describe("ReportPanel in text mode", () => {
 	});
 
 	it("keeps the editor on the bottom row when rows reached scrollback while the report was open", async () => {
-		// With the welcome header on screen, opening a tall report retires the
-		// header into scrollback, so the frame left after closing is shorter
-		// than the screen. The interactive mode notes the editor sat on the
-		// bottom row before opening and pins it there again on close.
+		// Complete scrollback retires transcript rows covered by the report.
+		// Closing it keeps the editor at the bottom without replaying history.
 		const terminal = new VirtualTerminal(100, ROWS);
 		const scheduler = new VirtualRenderScheduler();
 		const composer = new Composer({
 			terminal,
 			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: false },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: false, completeScrollback: true },
 		});
 		const transcript = new TranscriptContainer();
 		let transcriptRows = 0;
 		const dock = new Container();
 		const editor = new Container();
 		editor.addChild(new Text("EDITOR", 0, 0));
-		composer.setRuntimeChildren([transcript, dock, editor]);
+		composer.setRuntimeChildren([transcript, dock, editor], { transientChrome: [dock, editor] });
 		composer.start({ playWelcomeIntro: false });
 		await scheduler.settle(terminal);
 		const editorRow = () => terminal.getViewport().findIndex(row => row.includes("EDITOR"));
@@ -161,7 +159,9 @@ describe("ReportPanel in text mode", () => {
 		await scheduler.settle(terminal);
 
 		expect(editorRow()).toBe(ROWS - 1);
-		expect(terminal.getViewport().some(row => row.includes(`Transcript ${transcriptRows - 1}`))).toBe(true);
+		const buffer = terminal.getScrollBuffer().map(row => Bun.stripANSI(row).trim());
+		expect(buffer.filter(row => row === `Transcript ${transcriptRows - 1}`)).toHaveLength(1);
+		expect(terminal.getViewport().some(row => row.includes("Full Changelog"))).toBe(false);
 		composer.stop();
 	});
 

@@ -24,7 +24,7 @@ const repo = path.resolve(import.meta.dir, "../../../..");
 type State = { projects: AIReqProject[] };
 type Scenario = ProviderScenario & {
 	reply?: (request: ModelRequest) => Reply | Response | Promise<Reply | Response>;
-	setup?: (cwd: string, agentDir: string) => Promise<void>;
+	setup?: (cwd: string, agentDir: string, env: NodeJS.ProcessEnv) => Promise<void>;
 	startupResponse?: string;
 	configuration?: Record<string, unknown>;
 	screenDiagnostics?: boolean;
@@ -209,7 +209,7 @@ async function withTui(
 			},
 		}),
 	);
-	await scenario.setup?.(cwd, agentDir);
+	await scenario.setup?.(cwd, agentDir, env);
 	const session = `dev-native-${crypto.randomUUID()}`;
 	const nativeArtifacts = root.join("tui-failures");
 	const explicitCast = root.join("mixed-session.cast");

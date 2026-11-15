@@ -9,7 +9,7 @@ import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { fingerprintStaticModels, resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import {
 	deepinfraModelManagerOptions,
@@ -245,9 +245,10 @@ describe("buildModel", () => {
 	});
 
 	it("loads bundled OpenRouter models with resolved compat", () => {
-		const model = getBundledModel<"openrouter">("openrouter", "anthropic/claude-sonnet-4");
-
-		expect(model.compat).toBeDefined();
+		const model = getBundledModels("openrouter").find(
+			(candidate): candidate is Model<"openrouter"> => candidate.api === "openrouter",
+		);
+		if (!model) throw new Error("Expected a bundled OpenRouter model");
 		expect(model.compat?.isOpenRouterHost).toBe(true);
 		expect(model.compat?.supportsStrictMode).toBe(true);
 	});

@@ -1939,13 +1939,21 @@ describe("Settings", () => {
 		];
 
 		const MODEL_PRIO = roleDefaultModels();
+		const catalogSelector = (provider: string, field: "webSearchModel" | "imageModel"): string => {
+			const target = getBundledModels(provider).find(model => model[field])?.[field];
+			if (!target) throw new Error(`Expected bundled ${field} target for ${provider}`);
+			return `${provider}/${target}`;
+		};
+		const geminiWebModel = getBundledModels("google").find(model => model.webSearchModel)?.webSearchModel;
+		if (!geminiWebModel) throw new Error("Expected bundled Google web search target");
 		const webExaCandidates = ["web/exa", ...MODEL_PRIO.web.filter(selector => selector !== "web/exa")];
 		const webOrderedHead = [
-			"google-gemini-cli/gemini-2.5-flash",
-			"google-antigravity/gemini-2.5-flash",
-			"google/gemini-2.5-flash",
-			"openai-codex/gpt-6-luna",
-			"xai/grok-4.5",
+			`google-gemini-cli/${geminiWebModel}`,
+			`google-antigravity/${geminiWebModel}`,
+			`google/${geminiWebModel}`,
+			catalogSelector("anthropic", "webSearchModel"),
+			catalogSelector("openai-codex", "webSearchModel"),
+			catalogSelector("xai", "webSearchModel"),
 			"web/exa",
 			"web/tavily",
 		];
@@ -1953,19 +1961,19 @@ describe("Settings", () => {
 			...webOrderedHead,
 			...MODEL_PRIO.web.filter(selector => !webOrderedHead.includes(selector)),
 		];
-		const webExcludedCandidates = MODEL_PRIO.web.filter(selector => selector !== "web/public");
+		const webExcludedCandidates = MODEL_PRIO.web.filter(
+			selector => selector !== "web/public" && !selector.startsWith("xai/") && !selector.startsWith("xai-oauth/"),
+		);
 		const imageOrderedHead = [
-			"openai-codex/gpt-image-2",
-			"google-antigravity/gemini-3-pro-image",
-			"xai/grok-imagine-image",
+			catalogSelector("openai", "imageModel"),
+			catalogSelector("openai-codex", "imageModel"),
+			catalogSelector("google-antigravity", "imageModel"),
+			catalogSelector("xai", "imageModel"),
 			"openrouter/google/gemini-3-pro-image",
-			"google/gemini-3-pro-image",
-			"deepinfra/black-forest-labs/FLUX-2-pro",
+			catalogSelector("google", "imageModel"),
+			catalogSelector("deepinfra", "imageModel"),
 		];
-		const imageOrderedCandidates = [
-			...imageOrderedHead,
-			...MODEL_PRIO.image.filter(selector => !imageOrderedHead.includes(selector)),
-		];
+		const imageOrderedCandidates = [...new Set([...imageOrderedHead, ...MODEL_PRIO.image])];
 		const imageXaiCandidates = [
 			"xai/grok-imagine-image",
 			...MODEL_PRIO.image.filter(selector => selector !== "xai/grok-imagine-image"),

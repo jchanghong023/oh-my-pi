@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
-import { getOAuthCredentialProvider, getOAuthProviders, isOAuthLoginSupported } from "@oh-my-pi/pi-ai/oauth";
+import { getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { buildHotkeysMarkdown } from "@oh-my-pi/pi-tui/hotkeys-markdown";
 import { transcriptEntryMessage } from "@oh-my-pi/pi-tui/chat/transcript-entry";
@@ -454,9 +454,10 @@ export async function handleWebGuiLogin(
 	runtime: WebGuiSlashCommandRuntime,
 ): Promise<SlashCommandResult> {
 	const argument = command.args.trim();
+	const loginProviders = getOAuthProviders();
 	const pending = logins.get(runtime.session);
 	if (pending) {
-		if (argument && !isOAuthLoginSupported(argument) && pending.callback) {
+		if (argument && !loginProviders.some(provider => provider.id === argument) && pending.callback) {
 			pending.callback(argument);
 			return commandConsumed();
 		}
@@ -465,14 +466,14 @@ export async function handleWebGuiLogin(
 			runtime,
 		);
 	}
-	if (argument && !isOAuthLoginSupported(argument))
-		return usage("OAuth provider is not supported, or no login is waiting for a callback.", runtime);
-	const providers = getOAuthProviders().filter(
+	const providers = loginProviders.filter(
 		provider => !cfgDisabledProviders.get(runtime.settings).includes(provider.id),
 	);
 	const provider = argument
-		? getOAuthProviders().find(provider => provider.id === argument)
+		? providers.find(provider => provider.id === argument)
 		: await pick(runtime, "Login provider", providers, provider => `${provider.name} (${provider.id})`);
+	if (argument && !provider)
+		return usage("OAuth provider is not supported, disabled, or no login is waiting for a callback.", runtime);
 	if (!provider) return commandConsumed();
 	const login: PendingLogin = { provider: provider.id };
 	logins.set(runtime.session, login);

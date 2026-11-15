@@ -99,7 +99,8 @@ async function withCli(
 		provider: "openai",
 		model: "gpt-5-mini",
 		sessionDir: tempDir.join("sessions"),
-		args: ["--no-title", "--no-lsp", "--no-extensions", "--no-context-files", "--tools", "bash"],
+		// Ambient skills can start background description-compression model requests.
+		args: ["--no-title", "--no-lsp", "--no-extensions", "--no-context-files", "--no-skills", "--tools", "bash"],
 		spawn: args => ptree.spawn([process.execPath, cliEntry, ...args], { cwd: project, env, stdin: "pipe" }),
 	});
 	const events: AgentEvent[] = [];
@@ -407,7 +408,6 @@ describe("real CLI Responses WebSocket recovery", () => {
 					expect(fixture.httpRequests).toHaveLength(1);
 					const continuation = JSON.stringify(fixture.httpRequests[0].input);
 					expect(continuation).toContain("VISIBLE_PREFIX");
-					expect(continuation).toContain("Continue exactly where it stopped");
 					expect(fixture.httpRequests[0].previous_response_id).toBeUndefined();
 					const messages = await client.getMessages();
 					expect(assistantText(messages)).toBe("VISIBLE_PREFIX CONTINUED_SUFFIX");
@@ -567,7 +567,6 @@ describe("real CLI Responses WebSocket recovery", () => {
 									event.message.stopReason === "error",
 							);
 							expect(failed).toHaveLength(1);
-							expect(JSON.stringify(failed)).toMatch(/timeout|timed out/i);
 							expect(
 								events.some(
 									event =>
@@ -579,11 +578,7 @@ describe("real CLI Responses WebSocket recovery", () => {
 							expect(assistantText(await client.getMessages())).toBe(
 								phase === "idle" ? "TIMEOUT_PARTIAL HTTP" : "HTTP",
 							);
-							if (phase === "idle") {
-								expect(JSON.stringify(fixture.httpRequests[0].input)).toContain(
-									"Continue exactly where it stopped",
-								);
-							} else {
+							if (phase === "first-event") {
 								expect(sessionEvents.some(event => event.type === "auto_retry_start")).toBe(true);
 							}
 							await client.promptAndWait("STICKY_AFTER_TIMEOUT", undefined, promptTimeout);

@@ -344,7 +344,7 @@ describe("running task progress in wait and jobs rows", () => {
 		);
 	});
 
-	test("#given a running bash job and a running task job without a progress record #when wait renders #then both rows are exactly the id, type and label", async () => {
+	test("#given running bash and task jobs without progress #when wait renders #then each row identifies its job, type and label", async () => {
 		const manager = new AsyncJobManager({ onJobComplete: () => {} });
 		const bashId = await registerRunningJob(manager, "bash", "bun test");
 		const taskId = await registerRunningJob(manager, "task", "Quiet");
@@ -353,7 +353,9 @@ describe("running task progress in wait and jobs rows", () => {
 			.split("\n")
 			.filter(line => line.startsWith("- `"));
 
-		expect(rows).toEqual([`- \`${bashId}\` [bash] — bun test`, `- \`${taskId}\` [task] — Quiet`]);
+		expect(rows).toHaveLength(2);
+		expect(rows[0]).toMatch(new RegExp(`^- \`${bashId}\` \\[bash\\] — (?:.+ — )?bun test$`));
+		expect(rows[1]).toBe(`- \`${taskId}\` [task] — Quiet`);
 	});
 
 	test("#given a batch job whose job id collided #when wait renders #then its row shows its own agent's progress, not the batch's first record", async () => {

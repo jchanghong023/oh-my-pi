@@ -1,14 +1,23 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as syncFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
+import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { discoverCustomCommands, loadCustomCommands } from "../../../src/extensibility/custom-commands/loader";
 import { SYMLINKS_USABLE } from "../../helpers/symlink-support";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../../helpers/settings-test-state";
 
 let tempRoot: string | undefined;
+let settingsState: SettingsTestState | undefined;
 
 afterEach(async () => {
+	vi.restoreAllMocks();
+	if (settingsState) {
+		restoreSettingsTestState(settingsState);
+		settingsState = undefined;
+	}
 	if (tempRoot) {
 		await fs.rm(tempRoot, { recursive: true, force: true });
 		tempRoot = undefined;
@@ -26,6 +35,66 @@ async function makeCommandsRoot(prefix: string): Promise<string> {
 }
 
 describe("custom command loader", () => {
+	it("keeps bundled commands without probing or executing external commands when discovery is disabled", async () => {
+		tempRoot = await makeCommandsRoot("omp-custom-command-no-discovery-");
+		settingsState = beginSettingsTest();
+		setAgentDir(tempRoot);
+		const projectCommands = path.join(tempRoot, ".omp", "commands");
+		const marker = path.join(tempRoot, "imported.txt");
+		for (const commandsDir of [path.join(tempRoot, "commands"), projectCommands]) {
+			await Bun.write(
+				path.join(commandsDir, "external-fixture", "index.js"),
+				`await Bun.write(${JSON.stringify(marker)}, "imported");\n${commandSource("external-fixture", "External command")}`,
+			);
+		}
+		const exists = vi.spyOn(syncFs, "existsSync");
+		const readdir = vi.spyOn(fs, "readdir");
+
+		const result = await loadCustomCommands({ cwd: tempRoot, agentDir: tempRoot, discover: false });
+
+		const externalDirs = new Set([path.join(tempRoot, "commands"), projectCommands].map(dir => path.resolve(dir)));
+		const probes = [...exists.mock.calls, ...readdir.mock.calls]
+			.map(([target]) => path.resolve(String(target)))
+			.filter(target => [...externalDirs].some(dir => target === dir || target.startsWith(`${dir}${path.sep}`)));
+		expect(probes).toEqual([]);
+		expect(result.errors).toEqual([]);
+		expect(result.commands.map(({ command }) => command.name).sort()).toEqual(["annotate", "green", "review"]);
+		expect(await Bun.file(marker).exists()).toBe(false);
+	});
+
+	it("allows external commands to override bundled commands when discovery is omitted", async () => {
+		tempRoot = await makeCommandsRoot("omp-custom-command-override-");
+		settingsState = beginSettingsTest();
+		setAgentDir(tempRoot);
+		const commandPath = path.join(tempRoot, "commands", "review", "index.js");
+		await Bun.write(commandPath, commandSource("review", "External review"));
+
+		const result = await loadCustomCommands({ cwd: tempRoot, agentDir: tempRoot });
+
+		expect(result.errors).toEqual([]);
+		const reviews = result.commands.filter(({ command }) => command.name === "review");
+		expect(reviews).toHaveLength(1);
+		expect(reviews[0]?.resolvedPath).toBe(commandPath);
+		expect(reviews[0]?.source).toBe("user");
+	});
+
+	it("loads external commands when discovery is explicitly enabled", async () => {
+		tempRoot = await makeCommandsRoot("omp-custom-command-discovery-");
+		settingsState = beginSettingsTest();
+		setAgentDir(tempRoot);
+		await Bun.write(
+			path.join(tempRoot, "commands", "external-fixture", "index.js"),
+			commandSource("external-fixture", "External command"),
+		);
+
+		const result = await loadCustomCommands({ cwd: tempRoot, agentDir: tempRoot, discover: true });
+
+		expect(result.errors).toEqual([]);
+		expect(result.commands.map(({ command }) => command.name)).toEqual(
+			expect.arrayContaining(["review", "annotate", "green", "external-fixture"]),
+		);
+	});
+
 	it("supports legacy and callable ArkType injection", async () => {
 		tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-custom-command-loader-"));
 		const commandDir = path.join(tempRoot, "commands", "arktype-compat");

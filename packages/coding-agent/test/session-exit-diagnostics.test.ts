@@ -249,10 +249,6 @@ describe("session exit diagnostics", () => {
 
 	it("does not fork a session another live process owns when this process only loaded it", async () => {
 		tempDir = TempDir.createSync("@pi-unowned-session-exit-");
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
 		const creator = SessionManager.create(tempDir.path(), tempDir.path());
 		creator.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
 		creator.appendMessage({ ...pendingAssistant, content: [{ type: "text", text: "done" }], stopReason: "stop" });
@@ -285,23 +281,19 @@ describe("session exit diagnostics", () => {
 		try {
 			const { value } = await owner.stdout.getReader().read();
 			expect(new TextDecoder().decode(value)).toBe("ready\n");
+			const transcript = fs.readFileSync(sessionFile, "utf8");
 
 			// This process only loads the session to read its history, then exits.
 			const sessionManager = await SessionManager.open(sessionFile, tempDir.path(), undefined, {
 				suppressBreadcrumb: true,
 			});
-			const agent = new Agent({
-				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
-				convertToLlm,
-			});
-			session = new AgentSession({
-				agent,
-				sessionManager,
-				settings: Settings.isolated({ "compaction.enabled": false }),
-				modelRegistry,
-			});
-			await session.dispose();
-			session = undefined;
+			try {
+				expect(sessionManager.getEntries().some(entry => entry.type === "message")).toBe(true);
+			} finally {
+				await sessionManager.close();
+			}
+
+			expect(fs.readFileSync(sessionFile, "utf8")).toBe(transcript);
 
 			expect(sessionManager.getSessionFile()).toBe(sessionFile);
 			expect(fs.readdirSync(tempDir.path()).filter(name => name.endsWith(".jsonl"))).toEqual([

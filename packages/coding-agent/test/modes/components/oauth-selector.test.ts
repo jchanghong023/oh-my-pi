@@ -17,10 +17,11 @@ const authStorage = {
 } as unknown as AuthStorage;
 
 describe("OAuthSelectorComponent", () => {
-	it("fuzzy-filters provider lists from typed input", () => {
+	it("fuzzy-filters overflowing provider lists from typed input", () => {
 		const providers = getOAuthProviders();
-		const target = providers.find(provider => provider.available && provider.id === "openai-codex");
-		if (!target) throw new Error("Expected the available openai-codex login entry");
+		expect(providers.length).toBeGreaterThan(10);
+		const target = providers.find(provider => provider.available && provider.id === "vllm");
+		if (!target) throw new Error("Expected the available vllm login entry");
 
 		const selected: string[] = [];
 		const component = new OAuthSelectorComponent(
@@ -39,6 +40,8 @@ describe("OAuthSelectorComponent", () => {
 			.map(line => Bun.stripANSI(line))
 			.join("\n");
 		expect(rendered).toContain(target.name);
+		expect(rendered).toContain("搜索：");
+		expect(rendered).toContain(target.id);
 
 		component.handleInput("\n");
 		expect(selected).toEqual([target.id]);
@@ -93,6 +96,7 @@ describe("OAuthSelectorComponent", () => {
 			.map(line => Bun.stripANSI(line))
 			.join("\n");
 		expect(rendered).toContain("Anthropic");
+		expect(rendered).toContain("已登录");
 
 		component.handleInput("\n");
 		expect(selected).toEqual(["anthropic"]);

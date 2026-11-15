@@ -822,8 +822,10 @@ describe("subagent runtime fallback on a real provider error", () => {
 				settings: Settings.isolated({
 					"task.agentIdleTtlMs": 0,
 					"compaction.enabled": false,
-					"retry.baseDelayMs": 1,
-					"retry.maxRetries": 2,
+					// Exercise chain selection, not same-model retry delays.
+					"retry.enabled": true,
+					"retry.modelFallback": true,
+					"retry.maxRetries": 0,
 					"todo.enabled": false,
 					"todo.reminders": false,
 					"advisor.enabled": false,
@@ -842,6 +844,7 @@ describe("subagent runtime fallback on a real provider error", () => {
 			});
 			return { result, primaryRequests: primary.calls.length, fallbackRequests: fallback.calls.length };
 		} finally {
+			await AgentLifecycleManager.global().release(id);
 			authStorage.close();
 		}
 	}

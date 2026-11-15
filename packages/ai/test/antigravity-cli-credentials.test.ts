@@ -115,13 +115,15 @@ describe("Antigravity CLI credential ownership", () => {
 		const account = path.join(directory, agyCredentialKey(apiKey));
 		await stageAgyCredentials(apiKey, account);
 		const tokenPath = path.join(account, "antigravity-cli", "antigravity-oauth-token");
-		const previous = await fs.open(tokenPath, "r");
+		// POSIX permits replacing an open inode. Windows readers must release
+		// their handle first; both platforms still exercise the real atomic rename.
+		const previous = process.platform === "win32" ? undefined : await fs.open(tokenPath, "r");
 		try {
 			await stageAgyCredentials(JSON.stringify({ ...JSON.parse(apiKey), token: "new-access" }), account);
-			expect(JSON.parse(await previous.readFile("utf8")).token.access_token).toBe(grant.access);
+			if (previous) expect(JSON.parse(await previous.readFile("utf8")).token.access_token).toBe(grant.access);
 			expect((await exportAgyCredentials(account)).access).toBe("new-access");
 		} finally {
-			await previous.close();
+			await previous?.close();
 		}
 		if (process.platform !== "win32") {
 			expect((await fs.stat(account)).mode & 0o777).toBe(0o700);

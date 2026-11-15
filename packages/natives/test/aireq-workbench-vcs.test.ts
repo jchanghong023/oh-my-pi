@@ -255,24 +255,29 @@ describe("Dev workbench native VCS consumers", () => {
 
 	test("reads changed live remote HEAD without trusting or changing cached origin HEAD", async () => {
 		const { root, repo } = await repository();
-		const remote = path.join(root, "default-remote.git");
-		await gitDirectory(remote, true);
-		await repo.configSet("remote.origin.url", remote);
 		const firstSha = await repo.headSha();
 		if (!firstSha) throw new Error("fixture HEAD missing");
-		await repo.push({ remote: "origin", refspec: `${firstSha}:refs/heads/main` });
-		const cached = path.join(root, ".git", "refs", "remotes", "origin");
-		await fs.mkdir(cached, { recursive: true });
-		await fs.writeFile(path.join(cached, "main"), `${firstSha}\n`);
-		await fs.writeFile(path.join(cached, "HEAD"), "ref: refs/remotes/origin/main\n");
-		expect(await repo.remoteDefaultBranch("origin")).toEqual({ branch: "main", sha: firstSha });
 		await fs.writeFile(path.join(root, "tracked.txt"), "new remote default\n");
 		await repo.stageFiles(["tracked.txt"]);
 		await repo.commitCreate("next remote default\n", {});
 		const nextSha = await repo.headSha();
 		if (!nextSha || nextSha === firstSha) throw new Error("fixture needs a distinct commit");
+		const remote = path.join(root, "default-remote.git");
+		await gitDirectory(remote, true);
+		// Advertisement is the consumer contract; fixture setup need not perform
+		// unrelated push round trips before the two live HEAD observations.
+		await fs.cp(path.join(root, ".git", "objects"), path.join(remote, "objects"), { recursive: true });
+		await fs.writeFile(path.join(remote, "refs", "heads", "main"), `${firstSha}\n`);
 		const branch = "release/nested/default";
-		await repo.push({ remote: "origin", refspec: `${nextSha}:refs/heads/${branch}` });
+		const remoteBranch = path.join(remote, "refs", "heads", branch);
+		await fs.mkdir(path.dirname(remoteBranch), { recursive: true });
+		await fs.writeFile(remoteBranch, `${nextSha}\n`);
+		await repo.configSet("remote.origin.url", remote);
+		const cached = path.join(root, ".git", "refs", "remotes", "origin");
+		await fs.mkdir(cached, { recursive: true });
+		await fs.writeFile(path.join(cached, "main"), `${firstSha}\n`);
+		await fs.writeFile(path.join(cached, "HEAD"), "ref: refs/remotes/origin/main\n");
+		expect(await repo.remoteDefaultBranch("origin")).toEqual({ branch: "main", sha: firstSha });
 		await fs.writeFile(path.join(remote, "HEAD"), `ref: refs/heads/${branch}\n`);
 		expect(await repo.remoteDefaultBranch("origin")).toEqual({ branch, sha: nextSha });
 		expect(await repo.defaultBranch()).toBe("main");
@@ -283,51 +288,37 @@ describe("Dev workbench native VCS consumers", () => {
 		await expect(repo.remoteDefaultBranch("origin", abort.signal)).rejects.toThrow();
 	});
 
-	test("rejects missing, detached and non-branch remote defaults distinctly from failed transport", async () => {
-		const { root, repo } = await repository();
-		const remote = path.join(root, "invalid-default-remote.git");
-		await gitDirectory(remote, true);
-		const sha = await repo.headSha();
-		if (!sha) throw new Error("fixture HEAD missing");
-		// An unborn HEAD yields a successful, empty advertisement, not a
-		// transport failure and not an invented main/master branch.
-		await expect(repo.remoteDefaultBranch(remote)).rejects.toMatchObject({
-			name: "VcsError",
-			code: "Backend",
-			exitCode: 1,
+	for (const kind of ["unborn", "missing", "detached", "non-branch", "transport", "empty"] as const) {
+		test(`rejects a ${kind} remote default without changing local HEAD`, async () => {
+			const { root, repo } = await repository();
+			const remote = path.join(root, "invalid-default-remote.git");
+			await gitDirectory(remote, true);
+			const sha = await repo.headSha();
+			if (!sha) throw new Error("fixture HEAD missing");
+			await fs.cp(path.join(root, ".git", "objects"), path.join(remote, "objects"), { recursive: true });
+			if (kind !== "unborn") {
+				await fs.writeFile(path.join(remote, "refs", "heads", "main"), `${sha}\n`);
+			}
+			if (kind === "missing") {
+				await fs.writeFile(path.join(remote, "HEAD"), "ref: refs/heads/missing\n");
+			} else if (kind === "detached") {
+				await fs.writeFile(path.join(remote, "HEAD"), `${sha}\n`);
+			} else if (kind === "non-branch") {
+				await fs.mkdir(path.join(remote, "refs", "tags"), { recursive: true });
+				await fs.writeFile(path.join(remote, "refs", "tags", "not-a-branch"), `${sha}\n`);
+				await fs.writeFile(path.join(remote, "HEAD"), "ref: refs/tags/not-a-branch\n");
+			}
+			const target = kind === "transport" ? path.join(root, "missing-remote") : kind === "empty" ? "" : remote;
+			// Invalid advertisements reject without inventing a branch; failed
+			// transports retain their distinct CLI error.
+			await expect(repo.remoteDefaultBranch(target)).rejects.toMatchObject({
+				name: "VcsError",
+				code: kind === "transport" ? "Cli" : "Backend",
+				exitCode: kind === "transport" ? 128 : 1,
+			});
+			expect(await repo.headSha()).toBe(sha);
 		});
-		await repo.push({ remote, refspec: `${sha}:refs/heads/main` });
-		await fs.writeFile(path.join(remote, "HEAD"), "ref: refs/heads/missing\n");
-		await expect(repo.remoteDefaultBranch(remote)).rejects.toMatchObject({
-			name: "VcsError",
-			code: "Backend",
-			exitCode: 1,
-		});
-		await fs.writeFile(path.join(remote, "HEAD"), `${sha}\n`);
-		await expect(repo.remoteDefaultBranch(remote)).rejects.toMatchObject({
-			name: "VcsError",
-			code: "Backend",
-			exitCode: 1,
-		});
-		await repo.push({ remote, refspec: `${sha}:refs/tags/not-a-branch` });
-		await fs.writeFile(path.join(remote, "HEAD"), "ref: refs/tags/not-a-branch\n");
-		await expect(repo.remoteDefaultBranch(remote)).rejects.toMatchObject({
-			name: "VcsError",
-			code: "Backend",
-			exitCode: 1,
-		});
-		await expect(repo.remoteDefaultBranch(path.join(root, "missing-remote"))).rejects.toMatchObject({
-			name: "VcsError",
-			code: "Cli",
-			exitCode: 128,
-		});
-		await expect(repo.remoteDefaultBranch("")).rejects.toMatchObject({
-			name: "VcsError",
-			code: "Backend",
-			exitCode: 1,
-		});
-		expect(await repo.headSha()).toBe(sha);
-	});
+	}
 
 	test("treats a caller deadline and a lost local advertisement as unknown, never absent", async () => {
 		const { root, repo } = await repository();

@@ -50,7 +50,7 @@ describe("ModelRegistry lazy bundled composition", () => {
 		expect(JSON.parse(stdout)).toEqual({ buildCalls: 0 });
 	});
 
-	test("does not hydrate a removed LiteLLM chat cache", async () => {
+	test("hydrates only the current LiteLLM credential's cached roster", async () => {
 		const tempDir = TempDir.createSync("@model-registry-lazy-litellm-cache-");
 		tempDirs.push(tempDir);
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
@@ -83,7 +83,7 @@ describe("ModelRegistry lazy bundled composition", () => {
 		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		expect(registry.find("litellm", "cached-fixture")).toBeUndefined();
 		await registry.hydrateCredentialScopedModelCaches();
-		expect(registry.find("litellm", "cached-fixture")).toBeUndefined();
+		expect(registry.find("litellm", "cached-fixture")?.name).toBe("Cached Fixture");
 	});
 
 	test("scoped snapshots retain live availability and cannot be mutated through returned arrays", async () => {
@@ -93,7 +93,7 @@ describe("ModelRegistry lazy bundled composition", () => {
 		authStorages.push(authStorage);
 		const settings = Settings.isolated();
 		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings });
-		const provider = "ascend";
+		const provider = "snapshot-fixture";
 		const providers = new Set([provider]);
 		const definition = {
 			id: "first",
@@ -111,14 +111,14 @@ describe("ModelRegistry lazy bundled composition", () => {
 			models: [definition],
 		});
 		const first = registry.getAvailableForProviders(providers, "all");
-		expect(first.map(model => model.id)).toContain("first");
-		expect(registry.find(provider, "first")).toBe(first.find(model => model.id === "first"));
+		expect(first.map(model => model.id)).toEqual(["first"]);
+		expect(registry.find(provider, "first")).toBe(first[0]);
 		first.length = 0;
-		expect(registry.getAvailableForProviders(providers, "all").map(model => model.id)).toContain("first");
+		expect(registry.getAvailableForProviders(providers, "all").map(model => model.id)).toEqual(["first"]);
 		cfgDisabledProviders.set(settings, [provider]);
 		expect(registry.getAvailableForProviders(providers)).toEqual([]);
 		cfgDisabledProviders.set(settings, []);
-		expect(registry.getAvailableForProviders(providers).map(model => model.id)).toContain("first");
+		expect(registry.getAvailableForProviders(providers).map(model => model.id)).toEqual(["first"]);
 
 		registry.registerProvider(provider, {
 			api: "openai-completions",
@@ -127,10 +127,11 @@ describe("ModelRegistry lazy bundled composition", () => {
 			models: [{ ...definition, id: "second", contextWindow: 16384 }],
 		});
 		expect(registry.find(provider, "first")).toBeUndefined();
-		const second = registry.getAvailableForProviders(providers).find(model => model.id === "second");
-		expect(second?.contextWindow).toBe(16384);
-		expect(second?.baseUrl).toBe("https://example.invalid/v2");
-		expect(registry.find(provider, "second")).toBe(second);
+		const second = registry.getAvailableForProviders(providers);
+		expect(second.map(model => model.id)).toEqual(["second"]);
+		expect(second[0].contextWindow).toBe(16384);
+		expect(second[0].baseUrl).toBe("https://example.invalid/v2");
+		expect(registry.find(provider, "second")).toBe(second[0]);
 	});
 
 	test("policy refresh invalidates scoped catalogs after models config edits", async () => {
@@ -141,7 +142,7 @@ describe("ModelRegistry lazy bundled composition", () => {
 		const configPath = path.join(tempDir.path(), "models.json");
 		const config = {
 			providers: {
-				deepseek: {
+				"refresh-fixture": {
 					api: "openai-completions",
 					baseUrl: "https://example.invalid/v1",
 					apiKey: "test-key",
@@ -151,18 +152,18 @@ describe("ModelRegistry lazy bundled composition", () => {
 		};
 		await Bun.write(configPath, JSON.stringify(config));
 		const registry = new ModelRegistry(authStorage, configPath);
-		const providers = new Set(["deepseek"]);
-		const before = registry.getAvailableForProviders(providers).find(model => model.id === "fixture")!;
+		const providers = new Set(["refresh-fixture"]);
+		const before = registry.getAvailableForProviders(providers)[0];
 		expect(before.name).toBe("Before");
-		config.providers.deepseek.models[0].name = "After";
-		config.providers.deepseek.models[0].contextWindow = 16384;
+		config.providers["refresh-fixture"].models[0].name = "After";
+		config.providers["refresh-fixture"].models[0].contextWindow = 16384;
 		await Bun.write(configPath, JSON.stringify(config));
 		await registry.reapplyModelPolicies();
-		const after = registry.getAvailableForProviders(providers).find(model => model.id === "fixture")!;
+		const after = registry.getAvailableForProviders(providers)[0];
 		expect(after.name).toBe("After");
 		expect(after.contextWindow).toBe(16384);
 		expect(after).not.toBe(before);
-		expect(registry.find("deepseek", "fixture")).toBe(after);
+		expect(registry.find("refresh-fixture", "fixture")).toBe(after);
 	});
 
 	test("query order preserves ordering, snapshots, and model identity", async () => {
@@ -171,7 +172,7 @@ describe("ModelRegistry lazy bundled composition", () => {
 			tempDirs.push(tempDir);
 			const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 			authStorages.push(authStorage);
-			authStorage.keys.setRuntime("openai-codex", "test-key");
+			authStorage.keys.setRuntime("anthropic", "test-key");
 			if (maskTypeSafeEnvAuth) {
 				const source = authStorage.keys.source.bind(authStorage.keys);
 				spies.push(
@@ -185,9 +186,9 @@ describe("ModelRegistry lazy bundled composition", () => {
 
 		const findFirstRegistry = await createRegistry("find-first");
 		const scopedRegistry = await createRegistry("scoped-first", true);
-		const scopedProviders = new Set(["openai-codex", "local", "web", "typesafe"]);
+		const scopedProviders = new Set(["anthropic", "local", "web", "typesafe"]);
 		const startupPool = scopedRegistry.getAvailableForProviders(scopedProviders);
-		expect(startupPool.some(model => model.provider === "openai-codex")).toBe(true);
+		expect(startupPool.some(model => model.provider === "anthropic")).toBe(true);
 		expect(startupPool.every(model => modelKind(model) === "chat")).toBe(true);
 		expect(startupPool.some(model => ["local", "web", "typesafe"].includes(model.provider))).toBe(false);
 		const scopedAllKinds = scopedRegistry.getAvailableForProviders(scopedProviders, "all");
@@ -199,7 +200,7 @@ describe("ModelRegistry lazy bundled composition", () => {
 		);
 		expect(scopedAllKinds.some(model => model.provider === "typesafe")).toBe(false);
 
-		const foundBeforeAll = findFirstRegistry.find("openai-codex", "gpt-5.6-sol");
+		const foundBeforeAll = findFirstRegistry.find("anthropic", "claude-sonnet-4-5");
 		expect(foundBeforeAll).toBeDefined();
 		const availableBeforeAll = findFirstRegistry.getAvailable();
 		const availableAgain = findFirstRegistry.getAvailable();
@@ -211,20 +212,20 @@ describe("ModelRegistry lazy bundled composition", () => {
 		const allAfterSelectiveQueries = findFirstRegistry.getAll();
 		expect(findFirstRegistry.getAll()).toBe(allAfterSelectiveQueries);
 		expect(foundBeforeAll).toBe(
-			allAfterSelectiveQueries.find(model => model.provider === "openai-codex" && model.id === "gpt-5.6-sol"),
+			allAfterSelectiveQueries.find(model => model.provider === "anthropic" && model.id === "claude-sonnet-4-5"),
 		);
 		expect(foundBeforeAll).toBe(
-			availableBeforeAll.find(model => model.provider === "openai-codex" && model.id === "gpt-5.6-sol"),
+			availableBeforeAll.find(model => model.provider === "anthropic" && model.id === "claude-sonnet-4-5"),
 		);
 		expectSameModelObjects(availableBeforeAll, allAfterSelectiveQueries);
 
 		const allFirstRegistry = await createRegistry("all-first");
 		const allBeforeSelectiveQueries = allFirstRegistry.getAll();
 		const availableAfterAll = allFirstRegistry.getAvailable();
-		const foundAfterAll = allFirstRegistry.find("openai-codex", "gpt-5.6-sol");
+		const foundAfterAll = allFirstRegistry.find("anthropic", "claude-sonnet-4-5");
 		expect(allFirstRegistry.getAll()).toBe(allBeforeSelectiveQueries);
 		expect(foundAfterAll).toBe(
-			allBeforeSelectiveQueries.find(model => model.provider === "openai-codex" && model.id === "gpt-5.6-sol"),
+			allBeforeSelectiveQueries.find(model => model.provider === "anthropic" && model.id === "claude-sonnet-4-5"),
 		);
 		expectSameModelObjects(availableAfterAll, allBeforeSelectiveQueries);
 		expect(modelKeys(allBeforeSelectiveQueries)).toEqual(modelKeys(allAfterSelectiveQueries));

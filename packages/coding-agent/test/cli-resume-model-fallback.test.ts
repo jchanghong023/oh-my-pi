@@ -112,14 +112,15 @@ describe("headless startup resume", () => {
 				try {
 					if (rpc) {
 						proc.stdin.write(`${JSON.stringify({ id: "resume", type: "prompt", message: "Continue." })}\n`);
+						await proc.stdin.flush();
 					} else {
-						proc.stdin.end();
+						await proc.stdin.end();
 					}
 					const stdout = (async () => {
 						let text = "";
 						for await (const bytes of proc.stdout) {
 							text += new TextDecoder().decode(bytes);
-							if (rpc && text.includes('"type":"agent_end"')) proc.stdin.end();
+							if (rpc && text.includes('"type":"agent_end"')) await proc.stdin.end();
 						}
 						return text;
 					})();
@@ -137,7 +138,7 @@ describe("headless startup resume", () => {
 					await proc.exited;
 				}
 			} finally {
-				server.stop(true);
+				await server.stop(true);
 			}
 		},
 		30_000,
@@ -256,7 +257,18 @@ describe("headless runtime session switch", () => {
 		};
 
 		const proc = Bun.spawn(
-			[process.execPath, cliEntry, "--no-title", "--no-lsp", "--no-extensions", "--no-tools", "--mode", "rpc"],
+			[
+				process.execPath,
+				cliEntry,
+				"--no-title",
+				"--no-lsp",
+				"--no-extensions",
+				// Skill hint compression would send unrelated turns to the loopback provider.
+				"--no-skills",
+				"--no-tools",
+				"--mode",
+				"rpc",
+			],
 			{
 				cwd,
 				env: {
@@ -274,11 +286,12 @@ describe("headless runtime session switch", () => {
 				stderr: "pipe",
 			},
 		);
+		const stderr = new Response(proc.stderr).text();
 		const frames = readJsonl<RpcFrame>(proc.stdout);
 		const waitUntil = async (matches: (frame: RpcFrame) => boolean): Promise<RpcFrame> => {
 			for (;;) {
 				const next = await frames.next();
-				if (next.done) throw new Error(`RPC output ended: ${await new Response(proc.stderr).text()}`);
+				if (next.done) throw new Error(`RPC output ended: ${await stderr}`);
 				if (matches(next.value)) return next.value;
 			}
 		};
@@ -288,17 +301,19 @@ describe("headless runtime session switch", () => {
 				cwd,
 				requests,
 				writeThread,
-				request: command => {
+				request: async command => {
 					proc.stdin.write(`${JSON.stringify(command)}\n`);
+					await proc.stdin.flush();
 					return waitUntil(frame => frame.type === "response" && frame.id === command.id);
 				},
 				waitFor: type => waitUntil(frame => frame.type === type),
 			});
 		} finally {
-			proc.stdin.end();
+			await proc.stdin.end();
 			proc.kill();
 			await proc.exited;
-			server.stop(true);
+			await stderr;
+			await server.stop(true);
 		}
 	}
 

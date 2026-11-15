@@ -131,6 +131,8 @@ describe("ModelRegistry runtime provider registration", () => {
 	}
 
 	test("does not discover ClinePass without credentials", async () => {
+		const bundled = registry.find("cline-pass", "kimi-k3");
+		expect(bundled).toBeDefined();
 		const peek = vi.spyOn(authStorage.keys, "peek").mockResolvedValue(undefined);
 		try {
 			await registry.refresh("online");
@@ -139,7 +141,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		}
 
 		expect(fetchRequests).not.toContain("https://api.cline.bot/api/v1/ai/cline/recommended-models");
-		expect(registry.find("cline-pass", "kimi-k3")).toBeUndefined();
+		expect(registry.find("cline-pass", "kimi-k3")).toEqual(bundled);
 	});
 
 	test("validates provider config before mutating custom API state", () => {
@@ -203,24 +205,33 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(registry.getAll().some(model => model.provider === "my-gateway")).toBe(false);
 	});
 
-	test("OpenAI chat models cannot be restored by runtime transport overrides or refresh", async () => {
-		expect(registry.find("openai", "gpt-5.4")).toBeUndefined();
+	test("OpenAI runtime transport overrides survive refresh and restore the bundled model when removed", async () => {
+		const bundled = registry.find("openai", "gpt-5.4");
+		expect(bundled).toBeDefined();
 		registry.registerProvider(
 			"openai",
 			{
 				baseUrl: "https://runtime-proxy.example.com/v1",
 				api: "openai-responses",
 				apiKey: "RUNTIME_KEY",
+				headers: { "X-Runtime": "runtime-openai" },
 				models: [{ ...baseModel, id: "gpt-5.4" }],
 			},
 			"ext://runtime",
 		);
-		expect(registry.find("openai", "gpt-5.4")).toBeUndefined();
-		await registry.refresh("offline");
-		await registry.refreshProvider("openai", "offline");
-		expect(registry.getAll().filter(model => model.provider === "openai")).toEqual([]);
+		await expectModelTransportAcrossRefresh(
+			registry,
+			"openai",
+			"gpt-5.4",
+			"https://runtime-proxy.example.com/v1",
+			"X-Runtime",
+			"runtime-openai",
+		);
+		expect(registry.find("openai", "gpt-5.4")?.name).toBe(baseModel.name);
 		registry.clearSourceRegistrations("ext://runtime");
-		expect(registry.find("openai", "gpt-5.4")).toBeUndefined();
+		const restored = registry.find("openai", "gpt-5.4");
+		expect(restored).toMatchObject(bundled!);
+		expect(restored?.headers).toEqual(bundled?.headers);
 	});
 
 	test("registerProvider applies headers-only overrides to existing provider models across refresh", async () => {

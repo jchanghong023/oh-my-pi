@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import { Effort, getCustomApi, streamSimple } from "@oh-my-pi/pi-ai";
-import { getAllOAuthProviders, getOAuthProviders, isOAuthLoginSupported } from "@oh-my-pi/pi-ai/registry/oauth";
+import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 import { closeModelCache } from "@oh-my-pi/pi-catalog";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -77,36 +77,18 @@ function answer() {
 }
 
 describe("fork provider boundaries", () => {
-	test("retired Zen is absent from login choices but remains available for legacy credential management", () => {
-		expect(getOAuthProviders().map(provider => provider.id)).not.toContain("opencode-zen");
-		expect(isOAuthLoginSupported("opencode-zen")).toBe(false);
-		expect(getAllOAuthProviders().map(provider => provider.id)).toContain("opencode-zen");
-		expect(isOAuthLoginSupported("openai-codex")).toBe(true);
-		expect(isOAuthLoginSupported("kagi")).toBe(true);
-	});
+	test.each(["anthropic", "opencode-zen", "alibaba-coding-plan"])(
+		"%s remains discoverable as a login provider",
+		provider => {
+			expect(getOAuthProviders().find(entry => entry.id === provider)).toMatchObject({ available: true });
+		},
+	);
 
-	// Generated output, not rule text, must exclude retired and unsupported chat rows.
-	test("bundled output contains only retained chat lanes while retaining non-chat models", () => {
-		const allowed = [
-			"company",
-			"openai-codex",
-			"codeagent",
-			"ascend",
-			"opencode-go",
-			"deepseek",
-			"alibaba-token-plan",
-		];
+	test("bundled output retains upstream chat providers and non-chat capabilities", () => {
 		const models = getBundledProviders().flatMap(provider => getBundledModels(provider));
-		expect(models.length).toBeGreaterThan(0);
-		const chatProviders = [
-			...new Set(
-				models
-					.filter(model => (model.kind ?? "chat") === "chat" && model.api !== "local-inference")
-					.map(model => model.provider),
-			),
-		];
-		expect(chatProviders.filter(provider => !allowed.includes(provider))).toEqual([]);
-		expect(models.filter(model => model.provider === "opencode-zen")).toEqual([]);
+		for (const provider of ["anthropic", "openai", "google", "opencode-zen"]) {
+			expect(models.some(model => model.provider === provider && (model.kind ?? "chat") === "chat")).toBe(true);
+		}
 		expect(models.some(model => model.api === "local-inference")).toBe(true);
 		expect(models.some(model => model.kind === "embedding")).toBe(true);
 		expect(models.some(model => model.kind === "rerank")).toBe(true);
@@ -143,19 +125,22 @@ describe("fork provider boundaries", () => {
 		},
 	);
 
-	// Legacy chat rows cannot bypass admission by registration, refresh or the local name.
-	test("runtime admission rejects unsupported chat without deleting old credentials or non-chat capability", async () => {
+	test("runtime providers remain selectable after refresh without deleting stored credentials", async () => {
 		const { registry, auth } = await fixture();
-		await auth.credentials.set("opencode-zen", { type: "api_key", key: "legacy-secret" });
-		expect(await auth.keys.get("opencode-zen", "legacy-before")).toBe("legacy-secret");
-		for (const provider of ["opencode-zen", "anthropic", "local", "unsupported-gateway"]) {
+		const providers = ["opencode-zen", "anthropic", "local", "custom-gateway"];
+		for (const provider of providers) {
+			await auth.credentials.set(provider, { type: "api_key", key: `${provider}-secret` });
 			registry.registerProvider(provider, {
 				api: "openai-completions",
 				baseUrl: "https://remote.invalid/v1",
-				requestAuthConfigured: () => true,
+				apiKey: `${provider}-secret`,
 				models: [definition],
 			});
-			expect(registry.find(provider, definition.id)).toBeUndefined();
+			expect(registry.find(provider, definition.id)).toMatchObject({
+				id: definition.id,
+				provider,
+				baseUrl: "https://remote.invalid/v1",
+			});
 		}
 		registry.registerProvider("retained-image-gateway", {
 			api: "openai-images",
@@ -163,22 +148,18 @@ describe("fork provider boundaries", () => {
 			apiKey: "fixture-key",
 			models: [{ ...definition, kind: "image" }],
 		});
-		registry.registerProvider("deepseek", {
-			api: "openai-completions",
-			baseUrl: "https://retained.invalid/v1",
-			apiKey: "fixture-key",
-			models: [definition],
-		});
 		await registry.refresh("offline");
-		expect(registry.find("deepseek", definition.id)?.baseUrl).toBe("https://retained.invalid/v1");
 		expect(registry.getAll("image").find(model => model.provider === "retained-image-gateway")).toMatchObject({
 			id: definition.id,
 			kind: "image",
 		});
-		for (const provider of ["opencode-zen", "anthropic", "local", "unsupported-gateway"]) {
-			expect(registry.find(provider, definition.id)).toBeUndefined();
+		for (const provider of providers) {
+			const model = registry.find(provider, definition.id);
+			expect(model).toMatchObject({ id: definition.id, provider, baseUrl: "https://remote.invalid/v1" });
+			expect(resolveSessionModelSelector(registry, `${provider}/${definition.id}`)?.model).toEqual(model);
+			expect(await registry.getApiKey(model!)).toBe(`${provider}-secret`);
+			expect(await auth.keys.get(provider, "after-refresh")).toBe(`${provider}-secret`);
 		}
-		expect(await auth.keys.get("opencode-zen", "legacy-after")).toBe("legacy-secret");
 	});
 
 	// Read the real seeded model so wrong API/strict-tool axes cannot be hidden by a copied fixture.
@@ -198,11 +179,11 @@ describe("fork provider boundaries", () => {
 		});
 	});
 
-	test("old unsupported cache and selector references stay missing without rewriting user data", async () => {
+	test("configured discovery restores cached models and session selectors without rewriting user data", async () => {
 		const { registry, settings, dir, modelsPath } = await fixture();
 		const saved = JSON.stringify({
 			providers: {
-				"unsupported-gateway": {
+				"custom-gateway": {
 					api: "openai-completions",
 					baseUrl: "https://legacy.invalid/v1",
 					auth: "none",
@@ -212,12 +193,12 @@ describe("fork provider boundaries", () => {
 		});
 		await fs.writeFile(modelsPath, saved);
 		writeModelCache(
-			"unsupported-gateway",
+			"custom-gateway:openai-models-list-context-v6",
 			Date.now(),
 			[
 				buildModel({
 					...definition,
-					provider: "unsupported-gateway",
+					provider: "custom-gateway",
 					api: "openai-completions",
 					baseUrl: "https://legacy.invalid/v1",
 				}),
@@ -228,11 +209,12 @@ describe("fork provider boundaries", () => {
 		);
 		const historyPath = dir.join("old-session.jsonl");
 		const history =
-			JSON.stringify({ type: "model_change", provider: "unsupported-gateway", modelId: definition.id }) + "\n";
+			JSON.stringify({ type: "model_change", provider: "custom-gateway", modelId: definition.id }) + "\n";
 		await fs.writeFile(historyPath, history);
 		await registry.refresh("offline");
-		expect(resolveSessionModelSelector(registry, `unsupported-gateway/${definition.id}`)).toBeUndefined();
-		expect(registry.getAll().some(model => model.provider === "unsupported-gateway")).toBe(false);
+		const restored = registry.find("custom-gateway", definition.id);
+		expect(restored).toMatchObject({ provider: "custom-gateway", id: definition.id });
+		expect(resolveSessionModelSelector(registry, `custom-gateway/${definition.id}`)?.model).toEqual(restored);
 		expect(await fs.readFile(modelsPath, "utf8")).toBe(saved);
 		expect(await fs.readFile(historyPath, "utf8")).toBe(history);
 		expect(settings.getModelRole("default")).toBe("deepseek/explicit-default");

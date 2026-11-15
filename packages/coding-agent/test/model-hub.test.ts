@@ -1835,7 +1835,7 @@ describe("ModelHub", () => {
 	});
 
 	describe("locked providers", () => {
-		test("hides requested provider scopes without removing their available models", () => {
+		test("exposes provider scopes for available auxiliary models and locked catalog models", () => {
 			const local = makeModel("local", "local-model", 128_000, undefined, "tiny");
 			const commandcode = makeModel("commandcode", "judge-model", 128_000, undefined, "judge");
 			const web = makeModel("web", "web-model", 128_000, undefined, "search");
@@ -1856,9 +1856,9 @@ describe("ModelHub", () => {
 			const props = root.p as TspPickerProps;
 			const scopes = props.scopes?.map(scope => scope.id) ?? [];
 			expect(scopes).toContain("provider:web");
-			expect(scopes).not.toContain("provider:local");
-			expect(scopes).not.toContain("provider:commandcode");
-			expect(scopes).not.toContain("provider:google");
+			expect(scopes).toContain("provider:local");
+			expect(scopes).toContain("provider:commandcode");
+			expect(scopes).toContain("provider:google");
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("local-model");
 			expect(rendered).toContain("judge-model");

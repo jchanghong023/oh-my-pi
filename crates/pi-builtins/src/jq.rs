@@ -2891,7 +2891,13 @@ mod tests {
 
 		// one parser spans the operands, so `2` and the next file's `1` join
 		let (code, out, err) = jq(&[".", "in.json", "dir", "in.json"]);
-		assert_eq!((code, out.as_str(), err.as_str()), (2, "1\n21\n", "jq: error: Is a directory\n"));
+		// Windows refuses to open a directory; Unix opens it and fails on read.
+		let expected = if cfg!(windows) {
+			"jq: error: Could not open file dir: Permission denied\n"
+		} else {
+			"jq: error: Is a directory\n"
+		};
+		assert_eq!((code, out.as_str(), err.as_str()), (2, "1\n21\n", expected));
 
 		// operands are opened as the input stream reaches them
 		let (code, out, err) = jq(&["halt", "in.json", "nope.json"]);
@@ -2901,7 +2907,11 @@ mod tests {
 		let expected = "jq: Bad JSON in --rawfile n nope.json: Could not open nope.json: No such file or directory\n";
 		assert_eq!((code, err.as_str()), (2, expected));
 		let (code, _, err) = jq(&["-n", "--slurpfile", "n", "dir", "$n"]);
-		let expected = "jq: Bad JSON in --slurpfile n dir: Could not open dir: It's a directory\n";
+		let expected = if cfg!(windows) {
+			"jq: Bad JSON in --slurpfile n dir: Could not open dir: Permission denied\n"
+		} else {
+			"jq: Bad JSON in --slurpfile n dir: Could not open dir: It's a directory\n"
+		};
 		assert_eq!((code, err.as_str()), (2, expected));
 
 		std::fs::write(dir.path().join("bad.json"), "1 xyz").expect("write bad input");
@@ -2913,7 +2923,12 @@ mod tests {
 		assert_eq!((code, err.as_str()), (2, "jq: Could not open nope.jq: No such file or directory\n"));
 		// the program given before `-f` is still its file
 		let (code, _, err) = jq(&["dir", "-f"]);
-		assert_eq!((code, err.as_str()), (2, "jq: Could not open dir: It's a directory\n"));
+		let expected = if cfg!(windows) {
+			"jq: Could not open dir: Permission denied\n"
+		} else {
+			"jq: Could not open dir: It's a directory\n"
+		};
+		assert_eq!((code, err.as_str()), (2, expected));
 	}
 
 	#[test]

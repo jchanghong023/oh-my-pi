@@ -41,14 +41,14 @@ async function writeConfig(
 	await Bun.write(getMCPConfigPath(scope, cwd), `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`);
 }
 
-/** Fake ctx carrying only the mcpManager surface `collectMcpServerNames` reads. */
+/** Fake ctx carrying MCP discovery and the cwd used by command autocomplete. */
 function createFakeCtx(discoveredNames: string[]) {
 	const mcpManager = {
 		getAllServerNames: vi.fn((): string[] => discoveredNames),
 		getSource: vi.fn((): SourceMeta | undefined => undefined),
 		getConnectionStatus: vi.fn(() => "connected" as const),
 	};
-	const ctx = { mcpManager } as never as InteractiveModeContext;
+	const ctx = { mcpManager, sessionManager: { getCwd: () => process.cwd() } } as never as InteractiveModeContext;
 	return { ctx, mcpManager };
 }
 

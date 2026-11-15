@@ -52,9 +52,12 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	let fixtureDir: string;
 	let fixtureAuthStorage: AuthStorage;
 	let fixtureModelRegistry: ModelRegistry;
+	let previousCompanyLaneActive: boolean;
 	const authStoragesToClose: AuthStorage[] = [];
 
-	beforeAll(() => {
+	beforeAll(async () => {
+		previousCompanyLaneActive = companyProvider.isCompanyLaneActive();
+		await companyProvider.setCompanyOfflineEnabled(false);
 		fixtureDir = path.join(os.tmpdir(), `pi-sdk-model-selection-fixture-${Snowflake.next()}`);
 		fs.mkdirSync(fixtureDir, { recursive: true });
 		fixtureAuthStorage = createInMemoryAuthStorage();
@@ -66,8 +69,11 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		fs.mkdirSync(tempDir, { recursive: true });
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
+		// Offline inheritance cases activate the real process lane through the SDK,
+		// even when their entry point is a spy. Restoring spies does not reset it.
+		await companyProvider.setCompanyOfflineEnabled(false);
 		for (const authStorage of authStoragesToClose) {
 			authStorage.close();
 		}
@@ -81,9 +87,10 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	afterAll(() => {
+	afterAll(async () => {
 		fixtureAuthStorage.close();
 		removeSyncWithRetries(fixtureDir);
+		await companyProvider.setCompanyOfflineEnabled(previousCompanyLaneActive);
 	});
 
 	const providerExtension: ExtensionFactory = pi => {

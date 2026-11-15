@@ -1,7 +1,8 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { TUI } from "@oh-my-pi/pi-tui";
+import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 
 function writeArgs(lineCount: number) {
 	return {
@@ -16,15 +17,23 @@ function partialWriteResult(text = "Writing notes.txt...") {
 
 describe("ToolExecutionComponent write repaint seam", () => {
 	const components: ToolExecutionComponent[] = [];
+	let shellVisualization: boolean;
 
 	beforeAll(async () => {
 		await initTheme();
+	});
+
+	beforeEach(() => {
+		shellVisualization = chatTranscriptDisplayPreferences.shellVisualization;
+		// Inspect the raw command, not the optional shell visualization.
+		chatTranscriptDisplayPreferences.shellVisualization = false;
 	});
 
 	afterEach(() => {
 		for (const component of components) component.stopAnimation();
 		components.length = 0;
 		vi.restoreAllMocks();
+		chatTranscriptDisplayPreferences.shellVisualization = shellVisualization;
 	});
 
 	function makeComponent(args: unknown) {

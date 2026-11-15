@@ -57,6 +57,11 @@ interface ConfigSetRun {
 async function runConfigSet(tempDir: TempDir, settingsInit: SettingsInitMode): Promise<ConfigSetRun> {
 	const home = tempDir.join("home");
 	fs.mkdirSync(home);
+	// Explicit config edits require an existing configuration, even on a fresh profile.
+	const configRoot = path.join(home, ".omp");
+	const configPath = path.join(configRoot, "agent", "config.yml");
+	fs.mkdirSync(path.dirname(configPath), { recursive: true });
+	fs.writeFileSync(configPath, "{}\n");
 	const preloadArgs: string[] = [];
 	if (settingsInit !== "real") {
 		const preloadPath = tempDir.join("settings-init.ts");
@@ -69,7 +74,13 @@ async function runConfigSet(tempDir: TempDir, settingsInit: SettingsInitMode): P
 		preloadArgs.push("--preload", preloadPath);
 	}
 	// The child must resolve its agent dir from the isolated home, not an inherited override or profile.
-	const env: Record<string, string | undefined> = { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" };
+	const env: Record<string, string | undefined> = {
+		...process.env,
+		HOME: home,
+		USERPROFILE: home,
+		OMP_CONFIG_ROOT: configRoot,
+		NO_COLOR: "1",
+	};
 	delete env.PI_CODING_AGENT_DIR;
 	delete env.PI_CONFIG_DIR;
 	delete env.OMP_PROFILE;
@@ -87,7 +98,7 @@ async function runConfigSet(tempDir: TempDir, settingsInit: SettingsInitMode): P
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
 	]);
-	return { exitCode, stdout, stderr, configPath: path.join(home, ".omp", "agent", "config.yml") };
+	return { exitCode, stdout, stderr, configPath };
 }
 
 // Each case cold-starts the CLI graph in a child process; the budget covers that transpile.
@@ -101,7 +112,7 @@ describe("one-shot CLI command settlement", () => {
 		expect(run.stderr).toContain(`\`omp config\` ${DIAGNOSTIC}`);
 		expect(run.stderr).not.toContain("collab.autoStart");
 		expect(run.stdout).toBe("");
-		expect(fs.existsSync(run.configPath)).toBe(false);
+		expect(fs.readFileSync(run.configPath, "utf8")).toBe("{}\n");
 	}, 30_000);
 
 	it("keeps a completed command's exit 0 and output", async () => {

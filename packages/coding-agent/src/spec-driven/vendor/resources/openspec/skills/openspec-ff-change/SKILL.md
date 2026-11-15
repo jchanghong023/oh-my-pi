@@ -1,5 +1,6 @@
 ---
 name: openspec-ff-change
+disable-model-invocation: true
 description: Fast-forward through OpenSpec artifact creation. Use when the user wants to quickly create all artifacts needed for implementation without stepping through each one individually. Also use when the user says "openspec ff" or "opsx ff".
 allowed-tools: Bash(omp openspec:*)
 license: MIT

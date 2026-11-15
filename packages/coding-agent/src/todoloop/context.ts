@@ -85,7 +85,7 @@ export async function buildTodoLoopGroupPrompt(options: {
 	const filePath = path.resolve(cwd, options.filePath);
 	const content = await Bun.file(filePath).text();
 	const materials = await discoverChangeMaterials(filePath);
-	const lines = content.split(/(?<=\n)/);
+	const lines = content.split(/(?<=\n)|(?<=\r)(?!\n)/);
 	return prompt.render(groupTemplate, {
 		change: materials !== undefined,
 		taskPackageJson: JSON.stringify(
@@ -103,7 +103,7 @@ export async function buildTodoLoopGroupPrompt(options: {
 							raw: lines
 								.slice(task.line - 1, task.line - 1 + task.text.split("\n").length)
 								.join("")
-								.replace(/\r?\n$/, ""),
+								.replace(/(?:\r\n|\n|\r)$/, ""),
 						})),
 				},
 				completedTaskIds: options.group.tasks.filter(task => task.done).map(task => task.id),
