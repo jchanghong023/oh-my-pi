@@ -8,6 +8,7 @@
 
 ### Changed
 
+- TodoLoop now researches shared background once per run and reuses it across groups and continuations without restricting native task capabilities.
 - OpenSpec source preparation (`bun run gen:spec-driven-resources`), npm packaging and binary builds now share a runtime archive built from vendored source and locked production dependencies using Bun.
 - Legacy OpenSpec resource archives are rejected with a preparation command instead of being reused solely because the file exists.
 - Source OpenSpec execution now rejects intermediate archives whose build inputs have changed and points to the resource preparation command.

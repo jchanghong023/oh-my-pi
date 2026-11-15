@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { AsyncJobDetails } from "../async/job-manager";
 import type { EvalHandleSnapshot, EvalHandleState } from "../eval/handle-bridge";
-import { buildTodoLoopGroupPrompt, type TodoLoopPreviousAttempt } from "./context";
+import { buildTodoLoopGroupPrompt, buildTodoLoopScoutPrompt, type TodoLoopPreviousAttempt } from "./context";
 import { TodoLoopNative } from "./native";
 import {
 	readTodoLoop,
@@ -36,7 +36,8 @@ export interface TodoLoopState {
 export interface TodoLoopAttemptEvent {
 	type: "start" | "update" | "end";
 	id: string;
-	group: TodoLoopGroup;
+	/** Absent for shared-background preparation, which is not a group attempt. */
+	group?: TodoLoopGroup;
 	attempt: number;
 	details?: AsyncJobDetails;
 	text?: string;
@@ -92,38 +93,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 	} catch (error) {
 		return state("file_error", errorText(error));
 	}
-	let previous: TodoLoopPreviousAttempt | undefined;
-	for (;;) {
-		if (options.signal?.aborted) return state("stopped");
-		try {
-			await reread();
-		} catch (error) {
-			return state("file_error", errorText(error));
-		}
-		const next = snapshot!.groups.find(item => item.tasks.some(task => !task.done));
-		if (!next) return state("completed");
-		if (next.id !== group?.id) {
-			attempt = 0;
-			previous = undefined;
-		}
-		group = next;
-		let id: string;
-		try {
-			const prompt = await buildTodoLoopGroupPrompt({
-				filePath,
-				cwd: options.cwd,
-				group,
-				attempt: attempt + 1,
-				previous,
-			});
-			await reread();
-			if (options.signal?.aborted) return state("stopped");
-			id = await native.start(prompt, `TodoLoop group ${group.id} · ${attempt + 1}/3`, options.signal);
-		} catch (error) {
-			return state(options.signal?.aborted ? "stopped" : "file_error", errorText(error));
-		}
-		attempt++;
-		const activeGroup = group;
+	const execute = async (id: string, activeGroup?: TodoLoopGroup): Promise<EvalHandleSnapshot | TodoLoopState> => {
 		const event = (type: TodoLoopAttemptEvent["type"], fields: Partial<TodoLoopAttemptEvent> = {}): void => {
 			options.onAttempt?.({ type, id, group: activeGroup, attempt, ...fields });
 		};
@@ -152,7 +122,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 			progress = progress
 				.then(async () => {
 					if (fileError) return;
-					await reread(activeGroup.id);
+					await reread(activeGroup?.id);
 					state(phase);
 				})
 				.catch(error => {
@@ -164,7 +134,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 			try {
 				result = await native.wait(id, options.signal, onProgress);
 				if (result.status === "running") {
-					executionError = "Native wait returned before the group agent completed.";
+					executionError = "Native wait returned before the agent completed.";
 					cancel();
 				}
 			} catch (error) {
@@ -188,14 +158,71 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 		const job = native.job(id);
 		const text = result?.text ?? job.resultText;
 		const error = result?.error ?? executionError ?? job.errorText;
-		event("end", { text, error, status: job.status, details: job.latestDetails });
+		event("end", { text: activeGroup ? text : undefined, error, status: job.status, details: job.latestDetails });
 		if (fileError) return state("file_error", fileError);
 		try {
-			await reread(activeGroup.id);
+			await reread(activeGroup?.id);
 		} catch (error) {
 			return state("file_error", errorText(error));
 		}
 		if (options.signal?.aborted) return state("stopped");
+		return { kind: "agent", id, status: job.status, text, error, data: result?.data };
+	};
+
+	if (options.signal?.aborted) return state("stopped");
+	if (snapshot!.groups.every(item => item.tasks.every(task => task.done))) return state("completed");
+	let preparationId: string;
+	try {
+		const prompt = await buildTodoLoopScoutPrompt(filePath, options.cwd);
+		await reread();
+		if (options.signal?.aborted) return state("stopped");
+		preparationId = await native.start(prompt, "TodoLoop shared background", options.signal, { agent: "scout" });
+	} catch (error) {
+		return state(options.signal?.aborted ? "stopped" : "file_error", errorText(error));
+	}
+	const preparation = await execute(preparationId);
+	if ("phase" in preparation) return preparation;
+	if (preparation.status !== "completed" || preparation.error) {
+		return state("failed", preparation.error ?? "TodoLoop background preparation failed.");
+	}
+	const context = preparation.text?.trim();
+	if (!context) return state("failed", "TodoLoop background preparation returned no usable result.");
+
+	let previous: TodoLoopPreviousAttempt | undefined;
+	for (;;) {
+		if (options.signal?.aborted) return state("stopped");
+		try {
+			await reread();
+		} catch (error) {
+			return state("file_error", errorText(error));
+		}
+		const next = snapshot!.groups.find(item => item.tasks.some(task => !task.done));
+		if (!next) return state("completed");
+		if (next.id !== group?.id) {
+			attempt = 0;
+			previous = undefined;
+		}
+		group = next;
+		let id: string;
+		try {
+			const prompt = await buildTodoLoopGroupPrompt({
+				filePath,
+				cwd: options.cwd,
+				group,
+				attempt: attempt + 1,
+				previous,
+			});
+			await reread();
+			if (options.signal?.aborted) return state("stopped");
+			id = await native.start(prompt, `TodoLoop group ${group.id} · ${attempt + 1}/3`, options.signal, { context });
+		} catch (error) {
+			return state(options.signal?.aborted ? "stopped" : "file_error", errorText(error));
+		}
+		attempt++;
+		const activeGroup = group;
+		const execution = await execute(id, activeGroup);
+		if ("phase" in execution) return execution;
+		const { text, error } = execution;
 		const remaining = group!.tasks.filter(task => !task.done);
 		if (remaining.length === 0) continue;
 		previous = {

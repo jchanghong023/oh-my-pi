@@ -87,7 +87,7 @@ afterEach(async () => {
 	AgentRegistry.resetGlobalForTests();
 });
 
-function harness(cwd: string, filePath = path.join(cwd, "todo.md")) {
+function harness(cwd: string, filePath = path.join(cwd, "todo.md"), realScout = false) {
 	const deliveries: string[] = [];
 	const manager = new AsyncJobManager({
 		onJobComplete: (_id, text) => {
@@ -120,16 +120,38 @@ function harness(cwd: string, filePath = path.join(cwd, "todo.md")) {
 				source: "bundled",
 				spawns: "*",
 			},
+			{
+				name: "scout",
+				description: "Scout",
+				systemPrompt: "Inspect shared background",
+				source: "bundled",
+				spawns: "*",
+			},
 		],
 		projectAgentsDir: null,
 	});
 	const states: TodoLoopState[] = [];
 	const events: TodoLoopAttemptEvent[] = [];
 	const native = new TodoLoopNative(session);
+	const scoutJobs = new Set<string>();
+	if (!realScout) {
+		const start = native.start.bind(native);
+		vi.spyOn(native, "start").mockImplementation(async (prompt, label, signal, options) => {
+			if (options?.agent !== "scout") return start(prompt, label, signal, options);
+			const id = manager.register("task", label, async () => "Shared background prepared", {
+				ownerId: "Main",
+				suppressDelivery: true,
+			});
+			scoutJobs.add(id);
+			await manager.getJob(id)!.promise;
+			return id;
+		});
+	}
 	return {
 		manager,
 		session,
 		native,
+		scoutJobs,
 		deliveries,
 		states,
 		events,
@@ -205,7 +227,9 @@ describe("TodoLoop native eval file consumers", () => {
 		expect(await Bun.file(temp.join("first-output.txt")).text()).toBe("retained:alpha|beta");
 		expect(await Bun.file(temp.join("published.txt")).text()).toBe("published:retained:alpha|beta");
 		expect(await Bun.file(temp.join("todo.md")).text()).toBe(original.replaceAll("[ ]", "[x]"));
-		expect(new Set(h.events.filter(event => event.type === "start").map(event => event.id)).size).toBe(3);
+		expect(new Set(h.events.filter(event => event.type === "start" && event.group).map(event => event.id)).size).toBe(
+			3,
+		);
 	});
 
 	it("rejects changing another group's repeated Step 1 through native dispatch", async () => {
@@ -247,11 +271,11 @@ describe("TodoLoop native eval file consumers", () => {
 		});
 		expect(await h.run()).toMatchObject({ phase: "completed", completed: 4, completedGroups: 2, totalGroups: 2 });
 		expect(boundaries).toEqual(["start:1", "end:1", "start:2", "end:2"]);
-		const starts = h.events.filter(event => event.type === "start");
+		const starts = h.events.filter(event => event.type === "start" && event.group);
 		expect(new Set(starts.map(event => event.id)).size).toBe(2);
 		expect(starts.map(event => event.attempt)).toEqual([1, 1]);
-		expect(h.events.findIndex(event => event.type === "end")).toBeLessThan(
-			h.events.findLastIndex(event => event.type === "start"),
+		expect(h.events.findIndex(event => event.type === "end" && event.group)).toBeLessThan(
+			h.events.findLastIndex(event => event.type === "start" && event.group),
 		);
 		expect(h.deliveries).toEqual([]);
 	});
@@ -300,8 +324,8 @@ describe("TodoLoop native eval file consumers", () => {
 			return result(options, pkg.group.id === "1" ? { exitCode: 1, stderr: "actual execution error" } : {});
 		});
 		expect((await h.run()).phase).toBe("completed");
-		expect(h.events.filter(event => event.type === "start")).toHaveLength(2);
-		expect(h.events.find(event => event.type === "end")?.error).toContain("actual execution error");
+		expect(h.events.filter(event => event.type === "start" && event.group)).toHaveLength(2);
+		expect(h.events.find(event => event.type === "end" && event.group)?.error).toContain("actual execution error");
 	});
 
 	it("publishes serialized live checkbox progress before wait and settlement return without dispatching", async () => {
@@ -334,6 +358,7 @@ describe("TodoLoop native eval file consumers", () => {
 		});
 		const wait = h.native.wait.bind(h.native);
 		vi.spyOn(h.native, "wait").mockImplementation(async (id, signal, onProgress) => {
+			if (h.scoutJobs.has(id)) return wait(id, signal, onProgress);
 			publish = () => onProgress();
 			return wait(id, signal, onProgress);
 		});
@@ -341,7 +366,7 @@ describe("TodoLoop native eval file consumers", () => {
 		let first = true;
 		vi.spyOn(h.native, "settle").mockImplementation(async id => {
 			await settle(id);
-			if (first) {
+			if (first && !h.scoutJobs.has(id)) {
 				first = false;
 				settling.resolve();
 				await finishSettlement.promise;
@@ -376,18 +401,18 @@ describe("TodoLoop native eval file consumers", () => {
 				current: { id: "2" },
 				attempt: 1,
 			});
-			expect(h.events.filter(event => event.type === "start")).toHaveLength(1);
+			expect(h.events.filter(event => event.type === "start" && event.group)).toHaveLength(1);
 			release.resolve();
 			await groupChecked.promise;
 			publish?.();
 			await liveDone.promise;
 			expect(h.states.at(-1)).toMatchObject({ completed: 2, completedGroups: 1, current: undefined });
-			expect(h.events.filter(event => event.type === "start")).toHaveLength(1);
+			expect(h.events.filter(event => event.type === "start" && event.group)).toHaveLength(1);
 			expect(ended).toBe(false);
 			finishWorker.resolve();
 			await settling.promise;
 			expect(ended).toBe(false);
-			expect(h.events.filter(event => event.type === "start")).toHaveLength(1);
+			expect(h.events.filter(event => event.type === "start" && event.group)).toHaveLength(1);
 			finishSettlement.resolve();
 			expect((await running).phase).toBe("completed");
 			const count = h.states.length;
@@ -420,6 +445,7 @@ describe("TodoLoop native eval file consumers", () => {
 			});
 			const wait = h.native.wait.bind(h.native);
 			vi.spyOn(h.native, "wait").mockImplementation(async (id, signal, onProgress) => {
+				if (h.scoutJobs.has(id)) return wait(id, signal, onProgress);
 				await entered.promise;
 				if (mutation === "unreadable") await fs.unlink(temp.join("todo.md"));
 				else await Bun.write(temp.join("todo.md"), original.replace("[ ] 2", "[x] 2"));
@@ -437,7 +463,7 @@ describe("TodoLoop native eval file consumers", () => {
 				cleanup.resolve();
 				expect((await running).phase).toBe("file_error");
 				expect(h.manager.getUnsettledJobs()).toHaveLength(0);
-				expect(h.events.filter(event => event.type === "start")).toHaveLength(1);
+				expect(h.events.filter(event => event.type === "start" && event.group)).toHaveLength(1);
 			} finally {
 				cleanup.resolve();
 				await running;
@@ -467,7 +493,7 @@ describe("TodoLoop native eval file consumers", () => {
 		});
 		const fresh = harness(temp.path());
 		expect((await fresh.run()).phase).toBe("completed");
-		expect(fresh.events.filter(event => event.type === "start")).toHaveLength(1);
+		expect(fresh.events.filter(event => event.type === "start" && event.group)).toHaveLength(1);
 	});
 
 	it("runs zero jobs for completed input and stops malformed or unreadable input before dispatch", async () => {
@@ -481,6 +507,7 @@ describe("TodoLoop native eval file consumers", () => {
 		await fs.unlink(temp.join("todo.md"));
 		expect((await h.run()).phase).toBe("file_error");
 		expect(spy).not.toHaveBeenCalled();
+		expect(h.native.start).not.toHaveBeenCalled();
 	});
 
 	for (const mutation of ["rename", "other checkbox", "delete", "unreadable"] as const) {
@@ -507,10 +534,34 @@ describe("TodoLoop native eval file consumers", () => {
 		});
 	}
 
-	it("does not equate cancellation marking with actual cleanup and preserves unrelated jobs", async () => {
+	for (const outcome of ["failed", "empty"] as const) {
+		it(`never executes groups after ${outcome} scout preparation`, async () => {
+			await using temp = await TempDir.create("@todoloop-preparation-");
+			const original = "## First\n- [ ] 1 One\n## Next\n- [ ] 2 Two\n";
+			await Bun.write(temp.join("todo.md"), original);
+			const h = harness(temp.path(), undefined, true);
+			const run = vi.spyOn(executor, "runSubprocess").mockImplementation(async options => {
+				expect(options.agent.name).toBe("scout");
+				return result(
+					options,
+					outcome === "failed" ? { exitCode: 1, stderr: "preparation failed" } : { output: " \n\t" },
+				);
+			});
+			expect(await h.run()).toMatchObject({ phase: "failed", completed: 0, attempt: 0 });
+			expect(run).toHaveBeenCalledTimes(1);
+			const starts = h.events.filter(event => event.type === "start");
+			expect(starts).toHaveLength(1);
+			expect(starts[0]?.group).toBeUndefined();
+			expect(starts[0]?.attempt).toBe(0);
+			expect(h.manager.getUnsettledJobs()).toHaveLength(0);
+			expect(await Bun.file(temp.join("todo.md")).text()).toBe(original);
+		});
+	}
+
+	it("cancels preparation without equating cancellation marking with cleanup or disturbing unrelated jobs", async () => {
 		await using temp = await TempDir.create("@todoloop-cancel-");
 		await Bun.write(temp.join("todo.md"), "- [ ] 1 First\n- [ ] 2 Second\n");
-		const h = harness(temp.path());
+		const h = harness(temp.path(), undefined, true);
 		const entered = Promise.withResolvers<void>();
 		const cleanup = Promise.withResolvers<void>();
 		const aborted = Promise.withResolvers<void>();
@@ -518,10 +569,10 @@ describe("TodoLoop native eval file consumers", () => {
 		const sibling = Promise.withResolvers<string>();
 		h.manager.register("bash", "unrelated", async () => sibling.promise, { id: "sibling", ownerId: "Other" });
 		vi.spyOn(executor, "runSubprocess").mockImplementation(async options => {
+			expect(options.agent.name).toBe("scout");
 			options.signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
 			entered.resolve();
 			await cleanup.promise;
-			await check(taskPackage(options), ["1"]);
 			return result(options);
 		});
 		let ended = false;
@@ -537,8 +588,10 @@ describe("TodoLoop native eval file consumers", () => {
 			expect(h.states.at(-1)?.phase).toBe("stopping");
 			expect(h.manager.getJob("sibling")?.status).toBe("running");
 			cleanup.resolve();
-			expect(await running).toMatchObject({ phase: "stopped", completed: 1, total: 2 });
+			expect(await running).toMatchObject({ phase: "stopped", completed: 0, total: 2 });
 			expect(h.events.filter(event => event.type === "start")).toHaveLength(1);
+			expect(h.events[0]?.group).toBeUndefined();
+			expect(h.events[0]?.attempt).toBe(0);
 		} finally {
 			controller.abort();
 			cleanup.resolve();
@@ -569,10 +622,10 @@ describe("TodoLoop native eval file consumers", () => {
 		const wait = handles.runEvalWait;
 		let first = true;
 		vi.spyOn(handles, "runEvalWait").mockImplementation(async (args, options) => {
-			if (first) {
+			const job = h.manager.getAllJobs().find(job => !h.scoutJobs.has(job.id));
+			if (first && job) {
 				first = false;
-				const jobs = h.manager.getAllJobs();
-				return { items: [{ kind: "agent", id: jobs[0].id, status: "running" }] };
+				return { items: [{ kind: "agent", id: job.id, status: "running" }] };
 			}
 			return wait(args, options);
 		});
@@ -580,14 +633,20 @@ describe("TodoLoop native eval file consumers", () => {
 		expect(order).toEqual(["start:1", "clean:1", "start:2", "clean:2"]);
 	});
 
-	it("does not retry when native descendant settlement cannot be confirmed", async () => {
+	it("does not execute groups when preparation descendant settlement cannot be confirmed", async () => {
 		await using temp = await TempDir.create("@todoloop-settlement-");
 		await Bun.write(temp.join("todo.md"), "- [ ] 1 First\n- [ ] 2 Second\n");
-		const h = harness(temp.path());
-		vi.spyOn(executor, "runSubprocess").mockImplementation(async options => result(options));
+		const h = harness(temp.path(), undefined, true);
+		const run = vi.spyOn(executor, "runSubprocess").mockImplementation(async options => {
+			expect(options.agent.name).toBe("scout");
+			return result(options);
+		});
 		vi.spyOn(h.manager, "waitForOwnerJobs").mockResolvedValue(false);
 		expect((await h.run()).phase).toBe("settlement_failed");
 		expect(h.events.filter(event => event.type === "start")).toHaveLength(1);
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(h.events[0]?.group).toBeUndefined();
+		expect(h.events[0]?.attempt).toBe(0);
 	});
 
 	for (const design of [false, true]) {
@@ -843,7 +902,7 @@ describe("TodoLoop native context and cleanup boundaries", () => {
 	it("stops environment failure at dispatch rather than spending three attempts", async () => {
 		await using temp = await TempDir.create("@todoloop-environment-");
 		await Bun.write(temp.join("todo.md"), "- [ ] 1 First\n");
-		const h = harness(temp.path());
+		const h = harness(temp.path(), undefined, true);
 		vi.spyOn(discovery, "discoverAgents").mockRejectedValue(new Error("Agent environment unavailable"));
 		const spy = vi.spyOn(executor, "runSubprocess");
 		expect((await h.run()).phase).toBe("file_error");
@@ -880,9 +939,9 @@ describe("TodoLoop AgentSession ownership", () => {
 			let exited = false;
 			const runSubprocess = vi.spyOn(executor, "runSubprocess").mockImplementation(async options => {
 				options.signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
+				expect(options.agent.name).toBe("scout");
 				entered.resolve();
 				await cleanup.promise;
-				await check(taskPackage(options), ["1"]);
 				exited = true;
 				return result(options);
 			});

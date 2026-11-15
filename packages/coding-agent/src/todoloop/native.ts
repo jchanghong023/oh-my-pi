@@ -10,11 +10,16 @@ export class TodoLoopNative {
 	constructor(readonly session: ToolSession) {}
 	readonly #jobs = new Map<string, AsyncJob>();
 
-	async start(prompt: string, label: string, signal?: AbortSignal): Promise<string> {
+	async start(
+		prompt: string,
+		label: string,
+		signal?: AbortSignal,
+		options?: { agent?: "task" | "scout"; context?: string },
+	): Promise<string> {
 		if (signal?.aborted) throw signal.reason;
 		const handle = await runEvalAgent(
-			{ agent: "task", prompt, label, isolated: false },
-			{ session: this.session, signal, suppressDelivery: true },
+			{ agent: options?.agent ?? "task", prompt, label, isolated: false },
+			{ session: this.session, signal, suppressDelivery: true, context: options?.context },
 		);
 		this.#jobs.set(handle.id, this.job(handle.id));
 		return handle.id;

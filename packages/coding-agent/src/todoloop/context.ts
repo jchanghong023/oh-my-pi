@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import groupTemplate from "../prompts/todoloop-group.md" with { type: "text" };
+import scoutTemplate from "../prompts/todoloop-scout.md" with { type: "text" };
 import type { TodoLoopGroup } from "./parser";
 
 export interface TodoLoopPreviousAttempt {
@@ -61,6 +62,15 @@ async function discoverChangeMaterials(filePath: string): Promise<ChangeMaterial
 	}
 	await collectSpecs(path.join(changeDirectory, "specs"), true);
 	return materials;
+}
+
+/** One read-only scout assignment for all remaining groups; no conversation history. */
+export async function buildTodoLoopScoutPrompt(filePath: string, cwd: string): Promise<string> {
+	cwd = path.resolve(cwd);
+	filePath = path.resolve(cwd, filePath);
+	return prompt.render(scoutTemplate, {
+		taskPackageJson: JSON.stringify({ cwd, filePath, materials: await discoverChangeMaterials(filePath) }, null, 2),
+	});
 }
 
 /** File-only context seam for fresh native task dispatch; never accepts chat history. */

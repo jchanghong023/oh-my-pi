@@ -58,6 +58,8 @@ export interface EvalAgentBridgeOptions {
 	emitStatus?: (event: JsStatusEvent) => void;
 	/** Keep program-owned executions out of the owner's model delivery queue. */
 	suppressDelivery?: boolean;
+	/** Program-owned shared context; not exposed as a model-visible eval argument. */
+	context?: string;
 }
 
 /** Handle returned immediately after an eval subagent job is registered. */
@@ -229,6 +231,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 						session: options.session,
 						invocationKind: "eval",
 						assignment: parsed.prompt,
+						context: options.context,
 						...(parsed.agent !== undefined ? { agent: parsed.agent } : {}),
 						...(parsed.model !== undefined ? { perCallModel: parsed.model } : {}),
 						...(Object.hasOwn(parsed, "schema") ? { outputSchema: parsed.schema } : {}),

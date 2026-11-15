@@ -14,11 +14,13 @@ function clean(value: string): string {
 }
 
 function completionText(event: TodoLoopAttemptEvent): string | undefined {
+	if (!event.group) return undefined;
 	const result = event.details?.evalResult;
 	return event.text ?? (isRecord(result) && typeof result.text === "string" ? result.text : undefined);
 }
 
 function groupLabel(event: TodoLoopAttemptEvent): string {
+	if (!event.group) return "TodoLoop shared background";
 	return `Group ${clean(event.group.id)} · attempt ${event.attempt}/3 · ${clean(event.group.title).replace(/\s+/g, " ")}`;
 }
 
@@ -195,8 +197,8 @@ export class TodoLoopPresentation {
 			card = new TodoLoopTaskCard(
 				"task",
 				{
-					agent: "task",
-					tasks: [{ agent: "task", task: groupLabel(event) }],
+					agent: event.group ? "task" : "scout",
+					tasks: [{ agent: event.group ? "task" : "scout", task: groupLabel(event) }],
 				},
 				{ useBuiltInRenderer: true, transcriptPresenters: false },
 				undefined,
