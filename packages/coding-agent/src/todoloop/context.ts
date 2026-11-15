@@ -83,7 +83,7 @@ export async function buildTodoLoopGroupPrompt(options: {
 }): Promise<string> {
 	const cwd = path.resolve(options.cwd);
 	const filePath = path.resolve(cwd, options.filePath);
-	const content = await Bun.file(filePath).text();
+	const content = await fs.readFile(filePath, "utf8");
 	const materials = await discoverChangeMaterials(filePath);
 	const lines = content.split(/(?<=\n)|(?<=\r)(?!\n)/);
 	return prompt.render(groupTemplate, {

@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+
 export interface TodoLoopTask {
 	id: string;
 	/** Human-readable identity for Superpowers steps and unnumbered tasks. */
@@ -49,6 +51,8 @@ function expandIndent(line: string): string {
 
 function parseDocument(content: string): ParsedDocument {
 	const lines = content.split(/\r\n|\n|\r/);
+	// A terminal newline is a line delimiter, not an immutable empty paragraph.
+	if (lines.at(-1) === "") lines.pop();
 	const located: LocatedTask[] = [];
 	const sections: { title: string; tasks: TodoLoopTask[]; steps: Set<string> }[] = [
 		{ title: "Default", tasks: [], steps: new Set() },
@@ -58,13 +62,15 @@ function parseDocument(content: string): ParsedDocument {
 	const lists: { indent: number; contentIndent: number }[] = [];
 	let current: LocatedTask | undefined;
 	let fence: { char: string; length: number; base: number; line: number } | undefined;
+	let commentLine: number | undefined;
+	let paragraph: { start: number; title: string } | undefined;
 	let nearestHeading: { level: number; title: string } | undefined;
 	let groupLevel: number | undefined;
 	let groupCount = 0;
 
 	for (let index = 0; index < lines.length; index++) {
 		const raw = lines[index];
-		const line = expandIndent(raw);
+		const line = expandIndent(index === 0 && raw.startsWith("\uFEFF") ? raw.slice(1) : raw);
 		const indent = line.length - line.trimStart().length;
 		if (fence) {
 			const closing = line.trimStart().match(/^(`+|~+)[ \t]*$/)?.[1];
@@ -73,8 +79,13 @@ function parseDocument(content: string): ParsedDocument {
 			}
 			continue;
 		}
+		if (commentLine !== undefined) {
+			if (line.includes("-->")) commentLine = undefined;
+			continue;
+		}
 		if (!line.trim()) {
 			current = undefined;
+			paragraph = undefined;
 			continue;
 		}
 		while (lists.length && indent < lists[lists.length - 1].contentIndent) lists.pop();
@@ -88,18 +99,30 @@ function parseDocument(content: string): ParsedDocument {
 			}
 			continue;
 		}
+		if (line.trimStart().startsWith("<!--")) {
+			commentLine = line.includes("-->", line.indexOf("<!--") + 4) ? undefined : index + 1;
+			current = undefined;
+			paragraph = undefined;
+			continue;
+		}
 		const opening = line.trimStart().match(/^(`{3,}|~{3,})(.*)$/);
 		if (opening && !(opening[1][0] === "`" && opening[2].includes("`"))) {
 			fence = { char: opening[1][0], length: opening[1].length, base, line: index + 1 };
 			current = undefined;
+			paragraph = undefined;
 			continue;
 		}
 		const heading = line.match(/^ {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)$/);
-		if (heading) {
-			headings.push({ line: index + 1, raw });
-			const level = heading[1].length;
-			const title = (heading[2] ?? "").replace(/(?:^|[ \t]+)#+[ \t]*$/, "").trim();
+		const setext = paragraph && line.match(/^ {0,3}(=+|-+)[ \t]*$/);
+		if (heading || setext) {
+			const start = heading ? index : paragraph!.start;
+			for (let position = start; position <= index; position++) {
+				headings.push({ line: position + 1, raw: lines[position] });
+			}
+			const level = heading ? heading[1].length : setext![1][0] === "=" ? 1 : 2;
+			const title = heading ? (heading[2] ?? "").replace(/(?:^|[ \t]+)#+[ \t]*$/, "").trim() : paragraph!.title;
 			nearestHeading = { level, title };
+			paragraph = undefined;
 			if (located.length && level === groupLevel) {
 				sections.push({ title, tasks: [], steps: new Set() });
 			}
@@ -109,6 +132,7 @@ function parseDocument(content: string): ParsedDocument {
 		const list = line.match(LIST_PATTERN);
 		if (list) {
 			current = undefined;
+			paragraph = undefined;
 			let contentIndent = indent + list[2].length;
 			for (const char of list[3]) contentIndent += char === "\t" ? 4 - (contentIndent % 4) : 1;
 			lists.push({ indent, contentIndent });
@@ -184,9 +208,14 @@ function parseDocument(content: string): ParsedDocument {
 			current.bodyEnd = index + 1;
 		} else {
 			current = undefined;
+			if (!lists.length && !TEXT_BREAK_PATTERN.test(line)) {
+				if (paragraph) paragraph.title += `\n${line.trim()}`;
+				else paragraph = { start: index, title: line.trim() };
+			} else paragraph = undefined;
 		}
 	}
 	if (fence) throw new Error(`TodoLoop: unclosed code fence at line ${fence.line}`);
+	if (commentLine !== undefined) throw new Error(`TodoLoop: unclosed HTML comment at line ${commentLine}`);
 	for (const { task } of located) {
 		if (!task.text.trim()) throw new Error(`TodoLoop: empty task body for ${task.id} at line ${task.line}`);
 	}
@@ -203,7 +232,8 @@ export function parseTodoLoop(content: string): TodoLoopSnapshot {
 }
 
 export async function readTodoLoop(filePath: string): Promise<TodoLoopSnapshot> {
-	return parseTodoLoop(await Bun.file(filePath).text());
+	// Bun.file().text() removes a UTF-8 BOM; snapshots must preserve the source.
+	return parseTodoLoop(await fs.readFile(filePath, "utf8"));
 }
 
 /** Freeze the original document; only current-group checkboxes and appended notes may change. */
@@ -233,7 +263,14 @@ export function validateTodoLoopChange(
 		const newTask = newLocated.task;
 		if (oldTask.id !== newTask.id) throw new Error(`TodoLoop: task number or order changed at ${oldTask.id}`);
 		if (oldLocated.section !== newLocated.section) throw new Error(`TodoLoop: task group changed for ${oldTask.id}`);
-		if (oldTask.text !== newTask.text) throw new Error(`TodoLoop: task body changed for ${oldTask.id}`);
+		// New prose may extend the current task's paragraph, but never replace
+		// any original line. The raw-line check below also protects old notes.
+		if (
+			oldTask.text !== newTask.text &&
+			!(currentTaskIds.has(oldTask.id) && newTask.text.startsWith(`${oldTask.text}\n`))
+		) {
+			throw new Error(`TodoLoop: task body changed for ${oldTask.id}`);
+		}
 		if (oldTask.done && !newTask.done) throw new Error(`TodoLoop: completed task ${oldTask.id} was unchecked`);
 		if (oldTask.done !== newTask.done && !currentTaskIds.has(oldTask.id)) {
 			throw new Error(`TodoLoop: non-current group task ${oldTask.id} changed checkbox`);

@@ -56,14 +56,16 @@ MUST write a real, self-contained Markdown file, usable without the interview tr
 
 MUST use same-level `##` task groups and ordinary `- [ ]` tasks. First checkbox immediately follows its group's heading; shared context contains no checkboxes. Details use indented continuation text, not nested checkboxes or code-fenced tasks. MUST state dependencies between groups.
 
-## Sequentially completable groups
+## Completable checkboxes and groups
 
-- MUST treat file order as sequential: finish and verify every task in one group before starting the next. Group prerequisites MUST come only from shared preconditions or fully completed earlier groups.
-- MUST make each group a completion boundary, not merely a work-type boundary. Keep implementation, required tests, documentation and acceptance needed to check its tasks in that group; NEVER make an earlier checkbox wait for a later group's work or verification.
-- Shared acceptance required before several tasks can be checked? MUST merge those tasks and their prerequisites into one group. A single agreed verification batch MUST stay with all work whose completion depends on it; NEVER split into implementation, test-writing and acceptance groups that require returning to earlier checkboxes.
-- A later integration/final acceptance group MAY verify broader outcomes only when earlier groups have sufficient independent completion evidence. NEVER waive required verification, duplicate checks or mark unverified tasks complete to preserve a split.
-- MUST include sequential completion and no-forward-dependency rules in the generated shared context. Before delivery, walk groups in file order: can every checkbox be truthfully checked using only shared preconditions, completed earlier groups and work/verification in this group? If not, reorder or merge groups before writing; NEVER rely on skipping an unchecked group or returning later.
+- MUST keep groups sequentially completable: finish and verify a group before starting the next. Group prerequisites MUST come only from shared preconditions or completed earlier groups.
+- MUST give every checkbox its own output, minimal sufficient verification and observable completion criteria. Its completion MUST depend only on shared preconditions, completed earlier checkboxes and its own work, NEVER a later checkbox. Task completion does not mean full product acceptance.
+- A later integration/final acceptance task MAY check a broader contract. It NEVER supplies the first required verification that an earlier checkbox already claimed to complete. NEVER weaken verification or check unfinished work merely to preserve a split.
+- Shared commands or one agreed verification batch do not alone require merging tasks. MUST merge into one checkbox only when no independently verifiable intermediate outcome exists; keep inseparable implementation, tests, documentation and acceptance as that checkbox's continuation steps. Preserve agreed verification scope and frequency; NEVER add duplicate checks or create giant checkboxes solely because work is related.
+- TDD stages MAY be separate checkboxes: writing a regression completes after observing the intended failure; fixing it completes after the relevant regression passes; final acceptance checks the broader agreed outcome. NEVER require the test-writing checkbox to wait for the later fix or describe expected-red evidence as a working product.
+- Before writing, MUST walk every checkbox in file order using only shared preconditions, completed earlier checkboxes and that checkbox's work/verification, then check each group's completion boundary. A forward completion dependency requires reordering or revising task boundaries before generation; NEVER rely on skipping unchecked tasks or filling earlier checkboxes later.
+- MUST include each checkbox's completion criteria and the task-completion/product-acceptance distinction in the generated file, plus the group-completion and no-forward-dependency rules in shared context.
 
-MUST verify the file was written, follows the Markdown structure above and passes the sequential group-completion walkthrough. File generation does not prove the tasks were implemented or their acceptance checks passed.
+MUST verify the file was written, follows the Markdown structure above and passes the checkbox and group completion walkthrough. File generation does not prove the tasks were implemented or their acceptance checks passed.
 
 MUST deliver the actual file path and checks performed, then stop. NEVER execute the tasks or launch another session automatically.

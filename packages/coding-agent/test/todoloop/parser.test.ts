@@ -282,12 +282,194 @@ describe("TodoLoop file parsing", () => {
 		["unclosed tilde fence", "~~~\n- [ ] 1 Hidden", /unclosed code fence/],
 		["short closing fence", "````\n```\n- [ ] 1 Hidden", /unclosed code fence/],
 		["wrong closing fence", "```\n~~~\n- [ ] 1 Hidden", /unclosed code fence/],
+		["unclosed HTML comment", "## G\n- [x] A\n<!--\n- [ ] B\n", /unclosed HTML comment at line 3/],
 		["no tasks", "# Background\nOnly prose", /no executable tasks/],
 	] as const) {
 		it(`rejects ${name} through the file consumer`, async () => {
 			await expect(readTodoLoop(await fixture(content))).rejects.toThrow(error);
 		});
 	}
+});
+
+describe("TodoLoop Markdown format and update compatibility", () => {
+	for (const { name, lines, eol, ids, next } of [
+		{
+			name: "Grill Todo unnumbered tasks with multiline Chinese acceptance",
+			lines: [
+				"## 组 1：配置闭环",
+				"- [ ] 核对实施前置。",
+				"  读取既有规格，不修改无关文件。",
+				"  验收：所需检查通过。",
+				"- [ ] 贯通配置入口。",
+				"## 组 2：业务闭环",
+				"- [ ] 完成业务验收。",
+			],
+			eol: "\n",
+			ids: ["auto:1", "auto:2", "auto:3"],
+			next: "auto:2",
+		},
+		{
+			name: "OpenSpec numbered tasks in ordered lists with CRLF hard breaks",
+			lines: [
+				"## Implement",
+				"1. [ ] 1.1 Load commands\\",
+				"   Preserve external overrides.  ",
+				"2) [ ] 1.2 Verify the public entry",
+				"## Deliver",
+				"+ [ ] 2.1 Record results",
+			],
+			eol: "\r\n",
+			ids: ["1.1", "1.2", "2.1"],
+			next: "1.2",
+		},
+		{
+			name: "Superpowers Steps with CR newlines and group-local repeated numbers",
+			lines: [
+				"### Implement",
+				"- [ ] **Step 1: Write the regression**",
+				"  Exercise the real file consumer.",
+				"* [ ] **Step 2: Fix the parser**",
+				"### Deliver",
+				"- [ ] **Step 1: Report evidence**",
+			],
+			eol: "\r",
+			ids: ["step:1:1", "step:1:2", "step:2:1"],
+			next: "step:1:2",
+		},
+		{
+			name: "BOM-prefixed headerless nested tasks with tab-padded markers",
+			lines: ["\uFEFF-\t[ ] Parent task", "      * [ ] 8 Child task", "+ [ ] Final task"],
+			eol: "\n",
+			ids: ["auto:1", "8", "auto:3"],
+			next: "8",
+		},
+	] as const) {
+		it(`continues ${name} after inline execution notes without a blank separator`, async () => {
+			const content = lines.join(eol);
+			const filePath = await fixture(content);
+			const before = await readTodoLoop(filePath);
+			expect(before.content).toBe(content);
+			expect(before.tasks.map(task => task.id)).toEqual([...ids]);
+			const first = before.tasks[0];
+			const updated = [...lines] as string[];
+			updated[first.line - 1] = updated[first.line - 1]!.replace("[ ]", "[x]");
+			updated.splice(first.line - 1 + first.text.split("\n").length, 0, "    执行记录：定向检查通过。");
+			await fs.writeFile(filePath, updated.join(eol));
+			const after = await readTodoLoop(filePath);
+			validateTodoLoopChange(before, after, "1");
+			expect(after.tasks.map(task => task.id)).toEqual([...ids]);
+			expect(after.tasks.map(task => task.done)).toEqual([true, ...ids.slice(1).map(() => false)]);
+			expect(
+				after.groups.find(group => group.tasks.some(task => !task.done))?.tasks.find(task => !task.done)?.id,
+			).toBe(next);
+			// A second progress refresh must accept further append-only evidence,
+			// without allowing the previous record or original requirement to change.
+			const continued = after.content.replace(
+				"    执行记录：定向检查通过。",
+				`    执行记录：定向检查通过。${eol}    补充记录：公开入口已核验。`,
+			);
+			await fs.writeFile(filePath, continued);
+			const reread = await readTodoLoop(filePath);
+			validateTodoLoopChange(after, reread, "1");
+			expect(reread.tasks.filter(task => !task.done).map(task => task.id)).toEqual(ids.slice(1));
+			await fs.writeFile(filePath, continued.replace("定向检查通过。", "未执行检查。"));
+			const changed = await readTodoLoop(filePath);
+			expect(() => validateTodoLoopChange(reread, changed, "1")).toThrow(/body changed|original content changed/);
+		});
+	}
+
+	it("infers mixed Setext and ATX groups and freezes multiline Setext titles across rereads", async () => {
+		const content = [
+			"Implementation plan",
+			"===================",
+			"",
+			"Build",
+			"and verify",
+			"----------",
+			"- [ ] **Step 1: Implement**",
+			"",
+			"Review",
+			"------",
+			"- [ ] **Step 2: Inspect**",
+			"## Deliver",
+			"- [ ] **Step 3: Publish**",
+		].join("\n");
+		const filePath = await fixture(content);
+		const before = await readTodoLoop(filePath);
+		expect(before.groups.map(group => [group.title, group.tasks.map(task => task.id)])).toEqual([
+			["Build\nand verify", ["step:1:1"]],
+			["Review", ["step:2:2"]],
+			["Deliver", ["step:3:3"]],
+		]);
+		await fs.writeFile(filePath, content.replace("[ ] **Step 1: Implement", "[x] **Step 1: Implement"));
+		const after = await readTodoLoop(filePath);
+		validateTodoLoopChange(before, after, "1");
+		expect(after.groups.find(group => group.tasks.some(task => !task.done))?.title).toBe("Review");
+		for (const changed of [
+			after.content.replace("and verify", "and skip verification"),
+			after.content.replace("Review\n------", "Review\n======"),
+		]) {
+			const parsed = parseTodoLoop(changed);
+			expect(() => validateTodoLoopChange(after, parsed, "2")).toThrow(
+				/heading structure changed|task group changed/,
+			);
+		}
+	});
+
+	it("retains BOM-prefixed ATX grouping and ignores headings and checkboxes inside HTML comments", async () => {
+		const content = [
+			"\uFEFF## Prepare",
+			"<!--",
+			"### Not a group",
+			"- [~] Not a task",
+			"```markdown",
+			"-->", // A fence inside a comment must not hide the following real task.
+			"- [ ] Prepare configuration",
+			"  <!--",
+			"  - [ ] Not a nested task",
+			"  -->",
+			"## Deliver",
+			"<!-- - [ ] Also hidden -->",
+			"* [ ] Verify entry",
+		].join("\r\n");
+		const filePath = await fixture(content);
+		const before = await readTodoLoop(filePath);
+		expect(before.groups.map(group => [group.title, group.tasks.map(task => task.id)])).toEqual([
+			["Prepare", ["auto:1"]],
+			["Deliver", ["auto:2"]],
+		]);
+		await fs.writeFile(filePath, content.replace("[ ] Prepare", "[X] Prepare"));
+		const after = await readTodoLoop(filePath);
+		validateTodoLoopChange(before, after, "1");
+		expect(after.groups.find(group => group.tasks.some(task => !task.done))?.title).toBe("Deliver");
+	});
+
+	it("allows appending a record at EOF without requiring an extra trailing newline", async () => {
+		const content = "## Finish\n- [ ] Record results\n  Preserve acceptance.\n";
+		const filePath = await fixture(content);
+		const before = await readTodoLoop(filePath);
+		await fs.writeFile(filePath, `${content.replace("[ ]", "[x]")}  Execution: verified.`);
+		const after = await readTodoLoop(filePath);
+		validateTodoLoopChange(before, after, "1");
+		expect(after.tasks.map(task => ({ id: task.id, done: task.done }))).toEqual([{ id: "auto:1", done: true }]);
+		expect(after.tasks[0].text).toBe("Record results\nPreserve acceptance.\nExecution: verified.");
+	});
+
+	it("rejects a changed requirement or foreign inline note even when the current checkbox completes", async () => {
+		const content = "## Current\n- [ ] Work\n  Required acceptance.\n## Later\n- [ ] Publish\n  Required review.\n";
+		const filePath = await fixture(content);
+		const before = await readTodoLoop(filePath);
+		for (const changed of [
+			content.replace("Required acceptance.", "Replaced acceptance.\n  Execution: passed."),
+			content.replace("Required acceptance.", "Required acceptance. Changed."),
+			content.replace("Required review.", "Required review.\n  Execution: foreign."),
+		]) {
+			await fs.writeFile(filePath, changed.replace("[ ] Work", "[x] Work"));
+			const after = await readTodoLoop(filePath);
+			expect(() => validateTodoLoopChange(before, after, "1")).toThrow(/body changed|original content changed/);
+			expect(after.tasks[1].done).toBe(false);
+		}
+	});
 });
 
 const original =

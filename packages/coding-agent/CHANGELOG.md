@@ -54,7 +54,11 @@
 
 ### Fixed
 
-- TodoLoop now instructs executors to separate appended execution notes from task text with a blank line, avoiding task-body validation errors.
+- TodoLoop reports unclosed HTML comments instead of silently omitting later tasks.
+- Grill Todo now checks completion dependencies per checkbox without requiring full product acceptance for every task; TodoLoop executors no longer receive a fixed within-group execution order.
+- TodoLoop accepts append-only execution records without blank separators, preserves BOM-prefixed plans, and recognizes Setext groups while ignoring HTML-comment examples.
+- TodoLoop retains the original task file in memory for diagnosis and explicit recovery without creating disk backups or rolling back changes.
+- TodoLoop recommends separating appended execution notes from task text with a blank line while accepting append-only records without one.
 - Grill Todo now requires sequentially completable groups, keeping shared acceptance with the work it gates instead of blocking earlier groups on later verification.
 - Default startup restores `/review`, `/annotate`, and `/green` without enabling external command discovery.
 - TodoLoop no longer skips nested tasks after tab-padded list markers and preserves task text in CR-only Markdown files.

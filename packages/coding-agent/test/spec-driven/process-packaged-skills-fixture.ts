@@ -31,10 +31,15 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			const baseline = await git(config.cwd, config.env, ["rev-parse", "HEAD"]);
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
 			await peer.start();
-			const defaultSkills: Record<string, true> = {};
-			for (const entry of inventory.skills) {
-				if (entry.source === "openspec" || entry.name === "jch-codebase-design") defaultSkills[entry.name] = true;
-			}
+			const defaultSkills = new Set([
+				"openspec-propose",
+				"openspec-explore",
+				"openspec-apply-change",
+				"openspec-update-change",
+				"openspec-sync-specs",
+				"openspec-archive-change",
+				"jch-codebase-design",
+			]);
 			let events = await peer.promptAndWait(
 				`${MARKER} ordinary greeting, no skills requested`,
 				undefined,
@@ -65,7 +70,7 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 					const context = request.messages.map(message => contentText(message.content)).join("\n");
 					if (entry.source === "superpowers") expect(context).not.toContain(entry.name);
 					if (typeof metadata.frontmatter.description === "string") {
-						if (defaultSkills[entry.name]) expect(context).toContain(entry.name);
+						if (defaultSkills.has(entry.name)) expect(context).toContain(entry.name);
 						else expect(context).not.toContain(metadata.frontmatter.description);
 					}
 				}
@@ -111,7 +116,9 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 				const turn = entry.name;
 				const selectedPath = `skill://${entry.name}:raw`;
 				const allowedPaths: string[] = [];
-				const others = inventory.skills.filter(other => other.name !== entry.name && !defaultSkills[other.name]);
+				const others = inventory.skills.filter(
+					other => other.name !== entry.name && !defaultSkills.has(other.name),
+				);
 				const deniedPaths = others.map(other => `skill://${other.name}:raw`);
 				events = await peer.promptAndWait(
 					`/skill:${entry.name} ${MARKER} capability inspection only; do not implement, archive, commit, launch servers or execute destructive scripts.\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ turn, path: selectedPath, allowedPaths, deniedPaths })}`,

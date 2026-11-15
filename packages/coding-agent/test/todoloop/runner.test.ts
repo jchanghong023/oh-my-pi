@@ -496,6 +496,33 @@ describe("TodoLoop native eval file consumers", () => {
 		expect(fresh.events.filter(event => event.type === "start" && event.group)).toHaveLength(1);
 	});
 
+	it("retains the original input in memory across progress and corruption for explicit recovery without disk backups", async () => {
+		await using temp = await TempDir.create("@todoloop-original-");
+		const filePath = temp.join("todo.md");
+		const original = "## Work\r\n- [ ] First\r\n- [ ] Second\r\n## Later\r\n- [ ] Publish\r\n";
+		await Bun.write(filePath, original);
+		const h = harness(temp.path());
+		vi.spyOn(executor, "runSubprocess").mockImplementation(async options => {
+			const pkg = taskPackage(options);
+			if (pkg.attempt === 1) await check(pkg, [pkg.group.tasks[0]!.id]);
+			else await Bun.write(filePath, (await Bun.file(filePath).text()).replace("Second", "Changed task"));
+			return result(options);
+		});
+		const state = await h.run();
+		expect(state).toMatchObject({ phase: "file_error", completed: 1, originalContent: original });
+		expect(h.states.filter(item => item.completed === 1).every(item => item.originalContent === original)).toBe(true);
+		expect(await Bun.file(filePath).text()).toContain("Changed task");
+		expect(await fs.readdir(temp.path())).toEqual(["todo.md"]);
+		// Recovery is an explicit caller decision, never an automatic rollback.
+		await Bun.write(filePath, state.originalContent!);
+		const recovered = await readTodoLoop(filePath);
+		expect(recovered.tasks.map(task => [task.id, task.done])).toEqual([
+			["auto:1", false],
+			["auto:2", false],
+			["auto:3", false],
+		]);
+	});
+
 	it("runs zero jobs for completed input and stops malformed or unreadable input before dispatch", async () => {
 		await using temp = await TempDir.create("@todoloop-input-");
 		const spy = vi.spyOn(executor, "runSubprocess");

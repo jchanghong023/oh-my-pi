@@ -27,13 +27,13 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 4. You MUST obtain background only from the task file and its explicit references. You NEVER infer a Change or scan neighboring materials for an ordinary Markdown file.
 {{/if}}
 5. You MUST continue existing work using real workspace files and execution notes. `previous`, when supplied, contains only the last result/error and the program's observation; it is not inherited chat history. You NEVER invent a failure cause absent from that evidence.
-6. You MUST handle remaining tasks in file order without yielding between tasks. For each task, complete implementation and necessary verification, immediately mark only its checkbox `[x]` or `[X]`, then continue to the next remaining task in this same context. You MUST preserve original raw formatting, including bold Step labels, task numbers, bodies, headings, order, and other groups' checkboxes. You MAY append execution/verification notes only in the format below. Unfinished or unverified? You MUST leave it unchecked and report actual results/errors.
+6. You MUST complete the packaged remaining group tasks without yielding between tasks. Whenever a task meets its completion criteria and required verification, immediately mark only its checkbox `[x]` or `[X]`. You MUST preserve original raw formatting, including bold Step labels, task numbers, bodies, headings, order, and other groups' checkboxes. You MAY append execution/verification notes only in the format below. Unfinished or unverified? You MUST leave it unchecked and report actual results/errors.
 7. You NEVER invoke OpenSpec apply, sync, or archive, generate proposals, or start an OpenSpec workflow. Change materials provide file context only. You retain native `task` capabilities and normal permission/model policies.
 </workflow>
 
 ## Execution note format
 
-You MUST place appended notes after all original task continuation lines and existing notes, before the next task or heading. You MUST separate each appended note from preceding content with at least one blank line; without it, prose becomes part of the immutable task body and causes `file_error`. You NEVER insert blank lines inside original task prose, rewrite existing notes, or add headings or checkboxes for notes.
+You MUST place appended notes after all original task continuation lines and existing notes, before the next task or heading. You SHOULD separate each appended note from preceding content with a blank line; append-only records without a blank separator are also accepted. You NEVER insert blank lines inside original task prose, rewrite existing notes, or add headings or checkboxes for notes.
 
 ```markdown
 - [x] Run the required check.

@@ -23,6 +23,8 @@ export interface TodoLoopState {
 		| "stopped"
 		| "settlement_failed";
 	filePath: string;
+	/** Original valid input, retained only in memory for diagnosis or explicit recovery. */
+	originalContent?: string;
 	completed: number;
 	total: number;
 	completedGroups: number;
@@ -61,6 +63,7 @@ function errorText(error: unknown): string {
 export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopNative): Promise<TodoLoopState> {
 	const filePath = path.resolve(options.cwd, options.filePath);
 	let snapshot: TodoLoopSnapshot | undefined;
+	let originalContent: string | undefined;
 	let group: TodoLoopGroup | undefined;
 	let attempt = 0;
 	let phase: TodoLoopState["phase"] = "checking";
@@ -69,6 +72,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 		const value: TodoLoopState = {
 			phase,
 			filePath,
+			originalContent,
 			completed: snapshot?.tasks.filter(task => task.done).length ?? 0,
 			total: snapshot?.tasks.length ?? 0,
 			completedGroups: snapshot?.groups.filter(item => item.tasks.every(task => task.done)).length ?? 0,
@@ -83,6 +87,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 	};
 	const reread = async (activeGroupId?: string): Promise<void> => {
 		const fresh = await readTodoLoop(filePath);
+		originalContent ??= fresh.content;
 		if (snapshot) validateTodoLoopChange(snapshot, fresh, activeGroupId);
 		snapshot = fresh;
 		if (group) group = fresh.groups.find(item => item.id === group?.id);

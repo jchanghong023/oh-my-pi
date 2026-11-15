@@ -122,13 +122,13 @@ describe("TodoLoop group file context", () => {
 		expect(await fs.readdir(path.dirname(filePath))).not.toContain("result.txt");
 	});
 
-	test("packages CR-only task lines without losing original text or continuation delimiters", async () => {
+	test("packages BOM-prefixed CR-only task lines without losing original text or continuation delimiters", async () => {
 		const cwd = await workspace();
 		const filePath = path.join(cwd, "work.md");
-		await writeFile(filePath, "# Work\r## Active\r- [ ] 1 First\r  Keep this acceptance.\r- [ ] 2 Second\r");
+		await writeFile(filePath, "\uFEFF- [ ] 1 First\r  Keep this acceptance.\r- [ ] 2 Second\r");
 		const pkg = taskPackage(await build(filePath, cwd));
 		expect(pkg.group.tasks).toEqual([
-			{ id: "1", label: "1", raw: "- [ ] 1 First\r  Keep this acceptance." },
+			{ id: "1", label: "1", raw: "\uFEFF- [ ] 1 First\r  Keep this acceptance." },
 			{ id: "2", label: "2", raw: "- [ ] 2 Second" },
 		]);
 	});
