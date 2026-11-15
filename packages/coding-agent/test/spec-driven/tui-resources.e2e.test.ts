@@ -111,7 +111,8 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 						expect(provider.requests).toHaveLength(requestCount);
 					}
 					const manualOnly = inventory.skills.filter(
-						skill => skill.source === "jch" || skill.source === "superpowers",
+						skill =>
+							(skill.source === "jch" && skill.name !== "jch-codebase-design") || skill.source === "superpowers",
 					);
 					const deniedPaths = manualOnly.map(skill => `skill://${skill.name}:raw`);
 					let previousReply = `${MARKER}_CHAT_READY`;

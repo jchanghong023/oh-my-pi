@@ -502,7 +502,7 @@ describe("TodoLoop native eval file consumers", () => {
 		await Bun.write(temp.join("todo.md"), "- [X] 1 Done\n");
 		const h = harness(temp.path());
 		expect((await h.run()).phase).toBe("completed");
-		await Bun.write(temp.join("todo.md"), "- [ ] Missing number\n");
+		await Bun.write(temp.join("todo.md"), "- [~] Invalid state\n");
 		expect((await h.run()).phase).toBe("file_error");
 		await fs.unlink(temp.join("todo.md"));
 		expect((await h.run()).phase).toBe("file_error");

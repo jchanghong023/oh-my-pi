@@ -6,7 +6,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { loadOpenWikiVendor } from "../../src/openwiki/vendor-loader";
 
-const pages = ["/openwiki/alpha.md", "/openwiki/beta.md", "/openwiki/gamma.md", "/openwiki/quickstart.md"];
+const poolPages = ["/openwiki/alpha.md", "/openwiki/beta.md", "/openwiki/gamma.md", "/openwiki/quickstart.md"];
 type Message = { role: string; content?: unknown; tool_call_id?: string };
 
 async function repository(root: string) {
@@ -41,6 +41,8 @@ async function scenario(
 		| "verification"
 		| "partial-baseline",
 ) {
+	// Instruction invalidation needs one page; pool scenarios retain all workers.
+	const pages = mode === "instructions" ? [poolPages.at(-1)!] : poolPages;
 	using dir = TempDir.createSync("@omp-openwiki-native-pool-");
 	const root = dir.join("repo");
 	const git = await repository(root);

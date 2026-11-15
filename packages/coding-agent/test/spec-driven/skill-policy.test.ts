@@ -313,9 +313,9 @@ describe("pinned skill discovery and access", () => {
 			const context = { skills: [skill], getSessionBranch: () => [] };
 			await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 			for (const resource of resources) {
-				await expect(handler.locate(parseInternalUrl(`skill://${name}/${resource}`), context)).rejects.toBeInstanceOf(
-					SkillAccessDeniedError,
-				);
+				await expect(
+					handler.locate(parseInternalUrl(`skill://${name}/${resource}`), context),
+				).rejects.toBeInstanceOf(SkillAccessDeniedError);
 			}
 			const invoked = await buildSkillPromptMessage(skill, { args: "" }, "user");
 			const authorized = { skills: [skill], getSessionBranch: () => [provenance(skill, invoked.details)] };
@@ -324,7 +324,9 @@ describe("pinned skill discovery and access", () => {
 				const resourceUrl = parseInternalUrl(`skill://${name}/${resource}`);
 				const resourcePath = path.join(skill.baseDir, resource);
 				expect(await handler.locate(resourceUrl, authorized)).toBe(resourcePath);
-				expect((await handler.resolve(resourceUrl, authorized)).content).toBe(await fs.readFile(resourcePath, "utf8"));
+				expect((await handler.resolve(resourceUrl, authorized)).content).toBe(
+					await fs.readFile(resourcePath, "utf8"),
+				);
 				await expect(handler.resolve(resourceUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 			}
 		},

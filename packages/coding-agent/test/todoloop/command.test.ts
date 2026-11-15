@@ -108,7 +108,7 @@ describe("native /todoloop command", () => {
 		},
 	);
 
-	it.each([undefined, "# No tasks\n", "- [ ] missing number\n"])(
+	it.each([undefined, "# No tasks\n", "- [~] invalid state\n"])(
 		"shows real read or parser errors without executing",
 		async content => {
 			const h = await harness();

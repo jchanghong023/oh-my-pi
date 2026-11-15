@@ -32,8 +32,9 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
 			await peer.start();
 			const defaultSkills: Record<string, true> = {};
-			for (const entry of inventory.skills.filter(entry => entry.source === "openspec"))
-				defaultSkills[entry.name] = true;
+			for (const entry of inventory.skills) {
+				if (entry.source === "openspec" || entry.name === "jch-codebase-design") defaultSkills[entry.name] = true;
+			}
 			let events = await peer.promptAndWait(
 				`${MARKER} ordinary greeting, no skills requested`,
 				undefined,

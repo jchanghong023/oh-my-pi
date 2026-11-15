@@ -592,7 +592,15 @@ describe("native workflow host", () => {
 			expect(contentText(session.messages.findLast(message => message.role === "assistant")?.content)).toContain(
 				"Native response",
 			);
-			expect(await f.host.workflow.submit("browser-a", input)).toMatchObject({
+			// Durable turn completion precedes host ingestion; replay completion
+			// must wait for the public receipt rather than race that finalization.
+			expect(
+				await eventually(
+					() => f.host.workflow.submit("browser-a", input),
+					receipt => "status" in receipt && receipt.status === "completed",
+					5_000,
+				),
+			).toMatchObject({
 				operationId: input.operationId,
 				status: "completed",
 			});

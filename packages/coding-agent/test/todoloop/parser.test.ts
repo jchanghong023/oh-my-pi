@@ -230,9 +230,16 @@ describe("TodoLoop file parsing", () => {
 		expect(await fs.readFile(filePath, "utf8")).toBe(content);
 	});
 
+	it("assigns automatic identities to unnumbered text without colliding with explicit numbers", async () => {
+		const snapshot = await readTodoLoop(
+			await fixture("- [x] Previous work\n- [ ] 1..2 Work\n- [ ] 1 Numbered work\n- [ ] Next work\n"),
+		);
+		expect(snapshot.tasks.map(task => task.id)).toEqual(["auto:1", "auto:2", "1", "auto:4"]);
+		expect(snapshot.tasks.map(task => task.done)).toEqual([true, false, false, false]);
+		expect(snapshot.tasks[1].text).toBe("1..2 Work");
+	});
+
 	for (const [name, content, error] of [
-		["missing id", "- [ ] Work", /missing or invalid task number/],
-		["invalid dotted id", "- [ ] 1..2 Work", /missing or invalid task number/],
 		["duplicate id", "- [ ] 2 Work\n+ [X] 2 Other", /duplicate task number 2/],
 		["empty body", "- [ ] 1.2   ", /empty task body/],
 		["duplicate numeric across groups", "## One\n- [ ] 1 Work\n## Two\n- [ ] 1 Other", /duplicate task number 1/],
@@ -246,14 +253,14 @@ describe("TodoLoop file parsing", () => {
 			"- [ ] **Step 1: Work**\n## Later\n- [ ] **Step 1: Other**",
 			/duplicate Step number 1/,
 		],
-		["missing Step number", "- [ ] **Step : Work**", /missing or invalid task number/],
-		["invalid Step number", "- [ ] **Step 1.2: Work**", /missing or invalid task number/],
-		["missing Step colon", "- [ ] **Step 1 Work**", /missing or invalid task number/],
-		["unclosed Step bold", "- [ ] **Step 1: Work", /missing or invalid task number/],
-		["single closing Step bold", "- [ ] **Step 1: Work*", /missing or invalid task number/],
+		["missing Step number", "- [ ] **Step : Work**", /invalid Step task/],
+		["invalid Step number", "- [ ] **Step 1.2: Work**", /invalid Step task/],
+		["missing Step colon", "- [ ] **Step 1 Work**", /invalid Step task/],
+		["unclosed Step bold", "- [ ] **Step 1: Work", /invalid Step task/],
+		["single closing Step bold", "- [ ] **Step 1: Work*", /invalid Step task/],
 		["empty Step body", "- [ ] **Step 1: **", /empty task body/],
 		["missing Step body", "- [ ] **Step 1:**\n  continuation cannot supply the description", /empty task body/],
-		["trailing Step content", "- [ ] **Step 1: Work** extra", /missing or invalid task number/],
+		["trailing Step content", "- [ ] **Step 1: Work** extra", /invalid Step task/],
 		["invalid state", "- [~] 1 Work", /invalid checkbox state/],
 		["empty state", "- [] 1 Work", /invalid checkbox state/],
 		["padded state", "- [ x ] 1 Work", /invalid checkbox state/],
