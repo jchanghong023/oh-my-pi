@@ -50,6 +50,9 @@ MUST write a real, self-contained Markdown file, usable without the interview tr
 - Dependency-ordered tasks with concrete targets, required changes, observable outcomes and completion criteria; no placeholders or critical design decisions left open.
 - Minimal sufficient verification commands and expected results allowed by project/user rules, including required documentation/specification updates.
 - Preserve unrelated changes; mark tasks complete only after required work and verification succeed; report blockers without marking unfinished work complete.
+- MUST interpret completeness as fully covering the confirmed scope, not every possible improvement. Plan the smallest sufficient change using existing patterns; NEVER add speculative abstractions, unrelated refactors or adjacent improvements.
+- MUST reuse applicable existing tests and verification results. Add verification only for a concrete acceptance gap or regression risk; NEVER expand checks solely to increase coverage or fill a checklist. Preserve project/user-required checks and critical failure-path verification.
+- MUST include these scope and verification constraints in the generated file's shared context, together with an execution stop condition: once the agreed work and required verification succeed, stop without adding further work.
 
 MUST use same-level `##` task groups and ordinary `- [ ]` tasks. First checkbox immediately follows its group's heading; shared context contains no checkboxes. Details use indented continuation text, not nested checkboxes or code-fenced tasks. MUST state dependencies between groups.
 
