@@ -1,10 +1,10 @@
 /**
  * Shared JSON/failure output plumbing for command groups whose errors
- * carry the StoreDiagnostic envelope. One definition of the failure
+ * carry the OpenSpecDiagnostic envelope. One definition of the failure
  * contract: exit code 1, Error:/Fix: lines in human mode, a status
  * array in JSON mode.
  */
-import { StoreError, type StoreDiagnostic } from '../core/store/errors.js';
+import { OpenSpecError, type OpenSpecDiagnostic } from '../core/errors.js';
 
 export function printJson(payload: unknown): void {
   console.log(JSON.stringify(payload, null, 2));
@@ -27,13 +27,13 @@ export function isPromptCancellationError(error: unknown): boolean {
   );
 }
 
-export function asStatus(error: unknown, fallbackCode: string): StoreDiagnostic {
-  if (error instanceof StoreError) {
+export function asStatus(error: unknown, fallbackCode: string): OpenSpecDiagnostic {
+  if (error instanceof OpenSpecError) {
     return error.diagnostic;
   }
   // RootSelectionError (and siblings) carry the same envelope without
   // sharing a class hierarchy; duck-type the diagnostic once, here.
-  const diagnostic = (error as { diagnostic?: StoreDiagnostic }).diagnostic;
+  const diagnostic = (error as { diagnostic?: OpenSpecDiagnostic }).diagnostic;
   if (diagnostic && typeof diagnostic.code === 'string') {
     return diagnostic;
   }

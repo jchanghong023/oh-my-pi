@@ -88,11 +88,11 @@ That second one matters more than it looks. OpenSpec has two halves: a command l
 | [Troubleshooting](troubleshooting.md) | Concrete fixes for concrete failures |
 | [Migration Guide](migration-guide.md) | Moving from the legacy workflow to OPSX |
 
-### Coordinate across repos (beta)
+### Local context and automation
 
 | Doc | What it gives you |
 |-----|-------------------|
-| [Stores: User Guide](stores-beta/user-guide.md) | Plan in its own repo when your work spans repos or teams |
+| [CLI Reference](cli.md#personal-worksets) | Keep personal views of local folders; inspect project context and health |
 | [Agent Contract](agent-contract.md) | The machine-readable CLI surfaces agents drive |
 
 ## The thirty-second version

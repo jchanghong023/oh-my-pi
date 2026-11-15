@@ -2,7 +2,7 @@ import * as nodeFs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { FileSystemUtils } from '../utils/file-system.js';
-import { StoreError } from './store/errors.js';
+import { OpenSpecError } from './errors.js';
 
 const fs = nodeFs.promises;
 
@@ -30,7 +30,7 @@ export interface FileLockOptions {
 export interface LockErrorData {
   /** Noun phrase for the create-failed message, e.g. "the registry lock file". */
   createSubject: string;
-  /** The full timeout message, e.g. "Store registry is busy." */
+  /** The full timeout message, e.g. "Workset state is busy." */
   busyMessage: string;
   code: string;
   target: string;
@@ -39,11 +39,11 @@ export interface LockErrorData {
 /** One template for lock diagnostics; callers supply the data. */
 export function makeLockErrorFactory(
   data: LockErrorData
-): (kind: FileLockErrorKind, info: FileLockErrorInfo) => StoreError {
+): (kind: FileLockErrorKind, info: FileLockErrorInfo) => OpenSpecError {
   return (kind, info) => {
     if (kind === 'create-failed') {
       // A permission or filesystem problem, not contention - say so.
-      return new StoreError(
+      return new OpenSpecError(
         `Cannot create ${data.createSubject} ${info.lockPath} (${(info.cause as NodeJS.ErrnoException)?.code ?? info.cause}).`,
         data.code,
         {
@@ -53,7 +53,7 @@ export function makeLockErrorFactory(
       );
     }
 
-    return new StoreError(data.busyMessage, data.code, {
+    return new OpenSpecError(data.busyMessage, data.code, {
       target: data.target,
       fix: `Retry shortly; if this persists, delete the stale lock file ${info.lockPath}.`,
     });

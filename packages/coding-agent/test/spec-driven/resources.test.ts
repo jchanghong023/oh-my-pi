@@ -43,15 +43,17 @@ async function isolatedOpenSpec(project: string, configuration?: Record<string, 
 		path.join(home, "config", "openspec", "config.json"),
 		JSON.stringify({ delivery: "both", ...configuration }),
 	);
-	return async (args: string[]) => {
+	return async (args: string[], cwd = project) => {
 		const child = Bun.spawn([process.execPath, path.join(resources.openspecRoot, "bin/openspec.js"), ...args], {
-			cwd: project,
+			cwd,
 			stdin: "ignore",
 			stdout: "pipe",
 			stderr: "pipe",
 			env: {
 				...process.env,
 				BUN_BE_BUN: "1",
+				BUN_RUNTIME_TRANSPILER_CACHE_PATH:
+					process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH ?? path.join(temporary, "bun-transpiler-cache"),
 				NODE_PATH: "",
 				HOME: home,
 				USERPROFILE: home,
@@ -72,6 +74,27 @@ async function isolatedOpenSpec(project: string, configuration?: Record<string, 
 		]);
 		return { stdout, stderr, exitCode };
 	};
+}
+
+async function snapshotTree(root: string): Promise<Record<string, string>> {
+	const entries: Record<string, string> = {};
+	async function visit(directory: string): Promise<void> {
+		for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+			const absolute = path.join(directory, entry.name);
+			const relative = path.relative(root, absolute);
+			if (entry.isDirectory()) {
+				entries[relative] = "directory";
+				await visit(absolute);
+			} else {
+				entries[relative] = crypto
+					.createHash("sha256")
+					.update(await fs.readFile(absolute))
+					.digest("hex");
+			}
+		}
+	}
+	await visit(root);
+	return entries;
 }
 
 let temporary: string;
@@ -231,6 +254,290 @@ describe("pinned upstream resources", () => {
 		expect(profile.stdout).not.toContain("openspec update");
 	}, 30_000);
 
+	it("rejects removed Store commands and selectors without writing or contaminating JSON stdout", async () => {
+		const project = path.join(temporary, "removed-store");
+		await fs.mkdir(project);
+		const cli = await isolatedOpenSpec(project);
+		expect((await cli(["init"])).exitCode).toBe(0);
+		await fs.writeFile(path.join(project, "user.txt"), "User-owned bytes\r\n");
+		const before = await snapshotTree(project);
+		const invocations = [
+			["store", "list"],
+			["store", "list", "--json"],
+			...["--store", "--store-path"].flatMap(option => [
+				["context", option, "unused", "--json"],
+				["new", "change", "must-not-exist", option, "unused", "--json"],
+			]),
+		];
+		for (const args of invocations) {
+			const result = await cli(args);
+			expect(result.exitCode).not.toBe(0);
+			expect(result.stderr).toMatch(/unknown (command|option)/i);
+			expect(result.stdout).toBe("");
+			expect(await snapshotTree(project)).toEqual(before);
+		}
+	}, 30_000);
+
+	it("isolates nearest ancestor, nested and adjacent project roots for reads and writes", async () => {
+		const parent = path.join(temporary, "nearest-roots");
+		await fs.mkdir(parent);
+		const cli = await isolatedOpenSpec(parent);
+		const outer = path.join(parent, "outer");
+		const nested = path.join(outer, "nested");
+		const sibling = path.join(parent, "sibling");
+		for (const root of [outer, nested, sibling]) {
+			await fs.mkdir(path.join(root, "src", "deep"), { recursive: true });
+			expect((await cli(["init"], root)).exitCode).toBe(0);
+			await fs.writeFile(
+				path.join(root, "openspec", "config.yaml"),
+				`schema: spec-driven\ncontext: ${JSON.stringify(root)}\n`,
+			);
+		}
+		for (const root of [outer, nested, sibling]) {
+			const deep = path.join(root, "src", "deep");
+			for (const cwd of [root, deep]) {
+				const context = await cli(["context", "--json"], cwd);
+				expect(context.exitCode).toBe(0);
+				expect(JSON.parse(context.stdout).root).toMatchObject({ path: root, source: "nearest" });
+			}
+			const created = await cli(["new", "change", "same-name", "--json"], deep);
+			expect(created.exitCode).toBe(0);
+			const changeDir = path.join(root, "openspec", "changes", "same-name");
+			expect(JSON.parse(created.stdout).change.path).toBe(changeDir);
+			const instructions = await cli(["instructions", "proposal", "--change", "same-name", "--json"], deep);
+			expect(instructions.exitCode).toBe(0);
+			expect(JSON.parse(instructions.stdout)).toMatchObject({ changeDir, context: root });
+			expect(await Bun.file(path.join(deep, "openspec", "config.yaml")).exists()).toBe(false);
+		}
+		expect((await fs.readdir(path.join(parent, "outer", "openspec", "changes"))).sort()).toEqual([
+			"archive",
+			"same-name",
+		]);
+	}, 60_000);
+
+	it("does not initialize rootless queries but retains explicit implicit-root change creation", async () => {
+		const project = path.join(temporary, "implicit-root");
+		await fs.mkdir(project);
+		const cli = await isolatedOpenSpec(project);
+		const before = await snapshotTree(project);
+		for (const args of [
+			["context", "--json"],
+			["doctor", "--json"],
+			["validate", "--all", "--json"],
+		]) {
+			const result = await cli(args);
+			expect(result.exitCode).not.toBe(0);
+			expect(JSON.parse(result.stdout).status).toEqual(
+				expect.arrayContaining([expect.objectContaining({ severity: "error" })]),
+			);
+			expect(await snapshotTree(project)).toEqual(before);
+		}
+		const created = await cli(["new", "change", "explicit-change", "--json"]);
+		expect(created.exitCode).toBe(0);
+		const changeDir = path.join(project, "openspec", "changes", "explicit-change");
+		expect(JSON.parse(created.stdout)).toMatchObject({
+			root: { path: project, source: "implicit" },
+			change: { path: changeDir, schema: "spec-driven" },
+		});
+		expect(await Bun.file(path.join(changeDir, ".openspec.yaml")).exists()).toBe(true);
+	}, 30_000);
+
+	for (const extension of ["yaml", "yml"]) {
+		for (const field of ["store", "references"]) {
+			it(`rejects present ${field} fields in config.${extension}, including empty and null values`, async () => {
+				const project = path.join(temporary, `unsupported-${extension}-${field}`);
+				await fs.mkdir(path.join(project, "openspec", "changes", "existing"), { recursive: true });
+				const cli = await isolatedOpenSpec(project);
+				await fs.writeFile(path.join(project, "user.txt"), "Preserve user files\r\n");
+				await fs.writeFile(path.join(project, "openspec", "changes", "existing", "proposal.md"), proposalContent);
+				const configPath = path.join(project, "openspec", `config.${extension}`);
+				for (const value of field === "store" ? ['"external"', '""', "null"] : ["[external]", "[]", "null"]) {
+					await fs.writeFile(configPath, `schema: spec-driven\n${field}: ${value}\n`);
+					const before = await snapshotTree(project);
+					for (const args of [["init"], ["context", "--json"], ["new", "change", "rejected", "--json"]]) {
+						const result = await cli(args);
+						expect(result.exitCode).not.toBe(0);
+						if (args.includes("--json")) {
+							expect(JSON.parse(result.stdout).status).toEqual(
+								expect.arrayContaining([
+									expect.objectContaining({ code: "unsupported_project_field", severity: "error" }),
+								]),
+							);
+						} else {
+							expect(result.stderr).toMatch(new RegExp(field, "i"));
+						}
+						expect(await snapshotTree(project)).toEqual(before);
+					}
+				}
+			}, 60_000);
+		}
+	}
+
+	it("reports local context and doctor health without repairing directory or configuration faults", async () => {
+		const project = path.join(temporary, "local-diagnostics");
+		await fs.mkdir(project);
+		const cli = await isolatedOpenSpec(project);
+		expect((await cli(["init"])).exitCode).toBe(0);
+		const before = await snapshotTree(project);
+		const context = await cli(["context", "--json"]);
+		expect(context.exitCode).toBe(0);
+		expect(JSON.parse(context.stdout)).toEqual({
+			root: { path: project, source: "nearest", role: "openspec_root" },
+			status: [],
+		});
+		const doctor = await cli(["doctor", "--json"]);
+		expect(doctor.exitCode).toBe(0);
+		expect(JSON.parse(doctor.stdout)).toEqual({
+			root: { path: project, source: "nearest", healthy: true, status: [] },
+			configPath: path.join(project, "openspec", "config.yaml"),
+		});
+		expect(await snapshotTree(project)).toEqual(before);
+		await fs.rm(path.join(project, "openspec", "specs"), { recursive: true });
+		await fs.writeFile(path.join(project, "openspec", "specs"), "Not a directory\n");
+		for (const configMissing of [false, true]) {
+			if (configMissing) await fs.rm(path.join(project, "openspec", "config.yaml"));
+			const broken = await snapshotTree(project);
+			const diagnosed = await cli(["doctor", "--json"]);
+			expect(diagnosed.exitCode).toBe(0);
+			const health = JSON.parse(diagnosed.stdout);
+			expect(health.root.healthy).toBe(false);
+			expect(health.root.status).toEqual(
+				expect.arrayContaining([expect.objectContaining({ code: "openspec_specs_not_directory" })]),
+			);
+			if (configMissing) {
+				expect(health.root.status).toEqual(
+					expect.arrayContaining([expect.objectContaining({ code: "openspec_config_missing" })]),
+				);
+			}
+			const working = await cli(["context", "--json"]);
+			expect(working.exitCode).toBe(0);
+			expect(JSON.parse(working.stdout).status).toEqual(health.root.status);
+			expect(await snapshotTree(project)).toEqual(broken);
+		}
+	}, 30_000);
+
+	it("persists, reads and removes Workset views without changing member directories or opening an IDE", async () => {
+		const project = path.join(temporary, "local-worksets");
+		await fs.mkdir(project);
+		const cli = await isolatedOpenSpec(project);
+		const members = [path.join(project, "first member"), path.join(project, "second member")];
+		for (const member of members) {
+			await fs.mkdir(member);
+			await fs.writeFile(path.join(member, "user.txt"), `Keep ${member}\r\n`);
+		}
+		const before = await Promise.all(members.map(snapshotTree));
+		const created = await cli([
+			"workset",
+			"create",
+			"local-view",
+			"--member",
+			`primary=${members[0]}`,
+			"--member",
+			`secondary=${members[1]}`,
+			"--json",
+		]);
+		expect(created.exitCode).toBe(0);
+		const workset = JSON.parse(created.stdout).workset;
+		expect(workset).toEqual({
+			name: "local-view",
+			members: [
+				{ name: "primary", path: members[0] },
+				{ name: "secondary", path: members[1] },
+			],
+		});
+		for (const command of ["list", "ls"]) {
+			const listed = await cli(["workset", command, "--json"]);
+			expect(listed.exitCode).toBe(0);
+			expect(JSON.parse(listed.stdout).worksets).toEqual([workset]);
+		}
+		const removed = await cli(["workset", "remove", "local-view", "--yes", "--json"]);
+		expect(removed.exitCode).toBe(0);
+		expect(JSON.parse(removed.stdout).removed).toEqual({ name: "local-view" });
+		const remaining = await cli(["workset", "list", "--json"]);
+		expect(remaining.exitCode).toBe(0);
+		expect(JSON.parse(remaining.stdout).worksets).toEqual([]);
+		expect(await Promise.all(members.map(snapshotTree))).toEqual(before);
+	}, 30_000);
+
+	it("consumes project-local schemas, skipped specs and inherited guidance from a descendant cwd", async () => {
+		const project = path.join(temporary, "nested-custom-workflow");
+		const deep = path.join(project, "src", "deep");
+		const schemaDir = path.join(project, "openspec", "schemas", "local-flow");
+		await fs.mkdir(deep, { recursive: true });
+		await fs.mkdir(path.join(schemaDir, "templates"), { recursive: true });
+		await fs.writeFile(
+			path.join(project, "openspec", "config.yml"),
+			"schema: local-flow\ncontext: Local project context\nrules:\n  proposal:\n    - Keep the local requirement\n" +
+				"operations:\n  apply:\n    guidance:\n      - Use the local implementation checklist\n" +
+				"  archive:\n    guidance:\n      - Review the local release checklist\n",
+		);
+		await fs.writeFile(
+			path.join(schemaDir, "schema.yaml"),
+			"name: local-flow\nversion: 1\ndescription: Local workflow\nartifacts:\n" +
+				"  - id: proposal\n    generates: proposal.md\n    description: Proposal\n    template: proposal.md\n    requires: []\n" +
+				'  - id: specs\n    generates: "specs/**/*.md"\n    description: Specs\n    template: spec.md\n    requires: [proposal]\n' +
+				'  - id: checklist\n    generates: "work/*.md"\n    description: Checklist\n    template: checklist.md\n    requires: [specs]\n' +
+				'apply:\n  requires: [checklist]\n  tracks: "work/*.md"\n  instruction: Implement local tasks.\n',
+		);
+		for (const file of ["proposal.md", "spec.md", "checklist.md"]) {
+			await fs.writeFile(path.join(schemaDir, "templates", file), `# Local ${file}\n`);
+		}
+		const cli = await isolatedOpenSpec(project);
+		const created = await cli(["new", "change", "local-change", "--json"], deep);
+		expect(created.exitCode).toBe(0);
+		expect(JSON.parse(created.stdout).change.schema).toBe("local-flow");
+		const changeDir = path.join(project, "openspec", "changes", "local-change");
+		const proposal = await cli(["instructions", "proposal", "--change", "local-change", "--json"], deep);
+		expect(proposal.exitCode).toBe(0);
+		expect(JSON.parse(proposal.stdout)).toMatchObject({
+			schemaName: "local-flow",
+			changeDir,
+			context: "Local project context",
+			rules: ["Keep the local requirement"],
+			template: "# Local proposal.md\n",
+			resolvedOutputPath: path.join(changeDir, "proposal.md"),
+		});
+		await fs.appendFile(path.join(changeDir, ".openspec.yaml"), "skip_specs: true\n");
+		await fs.writeFile(path.join(changeDir, "proposal.md"), proposalContent);
+		const skipped = await cli(["instructions", "specs", "--change", "local-change", "--json"], deep);
+		expect(skipped.exitCode).toBe(0);
+		expect(JSON.parse(skipped.stdout).skipped).toBe(true);
+		const ready = await cli(["status", "--change", "local-change", "--json"], deep);
+		expect(ready.exitCode).toBe(0);
+		const status = JSON.parse(ready.stdout);
+		expect(status.changeRoot).toBe(changeDir);
+		expect(status.actionContext.allowedEditRoots).toEqual([project]);
+		expect(status.artifacts).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "specs", status: "skipped" }),
+				expect.objectContaining({ id: "checklist", status: "ready" }),
+			]),
+		);
+		await fs.mkdir(path.join(changeDir, "work"));
+		await fs.writeFile(path.join(changeDir, "work", "first.md"), "- [x] First local task\n");
+		await fs.writeFile(path.join(changeDir, "work", "second.md"), "- [ ] Second local task\n");
+		const apply = await cli(["instructions", "apply", "--change", "local-change", "--json"], deep);
+		expect(apply.exitCode).toBe(0);
+		expect(JSON.parse(apply.stdout)).toMatchObject({
+			state: "ready",
+			context: "Local project context",
+			operationGuidance: ["Use the local implementation checklist"],
+			progress: { total: 2, complete: 1, remaining: 1 },
+		});
+		expect(JSON.parse(apply.stdout).contextFiles.checklist.sort()).toEqual([
+			path.join(changeDir, "work", "first.md"),
+			path.join(changeDir, "work", "second.md"),
+		]);
+		const archive = await cli(["instructions", "archive", "--change", "local-change", "--json"], deep);
+		expect(archive.exitCode).toBe(0);
+		expect(JSON.parse(archive.stdout)).toMatchObject({
+			context: "Local project context",
+			operationGuidance: ["Review the local release checklist"],
+		});
+		expect(await Bun.file(path.join(deep, "openspec", "config.yaml")).exists()).toBe(false);
+		expect(await Bun.file(path.join(changeDir, "specs")).exists()).toBe(false);
+	}, 30_000);
+
 	it("uses the native four-artifact default schema through planning and archive", async () => {
 		const project = path.join(temporary, "native-default");
 		await fs.mkdir(project);
@@ -326,6 +633,16 @@ describe("pinned upstream resources", () => {
 		const status = await cli(["status", "--change", "invalid-delta", "--json"]);
 		expect(status.exitCode).toBe(0);
 		expect(JSON.parse(status.stdout).isComplete).toBe(true);
+		const validated = await cli(["validate", "invalid-delta"]);
+		expect(validated.exitCode).toBe(1);
+		const validationOutput = `${validated.stdout}\n${validated.stderr}`;
+		expect(validationOutput).toContain('ADDED "Offline requirements access" must include at least one scenario');
+		const recovery = validationOutput.match(/omp openspec (show invalid-delta --json --deltas-only)(?:\r?\n|$)/);
+		expect(recovery).not.toBeNull();
+		const shown = await cli(recovery![1].split(" "));
+		expect(shown.exitCode).toBe(0);
+		expect(JSON.parse(shown.stdout)).toMatchObject({ id: "invalid-delta", deltaCount: 1 });
+		expect(shown.stdout).toContain("Offline requirements access");
 		const archived = await cli(["archive", "invalid-delta", "--skip-specs", "--yes"]);
 		expect(archived.exitCode).toBe(1);
 		expect(`${archived.stdout}\n${archived.stderr}`).toMatch(/validation failed/i);

@@ -19,6 +19,7 @@
 - OpenSpec resource manifests now distinguish the upstream source revision from the SHA-256 of the adapted runtime instead of labeling it as npm package integrity.
 - OpenSpec bundles now pin the target build fingerprint and archive digest; missing or damaged runtime files are rejected before cached resources can be reused.
 - Missing OpenSpec source resources now report the preparation command and its working directory instead of a bare file-not-found error; runtime loading never installs or builds them automatically.
+- OpenSpec no longer supports external Stores and resolves planning in the nearest project's `openspec/`; existing Store repositories and local data are preserved without automatic migration.
 - OpenSpec initialization now rejects external store-pointer repositories at their root as well as in subdirectories, without installing integrations or creating a second planning root.
 - OpenSpec initialization now creates only project planning files and configuration, leaving existing skills, commands, legacy tool folders and global delivery settings untouched.
 - OpenSpec init help and completion now expose only the language option; removed tools, profile, force and animation flags fail as unknown options instead of being silently ignored.

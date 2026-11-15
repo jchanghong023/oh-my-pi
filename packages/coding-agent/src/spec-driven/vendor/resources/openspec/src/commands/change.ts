@@ -78,7 +78,7 @@ export class ChangeCommand {
   }
 
   // Main specs resolve against the same root as changes, so `--diff` reads the
-  // selected store's specs rather than whatever sits under the cwd.
+  // resolved project's specs rather than whatever sits under the cwd.
   private getSpecsPath(): string {
     return path.join(this.rootPath ?? process.cwd(), 'openspec', 'specs');
   }

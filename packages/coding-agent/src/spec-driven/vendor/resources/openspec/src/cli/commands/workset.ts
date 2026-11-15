@@ -1,6 +1,6 @@
 import { Command, Option } from 'commander';
 import { COMMAND_REGISTRY } from '../../core/completions/command-registry.js';
-import type { StoreDiagnostic } from '../../core/store/errors.js';
+import type { OpenSpecDiagnostic } from '../../core/errors.js';
 import { printJson } from '../../commands/shared-output.js';
 import type {
   WorksetCommand,
@@ -109,7 +109,7 @@ export function registerWorksetCommand(program: Command): void {
             code: 'unknown_workset_subcommand',
             message,
             fix: 'Run one of the workset subcommands.',
-          } satisfies StoreDiagnostic,
+          } satisfies OpenSpecDiagnostic,
         ],
       });
     } else {

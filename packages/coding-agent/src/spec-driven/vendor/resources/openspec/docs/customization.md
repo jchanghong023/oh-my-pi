@@ -105,8 +105,8 @@ omp openspec instructions archive --change my-feature --json
 
 Both surfaces return current project `context` and matching
 `operationGuidance` as separate optional fields. Each invocation reads a fresh
-snapshot from the resolved root. When `--store <id>` is selected, the change,
-context, and guidance all come from that store rather than the current repository.
+snapshot from the nearest local project root. The change, context, and guidance
+all come from that project's `openspec/` directory.
 The archive instruction command is read-only: it does not inspect or merge delta
 specs, write main specs, move the change, or run the static archive workflow.
 

@@ -6,7 +6,7 @@ The short answer: a change is just files, and OpenSpec never touches git. So it 
 
 ## One rule: OpenSpec doesn't touch git
 
-OpenSpec reads and writes plain Markdown under `openspec/`. It never commits, branches, pushes, or pulls in your project — and it never clones or syncs a [store](stores-beta/user-guide.md) on its own. That means:
+OpenSpec reads and writes plain Markdown under your project's `openspec/`. It never commits, branches, pushes, or pulls in your project. That means:
 
 - **You commit `openspec/` like any source.** Specs, active changes, and the archive are part of your project's history. (Yes, commit the whole folder — see the [FAQ](faq.md#should-i-commit-the-openspec-folder-to-git).)
 - **A change is a folder you version like code.** `openspec/changes/add-dark-mode/` is just files on a branch.
@@ -63,12 +63,11 @@ Because changes are separate folders, they don't collide:
 - **One change, one owner.** Two people editing the same change folder conflict exactly like two people editing the same file. Keep a change to a single author, or split it into two changes (another reason to [right-size](writing-specs.md#right-size-the-change)).
 - **The one place conflicts show up is `specs/`.** If two changes both modify the *same* requirement, archiving the second one will conflict in `openspec/specs/…/spec.md` — resolve it like any merge conflict, keeping the requirement that reflects reality. This is rare, and it's a feature: it's git telling you two changes disagreed about how the system should behave.
 
-## When planning outgrows one repo
+## Work across repositories
 
-Everything above assumes the plan lives in the code repo's own `openspec/` folder, which is the right default. When your planning genuinely spans several repos or teams — one feature touching three services, or requirements one team owns and others consume — that's what the beta **stores** feature is for: planning gets its own repo that any code repo can point at. Start with the [Stores User Guide](stores-beta/user-guide.md).
+Keep planning in each project's `openspec/` directory and coordinate related changes through your normal review process. A [personal workset](cli.md#personal-worksets) can reopen component folders together, but does not change their planning roots or route tasks between them.
 
 ## Where to go next
 
 - [Reviewing a Change](reviewing-changes.md) — the review pass, now inside your PR.
 - [Writing Good Specs](writing-specs.md) — including how to right-size a change so it fits one branch.
-- [Stores User Guide](stores-beta/user-guide.md) — planning that spans repos and teams.

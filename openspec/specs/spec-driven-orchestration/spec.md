@@ -27,9 +27,9 @@ OMP MUST 复用既有发现、补全、按需读取与资源授权，不因 AIRe
 
 包内 Superpowers 的发现范围仅适用于包内资源；同名非包内自定义技能继续遵循既有发现、调用与优先级规则，不被此例外覆盖。用户显式调用包内技能仍沿用原生调用及授权规则；AIReq 阶段技能注入、资源授权和工具权限不因发现范围变化而扩大，打开 `/aireq` 网页本身不授予阶段资源权限。
 
-普通 OpenSpec MUST 复用上述原生 Skill 入口，不再交付或注册包内 `commands/opsx-*` 文件命令，不保留 `/opsx-*` 别名，不另建命令分发表。任意目录可发现技能不等于获准自动初始化项目；项目尚未初始化时仍遵循上游前置条件，请求用户显式运行 `omp openspec init`，不得因发现或读取 Skill 自动创建 `openspec/` 目录。本条仅更新普通 OpenSpec 的需求合同，不新增 AIReq 专用技能过滤、阶段策略或业务接入要求；实现、资源生成与验收状态须分别记录，不因本次规格更新视为已完成。
+普通 OpenSpec MUST 复用上述原生 Skill 入口，不再交付或注册包内 `commands/opsx-*` 文件命令，不保留 `/opsx-*` 别名，不另建命令分发表。任意目录可发现技能不等于获准自动初始化项目；项目尚未初始化时，Agent 自选技能 MUST 退出该工作流并正常答复，用户显式请求 OpenSpec 时 MUST 等待用户显式授权运行 `omp openspec init`，不得因发现或读取 Skill 自动创建 `openspec/` 目录。本条仅更新普通 OpenSpec 的需求合同，不新增 AIReq 专用技能过滤、阶段策略或业务接入要求；实现、资源生成与验收状态须分别记录，不因本次规格更新视为已完成。
 
-独立 `omp openspec init [path]` MUST 仅负责项目初始化与配置，不向项目或用户目录安装、复制、链接、更新或清理 Skill／旧命令，也不迁移或删除用户已有 Skill、命令及其他 Agent 目录。该边界 MUST 由初始化实现本身保证，不依赖宿主强制追加 `--tools=none`；仅服务交付的工具探测、工具选择及参数不再属于初始化合同。项目路径校验、必要目录结构、配置与语言上下文、目标路径解析、重复初始化及已有配置保护、store 指针拒绝规则与原生错误语义 MUST 保留。新项目默认 schema MUST 为上游 `spec-driven`，MUST NOT 注入 mini；已有配置及 change 不自动覆盖、转换或迁移，显式 schema 选择仍遵循原生规则。内置 Skill 不以初始化为安装前提，随 OMP 版本交付。
+独立 `omp openspec init [path]` MUST 仅负责项目初始化与配置，不向项目或用户目录安装、复制、链接、更新或清理 Skill／旧命令，也不迁移或删除用户已有 Skill、命令及其他 Agent 目录。该边界 MUST 由初始化实现本身保证，不依赖宿主强制追加 `--tools=none`；仅服务交付的工具探测、工具选择及参数不再属于初始化合同。项目路径校验、必要目录结构、配置与语言上下文、目标路径解析、重复初始化及已有配置保护与原生错误语义 MUST 保留；项目配置出现 `store` 或 Store `references` 字段时 MUST 按不支持字段拒绝，不解析旧指针，不因本地规划目录已存在或字段值为空而放行。新项目默认 schema MUST 为上游 `spec-driven`，MUST NOT 注入 mini；已有配置及 change 不自动覆盖、转换或迁移，显式 schema 选择仍遵循原生规则。内置 Skill 不以初始化为安装前提，随 OMP 版本交付。
 
 普通 `omp openspec ...` 入口 MUST 使用上游通用 `spec-driven` 工作流及其原生产物依赖和校验语义，显式选择 schema 时仍遵循原生解析规则；MUST NOT 因 AIReq 旧需求而要求包内 `omp-spec`、验证其固定来源、注入私有 schema／context 或使用需求专用目录桥接。AIReq 旧有的材料范围、会话、阶段权限及归档假设 MUST NOT 约束普通 OpenSpec，也不得据此删减通用工作流要求的 design／tasks 等产物。现有用户配置及 change 不因本条自动转换或迁移。
 
@@ -54,8 +54,32 @@ Superpowers MUST 仅交付 OMP 原生技能发现与脚本执行需要的固定�
 
 - **WHEN** 用户运行 `omp openspec init [path]`，包括非 TTY、已检测到工具或重复初始化
 - **THEN** 仅建立原生初始化所需的 `openspec/` 目录及配置，新项目默认使用 `spec-driven`，不因检测到工具而选择或交付 Skill／命令，不触碰已有 Skill、自定义命令或其他 Agent 目录
-- **AND** 保留 `--language`、`--` 后目标路径、已有配置保护及重复初始化语义；遇到不允许初始化的 store 指针 MUST 按原生规则拒绝，不覆盖或迁移既有内容
+- **AND** 保留 `--language`、`--` 后目标路径、已有配置保护及重复初始化语义；项目配置含 `store` 或 Store `references` 字段时 MUST 明确报不支持且不写文件，无论字段值是否为空或本地规划目录是否已存在，不覆盖或迁移既有内容
 - **AND** 非 TTY 不要求选择交付工具；必要业务输入沿用现有配置／显式参数或返回明确错误，不擅自选择语言、覆盖配置或改变原生错误语义
+
+### Requirement: 普通 OpenSpec 仅使用本地项目根
+
+普通 OpenSpec MUST 仅从当前目录向上选择最近祖先中包含 `openspec/` 的本地项目根；项目根是包含该目录的目录，不是 `openspec/` 本身。MUST 撤销 Store 继承与选择合同，不读取项目 Store 指针、注册表、Store 元数据或全局 `defaultStore` 路由，不以 Git origin 推测或回退到外部 Store。无本地根时，各命令仍保留既有查询失败或显式写命令允许当前目录作为隐式根的差异；不得据此扩大 Skill 初始化授权。普通 `planningHome`、`changeRoot`、`artifactPaths`、`actionContext` 等有效路径与编辑范围 MUST 基于真实本地项目保留，不硬编码为启动目录。
+
+`store` 命令、`--store` 及隐藏 `--store-path` MUST 移除，调用时按正常未知命令／参数非零退出且不写文件；MUST NOT 保留兼容别名、忽略后继续、无操作成功、迁移或 Store 回退。项目配置中的 `store`／Store `references` 字段一旦出现，MUST 明确报不支持且不写文件，不区分字段值是否为空或本地规划目录是否存在，不解析旧值或旧系统状态。删除功能 MUST NOT 删除、改写、清理或自动迁移用户已有 Store 仓库、注册表、元数据、全局配置、项目材料、自定义 Skill 或缓存。
+
+Workset MUST 保留为独立的本机目录组合能力，保留既有 create／list／show／remove／open、普通目录成员、排序、保存视图及打开工具语义，不因 Store 移除删除该能力或改动成员目录。`context`、`doctor` MUST 保留本地项目、配置与规划目录的有效职责，仅撤销 Store 健康检查、跨 Store 引用及远程拉取指引。该收敛 MUST NOT 改变普通 OMP、Superpowers、JCH 或 AIReq 业务及其权限边界。
+
+#### Scenario: 最近本地项目根隔离
+
+- **WHEN** 从项目根或其多级子目录运行普通 OpenSpec 命令
+- **THEN** 使用同一本地项目根；存在嵌套项目时选择最近根，不串入相邻项目或外部 Store
+- **AND** 查询无根时不创建材料；显式初始化与其他允许隐式根的写命令仍遵循各自既有授权及目标路径合同
+
+#### Scenario: 已移除的 Store 入口不写文件
+
+- **WHEN** 调用 `omp openspec store`，或向命令传入 `--store`／`--store-path`
+- **THEN** 按正常未知命令／参数非零退出，不写文件，不提示选择 Store，不产生伪成功；JSON 调用不将人类提示混入结构化 stdout
+
+#### Scenario: 不支持的项目字段无例外
+
+- **WHEN** 项目配置出现 `store` 或 Store `references` 字段，包括空值且已有本地 `openspec/` 的情况
+- **THEN** 明确报不支持且不写文件，不忽略后继续，不解析指针、不读取外部 Store、不迁移或清理用户数据
 
 
 ### Requirement: AIReq 需求 schema 固定为包内 omp-spec

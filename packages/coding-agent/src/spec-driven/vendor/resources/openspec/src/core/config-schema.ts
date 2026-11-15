@@ -22,12 +22,6 @@ export const GlobalConfigSchema = z
     workflows: z
       .array(z.string())
       .optional(),
-    defaultStore: z
-      .string()
-      .optional()
-      .describe(
-        'Store id used as fallback root when no explicit --store, local root, or project-level store: pointer resolves'
-      ),
     // passthrough keeps runtime-managed fields (anonymousId, noticeSeen) valid
     // under CLI validate when users only set telemetry.enabled.
     telemetry: z
@@ -55,7 +49,6 @@ export const DEFAULT_CONFIG: GlobalConfigType = {
 const KNOWN_TOP_LEVEL_KEYS = new Set([
   ...Object.keys(DEFAULT_CONFIG),
   'workflows',
-  'defaultStore',
   'telemetry',
 ]);
 

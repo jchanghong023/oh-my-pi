@@ -1,15 +1,15 @@
-export type StoreDiagnosticSeverity = 'error' | 'warning' | 'info';
+export type OpenSpecDiagnosticSeverity = 'error' | 'warning' | 'info';
 
-export interface StoreDiagnostic {
-  severity: StoreDiagnosticSeverity;
+export interface OpenSpecDiagnostic {
+  severity: OpenSpecDiagnosticSeverity;
   code: string;
   message: string;
   target?: string;
   fix?: string;
 }
 
-export class StoreError extends Error {
-  readonly diagnostic: StoreDiagnostic;
+export class OpenSpecError extends Error {
+  readonly diagnostic: OpenSpecDiagnostic;
 
   constructor(
     message: string,
@@ -17,7 +17,7 @@ export class StoreError extends Error {
     options: { target?: string; fix?: string } = {}
   ) {
     super(message);
-    this.name = 'StoreError';
+    this.name = 'OpenSpecError';
     this.diagnostic = {
       severity: 'error',
       code,
@@ -27,12 +27,12 @@ export class StoreError extends Error {
   }
 }
 
-export function makeStoreDiagnostic(
-  severity: StoreDiagnosticSeverity,
+export function makeOpenSpecDiagnostic(
+  severity: OpenSpecDiagnosticSeverity,
   code: string,
   message: string,
   options: { target?: string; fix?: string } = {}
-): StoreDiagnostic {
+): OpenSpecDiagnostic {
   return {
     severity,
     code,

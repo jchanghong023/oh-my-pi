@@ -104,15 +104,7 @@ OpenSpec is built with OpenSpec — browse the upstream [specs](https://github.c
 
 ## Why teams adopt OpenSpec
 
-Solo, OpenSpec keeps you and your AI honest on a single repo. On a team, the hard part moves: a feature spans the API server, the web app, and a shared library; requirements are owned by one team and consumed by others; planning starts before any code exists.
-
-**[Stores](https://openspec.dev/docs/stores)** are the answer — planning in a repo of its own. The same `openspec/` shape you already know (specs and changes), shared by `git push` like anything else. One source of truth your whole team and every coding agent can read, across every repo.
-
-- **Cross-repo features** — one change, one plan, even when the code lands in three repos.
-- **Shared requirements** — a platform team owns the specs; product teams reference them read-only, right where their coding agent can read them. No drifting wiki.
-- **Plan before code** — capture the plan in the store now; the code repos catch up later.
-
-> Stores are in **beta**. Start with the [Stores guide](https://openspec.dev/docs/stores).
+OpenSpec keeps plans and implementation together in each project's `openspec/` directory. Teams can review requirements, proposed changes, and completed work alongside code in their existing Git workflow. See the [team workflow](docs/team-workflow.md).
 
 ## Quick Start
 
@@ -138,7 +130,6 @@ This bundled guide documents the OMP interface. Upstream documentation describes
 → **[CLI](docs/cli.md)**: terminal reference<br>
 → **[Supported interface](docs/supported-tools.md)**: native OMP Skill invocation<br>
 → **[Customize](https://openspec.dev/docs/customize)**: profiles, project config, and schemas<br>
-→ **[Stores](https://openspec.dev/docs/stores)**: plan in a separate repo, shared across your team (beta)<br>
 → **[Community Showcase](docs/community.md)**: projects and resources built with and for OpenSpec
 
 ## Community schemas

@@ -53,15 +53,12 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         values: ['recent', 'name'],
       },
       COMMON_FLAGS.json,
-      COMMON_FLAGS.store,
     ],
   },
   {
     name: 'view',
     description: 'Display an interactive dashboard of specs and changes',
-    flags: [
-      COMMON_FLAGS.store,
-    ],
+    flags: [],
   },
   {
     name: 'validate',
@@ -101,7 +98,6 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         takesValue: true,
       },
       COMMON_FLAGS.noInteractive,
-      COMMON_FLAGS.store,
     ],
   },
   {
@@ -140,7 +136,6 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         description: 'Show specific requirement by ID (JSON only, spec-specific)',
         takesValue: true,
       },
-      COMMON_FLAGS.store,
     ],
   },
   {
@@ -167,7 +162,6 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         name: 'json',
         description: 'Output as JSON (non-interactive)',
       },
-      COMMON_FLAGS.store,
     ],
   },
   {
@@ -189,7 +183,6 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         takesValue: true,
       },
       COMMON_FLAGS.json,
-      COMMON_FLAGS.store,
     ],
   },
   {
@@ -209,7 +202,6 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         takesValue: true,
       },
       COMMON_FLAGS.json,
-      COMMON_FLAGS.store,
     ],
   },
   {
@@ -229,7 +221,6 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
     description: 'List available workflow schemas with descriptions',
     flags: [
       COMMON_FLAGS.json,
-      COMMON_FLAGS.store,
     ],
   },
   {
@@ -259,106 +250,6 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
             takesValue: true,
           },
           COMMON_FLAGS.json,
-          COMMON_FLAGS.store,
-        ],
-      },
-    ],
-  },
-  {
-    name: 'store',
-    description:
-      'Create and manage stores - standalone OpenSpec repos you register on this machine',
-    flags: [],
-    subcommands: [
-      {
-        name: 'setup',
-        description: 'Create or register a local store',
-        acceptsPositional: true,
-        positionals: [{ name: 'id', optional: true }],
-        flags: [
-          {
-            name: 'path',
-            description: 'Directory to use for the store',
-            takesValue: true,
-            completionType: 'path',
-          },
-          {
-            name: 'init-git',
-            description: 'Initialize a Git repository in the store',
-          },
-          {
-            name: 'no-init-git',
-            description: 'Skip Git repository initialization',
-          },
-          {
-            name: 'remote',
-            description: 'Canonical clone source recorded in store.yaml',
-            takesValue: true,
-          },
-          COMMON_FLAGS.json,
-        ],
-      },
-      {
-        name: 'register',
-        description: 'Register an existing store directory',
-        acceptsPositional: true,
-        positionals: [{ name: 'path', type: 'path', optional: true }],
-        flags: [
-          {
-            name: 'id',
-            description: 'Store id',
-            takesValue: true,
-          },
-          {
-            name: 'yes',
-            description: 'Confirm creating store identity metadata',
-          },
-          COMMON_FLAGS.json,
-        ],
-      },
-      {
-        name: 'unregister',
-        description: 'Forget a local store registration without deleting files',
-        acceptsPositional: true,
-        positionals: [{ name: 'id' }],
-        flags: [
-          COMMON_FLAGS.json,
-        ],
-      },
-      {
-        name: 'remove',
-        description: 'Forget a local store registration and delete its local folder',
-        acceptsPositional: true,
-        positionals: [{ name: 'id' }],
-        flags: [
-          {
-            name: 'yes',
-            description: 'Confirm local store folder deletion',
-          },
-          COMMON_FLAGS.json,
-        ],
-      },
-      {
-        name: 'list',
-        description: 'List registered stores',
-        flags: [
-          COMMON_FLAGS.json,
-        ],
-      },
-      {
-        name: 'ls',
-        description: 'List registered stores',
-        flags: [
-          COMMON_FLAGS.json,
-        ],
-      },
-      {
-        name: 'doctor',
-        description: 'Check local store registration and metadata',
-        acceptsPositional: true,
-        positionals: [{ name: 'id', optional: true }],
-        flags: [
-          COMMON_FLAGS.json,
         ],
       },
     ],
@@ -368,7 +259,6 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
     description: 'Print the working context for the resolved OpenSpec root',
     flags: [
       COMMON_FLAGS.json,
-      COMMON_FLAGS.store,
       {
         name: 'code-workspace',
         description: 'Also write a VS Code workspace file for the set',
@@ -383,10 +273,9 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
   },
   {
     name: 'doctor',
-    description: 'Report relationship health for the resolved OpenSpec root',
+    description: 'Report local project configuration and directory health',
     flags: [
       COMMON_FLAGS.json,
-      COMMON_FLAGS.store,
     ],
   },
   {

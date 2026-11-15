@@ -7,13 +7,10 @@ import { Validator } from './validation/validator.js';
 import { VALIDATION_MESSAGES } from './validation/constants.js';
 import chalk from 'chalk';
 import {
-  emitStoreRootBanner,
   isRootSelectionError,
   resolveOpenSpecRoot,
   toRootOutput,
-  withStoreFlag,
   type ResolvedOpenSpecRoot,
-  isStoreSelectedRoot,
 } from './root-selection.js';
 import {
   findSpecUpdates,
@@ -188,8 +185,6 @@ export interface ArchiveOptions {
   noValidate?: boolean;
   validate?: boolean;
   json?: boolean;
-  store?: string;
-  storePath?: string;
 }
 
 interface ArchiveDiagnostic {
@@ -299,18 +294,16 @@ function rerunFlags(options: ArchiveOptions): string[] {
 }
 
 function rerunCommand(
-  root: ResolvedOpenSpecRoot,
   changeName: string,
   options: ArchiveOptions
 ): string {
   const flags = rerunFlags(options).join(' ');
   // A name starting with a dash is read as an option wherever it sits, so it
-  // goes last, behind the `--` that ends option parsing. The store flag has
-  // to stay in front of that `--` to still be read as an option.
+  // goes last, behind the `--` that ends option parsing.
   if (changeName.startsWith('-')) {
-    return `${withStoreFlag(root, `omp openspec archive ${flags}`)} -- ${quoteChangeName(changeName)}`;
+    return `omp openspec archive ${flags} -- ${quoteChangeName(changeName)}`;
   }
-  return withStoreFlag(root, `omp openspec archive ${quoteChangeName(changeName)} ${flags}`);
+  return `omp openspec archive ${quoteChangeName(changeName)} ${flags}`;
 }
 
 /**
@@ -1299,10 +1292,7 @@ export class ArchiveCommand {
 
     let root: ResolvedOpenSpecRoot;
     try {
-      root = await resolveOpenSpecRoot({
-        ...(options.store !== undefined ? { store: options.store } : {}),
-        ...(options.storePath !== undefined ? { storePath: options.storePath } : {}),
-      });
+      root = await resolveOpenSpecRoot();
     } catch (error) {
       if (json && isRootSelectionError(error)) {
         this.printJsonFailure(undefined, toArchiveDiagnostic(error));
@@ -1324,7 +1314,6 @@ export class ArchiveCommand {
       return;
     }
 
-    emitStoreRootBanner(root);
     await this.run(changeName, options, root, false);
   }
 
@@ -1388,10 +1377,10 @@ export class ArchiveCommand {
         throw new ArchiveBlockedError(
           'archive_change_name_required',
           'A change name is required: archive --json is non-interactive.',
-          withStoreFlag(root, 'omp openspec archive <change-name> --json')
+          'omp openspec archive <change-name> --json'
         );
       }
-      const selectedChange = await this.selectChange(changesDir, root, options);
+      const selectedChange = await this.selectChange(changesDir, options);
       if (!selectedChange) {
         console.log('No change selected. Aborting.');
         return null;
@@ -1567,7 +1556,7 @@ export class ArchiveCommand {
           throw new ArchiveBlockedError(
             'archive_validation_failed',
             `Validation failed for change '${changeName}'.`,
-            `Run ${withStoreFlag(root, `omp openspec validate ${changeName}`)} for details, fix the errors, or rerun with --no-validate.`
+            `Run omp openspec validate ${changeName} for details, fix the errors, or rerun with --no-validate.`
           );
         }
         console.log(chalk.red('\nValidation failed. Please fix the errors before archiving.'));
@@ -1580,7 +1569,7 @@ export class ArchiveCommand {
         throw new ArchiveBlockedError(
           'archive_confirmation_required',
           'Skipping validation requires confirmation: rerun with --yes.',
-          withStoreFlag(root, 'omp openspec archive <change-name> --json --no-validate --yes')
+          'omp openspec archive <change-name> --json --no-validate --yes'
         );
       }
     } else {
@@ -1597,7 +1586,7 @@ export class ArchiveCommand {
             new ArchiveBlockedError(
               'archive_confirmation_required',
               'Skipping validation requires confirmation, and no answer could be read from stdin.',
-              rerunCommand(root, changeName!, options)
+              rerunCommand(changeName!, options)
             )
         );
         if (!proceed) {
@@ -1639,7 +1628,7 @@ export class ArchiveCommand {
             new ArchiveBlockedError(
               'archive_tasks_incomplete',
               `${incompleteTasks} incomplete task(s) found for change '${describeChangeName(changeName!)}', and no answer could be read from stdin.`,
-              `Complete the tasks or rerun with ${rerunCommand(root, changeName!, options)}`
+              `Complete the tasks or rerun with ${rerunCommand(changeName!, options)}`
             )
         );
         if (!proceed) {
@@ -1770,7 +1759,7 @@ export class ArchiveCommand {
             throw new ArchiveBlockedError(
               'archive_confirmation_required',
               `Updating ${specUpdates.length} spec(s) requires confirmation: rerun with --yes.`,
-              withStoreFlag(root, 'omp openspec archive <change-name> --json --yes')
+              'omp openspec archive <change-name> --json --yes'
             );
           }
           shouldUpdateSpecs = await confirmOrBlock(
@@ -1782,7 +1771,7 @@ export class ArchiveCommand {
               new ArchiveBlockedError(
                 'archive_confirmation_required',
                 `Updating ${specUpdates.length} spec(s) requires confirmation, and no answer could be read from stdin.`,
-                rerunCommand(root, changeName!, options)
+                rerunCommand(changeName!, options)
               )
           );
           if (!shouldUpdateSpecs) {
@@ -1950,7 +1939,7 @@ export class ArchiveCommand {
                     refusalReason ??
                       retirementHint ??
                       blockedRetirementHint ??
-                      `Run ${withStoreFlag(root, `omp openspec validate ${specName}`)} after fixing the change deltas.`
+                      `Run omp openspec validate ${specName} after fixing the change deltas.`
                   );
                 }
                 console.log(chalk.red(`\nValidation errors in rebuilt spec for ${specName} (will not write changes):`));
@@ -2032,8 +2021,6 @@ export class ArchiveCommand {
                 }
                 mutationAttempts.add(p.update.target);
               },
-              // Cross-root paths must be absolute when a store is selected.
-              ...(isStoreSelectedRoot(root) ? { displayPath: p.update.target } : {}),
             });
             wroteAny = true;
             writeTotals.added += added;
@@ -2086,7 +2073,6 @@ export class ArchiveCommand {
                     );
                   }
                 },
-                ...(isStoreSelectedRoot(root) ? { displayPath: p.update.target } : {}),
               }
             );
             if (!retired) continue;
@@ -2135,13 +2121,13 @@ export class ArchiveCommand {
               !relativeToRoot.startsWith('..') &&
               !path.isAbsolute(relativeToRoot);
             const deletedPath =
-              isStoreSelectedRoot(root) || !insideRoot
+              !insideRoot
                 ? unlinkedPath
                 : relativeToRoot.split(path.sep).join('/');
             // A command is offered only when pasting it where archive was run
             // would actually work. An absolute path here means the file did not
-            // live under that directory - a selected store, or a symlinked
-            // capability directory - and `git checkout HEAD -- <abs>` is rejected
+            // live under that directory, for example a symlinked capability
+            // directory, and `git checkout HEAD -- <abs>` is rejected
             // from a different worktree however it is quoted, so that case gets
             // guidance instead of a command that cannot run. A path with no
             // portable shell spelling is handled the same way.
@@ -2350,7 +2336,6 @@ export class ArchiveCommand {
 
   private async selectChange(
     changesDir: string,
-    root: ResolvedOpenSpecRoot,
     options: ArchiveOptions
   ): Promise<string | null> {
     const { select } = await import('@inquirer/prompts');
@@ -2370,7 +2355,7 @@ export class ArchiveCommand {
       throw new ArchiveBlockedError(
         'archive_change_name_required',
         'A change name is required: no terminal is available to choose one from a list.',
-        withStoreFlag(root, `omp openspec archive <change-name> ${rerunFlags(options).join(' ')}`)
+        `omp openspec archive <change-name> ${rerunFlags(options).join(' ')}`
       );
     }
 
@@ -2410,7 +2395,7 @@ export class ArchiveCommand {
         throw new ArchiveBlockedError(
           'archive_change_name_required',
           'A change name is required: no answer could be read from stdin.',
-          withStoreFlag(root, `omp openspec archive <change-name> ${rerunFlags(options).join(' ')}`)
+          `omp openspec archive <change-name> ${rerunFlags(options).join(' ')}`
         );
       }
       // User cancelled (Ctrl+C)

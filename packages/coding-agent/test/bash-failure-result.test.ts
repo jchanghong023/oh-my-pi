@@ -469,7 +469,9 @@ describe("BashTool bundled Superpowers scripts", () => {
 					cwd: skill.baseDir,
 				});
 				expect(usage.isError).toBe(true);
-				expect(usage.content.find(c => c.type === "text")?.text).toContain("usage: sdd-workspace [-C DIR] PLAN_FILE");
+				expect(usage.content.find(c => c.type === "text")?.text).toContain(
+					"usage: sdd-workspace [-C DIR] PLAN_FILE",
+				);
 
 				const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 				const run = await tool.execute("skill-script-project", {

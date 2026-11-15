@@ -1,24 +1,7 @@
 import { z } from 'zod';
-import { isKebabId } from '../id.js';
 
 export { isKebabId } from '../id.js';
 
-const KebabIdentifierSchema = (label: string): z.ZodString =>
-  z.string().superRefine((value, ctx) => {
-    if (!isKebabId(value)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `${label} must be kebab-case with lowercase letters, numbers, and single hyphen separators`,
-      });
-    }
-  });
-
-export const InitiativeLinkSchema = z.object({
-  store: KebabIdentifierSchema('Store id'),
-  id: KebabIdentifierSchema('Initiative id'),
-}).strict();
-
-export type InitiativeLink = z.infer<typeof InitiativeLinkSchema>;
 
 /** Top-level keys ChangeMetadataSchema recognizes. Anything else is ignored. */
 export const CHANGE_METADATA_KNOWN_KEYS = [
@@ -26,7 +9,6 @@ export const CHANGE_METADATA_KNOWN_KEYS = [
   'created',
   'goal',
   'affected_areas',
-  'initiative',
   'skip_specs',
   'retire_capabilities',
 ] as const;
@@ -45,7 +27,6 @@ export const ChangeMetadataSchema = z.object({
     .optional(),
   goal: z.string().min(1).optional(),
   affected_areas: z.array(z.string().min(1)).optional(),
-  initiative: InitiativeLinkSchema.optional(),
   // Declares that this change intentionally has no spec deltas (pure refactor,
   // tooling, or docs work). Validation accepts zero deltas, and the artifact
   // graph counts artifacts whose `generates` path lives under specs/ as

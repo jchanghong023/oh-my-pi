@@ -23,7 +23,6 @@ import {
   type PlanningHomeSummary,
 } from '../change-status-policy.js';
 import { readProjectConfig, validateConfigRules, type ProjectConfig } from '../project-config.js';
-import type { ReferenceIndexEntry } from '../references.js';
 import type { PlanningHome } from '../planning-home.js';
 import type { ChangeMetadata } from '../change-metadata/index.js';
 import type { Artifact, CompletedSet } from './types.js';
@@ -109,8 +108,6 @@ export interface ArtifactInstructions {
   context: string | undefined;
   /** Artifact-specific rules from config (constraints for AI, not to be included in output) */
   rules: string[] | undefined;
-  /** Referenced-store index (read-only upstream context; omitted when no references are declared) */
-  references?: ReferenceIndexEntry[];
   /** Template content (structure to follow - this IS the output format) */
   template: string;
   /** Dependencies with completion status and paths */
@@ -343,8 +340,6 @@ export function loadChangeContext(
 export interface GenerateInstructionsOptions {
   /** Pre-read project config; suppresses the internal read (no double read). */
   projectConfig?: ProjectConfig | null;
-  /** Referenced-store index assembled at the command boundary. */
-  references?: ReferenceIndexEntry[];
 }
 
 export function generateInstructions(
@@ -368,11 +363,7 @@ export function generateInstructions(
   // Use the pre-read config when provided; otherwise read it here.
   let projectConfig = options.projectConfig ?? null;
   if (options.projectConfig === undefined && effectiveProjectRoot) {
-    try {
-      projectConfig = readProjectConfig(effectiveProjectRoot);
-    } catch {
-      // If config read fails, continue without config
-    }
+    projectConfig = readProjectConfig(effectiveProjectRoot);
   }
 
   // Validate rules artifact IDs if config has rules (only once per session).
@@ -414,7 +405,6 @@ export function generateInstructions(
     instruction: artifact.instruction,
     context: configContext,
     rules: configRules,
-    ...(options.references !== undefined ? { references: options.references } : {}),
     ...(context.warnings ? { warnings: context.warnings } : {}),
     ...(context.skippedArtifacts?.has(artifact.id)
       ? { skipped: true, warning: SKIP_SPECS_INSTRUCTIONS_WARNING }
@@ -471,10 +461,7 @@ function getUnlockedArtifacts(graph: ArtifactGraph, artifactId: string): string[
  * @param context - Change context
  * @returns Formatted change status
  */
-export function formatChangeStatus(
-  context: ChangeContext,
-  options: { storeId?: string; implementationRoot?: string } = {}
-): ChangeStatus {
+export function formatChangeStatus(context: ChangeContext): ChangeStatus {
   // Load schema to get apply phase configuration
   const schema = resolveSchema(context.schemaName, context.projectRoot);
   const applyRequires = schema.apply?.requires ?? schema.artifacts.map(a => a.id);
@@ -547,21 +534,10 @@ export function formatChangeStatus(
       changeName: context.changeName,
       artifactStatuses,
       allArtifactsComplete: isComplete,
-      ...(options.storeId ? { storeId: options.storeId } : {}),
     }),
     actionContext: buildActionContext({
       projectRoot: context.projectRoot,
       artifactIds,
-      ...(options.storeId
-        ? {
-            store: {
-              id: options.storeId,
-              ...(options.implementationRoot
-                ? { implementationRoot: options.implementationRoot }
-                : {}),
-            },
-          }
-        : {}),
     }),
     artifacts: artifactStatuses,
     ...(context.warnings ? { warnings: context.warnings } : {}),

@@ -7,7 +7,6 @@ import type { ArchiveOptions } from '../core/archive.js';
 import { registerSpecCommand } from './commands/spec.js';
 import { registerConfigCommand } from './commands/config.js';
 import { registerSchemaCommand } from './commands/schema.js';
-import { registerStoreCommand } from './commands/store.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerContextCommand } from './commands/context.js';
 import { registerWorksetCommand } from './commands/workset.js';
@@ -19,25 +18,12 @@ import type {
   SchemasOptions,
   NewChangeOptions,
 } from '../commands/workflow/index.js';
-import { COMMON_FLAGS } from '../core/completions/shared-flags.js';
 
 // Startup cost: every command's implementation, and the packages it uses,
 // loads with `await import()` inside its action. This module and
 // ./commands/ only define commands (names, options, help), so `--version`,
 // `--help`, and each command load no other command's implementation.
 
-const STORE_OPTION_DESCRIPTION = COMMON_FLAGS.store.description;
-
-// Deliberate rejection path: --store-path stays registered (hidden) so the
-// resolver can explain that registering the path is the supported route,
-// instead of Commander emitting a generic unknown-option error (or, for
-// `show`, silently ignoring it via allowUnknownOption).
-function hiddenStorePathOption(): Option {
-  return new Option(
-    '--store-path <path>',
-    'Not supported; register the path with "omp openspec store register <path>" and use --store <id>'
-  ).hideHelp();
-}
 
 async function failWithError(
   error: unknown,
@@ -59,7 +45,7 @@ async function failWithError(
   }
   const { default: ora } = await import('ora');
   ora().fail(`Error: ${(error as Error).message}`);
-  // Resolution and store errors carry a pasteable fix - never drop it.
+  // Resolution errors carry a pasteable fix - never drop it.
   const fix = (error as { diagnostic?: { fix?: string } }).diagnostic?.fix;
   if (fix) {
     console.error(`Fix: ${fix}`);
@@ -95,12 +81,8 @@ export function getCommandPath(command: Command): string {
  * True when the executing command asked for JSON output — used to suppress the
  * first-run telemetry notice so stdout stays a single valid JSON document.
  *
- * `--json` reaches commands three ways, so a single parsed option is not enough:
- * - declared on the leaf (`omp openspec status --json`) → `opts().json`
- * - declared on a parent group and read via globals (`omp openspec workset --json list`)
- *   → `optsWithGlobals().json`
- * - a residual arg on a permissive group that never declares the option
- *   (`omp openspec store --json`, which detects it from `command.args`) → `args`
+ * `--json` can be declared on a leaf command or inherited from a parent
+ * group such as `omp openspec workset --json list`.
  *
  * Suppressing is always safe: the disclosure is only deferred to the next
  * non-JSON run, never lost, whereas printing it on a JSON run corrupts stdout.
@@ -294,9 +276,7 @@ program
   .option('--all', 'Show both active and archived changes')
   .option('--sort <order>', 'Sort order: "recent" (default) or "name"', 'recent')
   .option('--json', 'Output as JSON (for programmatic use)')
-  .option('--store <id>', STORE_OPTION_DESCRIPTION)
-  .addOption(hiddenStorePathOption())
-  .action(async (options?: { specs?: boolean; changes?: boolean; archived?: boolean; all?: boolean; sort?: string; json?: boolean; store?: string; storePath?: string }) => {
+  .action(async (options?: { specs?: boolean; changes?: boolean; archived?: boolean; all?: boolean; sort?: string; json?: boolean }) => {
     try {
       if (options?.specs && (options.archived || options.all)) {
         throw new Error('--archived and --all can only be used when listing changes.');
@@ -305,11 +285,10 @@ program
         import('../core/root-selection.js'),
         import('../core/list.js'),
       ]);
-      const root = await resolveRootForCommand(options ?? {}, {
+      const root = await resolveRootForCommand({
         json: options?.json,
         failurePayload: options?.specs ? { specs: [], root: null } : { changes: [], root: null },
-        // Preserve the cwd fallback for pre-config.yaml projects. The resolver
-        // still lets a registered/default store take precedence over it.
+        // Preserve the cwd fallback for pre-config.yaml projects.
         allowImplicitRoot: existsSync(path.join(process.cwd(), 'openspec', 'project.md')),
       });
       if (!root) {
@@ -338,9 +317,7 @@ program
 program
   .command('view')
   .description('Display an interactive dashboard of specs and changes')
-  .option('--store <id>', STORE_OPTION_DESCRIPTION)
-  .addOption(hiddenStorePathOption())
-  .action(async (options?: { store?: string; storePath?: string }) => {
+  .action(async () => {
     try {
       // Implicit cwd fallback stays enabled so `view` keeps accepting the same
       // directories as `list`/`status` — notably pre-config.yaml `openspec/`
@@ -349,7 +326,7 @@ program
         import('../core/root-selection.js'),
         import('../core/view.js'),
       ]);
-      const root = await resolveRootForCommand(options ?? {});
+      const root = await resolveRootForCommand({});
       if (!root) {
         return;
       }
@@ -436,8 +413,6 @@ program
   .option('--skip-specs', 'Skip spec update operations (useful for infrastructure, tooling, or doc-only changes)')
   .option('--no-validate', 'Skip validation (not recommended, requires confirmation)')
   .option('--json', 'Output as JSON (non-interactive)')
-  .option('--store <id>', STORE_OPTION_DESCRIPTION)
-  .addOption(hiddenStorePathOption())
   .action(async (changeName?: string, options?: ArchiveOptions) => {
     try {
       const { ArchiveCommand } = await import('../core/archive.js');
@@ -452,7 +427,6 @@ program
 registerSpecCommand(program);
 registerConfigCommand(program);
 registerSchemaCommand(program);
-registerStoreCommand(program);
 registerDoctorCommand(program);
 registerContextCommand(program);
 registerWorksetCommand(program);
@@ -471,9 +445,7 @@ program
   .option('--json', 'Output validation results as JSON')
   .option('--concurrency <n>', 'Max concurrent validations (defaults to env OPENSPEC_CONCURRENCY or 6)')
   .option('--no-interactive', 'Disable interactive prompts')
-  .option('--store <id>', STORE_OPTION_DESCRIPTION)
-  .addOption(hiddenStorePathOption())
-  .action(async (itemName?: string, options?: { all?: boolean; changes?: boolean; specs?: boolean; archived?: boolean; report?: string; type?: string; strict?: boolean; json?: boolean; noInteractive?: boolean; concurrency?: string; store?: string; storePath?: string }) => {
+  .action(async (itemName?: string, options?: { all?: boolean; changes?: boolean; specs?: boolean; archived?: boolean; report?: string; type?: string; strict?: boolean; json?: boolean; noInteractive?: boolean; concurrency?: string }) => {
     try {
       const { ValidateCommand } = await import('../commands/validate.js');
       const validateCommand = new ValidateCommand();
@@ -499,12 +471,6 @@ program
   .option('--requirements', 'JSON only: Show only requirements (exclude scenarios)')
   .option('--no-scenarios', 'JSON only: Exclude scenario content')
   .option('-r, --requirement <id>', 'JSON only: Show specific requirement by ID (1-based)')
-  .option('--store <id>', STORE_OPTION_DESCRIPTION)
-  // Explicit registration required: allowUnknownOption would otherwise
-  // silently swallow --store-path instead of rejecting it deliberately.
-  .addOption(hiddenStorePathOption())
-  // allow unknown options to pass-through to underlying command implementation
-  .allowUnknownOption(true)
   .action(async (itemName?: string, options?: { json?: boolean; type?: string; noInteractive?: boolean; [k: string]: any }) => {
     try {
       const { ShowCommand } = await import('../commands/show.js');
@@ -608,8 +574,6 @@ program
   .option('--all', 'Show status for all active changes')
   .option('--schema <name>', 'Schema override (auto-detected from config.yaml)')
   .option('--json', 'Output as JSON')
-  .option('--store <id>', STORE_OPTION_DESCRIPTION)
-  .addOption(hiddenStorePathOption())
   .action(async (options: StatusOptions) => {
     try {
       const { statusCommand } = await import('../commands/workflow/status.js');
@@ -635,8 +599,6 @@ program
   .option('--change <id>', 'Change name')
   .option('--schema <name>', 'Schema override (auto-detected from config.yaml)')
   .option('--json', 'Output as JSON')
-  .option('--store <id>', STORE_OPTION_DESCRIPTION)
-  .addOption(hiddenStorePathOption())
   .action(async (artifactId: string | undefined, options: InstructionsOptions) => {
     try {
       const { applyInstructionsCommand, archiveInstructionsCommand, instructionsCommand } =
@@ -676,8 +638,6 @@ program
   .command('schemas')
   .description('List available workflow schemas with descriptions')
   .option('--json', 'Output as JSON (for agent use)')
-  .option('--store <id>', STORE_OPTION_DESCRIPTION)
-  .addOption(hiddenStorePathOption())
   .action(async (options: SchemasOptions) => {
     try {
       const { schemasCommand } = await import('../commands/workflow/schemas.js');
@@ -702,8 +662,6 @@ newCmd
   .option('--goal <text>', 'Optional goal metadata to store with the change')
   .option('--schema <name>', `Workflow schema to use (default: ${DEFAULT_SCHEMA})`)
   .option('--json', 'Output as JSON')
-  .option('--store <id>', STORE_OPTION_DESCRIPTION)
-  .addOption(hiddenStorePathOption())
   // Removed options kept registered (hidden) so users get a deliberate
   // explanation instead of a generic unknown-option error.
   .addOption(new Option('--initiative <id>', 'No longer supported').hideHelp())

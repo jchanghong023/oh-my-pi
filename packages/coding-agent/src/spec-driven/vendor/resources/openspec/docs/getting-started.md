@@ -284,5 +284,5 @@ omp openspec view
 - [Commands](commands.md) - Full reference for all slash commands
 - [Concepts](concepts.md) - Deeper understanding of specs, changes, and schemas
 - [Customization](customization.md) - Make OpenSpec work your way
-- [Stores](stores-beta/user-guide.md) - Planning that spans repos or teams? Keep it in its own repo (beta)
+- [Local context and worksets](cli.md#working-context-local-project) - Inspect your project or reopen folders together
 - [FAQ](faq.md) and [Troubleshooting](troubleshooting.md) - When you get stuck

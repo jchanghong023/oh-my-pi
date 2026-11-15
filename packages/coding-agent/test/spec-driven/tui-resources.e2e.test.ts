@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
 import { contentText, MARKER, respond, rolePayload, type ModelRequest } from "./provider-fixture";
-import { eventually, nativeDraftSnapshot, tuiTest, withTui } from "./tui-harness";
+import { clearNativeDraft, eventually, nativeDraftMatches, nativeDraftSnapshot, tuiTest, withTui } from "./tui-harness";
 
 function nativeReadResult(request: ModelRequest, target: string): string {
 	const call = request.messages
@@ -80,6 +80,36 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 					}
 					const superpowers = inventory.skills.filter(skill => skill.source === "superpowers");
 					for (const skill of superpowers) expect(ordinaryContext).not.toContain(skill.name);
+					// Exercise native completion once, including on Windows without a planning directory.
+					if (location === "file") {
+						const requestCount = provider.requests.length;
+						for (const skill of openSpec) {
+							const command = `/skill:${skill.name}`;
+							// The popup clips long labels at this viewport width. Only
+							// require a selected skill row here; the exact unique draft
+							// prefix and the completed chip below establish its identity.
+							const selected = /^❯\s+(?:\S+\s+)?skill:/mu;
+							await tui("type", command.slice(0, -1));
+							await eventually(
+								() => nativeDraftSnapshot(tui),
+								({ screen, cursor }) =>
+									nativeDraftMatches(screen, command.slice(0, -1), cursor) && selected.test(screen),
+							);
+							await tui("key", "press", "Tab");
+							// Tab inserts the exact /skill:<name> command plus a space.
+							// The native composer collapses that completed token into an
+							// atomic skill chip; its caret stays after the trailing space.
+							const completedDraft = `✦ ${skill.name}`;
+							await eventually(
+								() => nativeDraftSnapshot(tui),
+								({ screen, cursor }) =>
+									nativeDraftMatches(screen, completedDraft, cursor) &&
+									cursor.x === 3 + completedDraft.length + 1,
+							);
+							await clearNativeDraft(tui);
+						}
+						expect(provider.requests).toHaveLength(requestCount);
+					}
 					const manualOnly = inventory.skills.filter(
 						skill => skill.source === "jch" || skill.source === "superpowers",
 					);
@@ -137,10 +167,23 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 					for (const skill of openSpec) {
 						await newBranch();
 						const selectedPath = `skill://${skill.name}:raw`;
+						const explicit = location === "file" && skill.name === "openspec-explore";
+						const argumentsText = `${MARKER} inspect-only 参数 with spaces`;
 						const completed = await readResources(
-							`请按需读取已发现的 OpenSpec 技能，不实施、不同步、不归档。 ${MARKER}`,
+							explicit
+								? `/skill:${skill.name} ${argumentsText}`
+								: `请按需读取已发现的 OpenSpec 技能，不实施、不同步、不归档。 ${MARKER}`,
 							selectedPath,
 						);
+						if (explicit) {
+							const input = completed.messages
+								.filter(message => message.role === "user")
+								.map(message => contentText(message.content))
+								.join("\n");
+							expect(input).toContain(argumentsText);
+							expect(input).toContain(`User invoked the "${skill.name}" skill`);
+							expect(await fs.readFile(path.join(cwd, "openspec"), "utf8")).toBe("not a directory\n");
+						}
 						const selected = parseFrontmatter(nativeReadResult(completed, selectedPath), {
 							source: selectedPath,
 							repair: false,

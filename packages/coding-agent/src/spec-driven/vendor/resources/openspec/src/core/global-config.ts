@@ -27,11 +27,6 @@ export interface GlobalConfig {
   profile?: Profile;
   delivery?: Delivery;
   workflows?: string[];
-  /**
-   * Machine-level fallback store id, consulted during root resolution only
-   * when no --store flag, local root, or project-level store: pointer resolves.
-   */
-  defaultStore?: string;
   /** Workset opener rows (slice 7.1); hand-edited, validated on use. */
   openers?: unknown;
   /** Anonymous usage analytics settings and identity. */

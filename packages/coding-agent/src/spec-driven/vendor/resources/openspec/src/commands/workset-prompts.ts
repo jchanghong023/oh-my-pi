@@ -11,7 +11,7 @@ import {
   type OpenerChoice,
   type OpenerDefinition,
 } from '../core/openers.js';
-import { expandUserPath } from '../core/store/operations.js';
+import { expandUserPath } from '../utils/path.js';
 import {
   memberLabelProblem,
   validateWorksetName,

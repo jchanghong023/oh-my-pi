@@ -11,9 +11,6 @@ import {
   resolveRootForCommand,
   toPlanningHome,
   toRootOutput,
-  withStoreFlag,
-  isStoreSelectedRoot,
-  findDeclaringProjectRoot,
 } from '../../core/root-selection.js';
 import {
   loadChangeContext,
@@ -26,7 +23,7 @@ import {
   describeNestedChange,
   findNestedChanges,
 } from '../../utils/nested-change.js';
-import type { StoreDiagnostic } from '../../core/store/errors.js';
+import type { OpenSpecDiagnostic } from '../../core/errors.js';
 import {
   validateChangeExists,
   validateSchemaExists,
@@ -43,8 +40,6 @@ export interface StatusOptions {
   change?: string;
   all?: boolean;
   schema?: string;
-  store?: string;
-  storePath?: string;
   json?: boolean;
 }
 
@@ -54,7 +49,7 @@ export interface StatusOptions {
 
 // A batch entry is either a fully loaded status or, for a change that failed
 // to load, the change name plus the diagnostic — the sweep never aborts.
-type BatchStatusEntry = ChangeStatus | { changeName: string; status: StoreDiagnostic[] };
+type BatchStatusEntry = ChangeStatus | { changeName: string; status: OpenSpecDiagnostic[] };
 
 // The --all --json failure null-shape. Root-selection failures (handled in
 // resolveRootForCommand) and thrown errors (caught by the CLI wrapper) must
@@ -69,10 +64,8 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
     throw new Error('The --all and --change options are mutually exclusive.');
   }
 
-  // The root resolves (and the store banner prints) before the spinner starts
-  // so the two do not fight over stderr. The batch null-shape rides along so
-  // a root-selection failure under --all --json still carries `changes: []`.
-  const root = await resolveRootForCommand(options, {
+  // Resolve before progress output; batch failures preserve their JSON envelope.
+  const root = await resolveRootForCommand({
     json: options.json,
     failurePayload: options.all ? BATCH_STATUS_FAILURE_PAYLOAD : undefined,
   });
@@ -90,20 +83,7 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
     const planningHome = toPlanningHome(root);
     const projectRoot = root.path;
     const rootOutput = toRootOutput(root);
-    const newChangeHint = withStoreFlag(root, 'omp openspec new change <name>');
-
-    // One store-flag decision serves the JSON `nextSteps` sentence and the text
-    // `Next:` line, so a store-selected root can never carry `--store` in one
-    // and drop it from the other.
-    const storeOptions = isStoreSelectedRoot(root) ? { storeId: root.storeId } : {};
-    // A store holds planning artifacts only; the project declaring it is
-    // where implementation edits go (#2013).
-    const implementationRoot = isStoreSelectedRoot(root)
-      ? findDeclaringProjectRoot(root.storeId)
-      : null;
-    const statusOptions = implementationRoot
-      ? { ...storeOptions, implementationRoot }
-      : storeOptions;
+    const newChangeHint = 'omp openspec new change <name>';
 
     // Single definition of "load one change's status" so the batch and
     // single-change payloads can never drift apart.
@@ -112,8 +92,7 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
         loadChangeContext(projectRoot, changeName, options.schema, {
           changeDir: getChangeDir(planningHome, changeName),
           planningHome,
-        }),
-        statusOptions
+        })
       );
 
     // Handle no-changes case gracefully — status is informational,
@@ -191,7 +170,7 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
             console.log();
           }
           if ('artifacts' in entry) {
-            printStatusText(entry, storeOptions);
+            printStatusText(entry);
           } else {
             console.log(chalk.red(`✗ ${entry.changeName}: ${entry.status[0]?.message}`));
           }
@@ -217,8 +196,7 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
     const changeName = await validateChangeExists(
       options.change,
       projectRoot,
-      root.changesDir,
-      { newChangeHint }
+      root.changesDir
     );
 
     // Validate schema if explicitly provided
@@ -236,19 +214,14 @@ export async function statusCommand(options: StatusOptions): Promise<void> {
       return;
     }
 
-    printStatusText(status, storeOptions);
+    printStatusText(status);
   } catch (error) {
     spinner?.stop();
     throw error;
   }
 }
 
-export interface PrintStatusTextOptions {
-  /** Selected store id, so the printed command carries `--store`. */
-  storeId?: string;
-}
-
-export function printStatusText(status: ChangeStatus, options: PrintStatusTextOptions = {}): void {
+export function printStatusText(status: ChangeStatus): void {
   const doneCount = status.artifacts.filter((a) => a.status === 'done').length;
   const skippedCount = status.artifacts.filter((a) => a.status === 'skipped').length;
   const total = status.artifacts.length - skippedCount;
@@ -291,7 +264,6 @@ export function printStatusText(status: ChangeStatus, options: PrintStatusTextOp
     changeName: status.changeName,
     artifactStatuses: status.artifacts,
     allArtifactsComplete: status.isPlanningComplete,
-    ...(options.storeId ? { storeId: options.storeId } : {}),
   });
 
   if (status.isPlanningComplete || nextStep) {

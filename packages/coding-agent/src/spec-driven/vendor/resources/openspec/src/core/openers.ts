@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { z } from 'zod';
 
-import { StoreError } from './store/errors.js';
+import { OpenSpecError } from './errors.js';
 import { formatZodIssues } from './zod-issues.js';
 import type { WorksetMember } from './worksets.js';
 
@@ -98,8 +98,8 @@ const OpenerConfigRowSchema = z
 
 const OpenersConfigSchema = z.record(z.string(), OpenerConfigRowSchema);
 
-function invalidOpenerConfigError(message: string, configPath: string): StoreError {
-  return new StoreError(
+function invalidOpenerConfigError(message: string, configPath: string): OpenSpecError {
+  return new OpenSpecError(
     `Invalid openers config: ${message}`,
     'invalid_opener_config',
     {

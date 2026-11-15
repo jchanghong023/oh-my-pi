@@ -72,17 +72,11 @@ Terms are grouped by topic, then alphabetized within each group.
 
 **Enablers, not gates.** The principle that artifact dependencies show what becomes *possible* next, not what's *required* next. You can revisit and edit any artifact at any time. See [Core Concepts at a Glance](overview.md#enablers-not-gates).
 
-## Coordination across repos (beta)
+## Local working views
 
-These terms apply only if your planning spans more than one repo. They're in beta. Most users can ignore them. See the [Stores User Guide](stores-beta/user-guide.md).
+**Working context.** What `omp openspec context` reports for the current project: its local OpenSpec root and planning-directory diagnostics. It can also write a single-root editor workspace. See [CLI Reference](cli.md#working-context-local-project).
 
-**Store.** A standalone repo whose whole job is planning. It has the same `openspec/` shape you already know (specs and changes) plus a small identity file. You register it on your machine once, by name, and then any OpenSpec command can work in it from anywhere.
-
-**Reference.** A declaration, in a code repo's `openspec/config.yaml`, of a store that repo draws on. References are read-only: the repo keeps its own root, and `omp openspec instructions` gains an index of the referenced store's specs, each with the exact command to fetch it.
-
-**Working context.** What `omp openspec context` assembles for the current repo: its OpenSpec root plus every store it references, each with how to fetch it. The answer to "what am I working with?"
-
-**Workset.** A personal, machine-local set of folders you open together (a store alongside the code repos you work on). Created explicitly with `omp openspec workset create`; nothing about those local paths is committed to the shared planning repo.
+**Workset.** A personal, machine-local set of folders you open together. Created explicitly with `omp openspec workset create`; these local paths are not shared project state and removing a workset never removes its member folders. See [Personal worksets](cli.md#personal-worksets).
 
 ## See also
 

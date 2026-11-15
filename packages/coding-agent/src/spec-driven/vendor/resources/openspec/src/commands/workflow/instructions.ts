@@ -24,21 +24,14 @@ import {
 } from '../../core/planning-home.js';
 import {
   resolveRootForCommand,
-  withStoreFlag,
   toPlanningHome,
   toRootOutput,
-  type ResolvedOpenSpecRoot,
 } from '../../core/root-selection.js';
 import {
-  assembleReferenceIndex,
   escapeEnvelopeAttribute,
   escapeEnvelopeTags,
-  renderReferencedStoresBlock,
-  renderReferencedStoresSection,
   sanitizeInline,
-  type ReferenceIndexEntry,
-} from '../../core/references.js';
-import { readRegistrySnapshot } from '../../core/store/registry.js';
+} from '../../utils/text.js';
 import {
   loadOperationInputs,
   readProjectConfig,
@@ -61,16 +54,12 @@ import { METADATA_FILENAME } from '../../utils/change-metadata.js';
 export interface InstructionsOptions {
   change?: string;
   schema?: string;
-  store?: string;
-  storePath?: string;
   json?: boolean;
 }
 
 export interface ApplyInstructionsOptions {
   change?: string;
   schema?: string;
-  store?: string;
-  storePath?: string;
   json?: boolean;
 }
 
@@ -80,43 +69,12 @@ export type ArchiveInstructionsOptions = ApplyInstructionsOptions;
 // Artifact Instructions Command
 // -----------------------------------------------------------------------------
 
-/**
- * Reads the resolved root's config once, assembles the referenced-store
- * index when references are declared, and resolves the config path for
- * fix text. Shared by both instruction surfaces.
- */
-async function loadRootConfigContext(root: ResolvedOpenSpecRoot): Promise<{
-  projectConfig: ProjectConfig | null;
-  references: ReferenceIndexEntry[] | undefined;
-}> {
-  // readProjectConfig never throws: missing/unparseable configs are null.
-  const projectConfig = readProjectConfig(root.path);
-
-  // One registry read serves every relationship consumer in this
-  // output so it never carries a torn snapshot.
-  const snapshot = await readRegistrySnapshot();
-  const registryEntries = snapshot.entries;
-
-  const declared = projectConfig?.references ?? [];
-  const index =
-    declared.length > 0
-      ? await assembleReferenceIndex({ references: declared, resolvedRoot: root, registryEntries })
-      : [];
-
-  // Omitted, not empty: an index emptied by self-reference omission must
-  // look identical to an undeclared one in JSON.
-  return {
-    projectConfig,
-    references: index.length > 0 ? index : undefined,
-  };
-}
-
 export async function instructionsCommand(
   artifactId: string | undefined,
   options: InstructionsOptions
 ): Promise<void> {
-  // Resolve (and banner) before the spinner starts so stderr stays readable.
-  const root = await resolveRootForCommand(options, { json: options.json });
+  // Resolve the local project before starting progress output.
+  const root = await resolveRootForCommand({ json: options.json });
   if (!root) {
     return;
   }
@@ -133,8 +91,7 @@ export async function instructionsCommand(
     const changeName = await validateChangeExists(
       options.change,
       projectRoot,
-      root.changesDir,
-      { newChangeHint: withStoreFlag(root, 'omp openspec new change <name>') }
+      root.changesDir
     );
 
     // Validate schema if explicitly provided
@@ -142,7 +99,7 @@ export async function instructionsCommand(
       validateSchemaExists(options.schema, projectRoot);
     }
 
-    const { projectConfig, references } = await loadRootConfigContext(root);
+    const projectConfig = readProjectConfig(projectRoot);
 
     // loadChangeContext will auto-detect schema from metadata if not provided
     const context = loadChangeContext(projectRoot, changeName, options.schema, {
@@ -171,7 +128,6 @@ export async function instructionsCommand(
 
     const instructions = generateInstructions(context, artifactId, projectRoot, {
       projectConfig,
-      references,
     });
     const isBlocked = instructions.dependencies.some((d) => !d.done);
 
@@ -261,12 +217,6 @@ export function printInstructionsText(instructions: ArtifactInstructions, isBloc
     console.log('<!-- This is background information for you. Do NOT include this in your output. -->');
     console.log(escapeEnvelopeTags(context));
     console.log('</project_context>');
-    console.log();
-  }
-
-  // Referenced-store index (read-only upstream context)
-  if (instructions.references && instructions.references.length > 0) {
-    console.log(renderReferencedStoresBlock(instructions.references));
     console.log();
   }
 
@@ -525,7 +475,6 @@ async function collectApplyWarnings(input: {
 
 export interface GenerateApplyInstructionsOptions {
   planningHome?: PlanningHome;
-  references?: ReferenceIndexEntry[];
   projectConfig?: ProjectConfig | null;
 }
 
@@ -542,7 +491,6 @@ export async function generateApplyInstructions(
 ): Promise<ApplyInstructions> {
   const planningHome =
     options.planningHome ?? resolveCurrentPlanningHomeSync({ startPath: projectRoot });
-  const references = options.references;
   // loadChangeContext will auto-detect schema from metadata if not provided
   const context = loadChangeContext(projectRoot, changeName, schemaName, {
     changeDir: getChangeDir(planningHome, changeName),
@@ -711,14 +659,13 @@ export async function generateApplyInstructions(
     ...(missingPrerequisites.length > 0 ? { missingPrerequisites } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     instruction,
-    ...(references !== undefined ? { references } : {}),
     ...operationInputs,
   };
 }
 
 export async function applyInstructionsCommand(options: ApplyInstructionsOptions): Promise<void> {
-  // Resolve (and banner) before the spinner starts so stderr stays readable.
-  const root = await resolveRootForCommand(options, { json: options.json });
+  // Resolve the local project before starting progress output.
+  const root = await resolveRootForCommand({ json: options.json });
   if (!root) {
     return;
   }
@@ -735,8 +682,7 @@ export async function applyInstructionsCommand(options: ApplyInstructionsOptions
     const changeName = await validateChangeExists(
       options.change,
       projectRoot,
-      root.changesDir,
-      { newChangeHint: withStoreFlag(root, 'omp openspec new change <name>') }
+      root.changesDir
     );
 
     // Validate schema if explicitly provided
@@ -744,12 +690,10 @@ export async function applyInstructionsCommand(options: ApplyInstructionsOptions
       validateSchemaExists(options.schema, projectRoot);
     }
 
-    // One parsed config snapshot supplies schema fallback, references, context,
-    // and operation guidance for this command.
-    const { projectConfig, references } = await loadRootConfigContext(root);
+    // One parsed config snapshot supplies schema fallback, context, and operation guidance.
+    const projectConfig = readProjectConfig(projectRoot);
     const instructions = await generateApplyInstructions(projectRoot, changeName, options.schema, {
       planningHome,
-      references,
       projectConfig,
     });
 
@@ -773,11 +717,6 @@ export function printApplyInstructionsText(instructions: ApplyInstructions): voi
   console.log(`## Apply: ${changeName}`);
   console.log(`Schema: ${schemaName}`);
   console.log();
-
-  if (instructions.references && instructions.references.length > 0) {
-    console.log(renderReferencedStoresSection(instructions.references));
-    console.log();
-  }
 
   // Warning for blocked state
   if (state === 'blocked' && missingArtifacts) {
@@ -858,7 +797,7 @@ export function generateArchiveInstructions(
 export async function archiveInstructionsCommand(
   options: ArchiveInstructionsOptions
 ): Promise<void> {
-  const root = await resolveRootForCommand(options, { json: options.json });
+  const root = await resolveRootForCommand({ json: options.json });
   if (!root) {
     return;
   }
@@ -873,8 +812,7 @@ export async function archiveInstructionsCommand(
     const changeName = await validateChangeExists(
       options.change,
       root.path,
-      root.changesDir,
-      { newChangeHint: withStoreFlag(root, 'omp openspec new change <name>') }
+      root.changesDir
     );
     const projectConfig = readProjectConfig(root.path);
     const instructions = generateArchiveInstructions(changeName, projectConfig);

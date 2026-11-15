@@ -12,8 +12,8 @@ import {
   type OpenerDefinition,
   type OpenerScanOptions,
 } from '../core/openers.js';
-import { StoreError } from '../core/store/errors.js';
-import { expandUserPath } from '../core/store/operations.js';
+import { OpenSpecError } from '../core/errors.js';
+import { expandUserPath } from '../utils/path.js';
 import { getGlobalConfigPath } from '../core/global-config.js';
 import {
   memberLabelProblem,
@@ -22,8 +22,8 @@ import {
   type WorksetMember,
 } from '../core/worksets.js';
 
-function memberInvalidError(problem: string): StoreError {
-  return new StoreError(
+function memberInvalidError(problem: string): OpenSpecError {
+  return new OpenSpecError(
     `Invalid workset member: ${problem}.`,
     'workset_member_invalid',
     {
@@ -117,12 +117,12 @@ export function formatMemberRows(members: WorksetMember[]): string[] {
 export function toolUnknownError(
   toolId: string,
   table: OpenerDefinition[]
-): StoreError {
+): OpenSpecError {
   const knownIds = table
     .filter((opener) => isOpenerEnabled(opener))
     .map((opener) => opener.id)
     .join(', ');
-  return new StoreError(`Unknown tool '${toolId}'.`, 'workset_tool_unknown', {
+  return new OpenSpecError(`Unknown tool '${toolId}'.`, 'workset_tool_unknown', {
     target: 'workset.tool',
     fix: `Known tools: ${knownIds}. Add new tools under "openers" in ${getGlobalConfigPath()}.`,
   });
@@ -149,10 +149,10 @@ export function toolUnavailableError(
   table: OpenerDefinition[],
   worksetName: string,
   scan?: OpenerScanOptions
-): StoreError {
+): OpenSpecError {
   const alternative = firstInstalledAlternative(table, opener.id, scan);
 
-  return new StoreError(
+  return new OpenSpecError(
     `${opener.label} ('${opener.command}') is not on PATH.`,
     'workset_tool_unavailable',
     {
@@ -169,12 +169,12 @@ export function toolUnavailableError(
 export function noToolInstalledError(
   table: OpenerDefinition[],
   worksetName: string
-): StoreError {
+): OpenSpecError {
   const commands = table
     .filter((opener) => isOpenerEnabled(opener))
     .map((opener) => opener.command)
     .join(', ');
-  return new StoreError(
+  return new OpenSpecError(
     'None of the known tools is on PATH.',
     'workset_tool_unavailable',
     {

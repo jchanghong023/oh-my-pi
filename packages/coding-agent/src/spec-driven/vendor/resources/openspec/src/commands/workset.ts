@@ -40,7 +40,7 @@ import {
   getGlobalConfig,
   getGlobalConfigPath,
 } from '../core/global-config.js';
-import { StoreError, type StoreDiagnostic } from '../core/store/errors.js';
+import { OpenSpecError } from '../core/errors.js';
 import { isInteractive } from '../utils/interactive.js';
 import {
   asErrorMessage,
@@ -98,8 +98,8 @@ function readOpenerTable(): OpenerDefinition[] {
 function worksetCliOpenerDisabledError(
   opener: OpenerDefinition,
   name: string
-): StoreError {
-  return new StoreError(
+): OpenSpecError {
+  return new OpenSpecError(
     `Opening a workset in ${opener.label} is temporarily disabled while CLI-agent opening is reworked. Worksets open in an IDE for now.`,
     'workset_cli_opener_disabled',
     {
@@ -134,8 +134,8 @@ export function launchOpenerCommand(
   const spawnFn = options.spawnFn ?? defaultSpawn();
 
   return new Promise((resolve, reject) => {
-    const launchFailure = (error: unknown): StoreError =>
-      new StoreError(
+    const launchFailure = (error: unknown): OpenSpecError =>
+      new OpenSpecError(
         `Could not launch ${command.label}: ${asErrorMessage(error)}`,
         'workset_launch_failed',
         {
@@ -262,7 +262,7 @@ export class WorksetCommand {
     options: WorksetCreateOptions
   ): Promise<Workset> {
     if (!name) {
-      throw new StoreError('Pass a workset name.', 'workset_name_required', {
+      throw new OpenSpecError('Pass a workset name.', 'workset_name_required', {
         target: 'workset.name',
         fix: 'omp openspec workset create <name> --member <path>',
       });
@@ -272,7 +272,7 @@ export class WorksetCommand {
 
     const memberFlags = options.member ?? [];
     if (memberFlags.length === 0) {
-      throw new StoreError(
+      throw new OpenSpecError(
         'Pass at least one member folder.',
         'workset_members_required',
         {
@@ -336,7 +336,7 @@ export class WorksetCommand {
 
     try {
       if (options.json) {
-        throw new StoreError(
+        throw new OpenSpecError(
           'workset open hands this terminal to the chosen tool and has no JSON mode.',
           'workset_open_json_unsupported',
           {
@@ -368,7 +368,7 @@ export class WorksetCommand {
           .map((check) => check.member);
 
         if (surviving.length === 0) {
-          throw new StoreError(
+          throw new OpenSpecError(
             `No member folder of workset '${name}' exists on this machine.`,
             'workset_no_members_available',
             {
@@ -417,7 +417,7 @@ export class WorksetCommand {
         opener = found;
       } else {
         if (!isInteractive()) {
-          throw new StoreError(
+          throw new OpenSpecError(
             `Workset '${name}' has no saved tool.`,
             'workset_tool_required',
             {
@@ -463,12 +463,12 @@ export class WorksetCommand {
         // Make the launch-failure fix pasteable when an alternative is
         // installed (the launcher itself does not know the table).
         if (
-          error instanceof StoreError &&
+          error instanceof OpenSpecError &&
           error.diagnostic.code === 'workset_launch_failed'
         ) {
           const alternative = firstInstalledAlternative(table, opener.id);
           if (alternative !== null) {
-            throw new StoreError(error.message, 'workset_launch_failed', {
+            throw new OpenSpecError(error.message, 'workset_launch_failed', {
               target: 'workset.tool',
               fix: `Run: omp openspec workset open ${name} --tool ${alternative}`,
             });
@@ -515,7 +515,7 @@ export class WorksetCommand {
         }
 
         if (options.json || !isInteractive()) {
-          throw new StoreError(
+          throw new OpenSpecError(
             'Pass --yes to remove a workset non-interactively.',
             'workset_remove_confirmation_required',
             {
@@ -527,7 +527,7 @@ export class WorksetCommand {
 
         const confirmed = await confirmRemoveInteractively(workset);
         if (!confirmed) {
-          throw new StoreError(
+          throw new OpenSpecError(
             'Workset remove cancelled.',
             'workset_remove_cancelled',
             {

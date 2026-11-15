@@ -12,7 +12,7 @@ import {
   releaseFileLock,
   writeFileAtomically,
 } from './file-state.js';
-import { StoreError } from './store/errors.js';
+import { OpenSpecError } from './errors.js';
 import {
   folderStyleNameProblem,
   isKebabId,
@@ -83,7 +83,7 @@ export function getWorksetCodeWorkspacePath(
 
 export function validateWorksetName(name: string): string {
   if (!isKebabId(name)) {
-    throw new StoreError(
+    throw new OpenSpecError(
       `Workset name '${name}' ${KEBAB_ID_DESCRIPTION}.`,
       'invalid_workset_name',
       {
@@ -154,8 +154,8 @@ const WorksetsStateSchema = z
 function invalidWorksetsFileError(
   message: string,
   options: WorksetPathOptions
-): StoreError {
-  return new StoreError(
+): OpenSpecError {
+  return new OpenSpecError(
     `Invalid worksets file: ${message}`,
     'invalid_workset_file',
     {
@@ -279,11 +279,11 @@ export async function withWorksetsLock<T>(
 export function worksetNotFoundError(
   name: string,
   state: WorksetsState
-): StoreError {
+): OpenSpecError {
   const savedNames = Object.keys(state.worksets).sort((a, b) =>
     a.localeCompare(b)
   );
-  return new StoreError(
+  return new OpenSpecError(
     `Workset '${name}' is not saved on this machine.`,
     'workset_not_found',
     {
@@ -301,7 +301,7 @@ export function withWorkset(
   workset: Workset
 ): WorksetsState {
   if (Object.prototype.hasOwnProperty.call(state.worksets, workset.name)) {
-    throw new StoreError(
+    throw new OpenSpecError(
       `Workset '${workset.name}' already exists.`,
       'workset_exists',
       {

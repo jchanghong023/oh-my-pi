@@ -13,6 +13,7 @@ import {
 } from '../../core/artifact-graph/index.js';
 import { FileSystemUtils } from '../../utils/file-system.js';
 import { validateSchemaExists, DEFAULT_SCHEMA } from './shared.js';
+import { resolveRootForCommand } from '../../core/root-selection.js';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -34,6 +35,11 @@ export interface TemplateInfo {
 // -----------------------------------------------------------------------------
 
 export async function templatesCommand(options: TemplatesOptions): Promise<void> {
+  const root = await resolveRootForCommand({ json: options.json });
+  if (!root) {
+    return;
+  }
+
   let spinner: Ora | undefined;
   if (!options.json) {
     const { default: ora } = await import('ora');
@@ -41,7 +47,7 @@ export async function templatesCommand(options: TemplatesOptions): Promise<void>
   }
 
   try {
-    const projectRoot = process.cwd();
+    const projectRoot = root.path;
     const schemaName = validateSchemaExists(options.schema ?? DEFAULT_SCHEMA, projectRoot);
     const schema = resolveSchema(schemaName, projectRoot);
     const graph = ArtifactGraph.fromSchema(schema);

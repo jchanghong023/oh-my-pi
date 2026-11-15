@@ -13,7 +13,6 @@ import {
 } from '../../utils/nested-change.js';
 import * as fs from 'fs';
 import { getSchemaDir, listSchemas } from '../../core/artifact-graph/index.js';
-import type { ReferenceIndexEntry } from '../../core/references.js';
 import { isRootSelectionError } from '../../core/root-selection.js';
 
 // -----------------------------------------------------------------------------
@@ -63,8 +62,6 @@ export interface ApplyInstructions {
   /** Non-blocking problems with the change, reported alongside the instruction. */
   warnings?: string[];
   instruction: string;
-  /** Referenced-store index (read-only upstream context; omitted when none declared) */
-  references?: ReferenceIndexEntry[];
   /** Current project background from the selected root. */
   context?: string;
   /** Current advisory guidance for apply. */
@@ -203,12 +200,9 @@ function validateChangeLookupName(changeName: string): string | undefined {
 export async function validateChangeExists(
   changeName: string | undefined,
   projectRoot: string,
-  changesDir = path.join(projectRoot, 'openspec', 'changes'),
-  hints: { newChangeHint?: string } = {}
+  changesDir = path.join(projectRoot, 'openspec', 'changes')
 ): Promise<string> {
-  // Hints must stay pasteable: callers with a selected store pass a
-  // store-carrying hint so following it lands in the same root.
-  const newChangeHint = hints.newChangeHint ?? 'omp openspec new change <name>';
+  const newChangeHint = 'omp openspec new change <name>';
 
   if (!changeName) {
     const available = await getAvailableChanges(projectRoot, changesDir);

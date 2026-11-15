@@ -11,9 +11,7 @@ import { VALIDATION_MESSAGES } from '../core/validation/constants.js';
 import {
   resolveRootForCommand,
   toRootOutput,
-  withStoreFlag,
   type ResolvedOpenSpecRoot,
-  isStoreSelectedRoot,
 } from '../core/root-selection.js';
 import { canRenderSpinner, isInteractive, resolveNoInteractive } from '../utils/interactive.js';
 import { getSpecIds } from '../utils/item-discovery.js';
@@ -39,8 +37,6 @@ interface ExecuteOptions {
   noInteractive?: boolean;
   interactive?: boolean; // Commander sets this to false when --no-interactive is used
   concurrency?: string;
-  store?: string;
-  storePath?: string;
 }
 
 interface BulkItemResult {
@@ -110,9 +106,9 @@ export class ValidateCommand {
             : options.changes ? 'changes' : 'specs';
       }
     }
-    const root = await resolveRootForCommand(options, {
+    const root = await resolveRootForCommand({
       json: options.json,
-      ...(bulk ? { allowImplicitRoot: false } : {}),
+      ...(bulk || options.archived ? { allowImplicitRoot: false } : {}),
     });
     if (!root) {
       return;
@@ -170,7 +166,7 @@ export class ValidateCommand {
         await this.runInteractiveSelector(root, { strict: !!options.strict, json: !!options.json, concurrency: options.concurrency });
         return;
       }
-      this.printNonInteractiveHint(root);
+      this.printNonInteractiveHint();
       process.exitCode = 1;
       return;
     }
@@ -229,12 +225,12 @@ export class ValidateCommand {
     await this.validateByType(root, picked.type, picked.id, opts);
   }
 
-  private printNonInteractiveHint(root: ResolvedOpenSpecRoot): void {
+  private printNonInteractiveHint(): void {
     console.error('Nothing to validate. Try one of:');
-    console.error(`  ${withStoreFlag(root, 'omp openspec validate --all')}`);
-    console.error(`  ${withStoreFlag(root, 'omp openspec validate --changes')}`);
-    console.error(`  ${withStoreFlag(root, 'omp openspec validate --specs')}`);
-    console.error(`  ${withStoreFlag(root, 'omp openspec validate <item-name>')}`);
+    console.error('  omp openspec validate --all');
+    console.error('  omp openspec validate --changes');
+    console.error('  omp openspec validate --specs');
+    console.error('  omp openspec validate <item-name>');
     console.error('Or run in an interactive terminal.');
   }
 
@@ -287,12 +283,7 @@ export class ValidateCommand {
         return;
       }
       console.error(`Ambiguous item '${itemName}' matches both a change and a spec.`);
-      // The noun-form commands are cwd-based and cannot reach a selected store.
-      if (isStoreSelectedRoot(root)) {
-        console.error('Pass --type change|spec.');
-      } else {
-        console.error('Pass --type change|spec, or use: omp openspec change validate / openspec spec validate');
-      }
+      console.error('Pass --type change|spec.');
       process.exitCode = 1;
       return;
     }
@@ -422,7 +413,7 @@ export class ValidateCommand {
     } else if (type === 'change') {
       bullets.push('- Ensure change has deltas in specs/: use headers ## ADDED/MODIFIED/REMOVED/RENAMED Requirements');
       bullets.push('- Each requirement MUST include at least one #### Scenario: block');
-      bullets.push(`- Debug parsed deltas: ${withStoreFlag(root, `omp openspec show ${id} --json --deltas-only`)}`);
+      bullets.push(`- Debug parsed deltas: omp openspec show ${id} --json --deltas-only`);
     } else {
       bullets.push('- Ensure spec includes ## Purpose and ## Requirements sections');
       bullets.push('- Each requirement MUST include at least one #### Scenario: block');
@@ -456,9 +447,8 @@ export class ValidateCommand {
   private printBulkDetails(results: BulkItemResult[], root: ResolvedOpenSpecRoot): void {
     const firstFailure = results.find((res) => !res.valid);
     if (firstFailure) {
-      const storeFlag = isStoreSelectedRoot(root) ? ` --store ${root.storeId}` : '';
       console.log(
-        `Details: omp openspec validate ${firstFailure.id} --type ${firstFailure.type}${storeFlag}`
+        `Details: omp openspec validate ${firstFailure.id} --type ${firstFailure.type} (run from ${root.path})`
       );
     }
   }

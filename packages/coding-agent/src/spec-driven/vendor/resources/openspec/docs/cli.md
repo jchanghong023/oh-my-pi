@@ -7,9 +7,8 @@ The OpenSpec CLI (`openspec`) provides terminal commands for project setup, vali
 | Category | Commands | Purpose |
 |----------|----------|---------|
 | **Setup** | `init` | Initialize project structure and configuration |
-| **Stores (standalone OpenSpec repos)** | `store setup`, `store register`, `store unregister`, `store remove`, `store list`, `store doctor` | Manage stores — standalone OpenSpec repos you've registered |
-| **Health** | `doctor` | Report relationship health for the resolved root |
-| **Working context** | `context` | Assemble the working set (root + referenced stores) |
+| **Health** | `doctor` | Report local project configuration and planning-directory health |
+| **Working context** | `context` | Report the local OpenSpec root or write a single-root editor workspace |
 | **Personal worksets** | `workset create`, `workset list`, `workset open`, `workset remove` | Keep and open personal, local working views in your tool |
 | **Browsing** | `list`, `view`, `show` | Explore changes and specs |
 | **Validation** | `validate` | Check changes and specs for issues |
@@ -49,14 +48,10 @@ These commands support `--json` output for programmatic use by AI agents and scr
 | `omp openspec status` | See artifact progress | `--json` for structured status |
 | `omp openspec instructions` | Get next steps | `--json` for agent instructions |
 | `omp openspec templates` | Find template paths | `--json` for path resolution |
-| `omp openspec schemas` | List available schemas | `--json` for schema discovery; `--store <id>` to select a registered root |
-| `omp openspec store setup <id>` | Create and register a local store | `--json` with explicit inputs for structured setup output |
-| `omp openspec store register <path>` | Register an existing store | `--json` for structured registration output |
-| `omp openspec store unregister <id>` | Forget a local store registration | `--json` for structured cleanup output |
-| `omp openspec store remove <id>` | Delete a registered local store folder | `--yes --json` for non-interactive deletion |
-| `omp openspec store list` | Browse registered stores | `--json` for structured registrations |
-| `omp openspec store doctor` | Check local store setup | `--json` for structured diagnostics |
-| `omp openspec new change <id>` | Create repo-local change scaffolding | `--json`, plus `--store <id>` to use a registered store as the OpenSpec root |
+| `omp openspec schemas` | List available schemas | `--json` for schema discovery |
+| `omp openspec new change <id>` | Create project-local change scaffolding | `--json` for structured output |
+| `omp openspec doctor` | Check the local project | `--json` for root health and configuration path |
+| `omp openspec context` | Inspect the local root | `--json` for structured context |
 | `omp openspec workset create [name]` | Compose a personal working view | `--member <path> --json` for non-interactive composition |
 | `omp openspec workset list` | Browse saved worksets | `--json` for structured views |
 | `omp openspec workset remove <name>` | Delete a saved view | `--yes --json` for non-interactive removal |
@@ -85,7 +80,7 @@ Initialize the explicitly selected project, not Skill delivery. No standalone Op
 omp openspec init [path] [--language <language>]
 ```
 
-The target defaults to the current directory. Initialization creates project structure and configuration with `spec-driven` as the default schema. Existing configuration is preserved; a conflicting language request fails rather than overwriting context. Store pointers are not converted into local planning roots. Obtain explicit authorization before initializing an uninitialized project.
+The target defaults to the current directory. Initialization creates project structure and configuration with `spec-driven` as the default schema. Existing configuration is preserved; a conflicting language request fails rather than overwriting context. Unsupported project `store` or `references` fields fail even when empty or null. Obtain explicit authorization before initializing an uninitialized project.
 
 It does not create, update, or remove user Skills, Agent directories, legacy command files, or global prompts. All 12 Skills are already bundled with OMP and discoverable in any directory. There are no `--tools`, `--profile`, or cleanup options.
 
@@ -98,179 +93,38 @@ openspec/
 
 Upgrade OMP to update resources. CLI `update` and file-based `opsx` commands are removed; `openspec-update-change` remains the planning-material editing Skill.
 
-## Stores (standalone OpenSpec repos)
+## Project root
 
-> **Beta.** Stores and the features built on them (references, working context, worksets) are new; command names, flags, file formats, and JSON output may change shape between releases. For the problem-first walkthrough, see the [stores guide](stores-beta/user-guide.md).
+Root-resolving commands use the nearest ancestor project directory containing `openspec/`, including when invoked from a subdirectory. The root is the project directory, not `openspec/` itself. A nested project uses its own nearest root; adjacent projects are not searched.
 
-A store is a standalone OpenSpec repo you've registered on this machine — for example a planning repo or a contracts repo. Registering a store lets normal commands (`list`, `show`, `status`, `validate`, `new change`, `archive`, ...) act in it from anywhere by passing `--store <id>`.
+Commands that allow an implicit root fall back to the current directory when none exists; `context`, `doctor`, and bulk validation require an existing root. `list` also requires a root unless the current directory has legacy `openspec/project.md`. A fallback does not authorize an agent to initialize a project.
 
-### `omp openspec store setup`
+External Stores are not supported. The `store` command and `--store` / `--store-path` options are unknown commands or options. Project `store` and `references` fields are rejected regardless of value; global `defaultStore` does not route commands. Existing external repositories and machine-local data are left untouched and are not automatically migrated.
 
-Create and register a local store. With no arguments in a terminal,
-OpenSpec guides the user through setup. Agents and scripts should pass explicit
-inputs and use `--json`.
+## Doctor (local project health)
 
-```bash
-omp openspec store setup [id] [options]
-```
-
-**Options:**
-
-| Option | Description |
-|--------|-------------|
-| `--path <path>` | Folder where the store should live (for example `~/openspec/<id>`) |
-| `--remote <url>` | Record the canonical remote in the new store's `store.yaml` |
-| `--init-git` | Initialize a Git repository with an initial commit (default) |
-| `--no-init-git` | Skip every Git action: no init, no initial commit |
-| `--json` | Output JSON |
-
-Non-interactive runs (`--json`, scripts, agents) must pass both the store id and `--path`. In an interactive terminal, setup prompts for the location with an editable suggestion in a visible, user-owned place (for example `~/openspec/<id>`); it never defaults to OpenSpec's managed data directory.
-
-Examples:
+Ask "Is my setup healthy?" with a read-only check of the local project:
 
 ```bash
-omp openspec store setup
-omp openspec store setup team-context
-omp openspec store setup team-context --path ~/openspec/team-context --no-init-git
-omp openspec store setup team-context --path ~/openspec/team-context --no-init-git --json
+omp openspec doctor [--json]
 ```
 
-### `omp openspec store register`
+The report identifies the project root and configuration path, checks the configuration file and planning directories, and reports diagnostics. Missing optional `specs/`, `changes/`, or `changes/archive/` directories are allowed; paths that exist but are not directories are unhealthy. Doctor never repairs files or performs Git operations. Health findings exit 0; command failures such as a missing root or invalid project configuration exit 1.
 
-Register an existing local store folder. During the stores beta, a root may be
-registered before any changes exist, specs have been applied, or changes have
-been archived; in that case `openspec/changes/`, `openspec/specs/`, and
-`openspec/changes/archive/` may be absent until normal commands create them.
-A config-only repo that declares `store: <id>` remains a pointer to another
-store and is not registered as a store root unless that pointer is removed.
+## Working context (local project)
+
+Ask "What project am I working with?" without changing planning files:
 
 ```bash
-omp openspec store register [path] [options]
+omp openspec context [--json] [--code-workspace <path> [--force]]
 ```
 
-**Options:**
+The report contains the local root and its planning-directory diagnostics. `--code-workspace` additionally writes a VS Code workspace file containing just that project root — the only write this command performs. The parent directory must already exist, and an existing file is refused without `--force`. In JSON mode the write completes before the report is printed, so a write failure produces only the failure document.
 
-| Option | Description |
-|--------|-------------|
-| `--id <id>` | Store id; defaults to store metadata or folder name |
-| `--yes` | Confirm creating store identity metadata for a healthy OpenSpec root |
-| `--json` | Output JSON |
+This working context is distinct from the `context:` field in `openspec/config.yaml`, which supplies project background to instructions. For exact output shapes, see the [agent contract](agent-contract.md).
 
-### `omp openspec store unregister`
-
-Forget a local store registration without deleting files.
-
-```bash
-omp openspec store unregister <id> [--json]
-```
-
-Use this when a store was moved, cloned somewhere else, or should no longer be
-shown by OpenSpec on this machine.
-
-### `omp openspec store remove`
-
-Forget a local store registration and delete its local folder.
-
-```bash
-omp openspec store remove <id> [--yes] [--json]
-```
-
-`remove` shows the exact folder before deleting in an interactive terminal.
-Agents, scripts, and JSON callers must pass `--yes` to confirm deletion.
-OpenSpec refuses to delete a folder that does not contain matching
-store metadata.
-
-### `omp openspec store list`
-
-List locally registered stores.
-
-```bash
-omp openspec store list [--json]
-omp openspec store ls [--json]
-```
-
-### `omp openspec store doctor`
-
-Check local store registration, metadata, and Git presence.
-
-```bash
-omp openspec store doctor [id] [--json]
-```
-
-Doctor is diagnostic-only; it reports missing roots, metadata mismatches, and invalid local registry state without modifying the store.
-
-### Referencing stores from a project
-
-A project repo can declare which stores its work draws on in `openspec/config.yaml`:
-
-```yaml
-schema: spec-driven
-references:
-  - team-context
-```
-
-From then on, `omp openspec instructions` output in that repo (both the per-artifact and `apply` surfaces, JSON and human modes) carries an index of each referenced store's specs — spec ids, a one-line summary from each spec's Purpose section, and the fetch command (`omp openspec show <spec-id> --type spec --store <id>`). The index is built live from the registered checkout on every run; spec content is never copied into the output.
-
-References are read-only context. They never change where commands act: work stays in the repo's own root, and writing to a referenced store remains an explicit `--store` action. A reference that cannot be resolved (for example, a store not registered on this machine) degrades to a warning in the index with the exact fix, and instructions still generate. `omp openspec doctor` reports reference health in one place.
-
-### Recording where a store is cloned from
-
-A store can record its canonical clone source in its committed identity file, so onboarding never dead-ends at "register the store":
-
-```bash
-omp openspec store setup team-context --path ~/openspec/team-context \
-  --remote git@github.com:acme/team-context.git
-```
-
-The remote lands in `.openspec-store/store.yaml` inside the initial commit, so every clone is born knowing it. For an existing store, edit `store.yaml` by hand and commit. `store doctor` shows the recorded remote (and the checkout's observed Git origin); setup/register sharing guidance names it; and register records the checkout's origin in the machine-local registry.
-
-A reference declaration can carry the clone source too, so a teammate who doesn't have the store yet gets a complete, pasteable fix (`git clone <remote> <path> && omp openspec store register <path> --id <id>`):
-
-```yaml
-references:
-  - { id: team-context, remote: "git@github.com:acme/team-context.git" }
-```
-
-Recording a remote is not sync: OpenSpec never clones, pulls, or pushes on its own.
-
-### Declaring a default store
-
-A repo whose planning is fully externalized — no local `openspec/specs/` or `openspec/changes/` — can declare its store once instead of passing `--store` on every command:
-
-```yaml
-# openspec/config.yaml (the only file under openspec/)
-store: team-context
-```
-
-Normal commands then resolve to the declared store automatically; the root banner and JSON `root` block report `source: "declared"` with the store id, and printed hints still carry `--store <id>`. The declaration is a fallback, never an override: explicit `--store` always wins, and a directory with real planning folders ignores the pointer (with a warning). To convert a pointer repo into a local OpenSpec root, remove the `store:` line and run `omp openspec init` — init refuses to scaffold while the declaration is present.
-
-A machine-level variant covers every repo at once: `omp openspec config set defaultStore <id>` (see Configuration). It is consulted only after `--store`, a local root, and a project pointer have all failed to resolve; the root banner and JSON `root` block then report `source: "global_default"`.
-
-## Doctor (relationship health)
-
-One read-only question, one place: is the OpenSpec root healthy, and are the stores it references available on this machine?
-
-```bash
-omp openspec doctor [--store <id>] [--json]
-```
-
-The report separates root health, store metadata health (including a note when the recorded remote and the checkout's origin diverge, and a note when the store checkout has drifted behind its last-fetched upstream tracking ref), and reference health (the same diagnostics instructions show, with clone fixes for unresolved references). Health findings of any severity exit 0 — agents read the `status` arrays; only command failures (no root, unknown store) exit 1. Doctor never clones, syncs, or repairs. To get the assembled set itself rather than its health, use `omp openspec context`.
-
-## Working context (the assembled set)
-
-Everything this work relates to through OpenSpec declarations, in one working set: the OpenSpec root and the stores it references.
-
-```bash
-omp openspec context [--store <id>] [--json] [--code-workspace <path> [--force]]
-```
-
-The JSON brief is agent-consumable (each available referenced store carries its fetch recipe; unresolved members carry the same fixes instructions and doctor show). `--code-workspace` additionally writes a VS Code workspace file containing the root plus the available referenced stores (`ref:<id>` folders) — the one write this command performs, refused without `--force` if the file exists. Unavailable members are reported, never guessed at.
-
-"Working context" is the assembled set; the `context:` field in `openspec/config.yaml` is project background injected into instructions — two different things. `omp openspec doctor` answers whether the set is healthy; `omp openspec context` answers what the set is.
 
 ## Personal worksets
-
-> **Beta.** Worksets are part of the new beta surface; commands, flags, and file formats may change shape between releases. For the walkthrough, see the [stores guide](stores-beta/user-guide.md#worksets-reopen-the-folders-you-work-on-together).
 
 A workset is a personal, named view of the folders you work on together — a planning root plus whatever else you choose — kept on your machine and reopened by name in your tool. It is purely local: never committed, never shared, never derived from declarations, and removing one never touches a member folder.
 
@@ -280,6 +134,19 @@ omp openspec workset list [--json]
 omp openspec workset open <name> [--tool <id>]
 omp openspec workset remove <name> [--yes] [--json]
 ```
+
+For example, keep two component repositories open together:
+
+```bash
+omp openspec workset create checkout-promo \
+  --member ~/src/checkout-api \
+  --member ~/src/checkout-web \
+  --tool code
+omp openspec workset list
+omp openspec workset open checkout-promo
+```
+
+`workset ls` is an alias for `workset list`. Opening folders does not copy their source into planning context, change root selection, route tasks between repositories, or grant an agent permission to edit them.
 
 `create` runs a short guided flow (or takes `--member` flags non-interactively; the first member is the primary — sessions start there). `open` launches the chosen tool: editors (VS Code, Cursor) open a window with every member and return; CLI agents (Claude Code, codex) take over this terminal as a session with every member attached and no prompt pre-filled, ending when you exit. A member folder missing at open time is skipped with a note; the rest opens. The saved tool preference is overridable per open with `--tool`.
 
@@ -294,7 +161,7 @@ Supporting a new tool is configuration, not code. Every tool is one of two launc
 }
 ```
 
-All workset state lives under the global data dir's `worksets/` folder (the saved views plus the generated `<name>.code-workspace` files, regenerated on every open); deleting that folder removes every trace.
+All workset state lives under the global data dir's `worksets/` folder (the saved views plus generated `<name>.code-workspace` files, regenerated on every open). The data dir is `~/.local/share/openspec` on macOS and Linux, `$XDG_DATA_HOME/openspec` when set, or `%LOCALAPPDATA%\openspec` on Windows. Remove a saved view with `workset remove <name>`; member directories are never deleted.
 
 ---
 
@@ -614,14 +481,13 @@ or `00001-add-auth`.
 | `--description <text>` | Description to add to `README.md` |
 | `--goal <text>` | Optional goal metadata to store with the change |
 | `--schema <name>` | Workflow schema to use |
-| `--store <id>` | Store id to use as the OpenSpec root (a store is a standalone OpenSpec repo you've registered) |
 | `--json` | Output JSON |
 
 Examples:
 
 ```bash
 omp openspec new change add-billing-api
-omp openspec new change add-billing-api --store team-context --json
+omp openspec new change add-billing-api --json
 ```
 
 ### `omp openspec status`
@@ -752,7 +618,7 @@ omp openspec instructions design --change add-dark-mode --json
 - Per-artifact rules from config
 - Current project context and matching operation guidance for `apply`/`archive`
 
-Operation inputs are read from the resolved repo or selected store on every
+Operation inputs are read from the resolved repo on every
 invocation. Project context is a required prompt-level input: agents read it and
 apply relevant project facts, conventions, and constraints. Operation guidance is
 optional additive advice: agents consider every entry and follow only entries that
@@ -823,7 +689,6 @@ omp openspec schemas [options]
 | Option | Description |
 |--------|-------------|
 | `--json` | Output as JSON |
-| `--store <id>` | Use a registered store as the OpenSpec root |
 
 **Example:**
 
@@ -1053,10 +918,6 @@ omp openspec config set user.name "My Name" --string
 
 # Remove a custom setting
 omp openspec config unset user.name
-
-# Set a machine-level default store (fallback root when no --store,
-# local root, or project store: pointer resolves)
-omp openspec config set defaultStore team-plans
 
 # Reset all configuration
 omp openspec config reset --all --yes

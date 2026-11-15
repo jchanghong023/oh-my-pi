@@ -3,10 +3,8 @@ import { getActiveChangeIds, getSpecIds } from '../utils/item-discovery.js';
 import {
   resolveRootForCommand,
   toRootOutput,
-  withStoreFlag,
   type ResolvedOpenSpecRoot,
   type RootOutput,
-  isStoreSelectedRoot,
 } from '../core/root-selection.js';
 import { ChangeCommand } from './change.js';
 import { SpecCommand } from './spec.js';
@@ -21,14 +19,12 @@ interface ShowExecuteOptions {
   json?: boolean;
   type?: string;
   noInteractive?: boolean;
-  store?: string;
-  storePath?: string;
   [k: string]: any;
 }
 
 export class ShowCommand {
   async execute(itemName?: string, options: ShowExecuteOptions = {}): Promise<void> {
-    const root = await resolveRootForCommand(options, { json: options.json });
+    const root = await resolveRootForCommand({ json: options.json });
     if (!root) {
       return;
     }
@@ -49,7 +45,7 @@ export class ShowCommand {
         await this.runInteractiveByType(type, options, root);
         return;
       }
-      this.printNonInteractiveHint(root);
+      this.printNonInteractiveHint();
       process.exitCode = 1;
       return;
     }
@@ -167,12 +163,7 @@ export class ShowCommand {
         return;
       }
       console.error(`Ambiguous item '${itemName}' matches both a change and a spec.`);
-      // The noun-form commands are cwd-based and cannot reach a selected store.
-      if (isStoreSelectedRoot(root)) {
-        console.error('Pass --type change|spec.');
-      } else {
-        console.error('Pass --type change|spec, or use: omp openspec change show / openspec spec show');
-      }
+      console.error('Pass --type change|spec.');
       process.exitCode = 1;
       return;
     }
@@ -187,17 +178,11 @@ export class ShowCommand {
     await cmd.show(itemName, this.delegateOptions(root, params.options) as any);
   }
 
-  private printNonInteractiveHint(root: ResolvedOpenSpecRoot): void {
+  private printNonInteractiveHint(): void {
     console.error('Nothing to show. Try one of:');
-    console.error(`  ${withStoreFlag(root, 'omp openspec show <item>')}`);
-    if (isStoreSelectedRoot(root)) {
-      // The noun-form commands are cwd-based and cannot reach a selected store.
-      console.error(`  ${withStoreFlag(root, 'omp openspec show <item> --type change')}`);
-      console.error(`  ${withStoreFlag(root, 'omp openspec show <item> --type spec')}`);
-    } else {
-      console.error('  omp openspec change show');
-      console.error('  openspec spec show');
-    }
+    console.error('  omp openspec show <item>');
+    console.error('  omp openspec show <item> --type change');
+    console.error('  omp openspec show <item> --type spec');
     console.error('Or run in an interactive terminal.');
   }
 

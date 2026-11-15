@@ -19,6 +19,8 @@ import {
 import type { SchemaYaml, Artifact } from '../core/artifact-graph/types.js';
 import { resolveConfigFilePath } from '../core/project-config.js';
 import { FileSystemUtils } from '../utils/file-system.js';
+import { resolveOpenSpecRoot } from '../core/root-selection.js';
+import { emitFailure } from './shared-output.js';
 
 /**
  * Schema source location type
@@ -513,7 +515,7 @@ const DEFAULT_ARTIFACTS: Array<{
 
 export async function schemaWhichCommand(name?: string, options?: { json?: boolean; all?: boolean }): Promise<void> {
   try {
-    const projectRoot = process.cwd();
+    const projectRoot = (await resolveOpenSpecRoot({ allowImplicitRoot: true })).path;
 
     if (options?.all) {
       // List all schemas
@@ -602,14 +604,13 @@ export async function schemaWhichCommand(name?: string, options?: { json?: boole
       }
     }
   } catch (error) {
-    console.error(`Error: ${(error as Error).message}`);
-    process.exitCode = 1;
+    emitFailure(options?.json, {}, error, 'schema_resolution_failed');
   }
 }
 
 export async function schemaValidateCommand(name?: string, options?: { json?: boolean; verbose?: boolean }): Promise<void> {
   try {
-    const projectRoot = process.cwd();
+    const projectRoot = (await resolveOpenSpecRoot({ allowImplicitRoot: true })).path;
 
     if (!name) {
       // Validate all project schemas
@@ -759,7 +760,7 @@ export async function schemaForkCommand(source: string, name?: string, options?:
   }
 
   try {
-    const projectRoot = process.cwd();
+    const projectRoot = (await resolveOpenSpecRoot({ allowImplicitRoot: true })).path;
     const destinationName = name || `${source}-custom`;
 
     // Validate destination name
@@ -1016,7 +1017,7 @@ export async function schemaInitCommand(
   }
 
   try {
-    const projectRoot = process.cwd();
+    const projectRoot = (await resolveOpenSpecRoot({ allowImplicitRoot: true })).path;
 
     // Validate name
     if (!isValidSchemaName(name)) {

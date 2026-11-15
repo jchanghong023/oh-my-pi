@@ -8,7 +8,7 @@ import {
 } from '../core/change-metadata/index.js';
 import { listSchemas, resolveSchema } from '../core/artifact-graph/resolver.js';
 import { readProjectConfig, type ProjectConfig } from '../core/project-config.js';
-import { sanitizeInline } from '../core/references.js';
+import { sanitizeInline } from './text.js';
 
 export const METADATA_FILENAME = '.openspec.yaml';
 
@@ -20,8 +20,7 @@ export { CHANGE_METADATA_KNOWN_KEYS };
  * owner). OpenSpec ignores it and does not report it as unknown. As with
  * OpenAPI's `x-` extensions, the name after the prefix may use any case or
  * spelling, but must be non-empty and free of whitespace, so `x-`, `x- foo`
- * and `X-Foo` are still reported. Extensions are top-level only: a key inside
- * `initiative:` is rejected by that object's strict schema.
+ * and `X-Foo` are still reported. Extensions are top-level only.
  */
 export const EXTENSION_KEY_PATTERN = /^x-\S+$/;
 
@@ -323,7 +322,7 @@ export type SkipSpecsMarker = MetadataMarker;
  * Validate and archive must never honor metadata the rest of the CLI rejects,
  * in either direction. The project root for schema resolution is derived from
  * changeDir exactly like resolveSchemaForChange (changeDir is
- * <root>/openspec/changes/<name> for every root type, including store roots).
+ * <root>/openspec/changes/<name> for the resolved local project root).
  * Missing metadata means "not declared"; a marker that cannot be honored
  * yields invalidReason so callers can say why.
  */

@@ -10,10 +10,8 @@ import ora from 'ora';
 import * as fs from 'fs';
 import { FileSystemUtils } from '../utils/file-system.js';
 import {
-  classifyOpenSpecDir,
   MAX_CONTEXT_SIZE,
   readProjectConfig,
-  storePointerProblem,
 } from './project-config.js';
 import { findRepoPlanningRootSync } from './planning-home.js';
 import { ANCHORED_OPENSPEC_DIRS, ensureDirectoryAnchor } from './openspec-root.js';
@@ -65,29 +63,15 @@ export class InitCommand {
     const openspecDir = OPENSPEC_DIR_NAME;
     const openspecPath = path.join(projectPath, openspecDir);
 
+
+    // Validate unsupported project fields before creating any planning material.
+    readProjectConfig(projectPath);
+    const guardRoot = findRepoPlanningRootSync(projectPath);
+    if (guardRoot && guardRoot !== projectPath) {
+      readProjectConfig(guardRoot);
+    }
     // Validation happens silently in the background
     const extendMode = await this.validate(projectPath, openspecPath);
-
-    // Reject external planning pointers before prompts, migration, or writes.
-    const guardRoot = findRepoPlanningRootSync(projectPath);
-    if (guardRoot) {
-      const { hasPlanningShape, pointer } = classifyOpenSpecDir(guardRoot);
-      if (!hasPlanningShape) {
-        if (pointer.malformed) {
-          throw new Error(
-            `The store declaration in ${pointer.filePath} is invalid (` +
-              storePointerProblem(pointer.malformed) +
-              `). Fix or remove the store: line before running omp openspec init.`
-          );
-        }
-        if (pointer.value !== undefined) {
-          throw new Error(
-            `This repo's planning is externalized to store '${pointer.value}' (${pointer.filePath}). ` +
-              'Run omp openspec init in the store root instead.'
-          );
-        }
-      }
-    }
 
     await this.assertLanguageCanBeApplied(projectPath, openspecPath);
 
