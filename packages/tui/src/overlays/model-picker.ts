@@ -221,7 +221,6 @@ export class ModelPickerComponent implements Component {
 
 	invalidate(): void {}
 
-	/** Rebuild model items and role chips from the registry's in-memory state. */
 	#candidateItems(query: string): ModelBrowserItem[] {
 		return (this.#getCandidates?.(query) ?? []).map(model => ({
 			model,
@@ -231,6 +230,7 @@ export class ModelPickerComponent implements Component {
 		}));
 	}
 
+	/** Rebuild model items and role chips from the registry's in-memory state. */
 	#syncFromRegistryState(): void {
 		if (this.#getCandidates) {
 			this.#modelItems = this.#candidateItems("");
@@ -396,7 +396,7 @@ export class ModelPickerComponent implements Component {
 	}
 
 	#describePicker(): NativeNode {
-		const mode = this.#selectOnly ? "selection" : this.#taskMode ? "task" : this.#roleMode ? "role" : "session";
+		const mode = this.#taskMode ? "task" : this.#roleMode ? "role" : this.#selectOnly ? "selection" : "session";
 		const query = this.#browser.query;
 		const view = this.#browser.pickerOrder({
 			providers: false,
@@ -472,7 +472,7 @@ export class ModelPickerComponent implements Component {
 
 	/** Root card over the status line, the embedded browser, and the mode's key hints. */
 	#describeCard(): NativeNode {
-		const mode = this.#selectOnly ? "selection" : this.#taskMode ? "task" : this.#roleMode ? "role" : "session";
+		const mode = this.#taskMode ? "task" : this.#roleMode ? "role" : this.#selectOnly ? "selection" : "session";
 		const memo = `${mode}\0${this.#configError ?? ""}\0${this.#taskModeKey ?? ""}`;
 		if (this.#nativeRoot?.memo === memo) return this.#nativeRoot.node;
 

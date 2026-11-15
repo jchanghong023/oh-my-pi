@@ -377,8 +377,6 @@ export interface ToolSession {
 	restrictToolNames?: boolean;
 	/** Caller admission policy shared by advertised tools and canonical execution. */
 	toolRestrictions?: ToolRestrictions;
-	/** Seance forks: the consulted session's artifacts dir, read in place by history://, artifact://, agent://. */
-	readonly seanceSourceArtifactsDir?: string;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
 	/** Get this agent's eval executor session ID; keys its retained JS/Python/Ruby/Julia state. */

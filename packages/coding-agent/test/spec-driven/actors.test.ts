@@ -10,7 +10,6 @@ import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import { Settings } from "../../src/config/settings";
 import { ModelRegistry } from "../../src/config/model-registry";
-import { sessionFilesFromDisk } from "../../src/internal-urls/registry-helpers";
 import { KnowledgeService } from "../../src/knowledge/service";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { AuthStorage } from "../../src/session/auth-storage";
@@ -418,9 +417,7 @@ test("real read-only task descendants retain indexed evidence but cannot edit di
 		throw new Error(`Completed native descendant ${child.id} is not retained in its actor's registry`);
 	expect(childRef.parentId).toBe(fixture.actor.id);
 	// Read the canonical transcript without reviving or replacing the retained child.
-	const artifactsDir = fixture.actor.session.sessionManager.getArtifactsDir();
-	if (!artifactsDir) throw new Error("Missing native actor artifacts directory");
-	const sessionFile = (await sessionFilesFromDisk(artifactsDir, { onlyPreferred: true })).get(child.id);
+	const sessionFile = childRef.session.sessionManager.getSessionFile();
 	if (!sessionFile) throw new Error(`Missing retained native transcript for descendant ${child.id}`);
 	const history = await SessionManager.open(sessionFile, undefined, undefined, {
 		initialCwd: fixture.cwd,

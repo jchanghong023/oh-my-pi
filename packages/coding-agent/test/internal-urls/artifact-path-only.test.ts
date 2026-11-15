@@ -10,7 +10,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import { InternalUrlFilesystem } from "@oh-my-pi/pi-coding-agent/internal-urls/url-filesystem";
-import type { ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
 import { resolveToolSearchScope } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 
 /**
@@ -122,23 +121,15 @@ describe("artifact:// attachment discovery", () => {
 		await fs.rm(root, { recursive: true, force: true });
 	});
 
-	it("locates, resolves and completes real runtime attachments including seance sources", async () => {
+	it("locates, resolves and completes registered runtime attachments", async () => {
 		const source = path.join(runtimeRoot, "source");
-		const own = path.join(runtimeRoot, "own");
 		await fs.mkdir(source);
-		await fs.mkdir(own);
 		const artifact = path.join(source, "0.bash.log");
 		await fs.writeFile(artifact, "runtime attachment");
 		registerArtifactsDir(source);
 		expect(await handler.locate(url)).toBe(artifact);
 		expect((await handler.resolve(url)).content).toBe("runtime attachment");
 		expect(await handler.complete()).toEqual([{ value: "0" }]);
-		const context: ResolveContext = {
-			localProtocolOptions: { getArtifactsDir: () => own },
-			session: { seanceSourceArtifactsDir: source } as ResolveContext["session"],
-		};
-		expect(await handler.locate(url, context)).toBe(artifact);
-		expect((await handler.resolve(url, context)).content).toBe("runtime attachment");
 	});
 
 	it("keeps ordinary-mode external directory links readable", async () => {

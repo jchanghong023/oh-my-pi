@@ -13,7 +13,6 @@ import forkreviewerMd from "../prompts/agents/forkreviewer.md" with { type: "tex
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import scoutMd from "../prompts/agents/scout.md" with { type: "text" };
 import securityReviewerMd from "../prompts/agents/security-reviewer.md" with { type: "text" };
-import seanceMd from "../prompts/agents/seance.md" with { type: "text" };
 import specDrivenMd from "../prompts/agents/spec-driven.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
@@ -50,7 +49,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "reviewer.md", template: reviewerMd },
 	{ fileName: "forkreviewer.md", template: forkreviewerMd },
 	{ fileName: "security-reviewer.md", template: securityReviewerMd },
-	{ fileName: "seance.md", template: seanceMd },
 	{ fileName: "developer-test-agent.md", template: developerTestAgentMd },
 	{
 		fileName: "spec-requirements.md",

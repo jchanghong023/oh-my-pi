@@ -43,7 +43,7 @@ import type { SessionContext } from "../session/session-context";
 import type { SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
 import type { DictationTarget } from "../stt";
-import type { SessionContinuation, SessionInfo } from "../session/session-listing";
+import type { SessionContinuation } from "../session/session-listing";
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { LspStartupServerInfo } from "../tools";
@@ -129,8 +129,6 @@ export interface InteractiveModeInitOptions {
 
 export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions &
 	Pick<HookSelectorOptions, "disabledIndices" | "inline">;
-
-export type SessionPickHandler = (session: SessionInfo) => void | Promise<void>;
 
 /** How {@link InteractiveModeContext.handleResumeSession} picks the file it opens. */
 export interface ResumeSessionOptions {
@@ -688,13 +686,13 @@ export interface InteractiveModeContext {
 	showModelSelector(options?: { temporaryOnly?: boolean; selectOnly?: SelectOnlyModelSelectorOptions }): void;
 	/** Session-only switch to an already-resolved model (`/switch <selector>`); compacts first when over context. */
 	switchSessionModel(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void>;
-	showPluginSelector(mode?: "install" | "uninstall"): void;
+	showPluginSelector(mode?: "install" | "uninstall"): Promise<void>;
 	showUserMessageSelector(startAt?: string): void;
 	showCopySelector(): void;
 	showTreeSelector(): void;
 	/** Open the `/effort` picker over the levels the current model accepts. */
 	showThinkingSelector(): void;
-	showSessionSelector(source?: ForeignSessionSource, onSelect?: SessionPickHandler): void;
+	showSessionSelector(source?: ForeignSessionSource): void;
 	/** Settle side requests before replacing the session or deleting its artifacts. */
 	prepareSessionSwitch(): Promise<void>;
 	handleResumeSession(sessionPath: string, options?: ResumeSessionOptions): Promise<void>;

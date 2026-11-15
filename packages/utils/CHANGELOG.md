@@ -17,6 +17,11 @@
 - Reuse upstream per-user test temp directories without overriding explicit persistent or performance roots for logs.
 - `ptree` commands spawned with `subreaper: true` no longer leave a descendant that ignores SIGTERM running after a graceful stop (an `AbortSignal`, `kill()` without a hard grace, or dispose); the subreaper stays alive through the grace period and the hard sweep then ends every descendant ([#18018](https://github.com/can1357/oh-my-pi/pull/18018) by [@sjawhar](https://github.com/sjawhar))
 
+### Fixed
+
+- Fixed HTML-to-Markdown conversion (web fetch, pasted HTML) dropping the spaces of whitespace-only inline elements (`Hello<span> </span>world` → `Helloworld`) and code indentation inside `<pre>` (Sphinx/Pygments blocks) ([#19263](https://github.com/can1357/oh-my-pi/pull/19263) by [@tuschla](https://github.com/tuschla)).
+- Fixed HTML-to-Markdown conversion leaving a lone-space line between block elements ([#19263](https://github.com/can1357/oh-my-pi/pull/19263) by [@tuschla](https://github.com/tuschla)).
+
 ## [18.20.2] - 2026-11-14
 
 ### Added

@@ -58,8 +58,8 @@ const claude = buildModel({
 	maxTokens: 128_000,
 });
 // Takes no image input.
-const deepseek = getBundledModel("deepseek", "deepseek-v4-flash");
-if (!deepseek) throw new Error("Expected bundled deepseek/deepseek-v4-flash");
+const deepseek = getBundledModel("fireworks", "deepseek-v4-flash");
+if (!deepseek) throw new Error("Expected bundled fireworks/deepseek-v4-flash");
 
 function assistant(model: Model, content: AssistantMessage["content"]): AssistantMessage {
 	return {
@@ -136,7 +136,7 @@ describe("snapcompact archive read by another model", () => {
 		authStorage = await AuthStorage.create(":memory:");
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		authStorage.keys.setRuntime("openai", "test-key");
-		authStorage.keys.setRuntime("deepseek", "test-key");
+		authStorage.keys.setRuntime("fireworks", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 	});
 

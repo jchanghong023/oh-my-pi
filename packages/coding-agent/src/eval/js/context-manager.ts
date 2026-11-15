@@ -1057,7 +1057,7 @@ function spawnJsProcess(): JsEvalWorkerHandle {
 	let spawned: SpawnedSubprocess<ProcessWorkerOutbound>;
 	try {
 		spawned = createWorkerSubprocess<ProcessWorkerOutbound>({
-			spawnCommand: resolveWorkerSpawnCmd(JS_EVAL_PROCESS_ARG),
+			spawnCommand: resolveWorkerSpawnCmd(JS_EVAL_PROCESS_ARG, { sameBuild: true }),
 			env: { ...workerEnvFromParent(), [JS_EVAL_OUTBOX_ENV]: outbox },
 			exitLabel: "JS eval worker",
 			detached: shouldDetachKernel(process.platform),

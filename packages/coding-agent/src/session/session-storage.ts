@@ -1511,7 +1511,8 @@ export class FileSessionStorage implements SessionStorage {
 				session_path_hash: `hash-${Bun.hash(sessionPath).toString(36)}`,
 			},
 			async () => {
-				purgeDeletedSessionRows(sessionPath, options);
+				// Capture the id before unlink, but preserve database rows if unlink fails.
+				const sessionId = readSessionHeaderIdSync(sessionPath);
 				const started = performance.now();
 				let stage = "primary_delete";
 				let primaryDeleted = false;
@@ -1534,9 +1535,19 @@ export class FileSessionStorage implements SessionStorage {
 					result: "started",
 				});
 				try {
-					// Delete the session file itself before any cleanup.
-					await this.unlink(sessionPath);
-					primaryDeleted = true;
+					// Already absent transcripts still purge rows, then rethrow ENOENT so
+					// callers retain their success handling without cleaning up artifacts.
+					let alreadyGone: unknown;
+					try {
+						await this.unlink(sessionPath);
+						primaryDeleted = true;
+					} catch (error) {
+						if (!isEnoent(error)) throw error;
+						alreadyGone = error;
+					}
+					// Best-effort: a busy dashboard store never fails the deletion itself.
+					purgeDeletedSessionRows(sessionPath, { ...options, sessionId });
+					if (alreadyGone) throw alreadyGone;
 					logger.info("Session deletion stage completed", {
 						...fields(),
 						event: "session_storage_delete_stage",

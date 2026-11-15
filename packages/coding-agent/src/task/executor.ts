@@ -138,7 +138,7 @@ import { resolveAgentPrewalkDefault } from "./prewalk";
 import { isReadOnlyAgent } from "./read-only-policy";
 import { formatTaskResultSummary } from "./result-summary";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
-import { recordStepsSent, type StepProgress } from "./steps";
+import { recordStepsSent, type StepProgress, type StepReportRoute, sendStepReport } from "./steps";
 import type { WorkPoolYieldItem } from "./workpool-yield";
 import {
 	type AgentDefinition,
@@ -148,8 +148,6 @@ import {
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "./types";
-import { seanceIsolationOptions } from "./seance-policy";
-import type { PreparedSeanceSession } from "./seance";
 import type { NativeSubagentHooks } from "./types";
 import type { StructuredSubagentRequest } from "./structured-subagent";
 import {
@@ -468,7 +466,6 @@ export interface ExecutorOptions {
 	 */
 	steps?: string[];
 	assignment?: string;
-	preparedSession?: PreparedSeanceSession;
 	/** Shared background from the task call (`task.batch`), rendered into the subagent's system prompt. */
 	context?: string;
 	/**
@@ -2560,6 +2557,24 @@ function resultDelivered(outcome: DriveOutcome, monitor: SubagentRunMonitor, str
 	return outcome.exitCode === 0 && !outcome.aborted && monitor.lastReportTurnText() !== undefined;
 }
 
+/** Every `yield` the run recorded, in call order. */
+function recordedYields(progress: AgentProgress): YieldItem[] {
+	return (progress.extractedToolData?.yield ?? []) as YieldItem[];
+}
+
+/**
+ * What the child delivered for a step: its yields from `firstYield` on, folded
+ * like a run's result, or without `yield` its final message. Undefined when it
+ * delivered no data.
+ */
+function stepReport(monitor: SubagentRunMonitor, structured: boolean, firstYield: number): string | undefined {
+	const lastTurn = monitor.lastReportTurnText();
+	if (!structured) return lastTurn;
+	const assembled = assembleYieldResult(recordedYields(monitor.progress).slice(firstYield), lastTurn);
+	if (!assembled || assembled.missingData) return undefined;
+	return typeof assembled.data === "string" ? assembled.data : JSON.stringify(assembled.data, null, 2);
+}
+
 const MAX_YIELD_RETRIES = 3;
 const MAX_PROMPT_DISPATCH_ATTEMPTS = 4;
 const PROMPT_DISPATCH_IDLE_TIMEOUT_MS = 5_000;
@@ -2605,9 +2620,11 @@ async function driveSessionToResult(
 		 * them); each later one is sent once the previous one was delivered.
 		 */
 		steps?: StepProgress;
+		/** Where what each prompt before the last delivered goes; unset, the reports go nowhere. */
+		stepReports?: StepReportRoute;
 	} = {},
 ): Promise<DriveOutcome> {
-	const { solutionSpace, onPromptBusy, restore, steps } = options;
+	const { solutionSpace, onPromptBusy, restore, steps, stepReports } = options;
 	const structured = options.structured !== false;
 	const abortSignal = monitor.abortSignal;
 	let exitCode = 0;
@@ -2706,6 +2723,8 @@ async function driveSessionToResult(
 		}
 	};
 
+	// Yields before this index belong to earlier steps (or an earlier turn).
+	let stepYieldStart = recordedYields(monitor.progress).length;
 	try {
 		if (steps && !restore) recordStepsSent(session.sessionManager, steps.sent, steps.prompts);
 		monitor.holdForSteps(steps !== undefined && steps.sent < steps.prompts.length);
@@ -2892,6 +2911,11 @@ async function driveSessionToResult(
 				? monitor.yieldCalled()
 				: session.getLastAssistantMessage()?.stopReason === "stop";
 			if (!delivered || abortSignal.aborted || monitor.budgetStopRequested()) break;
+			if (stepReports) {
+				const report = stepReport(monitor, structured, stepYieldStart);
+				if (report?.trim()) await awaitAbortable(sendStepReport(stepReports, report));
+			}
+			stepYieldStart = recordedYields(monitor.progress).length;
 			monitor.holdForSteps(next + 1 < steps.prompts.length);
 			monitor.beginStep();
 			resetYieldTurnState(session.getToolByName("yield"));
@@ -3040,7 +3064,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	// the narration of earlier turns.
 	const structured = args.structured !== false;
 	let rawOutput = structured ? monitor.rawOutput() : (monitor.lastReportTurnText() ?? "");
-	const yieldItems = progress.extractedToolData?.yield as YieldItem[] | undefined;
+	const yieldItems = recordedYields(progress);
 	// Breadcrumb the synchronous yield-payload shaping (O(rawOutput)) so a block
 	// here is attributed to this subagent rather than logged as "unknown".
 	pushLoopPhase(`subagent:${id}`);
@@ -3076,7 +3100,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	) {
 		rawOutput = `[cancelled after ${progress.requests} req, ${progress.tokens} tok — last activity: "${formatSalvageSnippet(salvageText)}"]`;
 	}
-	const lastYield = yieldItems?.[yieldItems.length - 1];
+	const lastYield = yieldItems.at(-1);
 	const yieldAbortReason = lastYield?.status === "aborted" ? lastYield.error || "Subagent aborted task" : undefined;
 	const { abortedViaYield, hasYield } = finalized;
 	const { content: truncatedOutput, truncated } = truncateTail(rawOutput, {
@@ -4104,12 +4128,14 @@ async function driveFollowUpTurn(
 	// As in a first run: this turn's monitor would take a wake turn's answer
 	// (or its `yield`) as this turn's result, so non-parent wakes wait for it.
 	const releaseIrcWakes = session.holdIrcWakes();
+	const parentId = AgentRegistry.global().get(id)?.parentId;
 	try {
 		try {
 			outcome = await driveSessionToResult(session, monitor, message, {
 				structured,
 				restore: options.restore,
 				steps: options.steps,
+				stepReports: parentId ? { from: id, to: parentId } : undefined,
 				onPromptBusy: async () => {
 					attemptUnsubscribe();
 					logger.debug("Subagent follow-up lost the prompt race to an IRC wake; backing off", { id });
@@ -4208,7 +4234,6 @@ interface SubagentSessionSpec {
 		| "resolveServiceTierByFamily"
 		| "onFirstChatDispatch"
 	>;
-	preparedSession?: Pick<PreparedSeanceSession, "promptSuffix">;
 	prompt: SubagentPromptInputs;
 	hooks?: NativeSubagentHooks;
 	request?: StructuredSubagentRequest;
@@ -4287,8 +4312,7 @@ function buildSubagentSessionOptions(
 			// Per-spawn text (context, worktree, IRC roster) goes after the trailing
 			// `<project-context>` block so spawns of the same agent share the static
 			// prompt prefix as a cache hit.
-			const seancePrompt = spec.preparedSession?.promptSuffix(inputs.model);
-			return [...defaultPrompt, subagentPrompt, ...(seancePrompt ? [seancePrompt] : [])];
+			return [...defaultPrompt, subagentPrompt];
 		},
 	};
 }
@@ -4518,9 +4542,8 @@ async function reviveAdmittedSubagent(
 	// Account pools are owner policy: take the live exact-name entry, as
 	// dispatch and persisted revival do, never the spawn-time copy.
 	const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(capture.settings.parent));
-	// Session-local handoffs own revival, except for seance and exact per-call models.
-	const sessionLocalModel =
-		capture.spec.preparedSession || capture.perCallModel ? undefined : reopened.getSessionLocalModelChange()?.model;
+	// Session-local handoffs own revival, except for exact per-call models.
+	const sessionLocalModel = capture.perCallModel ? undefined : reopened.getSessionLocalModelChange()?.model;
 	capture.spec.prompt.reviving = true;
 	try {
 		let sessionPromise: Promise<CreateAgentSessionResult> | undefined;
@@ -4689,7 +4712,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 		signal,
 		onProgress,
 	} = options;
-	const preparedSession = options.preparedSession;
 	const cleanupGraceMs = options.cleanupGraceMs ?? TASK_ABORT_CLEANUP_GRACE_MS;
 	const structured = options.structured !== false;
 	const startTime = Date.now();
@@ -4737,12 +4759,10 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 	// owner is its parent subagent) and lands on the child's
 	// `modelRoles.advisor`, preserving automatic aliases and explicit branches.
 	// The same role-aware pattern is persisted for cold revival.
-	const advisorSelection = preparedSession
-		? undefined
-		: resolveAgentAdvisorSelection({
-				settingsOverride: cfgTaskAgentAdvisor.get(settings)[agent.name],
-				agentAdvisor: agent.advisor,
-			});
+	const advisorSelection = resolveAgentAdvisorSelection({
+		settingsOverride: cfgTaskAgentAdvisor.get(settings)[agent.name],
+		agentAdvisor: agent.advisor,
+	});
 	const advisorRolePattern = advisorSelection?.model
 		? resolveAgentAdvisorRolePattern(advisorSelection.model, settings)
 		: undefined;
@@ -4773,7 +4793,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 	const childDepth = parentDepth + 1;
 	const restrictToolNames =
 		options.restrictToolNames === true ||
-		preparedSession !== undefined ||
 		(agent.source === "bundled" && ["spec-requirements", "spec-planner", "spec-executor"].includes(agent.name));
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
 
@@ -4812,7 +4831,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 	}
 	// Inbound steering works without messaging; outbound peer coordination requires write.
 	const ircEnabled =
-		!preparedSession &&
 		options.enableIrc !== false &&
 		isIrcEnabled(subagentSettings, childDepth) &&
 		(toolNames === undefined || toolNames.includes("write"));
@@ -4865,10 +4883,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 	let releaseIrcWakes: (() => void) | undefined;
 	let registryAbortUnsubscribe: (() => void) | null = null;
 	let reviveSession: AgentReviver | null = null;
-	let pendingSessionManager: Promise<SessionManager> | undefined;
-	let openedSessionManager: SessionManager | undefined;
-	let untrackedSession: AgentSession | undefined;
-	let pendingSessionDisposal: Promise<void> | undefined;
 	const wakeOptions: IrcWakeTurnMonitorOptions = {
 		id,
 		index,
@@ -5099,26 +5113,13 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				effortLevel ?? (explicitThinkingLevel ? explicitLevel : (thinkingLevel ?? resolvedThinkingLevel));
 			resolvedAt = performance.now();
 			const effectiveCwd = worktree ?? cwd;
-			const fork = preparedSession?.fork;
-			if (fork && !subtaskSessionFile) {
-				throw new Error("The prepared session fork requires a persisted child session file.");
-			}
-			const sessionManagerPromise = fork
-				? SessionManager.forkFrom(fork.sourceFile, effectiveCwd, undefined, undefined, {
-						seance: true,
+			const sessionManagerPromise = sessionFile
+				? SessionManager.open(sessionFile, undefined, undefined, {
+						initialCwd: effectiveCwd,
+						parentSession: options.sessionFile ?? undefined,
 						suppressBreadcrumb: true,
-						sessionFile: subtaskSessionFile,
-						resetInheritedCost: true,
-						repairInterruptedTail: true,
 					})
-				: sessionFile
-					? SessionManager.open(sessionFile, undefined, undefined, {
-							initialCwd: effectiveCwd,
-							parentSession: options.sessionFile ?? undefined,
-							suppressBreadcrumb: true,
-						})
-					: Promise.resolve(SessionManager.inMemory(effectiveCwd));
-			if (preparedSession) pendingSessionManager = sessionManagerPromise;
+				: Promise.resolve(SessionManager.inMemory(effectiveCwd));
 			// Setup below can fail before this promise's consumption boundary.
 			// Observe rejection immediately while preserving it for the later await.
 			sessionManagerPromise.catch(() => {});
@@ -5131,13 +5132,12 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			// worker never switches models, so it never prewalks.
 			const perCallModelGrants = options.perCallModelGrants;
 			let prewalk: Prewalk | undefined;
-			const prewalkPattern =
-				preparedSession || perCallModelGrants
-					? undefined
-					: resolveAgentPrewalkPattern({
-							settingsOverride: cfgTaskAgentPrewalk.get(settings)[agent.name],
-							agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings)),
-						});
+			const prewalkPattern = perCallModelGrants
+				? undefined
+				: resolveAgentPrewalkPattern({
+						settingsOverride: cfgTaskAgentPrewalk.get(settings)[agent.name],
+						agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings)),
+					});
 			if (prewalkPattern) {
 				await awaitAbortable(modelRegistry.awaitBackgroundRefresh());
 				const resolvedPrewalk = resolveModelOverride([prewalkPattern], modelRegistry, settings);
@@ -5294,10 +5294,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					subagentHooks: options.subagentHooks,
 					localProtocolOptions: options.localProtocolOptions,
 					telemetry: subagentTelemetry,
-					// Seance isolation overrides every inherited field above in one place.
-					...(preparedSession ? seanceIsolationOptions(effectiveCwd) : {}),
 				},
-				preparedSession: preparedSession ? { promptSuffix: preparedSession.promptSuffix } : undefined,
 				prompt: {
 					id,
 					model: progress.resolvedModel,
@@ -5317,16 +5314,13 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			};
 
 			const sessionManager = await awaitAbortable(sessionManagerPromise);
-			if (preparedSession) openedSessionManager = sessionManager;
-			if (options.parentArtifactManager && !preparedSession) {
+			if (options.parentArtifactManager) {
 				sessionManager.adoptArtifactManager(options.parentArtifactManager);
 			}
 			sessionOpenedAt = performance.now();
 			await refreshSubagentIrcRoot(sessionSpec.prompt, sessionManager, sessionFile);
 
-			// A seance fork inherits the source's model roles; they describe the
-			// source run, not this consult, so the consult still pins its own chain.
-			const hasExistingModelRole = !preparedSession && sessionManager.getLastModelChangeRole() !== undefined;
+			const hasExistingModelRole = sessionManager.getLastModelChangeRole() !== undefined;
 			// Subscribe before the builder mints proxies so a manager change during
 			// session startup is replayed on bind instead of lost.
 			let mcpFollower =
@@ -5377,7 +5371,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				sessionPromise = createAgentSession(configuredOptions);
 				({ session, interactionUI } = await awaitAbortable(sessionPromise));
 				disposeSessionObserver = observeSession?.(session) ?? undefined;
-				if (preparedSession) untrackedSession = session;
 				// Stash the sibling family candidate once the child session exists,
 				// independent of its initial model, so a later model change (retry
 				// fallback, model switch) still finds it. Consumption is gated per
@@ -5393,16 +5386,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				// Abort raced session startup. The session may still resolve later
 				// holding live LSP/MCP child processes — dispose it when it does so
 				// a cancelled subagent cannot leak them.
-				if (preparedSession) {
-					pendingSessionDisposal = sessionPromise
-						?.then(created => created.session.dispose())
-						.then(
-							() => {},
-							() => {},
-						);
-				} else {
-					void sessionPromise?.then(created => created.session.dispose()).catch(() => {});
-				}
+				void sessionPromise?.then(created => created.session.dispose()).catch(() => {});
 				throw err;
 			}
 			mcpFollower?.bind(session);
@@ -5421,7 +5405,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			sessionCreatedAt = performance.now();
 
 			monitor.setActiveSession(session);
-			if (preparedSession) untrackedSession = undefined;
 			// Run-state notifications precede deferrable wire-level `agent_end`,
 			// so adopted keep-alive lifecycle cannot get stuck during prompt unwind.
 			const registry = AgentRegistry.global();
@@ -5451,7 +5434,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					spec: sessionSpec,
 					perCallModel: perCallModelGrants !== undefined,
 					settings: captureSubagentSettings(settings, subagentSettings),
-					parentArtifactManager: preparedSession ? undefined : options.parentArtifactManager,
+					parentArtifactManager: options.parentArtifactManager,
 					keepTodo: prewalk !== undefined,
 					wake: wakeOptions,
 					agentName: agent.name,
@@ -5619,6 +5602,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				solutionSpace: options.solutionSpace,
 				structured,
 				steps: options.steps?.length ? { prompts: options.steps, sent: 1 } : undefined,
+				stepReports: options.parentAgentId ? { from: id, to: options.parentAgentId } : undefined,
 			});
 			// Acceptance boundary (#11079): the run's final result is settled, so
 			// stamp the lifecycle and terminalize a ref the run-state mirror left
@@ -5720,7 +5704,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			const session = monitor.takeActiveSession();
 			if (session) {
 				monitor.captureSalvage(session);
-				if (options.keepAlive !== false && (!preparedSession || readyAt !== undefined)) {
+				if (options.keepAlive !== false) {
 					attachIrcWakeTurnMonitor(session, wakeOptions);
 				}
 				await finalizeSubagentLifecycle({
@@ -5728,7 +5712,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					session,
 					aborted,
 					abortKind: monitor.abortKind(),
-					keepAlive: options.keepAlive !== false && (!preparedSession || readyAt !== undefined),
+					keepAlive: options.keepAlive !== false,
 					isolated: worktree !== undefined,
 					agentIdleTtlMs,
 					reviveSession,
@@ -5754,62 +5738,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 						logger.warn("Subagent async job cleanup exceeded its deadline after session shutdown", {
 							id,
 							pendingJobIds: reap.pendingJobIds,
-						});
-					}
-				}
-			}
-			if (preparedSession && untrackedSession) {
-				const incompleteSession = untrackedSession;
-				untrackedSession = undefined;
-				const disposal = Promise.resolve().then(() => incompleteSession.dispose());
-				pendingSessionDisposal = disposal.then(
-					() => {},
-					() => {},
-				);
-				try {
-					await untilAborted(AbortSignal.timeout(Math.max(0, cleanupDeadlineAt - Date.now())), () => disposal);
-				} catch (cleanupError) {
-					if (Date.now() >= cleanupDeadlineAt) {
-						deferCleanup(disposal);
-					} else {
-						logger.warn("Incomplete subagent session disposal failed", {
-							id,
-							error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-						});
-					}
-				}
-			}
-			if (preparedSession && readyAt === undefined) {
-				const removeFailedFork = (async () => {
-					await pendingSessionDisposal;
-					if (deferredSessionShutdown) await deferredSessionShutdown;
-					let manager = openedSessionManager;
-					if (!manager && pendingSessionManager) {
-						manager = await pendingSessionManager.catch(() => undefined);
-					}
-					if (manager) {
-						const ownedSessionFile = manager.getSessionFile();
-						if (ownedSessionFile) await manager.dropSession(ownedSessionFile);
-					}
-				})().catch(cleanupError => {
-					logger.warn("Failed to remove incomplete prepared session fork", {
-						id,
-						sessionFile: openedSessionManager?.getSessionFile(),
-						error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-					});
-				});
-				try {
-					await untilAborted(
-						AbortSignal.timeout(Math.max(0, cleanupDeadlineAt - Date.now())),
-						() => removeFailedFork,
-					);
-				} catch (cleanupError) {
-					if (Date.now() >= cleanupDeadlineAt) {
-						deferCleanup(removeFailedFork);
-					} else {
-						logger.warn("Incomplete prepared session fork cleanup failed", {
-							id,
-							error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
 						});
 					}
 				}

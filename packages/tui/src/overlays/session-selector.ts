@@ -1503,8 +1503,6 @@ export interface SessionSelectorOptions<T extends SessionSelectorEntry = Session
 	allSessions?: SessionListing<T>;
 	/** Picker heading; defaults to "恢复会话". */
 	title?: string;
-	/** Primary action label; defaults to "恢复" (ANSI footer defaults to "选择"). */
-	actionLabel?: string;
 	/** Fixed scope label, or false to omit the scope suffix. */
 	scopeLabel?: string | false;
 	/**
@@ -1586,7 +1584,6 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	readonly #getTerminalRows: () => number;
 	readonly #fillHeight: boolean;
 	readonly #title: string;
-	readonly #actionLabel: string;
 	readonly #scopeLabel: string | false | undefined;
 	/** What `#messageContainer` shows, for the native description. */
 	#message: SessionPickerMessage | undefined;
@@ -1645,7 +1642,6 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		this.#getTerminalRows = options.getTerminalRows ?? (() => 24);
 		this.#fillHeight = options.fillHeight ?? false;
 		this.#title = options.title ?? "恢复会话";
-		this.#actionLabel = options.actionLabel ?? "恢复";
 		this.#pickerTitle = options.title;
 		this.#standalone = options.standalone ?? false;
 		this.#scopeLabel = options.scopeLabel;
@@ -2172,7 +2168,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		}
 		const loading = message?.kind === "loading";
 		const toggle = list.onToggleScope !== undefined;
-		const actions = [pickerAction("resume", this.#actionLabel, "enter", { primary: true })];
+		const actions = [pickerAction("resume", "恢复", "enter", { primary: true })];
 		if (this.#onDelete) actions.push(pickerAction("delete", "删除", bindingKeys("app.session.delete")));
 		if (this.#onRename) actions.push(pickerAction("rename", "重命名", "f2"));
 		const pin = this.#pinAction();

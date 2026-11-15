@@ -203,21 +203,6 @@ describe("ArtifactManager attachment discovery", () => {
 		removeSyncWithRetries(root);
 	});
 
-	it("lists and reads real runtime attachments while reserving source ids", async () => {
-		const source = path.join(runtimeRoot, "source");
-		fs.mkdirSync(source);
-		fs.writeFileSync(path.join(source, "8.bash.log"), "source attachment");
-		const manager = new ArtifactManager(path.join(runtimeRoot, "session"), undefined, source);
-		expect(await manager.listFiles()).toEqual([]);
-		expect(await manager.getPath("0")).toBeNull();
-		expect(await manager.save("runtime attachment", "bash")).toBe("9");
-		expect(await manager.listFiles()).toEqual(["9.bash.log"]);
-		expect(await manager.exists("9")).toBe(true);
-		const artifact = await manager.getPath("9");
-		expect(artifact).toBe(path.join(manager.dir, "9.bash.log"));
-		expect(await Bun.file(artifact!).text()).toBe("runtime attachment");
-	});
-
 	it("keeps ordinary-mode linked attachment discovery and reading unchanged", async () => {
 		fs.writeFileSync(path.join(external, "0.bash.log"), "ordinary attachment");
 		const dir = path.join(runtimeRoot, "linked");

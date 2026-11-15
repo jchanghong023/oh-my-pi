@@ -10,7 +10,6 @@ import { type ConflictEntry, renderConflictRegion } from "@oh-my-pi/pi-tui/tools
 import { PREVIEW_LIMITS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { stripBom } from "../edit/normalize";
-import { getEditStore } from "../edit/store";
 import type { InternalWriteResult } from "../internal-urls/types";
 import { writethroughNoop } from "../lsp/writethrough";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
@@ -169,7 +168,6 @@ async function resolveConflict(
 		before: bom + originalText,
 		after: bom + newContent,
 	});
-	getEditStore(session).invalidate(absolutePath);
 	const history = session.state?.conflictHistory;
 	history?.invalidate(entry.id);
 	history?.reconcilePath(absolutePath, { blocks: scanConflictLines(newContent.split("\n"), 1) });
@@ -430,7 +428,6 @@ async function resolveAllConflicts(
 		invalidateFsScanAfterWrite(absolutePath);
 		session.bumpFileMutationVersion?.(absolutePath);
 		session.recordFileChange?.({ path: absolutePath, tool: "edit", before: bom + original, after: bom + text });
-		getEditStore(session).invalidate(absolutePath);
 		for (const entry of resolvedEntries) history.invalidate(entry.id);
 		history.reconcilePath(absolutePath, { blocks: scanConflictLines(text.split("\n"), 1) });
 		const header = maybeWriteSnapshotHeader(session, absolutePath, text);

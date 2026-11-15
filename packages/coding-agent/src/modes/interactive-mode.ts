@@ -399,9 +399,8 @@ import type {
 	RenderInitialMessagesOptions,
 	RenderSessionContextOptions,
 	ResumeSessionOptions,
-	SessionPickHandler,
-	ShowStatusOptions,
 	SelectOnlyModelSelectorOptions,
+	ShowStatusOptions,
 	SubmittedUserInput,
 	YieldCompaction,
 } from "./types";
@@ -9984,8 +9983,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#selectorController.switchSessionModel(model, thinkingLevel);
 	}
 
-	showPluginSelector(mode?: "install" | "uninstall"): void {
-		void this.#selectorController.showPluginSelector(mode);
+	showPluginSelector(mode?: "install" | "uninstall"): Promise<void> {
+		return this.#selectorController.showPluginSelector(mode);
 	}
 
 	showUserMessageSelector(startAt?: string): void {
@@ -10004,8 +10003,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#selectorController.showThinkingSelector();
 	}
 
-	showSessionSelector(source?: ForeignSessionSource, onSelect?: SessionPickHandler): void {
-		void this.#selectorController.showSessionSelector(source, onSelect);
+	showSessionSelector(source?: ForeignSessionSource): void {
+		void this.#selectorController.showSessionSelector(source);
 	}
 
 	async handleResumeSession(sessionPath: string, options?: ResumeSessionOptions): Promise<void> {

@@ -54,7 +54,6 @@ import type {
 	InteractiveModeContext,
 	ResumeSessionOptions,
 	SelectOnlyModelSelectorOptions,
-	SessionPickHandler,
 } from "../../modes/types";
 import type { SessionOAuthAccountList } from "../../session/agent-session-types";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "../../session/auth-storage";
@@ -1887,7 +1886,7 @@ export class SelectorController {
 		return result;
 	}
 
-	async showSessionSelector(source?: ForeignSessionSource, onSelect?: SessionPickHandler): Promise<void> {
+	async showSessionSelector(source?: ForeignSessionSource): Promise<void> {
 		let sessions: SessionInfo[];
 		let onSelectSession: (session: SessionInfo) => Promise<boolean>;
 		let selectorOptions: SessionSelectorOptions<SessionInfo>;
@@ -1952,67 +1951,56 @@ export class SelectorController {
 				: undefined;
 			onSelectSession = session => this.handleResumeSession(session.path, { followContinuation: true });
 			selectorOptions = {
-				...(!onSelect
-					? {
-							onDelete: async (session: SessionInfo) => {
-								if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
-									return false;
-								}
-								const storage = new FileSessionStorage();
-								try {
-									await storage.deleteSessionWithArtifacts(session.path);
-									return true;
-								} catch (error) {
-									throw new Error(
-										`Failed to delete session: ${error instanceof Error ? error.message : String(error)}`,
-										{ cause: error },
-									);
-								}
-							},
-							onRename: async (session: SessionInfo, title: string): Promise<string | null> => {
-								if (this.ctx.sessionManager.getSessionFile() === session.path) {
-									// A session that has only been read does not hold
-									// its ownership lease, so another omp process can
-									// claim it; the live rename would then fork onto
-									// a sibling and still report success, leaving the
-									// row here pointing at the old path. Claim the
-									// lease up front and refuse while it is held by
-									// someone else.
-									const claim = new FileSessionStorage().claimSession(session.id, session.path);
-									if (!claim) {
-										throw new Error(
-											"Failed to rename session: it is currently in use by another omp process",
-										);
-									}
-									try {
-										const renamed = await this.ctx.sessionManager.setSessionName(title, "user");
-										return renamed ? (this.ctx.sessionManager.getSessionName() ?? null) : null;
-									} finally {
-										claim();
-									}
-								}
-								const renamed = await SessionManager.renameSessionTitle(session.path, title, {
-									cwd: session.cwd,
-								});
-								// The picker renders the failure itself; throwing
-								// hands it the reason so it can show one message
-								// instead of two.
-								if (!renamed) {
-									throw new Error("Failed to rename session: it is currently in use or no longer available");
-								}
-								return renamed;
-							},
-							onSetPinned: async (session: SessionInfo, pinned: boolean) => {
-								await setSessionPinned(session.id, pinned);
-								this.ctx.applySessionPin(session.id, pinned);
-							},
+				onDelete: async (session: SessionInfo) => {
+					if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
+						return false;
+					}
+					const storage = new FileSessionStorage();
+					try {
+						await storage.deleteSessionWithArtifacts(session.path);
+						return true;
+					} catch (error) {
+						throw new Error(
+							`Failed to delete session: ${error instanceof Error ? error.message : String(error)}`,
+							{ cause: error },
+						);
+					}
+				},
+				onRename: async (session: SessionInfo, title: string): Promise<string | null> => {
+					if (this.ctx.sessionManager.getSessionFile() === session.path) {
+						// A session that has only been read does not hold
+						// its ownership lease, so another omp process can
+						// claim it; the live rename would then fork onto
+						// a sibling and still report success, leaving the
+						// row here pointing at the old path. Claim the
+						// lease up front and refuse while it is held by
+						// someone else.
+						const claim = new FileSessionStorage().claimSession(session.id, session.path);
+						if (!claim) {
+							throw new Error("Failed to rename session: it is currently in use by another omp process");
 						}
-					: {
-							title: "选择要咨询的会话",
-							actionLabel: "选择",
-							scopeLabel: false,
-							showCwd: true,
-						}),
+						try {
+							const renamed = await this.ctx.sessionManager.setSessionName(title, "user");
+							return renamed ? (this.ctx.sessionManager.getSessionName() ?? null) : null;
+						} finally {
+							claim();
+						}
+					}
+					const renamed = await SessionManager.renameSessionTitle(session.path, title, {
+						cwd: session.cwd,
+					});
+					// The picker renders the failure itself; throwing
+					// hands it the reason so it can show one message
+					// instead of two.
+					if (!renamed) {
+						throw new Error("Failed to rename session: it is currently in use or no longer available");
+					}
+					return renamed;
+				},
+				onSetPinned: async (session: SessionInfo, pinned: boolean) => {
+					await setSessionPinned(session.id, pinned);
+					this.ctx.applySessionPin(session.id, pinned);
+				},
 				historyMatcher,
 				completeSessions: listing.complete,
 				loadAllSessions: () => SessionManager.listAllForPicker(),
@@ -2034,17 +2022,6 @@ export class SelectorController {
 			sessions,
 			async (session: SessionInfo) => {
 				selector.lockInput();
-				if (onSelect) {
-					// Selection-only callers may open a follow-up picker; remove this
-					// fullscreen overlay before invoking them.
-					done();
-					try {
-						await onSelect(session);
-					} catch (error) {
-						this.ctx.showError(sanitizeErrorLine(error));
-					}
-					return;
-				}
 				let keepOpen = false;
 				try {
 					const success = await onSelectSession(session);

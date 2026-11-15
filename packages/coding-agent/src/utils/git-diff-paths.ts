@@ -17,6 +17,23 @@ const C_ESCAPES: Readonly<Record<string, string>> = {
 
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder();
+const C_ESCAPED_CHARS = new Map(Object.entries(C_ESCAPES).map(([escaped, character]) => [character, escaped] as const));
+
+/** Encode a path for a Git diff record, C-quoting bytes that cannot appear verbatim. */
+export function encodeGitDiffPath(path: string): string {
+	if (!/["\\\x00-\x1f\x7f]/.test(path)) return path;
+	let encoded = "";
+	for (const character of path) {
+		const escaped = C_ESCAPED_CHARS.get(character);
+		if (escaped !== undefined) {
+			encoded += `\\${escaped}`;
+			continue;
+		}
+		const codePoint = character.codePointAt(0)!;
+		encoded += codePoint < 0x20 || codePoint === 0x7f ? `\\${codePoint.toString(8).padStart(3, "0")}` : character;
+	}
+	return `"${encoded}"`;
+}
 
 /** Decode a Git C-quoted path token (`"..."`, including octal UTF-8 escapes) or return an unquoted path verbatim. */
 export function decodeGitDiffPath(token: string): string {
@@ -26,7 +43,7 @@ export function decodeGitDiffPath(token: string): string {
 		const character = String.fromCodePoint(token.codePointAt(index)!);
 		if (character !== "\\") {
 			bytes.push(...UTF8_ENCODER.encode(character));
-			index += character.length - 1;
+			if (character.length === 2) index++;
 			continue;
 		}
 		const escaped = token[++index];
