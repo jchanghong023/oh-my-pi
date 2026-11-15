@@ -75,6 +75,7 @@ __pycache__/
 .testmondata*
 
 # Scratch files
+.todo.md
 syntax.jsonl
 out.jsonl
 out.html
