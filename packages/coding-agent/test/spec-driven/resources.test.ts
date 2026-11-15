@@ -306,7 +306,10 @@ describe("pinned upstream resources", () => {
 			expect(JSON.parse(created.stdout).change.path).toBe(changeDir);
 			const instructions = await cli(["instructions", "proposal", "--change", "same-name", "--json"], deep);
 			expect(instructions.exitCode).toBe(0);
-			expect(JSON.parse(instructions.stdout)).toMatchObject({ changeDir, context: root });
+			expect(JSON.parse(instructions.stdout)).toMatchObject({
+				changeDir,
+				context: expect.stringContaining(root),
+			});
 			expect(await Bun.file(path.join(deep, "openspec", "config.yaml")).exists()).toBe(false);
 		}
 		expect((await fs.readdir(path.join(parent, "outer", "openspec", "changes"))).sort()).toEqual([
@@ -492,7 +495,7 @@ describe("pinned upstream resources", () => {
 		expect(JSON.parse(proposal.stdout)).toMatchObject({
 			schemaName: "local-flow",
 			changeDir,
-			context: "Local project context",
+			context: expect.stringContaining("Local project context"),
 			rules: ["Keep the local requirement"],
 			template: "# Local proposal.md\n",
 			resolvedOutputPath: path.join(changeDir, "proposal.md"),
@@ -749,7 +752,7 @@ describe("pinned upstream resources", () => {
 		const proposal = await runOpenSpec(["instructions", "proposal", "--change", "resource-probe", "--json"], cwd);
 		expect(proposal.exitCode).toBe(0);
 		expect(JSON.parse(proposal.stdout).artifactId).toBe("proposal");
-		expect(JSON.parse(proposal.stdout).context).toBe(userContext);
+		expect(JSON.parse(proposal.stdout).context).toContain(userContext);
 		await fs.writeFile(
 			path.join(cwd, "openspec", "changes", "resource-probe", "proposal.md"),
 			"## Why\nExpose offline resources.\n\n## What Changes\n- Bundle upstream resources.\n\n## Capabilities\n### New Capabilities\n- `offline-resources`: offline capabilities\n### Modified Capabilities\nNone.\n\n## Impact\nOMP packaging.\n",

@@ -10,6 +10,7 @@
 
 ### Changed
 
+- OpenSpec 在所有新旧项目的产物生成指令中内置中文正文要求，保留项目上下文及必需的英文结构，无须修改项目配置。
 - Bundled `jch-grill-me` and `jch-grill-todo` now instruct research subagents to start with a fresh context window.
 - TodoLoop now accepts unnumbered Markdown checkboxes without rewriting the task file.
 - TodoLoop now researches shared background once per run and reuses it across groups and continuations without restricting native task capabilities.

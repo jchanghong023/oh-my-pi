@@ -59,6 +59,23 @@ Superpowers MUST 仅交付 OMP 原生技能发现与脚本执行需要的固定�
 - **AND** 保留 `--language`、`--` 后目标路径、已有配置保护及重复初始化语义；项目配置含 `store` 或 Store `references` 字段时 MUST 明确报不支持且不写文件，无论字段值是否为空或本地规划目录是否已存在，不覆盖或迁移既有内容
 - **AND** 非 TTY 不要求选择交付工具；必要业务输入沿用现有配置／显式参数或返回明确错误，不擅自选择语言、覆盖配置或改变原生错误语义
 
+### Requirement: 内置 OpenSpec 中文产物上下文
+
+OMP MUST 在 OpenSpec 的统一产物指令出口提供内置中文语言约束，适用于所有新旧项目及内置、自定义 schema，无须修改项目配置。生成文档的正文 MUST 使用简体中文；项目上下文中的其他语言要求不得覆盖此内置规则。MUST 保留 OpenSpec 必需的英文结构标题、SHALL/MUST 关键字、文件名、路径及代码标识符。
+
+内置语言约束 MUST 与项目原有有效上下文合并，不覆盖项目的其他约束，不写回配置或改写已有文档。MUST NOT 为此改写 12 项 Skill、原始 docs 目录、初始化默认值或 apply／archive 操作上下文。
+
+#### Scenario: 无语言配置的新旧项目创建文档
+
+- **WHEN** 用户在未配置语言的新项目或已有项目获取任意产物生成指令
+- **THEN** 指令上下文包含内置中文语言约束，适用于 proposal、specs、design、tasks 及自定义 schema 的产物，不要求重做初始化或修改项目配置
+
+#### Scenario: 项目上下文及原生格式保留
+
+- **WHEN** 项目已有有效 context、artifact rules 或自定义 schema
+- **THEN** 产物上下文保留原项目约束并加入内置中文语言要求，原有规则、模板、路径和依赖不变；项目配置文件及已有产物不被改写
+
+
 ### Requirement: 普通 OpenSpec 仅使用本地项目根
 
 普通 OpenSpec MUST 仅从当前目录向上选择最近祖先中包含 `openspec/` 的本地项目根；项目根是包含该目录的目录，不是 `openspec/` 本身。MUST 撤销 Store 继承与选择合同，不读取项目 Store 指针、注册表、Store 元数据或全局 `defaultStore` 路由，不以 Git origin 推测或回退到外部 Store。无本地根时，各命令仍保留既有查询失败或显式写命令允许当前目录作为隐式根的差异；不得据此扩大 Skill 初始化授权。普通 `planningHome`、`changeRoot`、`artifactPaths`、`actionContext` 等有效路径与编辑范围 MUST 基于真实本地项目保留，不硬编码为启动目录。

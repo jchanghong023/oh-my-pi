@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import bundledArtifactLanguage from '../../prompts/artifact-language.md' with { type: 'text' };
 import { getSchemaDir, resolveSchema, listSchemasWithInfo } from './resolver.js';
 import { ArtifactGraph } from './graph.js';
 import { detectCompleted } from './state.js';
@@ -29,6 +30,7 @@ import type { Artifact, CompletedSet } from './types.js';
 
 // Session-level cache for validation warnings (avoid repeating same warnings)
 const shownWarnings = new Set<string>();
+const artifactLanguageContext = bundledArtifactLanguage.trim();
 
 /**
  * Error thrown when loading a template fails.
@@ -104,7 +106,7 @@ export interface ArtifactInstructions {
   description: string;
   /** Guidance on how to create this artifact (from schema instruction field) */
   instruction: string | undefined;
-  /** Project context from config (constraints/background for AI, not to be included in output) */
+  /** Project context plus bundled language guidance (AI constraints, not output content). */
   context: string | undefined;
   /** Artifact-specific rules from config (constraints for AI, not to be included in output) */
   rules: string[] | undefined;
@@ -385,7 +387,10 @@ export function generateInstructions(
   }
 
   // Extract context and rules as separate fields (not prepended to template)
-  const configContext = projectConfig?.context?.trim() || undefined;
+  const projectContext = projectConfig?.context?.trim();
+  const configContext = projectContext
+    ? [projectContext, artifactLanguageContext].join('\n\n')
+    : artifactLanguageContext;
   const rulesForArtifact =
     projectConfig?.rules && Object.hasOwn(projectConfig.rules, artifactId)
       ? projectConfig.rules[artifactId]
