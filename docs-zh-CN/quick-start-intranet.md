@@ -492,7 +492,11 @@ AIReq 最新权威需求为长期共享 Web：A 的账号与 Token 运行服务�
 
 系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI，不是前三个节点可执行命令的模型工具。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
 
-包内资源清单固定为 OpenSpec **2.0.0**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据。OpenSpec CLI、schema 与全部 Skill 随 OMP 发行升级，离线运行不下载、安装或自更新这些资源，也不要求另行克隆 JCH。现有共享命令消费者使用同一原生控制器。
+SDD／计划执行脚本以当前工作目录所属 Git 仓库为准，不按计划文件所在位置猜测仓库，也不要切到技能缓存目录运行。`sdd-workspace`、`task-brief`、`review-package` 支持在脚本路径后加 `-C <工作区>`；例如 `omp superpowers skills/subagent-driven-development/scripts/review-package -C <工作区> <计划文件> <base> <head>`。提取任务仍使用英文 `Task` 标题，编号可为 `A1`、`6b`、`2.1`；需要提交范围的执行／审查脚本要求仓库已有提交，但不会代替用户自动初始化或提交。
+
+包内资源清单固定为 OpenSpec **2.0.0**、Superpowers **7.0.2**（修订 `22f0b463e7a5e579904dd6211a520321035526f7`），并包含真实 JCH `jch-grill-me` 技能及配套元数据。OpenSpec CLI、schema 与全部 Skill 随 OMP 发行升级，离线运行不下载、安装或自更新这些资源，也不要求另行克隆 JCH。现有共享命令消费者使用同一原生控制器。
+
+Superpowers 仅交付完整技能及其引用材料／运行脚本、许可证与 ESM／版本元数据，不携带 Claude、Codex、Pi、OpenCode 等其他宿主的插件、启动 hooks 或品牌图片。全部 15 个技能继续仅供显式调用，用户／项目同名覆盖与资源授权边界不变；后续同步也不整仓复制上游资源。
 
 此流程预期增加请求、token、费用和等待，不承诺降本或把弱模型变强。实际投入依可取得证据报告，未知费用仍为未知，调用数不等于账单。本地模拟模型只验证编排，不代表真实 Provider 的任务质量、计费或服务可用性已验收；源码入口、打包产物、各平台及桌面 UI 的验收范围须分别报告，不能互相代替。完整门禁与验收条件见[规格驱动编排需求](../openspec/specs/spec-driven-orchestration/spec.md)，各项证据边界见[历史验证记录](verification-history.md)。
 

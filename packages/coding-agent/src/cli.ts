@@ -542,7 +542,7 @@ export async function runCli(argv: string[]): Promise<void> {
 	}
 	if (resolvedArgv[0] === "superpowers") {
 		const usage =
-			"Usage: omp superpowers <relative-skill-script> [args...]\n\nExamples:\n  omp superpowers skills/writing-skills/render-graphs.js <skill-directory>\n  omp superpowers skills/subagent-driven-development/scripts/review-package <plan-file> <base> <head> [output-file]\n\nRuns only trusted bundled Superpowers skill scripts. JavaScript uses OMP's embedded Bun; shell scripts require Bash and POSIX utilities (Git Bash on Windows). Graph rendering also requires Graphviz (dot).\n";
+			"Usage: omp superpowers <relative-skill-script> [args...]\n\nExamples:\n  omp superpowers skills/writing-skills/render-graphs.js <skill-directory>\n  omp superpowers skills/subagent-driven-development/scripts/review-package [-C DIR] <plan-file> <base> <head> [output-file]\n\nRuns only trusted bundled Superpowers skill scripts. Run SDD helpers from the working tree being executed; sdd-workspace, task-brief and review-package also accept -C DIR. JavaScript uses OMP's embedded Bun; shell scripts require Bash and POSIX utilities (Git Bash on Windows). Graph rendering also requires Graphviz (dot).\n";
 		const script = resolvedArgv[1];
 		if (!script || script === "--help" || script === "-h") {
 			if (script) {

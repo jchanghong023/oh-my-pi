@@ -37,7 +37,7 @@ OMP MUST 复用既有发现、补全、按需读取与资源授权，不因 AIRe
 
 `omp-spec` 是供 AIReq 使用的独立需求 schema，AIReq 业务需求阶段只生成获授权的 proposal／增量规格，技术方案阶段同轮生成共享 design.md 与同目录 sr-dependencies.json，前者保留实现思路及技术取舍并引用后者，不生成编码执行计划或自动归档流水线。
 
-Superpowers 的技能、上游插件及扩展保留固定版本原始文件，所有包内 Superpowers `SKILL.md` 均增加 `disable-model-invocation: true`；未来同步或更新上游资源时同样保留该字段。不为 OMP 改写工具名称、子代理名称或脚本调用。依赖宿主提供的能力及实际可用性不改变上游基线。
+Superpowers MUST 仅交付 OMP 原生技能发现与脚本执行需要的固定版本资源：完整 `skills/`、`LICENSE` 和用于 ESM 语义及版本读取的根 `package.json`。NEVER 交付其他宿主专属插件、扩展、bootstrap hooks、安装入口及其品牌图片；后续上游同步同样遵循此边界，不整仓复制。所交付技能正文、引用材料和运行脚本保留上游原始内容，所有包内 Superpowers `SKILL.md` 均增加并持续保留 `disable-model-invocation: true`；根 `package.json` 删除指向未交付宿主资源的 `main`、`pi` 注册及专属包关键字。不为 OMP 改写工具名称、子代理名称或脚本调用，依赖宿主提供的能力及实际可用性不改变上游基线。
 
 #### Scenario: 普通会话发现
 
