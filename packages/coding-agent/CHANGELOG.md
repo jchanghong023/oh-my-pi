@@ -54,6 +54,7 @@
 
 ### Fixed
 
+- CNB Linux builds preserve the CLI source permissions when installing dependencies, avoiding a false dirty-worktree failure before publishing.
 - SSH directory reads now consume timeout-tracked subprocess output without stream-lock failures.
 - Company models now authenticate through the stdio gateway using the existing in-memory credentials.
 - Deferred model roles retain their eligible usage and retry fallback candidates.

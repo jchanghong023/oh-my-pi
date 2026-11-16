@@ -60,7 +60,10 @@ else
   export OMP_RELEASE_BINARY_DIR="$completed"
   export OMP_BUILD_CACHE_DIR="$cache/build-assets"
   started=$SECONDS
+  # Bun marks workspace bin entrypoints executable while linking dependencies.
+  cli_mode=$(stat -c '%a' packages/coding-agent/src/cli.ts)
   bun install --frozen-lockfile
+  chmod "$cli_mode" packages/coding-agent/src/cli.ts
   echo "Linux dependencies elapsed: $((SECONDS - started))s"
   started=$SECONDS
   bun scripts/build-release-native.ts
