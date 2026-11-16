@@ -153,7 +153,8 @@ function queryCacheKey(text: string): string {
 	}
 	const model = defaultModel();
 	const apiUrl = active?.apiUrl ?? "";
-	return `${providerId}::${model}::${apiUrl}::${text}`;
+	// `input_type` changes the vector a query embeds to, so a toggle must not reuse cached ones.
+	return `${providerId}::${model}::${apiUrl}::${sendInputType() ? "typed" : ""}::${text}`;
 }
 
 function inTestRuntime(): boolean {
@@ -247,6 +248,14 @@ function defaultModel(): string {
 	}
 	return $env.MNEMOPI_EMBEDDING_MODEL || "BAAI/bge-small-en-v1.5";
 }
+
+/** Whether API requests carry `input_type`: `embeddings.inputType`, then `MNEMOPI_EMBEDDING_INPUT_TYPE`. */
+function sendInputType(): boolean {
+	return activeEmbeddingOptions()?.inputType ?? $flag("MNEMOPI_EMBEDDING_INPUT_TYPE");
+}
+
+/** What a text is embedded as: a recall query, or a stored memory (the default). */
+export type EmbeddingRole = "query" | "document";
 
 /**
  * Resolve the embedding model name for the currently active runtime scope.
@@ -401,14 +410,24 @@ function positiveBatchSize(value: number | undefined): number | undefined {
 	return size >= 1 ? size : undefined;
 }
 
-async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
+function reportRequestFailure(baseUrl: string, status: number | undefined, message: string): void {
+	const onRequestFailed = activeEmbeddingOptions()?.onRequestFailed;
+	if (onRequestFailed === undefined) return;
+	try {
+		onRequestFailed({ baseUrl, model: defaultModel(), status, message });
+	} catch {
+		// A host's reporting hook must not turn a failed embedding into a thrown one.
+	}
+}
+
+async function embedApi(texts: readonly string[], role: EmbeddingRole = "document"): Promise<EmbeddingMatrix | null> {
 	const size = embeddingBatchSize();
 	if (texts.length <= size) {
-		return embedApiBatch(texts);
+		return embedApiBatch(texts, role);
 	}
 	const matrix: EmbeddingMatrix = [];
 	for (let offset = 0; offset < texts.length; offset += size) {
-		const part = await embedApiBatch(texts.slice(offset, offset + size));
+		const part = await embedApiBatch(texts.slice(offset, offset + size), role);
 		if (part === null) {
 			return null;
 		}
@@ -417,7 +436,7 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 	return matrix;
 }
 
-async function embedApiBatch(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
+async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Promise<EmbeddingMatrix | null> {
 	const inherited = logger.getLogContext();
 	return logger.withLogContext(
 		{
@@ -456,7 +475,7 @@ async function embedApiBatch(texts: readonly string[]): Promise<EmbeddingMatrix 
 						? AbortSignal.any([callerSignal, AbortSignal.timeout(timeoutMs)])
 						: AbortSignal.timeout(timeoutMs)
 					: undefined;
-			const degraded = (reason: string, error?: unknown): null => {
+			const degraded = (reason: string, error?: unknown, detail?: string): null => {
 				logger[strict && !mnemopiDebugEnabled() ? "debug" : "warn"]("Embedding API degraded to null", {
 					...fields,
 					...(strict || error === undefined ? {} : logger.diagnosticError(error)),
@@ -469,6 +488,17 @@ async function embedApiBatch(texts: readonly string[]): Promise<EmbeddingMatrix 
 					elapsed_ms: performance.now() - startedAt,
 					timeout: requestSignal?.aborted === true && requestSignal.reason?.name === "TimeoutError",
 				});
+				if (stage !== "configuration" && allowRemote?.(baseUrl) !== false) {
+					reportRequestFailure(
+						baseUrl,
+						reason === "exception"
+							? extractHttpStatusFromError(error)
+							: stage === "response_decode" || stage === "response_schema"
+								? undefined
+								: status,
+						detail ?? (error instanceof Error ? error.message : error === undefined ? reason : String(error)),
+					);
+				}
 				return null;
 			};
 			logger.info("Embedding API started", {
@@ -483,7 +513,11 @@ async function embedApiBatch(texts: readonly string[]): Promise<EmbeddingMatrix 
 				return degraded("credentials_unavailable");
 			}
 
-			const body = JSON.stringify({ model, input: texts });
+			const body = JSON.stringify({
+				model,
+				input: texts,
+				...(sendInputType() ? { input_type: role === "query" ? "query" : "passage" } : {}),
+			});
 			try {
 				// Auth refresh remains outside the existing per-request HTTP retry loop.
 				stage = "auth";
@@ -561,7 +595,8 @@ async function embedApiBatch(texts: readonly string[]): Promise<EmbeddingMatrix 
 								status,
 								elapsed_ms: performance.now() - startedAt,
 							});
-							throw new ProviderHttpError("mnemopi embedding request unauthorized (401)", 401, {
+							const detail = (await res.text().catch(() => "")).trim();
+							throw new ProviderHttpError(detail || "mnemopi embedding request unauthorized (401)", 401, {
 								headers: res.headers,
 							});
 						}
@@ -570,7 +605,8 @@ async function embedApiBatch(texts: readonly string[]): Promise<EmbeddingMatrix 
 					{ signal: retryTimeouts ? callerSignal : (requestSignal ?? callerSignal) },
 				);
 				if (!response.ok) {
-					return degraded("http_error");
+					const detail = await response.text().catch(() => "");
+					return degraded("http_error", undefined, detail);
 				}
 				stage = "response_decode";
 				const data = (await response.json()) as {
@@ -581,11 +617,11 @@ async function embedApiBatch(texts: readonly string[]): Promise<EmbeddingMatrix 
 					const { data: rows } = data;
 					stage = "response_schema";
 					if (rows === undefined) {
-						return degraded("missing_data");
+						return degraded("missing_data", undefined, "the response did not carry one embedding per input");
 					}
 					// A short or long matrix would stamp vectors onto the wrong memories.
 					if (rows.length !== texts.length) {
-						return degraded("row_count");
+						return degraded("row_count", undefined, "the response did not carry one embedding per input");
 					}
 					if (strict) {
 						if (data.model !== undefined && data.model !== model) return degraded("model_mismatch");
@@ -725,16 +761,22 @@ export function availableApi(): boolean {
 	return embeddingKeyConfigured();
 }
 
+/**
+ * Embed a recall query. The runtime scope's `embeddings.queryPrefix` (else
+ * `MNEMOPI_EMBEDDING_QUERY_PREFIX`) is prepended, and with `input_type` on the query is sent
+ * as a `query`. Results are cached per prefixed text and embedding source.
+ */
 export async function embedQuery(text: string): Promise<Vector | null> {
 	if (text === "" || embeddingsDisabled()) {
 		return null;
 	}
-	const key = queryCacheKey(text);
+	const input = (activeEmbeddingOptions()?.queryPrefix ?? $env.MNEMOPI_EMBEDDING_QUERY_PREFIX ?? "") + text;
+	const key = queryCacheKey(input);
 	const cached = queryCache.get(key);
 	if (cached !== undefined) {
 		return cached;
 	}
-	const vectors = await embed([text]);
+	const vectors = await embed([input], "query");
 	const vector = vectors?.[0] ?? null;
 	if (vector !== null) {
 		queryCache.set(key, vector);
@@ -742,7 +784,10 @@ export async function embedQuery(text: string): Promise<Vector | null> {
 	return vector;
 }
 
-export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
+export async function embed(
+	texts: readonly string[],
+	role: EmbeddingRole = "document",
+): Promise<EmbeddingMatrix | null> {
 	if (texts.length === 0 || embeddingsDisabled()) {
 		return null;
 	}
@@ -766,7 +811,7 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 		}
 	}
 	if (isApiModel(defaultModel())) {
-		return embedApi(texts);
+		return embedApi(texts, role);
 	}
 	if (texts.length === 1) {
 		const key = queryCacheKey(texts[0] ?? "");

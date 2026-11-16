@@ -579,7 +579,7 @@ export function createNativeWebGuiModeController(
 			loop.generation++;
 		}
 		if (event.type === "agent_end") {
-			if (loop?.goalMode && loop.prompt && event.isTerminal !== false && isLoopGoalComplete(event.messages)) {
+			if (loop?.goalMode && loop.prompt && isLoopGoalComplete(event.messages)) {
 				stopLoop();
 				return;
 			}

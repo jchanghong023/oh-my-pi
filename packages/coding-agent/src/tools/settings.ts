@@ -674,7 +674,7 @@ export const cfgSpeechgenEnabled = register({
 		tab: "tools",
 		group: "可用工具",
 		label: "语音生成",
-		description: "启用 tts 工具，使用本机（Kokoro）或 xAI Grok Voice 合成语音文件",
+		description: "启用 tts 工具，使用本机（Phonon）或 xAI Grok Voice 合成语音文件",
 	},
 });
 

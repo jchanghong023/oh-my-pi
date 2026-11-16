@@ -28,7 +28,7 @@ function nativeBusy(session: AgentSession): boolean {
 		session.hasAdmittedSubmission ||
 		session.queuedMessageCount > 0 ||
 		session.hasPostPromptWork ||
-		session.hasPendingAsyncWork() ||
+		session.wakeSources !== undefined ||
 		session.hasUnsettledAsyncJobTree() ||
 		session.getGoalModeState()?.enabled === true
 	);

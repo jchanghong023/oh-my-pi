@@ -7,7 +7,6 @@ import { type Component, replaceTabs, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
-import { clearCache as clearFsCache } from "../../capability/fs";
 import type { SourceMeta } from "../../capability/types";
 import {
 	analyzeAuthError,
@@ -16,6 +15,7 @@ import {
 	loadAllMCPConfigs,
 	MCPManager,
 	OAuthIssuerMismatchError,
+	reconnectMCPServers,
 } from "../../mcp";
 import {
 	findMcpServerForAuth,
@@ -67,17 +67,12 @@ import { cfgMcpEnableProjectConfig } from "../../mcp/settings";
 
 /** The native reload operation, shared by terminal controllers and browser command hosts. */
 export async function reloadNativeMcpServers(session: AgentSession, manager: MCPManager): Promise<MCPLoadResult> {
-	await manager.disconnectAll();
-	session.setMCPPromptCommands([]);
-	clearFsCache();
-	const result = await manager.discoverAndConnect({
+	return reconnectMCPServers(manager, session, {
 		enableProjectConfig: cfgMcpEnableProjectConfig.get(session.settings),
 		filterExa: true,
 		filterBrowser: session.getEvalPreludes().some(definition => definition.name === "browser"),
 		extensionRoots: session.effectiveExtensionRoots,
 	});
-	await session.refreshMCPTools(manager.getTools());
-	return result;
 }
 
 const MCP_MANUAL_INPUT_PROVIDER_ID = "mcp";

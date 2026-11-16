@@ -103,6 +103,35 @@ export const cfgMnemopiAutoRecall = register({
 	},
 });
 
+export const cfgMnemopiRecallRelevance = register({
+	id: "mnemopi.recallRelevance",
+	type: "enum",
+	values: ["auto", "on", "off"] as const,
+	default: "off",
+	ui: {
+		tab: "memory",
+		group: "Mnemopi",
+		label: "Mnemopi Recall Relevance",
+		description:
+			"Ask the judge model role whether each automatically recalled memory is relevant to the task before injecting it",
+		options: [
+			{
+				value: "auto",
+				label: "Auto",
+				description: "Filter only with a native judge backend; otherwise inject every recalled memory",
+			},
+			{
+				value: "on",
+				label: "On",
+				description:
+					"Filter with whichever model the judge role resolves to; an on-device judge may answer only some memories in time",
+			},
+			{ value: "off", label: "Off", description: "Never filter; inject every recalled memory" },
+		],
+		condition: "mnemopiActive",
+	},
+});
+
 export const cfgMnemopiAutoRetain = register({
 	id: "mnemopi.autoRetain",
 	type: "boolean",
@@ -206,6 +235,35 @@ export const cfgMnemopiEmbeddingApiKey = register({
 		group: "Mnemopi",
 		label: "Mnemopi 嵌入 API 密钥",
 		description: "传递给 Mnemopi 的可选嵌入 API 密钥",
+		condition: "mnemopiActive",
+	},
+});
+
+export const cfgMnemopiEmbeddingQueryPrefix = register({
+	id: "mnemopi.embeddingQueryPrefix",
+	type: "string",
+	default: undefined,
+	ui: {
+		tab: "memory",
+		group: "Mnemopi",
+		label: "Mnemopi 嵌入查询前缀",
+		description: "在召回查询前添加文本，供 Qwen3-Embedding、E5 等指令调优嵌入模型使用；存储的记忆保持不变",
+		condition: "mnemopiActive",
+	},
+});
+
+export const cfgMnemopiEmbeddingInputType = register({
+	id: "mnemopi.embeddingInputType",
+	type: "boolean",
+	default: false,
+	// Without the env term the `false` default would mask Mnemopi's own `MNEMOPI_EMBEDDING_INPUT_TYPE` fallback.
+	env: { name: "MNEMOPI_EMBEDDING_INPUT_TYPE", fallback: true },
+	ui: {
+		tab: "memory",
+		group: "Mnemopi",
+		label: "Mnemopi 嵌入输入类型",
+		description:
+			"在嵌入 API 请求中发送 input_type（召回为 query，存储记忆为 passage）；NVIDIA NIM 非对称嵌入模型需要此参数",
 		condition: "mnemopiActive",
 	},
 });

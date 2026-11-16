@@ -20,7 +20,7 @@ export const cfgTtsLocalVoice = register({
 		tab: "providers",
 		group: "服务",
 		label: "本地 TTS 音色",
-		description: "本地 TTS 后端使用的 Kokoro 音色（美式/英式、女声/男声）",
+		description: "本地 TTS 后端使用的 Phonon 音色（美式/英式、女声/男声）",
 		options: TTS_LOCAL_VOICE_OPTIONS,
 	},
 });
@@ -33,7 +33,7 @@ export const cfgTtsLocalSpeed = register({
 		tab: "providers",
 		group: "服务",
 		label: "本地 TTS 语速",
-		description: "本地 TTS 后端（tts 工具、omp say）的语速。1 = 正常；限制在 0.5–2.5",
+		description: "本地 TTS 后端（tts 工具、omp say）的语速。1 = 正常；限制在 0.8–1.3",
 		options: TTS_SPEED_OPTIONS,
 	},
 });
@@ -90,7 +90,7 @@ export const cfgSpeechVoice = register({
 		tab: "providers",
 		group: "服务",
 		label: "语音朗读音色",
-		description: "朗读助手输出时使用的 Kokoro 音色",
+		description: "朗读助手输出时使用的 Phonon 音色",
 		options: TTS_LOCAL_VOICE_OPTIONS,
 	},
 });
@@ -103,7 +103,7 @@ export const cfgSpeechSpeed = register({
 		tab: "providers",
 		group: "服务",
 		label: "语音朗读语速",
-		description: "朗读助手输出时的语速。1 = 正常；限制在 0.5–2.5",
+		description: "朗读助手输出时的语速。1 = 正常；限制在 0.8–1.3",
 		options: TTS_SPEED_OPTIONS,
 	},
 });

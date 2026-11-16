@@ -198,7 +198,8 @@ describe("AgentSession idle maintenance", () => {
 			async finishWithoutWake() {
 				h.jobs?.acknowledgeDeliveries(["idle-job"]);
 				done.resolve("finished");
-				await drive(h.session.settleAsyncWork());
+				await h.jobs?.waitForOwnerJobs(JOB_OWNER);
+				await drive(h.session.waitForRunEnd());
 				await flush();
 			},
 		};
@@ -891,15 +892,15 @@ describe("AgentSession idle maintenance", () => {
 			const job = startBackgroundJob(h);
 
 			await runTurn(h);
-			expect(h.session.hasPendingAsyncWork()).toBe(true);
+			expect(h.session.wakeSources).toBeDefined();
 			await elapse(RECAP_DELAY_MS - 1);
 			expect(sideCalls(h)).toBe(0);
 			await elapse(3 * RECAP_DELAY_MS);
-			expect(h.session.hasPendingAsyncWork()).toBe(true);
+			expect(h.session.wakeSources).toBeDefined();
 			expect(sideCalls(h)).toBe(0);
 
 			await job.finishWithoutWake();
-			expect(h.session.hasPendingAsyncWork()).toBe(false);
+			expect(h.session.wakeSources).toBeUndefined();
 			await elapse(RECAP_DELAY_MS - 1);
 			expect(sideCalls(h)).toBe(0);
 			vi.advanceTimersByTime(1);
@@ -926,7 +927,7 @@ describe("AgentSession idle maintenance", () => {
 			expect(compaction).not.toHaveBeenCalled();
 
 			await job.finishWithoutWake();
-			expect(h.session.hasPendingAsyncWork()).toBe(false);
+			expect(h.session.wakeSources).toBeUndefined();
 			await elapse(COMPACTION_DELAY_MS);
 			await until(() => compaction.mock.calls.length === 1, "the idle compaction pass");
 			await elapse(2 * COMPACTION_DELAY_MS);

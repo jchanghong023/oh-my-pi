@@ -32,6 +32,7 @@ import type { AgentSession } from "../session/agent-session";
 import type { EventBus } from "../utils/event-bus";
 import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session";
+import { fromWireEvent } from "../session/loop-end-wire";
 import type { SessionEntry } from "../session/session-entries";
 import { mintSessionId, SessionManager } from "../session/session-manager";
 import { FileSessionStorage } from "../session/session-storage";
@@ -744,7 +745,8 @@ export class CollabGuestLink {
 				break;
 			}
 			case "event":
-				this.#applyEvent(frame.event);
+				// Hosts send every stopped loop as a flagged `agent_end` (see loop-end-wire.ts).
+				this.#applyEvent(fromWireEvent(frame.event));
 				break;
 			case "state": {
 				this.state = frame.state;
@@ -881,11 +883,7 @@ export class CollabGuestLink {
 				this.#lifecycleEmitter.emit(runner, { type: "agent_start" });
 			}
 		} else if (this.#lifecycleEmitter.sawAgentStart) {
-			this.#lifecycleEmitter.emit(runner, {
-				type: "agent_end",
-				messages: [...this.#port.session.messages],
-				isTerminal: true,
-			});
+			this.#lifecycleEmitter.emit(runner, { type: "agent_end", messages: [...this.#port.session.messages] });
 		}
 	}
 

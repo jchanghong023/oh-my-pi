@@ -131,10 +131,11 @@ export function createSessionStub(
 		setActiveToolsByName: vi.fn(async () => {}),
 		runIdleCompaction: vi.fn(async () => {}),
 		waitForIdle: async () => {},
-		hasPendingAsyncWork: () => false,
+		isRunActive: false,
+		wakeSources: undefined,
+		waitForRunEnd: async () => {},
 		getAsyncJobSnapshot: () => null,
 		getLiveToolOutputSnapshot: () => [],
-		settleAsyncWork: async () => {},
 		subscribe: vi.fn(() => () => {}),
 	} satisfies SessionOverrides;
 	if (overrides) layer(stub, overrides);

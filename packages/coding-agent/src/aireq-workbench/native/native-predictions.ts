@@ -35,7 +35,7 @@ class NativePredictions {
 		});
 		this.detach = session.subscribe(event => {
 			if (event.type === "agent_start") this.cancel();
-			if (event.type === "agent_end" && event.isTerminal !== false && !this.closed && current()) {
+			if (event.type === "agent_end" && !this.closed && current()) {
 				this.generation++;
 				this.controller.request();
 				changed();

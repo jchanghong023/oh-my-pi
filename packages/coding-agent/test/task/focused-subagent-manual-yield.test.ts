@@ -338,8 +338,7 @@ for (const source of ["queued steering", "async completion"] as const) {
 			expect(parent.outcome).toBe("injected");
 			expect(await Bun.file(child.artifact).text()).toContain("INITIAL_FINAL");
 			releaseContinuation.resolve();
-			await child.session.waitForIdle();
-			await child.session.settleAsyncWork();
+			await child.session.waitForRunEnd();
 			await child.session.waitForIrcReplies();
 			await manager.waitForOwnerJobs(PARENT_ID);
 			await manager.drainDeliveries({ filter: { ownerId: PARENT_ID } });
@@ -358,8 +357,7 @@ for (const source of ["queued steering", "async completion"] as const) {
 				});
 			}
 			await peerOnlySeen.promise;
-			await child.session.waitForIdle();
-			await child.session.settleAsyncWork();
+			await child.session.waitForRunEnd();
 			await child.session.waitForIrcReplies();
 			await manager.waitForOwnerJobs(PARENT_ID);
 			await manager.drainDeliveries({ filter: { ownerId: PARENT_ID } });

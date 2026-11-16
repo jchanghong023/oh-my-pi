@@ -648,7 +648,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				return;
 			}
 			if (arg === "code") {
-				const block = extractLastCodeBlock(runtime.ctx.session.messages);
+				const block = extractLastCodeBlock(runtime.ctx.viewSession.messages);
 				if (!block) {
 					runtime.ctx.showStatus("No code block to copy.");
 					clearSubmittedText(runtime);
@@ -660,7 +660,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				return;
 			}
 			if (arg === "cmd" || arg === "command") {
-				const lastCommand = extractLastCommand(runtime.ctx.session.messages);
+				const lastCommand = extractLastCommand(runtime.ctx.viewSession.messages);
 				if (!lastCommand) {
 					runtime.ctx.showStatus("No command to copy.");
 					clearSubmittedText(runtime);
@@ -672,7 +672,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				return;
 			}
 			if (arg === "link" || arg === "url") {
-				const link = extractLastLink(runtime.ctx.session.messages);
+				const link = extractLastLink(runtime.ctx.viewSession.messages);
 				if (!link) {
 					runtime.ctx.showStatus("No link to copy.");
 					clearSubmittedText(runtime);

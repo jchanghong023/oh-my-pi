@@ -61,6 +61,7 @@ pi-shell.workspace = true
 pi-vfs.workspace = true
 pi-voice.workspace = true
 pi-walker.workspace = true
+ptts.workspace = true
 portable-pty.workspace = true
 png.workspace = true
 rayon.workspace = true

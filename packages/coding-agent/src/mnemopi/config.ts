@@ -15,7 +15,9 @@ import {
 	cfgMnemopiDebug,
 	cfgMnemopiEmbeddingApiKey,
 	cfgMnemopiEmbeddingApiUrl,
+	cfgMnemopiEmbeddingInputType,
 	cfgMnemopiEmbeddingModel,
+	cfgMnemopiEmbeddingQueryPrefix,
 	cfgMnemopiEmbeddingVariant,
 	cfgMnemopiEnhancedRecall,
 	cfgMnemopiInjectionTokenLimit,
@@ -125,6 +127,11 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 		providerOptions: {
 			...resolveMnemopiEmbeddingOptions(settings),
 			debug: cfgMnemopiDebug.get(settings),
+			embeddings: {
+				// A blank prefix is unset; a set one keeps its whitespace (`query: `).
+				queryPrefix: cfgMnemopiEmbeddingQueryPrefix.get(settings) || undefined,
+				inputType: cfgMnemopiEmbeddingInputType.get(settings),
+			},
 			llm:
 				llmMode === "remote"
 					? {
