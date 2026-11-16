@@ -127,7 +127,7 @@ Literal filesystem paths take precedence over selector interpretation, so an exi
    - Summary output keeps selected declarations and replaces elided spans with `…` or merged brace-pair lines containing `{ … }`. When at least one span is elided, the text content ends with a footer like `[…NNln elided; re-read needed ranges, e.g. <path>:5-16,40-80]` using concrete ranges from the actual elisions.
    - When an elided block sits between matching brace lines, `renderSummary()` may merge them into one anchored line rather than emitting separate opener/closer lines.
 - Explicit selector or summarization miss: streamed text read.
-   - Default open-ended limit is `read.defaultLimit = 300`, clamped to `[1, DEFAULT_MAX_LINES]`.
+   - Default open-ended limit is `read.defaultLimit = 3000`, clamped to `[1, DEFAULT_MAX_LINES]`.
    - Single bounded non-raw text ranges add `RANGE_LEADING_CONTEXT_LINES = 1` / `RANGE_TRAILING_CONTEXT_LINES = 3` on constrained sides. Raw and multi-range reads are exact; directory listing selectors slice rendered entries without context.
    - Non-raw output uses `resolveFileDisplayMode()`:
       - hashline numbered output when edit mode is hashline, read is not raw, source is mutable, and the edit tool exists
@@ -348,7 +348,7 @@ Notes: ...
 - Shared text truncation defaults from `packages/tui/src/tools/streaming-output.ts`:
    - `DEFAULT_MAX_LINES = 3000`
    - `DEFAULT_MAX_BYTES = 50 * 1024`
-- Local text open-ended default line limit: `read.defaultLimit` (default `300`), clamped to `[1, DEFAULT_MAX_LINES]`.
+- Local text open-ended default line limit: `read.defaultLimit` (default `3000`), clamped to `[1, DEFAULT_MAX_LINES]`.
 - Single bounded non-raw text ranges add `1` leading and `3` trailing context lines on constrained sides. Raw and multi-range reads are exact.
 - File streaming chunk size: `8 * 1024` bytes (`READ_CHUNK_SIZE`).
 - Local streamed byte budget for line reads: `max(DEFAULT_MAX_BYTES, maxLinesToCollect * 512)`. Numbered reads charge a line cut to `tools.outputMaxColumns` the UTF-8 bytes of its cut display, not its source size; `:raw` reads and a cap of `0` charge source bytes. Past the 4 MiB buffering cap a line longer than `3 * outputMaxColumns + 6` bytes (always cut) is kept only as the head its display needs, however much page budget remains, and such a window never builds the whole-file hashline snapshot or registers a conflict block from those heads. A multi-range read whose budget stops a range early appends `[Range A-B stopped before line N at the … read budget. Use :N-B to continue]`.

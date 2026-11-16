@@ -317,7 +317,7 @@ describe("spotlight shaping hooks", () => {
 	});
 });
 
-/** A source file well past `plain`'s read page (300 lines), which shaping outlines. */
+/** A large source file whose whole-file read shaping outlines. */
 const BIG_SOURCE = Array.from(
 	{ length: 120 },
 	(_, i) =>

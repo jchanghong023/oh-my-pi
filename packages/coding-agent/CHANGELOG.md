@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Read up to 3,000 lines by default instead of 300 when no line limit is specified.
 - Restored the upstream Provider catalog, login choices, custom providers and runtime discovery while retaining the fork's intranet providers.
 - OpenSpec 在所有新旧项目的产物生成指令中内置中文正文要求，保留项目上下文及必需的英文结构，无须修改项目配置。
 - Bundled `jch-grill-me` and `jch-grill-todo` now instruct research subagents to start with a fresh context window.
