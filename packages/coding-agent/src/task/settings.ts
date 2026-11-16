@@ -115,7 +115,7 @@ export const cfgWorktreeOnExit = register({
 	id: "worktree.onExit",
 	protocolDefault: ["rpc", "acp"],
 	type: "enum",
-	values: ["keep", "ask", "remove"] as const,
+	values: ["keep", "ask", "remove", "force"] as const,
 	default: "keep",
 	ui: {
 		tab: "tasks",
@@ -129,6 +129,12 @@ export const cfgWorktreeOnExit = register({
 				value: "remove",
 				label: "移除",
 				description: "移除干净的工作树；存在未提交更改或新提交时询问。被 Git 忽略的文件（如 `.env`）也会被删除",
+			},
+			{
+				value: "force",
+				label: "Force Remove",
+				description:
+					"Remove every worktree without asking, even with uncommitted changes. Uncommitted work, gitignored files (e.g. `.env`), and commits only on a detached HEAD are lost; new commits on the branch are kept",
 			},
 		],
 	},

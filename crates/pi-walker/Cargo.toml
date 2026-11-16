@@ -23,6 +23,7 @@ pi-vfs.workspace = true
 regex.workspace = true
 serde.workspace = true
 tokio.workspace = true
+xutf.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

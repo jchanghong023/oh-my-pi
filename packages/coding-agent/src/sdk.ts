@@ -1,6 +1,8 @@
 import * as path from "node:path";
-import { type CallRecord, ChangeJournal, callLabel } from "./commit/selective/journal";
+import { type CallRecord, ChangeJournal, callDetails } from "./commit/selective/journal";
 import { createCommitPrelude } from "./commit/selective/prelude-definition";
+import { cfgDisasmBackend } from "./disasm/active";
+import { createDsmPrelude, releaseDsmReferences } from "./disasm/prelude-definition";
 import {
 	Agent,
 	type AgentEvent,
@@ -467,6 +469,7 @@ import {
 	cfgTuiReactions,
 	cfgTuiAutoGraph,
 	cfgTuiRenderMermaid,
+	cfgTuiRenderEmbeds,
 	cfgTuiRenderSvg,
 } from "./modes/settings";
 import { cfgLspEnabled, cfgLspLazy, cfgLspShared } from "./lsp/settings";
@@ -3440,6 +3443,7 @@ async function createAgentSessionScoped(
 			let ratchetPrelude: EvalPreludeDefinition | undefined;
 			let archivePrelude: EvalPreludeDefinition | undefined;
 			let commitPrelude: EvalPreludeDefinition | undefined;
+			let dsmPrelude: EvalPreludeDefinition | undefined;
 			const getEvalPreludes = (): readonly EvalPreludeDefinition[] => {
 				if (restrictToolNames || !toolRegistry.has("eval") || !activeToolNames.has("eval")) return [];
 				const builtins: EvalPreludeDefinition[] = [];
@@ -3462,6 +3466,10 @@ async function createAgentSessionScoped(
 				if (cfgCommitEnabled.get(settings)) {
 					commitPrelude ??= createCommitPrelude(toolSession);
 					builtins.push(commitPrelude);
+				}
+				if (cfgDisasmBackend.get(settings) !== undefined) {
+					dsmPrelude ??= createDsmPrelude(toolSession);
+					builtins.push(dsmPrelude);
 				}
 				return getEnabledEvalPreludes(builtins);
 			};
@@ -5340,6 +5348,7 @@ async function createAgentSessionScoped(
 					subagent: agentKind === "sub",
 					renderMermaid: tuiTranscript && cfgTuiRenderMermaid.get(settings),
 					renderSvg: tuiTranscript && cfgTuiRenderSvg.get(settings),
+					renderEmbeds: tuiTranscript && cfgTuiRenderEmbeds.get(settings),
 					autoGraph: tuiTranscript && cfgTuiAutoGraph.get(settings) !== "off",
 					reactions: agentKind === "main" && options.hasUI === true && cfgTuiReactions.get(settings),
 					encourageEdits: cfgEncourageEdits.get(settings),
@@ -5786,7 +5795,10 @@ async function createAgentSessionScoped(
 							}
 						: requestOptions;
 				const stream = await withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
-					settingsBoundStreamFn(streamModel, context, effectiveOptions),
+					settingsBoundStreamFn(streamModel, context, {
+						...effectiveOptions,
+						thinkingCapabilityDbPath: modelRegistry.modelsDbPath,
+					}),
 				);
 				if (options.onModelResponse) {
 					void stream
@@ -5817,7 +5829,10 @@ async function createAgentSessionScoped(
 					return dispatchExecutionRequest(streamModel, context, streamOptions);
 				}
 				return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
-					settingsBoundStreamFn(streamModel, context, streamOptions),
+					settingsBoundStreamFn(streamModel, context, {
+						...streamOptions,
+						thinkingCapabilityDbPath: modelRegistry.modelsDbPath,
+					}),
 				);
 			};
 			const sideStreamFn = settingsAwareStreamFn;
@@ -6027,7 +6042,8 @@ async function createAgentSessionScoped(
 				}
 			});
 			// Shell-like calls bound the windows in which scripts, formatters, and codegen changed
-			// files on this agent's behalf; selective commits match file mtimes against them.
+			// files on this agent's behalf; selective commits match file ctimes against them, and the
+			// paths their scripts name against deleted files.
 			const shellCalls = new Map<string, Omit<CallRecord, "type" | "agent" | "parent" | "end">>();
 			agent.subscribe(event => {
 				if (event.type === "tool_execution_start") {
@@ -6035,7 +6051,7 @@ async function createAgentSessionScoped(
 					shellCalls.set(event.toolCallId, {
 						tool: event.toolName,
 						start: Date.now(),
-						label: callLabel(event.args),
+						...callDetails(event.args),
 					});
 				} else if (event.type === "tool_execution_end") {
 					const call = shellCalls.get(event.toolCallId);
@@ -6946,6 +6962,7 @@ async function createAgentSessionScoped(
 									strictSessionDisposed = true;
 								}
 								strictCallbacks ??= new Set([
+									() => releaseDsmReferences(toolSession),
 									...(releaseTinyTitleClient ? [() => releaseTinyTitleClient({ strict: true })] : []),
 									unsubscribeCredentialDisabled,
 									...(unbindSessionEffects ? [unbindSessionEffects] : []),
@@ -7040,8 +7057,12 @@ async function createAgentSessionScoped(
 						restoreProviderToggles?.();
 						unsubscribeMcpNotifications?.();
 						unregisterMcpPostmortem?.();
-						for (const callback of disposeCallbacks) await callback();
-						disposeCallbacks.clear();
+						try {
+							for (const callback of disposeCallbacks) await callback();
+						} finally {
+							disposeCallbacks.clear();
+							await releaseDsmReferences(toolSession);
+						}
 						// Drop refs so the process-global postmortem list doesn't retain
 						// the bridge closure past explicit dispose.
 						unsubscribeMcpNotifications = undefined;

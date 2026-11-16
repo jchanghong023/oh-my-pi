@@ -297,7 +297,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		});
 		await Bun.write(resolvedPlanPath, "# Plan\n\nUse the MCP tool.");
 		vi.spyOn(session!, "getContextUsage").mockReturnValue(undefined);
-		vi.spyOn(created, "showPlanReview").mockImplementation(async (_content, _title, options) => options[2]);
+		vi.spyOn(created, "showPlanReview").mockResolvedValue("keep");
 		vi.spyOn(session!, "prompt").mockResolvedValue(undefined as never);
 
 		await created.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
@@ -352,7 +352,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		});
 		await Bun.write(resolvedPlanPath, "# Plan\n\nUse the extension tool.");
 		vi.spyOn(session!, "getContextUsage").mockReturnValue(undefined);
-		vi.spyOn(created, "showPlanReview").mockImplementation(async (_content, _title, options) => options[2]);
+		vi.spyOn(created, "showPlanReview").mockResolvedValue("keep");
 		vi.spyOn(session!, "prompt").mockResolvedValue(undefined as never);
 
 		await created.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });

@@ -19,8 +19,7 @@ const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isT
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
 // This suite asserts the real emergencyTerminalRestore() write path, so it opts
-// out of the test-default headless suppression. Restored in afterEach (not the
-// helper) so the tests exercise emergency cleanup after terminal.stop() too.
+// out of the test-default headless suppression, restoring it in afterEach.
 let previousHeadless = false;
 
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
@@ -68,16 +67,6 @@ describe("emergencyTerminalRestore alt-screen gating", () => {
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
 	});
 
-	it("does not emit reset sequences after graceful shutdown has restored the terminal", () => {
-		const { terminal, writes } = startCapturedTerminal();
-		terminal.stop();
-
-		writes.length = 0;
-		emergencyTerminalRestore();
-
-		expect(writes).toEqual([]);
-	});
-
 	it.each([false, true])(
 		"closes only the negotiated keyboard mode before suppressing later restore (kitty=%s)",
 		kitty => {
@@ -97,25 +86,44 @@ describe("emergencyTerminalRestore alt-screen gating", () => {
 		},
 	);
 
-	it("emits DECRST 1049 on the post-stop path while the alt screen is tracked active, then resets the state", () => {
+	it("never writes after graceful stop has handed output back to the shell", () => {
 		const { terminal, writes } = startCapturedTerminal();
 		terminal.stop();
-		setAltScreenActive(true); // crash while a fullscreen overlay holds the alt buffer
+		expect(writes.join("")).toContain("\x1b[?25h");
 
 		writes.length = 0;
 		emergencyTerminalRestore();
-		const firstRestore = writes.join("");
-		expect(firstRestore).toContain("\x1b[?1049l");
-		const altExit = firstRestore.indexOf("\x1b[?1049l");
-		expect(firstRestore.indexOf("\x1b[<u", altExit + 1)).toBeGreaterThan(altExit);
-		expect(firstRestore).toContain("\x1b[?1006l");
-		expect(firstRestore).toContain("\x1b[?1003l");
-		expect(firstRestore).toContain("\x1b[?1000l");
+		terminal.showCursor(true);
+		terminal.write("late frame");
+		terminal.stop();
+		expect(writes).toEqual([]);
+	});
 
-		// State was consumed: a second restore must not leave the (now main) buffer again.
+	it("does not regain output ownership from stale alt-screen state after stop", () => {
+		const { terminal, writes } = startCapturedTerminal();
+		terminal.stop();
+		setAltScreenActive(true);
 		writes.length = 0;
 		emergencyTerminalRestore();
-		expect(writes.join("")).not.toContain("\x1b[?1049l");
+		expect(writes).toEqual([]);
+	});
+
+	it("permits output again only after a new start", () => {
+		const { terminal, writes } = startCapturedTerminal();
+		terminal.stop();
+		terminal.start(
+			() => {},
+			() => {},
+			undefined,
+			{ deferInput: true },
+		);
+		try {
+			writes.length = 0;
+			terminal.write("new session");
+			expect(writes).toEqual(["new session"]);
+		} finally {
+			terminal.stop();
+		}
 	});
 
 	it("emits DECRST 1049 on the live-terminal crash path only when the alt screen is tracked active", () => {

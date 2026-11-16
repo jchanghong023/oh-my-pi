@@ -6558,7 +6558,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -6600,7 +6600,7 @@ dependencies = [
 
 [[package]]
 name = "pi-builtins"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "ansi-width",
  "anyhow",
@@ -6686,11 +6686,14 @@ dependencies = [
 
 [[package]]
 name = "pi-diff"
-version = "18.20.3"
+version = "18.22.0"
+dependencies = [
+ "xutf",
+]
 
 [[package]]
 name = "pi-edit"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -6709,7 +6712,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "async-trait",
  "libc",
@@ -6717,6 +6720,7 @@ dependencies = [
  "pi-diff",
  "tokio",
  "windows-sys 0.61.2",
+ "xutf",
 ]
 
 [[package]]
@@ -6745,7 +6749,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6775,6 +6779,7 @@ dependencies = [
  "image",
  "indexmap",
  "libc",
+ "libm",
  "libsqlite3-sys",
  "log",
  "memchr",
@@ -6845,7 +6850,7 @@ dependencies = [
 
 [[package]]
 name = "pi-predict"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -6858,12 +6863,13 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "xutf",
  "zstd",
 ]
 
 [[package]]
 name = "pi-shell"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6896,12 +6902,13 @@ dependencies = [
  "toml",
  "windows-sys 0.61.2",
  "winreg 0.56.0",
+ "xutf",
  "xxhash-rust",
 ]
 
 [[package]]
 name = "pi-vcs"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "futures",
  "gix",
@@ -6914,11 +6921,12 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "xutf",
 ]
 
 [[package]]
 name = "pi-vfs"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "async-trait",
  "libc",
@@ -6932,7 +6940,7 @@ dependencies = [
 
 [[package]]
 name = "pi-voice"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "bytes",
  "flume",
@@ -6946,7 +6954,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "18.20.3"
+version = "18.22.0"
 dependencies = [
  "async-trait",
  "flume",
@@ -6966,6 +6974,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "windows-sys 0.61.2",
+ "xutf",
 ]
 
 [[package]]
@@ -11066,9 +11075,9 @@ dependencies = [
 
 [[package]]
 name = "xutf"
-version = "1.5.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "990cc0159ef1d38b900524ac2308778ce60de2d32af70f40a71517c6b299fe8a"
+checksum = "704bc7ae7d98d2d4bbb024f35cf8e706021bdc13a3a7257d741cb64ca71e8cfe"
 
 [[package]]
 name = "xxhash-rust"

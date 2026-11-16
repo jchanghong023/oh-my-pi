@@ -17,9 +17,11 @@
 - Reuse upstream per-user test temp directories without overriding explicit persistent or performance roots for logs.
 - `ptree` commands spawned with `subreaper: true` no longer leave a descendant that ignores SIGTERM running after a graceful stop (an `AbortSignal`, `kill()` without a hard grace, or dispose); the subreaper stays alive through the grace period and the hard sweep then ends every descendant ([#18018](https://github.com/can1357/oh-my-pi/pull/18018) by [@sjawhar](https://github.com/sjawhar))
 
+## [18.21.0] - 2026-11-16
+
 ### Fixed
 
-- Fixed bare URLs swallowing the following word when Korean, Japanese or Chinese text follows a parenthesized URL without a space, as in `(https://example.com/pull/1)가` ([#19336](https://github.com/can1357/oh-my-pi/pull/19336) by [@nnnnoel](https://github.com/nnnnoel))
+- Fixed bare URLs swallowing the following word when Korean, Japanese, or Chinese text follows a parenthesized URL without a space.
 
 ## [18.20.3] - 2026-11-16
 

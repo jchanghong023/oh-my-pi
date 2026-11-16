@@ -1,12 +1,16 @@
 /**
  * Compact session-model picker (ctrl+t / `/switch`): a bottom-anchored
- * floating overlay hosting just a {@link ModelBrowser} — no provider sidebar.
- * Model entries switch the current session only; a search beginning with `@`
- * exposes the configured ctrl+p quick roles.
+ * floating overlay hosting a {@link ModelBrowser}, filtered by a provider
+ * scope (Tab), with a thinking-level slider (←/→) for the pick. Natively
+ * it is a drop-up sheet rising from the composer with an icon-only provider
+ * rail. Model entries switch the current session only; a search beginning
+ * with `@` exposes the configured ctrl+p quick roles.
  */
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { addKeyAliases, canonicalKeyId } from "../keybindings";
-import { type KeyId, parseKey } from "../keys";
+import { type KeyId, matchesKey, parseKey } from "../keys";
 import type { SgrMouseEvent } from "../mouse";
 import type { Component, TUI } from "../tui";
 import { type ThemeColor, theme } from "../theme/theme";
@@ -15,18 +19,19 @@ import {
 	ModelBrowser,
 	type ModelBrowserItem,
 	type ModelPickerCatalogue,
+	providerMark,
 } from "./model-browser";
 import type { ModelBrowserRegistry, ModelBrowserSource } from "./model-browser";
-import type { ConfiguredThinkingLevel } from "../thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../thinking";
 import type { ScopedModelItem } from "./model-hub";
 import { bottomBorder, row, topBorder } from "../chrome/overlay-box";
 import { resolveSegmentPalette } from "../chrome/segment-track";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
-import { card, compact, span, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import { card, span, text } from "../native/describe";
+import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { CLOSE_ACTION, picker, pickerAction, pickerEvent } from "../native/picker";
-import type { TspPickerProps } from "@oh-my-pi/pi-wire";
+import type { TspPickerLevel, TspPickerScope } from "@oh-my-pi/pi-wire";
 import { actionHint, hintsRow, type NativeHint } from "../native/overlay";
 
 /** Configured role resolved to a concrete model. */
@@ -47,9 +52,14 @@ export interface ModelPickerCallbacks {
 	/**
 	 * A model was chosen for a session-only switch. `selector` is `provider/id`.
 	 * `overContext` is true when the session transcript exceeds the model's
-	 * context window — the host must compact before switching.
+	 * context window — the host must compact before switching. `thinkingLevel`
+	 * is the slider's level clamped to `model`, absent when it was not moved.
 	 */
-	onPick: (model: Model, selector: string, meta: { overContext: boolean }) => void;
+	onPick: (
+		model: Model,
+		selector: string,
+		meta: { overContext: boolean; thinkingLevel?: ConfiguredThinkingLevel },
+	) => void;
 	/** A configured ctrl+p quick role was chosen. */
 	onPickRole?: (entry: ResolvedRoleModel) => void;
 	/**
@@ -80,6 +90,8 @@ export interface ModelPickerOptions {
 	selectOnly?: boolean;
 	/** Complete selection-only catalogue and shared search; no session scope, recents or discovery. */
 	getCandidates?: (query: string) => readonly Model[];
+	/** Thinking level applied on selection when the session-mode slider is untouched. */
+	thinkingLevelFor?: (model: Model) => ConfiguredThinkingLevel | undefined;
 }
 
 /** Fixed chrome rows: top border, status row, footer, bottom border. */
@@ -96,20 +108,84 @@ const QUICK_ROLE_STATUS_HINT = "快捷角色切换 — 将其模型和思考级�
 const TASK_STATUS_HINT = "任务 Subagent 切换 — 新建的任务 Agent 使用此模型（仅当前会话）";
 const SELECT_ONLY_STATUS_HINT = "仅选择模型 — 不改变当前会话模型";
 
+type PickerMode = "session" | "role" | "task" | "selection";
+
+/** The scope listing every model. */
+const ALL_SCOPE = "all";
+/** Prefix of a provider scope id (`provider:anthropic`). */
+const PROVIDER_SCOPE = "provider:";
+
+/** Slider step labels by thinking selector. */
+const THINKING_STEP_LABELS: Readonly<Record<string, string>> = {
+	[AUTO_THINKING]: "Auto",
+	[ThinkingLevel.Off]: "Off",
+	[ThinkingLevel.Minimal]: "Min",
+	[ThinkingLevel.Low]: "Low",
+	[ThinkingLevel.Medium]: "Med",
+	[ThinkingLevel.High]: "High",
+	[ThinkingLevel.XHigh]: "XHigh",
+	[ThinkingLevel.Max]: "Max",
+};
+/** The frozen slider's steps for a model without an effort to pick. */
+const FROZEN_THINKING_STEPS: readonly ConfiguredThinkingLevel[] = [
+	ThinkingLevel.Off,
+	ThinkingLevel.Minimal,
+	ThinkingLevel.Low,
+	ThinkingLevel.Medium,
+	ThinkingLevel.High,
+];
+/** Keycaps of the slider's step keys (←/→). */
+const THINKING_KEYS = ["left", "right"];
+
+/** The thinking slider for one model: its steps low to high, the shown step, and why it is frozen. */
+interface ThinkingSlider {
+	steps: readonly ConfiguredThinkingLevel[];
+	value: ConfiguredThinkingLevel;
+	disabled?: string;
+}
+
+/** `model`'s slider steps (auto, off, its efforts), frozen when it has no effort to pick. */
+function thinkingSteps(model: Model): { steps: readonly ConfiguredThinkingLevel[]; disabled?: string } {
+	const efforts = getSupportedEfforts(model);
+	if (efforts.length > 0) return { steps: [AUTO_THINKING, ThinkingLevel.Off, ...efforts] };
+	return {
+		steps: FROZEN_THINKING_STEPS,
+		disabled: model.reasoning ? `${model.name} 自动选择思考强度` : `${model.name} 不支持推理`,
+	};
+}
+
+/** `level` as one of `model`'s live `steps`: unset or inherit as the model's default, an effort clamped to its ladder. */
+function thinkingStep(
+	model: Model,
+	steps: readonly ConfiguredThinkingLevel[],
+	level: ConfiguredThinkingLevel | undefined,
+): ConfiguredThinkingLevel {
+	const wanted =
+		level === undefined || level === ThinkingLevel.Inherit
+			? (model.thinking?.defaultLevel ?? ThinkingLevel.Off)
+			: level;
+	if (steps.includes(wanted)) return wanted;
+	if (wanted === AUTO_THINKING || wanted === ThinkingLevel.Off) return ThinkingLevel.Off;
+	return clampThinkingLevelForModel(model, wanted) ?? ThinkingLevel.Off;
+}
+
 /** Footer hint for the active mode; keys resolve at render time so theme/keybinding changes apply. */
-function footerHint(mode: "session" | "role" | "task" | "selection"): string {
+function footerHint(mode: PickerMode, thinking: boolean): string {
 	const upDown = editorKeys("tui.select.up", "tui.select.down");
 	const enter = formatKeyHint("enter");
+	const provider = `${formatKeyHint("tab")} 提供商`;
 	const close = `${editorKey("tui.select.cancel")} 关闭`;
 	switch (mode) {
 		case "role":
 			return `${upDown} 角色 · ${enter} 应用角色模型 · 输入以搜索 · ${close}`;
 		case "task":
-			return `${upDown} 模型 · ${enter} 用于任务 Subagent · 输入以搜索 · ${close}`;
+			return `${upDown} 模型 · ${enter} 用于任务 Subagent · ${provider} · 输入以搜索 · ${close}`;
 		case "selection":
 			return `${upDown} 模型 · ${enter} 选择模型 · 输入以搜索 · ${close}`;
-		default:
-			return `${upDown} 模型 · ${enter} 用于当前会话 · 输入以搜索 · @ 快捷角色 · ${close}`;
+		default: {
+			const level = thinking ? ` · ${formatKeyHint("left")}/${formatKeyHint("right")} 思考级别` : "";
+			return `${upDown} 模型 · ${enter} 用于当前会话 · ${provider}${level} · 输入以搜索 · @ 快捷角色 · ${close}`;
+		}
 	}
 }
 
@@ -138,13 +214,22 @@ export class ModelPickerComponent implements Component {
 	#taskSelector: string | undefined;
 	#selectOnly: boolean;
 	#getCandidates?: (query: string) => readonly Model[];
+	#thinkingLevelFor: ((model: Model) => ConfiguredThinkingLevel | undefined) | undefined;
+	/** The slider's pending level; undefined while untouched (each model shows what picking it applies). */
+	#thinking: ConfiguredThinkingLevel | undefined;
+	/** Active scope: {@link ALL_SCOPE} or `provider:<id>`. */
+	#scope = ALL_SCOPE;
+	#scopeItems: { source: ModelBrowserItem[]; scope: string; items: ModelBrowserItem[] } | undefined;
+	#scopes: { source: ModelBrowserItem[]; value: TspPickerScope[] } | undefined;
+	#level: { key: string; value: TspPickerLevel } | undefined;
 	#nativeRoot: { memo: string; node: NativeNode } | undefined;
 	#pickerRoot:
 		| {
 				memo: string;
 				catalogue: ModelPickerCatalogue;
 				order: object;
-				preview: readonly NativeChild[];
+				scopes: readonly TspPickerScope[] | undefined;
+				level: TspPickerLevel | null;
 				node: NativeNode;
 		  }
 		| undefined;
@@ -166,6 +251,7 @@ export class ModelPickerComponent implements Component {
 		this.#currentSelector = options.currentSelector;
 		this.#currentQuickRoleSelector = options.currentQuickRole ? `@${options.currentQuickRole}` : undefined;
 		this.#taskSelector = options.taskSelector;
+		this.#thinkingLevelFor = this.#selectOnly ? undefined : options.thinkingLevelFor;
 		if (!this.#selectOnly && callbacks.onPickTask) {
 			this.#taskModeKey = options.taskModeKeys?.[0];
 			for (const key of options.taskModeKeys ?? []) addKeyAliases(this.#taskMatchKeys, key);
@@ -184,6 +270,8 @@ export class ModelPickerComponent implements Component {
 					? `  ${editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p")} 轮换中没有快捷角色`
 					: undefined,
 		});
+		// The rail's logos name each row's provider: the rows show the model id alone.
+		this.#browser.setPickerProvider(false);
 		this.#browser.onActivate = item => {
 			const quickRole = this.#quickRoles.get(item.selector);
 			if (quickRole) {
@@ -194,7 +282,13 @@ export class ModelPickerComponent implements Component {
 				callbacks.onPickTask?.(item.model, item.selector);
 				return;
 			}
-			callbacks.onPick(item.model, item.selector, { overContext: this.#browser.isOverContext(item) });
+			const overContext = this.#browser.isOverContext(item);
+			const thinkingLevel = this.#pendingThinking(item.model);
+			callbacks.onPick(
+				item.model,
+				item.selector,
+				thinkingLevel === undefined ? { overContext } : { overContext, thinkingLevel },
+			);
 		};
 		this.#browser.onCancel = () => callbacks.onCancel();
 		this.#browser.onQueryChange = query => this.#syncItemsForQuery(query);
@@ -279,6 +373,7 @@ export class ModelPickerComponent implements Component {
 		if (!modeChanged && !refresh) return;
 
 		this.#roleMode = roleMode;
+		if (roleMode) this.#scope = ALL_SCOPE;
 		this.#browser.setShowProvider(!roleMode);
 		this.#browser.setMarkOverContext(!this.#selectOnly && !roleMode && !this.#taskMode);
 		this.#browser.setPreserveQueryOrder(roleMode);
@@ -288,10 +383,111 @@ export class ModelPickerComponent implements Component {
 				? this.#taskSelector
 				: this.#currentSelector;
 		this.#browser.setCurrentSelector(currentSelector);
-		this.#browser.setItems(roleMode ? this.#quickRoleItems : this.#modelItems);
+		this.#browser.setItems(roleMode ? this.#quickRoleItems : this.#scopedModelItems());
 		if (modeChanged && currentSelector) {
 			this.#browser.selectSelector(currentSelector);
 		}
+	}
+
+	#mode(): PickerMode {
+		return this.#taskMode ? "task" : this.#roleMode ? "role" : this.#selectOnly ? "selection" : "session";
+	}
+
+	/** The model rows of the active scope; a provider scope that lost its models falls back to All. */
+	#scopedModelItems(): ModelBrowserItem[] {
+		const source = this.#modelItems;
+		if (this.#scope === ALL_SCOPE) return source;
+		const memo = this.#scopeItems;
+		if (memo?.source === source && memo.scope === this.#scope) return memo.items;
+		const provider = this.#scope.slice(PROVIDER_SCOPE.length);
+		const items = source.filter(item => item.provider === provider);
+		if (items.length === 0) {
+			this.#scope = ALL_SCOPE;
+			return source;
+		}
+		this.#scopeItems = { source, scope: this.#scope, items };
+		return items;
+	}
+
+	/** One scope per provider with models, alphabetical; none active lists them all. */
+	#pickerScopes(): TspPickerScope[] {
+		const source = this.#modelItems;
+		if (this.#scopes?.source === source) return this.#scopes.value;
+		const counts = new Map<string, number>();
+		for (const item of source) counts.set(item.provider, (counts.get(item.provider) ?? 0) + 1);
+		const value: TspPickerScope[] = [...counts.keys()]
+			.sort((a, b) => a.localeCompare(b))
+			.map(provider => ({
+				id: `${PROVIDER_SCOPE}${provider}`,
+				label: provider,
+				mark: providerMark(provider),
+				count: counts.get(provider),
+			}));
+		this.#scopes = { source, value };
+		return value;
+	}
+
+	/**
+	 * Show scope `id` ({@link ALL_SCOPE}, or a provider's; the active provider again goes back to all); the highlight
+	 * stays on its model when the scope lists it, else falls back to the current model.
+	 */
+	#setScope(picked: string): void {
+		const id = picked === this.#scope ? ALL_SCOPE : picked;
+		if (this.#selectOnly || this.#roleMode || id === this.#scope) return;
+		if (id !== ALL_SCOPE && !this.#pickerScopes().some(scope => scope.id === id)) return;
+		const before = this.#browser.pickerSelected;
+		this.#scope = id;
+		this.#syncItemsForQuery(this.#browser.query, true);
+		const target = this.#taskMode ? this.#taskSelector : this.#currentSelector;
+		if (this.#browser.pickerSelected !== before && target) this.#browser.selectSelector(target);
+		this.#tui.requestRender();
+	}
+
+	/** Step through all models, then each provider, wrapping. */
+	#cycleScope(delta: -1 | 1): void {
+		const ids = [ALL_SCOPE, ...this.#pickerScopes().map(scope => scope.id)];
+		const index = ids.indexOf(this.#scope);
+		const next = ids[(index + delta + ids.length) % ids.length];
+		if (next) this.#setScope(next);
+	}
+
+	/** The thinking slider for the highlighted model; session mode only. */
+	#slider(): ThinkingSlider | undefined {
+		const levelFor = this.#thinkingLevelFor;
+		if (!levelFor || this.#mode() !== "session" || this.#browser.pickerSelected === null) return undefined;
+		const model = this.#browser.getSelected()?.model;
+		if (!model) return undefined;
+		const { steps, disabled } = thinkingSteps(model);
+		if (disabled) return { steps, value: ThinkingLevel.Off, disabled };
+		return { steps, value: thinkingStep(model, steps, this.#thinking ?? levelFor(model)) };
+	}
+
+	/** The pending level as picking `model` applies it; undefined when untouched or the model has no effort. */
+	#pendingThinking(model: Model): ConfiguredThinkingLevel | undefined {
+		if (this.#thinking === undefined || this.#mode() !== "session") return undefined;
+		const { steps, disabled } = thinkingSteps(model);
+		return disabled ? undefined : thinkingStep(model, steps, this.#thinking);
+	}
+
+	/** Move the pending level one step along the highlighted model's slider, stopping at its ends. */
+	#stepThinking(delta: -1 | 1): void {
+		const slider = this.#slider();
+		if (!slider || slider.disabled) return;
+		const index = slider.steps.indexOf(slider.value);
+		const next = slider.steps[Math.max(0, Math.min(slider.steps.length - 1, index + delta))];
+		if (next === undefined || next === slider.value) return;
+		this.#thinking = next;
+		this.#tui.requestRender();
+	}
+
+	/** A slider press: `value` must be a step of the highlighted model's live slider. */
+	#setThinking(value: string | undefined): void {
+		const slider = this.#slider();
+		if (!slider || slider.disabled) return;
+		const step = slider.steps.find(level => level === value);
+		if (step === undefined) return;
+		this.#thinking = step;
+		this.#tui.requestRender();
 	}
 
 	handleInput(data: string): void {
@@ -302,6 +498,28 @@ export class ModelPickerComponent implements Component {
 			const canonical = parsed !== undefined ? canonicalKeyId(parsed) : undefined;
 			if (canonical !== undefined && this.#taskMatchKeys.has(canonical)) {
 				this.#toggleTaskMode();
+				return;
+			}
+		}
+		if (!this.#selectOnly && !this.#roleMode) {
+			if (matchesKey(data, "tab")) {
+				this.#cycleScope(1);
+				return;
+			}
+			if (matchesKey(data, "shift+tab")) {
+				this.#cycleScope(-1);
+				return;
+			}
+		}
+		// ←/→ step the thinking slider; the search keeps ⌥←/→ and ⌃←/→ to
+		// move its caret by words.
+		if (this.#thinkingLevelFor && this.#mode() === "session") {
+			if (matchesKey(data, "left")) {
+				this.#stepThinking(-1);
+				return;
+			}
+			if (matchesKey(data, "right")) {
+				this.#stepThinking(1);
 				return;
 			}
 		}
@@ -329,7 +547,7 @@ export class ModelPickerComponent implements Component {
 
 		const inner = Math.max(1, width - 4);
 		const selectionOnly = this.#selectOnly;
-		const status = this.#configError
+		let status = this.#configError
 			? theme.fg("error", ` ${this.#configError}`)
 			: this.#taskMode
 				? theme.fg("error", ` ${TASK_STATUS_HINT}`)
@@ -337,11 +555,15 @@ export class ModelPickerComponent implements Component {
 						"muted",
 						` ${selectionOnly ? SELECT_ONLY_STATUS_HINT : this.#roleMode ? QUICK_ROLE_STATUS_HINT : STATUS_HINT}`,
 					);
+		const slider = this.#slider();
+		if (slider) {
+			status += slider.disabled
+				? theme.fg("dim", " · 无思考级别")
+				: `${theme.fg("muted", " · 思考级别 ")}${theme.getThinkingBorderColor(slider.value)(THINKING_STEP_LABELS[slider.value] ?? slider.value)}`;
+		}
 
 		const borderColor: ThemeColor | undefined = this.#taskMode ? "error" : undefined;
-		let footer = footerHint(
-			this.#taskMode ? "task" : this.#roleMode ? "role" : selectionOnly ? "selection" : "session",
-		);
+		let footer = footerHint(this.#mode(), this.#thinkingLevelFor !== undefined);
 		if (this.#taskModeKey !== undefined && !this.#roleMode) {
 			footer += ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "会话模型" : "任务模型"}`;
 		}
@@ -379,13 +601,14 @@ export class ModelPickerComponent implements Component {
 			case "clear":
 				if (this.#browser.query.length > 0) this.#browser.handleCancel();
 				return;
-			case "use": {
-				const selected = this.#browser.pickerSelected;
-				if (selected) this.#browser.routePickerItem(selected, true);
-				return;
-			}
 			case "task":
 				if (this.#taskModeKey !== undefined && !this.#roleMode) this.#toggleTaskMode();
+				return;
+			case "scope":
+				if (picked.value !== undefined) this.#setScope(picked.value);
+				return;
+			case "level":
+				this.#setThinking(picked.value);
 				return;
 		}
 	}
@@ -396,7 +619,7 @@ export class ModelPickerComponent implements Component {
 	}
 
 	#describePicker(): NativeNode {
-		const mode = this.#taskMode ? "task" : this.#roleMode ? "role" : this.#selectOnly ? "selection" : "session";
+		const mode = this.#mode();
 		const query = this.#browser.query;
 		const view = this.#browser.pickerOrder({
 			providers: false,
@@ -409,70 +632,78 @@ export class ModelPickerComponent implements Component {
 				: mode === "task"
 					? this.#taskSelector
 					: this.#currentSelector;
-		const preview = this.#browser.pickerPreview("compact", current);
+		const scopes = mode === "role" || mode === "selection" ? undefined : this.#pickerScopes();
+		const level = this.#levelProps();
 		const selected = this.#browser.pickerSelected;
 		const cursor = this.#browser.cursor;
-		const memo = `${mode}\0${this.#configError ?? ""}\0${query}\0${cursor}\0${selected ?? ""}`;
+		const memo = `${mode}\0${this.#configError ?? ""}\0${query}\0${cursor}\0${selected ?? ""}\0${this.#scope}`;
 		const cached = this.#pickerRoot;
 		if (
 			cached !== undefined &&
 			cached.memo === memo &&
 			cached.catalogue === catalogue &&
 			cached.order === view &&
-			cached.preview === preview
+			cached.scopes === scopes &&
+			cached.level === level
 		) {
 			return cached.node;
 		}
-		const subtitle: TspPickerProps["subtitle"] = this.#configError
-			? [span(this.#configError, "error")]
-			: mode === "task"
-				? [span(TASK_STATUS_HINT, "warning")]
-				: mode === "selection"
-					? SELECT_ONLY_STATUS_HINT
-					: mode === "role"
-						? QUICK_ROLE_STATUS_HINT
-						: STATUS_HINT;
 		const cycleKey = editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p");
-		const node = picker(
-			{
-				title: mode === "task" ? "切换任务模型" : mode === "selection" ? "选择模型" : "切换模型",
-				subtitle,
-				icon: "cpu",
-				noun: mode === "role" ? "角色" : "模型",
-				size: "md",
-				layout: "rows",
-				preview: "below",
-				placeholder: mode === "task" || mode === "selection" ? "搜索模型…" : "搜索模型，输入 @ 查找快捷角色…",
-				...this.#browser.pickerRows(catalogue, view, current),
-				empty: mode === "role" ? `${cycleKey} 轮换中没有快捷角色` : "没有可用模型",
-				actions: compact([
-					pickerAction(
-						"use",
-						mode === "role"
-							? "应用角色"
-							: mode === "task"
-								? "用于任务 Subagent"
-								: mode === "selection"
-									? "选择模型"
-									: "用于当前会话",
-						"enter",
-						{ primary: true },
-					),
-					this.#taskModeKey !== undefined && mode !== "role" && mode !== "selection"
-						? pickerAction("task", "任务模型", this.#taskModeKey, { on: mode === "task" })
-						: undefined,
-					query.length > 0 ? { ...CLOSE_ACTION, label: "清空搜索" } : CLOSE_ACTION,
-				]),
-			},
-			preview,
-		);
-		this.#pickerRoot = { memo, catalogue, order: view, preview, node };
+		const node = picker({
+			icon: "cpu",
+			noun: mode === "role" ? "角色" : "模型",
+			size: "md",
+			anchor: "composer",
+			search: "list",
+			density: "snug",
+			layout: "rows",
+			preview: "none",
+			placeholder:
+				mode === "selection" ? "搜索模型…" : mode === "task" ? "搜索任务模型…" : "搜索模型，输入 @ 查找快捷角色…",
+			...(scopes ? { scopes, scope: this.#scope, scopeStyle: "rail" as const } : {}),
+			...this.#browser.pickerRows(catalogue, view, current),
+			level,
+			...(this.#configError ? { title: "切换模型", subtitle: [span(this.#configError, "error")] } : {}),
+			empty: mode === "role" ? `${cycleKey} 轮换中没有快捷角色` : "没有可用模型",
+			actions:
+				this.#taskModeKey !== undefined && mode !== "role" && mode !== "selection"
+					? [
+							pickerAction("task", "任务 / 会话", this.#taskModeKey, {
+								on: mode === "task",
+								head: true,
+								icon: "users",
+							}),
+						]
+					: [],
+		});
+		this.#pickerRoot = { memo, catalogue, order: view, scopes, level, node };
 		return node;
+	}
+
+	/** The thinking slider's props for the highlighted model, the same object while its steps and value hold. */
+	#levelProps(): TspPickerLevel | null {
+		const slider = this.#slider();
+		if (!slider) return null;
+		// The rows leave their provider out: the chip names the highlighted one's.
+		const provider = this.#browser.getSelected()?.model.provider ?? "";
+		const key = `${slider.steps.join(",")}\0${slider.value}\0${slider.disabled ?? ""}\0${provider}`;
+		if (this.#level?.key === key) return this.#level.value;
+		const value: TspPickerLevel = {
+			label: "思考级别",
+			steps: slider.steps.map(id => ({ id, label: THINKING_STEP_LABELS[id] ?? id })),
+			value: slider.value,
+			...(provider ? { detail: provider } : {}),
+			icon: "brain",
+			keys: THINKING_KEYS,
+			...(slider.disabled ? { disabled: slider.disabled } : {}),
+		};
+		this.#level = { key, value };
+		return value;
 	}
 
 	/** Root card over the status line, the embedded browser, and the mode's key hints. */
 	#describeCard(): NativeNode {
-		const mode = this.#taskMode ? "task" : this.#roleMode ? "role" : this.#selectOnly ? "selection" : "session";
+		const mode = this.#mode();
 		const memo = `${mode}\0${this.#configError ?? ""}\0${this.#taskModeKey ?? ""}`;
 		if (this.#nativeRoot?.memo === memo) return this.#nativeRoot.node;
 

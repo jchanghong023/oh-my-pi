@@ -44,6 +44,7 @@ describe("AgentSession eval preludes", () => {
 			"browser.enabled": false,
 			"archive.enabled": false,
 			"commit.enabled": false,
+			"disassembler.backend": "none",
 		});
 		const { session } = await createAgentSession({
 			cwd: registryDir,
@@ -101,6 +102,7 @@ describe("AgentSession eval preludes", () => {
 			"browser.enabled": false,
 			"archive.enabled": false,
 			"commit.enabled": false,
+			"disassembler.backend": "none",
 		});
 		const { session } = await createAgentSession({
 			cwd: registryDir,

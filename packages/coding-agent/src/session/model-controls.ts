@@ -814,8 +814,6 @@ export class ModelControls {
 			ceiling === undefined
 				? efforts
 				: efforts.filter(level => THINKING_EFFORTS.indexOf(level) <= THINKING_EFFORTS.indexOf(ceiling));
-		// Auto never opts an unverified model into thinking; only a concrete pick does.
-		if (this.#model.thinking?.unverified) return [ThinkingLevel.Off, ...selectable];
 		return [ThinkingLevel.Off, AUTO_THINKING, ...selectable];
 	}
 
@@ -850,7 +848,7 @@ export class ModelControls {
 	 */
 	async applyAutoThinkingLevel(promptText: string, generation: number, solutionSpace?: string): Promise<void> {
 		const model = this.#model;
-		if (!model?.reasoning || model.thinking?.unverified) return;
+		if (!model?.reasoning) return;
 		// Models with reasoning but no controllable effort surface (devin-agent
 		// Cascade routes effort via sibling model ids, not a wire param) have
 		// nothing to pick — skip classification rather than discard its result.
@@ -919,7 +917,7 @@ export class ModelControls {
 	applyChillax(promptText: string): boolean {
 		if (!this.#host.magicKeywordEnabled("chillax") || !containsMagicKeyword(promptText, "chillax")) return false;
 		const model = this.#model;
-		if (!model?.reasoning || model.thinking?.unverified || !takesPerMessageEffort(model)) return false;
+		if (!model?.reasoning || !takesPerMessageEffort(model)) return false;
 		const floor = getSupportedEfforts(model)[0];
 		if (floor === undefined) return false;
 		if (this.#autoThinking) {
