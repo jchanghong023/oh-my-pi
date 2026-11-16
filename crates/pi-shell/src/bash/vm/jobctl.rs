@@ -1763,7 +1763,7 @@ mod tests {
 				Some(Box::new(Scratch { live: Live::Ext(Box::new(child)), ..Scratch::default() }));
 			vp.frames.push(frame);
 			vp.blocked = Some(Blocked { key: WaitKey::Ext { pid }, at: 0 });
-			shell.procs.push(vp);
+			shell.procs.push(Box::new(vp));
 			let wait = if background {
 				shell.k.jobctl.leaders.push((vpid, Some(vpid)));
 				let cwd = shell.procs[0].cwd.clone();

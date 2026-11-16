@@ -8,6 +8,9 @@
 
 ### Fixed
 
+- Long-running shell commands now release exited child-process handles before the enclosing call finishes.
+- `timeout --preserve-status` now preserves normal exit codes from in-process TERM traps.
+- Nested `timeout` commands now wait for TERM-handler cleanup children before returning.
 - Cancelling Git requests on Windows now waits for owned remote helper processes to exit.
 
 ### Fixed

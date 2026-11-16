@@ -33,7 +33,12 @@ mod git;
 mod nohup;
 mod timeout;
 
-use std::{collections::VecDeque, sync::Arc, task::Waker, time::Duration};
+use std::{
+	collections::{HashSet, VecDeque},
+	sync::Arc,
+	task::Waker,
+	time::Duration,
+};
 
 use bstr::{BStr, BString, ByteSlice};
 use parking_lot::Mutex;
@@ -157,24 +162,50 @@ impl ToolConfig {
 	}
 }
 
-type SpawnRecord = (u32, Option<crate::proctree::Process>);
+type SpawnRecord = (u32, crate::proctree::Process);
+
+#[derive(Default)]
+struct SpawnState {
+	spawned:       Vec<SpawnRecord>,
+	external:      HashSet<u32>,
+	next_sweep_at: usize,
+}
 
 /// External identities spawned in labeled subshell trees.
 ///
-/// Pin each identity at spawn, before a PID can be recycled. The entry remains
-/// even if the process exits or cannot be pinned, so timeout can distinguish
-/// an external command from an in-process cancellation.
+/// Pin each live identity at spawn, before a PID can be recycled. Keep the
+/// labels' external-spawn history separately so exited handles can be released.
 #[derive(Clone, Default)]
-pub struct SpawnLog(Arc<Mutex<Vec<SpawnRecord>>>);
+pub struct SpawnLog(Arc<Mutex<SpawnState>>);
 
 impl SpawnLog {
+	/// Bound historical handles without scanning a large live set on every
+	/// spawn.
+	const PRUNE_THRESHOLD: usize = 32;
+
 	/// `pid` was spawned with `lineage`.
 	pub fn record(&self, lineage: Lineage, pid: u32) {
 		if lineage.label != 0 && !lineage.detached {
 			let process = i32::try_from(pid)
 				.ok()
 				.and_then(crate::proctree::Process::from_pid);
-			self.0.lock().push((lineage.label, process));
+			let mut state = self.0.lock();
+			state.external.insert(lineage.label);
+			if let Some(process) = process {
+				state.spawned.push((lineage.label, process));
+				if state.spawned.len() >= state.next_sweep_at.max(Self::PRUNE_THRESHOLD) {
+					state.spawned.retain(|(_, process)| {
+						process.status() == crate::proctree::ProcessStatus::Running
+					});
+					// Geometric growth amortizes sweeps when most children stay
+					// alive.
+					state.next_sweep_at = state
+						.spawned
+						.len()
+						.saturating_mul(2)
+						.max(Self::PRUNE_THRESHOLD);
+				}
+			}
 		}
 	}
 
@@ -183,9 +214,10 @@ impl SpawnLog {
 		self
 			.0
 			.lock()
+			.spawned
 			.iter()
 			.filter(|(label, _)| labels.contains(label))
-			.filter_map(|(_, process)| process.as_ref())
+			.map(|(_, process)| process)
 			.filter(|process| process.status() == crate::proctree::ProcessStatus::Running)
 			.cloned()
 			.collect()
@@ -193,25 +225,28 @@ impl SpawnLog {
 
 	/// Whether any pinned member remains alive, without allocating a snapshot.
 	fn has_live(&self, labels: &[u32]) -> bool {
-		self.0.lock().iter().any(|(label, process)| {
-			labels.contains(label)
-				&& process
-					.as_ref()
-					.is_some_and(|process| process.status() == crate::proctree::ProcessStatus::Running)
+		self.0.lock().spawned.iter().any(|(label, process)| {
+			labels.contains(label) && process.status() == crate::proctree::ProcessStatus::Running
 		})
 	}
 
 	/// Whether the labeled command started any external process.
 	fn has_external(&self, labels: &[u32]) -> bool {
-		self
-			.0
-			.lock()
-			.iter()
-			.any(|(label, _)| labels.contains(label))
+		let state = self.0.lock();
+		labels.iter().any(|label| state.external.contains(label))
 	}
 
 	fn forget(&self, labels: &[u32]) {
-		self.0.lock().retain(|(label, _)| !labels.contains(label));
+		let mut state = self.0.lock();
+		state.spawned.retain(|(label, _)| !labels.contains(label));
+		for label in labels {
+			state.external.remove(label);
+		}
+		state.next_sweep_at = state
+			.spawned
+			.len()
+			.saturating_mul(2)
+			.max(Self::PRUNE_THRESHOLD);
 	}
 }
 
@@ -248,6 +283,17 @@ impl Labels {
 			at += 1;
 		}
 		group
+	}
+
+	/// Whether `label` belongs to a tree rooted at `ancestor`.
+	fn is_descendant(&self, mut label: u32, ancestor: u32) -> bool {
+		while let Some(&(_, parent)) = self.parents.iter().find(|&&(child, _)| child == label) {
+			if parent == ancestor {
+				return true;
+			}
+			label = parent;
+		}
+		false
 	}
 
 	fn release(&mut self, group: &[u32]) {
@@ -528,8 +574,18 @@ impl ToolCalls {
 			};
 			let (_, tool) = self.active.swap_remove(at);
 			self.orphans.extend(tool.pending());
-			self.log.forget(&group);
-			self.labels.release(&group);
+			// A signalled nested callout can disappear while its external's
+			// TERM handler still runs. Keep that subtree in the enclosing
+			// tool's signal/wait set; that tool releases it when it finishes.
+			let retained = self.active.iter().any(|(_, parent)| {
+				self
+					.labels
+					.is_descendant(tool.child().label, parent.child().label)
+			}) && (live || self.log.has_live(&group));
+			if !retained {
+				self.log.forget(&group);
+				self.labels.release(&group);
+			}
 			if let Some(outcome) = answer {
 				shell.complete(id, outcome);
 			}
@@ -583,6 +639,45 @@ mod tests {
 		log.forget(&[7]);
 		assert!(!log.has_external(&[7]));
 		assert_eq!(snapshot[0].status(), crate::proctree::ProcessStatus::Exited);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn spawn_log_prunes_exited_handles_without_losing_history_or_live_members() {
+		let mut live = std::process::Command::new("/bin/sleep")
+			.arg("30")
+			.spawn()
+			.unwrap();
+		let log = SpawnLog::default();
+		log.record(Lineage { label: 9, detached: false }, live.id());
+		for _ in 0..SpawnLog::PRUNE_THRESHOLD * 3 {
+			let mut child = std::process::Command::new("/bin/sleep")
+				.arg("30")
+				.spawn()
+				.unwrap();
+			log.record(Lineage { label: 7, detached: false }, child.id());
+			child.kill().unwrap();
+			child.wait().unwrap();
+		}
+		let retained = log.0.lock().spawned.len();
+		let history = log.has_external(&[7]);
+		let exited_live = log.has_live(&[7]);
+		let snapshot = log.live(&[9]);
+		let signalled = snapshot
+			.first()
+			.is_some_and(|process| process.signal(libc::SIGTERM));
+		if !signalled {
+			live.kill().unwrap();
+		}
+		live.wait().unwrap();
+		assert!(retained <= SpawnLog::PRUNE_THRESHOLD, "retained {retained} handles");
+		assert!(history, "pruning must preserve the external-spawn history");
+		assert!(!exited_live);
+		assert_eq!(snapshot.len(), 1, "the live member must survive pruning");
+		assert_eq!(snapshot[0].pid(), i32::try_from(live.id()).unwrap());
+		assert!(signalled, "the retained live identity must still accept cancellation");
+		log.forget(&[7, 9]);
+		assert!(!log.has_external(&[7, 9]));
 	}
 
 	#[test]

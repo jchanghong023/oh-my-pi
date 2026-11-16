@@ -39,6 +39,7 @@
 		"dist/cli.js",
 		"dist/docs-index.generated.txt",
 		"dist/spec-driven-resources*.gz",
+		"dist/developer-test-agent-resources*.gz",
 		"dist/openwiki-vendor.js",
 		"dist/aireq-workbench-assets.txt",
 		"dist/webgui-resources.generated.txt",

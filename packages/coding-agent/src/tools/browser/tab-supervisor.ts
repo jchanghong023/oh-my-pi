@@ -1846,8 +1846,6 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 	}
 	if (targetCloseFailed) progress.done.delete("page");
 	if (opts.strict) {
-		if (cleanupError) throw cleanupError;
-		if (targetCloseFailed) throw new ToolError(`Could not confirm closure of tab ${JSON.stringify(name)}`);
 		return await releaseTabStrict(tab, name, opts, progress);
 	}
 	try {
@@ -1938,17 +1936,27 @@ async function releaseTabStrict(
 		if (progress.cleanupBrowser && !progress.pending.has("page")) await disconnectCleanupConnection(tab, timeoutMs);
 		if (tab.ownsPage && !opts.keepPage) {
 			if (tab.browser.kind.kind === "relay" && !progress.strictPageConfirmed) progress.done.delete("page");
-			await strictCleanupStage(
-				tab,
-				"page",
-				timeoutMs,
-				`CDP target ${JSON.stringify(tab.targetId)} (Page.close)`,
-				async () => {
-					if (!(await closeOrphanTarget(tab, timeoutMs, true))) {
-						throw new ToolError(`Could not confirm closure of tab ${JSON.stringify(name)}`);
-					}
-				},
-			);
+			try {
+				await strictCleanupStage(
+					tab,
+					"page",
+					timeoutMs,
+					`CDP target ${JSON.stringify(tab.targetId)} (Page.close)`,
+					async () => {
+						if (!(await closeOrphanTarget(tab, timeoutMs, true))) {
+							throw new ToolError(`Could not confirm closure of tab ${JSON.stringify(name)}`);
+						}
+					},
+				);
+			} catch (error) {
+				const scope = sharedTargetScopeOf(tab.browser);
+				// A page timeout can leave CDP work pending forever. The guarded
+				// health check is independently bounded and proves every page gone
+				// only after the broker confirms the unreachable daemon stopped.
+				if (!scope || !(await stopSharedBrowserIfUnreachable(scope))) throw error;
+				progress.done.add("page");
+				progress.strictPageConfirmed = true;
+			}
 			await disconnectCleanupConnection(tab, timeoutMs);
 			await strictCleanupStage(tab, "uploads", timeoutMs, "upload staging", () =>
 				removeUploadStaging(tab.uploadDir, { strict: true }),

@@ -1,14 +1,17 @@
 import { describe, expect, it } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { MissingApiKeyError } from "../src/error";
+import { streamAnthropic } from "../src/providers/anthropic";
+import { streamOpenAICompletions } from "../src/providers/openai-completions";
+import { streamOpenAIResponses } from "../src/providers/openai-responses";
 import { streamSimple } from "../src/stream";
-import type { Context, SimpleStreamOptions } from "../src/types";
+import type { Context, SimpleStreamOptions, StreamOptions } from "../src/types";
 
 const context: Context = { messages: [{ role: "user", content: "Reply locally", timestamp: 0 }] };
 const provider = "header-only-auth-dispatch-local-fixture";
-type LocalApi = "openai-completions" | "anthropic-messages";
+type LocalApi = "openai-completions" | "openai-responses" | "anthropic-messages";
 
-function localModel(api: LocalApi, baseUrl: string) {
+function localModel<TApi extends LocalApi>(api: TApi, baseUrl: string) {
 	return buildModel({
 		id: `header-only-${api}`,
 		name: "Header-only localhost fixture",
@@ -35,6 +38,36 @@ function completionBody(api: LocalApi, modelId: string, text: string): string {
 				choices: [{ index: 0, delta, finish_reason: finishReason }],
 			})}\n\n`;
 		return chunk({ role: "assistant", content: text }, null) + chunk({}, "stop") + "data: [DONE]\n\n";
+	}
+	if (api === "openai-responses") {
+		const events = [
+			{ type: "response.created", response: { id: "resp_header_only" } },
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_header_only", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: text },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_header_only",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_header_only",
+					status: "completed",
+					usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+				},
+			},
+		];
+		return events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
 	}
 	const events = [
 		{
@@ -64,12 +97,12 @@ function completionBody(api: LocalApi, modelId: string, text: string): string {
 }
 
 describe("generic header-only authentication dispatch", () => {
-	// Both native consumers are intentional: OpenAI has its own API-key fallback,
-	// while Anthropic builds API-key and bearer headers through a separate client.
-	for (const api of ["openai-completions", "anthropic-messages"] as const) {
+	// OpenAI transports have their own API-key fallback, while Anthropic builds
+	// API-key and bearer headers through a separate client.
+	for (const api of ["openai-completions", "openai-responses", "anthropic-messages"] as const) {
 		it(`${api} completes over HTTP with only explicit request authentication headers`, async () => {
 			const expectedText = `localhost completed ${api}`;
-			const authorization = api === "openai-completions" ? "Bearer local-header-only-token" : null;
+			const authorization = api !== "anthropic-messages" ? "Bearer local-header-only-token" : null;
 			const apiKey = api === "anthropic-messages" ? "local-header-only-api-key" : null;
 			const requests: Array<{ path: string; headers: Headers; body: Record<string, unknown> }> = [];
 			const server = Bun.serve({
@@ -108,7 +141,13 @@ describe("generic header-only authentication dispatch", () => {
 				}
 				const result = await stream.result();
 				expect(requests).toHaveLength(1);
-				expect(requests[0]?.path).toBe(api === "openai-completions" ? "/v1/chat/completions" : "/v1/messages");
+				expect(requests[0]?.path).toBe(
+					api === "openai-completions"
+						? "/v1/chat/completions"
+						: api === "openai-responses"
+							? "/v1/responses"
+							: "/v1/messages",
+				);
 				expect(requests[0]?.headers.get("authorization")).toBe(authorization);
 				expect(requests[0]?.headers.get("x-api-key")).toBe(apiKey);
 				expect(requests[0]?.body.model).toBe(model.id);
@@ -204,4 +243,115 @@ describe("generic header-only authentication dispatch", () => {
 			await server.stop(true);
 		}
 	});
+});
+
+function directStream(api: LocalApi, baseUrl: string, options: StreamOptions, headers: Record<string, string>) {
+	switch (api) {
+		case "openai-completions":
+			return streamOpenAICompletions({ ...localModel(api, baseUrl), headers }, context, options);
+		case "openai-responses":
+			return streamOpenAIResponses({ ...localModel(api, baseUrl), headers }, context, {
+				...options,
+				preferWebsockets: false,
+			});
+		case "anthropic-messages":
+			return streamAnthropic({ ...localModel(api, baseUrl), headers }, context, options);
+	}
+}
+
+describe("direct provider request authentication", () => {
+	for (const api of ["openai-completions", "openai-responses", "anthropic-messages"] as const) {
+		for (const mode of ["headers", "api-key", "custom-headers"] as const) {
+			it(`${api} sends explicit ${mode} authentication without ambient credentials`, async () => {
+				const expectedText = `direct ${api} ${mode}`;
+				const authorization =
+					mode === "api-key"
+						? "Bearer local-explicit-api-key"
+						: mode === "headers" && api !== "anthropic-messages"
+							? "Bearer local-header-token"
+							: null;
+				const apiKey = mode === "headers" && api === "anthropic-messages" ? "local-header-api-key" : null;
+				const hostCredential = mode === "api-key" ? null : "local-host-secret";
+				const requests: Array<{ path: string; headers: Headers }> = [];
+				const server = Bun.serve({
+					hostname: "127.0.0.1",
+					port: 0,
+					async fetch(request) {
+						await request.text();
+						requests.push({ path: new URL(request.url).pathname, headers: request.headers });
+						if (
+							request.headers.get("authorization") !== authorization ||
+							request.headers.get("x-api-key") !== apiKey ||
+							request.headers.get("x-host-credential") !== hostCredential ||
+							request.headers.has("api-key")
+						) {
+							return Response.json(
+								{ error: { message: "Unexpected authentication material" } },
+								{ status: 401 },
+							);
+						}
+						return new Response(completionBody(api, `header-only-${api}`, expectedText), {
+							headers: { "content-type": "text/event-stream" },
+						});
+					},
+				});
+				try {
+					const authHeader = api === "anthropic-messages" ? "x-api-key" : "authorization";
+					const modelHeaders: Record<string, string> =
+						mode === "headers" ? { [authHeader]: "model-auth-conflict" } : {};
+					const headers: Record<string, string> =
+						mode === "headers" ? { [authHeader.toUpperCase()]: "options-auth-conflict" } : {};
+					if (hostCredential) {
+						modelHeaders["x-host-credential"] = "model-host-conflict";
+						headers["X-HOST-CREDENTIAL"] = "options-host-conflict";
+					}
+					const requestAuth: StreamOptions["requestAuth"] =
+						mode === "api-key"
+							? { apiKey: "local-explicit-api-key" }
+							: {
+									headers: {
+										"X-Host-Credential": hostCredential!,
+										...(mode === "headers"
+											? apiKey
+												? { "X-aPi-KeY": apiKey }
+												: { aUtHoRiZaTiOn: authorization! }
+											: {}),
+									},
+								};
+					const result = await directStream(
+						api,
+						`${server.url.origin}/v1`,
+						{
+							apiKey: "fixture-only-ambient-key",
+							headers,
+							requestAuth,
+							signal: AbortSignal.timeout(5000),
+						},
+						modelHeaders,
+					).result();
+					expect(requests).toHaveLength(1);
+					expect(requests[0]?.path).toBe(
+						api === "openai-completions"
+							? "/v1/chat/completions"
+							: api === "openai-responses"
+								? "/v1/responses"
+								: "/v1/messages",
+					);
+					expect(requests[0]?.headers.get("authorization")).toBe(authorization);
+					expect(requests[0]?.headers.get("x-api-key")).toBe(apiKey);
+					expect(requests[0]?.headers.get("x-host-credential")).toBe(hostCredential);
+					expect(result.stopReason).toBe("stop");
+					expect(result.errorMessage).toBeUndefined();
+					expect(
+						result.content
+							.filter(block => block.type === "text")
+							.map(block => block.text)
+							.join(""),
+					).toBe(expectedText);
+				} finally {
+					await server.stop(true);
+				}
+			});
+		}
+	}
 });

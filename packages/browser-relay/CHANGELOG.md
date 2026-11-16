@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows extension builds now archive only generated files and complete embedded CLI resource generation.
+
 ## [18.18.2] - 2026-11-08
 
 ### Added

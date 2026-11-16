@@ -345,13 +345,9 @@ impl Timeout {
 					let platform = Platform::current();
 					Phase::Exit(if killed {
 						EXIT_KILLED
-					} else if opts.preserve && !turn.log.has_external(turn.group) {
-						// In-process cancellation is not an OS exit status.
-						if cfg!(windows) {
-							128
-						} else {
-							opts.signal.exit_status(platform)
-						}
+					} else if opts.preserve && cfg!(windows) && !turn.log.has_external(turn.group) {
+						// Windows in-process cancellation is not an OS signal death.
+						128
 					} else if opts.preserve {
 						self
 							.child

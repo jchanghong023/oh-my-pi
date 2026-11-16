@@ -58,7 +58,7 @@ await Bun.write(
 // Use Windows' native bsdtar explicitly; GNU tar cannot produce ZIP archives.
 const zip =
 	process.platform === "win32"
-		? await $`${path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")} --format=zip -cf ../omp-browser-relay-extension.zip background.js manifest.json options.html options.js LICENSE THIRD-PARTY-NOTICES.txt`
+		? await $`${path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")} --format=zip -cf ../omp-browser-relay-extension.zip background.js manifest.json options.html options.js LICENSE`
 				.cwd(distExtension)
 				.nothrow()
 		: await $`zip -qr ../omp-browser-relay-extension.zip .`.cwd(distExtension).nothrow();

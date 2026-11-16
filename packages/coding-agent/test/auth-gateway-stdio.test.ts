@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { mkdir } from "node:fs/promises";
 import * as path from "node:path";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { getBundledModel, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { selectorCandidates, stdioModelResolver } from "@oh-my-pi/pi-coding-agent/cli/auth-gateway-stdio";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -121,6 +122,196 @@ describe("auth-gateway stdio model resolver", () => {
 		expect(resolve(key(video))).toBe(video);
 		expect(resolve(key(fast))).toBeUndefined();
 	});
+});
+
+describe("auth-gateway stdio credentials", () => {
+	it.each([
+		{ source: "company snapshot", provider: "company", modelId: "GLM-5.2-public", offline: true },
+		{ source: "local custom provider", provider: "stdio-custom", modelId: "fixture", offline: false },
+	])(
+		"serves $source credentials and rejects missing credentials",
+		async ({ provider, modelId, offline }) => {
+			await using home = await TempDir.create("@omp-gw-stdio-auth-");
+			const requests: Array<{ path: string; authorization: string | null; apiKey: string | null; model: string }> =
+				[];
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				async fetch(request) {
+					const body = (await request.json()) as { model: string };
+					requests.push({
+						path: new URL(request.url).pathname,
+						authorization: request.headers.get("authorization"),
+						apiKey: request.headers.get("x-api-key"),
+						model: body.model,
+					});
+					const events = [
+						{
+							type: "message_start",
+							message: {
+								id: "stdio-fixture",
+								type: "message",
+								role: "assistant",
+								model: body.model,
+								content: [],
+								stop_reason: null,
+								stop_sequence: null,
+								usage: { input_tokens: 5, output_tokens: 0 },
+							},
+						},
+						{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+						{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+						{ type: "content_block_stop", index: 0 },
+						{
+							type: "message_delta",
+							delta: { stop_reason: "end_turn", stop_sequence: null },
+							usage: { output_tokens: 1 },
+						},
+						{ type: "message_stop" },
+					];
+					return new Response(
+						events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+						{ headers: { "Content-Type": "text/event-stream" } },
+					);
+				},
+			});
+			try {
+				const agentDir = home.join("agent");
+				const claudeDir = home.join("claude");
+				await Promise.all([mkdir(agentDir), mkdir(claudeDir)]);
+				const configPath = home.join("config.yml");
+				await Bun.write(
+					configPath,
+					JSON.stringify({
+						disabledProviders: [
+							...getBundledProviders().filter(id => id !== provider),
+							"ollama",
+							"llama.cpp",
+							"lm-studio",
+							"apple",
+							"codeagent",
+						],
+					}),
+				);
+				const customModel = {
+					id: "fixture",
+					name: "Fixture",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 4096,
+					maxTokens: 128,
+				};
+				await Bun.write(
+					path.join(agentDir, "models.yml"),
+					JSON.stringify({
+						providers: {
+							"stdio-custom": {
+								api: "anthropic-messages",
+								baseUrl: server.url.origin,
+								apiKey: "fixture-token",
+								models: [customModel],
+							},
+							"stdio-missing": {
+								api: "anthropic-messages",
+								baseUrl: server.url.origin,
+								// Configured credential commands register the model even when no token is returned.
+								apiKey: "!exit 0",
+								models: [customModel],
+							},
+						},
+					}),
+				);
+				if (offline) {
+					await Bun.write(
+						path.join(claudeDir, "settings.json"),
+						JSON.stringify({
+							env: { ANTHROPIC_BASE_URL: server.url.origin, ANTHROPIC_AUTH_TOKEN: "fixture-token" },
+						}),
+					);
+				}
+				const selector = `${provider}/${modelId}`;
+				const frames = [
+					{ id: "models", path: "/v1/models" },
+					...[selector, "stdio-missing/fixture"].map(model => ({
+						id: model,
+						path: "/v1/chat/completions",
+						body: { model, messages: [{ role: "user", content: "hi" }], max_tokens: 16 },
+					})),
+				];
+				const child = Bun.spawn([process.execPath, cliEntry, "auth-gateway", "stdio"], {
+					cwd: home.path(),
+					env: {
+						PATH: process.env.PATH ?? "",
+						SystemRoot: process.env.SystemRoot ?? "",
+						HOME: home.path(),
+						USERPROFILE: home.path(),
+						OMP_CONFIG_ROOT: home.join(".omp"),
+						PI_CODING_AGENT_DIR: agentDir,
+						PI_CONFIG_FILES: configPath,
+						CLAUDE_CONFIG_DIR: claudeDir,
+						OMP_OFFLINE: offline ? "1" : "0",
+						NO_COLOR: "1",
+					},
+					stdin: Buffer.from(`${frames.map(frame => JSON.stringify(frame)).join("\n")}\n`),
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [stdout, stderr] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+				]);
+				expect(await child.exited, stderr).toBe(0);
+				const output: unknown[] = stdout
+					.trim()
+					.split("\n")
+					.map(line => JSON.parse(line));
+				expect(output).toContainEqual(
+					expect.objectContaining({
+						id: "models",
+						status: 200,
+						body: expect.objectContaining({
+							data: expect.arrayContaining([
+								expect.objectContaining({ id: selector }),
+								expect.objectContaining({ id: "stdio-missing/fixture" }),
+							]),
+						}),
+					}),
+				);
+				expect(output).toContainEqual(
+					expect.objectContaining({
+						id: selector,
+						status: 200,
+						body: expect.objectContaining({
+							choices: [
+								expect.objectContaining({
+									message: expect.objectContaining({ role: "assistant", content: "ok" }),
+								}),
+							],
+						}),
+					}),
+				);
+				expect(output).toContainEqual(
+					expect.objectContaining({
+						id: "stdio-missing/fixture",
+						status: 401,
+						body: { error: expect.objectContaining({ type: "authentication_error" }) },
+					}),
+				);
+				expect(requests).toEqual([
+					{
+						path: "/v1/messages",
+						authorization: "Bearer fixture-token",
+						apiKey: null,
+						model: modelId,
+					},
+				]);
+			} finally {
+				await server.stop(true);
+			}
+		},
+		30_000,
+	);
 });
 
 describe.skipIf(process.platform === "win32")("auth-gateway stdio process", () => {

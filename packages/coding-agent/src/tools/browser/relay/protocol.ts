@@ -74,17 +74,29 @@ export const DOWNLOADS_PROTOCOL_VERSION = 1;
  * peers supply these and results quote them.
  */
 export function isOmpVersion(version: string): boolean {
-	return /^(?=.{5,64}$)\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/.test(version);
+	return /^(?=.{5,64}$)\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:\+fork\.\d+)?(?![\s\S])/.test(version);
 }
 
 /**
  * Whether a reported omp version is provably older than `than`: unreported ("")
  * is older than anything reported; otherwise both must be omp versions, since
- * anything else has no known age.
+ * anything else has no known age. Fork build counters break ties in SemVer
+ * precedence; a plain release has counter zero.
  */
 export function isOlderOmpVersion(version: string, than: string): boolean {
 	if (version === "") return than !== "";
-	return isOmpVersion(version) && isOmpVersion(than) && Bun.semver.order(version, than) < 0;
+	if (!isOmpVersion(version) || !isOmpVersion(than)) return false;
+	const versionBuild = version.indexOf("+");
+	const thanBuild = than.indexOf("+");
+	const precedence = Bun.semver.order(
+		versionBuild === -1 ? version : version.slice(0, versionBuild),
+		thanBuild === -1 ? than : than.slice(0, thanBuild),
+	);
+	if (precedence !== 0) return precedence < 0;
+	// The input bound permits counters larger than Number.MAX_SAFE_INTEGER.
+	const versionRun = versionBuild === -1 ? 0n : BigInt(version.slice(versionBuild + "+fork.".length));
+	const thanRun = thanBuild === -1 ? 0n : BigInt(than.slice(thanBuild + "+fork.".length));
+	return versionRun < thanRun;
 }
 
 /**

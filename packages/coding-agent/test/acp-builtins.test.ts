@@ -16,9 +16,11 @@ import { MarketplaceManager } from "@oh-my-pi/pi-coding-agent/extensibility/plug
 import type { AgentSession, AsyncJobTree } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionDumpArchive } from "@oh-my-pi/pi-coding-agent/session/session-dump-format";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { SkillshareClient } from "@oh-my-pi/pi-coding-agent/skillshare/client";
+import { writeSkillsManifest } from "@oh-my-pi/pi-coding-agent/skillshare/manifest";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import { getProjectDir, removeWithRetries, setProjectDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, getProjectDir, removeWithRetries, setAgentDir, setProjectDir, TempDir } from "@oh-my-pi/pi-utils";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "@oh-my-pi/pi-coding-agent/tools/browser/settings";
@@ -908,6 +910,70 @@ describe("ACP builtin slash commands", () => {
 			const { runtime } = createRuntime();
 			const result = await executeAcpBuiltinSlashCommand(cmd, runtime);
 			expect(result).toBe(false);
+		}
+	});
+});
+
+describe("ACP skill registry commands", () => {
+	it("/skills help: emits one command output chunk", async () => {
+		const { output, runtime } = createRuntime();
+
+		expect(await executeAcpBuiltinSlashCommand("/skills help", runtime)).toEqual({ consumed: true });
+		expect(output).toHaveLength(1);
+		expect(output[0]).toContain("Skill registry (skills.omp.sh) commands:");
+		expect(output[0]).toContain("/skills search <query>");
+		expect(output[0]).toContain("/skills installed");
+	});
+
+	it("/skills installed: emits installed project skills once", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-acp-skills-"));
+		const previousAgentDir = getAgentDir();
+		try {
+			const project = path.join(root, "project");
+			await fs.mkdir(path.join(project, ".omp"), { recursive: true });
+			setAgentDir(path.join(root, "agent"));
+			await writeSkillsManifest(path.join(project, ".omp", "skills.json"), {
+				skills: { "@alice/installed-skill": "^1.0.0" },
+			});
+			const { output, runtime } = createRuntime();
+			runtime.cwd = project;
+
+			expect(await executeAcpBuiltinSlashCommand("/skills installed", runtime)).toEqual({ consumed: true });
+			expect(output).toEqual(["@alice/installed-skill not installed (project, range ^1.0.0)"]);
+		} finally {
+			setAgentDir(previousAgentDir);
+			await removeWithRetries(root);
+		}
+	});
+
+	it.each([
+		["search", "Usage: /skills search <query>"],
+		["install", "Usage: /skills install <@scope/name[@range]>… [--global]"],
+		["unknown", "Unknown /skills subcommand: unknown"],
+		["install --unknown", "Unknown option: --unknown"],
+	])("/skills %s: emits invalid arguments as a failed command", async (args, message) => {
+		const { output, runtime } = createRuntime();
+
+		expect(await executeAcpBuiltinSlashCommand(`/skills ${args}`, runtime)).toEqual({
+			consumed: true,
+			failed: true,
+		});
+		expect(output).toHaveLength(1);
+		expect(output[0]).toContain(message);
+	});
+
+	it("/skills install: emits registry failures and returns a failed command", async () => {
+		const createClient = spyOn(SkillshareClient, "create").mockRejectedValue(new Error("registry unavailable"));
+		try {
+			const { output, runtime } = createRuntime();
+
+			expect(await executeAcpBuiltinSlashCommand("/skills install @alice/unavailable", runtime)).toEqual({
+				consumed: true,
+				failed: true,
+			});
+			expect(output).toEqual(["Installing @alice/unavailable…", "Skills: registry unavailable"]);
+		} finally {
+			createClient.mockRestore();
 		}
 	});
 });

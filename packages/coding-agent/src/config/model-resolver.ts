@@ -1540,7 +1540,13 @@ export interface ResolvedModelRoleValue {
 export function resolveModelRoleValue(
 	roleValue: string | undefined,
 	availableModels: Model<Api>[],
-	options?: { settings?: Settings; roleLookup?: ModelRoleLookup; matchPreferences?: ModelMatchPreferences },
+	options?: {
+		settings?: Settings;
+		roleLookup?: ModelRoleLookup;
+		matchPreferences?: ModelMatchPreferences;
+		/** Retain automatic provenance when matching an already-expanded role candidate. */
+		automatic?: boolean;
+	},
 ): ResolvedModelRoleValue {
 	if (!roleValue) {
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
@@ -1562,9 +1568,10 @@ export function resolveModelRoleValue(
 	const matchPreferences = mergeModelMatchPreferences(options?.settings, options?.matchPreferences);
 	// Preserve priority provenance through alias expansion: a user's literal
 	// selector or configured role may opt in, but automatic defaults may not.
-	const automaticModels = effectivePatterns.some(candidate => candidate.automatic)
-		? availableModels.filter(model => providerEntry(model.provider)?.automaticDefault !== false)
-		: availableModels;
+	const automaticModels =
+		options?.automatic || effectivePatterns.some(candidate => candidate.automatic)
+			? availableModels.filter(model => providerEntry(model.provider)?.automaticDefault !== false)
+			: availableModels;
 	const preferenceContext = buildPreferenceContext(availableModels, matchPreferences);
 	const automaticPreferenceContext =
 		automaticModels === availableModels
@@ -1573,8 +1580,8 @@ export function resolveModelRoleValue(
 	for (const [patternIndex, { pattern: effectivePattern, automatic }] of effectivePatterns.entries()) {
 		const resolved = matchPatternWithContext(
 			effectivePattern,
-			automatic ? automaticModels : availableModels,
-			automatic ? automaticPreferenceContext : preferenceContext,
+			automatic || options?.automatic ? automaticModels : availableModels,
+			automatic || options?.automatic ? automaticPreferenceContext : preferenceContext,
 		);
 		if (resolved.model) {
 			return {

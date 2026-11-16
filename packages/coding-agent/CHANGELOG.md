@@ -54,6 +54,16 @@
 
 ### Fixed
 
+- SSH directory reads now consume timeout-tracked subprocess output without stream-lock failures.
+- Company models now authenticate through the stdio gateway using the existing in-memory credentials.
+- Deferred model roles retain their eligible usage and retry fallback candidates.
+- Private-root pauses now cover fresh and revived subagents when worker placement is enabled.
+- Strict browser cleanup now recovers unreachable shared Chromium instances without dropping retryable ownership.
+- Changing display modes now preserves running user Python and shell execution cards.
+- ACP skill commands now display their results, warnings and failures.
+- Packaged CLI installs now include the bundled Developer Test Agent resources.
+- Browser Relay upgrades now recognize fork release versions and compare fork counters numerically.
+- Plugin installs retain npm `dev` dist-tag routing when a marketplace shares that name.
 - TodoLoop reports unclosed HTML comments instead of silently omitting later tasks.
 - Grill Todo now checks completion dependencies per checkbox without requiring full product acceptance for every task; TodoLoop executors no longer receive a fixed within-group execution order.
 - TodoLoop accepts append-only execution records without blank separators, preserves BOM-prefixed plans, and recognizes Setext groups while ignoring HTML-comment examples.

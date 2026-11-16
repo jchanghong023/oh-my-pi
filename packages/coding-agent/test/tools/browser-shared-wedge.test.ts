@@ -38,7 +38,12 @@ import type { BrowserHandle } from "@oh-my-pi/pi-coding-agent/tools/browser/regi
 import * as sharedDaemon from "@oh-my-pi/pi-coding-agent/tools/browser/shared-daemon";
 import { stopSharedBrowserIfUnreachable } from "@oh-my-pi/pi-coding-agent/tools/browser/shared-daemon";
 import type { WorkerInbound } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-protocol";
-import { getTabsMapForTest, releaseTab, runInTab } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
+import {
+	getTabsMapForTest,
+	releaseTab,
+	releaseTabsForOwner,
+	runInTab,
+} from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import type { WorkerTabSession } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
@@ -159,6 +164,17 @@ function makeWedgeTab(scope: SharedTargetScope, options: WedgeOptions = {}): Wor
 			},
 		},
 	} as unknown as WorkerTabSession;
+}
+
+/** The worker shuts down normally; only its shared browser's CDP cleanup is wedged. */
+function makeStrictWedgeTab(scope: SharedTargetScope, options: WedgeOptions = {}): WorkerTabSession {
+	const tab = makeWedgeTab(scope, options);
+	tab.uploadDir = path.join(daemonRuntimeDir(scope.projectDir), "uploads");
+	tab.worker.onMessage = handler => {
+		handler({ type: "closed" });
+		return () => undefined;
+	};
+	return tab;
 }
 
 /** Minimal tool session for the `runInTab` entry point. */
@@ -521,6 +537,203 @@ describe("browser cleanup — timed-out target close in a shared browser", () =>
 
 		expect(await ownedTargets(scope)).toEqual([TARGET_ID]);
 		expect(healthCheck).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("strict shared browser owner cleanup", () => {
+	it("awaits confirmed daemon death before releasing ownership and leaves sibling resources tracked", async () => {
+		const scope = trackedScope();
+		const stopEntered = Promise.withResolvers<void>();
+		const stopAllowed = Promise.withResolvers<void>();
+		const stops: string[] = [];
+		const probes: string[] = [];
+		const broker = makeBroker({ snapshot: makeSnapshot(READY_MATCH) }, stops);
+		const request = broker.request.bind(broker);
+		broker.request = async (operation, signal) => {
+			if (operation.op === "stop") {
+				stopEntered.resolve();
+				await stopAllowed.promise;
+			}
+			return await request(operation, signal);
+		};
+		const check = sharedDaemon.stopSharedBrowserIfUnreachable;
+		const healthCheck = spyOn(sharedDaemon, "stopSharedBrowserIfUnreachable").mockImplementation(scope =>
+			check(scope, {
+				client: broker,
+				probe: async endpoint => {
+					probes.push(endpoint);
+					return false;
+				},
+			}),
+		);
+		let terminations = 0;
+		let siblingTerminations = 0;
+		const tab = makeStrictWedgeTab(scope, { onTerminate: () => terminations++ });
+		const sibling = makeStrictWedgeTab(scope, { onTerminate: () => siblingTerminations++ });
+		sibling.name = "sibling-tab";
+		sibling.targetId = "sibling-target";
+		sibling.ownerSessionId = "sibling-owner";
+		sibling.browser = tab.browser;
+		getTabsMapForTest().set(tab.name, tab);
+		getTabsMapForTest().set(sibling.name, sibling);
+		await recordSharedTarget(scope, tab.targetId);
+		await recordSharedTarget(scope, sibling.targetId);
+		await fs.mkdir(tab.uploadDir, { recursive: true });
+		const upload = path.join(tab.uploadDir, "pending-upload");
+		await fs.writeFile(upload, "still needed until the page dies");
+		let settled = false;
+		const cleanup = releaseTabsForOwner("session-wedge", { strict: true, timeoutMs: 60 }).finally(() => {
+			settled = true;
+		});
+		try {
+			await stopEntered.promise;
+			expect(settled).toBe(false);
+			expect(getTabsMapForTest().get(tab.name)).toBe(tab);
+			expect(tab.browser.refCount).toBe(2);
+			expect(await ownedTargets(scope)).toEqual([TARGET_ID, sibling.targetId]);
+			expect(await Bun.file(upload).text()).toBe("still needed until the page dies");
+			stopAllowed.resolve();
+			expect(await cleanup).toBe(1);
+			expect(getTabsMapForTest().has(tab.name)).toBe(false);
+			expect(getTabsMapForTest().get(sibling.name)).toBe(sibling);
+			expect(tab.browser.refCount).toBe(1);
+			expect(terminations).toBe(1);
+			expect(siblingTerminations).toBe(0);
+			expect(await ownedTargets(scope)).toEqual([sibling.targetId]);
+			expect(await Bun.file(upload).exists()).toBe(false);
+			expect(probes).toEqual([
+				"ws://127.0.0.1:63199/devtools/browser/wedged",
+				"ws://127.0.0.1:63199/devtools/browser/wedged",
+			]);
+			expect(stops).toEqual([DAEMON_NAME]);
+			expect(await releaseTabsForOwner("session-wedge", { strict: true, timeoutMs: 60 })).toBe(0);
+		} finally {
+			stopAllowed.resolve();
+			await cleanup.catch(() => undefined);
+			healthCheck.mockResolvedValue(true);
+			await releaseTabsForOwner("session-wedge", { strict: true, timeoutMs: 60 });
+			await releaseTabsForOwner("sibling-owner", { strict: true, timeoutMs: 60 });
+		}
+	});
+
+	it.each(["rejected", "stopping"] as const)(
+		"retains ownership after a %s stop and retries unfinished cleanup",
+		async failure => {
+			const scope = trackedScope();
+			const stops: string[] = [];
+			const options: {
+				snapshot: DaemonSnapshot;
+				stopFails: boolean;
+				stopState: DaemonSnapshot["state"];
+			} = {
+				snapshot: makeSnapshot(READY_MATCH),
+				stopFails: failure === "rejected",
+				stopState: "stopping",
+			};
+			const broker = makeBroker(options, stops);
+			const check = sharedDaemon.stopSharedBrowserIfUnreachable;
+			const healthCheck = spyOn(sharedDaemon, "stopSharedBrowserIfUnreachable").mockImplementation(scope =>
+				check(scope, { client: broker, probe: async () => false }),
+			);
+			let terminations = 0;
+			const tab = makeStrictWedgeTab(scope, { onTerminate: () => terminations++ });
+			getTabsMapForTest().set(tab.name, tab);
+			await recordSharedTarget(scope, TARGET_ID);
+			try {
+				await expect(releaseTabsForOwner("session-wedge", { strict: true, timeoutMs: 60 })).rejects.toThrow(
+					"Failed to release browser tabs for owner",
+				);
+				expect(getTabsMapForTest().get(tab.name)).toBe(tab);
+				expect(tab.browser.refCount).toBe(2);
+				expect(await ownedTargets(scope)).toEqual([TARGET_ID]);
+				expect(terminations).toBe(1);
+				expect(stops).toEqual([DAEMON_NAME]);
+
+				options.stopFails = false;
+				options.stopState = "exited";
+				expect(await releaseTabsForOwner("session-wedge", { strict: true, timeoutMs: 60 })).toBe(1);
+				expect(getTabsMapForTest().has(tab.name)).toBe(false);
+				expect(tab.browser.refCount).toBe(1);
+				expect(await ownedTargets(scope)).toEqual([]);
+				expect(terminations).toBe(1);
+				expect(stops).toEqual([DAEMON_NAME, DAEMON_NAME]);
+			} finally {
+				healthCheck.mockResolvedValue(true);
+				await releaseTabsForOwner("session-wedge", { strict: true, timeoutMs: 60 });
+			}
+		},
+	);
+
+	it.each(["healthy", "replacement"] as const)(
+		"does not stop a %s shared browser after strict page failure",
+		async state => {
+			const scope = trackedScope();
+			const stops: string[] = [];
+			const options = { snapshot: makeSnapshot(READY_MATCH) };
+			const broker = makeBroker(options, stops);
+			const check = sharedDaemon.stopSharedBrowserIfUnreachable;
+			const healthCheck = spyOn(sharedDaemon, "stopSharedBrowserIfUnreachable").mockImplementation(scope =>
+				check(scope, {
+					client: broker,
+					probe: async () => {
+						if (state === "healthy") return true;
+						options.snapshot = makeSnapshot(
+							"DevTools listening on ws://127.0.0.1:63199/devtools/browser/replacement",
+						);
+						return false;
+					},
+				}),
+			);
+			const tab = makeStrictWedgeTab(scope, { close: "fail" });
+			getTabsMapForTest().set(tab.name, tab);
+			await recordSharedTarget(scope, TARGET_ID);
+			try {
+				await expect(releaseTabsForOwner("session-wedge", { strict: true, timeoutMs: 60 })).rejects.toThrow(
+					"Failed to release browser tabs for owner",
+				);
+				expect(stops).toEqual([]);
+				expect(healthCheck).toHaveBeenCalledTimes(1);
+				expect(getTabsMapForTest().get(tab.name)).toBe(tab);
+				expect(tab.browser.refCount).toBe(2);
+				expect(await ownedTargets(scope)).toEqual([TARGET_ID]);
+			} finally {
+				healthCheck.mockResolvedValue(true);
+				await releaseTabsForOwner("session-wedge", { strict: true, timeoutMs: 60 });
+			}
+		},
+	);
+
+	it("recovers a failed page close when strict owner cleanup joins an ordinary release", async () => {
+		const scope = trackedScope();
+		const entered = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<void>();
+		const healthCheck = spyOn(sharedDaemon, "stopSharedBrowserIfUnreachable").mockResolvedValue(true);
+		let terminations = 0;
+		const tab = makeStrictWedgeTab(scope, {
+			close: "gate",
+			gate: gate.promise,
+			entered: () => entered.resolve(),
+			onTerminate: () => terminations++,
+		});
+		getTabsMapForTest().set(tab.name, tab);
+		await recordSharedTarget(scope, TARGET_ID);
+		const ordinary = releaseTab(tab.name, { timeoutMs: 60 });
+		try {
+			await entered.promise;
+			const strict = releaseTabsForOwner("session-wedge", { strict: true, timeoutMs: 60 });
+			gate.resolve();
+			expect(await strict).toBe(1);
+			expect(await ordinary).toBe(true);
+			expect(healthCheck).toHaveBeenCalledTimes(1);
+			expect(getTabsMapForTest().has(tab.name)).toBe(false);
+			expect(await ownedTargets(scope)).toEqual([]);
+			expect(tab.browser.refCount).toBe(1);
+			expect(terminations).toBe(1);
+		} finally {
+			gate.resolve();
+			await ordinary.catch(() => undefined);
+			await releaseTabsForOwner("session-wedge", { strict: true, timeoutMs: 60 });
+		}
 	});
 });
 

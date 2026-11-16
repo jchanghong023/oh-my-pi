@@ -122,9 +122,7 @@ describe("shared skill registry commands", () => {
 			settings: Settings.isolated({ "skills.registryUrl": "https://skills.test" }),
 			session: {
 				refreshSkills,
-				emitNotice: vi.fn((_level: string, text: string) => {
-					output.push(text);
-				}),
+				emitNotice: vi.fn(),
 			},
 			sessionManager: { getCwd: () => project },
 			output: (text: string) => {
@@ -173,7 +171,10 @@ describe("shared skill registry commands", () => {
 
 	test("declining script approval writes no manifest and downloads nothing", async () => {
 		approve = false;
-		expect(await executeAcpBuiltinSlashCommand(`/skills install ${PACKAGE}`, runtime)).toEqual({ consumed: true });
+		expect(await executeAcpBuiltinSlashCommand(`/skills install ${PACKAGE}`, runtime)).toEqual({
+			consumed: true,
+			failed: true,
+		});
 		expect(confirm).toHaveBeenCalledTimes(1);
 		expect(clients[0]!.tarball).not.toHaveBeenCalled();
 		expect(await Bun.file(path.join(project, ".omp", "skills.json")).exists()).toBe(false);
@@ -184,7 +185,10 @@ describe("shared skill registry commands", () => {
 
 	test("requires a confirmation-capable host for scripts and reports the failure without installing", async () => {
 		runtime.ui = undefined;
-		expect(await executeAcpBuiltinSlashCommand(`/skills install ${PACKAGE}`, runtime)).toEqual({ consumed: true });
+		expect(await executeAcpBuiltinSlashCommand(`/skills install ${PACKAGE}`, runtime)).toEqual({
+			consumed: true,
+			failed: true,
+		});
 		expect(clients[0]!.tarball).not.toHaveBeenCalled();
 		expect(await Bun.file(path.join(project, ".omp", "skills.json")).exists()).toBe(false);
 		expect(refreshSkills).not.toHaveBeenCalled();
@@ -196,7 +200,10 @@ describe("shared skill registry commands", () => {
 	test.each(["search", "install", "unknown", "install --unknown"])(
 		"reports invalid /skills %s without contacting the registry",
 		async args => {
-			expect(await executeAcpBuiltinSlashCommand(`/skills ${args}`, runtime)).toEqual({ consumed: true });
+			expect(await executeAcpBuiltinSlashCommand(`/skills ${args}`, runtime)).toEqual({
+				consumed: true,
+				failed: true,
+			});
 			expect(output.join("\n")).toMatch(/Usage: \/skills|Unknown \/skills subcommand|Unknown option/);
 			expect(clients).toEqual([]);
 			expect(refreshSkills).not.toHaveBeenCalled();
@@ -206,11 +213,13 @@ describe("shared skill registry commands", () => {
 
 	test("reports registry errors without rejecting the command and closes the client", async () => {
 		searchError = new Error("registry unavailable");
-		expect(await executeAcpBuiltinSlashCommand("/skills search unavailable", runtime)).toEqual({ consumed: true });
+		expect(await executeAcpBuiltinSlashCommand("/skills search unavailable", runtime)).toEqual({
+			consumed: true,
+			failed: true,
+		});
 		expect(output).toEqual(["Skills: registry unavailable"]);
 		expect(clients[0]!.close).toHaveBeenCalledTimes(1);
 		expect(refreshSkills).not.toHaveBeenCalled();
-		expect(runtime.session.emitNotice).toHaveBeenCalledWith("error", "Skills: registry unavailable");
 	});
 
 	test("reports an up-to-date update without refreshing command state", async () => {
@@ -224,10 +233,21 @@ describe("shared skill registry commands", () => {
 		expect(refreshCommands).not.toHaveBeenCalled();
 	});
 
+	test("emits registry warnings once through command output", async () => {
+		registry.versions["1.0.0"]!.deprecated = "Use the replacement skill";
+
+		expect(await executeAcpBuiltinSlashCommand(`/skills install ${PACKAGE}`, runtime)).toEqual({ consumed: true });
+		expect(output).toEqual([
+			`Installing ${PACKAGE}…`,
+			`+ ${PACKAGE}@1.0.0`,
+			`${PACKAGE}@1.0.0 is deprecated: Use the replacement skill`,
+		]);
+	});
+
 	test("uses the default registry when no source is configured and emits informational search results", async () => {
 		runtime.settings = Settings.isolated();
 		expect(await executeAcpBuiltinSlashCommand("/skills search shared", runtime)).toEqual({ consumed: true });
 		expect(clients[0]!.registryUrl).toBe(DEFAULT_SKILLS_URL);
-		expect(runtime.session.emitNotice).toHaveBeenCalledWith("info", output[0]);
+		expect(output).toEqual(["No skills found."]);
 	});
 });

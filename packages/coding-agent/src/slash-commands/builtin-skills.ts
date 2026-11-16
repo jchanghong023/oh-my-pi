@@ -43,11 +43,10 @@ async function handleProtocolSkillsCommand(command: ParsedSlashCommand, runtime:
 	await handleSkillsCommand(command.args, {
 		cwd: runtime.cwd,
 		registryUrl: cfgSkillsRegistryUrl.get(runtime.settings) || DEFAULT_SKILLS_URL,
-		output: text => (browser ? runtime.output(text) : runtime.session.emitNotice("info", text)),
+		output: text => runtime.output(text),
 		error: async text => {
-			failed = browser;
-			runtime.session.emitNotice("error", text);
-			if (browser) await runtime.output(text);
+			failed = true;
+			await runtime.output(text);
 		},
 		refresh: async () => {
 			await runtime.session.refreshSkills();
@@ -56,8 +55,7 @@ async function handleProtocolSkillsCommand(command: ParsedSlashCommand, runtime:
 		refreshAfterFailure: browser,
 		hooks: {
 			warn: message => {
-				runtime.session.emitNotice("warning", message);
-				if (browser) warnings.push(message);
+				warnings.push(message);
 			},
 			confirmScripts: request => {
 				if (!runtime.ui) throw new Error("Installing a skill with scripts requires a confirmation UI.");

@@ -85,6 +85,7 @@ import {
 	type CreateAgentSessionResult,
 	createAgentSession,
 	discoverAuthStorage,
+	hasRegistryPauseGate,
 } from "../sdk";
 import {
 	type AgentSession,
@@ -4650,11 +4651,12 @@ async function reviveAdmittedSubagent(
  */
 export async function runSubprocess(options: ExecutorOptions): Promise<SingleResult> {
 	const pool = isMainThread() && options.settings ? subagentWorkerPool(options.settings) : undefined;
-	// Native hosts pass live session objects and synchronous callbacks, which the
-	// worker RPC bridge cannot reproduce. Keep those runs on their owning thread.
+	// Native callbacks and registry-owned pause gates are realm-local. Keep
+	// these trees on their owning thread rather than lose them over worker RPC.
 	if (
 		pool &&
-		(options.subagentHooks ||
+		(hasRegistryPauseGate(AgentRegistry.global()) ||
+			options.subagentHooks ||
 			options.subagentRequest ||
 			options.onSessionCreated ||
 			options.createInteractionUI ||

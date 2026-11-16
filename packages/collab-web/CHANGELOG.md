@@ -5,6 +5,11 @@
 ### Added
 
 - Added the native-session browser development workbench with eight-stage materials, explicit Git confirmations, Markdown import, and offline Collab participation.
+
+### Fixed
+
+- Ask cards now display native HTML form questions, saved answers, option notes and timeout status.
+
 ## [18.20.1] - 2026-11-14
 
 ### Fixed

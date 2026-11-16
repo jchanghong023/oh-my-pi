@@ -5215,7 +5215,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.pythonComponent) liveSet.add(this.pythonComponent);
 		if (liveSet.size > 0) {
 			for (const child of this.chatContainer.children) {
-				if (liveSet.has(child)) liveComponents.push(child);
+				// User executions mount a presentation wrapper, but stream into its inner card.
+				if (liveSet.has(child) || (child instanceof PresentedBlock && liveSet.has(child.inner))) {
+					liveComponents.push(child);
+				}
 			}
 		}
 		const context = this.#uiHelpers.buildTranscriptSessionContext();

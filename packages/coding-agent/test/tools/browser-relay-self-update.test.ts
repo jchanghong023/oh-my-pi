@@ -125,6 +125,17 @@ describe("relay extension self-update decisions", () => {
 		expect(calls).toHaveLength(1);
 	});
 
+	it("rewrites and reloads an extension installed by an older fork", async () => {
+		const { bridge, calls, finish } = bridgeWithUpdater();
+		const socket = new FakeExtSocket();
+		hello(bridge, socket, { ompVersion: `${OLD}+fork.9` });
+		expect(calls).toEqual([EXTENSION_ID]);
+		expect(bridge.ready).toBe(false);
+		await finish(true);
+		expect(socket.reloads).toBe(1);
+		expect(socket.closed).toBe(true);
+	});
+
 	it("sends nothing more to a browser it asked to reload while another browser stays connected", async () => {
 		const { bridge, finish } = bridgeWithUpdater();
 		const reloading = new FakeExtSocket();
@@ -159,6 +170,8 @@ describe("relay extension self-update decisions", () => {
 		const { bridge, calls } = bridgeWithUpdater();
 		hello(bridge, new FakeExtSocket(), { ompVersion: VERSION });
 		hello(bridge, new FakeExtSocket(), { ompVersion: "999.0.0" });
+		const [base, build = "fork.0"] = VERSION.split("+");
+		hello(bridge, new FakeExtSocket(), { ompVersion: `${base}+fork.${BigInt(build.slice("fork.".length)) + 1n}` });
 		expect(calls).toEqual([]);
 	});
 
@@ -166,7 +179,22 @@ describe("relay extension self-update decisions", () => {
 		const { bridge, calls } = bridgeWithUpdater();
 		hello(bridge, new FakeExtSocket(), { ompVersion: "" });
 		hello(bridge, new FakeExtSocket(), { ompVersion: "dev" });
+		hello(bridge, new FakeExtSocket(), { ompVersion: `${OLD}+fork.invalid` });
+		hello(bridge, new FakeExtSocket(), { ompVersion: `${OLD}+fork.1\n` });
 		expect(calls).toEqual([]);
+	});
+
+	it("reports the oldest fork across connected browsers regardless of connection order", () => {
+		for (const versions of [
+			[`${OLD}+fork.10`, `${OLD}+fork.9`],
+			[`${OLD}+fork.9`, `${OLD}+fork.10`],
+		]) {
+			const bridge = new RelayBridge();
+			for (const [index, ompVersion] of versions.entries()) {
+				hello(bridge, new FakeExtSocket(), { instanceId: `browser-${index}`, ompVersion, reloadProtocol: 0 });
+			}
+			expect(bridge.versionInfo("ws://x/cdp").ompExtensionVersion).toBe(`${OLD}+fork.9`);
+		}
 	});
 
 	it("leaves an extension whose socket named no Chrome extension id alone", () => {
@@ -489,6 +517,19 @@ describe("relay extension self-update on a real relay", () => {
 		await settled;
 		expect(events).toContain("extension update stopped");
 		expect(await installedRelayExtensionVersion(dir)).toBe("999.0.0");
+	});
+
+	it("does not overwrite files installed by a newer fork of the same release", async () => {
+		const dir = home.join("extension");
+		const [base, build = "fork.0"] = VERSION.split("+");
+		const newer = `${base}+fork.${BigInt(build.slice("fork.".length)) + 1n}`;
+		await writeRelayExtension(dir, newer);
+		const { port, events, settled } = await startRelay(dir);
+		await dialExtension(port, dir);
+		await settled;
+		expect(events).toContain("extension update stopped");
+		expect(await installedRelayExtensionVersion(dir)).toBe(newer);
+		expect(await Bun.file(`${dir}/background.js`).text()).toBe(relayExtensionFiles(newer)["background.js"]!);
 	});
 
 	it("writes background.js last, so an update that fails midway leaves the old version reported", async () => {

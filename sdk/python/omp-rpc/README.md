@@ -115,6 +115,8 @@ with RpcClient(model="openrouter/anthropic/claude-sonnet-4.6", no_session=True) 
 
 `set_todos()` accepts either a flat list of todo strings/items or explicit
 phases, and `get_state().todo_phases` returns the typed current todo state.
+Blocked items retain their `blocker` reason when submitted as mappings or typed
+`TodoItem` values, including a `get_todos()` → `set_todos()` round trip.
 
 By default the client runs:
 

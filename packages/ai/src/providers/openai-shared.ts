@@ -266,6 +266,7 @@ export function resolveOpenAIRequestSetup(
 		model.headers,
 		model.provider === "openrouter" ? getOpenRouterHeaders() : undefined,
 		options.extraHeaders,
+		options.requestAuth?.headers,
 	);
 	if (model.provider === "coreweave") {
 		applyCoreWeaveProjectHeader(headers);

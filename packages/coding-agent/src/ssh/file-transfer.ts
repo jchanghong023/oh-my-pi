@@ -249,7 +249,7 @@ export async function listRemoteDir(
 	});
 	const buffer = new ConcatSink();
 	let size = 0;
-	for await (const chunk of child.proc.stdout) {
+	for await (const chunk of child.stdout) {
 		size += chunk.length;
 		if (size > DIRECTORY_MAX_BYTES) {
 			throw new Error("ssh://: directory listing exceeds the 1 MiB limit; use a narrower directory scope");

@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ShellFsFileType } from "@oh-my-pi/pi-natives";
+import { ptree } from "@oh-my-pi/pi-utils";
 import * as connectionManager from "../../src/ssh/connection-manager";
 import { listRemoteDir } from "../../src/ssh/file-transfer";
 import { fakeSshTransport } from "../helpers/fake-ssh-transport";
@@ -70,5 +71,30 @@ describe.skipIf(process.platform === "win32")("SSH structured directory transpor
 		vi.spyOn(connectionManager, "buildRemoteCommand").mockResolvedValue(["--fixture", "sleep 30"]);
 		onSpawn = () => controller.abort(new Error("directory transfer cancelled"));
 		await expect(listRemoteDir(target, fixture, { signal: controller.signal })).rejects.toThrow(/cancel|abort/i);
+	});
+});
+
+describe("SSH directory timeout-tracked output", () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it("parses directory entries from a subprocess with an attached timeout signal", async () => {
+		vi.spyOn(connectionManager, "ensureConnection").mockResolvedValue(undefined);
+		vi.spyOn(connectionManager, "ensureHostInfo").mockResolvedValue({
+			version: 4,
+			os: "linux",
+			shell: "sh",
+			transferShell: "sh",
+			compatEnabled: false,
+		});
+		vi.spyOn(connectionManager, "buildRemoteCommand").mockResolvedValue(["--directory-fixture"]);
+		const spawn = ptree.spawn;
+		vi.spyOn(ptree, "spawn").mockImplementation((_command, options) =>
+			spawn([process.execPath, "-e", 'process.stdout.write("file\\0entry with space\\0dir\\0sub\\0")'], options),
+		);
+
+		expect(await listRemoteDir(target, "/fixture")).toEqual([
+			{ name: "sub", fileType: ShellFsFileType.Dir },
+			{ name: "entry with space", fileType: ShellFsFileType.File },
+		]);
 	});
 });

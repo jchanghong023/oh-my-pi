@@ -360,7 +360,6 @@ class HostToolCompletedEvent:
     tool_call_id: str
 
 
-
 @dataclass(slots=True, frozen=True)
 class PromptTurn:
     events: tuple[RpcAgentEvent, ...]
@@ -811,9 +810,13 @@ class RpcClient(WireClient):
                     pass
         return all(process is exclude for process, _ in self._survivors)
 
-    def on_host_tool_completed(self, listener: HostToolCompletedListener) -> Callable[[], None]:
+    def on_host_tool_completed(
+        self, listener: HostToolCompletedListener
+    ) -> Callable[[], None]:
         self._host_tool_completed_listeners.append(listener)
-        return lambda: self._remove_listener(self._host_tool_completed_listeners, listener)
+        return lambda: self._remove_listener(
+            self._host_tool_completed_listeners, listener
+        )
 
     def on_event(self, listener: AgentEventListener) -> Callable[[], None]:
         self._event_listeners.append(listener)
@@ -972,7 +975,10 @@ class RpcClient(WireClient):
         phases = self._normalize_todo_phases(todos)
         data = self._command("set_todos", {"phases": phases})
         return required(
-            expect_object(data, "set_todos"), "todoPhases", array(parse_todo_phase), "set_todos"
+            expect_object(data, "set_todos"),
+            "todoPhases",
+            array(parse_todo_phase),
+            "set_todos",
         )
 
     def clear_todos(self) -> tuple[TodoPhase, ...]:
@@ -1046,7 +1052,10 @@ class RpcClient(WireClient):
             definitions.append(definition)
         data = self._command("set_host_tools", {"tools": definitions})
         return required(
-            expect_object(data, "set_host_tools"), "toolNames", array(decode_str), "set_host_tools"
+            expect_object(data, "set_host_tools"),
+            "toolNames",
+            array(decode_str),
+            "set_host_tools",
         )
 
     def set_host_uris(self, host_uris: Sequence[HostUri[Any]]) -> tuple[str, ...]:
@@ -1609,7 +1618,9 @@ class RpcClient(WireClient):
                     "host_tool_completed",
                     tool_name,
                     self._host_tool_completed_listeners,
-                    HostToolCompletedEvent(tool_name=tool_name, tool_call_id=tool_call_id),
+                    HostToolCompletedEvent(
+                        tool_name=tool_name, tool_call_id=tool_call_id
+                    ),
                 )
                 if pending_call.cancel_event.is_set():
                     return
@@ -1763,13 +1774,18 @@ class RpcClient(WireClient):
             status: TodoStatus,
             details: object,
             notes: object,
+            blocker: object,
         ) -> JsonObject:
             item: JsonObject = {"content": content, "status": status}
+            if isinstance(blocker, str):
+                item["blocker"] = blocker
             if isinstance(details, str):
                 item["details"] = details
             if isinstance(notes, str):
                 item["notes"] = [notes]
-            elif isinstance(notes, (list, tuple)) and all(isinstance(n, str) for n in notes):
+            elif isinstance(notes, (list, tuple)) and all(
+                isinstance(n, str) for n in notes
+            ):
                 item["notes"] = list(cast(Sequence[str], notes))
             return item
 
@@ -1780,7 +1796,9 @@ class RpcClient(WireClient):
             if isinstance(seed, TodoItem):
                 if seed.status not in _TODO_STATUS_VALUES:
                     raise RpcError(f"Unsupported todo status: {seed.status}")
-                return wire_item(seed.content, seed.status, seed.details, seed.notes)
+                return wire_item(
+                    seed.content, seed.status, seed.details, seed.notes, seed.blocker
+                )
 
             content = seed.get("content")
             if not isinstance(content, str) or not content.strip():
@@ -1793,7 +1811,13 @@ class RpcClient(WireClient):
                 status: TodoStatus = cast(TodoStatus, raw_status)
             else:
                 status = "pending"
-            return wire_item(content, status, seed.get("details"), seed.get("notes"))
+            return wire_item(
+                content,
+                status,
+                seed.get("details"),
+                seed.get("notes"),
+                seed.get("blocker"),
+            )
 
         def is_phase_seed(seed: TodoSeed | TodoPhaseSeed) -> bool:
             if isinstance(seed, TodoPhase):

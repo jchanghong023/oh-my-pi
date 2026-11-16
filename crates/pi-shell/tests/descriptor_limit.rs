@@ -145,3 +145,22 @@ fn running_out_of_descriptors_names_the_limit() {
 		assert!(lines[0].contains(part), "missing {part:?} in {output}");
 	}
 }
+
+/// One `find` call reuses its label for every command. Completed commands
+/// must release their pinned process handles before the whole traversal ends.
+#[test]
+fn find_exec_releases_exited_process_handles() {
+	if !in_limited_child("find_exec_releases_exited_process_handles") {
+		return;
+	}
+
+	let dir = tempfile::tempdir().expect("tempdir");
+	let count = 512;
+	for index in 0..count {
+		std::fs::write(dir.path().join(index.to_string()), []).expect("create find operand");
+	}
+	let path = dir.path().to_string_lossy().replace('\'', "'\\''");
+	let (code, output) = run(&format!("find '{path}' -type f -exec /bin/printf . ';'"));
+	assert_eq!(code, Some(0), "{output}");
+	assert_eq!(output, ".".repeat(count), "every file must run its external command");
+}

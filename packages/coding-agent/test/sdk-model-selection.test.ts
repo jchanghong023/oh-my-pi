@@ -1437,6 +1437,156 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
+	test.each(["high", "low"] as const)(
+		"deduplicates deferred role retries by inherited effort while preserving explicit %s effort",
+		async fallbackEffort => {
+			const settings = Settings.isolated({
+				prewalk: { enabled: false },
+				modelRoles: {
+					task: "missing-provider/missing-model,runtime-provider/runtime-fallback-model",
+				},
+				"retry.modelFallback": true,
+				"retry.fallbackChains": {
+					task: [`runtime-provider/runtime-fallback-model:${fallbackEffort}`, "runtime-provider/runtime-model"],
+				},
+			});
+			const role = "subagent:deferred-effort";
+			const { session } = await createAgentSession({
+				...buildSessionOptions("@task:high"),
+				modelPatternFallbackRole: role,
+				settings,
+			});
+			try {
+				expect(session.model?.id).toBe("runtime-fallback-model");
+				expect(session.thinkingLevel).toBe(Effort.High);
+				expect(session.settings.getModelRole(role)).toBe("runtime-provider/runtime-fallback-model:high");
+				expect(cfgRetryFallbackChains.get(session.settings)[role]).toEqual([
+					...(fallbackEffort === "low" ? ["runtime-provider/runtime-fallback-model:low"] : []),
+					"runtime-provider/runtime-model",
+				]);
+			} finally {
+				await session.dispose();
+			}
+		},
+	);
+
+	test.each(["healthy", "depleted", "fallback-disabled", "missing", "disabled"] as const)(
+		"enumerates deferred automatic role candidates with a %s primary",
+		async scenario => {
+			const primary =
+				scenario === "missing"
+					? "missing-provider/missing-model"
+					: scenario === "disabled"
+						? "deferred-disabled/role-primary"
+						: "apple/role-primary";
+			const settings = Settings.isolated({
+				prewalk: { enabled: false },
+				disabledProviders: ["deferred-disabled"],
+				modelRoles: { task: `${primary},@smol` },
+				"retry.modelFallback": scenario !== "fallback-disabled",
+				"retry.usageAwareFallback": true,
+				"retry.usageReservePolicy": "confirm",
+				"retry.fallbackChains": {
+					"apple/role-primary:high": ["runtime-provider/runtime-fallback-model:low"],
+					task: ["runtime-provider/runtime-model:low"],
+				},
+			});
+			const options = buildSessionOptions("@task:high");
+			const providerConfig = (ids: string[], apiKey?: string): ProviderConfigInput => ({
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey,
+				api: "openai-completions",
+				models: ids.map(id => ({
+					id,
+					name: id,
+					reasoning: true,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128000,
+					maxTokens: 8192,
+				})),
+			});
+			const unauthenticatedLogin = vi.fn(async (): Promise<string> => {
+				throw new Error("Automatic model selection must not initiate OAuth login");
+			});
+			const extension: ExtensionFactory = pi => {
+				pi.registerProvider(
+					"runtime-provider",
+					providerConfig(
+						["gemini-3.8-flash", "gemini-3.7-flash", "runtime-model", "runtime-fallback-model"],
+						"test-key",
+					),
+				);
+				// Apple is explicit-only: its primary may be pinned, but its higher-priority
+				// Haiku match must never enter the automatic branch or installed chain.
+				pi.registerProvider("apple", providerConfig(["role-primary", "claude-haiku-5-5"], "test-key"));
+				pi.registerProvider("deferred-disabled", providerConfig(["role-primary", "claude-haiku-5-5"], "test-key"));
+				// A registered OAuth provider without a stored login is a valid catalog
+				// source, but its higher-priority Haiku must remain unavailable.
+				pi.registerProvider("deferred-unauthenticated", {
+					...providerConfig(["claude-haiku-5-5"]),
+					oauth: { name: "Deferred unauthenticated", login: unauthenticatedLogin },
+				});
+			};
+			const providers = new Set(["runtime-provider", "apple", "deferred-disabled", "deferred-unauthenticated"]);
+			const getAll = options.modelRegistry.getAll.bind(options.modelRegistry);
+			const getAvailable = options.modelRegistry.getAvailable.bind(options.modelRegistry);
+			vi.spyOn(options.modelRegistry, "getAll").mockImplementation(() =>
+				getAll().filter(model => providers.has(model.provider)),
+			);
+			vi.spyOn(options.modelRegistry, "getAvailable").mockImplementation(() =>
+				getAvailable().filter(model => providers.has(model.provider)),
+			);
+			vi.spyOn(options.authStorage.health, "model").mockImplementation(async (_provider, healthOptions) =>
+				healthOptions.modelId === "role-primary" && scenario !== "healthy"
+					? { state: "depleted", accounts: [{ credentialId: 1, credentialType: "oauth", state: "depleted" }] }
+					: { state: "healthy", accounts: [{ credentialId: 2, credentialType: "oauth", state: "healthy" }] },
+			);
+			const role = "subagent:deferred-automatic";
+			const { session, modelFallbackMessage } = await createAgentSession({
+				...options,
+				extensions: [extension],
+				modelPatternFallbackRole: role,
+				settings,
+				hasUI: false,
+			});
+			try {
+				expect(options.modelRegistry.getAll().some(model => model.provider === "deferred-unauthenticated")).toBe(
+					true,
+				);
+				expect(
+					options.modelRegistry.getAvailable().some(model => model.provider === "deferred-unauthenticated"),
+				).toBe(false);
+				expect(unauthenticatedLogin).not.toHaveBeenCalled();
+				const selectsPrimary = scenario === "healthy" || scenario === "fallback-disabled";
+				const selected = selectsPrimary ? "apple/role-primary" : "runtime-provider/gemini-3.8-flash";
+				expect(`${session.model?.provider}/${session.model?.id}`).toBe(selected);
+				expect(session.thinkingLevel).toBe(Effort.High);
+				expect(session.settings.getModelRole(role)).toBe(`${selected}:high`);
+				expect(cfgRetryFallbackChains.get(session.settings)[role]).toEqual([
+					...(selectsPrimary ? ["runtime-provider/gemini-3.8-flash:high"] : []),
+					"runtime-provider/gemini-3.7-flash:high",
+					...(scenario === "fallback-disabled"
+						? []
+						: [
+								scenario === "missing" || scenario === "disabled"
+									? "runtime-provider/runtime-model:low"
+									: "runtime-provider/runtime-fallback-model:low",
+							]),
+				]);
+				if (scenario === "depleted") {
+					expect(modelFallbackMessage).toContain(
+						"apple/role-primary:high -> runtime-provider/gemini-3.8-flash:high",
+					);
+				} else {
+					expect(modelFallbackMessage).toBeUndefined();
+				}
+			} finally {
+				await session.dispose();
+			}
+		},
+	);
+
 	test.each([
 		["depleted", "runtime-model"],
 		["reserve", "runtime-m"],

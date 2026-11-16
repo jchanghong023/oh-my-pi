@@ -25,6 +25,13 @@ describe("classifyInstallTarget", () => {
 		expect(result).toEqual({ type: "npm", spec: "hello@my-marketplace" });
 	});
 
+	it("keeps the npm dev dist-tag when a marketplace has the same name", () => {
+		expect(classifyInstallTarget("package@dev", new Set(["dev"]))).toEqual({
+			type: "npm",
+			spec: "package@dev",
+		});
+	});
+
 	it("scoped @scope/pkg@marketplace is still npm — rule 1 wins", () => {
 		// Even though this starts with @, the rule only triggers when spec.startsWith("@")
 		// but @scope/pkg@my-marketplace DOES start with @ so rule 1 applies -> npm.

@@ -106,6 +106,15 @@ export async function runAuthGatewayStdio(): Promise<void> {
 	const routed = new Map<string, Model<Api>>();
 	const router = createAuthGatewayRouter({
 		storage,
+		credentials: {
+			resolve: (model, sessionId, signal) =>
+				registry.getApiKeyWithCredentialForProvider(model.provider, sessionId, {
+					baseUrl: model.baseUrl,
+					modelId: model.id,
+					signal,
+				}),
+			resolver: (model, sessionId) => registry.resolver(model, sessionId),
+		},
 		resolveModel: stdioModelResolver(routed, registry),
 		listModels: () => GATEWAY_MODEL_KINDS.flatMap(kind => registry.getAvailable(kind)),
 	});

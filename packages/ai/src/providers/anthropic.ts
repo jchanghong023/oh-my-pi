@@ -2003,6 +2003,10 @@ const streamAnthropicOnce = (
 				options?.requestAuth !== undefined
 					? (options.requestAuth.apiKey ?? "")
 					: (options?.apiKey ?? getEnvApiKey(model.provider) ?? "");
+			const callerHeaders = options?.requestAuth?.headers
+				? mergeHeaders(options?.headers, options.requestAuth.headers)
+				: options?.headers;
+			const mergedCallerHeaders = mergeHeaders(model.headers, callerHeaders);
 			const copilotApiKey = model.provider === "github-copilot" ? parseGitHubCopilotApiKey(apiKey) : undefined;
 			const copilotBaseUrl =
 				model.provider === "github-copilot"
@@ -2017,8 +2021,8 @@ const streamAnthropicOnce = (
 						messages: context.messages,
 						hasImages: hasCopilotVisionInput(context.messages),
 						premiumMultiplier: model.premiumMultiplier,
-						headers: { ...model.headers, ...options?.headers },
-						integrationId: resolveCopilotRequestIdentity(options?.headers),
+						headers: mergedCallerHeaders,
+						integrationId: resolveCopilotRequestIdentity(callerHeaders),
 						initiatorOverride: options?.initiatorOverride,
 						enterpriseUrl: copilotApiKey.enterpriseUrl,
 						cachedIntegrationId: copilotCached,
@@ -2114,7 +2118,6 @@ const streamAnthropicOnce = (
 			// The binding-controls beta follows the finalized body's
 			// `thinking.block_binding` per request (see below), not the client.
 			const controlBetas = resolveAnthropicControlBetas(model, undefined);
-			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
 			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);
 			// Base for the per-request beta override an injected client needs.
 			// `mergeAnthropicBetaHeader` seeds from the caller's own
@@ -2305,7 +2308,7 @@ const streamAnthropicOnce = (
 					extraBetas,
 					stream: true,
 					interleavedThinking: options?.interleavedThinking ?? true,
-					headers: options?.headers,
+					headers: callerHeaders,
 					dynamicHeaders: copilotDynamicHeaders?.headers,
 					isOAuth: options?.isOAuth,
 					omitClaudeCodeAppHeaders: options?.omitClaudeCodeAppHeaders,
@@ -2348,7 +2351,7 @@ const streamAnthropicOnce = (
 								providerSessionState.threads,
 								threadSessionId,
 								apiKey,
-								mergeHeaders(mergedCallerHeaders, options?.requestAuth?.headers),
+								mergedCallerHeaders,
 							),
 							{ resendSystemAndTools: isOAuthToken },
 						)
@@ -4495,13 +4498,13 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	// the proxy to deal with two competing credentials when the user explicitly
 	// asked for one.
 	const authorizationHeader = getHeaderCaseInsensitive(defaultHeaders, "Authorization");
-	// A keyless provider resolves to the `N/A` sentinel, for which no
-	// Authorization was built above; the client would otherwise inject a
-	// bogus `X-Api-Key: N/A` of its own.
+	// Keyless providers use `N/A`; explicit header-only authentication uses "".
+	// Neither builds Authorization above. The HTTP client injects X-Api-Key for
+	// every non-null apiKey (including ""), so pass null for both absent keys.
 	const shouldSuppressClientApiKey =
 		!oauthToken &&
 		!model.compat.officialEndpoint &&
-		(typeof authorizationHeader === "string" || apiKey === NO_AUTH_SENTINEL);
+		(typeof authorizationHeader === "string" || apiKey === NO_AUTH_SENTINEL || apiKey === "");
 
 	return {
 		isOAuthToken: oauthToken,

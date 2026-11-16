@@ -2281,6 +2281,11 @@ export type NativeChildCapabilities = Pick<
 /** A private registry owns its root's gate for the entire descendant/revival lifetime. */
 const registryPauseGates = new WeakMap<AgentRegistryApi, AgentPauseGate>();
 
+/** Whether a registry owns a pause gate that cannot cross the worker bridge. */
+export function hasRegistryPauseGate(registry: AgentRegistryApi): boolean {
+	return registryPauseGates.has(registry);
+}
+
 const registryStartupCleanupOwners = new WeakMap<
 	AgentRegistryApi,
 	{
@@ -3973,8 +3978,8 @@ async function createAgentSessionScoped(
 						? modelRegistry.getAvailable()
 						: modelRegistry.getAvailable().filter(candidate => !disabledProviders.has(candidate.provider));
 				// Keep automatic role provenance through every deferred candidate check.
-				const resolveDeferredPattern = (pattern: string, models: Model[]) =>
-					resolveModelRoleValue(pattern, models, { settings, matchPreferences });
+				const resolveDeferredPattern = (pattern: string, models: Model[], automatic = false) =>
+					resolveModelRoleValue(pattern, models, { settings, matchPreferences, automatic });
 				const expandedModelPatterns = deferredModelPatterns.flatMap(pattern =>
 					pattern.split(",").flatMap(selector => {
 						const trimmedSelector = selector.trim();
@@ -3988,9 +3993,10 @@ async function createAgentSessionScoped(
 						if (resolved.configuredPatterns && resolved.configuredPatterns.length > 0) {
 							const primaryPatterns: Array<{
 								pattern: string;
+								automatic: boolean;
 								retryFallback: InitialRetryFallbackState | undefined;
-							}> = resolved.configuredPatterns.map(pattern => ({
-								pattern,
+							}> = resolveModelPatternCandidates(resolved.configuredPatterns, settings).map(candidate => ({
+								...candidate,
 								retryFallback: undefined,
 							}));
 							if (!resolved.configuredRole || !cfgRetryModelFallback.get(settings)) {
@@ -4044,7 +4050,7 @@ async function createAgentSessionScoped(
 								...primaryPatterns,
 								...findRetryFallbackCandidates(fallbackContext, chainKey, chainSelector, originalModel, {
 									allowMissingPrimary: true,
-								}).map(candidate => ({ pattern: candidate.raw, retryFallback })),
+								}).map(candidate => ({ pattern: candidate.raw, automatic: false, retryFallback })),
 							];
 						}
 						if (resolved.model) {
@@ -4054,28 +4060,27 @@ async function createAgentSessionScoped(
 										resolved.selector ?? formatModelStringWithRouting(resolved.model),
 										resolved.thinkingLevel,
 									),
+									automatic: false,
 									retryFallback: undefined,
 								},
 							];
 						}
-						return resolveConfiguredModelPatterns([trimmedSelector], settings, {
-							preserveAutomaticRoleAliases: true,
-						}).map(pattern => ({
-							pattern,
+						return resolveModelPatternCandidates(trimmedSelector, settings).map(candidate => ({
+							...candidate,
 							retryFallback: undefined,
 						}));
 					}),
 				);
 				const resolutionModels = expandedModelPatterns.some(
-					({ pattern }) => resolveDeferredPattern(pattern, availableModels).model,
+					({ pattern, automatic }) => resolveDeferredPattern(pattern, availableModels, automatic).model,
 				)
 					? availableModels
 					: allEnabledModels;
 				let usageFallbackTriggered = false;
 				let usageFallbackReason: { from: string; reason: string } | undefined;
 				for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
-					const { pattern, retryFallback } = expandedModelPatterns[patternIndex];
-					const primary = resolveDeferredPattern(pattern, resolutionModels);
+					const { pattern, automatic, retryFallback } = expandedModelPatterns[patternIndex];
+					const primary = resolveDeferredPattern(pattern, resolutionModels, automatic);
 					if (!primary.model || (retryFallback && !hasModelAuth(primary.model))) continue;
 					let hasUsageFallbackCandidate = false;
 					for (
@@ -4086,6 +4091,7 @@ async function createAgentSessionScoped(
 						const candidate = resolveDeferredPattern(
 							expandedModelPatterns[candidateIndex].pattern,
 							resolutionModels,
+							expandedModelPatterns[candidateIndex].automatic,
 						);
 						if (candidate.model && hasModelAuth(candidate.model)) {
 							hasUsageFallbackCandidate = true;
@@ -4186,19 +4192,27 @@ async function createAgentSessionScoped(
 					if (!authFallbackUsed && options.modelPatternFallbackRole) {
 						const primarySelector = formatModelSelectorValue(
 							formatModelStringWithRouting(primary.model),
-							primary.thinkingLevel,
+							selectedThinkingLevel,
 						);
 						const seenSelectors = new Set<string>([primarySelector]);
 						const fallbackSelectors: string[] = [];
 						for (const fallbackEntry of expandedModelPatterns.slice(patternIndex + 1)) {
-							const fallback = resolveDeferredPattern(fallbackEntry.pattern, resolutionModels);
-							if (!fallback.model) continue;
-							const fallbackSelector = formatModelSelectorValue(
-								formatModelStringWithRouting(fallback.model),
-								fallback.thinkingLevel,
+							const fallback = resolveDeferredPattern(
+								fallbackEntry.pattern,
+								resolutionModels,
+								fallbackEntry.automatic,
 							);
-							if (seenSelectors.has(fallbackSelector)) continue;
-							seenSelectors.add(fallbackSelector);
+							if (!fallback.model) continue;
+							const fallbackModelSelector = formatModelStringWithRouting(fallback.model);
+							const fallbackSelector = formatModelSelectorValue(fallbackModelSelector, fallback.thinkingLevel);
+							// Suffixless retries inherit the selected effort, so they must
+							// not reinsert its primary at an apparently different effort.
+							const fallbackIdentity =
+								fallback.thinkingLevel === undefined
+									? formatModelSelectorValue(fallbackModelSelector, selectedThinkingLevel)
+									: fallbackSelector;
+							if (seenSelectors.has(fallbackIdentity)) continue;
+							seenSelectors.add(fallbackIdentity);
 							fallbackSelectors.push(fallbackSelector);
 						}
 						if (fallbackSelectors.length === 0) {

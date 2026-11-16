@@ -120,3 +120,29 @@ async fn operands_use_their_own_arguments() {
 	])
 	.await;
 }
+
+/// A TERM trap exits normally even though the timeout expired; its exit code
+/// is not replaced by the status of an unhandled TERM.
+#[tokio::test]
+async fn timeout_preserves_in_process_term_trap_exit_status() {
+	assert_callouts(&[
+		(
+			"timeout --preserve-status 0.1 eval 'trap \"printf trapped > marker; exit 7\" TERM; \
+			 while :; do :; done'",
+			7,
+			"trapped",
+		),
+		(
+			"timeout --preserve-status 0.1 eval 'trap \"printf trapped > marker; exit 0\" TERM; \
+			 while :; do :; done'",
+			0,
+			"trapped",
+		),
+		(
+			"timeout 0.1 eval 'trap \"printf trapped > marker; exit 7\" TERM; while :; do :; done'",
+			124,
+			"trapped",
+		),
+	])
+	.await;
+}

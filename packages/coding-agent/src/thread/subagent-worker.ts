@@ -30,6 +30,7 @@ import { SUBAGENT_WORKER_ARG } from "../cli/worker-selectors";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { AgentRegistry, type AgentRegistryApi } from "../registry/agent-registry";
+import { hasRegistryPauseGate } from "../sdk";
 import { cfgTaskWorkerThreads } from "../task/settings";
 import { isMainThread, type ThreadId } from "./identity";
 import type { MainThreadLink, SubagentWorkerInit } from "./protocol";
@@ -391,7 +392,8 @@ export class SubagentWorkerPool {
 	 */
 	place(): SubagentPlacement {
 		if (this.#disposed) throw new Error("Subagent worker pool is disposed");
-		const worker = this.#select();
+		// Cold revivals also enter here; their root's gate cannot cross worker RPC.
+		const worker = hasRegistryPauseGate(AgentRegistry.global()) ? undefined : this.#select();
 		if (!worker) return { worker: undefined, release: this.beginMainRun() };
 		return { worker, release: worker.beginRun() };
 	}
@@ -436,7 +438,7 @@ export class SubagentWorkerPool {
 	 * it booted; an idle worker those spawns may use gets its idle countdown restarted.
 	 */
 	prewarm(expectedSpawns = 1): void {
-		if (this.#disposed) return;
+		if (this.#disposed || hasRegistryPauseGate(AgentRegistry.global())) return;
 		const slots = this.#slots(this.runsInFlight + Math.max(1, expectedSpawns));
 		let slot = 0;
 		for (const worker of this.#workers.values()) {
