@@ -7,6 +7,10 @@
 - Preserve fork blocked-todo rendering and Eval failure output while adopting upstream wait rendering and render-cache improvements.
 - Preserve Chinese picker and plan-review presentation and selection-only model search while composing upstream provider scopes, thinking controls, document review, and terminal output ownership.
 
+### Added
+
+- Agent names in Task tool rows and agent hub rows take a colour of their own in the terminal UI: Main takes the theme accent, and subagents take one of six colours in the order they arrive, picked from the theme's own palette so each stays readable on its background; themes can set them with the optional `subagent1`–`subagent6` tokens ([#18987](https://github.com/can1357/oh-my-pi/pull/18987) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.22.0] - 2026-11-16
 
 ### Breaking Changes

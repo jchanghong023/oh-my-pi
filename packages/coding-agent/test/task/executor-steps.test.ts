@@ -139,6 +139,7 @@ describe("runSubprocess stepped spawns", () => {
 			steps: PROMPTS,
 			index: 0,
 			id: "steps-structured",
+			outputSchema: {},
 			parentAgentId: "Main",
 		});
 
@@ -172,6 +173,7 @@ describe("runSubprocess stepped spawns", () => {
 			steps: PROMPTS,
 			index: 0,
 			id: "steps-failed-yield",
+			outputSchema: {},
 		});
 
 		expect(harness.prompts).toEqual([PROMPTS[0]]);
@@ -188,7 +190,6 @@ describe("runSubprocess stepped spawns", () => {
 			agent,
 			task: PROMPTS[0],
 			steps: PROMPTS,
-			structured: false,
 			index: 0,
 			id: "steps-unstructured",
 			parentAgentId: "Main",

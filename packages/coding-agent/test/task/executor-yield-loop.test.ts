@@ -162,6 +162,7 @@ describe("runSubprocess incremental yield loops", () => {
 		return {
 			cwd: "/tmp",
 			agent: baseAgent,
+			outputSchema: {},
 			task: "inventory the api surface",
 			index: 0,
 			id,

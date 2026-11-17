@@ -142,7 +142,6 @@ async function createOwner(name: string, pauseGate: AgentPauseGate) {
 				task: "report completed",
 				index: 0,
 				id,
-				structured: false,
 				modelOverride: "mock/mock-model",
 				authStorage,
 				modelRegistry,

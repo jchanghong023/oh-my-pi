@@ -322,7 +322,7 @@ export const cfgTaskStructured = register({
 		group: "Subagents",
 		label: "结构化任务结果",
 		description:
-			"在 task 工具中提供 outputSchema/schemaMode，并通过 yield 工具返回 Subagent 结果，按调用方或 Agent 的输出 schema 验证。关闭时：task Subagent 没有 yield 工具，以纯文本返回最终消息，但定义中设置 structured: true 的 Agent 除外。Eval agent()/workpool 生成的 Agent 始终保留结构化结果。",
+			"在 task 工具中提供 outputSchema/schemaMode 并遵循 Agent 输出 schema；有 schema 的 Subagent 通过 yield 工具返回并验证结果。关闭时：task Subagent 忽略 schema，但定义中设置 structured: true 的 Agent 除外。无 schema 的 Subagent 没有 yield 工具，以最终消息返回结果。Eval agent()/workpool 生成的 Agent 始终遵循 schema。",
 	},
 });
 

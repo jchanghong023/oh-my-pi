@@ -408,6 +408,7 @@ describe("OMP OpenWiki read-only tools", () => {
 					env: {
 						PATH: process.env.PATH,
 						SystemRoot: process.env.SystemRoot,
+						BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH,
 						HOME: dir.path(),
 						USERPROFILE: dir.path(),
 						OMP_CONFIG_ROOT: config,
