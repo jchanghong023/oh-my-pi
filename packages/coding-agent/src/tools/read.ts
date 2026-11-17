@@ -29,6 +29,7 @@ import {
 	parseImageMetadata,
 	prompt,
 	readImageMetadata,
+	readLines,
 	untilAborted,
 } from "@oh-my-pi/pi-utils";
 import { peekFile } from "@oh-my-pi/pi-utils/peek-file";
@@ -293,6 +294,37 @@ function deriveBufferedFileText(bytes: Buffer): BufferedFileText {
 		addressableLines,
 		endsWithNewline: bytes.length > 0 && bytes[bytes.length - 1] === LF_BYTE,
 	};
+}
+
+async function findLogErrorLines(
+	absolutePath: string,
+	pattern: string,
+	buffered: BufferedFileText | undefined,
+	signal: AbortSignal | undefined,
+): Promise<string> {
+	let regex: RegExp;
+	try {
+		regex = new RegExp(pattern);
+	} catch {
+		throw new ToolError("Invalid regular expression in OMP_LOG_ERROR_REGEX");
+	}
+
+	const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+	const matches: string[] = [];
+	const lines = buffered?.rawSegments ?? readLines(Bun.file(absolutePath).stream(), signal);
+	const bufferedLineCount = buffered
+		? buffered.rawSegments.length - Number(buffered.endsWithNewline || buffered.bytes.length === 0)
+		: undefined;
+	let lineNumber = 0;
+	for await (const line of lines) {
+		throwIfAborted(signal);
+		if (++lineNumber > (bufferedLineCount ?? Infinity)) break;
+		let text = (typeof line === "string" ? line : decoder.decode(line)).replace(/\r$/, "");
+		if (lineNumber === 1) text = text.replace(/^\uFEFF/, "");
+		if (regex.test(text)) matches.push(`${lineNumber}:${text}`);
+	}
+	throwIfAborted(signal);
+	return matches.join("\n");
 }
 
 /** The line window a range read renders, with the budget accounting behind it. */
@@ -918,11 +950,25 @@ const kSpotlightWide = Symbol("read.spotlightWide");
  * call and joins them again ({@link joinReadList}).
  */
 const kReadList = Symbol("read.list");
+const kLogErrorLines = Symbol("read.logErrorLines");
 
 interface ReadDetailsWithWindow extends ReadToolDetails {
 	[kSpotlightWindow]?: ShapeInput["read"];
 	[kSpotlightWide]?: true;
 	[kReadList]?: ReadList;
+	[kLogErrorLines]?: string;
+}
+
+function prependLogErrorLines(result: AgentToolResult<ReadToolDetails>): AgentToolResult<ReadToolDetails> {
+	const details: ReadDetailsWithWindow | undefined = result.details;
+	const matches = details?.[kLogErrorLines];
+	if (!matches || result.isError) return result;
+	const firstText = result.content.find((c): c is TextContent => c.type === "text");
+	if (!firstText) return result;
+	const content = result.content.map(c =>
+		c === firstText ? { ...firstText, text: `${matches}\n\n${firstText.text}` } : c,
+	);
+	return { ...result, content };
 }
 
 /** A `;`/`,` path list as read: its note, then in order each part read, a nested list, or a part that failed. */
@@ -1034,6 +1080,8 @@ function repeatReadNotice(
 	path: string,
 	result: AgentToolResult<ReadToolDetails>,
 ): string | undefined {
+	const details: ReadDetailsWithWindow | undefined = result.details;
+	if (details?.[kLogErrorLines] === "") return;
 	const block = result.content?.find(entry => entry.type === "text");
 	if (!block || typeof block.text !== "string" || block.text.length === 0 || result.isError) return;
 
@@ -1343,7 +1391,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			// lexical path instead, so the committed result matches an ordinary
 			// read exactly (hashline headers, source metadata).
 			const requestedPath = (context.args as ReadParams).path;
-			const result = await speculativeTool.#executeInner(
+			const inner = await speculativeTool.#executeInner(
 				context.toolCall.id,
 				{ ...(context.args as ReadParams), path: absolutePath },
 				signal,
@@ -1357,6 +1405,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				},
 				path.resolve(this.session.cwd, requestedPath),
 			);
+			const result = prependLogErrorLines(inner);
 			const snapshotHash = store.headHash(absolutePath);
 			if (!signal.aborted && !execution.discarded && snapshotHash) {
 				this.#speculativeReads.set(context.toolCall.id, {
@@ -1481,7 +1530,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						? { list: nested }
 						: {
 								part: {
-									request: { path: part, raw: partDetails?.raw, read: partDetails?.[kSpotlightWindow] },
+									request: {
+										path: part,
+										raw: partDetails?.[kLogErrorLines] === "" || partDetails?.raw,
+										read: partDetails?.[kSpotlightWindow],
+									},
 									result,
 									plain: partDetails?.[kSpotlightWide] ? () => readPart(part, true) : undefined,
 								},
@@ -1996,6 +2049,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (earlierEffects) await untilAborted(signal, earlierEffects);
 		const inner = await this.#executeInner(toolCallId, params, signal, onUpdate, toolContext);
 		const innerDetails: ReadDetailsWithWindow | undefined = inner.details;
+		if (innerDetails?.[kLogErrorLines] === "") return inner;
 		const list = innerDetails?.[kReadList];
 		const result = list
 			? await this.#shapeList(toolCallId, params, inner, list, signal)
@@ -2030,8 +2084,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				);
 		const displayTarget = InternalUrlRouter.instance().locateSync(params.path);
 		if (displayTarget && result.details) result.details.displayTarget = displayTarget;
-		appendRepeatReadHint(this.session, params.path, result);
-		return result;
+		const presented = prependLogErrorLines(result);
+		appendRepeatReadHint(this.session, params.path, presented);
+		return presented;
 	}
 
 	/**
@@ -2066,7 +2121,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			signal,
 		);
 		const results = new Map(read.parts.map((part, i) => [part, shaped.results[i]]));
-		const { content } = joinReadList(list, part => results.get(part) ?? part.result, hints);
+		const { content } = joinReadList(list, part => prependLogErrorLines(results.get(part) ?? part.result), hints);
 		const details = shaped.spotlight ? { ...inner.details, spotlight: shaped.spotlight } : inner.details;
 		return { ...inner, content, details };
 	}
@@ -2235,17 +2290,22 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		readPath: string,
 		options: FilesystemReadOptions,
 	): Promise<AgentToolResult<ReadToolDetails>> {
-		const media: { path?: string } = {};
-		const result = await this.#readFilesystemPipeline(readPath, options, media);
-		if (media.path === undefined || result.isError) return result;
-		return { ...result, details: { ...result.details, mediaPath: media.path } };
+		const presentation: { mediaPath?: string; logMatches?: string } = {};
+		const result = await this.#readFilesystemPipeline(readPath, options, presentation);
+		if (result.isError) return result;
+		if (presentation.logMatches !== undefined) {
+			const details: ReadDetailsWithWindow = (result.details ??= {});
+			details[kLogErrorLines] = presentation.logMatches;
+		}
+		if (presentation.mediaPath === undefined) return result;
+		return { ...result, details: { ...result.details, mediaPath: presentation.mediaPath } };
 	}
 
-	/** {@link #readFilesystemPath}'s body; sets `media.path` once the read is known to be a whole Tern-viewable file. */
+	/** {@link #readFilesystemPath}'s body; records media paths and matching log lines for the result. */
 	async #readFilesystemPipeline(
 		readPath: string,
 		options: FilesystemReadOptions,
-		media: { path?: string },
+		presentation: { mediaPath?: string; logMatches?: string },
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		const {
 			located,
@@ -2501,7 +2561,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			(localTarget.sel === undefined || parsed.kind === "raw" || parsed.kind === "image") &&
 			ternShowsMedia(absolutePath)
 		) {
-			media.path = absolutePath;
+			presentation.mediaPath = absolutePath;
 		}
 
 		// Metadata inspection precedes whole-file snapshots and never starts analysis.
@@ -2684,6 +2744,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const buffered = wholeFileBytes ? deriveBufferedFileText(wholeFileBytes) : undefined;
 			if (buffered) onBufferedFile?.(buffered.bytes);
 
+			const logErrorPattern = ext === ".log" ? Bun.env.OMP_LOG_ERROR_REGEX : undefined;
+			if (logErrorPattern) {
+				const logMatches = await findLogErrorLines(absolutePath, logErrorPattern, buffered, signal);
+				presentation.logMatches = logMatches;
+				if (!logMatches) return toolResult<ReadToolDetails>({}).text("执行成功\n退出码 0").done();
+			}
+
 			// Unbounded schemes (instruction documents) read whole: no summary, no result limits.
 			if (located?.spec.unbounded) {
 				const text = buffered?.strippedText ?? (await Bun.file(absolutePath).text());
@@ -2844,9 +2911,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						const scaled = Math.max(DEFAULT_MAX_BYTES, lineCount * 512);
 						if (located?.spec.artifactStore) return scaled;
 						const threshold = resolveArtifactSpillThreshold(this.session.settings);
+						// Buffered files know how many rows can actually appear on this page.
+						const fileLines = buffered && buffered.rawSegments.length - Number(buffered.endsWithNewline);
+						const numberedRows =
+							fileLines === undefined ? lineCount : Math.min(lineCount, Math.max(0, fileLines - firstLine));
 						const prefixWidth =
-							!rawSelector && displayMode.lineNumbers ? String(firstLine + lineCount).length + 1 : 0;
-						const prefixReserve = Math.min(lineCount * prefixWidth, Math.floor(threshold / 2));
+							!rawSelector && displayMode.lineNumbers ? String(firstLine + numberedRows).length + 1 : 0;
+						const prefixReserve = Math.min(numberedRows * prefixWidth, Math.floor(threshold / 2));
 						return Math.min(scaled, threshold - prefixReserve);
 					};
 					// Per-line column cap. Skipped in raw mode so `:raw` always returns

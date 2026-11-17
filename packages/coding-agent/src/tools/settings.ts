@@ -159,7 +159,7 @@ export const cfgReadLineNumbers = register({
 export const cfgReadDefaultLimit = register({
 	id: "read.defaultLimit",
 	type: "number",
-	default: 3000,
+	default: 2000,
 	ui: {
 		tab: "files",
 		group: "读取",
@@ -170,6 +170,7 @@ export const cfgReadDefaultLimit = register({
 			{ value: "300", label: "300 行" },
 			{ value: "500", label: "500 行" },
 			{ value: "1000", label: "1000 行" },
+			{ value: "2000", label: "2000 行" },
 			{ value: "5000", label: "5000 行" },
 		],
 	},

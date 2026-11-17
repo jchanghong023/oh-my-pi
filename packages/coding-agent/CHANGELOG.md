@@ -4,6 +4,7 @@
 
 ### Added
 
+- Set `OMP_LOG_ERROR_REGEX` to make `read` return a two-line success result for clean `.log` files and show numbered error matches from anywhere in the file ahead of the normal output.
 - Use `/workspace` for session-scoped write-boundary reminders, or `/workspace <message>` to enable them and send a task, independently of Plan mode; this is a prompt, not a sandbox.
 - Cycle through multiple prompts with `/loopn "x1" "x2" …`; Esc or `/loopn` stops the sequence.
 - Design simpler module interfaces with the discoverable `jch-codebase-design` skill or `/skill:jch-codebase-design`, retaining upstream descriptions and design references.
@@ -16,7 +17,7 @@
 - Selective commit through `/commit` and the eval `commit` namespace is now opt-in via `commit.enabled`; unfinished merges use plain `git commit`.
 - Added `providers.thinkingProbe` (default off) so unknown-model thinking probes never add requests to intranet, company or custom providers.
 - Binary analysis remains disabled by default after the upstream IDA/Ghidra migration; enable it with `disassembler.backend`.
-- Read up to 3,000 lines by default instead of 300 when no line limit is specified.
+- Read up to 2,000 lines by default when no line limit is specified.
 - Restored the upstream Provider catalog, login choices, custom providers and runtime discovery while retaining the fork's intranet providers.
 - OpenSpec 在所有新旧项目的产物生成指令中内置中文正文要求，保留项目上下文及必需的英文结构，无须修改项目配置。
 - Bundled `jch-grill-me` and `jch-grill-todo` now instruct research subagents to start with a fresh context window.
