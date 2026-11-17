@@ -1444,6 +1444,24 @@ export const cfgProvidersFetch = register({
 	},
 });
 
+/**
+ * Whether `web_search` and the URL reader may use third-party services the user
+ * holds no credential for. Off, they stick to configured services; a per-request
+ * `omp q --model` selector still runs.
+ */
+export const cfgProvidersWebKeyless = register({
+	id: "providers.webKeyless",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "providers",
+		group: "服务",
+		label: "免密钥网页服务",
+		description:
+			"允许网页搜索和 URL 阅读使用免密钥的 Parallel、Exa、Firecrawl、Keenable、Perplexity、Jina 阅读器及搜索引擎（Startpage、DuckDuckGo、Ecosia、Google、Mojeek、Hacker News）；关闭后仅使用已配置的服务",
+	},
+});
+
 /** A saved-reset window with its own auto-redeem consent. */
 export type ResetWindow = "5h" | "weekly" | "fable";
 

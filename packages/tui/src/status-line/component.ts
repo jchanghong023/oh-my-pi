@@ -507,6 +507,18 @@ interface CachedStatusLine {
 	inputRevision: number;
 	previewTitle: string | undefined;
 	externalInputs: StatusLineExternalInputs;
+	/** `#statusLineClock` tick the content was drawn on. */
+	clockTick: number;
+	/** Wall-clock second of the last full build: every segment but the brand spinner changes only across seconds. */
+	builtSecond: number;
+	/** The animating `pi` segment as drawn into `content` at `start`, when it appears there once and whole. */
+	brand: { ctx: SegmentContext; part: string; start: number } | undefined;
+}
+
+/** The `pi` segment's context and rendered part, captured while a full build draws it. */
+interface BrandCapture {
+	ctx?: SegmentContext;
+	part?: string;
 }
 
 /** Dot separator of the plain (borderless) layouts; carries no caps. */
@@ -702,7 +714,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		"plain-right": undefined,
 	};
 	#statusLineInputRevision = 0;
-	#statusLineClockTick = 0;
 	/**
 	 * Earliest wall-clock ms at which a TTL-throttled VCS cache the render path
 	 * served goes stale (git/jj status, watcher-less branch poll, repository
@@ -2169,6 +2180,10 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			identity?.email ?? "",
 			identity?.projectId ?? "",
 			identity?.orgId ?? "",
+			// Credential-scoped identities (API-key accounts) invalidate by row
+			// id: rotation to a sibling account must drop the old account's
+			// cached usage instead of showing it for the rest of the TTL.
+			identity?.credentialId ?? "",
 		].join("\0");
 	}
 
@@ -3071,10 +3086,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const nowMs = Date.now();
 		this.#expireStaleVcsRender(nowMs);
 		const clockTick = this.#statusLineClock(nowMs, effectiveSettings);
-		if (clockTick !== this.#statusLineClockTick) {
-			this.#statusLineClockTick = clockTick;
-			this.#invalidateStatusLineRenderCache();
-		}
 
 		const cached = this.#statusLineRenderCache[layout];
 		if (
@@ -3085,13 +3096,20 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			cached.previewTitle === previewTitle &&
 			this.#sameStatusLineExternalInputs(cached.externalInputs, externalInputs)
 		) {
-			return cached;
+			if (cached.clockTick === clockTick) return cached;
+			const followed = this.#followBrandSpinner(cached, clockTick, nowMs);
+			if (followed) {
+				this.#statusLineRenderCache[layout] = followed;
+				return followed;
+			}
 		}
 
 		// The probe now belongs to the new cache entry; later probes need their own buffer.
 		this.#externalInputsProbe = new StatusLineExternalInputs();
-		const rendered = this.#renderStatusLine(width, layout, previewTitle, nowMs);
+		const brand: BrandCapture = {};
+		const rendered = this.#renderStatusLine(width, layout, previewTitle, nowMs, brand);
 		const content = rendered.content;
+		const start = brand.part ? content.indexOf(brand.part) : -1;
 		const result = {
 			content,
 			dimmedContent: this.#dimWhileFocusProxied(content),
@@ -3102,9 +3120,44 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			inputRevision: this.#statusLineInputRevision,
 			previewTitle,
 			externalInputs,
+			clockTick,
+			builtSecond: Math.floor(nowMs / 1_000),
+			brand:
+				brand.ctx && brand.part && start >= 0 && content.indexOf(brand.part, start + 1) < 0
+					? { ctx: brand.ctx, part: brand.part, start }
+					: undefined,
 		};
 		this.#statusLineRenderCache[layout] = result;
 		return result;
+	}
+
+	/**
+	 * Follow a spinner-rate clock tick by redrawing only the brand segment.
+	 * Within one wall-clock second the spinner glyph is the only thing on the
+	 * line that moves (time readouts change across seconds, a brand fade
+	 * recolors every frame), so a brand part of unchanged width drops into
+	 * the cached line at the same place: the layout around it cannot move.
+	 * Returns undefined when that does not hold; the caller rebuilds then.
+	 */
+	#followBrandSpinner(cached: CachedStatusLine, clockTick: number, nowMs: number): CachedStatusLine | undefined {
+		const brand = cached.brand;
+		if (!brand || this.#brandFade !== null || Math.floor(nowMs / 1_000) !== cached.builtSecond) return undefined;
+		const turnElapsedMs = this.getTurnElapsedMs();
+		if (turnElapsedMs === null) return undefined;
+		const ctx: SegmentContext = { ...brand.ctx, now: new Date(nowMs), turnElapsedMs };
+		const rendered = renderSegment("pi", ctx);
+		if (!rendered.visible || visibleWidth(rendered.content) !== visibleWidth(brand.part)) return undefined;
+		const content =
+			cached.content.slice(0, brand.start) +
+			rendered.content +
+			cached.content.slice(brand.start + brand.part.length);
+		return {
+			...cached,
+			content,
+			dimmedContent: this.#dimWhileFocusProxied(content),
+			clockTick,
+			brand: { ctx: brand.ctx, part: rendered.content, start: brand.start },
+		};
 	}
 
 	/**
@@ -3154,6 +3207,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		layout: StatusLineLayout,
 		previewTitle: string | undefined,
 		nowMs: number,
+		brand: BrandCapture,
 	): { content: string; overflowParts: readonly string[] } {
 		const effectiveSettings = this.#resolveSettings();
 		this.#syncPricingTimer();
@@ -3208,6 +3262,10 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			if (rendered.visible && rendered.content) {
 				leftParts.push(rendered.content);
 				leftSegIds.push(segId);
+				if (segId === "pi") {
+					brand.ctx = ctx;
+					brand.part = rendered.content;
+				}
 			}
 		}
 
@@ -3220,6 +3278,10 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			if (rendered.visible && rendered.content) {
 				rightParts.push(rendered.content);
 				rightSegIds.push(segId);
+				if (segId === "pi") {
+					brand.ctx = ctx;
+					brand.part = rendered.content;
+				}
 			}
 		}
 

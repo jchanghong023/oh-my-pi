@@ -1375,12 +1375,12 @@ describe("standard gate charged-budget parameters", () => {
 		expect(gatePoolWidth(12, 3, 12)).toBe(4);
 		expect(gatePoolWidth(48, 3, 12)).toBe(12);
 	});
-	test("WSL hosts halve the pool-sizing core budget; native hosts stay unchanged", () => {
-		expect(gateCpuBudget(26, "6.18.54.1-microsoft-standard-WSL2")).toBe(13);
-		expect(gateCpuBudget(2, "microsoft")).toBe(1);
-		expect(gateCpuBudget(8, "5.15.153.1-microsoft-standard-WSL2")).toBe(4);
-		expect(gateCpuBudget(26, "6.8.0-48-generic")).toBe(26);
-		expect(gateCpuBudget(32, "10.0.26100")).toBe(32);
+	test("Windows subprocess trees and shared WSL cores leave headroom without changing native Unix budgets", () => {
+		expect(gateCpuBudget(26, "6.18.54.1-microsoft-standard-WSL2", "linux")).toBe(13);
+		expect(gateCpuBudget(2, "microsoft", "linux")).toBe(1);
+		expect(gateCpuBudget(8, "5.15.153.1-microsoft-standard-WSL2", "linux")).toBe(4);
+		expect(gateCpuBudget(26, "6.8.0-48-generic", "linux")).toBe(26);
+		expect(gateCpuBudget(32, "10.0.26100", "win32")).toBe(16);
 	});
 
 	test("fastcheck accepts only a finite positive downward limit", () => {

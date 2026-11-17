@@ -10,7 +10,11 @@
 import type { Api, CodexCompactionContext, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-compaction";
-import { applyCodexResponsesLiteShape } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
+import {
+	applyCodexResponsesLiteShape,
+	moveCodexInstructionsToInput,
+	withCodexRoutingFieldsFirst,
+} from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import type {
 	OpenAICodexCompactionBody,
 	OpenAICodexCompatibilityMetadata,
@@ -22,6 +26,7 @@ import {
 	resolveOpenAIRequestSetup,
 } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { captureOpenAIHttpError } from "@oh-my-pi/pi-ai/utils/openai-http";
+import { withResolvedHeaders } from "@oh-my-pi/pi-ai/utils/model-headers";
 import type { CatalogPolicyInputs } from "@oh-my-pi/pi-catalog/types";
 import { isBedrockOpenAIUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
@@ -231,6 +236,8 @@ export function buildCompactionV2Request(
 	};
 	if (model.useResponsesLite) {
 		applyCodexResponsesLiteShape(body);
+	} else {
+		moveCodexInstructionsToInput(body);
 	}
 	return buildCompactionV2RequestFromBody(model, body, options);
 }
@@ -304,6 +311,7 @@ export async function requestCompactionV2Streaming(
 				effective_effort: effectiveEffort,
 			});
 			try {
+				model = await withResolvedHeaders(model, signal);
 				let fetchImpl: FetchImpl = options?.fetch ?? globalThis.fetch;
 				if (isBedrockOpenAIUrl(model.baseUrl)) {
 					({
@@ -490,7 +498,7 @@ async function attemptCompactionV2Streaming(
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
 		headers: buildCompactionV2Headers(model, apiKey, request, options.codexMetadata),
-		body: stringifyJson(body),
+		body: stringifyJson(withCodexRoutingFieldsFirst(body)),
 		signal,
 	});
 

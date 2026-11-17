@@ -41,9 +41,15 @@ export function parseFulltestArgs(args: readonly string[]): FulltestOptions | nu
 	return { debug, ...(full ? { full } : {}), ...(limitSeconds === undefined ? {} : { limitSeconds }) };
 }
 
-/** WSL2 vCPUs share the host's physical cores with the Windows side. */
-export function gateCpuBudget(cores: number = os.availableParallelism(), release: string = os.release()): number {
-	return release.toLowerCase().includes("microsoft") ? Math.max(1, Math.floor(cores / 2)) : cores;
+/** Reserve process-tree headroom for Windows helpers and shared WSL2 vCPUs. */
+export function gateCpuBudget(
+	cores: number = os.availableParallelism(),
+	release: string = os.release(),
+	platform: NodeJS.Platform = process.platform,
+): number {
+	return platform === "win32" || release.toLowerCase().includes("microsoft")
+		? Math.max(1, Math.floor(cores / 2))
+		: cores;
 }
 
 /** Keep static/subprocess headroom while favoring the longer Bun test lane. */

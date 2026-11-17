@@ -440,8 +440,8 @@ fn has_separator(name: &OsStr) -> bool {
 enum Candidate {
 	/// The file that runs.
 	Runs(PathBuf),
+	/// A file that cannot be executed (Unix only).
 	#[cfg(unix)]
-	/// A file that cannot be executed.
 	Denied,
 }
 

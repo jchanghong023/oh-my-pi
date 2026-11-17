@@ -15,6 +15,7 @@ export type KnownProvider =
 	| "azure"
 	| "baseten"
 	| "bedrock-mantle"
+	| "bifrost"
 	| "cerebras"
 	| "charm-hyper"
 	| "chutes"

@@ -260,12 +260,9 @@ async fn call<R: DeserializeOwned>(socket: &Path, dir: &Path, op: Op<'_>) -> Opt
 
 /// Without Unix sockets there is no daemon to ask.
 #[cfg(not(unix))]
-fn call<R: DeserializeOwned>(
-	_socket: &Path,
-	_dir: &Path,
-	_op: Op<'_>,
-) -> std::future::Ready<Option<R>> {
-	std::future::ready(None)
+#[expect(clippy::unused_async, reason = "same signature as the Unix daemon call")]
+async fn call<R: DeserializeOwned>(_socket: &Path, _dir: &Path, _op: Op<'_>) -> Option<R> {
+	None
 }
 
 /// The client's first frame.

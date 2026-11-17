@@ -807,6 +807,9 @@ function isIntegrationTest(testFile: string): boolean {
 		testFile === "test/aireq-workbench/workflow-domain.test.ts" ||
 		testFile === "test/goals/goal-recovery-public-wire.test.ts" ||
 		testFile === "test/goals/goal-sdk-auxiliary-consumers.test.ts" ||
+		// Repository snapshots and bundled shell helpers spawn repeated native subprocesses.
+		testFile === "test/openwiki/native-pool.test.ts" ||
+		testFile === "test/spec-driven/resources.test.ts" ||
 		testFile === "test/tools/browser/crawl.test.ts"
 	);
 }
@@ -821,6 +824,7 @@ function isStartupTest(file: string): boolean {
 		/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
 		/^test\/aireq-workbench\/(?:workflow-)?(?:browser|process)\.e2e\.test\.ts$/.test(file) ||
 		file === "test/zero-config-terminal.test.ts" ||
+		file === "test/startup-composer.test.ts" ||
 		file === "test/goals/goal-autopilot-tui.e2e.test.ts" ||
 		file === "test/goals/goal-ctrl-enter-tui.e2e.test.ts" ||
 		file === "test/goals/goal-autopilot-public-views.test.ts" ||

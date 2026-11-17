@@ -179,6 +179,7 @@ describe("executeSearch abort propagation", () => {
 			label: id,
 			isAvailable: () => true,
 			isExplicitlyAvailable: () => true,
+			isKeyless: () => false,
 			search: behaviour,
 		};
 	}

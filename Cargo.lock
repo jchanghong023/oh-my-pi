@@ -5511,9 +5511,9 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "1.2.3"
+version = "1.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b18443e9c262bfe8fa82f51666e2642c53393f7e5c27b3e1aeab922cff5b9d8"
+checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
 dependencies = [
  "libc",
  "log",
@@ -6558,7 +6558,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -6600,7 +6600,7 @@ dependencies = [
 
 [[package]]
 name = "pi-builtins"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "ansi-width",
  "anyhow",
@@ -6686,14 +6686,14 @@ dependencies = [
 
 [[package]]
 name = "pi-diff"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "xutf",
 ]
 
 [[package]]
 name = "pi-edit"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -6712,7 +6712,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "async-trait",
  "libc",
@@ -6725,7 +6725,7 @@ dependencies = [
 
 [[package]]
 name = "pi-knowledge"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "base64 0.23.1",
  "grep-matcher",
@@ -6749,7 +6749,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6849,7 +6849,7 @@ dependencies = [
 
 [[package]]
 name = "pi-predict"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -6868,7 +6868,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6907,7 +6907,7 @@ dependencies = [
 
 [[package]]
 name = "pi-vcs"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "futures",
  "gix",
@@ -6920,12 +6920,13 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "windows-sys 0.61.2",
  "xutf",
 ]
 
 [[package]]
 name = "pi-vfs"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "async-trait",
  "libc",
@@ -6939,7 +6940,7 @@ dependencies = [
 
 [[package]]
 name = "pi-voice"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "bytes",
  "flume",
@@ -6953,7 +6954,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "18.22.0"
+version = "18.22.1"
 dependencies = [
  "async-trait",
  "flume",

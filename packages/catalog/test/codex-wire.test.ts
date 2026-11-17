@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	applyCodexResidencyHeader,
 	getCodexAccountId,
@@ -73,4 +76,62 @@ describe("getCodexResidency", () => {
 		applyCodexResidencyHeader(configured, token);
 		expect(configured).toEqual({ "X-OpenAI-Internal-Codex-Residency": "eu" });
 	});
+});
+
+describe("Codex client version refresh", () => {
+	it.each(["1", " TrUe ", "yes", "ON", "0", "false", ""])(
+		"respects OMP_OFFLINE=%j without discarding the cached version",
+		offline => {
+			const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-version-"));
+			const agentDir = path.join(home, "agent");
+			fs.mkdirSync(agentDir);
+			fs.writeFileSync(
+				path.join(agentDir, "codex-client-version.json"),
+				JSON.stringify({ version: "999.0.0", checkedAt: 0 }),
+			);
+			try {
+				const child = Bun.spawnSync(
+					[
+						process.execPath,
+						"--eval",
+						`
+						let fetchCount = 0;
+						globalThis.fetch = async () => {
+							fetchCount++;
+							return new Response(null, { status: 503 });
+						};
+						const { resolveModelCacheProviderId } = await import(${JSON.stringify(path.join(import.meta.dir, "../src/provider-models/cache-provider-id.ts"))});
+						const cacheProviderId = resolveModelCacheProviderId("openai-codex");
+						const passiveFetchCount = fetchCount;
+						const { getCodexClientVersion } = await import(${JSON.stringify(path.join(import.meta.dir, "../src/wire/codex-version.ts"))});
+						const version = getCodexClientVersion();
+						console.log(JSON.stringify({ version, cacheProviderId, passiveFetchCount, fetchCount }));
+						`,
+					],
+					{
+						env: {
+							...process.env,
+							NODE_ENV: "production",
+							PI_AI_CODEX_CLIENT_VERSION: "",
+							PI_CODING_AGENT_DIR: agentDir,
+							OMP_CONFIG_ROOT: path.join(home, ".omp"),
+							PI_PROFILE: "",
+							OMP_OFFLINE: offline,
+						},
+						stdout: "pipe",
+						stderr: "pipe",
+					},
+				);
+				expect(child.exitCode, child.stderr.toString()).toBe(0);
+				expect(JSON.parse(child.stdout.toString())).toEqual({
+					version: "999.0.0",
+					cacheProviderId: "openai-codex:999.0.0",
+					passiveFetchCount: 0,
+					fetchCount: ["0", "false", ""].includes(offline) ? 1 : 0,
+				});
+			} finally {
+				fs.rmSync(home, { recursive: true, force: true });
+			}
+		},
+	);
 });

@@ -349,7 +349,12 @@ test("integration chunk classification matches coding-agent test paths only", ()
 		isIntegrationCommand(command("packages/coding-agent", ["test/unit.test.ts", "test/process.e2e.test.ts"])),
 	).toBe(true);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integration/session.test.ts"]))).toBe(true);
-	for (const file of ["test/aireq-workbench/git.test.ts", "test/aireq-workbench/workflow-domain.test.ts"]) {
+	for (const file of [
+		"test/aireq-workbench/git.test.ts",
+		"test/aireq-workbench/workflow-domain.test.ts",
+		"test/openwiki/native-pool.test.ts",
+		"test/spec-driven/resources.test.ts",
+	]) {
 		expect(isIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
 		expect(isLimitedIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
 		expect(isIntegrationCommand(command("packages/tui", [file]))).toBe(false);
@@ -956,6 +961,7 @@ test("local suites select fork consumers and drain failures without widening to 
 			"test/spec-driven/tui-capabilities.e2e.test.ts",
 			"test/goals/goal-autopilot-tui.e2e.test.ts",
 			"test/goals/goal-ctrl-enter-tui.e2e.test.ts",
+			"test/startup-composer.test.ts",
 		];
 		for (const file of startupFiles) {
 			await put(

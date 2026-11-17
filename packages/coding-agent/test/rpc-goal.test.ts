@@ -139,6 +139,111 @@ describe("RPC goal command", () => {
 		expect((await rpc.goal("create", { objective: "again" })).goal?.status).toBe("active");
 	}, 30_000);
 
+	test("a tool enabled during goal mode stays available after pause, resume and drop", async () => {
+		// Drive the in-process RpcGoalController and read its live tool roster directly:
+		// the RPC client's get_state -> dumpTools path needs the native shellBuiltins export.
+		const makeGoal = (objective: string, status: "active" | "paused" = "active"): GoalModeState => ({
+			enabled: status === "active",
+			mode: "active",
+			goal: {
+				id: "g1",
+				objective,
+				status,
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: 0,
+				updatedAt: 0,
+			},
+		});
+
+		let goalState: GoalModeState | undefined;
+		let tools: string[] = ["read"];
+		const session = {
+			settings: Settings.isolated({ "goal.continuationModes": [] }),
+			sessionManager: {
+				getSessionId: () => "t1",
+				buildSessionContext: () => ({ mode: "none" }),
+				appendModeChange: () => {},
+				appendCustomEntry: () => {},
+			},
+			isDisposed: false,
+			isSessionTransitioning: false,
+			isStreaming: false,
+			hasAdmittedSubmission: false,
+			queuedMessageCount: 0,
+			getPlanModeState: () => undefined,
+			getGoalModeState: () => goalState,
+			setGoalModeState: (state: GoalModeState | undefined) => {
+				goalState = state;
+			},
+			getEnabledToolNames: () => [...tools],
+			setActiveToolsByName: async (names: string[]) => {
+				tools = [...names];
+			},
+			getTodoPhases: () => [],
+			promptCustomMessage: async () => true,
+			waitForIdle: async () => {},
+			goalRuntime: {
+				buildContinuationPrompt: () => "continue",
+				clearAccounting: () => {},
+				createGoal: async ({ objective }: { objective: string }) => {
+					goalState = makeGoal(objective);
+					return goalState;
+				},
+				resumeGoal: async () => {
+					if (goalState?.goal.status !== "paused") throw new Error("No paused goal.");
+					goalState = makeGoal(goalState.goal.objective);
+					return goalState;
+				},
+				pauseGoal: async () => {
+					if (!goalState) return undefined;
+					goalState = makeGoal(goalState.goal.objective, "paused");
+					return goalState;
+				},
+				dropGoal: async () => {
+					if (!goalState) return undefined;
+					const dropped = { ...goalState.goal, status: "dropped" as const };
+					const droppedState: GoalModeState = { ...goalState, enabled: false, goal: dropped };
+					// Mirror the runtime's goal_updated(dropped): observe() queues #exit,
+					// which handle("drop") then awaits before reporting state.
+					controller.observe({
+						type: "goal_updated",
+						goal: dropped,
+						state: droppedState,
+					} as unknown as AgentSessionEvent);
+					goalState = undefined;
+					return dropped;
+				},
+			},
+		};
+		const controller = new RpcGoalController(session as unknown as RpcGoalSession);
+		const toolNames = (): string[] => [...tools];
+
+		expect(toolNames()).not.toContain("goaltest_late_tool");
+		const releaseInterview = await controller.prepareInterview();
+		await controller.handle({ op: "create", objective: "keep the late tool" });
+		await releaseInterview();
+		expect(toolNames()).toContain("goal");
+		expect(toolNames()).not.toContain("goaltest_late_tool");
+
+		// A deferred extension enables its tool only after goal entry.
+		await session.setActiveToolsByName([...session.getEnabledToolNames(), "goaltest_late_tool"]);
+		expect(toolNames()).toContain("goaltest_late_tool");
+		expect(toolNames()).toContain("goal");
+
+		await controller.handle({ op: "pause" });
+		expect(toolNames()).toContain("goaltest_late_tool");
+		expect(toolNames()).not.toContain("goal");
+
+		await controller.handle({ op: "resume" });
+		expect(toolNames()).toContain("goaltest_late_tool");
+		expect(toolNames()).toContain("goal");
+
+		await controller.handle({ op: "drop" });
+		expect(toolNames()).toContain("goaltest_late_tool");
+		expect(toolNames()).not.toContain("goal");
+	}, 30_000);
+
 	test("with rpc continuation opted in, create drives turns until the agent completes the goal", async () => {
 		const rpc = await start({ continuation: true });
 		const updates: Array<string | undefined> = [];
@@ -535,6 +640,32 @@ describe("RpcGoalController continuation gate", () => {
 			release: () => idle.resolve(),
 		};
 	}
+
+	test.each([false, true])(
+		"cancelling an interview preserves late tools and host-owned goal=%s",
+		async hostOwnsGoal => {
+			const f = fakeSession(async () => true);
+			f.session.setGoalModeState(undefined);
+			await f.session.setActiveToolsByName(hostOwnsGoal ? ["read", "goal"] : ["read"]);
+			const release = await f.controller.prepareInterview();
+			await f.session.setActiveToolsByName([...f.tools(), "late"]);
+			await release();
+			expect(f.tools()).toEqual(hostOwnsGoal ? ["read", "goal", "late"] : ["read", "late"]);
+			expect(f.goalState()).toBeUndefined();
+		},
+	);
+
+	test("an old interview release cannot remove the goal tool from a later interview", async () => {
+		const f = fakeSession(async () => true);
+		f.session.setGoalModeState(undefined);
+		const releaseFirst = await f.controller.prepareInterview();
+		await releaseFirst();
+		const releaseSecond = await f.controller.prepareInterview();
+		await releaseFirst();
+		expect(f.tools()).toContain("goal");
+		await releaseSecond();
+		expect(f.tools()).toEqual(["read"]);
+	});
 
 	test("a continuation decided before the session closes is never admitted after it", async () => {
 		const admitted: string[] = [];

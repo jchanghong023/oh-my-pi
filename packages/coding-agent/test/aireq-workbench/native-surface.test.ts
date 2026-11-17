@@ -21,6 +21,12 @@ import type {
 	AIReqNativeUiStateEvent,
 } from "../../src/aireq-workbench/native/native-surface-types";
 import { createProviderFixture } from "../spec-driven/provider-fixture";
+import {
+	disposeNativeWebGuiCommands,
+	executeNativeWebGuiCommand,
+	stopNativeWebGuiCommands,
+} from "../../src/aireq-workbench/native/native-commands";
+import { eventually } from "./fixture";
 
 /** Real native session and journal, not an ExtensionUIContext/controller substitute. */
 async function fixture() {
@@ -102,6 +108,33 @@ const png = {
 };
 
 describe("retained AIReq native surface", () => {
+	test("guided Goal native entry runs an interview and releases its temporary tool on host stop", async () => {
+		await using f = await fixture();
+		const toolsBefore = f.session.getEnabledToolNames();
+		expect(toolsBefore).not.toContain("goal");
+		try {
+			expect(await executeNativeWebGuiCommand(f.session, "/guided-goal verify native interview")).toBe(true);
+			await eventually(
+				async () =>
+					f.provider.requests.some(request => request.tools?.some(tool => tool.function?.name === "goal")),
+				Boolean,
+			);
+			await f.session.waitForIdle();
+			expect(
+				f.session.agent.state.messages.some(
+					message =>
+						message.role === "assistant" &&
+						message.content.some(part => part.type === "text" && part.text === "Native surface fixture response"),
+				),
+			).toBe(true);
+			await stopNativeWebGuiCommands(f.session);
+			expect(f.session.getEnabledToolNames()).toEqual(toolsBefore);
+			expect(f.session.getGoalModeState()).toBeUndefined();
+		} finally {
+			await disposeNativeWebGuiCommands(f.session);
+		}
+	}, 60_000);
+
 	test("portable native methods rehydrate for both exact pages without copying native history", async () => {
 		await using f = await fixture();
 		const a = f.target;

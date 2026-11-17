@@ -54,8 +54,10 @@ export type RpcGoalSession = Pick<
 
 export class RpcGoalController {
 	readonly #session: RpcGoalSession;
-	/** Active tool set before goal mode added `goal`; restored when the goal ends. */
-	#previousTools: string[] | undefined;
+	/** Whether goal mode added `goal` to the live roster; exit strips only that tool. */
+	#goalToolAddedByMode = false;
+	/** Invalidates release callbacks when an interview ends or another one starts. */
+	#interviewGeneration = 0;
 	/** Continuation turns submitted whose run has not reached its `agent_end`. */
 	#pendingContinuationTurns = 0;
 	#previousContinuationActivity: string | undefined;
@@ -134,20 +136,21 @@ export class RpcGoalController {
 		this.#scheduleContinuation();
 	}
 
-	/** Expose the real goal tool for an interview while preserving the tool set restored on goal exit. */
+	/** Expose the real goal tool for an interview; release only the tool this mode owns. */
 	async prepareInterview(): Promise<() => Promise<void>> {
 		await this.settled();
 		this.#assertCanEnter();
 		if (this.#session.getGoalModeState()?.goal) {
 			throw new Error("Resume or drop the current goal before starting an interview.");
 		}
-		const previousTools = this.#previousTools ?? this.#session.getEnabledToolNames();
-		if (this.#previousTools === undefined) {
-			await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
-			this.#previousTools = previousTools;
+		const enabledTools = this.#session.getEnabledToolNames();
+		if (!enabledTools.includes("goal")) {
+			await this.#session.setActiveToolsByName([...enabledTools, "goal"]);
+			this.#goalToolAddedByMode = true;
 		}
+		const generation = ++this.#interviewGeneration;
 		return async () => {
-			if (this.#previousTools === previousTools && !this.#session.getGoalModeState()?.goal) await this.#exit();
+			if (this.#interviewGeneration === generation && !this.#session.getGoalModeState()?.goal) await this.#exit();
 		};
 	}
 
@@ -294,13 +297,12 @@ export class RpcGoalController {
 	}
 
 	async #enter(start: () => Promise<GoalModeState>): Promise<void> {
-		// The pre-goal tool set is captured once, when this controller first adds `goal`
-		// (a reattached paused goal already holds it). A `goal` tool the host enabled
-		// before the goal stays enabled afterwards.
-		const previousTools = this.#previousTools ?? this.#session.getEnabledToolNames();
+		// Only a `goal` the controller added belongs to goal mode. A `goal` the host
+		// enabled beforehand stays enabled when the goal ends.
+		const enabledTools = this.#session.getEnabledToolNames();
 		const state = await start();
-		this.#previousTools = previousTools;
-		await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
+		this.#goalToolAddedByMode ||= !enabledTools.includes("goal");
+		await this.#session.setActiveToolsByName([...new Set([...enabledTools, "goal"])]);
 		this.#session.setGoalModeState(state);
 		this.#resetContinuation();
 		if (this.#session.isStreaming) {
@@ -310,12 +312,18 @@ export class RpcGoalController {
 		this.#scheduleContinuation();
 	}
 
-	/** Restore the pre-goal tool set. Idempotent. */
+	/** Undo only goal mode's own tool change, preserving the live roster. Idempotent. */
 	async #exit(): Promise<void> {
-		const previousTools = this.#previousTools;
-		this.#previousTools = undefined;
+		this.#interviewGeneration++;
+		const ownedGoalTool = this.#goalToolAddedByMode;
+		this.#goalToolAddedByMode = false;
 		this.#resetContinuation();
-		if (previousTools) await this.#session.setActiveToolsByName(previousTools);
+		if (ownedGoalTool) {
+			const liveTools = this.#session.getEnabledToolNames();
+			if (liveTools.includes("goal")) {
+				await this.#session.setActiveToolsByName(liveTools.filter(name => name !== "goal"));
+			}
+		}
 	}
 
 	/** Write the completion records into the current transcript and clear goal state. Synchronous. */
@@ -384,9 +392,9 @@ export class RpcGoalController {
 		});
 		const restored = await runtime.onThreadResumed({ preserveActiveGoal: options?.preserveActiveGoal });
 		if (!restored?.goal) return;
-		const previousTools = this.#session.getEnabledToolNames();
-		this.#previousTools = previousTools;
-		await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
+		const enabledTools = this.#session.getEnabledToolNames();
+		this.#goalToolAddedByMode = !enabledTools.includes("goal");
+		await this.#session.setActiveToolsByName([...new Set([...enabledTools, "goal"])]);
 	}
 
 	/**
@@ -400,12 +408,8 @@ export class RpcGoalController {
 			return;
 		}
 		if (event.type === "goal_updated") {
-			const status = event.state?.goal.status;
-			if (status === "dropped") {
+			if (event.state?.goal.status === "dropped") {
 				this.#queueExit(() => this.#exit());
-			} else if (event.state?.enabled && this.#previousTools === undefined) {
-				// Created by the agent's `goal` tool rather than this controller.
-				this.#previousTools = this.#session.getEnabledToolNames();
 			}
 			return;
 		}

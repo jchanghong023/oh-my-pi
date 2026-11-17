@@ -333,7 +333,7 @@ Cursor `oauth` · GitHub Copilot `oauth` · GitLab Duo · Devin `oauth` · Kimi 
 
 兼容 OpenAI 的 `/v1/models`。本地实例无需密钥。
 
-Ollama `local` · Ollama Cloud · LM Studio `local` · llama.cpp `local` · vLLM `local` · LiteLLM
+Ollama `local` · Ollama Cloud · LM Studio `local` · llama.cpp `local` · vLLM `local` · LiteLLM · Bifrost
 
 ### 自定义 OpenAI 兼容 provider
 
