@@ -433,6 +433,7 @@ import {
 	cfgProviderAppendOnlyContext,
 	cfgProvidersCacheWarming,
 	cfgProvidersKimiApiFormat,
+	cfgProvidersThinkingProbe,
 	cfgRetryFallbackChains,
 	cfgRetryModelFallback,
 	cfgRetryUsageAwareFallback,
@@ -5798,6 +5799,7 @@ async function createAgentSessionScoped(
 					settingsBoundStreamFn(streamModel, context, {
 						...effectiveOptions,
 						thinkingCapabilityDbPath: modelRegistry.modelsDbPath,
+						thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 					}),
 				);
 				if (options.onModelResponse) {
@@ -5832,6 +5834,7 @@ async function createAgentSessionScoped(
 					settingsBoundStreamFn(streamModel, context, {
 						...streamOptions,
 						thinkingCapabilityDbPath: modelRegistry.modelsDbPath,
+						thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 					}),
 				);
 			};

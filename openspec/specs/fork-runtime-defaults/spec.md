@@ -19,6 +19,8 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 
 - `recap.enabled=false`
 - `debug.enabled=false`、`disassembler.backend=none`、`archive.enabled=false`（普通与 offline 启动均默认关闭；反汇编沿用上游 IDA／Ghidra 后端选择，显式配置 `auto`、`ida` 或 `ghidra` 时启用；已有配置和用户显式开启仍优先，不改写配置文件）。
+- `commit.enabled=false`：`/commit` 与 eval `commit` 选择性提交默认关闭；显式开启后沿用上游行归属、私有索引构建及“合并／变基等操作进行中拒绝提交”的行为。
+- `providers.thinkingProbe=false`：未知模型的思考能力探测默认关闭，不为内网、自有 Provider 或自定义模型额外发送探测请求；显式开启后沿用上游探测、持久化与等级收敛行为。
 - `eval.js=false`：所有平台、普通与 offline 启动均默认关闭 JavaScript Eval。默认工具 schema 和对应运行时说明只声明 Python；显式开启 JavaScript 后恢复该后端。未开启时拒绝 JavaScript 执行，显式开启后可实际执行。
 - `async.maxJobs=32`；后台任务的硬上限及计数边界见下文。
 - 欢迎界面的使用提示、字体提醒与提示／新功能标签采用简体中文，展示边界见[简体中文用户界面](../tui-presentation/spec.md)。

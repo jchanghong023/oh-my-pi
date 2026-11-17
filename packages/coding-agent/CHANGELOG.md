@@ -10,6 +10,8 @@
 
 ### Changed
 
+- Selective commit through `/commit` and the eval `commit` namespace is now opt-in via `commit.enabled`; unfinished merges use plain `git commit`.
+- Added `providers.thinkingProbe` (default off) so unknown-model thinking probes never add requests to intranet, company or custom providers.
 - Binary analysis remains disabled by default after the upstream IDA/Ghidra migration; enable it with `disassembler.backend`.
 - Read up to 3,000 lines by default instead of 300 when no line limit is specified.
 - Restored the upstream Provider catalog, login choices, custom providers and runtime discovery while retaining the fork's intranet providers.

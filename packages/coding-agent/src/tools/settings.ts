@@ -728,7 +728,7 @@ export const cfgArchiveEnabled = register({
 export const cfgCommitEnabled = register({
 	id: "commit.enabled",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "tools",
 		group: "Available Tools",

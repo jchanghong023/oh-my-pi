@@ -1209,6 +1209,18 @@ export const cfgProvidersKimiApiFormat = register({
 	},
 });
 
+export const cfgProvidersThinkingProbe = register({
+	id: "providers.thinkingProbe",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "providers",
+		group: "协议",
+		label: "思考能力探测",
+		description: "为未知模型发送额外探测请求以学习思考等级；默认关闭，避免内网与自定义 Provider 产生额外模型请求",
+	},
+});
+
 export const cfgProvidersOpenaiWebsockets = register({
 	id: "providers.openaiWebsockets",
 	type: "enum",

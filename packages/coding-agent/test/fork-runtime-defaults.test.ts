@@ -22,7 +22,7 @@ import { setTerminalHeadless, TempDir } from "@oh-my-pi/pi-utils";
 const defaults = {
 	"recap.enabled": false,
 	"debug.enabled": false,
-	"ida.enabled": false,
+	"disassembler.backend": "none",
 	"archive.enabled": false,
 	"eval.js": false,
 	"async.maxJobs": 32,
@@ -102,7 +102,7 @@ describe("fork runtime defaults", () => {
 			const start = vi.spyOn(pyKernel.PythonKernel, "start");
 			for (const depth of [0, 1]) {
 				const owner = toolSession(root.path(), settings, depth);
-				const plan = await resolveBuiltinToolPlan(owner, ["eval", "debug", "ida", "lsp"]);
+				const plan = await resolveBuiltinToolPlan(owner, ["eval", "debug", "lsp"]);
 				expect(plan.names).toEqual(["eval"]);
 				const tools = await createTools(owner, ["eval"]);
 				expect(tools.map(tool => tool.name)).toEqual(["eval"]);

@@ -633,6 +633,8 @@ export interface StreamOptions {
 	providerSessionState?: Map<string, ProviderSessionState>;
 	/** @internal Registry-scoped models.db for persistent unknown-model thinking probes. */
 	thinkingCapabilityDbPath?: string;
+	/** Set `false` to skip probe requests that learn an unknown model's thinking controls; hosts that omit it keep probing. */
+	thinkingProbe?: boolean;
 	/**
 	 * Session a side request branches from, so it can read the parent's cached
 	 * prefix. Providers that keep per-conversation request controls (OpenAI

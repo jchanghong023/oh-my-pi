@@ -249,6 +249,7 @@ export function withProbedThinking<TApi extends Api>(
 		options.disableReasoning ||
 		options.forceReasoningOff ||
 		model.transport === "pi-native" ||
+		options.thinkingProbe === false ||
 		formatBatches(model.api).length === 0
 	) {
 		return run(model, context, options);
