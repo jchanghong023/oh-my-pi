@@ -1449,7 +1449,10 @@ export class InputController {
 				// branch, but an extension-command body would otherwise be retained
 				// as loopPrompt while the drain executes it locally — and idle
 				// submissions never arm commands.
-				if ((submittedMode === "loop" || submittedMode === "loopgoal") && !this.#isLocalExtensionCommand(text))
+				if (
+					(submittedMode === "loop" || submittedMode === "loopgoal" || submittedMode === "loopn") &&
+					!this.#isLocalExtensionCommand(text)
+				)
 					this.ctx.setLoopPrompt(text);
 				return;
 			}
@@ -1502,7 +1505,7 @@ export class InputController {
 					// retain a body whose dispatch rejects, resubmitting a failed
 					// prompt after every yield. A rejection leaves prior loop
 					// state untouched, so the previous body (if any) survives.
-					if ((submittedMode === "loop" || submittedMode === "loopgoal") && forwarded)
+					if ((submittedMode === "loop" || submittedMode === "loopgoal" || submittedMode === "loopn") && forwarded)
 						this.ctx.setLoopPrompt(text);
 				} catch (error) {
 					// Don't lose the queued steer draft: restore images then the collapsed

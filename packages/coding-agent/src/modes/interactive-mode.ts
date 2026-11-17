@@ -257,6 +257,7 @@ import { wrapTreeLine } from "@oh-my-pi/pi-tui/render/hanging-wrap";
 import { WidthAwareText } from "@oh-my-pi/pi-tui/render/width-aware-text";
 import { formatStartupChangelogSummary, type StartupChangelogSelection } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
+import { parseCommandArgs } from "../utils/command-args";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { openPath } from "../utils/open";
@@ -1428,6 +1429,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Last state reported through `mode_changed`; starts inactive so a restored session's modes are reported too. */
 	#reportedModeState: SessionModeState = {
 		plan: { status: "inactive" },
+	#loopNPrompts: string[] | undefined;
+	#loopNIndex = 0;
+
+	get loopNActive(): boolean {
+		return this.#loopNPrompts !== undefined;
+	}
+
 		vibe: { status: "inactive" },
 		goal: { status: "inactive" },
 		loop: { status: "inactive" },
@@ -3613,6 +3621,12 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** One loop iteration; while it runs, idle maintenance treats the loop's next turn as scheduled. */
 	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
+		if (this.#loopNPrompts) {
+			this.#loopNIndex = (this.#loopNIndex + 1) % this.#loopNPrompts.length;
+			prompt = this.#loopNPrompts[this.#loopNIndex];
+			this.loopPrompt = prompt;
+			this.#syncLoopModeStatus();
+		}
 		this.#pendingLoopIterations++;
 		try {
 			await this.#loopIteration(action, prompt);
@@ -3736,7 +3750,13 @@ export class InteractiveMode implements InteractiveModeContext {
 				? "running"
 				: "waiting";
 		this.statusLine.setLoopModeStatus(
-			this.loopModeEnabled ? { state, limit: this.loopLimit, condition: this.loopCondition } : undefined,
+			this.loopModeEnabled && !this.loopNActive
+				? { state, limit: this.loopLimit, condition: this.loopCondition }
+				: undefined,
+		);
+		this.statusLine.setHookStatus(
+			"loopn",
+			this.#loopNPrompts ? `LoopN · ${this.#loopNIndex + 1}/${this.#loopNPrompts.length}` : undefined,
 		);
 		this.ui.requestRender();
 		this.#notifyModeChanged();
@@ -3756,6 +3776,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncLoopModeStatus();
 		if (wasEnabled) {
 			this.showStatus(message);
+		this.#loopNPrompts = undefined;
+		this.#loopNIndex = 0;
 		}
 	}
 
@@ -3807,6 +3829,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cancelLoopAutoSubmit();
 		this.#abortLoopCondition();
 		this.#syncLoopModeStatus();
+		if (this.loopNActive) {
+			this.disableLoopMode("LoopN stopped.");
+			return;
+		}
 	}
 
 	async handleLoopCommand(args = "", goal = false): Promise<string | undefined> {
@@ -3815,6 +3841,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			return undefined;
 		}
 		const parsed = parseLoopArgs(args);
+		if (this.loopNActive) {
+			this.showError("Stop /loopn before starting /loop or /loopgoal.");
+			return undefined;
+		}
 		if (typeof parsed === "string") {
 			this.showError(parsed);
 			return undefined;
@@ -3833,6 +3863,32 @@ export class InteractiveMode implements InteractiveModeContext {
 		condition: LoopConditionConfig | undefined,
 		hasPrompt: boolean,
 		intervalMs?: number,
+	handleLoopNCommand(args = ""): string | undefined {
+		if (this.loopNActive) {
+			this.disableLoopMode("LoopN stopped.");
+			return undefined;
+		}
+		if (this.loopModeEnabled) {
+			this.showError("Stop /loop or /loopgoal before starting /loopn.");
+			return undefined;
+		}
+		let prompts: string[];
+		try {
+			prompts = parseCommandArgs(args, { strict: true });
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+			return undefined;
+		}
+		if (prompts.length === 0 || prompts.some(prompt => !prompt.trim())) {
+			this.showError('Usage: /loopn "prompt1" "prompt2" … (non-empty prompts only)');
+			return undefined;
+		}
+		this.#loopNPrompts = prompts;
+		this.#loopNIndex = 0;
+		this.#enableLoopMode(undefined, undefined, true);
+		return prompts[0];
+	}
+
 	): void {
 		this.loopModeEnabled = true;
 		this.loopModePaused = false;
@@ -3850,6 +3906,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		const intervalSuffix =
 			intervalMs !== undefined
 				? ` Delay after each turn: ${describeLoopLimit({ kind: "duration", durationMs: intervalMs })}.`
+		if (this.loopNActive) {
+			this.showStatus(`LoopN enabled. ${appKey(this.keybindings, "app.interrupt")} or /loopn stops the sequence.`);
+			return;
+		}
 				: "";
 		// The condition is a *continuation* signal: the first iteration always
 		// runs, and it is re-evaluated before each subsequent one.

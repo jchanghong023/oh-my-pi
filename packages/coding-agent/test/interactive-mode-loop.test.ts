@@ -212,6 +212,33 @@ describe("InteractiveMode loop auto-submit", () => {
 		expect(setLoopModeStatus).toHaveBeenLastCalledWith(undefined);
 	});
 
+	it("cycles LoopN prompts in order and stops instead of resuming after an interrupt", async () => {
+		vi.useFakeTimers();
+		new InputController(mode).setupEditorSubmitHandler();
+		pendingInput = mode.getUserInput();
+		await mode.editor.onSubmit?.('/loopn "first prompt" "second" "third"');
+		expect((await pendingInput).text).toBe("first prompt");
+		mode.cancelPendingSubmission();
+
+		for (const expected of ["second", "third", "first prompt"]) {
+			pendingInput = mode.getUserInput();
+			vi.advanceTimersByTime(800);
+			await flushMicrotasks();
+			expect((await pendingInput).text).toBe(expected);
+			mode.cancelPendingSubmission();
+		}
+
+		mode.pauseLoop();
+		const received: SubmittedUserInput[] = [];
+		pendingInput = mode.getUserInput();
+		void pendingInput.then(input => received.push(input));
+		vi.advanceTimersByTime(800);
+		await flushMicrotasks();
+		expect(received).toEqual([]);
+		expect(mode.loopModeEnabled).toBe(false);
+		expect(mode.loopNActive).toBe(false);
+	});
+
 	describe("positional interval", () => {
 		let nowMs: number;
 

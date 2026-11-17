@@ -651,6 +651,19 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Switch model for this session",
 		acpDescription: "Show current model or select a model",
 		acpInputHint: "[model]",
+	{
+		name: "loopn",
+		icon: "loop",
+		description: "Cycle through prompts in order; Esc or /loopn stops",
+		inlineHint: '"prompt1" "prompt2" …',
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime => (runtime.ctx.loopNActive ? "LoopN: on" : "LoopN: off"),
+		handleTui: (command, runtime) => {
+			const prompt = runtime.ctx.handleLoopNCommand(command.args);
+			clearSubmittedText(runtime);
+			if (prompt) return { prompt };
+		},
+	},
 		acpAllowArgs: true,
 		handleWebGui: async (command, runtime) => {
 			const selector =

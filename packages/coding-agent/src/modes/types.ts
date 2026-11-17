@@ -366,6 +366,7 @@ export interface InteractiveModeContext {
 	loopModePaused: boolean;
 	loopGoalMode?: boolean;
 	loopPrompt?: string;
+	readonly loopNActive: boolean;
 	loopLimit?: LoopLimitRuntime;
 	loopCondition?: LoopConditionConfig;
 	planModePlanFilePath?: string;
@@ -803,6 +804,7 @@ export interface InteractiveModeContext {
 	disableLoopMode(message?: string): void;
 	cancelGoalContinuation(): void;
 	disableGoalMode(message?: string): void;
+	handleLoopNCommand(args?: string): string | undefined;
 	pauseLoop(): void;
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
 	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string; role?: string }): boolean;
