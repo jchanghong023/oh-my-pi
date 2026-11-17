@@ -1925,6 +1925,7 @@ function mapOptionsForApi<TApi extends Api>(
 		fallbacks: options?.fallbacks,
 		acceptEmptyResponse: options?.acceptEmptyResponse,
 		anthropicPrefixMismatchBehavior: options?.anthropicPrefixMismatchBehavior,
+		omitDemotedReasoning: options?.omitDemotedReasoning,
 		anthropicCompaction: options?.anthropicCompaction,
 		anthropicSlowMode: options?.anthropicSlowMode,
 		userProfileId: options?.userProfileId,

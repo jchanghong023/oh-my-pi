@@ -609,7 +609,7 @@ bun setup
 bun dev
 ```
 
-用 `nix build .#omp` 构建可分发的 Nix 包并做冒烟测试。Wayland screencast 支持默认关闭（链接 libpipewire 会让运行时闭包增加约 750 MB）；可用 `omp.override { withWaylandScreencast = true; }` 启用。发布构建以 fat LTO 链接 `pi-natives`；本地可用 `omp.override { withFatLto = false; }` 改用 thin LTO，大幅加快重新构建。Rust 依赖与 native addon 在独立 derivation 中构建，因此修改 Rust 时可复用已编译依赖，修改 TypeScript 时可复用 addon。`nix/bun.nix` 只在 `bun.lock` 变化时生成；发版时会自动重新生成。若改动了依赖，请运行：
+用 `nix build .#omp` 构建可分发的 Nix 包并做冒烟测试。Wayland screencast 支持默认关闭（将 libpipewire 加入插件的库搜索路径会让运行时闭包增加约 750 MB）；可用 `omp.override { withWaylandScreencast = true; }` 启用。发布构建以 fat LTO 链接 `pi-natives`；本地可用 `omp.override { withFatLto = false; }` 改用 thin LTO，大幅加快重新构建。Rust 依赖与 native addon 在独立 derivation 中构建，因此修改 Rust 时可复用已编译依赖，修改 TypeScript 时可复用 addon。`nix/bun.nix` 只在 `bun.lock` 变化时生成；发版时会自动重新生成。若改动了依赖，请运行：
 
 ```sh
 bun run gen:nix

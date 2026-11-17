@@ -38,7 +38,7 @@ export const cfgBrowserRelay = register({
 		group: "Grep 与浏览器",
 		label: "浏览器中继",
 		description:
-			"通过 omp 浏览器中继操控你自己的 Chrome 标签页。只需安装一次扩展（`omp browser-relay install`）；browser 预置环境需要时会自动启动中继服务器。优先于浏览器 CDP URL；设置 PI_BROWSER_RELAY=0 或 PI_BROWSER_RELAY=1 可覆盖此设置。",
+			'通过 omp 浏览器中继操控你自己的 Chrome 标签页。只需安装一次扩展（`omp browser-relay install`）；browser 预置环境需要时会自动启动中继服务器。优先于浏览器 CDP URL；设置 PI_BROWSER_RELAY=0 或 PI_BROWSER_RELAY=1 可覆盖此设置。子代理默认跳过中继，除非打开时显式传入 app: "relay"。',
 	},
 });
 
@@ -76,7 +76,7 @@ export const cfgBrowserCmux = register({
 		group: "Grep 与浏览器",
 		label: "cmux 浏览器",
 		description:
-			"有可用的 cmux socket 时，使用 cmux WKWebView 界面进行浏览器自动化。设置 PI_BROWSER_CMUX=0 或 PI_BROWSER_CMUX=1 可覆盖此设置。",
+			"有可用的 cmux socket 时，使用 cmux WKWebView 界面进行浏览器自动化（不适用于子代理）。设置 PI_BROWSER_CMUX=0 或 PI_BROWSER_CMUX=1 可覆盖此设置。",
 	},
 });
 
@@ -89,7 +89,7 @@ export const cfgBrowserTern = register({
 		group: "Grep 与浏览器",
 		label: "Tern 浏览器",
 		description:
-			'在 Tern 窗格中，将浏览器标签页以画中画形式打开在 omp 窗格上方（原生网页视图），而非使用 OMP 自有无头浏览器；没有可承载的 Tern 窗口时回退到自有浏览器。显式 app、中继和浏览器 CDP URL 优先；app "own" 可在单次打开时禁用此行为。设置 PI_BROWSER_TERN=0 或 PI_BROWSER_TERN=1 可覆盖此设置。',
+			'在 Tern 窗格中，将浏览器标签页以画中画形式打开在 omp 窗格上方（原生网页视图），而非使用 OMP 自有无头浏览器；没有可承载的 Tern 窗口时回退到自有浏览器。子代理默认跳过此行为，除非打开时显式传入 app: "tern"。显式 app、中继和浏览器 CDP URL 优先；app "own" 可在单次打开时禁用此行为。设置 PI_BROWSER_TERN=0 或 PI_BROWSER_TERN=1 可覆盖此设置。',
 	},
 });
 

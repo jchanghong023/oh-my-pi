@@ -5,9 +5,6 @@
  *
  * `OMP_NATIVE_CARGO_PROFILE` selects the cargo profile (default `local`:
  * incremental, unstripped). Image builds set `ci` for a stripped addon.
- *
- * `OMP_NATIVE_FEATURES` passes extra cargo features to `napi build --features`
- * (e.g. `wayland-pipewire`). Bazel builds ignore it.
  */
 
 import * as fsSync from "node:fs";
@@ -243,10 +240,6 @@ export async function buildBindings(): Promise<void> {
 		"--profile",
 		cargoProfile,
 	];
-
-	// Local-only opt-in, e.g. OMP_NATIVE_FEATURES=wayland-pipewire.
-	const extraFeatures = Bun.env.OMP_NATIVE_FEATURES?.trim();
-	if (extraFeatures) napiArgs.push("--features", extraFeatures);
 
 	// Cargo routes some failure details to stdout rather than stderr.
 	const BUILD_LOG_TAIL_LINES = 40;
