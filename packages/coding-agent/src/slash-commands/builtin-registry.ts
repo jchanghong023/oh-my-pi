@@ -233,6 +233,7 @@ export async function executeWebGuiBuiltinSlashCommand(
 	if (!parsed) return false;
 	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
 	if (!command) return false;
+	if (command.name === "workspace") throw new Error("/workspace is not available in the native browser host");
 	if (parsed.args.length > 0 && !(command.acpAllowArgs ?? command.allowArgs)) {
 		throw new Error(`/${command.name} does not accept arguments`);
 	}

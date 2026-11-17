@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
+import { parseImageMetadata, removeWithRetries } from "@oh-my-pi/pi-utils";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	executeAcpBuiltinSlashCommand,
@@ -6,7 +11,11 @@ import {
 } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import type { RpcSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
-import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "../../src/slash-commands/builtin-registry";
+import {
+	BUILTIN_SLASH_COMMANDS_INTERNAL,
+	executeWebGuiBuiltinSlashCommand,
+} from "../../src/slash-commands/builtin-registry";
+import { nativeWebGuiCommands } from "../../src/aireq-workbench/native/native-commands";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -42,6 +51,8 @@ describe("RPC builtin dispatch", () => {
 		});
 		expect(await executeRpcBuiltinSlashCommand("/missing command", runtime)).toBe(false);
 		expect(await executeRpcBuiltinSlashCommand("/wiki", runtime)).toBe(false);
+		expect(await executeAcpBuiltinSlashCommand("/workspace", runtime)).toBe(false);
+		expect(await executeAcpBuiltinSlashCommand("/workspace inspect", runtime)).toBe(false);
 		await expect(executeRpcBuiltinSlashCommand("/git", runtime)).rejects.toThrow("interactive TUI");
 		await expect(executeRpcBuiltinSlashCommand("/knowledge accidental argument", runtime)).rejects.toThrow(
 			"does not accept arguments",
@@ -57,11 +68,36 @@ describe("RPC builtin dispatch", () => {
 		};
 		const acp = await buildAvailableSlashCommands(session, async () => []);
 		const rpc = await buildAvailableSlashCommands(session, async () => [], { includeRpcBuiltins: true });
-		for (const name of ["knowledge", "plan", "loop", "goal"]) {
+		for (const name of ["knowledge", "plan", "loop", "goal", "workspace"]) {
 			expect(acp.some(command => command.name === name)).toBe(false);
 			expect(rpc.some(command => command.name === name)).toBe(true);
 		}
 		expect(rpc.some(command => command.name === "wiki")).toBe(false);
+	});
+
+	test("browser neither advertises workspace nor dispatches its RPC handler", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-workspace-"));
+		try {
+			const session = {
+				customCommands: [],
+				skills: [],
+				setSlashCommands: () => {},
+				sessionManager: { getCwd: () => directory },
+			};
+			expect((await nativeWebGuiCommands(session as never)).some(command => command.name === "workspace")).toBe(
+				false,
+			);
+			const workspace = BUILTIN_SLASH_COMMANDS_INTERNAL.find(command => command.name === "workspace")!;
+			const handler = vi.spyOn(workspace, "handleRpc");
+			for (const text of ["/workspace", "/workspace inspect"]) {
+				await expect(executeWebGuiBuiltinSlashCommand(text, {} as never)).rejects.toThrow(
+					"/workspace is not available in the native browser host",
+				);
+			}
+			expect(handler).not.toHaveBeenCalled();
+		} finally {
+			await removeWithRetries(directory);
+		}
 	});
 
 	test("gates every registered TUI-only name and alias without invoking a handler", async () => {
@@ -97,4 +133,63 @@ describe("RPC builtin dispatch", () => {
 			if (rpcHandler) expect(rpcHandler).not.toHaveBeenCalled();
 		}
 	});
+
+	test("native RPC consumes toggles locally and submits workspace arguments once with attachments", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-rpc-workspace-"));
+		const client = new RpcClient({
+			command: [process.execPath, path.join(import.meta.dir, "..", "fixtures", "input-hook-rpc-agent.ts")],
+			cwd: directory,
+			env: { PI_CODING_AGENT_DIR: directory, PI_NO_TITLE: "1" },
+		});
+		try {
+			await client.start();
+			expect((await client.getAvailableCommands()).some(command => command.name === "workspace")).toBe(true);
+			const toggled = await client.promptAndWait("/workspace");
+			expect(toggled.some(event => event.type === "agent_start")).toBe(false);
+			expect(await client.getMessages()).toEqual([]);
+			await client.promptAndWait("/workspace");
+			const image = {
+				type: "image" as const,
+				mimeType: "image/png",
+				data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=",
+			};
+			await client.promptAndWait("/workspace inspect image", [image]);
+			await client.promptAndWait("/workspace inspect again");
+			const messages = await client.getMessages();
+			const users = messages.filter(message => message.role === "user");
+			expect(
+				users.map(message =>
+					typeof message.content === "string"
+						? message.content
+						: message.content
+								.filter(part => part.type === "text")
+								.map(part => part.text)
+								.join(""),
+				),
+			).toEqual(["inspect image", "inspect again"]);
+			const content = users[0]?.content;
+			if (!Array.isArray(content)) throw new Error("Workspace image is missing from native history");
+			const images = content.filter(part => part.type === "image");
+			expect(images).toHaveLength(1);
+			const normalized = images[0]!;
+			const metadata = parseImageMetadata(Buffer.from(normalized.data, "base64"));
+			expect(metadata?.width).toBeGreaterThan(0);
+			expect(metadata?.height).toBeGreaterThan(0);
+			expect(metadata?.mimeType).toBe<string>(normalized.mimeType);
+			expect(
+				messages.some(message => message.role === "custom" && message.customType === "workspace-mode-context"),
+			).toBe(true);
+			const disabled = await client.promptAndWait("/workspace");
+			expect(disabled.some(event => event.type === "agent_start")).toBe(false);
+			await client.promptAndWait("ordinary input");
+			expect(
+				(await client.getMessages()).some(
+					message => message.role === "custom" && message.customType === "workspace-mode-context",
+				),
+			).toBe(false);
+		} finally {
+			await client.stop();
+			await removeWithRetries(directory);
+		}
+	}, 30_000);
 });

@@ -1120,6 +1120,7 @@ async function runAdmittedSubagent(
 				: undefined;
 		let result: SingleResult;
 		try {
+			baseOptions.workspaceMode = await request.session.getWorkspaceModeSnapshot?.();
 			if (!isolationContext) {
 				result = await runSubprocess(baseOptions);
 				onSubprocessResult?.(result);

@@ -113,6 +113,10 @@ export interface SegmentContext {
 		enabled: boolean;
 		paused: boolean;
 	} | null;
+	/** Independent workspace reminder, shown alongside the active mode. */
+	workspaceMode?: {
+		enabled: boolean;
+	} | null;
 	prewalk: {
 		enabled: boolean;
 	} | null;

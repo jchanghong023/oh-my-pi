@@ -1416,6 +1416,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	todoExpanded = false;
 	planModeEnabled = false;
 	planModePaused = false;
+	get workspaceModeEnabled(): boolean {
+		return this.session.getWorkspaceModeState().enabled;
+	}
 	goalModeEnabled = false;
 	goalModePaused = false;
 	vibeModeEnabled = false;
@@ -1426,9 +1429,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	loopPrompt: string | undefined = undefined;
 	loopLimit: LoopLimitRuntime | undefined = undefined;
 	loopCondition: LoopConditionConfig | undefined = undefined;
-	/** Last state reported through `mode_changed`; starts inactive so a restored session's modes are reported too. */
-	#reportedModeState: SessionModeState = {
-		plan: { status: "inactive" },
 	#loopNPrompts: string[] | undefined;
 	#loopNIndex = 0;
 
@@ -1436,6 +1436,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#loopNPrompts !== undefined;
 	}
 
+	/** Last state reported through `mode_changed`; starts inactive so a restored session's modes are reported too. */
+	#reportedModeState: SessionModeState = {
+		plan: { status: "inactive" },
 		vibe: { status: "inactive" },
 		goal: { status: "inactive" },
 		loop: { status: "inactive" },
@@ -2272,6 +2275,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor);
 		this.statusLine = new StatusLineComponent(session, statusLineHost);
+		this.statusLine.setWorkspaceModeStatus(this.workspaceModeEnabled ? { enabled: true } : undefined);
 		// Native segment clicks open what their slash commands and keys open.
 		this.statusLine.onNativeAction = action => {
 			switch (action) {
@@ -3263,6 +3267,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.getFocused() !== this.editor
 		)
 			return "Close the ordinary session's native dialog or selector first.";
+		if (this.workspaceModeEnabled) return "Exit Workspace mode before entering a browser workbench.";
 		if (
 			this.planModeEnabled ||
 			this.planModePaused ||
@@ -3616,17 +3621,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#deferLoopAutoSubmit(() => this.#submitLoopPromptWhenReady(prompt));
 			return;
 		}
-		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
-	}
-
-	/** One loop iteration; while it runs, idle maintenance treats the loop's next turn as scheduled. */
-	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
 		if (this.#loopNPrompts) {
 			this.#loopNIndex = (this.#loopNIndex + 1) % this.#loopNPrompts.length;
 			prompt = this.#loopNPrompts[this.#loopNIndex];
 			this.loopPrompt = prompt;
 			this.#syncLoopModeStatus();
 		}
+		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
+	}
+
+	/** One loop iteration; while it runs, idle maintenance treats the loop's next turn as scheduled. */
+	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
 		this.#pendingLoopIterations++;
 		try {
 			await this.#loopIteration(action, prompt);
@@ -3771,13 +3776,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loopLimit = undefined;
 		this.loopCondition = undefined;
 		this.#loopIntervalMs = undefined;
+		this.#loopNPrompts = undefined;
+		this.#loopNIndex = 0;
 		this.#cancelLoopAutoSubmit();
 		this.#abortLoopCondition();
 		this.#syncLoopModeStatus();
 		if (wasEnabled) {
 			this.showStatus(message);
-		this.#loopNPrompts = undefined;
-		this.#loopNIndex = 0;
 		}
 	}
 
@@ -3824,27 +3829,27 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * user submits becomes the new loop prompt and resumes iteration.
 	 */
 	pauseLoop(): void {
+		if (this.loopNActive) {
+			this.disableLoopMode("LoopN stopped.");
+			return;
+		}
 		this.loopPrompt = undefined;
 		this.loopModePaused = true;
 		this.#cancelLoopAutoSubmit();
 		this.#abortLoopCondition();
 		this.#syncLoopModeStatus();
-		if (this.loopNActive) {
-			this.disableLoopMode("LoopN stopped.");
-			return;
-		}
 	}
 
 	async handleLoopCommand(args = "", goal = false): Promise<string | undefined> {
+		if (this.loopNActive) {
+			this.showError("Stop /loopn before starting /loop or /loopgoal.");
+			return undefined;
+		}
 		if (this.loopModeEnabled) {
 			this.disableLoopMode();
 			return undefined;
 		}
 		const parsed = parseLoopArgs(args);
-		if (this.loopNActive) {
-			this.showError("Stop /loopn before starting /loop or /loopgoal.");
-			return undefined;
-		}
 		if (typeof parsed === "string") {
 			this.showError(parsed);
 			return undefined;
@@ -3858,11 +3863,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		return parsed.prompt;
 	}
 
-	#enableLoopMode(
-		limit: LoopLimitConfig | undefined,
-		condition: LoopConditionConfig | undefined,
-		hasPrompt: boolean,
-		intervalMs?: number,
 	handleLoopNCommand(args = ""): string | undefined {
 		if (this.loopNActive) {
 			this.disableLoopMode("LoopN stopped.");
@@ -3889,6 +3889,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		return prompts[0];
 	}
 
+	#enableLoopMode(
+		limit: LoopLimitConfig | undefined,
+		condition: LoopConditionConfig | undefined,
+		hasPrompt: boolean,
+		intervalMs?: number,
 	): void {
 		this.loopModeEnabled = true;
 		this.loopModePaused = false;
@@ -3901,15 +3906,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.loopCondition = condition;
 		this.#syncLoopModeStatus();
+		if (this.loopNActive) {
+			this.showStatus(`LoopN enabled. ${appKey(this.keybindings, "app.interrupt")} or /loopn stops the sequence.`);
+			return;
+		}
 		const limitSuffix = limit ? ` Limited to ${describeLoopLimit(limit)}.` : "";
 		const remainingSuffix = this.loopLimit ? ` ${describeLoopLimitRuntime(this.loopLimit)}.` : "";
 		const intervalSuffix =
 			intervalMs !== undefined
 				? ` Delay after each turn: ${describeLoopLimit({ kind: "duration", durationMs: intervalMs })}.`
-		if (this.loopNActive) {
-			this.showStatus(`LoopN enabled. ${appKey(this.keybindings, "app.interrupt")} or /loopn stops the sequence.`);
-			return;
-		}
 				: "";
 		// The condition is a *continuation* signal: the first iteration always
 		// runs, and it is re-evaluated before each subsequent one.
@@ -5877,6 +5882,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#notifyModeChanged();
 	}
 
+	#updateWorkspaceModeStatus(): void {
+		this.statusLine.setWorkspaceModeStatus(this.workspaceModeEnabled ? { enabled: true } : undefined);
+		this.#pendingSlashCommands = this.#buildPendingSlashCommands();
+		this.#rebuildSlashCommandAutocomplete(this.sessionManager.getCwd());
+		this.ui.requestRender();
+	}
+
 	#updateVibeModeStatus(): void {
 		this.statusLine.setVibeModeStatus(this.vibeModeEnabled ? { enabled: true } : undefined);
 		this.ui.requestRender();
@@ -6254,6 +6266,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			vibeScopeAlreadySuspended,
 			restorePlanModel: Object.keys(sessionContext.models).length === 0,
 		});
+		this.#updateWorkspaceModeStatus();
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
 		const goalEnabled = cfgGoalEnabled.get(this.session.settings);
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
@@ -7386,6 +7399,49 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#updatePlanModeStatus();
 		this.sessionManager.appendModeChange("none");
 		this.showStatus("Plan mode disabled.");
+	}
+
+	async handleWorkspaceModeCommand(
+		initialPrompt?: string,
+		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		followUp?: ConversationPosition,
+	): Promise<boolean> {
+		this.#assertOrdinaryTuiInputAllowed();
+		const state = this.session.getWorkspaceModeState();
+		if (!initialPrompt || !state.enabled) {
+			this.session.setWorkspaceModeState({ ...state, enabled: initialPrompt ? true : !state.enabled });
+		}
+		this.#updateWorkspaceModeStatus();
+		if (!initialPrompt) return false;
+		const streamingBehavior = followUp ? "followUp" : "steer";
+		if (this.session.isCompacting) {
+			this.queueCompactionMessage(initialPrompt, streamingBehavior, input?.images, {
+				preserveDraft: true,
+				imageLinks: input?.imageLinks,
+				draftDetached: true,
+			});
+			return true;
+		}
+		if (isKnownSkillCommand(this, initialPrompt)) {
+			await invokeSkillCommandFromText(this, initialPrompt, streamingBehavior, {
+				images: input?.images,
+				imageLinks: input?.imageLinks,
+				propagateErrors: true,
+			});
+			return true;
+		}
+		if (this.session.isStreaming || !this.onInputCallback) {
+			await this.withLocalSubmission(
+				initialPrompt,
+				() => this.session.prompt(initialPrompt, { streamingBehavior, images: input?.images }),
+				{ imageCount: input?.images?.length ?? 0 },
+			);
+			return true;
+		}
+		this.onInputCallback(
+			this.startPendingSubmission({ text: initialPrompt, ...input, streamingBehavior }, { preserveDraft: true }),
+		);
+		return true;
 	}
 
 	async handlePlanModeCommand(

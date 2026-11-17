@@ -59,8 +59,11 @@ import { findMostRecentNonEmptySession, findRecentSessionContinuation } from "..
 import { probeSessionLeases } from "../../session/session-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
+import { workspaceCommand } from "../../slash-commands/builtin-modes";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
+import { parseSlashCommand } from "../../slash-commands/helpers/parse";
+import type { SlashCommandRuntime } from "../../slash-commands/types";
 import { cfgSttEnabled } from "../../stt/settings";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import type { EventBus } from "../../utils/event-bus";
@@ -1874,7 +1877,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		process.exit(0);
 	};
 
-	const getAvailableCommands = async () => buildAvailableSlashCommands(session);
+	const getAvailableCommands = async () => [
+		{
+			name: workspaceCommand.name,
+			description: workspaceCommand.description,
+			input: { hint: workspaceCommand.inlineHint },
+			source: "builtin" as const,
+		},
+		...(await buildAvailableSlashCommands(session)).filter(command => command.name !== workspaceCommand.name),
+	];
 	const reloadPluginState = async () => {
 		const cwd = session.sessionManager.getCwd();
 		const projectPath = await resolveActiveProjectRegistryPath(cwd);
@@ -1940,7 +1951,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				const builtinAbort = new AbortController();
 				builtinCommandAborts.add(builtinAbort);
 				let backgroundedBuiltin = false;
-				const builtinResult = await executeAcpBuiltinSlashCommand(text, {
+				const builtinRuntime: SlashCommandRuntime = {
 					session,
 					sessionManager: session.sessionManager,
 					settings: session.settings,
@@ -1972,7 +1983,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					notifyConfigChanged: async () => {
 						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
 					},
-				});
+				};
+				const parsedBuiltin = parseSlashCommand(text);
+				const builtinResult =
+					parsedBuiltin?.name === workspaceCommand.name
+						? workspaceCommand.handleRpc(parsedBuiltin, builtinRuntime)
+						: await executeAcpBuiltinSlashCommand(text, builtinRuntime);
 				if (!backgroundedBuiltin) builtinCommandAborts.delete(builtinAbort);
 				if (!isCurrent()) return "cancelled";
 				if (builtinResult !== false) {

@@ -49,6 +49,7 @@ import { type StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { EventBus } from "../utils/event-bus";
 import { WebSearchTool } from "../web/search";
+import type { WorkspaceModeState } from "../workspace-mode";
 import type { WorkspaceTree } from "../workspace-tree";
 import { DSM_REFERENCES, type DsmReferenceOwner } from "../disasm/reference-owner";
 import { AskTool } from "./ask";
@@ -509,6 +510,8 @@ export interface ToolSession {
 	settings: Settings;
 	/** Plan mode state (if active) */
 	getPlanModeState?: () => PlanModeState | undefined;
+	/** Capture the current workspace reminder state and allowed scope when a child is dispatched. */
+	getWorkspaceModeSnapshot?: () => Promise<WorkspaceModeState>;
 	/** Path of the session's active plan reference (e.g. `local://<title>.md`); defaults to `local://PLAN.md`. */
 	getPlanReferencePath?: () => string;
 	/** Goal mode state (if active or paused) */

@@ -497,7 +497,7 @@ function formatLoopLimit(
 	return `${seconds}s left`;
 }
 
-const modeSegment: StatusLineSegment = {
+const primaryModeSegment: StatusLineSegment = {
 	id: "mode",
 	render(ctx) {
 		const pauseSuffix = theme.icon.pause ? ` ${theme.icon.pause}` : " (paused)";
@@ -572,6 +572,26 @@ const modeSegment: StatusLineSegment = {
 			);
 		}
 		return null;
+	},
+};
+
+const modeSegment: StatusLineSegment = {
+	id: "mode",
+	render(ctx) {
+		const primary = primaryModeSegment.render(ctx);
+		if (!ctx.workspaceMode?.enabled) return primary;
+		const workspace = accentFg(ctx, "accent", "Workspace");
+		return {
+			content: primary.visible ? `${primary.content}${theme.fg("dim", theme.sep.dot)}${workspace}` : workspace,
+			visible: true,
+		};
+	},
+	describe(ctx) {
+		const primary = primaryModeSegment.describe(ctx);
+		if (!ctx.workspaceMode?.enabled) return primary;
+		const workspace = span("Workspace", accentToken(ctx, "accent"));
+		if (!primary) return segView([workspace]);
+		return { ...primary, spans: [...primary.spans, span(theme.sep.dot, "dim"), workspace] };
 	},
 };
 

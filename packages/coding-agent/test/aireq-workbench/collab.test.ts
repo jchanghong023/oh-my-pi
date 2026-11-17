@@ -222,6 +222,7 @@ async function fixture(held?: { marker: string; entered: PromiseWithResolvers<vo
 	return {
 		owned,
 		relay,
+		workflow,
 		member,
 		async [Symbol.asyncDispose]() {
 			try {
@@ -289,6 +290,14 @@ test("AIReq native offline share/join preserves local journals and leaving a gue
 	expect(hosts[0]!.sessionId).toBe(owner.session.sessionId);
 	expect(hosts[0]!.participants).toBe(3);
 	const bobLocalEvents = bob.localEvents.length;
+	const runNativeInput = f.workflow.runNativeInput.bind(f.workflow);
+	let sharedInput: Promise<unknown> | undefined;
+	const nativeInput = spyOn(f.workflow, "runNativeInput").mockImplementation((session, operation, text, kind) => {
+		const task = runNativeInput(session, operation, text, kind);
+		if (session === owner.session && text === marker) sharedInput = task;
+		return task;
+	});
+	using _restoreInput = { [Symbol.dispose]: () => nativeInput.mockRestore() };
 	await alice.projection.sendFrame("alice", aliceTarget, { t: "prompt", text: marker });
 	await entered.promise;
 	expect(owner.session.isStreaming).toBe(true);
@@ -302,6 +311,9 @@ test("AIReq native offline share/join preserves local journals and leaving a gue
 	expect(bob.projection.read("bob")?.status).toBe("joined");
 	expect(owner.session.isStreaming).toBe(true);
 	release.resolve();
+	// Agent idle precedes the workflow receipt, ingestion, and mutation lock release.
+	if (!sharedInput) throw new Error("Shared native input did not enter its workflow owner");
+	await sharedInput;
 	await pollWorkflow(
 		async () => ({ text: remoteMessages(bob.projection, "bob"), busy: owner.session.isStreaming }),
 		value => !value.busy && value.text.includes(marker),

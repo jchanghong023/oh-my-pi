@@ -208,6 +208,7 @@ const FOCUSED_VIEW_COMMAND_LIST = Object.keys(FOCUSED_VIEW_COMMANDS)
 /** Commands whose handler owns the submitted draft, images included: Enter takes it out of the editor first. */
 const DETACHED_DRAFT_COMMANDS = new Set([
 	"plan",
+	"workspace",
 	"vibe",
 	"goal",
 	"goal-autopilot",

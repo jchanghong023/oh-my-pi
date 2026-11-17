@@ -3339,6 +3339,7 @@ async function createAgentSessionScoped(
 				getServiceTierByFamily: () => session?.serviceTierByFamily,
 				getImageAttachments: () => session?.getImageAttachments() ?? [],
 				getPlanModeState: () => session?.getPlanModeState(),
+				getWorkspaceModeSnapshot: async () => session?.getWorkspaceModeSnapshot() ?? { enabled: false },
 				getPlanReferencePath: () => session?.getPlanReferencePath() ?? "local://PLAN.md",
 				getGoalModeState: () => session?.getGoalModeState(),
 				getGoalRuntime: () => session?.goalRuntime,
@@ -5910,7 +5911,10 @@ async function createAgentSessionScoped(
 				sessionId: providerSessionId,
 				promptCacheKey: providerPromptCacheKey,
 				deadline: options.deadline,
-				transformContext,
+				transformContext: async (messages, signal) => {
+					const contextual = session ? await session.prepareWorkspaceModeContext(messages) : messages;
+					return transformContext(contextual, signal);
+				},
 				transformProviderContext,
 				steeringMode: cfgSteeringMode.get(settings),
 				followUpMode: cfgFollowUpMode.get(settings),
@@ -5949,7 +5953,8 @@ async function createAgentSessionScoped(
 						...streamOptions,
 						promptCacheKey: streamOptions?.promptCacheKey ?? session?.getPromptCacheKeyForModel(streamModel),
 						forceReasoningOff: externalThinking || streamOptions?.forceReasoningOff,
-						omitDemotedReasoning: session?.omitsDemotedReasoning(streamModel) || streamOptions?.omitDemotedReasoning,
+						omitDemotedReasoning:
+							session?.omitsDemotedReasoning(streamModel) || streamOptions?.omitDemotedReasoning,
 					};
 					// The provider calls `onPayload` as it sends, past any wait for an in-flight
 					// slot: the prompt cache entry's lifetime starts there, not here.

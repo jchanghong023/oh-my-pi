@@ -4,6 +4,7 @@
 
 ### Added
 
+- Use `/workspace` for session-scoped write-boundary reminders, or `/workspace <message>` to enable them and send a task, independently of Plan mode; this is a prompt, not a sandbox.
 - Cycle through multiple prompts with `/loopn "x1" "x2" …`; Esc or `/loopn` stops the sequence.
 - Design simpler module interfaces with the discoverable `jch-codebase-design` skill or `/skill:jch-codebase-design`, retaining upstream descriptions and design references.
 - Use `/skill:jch-grill-todo` to confirm agreement through the original Grill-me interview, then ask whether to generate a self-contained `.todo.md` Markdown task file without executing the tasks.

@@ -30,7 +30,7 @@ import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata } from "@oh-my-
 import { noThinkingMessage, resolveThinkingArgument } from "./helpers/effort";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
 import { handleSecurityCommand } from "./helpers/security";
-import type { SlashCommandSpec } from "./types";
+import type { SlashCommandResult, SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 import {
 	cfgComputerBackgroundFallback,
@@ -53,6 +53,28 @@ import { parseCommandArgs } from "../utils/command-args";
 
 const activeTodoLoops = new WeakSet<AgentSession>();
 const TODOLOOP_USAGE = "Usage: /todoloop <path> [--check]";
+
+export const workspaceCommand = {
+	name: "workspace",
+	description: "Toggle workspace write reminders (not a sandbox)",
+	inlineHint: "[prompt]",
+	allowArgs: true,
+	getTuiAutocompleteDescription: runtime => `Workspace: ${runtime.ctx.workspaceModeEnabled ? "on" : "off"}`,
+	handleRpc: (command, runtime: SlashCommandRuntime): Exclude<SlashCommandResult, undefined> => {
+		const state = runtime.session.getWorkspaceModeState();
+		if (!command.args || !state.enabled) {
+			runtime.session.setWorkspaceModeState({ ...state, enabled: command.args ? true : !state.enabled });
+		}
+		if (command.args) return { prompt: command.args };
+		runtime.output(`Workspace mode ${state.enabled ? "disabled" : "enabled"}.`);
+		return { consumed: true };
+	},
+	handleTui: async (command, runtime) => {
+		await runWithDetachedDraft(command, runtime, () =>
+			runtime.ctx.handleWorkspaceModeCommand(command.args || undefined, runtime.input, runtime.followUp),
+		);
+	},
+} satisfies SlashCommandSpec;
 
 export function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
@@ -538,6 +560,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			clearSubmittedText(runtime);
 		},
 	},
+	workspaceCommand,
 	{
 		name: "plan",
 		icon: "plan",
@@ -631,6 +654,19 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "loopn",
+		icon: "loop",
+		description: "Cycle through prompts in order; Esc or /loopn stops",
+		inlineHint: '"prompt1" "prompt2" …',
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime => (runtime.ctx.loopNActive ? "LoopN: on" : "LoopN: off"),
+		handleTui: (command, runtime) => {
+			const prompt = runtime.ctx.handleLoopNCommand(command.args);
+			clearSubmittedText(runtime);
+			if (prompt) return { prompt };
+		},
+	},
+	{
 		name: "queue",
 		icon: "inbox",
 		description: "Queue a message for after the agent yields",
@@ -651,19 +687,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Switch model for this session",
 		acpDescription: "Show current model or select a model",
 		acpInputHint: "[model]",
-	{
-		name: "loopn",
-		icon: "loop",
-		description: "Cycle through prompts in order; Esc or /loopn stops",
-		inlineHint: '"prompt1" "prompt2" …',
-		allowArgs: true,
-		getTuiAutocompleteDescription: runtime => (runtime.ctx.loopNActive ? "LoopN: on" : "LoopN: off"),
-		handleTui: (command, runtime) => {
-			const prompt = runtime.ctx.handleLoopNCommand(command.args);
-			clearSubmittedText(runtime);
-			if (prompt) return { prompt };
-		},
-	},
 		acpAllowArgs: true,
 		handleWebGui: async (command, runtime) => {
 			const selector =

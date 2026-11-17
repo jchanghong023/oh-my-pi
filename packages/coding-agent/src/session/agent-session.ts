@@ -476,6 +476,14 @@ import {
 	SessionAdvisors,
 	type SessionAdvisorsHost,
 } from "./session-advisors";
+import {
+	buildWorkspaceModeMessage,
+	isWorkspaceModeContext,
+	resolveWorkspaceModeScope,
+	restoreWorkspaceModeState,
+	WORKSPACE_MODE_STATE_TYPE,
+	type WorkspaceModeState,
+} from "../workspace-mode";
 import type { SessionContext, TranscriptSessionContextOptions } from "./session-context";
 import { buildSessionContext, getRestorableSessionModels, isTranscriptEntry } from "./session-context";
 import {
@@ -2219,6 +2227,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.sessionManager = config.sessionManager;
 		// idle resume 也在托管会话，必须在任何运行期写入前取得共享的文件租约。
 		this.sessionManager.acquireRuntimeOwnership();
+		this.agent.replaceMessages(this.agent.state.messages.filter(message => !isWorkspaceModeContext(message)));
 		// Only a recorded approval may turn a draft file into an execution reference.
 		for (const entry of this.sessionManager.getBranch().reverse()) {
 			if (entry.type !== "mode_change") continue;
@@ -2852,7 +2861,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			sessionId: () => this.sessionId,
 			costGate: () => this.#costGate,
 			localProtocolOptions: () => this.#localProtocolOptions(),
-			transformContext: (messages, signal) => this.#transformContext(messages, signal),
+			transformContext: async (messages, signal) =>
+				this.#transformContext(await this.prepareWorkspaceModeContext(messages), signal),
 			convertToLlm: messages => this.#convertToLlm(messages),
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,
@@ -3135,10 +3145,16 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				// Transform the whole history as the live turn does, then cut it:
 				// provider transforms (inline imaging, image budgets) decide per
 				// request, so a separately transformed prefix can differ.
-				const prefixLength = (await this.convertMessagesToLlm(history, signal, model)).length;
-				const live = await this.agent.buildSideRequestContext(
-					await this.convertMessagesToLlm([...history, ...retained], signal, model),
-				);
+				// A missing workspace reminder may be rebuilt for delivery, but it
+				// was never part of the range native compression is summarizing.
+				const convertHistory = async (messages: AgentMessage[]) => {
+					const readable = model ? await this.#maintenance.messagesForModel(messages, model) : messages;
+					return await this.#convertToLlm(
+						await this.#transformContext(await this.prepareWorkspaceModeContext(readable, false), signal),
+					);
+				};
+				const prefixLength = (await convertHistory(history)).length;
+				const live = await this.agent.buildSideRequestContext(await convertHistory([...history, ...retained]));
 				// Date/cwd reminder controls are the only messages the transforms
 				// insert: count past them, and leave out any at the cut, so the kept
 				// turns follow the summarized range directly.
@@ -8483,6 +8499,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	readonly #unpersistedEvalStateContexts = new WeakSet<AgentMessage>();
 
 	#withEvalStateContext(context: SessionContext): SessionContext {
+		context = { ...context, messages: context.messages.filter(message => !isWorkspaceModeContext(message)) };
 		const evalStateContext = this.#buildEvalStateContextMessage(context.messages);
 		if (!evalStateContext) return context;
 		this.#unpersistedEvalStateContexts.add(evalStateContext);
@@ -8500,7 +8517,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 */
 	replaceMessagesFromSessionContext(messages: AgentMessage[]): void {
 		this.#persistRebuiltEvalStateContext(messages);
-		this.agent.replaceMessages(messages);
+		this.agent.replaceMessages(messages.filter(message => !isWorkspaceModeContext(message)));
 	}
 
 	/** Persist the snapshot a rebuild appended to `messages`, if any; see {@link replaceMessagesFromSessionContext}. */
@@ -8692,6 +8709,72 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		} catch (error) {
 			logger.warn("Scoped model refresh failed", { error: String(error) });
 		}
+	}
+
+	/** Independent metadata follows the current session branch, including native transitions. */
+	getWorkspaceModeState(): WorkspaceModeState {
+		return restoreWorkspaceModeState(this.sessionManager.getBranch());
+	}
+
+	setWorkspaceModeState(state: WorkspaceModeState): void {
+		this.sessionManager.appendCustomEntry(WORKSPACE_MODE_STATE_TYPE, structuredClone(state));
+		const messages = this.agent.state.messages;
+		const filtered = messages.filter(message => !isWorkspaceModeContext(message));
+		if (filtered.length !== messages.length) this.agent.replaceMessages(filtered);
+		const steering = this.agent.peekSteeringQueue();
+		const followUp = this.agent.peekFollowUpQueue();
+		const filteredSteering = steering.filter(message => !isWorkspaceModeContext(message));
+		const filteredFollowUp = followUp.filter(message => !isWorkspaceModeContext(message));
+		if (filteredSteering.length !== steering.length || filteredFollowUp.length !== followUp.length) {
+			this.agent.replaceQueues(filteredSteering, filteredFollowUp);
+		}
+		this.#pendingNextTurnMessages = this.#pendingNextTurnMessages.filter(message => !isWorkspaceModeContext(message));
+	}
+
+	async getWorkspaceModeSnapshot(): Promise<WorkspaceModeState> {
+		const state = this.getWorkspaceModeState();
+		if (!state.enabled) return state;
+		return {
+			enabled: true,
+			inheritedScope: await resolveWorkspaceModeScope(
+				this.sessionManager.getCwd(),
+				this.#localProtocolOptions(),
+				state.inheritedScope,
+			),
+		};
+	}
+
+	async #buildWorkspaceModeMessage(): Promise<CustomMessage | undefined> {
+		const state = await this.getWorkspaceModeSnapshot();
+		return state.enabled && state.inheritedScope ? buildWorkspaceModeMessage(state.inheritedScope) : undefined;
+	}
+
+	/** Applies workspace context before the configured primary/side request transforms. */
+	async prepareWorkspaceModeContext(messages: AgentMessage[], refreshMissing = true): Promise<AgentMessage[]> {
+		const state = this.getWorkspaceModeState();
+		if (!state.enabled) return messages.filter(message => !isWorkspaceModeContext(message));
+		// A delivered reminder occupies the same user-message slot in both live
+		// steering and history replay. Never rewrite the user's own message.
+		const prepared = messages.map(message =>
+			isWorkspaceModeContext(message) && "content" in message && typeof message.content === "string"
+				? { role: "user" as const, content: message.content, timestamp: message.timestamp }
+				: message,
+		);
+		if (messages.some(isWorkspaceModeContext) || !refreshMissing) return prepared;
+		// Rebuilds and retries may have discarded hidden messages without a new submission.
+		// Native children also inherit active context before their synthetic initial assignment.
+		// Refresh context here, never by manufacturing or requeueing a user turn.
+		const hasUserSubmission =
+			messages.some(isUserAuthoredQueuedMessage) ||
+			this.sessionManager
+				.getBranch()
+				.some(entry => entry.type === "message" && isUserAuthoredQueuedMessage(entry.message));
+		const hasInheritedContext = state.enabled && state.inheritedScope !== undefined;
+		if (!hasUserSubmission && !hasInheritedContext) return prepared;
+		const context = await this.#buildWorkspaceModeMessage();
+		return context && this.getWorkspaceModeState().enabled
+			? [{ role: "user", content: context.content, timestamp: context.timestamp }, ...prepared]
+			: prepared;
 	}
 
 	/** Prompt templates */
@@ -10165,6 +10248,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// 入队只保存冻结意图；原生选中该输入后，才允许更新它的执行策略。
 		const enteredPlan = first && this.#inputDeliveryHandler && (await this.#prepareInputDelivery(first, signal));
 		const planMessage = enteredPlan ? await this.#buildPlanModeMessage() : null;
+		const workspaceMessage = first ? await this.#buildWorkspaceModeMessage() : undefined;
 		const text: string[] = [];
 		const images: ImageContent[] = [];
 		for (const message of userMessages) {
@@ -10189,7 +10273,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				? this.#prepareQueuedUserTask(first, promptText, preparationImages, signal)
 				: this.#prepareAgentStart(first, promptText, preparationImages, this.#promptGeneration, signal, "queued");
 		const relaxed = preparation ? this.#relaxOnDelivery(preparation, promptText) : undefined;
-		if (!hasInitialSource && !planMessage) return relaxed;
+		if (!hasInitialSource && !planMessage && !workspaceMessage) return relaxed;
 		const generation = this.#promptGeneration;
 		const sessionGeneration = this.#sessionGeneration;
 		return Promise.resolve(relaxed).then(prepared => ({
@@ -10204,14 +10288,17 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				) {
 					return undefined;
 				}
-				const contextual = planMessage ? [planMessage, ...additional] : additional;
+				let contextual: readonly AgentMessage[] = planMessage ? [planMessage, ...additional] : additional;
+				if (workspaceMessage && this.getWorkspaceModeState().enabled)
+					contextual = [...contextual, workspaceMessage];
 				// Construct only after async preparation and Agent's delivery ownership check.
 				let notice: CustomMessage | undefined;
 				for (const message of messages) {
 					notice = this.#buildGoalAutoOrchestrateInitialContext(message);
 					if (notice) break;
 				}
-				return notice ? [...contextual, notice] : contextual;
+				const delivered = notice ? [...contextual, notice] : contextual;
+				return delivered;
 			},
 		}));
 	};
@@ -10507,6 +10594,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const planModeMessage = await this.#buildPlanModeMessage();
 			if (planModeMessage) {
 				messages.push(planModeMessage);
+			}
+			if (isUserAuthoredQueuedMessage(message)) {
+				const workspaceMessage = await this.#buildWorkspaceModeMessage();
+				if (workspaceMessage) messages.push(workspaceMessage);
 			}
 			const goalModeMessage = this.#buildGoalModeMessage();
 			if (goalModeMessage) {

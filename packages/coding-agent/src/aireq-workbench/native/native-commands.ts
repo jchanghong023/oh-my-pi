@@ -91,7 +91,9 @@ export async function nativeWebGuiCommands(
 ): Promise<Array<{ name: string; description: string }>> {
 	return (
 		await buildAvailableSlashCommands(session, undefined, { includeTuiOnlyBuiltins: true, includeRpcBuiltins: true })
-	).map(command => ({ name: command.name, description: command.description ?? "" }));
+	)
+		.filter(command => command.name !== "workspace")
+		.map(command => ({ name: command.name, description: command.description ?? "" }));
 }
 
 /** Build from this session's effective skills using the same policy-checked payload as the TUI. */

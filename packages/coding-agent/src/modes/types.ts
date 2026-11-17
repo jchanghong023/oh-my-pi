@@ -359,14 +359,15 @@ export interface InteractiveModeContext {
 	hideToolActivity: boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
+	readonly workspaceModeEnabled: boolean;
 	vibeModeEnabled: boolean;
 	goalModeEnabled: boolean;
 	goalModePaused: boolean;
 	loopModeEnabled: boolean;
 	loopModePaused: boolean;
 	loopGoalMode?: boolean;
-	loopPrompt?: string;
 	readonly loopNActive: boolean;
+	loopPrompt?: string;
 	loopLimit?: LoopLimitRuntime;
 	loopCondition?: LoopConditionConfig;
 	planModePlanFilePath?: string;
@@ -782,6 +783,11 @@ export interface InteractiveModeContext {
 	toggleToolOutputExpansion(): void;
 	setToolsExpanded(expanded: boolean): void;
 	toggleThinkingBlockVisibility(): void;
+	handleWorkspaceModeCommand(
+		initialPrompt?: string,
+		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
+		followUp?: ConversationPosition,
+	): Promise<boolean>;
 	handlePlanModeCommand(
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
@@ -799,12 +805,12 @@ export interface InteractiveModeContext {
 	/** True while `/guided-goal` is interviewing the user and no goal record exists yet. */
 	isGuidedGoalInterviewActive(): boolean;
 	handleLoopCommand(args?: string, goal?: boolean): Promise<string | undefined>;
+	handleLoopNCommand(args?: string): string | undefined;
 	setLoopPrompt(prompt: string): void;
 	armLoopAutoSubmit(promptPromise: Promise<unknown>): void;
 	disableLoopMode(message?: string): void;
 	cancelGoalContinuation(): void;
 	disableGoalMode(message?: string): void;
-	handleLoopNCommand(args?: string): string | undefined;
 	pauseLoop(): void;
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
 	resolvePlanReview(reviewId: string, choice: PlanReviewChoice, input?: { feedback?: string; role?: string }): boolean;

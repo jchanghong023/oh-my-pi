@@ -13,7 +13,7 @@ import type { AdvisorMessageDetails } from "../../advisor";
 import { InternalUrlRouter } from "../../internal-urls";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
-import { continuesConversation } from "./conversation-position";
+import { continuesConversation, conversationPosition } from "./conversation-position";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
@@ -1386,6 +1386,10 @@ export class UiHelpers {
 						? { images: message.images, imageLinks: message.imageLinks }
 						: undefined,
 				draftDetached: message.draftDetached,
+				followUp:
+					message.mode === "followUp" && parseSlashCommand(message.text)?.name === "workspace"
+						? conversationPosition(this.ctx.sessionManager)
+						: undefined,
 			});
 		} catch (error) {
 			if (this.ctx.session !== owner || !message.draftDetached || parseSlashCommand(message.text)?.name !== "team")

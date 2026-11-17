@@ -19,6 +19,7 @@ import {
 	postmortem,
 	prompt,
 	pushLoopPhase,
+	resolveEquivalentPath,
 	sanitizeText,
 	untilAborted,
 } from "@oh-my-pi/pi-utils";
@@ -103,6 +104,7 @@ import { type CostCapRefusal, CostCapError, type CostGateApi } from "../session/
 import { INTERRUPTED_TURN_ERROR } from "../session/exit-diagnostics";
 import { SKILL_PROMPT_MESSAGE_TYPE, usageContextTokens } from "../session/messages";
 import { hasConversationalHistory, SessionManager } from "../session/session-manager";
+import { type WorkspaceModeState, WORKSPACE_MODE_STATE_TYPE } from "../workspace-mode";
 import { truncateTail } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import {
 	AUTO_THINKING,
@@ -466,6 +468,8 @@ export interface ExecutorOptions {
 	/** Parent session whose stored credential affinities seed the child session. */
 	credentialSourceSessionId?: string;
 	worktree?: string;
+	/** Spawn-time workspace reminder scope; never reapplied when a child resumes. */
+	workspaceMode?: WorkspaceModeState;
 	agent: AgentDefinition;
 	task: string;
 	/**
@@ -5393,6 +5397,27 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			const sessionManager = await awaitAbortable(sessionManagerPromise);
 			if (options.parentArtifactManager) {
 				sessionManager.adoptArtifactManager(options.parentArtifactManager);
+			}
+			// Only a fresh child gets the launch snapshot. Existing transcripts,
+			// including old logs without workspace metadata, retain their own state.
+			if (options.workspaceMode && sessionManager.getEntries().length === 0) {
+				const inheritedScope = options.workspaceMode.inheritedScope;
+				const allowedRoots = [...(inheritedScope?.allowedRoots ?? [])];
+				if (worktree !== undefined) {
+					const root = resolveEquivalentPath(worktree, { throughMissing: true });
+					const key = process.platform === "win32" ? root.toLowerCase() : root;
+					if (
+						!allowedRoots.some(
+							allowed => (process.platform === "win32" ? allowed.toLowerCase() : allowed) === key,
+						)
+					) {
+						allowedRoots.push(root);
+					}
+				}
+				sessionManager.appendCustomEntry(WORKSPACE_MODE_STATE_TYPE, {
+					enabled: options.workspaceMode.enabled,
+					inheritedScope: { projectRoot: inheritedScope?.projectRoot ?? null, allowedRoots },
+				} satisfies WorkspaceModeState);
 			}
 			sessionOpenedAt = performance.now();
 			await refreshSubagentIrcRoot(sessionSpec.prompt, sessionManager, sessionFile);
