@@ -70,7 +70,6 @@ describe("Eval first-call guide messages", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		});
 		sessions.push(session);
 		const definition = session.getEvalPreludes().find(prelude => prelude.name === "browser");
