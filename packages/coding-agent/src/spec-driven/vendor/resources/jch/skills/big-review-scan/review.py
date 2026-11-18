@@ -26,25 +26,35 @@ def git(*args):
 
 BASELINE = "openspec/specs/fork-upstream-baseline/spec.md"
 DIFF = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames"]
-STATE = Path(".omp/big-review")
 
 
-def fork_base(head):
+def fork_base(head, explicit):
+    if explicit is not None:
+        return resolve_base(head, explicit)
     if git("ls-tree", head, "--", BASELINE):
         spec = git("show", f"{head}:{BASELINE}").decode()
         matches = re.findall(r"(?m)^[-*] \*\*Upstream commit\*\*[：:]\s*\x60([0-9a-f]{40}|[0-9a-f]{64})\x60\s*$", spec)
         if len(matches) != 1:
-            raise ValueError(f"{BASELINE}: expected one recorded Upstream commit")
-        git("merge-base", "--is-ancestor", matches[0], head)
-        return matches[0]
-    # Other forks may have a local upstream remote without an OMP baseline spec.
-    ref = "refs/remotes/upstream/HEAD"
-    if subprocess.run(["git", "show-ref", "--verify", "--quiet", ref]).returncode:
-        ref = "refs/remotes/upstream/main"
-    bases = git("merge-base", "--all", head, ref).decode().splitlines()
+            raise ValueError(f"{BASELINE}: expected one recorded Upstream commit; supply --base REF to override")
+        return resolve_base(head, matches[0])
+    try:
+        ref = git("symbolic-ref", "--quiet", "refs/remotes/upstream/HEAD").decode().strip()
+        bases = git("merge-base", "--all", head, ref).decode().splitlines()
+    except subprocess.CalledProcessError as exc:
+        raise ValueError("Cannot resolve the local upstream default branch and merge base; supply --base REF") from exc
     if len(bases) != 1:
-        raise ValueError("Cannot determine a unique integrated upstream base")
+        raise ValueError("Cannot determine a unique integrated upstream base; supply --base REF")
     return bases[0]
+
+
+def resolve_base(head, ref):
+    try:
+        base = git("rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}").decode().strip()
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(f"Invalid baseline {ref!r}; supply a commit or ref with --base") from exc
+    if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], check=False).returncode:
+        raise ValueError(f"Baseline {ref!r} is not an ancestor of the target commit")
+    return base
 
 
 @dataclass(frozen=True)
@@ -231,29 +241,24 @@ def nonempty(path):
     return path.is_file() and not path.is_symlink() and bool(path.read_bytes().strip())
 
 
-def command(args, db):
+def command(args, db, state):
     db.execute("BEGIN IMMEDIATE")
     db.execute("CREATE TABLE IF NOT EXISTS active (generation TEXT, mode TEXT, count INTEGER, head TEXT, base TEXT)")
     active = db.execute("SELECT * FROM active").fetchone()
-    if active and not (STATE / active[0]).is_dir():
+    if active and not (state / active[0]).is_dir():
         db.execute("DELETE FROM active")
         active = None
     if args.action == "plan":
-        if args.count < 1:
-            raise ValueError("Shard count must be positive")
-        if args.init:
-            # Only generation directories created by this skill live under this naming scheme.
-            # Clear even an interrupted plan before starting the replacement.
-            for folder in STATE.iterdir():
-                if re.fullmatch("[a-f0-9]{32}", folder.name) and folder.is_dir():
-                    shutil.rmtree(folder)
-            db.execute("DELETE FROM active")
-            active = None
-        if not active:
+        if not active or args.init:
             head = git("rev-parse", "--verify", "HEAD^{commit}").decode().strip()
-            base = fork_base(head) if args.mode == "fork" else ""
+            base = fork_base(head, args.base) if args.mode == "fork" else ""
+            if args.init:
+                # Clear old generations, including any interrupted plan.
+                for folder in state.iterdir():
+                    if re.fullmatch("[a-f0-9]{32}", folder.name) and folder.is_dir():
+                        shutil.rmtree(folder)
             generation = uuid.uuid4().hex
-            new = STATE / generation
+            new = state / generation
             try:
                 generate(new, args.mode, args.count, head, base)
             except BaseException:
@@ -263,14 +268,16 @@ def command(args, db):
             active = (generation, args.mode, args.count, head, base)
             db.execute("DELETE FROM active")
             db.execute("INSERT INTO active VALUES (?, ?, ?, ?, ?)", active)
-        elif active[1:3] != (args.mode, args.count):
-            raise ValueError("Active mode/count differs. Use init to replace this run.")
+        elif active[1:3] != (args.mode, args.count) or (
+            args.base is not None and resolve_base(active[3], args.base) != active[4]
+        ):
+            raise ValueError("Active mode, shard count or base differs. Use init to replace this run.")
     if not active:
         raise ValueError("No active big-review scan")
     generation, mode, count, head, base = active
     if not re.fullmatch("[a-f0-9]{32}", generation):
         raise ValueError("Invalid generation")
-    directory = STATE / generation
+    directory = state / generation
     if args.action == "publish":
         if generation != args.generation or not 1 <= args.shard <= count:
             raise ValueError("Stale run or unknown shard")
@@ -293,7 +300,7 @@ def command(args, db):
             missing.append(name)
     return dict(generation=generation, directory=str(directory.resolve()), mode=mode,
                 head=head, base=base, total=count, complete=count-len(missing), missing=missing,
-                attempt=uuid.uuid4().hex)
+                attempt=uuid.uuid4().hex, python_executable=sys.executable)
 
 
 def main():
@@ -303,20 +310,29 @@ def main():
     plan.add_argument("mode", choices=["full", "fork"])
     plan.add_argument("count", type=int)
     plan.add_argument("init", choices=["init"], nargs="?")
+    plan.add_argument("--base", metavar="REF", help="explicit ancestor commit or ref (fork only)")
     commands.add_parser("status")
     publish = commands.add_parser("publish")
     publish.add_argument("generation")
     publish.add_argument("shard", type=int)
     publish.add_argument("attempt")
     args = parser.parse_args()
+    if args.action == "plan":
+        if args.count < 1:
+            plan.error("Shard count must be positive")
+        if args.mode != "fork" and args.base is not None:
+            plan.error("--base requires fork mode")
     os.chdir(os.fsdecode(git("rev-parse", "--show-toplevel").rstrip(b"\n")))
-    if STATE.resolve() != Path.cwd() / STATE:
-        raise ValueError("Review workspace must be inside this checkout")
-    if args.action != "plan" and not (STATE / "state.sqlite3").is_file():
+    git_dir = Path(os.fsdecode(git("rev-parse", "--absolute-git-dir").rstrip(b"\n"))).resolve()
+    state = git_dir / "omp-big-review"
+    if state.resolve() != state:
+        raise ValueError("Review workspace must be inside this worktree's Git metadata directory")
+    database = state / "state.sqlite3"
+    if args.action != "plan" and not database.is_file():
         raise ValueError("No active big-review scan")
-    STATE.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(STATE / "state.sqlite3", timeout=60)) as db, db:
-        result = command(args, db)
+    state.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(database, timeout=60)) as db, db:
+        result = command(args, db, state)
     print(json.dumps(result))
 
 

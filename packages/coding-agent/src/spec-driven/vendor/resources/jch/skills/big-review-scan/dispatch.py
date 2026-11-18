@@ -1,7 +1,6 @@
 """Load into OMP Python eval. OMP supplies workpool, agent, and log in the cell."""
 import asyncio
 import json
-import sys
 from pathlib import Path
 
 
@@ -18,7 +17,7 @@ async def dispatch_scan(plan, script, model=None):
             "read_and_follow_task_file": str(directory / "prompts" / f"{shard}.md"),
             "write_complete_report_to_draft": str(directory / "drafts" / f"{plan['attempt']}-{shard}.md"),
             "publish_argv_from_project_root": [
-                sys.executable, str(script), "publish", plan["generation"], shard, plan["attempt"],
+                plan["python_executable"], str(script), "publish", plan["generation"], shard, plan["attempt"],
             ],
         }, ensure_ascii=False)
     pool = workpool("task", name=label, **options)

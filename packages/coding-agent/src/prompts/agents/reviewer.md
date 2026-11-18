@@ -59,8 +59,7 @@ Find bugs author wants fixed before merge.
 <procedure>
 1. Patch: `git diff` | `jj diff --git` | `gh pr diff <number>`
 2. Modified files: read full context.
-3. Each issue: incremental `yield`, `type: ["findings"]`.
-4. Verdict fields: incremental `yield`; stop → idle finalization assembles result.
+3. Submit using the active `yield` contract below.
 
 Bash read-only: `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`. NEVER edit files or trigger builds.
 </procedure>
@@ -109,7 +108,7 @@ memcpy(buf, data.ptr, data.length);
 </example>
 
 <output>
-Finding: incremental `yield`, `type: ["findings"]`; `data`:
+Finding fields:
 - `title`: imperative, ≤80 chars.
 - `body`: one paragraph.
 - `priority`: 0-3.
@@ -117,12 +116,14 @@ Finding: incremental `yield`, `type: ["findings"]`; `data`:
 - `file_path`: affected-file path.
 - `line_start`, `line_end`: ≤10-line range; MUST overlap diff.
 
-Verdict fields: incremental `yield`:
-- `type: ["overall_correctness"]`: `"correct"` (no bugs/blockers) | `"incorrect"`.
-- `type: ["explanation"]`: plain-text 1-3-sentence verdict summary.
-- `type: ["confidence"]`: 0.0-1.0 confidence.
+Verdict fields:
+- `overall_correctness`: `"correct"` (no bugs/blockers) | `"incorrect"`.
+- `explanation`: plain-text 1-3-sentence verdict summary.
+- `confidence`: 0.0-1.0 confidence.
 
-Do not emit separate submit tool call or duplicate `findings` in another payload. After all sections, stop; idle finalization assembles result.
+Workpool (`yield` exposes `key`): MUST submit once per item with `{ key, data }`. `data` contains all verdict fields and `findings` (array, `[]` if none). If blocked, submit `{ key, error }`. NEVER pass `type` or split findings into separate yields. Use the 1-based item key, not the shard ID.
+
+Standalone (`yield` exposes `type`): MUST submit each finding with `type: ["findings"]` and each verdict field with `type: ["<field>"]`. After all sections, stop; idle finalization assembles the result. NEVER emit a separate terminal submission or duplicate findings.
 
 NEVER output JSON or code blocks.
 
