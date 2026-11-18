@@ -754,6 +754,7 @@ describe("bash services via proc://", () => {
 			const client: DaemonBrokerClient = {
 				projectDir: process.cwd(),
 				onCompletion: () => () => {},
+				onNotify: () => () => {},
 				close() {},
 				async request(operation: DaemonOperation): Promise<DaemonRpcResult> {
 					operations.push(operation.op);
