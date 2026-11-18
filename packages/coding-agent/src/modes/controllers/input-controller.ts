@@ -19,7 +19,6 @@ import {
 import { isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
 import { resolveModelRoleValue } from "../../config/model-resolver";
@@ -3382,6 +3381,7 @@ export class InputController {
 	toggleToolOutputExpansion(): void {
 		if (this.ctx.isAIReqWorkbenchModeActive?.()) return;
 		if (this.ctx.hideToolActivity && cfgDisplayMode.get(this.ctx.settings) === "compact") {
+			if (this.ctx.compactFileDiff?.toggle()) return;
 			this.ctx.compactDiffExpanded = !this.ctx.compactDiffExpanded;
 			this.restoreCompactDiffExpansion();
 			this.ctx.ui.requestRender(true);
@@ -3404,14 +3404,14 @@ export class InputController {
 		void applyDisplayPreset(settings, nextDisplayMode(settings), this.ctx);
 	}
 
-	/** Restore compact diffs and explicit command task cards without expanding ambient tool activity. */
+	/** Keep the existing expand shortcut for explicit TodoLoop cards. */
 	restoreCompactDiffExpansion(): void {
 		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
 			this.ctx.compactDiffExpanded = false;
 			return;
 		}
 		for (const child of this.ctx.chatContainer.children) {
-			if (child instanceof TodoLoopTaskCard || child instanceof ToolExecutionComponent) {
+			if (child instanceof TodoLoopTaskCard) {
 				child.setExpanded(this.ctx.compactDiffExpanded);
 			}
 		}

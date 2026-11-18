@@ -318,6 +318,8 @@ import type { VibeModeState } from "../vibe/state";
 import type { AgentSessionEvent, AgentSessionEventListener, WakeSources } from "./agent-session-events";
 import { type AgentViewSession, isLocalAgentSession, type LiveToolOutputSnapshot } from "./agent-session-handle";
 import { LiveToolOutputState } from "./live-tool-output";
+import { LatestTurnFileChanges, type TurnFileChanges } from "./latest-turn-file-changes";
+import type { FileChangeReport } from "../tools";
 import {
 	asyncJobSnapshot,
 	asyncJobTree,
@@ -1171,6 +1173,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#eventListeners: AgentSessionEventListener[] = [];
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	readonly #liveToolOutput = new LiveToolOutputState();
+	#latestTurnFileChanges?: LatestTurnFileChanges;
 	#runStateListeners = new Set<(state: "running" | "idle", at: number) => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
 	#runStartedAt: number | undefined;
@@ -4176,6 +4179,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
+		if (event.type === "message_start" && event.message.role === "user") {
+			this.#latestTurnFileChanges?.start(this.sessionId);
+		}
 		// Listener array is copy-on-write (see `subscribe`), so iterating the
 		// current array is safe against (un)subscribes made by a listener.
 		for (const l of this.#eventListeners) {
@@ -4201,7 +4207,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#emitRunState(state: "running" | "idle"): void {
 		const at = Date.now();
 		if (state === "idle") this.#runStartedAt = undefined;
-		else this.#runStartedAt ??= at;
+		else {
+			if (this.#runStartedAt === undefined) this.#latestTurnFileChanges?.start(this.sessionId);
+			this.#runStartedAt ??= at;
+		}
 		this.#liveToolOutput.setRunActive(state === "running", at);
 		for (const listener of this.#runStateListeners) {
 			try {
@@ -6466,6 +6475,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	getLiveToolOutputSnapshot(): readonly LiveToolOutputSnapshot[] {
 		return this.#liveToolOutput.snapshot();
+	}
+
+	/** Opt in from the terminal before the next write; never replay edits from chat history. */
+	getLatestTurnFileChanges(): TurnFileChanges {
+		return (this.#latestTurnFileChanges ??= new LatestTurnFileChanges()).get(this.sessionId);
+	}
+
+	recordLatestTurnFileChange(change: FileChangeReport): void {
+		if (this.#runActive) this.#latestTurnFileChanges?.record(this.sessionId, change);
 	}
 
 	/**

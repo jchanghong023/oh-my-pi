@@ -3371,7 +3371,9 @@ async function createAgentSessionScoped(
 				recordFileChange: change => {
 					const journal = changeJournal();
 					// Session artifacts (local:// plans, outputs) are never commit material.
-					if (!journal || change.path.startsWith(`${journal.dir}${path.sep}`)) return;
+					if (journal && change.path.startsWith(`${journal.dir}${path.sep}`)) return;
+					session?.recordLatestTurnFileChange(change);
+					if (!journal) return;
 					const owner = change.agent ?? journalAgent;
 					journal.recordChange({
 						agent: owner.agent,

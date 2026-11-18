@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Compact mode shows wrapped file-operation cards as soon as their streamed arguments identify the target.
+- Compact chat no longer keeps per-call file edit cards in scrollback; detailed mode still shows the original cards.
 - File completion honors directory-cache expiry across fuzzy queries and prefix lookups, including explicit cache disablement.
 - Native settings keep Find, Share, and Collab distinct; Page Up and Page Down use the visible editor height.
 - The status line no longer presents a truncated Git status as an exact count and keeps the final directory visible in the overflow row.

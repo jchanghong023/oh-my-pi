@@ -5,8 +5,6 @@ import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/inp
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { cfgHideThinkingBlock } from "@oh-my-pi/pi-coding-agent/session/settings";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 describe("InputController tool output expansion", () => {
 	it("expands children and forces a full repaint so every live block re-renders", () => {
@@ -35,53 +33,6 @@ describe("InputController tool output expansion", () => {
 		// at their new heights in the same frame.
 		expect(requestRender).toHaveBeenCalledTimes(1);
 		expect(requestRender).toHaveBeenCalledWith(true);
-	});
-
-	it("expands file-targeted cards in compact, including unchanged and failed calls", async () => {
-		await initTheme(false);
-		const settings = Settings.isolated();
-		cfgDisplayMode.set(settings, "compact");
-		const ui = { requestRender: vi.fn(), requestComponentRender: vi.fn(), resetDisplay: vi.fn() };
-		const changed = new ToolExecutionComponent("write", { path: "changed.txt", content: "new" }, {}, undefined, ui);
-		const unchanged = new ToolExecutionComponent(
-			"write",
-			{ path: "unchanged.txt", content: "same" },
-			{},
-			undefined,
-			ui,
-		);
-		const failed = new ToolExecutionComponent("edit", { path: "failed.txt" }, {}, undefined, ui);
-		const ordinary = { setExpanded: vi.fn() };
-		changed.updateResult({ content: [{ type: "text", text: "written" }] }, false);
-		unchanged.updateResult({ content: [{ type: "text", text: "unchanged" }] }, false);
-		failed.updateResult({ content: [{ type: "text", text: "failed" }], isError: true }, false);
-		const changedExpansion = vi.spyOn(changed, "setExpanded");
-		const unchangedExpansion = vi.spyOn(unchanged, "setExpanded");
-		const failedExpansion = vi.spyOn(failed, "setExpanded");
-		ui.requestRender.mockClear();
-		const ctx = {
-			settings,
-			hideToolActivity: true,
-			toolOutputExpanded: false,
-			chatContainer: { children: [changed, unchanged, failed, ordinary] },
-			ui,
-			showStatus: vi.fn(),
-		} as unknown as InteractiveModeContext;
-		try {
-			const controller = new InputController(ctx);
-			controller.toggleToolOutputExpansion();
-			controller.toggleToolOutputExpansion();
-			expect(changedExpansion.mock.calls).toEqual([[true], [false]]);
-			expect(unchangedExpansion.mock.calls).toEqual([[true], [false]]);
-			expect(failedExpansion.mock.calls).toEqual([[true], [false]]);
-			expect(ordinary.setExpanded).not.toHaveBeenCalled();
-			expect(ctx.toolOutputExpanded).toBe(false);
-			expect(ui.requestRender).toHaveBeenCalledTimes(2);
-		} finally {
-			changed.dispose();
-			unchanged.dispose();
-			failed.dispose();
-		}
 	});
 
 	it("does not expand hidden tool activity and explains why", () => {

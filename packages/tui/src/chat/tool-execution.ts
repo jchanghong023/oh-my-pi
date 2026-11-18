@@ -49,7 +49,6 @@ import { NativeImageCache, readMediaPath, shownMedia } from "../native/blobs";
 import { imageLinksEnabled, linkedImageText } from "../prompt/image-references";
 import { Memo } from "../native/memo";
 import { type EditMode, type PerFileDiffPreview, renderStreamingFallback } from "../tools/edit";
-import { compactFileTarget } from "../tools/file-target";
 import { taskCardAgentIds } from "../tools/task";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../tools/todo";
 import { isNativeRendering } from "../native/state";
@@ -1159,24 +1158,9 @@ export class ToolExecutionComponent extends Container {
 		);
 	}
 
-	/**
-	 * Partial results remain active until they settle. Hidden blocks normally
-	 * cannot gate history, except an unresolved compact file mutation.
-	 */
+	/** Hidden tools do not gate stable chat history. */
 	isTranscriptBlockFinalized(): boolean {
-		if (!this.#isToolActivityVisible()) {
-			// An unresolved streamed target can still become a visible file operation.
-			if (
-				displayPreferences.compactToolActivity &&
-				!this.#sealed &&
-				this.#isPartial &&
-				this.#renderer &&
-				compactFileTarget(this.#toolName, this.#args, this.#argsComplete, this.#editMode) === "unknown"
-			) {
-				return false;
-			}
-			return true;
-		}
+		if (!this.#isToolActivityVisible()) return true;
 		if (this.#sealed) return true;
 		if (this.#result === undefined) return false;
 		// A parked background task's call already returned; job frames that land
@@ -1185,24 +1169,12 @@ export class ToolExecutionComponent extends Container {
 		return !this.#isPartial;
 	}
 
-	/** File-targeted operations retain their detailed card throughout their lifecycle. */
-	isCompactFileOperation(): boolean {
-		return (
-			!!this.#renderer &&
-			compactFileTarget(this.#toolName, this.#args, this.#argsComplete, this.#editMode) === "file"
-		);
-	}
-
 	#isToolActivityVisible(): boolean {
-		return this.#toolActivityVisible || (displayPreferences.compactToolActivity && this.isCompactFileOperation());
+		return this.#toolActivityVisible;
 	}
 
 	#toolImagesHidden(): boolean {
-		return (
-			!this.#detailedInspection &&
-			displayPreferences.hideToolActivity &&
-			!(displayPreferences.compactToolActivity && this.isCompactFileOperation())
-		);
+		return !this.#detailedInspection && displayPreferences.hideToolActivity;
 	}
 
 	/** Presentation identity remains available while a streamed call is still pending. */

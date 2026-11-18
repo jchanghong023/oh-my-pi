@@ -6,7 +6,6 @@ import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-ag
 import { CompactThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-thinking-preview";
 import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
@@ -337,7 +336,7 @@ describe("compact action dock", () => {
 		...(node.c ?? []).flatMap(child => ("k" in child ? spanStyles(child) : [])),
 	];
 
-	it("keeps file context secondary and settles the whole row without moving the detail", async () => {
+	it("keeps the path legible and distinguishes a settled file action", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -349,16 +348,15 @@ describe("compact action dock", () => {
 			args: { path: "workspace/src/config.ts", i: "Checking presets" },
 			intent: "Checking presets",
 		});
-		const running = plain(h.rows());
+		const running = plain(h.dock.render(80));
 		expect(running[0]).toBe("");
-		expect(running[1]).toBe(" 正在读取  workspace/src/config.ts · Checking presets");
+		expect(running[1]).toContain("Agent：正在读取  workspace/src/config.ts · Checking presets");
 		expect(running[2]).toBe("");
-		expect(Bun.stringWidth("正在读取")).toBe(8);
-		expect(h.rows()[1]).toContain(
+		expect(h.dock.render(80)[1]).toContain(
 			theme.fg("dim", "workspace/") + theme.fg("text", "src/config.ts") + theme.fg("dim", " · Checking presets"),
 		);
-		expect(spanStyles(h.dock.describe(cx()))).toEqual([
-			["正在读取", "muted"],
+		expect(spanStyles(h.dock.describe(cx(80)))).toEqual([
+			["Agent：正在读取", "muted"],
 			["workspace/", "dim"],
 			["src/config.ts", "text"],
 			[" · Checking presets", "dim"],
@@ -370,17 +368,15 @@ describe("compact action dock", () => {
 			result: { content: [] },
 			isError: false,
 		});
-		const done = plain(h.rows());
-		expect(done[1]).toBe(" 读取完成  workspace/src/config.ts · Checking presets");
-		// The detail origin (action area + two spaces) is identical across the state change.
-		expect(done[1]!.indexOf("src/config.ts")).toBe(running[1]!.indexOf("src/config.ts"));
-		expect(h.rows()[1]).toContain(theme.fg("dim", "读取完成"));
-		expect(h.rows()[1]).toContain(theme.fg("dim", "workspace/src/config.ts · Checking presets"));
-		expect(spanStyles(h.dock.describe(cx()))).toEqual([
-			["读取完成", "dim"],
+		const done = plain(h.dock.render(80));
+		expect(done[1]).toBe(" Agent：上次读取完成  workspace/src/config.ts · Checking presets");
+		expect(h.dock.render(80)[1]).toContain(theme.fg("dim", "Agent：上次读取完成"));
+		expect(h.dock.render(80)[1]).toContain(theme.fg("dim", "workspace/src/config.ts · Checking presets"));
+		expect(spanStyles(h.dock.describe(cx(80)))).toEqual([
+			["Agent：上次读取完成", "dim"],
 			["workspace/src/config.ts · Checking presets", "dim"],
 		]);
-		for (const rows of [h.rows(), nativeRows(h.dock.describe(cx()))]) {
+		for (const rows of [h.dock.render(80), nativeRows(h.dock.describe(cx(80)))]) {
 			expect(rows).toHaveLength(3);
 			expect(rows[2]).toBe("");
 			expect(Bun.stripANSI(rows[1]!)).toBe(done[1]!);
@@ -402,7 +398,7 @@ describe("compact action dock", () => {
 		for (const [index, c] of cases.entries()) {
 			const id = `cat-${index}`;
 			await live.emit({ type: "tool_execution_start", toolCallId: id, toolName: c.name, args: c.args });
-			expect(plain(h.rows())[1]).toStartWith(` ${c.running}  `);
+			expect(plain(h.rows())[1]).toStartWith(` Agent：${c.running}  `);
 			await live.emit({
 				type: "tool_execution_end",
 				toolCallId: id,
@@ -410,7 +406,7 @@ describe("compact action dock", () => {
 				result: { content: [] },
 				isError: false,
 			});
-			expect(plain(h.rows())[1]).toStartWith(` ${c.done}  `);
+			expect(plain(h.rows())[1]).toStartWith(` Agent：上次${c.done}  `);
 		}
 		// An unmapped tool keeps its real name in the detail and is never labeled read/exec.
 		await live.emit({
@@ -445,23 +441,23 @@ describe("compact action dock", () => {
 			isError: true,
 		});
 		const row = plain(h.rows())[1]!;
-		expect(row).toStartWith(" 执行失败  ");
+		expect(row).toStartWith(" Agent：上次执行失败  ");
 		expect(row).toContain("false");
 		expect(row).not.toContain("boom");
 		expect(h.rows()[1]).toContain(theme.getFgAnsi("error"));
 		expect(spanStyles(h.dock.describe(cx()))).toEqual([
-			["执行失败", "error"],
+			["Agent：上次执行失败", "error"],
 			["false", "dim"],
 		]);
-		// A fresh call is a separate record; while it runs, the failed action stays above as the latest ended.
+		// A live tool replaces the settled one on the Agent row.
 		await live.emit({
 			type: "tool_execution_start",
 			toolCallId: "b",
 			toolName: "bash",
 			args: { command: "true" },
 		});
-		expect(plain(h.rows())[0]).toStartWith(" 执行失败  ");
-		expect(plain(h.rows())[1]).toStartWith(" 正在执行  ");
+		expect(plain(h.rows())[0]).toBe("");
+		expect(plain(h.rows())[1]).toContain("Agent：正在执行  true");
 		await live.emit({
 			type: "tool_execution_end",
 			toolCallId: "b",
@@ -469,137 +465,57 @@ describe("compact action dock", () => {
 			result: { content: [] },
 			isError: false,
 		});
-		// Both ended actions are retained (latest two): the failure stays above, the success below.
-		expect(plain(h.rows())[0]).toStartWith(" 执行失败  ");
-		expect(plain(h.rows())[1]).toStartWith(" 执行完成  ");
+		expect(plain(h.rows())[0]).toBe("");
+		expect(plain(h.rows())[1]).toContain("Agent：上次执行完成  true");
 	});
 
-	it("records thinking as one action, shows the latest nonblank line, then replaces it with elapsed seconds", async () => {
-		setSystemTime(10_000);
+	it("separates request, thinking and reply from the tool row", async () => {
 		const h = focusFixture();
-		const message = thinkingMessage("older\nfirst\nlatest");
-		const live = liveSession(message, 0);
+		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		await live.emit({
-			type: "message_update",
-			message,
-			assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message },
-		});
-		expect(plain(h.rows())).toEqual(["", " 正在思考  latest", ""]);
-		setSystemTime(15_000);
-		live.session.agent.state.activeThinkingIndex = undefined;
-		await live.emit(update(message, "thinking_end"));
-		expect(plain(h.rows())).toEqual(["", " 思考完成  用时 5.0 秒", ""]);
-		expect(h.rendered()).not.toContain("latest");
-	});
-
-	it("formats sub-0.1s thinking as <0.1 and keeps seconds past a minute", async () => {
-		setSystemTime(10_000);
-		const h = focusFixture();
-		const message = thinkingMessage("quick");
-		const live = liveSession(message, 0);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({
-			type: "message_update",
-			message,
-			assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message },
-		});
-		setSystemTime(10_050);
-		live.session.agent.state.activeThinkingIndex = undefined;
-		await live.emit(update(message, "thinking_end"));
-		expect(plain(h.rows())[1]).toBe(" 思考完成  用时 <0.1 秒");
-
-		const slow = thinkingMessage("slow", 2);
-		const live2 = liveSession(slow, 0);
-		h.register("Slow", live2);
-		await h.focus.focusAgent("Slow");
-		await live2.emit({
-			type: "message_update",
-			message: slow,
-			assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: slow },
-		});
-		setSystemTime(80_000);
-		live2.session.agent.state.activeThinkingIndex = undefined;
-		await live2.emit(update(slow, "thinking_end"));
-		expect(plain(h.rows())[1]).toBe(" 思考完成  用时 70.0 秒");
-	});
-
-	it("orders serial actions as latest-ended above and current-running below", async () => {
-		setSystemTime(10_000);
-		const h = focusFixture();
-		const message = thinkingMessage("reasoning");
-		const live = liveSession(message, 0);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({
-			type: "message_update",
-			message,
-			assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message },
-		});
-		setSystemTime(15_000);
-		live.session.agent.state.activeThinkingIndex = undefined;
-		await live.emit(update(message, "thinking_end"));
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "r",
-			toolName: "read",
-			args: { path: "src/config.ts" },
-		});
-		expect(plain(h.rows())).toEqual([" 思考完成  用时 5.0 秒", " 正在读取  src/config.ts", ""]);
+		await live.emit({ type: "agent_start" });
+		await live.emit({ type: "turn_start" });
+		expect(plain(h.rows())[0]).toContain("模型：等待响应");
+		const reason = thinkingMessage("earlier line\nlatest model reasoning");
+		await live.emit(update(reason, "thinking_delta"));
+		expect(plain(h.rows())[0]).toContain("latest model reasoning");
+		expect(h.nativeRendered()).toBe(h.rendered());
+		h.ctx.hideThinkingBlock = true;
+		expect(plain(h.rows())[0]).toContain("模型：正在思考");
+		expect(h.rendered()).not.toContain("latest model reasoning");
+		await live.emit({ type: "message_end", message: reason });
+		await live.emit({ type: "tool_execution_start", toolCallId: "run", toolName: "bash", args: { command: "run" } });
+		expect(plain(h.rows())[0]).toBe("");
+		expect(plain(h.rows())[1]).toContain("Agent：正在执行");
 		await live.emit({
 			type: "tool_execution_end",
-			toolCallId: "r",
-			toolName: "read",
-			result: { content: [] },
-			isError: false,
-		});
-		expect(plain(h.rows())).toEqual([" 思考完成  用时 5.0 秒", " 读取完成  src/config.ts", ""]);
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "x",
+			toolCallId: "run",
 			toolName: "bash",
-			args: { command: "rg compact packages/" },
+			result: { content: [] },
+			isError: true,
 		});
-		expect(plain(h.rows())).toEqual([" 读取完成  src/config.ts", " 正在执行  rg compact packages/", ""]);
+		await live.emit({ type: "turn_start" });
+		const reply = thinkingMessage("", 2);
+		reply.content = [{ type: "text", text: "Reply" }];
+		await live.emit({
+			type: "message_update",
+			message: reply,
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Reply", partial: reply },
+		});
+		expect(plain(h.rows())[0]).toContain("模型：正在生成回复");
+		expect(plain(h.rows())[1]).toContain("Agent：上次执行失败");
+		await live.emit({ type: "message_end", message: reply });
+		await live.emit({ type: "agent_end", messages: [] });
+		expect(plain(h.rows())[0]).toBe("");
+		expect(h.rendered()).not.toContain("正在");
 	});
 
-	it("keeps two running actions in stable slots and fills vacancies without a carousel", async () => {
+	it("keeps the first running tool visible while indicating additional work", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		const start = (id: string) =>
-			live.emit({ type: "tool_execution_start", toolCallId: id, toolName: "bash", args: { command: id } });
-		const end = (id: string) =>
-			live.emit({
-				type: "tool_execution_end",
-				toolCallId: id,
-				toolName: "bash",
-				result: { content: [] },
-				isError: false,
-			});
-		await start("A");
-		await start("B");
-		await start("C");
-		// Bottom-first: A holds the bottom slot, B the top; C waits without rotating them.
-		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  A", ""]);
-		await end("A");
-		// A finished and a queued runner exists: C immediately fills A's bottom slot.
-		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  C", ""]);
-		await end("B");
-		// No queued runner remains: B stays static in place, C keeps running.
-		expect(plain(h.rows())).toEqual([" 执行完成  B", " 正在执行  C", ""]);
-		await end("C");
-		expect(plain(h.rows())).toEqual([" 执行完成  B", " 执行完成  C", ""]);
-	});
-
-	it("keeps the oldest active call in its slot while more than sixteen calls run", async () => {
-		const h = focusFixture();
-		const live = liveSession();
-		h.register("ManyCalls", live);
-		await h.focus.focusAgent("ManyCalls");
 		for (let i = 1; i <= 17; i++) {
 			await live.emit({
 				type: "tool_execution_start",
@@ -608,7 +524,16 @@ describe("compact action dock", () => {
 				args: { command: `task ${i}` },
 			});
 		}
-		expect(plain(h.rows())).toEqual([" 正在执行  task 2", " 正在执行  task 1", ""]);
+		expect(plain(h.rows())[1]).toMatch(/task 1.*\+16/);
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "call-1",
+			toolName: "bash",
+			result: { content: [] },
+			isError: false,
+		});
+		expect(plain(h.rows())[1]).toMatch(/task 2.*\+15/);
+		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
 	it("reserves one row for real wrapped thinking, without moving the other runner or leaking hidden prose", async () => {
@@ -619,21 +544,22 @@ describe("compact action dock", () => {
 		for (const command of ["A", "B"]) {
 			await live.emit({ type: "tool_execution_start", toolCallId: command, toolName: "bash", args: { command } });
 		}
-		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  A", ""]);
+		expect(plain(h.rows())[1]).toMatch(/A.*\+1/);
 		const message = thinkingMessage(" \t\n<!-- -->");
 		await live.emit(update(message, "thinking_delta"));
-		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  A", ""]);
+		expect(plain(h.rows())[0]).toContain("模型：正在思考");
 		message.content = [{ type: "thinking", thinking: "```\nPRIVATE_THOUGHT\n```" }];
 		await live.emit(update(message, "thinking_delta"));
-		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  A", ""]);
+		expect(h.rendered()).not.toContain("PRIVATE_THOUGHT");
 		message.content = [{ type: "thinking", thinking: "firstpart secondpart thirdpart final-tail\n \t\n" }];
 		await live.emit(update(message, "thinking_delta"));
-		const width = 21;
+		const width = 45;
 		for (const rows of [h.dock.render(width), nativeRows(h.dock.describe(cx(width)))]) {
-			expect(plain(rows)).toEqual([" 正在思考  final-tail", " 正在执行  A", ""]);
+			expect(plain(rows)[0]).toContain("final-tail");
+			expect(plain(rows)[1]).toMatch(/A.*\+1/);
 		}
 		h.ctx.hideThinkingBlock = true;
-		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  A", ""]);
+		expect(h.rendered()).not.toContain("final-tail");
 		h.ctx.hideThinkingBlock = false;
 		const wait = new Loader(
 			h.ctx.ui,
@@ -649,7 +575,7 @@ describe("compact action dock", () => {
 			expect(rows[1]).toContain("Waiting for a job");
 			expect(rows.join("")).not.toContain("正在执行");
 			setSystemTime(Date.now() + 1500);
-			expect(dock.describe(cx()).c?.[1]).toEqual(wait.describe(cx()));
+			expect(rows[1]).toContain("Agent：");
 			expect(shimmerWords(dock.describe(cx()))).toEqual(shimmerWords(wait.describe(cx())));
 		} finally {
 			dock.clear();
@@ -684,7 +610,7 @@ describe("compact action dock", () => {
 		vi.advanceTimersByTime(1);
 		expect(repaint).toHaveBeenCalledWith(h.dock);
 		setSystemTime(25_500);
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["正在执行"]);
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["Agent：正在执行"]);
 		expect(shimmerWords(h.dock.describe({ ...cx(), reduceMotion: true }))).toEqual([]);
 		expect(shimmerWords(h.dock.describe({ ...cx(), supports: () => false }))).toEqual([]);
 		const first = h.rows();
@@ -701,7 +627,7 @@ describe("compact action dock", () => {
 			result: { content: [] },
 			isError: false,
 		});
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["正在读取"]);
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["Agent：正在读取"]);
 		await live.emit({
 			type: "tool_execution_end",
 			toolCallId: "b",
@@ -741,7 +667,7 @@ describe("compact action dock", () => {
 		setSystemTime(12_700);
 		const quiet = shimmerWords(h.dock.describe(cx()));
 		expect(quiet).toHaveLength(1);
-		expect(shimmerWords(h.dock.describe(cx(15)))).toEqual(quiet);
+		expect(shimmerWords(h.dock.describe(cx(15)))).toEqual([]);
 	});
 
 	it("suppresses shimmer only for actual progress from the same displayed Bash call", async () => {
@@ -762,12 +688,12 @@ describe("compact action dock", () => {
 		try {
 			setSystemTime(11_900);
 			expect(shimmerWords(dock.describe(cx()))).toEqual([]);
-			expect(shimmerWords(dock.describe(cx(59)))).toEqual(["正在执行"]);
+			expect(shimmerWords(dock.describe(cx(59)))).toEqual(["Agent：正在执行"]);
 			callId = "other";
-			expect(shimmerWords(dock.describe(cx()))).toEqual(["正在执行"]);
+			expect(shimmerWords(dock.describe(cx()))).toEqual(["Agent：正在执行"]);
 			callId = "bash";
 			setSystemTime(12_900);
-			expect(shimmerWords(dock.describe(cx()))).toEqual(["正在执行"]);
+			expect(shimmerWords(dock.describe(cx()))).toEqual(["Agent：正在执行"]);
 			outputChangedAt = 12_900;
 			expect(shimmerWords(dock.describe(cx()))).toEqual([]);
 			const before = dock.render(60);
@@ -828,7 +754,7 @@ describe("compact action dock", () => {
 		const first = h.rows();
 		setSystemTime(25_500);
 		expect(h.rows()).toEqual(first);
-		expect(plain(first)[1]).toBe(" 正在读取  a.ts");
+		expect(plain(first)[1]).toBe(" Agent：正在读取  a.ts");
 		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
 	});
 
@@ -844,7 +770,7 @@ describe("compact action dock", () => {
 			args: { i: "THE_INTENT", command: "echo begin\ngit diff --stat" },
 		});
 		const row = plain(h.rows())[1]!;
-		expect(row).toStartWith(" 正在执行  ");
+		expect(row).toStartWith(" Agent：正在执行  ");
 		expect(row).toContain("echo begin git diff --stat");
 		expect(row).not.toContain("THE_INTENT");
 		expect(row).not.toMatch(/\d+(?:\.\d+)?(?:ms|s|m)\b/);
@@ -877,15 +803,14 @@ describe("compact action dock", () => {
 		}
 		for (const rows of [h.dock.render(40), nativeRows(h.dock.describe(cx(40)))]) {
 			const [top, bottom] = plain(rows);
-			expect(top).toContain("frontend/config.ts");
+			expect(top).toBe("");
 			expect(bottom).toContain("backend/config.ts");
 			expect(rows.join("")).not.toContain("INTENT");
 			expect(rows.every(row => Bun.stringWidth(row) <= 40)).toBe(true);
 		}
 		const styles = spanStyles(h.dock.describe(cx(40)));
-		expect(styles).toContainEqual(["frontend/config.ts", "text"]);
 		expect(styles).toContainEqual(["backend/config.ts", "text"]);
-		expect(styles.filter(([value, tone]) => value.endsWith("…") && tone === "dim")).toHaveLength(2);
+		expect(styles.filter(([value, tone]) => value.endsWith("…") && tone === "dim")).toHaveLength(1);
 	});
 
 	it("uses Bash intent only while the same call's command is visible and never hides a command without intent", async () => {
@@ -925,12 +850,19 @@ describe("compact action dock", () => {
 			expect(plain(dock.render(60))[1]).toContain("echo raw");
 			previewId = "no-intent";
 			await live.emit({
+				type: "tool_execution_end",
+				toolCallId: "with-intent",
+				toolName: "write",
+				result: { content: [] },
+				isError: false,
+			});
+			await live.emit({
 				type: "tool_execution_start",
 				toolCallId: "no-intent",
 				toolName: "bash",
 				args: { command: "pwd" },
 			});
-			expect(plain(dock.render(60))[0]).toContain("pwd");
+			expect(plain(dock.render(60))[1]).toContain("pwd");
 		} finally {
 			dock.clear();
 		}
@@ -958,33 +890,10 @@ describe("compact action dock", () => {
 				expect(rows.every(row => Bun.stringWidth(row) <= Math.max(width, 0))).toBe(true);
 			}
 		}
-		const narrow = plain(h.dock.render(32));
-		expect(narrow[0]).toContain("printf hello");
+		const narrow = plain(h.dock.render(44));
+		expect(narrow[0]).toBe("");
 		expect(narrow[1]).toContain("宽字符");
 		expect(narrow[2]).toBe("");
-	});
-
-	it("updates one record on incremental content without duplicating it or restarting thinking time", async () => {
-		setSystemTime(10_000);
-		const h = focusFixture();
-		const message = thinkingMessage("first");
-		const live = liveSession(message, 0);
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({
-			type: "message_update",
-			message,
-			assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message },
-		});
-		setSystemTime(12_000);
-		message.content = [{ type: "thinking", thinking: "first\nsecond" }];
-		await live.emit(update(message, "thinking_delta"));
-		expect(plain(h.rows())).toEqual(["", " 正在思考  second", ""]);
-		setSystemTime(15_000);
-		live.session.agent.state.activeThinkingIndex = undefined;
-		await live.emit(update(message, "thinking_end"));
-		// Elapsed is measured from the original phase start, not the last delta.
-		expect(plain(h.rows())[1]).toBe(" 思考完成  用时 5.0 秒");
 	});
 
 	it("shows a new message's thinking when its content index repeats", async () => {
@@ -1004,11 +913,11 @@ describe("compact action dock", () => {
 		setSystemTime(20_000);
 		await live.emit({ type: "message_start", message: second });
 		await live.emit(update(second, "thinking_delta"));
-		expect(h.rendered()).toContain("正在思考  second phase");
+		expect(h.rendered()).toContain("模型：正在思考  second phase");
 		expect(h.nativeRendered()).toBe(h.rendered());
 		setSystemTime(23_000);
 		await live.emit(update(second, "thinking_end"));
-		expect(plain(h.rows())).toEqual([" 思考完成  用时 2.0 秒", " 思考完成  用时 3.0 秒", ""]);
+		expect(h.rendered()).not.toContain("phase");
 		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
@@ -1029,14 +938,14 @@ describe("compact action dock", () => {
 		};
 		await run("old-a.ts");
 		await run("old-b.ts");
-		expect(plain(h.rows())).toEqual([" 读取完成  old-a.ts", " 读取完成  old-b.ts", ""]);
+		expect(plain(h.rows())[1]).toContain("上次读取完成  old-b.ts");
 		await run("new-a.ts");
 		await run("new-b.ts");
-		expect(plain(h.rows())).toEqual([" 读取完成  new-a.ts", " 读取完成  new-b.ts", ""]);
+		expect(plain(h.rows())[1]).toContain("上次读取完成  new-b.ts");
 		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
-	it("settles thinking before coalesced reply updates and excludes reply time from its duration", async () => {
+	it("does not resurrect coalesced thinking when streamed reply and its end arrive together", async () => {
 		setSystemTime(10_000);
 		const h = focusFixture();
 		const message = thinkingMessage("reasoning", 1);
@@ -1063,7 +972,7 @@ describe("compact action dock", () => {
 		live.session.agent.emitExternalEvent(textStart, { stateOnly: true });
 		await h.ctx.eventController.dispatchSessionEvent(textStart);
 		await h.ctx.eventController.dispatchSessionEvent({ type: "message_end", message: reply });
-		expect(plain(h.rows())).toEqual(["", " 思考完成  用时 2.0 秒", ""]);
+		expect(h.rendered()).not.toContain("思考");
 		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
@@ -1087,18 +996,18 @@ describe("compact action dock", () => {
 		});
 		await live.emit({ type: "agent_end", messages: [] });
 		const retained = h.rows();
-		expect(plain(retained)[1]).toBe(" 读取完成  keep.ts");
+		expect(plain(retained)[1]).toBe(" Agent：上次读取完成  keep.ts");
 		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
 		setSystemTime(Date.now() + 500);
 		expect(h.rows()).toEqual(retained);
 		await h.focus.focusAgent(MAIN_AGENT_ID);
 		expect(h.rows()).toEqual(["", "", ""]);
 		await h.focus.focusAgent("Worker");
-		expect(plain(h.rows())[1]).toBe(" 读取完成  keep.ts");
+		expect(plain(h.rows())[1]).toBe(" Agent：上次读取完成  keep.ts");
 	});
 
 	it.each(["display tier", "focused agent"])("does not revive thinking that ended outside the %s", async change => {
-		const thinking = thinkingMessage("old reasoning outside the current view");
+		const thinking = thinkingMessage("old reasoning");
 		const h = focusFixture();
 		const live = liveSession(thinking, 0);
 		h.register("ThinkingView", live);
@@ -1119,13 +1028,11 @@ describe("compact action dock", () => {
 		expect(h.nativeRendered()).not.toContain("old reasoning");
 	});
 
-	it("applies compact expansion to a file card created after Ctrl+O", async () => {
+	it("keeps file write content out of compact chat", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("ExpandedWrite", live);
 		await h.focus.focusAgent("ExpandedWrite");
-		const input = new InputController(h.ctx);
-		input.toggleToolOutputExpansion();
 		const body = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n");
 		await live.emit({
 			type: "tool_execution_start",
@@ -1141,8 +1048,6 @@ describe("compact action dock", () => {
 			isError: false,
 		});
 		const chat = () => Bun.stripANSI(h.ctx.chatContainer.render(120).join("\n"));
-		expect(chat()).toContain("line 60");
-		input.toggleToolOutputExpansion();
 		expect(chat()).not.toContain("line 60");
 	});
 
@@ -1161,7 +1066,7 @@ describe("compact action dock", () => {
 			assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: message },
 		});
 		expect(h.rendered()).not.toContain("正在读取");
-		expect(h.rendered()).not.toContain("准备中");
+		expect(h.rendered()).toContain("模型：正在准备调用");
 		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
 		await live.emit({
 			type: "tool_execution_start",
@@ -1169,7 +1074,7 @@ describe("compact action dock", () => {
 			toolName: "read",
 			args: { path: "src/宽字符.ts" },
 		});
-		expect(plain(h.rows())[1]).toBe(" 正在读取  src/宽字符.ts");
+		expect(plain(h.rows())[1]).toBe(" Agent：正在读取  src/宽字符.ts");
 	});
 
 	it("projects device inner targets without leaking the transport URI or private payloads", async () => {
@@ -1184,7 +1089,7 @@ describe("compact action dock", () => {
 			args: { path: "xd://bash", content: JSON.stringify({ command: "pwd && echo done" }) },
 		});
 		const row = plain(h.rows())[1]!;
-		expect(row).toStartWith(" 正在执行  ");
+		expect(row).toStartWith(" Agent：正在执行  ");
 		// The full inner command is shown (new spec replaces the old first-segment preview); no transport URI.
 		expect(row).toContain("pwd && echo done");
 		expect(row).not.toMatch(/xd:\/\//);
@@ -1218,7 +1123,7 @@ describe("compact action dock", () => {
 			["help", "xd://write", "?", "正在调用  write xd://write"],
 		] as const) {
 			await live.emit({ type: "tool_execution_start", toolCallId: id, toolName: "write", args: { path, content } });
-			expect(plain(h.rows())[1]).toBe(` ${expected}`);
+			expect(plain(h.rows())[1]).toBe(` Agent：${expected}`);
 			expect(h.rendered()).not.toContain("PRIVATE_BODY");
 			await live.emit({
 				type: "tool_execution_end",

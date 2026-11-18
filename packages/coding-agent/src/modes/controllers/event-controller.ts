@@ -1210,6 +1210,9 @@ export class EventController {
 			this.ctx as InteractiveModeContext & { compactThinkingPreview?: { observe(event: AgentSessionEvent): void } }
 		).compactThinkingPreview?.observe(event);
 		this.ctx.compactToolOutputPreview?.observe(event);
+		if (event.type === "agent_start" || (event.type === "message_start" && event.message.role === "user")) {
+			this.ctx.compactFileDiff?.sync();
+		}
 		if (event.type === "agent_end" || event.type === "session_abort") {
 			this.ctx.ui.requestRender();
 		}
@@ -1230,7 +1233,8 @@ export class EventController {
 			(event.type === "tool_execution_start" ||
 				event.type === "tool_execution_update" ||
 				event.type === "tool_execution_end" ||
-				event.type === "message_end")
+				event.type === "message_end" ||
+				event.type === "turn_start")
 		) {
 			this.ctx.ui.requestRender();
 		}

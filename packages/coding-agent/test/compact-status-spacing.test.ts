@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { CompactFileDiff } from "@oh-my-pi/pi-coding-agent/modes/compact-file-diff";
 import { CompactThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-thinking-preview";
 import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -12,6 +13,7 @@ import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controll
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { LatestTurnFileChanges } from "@oh-my-pi/pi-coding-agent/session/latest-turn-file-changes";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import {
@@ -430,6 +432,67 @@ describe("compaction and focus status spacing", () => {
 		} finally {
 			unwatch();
 			output.clear();
+			composer.stop();
+			setChatTranscriptDisplayPreferences(preferences);
+			setKeybindings(keys);
+		}
+	});
+
+	it("keeps a single net diff in the dock and never publishes it to scrollback", async () => {
+		const preferences = { ...chatTranscriptDisplayPreferences };
+		const keys = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory());
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		const terminal = new VirtualTerminal(80, 24);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true, completeScrollback: true },
+		});
+		const ctx = createInteractiveModeContext({ composer, ui: composer.ui, editor: composer.editor });
+		const changes = new LatestTurnFileChanges();
+		const id = ctx.sessionManager.getSessionId();
+		ctx.session.getLatestTurnFileChanges = () => changes.get(id);
+		const dock = new CompactFileDiff(ctx, () => 6);
+		const file = (name: string) => `${ctx.sessionManager.getCwd()}/${name}`;
+		const record = (name: string, before: string, after: string) =>
+			changes.record(id, { tool: "write", path: file(name), before, after });
+		record("target.txt", "ORIGINAL_VALUE\n", "INTERMEDIATE_VALUE\n");
+		record("./target.txt", "INTERMEDIATE_VALUE\n", "FINAL_VALUE\n");
+		record("revert.txt", "UNCHANGED\n", "TEMP_VALUE\n");
+		record("revert.txt", "TEMP_VALUE\n", "UNCHANGED\n");
+		composer.setRuntimeChildren([ctx.chatContainer, dock, composer.editor], {
+			selfClearingChrome: [dock],
+			transientChrome: [composer.editor],
+		});
+		composer.editor.setText("KEPT_DRAFT");
+		composer.ui.setFocus(composer.editor);
+		composer.start({ playWelcomeIntro: false });
+		const prose = Array.from({ length: 30 }, (_, i) => `Prose_${String(i).padStart(2, "0")}`);
+		const view = () => Bun.stripANSI(terminal.getViewport().join("\n"));
+		try {
+			for (const paragraph of prose) ctx.chatContainer.addChild(new Text(paragraph, 0, 0));
+			dock.toggle();
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			expect(view().match(/修改 target\.txt/gu)).toHaveLength(1);
+			expect(view()).toContain("ORIGINAL_VALUE");
+			expect(view()).toContain("FINAL_VALUE");
+			expect(view()).not.toMatch(/INTERMEDIATE_VALUE|revert\.txt/);
+
+			changes.start(id);
+			dock.sync();
+			terminal.resize(64, 18);
+			await scheduler.advance(terminal, 300);
+			await scheduler.settle(terminal);
+			expect(view()).toContain("KEPT_DRAFT");
+			expect(view()).not.toContain("本轮改动");
+			const history = Bun.stripANSI(terminal.getScrollBuffer().join("\n"));
+			expect(history).not.toMatch(/ORIGINAL_VALUE|FINAL_VALUE|target\.txt/);
+			expect(Array.from(history.matchAll(/Prose_\d\d/gu), match => match[0])).toEqual(prose);
+		} finally {
+			dock.close();
 			composer.stop();
 			setChatTranscriptDisplayPreferences(preferences);
 			setKeybindings(keys);

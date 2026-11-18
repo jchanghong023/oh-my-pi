@@ -139,6 +139,7 @@ import { onDownloadActivity } from "../downloads/activity";
 import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
 import { CompactThinkingPreview } from "./compact-thinking-preview";
 import { CompactToolOutputPreview } from "./compact-tool-output-preview";
+import { CompactFileDiff } from "./compact-file-diff";
 import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
 import { dispatchApprovedPlan } from "../plan-mode/session-approval";
 import { planVerificationChecks, recordApprovedPlanReference } from "../plan-mode/verification";
@@ -1391,6 +1392,17 @@ export class InteractiveMode implements InteractiveModeContext {
 				Math.max(this.composer.rowsBelow(this.compactToolOutputPreview) ?? 0, this.editor.renderedRows + 4),
 		),
 	);
+	readonly compactFileDiff: CompactFileDiff = new CompactFileDiff(this, () =>
+		Math.max(
+			0,
+			Math.min(
+				Math.floor(this.ui.terminal.rows / 3),
+				this.ui.terminal.rows -
+					Math.max(this.composer.rowsBelow(this.compactFileDiff) ?? 0, this.editor.renderedRows + 4) -
+					2,
+			),
+		),
+	);
 	/** Whether {@link statusContainer} rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	statusRowOccupied = false;
 	todoContainer: Container;
@@ -2061,6 +2073,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!options?.viewOnly) this.#inputController.restoreCompactionQueueToEditor();
 		this.compactThinkingPreview.clear();
 		this.compactToolOutputPreview.clear();
+		this.compactFileDiff.close();
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.lastAssistantUsage = undefined;
@@ -2150,6 +2163,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#rootSession = session;
 		this.sessionManager = session.sessionManager;
 		this.settings = session.settings;
+		session.getLatestTurnFileChanges();
 		const preferences = {
 			quiet: cfgStartupQuiet.get(settings),
 			composerShape: cfgComposerShape.get(settings),
@@ -2577,6 +2591,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.attachmentChipsContainer,
 				this.editorTopGapContainer,
 				this.hookWidgetContainerAbove,
+				this.compactFileDiff,
 				this.compactToolOutputPreview,
 				this.compactThinkingPreview,
 				this.editorContainer,
@@ -2610,6 +2625,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.modelCycleContainer,
 					this.progressHudContainer,
 					this.compactToolOutputPreview,
+					this.compactFileDiff,
 				],
 				// The working row, the idle status line that replaces it, and the
 				// margin above the editor (the band composer's gap opens when that
@@ -2633,6 +2649,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.pendingMessagesContainer,
 					this.editorTopGapContainer,
 					this.hookWidgetContainerAbove,
+					this.compactFileDiff,
 					this.compactToolOutputPreview,
 					this.compactThinkingPreview,
 					this.editorContainer,
@@ -4592,6 +4609,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (any("display.mode")) {
 			this.hideToolActivity = hideToolActivity;
 			if (!hideToolActivity) this.toolOutputExpanded = false;
+			this.compactFileDiff.close();
 			for (const child of this.chatContainer.children) {
 				if (
 					!hideToolActivity &&

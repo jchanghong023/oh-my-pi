@@ -16,6 +16,7 @@
 ### Changed
 
 - The intranet system notice describes the CentOS 7, NFS, and `/dev/shm` deployment without assuming the current host matches it.
+- Compact mode shows model stages separately from Agent activity and keeps one net diff per file for the latest turn, outside scrollback.
 - Compact mode keeps file targets and live reasoning visible alongside ongoing work, and shows up to five output lines without losing the last useful preview to empty or separator-only updates.
 - Compact mode aligns output with the activity rows, emphasizes file names, live thinking and failure diagnostics, and limits animation to one quiet, still-running action.
 - Updated to upstream v18.22.2 while retaining intranet providers, fork commands and TUI presentation.
@@ -51,7 +52,6 @@
 - All 12 bundled OpenSpec skills remain available through native skill invocation and completion; only the six core workflows appear in automatic model discovery, with the other six requiring manual invocation.
 - Bundled OpenSpec 2.0 workflows now use omp openspec throughout and update only with OMP; retired the unused skill installation and template-generation chain.
 - This repository now uses the native spec-driven schema; existing custom mini/omp-spec projects require explicit migration and any missing design/tasks remain incomplete (see docs-zh-CN/openspec-schema-migration.md).
-- Compact mode's two-line activity area now shows fixed-width Chinese action states (正在思考/读取/执行/写入/调用) with a gray detail that never shifts; only running action words shimmer, thinking completion shows elapsed seconds, and tool elapsed timers are removed.
 - Compact mode's tool output preview is now a bordered card with padding and a color-coded Chinese status header that keeps both ends of long commands; finished grep/glob results show their matching rows first instead of only the output tail.
 
 - AIReq, WebGUI and OpenWiki browser assets now use the same gzip archive pipeline as the stats dashboard, reducing embedded size and deferring decoding until the first request.
@@ -69,7 +69,7 @@
 ### Fixed
 
 - Compact Output expires from its own session's run end without reappearing in later turns; changing the display mode or focused agent no longer revives stale thinking.
-- Compact mode keeps running actions in place and applies `Ctrl+O` to later file cards; the display shortcut reports settings overrides instead of claiming a switch succeeded.
+- The display shortcut reports settings overrides instead of claiming a switch succeeded.
 - Native clean and detailed modes no longer reserve the compact activity rows.
 - Native child agents inherit the launching session's credentials and tool restrictions, and caller restrictions also apply to Cursor, Advisors, and resumed queued input.
 - Offline mode preserves the user's `models.offline` setting.
