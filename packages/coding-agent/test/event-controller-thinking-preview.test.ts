@@ -161,6 +161,7 @@ const eventControllers: EventController[] = [];
 const focusControllers: SessionFocusController[] = [];
 const statusLines: StatusLineComponent<AgentSession>[] = [];
 const outputPreviews: CompactToolOutputPreview[] = [];
+const activityDocks: CompactThinkingPreview[] = [];
 let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 
 function focusFixture() {
@@ -168,6 +169,14 @@ function focusFixture() {
 	const statusLine = new StatusLineComponent<AgentSession>(main.session, statusLineHost);
 	statusLines.push(statusLine);
 	const ctx = createInteractiveModeContext({ session: main.session, statusLine });
+	const output = new CompactToolOutputPreview(ctx);
+	const dock = new CompactThinkingPreview(ctx, undefined, width => output.compactActivity(width));
+	outputPreviews.push(output);
+	activityDocks.push(dock);
+	ctx.ui.scheduleAfter = (delay, callback) => {
+		const timer = setTimeout(callback, delay);
+		return { cancel: () => clearTimeout(timer) };
+	};
 	ctx.ensureLoadingAnimation = () => {
 		if (ctx.loadingAnimation) return;
 		const loader = new Loader(
@@ -181,6 +190,7 @@ function focusFixture() {
 	ctx.clearTransientSessionUi = () => {
 		ctx.loadingAnimation?.stop();
 		ctx.loadingAnimation = undefined;
+		dock.clear();
 	};
 	ctx.hideToolActivity = true;
 	ctx.chatContainer.setToolActivityVisible(false);
@@ -195,9 +205,6 @@ function focusFixture() {
 		get: () => focus.target ?? ctx.session,
 	});
 	focusControllers.push(focus);
-	const dock = new CompactThinkingPreview(ctx);
-	const output = new CompactToolOutputPreview(ctx);
-	outputPreviews.push(output);
 	Object.assign(ctx, { compactThinkingPreview: dock, compactToolOutputPreview: output });
 	return {
 		ctx,
@@ -227,12 +234,14 @@ function focusFixture() {
 			};
 			const ansi = output.render(width).map(row => Bun.stripANSI(row).trimEnd());
 			const native = nativeRows(output.describe(cx)).map(row => Bun.stripANSI(row).trimEnd());
+			// Content assertions exclude the shared transcript gutter, not the tool's own indentation.
+			const content = (line: string) => line.replace(/^ /, "");
 			return {
 				ansi,
-				head: ansi[0] ?? "",
-				body: ansi.slice(1),
-				nativeHead: native[0] ?? "",
-				nativeBody: native.slice(1),
+				head: content(ansi[0] ?? ""),
+				body: ansi.slice(1).map(content),
+				nativeHead: content(native[0] ?? ""),
+				nativeBody: native.slice(1).map(content),
 			};
 		},
 		register(id: string, live: { session: typeof main.session }) {
@@ -273,6 +282,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+	for (const dock of activityDocks.splice(0)) dock.clear();
 	for (const output of outputPreviews.splice(0)) output.clear();
 	for (const controller of focusControllers.splice(0)) controller.dispose();
 	for (const controller of eventControllers.splice(0)) controller.dispose();
@@ -294,8 +304,16 @@ describe("compact action dock", () => {
 		feature: () => true,
 	});
 	const plain = (rows: readonly string[]) => rows.map(row => Bun.stripANSI(row));
+	const shimmerWords = (node: NativeNode): string[] => [
+		...(node.k === "shimmer" ? [node.p?.spans?.map(span => span.t).join("") ?? ""] : []),
+		...(node.c ?? []).flatMap(child => ("k" in child ? shimmerWords(child) : [])),
+	];
+	const spanStyles = (node: NativeNode): [string, string | undefined][] => [
+		...(node.k === "text" ? (node.p?.spans ?? []).map(span => [span.t, span.s] as [string, string | undefined]) : []),
+		...(node.c ?? []).flatMap(child => ("k" in child ? spanStyles(child) : [])),
+	];
 
-	it("lays out a fixed eight-column action area, two spaces and a gray detail that never shifts", async () => {
+	it("keeps file context secondary and settles the whole row without moving the detail", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -304,14 +322,23 @@ describe("compact action dock", () => {
 			type: "tool_execution_start",
 			toolCallId: "a",
 			toolName: "read",
-			args: { path: "src/config.ts", i: "Reading raw preset table" },
-			intent: "Reading raw preset table",
+			args: { path: "workspace/src/config.ts", i: "Checking presets" },
+			intent: "Checking presets",
 		});
 		const running = plain(h.rows());
 		expect(running[0]).toBe("");
-		expect(running[1]).toBe(" 正在读取  src/config.ts · Reading raw preset table");
+		expect(running[1]).toBe(" 正在读取  workspace/src/config.ts · Checking presets");
 		expect(running[2]).toBe("");
 		expect(Bun.stringWidth("正在读取")).toBe(8);
+		expect(h.rows()[1]).toContain(
+			theme.fg("dim", "workspace/") + theme.fg("text", "src/config.ts") + theme.fg("dim", " · Checking presets"),
+		);
+		expect(spanStyles(h.dock.describe(cx()))).toEqual([
+			["正在读取", "muted"],
+			["workspace/", "dim"],
+			["src/config.ts", "text"],
+			[" · Checking presets", "dim"],
+		]);
 		await live.emit({
 			type: "tool_execution_end",
 			toolCallId: "a",
@@ -320,9 +347,15 @@ describe("compact action dock", () => {
 			isError: false,
 		});
 		const done = plain(h.rows());
-		expect(done[1]).toBe(" 读取完成  src/config.ts · Reading raw preset table");
+		expect(done[1]).toBe(" 读取完成  workspace/src/config.ts · Checking presets");
 		// The detail origin (action area + two spaces) is identical across the state change.
 		expect(done[1]!.indexOf("src/config.ts")).toBe(running[1]!.indexOf("src/config.ts"));
+		expect(h.rows()[1]).toContain(theme.fg("dim", "读取完成"));
+		expect(h.rows()[1]).toContain(theme.fg("dim", "workspace/src/config.ts · Checking presets"));
+		expect(spanStyles(h.dock.describe(cx()))).toEqual([
+			["读取完成", "dim"],
+			["workspace/src/config.ts · Checking presets", "dim"],
+		]);
 		for (const rows of [h.rows(), nativeRows(h.dock.describe(cx()))]) {
 			expect(rows).toHaveLength(3);
 			expect(rows[2]).toBe("");
@@ -392,6 +425,10 @@ describe("compact action dock", () => {
 		expect(row).toContain("false");
 		expect(row).not.toContain("boom");
 		expect(h.rows()[1]).toContain(theme.getFgAnsi("error"));
+		expect(spanStyles(h.dock.describe(cx()))).toEqual([
+			["执行失败", "error"],
+			["false", "dim"],
+		]);
 		// A fresh call is a separate record; while it runs, the failed action stays above as the latest ended.
 		await live.emit({
 			type: "tool_execution_start",
@@ -571,14 +608,17 @@ describe("compact action dock", () => {
 			expect(rows[0]).toContain("正在思考");
 			expect(rows[1]).toContain("Waiting for a job");
 			expect(rows.join("")).not.toContain("正在执行");
+			setSystemTime(Date.now() + 1500);
 			expect(dock.describe(cx()).c?.[1]).toEqual(wait.describe(cx()));
+			expect(shimmerWords(dock.describe(cx()))).toEqual(shimmerWords(wait.describe(cx())));
 		} finally {
 			dock.clear();
 		}
 	});
 
-	it("animates only the running action word, stops it on end, and keeps the detail static", async () => {
+	it("wakes without an event at the quiet deadline and animates only one label", async () => {
 		const h = focusFixture();
+		setSystemTime(24_000);
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
@@ -589,21 +629,31 @@ describe("compact action dock", () => {
 			toolName: "bash",
 			args: { command: "sleep 1" },
 		});
-		const native = h.dock.describe(cx());
-		expect(hasNativeKind(native, "shimmer")).toBe(true);
-		// The shimmer node carries only the four-character action word, not the detail.
-		const shimmerTexts: string[] = [];
-		const visit = (node: NativeNode) => {
-			if (node.k === "shimmer") shimmerTexts.push(node.p?.spans?.map(s => s.t).join("") ?? "");
-			for (const child of node.c ?? []) if ("k" in child) visit(child);
-		};
-		visit(native);
-		expect(shimmerTexts).toEqual(["正在执行"]);
-		setSystemTime(500);
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "b",
+			toolName: "read",
+			args: { path: "other.ts" },
+		});
+		const repaint = vi.fn();
+		h.ctx.ui.requestComponentRender = repaint;
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
+		repaint.mockClear();
+		vi.advanceTimersByTime(1499);
+		expect(repaint).not.toHaveBeenCalledWith(h.dock);
+		vi.advanceTimersByTime(1);
+		expect(repaint).toHaveBeenCalledWith(h.dock);
+		setSystemTime(25_500);
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["正在执行"]);
+		expect(shimmerWords(h.dock.describe({ ...cx(), reduceMotion: true }))).toEqual([]);
+		expect(shimmerWords(h.dock.describe({ ...cx(), supports: () => false }))).toEqual([]);
 		const first = h.rows();
-		setSystemTime(1000);
-		expect(h.rows()).not.toEqual(first);
-		expect(plain(h.rows())).toEqual(plain(first));
+		setSystemTime(26_000);
+		const next = h.rows();
+		expect(next[0]).toBe(first[0]);
+		expect(next[1]).not.toBe(first[1]);
+		expect(next[1]).toContain(theme.fg("dim", "sleep 1"));
+		expect(plain(next)).toEqual(plain(first));
 		await live.emit({
 			type: "tool_execution_end",
 			toolCallId: "a",
@@ -611,14 +661,120 @@ describe("compact action dock", () => {
 			result: { content: [] },
 			isError: false,
 		});
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["正在读取"]);
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "b",
+			toolName: "read",
+			result: { content: [] },
+			isError: false,
+		});
 		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
 		const stopped = h.rows();
-		setSystemTime(1500);
+		setSystemTime(26_500);
 		expect(h.rows()).toEqual(stopped);
+	});
+
+	it("keeps both labels static while readable thinking changes, but ignores hidden or repeated text", async () => {
+		const h = focusFixture();
+		setSystemTime(10_000);
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "a.ts" } });
+		const message = thinkingMessage("first line");
+		await live.emit(update(message, "thinking_delta"));
+		expect(spanStyles(h.dock.describe(cx()))).toContainEqual(["first line", "text"]);
+		expect(h.rows().join("")).toContain(theme.fg("text", "first line"));
+
+		setSystemTime(11_200);
+		message.content = [{ type: "thinking", thinking: "next line" }];
+		await live.emit(update(message, "thinking_delta"));
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
+		const staticRows = h.rows();
+		setSystemTime(12_400);
+		expect(h.rows()).toEqual(staticRows);
+
+		message.content = [{ type: "thinking", thinking: "earlier line\nnext line" }];
+		await live.emit(update(message, "thinking_delta"));
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
+		setSystemTime(12_700);
+		const quiet = shimmerWords(h.dock.describe(cx()));
+		expect(quiet).toHaveLength(1);
+		expect(shimmerWords(h.dock.describe(cx(15)))).toEqual(quiet);
+	});
+
+	it("suppresses shimmer only for actual progress from the same displayed Bash call", async () => {
+		const h = focusFixture();
+		setSystemTime(10_000);
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({ type: "tool_execution_start", toolCallId: "bash", toolName: "bash", args: { command: "pwd" } });
+		await live.emit({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "a.ts" } });
+		let callId = "bash";
+		let outputChangedAt = 11_400;
+		const dock = new CompactThinkingPreview(h.ctx, undefined, width => ({
+			callId,
+			commandVisible: true,
+			outputChangedAt: width >= 60 ? outputChangedAt : undefined,
+		}));
+		try {
+			setSystemTime(11_900);
+			expect(shimmerWords(dock.describe(cx()))).toEqual([]);
+			expect(shimmerWords(dock.describe(cx(59)))).toEqual(["正在执行"]);
+			callId = "other";
+			expect(shimmerWords(dock.describe(cx()))).toEqual(["正在执行"]);
+			callId = "bash";
+			setSystemTime(12_900);
+			expect(shimmerWords(dock.describe(cx()))).toEqual(["正在执行"]);
+			outputChangedAt = 12_900;
+			expect(shimmerWords(dock.describe(cx()))).toEqual([]);
+			const before = dock.render(60);
+			setSystemTime(13_200);
+			expect(dock.render(60)).toEqual(before);
+			expect(nativeRows(dock.describe(cx()))).toEqual(plain(dock.render(60)));
+		} finally {
+			dock.clear();
+		}
+	});
+
+	it("cancels a scheduled native wake when hidden by resize or cleared by focus", async () => {
+		const h = focusFixture();
+		setSystemTime(10_000);
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "a.ts" } });
+		const repaint = vi.fn();
+		h.ctx.ui.requestComponentRender = repaint;
+		const scheduleAfter = h.ctx.ui.scheduleAfter.bind(h.ctx.ui);
+		const cancel = vi.fn();
+		h.ctx.ui.scheduleAfter = (delay, callback) => {
+			const timer = scheduleAfter(delay, callback);
+			return {
+				cancel: () => {
+					cancel();
+					timer.cancel();
+				},
+			};
+		};
+		h.dock.describe(cx());
+		h.dock.describe(cx(5));
+		expect(cancel).toHaveBeenCalledTimes(1);
+		vi.advanceTimersByTime(500);
+		h.dock.describe(cx());
+		await h.focus.focusAgent(MAIN_AGENT_ID);
+		expect(cancel).toHaveBeenCalledTimes(2);
+		repaint.mockClear();
+		vi.advanceTimersByTime(1000);
+		expect(repaint).not.toHaveBeenCalledWith(h.dock);
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
 	});
 
 	it("honors disabled shimmer with static readable state words", async () => {
 		const h = focusFixture();
+		setSystemTime(24_000);
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
@@ -630,7 +786,7 @@ describe("compact action dock", () => {
 			args: { path: "a.ts" },
 		});
 		const first = h.rows();
-		setSystemTime(500);
+		setSystemTime(25_500);
 		expect(h.rows()).toEqual(first);
 		expect(plain(first)[1]).toBe(" 正在读取  a.ts");
 		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
@@ -686,6 +842,10 @@ describe("compact action dock", () => {
 			expect(rows.join("")).not.toContain("INTENT");
 			expect(rows.every(row => Bun.stringWidth(row) <= 40)).toBe(true);
 		}
+		const styles = spanStyles(h.dock.describe(cx(40)));
+		expect(styles).toContainEqual(["frontend/config.ts", "text"]);
+		expect(styles).toContainEqual(["backend/config.ts", "text"]);
+		expect(styles.filter(([value, tone]) => value.endsWith("…") && tone === "dim")).toHaveLength(2);
 	});
 
 	it("uses Bash intent only while the same call's command is visible and never hides a command without intent", async () => {
@@ -694,7 +854,9 @@ describe("compact action dock", () => {
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
 		let previewId: string | undefined = "with-intent";
-		const dock = new CompactThinkingPreview(h.ctx, undefined, width => (width >= 50 ? previewId : undefined));
+		const dock = new CompactThinkingPreview(h.ctx, undefined, width =>
+			width >= 50 && previewId ? { callId: previewId, commandVisible: true } : undefined,
+		);
 		try {
 			await live.emit({
 				type: "tool_execution_start",
@@ -1325,9 +1487,9 @@ describe("compact latest live Output consumers", () => {
 		h.register("AlignedOutput", live);
 		await h.focus.focusAgent("AlignedOutput");
 		const view = h.previewView();
-		expect(view.ansi).toEqual(["运行中 · bash · echo aligned", "根节点", "  child 42"]);
-		expect(view.nativeHead).toBe(view.head);
-		expect(view.nativeBody).toEqual(view.body);
+		const rows = [" 运行中 · bash · echo aligned", " 根节点", "   child 42"];
+		expect(view.ansi).toEqual(rows);
+		expect(h.outputRows()[1]).toEqual(rows);
 	});
 
 	it("does not open or replace meaningful output for symbol-only frames", async () => {
@@ -1623,6 +1785,9 @@ describe("compact latest live Output consumers", () => {
 		expect(failedView.head).toContain("失败 · bash");
 		expect(failedView.body).toEqual(["Error: boom at step 2", "line five", "line six", "line seven", "line eight"]);
 		expect(failedView.nativeBody).toEqual(failedView.body);
+		const [, diagnostic, context] = h.output.render(120);
+		expect(diagnostic).toContain(theme.bold(theme.fg("error", "Error: boom at step 2")));
+		expect(context).toContain(theme.fg("toolOutput", "line five"));
 		calls = [failed, empty];
 		const emptyView = h.previewView();
 		expect(emptyView.head).toContain("已完成 · grep");
@@ -1644,18 +1809,18 @@ describe("compact latest live Output consumers", () => {
 		expect(view.head).toContain("styles.css");
 		expect(Bun.stringWidth(view.ansi[0]!)).toBeLessThanOrEqual(60);
 		expect(view.nativeHead).toContain("运行中 · bash · rg -n");
-		expect(h.output.visibleCommandCallId(60)).toBe("long");
+		expect(h.output.compactActivity(60)).toMatchObject({ callId: "long", commandVisible: true });
 		const narrow = h.previewView(17);
 		expect(narrow.head).toBe("运行中 · bash");
 		expect(narrow.nativeHead).toBe(narrow.head);
-		expect(h.output.visibleCommandCallId(17)).toBeUndefined();
+		expect(h.output.compactActivity(17)?.commandVisible).toBe(false);
 		const headerOnly = new CompactToolOutputPreview(h.ctx, () => 1);
 		outputPreviews.push(headerOnly);
 		expect(headerOnly.render(60)).toHaveLength(1);
-		expect(headerOnly.visibleCommandCallId(60)).toBe("long");
+		expect(headerOnly.compactActivity(60)).toMatchObject({ commandVisible: true, outputChangedAt: undefined });
 		const noSpace = new CompactToolOutputPreview(h.ctx, () => 0);
 		outputPreviews.push(noSpace);
-		expect(noSpace.visibleCommandCallId(60)).toBeUndefined();
+		expect(noSpace.compactActivity(60)).toBeUndefined();
 	});
 
 	it("does not revive a finished preview when the next turn starts", async () => {

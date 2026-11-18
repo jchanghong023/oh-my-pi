@@ -12,7 +12,7 @@ import type { ThemeColor } from "@oh-my-pi/pi-tui/theme/theme";
 import { isGroupedHeader, isMatchRow } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
 import { isToolOutputRow, toolOutputSource, toolOutputText } from "@oh-my-pi/pi-tui/tools/output-preview";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
-import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { getPaddingX, padding, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
@@ -36,13 +36,15 @@ function wrapOutputRows(output: string, width: number): string[] {
 	return (width < 3 ? rows.map(row => truncateToWidth(row, width, "")) : rows).filter(isToolOutputRow);
 }
 
+type OutputRows = { lines: readonly string[]; diagnosticCount: number };
+
 function selectOutputRows(
 	output: string,
 	width: number,
 	budget: number,
 	toolName: string,
 	state: PreviewState,
-): string[] {
+): OutputRows {
 	if (state === "failed") {
 		const priority: string[] = [];
 		const tail: string[] = [];
@@ -52,12 +54,12 @@ function selectOutputRows(
 			const line = lines[index]!;
 			if (DIAGNOSTIC_ROW.test(line)) {
 				priority.push(...wrapOutputRows(line, width).slice(0, budget - priority.length));
-				if (priority.length === budget) return priority;
+				if (priority.length === budget) return { lines: priority, diagnosticCount: priority.length };
 			} else if (tail.length < budget) {
 				tail.unshift(...wrapOutputRows(line, width).slice(tail.length - budget));
 			}
 		}
-		return [...priority, ...tail.slice(priority.length - budget)];
+		return { lines: [...priority, ...tail.slice(priority.length - budget)], diagnosticCount: priority.length };
 	}
 	const rows = wrapOutputRows(output, width);
 	if (state === "completed" && (toolName === "grep" || toolName === "glob")) {
@@ -66,9 +68,10 @@ function selectOutputRows(
 				? (row: string) => isMatchRow(row)
 				: (row: string) => row.trim() !== "" && !isGroupedHeader(row);
 		const hits = rows.filter(isHit);
-		if (hits.length > 0) return [...hits, ...rows.filter(row => !isHit(row))].slice(0, budget);
+		if (hits.length > 0)
+			return { lines: [...hits, ...rows.filter(row => !isHit(row))].slice(0, budget), diagnosticCount: 0 };
 	}
-	return rows.slice(-budget);
+	return { lines: rows.slice(-budget), diagnosticCount: 0 };
 }
 
 /** Preview lifecycle state derived from the real terminal facts. */
@@ -97,8 +100,16 @@ const PREVIEW_BLOCK_STATE: Record<PreviewState, State> = {
 	cancelled: "pending",
 };
 
+export interface CompactPreviewActivity {
+	callId: string;
+	commandVisible: boolean;
+	outputChangedAt?: number;
+}
+
 type PreviewHeader = {
 	height: number;
+	contentWidth: number;
+	left: string;
 	state: PreviewState;
 	spans: TspSpan[];
 	callId: string;
@@ -114,6 +125,7 @@ export class CompactToolOutputPreview implements Component {
 	#session?: InteractiveModeContext["viewSession"];
 	#sessionId?: string;
 	#outputText = new WeakMap<ToolRenderResult<unknown>, string>();
+	#recentOutput?: { callId: string; text: string; changedAt: number };
 
 	constructor(
 		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "ui" | "statusLine">,
@@ -126,6 +138,7 @@ export class CompactToolOutputPreview implements Component {
 		this.#deadline = undefined;
 		this.#session = undefined;
 		this.#sessionId = undefined;
+		this.#recentOutput = undefined;
 	}
 
 	/** Synchronize even without a visible paint; close only after tool completion and activity stop. */
@@ -134,8 +147,17 @@ export class CompactToolOutputPreview implements Component {
 			event.type === "tool_execution_start" ||
 			event.type === "tool_execution_update" ||
 			event.type === "tool_execution_end"
-		)
-			this.restore();
+		) {
+			const selected = this.#source();
+			if (!selected || selected.call.terminalAt !== undefined) {
+				this.#recentOutput = undefined;
+				return;
+			}
+			if (selected.call.toolCallId !== event.toolCallId) return;
+			if (this.#recentOutput?.callId !== event.toolCallId || this.#recentOutput.text !== selected.output) {
+				this.#recentOutput = { callId: event.toolCallId, text: selected.output, changedAt: Date.now() };
+			}
+		}
 	}
 
 	restore(): void {
@@ -193,9 +215,17 @@ export class CompactToolOutputPreview implements Component {
 	}
 
 	/** Header-only query: dock paints never wrap the Output body. */
-	visibleCommandCallId(width: number): string | undefined {
+	compactActivity(width: number): CompactPreviewActivity | undefined {
 		const header = this.#header(width);
-		return header?.commandVisible ? header.callId : undefined;
+		if (!header) return undefined;
+		return {
+			callId: header.callId,
+			commandVisible: header.commandVisible,
+			outputChangedAt:
+				header.height > 1 && this.#recentOutput?.callId === header.callId
+					? this.#recentOutput.changedAt
+					: undefined,
+		};
 	}
 
 	#header(width: number): PreviewHeader | undefined {
@@ -203,6 +233,8 @@ export class CompactToolOutputPreview implements Component {
 		if (!displayPreferences.compactToolActivity || !selected || width < 1) return undefined;
 		const height = Math.max(0, Math.min(6, Math.floor(this.availableRows())));
 		if (height === 0) return undefined;
+		const inset = Math.min(getPaddingX(1), width - 1);
+		const contentWidth = width - inset;
 		const { call, output } = selected;
 		const info = compactToolPreviewInfo(call.toolName, call.args, call.intent, call.result);
 		const { name: toolName, details } = toolOutputSource(call.toolName, call.result);
@@ -225,8 +257,8 @@ export class CompactToolOutputPreview implements Component {
 		const wordWidth = visibleWidth(word);
 		const separator = " · ";
 		const separatorWidth = visibleWidth(separator);
-		const gap = width >= wordWidth + separatorWidth + nameWidth ? separator : " ";
-		const identityRoom = width - wordWidth - visibleWidth(gap);
+		const gap = contentWidth >= wordWidth + separatorWidth + nameWidth ? separator : " ";
+		const identityRoom = contentWidth - wordWidth - visibleWidth(gap);
 		const jobRoom = identityRoom - nameWidth - separatorWidth;
 		const identityText =
 			identityRoom < nameWidth
@@ -237,7 +269,7 @@ export class CompactToolOutputPreview implements Component {
 		// At widths where status and source cannot both be legible, retain the source.
 		const spans = identityText
 			? [span(word, `${PREVIEW_STATE_COLOR[state]} strong`), span(gap), span(identityText, "toolTitle strong")]
-			: [span(truncateToWidth(name, width, ""), "toolTitle strong")];
+			: [span(truncateToWidth(name, contentWidth, ""), "toolTitle strong")];
 		const command = info.command ? singleLine(info.command) : "";
 		const target = command || singleLine(info.detail);
 		const targetRoom = identityText ? identityRoom - visibleWidth(identityText) - separatorWidth : 0;
@@ -246,6 +278,8 @@ export class CompactToolOutputPreview implements Component {
 		if (targetVisible) spans.push(span(separator), span(targetText, "toolOutput"));
 		return {
 			height,
+			contentWidth,
+			left: padding(inset),
 			state,
 			spans,
 			callId: call.toolCallId,
@@ -255,20 +289,23 @@ export class CompactToolOutputPreview implements Component {
 		};
 	}
 
-	#body(header: PreviewHeader, width: number): readonly string[] {
+	#body(header: PreviewHeader): OutputRows {
 		return header.height > 1
-			? selectOutputRows(header.output, width, header.height - 1, header.toolName, header.state)
-			: [];
+			? selectOutputRows(header.output, header.contentWidth, header.height - 1, header.toolName, header.state)
+			: { lines: [], diagnosticCount: 0 };
 	}
 
 	render(width: number): readonly string[] {
 		const header = this.#header(width);
 		if (!header) return [];
 		const bg = getStateBgColor(PREVIEW_BLOCK_STATE[header.state]);
-		const paint = (row: string) => padToWidth(row, width, value => theme.bgFill(bg, value));
+		const paint = (row: string) => padToWidth(header.left + row, width, value => theme.bgFill(bg, value));
+		const { lines, diagnosticCount } = this.#body(header);
 		return [
 			paint(spansLine(header.spans)),
-			...this.#body(header, width).map(row => paint(theme.fg("toolOutput", row))),
+			...lines.map((line, i) =>
+				paint(i < diagnosticCount ? theme.bold(theme.fg("error", line)) : theme.fg("toolOutput", line)),
+			),
 		];
 	}
 
@@ -276,9 +313,15 @@ export class CompactToolOutputPreview implements Component {
 		const header = this.#header(cx.cols);
 		if (!header) return { k: "rows", p: { cols: cx.cols, lines: [] } };
 		const tone = backgroundChrome(getStateBgColor(PREVIEW_BLOCK_STATE[header.state])).tone;
+		const { lines, diagnosticCount } = this.#body(header);
 		return col([
-			text(header.spans, { wrap: "none", tone }),
-			...this.#body(header, cx.cols).map(row => text([span(row, "toolOutput")], { wrap: "none", tone })),
+			text([span(header.left), ...header.spans], { wrap: "none", tone }),
+			...lines.map((line, i) =>
+				text([span(header.left), span(line, i < diagnosticCount ? "error strong" : "toolOutput")], {
+					wrap: "none",
+					tone,
+				}),
+			),
 		]);
 	}
 }

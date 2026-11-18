@@ -1381,7 +1381,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly compactThinkingPreview = new CompactThinkingPreview(
 		this,
 		() => (this.#eventController.showingAsyncWait ? this.loadingAnimation : undefined),
-		width => this.compactToolOutputPreview.visibleCommandCallId(width),
+		width => this.compactToolOutputPreview.compactActivity(width),
 	);
 	/** Read-only Output sits above the activity dock; the input and its trailing chrome win space. */
 	readonly compactToolOutputPreview: CompactToolOutputPreview = new CompactToolOutputPreview(this, () =>
@@ -8652,6 +8652,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#micCursor?.dispose();
 		this.#micCursor = undefined;
+		this.compactThinkingPreview.clear();
+		this.compactToolOutputPreview.clear();
 		// Stop the shared tool-spinner ticker: a live block missed by per-component
 		// stopAnimation would otherwise keep the shared interval pinning the process.
 		stopSharedSpinnerTicker();

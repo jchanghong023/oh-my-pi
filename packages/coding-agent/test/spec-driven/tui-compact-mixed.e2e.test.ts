@@ -1111,6 +1111,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 	}));
 	const startBash = Promise.withResolvers<void>();
 	const print = Promise.withResolvers<void>();
+	const quiet = Promise.withResolvers<void>();
 	const exit = Promise.withResolvers<void>();
 	const startThinking = Promise.withResolvers<void>();
 	const stream = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
@@ -1127,8 +1128,8 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				choices: [{ index: 0, delta, finish_reason: finish }],
 			})}\n\n`,
 		);
-	// Hold real command stdout and exit independently. PTY observations, not sleeps,
-	// decide when the script can print and return.
+	// Drive one real Bash call through silence, sustained progress and quiet
+	// without tying either transition or process exit to a fixed delay.
 	const gate = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -1136,6 +1137,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 		async fetch(request) {
 			const pathname = new URL(request.url).pathname;
 			if (pathname === "/print") await print.promise;
+			else if (pathname === "/quiet") await quiet.promise;
 			else if (pathname === "/exit") await exit.promise;
 			else return new Response(null, { status: 404 });
 			return new Response(null, { status: 204 });
@@ -1145,17 +1147,25 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 		await withTui(
 			{
 				screenDiagnostics: true,
+				tuiTestBackend: "alacritty",
 				configuration: {
-					display: { mode: "compact" },
+					display: { mode: "compact", shimmer: "classic" },
 					hideThinkingBlock: false,
 					read: { toolResultPreview: true },
+					tui: { motion: "full", tight: false },
 				},
 				setup: async (cwd, _agentDir, env) => {
 					env.PI_TUI_NATIVE = "0";
+					env.PI_MOTION = "full";
 					await Bun.write(
 						path.join(cwd, "compact-output.ts"),
 						`const base = ${JSON.stringify(gate.url.href)};\n` +
 							`await fetch(new URL("print", base));\n` +
+							`const quiet = fetch(new URL("quiet", base)).then(() => true);\n` +
+							`for (let tick = 0; ; tick++) {\n` +
+							`  console.log("ACTIVITY_TICK_" + tick);\n` +
+							`  if (await Promise.race([quiet, Bun.sleep(150).then(() => false)])) break;\n` +
+							`}\n` +
 							`console.log(${JSON.stringify(output.join("\n"))});\n` +
 							`await fetch(new URL("exit", base));\n`,
 					);
@@ -1196,16 +1206,53 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				const actionRows = (text: string, label: string) =>
 					text.split("\n").filter(line => line.trimStart().startsWith(label));
 				const hasSource = (line: string, source: (typeof sources)[number]) =>
-					line.includes("shared.txt") && line.includes(source.parent);
+					line.includes(`${source.parent}/shared.txt`);
 				const observe = (label: string, matches: (text: string) => boolean) =>
 					eventually(
 						() => screen.checkpoint(label),
 						frame => nativeDraftMatches(frame.screen, draft, frame.cursor) && matches(frame.screen),
 						30_000,
 					);
+				type Cell = { x: number; y: number; char: string; fg: string; bold: boolean; dim: boolean };
+				const readRuns = async (text: string, ...markers: string[]) => {
+					const lines = text.split("\n");
+					const positions = markers.map(marker => {
+						const y = lines.findLastIndex(line => line.includes(marker));
+						expect(y, `Missing PTY text ${marker}`).toBeGreaterThanOrEqual(0);
+						const line = lines[y]!;
+						return { marker, y, x: Bun.stringWidth(line.slice(0, line.indexOf(marker))) };
+					});
+					const left = Math.min(...positions.map(({ x }) => x));
+					const top = Math.min(...positions.map(({ y }) => y));
+					const right = Math.max(...positions.map(({ x, marker }) => x + Bun.stringWidth(marker)));
+					const bottom = Math.max(...positions.map(({ y }) => y));
+					const raw = await tui("cells", `${left}`, `${top}`, `${right - left}`, `${bottom - top + 1}`, "--json");
+					const { data } = JSON.parse(raw) as { data: { cells: Cell[] } };
+					return positions.map(({ marker, x, y }) => {
+						const cells = data.cells.filter(cell => cell.y === y);
+						let column = x;
+						return Array.from(marker, char => {
+							// Skip wide-glyph continuation cells rather than using UTF-16 string indexes.
+							const cell = cells.find(candidate => candidate.x === column);
+							expect(cell?.char, `PTY cell (${column}, ${y}) in ${marker}`).toBe(char);
+							column += Bun.stringWidth(char);
+							return cell!;
+						});
+					});
+				};
+				const style = ({ fg, bold, dim }: Cell) => JSON.stringify([fg, bold, dim]);
+				const labelStyles = (cells: Cell[]) => cells.map(style).join("/");
+				const bashRuns = async (text: string, marker: string) => {
+					const [header, log, label, intent] = await readRuns(text, "运行中", marker, "正在执行", bash.intent);
+					expect(header![0]!.x).toBe(1);
+					expect(log![0]!.x).toBe(header![0]!.x);
+					expect(label![0]!.x).toBe(header![0]!.x);
+					expect(intent![0]!.x).toBe(label![0]!.x + Bun.stringWidth("正在执行") + 2);
+					return { label: label!, intent: intent! };
+				};
 				await tui("submit", prompt);
 				await tui("type", draft);
-				await observe("distinct file operations show path before intent", text => {
+				const fullFiles = await observe("distinct file operations show path before intent", text => {
 					const rows = actionRows(text, "写入完成");
 					return sources.every(source =>
 						rows.some(
@@ -1213,6 +1260,17 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 						),
 					);
 				});
+				const [settledLabel, settledTarget, settledIntent] = await readRuns(
+					fullFiles.screen,
+					"写入完成",
+					"south/shared.txt",
+					sources[1]!.intent,
+				);
+				expect(settledTarget![0]!.y).toBe(settledIntent![0]!.y);
+				expect(settledTarget![0]!.x).toBeLessThan(settledIntent![0]!.x);
+				const settledStyle = style(settledTarget![0]!);
+				expect(style(settledLabel![0]!)).toBe(settledStyle);
+				expect(style(settledIntent![0]!)).toBe(settledStyle);
 				await tui("resize", String(narrow), String(height));
 				const files = await observe("equal basenames retain distinct parents at 48 columns", text => {
 					const rows = actionRows(text, "写入完成");
@@ -1222,6 +1280,10 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 					);
 				});
 				expectVisibleDraft(files, draft, narrow, height);
+				const [north, south] = await readRuns(files.screen, "north/shared.txt", "south/shared.txt");
+				expect(north![0]!.y).not.toBe(south![0]!.y);
+				expect(style(north![0]!)).toBe(settledStyle);
+				expect(style(south![0]!)).toBe(settledStyle);
 				await tui("resize", String(wide), String(height));
 				startBash.resolve();
 				const silent = await observe(
@@ -1231,20 +1293,72 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				expectVisibleDraft(silent, draft, wide, height);
 
 				print.resolve();
-				const streaming = await observe(
-					"running command header and tail",
-					text =>
-						text.split("\n").some(line => line.includes("运行中") && line.includes(command)) &&
-						text.includes(output.at(-1)!),
+				const tickPrefix = "ACTIVITY_TICK_";
+				const lastTick = (text: string) => Number(Array.from(text.matchAll(/ACTIVITY_TICK_(\d+)/gu)).at(-1)?.[1]);
+				const running = (text: string) =>
+					text.split("\n").some(line => line.trimStart().startsWith("运行中") && line.includes(command)) &&
+					actionRows(text, "正在执行").some(line => line.includes(bash.intent));
+				const sampleProgress = () =>
+					observe("Bash repeatedly updates its visible tail", text => running(text) && lastTick(text) >= 6);
+				const firstProgress = await sampleProgress();
+				const initial = await bashRuns(firstProgress.screen, tickPrefix);
+				expect(new Set(initial.label.map(style)).size).toBe(1);
+				const staticLabel = labelStyles(initial.label);
+				const staticIntent = labelStyles(initial.intent);
+				const seenTicks = new Set([lastTick(firstProgress.screen)]);
+				const started = performance.now();
+				// Sample over more than one quiet threshold: a timer keyed only to call start
+				// must not animate while this same Bash keeps changing readable output.
+				await eventually(
+					async () => {
+						const frame = await sampleProgress();
+						const rendered = await bashRuns(frame.screen, tickPrefix);
+						expect(labelStyles(rendered.label)).toBe(staticLabel);
+						expect(labelStyles(rendered.intent)).toBe(staticIntent);
+						expectVisibleDraft(frame, draft, wide, height);
+						seenTicks.add(lastTick(frame.screen));
+						return seenTicks.size;
+					},
+					count => count >= 3 && performance.now() - started > 2_000,
+					12_000,
 				);
-				expect(actionRows(streaming.screen, "正在执行")).toHaveLength(1);
-				expect(actionRows(streaming.screen, "正在执行")[0]).toContain(bash.intent);
-				expect(streaming.screen.split(command)).toHaveLength(2);
-				for (const marker of output.slice(-5)) expect(streaming.screen).toContain(marker);
-				expect(streaming.screen).not.toContain(output.at(-6)!);
-				expectVisibleDraft(streaming, draft, wide, height);
 
+				quiet.resolve();
+				const finalTail = output.at(-1)!;
+				const observeTail = (label: string) => observe(label, text => running(text) && text.includes(finalTail));
+				const tail = await observeTail("running Bash shows its bounded final tail");
+				expect(actionRows(tail.screen, "正在执行")).toHaveLength(1);
+				expect(tail.screen.split(command)).toHaveLength(2);
+				for (const marker of output.slice(-5)) expect(tail.screen).toContain(marker);
+				expect(tail.screen).not.toContain(output.at(-6)!);
+				await bashRuns(tail.screen, finalTail);
+				expectVisibleDraft(tail, draft, wide, height);
+
+				const sweeps = new Set<string>();
+				await eventually(
+					async () => {
+						const frame = await observeTail("Bash stays running while readable output is quiet");
+						const rendered = await bashRuns(frame.screen, finalTail);
+						expect(rendered.label.every(cell => !cell.bold && !cell.dim)).toBe(true);
+						expect(labelStyles(rendered.intent)).toBe(staticIntent);
+						const label = labelStyles(rendered.label);
+						if (label !== staticLabel) sweeps.add(label);
+						expectVisibleDraft(frame, draft, wide, height);
+						return sweeps.size;
+					},
+					count => count >= 2,
+					10_000,
+				);
 				await tui("resize", String(narrow), String(height));
+				const narrowTail = await observe(
+					"quiet Bash preview stays aligned at 48 columns",
+					text =>
+						text.split("\n").some(line => line.trimStart().startsWith("运行中")) &&
+						actionRows(text, "正在执行").some(line => line.includes(bash.intent)) &&
+						text.includes(finalTail),
+				);
+				await bashRuns(narrowTail.screen, finalTail);
+				expectVisibleDraft(narrowTail, draft, narrow, height);
 				exit.resolve();
 				startThinking.resolve();
 				const active = await stream.promise;
@@ -1270,6 +1384,8 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				);
 				expect(thinking.screen).not.toContain("ACTIVITY_THINK_FIRST");
 				expect(thinking.screen).not.toContain("ACTIVITY_THINK_HEAD");
+				const [thinkingProse] = await readRuns(thinking.screen, "ACTIVITY_THINK_TAIL");
+				expect(thinkingProse!.every(cell => !cell.dim && cell.fg !== settledTarget![0]!.fg)).toBe(true);
 				expectVisibleDraft(thinking, draft, narrow, height);
 
 				active.enqueue(event({ content: "ACTIVITY_HISTORY_DONE" }));
@@ -1302,6 +1418,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 	} finally {
 		startBash.resolve();
 		print.resolve();
+		quiet.resolve();
 		exit.resolve();
 		startThinking.resolve();
 		if (controller && controller.desiredSize !== null) {

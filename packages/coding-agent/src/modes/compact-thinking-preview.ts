@@ -1,6 +1,6 @@
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import type { Component } from "@oh-my-pi/pi-tui";
+import type { Component, RenderTimer } from "@oh-my-pi/pi-tui";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import { registerSpinnerBlock, unregisterSpinnerBlock } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -10,7 +10,7 @@ import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tu
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
-import { theme } from "@oh-my-pi/pi-tui/theme";
+import { theme, type ThemeColor } from "@oh-my-pi/pi-tui/theme";
 import { describeShimmer, type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
@@ -20,13 +20,13 @@ import { getPaddingX, padding, sliceWithWidth, visibleWidth, wrapTextWithAnsi } 
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
+import type { CompactPreviewActivity } from "./compact-tool-output-preview";
 import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-summary";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
 import type { InteractiveModeContext } from "./types";
 
-const EMPTY_ROWS: readonly string[] = ["", ""];
-/** Same sweep style and palette as the previous whole-row dock animation. */
-const ACTION_SHIMMER_PALETTE: ShimmerPalette = { low: "dim", mid: "muted", high: "success", bold: true };
+const ACTION_SHIMMER_PALETTE: ShimmerPalette = { low: "muted", mid: "muted", high: "text" };
+const ACTION_QUIET_MS = 1500;
 /** Four CJK characters occupy eight terminal columns; the detail starts two spaces later. */
 const ACTION_WIDTH = 8;
 const ACTION_GAP = "  ";
@@ -53,6 +53,7 @@ type Call = {
 	embeddedIntent?: string;
 	file?: CompactFileSummary;
 	startedAt?: number;
+	motionStartedAt?: number;
 	endedAt?: number;
 	failed?: boolean;
 };
@@ -66,10 +67,22 @@ type Action = {
 	previewIntent?: string;
 	startedAt?: number;
 };
+type ThinkingPhase = {
+	startedAt: number;
+	endedAt?: number;
+	failed?: boolean;
+	text: string;
+	preview?: { source: string; width: number; proseOnly: boolean; text: string };
+};
+type ActionRow = {
+	word: string;
+	tone: ThemeColor;
+	detail: { text: string; tone: ThemeColor }[];
+};
 type SessionMemory = {
 	calls: Call[];
 	/** Thinking phases keyed by message timestamp and content index. */
-	thinking: Map<string, { startedAt: number; endedAt?: number; failed?: boolean; text: string }>;
+	thinking: Map<string, ThinkingPhase>;
 	/** Arrival order of action ids; the earliest undisplayed runner fills a vacancy. */
 	order: string[];
 	/** Persistent two-slot layout (top, bottom); running actions keep their slot. */
@@ -222,30 +235,34 @@ function thinkingDetail(text: string, proseOnly: boolean, width: number): string
 	return "";
 }
 
-function fileDetail(path: string, file: CompactFileSummary, width: number): string {
+/** Keep the same truncation, with separate runs for path context and its distinguishing tail. */
+function fileDetail(path: string, file: CompactFileSummary, width: number): [string, string, string] {
 	const count = file.countSuffix;
-	const full = path + count;
-	const fullWidth = visibleWidth(full);
+	const fullWidth = visibleWidth(path + count);
+	const basename = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+	const parent = Math.max(path.lastIndexOf("/", basename - 1), path.lastIndexOf("\\", basename - 1));
+	const tail = path.slice(parent + 1);
 	if (fullWidth <= width) {
 		const intent = file.intent && clean(file.intent).trim();
-		return intent && fullWidth + 3 + visibleWidth(intent) <= width ? `${full} · ${intent}` : full;
+		return [
+			path.slice(0, parent + 1),
+			tail,
+			intent && fullWidth + 3 + visibleWidth(intent) <= width ? `${count} · ${intent}` : count,
+		];
 	}
 	// Keep the parent and basename intact when they fit, spending spare cells on the prefix.
 	const pathWidth = visibleWidth(path);
 	const countWidth = visibleWidth(count);
 	const showCount = width - countWidth >= Math.min(pathWidth, 8);
 	const room = showCount ? width - countWidth : width;
-	if (pathWidth <= room) return path + (showCount ? count : "");
-	const basename = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-	const parent = Math.max(path.lastIndexOf("/", basename - 1), path.lastIndexOf("\\", basename - 1));
-	const tail = path.slice(parent + 1);
+	const suffix = showCount ? count : "";
+	if (pathWidth <= room) return [path.slice(0, parent + 1), tail, suffix];
 	const tailWidth = visibleWidth(tail);
 	if (tailWidth < room - 1) {
 		const prefix = sliceWithWidth(path, 0, room - tailWidth - 1, true).text;
-		return `${prefix}…${tail}${showCount ? count : ""}`;
+		return [`${prefix}…`, tail, suffix];
 	}
-	const suffix = sliceWithWidth(path, pathWidth - room + 1, room - 1, true).text;
-	return `…${suffix}${showCount ? count : ""}`;
+	return ["…", sliceWithWidth(path, pathWidth - room + 1, room - 1, true).text, suffix];
 }
 
 /** Composer-only projection of action records and the last displayed content. */
@@ -253,7 +270,8 @@ export class CompactThinkingPreview implements Component {
 	#session?: InteractiveModeContext["viewSession"];
 	#sessionId?: string;
 	#memory?: SessionMemory;
-	#rows: (Action | undefined)[] = [];
+	#shownThinking?: { id: string; source: string; text: string; width: number; proseOnly: boolean; changedAt?: number };
+	#quietWake?: { deadline: number; timer: RenderTimer };
 
 	constructor(
 		private readonly ctx: Pick<
@@ -262,15 +280,16 @@ export class CompactThinkingPreview implements Component {
 		> &
 			Partial<Pick<InteractiveModeContext, "ui">>,
 		private readonly asyncWaitRow?: () => Loader | undefined,
-		private readonly visibleCommandCallId?: (width: number) => string | undefined,
+		private readonly compactActivity?: (width: number) => CompactPreviewActivity | undefined,
 	) {}
 
 	clear(): void {
+		this.#cancelQuietWake();
 		unregisterSpinnerBlock(this);
 		this.#session = undefined;
 		this.#sessionId = undefined;
 		this.#memory = undefined;
-		this.#rows = [];
+		this.#shownThinking = undefined;
 	}
 
 	#syncSession(): void {
@@ -340,7 +359,14 @@ export class CompactThinkingPreview implements Component {
 			if (!name) continue;
 			const args = block ? streamedArgs(block) : (diagnostic?.args ?? marker?.args ?? update?.args);
 			const intent = diagnostic?.intent ?? (typeof marker?.intent === "string" ? marker.intent : undefined);
-			const call: Call = { id: callId, name, detail: "", intent, startedAt };
+			const call: Call = {
+				id: callId,
+				name,
+				detail: "",
+				intent,
+				startedAt,
+				motionStartedAt: startedAt === undefined ? Date.now() : undefined,
+			};
 			updateCall(call, args);
 			if (update) updateCall(call, update.args, update.partialResult);
 			this.#appendCall(call);
@@ -374,6 +400,8 @@ export class CompactThinkingPreview implements Component {
 		phase.endedAt = now;
 		phase.failed = failed;
 		phase.text = "";
+		phase.preview = undefined;
+		if (this.#shownThinking?.id === id) this.#shownThinking = undefined;
 	}
 
 	observe(event: AgentSessionEvent): void {
@@ -447,19 +475,28 @@ export class CompactThinkingPreview implements Component {
 		}
 	}
 
-	/** Reuse the shared ticker for visible running actions or the relocated waiting row. */
+	/** Reuse the shared ANSI ticker only while the dock has an eligible shimmer. */
 	tickSpinner(_frame: number): void {
-		this.ctx.ui?.requestComponentRender(this);
+		if (shimmerEnabled() && displayPreferences.compactToolActivity) this.ctx.ui?.requestComponentRender(this);
+		else unregisterSpinnerBlock(this);
 	}
 
 	render(width: number): readonly string[] {
 		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, width - 1));
-		const rows = this.#renderRows(width, inset, true, waitRow);
-		if (!rows.length) return rows;
+		const { slots, activity } = this.#visibleActions(width, inset, waitRow);
+		const animated = !isNativeRendering()
+			? this.#selectMotion(slots, activity, width - inset, !waitRow && shimmerEnabled())
+			: undefined;
+		if (animated !== undefined && this.ctx.ui) registerSpinnerBlock(this);
+		else unregisterSpinnerBlock(this);
+		if (!displayPreferences.compactToolActivity) return [];
 		const left = padding(inset);
+		const rows = slots.map(action =>
+			action ? left + this.#paintAnsi(this.#buildRow(action, width - inset), action.id === animated) : "",
+		);
 		const waiting = waitRow ? truncateToWidth(waitRow.inlineText(), width) : "";
-		return [rows[0] ? left + rows[0] : "", waiting || (rows[1] ? left + rows[1] : ""), ""];
+		return [rows[0] ?? "", waiting || (rows[1] ?? ""), ""];
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
@@ -467,7 +504,7 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	/** Reconcile the active thinking phase from live state so focus restoration shows it without a fresh event. */
-	#syncLiveThinking(): void {
+	#syncLiveThinking(now: number): void {
 		const memory = this.#memory!;
 		const state = this.ctx.viewSession.agent.state;
 		const stream = state.streamMessage;
@@ -475,7 +512,7 @@ export class CompactThinkingPreview implements Component {
 		if (stream?.role === "assistant" && index !== undefined) {
 			const block = stream.content[index];
 			if (block?.type === "thinking") {
-				const id = this.#startThinking(stream.timestamp, index, Date.now());
+				const id = this.#startThinking(stream.timestamp, index, now);
 				const phase = memory.thinking.get(id);
 				if (phase && phase.endedAt === undefined) phase.text = block.thinking;
 			}
@@ -484,7 +521,7 @@ export class CompactThinkingPreview implements Component {
 
 	/** Build the action records currently eligible for the two slots. */
 	#actions(detailWidth: number): Action[] {
-		this.#syncLiveThinking();
+		this.#syncLiveThinking(Date.now());
 		const memory = this.#memory!;
 		const state = this.ctx.viewSession.agent.state;
 		const hideThinking = this.ctx.effectiveHideThinkingBlock;
@@ -494,9 +531,20 @@ export class CompactThinkingPreview implements Component {
 		for (const [id, phase] of memory.thinking) {
 			if (hideThinking) continue;
 			const running = phase.endedAt === undefined;
-			const detail = running
-				? thinkingDetail(phase.text, proseOnly, detailWidth)
-				: thinkingSeconds(Math.max(0, (phase.endedAt ?? 0) - phase.startedAt));
+			let detail: string;
+			if (running) {
+				let preview = phase.preview;
+				if (preview?.source !== phase.text || preview.width !== detailWidth || preview.proseOnly !== proseOnly) {
+					preview = {
+						source: phase.text,
+						width: detailWidth,
+						proseOnly,
+						text: thinkingDetail(phase.text, proseOnly, detailWidth),
+					};
+					phase.preview = preview;
+				}
+				detail = preview.text;
+			} else detail = thinkingSeconds(Math.max(0, (phase.endedAt ?? 0) - phase.startedAt));
 			const action: Action = {
 				id,
 				category: "thinking",
@@ -522,7 +570,7 @@ export class CompactThinkingPreview implements Component {
 				detail: toolDetail(call, category),
 				file: call.file,
 				previewIntent: category === "exec" && call.command ? clean(call.detail).trim() : undefined,
-				startedAt: call.startedAt,
+				startedAt: call.startedAt ?? call.motionStartedAt,
 			});
 		}
 		// Blank or hidden prose cannot displace an existing tool or completed action.
@@ -584,15 +632,18 @@ export class CompactThinkingPreview implements Component {
 		return [held(0), held(1)];
 	}
 
-	#renderRows(width: number, inset: number, paint: boolean, waitRow: Loader | undefined): readonly string[] {
-		this.#rows = [];
+	#visibleActions(
+		width: number,
+		inset: number,
+		waitRow: Loader | undefined,
+	): { slots: (Action | undefined)[]; activity?: CompactPreviewActivity } {
 		if (!displayPreferences.compactToolActivity) {
 			this.clear();
-			return [];
+			return { slots: [] };
 		}
 		this.#syncSession();
 		const contentWidth = width - inset;
-		if (contentWidth < 1) return EMPTY_ROWS;
+		if (contentWidth < 1) return { slots: [] };
 		const memory = this.#memory!;
 		const slots = this.#select(this.#actions(contentWidth - ACTION_WIDTH - ACTION_GAP.length));
 		const visible = slots.filter((action): action is Action => action !== undefined);
@@ -605,68 +656,145 @@ export class CompactThinkingPreview implements Component {
 				(slots[1]?.running ? slots[1] : slots[0]?.running ? slots[0] : (slots[1] ?? slots[0]));
 			slots[1] = undefined;
 		}
-		const previewId = slots.some(action => action?.previewIntent) ? this.visibleCommandCallId?.(width) : undefined;
-		const animate = shimmerEnabled();
-		const rows = slots.map(action => {
-			if (action?.previewIntent && action.id === previewId) action = { ...action, detail: action.previewIntent };
-			this.#rows.push(action);
-			if (!paint || !action) return "";
-			const row = this.#buildRow(action, contentWidth);
-			return this.#paintAnsi(row, animate);
-		});
-		const needsTick =
-			!isNativeRendering() && !!this.ctx.ui && animate && (waitRow || visible.some(action => action.running));
-		if (needsTick) registerSpinnerBlock(this);
-		else unregisterSpinnerBlock(this);
-		return rows;
+		const activity = slots.some(action => action?.category === "exec") ? this.compactActivity?.(width) : undefined;
+		if (activity?.commandVisible) {
+			const index = slots.findIndex(action => action?.id === activity.callId && action.previewIntent);
+			if (index !== -1) {
+				const action = slots[index]!;
+				slots[index] = { ...action, detail: action.previewIntent! };
+			}
+		}
+		return { slots, activity };
 	}
 
-	/** Fixed action area + two spaces + gray detail; the detail origin never moves on state change. */
-	#buildRow(action: Action, width: number): { action: Action; word: string; detail: string; gap: string } {
+	#selectMotion(
+		slots: (Action | undefined)[],
+		activity: CompactPreviewActivity | undefined,
+		width: number,
+		animate: boolean,
+	): string | undefined {
+		const now = Date.now();
+		let deadline = 0;
+		let candidate: string | undefined;
+		for (const action of slots) {
+			if (!action?.running) continue;
+			// The lower slot wins when both running actions are quiet.
+			candidate = action.id;
+			let progressAt: number | undefined;
+			if (action.category === "thinking") progressAt = this.#thinkingProgress(action, width, now);
+			else if (action.category === "exec" && action.id === activity?.callId) progressAt = activity.outputChangedAt;
+			deadline = Math.max(deadline, Math.max(action.startedAt ?? 0, progressAt ?? 0) + ACTION_QUIET_MS);
+		}
+		if (!animate || width < ACTION_WIDTH || candidate === undefined || deadline <= now) {
+			this.#cancelQuietWake();
+			return animate && width >= ACTION_WIDTH ? candidate : undefined;
+		}
+		// Native shimmers are clocked by the terminal, but it needs a new frame
+		// to receive the first shimmer node after progress stops.
+		if (deadline !== this.#quietWake?.deadline) {
+			this.#cancelQuietWake();
+			const ui = this.ctx.ui;
+			if (ui) {
+				const timer = ui.scheduleAfter(deadline - now, () => {
+					this.#quietWake = undefined;
+					if (
+						displayPreferences.compactToolActivity &&
+						shimmerEnabled() &&
+						this.#session === this.ctx.viewSession &&
+						this.#sessionId === this.ctx.viewSession.sessionManager.getSessionId()
+					) {
+						ui.requestComponentRender(this);
+					}
+				});
+				this.#quietWake = { deadline, timer };
+			}
+		}
+		return undefined;
+	}
+
+	#cancelQuietWake(): void {
+		this.#quietWake?.timer.cancel();
+		this.#quietWake = undefined;
+	}
+
+	#thinkingProgress(action: Action, width: number, now: number): number | undefined {
+		const previous = this.#shownThinking;
+		const proseOnly = this.ctx.proseOnlyThinking;
+		const source = this.#memory!.thinking.get(action.id)!.text;
+		const sameAction = previous?.id === action.id;
+		const sameLayout = previous?.width === width && previous.proseOnly === proseOnly;
+		if (sameAction && sameLayout && previous.source === source) return previous.changedAt;
+		let changedAt = sameAction ? previous.changedAt : undefined;
+		// Reflowing the same prose is not progress. If input and layout changed
+		// together, compare both inputs at the new width.
+		if (action.detail) {
+			if (!sameAction) changedAt = now;
+			else if (previous.source !== source) {
+				const previousDetail = sameLayout
+					? previous.text
+					: thinkingDetail(previous.source, proseOnly, width - ACTION_WIDTH - ACTION_GAP.length);
+				if (previousDetail !== action.detail) changedAt = now;
+			}
+		}
+		this.#shownThinking = { id: action.id, source, text: action.detail, width, proseOnly, changedAt };
+		return changedAt;
+	}
+
+	/** Fixed action area and two spaces; style does not change the detail origin. */
+	#buildRow(action: Action, width: number): ActionRow {
 		const full = ACTION_WORDS[action.category][action.running ? "running" : action.failed ? "failed" : "done"];
-		// Normally the action area is eight columns; an extremely narrow terminal clips it safely too.
 		const actionWidth = Math.min(ACTION_WIDTH, width);
 		const word = truncateToWidth(full, actionWidth);
+		const tone = action.running ? "muted" : action.failed ? "error" : "dim";
 		const detailWidth = width - actionWidth - ACTION_GAP.length;
-		let detail = "";
+		const detail: ActionRow["detail"] = [];
 		if (detailWidth > 0 && action.detail) {
-			detail = action.file
-				? fileDetail(action.detail, action.file, detailWidth)
-				: truncateToWidth(action.detail, detailWidth);
+			if (action.file) {
+				const [prefix, target, suffix] = fileDetail(action.detail, action.file, detailWidth);
+				if (action.running) {
+					if (prefix) detail.push({ text: prefix, tone: "dim" });
+					if (target) detail.push({ text: target, tone: "text" });
+					if (suffix) detail.push({ text: suffix, tone: "dim" });
+				} else detail.push({ text: prefix + target + suffix, tone: "dim" });
+			} else {
+				const value = truncateToWidth(action.detail, detailWidth);
+				const tone = action.running && action.category === "thinking" ? "text" : "dim";
+				if (value) detail.push({ text: value, tone });
+			}
 		}
-		return { action, word, detail, gap: detail ? ACTION_GAP : "" };
+		return { word, tone, detail };
 	}
 
-	#paintAnsi(row: { action: Action; word: string; detail: string; gap: string }, animate: boolean): string {
-		const { action, word, detail, gap } = row;
-		const paintedAction = action.running
-			? animate
-				? shimmerText(word, theme, ACTION_SHIMMER_PALETTE)
-				: theme.fg("muted", word)
-			: action.failed
-				? theme.fg("error", word)
-				: theme.fg("text", word);
-		return paintedAction + gap + (detail ? theme.fg("dim", detail) : "");
+	#paintAnsi({ word, tone, detail }: ActionRow, animate: boolean): string {
+		let line = animate ? shimmerText(word, theme, ACTION_SHIMMER_PALETTE) : theme.fg(tone, word);
+		if (detail.length) {
+			line += ACTION_GAP;
+			for (const run of detail) line += theme.fg(run.tone, run.text);
+		}
+		return line;
 	}
 
 	describe(cx: DescribeContext): NativeNode {
 		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, cx.cols - 1));
-		this.#renderRows(cx.cols, inset, false, waitRow);
+		const { slots, activity } = this.#visibleActions(cx.cols, inset, waitRow);
 		const left = padding(inset);
-		const animate = shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer");
-		const children = this.#rows.map(action => {
+		const animated = this.#selectMotion(
+			slots,
+			activity,
+			cx.cols - inset,
+			!waitRow && shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer"),
+		);
+		unregisterSpinnerBlock(this);
+		const children = slots.map(action => {
 			if (!action) return node("rows", { cols: cx.cols, lines: [""] });
 			const built = this.#buildRow(action, cx.cols - inset);
-			const label = action.running
-				? animate
+			const label =
+				animated === action.id
 					? describeShimmer([{ text: built.word, palette: ACTION_SHIMMER_PALETTE }])
-					: text([span(built.word, "muted")])
-				: action.failed
-					? text([span(built.word, "error")])
-					: text([span(built.word, "text")]);
-			const parts = built.detail
-				? [text(left), label, text(built.gap), text([span(built.detail, "dim")])]
+					: text([span(built.word, built.tone)]);
+			const parts = built.detail.length
+				? [text(left), label, text(ACTION_GAP), text(built.detail.map(run => span(run.text, run.tone)))]
 				: [text(left), label];
 			return row(parts);
 		});
