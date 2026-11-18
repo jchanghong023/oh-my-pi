@@ -66,7 +66,7 @@ describe("OMP OpenWiki real browser consumer", () => {
 			let closePromise: Promise<void> | undefined;
 			const closeOwnedFixture = () =>
 				(closePromise ??= (async () => {
-					if (launchedBrowser) await closeLaunchedBrowser(launchedBrowser);
+					if (launchedBrowser) await closeLaunchedBrowser({ browser: launchedBrowser });
 					else launchAbort.abort();
 					await closeServer?.();
 				})());

@@ -217,6 +217,7 @@ function makeBroker(
 		projectDir: "/tmp/omp-wedge-broker",
 		close: () => undefined,
 		onCompletion: () => () => undefined,
+		onNotify: () => () => undefined,
 		request: async (operation: DaemonOperation) => {
 			if (opts.fail === true) throw new Error("broker unreachable");
 			if (operation.op === "describe") return { op: "describe", daemon: opts.snapshot };
@@ -771,6 +772,7 @@ describe("shared browser reachability check", () => {
 			projectDir: "/tmp/omp-wedge-replaced",
 			close: () => undefined,
 			onCompletion: () => () => undefined,
+			onNotify: () => () => undefined,
 			request: async (operation: DaemonOperation) => {
 				if (operation.op === "describe") {
 					describeCount++;

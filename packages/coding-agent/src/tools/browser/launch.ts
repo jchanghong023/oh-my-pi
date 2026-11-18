@@ -45,7 +45,7 @@ import stealthWorkerScript from "../puppeteer/13_stealth_worker.txt" with { type
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { withDownload } from "../../downloads/activity";
 import { TOOL_TIMEOUTS } from "../tool-timeouts";
-import { findUserDataDirInArgs, gracefulKillTreeOnce, probeCdpResponse } from "./attach";
+import { findUserDataDirInArgs, gracefulKillTreeOnce, killTreeOnce, probeCdpResponse } from "./attach";
 
 export const DEFAULT_VIEWPORT = { width: 1365, height: 768, deviceScaleFactor: 1.25 };
 
@@ -765,7 +765,7 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 			const wsEndpoint = pipe ? await activePortEndpoint(activePortFile, staleActivePort) : browser.wsEndpoint();
 			return { browser, wsEndpoint, userDataDir };
 		} catch (error) {
-			await closeLaunchedBrowser(browser);
+			await closeLaunchedBrowser({ browser, userDataDir }, { strict: opts.isolateUserEnvironment });
 			throw error;
 		}
 	} catch (error) {
@@ -840,8 +840,15 @@ async function isolatedBrowserEnvironment(
 	return env;
 }
 
-/** Close a launched browser; strict cleanup confirms owned process exit and rejects unresolved failures. */
-export async function closeLaunchedBrowser(browser: Browser, options?: { strict?: boolean }): Promise<void> {
+/**
+ * Close a launched browser, killing ordinary OMP-owned temporary profiles first.
+ * Caller-supplied profiles get a graceful close; strict cleanup instead pins
+ * the owned process tree and confirms exit, rejecting unresolved failures.
+ */
+export async function closeLaunchedBrowser(
+	{ browser, userDataDir }: Pick<LaunchHeadlessResult, "browser" | "userDataDir">,
+	options?: { strict?: boolean },
+): Promise<void> {
 	const proc = browser.process();
 	if (options?.strict) {
 		if (!proc || proc.pid === undefined) {
@@ -889,11 +896,16 @@ export async function closeLaunchedBrowser(browser: Browser, options?: { strict?
 			throw new AggregateError(failures, "Timed out terminating owned headless browser process tree");
 		}
 	}
+	const pid = proc?.pid;
+	if (userDataDir !== undefined && pid !== undefined) {
+		await killTreeOnce(pid).catch(() => undefined);
+		return;
+	}
 	try {
 		await withTimeout(browser.close(), HEADLESS_CLOSE_TIMEOUT_MS, "Timed out closing headless browser");
 	} catch (err) {
 		logger.debug("Failed to close headless browser; force-killing", { error: toError(err).message });
-		if (proc?.pid !== undefined) await gracefulKillTreeOnce(proc.pid).catch(() => undefined);
+		if (pid !== undefined) await gracefulKillTreeOnce(pid).catch(() => undefined);
 	}
 }
 

@@ -438,7 +438,7 @@ export async function withWorkflowChromium<T>(executable: string, run: (browser:
 	try {
 		return await run(launched.browser);
 	} finally {
-		await closeLaunchedBrowser(launched.browser, { strict: true });
+		await closeLaunchedBrowser(launched, { strict: true });
 		if (launched.userDataDir) await removeUserDataDir(launched.userDataDir, { strict: true });
 	}
 }

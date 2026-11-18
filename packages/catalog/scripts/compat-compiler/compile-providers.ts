@@ -57,6 +57,7 @@ const KNOWN_APIS = [
 	"google-generative-ai",
 	"google-gemini-cli",
 	"google-vertex",
+	"kiro-api",
 	"ollama-chat",
 	"cursor-agent",
 	"gitlab-duo-agent",

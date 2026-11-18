@@ -522,7 +522,7 @@ async function disposeBrowserHandle(handle: BrowserHandle, opts: ReleaseBrowserO
 			return;
 		}
 		if (!strictlyClosedBrowsers.has(handle) && (handle.browser.connected || opts.strict)) {
-			await closeLaunchedBrowser(handle.browser, opts);
+			await closeLaunchedBrowser({ browser: handle.browser, userDataDir: handle.userDataDir }, opts);
 			if (opts.strict) strictlyClosedBrowsers.add(handle);
 		}
 		// OMP owns the profile directory (puppeteer's temp cleanup is disabled by

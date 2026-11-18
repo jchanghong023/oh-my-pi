@@ -106,7 +106,7 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 				await server?.stop(true);
 			},
 			async () => {
-				if (browser) await closeLaunchedBrowser(browser);
+				if (browser) await closeLaunchedBrowser({ browser });
 				else launchAbort.abort();
 			},
 			async () => {

@@ -389,7 +389,7 @@ async function crawlDomFixture(pages: Record<string, string>, entry = "/article/
 		let closePromise: Promise<void> | undefined;
 		closeOwnedFixture = () =>
 			(closePromise ??= (async () => {
-				if (launchedBrowser) await closeLaunchedBrowser(launchedBrowser);
+				if (launchedBrowser) await closeLaunchedBrowser({ browser: launchedBrowser });
 				else launchAbort.abort();
 				await server.stop(true);
 			})());
