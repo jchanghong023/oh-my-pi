@@ -154,7 +154,7 @@ describe("runSharpshooterConsolidation", () => {
 		);
 		const listed = await listSharpshooterDeltas(harness.agentDir, harness.cwd);
 		const listedFiles = listed.flatMap(group => group.deltas.map(item => item.file));
-		vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
+		const request = vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
 			await appendSharpshooterDelta(harness.agentDir, harness.cwd, delta("session-a", 30, "Late arrival."));
 			return completion(completeFiles);
 		});
@@ -162,6 +162,7 @@ describe("runSharpshooterConsolidation", () => {
 		const result = await runSharpshooterConsolidation({ ...harness, force: true });
 
 		expect(result).toEqual({ ran: true, sessions: 2, deltas: 2 });
+		expect(request.mock.calls[0]?.[2]?.thinkingProbe).toBe(false);
 		for (const file of completeFiles) {
 			expect(await Bun.file(sharpshooterMemoryFilePath(harness.agentDir, harness.cwd, file.name)).text()).toBe(
 				file.content,

@@ -4,6 +4,7 @@ import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { cfgCommitChangelogMaxDiffChars } from "./settings";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
+import { cfgProvidersThinkingProbe } from "../session/settings";
 import { runAgenticCommit } from "./agentic";
 import { runChangelogFlow } from "./changelog";
 import { formatConventionalCommit } from "./conventional/normalization";
@@ -80,6 +81,7 @@ async function updateChangelog(cwd: string, args: CommitCommandArgs): Promise<vo
 			model: primary.model,
 			apiKey: primary.apiKey,
 			thinkingLevel: primary.thinkingLevel,
+			thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 			stagedFiles: await vcs.requireGit(cwd).changedFiles({ cached: true }),
 			dryRun: false,
 			maxDiffChars: cfgCommitChangelogMaxDiffChars.get(settings),

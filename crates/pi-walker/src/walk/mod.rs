@@ -53,6 +53,7 @@ use std::{
 		atomic::{AtomicBool, Ordering},
 	},
 	task::{Context, Poll},
+	time::Duration,
 };
 
 use futures::Stream;
@@ -158,6 +159,9 @@ pub struct Options {
 	/// Only [`Detail::Minimal`] native walks without an
 	/// [`Self::ignore_file`] consult it.
 	pub cache:               bool,
+	/// With [`Self::cache`] enabled, reuse listings for this long without
+	/// checking stamps. Zero disables caching; `None` keeps stamp validation.
+	pub cache_ttl:           Option<Duration>,
 	/// The flag this walk ends on, when the caller wants to hold a clone and
 	/// end the walk from its own frame ([`Stop`]). The walk makes its own
 	/// otherwise.
@@ -539,10 +543,14 @@ where
 
 /// The process-wide cache when `opts` asks for it and the walk can use it.
 fn default_cache(fs: &Fs, opts: &Options) -> Option<&'static cache::Cache> {
-	opts
-		.cache
-		.then(cache::global)
-		.filter(|_| fs.is_native() && opts.ignore_file.is_none())
+	if !opts.cache || !fs.is_native() || opts.ignore_file.is_some() {
+		return None;
+	}
+	match opts.cache_ttl {
+		None => Some(cache::global()),
+		Some(ttl) if !ttl.is_zero() => Some(cache::timed_global()),
+		Some(_) => None,
+	}
 }
 
 /// Whether `name` is pruned by the hidden, `.git`, and `node_modules` rules.

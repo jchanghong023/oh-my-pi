@@ -806,7 +806,7 @@ async function emitTurnEnd(
 	toolResults: ToolResultMessage[],
 	config: AgentLoopConfig,
 	signal?: AbortSignal,
-	context?: Omit<AgentTurnEndContext, "message" | "toolResults">,
+	context?: Partial<Omit<AgentTurnEndContext, "message" | "toolResults">>,
 	runHookOnAbortedMessage = false,
 ): Promise<void> {
 	stream.push({ type: "turn_end", message, toolResults });
@@ -819,6 +819,7 @@ async function emitTurnEnd(
 		toolResults,
 		additionalMessages: [],
 		willContinue: false,
+		canDrainQueuedMessages: false,
 		...context,
 	});
 }
@@ -1827,9 +1828,11 @@ async function runLoopBody(
 					hasMoreToolCalls = true;
 				}
 
+				const deadlineExceeded = isDeadlineExceeded(config.deadline);
 				await emitTurnEnd(stream, currentContext, message, toolResults, config, signal, {
 					additionalMessages,
-					willContinue: hasMoreToolCalls && !isDeadlineExceeded(config.deadline),
+					willContinue: hasMoreToolCalls && !deadlineExceeded,
+					canDrainQueuedMessages: !hasMoreToolCalls && !deadlineExceeded && !signal?.aborted,
 				});
 				turnOpen = false;
 

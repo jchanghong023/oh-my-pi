@@ -22,17 +22,9 @@ const AT_FUZZY_TIMEOUT_MS = 1_500;
 function buildAutocompleteFuzzyDiscoveryProfile(
 	query: string,
 	basePath: string,
+	cacheTtlMs: number | undefined,
 	signal?: AbortSignal,
-): {
-	query: string;
-	path: string;
-	maxResults: number;
-	hidden: boolean;
-	gitignore: boolean;
-	cache: boolean;
-	timeoutMs: number;
-	signal?: AbortSignal;
-} {
+) {
 	return {
 		query,
 		path: basePath,
@@ -40,6 +32,7 @@ function buildAutocompleteFuzzyDiscoveryProfile(
 		hidden: true,
 		gitignore: true,
 		cache: true,
+		...(cacheTtlMs === undefined ? {} : { cacheTtlMs }),
 		timeoutMs: AT_FUZZY_TIMEOUT_MS,
 		...(signal ? { signal } : {}),
 	};
@@ -641,6 +634,8 @@ function buildMidPromptSkillCompletions(commands: CommandEntry[], lowerPrefix: s
 const DIR_CACHE_MAX = 100;
 const DIR_CACHE_EVICT = 50;
 
+type DirectoryCache = Map<string, { entries: fs.Dirent[]; timestamp: number }>;
+
 /**
  * Drops the `count` oldest entries once `map` exceeds `max`. Callers delete a
  * key before re-setting it, so Map insertion order is refresh order.
@@ -659,10 +654,11 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 	#commands: CommandEntry[];
 	#basePath: string;
 	#commandUsage?: (name: string) => number;
-	// Intentionally separate from pi-natives cache: this cache is a local,
-	// per-directory readdir fast-path for prefix completions. Global fuzzy
-	// discovery continues to use native fuzzyFind + shared scan cache.
-	#dirCache: Map<string, { entries: fs.Dirent[]; timestamp: number }> = new Map();
+	// Per-directory readdir fast path for prefix completions. Recursive fuzzy
+	// discovery uses the native walker and its separate listing cache.
+	#dirCache: DirectoryCache = new Map();
+	readonly #atDirCache?: DirectoryCache;
+	readonly #atScanCacheTtlMs?: number;
 	// Whether a scoped fuzzy query's base (`src/` in `@src/foo`) is a directory;
 	// stat'ing it on every keystroke is redundant while the base is unchanged.
 	#scopedBaseCache: Map<string, { isDirectory: boolean; timestamp: number }> = new Map();
@@ -676,6 +672,14 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		this.#commands = commands;
 		this.#basePath = basePath;
 		this.#commandUsage = options?.commandUsage;
+		const configured = process.env.FS_SCAN_CACHE_TTL_MS?.trim();
+		if (configured) {
+			const ttl = Number(configured);
+			if (Number.isInteger(ttl) && ttl >= 0 && ttl <= 0xffff_ffff) {
+				this.#atScanCacheTtlMs = ttl;
+				if (ttl > 0) this.#atDirCache = new Map();
+			}
+		}
 	}
 
 	async getSuggestions(
@@ -1055,18 +1059,22 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		return `${displayBase}${relativePath}`;
 	}
 
-	async #getCachedDirEntries(searchDir: string): Promise<fs.Dirent[]> {
+	async #getCachedDirEntries(searchDir: string, isAtPrefix: boolean): Promise<fs.Dirent[]> {
+		const atTtl = isAtPrefix ? this.#atScanCacheTtlMs : undefined;
+		if (atTtl === 0) return fs.promises.readdir(searchDir, { withFileTypes: true });
+		const cache = (isAtPrefix ? this.#atDirCache : undefined) ?? this.#dirCache;
+		const cacheKey = atTtl === undefined ? searchDir : path.resolve(searchDir);
 		const now = Date.now();
-		const cached = this.#dirCache.get(searchDir);
+		const cached = cache.get(cacheKey);
 
-		if (cached && now - cached.timestamp < this.#DIR_CACHE_TTL) {
+		if (cached && now - cached.timestamp < (atTtl ?? this.#DIR_CACHE_TTL)) {
 			return cached.entries;
 		}
 
 		const entries = await fs.promises.readdir(searchDir, { withFileTypes: true });
-		this.#dirCache.delete(searchDir);
-		this.#dirCache.set(searchDir, { entries, timestamp: now });
-		evictOldest(this.#dirCache, DIR_CACHE_MAX, DIR_CACHE_EVICT);
+		cache.delete(cacheKey);
+		cache.set(cacheKey, { entries, timestamp: now });
+		evictOldest(cache, DIR_CACHE_MAX, DIR_CACHE_EVICT);
 
 		return entries;
 	}
@@ -1074,9 +1082,11 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 	invalidateDirCache(dir?: string): void {
 		if (dir) {
 			this.#dirCache.delete(dir);
+			this.#atDirCache?.delete(path.resolve(dir));
 			this.#scopedBaseCache.delete(dir);
 		} else {
 			this.#dirCache.clear();
+			this.#atDirCache?.clear();
 			this.#scopedBaseCache.clear();
 		}
 	}
@@ -1139,7 +1149,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				searchPrefix = file;
 			}
 
-			const entries = await this.#getCachedDirEntries(searchDir);
+			const entries = await this.#getCachedDirEntries(searchDir, isAtPrefix);
 			const suggestions: AutocompleteItem[] = [];
 
 			const lowerSearchPrefix = searchPrefix.toLowerCase();
@@ -1246,7 +1256,9 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			if (options.signal?.aborted) return [];
 			const searchPath = scopedQuery?.baseDir ?? this.#basePath;
 			const fuzzyQuery = scopedQuery?.query ?? query;
-			const result = await fuzzyFind(buildAutocompleteFuzzyDiscoveryProfile(fuzzyQuery, searchPath, options.signal));
+			const result = await fuzzyFind(
+				buildAutocompleteFuzzyDiscoveryProfile(fuzzyQuery, searchPath, this.#atScanCacheTtlMs, options.signal),
+			);
 			const lowerQuery = fuzzyQuery.toLowerCase();
 			const filteredMatches = result.matches.filter(entry => {
 				const p = entry.path.endsWith("/") ? entry.path.slice(0, -1) : entry.path;

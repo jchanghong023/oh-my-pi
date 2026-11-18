@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Turn-end hooks can distinguish queue-draining boundaries from terminal tool yields.
+- Compaction callers can explicitly enable or disable thinking-capability probes.
+
 ## [18.22.1] - 2026-11-17
 
 ### Added

@@ -10,12 +10,12 @@
 //! older than a racy window (git's "racily clean" rule); younger directories
 //! are listed again.
 //!
-//! Only filesystems whose sessions report [`crate::fs::Session::stable_stamps`]
-//! take part; providers, network, FUSE, and overlay mounts are always listed.
-//! Only [`crate::Detail::Minimal`] walks use the cache: file sizes and mtimes
-//! change without touching their directory's stamp. The cache holds at most
-//! about 64 MiB of listings, dropping whole shards when full. It needs no
-//! invalidation: a change to a directory changes its stamp.
+//! Stamp validation requires filesystems with stable stamps. Walks that
+//! explicitly opt into a TTL use a separate cache of timed snapshots, even
+//! on native filesystems without reliable stamps. Only
+//! [`crate::Detail::Minimal`] walks use either cache: file sizes and mtimes
+//! change without touching their directory's stamp. Each cache holds at most
+//! about 64 MiB of listings, dropping whole shards when full.
 
 use std::{
 	collections::HashMap,
@@ -25,7 +25,7 @@ use std::{
 		Arc, LazyLock,
 		atomic::{AtomicI64, Ordering},
 	},
-	time::{SystemTime, UNIX_EPOCH},
+	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use parking_lot::RwLock;
@@ -59,10 +59,22 @@ pub(crate) fn global() -> &'static Cache {
 	&CACHE
 }
 
+/// Timed snapshots never replace or extend entries in the stamp-checked cache.
+pub(crate) fn timed_global() -> &'static Cache {
+	static CACHE: LazyLock<Cache> = LazyLock::new(|| Cache::new(MAX_BYTES));
+	&CACHE
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Freshness {
+	Stamp(Stamp),
+	Timed(Instant),
+}
+
 /// An immutable listing snapshot; updates replace it.
 #[derive(Debug)]
 pub(crate) struct CachedDir {
-	stamp:              Stamp,
+	freshness:          Freshness,
 	/// Records carry no sizes, mtimes, or child counts: those change without
 	/// touching the directory's stamp.
 	pub(crate) listing: Listing,
@@ -105,7 +117,15 @@ impl Cache {
 	fn put(&self, key: &[u8], dir: CachedDir) {
 		let index = self.shard_index(key);
 		let size = dir.size;
-		let old = self.shards[index].write().insert(key.into(), Arc::new(dir));
+		let mut shard = self.shards[index].write();
+		if let Freshness::Timed(start) = dir.freshness
+			&& shard.get(key).is_some_and(
+				|old| matches!(old.freshness, Freshness::Timed(old_start) if old_start > start),
+			) {
+			return;
+		}
+		let old = shard.insert(key.into(), Arc::new(dir));
+		drop(shard);
 		let delta = size - old.map_or(0, |old| old.size);
 		if self.bytes.fetch_add(delta, Ordering::Relaxed) + delta > self.max_bytes {
 			self.evict(index);
@@ -134,14 +154,14 @@ impl Cache {
 		}
 	}
 
-	/// The cached listing of the directory at `abs` if it is still current,
-	/// revalidating its ignore sources when `with_ignores` is set. `scratch`
-	/// is per-worker path scratch.
+	/// The cached listing at `abs`, by age for timed walks or by filesystem
+	/// stamp otherwise. `scratch` is per-worker ignore-source path scratch.
 	pub(crate) async fn lookup(
 		&self,
 		session: &mut Session,
 		abs: &Path,
 		with_ignores: bool,
+		ttl: Option<Duration>,
 		scratch: &mut Vec<u8>,
 	) -> Option<Arc<CachedDir>> {
 		let key = abs.as_os_str().as_encoded_bytes();
@@ -151,10 +171,15 @@ impl Cache {
 			(ignores, true) => ignores.as_ref(),
 			(_, false) => None,
 		};
+		let stamp = match (dir.freshness, ttl) {
+			(Freshness::Timed(start), Some(ttl)) => return (start.elapsed() < ttl).then_some(dir),
+			(Freshness::Stamp(stamp), None) => stamp,
+			_ => return None,
+		};
 		// A directory reached through a followed link is stored under the
 		// link's path with the target's stamp.
 		match session.stat(abs, true).await {
-			Ok(info) if info.stamp == dir.stamp => {},
+			Ok(info) if info.stamp == stamp => {},
 			_ => {
 				self.drop_key(key);
 				return None;
@@ -189,26 +214,28 @@ impl Cache {
 		Some(dir)
 	}
 
-	/// Caches `listing`, just read from `dir` (stamped `stamp` before the
-	/// read), once its stamps have settled.
+	/// Caches `listing`, just read from `dir`. A stamp-checked listing is
+	/// only cached once its stamps have settled.
 	#[expect(clippy::too_many_arguments, reason = "everything one listing read produced")]
 	pub(crate) fn store(
 		&self,
 		session: &mut Session,
 		abs: &Path,
 		dir: &Dir,
-		stamp: Stamp,
+		freshness: Freshness,
 		listing: &Listing,
 		names: Names,
 		ignores: Option<&DirIgnores>,
 	) {
-		let now = now_nanos();
-		let settled = |stamp: &Stamp| stamp.latest() < now - RACY_WINDOW_NS;
-		if !settled(&stamp)
-			|| ignores.is_some_and(|ignores| !ignores.stamps.iter().all(settled))
-			|| !session.stable_stamps(dir, &stamp)
-		{
-			return;
+		if let Freshness::Stamp(stamp) = freshness {
+			let now = now_nanos();
+			let settled = |stamp: &Stamp| stamp.latest() < now - RACY_WINDOW_NS;
+			if !settled(&stamp)
+				|| ignores.is_some_and(|ignores| !ignores.stamps.iter().all(settled))
+				|| !session.stable_stamps(dir, &stamp)
+			{
+				return;
+			}
 		}
 		let mut listing = listing.clone();
 		for record in &mut listing.records {
@@ -220,7 +247,7 @@ impl Cache {
 		let size = i64::try_from(key.len() + listing.heap_size())
 			.unwrap_or(i64::MAX - ENTRY_OVERHEAD)
 			+ ENTRY_OVERHEAD;
-		self.put(key, CachedDir { stamp, listing, names, ignores: ignores.cloned(), size });
+		self.put(key, CachedDir { freshness, listing, names, ignores: ignores.cloned(), size });
 	}
 }
 

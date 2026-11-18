@@ -289,6 +289,7 @@ describe("skills", () => {
 				customDirectories: [shared, path.join(shared, "."), `${shared}${path.sep}`],
 			};
 			try {
+				await fs.mkdir(path.join(root, ".git"));
 				resetCapabilities();
 				const catalog = await loadSkillCatalog(options);
 				expect(catalog.skills.map(skill => skill.name)).toEqual(["original"]);
@@ -423,6 +424,7 @@ describe("skills", () => {
 			const aliasSkill = path.join(aliasRoot, "alias");
 			let linked = false;
 			try {
+				await fs.mkdir(path.join(root, ".git"));
 				await fs.mkdir(originalSkill, { recursive: true });
 				await fs.mkdir(aliasRoot);
 				await fs.writeFile(
@@ -486,6 +488,7 @@ describe("skills", () => {
 				const previous = process.env.OMP_SKILLS_DIR;
 				let linkedPath: string | undefined;
 				try {
+					await fs.mkdir(path.join(root, ".git"));
 					for (const [directory, body] of [
 						[agentsSkillDir, "Run the shared agents implementation."],
 						[nativeSkillDir, "Run the private native implementation."],

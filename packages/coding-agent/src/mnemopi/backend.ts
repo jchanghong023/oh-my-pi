@@ -26,6 +26,7 @@ import memoryConsolidationPrompt from "../prompts/system/memory-consolidation-sy
 import memoryExtractionPrompt from "../prompts/system/memory-extraction-system.md" with { type: "text" };
 import mnemopiInstructions from "../prompts/system/mnemopi-instructions.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
+import { cfgProvidersThinkingProbe } from "../session/settings";
 import { tinyModelClient } from "../tiny/title-client";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { concreteThinkingLevel, shouldDisableReasoning, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
@@ -671,6 +672,7 @@ async function resolveMnemopiProviderOptions(
 										maxTokens: opts?.maxTokens,
 										temperature: opts?.temperature,
 										reasoning: clampThinkingLevelForModel(model, toReasoningEffort(level)),
+										thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 										disableReasoning: shouldDisableReasoning(level) ? true : undefined,
 										signal,
 										onAttempt: message =>

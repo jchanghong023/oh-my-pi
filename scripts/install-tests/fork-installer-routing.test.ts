@@ -497,23 +497,33 @@ const metadataPowerShellHosts = [windowsPowerShell, process.platform === "win32"
 );
 
 for (const powerShell of metadataPowerShellHosts) {
-	test(`Windows installer uses the cache root for profile logs (${path.basename(powerShell)})`, async () => {
+	test(`Windows installer uses the cache root and an invariant UTC date (${path.basename(powerShell)})`, async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-storage-"));
 		tempDirs.push(dir);
 		const root = path.join(dir, "cache-root");
-		const installDir = path.join(dir, "install");
-		await fs.mkdir(path.join(installDir, "omp.exe"), { recursive: true });
+		const harness = path.join(dir, "culture.ps1");
+		await Bun.write(
+			harness,
+			`$ErrorActionPreference = "Stop"
+$culture = [Globalization.CultureInfo]::new("th-TH", $false)
+[Threading.Thread]::CurrentThread.CurrentCulture = $culture
+if ($culture.Calendar -isnot [Globalization.ThaiBuddhistCalendar]) { throw "Expected the Buddhist calendar" }
+$originalCallback = [Net.Security.RemoteCertificateValidationCallback] { $false }
+[Net.ServicePointManager]::ServerCertificateValidationCallback = $originalCallback
+$env:PROCESSOR_ARCHITEW6432 = $null
+$env:PROCESSOR_ARCHITECTURE = "ARM64"
+try {
+    & $env:TEST_INSTALLER -Binary
+} catch {
+    if (-not [object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $originalCallback)) {
+        throw "Installer changed the caller's TLS callback on an early environment error"
+    }
+    throw
+}
+`,
+		);
 		const child = Bun.spawn(
-			[
-				powerShell,
-				"-NoProfile",
-				"-NonInteractive",
-				"-ExecutionPolicy",
-				"Bypass",
-				"-File",
-				path.join(repoRoot, "scripts", "install.ps1"),
-				"-Binary",
-			],
+			[powerShell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
 			{
 				cwd: repoRoot,
 				env: {
@@ -523,10 +533,9 @@ for (const powerShell of metadataPowerShellHosts) {
 					OMP_OFFLINE: "",
 					OMP_PROFILE: "work",
 					PI_PROFILE: "",
-					PI_INSTALL_DIR: installDir,
+					PI_INSTALL_DIR: path.join(dir, "install"),
 					LOCALAPPDATA: path.join(dir, "local"),
-					PROCESSOR_ARCHITECTURE: "AMD64",
-					PROCESSOR_ARCHITEW6432: "",
+					TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
 				},
 				stdout: "pipe",
 				stderr: "pipe",
@@ -537,13 +546,20 @@ for (const powerShell of metadataPowerShellHosts) {
 			new Response(child.stdout).text(),
 			new Response(child.stderr).text(),
 		]);
-		expect(exitCode, `${stdout}\n${stderr}`).not.toBe(0);
-		const raw = await installerLog(path.join(root, "profiles", "work", "logs"));
+		expect(exitCode, `${stdout}\n${stderr}`).toBe(1);
+		expect(stderr).toContain("Unsupported Windows architecture: ARM64");
+		const logs = path.join(root, "profiles", "work", "logs");
+		const files = (await fs.readdir(logs)).filter(name => name.endsWith(`.${child.pid}.log`));
+		expect(files).toHaveLength(1);
+		const parts = /^omp\.install\.(\d{4}-\d{2}-\d{2})\.(\d+)\.\d+\.log$/.exec(files[0]!);
+		expect(parts).not.toBeNull();
+		expect(parts![1]).toBe(new Date(Number(parts![2])).toISOString().slice(0, 10));
+		const raw = await Bun.file(path.join(logs, files[0]!)).text();
 		const records = raw
 			.trim()
 			.split(/\r?\n/)
 			.map(line => JSON.parse(line));
-		expect(records.some(record => record.event === "install_failed")).toBe(true);
+		expect(records.find(record => record.event === "install_failed")).toMatchObject({ stage: "environment" });
 	});
 }
 
@@ -732,9 +748,36 @@ if ($env:TEST_MODE -eq "already") {
 }
 $downloadCount = 0
 $pathChecks = 0
+$originalTlsCallback = [Net.Security.RemoteCertificateValidationCallback] { $false }
+$originalTlsProtocol = [Net.SecurityProtocolType]::Tls
+[Net.ServicePointManager]::ServerCertificateValidationCallback = $originalTlsCallback
+[Net.ServicePointManager]::SecurityProtocol = $originalTlsProtocol
+$replacementTlsCallback = [Net.Security.RemoteCertificateValidationCallback] { $true }
+function Assert-CallerTls {
+    $expectedCallback = $originalTlsCallback
+    $expectedProtocol = $originalTlsProtocol
+    if ($env:TEST_MODE -eq "path-failed") {
+        $expectedCallback = $replacementTlsCallback
+        $expectedProtocol = [Net.SecurityProtocolType]::Tls11
+    }
+    if (-not [object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $expectedCallback)) {
+        throw "Installer did not preserve the caller's TLS callback"
+    }
+    if ([Net.ServicePointManager]::SecurityProtocol -ne $expectedProtocol) {
+        throw "Installer did not preserve the caller's TLS protocol"
+    }
+}
 function Invoke-RestMethod([string]$Uri) {
     if ($Uri -match '/main/scripts/install.ps1$') {
         return $script:installerDefinitions + '\nfunction Set-InstallEnvironment { $script:pathChecks++; return $false }\nInstall-Binary'
+    }
+    $callback = [Net.ServicePointManager]::ServerCertificateValidationCallback
+    if ([object]::ReferenceEquals($callback, $originalTlsCallback) -or
+        -not $callback.Invoke($null, $null, $null, [Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors)) {
+        throw "Installer did not relax TLS validation for release metadata"
+    }
+    if (-not ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12)) {
+        throw "Installer did not enable TLS 1.2 for release metadata"
     }
     return @{ tag_name = "v18.0.9+fork.125" }
 }
@@ -756,7 +799,12 @@ $script:installerDefinitions = $source.Substring(0, $lastStatement.Extent.StartO
 . ([scriptblock]::Create($script:installerDefinitions)) -Binary
 function Set-InstallEnvironment {
     $script:pathChecks++
-    if ($env:TEST_MODE -eq "path-failed") { Set-InstallStage "environment"; throw "fixture PATH access denied" }
+    if ($env:TEST_MODE -eq "path-failed") {
+        Set-InstallStage "environment"
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = $replacementTlsCallback
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls11
+        throw "fixture PATH access denied"
+    }
     return $false
 }
 $script:blockMoves = $true
@@ -796,6 +844,7 @@ try {
     try {
         Install-Binary 6>&1 | ForEach-Object { $script:messages += $_.ToString(); Write-Host $_ }
     } catch { $failed = $true; Write-Host $_.Exception.Message }
+    Assert-CallerTls
     if ($env:TEST_MODE -eq "directory") {
         Write-Host "RESULT failed=$failed retained=$((Get-Content -LiteralPath (Join-Path $old 'keep.txt')).Trim())"
     } elseif (Test-Path -LiteralPath $old -PathType Leaf) {
@@ -825,6 +874,7 @@ try {
         $retryCommand = $messages | Where-Object { $_.StartsWith('$env:PI_INSTALL_DIR = ') } | Select-Object -First 1
         $script:blockMoves = $false
         & ([scriptblock]::Create($retryCommand))
+        Assert-CallerTls
         Write-Host "RESULT retryVersion=$(& $old --version)"
     }
 } finally {
@@ -869,6 +919,69 @@ try {
 		]);
 		return { exitCode, stdout, stderr };
 	}
+
+	test("restores a null TLS callback when the caller cancels the installer pipeline", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-tls-cancel-"));
+		tempDirs.push(dir);
+		const harness = path.join(dir, "cancel.ps1");
+		await Bun.write(
+			harness,
+			`$ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::ServerCertificateValidationCallback = $null
+$originalProtocol = [Net.SecurityProtocolType]::Tls
+[Net.ServicePointManager]::SecurityProtocol = $originalProtocol
+$ready = [Threading.ManualResetEvent]::new($false)
+$worker = [PowerShell]::Create()
+try {
+    [void]$worker.AddScript({
+        param($ready)
+        function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec) {
+            $callback = [Net.ServicePointManager]::ServerCertificateValidationCallback
+            if ($null -eq $callback -or
+                -not $callback.Invoke($null, $null, $null, [Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors)) {
+                throw "Installer TLS callback is not active"
+            }
+            [void]$ready.Set()
+            Start-Sleep -Seconds 30
+        }
+        & $env:TEST_INSTALLER -Binary
+    }).AddArgument($ready)
+    [void]$worker.BeginInvoke()
+    if (-not $ready.WaitOne(10000)) { throw "Installer did not reach release metadata: $($worker.Streams.Error)" }
+    $worker.Stop()
+    if ($worker.InvocationStateInfo.State -ne "Stopped") { throw "Installer pipeline was not cancelled" }
+    if ($null -ne [Net.ServicePointManager]::ServerCertificateValidationCallback) { throw "Installer leaked a TLS callback" }
+    if ([Net.ServicePointManager]::SecurityProtocol -ne $originalProtocol) { throw "Installer leaked a TLS protocol" }
+} finally {
+    $worker.Dispose()
+    $ready.Dispose()
+}
+`,
+		);
+		const child = Bun.spawn(
+			[windowsPowerShell!, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
+			{
+				cwd: repoRoot,
+				env: {
+					...process.env,
+					OMP_CONFIG_ROOT: path.join(dir, "config"),
+					OMP_CACHE_DIR: "",
+					OMP_PROFILE: "default",
+					PI_INSTALL_DIR: path.join(dir, "install"),
+					PROCESSOR_ARCHITECTURE: "AMD64",
+					TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+	}, 30_000);
 
 	test("standalone rejection preserves the original exception and redacts its diagnostic evidence", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-standalone-"));
@@ -1317,14 +1430,32 @@ $source = [IO.File]::ReadAllText($env:TEST_INSTALLER)
 . ([scriptblock]::Create($source.Substring(0, $ast.EndBlock.Statements[-1].Extent.StartOffset))) -Binary
 # No proxy for this probe: exercise the TLS posture, not proxy resolution.
 [Net.WebRequest]::DefaultWebProxy = $null
-$release = Invoke-RestMethod -Uri "https://127.0.0.1:$env:TEST_PORT/release" @script:WebSkipCertCheck
-if ($release.tag_name -ne "v18.0.9+fork.125") { throw "Unexpected release metadata" }
-Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile $env:TEST_OUTFILE
-function Get-Command([string]$Name) {
-    if ($Name -eq "curl.exe") { return $null }
-    Microsoft.PowerShell.Core\\Get-Command $Name
+$originalTlsCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
+$originalSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
+$script:tlsProbeCompleted = $false
+function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec, [switch]$SkipCertificateCheck) {
+    $release = Microsoft.PowerShell.Utility\\Invoke-RestMethod -Uri "https://127.0.0.1:$env:TEST_PORT/release" -TimeoutSec $TimeoutSec @script:WebSkipCertCheck
+    if ($release.tag_name -ne "v18.0.9+fork.125") { throw "Unexpected release metadata" }
+    Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile $env:TEST_OUTFILE
+    function Get-Command([string]$Name) {
+        if ($Name -eq "curl.exe") { return $null }
+        Microsoft.PowerShell.Core\\Get-Command $Name
+    }
+    Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile "$env:TEST_OUTFILE.fallback"
+    $script:tlsProbeCompleted = $true
+    throw "TLS probe complete"
 }
-Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile "$env:TEST_OUTFILE.fallback"
+# Run all requests inside the real install TLS scope, then stop before replacement.
+try { Install-Binary } catch {
+    if (-not $script:tlsProbeCompleted -or $_.Exception.Message -ne "TLS probe complete") { throw }
+}
+if (-not $script:tlsProbeCompleted) { throw "TLS requests did not complete" }
+if (-not [object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $originalTlsCallback)) {
+    throw "Installer did not restore the caller certificate callback"
+}
+if ([Net.ServicePointManager]::SecurityProtocol -ne $originalSecurityProtocol) {
+    throw "Installer did not restore the caller security protocol"
+}
 `,
 					);
 					const child = Bun.spawn(
@@ -1334,6 +1465,7 @@ Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile "$en
 							env: {
 								...process.env,
 								OMP_CONFIG_ROOT: path.join(dir, "config"),
+								PI_INSTALL_DIR: path.join(dir, "install"),
 								OMP_CACHE_DIR: "",
 								OMP_OFFLINE: "",
 								OMP_PROFILE: "default",

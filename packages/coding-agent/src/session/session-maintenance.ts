@@ -137,12 +137,14 @@ import {
 	cfgSnapcompactShape,
 } from "./context-settings";
 import { resolveModelCompactionSettings } from "./model-compaction-threshold";
-import { cfgProvidersOpenaiCodexDaybreak, cfgRetry } from "./settings";
+import { cfgProvidersOpenaiCodexDaybreak, cfgProvidersThinkingProbe, cfgRetry } from "./settings";
 
 export type CompactionCheckResult = Readonly<{
 	continuationScheduled: boolean;
 	automaticContinuationBlocked?: boolean;
 	historyRewritten?: boolean;
+	/** Maintenance rewrote the existing branch and recovered capacity without appending a boundary. */
+	contextRecoveredInPlace?: boolean;
 }>;
 
 /** Shared no-op result for dispatcher paths that perform no maintenance. */
@@ -3007,7 +3009,7 @@ export class SessionMaintenance {
 			model: `${model.provider}/${model.id}`,
 		});
 		const previousLeaf = this.#host.sessionManager.getLeafId();
-		await this.runAutoCompaction("threshold", false, {
+		const result = await this.runAutoCompaction("threshold", false, {
 			autoContinue: false,
 			rebaseParentId,
 			triggerContextTokens: contextTokens,
@@ -3015,15 +3017,16 @@ export class SessionMaintenance {
 			preparedContextTokens: this.#estimateStoredContextTokens(),
 			phase: "pre_turn",
 		});
-		return rebaseParentId === undefined || this.#host.sessionManager.getLeafId() !== previousLeaf;
+		return (
+			rebaseParentId === undefined ||
+			this.#host.sessionManager.getLeafId() !== previousLeaf ||
+			result.contextRecoveredInPlace === true
+		);
 	}
 
 	/**
-	 * 缺陷 G02(队列自动 drain 没有计算待输入预算并提前压缩): agent loop 在
-	 * stop 边界将自动消费的待输入消息。与 loop 的 dequeue 条件保持一致:显式
-	 * hold(`queuedMessagesHeld`)时不消费;`followUpAutoDrain` 关闭时 follow-up
-	 * 队列保持排队。steering 在 stop 边界同样强制下一轮模型调用,因此两个队列
-	 * 都计入待输入预算。
+	 * Stop-boundary steering can force another model call even when follow-up
+	 * auto-drain is off. Budget both queues when eligible, but never when held.
 	 */
 	#pendingQueuedDrainMessages(): AgentMessage[] {
 		const agent = this.#host.agent;
@@ -3045,23 +3048,18 @@ export class SessionMaintenance {
 		signal: AbortSignal | undefined,
 		context: AgentTurnEndContext | undefined,
 	): Promise<void> {
-		// 缺陷 G02(队列自动 drain 没有计算待输入预算并提前压缩): 文本完成的
-		// turn(willContinue=false)若待消费队列非空,agent loop 马上会在 yield 边界
-		// 自动 drain 队列输入作为下一个 prompt。queued 输入与直接 prompt 一样属于
-		// 待输入预算(直接路径已由 runPrePromptCompactionIfNeeded 覆盖),这里补齐
-		// 队列路径:超阈值先 auto compact,再消费队列首条。
-		const queuedDrainMessages =
-			context !== undefined && !context.willContinue && !signal?.aborted && !this.#host.isDisposed()
-				? this.#pendingQueuedDrainMessages()
-				: [];
+		// A stop is not always a drain boundary: terminal yields still run this
+		// hook for bookkeeping, with no live signal, but leave the queue intact.
 		if (
+			!context ||
 			signal?.aborted ||
 			this.#host.isDisposed() ||
 			this.isCompacting ||
-			this.#host.isGeneratingHandoff() ||
-			(!context?.willContinue && queuedDrainMessages.length === 0)
+			this.#host.isGeneratingHandoff()
 		)
 			return;
+		const queuedDrainMessages = context.canDrainQueuedMessages ? this.#pendingQueuedDrainMessages() : [];
+		if (!context.willContinue && queuedDrainMessages.length === 0) return;
 
 		const model = this.#model;
 		const contextWindow = model?.contextWindow ?? 0;
@@ -4154,6 +4152,7 @@ export class SessionMaintenance {
 									// via resolveCompactionEffort so unsupported-effort models
 									// (xai-oauth/grok-build) don't trip requireSupportedEffort.
 									thinkingLevel: this.#host.thinkingLevel(),
+									thinkingProbe: cfgProvidersThinkingProbe.get(this.#host.settings),
 									tools: this.#host.agent.state.tools,
 									sessionId: this.#host.sessionId(),
 									// Conventional and remote requests may target different cache-affinity policies.
@@ -6412,6 +6411,7 @@ export class SessionMaintenance {
 													// site. Clamped per-model inside compact() via
 													// resolveCompactionEffort.
 													thinkingLevel: this.#host.thinkingLevel(),
+													thinkingProbe: cfgProvidersThinkingProbe.get(this.#host.settings),
 													tools: this.#host.agent.state.tools,
 													sessionId: this.#host.sessionId(),
 													promptCacheKey: this.#host.getPromptCacheKeyForModel(candidate),
@@ -7151,6 +7151,7 @@ export class SessionMaintenance {
 			return {
 				...(continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE),
 				historyRewritten: true,
+				contextRecoveredInPlace: contextWindow > 0 && !stillOverThreshold,
 			};
 		} catch (error) {
 			if (signal.aborted) {

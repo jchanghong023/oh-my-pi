@@ -246,6 +246,7 @@ export interface AnthropicNativeCompactionOptions
 			| "sessionId"
 			| "promptCacheKey"
 			| "providerSessionState"
+			| "thinkingProbe"
 			| "maxInFlightRequests"
 		>,
 		Pick<InstrumentedChatSpanOptions, "completeImpl" | "telemetry" | "retry"> {}
@@ -282,6 +283,7 @@ export async function requestAnthropicNativeCompaction(
 			signal,
 			maxTokens: request.maxTokens,
 			reasoning,
+			thinkingProbe: options.thinkingProbe,
 			initiatorOverride: options.initiatorOverride,
 			metadata: options.metadata,
 			fetch: options.fetch,

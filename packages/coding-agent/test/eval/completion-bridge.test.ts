@@ -745,9 +745,11 @@ describe("runEvalCompletion", () => {
 
 		await runEvalCompletionAndWait({ prompt: "q", model: "slow" }, { session });
 
-		const opts = spy.mock.calls[0]?.[2] as { reasoning?: unknown; disableReasoning?: unknown };
-		expect(opts.reasoning).toBe(Effort.Max);
-		expect(opts.disableReasoning).toBe(false);
+		expect(spy.mock.calls[0]?.[2]).toMatchObject({
+			reasoning: Effort.Max,
+			disableReasoning: false,
+			thinkingProbe: false,
+		});
 	});
 
 	it("clamps an explicit :max selector to the model's highest supported effort", async () => {

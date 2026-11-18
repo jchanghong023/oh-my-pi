@@ -78,7 +78,7 @@ function Initialize-InstallLog {
         if ($cacheRoot -eq "~") { $cacheRoot = $homeDir }
         elseif ($cacheRoot -match '^~[/\\]') { $cacheRoot = Join-Path $homeDir $cacheRoot.Substring(2) }
         if ($cacheRoot -notmatch '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)') { $cacheRoot = $null }
-        $name = "omp.install.{0}.{1}.{2}.log" -f $script:InstallStarted.ToString("yyyy-MM-dd"), $script:InstallStarted.ToUnixTimeMilliseconds(), $PID
+        $name = "omp.install.{0}.{1}.{2}.log" -f $script:InstallStarted.ToString("yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture), $script:InstallStarted.ToUnixTimeMilliseconds(), $PID
         $fallback = $false
         $directories = @((Join-Path $root "logs"), (Join-Path $fallbackRoot $profileSuffix))
         if ($cacheRoot) { $directories = @((Join-Path $cacheRoot $profileSuffix)) + $directories }
@@ -182,13 +182,11 @@ if ($PSVersionTable.PSVersion -lt [version]"5.1") {
 # enabled plus a permissive ServicePointManager callback; PS 7+ ignores
 # ServicePointManager for Invoke-* (HttpClient), so those callers splat
 # -SkipCertificateCheck from $script:WebSkipCertCheck instead.
-function Set-InstallTlsPolicy {
-    if ($PSVersionTable.PSVersion.Major -lt 7) {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        # TLS validation runs on a .NET worker thread without a PowerShell
-        # runspace. A scriptblock delegate fails there with a send error.
-        if (-not ("Omp.InstallerTls" -as [type])) {
-            Add-Type -TypeDefinition @'
+function Initialize-InstallTlsCallback {
+    # TLS validation runs on a .NET worker thread without a PowerShell
+    # runspace. A scriptblock delegate fails there with a send error.
+    if (-not ("Omp.InstallerTls" -as [type])) {
+        Add-Type -TypeDefinition @'
 namespace Omp {
     public static class InstallerTls {
         public static readonly System.Net.Security.RemoteCertificateValidationCallback Callback =
@@ -196,12 +194,9 @@ namespace Omp {
     }
 }
 '@
-        }
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = [Omp.InstallerTls]::Callback
     }
 }
 $script:WebSkipCertCheck = if ($PSVersionTable.PSVersion.Major -ge 7) { @{ SkipCertificateCheck = $true } } else { @{} }
-Set-InstallTlsPolicy
 
 $Repo = "jchanghong023/oh-my-pi"
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\omp" }
@@ -442,11 +437,21 @@ function Install-Binary {
     $failedStage = $null
     $renameFailure = $null
     $swapFailure = $null
+    $installTlsCallback = $null
     try {
     Set-InstallStage "install_target"
     $OutPath = Join-Path $InstallDir "omp.exe"
     if (Test-Path -LiteralPath $OutPath -PathType Container) {
         throw "Refusing to replace a directory at $OutPath"
+    }
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        $previousTlsCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
+        $previousSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
+        $installSecurityProtocol = $previousSecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Initialize-InstallTlsCallback
+        $installTlsCallback = [Omp.InstallerTls]::Callback
+        [Net.ServicePointManager]::SecurityProtocol = $installSecurityProtocol
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = $installTlsCallback
     }
     if ($Ref) {
         Set-InstallStage "release_metadata"
@@ -663,6 +668,16 @@ function Install-Binary {
         }
         Complete-InstallLog "failed" $_
         throw
+    } finally {
+        if ($null -ne $installTlsCallback) {
+            # Do not overwrite settings another consumer changed during install.
+            if ([object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $installTlsCallback)) {
+                [Net.ServicePointManager]::ServerCertificateValidationCallback = $previousTlsCallback
+            }
+            if ([Net.ServicePointManager]::SecurityProtocol -eq $installSecurityProtocol) {
+                [Net.ServicePointManager]::SecurityProtocol = $previousSecurityProtocol
+            }
+        }
     }
 }
 

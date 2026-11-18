@@ -31,6 +31,7 @@ use std::{
 		Arc, OnceLock,
 		atomic::{AtomicBool, AtomicUsize, Ordering},
 	},
+	time::Instant,
 };
 
 use parking_lot::Mutex;
@@ -42,7 +43,7 @@ use tokio::{
 use super::{
 	Action, Batch, DirError, Entry, Options, Stop, WalkError, Worker, absolute_root,
 	arena::{Arena, Bytes},
-	cache::Cache,
+	cache::{Cache, Freshness},
 	give_session, join_child_into, join_into, pruned, take_session,
 };
 use crate::{
@@ -842,7 +843,13 @@ impl<K: Sink> Ctx<K> {
 		if let Some(cache) = self.cache {
 			join_into(&self.fs, &self.root, rel, &mut st.abs);
 			if let Some(cached) = cache
-				.lookup(&mut st.session, &st.abs, self.ignorer.is_some(), &mut st.probe)
+				.lookup(
+					&mut st.session,
+					&st.abs,
+					self.ignorer.is_some(),
+					self.opts.cache_ttl,
+					&mut st.probe,
+				)
 				.await
 			{
 				drop(parent);
@@ -884,10 +891,12 @@ impl<K: Sink> Ctx<K> {
 			}
 		}
 		// Stamp before listing: any later change moves the stamp on.
-		let stamp = if self.cache.is_some() {
-			st.session.stat_dir(&dir).await.ok()
-		} else {
+		let freshness = if self.cache.is_none() {
 			None
+		} else if self.opts.cache_ttl.is_some() {
+			Some(Freshness::Timed(Instant::now()))
+		} else {
+			st.session.stat_dir(&dir).await.ok().map(Freshness::Stamp)
 		};
 		let mut listing = std::mem::take(&mut st.listing);
 		if let Err(error) = st
@@ -899,7 +908,7 @@ impl<K: Sink> Ctx<K> {
 			return Err(error);
 		}
 		let mut names = Names::default();
-		if self.ignorer.is_some() || stamp.is_some() {
+		if self.ignorer.is_some() || freshness.is_some() {
 			for record in listing.records() {
 				names.record(listing.name(record), record.file_type, self.opts.ignore_file);
 			}
@@ -908,17 +917,23 @@ impl<K: Sink> Ctx<K> {
 			None => None,
 			Some(_) if names.is_empty() => Some(DirIgnores::default()),
 			Some(ignorer) => Some(
-				DirIgnores::load(&mut st.session, &dir, names, ignorer.sources(), stamp.is_some())
-					.await,
+				DirIgnores::load(
+					&mut st.session,
+					&dir,
+					names,
+					ignorer.sources(),
+					matches!(freshness, Some(Freshness::Stamp(_))),
+				)
+				.await,
 			),
 		};
 		let frame = match &ignores {
 			Some(ignores) => ignores.frame(frame.as_ref(), names, rel),
 			None => frame,
 		};
-		if let (Some(cache), Some(stamp)) = (self.cache, stamp) {
+		if let (Some(cache), Some(freshness)) = (self.cache, freshness) {
 			join_into(&self.fs, &self.root, rel, &mut st.abs);
-			cache.store(&mut st.session, &st.abs, &dir, stamp, &listing, names, ignores.as_ref());
+			cache.store(&mut st.session, &st.abs, &dir, freshness, &listing, names, ignores.as_ref());
 		}
 		let dir = Arc::new(dir);
 		let share = self.retained.load(Ordering::Relaxed) < MAX_RETAINED_DIRS;

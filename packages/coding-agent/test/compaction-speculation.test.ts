@@ -698,7 +698,7 @@ describe("async speculative compaction", () => {
 			tokensBefore: preparation.tokensBefore,
 			details: {},
 		}));
-		const context = { message: boundary, toolResults: [], willContinue: true };
+		const context = { message: boundary, toolResults: [], willContinue: true, canDrainQueuedMessages: false };
 
 		await maintenance.maintainContextMidRun(activeMessages, undefined, context);
 		expect(compactSpy).toHaveBeenCalledTimes(1);
@@ -1101,6 +1101,7 @@ describe("async speculative compaction", () => {
 			message: boundary,
 			toolResults: [],
 			willContinue: false,
+			canDrainQueuedMessages: true,
 		});
 
 		expect(onDemand).toHaveBeenCalledWith(

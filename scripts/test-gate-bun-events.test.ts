@@ -2,8 +2,12 @@ import { expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
+import { type CiTestDriverArgs, ciTestDriverPath } from "./fixtures/ci-test-ts-driver";
 import { BunTestFailureObserver, type GateCommandError } from "./test-gate-failure-events";
+
+function driverArgv(...args: CiTestDriverArgs): string[] {
+	return [process.execPath, ciTestDriverPath, JSON.stringify(args)];
+}
 
 it("notifies on the first complete Bun case marker without waiting for stream end", () => {
 	const failures: GateCommandError[] = [];
@@ -102,7 +106,7 @@ it("visible first failure", () => expect(1).toBe(2));
 	}
 }, 15_000);
 
-it("the sequential TS runner reports a failing case before its afterAll barrier exits", async () => {
+it("the sequential TS runner notifies once before its afterAll barrier and continues independent work", async () => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-sequential-first-failure-"));
 	const eventFile = path.join(directory, "events");
 	const release = path.join(directory, "release");
@@ -130,30 +134,28 @@ afterAll(async () => {
 it("sequential first_测试 failure", () => expect(1).toBe(2));
 `,
 	);
-	const source = `
-import { runTestCommand } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "ci-test-ts.ts")).href)};
-try {
-  await runTestCommand({
-    label: "sequential fixture",
-    cwd: ${JSON.stringify(path.relative(path.join(import.meta.dir, ".."), directory))},
-    command: ${JSON.stringify([process.execPath, "test", fixture])},
-  });
-} catch (error) {
-  console.error(error.message);
-  process.exitCode = 1;
-}
-`;
-	const child = Bun.spawn([process.execPath, "--eval", source], {
-		env: {
-			...process.env,
-			OMP_GATE_EVENT_TOKEN: "sequential-first-failure",
-			OMP_GATE_EVENT_FILE: eventFile,
-			OMP_TEST_REPORT_DIR: path.join(directory, "reports"),
-			OMP_TEST_CHUNK_TIMEOUT: "60",
+	const cwd = path.relative(path.join(import.meta.dir, ".."), directory);
+	const child = Bun.spawn(
+		driverArgv([
+			{ label: "sequential fixture", cwd, command: [process.execPath, "test", fixture] },
+			{
+				label: "independent fixture",
+				cwd,
+				command: [process.execPath, "--eval", 'console.log("OMP_SEQUENTIAL_INDEPENDENT_RAN")'],
+			},
+		]),
+		{
+			env: {
+				...process.env,
+				OMP_GATE_EVENT_TOKEN: "sequential-first-failure",
+				OMP_GATE_EVENT_FILE: eventFile,
+				OMP_TEST_REPORT_DIR: path.join(directory, "reports"),
+				OMP_TEST_CHUNK_TIMEOUT: "60",
+			},
+			stdout: "pipe",
+			stderr: "pipe",
 		},
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	);
 	const teardown = Promise.withResolvers<void>();
 	const stderrOutput = (async () => {
 		const decoder = new TextDecoder();
@@ -180,8 +182,10 @@ try {
 		expect(child.exitCode).toBeNull();
 		await fs.writeFile(release, "release");
 		expect(await child.exited).toBe(1);
-		const [, stderr] = await output;
+		const [stdout, stderr] = await output;
 		expect(stderr).toContain("(fail) sequential first_测试 failure");
+		expect(stdout.split(/\r?\n/)).toContain("OMP_SEQUENTIAL_INDEPENDENT_RAN");
+		expect(await fs.readFile(eventFile, "utf8")).toBe(event);
 	} finally {
 		await fs.writeFile(release, "release");
 		if (child.exitCode === null) child.kill();
@@ -190,6 +194,76 @@ try {
 		await fs.rm(directory, { recursive: true, force: true });
 	}
 }, 15_000);
+
+it.each([false, true])(
+	"the parallel TS runner selects the first unrecoverable exit (gate-owned: %s)",
+	async gateOwned => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-parallel-crash-"));
+		const crashed = path.join(directory, "crashed");
+		const recovered = path.join(directory, "recovered");
+		const failed = path.join(directory, "failed");
+		const eventFile = path.join(directory, "events");
+		try {
+			const crashOnce = `
+import { existsSync, writeFileSync } from "node:fs";
+if (!existsSync(${JSON.stringify(crashed)})) {
+	writeFileSync(${JSON.stringify(crashed)}, "");
+	process.exit(139);
+}
+writeFileSync(${JSON.stringify(recovered)}, "");
+`;
+			// Outside a gate, delay the real failure until the crash retry starts.
+			// Inside a gate, a one-worker pool fixes the order without any retry.
+			const realFailure = `
+import { existsSync, writeFileSync } from "node:fs";
+if (!${gateOwned}) {
+	const deadline = performance.now() + 5000;
+	while (!existsSync(${JSON.stringify(recovered)}) && performance.now() < deadline) await Bun.sleep(10);
+	if (!existsSync(${JSON.stringify(recovered)})) process.exit(24);
+}
+writeFileSync(${JSON.stringify(failed)}, "");
+process.exit(23);
+`;
+			const child = Bun.spawn(
+				driverArgv(
+					[
+						{ label: "crash fixture", cwd: "scripts", command: [process.execPath, "--eval", crashOnce] },
+						{ label: "real failure", cwd: "scripts", command: [process.execPath, "--eval", realFailure] },
+					],
+					gateOwned ? 1 : 2,
+				),
+				{
+					env: {
+						...process.env,
+						OMP_GATE_EVENT_TOKEN: gateOwned ? "parallel-crash-fixture" : "",
+						OMP_GATE_EVENT_FILE: eventFile,
+						OMP_TEST_REPORT_DIR: path.join(directory, "reports"),
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			const [code, stdout, stderr] = await Promise.all([
+				child.exited,
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+			expect(code, `${stdout}\n${stderr}`).toBe(gateOwned ? 139 : 23);
+			expect(await Bun.file(failed).exists()).toBe(true);
+			expect(await Bun.file(recovered).exists()).toBe(!gateOwned);
+			if (gateOwned) {
+				const events = (await fs.readFile(eventFile, "utf8")).trim().split("\n");
+				expect(events).toHaveLength(1);
+				expect(events[0]).toContain('"exitCode":139');
+			} else {
+				expect(await Bun.file(eventFile).exists()).toBe(false);
+			}
+		} finally {
+			await fs.rm(directory, { recursive: true, force: true });
+		}
+	},
+	15_000,
+);
 
 it.each(["rejection", "exception"])(
 	"notifies on an unhandled %s before standalone fatal cleanup completes",

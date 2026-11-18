@@ -320,7 +320,7 @@ describe("memories runtime", () => {
 		// above `low` (e.g. deepseek-v4-pro → [high, xhigh]). The fix routes both call
 		// sites through `clampThinkingLevelForModel`, lifting the requested effort to
 		// the model's floor instead of throwing.
-		const fx = await createFixture();
+		const fx = await createFixture({ "providers.thinkingProbe": true });
 		const constrainedModel: Model = {
 			...fx.model,
 			reasoning: true,
@@ -382,8 +382,8 @@ describe("memories runtime", () => {
 		expect(spy).toHaveBeenCalledTimes(2);
 		// stage1 requested `low`, phase2 requested `medium`; both must clamp up to the
 		// model's floor (`high`) instead of being passed through and throwing.
-		expect(spy.mock.calls[0]?.[2]?.reasoning).toBe(Effort.High);
-		expect(spy.mock.calls[1]?.[2]?.reasoning).toBe(Effort.High);
+		expect(spy.mock.calls[0]?.[2]).toMatchObject({ reasoning: Effort.High, thinkingProbe: true });
+		expect(spy.mock.calls[1]?.[2]).toMatchObject({ reasoning: Effort.High, thinkingProbe: true });
 	});
 
 	test("phase2 sync prunes stale summaries and preserves raw memory ordering", async () => {

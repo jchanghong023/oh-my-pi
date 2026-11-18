@@ -7051,7 +7051,11 @@ describe("agentLoop passive additionalContext", () => {
 				{ content: ["must not be reached"] },
 			],
 		});
-		const turnEndCalls: Array<{ willContinue: boolean | undefined; signalAborted: boolean }> = [];
+		const turnEndCalls: Array<{
+			willContinue: boolean | undefined;
+			canDrainQueuedMessages: boolean | undefined;
+			signal: AbortSignal | undefined;
+		}> = [];
 		const config: AgentLoopConfig = {
 			model: mock.model,
 			convertToLlm: identityConverter,
@@ -7059,7 +7063,11 @@ describe("agentLoop passive additionalContext", () => {
 				controller.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 			},
 			onTurnEnd: (_messages, signal, ctx) => {
-				turnEndCalls.push({ willContinue: ctx?.willContinue, signalAborted: signal?.aborted === true });
+				turnEndCalls.push({
+					willContinue: ctx?.willContinue,
+					canDrainQueuedMessages: ctx?.canDrainQueuedMessages,
+					signal,
+				});
 			},
 		};
 
@@ -7071,7 +7079,7 @@ describe("agentLoop passive additionalContext", () => {
 		// hook runs once for the yield turn, marked complete (willContinue:false)
 		// and with no aborted signal so downstream waits behave like a plain turn.
 		expect(mock.calls).toHaveLength(1);
-		expect(turnEndCalls).toEqual([{ willContinue: false, signalAborted: false }]);
+		expect(turnEndCalls).toEqual([{ willContinue: false, canDrainQueuedMessages: false, signal: undefined }]);
 	});
 
 	it("preserves an external abort boundary when a completed tool ignores cancellation", async () => {

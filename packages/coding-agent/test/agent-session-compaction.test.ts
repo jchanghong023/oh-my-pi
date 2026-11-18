@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { CompactionPreparation } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
@@ -773,6 +774,69 @@ describe("AgentSession edited-input compaction admission", () => {
 			}
 		},
 	);
+
+	it.each(["shake", "soft"] as const)("requires recovered capacity after an in-place %s pass", async method => {
+		const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omp-edited-shake-"));
+		const auth = await AuthStorage.create(":memory:");
+		const mock = createMockModel({ contextWindow: 128_000, responses: [{ content: ["new answer"] }] });
+		auth.keys.setRuntime(mock.provider, "fixture-key");
+		const manager = SessionManager.create(directory, directory);
+		const timestamp = Date.now();
+		const fence = `\`\`\`text\n${"payload line\n".repeat(10_000)}\`\`\`\n`;
+		// Auto-shake can elide the older block outside its protected tail.
+		// The soft-compaction rescue can elide the block in a single huge user
+		// message, but still has no cut point and leaves that message oversized.
+		const parentId = method === "shake" ? manager.appendMessage({ role: "user", content: fence, timestamp }) : null;
+		const original = method === "shake" ? "tail ".repeat(17_000) : fence + "tail ".repeat(36_000);
+		const targetId = manager.appendMessage({ role: "user", content: original, timestamp });
+		const registry = new ModelRegistry(auth, path.join(directory, "models.yml"));
+		const availability = vi.spyOn(registry, "getAvailable").mockReturnValue([mock]);
+		const session = new AgentSession({
+			agent: new Agent({
+				convertToLlm,
+				getApiKey: () => "fixture-key",
+				initialState: { model: mock, tools: [], messages: manager.buildSessionContext().messages },
+				streamFn: mock.stream,
+			}),
+			sessionManager: manager,
+			modelRegistry: registry,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.thresholdTokens": 30_000,
+				"compaction.methodOrder": [method],
+				"compaction.asyncEnabled": false,
+				"compaction.autoContinue": false,
+			}),
+		});
+
+		try {
+			const completion = session.promptEditedUserQuery(targetId, "replacement query", { inputId: "edited-input" });
+			if (method === "shake") {
+				await completion;
+				expect(mock.calls).toHaveLength(1);
+				const branch = manager.getBranch();
+				expect(branch.some(entry => entry.id === targetId)).toBe(false);
+				expect(branch).toContainEqual(
+					expect.objectContaining({
+						type: "message",
+						parentId,
+						message: expect.objectContaining({ role: "user", inputId: "edited-input" }),
+					}),
+				);
+			} else {
+				await expect(completion).rejects.toThrow("Edited input preflight was cancelled");
+				expect(mock.calls).toHaveLength(0);
+				expect(manager.getLeafId()).toBe(targetId);
+			}
+			expect(JSON.stringify(manager.getEntry(parentId ?? targetId))).toContain("[shaken ~");
+			expect(manager.getEntries().some(entry => entry.type === "compaction")).toBe(false);
+		} finally {
+			await session.dispose();
+			availability.mockRestore();
+			auth.close();
+			removeSyncWithRetries(directory);
+		}
+	});
 });
 
 describe("AgentSession explicit context exhaustion recovery", () => {

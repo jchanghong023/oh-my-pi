@@ -3194,6 +3194,20 @@ async function createAgentSessionScoped(
 			}
 		}
 
+		// Startup owns tool resources until the session's dispose wrapper is installed.
+		const disposeCallbacks = new Set<() => void | Promise<void>>();
+		const disposePartialTools = async () => {
+			const results = await Promise.allSettled(
+				[...disposeCallbacks].map(async callback => {
+					await callback();
+					disposeCallbacks.delete(callback);
+				}),
+			);
+			const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+			if (failures.length) throw new AggregateError(failures, "SDK partial tool cleanup failed");
+		};
+		strictStartupResources?.add(disposePartialTools);
+		let startupOwnsToolCallbacks = true;
 		try {
 			const getActiveModelString = (): string | undefined => {
 				const activeModel = agent?.state.model;
@@ -3205,19 +3219,6 @@ async function createAgentSessionScoped(
 			// entries capture it at fetch time and are dropped at injection if a newer
 			// mutation (any tool) bumped it in the meantime.
 			const fileMutationVersions = new Map<string, number>();
-			const disposeCallbacks = new Set<() => void | Promise<void>>();
-			if (strictStartupResources) {
-				strictStartupResources.add(async () => {
-					const results = await Promise.allSettled(
-						[...disposeCallbacks].map(async callback => {
-							await callback();
-							disposeCallbacks.delete(callback);
-						}),
-					);
-					const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
-					if (failures.length) throw new AggregateError(failures, "SDK partial tool cleanup failed");
-				});
-			}
 			const activeToolNames = new Set<string>();
 			const toolRegistry = options.toolRestrictions
 				? new GuardedToolRegistry(options.toolRestrictions)
@@ -4656,10 +4657,10 @@ async function createAgentSessionScoped(
 					parentSessionId: options.interactionParentSessionId,
 					parentToolCallId: options.interactionParentToolCallId,
 				});
+				disposeCallbacks.add(() => host.dispose());
 				interactionHost = host;
 				interactionUI = host.ui;
 				toolContextStore.setUIContext(host.ui, true);
-				disposeCallbacks.add(() => host.dispose());
 			}
 			toolSession.getToolContext = () => toolContextStore.getContext();
 			const setSessionActiveToolNames = (names: Iterable<string>): void => {
@@ -7075,7 +7076,10 @@ async function createAgentSessionScoped(
 						unsubscribeMcpNotifications?.();
 						unregisterMcpPostmortem?.();
 						try {
-							for (const callback of disposeCallbacks) await callback();
+							for (const callback of disposeCallbacks) {
+								disposeCallbacks.delete(callback);
+								await callback();
+							}
 						} finally {
 							disposeCallbacks.clear();
 							await releaseDsmReferences(toolSession);
@@ -7089,6 +7093,7 @@ async function createAgentSessionScoped(
 			}
 			// The installed native SDK dispose wrapper now owns all startup holds
 			// and registered tool callbacks. Keep only that real session retry route.
+			startupOwnsToolCallbacks = false;
 			strictStartupResources?.clear();
 
 			const prewarmModel = session.model;
@@ -7473,6 +7478,13 @@ async function createAgentSessionScoped(
 			} catch (cleanupError) {
 				logger.warn("Failed to clean up createAgentSession resources after startup error", {
 					error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+				});
+			}
+			if (startupOwnsToolCallbacks) {
+				await disposePartialTools().catch(cleanupError => {
+					logger.warn("Failed to clean up createAgentSession tool resources after startup error", {
+						error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+					});
 				});
 			}
 			throw error;

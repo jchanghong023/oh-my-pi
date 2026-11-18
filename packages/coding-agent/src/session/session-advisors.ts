@@ -133,7 +133,7 @@ import {
 } from "../advisor/settings";
 import { cfgCompaction, cfgContextPromotionEnabled } from "./context-settings";
 import { resolveModelCompactionSettings } from "./model-compaction-threshold";
-import { cfgProvidersOpenaiCodexDaybreak, cfgRetry, cfgTierAdvisor } from "./settings";
+import { cfgProvidersOpenaiCodexDaybreak, cfgProvidersThinkingProbe, cfgRetry, cfgTierAdvisor } from "./settings";
 
 const ADVISOR_CODEX_SSE_MAX_ATTEMPTS = 1;
 
@@ -2666,6 +2666,7 @@ export class SessionAdvisors {
 					signal,
 					{
 						thinkingLevel: advisorCompactionThinkingLevel,
+						thinkingProbe: cfgProvidersThinkingProbe.get(this.#host.settings),
 						convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 						isUserAuthored: isUserAuthoredMessage,
 						telemetry,

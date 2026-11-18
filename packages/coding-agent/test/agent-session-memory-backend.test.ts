@@ -7,6 +7,7 @@ import * as ai from "@oh-my-pi/pi-ai";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -224,22 +225,22 @@ describe("AgentSession memory backend lifecycle", () => {
 		{
 			name: "an explicit level as the reasoning effort",
 			suffix: "low",
-			reasoning: "low",
+			reasoning: Effort.Low,
 			disableReasoning: undefined,
 		},
 		{ name: ":off as disabled reasoning", suffix: "off", reasoning: undefined, disableReasoning: true },
 		{ name: "neither option without a suffix", suffix: undefined, reasoning: undefined, disableReasoning: undefined },
 	])("sends the memory role's $name", async ({ suffix, reasoning, disableReasoning }) => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-6")!;
-		const sent: Array<{ reasoning: unknown; disableReasoning: unknown }> = [];
-		spyOn(ai, "completeSimple").mockImplementation(async (_model, _context, options) => {
-			sent.push({ reasoning: options?.reasoning, disableReasoning: options?.disableReasoning });
-			return memoryReply(model);
-		});
+		const request = spyOn(ai, "completeSimple").mockResolvedValue(memoryReply(model));
 		const { complete } = await startMemoryCompletion([model], [suffix]);
 
 		expect(await complete("Sam works at Globex.")).toBe("Sam works at Globex.");
-		expect(sent).toEqual([{ reasoning, disableReasoning }]);
+		expect(request).toHaveBeenCalledTimes(1);
+		const options = request.mock.calls[0]?.[2];
+		expect(options?.reasoning).toBe(reasoning);
+		expect(options?.disableReasoning).toBe(disableReasoning);
+		expect(options?.thinkingProbe).toBe(false);
 	});
 
 	it("sends each memory fallback candidate its own thinking suffix", async () => {

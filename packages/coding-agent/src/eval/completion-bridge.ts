@@ -51,7 +51,7 @@ import {
 import type { JsStatusEvent } from "./js/shared/types";
 
 import { cfgDisabledProviders } from "../config/model-settings";
-import { cfgRetry } from "../session/settings";
+import { cfgProvidersThinkingProbe, cfgRetry } from "../session/settings";
 
 /** Synthetic bridge name reserved for the `completion()` helper across both runtimes. */
 export const EVAL_COMPLETION_BRIDGE_NAME = "__completion__";
@@ -420,6 +420,7 @@ async function executeCompletion(
 					apiKey: registry.resolver(model, session.getSessionId?.() ?? undefined),
 					signal,
 					reasoning: candidate.reasoning,
+					thinkingProbe: cfgProvidersThinkingProbe.get(session.settings),
 					disableReasoning: candidate.disableReasoning,
 					toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,
 				},

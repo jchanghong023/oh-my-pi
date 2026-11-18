@@ -1852,7 +1852,7 @@ export async function runRootCommand(
 	deps: RunRootCommandDependencies = DEFAULT_RUN_ROOT_DEPENDENCIES,
 ): Promise<void> {
 	logger.startTiming();
-	// Set the offline scan-cache TTL before the native walker reads it on first use.
+	// Set the offline scan-cache TTL before constructing @ file autocomplete providers.
 	// Explicitly configured values, including "0", take precedence.
 	if (parsed.offline === true && (process.env.FS_SCAN_CACHE_TTL_MS ?? "") === "") {
 		process.env.FS_SCAN_CACHE_TTL_MS = OFFLINE_SCAN_CACHE_TTL_MS;

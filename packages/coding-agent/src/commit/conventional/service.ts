@@ -7,6 +7,7 @@ import { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import { cfgCommit } from "../settings";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../../sdk";
+import { cfgProvidersThinkingProbe } from "../../session/settings";
 import { resolvePrimaryModel, resolveSmolModel } from "../model-selection";
 import type { ConventionalCommit } from "../types";
 import { renderStat } from "../utils";
@@ -104,6 +105,7 @@ async function createOmpInference(
 			primary,
 			smol,
 			cwd: options.cwd,
+			thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 			forcePrimaryForEveryRole: options.modelOverride !== undefined,
 			config,
 			cache,

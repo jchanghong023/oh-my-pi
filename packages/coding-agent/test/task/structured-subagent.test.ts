@@ -264,6 +264,7 @@ describe("structured subagent primitive", () => {
 
 	it("preserves an offline agent-definition role and its deferred fallback context without an override", async () => {
 		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
+		vi.spyOn(companyProvider, "setCompanyOfflineEnabled").mockResolvedValue(undefined);
 		await withConsumerCatalog(async ({ parent, selections, sessionOptions }) => {
 			parent.settings.setModelRole("task", "cold-provider/primary");
 			cfgRetryFallbackChains.override(parent.settings, { task: ["cold-provider/fallback:low"] });
@@ -1581,97 +1582,139 @@ describe("agent frontmatter structured opt-in", () => {
 		await removeWithRetries(root);
 	});
 
-	it("does not discover or dispatch an uncached automatic task role in offline mode", async () => {
-		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
-		const cwd = path.join(root, "home", "offline-work");
-		await fs.mkdir(cwd, { recursive: true });
-		let discoveries = 0;
-		let chatRequests = 0;
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch(request) {
-				if (new URL(request.url).pathname === "/v1/models") {
-					discoveries++;
-					return Response.json({ data: [{ id: "uncached-task-model", context_length: 65_536 }] });
-				}
-				chatRequests++;
-				return Response.json({ error: { message: "Unexpected model dispatch" } }, { status: 500 });
-			},
-		});
-		const authStorage = createInMemoryAuthStorage();
-		try {
-			const modelsPath = path.join(cwd, "models.yml");
-			await Bun.write(
-				modelsPath,
-				JSON.stringify({
-					providers: {
-						"offline-primary": {
-							baseUrl: server.url.toString(),
-							api: "openai-completions",
-							auth: "none",
-							discovery: { type: "openai-models-list" },
+	const offlineTaskRoleTest = "does not discover or dispatch an uncached automatic task role in offline mode";
+	it(
+		offlineTaskRoleTest,
+		async () => {
+			if (process.env.OMP_TEST_STRUCTURED_SUBAGENT_OFFLINE_CHILD !== "1") {
+				// The real lane initializes a startup snapshot and worker state that outlive this test.
+				const home = path.join(root, "home");
+				const child = Bun.spawn(
+					[
+						process.execPath,
+						"test",
+						"--no-env-file",
+						import.meta.path,
+						"--test-name-pattern",
+						offlineTaskRoleTest,
+					],
+					{
+						env: {
+							PATH: process.env.PATH ?? "",
+							SystemRoot: process.env.SystemRoot ?? "",
+							HOME: home,
+							USERPROFILE: home,
+							CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
+							OMP_CONFIG_ROOT: path.join(home, ".omp"),
+							OMP_TEST_STRUCTURED_SUBAGENT_OFFLINE_CHILD: "1",
 						},
-						"local-parent": {
-							baseUrl: server.url.toString(),
-							api: "openai-completions",
-							auth: "none",
-							models: [
-								{
-									id: "cached-parent",
-									name: "Cached Parent",
-									reasoning: false,
-									input: ["text"],
-									cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-									contextWindow: 65_536,
-									maxTokens: 8192,
-								},
-							],
-						},
+						stdout: "pipe",
+						stderr: "pipe",
 					},
-				}),
-			);
-			const settings = Settings.isolated({
-				modelRoles: { default: "local-parent/cached-parent", task: "offline-primary/uncached-task-model" },
-				"retry.fallbackChains": { task: [] },
-				"retry.enabled": false,
-				"compaction.enabled": false,
-				"task.agentIdleTtlMs": 0,
+				);
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				expect(exitCode, stdout + stderr).toBe(0);
+				expect(stdout + stderr).toMatch(/1 pass/);
+				return;
+			}
+
+			await companyProvider.setCompanyOfflineEnabled(true);
+			const cwd = path.join(root, "home", "offline-work");
+			await fs.mkdir(cwd, { recursive: true });
+			let discoveries = 0;
+			let chatRequests = 0;
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					if (new URL(request.url).pathname === "/v1/models") {
+						discoveries++;
+						return Response.json({ data: [{ id: "uncached-task-model", context_length: 65_536 }] });
+					}
+					chatRequests++;
+					return Response.json({ error: { message: "Unexpected model dispatch" } }, { status: 500 });
+				},
 			});
-			const modelRegistry = new ModelRegistry(authStorage, modelsPath, { settings });
-			const child = await executorModule.runSubprocess({
-				cwd,
-				agent: { ...AGENT, model: ["@task"], tools: ["read"], output: undefined },
-				task: "Inspect the target.",
-				index: 0,
-				id: "OfflineAutomatic",
-				settings,
-				modelRegistry,
-				authStorage,
-				parentActiveModelPattern: "local-parent/cached-parent",
-				enableLsp: false,
-				enableIrc: false,
-				enableMCP: false,
-				preloadedExtensionPaths: [],
-				preloadedCustomToolPaths: [],
-				contextFiles: [],
-				skills: [],
-				promptTemplates: [],
-				rules: [],
-			});
-			expect(child.exitCode).toBe(1);
-			expect(child.resolvedModel).toBeUndefined();
-			expect(discoveries).toBe(0);
-			expect(chatRequests).toBe(0);
-			expect(settings.getModelRole("task")).toBe("offline-primary/uncached-task-model");
-			expect(settings.getModelRole("default")).toBe("local-parent/cached-parent");
-			expect(cfgRetryFallbackChains.get(settings).task).toEqual([]);
-		} finally {
-			await AgentLifecycleManager.global().dispose();
-			authStorage.close();
-			await server.stop(true);
-		}
-	});
+			const authStorage = createInMemoryAuthStorage();
+			try {
+				const modelsPath = path.join(cwd, "models.yml");
+				await Bun.write(
+					modelsPath,
+					JSON.stringify({
+						providers: {
+							"offline-primary": {
+								baseUrl: server.url.toString(),
+								api: "openai-completions",
+								auth: "none",
+								discovery: { type: "openai-models-list" },
+							},
+							"local-parent": {
+								baseUrl: server.url.toString(),
+								api: "openai-completions",
+								auth: "none",
+								models: [
+									{
+										id: "cached-parent",
+										name: "Cached Parent",
+										reasoning: false,
+										input: ["text"],
+										cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+										contextWindow: 65_536,
+										maxTokens: 8192,
+									},
+								],
+							},
+						},
+					}),
+				);
+				const settings = Settings.isolated({
+					modelRoles: { default: "local-parent/cached-parent", task: "offline-primary/uncached-task-model" },
+					"retry.fallbackChains": { task: [] },
+					"retry.enabled": false,
+					"compaction.enabled": false,
+					"task.agentIdleTtlMs": 0,
+				});
+				// Use the loopback fixture rather than the registry's test-runtime fetch suppression.
+				const modelRegistry = new ModelRegistry(authStorage, modelsPath, { settings, fetch });
+				const child = await executorModule.runSubprocess({
+					cwd,
+					agent: { ...AGENT, model: ["@task"], tools: ["read"], output: undefined },
+					task: "Inspect the target.",
+					index: 0,
+					id: "OfflineAutomatic",
+					settings,
+					modelRegistry,
+					authStorage,
+					parentActiveModelPattern: "local-parent/cached-parent",
+					enableLsp: false,
+					enableIrc: false,
+					enableMCP: false,
+					preloadedExtensionPaths: [],
+					preloadedCustomToolPaths: [],
+					contextFiles: [],
+					skills: [],
+					promptTemplates: [],
+					rules: [],
+				});
+				expect(child.exitCode).toBe(1);
+				expect(child.resolvedModel).toBeUndefined();
+				expect(discoveries).toBe(0);
+				expect(chatRequests).toBe(0);
+				expect(settings.getModelRole("task")).toBe("offline-primary/uncached-task-model");
+				expect(settings.getModelRole("default")).toBe("local-parent/cached-parent");
+				expect(cfgRetryFallbackChains.get(settings).task).toEqual([]);
+			} finally {
+				await AgentLifecycleManager.global().dispose();
+				authStorage.close();
+				await server.stop(true);
+			}
+		},
+		60_000,
+	);
 
 	async function withNativeHookFixture(
 		body: (fixture: { parent: ToolSession; cwd: string; model: MockModel; worker: AgentDefinition }) => Promise<void>,

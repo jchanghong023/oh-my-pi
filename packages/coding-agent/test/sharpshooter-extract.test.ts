@@ -137,6 +137,7 @@ describe("maybeStartSharpshooterExtraction", () => {
 		expect(completion).toHaveBeenCalledTimes(1);
 		pending.resolve(assistantResponse([{ type: "text", text: "No tool call." }]));
 		await flushSharpshooterExtraction(deps.session);
+		expect(completion.mock.calls[0]?.[2]?.thinkingProbe).toBe(false);
 	});
 
 	it("keeps pending queue writes retryable after strict flush timeouts without changing ordinary flush", async () => {

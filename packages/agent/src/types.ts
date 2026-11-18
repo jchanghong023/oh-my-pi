@@ -102,6 +102,8 @@ export interface AgentTurnEndContext {
 	additionalMessages?: AgentMessage[];
 	/** True when the current tool-loop batch is continuing without yielding to post-turn steering. */
 	willContinue: boolean;
+	/** True when this stop boundary can drain queued user input into another model call. */
+	canDrainQueuedMessages: boolean;
 }
 
 export interface AgentPreModelCallStop {
@@ -637,10 +639,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 		signal?: AbortSignal,
 	) => Promise<BeforeToolCallResult | undefined> | BeforeToolCallResult | undefined;
 	/**
-	 * Called after a turn ends and before the loop polls steering/asides for the
-	 * next iteration. `context` carries the just-finished turn; `context.willContinue`
-	 * is true when the current tool-loop batch is continuing without yielding to
-	 * post-turn steering.
+	 * Called after a turn ends, before the loop continues or exits. `context`
+	 * distinguishes an ongoing tool loop from a stop that can drain queued
+	 * input. Queue policy or an abort during the hook can still prevent draining.
 	 */
 	onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal, context?: AgentTurnEndContext) => Promise<void> | void;
 

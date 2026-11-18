@@ -13,7 +13,7 @@
 
 ### Changed
 
-- Updated to upstream v18.22.1 while retaining intranet providers, fork commands and TUI presentation.
+- Updated to upstream v18.22.2 while retaining intranet providers, fork commands and TUI presentation.
 - Selective commit through `/commit` and the eval `commit` namespace is now opt-in via `commit.enabled`; unfinished merges use plain `git commit`.
 - Added `providers.thinkingProbe` (default off) so unknown-model thinking probes never add requests to intranet, company or custom providers.
 - Binary analysis remains disabled by default after the upstream IDA/Ghidra migration; enable it with `disassembler.backend`.
@@ -63,6 +63,16 @@
 
 ### Fixed
 
+- Binary release builds now initialize their temporary directories without failing workflow validation.
+- Edited prompts continue after successful in-place context reduction, and terminal yields no longer compact input that will remain queued.
+- Auxiliary model requests now honor `providers.thinkingProbe`, including memory, commit, image, Eval and compaction requests.
+- Session startup failures release allocated interaction UI resources without duplicate cleanup.
+- Changing display modes no longer rebuilds the transcript twice.
+- Offline file completion now honors the configured directory rescan interval, including an explicit zero.
+- Empty update-repository overrides now retain valid upstream mise detection and update commands.
+- Recovered Bun crashes no longer replace real test failure exit codes, and sequential failures are reported only once.
+- Windows installation restores the caller's TLS settings and uses Gregorian UTC dates in diagnostic filenames.
+- OpenWiki now resolves a LangChain core version compatible with its model adapters.
 - Guided Goal interviews release only their temporary goal tool and preserve tools enabled during the interview.
 - Fulltest reserves Windows subprocess headroom and keeps startup, OpenWiki and Superpowers checks within their shared concurrency budgets.
 - Browser Relay can reattach a tab after Chrome temporarily refuses debugger access.

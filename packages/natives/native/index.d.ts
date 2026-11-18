@@ -2419,6 +2419,11 @@ export interface FuzzyFindOptions {
   gitignore?: boolean
   /** Reuse unchanged directory listings across calls (default: false). */
   cache?: boolean
+  /**
+   * With caching enabled, reuse listings for this many milliseconds without
+   * checking for changes. Zero disables caching; absent keeps stamp validation.
+   */
+  cacheTtlMs?: number
   /** Maximum number of matches to return (default: 100). */
   maxResults?: number
   /** Abort signal for cancelling the operation. */

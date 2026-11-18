@@ -18,6 +18,7 @@ export interface ChangelogFlowInput {
 	model: Model<Api>;
 	apiKey: ApiKey;
 	thinkingLevel?: ThinkingLevel;
+	thinkingProbe: boolean;
 	stagedFiles: string[];
 	dryRun: boolean;
 	maxDiffChars?: number;
@@ -43,6 +44,7 @@ export async function runChangelogFlow({
 	model,
 	apiKey,
 	thinkingLevel,
+	thinkingProbe,
 	stagedFiles,
 	dryRun,
 	maxDiffChars,
@@ -77,6 +79,7 @@ export async function runChangelogFlow({
 			apiKey,
 			sessionId,
 			thinkingLevel,
+			thinkingProbe,
 			changelogPath: boundary.changelogPath,
 			isPackageChangelog,
 			existingEntries: existingEntries || undefined,

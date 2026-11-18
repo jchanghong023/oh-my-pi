@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as ai from "@oh-my-pi/pi-ai";
 import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { generateCommitMessage } from "@oh-my-pi/pi-coding-agent/utils/commit-message-generator";
@@ -56,6 +57,64 @@ describe("role thinking helper propagation", () => {
 			reasoning: Effort.Minimal,
 			maxTokens: 1024,
 		});
+	});
+
+	it("only probes an unknown commit-message model when its settings opt in", async () => {
+		let taskRequests = 0;
+		let probeRequests = 0;
+		const marker = "commit-probe-task-marker";
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (!(await request.text()).includes(marker)) {
+					probeRequests++;
+					// Leave the capability cache untouched; only the actual task needs to succeed.
+					return Response.json({ error: { message: "Probe not served by this fixture" } }, { status: 403 });
+				}
+				taskRequests++;
+				const chunks = [
+					{ id: "commit", choices: [{ index: 0, delta: { content: "fix scope handling" } }] },
+					{ id: "commit", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+				];
+				const events = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("");
+				return new Response(`${events}data: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+			},
+		});
+		try {
+			const model = buildModel({
+				id: `unlisted-${Bun.randomUUIDv7()}`,
+				name: "Unknown commit-message model",
+				provider: "commit-probe-test",
+				api: "openai-completions",
+				baseUrl: new URL("v1", server.url).href,
+				input: ["text"],
+				contextWindow: 128_000,
+				maxTokens: 8_192,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			});
+			expect(model.thinking?.unverified).toBe(true);
+			const registry = createRegistry(model);
+			for (const thinkingProbe of [undefined, false, true]) {
+				taskRequests = 0;
+				probeRequests = 0;
+				const settings = Settings.isolated({
+					modelRoles: { smol: `${model.provider}/${model.id}:low` },
+					...(thinkingProbe === undefined ? {} : { "providers.thinkingProbe": thinkingProbe }),
+				});
+				const message = await generateCommitMessage(
+					`diff --git a/x b/x\n+${marker}\n`,
+					registry as never,
+					settings,
+					import.meta.dir,
+				);
+				expect(message).toBe("fix scope handling");
+				expect(taskRequests).toBe(1);
+				expect(probeRequests > 0).toBe(thinkingProbe === true);
+			}
+		} finally {
+			await server.stop(true);
+		}
 	});
 
 	it("keeps the commit budget reasoning-safe when the catalog disables reasoning", async () => {

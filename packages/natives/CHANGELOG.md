@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `fuzzyFind` accepts an explicit directory-cache TTL without changing the default metadata-validated cache behavior.
+
 ## [18.22.2] - 2026-11-18
 
 ### Added

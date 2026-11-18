@@ -835,6 +835,83 @@ describe("CombinedAutocompleteProvider", () => {
 		});
 	});
 
+	describe("@ scan-cache TTL", () => {
+		let baseDir: string;
+		let previousTtl: string | undefined;
+
+		beforeEach(() => {
+			baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-scan-ttl-"));
+			previousTtl = process.env.FS_SCAN_CACHE_TTL_MS;
+		});
+
+		afterEach(() => {
+			if (previousTtl === undefined) delete process.env.FS_SCAN_CACHE_TTL_MS;
+			else process.env.FS_SCAN_CACHE_TTL_MS = previousTtl;
+			vi.restoreAllMocks();
+			fs.rmSync(baseDir, { recursive: true, force: true });
+		});
+
+		async function values(provider: CombinedAutocompleteProvider, line: string): Promise<string[]> {
+			const result = await provider.getSuggestions([line], 0, line.length);
+			return result?.items.map(item => item.value) ?? [];
+		}
+
+		it("reuses recursive listings across queries, by directory, until expiry", async () => {
+			process.env.FS_SCAN_CACHE_TTL_MS = "1000";
+			const provider = new CombinedAutocompleteProvider([], baseDir);
+			fs.mkdirSync(path.join(baseDir, "src", "nested"), { recursive: true });
+			fs.mkdirSync(path.join(baseDir, "other", "nested"), { recursive: true });
+			fs.writeFileSync(path.join(baseDir, "src", "nested", "card.ts"), "");
+			fs.writeFileSync(path.join(baseDir, "src", "nested", "page-old.ts"), "");
+			fs.writeFileSync(path.join(baseDir, "other", "nested", "page-other.ts"), "");
+
+			expect(await values(provider, "@src/card")).toEqual(["@src/nested/card.ts"]);
+			fs.writeFileSync(path.join(baseDir, "src", "nested", "page-new.ts"), "");
+			expect(await values(provider, "@src/page")).toEqual(["@src/nested/page-old.ts"]);
+			expect(await values(provider, "@other/page")).toEqual(["@other/nested/page-other.ts"]);
+
+			await Bun.sleep(1000);
+			expect(await values(provider, "@src/page")).toEqual(["@src/nested/page-new.ts", "@src/nested/page-old.ts"]);
+		});
+
+		it.each(["0", undefined])("does not reuse timed listings with TTL %s", async ttl => {
+			process.env.FS_SCAN_CACHE_TTL_MS = "30000";
+			fs.mkdirSync(path.join(baseDir, "nested"));
+			fs.writeFileSync(path.join(baseDir, "nested", "page-old.ts"), "");
+			const timedProvider = new CombinedAutocompleteProvider([], baseDir);
+			expect(await values(timedProvider, "@page")).toEqual(["@nested/page-old.ts"]);
+			fs.writeFileSync(path.join(baseDir, "nested", "page-new.ts"), "");
+
+			if (ttl === undefined) delete process.env.FS_SCAN_CACHE_TTL_MS;
+			else process.env.FS_SCAN_CACHE_TTL_MS = ttl;
+			const provider = new CombinedAutocompleteProvider([], baseDir);
+			expect(await values(provider, "@page")).toEqual(["@nested/page-new.ts", "@nested/page-old.ts"]);
+			expect(await values(timedProvider, "@page")).toEqual(["@nested/page-old.ts"]);
+		});
+
+		it("applies the TTL to @ prefix listings without changing ordinary path completion", async () => {
+			process.env.FS_SCAN_CACHE_TTL_MS = "30000";
+			const clock = spyOn(Date, "now").mockReturnValue(1_000);
+			const provider = new CombinedAutocompleteProvider([], baseDir);
+			fs.writeFileSync(path.join(baseDir, "old.ts"), "");
+			expect(await values(provider, "@")).toEqual(["@old.ts"]);
+			expect(await values(provider, "./")).toEqual(["./old.ts"]);
+
+			fs.writeFileSync(path.join(baseDir, "new.ts"), "");
+			clock.mockReturnValue(3_000);
+			expect(await values(provider, "./")).toEqual(["./new.ts", "./old.ts"]);
+			expect(await values(provider, "@")).toEqual(["@old.ts"]);
+			clock.mockReturnValue(31_000);
+			expect(await values(provider, "@")).toEqual(["@new.ts", "@old.ts"]);
+
+			fs.writeFileSync(path.join(baseDir, "another.ts"), "");
+			expect(await values(provider, "@")).toEqual(["@new.ts", "@old.ts"]);
+
+			provider.invalidateDirCache(baseDir);
+			expect(await values(provider, "@")).toEqual(["@another.ts", "@new.ts", "@old.ts"]);
+		});
+	});
+
 	describe("slow @ fuzzy search", () => {
 		let baseDir: string;
 

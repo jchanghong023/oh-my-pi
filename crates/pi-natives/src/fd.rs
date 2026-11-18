@@ -3,7 +3,7 @@
 //! Searches for files and directories whose paths match a query string via
 //! subsequence scoring. Uses `pi-walker` for directory traversal and caching.
 
-use std::{cmp::Ordering, collections::BinaryHeap, path::Path};
+use std::{cmp::Ordering, collections::BinaryHeap, path::Path, time::Duration};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -14,21 +14,25 @@ use crate::task;
 #[napi(object)]
 pub struct FuzzyFindOptions<'env> {
 	/// Fuzzy query to match against file paths (case-insensitive).
-	pub query:       String,
+	pub query:        String,
 	/// Directory to search.
-	pub path:        String,
+	pub path:         String,
 	/// Include hidden files (default: false).
-	pub hidden:      Option<bool>,
+	pub hidden:       Option<bool>,
 	/// Respect .gitignore (default: true).
-	pub gitignore:   Option<bool>,
+	pub gitignore:    Option<bool>,
 	/// Reuse unchanged directory listings across calls (default: false).
-	pub cache:       Option<bool>,
+	pub cache:        Option<bool>,
+	/// With caching enabled, reuse listings for this many milliseconds without
+	/// checking for changes. Zero disables caching; absent keeps stamp
+	/// validation.
+	pub cache_ttl_ms: Option<u32>,
 	/// Maximum number of matches to return (default: 100).
-	pub max_results: Option<u32>,
+	pub max_results:  Option<u32>,
 	/// Abort signal for cancelling the operation.
-	pub signal:      Option<Unknown<'env>>,
+	pub signal:       Option<Unknown<'env>>,
 	/// Timeout in milliseconds for the operation.
-	pub timeout_ms:  Option<u32>,
+	pub timeout_ms:   Option<u32>,
 }
 
 /// A single match in fuzzy find results.
@@ -312,12 +316,13 @@ impl TopMatches {
 }
 
 struct FuzzyFindConfig {
-	query:       String,
-	path:        String,
-	hidden:      Option<bool>,
-	gitignore:   Option<bool>,
-	max_results: Option<u32>,
-	cache:       Option<bool>,
+	query:        String,
+	path:         String,
+	hidden:       Option<bool>,
+	gitignore:    Option<bool>,
+	max_results:  Option<u32>,
+	cache:        Option<bool>,
+	cache_ttl_ms: Option<u32>,
 }
 
 fn score_entries(
@@ -365,6 +370,9 @@ async fn fuzzy_find_async(
 		skip_node_modules: true,
 		follow_links: true,
 		cache: config.cache.unwrap_or(false),
+		cache_ttl: config
+			.cache_ttl_ms
+			.map(|ms| Duration::from_millis(u64::from(ms))),
 		..Default::default()
 	};
 	let entries =
@@ -391,10 +399,20 @@ pub fn fuzzy_find<'env>(
 	env: &'env Env,
 	options: FuzzyFindOptions<'_>,
 ) -> Result<PromiseRaw<'env, FuzzyFindResult>> {
-	let FuzzyFindOptions { query, path, hidden, gitignore, cache, max_results, timeout_ms, signal } =
-		options;
+	let FuzzyFindOptions {
+		query,
+		path,
+		hidden,
+		gitignore,
+		cache,
+		cache_ttl_ms,
+		max_results,
+		timeout_ms,
+		signal,
+	} = options;
 	let ct = task::CancelToken::new(timeout_ms, signal);
-	let config = FuzzyFindConfig { query, path, hidden, gitignore, max_results, cache };
+	let config =
+		FuzzyFindConfig { query, path, hidden, gitignore, max_results, cache, cache_ttl_ms };
 	let cancel = ct.clone();
 	task::filesystem_future(env, "fuzzy_find", ct, pi_vfs::Fs::native(), move |fs| async move {
 		fuzzy_find_async(&fs, config, cancel).await
@@ -467,12 +485,13 @@ mod tests {
 
 		let result = find(
 			FuzzyFindConfig {
-				query:       file_name.to_string(),
-				path:        root.path().to_string_lossy().into_owned(),
-				hidden:      Some(true),
-				gitignore:   Some(false),
-				max_results: Some(4),
-				cache:       Some(false),
+				query:        file_name.to_string(),
+				path:         root.path().to_string_lossy().into_owned(),
+				hidden:       Some(true),
+				gitignore:    Some(false),
+				max_results:  Some(4),
+				cache:        Some(false),
+				cache_ttl_ms: None,
 			},
 			task::CancelToken::default(),
 		)
@@ -509,12 +528,13 @@ mod tests {
 
 		let result = find(
 			FuzzyFindConfig {
-				query:       "scripts".to_string(),
-				path:        root.path().to_string_lossy().into_owned(),
-				hidden:      Some(true),
-				gitignore:   Some(false),
-				max_results: Some(10),
-				cache:       Some(false),
+				query:        "scripts".to_string(),
+				path:         root.path().to_string_lossy().into_owned(),
+				hidden:       Some(true),
+				gitignore:    Some(false),
+				max_results:  Some(10),
+				cache:        Some(false),
+				cache_ttl_ms: None,
 			},
 			task::CancelToken::default(),
 		)
@@ -544,12 +564,13 @@ mod tests {
 
 		let result = find(
 			FuzzyFindConfig {
-				query:       "needle".to_string(),
-				path:        root.path().to_string_lossy().into_owned(),
-				hidden:      Some(true),
-				gitignore:   Some(false),
-				max_results: Some(3),
-				cache:       Some(false),
+				query:        "needle".to_string(),
+				path:         root.path().to_string_lossy().into_owned(),
+				hidden:       Some(true),
+				gitignore:    Some(false),
+				max_results:  Some(3),
+				cache:        Some(false),
+				cache_ttl_ms: None,
 			},
 			task::CancelToken::default(),
 		)

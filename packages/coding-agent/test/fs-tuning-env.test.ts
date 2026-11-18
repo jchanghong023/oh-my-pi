@@ -119,12 +119,12 @@ describe("runRootCommand — fork filesystem tuning", () => {
 		});
 	});
 
-	it("keeps an explicitly configured scan-cache TTL", async () => {
+	it.each(["7", "0"])("keeps an explicitly configured scan-cache TTL of %s", async scanTtl => {
 		const snapshot = await startWith(["--print", "hi"], {
 			OMP_OFFLINE: "1",
-			FS_SCAN_CACHE_TTL_MS: "7",
+			FS_SCAN_CACHE_TTL_MS: scanTtl,
 		});
 
-		expect(snapshot.scanTtl).toBe("7");
+		expect(snapshot.scanTtl).toBe(scanTtl);
 	});
 });

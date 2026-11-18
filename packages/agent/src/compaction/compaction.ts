@@ -837,6 +837,8 @@ export interface SummaryOptions {
 	 * `resolveCompactionEffort` for the conversion contract.
 	 */
 	thinkingLevel?: ThinkingLevel;
+	/** Whether to probe unverified model thinking controls on summary requests. */
+	thinkingProbe?: boolean;
 	/** Session routing key for remote compaction transports with sticky provider sessions. */
 	sessionId?: string;
 	/** Prompt-cache key for conventional summary requests, gated against the summarizing model. */
@@ -1171,6 +1173,7 @@ async function summarizeConversationWindow(
 			signal,
 			apiKey,
 			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
+			thinkingProbe: options?.thinkingProbe,
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 			fetch: options?.fetch,
@@ -1951,6 +1954,7 @@ export async function compact(
 					// silently falls back to Effort.High — the same defect e07b47ee4 fixed
 					// at the call sites, leaked back in here. See resolveCompactionEffort.
 					thinkingLevel: options?.thinkingLevel,
+					thinkingProbe: options?.thinkingProbe,
 					sessionId: options?.sessionId,
 					promptCacheKey: options?.promptCacheKey,
 					remotePromptCacheKey:
@@ -2555,6 +2559,7 @@ export async function compact(
 								fetch: summaryOptions.fetch,
 								sessionId: summaryOptions.sessionId,
 								promptCacheKey: summaryOptions.promptCacheKey,
+								thinkingProbe: summaryOptions.thinkingProbe,
 								providerSessionState: summaryOptions.providerSessionState,
 								completeImpl: summaryOptions.completeImpl,
 								telemetry: summaryOptions.telemetry,
@@ -2790,6 +2795,7 @@ async function generateTurnPrefixSummary(
 			signal,
 			apiKey,
 			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
+			thinkingProbe: options?.thinkingProbe,
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 			fetch: options?.fetch,

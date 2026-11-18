@@ -2903,9 +2903,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#jobSettleListener = undefined;
 		});
 
-		this.#eventBusUnsubscribers.push(
-			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
-		);
 		// Refresh the next launch's status prepaint once startup settles: settings
 		// and the model catalog may have changed since the last session wrote it.
 		this.#scheduleComposerStatusPersist();

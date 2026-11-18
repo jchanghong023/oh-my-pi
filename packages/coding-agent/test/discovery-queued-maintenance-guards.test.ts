@@ -29,6 +29,7 @@ describe("queued pending-budget terminal boundaries", () => {
 							message: queued,
 							toolResults: [],
 							willContinue: false,
+							canDrainQueuedMessages: true,
 						};
 			try {
 				await maintenance.maintainContextMidRun([], controller.signal, context);

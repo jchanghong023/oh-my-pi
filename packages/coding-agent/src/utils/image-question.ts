@@ -16,6 +16,7 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { LoadedImageInput } from "./image-loading";
 
 import { cfgImagesBlockImages } from "../modes/settings";
+import { cfgProvidersThinkingProbe } from "../session/settings";
 import { cfgImagesQuestionTimeoutMs } from "../tools/settings";
 
 /** Vision-capable model selected for an explicit image question. */
@@ -156,6 +157,7 @@ export async function askImageQuestion(
 				apiKey: modelRegistry.resolver(model, session.getSessionId?.() ?? undefined),
 				signal: effectiveSignal,
 				reasoning,
+				thinkingProbe: cfgProvidersThinkingProbe.get(session.settings),
 			},
 			{ telemetry, oneshotKind: "image_question", completeImpl },
 		);

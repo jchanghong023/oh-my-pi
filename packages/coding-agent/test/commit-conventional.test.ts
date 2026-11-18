@@ -235,6 +235,7 @@ describe("llm-git generation routing", () => {
 			primary: target,
 			smol: target,
 			cwd: import.meta.dir,
+			thinkingProbe: true,
 			config: config({ maxRetries: 2, initialBackoffMs: 0, mapReduceEnabled: false }),
 			cache: null,
 		});
@@ -247,6 +248,7 @@ describe("llm-git generation routing", () => {
 				inference,
 			});
 			expect(calls).toBe(3);
+			expect(complete.mock.calls.map(([, , opts]) => opts?.thinkingProbe)).toEqual([true, true, true]);
 			expect(result.commit.summary).toBe("added parser recovery");
 		} finally {
 			inference.dispose();

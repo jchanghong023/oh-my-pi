@@ -13,6 +13,7 @@ import { redactMemorySecrets as redactSecrets } from "../memory-backend/redact";
 import { truncateApproxTokens } from "../mnemopi/config";
 import consolidateInputTemplate from "../prompts/memories/sharpshooter-consolidate-input.md" with { type: "text" };
 import consolidateSystemTemplate from "../prompts/memories/sharpshooter-consolidate-system.md" with { type: "text" };
+import { cfgProvidersThinkingProbe } from "../session/settings";
 import { resolveSharpshooterModel } from "./extract";
 import {
 	readSharpshooterState,
@@ -246,6 +247,7 @@ async function consolidateLocked(
 						sessionId: options.sessionId,
 						maxTokens,
 						reasoning: clampThinkingLevelForModel(model, Effort.Medium),
+						thinkingProbe: cfgProvidersThinkingProbe.get(options.settings),
 						toolChoice: "required",
 					},
 				);

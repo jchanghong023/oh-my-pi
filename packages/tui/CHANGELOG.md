@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- File completion honors directory-cache expiry across fuzzy queries and prefix lookups, including explicit cache disablement.
 - Preserve fork blocked-todo rendering and Eval failure output while adopting upstream wait rendering and render-cache improvements.
 - Preserve Chinese picker and plan-review presentation and selection-only model search while composing upstream provider scopes, thinking controls, document review, and terminal output ownership.
 

@@ -10,7 +10,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { type } from "@oh-my-pi/omptype";
+import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockHandler } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -34,7 +35,7 @@ describe("AgentSession queued drain pending-budget compaction (G02)", () => {
 		vi.restoreAllMocks();
 	});
 
-	async function createSession(responses: MockHandler[]): Promise<void> {
+	async function createSession(responses: MockHandler[], tool?: AgentTool): Promise<void> {
 		tempDir = TempDir.createSync("@pi-queued-drain-compaction-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.keys.setRuntime("mock", "test-key");
@@ -81,7 +82,7 @@ describe("AgentSession queued drain pending-budget compaction (G02)", () => {
 
 		const agent = new Agent({
 			getApiKey: () => "test-key",
-			initialState: { model: mock, systemPrompt: ["Test"], tools: [], messages: [] },
+			initialState: { model: mock, systemPrompt: ["Test"], tools: tool ? [tool] : [], messages: [] },
 			convertToLlm,
 			streamFn: mock.stream,
 		});
@@ -98,6 +99,7 @@ describe("AgentSession queued drain pending-budget compaction (G02)", () => {
 			}),
 			modelRegistry,
 			extensionRunner,
+			toolRegistry: tool ? new Map([[tool.name, tool]]) : undefined,
 		});
 	}
 
@@ -196,6 +198,49 @@ describe("AgentSession queued drain pending-budget compaction (G02)", () => {
 
 		expect(calls).toBe(2);
 		expect(session.agent.peekSteeringQueue()).toEqual([]);
+	});
+
+	it("does not compact for a queued follow-up left behind by a terminal yield", async () => {
+		const queued = { role: "user" as const, content: "queued input ".repeat(16_000), timestamp: Date.now() };
+		const yieldTool: AgentTool = {
+			name: "yield",
+			label: "Yield",
+			description: "Completes this run",
+			parameters: type({}),
+			execute: async () => ({ content: [{ type: "text", text: "Result submitted." }] }),
+		};
+		let calls = 0;
+		await createSession(
+			[
+				() => {
+					calls++;
+					session.agent.followUp(queued);
+					return {
+						content: [{ type: "toolCall", id: "terminal-yield", name: "yield", arguments: {} }],
+						usage: { input: 29_900, output: 12 },
+					};
+				},
+			],
+			yieldTool,
+		);
+		let maintenanceStarts = 0;
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_start") maintenanceStarts++;
+		});
+
+		await session.prompt("kick off");
+
+		expect(calls).toBe(1);
+		expect(session.agent.peekFollowUpQueue()).toEqual([queued]);
+		expect(maintenanceStarts).toBe(0);
+		const branch = session.sessionManager.getBranch();
+		expect(branch.some(entry => entry.type === "compaction")).toBe(false);
+		expect(branch).toContainEqual(
+			expect.objectContaining({
+				type: "message",
+				message: expect.objectContaining({ role: "toolResult", toolCallId: "terminal-yield", isError: false }),
+			}),
+		);
 	});
 
 	// A pending input is not budgeted until the loop is actually allowed to consume it.

@@ -27,6 +27,7 @@ import readPathTemplate from "../prompts/memories/read-path.md" with { type: "te
 import stageOneInputTemplate from "../prompts/memories/stage_one_input.md" with { type: "text" };
 import stageOneSystemTemplate from "../prompts/memories/stage_one_system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
+import { cfgProvidersThinkingProbe } from "../session/settings";
 import {
 	claimStage1Jobs,
 	clearMemoryData as clearMemoryDataInDb,
@@ -930,6 +931,7 @@ async function runStage1Job(options: {
 						metadata: options.metadata,
 						maxTokens: Math.max(1024, Math.min(4096, Math.floor(modelMaxTokens * 0.2))),
 						reasoning: clampThinkingLevelForModel(model, Effort.Low),
+						thinkingProbe: cfgProvidersThinkingProbe.get(options.session.settings),
 						// OpenAI chat-completions owns its transient retries in the HTTP
 						// transport; never restart that budget at the provider/oneshot layers.
 						maxHttpAttempts: model.api === "openai-completions" ? 3 : undefined,
@@ -1085,6 +1087,7 @@ async function runConsolidationModel(options: {
 					metadata: options.metadata,
 					maxTokens: 8192,
 					reasoning: clampThinkingLevelForModel(model, Effort.Medium),
+					thinkingProbe: cfgProvidersThinkingProbe.get(options.session.settings),
 					maxHttpAttempts: model.api === "openai-completions" ? 3 : undefined,
 				},
 			);

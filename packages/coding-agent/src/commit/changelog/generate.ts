@@ -32,6 +32,7 @@ export interface ChangelogPromptInput {
 	apiKey: ApiKey;
 	sessionId: string;
 	thinkingLevel?: ThinkingLevel;
+	thinkingProbe: boolean;
 	changelogPath: string;
 	isPackageChangelog: boolean;
 	existingEntries?: string;
@@ -44,6 +45,7 @@ export async function generateChangelogEntries({
 	apiKey,
 	sessionId,
 	thinkingLevel,
+	thinkingProbe,
 	changelogPath,
 	isPackageChangelog,
 	existingEntries,
@@ -66,7 +68,7 @@ export async function generateChangelogEntries({
 					messages: [{ role: "user", content: userContent, timestamp: Date.now() }],
 					tools: [changelogTool],
 				},
-				{ apiKey, sessionId, maxTokens: 1200, reasoning: toReasoningEffort(thinkingLevel) },
+				{ apiKey, sessionId, maxTokens: 1200, reasoning: toReasoningEffort(thinkingLevel), thinkingProbe },
 			),
 		{ provider: model.provider },
 	);

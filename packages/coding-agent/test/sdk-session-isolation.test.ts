@@ -9,6 +9,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -330,6 +331,8 @@ describe("createAgentSession session storage isolation", () => {
 			session: null,
 			status: "idle",
 		});
+		const dispose = vi.fn();
+		const createInteractionUI = vi.fn(() => ({ ui: {} as ExtensionUIContext, cancel() {}, dispose }));
 
 		await expect(
 			createAgentSession({
@@ -351,10 +354,57 @@ describe("createAgentSession session storage isolation", () => {
 				parentAgentId: "Main",
 				taskDepth: 1,
 				expectedAgentRef: null,
+				interactionParentSessionId: "parent-session",
+				createInteractionUI,
 			}),
 		).rejects.toThrow("already owned by another session generation");
+		expect(createInteractionUI).toHaveBeenCalledTimes(1);
+		expect(dispose).toHaveBeenCalledTimes(1);
 		expect(registry.get("shared-worker")).toBe(replacement);
 		expect(replacement).toMatchObject({ status: "idle", session: null });
+	});
+
+	it.each([false, true])("releases the interaction host once when session attachment succeeds=%s", async attached => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-interaction-ownership-${Snowflake.next()}-`));
+		tempDirs.push(cwd);
+		const agentRegistry = new AgentRegistry();
+		if (!attached) spyOn(agentRegistry, "attachSession").mockReturnValue(false);
+		const ui = {} as ExtensionUIContext;
+		const dispose = vi.fn();
+		const created = createAgentSession({
+			cwd,
+			agentDir: cwd,
+			sessionManager: SessionManager.inMemory(cwd),
+			modelRegistry: sharedModelRegistry,
+			settings: Settings.isolated(),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			toolNames: [],
+			enableMCP: false,
+			enableLsp: false,
+			agentRegistry,
+			agentId: "interactive-worker",
+			parentTaskPrefix: "interactive-worker",
+			parentAgentId: "Main",
+			taskDepth: 1,
+			interactionParentSessionId: "parent-session",
+			createInteractionUI: () => ({ ui, cancel() {}, dispose }),
+		});
+		if (attached) {
+			const { session, interactionUI } = await created;
+			try {
+				expect(interactionUI).toBe(ui);
+				expect(dispose).not.toHaveBeenCalled();
+			} finally {
+				await Promise.all([session.dispose(), session.dispose()]);
+			}
+		} else {
+			await expect(created).rejects.toThrow("was replaced during session initialization");
+		}
+		expect(dispose).toHaveBeenCalledTimes(1);
 	});
 
 	it("reclaims an unrevivable parked generation before a fresh same-id spawn", async () => {

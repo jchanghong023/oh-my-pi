@@ -14,6 +14,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import commitSystemPrompt from "../prompts/system/commit-message-system.md" with { type: "text" };
+import { cfgProvidersThinkingProbe } from "../session/settings";
 import { concreteThinkingLevel, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 
 const COMMIT_SYSTEM_PROMPT = prompt.render(commitSystemPrompt);
@@ -128,6 +129,7 @@ export async function generateCommitMessage(
 							cwd,
 							maxTokens,
 							reasoning: toReasoningEffort(candidate.thinkingLevel),
+							thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 						},
 					),
 				{ provider: candidate.model.provider },

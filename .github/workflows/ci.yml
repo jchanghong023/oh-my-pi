@@ -99,15 +99,19 @@ jobs:
          run:
             shell: bash
       env:
-         CARGO_TARGET_DIR: ${{ runner.temp }}/omp-release-cargo-target
-         OMP_RELEASE_NATIVE_DIR: ${{ runner.temp }}/omp-release-native
-         OMP_RELEASE_BINARY_DIR: ${{ runner.temp }}/omp-release-binaries
-         OMP_BUILD_CACHE_DIR: ${{ runner.temp }}/omp-release-build-assets
          RELEASE_TARGETS: ${{ matrix.target_id }}
          RELEASE_VERSION: ${{ needs.release_metadata.outputs.version }}
          UPDATE_REPOSITORY: ${{ github.repository }}
          RELEASE_COMMIT: ${{ github.sha }}
       steps:
+         - name: Configure release build directories
+           run: |
+              {
+                echo "CARGO_TARGET_DIR=$RUNNER_TEMP/omp-release-cargo-target"
+                echo "OMP_RELEASE_NATIVE_DIR=$RUNNER_TEMP/omp-release-native"
+                echo "OMP_RELEASE_BINARY_DIR=$RUNNER_TEMP/omp-release-binaries"
+                echo "OMP_BUILD_CACHE_DIR=$RUNNER_TEMP/omp-release-build-assets"
+              } >> "$GITHUB_ENV"
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
            with:
               submodules: recursive

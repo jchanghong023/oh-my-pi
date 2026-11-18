@@ -224,9 +224,12 @@ describe("compact() propagates thinkingLevel to all three summarizers (regressio
 
 		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined, {
 			thinkingLevel: ThinkingLevel.Low,
+			thinkingProbe: false,
 		});
 
 		expectSummarizerEfforts(spy.mock.calls, ai.Effort.Low);
+		const reasonedCalls = spy.mock.calls.filter(([, , opts]) => opts?.reasoning !== undefined);
+		expect(reasonedCalls.map(([, , opts]) => opts?.thinkingProbe)).toEqual([false, false]);
 	});
 
 	test("undefined thinkingLevel → history and turn-prefix calls still get reasoning=high (historical default)", async () => {
@@ -237,6 +240,7 @@ describe("compact() propagates thinkingLevel to all three summarizers (regressio
 		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined);
 
 		expectSummarizerEfforts(spy.mock.calls, ai.Effort.High);
+		for (const [, , opts] of spy.mock.calls) expect(opts?.thinkingProbe).toBeUndefined();
 	});
 
 	test("xai-oauth/grok-build + ThinkingLevel.High → every fan-out call gets reasoning=undefined (clamp)", async () => {

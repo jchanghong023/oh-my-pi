@@ -479,6 +479,7 @@ describe("AgentSession advisor context maintenance", () => {
 		);
 		expect(compactionCalls.length).toBeGreaterThan(0);
 		expect(compactionCalls.every(call => call.options?.signal instanceof AbortSignal)).toBe(true);
+		expect(compactionCalls[0]?.options?.thinkingProbe).toBe(false);
 
 		// Every advisor request — the compaction one-shot and the advisor turn —
 		// carries the advisor's own provider session id via metadata.user_id.

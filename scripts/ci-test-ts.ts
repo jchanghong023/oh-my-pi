@@ -6,7 +6,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
-import { BunTestFailureObserver, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
+import { BunTestFailureObserver, GateCommandError, gateFailure, reportGateFailure } from "./test-gate-failure-events";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
 import { bunCoreBrowserInputsChanged, bunRequiresFullSelection, captureChangedPaths } from "./test-gate-source";
 import type { GateRun } from "./test-gate-runtime";
@@ -1064,7 +1064,10 @@ async function recordAttempt(
 	return missing;
 }
 
-export async function runTestCommand(testCommand: TestCommand): Promise<void> {
+async function runTestCommand(
+	testCommand: TestCommand,
+	notifyFailure?: (error: GateCommandError) => void,
+): Promise<void> {
 	// Windows cross-drive relatives are already absolute; joining would build an invalid cwd.
 	const cwd = path.isAbsolute(testCommand.cwd) ? testCommand.cwd : path.join(repoRoot, testCommand.cwd);
 	console.log(`\n==> ${testCommand.label}`);
@@ -1086,7 +1089,7 @@ export async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			stdout: "inherit",
 			stderr: "pipe",
 		});
-		const failureObserver = gateReportsFailures ? new BunTestFailureObserver(reportGateFailure) : undefined;
+		const failureObserver = notifyFailure ? new BunTestFailureObserver(notifyFailure) : undefined;
 		const stderrReader = proc.stderr.getReader();
 		let stderrText = "";
 		const decoder = new TextDecoder();
@@ -1118,8 +1121,8 @@ export async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			}
 		}, chunkTimeoutMs());
 		const exitCode = await proc.exited;
-		if (gateReportsFailures && exitCode !== 0)
-			reportGateFailure(
+		if (notifyFailure && exitCode !== 0)
+			notifyFailure(
 				new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode),
 			);
 		clearTimeout(killTimer);
@@ -1153,7 +1156,7 @@ export async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			if (missing) console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
 			return;
 		}
-		if (!gateReportsFailures && !timedOut && BUN_CRASH_EXITS[exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
+		if (canRetryBunCrash(exitCode, timedOut, attempt)) {
 			console.log(
 				`==> ${testCommand.label}: bun crashed (exit ${exitCode}); retrying (attempt ${attempt + 1}/${MAX_CHUNK_ATTEMPTS})`,
 			);
@@ -1311,6 +1314,10 @@ const BUN_CRASH_EXITS: Record<number, true> = {
 // heap-timing dependent — a fresh process nearly always passes — while a
 // deterministic crash still fails every attempt and is reported normally.
 const MAX_CHUNK_ATTEMPTS = 3;
+
+function canRetryBunCrash(exitCode: number, timedOut: boolean, attempt: number): boolean {
+	return !gateReportsFailures && !timedOut && attempt < MAX_CHUNK_ATTEMPTS && Boolean(BUN_CRASH_EXITS[exitCode]);
+}
 
 // Why a chunk failed, in words. Exit 137 is SIGKILL, which this runner reaches
 // two very different ways -- the per-chunk watchdog firing, or the kernel OOM
@@ -1591,15 +1598,17 @@ export async function runBoundedPool<T>(
 // at the end; `--full` streams every chunk's output inline as it completes.
 // Gate-owned runs also stream authenticated failure notifications, but keep
 // executing independent work until the shared deadline or cancellation.
-async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
+async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<number> {
 	const env = buildChildEnv();
 	const failures: ChunkOutcome[] = [];
 	let completed = 0;
-	let firstFailure: GateCommandError | undefined;
-	function reportFirstFailure(error: GateCommandError): void {
-		if (firstFailure) return;
-		firstFailure = error;
+	let firstFailureExitCode: number | undefined;
+	let failureReported = false;
+	function reportFirstFailure(error: GateCommandError): boolean {
+		if (failureReported) return false;
+		failureReported = true;
 		reportGateFailure(error);
+		return true;
 	}
 	const fileWidths = [...new Set(commands.map(c => c.parallel).filter(p => p !== undefined))].sort((a, b) => a - b);
 	console.log(
@@ -1672,11 +1681,16 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		});
 		const stdout = { text: "" };
 		const stderr = { text: "" };
+		let firstCaseFailure = false;
 		const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
 		const stderrDrain = drainInto(
 			proc.stderr as ReadableStream<Uint8Array>,
 			stderr,
-			gateReportsFailures ? new BunTestFailureObserver(reportFirstFailure) : undefined,
+			gateReportsFailures
+				? new BunTestFailureObserver(error => {
+						firstCaseFailure = reportFirstFailure(error);
+					})
+				: undefined,
 		);
 		const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
 		// Watchdog: a wedged child (e.g. bun's panic handler deadlocking
@@ -1692,10 +1706,16 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			}
 		}, chunkTimeoutMs());
 		const exitCode = await proc.exited;
-		if (exitCode !== 0)
-			reportFirstFailure(
-				new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode),
-			);
+		if ((exitCode !== 0 || timedOut) && !canRetryBunCrash(exitCode, timedOut, attempt)) {
+			// A gate may already have observed this chunk's failing case before
+			// other workers exited. Keep that ordering, but preserve the exit code.
+			if (firstCaseFailure) firstFailureExitCode = exitCode || 1;
+			else firstFailureExitCode ??= exitCode || 1;
+			if (gateReportsFailures && !failureReported)
+				reportFirstFailure(
+					new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode),
+				);
+		}
 		clearTimeout(killTimer);
 		if (!(await settleWithin(drains, 5000))) {
 			stdoutDrain.cancel();
@@ -1729,12 +1749,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		let result = await runAttempt(testCommand, attempt);
 		// Bun-crash retry: a 128+signal exit means the runtime died (GC
 		// segfault/abort), not that tests failed — rerun in a fresh heap.
-		while (
-			!gateReportsFailures &&
-			!result.timedOut &&
-			BUN_CRASH_EXITS[result.exitCode] &&
-			attempt < MAX_CHUNK_ATTEMPTS
-		) {
+		while (canRetryBunCrash(result.exitCode, result.timedOut, attempt)) {
 			attempt += 1;
 			process.stdout.write(
 				`${style.dim(`↻ ${testCommand.label} — bun crashed (exit ${result.exitCode}); retrying (attempt ${attempt}/${MAX_CHUNK_ATTEMPTS})`)}\n`,
@@ -1786,9 +1801,31 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 	} else if (failures.length > 0) {
 		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
-	if (failures.length > 0) {
-		process.exitCode = firstFailure?.exitCode ?? 1;
+	return firstFailureExitCode ?? 0;
+}
+
+export async function runTestCommands(commands: TestCommand[], poolWidth?: number): Promise<number> {
+	if (poolWidth !== undefined && !isDryRun) return runTestCommandsInParallel(commands, poolWidth);
+	let firstFailureExitCode: number | undefined;
+	for (const command of commands) {
+		let failureReported = false;
+		const notifyFailure = gateReportsFailures
+			? (error: GateCommandError) => {
+					if (failureReported) return;
+					failureReported = true;
+					reportGateFailure(error);
+				}
+			: undefined;
+		try {
+			await runTestCommand(command, notifyFailure);
+		} catch (error) {
+			const failure = gateFailure(error);
+			firstFailureExitCode ??= failure.exitCode;
+			notifyFailure?.(failure);
+			console.error(failure.message);
+		}
 	}
+	return firstFailureExitCode ?? 0;
 }
 
 // `OMP_TEST_SHARD=i/n` splits a mode's chunk commands across n CI jobs; job i
@@ -1997,25 +2034,10 @@ if (import.meta.main) {
 	const run = isDryRun ? undefined : await beginTestRun(reportScope);
 	let failed = false;
 	try {
-		if (pooled && !isDryRun) {
-			await runTestCommandsInParallel(testCommands, poolWidth);
-		} else {
-			let firstFailure: GateCommandError | undefined;
-			for (const testCommand of testCommands) {
-				try {
-					await runTestCommand(testCommand);
-				} catch (error) {
-					failed = true;
-					const failure =
-						error instanceof GateCommandError
-							? error
-							: new GateCommandError(error instanceof Error ? error.message : String(error), 1);
-					firstFailure ??= failure;
-					reportGateFailure(failure);
-					console.error(failure.message);
-				}
-			}
-			if (firstFailure) process.exitCode = firstFailure.exitCode;
+		const exitCode = await runTestCommands(testCommands, pooled ? poolWidth : undefined);
+		if (exitCode) {
+			failed = true;
+			process.exitCode = exitCode;
 		}
 	} catch (error) {
 		failed = true;

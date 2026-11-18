@@ -12,6 +12,7 @@ import extractInputTemplate from "../prompts/memories/sharpshooter-extract-input
 import extractSystemTemplate from "../prompts/memories/sharpshooter-extract-system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { customMessageContentText } from "../session/checkpoint-entries";
+import { cfgProvidersThinkingProbe } from "../session/settings";
 import { appendSharpshooterDelta } from "./queue";
 import type { SharpshooterDelta, SharpshooterDeltaKind, SharpshooterDeltaSource, SharpshooterFriction } from "./types";
 
@@ -275,6 +276,7 @@ async function runSharpshooterExtraction(
 					sessionId: session.sessionId,
 					maxTokens: 2048,
 					reasoning: clampThinkingLevelForModel(model, Effort.Low),
+					thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 					toolChoice: "required",
 				},
 			);
