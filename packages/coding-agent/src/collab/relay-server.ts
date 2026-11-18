@@ -9,6 +9,7 @@ interface SocketData {
 	roomId: string;
 	role: "host" | "guest";
 	peerId: number;
+	relayOrigin: string;
 	username?: string;
 }
 
@@ -64,7 +65,7 @@ export function startIntranetRelay(options: { hostname?: string; port?: number }
 			registrationError(ws, "Invalid intranet username registration.");
 			return;
 		}
-		const parsed = parseCollabLink(value.link);
+		const parsed = parseCollabLink(value.link, ws.data.relayOrigin);
 		if ("error" in parsed || parsed.roomId !== ws.data.roomId) {
 			registrationError(ws, "The registered link must grant access to this room.");
 			return;
@@ -120,7 +121,7 @@ export function startIntranetRelay(options: { hostname?: string; port?: number }
 			const match = ROOM_PATH_RE.exec(url.pathname);
 			const role = url.searchParams.get("role");
 			if (!match || (role !== "host" && role !== "guest")) return new Response("not found", { status: 404 });
-			const data: SocketData = { roomId: match[1]!, role, peerId: 0 };
+			const data: SocketData = { roomId: match[1]!, role, peerId: 0, relayOrigin: url.origin.replace(/^http/, "ws") };
 			if (srv.upgrade(req, { data })) return undefined;
 			return new Response("websocket upgrade required", { status: 426 });
 		},

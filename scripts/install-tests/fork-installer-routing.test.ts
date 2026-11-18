@@ -31,6 +31,10 @@ async function createFixture(osName = "Linux", arch = "x86_64"): Promise<Install
 	const log = path.join(dir, "commands.log");
 	await fs.mkdir(binDir);
 	await Bun.write(log, "");
+	if (process.platform === "darwin") {
+		// These fixtures simulate Linux, but macOS ships shasum rather than sha256sum.
+		await writeExecutable(binDir, "sha256sum", '#!/bin/sh\nexec /usr/bin/shasum -a 256 "$@"\n');
+	}
 
 	await writeExecutable(binDir, "uname", `#!/bin/sh\n[ "$1" = "-s" ] && echo ${osName} || echo ${arch}\n`);
 	await writeExecutable(binDir, "sysctl", "#!/bin/sh\necho 0\n");
@@ -54,50 +58,75 @@ if [ "$1" = "--version" ]; then
   printf 'curl %s (fixture) %s\\n' "\${TEST_CURL_VERSION:-8.0.0}" "\${TEST_CURL_TLS:-OpenSSL}"
   exit 0
 fi
-case " $* " in
-  *" --insecure "*) ;;
-  *) echo 'curl: (60) fixture certificate verification failed' >&2; exit 60 ;;
-esac
-case " $* " in
-  *" --ssl-no-revoke "*)
-    if [ "\${TEST_CURL_TLS:-OpenSSL}" != Schannel ] || [ "\${TEST_CURL_NO_REVOKE_SUPPORTED:-1}" = 0 ]; then
-      echo 'curl: option --ssl-no-revoke: is unknown' >&2
-      exit 2
-    fi
-    ;;
-  *)
-    if [ "\${TEST_CURL_TLS:-OpenSSL}" = Schannel ] && [ "\${TEST_CURL_NO_REVOKE_SUPPORTED:-1}" = 1 ]; then
-      echo 'curl: (35) fixture Schannel revocation check failed' >&2
-      exit 35
-    fi
-    ;;
-esac
-case " $* " in
-  *" --fail-with-body "*)
-    if [ "\${TEST_CURL_FAIL_WITH_BODY_SUPPORTED:-1}" = 0 ]; then
-      echo 'curl: option --fail-with-body: is unknown' >&2
-      exit 2
-    fi
-    ;;
-esac
+fixture_binary() {
+  printf '%s\\n' '#!/bin/sh' "echo \\"\${TEST_BINARY_PREFIX-omp/}\${TEST_BINARY_VERSION:-18.0.9+fork.125}\\""
+}
 case "$*" in
   *api.github.com*)
+    if [ "$1" != "-q" ]; then
+      echo 'fixture expected metadata curl to ignore .curlrc' >&2
+      exit 2
+    fi
+    case " $* " in
+      *" --insecure "*|*" --ssl-no-revoke "*|*" -L "*|*" --location "*)
+        echo 'fixture expected verified TLS with no metadata redirects' >&2
+        exit 2
+        ;;
+    esac
     if [ "\${TEST_METADATA_EXIT:-0}" != 0 ]; then
       printf '%s\\n' "$TEST_METADATA_ERROR" >&2
       printf '\\n%s' "\${TEST_METADATA_STATUS:-000}"
       exit "$TEST_METADATA_EXIT"
     fi
-    case "$*" in
-      */releases/tags/*) tag="\${*##*/releases/tags/}" ;;
+    for url do :; done
+    case "$url" in
+      */releases/tags/*) tag="\${url##*/releases/tags/}" ;;
       *) tag="v18.0.9+fork.125" ;;
     esac
-    printf '{"tag_name":"%s"}\\n' "$tag"
+    if [ "\${TEST_METADATA_WITHOUT_ASSETS:-0}" = 1 ]; then
+      printf '{"tag_name":"%s"}' "$tag"
+    else
+      sum="$(fixture_binary | sha256sum)" || exit 1
+      printf '{"tag_name":"%s","assets":[' "$tag"
+      separator=""
+      for name in omp-linux-x64 omp-linux-arm64 omp-linux-musl-x64 omp-linux-musl-arm64; do
+        printf '%s{"name":"%s","digest":"sha256:%s"}' "$separator" "$name" "\${sum%% *}"
+        separator=,
+      done
+      printf ']}'
+    fi
     printf '\\n200'
     ;;
   *)
+    case " $* " in
+      *" --insecure "*) ;;
+      *) echo 'curl: (60) fixture certificate verification failed' >&2; exit 60 ;;
+    esac
+    case " $* " in
+      *" --ssl-no-revoke "*)
+        if [ "\${TEST_CURL_TLS:-OpenSSL}" != Schannel ] || [ "\${TEST_CURL_NO_REVOKE_SUPPORTED:-1}" = 0 ]; then
+          echo 'curl: option --ssl-no-revoke: is unknown' >&2
+          exit 2
+        fi
+        ;;
+      *)
+        if [ "\${TEST_CURL_TLS:-OpenSSL}" = Schannel ] && [ "\${TEST_CURL_NO_REVOKE_SUPPORTED:-1}" = 1 ]; then
+          echo 'curl: (35) fixture Schannel revocation check failed' >&2
+          exit 35
+        fi
+        ;;
+    esac
+    case " $* " in
+      *" --fail-with-body "*)
+        if [ "\${TEST_CURL_FAIL_WITH_BODY_SUPPORTED:-1}" = 0 ]; then
+          echo 'curl: option --fail-with-body: is unknown' >&2
+          exit 2
+        fi
+        ;;
+    esac
     while [ "$#" -gt 0 ]; do
       if [ "$1" = "-o" ]; then
-        printf '%s\\n' '#!/bin/sh' "echo \\"\${TEST_BINARY_PREFIX-omp/}\${TEST_BINARY_VERSION:-18.0.9+fork.125}\\"" > "$2"
+        fixture_binary > "$2"
         exit 0
       fi
       shift
@@ -362,6 +391,7 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 
 	test("an already-installed release skips binary download and still gives a PATH hint", async () => {
 		const fixture = await createFixture();
+		fixture.env.TEST_METADATA_WITHOUT_ASSETS = "1";
 		await fs.mkdir(fixture.installDir, { recursive: true });
 		await writeExecutable(fixture.installDir, "omp", '#!/bin/sh\necho "omp/18.0.9+fork.125"\n');
 		const result = await runInstallerWithFixture([], fixture);
@@ -617,9 +647,12 @@ $script:originalFailure = $null
 $script:downloads = 0
 $script:pathChecks = 0
 # Redirect only the endpoint; use the host's real HTTP cmdlet and exception type.
-function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec, [switch]$SkipCertificateCheck) {
+function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec, [int]$MaximumRedirection, [switch]$SkipCertificateCheck) {
+    if ($SkipCertificateCheck -or -not $PSBoundParameters.ContainsKey("MaximumRedirection") -or $MaximumRedirection -ne 0) {
+        throw "Metadata request did not require certificate validation and disable redirects"
+    }
     try {
-        Microsoft.PowerShell.Utility\\Invoke-RestMethod -Uri $env:TEST_METADATA_URL -TimeoutSec $TimeoutSec @script:WebSkipCertCheck
+        Microsoft.PowerShell.Utility\\Invoke-RestMethod -Uri $env:TEST_METADATA_URL -TimeoutSec $TimeoutSec -MaximumRedirection $MaximumRedirection
     } catch {
         $script:originalFailure = $_
         throw
@@ -767,19 +800,25 @@ function Assert-CallerTls {
         throw "Installer did not preserve the caller's TLS protocol"
     }
 }
-function Invoke-RestMethod([string]$Uri) {
+function Invoke-RestMethod([string]$Uri, [int]$MaximumRedirection, [switch]$SkipCertificateCheck) {
     if ($Uri -match '/main/scripts/install.ps1$') {
         return $script:installerDefinitions + '\nfunction Set-InstallEnvironment { $script:pathChecks++; return $false }\nInstall-Binary'
     }
-    $callback = [Net.ServicePointManager]::ServerCertificateValidationCallback
-    if ([object]::ReferenceEquals($callback, $originalTlsCallback) -or
-        -not $callback.Invoke($null, $null, $null, [Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors)) {
-        throw "Installer did not relax TLS validation for release metadata"
+    if ($null -ne [Net.ServicePointManager]::ServerCertificateValidationCallback -or $SkipCertificateCheck -or
+        -not $PSBoundParameters.ContainsKey("MaximumRedirection") -or $MaximumRedirection -ne 0) {
+        throw "Installer did not use default certificate validation and disable redirects for release metadata"
     }
     if (-not ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12)) {
         throw "Installer did not enable TLS 1.2 for release metadata"
     }
-    return @{ tag_name = "v18.0.9+fork.125" }
+    if ($env:TEST_MODE -eq "already") { return @{ tag_name = "v18.0.9+fork.125" } }
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = [BitConverter]::ToString($sha256.ComputeHash([IO.File]::ReadAllBytes($download))).Replace("-", "")
+    } finally {
+        $sha256.Dispose()
+    }
+    return @{ tag_name = "v18.0.9+fork.125"; assets = @(@{ name = "omp-windows-x64.exe"; digest = "sha256:$hash" }) }
 }
 function Invoke-WebRequest([string]$Uri, [string]$OutFile, [int]$TimeoutSec, [switch]$UseBasicParsing) {
     $script:downloadCount++
@@ -936,10 +975,9 @@ try {
     [void]$worker.AddScript({
         param($ready)
         function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec) {
-            $callback = [Net.ServicePointManager]::ServerCertificateValidationCallback
-            if ($null -eq $callback -or
-                -not $callback.Invoke($null, $null, $null, [Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors)) {
-                throw "Installer TLS callback is not active"
+            if ($null -ne [Net.ServicePointManager]::ServerCertificateValidationCallback -or
+                -not ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12)) {
+                throw "Installer metadata TLS scope is not active"
             }
             [void]$ready.Set()
             Start-Sleep -Seconds 30
@@ -1371,7 +1409,7 @@ for (const powerShell of metadataPowerShellHosts) {
 	describe.skipIf(!Bun.which("curl.exe") || !Bun.which("openssl.exe"))(
 		`Windows installer untrusted-certificate requests (${path.basename(powerShell)})`,
 		() => {
-			test("fetches metadata and downloads via both transports from a self-signed HTTPS endpoint", async () => {
+			test("rejects self-signed metadata but downloads assets via both transports", async () => {
 				const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-tls-"));
 				tempDirs.push(dir);
 				const payload = new Uint8Array([0x4d, 0x5a, 0, 0xff, 0x0d, 0x0a]);
@@ -1430,26 +1468,35 @@ $source = [IO.File]::ReadAllText($env:TEST_INSTALLER)
 . ([scriptblock]::Create($source.Substring(0, $ast.EndBlock.Statements[-1].Extent.StartOffset))) -Binary
 # No proxy for this probe: exercise the TLS posture, not proxy resolution.
 [Net.WebRequest]::DefaultWebProxy = $null
+# The standalone download probes also need TLS 1.2 on legacy PowerShell.
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+}
 $originalTlsCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
 $originalSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
-$script:tlsProbeCompleted = $false
-function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec, [switch]$SkipCertificateCheck) {
-    $release = Microsoft.PowerShell.Utility\\Invoke-RestMethod -Uri "https://127.0.0.1:$env:TEST_PORT/release" -TimeoutSec $TimeoutSec @script:WebSkipCertCheck
-    if ($release.tag_name -ne "v18.0.9+fork.125") { throw "Unexpected release metadata" }
-    Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile $env:TEST_OUTFILE
-    function Get-Command([string]$Name) {
-        if ($Name -eq "curl.exe") { return $null }
-        Microsoft.PowerShell.Core\\Get-Command $Name
+$script:metadataFailure = $null
+function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec, [int]$MaximumRedirection, [switch]$SkipCertificateCheck) {
+    if ($SkipCertificateCheck -or -not $PSBoundParameters.ContainsKey("MaximumRedirection") -or $MaximumRedirection -ne 0) {
+        throw "Metadata request did not require certificate validation and disable redirects"
     }
-    Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile "$env:TEST_OUTFILE.fallback"
-    $script:tlsProbeCompleted = $true
-    throw "TLS probe complete"
+    try {
+        Microsoft.PowerShell.Utility\\Invoke-RestMethod -Uri "https://127.0.0.1:$env:TEST_PORT/release" -TimeoutSec $TimeoutSec -MaximumRedirection $MaximumRedirection
+    } catch {
+        $script:metadataFailure = $_.Exception
+        throw
+    }
 }
-# Run all requests inside the real install TLS scope, then stop before replacement.
 try { Install-Binary } catch {
-    if (-not $script:tlsProbeCompleted -or $_.Exception.Message -ne "TLS probe complete") { throw }
+    if (-not $script:metadataFailure -or -not [object]::ReferenceEquals($_.Exception, $script:metadataFailure)) { throw }
 }
-if (-not $script:tlsProbeCompleted) { throw "TLS requests did not complete" }
+if (-not $script:metadataFailure) { throw "Untrusted metadata TLS unexpectedly succeeded" }
+
+Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile $env:TEST_OUTFILE
+function Get-Command([string]$Name) {
+    if ($Name -eq "curl.exe") { return $null }
+    Microsoft.PowerShell.Core\\Get-Command $Name
+}
+Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile "$env:TEST_OUTFILE.fallback"
 if (-not [object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $originalTlsCallback)) {
     throw "Installer did not restore the caller certificate callback"
 }
@@ -1491,7 +1538,7 @@ if ([Net.ServicePointManager]::SecurityProtocol -ne $originalSecurityProtocol) {
 					expect(stdout).not.toContain("curl download failed");
 					expect(new Uint8Array(await fs.readFile(outFile))).toEqual(payload);
 					expect(new Uint8Array(await fs.readFile(`${outFile}.fallback`))).toEqual(payload);
-					expect(requests).toEqual(["/release", "/omp.exe", "/omp.exe"]);
+					expect(requests).toEqual(["/omp.exe", "/omp.exe"]);
 				} finally {
 					server.stop(true);
 				}

@@ -121,8 +121,8 @@ function lookup(relay: IntranetRelay, username: string): Promise<Response> {
 	});
 }
 
-function parsedLink(link: string) {
-	const parsed = parseCollabLink(link);
+function parsedLink(link: string, allowedRelay?: string) {
+	const parsed = parseCollabLink(link, allowedRelay);
 	if ("error" in parsed) throw new Error(parsed.error);
 	return parsed;
 }
@@ -181,7 +181,7 @@ describe("offline intranet relay", () => {
 		});
 	}, 10_000);
 
-	it("registers over remote plain WS, looks up over HTTP, and routes guests without relaxing online link policy", async () => {
+	it("registers and routes guests over configured plain WS without trusting other relay URLs", async () => {
 		const address = Object.values(os.networkInterfaces())
 			.flat()
 			.find(entry => entry?.family === "IPv4" && !entry.internal)?.address;
@@ -195,8 +195,8 @@ describe("offline intranet relay", () => {
 			const keyB = await importRoomKey(rawKeyB);
 			const hostA = await connect(roomA, "host");
 			const hostB = await connect(roomB, "host");
-			const linkA = formatCollabLink(relay.url, roomA, rawKeyA, generateWriteToken());
-			const linkB = formatCollabLink(relay.url, roomB, rawKeyB, generateWriteToken());
+			const linkA = formatCollabLink(relay.url, roomA, rawKeyA, generateWriteToken(), relay.url);
+			const linkB = formatCollabLink(relay.url, roomB, rawKeyB, generateWriteToken(), relay.url);
 			registration(hostA, "remote_alice", "alice-workstation", linkA);
 			registration(hostB, "remote_bob", "bob-workstation", linkB);
 			expect(await hostA.control()).toEqual({ t: "registered" });
@@ -206,8 +206,8 @@ describe("offline intranet relay", () => {
 			const response = await lookup(relay, "remote_alice");
 			expect(response.url).toBe(`${httpOrigin}/collab/users/remote_alice`);
 			expect(response.status).toBe(200);
-			const resolvedA = parsedLink(await resolveIntranetUsername(httpOrigin, "remote_alice"));
-			const resolvedB = parsedLink(await resolveIntranetUsername(relay.url, "remote_bob"));
+			const resolvedA = parsedLink(await resolveIntranetUsername(httpOrigin, "remote_alice"), relay.url);
+			const resolvedB = parsedLink(await resolveIntranetUsername(relay.url, "remote_bob"), relay.url);
 			const guestA = await connect(resolvedA.roomId, "guest", resolvedA.wsUrl);
 			guestA.socket.send(
 				packEnvelope(
@@ -224,7 +224,6 @@ describe("offline intranet relay", () => {
 			guestA.socket.send(packEnvelope(0, await seal(keyA, { t: "prompt", text: "remote ordering barrier" })));
 			expect(await hostA.encrypted(keyA)).toEqual({ t: "prompt", text: "remote ordering barrier" });
 
-			delete process.env.OMP_OFFLINE;
 			const error = "relay link must be wss:// (plain ws:// is only allowed for localhost)";
 			expect(parseCollabLink(linkA)).toEqual({ error });
 			expect(() => formatCollabLink(relay.url, roomA, rawKeyA)).toThrow(error);

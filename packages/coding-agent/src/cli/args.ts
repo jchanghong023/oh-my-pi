@@ -25,12 +25,10 @@ export { getExtraHelpText };
 export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui";
 
 /**
- * Whether the OMP_OFFLINE environment variable requests offline mode. The env
- * var is the only offline trigger (the former `--offline` launch flag was
- * removed): machine-level configuration every spawned omp process inherits,
- * which a CLI flag cannot guarantee. Truthy spellings are `1`, `true`, `yes`,
- * and `on` (case-insensitive); anything else — unset, empty, `0`, `false` —
- * keeps the launch online.
+ * Whether `OMP_OFFLINE` selects the company intranet profile: CentOS 7, NFS,
+ * `/dev/shm`, and no internet access. This flag does not probe the host.
+ * The environment variable is inherited by child processes and is the only
+ * trigger. Only `1`, `true`, `yes`, and `on` enable it (trimmed, case-insensitive).
  */
 export function offlineFromEnv(): boolean {
 	const raw = process.env.OMP_OFFLINE?.trim().toLowerCase();
@@ -44,7 +42,7 @@ export interface Args {
 	profile?: string;
 	alias?: string;
 	allowHome?: boolean;
-	/** Restrict this launch to local resources: disable Web Search, Browser, and URL fetch tools for the process and tell the model there is no public network. Activated by the OMP_OFFLINE environment variable. */
+	/** Use intranet mode: disable Web Search, Browser, AST Edit, and Fetch for this launch. */
 	offline?: boolean;
 	provider?: string;
 	model?: string;

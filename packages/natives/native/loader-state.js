@@ -6,7 +6,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import packageJson from "../package.json" with { type: "json" };
 import { embeddedAddon } from "./embedded-addon.js";
-import { normalizeProfileName, resolveAbsoluteDir, resolveCacheRoot, resolvePersistentRoot, resolveXdgRoot } from "./offline-root.js";
+import {
+	normalizeProfileName,
+	resolveAbsoluteDir,
+	resolveCacheRoot,
+	resolveLinuxPrivateCacheRoot,
+	resolvePersistentRoot,
+	resolveXdgRoot,
+} from "./offline-root.js";
 import { bindingsHaveReleaseIdentity, bindingsReleaseVersion, containsVersionStamp } from "./version-sentinel.js";
 
 /**
@@ -235,6 +242,82 @@ function isOlderReleaseVersion(candidate, current) {
 // stale.
 const NATIVE_CACHE_CLEANUP_GRACE_MS = 10 * 60_000;
 
+class UnsafeOfflineNativeCacheError extends Error {
+	constructor(entryPath, expected) {
+		super(`Unsafe Linux offline native cache path ${entryPath}: expected ${expected}`);
+	}
+}
+
+function lstatIfPresent(entryPath) {
+	return fs.lstatSync(entryPath, { throwIfNoEntry: false });
+}
+
+function isPrivateCacheDirectory(stat, uid) {
+	return stat?.isDirectory() && stat.uid === uid && (stat.mode & 0o022) === 0;
+}
+
+/** Create and verify every component below an already trusted parent. */
+function preparePrivateNativeCacheDirectory(trustedParent, targetDir, uid) {
+	const relative = path.relative(trustedParent, targetDir);
+	if (!relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+		throw new UnsafeOfflineNativeCacheError(targetDir, `a directory below ${trustedParent}`);
+	}
+	let entryPath = trustedParent;
+	for (const component of relative.split(path.sep)) {
+		entryPath = path.join(entryPath, component);
+		let stat = lstatIfPresent(entryPath);
+		if (!stat) {
+			try {
+				fs.mkdirSync(entryPath, { mode: 0o700 });
+			} catch (err) {
+				if (err?.code !== "EEXIST") throw err;
+			}
+			// Validate the actual directory, including a concurrent mkdir winner.
+			stat = lstatIfPresent(entryPath);
+		}
+		if (!isPrivateCacheDirectory(stat, uid)) {
+			throw new UnsafeOfflineNativeCacheError(
+				entryPath,
+				`a real directory owned by uid ${uid} without group/other write access`,
+			);
+		}
+	}
+}
+
+/** A protected cache hit is an actual file, never a link or a module-resolution fallback. */
+function findPrivateNativeCacheFile(filePath, uid) {
+	const stat = lstatIfPresent(filePath);
+	if (!stat) return undefined;
+	if (!stat.isFile() || stat.uid !== uid || (stat.mode & 0o022) !== 0 || stat.nlink !== 1) {
+		throw new UnsafeOfflineNativeCacheError(
+			filePath,
+			`a regular file owned by uid ${uid} without group/other write access or additional hard links`,
+		);
+	}
+	return stat;
+}
+
+function prepareLinuxPrivateNativeCache(ctx) {
+	const sharedDir = "/dev/shm";
+	for (const ancestor of ["/", "/dev"]) {
+		if (!isPrivateCacheDirectory(lstatIfPresent(ancestor), 0)) {
+			throw new UnsafeOfflineNativeCacheError(
+				ancestor,
+				"a real root-owned directory without group/other write access",
+			);
+		}
+	}
+	const shared = lstatIfPresent(sharedDir);
+	// Sticky /dev/shm prevents other accounts from replacing our UID-owned entry.
+	if (!shared?.isDirectory() || shared.uid !== 0 || ((shared.mode & 0o022) !== 0 && (shared.mode & 0o1000) === 0)) {
+		throw new UnsafeOfflineNativeCacheError(sharedDir, "a real root-owned directory, sticky if group/other writable");
+	}
+	const targetDir = ctx.isCompiledBinary ? ctx.versionedDir : ctx.nativesDir;
+	preparePrivateNativeCacheDirectory(sharedDir, targetDir, ctx.offlineCacheUid);
+	preparePrivateNativeCacheDirectory(ctx.nativesDir, path.join(ctx.nativesDir, "grammars"), ctx.offlineCacheUid);
+	if (ctx.isCompiledBinary) touchNativeVersionDir(ctx.versionedDir);
+}
+
 /**
  * Create a version cache directory and refresh its activity timestamp before
  * extraction or staging begins. Recursive mkdir does not update the mtime of
@@ -245,6 +328,10 @@ const NATIVE_CACHE_CLEANUP_GRACE_MS = 10 * 60_000;
  */
 export function prepareNativeVersionDir(versionedDir) {
 	fs.mkdirSync(versionedDir, { recursive: true });
+	touchNativeVersionDir(versionedDir);
+}
+
+function touchNativeVersionDir(versionedDir) {
 	const now = new Date();
 	fs.utimesSync(versionedDir, now, now);
 }
@@ -254,10 +341,10 @@ export function prepareNativeVersionDir(versionedDir) {
  * Best-effort by design: permission errors and concurrent processes must not
  * abort startup after the native addon has already loaded successfully.
  *
- * @param {{ nativesDir: string; currentVersion: string }} input
+ * @param {{ nativesDir: string; currentVersion: string; offlineCacheUid?: number }} input
  * @returns {string[]}
  */
-export function cleanupStaleNativeVersions({ nativesDir, currentVersion }) {
+export function cleanupStaleNativeVersions({ nativesDir, currentVersion, offlineCacheUid }) {
 	const removed = [];
 	let entries;
 	try {
@@ -270,9 +357,18 @@ export function cleanupStaleNativeVersions({ nativesDir, currentVersion }) {
 		if (!entry.isDirectory() || !isOlderReleaseVersion(entry.name, currentVersion)) continue;
 		const targetPath = path.join(nativesDir, entry.name);
 		try {
-			const stat = fs.statSync(targetPath);
+			const stat = offlineCacheUid === undefined ? fs.statSync(targetPath) : lstatIfPresent(targetPath);
+			if (!stat || (offlineCacheUid !== undefined && !isPrivateCacheDirectory(stat, offlineCacheUid))) continue;
 			if (Date.now() - stat.mtimeMs < NATIVE_CACHE_CLEANUP_GRACE_MS) continue;
-			fs.rmSync(targetPath, { recursive: true, force: true });
+			if (offlineCacheUid === undefined) {
+				fs.rmSync(targetPath, { recursive: true, force: true });
+			} else {
+				// Version caches contain flat files. Do not descend into old, unverified trees.
+				const files = fs.readdirSync(targetPath, { withFileTypes: true });
+				if (files.some(file => file.isDirectory())) continue;
+				for (const file of files) fs.unlinkSync(path.join(targetPath, file.name));
+				fs.rmdirSync(targetPath);
+			}
 			removed.push(targetPath);
 		} catch {
 			// Stale caches are opportunistic cleanup only.
@@ -472,7 +568,8 @@ function isSafeEmbeddedAddonFilename(filename) {
 	return filename.length > 0 && path.basename(filename) === filename && !filename.includes("/") && !filename.includes("\\");
 }
 
-function isEmbeddedAddonFileCurrent(targetPath, file) {
+function isEmbeddedAddonFileCurrent(targetPath, file, offlineCacheUid) {
+	if (offlineCacheUid !== undefined) return findPrivateNativeCacheFile(targetPath, offlineCacheUid)?.size === file.size;
 	try {
 		const stat = fs.statSync(targetPath);
 		if (!stat.isFile()) return false;
@@ -536,10 +633,10 @@ function publishNativeFile(tempPath, targetPath) {
 	}
 }
 
-function writeEmbeddedAddonFile(targetPath, content) {
+function writeEmbeddedAddonFile(targetPath, content, mode) {
 	const tempPath = `${targetPath}.tmp.${process.pid}.${randomUUID()}`;
 	try {
-		fs.writeFileSync(tempPath, content, { mode: 0o755, flag: "wx" });
+		fs.writeFileSync(tempPath, content, { mode, flag: "wx" });
 	} catch (err) {
 		try {
 			fs.unlinkSync(tempPath);
@@ -551,7 +648,7 @@ function writeEmbeddedAddonFile(targetPath, content) {
 	publishNativeFile(tempPath, targetPath);
 }
 
-export function extractEmbeddedAddons({ files, targetDir }) {
+export function extractEmbeddedAddons({ files, targetDir, offlineCacheUid }) {
 	for (const file of files) {
 		if (!isSafeEmbeddedAddonFilename(file.filename)) {
 			throw new Error(`Unsafe embedded addon filename: ${file.filename}`);
@@ -560,12 +657,12 @@ export function extractEmbeddedAddons({ files, targetDir }) {
 	const writtenPaths = [];
 	for (const file of files) {
 		const targetPath = path.join(targetDir, file.filename);
-		if (isEmbeddedAddonFileCurrent(targetPath, file)) continue;
+		if (isEmbeddedAddonFileCurrent(targetPath, file, offlineCacheUid)) continue;
 		const content = Bun.zstdDecompressSync(fs.readFileSync(file.zstdPath));
 		if (content.length !== file.size) {
 			throw new Error(`Embedded addon size mismatch for ${file.filename}: expected ${file.size}, got ${content.length}`);
 		}
-		writeEmbeddedAddonFile(targetPath, content);
+		writeEmbeddedAddonFile(targetPath, content, offlineCacheUid === undefined ? 0o755 : 0o700);
 		writtenPaths.push(targetPath);
 	}
 	return writtenPaths;
@@ -579,7 +676,7 @@ function maybeExtractEmbeddedAddon(ctx, errors, file = selectEmbeddedAddonFile(c
 
 	startupMarker("native:extractEmbeddedAddon:start");
 	try {
-		prepareNativeVersionDir(ctx.versionedDir);
+		if (ctx.offlineCacheUid === undefined) prepareNativeVersionDir(ctx.versionedDir);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		errors.push(`embedded addon dir: ${message}`);
@@ -587,9 +684,10 @@ function maybeExtractEmbeddedAddon(ctx, errors, file = selectEmbeddedAddonFile(c
 	}
 
 	try {
-		extractEmbeddedAddons({ files: [file], targetDir: ctx.versionedDir });
+		extractEmbeddedAddons({ files: [file], targetDir: ctx.versionedDir, offlineCacheUid: ctx.offlineCacheUid });
 		return targetPath;
 	} catch (err) {
+		if (err instanceof UnsafeOfflineNativeCacheError) throw err;
 		const message = err instanceof Error ? err.message : String(err);
 		errors.push(`embedded addon extraction (${file.filename}): ${message}`);
 		return null;
@@ -1014,6 +1112,20 @@ export function initLoaderContext(overrides = {}) {
 	const nativeDir = overrides.nativeDir ?? path.join(import.meta.dir, "..", "native");
 	const execDir = path.dirname(process.execPath);
 	const nativesDir = getNativesDir();
+	const privateCacheRoot = resolveLinuxPrivateCacheRoot();
+	let offlineCacheUid;
+	if (privateCacheRoot) {
+		const normalizedNativesDir = path.resolve(nativesDir);
+		const parentDir = path.dirname(normalizedNativesDir);
+		// Protect the old shm layout even when the user selects it explicitly
+		// or a Linux broker forwards it as PI_NATIVES_DIR.
+		if (
+			path.basename(normalizedNativesDir) === "natives" &&
+			(parentDir === privateCacheRoot || path.dirname(parentDir) === path.join(privateCacheRoot, "profiles"))
+		) {
+			offlineCacheUid = process.getuid();
+		}
+	}
 	const versionedDir = path.join(nativesDir, packageVersion);
 	const userDataDir = platform === "win32"
 		? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "omp")
@@ -1079,12 +1191,14 @@ export function initLoaderContext(overrides = {}) {
 		candidates,
 		isWorkspaceLoad,
 		nativesDir,
+		offlineCacheUid,
 	};
 }
 
 export function loadNative() {
 	startupMarker("native:loadNative:start");
 	const ctx = initLoaderContext();
+	if (ctx.offlineCacheUid !== undefined) prepareLinuxPrivateNativeCache(ctx);
 	const require_ = createRequire(import.meta.url);
 
 	const errors = [];
@@ -1108,6 +1222,14 @@ export function loadNative() {
 		if (fallbackEmbeddedFile && candidate === fallbackEmbeddedPath) {
 			if (!maybeExtractEmbeddedAddon(ctx, errors, fallbackEmbeddedFile)) continue;
 		}
+		if (
+			ctx.offlineCacheUid !== undefined &&
+			path.dirname(candidate) === ctx.versionedDir &&
+			!findPrivateNativeCacheFile(candidate, ctx.offlineCacheUid)
+		) {
+			errors.push(`${candidate}: native addon file not found`);
+			continue;
+		}
 		try {
 			startupMarker(`native:require:${path.basename(candidate)}`);
 			const bindings = require_(candidate);
@@ -1116,7 +1238,11 @@ export function loadNative() {
 			configureGrammarDir(bindings, ctx.nativesDir);
 			loadedAddon = describeLoadedAddon(bindings, candidate, ctx);
 			reportStaleWorkspaceAddon(ctx, loadedAddon);
-	        cleanupStaleNativeVersions({ nativesDir: ctx.nativesDir, currentVersion: ctx.packageVersion });
+			cleanupStaleNativeVersions({
+				nativesDir: ctx.nativesDir,
+				currentVersion: ctx.packageVersion,
+				offlineCacheUid: ctx.offlineCacheUid,
+			});
 			startupMarker("native:loadNative:done");
 			return bindings;
 		} catch (err) {

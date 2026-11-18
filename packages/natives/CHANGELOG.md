@@ -6,6 +6,10 @@
 
 - `fuzzyFind` accepts an explicit directory-cache TTL without changing the default metadata-validated cache behavior.
 
+### Fixed
+
+- Linux offline startup rejects unsafe directories or files in the default shared-memory native addon cache.
+
 ## [18.22.2] - 2026-11-18
 
 ### Added

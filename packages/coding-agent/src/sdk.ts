@@ -737,7 +737,7 @@ export interface CreateAgentSessionOptions {
 	/** Validated inherited retry chain for a deferred singleton pattern; empty explicitly disables fallbacks. */
 	modelPatternDefaultFallbackChain?: string[];
 	/**
-	 * Process runs in offline mode (OMP_OFFLINE): the automatic model-discovery fallbacks
+	 * Process uses the company intranet profile (`OMP_OFFLINE`): automatic model-discovery fallbacks
 	 * (session-restore retry, default-role resolution) use the cache-only
 	 * `"offline"` refresh strategy instead of `online-if-uncached`, so a cold
 	 * catalog degrades to the default role instead of reaching the network.
@@ -2281,35 +2281,56 @@ class GuardedToolRegistry extends Map<string, Tool & Pick<ToolDefinition, "defau
 	}
 }
 
-const embeddingSessionHooks = new WeakMap<
-	ModelRegistry,
-	Pick<
-		CreateAgentSessionOptions,
-		"resolveRequestAuth" | "getApiKey" | "onPayload" | "onResponse" | "onModelResponse" | "toolRestrictions"
-	>
->();
+export type NativeChildSessionHooks = Pick<
+	CreateAgentSessionOptions,
+	"resolveRequestAuth" | "getApiKey" | "onPayload" | "onResponse" | "onModelResponse" | "toolRestrictions"
+>;
 
-/** Preserve the embedding caller's tool boundary when preparing an isolated native child. */
-export function cloneEmbeddingToolRestrictions(modelRegistry: ModelRegistry | undefined): ToolRestrictions | undefined {
-	return modelRegistry ? embeddingSessionHooks.get(modelRegistry)?.toolRestrictions?.clone() : undefined;
+/** These request hooks and policies cannot be passed through worker placement. */
+export function hasNativeChildSessionHooks(hooks: NativeChildSessionHooks | undefined): boolean {
+	return !!(
+		hooks?.resolveRequestAuth ||
+		hooks?.getApiKey ||
+		hooks?.onPayload ||
+		hooks?.onResponse ||
+		hooks?.onModelResponse ||
+		hooks?.toolRestrictions
+	);
 }
 
-export type NativeChildCapabilities = Pick<
-	CreateAgentSessionOptions,
-	| "customTools"
-	| "enableMCP"
-	| "disableExtensionDiscovery"
-	| "enableLsp"
-	| "lspReadOnly"
-	| "enableIrc"
-	| "toolNames"
-	| "restrictToolNames"
-	| "allowRestrictedCustomTools"
-	| "mcpTools"
-	| "mcpManager"
-	| "mcpToolScope"
-	| "extensionProviderOwnership"
->;
+/** Select effective hooks; callers clone an inherited tool policy when creating a session. */
+export function resolveNativeChildSessionHooks(
+	options: NativeChildSessionHooks & Pick<CreateAgentSessionOptions, "extensionProviderOwnership">,
+	parent?: NativeChildSessionHooks,
+): NativeChildSessionHooks {
+	return {
+		resolveRequestAuth: options.resolveRequestAuth ?? parent?.resolveRequestAuth,
+		getApiKey:
+			options.getApiKey ?? (options.extensionProviderOwnership === "inherited" ? parent?.getApiKey : undefined),
+		onPayload: options.onPayload ?? parent?.onPayload,
+		onResponse: options.onResponse ?? parent?.onResponse,
+		onModelResponse: options.onModelResponse ?? parent?.onModelResponse,
+		toolRestrictions: options.toolRestrictions ?? parent?.toolRestrictions,
+	};
+}
+
+export type NativeChildCapabilities = NativeChildSessionHooks &
+	Pick<
+		CreateAgentSessionOptions,
+		| "customTools"
+		| "enableMCP"
+		| "disableExtensionDiscovery"
+		| "enableLsp"
+		| "lspReadOnly"
+		| "enableIrc"
+		| "toolNames"
+		| "restrictToolNames"
+		| "allowRestrictedCustomTools"
+		| "mcpTools"
+		| "mcpManager"
+		| "mcpToolScope"
+		| "extensionProviderOwnership"
+	>;
 
 /** A private registry owns its root's gate for the entire descendant/revival lifetime. */
 const registryPauseGates = new WeakMap<AgentRegistryApi, AgentPauseGate>();
@@ -2358,23 +2379,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const extensionRoots = options.extensionRoots?.();
 	const explicit = extensionRoots?.explicit ?? options.additionalExtensionPaths ?? [];
 	const mode = extensionRoots?.mode ?? (options.disableExtensionDiscovery ? "explicit-only" : "merge");
-	const result = await withOmpExtensionRootScope(explicit, mode, () => createAgentSessionScoped(options, companyLane));
-	result.session.nativeChildCapabilities = {
-		customTools: options.customTools,
-		disableExtensionDiscovery: options.disableExtensionDiscovery,
-		enableMCP: options.enableMCP,
-		enableLsp: options.enableLsp,
-		lspReadOnly: options.lspReadOnly,
-		enableIrc: options.enableIrc,
-		toolNames: options.toolNames,
-		restrictToolNames: options.restrictToolNames,
-		allowRestrictedCustomTools: options.allowRestrictedCustomTools,
-		mcpTools: options.mcpTools,
-		mcpManager: result.mcpManager,
-		mcpToolScope: options.mcpToolScope,
-		extensionProviderOwnership: options.extensionProviderOwnership,
-	};
-	return result;
+	return withOmpExtensionRootScope(explicit, mode, () => createAgentSessionScoped(options, companyLane));
 }
 
 async function createAgentSessionScoped(
@@ -2730,28 +2735,6 @@ async function createAgentSessionScoped(
 				startupCleanup.defer(() => accountPoolScope.release());
 			}
 		}
-		const inheritedHooks = options.parentTaskPrefix ? embeddingSessionHooks.get(modelRegistry) : undefined;
-		if (inheritedHooks)
-			options = {
-				...options,
-				resolveRequestAuth: options.resolveRequestAuth ?? inheritedHooks.resolveRequestAuth,
-				getApiKey:
-					options.getApiKey ??
-					(options.extensionProviderOwnership === "inherited" ? inheritedHooks.getApiKey : undefined),
-				onPayload: options.onPayload ?? inheritedHooks.onPayload,
-				onResponse: options.onResponse ?? inheritedHooks.onResponse,
-				onModelResponse: options.onModelResponse ?? inheritedHooks.onModelResponse,
-				toolRestrictions: options.toolRestrictions ?? inheritedHooks.toolRestrictions?.clone(),
-			};
-		if (!options.parentTaskPrefix)
-			embeddingSessionHooks.set(modelRegistry, {
-				resolveRequestAuth: options.resolveRequestAuth,
-				getApiKey: options.getApiKey,
-				onPayload: options.onPayload,
-				onResponse: options.onResponse,
-				onModelResponse: options.onModelResponse,
-				toolRestrictions: options.toolRestrictions,
-			});
 		const forkCacheShapeChanged =
 			options.model !== undefined ||
 			options.modelPattern !== undefined ||
@@ -3253,6 +3236,10 @@ async function createAgentSessionScoped(
 				// Explicit resolvers retain their existing pass-through contract. Ordinary
 				// sessions inherit stored affinity into the child's own provider session.
 				getApiKey: options.getApiKey,
+				resolveRequestAuth: options.resolveRequestAuth,
+				onPayload: options.onPayload,
+				onResponse: options.onResponse,
+				onModelResponse: options.onModelResponse,
 				getCredentialSourceSessionId: options.getApiKey ? undefined : () => agent.sessionId,
 				get additionalDirectories() {
 					return sessionManager.getAdditionalDirectories();
@@ -3522,6 +3509,7 @@ async function createAgentSessionScoped(
 				evalActive: activeToolNames.has("eval"),
 			});
 
+			const nativeChildMcpTools = options.mcpTools;
 			// Restricted sessions cannot inherit or discover MCP capabilities.
 			const enableMCP = !restrictToolNames && (options.enableMCP ?? true);
 			let mcpManager: MCPManagerApi | undefined = enableMCP ? options.mcpManager : undefined;
@@ -4832,7 +4820,12 @@ async function createAgentSessionScoped(
 				// building one unconditionally would hand a read-only agent a
 				// mutating tool it was denied (the issue #5680 escalation).
 				if (!editWasGranted) return undefined;
-				cursorBridgeEditTool ??= createBridgeEditTool(toolSession, extensionRunner);
+				cursorBridgeEditTool ??= createBridgeEditTool(
+					toolSession,
+					extensionRunner,
+					undefined,
+					options.toolRestrictions,
+				);
 				return cursorBridgeEditTool;
 			};
 
@@ -5054,17 +5047,20 @@ async function createAgentSessionScoped(
 				// it over the registry, so installing it unconditionally would let a
 				// session without `grep` search anyway.
 				createGrepTool: toolRegistry.has("grep")
-					? createBridgeGrepFactory(toolSession, extensionRunner)
+					? createBridgeGrepFactory(toolSession, extensionRunner, undefined, options.toolRestrictions)
 					: undefined,
 				// Native delete and resource-download frames mutate files without a
 				// registry tool. Resolve both the transactional active predicate and
 				// live access mode: Agent.state.tools commits only after prompt rebuilding,
 				// while this predicate revokes before the await and rolls back on failure.
 				allowDirectFileMutation: () =>
-					(editWasGranted && toolSession.isToolActive?.("edit") === true) ||
-					(toolSession.isToolActive?.("write") === true &&
-						toolRegistry.has("write") &&
-						toolSession.deviceOnlyWrite !== true),
+					options.toolRestrictions?.allows("write") !== false &&
+					((editWasGranted &&
+						options.toolRestrictions?.allows("edit") !== false &&
+						toolSession.isToolActive?.("edit") === true) ||
+						(toolSession.isToolActive?.("write") === true &&
+							toolRegistry.has("write") &&
+							toolSession.deviceOnlyWrite !== true)),
 			});
 
 			// Resolve the live inline-descriptors setting against the active model.
@@ -5743,6 +5739,11 @@ async function createAgentSessionScoped(
 				),
 				() => blobBroker.current,
 			);
+			const assertOfflineDispatchModel = (streamModel: Model): void => {
+				if (cfgOffline.get(settings) && streamModel.provider !== session?.model?.provider) {
+					throw new Error("models.offline restricts model calls to the active session provider.");
+				}
+			};
 			// Outbound credential-pattern redaction follows THIS session's `secrets.enabled` per
 			// request, not the process-wide switch (the newest effect holder's): concurrent ACP/SDK
 			// sessions in one process each keep their own policy.
@@ -5814,20 +5815,35 @@ async function createAgentSessionScoped(
 				return stream;
 			};
 			const settingsAwareStreamFn: StreamFn = (streamModel, context, streamOptions) => {
-				if (cfgOffline.get(settings) && streamModel.provider !== session?.model?.provider) {
-					return Promise.reject(new Error("models.offline restricts model calls to the active session provider."));
+				try {
+					assertOfflineDispatchModel(streamModel);
+				} catch (error) {
+					return Promise.reject(error);
 				}
 				if (options.toolRestrictions) {
 					if (context.tools) context = { ...context, tools: options.toolRestrictions.filter(context.tools) };
 				}
 				const execution = currentExecutionModel();
-				if (execution?.recoverModelRequest && !options.disableModelFallback) {
+				const recover = execution?.recoverModelRequest;
+				if (recover && !options.disableModelFallback) {
+					let refused = false;
 					return streamWithExecutionRecovery(
-						dispatchExecutionRequest,
+						(requestModel, requestContext, requestOptions, resolveAuth) => {
+							try {
+								// Recovery can switch the parent session, not the child that owns this dispatcher.
+								assertOfflineDispatchModel(requestModel);
+								options.assertDispatchModel?.(requestModel);
+							} catch (error) {
+								// An admission refusal is terminal, not another provider failure to recover.
+								refused = true;
+								throw error;
+							}
+							return dispatchExecutionRequest(requestModel, requestContext, requestOptions, resolveAuth);
+						},
 						streamModel,
 						context,
 						streamOptions,
-						execution.recoverModelRequest,
+						async request => (refused ? undefined : recover(request)),
 					);
 				}
 				if (execution || options.resolveRequestAuth || options.onModelResponse) {
@@ -5925,7 +5941,12 @@ async function createAgentSessionScoped(
 				interruptMode: cfgInterruptMode.get(settings),
 				...cfgSampling.get(settings),
 				getToolContext: tc => toolContextStore.getContext(tc),
-				getApiKey: effectiveGetApiKey,
+				getApiKey: requestModel => {
+					// The loop resolves its seeded credential before invoking streamFn.
+					assertOfflineDispatchModel(requestModel);
+					options.assertDispatchModel?.(requestModel);
+					return effectiveGetApiKey(requestModel);
+				},
 				streamFn: (streamModel, context, streamOptions) => {
 					mainRequestProvider = undefined;
 					options.assertDispatchModel?.(streamModel);
@@ -6082,7 +6103,7 @@ async function createAgentSessionScoped(
 					const hasNewInput = [...agent.peekSteeringQueue(), ...agent.peekFollowUpQueue()].some(
 						message => typeof (message as AgentMessage & { inputId?: string }).inputId === "string",
 					);
-					if (hasNewInput) await releaseCurrentExecutionModel();
+					if (hasNewInput) await releaseCurrentExecutionModel(agent);
 				}),
 			);
 
@@ -6201,8 +6222,10 @@ async function createAgentSessionScoped(
 				if (tool instanceof Promise) throw new Error(`Advisor tool "${name}" must build synchronously`);
 				return tool;
 			};
+			const advisorRestrictions = options.toolRestrictions;
 			let advisorAvailableToolNames: string[] | undefined;
 			const advisorTools: AdvisorToolFactory = {
+				restrictions: advisorRestrictions,
 				names: () => {
 					if (!advisorAvailableToolNames) {
 						const probeSession = createAdvisorToolSession();
@@ -6216,7 +6239,8 @@ async function createAgentSessionScoped(
 					// is active only once its factory returns a tool, so a grant for an
 					// unavailable built-in (lsp with language servers off) is not advertised.
 					const activeToolNames = new Set<string>();
-					advisorSession.isToolActive = name => activeToolNames.has(name);
+					advisorSession.isToolActive = name =>
+						activeToolNames.has(name) && advisorRestrictions?.allows(name) !== false;
 					const tools: Tool[] = [];
 					for (const name of advisorBuiltinNames) {
 						if (!granted.has(name)) continue;
@@ -6233,17 +6257,28 @@ async function createAgentSessionScoped(
 						// bridge both run these instances directly, so a raw one would execute a
 						// `bash`/`write` the user configured as `ask` or `deny`. Meta-notice
 						// first, matching the registry's wrap order.
-						tools.push(new ExtensionToolWrapper(wrapToolWithMetaNotice(tool), extensionRunner, advisorAgent));
+						const approved = new ExtensionToolWrapper(
+							wrapToolWithMetaNotice(tool),
+							extensionRunner,
+							advisorAgent,
+						);
+						tools.push(advisorRestrictions?.wrap(approved) ?? approved);
 					}
 					return {
 						tools,
 						// Same per-call `grep` seam the primary bridge gets, built against the
 						// advisor's own tool session so a `pi_grep` frame's context width and
 						// match cap are honored there too.
-						createGrepTool: createBridgeGrepFactory(advisorSession, extensionRunner, advisorAgent),
+						createGrepTool: createBridgeGrepFactory(
+							advisorSession,
+							extensionRunner,
+							advisorAgent,
+							advisorRestrictions,
+						),
 						// Same `replace`-mode requirement as the primary bridge; the advisor
 						// path gates it on the advisor's own `edit` grant.
-						createEditTool: () => createBridgeEditTool(advisorSession, extensionRunner, advisorAgent),
+						createEditTool: () =>
+							createBridgeEditTool(advisorSession, extensionRunner, advisorAgent, advisorRestrictions),
 						resetState: () => {
 							advisorSession.state = new ToolConversationState();
 						},
@@ -6903,6 +6938,23 @@ async function createAgentSessionScoped(
 				build: buildLateDiagnosticsBatchMessage,
 				isStale: entry => entry.isStale(),
 			});
+
+			session.nativeChildCapabilities = {
+				...resolveNativeChildSessionHooks(options),
+				customTools: options.customTools,
+				disableExtensionDiscovery: options.disableExtensionDiscovery,
+				enableMCP: options.enableMCP,
+				enableLsp: options.enableLsp,
+				lspReadOnly: options.lspReadOnly,
+				enableIrc: options.enableIrc,
+				toolNames: options.toolNames,
+				restrictToolNames: options.restrictToolNames,
+				allowRestrictedCustomTools: options.allowRestrictedCustomTools,
+				mcpTools: nativeChildMcpTools,
+				mcpManager: ownedMcpManager ?? (mcpManager instanceof MCPManager ? mcpManager : undefined),
+				mcpToolScope: options.mcpToolScope,
+				extensionProviderOwnership: options.extensionProviderOwnership,
+			};
 
 			// Attach the live session to the pre-registered ref so peers can route IRC
 			// messages here. Refresh sessionFile in case it was unavailable at pre-register

@@ -129,8 +129,8 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 							"type",
 							`${prompt}\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ path: selectedPath, deniedPaths: denied })}\n${turnMarker}`,
 						);
-						// A multiline input burst can absorb the trailing Enter as text. Wait
-						// until its last line and caret are in the real composer before submitting.
+						// Wait for the draft before submitting. Large pastes can be
+						// represented by a chip; the provider still must see the exact turn below.
 						await eventually(
 							() => nativeDraftSnapshot(tui),
 							({ screen, cursor }) => {
@@ -141,8 +141,8 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 									start >= 0 &&
 									end > start &&
 									cursor.y === end - 1 &&
-									cursor.x === 3 + turnMarker.length &&
-									lines[cursor.y]?.startsWith(`│  ${turnMarker}`)
+									((cursor.x === 3 + turnMarker.length && lines[cursor.y]?.startsWith(`│  ${turnMarker}`)) ||
+										(end === start + 2 && lines[cursor.y]?.startsWith("│  📄 #")))
 								);
 							},
 						);

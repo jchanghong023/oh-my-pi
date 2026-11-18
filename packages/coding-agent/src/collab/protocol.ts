@@ -24,7 +24,6 @@ import {
 	WRITE_TOKEN_BYTES,
 } from "@oh-my-pi/pi-wire";
 import type { CollabSessionState } from "@oh-my-pi/pi-tui/status-line/types";
-import { offlineFromEnv } from "../cli/args";
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { SessionEntry, SessionHeader } from "../session/session-entries";
 
@@ -179,8 +178,14 @@ export function generateRoomId(): string {
 	return Buffer.from(bytes).toString("base64url");
 }
 
-/** Normalize a relay base URL (ws/wss/http/https) into a ws/wss origin, or an error. */
-export function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: string } {
+/**
+ * Normalize a relay base URL (ws/wss/http/https) into a ws/wss origin.
+ * A configured non-loopback plaintext relay requires its exact canonical WS origin.
+ */
+export function normalizeRelayOrigin(
+	relayUrl: string,
+	allowedIntranetRelayOrigin?: string,
+): { origin: string } | { error: string } {
 	let url: URL;
 	try {
 		url = new URL(relayUrl);
@@ -200,11 +205,12 @@ export function normalizeRelayOrigin(relayUrl: string): { origin: string } | { e
 		default:
 			return { error: `Unsupported relay URL scheme: ${url.protocol}` };
 	}
-	if (scheme === "ws:" && !isLocalHostname(url.hostname) && !offlineFromEnv()) {
+	const port = url.port ? `:${url.port}` : "";
+	const origin = `${scheme}//${url.hostname}${port}`;
+	if (scheme === "ws:" && !isLocalHostname(url.hostname) && origin !== allowedIntranetRelayOrigin) {
 		return { error: "relay link must be wss:// (plain ws:// is only allowed for localhost)" };
 	}
-	const port = url.port ? `:${url.port}` : "";
-	return { origin: `${scheme}//${url.hostname}${port}` };
+	return { origin };
 }
 
 /**
@@ -222,8 +228,14 @@ export function normalizeRelayOrigin(relayUrl: string): { origin: string } | { e
  * (`base64url(key ∥ writeToken)`); read-only (view) links carry the bare
  * 32-byte key, which is also the pre-token link format.
  */
-export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Array, writeToken?: Uint8Array): string {
-	const normalized = normalizeRelayOrigin(relayUrl);
+export function formatCollabLink(
+	relayUrl: string,
+	roomId: string,
+	key: Uint8Array,
+	writeToken?: Uint8Array,
+	allowedIntranetRelayOrigin?: string,
+): string {
+	const normalized = normalizeRelayOrigin(relayUrl, allowedIntranetRelayOrigin);
 	if ("error" in normalized) throw new Error(normalized.error);
 	const secret = writeToken ? Buffer.concat([key, writeToken]) : Buffer.from(key);
 	const keyText = secret.toString("base64url");
@@ -234,10 +246,14 @@ export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Arr
 	return `${compact}/r/${roomId}.${keyText}`;
 }
 
-function normalizeCollabWebBaseUrl(relayUrl: string, webUrl?: string): string {
+function normalizeCollabWebBaseUrl(
+	relayUrl: string,
+	webUrl?: string,
+	allowedIntranetRelayOrigin?: string,
+): string {
 	const explicitWebUrl = webUrl?.trim();
 	if (!explicitWebUrl) {
-		const normalized = normalizeRelayOrigin(relayUrl);
+		const normalized = normalizeRelayOrigin(relayUrl, allowedIntranetRelayOrigin);
 		if ("error" in normalized) throw new Error(normalized.error);
 		return normalized.origin.startsWith("wss://")
 			? `https://${normalized.origin.slice("wss://".length)}`
@@ -274,11 +290,13 @@ export function formatCollabWebLink(
 	key: Uint8Array,
 	writeToken?: Uint8Array,
 	webUrl?: string,
+	allowedIntranetRelayOrigin?: string,
 ): string {
-	return `${normalizeCollabWebBaseUrl(relayUrl, webUrl)}/#${formatCollabLink(relayUrl, roomId, key, writeToken)}`;
+	const base = normalizeCollabWebBaseUrl(relayUrl, webUrl, allowedIntranetRelayOrigin);
+	return `${base}/#${formatCollabLink(relayUrl, roomId, key, writeToken, allowedIntranetRelayOrigin)}`;
 }
 
-export function parseCollabLink(link: string): ParsedCollabLink | { error: string } {
+export function parseCollabLink(link: string, allowedIntranetRelayOrigin?: string): ParsedCollabLink | { error: string } {
 	// Lenient input: terminals that open OSC 8 links through strict URL stacks
 	// (macOS Foundation) percent-encode the legacy second `#` to `%23`.
 	let text = link.trim().replace(/%23/gi, "#");
@@ -295,10 +313,10 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	}
 	if ((url.protocol === "http:" || url.protocol === "https:") && url.hash) {
 		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
-		const parsed = parseCollabLink(inner);
+		const parsed = parseCollabLink(inner, allowedIntranetRelayOrigin);
 		if (!("error" in parsed)) return parsed;
 	}
-	const normalized = normalizeRelayOrigin(url.origin);
+	const normalized = normalizeRelayOrigin(url.origin, allowedIntranetRelayOrigin);
 	if ("error" in normalized) return normalized;
 	const match = ROOM_PATH_RE.exec(url.pathname);
 	if (!match) {
@@ -306,7 +324,9 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 		// fragment. http(s) links are handled once above so invalid fragments
 		// fall through to direct relay validation instead of double-recursing.
 		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
-		if (inner && url.protocol !== "http:" && url.protocol !== "https:") return parseCollabLink(inner);
+		if (inner && url.protocol !== "http:" && url.protocol !== "https:") {
+			return parseCollabLink(inner, allowedIntranetRelayOrigin);
+		}
 		return { error: "Collab link must contain a /r/<roomId> path" };
 	}
 	const roomId = match[1]!;

@@ -1,8 +1,8 @@
 /**
  * Shared test isolation for stats Bun tests.
  *
- * Each test owns an absolute `OMP_CONFIG_ROOT` and agent directory, so neither
- * inherited roots nor XDG defaults can redirect stats.db outside its TempDir.
+ * Each test owns absolute config and cache roots and its agent directory, so
+ * inherited roots, offline defaults, and XDG cannot redirect stats.db.
  * Absolute roots also work when the temporary directory and home are on
  * different Windows drives; `PI_CONFIG_DIR` retains its home-relative meaning.
  *
@@ -20,7 +20,7 @@ import {
 	TempDir,
 } from "@oh-my-pi/pi-utils";
 
-const ENV_KEYS = ["OMP_CONFIG_ROOT", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
+const ENV_KEYS = ["OMP_CONFIG_ROOT", "OMP_CACHE_DIR", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
 
 export interface StatsTestIsolation {
 	/** Active per-test `TempDir`. Null between tests. */
@@ -41,6 +41,7 @@ export function installStatsTestIsolation(prefix: string): StatsTestIsolation {
 		}
 		tempDir = TempDir.createSync(prefix);
 		process.env.OMP_CONFIG_ROOT = tempDir.join("config");
+		process.env.OMP_CACHE_DIR = tempDir.join("cache");
 		setAgentDir(tempDir.join("config", "agent"));
 	});
 

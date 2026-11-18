@@ -7,6 +7,7 @@ import { getDocumentConversionCacheDir } from "@oh-my-pi/pi-utils/dirs";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { offlineFromEnv } from "../cli/args";
+import { DEFAULT_NPM_REGISTRY } from "../cli/npm-registry";
 import type { Skill } from "../extensibility/skills";
 import bundledArchive from "./resource-archive";
 import { specDrivenSourceFingerprint } from "./resource-fingerprint";
@@ -280,13 +281,17 @@ export async function runOpenSpec(
 ): Promise<SpecDrivenProcessResult> {
 	const resources = await ensureSpecDrivenResources();
 	const entry = await resolveSpecDrivenResourcePath(resources.openspecRoot, "bin/openspec.js");
-	return run(
-		[process.execPath, entry, ...args],
-		cwd,
-		signal,
-		{ BUN_BE_BUN: "1", ...(offlineFromEnv() ? { OPENSPEC_NO_UPDATE_CHECK: "1" } : {}) },
-		io,
-	);
+	const extraEnv: Record<string, string> = { BUN_BE_BUN: "1" };
+	if (offlineFromEnv()) {
+		const registry = URL.parse(process.env.npm_config_registry?.trim() ?? "");
+		if (
+			registry?.protocol !== "https:" ||
+			registry.hostname.replace(/\.$/, "") === new URL(DEFAULT_NPM_REGISTRY).hostname
+		) {
+			extraEnv.OPENSPEC_NO_UPDATE_CHECK = "1";
+		}
+	}
+	return run([process.execPath, entry, ...args], cwd, signal, extraEnv, io);
 }
 
 async function findBash(): Promise<string> {

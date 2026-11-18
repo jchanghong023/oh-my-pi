@@ -3,14 +3,12 @@
  *
  * Authenticates against the same credential store sessions read (local
  * `agent.db`, or the configured auth broker), including OAuth providers
- * contributed by extensions, then re-runs that provider's model discovery so
- * the next session sees the models the credential unlocked.
+ * contributed by extensions, then reconciles that provider's model catalog.
  */
 import * as readline from "node:readline";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai";
 import { APP_NAME, getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { isCompanyLaneActive } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
@@ -45,12 +43,8 @@ export async function runLoginCommand(provider: string | undefined): Promise<voi
 			process.stdout.write(chalk.yellow(`No credentials were stored for ${info.name}.\n`));
 			return;
 		}
-		// Reconcile the new credential's catalog immediately, but offline processes
-		// must not turn an explicit OAuth login into unrelated directory discovery.
-		await modelRegistry.refreshProvider(
-			info.storeCredentialsAs ?? info.id,
-			isCompanyLaneActive() ? "offline" : "online",
-		);
+		// Reconcile the selected provider without bypassing the intranet cache policy.
+		await modelRegistry.refreshProvider(info.storeCredentialsAs ?? info.id, "online");
 
 		const who = formatLoginIdentity(identity);
 		process.stdout.write(chalk.green(`\nLogged in to ${info.name}${who ? ` as ${who}` : ""}\n`));

@@ -39,6 +39,8 @@
 
 ## 安装
 
+公司内网使用 `OMP_OFFLINE`：CentOS 7、NFS、有 `/dev/shm`、无法连接互联网。内网部署与使用见[公司内网快速指南](docs-zh-CN/quick-start-intranet.md)；下面的在线安装方式不适用于该环境。
+
 安装本 fork 通过 [`jchanghong023/oh-my-pi` releases](https://github.com/jchanghong023/oh-my-pi/releases) 发布的最新二进制。以下命令直接使用 fork 的 GitHub release 资产，不会安装上游的 npm、Homebrew、Nix 或 `omp.sh` 构建。
 
 **Linux（glibc x64）**
@@ -65,7 +67,9 @@ fork 发布版二进制报告的版本号为 `omp/<upstream-version>+fork.<build
 
 本 fork 的预编译二进制仅支持 Linux glibc x64 与 Windows x64；不提供 Linux arm64、musl、macOS 或 Windows arm64 的新版本资产。Linux 安装器会在 macOS 联网前拒绝安装。
 
-安装器在替换前验证下载的 `omp --version` 与所选 Release 完全一致，失败保留旧安装。运行中的会话通常继续使用旧映像，安装后退出并重新打开才能使用新版本；Windows 仅在旧映像无法重命名时回退为按安装路径匹配的进程终止。已有 fork 二进制可用 `omp update --stable` 更新，完成后运行 `omp --version` 核对 PATH 实际命中的版本。
+安装器获取 Release 元数据时验证 TLS 证书；如果企业代理拦截 TLS，安装器使用的客户端必须信任该代理的 CA。二进制资产下载保留原有传输兼容性，但在运行下载文件前，安装器会将其 SHA-256 与上述元数据中同名资产的摘要比对。摘要缺失或不匹配时，不运行下载文件并保留旧安装。摘要匹配后才运行 `omp --version`，确认与所选 Release 完全一致后再替换旧安装；已安装所选版本时仍跳过下载。
+
+运行中的会话通常继续使用旧映像，安装后退出并重新打开才能使用新版本；Windows 仅在旧映像无法重命名时回退为按安装路径匹配的进程终止。已有 fork 二进制可用 `omp update --stable` 更新，完成后运行 `omp --version` 核对 PATH 实际命中的版本。
 
 Windows 二进制下载在未设置代理环境变量时自动使用当前用户的系统代理；显式的 `HTTPS_PROXY` / `ALL_PROXY` 仍优先，curl 下载遵循 `NO_PROXY`。下载完成后的校验、替换或 PATH 配置失败时，安装器会打印失败阶段、具体错误、相关文件和日志路径，以及可复制执行的恢复、重试和版本核对命令。已验证但未换入的下载文件会保留；旧映像清理失败只提示警告，不代表新版安装失败。
 

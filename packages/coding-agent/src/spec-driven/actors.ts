@@ -9,7 +9,7 @@ import { cfgGoalEnabled } from "../goals/settings";
 import { initializeExtensions } from "../modes/runtime-init";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry, type AgentRegistryApi } from "../registry/agent-registry";
-import { cloneEmbeddingToolRestrictions, createAgentSession, type CreateAgentSessionOptions } from "../sdk";
+import { createAgentSession, type CreateAgentSessionOptions } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { isLocalAgentSession } from "../session/agent-session-handle";
 import type { SessionManager } from "../session/session-manager";
@@ -44,7 +44,6 @@ class SpecActorToolRestrictions extends ToolRestrictions {
 	readonly #after?: (event: SpecNativeToolBoundary & { isError: boolean }) => Promise<void>;
 	readonly #readOnly: boolean;
 	readonly #cache = new WeakMap<Tool, Tool>();
-	#sessionId = "";
 	constructor(
 		base: ToolRestrictions,
 		check: (name: string, input: unknown) => Promise<void>,
@@ -65,16 +64,13 @@ class SpecActorToolRestrictions extends ToolRestrictions {
 	}
 	withReadOnly(readOnly: boolean): SpecActorToolRestrictions {
 		return new SpecActorToolRestrictions(
-			this.#base,
+			this.#base.clone(),
 			this.#check,
 			this.#before,
 			this.#after,
 			readOnly || this.#readOnly,
 			this.snapshot(),
 		);
-	}
-	bindSession(sessionId: string): void {
-		this.#sessionId = sessionId;
 	}
 	override wrap<T extends Tool>(tool: T): T {
 		const existing = this.#cache.get(tool);
@@ -103,13 +99,14 @@ class SpecActorToolRestrictions extends ToolRestrictions {
 				)
 					throw new Error(`Native read-only child denied non-read tool: ${tool.name}`);
 				await check();
+				const sessionId = args[4]?.sessionManager?.getSessionId();
+				if (!sessionId) throw new Error("Native tool owner is not registered");
 				const event: SpecNativeToolBoundary = {
 					toolCallId: args[0],
 					toolName: tool.name,
 					input: args[1] as Record<string, unknown>,
-					sessionId: this.#sessionId,
+					sessionId,
 				};
-				if (!event.sessionId) throw new Error("Native tool owner is not registered");
 				await this.#before?.(event);
 				let isError = true;
 				let failure: unknown;
@@ -252,10 +249,7 @@ export async function createAIReqNativeActor(args: {
 }): Promise<AIReqNativeActor> {
 	const id = `dev-${args.name}-${crypto.randomUUID()}`;
 	const registry = args.options.agentRegistry ?? AgentRegistry.global();
-	const base =
-		args.options.toolRestrictions ??
-		cloneEmbeddingToolRestrictions(args.options.modelRegistry) ??
-		new ToolRestrictions();
+	const base = args.options.toolRestrictions ?? new ToolRestrictions();
 	const restrictions = new SpecActorToolRestrictions(base, args.check, undefined, args.afterTool);
 	let closed = false;
 	let stopping = false;
@@ -315,7 +309,6 @@ export async function createAIReqNativeActor(args: {
 				extensionProviderOwnership: "inherited",
 				deferSkillDescriptionCompression: true,
 				onSessionCreated(child) {
-					childRestrictions.bindSession(child.sessionId);
 					child.addDisposer(inheritSpecExecutionSkills(parentScope, child.sessionManager));
 				},
 			};
@@ -340,7 +333,6 @@ export async function createAIReqNativeActor(args: {
 		}),
 	);
 	const session = created.session;
-	restrictions.bindSession(session.sessionId);
 	const ref = registry.get(id);
 	const unsubscribe = registry.syncSessionStatus(id, session);
 	session.addDisposer(() => {
@@ -553,6 +545,7 @@ export async function aiReqNativeSessionOptions(args: {
 		methods,
 		options: {
 			...capabilities,
+			toolRestrictions: capabilities?.toolRestrictions?.clone(),
 			cwd,
 			settings: overlay,
 			sessionManager,
@@ -562,7 +555,6 @@ export async function aiReqNativeSessionOptions(args: {
 			modelRegistry: root.modelRegistry,
 			authStorage: deps.authStorage,
 			agentRegistry: root.agentRegistry,
-			getApiKey: deps.getApiKey,
 			asyncJobManager: root.asyncJobManager,
 			parentAgentId: root.getAgentId(),
 			eventBus: deps.eventBus,

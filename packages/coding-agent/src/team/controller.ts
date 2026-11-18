@@ -16,6 +16,7 @@ import type { Settings } from "../config/settings";
 import { cfgTaskMaxConcurrency } from "../task/settings";
 import { cfgTeamMembers } from "./settings";
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
+import { resolveNativeChildSessionHooks } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { runTeamDiscussion } from "./orchestrator";
 import { assembleTeamFailure } from "./report";
@@ -208,6 +209,9 @@ export function buildRunnerDeps(
 ): TeamRunnerDeps {
 	const sessionId = session.sessionId;
 	const modelRegistry = session.modelRegistry;
+	const parentCapabilities = session.nativeChildCapabilities;
+	const extensionProviderOwnership = parentCapabilities?.extensionProviderOwnership;
+	const sessionHooks = resolveNativeChildSessionHooks({ extensionProviderOwnership }, parentCapabilities);
 	return {
 		cwd,
 		// Session-granted roots (CLI --dir, ACP/add-dir, settings-seeded) must
@@ -216,7 +220,9 @@ export function buildRunnerDeps(
 		additionalDirectories: session.sessionManager.getAdditionalDirectories(),
 		settings,
 		modelRegistry,
-		extensionProviderOwnership: session.nativeChildCapabilities?.extensionProviderOwnership,
+		...sessionHooks,
+		toolRestrictions: sessionHooks.toolRestrictions?.clone(),
+		extensionProviderOwnership,
 		authStorage: modelRegistry.authStorage,
 		sessionFile: session.sessionFile ?? null,
 		artifactsDir: session.sessionManager.getArtifactsDir(),

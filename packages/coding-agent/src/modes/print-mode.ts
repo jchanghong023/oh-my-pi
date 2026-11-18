@@ -14,6 +14,7 @@ import type { MCPManager } from "../mcp/manager";
 import { resolveMCPTimeoutMs } from "../mcp/timeout";
 import { MNEMOPI_NOTICE_SOURCE } from "../mnemopi/embedding-notice";
 import { type AgentSession, type AgentSessionEvent, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../session/agent-session";
+import type { PromptOptions } from "../session/agent-session-types";
 import { toWireEvent } from "../session/loop-end-wire";
 import { COST_GATE_NOTICE_SOURCE } from "../session/cost-gate";
 import { CREDENTIAL_DISABLED_NOTICE_SOURCE } from "../session/credential-disabled-notice";
@@ -41,7 +42,9 @@ export interface PrintModeOptions {
 	mode: "text" | "json";
 	/** Array of additional prompts to send after initialMessage */
 	messages?: string[];
-	/** First message to send (may contain @file content) */
+	/** Explicit first CLI command to attempt before any prompt data when starting without a model. */
+	initialCommand?: string;
+	/** First message composed from stdin/@file and any merged CLI text; never parsed as a command or template. */
 	initialMessage?: string;
 	/** Images to attach to the initial message */
 	initialImages?: ImageContent[];
@@ -191,7 +194,15 @@ async function runPrintModeCore(
 	stdout: SerialStdout,
 	signalTeardownActive: () => boolean,
 ): Promise<number> {
-	const { mode, messages = [], initialMessage, initialImages, printThoughts, planYolo = false } = options;
+	const {
+		mode,
+		messages = [],
+		initialCommand,
+		initialMessage,
+		initialImages,
+		printThoughts,
+		planYolo = false,
+	} = options;
 	session.disableStopTimeTodoReminders();
 
 	// Emit session header for JSON mode
@@ -327,7 +338,7 @@ async function runPrintModeCore(
 	const PRINT_DISPATCHED_COMMANDS: Record<string, true> = { compact: true, handoff: true, retry: true };
 	/**
 	 * Dispatch a CLI-authored message as a local command, if it is one.
-	 * Only CLI-authored input (`messages`, the positional/-p args) is ever
+	 * Only CLI-authored input (`initialCommand` and `messages`) is ever
 	 * dispatched. The merged stdin/@file `initialMessage` is attacker-shaped
 	 * end to end — `curl … | omp "summarize"` must never run a slash payload
 	 * from the pipe as a command — so it always prompts the model as text.
@@ -486,29 +497,30 @@ async function runPrintModeCore(
 		return true;
 	};
 	/** Prompt the model with one input, gated on strict MCP readiness. */
-	const promptTurn = async (text: string, images?: PrintModeOptions["initialImages"]): Promise<void> => {
+	const promptTurn = async (text: string, options?: PromptOptions): Promise<void> => {
 		if (!(await prepareAgentTurn())) return;
 		admittedAgentTurn = true;
 		costCapRefusalBeforeTurn = session.costCapRefusal;
 		await logger.time("print:prompt", () =>
-			images !== undefined ? session.prompt(text, { images }) : session.prompt(text),
+			options !== undefined ? session.prompt(text, options) : session.prompt(text),
 		);
 	};
 
-	// Inputs run in order. The merged stdin/@file message is never dispatched
-	// (see dispatchCliMessage): it always prompts the model with its text.
-	if (initialMessage !== undefined) {
-		await promptTurn(initialMessage, initialImages);
-	}
-	// Remaining messages are CLI-authored: dispatch the recovery command as
-	// reached, prompt everything else.
-	for (const message of messages) {
-		if (strictMCPFailure) break;
+	const runCliMessage = async (message: string): Promise<void> => {
 		if (await dispatchCliMessage(message)) {
 			readinessDirty = true;
-			continue;
+			return;
 		}
 		await promptTurn(message);
+	};
+
+	if (initialCommand !== undefined) await runCliMessage(initialCommand);
+	if (!strictMCPFailure && initialMessage !== undefined) {
+		await promptTurn(initialMessage, { images: initialImages, runCommands: false, expandPromptTemplates: false });
+	}
+	for (const message of messages) {
+		if (strictMCPFailure) break;
+		await runCliMessage(message);
 	}
 	// A run with no model turn (every input consumed locally, or none) still
 	// reports strict unreadiness: `OMP_MCP_REQUIRE_READY=1 omp -p '/mcp reauth

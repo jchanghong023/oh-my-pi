@@ -63,12 +63,17 @@ export function resolvePersistentRoot(env = process.env) {
 	return normalizePersistentRoot(path.join(home, env.PI_CONFIG_DIR || DEFAULT_CONFIG_DIR_NAME));
 }
 
+/** The per-user shm layout, even when the offline cache is not selected. */
+export function resolveLinuxPrivateCacheRoot() {
+	return process.platform === "linux" ? path.join("/dev/shm", `omp-${process.getuid()}`) : undefined;
+}
+
 /** Resolve the optional cache root, keeping named profiles in their usual layout. */
 export function resolveCacheRoot(profile) {
 	let root = resolveAbsoluteDir(process.env.OMP_CACHE_DIR);
 	if (root && process.platform === "linux") root = path.join(root, String(process.getuid()));
 	else if (!root && process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "")) {
-		root = path.join("/dev/shm", `omp-${process.getuid()}`);
+		root = resolveLinuxPrivateCacheRoot();
 	}
 	return root && profile ? path.join(root, "profiles", profile) : root;
 }

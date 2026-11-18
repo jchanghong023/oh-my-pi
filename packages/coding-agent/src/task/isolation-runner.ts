@@ -268,6 +268,11 @@ interface IsolationPatchCapture {
 	fingerprint: bigint | number;
 }
 
+interface IsolationPatchProgress {
+	delta?: DeltaPatchResult;
+	rootPatchWritten?: boolean;
+}
+
 /**
  * Capture the isolation delta and write every part of it to disk — the root
  * patch and one file per nested repo — before the caller tears the workspace
@@ -277,11 +282,15 @@ async function writeIsolationPatch(
 	changes: RunChanges,
 	artifactsDir: string,
 	agentId: string,
+	progress?: IsolationPatchProgress,
 ): Promise<IsolationPatchCapture> {
-	const delta = await changes.delta();
+	const delta = progress ? (progress.delta ??= await changes.delta()) : await changes.delta();
 	const patchPath = path.join(artifactsDir, `${agentId}.patch`);
 	// Windows session artifact paths can exceed MAX_PATH; match the native session's long-path-safe Node IO.
-	await fs.writeFile(patchPath, delta.rootPatch, "utf8");
+	if (!progress?.rootPatchWritten) {
+		await fs.writeFile(patchPath, delta.rootPatch, "utf8");
+		if (progress) progress.rootPatchWritten = true;
+	}
 	const nestedPatchPaths = await persistNestedPatches(artifactsDir, agentId, delta.nestedPatches);
 	return {
 		artifacts: {
@@ -422,7 +431,7 @@ export interface WorkspaceStart {
  * (`ovnfsWorkspace` in `./ovnfs`). Capture and merge only see {@link dir}.
  */
 export interface IsolationWorkspace {
-	/** The checkout the subagent runs in. */
+	/** The checkout the subagent runs in; may change when retained for recovery. */
 	readonly dir: string;
 	/** Set when the workspace keeps the state it opened in; then no baseline is taken at start. */
 	readonly start?: WorkspaceStart;
@@ -439,9 +448,16 @@ export type OpenWorkspace = (repoRoot: string, agentId: string) => Promise<Isola
 export function nativeWorkspace(backend: IsoBackendKind | undefined): OpenWorkspace {
 	return async (repoRoot, agentId) => {
 		const handle = await ensureIsolation(repoRoot, agentId, backend);
+		let dir = handle.mergedDir;
 		return {
-			dir: handle.mergedDir,
-			retain: () => retainIsolationWorkspace(handle.mergedDir, handle.backend),
+			get dir() {
+				return dir;
+			},
+			async retain() {
+				const retained = await retainIsolationWorkspace(dir, handle.backend);
+				dir = retained.dir;
+				return retained;
+			},
 			cleanup: () => cleanupIsolation(handle),
 		};
 	};
@@ -486,9 +502,9 @@ function renderIsolationError(context: IsolationErrorContext): string {
  *
  * Kept-alive runs retain the isolation handle through idle/parked lifecycle
  * transitions, then capture final changes and clean up on release. One-shot
- * and failed startup paths clean up in `finally`. If captured changes cannot
- * be written to disk, the workspace is retained under a unique `.retained-*`
- * sibling and its path is named in the resulting error.
+ * and failed startup paths clean up in `finally`. Capture and observation
+ * failures retain the workspace under a unique `.retained-*` sibling for
+ * recovery; a strict release retry resumes only unfinished stages.
  */
 export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<SingleResult> {
 	let changes: RunChanges | undefined;
@@ -502,9 +518,24 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	let releasePromise: Promise<void> | undefined;
 	let sourceResult: SingleResult | undefined;
 	let runOutcome: SingleResult | undefined;
-	const preserveObservationFailure = async (result: SingleResult, error: unknown): Promise<SingleResult> => {
-		const retained = workspace && !retainWorkspace ? await workspace.retain() : undefined;
+	// Retention protects recovery files, independently of which release stages have completed.
+	let beforeCaptureDone = false;
+	let afterResultDone = false;
+	let releaseCaptureDone = false;
+	let releaseCapture: IsolationPatchCapture | undefined;
+	const releasePatchProgress: IsolationPatchProgress = {};
+	const preserveWorkspace = async (): Promise<RetainedWorkspace | undefined> => {
+		if (retainWorkspace) return;
 		retainWorkspace = true;
+		return workspace?.retain();
+	};
+	const observeReleaseResult = async (result: SingleResult): Promise<void> => {
+		if (afterResultDone || !opts.onAfterResult) return;
+		await opts.onAfterResult(result);
+		afterResultDone = true;
+	};
+	const preserveObservationFailure = async (result: SingleResult, error: unknown): Promise<SingleResult> => {
+		const retained = await preserveWorkspace();
 		const message = error instanceof Error ? error.message : String(error);
 		result.error = [
 			result.error,
@@ -530,103 +561,147 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	/** The run's IRC wake hold, released only once the run-end capture is done. */
 	let releaseIrcWakes: (() => void) | undefined;
 	const releaseBase = (): Promise<void> => {
-		baseReleasePromise ??= opts.baseOptions.onRelease?.() ?? Promise.resolve();
+		baseReleasePromise ??= Promise.resolve()
+			.then(() => opts.baseOptions.onRelease?.())
+			.catch(error => {
+				baseReleasePromise = undefined;
+				throw error;
+			});
 		return baseReleasePromise;
 	};
 	const cleanupHandle = (): Promise<void> => {
 		cleanupPromise ??= (async () => {
 			await releaseBase();
 			if (workspace && !retainWorkspace) await workspace.cleanup();
-		})();
+		})().catch(error => {
+			cleanupPromise = undefined;
+			throw error;
+		});
 		return cleanupPromise;
 	};
 	const releaseIsolation = (): Promise<void> => {
 		if (releasePromise) return releasePromise;
-		releasePromise = (async () => {
-			if (!workspace || !changes || retainWorkspace) {
+		const attempt = (async () => {
+			if (!workspace || !changes) {
 				await cleanupHandle();
 				return;
 			}
-			let outcomeObservationStarted = false;
+			let observingResult = false;
 			try {
 				await deferredCleanup;
-				if (sourceResult) await opts.onBeforeCapture?.(sourceResult);
-				let capture: IsolationPatchCapture;
-				try {
-					capture = await writeIsolationPatch(changes, opts.artifactsDir, opts.agentId);
-				} catch (captureErr) {
-					retainWorkspace = true;
-					const retained = await workspace.retain();
-					throw new Error(
-						renderIsolationError({
-							kind: "patch-capture-failed",
-							message: captureErr instanceof Error ? captureErr.message : String(captureErr),
-							retainedDir: retained.dir,
-							sidecarMissing: !retained.sidecarOk,
-						}),
-					);
+				if (!beforeCaptureDone && sourceResult) {
+					await opts.onBeforeCapture?.(sourceResult);
+					beforeCaptureDone = true;
 				}
-				const patchResult = capture.artifacts;
-				AgentRegistry.global().setHistory(opts.agentId, {
-					patchPath: patchResult.patchPath,
-					nestedPatchPaths: patchResult.nestedPatchPaths,
-				});
-				// Nothing changed since the run-end capture the caller already
-				// merged or applied: a branch now would only duplicate that work.
-				if (capture.fingerprint === handedOff && !opts.onAfterResult) return;
-				const commitResult =
-					capture.fingerprint === handedOff
-						? undefined
-						: await commitToBranch(
-								workspace.dir,
-								await changes.baseline(),
-								opts.agentId,
-								opts.description,
-								undefined,
-								capture.delta,
-							);
-				AgentRegistry.global().setHistory(opts.agentId, {
-					patchPath: patchResult.patchPath,
-					branchName: commitResult === undefined ? runOutcome?.branchName : commitResult?.branchName,
-					nestedPatchPaths: patchResult.nestedPatchPaths,
-				});
-				if (runOutcome) {
-					Object.assign(runOutcome, patchResult);
-					if (commitResult !== undefined)
-						Object.assign(runOutcome, {
-							branchName: commitResult?.branchName,
-							branchBaseSha: commitResult?.baseSha,
-							nestedPatches: commitResult?.nestedPatches,
-						});
-					outcomeObservationStarted = true;
-					await opts.onAfterResult?.(runOutcome);
-				}
-			} catch (error) {
-				if (sourceResult && (opts.onBeforeCapture || opts.onAfterResult)) {
-					await preserveObservationFailure(runOutcome ?? sourceResult, error);
-					if (!outcomeObservationStarted && opts.onAfterResult) {
+				if (!releaseCaptureDone) {
+					if (!releaseCapture) {
 						try {
-							await opts.onAfterResult(runOutcome ?? sourceResult);
-						} catch (observationError) {
-							await preserveObservationFailure(runOutcome ?? sourceResult, observationError);
+							releaseCapture = await writeIsolationPatch(
+								changes,
+								opts.artifactsDir,
+								opts.agentId,
+								releasePatchProgress,
+							);
+						} catch (captureErr) {
+							const retained = await preserveWorkspace();
+							throw new Error(
+								renderIsolationError({
+									kind: "patch-capture-failed",
+									message: captureErr instanceof Error ? captureErr.message : String(captureErr),
+									retainedDir: retained?.dir,
+									sidecarMissing: retained?.sidecarOk === false,
+								}),
+								{ cause: captureErr },
+							);
+						}
+						releasePatchProgress.delta = undefined;
+						AgentRegistry.global().setHistory(opts.agentId, {
+							patchPath: releaseCapture.artifacts.patchPath,
+							nestedPatchPaths: releaseCapture.artifacts.nestedPatchPaths,
+						});
+					}
+					const { artifacts, delta, fingerprint } = releaseCapture;
+					// Do not commit an unchanged delta the caller already merged or applied.
+					if (fingerprint !== handedOff || opts.onAfterResult) {
+						const commitResult =
+							fingerprint === handedOff
+								? undefined
+								: await commitToBranch(
+										workspace.dir,
+										await changes.baseline(),
+										opts.agentId,
+										opts.description,
+										undefined,
+										delta,
+									);
+						AgentRegistry.global().setHistory(opts.agentId, {
+							patchPath: artifacts.patchPath,
+							branchName: commitResult === undefined ? runOutcome?.branchName : commitResult?.branchName,
+							nestedPatchPaths: artifacts.nestedPatchPaths,
+						});
+						if (runOutcome) {
+							Object.assign(runOutcome, artifacts);
+							if (commitResult !== undefined)
+								Object.assign(runOutcome, {
+									branchName: commitResult?.branchName,
+									branchBaseSha: commitResult?.baseSha,
+									nestedPatches: commitResult?.nestedPatches,
+								});
 						}
 					}
+					releaseCaptureDone = true;
+					releaseCapture = undefined;
+				}
+				if (runOutcome) {
+					observingResult = true;
+					await observeReleaseResult(runOutcome);
+				}
+			} catch (error) {
+				try {
+					if (sourceResult && (opts.onBeforeCapture || opts.onAfterResult)) {
+						const result = runOutcome ?? sourceResult;
+						await preserveObservationFailure(result, error);
+						// Report an earlier-stage failure through the result observer, but
+						// only retry an observer that failed on the next release attempt.
+						if (!observingResult) {
+							try {
+								await observeReleaseResult(result);
+							} catch (observationError) {
+								await preserveObservationFailure(result, observationError);
+							}
+						}
+					} else {
+						await preserveWorkspace();
+					}
+				} catch (preservationError) {
+					error = new AggregateError(
+						[error, preservationError],
+						`Failed preserving isolated task ${opts.agentId}`,
+					);
+				}
+				try {
+					await cleanupHandle();
+				} catch (cleanupError) {
+					throw new AggregateError([error, cleanupError], `Failed releasing isolated task ${opts.agentId}`);
 				}
 				throw error;
-			} finally {
-				await cleanupHandle();
 			}
-		})();
+			await cleanupHandle();
+		})().catch(error => {
+			releasePromise = undefined;
+			throw error;
+		});
+		releasePromise = attempt;
 		// Session teardown has only a short grace period. Once the session has
 		// stopped, let a signal exit wait for the final capture and backend stop
 		// rather than abandoning a large sandbox when that grace period expires.
-		const unregister = postmortem.register(`isolation-release:${opts.agentId}`, () => releasePromise, {
+		const unregister = postmortem.register(`isolation-release:${opts.agentId}`, () => attempt, {
 			exitOnly: true,
 			deadlineMs: 120_000,
 			waitMessage: "Finishing isolated task cleanup",
 		});
-		void releasePromise.then(unregister, unregister);
-		return releasePromise;
+		void attempt.then(unregister, unregister);
+		return attempt;
 	};
 	try {
 		let requestedSubdir: string | undefined;

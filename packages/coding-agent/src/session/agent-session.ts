@@ -704,6 +704,8 @@ export class PromptDroppedError extends Error {
 	}
 }
 
+const EXECUTION_MODEL_INPUT_BLOCKED = "Another execution owns the temporary session model.";
+
 /**
  * A transcript snapshot ({@link AgentSession.fork} at an entry, a /btw branch) was
  * refused because a turn, user command, or maintenance pass could still write into
@@ -1206,6 +1208,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 *  still holds the user's own queued follow-up until they resume deliberately. */
 	#turnSettledSinceUserInterrupt = false;
 	#queuedMessageDrainScheduled = false;
+	#openQueuedDrainAfterExecutionModel = false;
 	/** A single model-only notebook reminder queued for the current prompt generation. */
 	#experimentalContextNotesReminder: { prompt: string; generation: number } | undefined;
 	#planModeState: PlanModeState | undefined;
@@ -1750,6 +1753,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 *  the agent responds to the peer. Skip only when a queued steer/follow-up will itself drive a
 	 *  resume turn whose aside poll already consumes these (no double-wake). */
 	#resumeStrandedIrcAsides(): void {
+		if (this.#models.executionModelBlocksInput()) return;
 		if (this.#modeExitDrainSuppressionDepth > 0 || this.#isDisposed || this.isStreaming || !this.#irc.hasPending()) {
 			return;
 		}
@@ -1833,6 +1837,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 *  because #canAutoContinueForFollowUp suppresses follow-up auto-resume while a user interrupt is
 	 *  in effect, even though the wake left a provider-valid tail. */
 	#wakeForIrc(wakeRecords: AgentMessage[]): void {
+		if (this.#models.executionModelBlocksInput()) {
+			this.#irc.queueDeferredWake(wakeRecords);
+			return;
+		}
 		if (this.#modeExitDrainSuppressionDepth > 0) {
 			this.#irc.queueAside(wakeRecords);
 			return;
@@ -2403,7 +2411,22 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
 		const modelControlsHost: ModelControlsHost = {
 			executionModelIdle: () =>
-				!this.isBusyForSnapshot && !this.isDisposed && !this.isRunActive && this.wakeSources === undefined,
+				!this.isBusyForSnapshot &&
+				!this.isDisposed &&
+				!this.isRunActive &&
+				!this.#abortInProgress &&
+				!this.isSessionTransitioning &&
+				!this.hasAdmittedSubmission &&
+				this.#promptInFlightCount === 0 &&
+				this.wakeSources === undefined,
+			executionModelReleased: () => {
+				const allowOpeningFollowUp = this.#openQueuedDrainAfterExecutionModel;
+				this.#openQueuedDrainAfterExecutionModel = false;
+				if (this.#isDisposed) return;
+				if (allowOpeningFollowUp) this.#scheduleQueuedMessageDrain(true);
+				this.#drainStrandedQueuedMessages();
+				this.yieldQueue.requestIdleFlush();
+			},
 			validateExecutionModelAuth: async (model, signal) => {
 				const key = await this.#modelRegistry.getApiKey(model, this.sessionId, { signal });
 				return Boolean(key) || (await this.#validateRequestAuth?.(model, signal)) === true;
@@ -2655,7 +2678,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.yieldQueue = new YieldQueue({
 			// A transition swaps the transcript under the agent: hold idle deliveries until it
 			// settles, so a result from the outgoing session cannot start a turn in the target.
-			isStreaming: () => this.isStreaming || this.isSessionTransitioning,
+			isStreaming: () => this.isStreaming || this.isSessionTransitioning || this.#models.executionModelBlocksInput(),
 			injectIdle: async delivered => {
 				const first = delivered[0];
 				if (!first) return;
@@ -2901,7 +2924,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			promptGeneration: () => this.#promptGeneration,
 			promptSequence: () => this.#promptSequence,
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
-			schedulePostPromptTask: task => this.#schedulePostPromptTask(task),
+			schedulePostPromptTask: task =>
+				this.#schedulePostPromptTask(async signal => {
+					if (this.#models.executionModelBlocksInput()) return;
+					// These recoveries wait for idle before continuing directly.
+					// Reserve the session across that wait just like scheduled continues.
+					const inFlightEpoch = this.#beginInFlight();
+					try {
+						await task(signal);
+					} finally {
+						this.#endInFlight(inFlightEpoch);
+					}
+				}),
 			discardAssistantTurn: message => this.#recovery.discardAssistantTurn(message),
 		};
 		this.#streamingEditGuard = new StreamingEditGuard(streamGuardsHost);
@@ -3991,7 +4025,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.agent.logContext ? logger.withContext(this.agent.logContext, work) : work();
 	}
 
-	async #admitSubmission<T>(work: () => Promise<T>): Promise<T> {
+	async #admitSubmission<T>(work: () => Promise<T>, onBlocked?: () => T): Promise<T> {
+		if (this.#models.executionModelBlocksInput()) {
+			if (onBlocked) return onBlocked();
+			throw new PromptDroppedError(EXECUTION_MODEL_INPUT_BLOCKED);
+		}
 		this.#admittedSubmissionCount++;
 		try {
 			if (this.hasPendingDeferredExtensions) await this.loadDeferredExtensions();
@@ -5740,6 +5778,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		onStart?: () => void,
 	): Promise<AgentContinueOutcome> {
 		try {
+			if (this.#models.executionModelBlocksInput()) {
+				return { status: "skipped", reason: "session-unavailable" };
+			}
 			// During an automatic-retry saga the primary model's selector cooldown
 			// can expire while a chain-tail fallback is still mid-backoff. Restoring
 			// the primary then would reset the retry budget and re-enter a model
@@ -5771,9 +5812,25 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				return { status: "skipped", reason: "session-unavailable" };
 			}
 			for (;;) {
+				if (this.#models.executionModelBlocksInput()) {
+					return { status: "skipped", reason: "session-unavailable" };
+				}
 				try {
 					if (!this.agent.state.isStreaming) onStart?.();
-					await this.agent.continue(signal);
+					const run = () => this.agent.continue(signal);
+					// Seed an empty scope; transformContext selects the policy from
+					// the input the loop actually consumes, after dequeue hooks.
+					if (
+						this.#runInputToolPolicy &&
+						!this.agent.queuedMessagesHeld &&
+						(this.agent.followUpAutoDrain
+							? this.agent.hasQueuedMessages()
+							: this.agent.peekSteeringQueue().length > 0)
+					) {
+						await this.#runInputToolPolicy([], run);
+					} else {
+						await run();
+					}
 					return { status: "completed" };
 				} catch (error) {
 					if (!(error instanceof AgentBusyError)) throw error;
@@ -5827,6 +5884,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		});
 		this.#schedulePostPromptTask(
 			async signal => {
+				if (this.#models.executionModelBlocksInput()) {
+					this.#skipAgentContinue("session-unavailable", request);
+					return;
+				}
 				// Defense in depth: if compaction/handoff slipped onto the post-prompt queue
 				// alongside us (e.g. via a scheduler we don't own), refuse to start a fresh
 				// streaming turn — agent.continue() here would race the handoff's session
@@ -9457,7 +9518,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
 		const submission = { ...options, inputId: options?.inputId ?? crypto.randomUUID() };
-		const run = () => this.#admitSubmission(() => this.#prompt(text, submission));
+		const run = () =>
+			this.#admitSubmission(
+				() => this.#prompt(text, submission),
+				() => {
+					this.#reportDroppedPrompt(
+						text,
+						submission,
+						this.#createPromptFollowUps(submission.followUps),
+						EXECUTION_MODEL_INPUT_BLOCKED,
+					);
+					if (submission.throwOnDrop) throw new PromptDroppedError(EXECUTION_MODEL_INPUT_BLOCKED);
+					return true;
+				},
+			);
 		return this.#runInputToolPolicy ? this.#runInputToolPolicy(options?.toolDenylist ?? [], run) : run();
 	}
 
@@ -9560,6 +9634,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * @throws {Error} when there is no conversation to resume.
 	 */
 	async resume(): Promise<void> {
+		if (this.#models.executionModelBlocksInput()) throw new AgentBusyError(EXECUTION_MODEL_INPUT_BLOCKED);
 		if (!this.isStreaming) return this.#resumeIdle();
 		// waitForIdle() reads a pending unwind as busy. Hold one from the interrupt
 		// until the continuation is live, so a host driving this session to a result
@@ -9586,6 +9661,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * before returning.
 	 */
 	async #resumeIdle(onAdmitted?: () => void): Promise<void> {
+		if (this.#models.executionModelBlocksInput()) throw new AgentBusyError(EXECUTION_MODEL_INPUT_BLOCKED);
 		const prompt = this.#recovery.prepareResume();
 		if (!prompt) {
 			// A handoff or full compaction can leave only the summary: it carries the
@@ -10532,6 +10608,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// every pre-dispatch bail (generation bump from abort, disposal, usage
 		// preflight denial) exits silently, and prompt() uses the outcome to hand
 		// the typed text back to the host instead of losing it.
+		if (this.#models.executionModelBlocksInput()) return false;
 		const inFlightEpoch = this.#beginInFlight();
 		// Client ownership is reserved by #prompt before dispatch preprocessing
 		// and released when its bracket settles; callers that reach this
@@ -11338,6 +11415,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			promptGeneration?: number;
 		},
 	): Promise<boolean> {
+		if (this.#models.executionModelBlocksInput()) return false;
 		options = { ...options, inputId: options?.inputId ?? crypto.randomUUID() };
 		const sourceGeneration = options?.promptGeneration ?? this.#promptGeneration;
 		const attribution = options?.attribution ?? "user";
@@ -11363,6 +11441,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// vision-model request for the same attachment.
 		const attachmentSourceNotices = this.#createAttachmentSourceNotices(images, timestamp ?? Date.now());
 		const normalizedImages = preprocessed ? preprocessed.images : await this.#normalizeImagesForModel(images);
+		if (this.#models.executionModelBlocksInput()) return false;
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (normalizedImages?.length) {
 			content.push(...normalizedImages);
@@ -11375,6 +11454,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				? await this.#buildImageDescriptionNotice(normalizedImages)
 				: undefined;
 		if (
+			this.#models.executionModelBlocksInput() ||
 			((mode !== "aside" || options?.promptGeneration !== undefined) &&
 				this.#promptGeneration !== sourceGeneration) ||
 			(mode !== "aside" && this.#sessionGeneration !== sessionGeneration) ||
@@ -11698,6 +11778,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#scheduleQueuedMessageDrain(allowOpeningFollowUp = false): void {
+		if (this.#models.executionModelBlocksInput()) {
+			if (allowOpeningFollowUp && this.agent.hasQueuedMessages()) this.#openQueuedDrainAfterExecutionModel = true;
+			return;
+		}
 		if (
 			this.#queuedMessageDrainScheduled ||
 			this.#modeExitDrainSuppressionDepth > 0 ||
@@ -11718,8 +11802,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					this.agent.hasQueuedMessages()
 				);
 			},
-			onSkip: () => {
+			onSkip: reason => {
 				this.#queuedMessageDrainScheduled = false;
+				if (reason === "session-unavailable" && allowOpeningFollowUp && this.#models.executionModelBlocksInput())
+					this.#openQueuedDrainAfterExecutionModel = true;
 			},
 			onError: () => {
 				this.#queuedMessageDrainScheduled = false;
@@ -11850,7 +11936,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	async #promptQueuedHiddenNextTurnMessages(): Promise<void> {
-		if (this.#pendingNextTurnMessages.length === 0) {
+		if (this.#models.executionModelBlocksInput() || this.#pendingNextTurnMessages.length === 0) {
 			return;
 		}
 
@@ -12619,18 +12705,24 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						return Promise.reject(new Error("Queued input reservation is no longer valid"));
 					started = true;
 					const run = () =>
-						this.#admitSubmission(async () => {
-							const dispatched = await this.#promptWithMessage(message, queueChipText(message), {
-								...options,
-								prependMessages: group.slice(0, -1),
-								onPromptAdmitted: () => {
-									committed = true;
-									options.onPromptAdmitted?.();
-								},
-							});
-							if (!dispatched && options.throwOnDrop) throw new PromptDroppedError();
-							return dispatched;
-						});
+						this.#admitSubmission(
+							async () => {
+								const dispatched = await this.#promptWithMessage(message, queueChipText(message), {
+									...options,
+									prependMessages: group.slice(0, -1),
+									onPromptAdmitted: () => {
+										committed = true;
+										options.onPromptAdmitted?.();
+									},
+								});
+								if (!dispatched && options.throwOnDrop) throw new PromptDroppedError();
+								return dispatched;
+							},
+							() => {
+								if (options.throwOnDrop) throw new PromptDroppedError(EXECUTION_MODEL_INPUT_BLOCKED);
+								return false;
+							},
+						);
 					const denylist = (message as AgentMessage & { toolDenylist?: readonly string[] }).toolDenylist ?? [];
 					return this.#runInputToolPolicy ? this.#runInputToolPolicy(denylist, run) : run();
 				},

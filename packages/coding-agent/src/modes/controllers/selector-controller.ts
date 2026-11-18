@@ -2300,13 +2300,8 @@ export class SelectorController {
 							)
 					: undefined,
 			});
-			// Scope the post-login refresh to the just-authenticated provider with an
-			// `online` strategy: the default all-provider `online-if-uncached` reuses
-			// a fresh authoritative cache row (e.g. an empty result fetched before
-			// login), so newly persisted credentials would never re-run discovery and
-			// models would stay unavailable in-session (#5780). Unrelated providers
-			// are left untouched. `refreshProvider` swallows discovery failures, so
-			// awaiting cannot reject the login.
+			// Refresh only the authenticated provider, overriding a stale pre-login
+			// catalog (#5780). Intranet mode still reconciles from cache only.
 			await this.ctx.session.modelRegistry.refreshProvider(getOAuthCredentialProvider(providerId), "online");
 			await this.ctx.session.refreshScopedModels();
 			const block = new TranscriptBlock();

@@ -42,6 +42,8 @@ export interface ExecutionModelContext {
 	policies?: ExecutionModelPolicies;
 	resolveRequestAuth?: ExecutionRequestAuthResolver;
 	recoverModelRequest?: ExecutionModelRequestRecovery;
+	/** Identity of the session and lease that own the temporary selection. */
+	lease?: { owner: object; sessionId: string };
 	releaseModel?: () => Promise<void>;
 }
 
@@ -54,8 +56,10 @@ export function currentExecutionModel(): ExecutionModelContext | undefined {
 }
 
 /** End only the submission's model lease before a later user input is dequeued. */
-export async function releaseCurrentExecutionModel(): Promise<void> {
-	await executionContext.getStore()?.value.releaseModel?.();
+export async function releaseCurrentExecutionModel(owner?: object): Promise<void> {
+	const context = executionContext.getStore()?.value;
+	if (owner !== undefined && context?.lease?.owner !== owner) return;
+	await context?.releaseModel?.();
 }
 
 /** Detached work may use ordinary session auth, never the submission's ephemeral material. */

@@ -19,7 +19,7 @@ OMP MUST 使用本 fork OMP 作为 Agent 核心，并按真实终端入口完成
 
 | 场景 | 使用目标 | 具体契约 |
 | --- | --- | --- |
-| 终端 TUI | 直接使用 OMP 原生终端交互入口，跟进上游能力，并带有本 fork 的个人默认值；公司无互联网环境通过 `OMP_OFFLINE=1` 使用本地资源和公司内部模型服务，日常启动与核心任务不依赖公网 | [默认设置](../fork-runtime-defaults/spec.md)、[快捷键与状态栏](../tui-presentation/spec.md)、[公司内网模型](../model-providers/spec.md)、[安装与运行](../fork-runtime/spec.md)；[新手快速指南](../../../docs-zh-CN/quick-start-intranet.md) |
+| 终端 TUI | 直接使用 OMP 原生终端交互入口，跟进上游能力，并带有本 fork 的个人默认值；`OMP_OFFLINE=1` 面向公司 CentOS 7 内网（NFS、`/dev/shm`、无法连接互联网），使用本地资源和公司内部模型服务 | [默认设置](../fork-runtime-defaults/spec.md)、[快捷键与状态栏](../tui-presentation/spec.md)、[公司内网模型](../model-providers/spec.md)、[安装与运行](../fork-runtime/spec.md)；[新手快速指南](../../../docs-zh-CN/quick-start-intranet.md) |
 
 - **零配置文件**：默认使用不要求用户手工创建、填写或修改 OMP 配置文件；所需默认值由内置行为、场景启动参数和已有环境信息提供。模型服务可达及必要认证仍是使用前提；公司环境复用既有 Claude Code 配置的具体约定见[公司内网模型](../model-providers/spec.md)，不要求另配一份 OMP 凭据。
 - 用户仍可主动调整偏好并由程序持久化；可选设置不能成为默认使用的必经步骤。零配置不禁止程序保存会话、缓存或用户主动选择。

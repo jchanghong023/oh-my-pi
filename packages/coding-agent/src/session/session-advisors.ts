@@ -120,6 +120,7 @@ import type { CompactionEntry, SessionEntry } from "./session-entries";
 import { formatSessionHistoryMarkdown } from "./session-history-format";
 import type { SessionManager } from "./session-manager";
 import { buildSessionMetadata } from "./session-metadata";
+import type { ToolRestrictions } from "./tool-restrictions";
 import type { YieldQueue } from "./yield-queue";
 
 import {
@@ -456,6 +457,8 @@ export interface AdvisorToolSlate {
  * on a fresh session rather than instances shared across the roster.
  */
 export interface AdvisorToolFactory {
+	/** The SDK caller's live admission policy, independent of the advisor configuration. */
+	readonly restrictions?: ToolRestrictions;
 	/** Every tool name a slate can hold. */
 	names(): readonly string[];
 	/** Build the granted `names` against a new tool session. */
@@ -1395,7 +1398,11 @@ export class SessionAdvisors {
 			// reflect this advisor's own reads, not its siblings' (#18834).
 			const slate = this.#advisorTools?.create(names);
 			const tools = (slate?.tools ?? []).filter(t => names.has(t.name));
-			const advisorLoopTools: AgentTool<any>[] = [adviseTool, ...tools];
+			const restrictions = this.#advisorTools?.restrictions;
+			const advisorLoopTools: AgentTool<any>[] = [restrictions?.wrap(adviseTool) ?? adviseTool, ...tools];
+			// Keep the configured slate separate from input admission. A denied
+			// tool may be available on a later review without rebuilding the advisor.
+			const availableTools = () => restrictions?.filter(advisorLoopTools) ?? advisorLoopTools;
 			const advisorToolMap = new Map<string, AgentTool<any>>();
 			for (const tool of advisorLoopTools) {
 				advisorToolMap.set(tool.name, tool);
@@ -1444,7 +1451,9 @@ export class SessionAdvisors {
 			// tool map, so gate it on the advisor actually holding a file-mutating
 			// tool. A default read-only advisor (advise/read/grep/glob) never gets
 			// to delete workspace files it was never granted (issue #5680 review).
-			const advisorCanMutateFiles = advisorToolMap.has("write") || advisorToolMap.has("edit");
+			const advisorCanMutateFiles = () =>
+				restrictions?.allows("write") !== false &&
+				(advisorToolMap.has("write") || (advisorToolMap.has("edit") && restrictions?.allows("edit") !== false));
 			// `pi_edit` speaks `replace`'s `old_string`/`new_string` schema, which the
 			// advisor's ordinary `EditTool` (built at the session's configured
 			// `edit.mode`, `hashline` by default) does not accept. The bridge map
@@ -1504,7 +1513,7 @@ export class SessionAdvisors {
 					systemPrompt,
 					model: advisorModel,
 					thinkingLevel: toReasoningEffort(advisorThinkingLevel),
-					tools: advisorLoopTools,
+					tools: availableTools(),
 				},
 				appendOnlyContext,
 				sessionId: advisorProviderSessionId,
@@ -1602,6 +1611,7 @@ export class SessionAdvisors {
 						currentAdvisorInput = Array.isArray(input)
 							? formatSessionHistoryMarkdown(input, { watchedRoles: true })
 							: input;
+						if (restrictions) advisorAgent.setTools(availableTools());
 						// Agent.prompt's overloads accept string OR AgentMessage[] but not
 						// the union, so narrow first; both branches intentionally identical.
 						if (Array.isArray(input)) await advisorAgent.prompt(input);

@@ -174,14 +174,9 @@ if ($PSVersionTable.PSVersion -lt [version]"5.1") {
     throw "Windows PowerShell 5.1 or newer is required (found $($PSVersionTable.PSVersion)). Install PowerShell 7 from https://aka.ms/powershell and re-run the installer."
 }
 
-# Zero-config TLS posture, matching the fork runtime: interception proxies and
-# private gateways serve certificates the machine does not trust, and curl.exe
-# (Schannel) additionally fails on revocation checks behind them. The download
-# stays integrity-gated by the post-download `omp --version` probe, so relax
-# verification for the installer's own web requests. PS 5.1 needs TLS 1.2
-# enabled plus a permissive ServicePointManager callback; PS 7+ ignores
-# ServicePointManager for Invoke-* (HttpClient), so those callers splat
-# -SkipCertificateCheck from $script:WebSkipCertCheck instead.
+# Release metadata must use normal certificate validation. Only the binary
+# download tolerates interception proxies with untrusted certificates because
+# the temporary binary is checked against the release digest before execution.
 function Initialize-InstallTlsCallback {
     # TLS validation runs on a .NET worker thread without a PowerShell
     # runspace. A scriptblock delegate fails there with a send error.
@@ -196,7 +191,6 @@ namespace Omp {
 '@
     }
 }
-$script:WebSkipCertCheck = if ($PSVersionTable.PSVersion.Major -ge 7) { @{ SkipCertificateCheck = $true } } else { @{} }
 
 $Repo = "jchanghong023/oh-my-pi"
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\omp" }
@@ -277,7 +271,23 @@ function Save-InstallBinary {
         Set-InstallStage "download_webrequest"
         Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; timeout_ms = 900000; attempt = $(if ($curlExe) { 2 } else { 1 }) }
         try {
-            Invoke-WebRequest -Uri $Uri.AbsoluteUri -OutFile $OutFile -TimeoutSec 900 -UseBasicParsing @script:WebSkipCertCheck
+            $downloadTlsCallback = $null
+            $webSkipCertCheck = @{}
+            try {
+                if ($PSVersionTable.PSVersion.Major -ge 7) {
+                    $webSkipCertCheck.SkipCertificateCheck = $true
+                } else {
+                    $previousTlsCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
+                    Initialize-InstallTlsCallback
+                    $downloadTlsCallback = [Omp.InstallerTls]::Callback
+                    [Net.ServicePointManager]::ServerCertificateValidationCallback = $downloadTlsCallback
+                }
+                Invoke-WebRequest -Uri $Uri.AbsoluteUri -OutFile $OutFile -TimeoutSec 900 -UseBasicParsing @webSkipCertCheck
+            } finally {
+                if ($null -ne $downloadTlsCallback -and [object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $downloadTlsCallback)) {
+                    [Net.ServicePointManager]::ServerCertificateValidationCallback = $previousTlsCallback
+                }
+            }
             Write-InstallLog INFO http_request_completed @{ result = "success"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; http_status = "success" }
         } catch {
             Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
@@ -288,6 +298,22 @@ function Save-InstallBinary {
             $curlDetail = if ($curlExe) { "curl exit $curlExit`n" } else { "" }
             throw "Download failed: $($Uri.AbsoluteUri)`n${curlDetail}Invoke-WebRequest: $($_.Exception.Message)"
         }
+    }
+}
+
+function Get-InstallFileSha256 {
+    param([string]$Path)
+
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        try {
+            return [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace("-", "")
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
     }
 }
 
@@ -437,45 +463,54 @@ function Install-Binary {
     $failedStage = $null
     $renameFailure = $null
     $swapFailure = $null
-    $installTlsCallback = $null
+    $useLegacyTls = $PSVersionTable.PSVersion.Major -lt 7
+    $installSecurityProtocol = $null
     try {
     Set-InstallStage "install_target"
     $OutPath = Join-Path $InstallDir "omp.exe"
     if (Test-Path -LiteralPath $OutPath -PathType Container) {
         throw "Refusing to replace a directory at $OutPath"
     }
-    if ($PSVersionTable.PSVersion.Major -lt 7) {
-        $previousTlsCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
+    if ($useLegacyTls) {
         $previousSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
         $installSecurityProtocol = $previousSecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Initialize-InstallTlsCallback
-        $installTlsCallback = [Omp.InstallerTls]::Callback
         [Net.ServicePointManager]::SecurityProtocol = $installSecurityProtocol
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = $installTlsCallback
     }
-    if ($Ref) {
-        Set-InstallStage "release_metadata"
-        Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
-        Write-Host "Fetching release $Ref..."
-        try {
-            $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Ref" -TimeoutSec 60 @script:WebSkipCertCheck
-        } catch {
-            $failureFields = Get-InstallFailureFields $_
-            Write-InstallLog ERROR http_request_failed $failureFields
-            if ($failureFields.http_status -eq 404) {
-                throw "Release tag not found: $Ref`nOnly published release tags are supported."
-            }
-            throw
+    try {
+        if ($useLegacyTls) {
+            $previousTlsCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
+            [Net.ServicePointManager]::ServerCertificateValidationCallback = $null
         }
-    } else {
-        Write-Host "Fetching latest release..."
-        Set-InstallStage "release_metadata"
-        Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_latest"; timeout_ms = 60000; attempt = 1 }
-        try {
-            $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 60 @script:WebSkipCertCheck
-        } catch {
-            Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
-            throw
+        # Do not follow redirects: Windows PowerShell can redirect HTTPS to HTTP.
+        if ($Ref) {
+            Set-InstallStage "release_metadata"
+            Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
+            Write-Host "Fetching release $Ref..."
+            try {
+                $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Ref" -TimeoutSec 60 -MaximumRedirection 0
+            } catch {
+                $failureFields = Get-InstallFailureFields $_
+                Write-InstallLog ERROR http_request_failed $failureFields
+                if ($failureFields.http_status -eq 404) {
+                    throw "Release tag not found: $Ref`nOnly published release tags are supported."
+                }
+                throw
+            }
+        } else {
+            Write-Host "Fetching latest release..."
+            Set-InstallStage "release_metadata"
+            Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_latest"; timeout_ms = 60000; attempt = 1 }
+            try {
+                $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 60 -MaximumRedirection 0
+            } catch {
+                Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
+                throw
+            }
+        }
+    } finally {
+        # Do not overwrite a callback another consumer replaced during the request.
+        if ($useLegacyTls -and $null -eq [Net.ServicePointManager]::ServerCertificateValidationCallback) {
+            [Net.ServicePointManager]::ServerCertificateValidationCallback = $previousTlsCallback
         }
     }
     Write-InstallLog INFO http_request_completed @{ result = "success"; host = "api.github.com"; endpoint = "release_metadata"; http_status = "success" }
@@ -501,6 +536,19 @@ function Install-Binary {
         return
     }
 
+    Set-InstallStage "release_asset_digest"
+    $assets = @($Release.assets | Where-Object { $_.name -is [string] -and [string]::Equals($_.name, $BinaryName, [StringComparison]::Ordinal) })
+    if ($assets.Count -ne 1) {
+        Write-InstallLog ERROR release_metadata_invalid @{ result = "asset_missing_or_ambiguous"; asset = $BinaryName }
+        throw "Expected exactly one $BinaryName asset in release $Latest."
+    }
+    $digest = $assets[0].digest
+    if ($digest -isnot [string] -or $digest -cnotmatch '\Asha256:[0-9a-fA-F]{64}\z') {
+        Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_asset_digest"; asset = $BinaryName }
+        throw "Release $Latest does not provide a valid SHA-256 digest for $BinaryName."
+    }
+    $expectedHash = $digest.Substring(7)
+
     Set-InstallStage "prepare_candidate"
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
@@ -523,6 +571,12 @@ function Install-Binary {
     try {
         Save-InstallBinary -Uri $BinaryUrl -OutFile $TmpPath
         $downloaded = $true
+
+        Set-InstallStage "candidate_sha256"
+        $actualHash = Get-InstallFileSha256 -Path $TmpPath
+        if (-not [string]::Equals($actualHash, $expectedHash, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "The downloaded $BinaryName SHA-256 digest does not match release $Latest; the existing install was not changed."
+        }
 
         if (-not (Test-InstalledBinaryVersion -TargetPath $TmpPath -ReleaseTag $Latest)) {
             throw "The downloaded omp binary failed validation; the existing install was not changed.`n$script:InstallProbeDetail"
@@ -669,14 +723,9 @@ function Install-Binary {
         Complete-InstallLog "failed" $_
         throw
     } finally {
-        if ($null -ne $installTlsCallback) {
-            # Do not overwrite settings another consumer changed during install.
-            if ([object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $installTlsCallback)) {
-                [Net.ServicePointManager]::ServerCertificateValidationCallback = $previousTlsCallback
-            }
-            if ([Net.ServicePointManager]::SecurityProtocol -eq $installSecurityProtocol) {
-                [Net.ServicePointManager]::SecurityProtocol = $previousSecurityProtocol
-            }
+        # Do not overwrite settings another consumer changed during install.
+        if ($null -ne $installSecurityProtocol -and [Net.ServicePointManager]::SecurityProtocol -eq $installSecurityProtocol) {
+            [Net.ServicePointManager]::SecurityProtocol = $previousSecurityProtocol
         }
     }
 }

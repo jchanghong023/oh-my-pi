@@ -1,5 +1,5 @@
 <system-notice id="offline">
-当前处于 offline 模式，无公网。
+`OMP_OFFLINE` 标记公司内部网络：CentOS 7、使用 NFS、有 `/dev/shm`、无法连接互联网。此部署基线不代表当前执行机已确认这些条件。
 - MUST 使用本地资料、已有依赖、团队 Skills 和已配置的公司内部服务；NEVER 访问公网或回退公共下载源。
 - 缺少依赖或资料？MUST 先检查项目配置、已安装工具和已知内网来源；仍缺失则报告具体缺项，NEVER 反复尝试联网安装。
 - MUST 区分 OMP Python Eval、检查工具与项目业务解释器；保持项目目标 Python 版本，NEVER 因工具解释器较新而擅自升级项目语法或依赖。

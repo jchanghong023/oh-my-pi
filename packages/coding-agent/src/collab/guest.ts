@@ -42,6 +42,7 @@ import { GuestLifecycleEmitter } from "../extensibility/extensions/lifecycle-mir
 import { setSessionTerminalTitle } from "../utils/title-generator";
 import { importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
+import { configuredIntranetRelayOrigin, intranetCollabEnabled } from "./intranet";
 import {
 	type AgentSnapshot,
 	COLLAB_PROTO,
@@ -51,6 +52,7 @@ import {
 	parseCollabLink,
 } from "./protocol";
 import { CollabSocket } from "./relay-client";
+import { cfgCollabRelayUrl } from "./settings";
 
 /** Real non-terminal presentation and lifecycle ports; the relay/replica protocol remains shared. */
 export interface CollabNativeGuestPort {
@@ -361,7 +363,10 @@ export class CollabGuestLink {
 	}
 
 	async join(link: string): Promise<void> {
-		const parsed = parseCollabLink(link);
+		const configuredOrigin = intranetCollabEnabled()
+			? configuredIntranetRelayOrigin(cfgCollabRelayUrl.get(this.#port.settings))
+			: undefined;
+		const parsed = parseCollabLink(link, configuredOrigin);
 		if ("error" in parsed) throw new Error(parsed.error);
 		if (this.#port.collabGuest || this.#left) throw new Error("Already in a collab session (/leave first)");
 		this.#roomId = parsed.roomId;

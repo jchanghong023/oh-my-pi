@@ -3,7 +3,7 @@ import * as net from "node:net";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
-it("blocks explicit registry checks offline without enabling telemetry or disabling online checks", async () => {
+it("uses the configured registry for explicit checks in offline mode without enabling telemetry", async () => {
 	await using temp = await TempDir.create("@omp-openspec-offline-");
 	let connections = 0;
 	const registry = net.createServer(socket => {
@@ -64,14 +64,14 @@ it("blocks explicit registry checks offline without enabling telemetry or disabl
 			expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
 			return JSON.parse(stdout);
 		}
-		expect((await report(" on ", probe)).update.status).toBe("disabled");
+		expect((await report(" on ", probe)).update.status).toBe("offline");
 		expect(
 			(await report("true", path.join(packageRoot, "src/cli.ts"), ["openspec", "version", "--check", "--json"]))
 				.update.status,
-		).toBe("disabled");
-		expect(connections).toBe(0);
+		).toBe("offline");
+		expect(connections).toBe(2);
 		expect((await report("false", probe)).update.status).toBe("offline");
-		expect(connections).toBe(1);
+		expect(connections).toBe(3);
 		// Opting in through the inherited environment/config must not create an anonymous telemetry ID.
 		expect(await Bun.file(configPath).text()).toBe(config);
 	} finally {

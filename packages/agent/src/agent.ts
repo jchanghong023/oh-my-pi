@@ -461,6 +461,7 @@ export class Agent {
 	#sentToolDefinitions = new SentToolDefinitions();
 	#steeringQueue: AgentMessage[] = [];
 	#followUpQueue: AgentMessage[] = [];
+	#queuedMessagesHeld = false;
 	#queuedMessageClaims: Partial<Record<QueuedMessageQueue, QueuedMessageClaim>> = {};
 	/**
 	 * Steering live steering took for the in-flight response (`onLiveSteeringTaken`) that the
@@ -1080,16 +1081,26 @@ export class Agent {
 	}
 
 	async #dequeueSteeringMessagesAfterHooks(signal: AbortSignal): Promise<AgentMessage[]> {
-		if (signal.aborted || this.queuedMessagesHeld || this.#steeringQueue.length === 0) return [];
+		if (signal.aborted || this.#consumableSteeringCount() === 0) return [];
 		await this.#runBeforeQueuedMessageDequeueHooks(signal);
-		return signal.aborted || this.queuedMessagesHeld ? [] : this.#prepareQueuedMessageBatch("steering", signal);
+		return signal.aborted || this.#consumableSteeringCount() === 0
+			? []
+			: this.#prepareQueuedMessageBatch("steering", signal);
 	}
 
 	/** Whether ordinary follow-up input may advance automatically at the next yield. */
 	followUpAutoDrain = true;
 
 	/** Explicit owner hold: neither steering nor follow-ups may enter a model turn until released. */
-	queuedMessagesHeld = false;
+	get queuedMessagesHeld(): boolean {
+		return this.#queuedMessagesHeld;
+	}
+
+	set queuedMessagesHeld(held: boolean) {
+		if (this.#queuedMessagesHeld === held) return;
+		this.#queuedMessagesHeld = held;
+		if (!held) this.#notifySteeringWaiters();
+	}
 
 	async #dequeueFollowUpMessagesAfterHooks(signal: AbortSignal): Promise<AgentMessage[]> {
 		if (signal.aborted || this.queuedMessagesHeld || !this.followUpAutoDrain || this.#followUpQueue.length === 0)
@@ -1574,7 +1585,6 @@ export class Agent {
 	clearSteeringQueue() {
 		this.#steeringQueue = [];
 		this.#cancelQueuedMessagePreparation("steering");
-		this.#notifySteeringWaiters();
 		this.#emitQueueChanged();
 	}
 
@@ -1599,7 +1609,6 @@ export class Agent {
 		this.#liveSteered = [];
 		this.#cancelQueuedMessagePreparation("steering");
 		this.#cancelQueuedMessagePreparation("followUp");
-		this.#notifySteeringWaiters();
 		this.clearDeferredToolDirectives();
 		this.#emitQueueChanged();
 	}
@@ -1764,14 +1773,20 @@ export class Agent {
 		return this.#runningPrompt ?? Promise.resolve();
 	}
 
+	#consumableSteeringCount(): number {
+		if (this.queuedMessagesHeld) return 0;
+		const count = this.#steeringQueue.length;
+		return this.#steeringMode === "one-at-a-time" ? Math.min(1, count) : count;
+	}
+
 	/**
-	 * Wait for a steering message without consuming the steering queue.
+	 * Wait for steering to become available without consuming the steering queue.
 	 *
 	 * The signal releases the waiter when the prompt ends, so an in-flight
 	 * tool watcher never survives the tool batch that owns it.
 	 */
 	#waitForSteeringMessages(signal?: AbortSignal): Promise<void> {
-		if (this.#steeringQueue.length > 0 || signal?.aborted) return Promise.resolve();
+		if (this.#consumableSteeringCount() > 0 || signal?.aborted) return Promise.resolve();
 		const { promise, resolve } = Promise.withResolvers<void>();
 		const onAbort = (): void => resolve();
 		this.#steeringWaiters.add(resolve);
@@ -1783,8 +1798,8 @@ export class Agent {
 	}
 
 	#notifySteeringWaiters(): void {
-		const waiters = [...this.#steeringWaiters];
-		for (const resolve of waiters) resolve();
+		if (this.#consumableSteeringCount() === 0) return;
+		for (const resolve of this.#steeringWaiters) resolve();
 	}
 
 	reset() {
@@ -2215,15 +2230,7 @@ export class Agent {
 				return this.#dequeueSteeringMessagesAfterHooks(signal ?? loopSignal);
 			},
 			isUndeliveredQueuedMessage: message => this.#isUndeliveredQueuedMessage(message),
-			hasSteeringMessages: () =>
-				steeringQueueState(
-					this.queuedMessagesHeld ? [] : this.#steeringQueue,
-					this.queuedMessagesHeld
-						? 0
-						: this.#steeringMode === "one-at-a-time"
-							? Math.min(1, this.#steeringQueue.length)
-							: this.#steeringQueue.length,
-				),
+			hasSteeringMessages: () => steeringQueueState(this.#steeringQueue, this.#consumableSteeringCount()),
 			waitForSteeringMessages: signal => this.#waitForSteeringMessages(signal),
 			onLiveSteeringTaken: messages => this.#adoptLiveSteering(messages),
 			hasIrcInterrupts: this.hasIrcInterrupts,

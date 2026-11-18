@@ -4,7 +4,7 @@
 
 ## Offline intranet: username sharing
 
-With `OMP_OFFLINE=1`, OMP provides a separate built-in intranet relay and native TUI username sharing. This is not the public `my.omp.sh` relay. The relay and all username-sharing clients must enable offline mode; outside offline mode, existing commands, help, invitation links, permissions, and other functionality are unchanged.
+In the [company intranet environment](../docs-zh-CN/quick-start-intranet.md), `OMP_OFFLINE=1` enables a separate built-in intranet relay and native TUI username sharing. This relay does not use the public `my.omp.sh` relay. The relay and all username-sharing clients must enable `OMP_OFFLINE`; outside that mode, existing collaboration behavior is unchanged.
 
 ### Start the relay
 
@@ -44,7 +44,7 @@ In another offline TUI configured for that relay:
 /join j00808874
 ```
 
-No host confirmation, copied invitation, credentials, or separate account registration is required. Username joining is a **native TUI** feature, not `omp join <username>`, GUI, browser, ACP, or RPC functionality. Existing `/join <link>` and `omp join <link>` remain link-based, and valid links keep their original access level.
+You can also launch the native TUI with `omp join j00808874`. No host confirmation, copied invitation, credentials, or separate account registration is required. GUI, browser, ACP, and RPC clients do not gain a username-join entry from this flow. Valid invitation links still work through `/join` and `omp join` with their original access level.
 
 ### Ownership, access, and limits
 
@@ -102,7 +102,7 @@ Explicit `/collab stop` and `/leave` also cancel any replacement already queued 
 
 Dedicated joins retain session-change observation: a failed join returns to the saved auto-start policy immediately, and `/leave` or host disconnection restores automatic hosting for the local session and its later replacements. Remote replica resynchronization never starts a local host.
 
-An explicit `omp join <link>` launch takes precedence over auto-start: it initializes as a guest without publishing a temporary local host, and leaves the saved auto-start setting unchanged. If interactive startup fails after a host has been installed, that room is shut down and withdrawn before terminal teardown and the startup error is rethrown.
+An explicit `omp join` launch takes precedence over auto-start: it attempts the join without publishing a temporary local host, and leaves the saved auto-start setting unchanged. If interactive startup fails after a host has been installed, that room is shut down and withdrawn before terminal teardown and the startup error is rethrown.
 
 Set `collab.autoStart` to `view` or `control` and every interactive session hosts itself as it starts, through `collab.relayUrl`, without running `/collab`. The room is created before extension `session_start` hooks run — a question an extension asks at startup is retained and delivered to the first writer that joins — and the relay connection proceeds in the background, so a slow or unreachable relay never delays the prompt (a failure is shown as a dim status line). Guests can join an auto-started room and answer a startup question straight away, but — like the local composer, whose Enter is gated for the same reason — they cannot prompt, interrupt, or drive subagents until startup has finished; such a frame is refused with `… is unavailable until the host finishes starting up`. Each auto-started session publishes itself to the local host registry below; the setting's value is the highest access the registry will hand out for it (`view`: read-only links only; `control`: links that can prompt and interrupt). `/collab` still works as before: it re-prints the current room, or replaces a view-only room with a full-control one when you ask for control.
 

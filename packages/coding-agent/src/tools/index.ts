@@ -283,6 +283,10 @@ export interface ToolSession {
 	fetch?: FetchImpl;
 	/** Provider credential resolver forwarded unchanged to restricted child sessions. */
 	getApiKey?: AgentOptions["getApiKey"];
+	resolveRequestAuth?: CreateAgentSessionOptions["resolveRequestAuth"];
+	onPayload?: CreateAgentSessionOptions["onPayload"];
+	onResponse?: CreateAgentSessionOptions["onResponse"];
+	onModelResponse?: CreateAgentSessionOptions["onModelResponse"];
 	/** Current session whose stored credential affinities should seed a child session. */
 	getCredentialSourceSessionId?: () => string | undefined;
 	/** Pre-loaded context files (AGENTS.md, etc) */

@@ -25,7 +25,7 @@ import { getTeamTransportSchema } from "./schemas";
 import { runSubprocess } from "../task/executor";
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition } from "../task/types";
-import type { CreateAgentSessionOptions } from "../sdk";
+import type { CreateAgentSessionOptions, NativeChildSessionHooks } from "../sdk";
 import { EventBus } from "../utils/event-bus";
 import type { TeamSubagentCall, TeamSubagentOutcome, TeamSubagentRunner } from "./types";
 
@@ -38,13 +38,12 @@ import type { TeamSubagentCall, TeamSubagentOutcome, TeamSubagentRunner } from "
 export const TEAM_READ_ONLY_TOOLS: readonly string[] = ["read", "grep", "glob", "knowledge_search", "ast_grep"];
 
 /** Everything the runner needs from the dispatching session, as plain values. */
-export interface TeamRunnerDeps {
+export interface TeamRunnerDeps extends NativeChildSessionHooks {
 	cwd: string;
 	additionalDirectories?: string[];
 	settings: Settings;
 	modelRegistry: ModelRegistry;
 	authStorage?: AuthStorage;
-	getApiKey?: CreateAgentSessionOptions["getApiKey"];
 	extensionProviderOwnership?: CreateAgentSessionOptions["extensionProviderOwnership"];
 	/** Persisted session file; child transcripts nest beside it. `null` uses a temp dir. */
 	sessionFile: string | null;
@@ -243,7 +242,12 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 					const result = await runSubprocess({
 						cwd: deps.cwd,
 						additionalDirectories: deps.additionalDirectories,
+						resolveRequestAuth: deps.resolveRequestAuth,
 						getApiKey: deps.getApiKey,
+						onPayload: deps.onPayload,
+						onResponse: deps.onResponse,
+						onModelResponse: deps.onModelResponse,
+						toolRestrictions: deps.toolRestrictions?.clone(),
 						extensionProviderOwnership: deps.extensionProviderOwnership,
 						agent,
 						task: call.task,

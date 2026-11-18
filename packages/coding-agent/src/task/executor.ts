@@ -86,7 +86,10 @@ import {
 	type CreateAgentSessionResult,
 	createAgentSession,
 	discoverAuthStorage,
+	hasNativeChildSessionHooks,
 	hasRegistryPauseGate,
+	type NativeChildSessionHooks,
+	resolveNativeChildSessionHooks,
 } from "../sdk";
 import {
 	type AgentSession,
@@ -451,14 +454,12 @@ export function collectIrcPeerRoster(
 }
 
 /** Options for subagent execution */
-export interface ExecutorOptions {
+export interface ExecutorOptions extends NativeChildSessionHooks {
 	cwd: string;
 	/** Cost gate of the parent session tree; the subagent's requests count toward it. */
 	costGate?: CostGateApi;
 	/** Additional workspace directories to seed on the subagent session (multi-root). */
 	additionalDirectories?: string[];
-	/** Exact provider credential resolver inherited from the parent session. */
-	getApiKey?: CreateAgentSessionOptions["getApiKey"];
 	/** Scoped non-terminal interaction host of the owning root session. */
 	createInteractionUI?: CreateAgentSessionOptions["createInteractionUI"];
 	interactionParentSessionId?: string;
@@ -4318,6 +4319,8 @@ function buildSubagentSessionOptions(
 	const customTools = spec.options.customTools ?? [];
 	return {
 		...spec.options,
+		// Launch uses the snapshot taken at spawn; revival gets its own runtime policy instance.
+		toolRestrictions: launch ? spec.options.toolRestrictions : spec.options.toolRestrictions?.clone(),
 		mcpTools: mcpTools.length > 0 ? mcpTools : undefined,
 		mcpToolScope: mcpFollower?.scope,
 		customTools: customTools.length > 0 ? customTools : undefined,
@@ -4700,12 +4703,14 @@ async function reviveAdmittedSubagent(
  * read from `options.settings`; a call without settings runs here.
  */
 export async function runSubprocess(options: ExecutorOptions): Promise<SingleResult> {
+	if (options.toolRestrictions) options = { ...options, toolRestrictions: options.toolRestrictions.clone() };
 	const pool = isMainThread() && options.settings ? subagentWorkerPool(options.settings) : undefined;
 	// Native callbacks and registry-owned pause gates are realm-local. Keep
 	// these trees on their owning thread rather than lose them over worker RPC.
 	if (
 		pool &&
 		(hasRegistryPauseGate(AgentRegistry.global()) ||
+			hasNativeChildSessionHooks(options) ||
 			options.subagentHooks ||
 			options.subagentRequest ||
 			options.onSessionCreated ||
@@ -5294,7 +5299,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					additionalDirectories: worktree !== undefined ? undefined : options.additionalDirectories,
 					authStorage,
 					modelRegistry,
-					getApiKey: options.getApiKey,
+					...resolveNativeChildSessionHooks(options),
 					extensionProviderOwnership: options.extensionProviderOwnership,
 					credentialSourceSessionId: options.credentialSourceSessionId,
 					oauthAccountPools: options.oauthAccountPools,
@@ -5619,7 +5624,11 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				// stamp the contract so cold revival leaves them transcript-only
 				// even when the workspace was retained for recovery.
 				isolated: worktree !== undefined || undefined,
-				requiresLiveHost: options.subagentHooks !== undefined || undefined,
+				// The exact callbacks and input-scoped admission snapshot cannot be recovered from JSONL.
+				requiresLiveHost:
+					options.subagentHooks !== undefined ||
+					hasNativeChildSessionHooks(session.nativeChildCapabilities) ||
+					undefined,
 			});
 
 			abortSignal.addEventListener(

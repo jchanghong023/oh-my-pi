@@ -15,6 +15,7 @@
 
 ### Changed
 
+- The intranet system notice describes the CentOS 7, NFS, and `/dev/shm` deployment without assuming the current host matches it.
 - Updated to upstream v18.22.2 while retaining intranet providers, fork commands and TUI presentation.
 - Selective commit through `/commit` and the eval `commit` namespace is now opt-in via `commit.enabled`; unfinished merges use plain `git commit`.
 - Added `providers.thinkingProbe` (default off) so unknown-model thinking probes never add requests to intranet, company or custom providers.
@@ -44,7 +45,7 @@
 - OpenSpec init and new change now preserve native arguments, output and the spec-driven default instead of injecting tools=none or the private mini schema.
 - Removed unused private OpenSpec directory bridges, the forced omp-spec schema API and archive-plan injection; ordinary commands use the upstream CLI directly.
 - OpenSpec commands now accept real terminal input and stream output when all standard streams are TTYs; SDK and non-TTY calls retain isolated captured output.
-- Offline OpenSpec calls now suppress registry requests even for explicit version --check commands; telemetry remains disabled.
+- Intranet OpenSpec version checks require an explicitly configured HTTPS mirror and no longer fall back to the public npm registry.
 - All 12 bundled OpenSpec skills remain available through native skill invocation and completion; only the six core workflows appear in automatic model discovery, with the other six requiring manual invocation.
 - Bundled OpenSpec 2.0 workflows now use omp openspec throughout and update only with OMP; retired the unused skill installation and template-generation chain.
 - This repository now uses the native spec-driven schema; existing custom mini/omp-spec projects require explicit migration and any missing design/tasks remain incomplete (see docs-zh-CN/openspec-schema-migration.md).
@@ -65,6 +66,14 @@
 
 ### Fixed
 
+- Native child agents inherit the launching session's credentials and tool restrictions, and caller restrictions also apply to Cursor, Advisors, and resumed queued input.
+- Offline mode preserves the user's `models.offline` setting.
+- Intranet model catalogs only refresh manually against configured discovery endpoints; signing in still uses the local catalog cache.
+- Intranet sharing refuses the default public relay; `omp join` accepts a username when launching the native TUI.
+- Standard input and `@file` content remain prompt text rather than becoming local commands.
+- Ordinary requests cannot use another execution's temporary model, and strict task cleanup can retry a failed isolated release.
+- Concurrent cleanup of one browser tab no longer disconnects another tab sharing its browser.
+- Linux and Windows installers verify downloaded binaries against the authenticated Release digest before running them.
 - Large-repository reviews now submit complete results per workpool item, detect Python 3.11+ on Windows, store reports in worktree-local Git metadata, and accept `--base REF` without guessing the upstream branch.
 - Compact mode now shows background-work waits in the two-line activity area instead of above command output.
 - Binary release builds now initialize their temporary directories without failing workflow validation.
@@ -78,7 +87,7 @@
 - Windows installation restores the caller's TLS settings and uses Gregorian UTC dates in diagnostic filenames.
 - OpenWiki now resolves a LangChain core version compatible with its model adapters.
 - Guided Goal interviews release only their temporary goal tool and preserve tools enabled during the interview.
-- Fulltest reserves Windows subprocess headroom and keeps startup, OpenWiki and Superpowers checks within their shared concurrency budgets.
+- Fulltest also limits Windows concurrency by available memory so subprocess-heavy checks do not crowd each other out.
 - Browser Relay can reattach a tab after Chrome temporarily refuses debugger access.
 - CNB Linux builds preserve the CLI source permissions when installing dependencies, avoiding a false dirty-worktree failure before publishing.
 - SSH directory reads now consume timeout-tracked subprocess output without stream-lock failures.

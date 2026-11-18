@@ -420,11 +420,9 @@ function selectProviderModels<T extends { provider: string }>(models: T[], provi
 }
 
 /**
- * Extra knobs for {@link ModelRegistry.refresh} / {@link ModelRegistry.refreshProvider}.
- * Online discovery (`strategy: "online"`) is independent of credential minting:
- * opening `/models` and hovering a provider fetch catalogs without re-running
- * `!command` helpers. Pass `refreshCommandCredentials` only for explicit user
- * refresh (`omp models refresh`, TUI F5).
+ * Opening `/models` and hovering a provider are background reconciliations.
+ * `refreshCommandCredentials` also marks an explicit catalog refresh
+ * (`omp models refresh`, TUI F5).
  */
 export interface ModelRegistryRefreshOptions {
 	refreshCommandCredentials?: boolean;
@@ -1004,12 +1002,9 @@ export class ModelRegistry {
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void> {
 		if (this.#owner) return this.#owner.refresh(strategy, options);
-		// Credential minting is opt-in. `strategy: "online"` only means "hit the
-		// network for catalogs" — the unscoped model hub opens with that strategy
-		// as a background reconcile, and must not spawn `!command` helpers.
 		this.#reloadStaticModelsForRefresh(options);
 		this.#suppressedSelectors.clear();
-		await this.#refreshRuntimeDiscoveries(strategy);
+		await this.#refreshRuntimeDiscoveries(strategy, undefined, options?.refreshCommandCredentials);
 	}
 
 	/**
@@ -1196,22 +1191,23 @@ export class ModelRegistry {
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void> {
 		if (this.#owner) return this.#owner.refreshProvider(providerId, strategy, options);
-		// Hover / auto-refresh uses `"online"` for a live catalog. Only F5 (and
-		// other explicit callers) pass refreshCommandCredentials to re-mint
-		// `!command` keys and headers for this provider.
 		this.#reloadStaticModelsForRefresh(options, providerId);
 		for (const selector of this.#suppressedSelectors.keys()) {
 			if (selector.startsWith(`${providerId}/`)) {
 				this.#suppressedSelectors.delete(selector);
 			}
 		}
-		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+		await this.#refreshRuntimeDiscoveries(
+			strategy,
+			new Set([providerId]),
+			options?.refreshCommandCredentials,
+		);
 		// #reloadStaticModels above may have rebuilt #models from static sources,
 		// dropping models previously discovered by OTHER runtime providers (their
 		// fetchDynamicModels results live only in #models + the SQLite cache, not
-		// in #loadModels' static inputs). Restore them from cache with the default
-		// online-if-uncached strategy: no network while their cached row is
-		// fresh, so the scoped refresh above stays the only forced fetch.
+		// in #loadModels' static inputs). Restore them with the usual cache-aware
+		// strategy; unlike the explicitly requested provider, this pass remains
+		// cache-only in the company lane.
 		const otherRuntimeProviderIds = new Set(
 			[...this.#runtimeModelManagers.keys()].filter(runtimeId => runtimeId !== providerId),
 		);
@@ -2612,18 +2608,23 @@ export class ModelRegistry {
 	async #refreshRuntimeDiscoveries(
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
+		manualRefresh = false,
 	): Promise<void> {
-		// Offline is a process policy; explicit inference and OAuth remain available.
-		if (offlineFromEnv() || isCompanyLaneActive()) strategy = "offline";
+		const intranet = offlineFromEnv() || isCompanyLaneActive();
+		if (intranet && !manualRefresh) strategy = "offline";
 		try {
-			await this.#runRuntimeDiscoveries(strategy, providerFilter);
+			await this.#runRuntimeDiscoveries(strategy, providerFilter, intranet);
 		} finally {
 			// Mirrors follow every discovery-layer change, including failure states.
 			this.#scheduleMirrorFlush();
 		}
 	}
 
-	async #runRuntimeDiscoveries(strategy: ModelRefreshStrategy, providerFilter?: ReadonlySet<string>): Promise<void> {
+	async #runRuntimeDiscoveries(
+		strategy: ModelRefreshStrategy,
+		providerFilter: ReadonlySet<string> | undefined,
+		intranet: boolean,
+	): Promise<void> {
 		// Share one cache connection across provider discovery.
 		using _cacheConnection = retainModelCacheConnection(this.#cacheDbPath);
 		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
@@ -2636,14 +2637,23 @@ export class ModelRegistry {
 			selectedDiscoverableProviders.length === 0
 				? Promise.resolve<Array<ConfiguredModelDiscoveryResult & { provider: DiscoveryProviderConfig }>>([])
 				: Promise.all(
-						selectedDiscoverableProviders.map(async provider => ({
-							provider,
-							...(await this.#discoverProviderModelsCoalesced(provider, strategy)),
-						})),
+						selectedDiscoverableProviders.map(async provider => {
+							const unconfiguredEndpoint =
+								intranet &&
+								strategy !== "offline" &&
+								(!provider.baseUrl?.trim() ||
+									(this.#implicitLocalProviders.has(provider.provider) &&
+										!this.#implicitProviderEndpointEnv.has(provider.provider)));
+							return {
+								provider,
+								...(await this.#discoverProviderModelsCoalesced(provider, unconfiguredEndpoint ? "offline" : strategy)),
+							};
+						}),
 					);
 		const [configuredDiscoveryResults, builtInDiscovery] = await Promise.all([
 			configuredDiscoveriesPromise,
-			this.#discoverBuiltInProviderModels(strategy, providerFilter),
+			// Built-in catalogs have public fallbacks; extension callbacks do not expose a discovery endpoint.
+			this.#discoverBuiltInProviderModels(intranet ? "offline" : strategy, providerFilter),
 		]);
 		// A pass whose fetch finished while an earlier one still prepares lands after it,
 		// preserving the land order of fetch completion.

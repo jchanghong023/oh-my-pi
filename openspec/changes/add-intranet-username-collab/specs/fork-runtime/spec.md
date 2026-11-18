@@ -56,7 +56,7 @@ OMP MUST 仅在 CentOS 7 x64 进程按既有规则启用 `OMP_OFFLINE` 时提供
 
 - **WHEN** 运行内网 Relay 或客户端协作流程
 - **THEN** 继续遵循既有 `OMP_OFFLINE` 真值、配置根、缓存根、profile 及日志规则，不为本能力改变数字 UID 在缓存目录中的原有用途
-- **AND** 不把公司模型配置变为纯 Relay 服务的启动前提，不自动启用浏览器、抓取、搜索或其他 offline 下被禁用的工具
+- **AND** 不把公司模型配置变为纯 Relay 服务的启动前提，不改写浏览器、抓取、搜索等工具的启用设置或审批。
 
 #### Scenario: 非 offline 的设置与网络行为保持不变
 

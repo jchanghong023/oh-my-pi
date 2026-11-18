@@ -36,7 +36,7 @@ import type { SessionEntry as StoredSessionEntry } from "../session/session-entr
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
-import { intranetCollabEnabled, intranetRelayUrl, intranetUsername } from "./intranet";
+import { configuredIntranetRelayOrigin, intranetCollabEnabled, intranetUsername, isPublicCollabRelay } from "./intranet";
 import {
 	type AgentSnapshot,
 	COLLAB_PROMPT_MESSAGE_TYPE,
@@ -72,6 +72,7 @@ import {
 	serializeReplicatedEntry,
 	serializeReplicatedEvent,
 } from "./replication-shrink";
+import { cfgCollabRelayUrl } from "./settings";
 
 export type CollabEntryListener = NonNullable<AgentSession["sessionManager"]["onEntryAppended"]>;
 
@@ -672,20 +673,25 @@ export class CollabHost {
 
 	async start(relayUrl: string, webUrl = ""): Promise<void> {
 		if (this.ending) throw new CollabHostStoppedError("collab host already stopped");
-		if (intranetCollabEnabled()) {
-			relayUrl = intranetRelayUrl(relayUrl);
-			this.#intranetUsername = intranetUsername();
-		}
+		const intranet = intranetCollabEnabled();
+		const configuredOrigin = intranet
+			? configuredIntranetRelayOrigin(cfgCollabRelayUrl.get(this.#ctx.settings))
+			: undefined;
 		const rawKey = generateRoomKey();
 		const writeToken = generateWriteToken();
 		const roomId = generateRoomId();
 		this.#writeToken = writeToken;
-		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
-		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl);
-		this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey);
-		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl);
-		const parsed = parseCollabLink(this.#link);
+		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken, configuredOrigin);
+		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl, configuredOrigin);
+		this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey, undefined, configuredOrigin);
+		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl, configuredOrigin);
+		const parsed = parseCollabLink(this.#link, configuredOrigin);
 		if ("error" in parsed) throw new Error(parsed.error);
+		const relay = new URL(parsed.wsUrl);
+		if (intranet && isPublicCollabRelay(relay)) {
+			throw new Error("Configure an intranet collab.relayUrl; the default public relay is unavailable offline.");
+		}
+		this.#intranetUsername = configuredOrigin && relay.origin === configuredOrigin ? intranetUsername() : undefined;
 		const firstOpen = Promise.withResolvers<void>();
 		// stop() may reject this before start() reaches its await (during key
 		// import); mark the rejection handled so it can only surface at the await.

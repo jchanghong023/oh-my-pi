@@ -5,8 +5,8 @@ import { CollabController } from "../collab/controller";
 import { importRoomKey } from "../collab/crypto";
 import { CollabHost, type CollabHostPort } from "../collab/host";
 import {
+	configuredIntranetRelayOrigin,
 	intranetCollabEnabled,
-	intranetRelayUrl,
 	isIntranetUsername,
 	resolveIntranetUsername,
 } from "../collab/intranet";
@@ -136,13 +136,17 @@ export class AIReqCollabBridge {
 		};
 		signal.addEventListener("abort", onAbort, { once: true });
 		try {
-			const offline = intranetCollabEnabled();
-			const relay = offline ? intranetRelayUrl(cfgCollabRelayUrl.get(this.#options.settings)) : undefined;
+			const configuredRelay = cfgCollabRelayUrl.get(this.#options.settings);
+			const intranet = intranetCollabEnabled();
+			const relay = intranet ? configuredIntranetRelayOrigin(configuredRelay) : undefined;
+			if (intranet && !relay) throw new Error("Configure a valid intranet collab.relayUrl before joining.");
 			const requested = input.usernameOrLink.trim();
 			const link =
-				offline && isIntranetUsername(requested) ? await resolveIntranetUsername(relay!, requested) : requested;
+				intranet && isIntranetUsername(requested)
+					? await resolveIntranetUsername(configuredRelay, requested)
+					: requested;
 			if (!current() || signal.aborted) throw new Error("Collaboration join cancelled");
-			const parsed = parseCollabLink(link);
+			const parsed = parseCollabLink(link, relay);
 			if ("error" in parsed) throw new Error(parsed.error.replaceAll(link, "[redacted]"));
 			if (relay && new URL(parsed.wsUrl).origin !== relay)
 				throw new Error("Collaboration link belongs to a different relay");

@@ -1380,7 +1380,14 @@ describe("standard gate charged-budget parameters", () => {
 		expect(gateCpuBudget(2, "microsoft", "linux")).toBe(1);
 		expect(gateCpuBudget(8, "5.15.153.1-microsoft-standard-WSL2", "linux")).toBe(4);
 		expect(gateCpuBudget(26, "6.8.0-48-generic", "linux")).toBe(26);
-		expect(gateCpuBudget(32, "10.0.26100", "win32")).toBe(16);
+		expect(gateCpuBudget(32, "10.0.26100", "win32", 32 * 1024 ** 3)).toBe(16);
+		const lowMemoryBudget = gateCpuBudget(32, "10.0.26100", "win32", 5 * 1024 ** 3);
+		expect(fulltestWorkerAllocation(lowMemoryBudget, true, true, true)).toEqual({
+			ordinary: 1,
+			rust: 1,
+			startup: 1,
+			serial: true,
+		});
 	});
 
 	test("fastcheck accepts only a finite positive downward limit", () => {

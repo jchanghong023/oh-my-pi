@@ -1,4 +1,6 @@
-# 公司内网 OMP 新手快速指南（Linux / tcsh）
+# 公司内网 OMP 新手快速指南（CentOS 7 / tcsh）
+
+`OMP_OFFLINE` 标记公司内部网络环境：系统为 CentOS 7，使用 NFS，有 `/dev/shm`，无法连接互联网。已配置且可达的内网服务仍可使用。
 
 ## 1. 设置环境变量
 
@@ -86,6 +88,10 @@ omp usage
 ```
 
 将文件名替换为实际路径。普通本地 `read` 与已有会话的 `render` 不要求公司配置，也不为此做 auth discovery 或在线模型发现。图片问答会按需初始化 company／vision 并调用真实模型；显式配置且解析成功的非 company vision／default 角色仍按用户选择执行，公司配置错误可见但不阻断该显式路径。需要默认或显式选择的 company 模型时，缺失或无效的公司配置必须明确失败，不隐式回退到其他 Provider；`dry-balance` 解析公司模型时复用同一初始化。上述模型目录发现使用 cache-only，不表示禁止公司模型 API 或现有 usage provider 的真实请求；`usage` 仅报告现有接口取得的数据，不提供虚构的 company 额度接口。offline 覆盖仅对当前进程有效，不保存；普通启动行为不变。
+
+内网模式下，登录或保存凭据后只读模型缓存。`omp models refresh` 或模型面板手动刷新只请求显式配置的发现端点（`models.yml` 的 `discovery` 和 `baseUrl`，或本地模型服务的端点环境变量），不探测默认公网目录；实际登录请求不受此规则影响。
+
+内置 OpenSpec 的 `omp openspec version --check` 仅在 `npm_config_registry` 明确指向非默认的 HTTPS 镜像时检查，未配置时不会访问公网 npm。
 
 OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpreter` 优先；未显式设置时，Linux 内网模式优先尝试 `/software/public/python/3.11.4/bin/python3.11`，缺失或不适合则继续检查原有候选及 PATH 中的版本化 `python3.11`～`python3.15`、`python3`、`python`。内网模式的 `1`／`true`／`yes`／`on` 均生效，忽略大小写和首尾空白；Linux 内网 Eval 要求 Python ≥3.11，遇到默认 Python 3.6 会继续查找，全部候选不满足时明确报错，不降级。显式解释器不满足要求时也会报错，不会自动换解释器。其他平台或非内网模式仍要求 Python 3.8+。OMP 不修改当前终端／主进程 PATH、项目虚拟环境或业务 Python，也不扫描软件目录或安装包；用 bash 执行业务脚本仍应使用项目自己的解释器。
 
@@ -526,7 +532,7 @@ omp collab serve --host 0.0.0.0 --port 7466
 
 1. 各自在 tcsh 执行 `setenv OMP_OFFLINE 1` 后启动 `omp`，在 `/settings` 中仅为此功能配置 `collab.relayUrl`，填入同一 `ws://<内网IP或主机名>:7466`（替换为实际地址）。按当前 profile 分别配置；未配置或仍为默认公网 Relay 时会明确失败，不回退公网。
 2. 房主在当前会话的 **OMP 输入框**只输入 `/collab`。例如房主实际登录用户名为 `j00808874`，共享成功后会显示同事可用的 `/join j00808874`。
-3. 同事在自己机器的 **OMP 输入框**输入 `/join j00808874`；无需房主地址或手工复制邀请链接。用户名加入仅用于原生 TUI，`omp join <link>` 仍是已有链接入口。
+3. 同事在 **OMP 输入框**输入 `/join j00808874`，或在自己的终端运行 `omp join j00808874` 进入原生 TUI；无需房主地址或手工复制邀请链接。`omp join <link>` 仍可使用邀请链接。
 4. 同事用 `/leave` 离开并恢复原本地会话，不停止房主共享；房主用 `/collab stop` 停止共享（房主 `/leave` 也会停止）。停止命令是带空格的 `/collab stop`，不是 `/collabstop`。房主退出或连接终止后，旧登记不再可加入。
 
 这里的用户名是房主进程所属账号的**实际登录名**，不是数字 UID、`collab.displayName` 或手填别名；共用 Relay 的机器必须统一账号命名。同一用户名跨机器、进程和 profile 只能有一个活动房间，其他宿主不能抢占；冲突时会提示已有主机和加入命令。
@@ -697,9 +703,7 @@ omp collab serve --host 0.0.0.0 --port 7466
 - **旧会话找不到**：确认项目目录、`OMP_CONFIG_ROOT` 和 `PI_CODING_AGENT_DIR` 与之前一致。用 `omp config path` 查看 agent 配置目录，但它不一定是实际会话目录。未设置 `OMP_CONFIG_ROOT` 时，已生效的 XDG 数据目录也可能影响会话存储位置。
 - **复制失败**：直接选择终端文本复制。
 
-内网使用本地技能和公司资料，不使用公网搜索、在线安装或更新。
-
-`OMP_OFFLINE=1` 会关闭公网工具及自动更新，但不会拦截显式安装、更新命令。内网不要运行这些联网命令。
+内网模式临时关闭 Web Search、Browser（含 `/crawl`）、AST Edit 和 Fetch 工具，不改审批，也不拦截 `omp read` 等独立命令访问可达的内网服务。
 
 ## 7. 项目地址
 

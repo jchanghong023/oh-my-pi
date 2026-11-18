@@ -60,6 +60,8 @@ OMP MUST 使用房主进程实际所属 Linux 账号的登录用户名作为房�
 
 offline 客户端 MUST 使用既有 `collab.relayUrl` 配置的 `ws://<内网IP或主机名>:<端口>` 连接 Relay，并通过同一服务器的 HTTP 查询用户名，无需人工复制邀请链接。客户端 MUST NOT 因地址不是 localhost 而拒绝普通 WS 或强制升级 WSS；流程 MUST 不要求证书、TLS、HTTPS 或反向代理。用户名无有效房间或连接失败时 MUST 明确失败，不回退公网或显示加入成功。
 
+远端普通 WS 例外仅适用于配置的 `collab.relayUrl` 源，`OMP_OFFLINE` 不为其他邀请放宽上游校验。仅在实际连接该配置中继时登记用户名；其他中继沿用普通邀请流程。
+
 #### Scenario: 同事跨机器加入
 
 - **WHEN** 同事在另一台机器配置普通远端 `ws://` Relay 后执行 `/join j00808874`，该用户名有有效的活动共享

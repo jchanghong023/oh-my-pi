@@ -41,15 +41,20 @@ export function parseFulltestArgs(args: readonly string[]): FulltestOptions | nu
 	return { debug, ...(full ? { full } : {}), ...(limitSeconds === undefined ? {} : { limitSeconds }) };
 }
 
-/** Reserve process-tree headroom for Windows helpers and shared WSL2 vCPUs. */
+/** Reserve headroom for Windows process trees and shared WSL2 vCPUs. */
 export function gateCpuBudget(
 	cores: number = os.availableParallelism(),
 	release: string = os.release(),
 	platform: NodeJS.Platform = process.platform,
+	freeMemoryBytes?: number,
 ): number {
-	return platform === "win32" || release.toLowerCase().includes("microsoft")
-		? Math.max(1, Math.floor(cores / 2))
-		: cores;
+	const halfCores = Math.max(1, Math.floor(cores / 2));
+	if (platform === "win32") {
+		// A worker can own a Bun, browser or PTY process tree, not just one thread.
+		const memorySlots = Math.floor((freeMemoryBytes ?? os.freemem()) / 1024 ** 3);
+		return Math.max(1, Math.min(halfCores, memorySlots));
+	}
+	return release.toLowerCase().includes("microsoft") ? halfCores : cores;
 }
 
 /** Keep static/subprocess headroom while favoring the longer Bun test lane. */

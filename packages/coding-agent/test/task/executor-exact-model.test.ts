@@ -34,6 +34,7 @@ let runs = 0;
 /** Runs a bundled `worker` through the real executor and mock registry. */
 async function runWorker(options: {
 	model: Model;
+	parentModel?: Model;
 	additionalModels?: Model[];
 	perCallModel?: string;
 	settings?: Settings;
@@ -78,6 +79,7 @@ async function runWorker(options: {
 		restrictToolNames: true,
 		enableMCP: false,
 		enableLsp: false,
+		getActiveModel: () => options.parentModel,
 		enableIrc: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
@@ -198,7 +200,7 @@ describe("per-call exact selection after background discovery", () => {
 		expect(result.output).not.toContain("Unexpected replacement.");
 	});
 
-	it("keeps execution recovery for ordinary workers", async () => {
+	it("keeps same-provider execution recovery for ordinary offline workers", async () => {
 		const requested = createMockModel({
 			id: "ordinary-requested",
 			handler: { stopReason: "error", errorMessage: "provider failed" },
@@ -213,8 +215,9 @@ describe("per-call exact selection after background discovery", () => {
 			() =>
 				runWorker({
 					model: requested,
+					parentModel: requested,
 					additionalModels: [replacement],
-					settings: perCallSettings(requested, { "retry.enabled": false }),
+					settings: perCallSettings(requested, { "retry.enabled": false, "models.offline": true }),
 				}),
 		);
 		expect(requested.calls).toHaveLength(1);

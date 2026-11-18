@@ -3,4 +3,5 @@ export function resolvePersistentRoot(env?: Record<string, string | undefined>):
 export function normalizeProfileName(profile: string | undefined): string | undefined;
 export function resolveAbsoluteDir(value: string | undefined): string | undefined;
 export function resolveXdgRoot(value: string | undefined, profile?: string): string | undefined;
+export function resolveLinuxPrivateCacheRoot(): string | undefined;
 export function resolveCacheRoot(profile?: string): string | undefined;

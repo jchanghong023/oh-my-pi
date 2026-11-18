@@ -43,7 +43,12 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import type { EditModeSetting } from "../edit/settings";
 import type { AgentSessionEvent } from "./agent-session-events";
-import { ExecutionModelContractError, type ExecutionModelOptions, withExecutionModelContext } from "./execution-model";
+import {
+	currentExecutionModel,
+	ExecutionModelContractError,
+	type ExecutionModelOptions,
+	withExecutionModelContext,
+} from "./execution-model";
 import type { ModelCycleResult, ResolvedRoleModel, RoleModelCycle, RoleModelCycleResult } from "./agent-session-types";
 import { formatRoleModelValue, resolveRoleModelFull } from "./role-models";
 import { EPHEMERAL_MODEL_CHANGE_ROLE, PREWALK_MODEL_CHANGE_ROLE } from "./session-entries";
@@ -177,6 +182,7 @@ export interface ModelControlsHost {
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	/** Includes prompt setup and admitted submissions, not just the provider stream. */
 	executionModelIdle?(): boolean;
+	executionModelReleased?(): void;
 	/** Resolves actual request-local auth without persisting or pinning credentials. */
 	validateExecutionModelAuth?(model: Model, signal?: AbortSignal): Promise<boolean>;
 	/** Restores an unselected session after its first execution-only selection. */
@@ -194,7 +200,7 @@ export class ModelControls {
 	#autoResolvedLevel: Effort | undefined;
 	#serviceTierByFamily: ServiceTierByFamily;
 	#modelSelectionGeneration = 0;
-	#executionModelLease: object | undefined;
+	#executionModelLease: { owner: object; sessionId: string; published: boolean } | undefined;
 
 	constructor(
 		host: ModelControlsHost,
@@ -422,6 +428,15 @@ export class ModelControls {
 		return (await this.#host.validateExecutionModelAuth?.(model, signal)) ?? false;
 	}
 
+	/** Authorization and metadata lookup may overlap normal work; publication may not. */
+	executionModelBlocksInput(): boolean {
+		const lease = this.#executionModelLease;
+		return (
+			lease?.published === true &&
+			(currentExecutionModel()?.lease !== lease || this.#host.sessionId() !== lease.sessionId)
+		);
+	}
+
 	/**
 	 * Own exactly one idle execution. No journal/settings writes or credential mutation.
 	 * A later explicit selection (even the same model) owns the final selection.
@@ -437,19 +452,18 @@ export class ModelControls {
 				"Execution model selection requires unselected-model restoration support",
 			);
 		}
-		const owner = {};
+		const lease = { owner: this.#host.agent, sessionId: this.#host.sessionId(), published: false };
 		const generation = this.#modelSelectionGeneration;
 		const thinking = this.#thinkingLevel;
 		const auto = this.#autoThinking;
 		const resolved = this.#autoResolvedLevel;
-		this.#executionModelLease = owner;
-		let installed = false;
+		this.#executionModelLease = lease;
 		let targetModel: Model | undefined;
 		let releasePromise: Promise<void> | undefined;
 		const releaseModel = (): Promise<void> => {
 			releasePromise ??= (async () => {
 				try {
-					if (installed && generation === this.#modelSelectionGeneration && this.#model === targetModel) {
+					if (lease.published && generation === this.#modelSelectionGeneration && this.#model === targetModel) {
 						const previousEditMode = this.#host.resolveActiveEditMode();
 						if (previousModel) await this.#host.setModelWithProviderSessionReset(previousModel, "automatic");
 						else await this.#host.clearExecutionModel!();
@@ -462,7 +476,10 @@ export class ModelControls {
 						}
 					}
 				} finally {
-					if (this.#executionModelLease === owner) this.#executionModelLease = undefined;
+					if (this.#executionModelLease === lease) {
+						this.#executionModelLease = undefined;
+						if (lease.published) this.#host.executionModelReleased?.();
+					}
 				}
 			})();
 			return releasePromise;
@@ -480,14 +497,14 @@ export class ModelControls {
 			if (!authorized) throw new Error(`No API key for ${options.model.provider}/${options.model.id}`);
 			targetModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(options.model);
 			options.signal?.throwIfAborted();
-			if (generation !== this.#modelSelectionGeneration) {
+			if (generation !== this.#modelSelectionGeneration || this.#host.sessionId() !== lease.sessionId) {
 				throw new ExecutionModelContractError("Model selection changed before execution admission");
 			}
 			if (!this.#host.executionModelIdle?.()) {
 				throw new ExecutionModelContractError("Execution model selection requires an idle session");
 			}
 			const previousEditMode = this.#host.resolveActiveEditMode();
-			installed = true;
+			lease.published = true;
 			const install = this.#host.setModelWithProviderSessionReset(targetModel, "automatic");
 			// Agent's model resolver may adapt a catalog row to per-session options.
 			targetModel = this.#model ?? targetModel;
@@ -498,11 +515,16 @@ export class ModelControls {
 			this.restoreThinkingLevel(options.thinkingLevel ?? this.configuredThinkingLevel());
 			await this.#host.syncAfterModelChange(previousEditMode);
 			options.signal?.throwIfAborted();
-			if (generation !== this.#modelSelectionGeneration || this.#model !== targetModel) {
+			if (
+				generation !== this.#modelSelectionGeneration ||
+				this.#model !== targetModel ||
+				this.#host.sessionId() !== lease.sessionId
+			) {
 				throw new ExecutionModelContractError("Model selection changed before execution admission");
 			}
 			return await withExecutionModelContext(
 				{
+					lease,
 					model: targetModel,
 					thinkingLevel: this.configuredThinkingLevel(),
 					policies: options.policies,
@@ -513,7 +535,7 @@ export class ModelControls {
 								if (!replacement) return undefined;
 								request.signal?.throwIfAborted();
 								if (
-									this.#executionModelLease !== owner ||
+									this.#executionModelLease !== lease ||
 									generation !== this.#modelSelectionGeneration ||
 									this.#model !== targetModel
 								) {
@@ -524,7 +546,7 @@ export class ModelControls {
 								);
 								request.signal?.throwIfAborted();
 								if (
-									this.#executionModelLease !== owner ||
+									this.#executionModelLease !== lease ||
 									generation !== this.#modelSelectionGeneration ||
 									this.#model !== targetModel
 								) {
@@ -535,7 +557,7 @@ export class ModelControls {
 								targetModel = this.#model ?? recoveredModel;
 								await install;
 								if (
-									this.#executionModelLease !== owner ||
+									this.#executionModelLease !== lease ||
 									generation !== this.#modelSelectionGeneration ||
 									this.#model !== targetModel
 								) {
@@ -544,7 +566,7 @@ export class ModelControls {
 								this.restoreThinkingLevel(replacement.thinkingLevel ?? this.configuredThinkingLevel());
 								await this.#host.syncAfterModelChange(previousEditMode);
 								if (
-									this.#executionModelLease !== owner ||
+									this.#executionModelLease !== lease ||
 									generation !== this.#modelSelectionGeneration ||
 									this.#model !== targetModel
 								) {

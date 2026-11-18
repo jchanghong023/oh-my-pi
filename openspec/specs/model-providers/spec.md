@@ -93,7 +93,7 @@ Knowledge 向量建库的并发、单次超时与固定重试策略采用[Knowle
 - **THEN** 以下具体约束适用：
 
 - `company` lane 只在 offline（`OMP_OFFLINE=1`）进程中存在：普通启动不注册该 provider，没有 company 模型、向量回退或启动警告；显式 `--provider company` 或 `--model company/...` 直接报错提示需要 `OMP_OFFLINE=1`。`models.yml` 中名为 `company` 的 provider 段整段忽略（该 id 为 fork 保留），命中时启动会输出保留提示（不阻断启动）。以下条目均限于 offline 进程。
-- `OMP_OFFLINE=1` 下的 `omp models` 与 `omp bench <selector…>` 采用与进程级 offline 同一套 company 语义：先翻转 lane 再构建 registry，因此 `omp models` 列出公司聊天模型、`omp bench` 能解析并压测 `company/<模型>` 选择器；刷新与 selector-miss 的发现回退都用 cache-only 策略、不发公网模型发现请求；公司配置缺失或无效时把公司 provider 的错误原因写到 stderr，不静默。`omp dry-balance`、`omp read`、`omp render`、`omp usage` 按实际需要复用既有初始化与 cache-only 策略，不新增平行注册流程：
+- `OMP_OFFLINE=1` 下的 `omp models` 与 `omp bench <selector…>` 先翻转 company lane 再构建 registry，可列出或压测 company 模型。自动刷新、登录或保存凭据后的目录同步，以及 selector-miss 的发现回退均只读缓存。只有 `omp models refresh` 和模型面板手动刷新可请求显式配置的发现端点（`models.yml` 的 `discovery` 和 `baseUrl`，或本地模型服务的端点环境变量）；内置公网目录、默认探测和扩展动态发现回调仍只读缓存。公司配置缺失或无效时将具体原因写到 stderr。`omp dry-balance`、`omp read`、`omp render`、`omp usage` 按实际需要复用现有初始化与自动发现策略，不新增平行注册流程：
   - `dry-balance` 在解析模型前初始化 company lane；`read "<图片路径>?q=<问题>"` 按需初始化 company 与 vision 角色，再向选中的模型发出真实请求。显式配置且解析成功的非 `company` vision／default 角色仍按用户选择执行，公司配置错误须可见但不阻断该显式路径；需要默认或显式选择的 `company` 模型时，配置缺失或无效须明确失败，不允许隐式回退到其他 Provider。
   - 普通 `read` 本地文件与 `render` 渲染已有会话不需要公司配置，不为此触发 auth discovery 或在线模型发现；实际需要 MCP、远端服务或模型的读取仍沿用相应能力的认证与请求流程。
   - `usage` 复用现有账号与 usage provider 流程，只将模型目录发现限制为 cache-only；不禁用真实 usage／公司模型 API 请求，不虚构 company usage 接口或额度数据。实际需要初始化 company 的路径须让配置错误可见且不泄露凭据。

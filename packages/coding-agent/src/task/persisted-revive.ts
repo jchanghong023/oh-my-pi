@@ -20,9 +20,14 @@ import type { AsyncJobManagerApi } from "../async";
 import type { PreparedExtension } from "../extensibility/extensions/types";
 import type { PersistedSubagentReviverFactory } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { createAgentSession } from "../sdk";
+import {
+	createAgentSession,
+	hasNativeChildSessionHooks,
+	type NativeChildSessionHooks,
+	resolveNativeChildSessionHooks,
+} from "../sdk";
 import type { AgentSession } from "../session/agent-session";
-import type { AgentSessionHandle } from "../session/agent-session-handle";
+import { type AgentSessionHandle, isLocalAgentSession } from "../session/agent-session-handle";
 import type { ArtifactManagerApi } from "../session/artifacts";
 import type { CostGateApi } from "../session/cost-gate";
 import { installRetryFallbackRole } from "../session/retry-fallback-chains";
@@ -82,9 +87,8 @@ export interface PersistedSubagentReviveContext {
 }
 
 /**
- * Everything one cold revive of a persisted subagent needs, built on main per revive and
- * cloneable (live objects cross as their bridged proxies), so the session can be created
- * on main or inside a pooled worker alike.
+ * Everything one cold revive needs, built per revive. A spec carrying
+ * live request hooks or tool policy stays on the owner's thread.
  */
 export interface PersistedReviveSpec {
 	readonly id: string;
@@ -97,6 +101,7 @@ export interface PersistedReviveSpec {
 	readonly root: AgentSessionHandle;
 	/** Registry id of {@link root}. */
 	readonly rootAgentId: string;
+	readonly sessionHooks?: NativeChildSessionHooks;
 	readonly costGate: CostGateApi;
 	readonly asyncJobManager: AsyncJobManagerApi | undefined;
 	/** The root's artifact manager at revive time; a revived agent adopts it. */
@@ -161,9 +166,7 @@ export function persistedAgentDefinition(displayName: string, init: PersistedSes
 export function createPersistedSubagentReviverFactory(
 	ctx: PersistedSubagentReviveContext,
 ): PersistedSubagentReviverFactory {
-	const registry = AgentRegistry.global();
-	// Lifecycle callbacks can run outside the embedded root's async context.
-	const scopedRegistry = AgentRegistry.scoped();
+	const registry = ctx.session.agentRegistry ?? AgentRegistry.global();
 	return async ref => {
 		const sessionFile = ref.sessionFile;
 		if (!sessionFile) return undefined;
@@ -199,6 +202,12 @@ export function createPersistedSubagentReviverFactory(
 		}
 		return async expectedRef => {
 			// Live root state is read per revive, so a later `/new` or cwd move is followed.
+			const rootAgentId = ctx.session.getAgentId?.() ?? MAIN_AGENT_ID;
+			const parent = ref.parentId === rootAgentId ? ctx.session : registry.get(ref.parentId ?? "")?.session;
+			const owner = parent ?? ctx.session;
+			const sessionHooks = isLocalAgentSession(owner)
+				? resolveNativeChildSessionHooks({}, owner.nativeChildCapabilities)
+				: undefined;
 			const spec: PersistedReviveSpec = {
 				id: ref.id,
 				displayName: ref.displayName,
@@ -206,7 +215,8 @@ export function createPersistedSubagentReviverFactory(
 				sessionFile,
 				taskDepth,
 				root: ctx.session,
-				rootAgentId: ctx.session.getAgentId?.() ?? MAIN_AGENT_ID,
+				rootAgentId,
+				...(sessionHooks && hasNativeChildSessionHooks(sessionHooks) ? { sessionHooks } : {}),
 				costGate: ctx.session.costGate,
 				asyncJobManager: ctx.session.asyncJobManager,
 				artifactManager: ctx.session.sessionManager.getArtifactManager() ?? undefined,
@@ -222,11 +232,12 @@ export function createPersistedSubagentReviverFactory(
 			// even when ensureLive was called from another async context.
 			const revive = () => {
 				const pool = subagentWorkerPool(ctx.settings);
-				return pool
-					? revivePersistedPlaced(pool, spec, expectedRef, revivePersistedSubagent)
-					: revivePersistedSubagent(spec, expectedRef);
+				if (!pool) return revivePersistedSubagent(spec, expectedRef);
+				if (!spec.sessionHooks) return revivePersistedPlaced(pool, spec, expectedRef, revivePersistedSubagent);
+				const endMainRun = pool.beginMainRun();
+				return revivePersistedSubagent(spec, expectedRef).finally(endMainRun);
 			};
-			return scopedRegistry ? AgentRegistry.runScoped(scopedRegistry, revive) : revive();
+			return AgentRegistry.global() === registry ? revive() : AgentRegistry.runScoped(registry, revive);
 		};
 	};
 }
@@ -412,6 +423,8 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 	let session: AgentSession;
 	try {
 		({ session } = await createAgentSession({
+			...spec.sessionHooks,
+			toolRestrictions: spec.sessionHooks?.toolRestrictions?.clone(),
 			cwd: spec.root.sessionManager.getCwd(),
 			costGate: spec.costGate,
 			authStorage: spec.authStorage,

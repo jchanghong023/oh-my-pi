@@ -123,7 +123,7 @@ RPC v3 的 `teamConfig` 能力提供三个接口。调用方 MUST 在目标 prof
 
 offline 中的 `company` provider 复用外部 Claude 配置目录中的 `settings.json`：默认 `~/.claude/settings.json`，设置 `CLAUDE_CONFIG_DIR` 时以其实际解析位置为准。需要已有 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`；它们来自该文件，不是仅凭 shell 中同名变量就能完成接入。修复后需重启 OMP。
 
-优先复用已有公司接入，不为每个 Team 成员重复创建 provider／凭据。offline 不等于模型本地推理或禁止所有网络：可以调用获准的公司内网模型，但目录缺失、配置失败或无可用服务时不能切到公网、安装依赖或擅自调用真实模型进行探测。
+优先复用已有公司接入，不为每个 Team 成员重复创建 provider／凭据。[公司内网模式](../docs-zh-CN/quick-start-intranet.md)无法连接互联网，但可调用获准的内网模型，并非只能本地推理。目录缺失、配置失败或无可用服务时，不切到公网、不安装依赖、不擅自调用真实模型探测。
 
 ## 5. 生效与常见问题
 

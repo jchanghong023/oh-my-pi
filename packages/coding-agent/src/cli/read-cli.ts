@@ -106,16 +106,16 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 		const urlTarget = parseReadUrlTarget(cmd.path);
 		const imageQuestion = splitImageQuestionTarget(cmd.path).question;
 		if (imageQuestion || (urlTarget && parseXUrl(urlTarget.path))) {
-			const offline = await initializeOfflineModelCommand(settings, undefined, message => {
+			const companyLane = await initializeOfflineModelCommand(settings, undefined, message => {
 				process.stderr.write(`${message}\n`);
 			});
 			authStorage ??= await discoverAuthStorage(undefined, { settings });
 			const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
 			for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
 			await modelRegistry.hydrateCredentialScopedModelCaches();
-			await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline });
+			await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline: companyLane });
 			session.modelRegistry = modelRegistry;
-			const companyError = offline && imageQuestion ? getCompanyConfigError() : undefined;
+			const companyError = companyLane && imageQuestion ? getCompanyConfigError() : undefined;
 			if (companyError) {
 				// A configured non-company route is an explicit choice, not a fallback.
 				// Keep a broken company selection from falling through to @default.

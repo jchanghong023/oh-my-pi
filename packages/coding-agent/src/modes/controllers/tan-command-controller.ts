@@ -134,6 +134,8 @@ export class TanCommandController {
 		const cloneId = `Tan-${Snowflake.next()}`;
 		const cloneFile = path.join(sessionDir, `${cloneId}.jsonl`);
 		const label = `/tan ${previewWork(trimmedWork)}`;
+		const parentHooks = sdk.resolveNativeChildSessionHooks({}, session.nativeChildCapabilities);
+		const sessionHooks = { ...parentHooks, toolRestrictions: parentHooks.toolRestrictions?.clone() };
 
 		await this.ctx.sessionManager.ensureOnDisk();
 		await this.ctx.sessionManager.flush();
@@ -171,6 +173,7 @@ export class TanCommandController {
 					try {
 						try {
 							const created = await sdk.createAgentSession({
+								...sessionHooks,
 								cwd,
 								costGate: session.costGate,
 								sessionManager: cloneManager,
@@ -221,6 +224,7 @@ export class TanCommandController {
 							task: trimmedWork,
 							tools: clone.getEnabledToolNames(),
 							mountedTools: clone.getMountedXdevToolNames(),
+							requiresLiveHost: sdk.hasNativeChildSessionHooks(sessionHooks) || undefined,
 						});
 						const abortClone = () => {
 							void clone?.abort();

@@ -8,8 +8,8 @@
  *   then list. This is the supported replacement for `rm -rf ~/.omp/models.db`
  *   when a provider ships a new model that the 24h cache has not picked up yet.
  *
- * `ls`/`find` use the cache when fresh (`online-if-uncached`); only `refresh`
- * forces the network (`online`).
+ * `ls`/`find` use the cache when fresh (`online-if-uncached`) and stay
+ * cache-only in the company lane. `refresh` forces a catalog re-fetch.
  */
 import type { Api, Effort, Model } from "@oh-my-pi/pi-ai";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
@@ -313,7 +313,7 @@ export interface RunModelsListingOptions {
 	disabledExtensionIds?: string[];
 	/** When true, exclude ambient factories and resolve only `additionalExtensionPaths`. */
 	disableExtensionDiscovery?: boolean;
-	/** Company environment: runtime provider discovery must stay cache-only. */
+	/** Company environment: extension catalog discovery stays cache-only. */
 	offline?: boolean;
 }
 
@@ -452,7 +452,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 
 				const cwd = getProjectDir();
 				const offline = offlineFromEnv();
-				const strategy = offline ? "offline" : action === "refresh" ? "online" : "online-if-uncached";
+				const strategy = action === "refresh" ? "online" : offline ? "offline" : "online-if-uncached";
 				stage = "lane";
 				const laneStarted = performance.now();
 				logger.info("models.lane.started", {
@@ -508,17 +508,18 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 
 					if (action === "refresh" && !json && process.stderr.isTTY) {
 						process.stderr.write(
-							offline ? "Refreshing models from local cache…\n" : "Refreshing models from all providers…\n",
+							offline ? "Refreshing configured intranet model catalogs…\n" : "Refreshing models from all providers…\n",
 						);
 					}
 					stage = "builtin_refresh";
 					const refreshStarted = performance.now();
+					const cacheOnly = strategy === "offline";
 					const refreshFields = {
 						...commandFields,
-						event: offline ? "offline_model_refresh" : "models_refresh",
+						event: cacheOnly ? "offline_model_refresh" : "models_refresh",
 						stage,
 						strategy,
-						cache_only: offline,
+						cache_only: cacheOnly,
 					};
 					logger.info("models.refresh.started", {
 						...refreshFields,

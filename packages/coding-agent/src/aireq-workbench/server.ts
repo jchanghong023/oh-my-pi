@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { ServerWebSocket, WebSocketHandler } from "bun";
-import { offlineFromEnv } from "../cli/args";
 import { getWorkbenchAddresses } from "../utils/browser-network";
 import type { OmpWebSocketData } from "../webgui/application";
 import { registerAIReqApplication } from "../webgui/server";
@@ -39,6 +38,7 @@ export interface AIReqWorkbenchApplication {
 export interface AIReqWorkbenchApplicationOptions {
 	basePath?: string;
 	asset?: (assetPath: string) => Promise<AIReqWorkbenchAsset | null>;
+	/** Explicit LAN access override; false restricts this workbench to loopback. */
 	offline?: boolean;
 }
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -276,7 +276,7 @@ export async function createAIReqWorkbenchApplication(
 	);
 	if (!launchProject) throw new Error("Launch project is not registered in the AIReq workflow");
 	if (!(await asset("/"))) throw new Error("AIReq workbench entry asset is unavailable");
-	const allowLan = options.offline ?? offlineFromEnv();
+	const allowLan = options.offline ?? true;
 	const allowedAddresses = getWorkbenchAddresses(allowLan);
 	const capability = randomBytes(32).toString("hex");
 	const prefix = `${(options.basePath ?? "").replace(/\/$/, "")}/${capability}/`;

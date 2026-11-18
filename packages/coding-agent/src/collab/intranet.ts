@@ -27,19 +27,25 @@ export function intranetUsername(): string {
 	return username;
 }
 
-export function intranetRelayUrl(input: string): string {
+const defaultRelayHost = new URL(DEFAULT_RELAY_URL).hostname;
+
+export function isPublicCollabRelay(url: URL): boolean {
+	return url.hostname.replace(/\.$/, "") === defaultRelayHost;
+}
+
+/** Only call with the configured collab.relayUrl, never a CLI override or invitation. */
+export function configuredIntranetRelayOrigin(input: string): string | undefined {
 	const value = input.trim();
-	if (!value) {
-		throw new Error("Configure an intranet collab.relayUrl before using offline collaboration.");
+	if (!value) return undefined;
+	let url: URL;
+	try {
+		url = new URL(value.includes("://") ? value : `wss://${value}`);
+	} catch {
+		return undefined;
 	}
-	const normalized = normalizeRelayOrigin(value);
-	if ("error" in normalized) {
-		throw new Error(`Invalid intranet collab.relayUrl: ${normalized.error}`);
-	}
-	if (new URL(normalized.origin).hostname === new URL(DEFAULT_RELAY_URL).hostname) {
-		throw new Error("Configure an intranet collab.relayUrl; the default public relay is unavailable offline.");
-	}
-	return normalized.origin;
+	if (isPublicCollabRelay(url)) return undefined;
+	const normalized = normalizeRelayOrigin(url.href, url.origin.replace(/^http:/, "ws:"));
+	return "origin" in normalized ? normalized.origin : undefined;
 }
 
 export function isIntranetUsername(input: string): boolean {
@@ -47,12 +53,13 @@ export function isIntranetUsername(input: string): boolean {
 	return /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$/.test(input) && !/^\d+$/.test(input);
 }
 
-export async function resolveIntranetUsername(relayUrl: string, username: string): Promise<string> {
+export async function resolveIntranetUsername(configuredRelayUrl: string, username: string): Promise<string> {
 	if (!intranetCollabEnabled()) {
 		throw new Error("Intranet username lookup requires OMP_OFFLINE.");
 	}
 	if (!isIntranetUsername(username)) throw new Error("Invalid intranet collaboration username.");
-	const origin = intranetRelayUrl(relayUrl);
+	const origin = configuredIntranetRelayOrigin(configuredRelayUrl);
+	if (!origin) throw new Error("Configure a valid intranet collab.relayUrl before using username lookup.");
 	const url = new URL(`/collab/users/${encodeURIComponent(username)}`, origin.replace(/^ws/, "http"));
 	let response: Response;
 	try {
@@ -78,7 +85,7 @@ export async function resolveIntranetUsername(relayUrl: string, username: string
 	if (typeof body !== "object" || body === null || !("link" in body) || typeof body.link !== "string") {
 		throw new Error("The intranet collaboration relay returned an invalid lookup response.");
 	}
-	const parsed = parseCollabLink(body.link);
+	const parsed = parseCollabLink(body.link, origin);
 	if ("error" in parsed || new URL(parsed.wsUrl).origin !== origin) {
 		throw new Error("The intranet collaboration relay returned an invalid room link.");
 	}

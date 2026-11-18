@@ -23,7 +23,6 @@ import {
 	CollabHostStoppedError,
 	CollabRelayUnavailableError,
 } from "./host";
-import { intranetCollabEnabled, intranetRelayUrl } from "./intranet";
 import type { CollabAccess } from "./registry";
 
 import { cfgCollabAutoStart, cfgCollabRelayUrl, cfgCollabWebUrl } from "./settings";
@@ -228,14 +227,13 @@ export class CollabController {
 	}
 
 	#resolveRelayUrl(relay?: string): string {
-		const input = relay?.trim() || cfgCollabRelayUrl.get(this.#ctx.settings) || "";
-		if (intranetCollabEnabled()) return intranetRelayUrl(input);
+		const input = relay?.trim() || cfgCollabRelayUrl.get(this.#ctx.settings).trim();
 		if (!input) {
 			throw new Error(
 				"No relay configured. Set collab.relayUrl in /settings or pass one: /collab relay.example.com",
 			);
 		}
-		// Scheme-less relay args default to wss (ws:// must be spelled out for localhost).
+		// Scheme-less relay args default to wss (plaintext must be spelled out).
 		return input.includes("://") ? input : `wss://${input}`;
 	}
 

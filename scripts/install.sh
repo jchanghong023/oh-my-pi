@@ -367,6 +367,95 @@ report_path_hint() {
     esac
 }
 
+# Read only the top-level tag and the named asset in the top-level assets array.
+# Scan JSON tokens so nesting, escaped text, and formatting cannot spoof fields.
+release_asset_metadata() {
+    LC_ALL=C awk -v binary="$1" '
+        function next_token(    first) {
+            sub(/^[ \t\r\n]+/, "", json)
+            first = substr(json, 1, 1)
+            if (first == "" || index("{}[],:", first)) {
+                token = first
+            } else if (match(json, /^"([^"\\[:cntrl:]]|\\(["\\\/bfnrt]|u[[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]]))*"/) ||
+                       match(json, /^(-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?|true|false|null)/)) {
+                token = substr(json, 1, RLENGTH)
+            } else {
+                exit 1
+            }
+            json = substr(json, length(token) + 1)
+        }
+
+        function value(scope, depth,    key, child, names, digests, name, digest) {
+            if (depth > 64 || (scope == "release" && token != "{")) exit 1
+            if ((scope == "assets" && token != "[") || (scope == "asset" && token != "{"))
+                invalid_assets = 1
+            if (token == "{") {
+                next_token()
+                if (token != "}") {
+                    while (1) {
+                        # GitHub emits literal keys. Reject escaped aliases.
+                        if (token !~ /^"[^\\]*"$/) exit 1
+                        key = substr(token, 2, length(token) - 2)
+                        next_token()
+                        if (token != ":") exit 1
+                        next_token()
+                        child = ""
+                        if (scope == "release" && key == "tag_name") {
+                            tags++
+                            if (token ~ /^"[^\\[:space:]]+"$/)
+                                tag = substr(token, 2, length(token) - 2)
+                        } else if (scope == "release" && key == "assets") {
+                            asset_arrays++
+                            child = "assets"
+                        } else if (scope == "asset" && key == "name") {
+                            names++
+                            if (token ~ /^"[^\\]+"$/)
+                                name = substr(token, 2, length(token) - 2)
+                        } else if (scope == "asset" && key == "digest") {
+                            digests++
+                            if (length(token) == 73 && token ~ /^"sha256:[[:xdigit:]]+"$/)
+                                digest = tolower(substr(token, 9, 64))
+                        }
+                        value(child, depth + 1)
+                        if (token == "}") break
+                        if (token != ",") exit 1
+                        next_token()
+                    }
+                }
+                if (scope == "asset") {
+                    if (names != 1 || name == "") invalid_assets = 1
+                    if (name == binary) {
+                        matches++
+                        if (digests == 1) asset_digest = digest
+                    }
+                }
+            } else if (token == "[") {
+                next_token()
+                if (token != "]") {
+                    while (1) {
+                        value(scope == "assets" ? "asset" : "", depth + 1)
+                        if (token == "]") break
+                        if (token != ",") exit 1
+                        next_token()
+                    }
+                }
+            } else if (token == "" || index("}],:", token)) {
+                exit 1
+            }
+            next_token()
+        }
+
+        { json = json $0 "\n" }
+        END {
+            next_token()
+            value("release", 0)
+            if (token != "" || tags != 1 || tag == "") exit 1
+            if (invalid_assets || asset_arrays != 1 || matches != 1) asset_digest = ""
+            print tag, asset_digest
+        }
+    '
+}
+
 # Install binary from the fork's published GitHub Releases
 install_binary() {
 
@@ -399,35 +488,30 @@ install_binary() {
         echo "Refusing to replace a directory at ${INSTALL_DIR}/omp" >&2
         exit 1
     fi
-    # Probe once for both metadata and asset requests. --ssl-no-revoke was
-    # introduced in curl 7.44 and only applies to the Schannel TLS backend.
-    CURL_INFO="$(curl --version 2>/dev/null)" || CURL_INFO=""
-    CURL_VERSION="$(printf '%s\n' "$CURL_INFO" | awk 'NR==1 {print $2}')"
-    CURL_VERSION="${CURL_VERSION%%-*}"
-    CURL_SSL_NO_REVOKE=""
-    case "$CURL_INFO" in
-        *Schannel*)
-            if [ -n "$CURL_VERSION" ] && version_ge "$CURL_VERSION" "7.44.0"; then
-                CURL_SSL_NO_REVOKE="--ssl-no-revoke"
-            fi
-            ;;
-    esac
-
-    # Get release tag, retaining curl's original stderr and HTTP/exit status.
+    # Fetch metadata only from the authenticated GitHub API endpoint.
     if [ -n "$REF" ]; then
         echo "Fetching release $REF..."
         RELEASE_ENDPOINT=release_tag
-        RELEASE_URL="https://api.github.com/repos/${REPO}/releases/tags/${REF}"
+        case "$REF" in
+            .|*..*) echo "Invalid release tag: $REF" >&2; exit 1 ;;
+        esac
+        REF_PATH="$(printf '%s' "$REF" | sed 's/%/%25/g; s|/|%2F|g; s/?/%3F/g; s/#/%23/g; s/\\/%5C/g')"
+        RELEASE_URL="https://api.github.com/repos/${REPO}/releases/tags/${REF_PATH}"
     else
         echo "Fetching latest release..."
         RELEASE_ENDPOINT=release_latest
         RELEASE_URL="https://api.github.com/repos/${REPO}/releases/latest"
     fi
     install_log INFO http_request_started "method=GET host=api.github.com endpoint=$RELEASE_ENDPOINT timeout_ms=60000 attempt=1"
-    # The optional flag is a fixed, probed token; an empty value adds no argument.
-    if RELEASE_RESPONSE=$(curl -fsSL --insecure $CURL_SSL_NO_REVOKE --connect-timeout 10 --max-time 60 --write-out '\n%{http_code}' "$RELEASE_URL"); then
+    # -q must be the first option to ignore .curlrc. Do not follow redirects.
+    if RELEASE_RESPONSE=$(curl -q -fgsS --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 --write-out '\n%{http_code}' "$RELEASE_URL"); then
         RELEASE_HTTP_STATUS="${RELEASE_RESPONSE##*
 }"
+        if [ "$RELEASE_HTTP_STATUS" != 200 ]; then
+            install_log ERROR http_request_failed "result=failed error_type=http http_status=$RELEASE_HTTP_STATUS endpoint=$RELEASE_ENDPOINT"
+            echo "Failed to fetch release metadata (expected HTTP 200, got $RELEASE_HTTP_STATUS)." >&2
+            exit 1
+        fi
         install_log INFO http_request_completed "result=success host=api.github.com endpoint=$RELEASE_ENDPOINT http_status=$RELEASE_HTTP_STATUS"
     else
         release_exit="$?"
@@ -444,11 +528,17 @@ install_binary() {
     fi
     RELEASE_JSON="${RELEASE_RESPONSE%
 *}"
-    LATEST=$(echo "$RELEASE_JSON" | grep '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+    if ! RELEASE_META=$(printf '%s\n' "$RELEASE_JSON" | release_asset_metadata "$BINARY"); then
+        install_log ERROR release_metadata_invalid 'result=invalid_tag_or_json'
+        echo "Failed to read the release tag from GitHub metadata." >&2
+        exit 1
+    fi
+    LATEST="${RELEASE_META%% *}"
+    EXPECTED_DIGEST="${RELEASE_META#* }"
 
-    if [ -z "$LATEST" ]; then
-        install_log ERROR release_metadata_invalid 'result=missing_tag'
-        echo "Failed to fetch release tag"
+    if [ -n "$REF" ] && [ "$LATEST" != "$REF" ]; then
+        install_log ERROR release_metadata_invalid 'result=unexpected_tag'
+        echo "GitHub metadata did not match the requested release tag." >&2
         exit 1
     fi
     echo "Using version: $LATEST"
@@ -469,6 +559,30 @@ install_binary() {
     INSTALL_STAGE=prepare_candidate
     INSTALL_STAGE_MS="$(install_now_ms)"
 
+    if [ -z "$EXPECTED_DIGEST" ]; then
+        install_log ERROR release_metadata_invalid 'result=invalid_asset_digest'
+        echo "Missing, invalid, or ambiguous SHA-256 digest for ${BINARY} in GitHub release metadata." >&2
+        exit 1
+    fi
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        echo "sha256sum is required to verify the downloaded omp binary." >&2
+        exit 1
+    fi
+
+    # Keep compatibility flags on the asset download only. --ssl-no-revoke
+    # requires curl 7.44 or newer and only applies to Schannel.
+    CURL_INFO="$(curl --version 2>/dev/null)" || CURL_INFO=""
+    CURL_VERSION="$(printf '%s\n' "$CURL_INFO" | awk 'NR==1 {print $2}')"
+    CURL_VERSION="${CURL_VERSION%%-*}"
+    CURL_SSL_NO_REVOKE=""
+    case "$CURL_INFO" in
+        *Schannel*)
+            if [ -n "$CURL_VERSION" ] && version_ge "$CURL_VERSION" "7.44.0"; then
+                CURL_SSL_NO_REVOKE="--ssl-no-revoke"
+            fi
+            ;;
+    esac
+
     # Fresh installs may not have the target directory yet; create it before
     # writing the temporary download or the final binary.
     mkdir -p "$INSTALL_DIR"
@@ -485,7 +599,6 @@ install_binary() {
     # Prefer --fail-with-body (curl >= 7.76) so an HTTP error keeps the server's
     # response body; --fail discards it. Fall back to --fail when the version
     # cannot be probed.
-    # Reuse the metadata request's version probe.
     if [ -n "$CURL_VERSION" ] && version_ge "$CURL_VERSION" "7.76.0"; then
         CURL_FAIL_FLAG="--fail-with-body"
     else
@@ -506,6 +619,14 @@ install_binary() {
         echo "  Target: ${INSTALL_DIR}/omp" >&2
         exit 1
     fi
+    INSTALL_STAGE=verify_candidate
+    INSTALL_STAGE_MS="$(install_now_ms)"
+    if ! CHECKSUM="$(sha256sum < "$TMP_BINARY")" || [ "${CHECKSUM%% *}" != "$EXPECTED_DIGEST" ]; then
+        install_log ERROR candidate_digest_failed 'result=failed'
+        echo "SHA-256 verification failed for ${BINARY}; the existing installation was not changed." >&2
+        exit 1
+    fi
+    install_log INFO candidate_digest_verified 'result=matches'
     INSTALL_STAGE=prepare_executable
     INSTALL_STAGE_MS="$(install_now_ms)"
     chmod +x "$TMP_BINARY"

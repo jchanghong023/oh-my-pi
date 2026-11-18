@@ -7,6 +7,10 @@
 - Turn-end hooks can distinguish queue-draining boundaries from terminal tool yields.
 - Compaction callers can explicitly enable or disable thinking-capability probes.
 
+### Fixed
+
+- Held steering messages no longer stall an active tool while the queue is paused.
+
 ## [18.22.1] - 2026-11-17
 
 ### Added

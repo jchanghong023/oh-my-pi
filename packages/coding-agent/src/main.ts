@@ -793,8 +793,8 @@ async function runInteractiveMode(
 			await mode.maybeAutoCreateWorktree();
 		}
 
-		// `omp join <link>`: dispatch through the same builtin path as a typed
-		// `/join` so collab guards and error rendering stay in one place.
+		// `omp join` dispatches through the same builtin path as a typed `/join`
+		// so collab guards and error rendering stay in one place.
 		if (joinLink !== undefined) {
 			const executeBuiltinSlashCommand = await loadBuiltinSlashCommandExecutor();
 			await executeBuiltinSlashCommand(`/join ${joinLink}`, { ctx: mode });
@@ -2773,12 +2773,6 @@ export async function runRootCommand(
 							}),
 						)
 					: undefined;
-			const { initialMessage, initialImages } = buildInitialMessage({
-				parsed: initialArgs,
-				fileText: processedFiles?.text,
-				fileImages: processedFiles?.images,
-				stdinContent: pipedInput,
-			});
 
 			const showStartupSplash = shouldShowStartupSplash({
 				configured: cfgStartupShowSplash.get(settingsInstance),
@@ -2949,12 +2943,10 @@ export async function runRootCommand(
 				notifs.push({ kind: "error", message: modelRegistryError.message });
 			}
 
-			// Let print-mode slash commands reach AgentSession's local dispatch before
-			// requiring a model. Commands that return a prompt (or are unknown) still
-			// hit the session's model/credential checks; ordinary prompts fail here.
+			// Only the first explicit CLI message may enter local dispatch without a
+			// model. stdin and @file content are prompt data, not command syntax.
 			const startsWithLocalCommand =
-				(mode === "text" || mode === "json") &&
-				(initialMessage ?? initialArgs.messages[0])?.startsWith("/") === true;
+				(mode === "text" || mode === "json") && initialArgs.messages[0]?.startsWith("/") === true;
 			if (!isInteractive && !session.model && !startsWithLocalCommand) {
 				if (modelRegistryError) {
 					process.stderr.write(`${chalk.red(modelRegistryError.message)}\n\n`);
@@ -2998,6 +2990,17 @@ export async function runRootCommand(
 				process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
 				process.exit(1);
 			}
+
+			// Without a model, dispatch the explicit command before attempting any
+			// prompt. Keep it separate so stdin and @file content cannot become its arguments.
+			const initialCommand =
+				!isInteractive && !session.model && startsWithLocalCommand ? initialArgs.messages.shift() : undefined;
+			const { initialMessage, initialImages } = buildInitialMessage({
+				parsed: initialCommand === undefined ? initialArgs : { ...initialArgs, messages: [] },
+				fileText: processedFiles?.text,
+				fileImages: processedFiles?.images,
+				stdinContent: pipedInput,
+			});
 
 			if (mode === "rpc" || mode === "rpc-ui" || isInteractive) {
 				// Long-lived hosts apply on-disk config edits (config.yml, project
@@ -3076,6 +3079,7 @@ export async function runRootCommand(
 				const exitCode = await runPrintMode(session, {
 					mode,
 					messages: initialArgs.messages,
+					initialCommand,
 					initialMessage,
 					initialImages,
 					printThoughts: initialArgs.printThoughts,

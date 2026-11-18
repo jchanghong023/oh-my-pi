@@ -34,6 +34,7 @@ import { MCPManager } from "../mcp/manager";
 import vibeTurnResultTemplate from "../prompts/tools/vibe-turn-result.md" with { type: "text" };
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { NativeChildSessionHooks } from "../sdk";
 import { SessionManager, SessionPersistenceIndeterminateError } from "../session/session-manager";
 import { getBundledAgent } from "../task/agents";
 import { type ExecutorOptions, runSubagentFollowUpTurn, runSubprocess } from "../task/executor";
@@ -803,13 +804,22 @@ export class VibeSessionRegistry {
 	/** Spawn a persistent worker session and start its first turn in the background. */
 	async spawn(session: ToolSession, args: { cli: VibeCli; name?: string; prompt: string }): Promise<VibeSpawnOutcome> {
 		const scope = this.ownerScope(session);
-		return this.#withTerminationLock(scope, () => this.#spawnLocked(session, scope, args));
+		// Capture the caller's effective policy before the lock or background job can defer execution.
+		const hooks: NativeChildSessionHooks = {
+			resolveRequestAuth: session.resolveRequestAuth,
+			onPayload: session.onPayload,
+			onResponse: session.onResponse,
+			onModelResponse: session.onModelResponse,
+			toolRestrictions: session.toolRestrictions?.clone(),
+		};
+		return this.#withTerminationLock(scope, () => this.#spawnLocked(session, scope, args, hooks));
 	}
 
 	async #spawnLocked(
 		session: ToolSession,
 		scope: VibeOwnerScope,
 		args: { cli: VibeCli; name?: string; prompt: string },
+		hooks: NativeChildSessionHooks,
 	): Promise<VibeSpawnOutcome> {
 		if (this.#terminatedScopes.has(scopeKey(scope, ""))) {
 			throw new ToolError("Vibe mode has exited; enter Vibe mode again before spawning a worker.");
@@ -867,7 +877,7 @@ export class VibeSessionRegistry {
 				);
 				if (!spawnPersisted) throw new ToolError("Vibe parent session changed before the worker could start.");
 			}
-			const jobId = this.#registerTurnJob(session, manager, record, args.prompt, { first: true });
+			const jobId = this.#registerTurnJob(session, manager, record, args.prompt, { first: true, hooks });
 			return { id, jobId };
 		} catch (error) {
 			record.killed = true;
@@ -1273,6 +1283,7 @@ export class VibeSessionRegistry {
 		message: string,
 		signal: AbortSignal,
 		onProgress: (progress: AgentProgress) => void,
+		hooks: NativeChildSessionHooks,
 	): Promise<ExecutorOptions> {
 		const sessionFile = session.getSessionFile();
 		const sessionArtifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
@@ -1308,6 +1319,7 @@ export class VibeSessionRegistry {
 			onProgress,
 			authStorage: session.authStorage,
 			modelRegistry: session.modelRegistry,
+			...hooks,
 			settings: session.settings,
 			asyncJobManager: session.asyncJobManager,
 			inheritedSessionAgents: session.getSessionAgents?.(),
@@ -1343,7 +1355,7 @@ export class VibeSessionRegistry {
 		manager: AsyncJobManagerApi,
 		record: VibeRecord,
 		message: string,
-		options: { first: boolean },
+		options: { first: true; hooks: NativeChildSessionHooks } | { first: false },
 	): string {
 		const turnIndex = record.turnCount + 1;
 		const turn: VibeTurn = {
@@ -1391,7 +1403,9 @@ export class VibeSessionRegistry {
 						throw new ToolError(`Vibe session "${record.id}" changed parent scope before its turn started.`);
 					}
 					const result = options.first
-						? await runSubprocess(await this.#buildSpawnOptions(session, record, message, signal, onProgress))
+						? await runSubprocess(
+								await this.#buildSpawnOptions(session, record, message, signal, onProgress, options.hooks),
+							)
 						: await runSubagentFollowUpTurn({
 								id: record.id,
 								agent: record.agent,

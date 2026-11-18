@@ -73,6 +73,7 @@ export interface NativeLoaderContext {
 	candidates: string[];
 	isWorkspaceLoad: boolean;
 	nativesDir: string;
+	offlineCacheUid: number | undefined;
 }
 
 export function initLoaderContext(overrides?: InitLoaderContextOverrides): NativeLoaderContext;
@@ -80,6 +81,7 @@ export function initLoaderContext(overrides?: InitLoaderContextOverrides): Nativ
 export interface CleanupStaleNativeVersionsInput {
 	nativesDir: string;
 	currentVersion: string;
+	offlineCacheUid?: number;
 }
 
 export function cleanupStaleNativeVersions(input: CleanupStaleNativeVersionsInput): string[];
@@ -89,6 +91,8 @@ export function prepareNativeVersionDir(versionedDir: string): void;
 export interface ExtractEmbeddedAddonsInput {
 	files: EmbeddedAddonFile[];
 	targetDir: string;
+	/** Check existing files when `targetDir` is an already protected Linux offline cache directory. */
+	offlineCacheUid?: number;
 }
 
 /** Decompress every manifest addon missing or wrong-sized in `targetDir`; returns the paths written. */

@@ -319,7 +319,7 @@ export function getOrStartAIReqWorkbench(
 			});
 			host.attachService(endpoint);
 			if (host.stopping) throw new Error("AIReq host exited during listener startup");
-			const allowLan = options?.offline ?? offlineFromEnv();
+			const allowLan = options?.offline ?? true;
 			await host.projectLease.activate(() => readWebGuiSessionInfo(host.rootSession), { allowLan });
 			if (host.stopping) {
 				await host.projectLease.markExiting();

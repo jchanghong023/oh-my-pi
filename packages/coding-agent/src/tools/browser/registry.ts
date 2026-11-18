@@ -106,6 +106,11 @@ export interface ReleaseBrowserOptions {
 	strict?: boolean;
 }
 
+/** A tab may upgrade its teardown after the browser hold was already consumed. */
+export interface BrowserReleaseProgress {
+	browserHoldReleased?: boolean;
+}
+
 const browsers = new Map<string, BrowserHandle>();
 /**
  * In-flight opens by browser key, so concurrent acquisitions share one launch instead of storming Chromium.
@@ -451,7 +456,14 @@ export async function connectBrowserForCleanup(handle: PuppeteerBrowserHandle): 
 	});
 }
 
-export async function releaseBrowser(handle: BrowserHandle, opts: ReleaseBrowserOptions): Promise<void> {
+export async function releaseBrowser(
+	handle: BrowserHandle,
+	opts: ReleaseBrowserOptions,
+	progress?: BrowserReleaseProgress,
+): Promise<void> {
+	const releaseHold = !progress?.browserHoldReleased;
+	// A strict follow-up can verify cleanup at zero, but never consume another tab's hold.
+	if (!releaseHold && (!opts.strict || handle.refCount !== 0)) return;
 	if (opts.strict && handle.refCount <= 1) {
 		let entry = strictReleases.get(handle);
 		if (entry?.promise) return entry.promise;
@@ -460,7 +472,10 @@ export async function releaseBrowser(handle: BrowserHandle, opts: ReleaseBrowser
 		const release = entry;
 		release.promise = disposeBrowserHandle(handle, opts)
 			.then(() => {
-				handle.refCount = Math.max(0, handle.refCount - 1);
+				if (releaseHold) {
+					handle.refCount = Math.max(0, handle.refCount - 1);
+					if (progress) progress.browserHoldReleased = true;
+				}
 				if (browsers.get(handle.key) === handle) browsers.delete(handle.key);
 				strictReleases.delete(handle);
 			})
@@ -470,6 +485,7 @@ export async function releaseBrowser(handle: BrowserHandle, opts: ReleaseBrowser
 		return release.promise;
 	}
 	handle.refCount = Math.max(0, handle.refCount - 1);
+	if (progress) progress.browserHoldReleased = true;
 	if (handle.refCount === 0) {
 		// Only evict if the registry still points at THIS handle. After a disconnect,
 		// `acquireBrowser` may have already replaced the entry with a fresh live handle
@@ -480,6 +496,7 @@ export async function releaseBrowser(handle: BrowserHandle, opts: ReleaseBrowser
 		} catch (error) {
 			if (opts.strict) {
 				handle.refCount++;
+				if (progress) progress.browserHoldReleased = false;
 				strictReleases.set(handle, {});
 				if (!browsers.has(handle.key)) browsers.set(handle.key, handle);
 			}
