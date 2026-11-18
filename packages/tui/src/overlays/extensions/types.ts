@@ -33,7 +33,7 @@ export type ExtensionState = "active" | "disabled" | "shadowed";
 /**
  * Reason why an extension is disabled.
  */
-export type DisabledReason = "provider-disabled" | "user-opt-in" | "item-disabled" | "shadowed";
+export type DisabledReason = "provider-disabled" | "user-opt-in" | "item-disabled" | "skill-config" | "shadowed";
 
 /**
  * Unified extension representation for the dashboard.

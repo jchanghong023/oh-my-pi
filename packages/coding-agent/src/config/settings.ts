@@ -56,6 +56,7 @@ import {
 import "./all-settings";
 import { cfgDisabledProviders, cfgModelRoles, cfgModelRoleStorage } from "./model-settings";
 import { cfgShellPath } from "../exec/settings";
+import { cfgSttLanguage } from "../stt/settings";
 import {
 	UserSettingError,
 	UserSettingsStore,
@@ -2476,9 +2477,36 @@ export class Settings {
 		if (isRecord(roles) && Object.hasOwn(roles, role)) return modelRoleValueFromUnknown(roles[role]);
 		// Project clears still fall back to configured global roles, but must not acquire process defaults.
 		if (this.#hasProjectModelRoleAssignment(role)) return undefined;
-		// Own-key guard: a plain-object index would surface inherited Object.prototype
-		// members ("toString", …) as role values for arbitrary alias strings like @toString.
+		return this.#processModelRole(role);
+	}
+
+	/** Source language used when resolving automatic dictation models. */
+	getDictationLanguage(): string {
+		return cfgSttLanguage.get(this);
+	}
+
+	/** Process default that would be effective after clearing this role in model-role storage. */
+	getProcessModelRoleAfterClear(role: ModelRole | string): string | undefined {
+		// A project assignment, including a clear, blocks process defaults. In
+		// project storage, clearing a runtime override also records a project clear.
+		if (this.#hasProjectModelRoleAssignment(role)) return undefined;
+		if (cfgModelRoleStorage.get(this) === "project") {
+			return this.getModelRoleProvenance(role) === "default" ? this.#processModelRole(role) : undefined;
+		}
+		// A global clear removes this instance's global/runtime values, but not
+		// a config-overlay assignment or an inherited configured role.
+		if (
+			this.#modelRoleLayerOwns(this.#configOverlay, role) ||
+			(this.#parent && this.#parent.getModelRoleProvenance(role) !== "default")
+		) {
+			return undefined;
+		}
+		return this.#processModelRole(role);
+	}
+
+	#processModelRole(role: ModelRole | string): string | undefined {
 		const defaults = this.#modelRoleDefaults();
+		// Don't surface Object.prototype members for arbitrary aliases like @toString.
 		return Object.hasOwn(defaults, role) ? defaults[role] : undefined;
 	}
 

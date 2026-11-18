@@ -761,6 +761,10 @@ export function deduplicateMCPToolsByName<T extends MCPToolOriginSource>(tools: 
 	return deduplicated;
 }
 
+function mcpToolLoadMode(alwaysLoad: boolean | undefined): CustomTool<TSchema, MCPToolDetails>["loadMode"] {
+	return alwaysLoad === undefined ? undefined : alwaysLoad ? "essential" : "discoverable";
+}
+
 /**
  * CustomTool wrapping an MCP tool with an active connection.
  */
@@ -775,7 +779,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	readonly label: string;
 	readonly description: string;
 	readonly parameters: TSchema;
-	readonly loadMode: "essential" | "discoverable" | undefined;
+	readonly loadMode: CustomTool<TSchema, MCPToolDetails>["loadMode"];
 	/** Original MCP tool name (before normalization) */
 	readonly mcpToolName: string;
 	/** Server name */
@@ -815,12 +819,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		this.label = `${connection.name}/${tool.name}`;
 		this.description = tool.description ?? `MCP tool from ${connection.name}`;
 		this.parameters = normalizeSchemaForMCP(tool.inputSchema) as TSchema;
-		this.loadMode =
-			connection.config.alwaysLoad === undefined
-				? undefined
-				: connection.config.alwaysLoad
-					? "essential"
-					: "discoverable";
+		this.loadMode = mcpToolLoadMode(connection.config.alwaysLoad);
 		this.mcpToolName = tool.name;
 		this.mcpServerName = connection.name;
 		this.mcpReadOnlyHint = tool.annotations?.readOnlyHint;
@@ -942,6 +941,7 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	readonly label: string;
 	readonly description: string;
 	readonly parameters: TSchema;
+	readonly loadMode: CustomTool<TSchema, MCPToolDetails>["loadMode"];
 	/** Original MCP tool name (before normalization) */
 	readonly mcpToolName: string;
 	/** Server name */
@@ -966,8 +966,11 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		source?: SourceMeta,
 		reconnect?: MCPReconnect,
 		observeCall?: MCPToolCallObserver,
+		alwaysLoad?: boolean,
 	): DeferredMCPTool[] {
-		return tools.map(tool => new DeferredMCPTool(serverName, tool, getConnection, source, reconnect, observeCall));
+		return tools.map(
+			tool => new DeferredMCPTool(serverName, tool, getConnection, source, reconnect, observeCall, alwaysLoad),
+		);
 	}
 
 	constructor(
@@ -977,12 +980,14 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		source?: SourceMeta,
 		private readonly reconnect?: MCPReconnect,
 		private readonly observeCall?: MCPToolCallObserver,
+		alwaysLoad?: boolean,
 	) {
 		this.name = createMCPToolName(serverName, tool.name);
 		this.legacyName = createLegacyMCPToolName(serverName, tool.name);
 		this.label = `${serverName}/${tool.name}`;
 		this.description = tool.description ?? `MCP tool from ${serverName}`;
 		this.parameters = normalizeSchemaForMCP(tool.inputSchema) as TSchema;
+		this.loadMode = mcpToolLoadMode(alwaysLoad);
 		this.mcpToolName = tool.name;
 		this.mcpServerName = serverName;
 		this.mcpReadOnlyHint = tool.annotations?.readOnlyHint;

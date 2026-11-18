@@ -25,7 +25,18 @@ const bun = process.execPath;
 const HANG = [bun, "-e", "await Bun.sleep(60_000)"];
 const IGNORE_TERM = [bun, "-e", 'process.on("SIGTERM", () => {}); await Bun.sleep(60_000)'];
 const baseEnv = (): Record<string, string | undefined> => ({ ...process.env });
-const hostPython = piUtils.$which("python") ?? piUtils.$which("python3");
+const hostPython = [...new Set([...piUtils.$whichAll("python"), ...piUtils.$whichAll("python3")])].find(python => {
+	try {
+		return (
+			Bun.spawnSync([python, "-c", "import sys; sys.exit(0)"], {
+				stdio: ["ignore", "ignore", "ignore"],
+				timeout: 5_000,
+			}).exitCode === 0
+		);
+	} catch {
+		return false;
+	}
+});
 
 describe("runBoundedProbe", () => {
 	test("a hung probe is bounded by its timeout instead of hanging (regression: #9466)", async () => {
@@ -186,7 +197,6 @@ describe("P2-21 Python Eval runtime scope", () => {
 		vi.spyOn(Settings, "init").mockResolvedValue(settings);
 		vi.spyOn(settings, "getShellConfig").mockReturnValue({ ...shellConfig, env });
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(path.join(cwd, "missing-managed"));
-		vi.spyOn(piUtils, "$which").mockReturnValue(systemPython);
 		vi.spyOn(piUtils, "$whichAll").mockReturnValue([systemPython]);
 		vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
 			[offlinePython, activePython].includes(String(candidate)),
@@ -348,13 +358,11 @@ describe("P2-21 Python Eval runtime scope", () => {
 			process.env.OMP_OFFLINE = " TrUe ";
 			const modernPython = path.join(cwd, "python3.11");
 			vi.spyOn(fs, "existsSync").mockImplementation(candidate => String(candidate) === activePython);
-			vi.spyOn(piUtils, "$which").mockImplementation(command =>
-				command === "python3.11"
-					? modernPython
-					: command === "python" || command === "python3"
-						? systemPython
-						: null,
-			);
+			vi.spyOn(piUtils, "$whichAll").mockImplementation(command => {
+				if (command === "python3.11") return [modernPython];
+				if (command === "python" || command === "python3") return [systemPython];
+				return [];
+			});
 			const probe = runtimeProbe.probeCandidates;
 			vi.spyOn(runtimeProbe, "probeCandidates").mockImplementation((candidates, options) =>
 				probe(

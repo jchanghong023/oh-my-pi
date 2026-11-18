@@ -4554,14 +4554,16 @@ fn await_(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, line: u32) ->
 				Some(ExitStatus::Signaled(sig)) => {
 					reaped = true;
 					if replacing && let Some(run) = run {
-						k.exec_signals.insert(run, i32::from(sig.number(platform)));
+						k.run_signals
+							.insert(run, super::RunSignal::External(i32::from(sig.number(platform))));
 					}
 					sig.exit_status(platform)
 				},
 				Some(ExitStatus::SignaledRaw(signal)) => {
 					reaped = true;
 					if replacing && let Some(run) = run {
-						k.exec_signals.insert(run, signal);
+						k.run_signals
+							.insert(run, super::RunSignal::External(signal));
 					}
 					128 + signal
 				},

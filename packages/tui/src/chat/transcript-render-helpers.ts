@@ -9,6 +9,7 @@ import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type Component } from "../tui";
 import { formatBytes, formatCount, formatDuration } from "@oh-my-pi/pi-utils";
 import { span } from "../native/describe";
+import { plainLine } from "../native/spans";
 import type { StructuredSubagentOutput } from "../tools/task";
 import type { DaemonSnapshot } from "../tools/daemon";
 import {
@@ -39,23 +40,67 @@ import { CustomMessageComponent } from "./custom-message";
 import type { MessageRenderer } from "./extension-types";
 import { type TranscriptBlock } from "../chrome/transcript-container";
 import { TranscriptStatusBlock, type TranscriptStatusRow } from "../chrome/transcript-status";
+import { ToolExecutionComponent } from "./tool-execution";
 import { theme } from "../theme";
 
 type CustomOrHookMessage = Extract<AgentMessage, { role: "custom" | "hookMessage" }>;
 type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 
-/** Render diagnostics from upstream completion receipts without repeating their status. */
-export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivityContainer {
+/** Render a receipt's terminal status only when no original card already presents it. */
+export function buildAsyncResultBlock(
+	message: CustomOrHookMessage,
+	transcript: readonly Component[] = [],
+): ToolActivityContainer {
 	type JobDetails = {
 		jobId?: string;
+		type?: string;
+		status?: string;
+		label?: string;
+		name?: string;
+		durationMs?: number;
 		meta?: OutputMeta;
 		schema?: StructuredSubagentOutput;
 	};
 	const details = (message as CustomMessage<JobDetails & { jobs?: JobDetails[] }>).details;
 	const jobs = details?.jobs && details.jobs.length > 0 ? details.jobs : [details ?? {}];
 	const rows: TranscriptStatusRow[] = [];
+	let represented: Set<string> | undefined;
 	for (const job of jobs) {
 		const jobId = job.jobId ?? "unknown";
+		const status = job.status ?? (job.jobId ? "finished" : undefined);
+		if (status === "completed" || status === "failed" || status === "cancelled" || status === "finished") {
+			const isRepresented =
+				job.type && job.jobId && status !== "finished"
+					? (represented ??= settledBackgroundJobs(transcript)).has(`${job.type}:${job.jobId}:${status}`)
+					: false;
+			if (!isRepresented) {
+				const title = `Background job ${status}`;
+				const tone =
+					status === "completed"
+						? "success"
+						: status === "failed"
+							? "error"
+							: status === "cancelled"
+								? "warning"
+								: "info";
+				const identity = plainLine(jobId);
+				const name = plainLine(job.name ?? job.label ?? "");
+				const label = name !== identity ? name : undefined;
+				const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
+				rows.push({
+					parts: [
+						{ text: `${theme.status[tone]} ${title}`, color: tone === "info" ? "dim" : tone },
+						{ text: identity, color: "accent" },
+						label ? { text: label, color: "dim" } : undefined,
+						duration ? { text: `(${duration})`, color: "dim" } : undefined,
+					],
+					native: {
+						tone,
+						message: [span(title), span(" "), span(identity, "mono"), ...facts([label, duration])],
+					},
+				});
+			}
+		}
 		if (job.meta?.artifactError) rows.push(artifactErrorRow(job.meta.artifactError));
 		if (job.schema && (job.schema.status !== "valid" || job.schema.error)) {
 			const notice = `${jobId}: Structured output ${job.schema.status}${job.schema.error ? `: ${job.schema.error}` : ""}`;
@@ -73,6 +118,17 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 	return new ToolActivityContainer(block ?? []);
 }
 
+/** Terminal outcomes confirmed by the original cards, keyed by job type, id, and state. */
+export function settledBackgroundJobs(transcript: readonly Component[]): Set<string> {
+	const jobs = new Set<string>();
+	for (const component of transcript) {
+		if (!(component instanceof ToolExecutionComponent)) continue;
+		const job = component.settledBackgroundJob();
+		if (job) jobs.add(`${job.type}:${job.id}:${job.state}`);
+	}
+	return jobs;
+}
+
 /**
  * The `async-result` card for both transcript surfaces: a registered renderer owns it (#14131);
  * the built-in block covers no renderer, a declining renderer, and a throwing one.
@@ -80,8 +136,9 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 export function buildAsyncResultComponent(
 	message: CustomOrHookMessage,
 	renderer: MessageRenderer | undefined,
+	transcript?: readonly Component[],
 ): ToolActivityContainer {
-	const block = buildAsyncResultBlock(message);
+	const block = buildAsyncResultBlock(message, transcript);
 	if (!renderer) return block;
 	const card = new CustomMessageComponent(message as CustomMessage<unknown>, (delegate, options, rendererTheme) => {
 		try {

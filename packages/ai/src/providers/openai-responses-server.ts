@@ -765,7 +765,7 @@ function reasoningItemId(part: ThinkingContent): string {
  * the wire: third-party clients validate the `call_id` charset
  * (`^[a-zA-Z0-9_-]+$`) or echo it to other backends, and `|` fails both.
  */
-function wireCallId(id: string): string {
+export function wireCallId(id: string): string {
 	const sep = id.indexOf("|");
 	return sep >= 0 ? id.slice(0, sep) : id;
 }

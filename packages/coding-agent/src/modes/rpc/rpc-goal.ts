@@ -58,6 +58,8 @@ export class RpcGoalController {
 	#goalToolAddedByMode = false;
 	/** Invalidates release callbacks when an interview ends or another one starts. */
 	#interviewGeneration = 0;
+	/** A newly created idle goal may start its first turn even with blocked session todos. */
+	#initialContinuationGoalId: string | undefined;
 	/** Continuation turns submitted whose run has not reached its `agent_end`. */
 	#pendingContinuationTurns = 0;
 	#previousContinuationActivity: string | undefined;
@@ -261,6 +263,19 @@ export class RpcGoalController {
 		}
 	}
 
+	/** Admit the objective as the initial user prompt rather than scheduling a hidden first turn. */
+	async setSlashGoal(objective: string, autoOrchestrate: boolean, replace: boolean): Promise<GoalModeState> {
+		await this.settled();
+		this.#assertCanEnter();
+		const current = this.#session.getGoalModeState();
+		if (current?.goal.status === "paused") throw new Error("Resume or drop the current goal first.");
+		if (current?.enabled) {
+			if (!replace) throw new Error("A goal already exists. Use /goal set to replace it.");
+			return this.#enter(() => this.#session.goalRuntime.replaceGoal({ objective, autoOrchestrate }), "slash");
+		}
+		return this.#enter(() => this.#session.goalRuntime.createGoal({ objective, autoOrchestrate }), "slash");
+	}
+
 	#assertCanEnter(): void {
 		if (!cfgGoalEnabled.get(this.#session.settings)) {
 			throw new Error("Goal mode is disabled (goal.enabled).");
@@ -283,7 +298,7 @@ export class RpcGoalController {
 		if (current?.goal.status === "paused") {
 			throw new Error("Resume or drop the paused goal before creating another.");
 		}
-		await this.#enter(() => this.#session.goalRuntime.createGoal({ objective, tokenBudget }));
+		await this.#enter(() => this.#session.goalRuntime.createGoal({ objective, tokenBudget }), "rpc");
 		return this.#state;
 	}
 
@@ -296,7 +311,12 @@ export class RpcGoalController {
 		return this.#state;
 	}
 
-	async #enter(start: () => Promise<GoalModeState>): Promise<void> {
+	async #enter(start: () => Promise<GoalModeState>, creation?: "rpc" | "slash"): Promise<GoalModeState> {
+		if (creation === "slash") {
+			this.#continuationScheduled = false;
+			this.#continuationGeneration++;
+			this.#initialContinuationGoalId = undefined;
+		}
 		// Only a `goal` the controller added belongs to goal mode. A `goal` the host
 		// enabled beforehand stays enabled when the goal ends.
 		const enabledTools = this.#session.getEnabledToolNames();
@@ -305,11 +325,14 @@ export class RpcGoalController {
 		await this.#session.setActiveToolsByName([...new Set([...enabledTools, "goal"])]);
 		this.#session.setGoalModeState(state);
 		this.#resetContinuation();
-		if (this.#session.isStreaming) {
+		const streaming = this.#session.isStreaming;
+		this.#initialContinuationGoalId = creation === "rpc" && !streaming ? state.goal.id : undefined;
+		if (streaming) {
 			await this.#session.sendGoalModeContext({ deliverAs: "steer" });
-			return;
+		} else if (creation !== "slash") {
+			this.#scheduleContinuation();
 		}
-		this.#scheduleContinuation();
+		return state;
 	}
 
 	/** Undo only goal mode's own tool change, preserving the live roster. Idempotent. */
@@ -317,6 +340,7 @@ export class RpcGoalController {
 		this.#interviewGeneration++;
 		const ownedGoalTool = this.#goalToolAddedByMode;
 		this.#goalToolAddedByMode = false;
+		this.#initialContinuationGoalId = undefined;
 		this.#resetContinuation();
 		if (ownedGoalTool) {
 			const liveTools = this.#session.getEnabledToolNames();
@@ -414,6 +438,8 @@ export class RpcGoalController {
 			return;
 		}
 		if (event.type !== "agent_end") return;
+		// A host or background turn may have run with the new goal before its hidden turn.
+		this.#initialContinuationGoalId = undefined;
 		if (this.#pendingContinuationTurns > 0) {
 			this.#pendingContinuationTurns--;
 			const activity = goalContinuationActivity(event.messages);
@@ -447,6 +473,7 @@ export class RpcGoalController {
 		if (session.getPlanModeState()?.enabled) return false;
 		const state = session.getGoalModeState();
 		if (!state?.enabled || state.goal.status !== "active") return false;
+		if (state.goal.id === this.#initialContinuationGoalId) return true;
 		const phases = session.getTodoPhases();
 		return !(
 			!nextActionableTask(phases) && phases.some(phase => phase.tasks.some(task => task.status === "blocked"))
@@ -489,6 +516,7 @@ export class RpcGoalController {
 				this.#onContinuationDropped?.();
 				return;
 			}
+			this.#initialContinuationGoalId = undefined;
 			this.#pendingContinuationTurns++;
 			const unclaim = () => {
 				this.#pendingContinuationTurns = Math.max(0, this.#pendingContinuationTurns - 1);

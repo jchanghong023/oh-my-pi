@@ -45,7 +45,7 @@ import {
 	type Usage,
 } from "@oh-my-pi/pi-utils/acp";
 import { disableProvider, enableProvider } from "../../capability";
-import { Settings } from "../../config/settings";
+import { Settings, withActiveSettings } from "../../config/settings";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionUIContext,
@@ -68,6 +68,12 @@ import { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-obser
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { normalizePlanTitle, type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import { autosaveApprovedPlan } from "../../plan-mode/plan-autosave";
+import {
+	type ApprovedPlanChecks,
+	planVerificationChecks,
+	recordApprovedPlanReference,
+	verificationApprovalDetails,
+} from "../../plan-mode/verification";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { BlobStore, resolveImageDataSync } from "../../session/blob-store";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -76,7 +82,7 @@ import type { SessionInfo as StoredSessionInfo } from "../../session/session-lis
 import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
-import { DEFAULT_STT_MODEL_KEY, STT_MODELS } from "../../stt/models";
+import { getDefaultLocalSttModel, STT_MODELS } from "../../stt/models";
 import { refreshAgentDiscovery } from "../../task";
 import { sumSubagentTreeCost } from "../agent-hub-runtime";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
@@ -486,7 +492,7 @@ type AcpSpeechTtsModelOption = AcpSpeechOption & {
 function buildAcpSpeechModelsCatalog(): Record<string, unknown> {
 	const localSelector = (modelId: string) => `local/${modelId}`;
 	const defaultSpeechModel = localSelector(TTS_LOCAL_MODELS[0].key);
-	const defaultDictationModel = localSelector(DEFAULT_STT_MODEL_KEY);
+	const defaultDictationModel = localSelector(getDefaultLocalSttModel().key);
 	const voices = TTS_LOCAL_VOICE_OPTIONS.map(({ value, label }) => ({ value, label }));
 	// Speed settings are numeric, so presets are advertised as numbers clients can write back as-is.
 	const speeds = TTS_SPEED_OPTIONS.map(({ value, label }) => ({ value: Number(value), label }));
@@ -1423,7 +1429,7 @@ export class AcpAgent implements Agent {
 				this.#clientCapabilities?.elicitation?.form != null
 					? createAcpExtensionUiContext(this.#connection, () => record.protocolSessionId, this.#clientCapabilities)
 					: undefined,
-			output: output => this.#emitCommandOutput(record, output),
+			output: (output, level) => this.#emitCommandOutput(record, output, level),
 			refreshCommands: () => this.#emitAvailableCommandsUpdate(record),
 			reloadPlugins: () => this.#reloadPluginState(record),
 			// `/mcp reauth` writes config-file credentials: reconnect the live
@@ -1713,16 +1719,18 @@ export class AcpAgent implements Agent {
 				const cwd = session?.sessionManager.getCwd() ?? requestedCwd;
 				const sm = session?.settings ?? (cwd ? await Settings.loadReadOnly({ cwd }) : await Settings.init());
 				const disabledIds = cfgDisabledExtensions.get(sm);
-				const extensions = await loadAllExtensions(
-					cwd,
-					disabledIds,
-					session?.effectiveExtensionRoots ?? {
-						explicit: [],
-						mode: "merge",
-						configured: cfgExtensions.get(sm),
-						configuredLevel: sm.extensionsSourceLevel(),
-					},
-					cfgSkills.get(sm),
+				const extensions = await withActiveSettings(sm, () =>
+					loadAllExtensions(
+						cwd,
+						disabledIds,
+						session?.effectiveExtensionRoots ?? {
+							explicit: [],
+							mode: "merge",
+							configured: cfgExtensions.get(sm),
+							configuredLevel: sm.extensionsSourceLevel(),
+						},
+						cfgSkills.get(sm),
+					),
 				);
 				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
 			}
@@ -2380,7 +2388,11 @@ export class AcpAgent implements Agent {
 		}
 	}
 
-	async #emitCommandOutput(record: ManagedSessionRecord, text: string): Promise<void> {
+	async #emitCommandOutput(
+		record: ManagedSessionRecord,
+		text: string,
+		level?: "info" | "warning" | "error",
+	): Promise<void> {
 		if (!text) {
 			return;
 		}
@@ -2390,6 +2402,7 @@ export class AcpAgent implements Agent {
 				sessionUpdate: "agent_message_chunk",
 				content: { type: "text", text },
 				messageId: crypto.randomUUID(),
+				...(level ? { _meta: { level } } : {}),
 			},
 		});
 	}
@@ -2621,7 +2634,14 @@ export class AcpAgent implements Agent {
 			readPlan: url => this.#readAcpPlanFile(session, url),
 			listPlanFiles: () => this.#listAcpLocalPlanFiles(session),
 		});
-		const approved = await this.#requestAcpPlanApprovalChoice(record.protocolSessionId, resolvedTitle, planContent);
+		const checks =
+			this.#clientCapabilities?.elicitation?.form != null ? planVerificationChecks(planContent) : undefined;
+		const approved = await this.#requestAcpPlanApprovalChoice(
+			record.protocolSessionId,
+			resolvedTitle,
+			planContent,
+			checks,
+		);
 		const details: PlanApprovalDetails = {
 			planFilePath,
 			title: resolvedTitle,
@@ -2647,10 +2667,9 @@ export class AcpAgent implements Agent {
 		}
 		// Approved. Set the plan reference so the next turn injects the plan
 		// content as context (the file keeps its agent-chosen name — no rename),
-		session.setPlanReferencePath(planFilePath);
+		recordApprovedPlanReference(session, planFilePath, checks);
 		session.setPlanProposalHandler?.(null);
 		session.setPlanModeState(undefined);
-		session.sessionManager.appendModeChange("none", { approvedPlanFilePath: planFilePath });
 		let autosaveFailed = false;
 		try {
 			await autosaveApprovedPlan({
@@ -2742,7 +2761,12 @@ export class AcpAgent implements Agent {
 	 * confirmation surface available; without that, plan mode would strand
 	 * the agent (the bug this method exists to fix).
 	 */
-	async #requestAcpPlanApprovalChoice(sessionId: string, title: string, planContent: string): Promise<boolean> {
+	async #requestAcpPlanApprovalChoice(
+		sessionId: string,
+		title: string,
+		planContent: string,
+		checks: ApprovedPlanChecks | undefined,
+	): Promise<boolean> {
 		const supportsForm = this.#clientCapabilities?.elicitation?.form != null;
 		if (!supportsForm) return true;
 		// Include a short preview of the plan so the user has context in the
@@ -2750,7 +2774,7 @@ export class AcpAgent implements Agent {
 		// inline and a multi-thousand-line plan blows out the dialog.
 		const previewLines = planContent.split("\n").slice(0, 12).join("\n");
 		const ellipsis = planContent.split("\n").length > 12 ? "\n…" : "";
-		const message = `Approve plan "${title}" and start implementation?\n\n${previewLines}${ellipsis}`;
+		const message = `Approve plan "${title}" and start implementation?\n\n${previewLines}${ellipsis}${verificationApprovalDetails(checks)}`;
 		const value = await elicitFromAcpClient(
 			this.#connection,
 			sessionId,

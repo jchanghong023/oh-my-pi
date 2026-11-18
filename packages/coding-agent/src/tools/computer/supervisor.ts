@@ -775,7 +775,10 @@ export async function releaseComputerSessionsForOwner(
 	if (!ownerId) return;
 	if (options?.strict) {
 		const controllers = ownedSupervisors.get(ownerId);
-		if (!controllers) return;
+		if (!controllers) {
+			ownerTurns.delete(ownerId);
+			return;
+		}
 		const results = await Promise.allSettled(
 			Array.from(controllers, async controller => {
 				await controller.close({ strict: true });

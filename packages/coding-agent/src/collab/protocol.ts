@@ -246,11 +246,7 @@ export function formatCollabLink(
 	return `${compact}/r/${roomId}.${keyText}`;
 }
 
-function normalizeCollabWebBaseUrl(
-	relayUrl: string,
-	webUrl?: string,
-	allowedIntranetRelayOrigin?: string,
-): string {
+function normalizeCollabWebBaseUrl(relayUrl: string, webUrl?: string, allowedIntranetRelayOrigin?: string): string {
 	const explicitWebUrl = webUrl?.trim();
 	if (!explicitWebUrl) {
 		const normalized = normalizeRelayOrigin(relayUrl, allowedIntranetRelayOrigin);
@@ -296,7 +292,10 @@ export function formatCollabWebLink(
 	return `${base}/#${formatCollabLink(relayUrl, roomId, key, writeToken, allowedIntranetRelayOrigin)}`;
 }
 
-export function parseCollabLink(link: string, allowedIntranetRelayOrigin?: string): ParsedCollabLink | { error: string } {
+export function parseCollabLink(
+	link: string,
+	allowedIntranetRelayOrigin?: string,
+): ParsedCollabLink | { error: string } {
 	// Lenient input: terminals that open OSC 8 links through strict URL stacks
 	// (macOS Foundation) percent-encode the legacy second `#` to `%23`.
 	let text = link.trim().replace(/%23/gi, "#");

@@ -9,6 +9,7 @@ import {
 	extractHttpStatusFromError,
 	fetchWithRetry,
 	getFastembedCacheDir,
+	isRetryableStatus,
 	logger,
 	withLoopPhase,
 } from "@oh-my-pi/pi-utils";
@@ -563,9 +564,11 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 									if (allowRemote?.(baseUrl) === false)
 										throw new Error("Remote embedding provider is not allowed");
 									const response = await fetch(input, requestInit);
-									if (!retryTimeouts || !response.ok || response.status === 204 || response.status === 205)
+									const { status } = response;
+									const readsRetryHint = fixedDelayMs === undefined && isRetryableStatus(status);
+									if (!retryTimeouts || (!response.ok && !readsRetryHint) || status === 204 || status === 205)
 										return response;
-									// Keep complete-body timeout retries inside the shared retry boundary.
+									// Read both successful bodies and retry hints under the attempt's deadline.
 									return new Response(await response.arrayBuffer(), {
 										status: response.status,
 										statusText: response.statusText,

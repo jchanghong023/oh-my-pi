@@ -1624,6 +1624,11 @@ impl ExtProc for UnixProc {
 		self.pid as u32
 	}
 
+	#[cfg(target_os = "linux")]
+	fn process(&self) -> Option<crate::proctree::Process> {
+		Some(crate::proctree::Process::from_child(self.pid, &self.tracker))
+	}
+
 	fn poll_wait(&mut self, cx: &mut Context<'_>) -> Poll<ExitStatus> {
 		#[cfg(target_os = "linux")]
 		if self.pidfd.is_some() && !(self.awaited && self.exited_now()) {

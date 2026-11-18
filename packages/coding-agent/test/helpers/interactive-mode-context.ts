@@ -235,8 +235,6 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 			markActivityStart: vi.fn(),
 			markActivityEnd: vi.fn(),
 			getTurnElapsedMs: vi.fn(() => null),
-			getLastActivityEndAt: vi.fn(() => null),
-			getTurnStartedAt: vi.fn(() => null),
 			setSession: vi.fn(),
 		},
 		session,
@@ -251,6 +249,7 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 		isInitialized: true,
 		initialChatRendered: true,
 		toolOutputExpanded: false,
+		compactDiffExpanded: false,
 		hideToolActivity: false,
 		hideThinkingBlock: false,
 		get effectiveHideThinkingBlock() {

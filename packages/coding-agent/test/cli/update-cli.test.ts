@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,32 +14,16 @@ import { cfgUpdateChannel } from "../../src/modes/settings";
 import { fixedNpmRegistry } from "../../src/cli/npm-registry";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { updateRepositoryTests } from "../helpers/update-repository-test";
 
-const upstreamChild = Bun.env.OMP_TEST_UPSTREAM_UPDATE_CHILD === "1";
-
-if (!upstreamChild) {
-	it("exercises upstream updater behavior in an isolated process", async () => {
-		const runner = path.resolve(import.meta.dir, "../../../../scripts/test-report-bun.ts");
-		const child = Bun.spawn([process.execPath, runner, import.meta.path], {
-			env: { ...process.env, PI_UPDATE_REPOSITORY: "", OMP_TEST_UPSTREAM_UPDATE_CHILD: "1" },
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const [stdout, stderr, exitCode] = await Promise.all([
-			new Response(child.stdout).text(),
-			new Response(child.stderr).text(),
-			child.exited,
-		]);
-		if (exitCode !== 0) throw new Error(`Upstream updater tests failed:\n${stdout}\n${stderr}`);
-	});
-}
+const { inChild, it } = updateRepositoryTests(import.meta.path, "");
 
 const npmjs = fixedNpmRegistry();
 
 type FetchInput = string | URL | Request;
 type FetchInit = RequestInit | BunFetchRequestInit;
 
-if (upstreamChild) {
+function registerUpstreamTests(): void {
 	describe("runUpdateCommand version source", () => {
 		const dirs: string[] = [];
 		let settingsState: SettingsTestState | undefined;
@@ -48,20 +32,22 @@ if (upstreamChild) {
 		// project and agent dirs; point both at a scratch dir so the host's config
 		// is never read, and drop the singleton afterwards so later files get a
 		// fresh `Settings.init()`.
-		beforeEach(async () => {
-			settingsState = beginSettingsTest();
-			const scratch = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-update-settings-")));
-			dirs.push(scratch);
-			setProjectDir(scratch);
-			setAgentDir(path.join(scratch, "agent"));
-		});
+		if (inChild) {
+			beforeEach(async () => {
+				settingsState = beginSettingsTest();
+				const scratch = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-update-settings-")));
+				dirs.push(scratch);
+				setProjectDir(scratch);
+				setAgentDir(path.join(scratch, "agent"));
+			});
 
-		afterEach(async () => {
-			AgentStorage.close();
-			restoreSettingsTestState(settingsState);
-			settingsState = undefined;
-			await Promise.all(dirs.splice(0).map(dir => removeWithRetries(dir)));
-		});
+			afterEach(async () => {
+				AgentStorage.close();
+				restoreSettingsTestState(settingsState);
+				settingsState = undefined;
+				await Promise.all(dirs.splice(0).map(dir => removeWithRetries(dir)));
+			});
+		}
 
 		/**
 		 * Make PATH a fresh directory holding only what the test puts there, so no
@@ -239,9 +225,7 @@ if (upstreamChild) {
 	});
 
 	describe("getLatestGitHubRelease", () => {
-		afterEach(() => {
-			vi.restoreAllMocks();
-		});
+		if (inChild) afterEach(vi.restoreAllMocks);
 
 		it("maps the fork's latest GitHub release to a binary-only update", async () => {
 			let requestedUrl = "";
@@ -309,9 +293,7 @@ if (upstreamChild) {
 	});
 
 	describe("getLatestRelease rename pointers", () => {
-		afterEach(() => {
-			vi.restoreAllMocks();
-		});
+		if (inChild) afterEach(vi.restoreAllMocks);
 
 		function stubRegistry(manifests: Record<string, unknown>): string[] {
 			const urls: string[] = [];
@@ -382,9 +364,7 @@ if (upstreamChild) {
 	});
 
 	describe("getLatestRelease configured registry", () => {
-		afterEach(() => {
-			vi.restoreAllMocks();
-		});
+		if (inChild) afterEach(vi.restoreAllMocks);
 
 		const feed = () => ({
 			url: "https://npm.corp.example/api/npm/feed/",
@@ -578,9 +558,7 @@ if (upstreamChild) {
 	});
 
 	describe("getLatestRelease proxy errors", () => {
-		afterEach(() => {
-			vi.restoreAllMocks();
-		});
+		if (inChild) afterEach(vi.restoreAllMocks);
 
 		it("translates Bun's UnsupportedProxyProtocol fetch failure into an actionable CLI message", async () => {
 			const fetchStub = Object.assign(
@@ -609,3 +587,5 @@ if (upstreamChild) {
 		});
 	});
 }
+
+registerUpstreamTests();

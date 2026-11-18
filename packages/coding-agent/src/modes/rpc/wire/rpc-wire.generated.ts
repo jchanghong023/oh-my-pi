@@ -905,6 +905,8 @@ export interface ToolExecutionEndEvent {
 	toolName: string;
 	result?: unknown;
 	isError?: boolean;
+	/** The tool execution was cancelled. */
+	cancelled?: boolean;
 }
 
 export interface AutoCompactionStartEvent {
@@ -927,6 +929,8 @@ export interface AutoCompactionEndEvent {
 /** A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted. */
 export interface ManualCompactionStartEvent {
 	type: "manual_compaction_start";
+	/** Identifies this operation and its matching `manual_compaction_end`. */
+	operationId: string;
 	/** The `/compact <mode>` subcommand, when one was given. */
 	mode?: string;
 }
@@ -934,6 +938,8 @@ export interface ManualCompactionStartEvent {
 /** Outcome of the compaction announced by the matching `manual_compaction_start`. */
 export interface ManualCompactionEndEvent {
 	type: "manual_compaction_end";
+	/** The ID from the matching `manual_compaction_start`. */
+	operationId: string;
 	/** The compaction was cancelled (abort, or a `session_before_compact` hook). */
 	aborted: boolean;
 	/** Present when the compaction committed. */

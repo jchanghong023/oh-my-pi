@@ -168,8 +168,8 @@ export class STTController {
 		);
 	}
 
-	#resolveModelKey(model = this.#resolveCandidate()?.model): SttModelKey {
-		return resolveSttModelSpec(model?.id).key;
+	#resolveModelKey(model: Model<Api> | undefined): SttModelKey {
+		return resolveSttModelSpec(model?.id, cfgSttLanguage.get(this.#settings)).key;
 	}
 
 	async #ensureDeps(options: SttCallbacks, modelKey: SttModelKey, signal: AbortSignal): Promise<SttModelKey | null> {

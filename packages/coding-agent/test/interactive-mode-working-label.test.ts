@@ -160,12 +160,14 @@ describe("InteractiveMode live working label", () => {
 					);
 				return visit(live.compactThinkingPreview.describe(nativeContext));
 			};
-			// A live thinking action animates even though the whole-turn marker has not started.
+			// New visible prose is its own activity signal, even without a whole-turn marker.
+			setSystemTime(8_000);
 			expect(live.statusLine.getTurnElapsedMs()).toBeNull();
-			expect(shimmering()).toBe(true);
+			expect(shimmering()).toBe(false);
 			expect(Bun.stripANSI(activity()[1]!)).toContain("正在思考");
 			expect(Bun.stripANSI(activity()[1]!)).toContain("WORKING_LIFETIME_THOUGHT");
 			setSystemTime(10_000);
+			expect(shimmering()).toBe(true);
 			const running = activity();
 			setSystemTime(10_500);
 			expect(activity().map(line => Bun.stripANSI(line))).toEqual(running.map(line => Bun.stripANSI(line)));

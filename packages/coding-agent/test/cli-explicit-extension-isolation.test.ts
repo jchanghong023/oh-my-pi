@@ -46,7 +46,8 @@ test.each(["-e", "--extension", "--hook", "--trusted-extension"])(
 		const options = await buildSessionOptions(parsed, [], SessionManager.inMemory(cwd), modelRegistry, settings);
 		const extensions = await loadSessionExtensions(options, cwd, settings, new EventBus());
 		expect(extensions.errors).toEqual([]);
-		expect(extensions.extensions.map(extension => extension.resolvedPath)).toEqual([extensionPath]);
+		const expectedPath = flag === "--trusted-extension" ? realpathSync.native(extensionPath) : extensionPath;
+		expect(extensions.extensions.map(extension => extension.resolvedPath)).toEqual([expectedPath]);
 		const { session, lspServers } = await createAgentSession({
 			...options,
 			cwd,

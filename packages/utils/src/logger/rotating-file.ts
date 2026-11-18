@@ -2,7 +2,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { localDay } from "../dirs";
+import { localDay, prepareLogDirectory } from "../dirs";
 import { isEexist } from "../fs-error";
 
 /** Write batching for {@link RotatingFileSink}. */
@@ -97,12 +97,13 @@ export class RotatingFileSink {
 
 	#openFd(filePath: string): void {
 		this.#closeFd();
-		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		const requirePrivate = prepareLogDirectory(path.dirname(filePath));
 		for (;;) {
 			try {
 				this.#fd = fs.openSync(
 					filePath,
 					fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_APPEND,
+					requirePrivate ? 0o600 : undefined,
 				);
 				break;
 			} catch (error) {

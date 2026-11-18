@@ -58,12 +58,10 @@ import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession, findRecentSessionContinuation } from "../../session/session-listing";
 import { probeSessionLeases } from "../../session/session-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
-import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
-import { workspaceCommand } from "../../slash-commands/builtin-modes";
+import { executeRpcBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
-import { parseSlashCommand } from "../../slash-commands/helpers/parse";
-import type { SlashCommandRuntime } from "../../slash-commands/types";
+import type { RpcSlashCommandRuntime } from "../../slash-commands/types";
 import { cfgSttEnabled } from "../../stt/settings";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import type { EventBus } from "../../utils/event-bus";
@@ -95,6 +93,7 @@ import {
 import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { isSessionSettled } from "../../session/session-settle";
 import { RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-session-settle";
+import { createRpcSlashModes } from "./rpc-slash-modes";
 import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
 import type {
 	RpcAbortAndRestoreQueueResult,
@@ -1507,10 +1506,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	let sessionChangesInProgress = 0;
 	const withSessionChange = async <T>(change: () => Promise<T>): Promise<T> => {
 		sessionChangesInProgress++;
+		slashModes.beforeSessionChange();
 		try {
 			return await change();
 		} finally {
 			sessionChangesInProgress--;
+			slashModes.sessionChanged();
 		}
 	};
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
@@ -1726,6 +1727,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// A single shared instance routes all responses received on stdin to the
 	// correct waiting promise regardless of which code path created the request.
 	const rpcUiContext = new RpcExtensionUIContext(pendingExtensionRequests, output);
+	const outputCommand: RpcSlashCommandRuntime["output"] = (text, level) => {
+		if (level) output({ type: "notice", level, message: text, source: "slash-command" });
+		else output({ type: "command_output", text });
+	};
+	const slashModes = createRpcSlashModes(session, goalController, rpcUiContext, outputCommand);
 	setToolUIContext?.(rpcUiContext, true);
 	const setAskDialog = (command: RpcCommand & { type: "set_ask_dialog" }): RpcResponse => {
 		rpcUiContext.askDialogEnabled = command.enabled === true;
@@ -1809,6 +1815,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		// Before the prompt-result and settle reports: a goal continuation decided at this
 		// agent_end is scheduled (and reported as pending) before either reads settlement.
 		goalController.observe(event);
+		slashModes.observe(event);
 		promptResults.observe(event);
 		settleWatcher.observe(event);
 	});
@@ -1844,6 +1851,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			// Close the realtime call (microphone, socket) before the session it delegates into.
 			dictationBridge.dispose();
 			await liveBridge.stop();
+			slashModes.dispose();
 			await session.dispose();
 		} catch (error) {
 			if (!persistenceFailure || error !== persistenceFailure) throw error;
@@ -1877,15 +1885,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		process.exit(0);
 	};
 
-	const getAvailableCommands = async () => [
-		{
-			name: workspaceCommand.name,
-			description: workspaceCommand.description,
-			input: { hint: workspaceCommand.inlineHint },
-			source: "builtin" as const,
-		},
-		...(await buildAvailableSlashCommands(session)).filter(command => command.name !== workspaceCommand.name),
-	];
+	const getAvailableCommands = () => buildAvailableSlashCommands(session, undefined, { includeRpcBuiltins: true });
 	const reloadPluginState = async () => {
 		const cwd = session.sessionManager.getCwd();
 		const projectPath = await resolveActiveProjectRegistryPath(cwd);
@@ -1925,6 +1925,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 			if (!isCurrent()) return "cancelled";
 			if (!text.trim() && !images?.length) return "local";
+			let goalAutoOrchestrateInitialId: string | undefined;
 			if (command.type === "steer") {
 				await session.steer(text, images);
 				return "admitted";
@@ -1951,12 +1952,14 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				const builtinAbort = new AbortController();
 				builtinCommandAborts.add(builtinAbort);
 				let backgroundedBuiltin = false;
-				const builtinRuntime: SlashCommandRuntime = {
+				const builtinRuntime: RpcSlashCommandRuntime = {
 					session,
 					sessionManager: session.sessionManager,
 					settings: session.settings,
 					cwd: session.sessionManager.getCwd(),
-					output: commandOutput => output({ type: "command_output", text: commandOutput }),
+					ui: rpcUiContext,
+					output: outputCommand,
+					runModeCommand: (mode, args) => slashModes.run(mode, args, builtinAbort.signal),
 					refreshCommands: emitAvailableCommandsUpdate,
 					reloadPlugins: reloadPluginState,
 					mcpManager: options.mcpManager,
@@ -1984,12 +1987,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
 					},
 				};
-				const parsedBuiltin = parseSlashCommand(text);
-				const builtinResult =
-					parsedBuiltin?.name === workspaceCommand.name
-						? workspaceCommand.handleRpc(parsedBuiltin, builtinRuntime)
-						: await executeAcpBuiltinSlashCommand(text, builtinRuntime);
-				if (!backgroundedBuiltin) builtinCommandAborts.delete(builtinAbort);
+				const builtinResult = await executeRpcBuiltinSlashCommand(text, builtinRuntime).finally(() => {
+					if (!backgroundedBuiltin) builtinCommandAborts.delete(builtinAbort);
+				});
 				if (!isCurrent()) return "cancelled";
 				if (builtinResult !== false) {
 					if (!("prompt" in builtinResult)) {
@@ -2007,15 +2007,21 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						return "local";
 					}
 					text = builtinResult.prompt;
+					goalAutoOrchestrateInitialId = builtinResult.goalAutoOrchestrateInitialId;
 				}
 			}
 			if (!isCurrent() || !ticket) return "cancelled";
+			text = slashModes.transformPrompt(text);
 			await watchAndReportPromptResult({
 				ticket,
 				startPrompt: onPromptAdmitted =>
 					session.prompt(text, {
 						images,
-						...(command.type === "prompt" ? { streamingBehavior: command.streamingBehavior } : {}),
+						...(goalAutoOrchestrateInitialId !== undefined
+							? { goalAutoOrchestrateInitialId, streamingBehavior: "steer" as const }
+							: command.type === "prompt"
+								? { streamingBehavior: command.streamingBehavior }
+								: {}),
 						onPromptAdmitted,
 					}),
 				results: promptResults,
@@ -2031,6 +2037,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// and can persist credentials after the client asked to abort.
 	const builtinCommandAborts = new Set<AbortController>();
 	const abortBuiltinCommands = (reason: string): void => {
+		slashModes.interrupt();
 		for (const controller of builtinCommandAborts) controller.abort(reason);
 		builtinCommandAborts.clear();
 	};
@@ -2824,7 +2831,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						},
 					});
 					// Reconcile the authenticated provider without bypassing the intranet cache policy.
-					await session.modelRegistry.refreshProvider(knownProvider.storeCredentialsAs ?? knownProvider.id, "online");
+					await session.modelRegistry.refreshProvider(
+						knownProvider.storeCredentialsAs ?? knownProvider.id,
+						"online",
+					);
 					await session.refreshScopedModels();
 					return success(id, "login", { providerId: command.providerId });
 				} catch (err: unknown) {
@@ -2971,6 +2981,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 	// stdin closed — RPC client is gone. Fail pending side-channel requests
 	// first so active/queued commands can settle, then drain accepted work.
+	slashModes.dispose();
 	pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
 	hostToolBridge.close("RPC client disconnected before host tool execution completed");
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");

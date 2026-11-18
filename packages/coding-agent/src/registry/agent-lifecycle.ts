@@ -35,15 +35,15 @@ import {
 	MAIN_AGENT_ID,
 	type RegistryEvent,
 } from "./agent-registry";
-import { getAgentTombstonePath } from "./agent-tombstone";
+import { getAgentExecutionEndedPath, getAgentTombstonePath } from "./agent-tombstone";
 
 export type AgentReviver = (expected: AgentRef) => Promise<AgentSessionHandle>;
 
 const AGENT_RELEASE_GRACE_MS = 5000;
 
-async function persistAgentTombstone(sessionFile: string): Promise<void> {
+async function persistAgentMarker(markerPath: string): Promise<void> {
 	try {
-		await fs.writeFile(getAgentTombstonePath(sessionFile), "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+		await fs.writeFile(markerPath, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 	}
@@ -720,8 +720,8 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			// Apply the terminal transition synchronously, before any await. The
 			// dying session's own dispose path calls unregisterUnlessParked
 			// (sdk.ts), which spares a ref only when it is already `aborted` AND
-			// already detached; awaiting persistAgentTombstone before this
-			// transition left a window in which that unregister deleted the ref
+			// already detached; awaiting the marker write before this transition
+			// left a window in which that unregister deleted the ref
 			// (issue #10531). Persisting the sidecar afterward is safe: within the
 			// process the still-registered `aborted` row already blocks re-adoption
 			// via the `if (!registry.get(id))` discovery guard, and the sidecar
@@ -734,7 +734,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			}
 		}
 		try {
-			if (options?.tombstone && ref.sessionFile) await persistAgentTombstone(ref.sessionFile);
+			if (options?.tombstone && ref.sessionFile) await persistAgentMarker(getAgentTombstonePath(ref.sessionFile));
 		} finally {
 			// Detaching removes the registry's only route to the live session. Always
 			// dispose the captured session, even when tombstone persistence fails.
@@ -840,8 +840,11 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				if (failures.length) throw new AggregateError(failures, `Failed releasing owned resources of ${id}`);
 			};
 			await releaseAdoptions();
+			if (options.retainRecord && ref.sessionFile) {
+				await persistAgentMarker(getAgentExecutionEndedPath(ref.sessionFile));
+			}
 			if (options.tombstone) {
-				if (ref.sessionFile) await persistAgentTombstone(ref.sessionFile);
+				if (ref.sessionFile) await persistAgentMarker(getAgentTombstonePath(ref.sessionFile));
 				if (this.#registry.get(id) === ref) {
 					this.#registry.detachSession(id, ref);
 					this.#registry.setStatus(id, "aborted", ref);

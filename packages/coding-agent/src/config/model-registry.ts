@@ -1197,11 +1197,7 @@ export class ModelRegistry {
 				this.#suppressedSelectors.delete(selector);
 			}
 		}
-		await this.#refreshRuntimeDiscoveries(
-			strategy,
-			new Set([providerId]),
-			options?.refreshCommandCredentials,
-		);
+		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]), options?.refreshCommandCredentials);
 		// #reloadStaticModels above may have rebuilt #models from static sources,
 		// dropping models previously discovered by OTHER runtime providers (their
 		// fetchDynamicModels results live only in #models + the SQLite cache, not
@@ -2646,7 +2642,10 @@ export class ModelRegistry {
 										!this.#implicitProviderEndpointEnv.has(provider.provider)));
 							return {
 								provider,
-								...(await this.#discoverProviderModelsCoalesced(provider, unconfiguredEndpoint ? "offline" : strategy)),
+								...(await this.#discoverProviderModelsCoalesced(
+									provider,
+									unconfiguredEndpoint ? "offline" : strategy,
+								)),
 							};
 						}),
 					);

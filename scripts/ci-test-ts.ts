@@ -85,17 +85,22 @@ export async function bunTestSelection(
 	// Run directories are timestamp-prefixed by beginTestRun. A newer failed or
 	// incomplete attempt must prevent reuse of an older successful baseline.
 	const directories = entries.filter(entry => entry.isDirectory()).sort((a, b) => b.name.localeCompare(a.name));
+	const unreadableReport = { ...fallback, reason: "newer test report is unreadable or invalid" };
 	for (const entry of directories) {
 		try {
 			const run = JSON.parse(
 				await fs.readFile(path.join(root, "runs", "test-timing", entry.name, "run.json"), "utf8"),
 			);
+			if (typeof run?.scope !== "string" || !run.scope) return unreadableReport;
+			if (run.scope !== "fulltest: fork feature suites") continue;
 			if (
-				run.scope !== "fulltest: fork feature suites" ||
-				run.platform !== process.platform ||
-				run.architecture !== process.arch
+				typeof run.platform !== "string" ||
+				!run.platform ||
+				typeof run.architecture !== "string" ||
+				!run.architecture
 			)
-				continue;
+				return unreadableReport;
+			if (run.platform !== process.platform || run.architecture !== process.arch) continue;
 			// fulltest creates its running report before it selects tests. Only
 			// that exact report is this invocation, not an interrupted prior run.
 			if (entry.name === currentRunId && run.runId === currentRunId && run.completion === "running") continue;
@@ -154,7 +159,8 @@ export async function bunTestSelection(
 				return { ...fallback, reason: "Git unavailable to validate baseline" };
 			}
 		} catch {
-			// Unreadable reports are not baselines.
+			// Without a readable report, its scope cannot be ruled out.
+			return unreadableReport;
 		}
 	}
 	return fallback;
@@ -506,6 +512,8 @@ const forkPackageFiles: Record<string, string[]> = {
 	"packages/utils": ["test/dirs-cache.test.ts", "test/logger-contract.test.ts"],
 	"packages/ai": ["test/proxy.test.ts"],
 	"packages/natives": ["test/aireq-workbench-vcs.test.ts"],
+	"packages/mnemopi": ["test/offline-storage.test.ts"],
+	"packages/stats": ["test/storage-relocation.test.ts"],
 	"packages/collab-web": [
 		"test/aireq-workbench.test.tsx",
 		"test/composer.test.tsx",
@@ -1696,15 +1704,19 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		// Watchdog: a wedged child (e.g. bun's panic handler deadlocking
 		// after a GC crash) would otherwise hang this worker forever.
 		let timedOut = false;
-		let stuckTree = "";
+		const timeoutMs = chunkTimeoutMs();
+		let watchdogOutput = "";
 		const killTimer = setTimeout(async () => {
 			timedOut = true;
 			try {
-				stuckTree = await describeStuckProcessTree(proc.pid);
+				const stuckTree = await describeStuckProcessTree(proc.pid);
+				watchdogOutput = `\n${stuckTree}[watchdog] chunk exceeded ${Math.round(timeoutMs / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n`;
+				// This is runner output, not child output, so the gate's pipe drains won't forward it.
+				if (gateReportsFailures) process.stdout.write(`\n==> ${testCommand.label}${watchdogOutput}`);
 			} finally {
 				proc.kill("SIGKILL");
 			}
-		}, chunkTimeoutMs());
+		}, timeoutMs);
 		const exitCode = await proc.exited;
 		if ((exitCode !== 0 || timedOut) && !canRetryBunCrash(exitCode, timedOut, attempt)) {
 			// A gate may already have observed this chunk's failing case before
@@ -1739,7 +1751,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			timedOut,
 			missing,
 			command: command.map(shellQuote).join(" "),
-			output: `${stdout.text}${stderr.text}${timedOut ? `\n${stuckTree}[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n` : ""}${missing ? `\nMissing or empty JUnit report: ${reportPath}\n` : ""}`,
+			output: `${stdout.text}${stderr.text}${watchdogOutput}${missing ? `\nMissing or empty JUnit report: ${reportPath}\n` : ""}`,
 		};
 	}
 

@@ -265,7 +265,7 @@ describe("STTController preflight", () => {
 		expect(isCached).toHaveBeenCalledTimes(2);
 	});
 
-	it("falls back to the full parakeet id when the dictation chain is empty", async () => {
+	it("falls back to the built-in Chinese dictation model when the dictation chain is empty", async () => {
 		settings.setModelRole("dictation", "missing/model");
 		const emptyRegistry: STTControllerDependencies["registry"] = {
 			getError: () => undefined,
@@ -280,8 +280,8 @@ describe("STTController preflight", () => {
 		const options = makeOptions();
 		await controller.toggle(makeEditor(), options);
 
-		expect(isCached).toHaveBeenCalledWith("parakeet-tdt-0.6b-v3");
-		expect(asrClient.sttClient.startStream).toHaveBeenCalledWith("parakeet-tdt-0.6b-v3", expect.anything());
+		expect(isCached).toHaveBeenCalledWith("whisper-base");
+		expect(asrClient.sttClient.startStream).toHaveBeenCalledWith("whisper-base", expect.anything());
 		expect(options.showWarning).toHaveBeenCalledWith(
 			"Dictation model missing/model not found; using the built-in local model",
 		);

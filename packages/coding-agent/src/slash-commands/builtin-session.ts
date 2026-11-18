@@ -816,9 +816,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					runtime.signal,
 				);
 				const feedback = formatLogoutCommandResult(result);
-				if (feedback) await runtime.output(feedback.message);
+				if (feedback) await runtime.output(feedback.message, feedback.level);
 			} catch (error) {
-				await runtime.output(`Logout failed: ${errorMessage(error)}`);
+				await runtime.output(`Logout failed: ${errorMessage(error)}`, "error");
 			}
 			return commandConsumed();
 		},

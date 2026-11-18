@@ -1,6 +1,6 @@
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { type Component } from "@oh-my-pi/pi-tui";
+import type { Component, RenderTimer } from "@oh-my-pi/pi-tui";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import { registerSpinnerBlock, unregisterSpinnerBlock } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -9,24 +9,24 @@ import { col, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { replaceTabs, truncateMiddleToWidth, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
-import { theme } from "@oh-my-pi/pi-tui/theme";
+import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
+import { theme, type ThemeColor } from "@oh-my-pi/pi-tui/theme";
 import { describeShimmer, type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
 import { isXdHelpContent, parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
-import { getPaddingX, padding } from "@oh-my-pi/pi-tui/utils";
+import { getPaddingX, padding, sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
-import { summarizeCompactTool } from "./compact-tool-summary";
+import type { CompactPreviewActivity } from "./compact-tool-output-preview";
+import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-summary";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
 import type { InteractiveModeContext } from "./types";
 
-const EMPTY_ROWS: readonly string[] = ["", ""];
-/** Same sweep style and palette as the previous whole-row dock animation. */
-const ACTION_SHIMMER_PALETTE: ShimmerPalette = { low: "dim", mid: "muted", high: "success", bold: true };
+const ACTION_SHIMMER_PALETTE: ShimmerPalette = { low: "muted", mid: "muted", high: "text" };
+const ACTION_QUIET_MS = 1500;
 /** Four CJK characters occupy eight terminal columns; the detail starts two spaces later. */
 const ACTION_WIDTH = 8;
 const ACTION_GAP = "  ";
@@ -50,7 +50,10 @@ type Call = {
 	waitTarget?: string;
 	command?: string;
 	intent?: string;
+	embeddedIntent?: string;
+	file?: CompactFileSummary;
 	startedAt?: number;
+	motionStartedAt?: number;
 	endedAt?: number;
 	failed?: boolean;
 };
@@ -60,23 +63,35 @@ type Action = {
 	running: boolean;
 	failed: boolean;
 	detail: string;
-	isPath: boolean;
+	file?: CompactFileSummary;
+	previewIntent?: string;
 	startedAt?: number;
+};
+type ThinkingPhase = {
+	startedAt: number;
+	endedAt?: number;
+	failed?: boolean;
+	text: string;
+	preview?: { source: string; width: number; proseOnly: boolean; text: string };
+};
+type ActionRow = {
+	word: string;
+	tone: ThemeColor;
+	detail: { text: string; tone: ThemeColor }[];
 };
 type SessionMemory = {
 	calls: Call[];
 	/** Thinking phases keyed by message timestamp and content index. */
-	thinking: Map<string, { startedAt: number; endedAt?: number; failed?: boolean; text: string }>;
+	thinking: Map<string, ThinkingPhase>;
 	/** Arrival order of action ids; the earliest undisplayed runner fills a vacancy. */
 	order: string[];
 	/** Persistent two-slot layout (top, bottom); running actions keep their slot. */
 	slots: [string | undefined, string | undefined];
-	snapshot?: Action[];
 	latestStart?: number;
 };
 
-// One bounded projection per viewed logical session; never persisted or reconstructed from ended calls.
-const memories = new Map<string, SessionMemory>();
+/** Retain view facts for a live session without pinning closed sessions or mixing equal IDs. */
+const memories = new WeakMap<InteractiveModeContext["viewSession"], { id: string; memory: SessionMemory }>();
 
 function clean(value: string): string {
 	return replaceTabs(sanitizeText(plainText(value))).replace(/[\r\n]+/g, " ");
@@ -90,7 +105,8 @@ function fields(value: unknown): Record<string, unknown> {
 function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknown>): void {
 	const outer = fields(args);
 	const dispatch = fields(fields(result?.details).xdev);
-	const path = typeof outer.path === "string" ? outer.path : undefined;
+	const outerPath = outer.path ?? outer.file_path;
+	const path = typeof outerPath === "string" ? outerPath : undefined;
 	const device = call.name === "write" && path ? parseXdUrl(unwrapHashlineHeaderPath(path)) : null;
 	const help = (typeof outer.content === "string" && isXdHelpContent(outer.content)) || dispatch.mode === "help";
 	const deviceName =
@@ -104,9 +120,11 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 		call.detail = "";
 		call.command = undefined;
 		call.waitTarget = undefined;
+		call.file = undefined;
+		call.embeddedIntent = undefined;
 	}
 	call.semanticName = semanticName;
-	let effectiveArgs: unknown = args;
+	let effectiveArgs = outer;
 	let effectiveResult = result;
 	if (wrapped) {
 		const decoded =
@@ -115,6 +133,9 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 				: undefined;
 		// Both sources belong only to this event; retain the resulting display facts, not their payloads.
 		effectiveArgs = { ...fields(decoded), ...fields(dispatch.args) };
+		call.embeddedIntent ??= [effectiveArgs.i, effectiveArgs.intent, effectiveArgs.title].find(
+			(value): value is string => typeof value === "string" && !!value.trim(),
+		);
 		effectiveResult = result ? { ...result, details: dispatch.inner } : undefined;
 	}
 	const target = waitTarget(semanticName, effectiveResult as ToolRenderResult<CoordinationDetails> | undefined);
@@ -123,7 +144,7 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 		(value): value is string => typeof value === "string" && !!value.trim(),
 	);
 	if (
-		!Object.keys(fields(effectiveArgs)).length &&
+		!Object.keys(effectiveArgs).length &&
 		!target &&
 		!identityChanged &&
 		(call.detail || call.command || (!path && !call.intent))
@@ -132,9 +153,11 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 	const detail = summarizeCompactTool(
 		semanticName,
 		effectiveArgs,
-		call.intent,
+		call.intent ?? call.embeddedIntent,
 		semanticName === "wait" ? call.waitTarget : undefined,
 	);
+	if (detail.file || effectiveArgs.path !== undefined || effectiveArgs.file_path !== undefined)
+		call.file = detail.file;
 	if (wrapped && !detail.detail && !detail.command && !call.detail && !call.command && path) detail.detail = path;
 	if (detail.detail || detail.command) {
 		call.detail = detail.detail;
@@ -170,50 +193,75 @@ function streamedArgs(block: ToolCall): unknown {
 		: decodeStreamedToolArgs(partial, { rawInput: block.customWireName !== undefined });
 }
 
-function categoryOf(semanticName: string): ActionCategory {
-	switch (semanticName) {
-		case "read":
-			return "read";
-		case "bash":
-			return "exec";
-		case "write":
-		case "edit":
-		case "apply_patch":
-		case "ast_edit":
-			return "write";
-		default:
-			return "call";
-	}
+function categoryOf(call: Call): ActionCategory {
+	if (call.file) return call.file.category;
+	return (call.semanticName ?? call.name) === "bash" ? "exec" : "call";
 }
 
 /** One-line detail for a tool action: command text, or a target summary, or the real tool name. */
-function toolDetail(call: Call): { detail: string; isPath: boolean } {
-	const category = categoryOf(call.semanticName ?? call.name);
-	if (call.command) return { detail: clean(call.command), isPath: false };
+function toolDetail(call: Call, category: ActionCategory): string {
+	if (call.file) return clean(call.file.path).trim();
+	if (call.command) return clean(call.command);
 	const target = clean(call.detail).trim();
-	if (category === "read" || category === "write") {
-		return { detail: target || call.name, isPath: true };
-	}
-	if (category === "exec") return { detail: target || call.name, isPath: false };
+	if (category === "exec") return target || call.name;
 	// Unmapped tools must name themselves AND keep the short parameter summary; never mislabel them.
 	const name =
 		call.semanticName && call.semanticName !== call.name ? `${call.name} (${call.semanticName})` : call.name;
-	return { detail: target ? `${name} ${target}` : name, isPath: false };
+	return target ? `${name} ${target}` : name;
 }
 
 function thinkingSeconds(ms: number): string {
 	return ms < 100 ? "用时 <0.1 秒" : `用时 ${(ms / 1000).toFixed(1)} 秒`;
 }
 
-/** Latest non-blank display line of the real thinking fragment; empty when none is displayable. */
-function thinkingDetail(text: string, proseOnly: boolean): string {
+/** Latest nonblank wrapped row, using the same visible thinking prose as the transcript. */
+function thinkingDetail(text: string, proseOnly: boolean, width: number): string {
+	if (width <= 0) return "";
 	const formatted = formatThinkingForDisplay(text, proseOnly);
 	if (!hasDisplayableThinking(text, formatted)) return "";
-	const lines = formatted
-		.split(/\r?\n/)
-		.map(line => clean(line).trim())
-		.filter(line => line.length > 0);
-	return lines.at(-1) ?? "";
+	let end = formatted.length;
+	while (end > 0) {
+		const start = formatted.lastIndexOf("\n", end - 1) + 1;
+		const line = clean(formatted.slice(start, end)).trim();
+		if (line && !/^[.…\s]+$/.test(line)) {
+			const tail = wrapTextWithAnsi(line, width)
+				.findLast(row => row.trim() && visibleWidth(row) <= width)
+				?.trim();
+			if (tail) return tail;
+		}
+		end = start - 1;
+	}
+	return "";
+}
+
+/** Keep the same truncation, with separate runs for path context and its distinguishing tail. */
+function fileDetail(path: string, file: CompactFileSummary, width: number): [string, string, string] {
+	const count = file.countSuffix;
+	const fullWidth = visibleWidth(path + count);
+	const basename = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+	const parent = Math.max(path.lastIndexOf("/", basename - 1), path.lastIndexOf("\\", basename - 1));
+	const tail = path.slice(parent + 1);
+	if (fullWidth <= width) {
+		const intent = file.intent && clean(file.intent).trim();
+		return [
+			path.slice(0, parent + 1),
+			tail,
+			intent && fullWidth + 3 + visibleWidth(intent) <= width ? `${count} · ${intent}` : count,
+		];
+	}
+	// Keep the parent and basename intact when they fit, spending spare cells on the prefix.
+	const pathWidth = visibleWidth(path);
+	const countWidth = visibleWidth(count);
+	const showCount = width - countWidth >= Math.min(pathWidth, 8);
+	const room = showCount ? width - countWidth : width;
+	const suffix = showCount ? count : "";
+	if (pathWidth <= room) return [path.slice(0, parent + 1), tail, suffix];
+	const tailWidth = visibleWidth(tail);
+	if (tailWidth < room - 1) {
+		const prefix = sliceWithWidth(path, 0, room - tailWidth - 1, true).text;
+		return [`${prefix}…`, tail, suffix];
+	}
+	return ["…", sliceWithWidth(path, pathWidth - room + 1, room - 1, true).text, suffix];
 }
 
 /** Composer-only projection of action records and the last displayed content. */
@@ -221,7 +269,8 @@ export class CompactThinkingPreview implements Component {
 	#session?: InteractiveModeContext["viewSession"];
 	#sessionId?: string;
 	#memory?: SessionMemory;
-	#rows: (Action | undefined)[] = [];
+	#shownThinking?: { id: string; source: string; text: string; width: number; proseOnly: boolean; changedAt?: number };
+	#quietWake?: { deadline: number; timer: RenderTimer };
 
 	constructor(
 		private readonly ctx: Pick<
@@ -230,14 +279,16 @@ export class CompactThinkingPreview implements Component {
 		> &
 			Partial<Pick<InteractiveModeContext, "ui">>,
 		private readonly asyncWaitRow?: () => Loader | undefined,
+		private readonly compactActivity?: (width: number) => CompactPreviewActivity | undefined,
 	) {}
 
 	clear(): void {
+		this.#cancelQuietWake();
 		unregisterSpinnerBlock(this);
 		this.#session = undefined;
 		this.#sessionId = undefined;
 		this.#memory = undefined;
-		this.#rows = [];
+		this.#shownThinking = undefined;
 	}
 
 	#syncSession(): void {
@@ -247,13 +298,23 @@ export class CompactThinkingPreview implements Component {
 		this.clear();
 		this.#session = session;
 		this.#sessionId = id;
-		let memory = memories.get(id);
-		if (!memory) {
-			memory = { calls: [], thinking: new Map(), order: [], slots: [undefined, undefined] };
-			memories.set(id, memory);
-		}
+		const saved = memories.get(session);
+		const memory: SessionMemory =
+			saved?.id === id ? saved.memory : { calls: [], thinking: new Map(), order: [], slots: [undefined, undefined] };
+		memories.set(session, { id, memory });
 		this.#memory = memory;
 		const pending = session.agent.state.pendingToolCalls;
+		// While not viewing this session, we may have missed thinking or tool end events.
+		// Only retain unfinished records that the current agent confirms are still active.
+		const state = session.agent.state;
+		const active =
+			state.streamMessage?.role === "assistant" && state.activeThinkingIndex !== undefined
+				? `thinking:${state.streamMessage.timestamp}:${state.activeThinkingIndex}`
+				: undefined;
+		for (const [key, phase] of memory.thinking) {
+			if (phase.endedAt === undefined && key !== active) memory.thinking.delete(key);
+		}
+		memory.calls = memory.calls.filter(call => call.endedAt !== undefined || pending.has(call.id));
 		if (!pending.size) return;
 		const branch = session.sessionManager.getBranch();
 		const diagnostics = collectPendingToolCalls(branch);
@@ -307,7 +368,14 @@ export class CompactThinkingPreview implements Component {
 			if (!name) continue;
 			const args = block ? streamedArgs(block) : (diagnostic?.args ?? marker?.args ?? update?.args);
 			const intent = diagnostic?.intent ?? (typeof marker?.intent === "string" ? marker.intent : undefined);
-			const call: Call = { id: callId, name, detail: "", intent, startedAt };
+			const call: Call = {
+				id: callId,
+				name,
+				detail: "",
+				intent,
+				startedAt,
+				motionStartedAt: startedAt === undefined ? Date.now() : undefined,
+			};
 			updateCall(call, args);
 			if (update) updateCall(call, update.args, update.partialResult);
 			this.#appendCall(call);
@@ -317,8 +385,6 @@ export class CompactThinkingPreview implements Component {
 	#appendCall(call: Call): void {
 		const memory = this.#memory!;
 		memory.calls.push(call);
-		// Bound the record set; the visible two slots are chosen by running-first selection.
-		if (memory.calls.length > 16) memory.calls.shift();
 		memory.order.push(call.id);
 		if (call.startedAt !== undefined)
 			memory.latestStart = Math.max(memory.latestStart ?? call.startedAt, call.startedAt);
@@ -340,6 +406,20 @@ export class CompactThinkingPreview implements Component {
 		if (!phase || phase.endedAt !== undefined) return;
 		phase.endedAt = now;
 		phase.failed = failed;
+		phase.text = "";
+		phase.preview = undefined;
+		if (this.#shownThinking?.id === id) this.#shownThinking = undefined;
+	}
+
+	/** Keep every running action but only the latest two settled actions of each kind. */
+	#pruneSettled(): void {
+		const memory = this.#memory!;
+		const settledCalls = new Set(memory.calls.filter(call => call.endedAt !== undefined).slice(-2));
+		memory.calls = memory.calls.filter(call => call.endedAt === undefined || settledCalls.has(call));
+		const settledThinking = [...memory.thinking].filter(([, phase]) => phase.endedAt !== undefined);
+		for (let i = 0; i < settledThinking.length - 2; i++) memory.thinking.delete(settledThinking[i]![0]);
+		const calls = new Set(memory.calls.map(call => call.id));
+		memory.order = memory.order.filter(id => calls.has(id) || memory.thinking.has(id));
 	}
 
 	observe(event: AgentSessionEvent): void {
@@ -411,21 +491,38 @@ export class CompactThinkingPreview implements Component {
 				if (phase.endedAt === undefined) this.#endThinking(index, now, failed);
 			}
 		}
+		if (
+			event.type === "tool_execution_end" ||
+			(event.type === "message_end" && event.message.role === "assistant") ||
+			(event.type === "message_update" &&
+				(event.assistantMessageEvent.type === "thinking_end" || event.assistantMessageEvent.type === "error"))
+		) {
+			this.#pruneSettled();
+		}
 	}
 
-	/** Reuse the shared ticker for visible running actions or the relocated waiting row. */
+	/** Reuse the shared ANSI ticker only while the dock has an eligible shimmer. */
 	tickSpinner(_frame: number): void {
-		this.ctx.ui?.requestComponentRender(this);
+		if (shimmerEnabled() && displayPreferences.compactToolActivity) this.ctx.ui?.requestComponentRender(this);
+		else unregisterSpinnerBlock(this);
 	}
 
 	render(width: number): readonly string[] {
 		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, width - 1));
-		const rows = this.#renderRows(width - inset, true, waitRow);
-		if (!rows.length) return rows;
+		const { slots, activity } = this.#visibleActions(width, inset, waitRow);
+		const animated = !isNativeRendering()
+			? this.#selectMotion(slots, activity, width - inset, !waitRow && shimmerEnabled())
+			: undefined;
+		if (animated !== undefined && this.ctx.ui) registerSpinnerBlock(this);
+		else unregisterSpinnerBlock(this);
+		if (!displayPreferences.compactToolActivity) return [];
 		const left = padding(inset);
+		const rows = slots.map(action =>
+			action ? left + this.#paintAnsi(this.#buildRow(action, width - inset), action.id === animated) : "",
+		);
 		const waiting = waitRow ? truncateToWidth(waitRow.inlineText(), width) : "";
-		return [rows[0] ? left + rows[0] : "", waiting || (rows[1] ? left + rows[1] : ""), ""];
+		return [rows[0] ?? "", waiting || (rows[1] ?? ""), ""];
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
@@ -433,7 +530,7 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	/** Reconcile the active thinking phase from live state so focus restoration shows it without a fresh event. */
-	#syncLiveThinking(): void {
+	#syncLiveThinking(now: number): void {
 		const memory = this.#memory!;
 		const state = this.ctx.viewSession.agent.state;
 		const stream = state.streamMessage;
@@ -441,7 +538,7 @@ export class CompactThinkingPreview implements Component {
 		if (stream?.role === "assistant" && index !== undefined) {
 			const block = stream.content[index];
 			if (block?.type === "thinking") {
-				const id = this.#startThinking(stream.timestamp, index, Date.now());
+				const id = this.#startThinking(stream.timestamp, index, now);
 				const phase = memory.thinking.get(id);
 				if (phase && phase.endedAt === undefined) phase.text = block.thinking;
 			}
@@ -449,42 +546,61 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	/** Build the action records currently eligible for the two slots. */
-	#actions(): Action[] {
-		this.#syncLiveThinking();
+	#actions(detailWidth: number): Action[] {
+		this.#syncLiveThinking(Date.now());
 		const memory = this.#memory!;
 		const state = this.ctx.viewSession.agent.state;
 		const hideThinking = this.ctx.effectiveHideThinkingBlock;
 		const proseOnly = this.ctx.proseOnlyThinking;
 		const actions: Action[] = [];
+		let activeThinking: Action | undefined;
 		for (const [id, phase] of memory.thinking) {
 			if (hideThinking) continue;
 			const running = phase.endedAt === undefined;
-			const detail = running
-				? thinkingDetail(phase.text, proseOnly)
-				: thinkingSeconds(Math.max(0, (phase.endedAt ?? 0) - phase.startedAt));
-			actions.push({
+			let detail: string;
+			if (running) {
+				let preview = phase.preview;
+				if (preview?.source !== phase.text || preview.width !== detailWidth || preview.proseOnly !== proseOnly) {
+					preview = {
+						source: phase.text,
+						width: detailWidth,
+						proseOnly,
+						text: thinkingDetail(phase.text, proseOnly, detailWidth),
+					};
+					phase.preview = preview;
+				}
+				detail = preview.text;
+			} else detail = thinkingSeconds(Math.max(0, (phase.endedAt ?? 0) - phase.startedAt));
+			const action: Action = {
 				id,
 				category: "thinking",
 				running,
 				failed: phase.failed === true,
 				detail,
-				isPath: false,
 				startedAt: phase.startedAt,
-			});
+			};
+			if (running) {
+				if (detail || !activeThinking?.detail) activeThinking = action;
+			} else {
+				actions.push(action);
+			}
 		}
 		for (const call of memory.calls) {
 			const running = call.endedAt === undefined && state.pendingToolCalls.has(call.id);
-			const { detail, isPath } = toolDetail(call);
+			const category = categoryOf(call);
 			actions.push({
 				id: call.id,
-				category: categoryOf(call.semanticName ?? call.name),
+				category,
 				running,
 				failed: call.failed === true,
-				detail,
-				isPath,
-				startedAt: call.startedAt,
+				detail: toolDetail(call, category),
+				file: call.file,
+				previewIntent: category === "exec" && call.command ? clean(call.detail).trim() : undefined,
+				startedAt: call.startedAt ?? call.motionStartedAt,
 			});
 		}
+		// Blank or hidden prose cannot displace an existing tool or completed action.
+		if (activeThinking && (activeThinking.detail || actions.length === 0)) actions.push(activeThinking);
 		return actions;
 	}
 
@@ -499,19 +615,24 @@ export class CompactThinkingPreview implements Component {
 			const id = slots[index];
 			return id === undefined ? undefined : byId.get(id);
 		};
-		const displayed = new Set(slots.filter((id): id is string => id !== undefined));
+		const displayed = (id: string): boolean => slots[0] === id || slots[1] === id;
 		const queuedRunner = (): Action | undefined => {
 			for (const id of memory.order) {
 				const action = byId.get(id);
-				if (action?.running && !displayed.has(id)) return action;
+				if (action?.running && !displayed(id)) return action;
 			}
 			return undefined;
 		};
 		const place = (index: 0 | 1, action: Action | undefined): void => {
 			slots[index] = action?.id;
-			if (action) displayed.add(action.id);
-			else if (slots[index] !== undefined) displayed.delete(slots[index]!);
 		};
+		for (const index of [0, 1] as const) if (!held(index)) place(index, undefined);
+		const thinking = actions.find(action => action.category === "thinking" && action.running && action.detail);
+		if (thinking && !displayed(thinking.id)) {
+			// Prefer a vacancy; if two tools already occupy the dock, keep the bottom runner.
+			const index = !held(1)?.running ? 1 : 0;
+			place(index, thinking);
+		}
 		// A running action keeps its slot; vacancies fill bottom-first so the current runner stays below.
 		for (const index of [1, 0] as const) {
 			const current = held(index);
@@ -524,105 +645,187 @@ export class CompactThinkingPreview implements Component {
 			// Keep settled slots stable unless newer actions completed between paints.
 			const ended = memory.order.map(id => byId.get(id)!).filter(action => action && !action.running);
 			const latest = ended.slice(-2);
-			if (latest.some(action => !displayed.has(action.id))) {
+			if (latest.some(action => !displayed(action.id))) {
 				place(0, latest.length === 2 ? latest[0] : undefined);
 				place(1, latest.at(-1));
 			}
 		} else if (runningCount === 1) {
-			// A lone serial runner sits on the bottom row; the latest ended action always takes the top.
-			const runner = actions.find(action => action.running)!;
-			if (held(0)?.running) place(0, undefined);
-			if (!held(1)?.running) place(1, runner);
-			const ended = memory.order.map(id => byId.get(id)!).filter(action => action && !action.running);
-			const latest = ended.at(-1);
-			if (latest && held(0)?.id !== latest.id) place(0, latest);
+			// Keep the surviving runner in its slot and use the other for the latest completion.
+			const settledIndex = held(0)?.running ? 1 : 0;
+			const latest = memory.order.findLast(id => byId.get(id)?.running === false);
+			place(settledIndex, latest === undefined ? undefined : byId.get(latest));
 		}
 		return [held(0), held(1)];
 	}
 
-	#renderRows(width: number, paint: boolean, waitRow: Loader | undefined): readonly string[] {
-		this.#rows = [];
+	#visibleActions(
+		width: number,
+		inset: number,
+		waitRow: Loader | undefined,
+	): { slots: (Action | undefined)[]; activity?: CompactPreviewActivity } {
 		if (!displayPreferences.compactToolActivity) {
 			this.clear();
-			return [];
+			return { slots: [] };
 		}
 		this.#syncSession();
-		if (width < 1) return EMPTY_ROWS;
-		const memory = this.#memory!;
-		const slots = this.#select(this.#actions());
-		const visible = slots.filter((action): action is Action => action !== undefined);
-		if (visible.length > 0) memory.snapshot = visible.map(action => ({ ...action }));
-		// Waiting belongs to the session, not to a completed tool. Reserve the
-		// lower slot without adding the wait to action history or the snapshot.
+		const contentWidth = width - inset;
+		if (contentWidth < 1) return { slots: [] };
+		const slots = this.#select(this.#actions(contentWidth - ACTION_WIDTH - ACTION_GAP.length));
+		// Waiting belongs to the session and does not enter action history.
 		if (waitRow) {
-			slots[0] = slots[1] ?? slots[0];
+			slots[0] =
+				slots.find(action => action?.category === "thinking" && action.running && action.detail) ??
+				(slots[1]?.running ? slots[1] : slots[0]?.running ? slots[0] : (slots[1] ?? slots[0]));
 			slots[1] = undefined;
 		}
-		const animate = shimmerEnabled();
-		const rows = slots.map(action => {
-			this.#rows.push(action);
-			if (!action) return "";
-			const row = this.#buildRow(action, width);
-			return this.#paintAnsi(row, paint && animate);
-		});
-		const needsTick =
-			!isNativeRendering() && !!this.ctx.ui && animate && (waitRow || visible.some(action => action.running));
-		if (needsTick) registerSpinnerBlock(this);
-		else unregisterSpinnerBlock(this);
-		return rows;
+		const activity = slots.some(action => action?.category === "exec") ? this.compactActivity?.(width) : undefined;
+		if (activity?.commandVisible) {
+			const index = slots.findIndex(action => action?.id === activity.callId && action.previewIntent);
+			if (index !== -1) {
+				const action = slots[index]!;
+				slots[index] = { ...action, detail: action.previewIntent! };
+			}
+		}
+		return { slots, activity };
 	}
 
-	/** Fixed action area + two spaces + gray detail; the detail origin never moves on state change. */
-	#buildRow(action: Action, width: number): { action: Action; word: string; detail: string; gap: string } {
+	#selectMotion(
+		slots: (Action | undefined)[],
+		activity: CompactPreviewActivity | undefined,
+		width: number,
+		animate: boolean,
+	): string | undefined {
+		const now = Date.now();
+		let deadline = 0;
+		let candidate: string | undefined;
+		for (const action of slots) {
+			if (!action?.running) continue;
+			// The lower slot wins when both running actions are quiet.
+			candidate = action.id;
+			let progressAt: number | undefined;
+			if (action.category === "thinking") progressAt = this.#thinkingProgress(action, width, now);
+			else if (action.category === "exec" && action.id === activity?.callId) progressAt = activity.outputChangedAt;
+			deadline = Math.max(deadline, Math.max(action.startedAt ?? 0, progressAt ?? 0) + ACTION_QUIET_MS);
+		}
+		if (!animate || width < ACTION_WIDTH || candidate === undefined || deadline <= now) {
+			this.#cancelQuietWake();
+			return animate && width >= ACTION_WIDTH ? candidate : undefined;
+		}
+		// Native shimmers are clocked by the terminal, but it needs a new frame
+		// to receive the first shimmer node after progress stops.
+		if (deadline !== this.#quietWake?.deadline) {
+			this.#cancelQuietWake();
+			const ui = this.ctx.ui;
+			if (ui) {
+				const timer = ui.scheduleAfter(deadline - now, () => {
+					this.#quietWake = undefined;
+					if (
+						displayPreferences.compactToolActivity &&
+						shimmerEnabled() &&
+						this.#session === this.ctx.viewSession &&
+						this.#sessionId === this.ctx.viewSession.sessionManager.getSessionId()
+					) {
+						ui.requestComponentRender(this);
+					}
+				});
+				this.#quietWake = { deadline, timer };
+			}
+		}
+		return undefined;
+	}
+
+	#cancelQuietWake(): void {
+		this.#quietWake?.timer.cancel();
+		this.#quietWake = undefined;
+	}
+
+	#thinkingProgress(action: Action, width: number, now: number): number | undefined {
+		const previous = this.#shownThinking;
+		const proseOnly = this.ctx.proseOnlyThinking;
+		const source = this.#memory!.thinking.get(action.id)!.text;
+		const sameAction = previous?.id === action.id;
+		const sameLayout = previous?.width === width && previous.proseOnly === proseOnly;
+		if (sameAction && sameLayout && previous.source === source) return previous.changedAt;
+		let changedAt = sameAction ? previous.changedAt : undefined;
+		// Reflowing the same prose is not progress. If input and layout changed
+		// together, compare both inputs at the new width.
+		if (action.detail) {
+			if (!sameAction) changedAt = now;
+			else if (previous.source !== source) {
+				const previousDetail = sameLayout
+					? previous.text
+					: thinkingDetail(previous.source, proseOnly, width - ACTION_WIDTH - ACTION_GAP.length);
+				if (previousDetail !== action.detail) changedAt = now;
+			}
+		}
+		this.#shownThinking = { id: action.id, source, text: action.detail, width, proseOnly, changedAt };
+		return changedAt;
+	}
+
+	/** Fixed action area and two spaces; style does not change the detail origin. */
+	#buildRow(action: Action, width: number): ActionRow {
 		const full = ACTION_WORDS[action.category][action.running ? "running" : action.failed ? "failed" : "done"];
-		// Normally the action area is eight columns; an extremely narrow terminal clips it safely too.
 		const actionWidth = Math.min(ACTION_WIDTH, width);
 		const word = truncateToWidth(full, actionWidth);
+		const tone = action.running ? "muted" : action.failed ? "error" : "dim";
 		const detailWidth = width - actionWidth - ACTION_GAP.length;
-		let detail = "";
+		const detail: ActionRow["detail"] = [];
 		if (detailWidth > 0 && action.detail) {
-			detail = action.isPath
-				? truncateMiddleToWidth(action.detail, detailWidth)
-				: truncateToWidth(action.detail, detailWidth);
+			if (action.file) {
+				const [prefix, target, suffix] = fileDetail(action.detail, action.file, detailWidth);
+				if (action.running) {
+					if (prefix) detail.push({ text: prefix, tone: "dim" });
+					if (target) detail.push({ text: target, tone: "text" });
+					if (suffix) detail.push({ text: suffix, tone: "dim" });
+				} else detail.push({ text: prefix + target + suffix, tone: "dim" });
+			} else {
+				const value = truncateToWidth(action.detail, detailWidth);
+				const tone = action.running && action.category === "thinking" ? "text" : "dim";
+				if (value) detail.push({ text: value, tone });
+			}
 		}
-		return { action, word, detail, gap: detail ? ACTION_GAP : "" };
+		return { word, tone, detail };
 	}
 
-	#paintAnsi(row: { action: Action; word: string; detail: string; gap: string }, animate: boolean): string {
-		const { action, word, detail, gap } = row;
-		const paintedAction = action.running
-			? animate
-				? shimmerText(word, theme, ACTION_SHIMMER_PALETTE)
-				: theme.fg("muted", word)
-			: action.failed
-				? theme.fg("error", word)
-				: theme.fg("text", word);
-		return paintedAction + gap + (detail ? theme.fg("dim", detail) : "");
+	#paintAnsi({ word, tone, detail }: ActionRow, animate: boolean): string {
+		let line = animate ? shimmerText(word, theme, ACTION_SHIMMER_PALETTE) : theme.fg(tone, word);
+		if (detail.length) {
+			line += ACTION_GAP;
+			for (const run of detail) line += theme.fg(run.tone, run.text);
+		}
+		return line;
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		if (!displayPreferences.compactToolActivity) {
+			this.clear();
+			return node("rows", { cols: cx.cols, lines: [] });
+		}
 		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, cx.cols - 1));
-		this.#renderRows(cx.cols - inset, false, waitRow);
+		const { slots, activity } = this.#visibleActions(cx.cols, inset, waitRow);
 		const left = padding(inset);
-		const animate = shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer");
-		const children = this.#rows.map(action => {
+		const animated = this.#selectMotion(
+			slots,
+			activity,
+			cx.cols - inset,
+			!waitRow && shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer"),
+		);
+		unregisterSpinnerBlock(this);
+		const children = slots.map(action => {
 			if (!action) return node("rows", { cols: cx.cols, lines: [""] });
 			const built = this.#buildRow(action, cx.cols - inset);
-			const label = action.running
-				? animate
+			const label =
+				animated === action.id
 					? describeShimmer([{ text: built.word, palette: ACTION_SHIMMER_PALETTE }])
-					: text([span(built.word, "muted")])
-				: action.failed
-					? text([span(built.word, "error")])
-					: text([span(built.word, "text")]);
-			const parts = built.detail
-				? [text(left), label, text(built.gap), text([span(built.detail, "dim")])]
+					: text([span(built.word, built.tone)]);
+			const parts = built.detail.length
+				? [text(left), label, text(ACTION_GAP), text(built.detail.map(run => span(run.text, run.tone)))]
 				: [text(left), label];
 			return row(parts);
 		});
 		while (children.length < 2) children.push(node("rows", { cols: cx.cols, lines: [""] }));
-		if (waitRow && displayPreferences.compactToolActivity) children[1] = waitRow.describe(cx);
+		if (waitRow) children[1] = waitRow.describe(cx);
 		children.push(node("rows", { cols: cx.cols, lines: [""] }));
 		return col(children);
 	}

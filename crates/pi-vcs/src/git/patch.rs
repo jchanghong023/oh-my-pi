@@ -8,6 +8,8 @@
 //! while unrelated dirty paths stay as they are. Stash pop is likewise
 //! preflighted so a rejected restore leaves no trace (issue #4175).
 
+mod owned_fs;
+
 use std::{
 	collections::{BTreeMap, BTreeSet},
 	fs, io,
@@ -188,31 +190,14 @@ fn owned_mode_matches(
 		Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(!exists),
 		Err(err) => return Err(err.into()),
 	};
-	if !exists {
+	let actual = if metadata.file_type().is_symlink() {
+		Mode::SYMLINK
+	} else if metadata.is_file() {
+		worktree_file_mode(&metadata, Mode::FILE)
+	} else {
 		return Ok(false);
-	}
-	let Some(mode) = mode else {
-		return Ok(metadata.is_file() || metadata.file_type().is_symlink());
 	};
-	if mode == Mode::COMMIT {
-		return Ok(false);
-	}
-	if mode == Mode::SYMLINK {
-		#[cfg(unix)]
-		return Ok(metadata.file_type().is_symlink());
-		#[cfg(not(unix))]
-		return Ok(metadata.is_file() || metadata.file_type().is_symlink());
-	}
-	if !metadata.is_file() || metadata.file_type().is_symlink() {
-		return Ok(false);
-	}
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::PermissionsExt;
-		return Ok((metadata.permissions().mode() & 0o111 != 0) == (mode == Mode::FILE_EXECUTABLE));
-	}
-	#[cfg(not(unix))]
-	Ok(true)
+	Ok(owned_fs::mode_matches(Some(actual), exists, mode))
 }
 
 /// Only this isolated repository observes the stricter filter exit policy.
@@ -247,12 +232,12 @@ fn owned_repository(owner: &GitRepo) -> Result<gix::Repository> {
 	Ok(repo)
 }
 
-fn owned_entry_version(
+fn owned_entry_bytes(
 	repo: &gix::Repository,
 	filter: &mut WorktreeFilter<'_>,
 	path: &str,
 	entry: Option<&FileEntry>,
-) -> Result<Option<String>> {
+) -> Result<Option<Vec<u8>>> {
 	let Some(entry) = entry else {
 		return Ok(None);
 	};
@@ -263,12 +248,11 @@ fn owned_entry_version(
 		));
 	}
 	let bytes = blob_bytes(repo, entry.id)?;
-	let bytes = if entry.mode == Mode::SYMLINK {
-		bytes
+	if entry.mode == Mode::SYMLINK {
+		Ok(Some(bytes))
 	} else {
-		filter.git_to_worktree(path, bytes)?
-	};
-	raw_sha256(&bytes).map(Some)
+		filter.git_to_worktree(path, bytes).map(Some)
+	}
 }
 
 impl GitRepo {
@@ -333,8 +317,8 @@ impl GitRepo {
 				..ApplyOptions::default()
 			})?;
 			for item in &mut expected[start..] {
-				item.after_version =
-					owned_entry_version(&repo, &mut filter, &item.path, state.get(&item.path))?;
+				let bytes = owned_entry_bytes(&repo, &mut filter, &item.path, state.get(&item.path))?;
+				item.after_version = bytes.as_deref().map(raw_sha256).transpose()?;
 				if owned_raw_version(self, &item.path)? != item.before_version {
 					return Err(Error::backend(
 						"git owned patch preview",
@@ -406,50 +390,41 @@ impl GitRepo {
 			complete:   true,
 			diagnostic: None,
 		};
+		if patches.is_empty() {
+			return Ok(output);
+		}
+		let root = owned_fs::open_root(self.root())?;
 		let mut diagnostics = Vec::new();
 		for patch in &patches {
 			let (source, target, source_mode, target_mode) = patch_sides(patch, options.reverse);
 			let paths = [source, target.filter(|target| Some(*target) != source)];
 			let mut attempted = [None, None];
 			let attempt = (|| -> Result<()> {
+				let mut destinations = [None, None];
 				let mut already_done = true;
-				for path in paths.into_iter().flatten() {
-					if owned_raw_version(self, path)? != expected[path].after_version
-						|| !owned_mode_matches(
-							self,
-							path,
-							Some(path) == target,
-							if Some(path) == target {
-								target_mode.or(source_mode)
-							} else {
-								None
-							},
-						)? {
-						already_done = false;
-					}
-				}
-				if already_done {
-					return Ok(());
-				}
-				for path in paths.into_iter().flatten() {
-					let actual = owned_raw_version(self, path)?;
-					let is_after = actual == expected[path].after_version
-						&& owned_mode_matches(
-							self,
-							path,
-							Some(path) == target,
-							if Some(path) == target {
-								target_mode.or(source_mode)
-							} else {
-								None
-							},
-						)?;
-					if actual != expected[path].before_version && !is_after {
+				for (position, path) in paths.into_iter().enumerate() {
+					let Some(path) = path else { continue };
+					let destination = owned_fs::PinnedPath::open(&root, Path::new(path))?;
+					let observed = destination.observe()?;
+					let actual = observed.as_ref().map(|(version, _)| version);
+					let is_target = Some(path) == target;
+					let is_after = actual == expected[path].after_version.as_ref()
+						&& owned_fs::mode_matches(
+							observed.as_ref().map(|(_, mode)| *mode),
+							is_target,
+							target_mode.or(source_mode),
+						);
+					if !is_after && actual != expected[path].before_version.as_ref() {
 						return Err(Error::backend(
 							"git owned patch",
 							format!("preimage changed: {path}"),
 						));
 					}
+					already_done &= is_after;
+					destinations[position] = Some((path, destination));
+				}
+				if already_done {
+					return Ok(());
 				}
 				let one = std::slice::from_ref(patch);
 				let mut state = patch_worktree_map(self, &repo, &mut filter, one, options.reverse)?;
@@ -458,58 +433,58 @@ impl GitRepo {
 					..ApplyOptions::default()
 				})?;
 				// Verify the exact checkout bytes before any destructive write.
-				for path in paths.into_iter().flatten() {
-					let after = owned_entry_version(&repo, &mut filter, path, state.get(path))?;
+				let mut postimages = [None, None];
+				for (position, path) in paths.into_iter().enumerate() {
+					let Some(path) = path else { continue };
+					let entry = state.get(path);
+					let bytes = owned_entry_bytes(&repo, &mut filter, path, entry)?;
+					let after = bytes.as_deref().map(raw_sha256).transpose()?;
 					if after != expected[path].after_version {
 						return Err(Error::backend(
 							"git owned patch",
 							format!("confirmed postimage does not match patch: {path}"),
 						));
 					}
+					postimages[position] = bytes.zip(entry.map(|entry| entry.mode));
 				}
 				// Materialize a rename target before deleting its source. A
 				// partial rename can then resume from the retained source and
 				// already-matching target without overwriting either blindly.
-				for (position, path) in target
-					.into_iter()
-					.chain(source.filter(|source| Some(*source) != target))
-					.enumerate()
-				{
-					let actual = owned_raw_version(self, path)?;
-					if actual == expected[path].after_version
-						&& owned_mode_matches(
-							self,
-							path,
-							state.contains_key(path),
-							state.get(path).map(|entry| entry.mode),
-						)? {
+				for (position, item) in destinations.iter_mut().enumerate().rev() {
+					let Some((path, destination)) = item else {
+						continue;
+					};
+					let path = *path;
+					let observed = destination.observe()?;
+					let actual = observed.as_ref().map(|(version, _)| version);
+					let actual_mode = observed.as_ref().map(|(_, mode)| *mode);
+					let entry = state.get(path);
+					if actual == expected[path].after_version.as_ref()
+						&& owned_fs::mode_matches(
+							actual_mode,
+							entry.is_some(),
+							entry.map(|entry| entry.mode),
+						) {
 						continue;
 					}
-					if actual != expected[path].before_version {
+					if actual != expected[path].before_version.as_ref() {
 						return Err(Error::backend(
 							"git owned patch",
 							format!("preimage changed before write: {path}"),
 						));
 					}
 					attempted[position] = Some(path);
-					if let Some(entry) = state.get(path) {
-						let absolute = guard_owned_path(self, path)?;
-						if entry.mode != Mode::SYMLINK
-							&& fs::symlink_metadata(&absolute)
-								.is_ok_and(|metadata| metadata.file_type().is_symlink())
-						{
-							fs::remove_file(&absolute)?;
-						}
-						write_worktree_entry(self, &repo, &mut filter, path, entry)?;
+					if let Some((bytes, mode)) = &postimages[position] {
+						destination.replace(bytes, *mode)?;
 					} else {
-						remove_worktree_path(self, path)?;
+						destination.remove()?;
 					}
 					if owned_raw_version(self, path)? != expected[path].after_version
 						|| !owned_mode_matches(
 							self,
 							path,
-							state.contains_key(path),
-							state.get(path).map(|entry| entry.mode),
+							entry.is_some(),
+							entry.map(|entry| entry.mode),
 						)? {
 						return Err(Error::backend(
 							"git owned patch",

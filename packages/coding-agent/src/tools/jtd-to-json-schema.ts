@@ -35,8 +35,16 @@ const primitiveMap: Record<JTDPrimitive, string> = {
 	uint32: "integer",
 };
 
+export class InvalidJTDReferenceError extends Error {
+	constructor() {
+		super('JTD "ref" must be a string naming a definition');
+		this.name = "InvalidJTDReferenceError";
+	}
+}
+
 function convertSchema(schema: unknown): unknown {
 	if (schema === null || typeof schema !== "object") return {};
+	if (isJTDRef(schema) && typeof schema.ref !== "string") throw new InvalidJTDReferenceError();
 	const converted = convertSchemaForm(schema);
 	return "nullable" in schema && schema.nullable === true ? { anyOf: [converted, { type: "null" }] } : converted;
 }
@@ -173,7 +181,8 @@ const jtdSchemaMaps = ["properties", "optionalProperties", "definitions", "mappi
 /**
  * Check that `schema` and every sub-schema it reaches stay inside the JTD grammar
  * (RFC 8927 §2): known keywords only, `type` limited to the JTD primitives, and the
- * scalar keywords carrying their declared value types.
+ * scalar keywords carrying their declared value types. Ref names are checked
+ * during conversion so malformed JTD refs do not silently pass as extensions.
  *
  * Used to resolve documents whose root parses as both formats. JSON Schema reaches
  * here through keywords JTD never defines (`items`, `required`, `$ref`, `anyOf`, …)
@@ -192,7 +201,6 @@ function isJTDDocument(schema: unknown): boolean {
 	if ("enum" in schema && !(Array.isArray(schema.enum) && schema.enum.every(value => typeof value === "string"))) {
 		return false;
 	}
-	if ("ref" in schema && typeof schema.ref !== "string") return false;
 	if ("discriminator" in schema && typeof schema.discriminator !== "string") return false;
 	if ("nullable" in schema && typeof schema.nullable !== "boolean") return false;
 	if ("additionalProperties" in schema && typeof schema.additionalProperties !== "boolean") return false;
@@ -253,7 +261,7 @@ function isUnambiguousJTDSchema(schema: unknown): boolean {
 	if (isRecord(schema.elements) || isRecord(schema.values) || isRecord(schema.optionalProperties)) {
 		return true;
 	}
-	if (typeof schema.ref === "string") return true;
+	if (typeof schema.ref === "string" || ("ref" in schema && isJTDDocument(schema))) return true;
 	if (typeof schema.type === "string" && Object.hasOwn(jtdOnlyPrimitiveTypes, schema.type)) {
 		return true;
 	}

@@ -157,19 +157,31 @@ export function countPerCallContextTokensBySource(
 	return counts;
 }
 
+/** Reject malformed persisted metadata and totals that include anonymous transforms. */
+function hasNamedPerCallTokenCounts(total: number, bySource: Record<string, number> | undefined): boolean {
+	if (!Number.isSafeInteger(total) || total < 0) return false;
+	if (bySource === undefined) return total === 0;
+	if (bySource === null || typeof bySource !== "object" || Array.isArray(bySource)) return false;
+	let namedTokens = 0;
+	for (const tokens of Object.values(bySource)) {
+		if (!Number.isSafeInteger(tokens) || tokens < 0) return false;
+		namedTokens += tokens;
+		if (namedTokens > total) return false;
+	}
+	return namedTokens === total;
+}
+
 /** Provider-anchored prompt size; falls back to a full local count when nothing anchors. */
 function countPromptTokens(context: Context, tokenizer: Tokenizer): number {
 	const { messages } = context;
 	const anchor = findRequestUsageAnchor(messages);
-	if (!anchor) {
-		return withMargin(countContextTokens(context, tokenizer)) + messages.length * MESSAGE_FRAMING_TOKENS;
-	}
 	// Anonymous transforms may replace persisted history, not merely append
 	// request-only text. Their usage cannot safely anchor a later restored view.
-	let namedPerCallTokens = 0;
-	for (const tokens of Object.values(anchor.message.perCallContextTokensBySource ?? {})) namedPerCallTokens += tokens;
+	const total = anchor?.message.perCallContextTokens;
+	const anchoredPerCallTokens = total === undefined ? 0 : total;
 	if (
-		(anchor.message.perCallContextTokens ?? 0) > namedPerCallTokens ||
+		!anchor ||
+		!hasNamedPerCallTokenCounts(anchoredPerCallTokens, anchor.message.perCallContextTokensBySource) ||
 		messages.some(message => isPerCallContextMessage(message) && getPerCallContextSource(message) === undefined)
 	) {
 		return withMargin(countContextTokens(context, tokenizer)) + messages.length * MESSAGE_FRAMING_TOKENS;
@@ -189,7 +201,7 @@ function countPromptTokens(context: Context, tokenizer: Tokenizer): number {
 			locallyFramedMessages++;
 		}
 	}
-	const delta = perCallTokens - (anchor.message.perCallContextTokens ?? 0);
+	const delta = perCallTokens - anchoredPerCallTokens;
 	return (
 		Math.max(0, anchor.tokens + Math.min(0, delta)) +
 		withMargin(tail + Math.max(0, delta)) +

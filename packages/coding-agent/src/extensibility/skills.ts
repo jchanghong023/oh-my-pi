@@ -82,7 +82,7 @@ export interface SkillCatalogEntry extends Skill {
 	_source: SourceMeta;
 	frontmatter?: SkillFrontmatter;
 	content: string;
-	disabledReason?: "item-disabled" | "provider-disabled" | "user-opt-in";
+	disabledReason?: "item-disabled" | "provider-disabled" | "user-opt-in" | "skill-config";
 }
 
 export interface LoadSkillCatalogResult {
@@ -359,6 +359,9 @@ export async function loadSkillCatalog(
 		extensionRoots,
 	} = options;
 
+	const home = os.homedir();
+	const claudePluginSourceEnabled = isUserSourceEnabled("claude-plugins", { cwd, home, repoRoot: null, agentDir });
+
 	function isSourceEnabled(source: Pick<SourceMeta, "provider" | "level" | "origin">): boolean {
 		const { provider, level } = source;
 		if (!isProviderEnabled(provider)) return false;
@@ -380,6 +383,9 @@ export async function loadSkillCatalog(
 		// discovery/claude-plugins.ts. Without this, #10666's root-level fix is
 		// re-dropped here for every user-level claude-plugins skill.
 		if (provider === "claude-plugins" && source.origin !== undefined && source.origin !== "claude") return true;
+		// Portable packages keep their provider ID, but only Claude registry
+		// installs follow the Claude source switch (including project installs).
+		if (provider === "agent-plugins" && source.origin === "claude") return claudePluginSourceEnabled;
 		if (level === "user") return isUserSourceEnabled(provider);
 		return true;
 	}
@@ -412,7 +418,7 @@ export async function loadSkillCatalog(
 			directories.map(async dir => {
 				const expandedDir = expandTilde(dir);
 				const scanResult = await scanSkillsFromDir(
-					{ cwd, home: os.homedir(), repoRoot: null },
+					{ cwd, home, repoRoot: null },
 					{
 						dir: expandedDir,
 						providerId: CUSTOM_DIR_PROVIDER_ID,
@@ -668,12 +674,12 @@ export async function loadSkillCatalog(
 		const rawName = admitted.get(skill.name)?.rawName ?? skill.name;
 		if (
 			!enabled ||
-			disabledSkillNames.has(rawName) ||
-			disabledSkillNames.has(skill.name) ||
 			matchesIgnorePatterns(rawName) ||
 			matchesIgnorePatterns(skill.name) ||
 			!matchesIncludePatterns(skill.name)
 		) {
+			skill.disabledReason = "skill-config";
+		} else if (disabledSkillNames.has(rawName) || disabledSkillNames.has(skill.name)) {
 			skill.disabledReason = "item-disabled";
 		}
 	}

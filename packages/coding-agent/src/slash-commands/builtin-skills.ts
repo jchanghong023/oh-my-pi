@@ -52,7 +52,7 @@ async function handleProtocolSkillsCommand(command: ParsedSlashCommand, runtime:
 			await runtime.session.refreshSkills();
 			await runtime.refreshCommands();
 		},
-		refreshAfterFailure: browser,
+		refreshAfterFailure: browser ? "mutation" : "persisted-update",
 		hooks: {
 			warn: message => {
 				warnings.push(message);
@@ -115,7 +115,7 @@ interface SkillCommandContext {
 	output(text: string, options?: { dim?: boolean }): Promise<void> | void;
 	error(text: string): Promise<void> | void;
 	refresh(): Promise<void>;
-	refreshAfterFailure?: boolean;
+	refreshAfterFailure?: "mutation" | "persisted-update";
 	hooks: SkillInstallHooks;
 }
 
@@ -155,7 +155,7 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 					return;
 				}
 				await context.output(`Installing ${targets.names.join(", ")}…`, { dim: true });
-				failedMutationMayNeedRefresh = true;
+				failedMutationMayNeedRefresh = context.refreshAfterFailure === "mutation";
 				const changes = await withSkillRegistryClient(context.registryUrl, client =>
 					installSkillPackages(
 						client,
@@ -177,9 +177,18 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 					return;
 				}
 				await context.output("Checking the registry for updates…", { dim: true });
-				failedMutationMayNeedRefresh = true;
+				failedMutationMayNeedRefresh = context.refreshAfterFailure === "mutation";
+				const hooks: SkillInstallHooks =
+					context.refreshAfterFailure === "persisted-update"
+						? {
+								...context.hooks,
+								onPersisted: () => {
+									failedMutationMayNeedRefresh = true;
+								},
+							}
+						: context.hooks;
 				const changes = await withSkillRegistryClient(context.registryUrl, client =>
-					updateSkillPackages(client, { names: targets.names, global: targets.global, cwd }, context.hooks),
+					updateSkillPackages(client, { names: targets.names, global: targets.global, cwd }, hooks),
 				);
 				failedMutationMayNeedRefresh = false;
 				await reportSkillChanges(context, changes);
@@ -195,7 +204,7 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 	} catch (error) {
 		await context.error(`Skills: ${errorMessage(error)}`);
 		// Manifest/lock persistence or store pruning can fail after a real change.
-		if (context.refreshAfterFailure && failedMutationMayNeedRefresh) {
+		if (failedMutationMayNeedRefresh) {
 			try {
 				await context.refresh();
 			} catch (refreshError) {

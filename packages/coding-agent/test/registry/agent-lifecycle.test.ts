@@ -1087,6 +1087,9 @@ describe("AgentLifecycleManager strict owned release", () => {
 	}
 
 	it("strictly retains read-only records, retries failed cleanup, and never revives or kills a completed worker", async () => {
+		using tempDir = TempDir.createSync("@omp-lifecycle-retained-");
+		const sessionFile = path.join(tempDir.path(), "child.jsonl");
+		await Bun.write(sessionFile, "");
 		const registry = new AgentRegistry();
 		const lifecycle = new AgentLifecycleManager(registry);
 		const root = registry.register({ id: "root", displayName: "root", kind: "main", session: null });
@@ -1100,7 +1103,7 @@ describe("AgentLifecycleManager strict owned release", () => {
 			kind: "sub",
 			parentId: root.id,
 			session: dispose.session,
-			sessionFile: "/transcripts/child.jsonl",
+			sessionFile,
 			status: "idle",
 		});
 		const siblingSession = makeSessionStub();
@@ -1130,7 +1133,7 @@ describe("AgentLifecycleManager strict owned release", () => {
 			expect(registry.get(child.id)).toBe(child);
 			expect(child.status).toBe("parked");
 			expect(child.session).toBeNull();
-			expect(child.sessionFile).toBe("/transcripts/child.jsonl");
+			expect(child.sessionFile).toBe(sessionFile);
 			expect(isResumable(child)).toBe(false);
 			expect(lifecycle.has(child.id, child)).toBe(false);
 			expect(dispose.disposeCalls()).toBe(2);

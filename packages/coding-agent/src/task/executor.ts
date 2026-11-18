@@ -488,6 +488,7 @@ export interface ExecutorOptions extends NativeChildSessionHooks {
 	 * the session did not start with a plan (or while plan mode is still active).
 	 */
 	planReference?: { path: string; content: string };
+	approvedPlanChecks?: CreateAgentSessionOptions["approvedPlanChecks"];
 	/** Pre-set UI label (e.g. eval bridge label). When absent, a tiny-model label is generated from the assignment. */
 	description?: string;
 	index: number;
@@ -5334,6 +5335,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					// Subagents are short-lived; never schedule background warm requests.
 					cacheWarming: false,
 					toolNames,
+					approvedPlanChecks: options.approvedPlanChecks,
 					outputSchema,
 					outputSchemaMode: options.outputSchemaMode,
 					restrictToolNames,
@@ -5461,7 +5463,14 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				let configuredOptions = sessionOptions;
 				let observeSession: ExecutorOptions["onSessionCreated"];
 				if (sessionSpec.hooks) {
-					const configured = await configureNativeSubagentSession(sessionSpec, sessionOptions);
+					checkAbort();
+					// Install the abort race before invoking host code that can cancel synchronously.
+					const configured = await awaitAbortable(
+						Promise.resolve().then(() => {
+							checkAbort();
+							return configureNativeSubagentSession(sessionSpec, sessionOptions);
+						}),
+					);
 					configuredOptions = configured.options;
 					observeSession = configured.onSessionCreated;
 					if (mcpManager && configuredOptions.enableMCP !== false && !configuredOptions.restrictToolNames) {
@@ -5475,6 +5484,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					}
 				}
 				configuredRestrictToolNames = configuredOptions.restrictToolNames === true;
+				checkAbort();
 				sessionPromise = createAgentSession(configuredOptions);
 				({ session, interactionUI } = await awaitAbortable(sessionPromise));
 				disposeSessionObserver = observeSession?.(session) ?? undefined;

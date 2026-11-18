@@ -251,7 +251,7 @@ export class SessionPublisher {
 		};
 		session.agent.queuedMessageGate = this.#gate;
 		this.#unsubscribe = session.subscribe(event => this.#onEvent(event));
-		this.#unsubscribeRunState = session.subscribeRunState(state => this.#onRunState(state));
+		this.#unsubscribeRunState = session.subscribeRunState((state, at) => this.#onRunState(state, at));
 		// `ircWakesPending` gates main's idle parking and changes without an event.
 		this.#unsubscribeIrcWakeHolds = session.subscribeIrcWakeHolds(() => this.schedule());
 		session.addDisposer(() => this.close());
@@ -374,10 +374,10 @@ export class SessionPublisher {
 		return [...dropped];
 	}
 
-	#onRunState(state: SessionRunState): void {
+	#onRunState(state: SessionRunState, at: number): void {
 		if (this.#closed) return;
 		this.flush();
-		this.#bridge.remote.notify("runState", this.#key, state);
+		this.#bridge.remote.notify("runState", this.#key, state, at);
 	}
 
 	#publishMessages(): void {

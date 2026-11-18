@@ -6,9 +6,8 @@
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1))) -Binary
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1))) -Binary -Ref 'v18.0.6+fork.123'
 #
-# Web requests use Invoke-RestMethod plus Invoke-WebRequest -UseBasicParsing:
-# the HTML parsing engine PowerShell 5.1 otherwise loads needs Internet
-# Explorer, which is absent on current Windows builds and Server Core.
+# Binary fallback uses Invoke-WebRequest -UseBasicParsing so Windows
+# PowerShell 5.1 can run without Internet Explorer.
 
 param(
     [switch]$Binary,
@@ -140,7 +139,13 @@ function Get-InstallFailureFields {
             $fields.source_file = "install.ps1"
             $fields.source_line = [int]$Failure.InvocationInfo.ScriptLineNumber
         }
-        if ($Failure.Exception.Response -and $Failure.Exception.Response.StatusCode) {
+        # The child process returns HTTP diagnostics separately from its message.
+        $isolatedFailure = $Failure.Exception.Data["OmpInstallHttpFailure"]
+        if ($isolatedFailure) {
+            $fields.error_type = $isolatedFailure.error_type
+            $fields.error_code = $isolatedFailure.error_code
+            if ($isolatedFailure.http_status -is [int]) { $fields.http_status = $isolatedFailure.http_status }
+        } elseif ($Failure.Exception.Response -and $Failure.Exception.Response.StatusCode) {
             $fields.http_status = [int]$Failure.Exception.Response.StatusCode
         }
     } catch {}
@@ -174,14 +179,54 @@ if ($PSVersionTable.PSVersion -lt [version]"5.1") {
     throw "Windows PowerShell 5.1 or newer is required (found $($PSVersionTable.PSVersion)). Install PowerShell 7 from https://aka.ms/powershell and re-run the installer."
 }
 
-# Release metadata must use normal certificate validation. Only the binary
-# download tolerates interception proxies with untrusted certificates because
-# the temporary binary is checked against the release digest before execution.
-function Initialize-InstallTlsCallback {
-    # TLS validation runs on a .NET worker thread without a PowerShell
-    # runspace. A scriptblock delegate fails there with a send error.
-    if (-not ("Omp.InstallerTls" -as [type])) {
-        Add-Type -TypeDefinition @'
+# Only downloads may bypass certificate validation: their bytes are checked
+# against the digest from trusted release metadata before execution. Isolate
+# legacy TLS settings so neither request changes the caller's host settings.
+function Invoke-InstallWebRequest {
+    param([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile)
+
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        if ($OutFile) {
+            Invoke-WebRequest -Uri $Uri.AbsoluteUri -OutFile $OutFile -TimeoutSec $TimeoutSec -UseBasicParsing -SkipCertificateCheck
+        } else {
+            # Do not follow redirects: Windows PowerShell can redirect HTTPS to HTTP.
+            Invoke-RestMethod -Uri $Uri.AbsoluteUri -TimeoutSec $TimeoutSec -MaximumRedirection 0
+        }
+        return
+    }
+
+    # Windows PowerShell 5.1 has no per-request skip flag. Start-Job runs in
+    # a child PowerShell process, not in another runspace of this process.
+    if ($OutFile) {
+        $OutFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutFile)
+    }
+    # The child inherits OS settings, but not the host's process-local proxy.
+    $callerProxy = [Net.WebRequest]::DefaultWebProxy
+    $proxyAddress = ""
+    if ($callerProxy -and -not $callerProxy.IsBypassed($Uri)) {
+        $proxyAddress = $callerProxy.GetProxy($Uri).AbsoluteUri
+    }
+    $job = Start-Job -ArgumentList @($Uri.AbsoluteUri, $TimeoutSec, $OutFile, $proxyAddress, ($null -eq $callerProxy)) -ScriptBlock {
+        param([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile, [string]$ProxyAddress, [bool]$ProxyDisabled)
+        $ErrorActionPreference = "Stop"
+        $ProgressPreference = "SilentlyContinue"
+        try {
+            $childProxy = [Net.WebRequest]::DefaultWebProxy
+            if ($ProxyAddress) {
+                # Keep the OS proxy object (including redirect routing) if it
+                # already selects the same endpoint for this request.
+                if (-not $childProxy -or $childProxy.IsBypassed($Uri) -or
+                    $childProxy.GetProxy($Uri).AbsoluteUri -ne $ProxyAddress) {
+                    [Net.WebRequest]::DefaultWebProxy = [Net.WebProxy]::new([Uri]$ProxyAddress)
+                }
+            } elseif ($ProxyDisabled -or ($childProxy -and -not $childProxy.IsBypassed($Uri))) {
+                [Net.WebRequest]::DefaultWebProxy = $null
+            }
+
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            if ($OutFile) {
+                # A PowerShell scriptblock cannot run on the TLS worker thread.
+                Add-Type -TypeDefinition @'
 namespace Omp {
     public static class InstallerTls {
         public static readonly System.Net.Security.RemoteCertificateValidationCallback Callback =
@@ -189,7 +234,40 @@ namespace Omp {
     }
 }
 '@
+                [Net.ServicePointManager]::ServerCertificateValidationCallback = [Omp.InstallerTls]::Callback
+                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -TimeoutSec $TimeoutSec -UseBasicParsing
+                @{ success = $true }
+            } else {
+                # Return the JSON body so job serialization cannot truncate
+                # the nested asset records needed for digest verification.
+                $response = Invoke-WebRequest -Uri $Uri -TimeoutSec $TimeoutSec -UseBasicParsing -MaximumRedirection 0
+                @{ success = $true; release_json = $response.Content }
+            }
+        } catch {
+            $failure = @{
+                success = $false
+                message = $_.Exception.Message
+                error_code = $_.Exception.HResult
+                error_type = $_.Exception.GetType().Name
+            }
+            if ($_.Exception.Response -is [Net.HttpWebResponse]) {
+                $failure.http_status = [int]$_.Exception.Response.StatusCode
+            }
+            $failure
+        }
     }
+    try {
+        $result = Receive-Job -Job $job -Wait
+    } finally {
+        Remove-Job -Job $job -Force
+    }
+    if (-not $result) { throw "The installer web request process returned no result." }
+    if (-not $result.success) {
+        $failure = [Exception]::new($result.message)
+        $failure.Data["OmpInstallHttpFailure"] = $result
+        throw $failure
+    }
+    if (-not $OutFile) { return (ConvertFrom-Json -InputObject $result.release_json) }
 }
 
 $Repo = "jchanghong023/oh-my-pi"
@@ -271,23 +349,7 @@ function Save-InstallBinary {
         Set-InstallStage "download_webrequest"
         Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; timeout_ms = 900000; attempt = $(if ($curlExe) { 2 } else { 1 }) }
         try {
-            $downloadTlsCallback = $null
-            $webSkipCertCheck = @{}
-            try {
-                if ($PSVersionTable.PSVersion.Major -ge 7) {
-                    $webSkipCertCheck.SkipCertificateCheck = $true
-                } else {
-                    $previousTlsCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
-                    Initialize-InstallTlsCallback
-                    $downloadTlsCallback = [Omp.InstallerTls]::Callback
-                    [Net.ServicePointManager]::ServerCertificateValidationCallback = $downloadTlsCallback
-                }
-                Invoke-WebRequest -Uri $Uri.AbsoluteUri -OutFile $OutFile -TimeoutSec 900 -UseBasicParsing @webSkipCertCheck
-            } finally {
-                if ($null -ne $downloadTlsCallback -and [object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $downloadTlsCallback)) {
-                    [Net.ServicePointManager]::ServerCertificateValidationCallback = $previousTlsCallback
-                }
-            }
+            Invoke-InstallWebRequest -Uri $Uri -OutFile $OutFile -TimeoutSec 900
             Write-InstallLog INFO http_request_completed @{ result = "success"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; http_status = "success" }
         } catch {
             Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
@@ -463,54 +525,35 @@ function Install-Binary {
     $failedStage = $null
     $renameFailure = $null
     $swapFailure = $null
-    $useLegacyTls = $PSVersionTable.PSVersion.Major -lt 7
-    $installSecurityProtocol = $null
     try {
     Set-InstallStage "install_target"
     $OutPath = Join-Path $InstallDir "omp.exe"
     if (Test-Path -LiteralPath $OutPath -PathType Container) {
         throw "Refusing to replace a directory at $OutPath"
     }
-    if ($useLegacyTls) {
-        $previousSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
-        $installSecurityProtocol = $previousSecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        [Net.ServicePointManager]::SecurityProtocol = $installSecurityProtocol
-    }
-    try {
-        if ($useLegacyTls) {
-            $previousTlsCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
-            [Net.ServicePointManager]::ServerCertificateValidationCallback = $null
-        }
-        # Do not follow redirects: Windows PowerShell can redirect HTTPS to HTTP.
-        if ($Ref) {
-            Set-InstallStage "release_metadata"
-            Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
-            Write-Host "Fetching release $Ref..."
-            try {
-                $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Ref" -TimeoutSec 60 -MaximumRedirection 0
-            } catch {
-                $failureFields = Get-InstallFailureFields $_
-                Write-InstallLog ERROR http_request_failed $failureFields
-                if ($failureFields.http_status -eq 404) {
-                    throw "Release tag not found: $Ref`nOnly published release tags are supported."
-                }
-                throw
+    if ($Ref) {
+        Set-InstallStage "release_metadata"
+        Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
+        Write-Host "Fetching release $Ref..."
+        try {
+            $Release = Invoke-InstallWebRequest -Uri "https://api.github.com/repos/$Repo/releases/tags/$Ref" -TimeoutSec 60
+        } catch {
+            $failureFields = Get-InstallFailureFields $_
+            Write-InstallLog ERROR http_request_failed $failureFields
+            if ($failureFields.http_status -eq 404) {
+                throw "Release tag not found: $Ref`nOnly published release tags are supported."
             }
-        } else {
-            Write-Host "Fetching latest release..."
-            Set-InstallStage "release_metadata"
-            Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_latest"; timeout_ms = 60000; attempt = 1 }
-            try {
-                $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 60 -MaximumRedirection 0
-            } catch {
-                Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
-                throw
-            }
+            throw
         }
-    } finally {
-        # Do not overwrite a callback another consumer replaced during the request.
-        if ($useLegacyTls -and $null -eq [Net.ServicePointManager]::ServerCertificateValidationCallback) {
-            [Net.ServicePointManager]::ServerCertificateValidationCallback = $previousTlsCallback
+    } else {
+        Write-Host "Fetching latest release..."
+        Set-InstallStage "release_metadata"
+        Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_latest"; timeout_ms = 60000; attempt = 1 }
+        try {
+            $Release = Invoke-InstallWebRequest -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 60
+        } catch {
+            Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
+            throw
         }
     }
     Write-InstallLog INFO http_request_completed @{ result = "success"; host = "api.github.com"; endpoint = "release_metadata"; http_status = "success" }
@@ -722,11 +765,6 @@ function Install-Binary {
         }
         Complete-InstallLog "failed" $_
         throw
-    } finally {
-        # Do not overwrite settings another consumer changed during install.
-        if ($null -ne $installSecurityProtocol -and [Net.ServicePointManager]::SecurityProtocol -eq $installSecurityProtocol) {
-            [Net.ServicePointManager]::SecurityProtocol = $previousSecurityProtocol
-        }
     }
 }
 
@@ -734,15 +772,19 @@ function Clear-InstallAsides {
     Set-InstallStage "aside_cleanup"
     Write-InstallLog INFO aside_cleanup_started @{ target = "old_images" }
     $cleanupErrors = @()
-    Get-ChildItem -LiteralPath $InstallDir -Filter ".omp.old.*" -File -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors |
-        Remove-Item -Force -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors
+    $oldImageName = '^\.omp\.old\.[0-9a-f]{32}\.exe\z'
+    Get-ChildItem -LiteralPath $InstallDir -Filter ".omp.old.*.exe" -File -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors |
+        Where-Object Name -CMatch $oldImageName |
+        ForEach-Object {
+            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors
+        }
     if ($cleanupErrors.Count) {
         Write-InstallLog WARN aside_cleanup_completed @{ result = "partial"; error_count = $cleanupErrors.Count; locked_images_may_remain = $true }
         Write-Host "[WARN] Old-image cleanup is incomplete; this does not undo binary installation." -ForegroundColor Yellow
         foreach ($cleanupError in $cleanupErrors) { Write-Host $cleanupError.Exception.Message }
         $installLiteral = "'" + $InstallDir.Replace("'", "''") + "'"
         Write-Host "Files still used by running sessions can stay until those sessions exit. Then retry cleanup without stopping processes:"
-        Write-Host "Get-ChildItem -LiteralPath $installLiteral -Filter '.omp.old.*' -File | Remove-Item -Force -ErrorAction Continue"
+        Write-Host "Get-ChildItem -LiteralPath $installLiteral -Filter '.omp.old.*.exe' -File | Where-Object Name -CMatch '$oldImageName' | ForEach-Object { Remove-Item -LiteralPath `$_.FullName -Force -ErrorAction Continue }"
     } else {
         Write-InstallLog INFO aside_cleanup_completed @{ result = "success" }
     }

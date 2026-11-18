@@ -13,6 +13,7 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
+import type { ModelRoleLookup } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
@@ -235,33 +236,40 @@ function pickAutomaticDefault(session: ModelPresetSession, candidates: Model[]):
 }
 
 /**
- * Where `default` lands once the preset is written: its model and thinking selector.
+ * Resolve the default before or after applying a preset. A process default
+ * is a preference, not a requirement: if unusable, try automatic selection.
  * Without an explicit `:level` on the selector, the preset's own `defaultThinkingLevel`
  * applies even when a higher layer still decides the setting — the switch is for this
  * session; the shadowing layer is reported separately.
  */
-function resolveLiveDefault(
+function resolvePresetDefault(
 	settings: Settings,
 	session: ModelPresetSession,
 	candidates: Model[],
 	preset: ModelPreset,
+	{
+		roleValue,
+		implicit,
+		roleLookup,
+	}: { roleValue: string | undefined; implicit: boolean; roleLookup?: ModelRoleLookup },
 ): { model: Model; thinkingLevel: ConfiguredThinkingLevel | undefined } | string {
-	const roleValue = settings.getModelRole("default");
 	const fallbackLevel =
 		preset.defaultThinkingLevel ?? parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings));
-	if (!roleValue) {
-		const model = pickAutomaticDefault(session, candidates);
-		return model ? { model, thinkingLevel: fallbackLevel } : "no model with configured credentials is available";
+	if (roleValue) {
+		const resolved = resolveModelRoleValue(roleValue, candidates, { settings, roleLookup });
+		if (!resolved.model) {
+			if (!implicit) return `default model \`${roleValue}\` is not available`;
+		} else if (!session.modelRegistry.hasConfiguredAuth(resolved.model)) {
+			if (!implicit) return `no credentials for ${resolved.model.provider}/${resolved.model.id}`;
+		} else {
+			return {
+				model: resolved.model,
+				thinkingLevel: resolved.explicitThinkingLevel ? resolved.thinkingLevel : fallbackLevel,
+			};
+		}
 	}
-	const resolved = resolveModelRoleValue(roleValue, candidates, { settings });
-	if (!resolved.model) return `default model \`${roleValue}\` is not available`;
-	if (!session.modelRegistry.hasConfiguredAuth(resolved.model)) {
-		return `no credentials for ${resolved.model.provider}/${resolved.model.id}`;
-	}
-	return {
-		model: resolved.model,
-		thinkingLevel: resolved.explicitThinkingLevel ? resolved.thinkingLevel : fallbackLevel,
-	};
+	const model = pickAutomaticDefault(session, candidates);
+	return model ? { model, thinkingLevel: fallbackLevel } : "no model with configured credentials is available";
 }
 
 /** Write the preset's roles into the model hub's storage scope, clearing roles it leaves out. */
@@ -349,33 +357,27 @@ async function applyModelPresetLocked(
 	const candidates = presetCandidates(session);
 
 	const presetDefault = Object.hasOwn(preset.modelRoles, "default") ? preset.modelRoles.default : undefined;
-	if (presetDefault) {
-		// Resolve against the preset's own roles overlaid on the current ones:
-		// a default written as an alias (`@slow`) must see the state the write
-		// produces, not the current roles.
-		const roleLookup = {
-			getModelRole: (role: string) =>
-				Object.hasOwn(preset.modelRoles, role) ? preset.modelRoles[role] : settings.getModelRole(role),
-		};
-		const resolved = resolveModelRoleValue(presetDefault, candidates, { settings, roleLookup });
-		if (!resolved.model)
-			return { kind: "unavailable", reason: `default model \`${presetDefault}\` is not available` };
-		if (!session.modelRegistry.hasConfiguredAuth(resolved.model)) {
-			return {
-				kind: "unavailable",
-				reason: `no credentials for ${resolved.model.provider}/${resolved.model.id}`,
-			};
-		}
-	} else if (!pickAutomaticDefault(session, candidates)) {
-		// No `default` to apply and nothing to fall back to: refuse before writing.
-		return { kind: "unavailable", reason: "no model with configured credentials is available" };
-	}
+	// A selector alias must see the preset's assignments rather than the
+	// assignments it is about to replace.
+	const roleLookup = {
+		getModelRole: (role: string) =>
+			Object.hasOwn(preset.modelRoles, role) ? preset.modelRoles[role] : settings.getModelRole(role),
+	};
+	const preflight = resolvePresetDefault(settings, session, candidates, preset, {
+		roleValue: presetDefault ?? settings.getProcessModelRoleAfterClear("default"),
+		implicit: presetDefault === undefined,
+		roleLookup,
+	});
+	if (typeof preflight === "string") return { kind: "unavailable", reason: preflight };
 
 	writePresetRoles(settings, preset);
 	const shadowed = shadowedRoles(settings, preset);
 	const thinkingShadow = shadowedThinking(settings, preset);
 
-	const live = resolveLiveDefault(settings, session, candidates, preset);
+	const live = resolvePresetDefault(settings, session, candidates, preset, {
+		roleValue: settings.getModelRole("default"),
+		implicit: settings.getModelRoleProvenance("default") === "default",
+	});
 	if (typeof live === "string") return { kind: "failed", reason: live, shadowed };
 	try {
 		await session.setModel(live.model, "default", { persist: false });

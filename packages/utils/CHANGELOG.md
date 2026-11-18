@@ -15,6 +15,8 @@
 ### Fixed
 
 - Reuse upstream per-user test temp directories without overriding explicit persistent or performance roots for logs.
+- SQLite recovery reads bounded pages rather than copying the database and preserves readable rows after a damaged record.
+- Removing an anchored YAML key preserves aliases to that key; offline cache logs are private to their owner.
 - `ptree` commands spawned with `subreaper: true` no longer leave a descendant that ignores SIGTERM running after a graceful stop (an `AbortSignal`, `kill()` without a hard grace, or dispose); the subreaper stays alive through the grace period and the hard sweep then ends every descendant ([#18018](https://github.com/can1357/oh-my-pi/pull/18018) by [@sjawhar](https://github.com/sjawhar))
 
 ## [18.22.2] - 2026-11-18

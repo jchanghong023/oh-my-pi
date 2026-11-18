@@ -418,6 +418,7 @@ export class ExtensionList implements Component {
 		}
 		const on = item.item.state !== "disabled";
 		if (isShadowedExtension(item.item)) return { on, blocked: "Shadowed by another source" };
+		if (item.item.disabledReason === "skill-config") return { on, blocked: "Disabled by skills settings" };
 		if (this.#isMasterDisabled()) return { on, blocked: "Provider disabled" };
 		return { on };
 	}
@@ -829,17 +830,8 @@ export class ExtensionList implements Component {
 			if (this.#callbacks.getProviders?.().find(provider => provider.id === item.providerId)?.enabled !== false)
 				this.#callbacks.onUserSourceToggle?.(item.providerId);
 		} else if (item?.type === "extension") {
-			// Shadowed same-name rows share the winner's id (`mcp:github`).
-			// Toggling them would mutate whichever config `find(id)` hits first.
-			if (isShadowedExtension(item.item)) return;
-			const masterDisabled =
-				this.#masterSwitchProvider !== null &&
-				this.#callbacks.getProviders?.().find(provider => provider.id === this.#masterSwitchProvider)?.enabled ===
-					false;
-			if (!masterDisabled) {
-				const newEnabled = item.item.state === "disabled";
-				this.#callbacks.onToggle?.(item.item.id, newEnabled);
-			}
+			if (this.selectedSwitch()?.blocked) return;
+			this.#callbacks.onToggle?.(item.item.id, item.item.state === "disabled");
 		}
 	}
 

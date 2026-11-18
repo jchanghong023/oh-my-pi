@@ -95,7 +95,7 @@ export const BUILTIN_TOOL_HELP: Record<BuiltinToolName, BuiltinToolHelp> = {
 	security_scan: { summary: "Run security scans", defaultState: "off" },
 };
 
-export const HIDDEN_TOOL_NAMES = ["yield", "goal", "think"] as const;
+export const HIDDEN_TOOL_NAMES = ["yield", "goal", "think", "spec_verify"] as const;
 
 export type HiddenToolName = (typeof HIDDEN_TOOL_NAMES)[number];
 

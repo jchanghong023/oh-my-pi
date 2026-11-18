@@ -871,6 +871,8 @@ export declare class VcsGitRepo {
   operationKind(signal?: unknown | undefined | null): Promise<"merge" | "cherry-pick" | "revert" | "rebase" | "am" | "unmerged-index" | null>
   /** Porcelain status. */
   statusPorcelain(options: VcsStatusOptions, signal?: unknown | undefined | null): Promise<string>
+  /** Complete NUL-delimited porcelain with raw paths and every untracked file. */
+  statusPorcelainBytes(signal?: unknown | undefined | null): Promise<Buffer>
   /** Status counts. */
   statusSummary(signal?: unknown | undefined | null): Promise<VcsStatusSummary>
   /** Read config. */

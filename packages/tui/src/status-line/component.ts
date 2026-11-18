@@ -15,6 +15,7 @@ import {
 	claudeComposerStyle,
 	padding,
 	motionEffectsEnabled,
+	sliceByColumn,
 	spinnerAnimated,
 	spinnerInterval,
 	spinnerTickDelay,
@@ -496,11 +497,13 @@ class StatusLineExternalInputs {
 	jobWidgetRef: unknown = undefined;
 }
 
+type OverflowPart = string | { path: string };
+
 interface CachedStatusLine {
 	content: string;
 	dimmedContent: string;
 	/** Segments the width shrink dropped, in render order; wrapped into rows by the callers that show them. */
-	overflowParts: readonly string[];
+	overflowParts: readonly OverflowPart[];
 	width: number;
 	availableWidth: number;
 	renderRevision: number;
@@ -604,7 +607,6 @@ function resolveWorktreeContext(cwd: string): WorktreeContext | null {
 interface ActiveMeter {
 	activeMs: number;
 	activeStartedAt: number | null;
-	lastActivityEndAt: number | null;
 	sessionFile: string | undefined;
 }
 
@@ -1122,10 +1124,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 */
 	resetActiveTime(): void {
 		const meter = this.#meter();
-		if (meter.activeMs === 0 && meter.activeStartedAt === null && meter.lastActivityEndAt === null) return;
+		if (meter.activeMs === 0 && meter.activeStartedAt === null) return;
 		meter.activeMs = 0;
 		meter.activeStartedAt = null;
-		meter.lastActivityEndAt = null;
 		this.#invalidateStatusLineRenderCache();
 		this.#syncActiveWindowRepaint();
 	}
@@ -1156,7 +1157,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		if (meter.activeStartedAt === null) return;
 		const now = Date.now();
 		meter.activeMs += Math.max(0, now - meter.activeStartedAt);
-		meter.lastActivityEndAt = now;
 		meter.activeStartedAt = null;
 		this.#invalidateStatusLineRenderCache();
 		this.#syncActiveWindowRepaint();
@@ -1179,16 +1179,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	getTurnElapsedMs(): number | null {
 		const startedAt = this.#meter().activeStartedAt;
 		return startedAt === null ? null : Math.max(0, Date.now() - startedAt);
-	}
-
-	/** Original stop time for the viewed session's last active window, independent of painting. */
-	getLastActivityEndAt(): number | null {
-		return this.#meter().lastActivityEndAt;
-	}
-
-	/** Original start time of the currently-open active window, or null while idle. */
-	getTurnStartedAt(): number | null {
-		return this.#meter().activeStartedAt;
 	}
 
 	/**
@@ -1214,7 +1204,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			}
 		}
 		if (!meter) {
-			meter = { activeMs: 0, activeStartedAt: null, lastActivityEndAt: null, sessionFile: currentFile };
+			meter = { activeMs: 0, activeStartedAt: null, sessionFile: currentFile };
 			this.#activeMeters.set(this.session, meter);
 		}
 		return meter;
@@ -1972,7 +1962,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		(async () => {
 			let nextStatus: GitStatus | null = null;
 			try {
-				nextStatus = parseGitStatus(await repository.statusPorcelain({ untracked: "all", nulTerminated: true }));
+				const taggedRepository: GitViewTaggedRepo = repository;
+				const gitRepository = (taggedRepository[GIT_VIEW] ??= repository.asGit());
+				if (gitRepository) nextStatus = parseGitStatus(await gitRepository.statusPorcelainBytes());
 			} catch {
 				nextStatus = null;
 			} finally {
@@ -3208,7 +3200,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		previewTitle: string | undefined,
 		nowMs: number,
 		brand: BrandCapture,
-	): { content: string; overflowParts: readonly string[] } {
+	): { content: string; overflowParts: readonly OverflowPart[] } {
 		const effectiveSettings = this.#resolveSettings();
 		this.#syncPricingTimer();
 		const plain = layout !== "box" && layout !== "band";
@@ -3318,6 +3310,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const originalLeft = [...left];
 		const originalRight = [...right];
 		const leftSourceIndices = originalLeft.map((_, index) => index);
+		const droppedLeft: OverflowPart[] = [];
 
 		const leftSepWidth = separators.leftSepWidth;
 		const rightSepWidth = separators.rightSepWidth;
@@ -3436,6 +3429,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			while (totalWidth() > topFillWidth && left.length > 0) {
 				const dropIdx = leftOverflowDropIndex();
 				const removedWidth = leftWidths[dropIdx];
+				const original = originalLeft[leftSourceIndices[dropIdx]];
+				droppedLeft[leftSourceIndices[dropIdx]] = leftSegIds[dropIdx] === "path" ? { path: original } : original;
 				left.splice(dropIdx, 1);
 				leftSourceIndices.splice(dropIdx, 1);
 				leftWidths.splice(dropIdx, 1);
@@ -3520,9 +3515,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			}
 		}
 
-		const retainedLeft = new Set(leftSourceIndices);
-		const overflowParts = originalLeft.filter((_, index) => !retainedLeft.has(index));
-		overflowParts.push(...originalRight.slice(right.length));
+		const overflowParts = droppedLeft.filter(part => part !== undefined);
+		const rightBadgeCount = originalRight.length - rightSegIds.length;
+		for (let i = right.length; i < originalRight.length; i++) {
+			const part = originalRight[i];
+			overflowParts.push(rightSegIds[i - rightBadgeCount] === "path" ? { path: part } : part);
+		}
 		if (embeddedContextParts && !contextLabelsVisible) overflowParts.push(...embeddedContextParts);
 		return { content: main, overflowParts };
 	}
@@ -3680,7 +3678,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		}
 	}
 
-	#wrapOverflowRows(initial: string, parts: readonly string[], width: number): string[] {
+	#wrapOverflowRows(initial: string, parts: readonly OverflowPart[], width: number): string[] {
 		if (width <= 0) return [];
 		const textAnsi = theme.getFgAnsi("text");
 		// Each separator (theme.fg) ends with this reset, so every row must
@@ -3696,15 +3694,23 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			content = "";
 			appended = 0;
 		};
-		const startRow = (part: string): void => {
-			const fitted = visibleWidth(part) > width ? truncateToWidth(part, width) : part;
+		const startRow = (part: string, isPath: boolean): void => {
+			const partWidth = visibleWidth(part);
+			let fitted = part;
+			if (partWidth > width) {
+				fitted = isPath
+					? `…${sliceByColumn(part, partWidth - width + 1, width - 1, true)}`
+					: truncateToWidth(part, width);
+			}
 			content = `${textAnsi}${fitted}`;
 			appended = 1;
 		};
 
-		for (const part of parts) {
+		for (const overflow of parts) {
+			const isPath = typeof overflow !== "string";
+			const part = isPath ? overflow.path : overflow;
 			if (!content) {
-				startRow(part);
+				startRow(part, isPath);
 				continue;
 			}
 			const separator =
@@ -3717,7 +3723,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			const candidate = content + decorated;
 			if (visibleWidth(candidate) > width) {
 				closeRow();
-				startRow(part);
+				startRow(part, isPath);
 				continue;
 			}
 			content = candidate;
@@ -3744,14 +3750,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		layout: StatusLineLayout,
 		previewTitle?: string,
 		overflowWidth?: number,
-	): { main: string; overflow: string[]; overflowParts: readonly string[] } {
+	): { main: string; overflow: string[] } {
 		const statusLine = this.#buildStatusLine(width, layout, previewTitle);
 		const rows = this.#wrapOverflowRows("", statusLine.overflowParts, overflowWidth ?? width);
-		if (!this.#focusedAgentId)
-			return { main: statusLine.dimmedContent, overflow: rows, overflowParts: statusLine.overflowParts };
+		if (!this.#focusedAgentId) return { main: statusLine.dimmedContent, overflow: rows };
 		const dim = (content: string): string =>
 			content ? `\x1b[2m${content.replaceAll("\x1b[0m", "\x1b[0m\x1b[2m")}\x1b[22m` : "";
-		return { main: statusLine.dimmedContent, overflow: rows.map(dim), overflowParts: statusLine.overflowParts };
+		return { main: statusLine.dimmedContent, overflow: rows.map(dim) };
 	}
 
 	/**

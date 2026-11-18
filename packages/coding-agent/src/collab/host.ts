@@ -36,7 +36,12 @@ import type { SessionEntry as StoredSessionEntry } from "../session/session-entr
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
-import { configuredIntranetRelayOrigin, intranetCollabEnabled, intranetUsername, isPublicCollabRelay } from "./intranet";
+import {
+	configuredIntranetRelayOrigin,
+	intranetCollabEnabled,
+	intranetUsername,
+	isPublicCollabRelay,
+} from "./intranet";
 import {
 	type AgentSnapshot,
 	COLLAB_PROMPT_MESSAGE_TYPE,

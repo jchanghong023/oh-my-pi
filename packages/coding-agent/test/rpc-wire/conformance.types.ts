@@ -177,26 +177,21 @@ export type CommandNullability = Assert<
 // --- Session events and notifications ---------------------------------------
 
 type ServerEventType = RpcAgentSessionEventFrame["type"];
-// The fork adds session-layer event kinds the upstream wire does not model (goal-autopilot
-// command hosts consume them in-process); the wire set stays authoritative and must be a
-// subset of the server's, so a wire event the server never writes is still drift.
-export type SessionEventSet = Assert<
-	[Wire.RpcAgentEvent["type"]] extends [ServerEventType]
-		? true
-		: { wireOnly: Exclude<Wire.RpcAgentEvent["type"], ServerEventType> }
->;
-// Compaction events carry fork journaling fields (operationId, summaryRef) the wire does
-// not model; they are server-side extras, so those events are checked as a subset.
-type WireSubsetEvents =
-	| "auto_compaction_start"
-	| "auto_compaction_end"
-	| "manual_compaction_start"
-	| "manual_compaction_end";
+export type SessionEventSet = Assert<Same<Wire.RpcAgentEvent["type"], ServerEventType>>;
+
+// The wire does not model automatic compaction's fork-specific journaling fields.
+type WireSubsetEvents = "auto_compaction_start" | "auto_compaction_end";
+type ServerEvent<K extends ServerEventType> = Extract<RpcAgentSessionEventFrame, { type: K }>;
+// Manual compaction exposes its pairing ID, but not the journal entry reference.
+type ManualCompactionEnd = Omit<ServerEvent<"manual_compaction_end">, "summaryRef">;
 export type SessionEvents = Assert<
 	AllTrue<{
-		[K in Wire.RpcAgentEvent["type"]]: [K] extends [WireSubsetEvents]
-			? OutboundSubset<Extract<RpcAgentSessionEventFrame, { type: K }>, Extract<Wire.RpcAgentEvent, { type: K }>>
-			: Outbound<Extract<RpcAgentSessionEventFrame, { type: K }>, Extract<Wire.RpcAgentEvent, { type: K }>>;
+		[K in Wire.RpcAgentEvent["type"]]: K extends WireSubsetEvents
+			? OutboundSubset<ServerEvent<K>, Extract<Wire.RpcAgentEvent, { type: K }>>
+			: Outbound<
+					K extends "manual_compaction_end" ? ManualCompactionEnd : ServerEvent<K>,
+					Extract<Wire.RpcAgentEvent, { type: K }>
+				>;
 	}>
 >;
 

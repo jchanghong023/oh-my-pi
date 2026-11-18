@@ -141,6 +141,7 @@ import { CompactThinkingPreview } from "./compact-thinking-preview";
 import { CompactToolOutputPreview } from "./compact-tool-output-preview";
 import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
 import { dispatchApprovedPlan } from "../plan-mode/session-approval";
+import { planVerificationChecks, recordApprovedPlanReference } from "../plan-mode/verification";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
@@ -1377,8 +1378,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	progressHudContainer: Container;
 	statusContainer: Container;
 	/** Compact activity dock; its per-session display memory never enters the transcript. */
-	readonly compactThinkingPreview = new CompactThinkingPreview(this, () =>
-		this.#eventController.showingAsyncWait ? this.loadingAnimation : undefined,
+	readonly compactThinkingPreview = new CompactThinkingPreview(
+		this,
+		() => (this.#eventController.showingAsyncWait ? this.loadingAnimation : undefined),
+		width => this.compactToolOutputPreview.compactActivity(width),
 	);
 	/** Read-only Output sits above the activity dock; the input and its trailing chrome win space. */
 	readonly compactToolOutputPreview: CompactToolOutputPreview = new CompactToolOutputPreview(this, () =>
@@ -1414,6 +1417,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	initialChatRendered = false;
 	isBashMode = false;
 	toolOutputExpanded = false;
+	compactDiffExpanded = false;
 	hideToolActivity = false;
 	todoExpanded = false;
 	planModeEnabled = false;
@@ -3610,6 +3614,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.session.isStreaming || this.session.isCompacting || this.session.hasPostPromptWork;
 	}
 
+	#hasLoopNBackgroundWork(): boolean {
+		return this.loopNActive && this.session.hasUnsettledAsyncJobTree();
+	}
+
 	#submitLoopPromptWhenReady(prompt: string): void {
 		if (this.isAIReqWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
@@ -3617,7 +3625,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
 			return;
 		}
-		if (this.#isAutoSubmitBlocked()) {
+		if (this.#isAutoSubmitBlocked() || this.#hasLoopNBackgroundWork()) {
 			this.#deferLoopAutoSubmit(() => this.#submitLoopPromptWhenReady(prompt));
 			return;
 		}
@@ -3644,7 +3652,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #loopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
 		if (this.isAIReqWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
-		if (this.#isAutoSubmitBlocked()) {
+		// Do not compact or reset a LoopN turn while its native jobs are still settling.
+		// The prompt-only path checks the same gate immediately before advancing the list.
+		if (this.#isAutoSubmitBlocked() || (action !== "prompt" && this.#hasLoopNBackgroundWork())) {
 			this.#deferLoopAutoSubmit(() => {
 				void this.#runLoopIteration(action, prompt);
 			});
@@ -7315,8 +7325,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// dropped the copy. Same best-effort semantics as the dispatch path
 			// (re-pinning the reference path is idempotent; it was already set
 			// before compaction).
-			this.session.setPlanReferencePath(options.planFilePath);
-			this.sessionManager.appendModeChange("none", { approvedPlanFilePath: options.planFilePath });
+			recordApprovedPlanReference(this.session, options.planFilePath, planVerificationChecks(planContent));
 			try {
 				const autosaved = await autosaveApprovedPlan({
 					settings: this.session.settings,
@@ -8644,6 +8653,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#micCursor?.dispose();
 		this.#micCursor = undefined;
+		this.compactThinkingPreview.clear();
+		this.compactToolOutputPreview.clear();
 		// Stop the shared tool-spinner ticker: a live block missed by per-component
 		// stopAnimation would otherwise keep the shared interval pinning the process.
 		stopSharedSpinnerTicker();

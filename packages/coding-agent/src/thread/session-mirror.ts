@@ -297,7 +297,7 @@ export type SessionBridgeProtocol = {
 	patch: RpcMethod<[key: string, patch: Partial<SessionMirrorState>], void>;
 	messages: RpcMethod<[key: string, delta: SessionMessagesDelta], void>;
 	event: RpcMethod<[key: string, event: AgentSessionEvent, outputStamp: LiveToolOutputStamp | undefined], void>;
-	runState: RpcMethod<[key: string, state: SessionRunState], void>;
+	runState: RpcMethod<[key: string, state: SessionRunState, at: number], void>;
 	/**
 	 * Watch started: the full view state, and what main's entry list (kept across
 	 * watches) lacks; undefined when it is current.

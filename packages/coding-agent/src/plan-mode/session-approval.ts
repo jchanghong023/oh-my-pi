@@ -15,6 +15,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import type { AgentSession } from "../session/agent-session";
 import { autosaveApprovedPlan } from "./plan-autosave";
 import { humanizePlanTitle } from "./approved-plan";
+import { planVerificationChecks, recordApprovedPlanReference } from "./verification";
 
 export interface ApprovedPlanDispatchOptions {
 	planFilePath: string;
@@ -55,8 +56,7 @@ function captureSessionGuard(session: AgentSession, signal?: AbortSignal): () =>
 export async function dispatchApprovedPlan(session: AgentSession, options: ApprovedPlanDispatchOptions): Promise<void> {
 	const assertCurrentSession = captureSessionGuard(session, options.signal);
 	assertCurrentSession();
-	session.setPlanReferencePath(options.planFilePath);
-	session.sessionManager.appendModeChange("none", { approvedPlanFilePath: options.planFilePath });
+	recordApprovedPlanReference(session, options.planFilePath, planVerificationChecks(options.planContent));
 	let autosavedPath: string | null = null;
 	let autosaveError: Error | undefined;
 	try {

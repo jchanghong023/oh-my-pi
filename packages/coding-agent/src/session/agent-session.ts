@@ -216,6 +216,7 @@ import { type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/appr
 import { listPlanFiles, readPlanFile, resolvePlanFilePath } from "../plan-mode/plan-files";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import type { PlanModeState } from "../plan-mode/state";
+import { type ApprovedPlanChecks, readApprovedPlanChecks } from "../plan-mode/verification";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
@@ -1170,7 +1171,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#eventListeners: AgentSessionEventListener[] = [];
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	readonly #liveToolOutput = new LiveToolOutputState();
-	#runStateListeners = new Set<(state: "running" | "idle") => void>();
+	#runStateListeners = new Set<(state: "running" | "idle", at: number) => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
 	#runStartedAt: number | undefined;
 	/** Bumped at every `agent_start`; lets a late loop end tell it was overtaken by a newer loop. */
@@ -1375,7 +1376,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** In-flight vision descriptions that gate prompt admission; abort() cancels them. */
 	#imageDescriptionAbortControllers = new Set<AbortController>();
 	/** Awaited custom commands own nested work outside the primary agent loop. */
-	#customCommandAbortControllers = new Set<AbortController>();
+	#customCommandsInFlight = new Map<AbortController, Promise<void>>();
+	/** A nested ordinary abort must not reopen custom-command admission during strict cleanup. */
+	#strictAbortCount = 0;
 	#queuedMessageDrainBlocked = false;
 	#modeExitDrainSuppressionDepth = 0;
 	#usagePreflightReadyForNextModelCall = false;
@@ -4196,11 +4199,13 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#emitRunState(state: "running" | "idle"): void {
+		const at = Date.now();
 		if (state === "idle") this.#runStartedAt = undefined;
-		else this.#runStartedAt ??= Date.now();
+		else this.#runStartedAt ??= at;
+		this.#liveToolOutput.setRunActive(state === "running", at);
 		for (const listener of this.#runStateListeners) {
 			try {
-				listener(state);
+				listener(state, at);
 			} catch (error) {
 				logger.warn("AgentSession run-state listener threw", {
 					error: error instanceof Error ? error.message : String(error),
@@ -6468,7 +6473,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * (just before its `agent_end`) or a transition abandons it. A paused run stays
 	 * `running`. The registry mirrors these into the agent's ref status.
 	 */
-	subscribeRunState(listener: (state: "running" | "idle") => void): () => void {
+	subscribeRunState(listener: (state: "running" | "idle", at: number) => void): () => void {
 		this.#runStateListeners.add(listener);
 		return () => this.#runStateListeners.delete(listener);
 	}
@@ -8968,6 +8973,19 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#planReferencePath;
 	}
 
+	getApprovedPlanChecks(): ApprovedPlanChecks | undefined {
+		if (!this.#planReferenceApproved || this.#planModeState?.enabled) return undefined;
+		for (const entry of this.sessionManager.getBranch().reverse()) {
+			if (entry.type !== "mode_change") continue;
+			if (entry.mode === "plan" || entry.mode === "plan_paused") break;
+			const path = entry.data?.approvedPlanFilePath;
+			if (typeof path !== "string") continue;
+			if (path !== this.#planReferencePath) break;
+			return readApprovedPlanChecks(entry.data?.approvedPlanChecks);
+		}
+		return undefined;
+	}
+
 	get clientBridge(): ClientBridge | undefined {
 		return this.#clientBridge;
 	}
@@ -9547,38 +9565,44 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				if (target?.type !== "message" || target.message.role !== "user") {
 					throw new Error("Edit requires a user input");
 				}
-				const originalLeaf = this.sessionManager.getLeafId();
+				const sessionId = this.sessionManager.getSessionId();
 				const generation = this.#promptGeneration;
-				let replacementLeaf = originalLeaf;
+				type BranchCommit = { previousLeaf: string | null; leaf: string | null; generation: number };
+				let branch: BranchCommit | undefined;
+				const ownsBranch = (commit: BranchCommit) =>
+					this.sessionManager.getSessionId() === sessionId &&
+					this.#promptGeneration === commit.generation &&
+					this.sessionManager.getLeafId() === commit.leaf;
+				const canCommit = () =>
+					this.sessionManager.getSessionId() === sessionId &&
+					this.#promptGeneration === generation &&
+					!this.#isDisposed &&
+					!this.#abortInProgress &&
+					(!branch || ownsBranch(branch));
+				const onCommitted = (previousLeaf: string | null, leaf: string | null) => {
+					// Maintenance may update the same commit with its own subsequent journal writes.
+					if (branch) branch.leaf = leaf;
+					else branch = { previousLeaf, leaf, generation: this.#promptGeneration };
+				};
 				let admitted = false;
 				try {
-					try {
-						const ready = await this.#maintenance.runPrePromptCompactionIfNeeded(
-							[{ role: "user", content: text, timestamp: Date.now() }],
-							target.parentId,
-						);
-						if (!ready) throw new Error("Edited input preflight was cancelled");
-					} finally {
-						// 修复：提交后的扩展 hook 仍可能抛错，也必须保留真实摘要并恢复原分支。
-						replacementLeaf = this.sessionManager.getLeafId();
-					}
-					if (this.#promptGeneration !== generation || this.#isDisposed || this.#abortInProgress) {
-						throw new Error("Edited input preflight was cancelled");
-					}
-					if (replacementLeaf === originalLeaf) {
-						try {
-							const moved = await this.navigateTree(entryId, { summarize: false });
-							if (moved.cancelled) throw new Error("Conversation navigation was cancelled");
-						} finally {
-							replacementLeaf = this.sessionManager.getLeafId();
-						}
+					const ready = await this.#maintenance.runPrePromptCompactionIfNeeded(
+						[{ role: "user", content: text, timestamp: Date.now() }],
+						{ parentId: target.parentId, canCommit, onCommitted },
+					);
+					if (!ready || !canCommit()) throw new Error("Edited input preflight was cancelled");
+					if (!branch) {
+						const moved = await this.#navigateTree(entryId, { summarize: false }, { canCommit, onCommitted });
+						if (moved.cancelled) throw new Error("Conversation navigation was cancelled");
 					} else {
-						// 修复：真实压缩已直接提交到编辑目标的父节点，不再 rewind 丢弃摘要。
-						this.#promptGeneration++;
+						// The summary is already on the edited branch; rewinding would discard it.
+						branch.generation = ++this.#promptGeneration;
 						await this.#reconcileModeAfterTransition();
+						if (!ownsBranch(branch)) throw new Error("Edited input preflight was cancelled");
 						this.#rehydrateCheckpointRewindState();
 						this.#modelMentions.syncFromBranch();
 					}
+					if (!branch || !ownsBranch(branch)) throw new Error("Edited input preflight was cancelled");
 					return await this.#prompt(text, {
 						...options,
 						inputId: options?.inputId ?? crypto.randomUUID(),
@@ -9591,29 +9615,37 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				} finally {
 					if (
 						!admitted &&
-						this.sessionManager.getLeafId() === replacementLeaf &&
-						replacementLeaf !== originalLeaf
+						branch &&
+						branch.leaf !== branch.previousLeaf &&
+						ownsBranch(branch) &&
+						!this.#isDisposed
 					) {
-						// 修复：navigateTree 对 user 节点会退到父节点，回滚必须精确选择原 leaf。
-						// 已提交的压缩留在旁支，不能伪造成功或删除真实维护记录。
-						using _transition = this.#beginSessionTransition();
-						this.#promptGeneration++;
-						const bashTransition = this.#bash.beginSessionTransition();
-						let branchRestored = false;
-						try {
-							await this.sessionManager.restoreLeaf(originalLeaf);
-							this.#bash.markSessionTransition(bashTransition);
-							branchRestored = true;
-						} finally {
-							this.#bash.finishSessionTransition(bashTransition, branchRestored);
-						}
-						await this.#reconcileModeAfterTransition();
-						this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
-						this.#rehydrateCheckpointRewindState();
-						this.#advisors.resetSessionState({ preserveCost: true });
-						this.#todo.syncFromBranch();
-						this.#modelMentions.syncFromBranch();
-						this.#closeCodexProviderSessionsForHistoryRewrite();
+						const commit = branch;
+						const restore = async (): Promise<void> => {
+							const queued = this.#enterSessionTransition(restore);
+							if (queued) return queued;
+							if (!ownsBranch(commit)) return;
+							// Keep a committed compaction on its side branch while restoring the exact prior leaf.
+							using _transition = this.#beginSessionTransition();
+							this.#promptGeneration++;
+							const bashTransition = this.#bash.beginSessionTransition();
+							let branchRestored = false;
+							try {
+								await this.sessionManager.restoreLeaf(commit.previousLeaf);
+								this.#bash.markSessionTransition(bashTransition);
+								branchRestored = true;
+							} finally {
+								this.#bash.finishSessionTransition(bashTransition, branchRestored);
+							}
+							await this.#reconcileModeAfterTransition();
+							this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
+							this.#rehydrateCheckpointRewindState();
+							this.#advisors.resetSessionState({ preserveCost: true });
+							this.#todo.syncFromBranch();
+							this.#modelMentions.syncFromBranch();
+							this.#closeCodexProviderSessionsForHistoryRewrite();
+						};
+						await restore();
 					}
 				}
 			});
@@ -11058,7 +11090,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#abortCustomCommands(reason = "Custom command cancelled"): void {
-		for (const controller of this.#customCommandAbortControllers) {
+		for (const controller of this.#customCommandsInFlight.keys()) {
 			controller.abort(new DOMException(reason, "AbortError"));
 		}
 	}
@@ -11080,10 +11112,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#customCommands.find(c => c.command.name === commandName) ??
 			this.#mcpPromptCommands.find(c => c.command.name === commandName);
 		if (!loaded) return null;
-		if (this.#isDisposed || this.#abortInProgress || generation !== this.#promptGeneration) return "";
+		if (
+			this.#isDisposed ||
+			this.#abortInProgress ||
+			this.#strictAbortCount > 0 ||
+			generation !== this.#promptGeneration
+		) {
+			return "";
+		}
 
 		const controller = new AbortController();
-		this.#customCommandAbortControllers.add(controller);
+		const completion = Promise.withResolvers<void>();
+		this.#customCommandsInFlight.set(controller, completion.promise);
 		let result: string | undefined;
 
 		try {
@@ -11114,7 +11154,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				logger.error("Custom command failed", { commandName, error: message });
 			}
 		} finally {
-			this.#customCommandAbortControllers.delete(controller);
+			this.#customCommandsInFlight.delete(controller);
+			completion.resolve();
 		}
 		// 原生命令返回 void／空串时已完成副作用，没有后续模型准入；
 		// 仅在此补报一次，非空变换仍由原有 prompt／队列边界报告准入。
@@ -13859,6 +13900,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// leave any queued steer/follow-up visible for the user rather than
 		// auto-starting a fresh turn during cleanup.
 		this.#abortInProgress = true;
+		if (options?.strict) this.#strictAbortCount++;
 		const forceQueuedDelivery = userInterrupt && options?.deliverQueuedMessages === true;
 		if (forceQueuedDelivery) this.#forcedQueuedMessageDeliveryCount++;
 		const unwind = Promise.withResolvers<void>();
@@ -13970,6 +14012,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 		} finally {
 			this.#abortInProgress = false;
+			if (options?.strict) this.#strictAbortCount--;
 			this.#drainStrandedQueuedMessages();
 			if (forceQueuedDelivery) this.#forcedQueuedMessageDeliveryCount--;
 			this.#abortUnwinds.delete(unwind.promise);
@@ -13982,6 +14025,13 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const ownerId = this.#eval.getKernelOwnerId();
 		const results = await Promise.allSettled([
 			this.#settleOwnAsyncJobs(),
+			this.#customCommandsInFlight.size > 0
+				? withTimeout(
+						Promise.all(this.#customCommandsInFlight.values()),
+						POST_PROMPT_DRAIN_TIMEOUT_MS,
+						"Timed out draining custom commands during abort",
+					)
+				: Promise.resolve(),
 			this.#eval.disposeKernels({ strict: true }),
 			withTimeout(
 				releaseTabsForOwner(ownerId, { kill: true, strict: true }),
@@ -16600,9 +16650,21 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			requireIdle?: boolean;
 		} = {},
 	): Promise<NavigateTreeResult> {
-		const queued = this.#enterSessionTransition(() => this.navigateTree(targetId, options));
+		return this.#navigateTree(targetId, options);
+	}
+
+	async #navigateTree(
+		targetId: string,
+		options: NonNullable<Parameters<AgentSession["navigateTree"]>[1]>,
+		edit?: {
+			canCommit: () => boolean;
+			onCommitted: (previousLeaf: string | null, leaf: string | null) => void;
+		},
+	): Promise<NavigateTreeResult> {
+		const queued = this.#enterSessionTransition(() => this.#navigateTree(targetId, options, edit));
 		if (queued) return queued;
 		using _transition = this.#beginSessionTransition();
+		if (edit && !edit.canCommit()) return { cancelled: true };
 		await this.#bash.flushPending();
 		const oldLeafId = this.sessionManager.getLeafId();
 
@@ -16754,6 +16816,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 		// A run admitted during the hook or summary awaits would keep writing into the branch the leaf leaves.
 		if (options.requireIdle) this.#assertIdleForSnapshot("navigate the session tree");
+		if (edit && !edit.canCommit()) return { cancelled: true };
 
 		// All cancellation/no-op exits are behind us. Invalidate prompt setup
 		// admitted on the abandoned branch before committing any tree changes.
@@ -16828,6 +16891,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const bashTransition = this.#bash.beginSessionTransition();
 		let summaryEntry: BranchSummaryEntry | undefined;
 		let branchTransitioned = false;
+		const previousLeaf = edit ? this.sessionManager.getLeafId() : undefined;
 		try {
 			if (summaryText) {
 				// Create summary at target position (can be null for root)
@@ -16843,6 +16907,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			} else {
 				this.sessionManager.branch(newLeafId);
 			}
+			if (edit) edit.onCommitted(previousLeaf ?? null, this.sessionManager.getLeafId());
 			this.#bash.markSessionTransition(bashTransition);
 			branchTransitioned = true;
 			this.#prunedTerminalFailure = undefined;

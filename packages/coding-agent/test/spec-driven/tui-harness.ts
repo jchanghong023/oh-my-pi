@@ -28,6 +28,7 @@ type Scenario = ProviderScenario & {
 	startupResponse?: string;
 	configuration?: Record<string, unknown>;
 	screenDiagnostics?: boolean;
+	tuiTestBackend?: "alacritty";
 	onScreenFailureEvidence?: (directory: string) => void;
 };
 
@@ -261,6 +262,7 @@ async function withTui(
 		await invoke(
 			target,
 			"run",
+			...(scenario.tuiTestBackend ? ["--backend", scenario.tuiTestBackend] : []),
 			"--cwd",
 			repo,
 			"--cols",

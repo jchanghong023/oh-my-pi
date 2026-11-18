@@ -386,6 +386,7 @@ describe("compaction and focus status spacing", () => {
 				args: { command: "echo preview" },
 				result,
 				terminalAt,
+				expiresAt: terminalAt === undefined ? undefined : terminalAt + 3000,
 			},
 		];
 		const summary = new CompactThinkingPreview(ctx);
@@ -409,7 +410,7 @@ describe("compaction and focus status spacing", () => {
 		};
 		try {
 			await paint();
-			expect(output.render(80)).toHaveLength(3);
+			expect(output.render(80)).toHaveLength(2);
 			expect(summary.render(80)).toHaveLength(3);
 			for (const rows of [12, 8, 6]) {
 				terminal.resize(80, rows);

@@ -74,7 +74,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 		fileName: "spec-executor.md",
 		frontmatter: {
 			name: "spec-executor",
-			description: "Approved task implementation using scoped native writes and planned verification only",
+			description: "Implement an approved plan using native edits and run only its approved spec_verify checks",
 			tools: ["read", "find", "grep", "glob", "write", "edit", "spec_verify", "task", "wait", "yield"],
 			spawns: "*",
 		},

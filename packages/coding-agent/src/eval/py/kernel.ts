@@ -10,7 +10,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { $env, $flag, $which, isBunTestRuntime, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, $flag, $whichAll, isBunTestRuntime, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../config/settings";
 import { offlineFromEnv } from "../../cli/args";
 import {
@@ -153,8 +153,8 @@ function enumerateEvalPythonRuntimes(cwd: string, baseEnv: Record<string, string
 	}
 	const seen = new Set(runtimes.map(runtime => runtime.pythonPath));
 	for (const command of ["python3.15", "python3.14", "python3.13", "python3.12", "python3.11", "python3", "python"]) {
-		const pythonPath = $which(command, { PATH: baseEnv.PATH });
-		if (pythonPath && !seen.has(pythonPath)) {
+		for (const pythonPath of $whichAll(command, { PATH: baseEnv.PATH })) {
+			if (seen.has(pythonPath)) continue;
 			seen.add(pythonPath);
 			runtimes.push({ pythonPath, env });
 		}

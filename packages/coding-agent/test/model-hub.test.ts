@@ -1218,7 +1218,7 @@ describe("ModelHub", () => {
 			enterRolesView(hub);
 			hub.handleInput("f"); // add a fallback for the first role (default)
 			const rendered = normalize(hub.render(220));
-			expect(rendered).toContain("Adding fallback for");
+			expect(rendered).toContain("添加回退：");
 			expect(rendered).toContain("chat-model");
 			expect(rendered).not.toContain("image-model");
 		});
@@ -1234,7 +1234,7 @@ describe("ModelHub", () => {
 			hub.handleInput(LEFT); // fallbacks:test/*
 			hub.handleInput("\n");
 			const rendered = normalize(hub.render(220));
-			expect(rendered).toContain("Adding fallback for test/*");
+			expect(rendered).toContain("添加回退： test/*");
 			expect(rendered).toContain("image-model");
 		});
 

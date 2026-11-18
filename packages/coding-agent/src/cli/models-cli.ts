@@ -508,7 +508,9 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 
 					if (action === "refresh" && !json && process.stderr.isTTY) {
 						process.stderr.write(
-							offline ? "Refreshing configured intranet model catalogs…\n" : "Refreshing models from all providers…\n",
+							offline
+								? "Refreshing configured intranet model catalogs…\n"
+								: "Refreshing models from all providers…\n",
 						);
 					}
 					stage = "builtin_refresh";

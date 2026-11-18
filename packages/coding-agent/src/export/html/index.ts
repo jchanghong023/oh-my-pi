@@ -19,18 +19,18 @@ export { type ExportThemeNames, parseExportArgs } from "./args";
 let cachedTemplate: string | undefined;
 const SESSION_DATA_MARKER = "{{SESSION_DATA}}";
 
-/** Create an export document with a checkout viewer or an integrity-pinned release viewer. */
+/** Create an export document with an inline or integrity-pinned hosted viewer. */
 export function getTemplate(): string {
 	if (cachedTemplate) return cachedTemplate;
+	const compiled = isCompiledBinary();
 	const sourceCheckout =
-		!isCompiledBinary() &&
+		!compiled &&
 		!process.env.PI_BUNDLED &&
 		!import.meta.dir.split(/[\\/]/).includes("node_modules") &&
 		fs.existsSync(path.join(import.meta.dir, "shell.html"));
-	let viewerScript: string;
+	let viewer = compiled ? process.env.PI_HTML_EXPORT_VIEWER : undefined;
 	if (sourceCheckout) {
 		const viewerPath = path.resolve(import.meta.dir, "../../../export-assets", viewerAsset.file);
-		let viewer: string;
 		try {
 			viewer = fs.readFileSync(viewerPath, "utf8");
 		} catch (err) {
@@ -41,6 +41,9 @@ export function getTemplate(): string {
 			}
 			throw err;
 		}
+	}
+	let viewerScript: string;
+	if (viewer !== undefined) {
 		// Inline classic scripts run before deferred external scripts. Wait for
 		// both shared libraries, and prevent embedded text from closing the tag.
 		const escaped = viewer.replace(/<\/script/gi, match => `<\\/${match.slice(2)}`);

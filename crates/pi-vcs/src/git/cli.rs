@@ -82,8 +82,24 @@ impl OutputCapture {
 	}
 
 	fn take(&mut self) -> String {
+		self.take_bytes().into_text()
+	}
+
+	fn take_bytes(&mut self) -> CapturedBytes {
 		self.closed = true;
-		let mut text = String::from_utf8_lossy_owned(std::mem::take(&mut self.retained));
+		CapturedBytes { bytes: std::mem::take(&mut self.retained), truncated: self.truncated }
+	}
+}
+
+#[derive(Default)]
+struct CapturedBytes {
+	bytes:     Vec<u8>,
+	truncated: bool,
+}
+
+impl CapturedBytes {
+	fn into_text(self) -> String {
+		let mut text = String::from_utf8_lossy_owned(self.bytes);
 		if self.truncated {
 			text.push_str(TRUNCATION_MARKER);
 		}
@@ -414,7 +430,7 @@ pub(crate) fn run_sync_write(
 	timeout: Duration,
 	input: &SyncWrite<'_>,
 ) -> Result<CliOutput> {
-	run_sync_impl(cwd, args, timeout, OUTPUT_LIMIT_BYTES, Some(input))
+	Ok(run_sync_impl(cwd, args, timeout, OUTPUT_LIMIT_BYTES, Some(input))?.into_text())
 }
 
 /// [`run_sync`] with an explicit retention cap. The cap is a parameter rather
@@ -427,7 +443,45 @@ pub(crate) fn run_sync_capped(
 	timeout: Duration,
 	limit: usize,
 ) -> Result<CliOutput> {
-	run_sync_impl(cwd, args, timeout, limit, None)
+	Ok(run_sync_impl(cwd, args, timeout, limit, None)?.into_text())
+}
+
+/// Capture raw stdout only if Git succeeds and the entire stream was read.
+pub(crate) fn run_sync_complete_stdout(
+	cwd: &Path,
+	args: &[String],
+	timeout: Duration,
+) -> Result<Vec<u8>> {
+	let out = run_sync_impl(cwd, args, timeout, OUTPUT_LIMIT_BYTES, None)?;
+	if out.exit_code != 0 {
+		return Err(Error::Cli {
+			command:   format!("git {}", args.join(" ")),
+			exit_code: out.exit_code,
+			stdout:    out.stdout.into_text(),
+			stderr:    out.stderr.into_text(),
+		});
+	}
+	if out.stdout.truncated || !out.stdout_eof {
+		return Err(Error::backend("git status", "incomplete stdout capture"));
+	}
+	Ok(out.stdout.bytes)
+}
+
+struct SyncCliOutput {
+	exit_code:  i32,
+	stdout:     CapturedBytes,
+	stderr:     CapturedBytes,
+	stdout_eof: bool,
+}
+
+impl SyncCliOutput {
+	fn into_text(self) -> CliOutput {
+		CliOutput {
+			exit_code: self.exit_code,
+			stdout:    self.stdout.into_text(),
+			stderr:    self.stderr.into_text(),
+		}
+	}
 }
 
 /// Shared synchronous runner: read-only when `write` is `None`.
@@ -437,7 +491,7 @@ fn run_sync_impl(
 	timeout: Duration,
 	limit: usize,
 	write: Option<&SyncWrite<'_>>,
-) -> Result<CliOutput> {
+) -> Result<SyncCliOutput> {
 	let argv = hardened_args(args, write.is_none());
 	let mut cmd = std::process::Command::new("git");
 	cmd.args(&argv)
@@ -494,7 +548,7 @@ fn wait_sync(
 	stdout: Option<SyncReader>,
 	stderr: Option<SyncReader>,
 	timeout: Duration,
-) -> Result<CliOutput> {
+) -> Result<SyncCliOutput> {
 	let deadline = std::time::Instant::now() + timeout;
 	let status = loop {
 		match child.try_wait()? {
@@ -521,22 +575,21 @@ fn wait_sync(
 	{
 		std::thread::sleep(Duration::from_millis(10));
 	}
-	let [stdout, stderr] = readers.map(|reader| {
+	let [(stdout, stdout_eof), (stderr, _)] = readers.map(|reader| {
 		reader.map_or_default(|reader| {
-			if reader.thread.is_finished() {
-				let _ = reader.thread.join();
-			}
-			reader.output.lock().unwrap().take()
+			let eof = reader.thread.is_finished() && reader.thread.join().unwrap_or(false);
+			let bytes = reader.output.lock().unwrap().take_bytes();
+			(bytes, eof)
 		})
 	});
 	let Some(status) = status else {
 		return Err(Error::CliTimeout { command: format!("git {}", argv.join(" ")) });
 	};
-	Ok(CliOutput { exit_code: status.code().unwrap_or(-1), stdout, stderr })
+	Ok(SyncCliOutput { exit_code: status.code().unwrap_or(-1), stdout, stderr, stdout_eof })
 }
 
 struct SyncReader {
-	thread: std::thread::JoinHandle<()>,
+	thread: std::thread::JoinHandle<bool>,
 	output: Arc<Mutex<OutputCapture>>,
 }
 
@@ -567,24 +620,28 @@ fn read_capped_sync(
 	mut stream: impl std::io::Read + AsRawPipe,
 	limit: usize,
 	output: &Mutex<OutputCapture>,
-) {
+) -> bool {
 	let mut buf = [0u8; 8 * 1024];
 	while !output.lock().unwrap().closed {
 		match sync_pipe_ready(&stream) {
 			Ok(true) => {},
 			Ok(false) => continue,
 			Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+			#[cfg(windows)]
+			Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => return true,
 			Err(_) => break,
 		}
 		let n = match stream.read(&mut buf) {
 			Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-			Ok(0) | Err(_) => break,
+			Ok(0) => return true,
+			Err(_) => break,
 			Ok(n) => n,
 		};
 		if !output.lock().unwrap().append(&buf[..n], limit) {
 			break;
 		}
 	}
+	false
 }
 
 /// Only this thread reads the pipe, so readable bytes cannot be consumed
@@ -898,7 +955,7 @@ impl GitRepo {
 				return Err(Error::backend(OP, "malformed remote HEAD advertisement"));
 			};
 			if name != "HEAD" {
-				return Err(Error::backend(OP, "mismatched remote HEAD advertisement"));
+				continue;
 			}
 			if let Some(target) = value.strip_prefix("ref: ") {
 				let _: gix::refs::FullName =
@@ -1119,7 +1176,8 @@ mod tests {
 				.expect("stderr reader");
 			captures.extend([Arc::clone(&stdout.output), Arc::clone(&stderr.output)]);
 			let out = wait_sync(&args, child, Some(stdout), Some(stderr), SYNC_TIMEOUT)
-				.expect("wait for alias");
+				.expect("wait for alias")
+				.into_text();
 			assert_eq!(out.exit_code, 0, "alias failed: {out:?}");
 			assert_eq!(out.stdout, "out\n");
 			assert_eq!(out.stderr, "err\n");

@@ -1089,6 +1089,8 @@ class ToolExecutionEndEvent:
     tool_name: str
     result: JsonValue | None = None
     is_error: bool | None = None
+    cancelled: bool | None = None
+    """The tool execution was cancelled."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1114,6 +1116,8 @@ class AutoCompactionEndEvent:
 class ManualCompactionStartEvent:
     """A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted."""
     type: Literal["manual_compaction_start"] = "manual_compaction_start"
+    operation_id: str
+    """Identifies this operation and its matching `manual_compaction_end`."""
     mode: str | None = None
     """The `/compact <mode>` subcommand, when one was given."""
 
@@ -1122,6 +1126,8 @@ class ManualCompactionStartEvent:
 class ManualCompactionEndEvent:
     """Outcome of the compaction announced by the matching `manual_compaction_start`."""
     type: Literal["manual_compaction_end"] = "manual_compaction_end"
+    operation_id: str
+    """The ID from the matching `manual_compaction_start`."""
     aborted: bool
     """The compaction was cancelled (abort, or a `session_before_compact` hook)."""
     result: CompactionResult | None = None
@@ -2541,6 +2547,7 @@ def parse_tool_execution_end_event(value: object, path: str = "ToolExecutionEndE
         tool_name=required(payload, "toolName", decode_str, path),
         result=optional(payload, "result", decode_json, path),
         is_error=optional(payload, "isError", decode_bool, path),
+        cancelled=optional(payload, "cancelled", decode_bool, path),
     )
 
 
@@ -2570,6 +2577,7 @@ def parse_manual_compaction_start_event(value: object, path: str = "ManualCompac
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["manual_compaction_start"]]', literal(frozenset({"manual_compaction_start"}))), path)
     return ManualCompactionStartEvent(
+        operation_id=required(payload, "operationId", decode_str, path),
         mode=optional(payload, "mode", decode_str, path),
     )
 
@@ -2578,6 +2586,7 @@ def parse_manual_compaction_end_event(value: object, path: str = "ManualCompacti
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["manual_compaction_end"]]', literal(frozenset({"manual_compaction_end"}))), path)
     return ManualCompactionEndEvent(
+        operation_id=required(payload, "operationId", decode_str, path),
         aborted=required(payload, "aborted", decode_bool, path),
         result=optional(payload, "result", parse_compaction_result, path),
         skipped=optional(payload, "skipped", decode_bool, path),

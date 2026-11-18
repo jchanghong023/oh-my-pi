@@ -53,7 +53,7 @@ describe("background receipt projections", () => {
 		setChatTranscriptDisplayPreferences(previous);
 	});
 
-	it("hides all async-result status rows without blank lines in live and restored history", async () => {
+	it("shows unrepresented async-result statuses only with visible tool activity", async () => {
 		const messages = [
 			createCustomMessage(
 				"async-result",
@@ -89,19 +89,24 @@ describe("background receipt projections", () => {
 						hideToolActivity: mode !== "detailed",
 					});
 					const block = buildAsyncResultBlock(current);
-					expect(block.render(160)).toEqual([]);
-					harness = await TspHarness.start(tui => tui.addChild(buildAsyncResultBlock(current)), {
-						cols: 160,
-						rows: 20,
-					});
+					block.setToolActivityVisible(mode === "detailed");
+					const lines = block.render(160);
+					if (mode === "detailed") expect(lines.join("\n")).toContain("Background job");
+					else expect(lines).toEqual([]);
+					harness = await TspHarness.start(tui => tui.addChild(block), { cols: 160, rows: 20 });
 					await harness.render();
 					const native = JSON.stringify(harness.doc());
-					expect(native).not.toContain("Background job");
-					expect(native).not.toContain("bash-failed");
-					expect(native).not.toContain("task-failed");
-					expect(native).not.toContain("eval-cancelled");
-					expect(native).not.toContain("single-job");
-					expect(native).not.toContain("compile project");
+					const activity = harness.find(node => node.p?.role === "omp.activity");
+					expect(activity?.p?.hidden === true).toBe(mode !== "detailed");
+					expect(native).toContain("Background job failed");
+					if (message === messages[0]) {
+						expect(native).toContain("bash-failed");
+						expect(native).toContain("task-failed");
+						expect(native).toContain("eval-cancelled");
+						expect(native).toContain("compile project");
+					} else {
+						expect(native).toContain("single-job");
+					}
 					harness.stop();
 					harness = undefined;
 				}
@@ -111,7 +116,7 @@ describe("background receipt projections", () => {
 		}
 	});
 
-	it("preserves independent artifact and schema diagnostics without status rows", async () => {
+	it("preserves independent artifact and schema diagnostics alongside unrepresented status rows", async () => {
 		const message = createCustomMessage(
 			"async-result",
 			"results",
@@ -141,9 +146,9 @@ describe("background receipt projections", () => {
 				const output = Bun.stripANSI(buildAsyncResultBlock(current).render(160).join("\n"));
 				expect(output).toContain("artifact write failed");
 				expect(output).toContain("invalid output");
-				expect(output).not.toContain("Background job");
-				expect(output).not.toContain("hidden command");
-				expect(output).not.toContain("other");
+				expect(output).toContain("Background job failed");
+				expect(output).toContain("hidden command");
+				expect(output).toContain("other");
 
 				harness = await TspHarness.start(tui => tui.addChild(buildAsyncResultBlock(current)), {
 					cols: 160,
@@ -153,9 +158,9 @@ describe("background receipt projections", () => {
 				const native = JSON.stringify(harness.doc());
 				expect(native).toContain("artifact write failed");
 				expect(native).toContain("invalid output");
-				expect(native).not.toContain("Background job");
-				expect(native).not.toContain("hidden command");
-				expect(native).not.toContain("other");
+				expect(native).toContain("Background job failed");
+				expect(native).toContain("hidden command");
+				expect(native).toContain("other");
 				harness.stop();
 				harness = undefined;
 			}

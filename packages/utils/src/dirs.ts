@@ -667,6 +667,27 @@ export function getLogsDir(): string {
 }
 
 /**
+ * Prepare a log directory at write time. Linux cache roots can live on shared
+ * storage; a UID in the path is not itself an access restriction.
+ * Returns whether the directory requires owner-only log files.
+ */
+export function prepareLogDirectory(directory: string): boolean {
+	const requirePrivate =
+		process.platform === "linux" &&
+		dirs.cacheRoot !== undefined &&
+		path.relative(path.join(dirs.cacheRoot, "logs"), directory) === "";
+	fs.mkdirSync(directory, { recursive: true, mode: requirePrivate ? 0o700 : undefined });
+	if (requirePrivate) {
+		// Do not chmod or follow a preexisting directory entry in shared storage.
+		const stat = fs.lstatSync(directory);
+		if (!stat.isDirectory() || stat.uid !== process.getuid!() || (stat.mode & 0o077) !== 0) {
+			throw new Error("Shared cache log directory is not private");
+		}
+	}
+	return requirePrivate;
+}
+
+/**
  * Local-timezone `YYYY-MM-DD` day key (zero-padded), formatted exactly like
  * the rotating log sink's file naming: log files are named `omp.<day>.<pid>.log`
  * with the LOCAL day, not the UTC day `toISOString()` yields. Anything that

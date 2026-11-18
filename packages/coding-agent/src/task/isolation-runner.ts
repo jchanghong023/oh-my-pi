@@ -518,7 +518,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	let releasePromise: Promise<void> | undefined;
 	let sourceResult: SingleResult | undefined;
 	let runOutcome: SingleResult | undefined;
-	// Retention protects recovery files, independently of which release stages have completed.
+	// A run-end capture failure leaves a recovery outcome to observe, not a
+	// release capture to retry. Retention during release never skips a stage.
+	let retainedAtRunEnd = false;
 	let beforeCaptureDone = false;
 	let afterResultDone = false;
 	let releaseCaptureDone = false;
@@ -529,7 +531,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		retainWorkspace = true;
 		return workspace?.retain();
 	};
-	const observeReleaseResult = async (result: SingleResult): Promise<void> => {
+	const observeResult = async (result: SingleResult): Promise<void> => {
 		if (afterResultDone || !opts.onAfterResult) return;
 		await opts.onAfterResult(result);
 		afterResultDone = true;
@@ -547,16 +549,21 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		Object.assign(result, rememberAgentArtifacts(result));
 		return result;
 	};
+	const observeRunOutcome = async (result: SingleResult): Promise<SingleResult> => {
+		try {
+			await observeResult(result);
+		} catch (error) {
+			return preserveObservationFailure(result, error);
+		}
+		return result;
+	};
 	const finish = async (result: SingleResult): Promise<SingleResult> => {
 		runOutcome = rememberAgentArtifacts(result);
-		// A retained session can still write. Its final observer belongs to releaseIsolation.
-		if (opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId)) return runOutcome;
-		try {
-			await opts.onAfterResult?.(runOutcome);
-		} catch (error) {
-			return preserveObservationFailure(runOutcome, error);
+		// A kept-alive session can still write. Its final observer belongs to releaseIsolation.
+		if (opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId)) {
+			return runOutcome;
 		}
-		return runOutcome;
+		return observeRunOutcome(runOutcome);
 	};
 	/** The run's IRC wake hold, released only once the run-end capture is done. */
 	let releaseIrcWakes: (() => void) | undefined;
@@ -589,11 +596,11 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			let observingResult = false;
 			try {
 				await deferredCleanup;
-				if (!beforeCaptureDone && sourceResult) {
+				if (!retainedAtRunEnd && !beforeCaptureDone && sourceResult) {
 					await opts.onBeforeCapture?.(sourceResult);
 					beforeCaptureDone = true;
 				}
-				if (!releaseCaptureDone) {
+				if (!retainedAtRunEnd && !releaseCaptureDone) {
 					if (!releaseCapture) {
 						try {
 							releaseCapture = await writeIsolationPatch(
@@ -654,7 +661,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				}
 				if (runOutcome) {
 					observingResult = true;
-					await observeReleaseResult(runOutcome);
+					await observeResult(runOutcome);
 				}
 			} catch (error) {
 				try {
@@ -665,7 +672,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 						// only retry an observer that failed on the next release attempt.
 						if (!observingResult) {
 							try {
-								await observeReleaseResult(result);
+								await observeResult(result);
 							} catch (observationError) {
 								await preserveObservationFailure(result, observationError);
 							}
@@ -810,6 +817,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				} catch (patchErr) {
 					retainWorkspace = true;
 					const retained = await workspace.retain();
+					retainedAtRunEnd = true;
 					return await finish({
 						...result,
 						error: renderIsolationError({
@@ -842,6 +850,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			} catch (persistErr) {
 				retainWorkspace = true;
 				const retained = await workspace.retain();
+				retainedAtRunEnd = true;
 				return await finish({
 					...result,
 					branchName: commitResult?.branchName,
@@ -864,6 +873,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			} catch (patchErr) {
 				retainWorkspace = true;
 				const retained = await workspace.retain();
+				retainedAtRunEnd = true;
 				return await finish({
 					...result,
 					error: renderIsolationError({

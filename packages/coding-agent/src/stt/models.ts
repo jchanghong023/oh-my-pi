@@ -1,4 +1,5 @@
 import type { TinyModelDtype } from "../tiny/dtype";
+import { dictationDefaultSelectors } from "./settings";
 
 /**
  * On-device speech-to-text model registry. Each tier maps a stable settings key
@@ -52,7 +53,7 @@ export interface SherpaSttModelSpec extends SttModelBase {
 export type SttModelSpec = TransformersSttModelSpec | SherpaSttModelSpec;
 
 /**
- * Speech models. Defaults to the multilingual {@link DEFAULT_STT_MODEL_KEY}.
+ * Speech models supported by the local worker.
  * Whisper uses transformers.js; Parakeet and native streaming Nemotron use
  * sherpa-onnx.
  */
@@ -102,7 +103,7 @@ export const STT_MODELS = [
 		englishOnly: false,
 		label: "Parakeet TDT v3 (SoTA)",
 		description:
-			"NVIDIA Parakeet TDT 0.6B v3, 25 languages. Open ASR Leaderboard leader — best accuracy and far fastest decoding. Default.",
+			"NVIDIA Parakeet TDT 0.6B v3, 25 European languages. Open ASR Leaderboard leader — best accuracy and far fastest decoding.",
 		sizeHint: "~680 MB",
 	},
 	{
@@ -124,12 +125,6 @@ export const STT_MODELS = [
 		sizeHint: "~630 MB",
 	},
 ] as const satisfies readonly SttModelSpec[];
-
-/**
- * SoTA default — NVIDIA Parakeet TDT 0.6B v3 (sherpa-onnx). Tops the Open ASR
- * Leaderboard on accuracy while decoding ~20× faster than Whisper large-v3.
- */
-export const DEFAULT_STT_MODEL_KEY = "parakeet-tdt-0.6b-v3";
 
 export type SttModelKey = (typeof STT_MODELS)[number]["key"];
 
@@ -167,7 +162,17 @@ export function getSttModelSpec(key: string): SttModel | undefined {
 	return STT_MODELS.find(model => model.key === key);
 }
 
-/** Resolve a catalog model id, falling back to the SoTA default when unknown. */
-export function resolveSttModelSpec(key: string | undefined): SttModel {
-	return (key !== undefined ? getSttModelSpec(key) : undefined) ?? getSttModelSpec(DEFAULT_STT_MODEL_KEY)!;
+/** Resolve the first available local model in the language's catalog policy. */
+export function getDefaultLocalSttModel(language?: string): SttModel {
+	for (const selector of dictationDefaultSelectors(language)) {
+		if (!selector.startsWith("local/")) continue;
+		const model = getSttModelSpec(selector.slice("local/".length));
+		if (model) return model;
+	}
+	throw new Error("Catalog dictation defaults must include a supported local model.");
+}
+
+/** Resolve a catalog model id, falling back to the language's default when unknown. */
+export function resolveSttModelSpec(key: string | undefined, language?: string): SttModel {
+	return (key !== undefined ? getSttModelSpec(key) : undefined) ?? getDefaultLocalSttModel(language);
 }

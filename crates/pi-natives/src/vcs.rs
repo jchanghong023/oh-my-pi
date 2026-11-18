@@ -998,6 +998,14 @@ impl VcsGitRepo {
 		})
 	}
 
+	/// Complete NUL-delimited porcelain with raw paths and every untracked file.
+	#[napi]
+	pub fn status_porcelain_bytes(&self, signal: Option<Unknown>) -> Promise<Buffer> {
+		blocking("vcs.statusPorcelainBytes", self.inner.clone(), signal, |r| {
+			r.status_porcelain_bytes().map(Buffer::from)
+		})
+	}
+
 	/// Status counts.
 	#[napi]
 	pub fn status_summary(&self, signal: Option<Unknown>) -> Promise<VcsStatusSummary> {

@@ -594,13 +594,15 @@ try {
 }
 
 for (const powerShell of metadataPowerShellHosts) {
-	describe(`Windows installer metadata failures (${path.basename(powerShell)})`, () => {
+	describe(`Windows installer metadata routing (${path.basename(powerShell)})`, () => {
 		test.each([
+			["valid metadata", 200],
+			["redirected tag", 302],
 			["missing tag", 404],
 			["rate limited", 403],
 			["connection refused", 0],
 		] as const)(
-			"reports %s without downloading or changing PATH",
+			"handles %s without changing PATH",
 			async (_name, status) => {
 				const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-metadata-"));
 				tempDirs.push(dir);
@@ -615,7 +617,17 @@ for (const powerShell of metadataPowerShellHosts) {
 					hostname: "127.0.0.1",
 					port: 0,
 					fetch(request) {
-						requests.push(new URL(request.url).pathname);
+						const url = new URL(request.url);
+						requests.push(url.pathname);
+						if (status === 302 && url.pathname !== "/redirected") {
+							return Response.redirect(new URL("/redirected", url), 302);
+						}
+						if (status === 200 || url.pathname === "/redirected") {
+							return Response.json({
+								tag_name: "v18.0.9+fork.125",
+								assets: [{ name: "omp-windows-x64.exe", digest: "sha256:" + "0".repeat(64) }],
+							});
+						}
 						return new Response(
 							JSON.stringify({ message: status === 403 ? "API rate limit exceeded" : "Not Found" }),
 							{
@@ -646,19 +658,18 @@ $source = [IO.File]::ReadAllText($env:TEST_INSTALLER)
 $script:originalFailure = $null
 $script:downloads = 0
 $script:pathChecks = 0
-# Redirect only the endpoint; use the host's real HTTP cmdlet and exception type.
-function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec, [int]$MaximumRedirection, [switch]$SkipCertificateCheck) {
-    if ($SkipCertificateCheck -or -not $PSBoundParameters.ContainsKey("MaximumRedirection") -or $MaximumRedirection -ne 0) {
-        throw "Metadata request did not require certificate validation and disable redirects"
-    }
+# Redirect only the endpoint; use the installer's real HTTP transport.
+$script:installWebRequest = \${function:Invoke-InstallWebRequest}
+function Invoke-InstallWebRequest([Uri]$Uri, [int]$TimeoutSec) {
     try {
-        Microsoft.PowerShell.Utility\\Invoke-RestMethod -Uri $env:TEST_METADATA_URL -TimeoutSec $TimeoutSec -MaximumRedirection $MaximumRedirection
+        & $script:installWebRequest -Uri $env:TEST_METADATA_URL -TimeoutSec $TimeoutSec
     } catch {
         $script:originalFailure = $_
         throw
     }
 }
-function Save-InstallBinary { $script:downloads++; throw "Unexpected binary download" }
+function Test-InstalledBinaryVersion { return $false }
+function Save-InstallBinary { $script:downloads++; throw "Candidate download reached" }
 function Set-InstallEnvironment { $script:pathChecks++; throw "Unexpected PATH change" }
 $result = @{ failed = $false }
 try { Install-Binary } catch {
@@ -704,8 +715,10 @@ Write-Output ("RESULT " + ($result | ConvertTo-Json -Compress))
 							.find(line => line.startsWith("RESULT "))!
 							.slice(7),
 					);
-					expect(result).toMatchObject({ failed: true, downloads: 0, pathChecks: 0 });
-					if (status === 404) {
+					expect(result).toMatchObject({ failed: true, downloads: status === 200 ? 1 : 0, pathChecks: 0 });
+					if (status === 200) {
+						expect(result.message).toBe("Candidate download reached");
+					} else if (status === 404) {
 						expect(result.message).toContain("Release tag not found: v18.0.9+fork.125");
 						expect(result.message).toContain("Only published release tags are supported.");
 					} else {
@@ -725,14 +738,20 @@ Write-Output ("RESULT " + ($result | ConvertTo-Json -Compress))
 						.filter(Boolean)
 						.map(line => JSON.parse(line));
 					const failures = records.filter(record => record.event === "http_request_failed");
-					expect(failures).toHaveLength(1);
-					expect(failures[0]).toMatchObject({
-						stage: "release_metadata",
-						result: "failed",
-						http_status: status || "unavailable",
-					});
+					if (status === 200) {
+						expect(failures).toHaveLength(0);
+					} else {
+						expect(failures).toHaveLength(1);
+						expect(failures[0]).toMatchObject({ stage: "release_metadata", result: "failed" });
+						if (status === 302) {
+							// Some hosts raise a redirect-limit error without an HTTP response attached.
+							expect([302, "unavailable"]).toContain(failures[0].http_status);
+						} else {
+							expect(failures[0].http_status).toBe(status || "unavailable");
+						}
+					}
 					expect(records.filter(record => record.event === "install_failed")).toHaveLength(1);
-					expect(records.some(record => record.event === "http_request_completed")).toBe(false);
+					expect(records.some(record => record.event === "http_request_completed")).toBe(status === 200);
 				} finally {
 					server.stop(true);
 				}
@@ -777,7 +796,7 @@ if ($env:TEST_MODE -eq "invalid") {
     New-FixtureBinary $download "18.0.9+fork.125"
 }
 if ($env:TEST_MODE -eq "already") {
-    Copy-Item -LiteralPath $old -Destination (Join-Path $install ".omp.old.fixture.exe")
+    Copy-Item -LiteralPath $old -Destination (Join-Path $install (".omp.old.{0}.exe" -f [Guid]::NewGuid().ToString("N")))
 }
 $downloadCount = 0
 $pathChecks = 0
@@ -800,30 +819,32 @@ function Assert-CallerTls {
         throw "Installer did not preserve the caller's TLS protocol"
     }
 }
-function Invoke-RestMethod([string]$Uri, [int]$MaximumRedirection, [switch]$SkipCertificateCheck) {
+function Invoke-RestMethod([string]$Uri) {
     if ($Uri -match '/main/scripts/install.ps1$') {
         return $script:installerDefinitions + '\nfunction Set-InstallEnvironment { $script:pathChecks++; return $false }\nInstall-Binary'
     }
-    if ($null -ne [Net.ServicePointManager]::ServerCertificateValidationCallback -or $SkipCertificateCheck -or
-        -not $PSBoundParameters.ContainsKey("MaximumRedirection") -or $MaximumRedirection -ne 0) {
-        throw "Installer did not use default certificate validation and disable redirects for release metadata"
-    }
-    if (-not ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12)) {
-        throw "Installer did not enable TLS 1.2 for release metadata"
-    }
-    if ($env:TEST_MODE -eq "already") { return @{ tag_name = "v18.0.9+fork.125" } }
-    $sha256 = [Security.Cryptography.SHA256]::Create()
-    try {
-        $hash = [BitConverter]::ToString($sha256.ComputeHash([IO.File]::ReadAllBytes($download))).Replace("-", "")
-    } finally {
-        $sha256.Dispose()
-    }
-    return @{ tag_name = "v18.0.9+fork.125"; assets = @(@{ name = "omp-windows-x64.exe"; digest = "sha256:$hash" }) }
+    throw "Unexpected bootstrap request: $Uri"
 }
-function Invoke-WebRequest([string]$Uri, [string]$OutFile, [int]$TimeoutSec, [switch]$UseBasicParsing) {
-    $script:downloadCount++
-    Copy-Item -LiteralPath $download -Destination $OutFile
+function Invoke-FixtureWebRequest([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile) {
+    if (-not [object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $originalTlsCallback) -or
+        [Net.ServicePointManager]::SecurityProtocol -ne $originalTlsProtocol) {
+        throw "Installer changed caller TLS settings during a request"
+    }
+    if ($OutFile) {
+        $script:downloadCount++
+        Copy-Item -LiteralPath $download -Destination $OutFile
+    } else {
+        if ($env:TEST_MODE -eq "already") { return @{ tag_name = "v18.0.9+fork.125" } }
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        try {
+            $hash = [BitConverter]::ToString($sha256.ComputeHash([IO.File]::ReadAllBytes($download))).Replace("-", "")
+        } finally {
+            $sha256.Dispose()
+        }
+        return @{ tag_name = "v18.0.9+fork.125"; assets = @(@{ name = "omp-windows-x64.exe"; digest = "sha256:$hash" }) }
+    }
 }
+Set-Alias Invoke-InstallWebRequest Invoke-FixtureWebRequest
 function Get-Command([string]$Name) {
     if ($Name -eq "curl.exe") { return $null }
     Microsoft.PowerShell.Core\\Get-Command $Name
@@ -959,7 +980,7 @@ try {
 		return { exitCode, stdout, stderr };
 	}
 
-	test("restores a null TLS callback when the caller cancels the installer pipeline", async () => {
+	test("preserves the caller's TLS settings when the installer pipeline is cancelled", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-tls-cancel-"));
 		tempDirs.push(dir);
 		const harness = path.join(dir, "cancel.ps1");
@@ -973,17 +994,18 @@ $ready = [Threading.ManualResetEvent]::new($false)
 $worker = [PowerShell]::Create()
 try {
     [void]$worker.AddScript({
-        param($ready)
-        function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec) {
+        param($ready, $originalProtocol)
+        function Invoke-FixtureWebRequest([Uri]$Uri, [int]$TimeoutSec) {
             if ($null -ne [Net.ServicePointManager]::ServerCertificateValidationCallback -or
-                -not ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12)) {
-                throw "Installer metadata TLS scope is not active"
+                [Net.ServicePointManager]::SecurityProtocol -ne $originalProtocol) {
+                throw "Installer changed caller TLS settings during release metadata"
             }
             [void]$ready.Set()
             Start-Sleep -Seconds 30
         }
+        Set-Alias Invoke-InstallWebRequest Invoke-FixtureWebRequest
         & $env:TEST_INSTALLER -Binary
-    }).AddArgument($ready)
+    }).AddArgument($ready).AddArgument($originalProtocol)
     [void]$worker.BeginInvoke()
     if (-not $ready.WaitOne(10000)) { throw "Installer did not reach release metadata: $($worker.Streams.Error)" }
     $worker.Stop()
@@ -1468,19 +1490,21 @@ $source = [IO.File]::ReadAllText($env:TEST_INSTALLER)
 . ([scriptblock]::Create($source.Substring(0, $ast.EndBlock.Statements[-1].Extent.StartOffset))) -Binary
 # No proxy for this probe: exercise the TLS posture, not proxy resolution.
 [Net.WebRequest]::DefaultWebProxy = $null
-# The standalone download probes also need TLS 1.2 on legacy PowerShell.
+# Legacy requests must enable TLS 1.2 without changing the caller's protocol.
 if ($PSVersionTable.PSVersion.Major -lt 7) {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls
 }
 $originalTlsCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
 $originalSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
 $script:metadataFailure = $null
-function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec, [int]$MaximumRedirection, [switch]$SkipCertificateCheck) {
-    if ($SkipCertificateCheck -or -not $PSBoundParameters.ContainsKey("MaximumRedirection") -or $MaximumRedirection -ne 0) {
-        throw "Metadata request did not require certificate validation and disable redirects"
+$script:installWebRequest = \${function:Invoke-InstallWebRequest}
+function Invoke-InstallWebRequest([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile) {
+    if ($OutFile) {
+        & $script:installWebRequest -Uri $Uri -TimeoutSec $TimeoutSec -OutFile $OutFile
+        return
     }
     try {
-        Microsoft.PowerShell.Utility\\Invoke-RestMethod -Uri "https://127.0.0.1:$env:TEST_PORT/release" -TimeoutSec $TimeoutSec -MaximumRedirection $MaximumRedirection
+        & $script:installWebRequest -Uri "https://127.0.0.1:$env:TEST_PORT/release" -TimeoutSec $TimeoutSec
     } catch {
         $script:metadataFailure = $_.Exception
         throw
@@ -1498,10 +1522,10 @@ function Get-Command([string]$Name) {
 }
 Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile "$env:TEST_OUTFILE.fallback"
 if (-not [object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $originalTlsCallback)) {
-    throw "Installer did not restore the caller certificate callback"
+    throw "Installer changed the caller certificate callback"
 }
 if ([Net.ServicePointManager]::SecurityProtocol -ne $originalSecurityProtocol) {
-    throw "Installer did not restore the caller security protocol"
+    throw "Installer changed the caller security protocol"
 }
 `,
 					);

@@ -64,6 +64,7 @@ export class StandardResponsesWebSocketSession {
 		options: {
 			signal: AbortSignal;
 			chain: boolean;
+			suppressRawDebug?: boolean;
 			supportsImageDetailOriginal?: boolean;
 			onSseEvent?: (event: RawSseEvent) => void;
 			/** Reports whether a sent continuation anchor was accepted or definitely rejected as stale. */
@@ -95,7 +96,7 @@ export class StandardResponsesWebSocketSession {
 				const closedError = this.connection.closedError;
 				if (closedError) throw closedError;
 				for await (const raw of this.connection.streamRequest(
-					{ send: wireRequest },
+					{ send: wireRequest, suppressRawDebug: options.suppressRawDebug },
 					{},
 					options.signal,
 					options.onSseEvent,

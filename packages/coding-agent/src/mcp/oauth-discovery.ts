@@ -562,13 +562,14 @@ export async function discoverOAuthEndpoints(
 		scopeOptions: { includeSupportedScopes: boolean },
 	): OAuthEndpoints | null => {
 		const metadataScopes = readMetadataScopes(metadata, scopeOptions);
-		if (metadata.authorization_endpoint && typeof metadata.token_endpoint === "string") {
+		const tokenUrl = metadata.token_endpoint;
+		if (metadata.authorization_endpoint && typeof tokenUrl === "string" && URL.canParse(tokenUrl)) {
 			// RFC 9728 names this MCP server; an auth server's `resource` is its own default audience.
 			const resource = protectedResource ?? (typeof metadata.resource === "string" ? metadata.resource : undefined);
 
 			return {
 				authorizationUrl: String(metadata.authorization_endpoint),
-				tokenUrl: String(metadata.token_endpoint),
+				tokenUrl,
 				issuerUrl: readIssuerUrl(metadata),
 				registrationUrl: readRegistrationUrl(metadata),
 				clientId:

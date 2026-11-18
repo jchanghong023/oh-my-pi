@@ -242,7 +242,7 @@ describe("skills", () => {
 				);
 				const masterDisabled = await loadSkillCatalog({ ...options, enabled: false });
 				expect(masterDisabled.skills.map(skill => skill.name)).toEqual(loaded.skills.map(skill => skill.name));
-				expect(masterDisabled.skills.every(skill => skill.disabledReason === "item-disabled")).toBe(true);
+				expect(masterDisabled.skills.every(skill => skill.disabledReason === "skill-config")).toBe(true);
 				const scanDisabled = spyOn(nodeFs.promises, "readdir");
 				try {
 					expect(await loadSkills({ ...options, enabled: false })).toEqual({ skills: [], warnings: [] });
@@ -554,7 +554,7 @@ describe("skills", () => {
 					expect(filteredNative.content).toContain("Run the private native implementation.");
 
 					const includedCatalog = await loadSkillCatalog({ ...options, includeSkills: [nativeName] });
-					expect(includedCatalog.skills.find(skill => skill.name === name)?.disabledReason).toBe("item-disabled");
+					expect(includedCatalog.skills.find(skill => skill.name === name)?.disabledReason).toBe("skill-config");
 					expect(includedCatalog.skills.find(skill => skill.name === nativeName)?.disabledReason).toBeUndefined();
 
 					const disabledOptions = { ...options, disabledExtensions: [`skill:${nativeName}`] };

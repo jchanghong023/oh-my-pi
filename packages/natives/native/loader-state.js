@@ -64,9 +64,9 @@ function startupMarker(text) {
 	}
 }
 
-function getNativesDir() {
+function getNativeDirs() {
 	const override = resolveAbsoluteDir(process.env.PI_NATIVES_DIR);
-	if (override) return override;
+	if (override) return { nativesDir: override, addonCacheDir: override };
 
 	const safeProfile = value => {
 		try {
@@ -76,8 +76,11 @@ function getNativesDir() {
 		}
 	};
 	const profile = safeProfile(process.env.OMP_PROFILE ?? process.env.PI_PROFILE);
-	const selectedCacheRoot = resolveCacheRoot(profile);
-	if (selectedCacheRoot) return path.join(selectedCacheRoot, "natives");
+	const cacheRoot = resolveCacheRoot(profile);
+	const cachedNativesDir = cacheRoot && path.join(cacheRoot, "natives");
+	if (cachedNativesDir && resolveAbsoluteDir(process.env.OMP_CACHE_DIR)) {
+		return { nativesDir: cachedNativesDir, addonCacheDir: cachedNativesDir };
+	}
 	const baseRoot = resolvePersistentRoot();
 	const configRoot = profile ? path.join(baseRoot, "profiles", profile) : baseRoot;
 	// A propagated profile agent directory is not a default-profile override.
@@ -86,15 +89,19 @@ function getNativesDir() {
 	const derivedAgent = piProfile && path.join(baseRoot, "profiles", piProfile, "agent");
 	const isDefaultAgent = !agentOverride || agentOverride === derivedAgent ||
 		path.resolve(agentOverride) === path.join(configRoot, "agent");
+	let addonCacheDir = path.join(configRoot, "natives");
 	if (
 		(process.platform === "linux" || process.platform === "darwin") &&
 		!resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT) &&
 		isDefaultAgent
 	) {
-		const cacheRoot = resolveXdgRoot(process.env.XDG_CACHE_HOME, profile);
-		if (cacheRoot) return path.join(cacheRoot, "natives");
+		const xdgRoot = resolveXdgRoot(process.env.XDG_CACHE_HOME, profile);
+		if (xdgRoot) addonCacheDir = path.join(xdgRoot, "natives");
 	}
-	return path.join(configRoot, "natives");
+	// The implicit offline cache is /dev/shm, which can forbid executable
+	// mappings. Keep addon binaries in the usual user cache and leave WASM
+	// grammars in the selected cache so the installer and loader still agree.
+	return { nativesDir: cachedNativesDir ?? addonCacheDir, addonCacheDir };
 }
 
 function resolveLeafPackageDir(platformTag) {
@@ -312,10 +319,19 @@ function prepareLinuxPrivateNativeCache(ctx) {
 	if (!shared?.isDirectory() || shared.uid !== 0 || ((shared.mode & 0o022) !== 0 && (shared.mode & 0o1000) === 0)) {
 		throw new UnsafeOfflineNativeCacheError(sharedDir, "a real root-owned directory, sticky if group/other writable");
 	}
-	const targetDir = ctx.isCompiledBinary ? ctx.versionedDir : ctx.nativesDir;
-	preparePrivateNativeCacheDirectory(sharedDir, targetDir, ctx.offlineCacheUid);
-	preparePrivateNativeCacheDirectory(ctx.nativesDir, path.join(ctx.nativesDir, "grammars"), ctx.offlineCacheUid);
-	if (ctx.isCompiledBinary) touchNativeVersionDir(ctx.versionedDir);
+	if (ctx.offlineCacheUid !== undefined) {
+		const targetDir = ctx.isCompiledBinary ? ctx.versionedDir : ctx.addonCacheDir;
+		preparePrivateNativeCacheDirectory(sharedDir, targetDir, ctx.offlineCacheUid);
+		if (ctx.isCompiledBinary) touchNativeVersionDir(ctx.versionedDir);
+	}
+	if (ctx.offlineGrammarCacheUid !== undefined) {
+		const trustedParent = ctx.addonCacheDir === ctx.nativesDir ? ctx.nativesDir : sharedDir;
+		preparePrivateNativeCacheDirectory(
+			trustedParent,
+			path.join(ctx.nativesDir, "grammars"),
+			ctx.offlineGrammarCacheUid,
+		);
+	}
 }
 
 /**
@@ -1096,6 +1112,20 @@ function buildHelpMessage(ctx) {
 	);
 }
 
+/** Recognize the shared-memory layout even when an explicit cache override selects it. */
+function getPrivateNativeCacheUid(directory, privateCacheRoot) {
+	if (!privateCacheRoot) return undefined;
+	const normalizedDir = path.resolve(directory);
+	const parentDir = path.dirname(normalizedDir);
+	if (
+		path.basename(normalizedDir) === "natives" &&
+		(parentDir === privateCacheRoot || path.dirname(parentDir) === path.join(privateCacheRoot, "profiles"))
+	) {
+		return process.getuid();
+	}
+	return undefined;
+}
+
 /**
  * Initialize the loader context: resolves every path, variant, and policy
  * decision once so the inner load loop stays a pure require/validate pipeline.
@@ -1111,22 +1141,12 @@ export function initLoaderContext(overrides = {}) {
 	const packageVersion = packageJson.version;
 	const nativeDir = overrides.nativeDir ?? path.join(import.meta.dir, "..", "native");
 	const execDir = path.dirname(process.execPath);
-	const nativesDir = getNativesDir();
+	const { nativesDir, addonCacheDir } = getNativeDirs();
 	const privateCacheRoot = resolveLinuxPrivateCacheRoot();
-	let offlineCacheUid;
-	if (privateCacheRoot) {
-		const normalizedNativesDir = path.resolve(nativesDir);
-		const parentDir = path.dirname(normalizedNativesDir);
-		// Protect the old shm layout even when the user selects it explicitly
-		// or a Linux broker forwards it as PI_NATIVES_DIR.
-		if (
-			path.basename(normalizedNativesDir) === "natives" &&
-			(parentDir === privateCacheRoot || path.dirname(parentDir) === path.join(privateCacheRoot, "profiles"))
-		) {
-			offlineCacheUid = process.getuid();
-		}
-	}
-	const versionedDir = path.join(nativesDir, packageVersion);
+	const offlineCacheUid = getPrivateNativeCacheUid(addonCacheDir, privateCacheRoot);
+	const offlineGrammarCacheUid =
+		nativesDir === addonCacheDir ? offlineCacheUid : getPrivateNativeCacheUid(nativesDir, privateCacheRoot);
+	const versionedDir = path.join(addonCacheDir, packageVersion);
 	const userDataDir = platform === "win32"
 		? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "omp")
 		: path.join(os.homedir(), ".local", "bin");
@@ -1191,14 +1211,18 @@ export function initLoaderContext(overrides = {}) {
 		candidates,
 		isWorkspaceLoad,
 		nativesDir,
+		addonCacheDir,
 		offlineCacheUid,
+		offlineGrammarCacheUid,
 	};
 }
 
 export function loadNative() {
 	startupMarker("native:loadNative:start");
 	const ctx = initLoaderContext();
-	if (ctx.offlineCacheUid !== undefined) prepareLinuxPrivateNativeCache(ctx);
+	if (ctx.offlineCacheUid !== undefined || ctx.offlineGrammarCacheUid !== undefined) {
+		prepareLinuxPrivateNativeCache(ctx);
+	}
 	const require_ = createRequire(import.meta.url);
 
 	const errors = [];
@@ -1239,7 +1263,7 @@ export function loadNative() {
 			loadedAddon = describeLoadedAddon(bindings, candidate, ctx);
 			reportStaleWorkspaceAddon(ctx, loadedAddon);
 			cleanupStaleNativeVersions({
-				nativesDir: ctx.nativesDir,
+				nativesDir: ctx.addonCacheDir,
 				currentVersion: ctx.packageVersion,
 				offlineCacheUid: ctx.offlineCacheUid,
 			});

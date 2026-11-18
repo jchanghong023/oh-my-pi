@@ -27,6 +27,7 @@ import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { TodoReminderComponent } from "@oh-my-pi/pi-tui/chat/todo-reminder";
 import { isNativeRendering, nativePacing } from "@oh-my-pi/pi-tui/native/state";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import { settledBackgroundJobs } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import {
 	asyncJobState,
 	isSettledJobFrame,
@@ -124,22 +125,23 @@ function hasNestedTodo(details: unknown): boolean {
 interface AsyncResultJob {
 	jobId?: string;
 	type?: string;
+	status?: string;
 	label?: string;
 	name?: string;
 	durationMs?: number;
 }
 
-/**
- * Toast text for an `async-result` delivery whose jobs are all background
- * task spawns, or undefined when it is anything else (bash jobs keep their
- * transcript rows). Native rendering only: the task call's agent nodes carry
- * the outcome, so the delivery needs no transcript block of its own.
- */
-function nativeTaskJobToast(message: { role: string; customType?: string; details?: unknown }): string | undefined {
+/** Notify for native task completions already shown by their original cards. */
+function nativeTaskJobToast(
+	message: { role: string; customType?: string; details?: unknown },
+	transcript: readonly Component[],
+): string | undefined {
 	if (message.role !== "custom" || message.customType !== "async-result" || !isRecord(message.details)) return;
 	const details = message.details as AsyncResultJob & { jobs?: AsyncResultJob[] };
 	const jobs = details.jobs && details.jobs.length > 0 ? details.jobs : [details];
-	if (!jobs.every(job => job.type === "task")) return;
+	if (!jobs.every(job => job.type === "task" && job.status === "completed" && job.jobId)) return;
+	const represented = settledBackgroundJobs(transcript);
+	if (!jobs.every(job => represented.has(`task:${job.jobId}:completed`))) return;
 	if (jobs.length > 1) return `${jobs.length} background tasks completed`;
 	const job = jobs[0]!;
 	const name = sanitizeText(job.name ?? job.label ?? job.jobId ?? "task").trim() || "task";
@@ -157,6 +159,13 @@ function exposesRawPartialJson(toolName: string, rawInput: boolean, tool: unknow
 type AgentSessionEventHandlers = {
 	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
 };
+
+interface PendingMessageUpdate {
+	event: Extract<AgentSessionEvent, { type: "message_update" }>;
+	restarted: boolean;
+	scheduled: boolean;
+}
+
 interface ApprovalPreviewGate {
 	promise: Promise<void>;
 	resolve(): void;
@@ -355,10 +364,7 @@ export class EventController {
 	// rate via its own render cadence; this caps the per-token handler work that
 	// feeds it. Speech stays intact: `#vocalizeDelta` runs at ARRIVAL for every
 	// delta before the snapshot is coalesced away.
-	#pendingMessageUpdate: Extract<AgentSessionEvent, { type: "message_update" }> | undefined = undefined;
-	// Provider replay resets are not cumulative: retain the boundary even when
-	// the empty restart snapshot is replaced by a later delta before painting.
-	#pendingMessageRestart = false;
+	#pendingMessageUpdate: PendingMessageUpdate | undefined;
 	#messageUpdateTimer: NodeJS.Timeout | undefined = undefined;
 	/** Tail of the serialized dispatch chain; see #runSerialized. */
 	#dispatchTail: Promise<void> = Promise.resolve();
@@ -521,7 +527,6 @@ export class EventController {
 			this.#messageUpdateTimer = undefined;
 		}
 		this.#pendingMessageUpdate = undefined;
-		this.#pendingMessageRestart = false;
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.stop();
 		this.composerPrediction.cancel();
@@ -968,9 +973,10 @@ export class EventController {
 			this.#enqueueMessageUpdate(event);
 			return;
 		}
+		const pending = this.#takePendingMessageUpdate();
 		await this.#runSerialized(async () => {
 			if (generation !== this.#dispatchGeneration) return;
-			await this.#flushPendingMessageUpdate();
+			await this.#flushMessageUpdate(pending, generation);
 			if (generation !== this.#dispatchGeneration) return;
 			await this.handleEvent(event);
 		});
@@ -983,8 +989,10 @@ export class EventController {
 	 * the stale work itself.
 	 */
 	async runSerialized(run: () => Promise<void>): Promise<void> {
+		const generation = this.#dispatchGeneration;
+		const pending = this.#takePendingMessageUpdate();
 		await this.#runSerialized(async () => {
-			await this.#flushPendingMessageUpdate();
+			await this.#flushMessageUpdate(pending, generation);
 			await run();
 		});
 	}
@@ -1051,12 +1059,15 @@ export class EventController {
 		// cumulative snapshot is later superseded and never rebuilt.
 		this.#vocalizeDelta(event);
 		this.#vocalizedMessageUpdates.add(event);
-		this.#pendingMessageUpdate = event;
-		this.#pendingMessageRestart ||= event.assistantMessageEvent.type === "start";
-		if (this.#messageUpdateTimer) return;
+		const pending = (this.#pendingMessageUpdate ??= { event, restarted: false, scheduled: false });
+		pending.event = event;
+		// Provider replay resets are not cumulative: keep the restart even if a later delta supersedes it.
+		pending.restarted ||= event.assistantMessageEvent.type === "start";
+		if (this.#messageUpdateTimer || pending.scheduled) return;
 		const generation = this.#dispatchGeneration;
 		this.#messageUpdateTimer = setTimeout(() => {
 			this.#messageUpdateTimer = undefined;
+			pending.scheduled = true;
 			// Mirror AgentSession.#emit: attach a catch so a streaming rebuild
 			// failure surfaces as a logged warning instead of a process-level
 			// unhandled rejection (the timer path has no listener to attach one).
@@ -1064,8 +1075,8 @@ export class EventController {
 			// agent_end landing mid-window cannot overtake this flush (issue
 			// #7443 follow-up).
 			void this.#runSerialized(async () => {
-				if (generation !== this.#dispatchGeneration) return;
-				await this.#flushPendingMessageUpdate();
+				if (this.#pendingMessageUpdate === pending) this.#pendingMessageUpdate = undefined;
+				await this.#flushMessageUpdate(pending, generation);
 			}).catch(err => {
 				logger.warn("Message update flush rejected", {
 					error: err instanceof Error ? err.message : String(err),
@@ -1074,25 +1085,25 @@ export class EventController {
 		}, this.#messageUpdateCoalesceMs);
 	}
 
-	/**
-	 * Run the coalesced `message_update` handler on the latest pending snapshot
-	 * (dropping any superseded intermediates) and clear the queue. Safe to call
-	 * more than once; no-ops when nothing is pending.
-	 */
-	async #flushPendingMessageUpdate(): Promise<void> {
+	/** Seal the current batch at enqueue time so a boundary never flushes later deltas. */
+	#takePendingMessageUpdate(): PendingMessageUpdate | undefined {
 		if (this.#messageUpdateTimer) {
 			clearTimeout(this.#messageUpdateTimer);
 			this.#messageUpdateTimer = undefined;
 		}
-		const event = this.#pendingMessageUpdate;
-		if (!event) return;
+		const pending = this.#pendingMessageUpdate;
 		this.#pendingMessageUpdate = undefined;
-		const restarted = this.#pendingMessageRestart;
-		this.#pendingMessageRestart = false;
+		// When the timer already queued this batch, that earlier link owns its flush.
+		return pending?.scheduled ? undefined : pending;
+	}
+
+	async #flushMessageUpdate(pending: PendingMessageUpdate | undefined, generation: number): Promise<void> {
+		if (!pending || generation !== this.#dispatchGeneration) return;
+		const { event, restarted } = pending;
 		if (restarted && event.assistantMessageEvent.type !== "start") {
 			await this.#restartAssistantStream(event.message);
 		}
-		await this.handleEvent(event);
+		if (generation === this.#dispatchGeneration) await this.handleEvent(event);
 	}
 
 	/** Whether `#handleToolExecutionStart` has fired for this call id this turn. */
@@ -1124,7 +1135,6 @@ export class EventController {
 			this.#messageUpdateTimer = undefined;
 		}
 		this.#pendingMessageUpdate = undefined;
-		this.#pendingMessageRestart = false;
 		this.#resetReadGroup();
 		this.#lastVisibleBlockCount = 0;
 		this.#renderedCustomMessages.clear();
@@ -1376,7 +1386,6 @@ export class EventController {
 				this.#turnStartedAt = event.message.timestamp;
 				this.#turnUsage.reset();
 			}
-			const taskJobToast = isNativeRendering() ? nativeTaskJobToast(event.message) : undefined;
 			if (
 				event.message.role === "custom" &&
 				this.ctx.optimisticSkillMessagePending &&
@@ -1385,13 +1394,12 @@ export class EventController {
 				// The optimistic `/skill:` row painted at submit time (issue #8895):
 				// swap it for the canonical message instead of appending a duplicate.
 				this.ctx.reconcileOptimisticSkillMessage(event.message);
-			} else if (taskJobToast) {
-				// Native: the task call's `agent` nodes already settled in place
-				// (its terminal async update); a toast replaces the appended
-				// "Background job completed" rows.
-				this.ctx.showStatus(taskJobToast);
 			} else {
 				this.ctx.addMessageToChat(event.message);
+				if (isNativeRendering()) {
+					const toast = nativeTaskJobToast(event.message, this.ctx.chatContainer.children);
+					if (toast) this.ctx.showStatus(toast);
+				}
 			}
 			// Queued custom-message chips are derived from the agent queue; refresh the
 			// pending bar when the queued custom is consumed so the chip disappears
@@ -1870,7 +1878,6 @@ export class EventController {
 						component.updateStreamPreview?.(pendingPreview);
 						this.#pendingStreamPreviews.delete(content.id);
 					}
-					component.setExpanded(this.ctx.toolOutputExpanded);
 					this.ctx.chatContainer.addChild(component);
 					this.ctx.pendingTools.set(content.id, component);
 					this.#toolTimelineComponents.set(content.id, component);
@@ -2192,7 +2199,6 @@ export class EventController {
 			component.setArgsComplete(event.toolCallId);
 			component.setExecutionStarted(event.toolCallId);
 			this.#executionStartedCallIds.add(event.toolCallId);
-			component.setExpanded(this.ctx.toolOutputExpanded);
 			this.ctx.chatContainer.addChild(component);
 			this.ctx.pendingTools.set(event.toolCallId, component);
 			this.#toolTimelineComponents.set(event.toolCallId, component);
@@ -2325,7 +2331,11 @@ export class EventController {
 			const job = this.ctx.viewSession.getAsyncJobSnapshot?.()?.running.find(job => job.id === jobId);
 			if (job) component.setExecutionStarted(event.toolCallId, job.startTime);
 		}
-		component.updateResult({ ...event.result, isError: event.isError }, parks, event.toolCallId);
+		component.updateResult(
+			{ ...event.result, isError: event.isError, cancelled: event.cancelled },
+			parks,
+			event.toolCallId,
+		);
 		if (parks) {
 			component.parkAsBackground();
 			this.#backgroundCallIds.add(event.toolCallId);
@@ -2366,7 +2376,11 @@ export class EventController {
 			if (this.#inlineReadToolImages(event.toolCallId, event.result)) {
 				const component = this.ctx.pendingTools.get(event.toolCallId);
 				if (component) {
-					component.updateResult({ ...event.result, isError: event.isError }, false, event.toolCallId);
+					component.updateResult(
+						{ ...event.result, isError: event.isError, cancelled: event.cancelled },
+						false,
+						event.toolCallId,
+					);
 					this.ctx.pendingTools.delete(event.toolCallId);
 				}
 				this.#clearReadToolCall(event.toolCallId);
@@ -2387,7 +2401,11 @@ export class EventController {
 					}
 					this.#orphanedToolCompletions.set(event.toolCallId, event);
 				} else {
-					component.updateResult({ ...event.result, isError: event.isError }, false, event.toolCallId);
+					component.updateResult(
+						{ ...event.result, isError: event.isError, cancelled: event.cancelled },
+						false,
+						event.toolCallId,
+					);
 					this.ctx.pendingTools.delete(event.toolCallId);
 					this.#clearReadToolCall(event.toolCallId);
 					this.ctx.ui.requestRender();
@@ -2432,7 +2450,7 @@ export class EventController {
 		if (event.toolName === "eval" && hasNestedTodo(event.result.details)) {
 			this.ctx.setTodos(this.ctx.viewSession.getTodoPhases());
 		}
-		if (event.toolName === "todo" && event.isError) {
+		if (event.toolName === "todo" && event.isError && !event.cancelled) {
 			const textContent = event.result.content.find(
 				(content: { type: string; text?: string }) => content.type === "text",
 			)?.text;
@@ -2527,6 +2545,7 @@ export class EventController {
 			// A focused worker's run ended while main's run goes on: tear down
 			// only what the viewed worker owns (its loader); main's status stays
 			// `working` until main's own `agent_end`.
+			this.ctx.statusLine.markActivityEnd();
 			if (this.ctx.loadingAnimation) {
 				this.ctx.loadingAnimation.stop();
 				this.ctx.loadingAnimation = undefined;

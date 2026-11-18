@@ -40,8 +40,8 @@ import {
 	cfgComputerMaxWidth,
 	cfgRatchetEnabled,
 } from "../tools/settings";
-import { cfgHideThinkingBlock, cfgPrewalkFrom, cfgPrewalkInto, cfgSkillful } from "../session/settings";
-import { cfgDisplayMode } from "../modes/settings";
+import { cfgPrewalkFrom, cfgPrewalkInto, cfgSkillful } from "../session/settings";
+import { applyDisplayPreset, nextDisplayMode } from "../modes/settings";
 import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
@@ -491,48 +491,13 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleWebGui: (command, runtime) => runtime.runNativeModeCommand("display", command.args),
 		handleTui: async (command, runtime) => {
 			const { settings } = runtime.ctx;
-			const current = cfgDisplayMode.get(settings);
-			const mode = command.args.trim() || { clean: "compact", compact: "detailed", detailed: "clean" }[current];
+			const mode = command.args.trim() || nextDisplayMode(settings);
 			if (mode !== "clean" && mode !== "compact" && mode !== "detailed") {
 				runtime.ctx.showWarning("用法：/display [clean|compact|detailed]");
 				clearSubmittedText(runtime);
 				return;
 			}
-			const preferences = [
-				// Detailed retains upstream inline reasoning; clean hides it entirely.
-				[cfgHideThinkingBlock, mode === "clean"],
-				[cfgDisplayMode, mode],
-			] as const;
-			cfgHideThinkingBlock.set(settings, mode === "clean");
-			cfgDisplayMode.set(settings, mode);
-			// Settings listeners apply display preferences in a coalesced microtask.
-			await Promise.resolve();
-			const label = { clean: "干净", compact: "紧凑", detailed: "详细" }[mode];
-			const shadowed = preferences.filter(([setting, value]) => setting.get(settings) !== value);
-			if (shadowed.length > 0) {
-				const sources = {
-					env: "环境变量",
-					runtime: "运行时",
-					overlay: "启动配置",
-					project: "项目配置",
-					global: "全局配置",
-					default: "默认值",
-				};
-				const overrides = shadowed
-					.map(([setting]) => `${setting.id}（${sources[setting.provenance(settings)]}）`)
-					.join("、");
-				const thinking = cfgHideThinkingBlock.get(settings) ? "隐藏" : "显示";
-				const tools = { clean: "隐藏", compact: "仅显示文件写入／编辑组件及两行活动内容", detailed: "详细" }[
-					cfgDisplayMode.get(settings)
-				];
-				runtime.ctx.showWarning(
-					`显示偏好：${label}（${mode}）；当前：实时思考窗口${thinking}、工具${tools}；覆盖：${overrides}`,
-				);
-			} else {
-				runtime.ctx.showStatus(
-					`显示模式：${label}（${mode}）${mode === "compact" ? "；工具详情：/display detailed" : ""}`,
-				);
-			}
+			await applyDisplayPreset(settings, mode, runtime.ctx);
 			clearSubmittedText(runtime);
 		},
 	},

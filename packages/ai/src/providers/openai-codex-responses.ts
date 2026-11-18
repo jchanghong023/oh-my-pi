@@ -1850,7 +1850,7 @@ async function openCodexWebSocketTransport(
 				retryBudget: CODEX_WEBSOCKET_RETRY_BUDGET,
 			});
 		const eventStream = websocketConnection.streamRequest(
-			{ send: withCodexRoutingFieldsFirst(websocketRequest) },
+			{ send: withCodexRoutingFieldsFirst(websocketRequest), suppressRawDebug: options?.requestAuth !== undefined },
 			timeouts,
 			requestSetup.requestSignal,
 			onSseEvent,
@@ -3770,7 +3770,7 @@ interface CodexWebSocketRequestTimeouts {
 
 /** What {@link CodexWebSocketConnection.streamRequest} puts on the wire before reading a response. */
 type CodexWebSocketExchange =
-	| { send: Record<string, unknown> }
+	| { send: Record<string, unknown>; suppressRawDebug?: boolean }
 	/** Read the successor the server creates from accepted steering; nothing is sent. */
 	| { attachSteerIds: readonly string[] };
 

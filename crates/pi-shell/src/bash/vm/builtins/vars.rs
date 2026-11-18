@@ -1723,17 +1723,6 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 	}
 	let first = args.len() - o.rest.len();
 	for (j, arg) in o.rest.iter().enumerate() {
-		if std::str::from_utf8(arg).is_err() {
-			let operand = String::from_utf8_lossy(arg);
-			if kind == DeclareKind::Export {
-				ctx.usage(format!("{operand}: invalid variable name"));
-				status = 2;
-			} else {
-				ctx.usage(format!("{operand}: not a valid variable name"));
-				status = 1;
-			}
-			continue;
-		}
 		let compound_word = ctx.compound.contains(&((1 + first + j) as u32));
 		if kind == DeclareKind::Local && arg.as_slice() == b"-" {
 			// `local -`: the `set` options, restored when the function
@@ -1753,6 +1742,17 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 			_ => false,
 		};
 		let (name, index, append, value) = split_assignment(arg, flat);
+		if std::str::from_utf8(name).is_err() {
+			let operand = String::from_utf8_lossy(arg);
+			if kind == DeclareKind::Export {
+				ctx.usage(format!("{operand}: invalid variable name"));
+				status = 2;
+			} else {
+				ctx.usage(format!("{operand}: not a valid variable name"));
+				status = 1;
+			}
+			continue;
+		}
 		if on.contains(Attrs::NAMEREF)
 			&& (index.is_some() || (value.is_none() && arg.contains(&b'[')))
 		{

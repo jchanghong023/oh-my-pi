@@ -608,6 +608,12 @@ pub enum StdioSpec {
 pub trait ExtProc: Send {
 	/// OS process id.
 	fn pid(&self) -> u32;
+	/// Process identity that stays usable after this handle is abandoned.
+	fn process(&self) -> Option<crate::proctree::Process> {
+		i32::try_from(self.pid())
+			.ok()
+			.and_then(crate::proctree::Process::from_pid)
+	}
 	/// Poll for exit. Must not block.
 	///
 	/// `Ready` only once the process has exited **and** every output pump

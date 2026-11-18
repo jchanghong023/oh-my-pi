@@ -198,7 +198,12 @@ export function expandPromptTemplate(text: string, templates: PromptTemplate[]):
 		const argsText = args.join(" ");
 		const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(template.content);
 		const substituted = substituteArgs(template.content, args);
-		const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
+		const rendered = prompt.render(substituted, {
+			args,
+			ARGUMENTS: argsText,
+			arguments: argsText,
+			rawArguments: argsString,
+		});
 		return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
 	}
 

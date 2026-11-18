@@ -1005,6 +1005,7 @@ const streamOpenAIResponsesOnce = (
 						return lease.session.events(requestParams, {
 							signal: requestSignal,
 							chain: isOpenAIResponsesWebSocketChainEnabled(options, model) && !lease.chainDisabled,
+							suppressRawDebug: options?.requestAuth !== undefined,
 							supportsImageDetailOriginal: model.compat.supportsImageDetailOriginal,
 							onSseEvent: rawSseObserver,
 							onChainResult: accepted => lease.recordChainResult(accepted),

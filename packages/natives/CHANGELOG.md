@@ -8,7 +8,8 @@
 
 ### Fixed
 
-- Linux offline startup rejects unsafe directories or files in the default shared-memory native addon cache.
+- Linux offline startup rejects unsafe directories or files in the default shared-memory grammar cache.
+- Offline Linux binaries can load their native addon when the shared memory filesystem is mounted `noexec`.
 
 ## [18.22.2] - 2026-11-18
 

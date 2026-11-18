@@ -1583,7 +1583,7 @@ export class Editor implements Component, Focusable {
 
 	#getPageScrollStep(totalVisualLines: number): number {
 		const visibleHeight =
-			this.#maxHeight === undefined
+			this.#maxHeight === undefined && this.renderHeightProvider === undefined
 				? DEFAULT_PAGE_SCROLL_LINES
 				: Math.max(1, this.#getVisibleContentHeight(totalVisualLines) - this.contentPaddingBottom);
 		return Math.max(1, visibleHeight - 1);

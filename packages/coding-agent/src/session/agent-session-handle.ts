@@ -245,6 +245,8 @@ export interface LiveToolOutputSnapshot {
 	dispatchOrder: number;
 	result?: ToolRenderResult<unknown>;
 	terminalAt?: number;
+	/** Absolute dismissal time once both the source and its active run have ended. */
+	expiresAt?: number;
 }
 
 /** Home-thread time and ordering for the mirrored output projection. */

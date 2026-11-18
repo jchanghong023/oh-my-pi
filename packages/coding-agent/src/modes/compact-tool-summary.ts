@@ -1,13 +1,21 @@
-import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { fieldQuestions } from "@oh-my-pi/pi-tui/html-form/data";
 import { parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
+import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
-import { editToolRenderer, getEditInputPaths } from "@oh-my-pi/pi-tui/tools/edit";
+import { toolFileTargets } from "@oh-my-pi/pi-tui/tools/file-target";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+
+export interface CompactFileSummary {
+	category: "read" | "write";
+	path: string;
+	countSuffix: string;
+	intent?: string;
+}
 
 export interface CompactToolSummary {
 	detail: string;
 	command?: string;
+	file?: CompactFileSummary;
 }
 
 type Fields = Record<string, unknown>;
@@ -77,14 +85,6 @@ function astEditTarget(fields: Fields): string {
 	return join(paths, ops);
 }
 
-function editTarget(fields: Fields): string | undefined {
-	const input = text(fields.input);
-	if (!input) return undefined;
-	// The renderer and its shared path extractor handle complete and streaming inputs.
-	const summary = editToolRenderer.activitySummary({ input }, { expanded: false, isPartial: true });
-	return summary.detail ?? stringList(getEditInputPaths(input), "paths");
-}
-
 function questionTarget(value: unknown): string | undefined {
 	if (typeof value !== "string" || !value.trim()) return undefined;
 	const form = parseHtmlForm(value);
@@ -127,9 +127,11 @@ function fallback(name: string, fields: Fields): string {
 			);
 		case "ida":
 			return join(text(fields.action), text(fields.db), text(fields.target));
+		case "write":
+		case "read":
 		case "edit":
 		case "apply_patch":
-			return editTarget(fields) ?? firstText(fields.path, fields.file_path, fields.target) ?? "";
+			return firstText(fields.path, fields.file_path, fields.target) ?? "";
 		case "task":
 			return taskTarget(fields) ?? "";
 		case "todo":
@@ -202,13 +204,17 @@ export function summarizeCompactTool(
 ): CompactToolSummary {
 	const fields = fieldsOf(args);
 	const description = firstText(intent, fields.i, fields.intent, fields.title);
-	if (name === "read") {
-		const path = text(fields.path);
-		if (path) {
-			return {
-				detail: description && comparable(description) !== comparable(path) ? join(description, path) : path,
-			};
-		}
+	const paths = toolFileTargets(name, fields);
+	const path = paths[0];
+	if (path) {
+		const targetIntent =
+			description && comparable(description).trim() !== comparable(path).trim() ? description : undefined;
+		// AST selectors may be directories or globs, not an identified set of files.
+		const countSuffix = paths.length > 1 ? ` (${paths.length} ${name === "ast_edit" ? "paths" : "files"})` : "";
+		return {
+			detail: join(path + countSuffix, targetIntent),
+			file: { category: name === "read" ? "read" : "write", path, countSuffix, intent: targetIntent },
+		};
 	}
 	const command = firstText(operation, fields.command, name === "eval" ? fields.code : undefined);
 	if (command)

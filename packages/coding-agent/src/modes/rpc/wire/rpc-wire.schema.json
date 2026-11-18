@@ -3956,6 +3956,10 @@
 				"result": {},
 				"isError": {
 					"type": "boolean"
+				},
+				"cancelled": {
+					"type": "boolean",
+					"description": "The tool execution was cancelled."
 				}
 			},
 			"required": [
@@ -4022,13 +4026,18 @@
 				"type": {
 					"const": "manual_compaction_start"
 				},
+				"operationId": {
+					"type": "string",
+					"description": "Identifies this operation and its matching `manual_compaction_end`."
+				},
 				"mode": {
 					"type": "string",
 					"description": "The `/compact <mode>` subcommand, when one was given."
 				}
 			},
 			"required": [
-				"type"
+				"type",
+				"operationId"
 			],
 			"description": "A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted."
 		},
@@ -4037,6 +4046,10 @@
 			"properties": {
 				"type": {
 					"const": "manual_compaction_end"
+				},
+				"operationId": {
+					"type": "string",
+					"description": "The ID from the matching `manual_compaction_start`."
 				},
 				"aborted": {
 					"type": "boolean",
@@ -4056,6 +4069,7 @@
 			},
 			"required": [
 				"type",
+				"operationId",
 				"aborted"
 			],
 			"description": "Outcome of the compaction announced by the matching `manual_compaction_start`."

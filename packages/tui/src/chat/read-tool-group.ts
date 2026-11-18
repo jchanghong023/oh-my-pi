@@ -27,7 +27,7 @@ import { wrapTextWithAnsi } from "../utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { internalUrlSchemeSpec, splitUrlScheme } from "../tools/url-scheme-host";
 import { SpotlightNotices } from "./spotlight";
-import type { ToolExecutionHandle } from "./tool-execution";
+import type { ToolExecutionHandle, ToolResultFrame } from "./tool-execution";
 import { formatUsageRow } from "../overlays/usage-row";
 import { formatCount, isUrlLikePath, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
 import { type TspCardStatus, type TspSpan, type TspText } from "@oh-my-pi/pi-wire";
@@ -132,7 +132,7 @@ type ReadEntry = {
 	path: string;
 	displayPaths?: ReadDisplayPathSpec[];
 	linkPath?: string;
-	status: "pending" | "success" | "warning" | "error";
+	status: "pending" | "success" | "cancelled" | "warning" | "error";
 	startedAt?: number;
 	endedAt?: number;
 	correctedFrom?: string;
@@ -197,8 +197,9 @@ const ROW_PATH_PAINT: PathPaint = {
 };
 
 /** Native item tone per read status; successful reads stay neutral. */
-const READ_STATUS_TONE: Record<ReadEntry["status"], "pending" | "warning" | "error" | undefined> = {
+const READ_STATUS_TONE: Record<ReadEntry["status"], "pending" | "info" | "warning" | "error" | undefined> = {
 	success: undefined,
+	cancelled: "info",
 	pending: "pending",
 	warning: "warning",
 	error: "error",
@@ -220,9 +221,10 @@ type ReadSummaryRow = {
 
 const READ_STATUS_RANK: Record<ReadEntry["status"], number> = {
 	success: 0,
-	pending: 1,
-	warning: 2,
-	error: 3,
+	cancelled: 1,
+	pending: 2,
+	warning: 3,
+	error: 4,
 };
 
 function getDisplayReadTargets(
@@ -450,7 +452,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		for (const [index, entry] of entries.entries()) {
 			const shown = drawn[index]!;
 			if (shown.mode === "compact") {
-				const glyph = entry.status === "success" ? undefined : formatStatusIcon(entry.status, theme);
+				const glyph =
+					entry.status === "success"
+						? undefined
+						: formatStatusIcon(entry.status === "cancelled" ? "info" : entry.status, theme);
 				lines.push(...compactRows(compactHead("Read", shortenPath(entry.path)), shown, width, glyph));
 			} else if (shown.mode === "full" && !fullDrawn) {
 				fullDrawn = true;
@@ -612,11 +617,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return this.#entries.size === 0;
 	}
 
-	updateResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: unknown; isError?: boolean },
-		isPartial = false,
-		toolCallId?: string,
-	): void {
+	updateResult(result: ToolResultFrame, isPartial = false, toolCallId?: string): void {
 		if (!toolCallId) return;
 		const entry = this.#entries.get(toolCallId);
 		if (!entry) return;
@@ -642,7 +643,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const conflictCount =
 			typeof details?.conflictCount === "number" && details.conflictCount > 0 ? details.conflictCount : undefined;
 		entry.conflictCount = conflictCount;
-		entry.status = result.isError ? "error" : suffixResolution || conflictCount ? "warning" : "success";
+		entry.status =
+			result.cancelled === true
+				? "cancelled"
+				: result.isError
+					? "error"
+					: suffixResolution || conflictCount
+						? "warning"
+						: "success";
 		entry.result = { content: result.content, details: rawDetails };
 		entry.presentation.markStale();
 		entry.contentType = details?.contentType;
@@ -854,7 +862,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 					collapsible = true;
 				}
 			} else {
-				head = rowHead;
+				head = status === "cancelled" ? { ...rowHead, note: "cancelled" } : rowHead;
 			}
 			for (const entry of previews) body.push(...this.#nativePreview(entry));
 			for (const [i, usage] of (this.#usageRowsBySummaryRow(rows).get(0) ?? []).entries()) {
@@ -891,7 +899,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				title: "Read",
 				status,
 				...timing,
-				tone: status === "error" ? "error" : undefined,
+				tone: status === "error" ? "error" : status === "cancelled" ? "info" : undefined,
 				frame: "inline",
 				collapsible,
 				collapsed: collapsible ? !entries.some(entry => entry.expanded) : undefined,
@@ -928,9 +936,11 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const detail: TspText | undefined =
 			error !== undefined
 				? [span(`— ${error.split("\n", 1)[0]}`, "error")]
-				: correctedFrom
-					? `corrected from ${shortenPath(correctedFrom)}`
-					: undefined;
+				: status === "cancelled"
+					? "cancelled"
+					: correctedFrom
+						? `corrected from ${shortenPath(correctedFrom)}`
+						: undefined;
 		return fileRow(shortenPath(split.sel ? split.path : row.targetPath), {
 			range: split.sel ? `:${split.sel}` : undefined,
 			href: fileHref(linkPathForTargets(row.targets)) ?? urlHref(split.path),
@@ -1098,6 +1108,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		for (const entry of entries) rank = Math.max(rank, READ_STATUS_RANK[entry.status]);
 		if (rank === READ_STATUS_RANK.error) return "error";
 		if (rank === READ_STATUS_RANK.pending) return this.#sealed ? "cancelled" : "running";
+		if (rank === READ_STATUS_RANK.cancelled) return "cancelled";
 		return "done";
 	}
 
@@ -1118,6 +1129,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		if (correctedFrom) spans.push(span(` (corrected from ${shortenPath(correctedFrom)})`, "dim"));
 		const conflicts = this.#conflictCountForTargets(row.targets);
 		if (conflicts) spans.push(span(` (⚠ ${conflicts} conflict${conflicts === 1 ? "" : "s"})`, "warning"));
+		if (this.#statusForTargets(row.targets) === "cancelled") spans.push(span(" (cancelled)", "dim"));
 		return spans;
 	}
 
@@ -1147,7 +1159,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		if (displayRows.length === 1) {
 			const row = displayRows[0]!;
 			if (!this.#shouldRenderPreviewRow(row)) {
-				const statusSymbol = formatStatusIcon(this.#statusForTargets(row.targets), theme);
+				const status = this.#statusForTargets(row.targets);
+				const statusSymbol = formatStatusIcon(status === "cancelled" ? "info" : status, theme);
 				const pathDisplay = this.#formatRowPath(row, HEADER_PATH_PAINT);
 				const lines = [` ${statusSymbol} ${theme.fg("toolTitle", theme.bold("Read"))} ${pathDisplay}`.trimEnd()];
 				const usageRows = this.#usageRowsBySummaryRow(displayRows).get(0) ?? [];
@@ -1313,18 +1326,20 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#formatRow(row: ReadSummaryRow): string {
 		const status = this.#statusForTargets(row.targets);
-		const statusPrefix = status === "success" ? "" : `${formatStatusIcon(status, theme)} `;
+		const statusPrefix =
+			status === "success" ? "" : `${formatStatusIcon(status === "cancelled" ? "info" : status, theme)} `;
 		return `${statusPrefix}${this.#formatRowPath(row)}`;
 	}
 
 	#formatRowPath(row: ReadSummaryRow, paint = ROW_PATH_PAINT): string {
-		return this.#formatPathValue(row.targetPath, paint, {
+		const path = this.#formatPathValue(row.targetPath, paint, {
 			correctedFrom: this.#correctedFromForTargets(row.targets),
 			conflictCount: this.#conflictCountForTargets(row.targets),
 			line: firstSelectorLineForTargets(row.targets),
 			linkPath: linkPathForTargets(row.targets),
 			basePath: row.basePath,
 		});
+		return this.#statusForTargets(row.targets) === "cancelled" ? `${path} ${theme.fg("dim", "(cancelled)")}` : path;
 	}
 
 	#statusForTargets(targets: ReadDisplayTarget[]): ReadEntry["status"] {
@@ -1440,7 +1455,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const component: Component = {
 			render: (width: number) => {
 				if (cachedLines && cachedWidth === width) return cachedLines;
-				const status = entry.status === "success" ? "complete" : entry.status;
+				const status = entry.status === "success" || entry.status === "cancelled" ? "complete" : entry.status;
 				cachedLines = previewsMarkdown(entry)
 					? renderMarkdownCell(
 							{
@@ -1498,6 +1513,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	#shouldRenderPreview(entry: ReadEntry): boolean {
-		return this.#showContentPreview && entry.contentText !== undefined;
+		return this.#showContentPreview && entry.status !== "cancelled" && entry.contentText !== undefined;
 	}
 }

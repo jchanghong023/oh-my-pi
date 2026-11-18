@@ -73,7 +73,9 @@ export interface NativeLoaderContext {
 	candidates: string[];
 	isWorkspaceLoad: boolean;
 	nativesDir: string;
+	addonCacheDir: string;
 	offlineCacheUid: number | undefined;
+	offlineGrammarCacheUid: number | undefined;
 }
 
 export function initLoaderContext(overrides?: InitLoaderContextOverrides): NativeLoaderContext;

@@ -4,6 +4,7 @@ import { offlineFromEnv } from "../cli/args";
 import { MOTION_MODES, MOTION_PRESETS } from "../config/motion-presets";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { cfgReadToolResultPreview } from "../tools/settings";
+import { cfgHideThinkingBlock } from "../session/settings";
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
 import { TREE_FILTER_MODES } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import {
@@ -784,6 +785,48 @@ export const cfgDisplayMode = register({
 	values: ["clean", "compact", "detailed"] as const,
 	default: "compact",
 });
+
+export function nextDisplayMode(settings: Settings): "clean" | "compact" | "detailed" {
+	return ({ clean: "compact", compact: "detailed", detailed: "clean" } as const)[cfgDisplayMode.get(settings)];
+}
+
+/** Apply the saved preset, reporting the actual values when a higher layer overrides it. */
+export async function applyDisplayPreset(
+	settings: Settings,
+	mode: "clean" | "compact" | "detailed",
+	output: { showStatus(message: string): void; showWarning(message: string): void },
+): Promise<void> {
+	const hideThinking = mode === "clean";
+	cfgHideThinkingBlock.set(settings, hideThinking);
+	cfgDisplayMode.set(settings, mode);
+	// The settings effect rebuilds the transcript in a microtask, before the status notice is inserted.
+	await Promise.resolve();
+	const actualMode = cfgDisplayMode.get(settings);
+	const actualHideThinking = cfgHideThinkingBlock.get(settings);
+	const label = { clean: "干净", compact: "紧凑", detailed: "详细" }[mode];
+	if (mode === actualMode && hideThinking === actualHideThinking) {
+		output.showStatus(`显示模式：${label}（${mode}）${mode === "compact" ? "；工具详情：/display detailed" : ""}`);
+		return;
+	}
+	const sources = {
+		env: "环境变量",
+		runtime: "运行时",
+		overlay: "启动配置",
+		project: "项目配置",
+		global: "全局配置",
+		default: "默认值",
+	};
+	const overrides: string[] = [];
+	if (hideThinking !== actualHideThinking)
+		overrides.push(`${cfgHideThinkingBlock.id}（${sources[cfgHideThinkingBlock.provenance(settings)]}）`);
+	if (mode !== actualMode)
+		overrides.push(`${cfgDisplayMode.id}（${sources[cfgDisplayMode.provenance(settings)]}）`);
+	const thinking = actualHideThinking || actualMode === "clean" ? "隐藏" : "显示";
+	const tools = { clean: "隐藏", compact: "文件写入／编辑组件及临时 Output", detailed: "详细" }[actualMode];
+	output.showWarning(
+		`显示偏好：${label}（${mode}）；当前：实时思考窗口${thinking}、工具${tools}；覆盖：${overrides.join("、")}`,
+	);
+}
 
 export const cfgDisplayShowTokenUsage = register({
 	id: "display.showTokenUsage",

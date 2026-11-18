@@ -33,6 +33,7 @@ function fakeProcess(exitCode = 0): Subprocess {
 	return {
 		pid: 1,
 		exited: Promise.resolve(exitCode),
+		unref: () => {},
 		kill: () => true,
 	} as unknown as Subprocess;
 }

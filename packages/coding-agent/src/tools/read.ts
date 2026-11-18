@@ -25,6 +25,7 @@ import {
 	isProbablyBinaryHeader,
 	isEnoent,
 	logger,
+	materializeString,
 	parseHeifImageMimeType,
 	parseImageMetadata,
 	prompt,
@@ -43,6 +44,7 @@ import readSourcesDoc from "../prompts/tools/read-sources.md" with { type: "text
 import type { ToolSession } from "../sdk";
 import { McpResourceNotFoundError } from "../internal-urls/mcp-protocol";
 import { parseInternalUrl } from "../internal-urls/parse";
+import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -296,12 +298,23 @@ function deriveBufferedFileText(bytes: Buffer): BufferedFileText {
 	};
 }
 
+interface LogErrorMatches {
+	text: string;
+	truncated: boolean;
+}
+
+interface FilesystemReadPresentation {
+	mediaPath?: string;
+	logMatches?: LogErrorMatches | "";
+}
+
 async function findLogErrorLines(
 	absolutePath: string,
 	pattern: string,
 	buffered: BufferedFileText | undefined,
+	maxBytes: number,
 	signal: AbortSignal | undefined,
-): Promise<string> {
+): Promise<LogErrorMatches | ""> {
 	let regex: RegExp;
 	try {
 		regex = new RegExp(pattern);
@@ -311,6 +324,8 @@ async function findLogErrorLines(
 
 	const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 	const matches: string[] = [];
+	let keptBytes = 0;
+	let truncated = false;
 	const lines = buffered?.rawSegments ?? readLines(Bun.file(absolutePath).stream(), signal);
 	const bufferedLineCount = buffered
 		? buffered.rawSegments.length - Number(buffered.endsWithNewline || buffered.bytes.length === 0)
@@ -321,10 +336,24 @@ async function findLogErrorLines(
 		if (++lineNumber > (bufferedLineCount ?? Infinity)) break;
 		let text = (typeof line === "string" ? line : decoder.decode(line)).replace(/\r$/, "");
 		if (lineNumber === 1) text = text.replace(/^\uFEFF/, "");
-		if (regex.test(text)) matches.push(`${lineNumber}:${text}`);
+		if (!regex.test(text)) continue;
+		const prefix = `${lineNumber}:`;
+		const remaining = maxBytes - keptBytes - Number(matches.length > 0);
+		const lineBytes =
+			prefix.length + text.length <= remaining ? prefix.length + Buffer.byteLength(text, "utf-8") : Infinity;
+		if (lineBytes > remaining) {
+			// Preserve a numbered preview when even the first match is wider than the budget.
+			if (matches.length === 0 && prefix.length <= remaining) {
+				matches.push(prefix + materializeString(truncateHeadBytes(text, remaining - prefix.length).text));
+			}
+			truncated = true;
+			break;
+		}
+		keptBytes += lineBytes + Number(matches.length > 0);
+		matches.push(prefix + text);
 	}
 	throwIfAborted(signal);
-	return matches.join("\n");
+	return matches.length || truncated ? { text: matches.join("\n"), truncated } : "";
 }
 
 /** The line window a range read renders, with the budget accounting behind it. */
@@ -956,18 +985,49 @@ interface ReadDetailsWithWindow extends ReadToolDetails {
 	[kSpotlightWindow]?: ShapeInput["read"];
 	[kSpotlightWide]?: true;
 	[kReadList]?: ReadList;
-	[kLogErrorLines]?: string;
+	[kLogErrorLines]?: LogErrorMatches | "";
 }
 
-function prependLogErrorLines(result: AgentToolResult<ReadToolDetails>): AgentToolResult<ReadToolDetails> {
+const LOG_ERROR_MATCHES_TRUNCATED = "[Log error matches truncated: output byte limit]";
+
+function textContentBytes(content: AgentToolResult<ReadToolDetails>["content"]): number {
+	let bytes = 0;
+	let textBlocks = 0;
+	for (const block of content) {
+		if (block.type === "text") bytes += Buffer.byteLength(block.text, "utf-8") + Number(textBlocks++ > 0);
+	}
+	return bytes;
+}
+
+function formatLogErrorPrefix(matches: LogErrorMatches, budget: number): string {
+	const maxBytes = budget - 2; // blank line between the matches and the requested output
+	if (!matches.truncated && Buffer.byteLength(matches.text, "utf-8") <= maxBytes) return `${matches.text}\n\n`;
+	const noticeBytes = LOG_ERROR_MATCHES_TRUNCATED.length;
+	if (maxBytes < noticeBytes) return "";
+	const head = truncateHeadBytes(matches.text, Math.max(0, maxBytes - noticeBytes - 1)).text;
+	return `${head ? `${head}\n` : ""}${LOG_ERROR_MATCHES_TRUNCATED}\n\n`;
+}
+
+function logOutputBytesRemaining(session: ToolSession, result: AgentToolResult<ReadToolDetails>): number {
+	const meta = result.details?.meta;
+	const maxBytes = meta?.pagedSource
+		? resolveInlineByteCapBudget(session.settings)
+		: resolveArtifactSpillThreshold(session.settings);
+	return maxBytes - textContentBytes(result.content) - Buffer.byteLength(formatOutputNotice(meta), "utf-8");
+}
+
+function prependLogErrorLines(
+	session: ToolSession,
+	result: AgentToolResult<ReadToolDetails>,
+): AgentToolResult<ReadToolDetails> {
 	const details: ReadDetailsWithWindow | undefined = result.details;
 	const matches = details?.[kLogErrorLines];
 	if (!matches || result.isError) return result;
 	const firstText = result.content.find((c): c is TextContent => c.type === "text");
 	if (!firstText) return result;
-	const content = result.content.map(c =>
-		c === firstText ? { ...firstText, text: `${matches}\n\n${firstText.text}` } : c,
-	);
+	const prefix = formatLogErrorPrefix(matches, logOutputBytesRemaining(session, result));
+	if (!prefix) return result;
+	const content = result.content.map(c => (c === firstText ? { ...firstText, text: prefix + firstText.text } : c));
 	return { ...result, content };
 }
 
@@ -988,6 +1048,7 @@ function joinReadList(
 	list: ReadList,
 	resultOf: (part: ShapePart<ReadToolDetails>) => AgentToolResult<ReadToolDetails>,
 	hints?: ReadonlyMap<ShapePart<ReadToolDetails>, string>,
+	logBudget = 0,
 ): { content: Array<TextContent | ImageContent>; layout: (string | number)[]; parts: ShapePart<ReadToolDetails>[] } {
 	const content: Array<TextContent | ImageContent> = [];
 	const layout: (string | number)[] = [];
@@ -1024,7 +1085,12 @@ function joinReadList(
 				const texts = result.content.filter((item): item is TextContent => item.type === "text");
 				if (texts.length) {
 					parts.push(entry.part);
-					append(parts.length - 1, texts.map(item => item.text).join("\n"));
+					const details: ReadDetailsWithWindow | undefined = result.details;
+					const matches = details?.[kLogErrorLines];
+					const prefix =
+						logBudget > 0 && matches && !result.isError ? formatLogErrorPrefix(matches, logBudget) : "";
+					if (prefix) logBudget -= Buffer.byteLength(prefix, "utf-8");
+					append(parts.length - 1, prefix + texts.map(item => item.text).join("\n"));
 					const hint = hints?.get(entry.part);
 					if (hint) {
 						pendingText += `\n\n${hint}`;
@@ -1071,7 +1137,16 @@ const REPEAT_READ_TRACKER_CAP = 64;
 function appendRepeatReadHint(session: ToolSession, path: string, result: AgentToolResult<ReadToolDetails>): void {
 	const notice = repeatReadNotice(session, path, result);
 	const block = result.content.find(entry => entry.type === "text");
-	if (notice && block) block.text = appendReadNotice(block.text, notice, (result.details ??= {}), "\n\n");
+	if (!notice || !block) return;
+	const details: ReadDetailsWithWindow = (result.details ??= {});
+	if (
+		details[kLogErrorLines] &&
+		!details.raw &&
+		Buffer.byteLength(notice, "utf-8") + 2 > logOutputBytesRemaining(session, result)
+	) {
+		return;
+	}
+	block.text = appendReadNotice(block.text, notice, details, "\n\n");
 }
 
 /** Counts `result` as a read of `path`; the loop-breaking hint when it repeats identical output often enough. */
@@ -1405,7 +1480,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				},
 				path.resolve(this.session.cwd, requestedPath),
 			);
-			const result = prependLogErrorLines(inner);
+			const result = prependLogErrorLines(this.session, inner);
 			const snapshotHash = store.headHash(absolutePath);
 			if (!signal.aborted && !execution.discarded && snapshotHash) {
 				this.#speculativeReads.set(context.toolCall.id, {
@@ -2084,7 +2159,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				);
 		const displayTarget = InternalUrlRouter.instance().locateSync(params.path);
 		if (displayTarget && result.details) result.details.displayTarget = displayTarget;
-		const presented = prependLogErrorLines(result);
+		const presented = prependLogErrorLines(this.session, result);
 		appendRepeatReadHint(this.session, params.path, presented);
 		return presented;
 	}
@@ -2104,7 +2179,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const read = joinReadList(list, part => part.result);
 		const hints = new Map<ShapePart<ReadToolDetails>, string>();
 		for (const part of read.parts) {
-			const notice = repeatReadNotice(this.session, part.request.path ?? "", prependLogErrorLines(part.result));
+			const notice = repeatReadNotice(
+				this.session,
+				part.request.path ?? "",
+				prependLogErrorLines(this.session, part.result),
+			);
 			// A raw part's notice goes to notes, not its bytes (`appendReadNotice`); a list keeps no part's notes.
 			if (notice && !part.request.raw) hints.set(part, notice);
 		}
@@ -2121,7 +2200,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			signal,
 		);
 		const results = new Map(read.parts.map((part, i) => [part, shaped.results[i]]));
-		const { content } = joinReadList(list, part => prependLogErrorLines(results.get(part) ?? part.result), hints);
+		const resultOf = (part: ShapePart<ReadToolDetails>) => results.get(part) ?? part.result;
+		let { content } = joinReadList(list, resultOf, hints);
+		if (shaped.results.some(result => (result.details as ReadDetailsWithWindow | undefined)?.[kLogErrorLines])) {
+			// Share the remaining budget across all log prefixes after sizing the shaped parts and their hints.
+			const remaining = resolveArtifactSpillThreshold(this.session.settings) - textContentBytes(content);
+			if (remaining > 0) ({ content } = joinReadList(list, resultOf, hints, remaining));
+		}
 		const details = shaped.spotlight ? { ...inner.details, spotlight: shaped.spotlight } : inner.details;
 		return { ...inner, content, details };
 	}
@@ -2290,7 +2375,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		readPath: string,
 		options: FilesystemReadOptions,
 	): Promise<AgentToolResult<ReadToolDetails>> {
-		const presentation: { mediaPath?: string; logMatches?: string } = {};
+		const presentation: FilesystemReadPresentation = {};
 		const result = await this.#readFilesystemPipeline(readPath, options, presentation);
 		if (result.isError) return result;
 		if (presentation.logMatches !== undefined) {
@@ -2305,7 +2390,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	async #readFilesystemPipeline(
 		readPath: string,
 		options: FilesystemReadOptions,
-		presentation: { mediaPath?: string; logMatches?: string },
+		presentation: FilesystemReadPresentation,
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		const {
 			located,
@@ -2746,7 +2831,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 			const logErrorPattern = ext === ".log" ? Bun.env.OMP_LOG_ERROR_REGEX : undefined;
 			if (logErrorPattern) {
-				const logMatches = await findLogErrorLines(absolutePath, logErrorPattern, buffered, signal);
+				const logMatches = await findLogErrorLines(
+					absolutePath,
+					logErrorPattern,
+					buffered,
+					resolveInlineByteCapBudget(this.session.settings),
+					signal,
+				);
 				presentation.logMatches = logMatches;
 				if (!logMatches) return toolResult<ReadToolDetails>({}).text("执行成功\n退出码 0").done();
 			}

@@ -1059,14 +1059,35 @@ describe("diagnostic consumer contracts", () => {
 		"recovers an actual write error rather than only mkdir failures",
 		async () => {
 			const result = await runDiagnosticConsumer(`
-			fs.mkdirSync(path.dirname(getLogPath()), { recursive: true });
-			fs.symlinkSync("/dev/full", getLogPath());
-			logger.info("write_failure_record");
+			logger.info("primary_record");
+			logger.flush();
+			const primary = fs.realpathSync(logger.getCurrentLogPath());
+			const fd = fs.readdirSync("/proc/self/fd").find(entry => {
+				try {
+					return fs.readlinkSync("/proc/self/fd/" + entry) === primary;
+				} catch {
+					// The descriptor used to list /proc/self/fd has already closed.
+					return false;
+				}
+			});
+			if (fd === undefined) throw new Error("expected the primary log to remain open");
+			logger.info("write_failure_record", { index: 1 });
+			// Invalidate only the active log descriptor with the record already buffered.
+			fs.closeSync(Number(fd));
 			logger.flush();
 		`);
-			expect((await readLogEntries(consumerFallbackDir(result.root))).map(entry => entry.message)).toEqual([
-				"log_directory_fallback",
-				"write_failure_record",
+			const [warning, ...replayed] = await readLogEntries(consumerFallbackDir(result.root));
+			expect(warning).toMatchObject({ message: "log_directory_fallback", stage: "flush", error_code: "EBADF" });
+			const expected = {
+				level: "info",
+				message: "write_failure_record",
+				index: 1,
+				pid: result.pid,
+				timestamp: expect.any(String),
+			};
+			expect(replayed).toEqual([expected]);
+			expect((await readLogEntries(path.join(result.root, "primary", "logs"))).map(entry => entry.message)).toEqual([
+				"primary_record",
 			]);
 			expect(result.stdout).toBe("");
 			expect(result.stderr).toBe("");

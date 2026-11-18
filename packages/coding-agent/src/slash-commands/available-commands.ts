@@ -5,7 +5,7 @@ import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { ExtensionRunner } from "../extensibility/extensions";
 import { getSkillSlashCommandName, type Skill } from "../extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands } from "../extensibility/slash-commands";
-import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "./builtin-registry";
+import { BUILTIN_SLASH_COMMANDS_INTERNAL, getWebGuiBuiltinHandler } from "./builtin-registry";
 
 export type AvailableSlashCommandSource = "builtin" | "skill" | "extension" | "custom" | "mcp_prompt" | "file";
 
@@ -30,11 +30,10 @@ export interface AvailableCommandsSession {
 }
 
 export interface AvailableCommandsOptions {
-	/**
-	 * Advertise builtins that only implement a TUI handler; ACP omits them
-	 * because nothing there can run them.
-	 */
+	/** Include terminal-only handlers when discovering commands for the TUI. */
 	includeTuiOnlyBuiltins?: boolean;
+	/** Use the native browser dispatcher's command surface. */
+	includeWebGuiBuiltins?: boolean;
 	/** Include RPC host adapters without changing the ACP command surface. */
 	includeRpcBuiltins?: boolean;
 }
@@ -64,15 +63,15 @@ export async function buildAvailableSlashCommands(
 	};
 
 	for (const command of BUILTIN_SLASH_COMMANDS_INTERNAL) {
-		if (
-			!command.handle &&
-			!(options.includeRpcBuiltins && command.handleRpc) &&
-			!(options.includeTuiOnlyBuiltins && command.handleTui)
-		) {
-			// RPC dispatch resolves every registry name and rejects handler-less
-			// builtins with an explicit error before `session.prompt()` can run
-			// custom or file commands, so skipped names stay reserved there.
-			if (options.includeRpcBuiltins) {
+		const executable = options.includeWebGuiBuiltins
+			? getWebGuiBuiltinHandler(command)
+			: (command.handle ??
+				(options.includeRpcBuiltins ? command.handleRpc : undefined) ??
+				(options.includeTuiOnlyBuiltins ? command.handleTui : undefined));
+		if (!executable) {
+			// These hosts resolve every registry name before trying custom or file
+			// commands, so skipped names and aliases stay reserved.
+			if (options.includeRpcBuiltins || options.includeWebGuiBuiltins) {
 				builtinNames.add(command.name);
 				for (const alias of command.aliases ?? []) builtinNames.add(alias);
 			}

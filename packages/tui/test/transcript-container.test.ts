@@ -2256,6 +2256,12 @@ describe("TranscriptContainer file changes", () => {
 			wrappedPatch.setExecutionStarted();
 			expect(wrappedEdit.render(120).join("")).not.toBe("");
 			expect(wrappedPatch.render(120).join("")).not.toBe("");
+			const streaming = call(root, "write", {
+				path: "xd://write",
+				content: '{"path":"known-target.txt","content":"partial',
+			});
+			for (const view of views(root)) expect(view).toContain("known-target.txt");
+			streaming.seal();
 
 			const cancelled = call(root, "edit", { path: "cancelled.ts" });
 			cancelled.setExecutionStarted();

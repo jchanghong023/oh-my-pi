@@ -26,7 +26,7 @@
 import { dlopen, FFIType } from "bun:ffi";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getLogPath } from "./dirs";
+import { getLogPath, prepareLogDirectory } from "./dirs";
 
 const STDOUT_FILENO = 1;
 const STDERR_FILENO = 2;
@@ -82,6 +82,30 @@ let savedStderrFd: number | null = null;
 /** Newest log file the guard knows about; see {@link setStderrRedirectTarget}. */
 let redirectTarget: string | null = null;
 
+function openStderrLog(filePath: string): number {
+	// The logger creates its directory lazily; stderr can be redirected first.
+	if (!prepareLogDirectory(path.dirname(filePath))) return fs.openSync(filePath, "a");
+	const fd = fs.openSync(
+		filePath,
+		fs.constants.O_WRONLY |
+			fs.constants.O_CREAT |
+			fs.constants.O_APPEND |
+			fs.constants.O_NOFOLLOW |
+			fs.constants.O_NONBLOCK,
+		0o600,
+	);
+	try {
+		const stat = fs.fstatSync(fd);
+		if (!stat.isFile() || stat.uid !== process.getuid!() || (stat.mode & 0o077) !== 0) {
+			throw new Error("Shared cache stderr log is not private");
+		}
+		return fd;
+	} catch (error) {
+		fs.closeSync(fd);
+		throw error;
+	}
+}
+
 export interface SuppressTerminalStderrOptions {
 	/**
 	 * Redirect target path; defaults to the log file the rotating sink last
@@ -117,11 +141,7 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
 	let redirectFd: number;
 	try {
 		const redirectPath = options?.redirectPath ?? redirectTarget ?? getLogPath();
-		// getLogsDir() only computes the path; the logger creates it lazily, so
-		// on a fresh profile ~/.omp/logs may not exist yet. Create it here so
-		// diagnostics land in the log instead of falling through to /dev/null.
-		fs.mkdirSync(path.dirname(redirectPath), { recursive: true });
-		redirectFd = fs.openSync(redirectPath, "a");
+		redirectFd = openStderrLog(redirectPath);
 		redirectTarget = redirectPath;
 	} catch {
 		try {
@@ -163,7 +183,7 @@ export function setStderrRedirectTarget(logPath: string): void {
 	if (!libc) return;
 	let redirectFd: number;
 	try {
-		redirectFd = fs.openSync(logPath, "a");
+		redirectFd = openStderrLog(logPath);
 	} catch {
 		return;
 	}

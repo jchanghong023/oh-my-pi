@@ -324,6 +324,10 @@ impl ExtProc for Relayed {
 		self.child.pid()
 	}
 
+	fn process(&self) -> Option<crate::proctree::Process> {
+		self.child.process()
+	}
+
 	fn poll_wait(&mut self, cx: &mut Context<'_>) -> Poll<ExitStatus> {
 		loop {
 			match std::task::ready!(self.poll_event(cx)) {

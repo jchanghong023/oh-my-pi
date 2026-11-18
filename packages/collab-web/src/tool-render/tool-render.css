@@ -355,6 +355,7 @@
 	flex: none;
 	color: var(--tv-accent);
 	-moz-user-select: none;
+	user-select: none;
 }
 
 .tv-cmd-text {
@@ -401,6 +402,7 @@
 .tv-diff-row--gap {
 	color: var(--tv-faint);
 	-moz-user-select: none;
+	user-select: none;
 }
 
 /* ---- cells (eval / ast ops) ---- */

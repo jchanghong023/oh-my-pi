@@ -117,7 +117,13 @@ fn signal_all(mut procs: Vec<ProcInfo>, sig: Signal) -> io::Result<Vec<ProcInfo>
 /// Send `sig` to `p` if the pid still names the process that was scanned.
 /// `Ok(false)` when it has exited or the pid now names another process.
 pub fn signal_pinned(p: &ProcInfo, sig: Signal) -> io::Result<bool> {
-	sys::signal_pinned(p, i32::from(sig.number(Platform::current())))
+	signal_pinned_raw(p, i32::from(sig.number(Platform::current())))
+}
+
+/// Signal a scanned identity using a raw signal number (including realtime
+/// signals).
+pub(crate) fn signal_pinned_raw(p: &ProcInfo, sig: i32) -> io::Result<bool> {
+	sys::signal_pinned(p, sig)
 }
 
 /// Split a Linux `/proc/<pid>/stat` line into `(comm, fields after comm)`.

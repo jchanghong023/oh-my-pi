@@ -4,7 +4,7 @@
  * Gated by `PI_PYTHON_INTEGRATION=1` so CI without a real Python interpreter
  * (or sandboxes where subprocess spawning is restricted) does not fail.
  */
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -1255,17 +1255,41 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 
 describe.skipIf(!SHOULD_RUN || process.platform !== "linux")("Linux offline Python selection", () => {
 	const offlinePython = "/software/public/python/3.11.4/bin/python3.11";
-	const realPython = piUtils.$which("python3") ?? piUtils.$which("python");
+	const pythonCommands = ["python3", "python", "python3.11", "python3.12", "python3.13", "python3.14", "python3.15"];
+	let realPython: string | undefined;
+	let originalOffline: string | undefined;
+
+	beforeEach(() => {
+		originalOffline = process.env.OMP_OFFLINE;
+		process.env.OMP_OFFLINE = "1";
+	});
 
 	afterEach(async () => {
-		await disposeAllKernelSessions();
-		vi.restoreAllMocks();
+		try {
+			await disposeAllKernelSessions();
+		} finally {
+			vi.restoreAllMocks();
+			if (originalOffline === undefined) delete process.env.OMP_OFFLINE;
+			else process.env.OMP_OFFLINE = originalOffline;
+		}
 	});
 
 	// Route only the fixed path into a private fixture: no writes under /software
 	// and no dependency on the company's Python installation for this regression.
 	async function prepareInterpreters(temp: TempDir, fixed: "working" | "broken" | "old", polluted = false) {
-		if (!realPython) throw new Error("PI_PYTHON_INTEGRATION requires a real Python 3.8+ interpreter");
+		realPython ??= [...new Set(pythonCommands.flatMap(command => piUtils.$whichAll(command)))].find(python => {
+			try {
+				return (
+					Bun.spawnSync([python, "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"], {
+						stdio: ["ignore", "ignore", "ignore"],
+						timeout: 5_000,
+					}).exitCode === 0
+				);
+			} catch {
+				return false;
+			}
+		});
+		if (!realPython) throw new Error("Linux offline Python integration requires a real Python 3.11+ interpreter");
 		const quotedPython = `'${realPython.replaceAll("'", "'\\''")}'`;
 		const activeDir = temp.join(".venv");
 		const activePython = path.join(activeDir, "bin", "python");
@@ -1288,7 +1312,6 @@ describe.skipIf(!SHOULD_RUN || process.platform !== "linux")("Linux offline Pyth
 		const shellConfig = settings.getShellConfig();
 		const env = {
 			...shellConfig.env,
-			OMP_OFFLINE: "1",
 			VIRTUAL_ENV: activeDir,
 			PYTHONPATH: polluted ? pollutionDir : "",
 		};
@@ -1296,7 +1319,7 @@ describe.skipIf(!SHOULD_RUN || process.platform !== "linux")("Linux offline Pyth
 		vi.spyOn(settings, "getShellConfig").mockReturnValue({ ...shellConfig, env });
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(temp.join("missing-managed-env"));
 		vi.spyOn(piUtils, "isBunTestRuntime").mockReturnValue(false);
-		vi.spyOn(piUtils, "$which").mockReturnValue(realPython);
+		vi.spyOn(piUtils, "$whichAll").mockReturnValue([realPython]);
 		const exists = nodeFs.existsSync;
 		vi.spyOn(nodeFs, "existsSync").mockImplementation(candidate =>
 			candidate === offlinePython ? true : exists(candidate),
@@ -1328,7 +1351,7 @@ describe.skipIf(!SHOULD_RUN || process.platform !== "linux")("Linux offline Pyth
 		try {
 			const result = await executePythonWithKernel(
 				kernel,
-				"import os, sys; print(sys.version_info >= (3, 8)); print(repr(os.environ.get('VIRTUAL_ENV'))); print(repr(os.environ.get('PYTHONPATH')))",
+				"import os, sys; print(sys.version_info >= (3, 11)); print(repr(os.environ.get('VIRTUAL_ENV'))); print(repr(os.environ.get('PYTHONPATH')))",
 			);
 			expect(result.exitCode).toBe(0);
 			expect(result.output.trim()).toBe("True\nNone\nNone");
@@ -1380,10 +1403,10 @@ describe.skipIf(!SHOULD_RUN || process.platform !== "linux")("Linux offline Pyth
 		expect(availability.ok).toBe(false);
 		expect(availability.pythonPath).toBe(oldPython);
 		expect(availability.reason).toContain("Configured Python interpreter");
-		expect(availability.reason).toContain("Python 3.8+ required");
+		expect(availability.reason).toContain("Python 3.11+ required");
 		expect(launched).toEqual([oldPython]);
 		await expect(PythonKernel.start({ cwd: temp.path(), interpreter: oldPython })).rejects.toThrow(
-			"Python 3.8+ required",
+			"Python 3.11+ required",
 		);
 		expect(launched).toEqual([oldPython, oldPython]);
 	});

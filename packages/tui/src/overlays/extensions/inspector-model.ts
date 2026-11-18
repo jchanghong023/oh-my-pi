@@ -475,7 +475,9 @@ export function enablementLabel(state: ExtensionState, reason?: string, shadowed
 						? "~/ config not enabled"
 						: reason === "item-disabled"
 							? "manually disabled"
-							: "unknown";
+							: reason === "skill-config"
+								? "skills settings"
+								: "unknown";
 			return `Disabled (${reasonText})`;
 		}
 		case "shadowed":

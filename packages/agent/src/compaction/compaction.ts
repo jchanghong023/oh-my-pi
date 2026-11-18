@@ -1069,8 +1069,8 @@ export async function generateSummary(
 				options,
 			);
 		} catch (error) {
-			// CodeAgent owns replay policy, including context rejections.
-			if (signal?.aborted || model.provider === "codeagent") throw error;
+			// CodeAgent's transport owns replay policy, but a remote summary endpoint bypasses it.
+			if (signal?.aborted || (model.provider === "codeagent" && !options?.remoteEndpoint)) throw error;
 			// The catalog window can overstate what the provider actually accepts:
 			// `claude-sonnet-4-5` advertises 1M but is beta-gated to 200k on OAuth
 			// credentials (see `anthropic.ts` — the 1M beta is never advertised).

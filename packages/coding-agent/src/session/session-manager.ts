@@ -2494,7 +2494,7 @@ export class SessionManager {
 		this.#clearDiskError();
 		this.#draftOnlySessionCleanupArmed = false;
 
-		const resolvedSessionFile = path.resolve(sessionFile);
+		const resolvedSessionFile = this.#storage instanceof FileSessionStorage ? path.resolve(sessionFile) : sessionFile;
 		const loaded = loadedSession ?? (await loadSessionFile(resolvedSessionFile, this.#storage));
 		const sourceSize =
 			loaded.sourceSize !== undefined
@@ -3609,6 +3609,30 @@ export class SessionManager {
 		return true;
 	}
 
+	/** Rename the live picker row without treating this manager's own lease as a conflict. */
+	async renameCurrentSessionTitle(title: string, expectedSessionId: string): Promise<string | null> {
+		if (this.#released) return null;
+		if (this.#sessionId !== expectedSessionId) {
+			throw new Error("Failed to rename session: it is no longer available");
+		}
+		const claim =
+			this.#persist && this.#sessionFile
+				? this.#storage.claimSession?.(
+						this.#sessionId,
+						this.#sessionFile,
+						this.#runtimeOwnership ? this : undefined,
+					)
+				: undefined;
+		if (claim === null) {
+			throw new Error("Failed to rename session: it is currently in use by another omp process");
+		}
+		try {
+			return (await this.setSessionName(title, "user")) ? (this.getSessionName() ?? null) : null;
+		} finally {
+			claim?.();
+		}
+	}
+
 	/**
 	 * Rename a session file that is not loaded in this process, e.g. from the
 	 * resume picker. Returns the title as stored (the session canonicalizes
@@ -4605,7 +4629,7 @@ export class SessionManager {
 			sessionDir ??
 			(recordedCwd && !recordedCwdUsable
 				? SessionManager.getDefaultSessionDir(cwd, undefined, storage)
-				: path.dirname(path.resolve(filePath)));
+				: path.dirname(storage instanceof FileSessionStorage ? path.resolve(filePath) : filePath));
 		const manager = new SessionManager(cwd, dir, true, storage);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
 		manager.#runtimeOwnership = options?.runtimeOwnership === true;

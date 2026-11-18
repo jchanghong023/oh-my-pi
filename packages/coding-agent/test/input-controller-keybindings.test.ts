@@ -253,6 +253,7 @@ async function createContext() {
 		isPythonMode: false,
 		hideToolActivity: false,
 		toolOutputExpanded: false,
+		compactDiffExpanded: false,
 		settings: Settings.isolated(),
 		chatContainer: { children: [], setToolActivityVisible: vi.fn() },
 		pendingShellContainer: { children: [] },
@@ -911,7 +912,7 @@ describe("InputController keybinding setup", () => {
 		expect(spies.prompt).not.toHaveBeenCalled();
 		editor.setText("");
 		controller.handleDequeue();
-		expect(editor.getText()).toBe("after the compaction");
+		expect(editor.getText()).toBe("=> after the compaction");
 		editor.setText("");
 		controller.handleDequeue();
 		expect(editor.getText()).toBe("/compact");
@@ -1584,6 +1585,20 @@ describe("InputController global editor actions", () => {
 		expect(cfgDisplayMode.get(context.ctx.settings)).toBe("detailed");
 		expect(dispatchInput(listeners, ALT_L)).toEqual({ consume: true });
 		expect(context.spies.resetDisplayAfterAppearanceRefresh).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports a blocked display shortcut without claiming the target layout took effect", async () => {
+		const { ctx, InputController, spies } = await createContext();
+		const showWarning = vi.fn();
+		Object.assign(ctx, { showWarning });
+		cfgDisplayMode.override(ctx.settings, "compact");
+		const controller = new InputController(ctx);
+		controller.setupKeyHandlers();
+		expect(dispatchInput(registeredInputListeners(spies.addInputListener), CTRL_SHIFT_O)).toEqual({ consume: true });
+		await Promise.resolve();
+		expect(cfgDisplayMode.get(ctx.settings)).toBe("compact");
+		expect(showWarning).toHaveBeenCalledWith(expect.stringMatching(/display\.mode.*运行时/));
+		expect(ctx.showStatus).not.toHaveBeenCalled();
 	});
 
 	it("still routes transcript actions when the main editor holds focus", async () => {

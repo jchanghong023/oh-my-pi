@@ -1193,6 +1193,7 @@ export class MCPManager implements MCPManagerApi {
 								source,
 								reconnect,
 								this.#observeToolCall(name),
+								task.config.alwaysLoad,
 							),
 						);
 					}

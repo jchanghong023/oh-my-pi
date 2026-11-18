@@ -1,14 +1,14 @@
 import { resolveExtraCa, withExtraCaInit } from "@oh-my-pi/pi-utils";
 import { coworkFetch } from "../providers/cowork-fetch";
 import { withInferenceUserAgent } from "../providers/inference-headers";
-import type { Api, FetchImpl, Model } from "../types";
+import type { Api, FetchImpl, Model, StreamOptions } from "../types";
 import { getProxyForProvider, withProxyInit } from "./proxy";
 import { createFetchRequestDebugSession, isRequestDebugEnabled } from "./request-debug";
 
 /** Stamped on a fetch already built by {@link transportFetch}. */
 const TRANSPORT_FETCH = Symbol("omp.transportFetch");
 
-type TransportFetch = FetchImpl & { [TRANSPORT_FETCH]?: true };
+type TransportFetch = FetchImpl & { [TRANSPORT_FETCH]?: true | (() => TransportFetch) };
 
 /**
  * The one fetch every inference request goes through. Per call it applies, in
@@ -19,7 +19,7 @@ type TransportFetch = FetchImpl & { [TRANSPORT_FETCH]?: true };
  * `beforeDispatch` runs for every HTTP attempt, including retries, before
  * dispatch bookkeeping; a thrown refusal prevents that attempt.
  *
- * Idempotent: the built fetch is stamped and returned as-is on later passes.
+ * Idempotent: reuse a stamped fetch unless the request needs a non-recording variant.
  * `streamSimple` re-enters `stream`, and `streamSimpleRequest` re-enters itself
  * on auth retries, so without the stamp each entry point would add another
  * layer (three PI_REQ_DEBUG dumps for one request).
@@ -28,13 +28,26 @@ export function transportFetch(
 	model: Model<Api>,
 	fetchImpl: FetchImpl | undefined,
 	beforeDispatch?: () => void,
+	suppressRawDebug = false,
 ): FetchImpl {
 	const given = fetchImpl as TransportFetch | undefined;
-	if (given?.[TRANSPORT_FETCH]) return given;
+	// These providers and explicitly authenticated requests may carry credentials
+	// in arbitrary headers or echo them in the response.
+	suppressRawDebug ||= model.provider === "codeagent" || model.provider === "company";
+	const stamped = given?.[TRANSPORT_FETCH];
+	if (given && stamped) return suppressRawDebug && typeof stamped === "function" ? stamped() : given;
 	const base =
 		given ?? (model.provider === "anthropic" && model.api === "anthropic-messages" ? coworkFetch : globalThis.fetch);
-	const proxyUrl = getProxyForProvider(model.provider);
+	return buildTransportFetch(model, base, getProxyForProvider(model.provider), beforeDispatch, suppressRawDebug);
+}
 
+function buildTransportFetch(
+	model: Model<Api>,
+	base: FetchImpl,
+	proxyUrl: string | undefined,
+	beforeDispatch: (() => void) | undefined,
+	suppressRawDebug: boolean,
+): TransportFetch {
 	const fetch: TransportFetch = async (input, init) => {
 		beforeDispatch?.();
 		if ((init?.method ?? (input instanceof Request ? input.method : "GET")) === "POST") {
@@ -44,14 +57,15 @@ export function transportFetch(
 		const extraCa = resolveExtraCa();
 		if (extraCa) init = withExtraCaInit(init, extraCa);
 		if (proxyUrl) init = withProxyInit(input, init, proxyUrl);
-		// CodeAgent and company credentials or credential-echoing responses must never enter raw request logs.
-		if (model.provider === "codeagent" || model.provider === "company" || !isRequestDebugEnabled())
-			return base(input, init);
+		if (suppressRawDebug || !isRequestDebugEnabled()) return base(input, init);
 		const session = await createFetchRequestDebugSession(input, init);
 		return session.wrapResponse(await base(input, init));
 	};
 	if (base.preconnect) fetch.preconnect = base.preconnect;
-	fetch[TRANSPORT_FETCH] = true;
+	// Rebuild from the same base and dispatch gate, not around the recording fetch.
+	fetch[TRANSPORT_FETCH] = suppressRawDebug
+		? true
+		: () => buildTransportFetch(model, base, proxyUrl, beforeDispatch, true);
 	return fetch;
 }
 
@@ -90,7 +104,10 @@ export function resetDispatchOriginsForTesting(): void {
 }
 
 /** Options-bag form of {@link transportFetch}; returns `options` untouched when its fetch is already built. */
-export function withTransportFetch<T extends { fetch?: FetchImpl }>(model: Model<Api>, options: T): T {
-	const fetch = transportFetch(model, options.fetch);
+export function withTransportFetch<T extends Pick<StreamOptions, "fetch" | "requestAuth">>(
+	model: Model<Api>,
+	options: T,
+): T {
+	const fetch = transportFetch(model, options.fetch, undefined, options.requestAuth !== undefined);
 	return fetch === options.fetch ? options : { ...options, fetch };
 }

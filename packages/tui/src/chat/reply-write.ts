@@ -111,7 +111,9 @@ export class ReplyWriteComponent extends AssistantMessageComponent implements To
 					.map(block => block.text ?? "")
 					.join("\n")
 			: undefined;
-		this.updateContent(replyDisplayMessage(this.#text, error));
+		const message = replyDisplayMessage(this.#text, error);
+		if (result.cancelled === true) message.stopReason = "aborted";
+		this.updateContent(message);
 		this.markTranscriptBlockFinalized();
 	}
 

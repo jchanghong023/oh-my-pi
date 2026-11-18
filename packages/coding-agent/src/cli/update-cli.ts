@@ -682,13 +682,33 @@ function httpStatusText(response: Response): string {
 	return `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
 }
 
-/** First lines of an HTTP error body (GitHub API rate-limit / not-found messages). */
+/** Bounded excerpt of an HTTP error body (e.g. a GitHub API rate-limit message). */
 async function responseBodyDetail(response: Response): Promise<string> {
+	if (!response.body || response.body.locked) return "";
+	const reader = response.body.getReader();
 	try {
-		const text = (await response.text()).trim();
-		return text ? `\n${text.slice(0, 400)}` : "";
+		const decoder = new TextDecoder();
+		const maxCharacters = 400;
+		let remaining = maxCharacters * 4; // UTF-8 uses up to four bytes per code point.
+		let text = "";
+		while (remaining > 0) {
+			const { done, value } = await reader.read();
+			if (done) {
+				text += decoder.decode();
+				break;
+			}
+			const bytes = Math.min(remaining, value.byteLength);
+			text += decoder.decode(value.subarray(0, bytes), { stream: true });
+			remaining -= bytes;
+		}
+		const detail = text.trim().slice(0, maxCharacters);
+		return detail ? `\n${detail}` : "";
 	} catch {
 		return "";
+	} finally {
+		// Do not let a slow stream cancellation delay the HTTP error.
+		void reader.cancel().catch(() => {});
+		reader.releaseLock();
 	}
 }
 /**
@@ -3511,7 +3531,7 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 		completion_scope: "command_returned",
 		installation_verification: "stage_records",
 	};
-	const lock = opts.check ? undefined : acquireInstallLock();
+	let lock: FileLockHandle | undefined;
 	try {
 		return await observeUpdateStage<UpdateOutcome>(
 			"command",
@@ -3526,6 +3546,7 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 					);
 					return { kind: "unsupported", reason: `This installation is managed by ${manager}.` };
 				}
+				if (!opts.check) lock = acquireInstallLock();
 				// `update.channel` picks the channel; --canary/--stable switch and persist it.
 				await Settings.init({ cwd: getProjectDir() });
 				console.log(chalk.dim(`Current version: ${VERSION}`));

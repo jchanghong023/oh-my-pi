@@ -1,7 +1,9 @@
 import * as AIError from "../error";
 import { getEnvApiKey } from "../env-api-key";
 import type { Context, Model, StreamFunction } from "../types";
+import { hasRequestAuthMaterial } from "../utils";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
+import { mergeHeaders } from "./anthropic-headers";
 import { applyInferenceHeaders } from "./inference-headers";
 import {
 	buildGoogleGenerateContentParams,
@@ -19,12 +21,17 @@ export const streamGoogle: StreamFunction<"google-generative-ai"> = (
 	context: Context,
 	options?: GoogleOptions,
 ): AssistantMessageEventStream => {
-	const apiKey = options?.apiKey || getEnvApiKey(model.provider);
+	const requestAuth = options?.requestAuth;
+	const apiKey =
+		requestAuth !== undefined ? requestAuth.apiKey?.trim() : options?.apiKey || getEnvApiKey(model.provider);
 	if (!apiKey) {
-		throw new AIError.MissingApiKeyError(
-			undefined,
-			"Google Generative AI requires an API key (GEMINI_API_KEY or options.apiKey).",
-		);
+		if (requestAuth === undefined) {
+			throw new AIError.MissingApiKeyError(
+				undefined,
+				"Google Generative AI requires an API key (GEMINI_API_KEY or options.apiKey).",
+			);
+		}
+		if (!hasRequestAuthMaterial(requestAuth)) throw new AIError.MissingApiKeyError(model.provider);
 	}
 
 	return streamGoogleGenAI({
@@ -37,11 +44,15 @@ export const streamGoogle: StreamFunction<"google-generative-ai"> = (
 			// `apiVersion: ""` reset that the SDK relied on for custom base URLs).
 			const base = model.baseUrl?.trim() || DEFAULT_GENERATIVE_LANGUAGE_BASE;
 			const url = `${base}/models/${model.id}:streamGenerateContent?alt=sse`;
-			const headers: Record<string, string> = {
-				"x-goog-api-key": apiKey,
-				...model.headers,
-				...options?.headers,
-			};
+			const headers =
+				requestAuth !== undefined
+					? mergeHeaders(
+							model.headers,
+							options?.headers,
+							apiKey ? { "x-goog-api-key": apiKey } : undefined,
+							requestAuth.headers,
+						)
+					: { "x-goog-api-key": apiKey!, ...model.headers, ...options?.headers };
 			applyInferenceHeaders(headers, {
 				provider: model.provider,
 				providerType: model.providerType,

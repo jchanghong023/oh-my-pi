@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
-import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -18,13 +17,18 @@ import * as secrets from "@oh-my-pi/pi-coding-agent/secrets";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { cfgReadDefaultLimit } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
-import { getProjectAgentDir, getSessionsDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import {
+	getAgentDbPath,
+	getProjectAgentDir,
+	getSessionsDir,
+	removeSyncWithRetries,
+	Snowflake,
+	TempDir,
+} from "@oh-my-pi/pi-utils";
 import { getActiveProfile, getConfigRootDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
 
 function createTtsrRule(name: string): Rule {
@@ -85,13 +89,6 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 			process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		}
 		setProfile(originalProfile);
-		// Sessions under the temp config root open process-wide sqlite stores
-		// (history, session index, agent.db, models.db);
-		// Windows keeps their files locked until each is closed.
-		HistoryStorage.close();
-		closeSessionIndex();
-		AgentStorage.close();
-		closeModelCache();
 		removeSyncWithRetries(configRoot);
 	}
 }
@@ -114,27 +111,22 @@ describe("createAgentSession session storage isolation", () => {
 	// ambient-credential-free in-memory auth store keeps them deterministic.
 	let sharedAuthStorage: AuthStorage;
 	let sharedModelRegistry: ModelRegistry;
+	let modelRegistryDir: TempDir;
 
 	beforeAll(async () => {
 		sharedAuthStorage = await AuthStorage.create(":memory:");
-		sharedModelRegistry = new ModelRegistry(sharedAuthStorage);
+		modelRegistryDir = TempDir.createSync("@sdk-session-models-");
+		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, modelRegistryDir.join("models.yml"));
 	});
 
-	afterAll(() => {
+	afterAll(async () => {
 		sharedAuthStorage.close();
+		await modelRegistryDir.remove();
 	});
 
-	afterEach(async () => {
+	afterEach(() => {
 		vi.restoreAllMocks();
 		LocalProtocolHandler.resetOverrideForTests();
-		// Sessions under per-test agentDirs open process-wide sqlite stores
-		// (history, session index, agent.db, models.db); Windows keeps their
-		// files locked until each is closed, which would EBUSY the temp-dir
-		// cleanup below. Same shutdown as withTempConfigRoot's finally.
-		HistoryStorage.close();
-		closeSessionIndex();
-		AgentStorage.close();
-		closeModelCache();
 		for (const tempDir of tempDirs.splice(0)) {
 			removeSyncWithRetries(tempDir);
 		}
@@ -184,6 +176,11 @@ describe("createAgentSession session storage isolation", () => {
 			}
 		} finally {
 			resetSettingsForTest();
+			// These sessions alone load persisted Settings. Release just their
+			// agent.db handles so the fixture can be removed on Windows.
+			for (const { agentDir } of workspaces) {
+				AgentStorage.close(getAgentDbPath(agentDir));
+			}
 		}
 	});
 

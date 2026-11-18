@@ -110,6 +110,7 @@ describe("ACP stdout hygiene", () => {
 					XDG_DATA_HOME: xdg,
 					XDG_CONFIG_HOME: xdg,
 					OMP_CONFIG_ROOT: path.join(root, "data"),
+					PI_CODING_AGENT_DIR: path.join(root, "data", "agent"),
 					OMP_OFFLINE: "0",
 					PI_NO_TITLE: "1",
 					NO_COLOR: "1",

@@ -2,7 +2,9 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { roleDefaultModels } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { register } from "../config/registry";
+import { normalizeSttLanguage } from "./language";
 import { STT_SUBMIT_TRIGGER_OPTIONS, STT_SUBMIT_TRIGGER_VALUES } from "./submit-trigger";
 
 // Speech-to-text
@@ -19,6 +21,13 @@ export const cfgSttEnabled = register({
 });
 
 export const cfgSttLanguage = register({ id: "stt.language", type: "string", default: "zh-CN" });
+
+/** Choose the catalog's dictation policy for the configured source language. */
+export function dictationDefaultSelectors(language = cfgSttLanguage.default): readonly string[] {
+	const tag = language.trim().toLowerCase();
+	const chinese = normalizeSttLanguage(tag) === "zh" || tag === "<|zh|>" || tag === "chinese";
+	return roleDefaultModels()[chinese ? "dictation" : "dictation-other"] ?? [];
+}
 
 export const cfgSttSubmitTrigger = register({
 	id: "stt.submitTrigger",

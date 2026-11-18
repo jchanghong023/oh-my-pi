@@ -92,7 +92,7 @@ export class RpcSessionEventForwarder {
 		this.#output = output;
 	}
 
-	/** Forward only the listed event types; `null` forwards everything. Returns the active selection. */
+	/** Forward only the listed RPC event types; `null` forwards every RPC event. Returns the active selection. */
 	setFilter(events: readonly string[] | null, messageUpdates: RpcMessageUpdates = "full"): string[] | null {
 		this.#filter = events === null ? undefined : new Set(events);
 		this.#messageUpdates = messageUpdates;
@@ -101,7 +101,7 @@ export class RpcSessionEventForwarder {
 
 	forward(event: AgentSessionEvent): void {
 		const frame = this.#stamp(toWireEvent(event));
-		if (this.#filter && !this.#filter.has(frame.type)) return;
+		if (!frame || (this.#filter && !this.#filter.has(frame.type))) return;
 		if (frame.type === "message_update" && this.#messageUpdates === "delta") {
 			this.#output({
 				...frame,
@@ -113,8 +113,11 @@ export class RpcSessionEventForwarder {
 		this.#output(frame);
 	}
 
-	#stamp(event: WireSessionEvent): RpcAgentSessionEventFrame {
+	#stamp(event: WireSessionEvent): RpcAgentSessionEventFrame | undefined {
 		switch (event.type) {
+			case "session_abort":
+				// In-process cancellation signal, not an RPC notification.
+				return undefined;
 			case "message_start": {
 				const messageId = this.#mintMessageId();
 				this.#openMessageIds.push(messageId);

@@ -14,6 +14,10 @@
 
 - Keep Linux offline memory databases, banks, blobs, plugins and checkpoints inside the active shm domain without automatically adopting legacy disk data.
 
+### Fixed
+
+- Embedding requests can retry when a transient HTTP error returns headers but its body stalls.
+
 ## [18.22.1] - 2026-11-17
 
 ### Fixed

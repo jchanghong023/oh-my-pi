@@ -74,6 +74,7 @@ export const eventDefs = {
 		toolName: "string",
 		"result?": "unknown",
 		"isError?": "boolean",
+		"cancelled?": doc("boolean", "The tool execution was cancelled."),
 	},
 	AutoCompactionStartEvent: {
 		type: "'auto_compaction_start'",
@@ -92,6 +93,7 @@ export const eventDefs = {
 	ManualCompactionStartEvent: doc(
 		{
 			type: "'manual_compaction_start'",
+			operationId: doc("string", "Identifies this operation and its matching `manual_compaction_end`."),
 			"mode?": doc("string", "The `/compact <mode>` subcommand, when one was given."),
 		},
 		"A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted.",
@@ -99,6 +101,7 @@ export const eventDefs = {
 	ManualCompactionEndEvent: doc(
 		{
 			type: "'manual_compaction_end'",
+			operationId: doc("string", "The ID from the matching `manual_compaction_start`."),
 			"result?": doc("CompactionResult", "Present when the compaction committed."),
 			aborted: doc("boolean", "The compaction was cancelled (abort, or a `session_before_compact` hook)."),
 			"skipped?": doc("boolean", "There was nothing to compact; `errorMessage` says why."),

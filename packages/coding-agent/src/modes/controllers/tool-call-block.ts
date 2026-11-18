@@ -3,6 +3,7 @@ import { isReplyWrite } from "@oh-my-pi/pi-tui/chat/reply-write";
 import { ToolExecutionComponent, type ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { createReplyWriteComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import { settings } from "../../config/settings";
+import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import type { InteractiveModeContext } from "../types";
 import { cfgTerminalShowImages } from "../settings";
 
@@ -37,6 +38,10 @@ export function createToolCallBlock(ctx: InteractiveModeContext, call: ToolCallB
 		ctx.ui,
 		call.cwd,
 		call.id,
+	);
+	// Set the expansion even before args identify the target: the same card may become visible mid-stream.
+	component.setExpanded(
+		chatTranscriptDisplayPreferences.compactToolActivity ? ctx.compactDiffExpanded : ctx.toolOutputExpanded,
 	);
 	return component;
 }

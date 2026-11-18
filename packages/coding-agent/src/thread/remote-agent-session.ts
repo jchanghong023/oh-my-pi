@@ -901,7 +901,7 @@ export class RemoteAgentSession implements AgentViewSession {
 		this.#pruneSettled(state.restorableQueue);
 		this.#activeUpdates.clear();
 		for (const update of state.activeToolExecutionUpdates) this.#activeUpdates.set(update.toolCallId, update);
-		this.#liveToolOutput.restore(state.liveToolOutput);
+		this.#liveToolOutput.restore(state.liveToolOutput, this.#state.runStartedAt !== undefined);
 		if (entries) this.applyEntries(entries);
 		this.#entryIndex.setLeaf(state.leafId);
 		this.#syncViewDerived(state);
@@ -952,8 +952,9 @@ export class RemoteAgentSession implements AgentViewSession {
 	}
 
 	/** Bridge only: report a run-state transition to run-state subscribers. */
-	applyRunState(state: SessionRunState): void {
+	applyRunState(state: SessionRunState, at = Date.now()): void {
 		if (this.#closed !== undefined) return;
+		this.#liveToolOutput.setRunActive(state === "running", at);
 		for (const listener of [...this.#runStateListeners]) {
 			try {
 				listener(state);

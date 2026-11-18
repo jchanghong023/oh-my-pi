@@ -16,6 +16,8 @@
 ### Changed
 
 - The intranet system notice describes the CentOS 7, NFS, and `/dev/shm` deployment without assuming the current host matches it.
+- Compact mode keeps file targets and live reasoning visible alongside ongoing work, and shows up to five output lines without losing the last useful preview to empty or separator-only updates.
+- Compact mode aligns output with the activity rows, emphasizes file names, live thinking and failure diagnostics, and limits animation to one quiet, still-running action.
 - Updated to upstream v18.22.2 while retaining intranet providers, fork commands and TUI presentation.
 - Selective commit through `/commit` and the eval `commit` namespace is now opt-in via `commit.enabled`; unfinished merges use plain `git commit`.
 - Added `providers.thinkingProbe` (default off) so unknown-model thinking probes never add requests to intranet, company or custom providers.
@@ -66,6 +68,9 @@
 
 ### Fixed
 
+- Compact Output expires from its own session's run end without reappearing in later turns; changing the display mode or focused agent no longer revives stale thinking.
+- Compact mode keeps running actions in place and applies `Ctrl+O` to later file cards; the display shortcut reports settings overrides instead of claiming a switch succeeded.
+- Native clean and detailed modes no longer reserve the compact activity rows.
 - Native child agents inherit the launching session's credentials and tool restrictions, and caller restrictions also apply to Cursor, Advisors, and resumed queued input.
 - Offline mode preserves the user's `models.offline` setting.
 - Intranet model catalogs only refresh manually against configured discovery endpoints; signing in still uses the local catalog cache.
@@ -77,6 +82,9 @@
 - Long-running sessions release subagent ancestry once no retained background jobs need it.
 - Linux and Windows installers verify downloaded binaries against the authenticated Release digest before running them.
 - Large-repository reviews now submit complete results per workpool item, detect Python 3.11+ on Windows, store reports in worktree-local Git metadata, and accept `--base REF` without guessing the upstream branch.
+- LoopN waits for background work before advancing, and queued compaction input stays with its original session after `/new`.
+- Log reads respect the inline byte budget even when many lines match `OMP_LOG_ERROR_REGEX`.
+- Fork binaries embed the HTML export viewer so exported sessions do not depend on a fork-specific viewer download.
 - Compact mode now shows background-work waits in the two-line activity area instead of above command output.
 - Binary release builds now initialize their temporary directories without failing workflow validation.
 - Edited prompts continue after successful in-place context reduction, and terminal yields no longer compact input that will remain queued.

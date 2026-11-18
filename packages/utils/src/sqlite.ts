@@ -1,5 +1,5 @@
 /** Shared SQLite opening, error attribution, and result-code classification for persistent stores. */
-import { Database } from "bun:sqlite";
+import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { installSqliteLockShim } from "@oh-my-pi/pi-natives/sqlite-locks";
@@ -376,72 +376,133 @@ export function checkpointWal(db: Database): void {
 /** Damaged regions one {@link readSalvageableRows} scan skips before abandoning the rest of the table. */
 const SALVAGE_MAX_DAMAGED_REGIONS = 1000;
 
-/** Interior table keys bound individual subtrees even when readable and damaged leaves alternate. */
-function readSalvageRowidStarts(db: Database, table: string): number[] {
-	const root = db
-		.query<{ rootpage: number }, [string]>("SELECT rootpage FROM sqlite_schema WHERE name = ?")
-		.get(table);
-	if (!root) return [];
-	// Serialize through SQLite so committed WAL pages are included, without modifying the damaged store.
-	const image = db.serialize();
-	const encodedPageSize = image.readUInt16BE(16);
-	const pageSize = encodedPageSize === 1 ? 65536 : encodedPageSize;
-	const pending = [root.rootpage];
-	const visited = new Set<number>();
-	const starts: number[] = [];
-	while (pending.length > 0) {
-		const page = pending.pop()!;
-		const start = (page - 1) * pageSize;
-		const end = start + pageSize;
-		if (start < 0 || end > image.length || visited.has(page)) continue;
-		visited.add(page);
-		const header = start + (page === 1 ? 100 : 0);
-		if (image[header] !== 0x05) continue;
-		const cells = image.readUInt16BE(header + 3);
+/** Reads a signed SQLite varint from a table interior cell. */
+function readSalvageSeparator(page: Buffer, offset: number): bigint | undefined {
+	let key = 0n;
+	for (let index = 0; index < 9 && offset < page.length; index++, offset++) {
+		const byte = page[offset]!;
+		key = (key << (index === 8 ? 8n : 7n)) | BigInt(index === 8 ? byte : byte & 0x7f);
+		if (index === 8 || byte < 0x80) return BigInt.asIntN(64, key);
+	}
+	return undefined;
+}
+
+/** Follows only the branch containing the next key, retaining its closest inclusive upper bound. */
+function findSalvageBoundary(
+	readPage: (page: number) => Buffer | undefined,
+	page: number,
+	after: number,
+): number | undefined {
+	const next = BigInt(after + 1);
+	let upper: bigint | undefined;
+	// Bound the descent even when damaged child pointers form a cycle.
+	for (let depth = 0; depth < 32 && page > 0; depth++) {
+		const bytes = readPage(page);
+		const header = page === 1 ? 100 : 0;
+		if (!bytes || bytes[header] !== 0x05 || header + 12 > bytes.length) break;
+		const cells = bytes.readUInt16BE(header + 3);
 		const contentStart = header + 12 + cells * 2;
-		if (contentStart > end) continue;
-		pending.push(image.readUInt32BE(header + 8));
+		if (contentStart > bytes.length) break;
+		page = bytes.readUInt32BE(header + 8);
 		for (let index = 0; index < cells; index++) {
-			const cell = start + image.readUInt16BE(header + 12 + index * 2);
-			if (cell < contentStart || cell + 5 > end) continue;
-			pending.push(image.readUInt32BE(cell));
-			let key = 0n;
-			for (let byteIndex = 0, offset = cell + 4; byteIndex < 9 && offset < end; byteIndex++, offset++) {
-				const byte = image[offset]!;
-				key = (key << BigInt(byteIndex === 8 ? 8 : 7)) | BigInt(byteIndex === 8 ? byte : byte & 0x7f);
-				if (byteIndex === 8 || byte < 0x80) {
-					const rowid = Number(BigInt.asIntN(64, key));
-					if (Number.isSafeInteger(rowid) && rowid < Number.MAX_SAFE_INTEGER) starts.push(rowid + 1);
-					break;
-				}
+			const cell = bytes.readUInt16BE(header + 12 + index * 2);
+			if (cell < contentStart || cell + 5 > bytes.length) continue;
+			const key = readSalvageSeparator(bytes, cell + 4);
+			if (key !== undefined && key >= next) {
+				if (upper === undefined || key < upper) upper = key;
+				page = bytes.readUInt32BE(cell);
+				break;
 			}
 		}
 	}
-	return starts.sort((a, b) => a - b);
+	return upper !== undefined && upper < BigInt(Number.MAX_SAFE_INTEGER) ? Number(upper) + 1 : undefined;
+}
+
+function readSalvageBoundary(db: Database, table: string, after: number): number | undefined {
+	try {
+		const root = db
+			.query<{ rootpage: number }, [string]>("SELECT rootpage FROM main.sqlite_schema WHERE name = ?")
+			.get(table);
+		if (!root) return undefined;
+
+		// When available, the SQLite pager includes committed WAL pages.
+		try {
+			const pages = db.query<{ data: Uint8Array }, [number]>(
+				"SELECT data FROM sqlite_dbpage('main') WHERE pgno = ?",
+			);
+			return findSalvageBoundary(
+				page => {
+					const data = pages.get(page)?.data;
+					return data && Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+				},
+				root.rootpage,
+				after,
+			);
+		} catch (error) {
+			if (!(error instanceof Error && error.message === "no such table: sqlite_dbpage")) throw error;
+		}
+
+		// A raw read of the quarantined main file is useful only without an overlay.
+		if (db.inTransaction) return undefined;
+		const file = db
+			.query<{ file: string }, []>("SELECT file FROM pragma_database_list WHERE name = 'main'")
+			.get()?.file;
+		const pageSize = db.query<{ page_size: number }, []>("PRAGMA main.page_size").get()?.page_size;
+		if (!file || !pageSize) return undefined;
+		try {
+			if (
+				fs.statSync(`${file}-wal`, { throwIfNoEntry: false })?.size ||
+				fs.statSync(`${file}-journal`, { throwIfNoEntry: false })?.size
+			) {
+				return undefined;
+			}
+			const fd = fs.openSync(file, "r");
+			try {
+				const bytes = Buffer.allocUnsafe(pageSize);
+				return findSalvageBoundary(
+					page => (fs.readSync(fd, bytes, 0, pageSize, (page - 1) * pageSize) === pageSize ? bytes : undefined),
+					root.rootpage,
+					after,
+				);
+			} finally {
+				fs.closeSync(fd);
+			}
+		} catch {
+			// Page hints are optional; an unavailable file must not discard recovered rows.
+			return undefined;
+		}
+	} catch (error) {
+		if (isSqliteCorruptionError(error)) return undefined;
+		throw error;
+	}
 }
 
 /**
  * Reads every row of a rowid table that SQLite can still decode, to salvage a
  * damaged store. A full scan aborts at the first unreadable page, so this walks
- * rowids with indexed seeks instead. A damaged seek advances to the next
- * subtree boundary, never bisecting across potentially readable islands.
+ * rowids with indexed seeks instead. On damage, a rowid-only seek can skip an
+ * unreadable record without decoding its payload. Damaged pages can be skipped
+ * using subtree boundaries; if unavailable, use bounded incremental probes.
  * Cross-linked pages can still decode rows with foreign column types, so
- * callers validate types;
- * rows returned out of rowid order count as damage. Only corruption errors are
+ * callers validate types.
+ * Rows returned out of rowid order count as damage. Only corruption errors are
  * treated as damage; anything else is thrown.
  */
 export function readSalvageableRows<T extends object>(db: Database, table: string, columns: string): T[] {
 	type Row = T & { salvage_rowid: number };
-	using seek = db.prepare<Row, [number]>(
-		`SELECT rowid AS salvage_rowid, ${columns} FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT 1`,
-	);
+	const seekClause = `FROM ${table} NOT INDEXED WHERE rowid > ? ORDER BY rowid LIMIT 1`;
+	using seek = db.prepare<Row, [number]>(`SELECT rowid AS salvage_rowid, ${columns} ${seekClause}`);
 	using exact = db.prepare<Row, [number]>(`SELECT rowid AS salvage_rowid, ${columns} FROM ${table} WHERE rowid = ?`);
 	// The row found, null when there is none, or undefined when the read hit damage.
-	const probe = (after: number, at?: number): Row | null | undefined => {
+	const probe = <R extends { salvage_rowid: number }>(
+		statement: Statement<R, [number]>,
+		after: number,
+		at?: number,
+	): R | null | undefined => {
 		try {
-			const row = at === undefined ? seek.get(after) : exact.get(at);
+			const row = statement.get(at ?? after);
 			if (!row) return null;
-			const valid = Number.isSafeInteger(row.salvage_rowid) && row.salvage_rowid === (at ?? row.salvage_rowid);
+			const valid = Number.isSafeInteger(row.salvage_rowid) && (at === undefined || row.salvage_rowid === at);
 			return valid && row.salvage_rowid > after ? row : undefined;
 		} catch (error) {
 			if (isSqliteCorruptionError(error)) return undefined;
@@ -456,23 +517,30 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 	};
 	let after = Number.MIN_SAFE_INTEGER;
 	let damaged = 0;
-	let starts: number[] | undefined;
-	let nextStart = 0;
+	let rowidSeek: Statement<{ salvage_rowid: number }, [number]> | undefined;
+	let useBoundaries = true;
 	while (after < Number.MAX_SAFE_INTEGER) {
-		const row = probe(after);
+		const row = probe(seek, after);
 		if (row === null) break;
 		if (row) {
 			keep(row);
 			after = row.salvage_rowid;
+			useBoundaries = true;
 			continue;
 		}
 		if (++damaged > SALVAGE_MAX_DAMAGED_REGIONS) break;
-		starts ??= readSalvageRowidStarts(db, table);
-		while (nextStart < starts.length && starts[nextStart]! <= after) nextStart++;
-		const clear = starts[nextStart] ?? Number.MAX_SAFE_INTEGER;
-		// A separator bounds its left subtree inclusively; test the following key
-		// exactly before resuming seeks so the first row of the next leaf is kept.
-		const boundary = probe(after, clear);
+		rowidSeek ??= db.query<{ salvage_rowid: number }, [number]>(`SELECT rowid AS salvage_rowid ${seekClause}`);
+		const unreadable = probe(rowidSeek, after);
+		if (unreadable) {
+			after = unreadable.salvage_rowid;
+			continue;
+		}
+		const nextBoundary: number | undefined = useBoundaries ? readSalvageBoundary(db, table, after) : undefined;
+		// Do not repeat page reads on every incremental probe within this damaged region.
+		useBoundaries = nextBoundary !== undefined;
+		const clear = nextBoundary ?? after + 1;
+		// Probe the next key exactly before resuming strict-greater-than seeks.
+		const boundary = probe(exact, after, clear);
 		if (boundary) keep(boundary);
 		after = clear;
 	}

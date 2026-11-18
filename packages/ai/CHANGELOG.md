@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The embedded gateway keeps tool turns separate by session and restores Responses tool calls using the IDs returned to the client.
+- Explicit request credentials no longer fall back to a Gemini environment key or appear in raw request recordings.
+
 ## [18.22.2] - 2026-11-18
 
 ### Added

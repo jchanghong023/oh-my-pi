@@ -204,6 +204,7 @@ export class ModelPickerComponent implements Component {
 	#currentSelector: string | undefined;
 	#currentQuickRoleSelector: string | undefined;
 	#modelItems: ModelBrowserItem[] = [];
+	#candidateCatalogue: Map<string, ModelBrowserItem> | undefined;
 	#quickRoleItems: ModelBrowserItem[] = [];
 	#quickRoleSourceItems: ModelBrowserItem[] = [];
 	#quickRoles = new Map<string, ResolvedRoleModel>();
@@ -315,20 +316,31 @@ export class ModelPickerComponent implements Component {
 
 	invalidate(): void {}
 
+	/** Keep the native catalogue ahead of the live query results it must describe. */
 	#candidateItems(query: string): ModelBrowserItem[] {
-		return (this.#getCandidates?.(query) ?? []).map(model => ({
-			model,
-			provider: model.provider,
-			id: model.id,
-			selector: `${model.provider}/${model.id}`,
-		}));
+		const catalogue = (this.#candidateCatalogue ??= new Map());
+		const unfiltered = !query.trim();
+		if (unfiltered) catalogue.clear();
+		let changed = false;
+		const items = (this.#getCandidates?.(query) ?? []).map(model => {
+			const { provider, id } = model;
+			const selector = `${provider}/${id}`;
+			const cached = catalogue.get(selector);
+			if (cached?.model === model) return cached;
+			const item = { model, provider, id, selector };
+			catalogue.set(selector, item);
+			changed = true;
+			return item;
+		});
+		if (unfiltered) this.#modelItems = items;
+		else if (changed) this.#modelItems = [...catalogue.values()];
+		return items;
 	}
 
 	/** Rebuild model items and role chips from the registry's in-memory state. */
 	#syncFromRegistryState(): void {
 		if (this.#getCandidates) {
-			this.#modelItems = this.#candidateItems("");
-			this.#browser.setItems(this.#modelItems);
+			this.#browser.setItems(this.#candidateItems(""));
 			return;
 		}
 		const scope = buildSessionModelScope(
@@ -366,8 +378,12 @@ export class ModelPickerComponent implements Component {
 		});
 	}
 
-	/** Switch browser content only when a leading `@` changes the search mode. */
+	/** Refresh unfiltered candidates, or switch session content when leading `@` changes the search mode. */
 	#syncItemsForQuery(query: string, refresh = false): void {
+		if (this.#getCandidates) {
+			if (!query.trim()) this.#browser.setItems(this.#candidateItems(""));
+			return;
+		}
 		const roleMode = !this.#selectOnly && query.startsWith("@") && !this.#taskMode;
 		const modeChanged = roleMode !== this.#roleMode;
 		if (!modeChanged && !refresh) return;
@@ -621,11 +637,16 @@ export class ModelPickerComponent implements Component {
 	#describePicker(): NativeNode {
 		const mode = this.#mode();
 		const query = this.#browser.query;
+		const source = this.#roleMode ? this.#quickRoleItems : this.#modelItems;
+		let catalogue = this.#browser.pickerItems(source);
+		// A dated rate refresh during pickerItems can reapply the live query.
+		if (mode === "selection" && source !== this.#modelItems) {
+			catalogue = this.#browser.pickerItems(this.#modelItems);
+		}
 		const view = this.#browser.pickerOrder({
 			providers: false,
 			rest: mode === "role" ? null : query.trim() ? "匹配结果" : "全部",
 		});
-		const catalogue = this.#browser.pickerItems(this.#roleMode ? this.#quickRoleItems : this.#modelItems);
 		const current =
 			mode === "role"
 				? this.#currentQuickRoleSelector

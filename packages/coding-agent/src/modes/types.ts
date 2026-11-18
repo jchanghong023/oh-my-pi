@@ -356,6 +356,7 @@ export interface InteractiveModeContext {
 	initialChatRendered: boolean;
 	isBashMode: boolean;
 	toolOutputExpanded: boolean;
+	compactDiffExpanded: boolean;
 	hideToolActivity: boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;

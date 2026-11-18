@@ -342,6 +342,7 @@ export class AssistantMessageComponent extends Container {
 	#kittyPreviouslyDisplayed: Map<string, ImageContent> | undefined;
 	#showImages = true;
 	#showToolResultImages = true;
+	#detailedInspection = false;
 	#displayCompactToolActivity = displayPreferences.compactToolActivity;
 	#displayHideToolActivity = displayPreferences.hideToolActivity;
 	/** Charts under numeric tables; off for subagent transcripts. */
@@ -795,7 +796,7 @@ export class AssistantMessageComponent extends Container {
 	 */
 	#shouldAnimateThinking(message: AssistantMessage): boolean {
 		return (
-			!displayPreferences.hideToolActivity &&
+			!this.#hideToolActivity &&
 			!this.#compactToolActivity &&
 			this.#hideThinkingBlock &&
 			this.#thinkingTailIndex(message) !== undefined
@@ -948,7 +949,7 @@ export class AssistantMessageComponent extends Container {
 	override render(width: number): readonly string[] {
 		if (
 			this.#displayCompactToolActivity !== this.#compactToolActivity ||
-			this.#displayHideToolActivity !== displayPreferences.hideToolActivity
+			this.#displayHideToolActivity !== this.#hideToolActivity
 		) {
 			this.invalidate();
 		}
@@ -981,7 +982,7 @@ export class AssistantMessageComponent extends Container {
 			this.#showImages,
 			this.#showToolResultImages,
 			this.#compactToolActivity,
-			displayPreferences.hideToolActivity,
+			this.#hideToolActivity,
 			this.#errorExpanded,
 			this.#nativeViewVersion,
 			rate,
@@ -1111,7 +1112,7 @@ export class AssistantMessageComponent extends Container {
 						});
 					});
 				} else if (content.type === "thinking") {
-					if (this.#compactToolActivity || displayPreferences.hideToolActivity) continue;
+					if (this.#compactToolActivity || this.#hideToolActivity) continue;
 					const display = resolveThinkingDisplay(content, this.#proseOnlyThinking);
 					if (!display.visible) continue;
 					const thinkingLive = streaming && thinkingTail === index;
@@ -1793,13 +1794,23 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	get #compactToolActivity(): boolean {
-		return displayPreferences.compactToolActivity;
+		return !this.#detailedInspection && displayPreferences.compactToolActivity;
+	}
+
+	get #hideToolActivity(): boolean {
+		return !this.#detailedInspection && displayPreferences.hideToolActivity;
+	}
+
+	/** Inspect a saved execution without the main transcript's compact/clean filtering. */
+	setDetailedInspection(enabled: boolean, hideThinking = this.#hideThinkingBlock): void {
+		if (this.#detailedInspection === enabled && this.#hideThinkingBlock === hideThinking) return;
+		this.#detailedInspection = enabled;
+		this.#hideThinkingBlock = hideThinking;
+		if (this.#lastMessage) this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 	}
 
 	getTranscriptBlockVersion(): number {
-		return (
-			this.#blockVersion * 4 + Number(this.#compactToolActivity) + 2 * Number(displayPreferences.hideToolActivity)
-		);
+		return this.#blockVersion * 4 + Number(this.#compactToolActivity) + 2 * Number(this.#hideToolActivity);
 	}
 
 	markTranscriptBlockFinalized(): void {
@@ -2013,12 +2024,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	#toolImagesVisible(): boolean {
-		return (
-			this.#showImages &&
-			this.#showToolResultImages &&
-			!this.#compactToolActivity &&
-			!displayPreferences.hideToolActivity
-		);
+		return this.#showImages && this.#showToolResultImages && !this.#compactToolActivity && !this.#hideToolActivity;
 	}
 
 	#renderToolImages(): void {
@@ -2056,7 +2062,7 @@ export class AssistantMessageComponent extends Container {
 
 	#computeShapeKey(message: AssistantMessage): string {
 		const parts: string[] = [
-			`htb:${this.#hideThinkingBlock ? 1 : 0}|pot:${this.#proseOnlyThinking ? 1 : 0}|etb:${this.#expandThinkingBlocks ? 1 : 0}|compact:${this.#compactToolActivity ? 1 : 0}|clean:${displayPreferences.hideToolActivity ? 1 : 0}`,
+			`htb:${this.#hideThinkingBlock ? 1 : 0}|pot:${this.#proseOnlyThinking ? 1 : 0}|etb:${this.#expandThinkingBlocks ? 1 : 0}|compact:${this.#compactToolActivity ? 1 : 0}|clean:${this.#hideToolActivity ? 1 : 0}`,
 		];
 		for (const content of message.content) {
 			if (content.type === "text") {
@@ -2165,7 +2171,7 @@ export class AssistantMessageComponent extends Container {
 
 	updateContent(message: AssistantMessage, opts?: { transient?: boolean }): void {
 		this.#displayCompactToolActivity = this.#compactToolActivity;
-		this.#displayHideToolActivity = displayPreferences.hideToolActivity;
+		this.#displayHideToolActivity = this.#hideToolActivity;
 		this.#blockVersion++;
 		this.#lastMessage = message;
 		this.#lastUpdateTransient = opts?.transient === true;
@@ -2250,7 +2256,7 @@ export class AssistantMessageComponent extends Container {
 				(c.type === "text" && canonicalizeMessage(c.text)) ||
 				(c.type === "image" && c.data && c.mimeType) ||
 				(!this.#hideThinkingBlock &&
-					!displayPreferences.hideToolActivity &&
+					!this.#hideToolActivity &&
 					c.type === "thinking" &&
 					resolveThinkingDisplay(c, this.#proseOnlyThinking).visible),
 		);
@@ -2269,7 +2275,7 @@ export class AssistantMessageComponent extends Container {
 				captureItems?.push({ md, contentIndex: i, blockType: "text", lastText: trimmed });
 				hasRenderedContent = true;
 			} else if (content.type === "thinking") {
-				if (this.#hideThinkingBlock || this.#compactToolActivity || displayPreferences.hideToolActivity) {
+				if (this.#hideThinkingBlock || this.#compactToolActivity || this.#hideToolActivity) {
 					thinkingIndex += 1;
 					continue;
 				}
