@@ -4,6 +4,8 @@
 
 ### Added
 
+- Review large repositories with the paired manual skills `/skill:big-review-scan` and `/skill:big-review-verify`, resumable shard reports and source-backed verification.
+
 - Set `OMP_LOG_ERROR_REGEX` to make `read` return a two-line success result for clean `.log` files and show numbered error matches from anywhere in the file ahead of the normal output.
 - Use `/workspace` for session-scoped write-boundary reminders, or `/workspace <message>` to enable them and send a task, independently of Plan mode; this is a prompt, not a sandbox.
 - Cycle through multiple prompts with `/loopn "x1" "x2" …`; Esc or `/loopn` stops the sequence.

@@ -25,6 +25,7 @@ export async function specDrivenSourceFingerprint(
 		await visit(`src/spec-driven/vendor/resources/openspec/${entry}`);
 	}
 	for (const entry of [
+		"src/spec-driven/vendor/resources/jch/skills",
 		"scripts/spec-driven-resources.ts",
 		"src/spec-driven/vendor/inventory.json",
 		"src/spec-driven/resource-fingerprint.ts",

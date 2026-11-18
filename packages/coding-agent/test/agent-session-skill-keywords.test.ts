@@ -46,6 +46,16 @@ describe("AgentSession skill prompt keyword steering", () => {
 	let session: AgentSession;
 	const observedTurns: ObservedSkillTurn[] = [];
 
+	const workflowNotice = renderWorkflowNotice({
+		taskBatch: true,
+		scoutAvailable: true,
+		evalTools: true,
+		py: false,
+		js: true,
+		freshAgents: true,
+		perCallModel: false,
+	});
+
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-agent-session-skill-keywords-");
 		observedTurns.length = 0;
@@ -90,6 +100,15 @@ describe("AgentSession skill prompt keyword steering", () => {
 
 		session = new AgentSession({
 			agent,
+			skills: [
+				{
+					name: "big-review-verify",
+					description: "Verify shard reports",
+					filePath: tempDir.join("bundled", "SKILL.md"),
+					baseDir: tempDir.join("bundled"),
+					source: "bundled-jch",
+				},
+			],
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			settings: Settings.isolated({
 				"compaction.enabled": false,
@@ -108,6 +127,20 @@ describe("AgentSession skill prompt keyword steering", () => {
 		authStorage?.close();
 		authStorage = undefined;
 		tempDir.removeSync();
+	});
+
+	it.each([
+		["bundled", true],
+		["override", false],
+	] as const)("activates the workflow notice only for the bundled verifier (%s)", async (directory, expected) => {
+		await session.promptCustomMessage({
+			customType: SKILL_PROMPT_MESSAGE_TYPE,
+			content: "workflowz",
+			display: true,
+			details: { name: "big-review-verify", path: tempDir.join(directory, "SKILL.md"), lineCount: 1 },
+			attribution: "user",
+		});
+		expect(observedTurns[0]?.texts.includes(workflowNotice)).toBe(expected);
 	});
 
 	it("injects magic keyword notices and turn budgets from user-authored skill args", async () => {
@@ -130,17 +163,7 @@ describe("AgentSession skill prompt keyword steering", () => {
 		const observedTurn = observedTurns[0];
 		if (!observedTurn) throw new Error("Expected prompt context to be captured");
 		expect(observedTurn.texts).toContain(`Skill body\n\n---\n\nSkill: ${skillPath}\nUser: ${details.args}`);
-		expect(observedTurn.texts).toContain(
-			renderWorkflowNotice({
-				taskBatch: true,
-				scoutAvailable: true,
-				evalTools: true,
-				py: false,
-				js: true,
-				freshAgents: true,
-				perCallModel: false,
-			}),
-		);
+		expect(observedTurn.texts).toContain(workflowNotice);
 		expect(session.sessionManager.getTurnBudget()).toEqual({ total: 500_000, spent: 0, hard: true });
 	});
 });

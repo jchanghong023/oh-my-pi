@@ -9379,6 +9379,21 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return cfgMagicKeywordsEnabled.get(this.settings) && cfgMagicKeyword[keyword].get(this.settings);
 	}
 
+	/** Only the explicitly invoked bundled verifier opts in without user-supplied keyword text. */
+	#skillKeywordText(details: unknown, fallback = ""): string {
+		if (!isRecord(details)) return fallback;
+		const args = typeof details.args === "string" ? details.args : fallback;
+		if (typeof details.name !== "string" || details.name.split("/").at(-1) !== "big-review-verify") return args;
+		const bundled = this.skills.some(
+			skill =>
+				skill.name === details.name &&
+				skill.filePath === details.path &&
+				(skill.source === "bundled-jch" ||
+					(skill._source?.provider === "spec-driven" && skill._source.pluginName === "jch")),
+		);
+		return bundled ? `workflowz\n${args}` : args;
+	}
+
 	#createMagicKeywordNotices(text: string, goalAutoOrchestrateInitialId?: string): CustomMessage[] {
 		const timestamp = Date.now();
 		const turnBudget = parseTurnBudget(text);
@@ -10139,12 +10154,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// prompt (#14093).
 		let queuedNotices: CustomMessage[] = keywordNotices;
 		if (message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user") {
-			const details = message.details;
-			let skillArgs = "";
-			if (details && typeof details === "object" && "args" in details && typeof details.args === "string") {
-				skillArgs = details.args;
-			}
-			keywordNotices = this.#createMagicKeywordNotices(skillArgs, options?.goalAutoOrchestrateInitialId);
+			keywordNotices = this.#createMagicKeywordNotices(
+				this.#skillKeywordText(message.details),
+				options?.goalAutoOrchestrateInitialId,
+			);
 			const sessionAgentNotice = this.#tools.takeSessionAgentNotice();
 			queuedNotices = sessionAgentNotice ? [...keywordNotices, sessionAgentNotice] : keywordNotices;
 		} else if (message.customType === COLLAB_PROMPT_MESSAGE_TYPE && message.attribution === "user") {
@@ -11206,12 +11219,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const mode = options?.queue === "followUp" ? "followUp" : "steer";
 			if (options?.customMessage) {
 				const message = options.customMessage;
-				const details = message.details;
-				const args =
-					details && typeof details === "object" && "args" in details && typeof details.args === "string"
-						? details.args
-						: "";
-				const notices = this.#createMagicKeywordNotices(args);
+				const notices = this.#createMagicKeywordNotices(this.#skillKeywordText(message.details));
 				const sessionAgentNotice = this.#tools.takeSessionAgentNotice();
 				return await this.#queueCustomMessage(message, mode, {
 					queueChipText: text,
@@ -12768,11 +12776,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				this.#queuedMessageRawText.set(replacement, options.text);
 				const source = this.#goalAutoOrchestrateInitialSources.get(original);
 				if (source) this.#goalAutoOrchestrateInitialSources.set(replacement, source);
-				const details = options.customMessage?.details;
-				const keywordText =
-					details && typeof details === "object" && "args" in details && typeof details.args === "string"
-						? details.args
-						: options.text;
+				const keywordText = this.#skillKeywordText(options.customMessage?.details, options.text);
 				remaining.splice(start, 0, ...this.#createMagicKeywordNotices(keywordText, source?.goalId), replacement);
 				this.agent.replaceQueue(queue, remaining);
 			} else {
