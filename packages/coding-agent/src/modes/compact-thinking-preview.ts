@@ -4,8 +4,9 @@ import { type Component } from "@oh-my-pi/pi-tui";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import { registerSpinnerBlock, unregisterSpinnerBlock } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import type { Loader } from "@oh-my-pi/pi-tui/components/loader";
 import { col, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
-import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { replaceTabs, truncateMiddleToWidth, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -228,6 +229,7 @@ export class CompactThinkingPreview implements Component {
 			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking"
 		> &
 			Partial<Pick<InteractiveModeContext, "ui">>,
+		private readonly asyncWaitRow?: () => Loader | undefined,
 	) {}
 
 	clear(): void {
@@ -411,21 +413,23 @@ export class CompactThinkingPreview implements Component {
 		}
 	}
 
-	/** Reuse the shared tool animation ticker; only visible running actions drive repaints. */
+	/** Reuse the shared ticker for visible running actions or the relocated waiting row. */
 	tickSpinner(_frame: number): void {
 		this.ctx.ui?.requestComponentRender(this);
 	}
 
 	render(width: number): readonly string[] {
-		return this.#layoutRows(width, true);
-	}
-
-	#layoutRows(width: number, paint: boolean): readonly string[] {
+		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, width - 1));
-		const rows = this.#renderRows(width - inset, paint);
+		const rows = this.#renderRows(width - inset, true, waitRow);
 		if (!rows.length) return rows;
 		const left = padding(inset);
-		return [rows[0] ? left + rows[0] : "", rows[1] ? left + rows[1] : "", ""];
+		const waiting = waitRow ? truncateToWidth(waitRow.inlineText(), width) : "";
+		return [rows[0] ? left + rows[0] : "", waiting || (rows[1] ? left + rows[1] : ""), ""];
+	}
+
+	handleNativeEvent(event: NativeUiEvent): void {
+		this.asyncWaitRow?.()?.handleNativeEvent(event);
 	}
 
 	/** Reconcile the active thinking phase from live state so focus restoration shows it without a fresh event. */
@@ -536,7 +540,7 @@ export class CompactThinkingPreview implements Component {
 		return [held(0), held(1)];
 	}
 
-	#renderRows(width: number, paint: boolean): readonly string[] {
+	#renderRows(width: number, paint: boolean, waitRow: Loader | undefined): readonly string[] {
 		this.#rows = [];
 		if (!displayPreferences.compactToolActivity) {
 			this.clear();
@@ -548,6 +552,12 @@ export class CompactThinkingPreview implements Component {
 		const slots = this.#select(this.#actions());
 		const visible = slots.filter((action): action is Action => action !== undefined);
 		if (visible.length > 0) memory.snapshot = visible.map(action => ({ ...action }));
+		// Waiting belongs to the session, not to a completed tool. Reserve the
+		// lower slot without adding the wait to action history or the snapshot.
+		if (waitRow) {
+			slots[0] = slots[1] ?? slots[0];
+			slots[1] = undefined;
+		}
 		const animate = shimmerEnabled();
 		const rows = slots.map(action => {
 			this.#rows.push(action);
@@ -555,7 +565,8 @@ export class CompactThinkingPreview implements Component {
 			const row = this.#buildRow(action, width);
 			return this.#paintAnsi(row, paint && animate);
 		});
-		const needsTick = !isNativeRendering() && !!this.ctx.ui && animate && visible.some(action => action.running);
+		const needsTick =
+			!isNativeRendering() && !!this.ctx.ui && animate && (waitRow || visible.some(action => action.running));
 		if (needsTick) registerSpinnerBlock(this);
 		else unregisterSpinnerBlock(this);
 		return rows;
@@ -590,8 +601,9 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, cx.cols - 1));
-		this.#renderRows(cx.cols - inset, false);
+		this.#renderRows(cx.cols - inset, false, waitRow);
 		const left = padding(inset);
 		const animate = shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer");
 		const children = this.#rows.map(action => {
@@ -610,6 +622,7 @@ export class CompactThinkingPreview implements Component {
 			return row(parts);
 		});
 		while (children.length < 2) children.push(node("rows", { cols: cx.cols, lines: [""] }));
+		if (waitRow && displayPreferences.compactToolActivity) children[1] = waitRow.describe(cx);
 		children.push(node("rows", { cols: cx.cols, lines: [""] }));
 		return col(children);
 	}

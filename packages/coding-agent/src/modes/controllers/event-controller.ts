@@ -2571,6 +2571,11 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
+	/** Whether the viewed run's working row is presenting an asynchronous wait. */
+	get showingAsyncWait(): boolean {
+		return this.#showingAsyncWait && this.ctx.viewSession === this.ctx.session;
+	}
+
 	/** The main run is paused waiting only on outside sources, and the interrupt key would end that wait. */
 	isAwaitingAsyncWork(): boolean {
 		const session = this.ctx.session;

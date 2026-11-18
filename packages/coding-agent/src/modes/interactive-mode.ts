@@ -1377,7 +1377,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	progressHudContainer: Container;
 	statusContainer: Container;
 	/** Compact activity dock; its per-session display memory never enters the transcript. */
-	readonly compactThinkingPreview = new CompactThinkingPreview(this);
+	readonly compactThinkingPreview = new CompactThinkingPreview(this, () =>
+		this.#eventController.showingAsyncWait ? this.loadingAnimation : undefined,
+	);
 	/** Read-only Output sits above the activity dock; the input and its trailing chrome win space. */
 	readonly compactToolOutputPreview: CompactToolOutputPreview = new CompactToolOutputPreview(this, () =>
 		Math.max(
@@ -9457,7 +9459,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!loader) return;
 		const attached = this.statusContainer.children.includes(loader);
 		const hidden =
-			cfgDisplayMode.get(this.settings) === "compact" && this.#workingMessage === DEFAULT_WORKING_MESSAGE;
+			cfgDisplayMode.get(this.settings) === "compact" &&
+			(this.#workingMessage === DEFAULT_WORKING_MESSAGE || this.#eventController.showingAsyncWait);
 		if (hidden) {
 			if (attached) {
 				this.statusContainer.removeChild(loader);

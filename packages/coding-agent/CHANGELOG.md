@@ -63,6 +63,7 @@
 
 ### Fixed
 
+- Compact mode now shows background-work waits in the two-line activity area instead of above command output.
 - Binary release builds now initialize their temporary directories without failing workflow validation.
 - Edited prompts continue after successful in-place context reduction, and terminal yields no longer compact input that will remain queued.
 - Auxiliary model requests now honor `providers.thinkingProbe`, including memory, commit, image, Eval and compaction requests.
