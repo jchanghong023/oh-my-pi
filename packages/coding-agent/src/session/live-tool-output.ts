@@ -1,8 +1,61 @@
-import { toolOutputText } from "@oh-my-pi/pi-tui/tools/output-preview";
+import { toolOutputSource, toolOutputText } from "@oh-my-pi/pi-tui/tools/output-preview";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "./agent-session-events";
 import type { LiveToolOutputSnapshot } from "./agent-session-handle";
+
+/**
+ * Keep display source and lifecycle facts independent of which frame supplies the body.
+ * In particular, an empty read's displayContent or Bash's output notices must not be
+ * applied to an earlier valid body.
+ */
+function withOutputFacts(
+	toolName: string,
+	body: ToolRenderResult<unknown>,
+	previous: ToolRenderResult<unknown> | undefined,
+	incoming: ToolRenderResult<unknown>,
+	cancelled: boolean,
+	isError: boolean | undefined,
+): ToolRenderResult<unknown> {
+	const source = toolOutputSource(toolName, body);
+	const before = toolOutputSource(toolName, previous);
+	const update = toolOutputSource(toolName, incoming);
+	const dispatch = update.dispatch || before.dispatch;
+	const previousJob = isRecord(before.details?.async) ? before.details.async : undefined;
+	const nextJob = isRecord(update.details?.async) ? update.details.async : undefined;
+	const bodyJob = isRecord(source.details?.async) ? source.details.async : undefined;
+	const job =
+		nextJob &&
+		previousJob &&
+		((nextJob.name === undefined && previousJob.name !== undefined) ||
+			(nextJob.jobId === undefined && previousJob.jobId !== undefined) ||
+			(nextJob.state === undefined && previousJob.state !== undefined))
+			? { ...previousJob, ...nextJob }
+			: (nextJob ?? previousJob);
+	const wasCancelled = cancelled || update.details?.cancelled === true || before.details?.cancelled === true;
+	const failed =
+		incoming.isError === true || isError === true ? true : (isError ?? incoming.isError ?? previous?.isError);
+	if (
+		dispatch === source.dispatch &&
+		!(dispatch && dispatch.args === undefined && before.dispatch?.args !== undefined) &&
+		job === bodyJob &&
+		(!wasCancelled || source.details?.cancelled === true) &&
+		failed === body.isError
+	)
+		return body;
+	const details = {
+		...source.details,
+		...(job ? { async: job } : {}),
+		...(wasCancelled ? { cancelled: true } : {}),
+	};
+	return {
+		...body,
+		isError: failed,
+		details: dispatch
+			? { xdev: { ...before.dispatch, ...dispatch, args: dispatch.args ?? before.dispatch?.args, inner: details } }
+			: details,
+	};
+}
 
 /** Dispatch facts for the in-flight calls and the latest real Output, never transcript history. */
 export class LiveToolOutputState {
@@ -21,8 +74,11 @@ export class LiveToolOutputState {
 		for (const snapshot of snapshots) {
 			this.#calls.set(snapshot.toolCallId, snapshot);
 			this.#dispatchOrder = Math.max(this.#dispatchOrder, snapshot.dispatchOrder);
-			if (snapshot.result) this.#latestOutputOrder = Math.max(this.#latestOutputOrder, snapshot.dispatchOrder);
+			if (snapshot.result && toolOutputText(snapshot.toolName, snapshot.result, snapshot.args)) {
+				this.#latestOutputOrder = Math.max(this.#latestOutputOrder, snapshot.dispatchOrder);
+			}
 		}
+		this.#prune();
 	}
 
 	snapshot(): readonly LiveToolOutputSnapshot[] {
@@ -31,47 +87,74 @@ export class LiveToolOutputState {
 
 	observe(event: AgentSessionEvent, receivedAt: number, dispatchOrder?: number): void {
 		if (event.type === "tool_execution_start") {
-			if (this.#calls.has(event.toolCallId)) return;
+			const order = dispatchOrder ?? this.#dispatchOrder + 1;
+			if (this.#calls.has(event.toolCallId) || order < this.#latestOutputOrder) return;
+			this.#dispatchOrder = Math.max(this.#dispatchOrder, order);
 			this.#calls.set(event.toolCallId, {
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
 				args: event.args,
 				intent: event.intent,
-				dispatchOrder: (this.#dispatchOrder = dispatchOrder ?? this.#dispatchOrder + 1),
+				dispatchOrder: order,
 			});
 			return;
 		}
 		if (event.type !== "tool_execution_update" && event.type !== "tool_execution_end") return;
 		const call = this.#calls.get(event.toolCallId);
-		if (!call) return;
+		// The first overall terminal result is authoritative over late progress and startup receipts.
+		if (!call || call.terminalAt !== undefined) return;
 		const result: ToolRenderResult<unknown> =
 			event.type === "tool_execution_update" ? event.partialResult : event.result;
-		const details = isRecord(result.details) ? result.details : undefined;
-		const dispatch = isRecord(details?.xdev) ? details.xdev : undefined;
-		const inner = isRecord(dispatch?.inner) ? dispatch.inner : details;
-		const async = isRecord(inner?.async) ? inner.async : undefined;
-		// An already received terminal frame is authoritative over a late startup receipt.
-		if (call.terminalAt !== undefined && async?.state === "running") return;
-		if (event.type === "tool_execution_update") call.args = event.args ?? call.args;
+		const { details } = toolOutputSource(call.toolName, result);
+		const async = isRecord(details?.async) ? details.async : undefined;
+		const updateArgs = event.type === "tool_execution_update" ? event.args : undefined;
+		const args =
+			updateArgs != null && (!isRecord(updateArgs) || Object.keys(updateArgs).length > 0) ? updateArgs : call.args;
+		const cancelled = event.type === "tool_execution_end" && event.cancelled === true;
+		const isStartupReceipt = event.type === "tool_execution_end" && async?.state === "running" && !cancelled;
 		if (
 			async?.state === "completed" ||
 			async?.state === "failed" ||
 			async?.state === "cancelled" ||
-			(event.type === "tool_execution_end" && async?.state !== "running")
+			(event.type === "tool_execution_end" && !isStartupReceipt)
 		) {
-			call.terminalAt ??= receivedAt;
+			call.terminalAt = receivedAt;
 		}
-		if (toolOutputText(call.toolName, result, call.args).trim()) {
-			call.result = result;
+		const isError = event.type === "tool_execution_end" ? event.isError : undefined;
+		const previous = call.result;
+		const hadOutput = call.dispatchOrder === this.#latestOutputOrder;
+		// A startup receipt may contain an older buffered preview. It can seed a body,
+		// but must not backdate actual progress already received from the same job.
+		const candidate =
+			isStartupReceipt && hadOutput
+				? undefined
+				: withOutputFacts(call.toolName, result, previous, result, cancelled, isError);
+		if (candidate && toolOutputText(call.toolName, candidate, args)) {
+			call.args = args;
+			call.result = candidate;
 			this.#latestOutputOrder = call.dispatchOrder;
-			// Older calls cannot reclaim the preview, even while they keep executing.
-			for (const [id, previous] of this.#calls) {
-				if (previous.dispatchOrder < this.#latestOutputOrder) this.#calls.delete(id);
-			}
-		} else if (call.result) {
-			call.result = { ...result, content: call.result.content };
-		} else if (call.terminalAt !== undefined) {
+			this.#prune();
+		} else if (call.terminalAt !== undefined && !hadOutput) {
 			this.#calls.delete(call.toolCallId);
+		} else {
+			// A no-output receipt can have source facts used by later frames, or a terminal
+			// result can annotate an earlier valid frame without changing that frame's content.
+			call.args ??= args;
+			call.result = withOutputFacts(
+				call.toolName,
+				previous ?? { content: [] },
+				previous,
+				result,
+				cancelled,
+				isError,
+			);
+		}
+	}
+
+	#prune(): void {
+		// Older calls cannot reclaim the preview, even while they keep executing.
+		for (const [id, call] of this.#calls) {
+			if (call.dispatchOrder < this.#latestOutputOrder) this.#calls.delete(id);
 		}
 	}
 }

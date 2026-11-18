@@ -82,6 +82,31 @@ describe("compact tool parameter summaries", () => {
 		expect(text).not.toMatch(/PRIVATE_PATCH_BODY|PRIVATE_REPLACEMENT|PRIVATE_PAYLOAD/);
 	});
 
+	it("puts an actual file target ahead of an optional intent", () => {
+		expect(summarizeCompactTool("read", { path: "src/config.ts", i: "Inspect defaults" })).toEqual({
+			detail: "src/config.ts · Inspect defaults",
+			file: { category: "read", path: "src/config.ts", countSuffix: "", intent: "Inspect defaults" },
+		});
+		expect(
+			summarizeCompactTool("write", { path: "[src/config.ts#ABCD]", content: "PRIVATE_PAYLOAD" }, "src/config.ts"),
+		).toMatchObject({ detail: "src/config.ts", file: { category: "write", path: "src/config.ts", countSuffix: "" } });
+	});
+
+	it("reports the representative path and unique file count without claiming any changes", () => {
+		const input = patch.replace("*** End Patch", "*** Add File: world.txt\n+PRIVATE_PATCH_BODY\n*** End Patch");
+		expect(summarizeCompactTool("apply_patch", { input }, "Add examples")).toEqual({
+			detail: "hello.txt (2 files) · Add examples",
+			file: { category: "write", path: "hello.txt", countSuffix: " (2 files)", intent: "Add examples" },
+		});
+	});
+
+	it.each(["cfg://display", "agent://worker", "proc://job/kill", "out://reply"])(
+		"does not classify a write to %s as a file action",
+		path => {
+			expect(summarizeCompactTool("write", { path, content: "PRIVATE_PAYLOAD" })).toEqual({ detail: path });
+		},
+	);
+
 	it("shows valid workpool item numbers without exposing yield results", () => {
 		for (const key of [1, 42, Number.MAX_SAFE_INTEGER]) {
 			expect(summarizeCompactTool("yield", { key, data: "PRIVATE_PAYLOAD", error: "PRIVATE_ERROR" })).toEqual({

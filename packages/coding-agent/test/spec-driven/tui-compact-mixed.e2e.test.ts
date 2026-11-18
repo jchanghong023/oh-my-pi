@@ -6,7 +6,7 @@ import { expectVisibleDraft } from "../helpers/compact-screen-recording";
 import { createMixedChildren } from "../helpers/mixed-session-children";
 import { createMixedWorkspace } from "../helpers/mixed-session-workspace";
 import { contentText, MARKER, respond, type ModelRequest, type Reply } from "./provider-fixture";
-import { eventually, tuiTest, withTui } from "./tui-harness";
+import { eventually, nativeDraftMatches, tuiTest, withTui } from "./tui-harness";
 
 interface Action {
 	name: string;
@@ -1086,5 +1086,231 @@ test("retained real edit does not move when the next assistant stream is empty o
 				// Cancellation can race teardown; preserve the original failure.
 			}
 		}
+	}
+}, 120_000);
+
+test("compact PTY activity keeps path identity, output and thinking tails, and the draft", async () => {
+	if (!tuiTest) throw new Error("tui-test is required for the compact activity regression");
+	const [wide, narrow, height] = [104, 48, 40] as const;
+	const prompt = "MIXED_ROOT_BEGIN compact activity";
+	const draft = "ACTIVITY_UNSENT_DRAFT";
+	const command = "bun ./compact-output.ts";
+	const output = Array.from({ length: 12 }, (_, i) => `ACTIVITY_OUT_${String(i + 1).padStart(2, "0")}`);
+	const sources = [
+		{ parent: "north", intent: "Writing north fixture", evidence: "ACTIVITY_WRITE_A" },
+		{ parent: "south", intent: "Writing south fixture", evidence: "ACTIVITY_WRITE_B" },
+	].map(source => ({
+		...source,
+		file: `outer-project/very-long-layer/repeated-branch/${source.parent}/shared.txt`,
+	}));
+	const bash: Action = { name: "bash", args: { command, timeout: 90 }, intent: "Producing live output" };
+	const writes: Action[] = sources.map(({ file, intent, evidence }) => ({
+		name: "write",
+		args: { path: file, content: evidence },
+		intent,
+	}));
+	const startBash = Promise.withResolvers<void>();
+	const print = Promise.withResolvers<void>();
+	const exit = Promise.withResolvers<void>();
+	const startThinking = Promise.withResolvers<void>();
+	const stream = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
+	const encoder = new TextEncoder();
+	let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+	let step = 0;
+	const event = (delta: Record<string, unknown>, finish: string | null = null) =>
+		encoder.encode(
+			`data: ${JSON.stringify({
+				id: "compact-activity",
+				object: "chat.completion.chunk",
+				created: 1,
+				model: "chat-a",
+				choices: [{ index: 0, delta, finish_reason: finish }],
+			})}\n\n`,
+		);
+	// Hold real command stdout and exit independently. PTY observations, not sleeps,
+	// decide when the script can print and return.
+	const gate = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		idleTimeout: 0,
+		async fetch(request) {
+			const pathname = new URL(request.url).pathname;
+			if (pathname === "/print") await print.promise;
+			else if (pathname === "/exit") await exit.promise;
+			else return new Response(null, { status: 404 });
+			return new Response(null, { status: 204 });
+		},
+	});
+	try {
+		await withTui(
+			{
+				screenDiagnostics: true,
+				configuration: {
+					display: { mode: "compact" },
+					hideThinkingBlock: false,
+					read: { toolResultPreview: true },
+				},
+				setup: async (cwd, _agentDir, env) => {
+					env.PI_TUI_NATIVE = "0";
+					await Bun.write(
+						path.join(cwd, "compact-output.ts"),
+						`const base = ${JSON.stringify(gate.url.href)};\n` +
+							`await fetch(new URL("print", base));\n` +
+							`console.log(${JSON.stringify(output.join("\n"))});\n` +
+							`await fetch(new URL("exit", base));\n`,
+					);
+				},
+				async reply(request) {
+					const lastUser = request.messages.findLast(message => message.role === "user");
+					if (!contentText(lastUser?.content).includes(prompt)) return respond(request);
+					if (step < writes.length) {
+						return {
+							text: step === 0 ? "ACTIVITY_HISTORY_START" : undefined,
+							tools: [call(request, writes[step++]!)],
+						};
+					}
+					if (step === writes.length) {
+						step++;
+						await startBash.promise;
+						return { tools: [call(request, bash)] };
+					}
+					expect(result(request, bash)).toContain(output.at(-1)!);
+					await startThinking.promise;
+					return new Response(
+						new ReadableStream<Uint8Array>({
+							start(active) {
+								controller = active;
+								active.enqueue(event({ role: "assistant" }));
+								stream.resolve(active);
+							},
+							cancel() {
+								controller = undefined;
+							},
+						}),
+						{ headers: { "content-type": "text/event-stream" } },
+					);
+				},
+			},
+			[wide, height],
+			async ({ agentDir, cwd, tui, screen }) => {
+				const actionRows = (text: string, label: string) =>
+					text.split("\n").filter(line => line.trimStart().startsWith(label));
+				const hasSource = (line: string, source: (typeof sources)[number]) =>
+					line.includes("shared.txt") && line.includes(source.parent);
+				const observe = (label: string, matches: (text: string) => boolean) =>
+					eventually(
+						() => screen.checkpoint(label),
+						frame => nativeDraftMatches(frame.screen, draft, frame.cursor) && matches(frame.screen),
+						30_000,
+					);
+				await tui("submit", prompt);
+				await tui("type", draft);
+				await observe("distinct file operations show path before intent", text => {
+					const rows = actionRows(text, "写入完成");
+					return sources.every(source =>
+						rows.some(
+							line => hasSource(line, source) && line.indexOf(source.intent) > line.indexOf("shared.txt"),
+						),
+					);
+				});
+				await tui("resize", String(narrow), String(height));
+				const files = await observe("equal basenames retain distinct parents at 48 columns", text => {
+					const rows = actionRows(text, "写入完成");
+					return (
+						sources.every(source => rows.some(line => hasSource(line, source))) &&
+						rows.every(line => !line.includes("fixture"))
+					);
+				});
+				expectVisibleDraft(files, draft, narrow, height);
+				await tui("resize", String(wide), String(height));
+				startBash.resolve();
+				const silent = await observe(
+					"silent command identified before output",
+					text => actionRows(text, "正在执行").some(line => line.includes(command)) && text.includes(draft),
+				);
+				expectVisibleDraft(silent, draft, wide, height);
+
+				print.resolve();
+				const streaming = await observe(
+					"running command header and tail",
+					text =>
+						text.split("\n").some(line => line.includes("运行中") && line.includes(command)) &&
+						text.includes(output.at(-1)!),
+				);
+				expect(actionRows(streaming.screen, "正在执行")).toHaveLength(1);
+				expect(actionRows(streaming.screen, "正在执行")[0]).toContain(bash.intent);
+				expect(streaming.screen.split(command)).toHaveLength(2);
+				for (const marker of output.slice(-5)) expect(streaming.screen).toContain(marker);
+				expect(streaming.screen).not.toContain(output.at(-6)!);
+				expectVisibleDraft(streaming, draft, wide, height);
+
+				await tui("resize", String(narrow), String(height));
+				exit.resolve();
+				startThinking.resolve();
+				const active = await stream.promise;
+				const empty = await observe("empty assistant stream keeps tool output", text =>
+					text.includes(output.at(-1)!),
+				);
+				expectVisibleDraft(empty, draft, narrow, height);
+				active.enqueue(event({ reasoning_content: "ACTIVITY_THINK_FIRST" }));
+				await observe(
+					"active thinking alongside retained tool output",
+					text =>
+						actionRows(text, "正在思考").some(line => line.includes("ACTIVITY_THINK_FIRST")) &&
+						text.includes(output.at(-1)!),
+				);
+				active.enqueue(
+					event({ reasoning_content: `\nACTIVITY_THINK_HEAD ${"detail ".repeat(20)}ACTIVITY_THINK_TAIL` }),
+				);
+				const thinking = await observe(
+					"latest portion of active thinking at 48 columns",
+					text =>
+						actionRows(text, "正在思考").some(line => line.includes("ACTIVITY_THINK_TAIL")) &&
+						text.includes(output.at(-1)!),
+				);
+				expect(thinking.screen).not.toContain("ACTIVITY_THINK_FIRST");
+				expect(thinking.screen).not.toContain("ACTIVITY_THINK_HEAD");
+				expectVisibleDraft(thinking, draft, narrow, height);
+
+				active.enqueue(event({ content: "ACTIVITY_HISTORY_DONE" }));
+				active.enqueue(event({}, "stop"));
+				active.enqueue(encoder.encode("data: [DONE]\n\n"));
+				active.close();
+				controller = undefined;
+				const finished = await observe(
+					"finished assistant history after preview clears",
+					text => text.includes("ACTIVITY_HISTORY_DONE") && !text.includes(output.at(-1)!),
+				);
+				expect(finished.screen).not.toContain("ACTIVITY_THINK_TAIL");
+				expectVisibleDraft(finished, draft, narrow, height);
+				const transcript = await tui("text", "--full");
+				expect(transcript).toContain(prompt);
+				expect(transcript).toContain("ACTIVITY_HISTORY_START");
+				expect(transcript).toContain("ACTIVITY_HISTORY_DONE");
+
+				const file = await rootJournal(agentDir);
+				const history = messages(await journal(file));
+				const executed = recordedResult(history, bash.intent);
+				expect(executed.isError).toBe(false);
+				for (const marker of output) expect(contentText(executed.content)).toContain(marker);
+				for (const source of sources) {
+					expect(recordedResult(history, source.intent).isError).toBe(false);
+					expect(await Bun.file(path.join(cwd, source.file)).text()).toContain(source.evidence);
+				}
+			},
+		);
+	} finally {
+		startBash.resolve();
+		print.resolve();
+		exit.resolve();
+		startThinking.resolve();
+		if (controller && controller.desiredSize !== null) {
+			try {
+				controller.close();
+			} catch {
+				// Cancellation can race teardown; preserve the original failure.
+			}
+		}
+		gate.stop(true);
 	}
 }, 120_000);

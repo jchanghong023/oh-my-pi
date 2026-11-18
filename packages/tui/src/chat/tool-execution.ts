@@ -48,7 +48,8 @@ import type { FileDiagnosticsResult } from "../tools/lsp";
 import { NativeImageCache, readMediaPath, shownMedia } from "../native/blobs";
 import { imageLinksEnabled, linkedImageText } from "../prompt/image-references";
 import { Memo } from "../native/memo";
-import { type EditMode, getEditInputPaths, type PerFileDiffPreview, renderStreamingFallback } from "../tools/edit";
+import { type EditMode, type PerFileDiffPreview, renderStreamingFallback } from "../tools/edit";
+import { compactFileTarget } from "../tools/file-target";
 import { taskCardAgentIds } from "../tools/task";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../tools/todo";
 import { isNativeRendering } from "../native/state";
@@ -68,9 +69,6 @@ import { sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
 import { renderDiff } from "../chrome/diff";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-container";
-import { isXdHelpContent, parseXdUrl } from "../tools/xd-url";
-import { unwrapHashlineHeaderPath } from "../tools/hashline-format";
-import { internalUrlSchemeSpec, internalUrlSchemeSpecs, splitUrlScheme } from "../tools/url-scheme-host";
 import { LateDiagnosticsMessageComponent } from "./late-diagnostics-message";
 import { compactRows, presentNative, TranscriptPresentationState } from "./transcript-presentation";
 
@@ -87,80 +85,6 @@ function isTodoToolDetails(details: unknown): details is TodoToolDetails {
 		"phases" in details &&
 		Array.isArray((details as { phases?: unknown }).phases)
 	);
-}
-
-type FileTarget = "file" | "other" | "unknown";
-
-/** Classify the destination, not the result of attempting the operation. */
-function fileTarget(path: unknown, complete: boolean): FileTarget {
-	if (typeof path !== "string" || !path.trim()) return complete ? "other" : "unknown";
-	const target = unwrapHashlineHeaderPath(path);
-	const url = splitUrlScheme(target);
-	if (!url) {
-		// A streamed prefix such as `agent:` is not yet a filesystem path.
-		if (!complete) {
-			const prefix = target.toLowerCase();
-			if ("file://".startsWith(prefix) || "xd://".startsWith(prefix)) return "unknown";
-			for (const scheme of internalUrlSchemeSpecs().keys()) {
-				if (`${scheme}://`.startsWith(prefix)) return "unknown";
-			}
-		}
-		return "file";
-	}
-	if (url.scheme === "file") return "file";
-	const write = internalUrlSchemeSpec(url.scheme)?.write;
-	return write?.via === "file" || write?.fileOperation === true ? "file" : "other";
-}
-
-function compactFileTarget(toolName: string, args: unknown, complete: boolean, editMode?: EditMode): FileTarget {
-	if (toolName !== "write" && !isEditLikeToolName(toolName)) return "other";
-	if (!isRecord(args)) return complete ? "other" : "unknown";
-	if (toolName === "write") {
-		const path = args.path ?? args.file_path;
-		if (typeof path === "string") {
-			const device = parseXdUrl(unwrapHashlineHeaderPath(path));
-			if (device) {
-				if (typeof args.content === "string" && isXdHelpContent(args.content)) {
-					return complete ? "other" : "unknown";
-				}
-				if (!device.name) return complete ? "other" : "unknown";
-				if (
-					!complete &&
-					!["write", "edit", "apply_patch"].includes(device.name) &&
-					["write", "edit", "apply_patch"].some(name => name.startsWith(device.name!))
-				)
-					return "unknown";
-				if (device.name !== "write" && device.name !== "edit" && device.name !== "apply_patch") return "other";
-				if (typeof args.content !== "string") return complete ? "other" : "unknown";
-				try {
-					const inner: unknown = JSON.parse(args.content);
-					return compactFileTarget(
-						device.name,
-						inner,
-						true,
-						device.name === "apply_patch" ? "apply_patch" : undefined,
-					);
-				} catch {
-					return complete ? "other" : "unknown";
-				}
-			}
-		}
-		return fileTarget(path, complete);
-	}
-	const paths: unknown[] = [args.path, args.file_path, args.rename, args.move];
-	if (Array.isArray(args.edits)) {
-		for (const entry of args.edits) {
-			if (isRecord(entry)) paths.push(entry.path, entry.rename, entry.move);
-		}
-	}
-	const input = args.input ?? args._input;
-	if (typeof input === "string") paths.push(...getEditInputPaths(input, editMode));
-	for (const path of paths) {
-		if (path === undefined) continue;
-		const target = fileTarget(path, complete);
-		if (target === "file") return "file";
-	}
-	return complete ? "other" : "unknown";
 }
 
 interface ToolImageBlock {

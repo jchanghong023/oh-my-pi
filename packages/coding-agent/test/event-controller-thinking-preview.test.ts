@@ -59,19 +59,6 @@ function nativeRows(node: NativeNode): readonly string[] {
 	});
 }
 
-/** Strip the framed block's vertical borders and uniform one-column padding, keeping relative indent. */
-function frameBody(rows: readonly string[]): string[] {
-	return rows.filter(row => row.startsWith("│") && row.endsWith("│")).map(row => row.slice(2, -2).trimEnd());
-}
-
-/** The native card's head text, joined from its spans. */
-function nativeHead(node: NativeNode): string {
-	if (node.k !== "card") throw new Error("Expected a native preview card");
-	const head = node.p?.head;
-	if (typeof head === "string") return head;
-	return head?.map(part => part.t).join("") ?? "";
-}
-
 function hasNativeKind(node: NativeNode, kind: string): boolean {
 	return node.k === kind || (node.c ?? []).some(child => "k" in child && hasNativeKind(child, kind));
 }
@@ -239,13 +226,13 @@ function focusFixture() {
 				feature: () => true,
 			};
 			const ansi = output.render(width).map(row => Bun.stripANSI(row).trimEnd());
-			const node = output.describe(cx);
+			const native = nativeRows(output.describe(cx)).map(row => Bun.stripANSI(row).trimEnd());
 			return {
 				ansi,
 				head: ansi[0] ?? "",
-				body: frameBody(ansi),
-				nativeHead: nativeHead(node),
-				nativeBody: nativeRows(node).map(row => Bun.stripANSI(row).trimEnd()),
+				body: ansi.slice(1),
+				nativeHead: native[0] ?? "",
+				nativeBody: native.slice(1),
 			};
 		},
 		register(id: string, live: { session: typeof main.session }) {
@@ -322,7 +309,7 @@ describe("compact action dock", () => {
 		});
 		const running = plain(h.rows());
 		expect(running[0]).toBe("");
-		expect(running[1]).toBe(" 正在读取  Reading raw preset table · src/config.ts");
+		expect(running[1]).toBe(" 正在读取  src/config.ts · Reading raw preset table");
 		expect(running[2]).toBe("");
 		expect(Bun.stringWidth("正在读取")).toBe(8);
 		await live.emit({
@@ -333,7 +320,7 @@ describe("compact action dock", () => {
 			isError: false,
 		});
 		const done = plain(h.rows());
-		expect(done[1]).toBe(" 读取完成  Reading raw preset table · src/config.ts");
+		expect(done[1]).toBe(" 读取完成  src/config.ts · Reading raw preset table");
 		// The detail origin (action area + two spaces) is identical across the state change.
 		expect(done[1]!.indexOf("src/config.ts")).toBe(running[1]!.indexOf("src/config.ts"));
 		for (const rows of [h.rows(), nativeRows(h.dock.describe(cx()))]) {
@@ -517,7 +504,7 @@ describe("compact action dock", () => {
 		expect(plain(h.rows())).toEqual([" 读取完成  src/config.ts", " 正在执行  rg compact packages/", ""]);
 	});
 
-	it("keeps two running actions in stable slots, fills vacancies without a carousel, and never hides a runner", async () => {
+	it("keeps two running actions in stable slots and fills vacancies without a carousel", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -545,6 +532,49 @@ describe("compact action dock", () => {
 		expect(plain(h.rows())).toEqual([" 执行完成  B", " 正在执行  C", ""]);
 		await end("C");
 		expect(plain(h.rows())).toEqual([" 执行完成  B", " 执行完成  C", ""]);
+	});
+
+	it("reserves one row for real wrapped thinking, without moving the other runner or leaking hidden prose", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		for (const command of ["A", "B"]) {
+			await live.emit({ type: "tool_execution_start", toolCallId: command, toolName: "bash", args: { command } });
+		}
+		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  A", ""]);
+		const message = thinkingMessage(" \t\n<!-- -->");
+		await live.emit(update(message, "thinking_delta"));
+		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  A", ""]);
+		message.content = [{ type: "thinking", thinking: "```\nPRIVATE_THOUGHT\n```" }];
+		await live.emit(update(message, "thinking_delta"));
+		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  A", ""]);
+		message.content = [{ type: "thinking", thinking: "firstpart secondpart thirdpart final-tail\n \t\n" }];
+		await live.emit(update(message, "thinking_delta"));
+		const width = 21;
+		for (const rows of [h.dock.render(width), nativeRows(h.dock.describe(cx(width)))]) {
+			expect(plain(rows)).toEqual([" 正在思考  final-tail", " 正在执行  A", ""]);
+		}
+		h.ctx.hideThinkingBlock = true;
+		expect(plain(h.rows())).toEqual([" 正在执行  B", " 正在执行  A", ""]);
+		h.ctx.hideThinkingBlock = false;
+		const wait = new Loader(
+			h.ctx.ui,
+			value => value,
+			value => value,
+			"Waiting for a job",
+		);
+		wait.stop();
+		const dock = new CompactThinkingPreview(h.ctx, () => wait);
+		try {
+			const rows = plain(dock.render(60));
+			expect(rows[0]).toContain("正在思考");
+			expect(rows[1]).toContain("Waiting for a job");
+			expect(rows.join("")).not.toContain("正在执行");
+			expect(dock.describe(cx()).c?.[1]).toEqual(wait.describe(cx()));
+		} finally {
+			dock.clear();
+		}
 	});
 
 	it("animates only the running action word, stops it on end, and keeps the detail static", async () => {
@@ -632,17 +662,76 @@ describe("compact action dock", () => {
 		expect(h.rendered()).not.toContain("OUTPUT_MUST_NOT_APPEAR");
 	});
 
-	it("middle-ellipsizes long read and write paths while keeping the file name", async () => {
+	it("drops file intent before clipping the path and keeps the distinguishing parent directory", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		const long = `src/${"nested/".repeat(20)}config.ts`;
-		await live.emit({ type: "tool_execution_start", toolCallId: "a", toolName: "read", args: { path: long } });
-		const row = plain(h.dock.render(40))[1]!;
-		expect(row).toContain("…");
-		expect(row).toContain("config.ts");
-		expect(Bun.stringWidth(row)).toBeLessThanOrEqual(40);
+		const prefix = `src/${"nested/".repeat(20)}`;
+		for (const [toolName, path] of [
+			["read", `${prefix}backend/config.ts`],
+			["write", `${prefix}frontend/config.ts`],
+		] as const) {
+			await live.emit({
+				type: "tool_execution_start",
+				toolCallId: toolName,
+				toolName,
+				args: { path, i: "LONG INTENT MUST NOT CROWD OUT THE PATH" },
+			});
+		}
+		for (const rows of [h.dock.render(40), nativeRows(h.dock.describe(cx(40)))]) {
+			const [top, bottom] = plain(rows);
+			expect(top).toContain("frontend/config.ts");
+			expect(bottom).toContain("backend/config.ts");
+			expect(rows.join("")).not.toContain("INTENT");
+			expect(rows.every(row => Bun.stringWidth(row) <= 40)).toBe(true);
+		}
+	});
+
+	it("uses Bash intent only while the same call's command is visible and never hides a command without intent", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		let previewId: string | undefined = "with-intent";
+		const dock = new CompactThinkingPreview(h.ctx, undefined, width => (width >= 50 ? previewId : undefined));
+		try {
+			await live.emit({
+				type: "tool_execution_start",
+				toolCallId: "with-intent",
+				toolName: "write",
+				args: { path: "xd://bash", content: '{"command":"echo raw","i":"Describe action"}' },
+			});
+			await live.emit({
+				type: "tool_execution_update",
+				toolCallId: "with-intent",
+				toolName: "write",
+				args: { path: "xd://bash" },
+				partialResult: {
+					content: [],
+					details: { xdev: { mode: "execute", tool: "bash", args: { command: "echo raw" } } },
+				},
+			});
+			for (const rows of [dock.render(60), nativeRows(dock.describe(cx(60)))]) {
+				expect(plain(rows)[1]).toContain("Describe action");
+				expect(plain(rows)[1]).not.toContain("echo raw");
+			}
+			expect(plain(dock.render(40))[1]).toContain("echo raw");
+			previewId = "other-call";
+			expect(plain(dock.render(60))[1]).toContain("echo raw");
+			previewId = undefined;
+			expect(plain(dock.render(60))[1]).toContain("echo raw");
+			previewId = "no-intent";
+			await live.emit({
+				type: "tool_execution_start",
+				toolCallId: "no-intent",
+				toolName: "bash",
+				args: { command: "pwd" },
+			});
+			expect(plain(dock.render(60))[0]).toContain("pwd");
+		} finally {
+			dock.clear();
+		}
 	});
 
 	it("keeps wide, multiline and styled details inside one row at narrow widths without leaking color", async () => {
@@ -855,6 +944,40 @@ describe("compact action dock", () => {
 			args: { path: "xd://think", content: '{"thoughts":"PRIVATE_THOUGHTS"}' },
 		});
 		expect(h.rendered()).not.toContain("PRIVATE_THOUGHTS");
+	});
+
+	it("labels wrapped file patches as writes and config, messaging and control transports as generic calls", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		const patch = [
+			"*** Begin Patch",
+			"*** Add File: src/one.ts",
+			"+PRIVATE_BODY",
+			"*** Add File: src/two.ts",
+			"+PRIVATE_BODY",
+			"*** End Patch",
+		].join("\n");
+		for (const [id, path, content, expected] of [
+			["patch", "XD://apply_patch", JSON.stringify({ input: patch }), "正在写入  src/one.ts (2 files)"],
+			["settings", "cfg://display", "PRIVATE_BODY", "正在调用  write cfg://display"],
+			["message", "agent://Worker", "PRIVATE_BODY", "正在调用  write agent://Worker"],
+			["control", "proc://job/kill", "PRIVATE_BODY", "正在调用  write proc://job/kill"],
+			["help", "xd://write", "?", "正在调用  write xd://write"],
+		] as const) {
+			await live.emit({ type: "tool_execution_start", toolCallId: id, toolName: "write", args: { path, content } });
+			expect(plain(h.rows())[1]).toBe(` ${expected}`);
+			expect(h.rendered()).not.toContain("PRIVATE_BODY");
+			await live.emit({
+				type: "tool_execution_end",
+				toolCallId: id,
+				toolName: "write",
+				result: { content: [] },
+				isError: false,
+			});
+			expect(plain(h.rows())[1]).toContain(id === "patch" ? "写入完成" : "调用完成");
+		}
 	});
 });
 
@@ -1180,7 +1303,7 @@ describe("compact latest live Output consumers", () => {
 		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("replacement");
 	});
 
-	it("shows the latest four meaningful display rows without changing the original Output", async () => {
+	it("shows the latest five meaningful display rows without changing the original Output", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		const text = `discard\nfirst\n \nsecond\n\t\nthird\n${" ".repeat(150)}\nfourth\n\x1b[31m  \x1b[0m\nfifth\n{}\n---\n\x1b[31m╰──╯\x1b[0m\n✅\n\n`;
@@ -1189,12 +1312,12 @@ describe("compact latest live Output consumers", () => {
 		h.register("NonblankOutput", live);
 		await h.focus.focusAgent("NonblankOutput");
 		const view = h.previewView();
-		expect(view.body).toEqual(["second", "third", "fourth", "fifth"]);
-		expect(view.nativeBody).toEqual(["second", "third", "fourth", "fifth"]);
+		expect(view.body).toEqual(["first", "second", "third", "fourth", "fifth"]);
+		expect(view.nativeBody).toEqual(view.body);
 		expect(call.result?.content).toEqual([{ type: "text", text }]);
 	});
 
-	it("frames output with borders and padding while preserving relative indentation", async () => {
+	it("uses a borderless header and preserves relative indentation on both paths", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		const call = outputCall("aligned", 1, "\n    根节点\n      child 42\n    ---\n    {}\n");
@@ -1202,11 +1325,9 @@ describe("compact latest live Output consumers", () => {
 		h.register("AlignedOutput", live);
 		await h.focus.focusAgent("AlignedOutput");
 		const view = h.previewView();
-		expect(view.ansi).toHaveLength(4);
-		expect(view.ansi[0]!.startsWith("╭")).toBe(true);
-		expect(view.ansi.at(-1)!.startsWith("╰")).toBe(true);
-		expect(view.body).toEqual(["根节点", "  child 42"]);
-		expect(view.nativeBody).toEqual(["根节点", "  child 42"]);
+		expect(view.ansi).toEqual(["运行中 · bash · echo aligned", "根节点", "  child 42"]);
+		expect(view.nativeHead).toBe(view.head);
+		expect(view.nativeBody).toEqual(view.body);
 	});
 
 	it("does not open or replace meaningful output for symbol-only frames", async () => {
@@ -1222,6 +1343,105 @@ describe("compact latest live Output consumers", () => {
 		expect(view.head).toContain("echo content");
 		expect(view.body).toEqual(["0"]);
 		expect(view.nativeBody).toEqual(["0"]);
+	});
+
+	it("retains eligible read output through symbol, image and empty display frames", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const output = new LiveToolOutputState();
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => output.snapshot());
+		h.register("RetainedOutput", live);
+		await h.focus.focusAgent("RetainedOutput");
+		const start = (id: string, path: string, dispatchOrder?: number) =>
+			output.observe(
+				{ type: "tool_execution_start", toolCallId: id, toolName: "read", args: { path } },
+				Date.now(),
+				dispatchOrder,
+			);
+		const update = (id: string, result: NonNullable<LiveToolOutputSnapshot["result"]>) =>
+			output.observe(
+				{ type: "tool_execution_update", toolCallId: id, toolName: "read", args: {}, partialResult: result },
+				Date.now(),
+			);
+		start("first", "actual.txt");
+		update("first", { content: [], details: { displayContent: { text: "retained body" } } });
+		start("later", "other.txt");
+		update("later", { content: [{ type: "image" }, { type: "text", text: "✅\n{}" }] });
+		update("first", { content: [{ type: "text", text: "{}" }], details: { displayContent: { text: "—" } } });
+		output.observe(
+			{ type: "tool_execution_end", toolCallId: "first", toolName: "read", result: { content: [] }, isError: true },
+			Date.now(),
+		);
+		expect(h.previewView()).toMatchObject({
+			head: "失败 · read · actual.txt",
+			nativeHead: "失败 · read · actual.txt",
+			body: ["retained body"],
+			nativeBody: ["retained body"],
+		});
+		update("later", { content: [{ type: "text", text: "new source" }] });
+		start("stale", "stale.txt", 1);
+		update("stale", { content: [{ type: "text", text: "late output" }] });
+		expect(h.previewView().body).toEqual(["new source"]);
+	});
+
+	it("retains device and async facts after an empty terminal frame and rejects late startup receipts", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const live = liveSession();
+		const output = new LiveToolOutputState();
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => output.snapshot());
+		h.register("AsyncOutput", live);
+		await h.focus.focusAgent("AsyncOutput");
+		output.observe({ type: "tool_execution_start", toolCallId: "job", toolName: "write", args: {} }, 10_000);
+		const xdev = { tool: "bash", mode: "execute", args: { command: "echo active" } };
+		output.observe(
+			{
+				type: "tool_execution_update",
+				toolCallId: "job",
+				toolName: "write",
+				args: {},
+				partialResult: {
+					content: [
+						{ type: "text", text: "Error: failed at step 2\n\nBackgrounded as job bg_1; output will follow" },
+					],
+					details: { xdev: { ...xdev, inner: { async: { name: "Build", jobId: "bg_1", state: "running" } } } },
+				},
+			},
+			10_000,
+		);
+		const startupReceipt: AgentSessionEvent = {
+			type: "tool_execution_end",
+			toolCallId: "job",
+			toolName: "write",
+			result: {
+				content: [{ type: "text", text: "older buffered output" }],
+				details: { xdev: { ...xdev, inner: { async: { jobId: "bg_1", state: "running" } } } },
+			},
+			isError: false,
+		};
+		output.observe(startupReceipt, 10_000);
+		expect(h.previewView().body).toEqual(["Error: failed at step 2"]);
+		output.observe(
+			{
+				type: "tool_execution_update",
+				toolCallId: "job",
+				toolName: "write",
+				args: {},
+				partialResult: {
+					content: [{ type: "text", text: "{}" }],
+					details: { xdev: { tool: "bash", mode: "execute", inner: { async: { state: "failed" } } } },
+				},
+			},
+			10_001,
+		);
+		output.restore(output.snapshot());
+		output.observe(startupReceipt, 10_002);
+		expect(output.snapshot()[0]?.terminalAt).toBe(10_001);
+		const view = h.previewView();
+		expect(view.head).toBe("失败 · write (bash) · Build · bg_1 · echo active");
+		expect(view.nativeHead).toBe(view.head);
+		expect(view.body).toEqual(["Error: failed at step 2"]);
+		expect(view.nativeBody).toEqual(view.body);
 	});
 
 	it("wraps safe output before its tail window and keeps ANSI/native text identical", async () => {
@@ -1301,6 +1521,7 @@ describe("compact latest live Output consumers", () => {
 		const running = h.previewView();
 		expect(running.head).toContain("运行中 · grep");
 		expect(running.body).toEqual([
+			" 15│context after",
 			"*16│alpha hit three",
 			"*17│alpha hit four",
 			"*18│alpha hit five",
@@ -1315,6 +1536,7 @@ describe("compact latest live Output consumers", () => {
 			"*14│alpha hit two",
 			"*16│alpha hit three",
 			"*17│alpha hit four",
+			"*18│alpha hit five",
 		]);
 		expect(terminal.nativeBody).toEqual(terminal.body);
 	});
@@ -1332,7 +1554,7 @@ describe("compact latest live Output consumers", () => {
 		h.register("GrepFill", live);
 		await h.focus.focusAgent("GrepFill");
 		const view = h.previewView();
-		expect(view.body).toEqual(["*12│only hit", "# src/", " 10│context one", " 13│context two"]);
+		expect(view.body).toEqual(["*12│only hit", "# src/", " 10│context one", " 13│context two", " 14│context three"]);
 		expect(view.nativeBody).toEqual(view.body);
 	});
 
@@ -1360,7 +1582,7 @@ describe("compact latest live Output consumers", () => {
 		await h.focus.focusAgent("GlobOutput");
 		const globView = h.previewView();
 		expect(globView.head).toContain("已完成 · glob");
-		expect(globView.body).toEqual(["a.ts", "b.ts", "c.ts", "d.ts"]);
+		expect(globView.body).toEqual(["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
 		expect(globView.nativeBody).toEqual(globView.body);
 		calls = [glob, wrapped];
 		const wrappedView = h.previewView();
@@ -1368,23 +1590,22 @@ describe("compact latest live Output consumers", () => {
 		expect(wrappedView.nativeBody).toEqual(wrappedView.body);
 	});
 
-	it("keeps tail selection for terminal bash and zero-hit grep without error heuristics", async () => {
+	it("prioritizes real failure diagnostics ahead of later output without inventing reasons", async () => {
 		const h = focusFixture();
 		const live = liveSession();
-		const failed = outputCall(
-			"failed",
-			1,
-			"line one\nError: boom at step 2\nline three\nline four\nline five\nline six",
-			{
-				terminalAt: Date.now(),
-				result: {
-					content: [
-						{ type: "text", text: "line one\nError: boom at step 2\nline three\nline four\nline five\nline six" },
-					],
-					isError: true,
-				},
+		const failed = outputCall("failed", 1, "", {
+			terminalAt: Date.now(),
+			result: {
+				content: [
+					{
+						type: "text",
+						text: "line one\nError: boom at step 2\nline three\nline four\nline five\nline six\nline seven\nline eight",
+					},
+				],
+				details: { reason: "not in the actual output" },
+				isError: true,
 			},
-		);
+		});
 		const empty = outputCall("empty", 2, "No matches found", {
 			toolName: "grep",
 			args: { pattern: "missing" },
@@ -1400,7 +1621,7 @@ describe("compact latest live Output consumers", () => {
 		await h.focus.focusAgent("FallbackOutput");
 		const failedView = h.previewView();
 		expect(failedView.head).toContain("失败 · bash");
-		expect(failedView.body).toEqual(["line three", "line four", "line five", "line six"]);
+		expect(failedView.body).toEqual(["Error: boom at step 2", "line five", "line six", "line seven", "line eight"]);
 		expect(failedView.nativeBody).toEqual(failedView.body);
 		calls = [failed, empty];
 		const emptyView = h.previewView();
@@ -1423,6 +1644,18 @@ describe("compact latest live Output consumers", () => {
 		expect(view.head).toContain("styles.css");
 		expect(Bun.stringWidth(view.ansi[0]!)).toBeLessThanOrEqual(60);
 		expect(view.nativeHead).toContain("运行中 · bash · rg -n");
+		expect(h.output.visibleCommandCallId(60)).toBe("long");
+		const narrow = h.previewView(17);
+		expect(narrow.head).toBe("运行中 · bash");
+		expect(narrow.nativeHead).toBe(narrow.head);
+		expect(h.output.visibleCommandCallId(17)).toBeUndefined();
+		const headerOnly = new CompactToolOutputPreview(h.ctx, () => 1);
+		outputPreviews.push(headerOnly);
+		expect(headerOnly.render(60)).toHaveLength(1);
+		expect(headerOnly.visibleCommandCallId(60)).toBe("long");
+		const noSpace = new CompactToolOutputPreview(h.ctx, () => 0);
+		outputPreviews.push(noSpace);
+		expect(noSpace.visibleCommandCallId(60)).toBeUndefined();
 	});
 
 	it("does not revive a finished preview when the next turn starts", async () => {

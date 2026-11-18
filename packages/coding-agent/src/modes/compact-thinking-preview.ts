@@ -1,6 +1,6 @@
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { type Component } from "@oh-my-pi/pi-tui";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import { registerSpinnerBlock, unregisterSpinnerBlock } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -9,18 +9,18 @@ import { col, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { replaceTabs, truncateMiddleToWidth, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
+import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { describeShimmer, type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
 import { isXdHelpContent, parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
-import { getPaddingX, padding } from "@oh-my-pi/pi-tui/utils";
+import { getPaddingX, padding, sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
-import { summarizeCompactTool } from "./compact-tool-summary";
+import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-summary";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
 import type { InteractiveModeContext } from "./types";
 
@@ -50,6 +50,8 @@ type Call = {
 	waitTarget?: string;
 	command?: string;
 	intent?: string;
+	embeddedIntent?: string;
+	file?: CompactFileSummary;
 	startedAt?: number;
 	endedAt?: number;
 	failed?: boolean;
@@ -60,7 +62,8 @@ type Action = {
 	running: boolean;
 	failed: boolean;
 	detail: string;
-	isPath: boolean;
+	file?: CompactFileSummary;
+	previewIntent?: string;
 	startedAt?: number;
 };
 type SessionMemory = {
@@ -90,7 +93,8 @@ function fields(value: unknown): Record<string, unknown> {
 function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknown>): void {
 	const outer = fields(args);
 	const dispatch = fields(fields(result?.details).xdev);
-	const path = typeof outer.path === "string" ? outer.path : undefined;
+	const outerPath = outer.path ?? outer.file_path;
+	const path = typeof outerPath === "string" ? outerPath : undefined;
 	const device = call.name === "write" && path ? parseXdUrl(unwrapHashlineHeaderPath(path)) : null;
 	const help = (typeof outer.content === "string" && isXdHelpContent(outer.content)) || dispatch.mode === "help";
 	const deviceName =
@@ -104,9 +108,11 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 		call.detail = "";
 		call.command = undefined;
 		call.waitTarget = undefined;
+		call.file = undefined;
+		call.embeddedIntent = undefined;
 	}
 	call.semanticName = semanticName;
-	let effectiveArgs: unknown = args;
+	let effectiveArgs = outer;
 	let effectiveResult = result;
 	if (wrapped) {
 		const decoded =
@@ -115,6 +121,9 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 				: undefined;
 		// Both sources belong only to this event; retain the resulting display facts, not their payloads.
 		effectiveArgs = { ...fields(decoded), ...fields(dispatch.args) };
+		call.embeddedIntent ??= [effectiveArgs.i, effectiveArgs.intent, effectiveArgs.title].find(
+			(value): value is string => typeof value === "string" && !!value.trim(),
+		);
 		effectiveResult = result ? { ...result, details: dispatch.inner } : undefined;
 	}
 	const target = waitTarget(semanticName, effectiveResult as ToolRenderResult<CoordinationDetails> | undefined);
@@ -123,7 +132,7 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 		(value): value is string => typeof value === "string" && !!value.trim(),
 	);
 	if (
-		!Object.keys(fields(effectiveArgs)).length &&
+		!Object.keys(effectiveArgs).length &&
 		!target &&
 		!identityChanged &&
 		(call.detail || call.command || (!path && !call.intent))
@@ -132,9 +141,11 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 	const detail = summarizeCompactTool(
 		semanticName,
 		effectiveArgs,
-		call.intent,
+		call.intent ?? call.embeddedIntent,
 		semanticName === "wait" ? call.waitTarget : undefined,
 	);
+	if (detail.file || effectiveArgs.path !== undefined || effectiveArgs.file_path !== undefined)
+		call.file = detail.file;
 	if (wrapped && !detail.detail && !detail.command && !call.detail && !call.command && path) detail.detail = path;
 	if (detail.detail || detail.command) {
 		call.detail = detail.detail;
@@ -170,50 +181,71 @@ function streamedArgs(block: ToolCall): unknown {
 		: decodeStreamedToolArgs(partial, { rawInput: block.customWireName !== undefined });
 }
 
-function categoryOf(semanticName: string): ActionCategory {
-	switch (semanticName) {
-		case "read":
-			return "read";
-		case "bash":
-			return "exec";
-		case "write":
-		case "edit":
-		case "apply_patch":
-		case "ast_edit":
-			return "write";
-		default:
-			return "call";
-	}
+function categoryOf(call: Call): ActionCategory {
+	if (call.file) return call.file.category;
+	return (call.semanticName ?? call.name) === "bash" ? "exec" : "call";
 }
 
 /** One-line detail for a tool action: command text, or a target summary, or the real tool name. */
-function toolDetail(call: Call): { detail: string; isPath: boolean } {
-	const category = categoryOf(call.semanticName ?? call.name);
-	if (call.command) return { detail: clean(call.command), isPath: false };
+function toolDetail(call: Call, category: ActionCategory): string {
+	if (call.file) return clean(call.file.path).trim();
+	if (call.command) return clean(call.command);
 	const target = clean(call.detail).trim();
-	if (category === "read" || category === "write") {
-		return { detail: target || call.name, isPath: true };
-	}
-	if (category === "exec") return { detail: target || call.name, isPath: false };
+	if (category === "exec") return target || call.name;
 	// Unmapped tools must name themselves AND keep the short parameter summary; never mislabel them.
 	const name =
 		call.semanticName && call.semanticName !== call.name ? `${call.name} (${call.semanticName})` : call.name;
-	return { detail: target ? `${name} ${target}` : name, isPath: false };
+	return target ? `${name} ${target}` : name;
 }
 
 function thinkingSeconds(ms: number): string {
 	return ms < 100 ? "用时 <0.1 秒" : `用时 ${(ms / 1000).toFixed(1)} 秒`;
 }
 
-/** Latest non-blank display line of the real thinking fragment; empty when none is displayable. */
-function thinkingDetail(text: string, proseOnly: boolean): string {
+/** Latest nonblank wrapped row, using the same visible thinking prose as the transcript. */
+function thinkingDetail(text: string, proseOnly: boolean, width: number): string {
+	if (width <= 0) return "";
 	const formatted = formatThinkingForDisplay(text, proseOnly);
 	if (!hasDisplayableThinking(text, formatted)) return "";
-	const lines = formatted
-		.split(/\r?\n/)
-		.map(line => clean(line).trim())
-		.filter(line => line.length > 0);
-	return lines.at(-1) ?? "";
+	let end = formatted.length;
+	while (end > 0) {
+		const start = formatted.lastIndexOf("\n", end - 1) + 1;
+		const line = clean(formatted.slice(start, end)).trim();
+		if (line && !/^[.…\s]+$/.test(line)) {
+			const tail = wrapTextWithAnsi(line, width)
+				.findLast(row => row.trim() && visibleWidth(row) <= width)
+				?.trim();
+			if (tail) return tail;
+		}
+		end = start - 1;
+	}
+	return "";
+}
+
+function fileDetail(path: string, file: CompactFileSummary, width: number): string {
+	const count = file.countSuffix;
+	const full = path + count;
+	const fullWidth = visibleWidth(full);
+	if (fullWidth <= width) {
+		const intent = file.intent && clean(file.intent).trim();
+		return intent && fullWidth + 3 + visibleWidth(intent) <= width ? `${full} · ${intent}` : full;
+	}
+	// Keep the parent and basename intact when they fit, spending spare cells on the prefix.
+	const pathWidth = visibleWidth(path);
+	const countWidth = visibleWidth(count);
+	const showCount = width - countWidth >= Math.min(pathWidth, 8);
+	const room = showCount ? width - countWidth : width;
+	if (pathWidth <= room) return path + (showCount ? count : "");
+	const basename = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+	const parent = Math.max(path.lastIndexOf("/", basename - 1), path.lastIndexOf("\\", basename - 1));
+	const tail = path.slice(parent + 1);
+	const tailWidth = visibleWidth(tail);
+	if (tailWidth < room - 1) {
+		const prefix = sliceWithWidth(path, 0, room - tailWidth - 1, true).text;
+		return `${prefix}…${tail}${showCount ? count : ""}`;
+	}
+	const suffix = sliceWithWidth(path, pathWidth - room + 1, room - 1, true).text;
+	return `…${suffix}${showCount ? count : ""}`;
 }
 
 /** Composer-only projection of action records and the last displayed content. */
@@ -230,6 +262,7 @@ export class CompactThinkingPreview implements Component {
 		> &
 			Partial<Pick<InteractiveModeContext, "ui">>,
 		private readonly asyncWaitRow?: () => Loader | undefined,
+		private readonly visibleCommandCallId?: (width: number) => string | undefined,
 	) {}
 
 	clear(): void {
@@ -340,6 +373,7 @@ export class CompactThinkingPreview implements Component {
 		if (!phase || phase.endedAt !== undefined) return;
 		phase.endedAt = now;
 		phase.failed = failed;
+		phase.text = "";
 	}
 
 	observe(event: AgentSessionEvent): void {
@@ -421,7 +455,7 @@ export class CompactThinkingPreview implements Component {
 	render(width: number): readonly string[] {
 		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, width - 1));
-		const rows = this.#renderRows(width - inset, true, waitRow);
+		const rows = this.#renderRows(width, inset, true, waitRow);
 		if (!rows.length) return rows;
 		const left = padding(inset);
 		const waiting = waitRow ? truncateToWidth(waitRow.inlineText(), width) : "";
@@ -449,42 +483,50 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	/** Build the action records currently eligible for the two slots. */
-	#actions(): Action[] {
+	#actions(detailWidth: number): Action[] {
 		this.#syncLiveThinking();
 		const memory = this.#memory!;
 		const state = this.ctx.viewSession.agent.state;
 		const hideThinking = this.ctx.effectiveHideThinkingBlock;
 		const proseOnly = this.ctx.proseOnlyThinking;
 		const actions: Action[] = [];
+		let activeThinking: Action | undefined;
 		for (const [id, phase] of memory.thinking) {
 			if (hideThinking) continue;
 			const running = phase.endedAt === undefined;
 			const detail = running
-				? thinkingDetail(phase.text, proseOnly)
+				? thinkingDetail(phase.text, proseOnly, detailWidth)
 				: thinkingSeconds(Math.max(0, (phase.endedAt ?? 0) - phase.startedAt));
-			actions.push({
+			const action: Action = {
 				id,
 				category: "thinking",
 				running,
 				failed: phase.failed === true,
 				detail,
-				isPath: false,
 				startedAt: phase.startedAt,
-			});
+			};
+			if (running) {
+				if (detail || !activeThinking?.detail) activeThinking = action;
+			} else {
+				actions.push(action);
+			}
 		}
 		for (const call of memory.calls) {
 			const running = call.endedAt === undefined && state.pendingToolCalls.has(call.id);
-			const { detail, isPath } = toolDetail(call);
+			const category = categoryOf(call);
 			actions.push({
 				id: call.id,
-				category: categoryOf(call.semanticName ?? call.name),
+				category,
 				running,
 				failed: call.failed === true,
-				detail,
-				isPath,
+				detail: toolDetail(call, category),
+				file: call.file,
+				previewIntent: category === "exec" && call.command ? clean(call.detail).trim() : undefined,
 				startedAt: call.startedAt,
 			});
 		}
+		// Blank or hidden prose cannot displace an existing tool or completed action.
+		if (activeThinking && (activeThinking.detail || actions.length === 0)) actions.push(activeThinking);
 		return actions;
 	}
 
@@ -499,19 +541,24 @@ export class CompactThinkingPreview implements Component {
 			const id = slots[index];
 			return id === undefined ? undefined : byId.get(id);
 		};
-		const displayed = new Set(slots.filter((id): id is string => id !== undefined));
+		const displayed = (id: string): boolean => slots[0] === id || slots[1] === id;
 		const queuedRunner = (): Action | undefined => {
 			for (const id of memory.order) {
 				const action = byId.get(id);
-				if (action?.running && !displayed.has(id)) return action;
+				if (action?.running && !displayed(id)) return action;
 			}
 			return undefined;
 		};
 		const place = (index: 0 | 1, action: Action | undefined): void => {
 			slots[index] = action?.id;
-			if (action) displayed.add(action.id);
-			else if (slots[index] !== undefined) displayed.delete(slots[index]!);
 		};
+		for (const index of [0, 1] as const) if (!held(index)) place(index, undefined);
+		const thinking = actions.find(action => action.category === "thinking" && action.running && action.detail);
+		if (thinking && !displayed(thinking.id)) {
+			// Prefer a vacancy; if two tools already occupy the dock, keep the bottom runner.
+			const index = !held(1)?.running ? 1 : 0;
+			place(index, thinking);
+		}
 		// A running action keeps its slot; vacancies fill bottom-first so the current runner stays below.
 		for (const index of [1, 0] as const) {
 			const current = held(index);
@@ -524,46 +571,48 @@ export class CompactThinkingPreview implements Component {
 			// Keep settled slots stable unless newer actions completed between paints.
 			const ended = memory.order.map(id => byId.get(id)!).filter(action => action && !action.running);
 			const latest = ended.slice(-2);
-			if (latest.some(action => !displayed.has(action.id))) {
+			if (latest.some(action => !displayed(action.id))) {
 				place(0, latest.length === 2 ? latest[0] : undefined);
 				place(1, latest.at(-1));
 			}
 		} else if (runningCount === 1) {
-			// A lone serial runner sits on the bottom row; the latest ended action always takes the top.
-			const runner = actions.find(action => action.running)!;
-			if (held(0)?.running) place(0, undefined);
-			if (!held(1)?.running) place(1, runner);
-			const ended = memory.order.map(id => byId.get(id)!).filter(action => action && !action.running);
-			const latest = ended.at(-1);
-			if (latest && held(0)?.id !== latest.id) place(0, latest);
+			// Keep the surviving runner in its slot and use the other for the latest completion.
+			const settledIndex = held(0)?.running ? 1 : 0;
+			const latest = memory.order.findLast(id => byId.get(id)?.running === false);
+			place(settledIndex, latest === undefined ? undefined : byId.get(latest));
 		}
 		return [held(0), held(1)];
 	}
 
-	#renderRows(width: number, paint: boolean, waitRow: Loader | undefined): readonly string[] {
+	#renderRows(width: number, inset: number, paint: boolean, waitRow: Loader | undefined): readonly string[] {
 		this.#rows = [];
 		if (!displayPreferences.compactToolActivity) {
 			this.clear();
 			return [];
 		}
 		this.#syncSession();
-		if (width < 1) return EMPTY_ROWS;
+		const contentWidth = width - inset;
+		if (contentWidth < 1) return EMPTY_ROWS;
 		const memory = this.#memory!;
-		const slots = this.#select(this.#actions());
+		const slots = this.#select(this.#actions(contentWidth - ACTION_WIDTH - ACTION_GAP.length));
 		const visible = slots.filter((action): action is Action => action !== undefined);
 		if (visible.length > 0) memory.snapshot = visible.map(action => ({ ...action }));
 		// Waiting belongs to the session, not to a completed tool. Reserve the
 		// lower slot without adding the wait to action history or the snapshot.
 		if (waitRow) {
-			slots[0] = slots[1] ?? slots[0];
+			slots[0] =
+				slots.find(action => action?.category === "thinking" && action.running && action.detail) ??
+				(slots[1]?.running ? slots[1] : slots[0]?.running ? slots[0] : (slots[1] ?? slots[0]));
 			slots[1] = undefined;
 		}
+		const previewId = slots.some(action => action?.previewIntent) ? this.visibleCommandCallId?.(width) : undefined;
 		const animate = shimmerEnabled();
 		const rows = slots.map(action => {
+			if (action?.previewIntent && action.id === previewId) action = { ...action, detail: action.previewIntent };
 			this.#rows.push(action);
-			if (!action) return "";
-			const row = this.#buildRow(action, width);
-			return this.#paintAnsi(row, paint && animate);
+			if (!paint || !action) return "";
+			const row = this.#buildRow(action, contentWidth);
+			return this.#paintAnsi(row, animate);
 		});
 		const needsTick =
 			!isNativeRendering() && !!this.ctx.ui && animate && (waitRow || visible.some(action => action.running));
@@ -581,8 +630,8 @@ export class CompactThinkingPreview implements Component {
 		const detailWidth = width - actionWidth - ACTION_GAP.length;
 		let detail = "";
 		if (detailWidth > 0 && action.detail) {
-			detail = action.isPath
-				? truncateMiddleToWidth(action.detail, detailWidth)
+			detail = action.file
+				? fileDetail(action.detail, action.file, detailWidth)
 				: truncateToWidth(action.detail, detailWidth);
 		}
 		return { action, word, detail, gap: detail ? ACTION_GAP : "" };
@@ -603,7 +652,7 @@ export class CompactThinkingPreview implements Component {
 	describe(cx: DescribeContext): NativeNode {
 		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, cx.cols - 1));
-		this.#renderRows(cx.cols - inset, false, waitRow);
+		this.#renderRows(cx.cols, inset, false, waitRow);
 		const left = padding(inset);
 		const animate = shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer");
 		const children = this.#rows.map(action => {

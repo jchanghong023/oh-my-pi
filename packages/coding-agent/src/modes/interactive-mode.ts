@@ -1378,8 +1378,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	progressHudContainer: Container;
 	statusContainer: Container;
 	/** Compact activity dock; its per-session display memory never enters the transcript. */
-	readonly compactThinkingPreview = new CompactThinkingPreview(this, () =>
-		this.#eventController.showingAsyncWait ? this.loadingAnimation : undefined,
+	readonly compactThinkingPreview = new CompactThinkingPreview(
+		this,
+		() => (this.#eventController.showingAsyncWait ? this.loadingAnimation : undefined),
+		width => this.compactToolOutputPreview.visibleCommandCallId(width),
 	);
 	/** Read-only Output sits above the activity dock; the input and its trailing chrome win space. */
 	readonly compactToolOutputPreview: CompactToolOutputPreview = new CompactToolOutputPreview(this, () =>

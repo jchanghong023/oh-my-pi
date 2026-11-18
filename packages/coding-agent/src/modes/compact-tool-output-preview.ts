@@ -1,54 +1,66 @@
 import type { Component } from "@oh-my-pi/pi-tui";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import type { TspSpan } from "@oh-my-pi/pi-wire";
-import { span } from "@oh-my-pi/pi-tui/native/describe";
+import { col, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { plainText, rowsText } from "@oh-my-pi/pi-tui/native/spans";
-import { describeOutputBlock, outputBlockContentWidth, renderOutputBlock } from "@oh-my-pi/pi-tui/render/output-block";
-import { replaceTabs, truncateMiddleToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
+import { plainText, spansLine } from "@oh-my-pi/pi-tui/native/spans";
+import { backgroundChrome } from "@oh-my-pi/pi-tui/native/tone";
+import { truncateMiddleToWidth, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { State } from "@oh-my-pi/pi-tui/render/types";
+import { getStateBgColor, padToWidth } from "@oh-my-pi/pi-tui/render/utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { ThemeColor } from "@oh-my-pi/pi-tui/theme/theme";
 import { isGroupedHeader, isMatchRow } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
-import { toolOutputText } from "@oh-my-pi/pi-tui/tools/output-preview";
+import { isToolOutputRow, toolOutputSource, toolOutputText } from "@oh-my-pi/pi-tui/tools/output-preview";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
-import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
+import type { TspSpan } from "@oh-my-pi/pi-wire";
+import { isRecord } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { LiveToolOutputSnapshot } from "../session/agent-session-handle";
 import { compactToolPreviewInfo } from "./compact-thinking-preview";
 import type { InteractiveModeContext } from "./types";
 
 function singleLine(value: string): string {
-	return replaceTabs(sanitizeText(plainText(value))).replace(/[\r\n]+/g, " ");
+	return plainText(value)
+		.replace(/[\r\n]+/g, " ")
+		.trim();
 }
 
-function compactOutputText(output: string): string {
-	const lines = output.split("\n").filter(line => /[\p{L}\p{N}]/u.test(line));
-	if (lines.length === 0) return "";
-	let indent = Number.POSITIVE_INFINITY;
-	for (const line of lines) indent = Math.min(indent, line.length - line.trimStart().length);
-	return lines.map(line => line.slice(indent)).join("\n");
+// Match explicit diagnostics in actual failed output, never infer a cause from tool metadata.
+const DIAGNOSTIC_ROW =
+	/(?:^\s*|:\s*|\]\s*)(?:fatal(?: error)?|[\w.]*error|exception|panic|failed|reason|错误|失败|原因)\s*[:：]|^\s*\[(?:error|fatal)\]|\b(?:failed to|command not found|permission denied|no such file or directory|timed out)\b/iu;
+
+function wrapOutputRows(output: string, width: number): string[] {
+	const rows = wrapTextWithAnsi(output, width);
+	// The wrapper can emit an intact wide grapheme in a one-column viewport.
+	return (width < 3 ? rows.map(row => truncateToWidth(row, width, "")) : rows).filter(isToolOutputRow);
 }
 
-/** Inner tool identity and details behind an existing device dispatch; direct calls pass through. */
-function effectiveTool(
+function selectOutputRows(
+	output: string,
+	width: number,
+	budget: number,
 	toolName: string,
-	result: ToolRenderResult<unknown> | undefined,
-): { name: string; details: Record<string, unknown> | undefined } {
-	const details = isRecord(result?.details) ? result.details : undefined;
-	const dispatch = isRecord(details?.xdev) ? details.xdev : undefined;
-	if (toolName === "write" && typeof dispatch?.tool === "string" && dispatch.mode !== "help")
-		return { name: dispatch.tool, details: isRecord(dispatch.inner) ? dispatch.inner : undefined };
-	return { name: toolName, details };
-}
-
-/**
- * Terminal selection for structured native searches: hit rows first (original order), then the
- * remaining rows fill the budget. No hit rows falls back to the tail window; other tools tail.
- */
-function selectOutputRows(rows: readonly string[], budget: number, toolName: string, terminal: boolean): string[] {
-	if (terminal && (toolName === "grep" || toolName === "glob")) {
+	state: PreviewState,
+): string[] {
+	if (state === "failed") {
+		const priority: string[] = [];
+		const tail: string[] = [];
+		const lines = output.split("\n");
+		// Classify before wrapping so a narrow display cannot split the diagnostic marker.
+		for (let index = lines.length - 1; index >= 0; index--) {
+			const line = lines[index]!;
+			if (DIAGNOSTIC_ROW.test(line)) {
+				priority.push(...wrapOutputRows(line, width).slice(0, budget - priority.length));
+				if (priority.length === budget) return priority;
+			} else if (tail.length < budget) {
+				tail.unshift(...wrapOutputRows(line, width).slice(tail.length - budget));
+			}
+		}
+		return [...priority, ...tail.slice(priority.length - budget)];
+	}
+	const rows = wrapOutputRows(output, width);
+	if (state === "completed" && (toolName === "grep" || toolName === "glob")) {
 		const isHit =
 			toolName === "grep"
 				? (row: string) => isMatchRow(row)
@@ -83,6 +95,16 @@ const PREVIEW_BLOCK_STATE: Record<PreviewState, State> = {
 	completed: "success",
 	failed: "error",
 	cancelled: "pending",
+};
+
+type PreviewHeader = {
+	height: number;
+	state: PreviewState;
+	spans: TspSpan[];
+	callId: string;
+	commandVisible: boolean;
+	toolName: string;
+	output: string;
 };
 
 /** A text-only projection of session execution facts, independent of transcript tool cards. */
@@ -133,10 +155,10 @@ export class CompactToolOutputPreview implements Component {
 			if (!call.result || (selected && call.dispatchOrder <= selected.call.dispatchOrder)) continue;
 			let output = this.#outputText.get(call.result);
 			if (output === undefined) {
-				output = compactOutputText(toolOutputText(call.toolName, call.result, call.args));
+				output = toolOutputText(call.toolName, call.result, call.args);
 				this.#outputText.set(call.result, output);
 			}
-			if (output.trim()) selected = { call, output };
+			if (output) selected = { call, output };
 		}
 		const terminalAt = selected?.call.terminalAt;
 		const turnRunning = this.ctx.statusLine.getTurnElapsedMs() !== null;
@@ -170,16 +192,20 @@ export class CompactToolOutputPreview implements Component {
 		return deadline !== undefined && deadline <= Date.now() ? undefined : selected;
 	}
 
-	/** Shared ANSI/native projection of the selected source within the row budget. */
-	#projection(width: number): { state: PreviewState; head: string; headSpans: TspSpan[]; body: string[] } | undefined {
+	/** Header-only query: dock paints never wrap the Output body. */
+	visibleCommandCallId(width: number): string | undefined {
+		const header = this.#header(width);
+		return header?.commandVisible ? header.callId : undefined;
+	}
+
+	#header(width: number): PreviewHeader | undefined {
 		const selected = this.#source();
 		if (!displayPreferences.compactToolActivity || !selected || width < 1) return undefined;
 		const height = Math.max(0, Math.min(6, Math.floor(this.availableRows())));
 		if (height === 0) return undefined;
 		const { call, output } = selected;
 		const info = compactToolPreviewInfo(call.toolName, call.args, call.intent, call.result);
-		const effective = effectiveTool(call.toolName, call.result);
-		const details = effective.details;
+		const { name: toolName, details } = toolOutputSource(call.toolName, call.result);
 		const job = isRecord(details?.async) ? details.async : undefined;
 		const state: PreviewState =
 			call.terminalAt === undefined
@@ -189,64 +215,70 @@ export class CompactToolOutputPreview implements Component {
 					: call.result?.isError || job?.state === "failed"
 						? "failed"
 						: "completed";
-		const identity = [
-			info.name,
-			typeof job?.name === "string" ? job.name : undefined,
-			typeof job?.jobId === "string" ? job.jobId : undefined,
-		]
+		const name = singleLine(info.name);
+		const nameWidth = visibleWidth(name);
+		const jobIdentity = [job?.name, job?.jobId]
+			.map(value => (typeof value === "string" ? singleLine(value) : ""))
 			.filter(Boolean)
 			.join(" · ");
-		const target = singleLine(info.command || info.detail);
-		// The frame's top bar embeds the header: ╭─── + " label " + ───╮.
-		const labelRoom = Math.max(0, width - 10);
 		const word = PREVIEW_STATE_WORD[state];
-		const identityRoom = Math.max(0, labelRoom - visibleWidth(word) - 3);
-		const identityText = truncateMiddleToWidth(identity, identityRoom);
-		const targetRoom = target ? labelRoom - visibleWidth(word) - visibleWidth(identityText) - 6 : 0;
-		const targetText = target && targetRoom >= 1 ? truncateMiddleToWidth(target, targetRoom) : "";
-		const headParts = [word, identityText, targetText].filter(Boolean);
-		const head = headParts.join(" · ");
-		const headSpans = [
-			span(word, PREVIEW_STATE_COLOR[state]),
-			...(identityText ? [span(" · "), span(identityText, "muted")] : []),
-			...(targetText ? [span(" · "), span(targetText, "dim")] : []),
-		];
-		// Two border rows leave the rest for output; the frame owns left/right padding.
-		const bodyBudget = Math.max(0, height - 2);
-		const contentWidth = outputBlockContentWidth(width);
-		const body =
-			bodyBudget > 0
-				? selectOutputRows(
-						wrapTextWithAnsi(output, contentWidth).filter(row => /[\p{L}\p{N}]/u.test(row)),
-						bodyBudget,
-						effective.name,
-						call.terminalAt !== undefined,
-					)
-				: [];
-		return { state, head, headSpans, body };
+		const wordWidth = visibleWidth(word);
+		const separator = " · ";
+		const separatorWidth = visibleWidth(separator);
+		const gap = width >= wordWidth + separatorWidth + nameWidth ? separator : " ";
+		const identityRoom = width - wordWidth - visibleWidth(gap);
+		const jobRoom = identityRoom - nameWidth - separatorWidth;
+		const identityText =
+			identityRoom < nameWidth
+				? truncateToWidth(name, identityRoom, "")
+				: jobIdentity && jobRoom > 1
+					? `${name}${separator}${truncateMiddleToWidth(jobIdentity, jobRoom)}`
+					: name;
+		// At widths where status and source cannot both be legible, retain the source.
+		const spans = identityText
+			? [span(word, `${PREVIEW_STATE_COLOR[state]} strong`), span(gap), span(identityText, "toolTitle strong")]
+			: [span(truncateToWidth(name, width, ""), "toolTitle strong")];
+		const command = info.command ? singleLine(info.command) : "";
+		const target = command || singleLine(info.detail);
+		const targetRoom = identityText ? identityRoom - visibleWidth(identityText) - separatorWidth : 0;
+		const targetText = target && targetRoom > 0 ? truncateMiddleToWidth(target, targetRoom) : "";
+		const targetVisible = targetText !== "" && (targetText === target || targetText.replace("…", "").trim() !== "");
+		if (targetVisible) spans.push(span(separator), span(targetText, "toolOutput"));
+		return {
+			height,
+			state,
+			spans,
+			callId: call.toolCallId,
+			commandVisible: !!command && targetVisible,
+			toolName,
+			output,
+		};
+	}
+
+	#body(header: PreviewHeader, width: number): readonly string[] {
+		return header.height > 1
+			? selectOutputRows(header.output, width, header.height - 1, header.toolName, header.state)
+			: [];
 	}
 
 	render(width: number): readonly string[] {
-		const projection = this.#projection(width);
-		if (!projection) return [];
-		return renderOutputBlock(
-			{
-				header: projection.head,
-				state: PREVIEW_BLOCK_STATE[projection.state],
-				sections: [{ lines: projection.body }],
-				width,
-			},
-			theme,
-		);
+		const header = this.#header(width);
+		if (!header) return [];
+		const bg = getStateBgColor(PREVIEW_BLOCK_STATE[header.state]);
+		const paint = (row: string) => padToWidth(row, width, value => theme.bgFill(bg, value));
+		return [
+			paint(spansLine(header.spans)),
+			...this.#body(header, width).map(row => paint(theme.fg("toolOutput", row))),
+		];
 	}
 
 	describe(cx: DescribeContext): NativeNode {
-		const projection = this.#projection(cx.cols);
-		if (!projection) return { k: "rows", p: { cols: cx.cols, lines: [] } };
-		return describeOutputBlock({
-			head: projection.headSpans,
-			state: PREVIEW_BLOCK_STATE[projection.state],
-			sections: [{ body: [rowsText(projection.body)] }],
-		});
+		const header = this.#header(cx.cols);
+		if (!header) return { k: "rows", p: { cols: cx.cols, lines: [] } };
+		const tone = backgroundChrome(getStateBgColor(PREVIEW_BLOCK_STATE[header.state])).tone;
+		return col([
+			text(header.spans, { wrap: "none", tone }),
+			...this.#body(header, cx.cols).map(row => text([span(row, "toolOutput")], { wrap: "none", tone })),
+		]);
 	}
 }

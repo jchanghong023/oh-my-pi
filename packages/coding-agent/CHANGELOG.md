@@ -15,6 +15,7 @@
 
 ### Changed
 
+- Compact mode keeps file targets and live reasoning visible alongside ongoing work, and shows up to five output lines without losing the last useful preview to empty or separator-only updates.
 - Updated to upstream v18.22.2 while retaining intranet providers, fork commands and TUI presentation.
 - Selective commit through `/commit` and the eval `commit` namespace is now opt-in via `commit.enabled`; unfinished merges use plain `git commit`.
 - Added `providers.thinkingProbe` (default off) so unknown-model thinking probes never add requests to intranet, company or custom providers.
