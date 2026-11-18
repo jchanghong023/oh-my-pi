@@ -2104,7 +2104,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const read = joinReadList(list, part => part.result);
 		const hints = new Map<ShapePart<ReadToolDetails>, string>();
 		for (const part of read.parts) {
-			const notice = repeatReadNotice(this.session, part.request.path ?? "", part.result);
+			const notice = repeatReadNotice(this.session, part.request.path ?? "", prependLogErrorLines(part.result));
 			// A raw part's notice goes to notes, not its bytes (`appendReadNotice`); a list keeps no part's notes.
 			if (notice && !part.request.raw) hints.set(part, notice);
 		}

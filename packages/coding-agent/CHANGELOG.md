@@ -73,6 +73,8 @@
 - Standard input and `@file` content remain prompt text rather than becoming local commands.
 - Ordinary requests cannot use another execution's temporary model, and strict task cleanup can retry a failed isolated release.
 - Concurrent cleanup of one browser tab no longer disconnects another tab sharing its browser.
+- Multi-path reads no longer report identical results when the displayed log errors have changed.
+- Long-running sessions release subagent ancestry once no retained background jobs need it.
 - Linux and Windows installers verify downloaded binaries against the authenticated Release digest before running them.
 - Large-repository reviews now submit complete results per workpool item, detect Python 3.11+ on Windows, store reports in worktree-local Git metadata, and accept `--base REF` without guessing the upstream branch.
 - Compact mode now shows background-work waits in the two-line activity area instead of above command output.

@@ -883,8 +883,9 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		for (const job of this.#filterJobs(this.#jobs.values(), filter)) {
 			if (job.status !== "completed" && job.status !== "failed") continue;
 			this.acknowledgeDeliveries([job.id]);
-			if (this.#evictJob(job.id)) evicted += 1;
+			if (this.#evictJob(job.id, false)) evicted += 1;
 		}
+		if (evicted > 0) this.#pruneAgentParents();
 		return evicted;
 	}
 
@@ -1223,7 +1224,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		}
 	}
 
-	#evictJob(jobId: string): boolean {
+	#evictJob(jobId: string, pruneLineage = true): boolean {
 		clearTimeout(this.#evictionTimers.get(jobId));
 		this.#evictionTimers.delete(jobId);
 		this.#suppressedDeliveries.delete(jobId);
@@ -1233,7 +1234,42 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		const job = this.#jobs.get(jobId);
 		if (job) this.#runRetainedArtifactsCleanup(job);
 		this.widgets?.forget(jobId);
-		return this.#jobs.delete(jobId);
+		const deleted = this.#jobs.delete(jobId);
+		if (
+			deleted &&
+			pruneLineage &&
+			job &&
+			((job.agentId !== undefined && this.#agentParents.has(job.agentId)) ||
+				(job.ownerId !== undefined && this.#agentParents.has(job.ownerId)))
+		) {
+			this.#pruneAgentParents();
+		}
+		return deleted;
+	}
+
+	/** Keep the ancestry of remaining jobs even after their parent task rows are evicted. */
+	#pruneAgentParents(): void {
+		if (this.#agentParents.size === 0) return;
+		if (this.#jobs.size === 0) {
+			this.#agentParents.clear();
+			return;
+		}
+		const retained = new Set<string>();
+		const keepAncestors = (agentId: string | undefined) => {
+			while (agentId !== undefined && !retained.has(agentId)) {
+				const parentId = this.#agentParents.get(agentId);
+				if (parentId === undefined) break;
+				retained.add(agentId);
+				agentId = parentId;
+			}
+		};
+		for (const job of this.#jobs.values()) {
+			keepAncestors(job.ownerId);
+			keepAncestors(job.agentId);
+		}
+		for (const agentId of this.#agentParents.keys()) {
+			if (!retained.has(agentId)) this.#agentParents.delete(agentId);
+		}
 	}
 
 	/**
