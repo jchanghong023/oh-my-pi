@@ -122,24 +122,34 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 	const cliPath = path.join(outDir, "cli.js");
 	const start = Bun.nanoseconds();
 	const repoRoot = path.resolve(packageDir, "../..");
-	const webGuiResources = await prepareWebGuiResources(repoRoot);
-	await writeWebGuiResources(path.join(packageDir, "src/webgui"), webGuiResources);
-	const workbenchAssets = await buildAIReqWorkbenchAssets();
-	await writeAIReqWorkbenchAssets(workbenchAssets);
-	const openWikiResources = await buildOpenWikiResources();
-	await writeOpenWikiResources(openWikiResources);
-	const workbenchText = await Bun.file(path.join(packageDir, "src/aireq-workbench/assets.generated.txt")).text();
-	const openWikiText = await Bun.file(path.join(packageDir, "src/openwiki/openwiki-resources.generated.txt")).text();
-	await cleanBundleOutputs(outDir);
-	// The npm bundle ships no stats dashboard sources, so embed the dashboard
-	// archive the same way compiled binaries do (scripts/build-binary.ts). Reset
-	// afterwards to keep the checked-in placeholder empty.
-	await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
-	// One payload for both consumers: inlined into dist/cli.js via `--define` for
-	// the bundled CLI entrypoint, and written to dist/docs-index.generated.txt so
-	// SDK consumers importing `@oh-my-pi/pi-coding-agent/*` (TypeScript source, no
-	// build-time embed) can still resolve omp:// docs (see src/internal-urls/docs-index.ts).
+	const webGuiDir = path.join(packageDir, "src/webgui");
+	// Register each reset before its write so partial failures are covered.
+	const resets: Array<() => Promise<void>> = [];
+	const failures: unknown[] = [];
 	try {
+		const webGuiResources = await prepareWebGuiResources(repoRoot);
+		resets.push(() => resetWebGuiResources(webGuiDir));
+		await writeWebGuiResources(webGuiDir, webGuiResources);
+		const workbenchAssets = await buildAIReqWorkbenchAssets();
+		resets.push(resetAIReqWorkbenchAssets);
+		await writeAIReqWorkbenchAssets(workbenchAssets);
+		const openWikiResources = await buildOpenWikiResources();
+		resets.push(resetOpenWikiResources);
+		await writeOpenWikiResources(openWikiResources);
+		const workbenchText = await Bun.file(path.join(packageDir, "src/aireq-workbench/assets.generated.txt")).text();
+		const openWikiText = await Bun.file(
+			path.join(packageDir, "src/openwiki/openwiki-resources.generated.txt"),
+		).text();
+		await cleanBundleOutputs(outDir);
+		// The npm bundle ships no stats dashboard sources, so embed the dashboard
+		// archive the same way compiled binaries do (scripts/build-binary.ts). Reset
+		// afterwards to keep the checked-in placeholder empty.
+		resets.push(() => runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]));
+		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
+		// One payload for both consumers: inlined into dist/cli.js via `--define` for
+		// the bundled CLI entrypoint, and written to dist/docs-index.generated.txt so
+		// SDK consumers importing `@oh-my-pi/pi-coding-agent/*` (TypeScript source, no
+		// build-time embed) can still resolve omp:// docs (see src/internal-urls/docs-index.ts).
 		const vendorBundle = await withCompilerActivity(() =>
 			Bun.build({
 				entrypoints: [path.join(packageDir, "scripts/openwiki-vendor-entry.ts")],
@@ -206,12 +216,15 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		await Bun.write(path.join(outDir, "aireq-workbench-assets.txt"), workbenchText);
 		await Bun.write(path.join(outDir, "webgui-resources.generated.txt"), webGuiResources.text);
 		await Bun.write(path.join(outDir, "openwiki-resources.generated.txt"), openWikiText);
+	} catch (error) {
+		failures.push(error);
 	} finally {
-		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
-		await resetAIReqWorkbenchAssets();
-		await resetOpenWikiResources();
-		await resetWebGuiResources(path.join(packageDir, "src/webgui"));
+		for (const result of await Promise.allSettled(resets.map(reset => reset()))) {
+			if (result.status === "rejected") failures.push(result.reason);
+		}
 	}
+	if (failures.length === 1) throw failures[0];
+	if (failures.length > 1) throw new AggregateError(failures, "CLI bundle or generated resource cleanup failed");
 	const stat = await fs.stat(cliPath);
 	const elapsedMs = (Bun.nanoseconds() - start) / 1_000_000;
 	process.stdout.write(

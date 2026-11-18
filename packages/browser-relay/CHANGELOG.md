@@ -5,6 +5,7 @@
 ### Fixed
 
 - Windows extension builds now archive only generated files and complete embedded CLI resource generation.
+- The extension ZIP now reports the version of the fork binary published in the same release.
 
 ## [18.22.1] - 2026-11-17
 

@@ -91,7 +91,7 @@ import { listSessionRecaps } from "../../session/session-index";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
-import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
+import { buildSkillCommandPrompt, isKnownSkillCommand } from "../skill-command";
 import {
 	createAssistantMessageComponent,
 	getAssistantMessageLinkTargets,
@@ -248,13 +248,14 @@ export class UiHelpers {
 	/** `initialChatRendered` to restore when the latest replay ends without committing. */
 	#chatRenderedBeforeReplay = false;
 	/** Queues belong to the session that accepted them, even when a queued command changes the view. */
-	readonly #parkedCompactionQueues = new WeakMap<AgentSession, CompactionQueuedMessage[]>();
+	readonly #parkedCompactionQueues = new Map<string, CompactionQueuedMessage[]>();
 
 	async restoreCompactionQueue(session: AgentSession): Promise<void> {
 		if (this.ctx.session !== session) return;
-		const parked = this.#parkedCompactionQueues.get(session);
+		const sessionId = session.sessionManager.getSessionId();
+		const parked = this.#parkedCompactionQueues.get(sessionId);
 		if (!parked?.length) return;
-		this.#parkedCompactionQueues.delete(session);
+		this.#parkedCompactionQueues.delete(sessionId);
 		this.ctx.compactionQueuedMessages = [...parked, ...this.ctx.compactionQueuedMessages];
 		this.ctx.updatePendingMessagesDisplay();
 		if (!session.isCompacting) await this.flushCompactionQueue();
@@ -343,7 +344,7 @@ export class UiHelpers {
 				if (message.display) {
 					if (message.customType === "async-result") {
 						const renderer = this.ctx.viewSession.extensionRunner?.getMessageRenderer(message.customType);
-						const inner = buildAsyncResultComponent(message, renderer);
+						const inner = buildAsyncResultComponent(message, renderer, this.ctx.chatContainer.children);
 						if (inner.children.length === 0) break;
 						const component = new PresentedBlock(inner, messageBlock(message));
 						component.setExpanded(this.ctx.toolOutputExpanded);
@@ -1383,8 +1384,13 @@ export class UiHelpers {
 	async #deliverQueuedMessage(
 		message: CompactionQueuedMessage,
 		onQueued: (queued: readonly AgentMessage[]) => void,
+		isOwnerVisible: () => boolean,
 	): Promise<boolean> {
 		const owner = this.ctx.session;
+		const requireOwner = () => {
+			if (!isOwnerVisible()) throw new Error("The queued message's session changed before delivery");
+		};
+		requireOwner();
 		let builtin: string | boolean;
 		try {
 			builtin = await executeBuiltinSlashCommand(message.text, {
@@ -1400,54 +1406,52 @@ export class UiHelpers {
 						: undefined,
 			});
 		} catch (error) {
-			if (this.ctx.session !== owner || !message.draftDetached || parseSlashCommand(message.text)?.name !== "team")
+			if (!isOwnerVisible() || !message.draftDetached || parseSlashCommand(message.text)?.name !== "team")
 				throw error;
 			restoreDetachedDraft(this.ctx.editor, message.text, message.images, message.imageLinks);
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 			return true;
 		}
 		if (builtin === true) {
-			if (this.ctx.session === owner) this.#parkLoopOnLocalConsume(message.text, false);
+			if (isOwnerVisible()) this.#parkLoopOnLocalConsume(message.text, false);
 			return true;
 		}
-		if (this.ctx.session !== owner) {
-			throw new Error("The queued message's session changed before delivery");
-		}
+		requireOwner();
 		if (typeof builtin === "string") {
 			const forwarded = await owner.prompt(builtin, {
 				streamingBehavior: message.mode,
 				images: message.images,
 				onPromptQueued: onQueued,
 			});
-			if (this.ctx.session === owner) this.#parkLoopOnLocalConsume(message.text, forwarded);
+			if (isOwnerVisible()) this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return !forwarded;
 		}
 		if (isKnownSkillCommand(this.ctx, message.text)) {
-			// Skill loading can await a session change; keep dispatch on the accepting session.
-			const skillHost = Object.create(this.ctx) as InteractiveModeContext;
-			Object.defineProperty(skillHost, "session", { value: owner });
-			if (
-				await invokeSkillCommandFromText(skillHost, message.text, message.mode, {
-					propagateErrors: true,
+			const built = await buildSkillCommandPrompt(this.ctx, message.text, message.mode, message.images);
+			requireOwner();
+			if (built) {
+				await owner.promptCustomMessage(built.message, {
+					...built.options,
 					queueOnly: true,
-					images: message.images,
 					onPromptQueued: onQueued,
-				})
-			)
+				});
 				return false;
+			}
 		}
 		if (this.ctx.isKnownSlashCommand(message.text)) {
 			// No `streamingBehavior`: this prompt never queues (a busy session rejects it).
 			const forwarded = await owner.prompt(message.text);
-			if (this.ctx.session === owner) this.#parkLoopOnLocalConsume(message.text, forwarded);
+			if (isOwnerVisible()) this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return !forwarded;
 		}
 		await this.ctx.withLocalSubmission(
 			message.text,
-			() =>
-				message.mode === "followUp"
+			() => {
+				requireOwner();
+				return message.mode === "followUp"
 					? owner.followUp(message.text, message.images, { onPromptQueued: onQueued })
-					: owner.steer(message.text, message.images, { onPromptQueued: onQueued }),
+					: owner.steer(message.text, message.images, { onPromptQueued: onQueued });
+			},
 			{ imageCount: message.images?.length ?? 0 },
 		);
 		return false;
@@ -1489,12 +1493,15 @@ export class UiHelpers {
 		}
 
 		const owner = this.ctx.session;
-		const isOwnerVisible = () => this.ctx.session === owner;
+		const ownerId = owner.sessionManager.getSessionId();
+		const ownsConversation = () => owner.sessionManager.getSessionId() === ownerId;
+		const isOwnerVisible = () => this.ctx.session === owner && ownsConversation();
 		const ownerQueue = () =>
-			isOwnerVisible() ? this.ctx.compactionQueuedMessages : (this.#parkedCompactionQueues.get(owner) ?? []);
+			isOwnerVisible() ? this.ctx.compactionQueuedMessages : (this.#parkedCompactionQueues.get(ownerId) ?? []);
 		const setOwnerQueue = (messages: CompactionQueuedMessage[]) => {
 			if (isOwnerVisible()) this.ctx.compactionQueuedMessages = messages;
-			else this.#parkedCompactionQueues.set(owner, messages);
+			else if (messages.length > 0) this.#parkedCompactionQueues.set(ownerId, messages);
+			else this.#parkedCompactionQueues.delete(ownerId);
 		};
 		const parkRemaining = (messages: CompactionQueuedMessage[]) => {
 			if (messages.length) setOwnerQueue([...ownerQueue(), ...messages]);
@@ -1536,7 +1543,9 @@ export class UiHelpers {
 			if (restored) return;
 			restored = true;
 			firstLeftOut = firstAdmitted !== undefined && !firstFailed;
-			owner.dropQueuedMessages(firstLeftOut ? deliveredByFlush : [...deliveredByFlush, ...firstQueued]);
+			if (ownsConversation()) {
+				owner.dropQueuedMessages(firstLeftOut ? deliveredByFlush : [...deliveredByFlush, ...firstQueued]);
+			}
 			const batch = queuedMessages.filter(
 				message => !completedCommands.has(message) && (!firstLeftOut || message !== firstPrompt),
 			);
@@ -1548,7 +1557,7 @@ export class UiHelpers {
 			if (options?.willRetry) {
 				for (let i = 0; i < queuedMessages.length; i++) {
 					const message = queuedMessages[i];
-					const consumed = await this.#deliverQueuedMessage(message, onDelivered);
+					const consumed = await this.#deliverQueuedMessage(message, onDelivered, isOwnerVisible);
 					if (!isOwnerVisible()) {
 						if (consumed) completedCommands.add(message);
 						parkRemaining(queuedMessages.slice(i + 1));
@@ -1569,7 +1578,7 @@ export class UiHelpers {
 			if (firstPromptIndex === -1) {
 				for (let i = 0; i < queuedMessages.length; i++) {
 					const message = queuedMessages[i];
-					const consumed = await this.#deliverQueuedMessage(message, onDelivered);
+					const consumed = await this.#deliverQueuedMessage(message, onDelivered, isOwnerVisible);
 					if (!isOwnerVisible()) {
 						if (consumed) completedCommands.add(message);
 						parkRemaining(queuedMessages.slice(i + 1));
@@ -1586,7 +1595,7 @@ export class UiHelpers {
 
 			for (let i = 0; i < preCommands.length; i++) {
 				const message = preCommands[i];
-				const consumed = await this.#deliverQueuedMessage(message, onDelivered);
+				const consumed = await this.#deliverQueuedMessage(message, onDelivered, isOwnerVisible);
 				if (!isOwnerVisible()) {
 					if (consumed) completedCommands.add(message);
 					parkRemaining(queuedMessages.slice(i + 1));
@@ -1604,7 +1613,7 @@ export class UiHelpers {
 				// already started leaves the batch instead.
 				if (!restored || firstLeftOut) return;
 				if (firstAdmitted.length > 0) {
-					owner.dropQueuedMessages(firstAdmitted);
+					if (ownsConversation()) owner.dropQueuedMessages(firstAdmitted);
 				} else {
 					firstLeftOut = true;
 					setOwnerQueue(ownerQueue().filter(m => m !== first));
@@ -1646,6 +1655,10 @@ export class UiHelpers {
 			// are rebuilt as user-attributed custom messages so queued `/skill:` text
 			// is not sent as a literal prompt after compaction.
 			let promptPromise: Promise<unknown>;
+			if (!isOwnerVisible()) {
+				parkRemaining(queuedMessages.slice(firstPromptIndex));
+				return;
+			}
 			if (isKnownSkillCommand(this.ctx, first.text)) {
 				const built = await buildSkillCommandPrompt(this.ctx, first.text, first.mode, first.images);
 				if (!isOwnerVisible()) {
@@ -1679,7 +1692,7 @@ export class UiHelpers {
 			}
 			// This dispatch leaves the original input waiter unresolved. Capture
 			// the loop generation now, before draining any more queued messages.
-			if (this.ctx.loopModeEnabled) this.ctx.armLoopAutoSubmit(promptPromise);
+			if (isOwnerVisible() && this.ctx.loopModeEnabled) this.ctx.armLoopAutoSubmit(promptPromise);
 
 			for (let i = 0; i < rest.length; i++) {
 				if (!isOwnerVisible()) {
@@ -1687,7 +1700,7 @@ export class UiHelpers {
 					return;
 				}
 				const message = rest[i];
-				const consumed = await this.#deliverQueuedMessage(message, onDelivered);
+				const consumed = await this.#deliverQueuedMessage(message, onDelivered, isOwnerVisible);
 				if (!isOwnerVisible()) {
 					if (consumed) completedCommands.add(message);
 					parkRemaining(rest.slice(i + 1));

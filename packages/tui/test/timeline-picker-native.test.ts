@@ -597,11 +597,12 @@ describe("session tree picker", () => {
 					null,
 					assistant([{ type: "toolCall", id: "c0", name: "bash", arguments: { command: value } }]),
 				),
-				children: [],
-			},
-			{
-				entry: entry("tool0", null, { ...toolResult("c0", ""), toolName: "bash" } as AgentMessage),
-				children: [],
+				children: [
+					{
+						entry: entry("tool0", "calls", { ...toolResult("c0", ""), toolName: "bash" } as AgentMessage),
+						children: [],
+					},
+				],
 			},
 			{
 				entry: {

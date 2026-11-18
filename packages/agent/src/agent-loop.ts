@@ -3611,9 +3611,10 @@ async function executeToolCalls(
 			toolName: toolCall.name,
 			result,
 			isError,
+			...(cancelled ? { cancelled: true } : {}),
 		});
 
-		const toolResultMessage: ToolResultMessage & { cancelled?: boolean } = {
+		const toolResultMessage: ToolResultMessage = {
 			role: "toolResult",
 			toolCallId: toolCall.id,
 			toolName: toolCall.name,

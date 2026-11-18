@@ -873,6 +873,7 @@ function describeJobsResult(
 	result: ToolRenderResult<CoordinationDetails>,
 	isPartial: boolean,
 	expanded: boolean,
+	settledBashJobs?: ReadonlyMap<string, string>,
 ): NativeToolView | undefined {
 	const jobs = result.details?.jobs ?? [];
 	const agents = result.details?.agents ?? [];
@@ -910,25 +911,30 @@ function describeJobsResult(
 		completed: 3,
 	};
 	const sorted = [...jobs].sort((a, b) => order[a.status] - order[b.status] || b.durationMs - a.durationMs);
-	// Compact cards add failure output only for jobs not already represented by a Bash card.
+	const visibleJobs = sorted.slice(0, TILES_SHOWN);
+	// Failure diagnostics belong here only when no original Bash card shows them.
 	const body: NativeNode[] = [];
-	if (sorted.length > 0) {
-		body.push(keyed(describeJobTiles(sorted.slice(0, TILES_SHOWN).map(job => jobTile(job, isPartial))), "tiles"));
+	if (visibleJobs.length > 0) {
+		body.push(keyed(describeJobTiles(visibleJobs.map(job => jobTile(job, isPartial))), "tiles"));
 	}
-	if (!expanded) {
-		for (const job of sorted.slice(0, TILES_SHOWN)) {
-			const preview = failurePreview(job);
-			if (preview.lines.length === 0 && !preview.artifact) continue;
-			if (job.type === "bash" && preview.lines.length > 0) {
-				body.push(text([span(`${plainText(job.id)} · Output tail:`, "muted")], { truncate: "end" }));
-			}
-			for (const line of preview.lines) {
-				const prefix = job.type === "bash" ? "" : `${plainText(job.id)} · `;
-				body.push(text([span(`${prefix}${plainText(replaceTabs(line))}`, "error")], { truncate: "end" }));
-			}
-			if (preview.artifact) {
-				body.push(text([span(plainText(preview.artifact), "warning")], { wrap: "word" }));
-			}
+	for (const job of visibleJobs) {
+		if (duplicatesBashCard(job, settledBashJobs)) continue;
+		const preview = failurePreview(job);
+		if (preview.lines.length === 0 && !preview.artifact) continue;
+		if (job.type === "bash" && preview.lines.length > 0) {
+			body.push(text([span(`${plainText(job.id)} · Output tail:`, "muted")], { truncate: "end" }));
+		}
+		for (const line of preview.lines) {
+			const prefix = job.type === "bash" ? "" : `${plainText(job.id)} · `;
+			body.push(
+				text(
+					[span(`${prefix}${plainText(replaceTabs(line))}`, "error")],
+					expanded ? { wrap: "word" } : { truncate: "end" },
+				),
+			);
+		}
+		if (preview.artifact) {
+			body.push(text([span(plainText(preview.artifact), "warning")], { wrap: "word" }));
 		}
 	}
 	if (sorted.length > TILES_SHOWN) {
@@ -1024,7 +1030,7 @@ export const waitToolRenderer = {
 						);
 					}
 				}
-				return describeJobsResult(result, options.isPartial, options.expanded);
+				return describeJobsResult(result, options.isPartial, options.expanded, options.settledBashJobs);
 			},
 		);
 	},

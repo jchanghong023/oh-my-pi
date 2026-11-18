@@ -17,7 +17,7 @@ import {
 	type AgentRegistryApi,
 	MAIN_AGENT_ID,
 } from "./agent-registry";
-import { getAgentTombstonePath } from "./agent-tombstone";
+import { getAgentExecutionEndedPath, getAgentTombstonePath } from "./agent-tombstone";
 
 /** Maximum prefix entries inspected for task metadata. */
 const MAX_METADATA_LINES = 64;
@@ -157,6 +157,18 @@ function assistantMetrics(message: Record<string, unknown>): AssistantMetrics {
 function isFilesystemError(error: unknown): boolean {
 	const code = (error as NodeJS.ErrnoException | null)?.code;
 	return typeof code === "string" && code !== "ENOENT";
+}
+
+async function hasPersistedAgentMarker(markerPath: string): Promise<boolean> {
+	try {
+		await fs.promises.access(markerPath);
+		return true;
+	} catch (error) {
+		// Only an absent marker is normal. A transient filesystem fault drops
+		// the roster latch so a later scan retries rather than offering a revive.
+		if (isFilesystemError(error)) throw error;
+		return false;
+	}
 }
 
 async function readPersistedAgentHistory(
@@ -811,16 +823,6 @@ async function registerPersistedSubagentsFromDir(
 		const id = entry.name.slice(0, -6);
 		const existing = registry.get(id);
 		if (existing?.sessionFile !== sessionFile && (await vibeOwned()).has(id)) continue;
-		let tombstoned = false;
-		try {
-			await fs.promises.access(getAgentTombstonePath(sessionFile));
-			tombstoned = true;
-		} catch (error) {
-			// A missing tombstone is the normal case. Any other fault (EACCES/
-			// EMFILE/EIO) is transient: surface it so the roster latch drops and
-			// the next call retries instead of silently skipping this transcript.
-			if (isFilesystemError(error)) throw error;
-		}
 		if (!shouldContinue()) return;
 		const replaceable =
 			existing !== undefined &&
@@ -861,8 +863,12 @@ async function registerPersistedSubagentsFromDir(
 		} else {
 			const expected = existing ?? null;
 			const metadata = await readPersistedAgentMetadata(sessionFile, nestedPatchFilesFor(dir, entry.name, entries));
+			const [tombstoned, executionEnded] = await Promise.all([
+				hasPersistedAgentMarker(getAgentTombstonePath(sessionFile)),
+				hasPersistedAgentMarker(getAgentExecutionEndedPath(sessionFile)),
+			]);
 			if (!shouldContinue()) return;
-			// Metadata reads yield. A spawn may claim the id while this scan is
+			// Disk reads yield. A spawn may claim the id while this scan is
 			// inspecting the file; never replace that live generation with a
 			// transcript-derived parked ref.
 			const current = registry.get(id);
@@ -872,7 +878,7 @@ async function registerPersistedSubagentsFromDir(
 			// SessionManager.open writes title+session before createAgentSession
 			// claims the id. Parking that stub makes the spawn's expectedAgentRef:null
 			// CAS fail with "already owned by another session generation".
-			if ((stillUnclaimed || stillReplaceable) && !(metadata.incomplete && !tombstoned)) {
+			if ((stillUnclaimed || stillReplaceable) && (!metadata.incomplete || tombstoned || executionEnded)) {
 				const input = {
 					id,
 					displayName: id,
@@ -883,7 +889,7 @@ async function registerPersistedSubagentsFromDir(
 					activity: metadata.activity,
 					createdAt: metadata.createdAt,
 					lastActivity: metadata.lastActivity,
-					history: metadata.history,
+					history: executionEnded ? { ...metadata.history, executionEnded } : metadata.history,
 					status: tombstoned ? ("aborted" as const) : ("parked" as const),
 				};
 				const vacated = stillUnclaimed || (expected !== null && registry.unregister(id, expected));

@@ -494,9 +494,12 @@ export async function runAIReqWorkbenchCommand(parsedArgs: Args, _rawArgs: strin
 		} else if (process.env.OMP_AIREQ_NO_OPEN === "1") {
 			process.stderr.write("Browser opener skipped (OMP_AIREQ_NO_OPEN=1); use the ready URL.\n");
 		} else {
-			const opened = await openPathWithResult(handle.loopbackUrl);
-			if (!opened.opened)
-				process.stderr.write(`Browser opener failed: ${opened.reason}. Service remains ready at ${handle.url}\n`);
+			void openPathWithResult(handle.loopbackUrl).then(opened => {
+				if (!opened.opened)
+					process.stderr.write(
+						`Browser opener failed: ${opened.reason}. Service remains ready at ${handle.url}\n`,
+					);
+			});
 		}
 		await shutdown.promise;
 	} catch (error) {

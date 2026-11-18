@@ -478,9 +478,12 @@ mod tests {
 		let replacement_path = replacement.join("knowledge.db");
 		{
 			let db = Connection::open(&replacement_path).unwrap();
-			db.execute_batch(include_str!(
-				"../../../../packages/coding-agent/test/fixtures/docs-v3.sql"
-			))
+			// Bazel relocates the Rust sources but leaves this cross-package input
+			// in the execroot.
+			db.execute_batch(include_str!(concat!(
+				env!("CARGO_MANIFEST_DIR"),
+				"/../../packages/coding-agent/test/fixtures/docs-v3.sql"
+			)))
 			.unwrap();
 			db.execute_batch(
 				"INSERT INTO \

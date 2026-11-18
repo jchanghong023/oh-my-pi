@@ -922,6 +922,14 @@ export class SpeculativeOperationCoordinator {
 		};
 		void (async () => {
 			try {
+				// Explicit root isolation covers evidence reads as well as execution.
+				// Leave the ordinary process-global speculative path unchanged.
+				const pauseGate = this.environment?.loopConfig.pauseGate;
+				while (pauseGate && pauseGate !== agentPauseGate && pauseGate.paused) {
+					await pauseGate.waitUntilResumed(signal);
+					// Aborting a parked candidate releases only its wait, not its gate.
+					signal.throwIfAborted();
+				}
 				// Content evidence is captured here — immediately before execution —
 				// rather than at admission: for hook-deferred candidates this runs
 				// after `beforeToolCall`, so a blocked call never triggers content
@@ -932,14 +940,11 @@ export class SpeculativeOperationCoordinator {
 						await this.#discardCandidate(candidate, "discarded", "host declined speculative evidence capture");
 						return;
 					}
-				}
-				// Explicit root isolation must also cover speculative physical work.
-				// Leave the ordinary process-global speculative path unchanged.
-				const pauseGate = this.environment?.loopConfig.pauseGate;
-				if (pauseGate && pauseGate !== agentPauseGate && pauseGate.paused) {
-					await pauseGate.waitUntilResumed(signal);
-					// Aborting a parked candidate releases only its wait, not its gate.
-					signal.throwIfAborted();
+					// Evidence capture may have yielded to a new pause.
+					while (pauseGate && pauseGate !== agentPauseGate && pauseGate.paused) {
+						await pauseGate.waitUntilResumed(signal);
+						signal.throwIfAborted();
+					}
 				}
 				const outcome = await candidate.policy.execute(executionContext, signal);
 				if (candidate.state === "discarded") return;

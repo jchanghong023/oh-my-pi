@@ -253,7 +253,9 @@ async function runCommands(commands: readonly (readonly string[])[], scope?: str
 				commandExitCode = await runCommand(command, scope);
 			} catch (error) {
 				commandExitCode = 1;
-				reportGateFailure(new GateCommandError(`${command.join(" ")} failed: ${String(error)}`, commandExitCode));
+				const failure = new GateCommandError(`${command.join(" ")} failed: ${String(error)}`, commandExitCode);
+				console.error(failure.message);
+				reportGateFailure(failure);
 			}
 			if (exitCode === 0) exitCode = commandExitCode;
 			if (commandExitCode !== 0 && !scope) break;

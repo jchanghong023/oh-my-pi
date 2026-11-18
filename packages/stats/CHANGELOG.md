@@ -9,6 +9,7 @@
 ### Fixed
 
 - Windows stats startup avoids a redundant process lookup when the requested port is occupied.
+- On Windows, stats falls back to `tasklist` when CIM cannot identify the process holding its port.
 
 ## [18.22.1] - 2026-11-17
 

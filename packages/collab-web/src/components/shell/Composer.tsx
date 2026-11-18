@@ -211,6 +211,17 @@ export const Composer = memo(function Composer({
 	const [pending, setPending] = useState(false);
 	const [sendError, setSendError] = useState<{ identity: string; message: string } | null>(null);
 	const pendingRef = useRef(false);
+	const [attachmentReads, setAttachmentReads] = useState<ReadonlyMap<string, number>>(() => new Map());
+	const attachmentReadsRef = useRef(attachmentReads);
+	const readingAttachments = attachmentReads.has(identity);
+	const updateAttachmentReads = (delta: 1 | -1): void => {
+		const next = new Map(attachmentReadsRef.current);
+		const count = (next.get(identity) ?? 0) + delta;
+		if (count === 0) next.delete(identity);
+		else next.set(identity, count);
+		attachmentReadsRef.current = next;
+		setAttachmentReads(next);
+	};
 	const { composingRef, onCompositionStart, onCompositionEnd } = useCompositionGuard();
 	const appliedEditorUpdates = useRef(new Map<string, number>());
 	useLayoutEffect(() => {
@@ -242,7 +253,7 @@ export const Composer = memo(function Composer({
 	const canPrompt = live && !readOnly;
 	const busy = working;
 	const queued = queuedMessageCount;
-	const canSend = canPrompt && !pending && (text.trim().length > 0 || images.length > 0);
+	const canSend = canPrompt && !pending && !readingAttachments && (text.trim().length > 0 || images.length > 0);
 	const [predictionSelection, setPredictionSelection] = useState<{
 		prediction: ComposerMessagePrediction;
 		rank: number;
@@ -302,16 +313,25 @@ export const Composer = memo(function Composer({
 
 	const send = useCallback(async (): Promise<void> => {
 		const trimmed = text.trim();
-		if ((!trimmed && images.length === 0) || !live || readOnly || pendingRef.current) return;
+		if (
+			(!trimmed && images.length === 0) ||
+			!live ||
+			readOnly ||
+			pendingRef.current ||
+			readingAttachments ||
+			attachmentReadsRef.current.has(identity)
+		)
+			return;
 		const result = await submit(() => client.sendPrompt(trimmed, images));
 		setDrafts(current => ({
 			...current,
 			[identity]: settleComposerDraft(current[identity] ?? EMPTY_DRAFT, draft, result),
 		}));
-	}, [client, live, readOnly, text, images, submit, identity, draft]);
+	}, [client, live, readOnly, text, images, submit, identity, draft, readingAttachments]);
 
 	const attach = async (files: FileList | null): Promise<void> => {
-		if (!files) return;
+		if (!files?.length) return;
+		updateAttachmentReads(1);
 		try {
 			const selected = Array.from(files);
 			for (const file of selected) {
@@ -322,7 +342,7 @@ export const Composer = memo(function Composer({
 					file =>
 						new Promise<ImageContent>((resolve, reject) => {
 							const reader = new FileReader();
-							reader.onerror = () => reject(new Error(`Cannot read ${file.name}`));
+							reader.onabort = reader.onerror = () => reject(new Error(`Cannot read ${file.name}`));
 							reader.onload = () => {
 								const dataUrl = String(reader.result);
 								resolve({ type: "image", data: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: file.type });
@@ -331,10 +351,22 @@ export const Composer = memo(function Composer({
 						}),
 				),
 			);
-			setImages(current => [...current, ...loaded]);
-			setAttachmentNames(current => [...current, ...selected.map(file => file.name)]);
+			const names = selected.map(file => file.name);
+			setDrafts(current => {
+				const previous = current[identity] ?? EMPTY_DRAFT;
+				return {
+					...current,
+					[identity]: {
+						...previous,
+						images: [...previous.images, ...loaded],
+						attachmentNames: [...previous.attachmentNames, ...names],
+					},
+				};
+			});
 		} catch (error) {
 			setSendError({ identity, message: error instanceof Error ? error.message : String(error) });
+		} finally {
+			updateAttachmentReads(-1);
 		}
 	};
 

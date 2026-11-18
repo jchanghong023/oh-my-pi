@@ -44,6 +44,7 @@ import { $which, removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import { canCreateSymlinks } from "./helpers/symlink-privilege";
+import { updateRepositoryTests } from "./helpers/update-repository-test";
 
 const miseBinary = Bun.env.MISE_BIN ?? $which("mise");
 const npmBinary = $which("npm");
@@ -1129,9 +1130,11 @@ describe("update-cli bun cache pruning", () => {
 });
 
 describe("update-cli release binary integrity", () => {
+	const repository = "jchanghong023/oh-my-pi";
+	const { it } = updateRepositoryTests(import.meta.path, repository);
 	const tag = "v17.1.2";
 	const binaryName = "omp-linux-x64";
-	const url = `https://github.com/jchanghong023/oh-my-pi/releases/download/${tag}/${binaryName}`;
+	const url = `https://github.com/${repository}/releases/download/${tag}/${binaryName}`;
 	const content = "verified binary";
 	const digest = `sha256:${Bun.SHA256.hash(content, "hex")}`;
 
@@ -1176,7 +1179,7 @@ describe("update-cli release binary integrity", () => {
 			),
 		).toEqual({
 			version: "18.0.9+fork.137",
-			url: `https://github.com/jchanghong023/oh-my-pi/releases/download/${forkTag}/${binaryName}`,
+			url: `https://github.com/${repository}/releases/download/${forkTag}/${binaryName}`,
 			size: Buffer.byteLength(content),
 			digest,
 		});
@@ -1464,7 +1467,7 @@ describe("update-cli release binary integrity", () => {
 					state: "uploaded",
 					size: Buffer.byteLength(body),
 					digest: `sha256:${Bun.SHA256.hash(body, "hex")}`,
-					browser_download_url: `https://github.com/jchanghong023/oh-my-pi/releases/download/v${version}/${binaryName}`,
+					browser_download_url: `https://github.com/${repository}/releases/download/v${version}/${binaryName}`,
 				},
 			],
 			...overrides,

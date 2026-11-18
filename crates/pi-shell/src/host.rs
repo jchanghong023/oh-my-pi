@@ -414,7 +414,7 @@ impl Launcher {
 		if let Some(relays) = relays {
 			child = relays.wrap(child);
 		}
-		self.spawns.record(lineage, child.pid());
+		self.spawns.record(lineage, || child.process());
 		Ok(match &self.observer {
 			Some(observer) => {
 				let pid = child.pid();
@@ -891,6 +891,10 @@ impl Observed {
 impl ExtProc for Observed {
 	fn pid(&self) -> u32 {
 		self.child.pid()
+	}
+
+	fn process(&self) -> Option<crate::proctree::Process> {
+		self.child.process()
 	}
 
 	fn poll_wait(&mut self, cx: &mut Context<'_>) -> Poll<ExitStatus> {

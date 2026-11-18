@@ -60,13 +60,13 @@ describe("applyEditsThenRename", () => {
 	});
 });
 
-describe("LSP resource snapshots", () => {
+describe("LSP resource root notifications", () => {
 	let cwd: string;
 	let unsubscribe: () => void;
 	let notifications: Array<{ paths: readonly string[]; reason?: string }>;
 
 	beforeEach(async () => {
-		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "lsp-resource-snapshot-"));
+		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "lsp-resource-root-"));
 		notifications = [];
 		unsubscribe = subscribeFsMutation((paths, reason) => {
 			if (paths.some(file => file.startsWith(`${cwd}${path.sep}`))) notifications.push({ paths, reason });
@@ -80,9 +80,9 @@ describe("LSP resource snapshots", () => {
 
 	const uri = (file: string) => pathToFileURL(file).href;
 
-	function denySnapshot(directory: string) {
+	function denyEnumeration(directory: string) {
 		const readdir = fs.readdir;
-		const failure = Object.assign(new Error("snapshot enumeration denied"), { code: "EACCES" });
+		const failure = Object.assign(new Error("directory enumeration denied"), { code: "EACCES" });
 		// 保留原始参数元组与重载，避免 options 联合类型转发时丢失返回值关联。
 		return spyOn(fs, "readdir").mockImplementation(((...args: Parameters<typeof readdir>) => {
 			if (args[0] === directory) return Promise.reject(failure);
@@ -91,12 +91,12 @@ describe("LSP resource snapshots", () => {
 	}
 
 	for (const entrypoint of ["workspace", "references"] as const) {
-		it(`moves a directory via ${entrypoint} when a descendant snapshot cannot be read`, async () => {
+		it(`moves a directory via ${entrypoint} without enumerating descendants`, async () => {
 			const source = path.join(cwd, "source");
 			const target = path.join(cwd, "target");
 			await fs.mkdir(path.join(source, "nested"), { recursive: true });
 			await Bun.write(path.join(source, "nested", "child.py"), "def movedentry(): pass\n");
-			const snapshotSpy = denySnapshot(path.join(source, "nested"));
+			const enumerationSpy = denyEnumeration(path.join(source, "nested"));
 			try {
 				if (entrypoint === "workspace") {
 					const result = await applyWorkspaceEdit(
@@ -108,24 +108,24 @@ describe("LSP resource snapshots", () => {
 					await applyEditsThenRename([], source, target);
 				}
 			} finally {
-				snapshotSpy.mockRestore();
+				enumerationSpy.mockRestore();
 			}
 			expect(await Bun.file(path.join(target, "nested", "child.py")).text()).toBe("def movedentry(): pass\n");
 			expect(await fs.lstat(source).catch(() => undefined)).toBeUndefined();
 			expect(notifications).toHaveLength(1);
 			expect(notifications[0].paths).toEqual([source, target]);
-			expect(notifications[0].reason).toBeDefined();
+			expect(notifications[0].reason).toBeUndefined();
 		});
 	}
 
-	it("marks an unreadable overwrite target snapshot uncertain without blocking the real rename", async () => {
+	it("notifies the overwrite target root without enumerating its descendants", async () => {
 		const source = path.join(cwd, "source");
 		const target = path.join(cwd, "target");
 		await fs.mkdir(source);
 		await Bun.write(path.join(source, "moved.py"), "def movedentry(): pass\n");
 		await fs.mkdir(path.join(target, "nested"), { recursive: true });
 		await Bun.write(path.join(target, "nested", "old.py"), "def displacedentry(): pass\n");
-		const snapshotSpy = denySnapshot(path.join(target, "nested"));
+		const enumerationSpy = denyEnumeration(path.join(target, "nested"));
 		try {
 			await applyWorkspaceEdit(
 				{
@@ -136,31 +136,26 @@ describe("LSP resource snapshots", () => {
 				cwd,
 			);
 		} finally {
-			snapshotSpy.mockRestore();
+			enumerationSpy.mockRestore();
 		}
 		expect(await Bun.file(path.join(target, "moved.py")).text()).toBe("def movedentry(): pass\n");
 		expect(await Bun.file(path.join(target, "nested", "old.py")).exists()).toBe(false);
 		expect(await fs.lstat(source).catch(() => undefined)).toBeUndefined();
 		expect(notifications).toHaveLength(2);
 		expect(notifications[0].paths).toEqual([target]);
-		expect(notifications[0].reason).toBeDefined();
-		expect(notifications[1].paths).toEqual([
-			source,
-			path.join(source, "moved.py"),
-			target,
-			path.join(target, "moved.py"),
-		]);
+		expect(notifications[0].reason).toBeUndefined();
+		expect(notifications[1].paths).toEqual([source, target]);
 		expect(notifications[1].reason).toBeUndefined();
 	});
 
-	it("preserves uncertain overwrite notifications and restores the target after a real rename failure", async () => {
+	it("notifies the displaced root and restores the target after a real rename failure", async () => {
 		const source = path.join(cwd, "source");
-		// 内核禁止把目录移入自身后代；真实 rename 失败必须恢复已暂存的目标，而非被快照错误提前拦截。
+		// The kernel rejects moves into a descendant; rollback must restore the displaced target.
 		const target = path.join(source, "target");
 		await fs.mkdir(path.join(target, "nested"), { recursive: true });
 		await Bun.write(path.join(source, "source.py"), "def sourceentry(): pass\n");
 		await Bun.write(path.join(target, "nested", "old.py"), "def restoredentry(): pass\n");
-		const snapshotSpy = denySnapshot(path.join(target, "nested"));
+		const enumerationSpy = denyEnumeration(path.join(target, "nested"));
 		const executed: string[] = [];
 		try {
 			await expect(
@@ -175,7 +170,7 @@ describe("LSP resource snapshots", () => {
 				),
 			).rejects.toThrow();
 		} finally {
-			snapshotSpy.mockRestore();
+			enumerationSpy.mockRestore();
 		}
 		expect(await Bun.file(path.join(source, "source.py")).text()).toBe("def sourceentry(): pass\n");
 		expect(await Bun.file(path.join(target, "nested", "old.py")).text()).toBe("def restoredentry(): pass\n");
@@ -183,15 +178,15 @@ describe("LSP resource snapshots", () => {
 		expect(notifications).toHaveLength(2);
 		for (const notification of notifications) {
 			expect(notification.paths).toEqual([target]);
-			expect(notification.reason).toBeDefined();
+			expect(notification.reason).toBeUndefined();
 		}
 	});
 
-	it("deletes a directory with an incomplete snapshot while retaining uncertain coverage", async () => {
+	it("notifies the deleted directory root without a pre-delete snapshot", async () => {
 		const target = path.join(cwd, "target");
 		await fs.mkdir(path.join(target, "nested"), { recursive: true });
 		await Bun.write(path.join(target, "nested", "child.py"), "def removedentry(): pass\n");
-		const snapshotSpy = denySnapshot(path.join(target, "nested"));
+		const enumerationSpy = denyEnumeration(path.join(target, "nested"));
 		try {
 			const result = await applyWorkspaceEdit(
 				{ documentChanges: [{ kind: "delete", uri: uri(target), options: { recursive: true } }] },
@@ -199,12 +194,12 @@ describe("LSP resource snapshots", () => {
 			);
 			expect(result.executed).toEqual([{ kind: "delete", uri: uri(target) }]);
 		} finally {
-			snapshotSpy.mockRestore();
+			enumerationSpy.mockRestore();
 		}
 		expect(await fs.lstat(target).catch(() => undefined)).toBeUndefined();
 		expect(notifications).toHaveLength(1);
 		expect(notifications[0].paths).toEqual([target]);
-		expect(notifications[0].reason).toBeDefined();
+		expect(notifications[0].reason).toBeUndefined();
 	});
 });
 
@@ -336,11 +331,11 @@ describe("LSP edit mutation notifications", () => {
 			cwd,
 		);
 		expect(await Bun.file(path.join(cwd, "nested/renamed.py")).exists()).toBe(false);
-		expect(notifications.at(-1)?.paths).toContain(path.join(cwd, "nested/renamed.py"));
+		expect(notifications.at(-1)?.paths).toEqual([path.join(cwd, "nested")]);
 	});
 
 	for (const entrypoint of ["workspace", "references"] as const) {
-		it(`notifies descendant paths after a directory rename via ${entrypoint}`, async () => {
+		it(`notifies resource roots after a directory rename via ${entrypoint}`, async () => {
 			await seed({
 				"before/engine.py": "def directoryentry(): pass\n",
 				"before/nested/child.py": "def descendantentry(): pass\n",
@@ -356,18 +351,13 @@ describe("LSP edit mutation notifications", () => {
 			expect(await Bun.file(path.join(cwd, "after/engine.py")).text()).toBe("def directoryentry(): pass\n");
 			expect(await Bun.file(path.join(cwd, "after/nested/child.py")).text()).toBe("def descendantentry(): pass\n");
 			expect(await fs.lstat(path.join(cwd, "before")).catch(() => undefined)).toBeUndefined();
-			expect(notifications.flatMap(notification => notification.paths)).toEqual(
-				expect.arrayContaining([
-					path.join(cwd, "before/engine.py"),
-					path.join(cwd, "before/nested/child.py"),
-					path.join(cwd, "after/engine.py"),
-					path.join(cwd, "after/nested/child.py"),
-				]),
-			);
+			expect(notifications).toEqual([
+				{ paths: [path.join(cwd, "before"), path.join(cwd, "after")], reason: undefined },
+			]);
 		});
 	}
 
-	it("notifies concrete descendants after a recursive delete partially fails", async () => {
+	it("marks the directory root uncertain after a recursive delete partially fails", async () => {
 		await seed({
 			"nested/removed.py": "def removedentry(): pass\n",
 			"nested/retained.py": "def retainedentry(): pass\n",
@@ -395,7 +385,7 @@ describe("LSP edit mutation notifications", () => {
 		expect(await Bun.file(path.join(directory, "removed.py")).exists()).toBe(false);
 		expect(await Bun.file(path.join(directory, "retained.py")).text()).toBe("def retainedentry(): pass\n");
 		expect(notifications).toContainEqual({
-			paths: expect.arrayContaining([path.join(directory, "removed.py"), path.join(directory, "retained.py")]),
+			paths: [directory],
 			reason: expect.any(String),
 		});
 	});
@@ -501,7 +491,7 @@ describe("LSP edit mutation notifications", () => {
 		expect(notifications.flatMap(notification => notification.paths)).toContain(target);
 	});
 
-	it("notifies displaced directory descendants when a failed rename restores them", async () => {
+	it("notifies the displaced directory root when a failed rename restores it", async () => {
 		await seed({
 			"source/engine.py": "def sourceentry(): pass\n",
 			"target/nested/child.py": "def restoredentry(): pass\n",
@@ -535,7 +525,7 @@ describe("LSP edit mutation notifications", () => {
 		expect(destinationWasDisplaced).toBe(true);
 		expect(await Bun.file(path.join(target, "nested/child.py")).text()).toBe("def restoredentry(): pass\n");
 		expect(await Bun.file(path.join(source, "engine.py")).text()).toBe("def sourceentry(): pass\n");
-		expect(notifications.flatMap(notification => notification.paths)).toContain(path.join(target, "nested/child.py"));
+		expect(notifications.flatMap(notification => notification.paths)).toContain(target);
 	});
 
 	it("does not publish mutations for previews, ignored operations or rejected edits", async () => {

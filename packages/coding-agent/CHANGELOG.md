@@ -66,6 +66,9 @@
 ### Fixed
 
 - Large-repository reviews now submit complete results per workpool item, detect Python 3.11+ on Windows, store reports in worktree-local Git metadata, and accept `--base REF` without guessing the upstream branch.
+- LoopN waits for background work before advancing, and queued compaction input stays with its original session after `/new`.
+- Log reads respect the inline byte budget even when many lines match `OMP_LOG_ERROR_REGEX`.
+- Fork binaries embed the HTML export viewer so exported sessions do not depend on a fork-specific viewer download.
 - Compact mode now shows background-work waits in the two-line activity area instead of above command output.
 - Binary release builds now initialize their temporary directories without failing workflow validation.
 - Edited prompts continue after successful in-place context reduction, and terminal yields no longer compact input that will remain queued.

@@ -37,6 +37,15 @@ export function sessionStagingPath(target: string): string {
 	return path.join(path.dirname(target), `.${path.basename(target)}.${Snowflake.next()}.tmp`);
 }
 
+/** Find the primary basename in `<primary>.<snowflake>.bak`. */
+export function sessionBackupPrimaryName(backupName: string): string | undefined {
+	const suffix = ".bak";
+	if (!backupName.endsWith(suffix)) return undefined;
+	const separator = backupName.lastIndexOf(".", backupName.length - suffix.length - 1);
+	if (separator <= 0) return undefined;
+	return backupName.slice(0, separator);
+}
+
 /**
  * The file a rewrite must land in: the referent when `fpath` is a symlink.
  *
@@ -1426,7 +1435,7 @@ export class FileSessionStorage implements SessionStorage {
 						});
 						const base = path.basename(sessionPath);
 						for (const bak of this.listFilesSync(path.dirname(sessionPath), "*.bak")) {
-							if (!path.basename(bak).startsWith(`${base}.`)) continue;
+							if (sessionBackupPrimaryName(path.basename(bak)) !== base) continue;
 							try {
 								fs.unlinkSync(bak);
 							} catch (err) {
@@ -1596,7 +1605,7 @@ export class FileSessionStorage implements SessionStorage {
 					});
 					const base = path.basename(sessionPath);
 					for (const bak of this.listFilesSync(path.dirname(sessionPath), "*.bak")) {
-						if (!path.basename(bak).startsWith(`${base}.`)) continue;
+						if (sessionBackupPrimaryName(path.basename(bak)) !== base) continue;
 						try {
 							await fsp.unlink(bak);
 						} catch (err) {

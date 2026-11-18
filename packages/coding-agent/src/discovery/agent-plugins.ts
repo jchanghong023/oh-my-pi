@@ -30,7 +30,7 @@ import {
 	validateAgentSkillFrontmatter,
 } from "./agent-plugin-format";
 import { resolveContainedPath } from "./contained-path";
-import { compareSkillOrder, createSourceMeta, listClaudePluginRoots } from "./helpers";
+import { type ClaudePluginRoot, compareSkillOrder, createSourceMeta, listClaudePluginRoots } from "./helpers";
 import { listOmpExtensionRoots } from "./omp-extension-roots";
 
 const PROVIDER_ID = "agent-plugins";
@@ -43,6 +43,7 @@ const PRIORITY = 75;
 interface CandidateRoot {
 	path: string;
 	level: "user" | "project";
+	origin?: ClaudePluginRoot["origin"];
 	/**
 	 * Stable identity of this installed plugin instance (§9.1). Registry
 	 * installs key on plugin id + scope so the persistent data directory
@@ -55,28 +56,47 @@ interface CandidateRoot {
 /**
  * Every directory that may contain an Agent Plugin: marketplace and
  * `--plugin-dir` roots from the shared registries, plus configured extension
- * package roots. First occurrence wins on duplicates.
+ * package roots. First occurrence wins on duplicates, except an inventory-only
+ * Claude root cannot mask an active installation of the same skill directory.
  */
-async function listCandidateRoots(ctx: LoadContext): Promise<CandidateRoot[]> {
+async function listCandidateRoots(ctx: LoadContext, preferActive = false): Promise<CandidateRoot[]> {
 	const [marketplace, extensionRoots] = await Promise.all([
 		listClaudePluginRoots(ctx.home, ctx.cwd, { includeClaude: isUserSourceEnabled("claude-plugins", ctx) }),
 		listOmpExtensionRoots(ctx),
 	]);
+	const prioritizeActive =
+		preferActive &&
+		ctx.includeOptOutUserSources &&
+		!isUserSourceEnabled("claude-plugins", { ...ctx, includeOptOutUserSources: false });
+	let optedOut: CandidateRoot[] | undefined;
 	const seen = new Set<string>();
 	const candidates: CandidateRoot[] = [];
 	for (const root of marketplace.roots) {
 		if (seen.has(root.path)) continue;
-		seen.add(root.path);
-		candidates.push({
+		const candidate = {
 			path: root.path,
 			level: root.scope,
+			origin: root.origin,
 			instanceKey: root.marketplace === "__local__" ? `dir:${root.path}` : `${root.id}#${root.scope}`,
-		});
+		};
+		if (prioritizeActive && root.origin === "claude") {
+			(optedOut ??= []).push(candidate);
+			continue;
+		}
+		seen.add(root.path);
+		candidates.push(candidate);
 	}
 	for (const root of extensionRoots) {
 		if (seen.has(root.path)) continue;
 		seen.add(root.path);
 		candidates.push({ path: root.path, level: root.level, instanceKey: `ext:${root.path}` });
+	}
+	if (optedOut) {
+		for (const candidate of optedOut) {
+			if (seen.has(candidate.path)) continue;
+			seen.add(candidate.path);
+			candidates.push(candidate);
+		}
 	}
 	return candidates;
 }
@@ -104,7 +124,7 @@ function pluginDataDir(home: string, manifestName: string, instanceKey: string):
  */
 async function scanStandardSkills(
 	realRoot: string,
-	level: "user" | "project",
+	{ level, origin }: CandidateRoot,
 	pluginName: string,
 ): Promise<LoadResult<Skill>> {
 	const items: Skill[] = [];
@@ -193,7 +213,7 @@ async function scanStandardSkills(
 				// The manifest name, never a path segment: registry installs live
 				// under `<marketplace>/<plugin>/<version>/`, so path-derived
 				// collision namespaces would change on every version bump.
-				_source: createSourceMeta(PROVIDER_ID, skillPath, level, undefined, pluginName),
+				_source: createSourceMeta(PROVIDER_ID, skillPath, level, origin, pluginName),
 			});
 		}),
 	);
@@ -203,7 +223,7 @@ async function scanStandardSkills(
 }
 
 async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
-	const candidates = await listCandidateRoots(ctx);
+	const candidates = await listCandidateRoots(ctx, true);
 	const results = await Promise.all(
 		candidates.map(async (candidate): Promise<LoadResult<Skill>> => {
 			const status = await classifyAgentPluginRoot(candidate.path);
@@ -213,7 +233,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 				// reported once here rather than from every capability loader.
 				return { items: [], warnings: [`[agent-plugins] Rejected plugin at ${candidate.path}: ${status.reason}`] };
 			}
-			const scan = await scanStandardSkills(status.realRoot, candidate.level, status.manifest.name);
+			const scan = await scanStandardSkills(status.realRoot, candidate, status.manifest.name);
 			return {
 				items: scan.items,
 				warnings: [...status.warnings, ...(scan.warnings ?? [])].map(

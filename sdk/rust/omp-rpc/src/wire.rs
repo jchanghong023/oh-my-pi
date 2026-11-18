@@ -3819,6 +3819,9 @@ pub struct ToolExecutionEndEvent {
 	pub result: Option<Value>,
 	#[serde(rename = "isError", default, skip_serializing_if = "Option::is_none")]
 	pub is_error: Option<bool>,
+	/// The tool execution was cancelled.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub cancelled: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3845,6 +3848,9 @@ pub struct AutoCompactionEndEvent {
 /// A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ManualCompactionStartEvent {
+	/// Identifies this operation and its matching `manual_compaction_end`.
+	#[serde(rename = "operationId")]
+	pub operation_id: String,
 	/// The `/compact <mode>` subcommand, when one was given.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub mode: Option<String>,
@@ -3853,6 +3859,9 @@ pub struct ManualCompactionStartEvent {
 /// Outcome of the compaction announced by the matching `manual_compaction_start`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ManualCompactionEndEvent {
+	/// The ID from the matching `manual_compaction_start`.
+	#[serde(rename = "operationId")]
+	pub operation_id: String,
 	/// The compaction was cancelled (abort, or a `session_before_compact` hook).
 	pub aborted: bool,
 	/// Present when the compaction committed.

@@ -6,6 +6,10 @@
 
 - `fuzzyFind` accepts an explicit directory-cache TTL without changing the default metadata-validated cache behavior.
 
+### Fixed
+
+- Offline Linux binaries can load their native addon when the shared memory filesystem is mounted `noexec`.
+
 ## [18.22.2] - 2026-11-18
 
 ### Added

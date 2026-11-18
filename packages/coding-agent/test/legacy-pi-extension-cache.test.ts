@@ -15,7 +15,14 @@ async function runProbe(cacheRoot: string, script: string = probePath, args: str
 		XDG_CACHE_HOME: cacheRoot,
 		OMP_CONFIG_ROOT: path.join(cacheRoot, "omp"),
 	};
-	for (const key of ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR"]) {
+	for (const key of [
+		"PI_CODING_AGENT_DIR",
+		"OMP_PROFILE",
+		"PI_PROFILE",
+		"PI_CONFIG_DIR",
+		"OMP_CACHE_DIR",
+		"OMP_OFFLINE",
+	]) {
 		delete env[key];
 	}
 	// XDG is honored only on Linux/macOS; elsewhere point the config root

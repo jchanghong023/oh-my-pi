@@ -32,7 +32,7 @@ mod fs_ops;
 #[cfg(any(windows, test))]
 mod job;
 pub mod langinfo;
-mod lifecycle;
+pub(crate) mod lifecycle;
 mod park;
 pub mod pathext;
 pub mod pcre;

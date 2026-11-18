@@ -59,6 +59,7 @@ async function createHarness(factory: ExtensionFactory) {
 	const editor = new CustomEditor(getEditorTheme());
 	const prompt = vi.fn(async (_text: string, _options?: PromptOptions) => true);
 	const session = {
+		sessionManager,
 		extensionRunner: runner,
 		isStreaming: true,
 		isCompacting: false,

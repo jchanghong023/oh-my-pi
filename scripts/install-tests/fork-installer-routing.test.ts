@@ -616,10 +616,11 @@ $source = [IO.File]::ReadAllText($env:TEST_INSTALLER)
 $script:originalFailure = $null
 $script:downloads = 0
 $script:pathChecks = 0
-# Redirect only the endpoint; use the host's real HTTP cmdlet and exception type.
-function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec, [switch]$SkipCertificateCheck) {
+# Redirect only the endpoint; use the installer's real HTTP transport.
+$script:installWebRequest = \${function:Invoke-InstallWebRequest}
+function Invoke-InstallWebRequest([Uri]$Uri, [int]$TimeoutSec) {
     try {
-        Microsoft.PowerShell.Utility\\Invoke-RestMethod -Uri $env:TEST_METADATA_URL -TimeoutSec $TimeoutSec @script:WebSkipCertCheck
+        & $script:installWebRequest -Uri $env:TEST_METADATA_URL -TimeoutSec $TimeoutSec
     } catch {
         $script:originalFailure = $_
         throw
@@ -744,7 +745,7 @@ if ($env:TEST_MODE -eq "invalid") {
     New-FixtureBinary $download "18.0.9+fork.125"
 }
 if ($env:TEST_MODE -eq "already") {
-    Copy-Item -LiteralPath $old -Destination (Join-Path $install ".omp.old.fixture.exe")
+    Copy-Item -LiteralPath $old -Destination (Join-Path $install (".omp.old.{0}.exe" -f [Guid]::NewGuid().ToString("N")))
 }
 $downloadCount = 0
 $pathChecks = 0
@@ -771,20 +772,21 @@ function Invoke-RestMethod([string]$Uri) {
     if ($Uri -match '/main/scripts/install.ps1$') {
         return $script:installerDefinitions + '\nfunction Set-InstallEnvironment { $script:pathChecks++; return $false }\nInstall-Binary'
     }
-    $callback = [Net.ServicePointManager]::ServerCertificateValidationCallback
-    if ([object]::ReferenceEquals($callback, $originalTlsCallback) -or
-        -not $callback.Invoke($null, $null, $null, [Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors)) {
-        throw "Installer did not relax TLS validation for release metadata"
-    }
-    if (-not ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12)) {
-        throw "Installer did not enable TLS 1.2 for release metadata"
-    }
-    return @{ tag_name = "v18.0.9+fork.125" }
+    throw "Unexpected bootstrap request: $Uri"
 }
-function Invoke-WebRequest([string]$Uri, [string]$OutFile, [int]$TimeoutSec, [switch]$UseBasicParsing) {
-    $script:downloadCount++
-    Copy-Item -LiteralPath $download -Destination $OutFile
+function Invoke-FixtureWebRequest([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile) {
+    if (-not [object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $originalTlsCallback) -or
+        [Net.ServicePointManager]::SecurityProtocol -ne $originalTlsProtocol) {
+        throw "Installer changed caller TLS settings during a request"
+    }
+    if ($OutFile) {
+        $script:downloadCount++
+        Copy-Item -LiteralPath $download -Destination $OutFile
+    } else {
+        return @{ tag_name = "v18.0.9+fork.125" }
+    }
 }
+Set-Alias Invoke-InstallWebRequest Invoke-FixtureWebRequest
 function Get-Command([string]$Name) {
     if ($Name -eq "curl.exe") { return $null }
     Microsoft.PowerShell.Core\\Get-Command $Name
@@ -920,7 +922,7 @@ try {
 		return { exitCode, stdout, stderr };
 	}
 
-	test("restores a null TLS callback when the caller cancels the installer pipeline", async () => {
+	test("preserves the caller's TLS settings when the installer pipeline is cancelled", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-tls-cancel-"));
 		tempDirs.push(dir);
 		const harness = path.join(dir, "cancel.ps1");
@@ -934,18 +936,18 @@ $ready = [Threading.ManualResetEvent]::new($false)
 $worker = [PowerShell]::Create()
 try {
     [void]$worker.AddScript({
-        param($ready)
-        function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec) {
-            $callback = [Net.ServicePointManager]::ServerCertificateValidationCallback
-            if ($null -eq $callback -or
-                -not $callback.Invoke($null, $null, $null, [Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors)) {
-                throw "Installer TLS callback is not active"
+        param($ready, $originalProtocol)
+        function Invoke-FixtureWebRequest([Uri]$Uri, [int]$TimeoutSec) {
+            if ($null -ne [Net.ServicePointManager]::ServerCertificateValidationCallback -or
+                [Net.ServicePointManager]::SecurityProtocol -ne $originalProtocol) {
+                throw "Installer changed caller TLS settings during release metadata"
             }
             [void]$ready.Set()
             Start-Sleep -Seconds 30
         }
+        Set-Alias Invoke-InstallWebRequest Invoke-FixtureWebRequest
         & $env:TEST_INSTALLER -Binary
-    }).AddArgument($ready)
+    }).AddArgument($ready).AddArgument($originalProtocol)
     [void]$worker.BeginInvoke()
     if (-not $ready.WaitOne(10000)) { throw "Installer did not reach release metadata: $($worker.Streams.Error)" }
     $worker.Stop()
@@ -1432,29 +1434,19 @@ $source = [IO.File]::ReadAllText($env:TEST_INSTALLER)
 [Net.WebRequest]::DefaultWebProxy = $null
 $originalTlsCallback = [Net.ServicePointManager]::ServerCertificateValidationCallback
 $originalSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
-$script:tlsProbeCompleted = $false
-function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec, [switch]$SkipCertificateCheck) {
-    $release = Microsoft.PowerShell.Utility\\Invoke-RestMethod -Uri "https://127.0.0.1:$env:TEST_PORT/release" -TimeoutSec $TimeoutSec @script:WebSkipCertCheck
-    if ($release.tag_name -ne "v18.0.9+fork.125") { throw "Unexpected release metadata" }
-    Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile $env:TEST_OUTFILE
-    function Get-Command([string]$Name) {
-        if ($Name -eq "curl.exe") { return $null }
-        Microsoft.PowerShell.Core\\Get-Command $Name
-    }
-    Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile "$env:TEST_OUTFILE.fallback"
-    $script:tlsProbeCompleted = $true
-    throw "TLS probe complete"
+$release = Invoke-InstallWebRequest -Uri "https://127.0.0.1:$env:TEST_PORT/release" -TimeoutSec 60
+if ($release.tag_name -ne "v18.0.9+fork.125") { throw "Unexpected release metadata" }
+Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile $env:TEST_OUTFILE
+function Get-Command([string]$Name) {
+    if ($Name -eq "curl.exe") { return $null }
+    Microsoft.PowerShell.Core\\Get-Command $Name
 }
-# Run all requests inside the real install TLS scope, then stop before replacement.
-try { Install-Binary } catch {
-    if (-not $script:tlsProbeCompleted -or $_.Exception.Message -ne "TLS probe complete") { throw }
-}
-if (-not $script:tlsProbeCompleted) { throw "TLS requests did not complete" }
+Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile "$env:TEST_OUTFILE.fallback"
 if (-not [object]::ReferenceEquals([Net.ServicePointManager]::ServerCertificateValidationCallback, $originalTlsCallback)) {
-    throw "Installer did not restore the caller certificate callback"
+    throw "Installer changed the caller certificate callback"
 }
 if ([Net.ServicePointManager]::SecurityProtocol -ne $originalSecurityProtocol) {
-    throw "Installer did not restore the caller security protocol"
+    throw "Installer changed the caller security protocol"
 }
 `,
 					);

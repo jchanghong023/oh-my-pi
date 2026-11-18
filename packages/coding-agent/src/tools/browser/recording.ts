@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { untilAborted } from "@oh-my-pi/pi-utils/abortable";
 import type { HTMLElement } from "@oh-my-pi/pi-utils/dom";
+import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries, TempDir } from "@oh-my-pi/pi-utils/temp";
 import type { Protocol } from "devtools-protocol";
 import type { CDPSession, Page } from "puppeteer-core";
@@ -195,6 +196,13 @@ export class BrowserRecordingError extends ToolError {
 	constructor(message: string) {
 		super(message);
 		this.name = "BrowserRecordingError";
+	}
+}
+
+/** A lost frame cannot be recovered by retrying finalization. */
+class RecordingFrameWriteError extends BrowserRecordingError {
+	constructor(error: unknown) {
+		super(`tab.recordStop() failed writing a frame: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 
@@ -566,7 +574,7 @@ export class RecordingController {
 		try {
 			await untilAborted(context.signal, () => active.source.stop());
 			await Promise.all(active.pendingWrites);
-			if (active.writeError) throw active.writeError;
+			if (active.writeError) throw new RecordingFrameWriteError(active.writeError);
 			if (active.options.cursor) await active.source.removeCursor();
 			if (active.frames.length === 0) {
 				const fallback = active.spool.join("frame-000000000.jpg");
@@ -639,10 +647,15 @@ export class RecordingController {
 				state.sourceStopped = true;
 			}
 			await Promise.all(active.pendingWrites);
-			if (active.writeError) throw active.writeError;
 			if (active.options.cursor && !state.cursorRemoved) {
 				await active.source.removeCursor({ strict: true });
 				state.cursorRemoved = true;
+			}
+			if (active.writeError) {
+				// All frame bytes have already been released; only the spool can still be cleaned up.
+				await removeWithRetries(active.spool.path());
+				this.#active = undefined;
+				throw new RecordingFrameWriteError(active.writeError);
 			}
 			if (active.frames.length === 0) {
 				const fallback = active.spool.join("frame-000000000.jpg");
@@ -724,6 +737,11 @@ export class RecordingController {
 	/** Finalize during teardown; strict cleanup retains failed stages for retry. */
 	async close(options?: { strict?: boolean }): Promise<void> {
 		if (!this.#active) return;
-		await this.stop({}, options);
+		try {
+			await this.stop({}, options);
+		} catch (error) {
+			if (!(error instanceof RecordingFrameWriteError)) throw error;
+			logger.warn("Failed to finalize browser recording during close", { error: error.message });
+		}
 	}
 }

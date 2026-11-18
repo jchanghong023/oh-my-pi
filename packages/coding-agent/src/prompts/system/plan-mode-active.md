@@ -91,6 +91,7 @@ Scannable markdown; depth follows change: one-file fix → few bullets; cross-cu
   - Every new path: empty/missing/conflict/error handling; or no handling and why.
 - **Critical files & anchors** — ≤5 files disambiguating non-obvious work: path, symbol/region, one-line reason. Line numbers hints; implementer rereads before edit. Omit Approach-obvious files.
 - **Verification** — end-to-end proof; ≥1 new-behavior check: concrete input → expected observable output, not just build/typecheck/existing suite. Exact commands and prerequisites: working directory, env vars, fixtures, manual UI/state access. Tie risky-step checks to steps.
+  For `spec-executor`, include one top-level fenced `spec-verification` block: a JSON array of `{ "id": "ut", "command": "bun test" }` entries. Use unique IDs and exact UT/ST commands for the implementation workspace. Manual checks stay in prose.
 - **Assumptions & contingencies** — only user-overridable decisions. NEVER put implementer decisions here; they belong in Approach. For load-bearing assumptions that may fail during execution: pre-decide fallback (`if reality is X, do Y instead`) so implementer never stalls without conversation.
 
 Cut decision-free material: restated invariants, unaffected behavior, mechanical repetition, narration. Specify what implementer would otherwise invent.

@@ -210,20 +210,22 @@ export class WebKitHost {
 		if (viewerPath === undefined || !this.canShow) {
 			throw new ToolError("omp's WebKit browser cannot show a window here: its engine ships no viewer.");
 		}
-		this.#viewer ??= WebKitViewer.launch(viewerPath, {
+		const pending: Promise<WebKitViewer> = (this.#viewer ??= WebKitViewer.launch(viewerPath, {
 			input: (source, events) => this.#userInputFrom(source, events),
 			closed: (source, byUser) => void this.#windowClosed(source, byUser),
 			exited: () => {
+				this.#retiringViewers.delete(pending);
+				if (this.#viewer !== pending) return;
 				this.#viewer = undefined;
 				this.#shown.clear();
 				this.#userInput.clear();
 			},
-		});
+		}));
 		let viewer: WebKitViewer;
 		try {
-			viewer = await this.#viewer;
+			viewer = await pending;
 		} catch (error) {
-			this.#viewer = undefined;
+			if (this.#viewer === pending) this.#viewer = undefined;
 			throw error;
 		}
 		viewer.show(block, title);
@@ -317,17 +319,18 @@ export class WebKitHost {
 
 	/** Stop owned processes; strict teardown retains failed viewer cleanup for retry and confirms exit. */
 	async close(options?: { strict?: boolean }): Promise<void> {
+		const strict = options?.strict === true;
 		const viewer = this.#viewer;
-		if (!options?.strict) this.#viewer = undefined;
+		this.#viewer = undefined;
+		if (viewer) this.#retiringViewers.add(viewer);
 		this.#shown.clear();
-		const viewers = new Set(options?.strict ? this.#retiringViewers : []);
-		if (viewer) viewers.add(viewer);
+		this.#userInput.clear();
+		const viewers = strict ? this.#retiringViewers : viewer ? [viewer] : [];
 		const viewerClosed = Promise.all(
-			[...viewers].map(async pending => {
+			Array.from(viewers, async pending => {
 				const running = await pending.catch(() => undefined);
-				if (!running) return;
-				await running.close(options);
-				this.#retiringViewers.delete(pending);
+				if (running) await running.close({ strict });
+				if (strict || !running) this.#retiringViewers.delete(pending);
 			}),
 		);
 		this.client.close();
@@ -348,14 +351,17 @@ export class WebKitHost {
 				await child.exited;
 			}
 		})();
-		if (!options?.strict) {
-			void viewerClosed;
+		if (!strict) {
+			void viewerClosed.catch(error => {
+				logger.warn("WebKit viewer cleanup failed; retaining its owned process for retry", {
+					error: String(error),
+				});
+			});
 			await hostClosed;
 			return;
 		}
 		const results = await Promise.allSettled([hostClosed, viewerClosed]);
 		const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
 		if (failures.length) throw new AggregateError(failures, "Failed closing owned WebKit processes");
-		if (this.#viewer === viewer) this.#viewer = undefined;
 	}
 }

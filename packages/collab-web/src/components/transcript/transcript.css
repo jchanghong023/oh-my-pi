@@ -39,6 +39,7 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	-moz-user-select: none;
+	user-select: none;
 }
 
 .tr-row--user .tr-gutter {
@@ -199,6 +200,7 @@
 	color: var(--fg-faint);
 	font-size: 12px;
 	-moz-user-select: none;
+	user-select: none;
 }
 
 .tr-divider::before,

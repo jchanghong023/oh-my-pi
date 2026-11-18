@@ -61,6 +61,7 @@ import type { Settings } from "./settings";
 
 import { cfgDisabledProviders, cfgEnabledModels, cfgModelProviderOrder } from "./model-settings";
 import { cfgRetryFallbackChains } from "../session/settings";
+import { dictationDefaultSelectors } from "../stt/settings";
 
 function isKnownProvider(provider: string): provider is KnownProvider {
 	return provider in DEFAULT_MODEL_PER_PROVIDER;
@@ -1203,8 +1204,13 @@ function hasOwnKey<T extends object>(value: T, key: PropertyKey): key is keyof T
 	return Object.hasOwn(value, key);
 }
 
+type RoleLookup = ModelRoleLookup & Partial<Pick<Settings, "getDictationLanguage">>;
+
 /** Built-in priority patterns for a role, following {@link ROLE_PRIORITY_ALIAS}. */
-export function rolePriorityDefaults(role: string): string[] {
+export function rolePriorityDefaults(role: string, settings?: RoleLookup): string[] {
+	if (role === "dictation") {
+		return normalizeModelPatternList([...dictationDefaultSelectors(settings?.getDictationLanguage?.())]);
+	}
 	const alias = hasOwnKey(ROLE_PRIORITY_ALIAS, role) ? ROLE_PRIORITY_ALIAS[role] : undefined;
 	const key = alias ?? role;
 	const defaults = roleDefaultModels();
@@ -1221,7 +1227,7 @@ interface ResolvedRolePattern {
 function resolveNestedRolePatterns(
 	value: string | string[],
 	roleDefaults: ResolvedRolePattern[],
-	settings: ModelRoleLookup | undefined,
+	settings: RoleLookup | undefined,
 	visited: Set<string>,
 	automatic = false,
 ): ResolvedRolePattern[] {
@@ -1257,7 +1263,7 @@ function resolveDefaultInheritedPatterns(
 	role: ModelRole,
 	configuredDefault: string | undefined,
 	roleDefaults: ResolvedRolePattern[],
-	settings: ModelRoleLookup | undefined,
+	settings: RoleLookup | undefined,
 	visited: Set<string>,
 ): ResolvedRolePattern[] {
 	if (!shouldInheritDefaultBeforePriority(role) || !configuredDefault) return [];
@@ -1266,7 +1272,7 @@ function resolveDefaultInheritedPatterns(
 
 function resolveConfiguredRolePattern(
 	value: string,
-	settings?: ModelRoleLookup,
+	settings?: RoleLookup,
 	visited: Set<string> = new Set(),
 ): ResolvedRolePattern[] | undefined {
 	const normalized = value.trim();
@@ -1287,7 +1293,7 @@ function resolveConfiguredRolePattern(
 	// Built-in defaults chain to other roles (judge: `@tiny`, `@smol`, `@default`). Left unexpanded, the
 	// matcher reads them as literal ids and `@default` fuzzy-matches Vertex ids like `claude-opus-4-8@default`.
 	const roleDefaults = isModelRole(role)
-		? resolveNestedRolePatterns(rolePriorityDefaults(role), [], settings, visited, true)
+		? resolveNestedRolePatterns(rolePriorityDefaults(role, settings), [], settings, visited, true)
 		: [];
 	const configuredFallback = isModelRole(role) ? ROLE_CONFIGURED_FALLBACK[role] : undefined;
 	const fallbackPatterns =
@@ -1318,7 +1324,7 @@ function resolveConfiguredRolePattern(
 /**
  * Expand a role alias like "@smol" to the configured model string.
  */
-export function expandRoleAlias(value: string, settings?: ModelRoleLookup): string {
+export function expandRoleAlias(value: string, settings?: RoleLookup): string {
 	const normalized = value.trim();
 	if (normalized === DEFAULT_MODEL_ROLE) {
 		return settings?.getModelRole("default") ?? value;
@@ -1329,10 +1335,7 @@ export function expandRoleAlias(value: string, settings?: ModelRoleLookup): stri
 }
 
 /** Expand a selector into ordered candidates while retaining automatic-default provenance. */
-export function resolveModelPatternCandidates(
-	value: string | string[],
-	settings?: ModelRoleLookup,
-): ResolvedRolePattern[] {
+export function resolveModelPatternCandidates(value: string | string[], settings?: RoleLookup): ResolvedRolePattern[] {
 	return normalizeModelPatternList(value).flatMap(
 		pattern => resolveConfiguredRolePattern(pattern, settings) ?? [{ pattern, automatic: false }],
 	);
@@ -1348,7 +1351,7 @@ export interface ModelPatternResolutionOptions {
 
 export function resolveConfiguredModelPatterns(
 	value: string | string[] | undefined,
-	settings?: ModelRoleLookup,
+	settings?: RoleLookup,
 	options?: ModelPatternResolutionOptions,
 ): string[] {
 	const patterns = normalizeModelPatternList(value);
@@ -1557,8 +1560,16 @@ export function resolveModelRoleValue(
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
 	}
 
+	const { roleLookup, settings } = options ?? {};
+	const lookup: RoleLookup | undefined =
+		roleLookup && settings
+			? {
+					getModelRole: role => roleLookup.getModelRole(role),
+					getDictationLanguage: () => settings.getDictationLanguage(),
+				}
+			: (roleLookup ?? settings);
 	const effectivePatterns = normalizeModelPatternList(normalized).flatMap(
-		pattern => resolveConfiguredRolePattern(pattern, options?.roleLookup ?? options?.settings) ?? [],
+		pattern => resolveConfiguredRolePattern(pattern, lookup) ?? [],
 	);
 	if (!effectivePatterns || effectivePatterns.length === 0) {
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
@@ -1713,7 +1724,7 @@ export function resolveRoleChain(role: string, settings: Settings, pool: Model<A
 	const primarySelector = configured || formatModelRoleAlias(role);
 	const configuredFallbacks = cfgRetryFallbackChains.get(settings)[role];
 	const hasConfiguredFallbackChain = Array.isArray(configuredFallbacks);
-	const fallbackSelectors = hasConfiguredFallbackChain ? configuredFallbacks : rolePriorityDefaults(role);
+	const fallbackSelectors = hasConfiguredFallbackChain ? configuredFallbacks : rolePriorityDefaults(role, settings);
 	const selectors = [
 		{ selector: primarySelector, explicit: Object.hasOwn(configuredRoles, role), automatic: false },
 		...fallbackSelectors.map(selector => ({

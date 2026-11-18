@@ -1,12 +1,13 @@
 import { expect, it } from "bun:test";
 import * as path from "node:path";
-import { hasEmbeddedArchive } from "@oh-my-pi/pi-utils/embedded-archive";
 import { renderOpenWikiLicenseSections } from "../src/cli/license";
 import { openWikiPackageDirectory } from "../src/openwiki/resource-dependencies";
+import { openWikiResourceFingerprint } from "../src/openwiki/resource-fingerprint";
+import { loadOpenWikiArchive } from "../src/openwiki/visual-assets";
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
-const cliEntry = path.join(repoRoot, "packages/coding-agent/src/cli.ts");
-const generatedArchive = path.join(repoRoot, "packages/coding-agent/src/openwiki/openwiki-resources.generated.txt");
+const packageDir = path.join(repoRoot, "packages/coding-agent");
+const cliEntry = path.join(packageDir, "src/cli.ts");
 const noticeOwners = ["coding-agent", "natives"];
 
 it("prints OMP, OpenWiki and dependency licenses on the top-level flag", async () => {
@@ -19,33 +20,46 @@ it("prints OMP, OpenWiki and dependency licenses on the top-level flag", async (
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	const dependencyLicenses = ["force-graph", "mermaid"].map(name =>
-		Bun.file(
-			path.join(openWikiPackageDirectory(name, path.join(repoRoot, "packages/coding-agent")), "LICENSE"),
-		).text(),
-	);
-	const [exitCode, stdout, stderr, license, openWikiLicense, ...notices] = await Promise.all([
+	const [exitCode, stdout, stderr, license, ...notices] = await Promise.all([
 		proc.exited,
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
-		Bun.file(path.join(repoRoot, "packages/coding-agent/LICENSE")).text(),
-		Bun.file(path.join(repoRoot, "vendor/openwiki/LICENSE")).text(),
+		Bun.file(path.join(packageDir, "LICENSE")).text(),
 		...noticeOwners.map(dir => Bun.file(path.join(repoRoot, "packages", dir, "THIRD-PARTY-NOTICES.txt")).text()),
 	]);
-	const dependencies = await Promise.all(dependencyLicenses);
 
 	expect(exitCode).toBe(0);
 	expect(stderr).toBe("");
 	for (const section of [license, ...notices]) {
 		expect(stdout).toContain(section.trimEnd());
 	}
-	expect(stdout).toContain(openWikiLicense.trimEnd());
-	if (hasEmbeddedArchive(await Bun.file(generatedArchive).text())) {
-		for (const dependencyLicense of dependencies) {
-			expect(stdout).toContain(dependencyLicense.trimEnd());
-		}
-	} else {
+	const vendorLicense = Bun.file(path.join(repoRoot, "vendor/openwiki/LICENSE"));
+	if (!(await vendorLicense.exists())) {
+		expect(stdout).toContain(
+			"OpenWiki resources are unavailable. Initialize the OpenWiki submodule and run bun run gen:openwiki-resources.",
+		);
+		return;
+	}
+	expect(stdout).toContain((await vendorLicense.text()).trimEnd());
+
+	const archive = await loadOpenWikiArchive().catch(() => undefined);
+	if (!archive) {
 		expect(stdout).toContain("OpenWiki browser notices are not generated");
+		return;
+	}
+	if (archive.sourceFingerprint !== openWikiResourceFingerprint(repoRoot)) {
+		expect(stdout).toContain("OpenWiki browser notices are stale");
+		return;
+	}
+	expect(stdout).not.toContain("OpenWiki browser notices are not generated");
+	expect(stdout).not.toContain("OpenWiki browser notices are stale");
+	const dependencies = await Promise.all(
+		["force-graph", "mermaid"].map(name =>
+			Bun.file(path.join(openWikiPackageDirectory(name, packageDir), "LICENSE")).text(),
+		),
+	);
+	for (const dependencyLicense of dependencies) {
+		expect(stdout).toContain(dependencyLicense.trimEnd());
 	}
 });
 

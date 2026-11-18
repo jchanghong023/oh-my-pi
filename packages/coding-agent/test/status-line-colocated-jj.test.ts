@@ -17,7 +17,7 @@ import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo, VcsStatusOptions } from "@oh-my-pi/pi-natives";
+import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { github } from "@oh-my-pi/pi-coding-agent/utils/github";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
@@ -91,7 +91,7 @@ function gitHandle(head: VcsHeadState | null, status: string): VcsGitRepo {
 	return {
 		headSync: () => head,
 		linkedWorktree: () => null,
-		statusPorcelain: async (): Promise<string> => status,
+		statusPorcelainBytes: async (): Promise<Buffer> => Buffer.from(status),
 	} as unknown as VcsGitRepo;
 }
 
@@ -107,7 +107,6 @@ function operationalGit(root: string, head: VcsHeadState | null, status = ""): V
 		asJj: () => null,
 		root: () => root,
 		watchTarget: () => `${root}/.git/HEAD`,
-		statusPorcelain: (options: VcsStatusOptions) => handle.statusPorcelain(options),
 	} as unknown as VcsRepo;
 }
 

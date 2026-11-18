@@ -17,7 +17,7 @@ use std::time::Duration;
 use bstr::{BString, ByteSlice};
 
 use super::{Child, Out, Turn, nanos};
-use crate::bash::{CallOutcome, Platform, ShellApi, Signal, ToolCall};
+use crate::bash::{CallOutcome, Platform, RunId, ShellApi, Signal, ToolCall};
 
 /// GNU timeout's exit status for its own usage or internal errors.
 const EXIT_FAILURE: i32 = 125;
@@ -256,6 +256,7 @@ enum Phase {
 /// A `timeout` call.
 pub(super) struct Timeout {
 	pub(super) child: Child,
+	virtual_signal:   bool,
 	call:             ToolCall,
 	out:              Out,
 	phase:            Phase,
@@ -275,7 +276,16 @@ impl Timeout {
 				Phase::Exit(EXIT_FAILURE)
 			},
 		};
-		Self { child: Child::default(), call, out, phase }
+		Self { child: Child::default(), virtual_signal: false, call, out, phase }
+	}
+
+	pub(super) fn on_done(&mut self, run: RunId, status: i32, virtual_signal: bool) -> bool {
+		if self.child.on_done(run, status) {
+			self.virtual_signal = virtual_signal;
+			true
+		} else {
+			false
+		}
 	}
 
 	pub(super) fn deadline(&self) -> Option<u64> {
@@ -345,8 +355,13 @@ impl Timeout {
 					let platform = Platform::current();
 					Phase::Exit(if killed {
 						EXIT_KILLED
-					} else if opts.preserve && cfg!(windows) && !turn.log.has_external(turn.group) {
-						// Windows in-process cancellation is not an OS signal death.
+					} else if opts.preserve
+						&& cfg!(windows)
+						&& (self.virtual_signal
+							|| (self.child.status.is_none() && !turn.log.has_external(turn.group)))
+					{
+						// A synthetic in-process cancellation is not an OS signal
+						// death.
 						128
 					} else if opts.preserve {
 						self

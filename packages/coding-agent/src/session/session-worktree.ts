@@ -6,7 +6,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { IsoBackendKind } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { hashPath } from "@oh-my-pi/pi-utils";
+import { hashPath, isEnoent } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { SettingValueOf } from "../config/registry";
 import type { Settings } from "../config/settings";
@@ -111,11 +111,18 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 	}
 	const worktrees = await repository.worktrees();
 	if (!createdBranch) {
-		const sameBranch = (await repository.currentBranch()) === branch;
-		const existing = worktrees.find(entry => entry.branch === branchRef);
-		const reusedPath = sameBranch ? cwd : existing ? await fs.realpath(existing.path) : undefined;
-		if (reusedPath !== undefined) {
-			return { path: reusedPath, branch, sourceCwd: cwd, baseCommit, created: false, createdBranch: false };
+		if ((await repository.currentBranch()) === branch) {
+			return { path: cwd, branch, sourceCwd: cwd, baseCommit, created: false, createdBranch: false };
+		}
+		for (const existing of worktrees) {
+			if (existing.branch !== branchRef) continue;
+			try {
+				const reusedPath = await fs.realpath(existing.path);
+				return { path: reusedPath, branch, sourceCwd: cwd, baseCommit, created: false, createdBranch: false };
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+				// worktreeAdd confirms the checkout is absent and the registration is unlocked before pruning it.
+			}
 		}
 	}
 	const primaryRoot = repository.primaryRoot() ?? repository.info().repoRoot;

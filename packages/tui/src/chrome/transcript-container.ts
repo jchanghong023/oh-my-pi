@@ -940,8 +940,8 @@ export class TranscriptContainer extends Container {
 			return drop > 0 ? output.slice(drop) : output;
 		}
 		this.#viewportHistoryAdjacent = false;
-		// Under pressure upstream spends rows on content rather than ordinary
-		// decoration. Status notices keep their semantic boundary on every path.
+		// Under pressure content comes before decoration. Reserve notice separators
+		// if they fit without displacing the one-row minimum of each block.
 		gapRows = 0;
 		for (let index = 0; index < shown.length; index++) {
 			gaps[index] = index > 0 && shown[index]!.entry.component instanceof StatusNotice ? gaps[index]! : 0;
@@ -1960,8 +1960,7 @@ export class TranscriptContainer extends Container {
 
 	/**
 	 * One-row-per-block fallback for a live region that cannot fit the viewport.
-	 * A status notice owns a leading spacer even here: keep that boundary when
-	 * both adjacent blocks fit, preferring the newest blocks over older ones.
+	 * Keep a status notice's leading spacer only after reserving content rows.
 	 * `behind` holds the older live blocks `renderViewport` deliberately left
 	 * unrendered. Only its active blocks (few) and the newest settled block
 	 * offering an emergency row are rendered, so the summary count and the
@@ -2005,7 +2004,7 @@ export class TranscriptContainer extends Container {
 			visible = visibleRows > 0 ? shown.slice(-visibleRows) : [];
 			emergencyCandidate = undefined;
 			emergencyRow = undefined;
-			const visibleStart = shown.length - visibleRows;
+			const visibleStart = visibleRows > 0 ? shown.length - visibleRows : 0;
 			for (let index = visibleStart - 1; index >= 0; index--) {
 				const candidate = shown[index]!;
 				const block = candidate.entry.component as Component & FinalizableBlock;
@@ -2017,35 +2016,12 @@ export class TranscriptContainer extends Container {
 				visible = [candidate, ...visible.slice(1)];
 				break;
 			}
-			if (emergencyCandidate === undefined) {
+			if (visibleRows > 0 && emergencyCandidate === undefined) {
 				const found = findBehindEmergency();
 				if (found !== null) {
 					emergencyCandidate = found.candidate;
 					emergencyRow = found.row;
 					visible = [found.candidate, ...visible.slice(1)];
-				}
-			}
-			// Full and history renders trim the notice's own Spacer and restore
-			// it as the inter-block gap. Emergency projection must reserve the
-			// same row instead of joining a notice to the preceding visible block.
-			// Drop the oldest projected blocks first; the active summary below
-			// then counts any active blocks displaced by these reserved gaps.
-			let statusGaps = 0;
-			for (let index = 1; index < visible.length; index++) {
-				if (visible[index]!.entry.component instanceof StatusNotice) statusGaps++;
-			}
-			let dropped = 0;
-			while (visible.length - dropped + statusGaps > visibleRows) {
-				if (dropped + 1 < visible.length && visible[dropped + 1]!.entry.component instanceof StatusNotice) {
-					statusGaps--;
-				}
-				dropped++;
-			}
-			if (dropped > 0) {
-				visible = visible.slice(dropped);
-				if (emergencyCandidate !== undefined && !visible.includes(emergencyCandidate)) {
-					emergencyCandidate = undefined;
-					emergencyRow = undefined;
 				}
 			}
 
@@ -2069,10 +2045,20 @@ export class TranscriptContainer extends Container {
 
 		const output = hiddenActive > 0 ? [`${hiddenActive} more transcript blocks active`] : [];
 		const owners: (Component | undefined)[] = hiddenActive > 0 ? [undefined] : [];
+		let noticeGaps = 0;
+		for (let index = 1; index < visible.length; index++) {
+			if (visible[index]!.entry.component instanceof StatusNotice) noticeGaps++;
+		}
+		// Omit the oldest gaps first when even one row per block leaves no room
+		// for decoration. A leading notice never needs a separator.
+		let skipGaps = Math.max(0, noticeGaps - Math.max(0, rows - visible.length - output.length));
 		for (const candidate of visible) {
 			if (candidate !== visible[0] && candidate.entry.component instanceof StatusNotice) {
-				output.push("");
-				owners.push(undefined);
+				if (skipGaps > 0) skipGaps--;
+				else {
+					output.push("");
+					owners.push(undefined);
+				}
 			}
 			if (candidate === emergencyCandidate) {
 				output.push(emergencyRow ?? "");

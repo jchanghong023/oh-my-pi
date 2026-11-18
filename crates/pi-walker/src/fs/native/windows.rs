@@ -333,14 +333,12 @@ pub(crate) fn list(
 					record.mtime = Some(info.stamp.mtime);
 					true
 				},
-				Err(err)
-					if matches!(
-						err.kind(),
-						io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
-					) =>
-				{
-					false
+				Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+					// Keep the enumerated metadata so descent can report an open
+					// error.
+					record.file_type == FileType::Dir
 				},
+				Err(err) if err.kind() == io::ErrorKind::NotFound => false,
 				Err(err) => {
 					error = Some(err);
 					true

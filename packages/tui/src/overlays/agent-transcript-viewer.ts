@@ -78,7 +78,7 @@ export interface AgentTranscriptViewerDeps {
 	isBuiltInTool?: (name: string) => boolean;
 	getMessageRenderer?: (customType: string) => MessageRenderer | undefined;
 	cwd: string;
-	hideThinkingBlock?: () => boolean;
+	hideThinkingBlock?: (detailedInspection: boolean) => boolean;
 	proseOnlyThinking?: () => boolean;
 	expandThinkingBlocks?: () => boolean;
 	expandKeys: KeyId[];
@@ -262,6 +262,7 @@ export class AgentTranscriptViewer implements Component {
 	/** Refresh the transcript from a local file or remote host. */
 	#refresh(allowAsync: boolean): void {
 		if (this.#disposed) return;
+		if (this.#syncInspectionMode() && !this.#builder.isEmpty) this.#deps.requestRender();
 		if (this.#deps.remote) {
 			this.#fetchRemote();
 			return;
@@ -523,19 +524,22 @@ export class AgentTranscriptViewer implements Component {
 		return messages;
 	}
 
+	#syncInspectionMode(): boolean {
+		// Only explicit inspection of a retained execution overrides the live HUD.
+		return this.#builder.setDetailedInspection(
+			this.#deps.registry.get(this.#deps.agentId)?.history?.executionEnded === true,
+		);
+	}
+
 	#rebuild(entries: SessionMessageEntryLike[]): void {
+		this.#syncInspectionMode();
 		this.#builder.rebuild(entries);
-		// Explicit execution inspection must not inherit the live compact HUD's
-		// hidden tool activity. Expansion still controls each tool's output depth.
-		if (this.#deps.registry.get(this.#deps.agentId)?.history?.executionEnded)
-			this.#builder.container.setToolActivityVisible(true);
 		this.#deps.requestRender();
 	}
 
 	#append(entries: SessionMessageEntryLike[]): void {
+		this.#syncInspectionMode();
 		this.#builder.append(entries);
-		if (this.#deps.registry.get(this.#deps.agentId)?.history?.executionEnded)
-			this.#builder.container.setToolActivityVisible(true);
 		this.#deps.requestRender();
 	}
 

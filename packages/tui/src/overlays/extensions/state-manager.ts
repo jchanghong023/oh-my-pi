@@ -292,6 +292,7 @@ export function applyDisabledExtensionsToState(
 ): DashboardState {
 	const disabled = new Set(disabledIds);
 	const updateExtension = (ext: Extension): Extension => {
+		if (ext.disabledReason === "skill-config") return ext;
 		if (disabled.has(ext.id)) {
 			if (ext.state === "disabled" && ext.disabledReason === "item-disabled") return ext;
 			return { ...ext, state: "disabled", disabledReason: "item-disabled" };

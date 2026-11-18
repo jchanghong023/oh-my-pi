@@ -29,6 +29,7 @@ import {
 	checkSkillReadAccess,
 	getGrantedSpecSkill,
 	isExplicitOnlySkill,
+	type SkillAccessContext,
 	skillAccessContext,
 } from "../spec-driven/skill-policy";
 import {
@@ -72,14 +73,13 @@ interface UrlSkill {
 	urlPath: string;
 }
 
-/** The loaded skill in `skills` that a skill:// URL names. */
-async function findUrlSkill(url: InternalUrl, skills: readonly Skill[], context?: ResolveContext): Promise<UrlSkill> {
-	const skillName = url.rawHost || url.hostname;
-	if (!skillName) {
-		throw new Error("skill:// URL requires a skill name: skill://<name>");
-	}
-
-	const access = skillAccessContext(context);
+/** Match the exact granted or loaded skill, without consulting the bundled manifest. */
+function findKnownUrlSkill(
+	url: InternalUrl,
+	skillName: string,
+	skills: readonly Skill[],
+	access: SkillAccessContext,
+): UrlSkill | undefined {
 	// WHATWG pathname 会先折叠原始或编码的 ..；使用原始路径让现有校验在解析目标前拒绝遍历。
 	let urlPath = url.rawPathname ?? url.pathname;
 	let skill: Skill | undefined;
@@ -94,34 +94,30 @@ async function findUrlSkill(url: InternalUrl, skills: readonly Skill[], context?
 		if (skill) urlPath = slash === -1 ? "" : urlPath.slice(slash);
 	}
 	skill ??= getGrantedSpecSkill(skillName, access) ?? skills.find(s => s.name === skillName);
-	// A disabled/unloaded pinned name is still protected, not an MCP fallback opportunity.
-	if (!skill) {
-		const resources = await ensureSpecDrivenResources();
-		const entry = resources.manifest.skills.find(entry => entry.name === skillName);
-		if (entry) {
-			const filePath = path.resolve(resources.root, entry.path);
-			skill = {
-				name: entry.name,
-				filePath,
-				baseDir: path.dirname(filePath),
-				description: "",
-				source: `bundled-${entry.source}`,
-				hide: true,
-				containRoot: {
-					openspec: resources.openspecRoot,
-					superpowers: resources.superpowersRoot,
-					jch: resources.jchRoot,
-				}[entry.source],
-			};
-		}
-	}
-	if (!skill) {
-		const available = skills.filter(s => !s.hide && !isExplicitOnlySkill(s)).map(s => s.name);
-		const availableStr = available.length > 0 ? available.join(", ") : "none";
-		throw new UnknownSkillError(`Unknown skill: ${skillName}\nAvailable: ${availableStr}`);
-	}
+	if (!skill) return undefined;
 	checkSkillReadAccess(skill, access);
 	return { skill, urlPath };
+}
+
+/** An unloaded pinned name remains protected even when no local skill owns the URL. */
+async function findBundledSkill(skillName: string): Promise<Skill | undefined> {
+	const resources = await ensureSpecDrivenResources();
+	const entry = resources.manifest.skills.find(entry => entry.name === skillName);
+	if (!entry) return undefined;
+	const filePath = path.resolve(resources.root, entry.path);
+	return {
+		name: entry.name,
+		filePath,
+		baseDir: path.dirname(filePath),
+		description: "",
+		source: `bundled-${entry.source}`,
+		hide: true,
+		containRoot: {
+			openspec: resources.openspecRoot,
+			superpowers: resources.superpowersRoot,
+			jch: resources.jchRoot,
+		}[entry.source],
+	};
 }
 
 /**
@@ -229,20 +225,6 @@ async function isStaleTarget(
 	return isSkillSuperseded(target.skill, host);
 }
 
-/** {@link findUrlSkill}, or undefined for a name no skill in `skills` owns. */
-async function findKnownUrlSkill(
-	url: InternalUrl,
-	skills: readonly Skill[],
-	context: ResolveContext | undefined,
-): Promise<UrlSkill | undefined> {
-	try {
-		return await findUrlSkill(url, skills, context);
-	} catch (error) {
-		if (error instanceof UnknownSkillError) return undefined;
-		throw error;
-	}
-}
-
 /**
  * The skill a skill:// URL names in `skills` or, when it moved on since `skills` was taken, in the
  * holder's current list, which wins where it names the URL more exactly (a namespaced skill added
@@ -256,11 +238,26 @@ async function findUrlSkillAnew(
 	host: SkillRediscoveryHost,
 	context: ResolveContext | undefined,
 ): Promise<UrlSkill> {
-	const captured = await findKnownUrlSkill(url, skills, context);
-	const current = host.skills !== skills ? await findKnownUrlSkill(url, host.skills, context) : undefined;
+	const skillName = url.rawHost || url.hostname;
+	if (!skillName) throw new Error("skill:// URL requires a skill name: skill://<name>");
+	const access = skillAccessContext(context);
+	const captured = findKnownUrlSkill(url, skillName, skills, access);
+	const current = host.skills !== skills ? findKnownUrlSkill(url, skillName, host.skills, access) : undefined;
 	if (current && (!captured || current.urlPath.length < captured.urlPath.length)) return current;
 	if (captured) return captured;
-	return findUrlSkill(url, (await host.rediscoverForUnknownName?.()) ?? skills, context);
+	const refreshed = await host.rediscoverForUnknownName?.();
+	const discovered = refreshed && findKnownUrlSkill(url, skillName, refreshed, access);
+	if (discovered) return discovered;
+
+	const bundled = await findBundledSkill(skillName);
+	if (bundled) {
+		checkSkillReadAccess(bundled, access);
+		return { skill: bundled, urlPath: url.rawPathname ?? url.pathname };
+	}
+
+	const available = (refreshed ?? host.skills).filter(s => !s.hide && !isExplicitOnlySkill(s)).map(s => s.name);
+	const availableStr = available.length > 0 ? available.join(", ") : "none";
+	throw new UnknownSkillError(`Unknown skill: ${skillName}\nAvailable: ${availableStr}`);
 }
 
 /**

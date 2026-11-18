@@ -25,6 +25,8 @@ function makeCtx(
 	});
 	const ctx = {
 		session: {
+			sessionManager: { getSessionId: () => "s1" },
+			isCompacting: false,
 			customCommands: [],
 			prompt,
 			promptCustomMessage: mock(async () => true),
@@ -64,12 +66,13 @@ function makeBuiltinCtx(queue: CompactionQueuedMessage[]) {
 	return { ctx, helpers };
 }
 
-test("queued /new starts a new session before the next prompt", async () => {
+test("queued /new parks the next prompt until the original session returns", async () => {
 	const { ctx, helpers } = makeBuiltinCtx([
 		{ text: "/new", mode: "followUp" },
-		{ text: "work in the new session", mode: "steer" },
+		{ text: "work in the original session", mode: "steer" },
 	]);
 	let sessionId = "previous";
+	ctx.session.sessionManager.getSessionId = () => sessionId;
 	ctx.handleNewCommand = async () => {
 		sessionId = "new";
 	};
@@ -80,10 +83,12 @@ test("queued /new starts a new session before the next prompt", async () => {
 	});
 
 	await helpers.flushCompactionQueue({ willRetry: false });
-	await Promise.resolve();
-	await Promise.resolve();
+	expect(sessionId).toBe("new");
+	expect(requests).toEqual([]);
 
-	expect(requests).toEqual([{ sessionId: "new", text: "work in the new session" }]);
+	sessionId = "previous";
+	await helpers.restoreCompactionQueue(ctx.session);
+	expect(requests).toEqual([{ sessionId: "previous", text: "work in the original session" }]);
 });
 
 test("a queued builtin without a following prompt runs locally", async () => {

@@ -80,6 +80,10 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 		await writeAIReqWorkbenchAssets(workbenchAssets);
 		const openWikiResources = await buildOpenWikiResources();
 		await writeOpenWikiResources(openWikiResources);
+		// Read the manifest after generation: local builds can update it in place.
+		const viewerManifest = Bun.file(path.resolve(import.meta.dir, "../src/export/html/viewer.generated.json"));
+		const { file }: { file: string } = await viewerManifest.json();
+		const viewer = await Bun.file(path.resolve(import.meta.dir, "../export-assets", file)).text();
 		const buildOptions: Bun.BuildConfig = {
 			entrypoints: [options.entrypoint],
 			root: options.repoRoot,
@@ -88,6 +92,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
+				"process.env.PI_HTML_EXPORT_VIEWER": JSON.stringify(viewer),
 				...(options.buildVersion ? { "process.env.PI_BUILD_VERSION": JSON.stringify(options.buildVersion) } : {}),
 				...(options.updateRepository
 					? { "process.env.PI_UPDATE_REPOSITORY": JSON.stringify(options.updateRepository) }

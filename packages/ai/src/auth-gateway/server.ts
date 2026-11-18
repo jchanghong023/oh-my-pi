@@ -320,16 +320,20 @@ class EmbeddedToolTurns {
 	#bytes = 0;
 	#closed = false;
 
-	#key(sessionId: string, message: AssistantMessage): string | undefined {
-		const calls = message.content.filter(part => part.type === "toolCall");
-		return calls.length > 0 && calls.every(call => call.id)
-			? JSON.stringify([sessionId, calls.map(call => [call.id, call.name, call.arguments])])
-			: undefined;
+	#key(sessionId: string, message: AssistantMessage, toWireId?: (id: string) => string): string | undefined {
+		const calls: [string, string, Record<string, unknown>][] = [];
+		for (const part of message.content) {
+			if (part.type !== "toolCall") continue;
+			const id = toWireId ? toWireId(part.id) : part.id;
+			if (!id) return undefined;
+			calls.push([id, part.name, part.arguments]);
+		}
+		return calls.length > 0 ? JSON.stringify([sessionId, calls]) : undefined;
 	}
 
-	remember(sessionId: string, message: AssistantMessage): void {
+	remember(sessionId: string, message: AssistantMessage, toWireId?: (id: string) => string): void {
 		if (this.#closed) return;
-		const key = this.#key(sessionId, message);
+		const key = this.#key(sessionId, message, toWireId);
 		if (!key) return;
 		const previous = this.#turns.get(key);
 		if (previous) {
@@ -455,13 +459,19 @@ async function handleFormatEndpoint(
 	const clientKey = normalizeClientSessionKey(parsed.options.promptCacheKey);
 	const toolsJson = clientKey === undefined ? serializeTools(parsed.context) : undefined;
 	const sessionId = clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
-	// Tool declarations can change between turns, unlike the conversation seed.
+	// When there is no explicit key, tool declarations can still change
+	// between turns, unlike the conversation seed.
 	const toolTurnSessionId = toolTurns
 		? JSON.stringify([
 				bootOpts.client?.name ?? null,
-				deriveSessionId(parsed.modelId, { messages: parsed.context.messages.slice(0, 1) }),
+				route.label,
+				parsed.modelId,
+				clientKey !== undefined,
+				clientKey ?? deriveSessionId(parsed.modelId, { messages: parsed.context.messages.slice(0, 1) }),
 			])
 		: sessionId;
+	// Responses echoes only the wire call ID; keep the native ID in the cached turn.
+	const toWireToolCallId = route.module === openaiResponses ? openaiResponses.wireCallId : undefined;
 	parsed.options.promptCacheKey = sessionId;
 	toolTurns?.restore(toolTurnSessionId, parsed.context);
 
@@ -520,7 +530,7 @@ async function handleFormatEndpoint(
 			if (controller.signal.aborted) return clientClosedResponse(route);
 			const message = await completeSimple(model, parsed.context, streamOpts);
 			if (message.stopReason !== "error" && message.stopReason !== "aborted")
-				toolTurns?.remember(toolTurnSessionId, message);
+				toolTurns?.remember(toolTurnSessionId, message, toWireToolCallId);
 			recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
 			if (message.stopReason === "aborted" || message.stopReason === "error") {
 				const errorMessage =
@@ -598,7 +608,7 @@ async function handleFormatEndpoint(
 				for await (const event of { [Symbol.asyncIterator]: iterate }) {
 					if (event.type === "done") {
 						terminalSeen = true;
-						toolTurns.remember(toolTurnSessionId, event.message);
+						toolTurns.remember(toolTurnSessionId, event.message, toWireToolCallId);
 					} else if (event.type === "error") {
 						terminalSeen = true;
 					}
@@ -607,7 +617,7 @@ async function handleFormatEndpoint(
 				// Some providers end with a result but no terminal event.
 				const message = terminalSeen ? undefined : await events.result().catch(() => undefined);
 				if (message && message.stopReason !== "error" && message.stopReason !== "aborted") {
-					toolTurns.remember(toolTurnSessionId, message);
+					toolTurns.remember(toolTurnSessionId, message, toWireToolCallId);
 				}
 			};
 		}

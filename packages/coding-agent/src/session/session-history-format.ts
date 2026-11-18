@@ -368,9 +368,15 @@ function toolCallLine(
 	if (expandToolIO) {
 		const sections: string[] = [];
 		if (name === "ask") {
-			const askArguments =
-				expandedAskArguments(args, transformExpandedToolIO) ?? expandedAskDetails(result, transformExpandedToolIO);
-			if (askArguments) sections.push(`Ask input:\n${boundedFencedToolContext(askArguments, "json")}`);
+			const html = args?.html;
+			if (typeof html === "string") {
+				sections.push(`Ask input:\n${boundedFencedToolContext(transformExpandedToolIO?.(html) ?? html, "html")}`);
+			} else {
+				const askArguments =
+					expandedAskArguments(args, transformExpandedToolIO) ??
+					expandedAskDetails(result, transformExpandedToolIO);
+				if (askArguments) sections.push(`Ask input:\n${boundedFencedToolContext(askArguments, "json")}`);
+			}
 		}
 		if (result) {
 			const resultText = expandedToolResultText(visibleResultText);

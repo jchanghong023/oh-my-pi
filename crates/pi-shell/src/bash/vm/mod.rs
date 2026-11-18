@@ -399,6 +399,12 @@ pub struct Shell {
 	orphans: Vec<Vpid>,
 }
 
+/// Provenance of a signal-derived run status, not an ordinary `exit 128+n`.
+enum RunSignal {
+	External(i32),
+	Virtual,
+}
+
 /// Shell-wide state shared by all vprocs (kept apart from `procs` so ops can
 /// borrow a vproc and the kernel at once).
 pub struct Kernel {
@@ -518,11 +524,10 @@ pub struct Kernel {
 	/// The last root run that `exit` or `set -e` ended
 	/// ([`Shell::ended_by_exit`]); not imaged.
 	pub exited:             Option<RunId>,
-	/// Signal deaths of external programs replacing a submitted run, pending
-	/// its completion report; callouts do not survive frame restoration.
-	pub exec_signals:       HashMap<RunId, i32>,
+	/// Signal deaths of submitted runs pending their completion report.
+	run_signals:            HashMap<RunId, RunSignal>,
 	/// Signal death associated with the most recently reported run.
-	pub reported_signal:    Option<(RunId, i32)>,
+	reported_signal:        Option<(RunId, RunSignal)>,
 	/// Background jobs whose pid is still to be settled
 	/// ([`proc::Bang`]): imaged (a restored job still decides).
 	pub bangs:              Vec<proc::Bang>,
@@ -645,7 +650,7 @@ impl Kernel {
 			callout_labels: Vec::new(),
 			prior_jobs: Vec::new(),
 			exited: None,
-			exec_signals: HashMap::new(),
+			run_signals: HashMap::new(),
 			reported_signal: None,
 			bangs: Vec::new(),
 			settled: Vec::new(),
@@ -1906,16 +1911,32 @@ impl Shell {
 	/// store holds every change the step made (`Kernel::sync_root` writes
 	/// the root vproc's in-place fields).
 	pub fn step(&mut self, cx: &mut Cx<'_>, budget: Budget) -> Step {
+		self.step_tracking_cancel(cx, budget, None)
+	}
+
+	/// Step with an optional snapshot of external handles targeted by TERM
+	/// cancellation.
+	pub(crate) fn step_tracking_cancel(
+		&mut self,
+		cx: &mut Cx<'_>,
+		budget: Budget,
+		term_members: Option<&mut Vec<crate::proctree::Process>>,
+	) -> Step {
 		self.see_epoch(cx);
 		// Subshells a host submitted since the last step.
 		self.adopt(cx);
 		self.settle_callouts();
-		let step = self.step_inner(cx, budget);
+		let step = self.step_inner(cx, budget, term_members);
 		self.k.sync_root(cx.store, &self.procs[0]);
 		step
 	}
 
-	fn step_inner(&mut self, cx: &mut Cx<'_>, budget: Budget) -> Step {
+	fn step_inner(
+		&mut self,
+		cx: &mut Cx<'_>,
+		budget: Budget,
+		mut term_members: Option<&mut Vec<crate::proctree::Process>>,
+	) -> Step {
 		let start = cx.host.now_ns();
 		let mut ops = 0u32;
 		loop {
@@ -1932,7 +1953,7 @@ impl Shell {
 				return step;
 			}
 			if self.k.ctl.word() != 0 {
-				if let Some(step) = self.apply_requests(cx) {
+				if let Some(step) = self.apply_requests(cx, term_members.as_deref_mut()) {
 					return step;
 				}
 				continue;
@@ -2149,7 +2170,7 @@ impl Shell {
 	/// A finished script or an outgoing callout, if any.
 	fn report(&mut self) -> Option<Step> {
 		if let Some((run, status)) = self.k.done.pop_front() {
-			self.k.reported_signal = self.k.exec_signals.remove(&run).map(|signal| (run, signal));
+			self.k.reported_signal = self.k.run_signals.remove(&run).map(|signal| (run, signal));
 			return Some(Step::Done { run, status });
 		}
 		let (id, call) = self.k.calls_out.pop_front()?;
@@ -2164,10 +2185,12 @@ impl Shell {
 		extra: &[crate::proctree::Process],
 		groups: bool,
 		resume: bool,
+		mut tracked: Option<&mut Vec<crate::proctree::Process>>,
 	) {
 		let included =
 			|i: usize, detached: bool| selected.map_or(!detached, |hits| hits.contains(&i));
-		let pids: Vec<u32> = self
+		let mut pids = Vec::new();
+		for ext in self
 			.procs
 			.iter()
 			.enumerate()
@@ -2175,10 +2198,16 @@ impl Shell {
 			.flat_map(|(_, p)| p.frames.iter())
 			.filter_map(|frame| frame.scratch.as_ref())
 			.filter_map(|sc| match &sc.live {
-				Live::Ext(ext) => Some(ext.pid()),
+				Live::Ext(ext) => Some(ext),
 				_ => None,
-			})
-			.collect();
+			}) {
+			pids.push(ext.pid());
+			if let Some(members) = tracked.as_deref_mut()
+				&& let Some(process) = ext.process()
+			{
+				members.push(process);
+			}
+		}
 		let mut batched = false;
 		'first: for (i, p) in self.procs.iter_mut().enumerate() {
 			if !included(i, p.lineage.detached) {
@@ -2234,7 +2263,11 @@ impl Shell {
 	}
 
 	/// Apply pending control requests.
-	fn apply_requests(&mut self, cx: &mut Cx<'_>) -> Option<Step> {
+	fn apply_requests(
+		&mut self,
+		cx: &mut Cx<'_>,
+		term_members: Option<&mut Vec<crate::proctree::Process>>,
+	) -> Option<Step> {
 		let req = self.k.ctl.take();
 		if req & (CANCEL | SIGNAL) != 0 {
 			// A cancel or signal concerns blocked vprocs too: let them run
@@ -2264,7 +2297,12 @@ impl Shell {
 				.enumerate()
 				.filter_map(|(i, p)| (!spared.contains(&p.vpid)).then_some(i))
 				.collect();
-			self.signal_externals(sig, Some(&selected), &[], true, true);
+			let tracked = if sig == Signal::Term {
+				term_members
+			} else {
+				None
+			};
+			self.signal_externals(sig, Some(&selected), &[], true, true, tracked);
 			for i in (0..self.procs.len()).rev() {
 				if spared.contains(&self.procs[i].vpid) {
 					continue;
@@ -2297,7 +2335,7 @@ impl Shell {
 						exec::finish_cancel(&mut self.k.root, cx.store, &mut self.procs[i], status);
 					}
 				} else {
-					self.kill(cx, i, sig, status, true);
+					self.kill(cx, i, sig, None, true);
 				}
 			}
 			// Calls of the cancelled vprocs are void; the spared ones' go on.
@@ -2331,9 +2369,9 @@ impl Shell {
 							.collect();
 						self.callout_trees(&mut hits);
 						let resume = sig.default_action() == DefaultAction::Terminate;
-						self.signal_externals(sig, Some(&hits), &extra, groups, resume && groups);
+						self.signal_externals(sig, Some(&hits), &extra, groups, resume && groups, None);
 						if resume && !groups {
-							self.signal_externals(Signal::Cont, Some(&hits), &extra, false, false);
+							self.signal_externals(Signal::Cont, Some(&hits), &extra, false, false, None);
 						}
 						for label in labels {
 							self.deliver(cx, SigTarget::Label(label), sig, true);
@@ -2368,16 +2406,18 @@ impl Shell {
 		None
 	}
 
-	/// Terminate vproc `i` with `status`: signal its task or external, end its
-	/// scripts. Transient vprocs are removed.
+	/// Terminate vproc `i`, signal its task or external, and end its scripts.
+	/// `failure` overrides the synthetic signal status after a store fault.
+	/// Transient vprocs are removed.
 	fn kill(
 		&mut self,
 		cx: &mut Cx<'_>,
 		i: usize,
 		sig: Signal,
-		status: i32,
+		failure: Option<i32>,
 		externals_signaled: bool,
 	) {
+		let status = failure.unwrap_or_else(|| sig.exit_status(self.k.engine.config().platform));
 		let p = &mut self.procs[i];
 		for f in &mut p.frames {
 			if let Some(sc) = f.scratch.as_mut() {
@@ -2400,7 +2440,11 @@ impl Shell {
 		let runs: Vec<Run> = p.runs.drain(..).collect();
 		let vpid = (p.vpid, p.mode);
 		for run in &runs {
-			self.k.exec_signals.remove(&run.id);
+			if cfg!(windows) && failure.is_none() && p.lineage.label != 0 {
+				self.k.run_signals.insert(run.id, RunSignal::Virtual);
+			} else {
+				self.k.run_signals.remove(&run.id);
+			}
 			if run.started {
 				self
 					.k
@@ -2615,7 +2659,7 @@ impl Shell {
 			}
 			match sig.default_action() {
 				DefaultAction::Terminate => {
-					self.kill(cx, i, sig, sig.exit_status(platform), externals_signaled);
+					self.kill(cx, i, sig, None, externals_signaled);
 				},
 				DefaultAction::Stop | DefaultAction::Continue => {
 					let stop = sig.default_action() == DefaultAction::Stop;
@@ -2656,7 +2700,7 @@ impl Shell {
 			message: BStr::new(&message),
 		});
 		for i in (0..self.procs.len()).rev() {
-			self.kill(cx, i, Signal::Term, 1, false);
+			self.kill(cx, i, Signal::Term, Some(1), false);
 		}
 	}
 
@@ -2684,11 +2728,15 @@ impl Shell {
 	/// immediately after its [`Step::Done`]; ordinary `exit 128+n` is not
 	/// a signal death.
 	pub fn exec_signal(&self, run: RunId) -> Option<i32> {
-		self
-			.k
-			.reported_signal
-			.filter(|(id, _)| *id == run)
-			.map(|(_, signal)| signal)
+		match self.k.reported_signal {
+			Some((id, RunSignal::External(signal))) if id == run => Some(signal),
+			_ => None,
+		}
+	}
+
+	/// Whether an uncaught virtual signal ended a Windows tool's reported run.
+	pub(crate) fn ended_by_virtual_signal(&self, run: RunId) -> bool {
+		matches!(self.k.reported_signal, Some((id, RunSignal::Virtual)) if id == run)
 	}
 
 	/// Number of the root's background jobs that still wait for a running

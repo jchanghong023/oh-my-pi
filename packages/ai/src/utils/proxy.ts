@@ -323,10 +323,10 @@ function readWindowsSystemProxy(): WindowsSystemProxy | undefined {
  *
  * Entry semantics, mirroring the source list's shape:
  * - leading `-` is the source format's exclusion marker and is stripped;
- * - an entry starting with a digit is an IP-literal prefix (`10.`, `100.120.`,
- *   `100.10`): the hostname must start with it;
+ * - an entry starting with a digit matches only IPv4 literals. Without a
+ *   wildcard it is a prefix (`10.`, `100.120.`, `100.10`);
  * - an entry containing `*` is a glob over the whole hostname (`100.7*`,
- *   `wo-dr*.dbankcloud.ru`);
+ *   `wo-dr*.dbankcloud.ru`), subject to the IPv4 check above;
  * - an entry both starting and ending with `.` (`.hisilicon.`) matches any
  *   hostname containing that dotted label;
  * - a leading dot alone is a domain suffix (`.huawei.com`);
@@ -414,24 +414,26 @@ const FORK_SYSTEM_PROXY_BYPASS = [
 	"wo-dr*.dbankcloud.ru",
 ] as const;
 
-const forkSystemProxyBypassGlobs = FORK_SYSTEM_PROXY_BYPASS.filter(entry => entry.includes("*")).map(
-	entry =>
-		new RegExp(
-			`^${entry
-				.split("*")
-				.map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-				.join(".*")}$`,
-		),
-);
+const forkSystemProxyBypassGlobs = FORK_SYSTEM_PROXY_BYPASS.filter(entry => entry.includes("*")).map(entry => ({
+	ipv4Only: /^\d/.test(entry),
+	pattern: new RegExp(
+		`^${entry
+			.split("*")
+			.map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+			.join(".*")}$`,
+	),
+}));
 
 /** Hostname match for {@link FORK_SYSTEM_PROXY_BYPASS}; see the entry semantics there. */
 export function matchesForkSystemProxyBypass(hostname: string): boolean {
 	const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-	if (forkSystemProxyBypassGlobs.some(glob => glob.test(host))) return true;
+	const ipv4 = net.isIPv4(hostname);
+	if (forkSystemProxyBypassGlobs.some(({ ipv4Only, pattern }) => (!ipv4Only || ipv4) && pattern.test(host)))
+		return true;
 	for (const entry of FORK_SYSTEM_PROXY_BYPASS) {
 		if (entry.includes("*")) continue;
 		if (/^\d/.test(entry)) {
-			if (host.startsWith(entry)) return true;
+			if (ipv4 && host.startsWith(entry)) return true;
 		} else if (entry.startsWith(".") && entry.endsWith(".")) {
 			if (host.includes(entry)) return true;
 		} else if (entry.startsWith(".")) {

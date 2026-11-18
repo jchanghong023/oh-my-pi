@@ -228,15 +228,16 @@ export class CollabController {
 	}
 
 	#resolveRelayUrl(relay?: string): string {
-		const input = relay?.trim() || cfgCollabRelayUrl.get(this.#ctx.settings) || "";
-		if (intranetCollabEnabled()) return intranetRelayUrl(input);
-		if (!input) {
+		const input = relay?.trim() || cfgCollabRelayUrl.get(this.#ctx.settings)?.trim() || "";
+		// Scheme-less relay args default to wss (ws:// must be spelled out for localhost).
+		const url = !input || input.includes("://") ? input : `wss://${input}`;
+		if (intranetCollabEnabled()) return intranetRelayUrl(url);
+		if (!url) {
 			throw new Error(
 				"No relay configured. Set collab.relayUrl in /settings or pass one: /collab relay.example.com",
 			);
 		}
-		// Scheme-less relay args default to wss (ws:// must be spelled out for localhost).
-		return input.includes("://") ? input : `wss://${input}`;
+		return url;
 	}
 
 	/**

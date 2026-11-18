@@ -126,7 +126,7 @@ export interface WritethroughResult {
  * Runs at most once per writethrough call: after the call's final bytes reach disk, before
  * `didSave` reaches language servers and before diagnostics are collected for those bytes,
  * deferred fetches included. `write` sets a shebang's execute bits here, since linters read
- * them (Ruff's EXE001). Receives the final bytes.
+ * them (Ruff's EXE001). If LSP post-processing is cancelled, receives the bytes already on disk.
  */
 export type WritethroughCommitHook = (finalContent: string) => Promise<void>;
 
@@ -508,14 +508,14 @@ async function runLspWritethrough(
 		if (diskContent !== finalContent) await writeContent(finalContent, writeSignal);
 	};
 	let committed: Promise<void> | undefined;
-	/**
-	 * Commit the final bytes, then run the caller's `onCommitted` hook on them, once. A budget
-	 * timeout that interrupts the hook leaves the catch path awaiting this same run.
-	 */
+	// The abort race can leave the hook in flight; await it instead of rerunning it.
+	const runCommitHook = (value: string) => {
+		const onCommitted = runOptions?.onCommitted;
+		if (onCommitted) return (committed ??= Promise.resolve().then(() => onCommitted(value)));
+	};
 	const commitFinalWrite = async (writeSignal?: AbortSignal) => {
 		await commitWrite(writeSignal);
-		const onCommitted = runOptions?.onCommitted;
-		if (onCommitted) await (committed ??= onCommitted(finalContent));
+		await runCommitHook(finalContent);
 	};
 	let writeNotified = false;
 	const notifyWriteCommitted = async (notifySignal: AbortSignal | undefined = signal) => {
@@ -531,11 +531,14 @@ async function runLspWritethrough(
 				writeNotified = false;
 				return;
 			}
+			// Caller cancellation stops the notification, not bookkeeping for a
+			// completed write. The operation callback still observes its own abort.
+			if (notifySignal === signal && signal?.aborted) return;
 			throw error;
 		}
 	};
 	if (!enableFormat && !enableDiagnostics) {
-		await commitFinalWrite();
+		await commitFinalWrite(signal);
 		await notifyWriteCommitted();
 		return { finalContent, diagnostics: undefined };
 	}
@@ -544,7 +547,7 @@ async function runLspWritethrough(
 	const servers = getServersForFile(config, dst);
 
 	if (servers.length === 0) {
-		await commitFinalWrite();
+		await commitFinalWrite(signal);
 		await notifyWriteCommitted();
 		return { finalContent, diagnostics: undefined };
 	}
@@ -672,7 +675,14 @@ async function runLspWritethrough(
 				// The fallback commit below reports write failures.
 			}
 		}
+		if (signal?.aborted && diskContent !== undefined) {
+			// Do not write a late formatter result. Report the bytes that landed so
+			// the caller can finish journaling, even if formatting was interrupted.
+			await runCommitHook(diskContent);
+			return { finalContent: diskContent };
+		}
 		await commitFinalWrite(signal);
+		if (signal?.aborted) return { finalContent };
 		if (timedOut) {
 			formatter = undefined;
 			diagnostics = undefined;
@@ -840,6 +850,7 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 		// File commits are never deferred: the batch owns only LSP post-processing,
 		// so a later flush cannot replay an obsolete whole-file snapshot.
 		try {
+			signal?.throwIfAborted();
 			await writethroughNoop(dst, content, signal, file);
 		} catch (error) {
 			if (batch.flush) {

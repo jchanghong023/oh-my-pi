@@ -83,7 +83,7 @@ export function createModelBrowserSource(
 		getGlobalModelRole: role => settings.getGlobalModelRole(role),
 		getModelRoleSource: role => settings.getModelRoleSource(role),
 		getRoleInfo: role => getRoleInfo(role, settings),
-		defaultRoleChain: role => rolePriorityDefaults(role),
+		defaultRoleChain: role => rolePriorityDefaults(role, settings),
 		resolveRoleValue: (value, models, roleLookup) => resolveModelRoleValue(value, models, { settings, roleLookup }),
 		getModelPresets: () => ({ names: getModelPresetNames(settings), active: findActiveModelPreset(settings) }),
 		compactionPointFor: model => describeModelCompactionPoint(settings, model),

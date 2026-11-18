@@ -1318,23 +1318,30 @@ describe("InteractiveMode plan review rendering", () => {
 			});
 			const dispatch = vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 			const errors = vi.spyOn(mode, "showError");
-			const approval = mode.handlePlanApproval({ planFilePath, planExists: true, title: "OLD" });
-			const request = await opened.promise;
-			expect(mode.resolvePlanReview(request.reviewId, "keep")).toBe(true);
-			await titleStarted.promise;
-			let replacement: Promise<string | undefined> | undefined;
-			if (action === "supersede")
-				replacement = mode.showPlanReview("# New plan", "New review", [{ id: "execute", label: "Approve" }]);
-			else await mode.prepareSessionSwitch();
-			titleDone.resolve();
-			await approval;
+			const previousNoTitle = Bun.env.PI_NO_TITLE;
+			delete Bun.env.PI_NO_TITLE;
+			try {
+				const approval = mode.handlePlanApproval({ planFilePath, planExists: true, title: "OLD" });
+				const request = await opened.promise;
+				expect(mode.resolvePlanReview(request.reviewId, "keep")).toBe(true);
+				await titleStarted.promise;
+				let replacement: Promise<string | undefined> | undefined;
+				if (action === "supersede")
+					replacement = mode.showPlanReview("# New plan", "New review", [{ id: "execute", label: "Approve" }]);
+				else await mode.prepareSessionSwitch();
+				titleDone.resolve();
+				await approval;
 
-			expect(dispatch).not.toHaveBeenCalled();
-			expect(errors).not.toHaveBeenCalled();
-			expect(mode.ui.hasOverlay()).toBe(action === "supersede");
-			if (replacement) {
-				await mode.prepareSessionSwitch();
-				await expect(replacement).resolves.toBeUndefined();
+				expect(dispatch).not.toHaveBeenCalled();
+				expect(errors).not.toHaveBeenCalled();
+				expect(mode.ui.hasOverlay()).toBe(action === "supersede");
+				if (replacement) {
+					await mode.prepareSessionSwitch();
+					await expect(replacement).resolves.toBeUndefined();
+				}
+			} finally {
+				if (previousNoTitle === undefined) delete Bun.env.PI_NO_TITLE;
+				else Bun.env.PI_NO_TITLE = previousNoTitle;
 			}
 		},
 	);

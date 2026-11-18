@@ -547,6 +547,10 @@ behavior {
 		model "xai-oauth/grok-tts"
 	}
 	role-defaults "dictation" {
+		model "local/whisper-base"
+	}
+	// Parakeet TDT v3 does not recognize Chinese.
+	role-defaults "dictation-other" {
 		model "local/parakeet-tdt-0.6b-v3"
 	}
 	// Pinned: TypeSafe's `jev-latest` alias moves only after a release ships (jev-1.14.0 shipped 2026-10-14; the alias moved 2026-10-22).

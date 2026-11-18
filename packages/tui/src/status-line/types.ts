@@ -80,7 +80,7 @@ export interface GitStatus {
 	unstaged: number;
 	untracked: number;
 	changed: number;
-	/** Git paths by category; null for JJ's disjoint numeric status summary. */
+	/** Lossless Git path keys by category; null for JJ's disjoint numeric status summary. */
 	paths: {
 		staged: readonly string[];
 		unstaged: readonly string[];

@@ -1360,8 +1360,6 @@ export class InputController {
 				return;
 			}
 
-			if (text && this.ctx.loopGoalMode) text = renderLoopGoalPrompt(text);
-
 			// `side: true` file commands answer as a /btw side question: off the
 			// transcript and runnable mid-turn, so they never steer the running work.
 			// The side question carries text only, so the submitted attachments drop.
@@ -1379,9 +1377,9 @@ export class InputController {
 			// During compaction, queue immediately so bash/python/loop-mode branches do
 			// not consume the skill before the compaction-resume path re-parses it.
 			if (text && isKnownSkillCommand(this.ctx, text)) {
-				// Capture here too: this branch's own early returns below would
-				// otherwise skip the non-skill capture further down.
-				if (this.ctx.loopModeEnabled) {
+				// Loop and LoopN still capture skill invocations here because they return
+				// before the regular capture path. A skill command is not a Loopgoal target.
+				if (this.ctx.loopModeEnabled && !this.ctx.loopGoalMode) {
 					this.ctx.setLoopPrompt(text);
 				}
 				if (this.ctx.session.isCompacting) {
@@ -1441,6 +1439,9 @@ export class InputController {
 				}
 			}
 
+			const localExtensionCommand = this.#isLocalExtensionCommand(text);
+			if (!localExtensionCommand && text && this.ctx.loopGoalMode) text = renderLoopGoalPrompt(text);
+
 			// Queue input during compaction
 			if (this.ctx.session.isCompacting) {
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
@@ -1452,7 +1453,7 @@ export class InputController {
 				// submissions never arm commands.
 				if (
 					(submittedMode === "loop" || submittedMode === "loopgoal" || submittedMode === "loopn") &&
-					!this.#isLocalExtensionCommand(text)
+					!localExtensionCommand
 				)
 					this.ctx.setLoopPrompt(text);
 				return;
@@ -1461,7 +1462,7 @@ export class InputController {
 			// Extension commands are local actions. Execute them before the normal
 			// submission path creates an optimistic user message; otherwise a
 			// consumed command remains rendered like a prompt sent to the model.
-			if (this.#isLocalExtensionCommand(text)) {
+			if (localExtensionCommand) {
 				this.ctx.editor.clearDraft(text);
 				try {
 					await this.ctx.session.prompt(text, { images: inputImages });

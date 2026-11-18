@@ -169,6 +169,9 @@ describe("dated log path", () => {
 describe("OMP_CONFIG_ROOT relocation", () => {
 	const ENV_KEYS = [
 		"OMP_CONFIG_ROOT",
+		"OMP_CACHE_DIR",
+		"OMP_OFFLINE",
+		"OMP_WORKTREE_DIR",
 		"PI_CONFIG_DIR",
 		"PI_CODING_AGENT_DIR",
 		"OMP_PROFILE",

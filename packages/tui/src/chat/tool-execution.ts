@@ -315,6 +315,8 @@ export interface ToolExecutionUi {
 
 export interface ToolExecutionOptions {
 	showImages?: boolean; // default: true (only used if terminal supports images)
+	/** Ignore the main transcript's activity filters when inspecting a saved execution. */
+	detailedInspection?: boolean;
 	/** Allow the name-keyed renderer registry only when the active tool is the built-in implementation. */
 	useBuiltInRenderer?: boolean;
 	/** Ask the extension transcript presenters; false for a replayed transcript (overlays). Default: true. */
@@ -326,6 +328,7 @@ export interface ToolResultFrame {
 	content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 	details?: unknown;
 	isError?: boolean;
+	cancelled?: boolean;
 }
 
 export interface ToolExecutionHandle extends Component {
@@ -516,6 +519,7 @@ export class ToolExecutionComponent extends Container {
 	#allocation = Number.POSITIVE_INFINITY;
 	#presentationFrame: AnimationFrame = { tick: 0, now: 0 };
 	#toolActivityVisible = true;
+	#detailedInspection: boolean;
 	#showImages: boolean;
 	#isPartial = true;
 	// A background task whose call already returned; later async job frames are
@@ -556,11 +560,7 @@ export class ToolExecutionComponent extends Container {
 	#tool?: AgentTool;
 	#renderer?: ToolRenderer;
 	#ui: ToolExecutionUi;
-	#result?: {
-		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-		isError?: boolean;
-		details?: unknown;
-	};
+	#result?: ToolResultFrame;
 	// Machine paths remain verbatim; only #result.details is handed to display renderers.
 	#rawDetails: unknown;
 	// Edit preview state
@@ -679,6 +679,7 @@ export class ToolExecutionComponent extends Container {
 		this.#toolLabel = tool?.label ?? toolName;
 		this.#renderer = options.useBuiltInRenderer === false ? undefined : toolRenderers[toolName];
 		this.#showImages = options.showImages ?? true;
+		this.#detailedInspection = options.detailedInspection ?? false;
 		this.#presented = options.transcriptPresenters ?? true;
 		this.#tool = tool;
 		this.#ui = ui;
@@ -966,12 +967,23 @@ export class ToolExecutionComponent extends Container {
 
 	/** Only a terminal frame on the original Bash card can replace another job row. */
 	settledBashJob(): { id: string; state: string } | undefined {
-		if (this.#toolName !== "bash" || !isRecord(this.#rawDetails) || !isRecord(this.#rawDetails.async)) return;
+		return this.#toolName === "bash" ? this.#settledJob() : undefined;
+	}
+
+	#settledJob(): { id: string; state: string } | undefined {
+		if (!isRecord(this.#rawDetails) || !isRecord(this.#rawDetails.async)) return;
 		const { jobId, state } = this.#rawDetails.async;
 		if (typeof jobId !== "string" || !jobId || !isSettledJobFrame(this.#rawDetails)) return;
 		if (this.#isPartial && !this.#sealed) return;
 		if (!this.#result?.content.some(part => part.type === "text" && part.text?.trim())) return;
 		return { id: jobId, state: state as string };
+	}
+
+	/** Match receipts only to a card that actually presents the terminal frame. */
+	settledBackgroundJob(): { type: string; id: string; state: string } | undefined {
+		if (!Object.hasOwn(JOB_CARD_TOOLS, this.#toolName) || this.#presentation.shown.mode !== "full") return;
+		const job = this.#settledJob();
+		return job ? { type: this.#toolName, ...job } : undefined;
 	}
 
 	setSettledBashJobs(jobs: () => ReadonlyMap<string, string>): void {
@@ -1263,6 +1275,7 @@ export class ToolExecutionComponent extends Container {
 
 	#toolImagesHidden(): boolean {
 		return (
+			!this.#detailedInspection &&
 			displayPreferences.hideToolActivity &&
 			!(displayPreferences.compactToolActivity && this.isCompactFileOperation())
 		);
@@ -1681,7 +1694,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#nativeStatus(): TspCardStatus {
-		if (this.#isBenignSkip()) return "cancelled";
+		if (this.#isCancelled()) return "cancelled";
 		if (this.#result !== undefined && !this.#isPartial) return this.#result.isError ? "error" : "done";
 		if (this.#sealed) return "cancelled";
 		return this.#result !== undefined || this.#executionStarted ? "running" : "pending";
@@ -1715,7 +1728,7 @@ export class ToolExecutionComponent extends Container {
 		const toolDescriber = this.#tool as ToolDescriber | undefined;
 		const renderer: ToolDescriber | undefined =
 			toolDescriber?.describeCall || toolDescriber?.describeResult ? toolDescriber : this.#renderer;
-		if (this.#isBenignSkip() || !renderer || (!renderer.describeCall && !renderer.describeResult)) {
+		if (this.#isCancelled() || !renderer || (!renderer.describeCall && !renderer.describeResult)) {
 			return this.#defaultNativeView(options);
 		}
 		try {
@@ -1761,7 +1774,7 @@ export class ToolExecutionComponent extends Container {
 			label: this.#toolLabel,
 			args: this.#args,
 			result: result
-				? { output: this.#nativeTextOutput(), isError: result.isError, skipped: this.#isBenignSkip() }
+				? { output: this.#nativeTextOutput(), isError: result.isError, skipped: this.#isCancelled() }
 				: undefined,
 			options,
 		});
@@ -1812,6 +1825,13 @@ export class ToolExecutionComponent extends Container {
 		this.#spotlight.setHidden(!visible);
 		this.#lateDiagnosticsBlock?.block.setToolActivityVisible(visible);
 		super.invalidate();
+	}
+
+	setDetailedInspection(enabled: boolean): void {
+		if (this.#detailedInspection === enabled) return;
+		this.#detailedInspection = enabled;
+		this.#blockVersion++;
+		this.#updateDisplay();
 	}
 
 	setShowImages(show: boolean): void {
@@ -2017,22 +2037,17 @@ export class ToolExecutionComponent extends Container {
 
 		// Non-self-framing tools (custom/extension renderers and the generic
 		// fallback) get a padded, state-tinted block — built-ins that draw their
-		// own frame opt out below via the framed-component mark. A benign skip
-		// (steering/peer interrupt aborted a still-pending call) never ran, so it
-		// gets the neutral pending tint rather than the error tint (#7199).
-		const benignSkip = this.#isBenignSkip();
+		// own frame opt out below via the framed-component mark.
+		const cancelled = this.#isCancelled();
 		const stateBgKey =
-			this.#isPartial || benignSkip ? "toolPendingBg" : this.#result?.isError ? "toolErrorBg" : "toolSuccessBg";
+			this.#isPartial || cancelled ? "toolPendingBg" : this.#result?.isError ? "toolErrorBg" : "toolSuccessBg";
 		// bgFill, not bg: rows carry nested full resets (e.g. truncateToWidth's
 		// `\x1b[0m` before its ellipsis) that would otherwise punch holes in the tint.
 		const stateBgFn = (t: string) => theme.bgFill(stateBgKey, t);
 
-		// A benign skip is a synthetic placeholder for a call that never executed,
-		// so bypass any bespoke error frame and draw the neutral generic card —
-		// the per-tool ✘/red-border would misread normal mid-turn steering as a
-		// failure (#7199).
-		if (benignSkip) {
-			this.#renderBenignSkipCard(stateBgFn);
+		// Cancellation uses a neutral generic card instead of a bespoke error frame.
+		if (cancelled) {
+			this.#renderCancelledCard(stateBgFn);
 		} else if (this.#tool && (this.#tool.renderCall || this.#tool.renderResult)) {
 			const tool = this.#tool;
 			const mergeCallAndResult = Boolean((tool as { mergeCallAndResult?: boolean }).mergeCallAndResult);
@@ -2341,7 +2356,7 @@ export class ToolExecutionComponent extends Container {
 		const result = this.#result;
 		const renderer = this.#tool?.renderCall || this.#tool?.renderResult ? undefined : this.#renderer;
 		const fence =
-			this.#isBenignSkip() || isNativeRendering()
+			this.#isCancelled() || isNativeRendering()
 				? undefined
 				: renderer?.figure?.(
 						this.#args,
@@ -2519,8 +2534,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
-	 * Format the generic call/result card at `contentWidth`. Shared by the
-	 * #contentText fallback and the benign-skip path so both render identically.
+	 * Format the generic call/result card at `contentWidth`, including cancellations.
 	 */
 	#renderDefaultCard(contentWidth: number): string {
 		return formatDefaultToolExecution(
@@ -2528,13 +2542,17 @@ export class ToolExecutionComponent extends Container {
 				label: this.#toolLabel,
 				args: this.#args,
 				result: this.#result
-					? { output: this.#getTextOutput(), isError: this.#result.isError, skipped: this.#isBenignSkip() }
+					? { output: this.#getTextOutput(), isError: this.#result.isError, skipped: this.#isCancelled() }
 					: undefined,
 				options: this.#renderState,
 			},
 			contentWidth,
 			theme,
 		);
+	}
+
+	#isCancelled(): boolean {
+		return !this.#isPartial && (this.#result?.cancelled === true || this.#isBenignSkip());
 	}
 
 	/**
@@ -2553,13 +2571,11 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
-	 * Render a benign skip as the neutral generic card, replacing any bespoke
+	 * Render a cancellation as the neutral generic card, replacing any bespoke
 	 * renderer's error frame. Generic-fallback tools already route through
-	 * {@link #renderDefaultCard} (which emits the info card for a skip); they
-	 * only need the neutral tint. Bespoke-renderer tools get their content box
-	 * swapped for the same neutral card.
+	 * {@link #renderDefaultCard}; they only need the neutral tint.
 	 */
-	#renderBenignSkipCard(stateBgFn: (text: string) => string): void {
+	#renderCancelledCard(stateBgFn: (text: string) => string): void {
 		if (!this.#usesContentBox) {
 			this.#refreshContentText("toolPendingBg", stateBgFn);
 			return;

@@ -48,7 +48,8 @@ await Bun.write(path.join(distExtension, "LICENSE"), Bun.file(path.join(repoRoot
 const sourceManifest = path.join(root, "extension/manifest.json");
 const distScript = path.join(distExtension, "background.js");
 const unstampedScript = await Bun.file(distScript).text();
-const { version: ompVersion } = await Bun.file(path.join(root, "../coding-agent/package.json")).json();
+const ompVersion =
+	Bun.env.RELEASE_VERSION ?? (await Bun.file(path.join(root, "../coding-agent/package.json")).json()).version;
 await Bun.write(distScript, stampRelayExtensionScript(unstampedScript, ompVersion));
 await Bun.write(
 	path.join(distExtension, "manifest.json"),

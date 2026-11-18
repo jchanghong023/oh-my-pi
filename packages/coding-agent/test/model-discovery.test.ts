@@ -22,6 +22,7 @@ import {
 } from "@oh-my-pi/pi-catalog/provider-models";
 import type { ModelKind, ModelSpec, OpenAICompat } from "@oh-my-pi/pi-catalog/types";
 import { CODEX_CLIENT_VERSION } from "@oh-my-pi/pi-catalog/wire/codex";
+import { isCompanyLaneActive, setCompanyOfflineEnabled } from "@oh-my-pi/pi-coding-agent/config/company-provider";
 import {
 	type DiscoveryProviderConfig,
 	discoverLlamaCppModels,
@@ -49,6 +50,7 @@ describe("ModelRegistry runtime discovery", () => {
 	let originalAnthropicApiKey: string | undefined;
 	let originalLlamaCppBaseUrl: string | undefined;
 	let originalOffline: string | undefined;
+	let originalCompanyLaneActive: boolean;
 
 	beforeEach(async () => {
 		resetSettingsForTest();
@@ -58,6 +60,8 @@ describe("ModelRegistry runtime discovery", () => {
 		originalAnthropicApiKey = Bun.env.ANTHROPIC_API_KEY;
 		originalOffline = process.env.OMP_OFFLINE;
 		delete process.env.OMP_OFFLINE;
+		originalCompanyLaneActive = isCompanyLaneActive();
+		await setCompanyOfflineEnabled(false);
 		delete Bun.env.OLLAMA_BASE_URL;
 		delete Bun.env.OLLAMA_HOST;
 		delete Bun.env.OLLAMA_CONTEXT_LENGTH;
@@ -75,7 +79,7 @@ describe("ModelRegistry runtime discovery", () => {
 		authStorage = await AuthStorage.create(":memory:");
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
 		resetSettingsForTest();
 		if (originalOllamaBaseUrl === undefined) {
@@ -108,6 +112,7 @@ describe("ModelRegistry runtime discovery", () => {
 		} else {
 			process.env.OMP_OFFLINE = originalOffline;
 		}
+		await setCompanyOfflineEnabled(originalCompanyLaneActive);
 		authStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
 			removeSyncWithRetries(tempDir);

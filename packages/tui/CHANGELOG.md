@@ -5,6 +5,8 @@
 ### Fixed
 
 - File completion honors directory-cache expiry across fuzzy queries and prefix lookups, including explicit cache disablement.
+- Native settings keep Find, Share, and Collab distinct; Page Up and Page Down use the visible editor height.
+- The status line no longer presents a truncated Git status as an exact count and keeps the final directory visible in the overflow row.
 - Preserve fork blocked-todo rendering and Eval failure output while adopting upstream wait rendering and render-cache improvements.
 - Preserve Chinese picker and plan-review presentation and selection-only model search while composing upstream provider scopes, thinking controls, document review, and terminal output ownership.
 

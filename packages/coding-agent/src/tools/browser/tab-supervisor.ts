@@ -1687,11 +1687,11 @@ async function strictCleanupStage(
 		throw new ToolError(`Could not confirm cleanup of ${resource} for tab ${JSON.stringify(tab.name)}`);
 }
 
-function trackCleanupStage<T>(tab: TabSession, stage: TabCleanupStage, run: Promise<T>): Promise<T> {
+function trackCleanupStage<T>(tab: TabSession, stage: TabCleanupStage, run: Promise<T>, confirmed = true): Promise<T> {
 	const progress = cleanupProgress(tab);
 	const pending = run
 		.then(value => {
-			if (stage !== "page" || value !== false) progress.done.add(stage);
+			if (confirmed && (stage !== "page" || value !== false)) progress.done.add(stage);
 			return value;
 		})
 		.finally(() => {
@@ -1861,6 +1861,9 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 			return await releaseTabStrict(tab, name, opts, progress);
 		}
 		try {
+			// Releasing the last WebKit hold ordinarily does not confirm viewer exit.
+			// If strict cleanup joins, retry that stage on the same host at refCount 0.
+			const confirmed = tab.backend !== "webkit" || tab.browser.refCount > 1;
 			await trackCleanupStage(
 				tab,
 				"browser",
@@ -1872,6 +1875,7 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 					timeoutMs,
 					resource: `tab ${JSON.stringify(name)}`,
 				}),
+				confirmed,
 			);
 		} catch (error) {
 			closeError ??= error;

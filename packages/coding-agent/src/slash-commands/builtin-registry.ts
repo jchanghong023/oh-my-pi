@@ -224,6 +224,12 @@ export function lookupBuiltinSlashCommand(name: string): SlashCommandSpec | unde
 	return BUILTIN_SLASH_COMMAND_LOOKUP.get(name);
 }
 
+/** The browser catalog and dispatcher must agree on which registry entries can run. */
+export function getWebGuiBuiltinHandler(command: SlashCommandSpec) {
+	if (command.name === "workspace") return undefined;
+	return command.handleWebGui ?? command.handleRpc ?? command.handle;
+}
+
 /** Execute the canonical registry with browser-native host and interaction capabilities. */
 export async function executeWebGuiBuiltinSlashCommand(
 	text: string,
@@ -240,7 +246,7 @@ export async function executeWebGuiBuiltinSlashCommand(
 	if (runtime.isCollabGuest && !COLLAB_GUEST_ALLOWED_COMMANDS[command.name]) {
 		throw new Error(`/${command.name} is host-only during a collab session`);
 	}
-	const handler = command.handleWebGui ?? command.handleRpc ?? command.handle;
+	const handler = getWebGuiBuiltinHandler(command);
 	if (!handler) throw new Error(`Native browser host has no /${command.name} operation`);
 	const result = await handler({ ...parsed, name: command.name }, runtime);
 	return result ?? { consumed: true };

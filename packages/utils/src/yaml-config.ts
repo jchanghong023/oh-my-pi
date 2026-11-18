@@ -49,6 +49,9 @@ export function setYamlConfigValue(source: string, keys: readonly string[], valu
 				changedNodes.add(node);
 			},
 		});
+	// Deleting a pair also removes the anchor on its key, if any.
+	const existingKey = resolvedKeys.at(-1);
+	if (value === undefined && isNode(existingKey)) changedNodes.add(existingKey);
 	// Snapshot aliases before changing/removing their anchor, including aliases of the role map.
 	const detached = new Map<Alias, Node>();
 	visit(doc, {

@@ -117,12 +117,11 @@ impl Shell {
 	/// its detached vprocs. The children of the vprocs it removes are
 	/// judged next ([`Self::reaped`] lists them as gone).
 	fn end_job(&mut self, cx: &mut Cx<'_>, job: Vpid) {
-		let status = Signal::Term.exit_status(self.k.engine.config().platform);
 		let hits: Vec<usize> = (0..self.procs.len())
 			.filter(|&i| !self.procs[i].lineage.detached && self.in_job(self.procs[i].vpid, job))
 			.collect();
 		for &i in hits.iter().rev() {
-			self.kill(cx, i, Signal::Term, status, false);
+			self.kill(cx, i, Signal::Term, None, false);
 		}
 		self.orphans.retain(|&v| v != job);
 	}

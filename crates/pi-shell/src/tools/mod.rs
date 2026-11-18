@@ -183,12 +183,14 @@ impl SpawnLog {
 	/// spawn.
 	const PRUNE_THRESHOLD: usize = 32;
 
-	/// `pid` was spawned with `lineage`.
-	pub fn record(&self, lineage: Lineage, pid: u32) {
+	/// Capture the identity of an external spawned with `lineage`.
+	pub fn record(
+		&self,
+		lineage: Lineage,
+		process: impl FnOnce() -> Option<crate::proctree::Process>,
+	) {
 		if lineage.label != 0 && !lineage.detached {
-			let process = i32::try_from(pid)
-				.ok()
-				.and_then(crate::proctree::Process::from_pid);
+			let process = process();
 			let mut state = self.0.lock();
 			state.external.insert(lineage.label);
 			if let Some(process) = process {
@@ -348,9 +350,15 @@ impl Tool {
 
 	/// `run` (one of the tool's subshells) ended; `false` when it is not
 	/// the tool's.
-	fn on_done(&mut self, run: RunId, status: i32, signal: Option<i32>) -> bool {
+	fn on_done(
+		&mut self,
+		run: RunId,
+		status: i32,
+		signal: Option<i32>,
+		virtual_signal: bool,
+	) -> bool {
 		let child = match self {
-			Self::Timeout(t) => &mut t.child,
+			Self::Timeout(t) => return t.on_done(run, status, virtual_signal),
 			Self::Nohup(t) => &mut t.child,
 			Self::Git(t) => &mut t.child,
 			Self::Extra(t) => return t.on_done(run, status, signal),
@@ -520,11 +528,18 @@ impl ToolCalls {
 	/// A run that is not the session's own ended; `true` when it belonged
 	/// to a tool (the driver ignores it then). `signal` is the actual
 	/// signal death of a command replacing the run, not an exit code.
-	pub fn on_done(&mut self, run: RunId, status: i32, signal: Option<i32>) -> bool {
+	/// `virtual_signal` identifies a synthetic, uncaught VM signal death.
+	pub fn on_done(
+		&mut self,
+		run: RunId,
+		status: i32,
+		signal: Option<i32>,
+		virtual_signal: bool,
+	) -> bool {
 		if self
 			.active
 			.iter_mut()
-			.any(|(_, tool)| tool.on_done(run, status, signal))
+			.any(|(_, tool)| tool.on_done(run, status, signal, virtual_signal))
 		{
 			return true;
 		}
@@ -621,8 +636,9 @@ mod tests {
 			.unwrap();
 		let pid = child.id();
 		let log = SpawnLog::default();
-		log.record(Lineage { label: 7, detached: false }, pid);
-		log.record(Lineage { label: 8, detached: true }, pid);
+		let process = || crate::proctree::Process::from_pid(i32::try_from(pid).unwrap());
+		log.record(Lineage { label: 7, detached: false }, process);
+		log.record(Lineage { label: 8, detached: true }, process);
 		let recorded = log.has_external(&[7]);
 		let detached_recorded = log.has_external(&[8]);
 		let snapshot = log.live(&[7]);
@@ -649,13 +665,17 @@ mod tests {
 			.spawn()
 			.unwrap();
 		let log = SpawnLog::default();
-		log.record(Lineage { label: 9, detached: false }, live.id());
+		log.record(Lineage { label: 9, detached: false }, || {
+			crate::proctree::Process::from_pid(i32::try_from(live.id()).unwrap())
+		});
 		for _ in 0..SpawnLog::PRUNE_THRESHOLD * 3 {
 			let mut child = std::process::Command::new("/bin/sleep")
 				.arg("30")
 				.spawn()
 				.unwrap();
-			log.record(Lineage { label: 7, detached: false }, child.id());
+			log.record(Lineage { label: 7, detached: false }, || {
+				crate::proctree::Process::from_pid(i32::try_from(child.id()).unwrap())
+			});
 			child.kill().unwrap();
 			child.wait().unwrap();
 		}

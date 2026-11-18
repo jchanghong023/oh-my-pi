@@ -27,13 +27,20 @@ mod platform {
 	use pi_builtins::proc_sys as sys;
 
 	use super::ProcessStatus;
+	use crate::sys::lifecycle::Tracker;
 
-	/// Stable Linux process reference backed by a pidfd.
+	/// Stable Linux process reference backed by a pidfd or an owned child's
+	/// waiter.
 	#[derive(Clone)]
 	pub struct Process {
-		pid:        i32,
-		pidfd:      Arc<OwnedFd>,
-		start_time: u64,
+		pid:      i32,
+		identity: Identity,
+	}
+
+	#[derive(Clone)]
+	enum Identity {
+		PidFd { fd: Arc<OwnedFd>, start_time: u64 },
+		Child(Arc<Tracker>),
 	}
 
 	impl Process {
@@ -41,9 +48,14 @@ mod platform {
 			if pid <= 0 {
 				return None;
 			}
-			let pidfd = Arc::new(sys::open_pidfd(pid)?);
+			let pidfd = sys::open_pidfd(pid)?;
 			let start_time = sys::start_time(pid)?;
-			Some(Self { pid, pidfd, start_time })
+			Some(Self { pid, identity: Identity::PidFd { fd: Arc::new(pidfd), start_time } })
+		}
+
+		pub(super) fn from_child(pid: i32, tracker: &Arc<Tracker>) -> Self {
+			Self::from_pid(pid)
+				.unwrap_or_else(|| Self { pid, identity: Identity::Child(Arc::clone(tracker)) })
 		}
 
 		pub const fn pid(&self) -> i32 {
@@ -102,6 +114,10 @@ mod platform {
 					self.push_validated_child(child_pid, &mut seen, &mut out);
 				}
 			}
+			// A waiter-backed root may have been reaped during the procfs walk.
+			if matches!(&self.identity, Identity::Child(_)) && !self.live_identity() {
+				return Vec::new();
+			}
 			out
 		}
 
@@ -123,10 +139,19 @@ mod platform {
 		}
 
 		pub fn parent_pid(&self) -> Option<i32> {
-			if self.status() == ProcessStatus::Running {
-				sys::parent_pid(self.pid)
-			} else {
-				None
+			match &self.identity {
+				Identity::PidFd { .. } if self.status() == ProcessStatus::Running => {
+					sys::parent_pid(self.pid)
+				},
+				Identity::PidFd { .. } => None,
+				Identity::Child(tracker) => {
+					let life = tracker.lock();
+					if life.has_exited() {
+						None
+					} else {
+						sys::parent_pid(self.pid)
+					}
+				},
 			}
 		}
 
@@ -147,25 +172,47 @@ mod platform {
 		}
 
 		pub fn kill(&self, signal: i32) -> bool {
-			sys::pidfd_send_signal(self.pidfd.as_fd(), signal)
+			match &self.identity {
+				Identity::PidFd { fd, .. } => sys::pidfd_send_signal(fd.as_fd(), signal),
+				Identity::Child(tracker) => {
+					let life = tracker.lock();
+					// SAFETY: kill takes scalar arguments; reaping can release the
+					// PID only after the waiter records exit under this lock.
+					!life.has_exited() && unsafe { libc::kill(self.pid, signal) == 0 }
+				},
+			}
 		}
 
 		pub fn group_id(&self) -> Option<i32> {
-			if self.status() != ProcessStatus::Running {
-				return None;
+			let group_id = || {
+				// SAFETY: getpgid takes a PID by value and does not access memory.
+				let pgid = unsafe { libc::getpgid(self.pid) };
+				(pgid > 0).then_some(pgid)
+			};
+			match &self.identity {
+				Identity::PidFd { .. } if self.status() == ProcessStatus::Running => group_id(),
+				Identity::PidFd { .. } => None,
+				Identity::Child(tracker) => {
+					let life = tracker.lock();
+					if life.has_exited() { None } else { group_id() }
+				},
 			}
-
-			// SAFETY: `self.pid` names the process currently referenced by
-			// `self.pidfd` unless it exits concurrently. If it exits, `getpgid`
-			// reports failure rather than dereferencing caller-owned memory.
-			let pgid = unsafe { libc::getpgid(self.pid) };
-			if pgid > 0 { Some(pgid) } else { None }
 		}
 
 		pub fn status(&self) -> ProcessStatus {
+			let fd = match &self.identity {
+				Identity::PidFd { fd, .. } => fd,
+				Identity::Child(tracker) => {
+					return if tracker.lock().has_exited() {
+						ProcessStatus::Exited
+					} else {
+						ProcessStatus::Running
+					};
+				},
+			};
 			loop {
 				let mut pollfd =
-					libc::pollfd { fd: self.pidfd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+					libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
 				// SAFETY: `pollfd` points to one initialized `pollfd` element, and
 				// the pidfd remains open for the duration of the call. Timeout
 				// zero makes this a non-blocking readiness probe.
@@ -193,10 +240,14 @@ mod platform {
 			}
 		}
 
-		/// Resolves once the process exits: its pidfd becomes readable then.
+		/// Resolves once the pidfd becomes readable; callers poll waiter-backed
+		/// children.
 		pub async fn exited(&self) -> std::io::Result<()> {
+			let Identity::PidFd { fd, .. } = &self.identity else {
+				return Err(std::io::ErrorKind::Unsupported.into());
+			};
 			let pidfd = tokio::io::unix::AsyncFd::with_interest(
-				self.pidfd.try_clone()?,
+				fd.try_clone()?,
 				tokio::io::Interest::READABLE,
 			)?;
 			let _ready = pidfd.readable().await?;
@@ -224,7 +275,10 @@ mod platform {
 
 		fn live_identity(&self) -> bool {
 			self.status() == ProcessStatus::Running
-				&& sys::start_time(self.pid) == Some(self.start_time)
+				&& match &self.identity {
+					Identity::PidFd { start_time, .. } => sys::start_time(self.pid) == Some(*start_time),
+					Identity::Child(_) => true,
+				}
 		}
 	}
 
@@ -657,6 +711,16 @@ impl Process {
 		platform::Process::from_pid(pid).map(Self::from_inner)
 	}
 
+	/// Capture a native child whose PID cannot be reaped without notifying
+	/// `tracker`.
+	#[cfg(target_os = "linux")]
+	pub(crate) fn from_child(
+		pid: i32,
+		tracker: &std::sync::Arc<crate::sys::lifecycle::Tracker>,
+	) -> Self {
+		Self::from_inner(platform::Process::from_child(pid, tracker))
+	}
+
 	/// Open stable process references whose executable path matches exactly.
 	pub fn from_path(path: String) -> Vec<Self> {
 		platform::find_by_path(&path)
@@ -818,14 +882,17 @@ impl Process {
 		signal: i32,
 		protected: &HashSet<i32>,
 	) {
-		let processes: Vec<_> = descendants
+		let processes = descendants
 			.iter()
 			.chain(std::iter::once(self))
-			.filter(|process| !protected.contains(&process.pid()))
-			.map(|process| (process, process.group_id()))
-			.collect();
+			.filter(|process| !protected.contains(&process.pid()));
 		let groups = group.into_iter().collect();
-		let _ = signal_snapshot(processes, groups, signal);
+		let seen = if group.is_some() {
+			processes.clone().map(Self::pid).collect()
+		} else {
+			HashSet::new()
+		};
+		let _ = signal_snapshot(processes, groups, &seen, protected, signal);
 	}
 
 	async fn terminate_tree_impl(
@@ -842,7 +909,7 @@ impl Process {
 		let process_group = if group { self.group_id() } else { None };
 		let protected = host_protected_pids();
 
-		// Capture the entire wave and group membership before sending any signal.
+		// Capture the entire wave before sending any signal.
 		let mut descendants = self.signalable_descendants(&protected);
 		self.signal_termination_wave(&descendants, process_group, TERM_SIGNAL, &protected);
 
@@ -1137,30 +1204,72 @@ fn signal_trees(roots: &[Process], pgids: &[i32], signal: i32, protected: &HashS
 			.chain(std::iter::once(root.clone()))
 		{
 			if !protected.contains(&process.pid()) && seen.insert(process.pid()) {
-				let pgid = process.group_id();
-				processes.push((process, pgid));
+				processes.push(process);
 			}
 		}
 	}
 
-	signal_snapshot(processes.iter().map(|(process, pgid)| (process, *pgid)), groups, signal)
+	signal_snapshot(&processes, groups, &seen, protected, signal)
 }
 
-/// Deliver a wave using only the process identities and groups captured before
-/// the first signal. Failed group deliveries fall back to individual handles.
+/// Snapshot group-only members separately from known tree members. Deliver
+/// to each identity once, regardless of later changes to its group.
 fn signal_snapshot<'a>(
-	processes: impl IntoIterator<Item = (&'a Process, Option<i32>)>,
-	mut groups: HashSet<i32>,
+	processes: impl IntoIterator<Item = &'a Process>,
+	groups: HashSet<i32>,
+	seen: &HashSet<i32>,
+	protected: &HashSet<i32>,
 	signal: i32,
 ) -> u32 {
-	groups.retain(|&pgid| kill_process_group(pgid, signal));
+	#[cfg(unix)]
+	signal_group_only_members(groups, seen, protected, signal);
+	#[cfg(not(unix))]
+	let _ = (groups, seen, protected);
 	let mut signaled = 0;
-	for (process, pgid) in processes {
-		if pgid.is_some_and(|pgid| groups.contains(&pgid)) || process.inner.kill(signal) {
+	for process in processes {
+		if process.inner.kill(signal) {
 			signaled += 1;
 		}
 	}
 	signaled
+}
+
+#[cfg(unix)]
+fn signal_group_only_members(
+	mut groups: HashSet<i32>,
+	seen: &HashSet<i32>,
+	protected: &HashSet<i32>,
+	signal: i32,
+) {
+	use crate::sys::proc::{self, ProcState};
+
+	groups.retain(|&pgid| pgid > 0 && !is_self_process_group(pgid));
+	if groups.is_empty() {
+		return;
+	}
+	let Ok(snapshot) = proc::list() else {
+		// Without member identities, broadcast only for a group-only
+		// request with no protected targets beyond the host.
+		if seen.is_empty()
+			&& protected
+				.iter()
+				.all(|&pid| u32::try_from(pid).ok() == Some(std::process::id()))
+		{
+			for pgid in groups {
+				let _ = kill_process_group(pgid, signal);
+			}
+		}
+		return;
+	};
+	for member in snapshot {
+		if groups.contains(&member.pgid)
+			&& member.state != ProcState::Zombie
+			&& !seen.contains(&member.pid)
+			&& !protected.contains(&member.pid)
+		{
+			let _ = proc::signal_pinned_raw(&member, signal);
+		}
+	}
 }
 
 /// A real Linux stop event for job-control consumer tests. Keep the syscall

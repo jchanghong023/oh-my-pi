@@ -1463,6 +1463,8 @@ export interface ToolResultMessage<TDetails = unknown> {
 	content: (TextContent | ImageContent)[]; // Supports text and images
 	details?: TDetails;
 	isError: boolean;
+	/** The caller cancelled the tool before it could complete. */
+	cancelled?: boolean;
 	/** Who initiated this message for billing/attribution semantics. */
 	attribution?: MessageAttribution;
 	/** Timestamp when output was pruned (ms since epoch). Undefined if unpruned. */

@@ -625,11 +625,9 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 			}
 			const rawContent = taskMatch[2].trim();
 			const blockerMatch = /^(.*?)\s*<!--\s*blocker:\s*(.*?)\s*-->$/.exec(rawContent);
-			if (status === "blocked" && blockerMatch) {
-				currentPhase.tasks.push({ content: blockerMatch[1].trim(), status, blocker: blockerMatch[2].trim() });
-			} else {
-				currentPhase.tasks.push({ content: rawContent, status });
-			}
+			const task: TodoItem = { content: blockerMatch ? blockerMatch[1].trim() : rawContent, status };
+			if (status === "blocked" && blockerMatch) task.blocker = blockerMatch[2].trim();
+			currentPhase.tasks.push(task);
 			continue;
 		}
 
@@ -755,7 +753,11 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		}
 		const entry = resolved;
 		const op = entry.op;
-		if ((op === "done" || op === "drop" || op === "rm") && !entry.task && !entry.phase) {
+		if (
+			(op === "done" || op === "drop" || op === "rm" || op === "block" || op === "unblock") &&
+			!entry.phase &&
+			!entry.task?.length
+		) {
 			return {
 				content: [
 					{

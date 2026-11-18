@@ -95,6 +95,8 @@ export async function openPathWithResult(
 			stderr: "ignore",
 			windowsHide: process.platform === "win32",
 		});
+		// Some openers (notably xdg-open) stay alive for the application's lifetime.
+		child.unref();
 		const exitCode = await child.exited;
 		if (exitCode !== 0) {
 			const reason = `External opener exited with status ${exitCode}`;

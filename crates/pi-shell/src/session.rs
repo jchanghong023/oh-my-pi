@@ -247,7 +247,7 @@ struct ChildrenState {
 	/// A run is in flight.
 	active: AtomicBool,
 	/// Live pids in spawn order.
-	pids:   Mutex<Vec<(u32, bool)>>,
+	pids:   Mutex<Vec<u32>>,
 }
 
 impl Children {
@@ -262,36 +262,23 @@ impl Children {
 			.pids
 			.lock()
 			.iter()
-			.filter_map(|&(pid, _)| i32::try_from(pid).ok())
+			.filter_map(|&pid| i32::try_from(pid).ok())
 			.collect()
 	}
 
 	fn set_active(&self, active: bool) {
 		self.0.active.store(active, Ordering::Release);
 	}
-
-	/// Pin the non-detached members before cancellation unwinds their handles.
-	fn cancellation_members(&self) -> Vec<crate::proctree::Process> {
-		self
-			.0
-			.pids
-			.lock()
-			.iter()
-			.filter(|(_, detached)| !detached)
-			.filter_map(|(pid, _)| i32::try_from(*pid).ok())
-			.filter_map(crate::proctree::Process::from_pid)
-			.collect()
-	}
 }
 
 impl SpawnObserver for Children {
-	fn spawned(&self, pid: u32, detached: bool) {
-		self.0.pids.lock().push((pid, detached));
+	fn spawned(&self, pid: u32, _detached: bool) {
+		self.0.pids.lock().push(pid);
 	}
 
 	fn released(&self, pid: u32) {
 		let mut pids = self.0.pids.lock();
-		if let Some(i) = pids.iter().position(|&(p, _)| p == pid) {
+		if let Some(i) = pids.iter().position(|&p| p == pid) {
 			pids.remove(i);
 		}
 	}
@@ -896,7 +883,6 @@ impl Driver {
 			let wanted = cancel.get();
 			if wanted > applied {
 				if applied == 0 && wanted == CancelLevel::TERM {
-					cancellation_members = self.children.cancellation_members();
 					term_deadline = Some(tokio::time::Instant::now() + TERM_GRACE);
 				}
 				applied = wanted;
@@ -908,7 +894,8 @@ impl Driver {
 				self.shell.control().cancel(sig);
 			}
 			self.poll_tools();
-			match self.step(Budget::default()) {
+			let tracked = term_deadline.map(|_| &mut cancellation_members);
+			match self.step_tracking_cancel(Budget::default(), tracked) {
 				Step::Done { run: done, status } if done == run => break status,
 				Step::Done { run, status } => self.on_done(run, status),
 				Step::Call { id, call } => self.on_call(id, call),
@@ -924,7 +911,8 @@ impl Driver {
 			// A cancel that raced the run's natural end is still pending:
 			// apply it now (it ends the background jobs this run started
 			// too), not at the start of the next command.
-			match self.step(Budget { max_ops: 1, max_ns: u64::MAX }) {
+			let tracked = term_deadline.map(|_| &mut cancellation_members);
+			match self.step_tracking_cancel(Budget { max_ops: 1, max_ns: u64::MAX }, tracked) {
 				Step::Done { run, status } => self.on_done(run, status),
 				Step::Call { id, call } => self.on_call(id, call),
 				_ => {},
@@ -996,7 +984,8 @@ impl Driver {
 	/// host callout ([`ToolCalls::on_done`]); nothing else submits scripts.
 	fn on_done(&mut self, run: RunId, status: i32) {
 		let signal = self.shell.exec_signal(run);
-		self.tools.on_done(run, status, signal);
+		let virtual_signal = self.shell.ended_by_virtual_signal(run);
+		self.tools.on_done(run, status, signal, virtual_signal);
 	}
 
 	/// Start a host callout ([`crate::bash::Resolved::Tool`]).
@@ -1013,9 +1002,19 @@ impl Driver {
 	}
 
 	fn step(&mut self, budget: Budget) -> Step {
-		self
-			.shell
-			.step(&mut Cx { host: &mut self.host, store: &mut self.store }, budget)
+		self.step_tracking_cancel(budget, None)
+	}
+
+	fn step_tracking_cancel(
+		&mut self,
+		budget: Budget,
+		term_members: Option<&mut Vec<crate::proctree::Process>>,
+	) -> Step {
+		self.shell.step_tracking_cancel(
+			&mut Cx { host: &mut self.host, store: &mut self.store },
+			budget,
+			term_members,
+		)
 	}
 
 	/// Suspend until the shell may make progress, a job or cancel request

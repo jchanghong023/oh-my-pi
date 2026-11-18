@@ -58,6 +58,7 @@ function makeFakeSession() {
 	});
 
 	const session = {
+		sessionManager: { getSessionId: () => "s1" },
 		isStreaming: true,
 		isCompacting: false,
 		extensionRunner: undefined,

@@ -1,4 +1,5 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { ToolCall } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
 	Container,
@@ -74,15 +75,6 @@ import { centeredViewportRange } from "../components/scroll-viewport";
 
 /** Filter mode for tree display */
 type FilterMode = TreeFilterMode;
-
-/**
- * Tree list component with selection and ASCII art visualization
- */
-/** Tool call info for lookup */
-interface ToolCallInfo {
-	name: string;
-	arguments: Record<string, unknown>;
-}
 
 /** Advisor note metadata surfaced on a single session-tree row. */
 interface AdvisorTreeDisplay {
@@ -246,7 +238,7 @@ class TreeList implements Component {
 	#filterMode: FilterMode;
 	/** The search field; its value is the fuzzy query. */
 	readonly searchInput = new Input();
-	#toolCallMap: Map<string, ToolCallInfo> = new Map();
+	#toolCallsByResult = new WeakMap<TreeSelectorNode, ToolCall | null>();
 	#expandedEntryId: string | undefined;
 	#details: ScrollView | undefined;
 	#detailScroll: NativeScroll | undefined;
@@ -336,13 +328,12 @@ class TreeList implements Component {
 	}
 
 	/**
-	 * Session-specific projection index. Iteratively collects tool calls for
-	 * later lookup, maps ids to nodes/parents, marks active-descendant
-	 * membership, orders the current branch first, and records the active
-	 * path. Hierarchy shape, filtering, and selection live in TreeView.
+	 * Session-specific projection index. Iteratively maps ids to nodes and
+	 * parents, marks active-descendant membership, orders the current branch
+	 * first, and records the active path. Hierarchy shape, filtering, and
+	 * selection live in TreeView.
 	 */
 	#indexSession(roots: TreeSelectorNode[]): void {
-		this.#toolCallMap.clear();
 		this.#containsActive.clear();
 		this.#nodeById.clear();
 		this.#activePathIds.clear();
@@ -355,18 +346,6 @@ class TreeList implements Component {
 			const node = visitStack.pop()!;
 			allNodes.push(node);
 			this.#nodeById.set(node.entry.id, node);
-			const entry = node.entry;
-			if (entry.type === "message" && entry.message.role === "assistant" && "content" in entry.message) {
-				const content = entry.message.content;
-				if (Array.isArray(content)) {
-					for (const block of content) {
-						if (typeof block === "object" && block !== null && "type" in block && block.type === "toolCall") {
-							const tc = block as { id: string; name: string; arguments: Record<string, unknown> };
-							this.#toolCallMap.set(tc.id, { name: tc.name, arguments: tc.arguments });
-						}
-					}
-				}
-			}
 			for (let i = node.children.length - 1; i >= 0; i--) {
 				const child = node.children[i];
 				parentIds.set(child.entry.id, node.entry.id);
@@ -405,6 +384,31 @@ class TreeList implements Component {
 			if (parentId === undefined || parentId === null) break;
 			currentId = parentId;
 		}
+	}
+
+	/** Resolve a result against its closest calling ancestor, not another branch or turn. */
+	#toolCallForResult(node: TreeSelectorNode, toolCallId: string): ToolCall | null {
+		if (!toolCallId) return null;
+		const cached = this.#toolCallsByResult.get(node);
+		if (cached !== undefined) return cached;
+		for (
+			let parentId = this.#parentById.get(node.entry.id);
+			parentId != null;
+			parentId = this.#parentById.get(parentId)
+		) {
+			const entry = this.#nodeById.get(parentId)?.entry;
+			if (entry?.type !== "message" || entry.message.role !== "assistant") continue;
+			const content = entry.message.content;
+			if (!Array.isArray(content)) continue;
+			for (const block of content) {
+				if (block?.type === "toolCall" && block.id === toolCallId) {
+					this.#toolCallsByResult.set(node, block);
+					return block;
+				}
+			}
+		}
+		this.#toolCallsByResult.set(node, null);
+		return null;
 	}
 
 	/** Children with the branch containing the active leaf first. */
@@ -625,7 +629,7 @@ class TreeList implements Component {
 				if ("content" in msg && msg.content) {
 					parts.push(this.#extractContent(msg.content));
 					if (msg.role === "toolResult") {
-						const call = this.#toolCallMap.get(msg.toolCallId);
+						const call = this.#toolCallForResult(node, msg.toolCallId);
 						const intent = call?.arguments[INTENT_FIELD];
 						if (typeof intent === "string") parts.push(sanitizeTreeField(intent));
 					}
@@ -1210,8 +1214,7 @@ class TreeList implements Component {
 					return [head, { t: "(no content)", s: "muted" }];
 				}
 				if (role === "toolResult") {
-					const toolMsg = msg as { toolCallId?: string; toolName?: string };
-					const toolCall = toolMsg.toolCallId ? this.#toolCallMap.get(toolMsg.toolCallId) : undefined;
+					const toolCall = this.#toolCallForResult(node, msg.toolCallId);
 					if (toolCall) {
 						const intent = toolCall.arguments[INTENT_FIELD];
 						const summary: EntryPart = {
@@ -1223,7 +1226,7 @@ class TreeList implements Component {
 						}
 						return [summary];
 					}
-					return [{ t: `[${toolMsg.toolName ?? "tool"}]`, s: "muted" }];
+					return [{ t: `[${msg.toolName ?? "tool"}]`, s: "muted" }];
 				}
 				if (role === "bashExecution") {
 					const bashMsg = msg as { command?: string };
@@ -1455,7 +1458,7 @@ class TreeList implements Component {
 		if (node.entry.type !== "message") return undefined;
 		const message = node.entry.message;
 		if (message.role === "toolResult") {
-			const call = this.#toolCallMap.get(message.toolCallId);
+			const call = this.#toolCallForResult(node, message.toolCallId);
 			const args = call ? JSON.stringify(call.arguments) : "(unavailable)";
 			return `Status: ${message.isError ? "error" : "success"}\nArguments: ${args}\nResult:\n${this.#joinTextContent(message.content)}`;
 		}

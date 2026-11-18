@@ -89,11 +89,7 @@ pub(crate) fn clean_fname(name: &[u8], collapse_dot_dot: bool) -> Vec<u8> {
 /// upstream leaves it when `CFN_REFUSE_DOT_DOT_DIRS` trips: partially
 /// compacted in place (that is what its diagnostics print).
 pub(crate) fn clean_fname_flags(name: &[u8], flags: u32) -> Result<Vec<u8>, Vec<u8>> {
-	let mut buf = name.to_vec();
-	match clean_in_place(&mut buf, flags) {
-		Ok(()) => Ok(buf),
-		Err(()) => Err(buf),
-	}
+	clean_with_prefix(name.to_vec(), 0, flags)
 }
 
 fn byte_at(buf: &[u8], i: usize) -> u8 {
@@ -107,7 +103,8 @@ fn dot_dot_at(buf: &[u8], i: usize) -> bool {
 
 /// The in-place compaction: `t` (write) never passes `f` (read), so the
 /// buffer can be rewritten as it is scanned, exactly like the C original.
-fn clean_in_place(buf: &mut Vec<u8>, flags: u32) -> Result<(), ()> {
+fn clean_with_prefix(mut name: Vec<u8>, root_len: usize, flags: u32) -> Result<Vec<u8>, Vec<u8>> {
+	let buf = &mut name[root_len..];
 	let anchored = byte_at(buf, 0) == b'/';
 	let (mut t, mut f) = (0usize, 0usize);
 	let mut limit = 0usize;
@@ -119,7 +116,7 @@ fn clean_in_place(buf: &mut Vec<u8>, flags: u32) -> Result<(), ()> {
 		t = 2;
 		f = 2;
 	} else if flags & CFN_REFUSE_DOT_DOT_DIRS != 0 && dot_dot_at(buf, 0) {
-		return Err(());
+		return Err(name);
 	}
 	while f < buf.len() {
 		let c = buf[f];
@@ -140,7 +137,7 @@ fn clean_in_place(buf: &mut Vec<u8>, flags: u32) -> Result<(), ()> {
 				&& dot_dot_at(buf, f)
 			{
 				if flags & CFN_REFUSE_DOT_DOT_DIRS != 0 {
-					return Err(());
+					return Err(name);
 				}
 				// `s` walks back over the previous element in the output.
 				let last = t as isize - 1;
@@ -171,14 +168,17 @@ fn clean_in_place(buf: &mut Vec<u8>, flags: u32) -> Result<(), ()> {
 			}
 		}
 	}
-	if t > usize::from(anchored) && buf[t - 1] == b'/' && flags & CFN_KEEP_TRAILING_SLASH == 0 {
+	if t > usize::from(anchored && root_len == 0)
+		&& buf[t - 1] == b'/'
+		&& flags & CFN_KEEP_TRAILING_SLASH == 0
+	{
 		t -= 1;
 	}
-	buf.truncate(t);
-	if t == 0 {
-		buf.push(b'.');
+	name.truncate(root_len + t);
+	if name.is_empty() {
+		name.push(b'.');
 	}
-	Ok(())
+	Ok(name)
 }
 
 /// The text after the last `/` of a name (the whole name without a slash; empty after a
@@ -549,6 +549,19 @@ pub(crate) fn clean_local_fname_flags(name: &[u8], flags: u32) -> Result<Vec<u8>
 		return clean_fname_flags(&name[2..], flags).map(prepend_drive).map_err(prepend_drive);
 	}
 	let unc = cfg!(windows) && name.starts_with(b"//") && name.get(2).is_some_and(|b| *b != b'/');
+	if unc
+		&& let Some(server_len) = memchr::memchr(b'/', &name[2..])
+		&& let Some(share_offset) = name[server_len + 3..].iter().position(|&b| b != b'/')
+	{
+		let after_server = server_len + 3;
+		let share_and_tail = &name[after_server + share_offset..];
+		let share_len = memchr::memchr(b'/', share_and_tail).unwrap_or(share_and_tail.len());
+		let mut path = Vec::with_capacity(name.len() - share_offset);
+		path.extend_from_slice(&name[..after_server]);
+		path.extend_from_slice(share_and_tail);
+		// Clean the suffix as an absolute path, so `..` stops at the share.
+		return clean_with_prefix(path, after_server + share_len, flags);
+	}
 	let cleaned = clean_fname_flags(name, flags);
 	if unc {
 		let prepend_slash = |mut path: Vec<u8>| {

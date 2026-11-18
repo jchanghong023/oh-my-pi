@@ -5,3 +5,8 @@ const AGENT_TOMBSTONE_SUFFIX = ".tombstone";
 export function getAgentTombstonePath(sessionFile: string): string {
 	return `${sessionFile}${AGENT_TOMBSTONE_SUFFIX}`;
 }
+
+/** Permanent marker for a retained execution record, independent of a reversible kill. */
+export function getAgentExecutionEndedPath(sessionFile: string): string {
+	return `${sessionFile}.execution-ended`;
+}

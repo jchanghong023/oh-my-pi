@@ -481,6 +481,7 @@ import {
 	cfgMcpStartupTimeoutMs,
 } from "./mcp/settings";
 import { cfgPlanEnabled } from "./plan-mode/settings";
+import type { ApprovedPlanChecks } from "./plan-mode/verification";
 import { cfgSecretsEnabled } from "./secrets/settings";
 import {
 	cfgSnapcompactShape,
@@ -832,6 +833,8 @@ export interface CreateAgentSessionOptions {
 
 	/** Custom tools to register (in addition to built-in tools). Accepts both CustomTool and ToolDefinition. */
 	customTools?: (CustomTool | ToolDefinition)[];
+	/** Host-approved verification commands inherited at native task dispatch. */
+	approvedPlanChecks?: ApprovedPlanChecks;
 	/**
 	 * Inline extensions (merged with discovery). In-process child sessions (subagents, `/tan` forks)
 	 * rebind these factories; worker-thread subagents cannot import a closure, so they run without
@@ -2289,6 +2292,14 @@ const embeddingSessionHooks = new WeakMap<
 	>
 >();
 
+// A prepared factory can be replayed even after another active extension takes
+// over its provider. Keep the accepted declarations with the forwarded binding,
+// not in the model registry's snapshot of current owners.
+const preparedProviderDeclarations = new WeakMap<
+	PreparedExtension,
+	{ registry: ModelRegistry; providers: Map<string, unknown> }
+>();
+
 /** Preserve the embedding caller's tool boundary when preparing an isolated native child. */
 export function cloneEmbeddingToolRestrictions(modelRegistry: ModelRegistry | undefined): ToolRestrictions | undefined {
 	return modelRegistry ? embeddingSessionHooks.get(modelRegistry)?.toolRestrictions?.clone() : undefined;
@@ -2539,21 +2550,6 @@ async function createAgentSessionScoped(
 				"options.authStorage and options.modelRegistry.authStorage must be the same instance when both are provided",
 			);
 		}
-		try {
-			await options.prepareConfiguration?.(cwd, settings, modelRegistry);
-		} catch (error) {
-			if (ownsAuthStorage && !strictStartupResources) authStorage.close();
-			throw error;
-		}
-		if (
-			options.modelRegistry &&
-			isCompanyLaneActive() &&
-			!getCompanyConfigError() &&
-			!disabledProviderIds(settings).has(COMPANY_PROVIDER_ID) &&
-			!modelRegistry.hasProvider(COMPANY_PROVIDER_ID)
-		) {
-			await modelRegistry.reapplyModelPolicies();
-		}
 		// Subscribe before any getApiKey() call so startup model probes can't fire a
 		// credential_disabled event past us. An embedder's constructor handler makes the
 		// listener set non-empty from construction, which defeats AuthStorage's no-listener
@@ -2576,6 +2572,21 @@ async function createAgentSessionScoped(
 		});
 		if (strictStartupResources) strictStartupResources.add(unsubscribeCredentialDisabled);
 		else startupCleanup.defer(unsubscribeCredentialDisabled);
+		try {
+			await options.prepareConfiguration?.(cwd, settings, modelRegistry);
+		} catch (error) {
+			if (ownsAuthStorage && !strictStartupResources) authStorage.close();
+			throw error;
+		}
+		if (
+			options.modelRegistry &&
+			isCompanyLaneActive() &&
+			!getCompanyConfigError() &&
+			!disabledProviderIds(settings).has(COMPANY_PROVIDER_ID) &&
+			!modelRegistry.hasProvider(COMPANY_PROVIDER_ID)
+		) {
+			await modelRegistry.reapplyModelPolicies();
+		}
 		// Local-only and never rejects; awaited just before the first catalog read so
 		// its credential/cache I/O overlaps the cwd-scoped discoveries started below.
 		const credentialScopedCacheHydration = logger.time("hydrateCredentialScopedModelCaches", () =>
@@ -2838,8 +2849,8 @@ async function createAgentSessionScoped(
 			}
 		}
 		await credentialScopedCacheHydration;
-		if (!options.modelRegistry && !options.offline) {
-			modelRegistry.refreshInBackground();
+		if (!options.modelRegistry) {
+			modelRegistry.refreshInBackground(options.offline ? "offline" : undefined);
 		}
 		const allowedModels = await logger.time("resolveAllowedModels", () =>
 			explicitDefaultProviders
@@ -3343,6 +3354,8 @@ async function createAgentSessionScoped(
 				getPlanModeState: () => session?.getPlanModeState(),
 				getWorkspaceModeSnapshot: async () => session?.getWorkspaceModeSnapshot() ?? { enabled: false },
 				getPlanReferencePath: () => session?.getPlanReferencePath() ?? "local://PLAN.md",
+				approvedPlanChecks: options.approvedPlanChecks,
+				getApprovedPlanChecks: () => session?.getApprovedPlanChecks() ?? options.approvedPlanChecks,
 				getGoalModeState: () => session?.getGoalModeState(),
 				getGoalRuntime: () => session?.goalRuntime,
 				getUsageStatistics: () => sessionManager.getUsageStatistics(),
@@ -3722,6 +3735,12 @@ async function createAgentSessionScoped(
 					if (!providers) declarations.set(change.sourceId, (providers = new Map()));
 					providers.set(change.name, change.config);
 				}
+				for (const prepared of options.preloadedPreparedExtensions ?? []) {
+					const accepted = preparedProviderDeclarations.get(prepared);
+					if (accepted && (accepted.registry === options.modelRegistry || accepted.registry === modelRegistry)) {
+						declarations.set(prepared.path, accepted.providers);
+					}
+				}
 				inheritedProviderRuntime = new SessionExtensionRuntime(declarations);
 			}
 			let extensionsResult: LoadExtensionsResult;
@@ -3857,13 +3876,6 @@ async function createAgentSessionScoped(
 			// Deferred extensions append to the forwarded lists after the session
 			// captured them, so subagents and forks still inherit them.
 			if (deferredExtensionPaths.length > 0) extensionsResult.preparedExtensions ??= [];
-			toolSession.preparedExtensions = extensionsResult.preparedExtensions;
-			// Every extension source this session forwards, suspended ones included: the
-			// project-scope reconcile republishes the active subset into the forwarded lists.
-			const forwardableExtensionPaths = [...extensionPaths];
-			const forwardablePreparedExtensions = new Map(
-				(extensionsResult.preparedExtensions ?? []).map(prepared => [prepared.resolvedPath, prepared]),
-			);
 
 			// Process provider registrations queued during extension loading.
 			// This must happen before the runner is created so that models registered by
@@ -3876,11 +3888,29 @@ async function createAgentSessionScoped(
 			if (extensionsResult.runtime.pendingProviderRegistrations.length > 0) {
 				if (inheritedProviderRuntime)
 					throw new Error("Inherited helper cannot take ownership of queued provider registrations.");
+				const acceptedDeclarations = new Map<string, Map<string, unknown>>();
 				for (const { name, config, sourceId } of extensionsResult.runtime.pendingProviderRegistrations) {
 					modelRegistry.registerProvider(name, config, sourceId);
+					let providers = acceptedDeclarations.get(sourceId);
+					if (!providers) acceptedDeclarations.set(sourceId, (providers = new Map()));
+					providers.set(name, config);
 				}
 				extensionsResult.runtime.pendingProviderRegistrations = [];
+				extensionsResult.preparedExtensions = extensionsResult.preparedExtensions?.map(prepared => {
+					const providers = acceptedDeclarations.get(prepared.path);
+					if (!providers) return prepared;
+					const forwarded = { ...prepared };
+					preparedProviderDeclarations.set(forwarded, { registry: modelRegistry, providers });
+					return forwarded;
+				});
 			}
+			toolSession.preparedExtensions = extensionsResult.preparedExtensions;
+			// Every extension source this session forwards, suspended ones included: the
+			// project-scope reconcile republishes the active subset into the forwarded lists.
+			const forwardableExtensionPaths = [...extensionPaths];
+			const forwardablePreparedExtensions = new Map(
+				(extensionsResult.preparedExtensions ?? []).map(prepared => [prepared.resolvedPath, prepared]),
+			);
 			// Hydrate cached runtime (extension) provider catalogs before model
 			// resolution. Dynamic-only providers have no synchronous registration side
 			// effect, so a cold --model/provider resume must see the same fresh SQLite
@@ -4084,8 +4114,11 @@ async function createAgentSessionScoped(
 							const originalThinkingLevel =
 								parsedOriginal?.thinkingLevel ??
 								extractExplicitThinkingSelector(originalSelector, settings, {
-									isLiteralModelId: (provider, id) =>
-										provider !== undefined && modelRegistry.find(provider, id) !== undefined,
+									isLiteralModelId: (provider, id) => {
+										if (provider !== undefined) return modelRegistry.find(provider, id) !== undefined;
+										const lowerId = id.toLowerCase();
+										return allEnabledModels.some(candidate => candidate.id.toLowerCase() === lowerId);
+									},
 								});
 							// Retry-chain matching still sees the concrete primary and its effort;
 							// persisted recovery retains the role selector that the caller supplied.
@@ -4802,9 +4835,9 @@ async function createAgentSessionScoped(
 					);
 					if (!adapted) continue;
 					const entry = new ExtensionToolWrapper(wrapToolWithMetaNotice(adapted), extensionRunner) as Tool;
-					toolRegistry.set(tool.name, entry);
-					settingsGatedCustomEntries.set(tool.name, entry);
-					added.push(entry);
+					const registered = toolRegistry.set(tool.name, entry).get(tool.name)!;
+					settingsGatedCustomEntries.set(tool.name, registered);
+					added.push(registered);
 				}
 				return { added, removed };
 			};
@@ -5813,7 +5846,19 @@ async function createAgentSessionScoped(
 				}
 				return stream;
 			};
-			const settingsAwareStreamFn: StreamFn = (streamModel, context, streamOptions) => {
+			let mainRequestProvider: string | undefined;
+			// Recovery can issue another provider request without reentering the main loop.
+			// Side streams, cache warming and capture must not overwrite this marker.
+			const dispatchMainExecutionRequest: ExecutionStreamDispatch = (model, context, options, resolveAuth) => {
+				mainRequestProvider = model.provider;
+				return dispatchExecutionRequest(model, context, options, resolveAuth);
+			};
+			const settingsAwareStreamFn = (
+				streamModel: Model,
+				context: Context,
+				streamOptions?: SimpleStreamOptions,
+				mainRequest = false,
+			): ReturnType<StreamFn> => {
 				if (cfgOffline.get(settings) && streamModel.provider !== session?.model?.provider) {
 					return Promise.reject(new Error("models.offline restricts model calls to the active session provider."));
 				}
@@ -5821,9 +5866,10 @@ async function createAgentSessionScoped(
 					if (context.tools) context = { ...context, tools: options.toolRestrictions.filter(context.tools) };
 				}
 				const execution = currentExecutionModel();
+				const dispatch = mainRequest ? dispatchMainExecutionRequest : dispatchExecutionRequest;
 				if (execution?.recoverModelRequest && !options.disableModelFallback) {
 					return streamWithExecutionRecovery(
-						dispatchExecutionRequest,
+						dispatch,
 						streamModel,
 						context,
 						streamOptions,
@@ -5831,8 +5877,9 @@ async function createAgentSessionScoped(
 					);
 				}
 				if (execution || options.resolveRequestAuth || options.onModelResponse) {
-					return dispatchExecutionRequest(streamModel, context, streamOptions);
+					return dispatch(streamModel, context, streamOptions);
 				}
+				if (mainRequest) mainRequestProvider = streamModel.provider;
 				return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
 					settingsBoundStreamFn(streamModel, context, {
 						...streamOptions,
@@ -5845,13 +5892,23 @@ async function createAgentSessionScoped(
 			// Primary-agent (and its auto-learn capture twin) provider options read per
 			// request, so `/settings` changes to budgets, Kimi format, or the Codex
 			// websocket policy reach the next call without a session recreate.
-			const primaryStreamFn: StreamFn = (streamModel, context, streamOptions) => {
+			const primaryStreamFn = (
+				streamModel: Model,
+				context: Context,
+				streamOptions?: SimpleStreamOptions,
+				mainRequest = false,
+			): ReturnType<StreamFn> => {
 				const kimiApiFormat = cfgProvidersKimiApiFormat.get(settings);
-				return settingsAwareStreamFn(streamModel, context, {
-					...streamOptions,
-					thinkingBudgets: streamOptions?.thinkingBudgets ?? cfgThinkingBudgets.get(settings),
-					kimiApiFormat: streamOptions?.kimiApiFormat ?? (kimiApiFormat === "auto" ? undefined : kimiApiFormat),
-				});
+				return settingsAwareStreamFn(
+					streamModel,
+					context,
+					{
+						...streamOptions,
+						thinkingBudgets: streamOptions?.thinkingBudgets ?? cfgThinkingBudgets.get(settings),
+						kimiApiFormat: streamOptions?.kimiApiFormat ?? (kimiApiFormat === "auto" ? undefined : kimiApiFormat),
+					},
+					mainRequest,
+				);
 			};
 			// Prompt-cache warmer for the main agent loop only: replays the last
 			// request through the same primary wrapper just before the entry would
@@ -5892,7 +5949,6 @@ async function createAgentSessionScoped(
 				},
 				host: localSpeculation.host,
 			};
-			let mainRequestProvider: string | undefined;
 
 			agent = new Agent({
 				pauseGate,
@@ -5963,15 +6019,19 @@ async function createAgentSessionScoped(
 					// The provider calls `onPayload` as it sends, past any wait for an in-flight
 					// slot: the prompt cache entry's lifetime starts there, not here.
 					const onPayload = merged.onPayload;
-					mainRequestProvider = streamModel.provider;
-					const stream = primaryStreamFn(streamModel, context, {
-						...merged,
-						...(fallbackCreditRedemption !== undefined ? { fallbackCreditRedemption } : {}),
-						onPayload: (payload, payloadModel, signal) => {
-							session.markPromptCacheDispatched(context);
-							return onPayload?.(payload, payloadModel, signal);
+					const stream = primaryStreamFn(
+						streamModel,
+						context,
+						{
+							...merged,
+							...(fallbackCreditRedemption !== undefined ? { fallbackCreditRedemption } : {}),
+							onPayload: (payload, payloadModel, signal) => {
+								session.markPromptCacheDispatched(context);
+								return onPayload?.(payload, payloadModel, signal);
+							},
 						},
-					});
+						true,
+					);
 					// A request that waited for a provider slot is checked again when it goes out.
 					if (stream instanceof Promise) {
 						stream.catch(error => {
@@ -7075,19 +7135,26 @@ async function createAgentSessionScoped(
 						restoreProviderToggles?.();
 						unsubscribeMcpNotifications?.();
 						unregisterMcpPostmortem?.();
-						try {
-							for (const callback of disposeCallbacks) {
-								disposeCallbacks.delete(callback);
+						const failures: unknown[] = [];
+						for (const callback of disposeCallbacks) {
+							disposeCallbacks.delete(callback);
+							try {
 								await callback();
+							} catch (error) {
+								failures.push(error);
 							}
-						} finally {
-							disposeCallbacks.clear();
+						}
+						try {
 							await releaseDsmReferences(toolSession);
+						} catch (error) {
+							failures.push(error);
 						}
 						// Drop refs so the process-global postmortem list doesn't retain
 						// the bridge closure past explicit dispose.
 						unsubscribeMcpNotifications = undefined;
 						unregisterMcpPostmortem = undefined;
+						if (failures.length === 1) throw failures[0];
+						if (failures.length) throw new AggregateError(failures, "Session owned cleanup failed");
 					}
 				};
 			}

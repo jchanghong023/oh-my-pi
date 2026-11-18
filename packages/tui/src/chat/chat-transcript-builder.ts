@@ -80,7 +80,7 @@ export interface ChatTranscriptBuilderDeps {
 	isBuiltInTool?: (name: string) => boolean;
 	getMessageRenderer?: (customType: string) => MessageRenderer | undefined;
 	cwd: string;
-	hideThinkingBlock?: () => boolean;
+	hideThinkingBlock?: (detailedInspection: boolean) => boolean;
 	proseOnlyThinking?: () => boolean;
 	expandThinkingBlocks?: () => boolean;
 	/** Session-scoped resolved destinations for model-authored Markdown links. */
@@ -110,13 +110,36 @@ export class ChatTranscriptBuilder {
 	#todoSnapshot: ToolExecutionComponent | null = null;
 	#expandables: Array<{ setExpanded(expanded: boolean): void }> = [];
 	#expanded = false;
+	#detailedInspection = false;
 	#entryComponents = new Map<string, Component[]>();
 
 	readonly #deps: ChatTranscriptBuilderDeps;
 
 	constructor(deps: ChatTranscriptBuilderDeps) {
 		this.#deps = deps;
-		this.container.setToolActivityVisible(!displayPreferences.hideToolActivity);
+		this.container.setToolActivityVisible(this.#toolActivityVisible);
+	}
+
+	get #toolActivityVisible(): boolean {
+		return this.#detailedInspection || !displayPreferences.hideToolActivity;
+	}
+
+	/** Use detailed activity for this viewer only, including cards already loaded by polling. */
+	setDetailedInspection(enabled: boolean): boolean {
+		if (this.#detailedInspection === enabled) return false;
+		this.#detailedInspection = enabled;
+		const hideThinking = this.#deps.hideThinkingBlock?.(enabled) ?? false;
+		const toolActivityVisible = this.#toolActivityVisible;
+		for (const component of this.container.children) {
+			if (component instanceof AssistantMessageComponent) {
+				component.setDetailedInspection(enabled, hideThinking);
+				component.setToolResultImagesVisible(toolActivityVisible);
+			} else if (component instanceof ToolExecutionComponent) {
+				component.setDetailedInspection(enabled);
+			}
+		}
+		this.container.setToolActivityVisible(toolActivityVisible);
+		return true;
 	}
 
 	/** Whether the transcript currently holds any rendered rows. */
@@ -127,7 +150,7 @@ export class ChatTranscriptBuilder {
 	/** Discard all components and rebuild the whole transcript from `entries`. */
 	rebuild(entries: TranscriptEntry[]): void {
 		this.reset();
-		this.container.setToolActivityVisible(!displayPreferences.hideToolActivity);
+		this.container.setToolActivityVisible(this.#toolActivityVisible);
 		for (const entry of entries) this.#appendEntry(entry);
 		// Flush the trailing turn's usage row once its pending tool results have
 		// arrived, keeping it below the tool blocks reserved during call traversal.
@@ -136,7 +159,7 @@ export class ChatTranscriptBuilder {
 
 	/** Append newly persisted entries without rebuilding already rendered rows. */
 	append(entries: TranscriptEntry[]): void {
-		this.container.setToolActivityVisible(!displayPreferences.hideToolActivity);
+		this.container.setToolActivityVisible(this.#toolActivityVisible);
 		for (const entry of entries) this.#appendEntry(entry);
 		if (this.#pendingTools.size === 0) this.#flushPendingUsage();
 	}
@@ -209,7 +232,8 @@ export class ChatTranscriptBuilder {
 	/** Append assistant prose (a reply, a post-tool segment, or an `out://` reply write) with the transcript's display preferences. */
 	#mountProse(component: AssistantMessageComponent): void {
 		component.setImagesVisible(displayPreferences.showImages);
-		component.setToolResultImagesVisible(!displayPreferences.hideToolActivity);
+		component.setDetailedInspection(this.#detailedInspection);
+		component.setToolResultImagesVisible(this.#toolActivityVisible);
 		component.setTableChartsVisible(this.#deps.tableCharts !== false);
 		this.#trackExpandable(component);
 		this.container.addChild(component);
@@ -424,7 +448,7 @@ export class ChatTranscriptBuilder {
 	}
 
 	#appendAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>): void {
-		const hideThinkingBlock = this.#deps.hideThinkingBlock?.() ?? false;
+		const hideThinkingBlock = this.#deps.hideThinkingBlock?.(this.#detailedInspection) ?? false;
 		const proseOnlyThinking = this.#deps.proseOnlyThinking ? this.#deps.proseOnlyThinking() : true;
 		const expandThinkingBlocks = this.#deps.expandThinkingBlocks?.() ?? false;
 		const timeline = splitAssistantMessageToolTimeline(message);
@@ -467,7 +491,7 @@ export class ChatTranscriptBuilder {
 			segment: Extract<AgentMessage, { role: "assistant" }> | undefined,
 		) => {
 			if (!segment || !assistantHasVisibleContent(segment)) return;
-			this.#readGroup?.seal();
+			this.#readGroup?.finalize();
 			this.#readGroup = null;
 			const component = new AssistantMessageComponent(
 				segment,
@@ -534,6 +558,7 @@ export class ChatTranscriptBuilder {
 						// Stable ids and Kitty placeholder cells keep images anchored
 						// while the transcript viewport scrolls and reflows.
 						showImages: displayPreferences.showImages,
+						detailedInspection: this.#detailedInspection,
 						transcriptPresenters: false,
 					},
 					tool,
@@ -622,7 +647,8 @@ export class ChatTranscriptBuilder {
 		if (!message.display) return;
 		if (message.customType === "async-result") {
 			const renderer = this.#deps.getMessageRenderer?.(message.customType);
-			const component = buildAsyncResultComponent(message, renderer);
+			const component = buildAsyncResultComponent(message, renderer, this.container.children);
+			if (component.children.length === 0) return;
 			this.#trackExpandable(component);
 			this.container.addChild(component);
 			return;

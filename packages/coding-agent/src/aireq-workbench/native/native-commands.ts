@@ -89,11 +89,8 @@ function commandState(session: AgentSession): NativeCommandState {
 export async function nativeWebGuiCommands(
 	session: AgentSession,
 ): Promise<Array<{ name: string; description: string }>> {
-	return (
-		await buildAvailableSlashCommands(session, undefined, { includeTuiOnlyBuiltins: true, includeRpcBuiltins: true })
-	)
-		.filter(command => command.name !== "workspace")
-		.map(command => ({ name: command.name, description: command.description ?? "" }));
+	const commands = await buildAvailableSlashCommands(session, undefined, { includeWebGuiBuiltins: true });
+	return commands.map(command => ({ name: command.name, description: command.description ?? "" }));
 }
 
 /** Build from this session's effective skills using the same policy-checked payload as the TUI. */
@@ -164,8 +161,7 @@ async function executeNativeCommand(
 	const name = skill ? getSkillSlashCommandName(skill) : parsed.name;
 	if (!lookupBuiltinSlashCommand(name)) {
 		const catalog = await buildAvailableSlashCommands(session, undefined, {
-			includeTuiOnlyBuiltins: true,
-			includeRpcBuiltins: true,
+			includeWebGuiBuiltins: true,
 		});
 		if (!catalog.some(command => command.name === name || command.aliases?.includes(name))) {
 			throw new Error(`Unknown native command: /${name}`);

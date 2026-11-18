@@ -39,12 +39,13 @@ export async function executeRpcBuiltinSlashCommand(
 	if (!parsed) return false;
 	const command = lookupBuiltinSlashCommand(parsed.name);
 	if (!command) return false;
-	if (!command.handleRpc && !command.handle) {
+	const handler = command.handleRpc ?? command.handle;
+	if (!handler) {
 		throw new Error(`/${command.name} is only available in the interactive TUI.`);
 	}
 	if (parsed.args.length > 0 && !(command.acpAllowArgs ?? command.allowArgs)) {
 		throw new Error(`/${command.name} does not accept arguments.`);
 	}
-	const result = command.handleRpc ? await command.handleRpc(parsed, runtime) : await command.handle!(parsed, runtime);
+	const result = await handler(parsed, runtime);
 	return result ?? { consumed: true };
 }

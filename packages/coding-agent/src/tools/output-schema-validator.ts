@@ -16,7 +16,7 @@ import {
 } from "@oh-my-pi/pi-ai/utils/schema";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
-import { jtdToJsonSchema, normalizeSchema } from "./jtd-to-json-schema";
+import { InvalidJTDReferenceError, jtdToJsonSchema, normalizeSchema } from "./jtd-to-json-schema";
 
 /** A validator bound to a specific output schema. */
 export interface OutputValidator {
@@ -105,7 +105,13 @@ function buildOutputValidatorUncached(schema: unknown): BuildOutputValidatorResu
 	if (normalized === false) return { error: "boolean false schema rejects all outputs", normalized };
 	if (normalized === true) return { normalized };
 
-	const jsonSchema = jtdToJsonSchema(normalized);
+	let jsonSchema: unknown;
+	try {
+		jsonSchema = jtdToJsonSchema(normalized);
+	} catch (error) {
+		if (error instanceof InvalidJTDReferenceError) return { error: error.message, normalized };
+		throw error;
+	}
 	if (jsonSchema === undefined) return { normalized };
 	if (jsonSchema === false) return { error: "boolean false schema rejects all outputs", normalized };
 	if (jsonSchema === true) return { normalized };

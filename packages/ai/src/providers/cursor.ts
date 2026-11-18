@@ -1500,15 +1500,16 @@ function streamCursorWithWireMode(
 							...sharedRequestHeaders,
 							"x-cursor-streaming": "true",
 						};
-			const debugSession = isRequestDebugEnabled()
-				? await createRequestDebugSession({
-						protocol: transportMode,
-						method: "POST",
-						url: new URL(requestPath, baseUrl).toString(),
-						headers: requestHeaders,
-						bodyBase64: Buffer.from(requestBytes).toString("base64"),
-					})
-				: undefined;
+			const debugSession =
+				options?.requestAuth === undefined && isRequestDebugEnabled()
+					? await createRequestDebugSession({
+							protocol: transportMode,
+							method: "POST",
+							url: new URL(requestPath, baseUrl).toString(),
+							headers: requestHeaders,
+							bodyBase64: Buffer.from(requestBytes).toString("base64"),
+						})
+					: undefined;
 
 			// Before connecting: the RunSSE fallback for a failed connect does not push its own start.
 			if (!retryContext) stream.push({ type: "start", partial: output });

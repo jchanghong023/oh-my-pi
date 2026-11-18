@@ -82,7 +82,11 @@ import {
 	treeMetadataIndent,
 } from "./agent-hub-renderer";
 import { sanitizeDisplaySingleLine } from "./extensions/display-text";
-import { AgentTranscriptViewer, type AgentTranscriptSource } from "./agent-transcript-viewer";
+import {
+	AgentTranscriptViewer,
+	type AgentTranscriptSource,
+	type AgentTranscriptViewerDeps,
+} from "./agent-transcript-viewer";
 import type { AgentRoleDisplay } from "./agent-hub-renderer";
 import { fuzzyMatch } from "../fuzzy";
 import { bottomBorder, divider, dividerSplit, PanelRows, row, topBorder, topBorderSplit } from "../chrome/overlay-box";
@@ -347,8 +351,8 @@ export interface AgentHubDeps<TRecord extends AgentRecordLike = AgentRecordLike>
 	getMessageRenderer?: (customType: string) => MessageRenderer | undefined;
 	/** Cwd used by tool renderers for path shortening; defaults to the project dir. */
 	cwd?: string;
-	/** Mirrors the main transcript's thinking-block visibility. */
-	hideThinkingBlock?: () => boolean;
+	/** Independent thinking visibility for the Agent viewer's current inspection mode. */
+	hideThinkingBlock?: AgentTranscriptViewerDeps["hideThinkingBlock"];
 	proseOnlyThinking?: () => boolean;
 	expandThinkingBlocks?: () => boolean;
 	/** Keys toggling tool output expansion (app.tools.expand). */
@@ -502,7 +506,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#isBuiltInTool: ((name: string) => boolean) | undefined;
 	#getMessageRenderer: ((customType: string) => MessageRenderer | undefined) | undefined;
 	#cwd: string;
-	#hideThinkingBlock: (() => boolean) | undefined;
+	#hideThinkingBlock: AgentTranscriptViewerDeps["hideThinkingBlock"];
 	#proseOnlyThinking: (() => boolean) | undefined;
 	#expandThinkingBlocks: (() => boolean) | undefined;
 	#expandKeys: KeyId[];

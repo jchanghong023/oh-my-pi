@@ -51,20 +51,10 @@ export async function resolveSqliteReadPath(
 	for (const candidate of candidates) {
 		let absolutePath = resolveReadPath(candidate.sqlitePath, session.cwd);
 		let suffixResolution: { from: string; to: string } | undefined;
-		await assertTeamReadTarget(session, absolutePath);
-
 		try {
 			const stat = await Bun.file(absolutePath).stat();
 			// Sniffing a FIFO or device can block; leave it to the read tool's rejection.
 			if (!stat.isFile()) continue;
-			if (!(await isSqliteFile(absolutePath))) continue;
-
-			return {
-				absolutePath,
-				sqliteSubPath: candidate.subPath,
-				queryString: candidate.queryString,
-				suffixResolution,
-			};
 		} catch (error) {
 			if (!isNotFoundError(error) || isRemoteMountPath(absolutePath)) continue;
 
@@ -74,23 +64,24 @@ export async function resolveSqliteReadPath(
 			try {
 				const retryStat = await Bun.file(suffixMatch.absolutePath).stat();
 				if (!retryStat.isFile()) continue;
-				await assertTeamReadTarget(session, suffixMatch.absolutePath);
-				if (!(await isSqliteFile(suffixMatch.absolutePath))) continue;
-
-				absolutePath = suffixMatch.absolutePath;
-				suffixResolution = { from: candidate.sqlitePath, to: suffixMatch.displayPath };
-				return {
-					absolutePath,
-					sqliteSubPath: candidate.subPath,
-					queryString: candidate.queryString,
-					suffixResolution,
-				};
 			} catch (retryError) {
 				if (!isNotFoundError(retryError)) {
 					throw retryError;
 				}
+				continue;
 			}
+			absolutePath = suffixMatch.absolutePath;
+			suffixResolution = { from: candidate.sqlitePath, to: suffixMatch.displayPath };
 		}
+
+		await assertTeamReadTarget(session, absolutePath);
+		if (!(await isSqliteFile(absolutePath))) continue;
+		return {
+			absolutePath,
+			sqliteSubPath: candidate.subPath,
+			queryString: candidate.queryString,
+			suffixResolution,
+		};
 	}
 
 	return null;

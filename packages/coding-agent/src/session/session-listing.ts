@@ -13,7 +13,12 @@ import { toError } from "@oh-my-pi/pi-utils/type-guards";
 import { EVAL_STATE_CONTEXT_TYPE } from "../eval/state";
 import { visitEntriesFromFile } from "./session-loader";
 import { computeDefaultSessionDir } from "./session-paths";
-import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
+import {
+	FileSessionStorage,
+	sessionBackupPrimaryName,
+	type SessionStorage,
+	type SessionStorageStat,
+} from "./session-storage";
 import { listSessionTitles, lookupSessionTitle, recordSessionTitle, recordSessionTitles } from "./session-index";
 
 /**
@@ -627,13 +632,8 @@ export async function recoverOrphanedBackups(sessionDir: string, storage: Sessio
 	const candidates = new Map<string, { backup: string; mtimeMs: number }>();
 	for (const backup of backups) {
 		const name = path.basename(backup);
-		// Expect "<primary>.<snowflake>.bak" where <primary> ends in ".jsonl".
-		if (!name.endsWith(".bak")) continue;
-		const trimmed = name.slice(0, -".bak".length);
-		const dotIdx = trimmed.lastIndexOf(".");
-		if (dotIdx <= 0) continue;
-		const primaryName = trimmed.slice(0, dotIdx);
-		if (!primaryName.endsWith(".jsonl")) continue;
+		const primaryName = sessionBackupPrimaryName(name);
+		if (!primaryName?.endsWith(".jsonl")) continue;
 		// The primary is the backup's sibling: strip the suffix from the listed path instead of
 		// re-joining `sessionDir`, so the key keeps the storage's own spelling of the directory.
 		const primaryPath = backup.slice(0, backup.length - (name.length - primaryName.length));

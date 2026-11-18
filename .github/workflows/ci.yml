@@ -192,6 +192,7 @@ jobs:
 
    browser_relay:
       name: Build browser relay extension
+      needs: [release_metadata]
       runs-on: ubuntu-22.04
       steps:
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -199,6 +200,8 @@ jobs:
            with:
               bun-version: 1.4.4
          - run: bun run --cwd packages/browser-relay build
+           env:
+              RELEASE_VERSION: ${{ needs.release_metadata.outputs.version }}
          - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
            with:
               name: omp-browser-relay-extension

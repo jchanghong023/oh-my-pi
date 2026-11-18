@@ -1,14 +1,17 @@
 import type { GitStatus } from "./types";
 
 /** Count distinct porcelain v1 -z paths; rename/copy sources are not separate changes. */
-export function parseGitStatus(porcelain: string): GitStatus {
+export function parseGitStatus(input: Buffer | string): GitStatus {
+	// Latin-1 maps every byte to a distinct code unit. These keys are compared,
+	// not displayed; UTF-8 replacement would merge different invalid paths.
+	const porcelain = typeof input === "string" ? input : input.toString("latin1");
 	const staged = new Set<string>();
 	const unstaged = new Set<string>();
 	const untracked = new Set<string>();
 	let offset = 0;
 	while (offset < porcelain.length) {
 		const end = porcelain.indexOf("\0", offset);
-		if (end < 0) break;
+		if (end === -1) throw new Error("Incomplete Git status record");
 		const index = porcelain[offset];
 		const worktree = porcelain[offset + 1];
 		const path = porcelain.slice(offset + 3, end);
@@ -21,7 +24,7 @@ export function parseGitStatus(porcelain: string): GitStatus {
 		offset = end + 1;
 		if (index === "R" || index === "C" || worktree === "R" || worktree === "C") {
 			const sourceEnd = porcelain.indexOf("\0", offset);
-			if (sourceEnd < 0) break;
+			if (sourceEnd === -1) throw new Error("Incomplete Git status rename or copy record");
 			offset = sourceEnd + 1;
 		}
 	}

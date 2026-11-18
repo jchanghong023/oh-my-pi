@@ -25,20 +25,24 @@ async function windowsPuppeteerAvailable(): Promise<boolean> {
 		await browser?.close().catch(() => undefined);
 		// Edge can hand off startup to a new process and exit 0 before Puppeteer
 		// connects. Only terminate processes using this probe's unique profile.
-		const cleanup = Bun.spawn(
-			[
-				"powershell.exe",
-				"-NoProfile",
-				"-Command",
-				"Get-CimInstance Win32_Process -Filter \"Name='msedge.exe' OR Name='chrome.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:OMP_CHROMIUM_TEST_PROFILE) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
-			],
-			{
-				env: { ...process.env, OMP_CHROMIUM_TEST_PROFILE: userDataDir },
-				stdout: "ignore",
-				stderr: "ignore",
-			},
-		);
-		await cleanup.exited;
+		try {
+			const cleanup = Bun.spawn(
+				[
+					"powershell.exe",
+					"-NoProfile",
+					"-Command",
+					"Get-CimInstance Win32_Process -Filter \"Name='msedge.exe' OR Name='chrome.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:OMP_CHROMIUM_TEST_PROFILE) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+				],
+				{
+					env: { ...process.env, OMP_CHROMIUM_TEST_PROFILE: userDataDir },
+					stdout: "ignore",
+					stderr: "ignore",
+				},
+			);
+			await cleanup.exited;
+		} catch {
+			// Cleanup is best-effort; keep the launch result even if PowerShell is unavailable.
+		}
 		await removeWithRetries(userDataDir).catch(() => undefined);
 	}
 }

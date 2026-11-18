@@ -502,6 +502,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	let releasePromise: Promise<void> | undefined;
 	let sourceResult: SingleResult | undefined;
 	let runOutcome: SingleResult | undefined;
+	let deferredRetainedOutcome: SingleResult | undefined;
 	const preserveObservationFailure = async (result: SingleResult, error: unknown): Promise<SingleResult> => {
 		const retained = workspace && !retainWorkspace ? await workspace.retain() : undefined;
 		retainWorkspace = true;
@@ -516,16 +517,22 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		Object.assign(result, rememberAgentArtifacts(result));
 		return result;
 	};
+	const observeRunOutcome = async (result: SingleResult): Promise<SingleResult> => {
+		try {
+			await opts.onAfterResult?.(result);
+		} catch (error) {
+			return preserveObservationFailure(result, error);
+		}
+		return result;
+	};
 	const finish = async (result: SingleResult): Promise<SingleResult> => {
 		runOutcome = rememberAgentArtifacts(result);
-		// A retained session can still write. Its final observer belongs to releaseIsolation.
-		if (opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId)) return runOutcome;
-		try {
-			await opts.onAfterResult?.(runOutcome);
-		} catch (error) {
-			return preserveObservationFailure(runOutcome, error);
+		// A kept-alive session can still write. Its final observer belongs to releaseIsolation.
+		if (opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId)) {
+			if (retainWorkspace) deferredRetainedOutcome = runOutcome;
+			return runOutcome;
 		}
-		return runOutcome;
+		return observeRunOutcome(runOutcome);
 	};
 	/** The run's IRC wake hold, released only once the run-end capture is done. */
 	let releaseIrcWakes: (() => void) | undefined;
@@ -544,7 +551,11 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		if (releasePromise) return releasePromise;
 		releasePromise = (async () => {
 			if (!workspace || !changes || retainWorkspace) {
-				await cleanupHandle();
+				try {
+					if (deferredRetainedOutcome) await observeRunOutcome(deferredRetainedOutcome);
+				} finally {
+					await cleanupHandle();
+				}
 				return;
 			}
 			let outcomeObservationStarted = false;

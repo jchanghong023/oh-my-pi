@@ -46,7 +46,9 @@ export interface ResponsesWebSocketTimeouts {
 	idleTimeoutMs?: number;
 }
 
-export type ResponsesWebSocketExchange = { send: Record<string, unknown> } | { receive: true };
+export type ResponsesWebSocketExchange =
+	| { send: Record<string, unknown>; suppressRawDebug?: boolean }
+	| { receive: true };
 
 export interface ResponsesWebSocketControlFrames {
 	consume(frame: Record<string, unknown>): boolean | Error;
@@ -412,15 +414,16 @@ export class ResponsesWebSocketConnection {
 			signal?.addEventListener("abort", onAbort, { once: true });
 			if (signal?.aborted) onAbort();
 			if ("send" in exchange) {
-				const debugSession = isRequestDebugEnabled()
-					? await createRequestDebugSession({
-							protocol: "websocket",
-							method: "POST",
-							url: this.#options.url,
-							headers: this.#options.headers,
-							body: exchange.send,
-						})
-					: undefined;
+				const debugSession =
+					!exchange.suppressRawDebug && isRequestDebugEnabled()
+						? await createRequestDebugSession({
+								protocol: "websocket",
+								method: "POST",
+								url: this.#options.url,
+								headers: this.#options.headers,
+								body: exchange.send,
+							})
+						: undefined;
 				this.#debugResponseLog = debugSession
 					? await debugSession.openResponseLog("WebSocket 101 Switching Protocols", this.#handshakeHeaders)
 					: undefined;

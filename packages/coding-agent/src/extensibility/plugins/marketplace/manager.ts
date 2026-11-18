@@ -225,12 +225,15 @@ export class MarketplaceManager {
 		}
 
 		// Promote the temp clone to its final cache location now that drift check passed.
-		if (clonePath) {
-			await promoteCloneToCache(clonePath, this.#opts.marketplacesCacheDir, catalog.name);
-		}
+		const checkoutDir = clonePath
+			? await promoteCloneToCache(clonePath, this.#opts.marketplacesCacheDir, catalog.name)
+			: undefined;
 
-		// Overwrite the cached catalog and migrate legacy home-relative registry entries.
-		const catalogPath = path.resolve(expandTilde(existing.catalogPath));
+		// Git catalogs must stay alongside their checkout for relative plugin sources.
+		// Other sources keep their registered location, including legacy home-relative entries.
+		const catalogPath = path.resolve(
+			expandTilde(checkoutDir ? path.join(checkoutDir, "marketplace.json") : existing.catalogPath),
+		);
 		await Bun.write(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
 
 		const updatedEntry: MarketplaceRegistryEntry = {

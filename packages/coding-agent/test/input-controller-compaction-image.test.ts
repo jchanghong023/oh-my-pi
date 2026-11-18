@@ -40,6 +40,7 @@ function makeCtx(initialQueue: CompactionQueuedMessage[] = []) {
 	const followUpCalls: Array<{ text: string; images?: ImageContent[] }> = [];
 
 	const session = {
+		sessionManager: { getSessionId: () => "s1" },
 		isStreaming: false,
 		isCompacting: false,
 		extensionRunner: undefined,

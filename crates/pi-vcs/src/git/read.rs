@@ -284,6 +284,23 @@ impl GitRepo {
 		self.status_porcelain_capped(options, super::cli::OUTPUT_LIMIT_BYTES)
 	}
 
+	/// Complete NUL-delimited porcelain with raw paths and every untracked file.
+	pub fn status_porcelain_bytes(&self) -> Result<Vec<u8>> {
+		let args = ["status", "--porcelain", "--untracked-files=all", "-z"].map(str::to_owned);
+		match super::cli::run_sync_complete_stdout(self.root(), &args, super::cli::COMMAND_TIMEOUT) {
+			Err(err) if !self.is_reftable() && super::cli::prefers_in_process(&err) => self
+				.status_porcelain_gix_bytes(
+					&StatusOptions {
+						untracked: UntrackedMode::All,
+						nul_terminated: true,
+						..Default::default()
+					},
+					super::cli::OUTPUT_LIMIT_BYTES,
+				),
+			result => result,
+		}
+	}
+
 	/// [`Self::status_porcelain`] with an explicit retention cap for the
 	/// subprocess capture. The in-process fallback ignores the cap: it builds
 	/// the rendering itself and has nothing to drain.
@@ -313,6 +330,12 @@ impl GitRepo {
 	/// without a git binary. Must stay byte-identical to `git status
 	/// --porcelain` — the oracle test compares both against the real CLI.
 	fn status_porcelain_gix(&self, options: &StatusOptions) -> Result<String> {
+		self
+			.status_porcelain_gix_bytes(options, usize::MAX)
+			.map(String::from_utf8_lossy_owned)
+	}
+
+	fn status_porcelain_gix_bytes(&self, options: &StatusOptions, limit: usize) -> Result<Vec<u8>> {
 		let repo = self.gix()?;
 		let untracked = match options.untracked {
 			UntrackedMode::No => gix::status::UntrackedFiles::None,
@@ -323,11 +346,10 @@ impl GitRepo {
 		let iter = platform
 			.into_iter(options.pathspecs.iter().map(|path| path.as_bytes().into()))
 			.map_err(|err| Error::backend("git status", err))?;
-		let mut states: BTreeMap<String, (char, char, Option<String>)> = BTreeMap::new();
+		let mut states = PorcelainStates::new();
 		// git emits tracked changes first, then untracked entries, each block
 		// sorted by path — not one merged sort.
-		let mut untracked_paths: std::collections::BTreeSet<String> =
-			std::collections::BTreeSet::new();
+		let mut untracked_paths = BTreeSet::new();
 		for item in iter {
 			let item = item.map_err(|err| Error::backend("git status", err))?;
 			use gix::status::{Item, index_worktree};
@@ -336,20 +358,20 @@ impl GitRepo {
 					use gix::diff::index::ChangeRef;
 					match change {
 						ChangeRef::Addition { location, .. } => {
-							set_index(&mut states, &location, 'A', None);
+							set_index(&mut states, &location, b'A', None);
 						},
 						ChangeRef::Deletion { location, .. } => {
-							set_index(&mut states, &location, 'D', None);
+							set_index(&mut states, &location, b'D', None);
 						},
 						ChangeRef::Modification { location, .. } => {
-							set_index(&mut states, &location, 'M', None);
+							set_index(&mut states, &location, b'M', None);
 						},
 						ChangeRef::Rewrite { source_location, location, copy, .. } => {
 							set_index(
 								&mut states,
 								&location,
-								if copy { 'C' } else { 'R' },
-								Some(bytes_to_path(&source_location)),
+								if copy { b'C' } else { b'R' },
+								Some(source_location.to_vec()),
 							);
 						},
 					}
@@ -358,15 +380,15 @@ impl GitRepo {
 					index_worktree::Item::Modification { rela_path, status, .. } => {
 						use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 						let code = match status {
-							EntryStatus::Conflict { .. } => 'U',
-							EntryStatus::Change(Change::Removed) => 'D',
-							EntryStatus::Change(Change::Type { .. }) => 'T',
+							EntryStatus::Conflict { .. } => b'U',
+							EntryStatus::Change(Change::Removed) => b'D',
+							EntryStatus::Change(Change::Type { .. }) => b'T',
 							EntryStatus::Change(
 								Change::Modification { .. } | Change::SubmoduleModification(_),
-							) => 'M',
+							) => b'M',
 							// git reports `git add -N` entries as worktree-side
 							// additions (` A`); the index side stays clean.
-							EntryStatus::IntentToAdd => 'A',
+							EntryStatus::IntentToAdd => b'A',
 							EntryStatus::NeedsUpdate(_) => continue,
 						};
 						set_worktree(&mut states, rela_path.as_bstr(), code);
@@ -374,17 +396,26 @@ impl GitRepo {
 					index_worktree::Item::DirectoryContents { entry, .. }
 						if entry.status == gix::dir::entry::Status::Untracked =>
 					{
-						let mut path = bytes_to_path(entry.rela_path.as_bstr());
+						let mut path = entry.rela_path.to_vec();
 						// A collapsed untracked directory renders with a
 						// trailing slash (`?? newdir/`).
 						if entry.disk_kind == Some(gix::dir::entry::Kind::Directory) {
 							// git only lists an untracked directory when at
 							// least one file exists beneath it; a tree of
 							// empty directories is invisible to status.
-							if !dir_contains_file(&self.info().repo_root.join(&path)) {
+							#[cfg(unix)]
+							let os_path = {
+								use std::os::unix::ffi::OsStrExt as _;
+								std::ffi::OsStr::from_bytes(&path)
+							};
+							#[cfg(not(unix))]
+							let Ok(os_path) = std::str::from_utf8(&path) else {
+								continue;
+							};
+							if !dir_contains_file(&self.info().repo_root.join(os_path)) {
 								continue;
 							}
-							path.push('/');
+							path.push(b'/');
 						}
 						untracked_paths.insert(path);
 					},
@@ -392,43 +423,43 @@ impl GitRepo {
 						let old = match source {
 							index_worktree::RewriteSource::RewriteFromIndex {
 								source_rela_path, ..
-							} => bytes_to_path(source_rela_path.as_bstr()),
+							} => source_rela_path.to_vec(),
 							index_worktree::RewriteSource::CopyFromDirectoryEntry {
 								source_dirwalk_entry,
 								..
-							} => bytes_to_path(source_dirwalk_entry.rela_path.as_bstr()),
+							} => source_dirwalk_entry.rela_path.to_vec(),
 						};
-						let new = bytes_to_path(dirwalk_entry.rela_path.as_bstr());
-						states.insert(new, (' ', if copy { 'C' } else { 'R' }, Some(old)));
+						let new = dirwalk_entry.rela_path.to_vec();
+						states.insert(new, (b' ', if copy { b'C' } else { b'R' }, Some(old)));
 					},
 					_ => {},
 				},
 			}
 		}
-		let separator = if options.nul_terminated { '\0' } else { '\n' };
-		let mut out = String::new();
+		let mut out = Vec::new();
 		for (path, (x, y, old)) in states.into_iter().chain(
 			untracked_paths
 				.into_iter()
-				.map(|path| (path, ('?', '?', None))),
+				.map(|path| (path, (b'?', b'?', None))),
 		) {
-			out.push(x);
-			out.push(y);
-			out.push(' ');
+			out.extend_from_slice(&[x, y, b' ']);
 			if options.nul_terminated {
-				out.push_str(&path);
-				out.push(separator);
+				out.extend_from_slice(&path);
+				out.push(0);
 				if let Some(old) = old {
-					out.push_str(&old);
-					out.push(separator);
+					out.extend_from_slice(&old);
+					out.push(0);
 				}
 			} else {
 				if let Some(old) = old {
-					out.push_str(&quote_path(&old));
-					out.push_str(" -> ");
+					quote_path(&mut out, &old);
+					out.extend_from_slice(b" -> ");
 				}
-				out.push_str(&quote_path(&path));
-				out.push(separator);
+				quote_path(&mut out, &path);
+				out.push(b'\n');
+			}
+			if out.len() > limit {
+				return Err(Error::backend("git status", "status exceeds the capture limit"));
 			}
 		}
 		Ok(out)
@@ -1138,29 +1169,19 @@ fn dir_contains_file(dir: &Path) -> bool {
 	}
 	false
 }
-fn set_index(
-	states: &mut BTreeMap<String, (char, char, Option<String>)>,
-	path: &gix::bstr::BStr,
-	code: char,
-	old: Option<String>,
-) {
-	states
-		.entry(bytes_to_path(path))
-		.and_modify(|s| {
-			s.0 = code;
-			s.2.clone_from(&old);
-		})
-		.or_insert((code, ' ', old));
+
+type PorcelainStates = BTreeMap<Vec<u8>, (u8, u8, Option<Vec<u8>>)>;
+
+fn set_index(states: &mut PorcelainStates, path: &gix::bstr::BStr, code: u8, old: Option<Vec<u8>>) {
+	let state = states.entry(path.to_vec()).or_insert((b' ', b' ', None));
+	state.0 = code;
+	state.2 = old;
 }
-fn set_worktree(
-	states: &mut BTreeMap<String, (char, char, Option<String>)>,
-	path: &gix::bstr::BStr,
-	code: char,
-) {
+fn set_worktree(states: &mut PorcelainStates, path: &gix::bstr::BStr, code: u8) {
 	states
-		.entry(bytes_to_path(path))
+		.entry(path.to_vec())
 		.and_modify(|s| s.1 = code)
-		.or_insert((' ', code, None));
+		.or_insert((b' ', code, None));
 }
 
 fn cli_try(cwd: &Path, args: &[&str]) -> Result<Option<String>> {
@@ -1216,30 +1237,34 @@ fn cli_lines(cwd: &Path, args: &[&str]) -> Result<Vec<String>> {
 		.collect())
 }
 
-fn quote_path(path: &str) -> String {
+fn quote_path(out: &mut Vec<u8>, path: &[u8]) {
 	if path
-		.bytes()
-		.all(|b| (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\')
+		.iter()
+		.all(|&b| (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\')
 	{
-		return path.to_owned();
+		out.extend_from_slice(path);
+		return;
 	}
-	let mut out = String::from("\"");
-	for byte in path.bytes() {
+	out.push(b'"');
+	for &byte in path {
 		match byte {
-			b'\\' => out.push_str("\\\\"),
-			b'"' => out.push_str("\\\""),
-			b'\n' => out.push_str("\\n"),
-			b'\r' => out.push_str("\\r"),
-			b'\t' => out.push_str("\\t"),
-			0x20..=0x7e => out.push(char::from(byte)),
+			b'\\' => out.extend_from_slice(b"\\\\"),
+			b'"' => out.extend_from_slice(b"\\\""),
+			b'\n' => out.extend_from_slice(b"\\n"),
+			b'\r' => out.extend_from_slice(b"\\r"),
+			b'\t' => out.extend_from_slice(b"\\t"),
+			0x20..=0x7e => out.push(byte),
 			_ => {
-				use std::fmt::Write as _;
-				let _ = write!(out, "\\{byte:03o}");
+				out.extend_from_slice(&[
+					b'\\',
+					b'0' + (byte >> 6),
+					b'0' + ((byte >> 3) & 7),
+					b'0' + (byte & 7),
+				]);
 			},
 		}
 	}
-	out.push('"');
-	out
+	out.push(b'"');
 }
 fn version_sort_desc(values: &mut [String]) {
 	values.sort_by(|a, b| version_key(b).cmp(&version_key(a)).then_with(|| b.cmp(a)));

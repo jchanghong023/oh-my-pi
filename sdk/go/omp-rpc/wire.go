@@ -3958,6 +3958,8 @@ type ToolExecutionEndEvent struct {
 	ToolName   string          `json:"toolName"`
 	Result     json.RawMessage `json:"result,omitempty"`
 	IsError    *bool           `json:"isError,omitempty"`
+	// The tool execution was cancelled.
+	Cancelled *bool `json:"cancelled,omitempty"`
 }
 
 func (v *ToolExecutionEndEvent) UnmarshalJSON(data []byte) error {
@@ -3972,6 +3974,7 @@ func (v *ToolExecutionEndEvent) decodeFrom(raw map[string]json.RawMessage) error
 	d.required("toolName", &out.ToolName)
 	d.optional("result", &out.Result)
 	d.optional("isError", &out.IsError)
+	d.optional("cancelled", &out.Cancelled)
 	if d.err != nil {
 		return d.err
 	}
@@ -4049,6 +4052,8 @@ func (v AutoCompactionEndEvent) MarshalJSON() ([]byte, error) {
 
 // A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted.
 type ManualCompactionStartEvent struct {
+	// Identifies this operation and its matching `manual_compaction_end`.
+	OperationID string `json:"operationId"`
 	// The `/compact <mode>` subcommand, when one was given.
 	Mode *string `json:"mode,omitempty"`
 }
@@ -4061,6 +4066,7 @@ func (v *ManualCompactionStartEvent) decodeFrom(raw map[string]json.RawMessage) 
 	var out ManualCompactionStartEvent
 	d := fieldDecoder{raw: raw, owner: "ManualCompactionStartEvent"}
 	d.constant("type", "manual_compaction_start")
+	d.required("operationId", &out.OperationID)
 	d.optional("mode", &out.Mode)
 	if d.err != nil {
 		return d.err
@@ -4076,6 +4082,8 @@ func (v ManualCompactionStartEvent) MarshalJSON() ([]byte, error) {
 
 // Outcome of the compaction announced by the matching `manual_compaction_start`.
 type ManualCompactionEndEvent struct {
+	// The ID from the matching `manual_compaction_start`.
+	OperationID string `json:"operationId"`
 	// The compaction was cancelled (abort, or a `session_before_compact` hook).
 	Aborted bool `json:"aborted"`
 	// Present when the compaction committed.
@@ -4093,6 +4101,7 @@ func (v *ManualCompactionEndEvent) decodeFrom(raw map[string]json.RawMessage) er
 	var out ManualCompactionEndEvent
 	d := fieldDecoder{raw: raw, owner: "ManualCompactionEndEvent"}
 	d.constant("type", "manual_compaction_end")
+	d.required("operationId", &out.OperationID)
 	d.required("aborted", &out.Aborted)
 	d.optional("result", &out.Result)
 	d.optional("skipped", &out.Skipped)

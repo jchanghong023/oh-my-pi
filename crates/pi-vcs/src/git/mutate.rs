@@ -46,7 +46,10 @@ pub(crate) fn raw_sha256(bytes: &[u8]) -> Result<String> {
 }
 
 pub(crate) fn sha256_file(path: &Path) -> Result<String> {
-	let mut file = fs::File::open(path)?;
+	sha256_reader(fs::File::open(path)?)
+}
+
+pub(super) fn sha256_reader(mut file: impl Read) -> Result<String> {
 	let mut hash = gix::hash::hasher(gix::hash::Kind::Sha256);
 	let mut buffer = [0; 8192];
 	loop {
@@ -1136,10 +1139,13 @@ impl GitRepo {
 				format!("refs/heads/{ref_name}")
 			};
 			if branch_is_checked_out(&self.info().common_dir, &full) {
-				return Err(Error::backend(
-					"git worktree add",
-					format!("'{full}' is already checked out"),
-				));
+				prune_missing_branch_worktrees(&self.info().common_dir, &full)?;
+				if branch_is_checked_out(&self.info().common_dir, &full) {
+					return Err(Error::backend(
+						"git worktree add",
+						format!("'{full}' is already checked out"),
+					));
+				}
 			}
 			if repo
 				.try_find_reference(&full)
@@ -2828,6 +2834,40 @@ fn branch_is_checked_out(common: &Path, full_ref: &str) -> bool {
 	entries.filter_map(std::result::Result::ok).any(|entry| {
 		fs::read_to_string(entry.path().join("HEAD")).is_ok_and(|head| head.trim() == expected)
 	})
+}
+
+/// Drop only unlocked registrations for this branch whose checkout directory is
+/// gone.
+fn prune_missing_branch_worktrees(common: &Path, full_ref: &str) -> Result<()> {
+	let expected = format!("ref: {full_ref}");
+	let Ok(entries) = fs::read_dir(common.join("worktrees")) else {
+		return Ok(());
+	};
+	let is_missing = |path: &Path| matches!(fs::symlink_metadata(path), Err(err) if err.kind() == io::ErrorKind::NotFound);
+	for entry in entries {
+		let entry = entry?;
+		if !entry.file_type()?.is_dir() {
+			continue;
+		}
+		let admin = entry.path();
+		if !fs::read_to_string(admin.join("HEAD")).is_ok_and(|head| head.trim() == expected) {
+			continue;
+		}
+		let Ok(backlink) = fs::read_to_string(admin.join("gitdir")) else {
+			continue;
+		};
+		let git_file = admin.join(backlink.trim());
+		if git_file.file_name() != Some(OsStr::new(".git")) {
+			continue;
+		}
+		let Some(checkout) = git_file.parent() else {
+			continue;
+		};
+		if is_missing(checkout) && is_missing(&admin.join("locked")) {
+			fs::remove_dir_all(admin)?;
+		}
+	}
+	Ok(())
 }
 
 fn tracked_worktree_dirty(repo: &GitRepo) -> Result<bool> {

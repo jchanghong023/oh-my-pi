@@ -201,6 +201,8 @@ export interface SkillInstallHooks {
 	/** Resolve `true` to install a version that ships scripts. */
 	confirmScripts(request: ScriptApprovalRequest): Promise<boolean>;
 	warn(message: string): void;
+	/** Called after the manifest and lock are written, before pruning the store. */
+	onPersisted?(): void;
 }
 
 export interface SkillChange {
@@ -329,6 +331,7 @@ async function applyPlans(
 	}
 	await writeSkillsManifest(state.paths.manifest, state.manifest);
 	await writeSkillsLock(state.paths.lock, state.lock);
+	hooks.onPersisted?.();
 	await pruneReleased(released, state.cwd, state.lock, state.paths);
 	return changes;
 }

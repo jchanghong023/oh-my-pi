@@ -9,6 +9,7 @@
 ### Fixed
 
 - Ask cards now display native HTML form questions, saved answers, option notes and timeout status.
+- Sending waits for selected images to finish loading; copying transcript text in Chromium no longer includes decorative labels, prompts, or diff gaps.
 
 ## [18.22.0] - 2026-11-16
 

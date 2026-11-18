@@ -199,18 +199,16 @@ async function findWindowsPortHolder(port: number): Promise<PortHolder | null> {
 		// CIM already supplies the executable name and full command line. Fetch both
 		// together instead of serializing an additional tasklist process before it.
 		// Single quotes preserve the filter through native Windows argument parsing.
-		const command = `$holder = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}' -Property Name,CommandLine; if ($holder) { $holder.Name; $holder.CommandLine }`;
+		const command = `$holder = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}' -Property Name,CommandLine; if ($holder.Name) { $holder.Name; $holder.CommandLine }`;
 		const processInfo = await $`${powershell} -NoProfile -NonInteractive -Command ${command}`.quiet().nothrow();
-		if (processInfo.exitCode !== 0) return { pid, image: "unknown", commandLine: "" };
-		// The image occupies the first line; retain the entire remaining command
-		// line, including embedded newlines, for the ownership identity check.
-		const output = processInfo.text().trim();
-		const separator = output.indexOf("\n");
-		return {
-			pid,
-			image: (separator === -1 ? output : output.slice(0, separator)).trim() || "unknown",
-			commandLine: separator === -1 ? "" : output.slice(separator + 1).trim(),
-		};
+		if (processInfo.exitCode === 0) {
+			// The image occupies the first line; retain the entire remaining command
+			// line, including embedded newlines, for the ownership identity check.
+			const output = processInfo.text();
+			const separator = output.indexOf("\n");
+			const image = (separator === -1 ? output : output.slice(0, separator)).trim();
+			if (image) return { pid, image, commandLine: separator === -1 ? "" : output.slice(separator + 1).trim() };
+		}
 	}
 
 	let image = "unknown";

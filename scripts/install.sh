@@ -359,8 +359,15 @@ host_arch() {
     esac
 }
 
-# Report how to make the installed binary reachable.
+# Report the command PATH actually resolves, or how to reach the installed binary.
 report_path_hint() {
+    # An omp earlier on PATH keeps winning until removed or INSTALL_DIR moves ahead.
+    ACTIVE_OMP="$(command -v omp 2>/dev/null || true)"
+    if [ -n "$ACTIVE_OMP" ] && ! [ "$ACTIVE_OMP" -ef "${INSTALL_DIR}/omp" ]; then
+        echo "'omp' still resolves to ${ACTIVE_OMP}; remove that install or put ${INSTALL_DIR} ahead of it on PATH."
+        return
+    fi
+
     case ":$PATH:" in
         *":$INSTALL_DIR:"*) echo "Run 'omp' to get started!" ;;
         *) echo "Add ${INSTALL_DIR} to your PATH, then run 'omp'" ;;
@@ -567,15 +574,6 @@ install_binary() {
         echo "Existing omp sessions may still use the previous version; exit and restart them to use this update."
     fi
 
-    # An omp earlier on PATH (a previous `bun install -g`, Homebrew, ...) keeps
-    # winning over this install until it is removed or INSTALL_DIR moves ahead.
-    ACTIVE_OMP="$(command -v omp 2>/dev/null || true)"
-    if [ -n "$ACTIVE_OMP" ] && ! [ "$ACTIVE_OMP" -ef "${INSTALL_DIR}/omp" ]; then
-        echo "'omp' still resolves to ${ACTIVE_OMP}; remove that install or put ${INSTALL_DIR} ahead of it on PATH."
-        return
-    fi
-
-    # Check if in PATH
     report_path_hint
 }
 

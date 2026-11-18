@@ -840,6 +840,9 @@ async function isolatedBrowserEnvironment(
 	return env;
 }
 
+/** Keep stable references to owned processes whose exit still needs confirmation. */
+const closingHeadlessProcesses = new WeakMap<Browser, Set<Process>>();
+
 /**
  * Close a launched browser, killing ordinary OMP-owned temporary profiles first.
  * Caller-supplied profiles get a graceful close; strict cleanup instead pins
@@ -849,54 +852,77 @@ export async function closeLaunchedBrowser(
 	{ browser, userDataDir }: Pick<LaunchHeadlessResult, "browser" | "userDataDir">,
 	options?: { strict?: boolean },
 ): Promise<void> {
-	const proc = browser.process();
 	if (options?.strict) {
-		if (!proc || proc.pid === undefined) {
-			throw new Error("Cannot confirm headless browser exit without its owned process");
-		}
-		if (proc.exitCode !== null || proc.signalCode !== null) return;
-		// Pin the owned child before closing its transport: looking up its PID
-		// after it exits could instead find an unrelated replacement process.
-		const ownedProcess = Process.fromPid(proc.pid);
-		if (!ownedProcess) {
-			throw new Error(`Cannot retain owned headless browser process ${proc.pid} for cleanup`);
-		}
-		const processes = [ownedProcess];
-		const visited = new Set([ownedProcess.pid]);
-		for (let index = 0; index < processes.length; index++) {
-			for (const child of processes[index]!.children()) {
-				if (visited.has(child.pid)) continue;
-				visited.add(child.pid);
-				processes.push(child);
+		let processes = closingHeadlessProcesses.get(browser);
+		const failures: unknown[] = [];
+		if (!processes) {
+			const proc = browser.process();
+			if (!proc || proc.pid === undefined) {
+				throw new Error("Cannot confirm headless browser exit without its owned process");
 			}
-		}
-		const deadline = Date.now() + HEADLESS_CLOSE_TIMEOUT_MS;
-		try {
-			await withTimeout(browser.close(), HEADLESS_CLOSE_TIMEOUT_MS, "Timed out closing headless browser");
-			const exited = await Promise.all(
-				processes.map(process => process.waitForExit({ timeoutMs: Math.max(0, deadline - Date.now()) })),
-			);
-			if (exited.every(Boolean)) return;
-			throw new Error("Timed out waiting for headless browser process exit");
-		} catch (err) {
-			logger.debug("Failed to close headless browser; force-killing", { error: toError(err).message });
-			// Match gracefulKillTreeOnce's existing budgets, but retain its exit
-			// result and the stable identity instead of reopening the PID.
-			const failures: unknown[] = [err];
-			for (const process of processes) {
-				try {
-					if (await process.waitForExit({ timeoutMs: 0 })) continue;
-					if (!(await process.terminate({ gracefulMs: 2000, timeoutMs: 500 })))
-						failures.push(new Error(`Owned headless browser process ${process.pid} did not exit`));
-				} catch (error) {
-					failures.push(error);
+			if (proc.exitCode !== null || proc.signalCode !== null) return;
+			// Pin the tree before closing the transport; looking up a PID later could
+			// find an unrelated process. Retain the references even if the root exits.
+			const ownedProcess = Process.fromPid(proc.pid);
+			if (!ownedProcess) {
+				throw new Error(`Cannot retain owned headless browser process ${proc.pid} for cleanup`);
+			}
+			const pending = new Set([ownedProcess]);
+			const visited = new Set([ownedProcess.pid]);
+			for (const process of pending) {
+				for (const child of process.children()) {
+					if (visited.has(child.pid)) continue;
+					visited.add(child.pid);
+					pending.add(child);
 				}
 			}
-			if (failures.length === 1) return;
+			closingHeadlessProcesses.set(browser, pending);
+			processes = pending;
+			const deadline = Date.now() + HEADLESS_CLOSE_TIMEOUT_MS;
+			try {
+				await withTimeout(browser.close(), HEADLESS_CLOSE_TIMEOUT_MS, "Timed out closing headless browser");
+				const exits = await Promise.allSettled(
+					Array.from(pending, async process => {
+						if (await process.waitForExit({ timeoutMs: Math.max(0, deadline - Date.now()) })) {
+							pending.delete(process);
+						}
+					}),
+				);
+				for (const exit of exits) {
+					if (exit.status === "rejected") failures.push(exit.reason);
+				}
+				if (pending.size && failures.length === 0) {
+					failures.push(new Error("Timed out waiting for headless browser process exit"));
+				}
+			} catch (error) {
+				failures.push(error);
+			}
+			if (failures.length) {
+				logger.debug("Failed to close headless browser; force-killing", { error: toError(failures[0]).message });
+			}
+		}
+		// Match gracefulKillTreeOnce's existing budgets without reopening a PID.
+		for (const process of processes) {
+			try {
+				if (
+					(await process.waitForExit({ timeoutMs: 0 })) ||
+					(await process.terminate({ gracefulMs: 2000, timeoutMs: 500 }))
+				) {
+					processes.delete(process);
+				} else {
+					failures.push(new Error(`Owned headless browser process ${process.pid} did not exit`));
+				}
+			} catch (error) {
+				failures.push(error);
+			}
+		}
+		if (processes.size) {
 			throw new AggregateError(failures, "Timed out terminating owned headless browser process tree");
 		}
+		closingHeadlessProcesses.delete(browser);
+		return;
 	}
-	const pid = proc?.pid;
+	const pid = browser.process()?.pid;
 	if (userDataDir !== undefined && pid !== undefined) {
 		await killTreeOnce(pid).catch(() => undefined);
 		return;

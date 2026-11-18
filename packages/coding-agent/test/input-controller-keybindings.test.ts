@@ -911,7 +911,7 @@ describe("InputController keybinding setup", () => {
 		expect(spies.prompt).not.toHaveBeenCalled();
 		editor.setText("");
 		controller.handleDequeue();
-		expect(editor.getText()).toBe("after the compaction");
+		expect(editor.getText()).toBe("=> after the compaction");
 		editor.setText("");
 		controller.handleDequeue();
 		expect(editor.getText()).toBe("/compact");
