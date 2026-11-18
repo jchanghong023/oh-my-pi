@@ -819,8 +819,7 @@ export async function applyDisplayPreset(
 	const overrides: string[] = [];
 	if (hideThinking !== actualHideThinking)
 		overrides.push(`${cfgHideThinkingBlock.id}（${sources[cfgHideThinkingBlock.provenance(settings)]}）`);
-	if (mode !== actualMode)
-		overrides.push(`${cfgDisplayMode.id}（${sources[cfgDisplayMode.provenance(settings)]}）`);
+	if (mode !== actualMode) overrides.push(`${cfgDisplayMode.id}（${sources[cfgDisplayMode.provenance(settings)]}）`);
 	const thinking = actualHideThinking || actualMode === "clean" ? "隐藏" : "显示";
 	const tools = { clean: "隐藏", compact: "文件写入／编辑组件及临时 Output", detailed: "详细" }[actualMode];
 	output.showWarning(

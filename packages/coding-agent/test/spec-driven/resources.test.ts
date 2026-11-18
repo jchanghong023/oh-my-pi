@@ -939,13 +939,16 @@ describe("bundled Superpowers helper regressions", () => {
 			["6b", "### Task 6b: Edge\nHandle the edge case.\n"],
 			["2.1", "### Task 2.1: Nested ID\nCheck the nested identifier.\n"],
 		]) {
+			// Exercise default workspace routing once; the other cases isolate task parsing.
+			const explicitOutput = id !== "A1";
+			const output = explicitOutput ? `task-${id}-brief.md` : `.superpowers/sdd/plan/task-${id}-brief.md`;
 			const result = await runSuperpowersScript(
 				"skills/subagent-driven-development/scripts/task-brief",
-				["plan.md", id!],
+				explicitOutput ? ["plan.md", id!, output] : ["plan.md", id!],
 				root.path(),
 			);
 			expect(result.exitCode).toBe(0);
-			expect(await Bun.file(root.join(`.superpowers/sdd/plan/task-${id}-brief.md`)).text()).toBe(expected!);
+			expect(await Bun.file(root.join(output)).text()).toBe(expected!);
 		}
 	});
 

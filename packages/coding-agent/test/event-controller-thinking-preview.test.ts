@@ -1933,25 +1933,28 @@ describe("compact latest live Output consumers", () => {
 		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("new turn output");
 	});
 
-	it.each(["focused", "detached"])("expires a %s worker's Output from its own run end, not the main run", async view => {
-		setSystemTime(10_000);
-		const h = focusFixture();
-		const live = liveSession(null, undefined, true);
-		h.register("FinishingWorker", live);
-		Object.defineProperty(h.ctx.session, "isRunActive", { configurable: true, value: true });
-		await h.focus.focusAgent("FinishingWorker");
-		await live.emit({ type: "agent_start" });
-		await live.completeOutput("worker", "worker result");
-		if (view === "detached") await h.focus.focusAgent(MAIN_AGENT_ID);
-		vi.advanceTimersByTime(10_000);
-		await live.emit({ type: "agent_end", messages: [] });
-		vi.advanceTimersByTime(2999);
-		if (view === "detached") await h.focus.focusAgent("FinishingWorker");
-		expect(h.ctx.statusLine.getTurnElapsedMs()).toBeNull();
-		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("worker result");
-		vi.advanceTimersByTime(1);
-		expect(h.outputRows()).toEqual([[], []]);
-	});
+	it.each(["focused", "detached"])(
+		"expires a %s worker's Output from its own run end, not the main run",
+		async view => {
+			setSystemTime(10_000);
+			const h = focusFixture();
+			const live = liveSession(null, undefined, true);
+			h.register("FinishingWorker", live);
+			Object.defineProperty(h.ctx.session, "isRunActive", { configurable: true, value: true });
+			await h.focus.focusAgent("FinishingWorker");
+			await live.emit({ type: "agent_start" });
+			await live.completeOutput("worker", "worker result");
+			if (view === "detached") await h.focus.focusAgent(MAIN_AGENT_ID);
+			vi.advanceTimersByTime(10_000);
+			await live.emit({ type: "agent_end", messages: [] });
+			vi.advanceTimersByTime(2999);
+			if (view === "detached") await h.focus.focusAgent("FinishingWorker");
+			expect(h.ctx.statusLine.getTurnElapsedMs()).toBeNull();
+			for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("worker result");
+			vi.advanceTimersByTime(1);
+			expect(h.outputRows()).toEqual([[], []]);
+		},
+	);
 
 	it("keeps a still-running background source across the turn boundary", async () => {
 		setSystemTime(10_000);

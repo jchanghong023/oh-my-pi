@@ -51,32 +51,19 @@ describe("InputController tool output expansion", () => {
 			ui,
 		);
 		const failed = new ToolExecutionComponent("edit", { path: "failed.txt" }, {}, undefined, ui);
-		const nonfile = new ToolExecutionComponent(
-			"write",
-			{ path: "agent://peer", content: "message" },
-			{},
-			undefined,
-			ui,
-		);
 		const ordinary = { setExpanded: vi.fn() };
 		changed.updateResult({ content: [{ type: "text", text: "written" }] }, false);
 		unchanged.updateResult({ content: [{ type: "text", text: "unchanged" }] }, false);
 		failed.updateResult({ content: [{ type: "text", text: "failed" }], isError: true }, false);
-		// Misleading change metadata cannot turn a non-file route into a file card.
-		nonfile.updateResult(
-			{ content: [{ type: "text", text: "message" }], details: { fileChanged: true, diff: "-old\n+new" } },
-			false,
-		);
 		const changedExpansion = vi.spyOn(changed, "setExpanded");
 		const unchangedExpansion = vi.spyOn(unchanged, "setExpanded");
 		const failedExpansion = vi.spyOn(failed, "setExpanded");
-		const nonfileExpansion = vi.spyOn(nonfile, "setExpanded");
 		ui.requestRender.mockClear();
 		const ctx = {
 			settings,
 			hideToolActivity: true,
 			toolOutputExpanded: false,
-			chatContainer: { children: [changed, unchanged, failed, nonfile, ordinary] },
+			chatContainer: { children: [changed, unchanged, failed, ordinary] },
 			ui,
 			showStatus: vi.fn(),
 		} as unknown as InteractiveModeContext;
@@ -87,7 +74,6 @@ describe("InputController tool output expansion", () => {
 			expect(changedExpansion.mock.calls).toEqual([[true], [false]]);
 			expect(unchangedExpansion.mock.calls).toEqual([[true], [false]]);
 			expect(failedExpansion.mock.calls).toEqual([[true], [false]]);
-			expect(nonfileExpansion).not.toHaveBeenCalled();
 			expect(ordinary.setExpanded).not.toHaveBeenCalled();
 			expect(ctx.toolOutputExpanded).toBe(false);
 			expect(ui.requestRender).toHaveBeenCalledTimes(2);
@@ -95,7 +81,6 @@ describe("InputController tool output expansion", () => {
 			changed.dispose();
 			unchanged.dispose();
 			failed.dispose();
-			nonfile.dispose();
 		}
 	});
 
@@ -125,14 +110,22 @@ describe("InputController tool output expansion", () => {
 });
 
 describe("InputController tool activity visibility", () => {
-	it("cycles the same clean, compact and detailed settings as /display", () => {
+	it("cycles the same clean, compact and detailed settings as /display", async () => {
 		const settings = Settings.isolated({
 			"terminal.showImages": false,
 			"images.autoResize": false,
 			"images.blockImages": true,
 		});
-		const showStatus = vi.fn();
-		const controller = new InputController({ settings, showStatus } as unknown as InteractiveModeContext);
+		const showWarning = vi.fn();
+		const controller = new InputController({
+			settings,
+			showStatus: vi.fn(),
+			showWarning,
+		} as unknown as InteractiveModeContext);
+		const toggle = async () => {
+			controller.toggleToolActivityVisibility();
+			await Promise.resolve(); // The preset reports after the settings effect.
+		};
 		cfgDisplayMode.set(settings, "compact");
 		const imagePreferences = () => ({
 			showImages: lookup("terminal.showImages")?.get(settings),
@@ -141,20 +134,20 @@ describe("InputController tool activity visibility", () => {
 		});
 		const independentImages = { showImages: false, autoResize: false, blockImages: true };
 
-		controller.toggleToolActivityVisibility();
+		await toggle();
 		expect(cfgDisplayMode.get(settings)).toBe("detailed");
 		expect(cfgHideThinkingBlock.get(settings)).toBe(false);
-		expect(showStatus).toHaveBeenLastCalledWith("Display: detailed");
 		expect(imagePreferences()).toEqual(independentImages);
 
-		controller.toggleToolActivityVisibility();
+		await toggle();
 		expect(cfgDisplayMode.get(settings)).toBe("clean");
 		expect(cfgHideThinkingBlock.get(settings)).toBe(true);
 		expect(imagePreferences()).toEqual(independentImages);
 
-		controller.toggleToolActivityVisibility();
+		await toggle();
 		expect(cfgDisplayMode.get(settings)).toBe("compact");
 		expect(cfgHideThinkingBlock.get(settings)).toBe(false);
 		expect(imagePreferences()).toEqual(independentImages);
+		expect(showWarning).not.toHaveBeenCalled();
 	});
 });

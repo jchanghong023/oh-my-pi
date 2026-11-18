@@ -351,21 +351,20 @@ describe("Goal public management and history views", () => {
 						await tui("key", "press", "Enter");
 					};
 					const initialCalls = provider.requests.length;
-					for (const prefix of commands) {
-						const screen = await complete(prefix === "goal" ? "/goa" : "/goal-auto", prefix, `/${prefix}`);
-						// The ambiguous prefix must expose both commands, while Tab
-						// accepts the selected ordinary command rather than its alias.
-						if (prefix === "goal") expect(screen).toContain("goal-autopilot");
-						for (const [head, completion] of [
-							["se", "set"],
-							["sh", "show"],
-							["pa", "pause"],
-							["re", "resume"],
-							["dr", "drop"],
-							["bu", "budget"],
-						]) {
-							await complete(`/${prefix} ${head}`, completion, `/${prefix} ${completion}`);
-						}
+					// Each case exercises its own completion namespace on the same fresh TUI.
+					const screen = await complete(origin === "goal" ? "/goa" : "/goal-auto", origin, `/${origin}`);
+					// The ambiguous prefix must expose both commands, while Tab
+					// accepts the selected ordinary command rather than its alias.
+					if (origin === "goal") expect(screen).toContain("goal-autopilot");
+					for (const [head, completion] of [
+						["se", "set"],
+						["sh", "show"],
+						["pa", "pause"],
+						["re", "resume"],
+						["dr", "drop"],
+						["bu", "budget"],
+					]) {
+						await complete(`/${origin} ${head}`, completion, `/${origin} ${completion}`);
 					}
 					expect(provider.requests).toHaveLength(initialCalls);
 					const objective = `GOAL_PUBLIC_${origin === "goal" ? "ORDINARY" : "AUTO"} preserve the terminal target`;

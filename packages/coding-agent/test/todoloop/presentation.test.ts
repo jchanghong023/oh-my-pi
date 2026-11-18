@@ -476,7 +476,7 @@ describe("TodoLoop native transcript presentation", () => {
 				expect(card.p).toMatchObject({ collapsed: false });
 			}
 			for (const card of presentation.attempts.values()) expect(card.isExpanded()).toBe(true);
-			expect(ordinary.isExpanded()).toBe(false);
+			expect(JSON.stringify(nativeNodes(ctx.chatContainer, cx))).not.toContain("ordinary ambient task");
 			const expanded = ctx.chatContainer.render(100).join("\n");
 			expect(expanded).toContain("real compact output 1");
 			expect(expanded).toContain("real compact output 2");
