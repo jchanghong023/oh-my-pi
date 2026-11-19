@@ -15,7 +15,7 @@ import { type ModelStage, nextModelStage } from "@oh-my-pi/pi-coding-agent/sessi
 import type { LiveToolOutputSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { LiveToolOutputState } from "@oh-my-pi/pi-coding-agent/session/live-tool-output";
-import { Loader } from "@oh-my-pi/pi-tui";
+import { Loader, setSpinnerInterval, spinnerInterval } from "@oh-my-pi/pi-tui";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
@@ -591,159 +591,112 @@ describe("compact action dock", () => {
 		}
 	});
 
-	it("wakes without an event at the quiet deadline and animates only one label", async () => {
+	it("starts model shimmer with the spinner and keeps it through streamed thinking and replies", async () => {
 		const h = focusFixture();
-		setSystemTime(24_000);
+		setSystemTime(10_000);
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		setShimmerMode("classic");
+		await live.emit({ type: "agent_start" });
+		await live.emit({ type: "turn_start" });
+		expect(h.ctx.statusLine.getTurnElapsedMs()).toBe(0);
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：等待响应"]);
+
+		const reason = thinkingMessage("First thought");
+		await live.emit(update(reason, "thinking_delta"));
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：正在思考"]);
+		setSystemTime(10_100);
+		reason.content = [{ type: "thinking", thinking: "Latest thought" }];
+		await live.emit(update(reason, "thinking_delta"));
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：正在思考"]);
+		expect(spanStyles(h.dock.describe(cx()))).toContainEqual(["Latest thought", "text"]);
+
+		const reply = thinkingMessage("", 2);
+		reply.content = [{ type: "text", text: "Reply" }];
 		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "a",
-			toolName: "bash",
-			args: { command: "sleep 1" },
+			type: "message_update",
+			message: reply,
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Reply", partial: reply },
 		});
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "b",
-			toolName: "read",
-			args: { path: "other.ts" },
-		});
-		const repaint = vi.fn();
-		h.ctx.ui.requestComponentRender = repaint;
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
-		repaint.mockClear();
-		vi.advanceTimersByTime(1499);
-		expect(repaint).not.toHaveBeenCalledWith(h.dock);
-		vi.advanceTimersByTime(1);
-		expect(repaint).toHaveBeenCalledWith(h.dock);
-		setSystemTime(25_500);
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["Agent：正在执行"]);
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：正在生成回复"]);
 		expect(shimmerWords(h.dock.describe({ ...cx(), reduceMotion: true }))).toEqual([]);
-		expect(shimmerWords(h.dock.describe({ ...cx(), supports: () => false }))).toEqual([]);
-		const first = h.rows();
-		setSystemTime(26_000);
-		const next = h.rows();
-		expect(next[0]).toBe(first[0]);
-		expect(next[1]).not.toBe(first[1]);
-		expect(next[1]).toContain(theme.fg("dim", "sleep 1"));
-		expect(plain(next)).toEqual(plain(first));
+		const ansiFrames = new Set<string>();
+		for (let elapsed = 100; elapsed < 1000; elapsed += 80) {
+			setSystemTime(10_000 + elapsed);
+			ansiFrames.add(h.rows()[0]!);
+		}
+		expect(ansiFrames.size).toBeGreaterThan(1);
+		expect([...ansiFrames].some(frame => frame.includes(`\x1b[1m${theme.getFgAnsi("accent")}`))).toBe(true);
+		expect([...ansiFrames].map(frame => Bun.stripANSI(frame).trim())).toEqual(
+			Array(ansiFrames.size).fill("模型：正在生成回复"),
+		);
+		await live.emit({ type: "message_end", message: reply });
+		await live.emit({ type: "agent_end", messages: [reply] });
+		expect(h.ctx.statusLine.getTurnElapsedMs()).toBeNull();
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
+	});
+
+	it("keeps running tools animated as output changes, without animating completed tools", async () => {
+		const h = focusFixture();
+		setSystemTime(10_000);
+		const live = liveSession(null, undefined, true);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({ type: "agent_start" });
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "bash",
+			toolName: "bash",
+			args: { command: "echo probe" },
+		});
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["Agent：正在执行"]);
+		for (const text of ["First line", "Second line"]) {
+			await live.emit({
+				type: "tool_execution_update",
+				toolCallId: "bash",
+				toolName: "bash",
+				args: {},
+				partialResult: { content: [{ type: "text", text }] },
+			});
+			expect(h.previewView().body).toContain(text);
+			expect(shimmerWords(h.dock.describe(cx()))).toEqual(["Agent：正在执行"]);
+		}
 		await live.emit({
 			type: "tool_execution_end",
-			toolCallId: "a",
+			toolCallId: "bash",
 			toolName: "bash",
 			result: { content: [] },
 			isError: false,
 		});
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["Agent：正在读取"]);
-		await live.emit({
-			type: "tool_execution_end",
-			toolCallId: "b",
-			toolName: "read",
-			result: { content: [] },
-			isError: false,
-		});
-		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
-		const stopped = h.rows();
-		setSystemTime(26_500);
-		expect(h.rows()).toEqual(stopped);
-	});
-
-	it("keeps both labels static while readable thinking changes, but ignores hidden or repeated text", async () => {
-		const h = focusFixture();
-		setSystemTime(10_000);
-		const live = liveSession();
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "a.ts" } });
-		const message = thinkingMessage("first line");
-		await live.emit(update(message, "thinking_delta"));
-		expect(spanStyles(h.dock.describe(cx()))).toContainEqual(["first line", "text"]);
-		expect(h.rows().join("")).toContain(theme.fg("text", "first line"));
-
+		await live.emit({ type: "turn_start" });
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：等待响应"]);
+		const settled = h.rows()[1];
 		setSystemTime(11_200);
-		message.content = [{ type: "thinking", thinking: "next line" }];
-		await live.emit(update(message, "thinking_delta"));
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
-		const staticRows = h.rows();
-		setSystemTime(12_400);
-		expect(h.rows()).toEqual(staticRows);
-
-		message.content = [{ type: "thinking", thinking: "earlier line\nnext line" }];
-		await live.emit(update(message, "thinking_delta"));
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
-		setSystemTime(12_700);
-		const quiet = shimmerWords(h.dock.describe(cx()));
-		expect(quiet).toHaveLength(1);
-		expect(shimmerWords(h.dock.describe(cx(15)))).toEqual([]);
+		expect(h.rows()[1]).toBe(settled);
+		expect(Bun.stripANSI(settled!)).toContain("Agent：上次执行完成");
 	});
 
-	it("suppresses shimmer only for actual progress from the same displayed Bash call", async () => {
+	it("stops both live labels when the status spinner goes static", async () => {
 		const h = focusFixture();
 		setSystemTime(10_000);
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		await live.emit({ type: "tool_execution_start", toolCallId: "bash", toolName: "bash", args: { command: "pwd" } });
+		await live.emit({ type: "agent_start" });
 		await live.emit({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "a.ts" } });
-		let callId = "bash";
-		let outputChangedAt = 11_400;
-		const dock = new CompactThinkingPreview(h.ctx, undefined, width => ({
-			callId,
-			commandVisible: true,
-			outputChangedAt: width >= 60 ? outputChangedAt : undefined,
-		}));
+		await live.emit(update(thinkingMessage("Thinking"), "thinking_delta"));
+		const interval = spinnerInterval();
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：正在思考", "Agent：正在读取"]);
 		try {
-			setSystemTime(11_900);
-			expect(shimmerWords(dock.describe(cx()))).toEqual([]);
-			expect(shimmerWords(dock.describe(cx(59)))).toEqual(["Agent：正在执行"]);
-			callId = "other";
-			expect(shimmerWords(dock.describe(cx()))).toEqual(["Agent：正在执行"]);
-			callId = "bash";
-			setSystemTime(12_900);
-			expect(shimmerWords(dock.describe(cx()))).toEqual(["Agent：正在执行"]);
-			outputChangedAt = 12_900;
-			expect(shimmerWords(dock.describe(cx()))).toEqual([]);
-			const before = dock.render(60);
-			setSystemTime(13_200);
-			expect(dock.render(60)).toEqual(before);
-			expect(nativeRows(dock.describe(cx()))).toEqual(plain(dock.render(60)));
+			setSpinnerInterval(0);
+			expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
+			const staticRows = h.rows();
+			setSystemTime(11_500);
+			expect(h.rows()).toEqual(staticRows);
 		} finally {
-			dock.clear();
+			setSpinnerInterval(interval);
 		}
-	});
-
-	it("cancels a scheduled native wake when hidden by resize or cleared by focus", async () => {
-		const h = focusFixture();
-		setSystemTime(10_000);
-		const live = liveSession();
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "a.ts" } });
-		const repaint = vi.fn();
-		h.ctx.ui.requestComponentRender = repaint;
-		const scheduleAfter = h.ctx.ui.scheduleAfter.bind(h.ctx.ui);
-		const cancel = vi.fn();
-		h.ctx.ui.scheduleAfter = (delay, callback) => {
-			const timer = scheduleAfter(delay, callback);
-			return {
-				cancel: () => {
-					cancel();
-					timer.cancel();
-				},
-			};
-		};
-		h.dock.describe(cx());
-		h.dock.describe(cx(5));
-		expect(cancel).toHaveBeenCalledTimes(1);
-		vi.advanceTimersByTime(500);
-		h.dock.describe(cx());
 		await h.focus.focusAgent(MAIN_AGENT_ID);
-		expect(cancel).toHaveBeenCalledTimes(2);
-		repaint.mockClear();
-		vi.advanceTimersByTime(1000);
-		expect(repaint).not.toHaveBeenCalledWith(h.dock);
 		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
 	});
 
@@ -754,6 +707,7 @@ describe("compact action dock", () => {
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
 		setShimmerMode("disabled");
+		await live.emit({ type: "agent_start" });
 		await live.emit({
 			type: "tool_execution_start",
 			toolCallId: "a",
@@ -1076,7 +1030,7 @@ describe("compact action dock", () => {
 		});
 		expect(h.rendered()).not.toContain("正在读取");
 		expect(h.rendered()).toContain("模型：正在准备调用");
-		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
+		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：正在准备调用"]);
 		await live.emit({
 			type: "tool_execution_start",
 			toolCallId: "prep",
@@ -1820,7 +1774,7 @@ describe("compact latest live Output consumers", () => {
 		const headerOnly = new CompactToolOutputPreview(h.ctx, () => 1);
 		outputPreviews.push(headerOnly);
 		expect(headerOnly.render(60)).toHaveLength(1);
-		expect(headerOnly.compactActivity(60)).toMatchObject({ commandVisible: true, outputChangedAt: undefined });
+		expect(headerOnly.compactActivity(60)).toMatchObject({ commandVisible: true });
 		const noSpace = new CompactToolOutputPreview(h.ctx, () => 0);
 		outputPreviews.push(noSpace);
 		expect(noSpace.compactActivity(60)).toBeUndefined();

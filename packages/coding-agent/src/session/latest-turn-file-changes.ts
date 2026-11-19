@@ -6,6 +6,7 @@ export interface TurnFileChange {
 	readonly before: string | null;
 	readonly after: string | null;
 	readonly continuous: boolean;
+	readonly revision: number;
 }
 
 export interface TurnFileChanges {
@@ -39,7 +40,7 @@ export class LatestTurnFileChanges {
 			before: previous ? previous.before : change.before,
 			after: change.after,
 			continuous: previous === undefined || (previous.continuous && previous.after === change.before),
+			revision: ++this.#turn.revision,
 		});
-		this.#turn.revision++;
 	}
 }

@@ -32,6 +32,7 @@ import {
 	Spacer,
 	setTerminalTextSizing,
 	setTuiTight,
+	spinnerAnimated,
 	TERMINAL,
 	Text,
 	type TUI,
@@ -1385,12 +1386,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		width => this.compactToolOutputPreview.compactActivity(width),
 	);
 	/** Read-only Output sits above the activity dock; the input and its trailing chrome win space. */
-	readonly compactToolOutputPreview: CompactToolOutputPreview = new CompactToolOutputPreview(this, () =>
-		Math.max(
-			0,
-			this.ui.terminal.rows -
-				Math.max(this.composer.rowsBelow(this.compactToolOutputPreview) ?? 0, this.editor.renderedRows + 4),
-		),
+	readonly compactToolOutputPreview = new CompactToolOutputPreview(
+		this,
+		() =>
+			Math.max(
+				0,
+				this.ui.terminal.rows -
+					Math.max(this.composer.rowsBelow(this.compactToolOutputPreview) ?? 0, this.editor.renderedRows + 4),
+			),
+		(file, width) => this.compactFileDiff.coveredDiff(file, width),
 	);
 	readonly compactFileDiff: CompactFileDiff = new CompactFileDiff(this, () =>
 		Math.max(
@@ -2229,6 +2233,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventBusUnsubscribers.push(
 			onNativeRenderingChange(() => {
 				if ((this.viewSession.extensionRunner?.getLinkSchemes().length ?? 0) > 0) this.#redrawExtensionLinks();
+				this.#syncWorkingLoaderVisibility();
 			}),
 		);
 		this.chatContainer = new TranscriptContainer();
@@ -4727,7 +4732,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			setProgramStatusEnabled(cfgTerminalProgramStatus.get(this.settings));
 			this.ui.terminal.setProgramStatusProbeEnabled?.(cfgTerminalProgramStatus.get(this.settings));
 		}
-		if (any("motion")) setTerminalTitleSpinnerInterval(next.motion.spinnerInterval);
+		if (any("motion")) {
+			setTerminalTitleSpinnerInterval(next.motion.spinnerInterval);
+			this.#syncWorkingLoaderVisibility();
+		}
 
 		if (
 			any(
@@ -9447,14 +9455,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.loadingAnimation) {
 			this.#clearWorkingMessageAccentCache();
 			this.statusContainer.disposeChildren();
-			const messageColorFn = ((message: string) =>
-				renderWorkingMessage(message, this.#getWorkingMessageAccent())) as LoaderMessageColorFn & {
-				animated?: true;
-			};
-			// Shimmer drives the 30fps redraw; when it is disabled the working
-			// message is static, so leave `animated` unset and let the loader use
-			// spinner-only cadence instead of repainting a frozen line.
-			if (shimmerEnabled()) messageColorFn.animated = true;
+			const messageColorFn: LoaderMessageColorFn = Object.defineProperty(
+				(message: string) => renderWorkingMessage(message, this.#getWorkingMessageAccent()),
+				"animated",
+				{ get: () => (shimmerEnabled() ? true : undefined) },
+			);
 			this.loadingAnimation = new Loader(
 				this.ui,
 				spinner => {
@@ -9482,7 +9487,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncWorkingLoaderVisibility();
 	}
 
-	/** Keep the loader as the turn's interrupt state even when its ordinary row is hidden. */
+	/** Keep the loader for interrupts and compact ANSI repaint even when its row is hidden. */
 	#syncWorkingLoaderVisibility(): void {
 		const loader = this.loadingAnimation;
 		if (!loader) return;
@@ -9493,9 +9498,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (hidden) {
 			if (attached) {
 				this.statusContainer.removeChild(loader);
-				loader.stop();
 				this.ui.requestRender();
 			}
+			// Let the existing working-message clock repaint the dock without mounting another row.
+			const animateDock =
+				!isNativeRendering() &&
+				spinnerAnimated() &&
+				shimmerEnabled() &&
+				this.statusLine.getTurnElapsedMs() !== null;
+			if (animateDock) loader.start();
+			else loader.stop();
 		} else if (!attached && !this.autoCompactionLoader && !this.retryLoader) {
 			this.statusContainer.disposeChildren();
 			loader.start();

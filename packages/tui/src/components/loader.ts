@@ -306,6 +306,7 @@ export class Loader extends Text {
 	}
 
 	start() {
+		if (this.#intervalId) return;
 		const now = Date.now();
 		this.#spinnerTick = sharedSpinnerTick(now);
 		this.#currentFrame = sharedSpinnerFrame(this.#frames.length, now);

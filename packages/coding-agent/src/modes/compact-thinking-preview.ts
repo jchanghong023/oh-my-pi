@@ -1,9 +1,8 @@
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import type { Component, RenderTimer } from "@oh-my-pi/pi-tui";
+import { type Component, spinnerAnimated } from "@oh-my-pi/pi-tui";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
-import { registerSpinnerBlock, unregisterSpinnerBlock } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import type { Loader } from "@oh-my-pi/pi-tui/components/loader";
 import { col, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
@@ -11,7 +10,7 @@ import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme, type ThemeColor } from "@oh-my-pi/pi-tui/theme";
-import { describeShimmer, type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
+import { describeShimmer, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
@@ -25,10 +24,7 @@ import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-su
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
 import type { InteractiveModeContext } from "./types";
 
-const ACTION_SHIMMER_PALETTE: ShimmerPalette = { low: "muted", mid: "muted", high: "text" };
-const ACTION_QUIET_MS = 1500;
 const THINKING_LABEL_WIDTH = 14;
-const AGENT_WIDTH = 19;
 const ACTION_GAP = "  ";
 
 type ActionCategory = "thinking" | "read" | "exec" | "write" | "call";
@@ -53,7 +49,6 @@ type Call = {
 	embeddedIntent?: string;
 	file?: CompactFileSummary;
 	startedAt?: number;
-	motionStartedAt?: number;
 	endedAt?: number;
 	failed?: boolean;
 };
@@ -67,7 +62,6 @@ type Action = {
 	previewIntent?: string;
 	stage?: ModelStage;
 	additional?: number;
-	startedAt?: number;
 };
 
 const MODEL_WORDS: Record<ModelStage, string> = {
@@ -78,8 +72,7 @@ const MODEL_WORDS: Record<ModelStage, string> = {
 };
 
 type ThinkingPhase = {
-	startedAt: number;
-	endedAt?: number;
+	ended?: true;
 	text: string;
 	preview?: { source: string; width: number; proseOnly: boolean; text: string };
 };
@@ -270,26 +263,20 @@ export class CompactThinkingPreview implements Component {
 	#session?: InteractiveModeContext["viewSession"];
 	#sessionId?: string;
 	#memory?: SessionMemory;
-	#shownThinking?: { id: string; source: string; text: string; width: number; proseOnly: boolean; changedAt?: number };
-	#quietWake?: { deadline: number; timer: RenderTimer };
 
 	constructor(
 		private readonly ctx: Pick<
 			InteractiveModeContext,
-			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking"
-		> &
-			Partial<Pick<InteractiveModeContext, "ui">>,
+			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "statusLine"
+		>,
 		private readonly asyncWaitRow?: () => Loader | undefined,
 		private readonly compactActivity?: (width: number) => CompactPreviewActivity | undefined,
 	) {}
 
 	clear(): void {
-		this.#cancelQuietWake();
-		unregisterSpinnerBlock(this);
 		this.#session = undefined;
 		this.#sessionId = undefined;
 		this.#memory = undefined;
-		this.#shownThinking = undefined;
 	}
 
 	#syncSession(): void {
@@ -312,7 +299,7 @@ export class CompactThinkingPreview implements Component {
 				? `thinking:${state.streamMessage.timestamp}:${state.activeThinkingIndex}`
 				: undefined;
 		for (const [key, phase] of memory.thinking) {
-			if (phase.endedAt === undefined && key !== active) memory.thinking.delete(key);
+			if (!phase.ended && key !== active) memory.thinking.delete(key);
 		}
 		memory.calls = memory.calls.filter(call => call.endedAt !== undefined || pending.has(call.id));
 		if (!pending.size) return;
@@ -374,7 +361,6 @@ export class CompactThinkingPreview implements Component {
 				detail: "",
 				intent,
 				startedAt,
-				motionStartedAt: startedAt === undefined ? Date.now() : undefined,
 			};
 			updateCall(call, args);
 			if (update) updateCall(call, update.args, update.partialResult);
@@ -389,23 +375,22 @@ export class CompactThinkingPreview implements Component {
 			memory.latestStart = Math.max(memory.latestStart ?? call.startedAt, call.startedAt);
 	}
 
-	#startThinking(messageTimestamp: number, contentIndex: number, now: number): string {
+	#startThinking(messageTimestamp: number, contentIndex: number): string {
 		const memory = this.#memory!;
 		const id = `thinking:${messageTimestamp}:${contentIndex}`;
 		if (!memory.thinking.has(id)) {
-			memory.thinking.set(id, { startedAt: now, text: "" });
+			memory.thinking.set(id, { text: "" });
 		}
 		return id;
 	}
 
-	#endThinking(id: string, now: number): void {
+	#endThinking(id: string): void {
 		const memory = this.#memory!;
 		const phase = memory.thinking.get(id);
-		if (!phase || phase.endedAt !== undefined) return;
-		phase.endedAt = now;
+		if (!phase || phase.ended) return;
+		phase.ended = true;
 		phase.text = "";
 		phase.preview = undefined;
-		if (this.#shownThinking?.id === id) this.#shownThinking = undefined;
 	}
 
 	/** Retain live calls and only the last settled tool. */
@@ -417,7 +402,7 @@ export class CompactThinkingPreview implements Component {
 		}
 		memory.calls = memory.calls.filter(call => call.endedAt === undefined || call === last);
 		for (const [id, phase] of memory.thinking) {
-			if (phase.endedAt !== undefined) memory.thinking.delete(id);
+			if (phase.ended) memory.thinking.delete(id);
 		}
 	}
 
@@ -461,19 +446,19 @@ export class CompactThinkingPreview implements Component {
 		} else if (event.type === "message_update" && event.message.role === "assistant") {
 			const delta = event.assistantMessageEvent;
 			if (delta.type === "thinking_start") {
-				this.#startThinking(event.message.timestamp, delta.contentIndex, now);
+				this.#startThinking(event.message.timestamp, delta.contentIndex);
 			} else if (delta.type === "thinking_delta") {
-				const id = this.#startThinking(event.message.timestamp, delta.contentIndex, now);
+				const id = this.#startThinking(event.message.timestamp, delta.contentIndex);
 				const phase = memory.thinking.get(id);
-				if (phase && phase.endedAt === undefined) {
+				if (phase && !phase.ended) {
 					const block = event.message.content[delta.contentIndex];
 					if (block?.type === "thinking") phase.text = block.thinking;
 				}
 			} else if (delta.type === "thinking_end") {
-				const id = this.#startThinking(event.message.timestamp, delta.contentIndex, now);
-				this.#endThinking(id, now);
+				const id = this.#startThinking(event.message.timestamp, delta.contentIndex);
+				this.#endThinking(id);
 			} else if (delta.type === "error") {
-				for (const id of memory.thinking.keys()) this.#endThinking(id, now);
+				for (const id of memory.thinking.keys()) this.#endThinking(id);
 			}
 			for (const block of event.message.content) {
 				if (block.type !== "toolCall") continue;
@@ -483,7 +468,7 @@ export class CompactThinkingPreview implements Component {
 			}
 		} else if (event.type === "message_end" && event.message.role === "assistant") {
 			// A stream that ends without thinking_end (abort/error) still settles its open phase.
-			for (const id of memory.thinking.keys()) this.#endThinking(id, now);
+			for (const id of memory.thinking.keys()) this.#endThinking(id);
 		}
 		if (
 			event.type === "tool_execution_end" ||
@@ -495,25 +480,20 @@ export class CompactThinkingPreview implements Component {
 		}
 	}
 
-	/** Reuse the shared ANSI ticker only while the dock has an eligible shimmer. */
-	tickSpinner(_frame: number): void {
-		if (shimmerEnabled() && displayPreferences.compactToolActivity) this.ctx.ui?.requestComponentRender(this);
-		else unregisterSpinnerBlock(this);
+	/** Match the status spinner's active window; the working loader drives ANSI repaint. */
+	#activityAnimating(): boolean {
+		return spinnerAnimated() && shimmerEnabled() && this.ctx.statusLine.getTurnElapsedMs() !== null;
 	}
 
 	render(width: number): readonly string[] {
 		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, width - 1));
-		const { slots, activity } = this.#visibleActions(width, inset, waitRow);
-		const animated = !isNativeRendering()
-			? this.#selectMotion(slots, activity, width - inset, !waitRow && shimmerEnabled())
-			: undefined;
-		if (animated !== undefined && this.ctx.ui) registerSpinnerBlock(this);
-		else unregisterSpinnerBlock(this);
+		const slots = this.#visibleActions(width, inset, waitRow);
+		const animate = !isNativeRendering() && this.#activityAnimating();
 		if (!displayPreferences.compactToolActivity) return [];
 		const left = padding(inset);
 		const rows = slots.map(action =>
-			action ? left + this.#paintAnsi(this.#buildRow(action, width - inset), action.id === animated) : "",
+			action ? left + this.#paintAnsi(this.#buildRow(action, width - inset), animate && action.running) : "",
 		);
 		const waiting = waitRow ? left + truncateToWidth(`Agent：${waitRow.inlineText()}`, width - inset) : "";
 		return [rows[0] ?? "", waiting || (rows[1] ?? ""), ""];
@@ -524,7 +504,7 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	/** Reconcile the active thinking phase from live state so focus restoration shows it without a fresh event. */
-	#syncLiveThinking(now: number): void {
+	#syncLiveThinking(): void {
 		const memory = this.#memory!;
 		const state = this.ctx.viewSession.agent.state;
 		const stream = state.streamMessage;
@@ -532,16 +512,16 @@ export class CompactThinkingPreview implements Component {
 		if (stream?.role === "assistant" && index !== undefined) {
 			const block = stream.content[index];
 			if (block?.type === "thinking") {
-				const id = this.#startThinking(stream.timestamp, index, now);
+				const id = this.#startThinking(stream.timestamp, index);
 				const phase = memory.thinking.get(id);
-				if (phase && phase.endedAt === undefined) phase.text = block.thinking;
+				if (phase && !phase.ended) phase.text = block.thinking;
 			}
 		}
 	}
 
 	/** Build the action records currently eligible for the two slots. */
 	#actions(detailWidth: number): Action[] {
-		this.#syncLiveThinking(Date.now());
+		this.#syncLiveThinking();
 		const memory = this.#memory!;
 		const state = this.ctx.viewSession.agent.state;
 		const hideThinking = this.ctx.effectiveHideThinkingBlock;
@@ -549,7 +529,7 @@ export class CompactThinkingPreview implements Component {
 		const actions: Action[] = [];
 		let activeThinking: Action | undefined;
 		for (const [id, phase] of memory.thinking) {
-			if (hideThinking || phase.endedAt !== undefined) continue;
+			if (hideThinking || phase.ended) continue;
 			let preview = phase.preview;
 			if (preview?.source !== phase.text || preview.width !== detailWidth || preview.proseOnly !== proseOnly) {
 				preview = {
@@ -567,7 +547,6 @@ export class CompactThinkingPreview implements Component {
 					running: true,
 					failed: false,
 					detail: preview.text,
-					startedAt: phase.startedAt,
 				};
 			}
 		}
@@ -582,7 +561,6 @@ export class CompactThinkingPreview implements Component {
 				detail: toolDetail(call, category),
 				file: call.file,
 				previewIntent: category === "exec" && call.command ? clean(call.detail).trim() : undefined,
-				startedAt: call.startedAt ?? call.motionStartedAt,
 			});
 		}
 		if (activeThinking) actions.push(activeThinking);
@@ -604,25 +582,20 @@ export class CompactThinkingPreview implements Component {
 					running: true,
 					failed: false,
 					detail: stage === "thinking" ? (thinking?.detail ?? "") : "",
-					startedAt: thinking?.startedAt,
 					stage,
 				}
 			: undefined;
 		return [model, current && { ...current, additional: Math.max(0, running.length - 1) }];
 	}
 
-	#visibleActions(
-		width: number,
-		inset: number,
-		waitRow: Loader | undefined,
-	): { slots: (Action | undefined)[]; activity?: CompactPreviewActivity } {
+	#visibleActions(width: number, inset: number, waitRow: Loader | undefined): (Action | undefined)[] {
 		if (!displayPreferences.compactToolActivity) {
 			this.clear();
-			return { slots: [] };
+			return [];
 		}
 		this.#syncSession();
 		const contentWidth = width - inset;
-		if (contentWidth < 1) return { slots: [] };
+		if (contentWidth < 1) return [];
 		const slots = this.#select(this.#actions(contentWidth - THINKING_LABEL_WIDTH - ACTION_GAP.length));
 		if (waitRow) slots[1] = undefined;
 		const agent = slots[1];
@@ -630,81 +603,7 @@ export class CompactThinkingPreview implements Component {
 		if (agent && activity?.callId === agent.id && activity.commandVisible && agent.previewIntent) {
 			slots[1] = { ...agent, detail: agent.previewIntent };
 		}
-		return { slots, activity };
-	}
-
-	#selectMotion(
-		slots: (Action | undefined)[],
-		activity: CompactPreviewActivity | undefined,
-		width: number,
-		animate: boolean,
-	): string | undefined {
-		const now = Date.now();
-		let deadline = 0;
-		let candidate: string | undefined;
-		for (const action of slots) {
-			if (!action?.running || (action.category === "thinking" && action.stage !== "thinking")) continue;
-			// The lower slot wins when both running actions are quiet.
-			candidate = action.id;
-			let progressAt: number | undefined;
-			if (action.category === "thinking" && action.stage === "thinking" && this.#memory!.thinking.has(action.id))
-				progressAt = this.#thinkingProgress(action, width, now);
-			else if (action.category === "exec" && action.id === activity?.callId) progressAt = activity.outputChangedAt;
-			deadline = Math.max(deadline, Math.max(action.startedAt ?? 0, progressAt ?? 0) + ACTION_QUIET_MS);
-		}
-		if (!animate || width < AGENT_WIDTH || candidate === undefined || deadline <= now) {
-			this.#cancelQuietWake();
-			return animate && width >= AGENT_WIDTH ? candidate : undefined;
-		}
-		// Native shimmers are clocked by the terminal, but it needs a new frame
-		// to receive the first shimmer node after progress stops.
-		if (deadline !== this.#quietWake?.deadline) {
-			this.#cancelQuietWake();
-			const ui = this.ctx.ui;
-			if (ui) {
-				const timer = ui.scheduleAfter(deadline - now, () => {
-					this.#quietWake = undefined;
-					if (
-						displayPreferences.compactToolActivity &&
-						shimmerEnabled() &&
-						this.#session === this.ctx.viewSession &&
-						this.#sessionId === this.ctx.viewSession.sessionManager.getSessionId()
-					) {
-						ui.requestComponentRender(this);
-					}
-				});
-				this.#quietWake = { deadline, timer };
-			}
-		}
-		return undefined;
-	}
-
-	#cancelQuietWake(): void {
-		this.#quietWake?.timer.cancel();
-		this.#quietWake = undefined;
-	}
-
-	#thinkingProgress(action: Action, width: number, now: number): number | undefined {
-		const previous = this.#shownThinking;
-		const proseOnly = this.ctx.proseOnlyThinking;
-		const source = this.#memory!.thinking.get(action.id)!.text;
-		const sameAction = previous?.id === action.id;
-		const sameLayout = previous?.width === width && previous.proseOnly === proseOnly;
-		if (sameAction && sameLayout && previous.source === source) return previous.changedAt;
-		let changedAt = sameAction ? previous.changedAt : undefined;
-		// Reflowing the same prose is not progress. If input and layout changed
-		// together, compare both inputs at the new width.
-		if (action.detail) {
-			if (!sameAction) changedAt = now;
-			else if (previous.source !== source) {
-				const previousDetail = sameLayout
-					? previous.text
-					: thinkingDetail(previous.source, proseOnly, width - THINKING_LABEL_WIDTH - ACTION_GAP.length);
-				if (previousDetail !== action.detail) changedAt = now;
-			}
-		}
-		this.#shownThinking = { id: action.id, source, text: action.detail, width, proseOnly, changedAt };
-		return changedAt;
+		return slots;
 	}
 
 	/** Keep the path or thinking text ahead of optional detail on narrow terminals. */
@@ -739,7 +638,7 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	#paintAnsi({ word, tone, detail }: ActionRow, animate: boolean): string {
-		let line = animate ? shimmerText(word, theme, ACTION_SHIMMER_PALETTE) : theme.fg(tone, word);
+		let line = animate ? shimmerText(word, theme) : theme.fg(tone, word);
 		if (detail.length) {
 			line += ACTION_GAP;
 			for (const run of detail) line += theme.fg(run.tone, run.text);
@@ -754,22 +653,14 @@ export class CompactThinkingPreview implements Component {
 		}
 		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, cx.cols - 1));
-		const { slots, activity } = this.#visibleActions(cx.cols, inset, waitRow);
+		const slots = this.#visibleActions(cx.cols, inset, waitRow);
 		const left = padding(inset);
-		const animated = this.#selectMotion(
-			slots,
-			activity,
-			cx.cols - inset,
-			!waitRow && shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer"),
-		);
-		unregisterSpinnerBlock(this);
+		const animate = this.#activityAnimating() && !cx.reduceMotion && cx.supports("shimmer");
 		const children = slots.map(action => {
 			if (!action) return node("rows", { cols: cx.cols, lines: [""] });
 			const built = this.#buildRow(action, cx.cols - inset);
 			const label =
-				animated === action.id
-					? describeShimmer([{ text: built.word, palette: ACTION_SHIMMER_PALETTE }])
-					: text([span(built.word, built.tone)]);
+				animate && action.running ? describeShimmer([{ text: built.word }]) : text([span(built.word, built.tone)]);
 			const parts = built.detail.length
 				? [text(left), label, text(ACTION_GAP), text(built.detail.map(run => span(run.text, run.tone)))]
 				: [text(left), label];

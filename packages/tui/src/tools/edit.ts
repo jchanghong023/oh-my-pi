@@ -210,6 +210,8 @@ export interface EditRenderContext {
 	editStreamingFallback?: string;
 	/** Function to render diff text with syntax highlighting */
 	renderDiff?: (diffText: string, options?: { filePath?: string }) => string;
+	/** Available body rows for a collapsed result in a height-limited host, including the expand hint. */
+	diffPreviewRows?: number;
 	/** Unsanitized result metadata, used only for filesystem link targets. */
 	rawDetails?: unknown;
 }
@@ -1019,30 +1021,37 @@ function renderDiffSection(
 	renderDiffFn: (t: string, o?: { filePath?: string }) => string,
 	renderCache?: RenderedStringCache,
 	sectionCache?: RenderedStringCache,
+	rowBudget?: number,
 ): string {
-	return cachedRenderedString(sectionCache, uiTheme, expanded, `${rawPath}:${innerWidth}`, diff, () => {
+	const previewRows = Math.min(PREVIEW_LIMITS.DIFF_COLLAPSED_LINES, rowBudget ?? Infinity);
+	return cachedRenderedString(sectionCache, uiTheme, expanded, `${rawPath}:${innerWidth}:${rowBudget}`, diff, () => {
 		const {
 			text: truncatedDiff,
 			hiddenHunks,
 			hiddenLines: logicallyHiddenLines,
 		} = expanded
 			? { text: diff, hiddenHunks: 0, hiddenLines: 0 }
-			: truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
+			: truncateDiffByHunk(diff, PREVIEW_LIMITS.DIFF_COLLAPSED_HUNKS, previewRows);
 
 		const renderedDiff = cachedRenderedString(renderCache, uiTheme, expanded, rawPath, truncatedDiff, () =>
 			renderDiffFn(truncatedDiff, { filePath: rawPath }),
 		);
-		const { text: visibleDiff, hiddenLines: visuallyHiddenLines } = expanded
+		let visible = expanded
 			? { text: renderedDiff, hiddenLines: 0 }
-			: sliceCollapsedDiffRows(renderedDiff, innerWidth, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
-		const hiddenLines = logicallyHiddenLines + visuallyHiddenLines;
+			: sliceCollapsedDiffRows(renderedDiff, innerWidth, previewRows);
+		if (!expanded && rowBudget !== undefined && (hiddenHunks > 0 || logicallyHiddenLines + visible.hiddenLines > 0)) {
+			const bodyRows = Math.min(previewRows, rowBudget - 1);
+			if (bodyRows < previewRows) visible = sliceCollapsedDiffRows(renderedDiff, innerWidth, bodyRows);
+		}
+		const hiddenLines = logicallyHiddenLines + visible.hiddenLines;
 
-		let text = `\n${visibleDiff}`;
+		let text = visible.text ? `\n${visible.text}` : "";
 		if (!expanded && (hiddenHunks > 0 || hiddenLines > 0)) {
 			const remainder: string[] = [];
 			if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
 			if (hiddenLines > 0) remainder.push(`${hiddenLines} more lines`);
-			text += uiTheme.fg("toolOutput", `\n… (${remainder.join(", ")}) ${formatExpandHint(uiTheme)}`);
+			const hint = `… (${remainder.join(", ")}) ${formatExpandHint(uiTheme)}`;
+			text += `\n${uiTheme.fg("toolOutput", rowBudget === undefined ? hint : truncateToWidth(hint, innerWidth))}`;
 		}
 		return text;
 	});
@@ -1600,6 +1609,7 @@ function renderSingleFileResult(
 					renderDiffFn,
 					renderedDiffCache,
 					diffSectionCache,
+					renderContext?.diffPreviewRows,
 				);
 			} else if (details) {
 				// Authoritative result with no textual diff: a delete, a move-only

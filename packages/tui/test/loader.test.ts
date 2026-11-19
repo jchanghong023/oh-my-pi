@@ -122,6 +122,9 @@ describe("Loader component", () => {
 		colorMessage.animated = true;
 		const loader = new Loader(ui as unknown as TUI, text => text, colorMessage, "Checking", ["0"]);
 
+		// Reattaching the working row must not restart an already-running animation.
+		loader.start();
+
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
 
 		vi.advanceTimersByTime(34);

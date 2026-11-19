@@ -65,11 +65,15 @@
 - Integrated upstream v18.20.2 while retaining blocked Goal tasks and fork deployment defaults.
 - Ask now uses upstream HTML forms and timeout behavior across native hosts, without fork-specific Goal replies or the legacy questions tool protocol.
 - File writes no longer capture unused before-and-after snapshots for the retired compact display.
+- Compact mode previews the latest file's net diff in the upstream Edit card, separated from the file count by a blank line and capped in height; Ctrl+O opens all file diffs for the turn.
 
 ### Fixed
 
 - Compact Output expires from its own session's run end without reappearing in later turns; changing the display mode or focused agent no longer revives stale thinking.
 - Compact mode restores typing when an expanded diff disappears, includes formatted batch writes and focused worker changes, flags interrupted file diffs, and shows model wait when switching back before the first response.
+- Compact model and Agent labels use the upstream work indicator's more visible shimmer and repaint cadence, starting and stopping with the status spinner.
+- Compact mode stops repeating file-tool output already covered by the turn diff without hiding distinct output or failures.
+- Compact mode shows deleted files as a single row with the upstream delete icon, without printing their contents.
 - The display shortcut reports settings overrides instead of claiming a switch succeeded.
 - Native clean and detailed modes no longer reserve the compact activity rows.
 - Native child agents inherit the launching session's credentials and tool restrictions, and caller restrictions also apply to Cursor, Advisors, and resumed queued input.
