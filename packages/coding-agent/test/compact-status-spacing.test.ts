@@ -607,10 +607,15 @@ describe("compaction and focus status spacing", () => {
 
 			record("target.txt", "ORIGINAL_VALUE\n", "FINAL_VALUE\n");
 			record("target.txt", "EXTERNAL_VALUE\n", "EXTERNAL_VALUE\n");
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			expect(view()).toContain("本轮改动 1 文件");
+			expect(dock.render(80)).toHaveLength(1);
+			expect(view()).not.toMatch(/本轮差异不可用|无法确认本轮净差异|target\.txt/);
 			dock.toggle();
 			composer.ui.requestRender();
 			await scheduler.settle(terminal);
-			expect(view()).toContain("无法确认本轮净差异");
+			expect(view()).toMatch(/修改 target\.txt[^\n]*\n[^\S\n]*本轮差异不可用/);
 			expect(view()).not.toMatch(/ORIGINAL_VALUE|FINAL_VALUE|EXTERNAL_VALUE/);
 
 			changes.start(id);

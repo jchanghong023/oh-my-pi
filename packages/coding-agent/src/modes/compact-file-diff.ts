@@ -145,7 +145,7 @@ export class CompactFileDiff implements Component {
 		if (height < 1) return [];
 		if (!file.continuous) {
 			this.#preview = undefined;
-			return [truncateToWidth(theme.fg("warning", `${displayPath(cwd, file.path)}：无法确认本轮净差异。`), width)];
+			return [];
 		}
 		// Only framed edits need space for two borders and a body row.
 		if (file.after !== null && height < 3) return [];
@@ -178,7 +178,7 @@ export class CompactFileDiff implements Component {
 		let lines = this.#diffRows.get(change);
 		if (lines) return lines;
 		if (!change.continuous) {
-			lines = [theme.fg("warning", "两次写入之间内容另有变化，无法确认本轮净差异。")];
+			lines = [theme.fg("warning", "本轮差异不可用")];
 		} else {
 			const { diff } = this.#diff(change);
 			lines = diff ? renderDiff(diff, { filePath: change.path }).split("\n") : [];
