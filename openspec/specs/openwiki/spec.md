@@ -77,6 +77,11 @@ OMP MUST 复用 OpenWiki 原有的规划 Agent、页面工作池、Claims、增�
 - **WHEN** 在没有旧 OpenWiki home、独立安装或开发源码目录的环境中执行生成
 - **THEN** 原生规划与页面 Agent 所需的内置 Skill 和提示资源可用，包括仓库 Wiki 所需的 Mermaid 指导，不因绕过独立 OpenWiki 初始化而缺失
 
+#### Scenario: 生成后轻量 Mermaid 校验
+- **WHEN** OpenWiki 生成或更新 Wiki 并执行最终化
+- **THEN** 生成端 MUST 仅做无 DOM 依赖的轻量结构检查，覆盖流程图节点标签与保留字、时序图块和复合状态块；检测到明确错误时保留图表正文，降级为纯文本并写入修复原因；未覆盖的图种和语法保持原样，不承诺完整 Mermaid 语法验证
+- **AND** OMP 不打包生成端 Mermaid 解析器或 jsdom；网页可视化与静态导出继续使用原有离线 Mermaid 渲染资源
+
 #### Scenario: 原有页面并行行为
 - **WHEN** 用户通过原有 `OPENWIKI_PAGE_CONCURRENCY` 设置并发值执行生成或更新
 - **THEN** 默认并发为 `1`，允许 `1–8`；原生页面工作池按该上限执行，任务在同一次运行内不重复分派，每个页面任务只能写其负责页面，quickstart 在其他页面任务结束后生成

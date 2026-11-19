@@ -17,6 +17,7 @@
 
 - The intranet system notice describes the CentOS 7, NFS, and `/dev/shm` deployment without assuming the current host matches it.
 - Compact mode shows model stages separately from Agent activity and keeps one net diff per file for the latest turn, outside scrollback.
+- OpenWiki uses lightweight diagram checks to shrink the standalone package while keeping offline Mermaid rendering in the browser.
 - Compact mode keeps file targets and live reasoning visible alongside ongoing work, and shows up to five output lines without losing the last useful preview to empty or separator-only updates.
 - Compact mode aligns output with the activity rows, emphasizes file names, live thinking and failure diagnostics, and limits animation to one quiet, still-running action.
 - Updated to upstream v18.22.2 while retaining intranet providers, fork commands and TUI presentation.
