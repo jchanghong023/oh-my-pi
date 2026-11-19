@@ -17,7 +17,6 @@ import {
 	removeUserDataDir,
 } from "../packages/coding-agent/src/tools/browser/launch";
 import { findUserDataDirInArgs, gracefulKillTreeOnce } from "../packages/coding-agent/src/tools/browser/attach";
-import { initializeRepository } from "../packages/coding-agent/test/aireq-workbench/fixture";
 import {
 	PlatformPrerequisiteError,
 	validateDirectUrl,
@@ -307,7 +306,7 @@ async function withChrome<T>(
 	recordCleanup: (evidence: Evidence) => void,
 ): Promise<T> {
 	const executable = await installed(options.chrome, "chrome-executable");
-	const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-aireqelopment-chrome-"));
+	const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-webgui-development-chrome-"));
 	let browser: Browser | undefined;
 	let launchStarted = false;
 	let endpoint: string | undefined;
@@ -573,7 +572,15 @@ async function fixtureProject(directory: string): Promise<void> {
 		skill,
 		`---\nname: acceptance-local\ndescription: Native acceptance local skill\n---\nUse the native write tool in the selected project to create skill-result.txt containing exactly native-effective-skill-${crypto.randomUUID()}.\n`,
 	);
-	await initializeRepository(directory);
+	const gitDir = path.join(directory, ".git");
+	for (const child of ["objects", "refs/heads", "refs/tags"]) {
+		await fs.mkdir(path.join(gitDir, child), { recursive: true });
+	}
+	await fs.writeFile(path.join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+	await fs.writeFile(
+		path.join(gitDir, "config"),
+		`[core]\nrepositoryformatversion = 0\nbare = false\nautocrlf = false\nhooksPath = ${JSON.stringify(path.join(gitDir, "hooks").replaceAll("\\", "/"))}\n[user]\nname = OMP Acceptance\nemail = omp-acceptance@example.invalid\n[commit]\ngpgsign = false\n`,
+	);
 	const repository = requireGit(directory);
 	await repository.stageFiles(["README.txt"]);
 	await repository.commitCreate("Isolated acceptance fixture", {});

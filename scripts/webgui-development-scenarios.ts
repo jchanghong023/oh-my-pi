@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { withTimeout } from "@oh-my-pi/pi-utils";
+import { isEnoent, withTimeout } from "@oh-my-pi/pi-utils";
 import { WEBGUI_PROJECTS_PATH } from "../vendor/zcode-frontend/preview/session-info";
 import { encodeCustomModelValue } from "../vendor/zcode-frontend/packages/shared/src/custom-model-value";
 import type { DevelopmentBrowser, DevelopmentPage } from "./webgui-platform-smoke";
@@ -462,13 +462,11 @@ async function assertNoModel(context: DevelopmentContext, evidence: Evidence[], 
 	check(snapshots.length === 0, "Standalone browsing created a native session before explicit work");
 	if (unregistered) {
 		check(projects.length === 0, "Lazy startup/refresh registered an unrequested project");
-		check(
-			!(await fs.stat(path.join(context.root, ".omp", "aireq-workbench", "browser-mode")).then(
-				() => true,
-				() => false,
-			)),
-			"Lazy startup created a project-mode lock",
-		);
+		const lockDirectory = await fs.stat(path.join(context.root, ".omp", "webgui")).catch(error => {
+			if (!isEnoent(error)) throw error;
+			return undefined;
+		});
+		check(!lockDirectory, "Lazy startup attempted to acquire a WebGUI project lock");
 	}
 	evidence.push({
 		lazyAgents: true,

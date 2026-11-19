@@ -513,14 +513,13 @@ async function runFulltestObserved(
 		const scriptTests = options.full ? files : selectChangedScriptTests(changedPaths, files);
 		let independentScriptCommands: GateCommand[] = [];
 		if (scriptTests.length) {
-			// Only fixture-local scripts may share the heavy phase's reserved workers.
-			// Unknown scripts, clock/watchdog selftests and shared writers stay isolated.
+			// Only short, pure fixtures may share the heavy phase's reserved workers.
+			// Subprocess-heavy fixtures (including Git and Cargo) run serially before the
+			// heavy phase to avoid contention-driven timeouts. Unknown scripts,
+			// clock/watchdog selftests and shared writers also stay isolated.
 			const parallelScripts = new Set([
 				"scripts/ci-release-checksums.test.ts",
-				"scripts/ci-test-ts.test.ts",
-				"scripts/fulltest.test.ts",
 				"scripts/install-tests/fork-installer-routing.test.ts",
-				"scripts/run-rs-task.test.ts",
 				"scripts/slowtest.test.ts",
 				"scripts/test-reporting.test.ts",
 			]);

@@ -6,68 +6,13 @@ import { ptree } from "@oh-my-pi/pi-utils";
 
 const registryModule = JSON.stringify(path.join(import.meta.dir, "../../src/webgui/project-registry.ts"));
 const serverModule = JSON.stringify(path.join(import.meta.dir, "../../src/webgui/server.ts"));
-const nativeServerModule = JSON.stringify(path.join(import.meta.dir, "../../src/aireq-workbench/server.ts"));
-const workflowStoreModule = JSON.stringify(path.join(import.meta.dir, "../../src/aireq-workbench/workflow-store.ts"));
 const processTreeModule = JSON.stringify(path.join(import.meta.dir, "../../../utils/src/ptree.ts"));
-const nativeVcsModule = JSON.stringify(import.meta.resolve("@oh-my-pi/pi-natives/vcs"));
-
-const bootstrapFixture = `
-import * as bootstrapFs from "node:fs/promises";
-import * as bootstrapPath from "node:path";
-import * as bootstrapVcs from ${nativeVcsModule};
-import { closeWebServer, ensureWebServer } from ${serverModule};
-import { startAIReqWorkbenchServer } from ${nativeServerModule};
-import { AIReqWorkflowStore } from ${workflowStoreModule};
-function metadataOnly(target, label) {
-	return new Proxy(target, {
-		get(value, key) {
-			if (!Object.hasOwn(value, key))
-				throw new Error("Bootstrap unexpectedly accessed native business capability " + label + "." + String(key));
-			return Reflect.get(value, key);
-		},
-	});
-}
-async function startBootstrap(projectId) {
-	const fixtureRoot = process.env.OWNERSHIP_FIXTURE_ROOT;
-	if (!fixtureRoot) throw new Error("Missing owned bootstrap fixture root");
-	// Keep this Git repository separate from the non-Git a/b ownership fixtures.
-	const directory = bootstrapPath.join(fixtureRoot, "native-bootstrap", projectId);
-	const projectRoot = bootstrapPath.join(directory, "repo");
-	for (const name of ["objects", "refs/heads", "refs/tags", "hooks"])
-		await bootstrapFs.mkdir(bootstrapPath.join(projectRoot, ".git", name), { recursive: true });
-	await bootstrapFs.writeFile(bootstrapPath.join(projectRoot, ".git", "HEAD"), "ref: refs/heads/trunk\\n");
-	await bootstrapFs.writeFile(
-		bootstrapPath.join(projectRoot, ".git", "config"),
-		"[core]\\nrepositoryformatversion = 0\\nautocrlf = false\\n[commit]\\ngpgsign = false\\n[user]\\nname = Ownership Contracts\\nemail = ownership@example.invalid\\n",
-	);
-	const repo = bootstrapVcs.requireGit(projectRoot);
-	await repo.configSet("core.hooksPath", bootstrapPath.join(repo.info().gitDir, "hooks"));
-	await bootstrapFs.writeFile(bootstrapPath.join(projectRoot, "existing.txt"), "owned bootstrap project\\n");
-	await repo.stageFiles(["existing.txt"]);
-	await repo.commitCreate("initial", {});
-	const store = new AIReqWorkflowStore(bootstrapPath.join(directory, "registry"));
-	await store.registerProject(projectRoot, "Native ownership bootstrap");
-	// Only genuine registered Git metadata is admitted; native sessions, models and business callbacks remain forbidden.
-	const host = metadataOnly({
-		cwd: projectRoot,
-		workflow: metadataOnly({
-			store: metadataOnly({ listProjects: () => store.listProjects() }, "workflow.store"),
-		}, "workflow"),
-	}, "host");
-	const html = new TextEncoder().encode("<!doctype html><title>Native bootstrap fixture</title>");
-	return startAIReqWorkbenchServer(host, {
-		basePath: "/dev/" + projectId + "/",
-		offline: false,
-		asset: async assetPath => assetPath === "/" ? { bytes: html, contentType: "text/html; charset=utf-8" } : null,
-	});
-}
-`;
 
 interface OwnershipAttempt {
 	outcome: "acquired" | "rejected";
 	projectId?: string;
 	root?: string;
-	mode?: "aireq" | "webgui";
+	mode?: "webgui";
 	error?: string;
 }
 
@@ -78,7 +23,7 @@ let lease;
 let result;
 try {
 	try {
-		lease = await acquireBrowserProject(process.env.OWNERSHIP_PROJECT, process.env.OWNERSHIP_MODE);
+		lease = await acquireBrowserProject(process.env.OWNERSHIP_PROJECT);
 		result = { outcome: "acquired", projectId: lease.projectId, root: lease.root, mode: lease.mode };
 	} catch (error) {
 		result = { outcome: "rejected", error: String(error) };
@@ -90,17 +35,21 @@ console.log(JSON.stringify(result));
 `;
 
 async function runScenario<T>(root: string, body: string): Promise<T> {
+	const assetsRoot = path.join(root, "vendor", "zcode-frontend", "build", "webgui");
+	await fs.mkdir(assetsRoot, { recursive: true });
+	// The test exercises the real listener, not the frontend bundle.
+	await fs.writeFile(path.join(assetsRoot, "index.html"), "<!doctype html><title>WebGUI ownership test</title>");
 	const script = `
 import * as path from "node:path";
 import { acquireBrowserProject, listBrowserProjects, readBrowserProject } from ${registryModule};
-${bootstrapFixture}
+import { closeWebServer, ensureWebServer } from ${serverModule};
 import * as ptree from ${processTreeModule};
 const root = process.env.OWNERSHIP_FIXTURE_ROOT;
 const contenderScript = ${JSON.stringify(contenderScript)};
-async function contend(project, mode, overrides = {}) {
+async function contend(project, overrides = {}) {
 	const child = Bun.spawn([process.execPath, "--eval", contenderScript], {
 		cwd: root,
-		env: { ...process.env, ...overrides, OWNERSHIP_PROJECT: project, OWNERSHIP_MODE: mode },
+		env: { ...process.env, ...overrides, OWNERSHIP_PROJECT: project },
 		stdin: "ignore", stdout: "pipe", stderr: "pipe",
 	});
 	const timer = setTimeout(() => child.kill(), 10_000);
@@ -131,6 +80,8 @@ console.log(JSON.stringify(result));
 			OMP_PROFILE: "owner",
 			PI_PROFILE: "owner",
 			PI_CODING_AGENT_DIR: "",
+			PI_PACKAGE_DIR: path.join(root, "packages", "coding-agent"),
+			PI_BUNDLED: "",
 			OWNERSHIP_FIXTURE_ROOT: root,
 		},
 		stdin: "ignore",
@@ -153,11 +104,18 @@ function expectOccupied(attempt: OwnershipAttempt): void {
 	expect(attempt.error).toMatch(/占用|occupied|in use/i);
 }
 
-test("a live native owner excludes another mode across directory aliases, profiles and config roots", async () => {
+test("a live WebGUI owner locks the real Git root across directory aliases, profiles and config roots", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-project-owner-"));
 	try {
 		const project = path.join(root, "project");
-		await fs.mkdir(project);
+		const gitDir = path.join(project, ".git");
+		await Promise.all(
+			[path.join(project, "nested"), path.join(gitDir, "objects"), path.join(gitDir, "refs", "heads")].map(
+				directory => fs.mkdir(directory, { recursive: true }),
+			),
+		);
+		await fs.writeFile(path.join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+		await fs.writeFile(path.join(gitDir, "config"), "[core]\nrepositoryformatversion = 0\nbare = false\n");
 		await fs.symlink(project, path.join(root, "alias"), process.platform === "win32" ? "junction" : "dir");
 		const result = await runScenario<{
 			ownerId: string;
@@ -171,13 +129,13 @@ test("a live native owner excludes another mode across directory aliases, profil
 	const project = path.join(root, "project");
 	const alias = path.join(root, "alias");
 	const alternateConfig = { OMP_CONFIG_ROOT: path.join(root, "other-config"), OMP_PROFILE: "other", PI_PROFILE: "other" };
-	const owner = await acquireBrowserProject(project, "aireq");
+	const owner = await acquireBrowserProject(path.join(project, "nested"));
 	try {
-		const aliasAttempt = await contend(alias, "webgui");
-		const profileAttempt = await contend(project, "webgui", { OMP_PROFILE: "other", PI_PROFILE: "other" });
-		const configAttempt = await contend(alias, "webgui", alternateConfig);
+		const aliasAttempt = await contend(alias);
+		const profileAttempt = await contend(project, { OMP_PROFILE: "other", PI_PROFILE: "other" });
+		const configAttempt = await contend(alias, alternateConfig);
 		await owner.close();
-		const afterClose = await contend(alias, "webgui", alternateConfig);
+		const afterClose = await contend(alias, alternateConfig);
 		return { ownerId: owner.projectId, alias: aliasAttempt, profile: profileAttempt, config: configAttempt, afterClose };
 	} finally {
 		await owner.close();
@@ -218,17 +176,17 @@ test("projects retain independent process-local leases through exiting and close
 	let a;
 	let b;
 	try {
-		a = await acquireBrowserProject(path.join(root, "a"), "webgui");
-		b = await acquireBrowserProject(path.join(root, "b"), "aireq");
+		a = await acquireBrowserProject(path.join(root, "a"));
+		b = await acquireBrowserProject(path.join(root, "b"));
 		const summarize = records => records.map(({ root, mode }) => ({ root, mode }));
 		const projects = summarize(await listBrowserProjects());
 		await a.markExiting();
 		const exitingPhase = (await readBrowserProject(a.projectId))?.phase;
-		const whileExiting = await contend(a.root, "aireq");
+		const whileExiting = await contend(a.root);
 		await a.close();
-		const afterClose = await contend(a.root, "aireq");
+		const afterClose = await contend(a.root);
 		await a.close();
-		const otherProject = await contend(b.root, "webgui");
+		const otherProject = await contend(b.root);
 		const released = await readBrowserProject(a.projectId);
 		const remaining = summarize(await listBrowserProjects());
 		return { projects, exitingPhase, whileExiting, afterClose, otherProject, released, remaining };
@@ -241,65 +199,60 @@ test("projects retain independent process-local leases through exiting and close
 		const canonicalB = await fs.realpath(projectB);
 		expect(result.projects).toEqual([
 			{ root: canonicalA, mode: "webgui" },
-			{ root: canonicalB, mode: "aireq" },
+			{ root: canonicalB, mode: "webgui" },
 		]);
 		expect(result.exitingPhase).toBe("exiting");
 		expectOccupied(result.whileExiting);
-		expect(result.afterClose).toMatchObject({ outcome: "acquired", root: canonicalA, mode: "aireq" });
+		expect(result.afterClose).toMatchObject({ outcome: "acquired", root: canonicalA, mode: "webgui" });
 		expectOccupied(result.otherProject);
 		expect(result.released).toBeNull();
-		expect(result.remaining).toEqual([{ root: canonicalB, mode: "aireq" }]);
+		expect(result.remaining).toEqual([{ root: canonicalB, mode: "webgui" }]);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
 }, 60_000);
 
-test("the native process runtime isolates project modes and closes only its own listener", async () => {
+test("the WebGUI runtime publishes only local projects and stops only its own listener", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-project-runtime-"));
 	try {
-		await Promise.all([fs.mkdir(path.join(root, "a")), fs.mkdir(path.join(root, "b"))]);
+		await Promise.all(["a", "b", "peer"].map(name => fs.mkdir(path.join(root, name))));
 		const peerScript = `
-${bootstrapFixture}
-const native = await startBootstrap("independent-process");
+import { acquireBrowserProject } from ${registryModule};
+import { closeWebServer, ensureWebServer } from ${serverModule};
+const project = await acquireBrowserProject(process.env.OWNERSHIP_PROJECT);
 try {
-	console.log(JSON.stringify({ url: native.loopbackUrl }));
+	const server = await ensureWebServer();
+	await project.activate(() => ({ bound: false }), { allowLan: false });
+	console.log(JSON.stringify({ url: server.loopbackUrl, projectId: project.projectId }));
 	await Bun.stdin.text();
 } finally {
-	await native.close();
+	await project.close();
 	await closeWebServer();
 }
 `;
 		const result = await runScenario<{
 			reused: boolean;
-			sameNativeListener: boolean;
 			independentListener: boolean;
-			devInfo: number;
-			webInfo: number;
-			missingCapability: number;
-			wrongCapability: number;
-			wrongOrigin: number;
-			wrongHost: number;
-			browserBootstrap: number;
-			scopedBrowserCookie: boolean;
-			browserCookieReused: boolean;
-			browserCookieRequired: number;
-			publicTargetHidden: boolean;
+			projects: { root: string; mode: string }[];
+			projectIdsPublished: boolean;
+			activeInfo: number[];
+			exitingInfo: number;
 			closedInfo: number;
-			closedNative: number;
 			survivingInfo: number;
 			localStopped: boolean;
+			foreignInfo: number;
 			peerSurviving: number;
 			peerExit: number | null;
 		}>(
 			root,
 			`
 	const peer = ptree.spawn([process.execPath, "--eval", ${JSON.stringify(peerScript)}], {
-		cwd: root, env: { ...process.env }, stdin: "pipe", stderr: "full", timeout: 35_000, subreaper: true,
+		cwd: root, env: { ...process.env, OWNERSHIP_PROJECT: path.join(root, "peer") },
+		stdin: "pipe", stderr: "full", timeout: 35_000, subreaper: true,
 	});
 	let peerDone;
 	let a;
 	let b;
-	let native;
 	try {
 		const reader = peer.stdout.getReader();
 		let ready = "";
@@ -314,62 +267,33 @@ try {
 			reader.releaseLock();
 		}
 		peerDone = peer.wait({ allowNonZero: true, allowAbort: true });
-		const peerUrl = JSON.parse(ready.slice(0, ready.indexOf("\\n"))).url;
+		const peerAddress = JSON.parse(ready.slice(0, ready.indexOf("\\n")));
 		const server = await ensureWebServer();
 		const reused = (await ensureWebServer()).loopbackUrl === server.loopbackUrl;
-		a = await acquireBrowserProject(path.join(root, "a"), "aireq");
-		b = await acquireBrowserProject(path.join(root, "b"), "webgui");
-		native = await startBootstrap(a.projectId);
+		a = await acquireBrowserProject(path.join(root, "a"));
+		b = await acquireBrowserProject(path.join(root, "b"));
 		await a.activate(() => ({ bound: false }), { allowLan: false });
 		await b.activate(() => ({ bound: false }), { allowLan: false });
-		async function status(url, options = {}) {
-			const response = await fetch(url, { ...options, signal: AbortSignal.timeout(5_000) });
+		async function status(url) {
+			const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
 			await response.body?.cancel();
 			return response.status;
 		}
-		const infoUrl = project => server.loopbackUrl + "api/omp/session-info?projectId=" + project.projectId;
-		const devInfo = await status(infoUrl(a));
-		const webInfo = await status(infoUrl(b));
-		const nativeUrl = new URL(native.loopbackUrl);
-		const publicDevBase = server.loopbackUrl + "aireq/" + a.projectId + "/";
-		const capability = nativeUrl.pathname.slice(new URL(publicDevBase).pathname.length, -1);
-		const browserHeaders = { Origin: nativeUrl.origin };
-		const missingCapability = await status(publicDevBase + "api/browser", { headers: browserHeaders });
-		const wrongCapability = await status(publicDevBase +
-			(capability[0] === "0" ? "1" : "0") + capability.slice(1) + "/api/browser", { headers: browserHeaders });
-		const bootstrapUrl = new URL("api/browser", nativeUrl);
-		const wrongOrigin = await status(bootstrapUrl, { headers: { Origin: "http://attacker.invalid" } });
-		const wrongHost = await status(bootstrapUrl, { headers: { Host: "attacker.invalid" } });
-		const bootstrap = await fetch(bootstrapUrl, {
-			headers: browserHeaders, signal: AbortSignal.timeout(5_000),
-		});
-		const browserBootstrap = bootstrap.status;
-		const setCookie = bootstrap.headers.get("set-cookie");
-		const cookiePath = setCookie?.split(";")
-			.map(part => part.trim()).find(part => part.toLowerCase().startsWith("path="))?.slice(5);
-		const scopedBrowserCookie = cookiePath === nativeUrl.pathname;
-		const browser = await bootstrap.json();
-		const repeated = await fetch(bootstrapUrl, {
-			headers: { ...browserHeaders, Cookie: setCookie?.split(";")[0] ?? "" },
-			signal: AbortSignal.timeout(5_000),
-		});
-		const repeatedBrowser = await repeated.json();
-		const browserCookieReused = repeated.status === 200 && repeatedBrowser.browserId === browser.browserId;
-		const browserCookieRequired = await status(new URL("api/requirements", nativeUrl), { headers: browserHeaders });
+		const infoUrl = (projectId, url = server.loopbackUrl) => url + "api/omp/session-info?projectId=" + projectId;
+		const activeInfo = await Promise.all([status(infoUrl(a.projectId)), status(infoUrl(b.projectId))]);
+		const foreignInfo = await status(infoUrl(peerAddress.projectId));
 		const projectsResponse = await fetch(server.loopbackUrl + "api/omp/projects", {
 			signal: AbortSignal.timeout(5_000),
 		});
 		if (projectsResponse.status !== 200) throw new Error("Process project list is unavailable");
-		const publicProjects = await projectsResponse.json();
-		if (!publicProjects.projects.some(project => project.projectId === a.projectId && project.mode === "aireq") ||
-			!publicProjects.projects.some(project => project.projectId === b.projectId && project.mode === "webgui"))
-			throw new Error("Process project list omitted an owned mode");
-		const publicTargetHidden = !JSON.stringify(publicProjects).includes(capability);
-		await native.close();
+		const { projects: publicProjects } = await projectsResponse.json();
+		const projects = publicProjects.map(({ root, mode }) => ({ root, mode }));
+		const projectIdsPublished = [a, b].every(lease => publicProjects.some(project => project.projectId === lease.projectId));
+		await a.markExiting();
+		const exitingInfo = await status(infoUrl(a.projectId));
 		await a.close();
-		const closedInfo = await status(infoUrl(a));
-		const closedNative = await status(bootstrapUrl, { headers: browserHeaders });
-		const survivingInfo = await status(infoUrl(b));
+		const closedInfo = await status(infoUrl(a.projectId));
+		const survivingInfo = await status(infoUrl(b.projectId));
 		await b.close();
 		await closeWebServer();
 		let localStopped = false;
@@ -378,23 +302,18 @@ try {
 		} catch {
 			localStopped = true;
 		}
-		const peerSurviving = await status(new URL("api/browser", peerUrl), {
-			headers: { Origin: new URL(peerUrl).origin },
-		});
+		const peerSurviving = await status(infoUrl(peerAddress.projectId, peerAddress.url));
 		peer.stdin.end();
 		const stopped = await peerDone;
 		return {
 			reused,
-			sameNativeListener: nativeUrl.origin === new URL(server.loopbackUrl).origin,
-			independentListener: new URL(peerUrl).origin !== nativeUrl.origin,
-			devInfo, webInfo, closedInfo, closedNative, survivingInfo, localStopped, peerSurviving,
-			missingCapability, wrongCapability, wrongOrigin, wrongHost, browserBootstrap,
-			scopedBrowserCookie, browserCookieReused, browserCookieRequired, publicTargetHidden,
+			independentListener: peerAddress.url !== server.loopbackUrl,
+			projects, projectIdsPublished, activeInfo, exitingInfo, closedInfo, survivingInfo, foreignInfo,
+			localStopped, peerSurviving,
 			peerExit: stopped.exitCode,
 		};
 	} finally {
 		try {
-			await native?.close();
 			await Promise.all([a?.close(), b?.close()]);
 			await closeWebServer();
 		} finally {
@@ -406,23 +325,18 @@ try {
 		);
 		expect(result).toEqual({
 			reused: true,
-			sameNativeListener: true,
 			independentListener: true,
-			devInfo: 409,
-			webInfo: 200,
-			missingCapability: 404,
-			wrongCapability: 404,
-			wrongOrigin: 403,
-			wrongHost: 403,
-			browserBootstrap: 200,
-			scopedBrowserCookie: true,
-			browserCookieReused: true,
-			browserCookieRequired: 401,
-			publicTargetHidden: true,
+			projects: [
+				{ root: await fs.realpath(path.join(root, "a")), mode: "webgui" },
+				{ root: await fs.realpath(path.join(root, "b")), mode: "webgui" },
+			],
+			projectIdsPublished: true,
+			activeInfo: [200, 200],
+			exitingInfo: 409,
 			closedInfo: 404,
-			closedNative: 404,
 			survivingInfo: 200,
 			localStopped: true,
+			foreignInfo: 404,
 			peerSurviving: 200,
 			peerExit: 0,
 		});
@@ -434,10 +348,10 @@ try {
 test("failed native root cleanup retains real project locks until retry and never releases independent owners", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-project-strict-exit-"));
 	try {
-		await Promise.all(["a", "b", "aireq", "peer"].map(name => fs.mkdir(path.join(root, name))));
+		await Promise.all(["a", "b", "independent", "peer"].map(name => fs.mkdir(path.join(root, name))));
 		const peerScript = `
 import { acquireBrowserProject } from ${registryModule};
-const lease = await acquireBrowserProject(process.env.OWNERSHIP_PROJECT, "aireq");
+const lease = await acquireBrowserProject(process.env.OWNERSHIP_PROJECT);
 try {
 	console.log(JSON.stringify({ ready: true }));
 	await Bun.stdin.text();
@@ -477,7 +391,7 @@ try {
 		stdin: "pipe", timeout: 35_000, subreaper: true,
 	});
 	let peerDone;
-	let aireq;
+	let independentLease;
 	let nextOwner;
 	let closeSpy;
 	let failing = true;
@@ -498,7 +412,7 @@ try {
 		peerDone = peer.wait({ allowNonZero: true, allowAbort: true });
 		activateNativeWebGuiComposition();
 		enableWebGuiNativeSessions();
-		aireq = await acquireBrowserProject(path.join(root, "aireq"), "aireq");
+		independentLease = await acquireBrowserProject(path.join(root, "independent"));
 		const a = await openWebGuiNativeProject(path.join(root, "a"));
 		const b = await openWebGuiNativeProject(path.join(root, "b"));
 		const model = getTestModel("ascend");
@@ -542,19 +456,19 @@ try {
 			ref?.session === current && readBrowserProject(a.projectId)?.nativeSessions?.has(current);
 		const independentRootSettled = !sibling.agentRegistry.get(sibling.getAgentId());
 		const cleanupCallsAfterFailure = cleanupCalls;
-		const afterFailure = await contend(a.root, "aireq");
-		const independentLeaseAfterFailure = await contend(aireq.root, "webgui");
-		const peerAfterFailure = await contend(path.join(root, "peer"), "webgui");
+		const afterFailure = await contend(a.root);
+		const independentLeaseAfterFailure = await contend(independentLease.root);
+		const peerAfterFailure = await contend(path.join(root, "peer"));
 		failing = false;
 		await closeAllWebGuis();
 		const cleanupCallsAfterRetry = cleanupCalls;
-		const afterRetry = await contend(a.root, "aireq");
-		const independentLeaseAfterRetry = await contend(aireq.root, "webgui");
-		const peerAfterRetry = await contend(path.join(root, "peer"), "webgui");
+		const afterRetry = await contend(a.root);
+		const independentLeaseAfterRetry = await contend(independentLease.root);
+		const peerAfterRetry = await contend(path.join(root, "peer"));
 		const projectsAfterRetry = listBrowserProjects().map(({ root, mode }) => ({ root, mode }));
-		nextOwner = await acquireBrowserProject(a.root, "aireq");
+		nextOwner = await acquireBrowserProject(a.root);
 		await closeAllWebGuis();
-		const newOwnerAfterRepeatedExit = await contend(a.root, "webgui");
+		const newOwnerAfterRepeatedExit = await contend(a.root);
 		return {
 			errors, failedPhase, routeRetained: Boolean(routeRetained), independentRootSettled,
 			cleanupCallsAfterFailure, cleanupCallsAfterRetry, closeCalls, afterFailure, afterRetry,
@@ -566,7 +480,7 @@ try {
 		closeSpy?.mockRestore();
 		try {
 			await closeAllWebGuis();
-			await Promise.all([nextOwner?.close(), aireq?.close()]);
+			await Promise.all([nextOwner?.close(), independentLease?.close()]);
 			await closeWebServer();
 		} finally {
 			auth.close();
@@ -587,14 +501,16 @@ try {
 		expect(result.afterRetry).toMatchObject({
 			outcome: "acquired",
 			root: await fs.realpath(path.join(root, "a")),
-			mode: "aireq",
+			mode: "webgui",
 		});
 		expectOccupied(result.independentLeaseAfterFailure);
 		expectOccupied(result.independentLeaseAfterRetry);
 		expectOccupied(result.peerAfterFailure);
 		expectOccupied(result.peerAfterRetry);
 		expectOccupied(result.newOwnerAfterRepeatedExit);
-		expect(result.projectsAfterRetry).toEqual([{ root: await fs.realpath(path.join(root, "aireq")), mode: "aireq" }]);
+		expect(result.projectsAfterRetry).toEqual([
+			{ root: await fs.realpath(path.join(root, "independent")), mode: "webgui" },
+		]);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
@@ -691,10 +607,10 @@ test("borrowed native exit retries strict async cleanup without disposing the or
 		const pendingAfterFailure = current.hasUnsettledAsyncJobTree();
 		const routeRetained = registry.get(current.getAgentId()) === ref &&
 			ref?.session === current && readBrowserProject(handle.projectId)?.nativeSessions?.has(current);
-		const afterFailure = await contend(cwd, "aireq");
+		const afterFailure = await contend(cwd);
 		finishOwnedCleanup.resolve();
 		await closeAllWebGuis();
-		const afterRetry = await contend(cwd, "aireq");
+		const afterRetry = await contend(cwd);
 		const pendingAfterRetry = current.hasUnsettledAsyncJobTree();
 		const independentJobRunning = manager.getJob(independentJob)?.status === "running" &&
 			!manager.getJob(independentJob)?.abortController.signal.aborted;
@@ -733,7 +649,11 @@ test("borrowed native exit retries strict async cleanup without disposing the or
 		expect(result.pendingAfterFailure).toBe(true);
 		expect(result.routeRetained).toBe(true);
 		expectOccupied(result.afterFailure);
-		expect(result.afterRetry).toMatchObject({ outcome: "acquired", root: await fs.realpath(project), mode: "aireq" });
+		expect(result.afterRetry).toMatchObject({
+			outcome: "acquired",
+			root: await fs.realpath(project),
+			mode: "webgui",
+		});
 		expect(result.cleanupCalls).toBe(1);
 		expect(result.pendingAfterRetry).toBe(false);
 		expect(result.independentJobRunning).toBe(true);
@@ -857,10 +777,10 @@ test("failed child SDK startup remains owned by its WebGUI root until resource c
 		const exitErrors = exitFailure ? errors(exitFailure) : [];
 		const childRouteRetained = Boolean(childRef?.session) && registry.get(childId) === childRef;
 		const parentClosesAfterFailedExit = parentClose.mock.calls.length;
-		const afterFailure = await contend(cwd, "aireq");
+		const afterFailure = await contend(cwd);
 		failCleanup = false;
 		await closeAllWebGuis();
-		const afterRetry = await contend(cwd, "aireq");
+		const afterRetry = await contend(cwd);
 		return {
 			startupErrors, exitErrors, parentRouteRetained: Boolean(parentRouteRetained),
 			childRouteRetained, parentToolRead, parentClosesAfterChildFailure,
@@ -894,7 +814,11 @@ test("failed child SDK startup remains owned by its WebGUI root until resource c
 		expect(result.failedCleanupCalls).toBe(3);
 		expect(result.failedChildCloses).toBe(1);
 		expectOccupied(result.afterFailure);
-		expect(result.afterRetry).toMatchObject({ outcome: "acquired", root: await fs.realpath(project), mode: "aireq" });
+		expect(result.afterRetry).toMatchObject({
+			outcome: "acquired",
+			root: await fs.realpath(project),
+			mode: "webgui",
+		});
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}

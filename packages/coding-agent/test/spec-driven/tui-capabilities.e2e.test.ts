@@ -2,9 +2,7 @@ import { expect, test } from "bun:test";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { buildSkillPromptMessage } from "../../src/extensibility/skills";
-import { KnowledgeIndexEngine } from "../../src/knowledge/engine";
 import type { CustomMessageEntry } from "../../src/session/session-entries";
-import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
 import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 import {
 	checkSkillReadAccess,
@@ -19,14 +17,11 @@ import {
 	IMPLEMENTATION,
 	IMPLEMENTATION_PATH,
 	respond,
-	rolePayload,
 	teamStage,
 	type ModelRequest,
 	type Reply,
 } from "./provider-fixture";
 import { tuiTest, withTui } from "./tui-harness";
-import { workflowGit, workflowNativeContext } from "../aireq-workbench/workflow-fixture";
-import { createWorkflowStage, successfulWorkflowReply } from "./tui-materials-cases";
 
 function calls(request: ModelRequest) {
 	return request.messages
@@ -158,7 +153,7 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 );
 
 test.skipIf(!tuiTest || process.platform === "win32")(
-	"ordinary openspec-update-change completes existing requirements maintenance without Dev or implementation",
+	"ordinary openspec-update-change completes existing requirements maintenance without implementation",
 	async () => {
 		const target = "openspec/changes/manual-maintenance/specs/greeting/spec.md";
 		const original =
@@ -202,10 +197,10 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 				},
 			},
 			[120, 36],
-			async ({ cwd, provider, tui, state }) => {
+			async ({ cwd, provider, tui }) => {
 				await tui(
 					"submit",
-					"/skill:openspec-update-change manual-maintenance-beacon 修改已有 manual-maintenance 需求：增加外侧空白裁剪，保持内部空白；仅维护需求，不实施、不测试、不建 Dev 流程。",
+					"/skill:openspec-update-change manual-maintenance-beacon 修改已有 manual-maintenance 需求：增加外侧空白裁剪，保持内部空白；仅维护需求，不实施、不测试。",
 				);
 				await tui("expect", "text", "manual-maintenance-complete", "--timeout", "60000");
 				await tui("wait", "idle", "--timeout", "30000");
@@ -222,22 +217,13 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 				);
 				expect(await Bun.file(path.join(cwd, target)).text()).toBe(updated);
 				expect(await Bun.file(path.join(cwd, IMPLEMENTATION_PATH)).text()).toBe(IMPLEMENTATION);
-				expect((await state()).projects).toEqual([]);
-				expect(await Bun.file(path.join(cwd, ".omp/aireq/state.json")).exists()).toBe(false);
-				expect(provider.requests.every(request => !rolePayload(request) && !teamStage(request))).toBe(true);
+				expect(provider.requests.every(request => !teamStage(request))).toBe(true);
 				expect(calls(completed).map(call => call.name)).toEqual(["read", "read", "write", "read"]);
 			},
 		);
 	},
 	180_000,
 );
-
-const stageSkills: Record<string, string[]> = {
-	requirements: ["jch-grill-me"],
-	solution: [],
-	planner: ["writing-plans"],
-	executor: ["subagent-driven-development", "using-superpowers"],
-};
 
 test("inherited packaged catalogs do not grant hidden methods or leak explicit invocations", async () => {
 	const grill = await loadSpecDrivenSkill("jch", "jch-grill-me");
@@ -320,84 +306,3 @@ test("descendant execution grants snapshot only their parent and survive stale d
 	}
 	expect(() => checkSkillReadAccess(brainstorming, { scope: child })).toThrow(SkillAccessDeniedError);
 });
-
-test("workflow native roles consume indexed Wiki evidence and enforce packaged skill grants", async () => {
-	const { manifest } = await collectSpecDrivenResources(
-		path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
-	);
-	const superpowers = manifest.skills.filter(skill => skill.source === "superpowers").map(skill => skill.name);
-	const skills = [...new Set([...Object.values(stageSkills).flat(), ...superpowers])];
-	const token = "OMP_CAPABILITY_WIKI_EVIDENCE";
-	const fact = `${token}: preserve internal whitespace; trim outer whitespace only.`;
-	const knowledgeDevice = "xd://knowledge_search";
-	const { fixture, view, srId } = await createWorkflowStage("executing", {
-		async setup(fixture) {
-			await Bun.write(path.join(fixture.project, "src/untouched.ts"), "original user bytes\n");
-			await workflowGit(fixture.project, ["add", "--", "src/untouched.ts"], fixture.env);
-			await workflowGit(fixture.project, ["commit", "-m", "Preserved user source"], fixture.env);
-			await workflowGit(fixture.project, ["push", "origin", "HEAD"], fixture.env);
-			const documents = path.join(fixture.root, "wiki-source");
-			await Bun.write(path.join(documents, "greeting.md"), `# Contract\n\n${fact}\n`);
-			const engine = new KnowledgeIndexEngine({
-				cwd: fixture.project,
-				agentDir: path.join(fixture.root, "config/profiles/acceptance/agent"),
-			});
-			try {
-				await engine.init(documents, "capability-contract");
-			} finally {
-				engine.close();
-			}
-		},
-		reply(request) {
-			const context = workflowNativeContext(request);
-			if (!context) return successfulWorkflowReply(request);
-			const executed = calls(request);
-			for (const name of skills) {
-				const target = `skill://${name}:raw`;
-				if (!executed.some(call => call.name === "read" && call.args.path === target))
-					return invoke(request, "read", { i: "Probing native resource grant", path: target });
-			}
-			if (context.role === "requirements") {
-				if (!executed.some(call => call.name === "read" && call.args.path === knowledgeDevice))
-					return invoke(request, "read", { i: "Reading indexed knowledge protocol", path: knowledgeDevice });
-				if (!executed.some(call => call.name === "write" && call.args.path === knowledgeDevice))
-					return invoke(request, "write", {
-						i: "Searching indexed Wiki evidence",
-						path: knowledgeDevice,
-						content: JSON.stringify({ query: token, mode: "grep" }),
-					});
-				if (!executed.some(call => call.name === "write" && call.args.path === "src/untouched.ts"))
-					return invoke(request, "write", {
-						i: "Probing unauthorized mutation",
-						path: "src/untouched.ts",
-						content: "unauthorized\n",
-					});
-			}
-			return successfulWorkflowReply(request);
-		},
-	});
-	await using owned = fixture;
-	const requirements = fixture.provider.requests.findLast(
-		request => workflowNativeContext(request)?.role === "requirements",
-	)!;
-	expect(result(requirements, "read", knowledgeDevice)).toContain("query");
-	expect(result(requirements, "write", knowledgeDevice)).toContain(fact);
-	expect(result(requirements, "write", "src/untouched.ts")).toMatch(/未授权|denied|not allowed|boundary/iu);
-	expect(await Bun.file(path.join(fixture.project, "src/untouched.ts")).text()).toBe("original user bytes\n");
-	const sr = view.srs.find(item => item.id === srId)!;
-	expect(await Bun.file(path.join(sr.worktree!.path, "src/untouched.ts")).text()).toBe("original user bytes\n");
-	for (const [role, allowed] of Object.entries(stageSkills)) {
-		const completed = fixture.provider.requests.findLast(request => workflowNativeContext(request)?.role === role)!;
-		for (const name of skills) {
-			const target = `skill://${name}:raw`;
-			const actual = result(completed, "read", target);
-			if (allowed.includes(name) || (role === "executor" && superpowers.includes(name))) {
-				expect(actual).not.toContain("Skill access denied:");
-				expect(parseFrontmatter(actual, { source: target, repair: false, level: "off" }).frontmatter.name).toBe(
-					name,
-				);
-			} else expect(actual).toContain(`Skill access denied: ${name}`);
-		}
-	}
-	expect(fixture.provider.failures).toEqual([]);
-}, 300_000);

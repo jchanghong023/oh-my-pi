@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
-import { contentText, MARKER, respond, rolePayload, type ModelRequest } from "./provider-fixture";
+import { contentText, MARKER, respond, type ModelRequest } from "./provider-fixture";
 import { clearNativeDraft, eventually, nativeDraftMatches, nativeDraftSnapshot, tuiTest, withTui } from "./tui-harness";
 
 function nativeReadResult(request: ModelRequest, target: string): string {
@@ -48,7 +48,7 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 					},
 				},
 				[120, 36],
-				async ({ cwd, provider, tui, state }) => {
+				async ({ cwd, provider, tui }) => {
 					const coreOpenSpec = [
 						"openspec-apply-change",
 						"openspec-archive-change",
@@ -190,8 +190,6 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 						expect(selected.frontmatter.description).toBeString();
 						const denied = nativeReadResult(completed, deniedPaths.join(";"));
 						for (const other of manualOnly) expect(denied).toContain(`Skill access denied: ${other.name}`);
-						expect((await state()).projects).toEqual([]);
-						expect(await Bun.file(path.join(cwd, ".omp/aireq/state.json")).exists()).toBe(false);
 					}
 					// Explicit user invocations grant only the selected hidden packaged skill.
 					for (const name of [
@@ -219,7 +217,6 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 					const hiddenPath = "skill://brainstorming:raw";
 					const hidden = await readResources("仅探测未授权读取。", hiddenPath);
 					expect(nativeReadResult(hidden, hiddenPath)).toContain("Skill access denied: brainstorming");
-					expect(provider.requests.every(request => !rolePayload(request))).toBe(true);
 				},
 			);
 		},

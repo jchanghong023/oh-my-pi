@@ -6,8 +6,6 @@ import {
 	bunCleanBaseline,
 	budgetedParallel,
 	bunTestSelection,
-	aiReqWorkbenchInputsChanged,
-	isAIReqFrontendInput,
 	isIntegrationCommand,
 	isLimitedIntegrationCommand,
 	prioritizeLocalCommands,
@@ -19,7 +17,7 @@ import { latestLocalTestProducers, type TestProducerRecord } from "./test-report
 import { fulltestCommands } from "./fulltest";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
 
-test("Bun discovery keeps OMP consumers but excludes vendor and explicit packaged verification", async () => {
+test("Bun discovery keeps OMP consumers but excludes vendor tests", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bun-discovery-"));
 	try {
 		await fs.copyFile(path.join(import.meta.dir, "..", "bunfig.toml"), path.join(root, "bunfig.toml"));
@@ -34,10 +32,6 @@ test("Bun discovery keeps OMP consumers but excludes vendor and explicit package
 			path.join(consumer, "consumer.test.ts"),
 			'import { test } from "bun:test"; test("consumer runs", () => { console.log("OMP_CONSUMER_RAN"); });\n',
 		);
-		await Bun.write(
-			path.join(root, "packages/coding-agent/scripts/verify-aireq-workbench-package.ts"),
-			'throw new Error("PACKAGED_VERIFICATION_RAN_WITHOUT_AUTHORIZATION");\n',
-		);
 		const child = Bun.spawn([process.execPath, "test"], { cwd: root, stdout: "pipe", stderr: "pipe" });
 		const [stdout, stderr, code] = await Promise.all([
 			new Response(child.stdout).text(),
@@ -47,59 +41,10 @@ test("Bun discovery keeps OMP consumers but excludes vendor and explicit package
 		expect(code, stdout + stderr).toBe(0);
 		expect(stdout + stderr).toContain("OMP_CONSUMER_RAN");
 		expect(stdout + stderr).not.toContain("VENDOR_TEST_RAN");
-		expect(stdout + stderr).not.toContain("PACKAGED_VERIFICATION_RAN_WITHOUT_AUTHORIZATION");
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
 }, 20_000);
-
-test("Dev dynamic resource inputs select their consumers without selecting original WebGUI or upstream suites", () => {
-	const command = (cwd: string, file: string) => ({ cwd, command: ["bun", "test", file] });
-	const consumers = [
-		command("packages/coding-agent", "test/aireq-workbench/resources.test.ts"),
-		command("packages/coding-agent", "test/aireq-workbench/workflow-process.e2e.test.ts"),
-		command("packages/collab-web", "test/aireq-workbench.test.tsx"),
-	];
-	for (const input of [
-		"packages/aireq-frontend/preview/main.tsx",
-		"packages/aireq-frontend/preview/vite.config.ts",
-		"packages/aireq-frontend/packages/ui/src/styles.css",
-		"packages/aireq-frontend/packages/ui/src/workers/fileSearch.worker.ts",
-		"packages/aireq-frontend/shared/shiki/langs-subset.ts",
-		"packages/aireq-frontend/packages/web/public/material-icons/dark/file.svg",
-		"packages/aireq-frontend/packages/client/src/index.ts",
-		"packages/aireq-frontend/package.json",
-		"packages/aireq-frontend/bun.lock",
-		"packages/aireq-frontend/copy-manifest.json",
-		"packages/aireq-frontend/tsconfig.base.json",
-	]) {
-		expect(isAIReqFrontendInput(input)).toBe(true);
-		for (const consumer of consumers) expect(aiReqWorkbenchInputsChanged(consumer, [input])).toBe(true);
-		for (const unrelated of [
-			command("packages/coding-agent", "test/webgui/core-browser.e2e.test.ts"),
-			command("packages/coding-agent", "test/team/integration.test.ts"),
-			command("packages/coding-agent", "test/aireq-workbench/workflow-store.test.ts"),
-			command("packages/natives", "test/aireq-workbench-vcs.test.ts"),
-		])
-			expect(aiReqWorkbenchInputsChanged(unrelated, [input])).toBe(false);
-	}
-	for (const input of [
-		"packages/aireq-frontend/NOTICE.md",
-		"packages/aireq-frontend/build/aireq/assets/index.js",
-		"packages/aireq-frontend/node_modules/react/index.js",
-		"packages/coding-agent/src/aireq-workbench/assets.generated.txt",
-		"vendor/zcode-frontend/preview/main.tsx",
-		"packages/collab-web/src/main.tsx",
-	]) {
-		expect(isAIReqFrontendInput(input)).toBe(false);
-		for (const consumer of consumers) expect(aiReqWorkbenchInputsChanged(consumer, [input])).toBe(false);
-	}
-	for (const input of [
-		"packages/coding-agent/scripts/aireq-workbench-resources.ts",
-		"packages/coding-agent/src/aireq-workbench/assets.ts",
-	])
-		for (const consumer of consumers) expect(aiReqWorkbenchInputsChanged(consumer, [input])).toBe(true);
-});
 
 test("affected selection needs a qualifying full TS baseline reachable in Git", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bun-baseline-"));
@@ -149,14 +94,14 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "ordinary", suiteRevision: 4 },
+					selection: { mode: "full", group: "ordinary", suiteRevision: 5 },
 				},
 				{
 					scope: "ci-test-ts:local-ts",
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "startup", suiteRevision: 4 },
+					selection: { mode: "full", group: "startup", suiteRevision: 5 },
 				},
 				{
 					scope: "rust-fork-features",
@@ -217,21 +162,21 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		});
 		expect((await bunTestSelection(root, true, null, "different-current-run")).mode).toBe("full");
 		await fs.rm(newer, { recursive: true });
-		// Reports from before the workbench cutover do not cover the current consumers.
+		// Missing or old scope revisions do not cover the current consumers.
 		report.producers[0]!.selection = { mode: "full", group: "ordinary" };
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[0]!.selection = { mode: "full", group: "ordinary", suiteRevision: 4 };
+		report.producers[0]!.selection = { mode: "full", group: "ordinary", suiteRevision: 5 };
 		report.producers[1]!.selection = { mode: "full", group: "startup" };
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[1]!.selection = { mode: "full", group: "startup", suiteRevision: 4 };
+		report.producers[1]!.selection = { mode: "full", group: "startup", suiteRevision: 5 };
 		await save();
 		for (const index of [0, 1]) {
-			report.producers[index]!.selection!.suiteRevision = 3;
+			report.producers[index]!.selection!.suiteRevision = 4;
 			await save();
 			expect((await bunTestSelection(root)).mode).toBe("full");
-			report.producers[index]!.selection!.suiteRevision = 4;
+			report.producers[index]!.selection!.suiteRevision = 5;
 		}
 		await save();
 		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
@@ -265,7 +210,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 			exitCode: 0,
 			status: "passed",
 			report: "available",
-			selection: { mode: "full", group: "ordinary", suiteRevision: 4 },
+			selection: { mode: "full", group: "ordinary", suiteRevision: 5 },
 		};
 		const startup = report.producers.splice(1, 1)[0]!;
 		await save();
@@ -278,7 +223,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.producers.pop();
-		report.producers.push({ ...startup, selection: { mode: "full", group: "ordinary", suiteRevision: 4 } });
+		report.producers.push({ ...startup, selection: { mode: "full", group: "ordinary", suiteRevision: 5 } });
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.producers.pop();
@@ -349,19 +294,11 @@ test("integration chunk classification matches coding-agent test paths only", ()
 		isIntegrationCommand(command("packages/coding-agent", ["test/unit.test.ts", "test/process.e2e.test.ts"])),
 	).toBe(true);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integration/session.test.ts"]))).toBe(true);
-	for (const file of [
-		"test/aireq-workbench/git.test.ts",
-		"test/aireq-workbench/workflow-domain.test.ts",
-		"test/openwiki/native-pool.test.ts",
-		"test/spec-driven/resources.test.ts",
-	]) {
+	for (const file of ["test/openwiki/native-pool.test.ts", "test/spec-driven/resources.test.ts"]) {
 		expect(isIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
 		expect(isLimitedIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
 		expect(isIntegrationCommand(command("packages/tui", [file]))).toBe(false);
 	}
-	expect(isIntegrationCommand(command("packages/coding-agent", ["test/aireq-workbench/cancel-policy.test.ts"]))).toBe(
-		false,
-	);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integrationish.test.ts"]))).toBe(false);
 	expect(isIntegrationCommand(command("packages/tui", ["test/process.e2e.test.ts"]))).toBe(false);
 });
@@ -369,8 +306,7 @@ test("integration chunk classification matches coding-agent test paths only", ()
 test("startup integration chunks bypass only the heavy integration limit", () => {
 	const command = (file: string) => ({ label: "chunk", cwd: "packages/coding-agent", command: ["bun", "test", file] });
 	for (const file of [
-		"test/aireq-workbench/process.e2e.test.ts",
-		"test/aireq-workbench/workflow-process.e2e.test.ts",
+		"test/webgui/core-browser.e2e.test.ts",
 		"test/spec-driven/tui-compact-mixed.e2e.test.ts",
 		"test/goals/goal-autopilot-tui.e2e.test.ts",
 		"test/goals/goal-ctrl-enter-tui.e2e.test.ts",
@@ -378,8 +314,7 @@ test("startup integration chunks bypass only the heavy integration limit", () =>
 		expect(isIntegrationCommand(command(file))).toBe(true);
 		expect(isLimitedIntegrationCommand(command(file))).toBe(false);
 	}
-	expect(isLimitedIntegrationCommand(command("test/aireq-workbench/host.test.ts"))).toBe(false);
-	expect(isLimitedIntegrationCommand(command("test/aireq-workbench/other.e2e.test.ts"))).toBe(true);
+	expect(isLimitedIntegrationCommand(command("test/webgui/native-chat-history.test.ts"))).toBe(false);
 	expect(isLimitedIntegrationCommand(command("test/integration/session.test.ts"))).toBe(true);
 });
 
@@ -403,9 +338,9 @@ test("bounded pool fills ordinary workers past the cap4 heavy queue and drains e
 					"bun",
 					"test",
 					item === "h1"
-						? "test/aireq-workbench/git.test.ts"
+						? "test/openwiki/native-pool.test.ts"
 						: item === "h5"
-							? "test/aireq-workbench/workflow-domain.test.ts"
+							? "test/spec-driven/resources.test.ts"
 							: item.startsWith("h")
 								? "test/integration/session.test.ts"
 								: "test/unit.test.ts",
@@ -485,7 +420,7 @@ test("startup file workers use the fulltest budget without exceeding CPU or comm
 				isLimitedIntegrationCommand({
 					label: "startup",
 					cwd: "packages/coding-agent",
-					command: ["bun", "test", "test/aireq-workbench/process.e2e.test.ts"],
+					command: ["bun", "test", "test/webgui/core-browser.e2e.test.ts"],
 				}),
 			4,
 			async file => {
@@ -577,7 +512,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 		durationSeconds: 12,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 4 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 5 },
 		report: "available",
 	} satisfies TestProducerRecord & { report: string };
 	const put = async (overrides: object = {}, records: unknown[] = [producer]) => {
@@ -657,7 +592,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 			{ startedAt: new Date(now + 1000).toISOString() },
 			{ startedAt: new Date(now - 180_000).toISOString() },
 			{ selection: { ...producer.selection, mode: "affected" } },
-			{ selection: { ...producer.selection, suiteRevision: 3 } },
+			{ selection: { ...producer.selection, suiteRevision: 4 } },
 			{ selection: { tool: "bun", mode: "full", group: "ordinary" } },
 			{ selection: { ...producer.selection, group: "other" } },
 		]) {
@@ -693,7 +628,7 @@ test("each exact chunk keeps its latest usable measurement across interrupted ru
 		durationSeconds,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 4 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 5 },
 		report: "available",
 	});
 	const put = async (name: string, age: number, records: object[], overrides: object = {}) => {
@@ -783,6 +718,9 @@ test("local suites select fork consumers and drain failures without widening to 
 				OMP_TEST_REPORT_DIR: "",
 				OMP_TEST_RUN_ID: "",
 				OMP_TEST_CONCURRENCY: env.OMP_TEST_CONCURRENCY ?? "1",
+				OMP_FULLTEST_AFFECTED: env.OMP_FULLTEST_AFFECTED ?? "",
+				OMP_FULLTEST_BASELINE: env.OMP_FULLTEST_BASELINE ?? "",
+				OMP_FULLTEST_SOURCE_REVISION: env.OMP_FULLTEST_SOURCE_REVISION ?? "",
 				FAIL_FIXTURE: env.FAIL_FIXTURE ?? "",
 				MARKER: marker,
 			},
@@ -815,35 +753,25 @@ test("local suites select fork consumers and drain failures without widening to 
 		]) {
 			await fs.copyFile(path.join(import.meta.dir, file), path.join(root, "scripts", file));
 		}
-		await fs.symlink(
-			path.join(sourceRoot, "node_modules"),
-			path.join(root, "node_modules"),
-			process.platform === "win32" ? "junction" : "dir",
-		);
+		// Only the failure observer's leaf import needs a package. Git for Windows
+		// follows directory junctions during affected discovery, including cached builds.
+		const utils = "node_modules/@oh-my-pi/pi-utils";
+		await fs.mkdir(path.join(root, utils, "src"), { recursive: true });
+		for (const file of ["package.json", "src/expected-cleanup.ts"]) {
+			await fs.copyFile(path.join(sourceRoot, "packages/utils", file), path.join(root, utils, file));
+		}
+		await put(".gitignore", "/node_modules/\n/runs/\n");
 		const fixture = (name: string) =>
 			`import { test } from "bun:test"; import { appendFileSync } from "node:fs"; test(${JSON.stringify(name)}, () => appendFileSync(process.env.MARKER!, ${JSON.stringify(`${name}\n`)}));\n`;
 		const selected = [
 			"packages/ai/test/proxy.test.ts",
-			"packages/natives/test/aireq-workbench-vcs.test.ts",
-			"packages/collab-web/test/aireq-workbench.test.tsx",
 			"packages/collab-web/test/composer.test.tsx",
 			"packages/collab-web/test/transcript.test.tsx",
 			"packages/collab-web/test/tool-view.test.tsx",
 			"packages/collab-web/test/markdown.test.tsx",
-			...[
-				"records",
-				"git",
-				"cancel",
-				"host",
-				"server",
-				"collab",
-				"cli",
-				"resources",
-				"workflow-store",
-				"workflow-git",
-				"workflow-runtime",
-				"requirement-package",
-			].map(name => `packages/coding-agent/test/aireq-workbench/${name}.test.ts`),
+			"packages/coding-agent/test/collab/intranet-relay.test.ts",
+			"packages/coding-agent/test/spec-driven/resources.test.ts",
+			"packages/coding-agent/test/spec-driven/skill-policy.test.ts",
 			"packages/coding-agent/test/spec-driven/process.e2e.test.ts",
 			"packages/coding-agent/test/team/integration.test.ts",
 			"packages/coding-agent/test/goals/goal-runtime.test.ts",
@@ -876,14 +804,8 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/task/worktree.test.ts",
 			"packages/coding-agent/test/rpc.test.ts",
 			"packages/coding-agent/test/settings-full-scope.test.ts",
-			"packages/coding-agent/test/webgui/native-mcp.test.ts",
-			"packages/coding-agent/test/webgui/native-mcp-binding.test.ts",
 		];
 		for (const file of [...selected, ...excluded]) await put(file, fixture(file));
-		await put(
-			"packages/coding-agent/scripts/verify-aireq-workbench-package.ts",
-			'throw new Error("PACKAGED_VERIFICATION_RAN_WITHOUT_AUTHORIZATION");\n',
-		);
 		await put(
 			"packages/coding-agent/test/knowledge-search-tool.test.ts",
 			'import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; test("failure", () => { appendFileSync(process.env.MARKER!, "failure\\n"); expect(Boolean(process.env.FAIL_FIXTURE)).toBe(false); }); test("after failure", () => appendFileSync(process.env.MARKER!, "after-failure\\n"));\n',
@@ -892,9 +814,6 @@ test("local suites select fork consumers and drain failures without widening to 
 		const dry = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--dry-run"]);
 		expect(await executed()).toEqual([]);
 		expect(dry).toContain(`scope=fork-features selected-files=${selected.length + 1} `);
-		expect(dry).not.toContain("verify-aireq-workbench-package.ts");
-		const fullDry = await run([process.execPath, "scripts/ci-test-ts.ts", "all", "--unsharded", "--dry-run"]);
-		expect(fullDry).not.toContain("verify-aireq-workbench-package.ts");
 		for (const file of excluded) expect(dry).not.toContain(file.replace("packages/coding-agent/", ""));
 		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts"], { OMP_TEST_SHARD: "1/20" });
 		const reportRoot = path.join(root, "runs/test-timing");
@@ -910,15 +829,14 @@ test("local suites select fork consumers and drain failures without widening to 
 		const bunProducers = report.producers.filter(producer => producer.scope === expectedScope);
 		expect(bunProducers.length).toBeGreaterThan(0);
 		for (const producer of bunProducers) {
-			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 4 });
+			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 5 });
 			expect(producer.exitCode).toBe(0);
 			expect(producer.status).toBe("passed");
 		}
-		const collabProducer = bunProducers.find(producer => producer.command.includes("test/aireq-workbench.test.tsx"));
+		const collabProducer = bunProducers.find(producer => producer.command.includes("test/composer.test.tsx"));
 		expect(collabProducer?.command.filter(arg => arg.endsWith(".test.tsx")).sort()).toEqual(
 			[
 				"test/composer.test.tsx",
-				"test/aireq-workbench.test.tsx",
 				"test/markdown.test.tsx",
 				"test/tool-view.test.tsx",
 				"test/transcript.test.tsx",
@@ -930,32 +848,8 @@ test("local suites select fork consumers and drain failures without widening to 
 		expect(emptyStartup).toContain("test-command-group=startup chunks=0");
 		expect(await executed()).toEqual([]);
 		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--defer-startup", "--only-startup"], {}, 1);
-		const fulltest = fulltestCommands({ debug: false }, path.join(temp, "home")).find(
-			command => command.label === "test/TypeScript fork feature suite",
-		)!;
-		await run([process.execPath, ...fulltest.argv.slice(1)], {
-			...fulltest.env,
-			CI: "true",
-			OMP_TEST_CONCURRENCY: "2",
-		});
-		expect(await executed()).toEqual(fullMarkers);
-		for (const concurrency of ["2", ""]) {
-			await clear();
-			await run(
-				[process.execPath, "scripts/ci-test-ts.ts", "local-ts"],
-				{
-					CI: "true",
-					OMP_TEST_CONCURRENCY: concurrency,
-					OMP_GATE_EVENT_TOKEN: "isolated-fixture-token",
-					FAIL_FIXTURE: "1",
-				},
-				1,
-			);
-			expect(await executed()).toEqual(fullMarkers);
-		}
 		const startupFiles = [
-			"test/aireq-workbench/process.e2e.test.ts",
-			"test/aireq-workbench/workflow-process.e2e.test.ts",
+			"test/webgui/core-browser.e2e.test.ts",
 			"test/spec-driven/tui-compact-mixed.e2e.test.ts",
 			"test/spec-driven/tui-resources.e2e.test.ts",
 			"test/spec-driven/tui-capabilities.e2e.test.ts",
@@ -970,9 +864,22 @@ test("local suites select fork consumers and drain failures without widening to 
 			);
 		}
 		await clear();
-		const ordinaryOutput = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--defer-startup"]);
+		const ordinary = fulltestCommands({ debug: false }, path.join(temp, "home")).find(
+			command => command.label === "test/TypeScript fork feature suite",
+		)!;
+		const ordinaryOutput = await run(
+			[process.execPath, ...ordinary.argv.slice(1)],
+			{
+				...ordinary.env,
+				CI: "true",
+				OMP_TEST_CONCURRENCY: "2",
+				OMP_GATE_EVENT_TOKEN: "isolated-fixture-token",
+				FAIL_FIXTURE: "1",
+			},
+			1,
+		);
 		expect(ordinaryOutput).toContain("test-command-group=ordinary");
-		for (const file of startupFiles) expect(await executed()).not.toContain(file);
+		expect(await executed()).toEqual(fullMarkers);
 		const startup = fulltestCommands({ debug: false }, path.join(temp, "home")).find(
 			command => command.label === "test/TypeScript startup suite",
 		)!;
@@ -980,6 +887,35 @@ test("local suites select fork consumers and drain failures without widening to 
 		expect(await executed()).toEqual([...fullMarkers, ...startupFiles].sort());
 		const pids = (await fs.readFile(`${marker}.pids`, "utf8")).trim().split("\n");
 		expect(new Set(pids).size).toBe(startupFiles.length);
+		const git = (...args: string[]) => {
+			const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "ignore", stderr: "pipe" });
+			expect(result.exitCode, result.stderr.toString()).toBe(0);
+		};
+		git("init", "-q");
+		git("add", "-f", "packages/coding-agent/test/webgui/core-browser.e2e.test.ts");
+		git(
+			"-c",
+			"user.name=Fixture",
+			"-c",
+			"user.email=fixture@example.invalid",
+			"-c",
+			"commit.gpgsign=false",
+			"commit",
+			"-qm",
+			"fixture",
+		);
+		const affected = [process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--changed=HEAD", "--dry-run"];
+		const testCommand = (output: string, file: string) =>
+			output.split("\n").find(line => line.startsWith("$ ") && line.includes(file));
+		const browserTest = "test/webgui/core-browser.e2e.test.ts";
+		expect(testCommand(await run(affected), browserTest)).toContain("--changed=HEAD");
+		await put("vendor/zcode-frontend/preview/main.tsx", "export {};\n");
+		git("add", "-f", "vendor/zcode-frontend/preview/main.tsx");
+		const frontendChanged = await run(affected);
+		const browserCommand = testCommand(frontendChanged, browserTest);
+		expect(browserCommand).toBeDefined();
+		expect(browserCommand).not.toContain("--changed=HEAD");
+		expect(testCommand(frontendChanged, "test/startup-composer.test.ts")).toContain("--changed=HEAD");
 		const singletonFiles = Array.from(
 			{ length: 23 },
 			(_, i) => `test/settings-${String(i).padStart(2, "0")}.test.ts`,

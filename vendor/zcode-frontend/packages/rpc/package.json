@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "VS Code style IPC communication abstraction framework",
   "type": "module",
-  "types": "./dist/index.d.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
       "default": "./src/index.ts"
     }
   },

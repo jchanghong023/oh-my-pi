@@ -7,11 +7,6 @@ import {
 	buildDeveloperTestAgentResources,
 	createDeveloperTestAgentArchivePlugin,
 } from "./developer-test-agent-resources";
-import {
-	buildAIReqWorkbenchAssets,
-	resetAIReqWorkbenchAssets,
-	writeAIReqWorkbenchAssets,
-} from "./aireq-workbench-resources";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
@@ -76,8 +71,6 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 	try {
 		const webGuiResources = await prepareWebGuiResources(options.repoRoot);
 		await writeWebGuiResources(path.resolve(import.meta.dir, "../src/webgui"), webGuiResources);
-		const workbenchAssets = await buildAIReqWorkbenchAssets();
-		await writeAIReqWorkbenchAssets(workbenchAssets);
 		const openWikiResources = await buildOpenWikiResources();
 		await writeOpenWikiResources(openWikiResources);
 		// Read the manifest after generation: local builds can update it in place.
@@ -147,7 +140,6 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			throw new Error(`Coding-agent binary bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
 		}
 	} finally {
-		await resetAIReqWorkbenchAssets();
 		await resetOpenWikiResources();
 		await resetWebGuiResources(path.resolve(import.meta.dir, "../src/webgui"));
 		if (previousCodesignSetting === undefined) {

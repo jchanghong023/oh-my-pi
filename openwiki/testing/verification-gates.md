@@ -11,14 +11,6 @@ sources:
     resource: repo://openspec/specs/fork-verification-gates/spec.md
   - id: openwiki-source-5b54a58d1b51cd490b0e7162
     resource: repo://package.json
-  - id: openwiki-source-cc7568176733f1a616b77baa
-    resource: repo://packages/coding-agent/test/spec-driven/controller.test.ts
-  - id: openwiki-source-6a1e00f633f30a33142dda91
-    resource: repo://packages/coding-agent/test/spec-driven/process.e2e.test.ts
-  - id: openwiki-source-83a6b241dd44f6e73fb3df58
-    resource: repo://packages/coding-agent/test/spec-driven/tui-harness.ts
-  - id: openwiki-source-2b134bc928f03afe190688ee
-    resource: repo://packages/coding-agent/test/spec-driven/tui-interactions.e2e.test.ts
   - id: openwiki-source-386ebd34093e4b9749d5e10d
     resource: repo://scripts/ci-test-ts.ts
   - id: openwiki-source-4069600cc72980b43d87734e
@@ -48,14 +40,14 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 
 # 验证门禁与行为证据
 
-验证应从改动风险和具体验收场景出发，而不是从命令名称推断覆盖率。本页描述当前实现与[验证规格](../../openspec/specs/fork-verification-gates/spec.md)的合同；**不表示本次运行或通过了任何测试**。纯文档改动通常只需检查内容、差异和链接；不要为了验证文档而运行产品构建或测试。日常操作和授权边界另见[开发生命周期](../workflows/aireq-lifecycle.md)与 [fork 维护](../operations/fork-maintenance.md)。
+验证应从改动风险和具体验收场景出发，而不是从命令名称推断覆盖率。本页描述当前实现与[验证规格](../../openspec/specs/fork-verification-gates/spec.md)的合同；**不表示本次运行或通过了任何测试**。纯文档改动通常只需检查内容、差异和链接；不要为了验证文档而运行产品构建或测试。日常操作和授权边界另见 [fork 维护](../operations/fork-maintenance.md)。
 
 ## 选择入口
 
 | 入口 | 实际职责和边界 |
 | --- | --- |
 | `bun run fastcheck` | TS lint、格式与类型检查，以及 Rust 格式、clippy 等静态检查和必要编译。**不执行任何测试**，包括冒烟或门禁自测。 |
-| `bun run fulltest` | 本平台的静态检查、native 准备、fork 功能测试与隔离 dev-TUI PTY 冒烟；默认 Bun 和 Rust 可根据合格基线选受影响范围，不能称为全仓新回归。 |
+| `bun run fulltest` | 本平台的静态检查、native 准备、fork 功能测试与隔离原生 TUI PTY 冒烟；默认 Bun 和 Rust 可根据合格基线选受影响范围，不能称为全仓新回归。 |
 | `bun run fulltest --full` | 当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 和脚本测试；不采用 fork 白名单或增量选测，但仍排除 `vendor/openwiki` 自身测试、独立授权的桌面输入和其他不适用项。 |
 | `bun run slowtest` | 本机默认 fulltest 一次，另在需要且可用时执行 Linux WSL fulltest；不是 `--full` 的别名。无适用 WSL 时仍保留本机验证。 |
 
@@ -117,9 +109,9 @@ fulltest 将脚本、静态检查和测试绑定到同一 post-native source ide
 | 改动域 | 先找的焦点证据 | 需要扩大时 |
 | --- | --- | --- |
 | 门禁选择、超时、进程回收、报告 | `scripts/test-gate-delta.test.ts`、`test-gate-runtime.test.ts`、`test-reporting.test.ts` | 对应 `fulltest.test.ts`、`slowtest.test.ts` 和获授权的真实入口；短任务自测不替代真实门禁。 |
-| Dev/OpenSpec 编排与资源 | `test/spec-driven/controller.test.ts`、`resources.test.ts` | `process.e2e.test.ts`、资源进程测试及相关 `tui-*.e2e.test.ts`，覆盖真实入口、失败和生命周期。 |
+| 独立 OpenSpec、Superpowers 与技能资源 | `test/spec-driven/resources.test.ts`、`test/spec-driven/skill-policy.test.ts` | `test/spec-driven/process-resources.e2e.test.ts` 覆盖公开 CLI、打包资源和 schema 行为。 |
 | Knowledge 文档索引 | 相关消费者测试及 `pi-knowledge`、`pi-natives` fork Rust 测试 | 跨语言或配置变更还需相应进程和索引回归；见 [Knowledge 文档索引](../concepts/knowledge-document-index.md)。 |
-| TUI 输入、状态和焦点 | 相应组件/控制器测试 | 相关 spec-driven TUI PTY 场景和隔离 dev-TUI 冒烟，保留取消、恢复、焦点等不同边界。 |
+| TUI 输入、状态和焦点 | 相应组件/控制器测试 | 隔离原生 TUI PTY 冒烟，保留取消、恢复、焦点等不同边界。 |
 
 路径中的 `test/` 指 `packages/coding-agent/test/`。局部 UT 可证明其断言的逻辑；真实子进程覆盖启动和协议，但本地 fixture 不证明真实提供者认证。参考终端或虚拟终端可验证渲染模型，PTY 上实际源码 TUI 可验证终端交互，但都不是共享桌面真实 GUI 输入。真实桌面输入需要另行明确授权，门禁记作 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`；真实模型质量、公司内网与真实认证也需单独授权和证据。
 

@@ -180,7 +180,7 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 						if (!project) return new Response("Project required", { status: 404 });
 						if (url.pathname === WEBGUI_SERVER_INFO_PATH)
 							return Response.json({ workspaces: [{ path: project.root }], businessAvailable: false });
-						if (host.upgrade(request, { data: { kind: "webgui", project, workspacePath: project.root } })) return;
+						if (host.upgrade(request, { data: { project, workspacePath: project.root } })) return;
 						return new Response("WebSocket required", { status: 426 });
 					}
 					if (url.pathname === "/" || url.pathname === "/components")
@@ -372,7 +372,7 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 					activeSession.agent.streamFn = () => {
 						throw new Error("Scenario must install a controlled reply before sending");
 					};
-					lease = await acquireBrowserProject(cwd, "webgui");
+					lease = await acquireBrowserProject(cwd);
 					await lease.activate(() => readWebGuiSessionInfo(activeSession), {
 						allowLan: false,
 						nativeSession: activeSession,

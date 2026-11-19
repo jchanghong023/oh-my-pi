@@ -22,7 +22,7 @@ import {
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
-import type { DescribeContext, NativeChild } from "@oh-my-pi/pi-tui/native/node";
+import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { DisplayContract, type DisplayFrame } from "../../tui/test/helpers/display-contract";
 import { withoutTerminalMultiplexer } from "../../tui/test/helpers/terminal-multiplexer";
@@ -129,7 +129,7 @@ describe("InteractiveMode live working label", () => {
 		expect(Bun.stringWidth(rows[0] ?? "")).toBeLessThanOrEqual(COLUMNS);
 	});
 
-	it("drives compact animation from visible running actions, not the whole-turn marker", async () => {
+	it("shares the status spinner's motion for live compact model stages", async () => {
 		const terminal = new VirtualTerminal(100, 29);
 		const composer = new Composer({ terminal, tuiOptions: { renderScheduler: new VirtualRenderScheduler() } });
 		const current = new AgentSession({
@@ -142,63 +142,76 @@ describe("InteractiveMode live working label", () => {
 		const live = new InteractiveMode(current, "test", undefined, undefined, undefined, undefined, composer);
 		try {
 			await live.init({ suppressWelcomeIntro: true });
-			live.ensureLoadingAnimation();
-			const thought = createAssistantMessage("");
-			thought.content = [{ type: "thinking", thinking: "WORKING_LIFETIME_THOUGHT" }];
-			live.noteDisplayableThinkingContent(thought);
-			current.agent.state.streamMessage = thought;
-			current.agent.state.activeThinkingIndex = 0;
+			const { agent } = current;
+			const drain = () => live.eventController.runSerialized(async () => {});
 			const activity = () => live.compactThinkingPreview.render(COLUMNS);
-			const shimmering = () => {
-				const visit = (node: { k?: string; c?: readonly unknown[] }): boolean =>
-					node.k === "shimmer" ||
-					(node.c ?? []).some(
-						child =>
-							typeof child === "object" &&
-							child !== null &&
-							visit(child as { k?: string; c?: readonly unknown[] }),
-					);
-				return visit(live.compactThinkingPreview.describe(nativeContext));
-			};
-			// New visible prose is its own activity signal, even without a whole-turn marker.
-			setSystemTime(8_000);
-			expect(live.statusLine.getTurnElapsedMs()).toBeNull();
-			expect(shimmering()).toBe(false);
-			expect(Bun.stripANSI(activity()[1]!)).toContain("正在思考");
-			expect(Bun.stripANSI(activity()[1]!)).toContain("WORKING_LIFETIME_THOUGHT");
-			setSystemTime(10_000);
-			expect(shimmering()).toBe(true);
-			const running = activity();
-			setSystemTime(10_500);
-			expect(activity().map(line => Bun.stripANSI(line))).toEqual(running.map(line => Bun.stripANSI(line)));
-			expect(activity()).not.toEqual(running);
-
-			// Ending the thinking action stops its animation immediately, even while the turn marker runs.
-			live.statusLine.markActivityStart();
-			expect(live.statusLine.getTurnElapsedMs()).toBe(0);
-			current.agent.state.activeThinkingIndex = undefined;
-			await live.eventController.handleEvent({
-				type: "message_update",
-				message: thought,
-				assistantMessageEvent: {
-					type: "thinking_end",
-					contentIndex: 0,
-					content: "WORKING_LIFETIME_THOUGHT",
-					partial: thought,
-				},
-			});
-			expect(shimmering()).toBe(false);
-			const stopped = activity();
-			expect(Bun.stripANSI(stopped[1]!)).toContain("思考完成");
-			expect(Bun.stripANSI(stopped[1]!)).toContain("用时");
-			setSystemTime(11_000);
-			expect(activity()).toEqual(stopped);
-
-			// compact still hides the independent working row; clean/detailed restore it.
+			const shimmerWords = (node: NativeNode): string[] => [
+				...(node.k === "shimmer" ? (node.p?.spans ?? []).map(span => span.t) : []),
+				...(node.c ?? []).flatMap(child => ("k" in child ? shimmerWords(child) : [])),
+			];
+			const shimmering = () => shimmerWords(live.compactThinkingPreview.describe(nativeContext));
 			const ansi = () => Bun.stripANSI(live.statusContainer.render(COLUMNS).join("\n"));
 			const roles = () => nativeRoles(live.statusContainer.describe(nativeContext)!);
+
+			setSystemTime(8_000);
+			agent.state.isStreaming = true;
+			agent.emitExternalEvent({ type: "agent_start" });
+			agent.emitExternalEvent({ type: "turn_start" });
+			await drain();
+			expect(live.statusLine.getTurnElapsedMs()).toBe(0);
+			expect(shimmering()).toEqual(["模型：等待响应"]);
+
+			const marker = "LIVE_THOUGHT_MARKER";
+			const empty = { ...createAssistantMessage(""), content: [] };
+			const thinkingStart = { ...empty, content: [{ type: "thinking" as const, thinking: "" }] };
+			const thought = { ...empty, content: [{ type: "thinking" as const, thinking: marker }] };
+			agent.emitExternalEvent({ type: "message_start", message: empty });
+			agent.emitExternalEvent({
+				type: "message_update",
+				message: thinkingStart,
+				assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: thinkingStart },
+			});
+			agent.emitExternalEvent({
+				type: "message_update",
+				message: thought,
+				assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: marker, partial: thought },
+			});
+			await drain();
+
+			// The model label animates immediately without moving or recoloring the thinking prose.
+			expect(live.statusLine.getTurnElapsedMs()).toBe(0);
+			expect(shimmering()).toEqual(["模型：正在思考"]);
+			const running = activity();
+			expect(Bun.stripANSI(running[0]!)).toContain("模型：正在思考");
+			expect(Bun.stripANSI(running[0]!)).toContain(marker);
+			expect(running.slice(1)).toEqual(["", ""]);
 			expect(live.statusContainer.render(COLUMNS)).toEqual([]);
 			expect(roles()).not.toContain("omp.working");
+			setSystemTime(8_500);
+			const animated = activity();
+			expect(animated.map(line => Bun.stripANSI(line))).toEqual(running.map(line => Bun.stripANSI(line)));
+			expect(animated[0]).not.toEqual(running[0]);
+
+			agent.emitExternalEvent({
+				type: "message_update",
+				message: thought,
+				assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: marker, partial: thought },
+			});
+			await drain();
+			// Finishing thinking removes its prose; only the current model stage can animate.
+			const waiting = Bun.stripANSI(activity()[0]!);
+			expect(waiting).toContain("模型：等待响应");
+			expect(waiting).not.toContain(marker);
+			expect(waiting).not.toContain("思考完成");
+			expect(shimmering()).toEqual(["模型：等待响应"]);
+
+			agent.emitExternalEvent({ type: "message_end", message: thought });
+			await drain();
+			expect(live.statusLine.getTurnElapsedMs()).toBe(500);
+			expect(shimmering()).toEqual([]);
+			expect(activity()).toEqual(["", "", ""]);
+
+			// The independent working row returns outside compact while the run is still open.
 			for (const displayMode of ["clean", "detailed"] as const) {
 				cfgDisplayMode.override(current.settings, displayMode);
 				await Promise.resolve();
@@ -211,6 +224,7 @@ describe("InteractiveMode live working label", () => {
 			expect(roles()).not.toContain("omp.working");
 		} finally {
 			live.stop();
+			current.agent.state.isStreaming = false;
 			setSystemTime();
 			await current.dispose();
 		}

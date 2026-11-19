@@ -935,35 +935,45 @@ test("retained real edit does not move when the next assistant stream is empty o
 				await tui("submit", "CLI_EDIT_PROMPT");
 				await waiting.promise;
 				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(`${edited}\n`);
+				const collapsedDiff = (text: string) =>
+					text.includes("本轮改动 1 文件 · Ctrl+O 查看全部") &&
+					text.includes("retained-edit.ts") &&
+					text.includes("EDIT_CLI_01") &&
+					!text.includes("EDIT_CLI_46");
+				const expandedDiff = "本轮改动 1 文件 · ↑/↓ 滚动 · Esc 收起";
 				const collapsed = await eventually(
-					() => screen.checkpoint("compact edit initially collapsed"),
-					frame =>
-						frame.screen.includes("EDIT_CLI_01") &&
-						!frame.screen.includes("EDIT_CLI_46") &&
-						frame.screen.includes("CLI_READ_RESULT"),
+					() => screen.checkpoint("compact net diff initially shows a bounded preview"),
+					frame => collapsedDiff(frame.screen) && frame.screen.includes("CLI_READ_RESULT"),
 				);
 				expect(collapsed.screen).not.toContain("retained-search.txt");
-				expect(collapsed.screen).toContain("CLI_READ_RESULT");
+				expectVisibleDraft(collapsed, "", 100, 80);
 				await tui("key", "press", "Ctrl+O");
 				const expanded = await eventually(
-					() => screen.checkpoint("compact edit expanded"),
-					frame => frame.screen.includes("EDIT_CLI_01") && frame.screen.includes("EDIT_CLI_46"),
+					() => screen.checkpoint("compact net diff opens at the start of the file"),
+					frame => frame.screen.includes(expandedDiff) && frame.screen.includes("EDIT_CLI_01"),
 				);
+				expect(expanded.screen).toContain("修改 retained-edit.ts");
+				expect(expanded.screen).toContain("const original = 0;");
+				expect(expanded.screen).not.toContain("EDIT_CLI_46");
 				expect(expanded.screen).not.toContain("retained-search.txt");
 				expect(expanded.screen).toContain("CLI_READ_RESULT");
-				await tui("key", "press", "Ctrl+O");
+				await tui("key", "press", "End");
 				await eventually(
-					() => screen.checkpoint("compact edit collapsed again"),
-					frame => frame.screen.includes("EDIT_CLI_01") && !frame.screen.includes("EDIT_CLI_46"),
+					() => screen.checkpoint("scrolling the compact net diff reveals its tail"),
+					frame => frame.screen.includes(expandedDiff) && frame.screen.includes("EDIT_CLI_46"),
 				);
-				await tui("key", "press", "Ctrl+O");
+				await tui("key", "press", "Escape");
 				const baseline = await eventually(
-					() => screen.checkpoint("retained edit before assistant stream"),
-					frame => frame.screen.includes("CLI_EDIT_PROMPT") && frame.screen.includes("EDIT_CLI_46"),
+					() => screen.checkpoint("Esc restores the compact net diff preview and composer focus"),
+					frame =>
+						collapsedDiff(frame.screen) &&
+						frame.screen.includes("CLI_EDIT_PROMPT") &&
+						frame.screen.includes("CLI_READ_RESULT") &&
+						nativeDraftMatches(frame.screen, "", frame.cursor),
 				);
 				const editMarkers = Array.from(baseline.screen.matchAll(/EDIT_CLI_\d{2}/gu), match => match[0]);
 				expect(editMarkers.length).toBeGreaterThan(1);
-				const markers = ["CLI_EDIT_PROMPT", ...editMarkers];
+				const markers = ["CLI_EDIT_PROMPT", "本轮改动 1 文件", ...editMarkers, "CLI_READ_RESULT"];
 				const rows = (text: string) =>
 					markers.map(marker => {
 						const matches = text
@@ -1035,6 +1045,7 @@ test("retained real edit does not move when the next assistant stream is empty o
 						frame.screen.includes("retained-read.txt"),
 				);
 				expect(detailed.screen).toContain("retained-search.txt");
+				expect(detailed.screen).not.toContain("本轮改动");
 				await tui("key", "press", "Ctrl+O");
 				await eventually(
 					() => screen.checkpoint("detailed edit expanded"),
@@ -1052,6 +1063,8 @@ test("retained real edit does not move when the next assistant stream is empty o
 					frame => !frame.screen.includes("EDIT_CLI_01") && !frame.screen.includes("retained-read.txt"),
 				);
 				expect(clean.screen).not.toContain("retained-search.txt");
+				expect(clean.screen).not.toContain("本轮改动");
+				expect(clean.screen).not.toContain("CLI_READ_RESULT");
 				await tui("key", "press", "Ctrl+O");
 				await tui("expect", "text", "Tool activity is hidden", "--timeout", "30000");
 				const cleanAfterToggle = await screen.checkpoint("clean expansion remains hidden");
@@ -1061,15 +1074,12 @@ test("retained real edit does not move when the next assistant stream is empty o
 				await tui("expect", "text", "compact", "--timeout", "30000");
 				const restored = await eventually(
 					() => screen.checkpoint("compact edit restored after transient output closes"),
-					frame =>
-						frame.screen.includes("EDIT_CLI_01") &&
-						!frame.screen.includes("EDIT_CLI_46") &&
-						!frame.screen.includes("CLI_READ_RESULT"),
+					frame => collapsedDiff(frame.screen) && !frame.screen.includes("CLI_READ_RESULT"),
 				);
 				// After the bounded output preview closes, only the completed read activity remains.
 				const readRows = restored.screen.split("\n").filter(line => line.includes("retained-read.txt"));
 				expect(readRows).toHaveLength(1);
-				expect(readRows[0]).toContain("读取完成");
+				expect(readRows[0]).toContain("Agent：上次读取完成");
 				expect(readRows[0]).toContain("Reading retained evidence");
 				expect(restored.screen).not.toContain("retained-search.txt");
 				expect(provider.requests).toHaveLength(requests);
@@ -1091,7 +1101,7 @@ test("retained real edit does not move when the next assistant stream is empty o
 
 test("compact PTY activity keeps path identity, output and thinking tails, and the draft", async () => {
 	if (!tuiTest) throw new Error("tui-test is required for the compact activity regression");
-	const [wide, narrow, height] = [104, 48, 40] as const;
+	const [wide, narrow, height] = [112, 48, 40] as const;
 	const prompt = "MIXED_ROOT_BEGIN compact activity";
 	const draft = "ACTIVITY_UNSENT_DRAFT";
 	const command = "bun ./compact-output.ts";
@@ -1109,6 +1119,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 		args: { path: file, content: evidence },
 		intent,
 	}));
+	const startSecondWrite = Promise.withResolvers<void>();
 	const startBash = Promise.withResolvers<void>();
 	const print = Promise.withResolvers<void>();
 	const quiet = Promise.withResolvers<void>();
@@ -1173,6 +1184,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				async reply(request) {
 					const lastUser = request.messages.findLast(message => message.role === "user");
 					if (!contentText(lastUser?.content).includes(prompt)) return respond(request);
+					if (step === 1) await startSecondWrite.promise;
 					if (step < writes.length) {
 						return {
 							text: step === 0 ? "ACTIVITY_HISTORY_START" : undefined,
@@ -1205,8 +1217,9 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 			async ({ agentDir, cwd, tui, screen }) => {
 				const actionRows = (text: string, label: string) =>
 					text.split("\n").filter(line => line.trimStart().startsWith(label));
-				const hasSource = (line: string, source: (typeof sources)[number]) =>
-					line.includes(`${source.parent}/shared.txt`);
+				const writeDone = "Agent：上次写入完成";
+				const bashRunning = "Agent：正在执行";
+				const modelThinking = "模型：正在思考";
 				const observe = (label: string, matches: (text: string) => boolean) =>
 					eventually(
 						() => screen.checkpoint(label),
@@ -1243,52 +1256,45 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				const style = ({ fg, bold, dim }: Cell) => JSON.stringify([fg, bold, dim]);
 				const labelStyles = (cells: Cell[]) => cells.map(style).join("/");
 				const bashRuns = async (text: string, marker: string) => {
-					const [header, log, label, intent] = await readRuns(text, "运行中", marker, "正在执行", bash.intent);
+					const [header, log, label, intent] = await readRuns(text, "运行中", marker, bashRunning, bash.intent);
 					expect(header![0]!.x).toBe(1);
 					expect(log![0]!.x).toBe(header![0]!.x);
 					expect(label![0]!.x).toBe(header![0]!.x);
-					expect(intent![0]!.x).toBe(label![0]!.x + Bun.stringWidth("正在执行") + 2);
+					expect(intent![0]!.x).toBe(label![0]!.x + Bun.stringWidth(bashRunning) + 2);
 					return { label: label!, intent: intent! };
 				};
 				await tui("submit", prompt);
 				await tui("type", draft);
-				const fullFiles = await observe("distinct file operations show path before intent", text => {
-					const rows = actionRows(text, "写入完成");
-					return sources.every(source =>
-						rows.some(
-							line => hasSource(line, source) && line.indexOf(source.intent) > line.indexOf("shared.txt"),
-						),
+				const settledForegrounds = new Set<string>();
+				for (const [index, source] of sources.entries()) {
+					const target = `${source.parent}/shared.txt`;
+					const isCurrentWrite = (text: string, matches: (line: string) => boolean) => {
+						const [row, extra] = actionRows(text, writeDone);
+						return !!row && !extra && row.includes(target) && matches(row);
+					};
+					const full = await observe(`${target}: latest write shows path before intent`, text =>
+						isCurrentWrite(text, line => line.indexOf(source.intent) > line.indexOf(target)),
 					);
-				});
-				const [settledLabel, settledTarget, settledIntent] = await readRuns(
-					fullFiles.screen,
-					"写入完成",
-					"south/shared.txt",
-					sources[1]!.intent,
-				);
-				expect(settledTarget![0]!.y).toBe(settledIntent![0]!.y);
-				expect(settledTarget![0]!.x).toBeLessThan(settledIntent![0]!.x);
-				const settledStyle = style(settledTarget![0]!);
-				expect(style(settledLabel![0]!)).toBe(settledStyle);
-				expect(style(settledIntent![0]!)).toBe(settledStyle);
-				await tui("resize", String(narrow), String(height));
-				const files = await observe("equal basenames retain distinct parents at 48 columns", text => {
-					const rows = actionRows(text, "写入完成");
-					return (
-						sources.every(source => rows.some(line => hasSource(line, source))) &&
-						rows.every(line => !line.includes("fixture"))
+					const [label, pathRun, intent] = await readRuns(full.screen, writeDone, target, source.intent);
+					expect(pathRun![0]!.y).toBe(intent![0]!.y);
+					expect(pathRun![0]!.x).toBeLessThan(intent![0]!.x);
+					const settledStyle = style(pathRun![0]!);
+					settledForegrounds.add(pathRun![0]!.fg);
+					expect(style(label![0]!)).toBe(settledStyle);
+					expect(style(intent![0]!)).toBe(settledStyle);
+					await tui("resize", String(narrow), String(height));
+					const files = await observe(`${target}: narrow activity preserves the parent and omits intent`, text =>
+						isCurrentWrite(text, line => !line.includes("fixture")),
 					);
-				});
-				expectVisibleDraft(files, draft, narrow, height);
-				const [north, south] = await readRuns(files.screen, "north/shared.txt", "south/shared.txt");
-				expect(north![0]!.y).not.toBe(south![0]!.y);
-				expect(style(north![0]!)).toBe(settledStyle);
-				expect(style(south![0]!)).toBe(settledStyle);
-				await tui("resize", String(wide), String(height));
+					expectVisibleDraft(files, draft, narrow, height);
+					const [narrowTarget] = await readRuns(files.screen, target);
+					expect(style(narrowTarget![0]!)).toBe(settledStyle);
+					await tui("resize", String(wide), String(height));
+					if (index === 0) startSecondWrite.resolve();
+				}
 				startBash.resolve();
-				const silent = await observe(
-					"silent command identified before output",
-					text => actionRows(text, "正在执行").some(line => line.includes(command)) && text.includes(draft),
+				const silent = await observe("silent command identified before output", text =>
+					actionRows(text, bashRunning).some(line => line.includes(command)),
 				);
 				expectVisibleDraft(silent, draft, wide, height);
 
@@ -1297,29 +1303,27 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				const lastTick = (text: string) => Number(Array.from(text.matchAll(/ACTIVITY_TICK_(\d+)/gu)).at(-1)?.[1]);
 				const running = (text: string) =>
 					text.split("\n").some(line => line.trimStart().startsWith("运行中") && line.includes(command)) &&
-					actionRows(text, "正在执行").some(line => line.includes(bash.intent));
+					actionRows(text, bashRunning).some(line => line.includes(bash.intent));
 				const sampleProgress = () =>
 					observe("Bash repeatedly updates its visible tail", text => running(text) && lastTick(text) >= 6);
 				const firstProgress = await sampleProgress();
 				const initial = await bashRuns(firstProgress.screen, tickPrefix);
-				expect(new Set(initial.label.map(style)).size).toBe(1);
-				const staticLabel = labelStyles(initial.label);
+				const progressSweeps = new Set([labelStyles(initial.label)]);
 				const staticIntent = labelStyles(initial.intent);
 				const seenTicks = new Set([lastTick(firstProgress.screen)]);
 				const started = performance.now();
-				// Sample over more than one quiet threshold: a timer keyed only to call start
-				// must not animate while this same Bash keeps changing readable output.
+				// Keep the active label sweeping while output advances; the intent must not sweep.
 				await eventually(
 					async () => {
 						const frame = await sampleProgress();
 						const rendered = await bashRuns(frame.screen, tickPrefix);
-						expect(labelStyles(rendered.label)).toBe(staticLabel);
+						progressSweeps.add(labelStyles(rendered.label));
 						expect(labelStyles(rendered.intent)).toBe(staticIntent);
 						expectVisibleDraft(frame, draft, wide, height);
 						seenTicks.add(lastTick(frame.screen));
-						return seenTicks.size;
+						return seenTicks.size >= 3 && progressSweeps.size >= 2 && performance.now() - started > 2_000;
 					},
-					count => count >= 3 && performance.now() - started > 2_000,
+					Boolean,
 					12_000,
 				);
 
@@ -1327,7 +1331,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				const finalTail = output.at(-1)!;
 				const observeTail = (label: string) => observe(label, text => running(text) && text.includes(finalTail));
 				const tail = await observeTail("running Bash shows its bounded final tail");
-				expect(actionRows(tail.screen, "正在执行")).toHaveLength(1);
+				expect(actionRows(tail.screen, bashRunning)).toHaveLength(1);
 				expect(tail.screen.split(command)).toHaveLength(2);
 				for (const marker of output.slice(-5)) expect(tail.screen).toContain(marker);
 				expect(tail.screen).not.toContain(output.at(-6)!);
@@ -1339,10 +1343,8 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 					async () => {
 						const frame = await observeTail("Bash stays running while readable output is quiet");
 						const rendered = await bashRuns(frame.screen, finalTail);
-						expect(rendered.label.every(cell => !cell.bold && !cell.dim)).toBe(true);
 						expect(labelStyles(rendered.intent)).toBe(staticIntent);
-						const label = labelStyles(rendered.label);
-						if (label !== staticLabel) sweeps.add(label);
+						sweeps.add(labelStyles(rendered.label));
 						expectVisibleDraft(frame, draft, wide, height);
 						return sweeps.size;
 					},
@@ -1354,7 +1356,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 					"quiet Bash preview stays aligned at 48 columns",
 					text =>
 						text.split("\n").some(line => line.trimStart().startsWith("运行中")) &&
-						actionRows(text, "正在执行").some(line => line.includes(bash.intent)) &&
+						actionRows(text, bashRunning).some(line => line.includes(bash.intent)) &&
 						text.includes(finalTail),
 				);
 				await bashRuns(narrowTail.screen, finalTail);
@@ -1370,7 +1372,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				await observe(
 					"active thinking alongside retained tool output",
 					text =>
-						actionRows(text, "正在思考").some(line => line.includes("ACTIVITY_THINK_FIRST")) &&
+						actionRows(text, modelThinking).some(line => line.includes("ACTIVITY_THINK_FIRST")) &&
 						text.includes(output.at(-1)!),
 				);
 				active.enqueue(
@@ -1379,13 +1381,13 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				const thinking = await observe(
 					"latest portion of active thinking at 48 columns",
 					text =>
-						actionRows(text, "正在思考").some(line => line.includes("ACTIVITY_THINK_TAIL")) &&
+						actionRows(text, modelThinking).some(line => line.includes("ACTIVITY_THINK_TAIL")) &&
 						text.includes(output.at(-1)!),
 				);
 				expect(thinking.screen).not.toContain("ACTIVITY_THINK_FIRST");
 				expect(thinking.screen).not.toContain("ACTIVITY_THINK_HEAD");
 				const [thinkingProse] = await readRuns(thinking.screen, "ACTIVITY_THINK_TAIL");
-				expect(thinkingProse!.every(cell => !cell.dim && cell.fg !== settledTarget![0]!.fg)).toBe(true);
+				expect(thinkingProse!.every(cell => !cell.dim && !settledForegrounds.has(cell.fg))).toBe(true);
 				expectVisibleDraft(thinking, draft, narrow, height);
 
 				active.enqueue(event({ content: "ACTIVITY_HISTORY_DONE" }));
@@ -1416,6 +1418,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 			},
 		);
 	} finally {
+		startSecondWrite.resolve();
 		startBash.resolve();
 		print.resolve();
 		quiet.resolve();

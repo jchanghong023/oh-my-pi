@@ -3,26 +3,20 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
-import { AIReqWorkflowStore } from "../../src/aireq-workbench/workflow-store";
-import type { AIReqProject } from "../../src/aireq-workbench/workflow-types";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 import { CompactScreenRecording } from "../helpers/compact-screen-recording";
-import { isolatedWorkflowEnvironment } from "../aireq-workbench/workflow-fixture";
 import {
 	contentText,
 	createProviderFixture,
 	MARKER,
-	rolePayload,
 	type ModelRequest,
 	type ProviderFixture,
-	type ProviderScenario,
 	type Reply,
 } from "./provider-fixture";
 
 const tuiTest = Bun.which("tui-test");
 const repo = path.resolve(import.meta.dir, "../../../..");
-type State = { projects: AIReqProject[] };
-type Scenario = ProviderScenario & {
+type Scenario = {
 	reply?: (request: ModelRequest) => Reply | Response | Promise<Reply | Response>;
 	setup?: (cwd: string, agentDir: string, env: NodeJS.ProcessEnv) => Promise<void>;
 	startupResponse?: string;
@@ -87,29 +81,8 @@ function nativeDraftMatches(screen: string, expected: string, cursor?: { x: numb
 	return remaining.length === 0;
 }
 
-async function expectRestoredNativeDraft(tui: (...args: string[]) => Promise<string>, expected: string): Promise<void> {
-	// Identical errors can leave the previous fixed error visible until this
-	// submission settles. Only this command's exact composer contents prove
-	// restoration; chat history is not evidence of the editable draft.
-	await eventually(
-		() => nativeDraftSnapshot(tui),
-		({ screen, cursor }) => nativeDraftMatches(screen, expected, cursor),
-	);
-	// The confirmed draft is one complete logical line, so native Home is
-	// now its actual beginning, not an empty line in a still-pending restore.
-	const probe = `preserved-input-${crypto.randomUUID()}-`;
-	await tui("key", "press", "Home");
-	await tui("type", probe);
-	await tui("key", "press", "End");
-	await eventually(
-		() => nativeDraftSnapshot(tui),
-		({ screen, cursor }) => nativeDraftMatches(screen, `${probe}${expected}`, cursor),
-	);
-}
-
 const lastDraftClear = new WeakMap<(...args: string[]) => Promise<string>, number>();
-async function clearNativeDraft(tui: (...args: string[]) => Promise<string>, restoredText?: string): Promise<void> {
-	if (restoredText) await expectRestoredNativeDraft(tui, restoredText);
+async function clearNativeDraft(tui: (...args: string[]) => Promise<string>): Promise<void> {
 	// Native app.clear (Ctrl+C) clears the entire multiline draft. Ctrl+U
 	// only kills text before the cursor on one line. The native second
 	// Ctrl+C within 500ms exits, so keep independent clear gestures apart.
@@ -138,13 +111,9 @@ async function withTui(
 		provider: ProviderFixture;
 		tui: (...args: string[]) => Promise<string>;
 		screen: CompactScreenRecording;
-		state: () => Promise<State>;
-		idle: () => Promise<void>;
-		restart: () => Promise<void>;
-		open: (directory: string) => Promise<{ tui: (...args: string[]) => Promise<string>; close: () => Promise<void> }>;
 	}) => Promise<void>,
 ): Promise<void> {
-	await using root = await TempDir.create("@omp-aireq-native-tui-");
+	await using root = await TempDir.create("@omp-native-tui-");
 	await using provider = createProviderFixture(scenario);
 	const cwd = root.join("project");
 	const home = root.join("home");
@@ -159,12 +128,31 @@ async function withTui(
 	// overrides KEY=VALUE rather than unsetting KEY. Clear inherited application
 	// settings, but preserve Bun's experimental engine options verbatim: an empty
 	// BUN_JSC_* value is an invalid option, not a reset to its default.
+	const inherited = new Set([
+		"PATH",
+		"Path",
+		"PATHEXT",
+		"SystemRoot",
+		"SYSTEMROOT",
+		"WINDIR",
+		"COMSPEC",
+		"LANG",
+		"LC_ALL",
+		"TERM",
+		"NUMBER_OF_PROCESSORS",
+		"PROCESSOR_ARCHITECTURE",
+		"BUN_RUNTIME_TRANSPILER_CACHE_PATH",
+	]);
 	const env = {
 		...Object.fromEntries(
-			Object.entries(process.env).map(([key, value]) => [key, key.startsWith("BUN_JSC_") ? value : ""]),
+			Object.entries(process.env).map(([key, value]) => [
+				key,
+				inherited.has(key) || key.startsWith("BUN_JSC_") ? value : "",
+			]),
 		),
-		...isolatedWorkflowEnvironment(root.join("")),
 		TZ: "UTC",
+		OMP_CONFIG_ROOT: root.join("config"),
+		OMP_PROFILE: "acceptance",
 		PI_CODING_AGENT_DIR: agentDir,
 		PI_CONFIG_DIR: ".omp",
 		PI_PROFILE: "",
@@ -179,7 +167,6 @@ async function withTui(
 		TEMP: temp,
 		TMP: temp,
 		OMP_OFFLINE: "0",
-		OMP_AIREQ_NO_OPEN: "1",
 		PI_NO_TITLE: "1",
 		PI_TEST_RUNTIME: "",
 		NO_PROXY: "127.0.0.1,localhost",
@@ -188,6 +175,9 @@ async function withTui(
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_CONFIG_GLOBAL: root.join("gitconfig"),
 		GIT_CONFIG_COUNT: "0",
+		GIT_TERMINAL_PROMPT: "0",
+		PUPPETEER_SKIP_DOWNLOAD: "true",
+		PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
 	};
 	await Bun.write(
 		path.join(agentDir, "models.yml"),
@@ -257,7 +247,6 @@ async function withTui(
 		}
 		return rawTui(...args);
 	};
-	const peers = new Set<string>();
 	async function start(target: string, directory: string): Promise<void> {
 		await invoke(
 			target,
@@ -295,35 +284,12 @@ async function withTui(
 		await invoke(target, "expect", "text", scenario.startupResponse ?? `${MARKER}_CHAT_READY`, "--timeout", "30000");
 		await invoke(target, "wait", "idle", "--timeout", "30000");
 	}
-	async function restart(): Promise<void> {
-		await tui("close");
-		await start(session, cwd);
-	}
-	async function open(directory: string) {
-		const target = `dev-peer-${crypto.randomUUID()}`;
-		peers.add(target);
-		await start(target, directory);
-		return {
-			tui: (...args: string[]) => invoke(target, ...args),
-			close: async () => {
-				await invoke(target, "close");
-				peers.delete(target);
-			},
-		};
-	}
-	async function state(): Promise<State> {
-		return { projects: await new AIReqWorkflowStore(path.join(agentDir, "aireq-projects-v1")).listProjects() };
-	}
-	async function idle(): Promise<void> {
-		await tui("expect", "text", "等待输入", "--timeout", "60000");
-	}
 	try {
 		await start(session, cwd);
 		expect(
 			provider.requests.filter(request => userTexts(request).at(-1)?.endsWith("ordinary-root-beacon")),
 		).toHaveLength(1);
 		expect(provider.requests.at(-1)?.model).toBe("chat-a");
-		expect(provider.requests.every(request => !rolePayload(request))).toBe(true);
 		await Promise.race([
 			run({
 				cwd,
@@ -331,10 +297,6 @@ async function withTui(
 				provider,
 				tui,
 				screen,
-				state,
-				idle,
-				restart,
-				open,
 			}),
 			provider.failure,
 		]);
@@ -458,7 +420,6 @@ async function withTui(
 				// The process may already have exited; do not hide the original failure.
 			}
 		}
-		for (const target of peers) await invoke(target, "close");
 		await tui("close");
 	}
 }
@@ -467,16 +428,4 @@ function userTexts(request: ModelRequest): string[] {
 	return request.messages.filter(message => message.role === "user").map(message => contentText(message.content));
 }
 
-export {
-	tuiTest,
-	repo,
-	type State,
-	type Scenario,
-	eventually,
-	withTui,
-	userTexts,
-	nativeDraftMatches,
-	nativeDraftSnapshot,
-	clearNativeDraft,
-	expectRestoredNativeDraft,
-};
+export { tuiTest, repo, eventually, withTui, nativeDraftMatches, nativeDraftSnapshot, clearNativeDraft };

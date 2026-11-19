@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
@@ -2022,9 +2022,12 @@ describe("TranscriptContainer file changes", () => {
 		return [ansi, ...native];
 	}
 
-	function mode(root: TranscriptContainer, compact: boolean): void {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: compact, hideToolActivity: compact });
-		root.setToolActivityVisible(!compact);
+	function mode(root: TranscriptContainer, display: "clean" | "compact" | "detailed"): void {
+		setChatTranscriptDisplayPreferences({
+			compactToolActivity: display === "compact",
+			hideToolActivity: display !== "detailed",
+		});
+		root.setToolActivityVisible(display === "detailed");
 	}
 
 	it("excludes descendants of hidden native nodes while retaining visible siblings", () => {
@@ -2040,10 +2043,10 @@ describe("TranscriptContainer file changes", () => {
 		expect(visibleNativeProps(document)).toContain("shown");
 	});
 
-	it("keeps all applied file diffs in detailed order and the original component on both surfaces", () => {
+	it("keeps all applied file diffs in detailed order and restores the original cards after compact", () => {
 		const root = new TranscriptContainer();
 		try {
-			mode(root, false);
+			mode(root, "detailed");
 			for (const name of ["one", "two", "three", "four"]) {
 				const edit = call(root, "edit", { path: `${name}.ts` });
 				edit.updateResult(
@@ -2063,12 +2066,15 @@ describe("TranscriptContainer file changes", () => {
 					last = position;
 				}
 			}
-			mode(root, true);
-			expect(views(root)).toEqual(detailed);
 			for (const component of components) component.setExpanded(true);
-			const expandedCompact = views(root);
-			mode(root, false);
-			expect(views(root)).toEqual(expandedCompact);
+			const expandedDetailed = views(root);
+			mode(root, "compact");
+			for (const view of views(root)) expect(view).not.toMatch(/new_(one|two|three|four)/);
+			mode(root, "detailed");
+			for (const [index, component] of components.entries()) expect(root.children[index]).toBe(component);
+			expect(views(root)).toEqual(expandedDetailed);
+			for (const component of components) component.setExpanded(false);
+			expect(views(root)).toEqual(detailed);
 		} finally {
 			for (const component of components.splice(0)) component.dispose();
 			stopSharedSpinnerTicker();
@@ -2076,10 +2082,10 @@ describe("TranscriptContainer file changes", () => {
 		}
 	});
 
-	it("retains file-targeted URL and device calls while hiding non-file activity", () => {
+	it("hides both file and ordinary tool cards from clean and compact history, but restores detailed cards", () => {
 		const root = new TranscriptContainer();
 		try {
-			mode(root, true);
+			mode(root, "compact");
 			call(root, "write", { path: "file:///tmp/url-file.txt", content: "URL_FILE_BODY" }).updateResult(
 				{
 					content: [{ type: "text", text: "written" }],
@@ -2183,37 +2189,40 @@ describe("TranscriptContainer file changes", () => {
 				},
 				false,
 			);
-			for (const view of views(root)) {
-				for (const marker of ["URL_FILE_BODY", "DEVICE_NEW", "PARTIAL_NEW"]) expect(view).toContain(marker);
-				for (const marker of [
-					"peer",
-					"display.test",
-					"exit 7",
-					"MESSAGE_NOT_A_DIFF",
-					"CONFIG_NOT_A_DIFF",
-					"PROCESS_NOT_A_DIFF",
-					"PREVIEW_NEW",
-					"DEVICE_HELP_NOT_A_DIFF",
-					"HELP_NEW",
-					"FAIL_COMMAND",
-					"FAIL_DIAGNOSTIC",
-				])
-					expect(view).not.toContain(marker);
+			// These tool results are transcript cards, not confirmed writes in the separate net-diff dock.
+			for (const display of ["compact", "clean"] as const) {
+				mode(root, display);
+				for (const view of views(root)) {
+					for (const marker of [
+						"URL_FILE_BODY",
+						"DEVICE_NEW",
+						"PARTIAL_NEW",
+						"peer",
+						"display.test",
+						"exit 7",
+						"MESSAGE_NOT_A_DIFF",
+						"CONFIG_NOT_A_DIFF",
+						"PROCESS_NOT_A_DIFF",
+						"PENDING_PREVIEW",
+						"PENDING_NEW",
+						"PREVIEW_NEW",
+						"DEVICE_HELP_NOT_A_DIFF",
+						"HELP_NEW",
+						"SUGGESTED_NEW",
+						"SAME_CONTENT",
+						"FAIL_COMMAND",
+						"FAIL_DIAGNOSTIC",
+					]) {
+						expect(view).not.toContain(marker);
+					}
+				}
 			}
-			// Switching back to detailed mode exposes ordinary activity again; it
-			// was hidden, not discarded from either consumer's transcript.
-			mode(root, false);
+			mode(root, "detailed");
 			for (const view of views(root)) {
-				for (const marker of ["peer", "display.test", "job"]) expect(view).toContain(marker);
-				for (const marker of ["URL_FILE_BODY", "DEVICE_NEW", "PARTIAL_NEW"]) expect(view).toContain(marker);
+				for (const marker of ["peer", "display.test", "job", "URL_FILE_BODY", "DEVICE_NEW", "PARTIAL_NEW"]) {
+					expect(view).toContain(marker);
+				}
 			}
-			mode(root, true);
-			const fileComponents = components.slice(0, 3);
-			const componentViews = () =>
-				fileComponents.map(component => [component.render(120).join("\n"), JSON.stringify(component.describe())]);
-			const compactFiles = componentViews();
-			mode(root, false);
-			expect(componentViews()).toEqual(compactFiles);
 		} finally {
 			for (const component of components.splice(0)) component.dispose();
 			stopSharedSpinnerTicker();
@@ -2221,11 +2230,10 @@ describe("TranscriptContainer file changes", () => {
 		}
 	});
 
-	it("keeps the original ANSI and native file cards throughout their lifecycle", () => {
-		const clock = spyOn(performance, "now").mockReturnValue(1000);
+	it("keeps the detailed ANSI and native file cards throughout their lifecycle", () => {
 		const root = new TranscriptContainer();
 		try {
-			mode(root, true);
+			mode(root, "detailed");
 			const file = call(root, "write", {});
 			expect(file.render(120).join("")).toBe("");
 			expect(file.isTranscriptBlockFinalized()).toBe(false);
@@ -2265,28 +2273,43 @@ describe("TranscriptContainer file changes", () => {
 
 			const cancelled = call(root, "edit", { path: "cancelled.ts" });
 			cancelled.setExecutionStarted();
+			expect(cancelled.isTranscriptBlockFinalized()).toBe(false);
 			cancelled.seal();
 			expect(cancelled.isTranscriptBlockFinalized()).toBe(true);
 
-			const expectOriginalCards = () => {
-				const compactAnsi = root.render(120);
-				const compact = views(root);
-				for (const view of compact) expect(view).toContain("lifecycle.txt");
-				for (const view of compact) expect(view).toContain("cancelled.ts");
-				mode(root, false);
-				expect(root.render(120)).toEqual(compactAnsi);
-				expect(views(root)).toEqual(compact);
-				mode(root, true);
+			const expectDetailedCards = () => {
+				for (const view of views(root)) {
+					expect(view).toContain("lifecycle.txt");
+					expect(view).toContain("cancelled.ts");
+				}
 			};
 
 			for (const view of views(root)) expect(view).toContain("wrapped.txt");
-			expectOriginalCards();
+			expectDetailedCards();
 			file.updateResult({ content: [{ type: "text", text: "unchanged" }] }, false);
 			wrapped.updateResult({ content: [{ type: "text", text: "write failed" }], isError: true }, false);
 			expect(wrapped.render(120).join("")).not.toBe("");
-			expectOriginalCards();
+			expectDetailedCards();
 		} finally {
-			clock.mockRestore();
+			for (const component of components.splice(0)) component.dispose();
+			stopSharedSpinnerTicker();
+			setChatTranscriptDisplayPreferences(preferences);
+		}
+	});
+
+	it("does not let a hidden pending file card gate clean or compact scrollback", () => {
+		try {
+			for (const display of ["clean", "compact"] as const) {
+				const root = new TranscriptContainer();
+				mode(root, display);
+				const file = call(root, "write", { path: "pending.txt", content: "pending body" });
+				file.setExecutionStarted();
+				root.addChild(new Block(["later settled"], true));
+
+				expect(file.isTranscriptBlockFinalized()).toBe(true);
+				expect(root.peekFinalizedBatch(120, 0)?.rows).toEqual(["later settled", ""]);
+			}
+		} finally {
 			for (const component of components.splice(0)) component.dispose();
 			stopSharedSpinnerTicker();
 			setChatTranscriptDisplayPreferences(preferences);

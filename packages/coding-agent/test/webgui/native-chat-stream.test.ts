@@ -86,7 +86,7 @@ test("native text streaming shares stable V4 rows across consumers and survives 
 			return stream;
 		};
 
-		lease = await acquireBrowserProject(temp.path(), "webgui");
+		lease = await acquireBrowserProject(temp.path());
 		await lease.activate(() => readWebGuiSessionInfo(native), { allowLan: false, nativeSession: native });
 		const contextA: WebGuiServiceContext = {
 			connectionId: "browser-a",

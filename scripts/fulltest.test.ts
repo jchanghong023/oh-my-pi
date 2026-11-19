@@ -40,12 +40,11 @@ test("debug changes only the isolated smoke diagnostic argument, not test scope"
 	}
 });
 
-test("fork and full plans never schedule the independently authorized packaged workbench verifier", () => {
+test("fork and full plans leave distribution packaging out of the verification gate", () => {
 	for (const full of [false, true]) {
 		const commands = fulltestCommands({ debug: false, full }, "/tmp/home");
 		expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
 		for (const command of commands) {
-			expect(command.argv.some(arg => arg.includes("verify-aireq-workbench-package"))).toBe(false);
 			expect(command.argv.some(arg => /(?:bundle-dist|build-binary|compile-binary)\.ts$/.test(arg))).toBe(false);
 		}
 	}
@@ -120,6 +119,12 @@ test("script selection uses changed modules and existing tests, not business fil
 test("Bun traces only known static inputs; unknown and dynamic inputs fall back", () => {
 	expect(bunRequiresFullSelection([])).toBe(false);
 	expect(bunRequiresFullSelection(["packages/coding-agent/src/tools/knowledge-search.ts"])).toBe(false);
+	expect(
+		bunRequiresFullSelection([
+			"vendor/zcode-frontend/preview/main.tsx",
+			"packages/coding-agent/test/webgui/fixtures/core-ui-entry.tsx",
+		]),
+	).toBe(false);
 	for (const file of [
 		"Cargo.lock",
 		"packages/natives/src/lib.rs",
@@ -788,6 +793,7 @@ describe("fulltest lane scheduling", () => {
 	for (const inheritedBudget of [2, 6]) {
 		test(`respects the caller's ${inheritedBudget}-worker ceiling across concurrent pools`, async () => {
 			const previousBudget = process.env.OMP_TEST_CPU_BUDGET;
+			const script = "scripts/test-reporting.test.ts";
 			process.env.OMP_TEST_CPU_BUDGET = String(inheritedBudget);
 			const commands: GateCommand[] = [];
 			let scriptConcurrency: number | undefined;
@@ -807,12 +813,11 @@ describe("fulltest lane scheduling", () => {
 						cpuBudget: 28,
 						captureSourceRevision: async () => ({ head: "head", dirty: false, status: "" }),
 						captureChangedPaths: async () => [],
-						scriptTestFiles: async () => ["scripts/ci-test-ts.test.ts"],
+						scriptTestFiles: async () => [script],
 						fastcheckCommands: async () => [],
 						runGateCommands: async (_runner, selected, options) => {
 							commands.push(...selected);
-							if (selected.some(command => command.argv[2] === "scripts/ci-test-ts.test.ts"))
-								scriptConcurrency = options?.concurrency;
+							if (selected.some(command => command.argv[2] === script)) scriptConcurrency = options?.concurrency;
 						},
 					},
 				);
@@ -835,15 +840,12 @@ describe("fulltest lane scheduling", () => {
 	}
 
 	for (const cpuBudget of [1, 5, 6, 28]) {
-		test(`keeps clock selftests isolated and bounds independent script workers on ${cpuBudget} CPUs`, async () => {
-			const independent = [
+		test(`isolates clock and subprocess selftests and bounds independent script workers on ${cpuBudget} CPUs`, async () => {
+			const independent = ["scripts/slowtest.test.ts", "scripts/test-reporting.test.ts"];
+			const isolated = [
 				"scripts/ci-test-ts.test.ts",
 				"scripts/fulltest.test.ts",
 				"scripts/run-rs-task.test.ts",
-				"scripts/slowtest.test.ts",
-				"scripts/test-reporting.test.ts",
-			];
-			const isolated = [
 				"scripts/slowtest-wsl-stage.test.ts",
 				"scripts/stamp-native-version.test.ts",
 				"scripts/test-gate-runtime.test.ts",

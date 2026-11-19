@@ -109,7 +109,7 @@ test("native history stays read-only and continues independently without replaci
 		};
 		({ session } = await createAgentSession(options));
 		const nativeSession = session;
-		lease = await acquireBrowserProject(activeCwd, "webgui");
+		lease = await acquireBrowserProject(activeCwd);
 		await lease.activate(() => readWebGuiSessionInfo(nativeSession), { allowLan: false, nativeSession });
 		const context: WebGuiServiceContext = {
 			connectionId: crypto.randomUUID(),

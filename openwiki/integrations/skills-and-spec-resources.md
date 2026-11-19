@@ -1,7 +1,7 @@
 ---
 type: 集成机制
 title: 技能发现、OpenSpec 与 Superpowers 资源
-description: 说明固定打包的需求维护资源如何被发现、覆盖、授权和执行，以及 Dev 阶段如何使用不同的资源与 schema。
+description: 说明固定打包的资源如何被发现、覆盖、授权及通过独立 CLI 使用。
 tags: [skills, openspec, superpowers, discovery, authorization]
 verified:
   - by: openwiki/0.0.0-unknown
@@ -9,8 +9,6 @@ verified:
 sources:
   - id: openwiki-source-26c612a2f809a60af2d101ff
     resource: repo://openspec/specs/model-and-skill-discovery/spec.md
-  - id: openwiki-source-dfe132b86d6cb277fde08350
-    resource: repo://openspec/specs/spec-driven-orchestration/spec.md
   - id: openwiki-source-5ad84278e31a922db452b5c3
     resource: repo://packages/coding-agent/src/cli.ts
   - id: openwiki-source-78aed986b565ffd1c6c1ead3
@@ -21,8 +19,6 @@ sources:
     resource: repo://packages/coding-agent/src/spec-driven/resource-inventory.ts
   - id: openwiki-source-b8bc987adb7987c551871cd5
     resource: repo://packages/coding-agent/src/spec-driven/resources.ts
-  - id: openwiki-source-ec58819131cc392d1bcd8468
-    resource: repo://packages/coding-agent/src/spec-driven/runtime.ts
   - id: openwiki-source-79b015f451ff70b19f6a9c87
     resource: repo://packages/coding-agent/src/spec-driven/skill-policy.ts
   - id: openwiki-source-084e8e5e6c766123015b0708
@@ -34,11 +30,11 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 
 # 技能发现、OpenSpec 与 Superpowers 资源
 
-OMP 同时提供普通会话可调用的技能和命令、独立的 `omp openspec` CLI，以及 [Dev 四阶段工作流](../workflows/aireq-lifecycle.md)使用的固定方法。三者共享打包资源，但不共享同一种控制权：独立 OpenSpec 用于需求材料维护，不负责实施或软件验收，也不依赖 Dev 状态；Dev 的阶段推进与批准由自己的控制器管理。
+OMP 提供普通会话可调用的技能与命令，以及独立的 `omp openspec` 和 `omp superpowers` CLI。它们共享打包资源；独立 OpenSpec 用于需求材料维护，不负责实施或软件验收。
 
 ## 固定来源和资源解析
 
-包内清单记录 OpenSpec `1.15.0` 的完整性信息、Superpowers `7.0.1` 的 revision 和 JCH revision；这是随发行物固定的来源，不是会话启动时下载的插件。源码模式从 vendored 资源树快照实际文件，编译包使用嵌入归档，缺少完整本地树的 SDK 包使用发行归档。清单按文件记录 SHA-256 和可执行属性，技能条目来自三个来源的 `skills/<name>/SKILL.md`。
+包内清单固定 OpenSpec `2.0.0`、Superpowers `7.0.2` 和 JCH 的源码 revision；这些是随发行物提供的固定资源，不是会话启动时下载的插件。源码模式从 vendored 资源树快照实际文件，编译包使用嵌入归档，缺少完整本地树的 SDK 包使用发行归档。清单按文件记录 SHA-256 和可执行属性，技能条目来自三个来源的 `skills/<name>/SKILL.md`。
 
 解包以清单摘要命名缓存，在文件锁下写临时目录、核验每个文件的 SHA-256、恢复可执行位，完成后才发布并写完成标记。失败会清除进程内的提取 promise，允许重试。资源路径拒绝绝对路径、反斜杠、空段和 `.`、`..`，并检查 realpath 仍在根内；加载固定技能时还检查来源根和内容摘要。vendored 树快照也拒绝逃逸和目录循环。
 
@@ -48,30 +44,22 @@ flowchart TD
     B --> C["加锁解包并校验"]
     C --> D["固定资源缓存"]
     D --> E["普通能力发现与同名解析"]
-    D --> F["Dev 按来源和名称加载"]
     E --> G["调用或读取时检查授权"]
-    F --> G
 ```
 
-图：普通目录发现和 Dev 精确加载共用缓存，但授权仍在使用时检查。
+图：能力发现使用固定资源缓存；发现成功不代表已获得读取或执行授权。
 
 ## 普通发现、同名覆盖与授权
 
-`spec-driven` 是低优先级能力提供者。它从清单逐项发现 Superpowers 和 JCH 技能，但 OpenSpec 普通技能只开放五项：`openspec-propose`、`openspec-explore`、`openspec-update-change`、`openspec-sync-specs`、`openspec-archive-change`。同一提供者从包内 OpenSpec `commands` 目录只发现 `/opsx-propose`、`/opsx-explore`、`/opsx-update`、`/opsx-sync`、`/opsx-archive`。这些是普通技能和 Markdown 命令的发现链，不是 `/dev` 的阶段命令；其他包内资源仍可供 CLI 使用。
+`spec-driven` 是低优先级能力提供者。它从清单逐项发现 Superpowers 和 JCH 技能，但 OpenSpec 普通技能只开放五项：`openspec-propose`、`openspec-explore`、`openspec-update-change`、`openspec-sync-specs`、`openspec-archive-change`。同一提供者从包内 OpenSpec `commands` 目录只发现 `/opsx-propose`、`/opsx-explore`、`/opsx-update`、`/opsx-sync`、`/opsx-archive`。其他包内资源仍可供 CLI 使用。
 
 技能 catalog 先按来源发现、解析名称，再应用启用、包含和排除过滤。自定义目录同名技能取得裸名，不同内容的原版本保留为命名空间名称，必要时带 `~N`；正文和 frontmatter 均相同的副本可合并。`OMP_SKILLS_DIR` 是优先于其他自定义目录的共享单层技能根，不负责下载或同步；默认也启用 Codex 用户技能发现。配置及其他模型发现边界见[配置与模型](../concepts/configuration-and-models.md)。普通会话可通过 `/skill:<name>` 显式调用；隐藏技能不出现在系统提示的技能列表中，但仍可被显式调用。
 
-**可见性不是授权。** 对隐藏的固定资源，`skill://` 读取要求当前会话分支存在匹配名称和路径的显式调用记录，或持有对应的精确授权；普通隐藏用户技能保留原有 URI 语义。Dev 的阶段策略还先检查允许的 catalog 名称，阶段内大多数固定 Superpowers 技能需要名称和绝对路径均匹配的原生授权；`systematic-debugging`、`verification-before-completion`、`writing-skills` 保留原有阶段访问例外。授权绑定会话作用域，替换策略会使旧授权失效，释放时不会清除较新的绑定。
+**可见性不是授权。** 对隐藏的固定资源，`skill://` 读取要求当前会话分支存在匹配名称和路径的显式调用记录，或持有对应的精确授权；普通隐藏用户技能保留原有 URI 语义。
 
 ## 独立 OpenSpec 与 schema
 
-`omp openspec` 直接运行包内 OpenSpec CLI，透传输出和退出码。`init` 强制 `--tools=none`，避免在项目安装重复的技能和命令；首次生成配置时把默认 schema 设为 `mini`，既有配置不改写。无配置的 `new change` 也默认 `mini`，但显式 `--schema` 和已有配置优先。`mini` 的材料是 `proposal` 和 `specs`；显式选择原生 `spec-driven` 则保留 `proposal`、`specs`、`design`、`tasks`，不会把旧 change 自动迁移。
-
-Dev 使用另一套包内 `omp-spec`。进入需求方法前通过 `openspec schema which omp-spec --json` 核验来源必须是 `package`，且 realpath 必须等于包内 `schemas/omp-spec`；项目或用户同名 schema 遮蔽时直接报错，而不是悄悄改变 Dev 流程或修改已有 change。需求阶段再请求该 schema 的 `proposal` 和 `specs` 指令。
-
-## Dev 的特殊注入
-
-Dev 不依赖普通 catalog 的裸名解析：需求角色精确加载 JCH 的 `jch-grill-me`，规划角色加载 Superpowers `writing-plans`，但截去 `Execution Handoff` 及其后内容；缺少该节即失败。执行角色注入 `using-superpowers` 和 `subagent-driven-development`。执行会话另外从清单递归暴露所有固定 Superpowers 技能并以名称和路径授权；若普通技能已占裸名，固定版本使用 `superpowers/<name>` 及必要的数字后缀，不抢占用户版本。阶段自动加载寻址固定资源，即使用户自定义了同名技能也不改变阶段方法。执行可见性和授权均限于执行会话，并不改变普通会话权限或名称优先级。
+`omp openspec` 直接运行包内 OpenSpec CLI，透传输出和退出码。`init` 不在项目安装重复的技能和命令，也不改写已有配置。没有显式选择或项目配置时使用原生 `spec-driven` schema，材料为 `proposal`、`specs`、`design`、`tasks`；显式 `--schema` 和已有配置优先，旧 change 不会自动迁移。
 
 ## Superpowers 脚本入口
 
@@ -88,4 +76,4 @@ omp superpowers skills/subagent-driven-development/scripts/review-package <plan-
 
 ## 验证与维护
 
-`resources.test.ts` 和 `skill-policy.test.ts` 覆盖资源边界与阶段授权；`process-resources.e2e.test.ts` 经公开进程入口验证打包命令、带引号参数、初始化不覆盖用户文件、`mini` 与显式原生 schema，以及验证和归档。更新 vendored 资源时应同时检查清单、打包、脚本运行环境和这些实际入口，而不是只验证源码树；参见 [fork 维护](../operations/fork-maintenance.md)和[无头与扩展接口](headless-and-extension-surfaces.md)。
+`resources.test.ts` 和 `skill-policy.test.ts` 覆盖资源边界与隐藏技能访问；`process-resources.e2e.test.ts` 经公开进程入口验证打包命令、带引号参数、初始化不覆盖用户文件、默认与显式 schema，以及验证和归档。更新 vendored 资源时应同时检查清单、打包、脚本运行环境和这些实际入口，而不是只验证源码树；参见 [fork 维护](../operations/fork-maintenance.md)和[无头与扩展接口](headless-and-extension-surfaces.md)。

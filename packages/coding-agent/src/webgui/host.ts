@@ -1,7 +1,6 @@
 import { createInterface } from "node:readline";
 import { logger } from "@oh-my-pi/pi-utils";
 import { offlineFromEnv } from "../cli/args";
-import type { AIReqWorkbenchHandle } from "../aireq-workbench/host";
 import type { AgentSession } from "../session/agent-session";
 import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPathWithResult } from "../utils/open";
@@ -18,10 +17,10 @@ import {
 	hasWebGuiNativeResources,
 } from "./native-session-host";
 import { acquireBrowserProject, readBrowserProject } from "./project-registry";
-import { closeWebServer, ensureWebServer } from "./server";
+import { closeWebServer, ensureWebServer, type WebServerHandle } from "./server";
 import { readWebGuiSessionInfo } from "./session-source";
 
-export interface WebGuiHandle extends AIReqWorkbenchHandle {
+export interface WebGuiHandle extends WebServerHandle {
 	readonly projectId: string;
 }
 
@@ -57,7 +56,7 @@ export function startWebGui(session: AgentSession, bindings?: WebGuiBindings): P
 }
 
 async function bindWebGui(session: AgentSession, bindings?: WebGuiBindings): Promise<WebGuiHandle> {
-	const lease = await acquireBrowserProject(session.sessionManager.getCwd(), "webgui", { reuseWebGuiOwner: true });
+	const lease = await acquireBrowserProject(session.sessionManager.getCwd(), { reuseWebGuiOwner: true });
 	let closing: Promise<void> | undefined;
 	let exiting = false;
 	const closeBinding = (): Promise<void> => {
@@ -76,17 +75,17 @@ async function bindWebGui(session: AgentSession, bindings?: WebGuiBindings): Pro
 		}
 		return closing;
 	};
-	const handle: WebGuiHandle = {
+	const handle = {
 		projectId: lease.projectId,
 		url: "",
-		urls: [],
+		urls: [] as readonly string[],
 		loopbackUrl: "",
 		close: closeAllWebGuis,
 	};
 	handles.add(handle);
 	bindingClosures.set(handle, closeBinding);
 	try {
-		const server = await ensureWebServer({ webgui: true });
+		const server = await ensureWebServer();
 		if (exiting) throw new Error("WebGUI exited during server startup");
 		assertWebGuiNativeAdmission();
 		await lease.activate(
@@ -164,7 +163,7 @@ export async function runWebGuiCommand(): Promise<void> {
 	let settled = false;
 	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, stop);
 	try {
-		const server = await ensureWebServer({ webgui: true });
+		const server = await ensureWebServer();
 		process.stdout.write("WebGUI 已启动，请在浏览器打开或创建项目后新建原生会话。\n");
 		for (const url of server.urls) process.stdout.write(`${url}\n`);
 		if (requestOfflineBrowserUrlCopy(server.loopbackUrl))

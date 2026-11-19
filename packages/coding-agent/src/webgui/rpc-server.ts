@@ -38,8 +38,7 @@ export async function resolveWebGuiProject(url: URL): Promise<BrowserProjectReco
 	if (ids.length !== 1 || !ids[0]) throw new WebGuiRequestError(404, "Project not found");
 	const project = readBrowserProject(ids[0]);
 	if (!project) throw new WebGuiRequestError(404, "Project not found");
-	if (project.mode !== "webgui" || project.phase !== "active")
-		throw new WebGuiRequestError(409, "Project is not active in WebGUI mode");
+	if (project.phase !== "active") throw new WebGuiRequestError(409, "WebGUI project is not active");
 	return project;
 }
 
@@ -48,12 +47,10 @@ function assertProjectOwner(project: BrowserProjectRecord | undefined): void {
 	const live = readBrowserProject(project.projectId);
 	if (!live || live.ownerId !== project.ownerId || live.root !== project.root)
 		throw new WebGuiRequestError(404, "Project ownership has ended");
-	if (live.mode !== "webgui" || live.phase !== "active")
-		throw new WebGuiRequestError(409, "Project is no longer active in WebGUI mode");
+	if (live.phase !== "active") throw new WebGuiRequestError(409, "WebGUI project is no longer active");
 }
 
 export interface WebGuiSocketData {
-	readonly kind: "webgui";
 	readonly project?: BrowserProjectRecord;
 	/** Display context only; project ownership is carried exclusively by project. */
 	readonly workspacePath: string;

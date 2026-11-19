@@ -92,20 +92,24 @@ describe("InputController thinking visibility", () => {
 	}
 
 	async function stream(message: AssistantMessage, activeThinkingIndex = 0): Promise<void> {
-		session.agent.state.isStreaming = true;
-		session.agent.state.streamMessage = message;
-		session.agent.state.activeThinkingIndex = activeThinkingIndex;
-		const started = assistant([]);
-		await mode.eventController.handleEvent({ type: "message_start", message: started });
-		const thinkingStart = assistant([{ type: "thinking", thinking: "" }]);
-		await mode.eventController.handleEvent({
+		const agent = session.agent;
+		const thinking = message.content[activeThinkingIndex];
+		if (thinking?.type !== "thinking") throw new Error("Expected a live thinking block");
+		agent.state.isStreaming = true;
+		// Route frames through AgentSession, which advances modelStage before the UI sees them.
+		agent.emitExternalEvent({ type: "turn_start" });
+		expect(session.modelStage).toBe("waiting");
+		agent.emitExternalEvent({ type: "message_start", message: assistant([]) });
+		const thinkingStart = assistant([
+			...message.content.slice(0, activeThinkingIndex),
+			{ ...thinking, thinking: "" },
+		]);
+		agent.emitExternalEvent({
 			type: "message_update",
 			message: thinkingStart,
 			assistantMessageEvent: { type: "thinking_start", contentIndex: activeThinkingIndex, partial: thinkingStart },
 		});
-		const thinking = message.content[activeThinkingIndex];
-		if (thinking?.type !== "thinking") throw new Error("Expected a live thinking block");
-		await mode.eventController.handleEvent({
+		agent.emitExternalEvent({
 			type: "message_update",
 			message,
 			assistantMessageEvent: {
@@ -115,10 +119,14 @@ describe("InputController thinking visibility", () => {
 				partial: message,
 			},
 		});
+		// A live delta is coalesced; drain it before callers assert on the render.
+		await mode.eventController.runSerialized(async () => {
+			expect(session.modelStage).toBe("thinking");
+		});
 	}
 
-	it("does not let the native effort picker bypass the exclusive browser workbench", () => {
-		mode.isAIReqWorkbenchModeActive = () => true;
+	it("does not let the native effort picker bypass exclusive WebGUI mode", () => {
+		mode.isWebGuiModeActive = () => true;
 		const setThinkingLevel = vi.spyOn(session, "setThinkingLevel");
 		controller.setupKeyHandlers();
 		mode.editor.onSetThinkingLevel?.("low");

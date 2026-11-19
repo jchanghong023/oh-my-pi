@@ -4,11 +4,11 @@ import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import { fixture, GATE_BUDGET, PublicPeer, test, textValues } from "./process-fixture";
 import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
-import { createProviderFixture, rolePayload } from "./provider-fixture";
+import { createProviderFixture } from "./provider-fixture";
 
 describe("spec-driven actual OMP public entry", () => {
 	test(
-		"ordinary sessions retain native read, write and Task outside /dev",
+		"ordinary sessions retain native read, write and Task",
 		async () => {
 			await using root = await TempDir.create("@omp-spec-ordinary-control-");
 			await using provider = createProviderFixture();
@@ -24,7 +24,6 @@ describe("spec-driven actual OMP public entry", () => {
 			expect(await fs.readFile(path.join(config.cwd, "ordinary-note.txt"), "utf8")).toBe(
 				"ordinary session remains writable\n",
 			);
-			expect(provider.requests.every(request => !rolePayload(request))).toBe(true);
 			const native = provider.requests
 				.flatMap(request => request.messages)
 				.flatMap(message => message.tool_calls ?? [])

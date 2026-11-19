@@ -30,7 +30,6 @@
 	},
 	"ignorePatterns": [
 		"**/vendor/**",
-		"packages/aireq-frontend/**",
 		"**/node_modules/**",
 		"**/test-sessions.ts",
 		"**/agent_pb.ts",

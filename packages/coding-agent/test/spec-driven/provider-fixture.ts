@@ -2,21 +2,9 @@ import { isRecord } from "@oh-my-pi/pi-utils";
 
 export const MARKER = "OMP_SPEC_PUBLIC_GREETING";
 export const IMPLEMENTATION_PATH = "src/greeting.ts";
-export const TEST_PATH = "test/greeting.test.ts";
-export const VALIDATION_COMMAND = "bun test test/greeting.test.ts";
-export const REQUIREMENT =
-	"greet(name) trims outer whitespace, defaults empty names to world, preserves internal whitespace and returns Hello, <name>!.";
 export const IMPLEMENTATION =
 	'export function greet(name: string): string {\n  return `Hello, ${name.trim() || "world"}!`;\n}\n';
-export const BEHAVIOR_TEST = `import { expect, test } from "bun:test";
-import { greet } from "../src/greeting";
-test("greeting behavior", () => {
-  expect(greet("  Ada  ")).toBe("Hello, Ada!");
-  expect(greet("   ")).toBe("Hello, world!");
-  expect(greet("Ada  Lovelace")).toBe("Hello, Ada  Lovelace!");
-});
-`;
-const TEAM_PROPOSAL = `# Pure greeting function\n\n${REQUIREMENT}\n\nExport one stateless function with no networking, global state or framework. Verify outer trimming, empty input and preserved internal whitespace.`;
+
 export interface ModelRequest {
 	model: string;
 	messages: Array<{ role: string; content?: unknown; tool_calls?: unknown[]; tool_call_id?: string }>;
@@ -27,13 +15,6 @@ export interface Reply {
 	tool?: { name: string; args: Record<string, unknown> };
 	tools?: Array<{ name: string; args: Record<string, unknown> }>;
 }
-export type FixtureRole = "requirements" | "solution" | "planner" | "executor";
-export interface ProviderScenario {
-	/** Hold selected native requests without replacing HTTP/SSE or tool execution. */
-	delay?: (request: ModelRequest, signal: AbortSignal) => Promise<void>;
-	/** Terminal provider rejection seam; callers can release it for same-session reentry. */
-	fail?: (request: ModelRequest) => string | undefined;
-}
 export function contentText(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (Array.isArray(content)) {
@@ -42,45 +23,6 @@ export function contentText(content: unknown): string {
 		return text.join("\n");
 	}
 	return "";
-}
-/** Extract the actual native stage data, never infer roles from prose or tool schemas. */
-export function rolePayload(
-	request: ModelRequest,
-): { specDrivenRole: string; input: Record<string, unknown> } | undefined {
-	for (const message of request.messages.filter(item => !["assistant", "tool"].includes(item.role)).toReversed()) {
-		const source = contentText(message.content);
-		for (let begin = source.indexOf("{"); begin >= 0; begin = source.indexOf("{", begin + 1)) {
-			let depth = 0;
-			let quoted = false;
-			let escaped = false;
-			for (let end = begin; end < source.length; end++) {
-				const char = source[end];
-				if (quoted) {
-					if (escaped) escaped = false;
-					else if (char === "\\") escaped = true;
-					else if (char === '"') quoted = false;
-				} else if (char === '"') quoted = true;
-				else if (char === "{") depth++;
-				else if (char === "}" && --depth === 0) {
-					try {
-						const value: unknown = JSON.parse(source.slice(begin, end + 1));
-						if (
-							isRecord(value) &&
-							isRecord(value.binding) &&
-							typeof value.role === "string" &&
-							Array.isArray(value.outputPaths) &&
-							typeof value.outputContract === "string"
-						)
-							return { specDrivenRole: value.role, input: value };
-					} catch {
-						/* Other JSON fragments are not the native workflow context. */
-					}
-					break;
-				}
-			}
-		}
-	}
-	return undefined;
 }
 function tool(request: ModelRequest, name: string, args: Record<string, unknown>): Reply {
 	const advertised = request.tools?.find(
@@ -112,59 +54,7 @@ export function teamStage(request: ModelRequest): string | undefined {
 	return undefined;
 }
 
-function teamReply(request: ModelRequest, stage: string): Reply {
-	if (!request.tools?.some(item => item.function?.name.replace(/^_/u, "") === "yield"))
-		return { text: "结构化讨论结果已提交。" };
-	let data: Record<string, unknown>;
-	switch (stage) {
-		case "proposal":
-			data = {
-				proposal: TEAM_PROPOSAL,
-				noViableProposal: false,
-				investigationBlockedReason: "",
-				keyAssumptions: [],
-				risks: ["Only string inputs are in scope."],
-				unknowns: [],
-				acceptanceCriteria: [REQUIREMENT],
-				ambiguityInterpretations: [],
-				evidence: [],
-			};
-			break;
-		case "alignment":
-			data = {
-				unifiedUnderstanding: REQUIREMENT,
-				acceptanceCriteria: [REQUIREMENT],
-				factDifferences: [],
-				interpretationDifferences: [],
-			};
-			break;
-		case "review":
-			data = {
-				noSubstantiveIssues: true,
-				reviewSummary: "The stateless function satisfies the confirmed behavior.",
-				findings: [],
-				blockingResolutions: [],
-			};
-			break;
-		case "synthesis":
-			data = {
-				reportMarkdown: "## 方案比较\n全部候选均使用纯函数，无额外依赖。",
-				recommendedProposal: "A",
-				recommendationReason: "保持最小范围。",
-				recommendationPreconditions: "",
-				hardConstraintViolations: [],
-			};
-			break;
-		default:
-			throw new Error(`Unexpected Team fixture stage ${stage}`);
-	}
-	return tool(request, "yield", { data });
-}
-
 export function respond(request: ModelRequest): Reply {
-	const payload = rolePayload(request);
-	const stage = teamStage(request);
-	if (stage) return teamReply(request, stage);
 	const ordinary = request.messages
 		.filter(message => message.role === "user")
 		.map(message => contentText(message.content))
@@ -186,23 +76,7 @@ export function respond(request: ModelRequest): Reply {
 			text: typeof selected.turn === "string" ? `${MARKER}_RESOURCE_READY_${selected.turn}` : `${MARKER}_CHAT_READY`,
 		};
 	}
-	if (!payload && ordinary.includes("OMP_SPEC_IMPLEMENT_CHILD") && request.tools?.length) {
-		const executed = calls(request);
-		if (!executed.some(call => call.name === "write" && call.args.path === TEST_PATH))
-			return tool(request, "write", { i: "Writing behavior test", path: TEST_PATH, content: BEHAVIOR_TEST });
-		if (!executed.some(call => call.name === "bash"))
-			return tool(request, "bash", { i: "Running failing test", command: VALIDATION_COMMAND, timeout: 60 });
-		if (!executed.some(call => call.name === "write" && call.args.path === IMPLEMENTATION_PATH))
-			return tool(request, "write", {
-				i: "Implementing greeting",
-				path: IMPLEMENTATION_PATH,
-				content: IMPLEMENTATION,
-			});
-		if (executed.filter(call => call.name === "bash").length < 2)
-			return tool(request, "bash", { i: "Running completed test", command: VALIDATION_COMMAND, timeout: 60 });
-		return { text: "Implementation and behavior tests completed." };
-	}
-	if (!payload && ordinary.includes("OMP_SPEC_REVIEW_CHILD") && request.tools?.length) {
+	if (ordinary.includes("OMP_SPEC_REVIEW_CHILD") && request.tools?.length) {
 		if (!calls(request).some(call => call.name === "read"))
 			return tool(request, "read", { i: "Reviewing implementation", path: IMPLEMENTATION_PATH });
 		if (request.tools?.some(item => item.function?.name.replace(/^_/u, "") === "yield"))
@@ -212,8 +86,8 @@ export function respond(request: ModelRequest): Reply {
 			});
 		return { text: "Reviewed the implementation." };
 	}
-	if (!payload && ordinary.includes("OMP_SPEC_ORDINARY_CHILD")) return { text: "OMP_SPEC_ORDINARY_CHILD_DONE" };
-	if (!payload && ordinary.includes("OMP_SPEC_ORDINARY_CONTROL") && request.tools?.length) {
+	if (ordinary.includes("OMP_SPEC_ORDINARY_CHILD")) return { text: "OMP_SPEC_ORDINARY_CHILD_DONE" };
+	if (ordinary.includes("OMP_SPEC_ORDINARY_CONTROL") && request.tools?.length) {
 		const executed = calls(request);
 		if (!executed.some(call => call.name === "write"))
 			return tool(request, "write", {
@@ -248,8 +122,7 @@ export interface ProviderFixture {
 }
 /** Local OpenAI SSE transport. Native tools, not this server, perform all workspace IO. */
 export function createProviderFixture(
-	options: ProviderScenario & {
-		observe?: (request: ModelRequest) => void | Promise<void>;
+	options: {
 		reply?: (request: ModelRequest) => Reply | Response | Promise<Reply | Response>;
 	} = {},
 ): ProviderFixture {
@@ -270,11 +143,6 @@ export function createProviderFixture(
 			try {
 				const body = (await request.json()) as ModelRequest;
 				requests.push(body);
-				await options.observe?.(body);
-				await options.delay?.(body, request.signal);
-				const failure = options.fail?.(body);
-				if (failure)
-					return Response.json({ error: { message: failure, type: "fixture_failure" } }, { status: 400 });
 				const reply = options.reply ? await options.reply(body) : respond(body);
 				// Selected journeys may supply a real, gated SSE response.
 				if (reply instanceof Response) return reply;

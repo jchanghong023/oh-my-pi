@@ -15,7 +15,7 @@ import {
 	test,
 	textValues,
 } from "./process-fixture";
-import { contentText, createProviderFixture, MARKER, rolePayload } from "./provider-fixture";
+import { contentText, createProviderFixture, MARKER } from "./provider-fixture";
 
 export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 	test(
@@ -218,7 +218,6 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			]);
 			expect(reviewUsage.exitCode).not.toBe(0);
 			expect(`${reviewUsage.stdout}\n${reviewUsage.stderr}`).toMatch(/usage|require.*bash/iu);
-			expect(provider.requests.every(request => !rolePayload(request))).toBe(true);
 			expect(provider.failures).toEqual([]);
 			expect(await git(config.cwd, config.env, ["status", "--porcelain"])).toBe("");
 			expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);

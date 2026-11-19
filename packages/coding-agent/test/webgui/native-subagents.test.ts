@@ -92,7 +92,7 @@ async function withRoot(temp: TempDir, work: (fixture: Fixture) => Promise<void>
 		const artifacts = manager.getArtifactsDir();
 		if (!artifacts) throw new Error("Root fixture has no native artifact directory");
 		await fs.mkdir(artifacts, { recursive: true });
-		lease = await acquireBrowserProject(temp.path(), "webgui");
+		lease = await acquireBrowserProject(temp.path());
 		await lease.activate(() => readWebGuiSessionInfo(root), { allowLan: false, nativeSession: root });
 		const context: WebGuiServiceContext = {
 			connectionId: crypto.randomUUID(),

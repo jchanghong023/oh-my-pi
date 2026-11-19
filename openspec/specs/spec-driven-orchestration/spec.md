@@ -2,15 +2,13 @@
 
 ## Purpose
 
-维护独立 OMP 技能与 AIReq 编排的边界，以及用户确认的 AIReq 全流程。
-
-> 状态：用户已确认的最新 AIReq 需求基线。原型与正式入口已共用同一前端 bootstrap 和网络客户端，旧 `runtime/omp-data-source.ts` 宿主适配已移除；原型业务状态、模拟回复与任务由服务端纯内存持有。真实 OMP 业务后端尚未实现，接入剩余工作仅为后端实现既有冻结请求、响应、错误及事件合同并配置后端地址，不再迁移前端、替换客户端或转换接口格式；真实服务未改造，发行内嵌资源未重新生成。原型 API 检查、浏览器演示及 packages/aireq-frontend/README.md 的既有启动命令、截图与交互记录保留原有证据范围，不证明真实 OMP 已接通，也不是真实模型、Git、数据库、正式宿主业务或发行产物的实现／验收证据。
+维护 OMP 内置 OpenSpec、Superpowers 与 JCH 技能，以及原生实施与验证能力的行为边界。
 
 ## Requirements
 
 ### Requirement: 包内技能发现与资源兼容
 
-OMP MUST 复用既有发现、补全、按需读取与资源授权，不因 AIReq 工作流改变独立技能行为。
+OMP MUST 复用既有技能发现、补全、按需读取与资源授权。
 
 #### Scenario: 技能发现与资源兼容的详细边界
 
@@ -19,37 +17,30 @@ OMP MUST 复用既有发现、补全、按需读取与资源授权，不因 AIRe
 
 | 范围                                               | 技能                                                                                                                                                    | 规则                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 普通会话及其子代理、AIReq 全部 Agent 及其后代仅手动调用 | 所有包内固定上游 Superpowers 技能，包括 `using-superpowers` | 不出现在模型自动发现索引，保留用户显式调用；AIReq 不设计划、执行或 IR 验收会话，不因进入 AIReq 自动获得实施技能或写代码权限 |
+| 普通会话及其子代理仅手动调用 | 所有包内固定上游 Superpowers 技能，包括 `using-superpowers` | 不出现在模型自动发现索引，保留用户显式调用 |
 | 普通会话及其子代理可通过原生机制发现与调用 | 随 OMP 内置的 OpenSpec 2.0 Skill | 任意工作目录均 MUST 通过既有发现与补全提供技能名称及描述，正文按需读取，通过原生 `/skill:<name>` 显式调用并沿用资源授权和同名用户／项目资源覆盖机制，无须先安装 Skill。实际 CLI 调用统一为 `omp openspec ...`，工具声明及兼容性说明使用同一入口；仅适配宿主交付、发现与执行入口，不将正文改写为需求专用工作流，不限制为旧五项或排除 apply，不改变上游通用工作流、artifact 依赖、校验、同步及归档语义 |
-| 普通会话仅手动调用                                 | `jch-grill-me`                                                                                                                                          | 保留原资源和显式调用，不默认发现；AIReq 业务需求 Agent 必须自动注入，业务需求评审 Agent 依独立检查职责读取确认材料，固定职责及访谈停止规则置于技能正文之后                                                                                                                                                                                                                                                                                                                                                         |
-| 普通会话仅手动调用 | `jch-grill-todo` | 独立的 OMP 本地技能，复用 JCH 包内资源与原生 `/skill:jch-grill-todo` 链路；访谈确认一致后另询生成许可，在当前工作目录生成符合格式的自包含 `.todo.md` Markdown 任务清单，不依赖执行器知识，不自动执行或注入 AIReq，不改变 `jch-grill-me` |
+| 普通会话仅手动调用 | `jch-grill-me` | 保留原资源和显式调用，不默认发现 |
+| 普通会话仅手动调用 | `jch-grill-todo` | 独立的 OMP 本地技能，复用 JCH 包内资源与原生 `/skill:jch-grill-todo` 链路；访谈确认一致后另询生成许可，在当前工作目录生成符合格式的自包含 `.todo.md` Markdown 任务清单，不依赖执行器知识，不自动执行，不改变 `jch-grill-me` |
 | 普通会话及其子代理可通过原生机制发现与调用 | `jch-codebase-design` | 复用 JCH 包内资源与原生 `/skill:jch-codebase-design`、`skill://` 链路；仅适配技能名称，正文、描述及 Agent 元数据与上游一致，保留完整配套材料，不添加手动调用限制，不扩大当前任务权限 |
 
-普通会话及其子代理 MUST 通过原生机制提供全部 12 项内置 OpenSpec Skill：`openspec-apply-change`、`openspec-archive-change`、`openspec-bulk-archive-change`、`openspec-continue-change`、`openspec-explore`、`openspec-ff-change`、`openspec-new-change`、`openspec-onboard`、`openspec-propose`、`openspec-sync-specs`、`openspec-update-change`、`openspec-verify-change`。模型自动发现索引默认仅展示 core 六项：`openspec-propose`、`openspec-explore`、`openspec-apply-change`、`openspec-update-change`、`openspec-sync-specs`、`openspec-archive-change`；其余六项 MUST 通过包内资源的 `disable-model-invocation: true` 仅保留手动调用，沿用现有显式调用及资源读取授权，不新增 profile 过滤或配置。全部技能均保留原生补全、按需读取、路径授权及 `/skill:<name>` 调用，用户／项目同名覆盖优先级不变，MUST NOT 删除非 core 技能或恢复旧五项白名单。可发现或可读取不等于获准执行，模型实际使用仍 MUST 遵循原生调用授权与当前工具权限；本轮 MUST NOT 新增 AIReq 专用 Skill 过滤或阶段策略绑定。
+普通会话及其子代理 MUST 通过原生机制提供全部 12 项内置 OpenSpec Skill：`openspec-apply-change`、`openspec-archive-change`、`openspec-bulk-archive-change`、`openspec-continue-change`、`openspec-explore`、`openspec-ff-change`、`openspec-new-change`、`openspec-onboard`、`openspec-propose`、`openspec-sync-specs`、`openspec-update-change`、`openspec-verify-change`。模型自动发现索引默认仅展示 core 六项：`openspec-propose`、`openspec-explore`、`openspec-apply-change`、`openspec-update-change`、`openspec-sync-specs`、`openspec-archive-change`；其余六项 MUST 通过包内资源的 `disable-model-invocation: true` 仅保留手动调用，沿用现有显式调用及资源读取授权，不新增 profile 过滤或配置。全部技能均保留原生补全、按需读取、路径授权及 `/skill:<name>` 调用，用户／项目同名覆盖优先级不变，MUST NOT 删除非 core 技能或恢复旧五项白名单。可发现或可读取不等于获准执行，模型实际使用仍 MUST 遵循原生调用授权与当前工具权限。
 
-包内 Superpowers 的发现范围仅适用于包内资源；同名非包内自定义技能继续遵循既有发现、调用与优先级规则，不被此例外覆盖。用户显式调用包内技能仍沿用原生调用及授权规则；AIReq 阶段技能注入、资源授权和工具权限不因发现范围变化而扩大，打开 `/aireq` 网页本身不授予阶段资源权限。
+包内 Superpowers 的发现范围仅适用于包内资源；同名非包内自定义技能继续遵循既有发现、调用与优先级规则，不被此例外覆盖。用户显式调用包内技能仍沿用原生调用及授权规则。
 
-普通 OpenSpec MUST 复用上述原生 Skill 入口，不再交付或注册包内 `commands/opsx-*` 文件命令，不保留 `/opsx-*` 别名，不另建命令分发表。任意目录可发现技能不等于获准自动初始化项目；项目尚未初始化时，Agent 自选技能 MUST 退出该工作流并正常答复，用户显式请求 OpenSpec 时 MUST 等待用户显式授权运行 `omp openspec init`，不得因发现或读取 Skill 自动创建 `openspec/` 目录。本条仅更新普通 OpenSpec 的需求合同，不新增 AIReq 专用技能过滤、阶段策略或业务接入要求；实现、资源生成与验收状态须分别记录，不因本次规格更新视为已完成。
+普通 OpenSpec MUST 复用上述原生 Skill 入口，不再交付或注册包内 `commands/opsx-*` 文件命令，不保留 `/opsx-*` 别名，不另建命令分发表。任意目录可发现技能不等于获准自动初始化项目；项目尚未初始化时，Agent 自选技能 MUST 退出该工作流并正常答复，用户显式请求 OpenSpec 时 MUST 等待用户显式授权运行 `omp openspec init`，不得因发现或读取 Skill 自动创建 `openspec/` 目录。
 
 独立 `omp openspec init [path]` MUST 仅负责项目初始化与配置，不向项目或用户目录安装、复制、链接、更新或清理 Skill／旧命令，也不迁移或删除用户已有 Skill、命令及其他 Agent 目录。该边界 MUST 由初始化实现本身保证，不依赖宿主强制追加 `--tools=none`；仅服务交付的工具探测、工具选择及参数不再属于初始化合同。项目路径校验、必要目录结构、配置与语言上下文、目标路径解析、重复初始化及已有配置保护与原生错误语义 MUST 保留；项目配置出现 `store` 或 Store `references` 字段时 MUST 按不支持字段拒绝，不解析旧指针，不因本地规划目录已存在或字段值为空而放行。新项目默认 schema MUST 为上游 `spec-driven`，MUST NOT 注入 mini；已有配置及 change 不自动覆盖、转换或迁移，显式 schema 选择仍遵循原生规则。内置 Skill 不以初始化为安装前提，随 OMP 版本交付。
 
-普通 `omp openspec ...` 入口 MUST 使用上游通用 `spec-driven` 工作流及其原生产物依赖和校验语义，显式选择 schema 时仍遵循原生解析规则；MUST NOT 因 AIReq 旧需求而要求包内 `omp-spec`、验证其固定来源、注入私有 schema／context 或使用需求专用目录桥接。AIReq 旧有的材料范围、会话、阶段权限及归档假设 MUST NOT 约束普通 OpenSpec，也不得据此删减通用工作流要求的 design／tasks 等产物。现有用户配置及 change 不因本条自动转换或迁移。
+普通 `omp openspec ...` 入口 MUST 使用上游通用 `spec-driven` 工作流及其原生产物依赖和校验语义，显式选择 schema 时仍遵循原生解析规则。MUST NOT 注入私有 schema／context、使用需求专用目录桥接或删减通用工作流要求的 design／tasks 等产物。现有用户配置及 change 不因默认 schema 变化而自动转换或迁移。
 
 内置 OpenSpec 的 Skill 与运行资源 MUST 随 OMP 发行版本更新，不通过 `omp openspec update` 安装、刷新或迁移。经职责核对，撤销 Skill／命令交付、profile 同步、旧产物迁移及独立安装升级链后，update 没有必须保留的独立项目职责，因此 MUST 移除该 CLI 入口及专属实现；同步清除公开导出、补全、帮助、配置侧自动应用调用和更新提示中的旧入口，不保留兼容别名、无操作成功或“已是最新”响应。调用 `omp openspec update` MUST 按正常未知命令返回非零退出码，不修改用户已有 Skill、命令、配置或 change；不得为替代它新增运行时自动下载或自升级机制。共享配置、模板及安全工具仅在确无剩余消费者时删除，不因本条改变其他通用 CLI 业务语义。`openspec-update-change` 是维护需求材料的业务 Skill，MUST 保留，不属于被移除的安装更新命令。
-
-`omp-spec` 是供 AIReq 使用的独立需求 schema，AIReq 业务需求阶段只生成获授权的 proposal／增量规格，技术方案阶段同轮生成共享 design.md 与同目录 sr-dependencies.json，前者保留实现思路及技术取舍并引用后者，不生成编码执行计划或自动归档流水线。
 
 Superpowers MUST 仅交付 OMP 原生技能发现与脚本执行需要的固定版本资源：完整 `skills/`、`LICENSE` 和用于 ESM 语义及版本读取的根 `package.json`。NEVER 交付其他宿主专属插件、扩展、bootstrap hooks、安装入口及其品牌图片；后续上游同步同样遵循此边界，不整仓复制。所交付技能正文、引用材料和运行脚本保留上游原始内容，所有包内 Superpowers `SKILL.md` 均增加并持续保留 `disable-model-invocation: true`；根 `package.json` 删除指向未交付宿主资源的 `main`、`pi` 注册及专属包关键字。不为 OMP 改写工具名称、子代理名称或脚本调用，依赖宿主提供的能力及实际可用性不改变上游基线。
 
 #### Scenario: 普通会话发现
 
 - **WHEN** 用户启动普通会话或重载技能
-- **THEN** 所有包内 Superpowers 技能均不出现在普通会话及其子代理、AIReq Agent 及其后代的模型自动发现索引，但保留用户显式调用；原生宿主与 AIReq 角色授权边界仍适用
-
-#### Scenario: AIReq 不提供实施技能授权
-
-- **WHEN** 用户在 AIReq 调用或按引用读取包内 Superpowers 资源
-- **THEN** 沿用原生显式调用及资源授权，不因技能可读而扩大角色写入权限；AIReq 不建立计划、执行、IR 验收或递归实施会话
+- **THEN** 所有包内 Superpowers 技能均不出现在普通会话及其子代理的模型自动发现索引，但保留用户显式调用并遵循原生宿主授权
 - **AND** 同名非包内自定义技能仍按既有发现、调用和优先级规则生效
 
 #### Scenario: 初始化不重复安装内置资源
@@ -82,7 +73,7 @@ OMP MUST 在 OpenSpec 的统一产物指令出口提供内置中文语言约束�
 
 `store` 命令、`--store` 及隐藏 `--store-path` MUST 移除，调用时按正常未知命令／参数非零退出且不写文件；MUST NOT 保留兼容别名、忽略后继续、无操作成功、迁移或 Store 回退。项目配置中的 `store`／Store `references` 字段一旦出现，MUST 明确报不支持且不写文件，不区分字段值是否为空或本地规划目录是否存在，不解析旧值或旧系统状态。删除功能 MUST NOT 删除、改写、清理或自动迁移用户已有 Store 仓库、注册表、元数据、全局配置、项目材料、自定义 Skill 或缓存。
 
-Workset MUST 保留为独立的本机目录组合能力，保留既有 create／list／show／remove／open、普通目录成员、排序、保存视图及打开工具语义，不因 Store 移除删除该能力或改动成员目录。`context`、`doctor` MUST 保留本地项目、配置与规划目录的有效职责，仅撤销 Store 健康检查、跨 Store 引用及远程拉取指引。该收敛 MUST NOT 改变普通 OMP、Superpowers、JCH 或 AIReq 业务及其权限边界。
+Workset MUST 保留为独立的本机目录组合能力，保留既有 create／list／show／remove／open、普通目录成员、排序、保存视图及打开工具语义，不因 Store 移除删除该能力或改动成员目录。`context`、`doctor` MUST 保留本地项目、配置与规划目录的有效职责，仅撤销 Store 健康检查、跨 Store 引用及远程拉取指引。该收敛 MUST NOT 改变普通 OMP、Superpowers 或 JCH 的能力及权限边界。
 
 #### Scenario: 最近本地项目根隔离
 
@@ -100,26 +91,6 @@ Workset MUST 保留为独立的本机目录组合能力，保留既有 create／
 - **WHEN** 项目配置出现 `store` 或 Store `references` 字段，包括空值且已有本地 `openspec/` 的情况
 - **THEN** 明确报不支持且不写文件，不忽略后继续，不解析指针、不读取外部 Store、不迁移或清理用户数据
 
-
-### Requirement: AIReq 需求 schema 固定为包内 omp-spec
-
-> 适用范围：本节保留的旧条款仅记录 AIReq 专属需求，不适用于普通 OpenSpec，不构成本轮恢复包内 `omp-spec` 或私有桥接的依据。AIReq 后续需求另行确定；本轮不重新定义、删除或实现其专属 schema、流程、会话或权限，也不将其接入、兼容或隔离作为普通 OpenSpec 适配的完成条件。
-
-OMP MUST 把 `omp-spec` 的唯一来源固定为随包内置 schema；项目或用户同名覆盖 MUST 被拒绝，不得静默改用另一套 AIReq 工作流。
-
-#### Scenario: 解析来源必须是包内 schema
-
-- **WHEN** AIReq 初始化新流程、需求阶段读取 OpenSpec 指令或校验需求 schema
-- **THEN** schema 解析结果 MUST 声明来源为包内，且其实际路径按真实路径比较等于随包内置的 `omp-spec` 目录，两者同时满足才可继续
-- **AND** 不得接受工作区或用户目录中的同名 schema，也不得为通过检查而复制、改写或移动内置 schema
-
-#### Scenario: 外部覆盖阻断流程
-
-- **WHEN** `omp-spec` 被项目级或用户级 schema 覆盖，或解析结果来源不是包内
-- **THEN** MUST 拒绝并阻断 AIReq 初始化及需求校验，报错说明外部 schema 遮蔽了内置 schema，且须在不修改已有 change 的前提下解决冲突；不以此建立 AIReq 归档阶段
-- **AND** 不创建 change、不迁移或转换已有 change、不回退为其他 schema，也不报告成功
-
-
 ### Requirement: 包内 Superpowers 脚本执行入口
 
 OMP MUST 通过 `omp superpowers <relative-script> [args...]` 提供包内技能脚本入口，只运行随包交付的脚本，不执行工作区任意脚本。
@@ -128,7 +99,7 @@ OMP MUST 通过 `omp superpowers <relative-script> [args...]` 提供包内技能
 
 - **WHEN** 用户运行 `omp superpowers <relative-script> [args...]`
 - **THEN** 只接受随包脚本清单中存在且位于 `skills/` 下的相对路径；其他路径 MUST 报“不是包内技能脚本”并拒绝执行
-- **AND** 脚本参数原样透传，不解释为 AIReq 命令或阶段操作
+- **AND** 脚本参数原样透传
 
 #### Scenario: 运行环境与外部工具
 
@@ -151,182 +122,30 @@ OMP MUST 通过 `omp superpowers <relative-script> [args...]` 提供包内技能
 
 ### Requirement: Markdown 需求权威探测
 
-普通 OMP 沿用既有 Markdown 文档时 MUST 明确资料来源；AIReq MUST 只使用 OpenSpec 提案及已合入的规格作为本流程需求权威，不再自动从旧 requirements 目录建立另一套 AIReq 需求基线。
-
-#### Scenario: AIReq 使用 OpenSpec
-- **WHEN** AIReq 新建提案或分析正式需求进度
-- **THEN** 提案在所属 OMP 项目的固定 dir 下生成 openspec/changes/<change-id>/proposal.md、specs/<capability>/spec.md，以及同目录的 design.md 与 sr-dependencies.json 两个方案产物；正式需求读取仓库中的实际需求、JSON 依赖和代码版本，旧 docs-zh-CN/requirements、docs/requirements 或 requirements 可只读参考，不是并列权威、不要求存在
+普通 OMP 沿用既有 Markdown 文档时 MUST 明确资料来源。
 
 #### Scenario: 普通 OMP 资料探测
 - **WHEN** 普通 OMP 独立文档流程沿用旧 Markdown 目录探测
-- **THEN** 保留原候选目录、歧义报错、真实读取失败和递归文件版本校验，不自动迁移或改写原文；此能力不驱动 AIReq 业务状态
-
-### Requirement: AIReq 阶段会话的强制运行默认值
-
-OMP MUST 在所有 AIReq 阶段会话上强制一组运行默认值，且只作用于该会话，不写回用户或项目配置。
-
-#### Scenario: 编辑模式强制整文件替换
-
-- **WHEN** AIReq 建立任一阶段 Agent 会话，包括新建与恢复
-- **THEN** `edit.mode` MUST 被覆盖为 `replace`（整文件替换），显式压过用户设置及按模型变体回退
-- **AND** 该覆盖不改写持久配置，普通会话仍按原设置解析
-
-#### Scenario: 需求文档与只读分析关闭投机启动
-
-- **WHEN** 业务需求、需求评审 A／B／C、综合评审、方案或进度分析会话执行其获授权的工具调用或派发任务
-- **THEN** 工具与任务的投机启动 MUST 关闭，即使配置为开启
-- **AND** 该关闭不改变角色工具权限；AIReq 不设编码执行或 IR 验收会话，普通 OMP 的配置行为不变
+- **THEN** 保留原候选目录、歧义报错、真实读取失败和递归文件版本校验，不自动迁移或改写原文
 
 ### Requirement: 普通 OMP 原生实施能力保持独立
 
-普通 OMP 的实施、验证、审查、原生子代理和包内资源授权 MUST 保持既有行为，不因 AIReq 简化而删减，也不转化为 AIReq 的执行阶段。AIReq 只复用原生会话、工具及生命周期完成获授权的需求文档和只读分析工作。
+普通 OMP 的实施、验证、审查、原生子代理和包内资源授权 MUST 保持既有行为。
 
-#### Scenario: 平台外实现已管理需求
-- **WHEN** 开发者在 AIReq 外使用普通 OMP、TUI、WebGUI 或自己的工具实现 SR
-- **THEN** 沿用各工具的原生权限、技能、任务及验证规则；AIReq 不为其批准计划、调度任务、分配执行名额或提供编码会话，不把平台外实施结果冒充 AIReq 执行证据
-- **AND** 独立 `spec-executor` 的原生能力不由 AIReq 管理，不能据此恢复 AIReq 计划、执行或验收角色
+#### Scenario: 原生入口实施需求
+- **WHEN** 开发者在普通 OMP、TUI 或 WebGUI 中实施需求
+- **THEN** 沿用各入口的原生权限、技能、任务及验证规则
 
 #### Scenario: 原生实施会话能力和技能授权存续
-- **WHEN** AIReq 外已获授权的原生实施会话或其递归实施后代工作、保活续聊或恢复
+- **WHEN** 已获授权的原生实施会话或其递归实施后代工作、保活续聊或恢复
 - **THEN** 沿用原生配置、可用性和权限提供工具及已配置能力，包括可用的 knowledge_search、web_search、eval、LSP、MCP、扩展和自定义工具，不以固定精简名单裁剪；wait 等待真实子任务，结束前结清自有递归工作
-- **AND** 原生明确授予的技能读取授权持续到会话释放，不因首次任务返回而提前撤销；不得绕过用户批准、项目规则、报告后只读或停止边界，不向 AIReq 增加实施技能发现或工具权限
+- **AND** 原生明确授予的技能读取授权持续到会话释放，不因首次任务返回而提前撤销；不得绕过用户批准、项目规则、报告后只读或停止边界
 
 ### Requirement: 内置执行代理具备必要原生能力
 
-AIReq 外的内置 `spec-executor` MUST 保留实施已批准计划、计划内验证、独立审查及等待所需的原生能力，遵守自身原生权限与获批范围；本要求不建立 AIReq 执行阶段。
+内置 `spec-executor` MUST 保留实施已批准计划、计划内验证、独立审查及等待所需的原生能力，遵守自身原生权限与获批范围。
 
 #### Scenario: 原生委派实施和独立审查
-- **WHEN** 普通 OMP 在 AIReq 外使用 `spec-executor` 实施获批计划且未达到原生派生限制
+- **WHEN** 普通 OMP 使用 `spec-executor` 实施获批计划且未达到原生派生限制
 - **THEN** 其工具 MUST 包含原生 task，可委派实施子代理与独立 reviewer，适用异步工作可使用原生 wait 等待真实结果；验证仅执行获授权的计划内验证
 - **AND** 缺少权限或必需能力时报告阻塞，不伪报实施、验证或审查完成；其他只读或显式受限代理保持自身边界
-
-### Requirement: 新 AIReq 模块与普通 OMP 的隔离
-
-OMP 后端 MUST 复用 OMP 原生会话、工具和生命周期，负责真实业务、持久化及外部能力，并保持普通 OMP、原 WebGUI、独立 OpenSpec／Superpowers 能力的既有行为。新业务只在 AIReq 模块承载，不建立第二执行器、第二聊天库或跨旧流程兼容路径。独立原型后端只模拟同一业务契约，不执行真实模型、Git 或数据库操作，不是第二套真实执行器。
-
-#### Scenario: 功能未启用和普通能力
-- **WHEN** 使用普通 OMP／WebGUI 或独立技能
-- **THEN** 不启动 AIReq 业务、不注入 AIReq 状态或冻结规则；已授权的新 AIReq 需求不改变原 WebGUI 源码、入口、协议、构建和资源
-
-#### Scenario: 进入退出和资源归属
-- **WHEN** 显式进入或退出 AIReq
-- **THEN** 沿用原生准入、TUI 独占和自有任务结清；关闭网页不退出服务，退出不撤销需求、代码或 Git；不关闭其他实例的任务
-
-### Requirement: 共享浏览器代码与独立后端
-
-AIReq MUST 遵循 [aireq-browser-workbench 的界面与数据源边界](../aireq-browser-workbench/spec.md)：原型和正式版共用同一份前端代码、同一接口客户端及完全相同的浏览器代码，只以配置的后端地址选择可独立启动的原型后端或 OMP 后端。两类后端 MUST 实现同一请求、响应、错误及实时事件契约；前端 MUST NOT 按 prototype／runtime 模式分支业务界面或注入两套前端业务数据源。原型业务数据、状态、模拟回复、任务和事件 MUST 由原型后端在服务端纯内存持有，不依赖 OMP、模型、Git 或数据库；模拟身份由后端数据表达。
-
-#### Scenario: 开发演示切换真实后端无需重写
-- **WHEN** 前端持续连接独立原型后端开发和演示后，连接独立运行的 OMP 后端
-- **THEN** 只切换配置的后端地址，不复制、重写或替换前端及客户端；请求、响应、错误及事件仍走相同路径，既有 UI、权限、业务门禁和 Firefox 128 边界不变
-- **AND** OMP 后端使用原生宿主承担真实业务、持久化与外部能力，不依赖原型服务，不新增第二执行器；两类后端错误均如实显示，不自动回退样例
-
-#### Scenario: 原型模拟工作归服务所有
-- **WHEN** 原型后端已接纳模拟任务后，浏览器刷新、关闭或断线
-- **THEN** 服务端业务状态与模拟任务不因此停止或重置，重连只读取当前状态，不重发动作；原型后端重启才恢复初始样例
-- **AND** 原型无需数据库、Git、模型或正式 OMP 后端即可独立运行，模拟状态及事件不作为真实后台、持久化或鉴权完成证据
-
-### Requirement: 需求 Agent 与代码证据分析职责
-
-AIReq MUST 使用业务需求、需求评审 A／B／C、综合评审、方案及需求进度分析角色；独立 Skill 设计仅为设置能力。MUST NOT 提供开发计划、执行、IR 验收或归档 Agent，不编写、测试或修复业务代码。OMP 唯一管理原生会话、工具、任务和递归工作，不建立第二聊天或执行管理系统。
-
-#### Scenario: 四 Agent 评审与人工决定
-- **WHEN** 用户提交当前 IR／全部 SR 评审
-- **THEN** 三个不同模型独立并行只读评审同轮同版文件，综合评审汇总来源、依据及分歧；四份报告完整可读后由人工判断通过或返回补充，不按投票、评分或模型标签自动批准
-- **AND** 可切换原始会话定向追问；需求更新使旧报告和决定失效，原始报告重试须重新生成综合意见，保留历史而不沿用旧决定
-
-技术方案、SR 依赖和工期预估 MUST 由方案 Agent 在对话中生成和更新；界面 MUST NOT 提供“生成技术方案”“生成方案”或“重新生成方案”按钮，也不要求人另行触发产出。人通过对话澄清、补充或要求修改，核对最新材料后逐文件确认。仅进入页面、切换会话或输入未发送文字不会生成材料；AI 尚未完成产出时不显示为已完成。
-
-#### Scenario: 方案与进度分析不编码
-- **WHEN** 方案 Agent 或需求进度分析 Agent 工作
-- **THEN** 方案只同轮维护 design.md 与 sr-dependencies.json；design.md 保留实现思路及技术取舍并引用 JSON，不重复依赖清单，SR spec.md 不维护依赖，不编制编码任务计划；进度分析只读取需求、验收标准及实际代码证据，报告实现、遗漏、问题和不确定项，不运行测试或修复代码
-
-#### Scenario: 独立 JSON 是依赖唯一权威
-- **WHEN** 生成或读取 SR 依赖
-- **THEN** 使用同一 OpenSpec Change 下与 design.md 同目录的 sr-dependencies.json，结构为 `{ "srs": [ { "srId": "...", "prerequisites": [ { "srId": "...", "reason": "..." } ] } ] }`；每个稳定 SR ID 唯一覆盖 IR 全部 SR，无依赖用空数组，前置项包含稳定 SR ID 和原因，不允许自依赖、未知 ID 或循环
-- **AND** 界面只读取 JSON 展示依赖与原因，从依赖图推导可并行关系，不在 JSON 重复存储并行关系；数据库只可持有依赖投影，不成为另一权威
-- **AND** JSON 缺失、无效或过期时明确提示，不降级读取 SR spec.md、design.md 或旧依赖，不沿用旧方案确认，不允许提交或自动转正
-
-### Requirement: 完整输入和版本证据
-
-Agent MUST 使用所属 IR 的完整需求、当前方案、必要上下文和实际代码版本，不用摘要或不同轮次材料替代。需求评审、文档确认及人工进度判断 MUST 绑定具体文件集合及版本。
-
-#### Scenario: 材料与候选变化
-- **WHEN** 需求、方案或其文件集合发生变化
-- **THEN** 旧报告及确认不得用于新内容；design.md 与 sr-dependencies.json 共用现有需求版本／方案轮次绑定，同轮生成、更新、失效并纳入查看及逐文件确认，任一产物变化使旧方案确认失效；历史保留版本和来源，未执行、失败及环境限制如实呈现，重复或过期请求在修改状态前拒绝
-
-#### Scenario: 正式需求不采用开发冻结锁
-- **WHEN** 开发者在平台外通过仓库人工 PR 流程修改需求、方案或代码
-- **THEN** 以实际提交为准，AIReq 重新绑定当前材料与证据，不因首个 SR 开始而建立冻结规则；排期元数据不能改写需求或验收条件，旧分析不证明新版本完成
-
-### Requirement: 仓库身份、需求分支与开发安排
-
-项目 MUST 只配置名称、Git 远程仓库及默认分支，不要求个人开发目录。平台按需管理内部工作副本；同仓库 clone／worktree 对应同一项目身份，但不引入开发锁、单 IR 限制、并发名额、个人 worktree 或开发会话绑定。
-
-#### Scenario: 方案确认后推送提案
-- **WHEN** 当前 IR、全部 SR、design.md 和有效 sr-dependencies.json 完整且人工逐文件确认
-- **THEN** 平台才从最新默认分支创建独立提案分支，将上述材料一同 Git 提交推送，再通过公司内网 Git API 自动创建包含 JSON 的 MR、记录编号／地址／分支／状态；人工在企业 Git 平台评审、合并 MR，平台不自动合并，不要求个人 Git 路径。后台定时查询 MR，并核验实际合入与完整材料后转正
-
-#### Scenario: 两条件自动转正并关联 SR 分支
-- **WHEN** 后台确认提案分支已合入默认分支，且默认分支上的 IR、全部 SR、design.md 和有效 sr-dependencies.json 完整有效
-- **THEN** 自动转正并从包含提案的最新默认分支创建推送各 SR 分支，保存需求、仓库、分支及基点映射；不重复转正或创建分支，失败保留事实并重试，不撤销已核验的正式需求
-- **AND** 不要求登记 PR 地址、人工通知或再次入库审批；沿用人员、排期和依赖，未分配或排期冲突不是转正门槛；不归档 Change 或提前将未实现增量提升为已实现规格
-
-#### Scenario: 安排提醒不成为执行调度
-- **WHEN** 调整 SR 开发人员、计划时间或查看依赖
-- **THEN** 人员与建议／人工排期入数据库，稳定 SR 依赖及原因只由 Git 中的 sr-dependencies.json 管理；提示依赖及人员时间冲突，不自动修改其他 SR、不锁定或调度平台外开发，不单列工时
-
-### Requirement: 真实工作结清与可恢复操作
-
-操作 MUST 防重并校验访问权限、轮次、材料及版本，分别保存文件、Git、人工决定和任务的真实结果。返回、停止或退出前 MUST 结清目标自有原生工作，不影响其他提案或实例。
-
-#### Scenario: 失败与重试
-- **WHEN** 状态写入、commit 或 push 部分失败
-- **THEN** 保留已成功步骤、提交和未发送输入，明确剩余工作，重试不重复提交或推进；不能以失败状态掩盖已接受工作，不强制覆盖或自动回滚其他工作
-
-#### Scenario: 浏览器与服务恢复
-- **WHEN** 页面刷新、关闭、断线，或后端服务重启后重新连接
-- **THEN** 页面不拥有原型或真实后台任务生命周期，不因页面离线停止或重置服务业务；OMP 后端恢复只读取持久事实并核对仍存活工作，不自动重放输入、合入确认或人工决定
-- **AND** 原型后端运行期间保留服务端纯内存业务与模拟任务，重启恢复初始样例，不从浏览器副本恢复旧业务；模拟生命周期不作为真实持久化或服务恢复证据
-
-### Requirement: 唯一共享数据库和业务边界
-
-正式部署中唯一共享 `omp aireq_web` MUST 由自身后端进程直接打开和读写 `/tmpdata/DFT_LAB/omp/omp_aireq_sqlite.db`；不需要独立数据库服务或数据库监听端口，不按访问工号另启正式 Web 或另造状态权威。SQLite 连接由 Web 后端持有，浏览器仍经现有 HTTP／WS 接口访问业务数据。`omp aireq_web --port <端口>` 指定端口，省略则自动选择并输出实际地址。此唯一性不禁止另启独立原型后端，其纯内存样例不得写入正式业务库。全部设置全员可看，外观和 Skill 设计全员可用，其余设置仅 Web 启动者可修改，包含草稿、保存、快捷键及全部写入口。本轮只更新需求文档与原型说明，不实现真实 SQLite 连接、持久化、命令、单实例门禁或权限；原型继续使用后端内存，不新增数据库服务、端口或 API。
-
-#### Scenario: Git、元数据与个人配置分离
-- **WHEN** 保存需求平台数据
-- **THEN** IR／SR 正文、验收标准、design.md 及 sr-dependencies.json 一同进入 Git，JSON 是依赖唯一权威；项目、Release、提案状态、人员、建议／人工排期、调整记录、进度分析和必要会话引用进入同一共享数据库，关联项目、IR、SR 及版本，记录操作人工号和时间
-- **AND** Token、个人模型／提示词／技能和聊天正文归所属 OMP profile／原生会话，不进入业务库；Git 不夹带进程、端口、队列、锁或聊天副本；共享路径不代表会话可迁移或另一 Web 可接管 A 的讨论
-
-### Requirement: 代码证据完成条件而非验收归档流水线
-
-AIReq MUST 根据代码证据报告 SR 实现百分比、遗漏、问题、不确定项、代码活动、分析时间、版本、分支及默认分支合入依据，不运行编码、验证、修复或固定通过验收流水线。
-
-#### Scenario: 一个调度器与每 SR 独立分析记录
-- **WHEN** 调度正式需求进度分析
-- **THEN** 由一个统一调度器管理所有项目；正式 SR 自动建立唯一分析任务记录，不建立每 SR 独立定时器。项目开关与全局间隔统一控制接纳，每 SR 独立保存状态、下次分析时间、历史和错误，不重复并发
-- **AND** 新项目默认关闭，已完成 SR 停止自动分析，重新打开复用原记录；停用不取消正在执行项或删除历史。需求及代码版本均未变则跳过模型调用；单个失败保留原因并可再次分析，不阻塞其他 SR
-- **AND** 这些记录、调度配置和执行历史属于共享业务数据，不是编码任务或开发调度；模型／提示词使用既有进度分析角色配置。原型后端只在服务端内存中提供虚拟时间、模拟任务与事件，共享前端经同一客户端请求及展示，不实施真实模型／Git／数据库分析；刷新／关页不停止或重置模拟，原型后端重启恢复样例
-- **AND** 调度摘要与列表查询分离：任务／历史分页返回摘要、总数及符合当前任务筛选的可接纳总数；报告按历史 ID 单条读取。立即分析覆盖全部匹配 SR 而非当前页；真实后端分页查询，禁止将全部报告随状态刷新复制给前端
-
-
-#### Scenario: SR 完成与人工依据
-- **WHEN** 后台分析或管理员／IR 负责人调整 SR 进度
-- **THEN** 0%～99% 仅由 AI 分析，AI 最高 99%；正式 SR 必须有平台分配的非空开发分支，缺失为异常。只有 AI 已分析到 99% 且已核实合入默认分支时，管理员或 IR 负责人才可填写依据人工确认到 100%，禁止人工填写其他百分比，记录工号、时间及依据
-- **AND** 合入本身、人员和排期变更不表示完成；保留原分析和代码证据，不把人工意见冒充新 AI 分析
-
-#### Scenario: IR 汇总不依赖最终归档 PR
-- **WHEN** 计算 IR 进度与完成
-- **THEN** 取全部 SR 的算术平均，无 SR 为 0%，不能独立人工修改，未实际达到 100% 不得舍入为 100%；全部 SR 完成才完成 IR
-- **AND** 不要求 IR 验收 Agent、最终修复／归档 PR 或人工合入通知，不占用或释放仓库名额；普通独立 OpenSpec 同步、归档行为保持原有边界，不由 AIReq 自动执行
-
-
-#### Scenario: 提案 MR 由平台创建、后台定时核验
-- **WHEN** 材料经人工确认，平台已创建分支并提交推送
-- **THEN** 使用公司 offline 内网已实测可用的 Git API 自动创建 MR、自动关联其编号和 URL，人工评审并合并；后台定时查询 MR、核验默认分支中的实际合入与完整材料后转正
-- **AND** 同一候选复用 MR，MR 创建／查询失败或关闭未合入不误转正；不引入自动合并、编码或验收流水线。本轮只更新需求文档与内存原型，不接真实 API，不运行测试
-
-
-### Requirement: 固定项目目录与原生会话引用
-
-提案的业务需求、独立评审 A／B／C、综合评审和技术方案 MUST 使用同一 OMP 项目 dir，各自会话 ID 由 OMP 提供，AIReq 按 IR、Agent 和轮次保存引用。切换 IR／Agent 不切换 dir，不新建 workspace 或重新连接；不同 IR 的文件以 change-id 区分。需求入库是确认、分支、MR 和后台核验的状态流程，不创建独立 Agent 会话。完整会话归属与场景见 [aireq-requirement-intake](../aireq-requirement-intake/spec.md#requirement-omp-按项目维护会话aireq-记录-ir-引用)。

@@ -64,8 +64,7 @@ packages/ai/test/.temp-images/
 .omp/plugins/
 .omp/big-review/
 .omp/spec-sessions/
-.omp/aireq/
-.omp/aireq-workbench/
+.omp/webgui/
 .pi_config/
 .opencode/
 .worktrees/

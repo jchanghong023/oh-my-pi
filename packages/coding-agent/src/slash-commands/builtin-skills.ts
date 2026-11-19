@@ -37,7 +37,7 @@ function parseTargets(rest: string): { names: string[]; global: boolean } | { er
 	return { names, global };
 }
 
-async function handleProtocolSkillsCommand(command: ParsedSlashCommand, runtime: SlashCommandRuntime, browser = false) {
+async function handleProtocolSkillsCommand(command: ParsedSlashCommand, runtime: SlashCommandRuntime) {
 	let failed = false;
 	const warnings: string[] = [];
 	await handleSkillsCommand(command.args, {
@@ -52,7 +52,7 @@ async function handleProtocolSkillsCommand(command: ParsedSlashCommand, runtime:
 			await runtime.session.refreshSkills();
 			await runtime.refreshCommands();
 		},
-		refreshAfterFailure: browser ? "mutation" : "persisted-update",
+		refreshAfterPersistedUpdate: true,
 		hooks: {
 			warn: message => {
 				warnings.push(message);
@@ -88,7 +88,6 @@ export const BUILTIN_SKILLS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		],
 		allowArgs: true,
 		handle: handleProtocolSkillsCommand,
-		handleWebGui: (command, runtime) => handleProtocolSkillsCommand(command, runtime, true),
 		handleTui: async (command, runtime) => {
 			const { ctx } = runtime;
 			const session = ctx.session;
@@ -115,7 +114,7 @@ interface SkillCommandContext {
 	output(text: string, options?: { dim?: boolean }): Promise<void> | void;
 	error(text: string): Promise<void> | void;
 	refresh(): Promise<void>;
-	refreshAfterFailure?: "mutation" | "persisted-update";
+	refreshAfterPersistedUpdate?: boolean;
 	hooks: SkillInstallHooks;
 }
 
@@ -132,7 +131,7 @@ async function reportSkillChanges(context: SkillCommandContext, changes: SkillCh
 async function handleSkillsCommand(args: string, context: SkillCommandContext): Promise<void> {
 	const { verb, rest } = parseSubcommand(args);
 	const cwd = context.cwd;
-	let failedMutationMayNeedRefresh = false;
+	let updatePersisted = false;
 	try {
 		switch (verb) {
 			case "search": {
@@ -155,7 +154,6 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 					return;
 				}
 				await context.output(`Installing ${targets.names.join(", ")}…`, { dim: true });
-				failedMutationMayNeedRefresh = context.refreshAfterFailure === "mutation";
 				const changes = await withSkillRegistryClient(context.registryUrl, client =>
 					installSkillPackages(
 						client,
@@ -163,7 +161,6 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 						context.hooks,
 					),
 				);
-				failedMutationMayNeedRefresh = false;
 				await reportSkillChanges(context, changes);
 				return;
 			}
@@ -177,20 +174,18 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 					return;
 				}
 				await context.output("Checking the registry for updates…", { dim: true });
-				failedMutationMayNeedRefresh = context.refreshAfterFailure === "mutation";
-				const hooks: SkillInstallHooks =
-					context.refreshAfterFailure === "persisted-update"
-						? {
-								...context.hooks,
-								onPersisted: () => {
-									failedMutationMayNeedRefresh = true;
-								},
-							}
-						: context.hooks;
+				const hooks: SkillInstallHooks = context.refreshAfterPersistedUpdate
+					? {
+							...context.hooks,
+							onPersisted: () => {
+								updatePersisted = true;
+							},
+						}
+					: context.hooks;
 				const changes = await withSkillRegistryClient(context.registryUrl, client =>
 					updateSkillPackages(client, { names: targets.names, global: targets.global, cwd }, hooks),
 				);
-				failedMutationMayNeedRefresh = false;
+				updatePersisted = false;
 				await reportSkillChanges(context, changes);
 				return;
 			}
@@ -204,7 +199,7 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 	} catch (error) {
 		await context.error(`Skills: ${errorMessage(error)}`);
 		// Manifest/lock persistence or store pruning can fail after a real change.
-		if (failedMutationMayNeedRefresh) {
+		if (updatePersisted) {
 			try {
 				await context.refresh();
 			} catch (refreshError) {

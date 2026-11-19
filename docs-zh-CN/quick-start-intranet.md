@@ -107,11 +107,11 @@ Linux offline 额外提醒项目持久材料及必要备份使用获准的 NFS�
 
 普通模式不追加上述规则，Windows offline 不追加 Linux/csh 段落；不改变 Shell 执行器或用户配置。提示词不替代实际网络隔离、存储权限和公司实机验证。
 
-### AIReq／WebGUI／sketch 手动打开网页
+### WebGUI／Sketch 手动打开网页
 
-`OMP_OFFLINE` 启用时，`/aireq`、`omp aireq`、`/webgui`、`omp webgui` 和原生 `/sketch` 不自动启动浏览器，适用于所有平台和 Shell。请在浏览器中手动打开 OMP 显示的完整地址；OMP 不读取 csh／tcsh 启动文件或调用 `ff` 别名，也不要求配置别名。非 offline 保留系统默认浏览器打开方式，`OMP_AIREQ_NO_OPEN=1`／`OMP_WEBGUI_NO_OPEN=1` 仍可分别跳过自动打开。
+`OMP_OFFLINE` 启用时，`/webgui`、`omp webgui` 和原生 `/sketch` 不自动启动浏览器，适用于所有平台和 Shell。请在浏览器中手动打开 OMP 显示的完整地址；OMP 不读取 csh／tcsh 启动文件或调用 `ff` 别名，也不要求配置别名。非 offline 保留系统默认浏览器打开方式，WebGUI 可用 `OMP_WEBGUI_NO_OPEN=1` 跳过自动打开。
 
-Linux offline 环境进入 `/aireq`、`/webgui`，启动 `omp webgui`，或打开原生 `/sketch` 后，仍会自动尝试复制完整的 `http://127.0.0.1:端口/…` 地址，包括随机路径，可在浏览器地址栏粘贴。其他环境不自动覆盖剪贴板。
+Linux offline 环境进入 `/webgui`、启动 `omp webgui`，或打开原生 `/sketch` 后，仍会自动尝试复制完整的本机回环地址，包括路径与查询参数，可在浏览器地址栏粘贴。其他环境不自动覆盖剪贴板。
 
 复制复用 OMP 的终端 OSC 52 和原生 X11 剪贴板，不需要另装 `xclip`／`xsel`。公司 SSH／Exceed 是否能粘贴到 Windows 取决于终端剪贴板权限和 X11 剪贴板共享设置；界面提示“已尝试复制”不等于实机已确认。不能粘贴时仍可手动复制显示的完整地址；复制不会建立端口转发，`127.0.0.1` 必须指向运行 OMP 的机器。
 
@@ -148,7 +148,7 @@ Linux offline 环境进入 `/aireq`、`/webgui`，启动 `omp webgui`，或打�
 | `/knowledge`                        | 查询已导入的公司资料                                 |
 | `/team 需求`                   | 多代理独立调查、交叉审查并汇总方案，只读             |
 | `/goal-autopilot 目标`         | 持久目标、自动编排与无人值守要求，见第 4.7 节        |
-| `/aireq`                         | 进入 / 退出工作区协同开发模式，见第 4.8 节           |
+| `/webgui`                      | 进入 / 退出浏览器会话模式，见第 4.8 节              |
 | `/advisor on` / `/advisor off` | 开启 / 关闭第二模型复审，默认逐轮，频率可配置        |
 | `/skill:技能名 任务`           | 调用本地技能，从补全中选择技能名                     |
 | `/todo` / `/hub`               | 查看待办进度 / 子代理活动                            |
@@ -481,33 +481,25 @@ OMP 按要求先确定范围与统一规则，再拆分独立工作项、排队�
 
 OMP 终端支持此命令。完整契约见 [Goal 自动编排需求](../openspec/specs/goal-autopilot/spec.md)，实现与验收边界见[历史验证记录](verification-history.md)。
 
-### 4.8 `/aireq`：浏览器协同开发
+### 4.8 `/webgui`：浏览器会话
 
-AIReq 最新权威需求为长期共享 Web：A 的账号与 Token 运行服务，同事以 `j` 加 8 位数字工号进入；无需密码，仅检查格式。项目／Release 及按工号绑定的开发目录存唯一共享数据库，需求提案先在固定临时目录生成 OpenSpec 标准文件。
-
-流程为业务需求与独立业务评审 → 技术方案及 SR 依赖 → 人工提案 PR → 正式提案 → 同仓库单 IR、默认最多两个依赖就绪 SR 并行 → 各 SR 的代码／测试／规格同 PR → IR 验收 → 最终修复与归档 PR。首个 SR 开始冻结需求和确认方案，归档只移动 Change，不重复同步规格。
-
-`/aireq`／`omp aireq` 为浏览器工作台入口，进入后原 TUI 保持独占；再次 `/aireq` 退出前结清自有工作，关闭网页不退出服务。旧 `/aireq new`、`next`、`back`、`drop`、工作区 Team 配置及四阶段 TUI 不再作为当前 AIReq 的操作合同。
-
-本轮只更新文档，未改当前代码或原型，也不表示上述目标已经可用。完整流程及实现边界见[最新 AIReq 说明](spec-driven-orchestration.md)，原型启动和未对齐项见[AIReq README](../packages/aireq-frontend/README.md)。历史测试不能证明新规则通过。
+在当前 TUI 输入 `/webgui` 进入浏览器会话，期间普通 TUI 输入不与网页并行执行。也可在系统终端运行 `omp webgui`，然后在网页显式打开或创建项目、新建或继续原生会话。两种入口均可在终端再次输入 `/webgui` 退出；关闭网页不会停止服务。使用终端显示的完整地址；内网访问、端口和中转边界见 [WebGUI 内网访问说明](webgui-http-access.md)。
 
 ### 4.9 OpenSpec：独立需求闭环
 
-内置 OpenSpec 2.0 与 `/aireq` 是独立功能，不依赖 `/aireq` 的运行或批准。全部 12 项 `openspec-*` Skill 在任意目录按 OMP 原生机制发现和补全，可用 `/skill:<name>` 显式调用、通过 `skill://<name>` 按需读取；项目／用户同名 Skill 继续沿用原有覆盖优先级。实际操作仍受用户授权和项目规则约束，发现 Skill 不会自动初始化项目。
+内置 OpenSpec 2.0 的全部 12 项 `openspec-*` Skill 在任意目录按 OMP 原生机制提供名称补全、`/skill:<name>` 显式调用和 `skill://<name>` 按需读取；其中六项 core Skill 默认出现在模型自动发现索引，其余六项仅供显式调用。项目／用户同名 Skill 继续沿用原有覆盖优先级。实际操作仍受用户授权和项目规则约束，发现 Skill 不会自动初始化项目。
 
 所有 CLI 操作统一使用 `omp openspec ...`，无需独立安装 OpenSpec 或 Node；`omp openspec --help` 查看能力。经用户明确要求后运行 `omp openspec init [项目路径]`，仅初始化项目目录和配置，默认 schema 为 `spec-driven`，不安装、更新或清理任何用户 Skill、Agent 配置或旧命令。CLI `update` 与 `opsx` 文件命令入口已移除；`openspec-update-change` Skill 用于修改变更材料，仍然保留。
 
-已有 `mini`／`omp-spec` 等自定义 schema 不会自动迁移，也不再提供包内兼容别名；用户需显式选择迁移并核对产物。仅改 schema 名称不能补齐 `design.md`／`tasks.md`，缺失材料必须如实保持待完成，历史归档不批量改写。本仓库的迁移记录见 [schema 迁移说明](openspec-schema-migration.md)。需求同步或归档不等于软件实现及验收，未结束的 `/aireq` 不允许借独立技能绕过阶段权限；本说明不代表 AIReq 已接入新的 OpenSpec 合同。
+已有 `mini`／`omp-spec` 等自定义 schema 不会自动迁移，也不再提供包内兼容别名；用户需显式选择迁移并核对产物。仅改 schema 名称不能补齐 `design.md`／`tasks.md`，缺失材料必须如实保持待完成，历史归档不批量改写。本仓库的迁移记录见 [schema 迁移说明](openspec-schema-migration.md)。需求同步或归档不等于软件实现及验收。
 
-系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI，不是前三个节点可执行命令的模型工具。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
+系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
 
 SDD／计划执行脚本以当前工作目录所属 Git 仓库为准，不按计划文件所在位置猜测仓库，也不要切到技能缓存目录运行。`sdd-workspace`、`task-brief`、`review-package` 支持在脚本路径后加 `-C <工作区>`；例如 `omp superpowers skills/subagent-driven-development/scripts/review-package -C <工作区> <计划文件> <base> <head>`。提取任务仍使用英文 `Task` 标题，编号可为 `A1`、`6b`、`2.1`；需要提交范围的执行／审查脚本要求仓库已有提交，但不会代替用户自动初始化或提交。
 
 包内资源清单固定为 OpenSpec **2.0.0**、Superpowers **7.0.2**（修订 `22f0b463e7a5e579904dd6211a520321035526f7`），并包含真实 JCH `jch-grill-me` 技能及配套元数据。OpenSpec CLI、schema 与全部 Skill 随 OMP 发行升级，离线运行不下载、安装或自更新这些资源，也不要求另行克隆 JCH。现有共享命令消费者使用同一原生控制器。
 
 Superpowers 仅交付完整技能及其引用材料／运行脚本、许可证与 ESM／版本元数据，不携带 Claude、Codex、Pi、OpenCode 等其他宿主的插件、启动 hooks 或品牌图片。全部 15 个技能继续仅供显式调用，用户／项目同名覆盖与资源授权边界不变；后续同步也不整仓复制上游资源。
-
-此流程预期增加请求、token、费用和等待，不承诺降本或把弱模型变强。实际投入依可取得证据报告，未知费用仍为未知，调用数不等于账单。本地模拟模型只验证编排，不代表真实 Provider 的任务质量、计费或服务可用性已验收；源码入口、打包产物、各平台及桌面 UI 的验收范围须分别报告，不能互相代替。完整门禁与验收条件见[规格驱动编排需求](../openspec/specs/spec-driven-orchestration/spec.md)，各项证据边界见[历史验证记录](verification-history.md)。
 
 ### 4.10 内网会话协作：按登录用户名加入
 

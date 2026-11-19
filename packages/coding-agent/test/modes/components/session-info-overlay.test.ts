@@ -103,19 +103,19 @@ describe("SessionInfoOverlay", () => {
 		expect(lines).toHaveLength(7);
 	});
 
-	it("keeps Dev detail guides aligned when long lines wrap", () => {
+	it("keeps detail guides aligned when long lines wrap", () => {
 		const guide = uiTheme.fg("dim", "│");
 		const overlay = new SessionInfoOverlay(
 			{ terminal: { rows: 12 } },
-			`Dev 工作区\n${guide} 入口: /dev next 确认需求；方案阶段批准方案；计划阶段批准计划；执行阶段验收并归档`,
+			`Worktree\n${guide} CWD: ${"workspace/".repeat(8)}project`,
 			() => {},
 		);
 
 		const lines = overlay.render(48).map(line => Bun.stripANSI(line));
-		const first = lines.findIndex(line => line.includes("入口:"));
+		const first = lines.findIndex(line => line.includes("CWD:"));
 		expect(first).toBeGreaterThan(-1);
 		expect(lines[first + 1]).toMatch(/^│ │ /);
-		expect(lines[first + 1]).toContain("阶段");
+		expect(lines[first + 1]).toContain("workspace/");
 	});
 
 	it("preserves exact-width details when the scrollbar is visible", () => {

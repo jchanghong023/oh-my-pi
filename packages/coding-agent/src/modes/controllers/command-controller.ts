@@ -26,7 +26,6 @@ import { formatDuration, logger, Snowflake, sanitizeText } from "@oh-my-pi/pi-ut
 import { getActiveProfile, getConfigDirName } from "@oh-my-pi/pi-utils/dirs";
 import { classifyTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
-import { getAIReqWorkbenchTuiMode } from "../../aireq-workbench/tui-mode";
 import { type BashResult, isPersistentShellCdCommand } from "../../exec/bash-executor";
 import { type LoadedCustomShare, loadCustomShare } from "../../export/custom-share";
 import { parseExportArgs } from "../../export/html/args";
@@ -89,9 +88,6 @@ import {
 	limitMatchesActiveAccount,
 } from "../../slash-commands/helpers/active-oauth-account";
 import { formatResetContextResult, resetContextForCommand } from "../../slash-commands/helpers/clear";
-import { handleAIReqCommand } from "../../slash-commands/builtin-aireq";
-import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
-import type { ParsedSlashCommand, SlashCommandResult, TuiSlashCommandRuntime } from "../../slash-commands/types";
 import { formatProviderName } from "@oh-my-pi/pi-tui/chrome/format";
 import { formatCompactQuota } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { resolveTernPane } from "../../tools/browser/tern/kind";
@@ -196,38 +192,6 @@ function hasForkApiKeyOverride(argv: string[]): boolean {
 		if (flagConsumesValue(arg, argv[i + 1])) i++;
 	}
 	return false;
-}
-
-/**
- * Bind the lightweight AIReq command to the native host here, not in its spec:
- * the browser host itself consumes the builtin registry.
- */
-export async function handleAIReqCommandTui(
-	command: ParsedSlashCommand,
-	runtime: TuiSlashCommandRuntime,
-): Promise<SlashCommandResult> {
-	const { ctx } = runtime;
-	const consumedText = !runtime.draftDetached && ctx.editor.getExpandedText() === command.text;
-	if (consumedText) ctx.editor.setText("");
-	const result = await handleAIReqCommand(command, {
-		session: ctx.session,
-		settings: ctx.settings,
-		cwd: ctx.sessionManager.getCwd(),
-		output: text => ctx.showStatus(text),
-		registerHostShutdown: dispose => ctx.registerHostShutdown(dispose),
-		toggleAIReqWorkbench: () => getAIReqWorkbenchTuiMode(ctx).toggle(),
-	});
-	if (runtime.draftDetached) {
-		if (result && "failed" in result && result.failed) {
-			restoreDetachedDraft(ctx.editor, command.text, runtime.input?.images, runtime.input?.imageLinks);
-		} else if (runtime.input?.images?.length) {
-			restoreDetachedDraft(ctx.editor, "", runtime.input.images, runtime.input.imageLinks);
-		}
-	}
-	if (!runtime.draftDetached && consumedText && result && "failed" in result && result.failed) {
-		restoreDetachedDraft(ctx.editor, command.text);
-	}
-	return result;
 }
 
 export class CommandController {

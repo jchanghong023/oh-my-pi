@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "pageVersion": "sha256:3d07e9ceffddae33d097729be471e583c4b3cc3419428488d48c062f75bb361c",
+  "pageVersion": "sha256:2210b95021b3a1ef79122345767055c54ed5e045441a5de45a15c545a5854810",
   "claims": [
     {
       "id": "claim_cc3dcb5da3de4183bf685647cf8e833f",
@@ -187,16 +187,6 @@
         {
           "resource": "repo://packages/coding-agent/src/team/controller.ts#L56-L173",
           "version": "repo-lines-v1:sha256:af613c715cb6a9c1fb13070cef3de29a0692a4829bf84d736db6d90beb1a0c96:eyJzZWxlY3RlZExpbmVDb3VudCI6MTE4LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJlYWYyMmNmMDczMjU5MmMyNDcxNDFjYmU2MWVmYTExMDEyNjEyZjVhMzEyMmI5YWY5YmJhZjUyZjU3MjRkMTk0IiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiIwYTczNDkyZDg5NDZiMWQwZjlkOWMwNGI3MDRhOTIwZjI0Zjg5ZWY3YzdmNzMxMWE4NTk5ZDEwYzdmNjM1OGQwIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiJjYTRkMjA2YWNmODUwZmM2NWNkZDlkYWRiNjQ0ODY5ZjQxMDI1OGRjZWFjYjczMTc3ZjRkNzE2YjU3NjI4OWZmIiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI2Y2E5MWVhMDhiMGM4NTE3MWU5YjBiYzg1MzUxOGZkZGZhNzhiOWE5OGY3ZDI1MzRkZWEzYjViMTFjMjliNWJhIn0"
-        }
-      ]
-    },
-    {
-      "id": "claim_7697881560d7432d9de545bd00610ce2",
-      "statement": "Dev 方案入口显式启用 Team 时由 Dev 阶段上下文拥有讨论，检查批准版本并复用成员解析、runner 和编排器，只有完成且有可采用候选才交给方案角色。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/spec-driven/runtime.ts#L388-L442",
-          "version": "repo-lines-v1:sha256:1c9ef43cdbdb844bf781c1c92e04dc9dbef21a6d31d6e0f9981149715b82a488:eyJzZWxlY3RlZExpbmVDb3VudCI6NTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFmYjE1ZTk5OGUzMzhlMDA4NmFlNzYyMDlmOTMzNDI2MzFhOTg0YzNjNmQyMGU5NTFiOTZlZTEwMGU5NTY3YjkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA1YmE5YjhlZTRhMWNjMDYxZWZlNjRmNmRmMzk2NDI5MmY0NjNjNmYwYTdhZGZmMTJlYmYwYWZhZjk1ZjY0MmYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM5NzM1ZTcwM2M0MzU3OTY5NDVhN2NjM2ViNDgwMWEwMWFlY2M4MjVmYjQ3YTYxMzcwM2RkM2RmODEyODYwZjIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExODk4ZDM4MWI4MTIzMTc1ZjJjM2MwMzE5MzA3OTg2NzU1ODRmMTE5ZDNjY2EyMzMwZjgyYzEwMDljNTE5ODEifQ"
         }
       ]
     },

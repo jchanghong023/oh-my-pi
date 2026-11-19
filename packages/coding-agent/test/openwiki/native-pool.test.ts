@@ -6,7 +6,8 @@ import { ChatOpenAI } from "@langchain/openai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { loadOpenWikiVendor } from "../../src/openwiki/vendor-loader";
 
-const poolPages = ["/openwiki/alpha.md", "/openwiki/beta.md", "/openwiki/gamma.md", "/openwiki/quickstart.md"];
+const quickstartPage = "/openwiki/quickstart.md";
+const poolPages = ["/openwiki/alpha.md", "/openwiki/beta.md", "/openwiki/gamma.md", quickstartPage];
 type Message = { role: string; content?: unknown; tool_call_id?: string };
 
 async function repository(root: string) {
@@ -42,8 +43,14 @@ async function scenario(
 		| "partial-baseline",
 	instructionCase?: "changed" | "emptied" | "legacy-nonempty" | "legacy-root",
 ) {
-	// Instruction invalidation needs one page; pool scenarios retain all workers.
-	const pages = mode === "instructions" ? [poolPages.at(-1)!] : poolPages;
+	// Init requires quickstart; partial coverage needs only one more page so
+	// one can fail while the other advances to the new source checkpoint.
+	const pages =
+		mode === "instructions"
+			? [quickstartPage]
+			: mode === "partial-baseline"
+				? [poolPages[0], quickstartPage]
+				: poolPages;
 	using dir = TempDir.createSync("@omp-openwiki-native-pool-");
 	const root = dir.join("repo");
 	const git = await repository(root);
@@ -187,7 +194,7 @@ async function scenario(
 				plannerModel: model,
 				embedded: true,
 				skillsDir: path.resolve(import.meta.dir, "../../../../vendor/openwiki/skills"),
-				pageConcurrency: mode === "fatal" ? 1 : 2,
+				pageConcurrency: mode === "fatal" || mode === "partial-baseline" ? 1 : 2,
 				signal,
 				onEvent: event => {
 					if (
@@ -320,7 +327,9 @@ async function scenario(
 			expect(plans).toBe(3);
 			const complete = JSON.parse(await readFile(metadataPath, "utf8"));
 			expect(complete.status).toBe("complete");
-			expect(complete.gitHead).not.toBe(baseline.gitHead);
+			expect(complete.gitHead).toBe(completedAfter.pages[pages[1]].gitHead);
+			const completedRecovered = JSON.parse(await readFile(manifestPath, "utf8"));
+			expect(completedRecovered.pages[pages[0]].gitHead).toBe(complete.gitHead);
 		}
 	} finally {
 		betaReady.resolve();

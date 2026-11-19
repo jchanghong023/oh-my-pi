@@ -5,47 +5,9 @@ import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import inventory from "../../src/spec-driven/vendor/inventory.json";
 import { fixture, GATE_BUDGET, git, launch, listSkills, PublicPeer, run, test, textValues } from "./process-fixture";
 import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
-import { contentText, createProviderFixture, MARKER, rolePayload } from "./provider-fixture";
-import { workflowNativeContext } from "../aireq-workbench/workflow-fixture";
-import { createWorkflowStage, successfulWorkflowReply } from "./tui-materials-cases";
+import { contentText, createProviderFixture, MARKER } from "./provider-fixture";
 
 describe("spec-driven actual OMP public entry", () => {
-	test(
-		"public workflow rejects a linked intake directory without changing external bytes",
-		async () => {
-			let outside = "";
-			let project = "";
-			let linked = false;
-			const h = await createWorkflowStage("requirements", {
-				failure: { role: "requirements", kind: "missing" },
-				async setup(fixture) {
-					project = fixture.project;
-					outside = path.join(fixture.root, "outside");
-					await fs.mkdir(outside);
-					await fs.writeFile(path.join(outside, "requirements.json"), "external user bytes");
-				},
-				async reply(request) {
-					const context = workflowNativeContext(request);
-					if (context?.role === "requirements" && !linked) {
-						const binding = context.binding as { irId: string };
-						const cwd = path.join(project, ".git/omp-aireq-worktrees/requirements", binding.irId);
-						const directory = path.join(cwd, `docs/aireq/intake/${binding.irId}`);
-						await fs.mkdir(path.dirname(directory), { recursive: true });
-						await fs.symlink(outside, directory, process.platform === "win32" ? "junction" : "dir");
-						linked = true;
-					}
-					return successfulWorkflowReply(request);
-				},
-			});
-			await using owned = h.fixture;
-			expect(linked).toBe(true);
-			expect(await fs.readFile(path.join(outside, "requirements.json"), "utf8")).toBe("external user bytes");
-			expect(h.view.groups).toEqual([]);
-			expect(h.view.drafts.find(group => group.id === h.irId)?.confirmation).toBeUndefined();
-		},
-		GATE_BUDGET,
-	);
-
 	registerPackagedSkillTest(false);
 
 	test(
@@ -70,7 +32,6 @@ describe("spec-driven actual OMP public entry", () => {
 				.map(message => contentText(message.content))
 				.join("\n");
 			expect(input).toContain(argumentsText);
-			expect(rolePayload(request)).toBeUndefined();
 			expect(provider.failures).toEqual([]);
 			expect(await git(config.cwd, config.env, ["status", "--porcelain"])).toBe("");
 		},

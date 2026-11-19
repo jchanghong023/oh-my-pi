@@ -1,7 +1,7 @@
 ---
 type: 运行机制
 title: Goal 自动推进与预算
-description: 说明会话级 Goal 的入口、状态转换、隐藏续跑、预算计量与恢复，以及它与 Dev 执行和授权的边界。
+description: 说明会话级 Goal 的入口、状态转换、隐藏续跑、预算计量与恢复，以及续跑与授权的边界。
 tags: [goal, autopilot, budget, session, orchestration]
 verified:
   - by: openwiki/0.0.0-unknown
@@ -82,8 +82,8 @@ Goal 限制的是 token，不是费用上限或时间截止。每次结算按累
 
 时间是启用且处于 `active` 或 `budget-limited` 的目标所累计的墙钟秒数，按结算间隔向下取整，并保留不足一秒的余量；暂停不继续累计。`tokensUsed` 和 `timeUsedSeconds` 是持久目标数据，而当前轮次的 usage 基线、墙钟锚点及已报告预算标记是运行时暂态快照。一般纯时间增量先更新内存和界面，token 增量、达到预算或内部切换前的必要时间结算才持久化，避免每个工具事件写入完整目标。恢复时重新建立锚点，不把会话关闭期间计作运行时间；压缩和内部切换前的结算与重新建立基线防止重复计量或漏掉已结算用量。
 
-## 与 Dev 的关系和验证
+## 权限边界与验证
 
-[Dev 生命周期](aireq-lifecycle.md)有自己的批准、执行和最终用户验收边界。用户可以在 **当前 Dev 执行会话中手动启用**原生 Goal 作为持续执行方式；这既不是 Dev 自动启动 Goal，也不把普通实现子代理变成无人值守代理。保存的 Goal 配置、旧会话中的恢复状态或历史通知不能恢复已经失效的 Dev 批准。Goal 不新增阶段，也不赋予系统权限、替代强制审批或允许绕过用户停止；受阻时应报告证据和缺失前提，而非虚报完成。
+Goal 不赋予系统权限、替代强制审批或允许绕过用户停止；受阻时应报告证据和缺失前提，而非虚报完成。
 
 维护时可重点检查 `test/goals/goal-runtime.test.ts` 的计量和内部中断、`goal-continuation-guard.test.ts` 的无进展与一次性纠偏、`test/agent-session-goal-midrun-compaction.test.ts` 的运行中压缩及通知持久化。规格中的真实 TUI 和 Provider 协议验收要求不等同于这些局部测试已经证明真实模型质量或费用节省。

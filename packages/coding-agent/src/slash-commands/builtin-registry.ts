@@ -2,7 +2,6 @@ import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
 import { JCH_SLASH_COMMANDS } from "../jch-commands";
-import { handleAIReqCommandTui } from "../modes/controllers/command-controller";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import { BUILTIN_COMMIT_SLASH_COMMANDS } from "./builtin-commit";
 import {
@@ -26,7 +25,6 @@ import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
 import { BUILTIN_SKETCH_SLASH_COMMANDS } from "./builtin-sketch";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
-import { BUILTIN_AIREQ_SLASH_COMMANDS } from "./builtin-aireq";
 import { BUILTIN_WEBGUI_SLASH_COMMANDS } from "./builtin-webgui";
 import { parseSlashCommand } from "./helpers/parse";
 import type {
@@ -36,7 +34,6 @@ import type {
 	SlashCommandRuntime,
 	SlashCommandSpec,
 	TuiSlashCommandRuntime,
-	WebGuiSlashCommandRuntime,
 } from "./types";
 
 export type { BuiltinSlashCommand, SubcommandDef } from "./types";
@@ -60,7 +57,6 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_LIFECYCLE_SLASH_COMMANDS,
 	...BUILTIN_MARKETPLACE_SLASH_COMMANDS,
 	...BUILTIN_SKILLS_SLASH_COMMANDS,
-	...BUILTIN_AIREQ_SLASH_COMMANDS.map(command => ({ ...command, handleTui: handleAIReqCommandTui })),
 	...BUILTIN_WEBGUI_SLASH_COMMANDS,
 	...BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS,
 	...JCH_SLASH_COMMANDS,
@@ -222,34 +218,6 @@ export async function executeBuiltinSlashCommand(
 /** Look up a unified spec by name or alias. Used by the ACP dispatcher. */
 export function lookupBuiltinSlashCommand(name: string): SlashCommandSpec | undefined {
 	return BUILTIN_SLASH_COMMAND_LOOKUP.get(name);
-}
-
-/** The browser catalog and dispatcher must agree on which registry entries can run. */
-export function getWebGuiBuiltinHandler(command: SlashCommandSpec) {
-	if (command.name === "workspace") return undefined;
-	return command.handleWebGui ?? command.handleRpc ?? command.handle;
-}
-
-/** Execute the canonical registry with browser-native host and interaction capabilities. */
-export async function executeWebGuiBuiltinSlashCommand(
-	text: string,
-	runtime: WebGuiSlashCommandRuntime,
-): Promise<SlashCommandResult | false> {
-	const parsed = parseSlashCommand(text);
-	if (!parsed) return false;
-	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
-	if (!command) return false;
-	if (command.name === "workspace") throw new Error("/workspace is not available in the native browser host");
-	if (parsed.args.length > 0 && !(command.acpAllowArgs ?? command.allowArgs)) {
-		throw new Error(`/${command.name} does not accept arguments`);
-	}
-	if (runtime.isCollabGuest && !COLLAB_GUEST_ALLOWED_COMMANDS[command.name]) {
-		throw new Error(`/${command.name} is host-only during a collab session`);
-	}
-	const handler = getWebGuiBuiltinHandler(command);
-	if (!handler) throw new Error(`Native browser host has no /${command.name} operation`);
-	const result = await handler({ ...parsed, name: command.name }, runtime);
-	return result ?? { consumed: true };
 }
 
 export type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime };

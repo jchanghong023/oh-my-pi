@@ -19,7 +19,7 @@ import type {
 	TuiSlashCommandRuntime,
 } from "../slash-commands/types";
 import { clearSubmittedText, restoreDetachedDraft } from "../slash-commands/helpers/draft";
-import { showTeamConfig, showWebGuiTeamConfig } from "../team/config-ui";
+import { showTeamConfig } from "../team/config-ui";
 
 const USAGE = "用法：/team <问题或需求> — 用一段自然语言描述要分析的问题、需求或设计取舍。不猜测你要分析什么。";
 
@@ -44,7 +44,6 @@ function detachSubmittedImages(runtime: TuiSlashCommandRuntime): boolean {
 async function handleTeamCommand(
 	command: ParsedSlashCommand,
 	runtime: SlashCommandRuntime,
-	webGui = false,
 ): Promise<SlashCommandResult> {
 	const question = command.args.trim();
 	if (question === "configure") {
@@ -60,17 +59,15 @@ async function handleTeamCommand(
 	// Deferred import keeps command registration free of the orchestrator's
 	// module graph (executor -> extensions -> builtin-registry -> here).
 	const { startTeamDiscussion } = await import("../team/controller");
-	const outcome = await startTeamDiscussion(question, {
+	await startTeamDiscussion(question, {
 		session: runtime.session,
 		settings: runtime.settings,
 		cwd: runtime.cwd,
-		signal: webGui ? runtime.signal : undefined,
-		ownerId: webGui ? runtime.session.getAgentId() : undefined,
 		hooks: {
 			output: text => runtime.output(text),
 		},
 	});
-	return webGui ? { consumed: true, agentInvoked: outcome.started, failed: !outcome.started } : { consumed: true };
+	return { consumed: true };
 }
 
 export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
@@ -84,10 +81,6 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		subcommandOptional: true,
 		subcommands: [{ name: "configure", description: "编辑 Team 有序模型槽位（不调用模型）" }],
 		handle: handleTeamCommand,
-		handleWebGui: async (command, runtime) => {
-			if (command.args.trim() === "configure") return showWebGuiTeamConfig(runtime);
-			return handleTeamCommand(command, runtime, true);
-		},
 		handleTui: async (command, runtime: TuiSlashCommandRuntime) => {
 			const question = command.args.trim();
 			const ctx = runtime.ctx;

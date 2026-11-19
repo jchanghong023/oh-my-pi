@@ -256,7 +256,7 @@ export function useRootPlatformEffects({
               toast(intl.formatMessage({ id: "update.toast.ready" }, { version: payload.version }));
               return;
             case "dev-skipped":
-              toast(intl.formatMessage({ id: "update.toast.aiReqSkipped" }));
+              toast(intl.formatMessage({ id: "update.toast.developerModeSkipped" }));
               return;
             case "error":
               toast(intl.formatMessage({ id: "update.toast.error" }, { error: payload.message }));

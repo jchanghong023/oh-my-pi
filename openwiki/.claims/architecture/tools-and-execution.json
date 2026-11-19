@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "pageVersion": "sha256:87df6ad6584ce74d4c76e074321c3a375c4492d868165244dd0cf86b986469d7",
+  "pageVersion": "sha256:536eab9a03f20978025e72d28dcaeacf43bd5d1d34d6b6167ff23f8b3ddc0186",
   "claims": [
     {
       "id": "claim_f1e8524e144c4c16996da232c78fce5b",
@@ -119,8 +119,8 @@
       "statement": "shell 规范要求非 UTF-8 参数保真、进程树信号快照和去重及宿主保护，取消已启动管道时须等待 TERM 清理宽限。",
       "evidence": [
         {
-          "resource": "repo://crates/pi-shell/src/process.rs",
-          "version": "repo-file-v1:sha256:108d94619c1d3446ed738b1f49242ee7c1db0ce169898e1dc29df8f4bedaec9c"
+          "resource": "repo://crates/pi-shell/src/proctree.rs",
+          "version": "repo-file-v1:sha256:c2c6c78fb7c44e6dc56f3577eece2cb81e013f9cc6dfab6b01364f463a4c452e"
         },
         {
           "resource": "repo://openspec/specs/shell-semantics/spec.md#L9-L26",
@@ -193,16 +193,6 @@
         {
           "resource": "repo://packages/coding-agent/src/tools/team-read-isolation.ts#L30-L80",
           "version": "repo-lines-v1:sha256:4b22d8a68664afb8ce29dd93f68407646100f1d5cda5c9b6b8a08dcea901bffe:eyJzZWxlY3RlZExpbmVDb3VudCI6NTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYxNmI3OGUyMGJiMmEzNGYzY2ZiZmJmM2M1OTUwZjAwZGFhMmI3NWM1NDlmOTg0YTM1YmVhYWEwZTBkNmQ0ZjQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImU4YjZhZmEyZWU0YjI3NmU5YjdjOTU4YWZmOWU1Mzk2YmZhMDg4YjA4ZWUyZmNhNmE3ZjI0ZTRiYzkyNGVhYTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI5ZWRlNzY0NWZmYzE2MmJhNjY2YzBlOGVjMDRmN2QzMzI4YjRmMzAwYWU5NzA2YTU3MWQ1YmFhZDkxZDMwZDUifQ"
-        }
-      ]
-    },
-    {
-      "id": "claim_f699a8b11303428da5270a186017927b",
-      "statement": "Dev 确认前 scout 由钩子限制为只读名单并禁用额外工具和 worktree；执行者有不同授权、克隆工具限制，Dev 协作仍禁止创建 worktree。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/spec-driven/actors.ts#L245-L284",
-          "version": "repo-lines-v1:sha256:79208dc9a79bb07c0804969dcd82b7e384ed5321925f0ebc66c2e735c0c57b9c:eyJzZWxlY3RlZExpbmVDb3VudCI6NDAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQzYjVhYzU2MWNhZjUwZjEzNGJlNjRiY2RkMDA5N2EzNmQxOTczNTg3MDA5YTk4YWFiNmY1YzQ0Mzc2YWJmMjMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNiZDRkZDIxMjFiMmNmYmMzM2JiOTM3YjFhM2QwODMyZmM1ODJiZjhkZTRiYjc5ZmVjNGVkODE0NmM5MWJhODEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImExOWEyYzNhZmQ1MTRkZGIxNGYzZTczNzg0YjcxZWJiNjAyZDU1Y2Y5YzIxMzZmZTQ4ODE3M2EyNTUxZTVmNTciLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY5MDExZmRiMDQzZDQ2MjgxNTc5MmM4YjA2ZGVkZGFiNzBiNTEwZjM3ODcwZjNiYTNjZjAzNzQzZGQyNGFjM2EifQ"
         }
       ]
     },

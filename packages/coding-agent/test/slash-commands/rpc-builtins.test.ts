@@ -11,11 +11,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import type { RpcSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
-import {
-	BUILTIN_SLASH_COMMANDS_INTERNAL,
-	executeWebGuiBuiltinSlashCommand,
-} from "../../src/slash-commands/builtin-registry";
-import { nativeWebGuiCommands } from "../../src/aireq-workbench/native/native-commands";
+import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "../../src/slash-commands/builtin-registry";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -73,31 +69,6 @@ describe("RPC builtin dispatch", () => {
 			expect(rpc.some(command => command.name === name)).toBe(true);
 		}
 		expect(rpc.some(command => command.name === "wiki")).toBe(false);
-	});
-
-	test("browser neither advertises workspace nor dispatches its RPC handler", async () => {
-		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-workspace-"));
-		try {
-			const session = {
-				customCommands: [],
-				skills: [],
-				setSlashCommands: () => {},
-				sessionManager: { getCwd: () => directory },
-			};
-			expect((await nativeWebGuiCommands(session as never)).some(command => command.name === "workspace")).toBe(
-				false,
-			);
-			const workspace = BUILTIN_SLASH_COMMANDS_INTERNAL.find(command => command.name === "workspace")!;
-			const handler = vi.spyOn(workspace, "handleRpc");
-			for (const text of ["/workspace", "/workspace inspect"]) {
-				await expect(executeWebGuiBuiltinSlashCommand(text, {} as never)).rejects.toThrow(
-					"/workspace is not available in the native browser host",
-				);
-			}
-			expect(handler).not.toHaveBeenCalled();
-		} finally {
-			await removeWithRetries(directory);
-		}
 	});
 
 	test("gates every registered TUI-only name and alias without invoking a handler", async () => {

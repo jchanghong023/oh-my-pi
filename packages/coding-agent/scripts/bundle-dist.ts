@@ -7,11 +7,6 @@ import {
 	buildDeveloperTestAgentResources,
 	createDeveloperTestAgentArchivePlugin,
 } from "./developer-test-agent-resources";
-import {
-	buildAIReqWorkbenchAssets,
-	resetAIReqWorkbenchAssets,
-	writeAIReqWorkbenchAssets,
-} from "./aireq-workbench-resources";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
@@ -89,7 +84,7 @@ function formatBytes(bytes: number): string {
 }
 
 async function cleanBundleOutputs(outDir: string): Promise<void> {
-	// dist/ is shared with the aireq binary (dist/omp); only remove assets
+	// dist/ is shared with the standalone coding-agent binary; only remove assets
 	// emitted by this script.
 	let entries: string[];
 	try {
@@ -130,13 +125,9 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		const webGuiResources = await prepareWebGuiResources(repoRoot);
 		resets.push(() => resetWebGuiResources(webGuiDir));
 		await writeWebGuiResources(webGuiDir, webGuiResources);
-		const workbenchAssets = await buildAIReqWorkbenchAssets();
-		resets.push(resetAIReqWorkbenchAssets);
-		await writeAIReqWorkbenchAssets(workbenchAssets);
 		const openWikiResources = await buildOpenWikiResources();
 		resets.push(resetOpenWikiResources);
 		await writeOpenWikiResources(openWikiResources);
-		const workbenchText = await Bun.file(path.join(packageDir, "src/aireq-workbench/assets.generated.txt")).text();
 		const openWikiText = await Bun.file(
 			path.join(packageDir, "src/openwiki/openwiki-resources.generated.txt"),
 		).text();
@@ -213,7 +204,6 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		await ensureShebang(cliPath);
 		await Bun.write(path.join(outDir, "docs-index.generated.txt"), docsPayload.payload);
 		await Bun.write(path.join(outDir, "spec-driven-resources.tar.gz"), specDrivenArchive);
-		await Bun.write(path.join(outDir, "aireq-workbench-assets.txt"), workbenchText);
 		await Bun.write(path.join(outDir, "webgui-resources.generated.txt"), webGuiResources.text);
 		await Bun.write(path.join(outDir, "openwiki-resources.generated.txt"), openWikiText);
 	} catch (error) {

@@ -203,22 +203,22 @@ describe("InteractiveMode pre-quit extension gate", () => {
 		expect(shutdownEvents).toBe(1);
 	});
 
-	it("keeps operator quits inside the exclusive browser workbench", async () => {
-		mode.isAIReqWorkbenchModeActive = () => true;
-		mode.handleAIReqWorkbenchModeSubmit = vi.fn(async () => true);
+	it("keeps operator quits inside exclusive WebGUI mode", async () => {
+		mode.isWebGuiModeActive = () => true;
+		mode.handleWebGuiModeSubmit = vi.fn(async () => true);
 		await mode.shutdown();
-		expect(mode.handleAIReqWorkbenchModeSubmit).toHaveBeenCalledWith("/exit");
+		expect(mode.handleWebGuiModeSubmit).toHaveBeenCalledWith("/webgui");
 		expect(attempts).toBe(0);
 		expect(mode.isShuttingDown).toBe(false);
 		expect(session.isDisposed).toBe(false);
 		expect(postmortem.quit).not.toHaveBeenCalled();
 	});
 
-	it("still tears down the host on a forced close during an exclusive browser workbench", async () => {
-		mode.isAIReqWorkbenchModeActive = () => true;
-		mode.handleAIReqWorkbenchModeSubmit = vi.fn(async () => true);
+	it("still tears down the host on a forced close during exclusive WebGUI mode", async () => {
+		mode.isWebGuiModeActive = () => true;
+		mode.handleWebGuiModeSubmit = vi.fn(async () => true);
 		await mode.shutdown({ cancellable: false });
-		expect(mode.handleAIReqWorkbenchModeSubmit).not.toHaveBeenCalled();
+		expect(mode.handleWebGuiModeSubmit).not.toHaveBeenCalled();
 		expect(attempts).toBe(0);
 		expect(session.isDisposed).toBe(true);
 		expect(shutdownEvents).toBe(1);

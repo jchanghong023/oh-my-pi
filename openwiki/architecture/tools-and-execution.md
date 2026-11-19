@@ -9,8 +9,8 @@ verified:
 sources:
   - id: openwiki-source-92ace9778e405a563e27a7e7
     resource: repo://crates/pi-edit/src/engine.rs
-  - id: openwiki-source-d5a7f07e23586381521aaffc
-    resource: repo://crates/pi-shell/src/process.rs
+  - id: openwiki-source-78cfc5ed829da616cdf0038a
+    resource: repo://crates/pi-shell/src/proctree.rs
   - id: openwiki-source-2cae1d2355087464683e658b
     resource: repo://openspec/specs/approval-policy/spec.md
   - id: openwiki-source-ce9bbccfdcb5e90f05bcef3c
@@ -23,8 +23,6 @@ sources:
     resource: repo://packages/coding-agent/src/exec/bash-executor.ts
   - id: openwiki-source-db87366a8cec881cc7139a2b
     resource: repo://packages/coding-agent/src/sdk.ts
-  - id: openwiki-source-0f96158c9cd5b33cc751f6cc
-    resource: repo://packages/coding-agent/src/spec-driven/actors.ts
   - id: openwiki-source-6e05544f6cc66645f211f37d
     resource: repo://packages/coding-agent/src/task/executor.ts
   - id: openwiki-source-f6be07ba091bd1a600896571
@@ -93,7 +91,7 @@ sequenceDiagram
 
 `bash` 经 [`executeBash`](../../packages/coding-agent/src/exec/bash-executor.ts) 调用原生 `Shell`，也可按配置走用户 shell 或 PTY。嵌入式 shell 支持注入内部 URL 文件系统；外部进程和用户 shell 不自动看到该文件系统。输出可流式预览、截断并保留完整输出工件；结果区分退出码、取消和超时。持久 shell 忙时可用一次性 shell，后者不会共享或保留前者的状态。
 
-[Shell 语义规范](../../openspec/specs/shell-semantics/spec.md) 要求原生非 UTF-8 参数保真；进程树信号先快照目标并避免重复投递，保护宿主及无关进程。取消已启动的管道时仍须等待 TERM 清理宽限，不能立即丢弃句柄并硬杀。修改该边界时同时检查 [pi-shell](../../crates/pi-shell/src/process.rs) 的平台实现和超时退出码约定。
+[Shell 语义规范](../../openspec/specs/shell-semantics/spec.md) 要求原生非 UTF-8 参数保真；进程树信号先快照目标并避免重复投递，保护宿主及无关进程。取消已启动的管道时仍须等待 TERM 清理宽限，不能立即丢弃句柄并硬杀。修改该边界时同时检查 [pi-shell 进程树实现](../../crates/pi-shell/src/proctree.rs) 和超时退出码约定。
 
 ## task、异步状态与释放
 
@@ -114,11 +112,10 @@ stateDiagram-v2
 
 [`AsyncJobManager`](../../packages/coding-agent/src/async/job-manager.ts) 统一管理 `bash`、`task`、`eval` 作业，记录状态、结果、错误和进度。排队作业在真正运行前不占运行配额；前台调用可以先隐藏作业，慢时再提升为后台作业。带 owner 的结果只投递给该 owner 的接收端，接收端缺失时保留结果供检查而不泄露给其他会话。已消费和未消费结果有不同保留期；延迟投递需要的临时工件可随作业保留，最终在清除或管理器释放时清理。后台化不是取消，取消也不意味着可以省略等待和资源释放。
 
-## 三种子代理权限不要混淆
+## 普通 task 与 Team 的权限
 
 * **普通 task**：权限取决于 agent 定义、会话工具及继承限制。提示词中的“只读”本身不是守卫。
 * **Team 讨论**：[`team/runner.ts`](../../packages/coding-agent/src/team/runner.ts) 直接调用同一执行器，但明确列出只读工具并使用 `restrictToolNames`，不提供 bash、edit、write、task 等。Team 读取隔离还在真实路径解析后限制其他成员材料及其祖先搜索范围，而非仅隐藏 `agent://` 链接。详见 [Team 讨论](../workflows/team-discussion.md)。
-* **Dev 阶段**：执行确认前的 scout 使用显式只读工具名单、禁用 MCP 等，并由 spawn 钩子拒绝额外工具和 worktree；执行者阶段有不同授权，继承克隆的限制，协作仍拒绝创建 worktree。阶段约束来自程序钩子和会话配置，而非角色提示词。详见 [Dev 生命周期](../workflows/aireq-lifecycle.md)。
 
 ## 修改与验证
 

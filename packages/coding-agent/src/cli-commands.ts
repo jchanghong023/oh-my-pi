@@ -110,11 +110,6 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.configHelp,
 	},
 	{
-		name: "aireq",
-		load: () => import("./commands/aireq").then(m => m.default),
-		help: commandHelp.aiReqHelp,
-	},
-	{
 		name: "webgui",
 		load: () => import("./commands/webgui").then(m => m.default),
 		help: commandHelp.webGuiHelp,
@@ -347,7 +342,7 @@ for (const command of commands) {
 }
 
 /** Commands that accept launch-global flags before their command token. */
-export const LAUNCH_FLAG_COMMANDS: Readonly<Record<string, true>> = { launch: true, acp: true, aireq: true };
+export const LAUNCH_FLAG_COMMANDS: Readonly<Record<string, true>> = { launch: true, acp: true };
 
 /** Commands whose trailing profile flags must be applied before their modules load. */
 export const PROFILE_FLAG_COMMANDS: Readonly<Record<string, true>> = {

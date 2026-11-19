@@ -21,7 +21,7 @@ async function runWorkspace(
 	options: {
 		fail?: boolean;
 		failDoc?: boolean;
-		repeat?: boolean;
+		changedPath?: string;
 		selection?: unknown;
 		rawSelection?: string;
 		full?: boolean;
@@ -44,8 +44,13 @@ async function runWorkspace(
 		]) {
 			fs.copyFileSync(path.join(import.meta.dir, name), path.join(scripts, name));
 		}
-		fs.symlinkSync(path.join(import.meta.dir, "..", "node_modules"), path.join(root, "node_modules"), "junction");
-		fs.symlinkSync(path.join(import.meta.dir, "..", "packages"), path.join(root, "packages"), "junction");
+		// The copied driver only loads the cleanup marker. Keep Cargo and test
+		// cleanup entirely inside the fixture rather than linking workspace trees.
+		const utils = path.join(root, "node_modules", "@oh-my-pi", "pi-utils");
+		fs.mkdirSync(path.join(utils, "src"), { recursive: true });
+		const utilsSource = path.join(import.meta.dir, "../packages/utils");
+		fs.copyFileSync(path.join(utilsSource, "package.json"), path.join(utils, "package.json"));
+		fs.copyFileSync(path.join(utilsSource, "src/expected-cleanup.ts"), path.join(utils, "src/expected-cleanup.ts"));
 		fs.copyFileSync(path.join(import.meta.dir, "..", "rust-toolchain.toml"), path.join(root, "rust-toolchain.toml"));
 		fs.mkdirSync(path.join(root, ".config"));
 		fs.writeFileSync(path.join(root, ".config", "nextest.toml"), '[profile.default.junit]\npath = "junit.xml"\n');
@@ -82,54 +87,41 @@ mod shell { #[test] fn excluded_case() { ${options.full ? "" : 'panic!("must be 
 		for (const key of Object.keys(env)) {
 			if (key.startsWith("OMP_") && key !== "OMP_TEST_CPU_BUDGET" && key !== "OMP_TEST_CONCURRENCY") delete env[key];
 		}
+		const reportDir = path.join(root, "reports");
 		Object.assign(env, {
 			CI: "0",
-			// Legacy delta cannot suppress any selected fork feature tests.
-			OMP_FULLTEST_CHANGED_PATHS: "[]",
-			OMP_TEST_REPORT_DIR: path.join(root, "reports"),
+			OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(options.changedPath ? [options.changedPath] : []),
+			OMP_TEST_REPORT_DIR: reportDir,
 		});
 		if (options.selection !== undefined) env.OMP_RUST_DELTA_SELECTION = JSON.stringify(options.selection);
 		if (options.rawSelection !== undefined) env.OMP_RUST_DELTA_SELECTION = options.rawSelection;
 		delete env.CARGO_TARGET_DIR;
-		const run = async (reportDir: string) => {
-			env.OMP_TEST_REPORT_DIR = reportDir;
-			const child = Bun.spawn(
-				[
-					process.execPath,
-					path.join(root, "scripts", "run-rs-task.ts"),
-					"test:rs",
-					...(options.full ? ["--full"] : []),
-				],
-				{
-					cwd: root,
-					env,
-					stdin: "ignore",
-					stdout: "pipe",
-					stderr: "pipe",
-				},
-			);
-			const [exitCode, stdout, stderr] = await Promise.all([
-				child.exited,
-				new Response(child.stdout).text(),
-				new Response(child.stderr).text(),
-			]);
-			const producers: Producer[] = fs.existsSync(reportDir)
-				? fs
-						.readdirSync(reportDir)
-						.filter(name => name.endsWith(".producer.json"))
-						.map(name => JSON.parse(fs.readFileSync(path.join(reportDir, name), "utf8")))
-				: [];
-			const reports = producers.map(p =>
-				p.reportPath && fs.existsSync(path.join(reportDir, p.reportPath))
-					? fs.readFileSync(path.join(reportDir, p.reportPath), "utf8")
-					: "",
-			);
-			return { exitCode, stdout, stderr, producers, reports };
-		};
-		const result = await run(path.join(root, "reports"));
-		if (!options.repeat) return { result };
-		fs.appendFileSync(path.join(root, "other", "src", "lib.rs"), "\n// Changed unrelated source.\n");
-		return { result, repeated: await run(path.join(root, "reports-repeat")) };
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				path.join(root, "scripts", "run-rs-task.ts"),
+				"test:rs",
+				...(options.full ? ["--full"] : []),
+			],
+			{ cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+		);
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		const producers: Producer[] = fs.existsSync(reportDir)
+			? fs
+					.readdirSync(reportDir)
+					.filter(name => name.endsWith(".producer.json"))
+					.map(name => JSON.parse(fs.readFileSync(path.join(reportDir, name), "utf8")))
+			: [];
+		const reports = producers.map(p =>
+			p.reportPath && fs.existsSync(path.join(reportDir, p.reportPath))
+				? fs.readFileSync(path.join(reportDir, p.reportPath), "utf8")
+				: "",
+		);
+		return { result: { exitCode, stdout, stderr, producers, reports } };
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
@@ -139,30 +131,28 @@ describe("Rust fork feature CLI", () => {
 	it(
 		"runs the full Knowledge package and native Knowledge bindings regardless of unrelated changes",
 		async () => {
-			const { result, repeated } = await runWorkspace({ repeat: true });
-			for (const run of [result, repeated!]) {
-				expect(run.exitCode, run.stderr).toBe(0);
-				const nextest = run.producers.find(producer => producer.producer === "cargo nextest run")!;
-				expect(nextest.command).toContain(`--test-threads=${testConcurrencyLimit()}`);
-				expect(nextest.scope).toBe("rust-fork-features");
-				expect(nextest.selection).toMatchObject({
-					tool: "cargo-nextest",
-					mode: "full",
-				});
-				const xml = run.reports[run.producers.indexOf(nextest)];
-				expect(xml).toContain("knowledge_case");
-				expect(xml).toContain("knowledge_other_module_case");
-				expect(xml).not.toContain("excluded_case");
-				expect(xml).toContain("native_knowledge_binding_case");
-				expect(xml).not.toContain("other_crate_case");
-				const doctest = run.producers.find(producer => producer.producer === "cargo test --doc")!;
-				expect(doctest.scope).toBe("rust-fork-features");
-				expect(doctest.status).toBe("stage");
-				expect(doctest.exitCode).toBe(0);
-				expect(doctest.report).toBe("not-supported");
-				expect(doctest.reportPath).toBeNull();
-				expect(run.stdout).toContain("documented");
-			}
+			const { result: run } = await runWorkspace({ changedPath: "other/src/lib.rs" });
+			expect(run.exitCode, run.stderr).toBe(0);
+			const nextest = run.producers.find(producer => producer.producer === "cargo nextest run")!;
+			expect(nextest.command).toContain(`--test-threads=${testConcurrencyLimit()}`);
+			expect(nextest.scope).toBe("rust-fork-features");
+			expect(nextest.selection).toMatchObject({
+				tool: "cargo-nextest",
+				mode: "full",
+			});
+			const xml = run.reports[run.producers.indexOf(nextest)];
+			expect(xml).toContain("knowledge_case");
+			expect(xml).toContain("knowledge_other_module_case");
+			expect(xml).not.toContain("excluded_case");
+			expect(xml).toContain("native_knowledge_binding_case");
+			expect(xml).not.toContain("other_crate_case");
+			const doctest = run.producers.find(producer => producer.producer === "cargo test --doc")!;
+			expect(doctest.scope).toBe("rust-fork-features");
+			expect(doctest.status).toBe("stage");
+			expect(doctest.exitCode).toBe(0);
+			expect(doctest.report).toBe("not-supported");
+			expect(doctest.reportPath).toBeNull();
+			expect(run.stdout).toContain("documented");
 		},
 		testTimeoutMs(),
 	);

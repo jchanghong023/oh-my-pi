@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "pageVersion": "sha256:135ab77a659d9d4aa2db468cc4d9f63d3428753a96a76ca7d1d4e7fe0d6f1930",
+  "pageVersion": "sha256:af13554feeaeadfff4c27e188f151d6fc839db84d15281e5820a062b773be471",
   "claims": [
     {
       "id": "claim_0d9751e85e304c568d78b52d44591e3a",
@@ -211,20 +211,6 @@
         {
           "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L389-L432",
           "version": "repo-lines-v1:sha256:80dd99cf1957401a4eab345c78a273bbb8d667f4b7f8a47c4dc1a07a5e856a08:eyJzZWxlY3RlZExpbmVDb3VudCI6NDQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBiZWEzNDdhNTMyNWRmMzdmNzYyN2JkNzBlNTkxNDVjMWI2MTZlM2UxMzMyYTJjNmJhY2U3YzhlYmMzMTk4ZjgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjIzNjlmM2FiMGY5ZDc2NDYxOWZlM2U1YjE0NWM5NThjYzcyN2Q0NGNhN2FjZjU3OGY1YWE2NmVjNzVlNmU4ZTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFjYjVmODUwYmU4YTU3Y2I0ZWFhNjJhZjNhYWJiZjJlOTBmN2I5NjYzMDcxM2Y2ZTQxMDEzYjkwYzMxOGNkMWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImYyYTdiYjcxNzFkNTlhNjVmNTIzZjZmN2NlOWQ5YmQ5N2Y4MzA4N2MxNjk3MDU0OTUzYWY0ZmNmMzg3YThhN2YifQ"
-        }
-      ]
-    },
-    {
-      "id": "claim_5a9a4c9b78a44ee7b660fef667a8e72b",
-      "statement": "Dev 当前执行会话中只有用户手动启用原生 Goal 才使用该持续执行方式；已保存状态不能恢复失效的 Dev 批准，Goal 不增加阶段或绕过现有权限与停止边界。",
-      "evidence": [
-        {
-          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L173-L184",
-          "version": "repo-lines-v1:sha256:50c1d4aadbb189051f628ad2dcecb0f0921a35eed0942e490a76484d5ee00249:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRmN2VkNDg1NWM5M2EyNzk3NjZkODFlM2JlMTJkMDk3MmQyZDIyNzk0NjQyMjU5ZDNiYjU4MDg4ZDA5MWI1YjgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ0MGQxYmRlYWNhNDg4NjY3NTg0MGRhM2RjYTMyYjhmMzI2ZmIyYjNhYThhY2U4NGNjZGUzNDhkYmVhZDY2OTgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImVhNGE2Yzk3MDU0YTExMjQ1NDI2OGM2ZDMyNjhkOTY4NGI3YTA2MjQ4MmZkMDczNmFkMGU4ZTZlOGQwZTdjY2MiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI1NWExNDY5MTQwN2E2NGVhMmUxZThjNDhkZGRhZmYyNTJlNDRjMzliOWRiYjVhZGRkYTE1NTE0ZmEyZjY3ZGQifQ"
-        },
-        {
-          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L69-L73",
-          "version": "repo-lines-v1:sha256:f2f8a95a22da0ba82edbe9c4174965c51cc2e1006926d4e661f7fcd6b8a55a0c:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiY2MwZmZjYWMyNjc1ZmUxM2RjOGU3YzE0YTNkYWZhYmZlNzIyNjA0NWYyYjM1MjIyMTYxOWQ4YTk5N2I5YjdhZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTg5MmVlNjQyZmY1ZDk0ZDk5ZGUzNDk5ZjYxNjA1MTc3YzI5N2QyNDNjZDE4NWY0Zjg4YzQxNTAwYTY2NTQ5NCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMjBjZTUxNjY3YTUzY2ZkZWJiZTE4NTk1MGI0NzBlMDBlNTU4N2QzZWM2YWM0ZWQ3MjA2ZWMyYTc2YjA0ZTI3MSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDMzMWVmMTYzOGZiMjlhN2I1NTk2NDI5ZDM0NDE1ZDM0ODQ2NzFkYTg5Y2JiODQ1N2M3NGQyZmU2NWNiYWUwMiJ9"
         }
       ]
     },

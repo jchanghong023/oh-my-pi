@@ -30,7 +30,6 @@ import type {
 } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { MCPManager } from "../mcp";
-import type { MCPAuthHandler } from "../mcp/manager";
 import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
 import type { AgentSession } from "../session/agent-session";
 import type { BlockedKind } from "../utils/run-status";
@@ -240,11 +239,11 @@ export interface InteractiveModeContext {
 	readonly rootSession: AgentSession;
 	/** Dispose long-lived native resources only during real host shutdown. */
 	registerHostShutdown(dispose: () => Promise<void>): () => void;
-	/** Installed by `/aireq` or `/webgui`; both share the same exclusive browser-mode owner. */
-	isAIReqWorkbenchModeActive?: () => boolean;
-	handleAIReqWorkbenchModeInput?: (data: string) => boolean;
-	handleAIReqWorkbenchModeSubmit?: (text: string) => Promise<boolean>;
-	getAIReqWorkbenchEntryBlocker?: () => string | undefined;
+	/** Exclusive terminal input owner installed by `/webgui`. */
+	isWebGuiModeActive?: () => boolean;
+	handleWebGuiModeInput?: (data: string) => boolean;
+	handleWebGuiModeSubmit?: (text: string) => Promise<boolean>;
+	getWebGuiEntryBlocker?: () => string | undefined;
 	/** Re-resolve the CLI/settings model scope after a successful OAuth login. */
 	refreshScopedModelsAfterLogin?: () => Promise<void>;
 	/** The current session display name / title. */
@@ -327,8 +326,6 @@ export interface InteractiveModeContext {
 	agent: AgentSession["agent"];
 	historyStorage?: HistoryStorage;
 	mcpManager?: MCPManager;
-	/** Exact ordinary TUI auth callback; workbench borrowing may restore only this handler. */
-	readonly nativeMcpUiAuthHandler?: MCPAuthHandler;
 	lspServers?: LspStartupServerInfo[];
 	/** Owns hosting: manual `/collab`, `collab.autoStart`, and room rotation on session switch. */
 	collabController: CollabController;

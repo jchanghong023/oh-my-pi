@@ -63,10 +63,6 @@ export const knowledgeHelp = {
 	description: "Manage persistent knowledge indexes (init/remove) or serve read-only queries over stdio (mcp)",
 } satisfies CommandMetadata;
 
-export const aiReqHelp = {
-	description: "Open this project's exclusive native AIReq workbench through the shared browser server",
-} satisfies CommandMetadata;
-
 export const webGuiHelp = {
 	description: "Open this OMP instance's WebGUI browser interface without creating an Agent or occupying a project",
 } satisfies CommandMetadata;

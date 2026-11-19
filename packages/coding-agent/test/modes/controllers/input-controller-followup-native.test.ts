@@ -33,8 +33,6 @@ function createHarness(isStreaming: boolean, hasPendingDeferredExtensions = fals
 		withLocalSubmission: async <T>(_text: string, submit: () => Promise<T>): Promise<T> => submit(),
 		showError,
 	});
-	// Match the native context even while older shared fixtures retain the retired helper.
-	Reflect.deleteProperty(ctx, "handleDevInput");
 	const controller = new InputController(ctx);
 	controller.setupKeyHandlers();
 	const followUp = vi.spyOn(controller, "handleFollowUp");
@@ -58,13 +56,13 @@ function createHarness(isStreaming: boolean, hasPendingDeferredExtensions = fals
 	return { ctx, controller, editor, prompt, showError, draft, pressFollowUp, loadDeferredExtensions };
 }
 
-describe("native main-session Ctrl+Enter after AIReq entry retirement", () => {
+describe("native main-session Ctrl+Enter", () => {
 	afterEach(() => vi.restoreAllMocks());
 
 	for (const isStreaming of [false, true]) {
 		const state = isStreaming ? "streaming" : "idle";
 
-		it(`submits text and attachments to the ${state} native session without a AIReq helper`, async () => {
+		it(`submits text and attachments to the ${state} native session`, async () => {
 			const { ctx, editor, prompt, showError, draft, pressFollowUp } = createHarness(isStreaming);
 			const sessionId = ctx.sessionManager.getSessionId();
 			draft("inspect this [Image #1]", originalImage, "local://original.png");
@@ -103,12 +101,12 @@ describe("native main-session Ctrl+Enter after AIReq entry retirement", () => {
 		});
 	}
 
-	it("consumes active-workbench follow-ups before hooks or draft detachment", async () => {
+	it("consumes WebGUI mode follow-ups before hooks or draft detachment", async () => {
 		const { ctx, editor, prompt, draft, pressFollowUp, loadDeferredExtensions } = createHarness(true, true);
 		draft("keep this [Image #1]", originalImage, "local://original.png");
 		const consume = vi.fn(async (_text: string) => true);
-		ctx.isAIReqWorkbenchModeActive = () => true;
-		ctx.handleAIReqWorkbenchModeSubmit = consume;
+		ctx.isWebGuiModeActive = () => true;
+		ctx.handleWebGuiModeSubmit = consume;
 		const clearDraft = vi.spyOn(editor, "clearDraft");
 
 		await pressFollowUp();
@@ -122,13 +120,13 @@ describe("native main-session Ctrl+Enter after AIReq entry retirement", () => {
 		expect(editor.pendingImageLinks).toEqual(["local://original.png"]);
 	});
 
-	it("restores the editor's pre-callback reset before consuming an active-workbench Enter", async () => {
+	it("restores the editor's pre-callback reset before consuming Enter in WebGUI mode", async () => {
 		const { ctx, controller, editor, prompt, draft, loadDeferredExtensions } = createHarness(false, true);
 		controller.setupEditorSubmitHandler();
 		draft("keep this [Image #1]", originalImage, "local://original.png");
 		const consume = vi.fn(async (_text: string) => true);
-		ctx.isAIReqWorkbenchModeActive = () => true;
-		ctx.handleAIReqWorkbenchModeSubmit = consume;
+		ctx.isWebGuiModeActive = () => true;
+		ctx.handleWebGuiModeSubmit = consume;
 		const onSubmit = editor.onSubmit;
 		if (!onSubmit) throw new Error("Expected the native submit handler");
 		const submitted = vi.fn(onSubmit);
@@ -147,28 +145,28 @@ describe("native main-session Ctrl+Enter after AIReq entry retirement", () => {
 		expect(editor.pendingImageLinks).toEqual(["local://original.png"]);
 	});
 
-	it("keeps /aireq and its attachments when the workbench exit fails", async () => {
+	it("keeps /webgui and its attachments when WebGUI mode fails to exit", async () => {
 		const { ctx, editor, prompt, showError, draft, pressFollowUp } = createHarness(false);
-		draft("/aireq", originalImage, "local://original.png");
-		ctx.isAIReqWorkbenchModeActive = () => true;
-		ctx.handleAIReqWorkbenchModeSubmit = vi.fn(async () => {
+		draft("/webgui", originalImage, "local://original.png");
+		ctx.isWebGuiModeActive = () => true;
+		ctx.handleWebGuiModeSubmit = vi.fn(async () => {
 			throw new Error("host close rejected");
 		});
 
 		await pressFollowUp();
 
-		expect(ctx.handleAIReqWorkbenchModeSubmit).toHaveBeenCalledWith("/aireq");
+		expect(ctx.handleWebGuiModeSubmit).toHaveBeenCalledWith("/webgui");
 		expect(showError).toHaveBeenCalledWith("host close rejected");
 		expect(prompt).not.toHaveBeenCalled();
-		expect(editor.getExpandedText()).toBe("/aireq");
+		expect(editor.getExpandedText()).toBe("/webgui");
 		expect(editor.pendingImages).toEqual([originalImage]);
 		expect(editor.pendingImageLinks).toEqual(["local://original.png"]);
 	});
 
-	it("blocks direct hotkey and native actions without changing the workbench-owned draft", async () => {
+	it("blocks direct hotkey and native actions without changing the draft owned by WebGUI mode", async () => {
 		const { ctx, controller, editor, prompt, draft } = createHarness(true);
 		draft("keep this [Image #1]", originalImage, "local://original.png");
-		ctx.isAIReqWorkbenchModeActive = () => true;
+		ctx.isWebGuiModeActive = () => true;
 		const shutdown = vi.fn(async () => {});
 		ctx.shutdown = shutdown;
 		const clearDraft = vi.spyOn(editor, "clearDraft");
@@ -251,9 +249,9 @@ describe("native submission dispatch identity", () => {
 		const { ctx, editor, prompt, draft, pressFollowUp, loadDeferredExtensions } = createHarness(true, true);
 		draft("keep this [Image #1]", originalImage, "local://original.png");
 		const consume = vi.fn(async (_text: string) => true);
-		ctx.handleAIReqWorkbenchModeSubmit = consume;
+		ctx.handleWebGuiModeSubmit = consume;
 		loadDeferredExtensions.mockImplementationOnce(async () => {
-			ctx.isAIReqWorkbenchModeActive = () => true;
+			ctx.isWebGuiModeActive = () => true;
 		});
 
 		await pressFollowUp();

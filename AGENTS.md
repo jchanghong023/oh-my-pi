@@ -351,31 +351,21 @@ Fork releases require explicit user authorization and use the manual CI workflow
 - `ask` 完整回归上游 HTML 表单协议与默认行为，不再定制 Goal 超时答复或保留 `questions[]` 工具兼容层；全部宿主与测试同步使用原生链路，详见 [上游继承边界](openspec/specs/fork-maintenance/spec.md#requirement-上游继承行为与本地差异边界)。
 - OpenSpec 2.0 随 OMP 内置全部 12 项 Skill；任意目录原生发现／补全，使用 `/skill:<name>` 调用及 `skill://<name>` 按需读取，MUST 保留项目／用户同名覆盖机制及 Superpowers／JCH 原有规则。所有执行入口 MUST 使用 `omp openspec ...`，NEVER 要求独立安装 OpenSpec／Node。
 - `omp openspec init` MUST 只初始化项目目录与配置，默认 `spec-driven`；未初始化项目 MUST 先取得显式初始化授权。NEVER 安装、更新或清理用户 Skill、其他 Agent 配置或旧命令；资源仅随 OMP 升级。CLI `update` 与 `opsx` 文件命令已删除，`openspec-update-change` 是保留的变更材料 Skill。
-- 旧 `mini`／`omp-spec` 自定义 schema MUST 由用户显式迁移，NEVER 恢复包内别名或私有 bridge。缺少 `design.md`／`tasks.md` MUST 如实记录待完成，NEVER 仅改 schema 名称宣称完成；历史归档不批量改写。普通 OpenSpec 适配 NEVER 视为 AIReq 接入完成。
+- 旧 `mini`／`omp-spec` 自定义 schema MUST 由用户显式迁移，NEVER 恢复包内别名或私有 bridge。缺少 `design.md`／`tasks.md` MUST 如实记录待完成，NEVER 仅改 schema 名称宣称完成；历史归档不批量改写。
 - [个人命令](openspec/specs/personal-commands/spec.md)维护 fork 内置斜杠命令及其行为边界。
 - 原生 TUI／RPC `/workspace` 是独立持久化的工作区写入提醒，可与 Plan 共存；不是沙箱或 `approvalMode`，不改变工具、模型或审批。状态与范围逻辑位于 `packages/coding-agent/src/workspace-mode.ts`，命令位于 `packages/coding-agent/src/slash-commands/builtin-modes.ts`；权威边界见[个人命令的工作区提醒需求](openspec/specs/personal-commands/spec.md#requirement-原生-workspace-工作区写入提醒)。
 - `/loopgoal` 复用 `/loop`，仅增加固定目标提示词包装及最终回复精确为 `无` 时停止；参数、上下文策略、首轮提交、调度与暂停恢复均沿用 Loop，不另设压缩阈值或准备流程，不接入 Goal 管理。提示词位于 `packages/coding-agent/src/prompts/loop-goal.md`，共享语义位于 `packages/coding-agent/src/modes/loop-goal.ts`，详见[个人命令](openspec/specs/personal-commands/spec.md)。
-- AIReq 最新规则已由用户确认并同步到 [需求提案](openspec/specs/aireq-requirement-intake/spec.md)、[工作台](openspec/specs/aireq-browser-workbench/spec.md)及[原生编排](openspec/specs/spec-driven-orchestration/spec.md)；完整说明见 [AIReq 流程](docs-zh-CN/spec-driven-orchestration.md)。同仓库单 IR、默认最多两个依赖就绪 SR 并行，首个 SR 启动冻结；SR 代码／测试／规格同 PR，IR 验收后最终修复／归档 PR，归档不再同步规格。旧计划冲突条款不再适用；本次仅文档更新，未改原型与代码，不代表实现完成。其他待定变更不因此获批。
-- AIReq 新定位为需求澄清、需求管理与进度跟踪，不参与编码。本步仅调整文档和设置原型：项目只配置 Git 仓库及默认分支，Release 继承，不再要求本地／个人开发目录；删除计划／执行 Agent 设置，IR 验收设置替换为需求分析，方案 Agent 保留于提案。进度必须有百分比与遗留问题，0%～99%只由AI分析，AI最高99%；只有AI已分析到99%、开发分支非空且已合入后，人工才可确认到100%，禁止其他人工百分比。其他旧开发流程文档与原型待逐步对齐，不因设置改动实施真实 Git 或后端；详见[工作台设置规则](openspec/specs/aireq-browser-workbench/spec.md)。
-- AIReq 正式需求原型在“自动化”下提供大表格入口，不再显示左侧正式需求树或 AI 会话；选中 IR／SR 仅在同页右侧展开报告／材料标签，不跳详情页，需求提案保持三栏。IR 进度为全部 SR 的算术平均值，管理员按工号分配唯一 IR 负责人；本轮仅文档与原型，复用 ZCode 控件，不接真实后端、Git 或模型。最新展示与进度规则见[工作台](openspec/specs/aireq-browser-workbench/spec.md)。
-- AIReq 正式需求表格 MUST 提供“开发分支”列，展开 IR 后所有访问者均可直接查看、点击或键盘复制各 SR 完整分支名；复用需求分析的复制及提示组件，成功／失败明确反馈，复制不触发行选择或 Git。优先使用平台 SR 分支映射，其次使用当前分析关联分支，NEVER 用执行历史或猜测名称；无关联明确显示，不提供空值复制。
-- AIReq 网页工作台 MUST 一次性完成替换，只处理新建需求；保留并复用原生 Agent 和底层能力，NEVER 保留旧 AIReq 模式、兼容入口、双轨运行或旧流程迁移／恢复。
-- AIReq 提案仅有提交人，不设负责人、开发人员或计划起止时间。方案 Agent 逐 SR 生成工期预估及假设，与依赖共同放入同一 Change 的 `sr-dependencies.json`：每个稳定 SR ID 记录 `estimate: { workingDays: 正数工作日, assumptions: 非空依据与不确定项 }` 及 `prerequisites`，覆盖全部 SR，无依赖为空数组。可并行关系由图推导，预估不直接相加为 IR 总工期；人通过方案对话让 AI 修改，不编辑文件。JSON 与 `design.md` 同轮生成、更新、失效、确认并提交 Git；缺失、无效或过期时不沿用旧确认、提交或自动转正。`design.md` 仅引用 JSON，SR `spec.md` 不重复维护。转正保留 Git 内预估和依赖，再按正式规则安排负责人、SR 开发人员与起止时间；正式安排属数据库元数据，不从预估自动换算。本轮只改文档和内存原型，不代表真实文件生成或后端已实现。
-- AIReq 右侧选中 `sr-dependencies.json` MUST 复用现有图画布及控件展示只读 SR 依赖图，不展示 JSON 正文；节点为稳定 ID／标题，箭头从前置 SR 指向依赖方，支持缩放、平移及点击连线查看原因，独立 SR 保留节点，缺失／无效／过期材料报错而不绘制旧图。
-- AIReq 提案方案有效完成后，材料顶部提供“技术方案／SR 依赖／工期预估”。预估逐 SR 只读展示工作日与假设，依赖图节点显示相同预估；提案不提供人员或日期编辑。正式需求才使用人员与排期控件，保留原有工号校验、人工记录、冲突提醒及 IR 时间汇总。
-- AIReq 提案方案完成并人工确认后，平台才创建提案分支、提交推送并通过公司内网 Git API 自动创建 MR，记录编号／地址／分支／状态；人工在 Git 平台评审和合并。后台定时查询 MR，核验提案分支实际合入默认分支且 IR／全部 SR／方案文档完整后自动转正式需求，不要求手填 MR 链接、人工通知或确认合入；转正后创建并推送各 SR 分支，固定需求并开始进度跟踪。本步只改文档和独立原型，五秒内存检查演示不代表真实后台或 Git 已实现；旧个人目录入库及人工核验按钮规则不再适用。
-- AIReq MUST 是显式启用的独立功能模块；`/aireq` 进入后当前 TUI 只接受再次 `/aireq` 退出，NEVER 与网页并行执行普通命令或输入。退出 MUST 先结清 AIReq 工作再恢复原普通会话，不取消需求或回滚 Git；关闭页面不退出。未开启时不启动 AIReq 服务／任务或改写其状态；借用资源不得污染普通 OMP，共享接口只保留确实必要且默认不启用的能力，配置继续沿用原方式。
-- WebGUI 提供 `/webgui`／`omp webgui`，沿用 AIReq 的 TUI 独占门禁，不改原始 TUI 输入、旁观与恢复逻辑。每个 OMP 进程独立持有随机端口的 Web 服务，同进程项目复用；AIReq 直接挂载原生 HTTP／WS，WebGUI 提供静态资源和 RPC，NEVER 引入独立 worker、常驻 Vite、内部 HTTP、Relay 或桌面远控。外部云中转不属于 OMP 内置能力，只透明转发 HTTP／WS，不改变同源、Host、Origin 或对端准入。
-- WebGUI 只保留手机低带宽远程聊天与子代理进度：项目选择／打开／创建、显式新建或继续原生会话、基础聊天、最近 5 条会话、子代理状态／进度／只读记录。聊天使用会话当前模型，输入框旁保留会话临时选模与思考等级切换；全局模型／Provider 配置、设置页、文件与图片上传、`@` 文件上下文、文件／Git 面板与自动刷新、终端／白板／计划／Workflow、命令面板、插件市场、定时任务、Skill／原生命令入口、PDF／Office／Mermaid／公式、通知／帮助／社区、Bots／CUA／Browser Use／远控全部删除。NEVER 以隐藏入口、空实现或统一不可用提示代替删除。首屏按约 3 MB/s 云中转设计：压缩后初始 JavaScript+CSS ≤ 1.5 MiB，单个懒加载块 ≤ 1 MiB，不预取全量语法／图标／PDF／Office 资源；外部云中转只透明转发 HTTP／WS，OMP 不内置 Relay，也不放宽同源／Host／Origin／对端准入。
-- 独立 `omp webgui` 启动时不自动创建 Agent、占用项目或调用模型；网页显式选择／打开／创建项目及新建／继续会话后 MUST 使用同进程原生会话直接开发，允许多个独立会话并行，不另建 ZCode 执行器。历史只读不切换执行会话；显式跨目录续聊按目标真实目录取得项目准入，不切走其他运行会话。同一真实项目根跨进程／profile／配置根仅一个 AIReq 或 WebGUI owner，同进程会话共享项目占用。退出 MUST 先结清本实例全部自有会话及递归子工作，再释放资源／服务／占用并恢复普通终端；失败保持锁定可重试，不关闭其他实例、不错误销毁借用的原 TUI 会话；关网页不退出。AIReq 保留完整随机能力地址；最新长期共享 Web 部署的多人访问以 AIReq 最新规则为准，原非 offline 仅本机假设不作为该部署约束；WebGUI 访问边界不变。
+- WebGUI 提供 `/webgui`／`omp webgui`。从 TUI 显式进入时使用 WebGUI 独占门禁，当前 TUI 不与网页并行执行普通命令或输入，再次 `/webgui` 退出。每个 OMP 进程独立持有随机端口的原生 HTTP／WS 服务，静态资源和 RPC 由同进程提供，同进程项目复用端口；NEVER 引入独立 worker、常驻 Vite、内部 HTTP、Relay 或桌面远控。外部云中转不属于 OMP 内置能力，只透明转发 HTTP／WS，不改变同源、Host、Origin 或对端准入。
+- WebGUI 只保留手机低带宽远程聊天与子代理进度：项目选择／打开／创建、显式新建或继续原生会话、基础聊天、最近 5 条会话、子代理状态／进度／只读记录。聊天使用会话当前模型，输入框旁保留会话临时选模与思考等级切换；全局模型／Provider 配置、设置页、文件与图片上传、`@` 文件上下文、文件／Git 面板与自动刷新、终端／白板／计划／Workflow、命令面板、插件市场、定时任务、Skill／原生命令入口、PDF／Office／Mermaid／公式、通知／帮助／社区、Bots／CUA／Browser Use／远控全部删除。NEVER 以隐藏入口、空实现或统一不可用提示代替删除。首屏按约 3 MB/s 云中转设计：压缩后初始 JavaScript+CSS ≤ 1.5 MiB，单个懒加载块 ≤ 1 MiB，不预取全量语法／图标／PDF／Office 资源。
+- 独立 `omp webgui` 启动时不自动创建 Agent、占用项目或调用模型；网页显式选择／打开／创建项目及新建／继续会话后 MUST 使用同进程原生会话直接开发，允许多个独立会话并行，不另建 ZCode 执行器。历史只读不切换执行会话；显式跨目录续聊按目标真实目录取得项目准入，不切走其他运行会话。同一真实项目根跨进程／profile／配置根仅一个 WebGUI owner，同进程会话共享项目占用。退出 MUST 先结清本实例全部自有会话及递归子工作，再释放资源／服务／占用并恢复普通终端；失败保持锁定可重试，不关闭其他实例、不错误销毁借用的原 TUI 会话；关网页不退出。
 - WebGUI MUST 不影响正常 OMP／TUI；未显式启用时不启动网页资源或绑定网页交互，新增共享参数默认保持原生行为。借用 TUI 会话退出后 MUST 恢复真实工具／扩展 UI、审批、输入及草稿，不销毁原会话；按[非干扰需求](openspec/specs/personal-commands/spec.md)验证普通入口与进入／退出后的行为。
 - WebGUI 不提供设置页：设置页签、身份入口设置按钮、设置快捷键、命令面板设置命令与全部设置分区（模型／Provider、用户级 AGENTS、Skill／插件／命令／Hooks／记忆／子智能体／项目／归档）均已删除，NEVER 以空分区、占位页或隐藏入口代替。聊天内会话临时选模与思考等级、真实原生工具执行、审批与错误提示保持。
-- AIReq 设置只保留有真实管理能力的页面：个人工具仅外观，平台配置为 AIReq 项目与 Release、模型设置、个性化、技能。MUST NOT 保留浏览器控制、电脑控制、键盘快捷键、插件、子智能体等仅展示、无真实管理的分区，也不得以空页、占位页或禁用控件代替删除；不恢复内嵌浏览器、Browser Use、系统授权或协议能力。
-- WebGUI 源码位于 `packages/coding-agent/src/webgui/`，前端入口为 `vendor/zcode-frontend/preview/`。`bun run build:webgui` 构建前端，正式二进制与 npm 构建通过 `scripts/generate-webgui-resources.ts` 携带同一份指纹校验资源，构建只包含聊天与子代理实际引用资源；运行时不依赖源码目录、Vite 或下载。源码检出需先准备依赖。AIReq／WebGUI 的 Firefox 目标为 128 系列，本机已安装版本为 128.14.0，不再以 68 为目标；版本查询不构成功能验收。Chromium、Firefox 128、手机实机和发行产物必须分别验证，不相互代称通过。
+- WebGUI 源码位于 `packages/coding-agent/src/webgui/`（TUI 门禁与生命周期见 `tui-mode.ts`），前端入口为 `vendor/zcode-frontend/preview/`。源码检出先准备前端依赖，再从仓库根目录运行 `bun run build:webgui` 生成 `vendor/zcode-frontend/build/webgui/`。正式二进制与 npm 构建通过 `scripts/generate-webgui-resources.ts` 携带同一份指纹校验资源；安装后无需源码目录、Vite 或下载。不要提交生成载荷或前端构建产物。WebGUI 的 Firefox 目标为 128 系列；版本查询不构成功能验收。Chromium、Firefox 128、手机实机和发行产物必须分别验证，不相互代称通过。
 - Firefox 浏览器测试 MUST 使用 Selenium＋geckodriver 驱动本机真实 Firefox，并使用隔离临时 profile；NEVER 以 Chromium、兼容模式或自写 Marionette 驱动替代。记录实际浏览器版本与验证范围，不自动安装浏览器／驱动，不修改个人浏览器配置。
 - 原生 TUI `/sketch`：`packages/coding-agent/src/sketch/` 及 `packages/coding-agent/src/slash-commands/builtin-sketch.ts`；资源静态内嵌，以 Firefox 128 原生能力为基线，不再兼容 52。画布工作区铺满窗口，支持缩放和平移，视野操作不改变完整 PNG 附件尺寸；本机验证不等于公司实机验证。
 - `OMP_OFFLINE` 标记公司内部网络环境：CentOS 7、使用 NFS、有 `/dev/shm`、无法连接互联网；可用已配置的内网服务。NEVER 把环境标记当作宿主探测，或扩大现有工具禁用范围、URL 拒绝与审批规则。
-- offline 的 `/aireq`、`/webgui`、`/sketch` 及独立 `omp aireq`／`omp webgui` 不自动启动浏览器；显示完整地址供手动打开，保留 Linux offline 地址复制。非 offline 与普通链接／文件打开沿用原行为，详见[运行约定](openspec/specs/fork-runtime/spec.md)。
+- 公司 offline 内网 Git 平台经用户 2026-11-12 实测支持查询／创建 PR／MR，且克隆→改代码→push→建 MR→放弃→删分支链路已跑通。平台支持这些操作不意味着获准自动编码、合并或清理分支。
+- offline 的 `/webgui`、`/sketch` 及独立 `omp webgui` 不自动启动浏览器；显示完整地址供手动打开，保留 Linux offline 地址复制。非 offline 与普通链接／文件打开沿用原行为，详见[运行约定](openspec/specs/fork-runtime/spec.md)。
 - offline 内网用户名协作：`packages/coding-agent/src/collab/intranet.ts`（门禁、登录名、入口与查找）、`packages/coding-agent/src/collab/relay-server.ts`（内置 Relay）；[本次变更需求](openspec/changes/add-intranet-username-collab/specs/)覆盖协作、运行与命令边界，[内网快速指南](docs-zh-CN/quick-start-intranet.md)提供普通 WS 直连部署入口。仅 offline 启用；非 offline 保持既有协作与安全策略。
 - Developer Test Agent 内置资源位于 `packages/coding-agent/src/extensibility/plugins/bundled/developer-test-agent/`；其命令和技能使用 OMP 原生接口，业务流程边界见[个人命令](openspec/specs/personal-commands/spec.md)。
 - [OpenWiki](openspec/specs/openwiki/spec.md) 通过 `vendor/openwiki` 子模块维护；`omp openwiki` 默认使用 OMP 的 `default` 模型，内置 `openwiki_*` 查询工具只读。修改子模块源码、技能或资源依赖后运行 `bun run gen:openwiki-resources`；资源指纹不匹配时不得使用旧资源。
@@ -387,14 +377,6 @@ Fork releases require explicit user authorization and use the manual CI workflow
 
 This repository has a generated `openwiki/` knowledge base. Use it as optional context when investigating unfamiliar architecture or behavior, or when source inspection leaves an important uncertainty. Use `openwiki_search` and `openwiki_read` to find relevant sections; if those tools are unavailable, consult `openwiki/quickstart.md` and its links. Source code and tests are authoritative when the Wiki is outdated.
 <!-- OPENWIKI:END -->
-
-- AIReq “需求分析”工作页（原“需求进度分析”）位于主页侧栏正式需求上方，不再作为设置分区；Skill 设计位于自动化下方。两页均复用原生导航及阅读／表格控件，模型与个性化中的 Agent 配置保留在设置中，业务权限和原生后台行为不因页面迁移改变；本轮只改文档及独立原型。
-
-- 公司 offline 内网 Git 平台能力以用户 2026-11-12 实测为准：支持查询／创建 PR／MR，克隆→改代码→push→建 MR→放弃→删分支链路已跑通。AIReq 提案按“确认材料→创建分支并提交推送→自动创建 MR→人工评审、合并→后台定时核验并转正”，不再要求手工建 MR／填链接。此事实不扩展为自动编码、合并或清理分支授权；本轮仅文档与原型内存演示，不实现真实接口、不运行测试。
-
-- 正式SR必须已有平台分配的非空开发分支，缺失属于异常，前端不得以分析分支、旧执行分支或猜测名称兜底。正式需求表格只提供固定112px复制入口；删除“名称列固定／隐藏列数”和前后列按钮整行，正文铺满剩余面板并保留12／16px左右间距。人工进度只允许99%且已合入时确认到100%，IR仍为SR平均；原型后端同样校验。
-
-- AIReq 技术方案、SR 依赖与工期预估均由方案 Agent 在对话中生成及更新，不提供生成／重新生成按钮；人只讨论补充、核对及逐文件确认。材料更新使旧确认失效，保留确认后建分支、推送、自动建 MR 的流程。本轮仅需求文档和原型，不实现真实模型／Git 接入，不运行测试。
 
 - 原生 TUI `/todoloop <Markdown 路径> [--check]` 支持首个 checkbox 前置标题层级推断及 Superpowers Step，采用组级编排和组内连续执行；有剩余组时程序先做一次只读 scout 调研，实际结清后通过原生 context 供全部组及接续复用，准备失败即停止，不限制执行 task 自主派生或更改原生缓存策略。实现位于 `packages/coding-agent/src/todoloop/`，命令入口位于 `packages/coding-agent/src/slash-commands/builtin-modes.ts`；需求见 [TodoLoop 基础](openspec/changes/add-todoloop-command/specs/personal-commands/spec.md)及[公共背景主规格](openspec/specs/personal-commands/spec.md)，使用说明见[内网快速指南](docs-zh-CN/quick-start-intranet.md)。
 

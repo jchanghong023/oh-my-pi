@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,21 +9,11 @@ import { Settings } from "../../src/config/settings";
 import type { InteractiveModeContext } from "../../src/modes/types";
 import { AgentSession } from "../../src/session/agent-session";
 import { SessionManager } from "../../src/session/session-manager";
-import {
-	BUILTIN_AIREQ_SLASH_COMMANDS,
-	handleAIReqCommand,
-	type AIReqLaunchContext,
-} from "../../src/slash-commands/builtin-aireq";
-import {
-	BUILTIN_SLASH_COMMAND_DEFS,
-	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
-	executeBuiltinSlashCommand,
-	lookupBuiltinSlashCommand,
-} from "../../src/slash-commands/builtin-registry";
+import { executeBuiltinSlashCommand } from "../../src/slash-commands/builtin-registry";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 async function fixture() {
-	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-aireq-launch-command-"));
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-native-slash-command-"));
 	const auth = createInMemoryAuthStorage();
 	const settings = Settings.isolated();
 	const registry = new ModelRegistry(auth, path.join(cwd, "isolated-models.yml"), { settings });
@@ -35,22 +25,9 @@ async function fixture() {
 		settings,
 		modelRegistry: registry,
 	});
-	const output: string[] = [];
-	const context: AIReqLaunchContext = {
+	return {
 		session,
 		settings,
-		cwd,
-		output: text => {
-			output.push(text);
-		},
-	};
-	return {
-		cwd,
-		session,
-		output,
-		context,
-		invoke: (args: string, text = args ? `/aireq ${args}` : "/aireq") =>
-			handleAIReqCommand({ name: "aireq", args, text }, context),
 		async [Symbol.asyncDispose]() {
 			await session.dispose();
 			await registry.awaitBackgroundRefresh();
@@ -60,162 +37,33 @@ async function fixture() {
 	};
 }
 
-describe("/aireq exclusive native entry rejects retired terminal routing", () => {
-	test("registers ordinary commands and routes AIReq through the native exclusive entry under this module load order", async () => {
-		await using f = await fixture();
-		expect(BUILTIN_SLASH_COMMAND_DEFS.filter(command => command.name === "aireq")).toHaveLength(1);
-		expect(BUILTIN_SLASH_COMMAND_RESERVED_NAMES.has("aireq")).toBe(true);
-		expect(lookupBuiltinSlashCommand("aireq")?.allowArgs).toBe(true);
-		let text = "/context";
-		let contextReports = 0;
-		let entryChecks = 0;
-		const shutdowns = new Set<() => Promise<void>>();
-		const editor = {
-			getExpandedText: () => text,
-			setText: (value: string) => {
-				text = value;
-			},
-			setCollapsedText: (value: string) => {
-				text = value;
-			},
-			pendingImages: [],
-			pendingImageLinks: [],
-			disableSubmit: false,
-		};
-		const ctx = {
-			session: f.session,
-			sessionManager: f.session.sessionManager,
-			settings: f.context.settings,
-			editor,
-			handleContextCommand: () => {
-				contextReports++;
-			},
-			showStatus: (value: string) => {
-				f.output.push(value);
-			},
-			registerHostShutdown: (dispose: () => Promise<void>) => {
-				shutdowns.add(dispose);
-				return () => shutdowns.delete(dispose);
-			},
-			getAIReqWorkbenchEntryBlocker: () => {
-				entryChecks++;
-				return "An ordinary native operation is still active";
-			},
-		} as unknown as InteractiveModeContext;
+test("dispatches the ordinary context command and clears its composer text", async () => {
+	await using f = await fixture();
+	let text = "/context";
+	let contextReports = 0;
+	const editor = {
+		getExpandedText: () => text,
+		setText: (value: string) => {
+			text = value;
+		},
+		setCollapsedText: (value: string) => {
+			text = value;
+		},
+		pendingImages: [],
+		pendingImageLinks: [],
+		disableSubmit: false,
+	};
+	const ctx = {
+		session: f.session,
+		sessionManager: f.session.sessionManager,
+		settings: f.settings,
+		editor,
+		handleContextCommand: () => {
+			contextReports++;
+		},
+	} as unknown as InteractiveModeContext;
 
-		expect(await executeBuiltinSlashCommand("/context", { ctx })).toBe(true);
-		expect(contextReports).toBe(1);
-		expect(text).toBe("");
-		text = "/aireq next";
-		expect(await executeBuiltinSlashCommand(text, { ctx })).toBe(true);
-		expect(entryChecks).toBe(0);
-		expect(shutdowns.size).toBe(0);
-		expect(text).toBe("/aireq next");
-
-		text = "/aireq";
-		expect(await executeBuiltinSlashCommand(text, { ctx })).toBe(true);
-		expect(entryChecks).toBe(1);
-		expect(shutdowns.size).toBe(1);
-		expect(ctx.isAIReqWorkbenchModeActive?.()).toBe(false);
-		expect(editor.disableSubmit).toBe(false);
-		expect(text).toBe("/aireq");
-		expect(f.output).toHaveLength(2);
-		expect(f.output.every(message => message.length > 0)).toBe(true);
-
-		text = "new ordinary draft";
-		expect(await executeBuiltinSlashCommand("/aireq", { ctx, draftDetached: true })).toBe(true);
-		expect(entryChecks).toBe(2);
-		expect(shutdowns.size).toBe(1);
-		expect(text).toBe("/aireq\n\nnew ordinary draft");
-		expect(f.session.messages).toEqual([]);
-		expect(f.session.isBusyForSnapshot).toBe(false);
-		await expect(fs.stat(path.join(f.cwd, ".omp/aireq-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
-		for (const shutdown of shutdowns) await shutdown();
-	});
-
-	test("invokes the host toggle exactly once per bare command and never for rejected arguments", async () => {
-		await using f = await fixture();
-		let toggles = 0;
-		let active = false;
-		f.context.toggleAIReqWorkbench = async () => {
-			toggles++;
-			active = !active;
-		};
-		expect(await f.invoke("")).toEqual({ consumed: true });
-		expect(active).toBe(true);
-		expect(toggles).toBe(1);
-		expect(await f.invoke("next")).toEqual({ consumed: true, failed: true, errorCode: "invalid_params" });
-		expect(active).toBe(true);
-		expect(toggles).toBe(1);
-		expect(await f.invoke("", "/aireq   ")).toEqual({ consumed: true });
-		expect(active).toBe(false);
-		expect(toggles).toBe(2);
-		expect(f.session.messages).toEqual([]);
-		expect(f.session.isBusyForSnapshot).toBe(false);
-	});
-
-	test("consumes every retired verb without changing the ordinary session or creating AIReq state", async () => {
-		await using f = await fixture();
-		expect(BUILTIN_AIREQ_SLASH_COMMANDS.map(command => command.name)).toEqual(["aireq"]);
-		const ordinaryId = f.session.sessionId;
-		const ordinaryModel = f.session.model;
-		const ordinarySettings = f.session.settings;
-		const ordinaryQueue = f.session.getQueuedInputMessages();
-		const messages = structuredClone(f.session.messages);
-		for (const args of [
-			"new 完整需求",
-			"business 业务描述",
-			"finish-business",
-			"next",
-			"next one",
-			"back",
-			"drop",
-			"config",
-			"status",
-			"--resume",
-			"unknown",
-			"next a b",
-		]) {
-			expect(await f.invoke(args)).toEqual({ consumed: true, failed: true, errorCode: "invalid_params" });
-		}
-		expect(f.session.sessionId).toBe(ordinaryId);
-		expect(f.session.messages).toEqual(messages);
-		expect(f.session.model).toBe(ordinaryModel);
-		expect(f.session.settings).toBe(ordinarySettings);
-		expect(f.session.getQueuedInputMessages()).toEqual(ordinaryQueue);
-		await expect(fs.stat(path.join(f.cwd, "docs/aireq-requirements"))).rejects.toMatchObject({ code: "ENOENT" });
-		await expect(fs.stat(path.join(f.cwd, ".omp/aireq-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
-	});
-
-	test("checks the submitted text rather than letting stale parsed args smuggle an old action", async () => {
-		await using f = await fixture();
-		for (const text of ["/aireq:next", "/aireq next\n仍然是旧参数", "/aireq\tnew raw request", "/aireq config "]) {
-			expect(await f.invoke("", text)).toEqual({ consumed: true, failed: true, errorCode: "invalid_params" });
-		}
-		expect(f.session.messages).toEqual([]);
-		expect(f.session.isBusyForSnapshot).toBe(false);
-		await expect(fs.stat(path.join(f.cwd, ".omp/aireq-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
-	});
-
-	test("a generic host without the native TUI toggle reports a consumed error without launching or calling a model", async () => {
-		await using f = await fixture();
-		const ordinaryId = f.session.sessionId;
-		const ordinaryModel = f.session.model;
-		const ordinarySettings = f.session.settings;
-		const ordinaryQueue = f.session.getQueuedInputMessages();
-		for (const text of ["/aireq", "/aireq   "]) {
-			expect(await f.invoke("", text)).toEqual({ consumed: true, failed: true, errorCode: "execution_failed" });
-		}
-		expect(f.output.length).toBe(2);
-		expect(f.output.every(message => message.length > 0)).toBe(true);
-		expect(f.session.messages).toEqual([]);
-		expect(f.session.isBusyForSnapshot).toBe(false);
-		expect(f.session.sessionId).toBe(ordinaryId);
-		expect(f.session.model).toBe(ordinaryModel);
-		expect(f.session.settings).toBe(ordinarySettings);
-		expect(f.session.getQueuedInputMessages()).toEqual(ordinaryQueue);
-		expect(f.session.sessionManager.getCwd()).toBe(f.cwd);
-		await expect(fs.stat(path.join(f.cwd, ".omp/aireq-workbench"))).rejects.toMatchObject({ code: "ENOENT" });
-		await expect(fs.stat(path.join(f.cwd, "docs/aireq-requirements"))).rejects.toMatchObject({ code: "ENOENT" });
-	});
+	expect(await executeBuiltinSlashCommand("/context", { ctx })).toBe(true);
+	expect(contextReports).toBe(1);
+	expect(text).toBe("");
 });

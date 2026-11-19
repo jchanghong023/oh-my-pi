@@ -122,7 +122,6 @@ import { copyLocalArtifacts, resolveLocalRoot } from "../internal-urls";
 import { hasNativeJudge } from "../judgment";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
-import type { MCPAuthHandler } from "../mcp/manager";
 import {
 	formatMCPConnectionStatusMessage,
 	isMcpConnectionStatusEvent,
@@ -1843,10 +1842,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	// session switches. While set, short replies like "c" are answers, not
 	// continue shortcuts.
 	#guidedGoalInterviewActive = false;
-	isAIReqWorkbenchModeActive?: () => boolean;
-	handleAIReqWorkbenchModeInput?: (data: string) => boolean;
-	handleAIReqWorkbenchModeSubmit?: (text: string) => Promise<boolean>;
-	#aiReqWorkbenchInputUnsubscribe?: () => void;
+	isWebGuiModeActive?: () => boolean;
+	handleWebGuiModeInput?: (data: string) => boolean;
+	handleWebGuiModeSubmit?: (text: string) => Promise<boolean>;
+	#webGuiInputUnsubscribe?: () => void;
 	readonly #rootSession: AgentSession;
 	readonly #hostShutdownCallbacks = new Set<() => Promise<void>>();
 	#sessionBindingUnsubscribers: Array<() => void> = [];
@@ -1909,7 +1908,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planReviewAnnotationStateBySubmission = new WeakMap<SubmittedUserInput, string>();
 	readonly lspServers: LspStartupServerInfo[] | undefined = undefined;
 	mcpManager?: MCPManager;
-	readonly nativeMcpUiAuthHandler: MCPAuthHandler;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 	#activeToolUIContext: ExtensionUIContext | undefined;
 
@@ -2206,9 +2204,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.mcpManager = mcpManager;
 		// An MCP sign-in can wait for the user mid-turn; like the auto-QA and cfg:// prompts below, it runs as a wait for
 		// the user (AgentSession.waitForUser).
-		this.nativeMcpUiAuthHandler = (serverName, challenge) =>
-			this.session.waitForUser(() => new MCPCommandController(this).handleMCPAuthChallenge(serverName, challenge));
-		this.mcpManager?.setAuthHandler(this.nativeMcpUiAuthHandler);
+		this.mcpManager?.setAuthHandler((serverName, challenge) =>
+			this.session.waitForUser(() => new MCPCommandController(this).handleMCPAuthChallenge(serverName, challenge)),
+		);
 		this.#eventBus = eventBus;
 		this.#subagentEventBus = subagentEventBus;
 
@@ -2668,8 +2666,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.setFocus(this.editor);
 		this.syncComposerShape();
 
-		this.#aiReqWorkbenchInputUnsubscribe ??= this.ui.addInputListener(
-			data => (this.handleAIReqWorkbenchModeInput?.(data) ? { consume: true } : undefined),
+		this.#webGuiInputUnsubscribe ??= this.ui.addInputListener(
+			data => (this.handleWebGuiModeInput?.(data) ? { consume: true } : undefined),
 			{ prepend: true },
 		);
 		this.#inputController.setupKeyHandlers();
@@ -2677,7 +2675,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Native transcript controls (user-message toolbar, error-frame actions)
 		// run the same commands as their key bindings.
 		setTranscriptActionHandler(action => {
-			if (this.isAIReqWorkbenchModeActive?.()) return;
+			if (this.isWebGuiModeActive?.()) return;
 			switch (action.act) {
 				case "retry":
 					void this.#inputController.handleRetry();
@@ -3215,7 +3213,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * reflect `newCwd` before this is called.
 	 */
 	async applyCwdChange(newCwd: string): Promise<boolean> {
-		if (this.isAIReqWorkbenchModeActive?.()) return false;
+		if (this.isWebGuiModeActive?.()) return false;
 		const previousCwd = getProjectDir();
 		try {
 			setProjectDir(newCwd);
@@ -3276,13 +3274,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		return () => this.#hostShutdownCallbacks.delete(dispose);
 	}
 
-	getAIReqWorkbenchEntryBlocker(): string | undefined {
+	getWebGuiEntryBlocker(): string | undefined {
 		if (this.#isShuttingDown) return "The native host is shutting down.";
 		if (!this.#modesRestored || this.#modeSetInFlight || this.#modeChangeHolds > 0)
 			return "Wait for the ordinary session's mode transition to settle.";
 		if (this.session.isSessionTransitioning) return "Wait for the ordinary session switch to settle.";
 		if (this.collabController.host || this.collabGuest)
-			return "Stop the ordinary Collab share or leave its guest session before entering a browser workbench.";
+			return "Stop the ordinary Collab share or leave its guest session before entering WebGUI.";
 		if (this.focusedAgentId) return "Return to the ordinary local session first.";
 		if (
 			this.ui.hasOverlay() ||
@@ -3293,7 +3291,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.getFocused() !== this.editor
 		)
 			return "Close the ordinary session's native dialog or selector first.";
-		if (this.workspaceModeEnabled) return "Exit Workspace mode before entering a browser workbench.";
+		if (this.workspaceModeEnabled) return "Exit Workspace mode before entering WebGUI.";
 		if (
 			this.planModeEnabled ||
 			this.planModePaused ||
@@ -3309,7 +3307,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#goalContinuationTimer ||
 			this.#pendingGoalContinuationTurns > 0
 		)
-			return "Exit the ordinary Plan, Goal, Vibe or Loop mode before entering a browser workbench.";
+			return "Exit the ordinary Plan, Goal, Vibe or Loop mode before entering WebGUI.";
 		if (
 			this.#pendingSubmittedInput ||
 			this.#inputController.hasOtherSubmissionDispatches() ||
@@ -3322,8 +3320,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#assertOrdinaryTuiInputAllowed(): void {
-		if (this.isAIReqWorkbenchModeActive?.())
-			throw new Error("Exit the active browser workbench with its exit command before using ordinary TUI commands.");
+		if (this.isWebGuiModeActive?.()) throw new Error("Exit WebGUI with /webgui before using ordinary TUI commands.");
 	}
 
 	#bindSessionEventBus(): void {
@@ -3445,7 +3442,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#scheduleLoopAutoSubmit(): void {
 		this.#cancelLoopAutoSubmit();
-		if (this.isAIReqWorkbenchModeActive?.()) return;
+		if (this.isWebGuiModeActive?.()) return;
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
 		if (this.#loopIntervalMs !== undefined && isLoopLimitExhausted(this.loopLimit)) {
 			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
@@ -3466,7 +3463,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#loopAutoSubmitTimer = setTimeout(() => {
 			this.#loopAutoSubmitTimer = undefined;
 			try {
-				if (this.isAIReqWorkbenchModeActive?.()) return;
+				if (this.isWebGuiModeActive?.()) return;
 				if (!this.loopModeEnabled || !this.onInputCallback || this.#isShuttingDown) return;
 				if (this.#loopIntervalMs !== undefined && isLoopDurationExpired(this.loopLimit)) {
 					this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
@@ -3511,7 +3508,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#scheduleGoalContinuation(): void {
 		this.#cancelGoalContinuation("rescheduled");
 		const stop = (reason: string) => this.#logGoalContinuation("suppressed", reason);
-		if (this.isAIReqWorkbenchModeActive?.()) return stop("aireq_workbench_mode");
+		if (this.isWebGuiModeActive?.()) return stop("webgui_mode");
 		if (this.loopModeEnabled) return stop("loop_mode");
 		if (!this.onInputCallback) return stop("not_waiting_for_input");
 		if (!cfgGoalContinuationModes.get(this.session.settings).includes("interactive"))
@@ -3545,7 +3542,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				const stopWaiting = (reason: string) =>
 					this.#logGoalContinuation("suppressed", reason, { ...elapsed(), stage: "idle_wait" });
 				if (!this.onInputCallback) return stopWaiting("not_waiting_for_input");
-				if (this.isAIReqWorkbenchModeActive?.()) return stopWaiting("aireq_workbench_mode");
+				if (this.isWebGuiModeActive?.()) return stopWaiting("webgui_mode");
 				if (this.session !== owner) return stopWaiting("session_changed");
 				if (!this.goalModeEnabled || this.goalModePaused) return stopWaiting("goal_disabled_or_paused");
 				// The idle timer can outlive its scheduling window; agent_end reschedules.
@@ -3632,7 +3629,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#isAutoSubmitBlocked(): boolean {
-		if (this.isAIReqWorkbenchModeActive?.()) return true;
+		if (this.isWebGuiModeActive?.()) return true;
 		return this.session.isStreaming || this.session.isCompacting || this.session.hasPostPromptWork;
 	}
 
@@ -3641,7 +3638,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#submitLoopPromptWhenReady(prompt: string): void {
-		if (this.isAIReqWorkbenchModeActive?.()) return;
+		if (this.isWebGuiModeActive?.()) return;
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
 		if (isLoopDurationExpired(this.loopLimit)) {
 			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
@@ -3672,7 +3669,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #loopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
-		if (this.isAIReqWorkbenchModeActive?.()) return;
+		if (this.isWebGuiModeActive?.()) return;
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
 		// Do not compact or reset a LoopN turn while its native jobs are still settling.
 		// The prompt-only path checks the same gate immediately before advancing the list.
@@ -3839,7 +3836,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	armLoopAutoSubmit(promptPromise: Promise<unknown>): void {
 		this.#cancelLoopAutoSubmit();
-		if (this.isAIReqWorkbenchModeActive?.()) return;
+		if (this.isWebGuiModeActive?.()) return;
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
 		if (this.#loopIntervalMs === undefined) {
 			this.#scheduleLoopAutoSubmit();
@@ -4027,8 +4024,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			message,
 			state: this.#getSessionModeState(),
 		});
-		if (this.isAIReqWorkbenchModeActive?.())
-			return refuse("conflict", "Exit the active browser workbench before changing the ordinary session mode.");
+		if (this.isWebGuiModeActive?.())
+			return refuse("conflict", "Exit WebGUI before changing the ordinary session mode.");
 		if (!cfgExtensionHandlersModeControl.get(this.session.settings)) {
 			return refuse("disabled", "Extension mode control is disabled in settings (extensionHandlers.modeControl).");
 		}
@@ -8652,8 +8649,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	stop(): void {
 		this.#closeAttempt?.abort();
-		this.#aiReqWorkbenchInputUnsubscribe?.();
-		this.#aiReqWorkbenchInputUnsubscribe = undefined;
+		this.#webGuiInputUnsubscribe?.();
+		this.#webGuiInputUnsubscribe = undefined;
 		for (const unsubscribe of this.#sessionBindingUnsubscribers) unsubscribe();
 		this.#sessionBindingUnsubscribers = [];
 		for (const unsubscribe of this.#sessionEventBusUnsubscribers) unsubscribe();
@@ -8756,8 +8753,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * cancellable and first ask extensions through `session_before_shutdown`.
 	 */
 	async shutdown(options?: { cancellable?: boolean }): Promise<void> {
-		if (options?.cancellable !== false && this.isAIReqWorkbenchModeActive?.()) {
-			await this.handleAIReqWorkbenchModeSubmit?.("/exit");
+		if (options?.cancellable !== false && this.isWebGuiModeActive?.()) {
+			await this.handleWebGuiModeSubmit?.("/webgui");
 			return;
 		}
 		if (this.#isShuttingDown) {
@@ -9798,7 +9795,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#vibeSessionTransitionBlocked(): boolean {
-		if (this.isAIReqWorkbenchModeActive?.()) return true;
+		if (this.isWebGuiModeActive?.()) return true;
 		if (!this.vibeModeEnabled) return false;
 		this.session.emitNotice("warning", "Exit vibe mode first.");
 		return true;

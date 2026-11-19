@@ -13,7 +13,7 @@ import {
 	type SpecDrivenProcessResult,
 } from "../../src/spec-driven/resources";
 import inventory from "../../src/spec-driven/vendor/inventory.json";
-import { initializeRepository } from "../aireq-workbench/fixture";
+import { initializeRepository } from "./repository-fixture";
 
 const upstreamOpenSpecSkills = [
 	"openspec-apply-change",
@@ -973,7 +973,7 @@ describe("bundled Superpowers helper regressions", () => {
 it("embedded script launch preserves exact arguments and workspace runtime environment", async () => {
 	const cwd = path.join(temporary, "script arguments Ω (workspace)");
 	await fs.mkdir(cwd);
-	const args = ["missing skill directory Ω (not a command)", "--combine", "/dev next", "literal=$VALUE"];
+	const args = ["missing skill directory Ω (not a command)", "--combine", "spaced argument", "literal=$VALUE"];
 	const resources = await ensureSpecDrivenResources();
 	const spawn = Bun.spawn;
 	const launches: Array<{ command: string[]; env?: Record<string, string> }> = [];
@@ -1000,7 +1000,6 @@ it("embedded script launch preserves exact arguments and workspace runtime envir
 		expect(launch.env?.OMP_BUN_EXECUTABLE).toBe(process.execPath);
 		expect(launch.env?.PATH?.split(path.delimiter)[0]).toBe(path.join(resources.root, "omp-runtime"));
 		expect(launch.env?.BRAINSTORM_DIR).toBe(path.join(cwd, ".superpowers", "brainstorm"));
-		await expect(fs.stat(path.join(cwd, ".omp/aireq/state.json"))).rejects.toMatchObject({ code: "ENOENT" });
 		const shellArgs = ["missing plan Ω (not a command).md", "literal base", "literal head"];
 		let shell: SpecDrivenProcessResult | undefined;
 		try {

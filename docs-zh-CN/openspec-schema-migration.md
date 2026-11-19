@@ -1,36 +1,28 @@
 # 本仓库 OpenSpec 2.0 schema 迁移记录
 
-本次仅迁移 OMP 仓库作为普通 OpenSpec 项目的配置，不迁移用户项目，不调整 AIReq 业务流程、会话或权限。
+本次仅迁移 OMP 仓库作为普通 OpenSpec 项目的配置，不迁移用户项目。
 
 ## 变更与恢复
 
-- 根 `openspec/config.yaml` 及下表 12 个活动 change 的 `.openspec.yaml` 从 `omp-spec` 改为上游 `spec-driven`，创建日期及换行格式保持。
-- 原始 13 个 YAML 文件保存在 `openspec/.migration-backup/openspec-2.0/`，按原相对路径组织；`material-sha256.json` 保存活动 change 原有材料的 SHA-256。需要撤回时，仅恢复对应配置／元数据；回滚名称不会恢复已撤销的包内私有 schema。
-- 本次没有生成、删除或改写 proposal、specs、design、tasks；逐文件摘要验证原有材料保持不变。
+- 根 `openspec/config.yaml` 及当时活动 change 的 `.openspec.yaml` 从 `omp-spec` 改为上游 `spec-driven`，创建日期及换行格式保持。
+- 现存的旧 YAML 配置与材料摘要保存在 `openspec/.migration-backup/openspec-2.0/`。需要撤回时，仅恢复对应配置／元数据；回滚名称不会恢复已撤销的包内私有 schema。
+- schema 迁移本身没有生成、删除或改写 proposal、specs、design、tasks；迁移时逐文件摘要验证原有材料保持不变。
 - 不批量改写历史 `changes/archive/`；其中旧 schema 名称保留为历史记录。没有恢复 `mini`／`omp-spec` 兼容 schema 或别名。
 
 ## 活动材料核对
 
-下表以迁移时实际文件为准。`specs` 列为 `specs/<capability>/spec.md` 的 capability 名称。文件存在不代表内容完整、实现完成、任务完成或业务获批；未自动生成缺失设计／任务，也未关闭校验。
+下表列出仍保留的活动 change，并记录 schema 迁移时的材料。`specs` 列为 `specs/<capability>/spec.md` 的 capability 名称。文件存在不代表内容完整、实现完成、任务完成或业务获批；迁移不自动生成缺失设计／任务，也不关闭校验。
 
 |活动 change|现有材料|specs|仍缺的原生产物|
 |---|---|---|---|
 |add-fork-review-workflow|proposal|fork-review、personal-commands|design、tasks|
 |add-intranet-username-collab|proposal|fork-runtime、intranet-collaboration、personal-commands|design、tasks|
 |add-todoloop-command|proposal、tasks|personal-commands|design|
-|refactor-dev-native-stage-retirement|proposal|spec-driven-orchestration|design、tasks|
-|refactor-dev-native-state-retirement|proposal|spec-driven-orchestration|design、tasks|
-|refactor-dev-native-workflow|proposal|spec-driven-orchestration|design、tasks|
 |refactor-dev-webgui-project-host|proposal|personal-commands|design、tasks|
-|refactor-dev-webgui-requirement-intake|proposal|aireq-requirement-intake|design、tasks|
-|refactor-dev-webgui-workbench-retirement|proposal|aireq-browser-workbench|design、tasks|
-|refactor-dev-webgui-workbench|proposal|aireq-browser-workbench|design、tasks|
 |refine-compact-output-preview|proposal|tui-presentation|design、tasks|
 |revamp-compact-activity-dock|proposal|tui-presentation|design、tasks|
 
-`align-zcode-3-18-visual-baseline` 没有显式 `.openspec.yaml`，没有为其创建或修改元数据；其 proposal、tasks 和 aireq-browser-workbench／personal-commands／zcode-visual-baseline 三份 specs 保留，缺少 design，使用根配置的 `spec-driven` 默认值。
-
-上述 `refactor-dev-*` 与视觉基线中包含 AIReq 相关历史提案。本次只调整仓库规划材料的 schema 引用或记录隐式默认，不修改其中业务方案，不据此实现、迁移或承诺 AIReq 兼容。
+`align-zcode-3-18-visual-baseline` 没有显式 `.openspec.yaml`；迁移未为其创建或修改元数据，沿用根配置的 `spec-driven` 默认值。该变更保留 `zcode-visual-baseline` 增量，当前适配范围见 [OMP 与 ZCode 视觉适配规则](../docs/design/omp-zcode-visual-adaptation.md)。
 
 ## 使用影响
 

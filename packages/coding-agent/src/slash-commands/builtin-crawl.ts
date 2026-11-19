@@ -106,7 +106,7 @@ function sessionState(runtime: SlashCommandRuntime): CrawlSessionState {
 	return state;
 }
 
-async function handleCrawlCommand(command: ParsedSlashCommand, runtime: SlashCommandRuntime, browser = false) {
+async function handleCrawlCommand(command: ParsedSlashCommand, runtime: SlashCommandRuntime) {
 	let options: CrawlOptions | "stop";
 	try {
 		options = parseCrawlOptions(command.args);
@@ -130,13 +130,6 @@ async function handleCrawlCommand(command: ParsedSlashCommand, runtime: SlashCom
 	const completion = Promise.withResolvers<void>();
 	const job: CrawlJob = { controller, completion: completion.promise, visible: true };
 	state.current = job;
-	const unregisterHostShutdown = browser
-		? runtime.registerHostShutdown?.(async () => {
-				job.visible = false;
-				controller.abort();
-				await job.completion;
-			})
-		: undefined;
 	const onAbort = () => controller.abort(runtime.signal?.reason);
 	runtime.signal?.addEventListener("abort", onAbort, { once: true });
 	const output = (text: string) => {
@@ -149,7 +142,6 @@ async function handleCrawlCommand(command: ParsedSlashCommand, runtime: SlashCom
 			await output(controller.signal.aborted ? "Crawl cancelled." : `Crawl failed: ${errorMessage(error)}`);
 		} finally {
 			runtime.signal?.removeEventListener("abort", onAbort);
-			unregisterHostShutdown?.();
 			if (state.current === job) state.current = undefined;
 			completion.resolve();
 		}
@@ -167,6 +159,5 @@ export const BUILTIN_CRAWL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		inlineHint:
 			"<URL> [--recursive] [--no-scroll] [--output <directory>] [--concurrency <number>] [--max-pages <number>] [--max-depth <depth>] [--wait <seconds>] | stop",
 		handle: handleCrawlCommand,
-		handleWebGui: (command, runtime) => handleCrawlCommand(command, runtime, true),
 	},
 ];

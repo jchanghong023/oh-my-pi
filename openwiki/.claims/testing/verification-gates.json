@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "pageVersion": "sha256:4b613e92baf5089999f5b8ba7e64868add57cbb66df5d4cf7e44c7c14c2545ed",
+  "pageVersion": "sha256:5fadea7490c0c44831f08184cf09b3075f0574f0459172b89a216da76d99c9b1",
   "claims": [
     {
       "id": "claim_592f6372ad0b42a7bafa80aab188318b",
@@ -167,10 +167,6 @@
       "statement": "运行时测试使用隔离 HOME 和本地 fixture，清除宿主配置与凭据，保留正常工具链缓存；Windows 子进程排除 WindowsApps 占位程序并启用 Python UTF-8。",
       "evidence": [
         {
-          "resource": "repo://packages/coding-agent/test/spec-driven/tui-harness.ts",
-          "version": "repo-file-v1:sha256:934cc687626a469ee40d169fd5de4d5f6a45575ac441671765621356cb02e514"
-        },
-        {
           "resource": "repo://scripts/fulltest.ts#L51-L100",
           "version": "repo-lines-v1:sha256:f5a56c3ca6cb1bca9a39185053a1a6c728dafa0b1d8e02d3ab54aa307b5566c8:eyJzZWxlY3RlZExpbmVDb3VudCI6NTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVlNzRjYTJiZjM5MzI3YmEwMzE4NDY4OTNlNGUyMDlmM2E0MTkzZWEzNWQ0OTYyYTBjZDA4NGVhNjIxMTUzYjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImY1Y2FlM2I2YzUzNzQ4Y2RmY2NiODUxNzY0ZDk4MTE0NGU1MTdiZGJhZDdjYTM3YTkyYzUzNDM0ZTIzOWE1ZTEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImMwMmU1MjUwZTBjMmVjZWI1YTk4YWM4MDNhZmU0YzY0Nzg0NWRlMzQxNTljN2Y1NTI0OWMxZGRhODMyYTNmYWQifQ"
         }
@@ -211,24 +207,6 @@
         {
           "resource": "repo://package.json#L86-L100",
           "version": "repo-lines-v1:sha256:c631cbb8e6b98bb4e5b9d6c3919168953593c6fcac039b9eaf20f66fa605869c:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc2MzU5N2M4MjY2ZjJkYjE1Nzg2ZmYzZGRhMzNkMmFkODBjZmVjMjgyMGFmZjUwNzgyZjVkOTQ5Nzc4ZWRjNWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc3N2M5YzI1NjE3NjBjN2ZmY2M1YTIxY2MyNjQyOTZhZmZmNDU0YTFlY2RhN2ZmZGJkMjAzYzAyZTcyMDE5MDciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImI3NmY3OTRmYzU5MWRmZDFlZmIyYzExMDJlZGEzMjE0NjdjYjM0YzBmNzQ2MDUyN2EwYThiYTliZTQ2OWVjYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhmNTc1OTVjN2FlZTA1ZjdlNTViNDllYWI2ZGU4MTdlODA5MjlhZTFkYTBlZjc5MjRiNGU4Y2ViMDdiMTc4NzIifQ"
-        }
-      ]
-    },
-    {
-      "id": "claim_d55ea814b1594fff9594f41ab5a8b8a7",
-      "statement": "Dev 的控制器、资源、进程和 TUI 测试提供按改动域分层选择的焦点回归入口。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/test/spec-driven/controller.test.ts",
-          "version": "repo-file-v1:sha256:6e766a5eb84e197e00cd3e28f13f98078af15fb49c7e2948e1c322a6608f45c6"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/spec-driven/process.e2e.test.ts",
-          "version": "repo-file-v1:sha256:c1f44dc9e3535f36d50c5ed4dc07b4a23de0e740c075da4d1e4c290f6186763e"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/spec-driven/tui-interactions.e2e.test.ts",
-          "version": "repo-file-v1:sha256:b345ce2343e4aa87722fe5e8e053fc8edd9fc604a7d9328d30f889faddc37961"
         }
       ]
     }

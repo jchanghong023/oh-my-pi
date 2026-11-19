@@ -101,8 +101,7 @@ function assertProject(context: WebGuiServiceContext): BrowserProjectRecord {
 	context.signal.throwIfAborted();
 	if (exiting) throw new Error("WebGUI is exiting");
 	const project = context.projectId ? readBrowserProject(context.projectId) : null;
-	if (!project || project.mode !== "webgui" || project.phase !== "active")
-		throw new Error("Select an active WebGUI project first");
+	if (!project || project.phase !== "active") throw new Error("Select an active WebGUI project first");
 	if (context.nativeSession && !project.nativeSessions?.has(context.nativeSession))
 		throw new Error("The native WebGUI binding is no longer owned by this project");
 	return project;
@@ -122,7 +121,7 @@ function binding(project: BrowserProjectRecord): WebGuiProjectBinding {
 	};
 }
 
-/** Opening a project acquires only its mode lease, never an Agent or a model turn. */
+/** Opening a project acquires only its WebGUI lease, never an Agent or a model turn. */
 export function openWebGuiNativeProject(directory: string, create = false): Promise<WebGuiProjectBinding> {
 	return runWebGuiNativeMutation(async () => {
 		if (!directory.trim() || !path.isAbsolute(directory)) throw new Error("Expected an absolute local project path");
@@ -141,14 +140,13 @@ async function openProject(directory: string): Promise<BrowserProjectRecord> {
 	const key = normalizePathForComparison(root);
 	const existing = listBrowserProjects().find(project => normalizePathForComparison(project.root) === key);
 	if (existing) {
-		if (existing.mode !== "webgui" || existing.phase !== "active")
-			throw new Error(`项目已被 AIReq 占用或正在退出，请先结清原模式：${root}`);
+		if (existing.phase !== "active") throw new Error(`WebGUI 项目正在打开或退出，请先结清当前操作：${root}`);
 		return existing;
 	}
 	const inFlight = openings.get(key);
 	if (inFlight) return inFlight;
 	const opening = (async () => {
-		const lease = await acquireBrowserProject(root, "webgui");
+		const lease = await acquireBrowserProject(root);
 		leases.set(lease.projectId, lease);
 		try {
 			if (exiting) throw new Error("WebGUI exited during project admission");
@@ -215,8 +213,7 @@ function nativeSessionRef(session: AgentSession): AgentRef | undefined {
 
 export function webGuiSessionProject(session: AgentSession): WebGuiProjectBinding {
 	const project = listBrowserProjects().find(candidate => candidate.nativeSessions?.has(session));
-	if (!project || project.mode !== "webgui" || project.phase !== "active")
-		throw new Error("Native session project ownership has ended");
+	if (!project || project.phase !== "active") throw new Error("Native session project ownership has ended");
 	return binding(project);
 }
 
@@ -239,7 +236,7 @@ async function createRoot(
 	});
 	try {
 		if (!leases.has(project.projectId)) {
-			const lease = await acquireBrowserProject(project.root, "webgui", { reuseWebGuiOwner: true });
+			const lease = await acquireBrowserProject(project.root, { reuseWebGuiOwner: true });
 			if (leases.has(project.projectId)) await lease.close();
 			else leases.set(project.projectId, lease);
 		}
@@ -464,15 +461,9 @@ function settleWebGuiNativeSessions(): Promise<void> {
 	if (closing) return closing;
 	exiting = true;
 	const operation = (async () => {
-		const live = [
-			...new Set(
-				listBrowserProjects()
-					.filter(project => project.mode === "webgui")
-					.flatMap(project => [...(project.nativeSessions ?? [])]),
-			),
-		];
+		const live = [...new Set(listBrowserProjects().flatMap(project => [...(project.nativeSessions ?? [])]))];
 		for (const project of listBrowserProjects()) {
-			if (project.mode === "webgui") markBrowserProjectExiting(project.projectId, project.ownerId);
+			markBrowserProjectExiting(project.projectId, project.ownerId);
 		}
 		for (const lease of leases.values()) await lease.markExiting();
 		const aborts = Promise.allSettled(
@@ -491,7 +482,6 @@ function settleWebGuiNativeSessions(): Promise<void> {
 		const abortResults = await aborts;
 		const ownedSessions = new Set([...roots].map(root => root.session));
 		const borrowed = listBrowserProjects()
-			.filter(project => project.mode === "webgui")
 			.flatMap(project => [...(project.nativeSessions ?? [])])
 			.filter(session => !ownedSessions.has(session));
 		const results = await Promise.allSettled([

@@ -468,7 +468,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "settings",
 		icon: "settings",
 		description: "Open settings menu",
-		handleWebGui: (_command, runtime) => runtime.runNativeModeCommand("settings", ""),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showSettingsSelector();
 			clearSubmittedText(runtime);
@@ -488,7 +487,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			},
 			{ name: "detailed", description: "沿用上游完整思考与工具显示" },
 		],
-		handleWebGui: (command, runtime) => runtime.runNativeModeCommand("display", command.args),
 		handleTui: async (command, runtime) => {
 			const { settings } = runtime.ctx;
 			const mode = command.args.trim() || nextDisplayMode(settings);
@@ -508,12 +506,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Open provider setup",
 		allowArgs: true,
 		subcommands: [{ name: "providers", description: "Configure sign-in and web search providers" }],
-		handleWebGui: (command, runtime) => {
-			if (command.args.trim() && command.args.trim().toLowerCase() !== "providers") {
-				return usage(`Usage: /${command.name} [providers]`, runtime);
-			}
-			return runtime.runNativeModeCommand("setup", command.args);
-		},
 		handleTui: async (command, runtime) => {
 			const args = command.args.trim().toLowerCase();
 			const opensProviders = args === "" || args === "providers";
@@ -552,7 +544,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "plan-review",
 		icon: "plan",
 		description: "Re-open the plan review for the latest plan (plan mode only)",
-		handleWebGui: (_command, runtime) => runtime.runNativeModeCommand("plan-review", ""),
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.planModeEnabled ? "Plan review: available" : "Plan review: plan mode inactive",
 		handleTui: async (_command, runtime) => {
@@ -566,7 +557,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Toggle vibe mode (direct persistent fast/good worker sessions; read-only toolset)",
 		inlineHint: "[prompt]",
 		allowArgs: true,
-		handleWebGui: (command, runtime) => runtime.runNativeModeCommand("vibe", command.args),
 		getTuiAutocompleteDescription: runtime => {
 			if (runtime.ctx.vibeModeEnabled) return "Vibe: on";
 			if (runtime.ctx.planModeEnabled) return "Vibe: blocked by plan mode";
@@ -598,7 +588,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Have the agent interview you in chat, then set up goal mode",
 		inlineHint: "[rough objective]",
 		allowArgs: true,
-		handleWebGui: (command, runtime) => runtime.runNativeModeCommand("guided-goal", command.args),
 		handleTui: async (command, runtime) => {
 			await runWithDetachedDraft(command, runtime, () =>
 				runtime.ctx.handleGuidedGoalCommand(command.args || undefined, runtime.input),
@@ -637,7 +626,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Queue a message for after the agent yields",
 		inlineHint: "<message>",
 		allowArgs: true,
-		handleWebGui: (command, runtime) => runtime.runNativeModeCommand("queue", command.args),
 		handleTui: async (command, runtime) => {
 			await runtime.ctx.handleQueueCommand(
 				command.args,
@@ -653,22 +641,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpDescription: "Show current model or select a model",
 		acpInputHint: "[model]",
 		acpAllowArgs: true,
-		handleWebGui: async (command, runtime) => {
-			const selector =
-				command.args.trim() ||
-				(await runtime.ui.select(
-					"Select model",
-					runtime.session.modelRegistry.getAvailable().map(model => `${model.provider}/${model.id}`),
-				));
-			if (!selector) return commandConsumed();
-			const resolved = resolveSessionModelSelector(selector, runtime.session, runtime.settings);
-			if (!resolved.model) return usage(resolved.error ?? `Unknown model: ${selector}`, runtime);
-			if (!runtime.setModel) throw new Error("The native host does not expose model selection");
-			await runtime.setModel(resolved.model);
-			if (resolved.thinkingLevel !== undefined) runtime.session.setThinkingLevel(resolved.thinkingLevel);
-			await runtime.output(`Model set to ${formatModelString(resolved.model)}.`);
-			return commandConsumed();
-		},
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.viewSession.model;
 			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
@@ -718,20 +690,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpInputHint: "[model]",
 		inlineHint: "[model]",
 		allowArgs: true,
-		handleWebGui: async (command, runtime) => {
-			const selector =
-				command.args.trim() ||
-				(await runtime.ui.select(
-					"Select session-only model",
-					runtime.session.modelRegistry.getAvailable().map(model => `${model.provider}/${model.id}`),
-				));
-			if (!selector) return commandConsumed();
-			const resolved = resolveSessionModelSelector(selector, runtime.session, runtime.settings);
-			if (!resolved.model) return usage(resolved.error ?? `Unknown model: ${selector}`, runtime);
-			await runtime.session.setModelTemporary(resolved.model, resolved.thinkingLevel);
-			await runtime.output(`Session-only model: ${formatModelString(resolved.model)}.`);
-			return commandConsumed();
-		},
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.viewSession.model;
 			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
@@ -963,26 +921,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Build (or reuse) an eval for an LLM flow, then hillclimb it unattended",
 		inlineHint: "[flow and goal]",
 		allowArgs: true,
-		handleWebGui: (command, runtime) => {
-			const armed = prepareRatchet(runtime.session, command.args);
-			if ("error" in armed) return usage(armed.error, runtime);
-			runtime.runCommandInBackground(async () => {
-				runtime.signal?.throwIfAborted();
-				const images = runtime.input?.images?.length ? runtime.input.images : undefined;
-				if (runtime.session.isStreaming) {
-					await runtime.session.followUp(armed.kickoff, images, { synthetic: true });
-				} else {
-					try {
-						await runtime.session.prompt(armed.kickoff, { synthetic: true, images });
-					} catch (error) {
-						if (!(error instanceof AgentBusyError)) throw error;
-						runtime.signal?.throwIfAborted();
-						await runtime.session.followUp(armed.kickoff, images, { synthetic: true });
-					}
-				}
-			});
-			return commandConsumed();
-		},
 		handle: (command, runtime) => {
 			const armed = prepareRatchet(runtime.session, command.args);
 			if ("error" in armed) return usage(armed.error, runtime);
@@ -1100,22 +1038,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "delete", description: "Delete a saved preset", usage: "<name>" },
 		],
 		allowArgs: true,
-		handleWebGui: async (command, runtime) => {
-			let args = command.args;
-			if (!args.trim()) {
-				const names = getModelPresetNames(runtime.settings);
-				if (names.length === 0) {
-					await runtime.output(NO_PRESETS_MESSAGE);
-					return commandConsumed();
-				}
-				const selected = await runtime.ui.select("Switch to model preset", names);
-				if (!selected) return commandConsumed();
-				args = `switch ${selected}`;
-			}
-			const outcome = await runPresetsCommand(args, runtime.settings, runtime.session);
-			await runtime.output(outcome.message);
-			return { consumed: true, ...(outcome.failed || outcome.usage ? { failed: true } : {}) };
-		},
 		getTuiAutocompleteDescription: runtime => {
 			const count = getModelPresetNames(runtime.ctx.settings).length;
 			return count > 0 ? `Presets: ${count} saved` : "Presets: none saved";
@@ -1166,21 +1088,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			name: level,
 			description: getConfiguredThinkingLevelMetadata(level).description,
 		})),
-		handleWebGui: async (command, runtime) => {
-			if (!runtime.session.model?.reasoning) {
-				await runtime.output(noThinkingMessage(runtime.session));
-				return commandConsumed();
-			}
-			const selector =
-				command.args.trim() ||
-				(await runtime.ui.select("Reasoning effort", runtime.session.getAvailableEffortSelectors()));
-			if (!selector) return commandConsumed();
-			const resolved = resolveThinkingArgument(runtime.session, selector);
-			if ("error" in resolved) return usage(resolved.error, runtime);
-			runtime.session.setThinkingLevel(resolved.level);
-			await runtime.output(`Thinking set to ${resolved.level}.`);
-			return commandConsumed();
-		},
 		getTuiAutocompleteDescription: runtime =>
 			`Thinking: ${runtime.ctx.viewSession.configuredThinkingLevel() ?? "model default"}`,
 		handle: async (command, runtime) => {

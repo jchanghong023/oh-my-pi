@@ -4,11 +4,11 @@ import * as path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord, ptree, TempDir } from "@oh-my-pi/pi-utils";
 import { requireGit } from "@oh-my-pi/pi-natives/vcs";
-import { initializeRepository } from "../aireq-workbench/fixture";
 import { RpcClient } from "../../src/modes/rpc/rpc-client";
 import type { SkillsCommandResult } from "../../src/cli/skill-list";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
-import { contentText, createProviderFixture, type ModelRequest, rolePayload } from "./provider-fixture";
+import { contentText, type ModelRequest } from "./provider-fixture";
+import { initializeRepository } from "./repository-fixture";
 
 const executable = Bun.env.OMP_SPEC_TEST_EXECUTABLE?.trim();
 if (executable && !path.isAbsolute(executable))
@@ -16,7 +16,6 @@ if (executable && !path.isAbsolute(executable))
 const launch = executable ? [executable] : [process.execPath, path.resolve(import.meta.dir, "../../src/cli.ts")];
 // One budget covers real CLI startup, native tools and the isolated local provider.
 const GATE_BUDGET = 600_000;
-type Frame = Record<string, unknown>;
 const caseDiagnostics = new AsyncLocalStorage<Array<() => unknown>>();
 function bounded(value: unknown): string {
 	return JSON.stringify(
@@ -39,38 +38,10 @@ function test(name: string, body: () => Promise<void>, budget: number): void {
 				const report = () => {
 					if (reported) return;
 					reported = true;
-					const observations = diagnostics.map(snapshot => snapshot());
-					console.error(
-						`Public acceptance final status: ${JSON.stringify({
-							case: name,
-							observations: observations.map(observation =>
-								isRecord(observation)
-									? {
-											command: observation.command,
-											phase: observation.phase,
-											phaseText: observation.phaseText,
-										}
-									: observation,
-							),
-						})}`,
-					);
 					console.error(
 						`Public acceptance diagnostics: ${bounded({
 							case: name,
-							observations: observations.map(observation =>
-								isRecord(observation)
-									? {
-											...observation,
-											phase: isRecord(observation.phase)
-												? {
-														...observation.phase,
-														statusMaterial: undefined,
-														publishedText: undefined,
-													}
-												: observation.phase,
-										}
-									: observation,
-							),
+							observations: diagnostics.map(snapshot => snapshot()),
 						})}`,
 					);
 				};
@@ -88,17 +59,6 @@ function test(name: string, body: () => Promise<void>, budget: number): void {
 		budget,
 	);
 }
-function executorToolDiagnostics(request: ModelRequest | undefined): unknown[] {
-	if (!request) return [];
-	return request.messages
-		.filter(message => message.role === "tool")
-		.slice(-8)
-		.map(message => ({
-			toolCallId: message.tool_call_id,
-			result: contentText(message.content),
-		}));
-}
-
 class PublicPeer extends RpcClient {
 	constructor(cwd: string, env: NodeJS.ProcessEnv, provider: { requests: ModelRequest[]; failures: string[] }) {
 		// Supplying the native process adapter avoids RpcClient's ambient-environment
@@ -115,12 +75,8 @@ class PublicPeer extends RpcClient {
 		});
 		caseDiagnostics.getStore()?.push(() => ({
 			providerFailures: provider.failures.slice(-12),
-			executorTools: executorToolDiagnostics(
-				provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === "executor"),
-			),
 			providerRequests: provider.requests.slice(-8).map(request => ({
 				model: request.model,
-				role: rolePayload(request)?.specDrivenRole,
 				tools: request.tools?.map(tool => tool.function?.name),
 				lastUser: contentText(request.messages.findLast(message => message.role === "user")?.content),
 				messages: request.messages.slice(-4).map(message => ({

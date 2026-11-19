@@ -1,14 +1,12 @@
 ---
 type: 工作流概念
 title: Team 配置与只读协作
-description: 说明 Team 成员配置、模型启动门槛、只读子代理讨论与报告生命周期，以及独立运行和 Dev 方案讨论的状态边界。
+description: 说明 Team 成员配置、模型启动门槛、只读子代理讨论与报告生命周期，以及与原生任务的边界。
 tags: [team, collaboration, configuration, orchestration, read-only]
 verified:
   - by: openwiki/0.0.0-unknown
     at: 2026-11-01T04:03:23.095Z
 sources:
-  - id: openwiki-source-ec58819131cc392d1bcd8468
-    resource: repo://packages/coding-agent/src/spec-driven/runtime.ts
   - id: openwiki-source-ebd262f42825081b8fdb9615
     resource: repo://packages/coding-agent/src/team/config.ts
   - id: openwiki-source-2a905f1dac6bc65223da7faf
@@ -88,12 +86,10 @@ flowchart TD
 
 独立运行完成后，控制器等待会话不再 streaming，再用 `appendCustomMessage` 将 `team-result` 作为可见持久消息写入，而非作为模型下一轮输入。失败可持久化失败说明；取消不发布成功报告。完整聚合结果也保存在 job 中，可通过 `proc://` 读取以恢复交付失败的结果；持久化后的 UI 回调失败不撤销已写入的报告。
 
-## Dev 与原生 task 的边界
+## 与原生 task 的边界
 
-
-Dev 的方案阶段可显式启用 Team：Dev runtime 在 solution 入口检查已批准版本，复用成员解析、runner 和 orchestrator，再把成功且至少有一个可采用候选的结果交给方案角色。它由 Dev 的阶段上下文和取消信号拥有，而非独立 `/team` 的后台 job 或配置保存触发；批准版本变化或讨论无可采用候选会阻断该阶段。后续需求、方案、计划和实施的门槛见 [Dev 生命周期](aireq-lifecycle.md)。原生 task 与 Team 共享底层子进程执行设施和并发设置，但 Team 自己拥有五阶段编排、只读工具集和审查门槛；一般工具执行边界见[工具与执行](../architecture/tools-and-execution.md)。
+原生 task 与 Team 共享底层子代理执行设施和并发设置，但 Team 自己拥有五阶段编排、只读工具集和审查门槛；一般工具执行边界见[工具与执行](../architecture/tools-and-execution.md)。
 
 ## 验证与维护线索
 
-<!-- openwiki: broken internal link [../../packages/coding-agent/test/team] file "../../packages/coding-agent/test/team" does not exist. Fix the href or restore the target, then delete this comment. -->
-重点回归位于 [`test/team`](../../packages/coding-agent/test/team)：`members.test.ts` 覆盖名单展开与模型预检，`config.test.ts` 覆盖配置读写与预览，`orchestrator.test.ts` 覆盖轮换、阻断和失败，`runner.test.ts` 与 `read-isolation.test.ts` 覆盖绑定、清理及隔离，`controller.test.ts` 覆盖取消和报告交付。并行审查回归另见 [`parallel-review-TeamDiscussion-regression.test.ts`](../../packages/coding-agent/test/parallel-review-TeamDiscussion-regression.test.ts)。变更报告合同、工具集合或生命周期时，应同时检查这些测试与 [Team 讨论规范](../../openspec/specs/team-discussion/spec.md)。
+重点回归位于 `packages/coding-agent/test/team/`：`members.test.ts` 覆盖名单展开与模型预检，`config.test.ts` 覆盖配置读写与预览，`orchestrator.test.ts` 覆盖轮换、阻断和失败，`runner.test.ts` 与 `read-isolation.test.ts` 覆盖绑定、清理及隔离，`controller.test.ts` 覆盖取消和报告交付。并行审查回归另见 [`parallel-review-TeamDiscussion-regression.test.ts`](../../packages/coding-agent/test/parallel-review-TeamDiscussion-regression.test.ts)。变更报告合同、工具集合或生命周期时，应同时检查这些测试与 [Team 讨论规范](../../openspec/specs/team-discussion/spec.md)。

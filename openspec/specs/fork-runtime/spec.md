@@ -57,7 +57,7 @@ OMP MUST 仅在 offline 会话追加环境规则；CLI、SDK 和 task 子代理 
 
 ### Requirement: offline 网页入口不自动启动浏览器
 
-`OMP_OFFLINE` 按统一真值规则启用时，原生 TUI 的 `/aireq`、`/webgui`、`/sketch` 以及独立 `omp aireq`、`omp webgui` MUST 不自动启动浏览器；该规则适用于全部平台与 Shell，不要求额外设置跳过打开的环境变量。
+`OMP_OFFLINE` 按统一真值规则启用时，原生 TUI 的 `/webgui`、`/sketch` 以及独立 `omp webgui` MUST 不自动启动浏览器；该规则适用于全部平台与 Shell，不要求额外设置跳过打开的环境变量。
 
 #### Scenario: offline 手动打开网页
 
@@ -68,17 +68,17 @@ OMP MUST 仅在 offline 会话追加环境规则；CLI、SDK 和 task 子代理 
 #### Scenario: 非 offline 与显式打开行为
 
 - **WHEN** 未启用 offline，或用户显式打开普通 OMP 链接／文件
-- **THEN** 沿用原系统打开方式；非 offline 的 AIReq／WebGUI 仍尊重 `OMP_AIREQ_NO_OPEN=1`／`OMP_WEBGUI_NO_OPEN=1`，不将禁止自动启动扩大到普通链接／文件打开
+- **THEN** 沿用原系统打开方式；非 offline 的 WebGUI 仍尊重 `OMP_WEBGUI_NO_OPEN=1`，不将禁止自动启动扩大到普通链接／文件打开
 
 ### Requirement: 内网网页入口自动复制本机地址
 
-仅在 Linux 且 `OMP_OFFLINE` 按统一真值规则启用时，原生 TUI 进入 AIReq／WebGUI、独立 `omp webgui` 启动以及原生 `/sketch` 打开画布 MUST 自动请求复制对应的完整 `http://127.0.0.1:<port>/…` 地址；保留端口、随机能力路径和查询参数，不选择局域网地址，不改写系统剪贴板设置。
+仅在 Linux 且 `OMP_OFFLINE` 按统一真值规则启用时，原生 TUI 进入 WebGUI、独立 `omp webgui` 启动以及原生 `/sketch` 打开画布 MUST 自动请求复制对应的完整 `http://127.0.0.1:<port>/…` 地址；保留端口、随机能力路径和查询参数，不选择局域网地址，不改写系统剪贴板设置。
 
 #### Scenario: 浏览器未打开页面时手动粘贴
 
 - **WHEN** 上述入口已成功取得可访问的本机地址
 - **THEN** 复用统一剪贴板写入能力，请求终端 OSC 52 与原生剪贴板复制；Linux X11 复用进程保活的 selection owner，不增加下载、安装或外部剪贴板服务
-- **AND** AIReq／WebGUI 跳过自动打开浏览器时仍复制；复制故障不阻断服务、画布或退出，不改变草稿、模型调用及任务状态
+- **AND** WebGUI 跳过自动打开浏览器时仍复制；复制故障不阻断服务、画布或退出，不改变草稿、模型调用及任务状态
 - **AND** 地址仍可手动选择复制；界面仅提示已尝试复制，不将无回执的终端请求冒充客户端剪贴板成功。SSH／X11 到 Windows 的粘贴取决于终端／Exceed 配置，复制回环地址不等于自动建立 SSH 端口转发
 - **AND** 非 offline 或非 Linux 保持原行为，不自动覆盖剪贴板；未显式进入这些入口不触发复制
 
@@ -104,7 +104,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
 - **内网交互减负**：仅 Linux offline 将普通后台 TUI 重绘合并到最多 10 FPS；输入回显与取消沿用原输入优先调度，强制最终刷新、终端输出反压与自适应限速不变。品牌渐变刷新降为 250ms，活动计时装饰刷新降为 1000ms。Git 状态缓存由普通模式的 10 秒延长到 60 秒，沿用 HEAD／工作目录／显式失效；未显式失效的外部工作树修改可能延后显示，不新增工具修改通知或修改 Git 配置。非 Linux 和非 offline 保持原行为，不要求改变企业远程软件，不预先承诺公司实机提速。
 - **内网运行期显示减负**：所有 `OMP_OFFLINE` 进程将现有累计流式更新合并窗口从普通模式的 50ms 调为 100ms，沿用结束／取消等边界事件立即冲刷、逐增量语音及实时思考阶段处理，不改变输入与终端绘制调度；进程内覆盖 `tui.autoGraph=off`、`tui.titleState=false`、`title.refreshOnReplan=false`，优先于已保存设置且不写配置。保留原始表格、首次 scout 自动标题、手动命名及单词／文件／路径／命令补全；SVG／Mermaid／图片、Markdown 缓存、历史裁剪、LSP 与 MCP 不变。非 offline 保留原合并窗口及配置行为。
-- offline 时，CLI 与独立 AIReq 启动时临时将 `web_search.enabled`、`browser.enabled`、`astEdit.enabled` 和 `fetch.enabled` 设为 `false`；不改审批，也不禁止 `omp read` 访问可达的内网 HTTP(S) 服务。`company/Qwen3.8-27B` 的 `contextWindow` 设为 `262144` tokens（256 × 1024），其他 `company` 聊天模型设为 `204800` tokens（200 × 1024）；模型特定限制由既有 KDL 策略维护（不改 `maxTokens`）。这些启动覆盖优先于已保存配置，不写配置文件，退出即消失，普通启动保持原值。Python Eval 的解释器优先级为显式 `python.interpreter` → Linux offline 固定候选 `/software/public/python/3.11.4/bin/python3.11` → 原有自动候选，并补查 PATH 中的版本化 `python3.15` 至 `python3.11`、`python3` 和 `python`；同一路径不重复探测。Linux offline 复用统一的 `OMP_OFFLINE` 真值判断（`1`、`true`、`yes`、`on`，忽略大小写及首尾空白），所有候选均实际检查 Python ≥3.11，旧业务 Python 3.6 或 3.10 不可成为 Eval 解释器；找不到合适版本时明确失败，不降级。显式解释器不可用或不兼容时不 fallback；固定候选缺失或不适合时继续查找，不因 PATH 中已有旧 `python` 而停止。其他平台或非 offline 进程保留原有候选和 Python 3.8+ 门槛。新发现的系统解释器只用于 OMP Eval 子进程，清除其继承的业务 venv／Conda／PYTHONPATH，不修改主进程 PATH、项目虚拟环境或业务 Python，不扫描软件目录找版本、不安装包。系统提示词遵循上文「offline 环境专用系统提示词」。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
+- offline 时，CLI 启动时临时将 `web_search.enabled`、`browser.enabled`、`astEdit.enabled` 和 `fetch.enabled` 设为 `false`；不改审批，也不禁止 `omp read` 访问可达的内网 HTTP(S) 服务。`company/Qwen3.8-27B` 的 `contextWindow` 设为 `262144` tokens（256 × 1024），其他 `company` 聊天模型设为 `204800` tokens（200 × 1024）；模型特定限制由既有 KDL 策略维护（不改 `maxTokens`）。这些启动覆盖优先于已保存配置，不写配置文件，退出即消失，普通启动保持原值。Python Eval 的解释器优先级为显式 `python.interpreter` → Linux offline 固定候选 `/software/public/python/3.11.4/bin/python3.11` → 原有自动候选，并补查 PATH 中的版本化 `python3.15` 至 `python3.11`、`python3` 和 `python`；同一路径不重复探测。Linux offline 复用统一的 `OMP_OFFLINE` 真值判断（`1`、`true`、`yes`、`on`，忽略大小写及首尾空白），所有候选均实际检查 Python ≥3.11，旧业务 Python 3.6 或 3.10 不可成为 Eval 解释器；找不到合适版本时明确失败，不降级。显式解释器不可用或不兼容时不 fallback；固定候选缺失或不适合时继续查找，不因 PATH 中已有旧 `python` 而停止。其他平台或非 offline 进程保留原有候选和 Python 3.8+ 门槛。新发现的系统解释器只用于 OMP Eval 子进程，清除其继承的业务 venv／Conda／PYTHONPATH，不修改主进程 PATH、项目虚拟环境或业务 Python，不扫描软件目录找版本、不安装包。系统提示词遵循上文「offline 环境专用系统提示词」。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
 - offline 且 company provider 可用时，仅为未配置的 model role 补充当前进程默认值：`default`、`plan`、`slow` → `company/GLM-5.3-public`；`smol`、`task`、`vision`、`advisor` → `company/Qwen3.8-27B`；`tiny`、`commit` → `company/Qwen3.6-35B-A3B`；`memory` 未配置时继续按既有规则自动解析，不新增固定赋值。已有角色配置（包括显式 `null` 清除项）和显式 CLI 模型参数仍优先，不写配置文件，不限制 `/model`、`Ctrl+T` 或角色切换，也不锁定 company。保存、活动匹配与切换冲突比较统一排除这些隐式默认角色，不误报刚保存的 preset 与公司默认值冲突；用户显式配置或 CLI 选择的角色仍按原规则保存和比较，包括显式选择的 company 模型。普通启动不受影响。
 - offline 当前进程将 `startup.setupWizard` 覆盖为 `false`，不自动弹出或导入首次启动的全屏配置向导；显式启用的启动动画按需独立加载，手动设置入口保持原有行为。
 - offline 启动不读取或展示启动更新日志。模型目录自动发现及手动刷新遵循[公司内网模型规格](../model-providers/spec.md)：自动发现只读缓存，手动刷新只请求显式配置的发现端点。已启用来源的已安装插件、内置和缓存模型照常加载。`OMP_OFFLINE` 不覆盖用户配置的 `models.offline`，实际模型／OAuth 请求、更新命令及 `/changelog` 的其他行为不变。`omp openspec version --check` 在 offline 下仅对 `npm_config_registry` 明确配置的非默认 HTTPS 镜像发起查询，不回退到公网 npm。OMP 与插件市场的自动更新检查在全部平台、全部启动模式下均取消，见「全平台轻量启动」；Claude 插件来源默认不扫描，见[默认设置](../fork-runtime-defaults/spec.md#requirement-claude-插件发现默认关闭)。
@@ -120,7 +120,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - `PI_UPDATE_REPOSITORY` MUST 可覆盖 `omp update` 使用的更新仓库；未设置时固定为本 fork 仓库。该变量 MUST NOT 写入配置文件或构建产物。
 - 本地构建脚本 `packages/coding-agent/scripts/build-binary.ts` 同样注入本 fork 更新仓库：本地构建产物的 `omp update` 指向本 fork Release，不会回退官方渠道（版本号不注入，`--version` 无 `+fork.N` 后缀属预期）。
 - 本地二进制构建 MUST 向终端输出目标平台、资源生成、编译、适用的签名及生成文件恢复阶段；仅在全部步骤成功后输出构建完成、实际可执行文件路径和总耗时，避免把编译阶段的静默成功误判为未执行而重复构建。
-- AIReq／WebGUI 前端资源 MUST 在资源准备或构建／打包阶段从当前前端源码生成，生成载荷及前端 `build/` 目录仅作为本地构建产物，不提交 Git。源码入口缺少资源时明确提示 `bun run gen:aireq` 或 `bun run build:webgui`，不得在运行时编译、下载或安装依赖；npm／SDK 和发行二进制继续携带经过字节及指纹校验的完整资源，保持无需源码目录、Vite 或公网的离线运行能力。
+- WebGUI 前端资源 MUST 在资源准备或构建／打包阶段从当前前端源码生成，生成载荷及前端 `build/` 目录仅作为本地构建产物，不提交 Git。源码入口缺少资源时明确提示 `bun run build:webgui`，不得在运行时编译、下载或安装依赖；npm／SDK 和发行二进制继续携带经过字节及指纹校验的完整资源，保持无需源码目录、Vite 或公网的离线运行能力。
 - `omp update` 先比较正常 SemVer，再比较同基线的 fork build counter；本地构建未带 `+fork.N` 时按 counter 0 比较，因此可取得同基线的新 fork Release，而不把更高上游基线降级。支持 `%2B` 编码的 `+` 版本 URL；GitHub 元数据和资产统一优先环境令牌，再尝试本机 `gh auth token`，无凭据才匿名请求。
 - `omp update` 下载二进制时，在交互终端显示下载百分比、速度与预计剩余时间；非 TTY 输出（如 CI、管道）不显示动态进度。若 `PATH` 中的 `omp` 与更新目标解析为不同文件，更新前警告并提示更新后运行 `omp --version` 核对实际生效的版本；指向同一文件的符号链接不视为冲突。
 - `update.channel=canary` 在 fork 二进制上不可用：显式执行 `omp update` 时提示该配置并指向 `omp update --stable`，不在启动时检查或提示更新渠道。
@@ -586,5 +586,3 @@ OMP MUST 为显式异步及自动转后台的有限 Bash job 自动提供非空�
 ### Requirement: 公司 offline 内网 Git API 可用（2026-11-12 权威补充）
 
 用户已在公司 offline 内部环境实测确认：内网 Git 平台提供 PR／MR 查询和创建 API，且已完整跑通“克隆 → 改代码 → push → 建 MR → 放弃 → 删分支”。offline 表示无公网，不得据此推断内网 Git API 不可用，也不得继续以该推断要求用户必须手工创建 MR。此记录来自用户提供的公司实测信息，不是本工作区测试结果；不推断具体 Git 产品、API 地址、认证格式或自动合并能力。
-
-AIReq 的目标提案流程为：**确认材料 → 创建分支并提交推送 → 自动创建 MR → 人工评审、合并 → 后台定时核验并转正。** 真实接入沿用宿主的公司内网能力；本轮仅更新需求文档和原型内存模拟，不实现 API 客户端、认证、真实 Git 写入或数据库，不运行测试。公司已验证的改代码、放弃 MR 和删除分支能力不意味着 AIReq 自动编码、自动合并或自动删除分支；本轮不新增这些工作流动作。

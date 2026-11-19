@@ -5,6 +5,9 @@ import type { GateRun } from "./test-gate-runtime";
 
 const reportRoot = path.join(import.meta.dir, "..", "runs", "test-timing");
 
+/** Identifies the current fork Bun consumer set for baselines and timing history. */
+export const BUN_FORK_SUITE_REVISION = 5;
+
 export interface TestReportRun {
 	id: string;
 	dir: string;
@@ -28,7 +31,7 @@ export interface TestSelection {
 	packages?: string[];
 	reportPath?: string;
 	group?: "ordinary" | "startup";
-	suiteRevision?: 4;
+	suiteRevision?: typeof BUN_FORK_SUITE_REVISION;
 }
 
 export interface TestProducerRecord {
@@ -116,7 +119,7 @@ export async function latestLocalTestProducers(
 					producer.report !== "available" ||
 					producer.selection?.tool !== "bun" ||
 					producer.selection.mode !== "full" ||
-					producer.selection.suiteRevision !== 4 ||
+					producer.selection.suiteRevision !== BUN_FORK_SUITE_REVISION ||
 					!["ordinary", "startup"].includes(producer.selection.group ?? "") ||
 					!Number.isInteger(producer.exitCode) ||
 					producer.exitCode < 0 ||

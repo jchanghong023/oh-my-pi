@@ -12,6 +12,7 @@ import { bunCoreBrowserInputsChanged, bunRequiresFullSelection, captureChangedPa
 import type { GateRun } from "./test-gate-runtime";
 import {
 	beginTestRun,
+	BUN_FORK_SUITE_REVISION,
 	endTestRun,
 	latestLocalTestProducers,
 	localTestProducerKey,
@@ -56,8 +57,8 @@ export interface BunSelection {
 	reason?: string;
 	selected?: number;
 	group?: "ordinary" | "startup";
-	/** Distinguishes the current fork test scope from older, narrower reports. */
-	suiteRevision?: 4;
+	/** Distinguishes the current fork test scope from earlier consumer sets. */
+	suiteRevision?: typeof BUN_FORK_SUITE_REVISION;
 }
 
 /** A clean full TS baseline lets Bun compare the current worktree against its revision. */
@@ -123,7 +124,7 @@ export async function bunTestSelection(
 						producer.status === "passed" &&
 						producer.report === "available" &&
 						producer.selection?.mode === "full" &&
-						(producer.selection as BunSelection).suiteRevision === 4,
+						producer.selection.suiteRevision === BUN_FORK_SUITE_REVISION,
 				) ||
 				!["ordinary", "startup"].every(group =>
 					producers.some(
@@ -298,13 +299,7 @@ const nativeAndIntegrationPackages = [
 
 // Discover coding-agent tests at file granularity before chunking. Full mode
 // uses Bun's test filename conventions.
-const forkCodingAgentDirectories = [
-	"test/spec-driven/",
-	"test/aireq-workbench/",
-	"test/team/",
-	"test/goals/",
-	"test/todoloop/",
-];
+const forkCodingAgentDirectories = ["test/spec-driven/", "test/team/", "test/goals/", "test/todoloop/"];
 const forkCodingAgentFiles = new Set([
 	"test/acp-builtins.test.ts", // /wt consumer
 	"test/cli/collab-serve.test.ts",
@@ -511,11 +506,9 @@ const forkPackageFiles: Record<string, string[]> = {
 	],
 	"packages/utils": ["test/dirs-cache.test.ts", "test/logger-contract.test.ts"],
 	"packages/ai": ["test/proxy.test.ts"],
-	"packages/natives": ["test/aireq-workbench-vcs.test.ts"],
 	"packages/mnemopi": ["test/offline-storage.test.ts"],
 	"packages/stats": ["test/storage-relocation.test.ts"],
 	"packages/collab-web": [
-		"test/aireq-workbench.test.tsx",
 		"test/composer.test.tsx",
 		"test/transcript.test.tsx",
 		"test/tool-view.test.tsx",
@@ -539,39 +532,6 @@ const forkPackageFiles: Record<string, string[]> = {
 	],
 	"packages/snapcompact": ["test/snapcompact.test.ts"],
 };
-
-/** Dev's Vite/public/worker inputs do not appear in Bun's static test import graph. */
-export function isAIReqFrontendInput(file: string): boolean {
-	if (!file.startsWith("packages/aireq-frontend/")) return false;
-	const relative = file.slice("packages/aireq-frontend/".length);
-	return (
-		/^(?:preview|shared|packages|public|config|third-party\/runtime)\//.test(relative) ||
-		/^(?:package\.json|bun\.lock|copy-manifest\.json|tsconfig\.base\.json)$/.test(relative)
-	);
-}
-
-export function aiReqWorkbenchInputsChanged(
-	command: Pick<TestCommand, "cwd" | "command">,
-	changed: readonly string[],
-): boolean {
-	const consumesAssets =
-		(command.cwd === "packages/collab-web" && command.command.includes("test/aireq-workbench.test.tsx")) ||
-		(command.cwd === "packages/coding-agent" &&
-			command.command.some(
-				file =>
-					/^test\/aireq-workbench\/(?:resources|(?:workflow-)?(?:browser|process)\.e2e)\.test\.ts$/.test(file) ||
-					(file.startsWith("test/aireq-workbench/") && isBrowserTest(file)),
-			));
-	return (
-		consumesAssets &&
-		changed.some(
-			file =>
-				isAIReqFrontendInput(file) ||
-				file === "packages/coding-agent/scripts/aireq-workbench-resources.ts" ||
-				file === "packages/coding-agent/src/aireq-workbench/assets.ts",
-		)
-	);
-}
 
 export function isForkCodingAgentTest(file: string): boolean {
 	return forkCodingAgentFiles.has(file) || forkCodingAgentDirectories.some(dir => file.startsWith(dir));
@@ -763,18 +723,14 @@ const browserConsumerTests = new Set<string>();
 
 function consumesBrowserProcess(content: string): boolean {
 	return (
-		/\b(?:withWorkflowChromium|launchHeadlessBrowser)\s*\(/.test(content) ||
+		/\blaunchHeadlessBrowser\s*\(/.test(content) ||
 		(/\b(?:loadPuppeteer|puppeteer-core)\b/.test(content) && /\b\w+\.launch\s*\(/.test(content)) ||
 		/from\s+["'][^"']*(?:chromium-probe|core-browser-fixture)["']/.test(content)
 	);
 }
 
 function isBrowserTest(file: string): boolean {
-	return (
-		browserConsumerTests.has(file) ||
-		/^test\/aireq-workbench\/(?:[^/]*browser(?:\.e2e)?)\.test\.ts$/.test(file) ||
-		file === "test/webgui/core-browser.e2e.test.ts"
-	);
+	return browserConsumerTests.has(file) || file === "test/webgui/core-browser.e2e.test.ts";
 }
 
 async function getCodingAgentTestPartition(all = false): Promise<CodingAgentTestPartition> {
@@ -810,9 +766,6 @@ function isIntegrationTest(testFile: string): boolean {
 	return (
 		/(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile) ||
 		/^(?:\.\/)?test\/openwiki\/visualize-browser\.test\.ts$/.test(testFile) ||
-		// Scoped publication and workflow transitions exercise repeated native Git operations.
-		testFile === "test/aireq-workbench/git.test.ts" ||
-		testFile === "test/aireq-workbench/workflow-domain.test.ts" ||
 		testFile === "test/goals/goal-recovery-public-wire.test.ts" ||
 		testFile === "test/goals/goal-sdk-auxiliary-consumers.test.ts" ||
 		// Repository snapshots and bundled shell helpers spawn repeated native subprocesses.
@@ -830,7 +783,6 @@ function isStartupTest(file: string): boolean {
 	return (
 		isBrowserTest(file) ||
 		/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
-		/^test\/aireq-workbench\/(?:workflow-)?(?:browser|process)\.e2e\.test\.ts$/.test(file) ||
 		file === "test/zero-config-terminal.test.ts" ||
 		file === "test/startup-composer.test.ts" ||
 		file === "test/goals/goal-autopilot-tui.e2e.test.ts" ||
@@ -1958,15 +1910,12 @@ if (import.meta.main) {
 	let changedPaths: string[] | undefined;
 	if (selection.mode === "affected") {
 		changedPaths = await bunChangedPaths(repoRoot, selection.baseline ?? "HEAD");
-		if (
-			!changedArgs.length &&
-			(!changedPaths || bunRequiresFullSelection(changedPaths.filter(file => !isAIReqFrontendInput(file))))
-		) {
+		if (!changedArgs.length && (!changedPaths || bunRequiresFullSelection(changedPaths))) {
 			selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
 		}
 	}
 	if (deferStartup || onlyStartup) selection.group = onlyStartup ? "startup" : "ordinary";
-	if (requestedMode === "local-ts") selection.suiteRevision = 4;
+	if (requestedMode === "local-ts") selection.suiteRevision = BUN_FORK_SUITE_REVISION;
 	if (
 		requestedCommands.length &&
 		requestedMode === "local-ts" &&
@@ -2008,22 +1957,14 @@ if (import.meta.main) {
 			command.cwd === "packages/coding-agent" &&
 			command.command.includes("test/webgui/core-browser.e2e.test.ts") &&
 			(!changedPaths || bunCoreBrowserInputsChanged(changedPaths));
-		const aiReqInputsChanged =
-			selection.mode === "affected" &&
-			(!changedPaths
-				? aiReqWorkbenchInputsChanged(command, ["packages/aireq-frontend/preview/main.tsx"])
-				: aiReqWorkbenchInputsChanged(command, changedPaths));
-		command.selection =
-			browserInputsChanged || aiReqInputsChanged
-				? {
-						...selection,
-						mode: "full",
-						reason: aiReqInputsChanged
-							? "explicit Dev Vite/public/worker dependency mapping"
-							: "explicit browser Vite/fixture dependency mapping",
-					}
-				: selection;
-		if (selection.mode === "affected" && !browserInputsChanged && !aiReqInputsChanged)
+		command.selection = browserInputsChanged
+			? {
+					...selection,
+					mode: "full",
+					reason: "explicit browser Vite/fixture dependency mapping",
+				}
+			: selection;
+		if (selection.mode === "affected" && !browserInputsChanged)
 			command.command.push(changedArgs[0] ?? `--changed=${selection.baseline}`);
 	}
 	// Prioritize within the selected shard, without changing shard membership.
