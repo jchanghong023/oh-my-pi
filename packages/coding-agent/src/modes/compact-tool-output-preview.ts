@@ -95,7 +95,7 @@ const PREVIEW_STATE_WORD: Record<PreviewState, string> = {
 
 const PREVIEW_STATE_COLOR: Record<PreviewState, ThemeColor> = {
 	running: "accent",
-	completed: "success",
+	completed: "muted",
 	failed: "error",
 	cancelled: "warning",
 };
@@ -335,8 +335,10 @@ export class CompactToolOutputPreview implements Component {
 					? `${name}${separator}${truncateMiddleToWidth(jobIdentity, jobRoom)}`
 					: name;
 		// At widths where status and source cannot both be legible, retain the source.
+		const statusStyle =
+			state === "completed" ? PREVIEW_STATE_COLOR.completed : `${PREVIEW_STATE_COLOR[state]} strong`;
 		const spans = identityText
-			? [span(word, `${PREVIEW_STATE_COLOR[state]} strong`), span(gap), span(identityText, "toolTitle strong")]
+			? [span(word, statusStyle), span(gap), span(identityText, "toolTitle strong")]
 			: [span(truncateToWidth(name, contentWidth, ""), "toolTitle strong")];
 		const command = info.command ? singleLine(info.command) : "";
 		const target = command || singleLine(info.detail);

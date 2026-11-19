@@ -615,7 +615,8 @@ export class CompactThinkingPreview implements Component {
 			: `Agent：${action.running ? "" : "上次"}${ACTION_WORDS[action.category][state]}`;
 		const extra = action.additional ? ` +${action.additional}` : "";
 		const word = truncateToWidth(full, width);
-		const tone = action.running ? "muted" : action.failed ? "error" : "dim";
+		const runningCall = action.running && action.category === "call";
+		const tone = runningCall ? "accent" : action.running ? "muted" : action.failed ? "error" : "dim";
 		const detailWidth = width - visibleWidth(word) - ACTION_GAP.length - visibleWidth(extra);
 		const detail: ActionRow["detail"] = [];
 		if (detailWidth > 0 && action.detail) {
@@ -628,7 +629,7 @@ export class CompactThinkingPreview implements Component {
 				} else detail.push({ text: prefix + target + suffix, tone: "dim" });
 			} else {
 				const value = truncateToWidth(action.detail, detailWidth);
-				const tone = action.running && action.category === "thinking" ? "text" : "dim";
+				const tone = runningCall || (action.running && model) ? "text" : "dim";
 				if (value) detail.push({ text: value, tone });
 			}
 		}
