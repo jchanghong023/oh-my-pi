@@ -18,7 +18,7 @@ import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/too
 import { isXdHelpContent, parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { getPaddingX, padding, sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import type { AgentSessionEvent } from "../session/agent-session";
+import type { AgentSessionEvent, ModelStage } from "../session/agent-session-events";
 import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
 import type { CompactPreviewActivity } from "./compact-tool-output-preview";
 import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-summary";
@@ -70,7 +70,12 @@ type Action = {
 	startedAt?: number;
 };
 
-type ModelStage = "等待响应" | "正在思考" | "正在生成回复" | "正在准备调用";
+const MODEL_WORDS: Record<ModelStage, string> = {
+	waiting: "等待响应",
+	thinking: "正在思考",
+	replying: "正在生成回复",
+	"tool-arguments": "正在准备调用",
+};
 
 type ThinkingPhase = {
 	startedAt: number;
@@ -87,7 +92,6 @@ type SessionMemory = {
 	calls: Call[];
 	/** Thinking phases keyed by message timestamp and content index. */
 	thinking: Map<string, ThinkingPhase>;
-	modelStage?: ModelStage;
 	latestStart?: number;
 };
 
@@ -426,18 +430,7 @@ export class CompactThinkingPreview implements Component {
 		this.#syncSession();
 		const memory = this.#memory!;
 		const calls = memory.calls;
-		if (event.type === "turn_start" || (event.type === "message_start" && event.message.role === "assistant")) {
-			memory.modelStage = "等待响应";
-		} else if (
-			event.type === "agent_end" ||
-			event.type === "agent_pause" ||
-			event.type === "session_abort" ||
-			event.type === "turn_end"
-		) {
-			memory.modelStage = undefined;
-		}
 		if (event.type === "tool_execution_start") {
-			memory.modelStage = undefined;
 			const call = calls.find(item => item.id === event.toolCallId);
 			if (call) {
 				call.name = event.toolName;
@@ -467,30 +460,6 @@ export class CompactThinkingPreview implements Component {
 			if (call && call.endedAt === undefined) updateCall(call, event.args, event.partialResult);
 		} else if (event.type === "message_update" && event.message.role === "assistant") {
 			const delta = event.assistantMessageEvent;
-			switch (delta.type) {
-				case "start":
-				case "thinking_end":
-				case "text_end":
-				case "toolcall_end":
-					memory.modelStage = "等待响应";
-					break;
-				case "thinking_start":
-				case "thinking_delta":
-					memory.modelStage = "正在思考";
-					break;
-				case "text_start":
-				case "text_delta":
-					memory.modelStage = "正在生成回复";
-					break;
-				case "toolcall_start":
-				case "toolcall_delta":
-					memory.modelStage = "正在准备调用";
-					break;
-				case "error":
-				case "done":
-					memory.modelStage = undefined;
-					break;
-			}
 			if (delta.type === "thinking_start") {
 				this.#startThinking(event.message.timestamp, delta.contentIndex, now);
 			} else if (delta.type === "thinking_delta") {
@@ -513,7 +482,6 @@ export class CompactThinkingPreview implements Component {
 				updateCall(call, streamedArgs(block));
 			}
 		} else if (event.type === "message_end" && event.message.role === "assistant") {
-			memory.modelStage = undefined;
 			// A stream that ends without thinking_end (abort/error) still settles its open phase.
 			for (const id of memory.thinking.keys()) this.#endThinking(id, now);
 		}
@@ -624,26 +592,18 @@ export class CompactThinkingPreview implements Component {
 	/** The model and Agent own separate rows; a settled tool never stands in for a running one. */
 	#select(actions: Action[]): (Action | undefined)[] {
 		const session = this.ctx.viewSession;
-		const stream = session.agent.state.streamMessage;
 		const thinking = actions.find(action => action.category === "thinking");
 		const tools = actions.filter(action => action.category !== "thinking");
 		const running = tools.filter(action => action.running);
 		const current = running[0] ?? tools.at(-1);
-		let stage = session.isStreaming ? this.#memory!.modelStage : undefined;
-		if (stream?.role === "assistant") {
-			if (session.agent.state.activeThinkingIndex !== undefined) stage = "正在思考";
-			else if (!stage) {
-				const block = stream.content.at(-1);
-				stage = block?.type === "text" ? "正在生成回复" : block?.type === "toolCall" ? "正在准备调用" : "等待响应";
-			}
-		}
+		const stage = session.modelStage;
 		const model: Action | undefined = stage
 			? {
 					id: thinking?.id ?? "model",
 					category: "thinking",
 					running: true,
 					failed: false,
-					detail: stage === "正在思考" ? (thinking?.detail ?? "") : "",
+					detail: stage === "thinking" ? (thinking?.detail ?? "") : "",
 					startedAt: thinking?.startedAt,
 					stage,
 				}
@@ -683,11 +643,11 @@ export class CompactThinkingPreview implements Component {
 		let deadline = 0;
 		let candidate: string | undefined;
 		for (const action of slots) {
-			if (!action?.running || (action.category === "thinking" && action.stage !== "正在思考")) continue;
+			if (!action?.running || (action.category === "thinking" && action.stage !== "thinking")) continue;
 			// The lower slot wins when both running actions are quiet.
 			candidate = action.id;
 			let progressAt: number | undefined;
-			if (action.category === "thinking" && action.stage === "正在思考" && this.#memory!.thinking.has(action.id))
+			if (action.category === "thinking" && action.stage === "thinking" && this.#memory!.thinking.has(action.id))
 				progressAt = this.#thinkingProgress(action, width, now);
 			else if (action.category === "exec" && action.id === activity?.callId) progressAt = activity.outputChangedAt;
 			deadline = Math.max(deadline, Math.max(action.startedAt ?? 0, progressAt ?? 0) + ACTION_QUIET_MS);
@@ -752,7 +712,7 @@ export class CompactThinkingPreview implements Component {
 		const model = action.category === "thinking";
 		const state = action.running ? "running" : action.failed ? "failed" : "done";
 		const full = model
-			? `模型：${action.stage ?? ACTION_WORDS.thinking.running}`
+			? `模型：${MODEL_WORDS[action.stage ?? "thinking"]}`
 			: `Agent：${action.running ? "" : "上次"}${ACTION_WORDS[action.category][state]}`;
 		const extra = action.additional ? ` +${action.additional}` : "";
 		const word = truncateToWidth(full, width);

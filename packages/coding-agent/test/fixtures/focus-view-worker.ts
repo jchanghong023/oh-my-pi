@@ -29,6 +29,7 @@ import type { ThreadService } from "../../src/thread/services";
 import { agentsThreadService } from "../../src/thread/services/agents";
 import { authService } from "../../src/thread/services/auth";
 import { identityThreadService } from "../../src/thread/services/identity";
+import type { FileChangeReport } from "../../src/tools";
 
 /** What the worker-side session reports about itself. */
 export interface FocusSessionReport {
@@ -48,6 +49,7 @@ export interface FocusProbe {
 	prompt(id: string, text: string): Promise<void>;
 	/** Feed real session events while its main-thread view may be detached. */
 	emit(id: string, event: AgentEvent): Promise<void>;
+	recordWrite(id: string, change: FileChangeReport): Promise<void>;
 	/** Release the reply held between its two deltas. */
 	release(): Promise<void>;
 	report(id: string): Promise<FocusSessionReport>;
@@ -160,6 +162,17 @@ const probe: FocusProbe = {
 	},
 	emit: async (id, event) => {
 		local(id).agent.emitExternalEvent(event);
+	},
+	recordWrite: async (id, change) => {
+		const session = local(id);
+		session.recordLatestTurnFileChange(change);
+		session.agent.emitExternalEvent({
+			type: "tool_execution_end",
+			toolCallId: change.path,
+			toolName: "write",
+			isError: false,
+			result: { content: [], details: {} },
+		});
 	},
 	release: async () => {
 		gate.resolve();

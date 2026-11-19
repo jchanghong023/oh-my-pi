@@ -55,7 +55,12 @@ import type { Skill } from "../extensibility/skills";
 import type { GoalModeState } from "../goals/state";
 import { AgentRegistry, type AgentRegistryApi, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
-import type { AgentSessionEvent, AgentSessionEventListener } from "../session/agent-session-events";
+import {
+	type AgentSessionEvent,
+	type AgentSessionEventListener,
+	type ModelStage,
+	nextModelStage,
+} from "../session/agent-session-events";
 import {
 	type AgentSessionAdvisorOverview,
 	type AgentViewLoop,
@@ -85,6 +90,7 @@ import type {
 	SessionStats,
 	SteerOptions,
 } from "../session/agent-session-types";
+import type { TurnFileChange, TurnFileChanges } from "../session/latest-turn-file-changes";
 import {
 	asyncJobSnapshot,
 	asyncJobTree,
@@ -285,6 +291,7 @@ export class RemoteAgentSession implements AgentViewSession {
 	#runToolCallIds = new Set<string>();
 	readonly #activeUpdates = new Map<string, ToolExecutionUpdateEvent>();
 	readonly #liveToolOutput = new LiveToolOutputState();
+	#turnFiles?: { files: Map<string, TurnFileChange>; revision: number };
 	#entries: SessionEntry[] = [];
 	readonly #entryIndex = new SessionEntryIndex();
 	/** Custom entries appended here and not yet echoed back by the home worker. */
@@ -543,6 +550,21 @@ export class RemoteAgentSession implements AgentViewSession {
 
 	getLiveToolOutputSnapshot(): readonly LiveToolOutputSnapshot[] {
 		return this.#liveToolOutput.snapshot();
+	}
+
+	get modelStage(): ModelStage | null {
+		return this.#view.modelStage ?? null;
+	}
+
+	getLatestTurnFileChanges(): TurnFileChanges | undefined {
+		return this.#turnFiles;
+	}
+
+	#applyTurnFiles(update: SessionViewState["turnFiles"]): void {
+		if (!update) return;
+		if (update.reset || !this.#turnFiles) this.#turnFiles = { files: new Map(), revision: 0 };
+		for (const [key, change] of update.entries) this.#turnFiles.files.set(key, change);
+		this.#turnFiles.revision = update.revision;
 	}
 
 	settleInFlightMessagePersistence(): Promise<void> {
@@ -879,7 +901,10 @@ export class RemoteAgentSession implements AgentViewSession {
 	/** Bridge only: merge a state patch from the publisher. */
 	applyPatch(patch: Partial<SessionMirrorState>): void {
 		if (this.#closed !== undefined) return;
-		if (patch.sessionId !== undefined && patch.sessionId !== this.#state.sessionId) this.#liveToolOutput.clear();
+		if (patch.sessionId !== undefined && patch.sessionId !== this.#state.sessionId) {
+			this.#liveToolOutput.clear();
+			this.#turnFiles = undefined;
+		}
 		this.#state = { ...this.#state, ...patch };
 		if (patch.pendingToolCalls) this.#pendingToolCalls = new Set(patch.pendingToolCalls);
 	}
@@ -897,11 +922,13 @@ export class RemoteAgentSession implements AgentViewSession {
 	 */
 	applyView(state: SessionViewState, entries: SessionEntriesDelta | undefined): void {
 		if (this.#closed !== undefined) return;
-		this.#view = state;
+		const { turnFiles, ...view } = state;
+		this.#view = view;
 		this.#pruneSettled(state.restorableQueue);
 		this.#activeUpdates.clear();
 		for (const update of state.activeToolExecutionUpdates) this.#activeUpdates.set(update.toolCallId, update);
 		this.#liveToolOutput.restore(state.liveToolOutput, this.#state.runStartedAt !== undefined);
+		this.#applyTurnFiles(turnFiles);
 		if (entries) this.applyEntries(entries);
 		this.#entryIndex.setLeaf(state.leafId);
 		this.#syncViewDerived(state);
@@ -911,7 +938,9 @@ export class RemoteAgentSession implements AgentViewSession {
 	/** Bridge only: merge a view-state patch from the publisher. */
 	applyViewPatch(patch: Partial<SessionViewState>): void {
 		if (this.#closed !== undefined) return;
-		this.#view = { ...this.#view, ...patch };
+		const { turnFiles, ...view } = patch;
+		this.#view = { ...this.#view, ...view };
+		this.#applyTurnFiles(turnFiles);
 		if (patch.restorableQueue) this.#pruneSettled(patch.restorableQueue);
 		if (patch.leafId !== undefined) this.#entryIndex.setLeaf(patch.leafId);
 		this.#syncViewDerived(patch);
@@ -937,6 +966,7 @@ export class RemoteAgentSession implements AgentViewSession {
 	/** Bridge only: dispatch one forwarded event to subscribers. */
 	applyEvent(event: AgentSessionEvent, outputStamp: LiveToolOutputStamp | undefined): void {
 		if (this.#closed !== undefined) return;
+		this.#view.modelStage = nextModelStage(this.modelStage, event);
 		this.#trackEvent(event);
 		if (outputStamp) this.#liveToolOutput.observe(event, outputStamp.receivedAt, outputStamp.dispatchOrder);
 		for (const listener of [...this.#listeners]) {
@@ -955,6 +985,7 @@ export class RemoteAgentSession implements AgentViewSession {
 	applyRunState(state: SessionRunState, at = Date.now()): void {
 		if (this.#closed !== undefined) return;
 		this.#liveToolOutput.setRunActive(state === "running", at);
+		if (state === "idle") this.#view.modelStage = null;
 		for (const listener of [...this.#runStateListeners]) {
 			try {
 				listener(state);

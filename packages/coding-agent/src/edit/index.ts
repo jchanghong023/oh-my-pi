@@ -872,6 +872,8 @@ export class EditTool implements AgentTool<TInput> {
 				began = true;
 				return this.#deferredDiagnostics.begin(request.path);
 			},
+			undefined,
+			journaled ? (before, after) => journal(request.path, after, { text: before }) : undefined,
 		);
 
 		if (preWriteBytes !== undefined) {

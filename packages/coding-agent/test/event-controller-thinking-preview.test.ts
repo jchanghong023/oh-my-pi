@@ -11,6 +11,7 @@ import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { type ModelStage, nextModelStage } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { LiveToolOutputSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { LiveToolOutputState } from "@oh-my-pi/pi-coding-agent/session/live-tool-output";
@@ -109,8 +110,12 @@ function liveSession(message: AssistantMessage | null = null, activeThinkingInde
 	const agent = new Agent();
 	agent.state.streamMessage = message;
 	agent.state.activeThinkingIndex = activeThinkingIndex;
+	let stage: ModelStage | null = activeThinkingIndex === undefined ? null : "thinking";
 	const session = createSessionStub(SessionManager.inMemory(process.cwd()), settings, {
 		isStreaming: message !== null,
+		get modelStage() {
+			return stage;
+		},
 		get state() {
 			return agent.state;
 		},
@@ -141,6 +146,7 @@ function liveSession(message: AssistantMessage | null = null, activeThinkingInde
 			});
 		},
 		async emit(event: AgentSessionEvent): Promise<void> {
+			stage = nextModelStage(stage, event);
 			const running = event.type === "agent_start";
 			if (running || event.type === "agent_end") {
 				output?.setRunActive(running, Date.now());
@@ -474,8 +480,11 @@ describe("compact action dock", () => {
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
 		await live.emit({ type: "agent_start" });
 		await live.emit({ type: "turn_start" });
+		expect(h.rendered()).not.toContain("模型：");
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		expect(plain(h.rows())[0]).toContain("模型：等待响应");
 		const reason = thinkingMessage("earlier line\nlatest model reasoning");
 		await live.emit(update(reason, "thinking_delta"));
@@ -971,7 +980,7 @@ describe("compact action dock", () => {
 		};
 		live.session.agent.emitExternalEvent(textStart, { stateOnly: true });
 		await h.ctx.eventController.dispatchSessionEvent(textStart);
-		await h.ctx.eventController.dispatchSessionEvent({ type: "message_end", message: reply });
+		await live.emit({ type: "message_end", message: reply });
 		expect(h.rendered()).not.toContain("思考");
 		expect(h.nativeRendered()).toBe(h.rendered());
 	});

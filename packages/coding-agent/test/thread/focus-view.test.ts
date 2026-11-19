@@ -22,6 +22,7 @@ import { isRecord } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { IrcBus } from "../../src/irc/bus";
+import { CompactFileDiff } from "../../src/modes/compact-file-diff";
 import { InputController } from "../../src/modes/controllers/input-controller";
 import { SessionFocusController } from "../../src/modes/controllers/session-focus-controller";
 import { statusLineHost } from "../../src/modes/status-line-host";
@@ -171,6 +172,7 @@ function focusHarness(): FocusHarness {
 					streamingAtAgentStart.push(focus.controller?.target?.isStreaming === true);
 				events.push(event);
 			},
+			syncAssistantMessage: vi.fn(async () => {}),
 			resetTranscriptAnchors() {},
 			restorePendingToolResults() {},
 			runSerialized: (run: () => Promise<void>) => run(),
@@ -255,6 +257,44 @@ function composerFor(view: AgentViewSession, focusedAgentId: string) {
 }
 
 describe("focused view of a worker-homed agent session", () => {
+	it("shows writes made before focus and refreshes an open worker diff until the next turn", async () => {
+		const probe = await startWorker();
+		const id = "DiffWorker";
+		await probe.open(id, await mainRegistry(), {});
+		const remote = mirrorOf(id);
+		const view = focusHarness();
+		const running = probe.prompt(id, "[hold] worker change");
+		const previous = { ...chatTranscriptDisplayPreferences };
+		const ctx = createInteractiveModeContext();
+		Object.assign(ctx.ui, { getFocused: () => ctx.editor });
+		const dock = new CompactFileDiff({ ...ctx, viewSession: remote }, () => 8);
+		const visible = () => Bun.stripANSI(dock.render(100).join("\n"));
+		const file = path.resolve("worker-change.txt");
+		try {
+			await waitFor(async () => (await probe.report(id)).userTexts.includes("[hold] worker change"), 3000);
+			await probe.recordWrite(id, { tool: "write", path: file, before: "WORKER_BEFORE\n", after: "WORKER_MID\n" });
+			await view.controller.focusAgent(id);
+			expect(remote.getLatestTurnFileChanges()?.files.size).toBe(1);
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			expect(dock.toggle()).toBe(true);
+			expect(visible()).toContain("WORKER_MID");
+
+			await probe.recordWrite(id, { tool: "write", path: file, before: "WORKER_MID\n", after: "WORKER_FINAL\n" });
+			await waitFor(() => visible().includes("WORKER_FINAL"), 3000);
+			expect(visible()).toContain("WORKER_BEFORE");
+			expect(visible()).not.toContain("WORKER_MID");
+			await probe.release();
+			await running;
+			expect(visible()).toContain("WORKER_FINAL");
+			await probe.prompt(id, "no more writes");
+			await waitFor(() => visible() === "", 3000);
+		} finally {
+			await probe.release();
+			await running;
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
 	it("restores a worker's early terminal Output without restarting its expiry or reviving running", async () => {
 		const probe = await startWorker();
 		await probe.open("OutputWorker", await mainRegistry(), {});

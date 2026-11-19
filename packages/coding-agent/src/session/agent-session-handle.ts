@@ -28,7 +28,8 @@ import type { AgentDefinition } from "../task/types";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import { currentThreadId } from "../thread/identity";
 import type { AgentSession } from "./agent-session";
-import type { AgentSessionEvent, AgentSessionEventListener } from "./agent-session-events";
+import type { AgentSessionEvent, AgentSessionEventListener, ModelStage } from "./agent-session-events";
+import type { TurnFileChanges } from "./latest-turn-file-changes";
 import type {
 	AgentSessionDisposeOptions,
 	AsyncJobInspection,
@@ -324,6 +325,9 @@ export interface AgentViewSession extends AgentSessionHandle {
 	activeToolExecutionUpdates(): readonly ToolExecutionUpdateEvent[];
 	/** In-flight dispatches and latest real Output, including its original terminal reception time. */
 	getLiveToolOutputSnapshot(): readonly LiveToolOutputSnapshot[];
+	/** Latest view-only model stage, including before the first response frame. */
+	readonly modelStage: ModelStage | null;
+	getLatestTurnFileChanges(): TurnFileChanges | undefined;
 	/** Await persistence of messages already emitted. */
 	settleInFlightMessagePersistence(): Promise<void>;
 	/** Session context for transcript rendering. */

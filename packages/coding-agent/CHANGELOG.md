@@ -69,6 +69,7 @@
 ### Fixed
 
 - Compact Output expires from its own session's run end without reappearing in later turns; changing the display mode or focused agent no longer revives stale thinking.
+- Compact mode restores typing when an expanded diff disappears, includes formatted batch writes and focused worker changes, flags interrupted file diffs, and shows model wait when switching back before the first response.
 - The display shortcut reports settings overrides instead of claiming a switch succeeded.
 - Native clean and detailed modes no longer reserve the compact activity rows.
 - Native child agents inherit the launching session's credentials and tool restrictions, and caller restrictions also apply to Cursor, Advisors, and resumed queued input.

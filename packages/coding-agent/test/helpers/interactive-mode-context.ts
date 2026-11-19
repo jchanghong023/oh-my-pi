@@ -136,6 +136,8 @@ export function createSessionStub(
 		waitForRunEnd: async () => {},
 		getAsyncJobSnapshot: () => null,
 		getLiveToolOutputSnapshot: () => [],
+		modelStage: null,
+		getLatestTurnFileChanges: () => ({ files: new Map(), revision: 0 }),
 		subscribe: vi.fn(() => () => {}),
 	} satisfies SessionOverrides;
 	if (overrides) layer(stub, overrides);

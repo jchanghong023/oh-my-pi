@@ -9,6 +9,7 @@ import { FileFormatResult } from "@oh-my-pi/pi-tui/tools/lsp";
 import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
 import type { LinterClient, ServerConfig } from "@oh-my-pi/pi-coding-agent/lsp/types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { LatestTurnFileChanges } from "@oh-my-pi/pi-coding-agent/session/latest-turn-file-changes";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { DeferredDiagnosticsEntry, ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { addFileWriteFallback } from "@oh-my-pi/pi-coding-agent/tools/file-write-fallback";
@@ -73,6 +74,65 @@ describe("createLspWritethrough batching", () => {
 		expect(loadConfigSpy).toHaveBeenCalledTimes(1);
 		expect(await Bun.file(fileA).text()).toBe("const a = 1;\n");
 		expect(await Bun.file(fileB).text()).toBe("const b = 2;\n");
+	});
+
+	it("shows the final on-disk content of earlier writes in the turn diff", async () => {
+		const formatter = createFormatter(async (_filePath, content) => content.replace("=1", " = 1;"));
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["formatter", formatter]]);
+		const cwd = tempDir.path();
+		const sessionManager = SessionManager.inMemory(cwd);
+		const authStorage = await AuthStorage.create(":memory:");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+		const changes = new LatestTurnFileChanges();
+		const turn = sessionManager.getSessionId();
+		const tool = new WriteTool({
+			cwd,
+			settings: Settings.isolated({
+				"lsp.enabled": true,
+				"lsp.formatOnWrite": true,
+				"lsp.diagnosticsOnWrite": false,
+			}),
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			enableLsp: true,
+			recordFileChange: change => changes.record(turn, change),
+		});
+		const context: AgentToolContext = {
+			sessionManager,
+			modelRegistry,
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+		};
+		const batch = {
+			batchId: "latest-turn-format",
+			total: 2,
+			toolCalls: [
+				{ id: "first", name: "write" },
+				{ id: "last", name: "write" },
+			],
+		};
+		try {
+			await Bun.write(path.join(cwd, "a.ts"), "const original = true;\n");
+			await tool.execute("first", { path: "a.ts", content: "const a=1\n" }, undefined, undefined, {
+				...context,
+				toolCall: { ...batch, index: 0 },
+			});
+			await tool.execute("last", { path: "b.ts", content: "const b=1\n" }, undefined, undefined, {
+				...context,
+				toolCall: { ...batch, index: 1 },
+			});
+			expect([...changes.get(turn).files.values()]).toMatchObject([
+				{ before: "const original = true;\n", after: "const a = 1;\n", continuous: true },
+				{ before: null, after: "const b = 1;\n", continuous: true },
+			]);
+		} finally {
+			await sessionManager.close();
+			authStorage.close();
+		}
 	});
 
 	it("preserves a newer external change made before the batch flush", async () => {

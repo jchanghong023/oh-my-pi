@@ -29,11 +29,11 @@ export class LatestTurnFileChanges {
 	}
 
 	record(sessionId: string, change: FileChangeReport): void {
-		if (change.before === change.after) return;
 		if (this.#sessionId !== sessionId) this.start(sessionId);
 		const key = normalizePathForComparison(change.path);
 		const { files } = this.#turn;
 		const previous = files.get(key);
+		if (change.before === change.after && (!previous || previous.after === change.before)) return;
 		files.set(key, {
 			path: change.path,
 			before: previous ? previous.before : change.before,

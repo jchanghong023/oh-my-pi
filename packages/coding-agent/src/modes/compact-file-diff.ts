@@ -11,7 +11,6 @@ import { replaceTabs, shortenPath, truncateMiddleToWidth, truncateToWidth } from
 import { getThemeEpoch, theme } from "@oh-my-pi/pi-tui/theme";
 import { getPaddingX, padding, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import { isLocalAgentSession } from "../session/agent-session-handle";
 import type { TurnFileChange, TurnFileChanges } from "../session/latest-turn-file-changes";
 import type { InteractiveModeContext } from "./types";
 
@@ -37,8 +36,7 @@ export class CompactFileDiff implements Component {
 	) {}
 
 	#source(): TurnFileChanges | undefined {
-		const session = this.ctx.viewSession;
-		return isLocalAgentSession(session) ? session.getLatestTurnFileChanges() : undefined;
+		return this.ctx.viewSession.getLatestTurnFileChanges();
 	}
 
 	#changed(source: TurnFileChanges): TurnFileChange[] {
@@ -57,11 +55,9 @@ export class CompactFileDiff implements Component {
 		this.ctx.ui.requestRender();
 	}
 
-	/** Close only when the underlying turn or display mode changed, never on redraw. */
-	sync(): void {
-		const source = this.#source();
+	sync(source = this.#source(), availableRows = this.availableRows()): void {
 		if (this.#changes?.source !== source) this.#changes = undefined;
-		if (this.#expanded && this.#expanded !== source) {
+		if (this.#expanded && (source !== this.#expanded || availableRows < 2 || this.#changed(source).length === 0)) {
 			this.close();
 		}
 	}
@@ -103,9 +99,10 @@ export class CompactFileDiff implements Component {
 	render(width: number): readonly string[] {
 		if (!chatTranscriptDisplayPreferences.compactToolActivity || width < 1) return [];
 		const source = this.#source();
+		const maxRows = this.availableRows();
+		if (this.#expanded) this.sync(source, maxRows);
 		if (!source?.files.size) return [];
 		const changes = this.#changed(source);
-		const maxRows = this.availableRows();
 		if (changes.length === 0 || maxRows < 1) return [];
 		const left = padding(Math.min(getPaddingX(1), width - 1));
 		const bodyWidth = width - left.length;

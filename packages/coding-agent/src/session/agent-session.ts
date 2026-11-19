@@ -315,7 +315,13 @@ import { generateSessionTitle, nerdGlyphsActive } from "../utils/title-generator
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { EventBus } from "../utils/event-bus";
 import type { VibeModeState } from "../vibe/state";
-import type { AgentSessionEvent, AgentSessionEventListener, WakeSources } from "./agent-session-events";
+import {
+	type AgentSessionEvent,
+	type AgentSessionEventListener,
+	type ModelStage,
+	nextModelStage,
+	type WakeSources,
+} from "./agent-session-events";
 import { type AgentViewSession, isLocalAgentSession, type LiveToolOutputSnapshot } from "./agent-session-handle";
 import { LiveToolOutputState } from "./live-tool-output";
 import { LatestTurnFileChanges, type TurnFileChanges } from "./latest-turn-file-changes";
@@ -1173,6 +1179,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#eventListeners: AgentSessionEventListener[] = [];
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	readonly #liveToolOutput = new LiveToolOutputState();
+	#modelStage: ModelStage | null = null;
 	#latestTurnFileChanges?: LatestTurnFileChanges;
 	#runStateListeners = new Set<(state: "running" | "idle", at: number) => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
@@ -4179,6 +4186,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
+		this.#modelStage = nextModelStage(this.#modelStage, event);
 		if (event.type === "message_start" && event.message.role === "user") {
 			this.#latestTurnFileChanges?.start(this.sessionId);
 		}
@@ -4206,8 +4214,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	#emitRunState(state: "running" | "idle"): void {
 		const at = Date.now();
-		if (state === "idle") this.#runStartedAt = undefined;
-		else {
+		if (state === "idle") {
+			this.#runStartedAt = undefined;
+			this.#modelStage = null;
+		} else {
 			if (this.#runStartedAt === undefined) this.#latestTurnFileChanges?.start(this.sessionId);
 			this.#runStartedAt ??= at;
 		}
@@ -6475,6 +6485,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	getLiveToolOutputSnapshot(): readonly LiveToolOutputSnapshot[] {
 		return this.#liveToolOutput.snapshot();
+	}
+
+	get modelStage(): ModelStage | null {
+		return this.#modelStage;
 	}
 
 	/** Opt in from the terminal before the next write; never replay edits from chat history. */

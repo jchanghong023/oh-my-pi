@@ -1246,6 +1246,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						async committed => {
 							madeExecutable = await maybeMarkExecutableForShebang(absolutePath, committed);
 						},
+						this.session.recordFileChange
+							? (before, after) =>
+									this.session.recordFileChange?.({ path: absolutePath, tool: "write", before, after })
+							: undefined,
 					);
 					if (!deferred || batchRequest?.flush === false) {
 						this.session.bumpFileMutationVersion?.(absolutePath);

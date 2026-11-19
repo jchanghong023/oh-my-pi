@@ -145,3 +145,48 @@ export interface WakeSources {
 
 /** Listener function for agent session events. */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
+
+export type ModelStage = "waiting" | "thinking" | "replying" | "tool-arguments";
+
+/** Display phase derived from real events, even while no terminal is watching. */
+export function nextModelStage(stage: ModelStage | null, event: AgentSessionEvent): ModelStage | null {
+	switch (event.type) {
+		case "turn_start":
+			return "waiting";
+		case "message_start":
+			return event.message.role === "assistant" ? "waiting" : stage;
+		case "message_end":
+			return event.message.role === "assistant" ? null : stage;
+		case "agent_end":
+		case "agent_pause":
+		case "session_abort":
+		case "turn_end":
+		case "tool_execution_start":
+			return null;
+		case "message_update":
+			if (event.message.role !== "assistant") return stage;
+			switch (event.assistantMessageEvent.type) {
+				case "start":
+				case "thinking_end":
+				case "text_end":
+				case "toolcall_end":
+					return "waiting";
+				case "thinking_start":
+				case "thinking_delta":
+					return "thinking";
+				case "text_start":
+				case "text_delta":
+					return "replying";
+				case "toolcall_start":
+				case "toolcall_delta":
+					return "tool-arguments";
+				case "error":
+				case "done":
+					return null;
+				default:
+					return stage;
+			}
+		default:
+			return stage;
+	}
+}

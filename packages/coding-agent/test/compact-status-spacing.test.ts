@@ -454,7 +454,8 @@ describe("compaction and focus status spacing", () => {
 		const changes = new LatestTurnFileChanges();
 		const id = ctx.sessionManager.getSessionId();
 		ctx.session.getLatestTurnFileChanges = () => changes.get(id);
-		const dock = new CompactFileDiff(ctx, () => 6);
+		let rows = 6;
+		const dock = new CompactFileDiff(ctx, () => rows);
 		const file = (name: string) => `${ctx.sessionManager.getCwd()}/${name}`;
 		const record = (name: string, before: string, after: string) =>
 			changes.record(id, { tool: "write", path: file(name), before, after });
@@ -480,6 +481,29 @@ describe("compaction and focus status spacing", () => {
 			expect(view()).toContain("ORIGINAL_VALUE");
 			expect(view()).toContain("FINAL_VALUE");
 			expect(view()).not.toMatch(/INTERMEDIATE_VALUE|revert\.txt/);
+
+			rows = 1;
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			expect(view()).toContain("本轮改动 1 文件");
+			expect(view()).not.toContain("FINAL_VALUE");
+			expect(composer.ui.getFocused()).toBe(composer.editor);
+
+			rows = 6;
+			dock.toggle();
+			record("target.txt", "FINAL_VALUE\n", "ORIGINAL_VALUE\n");
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			expect(view()).not.toContain("本轮改动");
+			expect(composer.ui.getFocused()).toBe(composer.editor);
+
+			record("target.txt", "ORIGINAL_VALUE\n", "FINAL_VALUE\n");
+			record("target.txt", "EXTERNAL_VALUE\n", "EXTERNAL_VALUE\n");
+			dock.toggle();
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			expect(view()).toContain("无法确认本轮净差异");
+			expect(view()).not.toMatch(/ORIGINAL_VALUE|FINAL_VALUE|EXTERNAL_VALUE/);
 
 			changes.start(id);
 			dock.sync();
