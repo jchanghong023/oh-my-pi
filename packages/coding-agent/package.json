@@ -609,7 +609,6 @@
 		"dompurify": "3.4.12",
 		"force-graph": "1.49.5",
 		"ink": "~6.8.0",
-		"jsdom": "^30.0.1",
 		"langchain": "^1.5.10",
 		"marked": "^18.0.11",
 		"mermaid": "11.16.0",

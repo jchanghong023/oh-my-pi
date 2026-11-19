@@ -11,7 +11,6 @@ export const openWikiLicensedPackages = [
 	"@langchain/openai",
 	"deepagents",
 	"ink",
-	"jsdom",
 	"langchain",
 	"marked",
 	"posthog-node",
