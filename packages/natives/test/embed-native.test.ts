@@ -129,7 +129,11 @@ describe("native addon embedding", () => {
 					child.exited,
 				]);
 				expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
-				expect(JSON.parse(stdout)).toEqual({ written: [target], script: "echo still-running" });
+				expect(JSON.parse(stdout)).toEqual({
+					written: [target],
+					script: "echo still-running",
+					replacementScript: "echo replacement-loaded",
+				});
 				expect(await fs.readFile(target)).toEqual(replacement);
 			} finally {
 				await fs.rm(root, { recursive: true, force: true });

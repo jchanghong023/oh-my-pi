@@ -17,6 +17,14 @@
 - Offline model commands retain the cached Codex client version without contacting the npm registry.
 - Restored Alibaba Token Plan login and chat models, including China (Beijing) and international (Singapore) regions.
 
+### Added
+
+- Added `uncached-instructions` compatibility flag, enabled for GPT-6.2 models on every host, which moves the system prompt out of the uncached Responses `instructions` field
+
+### Fixed
+
+- Fixed the Codex client version cache so `codex-client-version.json` is read and written under `$XDG_CACHE_HOME/omp` when that root is initialized, instead of the agent directory ([#19776](https://github.com/can1357/oh-my-pi/pull/19776) by [@Parsifa1](https://github.com/Parsifa1))
+
 ## [19.0.1] - 2026-11-19
 
 ### Added

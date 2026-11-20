@@ -6,7 +6,9 @@ import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CfgProtocolHandler, setCfgApprovalHost } from "@oh-my-pi/pi-coding-agent/internal-urls/cfg-protocol";
 import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
+import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller";
+import { MCPCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/mcp-command-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import {
 	cfgStartupChangelogMode,
@@ -17,6 +19,7 @@ import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { __resetAutoQaConsentForTests, resolveAutoQaConsent } from "@oh-my-pi/pi-coding-agent/tools/report-tool-issue";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { getProjectDir, setProjectDir, Snowflake } from "@oh-my-pi/pi-utils";
@@ -46,6 +49,7 @@ describe("cfg:// approval prompt wiring", () => {
 
 	afterEach(async () => {
 		setCfgApprovalHost(null);
+		__resetAutoQaConsentForTests();
 		mode?.stop();
 		mode = undefined;
 		if (testSession) {
@@ -62,7 +66,7 @@ describe("cfg:// approval prompt wiring", () => {
 		await fs.rm(tmp, { recursive: true, force: true });
 	});
 
-	async function startMode(askTimeout: number | undefined): Promise<Array<number | undefined>> {
+	async function startMode(askTimeout: number | undefined, mcpManager?: MCPManager): Promise<Array<number | undefined>> {
 		testSession = await createTestSession(
 			askTimeout === undefined ? {} : { settingsOverrides: { "ask.timeout": askTimeout } },
 		);
@@ -74,7 +78,7 @@ describe("cfg:// approval prompt wiring", () => {
 			"test",
 			undefined,
 			undefined,
-			undefined,
+			mcpManager,
 			undefined,
 			new Composer({ terminal: new VirtualTerminal(200, 60) }),
 		);
@@ -127,6 +131,12 @@ describe("cfg:// approval prompt wiring", () => {
 		return new CfgProtocolHandler().write(parseInternalUrl("cfg://advisor/enabled"), "true", { session, signal });
 	}
 
+	it("prompts without a deadline when ask.timeout is at its default", async () => {
+		const seen = await startMode(undefined);
+		await driveWrite();
+		expect(seen).toEqual([undefined]);
+	}, 60_000);
+
 	it("prompts with the ask.timeout deadline in milliseconds", async () => {
 		const seen = await startMode(45);
 		await driveWrite();
@@ -157,6 +167,22 @@ describe("cfg:// approval prompt wiring", () => {
 		// Only the first write ever presented: the queued one denied on the
 		// already-aborted signal without prompting.
 		expect(seen).toEqual([undefined]);
+	}, 60_000);
+
+	it("runs the cfg://, auto-QA and MCP sign-in prompts as waits for the user", async () => {
+		const manager = new MCPManager(tmp, async () => ({ configs: {}, sources: {}, exaApiKeys: [] }));
+		await startMode(undefined, manager);
+		const authHandler = manager.getAuthHandler();
+		const waits = spyOn(testSession!.session, "waitForUser");
+		spyOn(MCPCommandController.prototype, "handleMCPAuthChallenge").mockResolvedValue(undefined);
+
+		await driveWrite();
+		expect(waits).toHaveBeenCalledTimes(1);
+		await resolveAutoQaConsent(undefined);
+		expect(waits).toHaveBeenCalledTimes(2);
+		if (!authHandler) throw new Error("expected the mode to install an MCP auth handler");
+		await authHandler("server", { wwwAuthenticate: [] });
+		expect(waits).toHaveBeenCalledTimes(3);
 	}, 60_000);
 
 	it("denies a pending approval when the calling turn aborts", async () => {

@@ -4,9 +4,13 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type } from "@oh-my-pi/omptype";
 import { commitSelection, type CommitOutcome } from "@oh-my-pi/pi-coding-agent/commit/selective/apply";
 import { createDraft } from "@oh-my-pi/pi-coding-agent/commit/selective/draft";
 import { ChangeJournal, type JournalRecord } from "@oh-my-pi/pi-coding-agent/commit/selective/journal";
+import { createCommitPrelude } from "@oh-my-pi/pi-coding-agent/commit/selective/prelude-definition";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -91,7 +95,7 @@ async function emptyRepo() {
 		await Bun.write(absolute, after);
 		journal.recordChange({ agent, parent, tool: "edit", path: absolute, before, after });
 	};
-	return { root, journal, write };
+	return { root, artifacts, journal, write };
 }
 
 async function gitlinkWorkspace() {
@@ -152,6 +156,97 @@ async function sharedWorkspace() {
 }
 
 describe("selective commit flow", () => {
+	it("commits an inserted statement before a return changed only in the worktree", async () => {
+		const { root, journal, write } = await emptyRepo();
+		const file = "value.luau";
+		const head = "local function value()\n    return 1\nend\n";
+		const foreign = head.replace("return 1", "return 2");
+		const statement = "    assert(true)\n";
+		const insert = (source: string) => source.replace("    return", `${statement}    return`);
+		await Bun.write(path.join(root, file), head);
+		await git(root, ["add", file]);
+		await git(root, ["commit", "-qm", "seed"]);
+		await write("Other", undefined, file, foreign);
+		await write("Main", undefined, file, insert(foreign));
+		await journal.flush();
+
+		const draft = await createDraft({ cwd: root, journal, caller: "Main" });
+		await commitSelection(draft, { subject: "test: assert before return" }, { journal, agent: { agent: "Main" } });
+
+		expect(await git(root, ["show", `HEAD:${file}`])).toBe(insert(head));
+		expect(await Bun.file(path.join(root, file)).text()).toBe(insert(foreign));
+
+		const replay = await createDraft({ cwd: root, journal, caller: "Main" });
+		expect(replay.selection()).toEqual([]);
+		expect(replay.summary()).not.toContain("Review:");
+		const remaining = await createDraft({ cwd: root, journal, caller: "Other" });
+		await commitSelection(remaining, { subject: "test: update return" }, { journal, agent: { agent: "Other" } });
+		expect(await git(root, ["show", `HEAD:${file}`])).toBe(insert(foreign));
+		expect(await git(root, ["status", "--porcelain"])).toBe("");
+	});
+
+	it("never selects a second copy of a paragraph already committed during a reorder", async () => {
+		const { root, journal, write } = await emptyRepo();
+		const file = "notes.md";
+		const contents = (order: string, main = "old", other = "old") =>
+			Array.from(order, key => `## ${key}\n\nsame body\n\n\n`).join("") +
+			`footer\nmain: ${main}\nseparator\nother: ${other}\n`;
+		await Bun.write(path.join(root, file), contents("AB"));
+		await git(root, ["add", file]);
+		await git(root, ["commit", "-qm", "initial paragraphs"]);
+		await write("Main", undefined, file, contents("BAC"));
+		await write("Other", undefined, file, contents("BADC", "old", "pending"));
+		// Another commit takes D alone without touching the working file.
+		await Bun.write(path.join(root, ".git", "snapshot"), contents("ABD"));
+		const sha = (await git(root, ["hash-object", "-w", ".git/snapshot"])).trim();
+		await git(root, ["update-index", "--cacheinfo", `100644,${sha},${file}`]);
+		await git(root, ["commit", "-qm", "take D"]);
+		await write("Main", undefined, file, contents("ABCD", "pending", "pending"));
+		await journal.flush();
+		const draft = await createDraft({ cwd: root, journal, caller: "Main" });
+		expect(draft.summary()).toContain("review the net change");
+		expect(draft.diff()).toContain("+main: pending");
+		expect(draft.diff()).not.toContain("+## B");
+		draft.take({ path: file, units: ["1"] }); // C only, not the other writer's footer
+		await commitSelection(draft, { subject: "add C" }, { journal, agent: { agent: "Main" } });
+		expect(await git(root, ["show", `HEAD:${file}`])).toBe(contents("ABCD", "pending", "old"));
+		expect(await Bun.file(path.join(root, file)).text()).toBe(contents("ABCD", "pending", "pending"));
+	});
+
+	it("prints a long edited line as one row within the session's column cap while diff still returns the patch", async () => {
+		const { root, artifacts, journal, write } = await emptyRepo();
+		// Four changes far apart in one line of some 530 characters.
+		const line = (word: string) =>
+			`${[0, 1, 2, 3].map(n => `${"prompt history, ".repeat(8)}${word}${n}`).join(" ")}.\n`;
+		await Bun.write(path.join(root, "notes.md"), line("old"));
+		await git(root, ["add", "notes.md"]);
+		await git(root, ["commit", "-qm", "seed"]);
+		await write("Main", undefined, "notes.md", line("new"));
+		await journal.flush();
+		const session: ToolSession = {
+			cwd: root,
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => null,
+			getArtifactsDir: () => artifacts,
+			getAgentId: () => "Main",
+			settings: Settings.isolated({ "tools.outputMaxColumns": 256 }),
+		};
+		const commit = createCommitPrelude(session);
+		const call = (parameters: object) => commit.invoke(parameters, { session, toolCallId: "test" });
+
+		const { id } = type({ id: "string" }).assert((await call({ action: "draft" })).details);
+		const shown = await call({ action: "diff", draft: id });
+
+		const printed = shown.content.map(block => (block.type === "text" ? block.text : "")).join("");
+		const row = printed.split("\n").find(printedLine => printedLine.startsWith("!")) ?? "";
+		expect(row.match(/\[-old\d-\]\{\+new\d\+\}/g)).toHaveLength(4);
+		expect(Buffer.byteLength(row)).toBeLessThanOrEqual(256);
+		expect(shown.details).toEqual({
+			patch: `diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/notes.md\n@@ -1,1 +1,1 @@\n-${line("old")}+${line("new")}`,
+		});
+	});
+
 	it("explicitly selects a gitlink SHA with ordinary edits without committing child dirt or other staged work", async () => {
 		const { root, module, journal, write, before, after } = await gitlinkWorkspace();
 		await Bun.write(path.join(root, "user.txt"), "user staged\n");
@@ -600,6 +695,33 @@ describe("selective commit flow", () => {
 			commitSelection(draft, { subject: "fix: a" }, { journal, agent: { agent: "Main" } }),
 		).rejects.toThrow(/HEAD moved .* changed a\.ts/);
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"retries the commit when a hook moves HEAD after the expected-HEAD check",
+		async () => {
+			const { root, journal, head } = await sharedWorkspace();
+			const draft = await createDraft({ cwd: root, journal, caller: "Main" });
+			await git(root, ["config", "core.hooksPath", ".git/hooks"]);
+			// A concurrent commit carrying the seed's tree, made without touching the worktree or index.
+			const moved = (await git(root, ["commit-tree", `${head}^{tree}`, "-p", head, "-m", "concurrent"])).trim();
+			// `commit-msg` runs after the expected-HEAD check and before the swap that updates HEAD.
+			const hook = path.join(root, ".git", "hooks", "commit-msg");
+			await fs.mkdir(path.dirname(hook), { recursive: true });
+			await Bun.write(hook, `#!/bin/sh\ngit update-ref refs/heads/main ${moved}\n`);
+			await fs.chmod(hook, 0o755);
+
+			const outcome = await commitSelection(
+				draft,
+				{ subject: "fix(parser): added parse" },
+				{ journal, agent: { agent: "Main" } },
+			);
+
+			// The lost swap is retried on the new HEAD instead of failing the commit.
+			expect(outcome.parent).toBe(moved);
+			expect((await git(root, ["rev-parse", "HEAD~1"])).trim()).toBe(moved);
+			expect(await git(root, ["show", "HEAD:a.ts"])).toBe("export const a = 2;\n");
+		},
+	);
 
 	it("refuses to commit during a merge in a linked worktree without changing HEAD or the index", async () => {
 		const { root: mainRoot, journal } = await emptyRepo();

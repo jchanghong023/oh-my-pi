@@ -88,7 +88,6 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 				filterExa: true,
 				// `omp read` has no Eval prelude, so browser MCP remains available.
 				filterBrowser: false,
-				cacheStorage: settings.getStorage(),
 				authStorage,
 			});
 			mcpManager = result.manager;

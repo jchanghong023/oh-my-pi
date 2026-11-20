@@ -107,6 +107,7 @@ describe("MCPManager connection status events", () => {
 						},
 					},
 					event => events.push(event),
+					0,
 				);
 
 				const message = result.errors.get("broken") ?? "";

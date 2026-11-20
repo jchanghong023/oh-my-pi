@@ -599,12 +599,12 @@ export const cfgFindEnabled = register({
 		group: "可用工具",
 		label: "Find（语义 grep）",
 		description:
-			"启用 find 工具：使用自然语言搜索文件和行范围，由 judge 模型角色评判。自动模式仅在 judge 角色解析为原生 TypeSafe jev 模型时启用",
+			"启用 find 工具：使用自然语言搜索文件和行范围，由 judge 模型角色评判。自动模式在首个可用的 judge 模型支持原生判定时启用",
 		options: [
 			{
 				value: "auto",
 				label: "自动",
-				description: "judge 角色解析为原生 TypeSafe jev 模型时启用",
+				description: "首个可用的 judge 模型支持原生判定时启用",
 			},
 			{ value: "on", label: "开启", description: "始终启用，不受 judge 角色所解析模型的影响" },
 			{ value: "off", label: "关闭", description: "禁用 find 工具" },

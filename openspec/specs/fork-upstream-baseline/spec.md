@@ -19,5 +19,5 @@
 
 - **分支**：`can1357/oh-my-pi@main`
 * **版本**：`v19.0.1`
-- **Upstream commit**：`f40f335845f0b136453d12fec8d6057011082766`
+- **Upstream commit**：`21d93e49fbe3d3bd81e9245ddbf085271a53bf4d`
 - **同步日期**：2026-11-20

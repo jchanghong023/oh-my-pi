@@ -223,15 +223,41 @@ describe("openPath", () => {
 		}
 	});
 
-	it("reports a failed OS handoff instead of claiming the browser opened", async () => {
+	it("reports a failed OS handoff and logs the verification URL without its device code or fragment", async () => {
 		setPlatform("win32");
 		vi.spyOn(fs, "existsSync").mockReturnValue(true);
 		const calls: SpawnCall[] = [];
 		spySpawn(calls, 1);
 
-		expect(await openPathWithResult("https://example.com")).toEqual({
+		const warnSpy = vi.spyOn(piUtils.logger, "warn").mockImplementation((() => {}) as never);
+		expect(await openPathWithResult("https://auth.x.ai/activate?user_code=ABCD-EFGH#t=workspace-secret")).toEqual({
 			opened: false,
 			reason: expect.stringContaining("1"),
 		});
+		expect(warnSpy).toHaveBeenCalledWith(
+			"External opener exited with non-zero status",
+			expect.objectContaining({ exitCode: 1, target: "https://auth.x.ai/activate" }),
+		);
+	});
+
+	it("keeps URL secrets out of the log and failure result, but logs local paths verbatim", async () => {
+		setPlatform("win32");
+		vi.spyOn(fs, "existsSync").mockReturnValue(true);
+		const warnSpy = vi.spyOn(piUtils.logger, "warn").mockImplementation((() => {}) as never);
+		vi.spyOn(Bun, "spawn").mockImplementation(() => {
+			throw Object.assign(new Error("spawn failed: mailto:me@example.com?token=argv-secret"), { code: "ENOENT" });
+		});
+
+		expect(await openPathWithResult("mailto:me@example.com?token=argv-secret")).toEqual({
+			opened: false,
+			reason: "Failed to open external URL/path",
+		});
+		openPath("C:\\notes\\a#b.html");
+
+		const logged = JSON.stringify(warnSpy.mock.calls);
+		expect(logged).not.toContain("argv-secret");
+		expect(logged).not.toContain("me@example.com");
+		expect(warnSpy.mock.calls[0]?.[1]).toMatchObject({ code: "ENOENT", target: "mailto:" });
+		expect(warnSpy.mock.calls[1]?.[1]).toMatchObject({ target: "C:\\notes\\a#b.html" });
 	});
 });

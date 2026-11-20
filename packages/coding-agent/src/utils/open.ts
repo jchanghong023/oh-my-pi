@@ -2,8 +2,19 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as url from "node:url";
 import { $which, isWsl, logger } from "@oh-my-pi/pi-utils";
+import { redactUrlForLog } from "./redact-url";
 
 const URL_SCHEME_PATTERN = /^[a-zA-Z][a-zA-Z\d+.-]*:/;
+/** Like {@link URL_SCHEME_PATTERN}, but a one-letter "scheme" is a Windows drive (`C:\…`), not a URL. */
+const LOGGED_URL_PATTERN = /^[a-zA-Z][a-zA-Z\d+.-]+:/;
+
+/**
+ * Redact any scheme URL (`https:`, `mailto:`, …). A local filename may contain a
+ * literal `#`, so paths stay verbatim.
+ */
+function logTarget(target: string): string {
+	return LOGGED_URL_PATTERN.test(target) ? redactUrlForLog(target, "omit") : target;
+}
 
 function getExistingWslLocalPath(urlOrPath: string): string | undefined {
 	if (!isWsl() || !$which("wslview")) {
@@ -74,7 +85,7 @@ function windowsOpenerCommand(target: string): string[] {
 export async function openPathWithResult(
 	urlOrPath: string,
 ): Promise<{ opened: true } | { opened: false; reason: string }> {
-	let cmd: string[] = [];
+	let cmd: string[] | undefined;
 	try {
 		switch (process.platform) {
 			case "darwin":
@@ -100,19 +111,23 @@ export async function openPathWithResult(
 		const exitCode = await child.exited;
 		if (exitCode !== 0) {
 			const reason = `External opener exited with status ${exitCode}`;
-			logger.warn(reason, { command: cmd[0], target: urlOrPath, exitCode });
+			logger.warn("External opener exited with non-zero status", {
+				command: cmd[0],
+				target: logTarget(urlOrPath),
+				exitCode,
+			});
 			return { opened: false, reason };
 		}
 		// This confirms OS handoff, not that a browser displayed the page.
 		return { opened: true };
 	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
 		logger.warn("Failed to open external URL/path", {
-			command: cmd[0],
-			target: urlOrPath,
-			error: reason,
+			command: cmd?.[0],
+			target: logTarget(urlOrPath),
+			// Spawn errors can echo argv, including an encoded URL on Windows.
+			code: error instanceof Error && "code" in error ? error.code : undefined,
 		});
-		return { opened: false, reason };
+		return { opened: false, reason: "Failed to open external URL/path" };
 	}
 }
 

@@ -14,7 +14,7 @@
  * Park/dispose is gated against concurrent ensureLive/peer sends:
  * - A disposing session is never handed out.
  * - ensureLive during an in-flight park either cancels the park (session still
- *   live) or waits for detach+park and then revives.
+ *   live) or waits for detach+park and then revives, unless a release intervenes.
  * - Concurrent ensureLive/park operations coalesce per id.
  *
  * Every adoption, park, and revival is bound to the exact {@link AgentRef} it
@@ -131,6 +131,12 @@ interface ReopeningAgent {
 	ref: AgentRef;
 	/** Resolves to the fresh `parked` generation. */
 	promise: Promise<AgentRef>;
+}
+
+/** In-flight releases of one ref, split so ensureLive can tell a kill (retryable) from a removal. */
+interface ReleaseFence {
+	kills: number;
+	removals: number;
 }
 
 /** How {@link AgentLifecycleApi.release} ends an agent. */
@@ -257,6 +263,8 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	readonly #revivals = new Map<string, RevivingAgent>();
 	/** In-flight reopens of killed refs, bound to the killed ref, so concurrent {@link ensureLive} calls coalesce. */
 	readonly #reopens = new Map<string, ReopeningAgent>();
+	/** Releases can overlap; keep the exact ref fenced until the last one finishes. */
+	readonly #releasing = new WeakMap<AgentRef, ReleaseFence>();
 	#unsubscribe: (() => void) | undefined;
 	#persistedReviverFactory: PersistedSubagentReviverFactory | undefined;
 	/** Resolves the TTL applied when a cold-revived ref is adopted on demand (read per revive). */
@@ -512,47 +520,74 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		return park.promise;
 	}
 
+	#assertLiveAllowed(ref: AgentRef): void {
+		if (this.#strictReleases.has(ref)) throw new Error(`Agent "${ref.id}" is being released.`);
+		const fence = this.#releasing.get(ref);
+		if (fence) {
+			throw new Error(
+				fence.removals > 0
+					? `Agent "${ref.id}" is being removed and cannot be revived. If a transcript exists, read history://${ref.id}.`
+					: `Agent "${ref.id}" is still shutting down after its kill; retry once it has stopped.`,
+			);
+		}
+		if (ref.history?.executionEnded) throw new Error(`Agent "${ref.id}" is a read-only execution record.`);
+	}
+
 	/**
 	 * Return the live session, reviving from the sessionFile if parked or
-	 * killed. Throws a plain Error if the id is unknown, or its transcript
-	 * cannot be revived (no reviver, no session contract, workspace gone).
-	 * Concurrent calls share one in-flight revive.
+	 * killed. Concurrent calls share one in-flight revive.
 	 *
 	 * Never returns a session that is mid-dispose: an in-flight park is either
 	 * cancelled (session still live) or awaited to completion before revive.
+	 *
+	 * Throws a plain Error when:
+	 * - the id is unknown;
+	 * - the ref is being killed (retry once it has stopped) or removed;
+	 * - strict cleanup still owns the ref, or it is a retained read-only execution record;
+	 * - the ref was replaced, released, or killed while its park was in flight;
+	 * - the ref was replaced while its killed transcript was being reopened;
+	 * - its transcript cannot be revived (no reviver, no session contract, workspace gone).
 	 */
 	async ensureLive(id: string): Promise<AgentSessionHandle> {
-		const releasing = this.#registry.get(id);
-		if (releasing && this.#strictReleases.has(releasing)) throw new Error(`Agent "${id}" is being released.`);
-		const park = this.#parks.get(id);
-		if (park) {
-			const parked = this.#registry.get(id);
-			// Cancel if the live session is still attached — keep it instead of
-			// thrashing dispose + revive.
-			if (parked?.session && !park.detached && park.cancel()) {
-				await park.promise;
-				const kept = this.#registry.get(id)?.session;
-				if (kept) {
-					// Park cleared the idle timer; re-arm so TTL park still works.
-					const adopted = this.#adopted.get(id);
-					if (adopted && adopted.ref === parked && parked.status === "idle") this.#armTimer(id, adopted);
-					return kept;
-				}
-			} else {
-				// Already committed to detach (or no live session): wait for park,
-				// then fall through to the revive path.
-				await park.promise;
-			}
-		}
-
 		let ref = this.#registry.get(id);
 		if (!ref) {
 			throw new Error(
 				`Unknown agent "${id}" — it was never registered or has been released. If a transcript exists, read history://${id}.`,
 			);
 		}
-		if (ref.history?.executionEnded) throw new Error(`Agent "${id}" is a read-only execution record.`);
-		if (ref.status === "aborted") ref = await this.#reopen(id, ref);
+		this.#assertLiveAllowed(ref);
+		const park = this.#parks.get(id);
+		if (park?.ref === ref) {
+			const wasKilled = ref.status === "aborted";
+			// Cancel before detach; otherwise wait for disposal. Neither path may hand out
+			// (or cold-revive) a newer owner of the id after the await.
+			const kept = ref.session && !park.detached && park.cancel();
+			await park.promise;
+			// Release can be waiting on this same park, before it marks or unregisters the ref;
+			// other owners (task executor, vibe runtime) mark a turn aborted without release.
+			const becameAborted = !wasKilled && ref.status === "aborted";
+			if (
+				this.#registry.get(id) !== ref ||
+				this.#releasing.has(ref) ||
+				this.#strictReleases.has(ref) ||
+				becameAborted
+			) {
+				throw new Error(`Agent "${id}" changed while waiting for its session to park.`);
+			}
+			this.#assertLiveAllowed(ref);
+			if (kept && ref.session) {
+				// Park cleared the idle timer; re-arm so TTL park still works.
+				const adopted = this.#adopted.get(id);
+				if (adopted?.ref === ref && ref.status === "idle") this.#armTimer(id, adopted);
+				return ref.session;
+			}
+		}
+
+		if (ref.status === "aborted") {
+			ref = await this.#reopen(id, ref);
+			if (this.#registry.get(id) !== ref) throw new Error(`Agent "${id}" changed while reopening its transcript.`);
+			this.#assertLiveAllowed(ref);
+		}
 		// A revive attaches its session before it finishes initializing it: join the revive rather
 		// than hand out a session whose extensions have not re-registered their tools yet.
 		const inflight = this.#revivals.get(id);
@@ -601,7 +636,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		// Only decides whether the kill can be undone; the cold-revive path builds
 		// its own reviver for the fresh generation.
 		const reviver = await factory(killed);
-		if (this.#strictReleases.has(killed)) throw new Error(`Agent "${id}" is being released.`);
+		this.#assertLiveAllowed(killed);
 		if (this.#disposed) {
 			throw new Error(
 				`Agent "${id}" revival aborted: its lifecycle was disposed while its transcript was being checked.`,
@@ -634,7 +669,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		let coldAdopted = false;
 		if (!revive && ref.status === "parked" && ref.sessionFile && this.#persistedReviverFactory) {
 			revive = await this.#persistedReviverFactory(ref);
-			if (this.#strictReleases.has(ref)) throw new Error(`Agent "${id}" is being released.`);
+			this.#assertLiveAllowed(ref);
 			// Teardown can complete during the factory await. A late cold revive must
 			// not cold-adopt (and later attach a live session + TTL) into a disposed
 			// manager — reject deterministically before creating any session.
@@ -642,6 +677,11 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				throw new Error(
 					`Agent "${id}" revival aborted: its lifecycle was disposed while its persisted session was being prepared.`,
 				);
+			}
+			// The id may have been reused while the factory was reading the transcript.
+			// Never overwrite the replacement's adoption with the stale reviver.
+			if (this.#registry.get(id) !== ref) {
+				throw new Error(`Agent "${id}" changed while its persisted session was being prepared.`);
 			}
 			if (revive) {
 				adoption = {
@@ -700,8 +740,35 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		const adoptedMatches =
 			adopted && (expected === undefined || adopted.ref === expected || adopted.ref.session === expected);
 		const ref = currentMatches ? current : adoptedMatches ? adopted.ref : undefined;
+		// A strict owner (including a descendant reserved for bottom-up cleanup)
+		// must keep its disposal and resource hooks retryable.
+		if (!ref || this.#strictReleases.has(ref)) return false;
+
+		// Fence this generation before the first await: a waiter that joined the same
+		// park resumes before the ref is marked aborted or unregistered.
+		const kind = options?.tombstone ? "kills" : "removals";
+		let fence = this.#releasing.get(ref);
+		if (!fence) {
+			fence = { kills: 0, removals: 0 };
+			this.#releasing.set(ref, fence);
+		}
+		fence[kind]++;
+		try {
+			await this.#releaseRef(id, ref, adopted, options);
+			return true;
+		} finally {
+			fence[kind]--;
+			if (fence.kills + fence.removals === 0) this.#releasing.delete(ref);
+		}
+	}
+
+	async #releaseRef(
+		id: string,
+		ref: AgentRef,
+		adopted: AdoptedAgent | undefined,
+		options: AgentReleaseOptions | undefined,
+	): Promise<void> {
 		const onRelease = adopted && adopted.ref === ref ? adopted.onRelease : undefined;
-		if (!ref) return false;
 		if (adopted?.ref === ref) {
 			clearTimeout(adopted.timer);
 			this.#adopted.delete(id);
@@ -717,7 +784,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 
 		const live = this.#registry.get(id) === ref ? ref.session : null;
 		if (options?.tombstone) {
-			// Apply the terminal transition synchronously, before any await. The
+			// Apply the terminal transition before persisting or disposing. The
 			// dying session's own dispose path calls unregisterUnlessParked
 			// (sdk.ts), which spares a ref only when it is already `aborted` AND
 			// already detached; awaiting the marker write before this transition
@@ -755,7 +822,6 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			}
 		}
 		if (!options?.tombstone) this.#registry.unregister(id, ref);
-		return true;
 	}
 
 	#retainStrictRelease(ref: AgentRef): StrictRelease {

@@ -30,6 +30,31 @@ export const cfgMcpStartupTimeoutMs = register({
 	},
 });
 
+export const cfgMcpShared = register({
+	id: "mcp.shared",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "发现与 MCP",
+		label: "共享 MCP 服务器",
+		description:
+			"由守护进程托管 MCP 服务器，多个 OMP 实例可共享服务器进程与工具目录缓存；维护会话状态的服务器仍为每个实例单独运行。守护进程不可用时回退到独立服务器。",
+	},
+});
+
+export const cfgMcpIdleStopMinutes = register({
+	id: "mcp.idleStopMinutes",
+	type: "number",
+	default: 5,
+	ui: {
+		tab: "tools",
+		group: "发现与 MCP",
+		label: "MCP 空闲停止时间",
+		description: "共享 MCP 服务器空闲达到此分钟数后停止，下次请求时重新启动。",
+	},
+});
+
 export const cfgMcpEvalNamespaces = register({
 	id: "mcp.evalNamespaces",
 	type: "boolean",
