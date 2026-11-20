@@ -134,8 +134,10 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 				{ scope: "all scenarios", producer: "ui-smoke/runner-stage", exitCode: 0, status: "stage" },
 			] as const,
 		};
-		const save = async (fixtureRoot: string, data: object, runId = "baseline") => {
-			const dir = path.join(fixtureRoot, "runs", "test-timing", runId);
+		const baselineRunId = "2026-11-20T20-04-46.754Z-99788-2db8930f";
+		const reportDir = (fixtureRoot: string, runId: string) => path.join(fixtureRoot, "runs", "test-timing", runId);
+		const save = async (fixtureRoot: string, data: object, runId = baselineRunId) => {
+			const dir = reportDir(fixtureRoot, runId);
 			await fs.mkdir(dir, { recursive: true });
 			await fs.writeFile(path.join(dir, "run.json"), JSON.stringify(data));
 		};
@@ -154,14 +156,22 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 			["failed producer", withStartup({ ...startup, exitCode: 1, status: "failed" })],
 			["missing producer report", withStartup({ ...startup, report: "missing" })],
 		] as const;
-		const currentRunId = "zz-newer-attempt";
+		const currentRunId = "2026-11-20T20-14-46.754Z-99789-2db8930a";
 		const running = { ...report, runId: currentRunId, completion: "running", exitCode: null };
 		const checkNewerAttempt = async (name: string, newer: object, runId?: string) => {
 			const fixtureRoot = caseRoot(name);
 			await Promise.all([save(fixtureRoot, report), save(fixtureRoot, newer, currentRunId)]);
 			return select(fixtureRoot, null, runId);
 		};
-		const savedBaseline = save(root, report);
+		const savedBaseline = Promise.all([
+			save(root, report),
+			fs.mkdir(reportDir(root, "wiki-semantic-real-bge"), { recursive: true }),
+		]);
+		const unreadableRoot = caseRoot("unreadable-newer-run");
+		await Promise.all([
+			save(unreadableRoot, report),
+			fs.mkdir(reportDir(unreadableRoot, currentRunId), { recursive: true }),
+		]);
 		const unrelatedRoot = caseRoot("unreachable");
 		const [baseline, clean, wrongHint, current, failed, incomplete, previousRunning, unreachable, rejected] =
 			await Promise.all([
@@ -190,6 +200,10 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		expect(current).toMatchObject({ mode: "affected", baseline: revision });
 		expect(failed.mode).toBe("full");
 		expect(incomplete.mode).toBe("full");
+		expect(await select(unreadableRoot)).toMatchObject({
+			mode: "full",
+			reason: "newer test report is unreadable or invalid",
+		});
 		expect(previousRunning.mode).toBe("full");
 		expect(unreachable.mode).toBe("full");
 		for (const [name, mode] of rejected) expect(mode, name).toBe("full");

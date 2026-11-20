@@ -16,6 +16,7 @@ import {
 	bunTestProducerKey,
 	endTestRun,
 	isActiveBunFulltest,
+	isGeneratedTestRunDirectory,
 	latestFulltestBunProducers,
 	recordTestProducer,
 	testReportPath,
@@ -91,9 +92,11 @@ export async function bunTestSelection(
 	} catch {
 		return fallback;
 	}
-	// Run directories are timestamp-prefixed by beginTestRun. A newer failed or
-	// incomplete attempt must prevent reuse of an older successful baseline.
-	const directories = entries.filter(entry => entry.isDirectory()).sort((a, b) => b.name.localeCompare(a.name));
+	// Only runner-owned directories can be candidates or invalidate an earlier
+	// result. Manual timing artifacts may share the parent without a run.json.
+	const directories = entries
+		.filter(entry => entry.isDirectory() && isGeneratedTestRunDirectory(entry.name))
+		.sort((a, b) => b.name.localeCompare(a.name));
 	const unreadableReport = { ...fallback, reason: "newer test report is unreadable or invalid" };
 	for (const entry of directories) {
 		try {

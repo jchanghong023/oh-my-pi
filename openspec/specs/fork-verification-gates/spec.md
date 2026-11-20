@@ -134,6 +134,7 @@ fulltest 和 slowtest MUST 使用 Bun 原生选测能力和 cargo-delta 受影�
 - **WHEN** 运行本机或适用 WSL 的 fulltest
 - **THEN** Bun 测试在 fork 白名单内依据合格基线使用 `--changed`，新 compact 消费者与其他功能使用同一选择规则；不可建立有效选择时回退完整白名单，不再存在完整执行 compact 专属清单的例外。Rust 基于 cargo-delta 受影响 crate 与 fork 范围的交集执行 Nextest，空交集记为未选；选中 `omp-knowledge` 才运行其 doctest，native `cdylib` 无 doctest。缺基线、工具缺失或失败、输出无效及无法确定边界时回退完整 fork 范围
 - **AND** 选择结果区分执行、排除和未选中，报告 full 或 affected；历史执行与平台跳过不算本轮通过，选择近似不证明完整新回归
+- **AND** 基线扫描仅检查门禁生成的运行 ID 目录；同级手工产物既不提供基线，也不阻断基线。更新的有效运行 ID 对应报告缺失或损坏时仍保守回退，不视为通过。
 - **AND** 失败、取消或未完成的上次执行不得仅因已有历史数据而被排除；运行器须实际重跑并保留真实失败退出码
 
 #### Scenario: Bun 白名单内受影响测试

@@ -85,6 +85,10 @@ export async function isActiveBunFulltest(
 const timingHistoryMs = 7 * 24 * 60 * 60 * 1000;
 const generatedRunDirectory = /^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d\.\d{3}Z-\d+-[0-9a-f]{8}$/;
 
+export function isGeneratedTestRunDirectory(name: string): boolean {
+	return generatedRunDirectory.test(name);
+}
+
 // Scheduling hints are independent of successful coverage and affected-selection
 // baselines. A failed or interrupted fulltest still has completed chunk timings.
 export async function latestFulltestBunProducers(
@@ -103,7 +107,7 @@ export async function latestFulltestBunProducers(
 		const oldPrefix = new Date(now - timingHistoryMs - 86400000).toISOString().replaceAll(":", "-");
 		for (const entry of entries) {
 			if (!entry.isDirectory() || entry.name === currentRunId) continue;
-			if (entry.name < oldPrefix && generatedRunDirectory.test(entry.name)) continue;
+			if (entry.name < oldPrefix && isGeneratedTestRunDirectory(entry.name)) continue;
 			let run: HistoryRun;
 			try {
 				run = JSON.parse(await fs.readFile(path.join(root, entry.name, "run.json"), "utf8"));
