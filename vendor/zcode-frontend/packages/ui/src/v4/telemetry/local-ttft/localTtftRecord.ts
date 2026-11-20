@@ -35,8 +35,6 @@ export interface LocalTtftPending {
   sendMode: "idle" | "queued" | "guided";
   visibility: "foreground" | "background" | "background_returned";
   visibilityChanges: { at: number; foreground: boolean }[];
-  confirmationStart?: number;
-  confirmations: NonNullable<LocalTtftRecord["details"]>;
   rows: Map<number, { turnId: string; kind: ConversationRow["kind"] }>;
 }
 
@@ -108,21 +106,12 @@ export function buildLocalTtftRecord(
     sendMode: facts?.sendMode ?? pending.sendMode,
     visibility: pending.visibility,
     visibilityChanges: [...pending.visibilityChanges],
-    userWaitMs: pending.confirmations.reduce(
-      (sum, detail) => sum + (detail.end! - detail.start),
-      0,
-    ),
-    details: [
-      ...pending.confirmations,
-      ...(facts?.details ?? []).map((detail) => ({
-        ...detail,
-        start: detail.start + offset,
-        ...(detail.end === undefined ? {} : { end: detail.end + offset }),
-      })),
-    ].slice(0, LOCAL_TTFT_MAX_DETAILS),
-    truncated:
-      facts?.truncated ||
-      (facts?.details?.length ?? 0) + pending.confirmations.length > LOCAL_TTFT_MAX_DETAILS,
+    details: (facts?.details ?? []).slice(0, LOCAL_TTFT_MAX_DETAILS).map((detail) => ({
+      ...detail,
+      start: detail.start + offset,
+      ...(detail.end === undefined ? {} : { end: detail.end + offset }),
+    })),
+    truncated: facts?.truncated || (facts?.details?.length ?? 0) > LOCAL_TTFT_MAX_DETAILS,
     timingReliable: !pending.clockInvalid,
     cliTimingReliable: facts?.clockInvalid !== true,
     ...(aligned && facts?.executionAt !== undefined && end >= facts.executionAt + offset

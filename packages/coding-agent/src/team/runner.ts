@@ -25,7 +25,7 @@ import { getTeamTransportSchema } from "./schemas";
 import { runSubprocess } from "../task/executor";
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition } from "../task/types";
-import type { CreateAgentSessionOptions, NativeChildSessionHooks } from "../sdk";
+import type { NativeChildSessionHooks } from "../sdk";
 import { EventBus } from "../utils/event-bus";
 import type { TeamSubagentCall, TeamSubagentOutcome, TeamSubagentRunner } from "./types";
 
@@ -44,7 +44,6 @@ export interface TeamRunnerDeps extends NativeChildSessionHooks {
 	settings: Settings;
 	modelRegistry: ModelRegistry;
 	authStorage?: AuthStorage;
-	extensionProviderOwnership?: CreateAgentSessionOptions["extensionProviderOwnership"];
 	/** Persisted session file; child transcripts nest beside it. `null` uses a temp dir. */
 	sessionFile: string | null;
 	artifactsDir: string | null;
@@ -248,7 +247,6 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						onResponse: deps.onResponse,
 						onModelResponse: deps.onModelResponse,
 						toolRestrictions: deps.toolRestrictions?.clone(),
-						extensionProviderOwnership: deps.extensionProviderOwnership,
 						agent,
 						task: call.task,
 						assignment: call.task,

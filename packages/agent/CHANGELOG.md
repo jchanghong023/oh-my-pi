@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the retired ZCode attachment references from `AgentInputMetadata`. Inline image messages are unchanged.
+- Removed the unused `stateOnly` option from `Agent.emitExternalEvent()`; normal external events still update live thinking and notify subscribers.
+
 ### Added
 
 - Turn-end hooks can distinguish queue-draining boundaries from terminal tool yields.
@@ -15,6 +20,7 @@
 
 - Tool cancellations are reported consistently during execution and replay, and paused speculative reads wait before collecting evidence.
 - Compaction retries oversized requests to a separate summary endpoint and ignores invalid saved token counts.
+- Task calls no longer fail solely because their intent label contains JSON-like text.
 
 ## [19.0.0] - 2026-11-18
 

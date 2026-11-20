@@ -160,7 +160,6 @@ import {
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
 import type { UserWaitTracker } from "./extensibility/extensions/user-wait";
-import { ExtensionRuntime as SessionExtensionRuntime } from "./extensibility/extensions/loader";
 import { formatExtensionLoadNotifications } from "./extensibility/extensions/load-errors";
 import { partitionStartupExtensions, recordStartupVerdicts } from "./extensibility/extensions/startup-deferral";
 import {
@@ -308,8 +307,6 @@ import {
 	resolveBridgeCompactionThreshold,
 } from "./session/cache-warmer";
 import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
-import { currentExecutionModel, releaseCurrentExecutionModel } from "./session/execution-model";
-import { streamWithExecutionRecovery, type ExecutionStreamDispatch } from "./session/execution-stream";
 import { ToolRestrictions } from "./session/tool-restrictions";
 import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
 import { createSnapcompactSavingsRecorder } from "./session/snapcompact-savings-journal";
@@ -327,7 +324,6 @@ import {
 import type { AgentDefinition, NativeSubagentHooks } from "./task/types";
 import { refreshAgentDiscovery } from "./task";
 import { AgentOutputManager } from "./task/output-manager";
-import { parentModelGrantPattern } from "./task/model-approval";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import { sessionDelegationBias } from "./task/prompt-policy";
 import { isScoutSpawnable } from "./task/spawn-policy";
@@ -699,15 +695,11 @@ export interface CreateAgentSessionOptions {
 	spawns?: string;
 	/** User-authorized model agents inherited from the parent session for nested delegation. */
 	inheritedSessionAgents?: readonly AgentDefinition[];
-	/** Explicit session-local task agents; live definitions override filesystem/bundled names without changing global discovery. */
-	getAgentDefinitions?: () => readonly AgentDefinition[];
 
 	/** Auth storage for credentials. Default: discoverAuthStorage(agentDir) */
 	authStorage?: AuthStorage;
 	/** Model registry. Default: discoverModels(authStorage, agentDir) */
 	modelRegistry?: ModelRegistry;
-	/** Prepare an embedding host's configuration before initial model selection. */
-	prepareConfiguration?: (cwd: string, settings: Settings, registry: ModelRegistry) => Promise<void>;
 	/**
 	 * Request credential resolver. Defaults to the model registry's normal
 	 * session-affine resolver. Security scans use this narrow seam to keep one
@@ -886,12 +878,6 @@ export interface CreateAgentSessionOptions {
 	/** Disable extension discovery (explicit paths still load). */
 	disableExtensionDiscovery?: boolean;
 	/**
-	 * Helpers can retain the supplied registry's already-loaded extension providers
-	 * without taking ownership of registrations or cleanup. Default: session-owned.
-	 * Inherited factories replay existing declarations; later provider mutations fail.
-	 */
-	extensionProviderOwnership?: "session" | "inherited";
-	/**
 	 * Live extension-root policy inherited by a child session. Keeps recursive
 	 * sub-discovery aligned with the parent while `preloadedExtensionPaths` only
 	 * optimizes extension-module loading.
@@ -989,8 +975,6 @@ export interface CreateAgentSessionOptions {
 	enableMCP?: boolean;
 	/** Existing MCP manager to reuse when MCP is enabled (skips discovery, propagates to toolSession). */
 	mcpManager?: MCPManagerApi;
-	/** Transfer a prepared root's manager lifecycle to this session; children must leave this false. */
-	ownMcpManager?: boolean;
 	/**
 	 * MCP tools minted from a parent's shared manager (subagent proxies). They
 	 * register as manager-owned MCP tools — active from the start and replaced
@@ -1011,8 +995,6 @@ export interface CreateAgentSessionOptions {
 	enableIrc?: boolean;
 	/** Tool names explicitly requested (enables disabled-by-default tools) */
 	toolNames?: string[];
-	/** Pin this session's edit variant, overriding settings and model-specific adaptation without persisting it. */
-	editMode?: EditMode;
 	/** Names from `toolNames` that a fork inherits as `xd://` devices rather than explicit top-level tools. */
 	mountedToolNames?: string[];
 	/** Limit the session to explicitly supplied tool names, without discovered extras. */
@@ -1023,8 +1005,6 @@ export interface CreateAgentSessionOptions {
 	 * and ambient custom tools remain disabled. Default: false.
 	 */
 	allowRestrictedCustomTools?: boolean;
-	/** Explicit restricted Goal grant; settings, requested names and restrictions still apply. */
-	allowRestrictedGoal?: boolean;
 	/** Live-host native child admission/configuration; absent on ordinary sessions. */
 	subagentHooks?: NativeSubagentHooks;
 
@@ -1080,8 +1060,6 @@ export interface CreateAgentSessionOptions {
 	initialAgentStatus?: "running" | "idle";
 	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
 	parentTaskPrefix?: string;
-	/** Child output namespace for independent top-level roots; does not change agent kind. */
-	agentOutputPrefix?: string;
 	/** Parent's async jobs and delivery sinks; child sessions never resolve a process-global manager. */
 	asyncJobManager?: AsyncJobManagerApi;
 	/**
@@ -1139,11 +1117,6 @@ export interface CreateAgentSessionOptions {
 	 * keeps saved-reset consent off the extension UI context. Default: `hasUI`.
 	 */
 	interactivePrompts?: boolean;
-	/** Optional non-terminal human interaction host, inherited by native task children. */
-	createInteractionUI?: ToolSession["createInteractionUI"];
-	/** Owning parent identity for the scoped interaction host of a child. */
-	interactionParentSessionId?: string;
-	interactionParentToolCallId?: string;
 	/** Keep `ask` advertised in a headless fork sharing a parent's tool-schema prefix; calls still fail without UI. */
 	advertiseHeadlessAsk?: boolean;
 	/**
@@ -1216,15 +1189,7 @@ export interface CreateAgentSessionResult {
 	/** Extensions result (loaded extensions + runtime) */
 	extensionsResult: LoadExtensionsResult;
 	/** Update tool UI context (interactive mode) */
-	setToolUIContext: (
-		uiContext: ExtensionUIContext,
-		hasUI: boolean,
-		createInteractionUI?: ToolSession["createInteractionUI"],
-	) => void;
-	/** Live native context for host operations that use the session's existing tool gate. */
-	getToolContext: ToolContextStore["getContext"];
-	/** Scoped host UI allocated for this native child, for extension initialization. */
-	interactionUI?: ExtensionUIContext;
+	setToolUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 	/** MCP manager for server lifecycle management (undefined if MCP disabled) */
 	mcpManager?: MCPManager;
 	/** Warning if session was restored with a different model than saved */
@@ -2332,23 +2297,14 @@ export function hasNativeChildSessionHooks(hooks: NativeChildSessionHooks | unde
 	);
 }
 
-// A prepared factory can be replayed even after another active extension takes
-// over its provider. Keep the accepted declarations with the forwarded binding,
-// not in the model registry's snapshot of current owners.
-const preparedProviderDeclarations = new WeakMap<
-	PreparedExtension,
-	{ registry: ModelRegistry; providers: Map<string, unknown> }
->();
-
 /** Select effective hooks; callers clone an inherited tool policy when creating a session. */
 export function resolveNativeChildSessionHooks(
-	options: NativeChildSessionHooks & Pick<CreateAgentSessionOptions, "extensionProviderOwnership">,
+	options: NativeChildSessionHooks,
 	parent?: NativeChildSessionHooks,
 ): NativeChildSessionHooks {
 	return {
 		resolveRequestAuth: options.resolveRequestAuth ?? parent?.resolveRequestAuth,
-		getApiKey:
-			options.getApiKey ?? (options.extensionProviderOwnership === "inherited" ? parent?.getApiKey : undefined),
+		getApiKey: options.getApiKey,
 		onPayload: options.onPayload ?? parent?.onPayload,
 		onResponse: options.onResponse ?? parent?.onResponse,
 		onModelResponse: options.onModelResponse ?? parent?.onModelResponse,
@@ -2371,7 +2327,6 @@ export type NativeChildCapabilities = NativeChildSessionHooks &
 		| "mcpTools"
 		| "mcpManager"
 		| "mcpToolScope"
-		| "extensionProviderOwnership"
 	>;
 
 /** A private registry owns its root's gate for the entire descendant/revival lifetime. */
@@ -2391,23 +2346,6 @@ const registryStartupCleanupOwners = new WeakMap<
 >();
 
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
-	const execution = currentExecutionModel();
-	if (options.parentTaskPrefix && execution?.policies?.subagents?.foregroundModel === "submission") {
-		if (options.disableModelFallback && options.assertDispatchModel) {
-			const requested = options.model && parentModelGrantPattern(options.model);
-			const submission = parentModelGrantPattern(execution.model);
-			if (!requested || !submission || requested !== submission) {
-				throw new Error("The per-call model conflicts with the foreground submission model.");
-			}
-			// Keep the exact per-call model and its capped effort rather than replacing either.
-		} else {
-			options = {
-				...options,
-				model: execution.model,
-				thinkingLevel: execution.thinkingLevel,
-			};
-		}
-	}
 	// CLI offline mode applies to every session constructed in this process,
 	// including task spawns and revived sessions that omit the SDK option.
 	let companyLane: Promise<string | undefined> | undefined;
@@ -2462,10 +2400,6 @@ async function createAgentSessionScoped(
 	if (options.systemPromptTemplate !== undefined && options.customSystemPrompt !== undefined) {
 		throw new Error("systemPromptTemplate cannot be combined with a literal custom system prompt");
 	}
-	if (options.extensionProviderOwnership === "inherited" && (!options.modelRegistry || options.preloadedExtensions))
-		throw new Error(
-			"Inherited extension providers require the owning ModelRegistry and independent prepared factories, not a live parent runtime.",
-		);
 	if (options.strictStartupCleanup && !options.onStartupCleanupFailure) {
 		throw new Error("strictStartupCleanup requires onStartupCleanupFailure");
 	}
@@ -2608,12 +2542,6 @@ async function createAgentSessionScoped(
 		});
 		if (strictStartupResources) strictStartupResources.add(unsubscribeCredentialDisabled);
 		else startupCleanup.defer(unsubscribeCredentialDisabled);
-		try {
-			await options.prepareConfiguration?.(cwd, settings, modelRegistry);
-		} catch (error) {
-			if (ownsAuthStorage && !strictStartupResources) authStorage.close();
-			throw error;
-		}
 		if (
 			options.modelRegistry &&
 			isCompanyLaneActive() &&
@@ -3095,10 +3023,6 @@ async function createAgentSessionScoped(
 		let hasSession = false;
 		let hasRegistered = false;
 		const restrictToolNames = options.restrictToolNames === true;
-		const restrictedGoalGranted =
-			options.allowRestrictedGoal === true &&
-			options.toolNames?.includes("goal") === true &&
-			options.toolRestrictions?.allows("goal") !== false;
 		// The session tree shares one cost gate: a subagent is given its parent's; a root
 		// session owns one that follows its session file. Read it per request, so a request
 		// lands on the gate of the session file it was sent for.
@@ -3259,10 +3183,7 @@ async function createAgentSessionScoped(
 			};
 			const toolSession: ToolSession = {
 				toolRestrictions: options.toolRestrictions,
-				allowRestrictedGoal: options.allowRestrictedGoal,
-				editMode: options.editMode,
 				subagentHooks: options.subagentHooks,
-				extensionProviderOwnership: options.extensionProviderOwnership,
 				get cwd() {
 					return sessionManager.getCwd();
 				},
@@ -3274,7 +3195,6 @@ async function createAgentSessionScoped(
 				toolRegistry,
 				hasUI: options.hasUI ?? false,
 				canPromptUser: options.interactivePrompts ?? options.hasUI ?? false,
-				createInteractionUI: options.createInteractionUI,
 				advertiseHeadlessAsk: options.advertiseHeadlessAsk,
 				settingsApproval: options.settingsApproval === true && !isSubagentSession,
 				tuiTranscript,
@@ -3365,7 +3285,6 @@ async function createAgentSessionScoped(
 						? () => AgentLifecycleManager.global()
 						: undefined,
 				getSessionSpawns: () => options.spawns ?? "*",
-				getAgentDefinitions: options.getAgentDefinitions,
 				getSessionAgents: () => session?.getSessionAgents() ?? [],
 				advertisedSessionAgents: () => session?.getAdvertisedSessionAgents() ?? [],
 				advertisedPerCallModel: () => session?.getAdvertisedPerCallModel(),
@@ -3561,7 +3480,7 @@ async function createAgentSessionScoped(
 			toolSession.localProtocolOptions = localProtocolOptions;
 			toolSession.agentOutputManager = new AgentOutputManager(getArtifactsDir, {
 				settings,
-				parentPrefix: options.parentTaskPrefix ?? options.agentOutputPrefix,
+				parentPrefix: options.parentTaskPrefix,
 			});
 
 			// Create built-in tools (already wrapped with meta notice formatting)
@@ -3587,11 +3506,7 @@ async function createAgentSessionScoped(
 			let mcpManager: MCPManagerApi | undefined = enableMCP ? options.mcpManager : undefined;
 			// A subagent worker thread never connects MCP servers itself: it reuses the main thread's manager.
 			if (enableMCP && !mcpManager && !isMainThread()) mcpManager = MCPManager.instance();
-			/** Concrete manager created by or explicitly transferred to this session; proxies remain borrowed. */
-			let ownedMcpManager: MCPManager | undefined =
-				options.ownMcpManager && !options.parentTaskPrefix && mcpManager instanceof MCPManager
-					? mcpManager
-					: undefined;
+			let ownedMcpManager: MCPManager | undefined;
 			if (strictStartupResources) {
 				const disconnect = async () => {
 					await ownedMcpManager?.disconnectAll();
@@ -3603,10 +3518,6 @@ async function createAgentSessionScoped(
 			toolSession.mcpManager = mcpManager;
 			toolSession.mcpToolScope = options.mcpToolScope;
 			toolSession.enableMCP = enableMCP;
-			if (mcpManager && options.ownMcpManager && !options.parentTaskPrefix) {
-				await mcpManager.reconcileBrowserFilter(initialBrowserPreludeAvailable);
-				options = { ...options, mcpTools: mcpManager.getTools() };
-			}
 			const deferMCPDiscoveryForUI = enableMCP && !mcpManager && options.hasUI === true;
 			const initialMcpManagerTools: CustomTool[] = [];
 			let startDeferredMCPDiscovery: ((liveSession: AgentSession) => void) | undefined;
@@ -3776,25 +3687,6 @@ async function createAgentSessionScoped(
 			// `disableExtensionDiscovery` is honored implicitly: a caller that set
 			// the flag and pre-resolved the result already reflects that choice.
 			let extensionPaths: string[];
-			let inheritedProviderRuntime: SessionExtensionRuntime | undefined;
-			if (options.extensionProviderOwnership === "inherited") {
-				const inherited = modelRegistry.subscribeMirror(() => {});
-				inherited.unsubscribe();
-				const declarations = new Map<string, Map<string, unknown>>();
-				for (const change of inherited.snapshot.changes) {
-					if (change.kind !== "register" || !change.sourceId) continue;
-					let providers = declarations.get(change.sourceId);
-					if (!providers) declarations.set(change.sourceId, (providers = new Map()));
-					providers.set(change.name, change.config);
-				}
-				for (const prepared of options.preloadedPreparedExtensions ?? []) {
-					const accepted = preparedProviderDeclarations.get(prepared);
-					if (accepted && (accepted.registry === options.modelRegistry || accepted.registry === modelRegistry)) {
-						declarations.set(prepared.path, accepted.providers);
-					}
-				}
-				inheritedProviderRuntime = new SessionExtensionRuntime(declarations);
-			}
 			let extensionsResult: LoadExtensionsResult;
 			if (!restrictToolNames && options.preloadedExtensions) {
 				extensionsResult = {
@@ -3820,7 +3712,6 @@ async function createAgentSessionScoped(
 					preparedExtensions,
 					cwd,
 					eventBus,
-					inheritedProviderRuntime,
 				);
 				for (const { path, error } of extensionsResult.errors) {
 					logger.error("Failed to bind extension", { path, error });
@@ -3833,7 +3724,6 @@ async function createAgentSessionScoped(
 					extensionPaths,
 					cwd,
 					eventBus,
-					inheritedProviderRuntime,
 				);
 				for (const { path, error } of extensionsResult.errors) {
 					logger.error("Failed to load extension", { path, error });
@@ -3848,7 +3738,6 @@ async function createAgentSessionScoped(
 					extensionPaths,
 					cwd,
 					eventBus,
-					inheritedProviderRuntime,
 				);
 				for (const { path, error } of extensionsResult.errors) {
 					logger.error("Failed to load extension", { path, error });
@@ -3857,10 +3746,6 @@ async function createAgentSessionScoped(
 			// Forward the source-path list (NOT the loaded instances) so subagents
 			// rebuild their own session-scoped extensions.
 			toolSession.extensionPaths = extensionPaths;
-			if (inheritedProviderRuntime && extensionsResult.errors.length)
-				throw new Error(
-					`Inherited extension binding failed: ${extensionsResult.errors.map(error => `${error.path}: ${error.error}`).join("\n")}`,
-				);
 			toolSession.effectiveExtensionRoots = buildSessionExtensionRoots;
 
 			// Inline source ids must remain stable when caller factories are rebound in
@@ -3932,29 +3817,16 @@ async function createAgentSessionScoped(
 			// Process provider registrations queued during extension loading.
 			// This must happen before the runner is created so that models registered by
 			// extensions are available for model selection on session resume / fallback.
-			if (!restrictToolNames && !inheritedProviderRuntime) {
+			if (!restrictToolNames) {
 				const activeExtensionSources = extensionsResult.extensions.map(extension => extension.path);
 				modelRegistry.syncExtensionSources(activeExtensionSources);
 				modelRegistry.clearSourceRegistrations(new Set(activeExtensionSources));
 			}
 			if (extensionsResult.runtime.pendingProviderRegistrations.length > 0) {
-				if (inheritedProviderRuntime)
-					throw new Error("Inherited helper cannot take ownership of queued provider registrations.");
-				const acceptedDeclarations = new Map<string, Map<string, unknown>>();
 				for (const { name, config, sourceId } of extensionsResult.runtime.pendingProviderRegistrations) {
 					modelRegistry.registerProvider(name, config, sourceId);
-					let providers = acceptedDeclarations.get(sourceId);
-					if (!providers) acceptedDeclarations.set(sourceId, (providers = new Map()));
-					providers.set(name, config);
 				}
 				extensionsResult.runtime.pendingProviderRegistrations = [];
-				extensionsResult.preparedExtensions = extensionsResult.preparedExtensions?.map(prepared => {
-					const providers = acceptedDeclarations.get(prepared.path);
-					if (!providers) return prepared;
-					const forwarded = { ...prepared };
-					preparedProviderDeclarations.set(forwarded, { registry: modelRegistry, providers });
-					return forwarded;
-				});
 			}
 			toolSession.preparedExtensions = extensionsResult.preparedExtensions;
 			// Every extension source this session forwards, suspended ones included: the
@@ -4745,21 +4617,6 @@ async function createAgentSessionScoped(
 				spotlightShape,
 			});
 			const toolContextStore = new ToolContextStore(getSessionContext, trackUserWait);
-			let interactionUI: ExtensionUIContext | undefined;
-			let interactionHost: { cancel(): void } | undefined;
-			if (options.createInteractionUI && options.interactionParentSessionId && options.agentId) {
-				const host = options.createInteractionUI({
-					agentId: options.agentId,
-					agentName: options.agentName ?? options.agentDisplayName ?? options.agentId,
-					sessionId: sessionManager.getSessionId(),
-					parentSessionId: options.interactionParentSessionId,
-					parentToolCallId: options.interactionParentToolCallId,
-				});
-				disposeCallbacks.add(() => host.dispose());
-				interactionHost = host;
-				interactionUI = host.ui;
-				toolContextStore.setUIContext(host.ui, true);
-			}
 			toolSession.getToolContext = () => toolContextStore.getContext();
 			const setSessionActiveToolNames = (names: Iterable<string>): void => {
 				const snapshot = Array.from(names);
@@ -4825,11 +4682,7 @@ async function createAgentSessionScoped(
 			for (const [name, tool] of toolRegistry) {
 				nativeToolsByName.set(name, tool);
 			}
-			if (
-				(!restrictToolNames || restrictedGoalGranted) &&
-				!toolRegistry.has("goal") &&
-				cfgGoalEnabled.get(settings)
-			) {
+			if (!restrictToolNames && !toolRegistry.has("goal") && cfgGoalEnabled.get(settings)) {
 				const goalTool = await logger.time("createTools:goal:session", HIDDEN_TOOLS.goal, toolSession);
 				if (goalTool) {
 					const wrapped = wrapToolWithMetaNotice(goalTool);
@@ -4965,11 +4818,8 @@ async function createAgentSessionScoped(
 			// lazily on demand, mirroring `ensureWriteRegistered`.
 			let goalRegistration: Promise<boolean> | undefined;
 			const ensureGoalRegistered = (): Promise<boolean> => {
-				if (restrictToolNames && (!restrictedGoalGranted || !cfgGoalEnabled.get(settings))) {
-					return Promise.resolve(false);
-				}
 				if (toolRegistry.has("goal")) return Promise.resolve(true);
-				if (!cfgGoalEnabled.get(settings)) return Promise.resolve(false);
+				if (restrictToolNames || !cfgGoalEnabled.get(settings)) return Promise.resolve(false);
 				goalRegistration ??= (async () => {
 					const goalTool = await logger.time("createTools:goal:session", HIDDEN_TOOLS.goal, toolSession);
 					if (!goalTool || toolRegistry.has("goal")) return toolRegistry.has("goal");
@@ -5804,12 +5654,7 @@ async function createAgentSessionScoped(
 				await options.onResponse?.(response, model, signal);
 			};
 
-			const setToolUIContext = (
-				uiContext: ExtensionUIContext,
-				hasUI: boolean,
-				createInteractionUI?: ToolSession["createInteractionUI"],
-			) => {
-				toolSession.createInteractionUI = createInteractionUI;
+			const setToolUIContext = (uiContext: ExtensionUIContext, hasUI: boolean) => {
 				toolContextStore.setUIContext(uiContext, hasUI);
 			};
 
@@ -5881,11 +5726,10 @@ async function createAgentSessionScoped(
 			// Outbound credential-pattern redaction follows THIS session's `secrets.enabled` per
 			// request, not the process-wide switch (the newest effect holder's): concurrent ACP/SDK
 			// sessions in one process each keep their own policy.
-			const dispatchExecutionRequest: ExecutionStreamDispatch = async (
-				streamModel,
-				context,
-				streamOptions,
-				resolveAuth,
+			const dispatchHookedRequest = async (
+				streamModel: Model,
+				context: Context,
+				streamOptions?: SimpleStreamOptions,
 			) => {
 				const requestSignal = options.onModelResponse
 					? streamOptions?.signal
@@ -5907,30 +5751,16 @@ async function createAgentSessionScoped(
 								observeResponse(response, model ?? streamModel, requestSignal)
 						: undefined,
 				};
-				const execution = currentExecutionModel();
-				const resolver = resolveAuth ?? execution?.resolveRequestAuth ?? options.resolveRequestAuth;
-				let auth = await resolver?.(streamModel, requestSignal, {
+				const auth = await options.resolveRequestAuth?.(streamModel, requestSignal, {
 					thinkingLevel: (session ? session.thinkingLevel : effectiveThinkingLevel) ?? "off",
 				});
-				if (execution && auth === undefined) {
-					// Resolve for the effective model, never reuse the loop's seeded key resolver.
-					const apiKey = await resolveApiKeyOnce(await effectiveGetApiKey(streamModel));
-					if (!apiKey && apiKey !== kNoAuth) {
-						throw new Error(`No API key for ${streamModel.provider}/${streamModel.id}`);
-					}
-					auth = { apiKey };
-				}
-				if (execution && !auth?.apiKey && !Object.keys(auth?.headers ?? {}).length && auth?.apiKey !== kNoAuth) {
-					throw new Error(`No API key for ${streamModel.provider}/${streamModel.id}`);
-				}
 				const effectiveOptions =
 					auth !== undefined
 						? {
 								...requestOptions,
 								apiKey: auth.apiKey,
-								...(execution ? { credentialId: undefined, oauthIdentity: undefined } : {}),
 								requestAuth: auth,
-								headers: execution ? auth.headers : mergeHeaders(requestOptions.headers, auth.headers),
+								headers: mergeHeaders(requestOptions.headers, auth.headers),
 							}
 						: requestOptions;
 				const stream = await withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
@@ -5948,13 +5778,8 @@ async function createAgentSessionScoped(
 				}
 				return stream;
 			};
+			// Side streams, cache warming and capture must not overwrite primary request attribution.
 			let mainRequestProvider: string | undefined;
-			// Recovery can issue another provider request without reentering the main loop.
-			// Side streams, cache warming and capture must not overwrite this marker.
-			const dispatchMainExecutionRequest: ExecutionStreamDispatch = (model, context, options, resolveAuth) => {
-				mainRequestProvider = model.provider;
-				return dispatchExecutionRequest(model, context, options, resolveAuth);
-			};
 			const settingsAwareStreamFn = (
 				streamModel: Model,
 				context: Context,
@@ -5969,34 +5794,10 @@ async function createAgentSessionScoped(
 				if (options.toolRestrictions) {
 					if (context.tools) context = { ...context, tools: options.toolRestrictions.filter(context.tools) };
 				}
-				const execution = currentExecutionModel();
-				const dispatch = mainRequest ? dispatchMainExecutionRequest : dispatchExecutionRequest;
-				const recover = execution?.recoverModelRequest;
-				if (recover && !options.disableModelFallback) {
-					let refused = false;
-					return streamWithExecutionRecovery(
-						(requestModel, requestContext, requestOptions, resolveAuth) => {
-							try {
-								// Recovery can switch the parent session, not the child that owns this dispatcher.
-								assertOfflineDispatchModel(requestModel);
-								options.assertDispatchModel?.(requestModel);
-							} catch (error) {
-								// An admission refusal is terminal, not another provider failure to recover.
-								refused = true;
-								throw error;
-							}
-							return dispatch(requestModel, requestContext, requestOptions, resolveAuth);
-						},
-						streamModel,
-						context,
-						streamOptions,
-						async request => (refused ? undefined : recover(request)),
-					);
-				}
-				if (execution || options.resolveRequestAuth || options.onModelResponse) {
-					return dispatch(streamModel, context, streamOptions);
-				}
 				if (mainRequest) mainRequestProvider = streamModel.provider;
+				if (options.resolveRequestAuth || options.onModelResponse) {
+					return dispatchHookedRequest(streamModel, context, streamOptions);
+				}
 				return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
 					settingsBoundStreamFn(streamModel, context, {
 						...streamOptions,
@@ -6270,16 +6071,6 @@ async function createAgentSessionScoped(
 			// session adopts every model with the window its own settings select (a
 			// subagent with a compaction override must not inherit the parent's).
 			agent.setModelResolver(next => modelRegistry.fitContextWindow(next, settings));
-			disposeCallbacks.add(
-				agent.addBeforeQueuedMessageDequeueHook(async signal => {
-					if (!currentExecutionModel()) return;
-					signal?.throwIfAborted();
-					const hasNewInput = [...agent.peekSteeringQueue(), ...agent.peekFollowUpQueue()].some(
-						message => typeof (message as AgentMessage & { inputId?: string }).inputId === "string",
-					);
-					if (hasNewInput) await releaseCurrentExecutionModel(agent);
-				}),
-			);
 
 			cursorEventEmitter = event => agent.emitExternalEvent(event);
 
@@ -6565,8 +6356,7 @@ async function createAgentSessionScoped(
 				runInputToolPolicy: <T>(denylist: readonly string[], run: () => T): T =>
 					options.toolRestrictions ? options.toolRestrictions.runInput(denylist, run) : run(),
 				validateRequestAuth: async (requestModel, signal) => {
-					const resolver = currentExecutionModel()?.resolveRequestAuth ?? options.resolveRequestAuth;
-					const auth = await resolver?.(requestModel, signal, {
+					const auth = await options.resolveRequestAuth?.(requestModel, signal, {
 						thinkingLevel: (session ? session.thinkingLevel : effectiveThinkingLevel) ?? "off",
 					});
 					return Boolean(auth?.apiKey || (auth?.headers && Object.keys(auth.headers).length > 0));
@@ -6575,7 +6365,6 @@ async function createAgentSessionScoped(
 				interactivePrompts: options.interactivePrompts,
 				rebindModelAfterDiscovery: options.model === undefined || options.rebindModelAfterDiscovery === true,
 				toolRegistry,
-				editMode: options.editMode,
 				reconcileBrowserMcpFilter: mcpManager
 					? async enabled => {
 							await mcpManager.reconcileBrowserFilter(enabled);
@@ -6666,14 +6455,6 @@ async function createAgentSessionScoped(
 			if (strictStartupResources) {
 				strictStartupSession = session;
 				for (const resource of strictSessionResources!) strictStartupResources.delete(resource);
-			}
-			if (interactionHost) {
-				const host = interactionHost;
-				disposeCallbacks.add(
-					session.subscribe(event => {
-						if (event.type === "session_abort") host.cancel();
-					}),
-				);
 			}
 			// The session now owns its cost gate; the interactive TUI starts compression after its first frame.
 			if (options.deferHintCompression !== true) session.startHintCompression();
@@ -7140,7 +6921,6 @@ async function createAgentSessionScoped(
 				mcpTools: nativeChildMcpTools,
 				mcpManager: ownedMcpManager ?? (mcpManager instanceof MCPManager ? mcpManager : undefined),
 				mcpToolScope: options.mcpToolScope,
-				extensionProviderOwnership: options.extensionProviderOwnership,
 			};
 
 			// Attach the live session to the pre-registered ref so peers can route IRC
@@ -7544,10 +7324,7 @@ async function createAgentSessionScoped(
 					new AutoLearnController({
 						session,
 						settings,
-						capture: content =>
-							currentExecutionModel()?.policies?.memoryExtraction === "skip"
-								? Promise.resolve()
-								: session.runAutolearnCapture(signal => runAutoLearnCapture(content, signal)),
+						capture: content => session.runAutolearnCapture(signal => runAutoLearnCapture(content, signal)),
 					});
 				}
 			}
@@ -7678,8 +7455,6 @@ async function createAgentSessionScoped(
 					}
 					if (session.isDisposed) return;
 					// Providers queue until the runner is initialized; drain them as session creation does.
-					if (runtime.inheritedProviderOwnership && runtime.pendingProviderRegistrations.length)
-						throw new Error("Inherited helper cannot register deferred providers.");
 					for (const { name, config, sourceId } of runtime.pendingProviderRegistrations.splice(0)) {
 						modelRegistry.registerProvider(name, config, sourceId);
 					}
@@ -7700,8 +7475,6 @@ async function createAgentSessionScoped(
 				session,
 				extensionsResult,
 				setToolUIContext,
-				getToolContext: () => toolContextStore.getContext(),
-				interactionUI,
 				mcpManager: ownedMcpManager ?? (mcpManager instanceof MCPManager ? mcpManager : undefined),
 				modelFallbackMessage,
 				lspServers,

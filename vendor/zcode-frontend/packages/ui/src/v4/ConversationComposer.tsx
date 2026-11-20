@@ -16,7 +16,7 @@ import { formatConversationWorkDuration } from "@/v4/conversationWorkDuration.js
  * 芯：全新 v4 wiring——
  * - 路由/状态一律读 v4 投影 snapshot.inputRouting / control / config；
  * - 发送键状态机对齐旧 UI：canSend（有文本或附件+路由允许）/ pending spinner /
- *   running+空草稿 → Stop（v4 stop 命令）/ 暂停队列（choice）→ 发送后弹清空/保留确认框；
+ *   running+空草稿 → Stop（v4 stop 命令）；
  * - 附件全链路见 useComposerAttachments（发送经 v4 sendText attachments）；
  * - mention（@ 文件/画板、# 会话、$ 技能）与 slash 目录全集在 LexicalChatInput 内接线；
  * - 草稿 per-session 持久化（composerDraftStore）+ prompt history（promptHistoryStorage）；
@@ -42,11 +42,8 @@ import {
   TID_CHAT_ATTACHMENT_BUTTON,
   TID_CHAT_ATTACHMENT_MENU_ITEM,
   TID_V4_COMPOSER,
-  TID_V4_COMPOSER_CLEAR_QUEUE_SEND,
   TID_V4_COMPOSER_INPUT,
-  TID_V4_COMPOSER_KEEP_QUEUE_SEND,
   TID_V4_COMPOSER_SEND,
-  TID_V4_PAUSED_QUEUE_SEND_DIALOG,
   TID_V4_ATTACHMENT,
   TID_V4_ATTACHMENT_UPLOAD_PROGRESS,
   TID_V4_ATTACHMENT_UPLOAD_RETRY,
@@ -75,15 +72,6 @@ import {
   AttachmentPreview,
 } from "@/components/ai-elements/attachments.js";
 import { Button } from "@/components/ui/button.js";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog.js";
 import { Spinner } from "@/components/ui/spinner.js";
 import { ImagePreviewDialog } from "@/components/ai-elements/image-preview-dialog.js";
 import {
@@ -197,9 +185,6 @@ export interface ConversationComposerSendOptions {
   submittedDraftText?: string;
   /** 点击发送时复制的配置；null 表示未完成选择，Host 不得从 Session 补齐。 */
   submission?: ComposerSubmissionConfig | null;
-  heldQueueDisposition?: "clearQueueAndSend" | "keepQueueAndSend";
-  /** 发送确认框打开时看到的暂停队列 ID；CLI 用它拦截跨端增删竞态。 */
-  expectedHeldQueueItemIds?: readonly string[];
   /** 附件命令面：已序列化附件（宿主转 AttachmentRef 后随 v4 sendText/createSession 发送）。 */
   attachments?: AttachmentRef[];
   /** Prompt 文本内携带的上下文附件数量；用于阻止 /goal 等本地命令误消费。 */
@@ -215,7 +200,7 @@ export interface ConversationComposerSendOptions {
   source?: import("@zcode/shared/zcode-protocol-v4").ConversationInputSource;
 }
 
-export type ConversationComposerSendResult = "sent" | "blocked" | "confirmationRequired";
+export type ConversationComposerSendResult = "sent" | "blocked";
 function getComposerAttachmentTypeLabel(filename: string, mimeType: string): string {
   const leaf = filename.split(/[\\/]/u).at(-1) ?? filename;
   const dotIndex = leaf.lastIndexOf(".");
@@ -651,11 +636,6 @@ function ConversationComposerImpl({
     },
     [configPickerScopeKey],
   );
-  const [heldQueueConfirmation, setHeldQueueConfirmation] = useState<{
-    queueItemIds: readonly string[];
-    localTtft?: LocalTtftContext;
-    requestedDelivery?: "startNow" | "queue" | "guide";
-  } | null>(null);
   const [sendTooltipOpen, setSendTooltipOpen] = useState(false);
   // submit 经 ref 读取最新文本/pending，避免回调随每次输入变更引用。
   const textRef = useRef("");
@@ -1311,7 +1291,6 @@ function ConversationComposerImpl({
       busy: pending,
     });
   }, [hasComposerDraftContent, onDraftStateChange, pending]);
-  // choice 保留正常发送按钮；提交后由 SessionPane 按 slash 语义决定是否弹确认框。
   // V4 重构时把 guide 当成“不可提交”状态，导致按钮和 Enter 同时失效；
   // guide 是 CLI 已授权的 busy 输入路由，是否最终 steer 或回退 queue 由命令层裁决。
   const routingAllowsSend = draftMode || (snapshot !== null && mode !== "reject");
@@ -1342,18 +1321,11 @@ function ConversationComposerImpl({
   }, [canSend]);
 
   const submit = useCallback(
-    async (
-      heldQueueDisposition?: "clearQueueAndSend" | "keepQueueAndSend",
-      expectedHeldQueueItemIds?: readonly string[],
-      existingLocalTtft?: LocalTtftContext,
-      requestedDelivery?: "startNow" | "queue" | "guide",
-    ) => {
+    async (requestedDelivery?: "startNow" | "queue" | "guide") => {
       const submittedAt = performance.timeOrigin + performance.now();
       // IME 候选期间 textRef 尚未接收最终 onChange；提交必须与 claim/恢复共用 Lexical 快照。
       const submittedDraft = snapshotDraftOfEditor();
       const trimmed = submittedDraft.text.trim();
-      const submittedQueueItemIds =
-        snapshotRef.current?.queue.items.map((item) => item.queueItemId) ?? [];
       const hasPendingAttachments = attachmentsApi.attachments.length > 0;
       const currentCodeCommentContexts = getCodeCommentContexts();
       const hasPendingCodeCommentContexts = currentCodeCommentContexts.length > 0;
@@ -1425,16 +1397,14 @@ function ConversationComposerImpl({
         text: submittedDraft.text, revision: contentRevisionRef.current, attachmentIds: new Set(submittedAttachmentIds),
       };
       setPending(true);
-      const localTtft = existingLocalTtft ??
-        (!workspaceIdentity?.trim()
-          ? getLocalTtftObserver()?.start(
-              workspacePath,
-              snapshotRef.current !== null && snapshotRef.current.inputRouting.mode !== "startNow",
-              trimmed.startsWith("/"),
-              submittedAt,
-            )
-          : undefined);
-      if (existingLocalTtft) getLocalTtftObserver()?.confirmation(existingLocalTtft, false);
+      const localTtft = !workspaceIdentity?.trim()
+        ? getLocalTtftObserver()?.start(
+            workspacePath,
+            snapshotRef.current !== null && snapshotRef.current.inputRouting.mode !== "startNow",
+            trimmed.startsWith("/"),
+            submittedAt,
+          )
+        : undefined;
       let promptHistoryBeforeSend: readonly string[] | null = null;
       let promptHistoryAfterAppend: readonly string[] | null = null;
       let promptHistoryWasPersisted = false;
@@ -1617,8 +1587,6 @@ function ConversationComposerImpl({
           localTtft,
           onCommandCreated: subscribeToCommandResolution,
           ...(requestedDelivery ? { requestedDelivery } : {}),
-          ...(heldQueueDisposition ? { heldQueueDisposition } : {}),
-          ...(expectedHeldQueueItemIds ? { expectedHeldQueueItemIds } : {}),
           ...(readyAttachmentRefs.length > 0 ? { attachments: readyAttachmentRefs } : {}),
           ...(contextAttachmentCount > 0 ? { contextAttachmentCount } : {}),
         });
@@ -1630,22 +1598,6 @@ function ConversationComposerImpl({
           restoreSubmittedDraft();
           return;
         }
-        if (sendResult === "confirmationRequired") {
-          if (localTtft) getLocalTtftObserver()?.confirmation(localTtft, true);
-          rollbackPromptHistory();
-          restoreSubmittedDraft();
-          const latestQueueItemIds =
-            snapshotRef.current?.queue.items.map((item) => item.queueItemId) ?? [];
-          // 首次提交冻结当前队列；跨端 stale 后用最新投影替换，要求用户重新确认。
-          setHeldQueueConfirmation({
-            localTtft,
-            ...(requestedDelivery ? { requestedDelivery } : {}),
-            queueItemIds:
-              latestQueueItemIds.length > 0 ? latestQueueItemIds : submittedQueueItemIds,
-          });
-          return;
-        }
-        setHeldQueueConfirmation(null);
         // 发送成功或 ACK 丢失后由权威 projection 结算：清本次提交捕获的内容，
         // prompt history 已在真实发送前同步写盘，避免首发 promote 丢失或误清新 scope。
         await settleSubmittedContent();
@@ -1721,9 +1673,6 @@ function ConversationComposerImpl({
       reversePointerDeliveryRef.current = false;
       const followupMode = snapshotRef.current?.config.followupMode;
       void submit(
-        undefined,
-        undefined,
-        undefined,
         reverseDelivery && followupMode ? resolveOppositeFollowupDelivery(followupMode) : undefined,
       );
       return false;
@@ -1738,35 +1687,12 @@ function ConversationComposerImpl({
       // inputRouting 在 turn 启动初期可能仍为 startNow，不能用它
       // 推断空闲。组合键始终表达单次反向 delivery；空闲时 CLI 自然 startNow。
       void submit(
-        undefined,
-        undefined,
-        undefined,
         followupMode ? resolveOppositeFollowupDelivery(followupMode) : undefined,
       );
       return false;
     },
     [submit],
   );
-
-  const handleClearQueueSend = useCallback(() => {
-    if (!heldQueueConfirmation) return;
-    void submit(
-      "clearQueueAndSend",
-      heldQueueConfirmation.queueItemIds,
-      heldQueueConfirmation.localTtft,
-      heldQueueConfirmation.requestedDelivery,
-    );
-  }, [heldQueueConfirmation, submit]);
-
-  const handleKeepQueueSend = useCallback(() => {
-    if (!heldQueueConfirmation) return;
-    void submit(
-      "keepQueueAndSend",
-      heldQueueConfirmation.queueItemIds,
-      heldQueueConfirmation.localTtft,
-      heldQueueConfirmation.requestedDelivery,
-    );
-  }, [heldQueueConfirmation, submit]);
 
   const handleStopClick = useCallback(() => {
     onStop();
@@ -2288,7 +2214,7 @@ function ConversationComposerImpl({
                 size="sm"
                 disabled={!canSend}
                 data-testid={`v4-composer-delivery-${delivery}`}
-                onClick={() => void submit(undefined, undefined, undefined, delivery)}
+                onClick={() => void submit(delivery)}
               >
                 {intl.formatMessage({ id: label })}
               </Button>
@@ -2610,75 +2536,6 @@ function ConversationComposerImpl({
           if (!open) setPdfAttachmentPreview(null);
         }}
       />
-      <Dialog
-        open={heldQueueConfirmation !== null}
-        onOpenChange={(open) => {
-          if (!open && !pendingRef.current) {
-            if (heldQueueConfirmation?.localTtft)
-              getLocalTtftObserver()?.exclude(
-                heldQueueConfirmation.localTtft,
-                "cancelled",
-              );
-            setHeldQueueConfirmation(null);
-          }
-        }}
-      >
-        <DialogContent
-          data-testid={TID_V4_PAUSED_QUEUE_SEND_DIALOG}
-          showCloseButton={false}
-          className="max-w-xl gap-6 p-6 sm:p-8"
-        >
-          <DialogClose asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-md"
-              disabled={pending}
-              aria-label={intl.formatMessage({ id: "common.close" })}
-              className="absolute top-4 right-4"
-            >
-              <XIcon className="size-5" />
-            </Button>
-          </DialogClose>
-          <DialogHeader className="gap-3 pr-8">
-            <DialogTitle className="text-xl font-semibold sm:text-2xl">
-              {intl.formatMessage({ id: "chat.queue.sendConfirm.title" })}
-            </DialogTitle>
-            <DialogDescription className="text-ui-base sm:text-ui-lg">
-              {intl.formatMessage(
-                { id: "chat.queue.sendConfirm.description" },
-                {
-                  count: String(heldQueueConfirmation?.queueItemIds.length ?? 0),
-                },
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="gap-3 sm:gap-3">
-            <Button
-              type="button"
-              variant="destructive"
-              size="lg"
-              data-testid={TID_V4_COMPOSER_CLEAR_QUEUE_SEND}
-              disabled={pending}
-              className="min-w-32 rounded-full"
-              onClick={handleClearQueueSend}
-            >
-              {intl.formatMessage({ id: "chat.queue.sendConfirm.clear" })}
-            </Button>
-            <Button
-              type="button"
-              size="lg"
-              data-testid={TID_V4_COMPOSER_KEEP_QUEUE_SEND}
-              disabled={pending}
-              className="min-w-32 rounded-full"
-              onClick={handleKeepQueueSend}
-            >
-              {pending ? <Spinner className="size-4" /> : null}
-              {intl.formatMessage({ id: "chat.queue.sendConfirm.keep" })}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

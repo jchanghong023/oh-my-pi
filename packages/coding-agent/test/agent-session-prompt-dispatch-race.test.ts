@@ -96,7 +96,6 @@ describe("AgentSession concurrent prompt dispatch", () => {
 				sourceCommand,
 				inputClientId: "client",
 				toolDenylist: ["bash"],
-				attachments: [{ ref: "attachment:one", fileName: "one.txt", mime: "text/plain", bytes: 1 }],
 				queueOnly: true,
 				streamingBehavior: "followUp" as const,
 				followUps: ["second input", "third input"],
@@ -117,7 +116,6 @@ describe("AgentSession concurrent prompt dispatch", () => {
 				sourceCommand,
 				inputClientId: options.inputClientId,
 				toolDenylist: options.toolDenylist,
-				attachments: options.attachments,
 			});
 			expect(new Set(inputs.map(input => ("inputId" in input ? input.inputId : undefined))).size).toBe(3);
 			expect(session.messages.some(message => message.role === "assistant")).toBe(false);

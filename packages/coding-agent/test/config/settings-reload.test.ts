@@ -260,7 +260,8 @@ describe("Settings layer refresh", () => {
 		settings.setModelRoleDefaults({ smol: "company/Qwen3.6-35B-A3B" });
 		expect(settings.getModelRole("smol")).toBeUndefined();
 
-		await settings.saveUserModelRole("smol", undefined, undefined);
+		settings.setModelRole("smol", undefined);
+		await settings.flush();
 
 		expect(settings.getModelRole("smol")).toBe("company/Qwen3.6-35B-A3B");
 		expect(settings.getModelRoleProvenance("smol")).toBe("default");

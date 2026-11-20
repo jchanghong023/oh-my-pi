@@ -21,8 +21,6 @@ import type {
 	CollabUiResponseValue,
 	AgentEvent as WireAgentEvent,
 	SessionEntry as WireSessionEntry,
-	GuestFrame,
-	HostFrame,
 } from "@oh-my-pi/pi-wire";
 import type { InteractiveModeContext } from "../modes/types";
 import type { Settings } from "../config/settings";
@@ -95,8 +93,6 @@ export interface CollabHostPort {
 	getContextUsage(): { tokens: number; contextWindow: number };
 	showStatus(message: string, options?: { dim?: boolean }): void;
 	onCollabStatus?(status: { role: "host"; participantCount: number } | null): void;
-	/** Optional roster from the owning room when this host only projects a local view. */
-	getParticipants?(): CollabParticipant[] | undefined;
 	onPendingMessagesChanged?(): void;
 }
 
@@ -394,8 +390,6 @@ export class CollabHost {
 	#stopped = false;
 	/** Bumped on every `message_start`; keys a streaming message's superseding updates. */
 	#messageSeq = 0;
-	#localPeers = new Map<number, (frame: HostFrame) => void>();
-	#localPeerSeq = 0;
 
 	constructor(ctx: InteractiveModeContext | CollabNativeContext, options: CollabHostOptions = {}) {
 		this.scopedAgents = "nativePort" in ctx;
@@ -481,17 +475,10 @@ export class CollabHost {
 
 	get participants(): CollabParticipant[] {
 		const list: CollabParticipant[] = [{ name: collabDisplayName(this.#ctx), role: "host" }];
-		for (const [peerId, peer] of this.#peers) {
-			// Trusted local workbench connections mirror the host, not another person.
-			if (this.#localPeers.has(peerId)) continue;
+		for (const peer of this.#peers.values()) {
 			list.push({ name: peer.name, role: "guest", readOnly: peer.canWrite ? undefined : true });
 		}
 		return list;
-	}
-
-	/** Re-read the owning room's roster without changing connections or permissions. */
-	refreshParticipants(): void {
-		this.#scheduleStateBroadcast();
 	}
 
 	/**
@@ -549,46 +536,6 @@ export class CollabHost {
 		return promise;
 	}
 
-	/** Same native projection/dispatch for an already trusted local workbench. */
-	connectLocal(onFrame: (frame: HostFrame) => void): {
-		sendFrame(frame: GuestFrame): Promise<{ accepted: boolean; reason?: string }>;
-		close(): void;
-	} {
-		if (!this.#guestTrafficAllowed()) throw new Error("Shared session unavailable");
-		const peerId = --this.#localPeerSeq;
-		this.#localPeers.set(peerId, onFrame);
-		this.#subscribeNative();
-		this.#handleHello(collabDisplayName(this.#ctx), COLLAB_PROTO, undefined, peerId);
-		return {
-			sendFrame: async frame => {
-				if (!this.#localPeers.has(peerId) || !this.#guestTrafficAllowed())
-					return { accepted: false, reason: "Shared session ended" };
-				if (frame.t === "hello") return { accepted: false, reason: "Already joined" };
-				if (frame.t !== "fetch-transcript" && frame.t !== "ui-response" && !this.#guestActionsReady())
-					return { accepted: false, reason: "Session is not ready" };
-				if (frame.t === "ui-response" && !this.#pendingUi.has(frame.reqId))
-					return { accepted: false, reason: "UI request already ended" };
-				if (frame.t === "prompt") {
-					const accepted = await this.#handlePrompt(frame.text, frame.images, peerId);
-					return accepted ? { accepted: true } : { accepted: false, reason: "Prompt was not admitted" };
-				}
-				if (frame.t === "agent-cmd") {
-					if (!this.#ownedAgent(frame.agentId))
-						return { accepted: false, reason: "Agent is outside the shared session" };
-					const accepted = await this.#handleAgentCmd(frame.cmd, frame.agentId, frame.text, peerId);
-					return accepted ? { accepted: true } : { accepted: false, reason: "Agent command was not admitted" };
-				}
-				this.#handleFrame(frame, peerId);
-				return { accepted: true };
-			},
-			close: () => {
-				this.#localPeers.delete(peerId);
-				this.#peers.delete(peerId);
-				this.#dropAskRecipient(peerId);
-			},
-		};
-	}
-
 	#hasWritablePeers(): boolean {
 		for (const peer of this.#peers.values()) {
 			if (peer.canWrite) return true;
@@ -599,14 +546,11 @@ export class CollabHost {
 	/** @returns the writable peers outside {@link skip} the frame was admitted for. */
 	#sendWritablePeers(frame: CollabFrame, skip?: ReadonlySet<number>): number[] {
 		const socket = this.#socket;
-		if (this.#sendSuppressed(frame)) return [];
+		if (!socket || this.#sendSuppressed(frame)) return [];
 		const admitted: number[] = [];
 		for (const [peerId, peer] of this.#peers) {
 			if (!peer.canWrite || skip?.has(peerId)) continue;
-			if (this.#localPeers.has(peerId)) {
-				this.#deliverLocal(JSON.stringify(frame), peerId);
-				admitted.push(peerId);
-			} else if (socket?.send(frame, peerId)) admitted.push(peerId);
+			if (socket.send(frame, peerId)) admitted.push(peerId);
 		}
 		return admitted;
 	}
@@ -647,7 +591,7 @@ export class CollabHost {
 	#subscribeNative(): void {
 		if (this.#unsubscribe) return;
 		this.#unsubscribe = this.#ctx.session.subscribe(event => {
-			// Keep the established per-loop wire shape for native and relay guests.
+			// Keep the established per-loop wire shape for relay guests.
 			const wireEvent = toWireEvent(event);
 			if (isWireAgentEvent(wireEvent)) this.#broadcastEvent(wireEvent);
 			this.#onEventForState(event);
@@ -668,7 +612,6 @@ export class CollabHost {
 						const key = channel === TASK_SUBAGENT_PROGRESS_CHANNEL ? progressKey(data) : undefined;
 						if (key) {
 							this.#socket?.sendLatest(key, frame);
-							if (this.#localPeers.size > 0) this.#deliverLocal(JSON.stringify(frame));
 						} else {
 							this.#send(frame);
 						}
@@ -688,7 +631,7 @@ export class CollabHost {
 					// (PR #11999 review). Notices never enter agent state.
 					this.#send({ t: "event", event: oversizedEntryNotice(entry.type) });
 				}
-				this.#sendEncoded(encodeEntryFrame(bounded.json));
+				this.#socket?.send(encodeEntryFrame(bounded.json));
 			}
 			// Model/thinking/title changes land as entries while idle; refresh
 			// guest state promptly (debounce + JSON diff dedupe).
@@ -850,7 +793,6 @@ export class CollabHost {
 
 	async #runStop(reason: string): Promise<void> {
 		this.#stopping = true;
-		for (const listener of this.#localPeers.values()) listener({ t: "bye", reason });
 		// Leave the public slot at once: `/collab` must not re-print, and `/join`
 		// must not see as hosting, a room that already refuses frames.
 		if (this.#ctx.collabHost === this) this.#ctx.collabHost = undefined;
@@ -908,7 +850,6 @@ export class CollabHost {
 		for (const pending of this.#pendingUi.values()) pending.settle({ kind: "unavailable" });
 		this.#pendingUi.clear();
 		this.#peers.clear();
-		this.#localPeers.clear();
 		this.#socket?.close();
 		this.#socket = null;
 		this.#ctx.onCollabStatus?.(null);
@@ -994,22 +935,7 @@ export class CollabHost {
 		// current-session data. Do not strand guests if it settles during a
 		// provisional /resume that later rolls back. All other traffic stays gated.
 		if (this.#sendSuppressed(frame)) return;
-		if (toPeer >= 0) this.#socket?.send(frame, toPeer);
-		if (this.#localPeers.size > 0) this.#deliverLocal(JSON.stringify(frame), toPeer);
-	}
-
-	#deliverLocal(json: string, toPeer = 0): void {
-		if (this.#localPeers.size === 0) return;
-		const frame = JSON.parse(json) as HostFrame;
-		if (toPeer === 0) {
-			for (const listener of this.#localPeers.values()) listener(frame);
-		} else this.#localPeers.get(toPeer)?.(frame);
-	}
-
-	#sendEncoded(frame: EncodedFrame, toPeer = 0): void {
-		if (!this.#guestTrafficAllowed()) return;
-		if (toPeer >= 0) this.#socket?.send(frame, toPeer);
-		this.#deliverLocal(frame, toPeer);
+		this.#socket?.send(frame, toPeer);
 	}
 
 	#sendSuppressed(frame: CollabFrame): boolean {
@@ -1022,10 +948,8 @@ export class CollabHost {
 	 * @returns whether the queue admitted the frame.
 	 */
 	#broadcast(frame: CollabFrame, advisory = false): boolean {
-		if (this.#stopped || this.#sendSuppressed(frame)) return false;
-		if (this.#localPeers.size > 0) this.#deliverLocal(JSON.stringify(frame));
-		const admitted = advisory ? this.#socket?.broadcastAdvisory(frame) : this.#socket?.send(frame);
-		return admitted ?? this.#localPeers.size > 0;
+		if (this.#stopped || !this.#socket || this.#sendSuppressed(frame)) return false;
+		return advisory ? this.#socket.broadcastAdvisory(frame) : this.#socket.send(frame);
 	}
 
 	/**
@@ -1051,7 +975,6 @@ export class CollabHost {
 		if (event.type === "notice") socket?.broadcastAdvisory(frame);
 		else if (event.type === "message_update") socket?.sendLatest(`message_update:${this.#messageSeq}`, frame);
 		else socket?.send(frame);
-		this.#deliverLocal(frame);
 	}
 
 	#handleFrame(frame: CollabFrame, fromPeer: number): void {
@@ -1059,7 +982,7 @@ export class CollabHost {
 		// a hello can land after its sender's `peer-left`. The socket settled the
 		// peer's lifetime at reception; re-read it here rather than acting on a
 		// sender that is already gone and registering a ghost participant.
-		if (!this.#localPeers.has(fromPeer) && !this.#socket?.isServing(fromPeer)) {
+		if (!this.#socket?.isServing(fromPeer)) {
 			logger.debug("collab host ignoring frame from a peer it no longer serves", { type: frame.t, fromPeer });
 			return;
 		}
@@ -1085,7 +1008,7 @@ export class CollabHost {
 				break;
 			case "prompt":
 				if (this.#rejectWhileStarting("prompting", fromPeer)) break;
-				this.#handlePrompt(frame.text, frame.images, fromPeer);
+				void this.#handlePrompt(frame.text, frame.images, fromPeer);
 				break;
 			case "abort":
 				if (this.#rejectWhileStarting("interrupting", fromPeer)) break;
@@ -1143,13 +1066,13 @@ export class CollabHost {
 			return;
 		}
 		const cleanName = name.trim().slice(0, 64) || `guest-${fromPeer}`;
-		const canWrite = this.#localPeers.has(fromPeer) || this.#verifyWriteToken(writeToken);
+		const canWrite = this.#verifyWriteToken(writeToken);
 		const firstPeer = this.#peers.size === 0;
 		const registered = this.#peers.get(fromPeer);
 		this.#peers.set(fromPeer, { name: cleanName, canWrite });
 
 		const socket = this.#socket;
-		if (!socket && !this.#localPeers.has(fromPeer)) return;
+		if (!socket) return;
 		// Serialize the snapshot synchronously: live traffic queued after this
 		// cannot overtake it, and host rewrites of an entry in place cannot leak
 		// into it later, so the live entries are read without a defensive deep
@@ -1174,11 +1097,7 @@ export class CollabHost {
 		let retainedBytes = Buffer.byteLength(welcome);
 		for (const bytes of snapshotEntries.bytes) retainedBytes += bytes;
 		for (const ask of asks) retainedBytes += Buffer.byteLength(ask);
-		const batch = this.#welcomeBatch(welcome, snapshotEntries, asks);
-		const local = this.#localPeers.has(fromPeer);
-		if (local) {
-			for (const frame of batch) this.#sendEncoded(frame, fromPeer);
-		} else if (!socket?.sendBatch(batch, fromPeer, retainedBytes)) {
+		if (!socket.sendBatch(this.#welcomeBatch(welcome, snapshotEntries, asks), fromPeer, retainedBytes)) {
 			// The guest applies nothing before a welcome, so record nothing for it either.
 			if (registered) this.#peers.set(fromPeer, registered);
 			else this.#peers.delete(fromPeer);
@@ -1379,11 +1298,11 @@ export class CollabHost {
 		}
 	}
 
-	async #handlePrompt(text: string, images: ImageContent[] | undefined, fromPeer: number): Promise<boolean> {
+	async #handlePrompt(text: string, images: ImageContent[] | undefined, fromPeer: number): Promise<void> {
 		const peer = this.#peers.get(fromPeer);
 		if (!peer?.canWrite) {
 			this.#rejectReadOnly("prompting", fromPeer);
-			return false;
+			return;
 		}
 		const name = peer.name;
 		const content: string | (TextContent | ImageContent)[] =
@@ -1406,15 +1325,10 @@ export class CollabHost {
 				},
 				{ streamingBehavior: "steer", queueChipText: text },
 			);
-			if (dispatched === false) {
-				await this.#notifyPromptDropped(fromPeer);
-				return false;
-			}
-			return true;
+			if (dispatched === false) await this.#notifyPromptDropped(fromPeer);
 		} catch (err) {
 			logger.warn("collab guest prompt failed", { error: String(err) });
 			this.#send({ t: "error", message: `prompt failed: ${String(err)}` }, fromPeer);
-			return false;
 		}
 	}
 
@@ -1467,19 +1381,15 @@ export class CollabHost {
 		if (this.#peers.size === 0 && this.#pendingUi.size === 0) return;
 		// Identities first: settle() fans `ui-request-end` out over #peers, and those
 		// ids belong to the room that just went away.
-		for (const peer of this.#peers.keys()) {
-			if (!this.#localPeers.has(peer)) this.#peers.delete(peer);
-		}
+		this.#peers.clear();
 		// A mirrored local dialog remains open through a transport reconnect. Keep
 		// its request for replay after a new hello verifies the writer again. Bare
 		// guest-only callers still settle rather than wait without a recipient.
 		// Explicit stop and session replacement continue to settle every request.
 		for (const pending of this.#pendingUi.values()) {
-			// Local workbench peers survive relay recreation and still hold their dialogs.
-			for (const peer of pending.recipients) {
-				if (!this.#localPeers.has(peer)) pending.recipients.delete(peer);
-			}
-			if (!pending.retainOnReconnect && pending.recipients.size === 0) pending.settle({ kind: "unavailable" });
+			// Old-room ids may be reissued; only a writer that says hello again holds it.
+			pending.recipients.clear();
+			if (!pending.retainOnReconnect) pending.settle({ kind: "unavailable" });
 		}
 		this.#updateStatusSegment();
 		this.#scheduleStateBroadcast();
@@ -1587,7 +1497,7 @@ export class CollabHost {
 				contextWindow: breakdown.contextWindow,
 				percent: breakdown.contextWindow > 0 ? (tokens / breakdown.contextWindow) * 100 : 0,
 			},
-			participants: this.#ctx.getParticipants?.() ?? this.participants,
+			participants: this.participants,
 		};
 	}
 
@@ -1659,19 +1569,19 @@ export class CollabHost {
 		agentId: string,
 		text: string | undefined,
 		fromPeer: number,
-	): Promise<boolean> {
+	): Promise<void> {
 		const peer = this.#peers.get(fromPeer);
 		if (!peer?.canWrite) {
 			this.#rejectReadOnly("agent control", fromPeer);
-			return false;
+			return;
 		}
 		if (AgentRegistry.global().get(agentId)?.kind === "advisor") {
 			this.#send({ t: "error", message: `agent ${agentId}: advisor transcripts are read-only` }, fromPeer);
-			return false;
+			return;
 		}
 		if (!this.#ownedAgent(agentId)) {
 			this.#send({ t: "error", message: `agent ${agentId}: outside the shared session` }, fromPeer);
-			return false;
+			return;
 		}
 		const allowed = () =>
 			this.#guestTrafficAllowed() &&
@@ -1688,43 +1598,28 @@ export class CollabHost {
 					const trimmed = text?.trim();
 					if (!trimmed) {
 						this.#send({ t: "error", message: `agent ${agentId}: empty chat message` }, fromPeer);
-						return false;
+						return;
 					}
-					// Revival is not input admission. Resolve at the native queue/dispatch
-					// boundary, not when dispatch starts or the eventual model turn settles.
 					const session = await AgentLifecycleManager.global().ensureLive(agentId);
-					if (!allowed()) return false;
-					return await new Promise<boolean>(resolve => {
-						void session
-							.prompt(trimmed, {
-								streamingBehavior: "steer",
-								onPromptAdmitted: () => resolve(true),
-							})
-							.then(
-								() => resolve(false),
-								err => {
-									fail(err);
-									resolve(false);
-								},
-							);
-					});
+					if (!allowed()) return;
+					await session.prompt(trimmed, { streamingBehavior: "steer" });
+					break;
 				}
 				case "kill": {
 					const ref = this.#ownedAgent(agentId);
-					if (!ref || !allowed()) return false;
+					if (!ref || !allowed()) return;
 					if (ref.status === "running" && ref.session) {
 						await ref.session.abort({ reason: USER_INTERRUPT_LABEL });
 					}
-					if (!allowed()) return false;
-					return await AgentLifecycleManager.global().release(agentId, ref, { tombstone: true });
+					if (!allowed()) return;
+					await AgentLifecycleManager.global().release(agentId, ref, { tombstone: true });
+					break;
 				}
 				case "revive":
 					await AgentLifecycleManager.global().ensureLive(agentId);
-					return allowed();
 			}
 		} catch (err) {
 			fail(err);
-			return false;
 		}
 	}
 
@@ -1786,10 +1681,6 @@ export class CollabHost {
 	}
 
 	#updateStatusSegment(): void {
-		let participantCount = 1;
-		for (const peerId of this.#peers.keys()) {
-			if (!this.#localPeers.has(peerId)) participantCount++;
-		}
-		this.#ctx.onCollabStatus?.({ role: "host", participantCount });
+		this.#ctx.onCollabStatus?.({ role: "host", participantCount: this.#peers.size + 1 });
 	}
 }

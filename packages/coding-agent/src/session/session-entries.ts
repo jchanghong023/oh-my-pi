@@ -232,8 +232,6 @@ export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	method?: CompactionMethod;
 	/** Explicit maintenance trigger; absent when legacy or external provenance is unknown. */
 	origin?: "manual" | "auto";
-	/** Stable compaction operation identity shared with the live lifecycle. */
-	operationId?: string;
 	/** Last branch entry represented by provider-native replay history; later entries replay normally. */
 	providerReplayThroughEntryId?: string;
 	/** Extension-specific data (e.g., ArtifactIndex, version markers for structured compaction) */

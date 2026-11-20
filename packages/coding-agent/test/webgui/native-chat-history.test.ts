@@ -43,13 +43,16 @@ test("native history stays read-only and continues independently without replaci
 	const historicalPath = historicalManager.getSessionFile();
 	if (!historicalPath) throw new Error("Persisted history fixture has no journal path");
 
-	// Imported/older journals can report tokens without cache counters or prices.
-	// Encode that persisted boundary after closing the manager, which normalizes new appends.
+	// Older journals may carry retired attachment references and sparse usage.
 	const journal = (await readFile(historicalPath, "utf8"))
 		.trimEnd()
 		.split("\n")
 		.map(line => {
-			const entry: { type: string; message?: { role: string; usage?: unknown } } = JSON.parse(line);
+			const entry: { type: string; message?: { role: string; usage?: unknown; attachments?: unknown } } =
+				JSON.parse(line);
+			if (entry.type === "message" && entry.message?.role === "user") {
+				entry.message.attachments = [{ ref: "attachment:legacy", fileName: "old.txt", mime: "text/plain", bytes: 1 }];
+			}
 			if (entry.type === "message" && entry.message?.role === "assistant") {
 				entry.message.usage = { input: 13, output: 5 };
 			}

@@ -40,7 +40,7 @@ import { AgentStorage, type AgentStorageApi } from "../session/agent-storage";
 import { type CompactionMethod, DEFAULT_COMPACTION_METHOD_ORDER } from "../session/compaction-methods";
 import { writeFileAtomically } from "../utils/atomic-file";
 import { isRegisteredSearchEngine } from "../web/search/provider";
-import { setYamlConfigValue, stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
+import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
 import {
 	type AnySetting,
 	all as allSettings,
@@ -587,13 +587,6 @@ function modelRoleValueFromUnknown(value: unknown): string | undefined {
 
 	const entries = stringArrayFromUnknown(value);
 	return entries.length === value.length ? entries.join(",") : undefined;
-}
-
-export class ModelRoleConflictError extends Error {
-	constructor(role: string) {
-		super(`Model role "${role}" changed since it was read.`);
-		this.name = "ModelRoleConflictError";
-	}
 }
 
 /** Receives the setting whose effective value changed (see {@link Settings.onEffectiveChange}). */
@@ -2390,52 +2383,6 @@ export class Settings {
 		}
 		this.#savedRuntimeModelRoleOverrides.delete(role);
 		this.#updateRuntimeModelRoleOverride(role, modelId);
-	}
-
-	/** Persist one user role with compare-and-set semantics, preserving higher-precedence overrides. */
-	async saveUserModelRole(
-		role: ModelRole | string,
-		modelId: string | undefined,
-		expectedValue: string | undefined,
-	): Promise<void> {
-		if (this.#parent) return this.#parent.saveUserModelRole(role, modelId, expectedValue);
-		if (!this.#persist || this.#savesCancelled) {
-			throw new Error("User model role persistence is unavailable.");
-		}
-		this.#persistedMutationGeneration++;
-		await this.flush();
-		const configPath = this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
-		await fs.promises.mkdir(this.#agentDir, { recursive: true });
-		await this.#withYamlWriteLock(configPath, async writePath => {
-			const loaded = await this.#loadYamlIfPresentForWriteLocked(configPath, writePath);
-			const current =
-				loaded.settings ?? (this.#quarantinedYamlTargets.has(configPath) ? structuredClone(this.#global) : {});
-			const storedValue = getByPath(current, ["modelRoles", role]);
-			const currentValue = modelRoleValueFromUnknown(storedValue);
-			if (currentValue !== expectedValue || this.#hasPendingUserSetting(["modelRoles", role])) {
-				this.#adoptSavedGlobal(current, configPath);
-				throw new ModelRoleConflictError(role);
-			}
-			if (
-				modelId !== currentValue ||
-				(modelId === undefined && storedValue !== undefined) ||
-				(loaded.settings === null && this.#quarantinedYamlTargets.has(configPath))
-			) {
-				if (modelId === undefined) deleteByPath(current, ["modelRoles", role]);
-				else setByPath(current, ["modelRoles", role], modelId);
-				// GUI 持久化原先重建整个 YAML，导致其他字段的注释丢失。
-				// 使用同一次加锁读取的原文改目标节点，保留 CAS、隔离备份和原子写入边界。
-				const content =
-					loaded.settings !== null && loaded.generation.kind === "content"
-						? setYamlConfigValue(loaded.generation.source, ["modelRoles", role], modelId)
-						: stringifyYamlConfig(current);
-				await this.#writeYamlAtomically(writePath, content);
-				this.#persistedMutationGeneration++;
-			}
-			this.#quarantinedYamlTargets.delete(configPath);
-			this.#configPath = configPath;
-			this.#adoptSavedGlobal(current, configPath);
-		});
 	}
 
 	/**

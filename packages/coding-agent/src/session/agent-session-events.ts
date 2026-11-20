@@ -45,15 +45,11 @@ export type AgentSessionEvent =
 	| { type: "session_abort"; reason?: string }
 	| {
 			type: "auto_compaction_start";
-			operationId?: string;
 			reason: "threshold" | "overflow" | "idle" | "incomplete";
 			action: "context-full" | "remote" | "handoff" | "shake" | "snapcompact";
 	  }
 	| {
 			type: "auto_compaction_end";
-			operationId?: string;
-			/** Canonical journal entry committed by this operation, when present. */
-			summaryRef?: string;
 			action: "context-full" | "remote" | "handoff" | "shake" | "snapcompact";
 			result: CompactionResult | undefined;
 			aborted: boolean;
@@ -74,8 +70,6 @@ export type AgentSessionEvent =
 	| {
 			type: "manual_compaction_end";
 			operationId: string;
-			/** Canonical journal compaction entry, when this operation committed one. */
-			summaryRef?: string;
 			/** Present when the compaction committed. */
 			result?: CompactionResult;
 			/** True when the compaction was cancelled (abort, or a `session_before_compact` hook). */

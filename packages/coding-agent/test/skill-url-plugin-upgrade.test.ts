@@ -719,9 +719,6 @@ describe("a plugin upgrade that replaces the plugin's version directory under a 
 			session: child,
 			extensionsResult: {} as sdkModule.CreateAgentSessionResult["extensionsResult"],
 			setToolUIContext: () => {},
-			getToolContext: () => {
-				throw new Error("Native tool context is unavailable in this fixture");
-			},
 			eventBus: new EventBus(),
 		});
 

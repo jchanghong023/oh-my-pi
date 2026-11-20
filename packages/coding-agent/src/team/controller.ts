@@ -210,8 +210,7 @@ export function buildRunnerDeps(
 	const sessionId = session.sessionId;
 	const modelRegistry = session.modelRegistry;
 	const parentCapabilities = session.nativeChildCapabilities;
-	const extensionProviderOwnership = parentCapabilities?.extensionProviderOwnership;
-	const sessionHooks = resolveNativeChildSessionHooks({ extensionProviderOwnership }, parentCapabilities);
+	const sessionHooks = resolveNativeChildSessionHooks({}, parentCapabilities);
 	return {
 		cwd,
 		// Session-granted roots (CLI --dir, ACP/add-dir, settings-seeded) must
@@ -222,7 +221,6 @@ export function buildRunnerDeps(
 		modelRegistry,
 		...sessionHooks,
 		toolRestrictions: sessionHooks.toolRestrictions?.clone(),
-		extensionProviderOwnership,
 		authStorage: modelRegistry.authStorage,
 		sessionFile: session.sessionFile ?? null,
 		artifactsDir: session.sessionManager.getArtifactsDir(),

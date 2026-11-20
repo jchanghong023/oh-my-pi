@@ -390,12 +390,42 @@ export async function parallelInputScenario(native: NativeBrowserCase): Promise<
 		const stopped = native.setReply("A cancellation partial", " must not become a complete reply", a);
 		expect((await rpc.command(a, "sendText", { text: "A separately cancellable turn" })).status).toBe("accepted");
 		await stopped.began;
+		expect((await rpc.command(a, "sendText", { text: "A_NATIVE_QUEUE_AFTER_STOP" })).result).toMatchObject({
+			type: "inputAccepted",
+			delivery: "queue",
+		});
 		expect((await rpc.command(a, "stop", {})).status).toBe("accepted");
 		await stopped.finished;
 		expect(a.isStreaming).toBe(false);
 		expect(b.isStreaming).toBe(true);
-		expect((await rpc.snapshot(a)).control.phase).toBe("completedInterrupted");
+		const interrupted = await rpc.snapshot(a);
+		expect(interrupted.control.phase).toBe("completedInterrupted");
+		expect(interrupted.queue.items.map(item => item.text)).toEqual(["A_NATIVE_QUEUE_AFTER_STOP"]);
 		expect(await fs.readFile(priorWork, "utf8")).toBe("Previously completed workspace work.");
+
+		const afterStop = createMockModel({
+			responses: [{ content: ["Continuing with normal input"] }, { content: ["Pending input delivered"] }],
+		});
+		a.agent.streamFn = afterStop.stream;
+		await native.page.click(INPUT);
+		await native.page.keyboard.type("A_NORMAL_INPUT_AFTER_STOP");
+		await native.page.waitForSelector(`${SEND}:not([disabled])`, { visible: true });
+		await native.page.click(SEND);
+		await native.page.waitForFunction(
+			selector => {
+				const { document } = globalThis as BrowserGlobals;
+				return Array.from(document.querySelectorAll(selector)).some(element =>
+					element.textContent?.includes("Pending input delivered"),
+				);
+			},
+			{},
+			ASSISTANT_TEXT,
+		);
+		expect(JSON.stringify(afterStop.calls[0]?.context.messages)).toContain("A_NORMAL_INPUT_AFTER_STOP");
+		expect(JSON.stringify(afterStop.calls[1]?.context.messages)).toContain("A_NATIVE_QUEUE_AFTER_STOP");
+		expect((await rpc.snapshot(a)).queue.items).toHaveLength(0);
+		expect(b.isStreaming).toBe(true);
+
 		bReply.finish();
 		await bReply.finished;
 

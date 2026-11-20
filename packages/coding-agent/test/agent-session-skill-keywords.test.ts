@@ -129,18 +129,18 @@ describe("AgentSession skill prompt keyword steering", () => {
 		tempDir.removeSync();
 	});
 
-	it.each([
-		["bundled", true],
-		["override", false],
-	] as const)("activates the workflow notice only for the bundled verifier (%s)", async (directory, expected) => {
+	it("does not activate workflow from the bundled verifier body without a user argument", async () => {
+		const skillPath = tempDir.join("bundled", "SKILL.md");
 		await session.promptCustomMessage({
 			customType: SKILL_PROMPT_MESSAGE_TYPE,
 			content: "workflowz",
 			display: true,
-			details: { name: "big-review-verify", path: tempDir.join(directory, "SKILL.md"), lineCount: 1 },
+			details: { name: "big-review-verify", path: skillPath, lineCount: 1 },
 			attribution: "user",
 		});
-		expect(observedTurns[0]?.texts.includes(workflowNotice)).toBe(expected);
+		const turn = observedTurns[0];
+		if (!turn) throw new Error("Expected prompt context to be captured");
+		expect(turn.texts).not.toContain(workflowNotice);
 	});
 
 	it("injects magic keyword notices and turn budgets from user-authored skill args", async () => {

@@ -731,7 +731,6 @@ describe("AgentSession queued steer delivery", () => {
 			errorMessage?: string;
 			skipped?: boolean;
 			aborted?: boolean;
-			summaryRef?: string;
 		}> = [];
 		session.subscribe(event => {
 			if (event.type === "manual_compaction_start" || event.type === "manual_compaction_end") {
@@ -750,7 +749,6 @@ describe("AgentSession queued steer delivery", () => {
 		expect(events[0].mode).toBe("soft");
 		expect(events[1].aborted).toBe(false);
 		expect(events[1].skipped).toBe(true);
-		expect(events[1].summaryRef).toBeUndefined();
 		expect(events[1].errorMessage).toBe((failure as Error).message);
 	});
 

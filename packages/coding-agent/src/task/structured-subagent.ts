@@ -43,7 +43,7 @@ import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../irc/messaging";
 import { buildOutputValidator } from "../tools/output-schema-validator";
 import { trackLateCleanup } from "../utils/late-cleanup";
-import { type DiscoveryResult, discoverAgents, getAgent, mergeAgentDefinitions } from "./discovery";
+import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { renderStepPrompts } from "./steps";
 import { type ExecutorOptions, runSubprocess, type SubagentToolResult, usesYield } from "./executor";
 import {
@@ -518,10 +518,7 @@ export async function resolveEffectiveSubagentPolicy(
 
 	const discovery = await discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.());
 	const sessionAgents = request.session.getSessionAgents?.() ?? [];
-	const agents = [
-		...mergeAgentDefinitions(discovery.agents, request.session.getAgentDefinitions?.()),
-		...sessionAgents,
-	];
+	const agents = [...discovery.agents, ...sessionAgents];
 	const agent = getAgent(agents, agentName);
 	if (!agent) {
 		const available =
@@ -771,9 +768,6 @@ function buildExecutorOptions(
 		onResponse: session.onResponse,
 		onModelResponse: session.onModelResponse,
 		toolRestrictions: session.toolRestrictions,
-		createInteractionUI: session.createInteractionUI,
-		extensionProviderOwnership: session.extensionProviderOwnership,
-		interactionParentSessionId: session.getSessionId?.() ?? undefined,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,
 		// A stepped spawn starts on its first step prompt; the executor sends the rest.
@@ -839,7 +833,6 @@ function buildExecutorOptions(
 		settings: session.settings,
 		asyncJobManager: session.asyncJobManager,
 		inheritedSessionAgents: session.getSessionAgents?.(),
-		getAgentDefinitions: session.getAgentDefinitions,
 		mcpManager: enableMCP ? (session.mcpManager ?? MCPManager.instance()) : undefined,
 		mcpToolScope: session.mcpToolScope,
 		enableMCP,

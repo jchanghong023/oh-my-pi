@@ -462,10 +462,6 @@ export interface ExecutorOptions extends NativeChildSessionHooks {
 	costGate?: CostGateApi;
 	/** Additional workspace directories to seed on the subagent session (multi-root). */
 	additionalDirectories?: string[];
-	/** Scoped non-terminal interaction host of the owning root session. */
-	createInteractionUI?: CreateAgentSessionOptions["createInteractionUI"];
-	interactionParentSessionId?: string;
-	extensionProviderOwnership?: CreateAgentSessionOptions["extensionProviderOwnership"];
 	/** Parent session's manager; the child and its revived turns use this exact delivery scope. */
 	asyncJobManager?: AsyncJobManagerApi;
 	/** Parent session whose stored credential affinities seed the child session. */
@@ -626,8 +622,6 @@ export interface ExecutorOptions extends NativeChildSessionHooks {
 	mcpToolScope?: MCPToolScope;
 	/** User-authorized model agents available to this child and its descendants. */
 	inheritedSessionAgents?: CreateAgentSessionOptions["inheritedSessionAgents"];
-	/** Owning session's explicit definitions, retained by native nested/revived children. */
-	getAgentDefinitions?: CreateAgentSessionOptions["getAgentDefinitions"];
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
@@ -4427,7 +4421,6 @@ async function configureNativeSubagentSession(
 		"lspReadOnly",
 		"enableIrc",
 		"subagentHooks",
-		"extensionProviderOwnership",
 		"preloadedPreparedExtensions",
 		"deferHintCompression",
 	] as const;
@@ -4621,7 +4614,6 @@ async function reviveAdmittedSubagent(
 			? followMCPTools(mcpManager, { scope: reopened.getSessionId() }, explicitSubagentToolNames(capture.spec))
 			: undefined;
 	let revived: AgentSession;
-	let interactionUI: CreateAgentSessionResult["interactionUI"];
 	let revivedRestrictedToolNames = false;
 	// Account pools are owner policy: take the live exact-name entry, as
 	// dispatch and persisted revival do, never the spawn-time copy.
@@ -4679,7 +4671,7 @@ async function reviveAdmittedSubagent(
 			}
 			revivedRestrictedToolNames = configuredOptions.restrictToolNames === true;
 			sessionPromise = createAgentSession(configuredOptions);
-			({ session: revived, interactionUI } = await sessionPromise);
+			({ session: revived } = await sessionPromise);
 			const disposeObserver = observeSession?.(revived);
 			if (disposeObserver) revived.addDisposer(disposeObserver);
 			const disposeOriginalObserver = capture.spec.onSessionCreated?.(revived);
@@ -4711,7 +4703,6 @@ async function reviveAdmittedSubagent(
 		// runner pre-init, so a `tool_call` handler touching a runtime action trips the
 		// fail-closed gate and blocks every tool (including `yield`) in the revived agent (issue #8824).
 		await initializeExtensions(revived, {
-			uiContext: interactionUI,
 			reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
 			reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
 			filterActiveTools: withoutParentOwnedTools,
@@ -4743,9 +4734,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			hasNativeChildSessionHooks(options) ||
 			options.subagentHooks ||
 			options.subagentRequest ||
-			options.onSessionCreated ||
-			options.createInteractionUI ||
-			options.getAgentDefinitions)
+			options.onSessionCreated)
 	) {
 		const endMainRun = pool.beginMainRun();
 		try {
@@ -5332,11 +5321,9 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					authStorage,
 					modelRegistry,
 					...resolveNativeChildSessionHooks(options),
-					extensionProviderOwnership: options.extensionProviderOwnership,
 					credentialSourceSessionId: options.credentialSourceSessionId,
 					oauthAccountPools: options.oauthAccountPools,
 					inheritedSessionAgents: options.inheritedSessionAgents,
-					getAgentDefinitions: options.getAgentDefinitions,
 					model,
 					// Offline agent-definition patterns are automatic selections too.
 					// Keep an unresolved role explicit to the SDK instead of falling
@@ -5386,10 +5373,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					preloadedPreparedExtensions: options.preloadedPreparedExtensions,
 					preloadedCustomToolPaths: restrictToolNames ? [] : options.preloadedCustomToolPaths,
 					hasUI: false,
-					interactivePrompts: options.createInteractionUI !== undefined,
-					createInteractionUI: options.createInteractionUI,
-					interactionParentSessionId: options.interactionParentSessionId,
-					interactionParentToolCallId: options.parentToolCallId,
 					prewalk,
 					spawns: spawnsEnv,
 					taskDepth: childDepth,
@@ -5473,7 +5456,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 						)
 					: undefined;
 			let session: AgentSession;
-			let interactionUI: CreateAgentSessionResult["interactionUI"];
 			let modelFallbackMessage: string | undefined;
 			let sessionPromise: Promise<CreateAgentSessionResult> | undefined;
 			let configuredRestrictToolNames = restrictToolNames;
@@ -5519,7 +5501,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				configuredRestrictToolNames = configuredOptions.restrictToolNames === true;
 				checkAbort();
 				sessionPromise = createAgentSession(configuredOptions);
-				({ session, interactionUI, modelFallbackMessage } = await awaitAbortable(sessionPromise));
+				({ session, modelFallbackMessage } = await awaitAbortable(sessionPromise));
 				disposeSessionObserver = observeSession?.(session) ?? undefined;
 				// Stash the sibling family candidate once the child session exists,
 				// independent of its initial model, so a later model change (retry
@@ -5725,7 +5707,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			const pendingExtensionMessages: Array<Promise<unknown>> = [];
 			await awaitAbortable(
 				initializeExtensions(session, {
-					uiContext: interactionUI,
 					reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
 					reportRuntimeError: err =>
 						logger.error("Extension error", { path: err.extensionPath, error: err.error }),

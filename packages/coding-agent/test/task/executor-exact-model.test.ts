@@ -12,7 +12,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import * as sdk from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { withExecutionModelContext } from "@oh-my-pi/pi-coding-agent/session/execution-model";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as discovery from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { runStructuredSubagent } from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
@@ -34,8 +33,6 @@ let runs = 0;
 /** Runs a bundled `worker` through the real executor and mock registry. */
 async function runWorker(options: {
 	model: Model;
-	parentModel?: Model;
-	additionalModels?: Model[];
 	perCallModel?: string;
 	settings?: Settings;
 	assignment?: string;
@@ -57,7 +54,7 @@ async function runWorker(options: {
 	authStorage.keys.setRuntime("mock", "test-key");
 	registerMockApi(sourceId);
 	const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
-	const models = [model, ...(options.additionalModels ?? [])];
+	const models = [model];
 	const find = modelRegistry.find.bind(modelRegistry);
 	vi.spyOn(modelRegistry, "find").mockImplementation(
 		(provider, id) =>
@@ -79,7 +76,6 @@ async function runWorker(options: {
 		restrictToolNames: true,
 		enableMCP: false,
 		enableLsp: false,
-		getActiveModel: () => options.parentModel,
 		enableIrc: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
@@ -168,112 +164,6 @@ describe("per-call exact selection after background discovery", () => {
 		expect(model.calls).toHaveLength(1);
 		expect(result.output).not.toContain("Answer after revocation.");
 		expect(failure(result)).toMatch(/not approved/);
-	});
-
-	it("never dispatches an approved replacement through execution recovery", async () => {
-		const requested = createMockModel({
-			id: "requested",
-			handler: { stopReason: "error", errorMessage: "provider failed" },
-		});
-		const replacement = createMockModel({ id: "replacement", handler: { content: ["Unexpected replacement."] } });
-		const settings = perCallSettings(requested, {
-			"retry.enabled": false,
-			modelRoles: { review: "mock/requested", slow: "mock/replacement" },
-		});
-		const result = await withExecutionModelContext(
-			{
-				model: requested,
-				resolveRequestAuth: async () => ({ apiKey: "test-key" }),
-				recoverModelRequest: async () => ({ model: replacement }),
-			},
-			() =>
-				runWorker({
-					model: requested,
-					additionalModels: [replacement],
-					settings,
-					perCallModel: "mock/requested",
-				}),
-		);
-		expect(requested.calls).toHaveLength(1);
-		expect(replacement.calls).toHaveLength(0);
-		expect(result.exitCode).not.toBe(0);
-		expect(result.output).not.toContain("Unexpected replacement.");
-	});
-
-	it("keeps same-provider execution recovery for ordinary offline workers", async () => {
-		const requested = createMockModel({
-			id: "ordinary-requested",
-			handler: { stopReason: "error", errorMessage: "provider failed" },
-		});
-		const replacement = createMockModel({ id: "ordinary-replacement", handler: { content: ["Recovered."] } });
-		const result = await withExecutionModelContext(
-			{
-				model: requested,
-				resolveRequestAuth: async () => ({ apiKey: "test-key" }),
-				recoverModelRequest: async () => ({ model: replacement }),
-			},
-			() =>
-				runWorker({
-					model: requested,
-					parentModel: requested,
-					additionalModels: [replacement],
-					settings: perCallSettings(requested, { "retry.enabled": false, "models.offline": true }),
-				}),
-		);
-		expect(requested.calls).toHaveLength(1);
-		expect(replacement.calls).toHaveLength(1);
-		expect(result.exitCode).toBe(0);
-		expect(result.output).toBe("Recovered.");
-	});
-
-	it("rejects a per-call model conflicting with the foreground submission model before dispatch", async () => {
-		const requested = createMockModel({ id: "requested", handler: { content: ["Requested."] } });
-		const submission = createMockModel({ id: "submission", handler: { content: ["Submission."] } });
-		const settings = perCallSettings(requested, {
-			"retry.enabled": false,
-			modelRoles: { review: "mock/requested", slow: "mock/submission" },
-		});
-		const result = await withExecutionModelContext(
-			{
-				model: submission,
-				policies: { subagents: { foregroundModel: "submission", background: "deny" } },
-				resolveRequestAuth: async () => ({ apiKey: "test-key" }),
-			},
-			() =>
-				runWorker({
-					model: requested,
-					additionalModels: [submission],
-					settings,
-					perCallModel: "mock/requested",
-				}),
-		);
-		expect(requested.calls).toHaveLength(0);
-		expect(submission.calls).toHaveLength(0);
-		expect(result.exitCode).not.toBe(0);
-		expect(failure(result)).toMatch(/per-call.*foreground.*submission/i);
-	});
-
-	it("keeps capped per-call thinking when the foreground submission uses the same model", async () => {
-		const requested = Object.assign(
-			createMockModel({ id: "same-model", reasoning: true, handler: { content: ["Exact."] } }),
-			{ thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] } satisfies ThinkingConfig },
-		);
-		const result = await withExecutionModelContext(
-			{
-				model: requested,
-				thinkingLevel: Effort.High,
-				policies: { subagents: { foregroundModel: "submission", background: "deny" } },
-				resolveRequestAuth: async () => ({ apiKey: "test-key" }),
-			},
-			() =>
-				runWorker({
-					model: requested,
-					settings: perCallSettings(requested, { "task.maxEffort": "low" }),
-					perCallModel: "mock/same-model:high",
-				}),
-		);
-		expect(result.exitCode).toBe(0);
-		expect(requested.calls.map(call => call.options?.reasoning)).toEqual([Effort.Low]);
 	});
 
 	it.each([

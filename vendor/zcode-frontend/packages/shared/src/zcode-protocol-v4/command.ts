@@ -83,9 +83,7 @@ export const commandPayloadSchemas = {
       })
       .optional(),
   }),
-  // 按 inputRouting 裁决：startNow / enqueue / guide / choice。
-  // heldQueueDisposition：held 状态（inputRouting.mode=choice）下必带；
-  // clear→清空 queue 后 startNow，keep→保留 queue 立即 startNow。
+  // 按 inputRouting 裁决：startNow / enqueue / guide。
   sendText: z
     .object({
       text: z.string(),
@@ -97,10 +95,6 @@ export const commandPayloadSchemas = {
       browserAmbientContext: zcodeBrowserAmbientContextSchema.optional(),
       // 插件 UI 代发（ui/message）时的来源标记；随 intent 持久化并投影到 userInput row。
       source: conversationInputSourceSchema.optional(),
-      heldQueueDisposition: z.enum(["clearQueueAndSend", "keepQueueAndSend"]).optional(),
-      // 暂停队列确认框打开时看到的 queueItemId 集合。CLI 在执行 clear/keep 前校验，
-      // 防止桌面/手机并发增删后把用户没确认过的新队列一并处置。
-      expectedHeldQueueItemIds: z.array(z.string().min(1)).optional(),
       // 迁移期允许旧发送端缺省；CLI admission 会把当前 Session Selection 固定进
       // canonical intent。Renderer 切换完成后，第一方用户提交始终显式携带这两项。
       modelSelection: modelSelectionSchema.optional(),
@@ -128,8 +122,6 @@ export const commandPayloadSchemas = {
     modelSelection: modelSelectionSchema.optional(),
     mode: submissionModeSchema.optional(),
     planEnabled: z.boolean().optional(),
-    heldQueueDisposition: z.enum(["clearQueueAndSend", "keepQueueAndSend"]).optional(),
-    expectedHeldQueueItemIds: z.array(z.string().min(1)).optional(),
   }),
   stop: z.object({
     // 来自 activeWorks；CLI 用它拒绝会误杀后续无关执行的迟到 Stop。
@@ -174,7 +166,6 @@ export const commandPayloadSchemas = {
     beforeQueueItemId: z.string().nullable(),
   }),
   deleteQueueItem: z.object({ queueItemId: z.string() }),
-  setAutoDrain: z.object({ autoDrain: z.boolean() }),
   // 先到先得，晚到 noop（reasonCode=proto.alreadyResolved）。
   resolveInteraction: z.object({
     interactionId: z.string(),
@@ -279,7 +270,6 @@ export const COMMANDS_REQUIRING_BASE_REVISION: ReadonlySet<CommandType> = new Se
   "editQueueItem",
   "reorderQueueItem",
   "deleteQueueItem",
-  "setAutoDrain",
   "switchModelConfig",
   "switchCollaborationMode",
   "setFollowupMode",

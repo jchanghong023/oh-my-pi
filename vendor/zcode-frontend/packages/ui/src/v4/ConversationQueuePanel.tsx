@@ -13,15 +13,13 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { memo, useCallback, useMemo, useState, type CSSProperties } from "react";
+import { memo, useCallback, useMemo, type CSSProperties } from "react";
 import {
   TID_V4_QUEUE,
   TID_V4_QUEUE_ITEM,
   TID_V4_QUEUE_ITEM_DELETE,
   TID_V4_QUEUE_ITEM_EDIT,
   TID_V4_QUEUE_ITEM_SEND_NOW,
-  TID_V4_QUEUE_PAUSED_BANNER,
-  TID_V4_QUEUE_RESUME,
   testId,
 } from "@zcode/shared/test-ids";
 import type { QueueState } from "@zcode/shared/zcode-protocol-v4";
@@ -43,8 +41,6 @@ export interface ConversationQueuePanelProps {
   onSendNow?: (queueItemId: string) => void;
   /** 拖拽排序项（reorderQueueItem，移动到锚点前；null=队尾）。 */
   onMoveItem?: (queueItemId: string, beforeQueueItemId: string | null) => void;
-  /** 暂停队列恢复：CLI setAutoDrain(true)，idle 立即消费、busy 仅武装。 */
-  onResume?: () => Promise<void> | void;
 }
 
 type QueueItem = QueueState["items"][number];
@@ -306,10 +302,8 @@ function ConversationQueuePanelImpl({
   pendingEditQueueItemId = null,
   onSendNow,
   onMoveItem,
-  onResume,
 }: ConversationQueuePanelProps) {
   const { intl } = useZCodeIntl();
-  const [resumePending, setResumePending] = useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },
@@ -330,59 +324,17 @@ function ConversationQueuePanelImpl({
     },
     [onMoveItem, queue.items],
   );
-  const handleResume = useCallback(async () => {
-    if (!onResume || resumePending) return;
-    setResumePending(true);
-    try {
-      await Promise.resolve(onResume());
-    } finally {
-      setResumePending(false);
-    }
-  }, [onResume, resumePending]);
-
   if (queue.items.length === 0) return null;
   // 补回 v4 视觉迁移时漏掉的旧队列面板 blur 层，让列表保持贴合 composer 的磨砂背景。
   return (
     <div
       data-testid={TID_V4_QUEUE}
       data-queue-count={queue.items.length}
-      data-queue-auto-drain={queue.autoDrain ? "true" : "false"}
       className={cn(
         "relative z-0 w-full overflow-hidden rounded-t-2xl border border-border bg-surface p-1 backdrop-blur-md",
         "-mb-7 pb-7",
       )}
     >
-      {!queue.autoDrain ? (
-        <div
-          data-testid={TID_V4_QUEUE_PAUSED_BANNER}
-          className="mb-1 flex min-h-10 items-center gap-3 rounded-xl border border-border/70 bg-surface-raised px-3 py-2 text-ui-base text-foreground"
-        >
-          <span className="min-w-0 flex-1">
-            {intl.formatMessage({
-              id:
-                queue.pauseReason === "stopped"
-                  ? "chat.queue.paused.stopped"
-                  : queue.pauseReason === "error"
-                    ? "chat.queue.paused.error"
-                    : "chat.queue.paused.generic",
-            })}
-          </span>
-          {onResume ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              data-testid={TID_V4_QUEUE_RESUME}
-              aria-label={intl.formatMessage({ id: "chat.queue.resume.description" })}
-              disabled={resumePending}
-              className="shrink-0 text-foreground-subtle hover:text-foreground"
-              onClick={() => void handleResume()}
-            >
-              {intl.formatMessage({ id: "chat.queue.resume" })}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}

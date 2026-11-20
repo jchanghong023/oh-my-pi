@@ -78,7 +78,6 @@ export class LocalTtftObserver {
       sendMode: busy ? "queued" : "idle",
       visibility: this.isForeground ? "foreground" : "background",
       visibilityChanges: [{ at: this.now(), foreground: this.isForeground }],
-      confirmations: [],
     };
     this.emit(this.record(pending, "start", "success"));
     if (this.pending.size >= LOCAL_TTFT_MAX_PENDING) {
@@ -282,35 +281,10 @@ export class LocalTtftObserver {
       }
       return;
     }
-    if (pending.confirmationStart !== undefined) this.confirmation(context, false);
     this.emit(this.record(pending, pending.first ? "no_text" : "excluded", outcome));
     pending.closed = true;
     pending.outcome = outcome;
     pending.textClosed = true;
-  }
-  confirmationRetry(context: LocalTtftContext): void {
-    const pending = this.pending.get(context.observationId);
-    if (!pending || pending.closed) return;
-    // stale 确认拒绝没有 accepted input；下一次命令仍沿首次点击，但不能绑定已拒绝命令。
-    pending.commandId = undefined;
-    pending.facts = undefined;
-  }
-  confirmation(context: LocalTtftContext, waiting: boolean): void {
-    const pending = this.pending.get(context.observationId);
-    if (!pending) return;
-    if (waiting) pending.confirmationStart ??= this.now();
-    else if (pending.confirmationStart !== undefined) {
-      if (pending.confirmations.length < 32)
-        pending.confirmations.push({
-          id: `confirmation:${pending.confirmations.length}`,
-          stage: "user_confirmation",
-          start: pending.confirmationStart,
-          end: this.now(),
-          source: "renderer",
-          outcome: "completed",
-        });
-      pending.confirmationStart = undefined;
-    }
   }
   background(): void {
     this.visibility(false);

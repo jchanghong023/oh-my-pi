@@ -26,7 +26,11 @@ import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line/component";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
 import { formatDuration } from "@oh-my-pi/pi-utils";
-import { createInteractiveModeContext, createSessionStub } from "./helpers/interactive-mode-context";
+import {
+	applyRenderFixtureEvent,
+	createInteractiveModeContext,
+	createSessionStub,
+} from "./helpers/interactive-mode-context";
 
 function nativeRows(node: NativeNode): readonly string[] {
 	if (node.k === "rows" && node.p) return node.p.lines;
@@ -156,13 +160,12 @@ function liveSession(message: AssistantMessage | null = null, activeThinkingInde
 			switch (event.type) {
 				case "tool_execution_start":
 				case "tool_execution_end":
-				case "tool_execution_update":
 				case "message_start":
 				case "message_update":
 				case "message_end":
 				case "agent_start":
 				case "agent_end":
-					agent.emitExternalEvent(event, { stateOnly: true });
+					applyRenderFixtureEvent(agent.state, event);
 			}
 			if (event.type === "tool_execution_start") {
 				session.sessionManager.appendCustomEntry("tool_execution_start", {
@@ -920,7 +923,7 @@ describe("compact action dock", () => {
 
 		setSystemTime(12_000);
 		const end = update(message, "thinking_end");
-		live.session.agent.emitExternalEvent(end, { stateOnly: true });
+		applyRenderFixtureEvent(live.session.agent.state, end);
 		await h.ctx.eventController.dispatchSessionEvent(end);
 		setSystemTime(20_000);
 		const reply: AssistantMessage = {
@@ -932,7 +935,7 @@ describe("compact action dock", () => {
 			message: reply,
 			assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: reply },
 		};
-		live.session.agent.emitExternalEvent(textStart, { stateOnly: true });
+		applyRenderFixtureEvent(live.session.agent.state, textStart);
 		await h.ctx.eventController.dispatchSessionEvent(textStart);
 		await live.emit({ type: "message_end", message: reply });
 		expect(h.rendered()).not.toContain("思考");

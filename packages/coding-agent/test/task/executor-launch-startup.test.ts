@@ -73,9 +73,6 @@ it("overlaps registry refresh with session-file opening and session setup", asyn
 			session,
 			extensionsResult: { extensions: [], errors: [], runtime: new ExtensionRuntime() },
 			setToolUIContext: () => {},
-			getToolContext: () => {
-				throw new Error("Native tool context is unavailable in this fixture");
-			},
 			eventBus: new EventBus(),
 		};
 		return result;

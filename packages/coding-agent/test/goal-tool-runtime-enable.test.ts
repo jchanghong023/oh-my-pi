@@ -5,7 +5,6 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { createAgentSession, type CreateAgentSessionOptions } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { ToolRestrictions } from "@oh-my-pi/pi-coding-agent/session/tool-restrictions";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
@@ -31,7 +30,7 @@ describe("goal tool registration when goal mode is enabled at runtime", () => {
 
 	async function makeSession(
 		goalEnabledAtStartup: boolean,
-		options: Partial<CreateAgentSessionOptions> & { allowRestrictedGoal?: boolean } = {},
+		options: Partial<CreateAgentSessionOptions> = {},
 	): Promise<AgentSession> {
 		const authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("ascend", "test-key");
@@ -106,67 +105,13 @@ describe("goal tool registration when goal mode is enabled at runtime", () => {
 		expect(text).toContain("test goal");
 	});
 
-	it.each([
-		{
-			label: "ordinary restricted default",
-			optIn: undefined,
-			requested: true,
-			allowed: true,
-			enabled: true,
-			expected: false,
+	it.each([true, false])(
+		"keeps native Goal unavailable to restricted sessions (enabled at startup: %s)",
+		async enabled => {
+			session = await makeSession(enabled, { restrictToolNames: true, toolNames: ["read", "goal"] });
+			cfgGoalEnabled.set(Settings.instance, true);
+			await enterGoalMode(session);
+			expect(session.agent.state.tools.map(tool => tool.name)).not.toContain("goal");
 		},
-		{ label: "explicit opt-out", optIn: false, requested: true, allowed: true, enabled: true, expected: false },
-		{
-			label: "explicit restricted Goal grant",
-			optIn: true,
-			requested: true,
-			allowed: true,
-			enabled: true,
-			expected: true,
-		},
-		{
-			label: "Goal omitted from exact list",
-			optIn: true,
-			requested: false,
-			allowed: true,
-			enabled: true,
-			expected: false,
-		},
-		{
-			label: "Goal denied by ToolRestrictions",
-			optIn: true,
-			requested: true,
-			allowed: false,
-			enabled: true,
-			expected: false,
-		},
-		{
-			label: "Goal disabled in settings",
-			optIn: true,
-			requested: true,
-			allowed: true,
-			enabled: false,
-			expected: false,
-		},
-	])("restricted Goal admission: $label", async ({ optIn, requested, allowed, enabled, expected }) => {
-		// The optional SDK seam is intentionally structural until core exports it.
-		session = await makeSession(enabled, {
-			restrictToolNames: true,
-			allowRestrictedGoal: optIn,
-			toolNames: requested ? ["read", "goal"] : ["read"],
-			toolRestrictions: new ToolRestrictions({
-				allowlist: ["read", "goal"],
-				denylist: allowed ? [] : ["goal"],
-			}),
-		});
-		await enterGoalMode(session);
-		expect(session.getEnabledToolNames().includes("goal")).toBe(expected);
-		const goal = session.agent.state.tools.find(tool => tool.name === "goal");
-		expect(goal !== undefined).toBe(expected);
-		if (expected) {
-			const result = await goal!.execute("restricted-goal-get", { op: "get" } as never);
-			expect(result.isError ?? false).toBe(false);
-			expect(result.content.map(part => ("text" in part ? part.text : "")).join("\n")).toContain("test goal");
-		}
-	});
+	);
 });

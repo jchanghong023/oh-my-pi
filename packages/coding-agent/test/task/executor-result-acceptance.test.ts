@@ -226,9 +226,6 @@ describe("runSubprocess result acceptance", () => {
 			session: harness.session,
 			extensionsResult: {} as unknown as LoadExtensionsResult,
 			setToolUIContext: () => {},
-			getToolContext: () => {
-				throw new Error("Native tool context is unavailable in this fixture");
-			},
 			eventBus: new EventBus(),
 		} as CreateAgentSessionResult);
 
@@ -258,9 +255,6 @@ describe("runSubprocess result acceptance", () => {
 			session: harness.session,
 			extensionsResult: {} as unknown as LoadExtensionsResult,
 			setToolUIContext: () => {},
-			getToolContext: () => {
-				throw new Error("Native tool context is unavailable in this fixture");
-			},
 			eventBus: new EventBus(),
 		} as CreateAgentSessionResult);
 		const delivered = Promise.withResolvers<{ id: string; text: string }>();

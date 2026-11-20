@@ -11,7 +11,6 @@ import { createSpeculativeToolExecutionConfig } from "@oh-my-pi/pi-coding-agent/
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
-import { withExecutionModelContext } from "@oh-my-pi/pi-coding-agent/session/execution-model";
 
 const temporaryDirectories: string[] = [];
 
@@ -61,7 +60,7 @@ function assistant(content: AssistantMessage["content"], stopReason: AssistantMe
 
 describe("enabled speculative local reads", () => {
 	it.each([true, false])(
-		"honors speculative execution=%s for a recovery request and commits one normal result",
+		"honors speculative execution=%s and commits one normal result",
 		async enabled => {
 			const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-read-"));
 			temporaryDirectories.push(directory);
@@ -108,21 +107,13 @@ describe("enabled speculative local reads", () => {
 				return response;
 			};
 
-			const messages = await withExecutionModelContext(
-				{ model: mock.model, recoverModelRequest: async () => undefined },
-				() =>
-					agentLoop(
-						[{ role: "user", content: "Read the note", timestamp: Date.now() }],
-						{ systemPrompt: [""], messages: [], tools: [tool] },
-						{
-							model: mock.model,
-							convertToLlm: identityConverter,
-							speculativeToolExecution: config,
-						},
-						undefined,
-						streamFn,
-					).result(),
-			);
+			const messages = await agentLoop(
+				[{ role: "user", content: "Read the note", timestamp: Date.now() }],
+				{ systemPrompt: [""], messages: [], tools: [tool] },
+				{ model: mock.model, convertToLlm: identityConverter, speculativeToolExecution: config },
+				undefined,
+				streamFn,
+			).result();
 
 			expect(startedBeforeProviderDone).toBe(enabled);
 			const results = messages.filter(message => message.role === "toolResult");
@@ -136,9 +127,8 @@ describe("enabled speculative local reads", () => {
 		},
 	);
 
-	// Recovery requests retain the upstream abort/discard boundary even after a real speculative read.
-	it("discards a recovery request's speculative read when the request is cancelled", async () => {
-		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-recovery-abort-"));
+	it("discards a speculative read when the provider request is cancelled", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-read-abort-"));
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "cancelled content must not commit");
 		const session = createSession(directory);
@@ -178,23 +168,19 @@ describe("enabled speculative local reads", () => {
 				stream.push({ type: "toolcall_start", contentIndex: 0, partial });
 				stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
 				await physicalRead.promise;
-				controller.abort(new Error("recovery request cancelled"));
+				controller.abort(new Error("provider request cancelled"));
 				stream.push({ type: "error", reason: "aborted", error: { ...partial, stopReason: "aborted" } });
 			})();
 			return stream;
 		};
 		try {
-			const messages = await withExecutionModelContext(
-				{ model: mock.model, recoverModelRequest: async () => undefined },
-				() =>
-					agentLoop(
-						[{ role: "user", content: "read the note", timestamp: Date.now() }],
-						{ systemPrompt: [""], messages: [], tools: [tool] },
-						{ model: mock.model, convertToLlm: identityConverter, speculativeToolExecution: config },
-						controller.signal,
-						streamFn,
-					).result(),
-			);
+			const messages = await agentLoop(
+				[{ role: "user", content: "read the note", timestamp: Date.now() }],
+				{ systemPrompt: [""], messages: [], tools: [tool] },
+				{ model: mock.model, convertToLlm: identityConverter, speculativeToolExecution: config },
+				controller.signal,
+				streamFn,
+			).result();
 
 			expect(executionSignal?.aborted).toBe(true);
 			expect(commit).not.toHaveBeenCalled();

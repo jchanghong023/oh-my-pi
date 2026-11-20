@@ -2,9 +2,31 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the retired ZCode SDK method `AgentSession.withExecutionModel()` and its private request recovery. Session-scoped `setModelTemporary()` and explicit SDK request hooks remain available.
+- Removed the fork-only `Settings.saveUserModelRole()` and `ModelRoleConflictError`; use upstream `setModelRole()` and `flush()` for ordinary role changes.
+- Removed the retired ZCode SDK startup option `createAgentSession({ prepareConfiguration })`.
+- Removed the retired ZCode edit-and-resend SDK method `AgentSession.promptEditedUserQuery()` and its branch-rollback helper `SessionManager.restoreLeaf()`. WebGUI editing still uses native session branching.
+- Removed the retired AIReq workbench’s in-process Collab connection. Relay-based collaboration and intranet username joins are unchanged.
+- Removed the retired ZCode SDK hook `AgentSession.setInputDeliveryHandler()` and `sourceCommand.configuration`. Input attribution is unchanged.
+- Removed the retired ZCode SDK method `AgentSession.refreshCurrentModelMetadata()`. Native model discovery and context-window updates are unchanged.
+- Removed the retired ZCode `PromptOptions.attachments` field. Use `images` for inline images; existing session history remains readable.
+- Removed the fork-only SDK option `agentOutputPrefix`. Subagent artifact names use upstream task prefixes.
+- Removed the fork-only SDK option `ownMcpManager`. Supplied MCP managers remain caller-owned; sessions still manage MCP managers they create.
+- Removed the fork-only `CreateAgentSessionResult.getToolContext()` accessor. Native tool execution keeps its internal context.
+- Removed the fork-only SDK option `extensionProviderOwnership`. Extension providers use upstream registration and lifecycle behavior.
+- Removed the retired ZCode `SessionManager.create()` option for supplying a session ID. Existing session IDs and ownership transitions are unchanged.
+- Removed the retired ZCode compaction-to-journal references from session events and new journal entries. Manual RPC event pairing IDs and diagnostic log correlation are unchanged.
+- Removed the fork-only SDK option `allowRestrictedGoal`. Restricted sessions follow upstream Goal tool admission rules.
+- Removed the unused `AgentSession.disposeHeldQueue()` SDK method. Native Stop and queued input controls are unchanged.
+- Removed the fork-only SDK option `getAgentDefinitions`. Define project agents in `.omp/agents/`; native agent discovery and session model tags are unchanged.
+- Removed the fork-only SDK option `createAgentSession({ editMode })`. Edit schemas and read anchors use the upstream settings and model rules.
+- Removed the retired ZCode child-session interaction factory and restored the two-argument `setToolUIContext()`. WebGUI questions and approvals are unchanged.
+
 ### Added
 
-- Review large repositories with the paired manual skills `/skill:big-review-scan` and `/skill:big-review-verify`, resumable shard reports and source-backed verification.
+- Review large repositories with the paired manual skills `/skill:big-review-scan` and `/skill:big-review-verify`, resumable shard reports and source-backed verification. Use `/skill:big-review-verify workflowz` to request the workflow notice.
 
 - Set `OMP_LOG_ERROR_REGEX` to make `read` return a two-line success result for clean `.log` files and show numbered error matches from anywhere in the file ahead of the normal output.
 - Use `/workspace` for session-scoped write-boundary reminders, or `/workspace <message>` to enable them and send a task, independently of Plan mode; this is a prompt, not a sandbox.
@@ -15,6 +37,9 @@
 
 ### Changed
 
+- TUI input predictions use the upstream request lifecycle and still discard suggestions from a previous session.
+- Session lists no longer drop a readable session just because it grows during a scan.
+- WebGUI uses the native OMP queue after Stop, without a separate pause, resume, or send confirmation.
 - The intranet system notice describes the CentOS 7, NFS, and `/dev/shm` deployment without assuming the current host matches it.
 - Compact mode shows model stages separately from Agent activity and keeps one net diff per file for the latest turn, outside scrollback.
 - OpenWiki uses lightweight diagram checks to shrink the standalone package while keeping offline Mermaid rendering in the browser.
@@ -66,6 +91,7 @@
 
 ### Fixed
 
+- ACP extension listings use project settings for `cwd` queries and live session settings only when a `sessionId` is supplied.
 - Compact tool output backgrounds now start in the same column as the two activity rows, leaving the shared left gutter clear.
 - Compact Output expires from its own session's run end without reappearing in later turns; changing the display mode or focused agent no longer revives stale thinking.
 - Compact mode restores typing when an expanded diff disappears, includes formatted batch writes and focused worker changes, flags interrupted file diffs, and shows model wait when switching back before the first response.
@@ -79,7 +105,7 @@
 - Intranet model catalogs only refresh manually against configured discovery endpoints; signing in still uses the local catalog cache.
 - Intranet sharing refuses the default public relay; `omp join` accepts a username when launching the native TUI.
 - Standard input and `@file` content remain prompt text rather than becoming local commands.
-- Ordinary requests cannot use another execution's temporary model, and strict task cleanup can retry a failed isolated release.
+- Strict task cleanup can retry a failed isolated release.
 - Concurrent cleanup of one browser tab no longer disconnects another tab sharing its browser.
 - Multi-path reads no longer report identical results when the displayed log errors have changed.
 - Long-running sessions release subagent ancestry once no retained background jobs need it.

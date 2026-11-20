@@ -3,8 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { withExecutionModelContext } from "@oh-my-pi/pi-coding-agent/session/execution-model";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { createSpeculativeToolExecutionConfig } from "@oh-my-pi/pi-coding-agent/speculation/host";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
@@ -57,45 +55,6 @@ describe("createSpeculativeToolExecutionConfig", () => {
 
 		expect(config.enabled).toBe(true);
 	});
-
-	it.each([true, false])(
-		"preserves configured speculation=%s and authorization during recovery without changing settings",
-		async enabled => {
-			const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-recovery-"));
-			temporaryDirectories.push(directory);
-			await fs.writeFile(path.join(directory, "note.txt"), "ordinary read content");
-			const settings = Settings.isolated({
-				"tools.speculativeExecution.enabled": enabled,
-				"task.speculativeLaunch": enabled,
-				"tools.approvalMode": "yolo",
-				"images.autoResize": false,
-			});
-			const session = createSession(directory, settings);
-			const tool = new ReadTool(session);
-			const assessment = await tool.speculation.finalized?.assess({ args: { path: "note.txt" } });
-			if (!assessment?.eligible) throw new Error("Expected eligible local read outside recovery");
-			const config = createSpeculativeToolExecutionConfig(settings, session, { hasHandlers: () => false });
-			const candidate = {
-				candidateId: "recovery-read",
-				source: "direct" as const,
-				dependencies: [],
-				tool,
-				toolCall: { type: "toolCall" as const, id: "recovery-read", name: "read", arguments: { path: "note.txt" } },
-				args: { path: "note.txt" },
-				effect: assessment.effect,
-			};
-			const model = createMockModel({ responses: [] }).model;
-			expect(config.enabled).toBe(enabled);
-			await withExecutionModelContext({ model, recoverModelRequest: async () => undefined }, async () => {
-				expect(config.enabled).toBe(enabled);
-				expect(await config.host?.authorize(candidate)).toMatchObject({ allowed: enabled });
-				expect(cfgTaskSpeculativeLaunch.get(settings)).toBe(enabled);
-				expect(cfgToolsSpeculativeExecutionEnabled.get(settings)).toBe(enabled);
-			});
-			expect(config.enabled).toBe(enabled);
-			expect(await config.host?.authorize(candidate)).toMatchObject({ allowed: enabled });
-		},
-	);
 
 	it("propagates maxInFlight changes to the same config object", async () => {
 		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-live-config-"));

@@ -401,9 +401,6 @@ describe("outer startup collaboration gate", () => {
 				return {
 					session: testSession.session,
 					setToolUIContext: () => {},
-					getToolContext: () => {
-						throw new Error("Native tool context is unavailable in this fixture");
-					},
 					extensionsResult: options.preloadedExtensions,
 					eventBus: options.eventBus,
 				};

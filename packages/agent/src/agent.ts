@@ -1345,12 +1345,8 @@ export class Agent {
 			: activeThinkingIndexAfterEvent(this.#state.activeThinkingIndex, event);
 	}
 
-	/**
-	 * Apply an external event before notifying listeners. Replicas use
-	 * `stateOnly` to mirror runtime phases without appending messages or
-	 * replaying session side effects; their entries own persisted history.
-	 */
-	emitExternalEvent(event: AgentEvent, options?: { stateOnly?: boolean }) {
+	/** Apply an external event before notifying listeners. */
+	emitExternalEvent(event: AgentEvent) {
 		switch (event.type) {
 			case "message_start":
 				this.#state.activeThinkingIndex = undefined;
@@ -1358,12 +1354,12 @@ export class Agent {
 				break;
 			case "message_update":
 				this.#state.streamMessage = event.message;
-				this.#updateActiveThinkingIndex(event.assistantMessageEvent, options?.stateOnly ? false : undefined);
+				this.#updateActiveThinkingIndex(event.assistantMessageEvent);
 				break;
 			case "message_end":
 				this.#state.streamMessage = null;
 				this.#state.activeThinkingIndex = undefined;
-				if (!options?.stateOnly) this.appendMessage(event.message);
+				this.appendMessage(event.message);
 				break;
 			case "tool_execution_start":
 				this.#state.pendingToolCalls.add(event.toolCallId);
@@ -1372,19 +1368,12 @@ export class Agent {
 				this.#state.pendingToolCalls.delete(event.toolCallId);
 				break;
 			case "agent_start":
-				if (options?.stateOnly) this.#state.isStreaming = true;
-				this.#state.activeThinkingIndex = undefined;
-				break;
 			case "agent_end":
-				if (options?.stateOnly) {
-					this.#state.isStreaming = false;
-					this.#state.streamMessage = null;
-				}
 				this.#state.activeThinkingIndex = undefined;
 				break;
 		}
 
-		if (!options?.stateOnly) this.#emit(event);
+		this.#emit(event);
 	}
 
 	// State mutators

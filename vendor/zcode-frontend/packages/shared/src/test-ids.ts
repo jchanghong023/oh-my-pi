@@ -479,12 +479,6 @@ export const TID_V4_COMPOSER_BACKGROUND_WORK_TRIGGER = "v4-composer-background-w
 export const TID_V4_COMPOSER_CUA_ENTRY = "v4-composer-cua-entry";
 /** v4 composer 发送按钮 */
 export const TID_V4_COMPOSER_SEND = "v4-composer-send";
-/** v4 暂停队列发送确认：清空队列并发送 */
-export const TID_V4_COMPOSER_CLEAR_QUEUE_SEND = "v4-composer-clear-queue-send";
-/** v4 暂停队列发送确认：保留队列并发送 */
-export const TID_V4_COMPOSER_KEEP_QUEUE_SEND = "v4-composer-keep-queue-send";
-/** v4 暂停队列发送确认弹窗 */
-export const TID_V4_PAUSED_QUEUE_SEND_DIALOG = "v4-paused-queue-send-dialog";
 /** V4 composer 附件 chip（动态后缀为附件 id） */
 export const TID_V4_ATTACHMENT = "v4-attachment";
 /** V4 composer 附件上传进度（动态后缀为附件 id） */
@@ -523,10 +517,6 @@ export const TID_V4_EDIT_WORKSPACE_CONFLICT_CONVERSATION_ONLY =
   "v4-edit-workspace-conflict-conversation-only";
 /** v4 queue 面板容器 */
 export const TID_V4_QUEUE = "v4-queue";
-/** v4 暂停队列原因/恢复提示条 */
-export const TID_V4_QUEUE_PAUSED_BANNER = "v4-queue-paused-banner";
-/** v4 暂停队列继续自动消费按钮 */
-export const TID_V4_QUEUE_RESUME = "v4-queue-resume";
 /** v4 queue 项行内编辑输入框（动态后缀为 queueItemId） */
 /** v4 queue 项（动态后缀为 queueItemId） */
 export const TID_V4_QUEUE_ITEM = "v4-queue-item";
@@ -538,8 +528,6 @@ export const TID_V4_QUEUE_ITEM_EDIT = "v4-queue-item-edit";
 export const TID_V4_QUEUE_ITEM_SEND_NOW = "v4-queue-item-send-now";
 /** v4 queue 项上移按钮（动态后缀为 queueItemId） */
 export const TID_V4_QUEUE_ITEM_UP = "v4-queue-item-up";
-/** v4 输入控制：queue autoDrain 开关按钮（setAutoDrain 命令） */
-export const TID_V4_AUTODRAIN_TOGGLE = "v4-autodrain-toggle";
 /** v4 输入控制：followup 路由模式开关按钮（setFollowupMode 命令） */
 export const TID_V4_FOLLOWUP_TOGGLE = "v4-followup-toggle";
 /** v4 会话标题显示（meta.title，空则显示占位） */

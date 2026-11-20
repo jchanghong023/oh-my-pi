@@ -179,19 +179,10 @@ export type CommandNullability = Assert<
 type ServerEventType = RpcAgentSessionEventFrame["type"];
 export type SessionEventSet = Assert<Same<Wire.RpcAgentEvent["type"], ServerEventType>>;
 
-// The wire does not model automatic compaction's fork-specific journaling fields.
-type WireSubsetEvents = "auto_compaction_start" | "auto_compaction_end";
 type ServerEvent<K extends ServerEventType> = Extract<RpcAgentSessionEventFrame, { type: K }>;
-// Manual compaction exposes its pairing ID, but not the journal entry reference.
-type ManualCompactionEnd = Omit<ServerEvent<"manual_compaction_end">, "summaryRef">;
 export type SessionEvents = Assert<
 	AllTrue<{
-		[K in Wire.RpcAgentEvent["type"]]: K extends WireSubsetEvents
-			? OutboundSubset<ServerEvent<K>, Extract<Wire.RpcAgentEvent, { type: K }>>
-			: Outbound<
-					K extends "manual_compaction_end" ? ManualCompactionEnd : ServerEvent<K>,
-					Extract<Wire.RpcAgentEvent, { type: K }>
-				>;
+		[K in Wire.RpcAgentEvent["type"]]: Outbound<ServerEvent<K>, Extract<Wire.RpcAgentEvent, { type: K }>>;
 	}>
 >;
 

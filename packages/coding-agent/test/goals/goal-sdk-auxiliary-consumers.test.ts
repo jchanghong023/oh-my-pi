@@ -87,6 +87,17 @@ async function harness(reply: (request: ModelRequest) => Reply) {
 	}
 	try {
 		auth.keys.setRuntime("deepseek", "isolated-goal-aux-key");
+		await Bun.write(
+			root.join(".omp", "agents", "task.md"),
+			[
+				"---",
+				"name: task",
+				"description: Read the Goal fixture",
+				"tools: read",
+				"---",
+				"Read child-input.txt, then report the actual result.",
+			].join("\n"),
+		);
 		// ascend is a company-managed provider: ModelRegistry intentionally ignores
 		// models.yml rows for it. Use an admitted customizable provider instead.
 		await Bun.write(
@@ -163,15 +174,6 @@ async function harness(reply: (request: ModelRequest) => Reply) {
 			enableIrc: false,
 			bindProcessState: false,
 			workspaceTree: { rootPath: root.path(), rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
-			getAgentDefinitions: () => [
-				{
-					name: "task",
-					description: "Read the Goal fixture",
-					systemPrompt: "Read child-input.txt, then report the actual result.",
-					source: "project" as const,
-					tools: ["read"],
-				},
-			],
 			subagentHooks: {
 				beforeSpawn: async () => ({ keepAlive: false }),
 				configureSession: async () => ({

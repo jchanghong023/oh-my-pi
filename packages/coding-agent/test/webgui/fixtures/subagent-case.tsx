@@ -77,7 +77,7 @@ function createProjection(sessionId: string, text: string) {
 				contextWindow: null,
 				cumulative: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
 			},
-			queue: { items: [], autoDrain: false },
+			queue: { items: [] },
 			pendingInteractions: [],
 			pendingCommands: [],
 			backgroundWorks: [],

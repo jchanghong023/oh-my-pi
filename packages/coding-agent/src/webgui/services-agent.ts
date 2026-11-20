@@ -718,8 +718,6 @@ class BrowserAgentAttachment {
 							envelope.commandId,
 							{
 								requestedDelivery: payload.requestedDelivery,
-								heldQueueDisposition: payload.heldQueueDisposition,
-								expectedHeldQueueItemIds: payload.expectedHeldQueueItemIds,
 							},
 						);
 						result = { type: "inputAccepted", delivery, inputId: envelope.commandId };
@@ -750,12 +748,6 @@ class BrowserAgentAttachment {
 					case "setFollowupMode":
 						runtime.setFollowupMode(commandPayloadSchemas.setFollowupMode.parse(envelope.payload).mode);
 						break;
-					case "setAutoDrain": {
-						const payload = commandPayloadSchemas.setAutoDrain.parse(envelope.payload);
-						// Resuming an idle queue schedules native work; retain this root's registry.
-						runWebGuiSession(session, () => session.setQueueAutoDrain(payload.autoDrain));
-						break;
-					}
 					case "editQueueItem": {
 						const payload = commandPayloadSchemas.editQueueItem.parse(envelope.payload);
 						await runtime.editQueued(this.#context, payload.queueItemId, payload.newText);
@@ -1052,8 +1044,6 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 					undefined,
 					{
 						requestedDelivery: payload.requestedDelivery,
-						heldQueueDisposition: payload.heldQueueDisposition,
-						expectedHeldQueueItemIds: payload.expectedHeldQueueItemIds,
 					},
 				);
 				return { sessionId: id, accepted: true, stateRevision: runtime.state(id).seq };

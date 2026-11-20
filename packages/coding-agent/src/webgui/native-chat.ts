@@ -445,8 +445,6 @@ export class NativeChatRuntime {
 		commandId?: string,
 		options: {
 			requestedDelivery?: "startNow" | "queue" | "guide";
-			heldQueueDisposition?: "clearQueueAndSend" | "keepQueueAndSend";
-			expectedHeldQueueItemIds?: string[];
 			images?: ImageContent[];
 		} = {},
 	): Promise<"startNow" | "queue" | "guide"> {
@@ -501,14 +499,10 @@ export class NativeChatRuntime {
 		}
 		if (delivery === "startNow" && busy) {
 			nativeWebGuiQuestions(session).cancelPendingInteractions("Interrupted by immediate input.");
-			await runWebGuiSession(session, () =>
-				session.abort({ reason: USER_INTERRUPT_LABEL, preserveQueuedInputs: true }),
-			);
+			await runWebGuiSession(session, () => session.abort({ reason: USER_INTERRUPT_LABEL }));
 		}
 		assertNativeChat(context);
 		if (stopGeneration !== this.#stopGeneration) throw new Error("The input was cancelled before native admission.");
-		if (options.heldQueueDisposition)
-			session.disposeHeldQueue(options.expectedHeldQueueItemIds ?? [], options.heldQueueDisposition);
 		this.state(id).error = undefined;
 		if (!session.isStreaming) this.#executionId = undefined;
 		this.#submitting++;
@@ -571,9 +565,7 @@ export class NativeChatRuntime {
 		this.notify();
 		try {
 			nativeWebGuiQuestions(session).cancelPendingInteractions("Native session stopped.");
-			await runWebGuiSession(session, () =>
-				session.abort({ reason: USER_INTERRUPT_LABEL, preserveQueuedInputs: true }),
-			);
+			await runWebGuiSession(session, () => session.abort({ reason: USER_INTERRUPT_LABEL }));
 		} catch (error) {
 			this.state(session.sessionId).error = {
 				message: error instanceof Error ? error.message : String(error),
@@ -626,9 +618,7 @@ export class NativeChatRuntime {
 		try {
 			if (session.isStreaming || this.#submitting) {
 				nativeWebGuiQuestions(session).cancelPendingInteractions("Interrupted by queued immediate input.");
-				await runWebGuiSession(session, () =>
-					session.abort({ reason: USER_INTERRUPT_LABEL, preserveQueuedInputs: true }),
-				);
+				await runWebGuiSession(session, () => session.abort({ reason: USER_INTERRUPT_LABEL }));
 			}
 			assertNativeChat(this.context(context));
 			if (this.#stopping || stopGeneration !== this.#stopGeneration)
@@ -1018,9 +1008,6 @@ export class NativeChatRuntime {
 			? nativeWebGuiQuestions(this.session).pendingInteractionsFor({ connectionId: context.connectionId, clientId })
 			: [];
 		const queuedInputs = active ? [...this.#reservations.values(), ...this.session.getQueuedInputMessages()] : [];
-		const queueAutoDrain = active && this.session.getQueueAutoDrain();
-		const queuePauseReason =
-			active && !queueAutoDrain ? (this.session.agent.queuedMessagesHeld ? "stopped" : "manual") : undefined;
 		const queue = queuedInputs.flatMap((message, index) => {
 			const input = message as AgentMessage & {
 				inputId?: string;
@@ -1142,9 +1129,7 @@ export class NativeChatRuntime {
 						? { mode: "reject", reasonCode: "guard.nativeSessionTransition" }
 						: busy
 							? { mode: this.#followupMode === "guide" ? "guide" : "enqueue" }
-							: queue.length && !queueAutoDrain
-								? { mode: "choice" }
-								: { mode: "startNow" },
+							: { mode: "startNow" },
 			meta: { title: sessionDisplayName(info), titleSource: "default" },
 			config: {
 				provider: model?.provider ?? "",
@@ -1169,11 +1154,7 @@ export class NativeChatRuntime {
 					{ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
 				),
 			},
-			queue: {
-				items: queue,
-				autoDrain: queueAutoDrain,
-				...(queuePauseReason ? { pauseReason: queuePauseReason } : {}),
-			},
+			queue: { items: queue },
 			pendingInteractions,
 			pendingCommands: [],
 			backgroundWorks: [],

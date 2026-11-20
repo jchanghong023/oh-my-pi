@@ -3235,12 +3235,6 @@ async function prepareToolCallDispatch(
 				? { intent: undefined, strippedArgs: argsForExecution }
 				: extractIntent(toolCall.arguments);
 			argsForExecution = strippedArgs;
-			if (tool?.name === "task" && intent && /"tasks"\s*:\s*\[/u.test(intent) && /"agent"\s*:\s*"/u.test(intent)) {
-				entry.args = strippedArgs;
-				entry.validationErrorMessage =
-					'The task tool was not run: `i` contains task arguments instead of a short intent label. Put `agent` inside the actual `tasks[]` item, not inside `i`, and retry. Example: {"i":"Review code","context":"Review changes","tasks":[{"agent":"reviewer","task":"Review code","solutionSpace":"code review"}]}';
-				continue;
-			}
 			if (intent) {
 				toolCall.intent = intent;
 			} else if (typeof tool?.intent === "function") {

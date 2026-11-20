@@ -185,9 +185,6 @@ function mockCreateAgentSession(session: AgentSession) {
 		session,
 		extensionsResult: {} as unknown as LoadExtensionsResult,
 		setToolUIContext: () => {},
-		getToolContext: () => {
-			throw new Error("Native tool context is unavailable in this fixture");
-		},
 		eventBus: new EventBus(),
 	} satisfies CreateAgentSessionResult);
 }
@@ -605,9 +602,6 @@ describe("runSubprocess soft request budget", () => {
 				session: handle.session,
 				extensionsResult: {} as unknown as LoadExtensionsResult,
 				setToolUIContext: () => {},
-				getToolContext: () => {
-					throw new Error("Native tool context is unavailable in this fixture");
-				},
 				eventBus: new EventBus(),
 			} satisfies CreateAgentSessionResult;
 		});
@@ -652,9 +646,6 @@ describe("runSubprocess soft request budget", () => {
 				session: handle.session,
 				extensionsResult: {} as unknown as LoadExtensionsResult,
 				setToolUIContext: () => {},
-				getToolContext: () => {
-					throw new Error("Native tool context is unavailable in this fixture");
-				},
 				eventBus: new EventBus(),
 			} satisfies CreateAgentSessionResult;
 		});

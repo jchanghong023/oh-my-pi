@@ -41,7 +41,6 @@ export type NativeSubagentOverrides = Pick<
 	| "lspReadOnly"
 	| "enableIrc"
 	| "subagentHooks"
-	| "extensionProviderOwnership"
 	| "preloadedPreparedExtensions"
 	| "deferHintCompression"
 > & {

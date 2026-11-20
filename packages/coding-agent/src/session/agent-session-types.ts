@@ -318,8 +318,6 @@ export interface AgentSessionConfig {
 	rebindModelAfterDiscovery?: boolean;
 	/** Tool registry for LSP and settings. */
 	toolRegistry?: Map<string, AgentTool>;
-	/** Session-only edit variant pin, shared with the built-in tool context. */
-	editMode?: ToolSession["editMode"];
 	/** Creates tools registered only while vibe mode is active. */
 	createVibeTools?: () => AgentTool[];
 	/** Names whose current registry entry is the built-in implementation. */
@@ -473,25 +471,11 @@ export interface PromptOptions {
 		epoch?: string;
 		type?: string;
 		automationId?: string;
-		/** Frozen host input intent; interpreted only by the session's delivery owner. */
-		configuration?: { mode?: string; planEnabled?: boolean };
 	};
 	/** Caller restrictions for this input, retained with queued/persisted input identity. */
 	toolDenylist?: readonly string[];
 	/** Input author identity supplied by an embedding host; not provider metadata. */
 	inputClientId?: string;
-	/** Immutable attachment references owned by the submitting host, retained in history.
-	 * Native hosts supply [] when no uploads exist, distinguishing resolved file-reference images
-	 * from inline images supplied by CLI/TUI callers that omit this metadata. */
-	attachments?: readonly {
-		ref: string;
-		fileName: string;
-		mime: string;
-		bytes: number;
-		sourceKind?: string;
-		messageCount?: number;
-		previewRef?: string;
-	}[];
 	/** Whether to expand file-based prompt templates (default: true). */
 	expandPromptTemplates?: boolean;
 	/**

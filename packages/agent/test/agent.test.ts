@@ -2002,6 +2002,27 @@ describe("Agent active thinking phase", () => {
 		return observed.promise;
 	}
 
+	it("publishes external thinking before committing and notifying the final message", () => {
+		const agent = new Agent();
+		const message = createAssistantMessage([{ type: "thinking", thinking: "external reasoning" }]);
+		const observed: Array<[AgentEvent["type"], number | undefined, boolean]> = [];
+		agent.subscribe(event => {
+			observed.push([event.type, agent.state.activeThinkingIndex, agent.state.messages.includes(message)]);
+		});
+
+		agent.emitExternalEvent({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "external reasoning", partial: message },
+		});
+		agent.emitExternalEvent({ type: "message_end", message });
+
+		expect(observed).toEqual([
+			["message_update", 0, false],
+			["message_end", undefined, true],
+		]);
+	});
+
 	it("publishes the exact thinking phase and clears thinking_end while the provider remains idle", async () => {
 		const stream = new AssistantMessageEventStream();
 		const agent = new Agent({ streamFn: () => stream });

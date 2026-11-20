@@ -1554,7 +1554,7 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
-	it("lists extension modules configured for the requested project, not the ACP process", async () => {
+	it("lists project extensions by cwd and uses live settings only for an explicit ACP session", async () => {
 		const harness = await createHarness();
 		const other = path.join(harness.cwdA, "other");
 		const target = path.join(harness.cwdB, "fleet");
@@ -1568,6 +1568,7 @@ describe("ACP agent", () => {
 			"extensions:\n  - ./fleet\ndisabledExtensions:\n  - extension-module:hello\n",
 		);
 		cfgExtensions.set(Settings.instance, [other]);
+		const { sessionId } = await harness.agent.newSession({ cwd: harness.cwdB, mcpServers: [] });
 
 		const result = await harness.agent.extMethod("_omp/extensions", { cwd: harness.cwdB });
 		expect(result.extensions).toEqual(
@@ -1583,6 +1584,11 @@ describe("ACP agent", () => {
 		);
 		expect(result.extensions).not.toEqual(
 			expect.arrayContaining([expect.objectContaining({ id: "extension-module:wrong" })]),
+		);
+
+		const sessionResult = await harness.agent.extMethod("_omp/extensions", { sessionId });
+		expect(sessionResult.extensions).toEqual(
+			expect.arrayContaining([expect.objectContaining({ id: "extension-module:wrong", state: "active" })]),
 		);
 		harness.abortController.abort();
 		await Bun.sleep(0);

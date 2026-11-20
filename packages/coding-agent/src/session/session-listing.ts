@@ -54,8 +54,6 @@ export interface SessionInfo {
 	assistantTurns?: number;
 	/** File size in bytes on disk; used for compact list rendering. */
 	size: number;
-	/** File generation observed by the metadata scan; absent on synthesized entries. */
-	fileSnapshot?: Readonly<Pick<SessionStorageStat, "size" | "mtimeMs" | "ctimeMs">>;
 	firstMessage: string;
 	allMessagesText: string;
 	/**
@@ -429,13 +427,6 @@ function getSessionListWorkerCount(fileCount: number): number {
 	);
 }
 
-function sameFileSnapshot(
-	left: Pick<SessionStorageStat, "size" | "mtimeMs" | "ctimeMs">,
-	right: SessionStorageStat,
-): boolean {
-	return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
-}
-
 /**
  * Scan a single session file into a {@link SessionInfo}. Reads the 4 KB
  * prefix, plus the 32 KB tail when `withStatus` is set; a record the windows
@@ -446,7 +437,6 @@ async function scanSessionFile(
 	storage: SessionStorage,
 	withStatus: boolean,
 	knownStat?: SessionStorageStat,
-	retries = 2,
 ): Promise<SessionInfo | undefined> {
 	let stat: SessionStorageStat;
 	try {
@@ -460,7 +450,7 @@ async function scanSessionFile(
 	// two variants are cached under distinct keys.
 	const cacheKey = withStatus ? `s\0${file}` : `h\0${file}`;
 	const cached = cache.get(cacheKey);
-	if (cached && sameFileSnapshot(cached, stat)) {
+	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size && cached.ctimeMs === stat.ctimeMs) {
 		return cached.info ? { ...cached.info } : undefined;
 	}
 	try {
@@ -469,9 +459,6 @@ async function scanSessionFile(
 			SESSION_LIST_PREFIX_BYTES,
 			withStatus ? SESSION_LIST_SUFFIX_BYTES : 0,
 		);
-		if (!sameFileSnapshot(stat, storage.statSync(file))) {
-			return retries > 0 ? scanSessionFile(file, storage, withStatus, undefined, retries - 1) : undefined;
-		}
 		const { size, mtime } = stat;
 		const entries = parseJsonlLenient<Record<string, unknown>>(content);
 		const header = parseSessionListHeader(content, entries);
@@ -541,9 +528,6 @@ async function scanSessionFile(
 			} catch {
 				// Backend unreadable: keep the bounded-window evidence.
 			}
-			if (!sameFileSnapshot(stat, storage.statSync(file))) {
-				return retries > 0 ? scanSessionFile(file, storage, withStatus, undefined, retries - 1) : undefined;
-			}
 		}
 		firstMessage ||= extractFirstDisplayMessageFromPrefix(content) ?? "";
 		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
@@ -559,7 +543,6 @@ async function scanSessionFile(
 			messageCount,
 			assistantTurns,
 			size,
-			fileSnapshot: { size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs },
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
 			status: withStatus ? deriveSessionStatus(suffix) : undefined,
@@ -719,19 +702,6 @@ export function listSessions(sessionDir: string, storage: SessionStorage): Promi
  */
 export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage): Promise<SessionInfo[]> {
 	return scanSessionDirReadOnly(sessionDir, storage, true);
-}
-
-/**
- * Drop the cached scan results for `file` so the next listing re-reads it
- * regardless of stat identity. Needed after same-size rewrites published via
- * temp-file rename: the fixed-width title slot keeps `size` unchanged and the
- * renamed file can carry the same coarse filesystem timestamp as the previous
- * write, so the `mtimeMs`+`size` cache key alone cannot detect the change.
- */
-export function invalidateSessionScan(file: string, storage: SessionStorage): void {
-	const cache = getSessionScanCache(storage);
-	cache.delete(`s\0${file}`);
-	cache.delete(`h\0${file}`);
 }
 
 /** List all sessions across all project directories (newest first). */

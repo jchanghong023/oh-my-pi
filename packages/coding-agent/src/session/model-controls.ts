@@ -42,12 +42,6 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import type { EditModeSetting } from "../edit/settings";
 import type { AgentSessionEvent } from "./agent-session-events";
-import {
-	currentExecutionModel,
-	ExecutionModelContractError,
-	type ExecutionModelOptions,
-	withExecutionModelContext,
-} from "./execution-model";
 import type { ModelCycleResult, ResolvedRoleModel, RoleModelCycle, RoleModelCycleResult } from "./agent-session-types";
 import { formatRoleModelValue, resolveRoleModelFull } from "./role-models";
 import { EPHEMERAL_MODEL_CHANGE_ROLE, PREWALK_MODEL_CHANGE_ROLE, TEMPORARY_MODEL_CHANGE_ROLE } from "./session-entries";
@@ -158,13 +152,8 @@ export interface ModelControlsHost {
 	emit(event: AgentSessionEvent): void;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
-	/** Includes prompt setup and admitted submissions, not just the provider stream. */
-	executionModelIdle?(): boolean;
-	executionModelReleased?(): void;
 	/** Resolves actual request-local auth without persisting or pinning credentials. */
 	validateExecutionModelAuth?(model: Model, signal?: AbortSignal): Promise<boolean>;
-	/** Restores an unselected session after its first execution-only selection. */
-	clearExecutionModel?(): Promise<void>;
 }
 
 /** Owns model selection, thinking effort, role cycling, and service tiers. */
@@ -177,8 +166,6 @@ export class ModelControls {
 	#autoThinking = false;
 	#autoResolvedLevel: Effort | undefined;
 	#serviceTierByFamily: ServiceTierByFamily;
-	#modelSelectionGeneration = 0;
-	#executionModelLease: { owner: object; sessionId: string; published: boolean } | undefined;
 
 	constructor(
 		host: ModelControlsHost,
@@ -319,7 +306,6 @@ export class ModelControls {
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
-		this.#modelSelectionGeneration++;
 		await this.#host.setModelWithProviderSessionReset(targetModel);
 		this.#host.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
 		if (options?.persist) {
@@ -366,7 +352,6 @@ export class ModelControls {
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
-		this.#modelSelectionGeneration++;
 		await this.#host.setModelWithProviderSessionReset(targetModel, selection);
 		// Identity, not object equality: the agent's resolver and metadata rebinds swap in refitted rows of the
 		// same model. Only a different model means another selection replaced this one during reconciliation.
@@ -398,166 +383,6 @@ export class ModelControls {
 	async #hasSelectionAuth(model: Model, signal?: AbortSignal): Promise<boolean> {
 		if (this.#host.modelRegistry.hasConfiguredAuth(model)) return true;
 		return (await this.#host.validateExecutionModelAuth?.(model, signal)) ?? false;
-	}
-
-	/** Authorization and metadata lookup may overlap normal work; publication may not. */
-	executionModelBlocksInput(): boolean {
-		const lease = this.#executionModelLease;
-		return (
-			lease?.published === true &&
-			(currentExecutionModel()?.lease !== lease || this.#host.sessionId() !== lease.sessionId)
-		);
-	}
-
-	/**
-	 * Own exactly one idle execution. No journal/settings writes or credential mutation.
-	 * A later explicit selection (even the same model) owns the final selection.
-	 */
-	async withExecutionModel<T>(options: ExecutionModelOptions, run: () => Promise<T>): Promise<T> {
-		options.signal?.throwIfAborted();
-		if (!this.#host.executionModelIdle?.() || this.#executionModelLease) {
-			throw new ExecutionModelContractError("Execution model selection requires an idle session");
-		}
-		const previousModel = this.#model;
-		if (!previousModel && !this.#host.clearExecutionModel) {
-			throw new ExecutionModelContractError(
-				"Execution model selection requires unselected-model restoration support",
-			);
-		}
-		const lease = { owner: this.#host.agent, sessionId: this.#host.sessionId(), published: false };
-		const generation = this.#modelSelectionGeneration;
-		const thinking = this.#thinkingLevel;
-		const auto = this.#autoThinking;
-		const resolved = this.#autoResolvedLevel;
-		this.#executionModelLease = lease;
-		let targetModel: Model | undefined;
-		let releasePromise: Promise<void> | undefined;
-		const releaseModel = (): Promise<void> => {
-			releasePromise ??= (async () => {
-				try {
-					if (lease.published && generation === this.#modelSelectionGeneration && this.#model === targetModel) {
-						const previousEditMode = this.#host.resolveActiveEditMode();
-						if (previousModel) await this.#host.setModelWithProviderSessionReset(previousModel, "automatic");
-						else await this.#host.clearExecutionModel!();
-						if (
-							generation === this.#modelSelectionGeneration &&
-							(previousModel ? modelsAreEqual(this.#model, previousModel) : this.#model === undefined)
-						) {
-							this.restoreThinkingSnapshot(thinking, auto, resolved);
-							await this.#host.syncAfterModelChange(previousEditMode);
-						}
-					}
-				} finally {
-					if (this.#executionModelLease === lease) {
-						this.#executionModelLease = undefined;
-						if (lease.published) this.#host.executionModelReleased?.();
-					}
-				}
-			})();
-			return releasePromise;
-		};
-		try {
-			// Unlike ordinary selectors, admission needs resolved auth, not merely a configured source.
-			const requestAuth = await options.resolveRequestAuth?.(options.model, options.signal);
-			const authorized =
-				requestAuth?.apiKey || (requestAuth?.headers && Object.keys(requestAuth.headers).length > 0)
-					? true
-					: this.#host.validateExecutionModelAuth
-						? await this.#host.validateExecutionModelAuth(options.model, options.signal)
-						: Boolean(await this.#host.modelRegistry.getApiKey(options.model, this.#host.sessionId()));
-			options.signal?.throwIfAborted();
-			if (!authorized) throw new Error(`No API key for ${options.model.provider}/${options.model.id}`);
-			targetModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(options.model);
-			options.signal?.throwIfAborted();
-			if (generation !== this.#modelSelectionGeneration || this.#host.sessionId() !== lease.sessionId) {
-				throw new ExecutionModelContractError("Model selection changed before execution admission");
-			}
-			if (!this.#host.executionModelIdle?.()) {
-				throw new ExecutionModelContractError("Execution model selection requires an idle session");
-			}
-			const previousEditMode = this.#host.resolveActiveEditMode();
-			lease.published = true;
-			const install = this.#host.setModelWithProviderSessionReset(targetModel, "automatic");
-			// Agent's model resolver may adapt a catalog row to per-session options.
-			targetModel = this.#model ?? targetModel;
-			await install;
-			if (generation !== this.#modelSelectionGeneration || this.#model !== targetModel) {
-				throw new ExecutionModelContractError("Model selection changed before execution admission");
-			}
-			this.restoreThinkingLevel(options.thinkingLevel ?? this.configuredThinkingLevel());
-			await this.#host.syncAfterModelChange(previousEditMode);
-			options.signal?.throwIfAborted();
-			if (
-				generation !== this.#modelSelectionGeneration ||
-				this.#model !== targetModel ||
-				this.#host.sessionId() !== lease.sessionId
-			) {
-				throw new ExecutionModelContractError("Model selection changed before execution admission");
-			}
-			return await withExecutionModelContext(
-				{
-					lease,
-					model: targetModel,
-					thinkingLevel: this.configuredThinkingLevel(),
-					policies: options.policies,
-					resolveRequestAuth: options.resolveRequestAuth,
-					recoverModelRequest: options.recoverModelRequest
-						? async request => {
-								const replacement = await options.recoverModelRequest!(request);
-								if (!replacement) return undefined;
-								request.signal?.throwIfAborted();
-								if (
-									this.#executionModelLease !== lease ||
-									generation !== this.#modelSelectionGeneration ||
-									this.#model !== targetModel
-								) {
-									throw new ExecutionModelContractError("Model selection changed during execution recovery");
-								}
-								const recoveredModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(
-									replacement.model,
-								);
-								request.signal?.throwIfAborted();
-								if (
-									this.#executionModelLease !== lease ||
-									generation !== this.#modelSelectionGeneration ||
-									this.#model !== targetModel
-								) {
-									throw new ExecutionModelContractError("Model selection changed during execution recovery");
-								}
-								const previousEditMode = this.#host.resolveActiveEditMode();
-								const install = this.#host.setModelWithProviderSessionReset(recoveredModel, "automatic");
-								targetModel = this.#model ?? recoveredModel;
-								await install;
-								if (
-									this.#executionModelLease !== lease ||
-									generation !== this.#modelSelectionGeneration ||
-									this.#model !== targetModel
-								) {
-									throw new ExecutionModelContractError("Model selection changed during execution recovery");
-								}
-								this.restoreThinkingLevel(replacement.thinkingLevel ?? this.configuredThinkingLevel());
-								await this.#host.syncAfterModelChange(previousEditMode);
-								if (
-									this.#executionModelLease !== lease ||
-									generation !== this.#modelSelectionGeneration ||
-									this.#model !== targetModel
-								) {
-									throw new ExecutionModelContractError("Model selection changed during execution recovery");
-								}
-								return {
-									...replacement,
-									model: targetModel,
-									thinkingLevel: this.configuredThinkingLevel(),
-								};
-							}
-						: undefined,
-					releaseModel,
-				},
-				run,
-			);
-		} finally {
-			await releaseModel();
-		}
 	}
 
 	/**
@@ -665,7 +490,6 @@ export class ModelControls {
 		// Apply model
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#host.clearActiveRetryFallback();
-		this.#modelSelectionGeneration++;
 		await this.#host.setModelWithProviderSessionReset(next.model);
 		this.#host.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
 		this.#host.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
@@ -697,7 +521,6 @@ export class ModelControls {
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#host.clearActiveRetryFallback();
-		this.#modelSelectionGeneration++;
 		await this.#host.setModelWithProviderSessionReset(nextModel);
 		this.#host.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
 		this.#host.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);

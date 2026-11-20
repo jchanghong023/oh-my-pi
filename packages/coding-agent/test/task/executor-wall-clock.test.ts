@@ -65,9 +65,6 @@ function mockCreateAgentSession(session: AgentSession) {
 		session,
 		extensionsResult: {} as unknown as LoadExtensionsResult,
 		setToolUIContext: () => {},
-		getToolContext: () => {
-			throw new Error("Native tool context is unavailable in this fixture");
-		},
 		eventBus: new EventBus(),
 	} satisfies CreateAgentSessionResult);
 }
@@ -218,9 +215,6 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 				session: handle.session,
 				extensionsResult: {} as unknown as LoadExtensionsResult,
 				setToolUIContext: () => {},
-				getToolContext: () => {
-					throw new Error("Native tool context is unavailable in this fixture");
-				},
 				eventBus: new EventBus(),
 			} satisfies CreateAgentSessionResult;
 		});
@@ -269,9 +263,6 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 				session: lateSession,
 				extensionsResult: {} as unknown as LoadExtensionsResult,
 				setToolUIContext: () => {},
-				getToolContext: () => {
-					throw new Error("Native tool context is unavailable in this fixture");
-				},
 				eventBus: new EventBus(),
 			} satisfies CreateAgentSessionResult;
 		});

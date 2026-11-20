@@ -160,10 +160,8 @@ export const sessionActionAvailabilitySchema = z.object({
 export type SessionActionAvailability = z.infer<typeof sessionActionAvailabilitySchema>;
 
 export const inputRoutingSchema = z.object({
-  // choice：held（completed+queue>0+autoDrain=false）下
-  // 输入不静默入队，客户端呈现「清空 queue 后发送 / 保留 queue 立即发送」。
-  mode: z.enum(["startNow", "enqueue", "guide", "reject", "choice"]),
-  // mode=reject 必带；enqueue/guide/choice 可带（如 guide 不合格回退原因）。
+  mode: z.enum(["startNow", "enqueue", "guide", "reject"]),
+  // mode=reject 必带；enqueue/guide 可带（如 guide 不合格回退原因）。
   reasonCode: z.string().optional(),
 });
 export type InputRouting = z.infer<typeof inputRoutingSchema>;
@@ -210,10 +208,6 @@ export type QueueItem = z.infer<typeof queueItemSchema>;
 
 export const queueStateSchema = z.object({
   items: z.array(queueItemSchema),
-  // stop 后 = false（暂停队列）；setAutoDrain 恢复。
-  autoDrain: z.boolean(),
-  // additive：旧快照缺省时 UI 使用通用暂停文案；Stop/TurnError 可显示原因文案。
-  pauseReason: z.enum(["stopped", "manual", "error"]).optional(),
 });
 export type QueueState = z.infer<typeof queueStateSchema>;
 

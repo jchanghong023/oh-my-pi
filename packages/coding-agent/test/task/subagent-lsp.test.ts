@@ -141,9 +141,6 @@ function mockCreateAgentSession(): { getOptions: () => CreateAgentSessionOptions
 			session: createYieldingSession(),
 			extensionsResult: {} as unknown as LoadExtensionsResult,
 			setToolUIContext: () => {},
-			getToolContext: () => {
-				throw new Error("Native tool context is unavailable in this fixture");
-			},
 			eventBus: new EventBus(),
 		} satisfies CreateAgentSessionResult;
 	});

@@ -76,6 +76,49 @@ describe("session listing scan cache", () => {
 		expect(after[0]?.firstMessage).toBe("SAME-LENGTH");
 	});
 
+	it("invalidates when only ctime changes after a same-size replacement", async () => {
+		const storage = new MemorySessionStorage();
+		const file = `${SESSION_DIR}/peer-replacement.jsonl`;
+		const statSync = storage.statSync.bind(storage);
+		let ctimeMs = 1;
+		const mtime = new Date(0);
+		const stat = spyOn(storage, "statSync").mockImplementation(filePath => ({
+			...statSync(filePath),
+			mtimeMs: mtime.getTime(),
+			mtime,
+			ctimeMs,
+		}));
+		try {
+			writeSession(storage, file, "before");
+			const size = statSync(file).size;
+			expect((await listSessions(SESSION_DIR, storage))[0]?.firstMessage).toBe("before");
+
+			writeSession(storage, file, "AFTER!");
+			expect(statSync(file).size).toBe(size);
+			ctimeMs++;
+			expect((await listSessions(SESSION_DIR, storage))[0]?.firstMessage).toBe("AFTER!");
+		} finally {
+			stat.mockRestore();
+		}
+	});
+
+	it("keeps an actively growing session in the list while reading its preview", async () => {
+		const storage = new MemorySessionStorage();
+		const file = `${SESSION_DIR}/streaming.jsonl`;
+		writeSession(storage, file, "running prompt");
+		const readTextSlices = storage.readTextSlices.bind(storage);
+		const read = spyOn(storage, "readTextSlices").mockImplementation(async (...args) => {
+			const slices = await readTextSlices(...args);
+			storage.appendSync(file, '{"type":"message","message":{"role":"assistant","content":"streaming"}}\n');
+			return slices;
+		});
+		try {
+			expect((await listSessions(SESSION_DIR, storage))[0]?.firstMessage).toBe("running prompt");
+		} finally {
+			read.mockRestore();
+		}
+	});
+
 	it("caches negative results for unparseable files", async () => {
 		const storage = new MemorySessionStorage();
 		const file = `${SESSION_DIR}/garbage.jsonl`;

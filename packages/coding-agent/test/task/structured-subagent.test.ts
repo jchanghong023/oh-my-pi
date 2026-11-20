@@ -399,25 +399,6 @@ describe("structured subagent primitive", () => {
 		expect(policy.modelOverride).toEqual(["b/y"]);
 	});
 
-	it("keeps explicit host definitions ahead of session tags without sharing them across sessions", async () => {
-		mockDiscovery({ ...AGENT, name: "m1", model: ["discovered/model"] });
-		const tagged: AgentDefinition = {
-			...AGENT,
-			name: "m1",
-			model: ["tagged/model:high"],
-			thinkingLevel: Effort.High,
-		};
-		const explicit: AgentDefinition = { ...AGENT, name: "m1", model: ["host/model"] };
-		const host = session({ sessionAgents: [tagged] });
-		host.getAgentDefinitions = () => [explicit];
-		const policy = await resolveEffectiveSubagentPolicy(request({ session: host, agent: "m1", effort: "lo" }));
-		expect(policy.agent).toBe(explicit);
-		expect(policy.modelOverride).toEqual(["host/model"]);
-		expect(policy.effort).toBe("lo");
-		const other = await resolveEffectiveSubagentPolicy(request({ session: session(), agent: "m1" }));
-		expect(other.modelOverride).toEqual(["discovered/model"]);
-	});
-
 	it("keeps live native capabilities on the owning thread while ordinary runs use placement", async () => {
 		const pool = new SubagentWorkerPool({ maxWorkers: () => 1 });
 		setSubagentWorkerPoolForTests(pool);
@@ -440,12 +421,6 @@ describe("structured subagent primitive", () => {
 			{ subagentHooks: { beforeSpawn: async () => ({}), configureSession: async () => ({}) } },
 			{ subagentRequest: request() },
 			{ onSessionCreated: () => {} },
-			{
-				createInteractionUI: () => {
-					throw new Error("not called");
-				},
-			},
-			{ getAgentDefinitions: () => [AGENT] },
 		];
 		try {
 			for (const capability of capabilities) {
@@ -741,9 +716,6 @@ describe("structured subagent primitive", () => {
 				session: child,
 				extensionsResult: {} as unknown as LoadExtensionsResult,
 				setToolUIContext: () => {},
-				getToolContext: () => {
-					throw new Error("This effort fixture does not execute host-context tools");
-				},
 				eventBus: new EventBus(),
 			};
 		});

@@ -87,8 +87,6 @@ const STOP = tid("v4-stop");
 const ASK = tid("v4-native-question");
 const QUESTION = `${ASK},${tid("v4-user-input-dialog")}`;
 const QUEUE = tid("v4-queue");
-const QUEUE_PAUSED = tid("v4-queue-paused-banner");
-const QUEUE_RESUME = tid("v4-queue-resume");
 const nativeAdmissions = new WeakMap<DevelopmentContext, Map<string, Evidence & { cwd: string }>>();
 const body = async (page: DevelopmentPage) => {
 	await assertUiHealthy(page);
@@ -766,13 +764,13 @@ export function developmentScenarios(
 					"Use the native write tool to create queued-second.txt containing exactly queued-after-first.",
 				);
 				const queueState = () =>
-					page.evaluate<{ autoDrain: string | null; text: string; paused: boolean; count: number }>(
-						`(function(){var queue=document.querySelector(${JSON.stringify(QUEUE)});return {autoDrain:queue&&queue.getAttribute('data-queue-auto-drain'),text:queue?queue.innerText:'',paused:!!document.querySelector(${JSON.stringify(QUEUE_PAUSED)}),count:queue?Number(queue.getAttribute('data-queue-count')):0};})()`,
+					page.evaluate<{ text: string; count: number }>(
+						`(function(){var queue=document.querySelector(${JSON.stringify(QUEUE)});return {text:queue?queue.innerText:'',count:queue?Number(queue.getAttribute('data-queue-count')):0};})()`,
 					);
 				const admittedQueue = await observe(
 					queueState,
 					value => value.count > 0 && value.text.includes("queued-second.txt"),
-					"native busy follow-up admission, whether held or auto-draining",
+					"native busy follow-up admission",
 				);
 				check(await visible(page, STOP), "Follow-up admission was not observed during the active native run");
 				check(
@@ -800,18 +798,7 @@ export function developmentScenarios(
 					},
 					"two native queued follow-ups admitted in FIFO order while busy",
 				);
-				const drainState = await queueState();
-				evidence.push({ sessionId: a(), admittedQueue, fifoQueue, drainState });
-				if (drainState.autoDrain === "false") {
-					check(drainState.paused, "Held native queue has no paused banner");
-					await click(page, QUEUE_RESUME);
-					await observe(
-						queueState,
-						value => value.autoDrain === "true" || value.count === 0,
-						"native queue resumed or drained after explicit Continue",
-					);
-					evidence.push({ manualResumeControl: QUEUE_RESUME });
-				} else check(drainState.autoDrain === "true", "Native queue has no authoritative drain mode");
+				evidence.push({ sessionId: a(), admittedQueue, fifoQueue });
 				evidence.push(await written(context, "queue-first.txt", a()));
 				evidence.push(await written(context, "queued-second.txt", "queued-after-first"));
 				evidence.push(await written(context, "queued-third.txt", "queued-after-second"));

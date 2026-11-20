@@ -103,8 +103,6 @@ export interface SessionToolsHost {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
-	/** Explicit session edit variant, before model-specific adaptation. */
-	readonly editMode?: EditModeSetting;
 	/** Session-local extension roots (explicit + mode + configured) for post-startup reloads. */
 	effectiveExtensionRoots(): EffectiveExtensionRoots;
 	modelRegistry: ModelRegistry;
@@ -1190,7 +1188,6 @@ export class SessionTools {
 	#getEditModeSession() {
 		return {
 			settings: this.#host.settings,
-			editMode: this.#host.editMode,
 			getActiveModelString: () => {
 				const model = this.#host.model();
 				return model ? formatModelString(model) : undefined;

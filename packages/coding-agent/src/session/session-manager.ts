@@ -2145,11 +2145,7 @@ export class SessionManager {
 		}
 	}
 
-	#resetToNewSession(
-		options?: NewSessionOptions,
-		forcedSessionFile?: string,
-		requestedSessionId?: string,
-	): string | undefined {
+	#resetToNewSession(options?: NewSessionOptions, forcedSessionFile?: string): string | undefined {
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
 		this.#expectedDiskSize = null;
@@ -2158,10 +2154,7 @@ export class SessionManager {
 			this.#sessionDir = path.resolve(options.sessionDir);
 			this.#storage.ensureDirSync(this.#sessionDir);
 		}
-		if (requestedSessionId !== undefined && !/^[A-Za-z0-9_-]+$/.test(requestedSessionId)) {
-			throw new Error("Invalid requested session identity");
-		}
-		const sessionId = requestedSessionId ?? mintSessionId();
+		const sessionId = mintSessionId();
 		const timestamp = nowIso();
 		const sessionFile = this.#persist
 			? (forcedSessionFile ?? path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${sessionId}.jsonl`))
@@ -3860,25 +3853,13 @@ export class SessionManager {
 			preserveData?: Record<string, unknown>;
 			method?: CompactionMethod;
 			origin?: CompactionEntry["origin"];
-			operationId?: string;
 			providerReplayThroughEntryId?: string;
 			tokensAfter?: number;
-			/** Commit a prepared summary directly onto a replacement-input branch. */
-			rebaseParentId?: string | null;
 		} = {},
 	): string {
-		if (
-			options.rebaseParentId !== undefined &&
-			options.rebaseParentId !== null &&
-			!this.#index.has(options.rebaseParentId)
-		) {
-			throw new Error(`Entry ${options.rebaseParentId} not found`);
-		}
-		if (options.rebaseParentId !== undefined) this.#index.detachBranchView();
 		const entry: CompactionEntry<T> = {
 			type: "compaction",
 			...this.#freshEntryFields(),
-			...(options.rebaseParentId === undefined ? {} : { parentId: options.rebaseParentId }),
 			summary,
 			shortSummary,
 			firstKeptEntryId,
@@ -3886,7 +3867,6 @@ export class SessionManager {
 			tokensAfter: options.tokensAfter,
 			method: options.method,
 			origin: options.origin,
-			operationId: options.operationId,
 			providerReplayThroughEntryId: options.providerReplayThroughEntryId,
 			details: options.details,
 			fromExtension: options.fromExtension,
@@ -4221,18 +4201,6 @@ export class SessionManager {
 		this.#setLeaf(null);
 	}
 
-	/** 精确恢复已选分支；保留提交后的旁支记录，并让重载恢复同一 leaf。 */
-	async restoreLeaf(leafId: string | null): Promise<void> {
-		if (leafId !== null && !this.#index.has(leafId)) throw new Error(`Entry ${leafId} not found`);
-		this.#setLeaf(leafId);
-		const lastEntry = this.#entries.at(-1);
-		if (lastEntry) {
-			// 修复：仅移动内存 leaf 会在重载时误选最后写入的压缩旁支。
-			lastEntry.activeLeafId = leafId;
-			await this.rewriteEntries();
-		}
-	}
-
 	/**
 	 * Durably move the active branch past a discarded entry.
 	 *
@@ -4415,15 +4383,10 @@ export class SessionManager {
 	 * @param cwd Working directory (stored in the session header)
 	 * @param sessionDir Optional session directory; defaults to the cwd-derived dir.
 	 */
-	static create(
-		cwd: string,
-		sessionDir?: string,
-		storage: SessionStorage = new FileSessionStorage(),
-		options?: { sessionId?: string },
-	): SessionManager {
+	static create(cwd: string, sessionDir?: string, storage: SessionStorage = new FileSessionStorage()): SessionManager {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
-		manager.#resetToNewSession(undefined, undefined, options?.sessionId);
+		manager.#resetToNewSession();
 		return manager;
 	}
 

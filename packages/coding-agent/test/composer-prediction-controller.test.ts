@@ -84,7 +84,6 @@ interface HarnessOptions {
 	capPreservesRequest?: boolean;
 	deadlineMs?: number;
 	meterProvider?: MeterProvider;
-	isCurrent?: () => boolean;
 }
 
 const MODEL = { id: "claude-sonnet-4-5", provider: "anthropic", api: "anthropic-messages" } as Model;
@@ -126,7 +125,6 @@ function harness(options: HarnessOptions = {}) {
 		focusedAgentId: options.focusedAgentId,
 		editor,
 		ui: { requestRender: () => renders++ },
-		isCurrent: options.isCurrent,
 	} as unknown as ConstructorParameters<typeof ComposerPredictionController>[0];
 	const controller = new ComposerPredictionController(ctx, {
 		deadlineMs: options.deadlineMs,
@@ -161,6 +159,7 @@ function harness(options: HarnessOptions = {}) {
 		editor,
 		turns,
 		messages,
+		sessionManager,
 		firstLeafId,
 		reply,
 		fail,
@@ -327,35 +326,20 @@ describe("ComposerPredictionController", () => {
 		expect(controller.choices).toEqual(["now run the tests"]);
 	});
 
-	it("settles superseded paid requests before an owning host can release the ledger", async () => {
-		const { controller, reply, usageEntries } = harness();
+	it("drops ready and in-flight predictions when the journal session ID changes", async () => {
+		const { controller, sessionManager, reply } = harness();
 		controller.request();
-		controller.request();
-		controller.cancel();
-		let settled = false;
-		const closing = controller.settled().then(() => {
-			settled = true;
-		});
-		await reply(1, "newer but cancelled");
-		expect(settled).toBe(false);
-		await reply(0, "older paid reply");
-		await closing;
-		expect(settled).toBe(true);
-		expect(controller.choices).toBeUndefined();
-		expect(usageEntries()).toHaveLength(2);
-	});
+		await reply(0, "now run the tests");
+		expect(controller.choices).toEqual(["now run the tests"]);
 
-	it("discards a late reply when its non-TUI target generation is retired", async () => {
-		let current = true;
-		const { controller, turns, reply, usageEntries } = harness({ isCurrent: () => current });
-		controller.request();
-		current = false;
-		await reply(0, "wrong generation");
+		// Reuse the view object and message anchor, so only the journal identity changes.
+		await sessionManager.newSession();
 		expect(controller.choices).toBeUndefined();
-		expect(usageEntries()).toHaveLength(1);
+
 		controller.request();
-		expect(turns).toHaveLength(1);
-		await controller.settled();
+		await sessionManager.newSession();
+		await reply(1, "old session reply");
+		expect(controller.choices).toBeUndefined();
 	});
 
 	it("keeps the prediction when a row kept out of context lands, but not when a context message does", async () => {

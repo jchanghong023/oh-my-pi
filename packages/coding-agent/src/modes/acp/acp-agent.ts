@@ -1704,19 +1704,9 @@ export class AcpAgent implements Agent {
 				return { reports: reports ?? [] };
 			}
 			case "_omp/extensions": {
-				const requestedCwd = typeof params.cwd === "string" ? path.resolve(params.cwd) : undefined;
 				const session =
-					typeof params.sessionId === "string"
-						? this.#getSessionRecord(params.sessionId).session
-						: ([...this.#sessions.values()].find(
-								record =>
-									!requestedCwd || path.resolve(record.session.sessionManager.getCwd()) === requestedCwd,
-							)?.session ??
-							(this.#initialSession &&
-							(!requestedCwd || path.resolve(this.#initialSession.sessionManager.getCwd()) === requestedCwd)
-								? this.#initialSession
-								: undefined));
-				const cwd = session?.sessionManager.getCwd() ?? requestedCwd;
+					typeof params.sessionId === "string" ? this.#getSessionRecord(params.sessionId).session : undefined;
+				const cwd = session?.sessionManager.getCwd() ?? (typeof params.cwd === "string" ? params.cwd : undefined);
 				const sm = session?.settings ?? (cwd ? await Settings.loadReadOnly({ cwd }) : await Settings.init());
 				const disabledIds = cfgDisabledExtensions.get(sm);
 				const extensions = await withActiveSettings(sm, () =>

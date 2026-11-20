@@ -1060,15 +1060,6 @@ export interface AgentInputMetadata {
 		automationId?: string;
 	};
 	toolDenylist?: readonly string[];
-	attachments?: readonly {
-		ref: string;
-		fileName: string;
-		mime: string;
-		bytes: number;
-		sourceKind?: string;
-		messageCount?: number;
-		previewRef?: string;
-	}[];
 }
 
 export type AgentUserMessage = Extract<Message, { role: "user" }> & AgentInputMetadata;

@@ -31,6 +31,7 @@
  * that also import the module-level `settings` need the global initialized.
  */
 import { vi } from "bun:test";
+import { activeThinkingIndexAfterEvent, type AgentEvent, type AgentState } from "@oh-my-pi/pi-agent-core";
 import { isSettingsInitialized, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { MCPDroppedServer } from "@oh-my-pi/pi-coding-agent/mcp/transforms";
@@ -144,6 +145,42 @@ export function createSessionStub(
 	} satisfies SessionOverrides;
 	if (overrides) layer(stub, overrides);
 	return stub as unknown as AgentSession;
+}
+
+/** Prepare a scripted renderer frame without replaying Agent listeners or history. */
+export function applyRenderFixtureEvent(state: AgentState, event: AgentEvent): void {
+	switch (event.type) {
+		case "agent_start":
+			state.isStreaming = true;
+			state.activeThinkingIndex = undefined;
+			break;
+		case "agent_end":
+			state.isStreaming = false;
+			state.streamMessage = null;
+			state.activeThinkingIndex = undefined;
+			break;
+		case "message_start":
+			state.streamMessage = event.message;
+			state.activeThinkingIndex = undefined;
+			break;
+		case "message_update":
+			state.streamMessage = event.message;
+			state.activeThinkingIndex = activeThinkingIndexAfterEvent(
+				state.activeThinkingIndex,
+				event.assistantMessageEvent,
+			);
+			break;
+		case "message_end":
+			state.streamMessage = null;
+			state.activeThinkingIndex = undefined;
+			break;
+		case "tool_execution_start":
+			state.pendingToolCalls.add(event.toolCallId);
+			break;
+		case "tool_execution_end":
+			state.pendingToolCalls.delete(event.toolCallId);
+			break;
+	}
 }
 
 // `waitForConnection` is only awaited by the controller; the resolved value is

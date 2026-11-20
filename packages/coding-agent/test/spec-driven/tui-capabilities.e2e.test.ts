@@ -98,61 +98,6 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 );
 
 test.skipIf(!tuiTest || process.platform === "win32")(
-	"malformed task intent is rejected before spawning and the corrected reviewer runs",
-	async () => {
-		const marker = "OMP_MALFORMED_REVIEW_INTENT";
-		const badIntent = 'y",\n "tasks": [{"agent": "reviewer", "task": "Review"}]}';
-		await withTui(
-			{
-				reply(request) {
-					if (
-						!request.messages.some(message => message.role === "user" && contentText(message.content) === marker)
-					)
-						return respond(request);
-					const tasks = calls(request).filter(call => call.name === "task");
-					if (tasks.length === 0)
-						return invoke(request, "task", {
-							i: badIntent,
-							context: "Review changes",
-							tasks: [{ task: "SHOULD_NOT_SPAWN", solutionSpace: "review" }],
-						});
-					if (tasks.length === 1) {
-						expect(result(request, "task")).toContain("not run");
-						return invoke(request, "task", {
-							i: "Reviewing changes",
-							context: "Review changes",
-							tasks: [{ agent: "reviewer", task: "OMP_SPEC_REVIEW_CHILD", solutionSpace: "review" }],
-						});
-					}
-					return { text: "OMP_MALFORMED_REVIEW_RECOVERED" };
-				},
-			},
-			[120, 36],
-			async ({ provider, tui }) => {
-				await tui("submit", marker);
-				await tui("expect", "text", "OMP_MALFORMED_REVIEW_RECOVERED", "--timeout", "60000");
-				expect(
-					provider.requests.some(request =>
-						request.messages.some(
-							message => message.role === "user" && contentText(message.content).includes("SHOULD_NOT_SPAWN"),
-						),
-					),
-				).toBe(false);
-				expect(
-					provider.requests.some(request =>
-						request.messages.some(
-							message =>
-								message.role === "user" && contentText(message.content).includes("OMP_SPEC_REVIEW_CHILD"),
-						),
-					),
-				).toBe(true);
-			},
-		);
-	},
-	120_000,
-);
-
-test.skipIf(!tuiTest || process.platform === "win32")(
 	"ordinary openspec-update-change completes existing requirements maintenance without implementation",
 	async () => {
 		const target = "openspec/changes/manual-maintenance/specs/greeting/spec.md";

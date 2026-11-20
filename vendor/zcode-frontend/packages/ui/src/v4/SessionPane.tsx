@@ -1369,9 +1369,7 @@ export function SessionPane({
             projectId !== undefined
               ? await sendCommand(envelope, { projectId })
               : await sendCommand(envelope);
-          if (localTtft && ack.reasonCode === "guard.heldQueueConfirmationStale")
-            getLocalTtftObserver()?.confirmationRetry(localTtft);
-          else if (localTtft)
+          if (localTtft)
             getLocalTtftObserver()?.ack(localTtft, ack.status, ack.ttftExcluded);
         } catch (error) {
           if (localTtft)
@@ -1826,23 +1824,13 @@ export function SessionPane({
     onSelectionSideChatUnavailable?.();
   }, [onSelectionSideChatUnavailable, selectionSideChat, state.lastError, state.status]);
 
-  const settleCurrentQueueInputs = useCallback((targetSessionId: string) => {
-    const current = snapshotRef.current;
-    if (!current || current.sessionId !== targetSessionId) return;
-    for (const item of current.queue.items) {
-      pendingCommandRegistry.settle(targetSessionId, item.sourceCommandId);
-    }
-  }, []);
-
   const dispatchSlashCommand = useCallback(
     async (
       command: V4VisibleSlashCommand,
       targetSessionId: string,
       baseRevision: number | undefined,
-      heldQueueDisposition: "clearQueueAndSend" | "keepQueueAndSend" | undefined,
-      expectedHeldQueueItemIds?: readonly string[],
       submission?: ComposerSubmissionConfig,
-    ): Promise<boolean | "confirmationRequired"> => {
+    ): Promise<boolean> => {
       let type: CommandType | null = null;
       let payload: Record<string, unknown> = {};
       // compact 是可排队 input command，不走 CAS；resumeGoal 仍是 CAS。
@@ -1868,8 +1856,6 @@ export function SessionPane({
             text: command.objective,
             displayText: command.displayText,
             ...submission,
-            ...(heldQueueDisposition ? { heldQueueDisposition } : {}),
-            ...(expectedHeldQueueItemIds ? { expectedHeldQueueItemIds } : {}),
           };
           break;
         case "resumeGoal":
@@ -1895,9 +1881,6 @@ export function SessionPane({
         targetSessionId,
         withBaseRevision ? baseRevision : undefined,
       );
-      if (ack.reasonCode === "guard.heldQueueConfirmationStale") {
-        return "confirmationRequired";
-      }
       if (ack.status !== "accepted" && ack.status !== "noop") {
         logger.warn(
           `[v4-pane] slash ${command.kind} 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`,
@@ -1910,12 +1893,10 @@ export function SessionPane({
         }
       } else if (command.kind === "compact" && compactExpectedToQueue) {
         toast(intl.formatMessage({ id: "chat.compact.queued" }));
-      } else if (heldQueueDisposition === "clearQueueAndSend") {
-        settleCurrentQueueInputs(targetSessionId);
       }
       return true;
     },
-    [dispatchCommand, intl, settleCurrentQueueInputs],
+    [dispatchCommand, intl],
   );
 
   const dispatchSendTextAfterConfig = useCallback(
@@ -1953,8 +1934,6 @@ export function SessionPane({
             ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
             ...(options?.conversationQuotes?.length ? { conversationQuotes: options.conversationQuotes } : {}),
             ...(options?.requestedDelivery ? { requestedDelivery: options.requestedDelivery } : {}),
-            ...(options?.heldQueueDisposition ? { heldQueueDisposition: options.heldQueueDisposition } : {}),
-            ...(options?.expectedHeldQueueItemIds ? { expectedHeldQueueItemIds: options.expectedHeldQueueItemIds } : {}),
             ...(options?.source ? { source: options.source } : {}),
           },
           targetSessionId,
@@ -1965,8 +1944,6 @@ export function SessionPane({
             ? (envelope) => options.onCommandCreated?.(envelope.commandId)
             : undefined,
         );
-        if (ack.reasonCode === "guard.heldQueueConfirmationStale")
-          return "confirmationRequired" as const;
         if (ack.status !== "accepted") throw new Error(ack.message ?? ack.reasonCode ?? "sendText rejected");
         const navigation = nativeDraftNavigation.current;
         if (sessionId === null && nativeDraftOwnerRef.current === nativeDraftOwnerKey &&
@@ -2015,8 +1992,6 @@ export function SessionPane({
       };
       // 进入 barrier 前已经冻结；等待配置/附件期间不再回读 Composer 或 Session。
       const submission = options?.submission ?? null;
-      const heldQueueDisposition = options?.heldQueueDisposition;
-      const expectedHeldQueueItemIds = options?.expectedHeldQueueItemIds;
       const readyAttachments = options?.attachments ?? [];
       const contextAttachmentCount = options?.contextAttachmentCount ?? 0;
       const slashCommand = parseV4VisibleSlashCommand(text, readyAttachments, {
@@ -2044,16 +2019,6 @@ export function SessionPane({
         logger.warn("[v4-pane] Submission 缺少完整模型或模式配置");
         return "blocked" as const;
       }
-      const currentRoutingMode = snapshotRef.current?.inputRouting.mode;
-      if (
-        currentRoutingMode === "choice" &&
-        !heldQueueDisposition &&
-        (slashCommand === null || slashCommand.kind === "sendGoalCommand")
-      ) {
-        // UI choice 只对普通输入和 /goal <新目标> 生效；/compact 直接追加暂停队列，
-        // resumeGoal 等控制命令也不应被发送消息确认框截获。
-        return "confirmationRequired" as const;
-      }
       const prewarmTargetBeforeSend =
         sessionId === null ? prewarmBindingRef.current?.sessionId : null;
       if (prewarmTargetBeforeSend) {
@@ -2069,11 +2034,8 @@ export function SessionPane({
           slashCommand,
           sessionId,
           snapshotRef.current?.revision,
-          heldQueueDisposition,
-          expectedHeldQueueItemIds,
           submission,
         );
-        if (consumed === "confirmationRequired") return consumed;
         if (consumed) {
           return;
         }
@@ -2094,8 +2056,6 @@ export function SessionPane({
             draftSlashCommand,
             prewarmBindingRef.current?.sessionId ?? "__draft__",
             undefined,
-            heldQueueDisposition,
-            expectedHeldQueueItemIds,
             submission,
           );
           return;
@@ -2114,11 +2074,8 @@ export function SessionPane({
           draftSlashCommand,
           targetSessionId,
           0,
-          heldQueueDisposition,
-          expectedHeldQueueItemIds,
           submission,
         );
-        if (consumed === "confirmationRequired") return consumed;
         if (consumed) {
           draftBinding.promote();
           await handleDraftSessionCreated(
@@ -2148,8 +2105,6 @@ export function SessionPane({
                 requestedDelivery: options.requestedDelivery,
               }
             : {}),
-          ...(heldQueueDisposition ? { heldQueueDisposition } : {}),
-          ...(expectedHeldQueueItemIds ? { expectedHeldQueueItemIds } : {}),
           ...(options?.source ? { source: options.source } : {}),
         },
         targetSessionId,
@@ -2162,9 +2117,6 @@ export function SessionPane({
             }
           : undefined,
       );
-      if (ack.reasonCode === "guard.heldQueueConfirmationStale") {
-        return "confirmationRequired" as const;
-      }
       if (ack.status !== "accepted") {
         throw new Error(ack.message ?? ack.reasonCode ?? "sendText 被拒绝");
       }
@@ -2175,8 +2127,6 @@ export function SessionPane({
           ack.commandId,
           taskGroupIdAtSend,
         );
-      } else if (heldQueueDisposition === "clearQueueAndSend") {
-        settleCurrentQueueInputs(targetSessionId);
       }
     },
     [
@@ -2202,7 +2152,6 @@ export function SessionPane({
       composerClientNamespace,
       composerDraftGeneration,
       sessionId,
-      settleCurrentQueueInputs,
       waitForDraftSession,
     ],
   );
@@ -2264,11 +2213,10 @@ export function SessionPane({
       const shouldFocusLatest = shouldFocusTimelineAfterComposerSend({
         draftMode: sessionId === null,
         inputRoutingMode: snapshotRef.current?.inputRouting.mode ?? null,
-        heldQueueDisposition: options?.heldQueueDisposition,
       });
       try {
         const sendResult = await dispatchSendText(text, options);
-        if (sendResult === "blocked" || sendResult === "confirmationRequired") {
+        if (sendResult === "blocked") {
           return sendResult;
         }
         setSendSubmissionError(null);
@@ -2559,22 +2507,6 @@ export function SessionPane({
     },
     [dispatchCommand, sessionId],
   );
-
-  const handleResumeQueue = useCallback(async () => {
-    const current = snapshotRef.current;
-    if (!sessionId || !current || current.queue.autoDrain || current.queue.items.length === 0) {
-      return;
-    }
-    const ack = await dispatchCommand(
-      "setAutoDrain",
-      { autoDrain: true },
-      sessionId,
-      current.revision,
-    );
-    if (ack.status !== "accepted" && ack.status !== "noop") {
-      logger.warn(`[v4-pane] 恢复暂停队列被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
-    }
-  }, [dispatchCommand, sessionId]);
 
   // 配置面 CAS 命令的 stale 重试。模型→思考深度→模式连续操作时，前一条命令的
   // revision bump 可能尚未回流到本地投影，直接用本地 revision 会被 CAS 判 stale。
@@ -3514,7 +3446,6 @@ export function SessionPane({
           }
           onSendNow={handleSendQueuedNow}
           onMoveItem={handleReorderQueueItem}
-          onResume={handleResumeQueue}
         />
       ) : null}
       {nativePresentation?.todoExpanded && nativePresentation.todoMarkdown ? (

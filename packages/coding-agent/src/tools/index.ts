@@ -1,5 +1,4 @@
 import type { AgentOptions, AgentTelemetryConfig, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
-import type { EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 import type { ToolConversationState } from "./tool-state";
 import type { FetchImpl, ImageContent, Message, Model, ServiceTierByFamily, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -17,7 +16,6 @@ import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type {
 	BeforeSubagentSpawnEvent,
 	BeforeSubagentSpawnEventResult,
-	ExtensionUIContext,
 	PreparedExtension,
 } from "../extensibility/extensions/types";
 import type { Skill, SkillRediscoveryHost } from "../extensibility/skills";
@@ -239,11 +237,6 @@ export interface FileChangeReport {
 export interface ToolSession {
 	/** Optional live-host native child callbacks. */
 	subagentHooks?: NativeSubagentHooks;
-	extensionProviderOwnership?: CreateAgentSessionOptions["extensionProviderOwnership"];
-	/** Explicit restricted Goal grant; never widens the requested tool list. */
-	allowRestrictedGoal?: boolean;
-	/** Session-only edit variant pin, shared by edit schemas, read anchors and prompt policies. */
-	editMode?: EditMode;
 	/** Current working directory */
 	cwd: string;
 	/** Agent-owned database references, released independently from other sessions. */
@@ -256,14 +249,6 @@ export interface ToolSession {
 	hasUI: boolean;
 	/** Whether `ask` can reach a human. Defaults to `hasUI`. */
 	canPromptUser?: boolean;
-	/** Host-owned human interaction surface inherited by native child sessions, without enabling terminal UI. */
-	createInteractionUI?: (origin: {
-		agentId: string;
-		agentName: string;
-		sessionId: string;
-		parentSessionId: string;
-		parentToolCallId?: string;
-	}) => { ui: ExtensionUIContext; cancel(): void; dispose(): void };
 	/** Keep `ask` in a headless fork's roster; execution still requires UI. */
 	advertiseHeadlessAsk?: boolean;
 	/** The user approves `cfg://` writes for this session (top-level TUI session only). */
@@ -470,8 +455,6 @@ export interface ToolSession {
 	allocateOutputArtifact?: () => Promise<{ id?: string; path?: string }>;
 	/** Get session spawns */
 	getSessionSpawns: () => string | null;
-	/** Explicit host definitions for this session only, with precedence over discovered agents. */
-	getAgentDefinitions?: () => readonly AgentDefinition[];
 	/** Session-scoped agent definitions (user-tagged model pseudonyms) merged after discovered agents. */
 	getSessionAgents?: () => readonly AgentDefinition[];
 	/**
@@ -846,7 +829,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		// a goal record exists, only an enabled goal keeps the tool: a completed
 		// (exiting) or paused goal must stop advertising it on the next rebuild.
 		if (name === "goal") {
-			if (!goalEnabled || (restrictToolNames && session.allowRestrictedGoal !== true)) return false;
+			if (!goalEnabled || restrictToolNames) return false;
 			const goalState = session.getGoalModeState?.();
 			return goalState === undefined || goalState.enabled === true || goalState.goal.status === "dropped";
 		}

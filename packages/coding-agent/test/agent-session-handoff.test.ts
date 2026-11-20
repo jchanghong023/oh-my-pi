@@ -542,8 +542,7 @@ describe("AgentSession handoff", () => {
 		expect(startEvent).toMatchObject({ type: "auto_compaction_start", reason: "idle", action: "snapcompact" });
 		expect(fallbackStart).toMatchObject({ type: "auto_compaction_start", reason: "idle", action: "context-full" });
 		expect(events.indexOf(startEvent!)).toBeLessThan(events.indexOf(fallbackStart!));
-		expect(fallbackStart?.operationId).toBe(startEvent?.operationId);
-		expect(endEvent?.operationId).toBe(startEvent?.operationId);
+		expect(events.indexOf(fallbackStart!)).toBeLessThan(events.indexOf(endEvent!));
 		expect(endEvent).toMatchObject({
 			type: "auto_compaction_end",
 			action: "context-full",

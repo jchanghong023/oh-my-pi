@@ -7,7 +7,7 @@ import type { AgentViewSession } from "../../session/agent-session-handle";
 import { completionRecord } from "../../session/model-usage-journal";
 import { isAdvisorCard } from "../../session/queued-messages";
 import { cfgComposerPredictionAlternatives, cfgComposerPredictions } from "../settings";
-import type { Settings } from "../../config/settings";
+import type { InteractiveModeContext } from "../types";
 import {
 	type PredictionOutcome,
 	recordPredictionRequest,
@@ -77,15 +77,7 @@ interface Prediction {
 	rank: number | undefined;
 }
 
-interface PredictionContext {
-	settings: Settings;
-	viewSession: AgentViewSession;
-	focusedAgentId: string | undefined;
-	editor: { getText(): string };
-	ui: { requestRender(): void };
-	/** Non-TUI owners can bind the request to their session target and generation. */
-	isCurrent?(): boolean;
-}
+type PredictionContext = Pick<InteractiveModeContext, "settings" | "viewSession" | "focusedAgentId" | "editor" | "ui">;
 
 /**
  * Normalize a prediction reply to the single line the composer shows, or
@@ -150,7 +142,6 @@ export class ComposerPredictionController {
 	readonly #meterProvider: MeterProvider | undefined;
 	#abort: AbortController | undefined;
 	#prediction: Prediction | undefined;
-	readonly #pending = new Set<Promise<void>>();
 
 	constructor(ctx: PredictionContext, options: { deadlineMs?: number; meterProvider?: MeterProvider } = {}) {
 		this.#ctx = ctx;
@@ -176,14 +167,7 @@ export class ComposerPredictionController {
 		// prediction), and a compaction would rewrite the history the prediction reads: skip the
 		// billed request either way.
 		const model = session.model;
-		if (
-			!model ||
-			session.isStreaming ||
-			session.isCompacting ||
-			this.#ctx.editor.getText() ||
-			this.#ctx.isCurrent?.() === false
-		)
-			return;
+		if (!model || session.isStreaming || session.isCompacting || this.#ctx.editor.getText()) return;
 		const abort = new AbortController();
 		this.#abort = abort;
 		const source: PredictionSource = {
@@ -195,12 +179,7 @@ export class ComposerPredictionController {
 			leafId: session.sessionManager.getLeafId(),
 			model: `${model.provider}/${model.id}`,
 		};
-		const task = this.#run(source, abort, cfgComposerPredictionAlternatives.get(this.#ctx.settings));
-		this.#pending.add(task);
-		void task.then(
-			() => this.#pending.delete(task),
-			() => this.#pending.delete(task),
-		);
+		void this.#run(source, abort, cfgComposerPredictionAlternatives.get(this.#ctx.settings));
 	}
 
 	/** The composer painted the current prediction; its first painted frame counts it as shown. */
@@ -252,11 +231,6 @@ export class ComposerPredictionController {
 		}
 		this.#prediction = undefined;
 		this.#ctx.ui.requestRender();
-	}
-
-	/** Wait for cancelled requests too: a late paid reply must reach the original usage ledger. */
-	async settled(): Promise<void> {
-		while (this.#pending.size) await Promise.all(this.#pending);
 	}
 
 	async #run(source: PredictionSource, abort: AbortController, alternatives: boolean): Promise<void> {
@@ -323,7 +297,6 @@ export class ComposerPredictionController {
 
 	#isCurrent(source: PredictionSource): boolean {
 		return (
-			this.#ctx.isCurrent?.() !== false &&
 			this.#ctx.viewSession === source.session &&
 			source.session.sessionManager.getSessionId() === source.sessionId &&
 			predictionAnchor(source.session) === source.lastMessage

@@ -29,6 +29,7 @@ import { withoutTerminalMultiplexer } from "../../tui/test/helpers/terminal-mult
 import { VirtualRenderScheduler } from "../../tui/test/virtual-render-scheduler";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
+import { applyRenderFixtureEvent } from "./helpers/interactive-mode-context";
 
 withoutTerminalMultiplexer();
 const COLUMNS = 40;
@@ -251,7 +252,7 @@ describe("InteractiveMode live working label", () => {
 			fakeTimers = true;
 			setSystemTime(10_000);
 			const start = { type: "agent_start" as const };
-			current.agent.emitExternalEvent(start, { stateOnly: true });
+			applyRenderFixtureEvent(current.agent.state, start);
 			await live.eventController.handleEvent(start);
 			live.ensureLoadingAnimation();
 			const dispatch = {
@@ -260,7 +261,7 @@ describe("InteractiveMode live working label", () => {
 				toolName: "bash",
 				args: { command: "IDLE_CLOCK_MARKER" },
 			};
-			current.agent.emitExternalEvent(dispatch, { stateOnly: true });
+			applyRenderFixtureEvent(current.agent.state, dispatch);
 			await live.eventController.handleEvent(dispatch);
 			await scheduler.settle(terminal);
 			const dockRows = () => live.compactThinkingPreview.render(COLUMNS).map(line => Bun.stripANSI(line));
@@ -292,7 +293,7 @@ describe("InteractiveMode live working label", () => {
 	it("keeps custom activity visible for a focused agent in compact and detailed modes", async () => {
 		session.agent.state.pendingToolCalls.add("parent-call");
 		const message = createAssistantMessage("focused reply");
-		focusedSession.agent.emitExternalEvent({ type: "message_start", message }, { stateOnly: true });
+		applyRenderFixtureEvent(focusedSession.agent.state, { type: "message_start", message });
 		Object.defineProperty(mode, "viewSession", { configurable: true, value: focusedSession });
 		try {
 			mode.ensureLoadingAnimation();
@@ -311,7 +312,7 @@ describe("InteractiveMode live working label", () => {
 		} finally {
 			delete (mode as unknown as { viewSession?: AgentSession }).viewSession;
 			session.agent.state.pendingToolCalls.clear();
-			focusedSession.agent.emitExternalEvent({ type: "message_end", message }, { stateOnly: true });
+			applyRenderFixtureEvent(focusedSession.agent.state, { type: "message_end", message });
 		}
 	});
 
@@ -359,7 +360,7 @@ describe("InteractiveMode live working label", () => {
 				vi.useFakeTimers();
 				fakeTimers = true;
 				const start = { type: "agent_start" as const };
-				current.agent.emitExternalEvent(start, { stateOnly: true });
+				applyRenderFixtureEvent(current.agent.state, start);
 				await live.eventController.handleEvent(start);
 				let phase = "tool stream";
 				let phaseBaseline: StageGeometry | undefined;
@@ -432,7 +433,7 @@ describe("InteractiveMode live working label", () => {
 				for (const call of calls) {
 					const empty = createAssistantMessage("");
 					empty.content = [];
-					current.agent.emitExternalEvent({ type: "message_start", message: empty }, { stateOnly: true });
+					applyRenderFixtureEvent(current.agent.state, { type: "message_start", message: empty });
 					await live.eventController.handleEvent({ type: "message_start", message: empty });
 					await stablePhase(`${call.id} message start`);
 					const partialCall: ToolCall = { ...call, arguments: {} };
@@ -445,7 +446,7 @@ describe("InteractiveMode live working label", () => {
 						message: partial,
 						assistantMessageEvent: { type: "toolcall_start" as const, contentIndex: 0, partial },
 					};
-					current.agent.emitExternalEvent(callStart, { stateOnly: true });
+					applyRenderFixtureEvent(current.agent.state, callStart);
 					await live.eventController.handleEvent(callStart);
 					await stablePhase(`${call.id} arguments start`);
 					const serialized = JSON.stringify(call.arguments);
@@ -463,7 +464,7 @@ describe("InteractiveMode live working label", () => {
 								partial,
 							},
 						};
-						current.agent.emitExternalEvent(delta, { stateOnly: true });
+						applyRenderFixtureEvent(current.agent.state, delta);
 						await live.eventController.handleEvent(delta);
 						await stablePhase(`${call.id} arguments delta ${index}`);
 					}
@@ -480,11 +481,11 @@ describe("InteractiveMode live working label", () => {
 							partial: message,
 						},
 					};
-					current.agent.emitExternalEvent(update, { stateOnly: true });
+					applyRenderFixtureEvent(current.agent.state, update);
 					await live.eventController.handleEvent(update);
 					await stablePhase(`${call.id} arguments finalized`);
 					manager.appendMessage(message);
-					current.agent.emitExternalEvent({ type: "message_end", message }, { stateOnly: true });
+					applyRenderFixtureEvent(current.agent.state, { type: "message_end", message });
 					await live.eventController.handleEvent({ type: "message_end", message });
 					await stablePhase(`${call.id} message end`);
 					const toolStart = {
@@ -493,7 +494,7 @@ describe("InteractiveMode live working label", () => {
 						toolName: call.name,
 						args: call.arguments,
 					};
-					current.agent.emitExternalEvent(toolStart, { stateOnly: true });
+					applyRenderFixtureEvent(current.agent.state, toolStart);
 					await live.eventController.handleEvent(toolStart);
 					await stablePhase(`${call.id} execution start`);
 					const result = { content: [{ type: "text" as const, text: "completed" }] };
@@ -504,7 +505,7 @@ describe("InteractiveMode live working label", () => {
 						result,
 						isError: false,
 					};
-					current.agent.emitExternalEvent(toolEnd, { stateOnly: true });
+					applyRenderFixtureEvent(current.agent.state, toolEnd);
 					await live.eventController.handleEvent(toolEnd);
 					manager.appendMessage({
 						role: "toolResult",
