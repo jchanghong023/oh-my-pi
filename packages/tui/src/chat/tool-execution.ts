@@ -1151,7 +1151,7 @@ export class ToolExecutionComponent extends Container {
 	/** Hold visible results until their figures and Kitty images are ready for immutable scrollback. */
 	isTranscriptBlockPending(): boolean {
 		return (
-			this.#isToolActivityVisible() &&
+			this.#toolActivityVisible &&
 			this.#presentation.shown.mode === "full" &&
 			((this.#showImages && !this.#toolImagesHidden() && this.#kittyConversionsAwaited.size > 0) ||
 				this.#figure?.pending === true)
@@ -1160,17 +1160,13 @@ export class ToolExecutionComponent extends Container {
 
 	/** Hidden tools do not gate stable chat history. */
 	isTranscriptBlockFinalized(): boolean {
-		if (!this.#isToolActivityVisible()) return true;
+		if (!this.#toolActivityVisible) return true;
 		if (this.#sealed) return true;
 		if (this.#result === undefined) return false;
 		// A parked background task's call already returned; job frames that land
 		// while it is still live keep updating it, but it must not gate history.
 		if (this.#parkedBackground) return true;
 		return !this.#isPartial;
-	}
-
-	#isToolActivityVisible(): boolean {
-		return this.#toolActivityVisible;
 	}
 
 	#toolImagesHidden(): boolean {
@@ -1299,7 +1295,7 @@ export class ToolExecutionComponent extends Container {
 		}
 		const diagnostics = this.#lateDiagnosticsBlock.block;
 		// Not a transcript child: the transcript-wide visibility reaches it only through this card.
-		diagnostics.setToolActivityVisible(this.#isToolActivityVisible());
+		diagnostics.setToolActivityVisible(this.#toolActivityVisible);
 		// A call a presenter hides takes its notice with it.
 		return mode === "hidden" ? [diagnostics] : [...this.#spotlight.list(), diagnostics];
 	}
@@ -1321,11 +1317,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	isTranscriptBlockCompact(): boolean {
-		if (
-			!this.#isToolActivityVisible() ||
-			this.#allocation === 0 ||
-			(this.#toolName === "wait" && this.#isBenignSkip())
-		) {
+		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
 			return false;
 		}
 		return this.#presentation.shown.mode === "compact";
@@ -1409,7 +1401,7 @@ export class ToolExecutionComponent extends Container {
 			this.#showImages,
 			this.#toolName === "bash" && chatTranscriptDisplayPreferences.shellVisualization,
 			this.#displayInputVersion,
-			this.#isToolActivityVisible(),
+			this.#toolActivityVisible,
 			this.#toolImagesHidden(),
 			this.#renderState.settledBashJobs ? JSON.stringify([...this.#renderState.settledBashJobs]) : undefined,
 			cx?.cols,
@@ -1427,7 +1419,7 @@ export class ToolExecutionComponent extends Container {
 				title: this.#toolLabel,
 				target: this.#activitySummary().detail,
 			});
-			return withHidden(shown, !this.#isToolActivityVisible());
+			return withHidden(shown, !this.#toolActivityVisible);
 		});
 	}
 
@@ -1807,11 +1799,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
-		if (
-			!this.#isToolActivityVisible() ||
-			this.#allocation === 0 ||
-			(this.#toolName === "wait" && this.#isBenignSkip())
-		) {
+		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
 			return [];
 		}
 		const presentation = this.#presentation.draw();

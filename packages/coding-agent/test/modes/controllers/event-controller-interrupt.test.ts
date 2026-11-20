@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import {
 	chatTranscriptDisplayPreferences,
@@ -98,9 +99,10 @@ describe("EventController aborted-turn working messages", () => {
 		expect(ctx.clearOptimisticUserMessage).toHaveBeenCalledTimes(1);
 	});
 
-	it("shows a blocked tool's user-input state until its completion", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	it("keeps a pending ask out of the transcript and shows its result after completion", async () => {
 		const { ctx } = createContext();
+		cfgDisplayMode.override(ctx.settings, "detailed");
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
 		await controller.handleEvent({
@@ -111,7 +113,7 @@ describe("EventController aborted-turn working messages", () => {
 		} as AgentSessionEvent);
 		const component = ctx.pendingTools.get("question-1");
 		expect(component).toBeInstanceOf(ToolExecutionComponent);
-		expect(ctx.chatContainer.render(100).length).toBeGreaterThan(0);
+		expect(ctx.chatContainer.render(100)).toHaveLength(0);
 
 		await controller.handleEvent({
 			type: "tool_execution_end",
@@ -137,7 +139,8 @@ describe("EventController aborted-turn working messages", () => {
 
 	it("keeps tool intent out of the clean working line", async () => {
 		const { ctx, setWorkingMessage } = createContext();
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: true });
+		cfgDisplayMode.override(ctx.settings, "clean");
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
 		setWorkingMessage.mockClear();
@@ -148,7 +151,8 @@ describe("EventController aborted-turn working messages", () => {
 
 	it("resumes intent updates once aborting clears", async () => {
 		const { ctx, setWorkingMessage, sessionState } = createContext();
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		cfgDisplayMode.override(ctx.settings, "detailed");
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
 		sessionState.isAborting = true;

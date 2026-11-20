@@ -179,8 +179,8 @@ describe("composer inline shrink (#11007)", () => {
 		try {
 			for (const completeScrollback of [false, true]) {
 				let upstreamGrowth: string[] | undefined;
-				for (const compactToolActivity of [false, true]) {
-					setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: compactToolActivity });
+				for (const hideToolActivity of [false, true]) {
+					setChatTranscriptDisplayPreferences({ hideToolActivity });
 					const h = makeHarness(100, 28, 0);
 					h.composer.setPreferences({ completeScrollback });
 					h.hud.rows = 2;
@@ -206,7 +206,7 @@ describe("composer inline shrink (#11007)", () => {
 						expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
 						if (completeScrollback) {
 							expect(grown).toEqual(expected);
-						} else if (!compactToolActivity) {
+						} else if (!hideToolActivity) {
 							// Upstream holds displaced rows live instead of retiring them.
 							upstreamGrowth = grown;
 						} else {
@@ -230,7 +230,7 @@ describe("composer inline shrink (#11007)", () => {
 
 	it("archives completed prose before a table while a self-clearing HUD is still visible", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const h = makeHarness(60, 18, 0, ["SHELL_BEFORE_COMPACT_REPLY"]);
 		h.composer.setPreferences({ completeScrollback: true });
 		h.composer.setRuntimeChildren([h.transcript, h.hud, h.editor], {
@@ -270,7 +270,7 @@ describe("composer inline shrink (#11007)", () => {
 
 	it("keeps normal-follow prose and table history ordered when a draft and self-clearing HUD coexist", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		try {
 			for (const [columns, rows] of [
 				[100, 28],
@@ -350,7 +350,7 @@ describe("composer inline shrink (#11007)", () => {
 
 	it("keeps finalized table content available and the draft visible beside narrow activity and status chrome", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const terminal = new VirtualTerminal(100, 24);
 		const scheduler = new VirtualRenderScheduler();
 		const composer = new Composer({
@@ -686,7 +686,7 @@ describe("composer inline shrink (#11007)", () => {
 	] as const) {
 		it(`keeps compact frames stable with deferred scrollback through transient growth and refill at ${columns}x${rows}`, async () => {
 			const previous = { ...chatTranscriptDisplayPreferences };
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 			const h = makeHarness(columns, rows);
 			const contract = new DisplayContract(columns * 100 + rows);
 			let event = "initial";
@@ -1109,7 +1109,7 @@ describe("composer inline shrink (#11007)", () => {
 	for (const resizeTiming of ["before finalization", "after finalization"] as const) {
 		it(`keeps default compact streaming frames coherent when resized ${resizeTiming}`, async () => {
 			const previous = { ...chatTranscriptDisplayPreferences };
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 			const h = makeHarness(100, 28, 0);
 			const contract = new DisplayContract(resizeTiming === "before finalization" ? 2101 : 2102);
 			const message = new AssistantMessageComponent();
@@ -1577,7 +1577,7 @@ describe("composer inline shrink (#11007)", () => {
 					[120, 36],
 				] as const) {
 					const run = async (compact: boolean) => {
-						setChatTranscriptDisplayPreferences({ compactToolActivity: compact, hideToolActivity: compact });
+						setChatTranscriptDisplayPreferences({ hideToolActivity: compact });
 						const h = makeHarness(columns, rows);
 						h.composer.setPreferences({ completeScrollback });
 						let toolRows = 12;
@@ -1623,7 +1623,7 @@ describe("composer inline shrink (#11007)", () => {
 
 	it("parks a collapsing block's slack below the reply instead of banding its history", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		const rows = 50;
 		const h = makeHarness(107, rows, 10);
 		try {

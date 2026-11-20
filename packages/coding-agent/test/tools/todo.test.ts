@@ -1240,7 +1240,7 @@ describe("todo presentation", () => {
 		const result = { content: [], details: { phases, storage: "session" as const } };
 		const options = { expanded: true, isPartial: false };
 		try {
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 			const component = todoToolRenderer.renderResult(result, options, theme);
 			const detailed = component.render(160).join("\n");
 			const detailedNative = todoToolRenderer.describeResult(result, options);
@@ -1272,7 +1272,7 @@ describe("todo presentation", () => {
 		];
 		const snapshot = structuredClone(tasks);
 		try {
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 			setActiveTodoDescriptionsProvider(() => ["first worker", "second worker"]);
 			const result = { content: [], details: { phases: [{ name: "Work", tasks }], storage: "session" as const } };
 			const rendered = Bun.stripANSI(

@@ -433,7 +433,7 @@ describe("libkitty end-to-end", () => {
 		cfgDisplayMode.set(session.settings, "detailed");
 		// Direct AgentSession construction bypasses the SDK's process-wide settings binding.
 		releaseSessionEffects = bindEffects(session.settings);
-		expect(chatTranscriptDisplayPreferences.compactToolActivity).toBe(false);
+		expect(cfgDisplayMode.get(session.settings)).toBe("detailed");
 		expect(chatTranscriptDisplayPreferences.hideToolActivity).toBe(false);
 		term = new VirtualTerminal(120, 10);
 		const composer = new Composer({ terminal: term });

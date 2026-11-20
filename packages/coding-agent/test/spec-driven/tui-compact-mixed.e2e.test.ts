@@ -838,8 +838,11 @@ test("resumed compact transcript stays in place while successive tools finish an
 	}
 }, 120_000);
 
-test("retained real edit does not move when the next assistant stream is empty or hidden", async () => {
+test("retained real edit stays hidden in compact while the next assistant stream is empty or hidden", async () => {
 	if (!tuiTest) throw new Error("tui-test is required for the compact empty-stream regression");
+	const original = "const original = 0;";
+	const editTail = "export const EDIT_CLI_46 = 46;";
+	const draft = "CLI_UNSENT_DRAFT";
 	const edited = Array.from(
 		{ length: 46 },
 		(_, i) => `export const EDIT_CLI_${String(i + 1).padStart(2, "0")} = ${i + 1};`,
@@ -858,6 +861,8 @@ test("retained real edit does not move when the next assistant stream is empty o
 		},
 		{ name: "read", args: { path: "retained-read.txt" }, intent: "Reading retained evidence" },
 	];
+	const editReturned = Promise.withResolvers<string>();
+	const continueToGrep = Promise.withResolvers<void>();
 	const waiting = Promise.withResolvers<void>();
 	const startStream = Promise.withResolvers<void>();
 	const opened = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
@@ -885,7 +890,7 @@ test("retained real edit does not move when the next assistant stream is empty o
 				},
 				setup: async cwd => {
 					await Promise.all([
-						Bun.write(path.join(cwd, "retained-edit.ts"), "const original = 0;\n"),
+						Bun.write(path.join(cwd, "retained-edit.ts"), `${original}\n`),
 						Bun.write(path.join(cwd, "retained-search.txt"), "CLI_GREPPED\n"),
 						Bun.write(path.join(cwd, "retained-read.txt"), "CLI_READ_RESULT\n"),
 					]);
@@ -900,12 +905,16 @@ test("retained real edit does not move when the next assistant stream is empty o
 						const output = result(request, actions[step - 1]!);
 						if (step === 1) {
 							const header = output.match(/\[retained-edit\.ts#[A-F0-9]{4}\]/u)?.[0];
-							if (!header || !output.includes("const original = 0;"))
+							if (!header || !output.includes(original))
 								throw new Error(`Missing source hashline or content: ${output}`);
 							actions[1]!.args.input = `*** Begin Patch\n${header}\nPUT 1.=1:\n${edited
 								.split("\n")
 								.map(line => `+${line}`)
 								.join("\n")}\n*** End Patch\n`;
+						}
+						if (step === 2) {
+							editReturned.resolve(output);
+							await continueToGrep.promise;
 						}
 						if (step === 3) expect(output).toContain("CLI_GREPPED");
 						if (step === 4) expect(output).toContain("CLI_READ_RESULT");
@@ -936,47 +945,26 @@ test("retained real edit does not move when the next assistant stream is empty o
 					frame => frame.screen.includes(`${MARKER}_CHAT_READY`),
 				);
 				await tui("submit", "CLI_EDIT_PROMPT");
+				const editOutput = await editReturned.promise;
+				expect(editOutput).toContain(`46:${editTail}`);
+				expect(editOutput).not.toContain(original);
+				const editPreview = await eventually(
+					() => screen.checkpoint("compact shows the bounded raw edit result"),
+					frame => frame.screen.includes(`46:${editTail}`),
+				);
+				expect(editPreview.screen).not.toContain("EDIT_CLI_01");
+				expect(editPreview.screen).not.toContain(original);
+				continueToGrep.resolve();
 				await waiting.promise;
 				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(`${edited}\n`);
-				const collapsedDiff = (text: string) =>
-					text.includes("本轮改动 1 文件 · Ctrl+O 查看全部") &&
-					text.includes("retained-edit.ts") &&
-					text.includes("EDIT_CLI_01") &&
-					!text.includes("EDIT_CLI_46");
-				const expandedDiff = "本轮改动 1 文件 · ↑/↓ 滚动 · Esc 收起";
-				const collapsed = await eventually(
-					() => screen.checkpoint("compact net diff initially shows a bounded preview"),
-					frame => collapsedDiff(frame.screen) && frame.screen.includes("CLI_READ_RESULT"),
-				);
-				expect(collapsed.screen).not.toContain("retained-search.txt");
-				expectVisibleDraft(collapsed, "", 100, 80);
-				await tui("key", "press", "Ctrl+O");
-				const expanded = await eventually(
-					() => screen.checkpoint("compact net diff opens at the start of the file"),
-					frame => frame.screen.includes(expandedDiff) && frame.screen.includes("EDIT_CLI_01"),
-				);
-				expect(expanded.screen).toContain("修改 retained-edit.ts");
-				expect(expanded.screen).toContain("const original = 0;");
-				expect(expanded.screen).not.toContain("EDIT_CLI_46");
-				expect(expanded.screen).not.toContain("retained-search.txt");
-				expect(expanded.screen).toContain("CLI_READ_RESULT");
-				await tui("key", "press", "End");
-				await eventually(
-					() => screen.checkpoint("scrolling the compact net diff reveals its tail"),
-					frame => frame.screen.includes(expandedDiff) && frame.screen.includes("EDIT_CLI_46"),
-				);
-				await tui("key", "press", "Escape");
+				const hiddenTools = /retained-(?:edit\.ts|search\.txt)|EDIT_CLI_\d{2}|const original = 0;|CLI_GREPPED/u;
+				await tui("type", draft);
 				const baseline = await eventually(
-					() => screen.checkpoint("Esc restores the compact net diff preview and composer focus"),
+					() => screen.checkpoint("compact shows only the latest read output beside history and draft"),
 					frame =>
-						collapsedDiff(frame.screen) &&
-						frame.screen.includes("CLI_EDIT_PROMPT") &&
-						frame.screen.includes("CLI_READ_RESULT") &&
-						nativeDraftMatches(frame.screen, "", frame.cursor),
+						frame.screen.includes("CLI_READ_RESULT") && nativeDraftMatches(frame.screen, draft, frame.cursor),
 				);
-				const editMarkers = Array.from(baseline.screen.matchAll(/EDIT_CLI_\d{2}/gu), match => match[0]);
-				expect(editMarkers.length).toBeGreaterThan(1);
-				const markers = ["CLI_EDIT_PROMPT", "本轮改动 1 文件", ...editMarkers, "CLI_READ_RESULT"];
+				const markers = [`${MARKER}_CHAT_READY`, "CLI_EDIT_PROMPT", "CLI_READ_RESULT"];
 				const rows = (text: string) =>
 					markers.map(marker => {
 						const matches = text
@@ -986,7 +974,7 @@ test("retained real edit does not move when the next assistant stream is empty o
 						return matches[0]!;
 					});
 				const composer = (frame: typeof baseline) => {
-					expectVisibleDraft(frame, "", 100, 80);
+					expectVisibleDraft(frame, draft, 100, 80);
 					const lines = frame.screen.split("\n");
 					const top = lines.findLastIndex(line => line.startsWith("╭── "));
 					const bottom = lines.findIndex((line, index) => index > top && line.startsWith("╰─"));
@@ -997,8 +985,12 @@ test("retained real edit does not move when the next assistant stream is empty o
 				const check = (frame: typeof baseline) => {
 					expect(rows(frame.screen)).toEqual(expected);
 					expect(composer(frame)).toEqual(inputGeometry);
+					expect(frame.screen).not.toMatch(hiddenTools);
 					expect(frame.screen).not.toContain("CLI_HIDDEN_REASONING");
 				};
+				check(baseline);
+				await tui("key", "press", "Ctrl+O");
+				await screen.checkpoint("compact expansion does not reveal hidden tool cards or a file diff", check);
 				startStream.resolve();
 				const controller = await opened.promise;
 				for (let tick = 0; tick < 6; tick++) {
@@ -1016,11 +1008,11 @@ test("retained real edit does not move when the next assistant stream is empty o
 				controller.close();
 				streamController = undefined;
 				await tui("expect", "text", "CLI_EDIT_DONE", "--timeout", "30000");
-				// The completed native journal proves the hidden SSE delta reached and
-				// was parsed by the client, even though it never appeared on screen.
-				await eventually(async () => {
+				// The native journal proves the hidden delta was parsed and the tools' results survived the stream.
+				const completed = (await eventually(async () => {
 					for await (const file of new Bun.Glob("**/*.jsonl").scan(path.join(agentDir, "sessions"))) {
-						const history = messages(await journal(path.join(agentDir, "sessions", file)));
+						const absolute = path.join(agentDir, "sessions", file);
+						const history = messages(await journal(absolute));
 						if (
 							history.some(
 								message => message.role === "user" && contentText(message.content).includes("CLI_EDIT_PROMPT"),
@@ -1033,26 +1025,36 @@ test("retained real edit does not move when the next assistant stream is empty o
 									),
 							)
 						)
-							return true;
+							return { file: absolute, history };
 					}
-					return false;
-				}, Boolean);
+					return undefined;
+				}, Boolean))!;
+				for (const [index, marker] of [original, editTail, "CLI_GREPPED", "CLI_READ_RESULT"].entries()) {
+					const output = recordedResult(completed.history, actions[index]!.intent);
+					expect(output.isError).toBe(false);
+					expect(contentText(output.content)).toContain(marker);
+				}
 				const requests = provider.requests.length;
+				await tui("key", "press", "Ctrl+C");
+				await eventually(
+					() => screen.checkpoint("clear the unsent draft before switching display modes"),
+					frame => nativeDraftMatches(frame.screen, "", frame.cursor),
+				);
 				await tui("submit", "/display detailed");
 				await tui("expect", "text", "detailed", "--timeout", "30000");
 				const detailed = await eventually(
 					() => screen.checkpoint("detailed edit initially collapsed"),
 					frame =>
+						frame.screen.includes(original) &&
 						frame.screen.includes("EDIT_CLI_01") &&
 						!frame.screen.includes("EDIT_CLI_46") &&
 						frame.screen.includes("retained-read.txt"),
 				);
 				expect(detailed.screen).toContain("retained-search.txt");
-				expect(detailed.screen).not.toContain("本轮改动");
 				await tui("key", "press", "Ctrl+O");
 				await eventually(
 					() => screen.checkpoint("detailed edit expanded"),
-					frame => frame.screen.includes("EDIT_CLI_46"),
+					frame => frame.screen.includes(original) && frame.screen.includes("EDIT_CLI_46"),
 				);
 				await tui("key", "press", "Ctrl+O");
 				await eventually(
@@ -1063,34 +1065,34 @@ test("retained real edit does not move when the next assistant stream is empty o
 				await tui("expect", "text", "clean", "--timeout", "30000");
 				const clean = await eventually(
 					() => screen.checkpoint("clean hides tools and edit"),
-					frame => !frame.screen.includes("EDIT_CLI_01") && !frame.screen.includes("retained-read.txt"),
+					frame => !hiddenTools.test(frame.screen) && !frame.screen.includes("retained-read.txt"),
 				);
-				expect(clean.screen).not.toContain("retained-search.txt");
-				expect(clean.screen).not.toContain("本轮改动");
 				expect(clean.screen).not.toContain("CLI_READ_RESULT");
 				await tui("key", "press", "Ctrl+O");
 				await tui("expect", "text", "Tool activity is hidden", "--timeout", "30000");
 				const cleanAfterToggle = await screen.checkpoint("clean expansion remains hidden");
-				expect(cleanAfterToggle.screen).not.toContain("EDIT_CLI_01");
+				expect(cleanAfterToggle.screen).not.toMatch(hiddenTools);
 				expect(cleanAfterToggle.screen).not.toContain("retained-read.txt");
 				await tui("submit", "/display compact");
 				await tui("expect", "text", "compact", "--timeout", "30000");
 				const restored = await eventually(
-					() => screen.checkpoint("compact edit restored after transient output closes"),
-					frame => collapsedDiff(frame.screen) && !frame.screen.includes("CLI_READ_RESULT"),
+					() => screen.checkpoint("compact restores read activity without reconstructing a file diff"),
+					frame => frame.screen.includes("Agent：上次读取完成") && !frame.screen.includes("CLI_READ_RESULT"),
 				);
 				// After the bounded output preview closes, only the completed read activity remains.
 				const readRows = restored.screen.split("\n").filter(line => line.includes("retained-read.txt"));
 				expect(readRows).toHaveLength(1);
 				expect(readRows[0]).toContain("Agent：上次读取完成");
 				expect(readRows[0]).toContain("Reading retained evidence");
-				expect(restored.screen).not.toContain("retained-search.txt");
+				expect(restored.screen).not.toMatch(hiddenTools);
 				expect(provider.requests).toHaveLength(requests);
+				expect(messages(await journal(completed.file))).toEqual(completed.history);
 				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(`${edited}\n`);
 				await screen.stop();
 			},
 		);
 	} finally {
+		continueToGrep.resolve();
 		startStream.resolve();
 		if (streamController && streamController.desiredSize !== null) {
 			try {

@@ -119,7 +119,6 @@ describe("RewindSelectorComponent", () => {
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
 		// Exercise tool exchange inspection and filtering with tool cards visible.
 		chatTranscriptDisplayPreferences.hideToolActivity = false;
-		chatTranscriptDisplayPreferences.compactToolActivity = false;
 		setKeybindings(KeybindingsManager.inMemory());
 	});
 	afterEach(() => {

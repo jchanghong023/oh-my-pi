@@ -483,7 +483,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "clean", description: "隐藏思考与工具活动" },
 			{
 				name: "compact",
-				description: "隐藏普通工具卡片，保留文件写入／编辑组件及输入区上方两行活动内容",
+				description: "隐藏普通工具历史卡片，在输入框上方显示两行活动和最近工具输出",
 			},
 			{ name: "detailed", description: "沿用上游完整思考与工具显示" },
 		],

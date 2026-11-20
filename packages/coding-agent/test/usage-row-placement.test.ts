@@ -28,7 +28,7 @@ let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 beforeEach(() => {
 	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 	// Usage nesting and path association require the full upstream rendering.
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 });
 
 afterEach(() => {

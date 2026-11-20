@@ -10,6 +10,7 @@ import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
@@ -23,7 +24,7 @@ let previousDisplayPreferences = originalDisplayPreferences;
 
 beforeEach(() => {
 	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 });
 
 afterEach(() => {
@@ -43,6 +44,7 @@ afterAll(() => {
 
 function createFixture() {
 	const ctx = createInteractiveModeContext({
+		settings: Settings.isolated({ "display.mode": "detailed" }),
 		streamingComponent: new AssistantMessageComponent(),
 	});
 	const blocks: Component[] = [];
@@ -364,6 +366,7 @@ describe("EventController + Cursor todo bridge", () => {
 			timestamp: 1,
 		};
 		const ctx = createInteractiveModeContext({
+			settings: Settings.isolated({ "display.mode": "detailed" }),
 			streamingComponent: new AssistantMessageComponent(),
 			session: {
 				agent: {
@@ -400,6 +403,7 @@ describe("EventController + Cursor todo bridge", () => {
 			timestamp: 1,
 		};
 		const ctx = createInteractiveModeContext({
+			settings: Settings.isolated({ "display.mode": "detailed" }),
 			streamingComponent: new AssistantMessageComponent(),
 			session: {
 				agent: {
@@ -427,7 +431,7 @@ describe("EventController + Cursor todo bridge", () => {
 
 describe("Todo failure replay", () => {
 	it("replaces a replayed failure with the new live result in detailed views", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		const f = createPresentationFixture();
 		const component = new ToolExecutionComponent("todo", { todos: [] }, {}, undefined, f.ctx.ui);
 		component.updateResult(
@@ -442,15 +446,15 @@ describe("Todo failure replay", () => {
 		expect(expanded).toContain("NEW_LIVE_FAILURE");
 		expect(expanded).not.toContain("OLD_FAILURE");
 		component.setExpanded(false);
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
 		const detailed = Bun.stripANSI(component.render(180).join("\n"));
 		expect(detailed).toContain("NEW_LIVE_FAILURE");
 		expect(detailed).not.toContain("OLD_FAILURE");
 	});
 
 	it.each(["detailed", "clean"] as const)("drops stale warnings on %s replay", async presentation => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const f = createPresentationFixture();
+		cfgDisplayMode.override(f.ctx.settings, "compact");
 		f.ctx.hideToolActivity = true;
 		f.ctx.chatContainer.setToolActivityVisible(false);
 		f.ctx.addMessageToChat = f.helpers.addMessageToChat.bind(f.helpers);
@@ -508,10 +512,8 @@ describe("Todo failure replay", () => {
 		);
 		expect(Bun.stripANSI(builder.container.render(180).join("\n"))).not.toContain("HISTORY_FAILURE_REASON");
 		expect(renderTranscript(f.ctx)).not.toContain("HISTORY_FAILURE_REASON");
-		setChatTranscriptDisplayPreferences({
-			compactToolActivity: false,
-			hideToolActivity: presentation === "clean",
-		});
+		cfgDisplayMode.override(f.ctx.settings, presentation);
+		setChatTranscriptDisplayPreferences({ hideToolActivity: presentation === "clean" });
 		f.ctx.hideToolActivity = presentation === "clean";
 		f.ctx.chatContainer.setToolActivityVisible(!f.ctx.hideToolActivity);
 		builder.container.setToolActivityVisible(!f.ctx.hideToolActivity);
@@ -529,7 +531,8 @@ describe("Todo failure replay", () => {
 		expect(rebuilt).not.toContain("Warning:");
 		if (presentation === "clean") expect(rebuilt).not.toContain("HISTORY_FAILURE_REASON");
 		// Revealing clean history must not resurrect a warning retained while hidden.
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		cfgDisplayMode.override(f.ctx.settings, "detailed");
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		f.ctx.hideToolActivity = false;
 		f.ctx.chatContainer.setToolActivityVisible(true);
 		builder.container.setToolActivityVisible(true);
@@ -543,7 +546,7 @@ describe("Todo failure replay", () => {
 		expect(detailed).not.toContain("Warning:");
 		await f.helpers.renderInitialMessages();
 		expect(renderTranscript(f.ctx)).not.toContain("Warning:");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		f.ctx.chatContainer.setToolActivityVisible(false);
 		builder.container.setToolActivityVisible(false);
 		expect(Bun.stripANSI(builder.container.render(180).join("\n"))).not.toContain("HISTORY_FAILURE_REASON");

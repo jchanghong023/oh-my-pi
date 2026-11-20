@@ -249,7 +249,6 @@ describe("CopySelectorComponent", () => {
 		previousPreferences = { ...chatTranscriptDisplayPreferences };
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
 		setChatTranscriptDisplayPreferences({
-			compactToolActivity: false,
 			hideToolActivity: false,
 			readToolResultPreview: false,
 		});
@@ -322,7 +321,7 @@ describe("CopySelectorComponent", () => {
 	});
 
 	it("folds lazily created grouped reads into the assistant turn so Enter copies the yield", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		const picks: Array<{ content: string; label: string }> = [];
 		const selector = makeSelector(picks, () => {}, undefined, makeGroupedReadEntries());
 		const lines = selector.render(100).map(line => Bun.stripANSI(line));

@@ -83,21 +83,18 @@ describe("background receipt projections", () => {
 		for (const message of messages) {
 			const original = JSON.stringify(message);
 			for (const current of [message, JSON.parse(original) as typeof message]) {
-				for (const mode of ["clean", "compact", "detailed"] as const) {
-					setChatTranscriptDisplayPreferences({
-						compactToolActivity: mode === "compact",
-						hideToolActivity: mode !== "detailed",
-					});
+				for (const hideToolActivity of [true, false]) {
+					setChatTranscriptDisplayPreferences({ hideToolActivity });
 					const block = buildAsyncResultBlock(current);
-					block.setToolActivityVisible(mode === "detailed");
+					block.setToolActivityVisible(!hideToolActivity);
 					const lines = block.render(160);
-					if (mode === "detailed") expect(lines.join("\n")).toContain("Background job");
-					else expect(lines).toEqual([]);
+					if (hideToolActivity) expect(lines).toEqual([]);
+					else expect(lines.join("\n")).toContain("Background job");
 					harness = await TspHarness.start(tui => tui.addChild(block), { cols: 160, rows: 20 });
 					await harness.render();
 					const native = JSON.stringify(harness.doc());
 					const activity = harness.find(node => node.p?.role === "omp.activity");
-					expect(activity?.p?.hidden === true).toBe(mode !== "detailed");
+					expect(activity?.p?.hidden === true).toBe(hideToolActivity);
 					expect(native).toContain("Background job failed");
 					if (message === messages[0]) {
 						expect(native).toContain("bash-failed");
@@ -138,11 +135,8 @@ describe("background receipt projections", () => {
 		);
 		const original = JSON.stringify(message);
 		for (const current of [message, JSON.parse(original) as typeof message]) {
-			for (const mode of ["clean", "compact", "detailed"] as const) {
-				setChatTranscriptDisplayPreferences({
-					compactToolActivity: mode === "compact",
-					hideToolActivity: mode !== "detailed",
-				});
+			for (const hideToolActivity of [true, false]) {
+				setChatTranscriptDisplayPreferences({ hideToolActivity });
 				const output = Bun.stripANSI(buildAsyncResultBlock(current).render(160).join("\n"));
 				expect(output).toContain("artifact write failed");
 				expect(output).toContain("invalid output");
@@ -169,7 +163,7 @@ describe("background receipt projections", () => {
 		expect(JSON.stringify(message)).toBe(original);
 	});
 
-	it("keeps process exit details in detailed mode and hides receipts in clean and compact", async () => {
+	it("keeps process exit details with visible tool activity and hides receipts otherwise", async () => {
 		const message = createCustomMessage(
 			"launch-completion",
 			"processes exited",
@@ -188,7 +182,7 @@ describe("background receipt projections", () => {
 		const original = JSON.stringify(message);
 		for (const current of [message, JSON.parse(original) as typeof message]) {
 			const block = buildLaunchCompletionBlock(current);
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 			expect(
 				block
 					.render(200)
@@ -196,14 +190,12 @@ describe("background receipt projections", () => {
 					.join("\n"),
 			).toContain("Supervised process completed healthy");
 			expect(Bun.stripANSI(block.render(200).join("\n"))).toContain("unknown-exit");
-			for (const compactToolActivity of [false, true]) {
-				setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: true });
-				block.setToolActivityVisible(false);
-				expect(block.render(200)).toEqual([]);
-			}
+			setChatTranscriptDisplayPreferences({ hideToolActivity: true });
+			block.setToolActivityVisible(false);
+			expect(block.render(200)).toEqual([]);
 		}
 		expect(JSON.stringify(message)).toBe(original);
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		harness = await TspHarness.start(tui => tui.addChild(buildLaunchCompletionBlock(message)), {
 			cols: 200,
 			rows: 30,

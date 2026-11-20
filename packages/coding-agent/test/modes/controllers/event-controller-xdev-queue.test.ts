@@ -16,7 +16,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 
-import { cfgDisplaySmoothStreaming } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode, cfgDisplaySmoothStreaming } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 beforeAll(async () => {
 	await initTheme();
@@ -55,13 +55,14 @@ function deviceWrite(id: string, name: string, inner: Record<string, unknown>) {
 }
 
 function createFixture(streamingMessage: AssistantMessage) {
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	const pendingTools = new Map<string, ToolExecutionComponent>();
 	const ctx = createInteractiveModeContext({
 		streamingComponent: new AssistantMessageComponent(),
 		streamingMessage,
 		pendingTools,
 	});
+	cfgDisplayMode.override(ctx.settings, "detailed");
 
 	const controller = new EventController(ctx);
 	ctx.eventController = controller;

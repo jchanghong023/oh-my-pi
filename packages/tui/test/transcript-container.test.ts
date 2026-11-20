@@ -1050,7 +1050,7 @@ describe("TranscriptContainer", () => {
 
 	it("keeps compact prose complete when a blocking active prefix finally settles", () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		try {
 			const transcript = new TranscriptContainer();
 			const active = new Block(["active prefix"], false);
@@ -1325,8 +1325,8 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 	beforeEach(() => {
 		previousPreferences = { ...chatTranscriptDisplayPreferences };
 		// These upstream cases publish thinking before prose. A host in another
-		// test may have selected clean/compact, where thinking is intentionally hidden.
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		// test may have hidden tool activity, which also hides thinking.
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 	afterEach(() => setChatTranscriptDisplayPreferences(previousPreferences));
 
@@ -1354,7 +1354,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 	function compactTranscript(run: () => void): () => void {
 		return () => {
 			const previous = { ...chatTranscriptDisplayPreferences };
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 			try {
 				run();
 			} finally {
@@ -1415,7 +1415,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 			const protocol = TERMINAL.imageProtocol;
 			const svg = svgFigureRendering();
 			const charts = tableChartMode();
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 			setTerminalImageProtocol(ImageProtocol.Kitty);
 			setSvgFigureRendering(true);
 			setTableCharts("always");
@@ -1476,7 +1476,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 	it("refreshes cached compact prose after a theme invalidation", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
 		const originalTheme = theme;
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		try {
 			const dark = await getThemeByName("dark");
 			const light = await getThemeByName("light");
@@ -2022,12 +2022,9 @@ describe("TranscriptContainer file changes", () => {
 		return [ansi, ...native];
 	}
 
-	function mode(root: TranscriptContainer, display: "clean" | "compact" | "detailed"): void {
-		setChatTranscriptDisplayPreferences({
-			compactToolActivity: display === "compact",
-			hideToolActivity: display !== "detailed",
-		});
-		root.setToolActivityVisible(display === "detailed");
+	function setToolActivityVisible(root: TranscriptContainer, visible: boolean): void {
+		setChatTranscriptDisplayPreferences({ hideToolActivity: !visible });
+		root.setToolActivityVisible(visible);
 	}
 
 	it("excludes descendants of hidden native nodes while retaining visible siblings", () => {
@@ -2043,10 +2040,10 @@ describe("TranscriptContainer file changes", () => {
 		expect(visibleNativeProps(document)).toContain("shown");
 	});
 
-	it("keeps all applied file diffs in detailed order and restores the original cards after compact", () => {
+	it("keeps all applied file diffs in order and restores the original cards after hiding tool activity", () => {
 		const root = new TranscriptContainer();
 		try {
-			mode(root, "detailed");
+			setToolActivityVisible(root, true);
 			for (const name of ["one", "two", "three", "four"]) {
 				const edit = call(root, "edit", { path: `${name}.ts` });
 				edit.updateResult(
@@ -2068,9 +2065,9 @@ describe("TranscriptContainer file changes", () => {
 			}
 			for (const component of components) component.setExpanded(true);
 			const expandedDetailed = views(root);
-			mode(root, "compact");
+			setToolActivityVisible(root, false);
 			for (const view of views(root)) expect(view).not.toMatch(/new_(one|two|three|four)/);
-			mode(root, "detailed");
+			setToolActivityVisible(root, true);
 			for (const [index, component] of components.entries()) expect(root.children[index]).toBe(component);
 			expect(views(root)).toEqual(expandedDetailed);
 			for (const component of components) component.setExpanded(false);
@@ -2082,10 +2079,10 @@ describe("TranscriptContainer file changes", () => {
 		}
 	});
 
-	it("hides both file and ordinary tool cards from clean and compact history, but restores detailed cards", () => {
+	it("hides both file and ordinary tool cards from history, but restores them when tool activity is visible", () => {
 		const root = new TranscriptContainer();
 		try {
-			mode(root, "compact");
+			setToolActivityVisible(root, false);
 			call(root, "write", { path: "file:///tmp/url-file.txt", content: "URL_FILE_BODY" }).updateResult(
 				{
 					content: [{ type: "text", text: "written" }],
@@ -2190,34 +2187,31 @@ describe("TranscriptContainer file changes", () => {
 				false,
 			);
 			// These tool results are transcript cards, not confirmed writes in the separate net-diff dock.
-			for (const display of ["compact", "clean"] as const) {
-				mode(root, display);
-				for (const view of views(root)) {
-					for (const marker of [
-						"URL_FILE_BODY",
-						"DEVICE_NEW",
-						"PARTIAL_NEW",
-						"peer",
-						"display.test",
-						"exit 7",
-						"MESSAGE_NOT_A_DIFF",
-						"CONFIG_NOT_A_DIFF",
-						"PROCESS_NOT_A_DIFF",
-						"PENDING_PREVIEW",
-						"PENDING_NEW",
-						"PREVIEW_NEW",
-						"DEVICE_HELP_NOT_A_DIFF",
-						"HELP_NEW",
-						"SUGGESTED_NEW",
-						"SAME_CONTENT",
-						"FAIL_COMMAND",
-						"FAIL_DIAGNOSTIC",
-					]) {
-						expect(view).not.toContain(marker);
-					}
+			for (const view of views(root)) {
+				for (const marker of [
+					"URL_FILE_BODY",
+					"DEVICE_NEW",
+					"PARTIAL_NEW",
+					"peer",
+					"display.test",
+					"exit 7",
+					"MESSAGE_NOT_A_DIFF",
+					"CONFIG_NOT_A_DIFF",
+					"PROCESS_NOT_A_DIFF",
+					"PENDING_PREVIEW",
+					"PENDING_NEW",
+					"PREVIEW_NEW",
+					"DEVICE_HELP_NOT_A_DIFF",
+					"HELP_NEW",
+					"SUGGESTED_NEW",
+					"SAME_CONTENT",
+					"FAIL_COMMAND",
+					"FAIL_DIAGNOSTIC",
+				]) {
+					expect(view).not.toContain(marker);
 				}
 			}
-			mode(root, "detailed");
+			setToolActivityVisible(root, true);
 			for (const view of views(root)) {
 				for (const marker of ["peer", "display.test", "job", "URL_FILE_BODY", "DEVICE_NEW", "PARTIAL_NEW"]) {
 					expect(view).toContain(marker);
@@ -2233,7 +2227,7 @@ describe("TranscriptContainer file changes", () => {
 	it("keeps the detailed ANSI and native file cards throughout their lifecycle", () => {
 		const root = new TranscriptContainer();
 		try {
-			mode(root, "detailed");
+			setToolActivityVisible(root, true);
 			const file = call(root, "write", {});
 			expect(file.render(120).join("")).toBe("");
 			expect(file.isTranscriptBlockFinalized()).toBe(false);
@@ -2297,18 +2291,16 @@ describe("TranscriptContainer file changes", () => {
 		}
 	});
 
-	it("does not let a hidden pending file card gate clean or compact scrollback", () => {
+	it("does not let a hidden pending file card gate scrollback", () => {
 		try {
-			for (const display of ["clean", "compact"] as const) {
-				const root = new TranscriptContainer();
-				mode(root, display);
-				const file = call(root, "write", { path: "pending.txt", content: "pending body" });
-				file.setExecutionStarted();
-				root.addChild(new Block(["later settled"], true));
+			const root = new TranscriptContainer();
+			setToolActivityVisible(root, false);
+			const file = call(root, "write", { path: "pending.txt", content: "pending body" });
+			file.setExecutionStarted();
+			root.addChild(new Block(["later settled"], true));
 
-				expect(file.isTranscriptBlockFinalized()).toBe(true);
-				expect(root.peekFinalizedBatch(120, 0)?.rows).toEqual(["later settled", ""]);
-			}
+			expect(file.isTranscriptBlockFinalized()).toBe(true);
+			expect(root.peekFinalizedBatch(120, 0)?.rows).toEqual(["later settled", ""]);
 		} finally {
 			for (const component of components.splice(0)) component.dispose();
 			stopSharedSpinnerTicker();

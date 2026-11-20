@@ -42,8 +42,8 @@ function message(content: AssistantMessage["content"]): AssistantMessage {
 	};
 }
 
-function assistant(compact: boolean, hide = false): AssistantMessageComponent {
-	setChatTranscriptDisplayPreferences({ compactToolActivity: compact, hideToolActivity: compact });
+function assistant(hideToolActivity: boolean, hide = false): AssistantMessageComponent {
+	setChatTranscriptDisplayPreferences({ hideToolActivity });
 	const component = new AssistantMessageComponent(undefined, hide, undefined, [], undefined, true, undefined, false);
 	components.push(component);
 	return component;
@@ -60,7 +60,7 @@ function expectNoInlineThinking(component: AssistantMessageComponent): void {
 	expect(native).not.toContain("reasoning");
 }
 
-describe("compact transient thinking preview", () => {
+describe("assistant thinking visibility", () => {
 	it("keeps current and finalized thinking entirely outside ANSI and native transcripts", () => {
 		for (const hide of [false, true]) {
 			const component = assistant(true, hide);
@@ -93,7 +93,7 @@ describe("compact transient thinking preview", () => {
 		expect(JSON.stringify(component.describe())).not.toContain("private reasoning");
 	});
 
-	it("projects cached live and historical thinking away in clean while retaining ordinary answer text", () => {
+	it("projects cached live and historical thinking away while retaining ordinary answer text", () => {
 		const component = assistant(false);
 		const content = message([
 			{ type: "text", text: "Thinking is part of this ordinary answer." },
@@ -106,23 +106,20 @@ describe("compact transient thinking preview", () => {
 		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		for (const finalized of [false, true]) {
 			if (finalized) component.markTranscriptBlockFinalized();
-			const ansi = plain(component.render(80)).join("\n");
 			const native = JSON.stringify(component.describe());
+			const ansi = plain(component.render(80)).join("\n");
 			expect(ansi).toContain("Thinking is part of this ordinary answer.");
 			expect(native).toContain("Thinking is part of this ordinary answer.");
 			expect(ansi).not.toContain("private reasoning");
 			expect(native).not.toContain("private reasoning");
 			expect(native).not.toContain("omp.thinking");
 		}
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true, compactToolActivity: true });
-		expect(plain(component.render(80)).join("\n")).not.toContain("private reasoning");
-		expect(JSON.stringify(component.describe())).not.toContain("private reasoning");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
-		expect(plain(component.render(80)).join("\n")).toContain("private reasoning");
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		expect(JSON.stringify(component.describe())).toContain("private reasoning");
+		expect(plain(component.render(80)).join("\n")).toContain("private reasoning");
 	});
 
-	it("does not leave an ANSI pulse or expandable native node for hidden live thinking in clean", () => {
+	it("does not leave an ANSI pulse or expandable native node when live thinking becomes hidden", () => {
 		const component = assistant(false, true);
 		component.updateContent(thinking("private reasoning"), { transient: true });
 		expect(plain(component.render(40)).join("\n")).toContain("Thinking");
@@ -134,17 +131,17 @@ describe("compact transient thinking preview", () => {
 		expectNoInlineThinking(component);
 	});
 
-	it("retains complete thinking only in detailed mode and never exposes the dock in clean mode", () => {
+	it("shows complete thinking during detailed inspection without unhiding it in the transcript", () => {
 		const source = "first\n\nsecond\n\nthird";
-		const detailed = assistant(false);
-		detailed.updateContent(thinking(source), { transient: true });
+		const component = assistant(true, true);
+		component.updateContent(thinking(source));
+		expectNoInlineThinking(component);
+		component.setDetailedInspection(true, false);
 		for (const word of ["first", "second", "third"]) {
-			expect(plain(detailed.render(40)).join("\n")).toContain(word);
-			expect(JSON.stringify(detailed.describe())).toContain(word);
+			expect(plain(component.render(40)).join("\n")).toContain(word);
+			expect(JSON.stringify(component.describe())).toContain(word);
 		}
-		const clean = assistant(false, true);
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
-		clean.updateContent(thinking(source), { transient: true });
-		expectNoInlineThinking(clean);
+		component.setDetailedInspection(false, true);
+		expectNoInlineThinking(component);
 	});
 });

@@ -42,10 +42,11 @@
 - TUI input predictions use the upstream request lifecycle and still discard suggestions from a previous session.
 - Session lists no longer drop a readable session just because it grows during a scan.
 - The intranet system notice describes the CentOS 7, NFS, and `/dev/shm` deployment without assuming the current host matches it.
-- Compact mode shows model stages separately from Agent activity and keeps one net diff per file for the latest turn, outside scrollback.
+- Compact mode shows model stages separately from Agent activity.
 - OpenWiki uses lightweight diagram checks to shrink the standalone package while keeping offline Mermaid rendering in the browser.
 - Compact mode keeps file targets and live reasoning visible alongside ongoing work, and shows up to five output lines without losing the last useful preview to empty or separator-only updates.
-- Compact mode aligns output with the activity rows, emphasizes file names, live thinking and failure diagnostics, and limits animation to one quiet, still-running action.
+- Compact mode reuses the session’s selected tool output when redrawing, without rescanning tool results.
+- Compact mode emphasizes file names, live thinking and failure diagnostics, and animates active labels in step with the status spinner.
 - Updated to upstream v18.22.2 while retaining intranet providers, fork commands and TUI presentation.
 - Selective commit through `/commit` and the eval `commit` namespace is now opt-in via `commit.enabled`; unfinished merges use plain `git commit`.
 - Added `providers.thinkingProbe` (default off) so unknown-model thinking probes never add requests to intranet, company or custom providers.
@@ -79,26 +80,25 @@
 - All 12 bundled OpenSpec skills remain available through native skill invocation and completion; only the six core workflows appear in automatic model discovery, with the other six requiring manual invocation.
 - Bundled OpenSpec 2.0 workflows now use omp openspec throughout and update only with OMP; retired the unused skill installation and template-generation chain.
 - This repository now uses the native spec-driven schema; existing custom mini/omp-spec projects require explicit migration and any missing design/tasks remain incomplete (see docs-zh-CN/openspec-schema-migration.md).
-- Compact mode's tool output preview is now a bordered card with padding and a color-coded Chinese status header that keeps both ends of long commands; finished grep/glob results show their matching rows first instead of only the output tail.
+- Compact output uses a single-line status header; successful grep/glob previews prioritize matching rows.
 
 - OpenWiki browser assets now use the same gzip archive pipeline as the stats dashboard, reducing embedded size and deferring decoding until the first request.
 - Integrated upstream v18.22.0, adopting the backend-neutral `dsm` analysis namespace while keeping binary analysis disabled by default.
 - Integrated upstream v18.20.2 while retaining blocked Goal tasks and fork deployment defaults.
 - Ask now uses upstream HTML forms and timeout behavior across native hosts, without fork-specific Goal replies or the legacy questions tool protocol.
 - File writes no longer capture unused before-and-after snapshots for the retired compact display.
-- Compact mode previews the latest file's net diff in the upstream Edit card, separated from the file count by a blank line and capped in height; Ctrl+O opens all file diffs for the turn.
+- Compact mode no longer shows a turn-wide file diff. Recent tool output still appears briefly, and detailed mode retains the original expandable file diffs.
 
 ### Fixed
 
 - ACP extension listings use project settings for `cwd` queries and live session settings only when a `sessionId` is supplied.
 - Compact tool output backgrounds now start in the same column as the two activity rows, leaving the shared left gutter clear.
 - Compact Output expires from its own session's run end without reappearing in later turns; changing the display mode or focused agent no longer revives stale thinking.
-- Compact mode restores typing when an expanded diff disappears, includes formatted batch writes and focused worker changes, flags interrupted file diffs, and shows model wait when switching back before the first response.
+- Compact mode shows model wait when switching back before the first response.
 - Compact model and Agent labels use the upstream work indicator's more visible shimmer and repaint cadence, starting and stopping with the status spinner.
-- Compact mode stops repeating file-tool output already covered by the turn diff without hiding distinct output or failures.
-- Compact mode shows deleted files as a single row with the upstream delete icon, without printing their contents.
 - The display shortcut reports settings overrides instead of claiming a switch succeeded.
 - Native clean and detailed modes no longer reserve the compact activity rows.
+- In compact mode, Ctrl+O expands explicit TodoLoop records without revealing hidden tool cards.
 - Native child agents inherit the launching session's credentials and tool restrictions, and caller restrictions also apply to Cursor, Advisors, and resumed queued input.
 - Offline mode preserves the user's `models.offline` setting.
 - Intranet model catalogs only refresh manually against configured discovery endpoints; signing in still uses the local catalog cache.

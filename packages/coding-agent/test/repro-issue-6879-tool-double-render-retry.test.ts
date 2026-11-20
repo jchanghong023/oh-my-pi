@@ -84,7 +84,7 @@ describe("issue #6879 — tool output appears twice after a superseded turn", ()
 
 	beforeEach(() => {
 		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		vi.spyOn(process.stdout, "write").mockReturnValue(true);
 		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);

@@ -411,7 +411,7 @@ describe("EventController thinking visibility", () => {
 	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 	beforeEach(() => {
 		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
 

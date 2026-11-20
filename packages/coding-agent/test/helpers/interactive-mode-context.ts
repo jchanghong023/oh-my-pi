@@ -138,9 +138,8 @@ export function createSessionStub(
 		wakeSources: undefined,
 		waitForRunEnd: async () => {},
 		getAsyncJobSnapshot: () => null,
-		getLiveToolOutputSnapshot: () => [],
+		getLiveToolOutputPreview: () => undefined,
 		modelStage: null,
-		getLatestTurnFileChanges: () => ({ files: new Map(), revision: 0 }),
 		subscribe: vi.fn(() => () => {}),
 	} satisfies SessionOverrides;
 	if (overrides) layer(stub, overrides);
@@ -291,7 +290,6 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 		isInitialized: true,
 		initialChatRendered: true,
 		toolOutputExpanded: false,
-		compactDiffExpanded: false,
 		hideToolActivity: false,
 		hideThinkingBlock: false,
 		get effectiveHideThinkingBlock() {

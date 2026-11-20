@@ -29,7 +29,6 @@ import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import { currentThreadId } from "../thread/identity";
 import type { AgentSession } from "./agent-session";
 import type { AgentSessionEvent, AgentSessionEventListener, ModelStage } from "./agent-session-events";
-import type { TurnFileChanges } from "./latest-turn-file-changes";
 import type {
 	AgentSessionDisposeOptions,
 	AsyncJobInspection,
@@ -244,6 +243,12 @@ export interface LiveToolOutputSnapshot {
 	expiresAt?: number;
 }
 
+/** The selected live output and its normalized display text, retained through expiry. */
+export interface LiveToolOutputPreview {
+	readonly call: LiveToolOutputSnapshot;
+	readonly text: string;
+}
+
 /** Home-thread time and ordering for the mirrored output projection. */
 export interface LiveToolOutputStamp {
 	receivedAt: number;
@@ -315,11 +320,10 @@ export interface AgentViewSession extends AgentSessionHandle {
 	readonly hasInterruptibleInput: boolean;
 	/** Tool execution updates of tools still running, for mid-tool attach. */
 	activeToolExecutionUpdates(): readonly ToolExecutionUpdateEvent[];
-	/** In-flight dispatches and latest real Output, including its original terminal reception time. */
-	getLiveToolOutputSnapshot(): readonly LiveToolOutputSnapshot[];
+	/** Latest eligible output, including its original dismissal deadline. */
+	getLiveToolOutputPreview(): LiveToolOutputPreview | undefined;
 	/** Latest view-only model stage, including before the first response frame. */
 	readonly modelStage: ModelStage | null;
-	getLatestTurnFileChanges(): TurnFileChanges | undefined;
 	/** Await persistence of messages already emitted. */
 	settleInFlightMessagePersistence(): Promise<void>;
 	/** Session context for transcript rendering. */

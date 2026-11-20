@@ -58,6 +58,29 @@ describe("InputController tool output expansion", () => {
 		expect(requestRender).not.toHaveBeenCalled();
 		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("/display"));
 	});
+
+	it("does nothing in compact when there is no TodoLoop output to expand", () => {
+		const settings = Settings.isolated();
+		cfgDisplayMode.set(settings, "compact");
+		const expandable = { setExpanded: vi.fn() };
+		const requestRender = vi.fn();
+		const showStatus = vi.fn();
+		const ctx = {
+			settings,
+			hideToolActivity: true,
+			toolOutputExpanded: false,
+			chatContainer: { children: [expandable] },
+			ui: { requestRender },
+			showStatus,
+		} as unknown as InteractiveModeContext;
+
+		new InputController(ctx).toggleToolOutputExpansion();
+
+		expect(ctx.toolOutputExpanded).toBe(false);
+		expect(expandable.setExpanded).not.toHaveBeenCalled();
+		expect(requestRender).not.toHaveBeenCalled();
+		expect(showStatus).not.toHaveBeenCalled();
+	});
 });
 
 describe("InputController tool activity visibility", () => {

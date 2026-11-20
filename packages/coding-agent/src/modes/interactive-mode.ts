@@ -143,7 +143,6 @@ import { onDownloadActivity } from "../downloads/activity";
 import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
 import { CompactThinkingPreview } from "./compact-thinking-preview";
 import { CompactToolOutputPreview } from "./compact-tool-output-preview";
-import { CompactFileDiff } from "./compact-file-diff";
 import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
 import { dispatchApprovedPlan } from "../plan-mode/session-approval";
 import { planVerificationChecks, recordApprovedPlanReference } from "../plan-mode/verification";
@@ -1405,25 +1404,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		width => this.compactToolOutputPreview.compactActivity(width),
 	);
 	/** Read-only Output sits above the activity dock; the input and its trailing chrome win space. */
-	readonly compactToolOutputPreview = new CompactToolOutputPreview(
-		this,
-		() =>
-			Math.max(
-				0,
-				this.ui.terminal.rows -
-					Math.max(this.composer.rowsBelow(this.compactToolOutputPreview) ?? 0, this.editor.renderedRows + 4),
-			),
-		(file, width) => this.compactFileDiff.coveredDiff(file, width),
-	);
-	readonly compactFileDiff: CompactFileDiff = new CompactFileDiff(this, () =>
+	readonly compactToolOutputPreview = new CompactToolOutputPreview(this, () =>
 		Math.max(
 			0,
-			Math.min(
-				Math.floor(this.ui.terminal.rows / 3),
-				this.ui.terminal.rows -
-					Math.max(this.composer.rowsBelow(this.compactFileDiff) ?? 0, this.editor.renderedRows + 4) -
-					2,
-			),
+			this.ui.terminal.rows -
+				Math.max(this.composer.rowsBelow(this.compactToolOutputPreview) ?? 0, this.editor.renderedRows + 4),
 		),
 	);
 	/** Whether {@link statusContainer} rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
@@ -1452,7 +1437,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	initialChatRendered = false;
 	isBashMode = false;
 	toolOutputExpanded = false;
-	compactDiffExpanded = false;
 	hideToolActivity = false;
 	todoExpanded = false;
 	planModeEnabled = false;
@@ -2210,7 +2194,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!options?.viewOnly) this.#inputController.restoreCompactionQueueToEditor();
 		this.compactThinkingPreview.clear();
 		this.compactToolOutputPreview.clear();
-		this.compactFileDiff.close();
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.lastAssistantUsage = undefined;
@@ -2332,7 +2315,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
 		this.settings = session.settings;
-		session.getLatestTurnFileChanges();
 		const preferences = {
 			quiet: cfgStartupQuiet.get(settings),
 			composerShape: cfgComposerShape.get(settings),
@@ -2769,7 +2751,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.attachmentChipsContainer,
 				this.editorTopGapContainer,
 				this.hookWidgetContainerAbove,
-				this.compactFileDiff,
 				this.compactToolOutputPreview,
 				this.compactThinkingPreview,
 				// Keep a pending ask next to the composer, ahead of previews when
@@ -2807,7 +2788,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.modelCycleContainer,
 					this.progressHudContainer,
 					this.compactToolOutputPreview,
-					this.compactFileDiff,
 				],
 				// The working row, the idle status line that replaces it, and the
 				// margin above the editor (the band composer's gap opens when that
@@ -2833,7 +2813,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.statusContainer,
 					{ component: this.#tray, feature: "tray" },
 					this.pendingMessagesContainer,
-					this.compactFileDiff,
 					this.compactToolOutputPreview,
 					this.compactThinkingPreview,
 					this.editorContainer,
@@ -4728,11 +4707,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Field comparisons skip effects the keybinding toggles already applied.
 		const displayMode = cfgDisplayMode.get(this.settings);
 		const hideToolActivity = displayMode !== "detailed";
-		const compactToolActivity = displayMode === "compact";
 		if (any("display.mode")) {
 			this.hideToolActivity = hideToolActivity;
 			if (!hideToolActivity) this.toolOutputExpanded = false;
-			this.compactFileDiff.close();
 			for (const child of this.chatContainer.children) {
 				if (
 					!hideToolActivity &&
@@ -4740,13 +4717,13 @@ export class InteractiveMode implements InteractiveModeContext {
 				) {
 					child.setExpanded(false);
 				} else if (child instanceof AssistantMessageComponent) {
-					child.setToolResultImagesVisible(!hideToolActivity && !compactToolActivity);
+					child.setToolResultImagesVisible(!hideToolActivity);
 				}
 			}
 			this.chatContainer.setToolActivityVisible(!hideToolActivity);
 			this.#syncWorkingLoaderVisibility();
 			this.#renderTodoList();
-			if (hideToolActivity || compactToolActivity) this.ui.clearInlineImages();
+			if (hideToolActivity) this.ui.clearInlineImages();
 			// Recreate settled blocks and replace retired rows using the new presentation.
 			rebuildChat = true;
 		}
@@ -4777,7 +4754,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		if (any("display.mode", "hideThinkingBlock", "proseOnlyThinking", "expandThinkingBlocks")) {
 			this.#eventController.refreshThinkingVisibility();
-			if (!hideToolActivity && !compactToolActivity) {
+			if (!hideToolActivity) {
 				this.chatContainer.resetStableEmission();
 				resetDisplay = true;
 			}
@@ -5506,7 +5483,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		for (const child of liveComponents) {
 			this.chatContainer.addChild(child);
 		}
-		if (liveComponents.length > 0) this.#inputController.restoreCompactDiffExpansion();
+		if (liveComponents.length > 0) this.#inputController.restoreCompactTodoLoopExpansion();
 		// `renderSessionContext` clears `pendingTools` at start AND end so the
 		// reconstructed historical tool components don't leak into live tracking.
 		// Restore the in-flight entries afterwards so the next streamed tool-call
@@ -9782,7 +9759,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.noteDisplayableThinkingContent(message);
 		}
 		this.#uiHelpers.renderSessionContext(sessionContext, options);
-		this.#inputController.restoreCompactDiffExpansion();
+		this.#inputController.restoreCompactTodoLoopExpansion();
 	}
 
 	/** Build a session context in bounded chunks so terminal input runs between event-loop turns. */
@@ -9795,7 +9772,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.noteDisplayableThinkingContent(message);
 		}
 		await this.#uiHelpers.renderSessionContextIncrementally(sessionContext, options, renderChunk);
-		this.#inputController.restoreCompactDiffExpansion();
+		this.#inputController.restoreCompactTodoLoopExpansion();
 	}
 
 	async renderInitialMessages(options?: RenderInitialMessagesOptions): Promise<void> {

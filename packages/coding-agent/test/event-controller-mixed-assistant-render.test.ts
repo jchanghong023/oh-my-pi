@@ -99,7 +99,7 @@ describe("EventController mixed assistant text/tool rendering", () => {
 			inMemory: true,
 			overrides: { "display.smoothStreaming": false, "display.mode": "detailed" },
 		});
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 
 	afterEach(() => {

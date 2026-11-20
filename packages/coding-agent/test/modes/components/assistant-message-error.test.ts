@@ -65,7 +65,7 @@ function useDetailedDisplay() {
 	let previous: typeof chatTranscriptDisplayPreferences;
 	beforeEach(() => {
 		previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 	afterEach(() => setChatTranscriptDisplayPreferences(previous));
 }

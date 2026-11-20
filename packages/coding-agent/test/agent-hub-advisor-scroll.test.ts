@@ -373,7 +373,7 @@ describe("AgentTranscriptViewer", () => {
 
 	it("renders tool-result images through the shared Kitty placeholder budget", () => {
 		const previousPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: false, showImages: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false, showImages: true });
 		cfgTerminalShowImages.override(Settings.instance, true);
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-view-image-"));
 		const file = path.join(dir, "__advisor.jsonl");

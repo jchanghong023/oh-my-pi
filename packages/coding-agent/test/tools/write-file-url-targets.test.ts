@@ -36,7 +36,6 @@ function resultText(result: { content: { type: string; text?: string }[] }): str
 function expectWriteCard(
 	args: { path: string; content: string },
 	result: AgentToolResult,
-	visible: boolean,
 	marker?: string,
 	partial = false,
 ): void {
@@ -45,15 +44,14 @@ function expectWriteCard(
 	const card = new ToolExecutionComponent("write", args, {}, undefined, ui);
 	try {
 		card.updateResult(result, partial);
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		card.setToolActivityVisible(true);
 		const detailed = Bun.stripANSI(card.render(120).join("\n"));
 		expect(detailed.length).toBeGreaterThan(0);
 		if (marker) expect(detailed).toContain(marker);
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		card.setToolActivityVisible(false);
-		const compact = Bun.stripANSI(card.render(120).join("\n"));
-		expect(compact).toBe(visible ? detailed : "");
+		expect(card.render(120)).toEqual([]);
 	} finally {
 		card.dispose();
 		setChatTranscriptDisplayPreferences(previous);
@@ -98,7 +96,7 @@ describe("write to file-backed internal URLs", () => {
 		expect(resultText(result)).not.toContain(vaultRoot);
 	});
 
-	it("retains the original card for vault writes regardless of whether bytes changed", async () => {
+	it("renders vault write cards only in detailed mode", async () => {
 		const tool = new WriteTool(createSession(tmpDir));
 		const file = path.join(vaultRoot, "note.md");
 		const args = { path: "vault://Work/note.md", content: "Vault first marker\n" };
@@ -109,11 +107,11 @@ describe("write to file-backed internal URLs", () => {
 		] as const) {
 			const result = await tool.execute(id, input);
 			expect(await fs.readFile(file, "utf8")).toBe(input.content);
-			expectWriteCard(input, result, true, input.content.trim());
+			expectWriteCard(input, result, input.content.trim());
 		}
 	});
 
-	it("retains file URL writes dispatched through xd://write even when unchanged", async () => {
+	it("renders file URL write cards dispatched through xd://write only in detailed mode", async () => {
 		const session = createSession(tmpDir);
 		const inner = new WriteTool(session);
 		const xdev: XdevState = {
@@ -141,53 +139,40 @@ describe("write to file-backed internal URLs", () => {
 				args: input,
 				inner: { resolvedPath: await fs.realpath(file) },
 			});
-			expectWriteCard(args, result, true);
+			expectWriteCard(args, result, content.trim());
 		}
 	});
 
-	it("classifies device and partial results by the target, not diff-like metadata", () => {
+	it("renders device and partial write cards only in detailed mode, regardless of result metadata", () => {
 		for (const target of ["agent://peer", "proc://job", "cfg://display/test"]) {
 			const args = { path: target, content: "Not a file" };
-			expectWriteCard(
-				args,
-				{
-					content: [{ type: "text", text: "Not a file" }],
-					details: { fileChanged: true, path: "/tmp/file", resolvedPath: "/tmp/file" },
-				},
-				false,
-			);
-			expectWriteCard(
-				args,
-				{
-					content: [{ type: "text", text: "Not a file" }],
-					details: { conflictChanges: [{ path: "/tmp/file", diff: "-old\n+new" }] },
-				},
-				false,
-			);
+			expectWriteCard(args, {
+				content: [{ type: "text", text: "Not a file" }],
+				details: { fileChanged: true, path: "/tmp/file", resolvedPath: "/tmp/file" },
+			});
+			expectWriteCard(args, {
+				content: [{ type: "text", text: "Not a file" }],
+				details: { conflictChanges: [{ path: "/tmp/file", diff: "-old\n+new" }] },
+			});
 		}
 		const wrapped = { path: "xd://write", content: JSON.stringify({ path: "agent://peer", content: "Message" }) };
-		expectWriteCard(
-			wrapped,
-			{
-				content: [{ type: "text", text: "Message" }],
-				details: {
-					xdev: {
-						tool: "write",
-						mode: "execute",
-						args: { path: "agent://peer" },
-						inner: { fileChanged: true, path: "/tmp/file", resolvedPath: "/tmp/file" },
-					},
+		expectWriteCard(wrapped, {
+			content: [{ type: "text", text: "Message" }],
+			details: {
+				xdev: {
+					tool: "write",
+					mode: "execute",
+					args: { path: "agent://peer" },
+					inner: { fileChanged: true, path: "/tmp/file", resolvedPath: "/tmp/file" },
 				},
 			},
-			false,
-		);
+		});
 		expectWriteCard(
 			{ path: "vault://Work/note.md", content: "Unverified" },
 			{
 				content: [{ type: "text", text: "Unverified" }],
 				details: {},
 			},
-			true,
 		);
 		expectWriteCard(
 			{ path: "vault://Work/note.md", content: "Preview" },
@@ -195,42 +180,33 @@ describe("write to file-backed internal URLs", () => {
 				content: [{ type: "text", text: "Preview" }],
 				details: { resolvedPath: "/tmp/file" },
 			},
-			true,
 			undefined,
 			true,
 		);
 		for (const mode of ["help", "preview"] as const) {
 			const args = { path: "xd://write", content: mode === "help" ? "?" : "{}" };
-			expectWriteCard(
-				args,
-				{
-					content: [{ type: "text", text: "Not a file" }],
-					details: {
-						xdev: {
-							tool: "write",
-							mode,
-							args: { path: "vault://Work/note.md" },
-							inner: { fileChanged: true, path: "/tmp/file", resolvedPath: "/tmp/file" },
-						},
+			expectWriteCard(args, {
+				content: [{ type: "text", text: "Not a file" }],
+				details: {
+					xdev: {
+						tool: "write",
+						mode,
+						args: { path: "vault://Work/note.md" },
+						inner: { fileChanged: true, path: "/tmp/file", resolvedPath: "/tmp/file" },
 					},
 				},
-				false,
-			);
+			});
 		}
 	});
 
-	it("retains file and handler-backed URL targets without requiring change metadata", () => {
+	it("renders file and handler-backed URL write cards only in detailed mode without change metadata", () => {
 		for (const target of [
 			"file:///tmp/note.txt",
 			"local://note.txt",
 			"ssh://example.test/tmp/note.txt",
 			"conflict://1",
 		]) {
-			expectWriteCard(
-				{ path: target, content: "replacement" },
-				{ content: [{ type: "text", text: "unchanged" }] },
-				true,
-			);
+			expectWriteCard({ path: target, content: "replacement" }, { content: [{ type: "text", text: "unchanged" }] });
 		}
 	});
 

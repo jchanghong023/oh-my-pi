@@ -1,7 +1,6 @@
 /** Process-wide display preferences applied by the host settings hooks. */
 export interface ChatTranscriptDisplayPreferences {
 	hideToolActivity: boolean;
-	compactToolActivity: boolean;
 	/** Show the interactive shell execution visualization instead of the plain command. */
 	shellVisualization: boolean;
 	readToolResultPreview: boolean;
@@ -16,7 +15,6 @@ export interface ChatTranscriptDisplayPreferences {
 /** Current transcript display preferences. */
 export const chatTranscriptDisplayPreferences: ChatTranscriptDisplayPreferences = {
 	hideToolActivity: false,
-	compactToolActivity: false,
 	shellVisualization: true,
 	readToolResultPreview: false,
 	showImages: true,

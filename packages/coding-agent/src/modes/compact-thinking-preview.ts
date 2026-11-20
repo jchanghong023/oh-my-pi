@@ -1,7 +1,6 @@
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, spinnerAnimated } from "@oh-my-pi/pi-tui";
-import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import type { Loader } from "@oh-my-pi/pi-tui/components/loader";
 import { col, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
@@ -22,16 +21,16 @@ import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../se
 import type { CompactPreviewActivity } from "./compact-tool-output-preview";
 import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-summary";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
+import { cfgDisplayMode } from "./settings";
 import type { InteractiveModeContext } from "./types";
 
 const THINKING_LABEL_WIDTH = 14;
 const ACTION_GAP = "  ";
 
-type ActionCategory = "thinking" | "read" | "exec" | "write" | "call";
+type ToolActionCategory = "read" | "exec" | "write" | "call";
 type ActionState = "running" | "done" | "failed";
 
-const ACTION_WORDS: Record<ActionCategory, Record<ActionState, string>> = {
-	thinking: { running: "正在思考", done: "思考完成", failed: "思考失败" },
+const ACTION_WORDS: Record<ToolActionCategory, Record<ActionState, string>> = {
 	read: { running: "正在读取", done: "读取完成", failed: "读取失败" },
 	exec: { running: "正在执行", done: "执行完成", failed: "执行失败" },
 	write: { running: "正在写入", done: "写入完成", failed: "写入失败" },
@@ -52,17 +51,18 @@ type Call = {
 	endedAt?: number;
 	failed?: boolean;
 };
-type Action = {
+type ToolAction = {
 	id: string;
-	category: ActionCategory;
+	category: ToolActionCategory;
 	running: boolean;
 	failed: boolean;
 	detail: string;
 	file?: CompactFileSummary;
 	previewIntent?: string;
-	stage?: ModelStage;
 	additional?: number;
 };
+
+type Action = ToolAction | { category: "thinking"; detail: string; stage: ModelStage; running: true };
 
 const MODEL_WORDS: Record<ModelStage, string> = {
 	waiting: "等待响应",
@@ -71,11 +71,7 @@ const MODEL_WORDS: Record<ModelStage, string> = {
 	"tool-arguments": "正在准备调用",
 };
 
-type ThinkingPhase = {
-	ended?: true;
-	text: string;
-	preview?: { source: string; width: number; proseOnly: boolean; text: string };
-};
+type ThinkingPreview = { source: string; width: number; proseOnly: boolean; text: string };
 type ActionRow = {
 	word: string;
 	tone: ThemeColor;
@@ -83,8 +79,6 @@ type ActionRow = {
 };
 type SessionMemory = {
 	calls: Call[];
-	/** Thinking phases keyed by message timestamp and content index. */
-	thinking: Map<string, ThinkingPhase>;
 	latestStart?: number;
 };
 
@@ -191,13 +185,13 @@ function streamedArgs(block: ToolCall): unknown {
 		: decodeStreamedToolArgs(partial, { rawInput: block.customWireName !== undefined });
 }
 
-function categoryOf(call: Call): ActionCategory {
+function categoryOf(call: Call): ToolActionCategory {
 	if (call.file) return call.file.category;
 	return (call.semanticName ?? call.name) === "bash" ? "exec" : "call";
 }
 
 /** One-line detail for a tool action: command text, or a target summary, or the real tool name. */
-function toolDetail(call: Call, category: ActionCategory): string {
+function toolDetail(call: Call, category: ToolActionCategory): string {
 	if (call.file) return clean(call.file.path).trim();
 	if (call.command) return clean(call.command);
 	const target = clean(call.detail).trim();
@@ -263,11 +257,12 @@ export class CompactThinkingPreview implements Component {
 	#session?: InteractiveModeContext["viewSession"];
 	#sessionId?: string;
 	#memory?: SessionMemory;
+	#thinkingPreview?: ThinkingPreview;
 
 	constructor(
 		private readonly ctx: Pick<
 			InteractiveModeContext,
-			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "statusLine"
+			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "statusLine" | "settings"
 		>,
 		private readonly asyncWaitRow?: () => Loader | undefined,
 		private readonly compactActivity?: (width: number) => CompactPreviewActivity | undefined,
@@ -277,6 +272,7 @@ export class CompactThinkingPreview implements Component {
 		this.#session = undefined;
 		this.#sessionId = undefined;
 		this.#memory = undefined;
+		this.#thinkingPreview = undefined;
 	}
 
 	#syncSession(): void {
@@ -287,20 +283,12 @@ export class CompactThinkingPreview implements Component {
 		this.#session = session;
 		this.#sessionId = id;
 		const saved = memories.get(session);
-		const memory: SessionMemory = saved?.id === id ? saved.memory : { calls: [], thinking: new Map() };
+		const memory: SessionMemory = saved?.id === id ? saved.memory : { calls: [] };
 		memories.set(session, { id, memory });
 		this.#memory = memory;
 		const pending = session.agent.state.pendingToolCalls;
-		// While not viewing this session, we may have missed thinking or tool end events.
-		// Only retain unfinished records that the current agent confirms are still active.
-		const state = session.agent.state;
-		const active =
-			state.streamMessage?.role === "assistant" && state.activeThinkingIndex !== undefined
-				? `thinking:${state.streamMessage.timestamp}:${state.activeThinkingIndex}`
-				: undefined;
-		for (const [key, phase] of memory.thinking) {
-			if (!phase.ended && key !== active) memory.thinking.delete(key);
-		}
+		// While not viewing this session, we may have missed tool end events.
+		// Only retain unfinished calls that the current agent confirms are still active.
 		memory.calls = memory.calls.filter(call => call.endedAt !== undefined || pending.has(call.id));
 		if (!pending.size) return;
 		const branch = session.sessionManager.getBranch();
@@ -375,24 +363,6 @@ export class CompactThinkingPreview implements Component {
 			memory.latestStart = Math.max(memory.latestStart ?? call.startedAt, call.startedAt);
 	}
 
-	#startThinking(messageTimestamp: number, contentIndex: number): string {
-		const memory = this.#memory!;
-		const id = `thinking:${messageTimestamp}:${contentIndex}`;
-		if (!memory.thinking.has(id)) {
-			memory.thinking.set(id, { text: "" });
-		}
-		return id;
-	}
-
-	#endThinking(id: string): void {
-		const memory = this.#memory!;
-		const phase = memory.thinking.get(id);
-		if (!phase || phase.ended) return;
-		phase.ended = true;
-		phase.text = "";
-		phase.preview = undefined;
-	}
-
 	/** Retain live calls and only the last settled tool. */
 	#pruneSettled(): void {
 		const memory = this.#memory!;
@@ -401,13 +371,10 @@ export class CompactThinkingPreview implements Component {
 			if (call.endedAt !== undefined && call.endedAt >= (last?.endedAt ?? 0)) last = call;
 		}
 		memory.calls = memory.calls.filter(call => call.endedAt === undefined || call === last);
-		for (const [id, phase] of memory.thinking) {
-			if (phase.ended) memory.thinking.delete(id);
-		}
 	}
 
 	observe(event: AgentSessionEvent): void {
-		if (!displayPreferences.compactToolActivity) {
+		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
 			this.clear();
 			return;
 		}
@@ -440,43 +407,17 @@ export class CompactThinkingPreview implements Component {
 				call.endedAt = now;
 				call.failed = event.isError === true || event.result?.isError === true;
 			}
+			this.#pruneSettled();
 		} else if (event.type === "tool_execution_update") {
 			const call = calls.find(item => item.id === event.toolCallId);
 			if (call && call.endedAt === undefined) updateCall(call, event.args, event.partialResult);
 		} else if (event.type === "message_update" && event.message.role === "assistant") {
-			const delta = event.assistantMessageEvent;
-			if (delta.type === "thinking_start") {
-				this.#startThinking(event.message.timestamp, delta.contentIndex);
-			} else if (delta.type === "thinking_delta") {
-				const id = this.#startThinking(event.message.timestamp, delta.contentIndex);
-				const phase = memory.thinking.get(id);
-				if (phase && !phase.ended) {
-					const block = event.message.content[delta.contentIndex];
-					if (block?.type === "thinking") phase.text = block.thinking;
-				}
-			} else if (delta.type === "thinking_end") {
-				const id = this.#startThinking(event.message.timestamp, delta.contentIndex);
-				this.#endThinking(id);
-			} else if (delta.type === "error") {
-				for (const id of memory.thinking.keys()) this.#endThinking(id);
-			}
 			for (const block of event.message.content) {
 				if (block.type !== "toolCall") continue;
 				const call = calls.find(item => item.id === block.id && item.endedAt === undefined);
 				if (!call) continue;
 				updateCall(call, streamedArgs(block));
 			}
-		} else if (event.type === "message_end" && event.message.role === "assistant") {
-			// A stream that ends without thinking_end (abort/error) still settles its open phase.
-			for (const id of memory.thinking.keys()) this.#endThinking(id);
-		}
-		if (
-			event.type === "tool_execution_end" ||
-			(event.type === "message_end" && event.message.role === "assistant") ||
-			(event.type === "message_update" &&
-				(event.assistantMessageEvent.type === "thinking_end" || event.assistantMessageEvent.type === "error"))
-		) {
-			this.#pruneSettled();
 		}
 	}
 
@@ -486,11 +427,14 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	render(width: number): readonly string[] {
+		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
+			this.clear();
+			return [];
+		}
 		const waitRow = this.asyncWaitRow?.();
 		const inset = Math.min(getPaddingX(1), Math.max(0, width - 1));
 		const slots = this.#visibleActions(width, inset, waitRow);
 		const animate = !isNativeRendering() && this.#activityAnimating();
-		if (!displayPreferences.compactToolActivity) return [];
 		const left = padding(inset);
 		const rows = slots.map(action =>
 			action ? left + this.#paintAnsi(this.#buildRow(action, width - inset), animate && action.running) : "",
@@ -503,124 +447,90 @@ export class CompactThinkingPreview implements Component {
 		this.asyncWaitRow?.()?.handleNativeEvent(event);
 	}
 
-	/** Reconcile the active thinking phase from live state so focus restoration shows it without a fresh event. */
-	#syncLiveThinking(): void {
-		const memory = this.#memory!;
-		const state = this.ctx.viewSession.agent.state;
-		const stream = state.streamMessage;
-		const index = state.activeThinkingIndex;
-		if (stream?.role === "assistant" && index !== undefined) {
-			const block = stream.content[index];
-			if (block?.type === "thinking") {
-				const id = this.#startThinking(stream.timestamp, index);
-				const phase = memory.thinking.get(id);
-				if (phase && !phase.ended) phase.text = block.thinking;
-			}
+	#thinkingDetail(stage: ModelStage | null, width: number): string {
+		if (stage !== "thinking" || this.ctx.effectiveHideThinkingBlock) {
+			this.#thinkingPreview = undefined;
+			return "";
 		}
-	}
-
-	/** Build the action records currently eligible for the two slots. */
-	#actions(detailWidth: number): Action[] {
-		this.#syncLiveThinking();
-		const memory = this.#memory!;
-		const state = this.ctx.viewSession.agent.state;
-		const hideThinking = this.ctx.effectiveHideThinkingBlock;
+		const { streamMessage, activeThinkingIndex } = this.ctx.viewSession.agent.state;
+		const block =
+			streamMessage?.role === "assistant" && activeThinkingIndex !== undefined
+				? streamMessage.content[activeThinkingIndex]
+				: undefined;
+		if (block?.type !== "thinking") {
+			this.#thinkingPreview = undefined;
+			return "";
+		}
+		const source = block.thinking;
 		const proseOnly = this.ctx.proseOnlyThinking;
-		const actions: Action[] = [];
-		let activeThinking: Action | undefined;
-		for (const [id, phase] of memory.thinking) {
-			if (hideThinking || phase.ended) continue;
-			let preview = phase.preview;
-			if (preview?.source !== phase.text || preview.width !== detailWidth || preview.proseOnly !== proseOnly) {
-				preview = {
-					source: phase.text,
-					width: detailWidth,
-					proseOnly,
-					text: thinkingDetail(phase.text, proseOnly, detailWidth),
-				};
-				phase.preview = preview;
-			}
-			if (preview.text || !activeThinking?.detail) {
-				activeThinking = {
-					id,
-					category: "thinking",
-					running: true,
-					failed: false,
-					detail: preview.text,
-				};
-			}
+		const preview = this.#thinkingPreview;
+		if (preview?.source === source && preview.width === width && preview.proseOnly === proseOnly) {
+			return preview.text;
 		}
-		for (const call of memory.calls) {
-			const running = call.endedAt === undefined && state.pendingToolCalls.has(call.id);
-			const category = categoryOf(call);
-			actions.push({
-				id: call.id,
-				category,
-				running,
-				failed: call.failed === true,
-				detail: toolDetail(call, category),
-				file: call.file,
-				previewIntent: category === "exec" && call.command ? clean(call.detail).trim() : undefined,
-			});
-		}
-		if (activeThinking) actions.push(activeThinking);
-		return actions;
+		const text = thinkingDetail(source, proseOnly, width);
+		this.#thinkingPreview = { source, width, proseOnly, text };
+		return text;
 	}
 
-	/** The model and Agent own separate rows; a settled tool never stands in for a running one. */
-	#select(actions: Action[]): (Action | undefined)[] {
-		const session = this.ctx.viewSession;
-		const thinking = actions.find(action => action.category === "thinking");
-		const tools = actions.filter(action => action.category !== "thinking");
-		const running = tools.filter(action => action.running);
-		const current = running[0] ?? tools.at(-1);
-		const stage = session.modelStage;
-		const model: Action | undefined = stage
-			? {
-					id: thinking?.id ?? "model",
-					category: "thinking",
-					running: true,
-					failed: false,
-					detail: stage === "thinking" ? (thinking?.detail ?? "") : "",
-					stage,
-				}
-			: undefined;
-		return [model, current && { ...current, additional: Math.max(0, running.length - 1) }];
+	/** Show the first running call, or the last retained call when none are running. */
+	#currentTool(): ToolAction | undefined {
+		const { calls } = this.#memory!;
+		const pending = this.ctx.viewSession.agent.state.pendingToolCalls;
+		let current: Call | undefined;
+		let running = 0;
+		for (const call of calls) {
+			if (call.endedAt !== undefined || !pending.has(call.id)) continue;
+			current ??= call;
+			running++;
+		}
+		current ??= calls.at(-1);
+		if (!current) return;
+		const category = categoryOf(current);
+		return {
+			id: current.id,
+			category,
+			running: running > 0,
+			failed: current.failed === true,
+			detail: toolDetail(current, category),
+			file: current.file,
+			previewIntent: category === "exec" && current.command ? clean(current.detail).trim() : undefined,
+			additional: Math.max(0, running - 1),
+		};
 	}
 
 	#visibleActions(width: number, inset: number, waitRow: Loader | undefined): (Action | undefined)[] {
-		if (!displayPreferences.compactToolActivity) {
-			this.clear();
-			return [];
-		}
 		this.#syncSession();
 		const contentWidth = width - inset;
 		if (contentWidth < 1) return [];
-		const slots = this.#select(this.#actions(contentWidth - THINKING_LABEL_WIDTH - ACTION_GAP.length));
-		if (waitRow) slots[1] = undefined;
-		const agent = slots[1];
-		const activity = agent?.category === "exec" ? this.compactActivity?.(width) : undefined;
-		if (agent && activity?.callId === agent.id && activity.commandVisible && agent.previewIntent) {
-			slots[1] = { ...agent, detail: agent.previewIntent };
+		const stage = this.ctx.viewSession.modelStage;
+		const detail = this.#thinkingDetail(stage, contentWidth - THINKING_LABEL_WIDTH - ACTION_GAP.length);
+		const model: Action | undefined = stage ? { category: "thinking", running: true, detail, stage } : undefined;
+		const agent = waitRow ? undefined : this.#currentTool();
+		if (agent?.category === "exec") {
+			const activity = this.compactActivity?.(width);
+			if (activity?.callId === agent.id && activity.commandVisible && agent.previewIntent) {
+				agent.detail = agent.previewIntent;
+			}
 		}
-		return slots;
+		return [model, agent];
 	}
 
 	/** Keep the path or thinking text ahead of optional detail on narrow terminals. */
 	#buildRow(action: Action, width: number): ActionRow {
 		const model = action.category === "thinking";
-		const state = action.running ? "running" : action.failed ? "failed" : "done";
+		const failed = !model && action.failed;
+		const state = action.running ? "running" : failed ? "failed" : "done";
 		const full = model
-			? `模型：${MODEL_WORDS[action.stage ?? "thinking"]}`
+			? `模型：${MODEL_WORDS[action.stage]}`
 			: `Agent：${action.running ? "" : "上次"}${ACTION_WORDS[action.category][state]}`;
-		const extra = action.additional ? ` +${action.additional}` : "";
+		const extra = !model && action.additional ? ` +${action.additional}` : "";
 		const word = truncateToWidth(full, width);
 		const runningCall = action.running && action.category === "call";
-		const tone = runningCall ? "accent" : action.running ? "muted" : action.failed ? "error" : "dim";
+		const tone = runningCall ? "accent" : action.running ? "muted" : failed ? "error" : "dim";
 		const detailWidth = width - visibleWidth(word) - ACTION_GAP.length - visibleWidth(extra);
 		const detail: ActionRow["detail"] = [];
 		if (detailWidth > 0 && action.detail) {
-			if (action.file) {
+			if (!model && action.file) {
 				const [prefix, target, suffix] = fileDetail(action.detail, action.file, detailWidth);
 				if (action.running) {
 					if (prefix) detail.push({ text: prefix, tone: "dim" });
@@ -629,7 +539,7 @@ export class CompactThinkingPreview implements Component {
 				} else detail.push({ text: prefix + target + suffix, tone: "dim" });
 			} else {
 				const value = truncateToWidth(action.detail, detailWidth);
-				const tone = runningCall || (action.running && model) ? "text" : "dim";
+				const tone = runningCall || model ? "text" : "dim";
 				if (value) detail.push({ text: value, tone });
 			}
 		}
@@ -648,7 +558,7 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	describe(cx: DescribeContext): NativeNode {
-		if (!displayPreferences.compactToolActivity) {
+		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
 			this.clear();
 			return node("rows", { cols: cx.cols, lines: [] });
 		}

@@ -2,7 +2,6 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { CompactFileDiff } from "@oh-my-pi/pi-coding-agent/modes/compact-file-diff";
 import { CompactThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-thinking-preview";
 import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -10,11 +9,10 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { LatestTurnFileChanges } from "@oh-my-pi/pi-coding-agent/session/latest-turn-file-changes";
-import type { LiveToolOutputSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import {
@@ -24,7 +22,7 @@ import {
 import { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
-import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { getKeybindings, setKeybindings, Text, type Component } from "@oh-my-pi/pi-tui";
 import { DisplayContract } from "../../tui/test/helpers/display-contract";
 import { withoutTerminalMultiplexer } from "../../tui/test/helpers/terminal-multiplexer";
@@ -59,7 +57,7 @@ function numbered(rows: readonly string[]): string {
 
 beforeAll(async () => {
 	resetSettingsForTest();
-	await Settings.init({ inMemory: true, overrides: { "display.smoothStreaming": false, "display.mode": "compact" } });
+	await Settings.init({ inMemory: true, overrides: { "display.smoothStreaming": false } });
 	await initTheme();
 });
 afterAll(() => resetSettingsForTest());
@@ -90,7 +88,7 @@ describe("compaction and focus status spacing", () => {
 		const preferences = { ...chatTranscriptDisplayPreferences };
 		const keys = getKeybindings();
 		setKeybindings(KeybindingsManager.inMemory());
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const terminal = new VirtualTerminal(160, 48);
 		const scheduler = new VirtualRenderScheduler();
 		const composer = new Composer({
@@ -99,6 +97,7 @@ describe("compaction and focus status spacing", () => {
 			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
 		});
 		const ctx = createInteractiveModeContext({ composer, ui: composer.ui, editor: composer.editor });
+		cfgDisplayMode.set(ctx.settings, "compact");
 		ctx.present = (content: Component | readonly Component[]) => {
 			for (const component of Array.isArray(content) ? content : [content as Component])
 				ctx.chatContainer.addChild(component);
@@ -370,7 +369,7 @@ describe("compaction and focus status spacing", () => {
 		const preferences = { ...chatTranscriptDisplayPreferences };
 		const keys = getKeybindings();
 		setKeybindings(KeybindingsManager.inMemory());
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const terminal = new VirtualTerminal(80, 24);
 		const scheduler = new VirtualRenderScheduler();
 		const composer = new Composer({
@@ -379,10 +378,12 @@ describe("compaction and focus status spacing", () => {
 			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
 		});
 		const ctx = createInteractiveModeContext({ composer, ui: composer.ui, editor: composer.editor });
+		cfgDisplayMode.set(ctx.settings, "compact");
 		let terminalAt: number | undefined;
-		const result = { content: [{ type: "text" as const, text: "TEMPORARY_OUTPUT_ONLY" }] };
-		ctx.session.getLiveToolOutputSnapshot = () => [
-			{
+		const text = "TEMPORARY_OUTPUT_ONLY";
+		const result = { content: [{ type: "text" as const, text }] };
+		ctx.session.getLiveToolOutputPreview = () => ({
+			call: {
 				toolCallId: "temporary",
 				toolName: "bash",
 				dispatchOrder: 1,
@@ -391,7 +392,8 @@ describe("compaction and focus status spacing", () => {
 				terminalAt,
 				expiresAt: terminalAt === undefined ? undefined : terminalAt + 3000,
 			},
-		];
+			text,
+		});
 		const summary = new CompactThinkingPreview(ctx);
 		const output: CompactToolOutputPreview = new CompactToolOutputPreview(ctx, () =>
 			Math.max(0, terminal.rows - Math.max(composer.rowsBelow(output) ?? 0, composer.editor.renderedRows + 4)),
@@ -433,219 +435,6 @@ describe("compaction and focus status spacing", () => {
 		} finally {
 			unwatch();
 			output.clear();
-			composer.stop();
-			setChatTranscriptDisplayPreferences(preferences);
-			setKeybindings(keys);
-		}
-	});
-
-	it("hides duplicate file output only when the matching diff can be shown", () => {
-		const preferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
-		const ctx = createInteractiveModeContext();
-		const cwd = ctx.sessionManager.getCwd();
-		const id = ctx.sessionManager.getSessionId();
-		const source = new LatestTurnFileChanges();
-		const file = `${cwd}/covered.txt`;
-		const other = `${cwd}/other.txt`;
-		ctx.session.getLatestTurnFileChanges = () => source.get(id);
-		source.record(id, { tool: "edit", path: other, before: "OTHER_BEFORE\n", after: "DUPLICATE_TEXT\n" });
-		source.record(id, { tool: "edit", path: file, before: "BEFORE\n", after: "DUPLICATE_TEXT\n" });
-		let maxRows = 8;
-		const diff = new CompactFileDiff(ctx, () => maxRows);
-		const output = new CompactToolOutputPreview(
-			ctx,
-			() => 6,
-			(target, width) => diff.coveredDiff(target, width),
-		);
-		let call: LiveToolOutputSnapshot;
-		ctx.session.getLiveToolOutputSnapshot = () => [call];
-		const show = (toolName: string, text: string, details: unknown, isError = false) => {
-			call = {
-				toolName,
-				args: { path: "covered.txt" },
-				toolCallId: "file-output",
-				dispatchOrder: 1,
-				terminalAt: Date.now(),
-				result: { content: [{ type: "text", text }], details, isError },
-			};
-			return Bun.stripANSI(output.render(100).join("\n"));
-		};
-		try {
-			const editDetails = { path: file, diff: "-1|BEFORE\n+1|DUPLICATE_TEXT" };
-			expect(show("edit", "[covered.txt#ABCD]\n1:DUPLICATE_TEXT", editDetails)).toBe("");
-			const notEqual = show("edit", "[covered.txt#ABCD]\n1:DUPLICATE_TEXT_IN_PREVIOUS_EDIT", editDetails);
-			expect(notEqual).toContain("DUPLICATE_TEXT_IN_PREVIOUS_EDIT");
-			const warnings = show("edit", "[covered.txt#ABCD]\n1:DUPLICATE_TEXT\nWarnings:\nA real warning", editDetails);
-			expect(warnings).not.toContain("DUPLICATE_TEXT");
-			expect(warnings).toContain("A real warning");
-			const multi = show("edit", "[covered.txt#ABCD]\n1:DUPLICATE_TEXT\n[other.txt#1234]\n1:DUPLICATE_TEXT", {
-				perFileResults: [editDetails, { path: other, diff: "-1|OTHER_BEFORE\n+1|DUPLICATE_TEXT" }],
-			});
-			expect(multi).toContain("[other.txt#1234]");
-			expect(multi).not.toContain("[covered.txt#ABCD]");
-			expect(multi.match(/1:DUPLICATE_TEXT/g)).toHaveLength(1);
-			const patch = show("apply_patch", "Success. Updated the following files:\nM covered.txt\nM other.txt", {
-				perFileResults: [editDetails, { path: other, diff: "-1|OTHER_BEFORE\n+1|DUPLICATE_TEXT" }],
-			});
-			expect(patch).toContain("M other.txt");
-			expect(patch).not.toContain("M covered.txt");
-			expect(show("edit", "[covered.txt#ABCD]\n1:DUPLICATE_TEXT", editDetails, true)).toContain("DUPLICATE_TEXT");
-			const receipt = "Successfully wrote 15 bytes to covered.txt";
-			expect(show("write", receipt, { resolvedPath: file })).toBe("");
-			expect(show("write", `${receipt}\nNotice: Made executable`, { resolvedPath: file })).toContain(
-				"Notice: Made executable",
-			);
-			maxRows = 3;
-			expect(show("write", receipt, { resolvedPath: file })).toContain(receipt);
-			source.start(id);
-			source.record(id, { tool: "edit", path: file, before: "REMOVED\n", after: null });
-			const deletion = { path: file, op: "delete", diff: "" };
-			expect(show("edit", "Deleted covered.txt", deletion)).toBe("");
-			expect(show("edit", "Deleted covered.txt\nWarnings:\nDeletion warning", deletion)).toContain(
-				"Deletion warning",
-			);
-			maxRows = 1;
-			expect(show("edit", "Deleted covered.txt", deletion)).toContain("Deleted covered.txt");
-		} finally {
-			output.clear();
-			setChatTranscriptDisplayPreferences(preferences);
-		}
-	});
-
-	it("previews the latest net diff without taking input focus or publishing to scrollback", async () => {
-		const preferences = { ...chatTranscriptDisplayPreferences };
-		const keys = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory());
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
-		const terminal = new VirtualTerminal(80, 24);
-		const scheduler = new VirtualRenderScheduler();
-		const composer = new Composer({
-			terminal,
-			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: true, completeScrollback: true },
-		});
-		const ctx = createInteractiveModeContext({ composer, ui: composer.ui, editor: composer.editor });
-		const changes = new LatestTurnFileChanges();
-		const id = ctx.sessionManager.getSessionId();
-		ctx.session.getLatestTurnFileChanges = () => changes.get(id);
-		let rows = 6;
-		const dock = new CompactFileDiff(ctx, () => rows);
-		const file = (name: string) => `${ctx.sessionManager.getCwd()}/${name}`;
-		const record = (name: string, before: string, after: string) =>
-			changes.record(id, { tool: "write", path: file(name), before, after });
-		record("target.txt", "ORIGINAL_VALUE\n", "INTERMEDIATE_VALUE\n");
-		record("./target.txt", "INTERMEDIATE_VALUE\n", "FINAL_VALUE\n");
-		record("revert.txt", "UNCHANGED\n", "TEMP_VALUE\n");
-		record("revert.txt", "TEMP_VALUE\n", "UNCHANGED\n");
-		composer.setRuntimeChildren([ctx.chatContainer, dock, composer.editor], {
-			selfClearingChrome: [dock],
-			transientChrome: [composer.editor],
-		});
-		composer.editor.setText("KEPT_DRAFT");
-		composer.ui.setFocus(composer.editor);
-		composer.start({ playWelcomeIntro: false });
-		const prose = Array.from({ length: 30 }, (_, i) => `Prose_${String(i).padStart(2, "0")}`);
-		const view = () => Bun.stripANSI(terminal.getViewport().join("\n"));
-		try {
-			for (const paragraph of prose) ctx.chatContainer.addChild(new Text(paragraph, 0, 0));
-			const long = Array.from({ length: 100 }, (_, i) => `LONG_DIFF_${String(i).padStart(2, "0")}\n`).join("");
-			record("second.txt", "", long);
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			expect(view()).toMatch(/本轮改动 2 文件[^\n]*\n[ \t]*\n[ \t]*[╭┌].*Edit.*second\.txt.*\+100/);
-			expect(view()).toContain("LONG_DIFF_00");
-			expect(view()).toContain("more lines");
-			expect(dock.render(80)).toHaveLength(rows);
-			expect(dock.render(80).at(-1)).toMatch(/[╰└]/);
-			expect(view()).not.toMatch(/target\.txt|FINAL_VALUE|LONG_DIFF_99/);
-			expect(composer.ui.getFocused()).toBe(composer.editor);
-
-			dock.toggle();
-			await scheduler.settle(terminal);
-			dock.handleInput("\x1b[6~");
-			await scheduler.settle(terminal);
-			expect(view()).not.toContain("LONG_DIFF_00");
-			dock.handleInput("\x1b[F");
-			await scheduler.settle(terminal);
-			expect(view()).toContain("LONG_DIFF_99");
-			expect(view()).toContain("FINAL_VALUE");
-			dock.handleInput("\x1b");
-
-			// Revisiting an existing path must move the preview, not leave it on the last inserted path.
-			record("target.txt", "FINAL_VALUE\n", "LATEST_VALUE\n");
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			expect(view()).toContain("ORIGINAL_VALUE");
-			expect(view()).toContain("LATEST_VALUE");
-			expect(view()).not.toMatch(/FINAL_VALUE|second\.txt|LONG_DIFF/);
-			expect(composer.ui.getFocused()).toBe(composer.editor);
-
-			record("second.txt", long, "");
-			dock.toggle();
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			expect(view().match(/修改 target\.txt/gu)).toHaveLength(1);
-			expect(view()).toContain("ORIGINAL_VALUE");
-			expect(view()).toContain("LATEST_VALUE");
-			expect(view()).not.toMatch(/INTERMEDIATE_VALUE|revert\.txt/);
-
-			rows = 1;
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			expect(view()).toContain("本轮改动 1 文件");
-			expect(view()).not.toContain("LATEST_VALUE");
-			expect(composer.ui.getFocused()).toBe(composer.editor);
-
-			rows = 6;
-			dock.toggle();
-			record("target.txt", "LATEST_VALUE\n", "ORIGINAL_VALUE\n");
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			expect(view()).not.toContain("本轮改动");
-			expect(composer.ui.getFocused()).toBe(composer.editor);
-
-			record("target.txt", "ORIGINAL_VALUE\n", "FINAL_VALUE\n");
-			record("target.txt", "EXTERNAL_VALUE\n", "EXTERNAL_VALUE\n");
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			expect(view()).toContain("本轮改动 1 文件");
-			expect(dock.render(80)).toHaveLength(1);
-			expect(view()).not.toMatch(/本轮差异不可用|无法确认本轮净差异|target\.txt/);
-			dock.toggle();
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			expect(view()).toMatch(/修改 target\.txt[^\n]*\n[^\S\n]*本轮差异不可用/);
-			expect(view()).not.toMatch(/ORIGINAL_VALUE|FINAL_VALUE|EXTERNAL_VALUE/);
-
-			changes.start(id);
-			dock.sync();
-			changes.record(id, { tool: "edit", path: file("deleted.txt"), before: "REMOVED_CONTENT\n", after: null });
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			const deletionIcon = Bun.stripANSI(theme.styledSymbol("tool.delete", "accent"));
-			expect(view()).toContain(`${deletionIcon} Delete:`);
-			expect(dock.render(80)).toHaveLength(2);
-			expect(view()).not.toContain("REMOVED_CONTENT");
-			dock.toggle();
-			await scheduler.settle(terminal);
-			expect(view()).toContain(`${deletionIcon} 删除 deleted.txt`);
-			expect(view()).not.toContain("REMOVED_CONTENT");
-
-			changes.start(id);
-			dock.sync();
-			terminal.resize(64, 18);
-			await scheduler.advance(terminal, 300);
-			await scheduler.settle(terminal);
-			expect(view()).toContain("KEPT_DRAFT");
-			expect(view()).not.toContain("本轮改动");
-			const history = Bun.stripANSI(terminal.getScrollBuffer().join("\n"));
-			expect(history).not.toMatch(
-				/ORIGINAL_VALUE|FINAL_VALUE|LATEST_VALUE|LONG_DIFF|REMOVED_CONTENT|target\.txt|second\.txt/,
-			);
-			expect(Array.from(history.matchAll(/Prose_\d\d/gu), match => match[0])).toEqual(prose);
-		} finally {
-			dock.close();
 			composer.stop();
 			setChatTranscriptDisplayPreferences(preferences);
 			setKeybindings(keys);

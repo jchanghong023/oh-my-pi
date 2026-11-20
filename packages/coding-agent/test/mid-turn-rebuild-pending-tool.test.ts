@@ -29,7 +29,7 @@ import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-c
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
-import { cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode, cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 const usage = {
 	input: 1,
@@ -52,8 +52,12 @@ const danglingAssistant = {
 	timestamp: Date.now(),
 } as unknown as AgentMessage;
 
-function createFixture(opts: { isStreaming: boolean }) {
-	const ctx = createInteractiveModeContext({ session: { isStreaming: opts.isStreaming } });
+function createFixture(opts: { isStreaming: boolean; displayMode?: "compact" | "detailed" }) {
+	const ctx = createInteractiveModeContext({
+		settings: Settings.isolated(),
+		session: { isStreaming: opts.isStreaming },
+	});
+	cfgDisplayMode.override(ctx.settings, opts.displayMode ?? "detailed");
 	const helpers = new UiHelpers(ctx);
 	ctx.addMessageToChat = helpers.addMessageToChat.bind(helpers);
 	const controller = new EventController(ctx);
@@ -110,8 +114,8 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 
 	it("routes a late failed Bash result exactly once after a compact rebuild", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
-		const { ctx, helpers, controller, chatContainer } = createFixture({ isStreaming: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
+		const { ctx, helpers, controller, chatContainer } = createFixture({ isStreaming: true, displayMode: "compact" });
 		ctx.hideToolActivity = true;
 		chatContainer.setToolActivityVisible(false);
 		try {
@@ -138,7 +142,9 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 			const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
 			expect(rendered).not.toContain("LATE_FAILURE_MARKER");
 			expect(rendered).not.toContain("sleep 60");
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+			cfgDisplayMode.override(ctx.settings, "detailed");
+			ctx.hideToolActivity = false;
+			setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 			chatContainer.setToolActivityVisible(true);
 			const detailed = Bun.stripANSI(chatContainer.render(120).join("\n"));
 			expect(detailed.match(/LATE_FAILURE_MARKER/g)).toHaveLength(1);
@@ -151,7 +157,7 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 		it(`keeps replayed read images visible after ${arrival} completion`, async () => {
 			const protocol = Object.getOwnPropertyDescriptor(TERMINAL, "imageProtocol")!;
 			const previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false, showImages: true });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: false, showImages: true });
 			Object.defineProperty(TERMINAL, "imageProtocol", { value: null });
 			const { ctx, helpers, controller, chatContainer } = createFixture({ isStreaming: true });
 			const showImages = cfgTerminalShowImages.get(ctx.settings);

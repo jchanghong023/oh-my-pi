@@ -36,7 +36,7 @@ describe("ReadToolGroupComponent transcript freezing", () => {
 
 	beforeEach(() => {
 		previousPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 
 	afterEach(() => {

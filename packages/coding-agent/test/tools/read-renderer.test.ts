@@ -22,7 +22,7 @@ describe("read ToolExecutionComponent framing", () => {
 	let previousPreferences: typeof chatTranscriptDisplayPreferences;
 	beforeEach(() => {
 		previousPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 	afterEach(() => setChatTranscriptDisplayPreferences(previousPreferences));
 

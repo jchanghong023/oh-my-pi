@@ -1,12 +1,12 @@
+import { plainText } from "@oh-my-pi/pi-tui/native/spans";
+import { sanitizeDisplayLines } from "@oh-my-pi/pi-tui/render/render-utils";
+import { type BashToolDetails, stripBashNotices } from "@oh-my-pi/pi-tui/tools/bash";
+import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
+import { resultText } from "@oh-my-pi/pi-tui/tools/native-view";
+import { type OutputMeta, stripOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
+import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
+import { parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import { plainText } from "../native/spans";
-import { sanitizeDisplayLines } from "../render/render-utils";
-import { type BashToolDetails, stripBashNotices } from "./bash";
-import { unwrapHashlineHeaderPath } from "./hashline-format";
-import { resultText } from "./native-view";
-import { type OutputMeta, stripOutputNotice } from "./output-meta";
-import type { ToolRenderResult } from "./renderer";
-import { parseXdUrl } from "./xd-url";
 
 /** A compact preview row must contain a Unicode letter or number, not just decoration. */
 export function isToolOutputRow(row: string): boolean {

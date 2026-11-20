@@ -17,6 +17,7 @@ import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
+import { cfgDisplayMode, cfgDisplaySmoothStreaming } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
@@ -295,6 +296,7 @@ function createFixture(main = makeSession([danglingWait], true), worker = makeSe
 	});
 	const lifecycle = new AgentLifecycleManager(registry);
 	const ctx = createInteractiveModeContext({
+		settings: Settings.isolated({ "display.mode": "detailed" }),
 		session: main.session,
 		initialChatRendered: false,
 	});
@@ -325,7 +327,7 @@ function useDetailedDisplay(): void {
 	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 	beforeEach(() => {
 		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
 }
@@ -371,7 +373,7 @@ describe("compact focus blackout across an in-flight wait", () => {
 	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 	beforeEach(() => {
 		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 	});
 	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
 
@@ -390,6 +392,7 @@ describe("compact focus blackout across an in-flight wait", () => {
 
 	it("rebuilds the completed wait once when persistence finishes during unfocus", async () => {
 		const { ctx, focus, main } = createFixture();
+		cfgDisplayMode.override(ctx.settings, "compact");
 		ctx.hideToolActivity = true;
 		ctx.chatContainer.setToolActivityVisible(false);
 		await ctx.renderInitialMessages();
@@ -407,7 +410,7 @@ describe("compact focus blackout across an in-flight wait", () => {
 		const cards = ctx.chatContainer.children.filter(child => child instanceof ToolExecutionComponent);
 		expect(cards).toHaveLength(1);
 		expectCompletedCard(cards[0]!);
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		ctx.chatContainer.setToolActivityVisible(true);
 		cards[0]!.setExpanded(true);
 		const expanded = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
@@ -417,6 +420,7 @@ describe("compact focus blackout across an in-flight wait", () => {
 
 	it("routes a later completion once into the rebuilt pending wait", async () => {
 		const { ctx, focus, main } = createFixture();
+		cfgDisplayMode.override(ctx.settings, "compact");
 		ctx.hideToolActivity = true;
 		ctx.chatContainer.setToolActivityVisible(false);
 		await ctx.renderInitialMessages();
@@ -444,7 +448,7 @@ describe("compact focus blackout across an in-flight wait", () => {
 		const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
 		expect(rendered).not.toContain("Sleeper1");
 		expect(rendered).not.toContain("completion payload marker");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		ctx.chatContainer.setToolActivityVisible(true);
 		cards[0]!.setExpanded(true);
 		const expanded = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
@@ -710,7 +714,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		main.setLiveAssistant(mainLive, []);
 		const worker = makeSession([], true);
 		const { ctx, focus } = createFixture(main, worker);
-		ctx.settings = Settings.isolated({ "display.smoothStreaming": false });
+		cfgDisplaySmoothStreaming.override(ctx.settings, false);
 		const firstAssistant: AssistantMessage = {
 			...paused,
 			content: [
@@ -836,7 +840,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		const main = makeSession([arrivalMessage], false);
 		const worker = makeSession([], true);
 		const { ctx, focus } = createFixture(main, worker);
-		ctx.settings = Settings.isolated({ "display.smoothStreaming": false });
+		cfgDisplaySmoothStreaming.override(ctx.settings, false);
 		const workerAssistant: AssistantMessage = {
 			...paused,
 			content: [{ type: "text", text: "WORKER_LINK [x](x.md)" }],
@@ -890,7 +894,7 @@ describe("live Cursor focus recovery without another delta", () => {
 	async function focusBehindHeldLinkCheck(main: SessionStub) {
 		const worker = makeSession([], true);
 		const fixture = createFixture(main, worker);
-		fixture.ctx.settings = Settings.isolated({ "display.smoothStreaming": false });
+		cfgDisplaySmoothStreaming.override(fixture.ctx.settings, false);
 		const workerAssistant: AssistantMessage = {
 			...paused,
 			content: [{ type: "text", text: "WORKER_LINK [x](x.md)" }],
@@ -1167,7 +1171,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		const main = makeSession([mainPrompt], false);
 		const worker = makeSession([], true);
 		const { ctx, focus } = createFixture(main, worker);
-		ctx.settings = Settings.isolated({ "display.smoothStreaming": false });
+		cfgDisplaySmoothStreaming.override(ctx.settings, false);
 		const started: AssistantMessage = {
 			...paused,
 			content: [{ type: "text", text: "WORKER_HEAD [h](head.md)" }],
@@ -1233,7 +1237,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		const main = makeSession([mainPrompt], false);
 		const worker = makeSession([], true);
 		const { ctx, focus } = createFixture(main, worker);
-		ctx.settings = Settings.isolated({ "display.smoothStreaming": false });
+		cfgDisplaySmoothStreaming.override(ctx.settings, false);
 		const started: AssistantMessage = {
 			...paused,
 			content: [{ type: "text", text: "WORKER_SEG_HEAD [h](head.md)" }],

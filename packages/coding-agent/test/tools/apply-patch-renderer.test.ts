@@ -25,7 +25,7 @@ let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 beforeEach(async () => {
 	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 });
 
 afterEach(() => {

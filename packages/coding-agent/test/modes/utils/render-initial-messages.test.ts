@@ -45,7 +45,7 @@ const originalImageProtocol = TERMINAL.imageProtocol;
 afterEach(() => {
 	resetSettingsForTest();
 	setTerminalImageProtocol(originalImageProtocol);
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	vi.restoreAllMocks();
 });
 
@@ -153,18 +153,22 @@ function hasImageComponent(component: Component): boolean {
 	return countImageComponents(component) > 0;
 }
 
+type DisplayMode = ReturnType<typeof cfgDisplayMode.get>;
+
+function setRenderDisplayMode(ctx: InteractiveModeContext, mode: DisplayMode): void {
+	const hideToolActivity = mode !== "detailed";
+	cfgDisplayMode.override(ctx.settings, mode);
+	ctx.hideToolActivity = hideToolActivity;
+	ctx.chatContainer.setToolActivityVisible(!hideToolActivity);
+	setChatTranscriptDisplayPreferences({ hideToolActivity });
+}
+
 function makeRenderCtx(
 	transcript: SessionContext,
 	showImages = true,
-	hideToolActivity = false,
-	compactToolActivity = false,
+	mode: DisplayMode = "detailed",
 ): { ctx: InteractiveModeContext; chatContainer: TranscriptContainer } {
-	const mode = compactToolActivity ? "compact" : hideToolActivity ? "clean" : "detailed";
-	const hidden = hideToolActivity || compactToolActivity;
-	cfgDisplayMode.override(Settings.instance, mode);
-	setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: hidden });
 	const chatContainer = new TranscriptContainer();
-	chatContainer.setToolActivityVisible(!hidden);
 	const ctx = {
 		chatContainer,
 		pendingShellContainer: new Container(),
@@ -192,11 +196,10 @@ function makeRenderCtx(
 		// keep it on so the image-replay contracts below stay meaningful.
 		settings: Settings.isolated({
 			"terminal.showImages": showImages,
-			"display.mode": mode,
 			"composer.recallClearedDrafts": false,
 		}),
 		toolOutputExpanded: false,
-		hideToolActivity: hidden,
+		hideToolActivity: false,
 		hideThinkingBlock: false,
 		assistantImagesVisible: showImages,
 		tableChartsVisible: true,
@@ -243,6 +246,7 @@ function makeRenderCtx(
 		) => helpers.renderSessionContextIncrementally(context, options, renderChunk),
 		showStatus: vi.fn(),
 	} as unknown as InteractiveModeContext;
+	setRenderDisplayMode(ctx, mode);
 	const helpers = new UiHelpers(ctx);
 	return { ctx, chatContainer };
 }
@@ -255,7 +259,7 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		const kept = session.appendMessage({ role: "user", content: "KEPT_REQUEST", timestamp: 2 });
 		session.appendCompaction("UPSTREAM_COMPACTION_SUMMARY", undefined, kept, 1000);
 		session.appendMessage({ role: "user", content: "CURRENT_REQUEST", timestamp: 3 });
-		const { ctx, chatContainer } = makeRenderCtx(makeEmptyContext(), true, false, true);
+		const { ctx, chatContainer } = makeRenderCtx(makeEmptyContext(), true, "compact");
 		vi.spyOn(ctx.viewSession, "buildTranscriptSessionContext").mockImplementation(options =>
 			session.buildSessionContext({ transcript: true, ...options }),
 		);
@@ -340,7 +344,7 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 			isError: false,
 			timestamp: 4,
 		});
-		const { ctx, chatContainer } = makeRenderCtx(makeEmptyContext(), true, false, true);
+		const { ctx, chatContainer } = makeRenderCtx(makeEmptyContext(), true, "compact");
 		vi.spyOn(ctx.viewSession, "buildTranscriptSessionContext").mockImplementation(options =>
 			session.buildSessionContext({ transcript: true, ...options }),
 		);
@@ -378,10 +382,7 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
 
 		cfgDisplayCollapseCompacted.override(Settings.instance, false);
-		cfgDisplayMode.override(Settings.instance, "detailed");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
-		ctx.hideToolActivity = false;
-		chatContainer.setToolActivityVisible(true);
+		setRenderDisplayMode(ctx, "detailed");
 		await helpers.renderInitialMessages();
 		const detailed = Bun.stripANSI(chatContainer.render(120).join("\n"));
 		expect(detailed).toContain("OLD_TOOL_PATH");
@@ -390,10 +391,7 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		expect(detailed).toContain("RECENT_FILE_BODY");
 		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
 
-		cfgDisplayMode.override(Settings.instance, "compact");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
-		ctx.hideToolActivity = true;
-		chatContainer.setToolActivityVisible(false);
+		setRenderDisplayMode(ctx, "compact");
 		await helpers.renderInitialMessages();
 		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("ORIGINAL_USER_REQUEST");
 		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
@@ -422,7 +420,7 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		});
 		const kept = session.appendMessage({ role: "user", content: "continue", timestamp: 3 });
 		session.appendCompaction("summary", undefined, kept, 1000);
-		const { ctx, chatContainer } = makeRenderCtx(makeEmptyContext(), false, false, true);
+		const { ctx, chatContainer } = makeRenderCtx(makeEmptyContext(), false, "compact");
 		const update: Extract<AgentSessionEvent, { type: "tool_execution_update" }> = {
 			type: "tool_execution_update",
 			toolCallId: "old-background",
@@ -653,11 +651,7 @@ describe("UiHelpers.renderInitialMessages — read segment replay", () => {
 		const { ctx, chatContainer } = makeRenderCtx(transcript, false);
 		const helpers = new UiHelpers(ctx);
 		for (const mode of ["detailed", "clean", "detailed"] as const) {
-			cfgDisplayMode.override(Settings.instance, mode);
-			cfgDisplayMode.override(ctx.settings, mode);
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: mode === "clean" });
-			ctx.hideToolActivity = mode === "clean";
-			chatContainer.setToolActivityVisible(mode !== "clean");
+			setRenderDisplayMode(ctx, mode);
 			await helpers.renderInitialMessages();
 			const groups = chatContainer.children.filter(
 				(child): child is ReadToolGroupComponent => child instanceof ReadToolGroupComponent,
@@ -713,7 +707,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 		const original = structuredClone(transcript.messages);
 		for (const display of ["compact", "detailed", "clean"] as const) {
 			const hidden = display !== "detailed";
-			const { ctx, chatContainer } = makeRenderCtx(transcript, true, display === "clean", display === "compact");
+			const { ctx, chatContainer } = makeRenderCtx(transcript, true, display);
 			await new UiHelpers(ctx).renderInitialMessages();
 			const ansi = Bun.stripANSI(chatContainer.render(100).join("\n"));
 			const cx: DescribeContext = {
@@ -830,7 +824,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 				timestamp: 2,
 			},
 		]);
-		const { ctx, chatContainer } = makeRenderCtx(transcript, true, true);
+		const { ctx, chatContainer } = makeRenderCtx(transcript, true, "clean");
 
 		await new UiHelpers(ctx).renderInitialMessages();
 
@@ -839,8 +833,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 			(child): child is AssistantMessageComponent => child instanceof AssistantMessageComponent,
 		);
 		expect(assistant).toBeDefined();
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
-		chatContainer.setToolActivityVisible(true);
+		setRenderDisplayMode(ctx, "detailed");
 		assistant?.setToolResultImagesVisible(true);
 		expect(hasImageComponent(chatContainer)).toBe(true);
 	});
@@ -922,7 +915,7 @@ describe("UiHelpers.renderInitialMessages — hidden tool activity", () => {
 			},
 		]);
 
-		const hidden = makeRenderCtx(transcript, true, true);
+		const hidden = makeRenderCtx(transcript, true, "clean");
 		await new UiHelpers(hidden.ctx).renderInitialMessages();
 		const hiddenRender = Bun.stripANSI(hidden.chatContainer.render(120).join("\n"));
 		expect(hiddenRender).toContain(narrationMarker);
@@ -930,7 +923,7 @@ describe("UiHelpers.renderInitialMessages — hidden tool activity", () => {
 		expect(hiddenRender).not.toContain(toolArgumentMarker);
 		expect(hiddenRender).not.toContain(toolResultMarker);
 
-		const visible = makeRenderCtx(transcript, true, false);
+		const visible = makeRenderCtx(transcript);
 		await new UiHelpers(visible.ctx).renderInitialMessages();
 		const visibleRender = Bun.stripANSI(visible.chatContainer.render(120).join("\n"));
 		expect(visibleRender).toContain(toolArgumentMarker);
@@ -979,14 +972,14 @@ describe("UiHelpers.renderInitialMessages — hidden tool activity", () => {
 			},
 		]);
 
-		const hidden = makeRenderCtx(transcript, true, true);
+		const hidden = makeRenderCtx(transcript, true, "clean");
 		await new UiHelpers(hidden.ctx).renderInitialMessages();
 		const hiddenRender = Bun.stripANSI(hidden.chatContainer.render(120).join("\n"));
 		expect(hiddenRender).not.toContain("ASYNC_JOB_MARKER");
 		expect(hiddenRender).not.toContain("LATE_DIAGNOSTIC_MARKER");
 		expect(hiddenRender).not.toContain("LAUNCH_COMPLETION_MARKER");
 
-		const visible = makeRenderCtx(transcript, true, false);
+		const visible = makeRenderCtx(transcript);
 		await new UiHelpers(visible.ctx).renderInitialMessages();
 		const visibleRender = Bun.stripANSI(visible.chatContainer.render(120).join("\n"));
 		expect(visibleRender).toContain("ASYNC_JOB_MARKER");
@@ -995,7 +988,7 @@ describe("UiHelpers.renderInitialMessages — hidden tool activity", () => {
 	});
 
 	it("keeps normal warnings visible and hides warnings tied to tool activity", () => {
-		const hidden = makeRenderCtx(makeEmptyContext(), true, true);
+		const hidden = makeRenderCtx(makeEmptyContext(), true, "clean");
 		const hiddenHelpers = new UiHelpers(hidden.ctx);
 		hiddenHelpers.showWarning("NORMAL_WARNING_MARKER");
 		hiddenHelpers.showWarning("TODO_WARNING_MARKER", { hideWithToolActivity: true });
@@ -1003,7 +996,7 @@ describe("UiHelpers.renderInitialMessages — hidden tool activity", () => {
 		expect(hiddenRender).toContain("NORMAL_WARNING_MARKER");
 		expect(hiddenRender).not.toContain("TODO_WARNING_MARKER");
 
-		const visible = makeRenderCtx(makeEmptyContext(), true, false);
+		const visible = makeRenderCtx(makeEmptyContext());
 		new UiHelpers(visible.ctx).showWarning("TODO_WARNING_MARKER", { hideWithToolActivity: true });
 		expect(Bun.stripANSI(visible.chatContainer.render(120).join("\n"))).toContain("TODO_WARNING_MARKER");
 	});
@@ -1022,7 +1015,7 @@ describe("UiHelpers.renderInitialMessages — hidden tool activity", () => {
 		};
 		const transcript = transcriptWith([strippedAssistant]);
 
-		const hidden = makeRenderCtx(transcript, true, true);
+		const hidden = makeRenderCtx(transcript, true, "clean");
 		await new UiHelpers(hidden.ctx).renderInitialMessages();
 		expect(Bun.stripANSI(hidden.chatContainer.render(120).join("\n"))).not.toContain(
 			"elided — no result on this branch",

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import {
 	GALLERY_STATES,
 	GALLERY_SURFACES,
@@ -17,21 +17,11 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { toolRenderers } from "@oh-my-pi/pi-tui/tools";
 import { writeToolRenderer } from "@oh-my-pi/pi-tui/tools/write";
-import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	await initTheme(false, undefined, undefined, "dark", "light");
-});
-
-let previousCompact: boolean;
-beforeEach(() => {
-	previousCompact = chatTranscriptDisplayPreferences.compactToolActivity;
-	chatTranscriptDisplayPreferences.compactToolActivity = false;
-});
-afterEach(() => {
-	chatTranscriptDisplayPreferences.compactToolActivity = previousCompact;
 });
 
 describe("gallery harness", () => {

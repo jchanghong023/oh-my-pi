@@ -12,19 +12,15 @@ import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { CompactToolOutputPreview } from "../../src/modes/compact-tool-output-preview";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { IrcBus } from "../../src/irc/bus";
-import { CompactFileDiff } from "../../src/modes/compact-file-diff";
+import { CompactToolOutputPreview } from "../../src/modes/compact-tool-output-preview";
 import { InputController } from "../../src/modes/controllers/input-controller";
 import { SessionFocusController } from "../../src/modes/controllers/session-focus-controller";
+import { cfgDisplayMode } from "../../src/modes/settings";
 import { statusLineHost } from "../../src/modes/status-line-host";
 import type { InteractiveModeContext } from "../../src/modes/types";
 import { AgentLifecycleManager } from "../../src/registry/agent-lifecycle";
@@ -257,56 +253,15 @@ function composerFor(view: AgentViewSession, focusedAgentId: string) {
 }
 
 describe("focused view of a worker-homed agent session", () => {
-	it("shows writes made before focus and refreshes an open worker diff until the next turn", async () => {
-		const probe = await startWorker();
-		const id = "DiffWorker";
-		await probe.open(id, await mainRegistry(), {});
-		const remote = mirrorOf(id);
-		const view = focusHarness();
-		const running = probe.prompt(id, "[hold] worker change");
-		const previous = { ...chatTranscriptDisplayPreferences };
-		const ctx = createInteractiveModeContext();
-		Object.assign(ctx.ui, { getFocused: () => ctx.editor });
-		const dock = new CompactFileDiff({ ...ctx, viewSession: remote }, () => 8);
-		const visible = () => Bun.stripANSI(dock.render(100).join("\n"));
-		const file = path.resolve("worker-change.txt");
-		try {
-			await waitFor(async () => (await probe.report(id)).userTexts.includes("[hold] worker change"), 3000);
-			await probe.recordWrite(id, { tool: "write", path: file, before: "WORKER_BEFORE\n", after: "WORKER_MID\n" });
-			await view.controller.focusAgent(id);
-			expect(remote.getLatestTurnFileChanges()?.files.size).toBe(1);
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-			expect(dock.toggle()).toBe(true);
-			expect(visible()).toContain("WORKER_MID");
-
-			await probe.recordWrite(id, { tool: "write", path: file, before: "WORKER_MID\n", after: "WORKER_FINAL\n" });
-			await waitFor(() => visible().includes("WORKER_FINAL"), 3000);
-			expect(visible()).toContain("WORKER_BEFORE");
-			expect(visible()).not.toContain("WORKER_MID");
-			await probe.release();
-			await running;
-			expect(visible()).toContain("WORKER_FINAL");
-			await probe.prompt(id, "no more writes");
-			await waitFor(() => visible() === "", 3000);
-		} finally {
-			await probe.release();
-			await running;
-			setChatTranscriptDisplayPreferences(previous);
-		}
-	});
-
 	it("restores a worker's early terminal Output without restarting its expiry or reviving running", async () => {
 		const probe = await startWorker();
 		await probe.open("OutputWorker", await mainRegistry(), {});
 		const remote = mirrorOf("OutputWorker");
 		const view = focusHarness();
 		await view.controller.focusAgent("OutputWorker");
-		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const preview = new CompactToolOutputPreview({
-			...createInteractiveModeContext(),
-			viewSession: remote,
-		});
+		const ctx = createInteractiveModeContext();
+		cfgDisplayMode.set(ctx.settings, "compact");
+		const preview = new CompactToolOutputPreview({ ...ctx, viewSession: remote });
 		try {
 			await probe.emit("OutputWorker", {
 				type: "tool_execution_start",
@@ -325,7 +280,7 @@ describe("focused view of a worker-homed agent session", () => {
 				},
 			});
 			await waitFor(() => preview.render(100).some(row => row.includes("WORKER_OUTPUT_FINAL")));
-			const terminalAt = remote.getLiveToolOutputSnapshot()[0]?.terminalAt;
+			const terminalAt = remote.getLiveToolOutputPreview()?.call.terminalAt;
 			if (terminalAt === undefined) throw new Error("Worker terminal Output lacks its original reception time");
 			await view.controller.unfocus();
 			await probe.emit("OutputWorker", {
@@ -348,7 +303,6 @@ describe("focused view of a worker-homed agent session", () => {
 			clock.mockRestore();
 		} finally {
 			preview.clear();
-			setChatTranscriptDisplayPreferences(previous);
 		}
 	});
 

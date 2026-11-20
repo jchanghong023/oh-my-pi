@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Settings, resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
@@ -41,7 +42,7 @@ describe("EventController tool intent", () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		await initTheme();
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 
 	afterEach(() => {
@@ -56,6 +57,7 @@ describe("EventController tool intent", () => {
 			session: { isStreaming: true },
 			viewSession: { isStreaming: true, hasBuiltInTool: () => true, getToolByName: () => undefined },
 		});
+		cfgDisplayMode.override(ctx.settings, "detailed");
 		return { controller: new EventController(ctx), pendingTools, ctx };
 	}
 

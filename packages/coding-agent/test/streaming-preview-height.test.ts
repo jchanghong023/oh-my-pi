@@ -31,7 +31,7 @@ withoutTerminalMultiplexer();
 let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 beforeEach(() => {
 	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 });
 afterEach(() => {
 	setChatTranscriptDisplayPreferences(previousDisplayPreferences);
@@ -82,7 +82,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		await fs.writeFile(file, fileContent);
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true, cwd: tmpDir });
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 
 	afterEach(async () => {

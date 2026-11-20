@@ -288,6 +288,8 @@ const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
 
 export class InputController {
+	#compactTodoLoopExpanded = false;
+
 	constructor(
 		private ctx: InteractiveModeContext,
 		/** Injectable clipboard reads so tests can drive paste flows without a real clipboard. */
@@ -3290,11 +3292,11 @@ export class InputController {
 
 	toggleToolOutputExpansion(): void {
 		if (this.ctx.hideToolActivity && cfgDisplayMode.get(this.ctx.settings) === "compact") {
-			if (this.ctx.compactFileDiff?.toggle()) return;
-			this.ctx.compactDiffExpanded = !this.ctx.compactDiffExpanded;
-			this.restoreCompactDiffExpansion();
+			const expanded = !this.#compactTodoLoopExpanded;
+			if (!this.#setTodoLoopExpanded(expanded)) return;
+			this.#compactTodoLoopExpanded = expanded;
 			this.ctx.ui.requestRender(true);
-			this.ctx.showStatus(`Tool output expansion: ${this.ctx.compactDiffExpanded ? "enabled" : "disabled"}`);
+			this.ctx.showStatus(`TodoLoop output expansion: ${expanded ? "enabled" : "disabled"}`);
 			return;
 		}
 		if (this.ctx.hideToolActivity) {
@@ -3312,17 +3314,24 @@ export class InputController {
 		void applyDisplayPreset(settings, nextDisplayMode(settings), this.ctx);
 	}
 
-	/** Keep the existing expand shortcut for explicit TodoLoop cards. */
-	restoreCompactDiffExpansion(): void {
+	/** Restore explicit TodoLoop cards without expanding hidden tool activity. */
+	restoreCompactTodoLoopExpansion(): void {
 		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
-			this.ctx.compactDiffExpanded = false;
+			this.#compactTodoLoopExpanded = false;
 			return;
 		}
+		this.#setTodoLoopExpanded(this.#compactTodoLoopExpanded);
+	}
+
+	#setTodoLoopExpanded(expanded: boolean): boolean {
+		let hasCards = false;
 		for (const child of this.ctx.chatContainer.children) {
 			if (child instanceof TodoLoopTaskCard) {
-				child.setExpanded(this.ctx.compactDiffExpanded);
+				child.setExpanded(expanded);
+				hasCards = true;
 			}
 		}
+		return hasCards;
 	}
 
 	setToolsExpanded(expanded: boolean): void {

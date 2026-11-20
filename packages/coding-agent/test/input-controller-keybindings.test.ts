@@ -254,7 +254,6 @@ async function createContext() {
 		isBtwMode: false,
 		hideToolActivity: false,
 		toolOutputExpanded: false,
-		compactDiffExpanded: false,
 		settings: Settings.isolated(),
 		chatContainer: { children: [], setToolActivityVisible: vi.fn() },
 		pendingShellContainer: { children: [] },

@@ -34,7 +34,7 @@ beforeEach(() => {
 	preferences = { ...chatTranscriptDisplayPreferences };
 	previousProtocol = TERMINAL.imageProtocol;
 	previousNativeRendering = isNativeRendering();
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false, showImages: true });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false, showImages: true });
 	setNativeRendering(false);
 	setTerminalImageProtocol(ImageProtocol.Kitty);
 });
@@ -371,12 +371,10 @@ describe("hidden tool image loading", () => {
 		for (const cleanup of cleanups) cleanup();
 	});
 
-	for (const mode of ["compact", "clean", "images-off"] as const) {
+	for (const mode of ["hidden", "images-off"] as const) {
+		const hideToolActivity = mode === "hidden";
 		it(`defers a ${mode} tool card image until it becomes visible`, async () => {
-			setChatTranscriptDisplayPreferences({
-				compactToolActivity: mode === "compact",
-				hideToolActivity: mode !== "images-off",
-			});
+			setChatTranscriptDisplayPreferences({ hideToolActivity });
 			const { gate, encode } = deferredConversion();
 			const dimensions = vi.spyOn(terminalCapabilities, "getImageDimensions");
 			cleanups.push(() => dimensions.mockRestore());
@@ -387,15 +385,15 @@ describe("hidden tool image loading", () => {
 				resetDisplay: () => {},
 			};
 			const picture = image(`card-${mode}`);
-			const card = new ToolExecutionComponent("example", {}, { showImages: mode !== "images-off" }, undefined, ui);
-			if (mode !== "images-off") card.setToolActivityVisible(false);
+			const card = new ToolExecutionComponent("example", {}, { showImages: hideToolActivity }, undefined, ui);
+			if (hideToolActivity) card.setToolActivityVisible(false);
 			card.updateResult({ content: [{ type: "text", text: "Done" }, picture] }, false);
 			card.render(80);
 			expect(encode).not.toHaveBeenCalled();
 			expect(dimensions).not.toHaveBeenCalled();
 			expect(card.isTranscriptBlockPending()).toBe(false);
 
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 			card.setToolActivityVisible(true);
 			if (mode === "images-off") card.setShowImages(true);
 			card.render(80);
@@ -414,11 +412,11 @@ describe("hidden tool image loading", () => {
 	}
 
 	it("keeps hidden grouped images out of pending and the streaming fast path, then restores them", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const { gate, encode } = deferredConversion();
 		const landed = Promise.withResolvers<void>();
 		const component = new AssistantMessageComponent(message(), false, () => landed.resolve());
-		const picture = image("group-compact");
+		const picture = image("group-hidden");
 		component.setToolResultImages("read-1", [picture]);
 		const content = component.children[0] as Container;
 		const prose = content.children[0];
@@ -427,7 +425,9 @@ describe("hidden tool image loading", () => {
 		expect(encode).not.toHaveBeenCalled();
 		expect(component.isTranscriptBlockPending()).toBe(false);
 
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		expect(component.describe().c).not.toContainEqual(expect.objectContaining({ k: "image" }));
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
+		expect(component.describe().c).toContainEqual(expect.objectContaining({ k: "image" }));
 		component.render(80);
 		expect(encode).toHaveBeenCalledTimes(1);
 		expect(component.isTranscriptBlockPending()).toBe(true);
@@ -439,12 +439,16 @@ describe("hidden tool image loading", () => {
 		rebuilt.setToolResultImages("read-1", [picture]);
 		expect(rebuilt.render(80).join("\n")).toContain("\x1b_G");
 		expect(encode).toHaveBeenCalledTimes(1);
+
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
+		expect(component.describe().c).not.toContainEqual(expect.objectContaining({ k: "image" }));
+		expect(component.render(80).join("\n")).not.toContain("\x1b_G");
 	});
-	for (const mode of ["clean", "images-off", "tool-images-off"] as const) {
+	for (const mode of ["hidden", "images-off", "tool-images-off"] as const) {
 		it(`lazily restores grouped images rebuilt in ${mode} mode`, async () => {
-			setChatTranscriptDisplayPreferences({ hideToolActivity: mode === "clean" });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: mode === "hidden" });
 			const { gate, encode } = deferredConversion();
-			const picture = image(`group-${mode}`);
+			const picture = image(`group-rebuilt-${mode}`);
 			const landed = Promise.withResolvers<void>();
 			const makeComponent = () => {
 				const component = new AssistantMessageComponent(message(), false, () => landed.resolve());
@@ -480,7 +484,7 @@ describe("hidden tool image loading", () => {
 		});
 	}
 
-	it("does not hold a tool card in scrollback while its in-flight image is compacted", async () => {
+	it("does not hold a tool card in scrollback while its in-flight image is hidden", async () => {
 		const { gate, encode } = deferredConversion();
 		const landed = Promise.withResolvers<void>();
 		const card = new ToolExecutionComponent("example", {}, {}, undefined, {
@@ -490,7 +494,7 @@ describe("hidden tool image loading", () => {
 		});
 		card.updateResult({ content: [{ type: "text", text: "Done" }, image("card-in-flight")] }, false);
 		expect(card.isTranscriptBlockPending()).toBe(true);
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		card.setToolActivityVisible(false);
 		expect(card.isTranscriptBlockPending()).toBe(false);
 		const transcript = new TranscriptContainer();
@@ -498,7 +502,7 @@ describe("hidden tool image loading", () => {
 		transcript.addChild(card);
 		for (let i = 0; i < 10; i++) transcript.addChild(new Text(`Later message ${i}`, 0, 0));
 		expect(transcript.peekFinalizedBatch(80, 5)).toBeDefined();
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		card.setToolActivityVisible(true);
 		expect(card.isTranscriptBlockPending()).toBe(true);
 		gate.resolve(png);

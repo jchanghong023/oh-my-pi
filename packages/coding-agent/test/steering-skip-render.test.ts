@@ -1,10 +1,6 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
@@ -14,13 +10,6 @@ beforeAll(async () => {
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
 	await initTheme(false, undefined, undefined, "dark", "light");
 }, 15_000);
-
-let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-beforeEach(() => {
-	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
-});
-afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
 
 const SKIP_TEXT = "Skipped due to a queued background completion (job or supervised process).";
 
@@ -44,7 +33,7 @@ function renderTool(
 }
 
 describe("mid-turn steering skip rendering", () => {
-	it("hides skipped waits in collapsed, expanded, and compact views", () => {
+	it("hides skipped waits in collapsed, expanded, and one-row views", () => {
 		const skipDetails = [
 			{ __synthetic: true, source: "interrupt_skipped", executed: false },
 			{ __interrupted: true, source: "interrupt_skipped", execution: "started" },
@@ -55,10 +44,6 @@ describe("mid-turn steering skip rendering", () => {
 			expect(renderTool("wait", result)).toBe("");
 			expect(renderTool("wait", result, { expanded: true })).toBe("");
 			expect(renderTool("wait", result, { rows: 1 })).toBe("");
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-			expect(renderTool("wait", result)).toBe("");
-			expect(renderTool("wait", result, { expanded: true })).toBe("");
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
 		}
 	});
 

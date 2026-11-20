@@ -1,8 +1,8 @@
-import { toolOutputSource, toolOutputText } from "@oh-my-pi/pi-tui/tools/output-preview";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "./agent-session-events";
-import type { LiveToolOutputSnapshot } from "./agent-session-handle";
+import type { LiveToolOutputPreview, LiveToolOutputSnapshot } from "./agent-session-handle";
+import { toolOutputSource, toolOutputText } from "./live-tool-output-text";
 
 /**
  * Keep display source and lifecycle facts independent of which frame supplies the body.
@@ -61,13 +61,14 @@ function withOutputFacts(
 export class LiveToolOutputState {
 	readonly #calls = new Map<string, LiveToolOutputSnapshot>();
 	#dispatchOrder = 0;
-	#latestOutputOrder = 0;
+	// Keep the selected call after expiry: its dispatch order still excludes older calls.
+	#selected: LiveToolOutputPreview | undefined;
 	#runActive = false;
 
 	clear(): void {
 		this.#calls.clear();
 		this.#dispatchOrder = 0;
-		this.#latestOutputOrder = 0;
+		this.#selected = undefined;
 	}
 
 	setRunActive(active: boolean, at: number): void {
@@ -90,11 +91,21 @@ export class LiveToolOutputState {
 		for (const snapshot of snapshots) {
 			this.#calls.set(snapshot.toolCallId, snapshot);
 			this.#dispatchOrder = Math.max(this.#dispatchOrder, snapshot.dispatchOrder);
-			if (snapshot.result && toolOutputText(snapshot.toolName, snapshot.result, snapshot.args)) {
-				this.#latestOutputOrder = Math.max(this.#latestOutputOrder, snapshot.dispatchOrder);
-			}
+			const selected = this.#selected;
+			if (!snapshot.result || (selected && snapshot.dispatchOrder <= selected.call.dispatchOrder)) continue;
+			const text = toolOutputText(snapshot.toolName, snapshot.result, snapshot.args);
+			if (text) this.#selected = { call: snapshot, text };
 		}
 		this.#prune();
+	}
+
+	preview(): LiveToolOutputPreview | undefined {
+		const selected = this.#selected;
+		return selected?.text ? selected : undefined;
+	}
+
+	get(toolCallId: string): LiveToolOutputSnapshot | undefined {
+		return this.#calls.get(toolCallId);
 	}
 
 	snapshot(): readonly LiveToolOutputSnapshot[] {
@@ -102,9 +113,10 @@ export class LiveToolOutputState {
 	}
 
 	observe(event: AgentSessionEvent, receivedAt: number, dispatchOrder?: number): void {
+		const selected = this.#selected;
 		if (event.type === "tool_execution_start") {
 			const order = dispatchOrder ?? this.#dispatchOrder + 1;
-			if (this.#calls.has(event.toolCallId) || order < this.#latestOutputOrder) return;
+			if (this.#calls.has(event.toolCallId) || (selected && order < selected.call.dispatchOrder)) return;
 			this.#dispatchOrder = Math.max(this.#dispatchOrder, order);
 			this.#calls.set(event.toolCallId, {
 				toolCallId: event.toolCallId,
@@ -139,25 +151,26 @@ export class LiveToolOutputState {
 		}
 		const isError = event.type === "tool_execution_end" ? event.isError : undefined;
 		const previous = call.result;
-		const hadOutput = call.dispatchOrder === this.#latestOutputOrder;
+		const hadOutput = selected?.call === call;
 		// A startup receipt may contain an older buffered preview. It can seed a body,
 		// but must not backdate actual progress already received from the same job.
 		const candidate =
 			isStartupReceipt && hadOutput
 				? undefined
 				: withOutputFacts(call.toolName, result, previous, result, cancelled, isError);
-		if (candidate && toolOutputText(call.toolName, candidate, args)) {
+		const text = candidate && toolOutputText(call.toolName, candidate, args);
+		if (candidate && text) {
 			call.args = args;
 			call.result = candidate;
-			this.#latestOutputOrder = call.dispatchOrder;
-			this.#prune();
+			if (!hadOutput || text !== selected.text) this.#selected = { call, text };
+			if (!hadOutput) this.#prune();
 		} else if (call.terminalAt !== undefined && !hadOutput) {
 			this.#calls.delete(call.toolCallId);
 		} else {
-			// A no-output receipt can have source facts used by later frames, or a terminal
-			// result can annotate an earlier valid frame without changing that frame's content.
+			// Keep the earlier body, but incorporate lifecycle and dispatch facts. Those
+			// facts can change which parts of the body qualify as displayable output.
 			call.args ??= args;
-			call.result = withOutputFacts(
+			const merged = withOutputFacts(
 				call.toolName,
 				previous ?? { content: [] },
 				previous,
@@ -165,13 +178,20 @@ export class LiveToolOutputState {
 				cancelled,
 				isError,
 			);
+			call.result = merged;
+			if (hadOutput && merged !== previous) {
+				const text = toolOutputText(call.toolName, merged, call.args);
+				if (text !== selected.text) this.#selected = { call, text };
+			}
 		}
 	}
 
 	#prune(): void {
 		// Older calls cannot reclaim the preview, even while they keep executing.
+		const order = this.#selected?.call.dispatchOrder;
+		if (order === undefined) return;
 		for (const [id, call] of this.#calls) {
-			if (call.dispatchOrder < this.#latestOutputOrder) this.#calls.delete(id);
+			if (call.dispatchOrder < order) this.#calls.delete(id);
 		}
 	}
 }

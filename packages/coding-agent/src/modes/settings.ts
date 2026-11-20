@@ -821,7 +821,7 @@ export async function applyDisplayPreset(
 		overrides.push(`${cfgHideThinkingBlock.id}（${sources[cfgHideThinkingBlock.provenance(settings)]}）`);
 	if (mode !== actualMode) overrides.push(`${cfgDisplayMode.id}（${sources[cfgDisplayMode.provenance(settings)]}）`);
 	const thinking = actualHideThinking || actualMode === "clean" ? "隐藏" : "显示";
-	const tools = { clean: "隐藏", compact: "文件写入／编辑组件及临时 Output", detailed: "详细" }[actualMode];
+	const tools = { clean: "隐藏", compact: "仅显示两行活动和临时输出", detailed: "详细" }[actualMode];
 	output.showWarning(
 		`显示偏好：${label}（${mode}）；当前：实时思考窗口${thinking}、工具${tools}；覆盖：${overrides.join("、")}`,
 	);
@@ -897,7 +897,6 @@ export const cfgDisplayAdvisorCollapsedLines = register({
 effect(
 	combine({
 		hideToolActivity: cfgDisplayMode.map(mode => mode !== "detailed"),
-		compactToolActivity: cfgDisplayMode.map(mode => mode === "compact"),
 		shellVisualization: cfgDisplayShellVisualization,
 		readToolResultPreview: cfgReadToolResultPreview,
 		showImages: cfgTerminalShowImages,

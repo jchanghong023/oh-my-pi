@@ -163,7 +163,7 @@ describe("issue #4348: cursor exec-channel tool results pair with synthesized to
 	beforeEach(async () => {
 		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 		await Settings.init({ inMemory: true });
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
 

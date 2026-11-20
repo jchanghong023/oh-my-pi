@@ -33,7 +33,7 @@ let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 beforeEach(() => {
 	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 	// Displacement and replay assertions inspect full upstream wait output.
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 });
 
 afterEach(() => {

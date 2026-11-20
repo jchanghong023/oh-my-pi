@@ -57,7 +57,6 @@ import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { AgentSession } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-events";
 import type { AgentViewToolSchema } from "../session/agent-session-handle";
-import type { TurnFileChange, TurnFileChanges } from "../session/latest-turn-file-changes";
 import {
 	isHiddenUserCompanion,
 	isUserAuthoredQueuedMessage,
@@ -138,8 +137,8 @@ function findQueuedMessage(messages: Iterable<AgentMessage>, id: string): AgentM
 	return undefined;
 }
 
-/** View state without the event-maintained running tool updates, as diffed between flushes. */
-type DiffedViewState = Omit<SessionViewState, "activeToolExecutionUpdates" | "liveToolOutput" | "turnFiles">;
+/** View state diffed between flushes; live tool snapshots are attach-only. */
+type DiffedViewState = Omit<SessionViewState, "activeToolExecutionUpdates" | "liveToolOutput">;
 
 /** Live objects behind the wire copies of the heavy view fields; an unchanged source reuses its copy. */
 interface ViewSources {
@@ -214,9 +213,6 @@ export class SessionPublisher {
 	/** Last published view state; undefined until the current watch sent its snapshot. */
 	#view: DiffedViewState | undefined;
 	#viewSources: ViewSources | undefined;
-	#turnFiles?: TurnFileChanges;
-	#turnFilesRevision = -1;
-	readonly #publishedTurnFiles = new Map<string, TurnFileChange>();
 	/** Entries main holds (kept across watches), by identity, in order, and the body revision they were read at. */
 	#entries: SessionEntry[] = [];
 	#entriesRevision = 0;
@@ -231,8 +227,6 @@ export class SessionPublisher {
 		this.session = session;
 		this.#bridge = bridge;
 		this.#key = session.instanceKey;
-		// Collect writes from the start of a run, even before a TUI attaches.
-		session.getLatestTurnFileChanges();
 		this.#state = captureSessionState(session);
 		this.#publishedSource = session.messages;
 		this.#published = [...this.#publishedSource];
@@ -296,8 +290,6 @@ export class SessionPublisher {
 		}
 		this.#view = undefined;
 		this.#viewSources = undefined;
-		this.#turnFiles = undefined;
-		this.#publishedTurnFiles.clear();
 	}
 
 	/** Post `closed` and stop observing the session. Idempotent. */
@@ -335,9 +327,7 @@ export class SessionPublisher {
 				event.type === "tool_execution_start" ||
 				event.type === "tool_execution_update" ||
 				event.type === "tool_execution_end";
-			const output = toolEvent
-				? this.session.getLiveToolOutputSnapshot().find(call => call.toolCallId === event.toolCallId)
-				: undefined;
+			const output = toolEvent ? this.session.getLiveToolOutputCall(event.toolCallId) : undefined;
 			this.#bridge.remote.notify(
 				"event",
 				this.#key,
@@ -441,33 +431,15 @@ export class SessionPublisher {
 		return { kind: "replace", entries: displayEntries(this.#entries, obfuscator) };
 	}
 
-	#captureTurnFiles(): SessionViewState["turnFiles"] {
-		const source = this.session.getLatestTurnFileChanges();
-		const reset = this.#turnFiles !== source;
-		if (!reset && this.#turnFilesRevision === source.revision) return undefined;
-		if (reset) this.#publishedTurnFiles.clear();
-		const entries: [string, TurnFileChange][] = [];
-		for (const [key, change] of source.files) {
-			if (this.#publishedTurnFiles.get(key) === change) continue;
-			this.#publishedTurnFiles.set(key, change);
-			entries.push([key, change]);
-		}
-		this.#turnFiles = source;
-		this.#turnFilesRevision = source.revision;
-		return { reset, revision: source.revision, entries };
-	}
-
 	#publishView(): void {
 		const next = this.#captureView();
-		const turnFiles = this.#captureTurnFiles();
 		const previous = this.#view;
 		this.#view = next;
 		if (!previous) {
 			const state: SessionViewState = {
 				...next,
 				activeToolExecutionUpdates: toWireData([...this.session.activeToolExecutionUpdates()]),
-				liveToolOutput: toWireData([...this.session.getLiveToolOutputSnapshot()]),
-				turnFiles,
+				liveToolOutput: toWireData(this.session.getLiveToolOutputSnapshot()),
 			};
 			this.#bridge.remote.notify("view", this.#key, state, this.#entriesDelta());
 			return;
@@ -485,8 +457,7 @@ export class SessionPublisher {
 			copyViewField(patch, next, field);
 			changed = true;
 		}
-		if (turnFiles) patch.turnFiles = turnFiles;
-		if (changed || turnFiles) this.#bridge.remote.notify("viewPatch", this.#key, patch);
+		if (changed) this.#bridge.remote.notify("viewPatch", this.#key, patch);
 	}
 
 	#captureView(): DiffedViewState {

@@ -35,7 +35,7 @@ describe("ReadToolGroupComponent", () => {
 
 	beforeEach(() => {
 		previousPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 	afterEach(() => {
 		setChatTranscriptDisplayPreferences(previousPreferences);

@@ -1,31 +1,22 @@
-import * as path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { col, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { plainText, spansLine } from "@oh-my-pi/pi-tui/native/spans";
 import { backgroundChrome } from "@oh-my-pi/pi-tui/native/tone";
-import {
-	replaceTabs,
-	truncateMiddleToWidth,
-	truncateToWidth,
-	wrapTextWithAnsi,
-} from "@oh-my-pi/pi-tui/render/render-utils";
+import { truncateMiddleToWidth, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { State } from "@oh-my-pi/pi-tui/render/types";
 import { getStateBgColor, padToWidth } from "@oh-my-pi/pi-tui/render/utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { ThemeColor } from "@oh-my-pi/pi-tui/theme/theme";
 import { isGroupedHeader, isMatchRow } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
-import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
-import { isToolOutputRow, toolOutputSource, toolOutputText } from "@oh-my-pi/pi-tui/tools/output-preview";
-import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { getPaddingX, padding, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
-import type { LiveToolOutputSnapshot } from "../session/agent-session-handle";
-import { formatPathRelativeToCwd } from "../tools/path-utils";
+import type { LiveToolOutputPreview } from "../session/agent-session-handle";
+import { isToolOutputRow, toolOutputSource } from "../session/live-tool-output-text";
 import { compactToolPreviewInfo } from "./compact-thinking-preview";
+import { cfgDisplayMode } from "./settings";
 import type { InteractiveModeContext } from "./types";
 
 function singleLine(value: string): string {
@@ -131,13 +122,10 @@ export class CompactToolOutputPreview implements Component {
 	#deadline?: number;
 	#session?: InteractiveModeContext["viewSession"];
 	#sessionId?: string;
-	#outputText = new WeakMap<ToolRenderResult<unknown>, string>();
-	#numberedDiff?: { diff: string; rows: Set<string> };
 
 	constructor(
-		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "ui">,
+		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "ui" | "settings">,
 		private readonly availableRows: () => number = () => 6,
-		private readonly coveredDiff?: (file: string, width: number) => string | undefined,
 	) {}
 
 	clear(): void {
@@ -146,7 +134,6 @@ export class CompactToolOutputPreview implements Component {
 		this.#deadline = undefined;
 		this.#session = undefined;
 		this.#sessionId = undefined;
-		this.#numberedDiff = undefined;
 	}
 
 	/** Synchronize even without a visible paint; close only after tool completion and activity stop. */
@@ -164,7 +151,7 @@ export class CompactToolOutputPreview implements Component {
 		this.#source();
 	}
 
-	#source(): { call: LiveToolOutputSnapshot; output: string } | undefined {
+	#source(): LiveToolOutputPreview | undefined {
 		const session = this.ctx.viewSession;
 		const sessionId = session.sessionManager.getSessionId();
 		if (session !== this.#session || sessionId !== this.#sessionId) {
@@ -172,16 +159,7 @@ export class CompactToolOutputPreview implements Component {
 			this.#session = session;
 			this.#sessionId = sessionId;
 		}
-		let selected: { call: LiveToolOutputSnapshot; output: string } | undefined;
-		for (const call of session.getLiveToolOutputSnapshot()) {
-			if (!call.result || (selected && call.dispatchOrder <= selected.call.dispatchOrder)) continue;
-			let output = this.#outputText.get(call.result);
-			if (output === undefined) {
-				output = toolOutputText(call.toolName, call.result, call.args);
-				this.#outputText.set(call.result, output);
-			}
-			if (output) selected = { call, output };
-		}
+		const selected = session.getLiveToolOutputPreview();
 		const deadline = selected?.call.expiresAt;
 		if (this.#deadline !== deadline) {
 			clearTimeout(this.#timer);
@@ -213,96 +191,14 @@ export class CompactToolOutputPreview implements Component {
 		};
 	}
 
-	#withoutCoveredOutput(call: LiveToolOutputSnapshot, output: string, width: number): string {
-		if (!this.coveredDiff || call.terminalAt === undefined || call.result?.isError) return output;
-		const { name, details, dispatch } = toolOutputSource(call.toolName, call.result);
-		if (!details || dispatch || details.cancelled === true || details.xdev) return output;
-		if (name !== "write" && name !== "edit" && name !== "apply_patch") return output;
-
-		const cwd = this.ctx.viewSession.sessionManager.getCwd();
-		const targets = new Map<string, string>();
-		const results = Array.isArray(details.perFileResults) ? details.perFileResults : [details];
-		for (const result of results) {
-			if (!isRecord(result)) continue;
-			const file = name === "write" ? result.resolvedPath : result.path;
-			if (typeof file !== "string" || !path.isAbsolute(file)) continue;
-			const diff = this.coveredDiff(file, width);
-			if (diff === undefined) continue;
-			if (result.op === "delete" ? diff !== "" : !diff || (name !== "write" && !result.diff)) continue;
-			targets.set(file, diff);
-			targets.set(formatPathRelativeToCwd(file, cwd), diff);
-		}
-		if (!targets.size) return output;
-
-		const lines: string[] = [];
-		let numbered: ReadonlySet<string> | undefined;
-		let taggedHeader: string | undefined;
-		const patchHeader = "Success. Updated the following files:";
-		const patchReceipt = output.startsWith(`${patchHeader}\n`);
-		let inWarnings = false;
-		for (const line of output.split("\n")) {
-			if (patchReceipt && line === patchHeader) {
-				taggedHeader = line;
-				continue;
-			}
-			if (line === "Warnings:") inWarnings = true;
-			if (!inWarnings) {
-				if (patchReceipt && /^[AMD] /u.test(line) && targets.has(line.slice(2))) continue;
-				if (line.startsWith("Deleted ") && targets.get(line.slice("Deleted ".length)) === "") continue;
-				const target = unwrapHashlineHeaderPath(line);
-				if (target !== line) {
-					const diff = targets.get(target);
-					if (diff) {
-						taggedHeader = line;
-						numbered = this.#numberedDiffRows(diff);
-						continue;
-					}
-					taggedHeader = undefined;
-					numbered = undefined;
-				}
-				if (name === "write") {
-					const receipt = /^Successfully wrote \d+ bytes to (.+)$/u.exec(line);
-					if (receipt && targets.has(receipt[1]!)) continue;
-				} else if (numbered?.has(line)) {
-					continue;
-				}
-			}
-			if (taggedHeader) lines.push(taggedHeader);
-			taggedHeader = undefined;
-			lines.push(line);
-		}
-		return lines.join("\n");
-	}
-
-	#numberedDiffRows(diff: string): Set<string> {
-		if (this.#numberedDiff?.diff === diff) return this.#numberedDiff.rows;
-		const rows = new Set<string>();
-		let offset = 0;
-		for (const line of diff.split("\n")) {
-			const match = /^([-+ ])\s*(\d+)\|(.*)$/u.exec(line);
-			if (!match) continue;
-			const [, marker, n, content] = match;
-			rows.add(replaceTabs(line).trimStart());
-			if (marker === "-") {
-				offset--;
-			} else {
-				rows.add(`${marker === "+" ? n : Number(n) + offset}:${replaceTabs(content!)}`);
-				if (marker === "+") offset++;
-			}
-		}
-		this.#numberedDiff = { diff, rows };
-		return rows;
-	}
-
 	#header(width: number): PreviewHeader | undefined {
 		const selected = this.#source();
-		if (!displayPreferences.compactToolActivity || !selected || width < 1) return undefined;
+		if (cfgDisplayMode.get(this.ctx.settings) !== "compact" || !selected || width < 1) return undefined;
 		const height = Math.max(0, Math.min(6, Math.floor(this.availableRows())));
 		if (height === 0) return undefined;
 		const inset = Math.min(getPaddingX(1), width - 1);
 		const contentWidth = width - inset;
-		const { call } = selected;
-		const output = this.#withoutCoveredOutput(call, selected.output, width);
+		const { call, text: output } = selected;
 		if (!output) return undefined;
 		const info = compactToolPreviewInfo(call.toolName, call.args, call.intent, call.result);
 		const { name: toolName, details } = toolOutputSource(call.toolName, call.result);

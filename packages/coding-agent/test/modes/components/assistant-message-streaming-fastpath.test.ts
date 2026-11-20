@@ -62,7 +62,7 @@ describe("AssistantMessageComponent streaming fast path", () => {
 	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 	beforeEach(() => {
 		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	});
 	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
 
@@ -266,9 +266,9 @@ describe("AssistantMessageComponent streaming fast path", () => {
 	});
 
 	it.each([false, true])(
-		"repairs Gemini's lone closing fence when the streamed turn becomes final (compact=%s)",
-		compact => {
-			setChatTranscriptDisplayPreferences({ compactToolActivity: compact });
+		"repairs Gemini's lone closing fence when the streamed turn becomes final (activity initially hidden=%s)",
+		hideToolActivity => {
+			setChatTranscriptDisplayPreferences({ hideToolActivity });
 			const text = `=== PACED IP ROTATION SOAK RESULTS ===
 Average Latency: 1,240 ms
 \`\`\`
@@ -280,14 +280,22 @@ Average Latency: 1,240 ms
 | Workload | Pod Status |
 | :--- | :--- |
 | google-scraper | **1/1 Running** |`;
-			const message = msg([{ type: "text", text }]);
+			const thinking = "Checking the deployment status.";
+			const message = msg([
+				{ type: "thinking", thinking },
+				{ type: "text", text },
+			]);
 			const component = new AssistantMessageComponent();
 
 			component.updateContent(message, { transient: true });
-			expect(Bun.stripANSI(component.render(W).join("\n"))).toContain("| :--- | :--- |");
+			const streamed = Bun.stripANSI(component.render(W).join("\n"));
+			expect(streamed).toContain("| :--- | :--- |");
+			expect(streamed.includes(thinking)).toBe(!hideToolActivity);
 
+			setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 			component.updateContent(message);
 			const finalized = Bun.stripANSI(component.render(W).join("\n"));
+			expect(finalized).toContain(thinking);
 			expect(finalized).not.toContain("| :--- | :--- |");
 			expect(finalized).toContain("google-scraper");
 			expect(finalized).toContain("1/1 Running");

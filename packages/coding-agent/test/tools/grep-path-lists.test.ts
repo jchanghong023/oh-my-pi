@@ -414,7 +414,6 @@ describe("tool path arrays", () => {
 
 		const previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 		chatTranscriptDisplayPreferences.hideToolActivity = false;
-		chatTranscriptDisplayPreferences.compactToolActivity = false;
 		const viewer = new AgentTranscriptViewer({
 			transcript: agentTranscriptSource,
 			agentId: "search-overlay-session",

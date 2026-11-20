@@ -9,12 +9,12 @@ beforeAll(async () => {
 	await initTheme(false);
 });
 afterEach(() => {
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 	setTranscriptActionHandler(undefined);
 });
 
 describe("ordinary user message display", () => {
-	it("shows the complete long message and preserves native copy in all display modes", () => {
+	it("shows the complete long message and preserves native copy with tool activity visible or hidden", () => {
 		const source = Array.from({ length: 24 }, (_, index) => `row-${index.toString().padStart(2, "0")}`).join("\n");
 		const actions: TranscriptAction[] = [];
 		setTranscriptActionHandler(action => actions.push(action));
@@ -26,26 +26,25 @@ describe("ordinary user message display", () => {
 			supports: () => false,
 			feature: () => false,
 		};
-		let detailed: readonly string[] | undefined;
-		for (const preferences of [
-			{ compactToolActivity: false, hideToolActivity: false },
-			{ compactToolActivity: false, hideToolActivity: true },
-			{ compactToolActivity: true, hideToolActivity: true },
-		]) {
-			setChatTranscriptDisplayPreferences(preferences);
+		let visible: readonly string[] | undefined;
+		for (const hideToolActivity of [false, true]) {
+			setChatTranscriptDisplayPreferences({ hideToolActivity });
 			const rows = message.render(80);
-			detailed ??= rows;
-			expect(rows).toEqual(detailed);
+			visible ??= rows;
+			expect(rows).toEqual(visible);
 			expect(Bun.stripANSI(rows.join("\n"))).toContain("row-23");
 			expect(JSON.stringify(message.describe(cx))).toContain("row-23");
 			message.handleNativeEvent({ type: "action", key: "copy", act: "copy-message", mods: [] });
 		}
-		expect(actions).toEqual(Array.from({ length: 3 }, () => ({ act: "copy", text: source })));
+		expect(actions).toEqual([
+			{ act: "copy", text: source },
+			{ act: "copy", text: source },
+		]);
 	});
 
 	it("keeps the upstream native message toolbar", () => {
 		setTranscriptActionHandler(() => {});
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const message = new UserMessageComponent("line\n".repeat(24));
 		const toolbar = message.describe().c?.find(child => "k" in child && child.p?.role === "omp.user.tools");
 		expect(

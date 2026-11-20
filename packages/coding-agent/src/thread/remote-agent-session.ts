@@ -69,7 +69,7 @@ import {
 	type AgentViewSessionManager,
 	type AgentViewState,
 	isLocalAgentSession,
-	type LiveToolOutputSnapshot,
+	type LiveToolOutputPreview,
 	type LiveToolOutputStamp,
 	type ToolExecutionUpdateEvent,
 } from "../session/agent-session-handle";
@@ -90,7 +90,6 @@ import type {
 	SessionStats,
 	SteerOptions,
 } from "../session/agent-session-types";
-import type { TurnFileChange, TurnFileChanges } from "../session/latest-turn-file-changes";
 import {
 	asyncJobSnapshot,
 	asyncJobTree,
@@ -288,7 +287,6 @@ export class RemoteAgentSession implements AgentViewSession {
 	#runToolCallIds = new Set<string>();
 	readonly #activeUpdates = new Map<string, ToolExecutionUpdateEvent>();
 	readonly #liveToolOutput = new LiveToolOutputState();
-	#turnFiles?: { files: Map<string, TurnFileChange>; revision: number };
 	#entries: SessionEntry[] = [];
 	readonly #entryIndex = new SessionEntryIndex();
 	/** Custom entries appended here and not yet echoed back by the home worker. */
@@ -543,23 +541,12 @@ export class RemoteAgentSession implements AgentViewSession {
 		return [...this.#activeUpdates.values()];
 	}
 
-	getLiveToolOutputSnapshot(): readonly LiveToolOutputSnapshot[] {
-		return this.#liveToolOutput.snapshot();
+	getLiveToolOutputPreview(): LiveToolOutputPreview | undefined {
+		return this.#liveToolOutput.preview();
 	}
 
 	get modelStage(): ModelStage | null {
 		return this.#view.modelStage ?? null;
-	}
-
-	getLatestTurnFileChanges(): TurnFileChanges | undefined {
-		return this.#turnFiles;
-	}
-
-	#applyTurnFiles(update: SessionViewState["turnFiles"]): void {
-		if (!update) return;
-		if (update.reset || !this.#turnFiles) this.#turnFiles = { files: new Map(), revision: 0 };
-		for (const [key, change] of update.entries) this.#turnFiles.files.set(key, change);
-		this.#turnFiles.revision = update.revision;
 	}
 
 	settleInFlightMessagePersistence(): Promise<void> {
@@ -890,7 +877,6 @@ export class RemoteAgentSession implements AgentViewSession {
 		if (this.#closed !== undefined) return;
 		if (patch.sessionId !== undefined && patch.sessionId !== this.#state.sessionId) {
 			this.#liveToolOutput.clear();
-			this.#turnFiles = undefined;
 		}
 		this.#state = { ...this.#state, ...patch };
 		if (patch.pendingToolCalls) this.#pendingToolCalls = new Set(patch.pendingToolCalls);
@@ -909,13 +895,11 @@ export class RemoteAgentSession implements AgentViewSession {
 	 */
 	applyView(state: SessionViewState, entries: SessionEntriesDelta | undefined): void {
 		if (this.#closed !== undefined) return;
-		const { turnFiles, ...view } = state;
-		this.#view = view;
+		this.#view = { ...state };
 		this.#pruneSettled(state.restorableQueue);
 		this.#activeUpdates.clear();
 		for (const update of state.activeToolExecutionUpdates) this.#activeUpdates.set(update.toolCallId, update);
 		this.#liveToolOutput.restore(state.liveToolOutput, this.#state.runStartedAt !== undefined);
-		this.#applyTurnFiles(turnFiles);
 		if (entries) this.applyEntries(entries);
 		this.#entryIndex.setLeaf(state.leafId);
 		this.#syncViewDerived(state);
@@ -925,9 +909,7 @@ export class RemoteAgentSession implements AgentViewSession {
 	/** Bridge only: merge a view-state patch from the publisher. */
 	applyViewPatch(patch: Partial<SessionViewState>): void {
 		if (this.#closed !== undefined) return;
-		const { turnFiles, ...view } = patch;
-		this.#view = { ...this.#view, ...view };
-		this.#applyTurnFiles(turnFiles);
+		this.#view = { ...this.#view, ...patch };
 		if (patch.restorableQueue) this.#pruneSettled(patch.restorableQueue);
 		if (patch.leafId !== undefined) this.#entryIndex.setLeaf(patch.leafId);
 		this.#syncViewDerived(patch);

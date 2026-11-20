@@ -27,7 +27,7 @@ beforeAll(async () => {
 let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 beforeEach(() => {
 	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 });
 afterEach(() => {
 	setChatTranscriptDisplayPreferences(previousDisplayPreferences);

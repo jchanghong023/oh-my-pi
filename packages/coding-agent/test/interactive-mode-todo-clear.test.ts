@@ -100,7 +100,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		cfgDisplayMode.override(session.settings, "compact");
 		await mode.init();
 		// Isolated settings do not own the host's process-wide display effect.
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		const toolCallId = "todo-rebuild-failure";
 		const toolCall = {
 			...assistantMsg(""),
@@ -142,10 +142,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 
 		cfgDisplayMode.override(session.settings, presentation);
 		await Promise.resolve();
-		setChatTranscriptDisplayPreferences({
-			compactToolActivity: false,
-			hideToolActivity: presentation === "clean",
-		});
+		setChatTranscriptDisplayPreferences({ hideToolActivity: presentation === "clean" });
 		mode.hideToolActivity = presentation === "clean";
 		mode.chatContainer.setToolActivityVisible(!mode.hideToolActivity);
 		mode.rebuildChatFromMessages();
@@ -156,7 +153,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		// Revealing clean history must not resurrect a warning retained while hidden.
 		cfgDisplayMode.override(session.settings, "detailed");
 		await Promise.resolve();
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		mode.hideToolActivity = false;
 		mode.chatContainer.setToolActivityVisible(true);
 		const detailed = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));

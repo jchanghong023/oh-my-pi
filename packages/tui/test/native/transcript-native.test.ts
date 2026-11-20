@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { createCompactionSummaryMessage, createCustomMessage } from "@oh-my-pi/pi-agent-core/compaction/messages";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
@@ -46,7 +46,12 @@ beforeAll(async () => {
 	await initTheme(false);
 });
 
-const preferences = { ...chatTranscriptDisplayPreferences };
+let preferences: typeof chatTranscriptDisplayPreferences;
+beforeEach(() => {
+	preferences = { ...chatTranscriptDisplayPreferences };
+	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
+});
+
 let harness: TspHarness | undefined;
 afterEach(() => {
 	harness?.stop();
@@ -631,7 +636,6 @@ describe("native transcript", () => {
 	it("keeps replayed read groups in call order across prose and writes when results arrive in reverse order", async () => {
 		setChatTranscriptDisplayPreferences({
 			hideToolActivity: false,
-			compactToolActivity: false,
 			readToolResultPreview: true,
 		});
 		const calls: AssistantMessage["content"] = [

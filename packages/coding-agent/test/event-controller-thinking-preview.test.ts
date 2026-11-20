@@ -7,14 +7,19 @@ import { CompactThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-
 import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { type ModelStage, nextModelStage } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
-import type { LiveToolOutputSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type {
+	LiveToolOutputPreview,
+	LiveToolOutputSnapshot,
+} from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { LiveToolOutputState } from "@oh-my-pi/pi-coding-agent/session/live-tool-output";
+import { toolOutputText } from "@oh-my-pi/pi-coding-agent/session/live-tool-output-text";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Loader, setSpinnerInterval, spinnerInterval } from "@oh-my-pi/pi-tui";
 import {
 	chatTranscriptDisplayPreferences,
@@ -129,7 +134,7 @@ function liveSession(message: AssistantMessage | null = null, activeThinkingInde
 		},
 		settleInFlightMessagePersistence: async () => {},
 		activeToolExecutionUpdates: () => [...updates.values()],
-		getLiveToolOutputSnapshot: () => output?.snapshot() ?? [],
+		getLiveToolOutputPreview: () => output?.preview(),
 	});
 	Object.defineProperty(session, "agent", { configurable: true, value: agent });
 	return {
@@ -201,6 +206,7 @@ function focusFixture() {
 	const statusLine = new StatusLineComponent<AgentSession>(main.session, statusLineHost);
 	statusLines.push(statusLine);
 	const ctx = createInteractiveModeContext({ session: main.session, statusLine });
+	cfgDisplayMode.set(ctx.settings, "compact");
 	const output = new CompactToolOutputPreview(ctx);
 	const dock = new CompactThinkingPreview(ctx, undefined, width => output.compactActivity(width));
 	outputPreviews.push(output);
@@ -310,7 +316,7 @@ beforeEach(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true, overrides: { "display.smoothStreaming": false } });
 	vi.useFakeTimers();
-	setChatTranscriptDisplayPreferences({ hideToolActivity: true, compactToolActivity: true });
+	setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 });
 
 afterEach(() => {
@@ -483,11 +489,11 @@ describe("compact action dock", () => {
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		cfgDisplayMode.set(h.ctx.settings, "clean");
 		await live.emit({ type: "agent_start" });
 		await live.emit({ type: "turn_start" });
 		expect(h.rendered()).not.toContain("模型：");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		cfgDisplayMode.set(h.ctx.settings, "compact");
 		expect(plain(h.rows())[0]).toContain("模型：等待响应");
 		const reason = thinkingMessage("earlier line\nlatest model reasoning");
 		await live.emit(update(reason, "thinking_delta"));
@@ -559,10 +565,12 @@ describe("compact action dock", () => {
 		expect(plain(h.rows())[1]).toMatch(/A.*\+1/);
 		const message = thinkingMessage(" \t\n<!-- -->");
 		await live.emit(update(message, "thinking_delta"));
-		expect(plain(h.rows())[0]).toContain("模型：正在思考");
+		expect(plain(h.rows())[0]).toBe(" 模型：正在思考");
+		expect(h.nativeRendered()).toBe(h.rendered());
 		message.content = [{ type: "thinking", thinking: "```\nPRIVATE_THOUGHT\n```" }];
 		await live.emit(update(message, "thinking_delta"));
 		expect(h.rendered()).not.toContain("PRIVATE_THOUGHT");
+		expect(h.nativeRendered()).toBe(h.rendered());
 		message.content = [{ type: "thinking", thinking: "firstpart secondpart thirdpart final-tail\n \t\n" }];
 		await live.emit(update(message, "thinking_delta"));
 		const width = 45;
@@ -572,7 +580,10 @@ describe("compact action dock", () => {
 		}
 		h.ctx.hideThinkingBlock = true;
 		expect(h.rendered()).not.toContain("final-tail");
+		expect(h.nativeRendered()).toBe(h.rendered());
 		h.ctx.hideThinkingBlock = false;
+		expect(h.rendered()).toContain("final-tail");
+		expect(h.nativeRendered()).toBe(h.rendered());
 		const wait = new Loader(
 			h.ctx.ui,
 			value => value,
@@ -887,6 +898,35 @@ describe("compact action dock", () => {
 		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
+	it("reads the live active block and drops cached text as soon as it is aborted", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		const message = thinkingMessage("old reasoning");
+		await live.emit(update(message, "thinking_delta"));
+		expect(h.rendered()).toContain("old reasoning");
+
+		const agent = live.session.agent;
+		const current: AssistantMessage = {
+			...message,
+			content: [...message.content, { type: "thinking", thinking: "live reasoning" }],
+		};
+		// Update the agent stream without delivering another event to the dock.
+		agent.emitExternalEvent({
+			type: "message_update",
+			message: current,
+			assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "live reasoning", partial: current },
+		});
+		expect(h.rendered()).toBe(" 模型：正在思考  live reasoning");
+		expect(h.nativeRendered()).toBe(h.rendered());
+
+		// The stream still contains both blocks and the session has not emitted a terminal event.
+		agent.abort();
+		expect(h.rendered()).toBe(" 模型：正在思考");
+		expect(h.nativeRendered()).toBe(h.rendered());
+	});
+
 	it("replaces old completed rows when new tools start and finish between paints", async () => {
 		const h = focusFixture();
 		const live = liveSession();
@@ -922,9 +962,7 @@ describe("compact action dock", () => {
 		expect(h.rendered()).toContain("正在思考");
 
 		setSystemTime(12_000);
-		const end = update(message, "thinking_end");
-		applyRenderFixtureEvent(live.session.agent.state, end);
-		await h.ctx.eventController.dispatchSessionEvent(end);
+		await live.emit(update(message, "thinking_end"));
 		setSystemTime(20_000);
 		const reply: AssistantMessage = {
 			...message,
@@ -935,8 +973,7 @@ describe("compact action dock", () => {
 			message: reply,
 			assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: reply },
 		};
-		applyRenderFixtureEvent(live.session.agent.state, textStart);
-		await h.ctx.eventController.dispatchSessionEvent(textStart);
+		await live.emit(textStart);
 		await live.emit({ type: "message_end", message: reply });
 		expect(h.rendered()).not.toContain("思考");
 		expect(h.nativeRendered()).toBe(h.rendered());
@@ -980,18 +1017,21 @@ describe("compact action dock", () => {
 		await h.focus.focusAgent("ThinkingView");
 		expect(h.rendered()).toContain("old reasoning");
 		if (change === "display tier") {
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+			cfgDisplayMode.set(h.ctx.settings, "clean");
 			expect(h.dock.render(60)).toEqual([]);
 			expect(nativeRows(h.dock.describe(cx()))).toEqual([]);
 		} else {
 			await h.focus.focusAgent(MAIN_AGENT_ID);
+			expect(h.rendered()).not.toContain("old reasoning");
+			expect(h.nativeRendered()).toBe(h.rendered());
 		}
 		await live.emit({ type: "message_end", message: thinking });
 		await live.emit({ type: "agent_end", messages: [] });
-		if (change === "display tier") setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		if (change === "display tier") cfgDisplayMode.set(h.ctx.settings, "compact");
 		else await h.focus.focusAgent("ThinkingView");
 		expect(h.rendered()).not.toContain("正在思考");
-		expect(h.nativeRendered()).not.toContain("old reasoning");
+		expect(h.rendered()).not.toContain("old reasoning");
+		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
 	it("keeps file write content out of compact chat", async () => {
@@ -1105,10 +1145,11 @@ describe("compact action dock", () => {
 
 describe("execution-only read group activity", () => {
 	it("starts and times a read created by its first execution event (P2-23)", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		let now = 100;
 		vi.spyOn(performance, "now").mockImplementation(() => now);
 		const ctx = createInteractiveModeContext();
+		cfgDisplayMode.set(ctx.settings, "detailed");
 		const controller = new EventController(ctx);
 		eventControllers.push(controller);
 		const toolCx: DescribeContext = {
@@ -1210,6 +1251,11 @@ function outputCall(
 	};
 }
 
+function previewFixture(call: LiveToolOutputSnapshot): LiveToolOutputPreview {
+	if (!call.result) throw new Error("Expected a result for the selected Output fixture");
+	return { call, text: toolOutputText(call.toolName, call.result, call.args) };
+}
+
 describe("compact latest live Output consumers", () => {
 	const todoRoutes: { route: string; options: Partial<LiveToolOutputSnapshot> }[] = [
 		{ route: "direct", options: { toolName: "todo", args: { op: "view" } } },
@@ -1229,33 +1275,15 @@ describe("compact latest live Output consumers", () => {
 	it.each(todoRoutes)("excludes todo via $route without replacing another tool's output", async ({ options }) => {
 		const h = focusFixture();
 		const live = liveSession();
-		const todo = outputCall("todo", 2, "TODO_RESULT", options);
+		const terminalAt = Date.now();
+		const todo = outputCall("todo", 2, "TODO_RESULT", { ...options, terminalAt });
 		const output = new LiveToolOutputState();
-		const observe = (call: LiveToolOutputSnapshot) => {
-			output.observe(
-				{ type: "tool_execution_start", toolCallId: call.toolCallId, toolName: call.toolName, args: call.args },
-				Date.now(),
-				call.dispatchOrder,
-			);
-			output.observe(
-				{
-					type: "tool_execution_end",
-					toolCallId: call.toolCallId,
-					toolName: call.toolName,
-					result: call.result!,
-					isError: false,
-				},
-				Date.now(),
-			);
-		};
-		observe(todo);
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => output.snapshot());
+		output.restore([todo], false);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
 		h.register("TodoOutput", live);
 		await h.focus.focusAgent("TodoOutput");
 		expect(h.outputRows()).toEqual([[], []]);
-		output.clear();
-		observe(outputCall("shell", 1, "SHELL_OUTPUT"));
-		observe(todo);
+		output.restore([outputCall("shell", 1, "SHELL_OUTPUT", { terminalAt }), todo], false);
 		const view = h.previewView();
 		expect(view.head).toContain("已完成 · bash · echo shell");
 		expect(view.body).toEqual(["SHELL_OUTPUT"]);
@@ -1268,42 +1296,49 @@ describe("compact latest live Output consumers", () => {
 		const live = liveSession();
 		const first = outputCall("first", 1, "first output");
 		const second = outputCall("second", 2, "");
-		let calls = [first, second];
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		const output = new LiveToolOutputState();
+		output.restore([first, second], false);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
 		h.register("OutputWorker", live);
 		await h.focus.focusAgent("OutputWorker");
 		const view = h.previewView();
 		expect(view.head).toContain("运行中 · bash · echo first");
 		expect(view.body).toEqual(["first output"]);
 		expect(view.nativeHead).toContain("运行中 · bash · echo first");
-		calls = [
-			first,
-			{
-				...second,
-				result: {
-					content: [{ type: "text", text: "\x1b[31m \t\n\x1b[0m" }, { type: "image" }],
+		output.restore(
+			[
+				first,
+				{
+					...second,
+					result: {
+						content: [{ type: "text", text: "\x1b[31m \t\n\x1b[0m" }, { type: "image" }],
+					},
 				},
-			},
-		];
+			],
+			false,
+		);
 		expect(h.previewView().head).toContain("echo first");
-		calls = [
-			first,
-			{
-				...second,
-				result: {
-					content: [{ type: "text", text: "Backgrounded as job bg_2; output will follow" }],
-					details: { async: { jobId: "bg_2", state: "running" } },
+		output.restore(
+			[
+				first,
+				{
+					...second,
+					result: {
+						content: [{ type: "text", text: "Backgrounded as job bg_2; output will follow" }],
+						details: { async: { jobId: "bg_2", state: "running" } },
+					},
 				},
-			},
-		];
+			],
+			false,
+		);
 		expect(h.previewView().head).toContain("echo first");
 		const newer = outputCall("second", 2, "one\ntwo");
-		calls = [newer, outputCall("first", 1, "late first output")];
+		output.restore([newer, outputCall("first", 1, "late first output")], false);
 		const newerView = h.previewView();
 		expect(newerView.head).toContain("echo second");
 		expect(newerView.body).toEqual(["one", "two"]);
 		expect(newerView.nativeBody).toEqual(["one", "two"]);
-		calls = [outputCall("first", 1, "even later"), outputCall("second", 2, "one\ntwo\nthree")];
+		output.restore([outputCall("first", 1, "even later"), outputCall("second", 2, "one\ntwo\nthree")], false);
 		const threeView = h.previewView();
 		expect(threeView.body).toEqual(["one", "two", "three"]);
 		expect(threeView.nativeBody).toEqual(["one", "two", "three"]);
@@ -1312,33 +1347,30 @@ describe("compact latest live Output consumers", () => {
 	it("keeps background Output live after loop completion without retained tool cards", async () => {
 		setSystemTime(10_000);
 		const h = focusFixture();
-		const live = liveSession();
-		let frame = outputCall("shell", 1, "0", {
-			result: {
-				content: [{ type: "text", text: "0" }],
-				details: { async: { jobId: "bg_1", name: "BuildPackage", state: "running" } },
-			},
-		});
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => [frame]);
+		const live = liveSession(null, undefined, true);
+		const args = { command: "echo shell" };
+		const details = { async: { jobId: "bg_1", name: "BuildPackage", state: "running" } };
 		h.register("BackgroundOutput", live);
 		await h.focus.focusAgent("BackgroundOutput");
+		await live.emit({ type: "agent_start" });
+		await live.emit({ type: "tool_execution_start", toolCallId: "shell", toolName: "bash", args });
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "shell",
+			toolName: "bash",
+			result: { content: [{ type: "text", text: "0" }], details },
+			isError: false,
+		});
 		await live.emit({ type: "agent_end", messages: [] });
 		h.ctx.pendingTools.clear();
 		for (let second = 1; second <= 25; second++) {
 			setSystemTime(10_000 + second * 1000);
-			frame = {
-				...frame,
-				result: {
-					content: [{ type: "text", text: `tick ${second}` }],
-					details: { async: { jobId: "bg_1", name: "BuildPackage", state: "running" } },
-				},
-			};
 			await live.emit({
 				type: "tool_execution_update",
 				toolCallId: "shell",
 				toolName: "bash",
-				args: frame.args,
-				partialResult: frame.result!,
+				args,
+				partialResult: { content: [{ type: "text", text: `tick ${second}` }], details },
 			});
 			const view = h.previewView();
 			expect(view.head).toContain("运行中 · bash · BuildPackage · bg_1");
@@ -1375,8 +1407,9 @@ describe("compact latest live Output consumers", () => {
 		const live = liveSession();
 		const old = outputCall("old", 1, "old still running");
 		const terminal = outputCall("latest", 2, "terminal Output", { terminalAt: 10_000 });
-		let calls = [old, terminal];
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		const output = new LiveToolOutputState();
+		output.restore([old, terminal], false);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
 		h.register("TerminalOutput", live);
 		await h.focus.focusAgent("TerminalOutput");
 		await live.emit({
@@ -1386,18 +1419,19 @@ describe("compact latest live Output consumers", () => {
 			result: terminal.result!,
 			isError: false,
 		});
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		cfgDisplayMode.set(h.ctx.settings, "clean");
 		await h.focus.focusAgent(MAIN_AGENT_ID);
 		vi.advanceTimersByTime(3000);
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		cfgDisplayMode.set(h.ctx.settings, "compact");
 		await h.focus.focusAgent("TerminalOutput");
 		expect(h.outputRows()).toEqual([[], []]);
 		const rebuilt = new CompactToolOutputPreview(h.ctx);
 		outputPreviews.push(rebuilt);
 		expect(rebuilt.render(120)).toEqual([]);
-		calls = [terminal, outputCall("old", 1, "late old"), outputCall("new-no-output", 3, "")];
+		const calls = [terminal, outputCall("old", 1, "late old"), outputCall("new-no-output", 3, "")];
+		output.restore(calls, false);
 		for (const rows of h.outputRows()) expect(rows).toEqual([]);
-		calls = [...calls, outputCall("new-output", 4, "new Output")];
+		output.restore([...calls, outputCall("new-output", 4, "new Output")], false);
 		for (const rows of h.outputRows()) {
 			expect(rows.join("\n")).toContain("new Output");
 		}
@@ -1407,19 +1441,18 @@ describe("compact latest live Output consumers", () => {
 	it("does not let an earlier terminal deadline close a newer Output source", async () => {
 		setSystemTime(10_000);
 		const h = focusFixture();
-		const live = liveSession();
-		let calls = [outputCall("done", 1, "done", { terminalAt: 10_000 })];
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		const live = liveSession(null, undefined, true);
 		h.register("ReplacementOutput", live);
 		await h.focus.focusAgent("ReplacementOutput");
+		await live.completeOutput("done", "done");
 		vi.advanceTimersByTime(2000);
-		calls = [outputCall("next", 2, "replacement")];
+		await live.emit({ type: "tool_execution_start", toolCallId: "next", toolName: "bash", args: {} });
 		await live.emit({
 			type: "tool_execution_update",
 			toolCallId: "next",
 			toolName: "bash",
 			args: {},
-			partialResult: calls[0]!.result!,
+			partialResult: { content: [{ type: "text", text: "replacement" }] },
 		});
 		vi.advanceTimersByTime(1000);
 		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("replacement");
@@ -1430,7 +1463,7 @@ describe("compact latest live Output consumers", () => {
 		const live = liveSession();
 		const text = `discard\nfirst\n \nsecond\n\t\nthird\n${" ".repeat(150)}\nfourth\n\x1b[31m  \x1b[0m\nfifth\n{}\n---\n\x1b[31m╰──╯\x1b[0m\n✅\n\n`;
 		const call = outputCall("nonblank", 1, text);
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockReturnValue(previewFixture(call));
 		h.register("NonblankOutput", live);
 		await h.focus.focusAgent("NonblankOutput");
 		const view = h.previewView();
@@ -1443,7 +1476,7 @@ describe("compact latest live Output consumers", () => {
 		const h = focusFixture();
 		const live = liveSession();
 		const call = outputCall("aligned", 1, "\n    根节点\n      child 42\n    ---\n    {}\n");
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockReturnValue(previewFixture(call));
 		h.register("AlignedOutput", live);
 		await h.focus.focusAgent("AlignedOutput");
 		const view = h.previewView();
@@ -1455,12 +1488,14 @@ describe("compact latest live Output consumers", () => {
 	it("does not open or replace meaningful output for symbol-only frames", async () => {
 		const h = focusFixture();
 		const live = liveSession();
-		let calls = [outputCall("symbols", 2, "\x1b[31m{}\n---\n╰──╯\x1b[0m\n✅")];
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		const symbols = outputCall("symbols", 2, "\x1b[31m{}\n---\n╰──╯\x1b[0m\n✅");
+		const output = new LiveToolOutputState();
+		output.restore([symbols], false);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
 		h.register("SymbolOutput", live);
 		await h.focus.focusAgent("SymbolOutput");
 		expect(h.outputRows()).toEqual([[], []]);
-		calls = [outputCall("content", 1, "0"), ...calls];
+		output.restore([outputCall("content", 1, "0"), symbols], false);
 		const view = h.previewView();
 		expect(view.head).toContain("echo content");
 		expect(view.body).toEqual(["0"]);
@@ -1471,7 +1506,7 @@ describe("compact latest live Output consumers", () => {
 		const h = focusFixture();
 		const live = liveSession();
 		const output = new LiveToolOutputState();
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => output.snapshot());
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
 		h.register("RetainedOutput", live);
 		await h.focus.focusAgent("RetainedOutput");
 		const start = (id: string, path: string, dispatchOrder?: number) =>
@@ -1511,7 +1546,7 @@ describe("compact latest live Output consumers", () => {
 		const h = focusFixture();
 		const live = liveSession();
 		const output = new LiveToolOutputState();
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => output.snapshot());
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
 		h.register("AsyncOutput", live);
 		await h.focus.focusAgent("AsyncOutput");
 		output.observe({ type: "tool_execution_start", toolCallId: "job", toolName: "write", args: {} }, 10_000);
@@ -1558,12 +1593,56 @@ describe("compact latest live Output consumers", () => {
 		);
 		output.restore(output.snapshot(), false);
 		output.observe(startupReceipt, 10_002);
-		expect(output.snapshot()[0]?.terminalAt).toBe(10_001);
+		expect(output.preview()?.call.terminalAt).toBe(10_001);
 		const view = h.previewView();
 		expect(view.head).toBe("失败 · write (bash) · Build · bg_1 · echo active");
 		expect(view.nativeHead).toBe(view.head);
 		expect(view.body).toEqual(["Error: failed at step 2"]);
 		expect(view.nativeBody).toEqual(view.body);
+	});
+
+	it("renormalizes a retained body when later device metadata identifies its Bash startup notice", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const live = liveSession();
+		const output = new LiveToolOutputState();
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
+		h.register("LateDeviceFacts", live);
+		await h.focus.focusAgent("LateDeviceFacts");
+		output.observe({ type: "tool_execution_start", toolCallId: "job", toolName: "write", args: {} }, 10_000);
+		const notice = "Backgrounded as job bg_1; output will follow";
+		output.observe(
+			{
+				type: "tool_execution_update",
+				toolCallId: "job",
+				toolName: "write",
+				args: {},
+				partialResult: { content: [{ type: "text", text: `actual body\n\n${notice}` }] },
+			},
+			10_000,
+		);
+		expect(h.previewView().body).toEqual(["actual body", notice]);
+		output.observe(
+			{
+				type: "tool_execution_update",
+				toolCallId: "job",
+				toolName: "write",
+				args: {},
+				partialResult: {
+					content: [],
+					details: {
+						xdev: { tool: "bash", mode: "execute", inner: { async: { jobId: "bg_1", state: "running" } } },
+					},
+				},
+			},
+			10_001,
+		);
+		const visible = h.previewView();
+		expect(visible.head).toContain("运行中 · write (bash) · bg_1");
+		expect(visible.body).toEqual(["actual body"]);
+		expect(visible.nativeBody).toEqual(visible.body);
+		output.restore(output.snapshot(), false);
+		expect(h.previewView()).toEqual(visible);
 	});
 
 	it("wraps safe output before its tail window and keeps ANSI/native text identical", async () => {
@@ -1574,7 +1653,7 @@ describe("compact latest live Output consumers", () => {
 			1,
 			"discarded\r最新\t内容\nline2\nline3\nline4\nline5\nline6\n\x1b[31m尾部中文宽字符尾部中文宽字符\x1b[0m",
 		);
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockReturnValue(previewFixture(call));
 		h.register("WrappedOutput", live);
 		await h.focus.focusAgent("WrappedOutput");
 		const view = h.previewView(18);
@@ -1610,7 +1689,9 @@ describe("compact latest live Output consumers", () => {
 			toolName: "write",
 			args: { path: "out://answer", content: "assistant reply stays in the transcript" },
 		});
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([first, second, reply]);
+		const output = new LiveToolOutputState();
+		output.restore([first, second, reply], false);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
 		h.register("ReadOutput", live);
 		await h.focus.focusAgent("ReadOutput");
 		const view = h.previewView();
@@ -1637,7 +1718,7 @@ describe("compact latest live Output consumers", () => {
 			"*19│alpha hit six",
 		].join("\n");
 		let call = outputCall("search", 1, text, { toolName: "grep", args: { pattern: "alpha" } });
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => [call]);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => previewFixture(call));
 		h.register("GrepOutput", live);
 		await h.focus.focusAgent("GrepOutput");
 		const running = h.previewView();
@@ -1672,7 +1753,7 @@ describe("compact latest live Output consumers", () => {
 			args: { pattern: "only" },
 			terminalAt: Date.now(),
 		});
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockReturnValue(previewFixture(call));
 		h.register("GrepFill", live);
 		await h.focus.focusAgent("GrepFill");
 		const view = h.previewView();
@@ -1698,15 +1779,14 @@ describe("compact latest live Output consumers", () => {
 			},
 			terminalAt: Date.now(),
 		});
-		let calls = [glob];
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		const source = vi.spyOn(live.session, "getLiveToolOutputPreview").mockReturnValue(previewFixture(glob));
 		h.register("GlobOutput", live);
 		await h.focus.focusAgent("GlobOutput");
 		const globView = h.previewView();
 		expect(globView.head).toContain("已完成 · glob");
 		expect(globView.body).toEqual(["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
 		expect(globView.nativeBody).toEqual(globView.body);
-		calls = [glob, wrapped];
+		source.mockReturnValue(previewFixture(wrapped));
 		const wrappedView = h.previewView();
 		expect(wrappedView.body).toEqual(["*12│wrapped hit", "# src/", " 10│context", " 13│context after"]);
 		expect(wrappedView.nativeBody).toEqual(wrappedView.body);
@@ -1737,8 +1817,9 @@ describe("compact latest live Output consumers", () => {
 				details: { matchCount: 0, fileCount: 0 },
 			},
 		});
-		let calls = [failed];
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		const output = new LiveToolOutputState();
+		output.restore([failed], false);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
 		h.register("FallbackOutput", live);
 		await h.focus.focusAgent("FallbackOutput");
 		const failedView = h.previewView();
@@ -1748,7 +1829,7 @@ describe("compact latest live Output consumers", () => {
 		const [, diagnostic, context] = h.output.render(120);
 		expect(diagnostic).toContain(theme.bold(theme.fg("error", "Error: boom at step 2")));
 		expect(context).toContain(theme.fg("toolOutput", "line five"));
-		calls = [failed, empty];
+		output.restore([failed, empty], false);
 		const emptyView = h.previewView();
 		expect(emptyView.head).toContain("已完成 · grep");
 		expect(emptyView.body).toEqual(["No matches found"]);
@@ -1760,7 +1841,7 @@ describe("compact latest live Output consumers", () => {
 		const live = liveSession();
 		const command = `rg -n "backdrop-filter" ${"packages/coding-agent/src/modes/".repeat(3)}styles.css`;
 		const call = outputCall("long", 1, "hit", { args: { command } });
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockReturnValue(previewFixture(call));
 		h.register("LongCommand", live);
 		await h.focus.focusAgent("LongCommand");
 		const view = h.previewView(60);
@@ -1830,12 +1911,21 @@ describe("compact latest live Output consumers", () => {
 	it("keeps a still-running background source across the turn boundary", async () => {
 		setSystemTime(10_000);
 		const h = focusFixture();
-		const live = liveSession();
-		const running = outputCall("bg", 1, "background progress");
-		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([running]);
+		const live = liveSession(null, undefined, true);
 		h.register("RunningBoundary", live);
 		await h.focus.focusAgent("RunningBoundary");
 		await live.emit({ type: "agent_start" });
+		await live.emit({ type: "tool_execution_start", toolCallId: "bg", toolName: "bash", args: {} });
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "bg",
+			toolName: "bash",
+			result: {
+				content: [{ type: "text", text: "background progress" }],
+				details: { async: { jobId: "bg", state: "running" } },
+			},
+			isError: false,
+		});
 		await live.emit({ type: "agent_end", messages: [] });
 		setSystemTime(20_000);
 		await live.emit({ type: "agent_start" });

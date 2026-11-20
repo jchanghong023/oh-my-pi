@@ -67,7 +67,7 @@ describe("InteractiveMode live working label", () => {
 
 	beforeEach(() => {
 		previousPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		cfgDisplayMode.override(mode.settings, "compact");
 	});
 
@@ -320,7 +320,7 @@ describe("InteractiveMode live working label", () => {
 		"keeps resumed transcript geometry stable through streamed tool calls (%i old paragraphs)",
 		async oldParagraphs => {
 			const preferences = { ...chatTranscriptDisplayPreferences };
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+			setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 			const terminal = new VirtualTerminal(100, 29);
 			const scheduler = new VirtualRenderScheduler();
 			const composer = new Composer({

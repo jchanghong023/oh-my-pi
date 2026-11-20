@@ -1,11 +1,7 @@
-import { afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { taskToolRenderer } from "@oh-my-pi/pi-tui/tools/task";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -40,8 +36,6 @@ const initial: TodoLoopState = {
 	current: task,
 	attempt: 2,
 };
-const displayPreferences = { ...chatTranscriptDisplayPreferences };
-afterEach(() => setChatTranscriptDisplayPreferences(displayPreferences));
 beforeAll(async () => {
 	await initTheme(false);
 });
@@ -135,7 +129,6 @@ describe("TodoLoop native transcript presentation", () => {
 	it.each(["failed", "settlement_failed", "stopped", "completed"] as const)(
 		"keeps %s and live stopping visible in the 42x28 software terminal budget",
 		async phase => {
-			setChatTranscriptDisplayPreferences({ hideToolActivity: true, compactToolActivity: true });
 			const terminal = new VirtualTerminal(42, 28);
 			const scheduler = new VirtualRenderScheduler();
 			const composer = new Composer({
@@ -143,7 +136,9 @@ describe("TodoLoop native transcript presentation", () => {
 				tuiOptions: { renderScheduler: scheduler },
 				preferences: { ...COMPOSER_DEFAULTS, quiet: true, completeScrollback: false },
 			});
-			const ctx = createInteractiveModeContext({ hideToolActivity: true });
+			const ctx = createInteractiveModeContext({ settings: Settings.isolated(), hideToolActivity: true });
+			cfgDisplayMode.set(ctx.settings, "compact");
+			ctx.chatContainer.setToolActivityVisible(false);
 			ctx.ui.requestRender = () => composer.ui.requestRender();
 			const otherStatus = new Text("Other command status", 0, 0);
 			ctx.statusContainer.addChild(otherStatus);
@@ -438,7 +433,6 @@ describe("TodoLoop native transcript presentation", () => {
 		dataFirst => {
 			const ctx = createInteractiveModeContext({ settings: Settings.isolated(), hideToolActivity: true });
 			cfgDisplayMode.set(ctx.settings, "compact");
-			setChatTranscriptDisplayPreferences({ hideToolActivity: true, compactToolActivity: true });
 			ctx.chatContainer.setToolActivityVisible(false);
 			const controller = new InputController(ctx);
 			const presentation = new TodoLoopPresentation(ctx, initial);

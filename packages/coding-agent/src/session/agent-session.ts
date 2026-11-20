@@ -333,10 +333,13 @@ import {
 	nextModelStage,
 	type WakeSources,
 } from "./agent-session-events";
-import { type AgentViewSession, isLocalAgentSession, type LiveToolOutputSnapshot } from "./agent-session-handle";
+import {
+	type AgentViewSession,
+	isLocalAgentSession,
+	type LiveToolOutputPreview,
+	type LiveToolOutputSnapshot,
+} from "./agent-session-handle";
 import { LiveToolOutputState } from "./live-tool-output";
-import { LatestTurnFileChanges, type TurnFileChanges } from "./latest-turn-file-changes";
-import type { FileChangeReport } from "../tools";
 import {
 	asyncJobSnapshot,
 	asyncJobTree,
@@ -1207,7 +1210,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	readonly #liveToolOutput = new LiveToolOutputState();
 	#modelStage: ModelStage | null = null;
-	#latestTurnFileChanges?: LatestTurnFileChanges;
 	#runStateListeners = new Set<(state: "running" | "idle", at: number) => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
 	#runStartedAt: number | undefined;
@@ -4283,9 +4285,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
 		this.#modelStage = nextModelStage(this.#modelStage, event);
-		if (event.type === "message_start" && event.message.role === "user") {
-			this.#latestTurnFileChanges?.start(this.sessionId);
-		}
 		// Listener array is copy-on-write (see `subscribe`), so iterating the
 		// current array is safe against (un)subscribes made by a listener.
 		for (const l of this.#eventListeners) {
@@ -4314,7 +4313,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#runStartedAt = undefined;
 			this.#modelStage = null;
 		} else {
-			if (this.#runStartedAt === undefined) this.#latestTurnFileChanges?.start(this.sessionId);
 			this.#runStartedAt ??= at;
 		}
 		this.#liveToolOutput.setRunActive(state === "running", at);
@@ -6574,21 +6572,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return [...this.#activeToolExecutionUpdates.values()];
 	}
 
+	getLiveToolOutputPreview(): LiveToolOutputPreview | undefined {
+		return this.#liveToolOutput.preview();
+	}
+
+	getLiveToolOutputCall(toolCallId: string): LiveToolOutputSnapshot | undefined {
+		return this.#liveToolOutput.get(toolCallId);
+	}
+
 	getLiveToolOutputSnapshot(): readonly LiveToolOutputSnapshot[] {
 		return this.#liveToolOutput.snapshot();
 	}
 
 	get modelStage(): ModelStage | null {
 		return this.#modelStage;
-	}
-
-	/** Opt in from the terminal before the next write; never replay edits from chat history. */
-	getLatestTurnFileChanges(): TurnFileChanges {
-		return (this.#latestTurnFileChanges ??= new LatestTurnFileChanges()).get(this.sessionId);
-	}
-
-	recordLatestTurnFileChange(change: FileChangeReport): void {
-		if (this.#runActive) this.#latestTurnFileChanges?.record(this.sessionId, change);
 	}
 
 	/**
