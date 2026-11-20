@@ -1229,7 +1229,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 						frame => nativeDraftMatches(frame.screen, draft, frame.cursor) && matches(frame.screen),
 						30_000,
 					);
-				type Cell = { x: number; y: number; char: string; fg: string; bold: boolean; dim: boolean };
+				type Cell = { x: number; y: number; char: string; fg: string; bg: string; bold: boolean; dim: boolean };
 				const readRuns = async (text: string, ...markers: string[]) => {
 					const lines = text.split("\n");
 					const positions = markers.map(marker => {
@@ -1265,6 +1265,26 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 					expect(label![0]!.x).toBe(header![0]!.x);
 					expect(intent![0]!.x).toBe(label![0]!.x + Bun.stringWidth(bashRunning) + 2);
 					return { label: label!, intent: intent! };
+				};
+				const expectAlignedGutter = async (screenText: string, marker: string) => {
+					const lines = screenText.split("\n");
+					const header = lines.findIndex(line => line.trimStart().startsWith("运行中"));
+					const body = lines.findIndex(line => line.includes(marker));
+					const status = lines.findIndex(line => line.trimStart().startsWith(bashRunning));
+					expect(header).toBeGreaterThanOrEqual(0);
+					expect(body).toBeGreaterThan(header);
+					expect(status).toBeGreaterThan(body);
+					const raw = await tui("cells", "0", `${header}`, "2", `${status - header + 1}`, "--json");
+					const { data } = JSON.parse(raw) as { data: { cells: Cell[] } };
+					const at = (x: number, y: number) => {
+						const cell = data.cells.find(cell => cell.x === x && cell.y === y);
+						if (!cell) throw new Error(`Missing PTY cell (${x}, ${y})`);
+						return cell.bg;
+					};
+					for (const y of [header, body]) {
+						expect(at(0, y)).toBe(at(0, status));
+						expect(at(1, y)).not.toBe(at(0, y));
+					}
 				};
 				await tui("submit", prompt);
 				await tui("type", draft);
@@ -1339,6 +1359,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				for (const marker of output.slice(-5)) expect(tail.screen).toContain(marker);
 				expect(tail.screen).not.toContain(output.at(-6)!);
 				await bashRuns(tail.screen, finalTail);
+				await expectAlignedGutter(tail.screen, finalTail);
 				expectVisibleDraft(tail, draft, wide, height);
 
 				const sweeps = new Set<string>();
@@ -1363,6 +1384,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 						text.includes(finalTail),
 				);
 				await bashRuns(narrowTail.screen, finalTail);
+				await expectAlignedGutter(narrowTail.screen, finalTail);
 				expectVisibleDraft(narrowTail, draft, narrow, height);
 				exit.resolve();
 				startThinking.resolve();

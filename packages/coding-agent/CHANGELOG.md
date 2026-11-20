@@ -66,6 +66,7 @@
 
 ### Fixed
 
+- Compact tool output backgrounds now start in the same column as the two activity rows, leaving the shared left gutter clear.
 - Compact Output expires from its own session's run end without reappearing in later turns; changing the display mode or focused agent no longer revives stale thinking.
 - Compact mode restores typing when an expanded diff disappears, includes formatted batch writes and focused worker changes, flags interrupted file diffs, and shows model wait when switching back before the first response.
 - Compact model and Agent labels use the upstream work indicator's more visible shimmer and repaint cadence, starting and stopping with the status spinner.

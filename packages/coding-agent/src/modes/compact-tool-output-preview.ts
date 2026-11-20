@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { col, span, text } from "@oh-my-pi/pi-tui/native/describe";
+import { col, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { plainText, spansLine } from "@oh-my-pi/pi-tui/native/spans";
 import { backgroundChrome } from "@oh-my-pi/pi-tui/native/tone";
@@ -369,7 +369,8 @@ export class CompactToolOutputPreview implements Component {
 		const header = this.#header(width);
 		if (!header) return [];
 		const bg = getStateBgColor(PREVIEW_BLOCK_STATE[header.state]);
-		const paint = (row: string) => padToWidth(header.left + row, width, value => theme.bgFill(bg, value));
+		const paint = (row: string) =>
+			header.left + padToWidth(row, header.contentWidth, value => theme.bgFill(bg, value));
 		const { lines, diagnosticCount } = this.#body(header);
 		return [
 			paint(spansLine(header.spans)),
@@ -384,14 +385,13 @@ export class CompactToolOutputPreview implements Component {
 		if (!header) return { k: "rows", p: { cols: cx.cols, lines: [] } };
 		const tone = backgroundChrome(getStateBgColor(PREVIEW_BLOCK_STATE[header.state])).tone;
 		const { lines, diagnosticCount } = this.#body(header);
+		const paint = (spans: TspSpan[]) => {
+			const content = text(spans, { wrap: "none", tone, grow: 1 });
+			return header.left ? row([text(header.left), content]) : content;
+		};
 		return col([
-			text([span(header.left), ...header.spans], { wrap: "none", tone }),
-			...lines.map((line, i) =>
-				text([span(header.left), span(line, i < diagnosticCount ? "error strong" : "toolOutput")], {
-					wrap: "none",
-					tone,
-				}),
-			),
+			paint(header.spans),
+			...lines.map((line, i) => paint([span(line, i < diagnosticCount ? "error strong" : "toolOutput")])),
 		]);
 	}
 }
