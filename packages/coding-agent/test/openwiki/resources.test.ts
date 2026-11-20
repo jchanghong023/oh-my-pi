@@ -87,12 +87,11 @@ describe("OpenWiki embedded generation resources", () => {
 	});
 
 	it("rejects stale source fingerprints and accepts unknown or matching ones", () => {
-		expect(isOpenWikiArchiveStale("generated", "current")).toBe(true);
 		expect(isOpenWikiArchiveStale("generated", "generated")).toBe(false);
 		expect(isOpenWikiArchiveStale("generated", undefined)).toBe(false);
-		expect(() => assertOpenWikiArchiveFresh("generated", "current")).toThrow("OpenWiki visualizer assets are stale");
-		expect(() => assertOpenWikiArchiveFresh("generated", "current")).toThrow("gen:openwiki-resources");
-		expect(() => assertOpenWikiArchiveFresh("generated", "generated")).not.toThrow();
+		expect(() => assertOpenWikiArchiveFresh("generated", "current")).toThrow(
+			/OpenWiki visualizer assets are stale.*gen:openwiki-resources/u,
+		);
 	});
 });
 

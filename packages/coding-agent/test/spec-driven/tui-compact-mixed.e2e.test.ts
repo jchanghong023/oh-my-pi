@@ -715,28 +715,11 @@ test("resumed compact transcript stays in place while successive tools finish an
 			{
 				screenDiagnostics: true,
 				configuration: { display: { mode: "compact" }, read: { toolResultPreview: true } },
-				setup: async (cwd, _agentDir, env) => {
+				setup: async cwd => {
 					await Promise.all([
 						Bun.write(path.join(cwd, "jump-first.txt"), "JUMP_FIRST_EVIDENCE\n"),
 						Bun.write(path.join(cwd, "jump-second.txt"), "JUMP_EVIDENCE\n"),
 					]);
-					// This regression measures resumed rendering, not cold resource
-					// extraction. Prepare only its own isolated profile via the real CLI.
-					const preparation = Bun.spawn(
-						[
-							Bun.which("bun") ?? process.execPath,
-							path.resolve(import.meta.dir, "../../src/cli.ts"),
-							"openspec",
-							"--version",
-						],
-						{ cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-					);
-					const [stdout, stderr, code] = await Promise.all([
-						new Response(preparation.stdout).text(),
-						new Response(preparation.stderr).text(),
-						preparation.exited,
-					]);
-					if (code !== 0) throw new Error(`Native resource preparation exited ${code}:\n${stdout}\n${stderr}`);
 				},
 				async reply(request) {
 					if (!request.tools?.some(tool => tool.function?.name.replace(/^_/u, "") === "read"))
