@@ -426,8 +426,8 @@ test("compact mixed long session preserves input, tool effects and peer messages
 					expect(frame.screen).toContain("MIXED_DECISION");
 					expect(frame.screen).toContain("Proceed");
 				});
-				// Proceed is preselected. Confirm it, then submit from the separate Submit stop.
-				await tui("key", "press", "Enter", "Enter");
+				// Enter submits the single-question form without sending the composer draft.
+				await tui("key", "press", "Enter");
 				// Leave room for the transcript beside the long draft and both child docks.
 				await tui("resize", "120", "48");
 				await screen.waitForVisualHandoff();

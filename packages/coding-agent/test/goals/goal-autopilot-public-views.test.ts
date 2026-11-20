@@ -217,13 +217,12 @@ describe("Goal public management and history views", () => {
 			auth.close();
 		}
 		const views = await queryPublicHistory(config, saved.file);
-		// Observe the real cold RPC restoration before the independent view
-		// assertions, so a lost persisted mode flag is reported directly.
+		// Cold RPC retains the goal identity and paused status, but not local mode metadata.
 		expect(views.state.goal).toMatchObject({
-			autoOrchestrate: true,
 			enabled: false,
 			goal: { id: goal(saved.entries).id, objective, status: "paused" },
 		});
+		expect(views.state.goal).not.toHaveProperty("autoOrchestrate");
 		const notice = notices(saved.entries);
 		expect(notice).toHaveLength(1);
 		const originalNotice = notice[0]!;
