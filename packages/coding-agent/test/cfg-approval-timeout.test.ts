@@ -66,7 +66,10 @@ describe("cfg:// approval prompt wiring", () => {
 		await fs.rm(tmp, { recursive: true, force: true });
 	});
 
-	async function startMode(askTimeout: number | undefined, mcpManager?: MCPManager): Promise<Array<number | undefined>> {
+	async function startMode(
+		askTimeout: number | undefined,
+		mcpManager?: MCPManager,
+	): Promise<Array<number | undefined>> {
 		testSession = await createTestSession(
 			askTimeout === undefined ? {} : { settingsOverrides: { "ask.timeout": askTimeout } },
 		);

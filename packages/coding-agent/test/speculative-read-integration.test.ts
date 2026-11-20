@@ -59,73 +59,70 @@ function assistant(content: AssistantMessage["content"], stopReason: AssistantMe
 }
 
 describe("enabled speculative local reads", () => {
-	it.each([true, false])(
-		"honors speculative execution=%s and commits one normal result",
-		async enabled => {
-			const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-read-"));
-			temporaryDirectories.push(directory);
-			await fs.writeFile(path.join(directory, "note.txt"), "content");
-			const session = createSession(directory, enabled);
-			const tool = new ReadTool(session);
-			const finalized = tool.speculation.finalized;
-			if (!finalized) throw new Error("read tool has no finalized speculation policy");
-			const execute = finalized.execute;
-			const started = Promise.withResolvers<void>();
-			let providerDone = false;
-			let startedBeforeProviderDone = false;
-			finalized.execute = async (context, signal) => {
-				startedBeforeProviderDone = !providerDone;
-				started.resolve();
-				return await execute(context, signal);
-			};
-			const config = createSpeculativeToolExecutionConfig(session.settings, session, { hasHandlers: () => false });
-			const mock = createMockModel({ responses: [] });
-			let turn = 0;
-			const streamFn = (_model: unknown, _context: Context) => {
-				const response = new AssistantMessageEventStream();
-				void (async () => {
-					if (turn++ === 0) {
-						const toolCall = {
-							type: "toolCall" as const,
-							id: "read-1",
-							name: "read",
-							arguments: { path: "note.txt" },
-						};
-						const partial = assistant([toolCall], "toolUse");
-						response.push({ type: "start", partial });
-						response.push({ type: "toolcall_start", contentIndex: 0, partial });
-						response.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
-						if (enabled) await started.promise;
-						providerDone = true;
-						response.push({ type: "done", reason: "toolUse", message: partial });
-						return;
-					}
-					const partial = assistant([{ type: "text", text: "done" }], "stop");
+	it.each([true, false])("honors speculative execution=%s and commits one normal result", async enabled => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-read-"));
+		temporaryDirectories.push(directory);
+		await fs.writeFile(path.join(directory, "note.txt"), "content");
+		const session = createSession(directory, enabled);
+		const tool = new ReadTool(session);
+		const finalized = tool.speculation.finalized;
+		if (!finalized) throw new Error("read tool has no finalized speculation policy");
+		const execute = finalized.execute;
+		const started = Promise.withResolvers<void>();
+		let providerDone = false;
+		let startedBeforeProviderDone = false;
+		finalized.execute = async (context, signal) => {
+			startedBeforeProviderDone = !providerDone;
+			started.resolve();
+			return await execute(context, signal);
+		};
+		const config = createSpeculativeToolExecutionConfig(session.settings, session, { hasHandlers: () => false });
+		const mock = createMockModel({ responses: [] });
+		let turn = 0;
+		const streamFn = (_model: unknown, _context: Context) => {
+			const response = new AssistantMessageEventStream();
+			void (async () => {
+				if (turn++ === 0) {
+					const toolCall = {
+						type: "toolCall" as const,
+						id: "read-1",
+						name: "read",
+						arguments: { path: "note.txt" },
+					};
+					const partial = assistant([toolCall], "toolUse");
 					response.push({ type: "start", partial });
-					response.push({ type: "done", reason: "stop", message: partial });
-				})();
-				return response;
-			};
+					response.push({ type: "toolcall_start", contentIndex: 0, partial });
+					response.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
+					if (enabled) await started.promise;
+					providerDone = true;
+					response.push({ type: "done", reason: "toolUse", message: partial });
+					return;
+				}
+				const partial = assistant([{ type: "text", text: "done" }], "stop");
+				response.push({ type: "start", partial });
+				response.push({ type: "done", reason: "stop", message: partial });
+			})();
+			return response;
+		};
 
-			const messages = await agentLoop(
-				[{ role: "user", content: "Read the note", timestamp: Date.now() }],
-				{ systemPrompt: [""], messages: [], tools: [tool] },
-				{ model: mock.model, convertToLlm: identityConverter, speculativeToolExecution: config },
-				undefined,
-				streamFn,
-			).result();
+		const messages = await agentLoop(
+			[{ role: "user", content: "Read the note", timestamp: Date.now() }],
+			{ systemPrompt: [""], messages: [], tools: [tool] },
+			{ model: mock.model, convertToLlm: identityConverter, speculativeToolExecution: config },
+			undefined,
+			streamFn,
+		).result();
 
-			expect(startedBeforeProviderDone).toBe(enabled);
-			const results = messages.filter(message => message.role === "toolResult");
-			expect(results).toHaveLength(1);
-			expect(results[0]).toMatchObject({
-				toolCallId: "read-1",
-				toolName: "read",
-				isError: false,
-				content: [expect.objectContaining({ type: "text", text: expect.stringContaining("content") })],
-			});
-		},
-	);
+		expect(startedBeforeProviderDone).toBe(enabled);
+		const results = messages.filter(message => message.role === "toolResult");
+		expect(results).toHaveLength(1);
+		expect(results[0]).toMatchObject({
+			toolCallId: "read-1",
+			toolName: "read",
+			isError: false,
+			content: [expect.objectContaining({ type: "text", text: expect.stringContaining("content") })],
+		});
+	});
 
 	it("discards a speculative read when the provider request is cancelled", async () => {
 		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-read-abort-"));

@@ -30,8 +30,6 @@ export interface AvailableCommandsSession {
 }
 
 export interface AvailableCommandsOptions {
-	/** Include terminal-only handlers when discovering commands for the TUI. */
-	includeTuiOnlyBuiltins?: boolean;
 	/** Include RPC host adapters without changing the ACP command surface. */
 	includeRpcBuiltins?: boolean;
 }
@@ -61,10 +59,7 @@ export async function buildAvailableSlashCommands(
 	};
 
 	for (const command of BUILTIN_SLASH_COMMANDS_INTERNAL) {
-		const executable =
-			command.handle ??
-			(options.includeRpcBuiltins ? command.handleRpc : undefined) ??
-			(options.includeTuiOnlyBuiltins ? command.handleTui : undefined);
+		const executable = command.handle ?? (options.includeRpcBuiltins ? command.handleRpc : undefined);
 		if (!executable) {
 			// RPC resolves every registry name before trying custom or file
 			// commands, so skipped names and aliases stay reserved.

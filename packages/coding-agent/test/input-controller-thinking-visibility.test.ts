@@ -125,14 +125,6 @@ describe("InputController thinking visibility", () => {
 		});
 	}
 
-	it("does not let the native effort picker bypass exclusive WebGUI mode", () => {
-		mode.isWebGuiModeActive = () => true;
-		const setThinkingLevel = vi.spyOn(session, "setThinkingLevel");
-		controller.setupKeyHandlers();
-		mode.editor.onSetThinkingLevel?.("low");
-		expect(setThinkingLevel).not.toHaveBeenCalled();
-	});
-
 	it("toggles live thinking visibility without modifying stored reasoning", async () => {
 		cfgExpandThinkingBlocks.set(session.settings, true);
 		const history = assistant([

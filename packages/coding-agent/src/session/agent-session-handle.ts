@@ -156,13 +156,9 @@ export interface AgentSessionHandle {
 	steer(text: string, images?: ImageContent[], options?: SteerOptions): Promise<void>;
 	/** Abort the current operation and wait for the agent to become idle. */
 	abort(options?: {
-		/** Settle this session's owned work without disposing the reusable session. */
-		strict?: boolean;
 		goalReason?: "interrupted" | "internal";
 		reason?: string;
 		preserveCompaction?: boolean;
-		/** Drop queued inputs on the session's owning thread before aborting. */
-		clearQueuedInputs?: boolean;
 		deliverQueuedMessages?: boolean;
 	}): Promise<void>;
 	/** Replace the pooled-turn yield contract. */

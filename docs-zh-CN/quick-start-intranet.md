@@ -107,11 +107,11 @@ Linux offline 额外提醒项目持久材料及必要备份使用获准的 NFS�
 
 普通模式不追加上述规则，Windows offline 不追加 Linux/csh 段落；不改变 Shell 执行器或用户配置。提示词不替代实际网络隔离、存储权限和公司实机验证。
 
-### WebGUI／Sketch 手动打开网页
+### `/sketch` 手动打开网页
 
-`OMP_OFFLINE` 启用时，`/webgui`、`omp webgui` 和原生 `/sketch` 不自动启动浏览器，适用于所有平台和 Shell。请在浏览器中手动打开 OMP 显示的完整地址；OMP 不读取 csh／tcsh 启动文件或调用 `ff` 别名，也不要求配置别名。非 offline 保留系统默认浏览器打开方式，WebGUI 可用 `OMP_WEBGUI_NO_OPEN=1` 跳过自动打开。
+`OMP_OFFLINE` 启用时，原生 `/sketch` 不自动启动浏览器，适用于所有平台和 Shell。请在浏览器中手动打开 OMP 显示的完整地址；OMP 不读取 csh／tcsh 启动文件或调用 `ff` 别名，也不要求配置别名。非 offline 保留系统默认浏览器打开方式。
 
-Linux offline 环境进入 `/webgui`、启动 `omp webgui`，或打开原生 `/sketch` 后，仍会自动尝试复制完整的本机回环地址，包括路径与查询参数，可在浏览器地址栏粘贴。其他环境不自动覆盖剪贴板。
+Linux offline 环境打开原生 `/sketch` 后，仍会自动尝试复制完整的本机回环地址，包括路径与查询参数，可在浏览器地址栏粘贴。其他环境不自动覆盖剪贴板。
 
 复制复用 OMP 的终端 OSC 52 和原生 X11 剪贴板，不需要另装 `xclip`／`xsel`。公司 SSH／Exceed 是否能粘贴到 Windows 取决于终端剪贴板权限和 X11 剪贴板共享设置；界面提示“已尝试复制”不等于实机已确认。不能粘贴时仍可手动复制显示的完整地址；复制不会建立端口转发，`127.0.0.1` 必须指向运行 OMP 的机器。
 
@@ -148,7 +148,6 @@ Linux offline 环境进入 `/webgui`、启动 `omp webgui`，或打开原生 `/s
 | `/knowledge`                        | 查询已导入的公司资料                                 |
 | `/team 需求`                   | 多代理独立调查、交叉审查并汇总方案，只读             |
 | `/goal-autopilot 目标`         | 持久目标、自动编排与无人值守要求，见第 4.7 节        |
-| `/webgui`                      | 进入 / 退出浏览器会话模式，见第 4.8 节              |
 | `/advisor on` / `/advisor off` | 开启 / 关闭第二模型复审，默认逐轮，频率可配置        |
 | `/skill:技能名 任务`           | 调用本地技能，从补全中选择技能名                     |
 | `/todo` / `/hub`               | 查看待办进度 / 子代理活动                            |
@@ -481,11 +480,7 @@ OMP 按要求先确定范围与统一规则，再拆分独立工作项、排队�
 
 OMP 终端支持此命令。完整契约见 [Goal 自动编排需求](../openspec/specs/goal-autopilot/spec.md)，实现与验收边界见[历史验证记录](verification-history.md)。
 
-### 4.8 `/webgui`：浏览器会话
-
-在当前 TUI 输入 `/webgui` 进入浏览器会话，期间普通 TUI 输入不与网页并行执行。也可在系统终端运行 `omp webgui`，然后在网页显式打开或创建项目、新建或继续原生会话。两种入口均可在终端再次输入 `/webgui` 退出；关闭网页不会停止服务。使用终端显示的完整地址；内网访问、端口和中转边界见 [WebGUI 内网访问说明](webgui-http-access.md)。
-
-### 4.9 OpenSpec：独立需求闭环
+### 4.8 OpenSpec：独立需求闭环
 
 内置 OpenSpec 2.0 的全部 12 项 `openspec-*` Skill 在任意目录按 OMP 原生机制提供名称补全、`/skill:<name>` 显式调用和 `skill://<name>` 按需读取；其中六项 core Skill 默认出现在模型自动发现索引，其余六项仅供显式调用。项目／用户同名 Skill 继续沿用原有覆盖优先级。实际操作仍受用户授权和项目规则约束，发现 Skill 不会自动初始化项目。
 
@@ -501,7 +496,7 @@ SDD／计划执行脚本以当前工作目录所属 Git 仓库为准，不按计
 
 Superpowers 仅交付完整技能及其引用材料／运行脚本、许可证与 ESM／版本元数据，不携带 Claude、Codex、Pi、OpenCode 等其他宿主的插件、启动 hooks 或品牌图片。全部 15 个技能继续仅供显式调用，用户／项目同名覆盖与资源授权边界不变；后续同步也不整仓复制上游资源。
 
-### 4.10 内网会话协作：按登录用户名加入
+### 4.9 内网会话协作：按登录用户名加入
 
 仅在 Relay、房主与同事的 OMP 进程均启用 `OMP_OFFLINE` 时使用本流程；非 offline 不启用内网 Relay 服务或用户名登记／加入，原有协作行为不变。以下面向 CentOS 7／tcsh 使用者，不代表已完成 CentOS 7 x64 最终独立发行产物实机验收。
 

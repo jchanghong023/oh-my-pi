@@ -174,14 +174,12 @@ describe("AgentSession queued drain pending-budget compaction (G02)", () => {
 		expect(session.agent.peekFollowUpQueue()).toEqual([]);
 	});
 
-	// Steering still requests the next model turn when ordinary follow-up draining is disabled.
-	it("compacts before draining steering at a stop boundary with follow-up auto-drain off", async () => {
+	it("compacts before draining steering at a stop boundary", async () => {
 		const queuedPrompt = `queued steering ${"s".repeat(20_000)}`;
 		let calls = 0;
 		await createSession([
 			() => {
 				calls++;
-				session.agent.followUpAutoDrain = false;
 				session.agent.steer({ role: "user", content: queuedPrompt, timestamp: Date.now() });
 				return { content: ["first done"], usage: { input: 29_900, output: 12 } };
 			},
@@ -242,35 +240,6 @@ describe("AgentSession queued drain pending-budget compaction (G02)", () => {
 			}),
 		);
 	});
-
-	// A pending input is not budgeted until the loop is actually allowed to consume it.
-	it.each(["held-followUp", "held-steering", "manual-followUp"] as const)(
-		"does not compact or consume %s at the stop boundary",
-		async mode => {
-			const queuedPrompt = `parked input ${"p".repeat(20_000)}`;
-			let calls = 0;
-			await createSession([
-				() => {
-					calls++;
-					session.agent.queuedMessagesHeld = mode !== "manual-followUp";
-					session.agent.followUpAutoDrain = mode !== "manual-followUp";
-					const message = { role: "user" as const, content: queuedPrompt, timestamp: Date.now() };
-					if (mode === "held-steering") session.agent.steer(message);
-					else session.agent.followUp(message);
-					return { content: ["first done"], usage: { input: 29_900, output: 12 } };
-				},
-			]);
-
-			await session.prompt("kick off");
-
-			expect(calls).toBe(1);
-			expect(session.sessionManager.getBranch().filter(entry => entry.type === "compaction")).toEqual([]);
-			const queued =
-				mode === "held-steering" ? session.agent.peekSteeringQueue() : session.agent.peekFollowUpQueue();
-			expect(queued).toHaveLength(1);
-			expect(queued[0]).toMatchObject({ role: "user", content: queuedPrompt });
-		},
-	);
 
 	it("does not compact a below-threshold stop boundary when the queue is empty", async () => {
 		let compactionEntries = 0;

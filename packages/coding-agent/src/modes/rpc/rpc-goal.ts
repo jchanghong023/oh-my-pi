@@ -56,8 +56,6 @@ export class RpcGoalController {
 	readonly #session: RpcGoalSession;
 	/** Whether goal mode added `goal` to the live roster; exit strips only that tool. */
 	#goalToolAddedByMode = false;
-	/** Invalidates release callbacks when an interview ends or another one starts. */
-	#interviewGeneration = 0;
 	/** A newly created idle goal may start its first turn even with blocked session todos. */
 	#initialContinuationGoalId: string | undefined;
 	/** Continuation turns submitted whose run has not reached its `agent_end`. */
@@ -136,24 +134,6 @@ export class RpcGoalController {
 	notifyHostAction(): void {
 		this.#resetContinuation();
 		this.#scheduleContinuation();
-	}
-
-	/** Expose the real goal tool for an interview; release only the tool this mode owns. */
-	async prepareInterview(): Promise<() => Promise<void>> {
-		await this.settled();
-		this.#assertCanEnter();
-		if (this.#session.getGoalModeState()?.goal) {
-			throw new Error("Resume or drop the current goal before starting an interview.");
-		}
-		const enabledTools = this.#session.getEnabledToolNames();
-		if (!enabledTools.includes("goal")) {
-			await this.#session.setActiveToolsByName([...enabledTools, "goal"]);
-			this.#goalToolAddedByMode = true;
-		}
-		const generation = ++this.#interviewGeneration;
-		return async () => {
-			if (this.#interviewGeneration === generation && !this.#session.getGoalModeState()?.goal) await this.#exit();
-		};
 	}
 
 	get #state(): RpcGoalResult {
@@ -337,7 +317,6 @@ export class RpcGoalController {
 
 	/** Undo only goal mode's own tool change, preserving the live roster. Idempotent. */
 	async #exit(): Promise<void> {
-		this.#interviewGeneration++;
 		const ownedGoalTool = this.#goalToolAddedByMode;
 		this.#goalToolAddedByMode = false;
 		this.#initialContinuationGoalId = undefined;

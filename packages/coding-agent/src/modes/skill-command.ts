@@ -71,7 +71,7 @@ export function isKnownSkillCommand(ctx: SkillCommandHost, text: string): boolea
 
 /** Build the user-attributed custom message for a registered `/skill:<name>` command. */
 export async function buildSkillCommandPrompt(
-	ctx: Pick<SkillCommandHost, "skillCommands" | "session">,
+	ctx: SkillCommandHost,
 	text: string,
 	streamingBehavior: "steer" | "followUp",
 	images?: ImageContent[],

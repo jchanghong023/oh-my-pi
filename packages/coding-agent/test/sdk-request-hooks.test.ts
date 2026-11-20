@@ -19,6 +19,7 @@ it("dispatches with explicit SDK authorization and observes the same request's t
 		const model = createMockModel({
 			handler: { content: ["Provider reply"], responseHeaders: { "x-request-id": "request-1" } },
 		});
+		auth.keys.setRuntime(model.provider, "stored-key");
 		const metadata: Array<{ id: string | undefined; signal: AbortSignal | undefined }> = [];
 		const terminal: Array<{ message: unknown; modelId: string; signal: AbortSignal | undefined }> = [];
 		const settings = Settings.isolated({ "compaction.enabled": false, "todo.enabled": false });

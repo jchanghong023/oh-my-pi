@@ -239,15 +239,8 @@ export interface InteractiveModeContext {
 	// Session access
 	session: AgentSession;
 	sessionManager: SessionManager;
-	/** Original native session owned by this host, independent of the viewed conversation. */
-	readonly rootSession: AgentSession;
 	/** Dispose long-lived native resources only during real host shutdown. */
 	registerHostShutdown(dispose: () => Promise<void>): () => void;
-	/** Exclusive terminal input owner installed by `/webgui`. */
-	isWebGuiModeActive?: () => boolean;
-	handleWebGuiModeInput?: (data: string) => boolean;
-	handleWebGuiModeSubmit?: (text: string) => Promise<boolean>;
-	getWebGuiEntryBlocker?: () => string | undefined;
 	/** Re-resolve the CLI/settings model scope after a successful OAuth login. */
 	refreshScopedModelsAfterLogin?: () => Promise<void>;
 	/** The current session display name / title. */
@@ -466,9 +459,6 @@ export interface InteractiveModeContext {
 
 	// Extension UI integration
 	setToolUIContext(uiContext: ExtensionUIContext, hasUI: boolean): void;
-	/** Check browser override ownership without changing the enriched TUI tool context. */
-	ownsToolUIContext?(uiContext: ExtensionUIContext): boolean;
-	initializeWebGuiNativeHost?(): void;
 	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void;
 	/** Stack extension autocomplete behavior on top of the built-in editor provider. */
 	addAutocompleteProvider(factory: AutocompleteProviderFactory): void;

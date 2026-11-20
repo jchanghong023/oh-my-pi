@@ -18,11 +18,8 @@
 |add-fork-review-workflow|proposal|fork-review、personal-commands|design、tasks|
 |add-intranet-username-collab|proposal|fork-runtime、intranet-collaboration、personal-commands|design、tasks|
 |add-todoloop-command|proposal、tasks|personal-commands|design|
-|refactor-dev-webgui-project-host|proposal|personal-commands|design、tasks|
 |refine-compact-output-preview|proposal|tui-presentation|design、tasks|
 |revamp-compact-activity-dock|proposal|tui-presentation|design、tasks|
-
-`align-zcode-3-18-visual-baseline` 没有显式 `.openspec.yaml`；迁移未为其创建或修改元数据，沿用根配置的 `spec-driven` 默认值。该变更保留 `zcode-visual-baseline` 增量，当前适配范围见 [OMP 与 ZCode 视觉适配规则](../docs/design/omp-zcode-visual-adaptation.md)。
 
 ## 使用影响
 

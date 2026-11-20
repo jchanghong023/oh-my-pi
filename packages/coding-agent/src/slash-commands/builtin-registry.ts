@@ -25,7 +25,6 @@ import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
 import { BUILTIN_SKETCH_SLASH_COMMANDS } from "./builtin-sketch";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
-import { BUILTIN_WEBGUI_SLASH_COMMANDS } from "./builtin-webgui";
 import { parseSlashCommand } from "./helpers/parse";
 import type {
 	BuiltinSlashCommand,
@@ -57,7 +56,6 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_LIFECYCLE_SLASH_COMMANDS,
 	...BUILTIN_MARKETPLACE_SLASH_COMMANDS,
 	...BUILTIN_SKILLS_SLASH_COMMANDS,
-	...BUILTIN_WEBGUI_SLASH_COMMANDS,
 	...BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS,
 	...JCH_SLASH_COMMANDS,
 	...BUILTIN_CONTROL_SLASH_COMMANDS,

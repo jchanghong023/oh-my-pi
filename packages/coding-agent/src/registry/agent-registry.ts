@@ -9,7 +9,6 @@
  * revival) and are only removed on explicit release/teardown.
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentSessionHandle } from "../session/agent-session-handle";
 import { AgentAwaits, type AgentAwaitsApi } from "./agent-awaits";
@@ -184,26 +183,9 @@ export interface AgentRegistryApi {
 
 export class AgentRegistry implements AgentRegistryApi {
 	static #global: AgentRegistryApi | undefined;
-	static readonly #scope = new AsyncLocalStorage<AgentRegistryApi>();
 
-	/** Bind legacy lookups to an embedded session tree, including its asynchronous work. */
-	static runScoped<T>(registry: AgentRegistryApi, fn: () => T): T {
-		return AgentRegistry.#scope.run(registry, fn);
-	}
-
-	static scoped(): AgentRegistryApi | undefined {
-		return AgentRegistry.#scope.getStore();
-	}
-
-	/** Compare the installed singleton without creating it or consulting the current scope. */
-	static isProcessGlobal(registry: AgentRegistryApi): boolean {
-		return AgentRegistry.#global === registry;
-	}
-
-	/** The scoped or installed registry, lazily a local registry unless a worker installed a proxy. */
+	/** The installed registry, lazily a local registry unless a worker installed a proxy. */
 	static global(): AgentRegistryApi {
-		const scoped = AgentRegistry.scoped();
-		if (scoped) return scoped;
 		if (!AgentRegistry.#global) {
 			AgentRegistry.#global = new AgentRegistry();
 		}

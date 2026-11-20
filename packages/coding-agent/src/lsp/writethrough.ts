@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { isEnoent, isRecord, logger, untilAborted } from "@oh-my-pi/pi-utils";
 import type { BunFile } from "bun";
-import { withFileMutationLocks } from "../edit/file-rewind";
 import { isPermissionDeniedError, writeFileWithFallback } from "../tools/file-write-fallback";
 import {
 	beginPendingDiskWrite,
@@ -164,7 +164,7 @@ interface PendingWritethrough {
 	changeType: FileChangeType;
 	/**
 	 * The bytes this entry committed. A flush reads under mutation admission and
-	 * skips post-processing when those bytes changed, including a session rewind.
+	 * skips post-processing when a newer change has replaced those bytes.
 	 * A brokered write that denies read-back falls back to these bytes.
 	 */
 	content: string;
@@ -197,10 +197,45 @@ interface WritethroughMutationScope {
 
 const mutationScope = new AsyncLocalStorage<WritethroughMutationScope>();
 
+const mutations = new Map<string, Promise<void>>();
+
+function mutationKey(file: string): string {
+	let absolute = path.resolve(file);
+	const suffix: string[] = [];
+	for (;;) {
+		try {
+			absolute = path.join(fs.realpathSync.native(absolute), ...suffix.reverse());
+			break;
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			const parent = path.dirname(absolute);
+			if (parent === absolute) throw error;
+			suffix.push(path.basename(absolute));
+			absolute = parent;
+		}
+	}
+	return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+}
+
+/** Serialize overlapping edits, writes, and formatter commits across sessions. */
+async function withFileMutationLocks<T>(files: readonly string[], run: () => Promise<T>): Promise<T> {
+	const keys = [...new Set(files.map(mutationKey))].sort();
+	const pending = keys.map(key => mutations.get(key)).filter((value): value is Promise<void> => value !== undefined);
+	const gate = Promise.withResolvers<void>();
+	for (const key of keys) mutations.set(key, gate.promise);
+	try {
+		await Promise.all(pending);
+		return await run();
+	} finally {
+		gate.resolve();
+		for (const key of keys) if (mutations.get(key) === gate.promise) mutations.delete(key);
+	}
+}
+
 /**
- * Freeze the flush set before waiting for any mutation locks. The tool's
- * checkpoint capture and every formatter read/commit share this one admission,
- * so neither same-path reentry nor opposite-order batches acquire nested locks.
+ * Freeze the flush set before waiting for any mutation locks. A tool's
+ * before/after snapshots and the formatter's read and commit share this lock
+ * scope, so neither same-path reentry nor opposite-order batches acquire nested locks.
  */
 export async function withWritethroughMutationLocks<T>(
 	files: readonly string[],
@@ -772,8 +807,8 @@ async function flushWritethroughBatch(
 			content = entry.content;
 		}
 		if (content !== entry.content) {
-			// This queued post-processing belongs to an older mutation. Do not
-			// format a successful rewind (or another writer's replacement).
+			// This queued post-processing belongs to an older mutation.
+			// Leave the newer content untouched.
 			finalContents.set(entry.dst, content);
 			bundle?.finalize(undefined);
 			continue;

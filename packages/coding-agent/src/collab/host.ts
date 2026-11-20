@@ -23,11 +23,9 @@ import type {
 	SessionEntry as WireSessionEntry,
 } from "@oh-my-pi/pi-wire";
 import type { InteractiveModeContext } from "../modes/types";
-import type { Settings } from "../config/settings";
-import type { EventBus } from "../utils/event-bus";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
-import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import type { AgentSessionEvent } from "../session/agent-session";
 import { toWireEvent } from "../session/loop-end-wire";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import type { SessionEntry as StoredSessionEntry } from "../session/session-entries";
@@ -76,110 +74,6 @@ import {
 	serializeReplicatedEvent,
 } from "./replication-shrink";
 import { cfgCollabRelayUrl } from "./settings";
-
-export type CollabEntryListener = NonNullable<AgentSession["sessionManager"]["onEntryAppended"]>;
-
-/** Only native session capabilities; presentation is supplied by the actual owner. */
-export interface CollabHostPort {
-	readonly session: AgentSession;
-	readonly sessionManager: AgentSession["sessionManager"];
-	readonly settings: Settings;
-	readonly eventBus?: EventBus;
-	readonly subagentEventBus?: EventBus;
-	collabHost?: CollabHost;
-	readonly collabGuest?: unknown;
-	subscribeEntries(listener: CollabEntryListener): () => void;
-	promptCustomMessage?: AgentSession["promptCustomMessage"];
-	getContextUsage(): { tokens: number; contextWindow: number };
-	showStatus(message: string, options?: { dim?: boolean }): void;
-	onCollabStatus?(status: { role: "host"; participantCount: number } | null): void;
-	onPendingMessagesChanged?(): void;
-}
-
-/** Explicit native embedder entry; ordinary TUI callers keep their existing context. */
-export interface CollabNativeContext {
-	readonly nativePort: CollabHostPort;
-}
-
-interface EntrySubscriptions {
-	previous: CollabEntryListener | undefined;
-	listeners: Set<CollabEntryListener>;
-	dispatch: CollabEntryListener;
-}
-const entrySubscriptions = new WeakMap<AgentSession["sessionManager"], EntrySubscriptions>();
-
-/** Share the native single callback without one subscriber clearing another. */
-export function subscribeCollabEntries(
-	manager: AgentSession["sessionManager"],
-	listener: CollabEntryListener,
-): () => void {
-	let subscriptions = entrySubscriptions.get(manager);
-	if (!subscriptions) {
-		const listeners = new Set<CollabEntryListener>();
-		const previous = manager.onEntryAppended;
-		const dispatch: CollabEntryListener = entry => {
-			previous?.(entry);
-			for (const subscriber of listeners) subscriber(entry);
-		};
-		subscriptions = { previous, listeners, dispatch };
-		entrySubscriptions.set(manager, subscriptions);
-		manager.onEntryAppended = dispatch;
-	}
-	const subscriber: CollabEntryListener = entry => listener(entry);
-	subscriptions.listeners.add(subscriber);
-	const current = subscriptions;
-	return () => {
-		current.listeners.delete(subscriber);
-		if (current.listeners.size !== 0) return;
-		if (manager.onEntryAppended === current.dispatch) manager.onEntryAppended = current.previous;
-		if (entrySubscriptions.get(manager) === current) entrySubscriptions.delete(manager);
-	};
-}
-
-/** Internal presentation adapter; ordinary callers pass their real TUI context. */
-function tuiHostPort(ctx: InteractiveModeContext): CollabHostPort {
-	return {
-		get session() {
-			return ctx.session;
-		},
-		get sessionManager() {
-			return ctx.sessionManager;
-		},
-		get settings() {
-			return ctx.settings;
-		},
-		get eventBus() {
-			return ctx.eventBus;
-		},
-		get subagentEventBus() {
-			return ctx.subagentEventBus;
-		},
-		get collabHost() {
-			return ctx.collabHost;
-		},
-		set collabHost(host) {
-			ctx.collabHost = host;
-		},
-		get collabGuest() {
-			return ctx.collabGuest;
-		},
-		subscribeEntries: listener => subscribeCollabEntries(ctx.sessionManager, listener),
-		getContextUsage: () => {
-			const usage = ctx.statusLine.getCachedContextBreakdown();
-			return { tokens: usage.usedTokens ?? 0, contextWindow: usage.contextWindow };
-		},
-		showStatus: (message, options) => ctx.showStatus(message, options),
-		onCollabStatus: status => {
-			ctx.statusLine.setCollabStatus(status);
-			ctx.statusLine.invalidate();
-			ctx.ui.requestRender();
-		},
-		onPendingMessagesChanged: () => {
-			ctx.updatePendingMessagesDisplay();
-			ctx.ui.requestRender();
-		},
-	};
-}
 
 /** Events that change the footer state guests render. */
 const STATE_TRIGGER_EVENTS: Record<string, true> = {
@@ -332,8 +226,7 @@ export class CollabRelayUnavailableError extends Error {
 }
 
 export class CollabHost {
-	#ctx: CollabHostPort;
-	private readonly scopedAgents: boolean;
+	#ctx: InteractiveModeContext;
 	#socket: CollabSocket | null = null;
 	#link = "";
 	#webLink = "";
@@ -357,7 +250,6 @@ export class CollabHost {
 	/** Rejects the in-flight first-open wait when `stop()` overtakes `start()`. */
 	#abortStart: ((reason: Error) => void) | null = null;
 	#unsubscribe?: () => void;
-	#unsubscribeEntries?: () => void;
 	/**
 	 * Guest identity and permission, keyed by relay peer id. Drives the
 	 * participant list, notices, the status segment and the writable-peer fan-out.
@@ -391,9 +283,8 @@ export class CollabHost {
 	/** Bumped on every `message_start`; keys a streaming message's superseding updates. */
 	#messageSeq = 0;
 
-	constructor(ctx: InteractiveModeContext | CollabNativeContext, options: CollabHostOptions = {}) {
-		this.scopedAgents = "nativePort" in ctx;
-		this.#ctx = "nativePort" in ctx ? ctx.nativePort : tuiHostPort(ctx);
+	constructor(ctx: InteractiveModeContext, options: CollabHostOptions = {}) {
+		this.#ctx = ctx;
 		this.#instanceId = options.instanceId ?? randomBytes(8).toString("hex");
 		this.#generation = options.generation ?? 1;
 		this.#access = options.access ?? "control";
@@ -401,7 +292,7 @@ export class CollabHost {
 		this.#onEnded = options.onEnded;
 		// The room mirrors the session that is active when it is created; the
 		// frame guard and the registry snapshot compare against this from then on.
-		this.#sessionId = this.#ctx.sessionManager.getSessionId();
+		this.#sessionId = ctx.sessionManager.getSessionId();
 	}
 
 	/** Registry identity shared by every room this process hosts. */
@@ -588,10 +479,9 @@ export class CollabHost {
 		}
 	}
 
-	#subscribeNative(): void {
-		if (this.#unsubscribe) return;
+	#subscribeSession(): void {
 		this.#unsubscribe = this.#ctx.session.subscribe(event => {
-			// Keep the established per-loop wire shape for relay guests.
+			// Guests speak the per-loop `agent_end` wire shape (see loop-end-wire.ts).
 			const wireEvent = toWireEvent(event);
 			if (isWireAgentEvent(wireEvent)) this.#broadcastEvent(wireEvent);
 			this.#onEventForState(event);
@@ -606,21 +496,18 @@ export class CollabHost {
 				this.#busUnsubscribers.push(
 					observabilityBus.on(channel, data => {
 						if (!this.#broadcastAllowed()) return;
-						// Each progress frame carries the whole snapshot, so a slow relay only
-						// needs the newest queued frame for each subagent.
-						const frame = { t: "bus", channel, data } as const;
+						// A progress frame is the subagent's whole progress so far, so a newer one
+						// supersedes any still queued for the same subagent (as message_update does):
+						// a busy host's subagents can't fill the queue behind a slow welcome.
 						const key = channel === TASK_SUBAGENT_PROGRESS_CHANNEL ? progressKey(data) : undefined;
-						if (key) {
-							this.#socket?.sendLatest(key, frame);
-						} else {
-							this.#send(frame);
-						}
+						if (key) this.#socket?.sendLatest(key, { t: "bus", channel, data });
+						else this.#send({ t: "bus", channel, data });
 					}),
 				);
 			}
 		}
 		this.#registryUnsubscribe = AgentRegistry.global().onChange(() => this.#scheduleAgentsBroadcast());
-		this.#unsubscribeEntries = this.#ctx.subscribeEntries(entry => {
+		this.#ctx.sessionManager.onEntryAppended = entry => {
 			if (isWireSessionEntry(entry) && this.#broadcastAllowed()) {
 				const bounded = serializeReplicatedEntry(entry);
 				const shrunk = bounded.value;
@@ -636,7 +523,7 @@ export class CollabHost {
 			// Model/thinking/title changes land as entries while idle; refresh
 			// guest state promptly (debounce + JSON diff dedupe).
 			this.#scheduleStateBroadcast();
-		});
+		};
 	}
 
 	async start(relayUrl: string, webUrl = ""): Promise<void> {
@@ -741,7 +628,7 @@ export class CollabHost {
 		// Frames are mirrored only while #broadcastAllowed() holds (at least one
 		// peer); a joining guest's welcome snapshot covers everything before that.
 		// The local registry work below is independent of this.
-		this.#subscribeNative();
+		this.#subscribeSession();
 		this.#updateStatusSegment();
 
 		// Publish to the local host registry only after the relay connection
@@ -830,8 +717,7 @@ export class CollabHost {
 				.close()
 				.catch(err => logger.warn("Collab host registry withdrawal failed", { error: String(err) }));
 		}
-		this.#unsubscribeEntries?.();
-		this.#unsubscribeEntries = undefined;
+		if (this.#unsubscribe) this.#ctx.sessionManager.onEntryAppended = undefined;
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
 		for (const unsubscribe of this.#busUnsubscribers) unsubscribe();
@@ -852,7 +738,9 @@ export class CollabHost {
 		this.#peers.clear();
 		this.#socket?.close();
 		this.#socket = null;
-		this.#ctx.onCollabStatus?.(null);
+		this.#ctx.statusLine.setCollabStatus(null);
+		this.#ctx.statusLine.invalidate();
+		this.#ctx.ui.requestRender();
 		// A publication still being created when the room ended is withdrawn
 		// before stop() resolves: a successor room reuses this instance
 		// endpoint, and this room's late cleanup must never unlink the winner.
@@ -1309,13 +1197,12 @@ export class CollabHost {
 			images && images.length > 0 ? [{ type: "text", text }, ...images] : text;
 		const details: CollabPromptDetails = { from: name };
 		if (this.#ctx.session.isStreaming) {
-			this.#ctx.onPendingMessagesChanged?.();
+			this.#ctx.updatePendingMessagesDisplay();
+			this.#ctx.ui.requestRender();
 			this.#scheduleStateBroadcast();
 		}
 		try {
-			const submit = this.#ctx.promptCustomMessage ?? this.#ctx.session.promptCustomMessage;
-			const dispatched = await submit.call(
-				this.#ctx.session,
+			const dispatched = await this.#ctx.session.promptCustomMessage(
 				{
 					customType: COLLAB_PROMPT_MESSAGE_TYPE,
 					content,
@@ -1456,8 +1343,9 @@ export class CollabHost {
 
 	#buildState(): CollabSessionState {
 		const session = this.#ctx.session;
-		const breakdown = this.#ctx.getContextUsage();
-		const tokens = breakdown.tokens;
+		// Use the same anchored, provider-real count the host's status line shows.
+		const breakdown = this.#ctx.statusLine.getCachedContextBreakdown();
+		const tokens = breakdown.usedTokens ?? 0;
 		const model = session.model;
 		return {
 			isStreaming: session.isStreaming,
@@ -1512,27 +1400,6 @@ export class CollabHost {
 		}
 	}
 
-	#ownedAgent(agentId: string): AgentRef | undefined {
-		const registry = AgentRegistry.global();
-		const ref = registry.get(agentId);
-		if (!ref || ref.kind === "advisor") return undefined;
-		// Ordinary Collab retains its process-wide Agent Hub; only an explicit
-		// native workbench embedder narrows visibility/control to its session tree.
-		if (!this.scopedAgents) return ref;
-		const visited = new Set<string>();
-		let ancestor: AgentRef | undefined = ref;
-		while (ancestor && !visited.has(ancestor.id)) {
-			visited.add(ancestor.id);
-			if (
-				ancestor.session === this.#ctx.session ||
-				ancestor.session?.sessionManager.getSessionId() === this.#sessionId
-			)
-				return ref;
-			ancestor = ancestor.parentId ? registry.get(ancestor.parentId) : undefined;
-		}
-		return undefined;
-	}
-
 	#snapshotAgents(): AgentSnapshot[] {
 		return (
 			AgentRegistry.global()
@@ -1540,7 +1407,7 @@ export class CollabHost {
 				// Advisor transcripts are local observability only; never mirror them to
 				// guests (the wire AgentSnapshot kind has no `advisor`, and guests must not
 				// be able to chat/kill/revive them).
-				.filter((ref): ref is AgentRef & { kind: "main" | "sub" } => !!this.#ownedAgent(ref.id))
+				.filter((ref): ref is AgentRef & { kind: "main" | "sub" } => ref.kind !== "advisor")
 				.map(ref => ({
 					id: ref.id,
 					displayName: ref.displayName,
@@ -1579,15 +1446,11 @@ export class CollabHost {
 			this.#send({ t: "error", message: `agent ${agentId}: advisor transcripts are read-only` }, fromPeer);
 			return;
 		}
-		if (!this.#ownedAgent(agentId)) {
-			this.#send({ t: "error", message: `agent ${agentId}: outside the shared session` }, fromPeer);
-			return;
-		}
 		const allowed = () =>
 			this.#guestTrafficAllowed() &&
 			this.#guestActionsReady() &&
 			this.#peers.get(fromPeer) === peer &&
-			!!this.#ownedAgent(agentId);
+			AgentRegistry.global().get(agentId)?.kind !== "advisor";
 		const fail = (err: unknown) => {
 			logger.warn("collab agent-cmd failed", { cmd, agentId, error: String(err) });
 			this.#send({ t: "error", message: `agent ${agentId}: ${String(err)}` }, fromPeer);
@@ -1606,7 +1469,7 @@ export class CollabHost {
 					break;
 				}
 				case "kill": {
-					const ref = this.#ownedAgent(agentId);
+					const ref = AgentRegistry.global().get(agentId);
 					if (!ref || !allowed()) return;
 					if (ref.status === "running" && ref.session) {
 						await ref.session.abort({ reason: USER_INTERRUPT_LABEL });
@@ -1627,7 +1490,7 @@ export class CollabHost {
 	async #handleFetchTranscript(reqId: number, agentId: string, fromByte: number, fromPeer: number): Promise<void> {
 		const reply = (text: string, newSize: number, error?: string) =>
 			this.#send({ t: "transcript", reqId, text, newSize, error }, fromPeer);
-		const ref = this.#ownedAgent(agentId);
+		const ref = AgentRegistry.global().get(agentId);
 		if (!ref?.sessionFile || ref.kind === "advisor") {
 			reply("", fromByte, "no transcript available");
 			return;
@@ -1681,6 +1544,8 @@ export class CollabHost {
 	}
 
 	#updateStatusSegment(): void {
-		this.#ctx.onCollabStatus?.({ role: "host", participantCount: this.#peers.size + 1 });
+		this.#ctx.statusLine.setCollabStatus({ role: "host", participantCount: this.#peers.size + 1 });
+		this.#ctx.statusLine.invalidate();
+		this.#ctx.ui.requestRender();
 	}
 }

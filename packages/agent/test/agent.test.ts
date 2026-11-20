@@ -2013,7 +2013,12 @@ describe("Agent active thinking phase", () => {
 		agent.emitExternalEvent({
 			type: "message_update",
 			message,
-			assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "external reasoning", partial: message },
+			assistantMessageEvent: {
+				type: "thinking_delta",
+				contentIndex: 0,
+				delta: "external reasoning",
+				partial: message,
+			},
 		});
 		agent.emitExternalEvent({ type: "message_end", message });
 

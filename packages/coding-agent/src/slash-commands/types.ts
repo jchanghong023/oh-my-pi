@@ -62,13 +62,7 @@ export interface ParsedSlashCommand {
  */
 export type SlashCommandResult =
 	| undefined
-	| {
-			consumed: true;
-			agentInvoked?: boolean;
-			failed?: boolean;
-			/** Preserve pre-admission rejection separately from failures after execution begins. */
-			errorCode?: "invalid_params" | "execution_failed";
-	  }
+	| { consumed: true; agentInvoked?: boolean; failed?: boolean }
 	| { prompt: string; goalAutoOrchestrateInitialId?: string };
 
 /**
@@ -85,8 +79,6 @@ export interface SlashCommandRuntime {
 	cwd: string;
 	/** Native attachments supplied with this slash submission. */
 	input?: Pick<SubmittedUserInput, "images" | "imageLinks">;
-	/** Keep cwd in the session manager rather than rebinding the shared process directory. */
-	sessionScopedCwd?: boolean;
 	/** Cancellation of the host prompt/request, when supported. */
 	signal?: AbortSignal;
 	/** Actual host dialogs, including headless RPC tool UI when extensions have no UI. */

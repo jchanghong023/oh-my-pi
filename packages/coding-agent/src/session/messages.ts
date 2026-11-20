@@ -4,7 +4,7 @@
  * Extends the base AgentMessage type with coding-agent specific message types,
  * and provides a transformer to convert them to LLM-compatible messages.
  */
-import { type AgentMessage, type AgentUserMessage, toProviderReplayMessage } from "@oh-my-pi/pi-agent-core";
+import { type AgentMessage, toProviderReplayMessage } from "@oh-my-pi/pi-agent-core";
 import {
 	isUserInterruptAbort,
 	isCustomMessageContent,
@@ -52,7 +52,7 @@ import {
 	registerMessageCacheInvalidator,
 } from "@oh-my-pi/pi-agent-core/compaction/message-cache";
 import { convertMessageToLlm } from "@oh-my-pi/pi-agent-core/compaction/messages";
-import type { AssistantMessage, ImageContent, Message, TextContent } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Message, TextContent, UserMessage } from "@oh-my-pi/pi-ai";
 import { copyPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
 import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
@@ -775,7 +775,7 @@ export function stripInternalDetailsFields<T>(details: T | undefined): T | undef
 }
 
 type SteeringUserMessage =
-	| (AgentUserMessage & { steering: true })
+	| (UserMessage & { steering: true })
 	| (CustomMessage & {
 			customType: typeof COLLAB_PROMPT_MESSAGE_TYPE;
 			attribution: "user";
@@ -788,7 +788,7 @@ function isSteeringUserMessage(message: AgentMessage | undefined): message is St
 	);
 }
 
-function userMessageWithoutSteering(message: AgentUserMessage): AgentUserMessage {
+function userMessageWithoutSteering(message: UserMessage): UserMessage {
 	const { steering, ...rest } = message;
 	void steering;
 	return rest;
@@ -825,8 +825,8 @@ function getArrayContentImages(content: (TextContent | ImageContent)[]): ImageCo
 	return images ?? [];
 }
 
-function wrapSteeringUserMessage(message: SteeringUserMessage): AgentUserMessage {
-	const userMessage: AgentUserMessage =
+function wrapSteeringUserMessage(message: SteeringUserMessage): UserMessage {
+	const userMessage: UserMessage =
 		message.role === "user"
 			? userMessageWithoutSteering(message)
 			: {
@@ -851,7 +851,7 @@ function wrapSteeringUserMessage(message: SteeringUserMessage): AgentUserMessage
 // One wrapper per steering message. Per-request transforms key on identity (the
 // date/cwd reminder treats an unseen user turn as new), so a fresh wrapper each
 // request would read as a never-sent turn. Owner edits evict it below.
-const steeringWrapperCache = new WeakMap<AgentMessage, AgentUserMessage>();
+const steeringWrapperCache = new WeakMap<AgentMessage, UserMessage>();
 
 export function wrapSteeringForModel(messages: AgentMessage[]): AgentMessage[] {
 	// Wrap EVERY steering message, not just a trailing run. The wire bytes of a

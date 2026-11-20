@@ -104,7 +104,6 @@ export type {
 } from "@oh-my-pi/pi-tui/tools/edit";
 export * from "./schemas";
 export * from "./store";
-export * from "./file-rewind";
 export { type EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 
 type TInput =

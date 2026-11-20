@@ -167,7 +167,7 @@ export function persistedAgentDefinition(displayName: string, init: PersistedSes
 export function createPersistedSubagentReviverFactory(
 	ctx: PersistedSubagentReviveContext,
 ): PersistedSubagentReviverFactory {
-	const registry = ctx.session.agentRegistry ?? AgentRegistry.global();
+	const registry = AgentRegistry.global();
 	return async ref => {
 		const sessionFile = ref.sessionFile;
 		if (!sessionFile) return undefined;
@@ -229,16 +229,12 @@ export function createPersistedSubagentReviverFactory(
 				eventBus: ctx.eventBus,
 				subagentEventBus: ctx.subagentEventBus,
 			};
-			// Worker pools and local revivals must use the factory owner's registry,
-			// even when ensureLive was called from another async context.
-			const revive = () => {
-				const pool = subagentWorkerPool(ctx.settings);
-				if (!pool) return revivePersistedSubagent(spec, expectedRef);
-				if (!spec.sessionHooks) return revivePersistedPlaced(pool, spec, expectedRef, revivePersistedSubagent);
-				const endMainRun = pool.beginMainRun();
-				return revivePersistedSubagent(spec, expectedRef).finally(endMainRun);
-			};
-			return AgentRegistry.global() === registry ? revive() : AgentRegistry.runScoped(registry, revive);
+			// Worker mode: place revivals like fresh spawns, except with live hooks.
+			const pool = subagentWorkerPool(ctx.settings);
+			if (!pool) return revivePersistedSubagent(spec, expectedRef);
+			if (!spec.sessionHooks) return revivePersistedPlaced(pool, spec, expectedRef, revivePersistedSubagent);
+			const endMainRun = pool.beginMainRun();
+			return revivePersistedSubagent(spec, expectedRef).finally(endMainRun);
 		};
 	};
 }

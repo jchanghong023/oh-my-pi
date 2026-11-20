@@ -8,7 +8,7 @@ import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
 import { BunTestFailureObserver, GateCommandError, gateFailure, reportGateFailure } from "./test-gate-failure-events";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
-import { bunCoreBrowserInputsChanged, bunRequiresFullSelection, captureChangedPaths } from "./test-gate-source";
+import { bunRequiresFullSelection, captureChangedPaths } from "./test-gate-source";
 import type { GateRun } from "./test-gate-runtime";
 import {
 	beginTestRun,
@@ -167,8 +167,8 @@ export async function bunTestSelection(
 	return fallback;
 }
 
-/** Capture once for both conservative native fallback and the explicit Vite dependency closure. */
-async function bunChangedPaths(root: string, baseline: string): Promise<string[] | undefined> {
+/** Git failure or a dynamic/native input makes automatic Bun selection unsafe. */
+async function bunCanTraceChanges(root: string, baseline: string): Promise<boolean> {
 	try {
 		const gitGate = {
 			charged: async <T>(work: () => Promise<T>) => work(),
@@ -179,9 +179,9 @@ async function bunChangedPaths(root: string, baseline: string): Promise<string[]
 				return { stdout };
 			},
 		} as unknown as GateRun;
-		return await captureChangedPaths(gitGate, root, baseline);
+		return !bunRequiresFullSelection(await captureChangedPaths(gitGate, root, baseline));
 	} catch {
-		return undefined;
+		return false;
 	}
 }
 /** Consolidation is safe only when Git confirms that the baseline is the entire current tree. */
@@ -399,12 +399,10 @@ const forkCodingAgentFiles = new Set([
 	"test/config-cli-revision-contract.test.ts",
 	"test/context-fits-model.test.ts",
 	"test/developer-test-agent-resources.test.ts",
-	"test/discovery-input-metadata.test.ts",
 	"test/discovery-per-call-compaction-baseline.test.ts",
 	"test/discovery-queued-maintenance-guards.test.ts",
 	"test/discovery-skill-scanner.test.ts",
 	"test/discovery/claude-plugins.test.ts",
-	"test/edit/file-rewind.test.ts",
 	"test/eval/completion-bridge.test.ts",
 	"test/extension-dashboard-mcp-parity.test.ts",
 	"test/fork-diagnostic-logging.test.ts",
@@ -483,20 +481,10 @@ const forkCodingAgentFiles = new Set([
 	"test/parallel-review-SessionRuntimeCompact-regression.test.ts",
 	"test/developer-test-agent-materialization.test.ts",
 	"test/task/structured-subagent.test.ts",
-	"test/webgui/core-browser.e2e.test.ts",
-	"test/webgui/native-chat-history.test.ts",
-	"test/webgui/native-chat-stream.test.ts",
-	"test/webgui/native-interactions.test.ts",
-	"test/webgui/native-browser-release.test.ts",
-	"test/webgui/project-ownership.test.ts",
 	"test/registry/agent-lifecycle.test.ts",
 	"test/agent-hub-activate.test.ts",
 	"test/agent-session-dispose-releases-memory.test.ts",
 	"test/sharpshooter-extract.test.ts",
-	"test/webgui/native-subagents.test.ts",
-	"test/webgui/platform-probe.test.ts",
-	"test/webgui/directive-streaming.test.ts",
-	"test/webgui/packaged-assets.test.ts",
 ]);
 const forkPackageFiles: Record<string, string[]> = {
 	"packages/agent": [
@@ -725,12 +713,8 @@ function consumesBrowserProcess(content: string): boolean {
 	return (
 		/\blaunchHeadlessBrowser\s*\(/.test(content) ||
 		(/\b(?:loadPuppeteer|puppeteer-core)\b/.test(content) && /\b\w+\.launch\s*\(/.test(content)) ||
-		/from\s+["'][^"']*(?:chromium-probe|core-browser-fixture)["']/.test(content)
+		/from\s+["'][^"']*chromium-probe["']/.test(content)
 	);
-}
-
-function isBrowserTest(file: string): boolean {
-	return browserConsumerTests.has(file) || file === "test/webgui/core-browser.e2e.test.ts";
 }
 
 async function getCodingAgentTestPartition(all = false): Promise<CodingAgentTestPartition> {
@@ -781,7 +765,7 @@ export function isIntegrationCommand(command: TestCommand): boolean {
 
 function isStartupTest(file: string): boolean {
 	return (
-		isBrowserTest(file) ||
+		browserConsumerTests.has(file) ||
 		/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
 		file === "test/zero-config-terminal.test.ts" ||
 		file === "test/startup-composer.test.ts" ||
@@ -798,7 +782,7 @@ function isStartupCommand(command: TestCommand): boolean {
 }
 
 function isBrowserCommand(command: TestCommand): boolean {
-	return command.cwd === "packages/coding-agent" && command.command.some(isBrowserTest);
+	return command.cwd === "packages/coding-agent" && command.command.some(file => browserConsumerTests.has(file));
 }
 
 /** Startup chunks run in their own lane; retain the integration cap for other chunks. */
@@ -1907,12 +1891,12 @@ if (import.meta.main) {
 		: localMode
 			? await bunTestSelection()
 			: { tool: "bun", mode: "full", reason: "full selection requested" };
-	let changedPaths: string[] | undefined;
-	if (selection.mode === "affected") {
-		changedPaths = await bunChangedPaths(repoRoot, selection.baseline ?? "HEAD");
-		if (!changedArgs.length && (!changedPaths || bunRequiresFullSelection(changedPaths))) {
-			selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
-		}
+	if (
+		!changedArgs.length &&
+		selection.mode === "affected" &&
+		!(await bunCanTraceChanges(repoRoot, selection.baseline ?? "HEAD"))
+	) {
+		selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
 	}
 	if (deferStartup || onlyStartup) selection.group = onlyStartup ? "startup" : "ordinary";
 	if (requestedMode === "local-ts") selection.suiteRevision = BUN_FORK_SUITE_REVISION;
@@ -1949,23 +1933,8 @@ if (import.meta.main) {
 	);
 	for (const command of requestedCommands) {
 		if (command.parallel === undefined) continue;
-		// Frontend assets and Vite's entrypoints are invisible to Bun --changed.
-		// Run this single startup chunk without --changed only when that closure changed;
-		// other chunks retain Bun's native affected selection and existing budgets.
-		const browserInputsChanged =
-			selection.mode === "affected" &&
-			command.cwd === "packages/coding-agent" &&
-			command.command.includes("test/webgui/core-browser.e2e.test.ts") &&
-			(!changedPaths || bunCoreBrowserInputsChanged(changedPaths));
-		command.selection = browserInputsChanged
-			? {
-					...selection,
-					mode: "full",
-					reason: "explicit browser Vite/fixture dependency mapping",
-				}
-			: selection;
-		if (selection.mode === "affected" && !browserInputsChanged)
-			command.command.push(changedArgs[0] ?? `--changed=${selection.baseline}`);
+		command.selection = selection;
+		if (selection.mode === "affected") command.command.push(changedArgs[0] ?? `--changed=${selection.baseline}`);
 	}
 	// Prioritize within the selected shard, without changing shard membership.
 	requestedCommands.sort((a, b) => Number(isIntegrationCommand(b)) - Number(isIntegrationCommand(a)));

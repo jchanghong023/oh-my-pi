@@ -4,12 +4,13 @@
 
 ### Breaking Changes
 
+- Removed `/webgui` and `omp webgui`, including the bundled ZCode frontend. Native TUI, RPC, `/sketch`, and Collab Web remain available.
 - Removed the retired ZCode SDK method `AgentSession.withExecutionModel()` and its private request recovery. Session-scoped `setModelTemporary()` and explicit SDK request hooks remain available.
 - Removed the fork-only `Settings.saveUserModelRole()` and `ModelRoleConflictError`; use upstream `setModelRole()` and `flush()` for ordinary role changes.
 - Removed the retired ZCode SDK startup option `createAgentSession({ prepareConfiguration })`.
-- Removed the retired ZCode edit-and-resend SDK method `AgentSession.promptEditedUserQuery()` and its branch-rollback helper `SessionManager.restoreLeaf()`. WebGUI editing still uses native session branching.
+- Removed the retired ZCode edit-and-resend SDK method `AgentSession.promptEditedUserQuery()` and its branch-rollback helper `SessionManager.restoreLeaf()`.
 - Removed the retired AIReq workbench’s in-process Collab connection. Relay-based collaboration and intranet username joins are unchanged.
-- Removed the retired ZCode SDK hook `AgentSession.setInputDeliveryHandler()` and `sourceCommand.configuration`. Input attribution is unchanged.
+- Removed the ZCode SDK input-delivery hook, command metadata, and queue mutation APIs. Native steering and follow-up controls remain available.
 - Removed the retired ZCode SDK method `AgentSession.refreshCurrentModelMetadata()`. Native model discovery and context-window updates are unchanged.
 - Removed the retired ZCode `PromptOptions.attachments` field. Use `images` for inline images; existing session history remains readable.
 - Removed the fork-only SDK option `agentOutputPrefix`. Subagent artifact names use upstream task prefixes.
@@ -22,7 +23,8 @@
 - Removed the unused `AgentSession.disposeHeldQueue()` SDK method. Native Stop and queued input controls are unchanged.
 - Removed the fork-only SDK option `getAgentDefinitions`. Define project agents in `.omp/agents/`; native agent discovery and session model tags are unchanged.
 - Removed the fork-only SDK option `createAgentSession({ editMode })`. Edit schemas and read anchors use the upstream settings and model rules.
-- Removed the retired ZCode child-session interaction factory and restored the two-argument `setToolUIContext()`. WebGUI questions and approvals are unchanged.
+- Removed the retired ZCode child-session interaction factory and restored the two-argument `setToolUIContext()`.
+- Removed the old ZCode-only filesystem rollback and runtime provider admission overrides. Native edit/format locking and SDK request hooks remain available.
 
 ### Added
 
@@ -39,7 +41,6 @@
 
 - TUI input predictions use the upstream request lifecycle and still discard suggestions from a previous session.
 - Session lists no longer drop a readable session just because it grows during a scan.
-- WebGUI uses the native OMP queue after Stop, without a separate pause, resume, or send confirmation.
 - The intranet system notice describes the CentOS 7, NFS, and `/dev/shm` deployment without assuming the current host matches it.
 - Compact mode shows model stages separately from Agent activity and keeps one net diff per file for the latest turn, outside scrollback.
 - OpenWiki uses lightweight diagram checks to shrink the standalone package while keeping offline Mermaid rendering in the browser.
@@ -80,9 +81,7 @@
 - This repository now uses the native spec-driven schema; existing custom mini/omp-spec projects require explicit migration and any missing design/tasks remain incomplete (see docs-zh-CN/openspec-schema-migration.md).
 - Compact mode's tool output preview is now a bordered card with padding and a color-coded Chinese status header that keeps both ends of long commands; finished grep/glob results show their matching rows first instead of only the output tail.
 
-- WebGUI and OpenWiki browser assets now use the same gzip archive pipeline as the stats dashboard, reducing embedded size and deferring decoding until the first request.
-- WebGUI’s sidebar groups sessions only under their projects; the separate “任务” section is gone, and the recently updated and unread views still list all history.
-- WebGUI frontend resources are generated during preparation and packaging, kept out of Git, and included in offline release packages.
+- OpenWiki browser assets now use the same gzip archive pipeline as the stats dashboard, reducing embedded size and deferring decoding until the first request.
 - Integrated upstream v18.22.0, adopting the backend-neutral `dsm` analysis namespace while keeping binary analysis disabled by default.
 - Integrated upstream v18.20.2 while retaining blocked Goal tasks and fork deployment defaults.
 - Ask now uses upstream HTML forms and timeout behavior across native hosts, without fork-specific Goal replies or the legacy questions tool protocol.
@@ -132,7 +131,6 @@
 - SSH directory reads now consume timeout-tracked subprocess output without stream-lock failures.
 - Company models now authenticate through the stdio gateway using the existing in-memory credentials.
 - Deferred model roles retain their eligible usage and retry fallback candidates.
-- Private-root pauses now cover fresh and revived subagents when worker placement is enabled.
 - Strict browser cleanup now recovers unreachable shared Chromium instances without dropping retryable ownership.
 - Changing display modes now preserves running user Python and shell execution cards.
 - ACP skill commands now display their results, warnings and failures.
@@ -154,14 +152,10 @@
 - Compact mode's read activity now appends the target path after the intent instead of hiding it.
 - Compact mode now shows thinking across successive messages, refreshes tools that finish between paints, and stops thinking timers before reply generation.
 - Compact mode's tool output preview no longer repaints the previous turn's finished output when a new turn starts; it stays closed until the new turn produces output, while still-running background output keeps showing.
-- WebGUI subagent summaries open their child transcript again: native lowercase `task` tool calls pair with their subagent rows, and every child of a multi-subagent dispatch stays clickable.
-- WebGUI restores ZCode browser control, computer control, and keyboard shortcut settings for display only, with all editing actions disabled.
-- Editing queued WebGUI messages replaces referenced images while preserving uploaded attachments.
 - Offline OpenWiki planning now respects the effective plan model role after runtime defaults are applied.
 - Team truncates oversized narrative output before strict validation instead of aborting the discussion.
 - Native subagents retain access to their exact granted Skills until their session is released.
 - RPC clients retain blocked task status and blocker notes; ACP plans display blocked tasks as pending.
-- WebGUI questions and approvals keep the borrowed terminal session marked as waiting until they settle.
 - Provider-scoped model lookups no longer include unrelated runtime models before OAuth login.
 - WebKit browser shutdown waits for owned host and viewer processes and retains failed cleanup for retry.
 

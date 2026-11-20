@@ -113,19 +113,9 @@ export interface IrcBusApi {
 
 export class IrcBus implements IrcBusApi {
 	static #global: IrcBusApi | undefined;
-	static readonly #scoped = new WeakMap<AgentRegistryApi, IrcBus>();
 
 	/** The installed bus; lazily a local {@link IrcBus} unless a worker installed a proxy. */
 	static global(): IrcBusApi {
-		const registry = AgentRegistry.scoped();
-		if (registry) {
-			let bus = IrcBus.#scoped.get(registry);
-			if (!bus) {
-				bus = new IrcBus(registry, () => AgentRegistry.runScoped(registry, () => AgentLifecycleManager.global()));
-				IrcBus.#scoped.set(registry, bus);
-			}
-			return bus;
-		}
 		if (!IrcBus.#global) {
 			IrcBus.#global = new IrcBus();
 		}
@@ -154,8 +144,7 @@ export class IrcBus implements IrcBusApi {
 	 * message was ever sent, so there is nothing to answer.
 	 */
 	static recordReply(from: string, to: string): void {
-		if (AgentRegistry.scoped()) IrcBus.global().recordReply(from, to);
-		else IrcBus.#global?.recordReply(from, to);
+		IrcBus.#global?.recordReply(from, to);
 	}
 
 	readonly #registry: AgentRegistryApi;
@@ -175,14 +164,11 @@ export class IrcBus implements IrcBusApi {
 	/** Last {@link SendMark.seq} handed out, taken when a send starts. */
 	#sendSeq = 0;
 
-	constructor(
-		registry: AgentRegistryApi = AgentRegistry.global(),
-		lifecycle?: AgentLifecycleApi | (() => AgentLifecycleApi),
-	) {
+	constructor(registry: AgentRegistryApi = AgentRegistry.global(), lifecycle?: AgentLifecycleApi) {
 		this.#registry = registry;
 		// Lazy: the lifecycle global self-constructs against the global registry,
 		// so only touch it when a parked recipient actually needs reviving.
-		this.#lifecycle = typeof lifecycle === "function" ? lifecycle : () => lifecycle ?? AgentLifecycleManager.global();
+		this.#lifecycle = () => lifecycle ?? AgentLifecycleManager.global();
 	}
 
 	/**

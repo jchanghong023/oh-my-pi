@@ -220,9 +220,7 @@ describe("RPC goal command", () => {
 		const toolNames = (): string[] => [...tools];
 
 		expect(toolNames()).not.toContain("goaltest_late_tool");
-		const releaseInterview = await controller.prepareInterview();
 		await controller.handle({ op: "create", objective: "keep the late tool" });
-		await releaseInterview();
 		expect(toolNames()).toContain("goal");
 		expect(toolNames()).not.toContain("goaltest_late_tool");
 
@@ -640,32 +638,6 @@ describe("RpcGoalController continuation gate", () => {
 			release: () => idle.resolve(),
 		};
 	}
-
-	test.each([false, true])(
-		"cancelling an interview preserves late tools and host-owned goal=%s",
-		async hostOwnsGoal => {
-			const f = fakeSession(async () => true);
-			f.session.setGoalModeState(undefined);
-			await f.session.setActiveToolsByName(hostOwnsGoal ? ["read", "goal"] : ["read"]);
-			const release = await f.controller.prepareInterview();
-			await f.session.setActiveToolsByName([...f.tools(), "late"]);
-			await release();
-			expect(f.tools()).toEqual(hostOwnsGoal ? ["read", "goal", "late"] : ["read", "late"]);
-			expect(f.goalState()).toBeUndefined();
-		},
-	);
-
-	test("an old interview release cannot remove the goal tool from a later interview", async () => {
-		const f = fakeSession(async () => true);
-		f.session.setGoalModeState(undefined);
-		const releaseFirst = await f.controller.prepareInterview();
-		await releaseFirst();
-		const releaseSecond = await f.controller.prepareInterview();
-		await releaseFirst();
-		expect(f.tools()).toContain("goal");
-		await releaseSecond();
-		expect(f.tools()).toEqual(["read"]);
-	});
 
 	test("a continuation decided before the session closes is never admitted after it", async () => {
 		const admitted: string[] = [];

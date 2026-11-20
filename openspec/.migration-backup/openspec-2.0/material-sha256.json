@@ -9,8 +9,6 @@
   "add-todoloop-command/proposal.md": "547032a80213e6e630038d75e138a04c5e01aa32feb98f40b7315fe9374ca1c4",
   "add-todoloop-command/specs/personal-commands/spec.md": "e16a0b478900e2edc80cb62d9992687bfb1c0aa96e5f3807129e587406b6370e",
   "add-todoloop-command/tasks.md": "8dfdcf02b028a5c5f772df22433b010b369267d7fc692cc03604f3d0c40e34dd",
-  "refactor-dev-webgui-project-host/proposal.md": "6a5566ac306829293061e4da940715b59b7b78cc6cd3652bb2c6fdeb9e8a74f1",
-  "refactor-dev-webgui-project-host/specs/personal-commands/spec.md": "016eaf551d7b2bdd2d3610eda598751febd0ed29341b85ccb59e97a8e803fe1f",
   "refine-compact-output-preview/proposal.md": "9ede77d161de1331c7b80102d22f8adcd17f7fe8e6ad549a575736dbbe0462ff",
   "refine-compact-output-preview/specs/tui-presentation/spec.md": "89a5701d6648f54db42c9cdad8d705ad16863a410df8f764d568e644d6407b0e",
   "revamp-compact-activity-dock/proposal.md": "3f0191f4afd0b59da5f9cf8af02b260507bd334925eeb21e2ae3ac2d62ff58bb",

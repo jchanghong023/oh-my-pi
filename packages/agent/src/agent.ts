@@ -40,7 +40,7 @@ import {
 	unpairedToolCallTail,
 } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
-import { type AgentPauseGate, agentPauseGate } from "./pause";
+import { agentPauseGate } from "./pause";
 import { filterProviderReplayMessages } from "./replay-policy";
 import { SentToolDefinitions } from "./sent-tool-definitions";
 import { Tokenizer } from "./tokenizer";
@@ -138,8 +138,6 @@ export class AgentBusyError extends Error {
 }
 export interface AgentOptions {
 	initialState?: Partial<AgentState>;
-	/** Gate shared by this agent and its owned workers. Defaults to the process-wide gate. */
-	pauseGate?: AgentPauseGate;
 
 	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -462,7 +460,6 @@ export class Agent {
 	#sentToolDefinitions = new SentToolDefinitions();
 	#steeringQueue: AgentMessage[] = [];
 	#followUpQueue: AgentMessage[] = [];
-	#queuedMessagesHeld = false;
 	#queuedMessageClaims: Partial<Record<QueuedMessageQueue, QueuedMessageClaim>> = {};
 	/**
 	 * Steering live steering took for the in-flight response (`onLiveSteeringTaken`) that the
@@ -516,12 +513,10 @@ export class Agent {
 
 	#runningPrompt?: Promise<void>;
 	#isPaused = false;
-	/** Actual gate controlling this agent's safe execution boundaries. */
-	readonly pauseGate: AgentPauseGate;
 
-	/** True while this unfinished turn is safely parked by its pause gate. */
+	/** True while this unfinished turn is safely parked by the process pause gate. */
 	get isPaused(): boolean {
-		return this.#isPaused && this.pauseGate.paused && !this.#abortController?.signal.aborted;
+		return this.#isPaused && agentPauseGate.paused && !this.#abortController?.signal.aborted;
 	}
 	#resolveRunningPrompt?: () => void;
 	#kimiApiFormat?: "openai" | "anthropic";
@@ -603,7 +598,6 @@ export class Agent {
 	hasQueuedAsides?: AgentLoopConfig["hasQueuedAsides"];
 
 	constructor(opts: AgentOptions = {}) {
-		this.pauseGate = opts.pauseGate ?? agentPauseGate;
 		this.#state = { ...this.#state, ...opts.initialState };
 		if (opts.initialState?.messages) this.#state.messages = opts.initialState.messages.slice();
 		if (opts.initialState?.pendingToolCalls)
@@ -1082,34 +1076,15 @@ export class Agent {
 	}
 
 	async #dequeueSteeringMessagesAfterHooks(signal: AbortSignal): Promise<AgentMessage[]> {
-		if (signal.aborted || this.#consumableSteeringCount() === 0) return [];
+		if (signal.aborted || this.#steeringQueue.length === 0) return [];
 		await this.#runBeforeQueuedMessageDequeueHooks(signal);
-		return signal.aborted || this.#consumableSteeringCount() === 0
-			? []
-			: this.#prepareQueuedMessageBatch("steering", signal);
-	}
-
-	/** Whether ordinary follow-up input may advance automatically at the next yield. */
-	followUpAutoDrain = true;
-
-	/** Explicit owner hold: neither steering nor follow-ups may enter a model turn until released. */
-	get queuedMessagesHeld(): boolean {
-		return this.#queuedMessagesHeld;
-	}
-
-	set queuedMessagesHeld(held: boolean) {
-		if (this.#queuedMessagesHeld === held) return;
-		this.#queuedMessagesHeld = held;
-		if (!held) this.#notifySteeringWaiters();
+		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("steering", signal);
 	}
 
 	async #dequeueFollowUpMessagesAfterHooks(signal: AbortSignal): Promise<AgentMessage[]> {
-		if (signal.aborted || this.queuedMessagesHeld || !this.followUpAutoDrain || this.#followUpQueue.length === 0)
-			return [];
+		if (signal.aborted || this.#followUpQueue.length === 0) return [];
 		await this.#runBeforeQueuedMessageDequeueHooks(signal);
-		return signal.aborted || this.queuedMessagesHeld || !this.followUpAutoDrain
-			? []
-			: this.#prepareQueuedMessageBatch("followUp", signal);
+		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("followUp", signal);
 	}
 
 	async #prepareQueuedMessageBatch(queue: QueuedMessageQueue, signal: AbortSignal): Promise<AgentMessage[]> {
@@ -1381,7 +1356,7 @@ export class Agent {
 		this.#state.systemPrompt = typeof v === "string" ? [v] : v;
 	}
 
-	setModel(model: Model | undefined) {
+	setModel(model: Model) {
 		// Sessions may start with no model selected (`initialState.model: undefined`).
 		const resolved = this.#modelResolver && model ? this.#modelResolver(model) : model;
 		this.#state.model = resolved;
@@ -1525,7 +1500,6 @@ export class Agent {
 		for (const delivery of this.#queuedMessageDeliveries) {
 			if (delivery.messages[delivery.next] !== m) continue;
 			if (++delivery.next === delivery.messages.length) this.#queuedMessageDeliveries.delete(delivery);
-			this.#emitQueueChanged();
 			break;
 		}
 	}
@@ -1575,6 +1549,7 @@ export class Agent {
 	clearSteeringQueue() {
 		this.#steeringQueue = [];
 		this.#cancelQueuedMessagePreparation("steering");
+		this.#notifySteeringWaiters();
 		this.#emitQueueChanged();
 	}
 
@@ -1599,6 +1574,7 @@ export class Agent {
 		this.#liveSteered = [];
 		this.#cancelQueuedMessagePreparation("steering");
 		this.#cancelQueuedMessagePreparation("followUp");
+		this.#notifySteeringWaiters();
 		this.clearDeferredToolDirectives();
 		this.#emitQueueChanged();
 	}
@@ -1763,20 +1739,14 @@ export class Agent {
 		return this.#runningPrompt ?? Promise.resolve();
 	}
 
-	#consumableSteeringCount(): number {
-		if (this.queuedMessagesHeld) return 0;
-		const count = this.#steeringQueue.length;
-		return this.#steeringMode === "one-at-a-time" ? Math.min(1, count) : count;
-	}
-
 	/**
-	 * Wait for steering to become available without consuming the steering queue.
+	 * Wait for a steering message without consuming the steering queue.
 	 *
 	 * The signal releases the waiter when the prompt ends, so an in-flight
 	 * tool watcher never survives the tool batch that owns it.
 	 */
 	#waitForSteeringMessages(signal?: AbortSignal): Promise<void> {
-		if (this.#consumableSteeringCount() > 0 || signal?.aborted) return Promise.resolve();
+		if (this.#steeringQueue.length > 0 || signal?.aborted) return Promise.resolve();
 		const { promise, resolve } = Promise.withResolvers<void>();
 		const onAbort = (): void => resolve();
 		this.#steeringWaiters.add(resolve);
@@ -1788,8 +1758,8 @@ export class Agent {
 	}
 
 	#notifySteeringWaiters(): void {
-		if (this.#consumableSteeringCount() === 0) return;
-		for (const resolve of this.#steeringWaiters) resolve();
+		const waiters = [...this.#steeringWaiters];
+		for (const resolve of waiters) resolve();
 	}
 
 	reset() {
@@ -1806,7 +1776,6 @@ export class Agent {
 		this.#state.activeThinkingIndex = undefined;
 		this.#state.pendingToolCalls.clear();
 		this.#state.error = undefined;
-		this.queuedMessagesHeld = false;
 		this.clearAllQueues();
 	}
 
@@ -2104,7 +2073,6 @@ export class Agent {
 
 		const config: AgentLoopConfig = {
 			model,
-			pauseGate: this.pauseGate,
 			reasoning,
 			disableReasoning: this.#state.disableReasoning,
 			temperature: this.#temperature,
@@ -2211,7 +2179,13 @@ export class Agent {
 				return this.#dequeueSteeringMessagesAfterHooks(signal ?? loopSignal);
 			},
 			isUndeliveredQueuedMessage: message => this.#isUndeliveredQueuedMessage(message),
-			hasSteeringMessages: () => steeringQueueState(this.#steeringQueue, this.#consumableSteeringCount()),
+			hasSteeringMessages: () =>
+				steeringQueueState(
+					this.#steeringQueue,
+					this.#steeringMode === "one-at-a-time"
+						? Math.min(1, this.#steeringQueue.length)
+						: this.#steeringQueue.length,
+				),
 			waitForSteeringMessages: signal => this.#waitForSteeringMessages(signal),
 			onLiveSteeringTaken: messages => this.#adoptLiveSteering(messages),
 			hasIrcInterrupts: this.hasIrcInterrupts,

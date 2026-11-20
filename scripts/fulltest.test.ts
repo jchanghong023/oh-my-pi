@@ -119,12 +119,6 @@ test("script selection uses changed modules and existing tests, not business fil
 test("Bun traces only known static inputs; unknown and dynamic inputs fall back", () => {
 	expect(bunRequiresFullSelection([])).toBe(false);
 	expect(bunRequiresFullSelection(["packages/coding-agent/src/tools/knowledge-search.ts"])).toBe(false);
-	expect(
-		bunRequiresFullSelection([
-			"vendor/zcode-frontend/preview/main.tsx",
-			"packages/coding-agent/test/webgui/fixtures/core-ui-entry.tsx",
-		]),
-	).toBe(false);
 	for (const file of [
 		"Cargo.lock",
 		"packages/natives/src/lib.rs",

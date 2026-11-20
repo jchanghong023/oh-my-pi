@@ -187,7 +187,6 @@ import {
 import type { ShakeMode } from "../session/shake-types";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
-import { activateNativeWebGuiComposition } from "../webgui/native-composition";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
@@ -1974,11 +1973,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	// session switches. While set, short replies like "c" are answers, not
 	// continue shortcuts.
 	#guidedGoalInterviewActive = false;
-	isWebGuiModeActive?: () => boolean;
-	handleWebGuiModeInput?: (data: string) => boolean;
-	handleWebGuiModeSubmit?: (text: string) => Promise<boolean>;
-	#webGuiInputUnsubscribe?: () => void;
-	readonly #rootSession: AgentSession;
 	readonly #hostShutdownCallbacks = new Set<() => Promise<void>>();
 	#sessionBindingUnsubscribers: Array<() => void> = [];
 	#sessionEventBusUnsubscribers: Array<() => void> = [];
@@ -2044,7 +2038,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly lspServers: LspStartupServerInfo[] | undefined = undefined;
 	mcpManager?: MCPManager;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
-	#activeToolUIContext: ExtensionUIContext | undefined;
 
 	readonly #codexResetFireworksController: CodexResetFireworksController;
 	readonly #btwController: BtwController;
@@ -2140,7 +2133,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.session.sessionName;
 	}
 	focusAgentSession(id: string): Promise<void> {
-		this.#assertOrdinaryTuiInputAllowed();
 		// Viewing an agent may revive it, passing its registry status through `running`: the
 		// tray must not read that as work (cards would regroup, a quiet tray would wake).
 		// Off a tray host, or for an agent already at work, it is simply viewed.
@@ -2154,11 +2146,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 	}
 	focusParentSession(): Promise<void> {
-		this.#assertOrdinaryTuiInputAllowed();
 		return this.#focusController.focusParent();
 	}
 	unfocusSession(): Promise<void> {
-		this.#assertOrdinaryTuiInputAllowed();
 		return this.#focusController.unfocus();
 	}
 	invalidatePendingFocus(): void {
@@ -2340,7 +2330,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		subagentEventBus?: EventBus,
 	) {
 		this.session = session;
-		this.#rootSession = session;
 		this.sessionManager = session.sessionManager;
 		this.settings = session.settings;
 		session.getLatestTurnFileChanges();
@@ -2553,9 +2542,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#focusController = new SessionFocusController(this);
 		this.#inputController = new InputController(this);
 		this.collabController = new CollabController(this);
-		this.session.setPromptDropped?.(prompt => {
-			if (this.session === this.#rootSession) this.restoreDroppedPrompt(prompt);
-		});
+		this.session.setPromptDropped?.(prompt => this.restoreDroppedPrompt(prompt));
 		this.#observerRegistry = new SessionObserverRegistry();
 		this.#bindSessionEventBus();
 	}
@@ -2685,17 +2672,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			getDraftText: () => this.#inputController.getDraftText(),
 			beginDispose: () => {
 				this.#closeAttempt?.abort();
-				this.#rootSession.beginDispose();
+				this.session.beginDispose();
 				this.statusLine.dispose();
 			},
-			saveDraft: text => this.#rootSession.sessionManager.saveDraft(text),
+			saveDraft: text => this.sessionManager.saveDraft(text),
 			disposeSession: async reason => {
 				const errors: unknown[] = [];
 				for (const dispose of [
 					...this.#hostShutdownCallbacks,
 					() => this.#btwController.dispose(),
 					() =>
-						this.#rootSession.dispose({
+						this.session.dispose({
 							mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS,
 							reason,
 						}),
@@ -2861,16 +2848,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.setFocus(this.editor);
 		this.syncComposerShape();
 
-		this.#webGuiInputUnsubscribe ??= this.ui.addInputListener(
-			data => (this.handleWebGuiModeInput?.(data) ? { consume: true } : undefined),
-			{ prepend: true },
-		);
 		this.#inputController.setupKeyHandlers();
 		this.#inputController.setupEditorSubmitHandler();
 		// Native transcript controls (user-message toolbar, error-frame actions)
 		// run the same commands as their key bindings.
 		setTranscriptActionHandler(action => {
-			if (this.isWebGuiModeActive?.()) return;
 			switch (action.act) {
 				case "retry":
 					void this.#inputController.handleRetry();
@@ -3408,7 +3390,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * reflect `newCwd` before this is called.
 	 */
 	async applyCwdChange(newCwd: string): Promise<boolean> {
-		if (this.isWebGuiModeActive?.()) return false;
 		const previousCwd = getProjectDir();
 		try {
 			setProjectDir(newCwd);
@@ -3459,68 +3440,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		return true;
 	}
 
-	get rootSession(): AgentSession {
-		return this.#rootSession;
-	}
-
 	registerHostShutdown(dispose: () => Promise<void>): () => void {
 		if (this.#isShuttingDown) throw new Error("The native host is shutting down");
 		this.#hostShutdownCallbacks.add(dispose);
 		return () => this.#hostShutdownCallbacks.delete(dispose);
 	}
 
-	getWebGuiEntryBlocker(): string | undefined {
-		if (this.#isShuttingDown) return "The native host is shutting down.";
-		if (!this.#modesRestored || this.#modeSetInFlight || this.#modeChangeHolds > 0)
-			return "Wait for the ordinary session's mode transition to settle.";
-		if (this.session.isSessionTransitioning) return "Wait for the ordinary session switch to settle.";
-		if (this.collabController.host || this.collabGuest)
-			return "Stop the ordinary Collab share or leave its guest session before entering WebGUI.";
-		if (this.focusedAgentId) return "Return to the ordinary local session first.";
-		if (
-			this.ui.hasOverlay() ||
-			this.hookSelector ||
-			this.hookInput ||
-			this.hookEditor ||
-			this.approvalOwnsComposer ||
-			this.ui.getFocused() !== this.editor
-		)
-			return "Close the ordinary session's native dialog or selector first.";
-		if (this.workspaceModeEnabled) return "Exit Workspace mode before entering WebGUI.";
-		if (
-			this.planModeEnabled ||
-			this.planModePaused ||
-			this.goalModeEnabled ||
-			this.goalModePaused ||
-			this.#guidedGoalInterviewActive ||
-			this.vibeModeEnabled ||
-			this.#vibeModeEntry ||
-			this.#vibeSkillInFlight > 0 ||
-			this.loopModeEnabled ||
-			this.#loopAutoSubmitTimer ||
-			this.#pendingLoopIterations > 0 ||
-			this.#goalContinuationTimer ||
-			this.#pendingGoalContinuationTurns > 0
-		)
-			return "Exit the ordinary Plan, Goal, Vibe or Loop mode before entering WebGUI.";
-		if (
-			this.#pendingSubmittedInput ||
-			this.#inputController.hasOtherSubmissionDispatches() ||
-			this.loadingAnimation ||
-			this.compactionQueuedMessages.length > 0 ||
-			this.yieldCompaction
-		)
-			return "Wait for the ordinary session's pending input and compaction queue to settle.";
-		return undefined;
-	}
-
-	#assertOrdinaryTuiInputAllowed(): void {
-		if (this.isWebGuiModeActive?.()) throw new Error("Exit WebGUI with /webgui before using ordinary TUI commands.");
-	}
-
 	#bindSessionEventBus(): void {
-		for (const unsubscribe of this.#sessionEventBusUnsubscribers) unsubscribe();
-		this.#sessionEventBusUnsubscribers = [];
+		if (this.#sessionEventBusUnsubscribers.length > 0) return;
 		const bus = this.session.eventBus ?? this.#eventBus;
 		if (bus)
 			this.#sessionEventBusUnsubscribers.push(
@@ -3605,7 +3532,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			}),
 		];
 		this.#bindSessionEventBus();
-		const boundSession = this.session;
 		let redactorLoads = 0;
 		this.#sessionBindingUnsubscribers.push(
 			() => {
@@ -3613,8 +3539,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 			cfgStreamRedactPatterns.listen(this.settings, async patterns => {
 				const load = ++redactorLoads;
-				const redactor = await StreamRedactor.load(boundSession.sessionManager.getCwd(), patterns);
-				if (load === redactorLoads && this.session === boundSession) this.#streamPublisher?.setRedactor(redactor);
+				const redactor = await StreamRedactor.load(this.sessionManager.getCwd(), patterns);
+				if (load === redactorLoads) this.#streamPublisher?.setRedactor(redactor);
 			}),
 		);
 		this.#mouseCapture = cfgTuiMouse.get(this.settings);
@@ -3638,7 +3564,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#scheduleLoopAutoSubmit(): void {
 		this.#cancelLoopAutoSubmit();
-		if (this.isWebGuiModeActive?.()) return;
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
 		if (this.#loopIntervalMs !== undefined && isLoopLimitExhausted(this.loopLimit)) {
 			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
@@ -3659,7 +3584,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#loopAutoSubmitTimer = setTimeout(() => {
 			this.#loopAutoSubmitTimer = undefined;
 			try {
-				if (this.isWebGuiModeActive?.()) return;
 				if (!this.loopModeEnabled || !this.onInputCallback || this.#isShuttingDown) return;
 				if (this.#loopIntervalMs !== undefined && isLoopDurationExpired(this.loopLimit)) {
 					this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
@@ -3704,7 +3628,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#scheduleGoalContinuation(): void {
 		this.#cancelGoalContinuation("rescheduled");
 		const stop = (reason: string) => this.#logGoalContinuation("suppressed", reason);
-		if (this.isWebGuiModeActive?.()) return stop("webgui_mode");
 		if (this.loopModeEnabled) return stop("loop_mode");
 		if (!this.onInputCallback) return stop("not_waiting_for_input");
 		if (!cfgGoalContinuationModes.get(this.session.settings).includes("interactive"))
@@ -3738,7 +3661,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				const stopWaiting = (reason: string) =>
 					this.#logGoalContinuation("suppressed", reason, { ...elapsed(), stage: "idle_wait" });
 				if (!this.onInputCallback) return stopWaiting("not_waiting_for_input");
-				if (this.isWebGuiModeActive?.()) return stopWaiting("webgui_mode");
 				if (this.session !== owner) return stopWaiting("session_changed");
 				if (!this.goalModeEnabled || this.goalModePaused) return stopWaiting("goal_disabled_or_paused");
 				// The idle timer can outlive its scheduling window; agent_end reschedules.
@@ -3830,7 +3752,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * `agent_end` re-arms both.
 	 */
 	#isAutoSubmitBlocked(): boolean {
-		if (this.isWebGuiModeActive?.()) return true;
 		return (
 			this.session.isStreaming ||
 			this.session.isCompacting ||
@@ -3844,7 +3765,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#submitLoopPromptWhenReady(prompt: string): void {
-		if (this.isWebGuiModeActive?.()) return;
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
 		if (isLoopDurationExpired(this.loopLimit)) {
 			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
@@ -3875,7 +3795,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #loopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
-		if (this.isWebGuiModeActive?.()) return;
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
 		// Do not compact or reset a LoopN turn while its native jobs are still settling.
 		// The prompt-only path checks the same gate immediately before advancing the list.
@@ -4042,7 +3961,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	armLoopAutoSubmit(promptPromise: Promise<unknown>): void {
 		this.#cancelLoopAutoSubmit();
-		if (this.isWebGuiModeActive?.()) return;
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
 		if (this.#loopIntervalMs === undefined) {
 			this.#scheduleLoopAutoSubmit();
@@ -4230,8 +4148,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			message,
 			state: this.#getSessionModeState(),
 		});
-		if (this.isWebGuiModeActive?.())
-			return refuse("conflict", "Exit WebGUI before changing the ordinary session mode.");
 		if (!cfgExtensionHandlersModeControl.get(this.session.settings)) {
 			return refuse("disabled", "Extension mode control is disabled in settings (extensionHandlers.modeControl).");
 		}
@@ -4525,7 +4441,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		},
 		options?: { preserveDraft?: boolean; clearEditor?: boolean },
 	): SubmittedUserInput {
-		this.#assertOrdinaryTuiInputAllowed();
 		const submission: SubmittedUserInput = {
 			text: input.text,
 			images: input.images,
@@ -7675,7 +7590,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 		followUp?: ConversationPosition,
 	): Promise<boolean> {
-		this.#assertOrdinaryTuiInputAllowed();
 		const state = this.session.getWorkspaceModeState();
 		if (!initialPrompt || !state.enabled) {
 			this.session.setWorkspaceModeState({ ...state, enabled: initialPrompt ? true : !state.enabled });
@@ -7717,7 +7631,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		this.#assertOrdinaryTuiInputAllowed();
 		if (this.goalModeEnabled || this.goalModePaused) {
 			this.showWarning("Exit goal mode first.");
 			return false;
@@ -7792,7 +7705,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		this.#assertOrdinaryTuiInputAllowed();
 		if (this.vibeModeEnabled) {
 			await this.#exitVibeMode();
 			return false;
@@ -8029,7 +7941,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 		options?: { autoOrchestrate?: boolean },
 	): Promise<boolean> {
-		this.#assertOrdinaryTuiInputAllowed();
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
 			return false;
@@ -8074,7 +7985,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		this.#assertOrdinaryTuiInputAllowed();
 		try {
 			if (this.planModeEnabled || this.planModePaused) {
 				this.#warnPlanModeBlocks();
@@ -8878,8 +8788,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	stop(): void {
 		this.#closeAttempt?.abort();
-		this.#webGuiInputUnsubscribe?.();
-		this.#webGuiInputUnsubscribe = undefined;
 		for (const unsubscribe of this.#sessionBindingUnsubscribers) unsubscribe();
 		this.#sessionBindingUnsubscribers = [];
 		for (const unsubscribe of this.#sessionEventBusUnsubscribers) unsubscribe();
@@ -8982,10 +8890,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * cancellable and first ask extensions through `session_before_shutdown`.
 	 */
 	async shutdown(options?: { cancellable?: boolean }): Promise<void> {
-		if (options?.cancellable !== false && this.isWebGuiModeActive?.()) {
-			await this.handleWebGuiModeSubmit?.("/webgui");
-			return;
-		}
 		if (this.#isShuttingDown) {
 			// Another close request ends the pending attempt's prompts; that
 			// attempt keeps ownership of teardown and can no longer be cancelled.
@@ -9274,16 +9178,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	// Extension UI integration
 	setToolUIContext(uiContext: ExtensionUIContext, hasUI: boolean): void {
 		this.#toolUiContextSetter(uiContext, hasUI);
-		this.#activeToolUIContext = uiContext;
-	}
-
-	/** Ownership probe for browser teardown; the tool getter remains the enriched TUI context. */
-	ownsToolUIContext(uiContext: ExtensionUIContext): boolean {
-		return this.#activeToolUIContext === uiContext;
-	}
-
-	initializeWebGuiNativeHost(): void {
-		activateNativeWebGuiComposition();
 	}
 
 	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void {
@@ -9293,7 +9187,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	setEditorComponent(
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void {
-		this.#assertOrdinaryTuiInputAllowed();
 		const previousEditor = this.editor;
 		const previousText = previousEditor.getText();
 		const nextEditor = factory
@@ -10035,14 +9928,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#vibeSessionTransitionBlocked(): boolean {
-		if (this.isWebGuiModeActive?.()) return true;
 		if (!this.vibeModeEnabled) return false;
 		this.session.emitNotice("warning", "Exit vibe mode first.");
 		return true;
 	}
 
 	async prepareSessionSwitch(planReviewOwner?: object): Promise<void> {
-		this.#assertOrdinaryTuiInputAllowed();
 		this.#hidePlanReview(planReviewOwner);
 		this.#clearJudgmentBatchProgress(true);
 		await this.#btwController.dispose();
@@ -10412,12 +10303,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async handleResumeSession(sessionPath: string, options?: ResumeSessionOptions): Promise<void> {
-		this.#assertOrdinaryTuiInputAllowed();
 		await this.#selectorController.handleResumeSession(sessionPath, options);
 	}
 
 	handleSessionDeleteCommand(): Promise<void> {
-		this.#assertOrdinaryTuiInputAllowed();
 		return this.#selectorController.handleSessionDeleteCommand();
 	}
 

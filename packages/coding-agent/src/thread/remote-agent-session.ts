@@ -53,7 +53,7 @@ import type { ExtensionRunner } from "../extensibility/extensions";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState } from "../goals/state";
-import { AgentRegistry, type AgentRegistryApi, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
 import {
 	type AgentSessionEvent,
@@ -243,8 +243,6 @@ export interface RemoteAgentSessionInit {
 	readonly modelRegistry?: ModelRegistry | null;
 	/** Main job manager the worker session registers its async jobs with. */
 	readonly asyncJobManager?: AsyncJobManagerApi | null;
-	/** Registry owning this mirror, independent of the current async context. */
-	readonly agentRegistry?: AgentRegistryApi;
 }
 
 /** Content-addressed blob store shared by every session of this process (the worker writes to the same directory). */
@@ -273,7 +271,6 @@ export class RemoteAgentSession implements AgentViewSession {
 	readonly #host: SessionHostClient | undefined;
 	readonly #modelRegistry: ModelRegistry | undefined;
 	readonly #asyncJobs: AsyncJobManagerApi | undefined;
-	readonly #agentRegistry: AgentRegistryApi;
 	#state: SessionMirrorState;
 	#pendingToolCalls: Set<string>;
 	readonly #messages: AgentMessage[];
@@ -311,7 +308,6 @@ export class RemoteAgentSession implements AgentViewSession {
 		this.#host = init.host;
 		this.#modelRegistry = init.modelRegistry ?? undefined;
 		this.#asyncJobs = init.asyncJobManager ?? undefined;
-		this.#agentRegistry = init.agentRegistry ?? AgentRegistry.global();
 		this.#state = init.state;
 		this.#pendingToolCalls = new Set(init.state.pendingToolCalls);
 		this.#messages = init.messages;
@@ -1107,7 +1103,7 @@ export class RemoteAgentSession implements AgentViewSession {
 
 	/** Nearest main-thread session up the registry's parent chain, else the main agent's. */
 	#mainAncestor(): AgentSession | undefined {
-		const registry = this.#agentRegistry;
+		const registry = AgentRegistry.global();
 		const seen = new Set<string>();
 		let id = this.agentId === undefined ? undefined : registry.get(this.agentId)?.parentId;
 		while (id !== undefined && !seen.has(id)) {

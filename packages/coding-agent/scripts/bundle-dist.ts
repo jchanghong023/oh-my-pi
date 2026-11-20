@@ -13,11 +13,6 @@ import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { buildOpenWikiResources, resetOpenWikiResources, writeOpenWikiResources } from "./openwiki-resources";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
-import {
-	prepareWebGuiResources,
-	resetWebGuiResources,
-	writeWebGuiResources,
-} from "../../../scripts/generate-webgui-resources";
 import { withCompilerActivity } from "../../../scripts/test-gate-events";
 
 const packageDir = path.join(import.meta.dir, "..");
@@ -116,15 +111,10 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 export async function bundleDist(outDir: string = defaultOutDir): Promise<void> {
 	const cliPath = path.join(outDir, "cli.js");
 	const start = Bun.nanoseconds();
-	const repoRoot = path.resolve(packageDir, "../..");
-	const webGuiDir = path.join(packageDir, "src/webgui");
 	// Register each reset before its write so partial failures are covered.
 	const resets: Array<() => Promise<void>> = [];
 	const failures: unknown[] = [];
 	try {
-		const webGuiResources = await prepareWebGuiResources(repoRoot);
-		resets.push(() => resetWebGuiResources(webGuiDir));
-		await writeWebGuiResources(webGuiDir, webGuiResources);
 		const openWikiResources = await buildOpenWikiResources();
 		resets.push(resetOpenWikiResources);
 		await writeOpenWikiResources(openWikiResources);
@@ -204,7 +194,6 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		await ensureShebang(cliPath);
 		await Bun.write(path.join(outDir, "docs-index.generated.txt"), docsPayload.payload);
 		await Bun.write(path.join(outDir, "spec-driven-resources.tar.gz"), specDrivenArchive);
-		await Bun.write(path.join(outDir, "webgui-resources.generated.txt"), webGuiResources.text);
 		await Bun.write(path.join(outDir, "openwiki-resources.generated.txt"), openWikiText);
 	} catch (error) {
 		failures.push(error);

@@ -11,21 +11,6 @@ import { copyToClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import type { InteractiveModeContext } from "../types";
 
-/** Real host operations for todos; browser hosts provide an editor and clipboard, never a terminal facade. */
-export interface TodoCommandHost {
-	session: InteractiveModeContext["session"];
-	sessionManager: InteractiveModeContext["sessionManager"];
-	showStatus(text: string): void;
-	showWarning(text: string): void;
-	showError(text: string): void;
-	setTodos(phases: TodoPhase[]): void;
-	setTodoExpanded(expanded: boolean): void;
-	todoExpanded: boolean;
-	toggleTodoExpansion(): void;
-	editMarkdown(markdown: string): Promise<string | undefined>;
-	copyMarkdown(markdown: string): Promise<void>;
-}
-
 const USAGE = [
 	"Usage: /todo <verb> [args]",
 	"  /todo                              Show current todos",
@@ -146,7 +131,7 @@ function buildSystemReminder(action: string, phases: TodoPhase[], removed = fals
 }
 
 export class TodoCommandController {
-	constructor(private readonly ctx: InteractiveModeContext | TodoCommandHost) {}
+	constructor(private readonly ctx: InteractiveModeContext) {}
 
 	/**
 	 * True latest todo state for the user-facing /todo verbs. Reads from session
@@ -180,7 +165,7 @@ export class TodoCommandController {
 				await this.#editInExternalEditor();
 				return;
 			case "copy":
-				await this.#copyMarkdown();
+				this.#copyMarkdown();
 				return;
 			case "export":
 				await this.#exportToFile(rest);
@@ -221,15 +206,14 @@ export class TodoCommandController {
 		this.ctx.showStatus(phasesToMarkdown(phases).trimEnd());
 	}
 
-	async #copyMarkdown(): Promise<void> {
+	#copyMarkdown(): void {
 		const phases = this.#currentPhases();
 		if (phases.length === 0) {
 			this.ctx.showWarning("No todos to copy.");
 			return;
 		}
 		try {
-			if ("copyMarkdown" in this.ctx) await this.ctx.copyMarkdown(phasesToMarkdown(phases));
-			else copyToClipboard(phasesToMarkdown(phases));
+			copyToClipboard(phasesToMarkdown(phases));
 			this.ctx.showStatus("Copied todos as Markdown to clipboard.");
 		} catch (error) {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
@@ -424,20 +408,6 @@ export class TodoCommandController {
 	// ------------------------------------------------------------- editor
 
 	async #editInExternalEditor(): Promise<void> {
-		if ("editMarkdown" in this.ctx) {
-			const edited = await this.ctx.editMarkdown(phasesToMarkdown(this.#currentPhases()));
-			if (edited === undefined) return;
-			const { phases, errors } = markdownToPhases(edited);
-			if (errors.length) {
-				this.ctx.showError(`Could not parse Markdown:\n  ${errors.join("\n  ")}`);
-				return;
-			}
-			this.#commit(phases, "/todo edit");
-			this.ctx.showStatus(
-				`Todos updated from editor: ${phases.length} phase(s), ${phases.reduce((count, phase) => count + phase.tasks.length, 0)} task(s).`,
-			);
-			return;
-		}
 		const editorCmd = getEditorCommand();
 		if (!editorCmd) {
 			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
@@ -488,7 +458,7 @@ export class TodoCommandController {
 			attribution: "user" as const,
 			timestamp: Date.now(),
 		};
-		("editMarkdown" in this.ctx ? this.ctx.session.agent : this.ctx.agent).appendMessage(message);
+		this.ctx.agent.appendMessage(message);
 		this.ctx.sessionManager.appendMessage(message);
 	}
 }

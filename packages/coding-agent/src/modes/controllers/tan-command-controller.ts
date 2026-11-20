@@ -102,16 +102,8 @@ async function removeCloneSession(cloneFile: string): Promise<void> {
 	]);
 }
 
-/** Host-independent inputs for the native background dispatch operation. */
-export type TanCommandContext = Pick<
-	InteractiveModeContext,
-	"session" | "sessionManager" | "settings" | "mcpManager" | "showStatus" | "showError"
-> & {
-	sessionScopedCwd?: boolean;
-};
-
 export class TanCommandController {
-	constructor(private readonly ctx: TanCommandContext) {}
+	constructor(private readonly ctx: InteractiveModeContext) {}
 
 	/** Dispatch `work` to a background clone of this session; resolves `false` when nothing was dispatched. */
 	async start(work: string, images?: ImageContent[]): Promise<boolean> {
@@ -188,9 +180,7 @@ export class TanCommandController {
 		const sessionDir = parentFile.slice(0, -6);
 		const settings = createSubagentSettings(this.ctx.settings);
 		const enableLsp = cfgTaskEnableLsp.get(this.ctx.settings) !== false;
-		const agentRegistry = this.ctx.sessionScopedCwd
-			? (session.agentRegistry ?? AgentRegistry.global())
-			: AgentRegistry.global();
+		const agentRegistry = AgentRegistry.global();
 		const label = `/tan ${previewWork(trimmedWork)}`;
 		const parentHooks = sdk.resolveNativeChildSessionHooks({}, session.nativeChildCapabilities);
 		const sessionHooks = { ...parentHooks, toolRestrictions: parentHooks.toolRestrictions?.clone() };
@@ -249,7 +239,6 @@ export class TanCommandController {
 								model,
 								thinkingLevel,
 								systemPrompt,
-								bindProcessState: this.ctx.sessionScopedCwd ? false : undefined,
 								toolNames,
 								mountedToolNames,
 								advertiseHeadlessAsk: activeToolNames.includes("ask"),

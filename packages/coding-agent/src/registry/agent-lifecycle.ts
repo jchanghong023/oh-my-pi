@@ -190,19 +190,9 @@ export interface AgentLifecycleApi {
 export class AgentLifecycleManager implements AgentLifecycleApi {
 	static #global: AgentLifecycleManager | undefined;
 	static #installed: AgentLifecycleApi | undefined;
-	static readonly #scoped = new WeakMap<AgentRegistryApi, AgentLifecycleManager>();
 
-	/** The scoped or installed lifecycle, lazily a local manager bound to its registry. */
+	/** The installed lifecycle, lazily a local manager bound to the global registry. */
 	static global(): AgentLifecycleApi {
-		const scopedRegistry = AgentRegistry.scoped();
-		if (scopedRegistry) {
-			let manager = AgentLifecycleManager.#scoped.get(scopedRegistry);
-			if (!manager) {
-				manager = new AgentLifecycleManager(scopedRegistry);
-				AgentLifecycleManager.#scoped.set(scopedRegistry, manager);
-			}
-			return manager;
-		}
 		if (AgentLifecycleManager.#installed) return AgentLifecycleManager.#installed;
 		const current = AgentLifecycleManager.#global;
 		if (current) {
@@ -1048,9 +1038,6 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		this.#revivals.clear();
 		this.#parks.clear();
 		this.#persistedReviverFactory = undefined;
-		if (AgentLifecycleManager.#scoped.get(this.#registry) === this) {
-			AgentLifecycleManager.#scoped.delete(this.#registry);
-		}
 		if (AgentLifecycleManager.#global === this) AgentLifecycleManager.#global = undefined;
 	}
 

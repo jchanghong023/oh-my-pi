@@ -80,58 +80,58 @@ function windowsOpenerCommand(target: string): string[] {
 		Buffer.from(script, "utf16le").toString("base64"),
 	];
 }
-
-/** Open a URL or file path in the default application, reporting the opener's actual result. */
-export async function openPathWithResult(
-	urlOrPath: string,
-): Promise<{ opened: true } | { opened: false; reason: string }> {
-	let cmd: string[] | undefined;
-	try {
-		switch (process.platform) {
-			case "darwin":
-				cmd = ["open", urlOrPath];
-				break;
-			case "win32":
-				cmd = windowsOpenerCommand(urlOrPath);
-				break;
-			default: {
-				const wslPath = getExistingWslLocalPath(urlOrPath);
-				cmd = wslPath ? ["wslview", wslPath] : ["xdg-open", urlOrPath];
-				break;
-			}
+/** Open a URL or file path in the default browser/application. Best-effort, never throws. */
+export function openPath(urlOrPath: string): void {
+	let cmd: string[];
+	switch (process.platform) {
+		case "darwin":
+			cmd = ["open", urlOrPath];
+			break;
+		case "win32":
+			cmd = windowsOpenerCommand(urlOrPath);
+			break;
+		default: {
+			const wslPath = getExistingWslLocalPath(urlOrPath);
+			cmd = wslPath ? ["wslview", wslPath] : ["xdg-open", urlOrPath];
+			break;
 		}
-		const child = Bun.spawn(cmd, {
+	}
+	let child: Bun.Subprocess | undefined;
+	try {
+		child = Bun.spawn(cmd, {
 			stdin: "ignore",
 			stdout: "ignore",
 			stderr: "ignore",
 			windowsHide: process.platform === "win32",
 		});
-		// Some openers (notably xdg-open) stay alive for the application's lifetime.
-		child.unref();
-		const exitCode = await child.exited;
-		if (exitCode !== 0) {
-			const reason = `External opener exited with status ${exitCode}`;
-			logger.warn("External opener exited with non-zero status", {
-				command: cmd[0],
-				target: logTarget(urlOrPath),
-				exitCode,
-			});
-			return { opened: false, reason };
-		}
-		// This confirms OS handoff, not that a browser displayed the page.
-		return { opened: true };
 	} catch (error) {
+		// Spawn threw synchronously (missing binary, denied exec, sandbox
+		// restriction, …). Best-effort: log so the failure isn't invisible while
+		// still letting the caller advertise a copy-URL fallback.
 		logger.warn("Failed to open external URL/path", {
-			command: cmd?.[0],
+			command: cmd[0],
 			target: logTarget(urlOrPath),
 			// Spawn errors can echo argv, including an encoded URL on Windows.
 			code: error instanceof Error && "code" in error ? error.code : undefined,
 		});
-		return { opened: false, reason: "Failed to open external URL/path" };
+		return;
 	}
-}
-
-/** Open a URL or file path in the default application. Best-effort, never throws. */
-export function openPath(urlOrPath: string): void {
-	void openPathWithResult(urlOrPath);
+	// Detect delayed failures (exec succeeded but the opener exited non-zero)
+	// without blocking the caller. Recording them makes silent misconfigurations
+	// (e.g. `xdg-open` present but no MIME handler for `https`) diagnosable from
+	// `~/.omp/logs/omp.*.log`.
+	child.exited.then(
+		exitCode => {
+			if (typeof exitCode === "number" && exitCode !== 0) {
+				logger.warn("External opener exited with non-zero status", {
+					command: cmd[0],
+					target: logTarget(urlOrPath),
+					exitCode,
+				});
+			}
+		},
+		() => {
+			// Ignore — awaiting the subprocess is best-effort telemetry.
+		},
+	);
 }

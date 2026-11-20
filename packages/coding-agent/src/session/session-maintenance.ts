@@ -3170,14 +3170,9 @@ export class SessionMaintenance {
 		});
 	}
 
-	/**
-	 * Stop-boundary steering can force another model call even when follow-up
-	 * auto-drain is off. Budget both queues when eligible, but never when held.
-	 */
 	#pendingQueuedDrainMessages(): AgentMessage[] {
 		const agent = this.#host.agent;
-		if (agent.queuedMessagesHeld) return [];
-		return [...agent.peekSteeringQueue(), ...(agent.followUpAutoDrain ? agent.peekFollowUpQueue() : [])];
+		return [...agent.peekSteeringQueue(), ...agent.peekFollowUpQueue()];
 	}
 
 	#replaceActiveMessages(activeMessages: AgentMessage[]): void {

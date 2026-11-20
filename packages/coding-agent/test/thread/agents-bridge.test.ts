@@ -100,40 +100,6 @@ async function mainSession(id: string): Promise<AgentSession> {
 }
 
 describe("agent bridging across subagent workers", () => {
-	it("keeps worker registry generations, lifecycle and crash cleanup in their owning scope", async () => {
-		const first = new AgentRegistry();
-		const second = new AgentRegistry();
-		const one = await AgentRegistry.runScoped(first, startWorker);
-		const two = await AgentRegistry.runScoped(second, startWorker);
-
-		await one.probe.open("same", {});
-		await two.probe.open("same", {});
-		const firstRef = first.get("same");
-		const secondRef = second.get("same");
-		if (!firstRef || !secondRef) throw new Error("Workers did not register their scoped agents");
-		expect(firstRef?.session).toBeDefined();
-		expect(secondRef?.session).toBeDefined();
-		expect(firstRef).not.toBe(secondRef);
-		expect(await one.probe.grab("same")).toBe(firstRef?.generation);
-		expect(await one.probe.cas("same", "running")).toEqual({ grabbed: true, fresh: true, canonical: true });
-		expect(await two.probe.manages()).toBe(true);
-
-		one.worker.terminate("scope test");
-		await waitFor(() => first.get("same")?.session === null);
-		expect(second.get("same")).toBe(secondRef);
-		expect(secondRef?.session).toBeDefined();
-	});
-
-	it("keeps scoped IRC buses separate from each other and from the process bus", () => {
-		const first = new AgentRegistry();
-		const second = new AgentRegistry();
-		const processBus = IrcBus.global();
-		const firstBus = AgentRegistry.runScoped(first, () => IrcBus.global());
-		expect(AgentRegistry.runScoped(first, () => IrcBus.global())).toBe(firstBus);
-		expect(AgentRegistry.runScoped(second, () => IrcBus.global())).not.toBe(firstBus);
-		expect(firstBus).not.toBe(processBus);
-	});
-
 	it("mirrors a real worker-homed AgentSession on main: streaming, run state, events, messages", async () => {
 		const { worker, probe } = await startWorker();
 		const key = await probe.open("W1", { gated: true });

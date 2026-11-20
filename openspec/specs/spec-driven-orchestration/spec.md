@@ -133,7 +133,7 @@ OMP MUST 通过 `omp superpowers <relative-script> [args...]` 提供包内技能
 普通 OMP 的实施、验证、审查、原生子代理和包内资源授权 MUST 保持既有行为。
 
 #### Scenario: 原生入口实施需求
-- **WHEN** 开发者在普通 OMP、TUI 或 WebGUI 中实施需求
+- **WHEN** 开发者在普通 OMP 或 TUI 中实施需求
 - **THEN** 沿用各入口的原生权限、技能、任务及验证规则
 
 #### Scenario: 原生实施会话能力和技能授权存续

@@ -15,14 +15,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { sanitizeDisplayLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
 import { TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { InteractiveModeContext } from "../modes/types";
-import {
-	CollabHost,
-	type CollabHostOptions,
-	type CollabHostPort,
-	type CollabNativeContext,
-	CollabHostStoppedError,
-	CollabRelayUnavailableError,
-} from "./host";
+import { CollabHost, CollabHostStoppedError, CollabRelayUnavailableError } from "./host";
 import type { CollabAccess } from "./registry";
 
 import { cfgCollabAutoStart, cfgCollabRelayUrl, cfgCollabWebUrl } from "./settings";
@@ -49,8 +42,7 @@ export interface CollabStartOptions {
 
 export class CollabController {
 	readonly instanceId: string;
-	#ctx: InteractiveModeContext | CollabHostPort;
-	private readonly hostContext: InteractiveModeContext | CollabNativeContext;
+	#ctx: InteractiveModeContext;
 	#generation = 0;
 	#host: CollabHost | undefined;
 	/** Serializes stop/start sequences so a rotation never interleaves with another. */
@@ -72,9 +64,8 @@ export class CollabController {
 	#lastRelaunchCauseAt: number | undefined;
 	#relaunchTimer: Timer | undefined;
 
-	constructor(ctx: InteractiveModeContext | CollabNativeContext) {
-		this.hostContext = ctx;
-		this.#ctx = "nativePort" in ctx ? ctx.nativePort : ctx;
+	constructor(ctx: InteractiveModeContext) {
+		this.#ctx = ctx;
 		// 64 random bits: unique per process on one machine, short enough for `omp collab link <id>` and socket paths.
 		this.instanceId = randomBytes(8).toString("hex");
 	}
@@ -260,14 +251,13 @@ export class CollabController {
 		const webUrl = cfgCollabWebUrl.get(this.#ctx.settings) || "";
 		this.#observeSessionChanges();
 		const previous = this.#host;
-		const options: CollabHostOptions = {
+		const host: CollabHost = new CollabHost(this.#ctx, {
 			instanceId: this.instanceId,
 			generation: ++this.#generation,
 			access,
 			guestActionsReady: () => this.#startupComplete && !this.#ctx.session.isSessionTransitioning,
 			onEnded: () => this.#onHostEnded(host),
-		};
-		const host: CollabHost = new CollabHost(this.hostContext, options);
+		});
 		this.#host = host;
 		this.#ctx.collabHost = host;
 		try {

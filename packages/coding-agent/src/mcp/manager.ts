@@ -1317,12 +1317,10 @@ export class MCPManager implements MCPManagerApi {
 	 * Zero disables the barrier deadline; an unresponsive server can then wait indefinitely.
 	 * Tool-change callbacks are drained before returning; callers should still refresh their
 	 * session with the final tool snapshot before sending a prompt.
-	 * stopOnFailure lets admission owners reject an initial failure without waiting for retries.
 	 */
-	async waitForStartup(timeoutMs: number, options?: { stopOnFailure?: boolean }): Promise<MCPStartupStatus> {
+	async waitForStartup(timeoutMs: number): Promise<MCPStartupStatus> {
 		const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Infinity;
 		for (;;) {
-			if (options?.stopOnFailure && this.#startupFailures.size > 0) break;
 			const pending = [
 				...this.#startupUpdates.values(),
 				...this.#pendingReconnections.values(),
@@ -1334,17 +1332,7 @@ export class MCPManager implements MCPManagerApi {
 			const remaining = deadline - Date.now();
 			const timer = remaining === Infinity ? undefined : setTimeout(resolve, Math.min(remaining, 2_147_483_647));
 			try {
-				const settled = options?.stopOnFailure
-					? Promise.race(
-							pending.map(update =>
-								update.then(
-									() => {},
-									() => {},
-								),
-							),
-						)
-					: Promise.allSettled(pending);
-				await Promise.race([settled, promise]);
+				await Promise.race([Promise.allSettled(pending), promise]);
 			} finally {
 				clearTimeout(timer);
 			}

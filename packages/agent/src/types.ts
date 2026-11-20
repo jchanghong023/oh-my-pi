@@ -23,7 +23,6 @@ import type {
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import type { HarmonyAuditEvent } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import type { AppendOnlyContextManager } from "./append-only-context";
-import type { AgentPauseGate } from "./pause";
 import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
 import type { SentToolDefinitions } from "./sent-tool-definitions";
 import type { AgentTelemetryConfig } from "./telemetry";
@@ -196,10 +195,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model;
 	/** Reuse the Agent's current model-aware token counter for request-only usage accounting. */
 	getTokenizer?: () => Tokenizer;
-	/** Gate shared by the owning root and its workers. Defaults to the process-wide gate. */
-	pauseGate?: AgentPauseGate;
 
-	/** Reports whether this loop has reached a safe pause boundary. */
+	/** Reports whether this loop has reached a safe process-pause boundary. */
 	onPauseChange?: (paused: boolean) => void;
 
 	/**
@@ -1046,35 +1043,14 @@ export interface CustomAgentMessages {
  * This abstraction allows apps to add custom message types while maintaining
  * type safety and compatibility with the base LLM messages.
  */
-/** Stable input provenance retained by the runtime queue and journal, never sent as provider options. */
-export interface AgentInputMetadata {
-	inputId?: string;
-	inputAdmissionSeq?: number;
-	inputClientId?: string;
-	sourceCommand?: {
-		sessionId: string | null;
-		commandId: string;
-		fingerprint: string;
-		epoch?: string;
-		type?: string;
-		automationId?: string;
-	};
-	toolDenylist?: readonly string[];
-}
-
-export type AgentUserMessage = Extract<Message, { role: "user" }> & AgentInputMetadata;
-
-export type AgentMessage =
-	| Exclude<Message, { role: "user" }>
-	| AgentUserMessage
-	| CustomAgentMessages[keyof CustomAgentMessages];
+export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessages];
 
 /**
  * Agent state containing all configuration and conversation data.
  */
 export interface AgentState {
 	systemPrompt: string[];
-	model: Model | undefined;
+	model: Model;
 	thinkingLevel?: Effort;
 	disableReasoning?: boolean;
 	tools: AgentTool<any>[];

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
@@ -342,7 +341,6 @@ export class InputController {
 	#submissionHookOrder: Promise<void> = Promise.resolve();
 	/** Submissions (Enter or the follow-up key) the session has not admitted yet and that still dispatch locally. */
 	readonly #submissionDispatches = new Set<Promise<void>>();
-	private readonly submissionDispatchScope = new AsyncLocalStorage<Promise<void>>();
 
 	/** Return the last full editor snapshot delivered by its change contract. */
 	getDraftText(): string {
@@ -540,7 +538,6 @@ export class InputController {
 			this.ctx.ui.addInputListener(data => this.#handleInlineMouse(data));
 		}
 		this.ctx.editor.onEscape = () => {
-			if (this.ctx.isWebGuiModeActive?.()) return;
 			// `/mcp test` advertises Esc until each owner's post-settlement grace expires.
 			// Cancel every overlapping test before any main-turn or side-channel action.
 			if (this.ctx.mcpTestEscapeHandlers.size > 0) {
@@ -704,7 +701,6 @@ export class InputController {
 		this.ctx.editor.setActionKeys("app.exit", this.ctx.keybindings.getKeys("app.exit"));
 		this.ctx.editor.setActionKeys("app.display.reset", this.ctx.keybindings.getKeys("app.display.reset"));
 		this.ctx.editor.onDisplayReset = () => {
-			if (this.ctx.isWebGuiModeActive?.()) return;
 			// Explicit user gesture (display reset, Alt+L by default): re-query the
 			// terminal background once so a mid-session light/dark switch is picked
 			// up even on terminals without an end-to-end Mode 2031 notification
@@ -718,14 +714,12 @@ export class InputController {
 		this.ctx.editor.onSuspend = () => this.handleCtrlZ();
 		this.ctx.editor.setActionKeys("app.thinking.cycle", this.ctx.keybindings.getKeys("app.thinking.cycle"));
 		this.ctx.editor.onCycleThinkingLevel = () => {
-			if (this.ctx.isWebGuiModeActive?.()) return;
 			// Shift+Tab, Tab's way back: from the composer to the ask waiting above it.
 			if (this.ctx.focusAsk()) return;
 			hintUsage.record("effort");
 			this.cycleThinkingLevel();
 		};
 		this.ctx.editor.onSetThinkingLevel = value => {
-			if (this.ctx.isWebGuiModeActive?.()) return;
 			const level = parseConfiguredThinkingLevel(value);
 			const viewed = this.ctx.viewSession;
 			if (level === undefined || !viewed.getAvailableEffortSelectors().includes(level)) return;
@@ -741,21 +735,12 @@ export class InputController {
 			"app.model.selectTemporary",
 			this.ctx.keybindings.getKeys("app.model.selectTemporary"),
 		);
-		this.ctx.editor.onSelectModelTemporary = () => {
-			if (this.ctx.isWebGuiModeActive?.()) return;
-			this.ctx.showModelSelector({ temporaryOnly: true });
-		};
+		this.ctx.editor.onSelectModelTemporary = () => this.ctx.showModelSelector({ temporaryOnly: true });
 
 		// Global debug handler on TUI (works regardless of focus)
-		this.ctx.ui.onDebug = () => {
-			if (this.ctx.isWebGuiModeActive?.()) return;
-			this.ctx.showDebugSelector();
-		};
+		this.ctx.ui.onDebug = () => this.ctx.showDebugSelector();
 		this.ctx.editor.setActionKeys("app.model.select", this.ctx.keybindings.getKeys("app.model.select"));
-		this.ctx.editor.onSelectModel = () => {
-			if (this.ctx.isWebGuiModeActive?.()) return;
-			this.ctx.showModelSelector();
-		};
+		this.ctx.editor.onSelectModel = () => this.ctx.showModelSelector();
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.pasteImage",
 			this.ctx.keybindings.getKeys("app.clipboard.pasteImage"),
@@ -783,7 +768,6 @@ export class InputController {
 		const planModeKeys = this.ctx.keybindings.getKeys("app.plan.toggle");
 		for (const key of planModeKeys) {
 			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (this.ctx.isWebGuiModeActive?.()) return;
 				void this.ctx.handlePlanModeCommand().catch(error => {
 					this.ctx.showWarning(error instanceof Error ? error.message : String(error));
 				});
@@ -791,43 +775,25 @@ export class InputController {
 		}
 
 		for (const key of this.ctx.keybindings.getKeys("app.session.new")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (this.ctx.isWebGuiModeActive?.()) return;
-				this.ctx.handleNewCommand();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleNewCommand());
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.session.tree")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (this.ctx.isWebGuiModeActive?.()) return;
-				this.ctx.showTreeSelector();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showTreeSelector());
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.session.fork")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (this.ctx.isWebGuiModeActive?.()) return;
-				this.ctx.showUserMessageSelector();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showUserMessageSelector());
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.session.resume")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (this.ctx.isWebGuiModeActive?.()) return;
-				this.ctx.showSessionSelector();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showSessionSelector());
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.message.followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.stt.toggle")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (this.ctx.isWebGuiModeActive?.()) return;
-				void this.ctx.handleSTTToggle();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleSTTToggle());
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.live.toggle")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (this.ctx.isWebGuiModeActive?.()) return;
-				void this.ctx.handleLiveCommand();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleLiveCommand());
 		}
 		// Push-to-talk uses its own binding, separate from the STT toggle.
 		this.ctx.editor.spaceHold.keys = this.ctx.keybindings.getKeys("app.stt.pushToTalk");
@@ -837,18 +803,14 @@ export class InputController {
 		}
 		// A modifier chord, not a bare letter: it sends text into the main session, mid-run if it is working.
 		for (const key of this.ctx.keybindings.getKeys("app.btw.inject")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (this.ctx.isWebGuiModeActive?.()) return;
-				this.ctx.handleBtwInjectKey();
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleBtwInjectKey());
 		}
 		const agentsHubKeys = new Set(this.ctx.keybindings.getKeys("app.agents.hub"));
 		const hubKeys = new Set([...agentsHubKeys, ...this.ctx.keybindings.getKeys("app.session.observe")]);
 		for (const key of hubKeys) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				if (this.ctx.isWebGuiModeActive?.()) return;
-				this.ctx.showAgentHub(agentsHubKeys.has(key) ? { trayFirst: true } : undefined);
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () =>
+				this.ctx.showAgentHub(agentsHubKeys.has(key) ? { trayFirst: true } : undefined),
+			);
 		}
 
 		// Double-tap left arrow on an empty editor: opens the agent hub from the
@@ -859,7 +821,6 @@ export class InputController {
 		// tap state to the hub so the same ←← that opened it also arms its close —
 		// otherwise the hub's fresh detector demands a second ←← (issue #4780).
 		this.ctx.editor.onLeftAtStart = () => {
-			if (this.ctx.isWebGuiModeActive?.()) return;
 			if (this.ctx.focusedAgentId) {
 				this.#handleFocusedLeftTap();
 				return;
@@ -877,7 +838,6 @@ export class InputController {
 		this.ctx.editor.onChange = (text: string) => {
 			const wasComposing = (this.#draftText ?? "").trim() !== "";
 			this.#draftText = text;
-			if (this.ctx.isWebGuiModeActive?.()) return;
 			// Typing signals an imminent turn; refresh the API connection now so
 			// the handshake overlaps composition instead of delaying the send.
 			if (text) this.ctx.session.prewarmModelConnection();
@@ -912,7 +872,6 @@ export class InputController {
 	}
 
 	#handleFocusedLeftTap(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		if (this.#detectLeftDoubleTap()) {
 			void this.ctx.unfocusSession();
 		}
@@ -1046,7 +1005,6 @@ export class InputController {
 
 	/** Focus a resolved agent id, ignoring already-viewing and surfacing errors as status. */
 	#focusResolvedAgent(nextId: string): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		if (nextId === this.ctx.focusedAgentId) {
 			// Reaffirming the current view is still the user's latest click: a
 			// parked agent reviving from an older click must not land over it.
@@ -1277,16 +1235,6 @@ export class InputController {
 				}
 			} finally {
 				hooksDone.resolve();
-			}
-			if (this.ctx.isWebGuiModeActive?.()) {
-				if (teamDraftDetached) {
-					restoreDetachedDraft(this.ctx.editor, text, inputImages, inputImageLinks);
-				} else {
-					const currentText = this.ctx.editor.getExpandedText();
-					this.ctx.editor.setCollapsedText([rawText ?? submittedText, currentText].filter(Boolean).join("\n\n"));
-				}
-				await this.submitWebGuiInput(rawText ?? submittedText);
-				return;
 			}
 			const submittedMode = parseSlashCommand(text)?.name;
 			const draftDetached =
@@ -1624,24 +1572,7 @@ export class InputController {
 		};
 		// A queued `/compact` waits for Enter input taken before it to reach the session (skill
 		// expansion, `/queue`, mode commands), the same as for the follow-up key.
-		this.ctx.editor.onSubmit = (text, rawText) => {
-			if (this.ctx.isWebGuiModeActive?.()) {
-				// Editor.submit resets text before onSubmit; keep that rejected draft
-				// and its still-pending attachments available while WebGUI owns input.
-				const submittedText = rawText ?? text;
-				if (!this.ctx.editor.getText() && submittedText) this.ctx.editor.setCollapsedText(submittedText);
-				return this.submitWebGuiInput(submittedText);
-			}
-			return this.#trackSubmission(() => submit(text, rawText));
-		};
-	}
-
-	private async submitWebGuiInput(text: string): Promise<void> {
-		try {
-			await this.ctx.handleWebGuiModeSubmit?.(text);
-		} catch (error) {
-			this.ctx.showError(error instanceof Error ? error.message : String(error));
-		}
+		this.ctx.editor.onSubmit = (text, rawText) => this.#trackSubmission(() => submit(text, rawText));
 	}
 
 	/**
@@ -1854,7 +1785,6 @@ export class InputController {
 	}
 
 	handleCtrlC(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		// Sync-flush the session JSONL so in-flight writes survive a hard exit.
 		// The TUI consumes Ctrl+C as a key event in raw mode, so postmortem's
 		// process-level SIGINT handler never fires. shutdown() awaits its own
@@ -1904,7 +1834,6 @@ export class InputController {
 	}
 
 	handleCtrlD(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		// Editor text (if any) is snapshotted at the start of shutdown() and
 		// persisted as a draft for the next resume. Empty text is also fine —
 		// shutdown clears any stale sidecar in that case.
@@ -1912,7 +1841,6 @@ export class InputController {
 	}
 
 	handleCtrlZ(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		// Job-control suspend is POSIX-only: on Windows `process.kill(_, "SIGSTOP")`
 		// throws `TypeError: Unknown signal: SIGSTOP` and takes the whole agent down
 		// via an uncaught exception (issue #2036, originally for SIGTSTP — same
@@ -1990,7 +1918,6 @@ export class InputController {
 	}
 
 	handleDequeue(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		const popped = this.#popLastQueuedMessage();
 		if (!popped) {
 			this.ctx.showStatus("No queued messages to restore");
@@ -2104,7 +2031,6 @@ export class InputController {
 	}
 
 	async handleRetry(): Promise<void> {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		if (this.ctx.collabGuest) {
 			this.ctx.showStatus("/retry is host-only during a collab session");
 			return;
@@ -2126,7 +2052,6 @@ export class InputController {
 		text: string,
 		detached?: Pick<SubmittedUserInput, "text" | "images" | "imageLinks">,
 	): Promise<void> {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		const source = detached ?? {
 			images: this.ctx.editor.pendingImages,
 			imageLinks: this.ctx.editor.pendingImageLinks,
@@ -2272,10 +2197,6 @@ export class InputController {
 
 	/** Send editor text as a follow-up message (queued behind current stream). */
 	async handleFollowUp(): Promise<void> {
-		if (this.ctx.isWebGuiModeActive?.()) {
-			await this.submitWebGuiInput(this.ctx.editor.getExpandedText());
-			return;
-		}
 		let text = this.#compactDraftImages(this.#trimSubmittedText(this.ctx.editor.getExpandedText()));
 		let images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 		let imageLinks =
@@ -2299,34 +2220,27 @@ export class InputController {
 			if (this.#submissionDispatches.delete(dispatch.promise)) dispatch.resolve();
 		};
 		try {
-			await this.submissionDispatchScope.run(dispatch.promise, async () => {
-				const earlier = this.#submissionHookOrder;
-				const hooksDone = Promise.withResolvers<void>();
-				this.#submissionHookOrder = hooksDone.promise;
-				try {
-					await earlier;
-					if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
-					if (this.ctx.session.extensionRunner?.hasHandlers("input")) {
-						try {
-							const input = await this.#runInputHandlers(text, images, imageLinks);
-							if (!input) return;
-							({ text, images, imageLinks } = input);
-						} catch (error) {
-							restoreDetachedDraft(this.ctx.editor, text, images, imageLinks);
-							this.ctx.showError(error instanceof Error ? error.message : String(error));
-							return;
-						}
+			const earlier = this.#submissionHookOrder;
+			const hooksDone = Promise.withResolvers<void>();
+			this.#submissionHookOrder = hooksDone.promise;
+			try {
+				await earlier;
+				if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
+				if (this.ctx.session.extensionRunner?.hasHandlers("input")) {
+					try {
+						const input = await this.#runInputHandlers(text, images, imageLinks);
+						if (!input) return;
+						({ text, images, imageLinks } = input);
+					} catch (error) {
+						restoreDetachedDraft(this.ctx.editor, text, images, imageLinks);
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return;
 					}
-				} finally {
-					hooksDone.resolve();
 				}
-				if (this.ctx.isWebGuiModeActive?.()) {
-					restoreDetachedDraft(this.ctx.editor, text, images, imageLinks);
-					await this.submitWebGuiInput(text);
-					return;
-				}
-				await this.#dispatchFollowUp(text, images, imageLinks, origin, admitted);
-			});
+			} finally {
+				hooksDone.resolve();
+			}
+			await this.#dispatchFollowUp(text, images, imageLinks, origin, admitted);
 		} finally {
 			admitted();
 		}
@@ -2452,7 +2366,6 @@ export class InputController {
 	}
 
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
-		if (this.ctx.isWebGuiModeActive?.()) return 0;
 		this.ctx.locallySubmittedUserSignatures.clear();
 		// On Esc (abort) the abort below records queued extension/agent messages in the
 		// transcript without a turn, so the post-abort drain can't auto-resume on them;
@@ -2514,15 +2427,6 @@ export class InputController {
 		}
 	}
 
-	/** Exclude only the actual current dispatch; external callers exclude none. */
-	hasOtherSubmissionDispatches(): boolean {
-		const current = this.submissionDispatchScope.getStore();
-		for (const dispatch of this.#submissionDispatches) {
-			if (dispatch !== current) return true;
-		}
-		return false;
-	}
-
 	/**
 	 * Resolves once every submission (Enter or the follow-up key) reached the session (prompt or
 	 * custom-message admission, or the pending-submission hand-off) or finished dispatching locally.
@@ -2536,7 +2440,7 @@ export class InputController {
 		const done = Promise.withResolvers<void>();
 		this.#submissionDispatches.add(done.promise);
 		try {
-			await this.submissionDispatchScope.run(done.promise, dispatch);
+			await dispatch();
 		} finally {
 			this.#submissionDispatches.delete(done.promise);
 			done.resolve();
@@ -2930,7 +2834,6 @@ export class InputController {
 	}
 
 	handleImagePathPaste(path: string, isCurrent?: () => boolean): Promise<void> {
-		if (this.ctx.isWebGuiModeActive?.()) return Promise.resolve();
 		return this.#pasteImageIntoFocus((sink, ownsTarget) => this.#pasteImagePath(path, sink, ownsTarget), isCurrent);
 	}
 
@@ -3023,7 +2926,6 @@ export class InputController {
 	}
 
 	async handleImagePaste(): Promise<boolean> {
-		if (this.ctx.isWebGuiModeActive?.()) return false;
 		if (!this.#clipboardIsTerminalLocal()) {
 			this.ctx.showStatus(REMOTE_CLIPBOARD_STATUS);
 			return false;
@@ -3151,7 +3053,6 @@ export class InputController {
 	}
 
 	async handleClipboardTextRawPaste(): Promise<void> {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		if (!this.#clipboardIsTerminalLocal()) {
 			this.ctx.showStatus(REMOTE_CLIPBOARD_STATUS);
 			return;
@@ -3178,7 +3079,6 @@ export class InputController {
 	 * before the submit lands, so the paste is staged the way cancelling the menu would.
 	 */
 	handleLargePaste(text: string, lineCount: number, options: PasteOptions = {}): boolean {
-		if (this.ctx.isWebGuiModeActive?.()) return true;
 		const threshold = cfgPasteLargeMenuThreshold.get(this.ctx.settings);
 		if (!(threshold > 0) || lineCount < threshold || options.submitAfterPaste) {
 			// Below the menu threshold: stage the paste as a text-attachment chip
@@ -3197,7 +3097,6 @@ export class InputController {
 	 * inline paste marker, so the pasted content is never lost.
 	 */
 	async presentLargePasteMenu(text: string, lineCount: number): Promise<void> {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		const WRAPPED_BLOCK = "Attach as a wrapped block";
 		const LOCAL_FILE = "Attach as local file";
 		const INLINE = "Paste inline";
@@ -3321,7 +3220,6 @@ export class InputController {
 
 	/** Copy the current editor line to the system clipboard. */
 	handleCopyCurrentLine(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		const { line } = this.ctx.editor.getCursor();
 		const text = this.ctx.editor.getLines()[line] || "";
 		if (!text) {
@@ -3340,7 +3238,6 @@ export class InputController {
 
 	/** Copy current prompt text to system clipboard. */
 	handleCopyPrompt(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		const text = this.ctx.editor.getText();
 		if (!text) {
 			this.ctx.showStatus("Nothing to copy");
@@ -3357,7 +3254,6 @@ export class InputController {
 	}
 
 	cycleThinkingLevel(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		const newLevel = this.ctx.viewSession.cycleThinkingLevel();
 		if (newLevel === undefined) {
 			this.ctx.showStatus("Current model does not support thinking");
@@ -3368,7 +3264,6 @@ export class InputController {
 	}
 
 	async cycleRoleModel(direction: "forward" | "backward" = "forward"): Promise<void> {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		try {
 			const cycleOrder = cfgCycleOrder.get(settings);
 			const result = await this.ctx.viewSession.cycleRoleModels(cycleOrder, direction);
@@ -3394,7 +3289,6 @@ export class InputController {
 	}
 
 	toggleToolOutputExpansion(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		if (this.ctx.hideToolActivity && cfgDisplayMode.get(this.ctx.settings) === "compact") {
 			if (this.ctx.compactFileDiff?.toggle()) return;
 			this.ctx.compactDiffExpanded = !this.ctx.compactDiffExpanded;
@@ -3414,7 +3308,6 @@ export class InputController {
 	}
 
 	toggleToolActivityVisibility(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		const settings = this.ctx.settings;
 		void applyDisplayPreset(settings, nextDisplayMode(settings), this.ctx);
 	}
@@ -3433,7 +3326,6 @@ export class InputController {
 	}
 
 	setToolsExpanded(expanded: boolean): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		this.ctx.toolOutputExpanded = expanded;
 		// `!`/`$` runs queued while the agent streams join the transcript later.
 		for (const child of [...this.ctx.chatContainer.children, ...this.ctx.pendingShellContainer.children]) {
@@ -3447,7 +3339,6 @@ export class InputController {
 	}
 
 	toggleThinkingBlockVisibility(): void {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		// When thinking is "off" and the session has not produced reasoning
 		// content, thinking blocks stay auto-hidden; the toggle would only corrupt
 		// the persisted preference. OpenAI-compatible servers can stream reasoning
@@ -3472,7 +3363,6 @@ export class InputController {
 	}
 
 	async openExternalEditor(): Promise<void> {
-		if (this.ctx.isWebGuiModeActive?.()) return;
 		const editorCmd = getEditorCommand();
 		if (!editorCmd) {
 			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
@@ -3499,7 +3389,6 @@ export class InputController {
 
 	/** Alt+G: the `/local` picker. `openLocalFileInEditor` refuses collab guests itself. */
 	openLocalFilePicker(): Promise<void> {
-		if (this.ctx.isWebGuiModeActive?.()) return Promise.resolve();
 		return openLocalFileInEditor(this.ctx);
 	}
 
@@ -3510,7 +3399,6 @@ export class InputController {
 		const shortcuts = runner.getShortcuts();
 		for (const [keyId, shortcut] of shortcuts) {
 			this.ctx.editor.setCustomKeyHandler(keyId, () => {
-				if (this.ctx.isWebGuiModeActive?.()) return;
 				// Bound once at startup; a live `disabledExtensions` edit may have suspended the owner since.
 				if (!runner.isExtensionActive(shortcut.extensionPath)) return;
 				const ctx = runner.createCommandContext();

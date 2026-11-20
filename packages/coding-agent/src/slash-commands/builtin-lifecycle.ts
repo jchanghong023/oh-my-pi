@@ -140,8 +140,6 @@ function formatWorkspaceDirectories(runtime: SlashCommandRuntime, note?: string)
 	return note ? `${note}\n${lines.join("\n")}` : lines.join("\n");
 }
 async function fatalMoveFailure(text: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
-	// A browser root and its leases belong to the native host, including failed settlement.
-	if ("host" in runtime) throw new Error(text);
 	await runtime.output(text);
 	await runtime.session.dispose();
 	return commandConsumed();
@@ -166,7 +164,7 @@ async function reportFailedRollback(runtime: SlashCommandRuntime, rollbackError:
 
 /**
  * Relocate the headless session to `resolvedPath` (an existing directory):
- * flush settings, move the session file, re-scope its runtime, rolling back
+ * flush settings, move the session file, re-scope the process, rolling back
  * on failure. Returns a result when the move did not complete; `undefined`
  * on success so the caller can report its own confirmation.
  */
@@ -186,8 +184,7 @@ async function relocateHeadlessSession(
 		return usage(`Move failed: ${errorMessage(err)}`, runtime);
 	}
 	try {
-		// 共享进程 Host 由 sessionManager 唯一持有 cwd，不能修改兄弟会话的进程目录。
-		if (!runtime.sessionScopedCwd) setProjectDir(resolvedPath);
+		setProjectDir(resolvedPath);
 	} catch (err) {
 		try {
 			await runtime.sessionManager.rollbackMove(previousState);
@@ -860,7 +857,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 	},
 ];
 async function rescopeHeadlessToCwd(runtime: SlashCommandRuntime, cwd: string): Promise<void> {
-	if (!runtime.sessionScopedCwd) setProjectDir(cwd);
+	setProjectDir(cwd);
 	await rescopeSessionToCwd(runtime.session, runtime.settings, cwd);
 	await runtime.refreshCommands?.();
 }

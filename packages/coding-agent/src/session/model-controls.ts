@@ -152,8 +152,6 @@ export interface ModelControlsHost {
 	emit(event: AgentSessionEvent): void;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
-	/** Resolves actual request-local auth without persisting or pinning credentials. */
-	validateExecutionModelAuth?(model: Model, signal?: AbortSignal): Promise<boolean>;
 }
 
 /** Owns model selection, thinking effort, role cycling, and service tiers. */
@@ -298,7 +296,7 @@ export class ModelControls {
 		},
 	): Promise<{ switched: boolean }> {
 		const previousEditMode = this.#host.resolveActiveEditMode();
-		if (!(await this.#hasSelectionAuth(model))) {
+		if (!this.#host.modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
 
@@ -330,9 +328,9 @@ export class ModelControls {
 
 	/**
 	 * Set model temporarily (for this session only).
-	 * Accepts a configured credential source or actual request-local authorization
-	 * resolved by the host. Saves the model selection to the session log, NOT
-	 * settings; request-local credentials are never persisted.
+	 * Validates that a credential source is configured (synchronously, without
+	 * refreshing OAuth or running command-backed key programs), saves to session
+	 * log but NOT to settings.
 	 * @throws Error if no API key available for the model
 	 */
 	async setModelTemporary(
@@ -343,7 +341,7 @@ export class ModelControls {
 		isCurrent?: () => boolean,
 	): Promise<boolean> {
 		const previousEditMode = this.#host.resolveActiveEditMode();
-		if (!(await this.#hasSelectionAuth(model))) {
+		if (!this.#host.modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
 
@@ -378,11 +376,6 @@ export class ModelControls {
 		}
 		await this.#host.syncAfterModelChange(previousEditMode);
 		return isCurrent?.() !== false && landed;
-	}
-
-	async #hasSelectionAuth(model: Model, signal?: AbortSignal): Promise<boolean> {
-		if (this.#host.modelRegistry.hasConfiguredAuth(model)) return true;
-		return (await this.#host.validateExecutionModelAuth?.(model, signal)) ?? false;
 	}
 
 	/**

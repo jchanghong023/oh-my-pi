@@ -29,8 +29,6 @@ import { workerHostEntry } from "@oh-my-pi/pi-utils/worker-host";
 import { SUBAGENT_WORKER_ARG } from "../cli/worker-selectors";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
-import { AgentRegistry, type AgentRegistryApi } from "../registry/agent-registry";
-import { hasRegistryPauseGate } from "../sdk";
 import { cfgTaskWorkerThreads } from "../task/settings";
 import { isMainThread, type ThreadId } from "./identity";
 import type { MainThreadLink, SubagentWorkerInit } from "./protocol";
@@ -392,8 +390,7 @@ export class SubagentWorkerPool {
 	 */
 	place(): SubagentPlacement {
 		if (this.#disposed) throw new Error("Subagent worker pool is disposed");
-		// Cold revivals also enter here; their root's gate cannot cross worker RPC.
-		const worker = hasRegistryPauseGate(AgentRegistry.global()) ? undefined : this.#select();
+		const worker = this.#select();
 		if (!worker) return { worker: undefined, release: this.beginMainRun() };
 		return { worker, release: worker.beginRun() };
 	}
@@ -438,7 +435,7 @@ export class SubagentWorkerPool {
 	 * it booted; an idle worker those spawns may use gets its idle countdown restarted.
 	 */
 	prewarm(expectedSpawns = 1): void {
-		if (this.#disposed || hasRegistryPauseGate(AgentRegistry.global())) return;
+		if (this.#disposed) return;
 		const slots = this.#slots(this.runsInFlight + Math.max(1, expectedSpawns));
 		let slot = 0;
 		for (const worker of this.#workers.values()) {
@@ -552,14 +549,10 @@ export class SubagentWorkerPool {
 	}
 }
 
-interface PoolState {
-	pool: SubagentWorkerPool;
-	settings: Settings;
-	modelRegistry?: ModelRegistry;
-}
-
-let processPool: PoolState | undefined;
-const scopedPools = new WeakMap<AgentRegistryApi, PoolState>();
+let processPool: SubagentWorkerPool | undefined;
+let processPoolSettings: Settings | undefined;
+/** The registry of the session about to spawn: its subagents mirror it, so warm-ups build that mirror. */
+let processPoolRegistry: ModelRegistry | undefined;
 let testPool: SubagentWorkerPool | undefined;
 
 /**
@@ -569,33 +562,29 @@ let testPool: SubagentWorkerPool | undefined;
 export function subagentWorkerPool(settings: Settings): SubagentWorkerPool | undefined {
 	if (testPool) return testPool;
 	if (!isMainThread() || workerHostEntry() === null || cfgTaskWorkerThreads.get(settings) <= 0) return undefined;
-	const scoped = AgentRegistry.scoped();
-	let state = scoped ? scopedPools.get(scoped) : processPool;
-	if (!state) {
+	processPoolSettings = settings;
+	if (!processPool) {
 		const pool = new SubagentWorkerPool({
-			maxWorkers: () => cfgTaskWorkerThreads.get(owner.settings),
+			maxWorkers: () => (processPoolSettings ? cfgTaskWorkerThreads.get(processPoolSettings) : 0),
 			worker: {
 				warmUp: async worker => {
-					const registry = owner.modelRegistry;
+					const registry = processPoolRegistry;
+					// The warm-up session runs on the mirror, so build that first.
 					if (registry) await prewarmModelRegistryMirror(worker, registry);
+					// A run already waiting here pays the first-session costs itself, sooner than after a
+					// throwaway session would: then only the discoveries it shares are warmed.
 					await worker.link.call("warmUp", {
 						cwd: getProjectDir(),
-						settings: owner.settings,
+						settings: processPoolSettings,
 						modelRegistry: worker.runs > 0 ? undefined : registry,
 					});
 				},
 			},
 		});
-		const owner: PoolState = { pool, settings };
-		state = owner;
-		if (scoped) scopedPools.set(scoped, owner);
-		else {
-			processPool = owner;
-			postmortem.register("subagent-worker-pool", () => owner.pool.dispose(), { exitOnly: true });
-		}
+		processPool = pool;
+		postmortem.register("subagent-worker-pool", () => pool.dispose(), { exitOnly: true });
 	}
-	state.settings = settings;
-	return state.pool;
+	return processPool;
 }
 
 /**
@@ -608,9 +597,7 @@ export function subagentWorkerPool(settings: Settings): SubagentWorkerPool | und
 export function prewarmSubagentWorker(settings: Settings, modelRegistry: ModelRegistry, expectedSpawns: number): void {
 	const pool = subagentWorkerPool(settings);
 	if (!pool) return;
-	const scoped = AgentRegistry.scoped();
-	const state = scoped ? scopedPools.get(scoped) : processPool;
-	if (state?.pool === pool) state.modelRegistry = modelRegistry;
+	processPoolRegistry = modelRegistry;
 	pool.prewarm(expectedSpawns);
 }
 
@@ -620,8 +607,7 @@ export function prewarmSubagentWorker(settings: Settings, modelRegistry: ModelRe
  * of a worker-homed session.
  */
 export function existingSubagentWorkerPool(): SubagentWorkerPool | undefined {
-	const scoped = AgentRegistry.scoped();
-	return testPool ?? (scoped ? scopedPools.get(scoped)?.pool : processPool?.pool);
+	return testPool ?? processPool;
 }
 
 /** Tests only: make {@link subagentWorkerPool} return `pool` regardless of settings or worker host; `undefined` restores. */

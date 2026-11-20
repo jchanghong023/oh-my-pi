@@ -18,7 +18,7 @@ import {
 } from "./omfg-rule";
 
 interface OmfgRequest {
-	component: OmfgCommandPanel;
+	component: OmfgPanelComponent;
 	abortController: AbortController;
 	complaint: string;
 }
@@ -41,78 +41,15 @@ const AMEND_OPTION = "Amend with feedback…";
 /** Keep /omfg prompts in the composer slot: a picker sheet would cover the candidate rule above it. */
 const OMFG_DIALOG = { inline: true } as const;
 
-/** A real host renders these updates without constructing an interactive terminal. */
-export type OmfgCommandPanel = Pick<
-	OmfgPanelComponent,
-	"setRule" | "setStatus" | "markError" | "markAborted" | "markRejected" | "markSaved"
-> &
-	Partial<Pick<OmfgPanelComponent, "appendDraft" | "close">>;
-
-export type OmfgCommandContext = Pick<
-	InteractiveModeContext,
-	| "session"
-	| "sessionManager"
-	| "settings"
-	| "showStatus"
-	| "showError"
-	| "showHookConfirm"
-	| "showHookSelector"
-	| "showHookInput"
-> & {
-	createPanel(complaint: string): OmfgCommandPanel;
-	clearPanel?(): void;
-};
-
 export class OmfgController {
 	#activeRequest: OmfgRequest | undefined;
 	readonly #inspector: TtsrToolInspector;
 
-	readonly #ctx: OmfgCommandContext;
-	#pending: Promise<void> = Promise.resolve();
-
-	constructor(ctx: InteractiveModeContext | OmfgCommandContext) {
-		this.#ctx =
-			"createPanel" in ctx
-				? ctx
-				: {
-						get session() {
-							return ctx.session;
-						},
-						get sessionManager() {
-							return ctx.sessionManager;
-						},
-						get settings() {
-							return ctx.settings;
-						},
-						showStatus: text => ctx.showStatus(text),
-						showError: text => ctx.showError(text),
-						showHookConfirm: (...args) => ctx.showHookConfirm(...args),
-						showHookSelector: (...args) => ctx.showHookSelector(...args),
-						showHookInput: (...args) => ctx.showHookInput(...args),
-						createPanel: complaint => {
-							const panel = new OmfgPanelComponent({ complaint, tui: ctx.ui });
-							ctx.omfgContainer.clear();
-							ctx.omfgContainer.addChild(panel);
-							ctx.ui.requestRender();
-							return panel;
-						},
-						clearPanel: () => {
-							ctx.omfgContainer.clear();
-							ctx.ui.requestRender();
-						},
-					};
+	constructor(private readonly ctx: InteractiveModeContext) {
 		this.#inspector = new TtsrToolInspector(
-			() => this.#ctx.session.agent.state.tools,
-			() => this.#ctx.sessionManager.getCwd(),
+			() => ctx.session.agent.state.tools,
+			() => ctx.sessionManager.getCwd(),
 		);
-	}
-
-	get ctx(): OmfgCommandContext {
-		return this.#ctx;
-	}
-
-	async settle(): Promise<void> {
-		await this.#pending;
 	}
 
 	hasActiveRequest(): boolean {
@@ -145,12 +82,15 @@ export class OmfgController {
 		this.#closeActiveRequest({ abort: true });
 
 		const request: OmfgRequest = {
-			component: this.ctx.createPanel(trimmedComplaint),
+			component: new OmfgPanelComponent({ complaint: trimmedComplaint, tui: this.ctx.ui }),
 			abortController: new AbortController(),
 			complaint: trimmedComplaint,
 		};
+		this.ctx.omfgContainer.clear();
+		this.ctx.omfgContainer.addChild(request.component);
+		this.ctx.ui.requestRender();
 		this.#activeRequest = request;
-		this.#pending = this.#runRequest(request);
+		void this.#runRequest(request);
 	}
 
 	async #runRequest(request: OmfgRequest): Promise<void> {
@@ -223,7 +163,7 @@ export class OmfgController {
 				dedupeReply: false,
 				onTextDelta: delta => {
 					if (this.#isActiveRequest(request)) {
-						request.component.appendDraft?.(delta);
+						request.component.appendDraft(delta);
 					}
 				},
 				signal: request.abortController.signal,
@@ -363,8 +303,9 @@ export class OmfgController {
 		if (options.abort) {
 			request.abortController.abort();
 		}
-		request.component.close?.();
-		this.ctx.clearPanel?.();
+		request.component.close();
+		this.ctx.omfgContainer.clear();
+		this.ctx.ui.requestRender();
 	}
 
 	#isActiveRequest(request: OmfgRequest): boolean {

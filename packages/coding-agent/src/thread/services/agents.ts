@@ -82,9 +82,6 @@ interface OpenSession {
  */
 export class MainSessionBridge {
 	readonly #peer: WorkerPeer;
-	readonly registry: AgentRegistry;
-	readonly lifecycle: AgentLifecycleManager;
-	readonly bus: IrcBus;
 	readonly #open = new Map<string, OpenSession>();
 	readonly #subscriptions = new Set<() => void>();
 	readonly #revivers = new Set<{ lifecycle: AgentLifecycleManager; id: string; revive: AgentReviver }>();
@@ -93,19 +90,6 @@ export class MainSessionBridge {
 
 	constructor(peer: WorkerPeer) {
 		this.#peer = peer;
-		const registry = AgentRegistry.global();
-		const lifecycle = AgentLifecycleManager.global();
-		const bus = IrcBus.global();
-		if (
-			!(registry instanceof AgentRegistry) ||
-			!(lifecycle instanceof AgentLifecycleManager) ||
-			!(bus instanceof IrcBus)
-		) {
-			throw new Error("Agent singletons must be main-thread instances to bridge them into a worker");
-		}
-		this.registry = registry;
-		this.lifecycle = lifecycle;
-		this.bus = bus;
 	}
 
 	/** Worker the bridge serves. */
@@ -130,7 +114,6 @@ export class MainSessionBridge {
 			messages: opened.messages,
 			modelRegistry: opened.modelRegistry,
 			asyncJobManager: opened.asyncJobManager,
-			agentRegistry: this.registry,
 		});
 		holdRemoteSession(opened.key, session);
 		this.#open.set(opened.key, { session, release: this.#peer.retain?.() ?? (() => {}) });
@@ -220,7 +203,7 @@ export class MainSessionBridge {
 		const revivers = [...this.#revivers];
 		this.#revivers.clear();
 		for (const { lifecycle, id, revive } of revivers) lifecycle.forgetReviver(id, revive);
-		const registry = this.registry;
+		const registry = AgentRegistry.global();
 		for (const ref of registry.list()) {
 			const session = ref.session;
 			if (!(session instanceof RemoteAgentSession) || session.home !== this.#peer.threadId) continue;
@@ -360,8 +343,18 @@ function installMain(peer: WorkerPeer): void {
 
 function mainGlobals(peer: WorkerPeer): AgentsThreadGlobals {
 	const bridge = bridges.get(peer.threadId);
+	const registry = AgentRegistry.global();
+	const lifecycle = AgentLifecycleManager.global();
+	const bus = IrcBus.global();
 	if (!bridge) throw new Error(`No agent session bridge for ${peer.threadId}`);
-	return { registry: bridge.registry, lifecycle: bridge.lifecycle, bus: bridge.bus, bridge };
+	if (
+		!(registry instanceof AgentRegistry) ||
+		!(lifecycle instanceof AgentLifecycleManager) ||
+		!(bus instanceof IrcBus)
+	) {
+		throw new Error("Agent singletons must be main-thread instances to bridge them into a worker");
+	}
+	return { registry, lifecycle, bus, bridge };
 }
 
 function onWorkerExit(peer: WorkerPeer, reason: string): void {

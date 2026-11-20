@@ -94,14 +94,14 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "ordinary", suiteRevision: 5 },
+					selection: { mode: "full", group: "ordinary", suiteRevision: 6 },
 				},
 				{
 					scope: "ci-test-ts:local-ts",
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "startup", suiteRevision: 5 },
+					selection: { mode: "full", group: "startup", suiteRevision: 6 },
 				},
 				{
 					scope: "rust-fork-features",
@@ -166,17 +166,17 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		report.producers[0]!.selection = { mode: "full", group: "ordinary" };
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[0]!.selection = { mode: "full", group: "ordinary", suiteRevision: 5 };
+		report.producers[0]!.selection = { mode: "full", group: "ordinary", suiteRevision: 6 };
 		report.producers[1]!.selection = { mode: "full", group: "startup" };
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[1]!.selection = { mode: "full", group: "startup", suiteRevision: 5 };
+		report.producers[1]!.selection = { mode: "full", group: "startup", suiteRevision: 6 };
 		await save();
 		for (const index of [0, 1]) {
-			report.producers[index]!.selection!.suiteRevision = 4;
+			report.producers[index]!.selection!.suiteRevision = 5;
 			await save();
 			expect((await bunTestSelection(root)).mode).toBe("full");
-			report.producers[index]!.selection!.suiteRevision = 5;
+			report.producers[index]!.selection!.suiteRevision = 6;
 		}
 		await save();
 		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
@@ -210,7 +210,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 			exitCode: 0,
 			status: "passed",
 			report: "available",
-			selection: { mode: "full", group: "ordinary", suiteRevision: 5 },
+			selection: { mode: "full", group: "ordinary", suiteRevision: 6 },
 		};
 		const startup = report.producers.splice(1, 1)[0]!;
 		await save();
@@ -223,7 +223,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.producers.pop();
-		report.producers.push({ ...startup, selection: { mode: "full", group: "ordinary", suiteRevision: 5 } });
+		report.producers.push({ ...startup, selection: { mode: "full", group: "ordinary", suiteRevision: 6 } });
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.producers.pop();
@@ -306,7 +306,6 @@ test("integration chunk classification matches coding-agent test paths only", ()
 test("startup integration chunks bypass only the heavy integration limit", () => {
 	const command = (file: string) => ({ label: "chunk", cwd: "packages/coding-agent", command: ["bun", "test", file] });
 	for (const file of [
-		"test/webgui/core-browser.e2e.test.ts",
 		"test/spec-driven/tui-compact-mixed.e2e.test.ts",
 		"test/goals/goal-autopilot-tui.e2e.test.ts",
 		"test/goals/goal-ctrl-enter-tui.e2e.test.ts",
@@ -314,7 +313,6 @@ test("startup integration chunks bypass only the heavy integration limit", () =>
 		expect(isIntegrationCommand(command(file))).toBe(true);
 		expect(isLimitedIntegrationCommand(command(file))).toBe(false);
 	}
-	expect(isLimitedIntegrationCommand(command("test/webgui/native-chat-history.test.ts"))).toBe(false);
 	expect(isLimitedIntegrationCommand(command("test/integration/session.test.ts"))).toBe(true);
 });
 
@@ -420,7 +418,7 @@ test("startup file workers use the fulltest budget without exceeding CPU or comm
 				isLimitedIntegrationCommand({
 					label: "startup",
 					cwd: "packages/coding-agent",
-					command: ["bun", "test", "test/webgui/core-browser.e2e.test.ts"],
+					command: ["bun", "test", "test/spec-driven/tui-compact-mixed.e2e.test.ts"],
 				}),
 			4,
 			async file => {
@@ -512,7 +510,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 		durationSeconds: 12,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 5 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 6 },
 		report: "available",
 	} satisfies TestProducerRecord & { report: string };
 	const put = async (overrides: object = {}, records: unknown[] = [producer]) => {
@@ -592,7 +590,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 			{ startedAt: new Date(now + 1000).toISOString() },
 			{ startedAt: new Date(now - 180_000).toISOString() },
 			{ selection: { ...producer.selection, mode: "affected" } },
-			{ selection: { ...producer.selection, suiteRevision: 4 } },
+			{ selection: { ...producer.selection, suiteRevision: 5 } },
 			{ selection: { tool: "bun", mode: "full", group: "ordinary" } },
 			{ selection: { ...producer.selection, group: "other" } },
 		]) {
@@ -628,7 +626,7 @@ test("each exact chunk keeps its latest usable measurement across interrupted ru
 		durationSeconds,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 5 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 6 },
 		report: "available",
 	});
 	const put = async (name: string, age: number, records: object[], overrides: object = {}) => {
@@ -753,14 +751,12 @@ test("local suites select fork consumers and drain failures without widening to 
 		]) {
 			await fs.copyFile(path.join(import.meta.dir, file), path.join(root, "scripts", file));
 		}
-		// Only the failure observer's leaf import needs a package. Git for Windows
-		// follows directory junctions during affected discovery, including cached builds.
+		// Only the failure observer's leaf import needs a package.
 		const utils = "node_modules/@oh-my-pi/pi-utils";
 		await fs.mkdir(path.join(root, utils, "src"), { recursive: true });
 		for (const file of ["package.json", "src/expected-cleanup.ts"]) {
 			await fs.copyFile(path.join(sourceRoot, "packages/utils", file), path.join(root, utils, file));
 		}
-		await put(".gitignore", "/node_modules/\n/runs/\n");
 		const fixture = (name: string) =>
 			`import { test } from "bun:test"; import { appendFileSync } from "node:fs"; test(${JSON.stringify(name)}, () => appendFileSync(process.env.MARKER!, ${JSON.stringify(`${name}\n`)}));\n`;
 		const selected = [
@@ -829,7 +825,7 @@ test("local suites select fork consumers and drain failures without widening to 
 		const bunProducers = report.producers.filter(producer => producer.scope === expectedScope);
 		expect(bunProducers.length).toBeGreaterThan(0);
 		for (const producer of bunProducers) {
-			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 5 });
+			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 6 });
 			expect(producer.exitCode).toBe(0);
 			expect(producer.status).toBe("passed");
 		}
@@ -849,7 +845,6 @@ test("local suites select fork consumers and drain failures without widening to 
 		expect(await executed()).toEqual([]);
 		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--defer-startup", "--only-startup"], {}, 1);
 		const startupFiles = [
-			"test/webgui/core-browser.e2e.test.ts",
 			"test/spec-driven/tui-compact-mixed.e2e.test.ts",
 			"test/spec-driven/tui-resources.e2e.test.ts",
 			"test/spec-driven/tui-capabilities.e2e.test.ts",
@@ -887,35 +882,17 @@ test("local suites select fork consumers and drain failures without widening to 
 		expect(await executed()).toEqual([...fullMarkers, ...startupFiles].sort());
 		const pids = (await fs.readFile(`${marker}.pids`, "utf8")).trim().split("\n");
 		expect(new Set(pids).size).toBe(startupFiles.length);
-		const git = (...args: string[]) => {
-			const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "ignore", stderr: "pipe" });
-			expect(result.exitCode, result.stderr.toString()).toBe(0);
-		};
-		git("init", "-q");
-		git("add", "-f", "packages/coding-agent/test/webgui/core-browser.e2e.test.ts");
-		git(
-			"-c",
-			"user.name=Fixture",
-			"-c",
-			"user.email=fixture@example.invalid",
-			"-c",
-			"commit.gpgsign=false",
-			"commit",
-			"-qm",
-			"fixture",
-		);
-		const affected = [process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--changed=HEAD", "--dry-run"];
-		const testCommand = (output: string, file: string) =>
-			output.split("\n").find(line => line.startsWith("$ ") && line.includes(file));
-		const browserTest = "test/webgui/core-browser.e2e.test.ts";
-		expect(testCommand(await run(affected), browserTest)).toContain("--changed=HEAD");
-		await put("vendor/zcode-frontend/preview/main.tsx", "export {};\n");
-		git("add", "-f", "vendor/zcode-frontend/preview/main.tsx");
-		const frontendChanged = await run(affected);
-		const browserCommand = testCommand(frontendChanged, browserTest);
-		expect(browserCommand).toBeDefined();
-		expect(browserCommand).not.toContain("--changed=HEAD");
-		expect(testCommand(frontendChanged, "test/startup-composer.test.ts")).toContain("--changed=HEAD");
+		const affected = await run([
+			process.execPath,
+			"scripts/ci-test-ts.ts",
+			"local-ts",
+			"--changed=HEAD",
+			"--dry-run",
+		]);
+		const testCommand = (file: string) =>
+			affected.split("\n").find(line => line.startsWith("$ ") && line.includes(file));
+		expect(testCommand("test/team/integration.test.ts")).toContain("--changed=HEAD");
+		expect(testCommand("test/startup-composer.test.ts")).toContain("--changed=HEAD");
 		const singletonFiles = Array.from(
 			{ length: 23 },
 			(_, i) => `test/settings-${String(i).padStart(2, "0")}.test.ts`,

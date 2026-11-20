@@ -1098,188 +1098,108 @@ describe("AgentSession mid-run threshold compaction", () => {
 		).toHaveLength(0);
 	});
 
-	for (const queue of ["steer", "followUp"] as const) {
-		it.each([true, false])(
-			`regenerates a prepared ${queue} initial Goal notice only after a preserving Stop (%s)`,
-			async preserveQueuedInputs => {
-				const prepared = Promise.withResolvers<void>();
-				const release = Promise.withResolvers<void>();
-				const { session, sessionManager, observedContexts } = await createHarness(
-					{ "compaction.enabled": false },
-					{
-						persistHistory: true,
-						tool: {
-							name: "task",
-							label: "Task",
-							description: "Current orchestration capability",
-							parameters: type({}),
-							execute: async () => ({ content: [{ type: "text" as const, text: "task completed" }] }),
+	it.each(["steer", "followUp"] as const)(
+		"delivers a queued %s once without reviving cancelled initial Goal preparation",
+		async queue => {
+			const toolStarted = Promise.withResolvers<void>();
+			const releaseTool = Promise.withResolvers<void>();
+			const prepared = Promise.withResolvers<CustomMessage>();
+			const releasePreparation = Promise.withResolvers<void>();
+			const { session, sessionManager, observedContexts } = await createHarness(
+				{ "compaction.enabled": false },
+				{
+					persistHistory: true,
+					tool: {
+						name: "task",
+						label: "Task",
+						description: "Hold the current turn until the initial Goal source is queued",
+						parameters: type({}),
+						execute: async () => {
+							toolStarted.resolve();
+							await releaseTool.promise;
+							return { content: [{ type: "text" as const, text: "task completed" }] };
 						},
 					},
-				);
-				await session.setActiveToolsByName([]);
-				session.setQueueAutoDrain(false);
-				const objective = "Ship every release component after the prepared input is restored";
+				},
+			);
+			const objective = "Ship every release component after cancellation";
+			const expectedUserMessage = { role: "user", content: [{ type: "text", text: objective }] };
+			const running = session.prompt("Start unrelated work");
+			let detach: (() => void) | undefined;
+			try {
+				expect(
+					await raceWithTimeout(
+						toolStarted.promise.then(() => true),
+						2_000,
+						false,
+					),
+				).toBe(true);
 				const state = await session.goalRuntime.createGoal({ objective, autoOrchestrate: true });
 				await session.prompt(objective, {
-					inputId: "prepared-initial-goal",
-					queueOnly: true,
 					streamingBehavior: queue,
 					goalAutoOrchestrateInitialId: state.goal.id,
 				});
-				const source = session.getQueuedInputMessages()[0];
-				let preparedNotice: CustomMessage | undefined;
-				let preparedSignal: AbortSignal | undefined;
-				const detach = session.agent.addBeforeModelCallHook(async (signal, context) => {
-					if (preparedNotice || !context.messages.includes(source)) return;
+				const pending = queue === "steer" ? session.agent.peekSteeringQueue() : session.agent.peekFollowUpQueue();
+				const source = pending.at(-1);
+				if (!source) throw new Error(`Expected the initial Goal source in the native ${queue} queue`);
+				expect(source).toMatchObject(expectedUserMessage);
+				detach = session.agent.addBeforeModelCallHook(async (_signal, context) => {
+					if (!context.messages.includes(source)) return;
 					const notice = context.messages.find(
 						message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
 					);
-					if (notice?.role !== "custom") throw new Error("Expected the dequeue preparation's initial notice");
-					preparedNotice = notice;
-					preparedSignal = signal;
-					prepared.resolve();
-					await release.promise;
+					if (notice?.role !== "custom") return;
+					prepared.resolve(notice);
+					await releasePreparation.promise;
 				});
-				try {
-					session.setQueueAutoDrain(true);
-					expect(
-						await raceWithTimeout(
-							prepared.promise.then(() => true),
-							2_000,
-							false,
-						),
-					).toBe(true);
-					expect(observedContexts).toHaveLength(0);
-					expect(preparedSignal?.aborted).toBe(false);
-					expect(session.agent.peekUndeliveredQueuedMessages()).toContain(source);
-					expect(session.agent.peekSteeringQueue()).not.toContain(source);
-					expect(session.agent.peekFollowUpQueue()).not.toContain(source);
-					expect(session.messages).not.toContain(source);
-					expect(
-						sessionManager
-							.getBranch()
-							.filter(
-								entry =>
-									entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
-							),
-					).toHaveLength(0);
-					// Disabling auto-drain holds follow-ups, not steering. Only a preserving
-					// Stop holds both queues after abort restores the committed delivery.
-					session.setQueueAutoDrain(false);
-					const stopping = session.abort({ reason: "Stop before provider delivery", preserveQueuedInputs });
-					expect(preparedSignal?.aborted).toBe(true);
-					expect(session.agent.queuedMessagesHeld).toBe(preserveQueuedInputs);
-					release.resolve();
-					await stopping;
-					await session.waitForIdle();
-				} finally {
-					release.resolve();
-					detach();
-				}
-				expect(preparedNotice).toBeDefined();
-				if (preserveQueuedInputs || queue === "followUp") {
-					expect(session.getQueuedInputMessages()).toEqual([source]);
-					expect(session.messages).not.toContain(source);
-					expect(observedContexts).toHaveLength(0);
-				} else {
-					// A non-preserving cancellation lets native steering resume immediately.
-					// Its invalidated initial provenance must not regenerate the prepared notice.
-					expect(session.getQueuedInputMessages()).toEqual([]);
-					expect(session.messages.filter(message => message === source)).toHaveLength(1);
-					expect(observedContexts.length).toBeGreaterThan(0);
-				}
-				expect(
-					session.messages.filter(
-						message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
-					),
-				).toHaveLength(0);
-				expect(
-					sessionManager
-						.getBranch()
-						.filter(
-							entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
-						),
-				).toHaveLength(0);
-
-				const resumed = await session.goalRuntime.resumeGoal();
-				await session.setActiveToolsByName(["task"]);
-				const expected = buildGoalAutoOrchestrateMessage(resumed, session.getEnabledToolNames());
-				if (!expected) throw new Error("Expected the resumed Goal's current-state notice");
-				expect(expected.content).not.toEqual(preparedNotice!.content);
-				session.setQueueAutoDrain(true);
+				releaseTool.resolve();
+				const notice = await raceWithTimeout(prepared.promise, 2_000, undefined);
+				if (!notice) throw new Error("Expected the queued input's initial Goal notice to prepare");
+				expect(session.agent.peekUndeliveredQueuedMessages()).toContain(source);
+				expect(session.messages).not.toContain(source);
+				const stopping = session.abort({ reason: "Stop before provider delivery" });
+				releasePreparation.resolve();
+				await stopping;
+				await running;
 				await session.waitForIdle();
-				const notices = session.messages.filter(
-					message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
-				);
-				expect(notices).toEqual(
-					preserveQueuedInputs ? [expect.objectContaining({ content: expected.content })] : [],
-				);
-				expect(session.messages.filter(message => message === source)).toHaveLength(1);
-				expect(session.getQueuedInputMessages()).toEqual([]);
-				expect(observedContexts.length).toBeGreaterThan(0);
-				const delivered = observedContexts[0].map(value => JSON.parse(value));
+				await session.goalRuntime.resumeGoal();
+				await session.prompt("Inspect the resumed release");
+				await session.waitForIdle();
+				for (const context of observedContexts) {
+					expect(context.join("\n")).not.toContain(JSON.stringify(notice.content));
+				}
+			} finally {
+				releaseTool.resolve();
+				releasePreparation.resolve();
+				detach?.();
+				await running;
+			}
+			expect(session.agent.hasQueuedMessages()).toBe(false);
+			const file = sessionManager.getSessionFile();
+			if (!file) throw new Error("Expected a persisted Goal delivery journal");
+			await sessionManager.flush();
+			const reopened = await SessionManager.open(file, undefined, undefined, { suppressBreadcrumb: true });
+			try {
+				const branch = reopened.getBranch();
 				expect(
-					delivered.filter(
-						message =>
-							message.role === "user" &&
-							message.content.some(
-								(part: { type: string; text?: string }) => part.type === "text" && part.text === objective,
-							),
+					branch.filter(
+						entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+					),
+				).toEqual([]);
+				expect(
+					branch.filter(
+						entry =>
+							entry.type === "message" &&
+							entry.message.role === "user" &&
+							Array.isArray(entry.message.content) &&
+							entry.message.content.some(part => part.type === "text" && part.text === objective),
 					),
 				).toHaveLength(1);
-				expect(
-					delivered.filter(
-						message =>
-							message.role === "user" &&
-							message.content.some(
-								(part: { type: string; text?: string }) =>
-									part.type === "text" && part.text === expected.content,
-							),
-					),
-				).toHaveLength(preserveQueuedInputs ? 1 : 0);
-				for (const context of observedContexts) {
-					expect(context.join("\n")).not.toContain(JSON.stringify(preparedNotice!.content));
-				}
-				await session.prompt("inspect the release without repeating initial admission");
-				await session.waitForIdle();
-				const persisted = sessionManager
-					.getBranch()
-					.filter(
-						entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
-					);
-				expect(persisted).toEqual(
-					preserveQueuedInputs ? [expect.objectContaining({ content: expected.content })] : [],
-				);
-				await sessionManager.flush();
-				const file = sessionManager.getSessionFile();
-				if (!file) throw new Error("Expected a persisted Goal delivery journal");
-				const reopened = await SessionManager.open(file, undefined, undefined, { suppressBreadcrumb: true });
-				try {
-					expect(
-						reopened
-							.getBranch()
-							.filter(
-								entry =>
-									entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
-							),
-					).toEqual(preserveQueuedInputs ? [expect.objectContaining({ content: expected.content })] : []);
-					expect(
-						reopened
-							.getBranch()
-							.filter(
-								entry =>
-									entry.type === "message" &&
-									entry.message.role === "user" &&
-									entry.message.inputId === "prepared-initial-goal",
-							),
-					).toHaveLength(1);
-				} finally {
-					await reopened.close();
-				}
-			},
-		);
-	}
+			} finally {
+				await reopened.close();
+			}
+		},
+	);
 
 	it("persists one first auto Goal notice when its explicit custom user source reaches followUp delivery", async () => {
 		const boundaryEntered = Promise.withResolvers<void>();

@@ -129,7 +129,7 @@ describe("InteractiveMode workspace command", () => {
 		return [mode.statusLine.getTopBorder(width).content, ...mode.statusLine.render(width)].join(" ");
 	}
 
-	it("toggles without submitting and rejects ordinary commands in WebGUI mode", async () => {
+	it("toggles without submitting", async () => {
 		const model = session.model;
 		const tools = session.getEnabledToolNames();
 		expect(await mode.handleWorkspaceModeCommand()).toBe(false);
@@ -139,9 +139,6 @@ describe("InteractiveMode workspace command", () => {
 		expect(mock.calls).toHaveLength(0);
 		expect(session.model).toBe(model);
 		expect(session.getEnabledToolNames()).toEqual(tools);
-		mode.isWebGuiModeActive = () => true;
-		await expect(mode.handleWorkspaceModeCommand("blocked")).rejects.toThrow("Exit WebGUI");
-		expect(mock.calls).toHaveLength(0);
 	});
 
 	it("submits once when off and already on, preserving text, images, links and the draft", async () => {

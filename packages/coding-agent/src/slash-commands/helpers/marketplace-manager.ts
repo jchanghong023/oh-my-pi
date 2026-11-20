@@ -1,7 +1,5 @@
-import * as path from "node:path";
 import { clearPluginRootsAndCaches, resolveOrDefaultProjectRegistryPath } from "../../discovery/helpers";
 import {
-	classifySource,
 	getInstalledPluginsRegistryPath,
 	getMarketplacesCacheDir,
 	getMarketplacesRegistryPath,
@@ -9,7 +7,6 @@ import {
 	MarketplaceManager,
 } from "../../extensibility/plugins/marketplace";
 import type { SlashCommandRuntime } from "../types";
-import { expandTilde } from "../../tools/path-utils";
 
 /**
  * Build a `MarketplaceManager` wired up with the active project's registry
@@ -25,9 +22,4 @@ export async function createMarketplaceManager(runtime: SlashCommandRuntime): Pr
 		pluginsCacheDir: getPluginsCacheDir(),
 		clearPluginRootsCache: clearPluginRootsAndCaches,
 	});
-}
-
-/** Resolve local sources in the submitting session, never the process-wide cwd. */
-export function resolveMarketplaceSource(source: string, cwd: string): string {
-	return classifySource(source) === "local" ? path.resolve(cwd, expandTilde(source)) : source;
 }

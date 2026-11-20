@@ -9,11 +9,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import {
-	type AgentSessionStartupCleanupFailure,
-	type CreateAgentSessionOptions,
-	createAgentSession,
-} from "@oh-my-pi/pi-coding-agent/sdk";
+import { type CreateAgentSessionOptions, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -774,78 +770,6 @@ describe("SDK strict owned disposal", () => {
 			expect(closeSpy).toHaveBeenCalledTimes(1);
 		} finally {
 			fail = false;
-		}
-	});
-
-	it("retains actual failed startup resources and coalesces cleanup retries before releasing the root", async () => {
-		const startupError = new Error("native startup failed after session attachment");
-		const cleanupError = new Error("native startup resource remains busy");
-		const retryReached = Promise.withResolvers<void>();
-		const finishRetry = Promise.withResolvers<void>();
-		let failCleanup = true;
-		let actualSession: AgentSession | undefined;
-		let pending: AgentSessionStartupCleanupFailure | undefined;
-		let cleanupFailures = 0;
-		const completed = vi.fn(async () => {});
-		const failing = vi.fn(async () => {
-			if (failCleanup) throw cleanupError;
-			retryReached.resolve();
-			await finishRetry.promise;
-		});
-		const attachSession = registry.attachSession.bind(registry);
-		vi.spyOn(registry, "attachSession").mockImplementation((id, session, sessionFile, expected) => {
-			const attached = attachSession(id, session, sessionFile, expected);
-			if (!attached) return attached;
-			actualSession = session as AgentSession;
-			registerCleanup(actualSession, completed);
-			registerCleanup(actualSession, failing);
-			throw startupError;
-		});
-		function cleanupErrors(error: unknown): unknown[] {
-			return error instanceof AggregateError ? error.errors.flatMap(cleanupErrors) : [error];
-		}
-		try {
-			const error = await createSession("strict-startup-root", {
-				strictStartupCleanup: true,
-				onStartupCleanupFailure: failure => {
-					cleanupFailures++;
-					pending = failure;
-				},
-			}).then(
-				() => undefined,
-				(failure: unknown) => failure,
-			);
-			expect(cleanupErrors(error)).toContain(startupError);
-			expect(cleanupErrors(error)).toContain(cleanupError);
-			expect(cleanupFailures).toBe(1);
-			expect(actualSession).toBeDefined();
-			expect(pending?.session).toBe(actualSession);
-			const ref = registry.get("strict-startup-root");
-			expect(ref?.session).toBe(actualSession);
-			expect(completed).toHaveBeenCalledTimes(1);
-			expect(failing).toHaveBeenCalledTimes(1);
-			if (!pending) throw new Error("expected actual retained startup cleanup");
-
-			failCleanup = false;
-			const firstRetry = pending.cleanup();
-			const concurrentRetry = pending.cleanup();
-			try {
-				await retryReached.promise;
-				expect(registry.get("strict-startup-root")).toBe(ref);
-				expect(completed).toHaveBeenCalledTimes(1);
-				expect(failing).toHaveBeenCalledTimes(2);
-			} finally {
-				finishRetry.resolve();
-				await Promise.all([firstRetry, concurrentRetry]);
-			}
-			expect(registry.get("strict-startup-root")).toBeUndefined();
-			expect(completed).toHaveBeenCalledTimes(1);
-			expect(failing).toHaveBeenCalledTimes(2);
-			expect(cleanupFailures).toBe(1);
-		} finally {
-			failCleanup = false;
-			finishRetry.resolve();
-			await pending?.cleanup();
 		}
 	});
 

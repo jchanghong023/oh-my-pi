@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import {
 	__resetDirsFromEnvForTests,
 	ptree,
@@ -12,13 +13,7 @@ import {
 	withTimeout,
 } from "@oh-my-pi/pi-utils";
 import { KnowledgeService } from "../src/knowledge/service";
-import {
-	type JsonRpcResponse,
-	MCP_PROTOCOL_VERSION,
-	type MCPInitializeResult,
-	type MCPToolCallResult,
-	type MCPToolsListResult,
-} from "../src/mcp/types";
+import type { JsonRpcResponse, MCPInitializeResult, MCPToolCallResult, MCPToolsListResult } from "../src/mcp/types";
 import { restoreEnvValue } from "./helpers/settings-test-state";
 
 // The CLI loads commands and workers dynamically; keep Bun's --changed graph honest.
@@ -231,7 +226,7 @@ async function fixture() {
 		}
 		const request = <T>(method: string, params?: Record<string, unknown>) => start<T>(method, params).result;
 		const initialized = await request<MCPInitializeResult>("initialize", {
-			protocolVersion: MCP_PROTOCOL_VERSION,
+			protocolVersion: LATEST_PROTOCOL_VERSION,
 			capabilities: {},
 			clientInfo: { name: "knowledge-consumer-test", version: "1" },
 		});

@@ -62,24 +62,9 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import { col, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { InteractiveModeContext } from "../types";
-import type { AgentSession } from "../../session/agent-session";
-import type { MCPLoadResult } from "../../mcp/manager";
 import { groupBySource, parseRemoveArgs, readScopeFlag, showCommandMessage } from "./command-controller-shared";
 
 import { cfgMcpEnableProjectConfig } from "../../mcp/settings";
-
-/** The native reload operation, shared by terminal controllers and browser command hosts. */
-export async function reloadNativeMcpServers(session: AgentSession, manager: MCPManager): Promise<MCPLoadResult> {
-	return reconnectMCPServers(manager, session, {
-		enableProjectConfig: cfgMcpEnableProjectConfig.get(session.settings),
-		filterExa: true,
-		filterBrowser: session.getEvalPreludes().some(definition => definition.name === "browser"),
-		builtinTransforms: resolveMCPTransformContext(session.settings, {
-			evalActive: session.getActiveToolNames().includes("eval"),
-		}),
-		extensionRoots: session.effectiveExtensionRoots,
-	});
-}
 
 const MCP_MANUAL_INPUT_PROVIDER_ID = "mcp";
 const MCP_MANUAL_LOGIN_TIP = "Headless? Paste the redirect URL or code with /login <value>.";
@@ -1791,11 +1776,21 @@ export class MCPCommandController {
 	 * keep project `.mcp.json` servers from being started on reload.
 	 */
 	async reloadServers(): Promise<void> {
-		if (!this.ctx.mcpManager) {
+		const { session, mcpManager } = this.ctx;
+		if (!mcpManager) {
 			return;
 		}
 
-		const result = await reloadNativeMcpServers(this.ctx.session, this.ctx.mcpManager);
+		// Rediscover and connect, mirroring startup's discovery filters.
+		const result = await reconnectMCPServers(mcpManager, session, {
+			enableProjectConfig: cfgMcpEnableProjectConfig.get(session.settings),
+			filterExa: true,
+			filterBrowser: session.getEvalPreludes().some(definition => definition.name === "browser"),
+			builtinTransforms: resolveMCPTransformContext(session.settings, {
+				evalActive: session.getActiveToolNames().includes("eval"),
+			}),
+			extensionRoots: session.effectiveExtensionRoots,
+		});
 
 		this.#showMCPConnectionErrors(result.errors);
 	}

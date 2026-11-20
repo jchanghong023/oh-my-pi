@@ -23,8 +23,7 @@ async function fixture() {
 	const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-personal-session-")));
 	cleanups.push(() => fs.rm(root, { recursive: true, force: true }));
 	const source = path.join(root, "source");
-	const target = path.join(root, "target");
-	await Promise.all([source, target].map(directory => fs.mkdir(directory)));
+	await fs.mkdir(source);
 	const created: CreateAgentSessionResult[] = [];
 	const auth = createInMemoryAuthStorage();
 	auth.keys.setRuntime("ascend", "personal-session-fixture-key");
@@ -65,7 +64,6 @@ async function fixture() {
 			get cwd() {
 				return manager.getCwd();
 			},
-			sessionScopedCwd: true,
 			output: (text: string) => {
 				output.push(text);
 			},
@@ -74,7 +72,7 @@ async function fixture() {
 		} as unknown as RpcSlashCommandRuntime;
 		return { ...result, runtime, manager, settings, output };
 	}
-	return { root, source, target, make };
+	return { source, make };
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -88,37 +86,6 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 describe("personal command session isolation", () => {
-	it("rebinds a moved RPC session without changing the process or sibling session directory", async () => {
-		const f = await fixture();
-		await Bun.write(path.join(f.source, "location.txt"), "source-session-content");
-		await Bun.write(path.join(f.target, "location.txt"), "target-session-content");
-		const first = await f.make(f.source);
-		const sibling = await f.make(f.source);
-		const processDirectory = getProjectDir();
-		const nativeProcessDirectory = process.cwd();
-		const firstIdentity = first.manager.getSessionId();
-		const siblingIdentity = sibling.manager.getSessionId();
-		expect(await executeRpcBuiltinSlashCommand(`/move ${f.target}`, first.runtime)).toEqual({ consumed: true });
-		expect(first.manager.getCwd()).toBe(f.target);
-		expect(first.runtime.cwd).toBe(f.target);
-		expect(first.manager.getSessionId()).toBe(firstIdentity);
-		expect(sibling.manager.getCwd()).toBe(f.source);
-		expect(sibling.runtime.cwd).toBe(f.source);
-		expect(sibling.manager.getSessionId()).toBe(siblingIdentity);
-		expect(getProjectDir()).toBe(processDirectory);
-		expect(process.cwd()).toBe(nativeProcessDirectory);
-		for (const [owner, expected] of [
-			[first, "target-session-content"],
-			[sibling, "source-session-content"],
-		] as const) {
-			const read = owner.session.getToolByName("read")!;
-			const result = await read.execute("verify-session-cwd", { path: "location.txt" });
-			expect(result.content).toContainEqual(
-				expect.objectContaining({ type: "text", text: expect.stringContaining(expected) }),
-			);
-		}
-	});
-
 	it("skips same-branch worktree relocation and keeps staged, unstaged and untracked source content", async () => {
 		const f = await fixture();
 		git(f.source, "init", "-q", "-b", "main");

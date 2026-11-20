@@ -303,19 +303,14 @@ describe("AgentSession auto-compaction queue resume", () => {
 		}
 
 		// A native input admitted DURING compaction must be observable before cleanup.
-		// queue_update.followUp 是 readonly string[],元素保持只读即可。
 		const queueUpdates: (readonly string[])[] = [];
 		const unsubscribeQueue = session.subscribe(event => {
 			if (event.type === "queue_update") queueUpdates.push(event.followUp);
 		});
-		await session.prompt("/goal set please respond after compaction", {
-			inputId: "goal-during-manual-compact",
-			queueOnly: true,
-			streamingBehavior: "followUp",
-		});
+		await session.followUp("please respond after compaction");
 		expect(session.agent.hasQueuedMessages()).toBe(true);
-		expect(session.getQueuedInputMessages()).toHaveLength(1);
-		expect(queueUpdates).toEqual([["/goal set please respond after compaction"]]);
+		expect(session.getQueuedMessages().followUp).toEqual(["please respond after compaction"]);
+		expect(queueUpdates).toEqual([["please respond after compaction"]]);
 		expect(continueSpy).not.toHaveBeenCalled();
 		unsubscribeQueue();
 

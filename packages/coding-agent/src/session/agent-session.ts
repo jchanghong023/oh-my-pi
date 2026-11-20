@@ -1400,8 +1400,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	// Model registry for API key resolution
 	#modelRegistry: ModelRegistry;
-	readonly #validateRequestAuth?: AgentSessionConfig["validateRequestAuth"];
-	readonly #runInputToolPolicy?: AgentSessionConfig["runInputToolPolicy"];
 	/** Main thread only: spots streaming spawning tool calls so a subagent worker boots ahead of dispatch. */
 	readonly #spawnSignal = isMainThread() ? new SubagentSpawnSignal() : undefined;
 	/** Creation-time permission for switchSession to keep the current model when a target's saved model is unrestorable. */
@@ -1416,9 +1414,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** In-flight vision descriptions that gate prompt admission; abort() cancels them. */
 	#imageDescriptionAbortControllers = new Set<AbortController>();
 	/** Awaited custom commands own nested work outside the primary agent loop. */
-	#customCommandsInFlight = new Map<AbortController, Promise<void>>();
-	/** A nested ordinary abort must not reopen custom-command admission during strict cleanup. */
-	#strictAbortCount = 0;
+	#customCommandsInFlight = new Set<AbortController>();
 	#queuedMessageDrainBlocked = false;
 	#modeExitDrainSuppressionDepth = 0;
 	#usagePreflightReadyForNextModelCall = false;
@@ -1521,7 +1517,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#admittedSubmissionCount = 0;
 	#admittedSubmissionsSettled: PromiseWithResolvers<void> | undefined;
 	#promptGeneration = 0;
-	#inputAdmissionSequence = 0;
 	// abort() can finish in a message_end listener before queued settle work runs.
 	#activeAgentPromptGeneration = this.#promptGeneration;
 	/** Bumped by newSession()/switchSession() at the same point they clear the pending IRC/aside
@@ -2333,8 +2328,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#mcpNamespaces = config.mcpNamespaces;
 		this.memoryEnabled = config.memoryEnabled ?? true;
 		this.#modelRegistry = config.modelRegistry;
-		this.#validateRequestAuth = config.validateRequestAuth;
-		this.#runInputToolPolicy = config.runInputToolPolicy;
 		this.#allowSessionModelFallback = config.allowSessionModelFallback === true;
 		this.#disableModelFallback = config.disableModelFallback === true;
 		this.#interactivePrompts = config.interactivePrompts !== false;
@@ -2481,10 +2474,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#releaseOwnedAsyncJobManager = config.releaseOwnedAsyncJobManager;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
 		const modelControlsHost: ModelControlsHost = {
-			validateExecutionModelAuth: async (model, signal) => {
-				const key = await this.#modelRegistry.getApiKey(model, this.sessionId, { signal });
-				return Boolean(key) || (await this.#validateRequestAuth?.(model, signal)) === true;
-			},
 			agent: this.agent,
 			settings: this.settings,
 			modelRegistry: this.#modelRegistry,
@@ -3910,10 +3899,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * No-op when no manager is reachable or this session has no agent id.
 	 *
 	 * A transcript transition also abandons an open run, closing it without `agent_end`.
-	 * Strict abort keeps the transcript and lets its normal unwind end the run instead.
 	 */
-	#cancelOwnAsyncJobs(reason?: unknown, abandonRun = true): void {
-		if (abandonRun && this.#runActive) this.#closeRun();
+	#cancelOwnAsyncJobs(reason?: unknown): void {
+		if (this.#runActive) this.#closeRun();
 		if (!this.#agentId) return;
 		releaseCompletionHandles(this.#agentId);
 		releaseJudgmentBatches(this.#agentId);
@@ -5960,20 +5948,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			for (;;) {
 				try {
 					if (!this.agent.state.isStreaming) onStart?.();
-					const run = () => this.agent.continue(signal);
-					// Seed an empty scope; transformContext selects the policy from
-					// the input the loop actually consumes, after dequeue hooks.
-					if (
-						this.#runInputToolPolicy &&
-						!this.agent.queuedMessagesHeld &&
-						(this.agent.followUpAutoDrain
-							? this.agent.hasQueuedMessages()
-							: this.agent.peekSteeringQueue().length > 0)
-					) {
-						await this.#runInputToolPolicy([], run);
-					} else {
-						await run();
-					}
+					await this.agent.continue(signal);
 					return { status: "completed" };
 				} catch (error) {
 					if (!(error instanceof AgentBusyError)) throw error;
@@ -7972,16 +7947,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			: undefined;
 	}
 
-	/** Temporarily replace the decision surface without losing its exact prior wrapped identity. */
-	overrideUsageFallbackConfirmer(confirmer: UsageFallbackConfirmer): () => void {
-		const previous = this.#usageFallbackConfirmer;
-		this.setUsageFallbackConfirmer(confirmer);
-		const installed = this.#usageFallbackConfirmer;
-		return () => {
-			if (this.#usageFallbackConfirmer === installed) this.#usageFallbackConfirmer = previous;
-		};
-	}
-
 	#allowQueuedMessageDrainRetry(): void {
 		this.#queuedMessageDrainBlocked = false;
 	}
@@ -8052,11 +8017,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Effective thinking level applied to the agent (the resolved level when `auto`). */
 	get thinkingLevel(): ThinkingLevel | undefined {
 		return this.#models.thinkingLevel;
-	}
-
-	/** Highest thinking level the active model allows, when the provider declares one. */
-	get thinkingLevelCeiling(): Effort | undefined {
-		return this.#models.thinkingLevelCeiling;
 	}
 
 	/** The selector the user configured: `auto` when auto mode is active, else the effective level. */
@@ -9675,9 +9635,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * {@link PromptDroppedError} instead.
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
-		const submission = { ...options, inputId: options?.inputId ?? crypto.randomUUID() };
-		const run = () => this.#admitSubmission(() => this.#prompt(text, submission));
-		return this.#runInputToolPolicy ? this.#runInputToolPolicy(options?.toolDenylist ?? [], run) : run();
+		return this.#admitSubmission(() => this.#prompt(text, options));
 	}
 
 	/**
@@ -9780,10 +9738,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const followUps = this.#createPromptFollowUps(options?.followUps);
 		try {
 			this.#rejectQueuedExtensionCommands(options?.followUps);
-			// Queue admission remains immediate during maintenance; only delivery waits.
-			if (options?.queueOnly) {
-				return await this.#dispatchPrompt(text, options, submittedAt, { sessionClaimed: false }, followUps);
-			}
 			// Blocking compaction rewrites history before the next prompt. A prompt
 			// parked by a manual pass supersedes its interrupted-turn resume only if
 			// it claims the session.
@@ -9906,8 +9860,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
 
-		// Explicit queue-only submissions use the same preprocessing and canonical queue.
-		if (options?.queueOnly || this.isStreaming) {
+		// If streaming, queue according to the selected delivery mode.
+		if (this.isStreaming) {
 			const streamingBehavior = options?.streamingBehavior;
 			if (!streamingBehavior) {
 				// Busy because the agent owns a turn: that turn supersedes the interrupted
@@ -9922,10 +9876,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const queueGeneration = this.#promptGeneration;
 			const queued = await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
 				timestamp: submittedAt,
-				inputId: options?.inputId,
-				sourceCommand: options?.sourceCommand,
-				inputClientId: options?.inputClientId,
-				toolDenylist: options?.toolDenylist,
 				attribution: promptAttribution,
 				prependMessages: prependNotices,
 				goalAutoOrchestrateInitialId: options?.goalAutoOrchestrateInitialId,
@@ -10001,10 +9951,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 			const queued = await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
 				timestamp: submittedAt,
-				inputId: options?.inputId,
-				sourceCommand: options?.sourceCommand,
-				inputClientId: options?.inputClientId,
-				toolDenylist: options?.toolDenylist,
 				attribution: promptAttribution,
 				prependMessages: prependNotices,
 				goalAutoOrchestrateInitialId: options?.goalAutoOrchestrateInitialId,
@@ -10039,9 +9985,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				}
 			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: submittedAt };
 
-		if (options?.inputId !== undefined) Object.assign(message, { inputId: options.inputId });
-		Object.assign(message, { sourceCommand: options?.sourceCommand, inputClientId: options?.inputClientId });
-		Object.assign(message, { toolDenylist: options?.toolDenylist });
 		const preludeMessages: AgentMessage[] = [];
 		if (eagerTodoPrelude) {
 			if (eagerTodoPrelude.toolChoice) {
@@ -10123,60 +10066,41 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		options?: Pick<
 			PromptOptions,
-			| "inputId"
-			| "sourceCommand"
-			| "inputClientId"
-			| "toolDenylist"
-			| "streamingBehavior"
-			| "toolChoice"
-			| "onPromptAdmitted"
-			| "followUps"
-			| "goalAutoOrchestrateInitialId"
+			"streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "followUps" | "goalAutoOrchestrateInitialId"
 		> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
 			onPromptQueued?: PromptOptions["onPromptQueued"];
 		},
 	): Promise<boolean> {
-		const run = async () => {
-			if (message.customType !== "goal-tool-recovery") {
-				return this.#admitSubmission(() => this.#promptCustomMessage(message, options));
+		if (message.customType !== "goal-tool-recovery") {
+			return this.#admitSubmission(() => this.#promptCustomMessage(message, options));
+		}
+		try {
+			return await this.#admitSubmission(() => this.#promptCustomMessage(message, options));
+		} catch (error) {
+			const state = this.getGoalModeState();
+			if (
+				state?.enabled &&
+				state.mode === "active" &&
+				state.goal.status === "active" &&
+				!(error instanceof Error && error.name === "AbortError")
+			) {
+				this.emitNotice(
+					"warning",
+					"Goal automatic continuation stopped: the forced-tool recovery could not run. The goal is still unfinished.",
+					"goal",
+				);
 			}
-			try {
-				return await this.#admitSubmission(() => this.#promptCustomMessage(message, options));
-			} catch (error) {
-				const state = this.getGoalModeState();
-				if (
-					state?.enabled &&
-					state.mode === "active" &&
-					state.goal.status === "active" &&
-					!(error instanceof Error && error.name === "AbortError")
-				) {
-					this.emitNotice(
-						"warning",
-						"Goal automatic continuation stopped: the forced-tool recovery could not run. The goal is still unfinished.",
-						"goal",
-					);
-				}
-				throw error;
-			}
-		};
-		return this.#runInputToolPolicy ? this.#runInputToolPolicy(options?.toolDenylist ?? [], run) : run();
+			throw error;
+		}
 	}
 
 	async #promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
 		options?: Pick<
 			PromptOptions,
-			| "inputId"
-			| "sourceCommand"
-			| "inputClientId"
-			| "toolDenylist"
-			| "streamingBehavior"
-			| "toolChoice"
-			| "onPromptAdmitted"
-			| "followUps"
-			| "goalAutoOrchestrateInitialId"
+			"streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "followUps" | "goalAutoOrchestrateInitialId"
 		> & {
 			queueChipText?: string;
 			queueOnly?: boolean;
@@ -10229,15 +10153,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		options:
 			| (Pick<
 					PromptOptions,
-					| "inputId"
-					| "sourceCommand"
-					| "inputClientId"
-					| "toolDenylist"
-					| "streamingBehavior"
-					| "toolChoice"
-					| "onPromptAdmitted"
-					| "followUps"
-					| "goalAutoOrchestrateInitialId"
+					"streamingBehavior" | "toolChoice" | "onPromptAdmitted" | "followUps" | "goalAutoOrchestrateInitialId"
 			  > & {
 					queueChipText?: string;
 					queueOnly?: boolean;
@@ -10314,10 +10230,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 			const queued = await this.#queueCustomMessage(message, streamingBehavior, {
 				queueChipText: options?.queueChipText,
-				inputId: options?.inputId,
-				sourceCommand: options?.sourceCommand,
-				inputClientId: options?.inputClientId,
-				toolDenylist: options?.toolDenylist,
 				prependMessages: queuedNotices,
 				goalAutoOrchestrateInitialId: options?.goalAutoOrchestrateInitialId,
 				onPromptAdmitted: onPromptQueuedAdmitted,
@@ -10337,9 +10249,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			attribution: message.attribution ?? "agent",
 			timestamp: Date.now(),
 		};
-		if (options?.inputId !== undefined) Object.assign(customMessage, { inputId: options.inputId });
-		Object.assign(customMessage, { sourceCommand: options?.sourceCommand, inputClientId: options?.inputClientId });
-		Object.assign(customMessage, { toolDenylist: options?.toolDenylist });
 		const hasSkillImages =
 			isUserInvokedSkillPrompt(customMessage) &&
 			Array.isArray(customMessage.content) &&
@@ -10370,10 +10279,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 			const queued = await this.#queueCustomMessage(message, streamingBehavior, {
 				queueChipText: options?.queueChipText,
-				inputId: options?.inputId,
-				sourceCommand: options?.sourceCommand,
-				inputClientId: options?.inputClientId,
-				toolDenylist: options?.toolDenylist,
 				preprocessed: { content: preparedMessage.content, descriptionNotice },
 				prependMessages: queuedNotices,
 				goalAutoOrchestrateInitialId: options?.goalAutoOrchestrateInitialId,
@@ -10454,7 +10359,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					return undefined;
 				}
 				const contextual =
-					workspaceMessage && this.getWorkspaceModeState().enabled ? [...additional, workspaceMessage] : additional;
+					workspaceMessage && this.getWorkspaceModeState().enabled
+						? [...additional, workspaceMessage]
+						: additional;
 				// Construct only after async preparation and Agent's delivery ownership check.
 				let notice: CustomMessage | undefined;
 				for (const message of messages) {
@@ -10694,17 +10601,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						"Then use /model to select a model.",
 				);
 			}
-			const requestAuthorized = await this.#validateRequestAuth?.(admissionModel, setupAbort.signal);
+			const apiKey = await this.#modelRegistry.getApiKey(admissionModel, this.sessionId, {
+				signal: setupAbort.signal,
+			});
 			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
-			const apiKey = requestAuthorized
-				? undefined
-				: await this.#modelRegistry.getApiKey(admissionModel, this.sessionId, { signal: setupAbort.signal });
-			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
-			if (
-				!requestAuthorized &&
-				!apiKey &&
-				!(await this.#recovery.applyMissingCredentialFallback(setupAbort.signal))
-			) {
+			if (!apiKey && !(await this.#recovery.applyMissingCredentialFallback(setupAbort.signal))) {
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 				throw new PromptPreflightError(
 					`No API key found for ${admissionModel.provider}.\n\n` +
@@ -10970,9 +10871,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 			try {
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
-				if (Object.hasOwn(message, "inputId") && !Object.hasOwn(message, "inputAdmissionSeq")) {
-					Object.assign(message, { inputAdmissionSeq: ++this.#inputAdmissionSequence });
-				}
 				options?.onPromptAdmitted?.();
 				await this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions, () => {
 					// `agent.prompt` claims streaming synchronously before its
@@ -11123,7 +11021,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#abortCustomCommands(reason = "Custom command cancelled"): void {
-		for (const controller of this.#customCommandsInFlight.keys()) {
+		for (const controller of this.#customCommandsInFlight) {
 			controller.abort(new DOMException(reason, "AbortError"));
 		}
 	}
@@ -11145,18 +11043,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#customCommands.find(c => c.command.name === commandName) ??
 			this.#mcpPromptCommands.find(c => c.command.name === commandName);
 		if (!loaded) return null;
-		if (
-			this.#isDisposed ||
-			this.#abortInProgress ||
-			this.#strictAbortCount > 0 ||
-			generation !== this.#promptGeneration
-		) {
+		if (this.#isDisposed || this.#abortInProgress || generation !== this.#promptGeneration) {
 			return "";
 		}
 
 		const controller = new AbortController();
-		const completion = Promise.withResolvers<void>();
-		this.#customCommandsInFlight.set(controller, completion.promise);
+		this.#customCommandsInFlight.add(controller);
 		let result: string | undefined;
 
 		try {
@@ -11188,7 +11080,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 		} finally {
 			this.#customCommandsInFlight.delete(controller);
-			completion.resolve();
 		}
 		// 原生命令返回 void／空串时已完成副作用，没有后续模型准入；
 		// 仅在此补报一次，非空变换仍由原有 prompt／队列边界报告准入。
@@ -11348,15 +11239,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	async joinActiveTurn(
 		text: string,
 		images?: ImageContent[],
-		options?: Pick<PromptOptions, "inputId" | "sourceCommand" | "inputClientId"> & {
+		options?: {
 			queue?: "steering" | "followUp";
-			/** The caller forwards autonomous run events, not only client prompt events. */
-			allowAutonomous?: boolean;
-			/** A policy-checked user skill payload, retaining native skill attribution and details. */
-			customMessage?: Pick<CustomMessage, "content" | "display" | "details"> & {
-				customType: typeof SKILL_PROMPT_MESSAGE_TYPE;
-				attribution: "user";
-			};
 		},
 	): Promise<boolean> {
 		// Liveness first: an idle session hands the content back
@@ -11382,8 +11266,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// promptTurn), so a steer admitted into one would answer invisibly
 		// and be reported `injected`. Refuse instead — the host keeps its
 		// content and resubmits through session/prompt.
-		const autonomous = options?.allowAutonomous === true;
-		if (autonomous ? !this.agent.state.isStreaming : this.#clientPromptInFlightCount === 0) return false;
+		if (this.#clientPromptInFlightCount === 0) return false;
 		if (text.startsWith("/")) {
 			this.#throwIfExtensionCommand(text);
 		}
@@ -11411,45 +11294,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				// admits, never an autonomous run's streaming.
 			}
 		}
-		let targetEnded = false;
-		const unsubscribe = autonomous
-			? this.agent.subscribe(event => {
-					if (event.type === "agent_end") targetEnded = true;
-				})
-			: undefined;
-		try {
-			const mode = options?.queue === "followUp" ? "followUp" : "steer";
-			if (options?.customMessage) {
-				const message = options.customMessage;
-				const notices = this.#createMagicKeywordNotices(this.#skillKeywordText(message.details));
-				const sessionAgentNotice = this.#takeQueuedSessionAgentNotice(text, mode);
-				return await this.#queueCustomMessage(message, mode, {
-					queueChipText: text,
-					inputId: options.inputId,
-					sourceCommand: options.sourceCommand,
-					inputClientId: options.inputClientId,
-					prependMessages: sessionAgentNotice ? [...notices, sessionAgentNotice] : notices,
-					requireActiveRun: true,
-					activeRunGuard: autonomous ? () => !targetEnded && this.agent.state.isStreaming : undefined,
-					skipIdleDrain: true,
-					onPromptQueued: mode === "steer" ? queued => this.#fireSteeringArrival(queued) : undefined,
-				});
-			}
-			const queued = this.#expandQueuedMentions(expandPromptTemplate(text, [...this.#promptTemplates]), mode);
-			return await this.#queueUserMessage(queued.text, images, mode, {
-				timestamp: Date.now(),
-				prependMessages: queued.prependMessages,
-				rawText: text,
-				inputId: options?.inputId,
-				sourceCommand: options?.sourceCommand,
-				inputClientId: options?.inputClientId,
-				requireActiveRun: true,
-				activeRunGuard: autonomous ? () => !targetEnded && this.agent.state.isStreaming : undefined,
-				skipIdleDrain: true,
-			});
-		} finally {
-			unsubscribe?.();
-		}
+		const mode = options?.queue === "followUp" ? "followUp" : "steer";
+		const queued = this.#expandQueuedMentions(expandPromptTemplate(text, [...this.#promptTemplates]), mode);
+		return this.#queueUserMessage(queued.text, images, mode, {
+			timestamp: Date.now(),
+			prependMessages: queued.prependMessages,
+			rawText: text,
+			requireActiveRun: true,
+			skipIdleDrain: true,
+		});
 	}
 
 	/**
@@ -11485,10 +11338,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		mode: "steer" | "followUp" | "aside",
 		options?: {
 			timestamp?: number;
-			inputId?: string;
-			sourceCommand?: PromptOptions["sourceCommand"];
-			inputClientId?: string;
-			toolDenylist?: readonly string[];
 			attribution?: MessageAttribution;
 			prependMessages?: readonly CustomMessage[];
 			goalAutoOrchestrateInitialId?: string;
@@ -11521,8 +11370,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			 * no interleaving drain can race it.
 			 */
 			requireActiveRun?: boolean;
-			/** Explicit autonomous admission is fenced to the exact still-live run. */
-			activeRunGuard?: () => boolean;
 			/**
 			 * `joinActiveTurn` admission: never schedule the idle queue drain —
 			 * the live run owns delivery (its loop polls the steering queue at
@@ -11538,7 +11385,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			promptGeneration?: number;
 		},
 	): Promise<boolean> {
-		options = { ...options, inputId: options?.inputId ?? crypto.randomUUID() };
 		const sourceGeneration = options?.promptGeneration ?? this.#promptGeneration;
 		const attribution = options?.attribution ?? "user";
 		const timestamp = options?.timestamp;
@@ -11594,10 +11440,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// between this check and the message landing on the queue.
 		if (
 			options?.requireActiveRun &&
-			(this.#abortInProgress ||
-				(options.activeRunGuard
-					? !options.activeRunGuard()
-					: !this.isStreaming || this.#clientPromptInFlightCount === 0))
+			(this.#abortInProgress || !this.isStreaming || this.#clientPromptInFlightCount === 0)
 		) {
 			return false;
 		}
@@ -11610,14 +11453,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				content,
 				attribution,
 				timestamp: timestamp ?? Date.now(),
-				inputId: options?.inputId,
 			};
-			Object.assign(userMessage, {
-				sourceCommand: options?.sourceCommand,
-				inputClientId: options?.inputClientId,
-				inputAdmissionSeq: ++this.#inputAdmissionSequence,
-			});
-			Object.assign(userMessage, { toolDenylist: options?.toolDenylist });
 			this.#queuedMessageRawText.set(userMessage, rawText);
 			records.push(userMessage);
 			this.#irc.queueAside(records);
@@ -11663,10 +11499,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		attribution: MessageAttribution,
 		timestamp: number,
 		rawText: string,
-		options?: Pick<
-			PromptOptions,
-			"inputId" | "sourceCommand" | "inputClientId" | "toolDenylist" | "goalAutoOrchestrateInitialId"
-		>,
+		options?: Pick<PromptOptions, "goalAutoOrchestrateInitialId">,
 		sourceGeneration = this.#promptGeneration,
 	): AgentMessage[] {
 		this.#allowQueuedMessageDrainRetry();
@@ -11674,13 +11507,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			mode === "followUp"
 				? { role: "user", content, attribution, timestamp }
 				: { role: "user", content, steering: true, attribution, timestamp };
-		Object.assign(userMessage, {
-			inputId: options?.inputId ?? crypto.randomUUID(),
-			sourceCommand: options?.sourceCommand,
-			inputClientId: options?.inputClientId,
-			inputAdmissionSeq: ++this.#inputAdmissionSequence,
-			toolDenylist: options?.toolDenylist,
-		});
 		if (options?.goalAutoOrchestrateInitialId !== undefined) {
 			this.#goalAutoOrchestrateInitialSources.set(userMessage, {
 				goalId: options.goalAutoOrchestrateInitialId,
@@ -11896,12 +11722,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#scheduleQueuedMessageDrain();
 	}
 
-	#scheduleQueuedMessageDrain(allowOpeningFollowUp = false): void {
+	#scheduleQueuedMessageDrain(): void {
 		if (
 			this.#queuedMessageDrainScheduled ||
 			this.#modeExitDrainSuppressionDepth > 0 ||
 			this.#queuedMessageDrainBlocked ||
-			!this.#canAutoContinueForFollowUp(allowOpeningFollowUp) ||
+			!this.#canAutoContinueForFollowUp() ||
 			!this.agent.hasQueuedMessages()
 		) {
 			return;
@@ -11913,7 +11739,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				this.#queuedMessageDrainScheduled = false;
 				return (
 					this.#modeExitDrainSuppressionDepth === 0 &&
-					this.#canAutoContinueForFollowUp(allowOpeningFollowUp) &&
+					this.#canAutoContinueForFollowUp() &&
 					this.agent.hasQueuedMessages()
 				);
 			},
@@ -11930,9 +11756,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/**
 	 * Gate for idle-path queued-message auto-continue (see `#scheduleQueuedMessageDrain`).
 	 */
-	#canAutoContinueForFollowUp(allowOpeningFollowUp = false): boolean {
-		if (this.agent.queuedMessagesHeld) return false;
-		if (!this.agent.followUpAutoDrain && this.agent.peekSteeringQueue().length === 0) return false;
+	#canAutoContinueForFollowUp(): boolean {
 		if (this.isStreaming) return false;
 		if (this.isRetrying) return false;
 		// An ACP client that defers agent-initiated turns owns turn
@@ -11969,9 +11793,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// resume. Rows kept out of context (`!!` runs, excluded extension rows) never reach the model,
 		// so they do not count as the tail.
 		const last = lastContextMessage(this.agent.state.messages);
-		// Explicit queue resume may deliver the opening turn; Agent.continue() dequeues it
-		// before calling the provider. Ordinary idle follow-ups retain their existing gate.
-		if (allowOpeningFollowUp && last === undefined) return true;
 		return last?.role === "assistant" || last?.role === "toolResult";
 	}
 
@@ -12184,10 +12005,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		deliverAs: "steer" | "followUp" | "aside",
 		options?: {
 			queueChipText?: string;
-			inputId?: string;
-			sourceCommand?: PromptOptions["sourceCommand"];
-			inputClientId?: string;
-			toolDenylist?: readonly string[];
 			/** Content and vision companion already prepared by the caller; skips re-normalizing and re-describing. */
 			preprocessed?: { content: CustomMessage<T>["content"]; descriptionNotice?: CustomMessage };
 			/** Hidden notices published immediately before this message, in the same synchronous group. */
@@ -12197,13 +12014,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			onPromptAdmitted?: () => void;
 			/** Called synchronously with the messages pushed onto the queue. See {@link PromptOptions.onPromptQueued}. */
 			onPromptQueued?: (queued: readonly AgentMessage[]) => void;
-			/** Live-run-only admission from joinActiveTurn; never wakes an idle autonomous turn. */
-			requireActiveRun?: boolean;
-			activeRunGuard?: () => boolean;
-			skipIdleDrain?: boolean;
 		},
 	): Promise<boolean> {
-		options = { ...options, inputId: options?.inputId ?? crypto.randomUUID() };
 		// Captured before the normalization await below — see #sessionGeneration's doc comment.
 		const sessionGeneration = this.#sessionGeneration;
 		const sourceGeneration = this.#promptGeneration;
@@ -12226,13 +12038,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			attribution: message.attribution ?? "agent",
 			timestamp: Date.now(),
 		};
-		if (options?.inputId !== undefined) Object.assign(appMessage, { inputId: options.inputId });
-		Object.assign(appMessage, {
-			sourceCommand: options?.sourceCommand,
-			inputClientId: options?.inputClientId,
-			inputAdmissionSeq: ++this.#inputAdmissionSequence,
-		});
-		Object.assign(appMessage, { toolDenylist: options?.toolDenylist });
 		const preprocessed = options?.preprocessed;
 		const prependMessages = options?.prependMessages ?? [];
 		const onPromptAdmitted = options?.onPromptAdmitted;
@@ -12247,15 +12052,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			(deliverAs !== "aside" && this.#sessionGeneration !== sessionGeneration) ||
 			this.#isDisposed ||
 			(deliverAs !== "aside" && this.#promptGeneration !== sourceGeneration)
-		) {
-			return false;
-		}
-		if (
-			options?.requireActiveRun &&
-			(this.#abortInProgress ||
-				(options.activeRunGuard
-					? !options.activeRunGuard()
-					: !this.isStreaming || this.#clientPromptInFlightCount === 0))
 		) {
 			return false;
 		}
@@ -12297,7 +12093,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#emitQueueUpdateIfChanged();
 		onPromptQueued?.([...prependMessages, ...(descriptionNotice ? [descriptionNotice] : []), normalizedAppMessage]);
 		onPromptAdmitted?.();
-		if (!options?.skipIdleDrain) this.#scheduleIdleQueueDrain();
+		this.#scheduleIdleQueueDrain();
 		return true;
 	}
 
@@ -12778,235 +12574,23 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		};
 	}
 
-	/** Stable objects from the runtime queues, for identity-aware embedded consumers. */
-	getQueuedInputMessages(): readonly AgentMessage[] {
-		return [
-			...this.agent.peekUndeliveredQueuedMessages(),
-			...this.agent.peekSteeringQueue(),
-			...this.agent.peekFollowUpQueue(),
-		].filter(isUserAuthoredQueuedMessage);
-	}
-
-	/** Follow-up drain preference, also false while an explicit stop holds all queued inputs. */
-	getQueueAutoDrain(): boolean {
-		return !this.agent.queuedMessagesHeld && this.agent.followUpAutoDrain;
-	}
-
-	setQueueAutoDrain(enabled: boolean): void {
-		this.agent.followUpAutoDrain = enabled;
-		if (enabled) {
-			this.agent.queuedMessagesHeld = false;
-			this.#advisors.autoResumeSuppressed = false;
-			this.#allowQueuedMessageDrainRetry();
-			this.#scheduleQueuedMessageDrain(true);
-		}
-	}
-
-	/** Borrow one pending input for an immediate execution; rollback stays in this queue owner. */
-	takeQueuedInput(inputId: string):
-		| {
-				message: AgentMessage;
-				prompt: (options: PromptOptions) => Promise<boolean>;
-				restore: () => boolean;
-		  }
-		| undefined {
-		for (const queue of ["steering", "followUp"] as const) {
-			const selected = queue === "steering" ? this.agent.peekSteeringQueue() : this.agent.peekFollowUpQueue();
-			const index = selected.findIndex(
-				message =>
-					isUserAuthoredQueuedMessage(message) &&
-					(message as AgentMessage & { inputId?: string }).inputId === inputId,
-			);
-			if (index < 0) continue;
-			const message = selected[index];
-			if (message.role !== "user" && message.role !== "custom") return undefined;
-			const start = this.#queuedUserGroupStart(selected, index);
-			const group = selected.slice(start, index + 1);
-			const generation = this.#sessionGeneration;
-			let started = false;
-			let committed = false;
-			let restored = false;
-			this.agent.replaceQueue(queue, this.#withoutQueuedUserMessage(selected, index));
-			return {
-				message,
-				prompt: options => {
-					if (started || restored || generation !== this.#sessionGeneration)
-						return Promise.reject(new Error("Queued input reservation is no longer valid"));
-					started = true;
-					const run = () =>
-						this.#admitSubmission(async () => {
-							const dispatched = await this.#promptWithMessage(message, queueChipText(message), {
-								...options,
-								prependMessages: group.slice(0, -1),
-								onPromptAdmitted: () => {
-									committed = true;
-									options.onPromptAdmitted?.();
-								},
-							});
-							if (!dispatched && options.throwOnDrop) throw new PromptDroppedError();
-							return dispatched;
-						});
-					const denylist = (message as AgentMessage & { toolDenylist?: readonly string[] }).toolDenylist ?? [];
-					return this.#runInputToolPolicy ? this.#runInputToolPolicy(denylist, run) : run();
-				},
-				restore: () => {
-					if (committed || restored || this.#isDisposed || generation !== this.#sessionGeneration) return false;
-					if (
-						this.getQueuedInputMessages().some(
-							input => (input as AgentMessage & { inputId?: string }).inputId === inputId,
-						)
-					)
-						return false;
-					restored = true;
-					if (this.isStreaming) {
-						for (const item of group) {
-							if (queue === "steering") this.agent.steer(item);
-							else this.agent.followUp(item);
-						}
-					} else {
-						const remaining = [
-							...(queue === "steering" ? this.agent.peekSteeringQueue() : this.agent.peekFollowUpQueue()),
-						];
-						remaining.splice(Math.min(start, remaining.length), 0, ...group);
-						this.agent.replaceQueue(queue, remaining);
-					}
-					this.#reconcileQueuedMessageDrain();
-					return true;
-				},
-			};
-		}
-		return undefined;
-	}
-
-	/** Mutate one not-yet-delivered input by identity; identical text never selects its sibling. */
-	mutateQueuedInput(
-		inputId: string,
-		operation: "edit" | "delete" | "reorder" | "sendNow",
-		options: {
-			text?: string;
-			/** Omit to retain queued images; an explicit array replaces them, including [] to clear. */
-			images?: ImageContent[];
-			beforeInputId?: string | null;
-			/** Rebuilt and policy-checked by the host before atomically replacing this queued input. */
-			customMessage?: Pick<CustomMessage, "content" | "display" | "details"> & {
-				customType: typeof SKILL_PROMPT_MESSAGE_TYPE;
-				attribution: "user";
-			};
-		} = {},
-	): boolean {
-		for (const queue of ["steering", "followUp"] as const) {
-			const selected = queue === "steering" ? this.agent.peekSteeringQueue() : this.agent.peekFollowUpQueue();
-			const index = selected.findIndex(
-				message =>
-					isUserAuthoredQueuedMessage(message) &&
-					(message as AgentMessage & { inputId?: string }).inputId === inputId,
-			);
-			if (index < 0) continue;
-			if (operation === "reorder" && options.beforeInputId === inputId) return true;
-			const start = this.#queuedUserGroupStart(selected, index);
-			const group = selected.slice(start, index + 1);
-			const remaining = this.#withoutQueuedUserMessage(selected, index);
-			if (operation === "delete") {
-				this.agent.replaceQueue(queue, remaining);
-			} else if (operation === "sendNow") {
-				if (queue === "steering") return true;
-				const message = group[group.length - 1];
-				if (message.role === "user") message.steering = true;
-				this.agent.moveFollowUpsToSteering(remaining, group);
-			} else if (operation === "edit") {
-				if (options.text === undefined) throw new Error("Queued input edit requires text");
-				const original = selected[index];
-				if (original.role !== "user" && original.role !== "custom") return false;
-				const images =
-					options.images ??
-					("content" in original && Array.isArray(original.content)
-						? original.content.filter(part => part.type === "image")
-						: []);
-				const replacement = options.customMessage
-					? {
-							role: "custom" as const,
-							...options.customMessage,
-							details: {
-								...(options.customMessage.details && typeof options.customMessage.details === "object"
-									? options.customMessage.details
-									: {}),
-								__queueChipText: options.text,
-							},
-							timestamp: original.timestamp,
-							inputId,
-						}
-					: {
-							role: "user" as const,
-							content: [{ type: "text" as const, text: options.text }, ...images],
-							timestamp: original.timestamp,
-							attribution: "user" as const,
-							inputId,
-							...(queue === "steering" ? { steering: true } : {}),
-						};
-				Object.assign(replacement, {
-					sourceCommand: (original as AgentMessage & { sourceCommand?: PromptOptions["sourceCommand"] })
-						.sourceCommand,
-					inputClientId: (original as AgentMessage & { inputClientId?: string }).inputClientId,
-					inputAdmissionSeq: (original as AgentMessage & { inputAdmissionSeq?: number }).inputAdmissionSeq,
-					toolDenylist: (original as AgentMessage & { toolDenylist?: readonly string[] }).toolDenylist,
-				});
-				this.#queuedMessageRawText.set(replacement, options.text);
-				const source = this.#goalAutoOrchestrateInitialSources.get(original);
-				if (source) this.#goalAutoOrchestrateInitialSources.set(replacement, source);
-				const keywordText = this.#skillKeywordText(options.customMessage?.details, options.text);
-				remaining.splice(start, 0, ...this.#createMagicKeywordNotices(keywordText, source?.goalId), replacement);
-				this.agent.replaceQueue(queue, remaining);
-			} else {
-				let before = remaining.length;
-				if (options.beforeInputId != null) {
-					const target = remaining.findIndex(
-						message => (message as AgentMessage & { inputId?: string }).inputId === options.beforeInputId,
-					);
-					if (target < 0) throw new Error("Queue reorder target is no longer in this queue");
-					before = this.#queuedUserGroupStart(remaining, target);
-				}
-				remaining.splice(before, 0, ...group);
-				this.agent.replaceQueue(queue, remaining);
-			}
-			this.#reconcileQueuedMessageDrain();
-			if (operation === "sendNow") {
-				this.#allowQueuedMessageDrainRetry();
-				this.#scheduleIdleQueueDrain();
-			}
-			return true;
-		}
-		return false;
-	}
-
 	/** Last {@link getQueuedMessages} snapshot emitted as a `queue_update` event.
 	 *  Coalesces the agent's internal `onQueueChange` notification down to the
 	 *  externally observable transitions RPC/ACP/TUI subscribers actually care
 	 *  about, so a mutation that leaves the displayable queue unchanged (e.g. an
 	 *  agent-authored aside, or a claim/restore round-trip) never re-emits. */
 	#lastEmittedQueueSnapshot:
-		| {
-				steering: readonly string[];
-				followUp: readonly string[];
-				liveSteered: number;
-				inputIds: readonly (string | undefined)[];
-		  }
+		| { steering: readonly string[]; followUp: readonly string[]; liveSteered: number }
 		| undefined;
 
 	#emitQueueUpdateIfChanged(): void {
-		const snapshot = {
-			...this.getQueuedMessages(),
-			inputIds: this.getQueuedInputMessages().map(
-				message => (message as AgentMessage & { inputId?: string }).inputId,
-			),
-		};
+		const snapshot = this.getQueuedMessages();
 		const last = this.#lastEmittedQueueSnapshot;
 		const unchanged =
 			last !== undefined &&
 			last.steering.length === snapshot.steering.length &&
 			last.followUp.length === snapshot.followUp.length &&
 			last.liveSteered === snapshot.liveSteered &&
-			last.inputIds.length === snapshot.inputIds.length &&
-			last.inputIds.every((id, i) => id === snapshot.inputIds[i]) &&
 			last.steering.every((text, i) => text === snapshot.steering[i]) &&
 			last.followUp.every((text, i) => text === snapshot.followUp[i]);
 		if (unchanged) return;
@@ -13919,22 +13503,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * abort. Omit it for internal/lifecycle aborts.
 	 */
 	async abort(options?: {
-		/** Require this session's owned work to settle without disposing the session. */
-		strict?: boolean;
 		goalReason?: "interrupted" | "internal";
 		reason?: string;
 		/** Force queued user follow-ups into the continuation after a user interrupt. */
 		deliverQueuedMessages?: boolean;
 		/** Internal `/compact` startup keeps the manual-compaction marker alive while aborting the active turn. */
 		preserveCompaction?: boolean;
-		/** Retain canonical queued inputs without consuming them until setQueueAutoDrain(true). */
-		preserveQueuedInputs?: boolean;
-		/** Drop this session's queued inputs before stopping owned work. */
-		clearQueuedInputs?: boolean;
 	}): Promise<void> {
 		const userInterrupt = options?.reason === USER_INTERRUPT_LABEL;
-		if (options?.clearQueuedInputs) this.clearQueue();
-		if (options?.preserveQueuedInputs) this.agent.queuedMessagesHeld = true;
 		this.#pendingAbortErrorId = userInterrupt ? AIError.create(AIError.Flag.UserInterrupt) : undefined;
 		// Latch only when the interrupt stops something; an idle Esc would otherwise fold
 		// every later background completion for the rest of the session. A paused run counts:
@@ -13956,13 +13532,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// leave any queued steer/follow-up visible for the user rather than
 		// auto-starting a fresh turn during cleanup.
 		this.#abortInProgress = true;
-		if (options?.strict) this.#strictAbortCount++;
 		const forceQueuedDelivery = userInterrupt && options?.deliverQueuedMessages === true;
 		if (forceQueuedDelivery) this.#forcedQueuedMessageDeliveryCount++;
 		const unwind = Promise.withResolvers<void>();
 		this.#abortUnwinds.add(unwind.promise);
 		try {
-			if (options?.strict) this.#cancelOwnAsyncJobs(options.reason, false);
 			this.#emit({ type: "session_abort", reason: options?.reason });
 			this.#titleGenerationAbortController.abort();
 			if (!this.#isDisposed) this.#titleGenerationAbortController = new AbortController();
@@ -13972,19 +13546,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#abortCustomCommands(options?.reason);
 			this.abortRetry();
 			this.#promptGeneration++;
-			if (options?.preserveQueuedInputs) {
-				// Accepted inputs survive this stop; retain only their initial Goal provenance.
-				// Preflight submissions still carry the old generation and remain cancelled.
-				for (const message of this.getQueuedInputMessages()) {
-					const source = this.#goalAutoOrchestrateInitialSources.get(message);
-					if (source?.generation === this.#promptGeneration - 1) {
-						this.#goalAutoOrchestrateInitialSources.set(message, {
-							goalId: source.goalId,
-							generation: this.#promptGeneration,
-						});
-					}
-				}
-			}
 			// Cancel any awaited pre-dispatch setup (e.g. Hindsight auto-recall) so the
 			// admitted submission unwinds now instead of at the recall timeout (#12668).
 			this.#promptSetupAbortController?.abort(options?.reason);
@@ -14003,9 +13564,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 			this.abortBash();
 			this.abortEval();
-			const computerControlRevocation = options?.strict
-				? revokeComputerControlForOwner(this.#eval.getKernelOwnerId(), { strict: true })
-				: revokeComputerControlForOwner(this.#eval.getKernelOwnerId());
+			const computerControlRevocation = revokeComputerControlForOwner(this.#eval.getKernelOwnerId());
 			const postPromptDrain = this.#cancelPostPromptTasks(options?.reason);
 			this.agent.abort(options?.reason);
 			await Promise.all([postPromptDrain, computerControlRevocation]);
@@ -14025,7 +13584,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			await manualCompactionCleanup;
 			await this.#drainAutolearnCapture();
 			await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
-			if (options?.strict) await this.#settleOwnedWorkAfterAbort();
 			// The loop has restored any claimed input by now. Promote forced follow-ups
 			// before flushing agent_end so observers see the pending continuation.
 			if (forceQueuedDelivery) this.#promoteForcedFollowUps();
@@ -14065,44 +13623,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 		} finally {
 			this.#abortInProgress = false;
-			if (options?.strict) this.#strictAbortCount--;
 			this.#drainStrandedQueuedMessages();
 			if (forceQueuedDelivery) this.#forcedQueuedMessageDeliveryCount--;
 			this.#abortUnwinds.delete(unwind.promise);
 			unwind.resolve();
 			this.#scheduleRunCheck();
 		}
-	}
-
-	async #settleOwnedWorkAfterAbort(): Promise<void> {
-		const ownerId = this.#eval.getKernelOwnerId();
-		const results = await Promise.allSettled([
-			this.#settleOwnAsyncJobs(),
-			this.#customCommandsInFlight.size > 0
-				? withTimeout(
-						Promise.all(this.#customCommandsInFlight.values()),
-						POST_PROMPT_DRAIN_TIMEOUT_MS,
-						"Timed out draining custom commands during abort",
-					)
-				: Promise.resolve(),
-			this.#eval.disposeKernels({ strict: true }),
-			withTimeout(
-				releaseTabsForOwner(ownerId, { kill: true, strict: true }),
-				3_000,
-				"Timed out releasing owned browser tabs during abort",
-			),
-			withTimeout(
-				this.#drainInFlightEventHandlers(),
-				POST_PROMPT_DRAIN_TIMEOUT_MS,
-				"Timed out draining session event handlers during abort",
-			),
-			this.#autolearnCaptureTask
-				? withTimeout(this.#autolearnCaptureTask, 3_000, "Timed out draining auto-learn capture during abort")
-				: Promise.resolve(),
-			this.#bash.flushPending(),
-		]);
-		const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
-		if (failures.length) throw new AggregateError(failures, "Session owned work did not settle during strict abort");
 	}
 
 	/**

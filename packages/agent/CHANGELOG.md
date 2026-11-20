@@ -4,7 +4,7 @@
 
 ### Breaking Changes
 
-- Removed the retired ZCode attachment references from `AgentInputMetadata`. Inline image messages are unchanged.
+- Removed ZCode-only input metadata, per-agent pause gates, and manual queue holding. Native pause, steering, follow-ups, and inline images remain supported.
 - Removed the unused `stateOnly` option from `Agent.emitExternalEvent()`; normal external events still update live thinking and notify subscribers.
 
 ### Added
@@ -14,11 +14,7 @@
 
 ### Fixed
 
-- Held steering messages no longer stall an active tool while the queue is paused.
-
-### Fixed
-
-- Tool cancellations are reported consistently during execution and replay, and paused speculative reads wait before collecting evidence.
+- Tool cancellations are reported consistently during execution and replay.
 - Compaction retries oversized requests to a separate summary endpoint and ignores invalid saved token counts.
 - Task calls no longer fail solely because their intent label contains JSON-like text.
 

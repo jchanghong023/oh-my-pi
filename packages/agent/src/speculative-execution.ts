@@ -1,7 +1,6 @@
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { untilAborted } from "@oh-my-pi/pi-utils";
-import { agentPauseGate } from "./pause";
 import { validateAgentToolArguments } from "./tool-arguments";
 import type {
 	AgentContext,
@@ -922,14 +921,6 @@ export class SpeculativeOperationCoordinator {
 		};
 		void (async () => {
 			try {
-				// Explicit root isolation covers evidence reads as well as execution.
-				// Leave the ordinary process-global speculative path unchanged.
-				const pauseGate = this.environment?.loopConfig.pauseGate;
-				while (pauseGate && pauseGate !== agentPauseGate && pauseGate.paused) {
-					await pauseGate.waitUntilResumed(signal);
-					// Aborting a parked candidate releases only its wait, not its gate.
-					signal.throwIfAborted();
-				}
 				// Content evidence is captured here — immediately before execution —
 				// rather than at admission: for hook-deferred candidates this runs
 				// after `beforeToolCall`, so a blocked call never triggers content
@@ -939,11 +930,6 @@ export class SpeculativeOperationCoordinator {
 					if (!ready || candidate.state === "discarded") {
 						await this.#discardCandidate(candidate, "discarded", "host declined speculative evidence capture");
 						return;
-					}
-					// Evidence capture may have yielded to a new pause.
-					while (pauseGate && pauseGate !== agentPauseGate && pauseGate.paused) {
-						await pauseGate.waitUntilResumed(signal);
-						signal.throwIfAborted();
 					}
 				}
 				const outcome = await candidate.policy.execute(executionContext, signal);

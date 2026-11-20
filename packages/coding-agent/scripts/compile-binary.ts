@@ -13,11 +13,6 @@ import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { buildOpenWikiResources, resetOpenWikiResources, writeOpenWikiResources } from "./openwiki-resources";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
-import {
-	prepareWebGuiResources,
-	resetWebGuiResources,
-	writeWebGuiResources,
-} from "../../../scripts/generate-webgui-resources";
 import { withChargedActivity, withCompilerActivity } from "../../../scripts/test-gate-events";
 
 /**
@@ -69,8 +64,6 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 		Bun.env.BUN_NO_CODESIGN_MACHO_BINARY = "1";
 	}
 	try {
-		const webGuiResources = await prepareWebGuiResources(options.repoRoot);
-		await writeWebGuiResources(path.resolve(import.meta.dir, "../src/webgui"), webGuiResources);
 		const openWikiResources = await buildOpenWikiResources();
 		await writeOpenWikiResources(openWikiResources);
 		// Read the manifest after generation: local builds can update it in place.
@@ -141,7 +134,6 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 		}
 	} finally {
 		await resetOpenWikiResources();
-		await resetWebGuiResources(path.resolve(import.meta.dir, "../src/webgui"));
 		if (previousCodesignSetting === undefined) {
 			delete Bun.env.BUN_NO_CODESIGN_MACHO_BINARY;
 		} else {

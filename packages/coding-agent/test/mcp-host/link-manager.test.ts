@@ -20,7 +20,7 @@ import { FakeHost, type FakeTunnel, type Message, paramsOf, settled, unauthorize
 const TIMEOUT_ENV = "OMP_MCP_TIMEOUT_MS";
 const SERVER = "srv";
 const URL = "https://mcp.example.test/mcp";
-const PONG = { content: [{ type: "text", text: "pong" }] };
+const PONG = { content: [{ type: "text" as const, text: "pong" }] };
 const TOOLS = { tools: [{ name: "ping", inputSchema: { type: "object" } }] };
 const noop = () => {};
 const noCtx = {} as Parameters<MCPTool["execute"]>[3];
@@ -231,10 +231,7 @@ describe("MCPManager on a scripted host", () => {
 			return { ...config, headers: { Authorization: "Bearer refreshed" } };
 		});
 		answers["tools/call"] = (_message, tunnel) => ({
-			result:
-				tunnel === first
-					? { ...PONG, isError: true, _meta: { "mcp/www_authenticate": ["Bearer"] } }
-					: PONG,
+			result: tunnel === first ? { ...PONG, isError: true, _meta: { "mcp/www_authenticate": ["Bearer"] } } : PONG,
 		});
 		const [tool] = manager.getTools();
 		expect(tool.loadMode).toBe("discoverable");
@@ -247,7 +244,9 @@ describe("MCPManager on a scripted host", () => {
 		} finally {
 			release();
 		}
-		expect(calls).toEqual([{ serverName: SERVER, invocation: { scope: "task-scope", toolCallId: "call-oauth", signal } }]);
+		expect(calls).toEqual([
+			{ serverName: SERVER, invocation: { scope: "task-scope", toolCallId: "call-oauth", signal } },
+		]);
 		expect(first.released).toBe(true);
 		expect(authorization(host.tunnel)).toBe("Bearer refreshed");
 		expect(manager.getTools()[0].loadMode).toBe("discoverable");

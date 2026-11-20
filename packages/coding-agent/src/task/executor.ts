@@ -87,7 +87,6 @@ import {
 	createAgentSession,
 	discoverAuthStorage,
 	hasNativeChildSessionHooks,
-	hasRegistryPauseGate,
 	type NativeChildSessionHooks,
 	resolveNativeChildSessionHooks,
 } from "../sdk";
@@ -4726,12 +4725,10 @@ async function reviveAdmittedSubagent(
 export async function runSubprocess(options: ExecutorOptions): Promise<SingleResult> {
 	if (options.toolRestrictions) options = { ...options, toolRestrictions: options.toolRestrictions.clone() };
 	const pool = isMainThread() && options.settings ? subagentWorkerPool(options.settings) : undefined;
-	// Native callbacks and registry-owned pause gates are realm-local. Keep
-	// these trees on their owning thread rather than lose them over worker RPC.
+	// Keep realm-local native callbacks on their owning thread.
 	if (
 		pool &&
-		(hasRegistryPauseGate(AgentRegistry.global()) ||
-			hasNativeChildSessionHooks(options) ||
+		(hasNativeChildSessionHooks(options) ||
 			options.subagentHooks ||
 			options.subagentRequest ||
 			options.onSessionCreated)

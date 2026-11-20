@@ -180,8 +180,7 @@ describe("HTML export template", () => {
 		await Bun.write(path.join(packWorkspace, "bun.lock"), Bun.file(path.join(repoRoot, "bun.lock")));
 		const packDir = path.join(packWorkspace, packageRel);
 		await Bun.write(path.join(packDir, "package.json"), Bun.file(path.join(packageDir, "package.json")));
-		// Use the focused loader bundle, not a full release build (which also
-		// generates unrelated web GUI, wiki, workbench, stats and docs assets).
+		// Use the focused loader bundle, not a full release build.
 		await Bun.write(path.join(packDir, "dist", "cli.js"), Bun.file(bundlePath));
 		for (const name of ["template-stale.css", "tool-views.generated.js", "marked.min.js", "highlight.min.js"]) {
 			await Bun.write(path.join(packDir, "dist", name), "excluded hosted viewer sidecar");

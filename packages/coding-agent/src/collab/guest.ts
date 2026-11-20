@@ -26,10 +26,6 @@ import { getConfigRootDir, logger, toError } from "@oh-my-pi/pi-utils";
 import { takeAutoRejoin } from "@oh-my-pi/pi-wire";
 import type { AgentHubRemote, AgentHubRemoteTranscript } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import type { InteractiveModeContext } from "../modes/types";
-import type { Settings } from "../config/settings";
-import type { ExtensionUIContext } from "../extensibility/extensions/types";
-import type { AgentSession } from "../session/agent-session";
-import type { EventBus } from "../utils/event-bus";
 import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { fromWireEvent } from "../session/loop-end-wire";
@@ -53,27 +49,6 @@ import {
 } from "./protocol";
 import { CollabSocket } from "./relay-client";
 import { cfgCollabRelayUrl } from "./settings";
-
-/** Real non-terminal presentation and lifecycle ports; the relay/replica protocol remains shared. */
-export interface CollabNativeGuestPort {
-	readonly session: AgentSession;
-	readonly sessionManager: SessionManager;
-	readonly settings: Settings;
-	readonly collabGuest?: CollabGuestLink;
-	readonly eventBus?: EventBus;
-	readonly subagentEventBus?: EventBus;
-	readonly ui: Pick<ExtensionUIContext, "select" | "editor">;
-	setCollabGuest(guest: CollabGuestLink | undefined): void;
-	activateReplica(path: string): Promise<boolean | void>;
-	restoreLocalSession(file: string | null): Promise<void>;
-	dispatchSessionEvent(event: AgentSessionEvent): Promise<void> | void;
-	onSnapshot(state: CollabSessionState): Promise<void> | void;
-	onState(state: CollabSessionState | null): void;
-	onAgentsChanged?(): void;
-	resumeAfterGuest?(restoration: Promise<boolean>): void;
-	showStatus(message: string, options?: { dim?: boolean }): void;
-	showError(message: string): void;
-}
 
 /** Commands a guest may run locally; everything else is host-only. */
 export const COLLAB_GUEST_ALLOWED_COMMANDS: Record<string, true> = {
@@ -234,15 +209,7 @@ function omittedStreamDeltas(
 }
 
 export class CollabGuestLink {
-	#tui: InteractiveModeContext | undefined;
-	#native: CollabNativeGuestPort | undefined;
-	get #ctx(): InteractiveModeContext {
-		if (!this.#tui) throw new Error("Terminal presentation requested by a native collaboration guest");
-		return this.#tui;
-	}
-	get #port(): InteractiveModeContext | CollabNativeGuestPort {
-		return this.#native ?? this.#ctx;
-	}
+	#ctx: InteractiveModeContext;
 	#socket: CollabSocket | null = null;
 	#roomId = "";
 	/**
@@ -353,27 +320,26 @@ export class CollabGuestLink {
 	/** Shows the read-only status hint when applicable; true when the action must be dropped. */
 	#rejectReadOnly(): boolean {
 		if (!this.#readOnly) return false;
-		this.#port.showStatus("This collab link is read-only");
+		this.#ctx.showStatus("This collab link is read-only");
 		return true;
 	}
 
-	constructor(ctx: InteractiveModeContext | { nativePort: CollabNativeGuestPort }) {
-		if ("nativePort" in ctx) this.#native = ctx.nativePort;
-		else this.#tui = ctx;
+	constructor(ctx: InteractiveModeContext) {
+		this.#ctx = ctx;
 	}
 
 	async join(link: string): Promise<void> {
 		const configuredOrigin = intranetCollabEnabled()
-			? configuredIntranetRelayOrigin(cfgCollabRelayUrl.get(this.#port.settings))
+			? configuredIntranetRelayOrigin(cfgCollabRelayUrl.get(this.#ctx.settings))
 			: undefined;
 		const parsed = parseCollabLink(link, configuredOrigin);
 		if ("error" in parsed) throw new Error(parsed.error);
-		if (this.#port.collabGuest || this.#left) throw new Error("Already in a collab session (/leave first)");
+		if (this.#ctx.collabGuest || this.#left) throw new Error("Already in a collab session (/leave first)");
 		this.#roomId = parsed.roomId;
 		this.#writeToken = parsed.writeToken ? Buffer.from(parsed.writeToken).toString("base64url") : undefined;
-		this.#returnSessionFile = this.#port.sessionManager.getSessionFile() ?? null;
+		this.#returnSessionFile = this.#ctx.sessionManager.getSessionFile() ?? null;
 		// Claim the process before any async setup or replica session transition.
-		this.#port.setCollabGuest(this);
+		this.#ctx.setCollabGuest(this);
 		let key: CryptoKey;
 		try {
 			key = await importRoomKey(parsed.key);
@@ -407,7 +373,7 @@ export class CollabGuestLink {
 			socket.send({
 				t: "hello",
 				proto: COLLAB_PROTO,
-				name: collabDisplayName(this.#port),
+				name: collabDisplayName(this.#ctx),
 				writeToken: this.#writeToken,
 			});
 		};
@@ -470,7 +436,7 @@ export class CollabGuestLink {
 						// Fail the join with the host's message instead of hanging
 						// until the welcome timeout.
 						this.#clearWelcomeTimer();
-						if (joined) this.#port.showError(`Collab host: ${frame.message}`);
+						if (joined) this.#ctx.showError(`Collab host: ${frame.message}`);
 						else firstWelcome.reject(new Error(frame.message));
 						return;
 					}
@@ -495,10 +461,10 @@ export class CollabGuestLink {
 				return;
 			}
 			if (willReconnect) {
-				this.#port.showStatus(`Collab connection lost (${reason}), reconnecting…`, { dim: true });
+				this.#ctx.showStatus(`Collab connection lost (${reason}), reconnecting…`, { dim: true });
 				return;
 			}
-			this.#port.showStatus(`Collab session ended (${reason})`);
+			this.#ctx.showStatus(`Collab session ended (${reason})`);
 			this.#restoreAfterDisconnect();
 		};
 		try {
@@ -596,7 +562,7 @@ export class CollabGuestLink {
 		const lines = [header, ...pending.entries].map(entry => JSON.stringify(entry)).join("\n");
 		const storage = new FileSessionStorage();
 		this.#replicaLease ??=
-			storage.claimSession(this.#replicaId, replicaPath, this.#port.session.sessionManager) ?? undefined;
+			storage.claimSession(this.#replicaId, replicaPath, this.#ctx.session.sessionManager) ?? undefined;
 		// Published atomically: `omp gc` reads the replica's header to find its
 		// lease, so a resync must never expose a truncated, headerless file.
 		const tempPath = `${replicaPath}.${mintSessionId()}.tmp`;
@@ -611,32 +577,12 @@ export class CollabGuestLink {
 
 		// Resume through AgentSession without adopting the host's cwd. The replica
 		// keeps its model: #applyHostState mirrors the host's, which runs inference.
-		const switched = this.#native
-			? await this.#native.activateReplica(replicaPath)
-			: await this.#ctx.session.switchSession(replicaPath, { preserveLocalCwd: true, keepModel: true });
+		const switched = await this.#ctx.session.switchSession(replicaPath, { preserveLocalCwd: true, keepModel: true });
 		if (switched === false) {
 			throw new Error("Collab replica activation was cancelled");
 		}
 		this.#replicaActivated = true;
 		if (this.#left) return;
-		if (this.#native) {
-			this.#clearTransientUi();
-			this.#clearAgentMirror();
-			this.state = pending.state;
-			this.#reconcileLifecycle(pending.state.isStreaming);
-			this.#applyHostState(pending.state);
-			this.#applyAgentSnapshots(pending.agents);
-			this.#assistantStreamSynced = false;
-			this.#streamedSnapshot = undefined;
-			this.#readOnly = pending.readOnly;
-			this.#welcomed = true;
-			await this.#native.onSnapshot(pending.state);
-			this.#updateStatusSegment();
-			this.#port.showStatus(
-				`${pending.isResync ? "Reconnected to" : "Joined"} collab session${this.#readOnly ? " (read-only)" : ""}`,
-			);
-			return;
-		}
 		const orphanedLiveBlocks = [
 			...this.#ctx.pendingTools.values(),
 			...this.#ctx.eventController.takeDisplaceableComponents(),
@@ -735,9 +681,9 @@ export class CollabGuestLink {
 				// Entries are never rendered directly — rendering is events-only
 				// (prevents double-render). They keep the replica file, the agent's
 				// message array (/dump, context estimates), and todos current.
-				this.#port.sessionManager.ingestReplicatedEntry(frame.entry);
+				this.#ctx.sessionManager.ingestReplicatedEntry(frame.entry);
 				if (frame.entry.type === "message") {
-					this.#port.session.agent.replaceMessages([...this.#port.session.messages, frame.entry.message]);
+					this.#ctx.session.agent.replaceMessages([...this.#ctx.session.messages, frame.entry.message]);
 				} else if (frame.entry.type === "compaction" || frame.entry.type === "branch_summary") {
 					// Compaction/branch entries rewrite the host's model context: the
 					// pre-boundary transcript collapses behind a summary. Appending
@@ -745,7 +691,7 @@ export class CollabGuestLink {
 					// history, so rebuild the message array from the ingested entries
 					// exactly as the host does after appendCompaction/branchWithSummary
 					// (session-maintenance.ts, agent-session.ts).
-					this.#port.session.agent.replaceMessages(this.#port.session.buildDisplaySessionContext().messages);
+					this.#ctx.session.agent.replaceMessages(this.#ctx.session.buildDisplaySessionContext().messages);
 				}
 				break;
 			}
@@ -756,26 +702,23 @@ export class CollabGuestLink {
 			case "state": {
 				this.state = frame.state;
 				this.#applyHostState(frame.state);
-				if (!this.#native) setSessionTerminalTitle(frame.state.sessionName, frame.state.cwd);
+				setSessionTerminalTitle(frame.state.sessionName, frame.state.cwd);
 				this.#updateStatusSegment();
-				if (!this.#native) reconcileGuestSnapshotHostState(this.#ctx, frame.state.isStreaming);
+				reconcileGuestSnapshotHostState(this.#ctx, frame.state.isStreaming);
 				this.#reconcileLifecycle(frame.state.isStreaming);
-				if (!this.#native) {
-					this.#ctx.statusLine.invalidate();
-					this.#ctx.ui.requestRender();
-				}
+				this.#ctx.statusLine.invalidate();
+				this.#ctx.ui.requestRender();
 				break;
 			}
 			case "bus":
 				// Mirrored host EventBus traffic (task subagent lifecycle/progress)
 				// feeding the observer HUD and Agent Hub progress columns. The
 				// observer registry listens on the shared observability bus.
-				emitSubagentFrame(this.#port.eventBus, this.#port.subagentEventBus, frame.channel, frame.data);
+				emitSubagentFrame(this.#ctx.eventBus, this.#ctx.subagentEventBus, frame.channel, frame.data);
 				break;
 			case "agents":
 				this.#applyAgentSnapshots(frame.agents);
-				if (this.#native) this.#native.onAgentsChanged?.();
-				else this.#ctx.syncRunningSubagentBadge();
+				this.#ctx.syncRunningSubagentBadge();
 				break;
 			case "ui-request":
 				this.#presentUiRequest(frame.request);
@@ -792,12 +735,12 @@ export class CollabGuestLink {
 				break;
 			}
 			case "bye": {
-				this.#port.showStatus(`Collab session ended (${frame.reason})`);
+				this.#ctx.showStatus(`Collab session ended (${frame.reason})`);
 				this.#restoreAfterDisconnect();
 				break;
 			}
 			case "error":
-				this.#port.showError(`Collab host: ${frame.message}`);
+				this.#ctx.showError(`Collab host: ${frame.message}`);
 				break;
 			default:
 				logger.debug("collab guest ignoring unexpected frame", { type: frame.t });
@@ -847,7 +790,7 @@ export class CollabGuestLink {
 		// working/idle transitions while joined. Emissions chain (ordered but never
 		// awaited inline) so a slow extension handler neither stalls frame
 		// application nor completes out of order.
-		const runner = this.#port.session.extensionRunner;
+		const runner = this.#ctx.session.extensionRunner;
 		if (runner) this.#lifecycleEmitter.emit(runner, event);
 	}
 
@@ -858,12 +801,6 @@ export class CollabGuestLink {
 	 * cannot reorder (message_update → message_end → agent_end).
 	 */
 	#dispatchEvent(event: AgentSessionEvent): void {
-		if (this.#native) {
-			void Promise.resolve(this.#native.dispatchSessionEvent(event)).catch(err => {
-				logger.warn("collab native guest event dispatch failed", { type: event.type, error: String(err) });
-			});
-			return;
-		}
 		this.#ctx.eventController.dispatchSessionEvent(event).catch(err => {
 			logger.warn("collab guest event dispatch failed", { type: event.type, error: String(err) });
 		});
@@ -881,14 +818,14 @@ export class CollabGuestLink {
 	 * host's intermediate `willContinue` settles never reach the wire.
 	 */
 	#reconcileLifecycle(isStreaming: boolean): void {
-		const runner = this.#port.session.extensionRunner;
+		const runner = this.#ctx.session.extensionRunner;
 		if (!runner) return;
 		if (isStreaming) {
 			if (!this.#lifecycleEmitter.sawAgentStart) {
 				this.#lifecycleEmitter.emit(runner, { type: "agent_start" });
 			}
 		} else if (this.#lifecycleEmitter.sawAgentStart) {
-			this.#lifecycleEmitter.emit(runner, { type: "agent_end", messages: [...this.#port.session.messages] });
+			this.#lifecycleEmitter.emit(runner, { type: "agent_end", messages: [...this.#ctx.session.messages] });
 		}
 	}
 
@@ -899,7 +836,7 @@ export class CollabGuestLink {
 	 * persist entries and clamp to local credentials.
 	 */
 	#applyHostState(state: CollabSessionState): void {
-		const session = this.#port.session;
+		const session = this.#ctx.session;
 		if (
 			state.model &&
 			(session.agent.state.model?.id !== state.model.id ||
@@ -987,16 +924,10 @@ export class CollabGuestLink {
 				: undefined;
 		const dialog =
 			request.kind === "select"
-				? this.#native
-					? this.#native.ui.select(request.title, request.options, dialogOptions)
-					: this.#ctx.showHookSelector(request.title, request.options, dialogOptions, {
-							kind: request.approval ? "permission" : "question",
-						})
-				: (this.#native ? this.#native.ui.editor.bind(this.#native.ui) : this.#ctx.showHookEditor.bind(this.#ctx))(
-						request.title,
-						request.prefill,
-						{ signal: abort.signal },
-					);
+				? this.#ctx.showHookSelector(request.title, request.options, dialogOptions, {
+						kind: request.approval ? "permission" : "question",
+					})
+				: this.#ctx.showHookEditor(request.title, request.prefill, { signal: abort.signal });
 		dialog
 			.then(value => {
 				// Identity check: only the presentation that still owns the reqId
@@ -1042,7 +973,6 @@ export class CollabGuestLink {
 
 	#clearTransientUi(): void {
 		this.#clearUiRequests();
-		if (this.#native) return;
 		clearGuestTransientStatus(this.#ctx);
 		this.#ctx.pendingShellContainer.clear();
 		this.#ctx.pendingMessagesContainer.clear();
@@ -1059,7 +989,7 @@ export class CollabGuestLink {
 	#restoreAfterDisconnect(): void {
 		void this.#restoreLocalSession().catch(err => {
 			logger.warn("Collab local restoration failed", { error: String(err) });
-			this.#port.showError(`Failed to restore local session: ${err instanceof Error ? err.message : String(err)}`);
+			this.#ctx.showError(`Failed to restore local session: ${err instanceof Error ? err.message : String(err)}`);
 		});
 	}
 
@@ -1076,15 +1006,8 @@ export class CollabGuestLink {
 		// disconnect, `bye`): unlatch the pane before the local session takes
 		// over so extensions do not stay stuck on the host's last `agent_start`.
 		this.#reconcileLifecycle(false);
-		const restoration = this.#runRestoreLocalSession();
-		this.#restoration = this.#native
-			? restoration.catch(error => {
-					this.#restoration = undefined;
-					throw error;
-				})
-			: restoration;
-		if (this.#native) this.#native.resumeAfterGuest?.(this.#restoration);
-		else this.#ctx.collabController?.resumeAfterGuest(this.#restoration);
+		this.#restoration = this.#runRestoreLocalSession();
+		this.#ctx.collabController?.resumeAfterGuest(this.#restoration);
 		return this.#restoration;
 	}
 
@@ -1092,34 +1015,19 @@ export class CollabGuestLink {
 		// An already-running switch cannot be cancelled halfway through. Drain
 		// it before rollback; no queued frame may reactivate the replica later.
 		await this.#applyChain;
-		if (this.#native) {
+		try {
 			if (this.#replicaActivated) await this.#resumeLocalSession();
+		} finally {
 			this.#replicaLease?.();
 			this.#replicaLease = undefined;
-		} else {
-			try {
-				if (this.#replicaActivated) await this.#resumeLocalSession();
-			} finally {
-				this.#replicaLease?.();
-				this.#replicaLease = undefined;
-			}
 		}
-		if (this.#port.collabGuest !== this) return false;
-		this.#port.setCollabGuest(undefined);
-		if (this.#native) this.#native.onAgentsChanged?.();
-		else this.#ctx.syncRunningSubagentBadge();
+		if (this.#ctx.collabGuest !== this) return false;
+		this.#ctx.setCollabGuest(undefined);
+		this.#ctx.syncRunningSubagentBadge();
 		return this.#replicaActivated;
 	}
 
 	async #resumeLocalSession(): Promise<void> {
-		if (this.#native) {
-			this.#native.onState(null);
-			this.#flushPendingTranscripts();
-			this.#clearAgentMirror();
-			this.#clearTransientUi();
-			await this.#native.restoreLocalSession(this.#returnSessionFile);
-			return;
-		}
 		this.#ctx.statusLine.setCollabStatus(null);
 		this.#flushPendingTranscripts();
 		// A pending coalesced mirror message_update must not flush after leave.
@@ -1153,10 +1061,6 @@ export class CollabGuestLink {
 	}
 
 	#updateStatusSegment(): void {
-		if (this.#native) {
-			this.#native.onState(this.state);
-			return;
-		}
 		this.#ctx.statusLine.setCollabStatus({
 			role: "guest",
 			participantCount: this.state?.participants.length ?? 1,

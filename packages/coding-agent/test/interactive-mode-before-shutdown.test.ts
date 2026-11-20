@@ -203,28 +203,6 @@ describe("InteractiveMode pre-quit extension gate", () => {
 		expect(shutdownEvents).toBe(1);
 	});
 
-	it("keeps operator quits inside exclusive WebGUI mode", async () => {
-		mode.isWebGuiModeActive = () => true;
-		mode.handleWebGuiModeSubmit = vi.fn(async () => true);
-		await mode.shutdown();
-		expect(mode.handleWebGuiModeSubmit).toHaveBeenCalledWith("/webgui");
-		expect(attempts).toBe(0);
-		expect(mode.isShuttingDown).toBe(false);
-		expect(session.isDisposed).toBe(false);
-		expect(postmortem.quit).not.toHaveBeenCalled();
-	});
-
-	it("still tears down the host on a forced close during exclusive WebGUI mode", async () => {
-		mode.isWebGuiModeActive = () => true;
-		mode.handleWebGuiModeSubmit = vi.fn(async () => true);
-		await mode.shutdown({ cancellable: false });
-		expect(mode.handleWebGuiModeSubmit).not.toHaveBeenCalled();
-		expect(attempts).toBe(0);
-		expect(session.isDisposed).toBe(true);
-		expect(shutdownEvents).toBe(1);
-		expect(postmortem.quit).toHaveBeenCalledTimes(1);
-	});
-
 	it("does not ask before an extension-requested shutdown", async () => {
 		mode.requestShutdown();
 		await quitCalled.promise;

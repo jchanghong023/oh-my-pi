@@ -5,7 +5,6 @@
  * turns of sessions homed here, and cold revives. Main side: serves follow-up turns a
  * worker forwards for sessions homed elsewhere, routing them on.
  */
-import { AgentRegistry } from "../../registry/agent-registry";
 import { runFollowUpTurnOnThisThread, runSubagentFollowUpTurn, runSubagentRunRequest } from "../../task/executor";
 import { revivePersistedSubagent } from "../../task/persisted-revive";
 import { invalidateRemoteAuthAvailability } from "./auth-remote";
@@ -18,12 +17,7 @@ export const executorThreadService: ThreadService = {
 
 	installMain(peer) {
 		// A worker routes follow-ups of sessions homed elsewhere through main.
-		const registry = AgentRegistry.scoped();
-		peer.link.handle("runFollowUpTurn", options =>
-			registry
-				? AgentRegistry.runScoped(registry, () => runSubagentFollowUpTurn(options))
-				: runSubagentFollowUpTurn(options),
-		);
+		peer.link.handle("runFollowUpTurn", options => runSubagentFollowUpTurn(options));
 	},
 
 	installWorker(link) {

@@ -537,7 +537,6 @@ export class ModelRegistry {
 	#runtimeModelOverlays: CustomModelOverlay[] = [];
 	// `fallback` ranks the key below stored login credentials (see registerProvider).
 	#runtimeProviderApiKeys: Map<string, { keyConfig: string; fallback: boolean }> = new Map();
-	#runtimeRequestAuthSources = new Map<string, () => boolean>();
 	#runtimeProviderOverrides: Map<string, ProviderOverride> = new Map();
 	// Command-backed values from registerProvider (apiKey + provider/model
 	// headers). Separate from #commandConfigsByProvider because static reload
@@ -863,7 +862,7 @@ export class ModelRegistry {
 	#applyMirrorChange(change: ModelRegistryMirrorChange): void {
 		switch (change.kind) {
 			case "register":
-				this.#registerProvider(change.name, change.config, change.sourceId, change.sourceLifetime);
+				this.#registerProvider(change.name, change.config, change.sourceId);
 				return;
 			case "unregister":
 				this.#unregisterProvider(change.name);
@@ -4016,8 +4015,7 @@ export class ModelRegistry {
 					!disabledProviders.has(provider) &&
 					(provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig
 						? getCompanyConfig() !== undefined
-						: this.#runtimeRequestAuthSources.get(provider)?.() === true ||
-							this.#keylessProviders.has(provider) ||
+						: this.#keylessProviders.has(provider) ||
 							this.authStorage.keys.source(provider) !== undefined ||
 							this.authStorage.keys.keyless(provider));
 				byProvider.set(provider, available);
@@ -4097,7 +4095,6 @@ export class ModelRegistry {
 		const keyConfig = this.#customProviderApiKeys.get(model.provider);
 		return (
 			keyConfig !== undefined ||
-			this.#runtimeRequestAuthSources.get(model.provider)?.() === true ||
 			this.#keylessProviders.has(model.provider) ||
 			this.authStorage.keys.source(model.provider, { env: "aliases" }) !== undefined ||
 			this.authStorage.keys.keyless(model.provider)
@@ -4425,7 +4422,6 @@ export class ModelRegistry {
 
 	#clearRuntimeProviderState(providerName: string): void {
 		this.#runtimeProviderApiKeys.delete(providerName);
-		this.#runtimeRequestAuthSources.delete(providerName);
 		this.#runtimeProviderOverrides.delete(providerName);
 		this.#runtimeCommandConfigsByProvider.delete(providerName);
 		this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(overlay => overlay.provider !== providerName);
@@ -4531,26 +4527,20 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Register a provider dynamically. Runtime-owned sources outlive extension reloads;
-	 * their owner removes them explicitly with clearSourceRegistrations.
+	 * Register a provider dynamically (from extensions).
 	 *
 	 * If provider has models: replaces all existing models for this provider.
 	 * If provider has only baseUrl/headers: overrides existing models' URLs.
 	 * If provider has streamSimple: registers a custom API streaming function.
 	 * If provider has oauth: registers OAuth provider for /login support.
 	 */
-	registerProvider(
-		providerName: string,
-		config: ProviderConfigInput,
-		sourceId?: string,
-		sourceLifetime: "extension" | "runtime" = "extension",
-	): void {
+	registerProvider(providerName: string, config: ProviderConfigInput, sourceId?: string): void {
 		if (providerName === COMPANY_PROVIDER_ID) throw new Error("The built-in company provider cannot be replaced.");
 		if (providerName === CODEAGENT_PROVIDER_ID)
 			throw new Error("The built-in CodeAgent provider cannot be replaced.");
 		if (this.#ignoreMirrorLocalChange("registerProvider")) return;
-		this.#runtimeChange({ kind: "register", name: providerName, config, sourceId, sourceLifetime }, () =>
-			this.#registerProvider(providerName, config, sourceId, sourceLifetime),
+		this.#runtimeChange({ kind: "register", name: providerName, config, sourceId }, () =>
+			this.#registerProvider(providerName, config, sourceId),
 		);
 	}
 
@@ -4563,12 +4553,7 @@ export class ModelRegistry {
 		return true;
 	}
 
-	#registerProvider(
-		providerName: string,
-		config: ProviderConfigInput,
-		sourceId: string | undefined,
-		sourceLifetime: "extension" | "runtime",
-	): void {
+	#registerProvider(providerName: string, config: ProviderConfigInput, sourceId: string | undefined): void {
 		if (config.streamSimple && !config.api) {
 			throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
 		}
@@ -4581,7 +4566,6 @@ export class ModelRegistry {
 				apiKey: config.apiKey,
 				api: config.api,
 				oauthConfigured: Boolean(config.oauth),
-				requestAuthConfigured: config.requestAuthConfigured?.() === true,
 				models: (config.models ?? []) as ProviderValidationModel[],
 			},
 			"runtime-register",
@@ -4604,8 +4588,7 @@ export class ModelRegistry {
 
 		let sourceHandoff = false;
 		if (sourceId) {
-			if (sourceLifetime === "extension") this.#registeredProviderSources.add(sourceId);
-			else this.#registeredProviderSources.delete(sourceId);
+			this.#registeredProviderSources.add(sourceId);
 			const previousSourceId = this.#runtimeProviderSourceByName.get(providerName);
 			if (previousSourceId && previousSourceId !== sourceId) {
 				const previousProviders = this.#runtimeProvidersBySource.get(previousSourceId);
@@ -4642,8 +4625,6 @@ export class ModelRegistry {
 			// Persist runtime API keys so they survive #reloadStaticModels() cycles
 			this.#runtimeProviderApiKeys.set(providerName, { keyConfig: config.apiKey, fallback });
 		}
-		if (config.requestAuthConfigured) this.#runtimeRequestAuthSources.set(providerName, config.requestAuthConfigured);
-		else this.#runtimeRequestAuthSources.delete(providerName);
 		this.#recordRuntimeCommandConfigs(providerName, config);
 
 		if (config.models && config.models.length > 0) {
@@ -4920,7 +4901,6 @@ type ModelRegistryMirrorChangeInput =
 			readonly name: string;
 			readonly config: ProviderConfigInput;
 			readonly sourceId: string | undefined;
-			readonly sourceLifetime: "extension" | "runtime";
 	  }
 	| { readonly kind: "unregister"; readonly name: string }
 	| { readonly kind: "clearSources"; readonly sourceIds: readonly string[] }
@@ -4992,13 +4972,6 @@ export interface ProviderConfigInput {
 	baseUrl?: string;
 	apiKey?: string;
 	api?: Api;
-	/**
-	 * Runtime-only declaration of a request-bound credential source owned by the caller.
-	 * Called synchronously for registration and model selection, never to obtain secrets.
-	 * This does not authenticate requests or provide an API key: the caller must resolve
-	 * and enforce authorization at the actual request boundary.
-	 */
-	requestAuthConfigured?: () => boolean;
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
 	headers?: Record<string, string>;
 	compat?: ModelSpec<Api>["compat"];

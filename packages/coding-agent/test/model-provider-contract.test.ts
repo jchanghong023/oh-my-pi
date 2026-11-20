@@ -95,35 +95,29 @@ describe("fork provider boundaries", () => {
 	});
 
 	// A rejected reserved registration must not install even its custom transport or key.
-	test.each(["company", "codeagent"])(
-		"reserved %s registration fails atomically for runtime and extension owners",
-		async provider => {
-			const { registry, auth } = await fixture();
-			const before = registry.getAll("all");
-			const source = auth.keys.source(provider);
-			for (const lifetime of ["extension", "runtime"] as const) {
-				expect(() =>
-					registry.registerProvider(
-						provider,
-						{
-							api: "reserved-contract-api",
-							baseUrl: "https://replacement.invalid",
-							apiKey: "replacement-secret",
-							models: [definition],
-							streamSimple: () => {
-								throw new Error("Rejected transport must never run");
-							},
-						},
-						"ext://reserved-contract",
-						lifetime,
-					),
-				).toThrow(/built-in.*cannot be replaced/i);
-				expect(registry.getAll("all")).toEqual(before);
-				expect(auth.keys.source(provider)).toEqual(source);
-				expect(getCustomApi("reserved-contract-api")).toBeUndefined();
-			}
-		},
-	);
+	test.each(["company", "codeagent"])("reserved %s registration fails atomically", async provider => {
+		const { registry, auth } = await fixture();
+		const before = registry.getAll("all");
+		const source = auth.keys.source(provider);
+		expect(() =>
+			registry.registerProvider(
+				provider,
+				{
+					api: "reserved-contract-api",
+					baseUrl: "https://replacement.invalid",
+					apiKey: "replacement-secret",
+					models: [definition],
+					streamSimple: () => {
+						throw new Error("Rejected transport must never run");
+					},
+				},
+				"ext://reserved-contract",
+			),
+		).toThrow(/built-in.*cannot be replaced/i);
+		expect(registry.getAll("all")).toEqual(before);
+		expect(auth.keys.source(provider)).toEqual(source);
+		expect(getCustomApi("reserved-contract-api")).toBeUndefined();
+	});
 
 	test("runtime providers remain selectable after refresh without deleting stored credentials", async () => {
 		const { registry, auth } = await fixture();

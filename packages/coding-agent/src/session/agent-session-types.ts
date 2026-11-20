@@ -185,9 +185,6 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
-	/** Validate explicit embedding-host request authentication without inventing a stored API key. */
-	validateRequestAuth?: (model: Model, signal?: AbortSignal) => Promise<boolean>;
-	runInputToolPolicy?: <T>(denylist: readonly string[], run: () => T) => T;
 	/** Session-local communication and root-scoped child observability buses. */
 	eventBus?: EventBus;
 	subagentEventBus?: EventBus;
@@ -461,21 +458,6 @@ export interface AgentSessionConfig {
 
 /** Options for AgentSession.prompt(). */
 export interface PromptOptions {
-	/** Stable caller-owned input identity; retained on the actual queued/persisted message. */
-	inputId?: string;
-	/** Semantic command origin for durable host receipts; never forwarded to provider payloads. */
-	sourceCommand?: {
-		sessionId: string | null;
-		commandId: string;
-		fingerprint: string;
-		epoch?: string;
-		type?: string;
-		automationId?: string;
-	};
-	/** Caller restrictions for this input, retained with queued/persisted input identity. */
-	toolDenylist?: readonly string[];
-	/** Input author identity supplied by an embedding host; not provider metadata. */
-	inputClientId?: string;
 	/** Whether to expand file-based prompt templates (default: true). */
 	expandPromptTemplates?: boolean;
 	/**
@@ -495,8 +477,6 @@ export interface PromptOptions {
 	 *  an in-flight tool batch, injecting at the next step boundary instead (see
 	 *  AgentSession.sendUserMessage's `deliverAs: "aside"`). */
 	streamingBehavior?: "steer" | "followUp" | "aside";
-	/** Enqueue using streamingBehavior even while idle or manual maintenance is active (default: false). */
-	queueOnly?: boolean;
 	/** Optional tool choice override for the next LLM call. */
 	toolChoice?: ToolChoice;
 	/** Send as a developer/system message instead of user. */

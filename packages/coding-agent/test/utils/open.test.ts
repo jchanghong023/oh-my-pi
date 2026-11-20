@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { openPath, openPathWithResult } from "@oh-my-pi/pi-coding-agent/utils/open";
+import { openPath } from "@oh-my-pi/pi-coding-agent/utils/open";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 
@@ -33,7 +33,6 @@ function fakeProcess(exitCode = 0): Subprocess {
 	return {
 		pid: 1,
 		exited: Promise.resolve(exitCode),
-		unref: () => {},
 		kill: () => true,
 	} as unknown as Subprocess;
 }
@@ -90,14 +89,14 @@ afterEach(() => {
 });
 
 describe("openPath", () => {
-	it("keeps explicit URL opening available in offline csh sessions", async () => {
+	it("keeps explicit URL opening available in offline csh sessions", () => {
 		setPlatform("linux");
 		process.env.SHELL = "/bin/tcsh";
 		process.env.OMP_OFFLINE = "1";
 		const calls: SpawnCall[] = [];
 		spySpawn(calls);
 
-		expect(await openPathWithResult("http://127.0.0.1:1234/")).toEqual({ opened: true });
+		openPath("http://127.0.0.1:1234/");
 		expect(calls.map(call => call.cmd)).toEqual([["xdg-open", "http://127.0.0.1:1234/"]]);
 	});
 
@@ -223,24 +222,22 @@ describe("openPath", () => {
 		}
 	});
 
-	it("reports a failed OS handoff and logs the verification URL without its device code or fragment", async () => {
+	it("logs the non-zero exit and verification URL without its device code or fragment", async () => {
 		setPlatform("win32");
 		vi.spyOn(fs, "existsSync").mockReturnValue(true);
 		const calls: SpawnCall[] = [];
 		spySpawn(calls, 1);
 
 		const warnSpy = vi.spyOn(piUtils.logger, "warn").mockImplementation((() => {}) as never);
-		expect(await openPathWithResult("https://auth.x.ai/activate?user_code=ABCD-EFGH#t=workspace-secret")).toEqual({
-			opened: false,
-			reason: expect.stringContaining("1"),
-		});
+		openPath("https://auth.x.ai/activate?user_code=ABCD-EFGH#t=workspace-secret");
+		await Promise.resolve();
 		expect(warnSpy).toHaveBeenCalledWith(
 			"External opener exited with non-zero status",
 			expect.objectContaining({ exitCode: 1, target: "https://auth.x.ai/activate" }),
 		);
 	});
 
-	it("keeps URL secrets out of the log and failure result, but logs local paths verbatim", async () => {
+	it("keeps URL secrets out of the log when the opener cannot spawn, but logs local paths verbatim", () => {
 		setPlatform("win32");
 		vi.spyOn(fs, "existsSync").mockReturnValue(true);
 		const warnSpy = vi.spyOn(piUtils.logger, "warn").mockImplementation((() => {}) as never);
@@ -248,10 +245,7 @@ describe("openPath", () => {
 			throw Object.assign(new Error("spawn failed: mailto:me@example.com?token=argv-secret"), { code: "ENOENT" });
 		});
 
-		expect(await openPathWithResult("mailto:me@example.com?token=argv-secret")).toEqual({
-			opened: false,
-			reason: "Failed to open external URL/path",
-		});
+		openPath("mailto:me@example.com?token=argv-secret");
 		openPath("C:\\notes\\a#b.html");
 
 		const logged = JSON.stringify(warnSpy.mock.calls);
