@@ -22,7 +22,6 @@ import {
 	type CompactionResult,
 	type CompactionSummaryMessage,
 	calculateContextTokens,
-	calculatePersistentContextTokens,
 	canReplayRemoteCompactionFrom,
 	collectShakeRegions,
 	COMPACTION_RECOVERY_BAND,
@@ -3170,11 +3169,6 @@ export class SessionMaintenance {
 		});
 	}
 
-	#pendingQueuedDrainMessages(): AgentMessage[] {
-		const agent = this.#host.agent;
-		return [...agent.peekSteeringQueue(), ...agent.peekFollowUpQueue()];
-	}
-
 	#replaceActiveMessages(activeMessages: AgentMessage[]): void {
 		const compactedMessages = this.#host.agent.state.messages;
 		if (compactedMessages === activeMessages) return;
@@ -3212,11 +3206,7 @@ export class SessionMaintenance {
 				ready.fail(error);
 			}
 		}
-		// A stop is not always a drain boundary: terminal yields still run this
-		// hook for bookkeeping, with no live signal, but leave the queue intact.
-		if (!context || signal?.aborted) return;
-		const queuedDrainMessages = context.canDrainQueuedMessages ? this.#pendingQueuedDrainMessages() : [];
-		if (!context.willContinue && queuedDrainMessages.length === 0) return;
+		if (!context?.willContinue || signal?.aborted) return;
 
 		const model = this.#model;
 		const contextWindow = model?.contextWindow ?? 0;
@@ -3268,23 +3258,9 @@ export class SessionMaintenance {
 		// persistence; rewrites and dead-end cut-point rechecks do. Awaiting it on every tool turn lets
 		// a slow message_end listener leave the TUI "generating" with no provider
 		// request or tool running.
-		const persistentContextTokens = calculatePersistentContextTokens(lastAssistant);
+		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
-		let contextTokens = compactionContextTokens(persistentContextTokens, storedContextTokens);
-		if (queuedDrainMessages.length > 0) {
-			// 缺陷 G02: 队列待消费输入按直接 prompt 同一口径计入待输入预算 ——
-			// provider usage(锚定估算)+pending 与本地估算+pending 取较大者,
-			// 与 #estimatePrePromptContextTokens 的 max 语义一致,不改阈值。
-			const queuedBreakdown = this.#host.getContextBreakdown({
-				contextWindow,
-				pendingMessages: queuedDrainMessages,
-			});
-			const queuedEstimate = compactionContextTokens(
-				queuedBreakdown?.usedTokens ?? 0,
-				this.#estimateStoredContextTokens(queuedDrainMessages),
-			);
-			contextTokens = Math.max(contextTokens, queuedEstimate);
-		}
+		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
 		// A bridge compaction replaced the long tool call's prompt-cache entry: its result lands here, whatever
 		// the threshold says. One still summarizing leaves this turn on the old, still warm, context.
 		if (this.#speculation?.bridge && this.#speculation.armed) {
@@ -3365,15 +3341,7 @@ export class SessionMaintenance {
 			autoContinue: false,
 			suppressContinuation: true,
 			triggerContextTokens: contextTokens,
-			// 缺陷 G02: 队列待消费输入已计入 triggerContextTokens,但不在 prepared
-			// history 中;pendingContextTokens 让 armed speculation 校验与直接
-			// prompt 路径保持同一口径。phase 用 pre_turn:queued 输入尚未进入上下文,
-			// 与直接路径的 pre-prompt 压缩同语义。
-			pendingContextTokens:
-				queuedDrainMessages.length > 0
-					? this.#tokenizer.countMessages(queuedDrainMessages, { excludeEncryptedReasoning: true })
-					: undefined,
-			phase: queuedDrainMessages.length > 0 ? "pre_turn" : "mid_turn",
+			phase: "mid_turn",
 			detachPostCommit: true,
 		});
 		if (result.automaticContinuationBlocked) {
@@ -3950,7 +3918,7 @@ export class SessionMaintenance {
 		// (the floor applied below) drive the decision instead.
 		const assistantUsageContextTokens = assistantPredatesCompaction
 			? 0
-			: calculatePersistentContextTokens(assistantMessage);
+			: calculateContextTokens(assistantMessage.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
 		// Pruning frees bytes for the NEXT prompt; it does not change the size of
 		// the prompt the LLM just billed for. Earlier revisions subtracted the
@@ -3960,8 +3928,7 @@ export class SessionMaintenance {
 		// post-prune estimate below the user-configured trigger — the visible
 		// context (anchored to the same provider billing) still showed >threshold,
 		// but `shouldCompact` no-op'd (#3174). Anchor the initial trigger on the
-		// last turn's billed persistent context tokens (excluding request-only
-		// context), floored by the post-prune
+		// last turn's billed context tokens, floored by the post-prune
 		// stored-conversation estimate so a payload-compression hook still can't
 		// deflate the trigger.
 		const contextTokens = compactionContextTokens(assistantUsageContextTokens, storedContextTokens);
@@ -4112,100 +4079,43 @@ export class SessionMaintenance {
 		availableModels: Model[],
 		filter?: (model: Model) => boolean,
 	): Model[] {
-		const compactionId = logger.getLogContext().compaction_id ?? `compact-${crypto.randomUUID()}`;
-		return logger.withLogContext(
-			{
-				operation_id: logger.getLogContext().operation_id ?? compactionId,
-				compaction_id: compactionId,
-			},
-			() => {
-				// Shared catalog rows carry the registry's extended-window opt-ins; judge
-				// and compact with the window this session's settings select.
-				const registry = this.#host.modelRegistry;
-				const settings = this.#host.settings;
-				availableModels = availableModels.map(model => registry.fitContextWindow(model, settings));
-				const candidates: Model[] = [];
-				const seen = new Set<string>();
-				let eligibilitySkipped = 0;
-				const activeProvider = this.#model?.provider;
-				const offlineBlocked = (model: Model): boolean =>
-					cfgOffline.get(settings) && (!activeProvider || model.provider !== activeProvider);
+		// Shared catalog rows carry the registry's extended-window opt-ins; judge
+		// and compact with the window this session's settings select.
+		const registry = this.#host.modelRegistry;
+		const settings = this.#host.settings;
+		availableModels = availableModels.map(model => registry.fitContextWindow(model, settings));
+		const candidates: Model[] = [];
+		const seen = new Set<string>();
+		const activeProvider = this.#model?.provider;
+		const offlineBlocked = (model: Model): boolean =>
+			cfgOffline.get(settings) && (!activeProvider || model.provider !== activeProvider);
 
-				const addCandidate = (model: Model | undefined, source: string): boolean => {
-					const fields = {
-						component: "compaction",
-						event: "compaction_candidate",
-						stage: "selection",
-						source,
-						provider: compactionDiagnosticId(model?.provider),
-						model: compactionDiagnosticId(model?.id),
-					};
-					if (!model || offlineBlocked(model)) {
-						logger.info("Compaction candidate skipped", { ...fields, result: "skipped", reason: "unresolved" });
-						return false;
-					}
-					const key = `${model.provider}/${model.id}`;
-					if (seen.has(key)) {
-						if (source !== "largest_context") {
-							logger.info("Compaction candidate skipped", { ...fields, result: "skipped", reason: "duplicate" });
-						}
-						return false;
-					}
-					seen.add(key);
-					// Rejected models remain seen so the context fallback cannot reintroduce them.
-					if (filter && !filter(model)) {
-						eligibilitySkipped++;
-						if (source !== "largest_context" || model.provider === "openai-codex") {
-							logger.info("Compaction candidate skipped", {
-								...fields,
-								result: "skipped",
-								reason: "native_eligibility_filter",
-								same_provider: model.provider === preferredModel?.provider,
-							});
-						}
-						return false;
-					}
-					candidates.push(model);
-					logger.info("Compaction candidate included", {
-						...fields,
-						result: "included",
-						candidate_index: candidates.length,
-					});
-					return true;
-				};
+		const addCandidate = (model: Model | undefined): boolean => {
+			if (!model || offlineBlocked(model)) return false;
+			const key = `${model.provider}/${model.id}`;
+			if (seen.has(key)) return false;
+			seen.add(key);
+			// Rejected models remain seen so the context fallback cannot reintroduce them.
+			if (filter && !filter(model)) return false;
+			candidates.push(model);
+			return true;
+		};
 
-				if (preferredModel) {
-					addCandidate(resolveCompactionConfiguredTarget(preferredModel, availableModels), "explicit");
-				}
-				addCandidate(preferredModel ?? undefined, "preferred");
-				for (const role of CHAT_MODEL_ROLE_IDS) {
-					const original = resolveRoleModelFull(
-						this.#host.settings,
-						role,
-						availableModels,
-						preferredModel ?? undefined,
-					).model;
-					addCandidate(original, `role:${role}`);
-				}
+		if (preferredModel) {
+			addCandidate(resolveCompactionConfiguredTarget(preferredModel, availableModels));
+		}
+		addCandidate(preferredModel ?? undefined);
+		for (const role of CHAT_MODEL_ROLE_IDS) {
+			addCandidate(
+				resolveRoleModelFull(this.#host.settings, role, availableModels, preferredModel ?? undefined).model,
+			);
+		}
 
-				const sortedByContext = [...availableModels].sort(
-					(a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0),
-				);
-				for (const model of sortedByContext) {
-					if (addCandidate(model, "largest_context")) break;
-				}
-
-				logger.info("Compaction candidate chain resolved", {
-					component: "compaction",
-					event: "compaction_candidates_resolved",
-					stage: "selection",
-					result: "completed",
-					candidate_count: candidates.length,
-					eligibility_skipped_count: eligibilitySkipped,
-				});
-				return candidates;
-			},
-		);
+		const sortedByContext = [...availableModels].sort((a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0));
+		for (const model of sortedByContext) {
+			if (addCandidate(model)) break;
+		}
+		return candidates;
 	}
 
 	#buildCompactionAuthError(): Error {
@@ -4271,15 +4181,6 @@ export class SessionMaintenance {
 
 					for (const [candidateIndex, candidate] of candidates.entries()) {
 						const attemptStarted = performance.now();
-						logger.info("Compaction model attempt started", {
-							component: "compaction",
-							event: "compaction_model_attempt",
-							stage: "authentication",
-							result: "started",
-							attempt: candidateIndex + 1,
-							provider: compactionDiagnosticId(candidate.provider),
-							model: compactionDiagnosticId(candidate.id),
-						});
 						const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
 						if (!apiKey) {
 							logger.info("Compaction model skipped", {
@@ -4289,6 +4190,8 @@ export class SessionMaintenance {
 								result: "skipped",
 								attempt: candidateIndex + 1,
 								reason: "credentials_unavailable",
+								provider: compactionDiagnosticId(candidate.provider),
+								model: compactionDiagnosticId(candidate.id),
 								elapsed_ms: performance.now() - attemptStarted,
 							});
 							continue;
@@ -4308,16 +4211,6 @@ export class SessionMaintenance {
 							});
 							throw nativeCompactionFailure.error;
 						}
-						logger.info("Compaction model selected", {
-							component: "compaction",
-							event: "compaction_model_selected",
-							stage: "request",
-							result: "selected",
-							attempt: candidateIndex + 1,
-							provider: compactionDiagnosticId(candidate.provider),
-							model: compactionDiagnosticId(candidate.id),
-						});
-
 						try {
 							const result = await compact(
 								this.#host.obfuscatePreparationForProvider(preparation),
@@ -4401,6 +4294,8 @@ export class SessionMaintenance {
 								stage: "request",
 								result: cancelled ? "cancelled" : "failed",
 								attempt: candidateIndex + 1,
+								provider: compactionDiagnosticId(candidate.provider),
+								model: compactionDiagnosticId(candidate.id),
 								auth_failed: AIError.is(id, AIError.Flag.AuthFailed),
 								native_failure: error instanceof NativeCompactionError,
 								elapsed_ms: performance.now() - attemptStarted,
@@ -6578,16 +6473,6 @@ export class SessionMaintenance {
 									let attempt = 0;
 									while (true) {
 										const attemptStarted = performance.now();
-										logger.info("Automatic compaction model selected", {
-											component: "compaction",
-											event: "compaction_model_attempt",
-											stage: "request",
-											result: "started",
-											candidate_index: candidateIndex + 1,
-											attempt: attempt + 1,
-											provider: compactionDiagnosticId(candidate.provider),
-											model: compactionDiagnosticId(candidate.id),
-										});
 										try {
 											compactResult = await compact(
 												this.#host.obfuscatePreparationForProvider(preparation),
@@ -6641,16 +6526,6 @@ export class SessionMaintenance {
 													onRemoteUsage: journal,
 												},
 											);
-											logger.info("Automatic compaction model completed", {
-												component: "compaction",
-												event: "compaction_model_attempt",
-												stage: "request",
-												result: "success",
-												candidate_index: candidateIndex + 1,
-												attempt: attempt + 1,
-												input_tokens: compactResult.tokensBefore,
-												elapsed_ms: performance.now() - attemptStarted,
-											});
 											break;
 										} catch (error) {
 											(autoCompactionSignal.aborted ? logger.info : logger.warn)(
@@ -6662,6 +6537,8 @@ export class SessionMaintenance {
 													result: autoCompactionSignal.aborted ? "cancelled" : "failed",
 													candidate_index: candidateIndex + 1,
 													attempt: attempt + 1,
+													provider: compactionDiagnosticId(candidate.provider),
+													model: compactionDiagnosticId(candidate.id),
 													elapsed_ms: performance.now() - attemptStarted,
 													...logger.diagnosticError(error),
 												},

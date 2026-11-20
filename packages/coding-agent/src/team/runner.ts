@@ -12,7 +12,6 @@ import * as os from "node:os";
 import path from "node:path";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../session/auth-storage";
-import type { AgentSession } from "../session/agent-session";
 import type { ContextFileEntry } from "../tools";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
@@ -57,13 +56,6 @@ export interface TeamRunnerDeps extends NativeChildSessionHooks {
 	rules?: Rule[];
 	contextFiles?: ContextFileEntry[];
 	workspaceTree?: WorkspaceTree;
-	/** Observe real child requests without equating participant calls with provider requests. */
-	onSessionCreated?: (call: TeamSubagentCall, session: AgentSession) => void | (() => void);
-	disableAutoCompaction?: boolean;
-	/** Restricted workflows preserve their already-loaded project constraints verbatim. */
-	preserveContextFiles?: boolean;
-	/** Additional workflow-owned communication constraints; ordinary Team calls omit this. */
-	appendSystemPrompt?: string;
 }
 
 interface ArtifactLease {
@@ -221,9 +213,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 					const agent: AgentDefinition = {
 						name: `team-${call.role}`,
 						description: `Team discussion ${call.role} (${call.label})`,
-						systemPrompt: deps.appendSystemPrompt
-							? [TEAM_ROLE_SYSTEM_PROMPTS[call.role], deps.appendSystemPrompt].join("\n\n")
-							: TEAM_ROLE_SYSTEM_PROMPTS[call.role],
+						systemPrompt: TEAM_ROLE_SYSTEM_PROMPTS[call.role],
 						tools: [...TEAM_READ_ONLY_TOOLS],
 						readSummarize: false,
 						source: "bundled",
@@ -245,7 +235,6 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						getApiKey: deps.getApiKey,
 						onPayload: deps.onPayload,
 						onResponse: deps.onResponse,
-						onModelResponse: deps.onModelResponse,
 						toolRestrictions: deps.toolRestrictions?.clone(),
 						agent,
 						task: call.task,
@@ -267,8 +256,6 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						restrictToolNames: true,
 						keepAlive: false,
 						signal,
-						onSessionCreated: session => deps.onSessionCreated?.(call, session),
-						disableAutoCompaction: deps.disableAutoCompaction,
 						onCleanupDeferred: completion => {
 							deferredCleanup = completion;
 						},
@@ -286,9 +273,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						authStorage: deps.authStorage,
 						modelRegistry: deps.modelRegistry,
 						settings: deps.settings,
-						contextFiles: deps.preserveContextFiles
-							? deps.contextFiles
-							: deps.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
+						contextFiles: deps.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
 						skills: deps.skills ? [...deps.skills] : undefined,
 						workspaceTree: deps.workspaceTree,
 						promptTemplates: deps.promptTemplates,

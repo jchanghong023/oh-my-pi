@@ -809,7 +809,6 @@ export class VibeSessionRegistry {
 			resolveRequestAuth: session.resolveRequestAuth,
 			onPayload: session.onPayload,
 			onResponse: session.onResponse,
-			onModelResponse: session.onModelResponse,
 			toolRestrictions: session.toolRestrictions?.clone(),
 		};
 		return this.#withTerminationLock(scope, () => this.#spawnLocked(session, scope, args, hooks));

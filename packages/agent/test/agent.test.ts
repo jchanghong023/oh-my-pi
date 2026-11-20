@@ -2244,7 +2244,7 @@ describe("Agent active thinking phase", () => {
 		});
 	}
 
-	it("does not let a reset predecessor's late events clear a successor's thinking phase", async () => {
+	it("keeps a reset run's late thinking hidden before and during the successor", async () => {
 		const oldStream = new AssistantMessageEventStream();
 		const newStream = new AssistantMessageEventStream();
 		let calls = 0;
@@ -2260,6 +2260,19 @@ describe("Agent active thinking phase", () => {
 		});
 		agent.reset();
 		expect(agent.state.activeThinkingIndex).toBeUndefined();
+		let idle = false;
+		const waitForOldRun = agent.waitForIdle().then(() => {
+			idle = true;
+		});
+		await Promise.resolve();
+		expect(idle).toBe(false);
+		const lateUpdate = await dispatchUpdate(agent, oldStream, {
+			type: "thinking_delta",
+			contentIndex: 0,
+			delta: "late after reset",
+			partial: oldPartial,
+		});
+		expect(lateUpdate.index).toBeUndefined();
 
 		const newRun = agent.prompt("new owner");
 		const newPartial = createAssistantMessage([
@@ -2276,6 +2289,7 @@ describe("Agent active thinking phase", () => {
 		oldStream.push({ type: "thinking_end", contentIndex: 0, content: "old", partial: oldPartial });
 		oldStream.push({ type: "done", reason: "stop", message: oldPartial });
 		await oldRun;
+		await waitForOldRun;
 		expect(agent.state.activeThinkingIndex).toBe(1);
 		const current = agent.state.streamMessage;
 		if (current?.role !== "assistant") throw new Error("Expected the successor's active assistant message");

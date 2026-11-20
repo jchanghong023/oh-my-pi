@@ -1,6 +1,5 @@
 import type { Agent, AgentMessage } from "@oh-my-pi/pi-agent-core";
 import {
-	calculatePersistentContextTokens,
 	calculatePromptTokens,
 	findTranscriptUsageAnchor,
 	isTranscriptUsageAnchor,
@@ -55,11 +54,7 @@ export interface SessionStatsTrackerHost {
 
 function correctedPromptTokens(assistant: AssistantMessage): number {
 	const providerPromptTokens = assistant.contextSnapshot?.promptTokens ?? calculatePromptTokens(assistant.usage);
-	return Math.max(
-		0,
-		calculatePersistentContextTokens(assistant, providerPromptTokens) -
-			(assistant.contextSnapshot?.historyRewriteTokensRemoved ?? 0),
-	);
+	return Math.max(0, providerPromptTokens - (assistant.contextSnapshot?.historyRewriteTokensRemoved ?? 0));
 }
 
 function isUsageWindowBoundary(entry: SessionEntry): boolean {

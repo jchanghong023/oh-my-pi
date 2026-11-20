@@ -373,7 +373,6 @@ describe("advisor tool-call loop guard", () => {
 				},
 				toolResults: [],
 				willContinue: true,
-				canDrainQueuedMessages: false,
 			});
 		}
 		expect(messages).toHaveLength(redirects);
@@ -412,7 +411,7 @@ describe("advisor tool-call loop guard", () => {
 				isError: true,
 				timestamp: Date.now(),
 			};
-			return { message, toolResults: [result], willContinue: true, canDrainQueuedMessages: false };
+			return { message, toolResults: [result], willContinue: true };
 		};
 
 		guard.recordTurn(messages, turn("before-1"));

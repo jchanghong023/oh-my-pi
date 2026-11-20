@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { AssistantMessage, Context, Message, Model, UserMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Context, Message, Model } from "@oh-my-pi/pi-ai";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import { markPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
@@ -19,7 +18,7 @@ function promptOf(tokens: number): Context {
 	return { messages: [{ role: "user", content: "x".repeat(tokens * 4), timestamp: 0 }] };
 }
 
-function userOf(tokens: number, timestamp: number): UserMessage {
+function userOf(tokens: number, timestamp: number): Message {
 	return { role: "user", content: "x".repeat(tokens * 4), timestamp };
 }
 
@@ -259,80 +258,6 @@ describe("fitOutputTokensToContextWindow", () => {
 		const context: Context = { messages: [reported(990_000, 1), userOf(1_000, 2)] };
 		expect(fitOutputTokensToContextWindow(deepseek, context, 384_000, tokenizer)).toBe(
 			1_000_000 - 991_100 - MESSAGE_FRAMING_TOKENS - OUTPUT_FIT_HEADWAY_TOKENS,
-		);
-	});
-
-	test.each([
-		["unchanged", 100_000, 50_000],
-		["grown", 200_000, 150_000],
-		["shrunk", 50_000, 50_000],
-		["removed", 0, 50_000],
-	] as const)("fits only the %s request-context delta since provider usage", (_name, current, paddedTail) => {
-		const anchor = {
-			...reported(700_000, 2),
-			perCallContextTokens: 100_000,
-			perCallContextTokensBySource: { fixture: 100_000 },
-		};
-		const temporary = userOf(current, 0);
-		markPerCallContextMessage(temporary, "fixture");
-		const context: Context = {
-			messages: [userOf(1_000, 1), anchor, userOf(50_000, 3), ...(current ? [temporary] : [])],
-		};
-		const reduction = Math.min(0, current - 100_000);
-		expect(fitOutputTokensToContextWindow(deepseek, context, undefined, tokenizer)).toBe(
-			1_000_000 -
-				(700_000 + reduction + paddedTail + Math.ceil(paddedTail / 10)) -
-				(1 + (current ? 1 : 0)) * MESSAGE_FRAMING_TOKENS -
-				OUTPUT_FIT_HEADWAY_TOKENS,
-		);
-	});
-
-	test("counts request-only context inserted before the anchor and after a history rewrite", () => {
-		const temporary = userOf(100_000, 0);
-		markPerCallContextMessage(temporary, "fixture");
-		const anchored: Context = { messages: [temporary, reported(700_000, 2), userOf(50_000, 3)] };
-		expect(fitOutputTokensToContextWindow(deepseek, anchored, undefined, tokenizer)).toBe(
-			1_000_000 - 865_000 - 2 * MESSAGE_FRAMING_TOKENS - OUTPUT_FIT_HEADWAY_TOKENS,
-		);
-		const rewritten: Context = {
-			messages: [{ ...userOf(700_000, 10), historyRewriteAt: 10 }, temporary],
-		};
-		expect(fitOutputTokensToContextWindow(deepseek, rewritten, undefined, tokenizer)).toBe(
-			1_000_000 - 880_000 - 2 * MESSAGE_FRAMING_TOKENS - OUTPUT_FIT_HEADWAY_TOKENS,
-		);
-	});
-
-	// An unreconstructable request-only transform must invalidate provider anchoring.
-	test.each(["anonymous-anchor", "anonymous-current", "no-anchor"] as const)(
-		"uses the full local estimate for %s request context",
-		kind => {
-			const anchor = reported(900_000, 2);
-			anchor.perCallContextTokens = 100_000;
-			anchor.perCallContextTokensBySource = { fixture: kind === "anonymous-anchor" ? 99_999 : 100_000 };
-			const temporary = userOf(50_003, 0);
-			markPerCallContextMessage(temporary, kind === "anonymous-current" ? undefined : "fixture");
-			const context: Context = {
-				systemPrompt: ["s".repeat(28)],
-				messages: [userOf(600_000, 1), ...(kind === "no-anchor" ? [] : [anchor]), temporary],
-			};
-			// Include the system prefix and assistant text, not the stale 900k report.
-			const local = 7 + tokenizer.countMessages(context.messages);
-			expect(fitOutputTokensToContextWindow(deepseek, context, undefined, tokenizer)).toBe(
-				1_000_000 -
-					(local + Math.ceil(local / 10) + context.messages.length * MESSAGE_FRAMING_TOKENS) -
-					OUTPUT_FIT_HEADWAY_TOKENS,
-			);
-		},
-	);
-
-	// Shrinking request-only context cannot make the anchored component negative.
-	test("floors a negative anchored remainder before adding the ordinary tail", () => {
-		const anchor = reported(20_000, 1);
-		anchor.perCallContextTokens = 100_000;
-		anchor.perCallContextTokensBySource = { fixture: 100_000 };
-		const context: Context = { messages: [anchor, userOf(600_003, 2)] };
-		expect(fitOutputTokensToContextWindow(deepseek, context, undefined, tokenizer)).toBe(
-			1_000_000 - 660_004 - MESSAGE_FRAMING_TOKENS - OUTPUT_FIT_HEADWAY_TOKENS,
 		);
 	});
 

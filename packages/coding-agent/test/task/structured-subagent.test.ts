@@ -399,7 +399,7 @@ describe("structured subagent primitive", () => {
 		expect(policy.modelOverride).toEqual(["b/y"]);
 	});
 
-	it("keeps live native capabilities on the owning thread while ordinary runs use placement", async () => {
+	it("keeps live host capabilities and read isolation on the owning thread while ordinary runs use placement", async () => {
 		const pool = new SubagentWorkerPool({ maxWorkers: () => 1 });
 		setSubagentWorkerPoolForTests(pool);
 		const place = vi.spyOn(pool, "place").mockImplementation(() => ({
@@ -421,6 +421,7 @@ describe("structured subagent primitive", () => {
 			{ subagentHooks: { beforeSpawn: async () => ({}), configureSession: async () => ({}) } },
 			{ subagentRequest: request() },
 			{ onSessionCreated: () => {} },
+			{ localProtocolOptions: { allowCrossAgentReads: false, getReadIsolationRoots: () => ["/tmp"] } },
 		];
 		try {
 			for (const capability of capabilities) {

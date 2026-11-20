@@ -25,6 +25,7 @@
 - Removed the fork-only SDK option `createAgentSession({ editMode })`. Edit schemas and read anchors use the upstream settings and model rules.
 - Removed the retired ZCode child-session interaction factory and restored the two-argument `setToolUIContext()`.
 - Removed the old ZCode-only filesystem rollback and runtime provider admission overrides. Native edit/format locking and SDK request hooks remain available.
+- Removed the retired `onModelResponse` SDK hook and Team workbench-only runner options. Request authentication, response metadata hooks, and native Team read isolation are unchanged.
 
 ### Added
 
@@ -86,6 +87,7 @@
 - Integrated upstream v18.22.0, adopting the backend-neutral `dsm` analysis namespace while keeping binary analysis disabled by default.
 - Integrated upstream v18.20.2 while retaining blocked Goal tasks and fork deployment defaults.
 - Ask now uses upstream HTML forms and timeout behavior across native hosts, without fork-specific Goal replies or the legacy questions tool protocol.
+- Images pasted into Ask answers no longer replace numbered `attachment://` references to images in submitted messages.
 - File writes no longer capture unused before-and-after snapshots for the retired compact display.
 - Compact mode no longer shows a turn-wide file diff. Recent tool output still appears briefly, and detailed mode retains the original expandable file diffs.
 

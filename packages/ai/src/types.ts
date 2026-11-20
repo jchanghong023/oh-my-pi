@@ -1390,10 +1390,6 @@ export interface AssistantMessage {
 	/** Stored credential row that produced this turn; absent for external or unknown keys. */
 	credentialId?: number;
 	contextSnapshot?: ContextSnapshot;
-	/** Local token count of request-only messages included in this response's provider usage. */
-	perCallContextTokens?: number;
-	/** Named subsets of request-only usage; planners correct only the producers they can rebuild. */
-	perCallContextTokensBySource?: Record<string, number>;
 	retryRecovery?: AssistantRetryRecovery;
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
 	/**

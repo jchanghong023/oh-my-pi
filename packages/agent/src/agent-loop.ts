@@ -38,7 +38,6 @@ import {
 	type CursorExecResolvedCarrier,
 	copyCursorExecResolved,
 	getStreamingPartialJson,
-	isPerCallContextMessage,
 	kCursorExecResolved,
 } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { schemaDefinesProperty } from "@oh-my-pi/pi-ai/utils/schema/json-schema-validator";
@@ -57,8 +56,6 @@ import { isDsmlLeakRecoveryTarget, removeDsmlToolMarkupLeak } from "@oh-my-pi/pi
 import { cloneJsonTree, logger, sanitizeText, structuredCloneJSON, toError } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { LiveSteeringChannel } from "./live-steering";
-import { countPerCallContextTokens, countPerCallContextTokensBySource } from "./output-budget";
-import { Tokenizer } from "./tokenizer";
 import { agentPauseGate } from "./pause";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import { SpeculativeOperationCoordinator } from "./speculative-execution";
@@ -825,7 +822,7 @@ async function emitTurnEnd(
 	toolResults: ToolResultMessage[],
 	config: AgentLoopConfig,
 	signal?: AbortSignal,
-	context?: Partial<Omit<AgentTurnEndContext, "message" | "toolResults">>,
+	context?: Omit<AgentTurnEndContext, "message" | "toolResults">,
 	runHookOnAbortedMessage = false,
 ): Promise<void> {
 	stream.push({ type: "turn_end", message, toolResults });
@@ -838,7 +835,6 @@ async function emitTurnEnd(
 		toolResults,
 		additionalMessages: [],
 		willContinue: false,
-		canDrainQueuedMessages: false,
 		...context,
 	});
 }
@@ -1848,11 +1844,9 @@ async function runLoopBody(
 					hasMoreToolCalls = true;
 				}
 
-				const deadlineExceeded = isDeadlineExceeded(config.deadline);
 				await emitTurnEnd(stream, currentContext, message, toolResults, config, signal, {
 					additionalMessages,
-					willContinue: hasMoreToolCalls && !deadlineExceeded,
-					canDrainQueuedMessages: !hasMoreToolCalls && !deadlineExceeded && !signal?.aborted,
+					willContinue: hasMoreToolCalls && !isDeadlineExceeded(config.deadline),
 				});
 				turnOpen = false;
 
@@ -2112,13 +2106,6 @@ async function streamAssistantResponse(
 ): Promise<AssistantMessage> {
 	const providerCall = prepared ?? (await prepareProviderCall(context, config, signal));
 	const { model, context: llmContext, promptToolWireTools, ownedDialect } = providerCall;
-	const perCallTokenizer = llmContext.messages.some(isPerCallContextMessage)
-		? (config.getTokenizer?.() ?? new Tokenizer(model))
-		: undefined;
-	const perCallContextTokens = perCallTokenizer ? countPerCallContextTokens(llmContext, perCallTokenizer) : 0;
-	const perCallContextTokensBySource = perCallTokenizer
-		? countPerCallContextTokensBySource(llmContext, perCallTokenizer)
-		: undefined;
 
 	const streamFunction = streamFn || streamSimple;
 
@@ -2395,11 +2382,6 @@ async function streamAssistantResponse(
 							const detection = detectHarmonyLeakInAssistantMessage(finalMessage);
 							if (detection) {
 								const recovered = recoverHarmonyToolCall(finalMessage, detection);
-								if (recovered) {
-									if (perCallContextTokens > 0) recovered.message.perCallContextTokens = perCallContextTokens;
-									if (perCallContextTokensBySource)
-										recovered.message.perCallContextTokensBySource = perCallContextTokensBySource;
-								}
 								const removed = recovered?.removed ?? extractHarmonyRemoved(finalMessage, detection);
 								if (addedPartial) {
 									emitDiscardedHarmonyPartial(
@@ -2430,9 +2412,6 @@ async function streamAssistantResponse(
 						if (config.transformAssistantMessage) {
 							await config.transformAssistantMessage(finalMessage, requestSignal);
 						}
-						if (perCallContextTokens > 0) finalMessage.perCallContextTokens = perCallContextTokens;
-						if (perCallContextTokensBySource)
-							finalMessage.perCallContextTokensBySource = perCallContextTokensBySource;
 						// A pre-dispatch hook may request approval or change external state, so
 						// do not run it until the outer loop has established this tool turn can
 						// actually dispatch. The same gate keeps host-deferred speculation from
@@ -2696,11 +2675,6 @@ async function streamAssistantResponse(
 					const detection = detectHarmonyLeakInAssistantMessage(trailing);
 					if (detection) {
 						const recovered = recoverHarmonyToolCall(trailing, detection);
-						if (recovered) {
-							if (perCallContextTokens > 0) recovered.message.perCallContextTokens = perCallContextTokens;
-							if (perCallContextTokensBySource)
-								recovered.message.perCallContextTokensBySource = perCallContextTokensBySource;
-						}
 						const removed = recovered?.removed ?? extractHarmonyRemoved(trailing, detection);
 						if (addedPartial) {
 							emitDiscardedHarmonyPartial(
@@ -2717,8 +2691,6 @@ async function streamAssistantResponse(
 				if (config.transformAssistantMessage) {
 					await config.transformAssistantMessage(trailing, requestSignal);
 				}
-				if (perCallContextTokens > 0) trailing.perCallContextTokens = perCallContextTokens;
-				if (perCallContextTokensBySource) trailing.perCallContextTokensBySource = perCallContextTokensBySource;
 				trailing = snapshotAssistantMessage(trailing);
 				const finalToolCallsCanDispatch =
 					!requestSignal?.aborted &&

@@ -4726,12 +4726,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (options.toolRestrictions) options = { ...options, toolRestrictions: options.toolRestrictions.clone() };
 	const pool = isMainThread() && options.settings ? subagentWorkerPool(options.settings) : undefined;
 	// Keep realm-local native callbacks on their owning thread.
+	// Read-isolated Team runs also need synchronous local-protocol getters that the worker codec does not bridge.
 	if (
 		pool &&
 		(hasNativeChildSessionHooks(options) ||
 			options.subagentHooks ||
 			options.subagentRequest ||
-			options.onSessionCreated)
+			options.onSessionCreated ||
+			options.localProtocolOptions?.allowCrossAgentReads === false)
 	) {
 		const endMainRun = pool.beginMainRun();
 		try {

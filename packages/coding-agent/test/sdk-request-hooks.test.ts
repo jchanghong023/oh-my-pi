@@ -9,7 +9,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
-it("dispatches with explicit SDK authorization and observes the same request's terminal reply", async () => {
+it("dispatches with explicit SDK authorization and observes the same request's response metadata", async () => {
 	using root = TempDir.createSync("@pi-sdk-request-hooks-");
 	const auth = createInMemoryAuthStorage();
 	const source = "sdk-request-hooks-test";
@@ -21,7 +21,6 @@ it("dispatches with explicit SDK authorization and observes the same request's t
 		});
 		auth.keys.setRuntime(model.provider, "stored-key");
 		const metadata: Array<{ id: string | undefined; signal: AbortSignal | undefined }> = [];
-		const terminal: Array<{ message: unknown; modelId: string; signal: AbortSignal | undefined }> = [];
 		const settings = Settings.isolated({ "compaction.enabled": false, "todo.enabled": false });
 		({ session } = await createAgentSession({
 			cwd: root.path(),
@@ -34,9 +33,6 @@ it("dispatches with explicit SDK authorization and observes the same request's t
 			resolveRequestAuth: async () => ({ apiKey: "request-key", headers: { "x-request-auth": "ephemeral" } }),
 			onResponse: (response, _model, signal) => {
 				metadata.push({ id: response.headers["x-request-id"], signal });
-			},
-			onModelResponse: (message, requestModel, signal) => {
-				terminal.push({ message, modelId: requestModel.id, signal });
 			},
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -55,13 +51,6 @@ it("dispatches with explicit SDK authorization and observes the same request's t
 		expect(options).toMatchObject({ apiKey: "request-key", headers: { "x-request-auth": "ephemeral" } });
 		expect(options?.signal).toBeInstanceOf(AbortSignal);
 		expect(metadata).toEqual([{ id: "request-1", signal: options?.signal }]);
-		expect(terminal).toEqual([
-			{
-				message: expect.objectContaining({ content: [{ type: "text", text: "Provider reply" }] }),
-				modelId: model.id,
-				signal: options?.signal,
-			},
-		]);
 	} finally {
 		try {
 			await session?.dispose();

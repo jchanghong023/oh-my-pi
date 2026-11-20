@@ -9,14 +9,18 @@
 
 ### Added
 
-- Turn-end hooks can distinguish queue-draining boundaries from terminal tool yields.
 - Compaction callers can explicitly enable or disable thinking-capability probes.
+
+### Changed
+
+- Context budgeting follows upstream for queued input and request-only context.
 
 ### Fixed
 
 - Tool cancellations are reported consistently during execution and replay.
-- Compaction retries oversized requests to a separate summary endpoint and ignores invalid saved token counts.
+- Compaction retries oversized requests to a separate summary endpoint.
 - Task calls no longer fail solely because their intent label contains JSON-like text.
+- `Agent.reset()` no longer cancels an ordinary in-flight run or releases `waitForIdle()` before it settles.
 
 ## [19.0.0] - 2026-11-18
 

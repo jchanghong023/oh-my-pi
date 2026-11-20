@@ -175,7 +175,6 @@ export function isSyntheticUser(message: SyntheticUserCarrier | null | undefined
  * Symbol-keyed so the marker never persists or reaches the provider wire.
  */
 export const kPerCallContextMessage = Symbol("agent.message.perCallContext");
-const kPerCallContextSource = Symbol("agent.message.perCallContextSource");
 const kPerCallContextHistoryOrigin = Symbol("agent.message.perCallContextHistoryOrigin");
 
 /** Turn identity only; never retain the historical message or its contents. */
@@ -187,18 +186,15 @@ export interface PerCallContextHistoryOrigin {
 /** Carries per-call context provenance without exposing a string-keyed property. */
 export type PerCallContextMessageCarrier = object & {
 	[kPerCallContextMessage]?: true;
-	[kPerCallContextSource]?: string;
 	[kPerCallContextHistoryOrigin]?: PerCallContextHistoryOrigin;
 };
 
 /** Marks a message as synthesized for the current provider call. */
 export function markPerCallContextMessage(
 	message: PerCallContextMessageCarrier,
-	source?: string,
 	historyOrigin?: PerCallContextHistoryOrigin,
 ): void {
 	message[kPerCallContextMessage] = true;
-	if (source !== undefined) message[kPerCallContextSource] = source;
 	if (historyOrigin) message[kPerCallContextHistoryOrigin] = historyOrigin;
 	else delete message[kPerCallContextHistoryOrigin];
 }
@@ -214,17 +210,11 @@ export function copyPerCallContextMessage(
 		if (historyOrigin) target[kPerCallContextHistoryOrigin] = historyOrigin;
 		else delete target[kPerCallContextHistoryOrigin];
 	}
-	if (source[kPerCallContextSource] !== undefined) target[kPerCallContextSource] = source[kPerCallContextSource];
 }
 
 /** True when a message was synthesized for the current provider call. */
 export function isPerCallContextMessage(message: PerCallContextMessageCarrier | null | undefined): boolean {
 	return message?.[kPerCallContextMessage] === true;
-}
-
-/** Stable producer identity for independently reserving request-only context in compaction. */
-export function getPerCallContextSource(message: PerCallContextMessageCarrier): string | undefined {
-	return message[kPerCallContextSource];
 }
 
 /** Original turn boundary for a transformed message with a trusted history index. */

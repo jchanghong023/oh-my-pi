@@ -377,7 +377,6 @@ const forkCodingAgentFiles = new Set([
 	"test/agent-session-compaction.test.ts",
 	"test/agent-session-goal-midrun-compaction.test.ts",
 	"test/agent-session-magic-keywords.test.ts",
-	"test/agent-session-queued-drain-compaction.test.ts",
 	"test/agent-session-queued-steer-delivery.test.ts",
 	"test/agent-session-stats.test.ts",
 	"test/approval-launch-contract.test.ts",
@@ -399,8 +398,6 @@ const forkCodingAgentFiles = new Set([
 	"test/config-cli-revision-contract.test.ts",
 	"test/context-fits-model.test.ts",
 	"test/developer-test-agent-resources.test.ts",
-	"test/discovery-per-call-compaction-baseline.test.ts",
-	"test/discovery-queued-maintenance-guards.test.ts",
 	"test/discovery-skill-scanner.test.ts",
 	"test/discovery/claude-plugins.test.ts",
 	"test/eval/completion-bridge.test.ts",
@@ -487,11 +484,7 @@ const forkCodingAgentFiles = new Set([
 	"test/sharpshooter-extract.test.ts",
 ]);
 const forkPackageFiles: Record<string, string[]> = {
-	"packages/agent": [
-		"test/discovery-per-call-context.test.ts",
-		"test/output-budget.test.ts",
-		"test/pause-gate.test.ts",
-	],
+	"packages/agent": ["test/output-budget.test.ts", "test/pause-gate.test.ts"],
 	"packages/utils": ["test/dirs-cache.test.ts", "test/logger-contract.test.ts"],
 	"packages/ai": ["test/proxy.test.ts"],
 	"packages/mnemopi": ["test/offline-storage.test.ts"],

@@ -2571,7 +2571,7 @@ export class ExtensionRunner {
 				origin !== undefined && (message.role !== origin.role || message.timestamp !== origin.timestamp);
 			const repeated = historyMessage !== undefined && this.#isRepeatedProjection(historyMessage, message);
 			if (!repeated || changesTurnIdentity) {
-				markPerCallContextMessage(message, undefined, historyMessage ? origin : undefined);
+				markPerCallContextMessage(message, historyMessage ? origin : undefined);
 			}
 		}
 		for (const message of messages) clearContextHistoryIndex(message);

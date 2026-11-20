@@ -26,7 +26,6 @@ import type { AppendOnlyContextManager } from "./append-only-context";
 import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
 import type { SentToolDefinitions } from "./sent-tool-definitions";
 import type { AgentTelemetryConfig } from "./telemetry";
-import type { Tokenizer } from "./tokenizer";
 
 /** Stream function - can return sync or Promise for async config lookup */
 export type StreamFn = (
@@ -101,8 +100,6 @@ export interface AgentTurnEndContext {
 	additionalMessages?: AgentMessage[];
 	/** True when the current tool-loop batch is continuing without yielding to post-turn steering. */
 	willContinue: boolean;
-	/** True when this stop boundary can drain queued user input into another model call. */
-	canDrainQueuedMessages: boolean;
 }
 
 export interface AgentPreModelCallStop {
@@ -193,8 +190,6 @@ export interface SteeringQueueState {
  */
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model;
-	/** Reuse the Agent's current model-aware token counter for request-only usage accounting. */
-	getTokenizer?: () => Tokenizer;
 
 	/** Reports whether this loop has reached a safe process-pause boundary. */
 	onPauseChange?: (paused: boolean) => void;
@@ -636,9 +631,10 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 		signal?: AbortSignal,
 	) => Promise<BeforeToolCallResult | undefined> | BeforeToolCallResult | undefined;
 	/**
-	 * Called after a turn ends, before the loop continues or exits. `context`
-	 * distinguishes an ongoing tool loop from a stop that can drain queued
-	 * input. Queue policy or an abort during the hook can still prevent draining.
+	 * Called after a turn ends and before the loop polls steering/asides for the
+	 * next iteration. `context` carries the just-finished turn; `context.willContinue`
+	 * is true when the current tool-loop batch is continuing without yielding to
+	 * post-turn steering.
 	 */
 	onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal, context?: AgentTurnEndContext) => Promise<void> | void;
 

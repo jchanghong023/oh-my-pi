@@ -1,5 +1,4 @@
 import type { Context, Model, Tool } from "@oh-my-pi/pi-ai";
-import { getPerCallContextSource, isPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { stopsOutputAtContextWindow } from "@oh-my-pi/pi-catalog/compat/output-limits";
 import { stringifyJson } from "@oh-my-pi/pi-utils";
 import { findRequestUsageAnchor } from "./compaction/transcript-tokens";
@@ -24,10 +23,8 @@ const PROMPT_ESTIMATE_MARGIN_DIVISOR = 10;
  * separators, and tool results in response wrappers: about 5 tokens per merged
  * Qwen3 `<tool_response>` or Llama 3 turn, 10–15 for harmony or Mistral tool results.
  * The proportional margin scales with content, so many short messages (a turn's
- * parallel tool results) leave this uncovered. Persisted provider-anchored messages
- * need no charge: the host's report includes their framing. Request-only messages
- * retain a conservative framing charge because their saved metadata counts content,
- * not how many message wrappers the anchored request contained.
+ * parallel tool results) leave this uncovered. Provider-anchored messages need no
+ * charge: the host's own report already includes their framing.
  */
 export const MESSAGE_FRAMING_TOKENS = 16;
 
@@ -132,81 +129,18 @@ function withMargin(localTokens: number): number {
 	return localTokens + Math.ceil(localTokens / PROMPT_ESTIMATE_MARGIN_DIVISOR);
 }
 
-/** Count all request-only messages, including transforms that insert before the usage anchor. */
-export function countPerCallContextTokens(context: Context, tokenizer: Tokenizer): number {
-	let tokens = 0;
-	for (const message of context.messages) {
-		if (isPerCallContextMessage(message)) tokens += tokenizer.countMessage(message);
-	}
-	return tokens;
-}
-
-/** Preserve other request transforms' usage when a planner rebuilds one named producer. */
-export function countPerCallContextTokensBySource(
-	context: Context,
-	tokenizer: Tokenizer,
-): Record<string, number> | undefined {
-	let counts: Record<string, number> | undefined;
-	for (const message of context.messages) {
-		if (!isPerCallContextMessage(message)) continue;
-		const source = getPerCallContextSource(message);
-		if (source === undefined) continue;
-		counts ??= Object.create(null) as Record<string, number>;
-		counts[source] = (counts[source] ?? 0) + tokenizer.countMessage(message);
-	}
-	return counts;
-}
-
-/** Reject malformed persisted metadata and totals that include anonymous transforms. */
-function hasNamedPerCallTokenCounts(total: number, bySource: Record<string, number> | undefined): boolean {
-	if (!Number.isSafeInteger(total) || total < 0) return false;
-	if (bySource === undefined) return total === 0;
-	if (bySource === null || typeof bySource !== "object" || Array.isArray(bySource)) return false;
-	let namedTokens = 0;
-	for (const tokens of Object.values(bySource)) {
-		if (!Number.isSafeInteger(tokens) || tokens < 0) return false;
-		namedTokens += tokens;
-		if (namedTokens > total) return false;
-	}
-	return namedTokens === total;
-}
-
 /** Provider-anchored prompt size; falls back to a full local count when nothing anchors. */
 function countPromptTokens(context: Context, tokenizer: Tokenizer): number {
 	const { messages } = context;
 	const anchor = findRequestUsageAnchor(messages);
-	// Anonymous transforms may replace persisted history, not merely append
-	// request-only text. Their usage cannot safely anchor a later restored view.
-	const total = anchor?.message.perCallContextTokens;
-	const anchoredPerCallTokens = total === undefined ? 0 : total;
-	if (
-		!anchor ||
-		!hasNamedPerCallTokenCounts(anchoredPerCallTokens, anchor.message.perCallContextTokensBySource) ||
-		messages.some(message => isPerCallContextMessage(message) && getPerCallContextSource(message) === undefined)
-	) {
+	if (!anchor) {
 		return withMargin(countContextTokens(context, tokenizer)) + messages.length * MESSAGE_FRAMING_TOKENS;
 	}
 	let tail = 0;
-	let perCallTokens = 0;
-	let locallyFramedMessages = 0;
-	for (let index = 0; index < messages.length; index++) {
-		const message = messages[index];
-		if (isPerCallContextMessage(message)) {
-			perCallTokens += tokenizer.countMessage(message);
-			// These messages can be inserted before the anchor. Its metadata records
-			// content tokens, not message counts, so keep their framing conservative.
-			locallyFramedMessages++;
-		} else if (index > anchor.index) {
-			tail += tokenizer.countMessage(message);
-			locallyFramedMessages++;
-		}
+	for (let index = anchor.index + 1; index < messages.length; index++) {
+		tail += tokenizer.countMessage(messages[index]);
 	}
-	const delta = perCallTokens - anchoredPerCallTokens;
-	return (
-		Math.max(0, anchor.tokens + Math.min(0, delta)) +
-		withMargin(tail + Math.max(0, delta)) +
-		locallyFramedMessages * MESSAGE_FRAMING_TOKENS
-	);
+	return anchor.tokens + withMargin(tail) + (messages.length - anchor.index - 1) * MESSAGE_FRAMING_TOKENS;
 }
 
 function countContextTokens(context: Context, tokenizer: Tokenizer): number {

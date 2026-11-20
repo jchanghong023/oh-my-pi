@@ -621,7 +621,7 @@ export function buildSessionContext(
 		);
 		// Agent context (non-transcript): summary first so the LLM sees the
 		// compacted context before recent messages.
-		if (!options?.transcript && compactionSummaryMsg) {
+		if (!options?.transcript) {
 			pushMessage(compactionSummaryMsg);
 		}
 
@@ -664,8 +664,8 @@ export function buildSessionContext(
 					? path.findIndex(entry => entry.id === compaction.providerReplayThroughEntryId)
 					: -1;
 			const retainedStart = firstKeptIdx >= 0 ? firstKeptIdx : snapshotIdx >= 0 ? snapshotIdx + 1 : -1;
-			let displayStartIdx = retainedStart >= 0 && retainedStart < compactionIdx ? retainedStart : compactionIdx;
 			if (retainedStart >= 0 && retainedStart < compactionIdx) {
+				let displayStartIdx = retainedStart;
 				if (options?.transcript) {
 					// `findCutPoint` may leave the collapsed display's kept region
 					// mid-turn. Trim only to a new turn initiated by the user:
@@ -681,8 +681,6 @@ export function buildSessionContext(
 						}
 					}
 				}
-			}
-			if (retainedStart >= 0 && retainedStart < compactionIdx) {
 				for (let i = retainedStart; i < compactionIdx; i++) {
 					const entry = path[i];
 					if (i < displayStartIdx) {
@@ -710,7 +708,7 @@ export function buildSessionContext(
 		// here so the first post-compaction assistant turn — not a kept
 		// pre-compaction one — is marked as a cache miss.
 		if (options?.transcript) handleEntryResetTracking(compaction);
-		if (options?.transcript && compactionSummaryMsg) {
+		if (options?.transcript) {
 			pushMessage(compactionSummaryMsg);
 		}
 

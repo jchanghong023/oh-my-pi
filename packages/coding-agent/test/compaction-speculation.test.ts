@@ -695,7 +695,7 @@ describe("async speculative compaction", () => {
 			tokensBefore: preparation.tokensBefore,
 			details: {},
 		}));
-		const context = { message: boundary, toolResults: [], willContinue: true, canDrainQueuedMessages: false };
+		const context = { message: boundary, toolResults: [], willContinue: true };
 
 		await maintenance.maintainContextMidRun(activeMessages, undefined, context);
 		expect(compactSpy).toHaveBeenCalledTimes(1);
@@ -761,7 +761,6 @@ describe("async speculative compaction", () => {
 			message: pending,
 			toolResults: [result],
 			willContinue: true,
-			canDrainQueuedMessages: false,
 		});
 
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(1);
@@ -1153,48 +1152,6 @@ describe("async speculative compaction", () => {
 		expect(compactSpy).toHaveBeenCalledTimes(2);
 		const entry = sessionManager.getEntries().findLast(item => item.type === "compaction");
 		expect(entry?.type === "compaction" ? entry.summary : undefined).toBe("summary 2");
-	});
-
-	// Exercise the stop-boundary consumer: queued input is pending, not prepared history.
-	it("passes queued pending tokens as pre_turn and rejects an armed summary without recovery headroom", async () => {
-		maintenance = createMaintenance({ persistTurnMessagesForMidRunCompaction: async () => true });
-		agent.replaceMessages(sessionManager.buildSessionContext().messages);
-		let invocation = 0;
-		const compact = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
-			summary: `queued summary ${++invocation}`,
-			firstKeptEntryId: preparation.firstKeptEntryId,
-			tokensBefore: preparation.tokensBefore,
-			details: {},
-		}));
-		maintenance.maybeStartSpeculativeCompaction(SPECULATION_BAND_START, CONTEXT_WINDOW);
-		await waitForState("armed");
-		const boundary = assistantMessage("post-snapshot stop", model);
-		sessionManager.appendMessage(boundary);
-		agent.state.messages.push(boundary);
-		const pending = userMessage("p".repeat(180_000));
-		agent.followUp(pending);
-		const onDemand = vi.spyOn(maintenance, "runAutoCompaction");
-
-		await maintenance.maintainContextMidRun(agent.state.messages, undefined, {
-			message: boundary,
-			toolResults: [],
-			willContinue: false,
-			canDrainQueuedMessages: true,
-		});
-
-		expect(onDemand).toHaveBeenCalledWith(
-			"threshold",
-			false,
-			expect.objectContaining({
-				pendingContextTokens: 45_000,
-				phase: "pre_turn",
-			}),
-		);
-		expect(compact).toHaveBeenCalledTimes(2);
-		const entry = sessionManager.getEntries().findLast(item => item.type === "compaction");
-		expect(entry?.type === "compaction" ? entry.summary : undefined).toBe("queued summary 2");
-		expect(agent.peekFollowUpQueue()).toEqual([pending]);
-		expect(agent.state.messages).not.toContain(pending);
 	});
 
 	it("discards an armed handoff summary when post-snapshot branch growth prevents recovery headroom", async () => {

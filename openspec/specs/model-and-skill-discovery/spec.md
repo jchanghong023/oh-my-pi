@@ -41,41 +41,6 @@ OMP MUST 按单层目录发现及优先级加载；禁用时执行侧不扫描�
 - **WHEN** 设置有效共享技能根或禁用该来源
 - **THEN** 按单层目录发现及优先级加载；禁用时执行侧不扫描，管理侧仍可重新启用
 
-### Requirement: 压缩触发的待输入预算
-
-OMP MUST 把即将被自动消费的排队输入计入自动压缩的待输入预算，与直接 prompt 同口径，不改变阈值与方法顺序。
-
-#### Scenario: 压缩触发的待输入预算的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 轮次文本结束（`willContinue=false`）时，若 agent loop 在 yield 边界会自动 drain 队列输入，则这些输入与直接 prompt 一样属于待输入预算：先按同一阈值判断是否需要自动压缩，再消费队列首条。仅在显式 hold（`queuedMessagesHeld`）时不消费，`followUpAutoDrain=false` 时 follow-up 队列保持排队；steering 在 stop 边界同样强制下一轮模型调用。
-- 计算沿用直接 prompt 的 `max` 语义：provider usage 锚定估算加 pending 与本地估算加 pending 取较大者；排队输入未进入 prepared history 时，以 `pendingContextTokens` 参与已武装 speculation 的校验，阶段按 `pre_turn` 处理。
-- 不改压缩阈值、方法顺序、触发判定和非排队路径行为；被取消、已释放或已结清的会话不因该预算额外压缩，消费顺序不变。
-
-#### Scenario: 队列输入在自动压缩后消费
-
-- **WHEN** 一轮结束且待消费队列非空，加入队列输入后超过自动压缩阈值
-- **THEN** 先执行自动压缩，再消费队列首条，不把排队输入当作已在上文中的历史
-
-### Requirement: 请求级上下文的独立计数
-
-OMP MUST 用 `markPerCallContextMessage` 标记仅本次请求携带的消息并单独计数，只以增量形式计入当次调用的 prompt 估算，MUST NOT 让其混入后续压缩基线。
-
-#### Scenario: 有 usage 锚点的请求级上下文
-
-- **WHEN** 一次调用包含仅本次请求使用的消息，历史中存在 `TranscriptUsageAnchor`，锚点记录的总请求级计数不小于其按来源分项之和，且本次请求级消息都带来源
-- **THEN** prompt 估算 MUST 以锚点用量为基础加请求级计数增量：增量增加时按本地计数并叠加估算余量，增量减少时只从锚点用量中扣除且不降到零以下
-- **AND** 锚点之后追加的普通消息 MUST 本地计数并叠加同一余量（本地计数 + 向上取整的 1/10），每个本地计数的消息 MUST 额外计入 `MESSAGE_FRAMING_TOKENS`（16）
-- **AND** 统计结果 MUST 写入该次 assistant 消息的 `perCallContextTokens`；每条请求级消息都带具名来源时，MUST 同时写入按来源分项的 `perCallContextTokensBySource`。
-
-#### Scenario: 匿名变换或缺少锚点
-
-- **WHEN** 锚点记录的总请求级计数大于其按来源分项之和、存在无来源的请求级消息，或没有可用锚点
-- **THEN** MUST 退回本地全量估算：上下文总计数叠加估算余量，并按消息条数叠加 `MESSAGE_FRAMING_TOKENS`
-- **AND** MUST NOT 依据已无法重建的锚点推断增量。
-
 ### Requirement: Judge 候选池的会话作用域
 
 OMP MUST 在会话或项目配置了 `enabledModels` 时，把 judge 候选池限制在同一作用域内，作用域外模型不进入主候选或 fallback。

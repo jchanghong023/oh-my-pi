@@ -1763,7 +1763,7 @@ export class Agent {
 	}
 
 	reset() {
-		if (this.#abortController) {
+		if (this.#queuedMessageClaims.steering || this.#queuedMessageClaims.followUp) {
 			this.#abortController?.abort();
 			this.#abortController = undefined;
 			this.#resolveRunningPrompt?.();
@@ -2095,7 +2095,6 @@ export class Agent {
 			kimiApiFormat: this.#kimiApiFormat,
 			preferWebsockets: this.#preferWebsockets,
 			convertToLlm: this.#convertToLlm,
-			getTokenizer: () => this.tokenizer,
 			transformProviderContext: this.#transformProviderContext,
 			sentToolDefinitions: this.#sentToolDefinitions,
 			transformContext: this.#transformContext,
@@ -2233,7 +2232,10 @@ export class Agent {
 					case "message_update":
 						partial = event.message;
 						this.#state.streamMessage = event.message;
-						this.#updateActiveThinkingIndex(event.assistantMessageEvent, loopSignal.aborted);
+						// A reset can clear the preview while the upstream run still drains.
+						if (this.#state.isStreaming) {
+							this.#updateActiveThinkingIndex(event.assistantMessageEvent, loopSignal.aborted);
+						}
 						if (event.assistantMessageEvent.type === "toolcall_end") {
 							completedToolCallIds.add(event.assistantMessageEvent.toolCall.id);
 						}

@@ -661,8 +661,6 @@ export interface CreateAgentSessionOptions {
 	onPayload?: (payload: unknown, model?: Model, signal?: AbortSignal) => void | Promise<void>;
 	/** Observe actual provider response metadata after extension handlers. */
 	onResponse?: SimpleStreamOptions["onResponse"];
-	/** Observe terminal provider output for both primary and auxiliary requests. */
-	onModelResponse?: (message: unknown, model: Model, signal?: AbortSignal) => void | Promise<void>;
 	/** Resolve embedding-host credentials for this actual request, including temporary headers. */
 	resolveRequestAuth?: (
 		model: Model,
@@ -2223,7 +2221,7 @@ class GuardedToolRegistry extends Map<string, Tool & Pick<ToolDefinition, "defau
 
 export type NativeChildSessionHooks = Pick<
 	CreateAgentSessionOptions,
-	"resolveRequestAuth" | "getApiKey" | "onPayload" | "onResponse" | "onModelResponse" | "toolRestrictions"
+	"resolveRequestAuth" | "getApiKey" | "onPayload" | "onResponse" | "toolRestrictions"
 >;
 
 /** These request hooks and policies cannot be passed through worker placement. */
@@ -2233,7 +2231,6 @@ export function hasNativeChildSessionHooks(hooks: NativeChildSessionHooks | unde
 		hooks?.getApiKey ||
 		hooks?.onPayload ||
 		hooks?.onResponse ||
-		hooks?.onModelResponse ||
 		hooks?.toolRestrictions
 	);
 }
@@ -2248,7 +2245,6 @@ export function resolveNativeChildSessionHooks(
 		getApiKey: options.getApiKey,
 		onPayload: options.onPayload ?? parent?.onPayload,
 		onResponse: options.onResponse ?? parent?.onResponse,
-		onModelResponse: options.onModelResponse ?? parent?.onModelResponse,
 		toolRestrictions: options.toolRestrictions ?? parent?.toolRestrictions,
 	};
 }
@@ -3028,7 +3024,6 @@ async function createAgentSessionScoped(
 			resolveRequestAuth: options.resolveRequestAuth,
 			onPayload: options.onPayload,
 			onResponse: options.onResponse,
-			onModelResponse: options.onModelResponse,
 			getCredentialSourceSessionId: options.getApiKey ? undefined : () => agent.sessionId,
 			get additionalDirectories() {
 				return sessionManager.getAdditionalDirectories();
@@ -5474,13 +5469,8 @@ async function createAgentSessionScoped(
 			context: Context,
 			streamOptions?: SimpleStreamOptions,
 		) => {
-			const requestSignal = options.onModelResponse
-				? streamOptions?.signal
-					? AbortSignal.any([streamOptions.signal])
-					: new AbortController().signal
-				: streamOptions?.signal;
-			// Providers may omit or replace the optional hook signal. Bind observers to
-			// this dispatch's identity so payload and terminal output stay correlated.
+			const requestSignal = streamOptions?.signal;
+			// Bind observers to this dispatch's signal even if the provider omits or replaces it.
 			const observePayload = streamOptions?.onPayload;
 			const observeResponse = streamOptions?.onResponse;
 			const requestOptions = {
@@ -5506,20 +5496,13 @@ async function createAgentSessionScoped(
 							headers: mergeHeaders(requestOptions.headers, auth.headers),
 						}
 					: requestOptions;
-			const stream = await withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
+			return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
 				settingsBoundStreamFn(streamModel, context, {
 					...effectiveOptions,
 					thinkingCapabilityDbPath: modelRegistry.modelsDbPath,
 					thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 				}),
 			);
-			if (options.onModelResponse) {
-				void stream
-					.result()
-					.then(message => options.onModelResponse?.(message, streamModel, requestSignal))
-					.catch(error => logger.warn("Provider response observer failed", { error: String(error) }));
-			}
-			return stream;
 		};
 		// Side streams, cache warming and capture must not overwrite primary request attribution.
 		let mainRequestProvider: string | undefined;
@@ -5538,7 +5521,7 @@ async function createAgentSessionScoped(
 				if (context.tools) context = { ...context, tools: options.toolRestrictions.filter(context.tools) };
 			}
 			if (mainRequest) mainRequestProvider = streamModel.provider;
-			if (options.resolveRequestAuth || options.onModelResponse) {
+			if (options.resolveRequestAuth) {
 				return dispatchHookedRequest(streamModel, context, streamOptions);
 			}
 			return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>

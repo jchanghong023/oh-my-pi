@@ -766,7 +766,6 @@ function buildExecutorOptions(
 		resolveRequestAuth: session.resolveRequestAuth,
 		onPayload: session.onPayload,
 		onResponse: session.onResponse,
-		onModelResponse: session.onModelResponse,
 		toolRestrictions: session.toolRestrictions,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,

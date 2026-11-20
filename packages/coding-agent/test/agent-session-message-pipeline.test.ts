@@ -779,7 +779,7 @@ describe("AgentSession message pipeline", () => {
 		expect(attachments).toEqual([{ label: "Image #1", uri: "attachment://1", image: userImage, sourcePath }]);
 	});
 
-	it("resolves attachment://N to images pasted into a newer ask answer", () => {
+	it("keeps a submitted image addressable after a newer ask answer includes an image", () => {
 		const userImage: ImageContent = { type: "image", data: "user-image", mimeType: "image/png" };
 		const answerImage: ImageContent = { type: "image", data: "answer-image", mimeType: "image/png" };
 		const session = new AgentSession({
@@ -805,7 +805,7 @@ describe("AgentSession message pipeline", () => {
 		});
 
 		expect(session.getImageAttachments().map(entry => [entry.uri, entry.image])).toEqual([
-			["attachment://1", answerImage],
+			["attachment://1", userImage],
 		]);
 	});
 

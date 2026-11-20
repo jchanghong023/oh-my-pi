@@ -311,6 +311,7 @@ export async function requestCompactionV2Streaming(
 				provider: /^[\w.-]{1,160}$/.test(model.provider) ? model.provider : "[custom]",
 				model: /^[\w./:[\]-]{1,160}$/.test(model.id) ? model.id : "[custom]",
 				effective_effort: effectiveEffort,
+				timeout_ms: options?.timeoutMs ?? V2_COMPACTION_TIMEOUT_MS,
 			});
 			try {
 				model = await withResolvedHeaders(model, signal);
@@ -349,18 +350,6 @@ export async function requestCompactionV2Streaming(
 
 				for (let attempt = 0; attempt <= V2_COMPACTION_MAX_RETRIES; attempt++) {
 					const timeoutSignal = ptree.combineSignals(signal, options?.timeoutMs ?? V2_COMPACTION_TIMEOUT_MS);
-					const attemptStarted = performance.now();
-					logger.info("V2 compaction request started", {
-						component: "compaction",
-						event: "compaction_v2_attempt",
-						stage: "request",
-						result: "started",
-						attempt: attempt + 1,
-						method: "POST",
-						...logger.diagnosticUrl(endpoint),
-						timeout_ms: options?.timeoutMs ?? V2_COMPACTION_TIMEOUT_MS,
-						effective_effort: effectiveEffort,
-					});
 					try {
 						const result = await attemptCompactionV2Streaming(
 							endpoint,
@@ -377,18 +366,6 @@ export async function requestCompactionV2Streaming(
 								codexAccessPrograms: options?.codexAccessPrograms,
 							},
 						);
-						logger.info("V2 compaction request completed", {
-							component: "compaction",
-							event: "compaction_v2_attempt",
-							stage: "response",
-							result: "success",
-							attempt: attempt + 1,
-							elapsed_ms: performance.now() - attemptStarted,
-							input_tokens: result.usage?.inputTokens,
-							output_tokens: result.usage?.outputTokens,
-							used_tokens: result.usedTokens,
-							retained_image_count: result.retainedImageCount,
-						});
 						logger.info("V2 compaction transport completed", {
 							component: "compaction",
 							event: "compaction_v2_transport",
@@ -396,19 +373,14 @@ export async function requestCompactionV2Streaming(
 							result: "success",
 							attempt: attempt + 1,
 							elapsed_ms: performance.now() - started,
+							input_tokens: result.usage?.inputTokens,
+							output_tokens: result.usage?.outputTokens,
+							used_tokens: result.usedTokens,
+							retained_image_count: result.retainedImageCount,
 						});
 						return result;
 					} catch (err) {
 						const error = toError(err);
-						(signal?.aborted ? logger.info : logger.warn)("V2 compaction request ended", {
-							component: "compaction",
-							event: "compaction_v2_attempt",
-							stage: "response",
-							result: signal?.aborted ? "cancelled" : "failed",
-							attempt: attempt + 1,
-							elapsed_ms: performance.now() - attemptStarted,
-							...logger.diagnosticError(error),
-						});
 						if (signal?.aborted) throw error;
 
 						if (isRetryableCompactionError(error) && attempt < V2_COMPACTION_MAX_RETRIES) {

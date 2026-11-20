@@ -297,21 +297,6 @@ export function calculatePromptTokens(usage: Usage): number {
 	return calculateContextTokens(usage);
 }
 
-/**
- * Context retained after a request settles, excluding its request-only messages.
- * `tokens` may be a raw provider prompt snapshot instead of total context usage.
- * Keep usage and snapshots unchanged so request budgeting can still compare
- * per-call deltas against the original provider report, including old journals
- * that have no per-call metadata.
- */
-export function calculatePersistentContextTokens(
-	message: AssistantMessage,
-	tokens = calculateContextTokens(message.usage),
-): number {
-	const perCallTokens = message.perCallContextTokens ?? 0;
-	return Math.max(0, tokens - (Number.isFinite(perCallTokens) && perCallTokens > 0 ? perCallTokens : 0));
-}
-
 export function hasContextTokenUsage(usage: Usage): boolean {
 	return (
 		(usage.contextTokens ?? 0) > 0 ||
@@ -2256,22 +2241,6 @@ export async function compact(
 									tools,
 									reasoning: buildCompactionV2Reasoning(model, summaryOptions.thinkingLevel),
 								});
-						const reasoning = request.body.reasoning;
-						const effectiveEffort =
-							isRecord(reasoning) && typeof reasoning.effort === "string"
-								? /^(none|minimal|low|medium|high|xhigh|max)$/.test(reasoning.effort)
-									? reasoning.effort
-									: "unknown"
-								: "off";
-						logger.info("Compaction native method started", {
-							component: "compaction",
-							event: "compaction_native_method",
-							stage: "request",
-							result: "started",
-							method: "responses_v2",
-							effective_effort: effectiveEffort,
-							input_item_count: request.input.length,
-						});
 						const startedAt = Date.now();
 						const remote = await withAuth(
 							apiKey,
@@ -2289,17 +2258,6 @@ export async function compact(
 						preserveData = { ...preserveData, ...storeCompactionV2PreserveData(remote, model) };
 						finalMethod = "responses_v2";
 						outputTokens = remote.usage?.outputTokens;
-						logger.info("Compaction native method completed", {
-							component: "compaction",
-							event: "compaction_native_method",
-							stage: "request",
-							result: "success",
-							method: finalMethod,
-							input_tokens: remote.usage?.inputTokens,
-							output_tokens: outputTokens,
-							used_tokens: remote.usedTokens,
-							elapsed_ms: performance.now() - methodStarted,
-						});
 					};
 					const whole = await buildV2Input(true);
 					const methodStarted = performance.now();
