@@ -355,9 +355,9 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser omp did 
 				} finally {
 					await close();
 				}
-				// A page omp only attached to can outlive omp's tab, so its staged copies stay for the sweep.
+				// omp opened and closed its own page, so its staged copies went too.
 				const left = await stagingFolders();
-				expect(created.filter(name => left.has(name))).toEqual(created);
+				expect(created.filter(name => left.has(name))).toEqual([]);
 			},
 			60_000,
 		);

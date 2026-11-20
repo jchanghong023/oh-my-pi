@@ -7,7 +7,7 @@ import { AgentProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/ag
 import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
 import { registerArtifactsDir } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import { ArtifactManager, writeArtifact } from "@oh-my-pi/pi-coding-agent/session/artifacts";
-import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, spillFileName } from "@oh-my-pi/pi-utils";
 
 describe("ArtifactManager write integrity", () => {
 	const dirs: string[] = [];
@@ -46,12 +46,11 @@ describe("ArtifactManager write integrity", () => {
 	});
 
 	it("rejects a short write instead of publishing an unreadable artifact id", async () => {
-		const manager = new ArtifactManager(freshDir());
+		const manager = new ArtifactManager(freshDir(), null);
 		injectShortWrite(1);
 
-		await expect(manager.save("complete report", "task")).rejects.toThrow(
-			"Artifact write incomplete: wrote 1 of 15 bytes",
-		);
+		await expect(manager.save("complete report")).rejects.toThrow("Artifact write incomplete: wrote 1 of 15 bytes");
+		expect(await manager.exists("0")).toBe(false);
 	});
 
 	it("leaves no discoverable file when the staged write falls short", async () => {
@@ -63,7 +62,7 @@ describe("ArtifactManager write integrity", () => {
 		await expect(writeArtifact(destination, "full report body")).rejects.toThrow("Artifact write incomplete");
 
 		// Neither the destination nor a leftover staging file survives, so
-		// agent:// / artifact:// scans cannot resolve a truncated artifact.
+		// agent:// scans and local:// spill reads cannot resolve a truncated artifact.
 		expect(await fs.promises.readdir(dir)).toEqual([]);
 	});
 
@@ -204,14 +203,13 @@ describe("ArtifactManager attachment discovery", () => {
 	});
 
 	it("keeps ordinary-mode linked attachment discovery and reading unchanged", async () => {
-		fs.writeFileSync(path.join(external, "0.bash.log"), "ordinary attachment");
+		fs.writeFileSync(path.join(external, spillFileName("0")), "ordinary attachment");
 		const dir = path.join(runtimeRoot, "linked");
 		fs.symlinkSync(external, dir, process.platform === "win32" ? "junction" : "dir");
-		const manager = new ArtifactManager(dir);
+		const manager = new ArtifactManager(dir, null);
 		expect(await manager.exists("0")).toBe(true);
-		expect(await manager.listFiles()).toContain("0.bash.log");
 		const artifact = await manager.getPath("0");
-		expect(artifact).toBe(path.join(dir, "0.bash.log"));
+		expect(artifact).toBe(path.join(dir, spillFileName("0")));
 		expect(await Bun.file(artifact!).text()).toBe("ordinary attachment");
 	});
 });

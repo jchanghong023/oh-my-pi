@@ -10,7 +10,7 @@ import { testConcurrencyLimit } from "./test-gate-scheduler";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 import type { RustDeltaSelection } from "./test-gate-delta";
 
-const forkPackages = ["pi-knowledge", "pi-natives"] as const;
+const forkPackages = ["omp-knowledge", "omp-natives"] as const;
 const packageNamePattern = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
 const baselinePattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
@@ -31,7 +31,7 @@ const TRUNKS = ["upstream/main", "origin/main"] as const satisfies readonly stri
 // (path-patch rendering is machine-local), but cargo dev tasks keep their
 // historical scope: the forks are not held to workspace format/lint/test gates.
 //
-// pi-builtins is NOT excluded. It is first-party, and although it opts out of
+// omp-builtins is NOT excluded. It is first-party, and although it opts out of
 // the workspace's pedantic/nursery lints in its own manifest (most of it is
 // ported third-party code), it is held to default clippy and to zero rustc
 // warnings like everything else.
@@ -102,7 +102,8 @@ const FULL_TEST_COMMANDS = [
 		"--status-level=fail",
 		"--final-status-level=fail",
 	],
-	["cargo", "test", "--workspace", "--doc", "--no-fail-fast"],
+	// --doc overrides Cargo's doctest=false; napi's vendored examples cannot run.
+	["cargo", "test", "--workspace", "--exclude", "napi", "--doc", "--no-fail-fast"],
 ] as const satisfies readonly (readonly string[])[];
 
 type RustTaskName = keyof typeof TASK_COMMANDS;
@@ -188,9 +189,9 @@ function validChangedPaths(): string[] | undefined {
 
 function forkTestCommands(packages: readonly string[]): readonly (readonly string[])[] {
 	if (!packages.length) return [];
-	const knowledge = packages.includes("pi-knowledge");
-	const native = packages.includes("pi-natives");
-	const expression = [knowledge && "package(pi-knowledge)", native && "(package(pi-natives) & test(/^knowledge::/))"]
+	const knowledge = packages.includes("omp-knowledge");
+	const native = packages.includes("omp-natives");
+	const expression = [knowledge && "package(omp-knowledge)", native && "(package(omp-natives) & test(/^knowledge::/))"]
 		.filter(Boolean)
 		.join(" | ");
 	return [
@@ -208,7 +209,7 @@ function forkTestCommands(packages: readonly string[]): readonly (readonly strin
 			"--status-level=fail",
 			"--final-status-level=fail",
 		],
-		...(knowledge ? [["cargo", "test", "-p", "pi-knowledge", "--doc", "--no-fail-fast"]] : []),
+		...(knowledge ? [["cargo", "test", "-p", "omp-knowledge", "--doc", "--no-fail-fast"]] : []),
 	];
 }
 
@@ -222,8 +223,8 @@ async function runCommands(commands: readonly (readonly string[])[], scope?: str
 						["cargo nextest run", ["cargo", "nextest", "run"]],
 						["cargo test --doc", ["cargo", "test", "--doc"]],
 					] as const)
-				: !selectedPackages.includes("pi-knowledge")
-					? ([["cargo test --doc", ["cargo", "test", "-p", "pi-knowledge", "--doc"]]] as const)
+				: !selectedPackages.includes("omp-knowledge")
+					? ([["cargo test --doc", ["cargo", "test", "-p", "omp-knowledge", "--doc"]]] as const)
 					: [];
 			for (const [producer, command] of skipped) {
 				await recordTestProducer({
@@ -242,7 +243,9 @@ async function runCommands(commands: readonly (readonly string[])[], scope?: str
 						selected: 0,
 						changedPaths: validChangedPaths()!,
 						reason:
-							producer === "cargo test --doc" ? "pi-knowledge is not affected" : "no fork packages are affected",
+							producer === "cargo test --doc"
+								? "omp-knowledge is not affected"
+								: "no fork packages are affected",
 					},
 				});
 			}
@@ -287,7 +290,10 @@ function cargoEnvironment(binary: string): Record<string, string> {
 	const toolchainBin = path.dirname(binary);
 	const pathSep = process.platform === "win32" ? ";" : ":";
 	const currentPath = env.PATH ?? env.Path ?? "";
-	env.PATH = [toolchainBin, currentPath].join(pathSep);
+	env.PATH = currentPath === "" ? toolchainBin : `${toolchainBin}${pathSep}${currentPath}`;
+	// Rustup's cargo subcommand proxies must use the same toolchain as cargo.
+	const toolchain = toolchainOfCargo(binary);
+	if (toolchain !== undefined) env.RUSTUP_TOOLCHAIN = toolchain;
 	return env;
 }
 
@@ -453,8 +459,14 @@ async function resolveCargoBinary(): Promise<string> {
 	// On macOS runners, Homebrew's `rustup-init` binary is on PATH before the
 	// rustup proxies in `$CARGO_HOME/bin`, and invoking it as `cargo` falls
 	// through to its installer mode ("unexpected argument 'nextest' found").
-	// Ask rustup directly for the cargo binary in the active toolchain.
-	const result = await $`rustup which cargo`.cwd(repoRoot).quiet().nothrow();
+	// Ask rustup directly for the cargo binary of the repository's toolchain.
+	// rustup lets RUSTUP_TOOLCHAIN override `rust-toolchain.toml`, and a
+	// caller's shell can carry one (mise exports its global rust pin into every
+	// shell it starts), so it is left out here: the gates are the pinned
+	// toolchain's, whatever toolchain the caller's shell names.
+	const env: Record<string, string | undefined> = { ...process.env };
+	delete env.RUSTUP_TOOLCHAIN;
+	const result = await $`rustup which cargo`.cwd(repoRoot).env(env).quiet().nothrow();
 	if (result.exitCode === 0) {
 		const resolved = result.stdout.toString().trim();
 		if (resolved !== "") return resolved;
@@ -469,6 +481,18 @@ function toolVersion(command: string[], env: Record<string, string>): string | u
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * The rustup toolchain a resolved cargo belongs to, read from its path
+ * (`<RUSTUP_HOME>/toolchains/<toolchain>/bin/cargo`), or `undefined` when the
+ * cargo is not a rustup toolchain's own binary.
+ */
+function toolchainOfCargo(cargo: string): string | undefined {
+	const bin = path.dirname(cargo);
+	const toolchainDir = path.dirname(bin);
+	if (path.basename(bin) !== "bin" || path.basename(path.dirname(toolchainDir)) !== "toolchains") return undefined;
+	return path.basename(toolchainDir);
 }
 
 async function runCommand(command: readonly string[], scope?: string): Promise<number> {
@@ -559,7 +583,7 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 								mode: "full",
 								reason: full
 									? "all workspace packages and test namespaces"
-									: "full pi-knowledge package and pi-natives knowledge bindings",
+									: "full omp-knowledge package and omp-natives knowledge bindings",
 							},
 				timingBasis: "nextest native JUnit case time",
 				runnerVersion: toolVersion([executable, "nextest", "--version"], env),
@@ -588,10 +612,10 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 								tool: "cargo-delta",
 								mode: "affected",
 								baseline: selection.baseline,
-								packages: ["pi-knowledge"],
+								packages: ["omp-knowledge"],
 								reason: selection.reason,
 							}
-						: { tool: "cargo", mode: "full", reason: full ? "workspace doctests" : "pi-knowledge doctests" },
+						: { tool: "cargo", mode: "full", reason: full ? "workspace doctests" : "omp-knowledge doctests" },
 				runnerVersion: toolVersion([executable, "--version"], env),
 			});
 		} catch (error) {

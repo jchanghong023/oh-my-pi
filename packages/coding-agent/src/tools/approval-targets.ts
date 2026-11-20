@@ -4,12 +4,14 @@
  * Shared by every path-based tool (`read`, `write`, `edit`) so one approved
  * target maps to one key: a filesystem path resolved against the session cwd
  * (case-folded on case-insensitive platforms via {@link approvalCacheKeyForPath}),
- * a registered internal URL (`xd://`, `local://`, …) kept in its normalized
- * form, or a readable web URL kept as written.
+ * a session-local URL mapped to that session's backing path, another registered
+ * internal URL kept in normalized form, or a readable web URL kept as written.
  */
 import { isReadableUrlPath } from "@oh-my-pi/pi-tui/tools/read";
 import * as fs from "node:fs";
+import { contextLocalProtocolOptions } from "../internal-urls/context";
 import { InternalUrlRouter } from "../internal-urls/router";
+import type { ToolSession } from "./index";
 import { approvalCacheKeyForPath } from "./approval-cache";
 import { resolveToCwd } from "./path-utils";
 
@@ -99,13 +101,17 @@ export function approvalTargetNamesFile(target: string): boolean {
  * the argument is empty. Unresolvable-but-non-empty targets fall back to their
  * trimmed text so a grant still sticks to the exact target that was approved.
  */
-export function approvalTargetKey(cwd: string, target: string): string | undefined {
+export function approvalTargetKey(cwd: string, target: string, session?: ToolSession): string | undefined {
 	// Trimming is only a test for a blank input: leading and trailing spaces are real filename bytes,
 	// so `" secret "` and `"secret"` must not share one grant.
 	const trimmed = target.trim();
 	if (trimmed.length === 0) return undefined;
 	const router = InternalUrlRouter.instance();
 	const normalized = router.normalize(trimmed);
+	if (session && normalized.startsWith("local://")) {
+		const backing = router.locateSync(normalized, { localProtocolOptions: contextLocalProtocolOptions(session) });
+		if (backing !== undefined) return approvalCacheKeyForPath(backing);
+	}
 	if (router.canHandle(normalized)) return normalized;
 	if (isReadableUrlPath(trimmed)) return trimmed;
 	try {

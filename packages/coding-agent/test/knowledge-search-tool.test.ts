@@ -709,7 +709,7 @@ describe("KnowledgeSearchTool", () => {
 		expect(first).toContain("MIDDLE_EVIDENCE_MUST_SURVIVE");
 		expect(first).toContain("FINAL_EVIDENCE");
 		expect(first).toContain("carried whole");
-		expect(first).not.toContain("artifact://");
+		expect(first).not.toMatch(/local:\/\/\d+\.log\b/);
 		const next = continuation(first);
 		expect(next).toBeDefined();
 		const last = text(await run(tool, next!, context));
@@ -720,7 +720,7 @@ describe("KnowledgeSearchTool", () => {
 		// A final page must retain the same complete body and its exhaustion footer.
 		const only = text(await run(tool, { query: "^# WIKIPAGEBEACON$", mode: "grep" }, context));
 		expect(only).toContain(body);
-		expect(only).not.toContain("artifact://");
+		expect(only).not.toMatch(/local:\/\/\d+\.log\b/);
 		expect(continuation(only)).toBeUndefined();
 		expect(only).toMatch(/exhaust|no (?:more|further) results/i);
 		expect(only).toMatch(/corpus|indexes|documents/i);
@@ -734,7 +734,7 @@ describe("KnowledgeSearchTool", () => {
 		const artifactId = ordinary.details?.meta?.truncation?.artifactId;
 		expect(artifactId).toBeDefined();
 		expect(text(ordinary)).not.toContain(body);
-		expect(text(ordinary)).toContain(`artifact://${artifactId}`);
+		expect(text(ordinary)).toContain(`local://${artifactId}.log`);
 		const artifactPath = await manager.getArtifactPath(artifactId!);
 		expect(artifactPath).not.toBeNull();
 		expect(await Bun.file(artifactPath!).text()).toBe(body);

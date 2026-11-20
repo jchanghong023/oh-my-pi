@@ -54,7 +54,7 @@ async function runWorkspace(
 		fs.copyFileSync(path.join(import.meta.dir, "..", "rust-toolchain.toml"), path.join(root, "rust-toolchain.toml"));
 		fs.mkdirSync(path.join(root, ".config"));
 		fs.writeFileSync(path.join(root, ".config", "nextest.toml"), '[profile.default.junit]\npath = "junit.xml"\n');
-		const names = ["pi-knowledge", "pi-natives", "other"];
+		const names = ["omp-knowledge", "omp-natives", "other"];
 		fs.writeFileSync(
 			path.join(root, "Cargo.toml"),
 			`[workspace]\nresolver = "2"\nmembers = ${JSON.stringify(names)}\n`,
@@ -64,11 +64,11 @@ async function runWorkspace(
 			fs.mkdirSync(path.join(crate, "src"), { recursive: true });
 			fs.writeFileSync(
 				path.join(crate, "Cargo.toml"),
-				`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n${name === "pi-natives" ? '[lib]\ncrate-type = ["cdylib"]\n' : ""}`,
+				`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n${name === "omp-natives" ? '[lib]\ncrate-type = ["cdylib"]\n' : ""}`,
 			);
 			fs.writeFileSync(
 				path.join(crate, "src", "lib.rs"),
-				name === "pi-knowledge"
+				name === "omp-knowledge"
 					? `/// Knowledge doctest.
 /// \`\`\`
 /// assert!(${options.failDoc ? "false" : "true"});
@@ -76,7 +76,7 @@ async function runWorkspace(
 pub fn documented() {}
 mod knowledge { #[test] fn knowledge_case() { assert!(${options.fail ? "false" : "true"}); } }
 mod another_module { #[test] fn knowledge_other_module_case() {} }`
-					: name === "pi-natives"
+					: name === "omp-natives"
 						? `mod knowledge { #[test] fn native_knowledge_binding_case() {} }
 mod shell { #[test] fn excluded_case() { ${options.full ? "" : 'panic!("must be filtered");'} } }`
 						: `mod knowledge { #[test] fn other_crate_case() { ${options.full ? "" : 'panic!("must be excluded");'} } }`,
@@ -207,7 +207,7 @@ const affected = (packages: string[]) => ({
 });
 
 describe("Rust delta selection", () => {
-	for (const packages of [["pi-knowledge"], ["pi-natives"], ["pi-knowledge", "pi-natives"]]) {
+	for (const packages of [["omp-knowledge"], ["omp-natives"], ["omp-knowledge", "omp-natives"]]) {
 		it(
 			`executes only selected fork packages ${packages.join(", ")}`,
 			async () => {
@@ -215,15 +215,15 @@ describe("Rust delta selection", () => {
 				expect(result.exitCode, result.stderr).toBe(0);
 				const nextest = result.producers.find(producer => producer.producer === "cargo nextest run")!;
 				expect(nextest.selection).toMatchObject({ tool: "cargo-delta", mode: "affected", packages, baseline });
-				for (const name of ["pi-knowledge", "pi-natives"])
+				for (const name of ["omp-knowledge", "omp-natives"])
 					expect(nextest.command.includes(name)).toBe(packages.includes(name));
 				const xml = result.reports[result.producers.indexOf(nextest)];
-				expect(xml.includes("knowledge_other_module_case")).toBe(packages.includes("pi-knowledge"));
-				expect(xml.includes("native_knowledge_binding_case")).toBe(packages.includes("pi-natives"));
+				expect(xml.includes("knowledge_other_module_case")).toBe(packages.includes("omp-knowledge"));
+				expect(xml.includes("native_knowledge_binding_case")).toBe(packages.includes("omp-natives"));
 				expect(xml).not.toContain("excluded_case");
 				const doc = result.producers.find(producer => producer.producer === "cargo test --doc")!;
-				expect(doc.status).toBe(packages.includes("pi-knowledge") ? "stage" : "not-selected");
-				if (!packages.includes("pi-knowledge"))
+				expect(doc.status).toBe(packages.includes("omp-knowledge") ? "stage" : "not-selected");
+				if (!packages.includes("omp-knowledge"))
 					expect(doc.selection).toMatchObject({
 						tool: "cargo-delta",
 						mode: "affected",

@@ -252,6 +252,48 @@ describe("ModelBrowser search ranking", () => {
 		expect(browser.getSelected()?.selector).toBe("zenmux/gpt-5.5");
 	});
 
+	describe("provider/model queries", () => {
+		const models = [
+			makeModel("openai", "gpt-6-sol"),
+			makeModel("ollama-cloud", "deepseek-v4"),
+			makeModel("ollama", "qwen3.8:27b"),
+			makeModel("ollama", "gemma-4"),
+			makeModel("openrouter", "openai/gpt-6-sol"),
+		];
+		const mruOrder = ["openai/gpt-6-sol", "ollama-cloud/deepseek-v4"];
+		const rank = (query: string) =>
+			rankModelItems(query, buildBrowserItems(models), {
+				roles: {},
+				mruOrder,
+				affinity: buildSearchAffinity([], {}, mruOrder),
+			}).map(item => item.selector);
+
+		test("a provider prefix lists that provider's models before recent whole-text matches", () => {
+			// Regression: "ol/" collapsed to "ol", so recent "...-sol" models outranked ollama.
+			const ranked = rank("ol/");
+			expect(ranked.slice(0, 3).sort()).toEqual([
+				"ollama-cloud/deepseek-v4",
+				"ollama/gemma-4",
+				"ollama/qwen3.8:27b",
+			]);
+			expect(ranked[3]).toBe("openai/gpt-6-sol");
+		});
+
+		test("an exact provider outranks a recently used provider it prefixes", () => {
+			const ranked = rank("ollama/");
+			expect(ranked.slice(0, 2).sort()).toEqual(["ollama/gemma-4", "ollama/qwen3.8:27b"]);
+			expect(ranked[2]).toBe("ollama-cloud/deepseek-v4");
+		});
+
+		test("the model part filters the prefixed providers' models by id", () => {
+			expect(rank("ol/qw")).toEqual(["ollama/qwen3.8:27b"]);
+		});
+
+		test("a model id containing a slash stays reachable after the scoped rows", () => {
+			expect(rank("openai/gpt-6")).toEqual(["openai/gpt-6-sol", "openrouter/openai/gpt-6-sol"]);
+		});
+	});
+
 	test("a configured role provider outranks punctuation-biased fuzzy scores", () => {
 		const kilo = makeModel("kilo", "liquid/lfm-2.5-2.6b:free");
 		const ollama = makeModel("ollama", "lfm2:2.6b");
@@ -642,7 +684,6 @@ describe("ordinary provider model switching", () => {
 			session: {
 				model: ordinary,
 				getContextUsage: () => ({ tokens: 100_000, contextWindow: 128_000, percent: 78.125 }),
-				resolveTemporaryModelThinkingLevel: () => ThinkingLevel.Inherit,
 				setModelTemporary: async model => {
 					active = model;
 				},

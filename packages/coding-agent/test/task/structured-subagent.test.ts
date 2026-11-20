@@ -288,7 +288,7 @@ describe("structured subagent primitive", () => {
 			expect(selections.at(-1)?.model).toBeUndefined();
 			const deferred = sessionOptions.at(-1);
 			expect(deferred?.modelPattern).toEqual(["@task"]);
-			expect(deferred?.modelPatternAuthFallback).toBe("parent-provider/parent-model");
+			expect(deferred?.modelPatternParentFallback).toBe("parent-provider/parent-model");
 			expect(deferred?.modelPatternFallbackRole).toBe("subagent:ColdDefinition");
 			expect(deferred?.modelPatternDefaultFallbackChain).toEqual(["cold-provider/fallback:low"]);
 			expect(parent.settings.getModelRoles()).toEqual(rolesBefore);

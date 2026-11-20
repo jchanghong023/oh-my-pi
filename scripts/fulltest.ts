@@ -480,7 +480,7 @@ async function runFulltestObserved(
 						return {
 							tool: "cargo-delta" as const,
 							mode: "full" as const,
-							packages: ["pi-knowledge", "pi-natives"],
+							packages: ["omp-knowledge", "omp-natives"],
 							reason: `cargo-delta selection failed: ${String(error)}`,
 						};
 					},
@@ -577,7 +577,7 @@ async function runFulltestObserved(
 			});
 			if (
 				rustSelection?.mode === "affected" &&
-				!rustSelection.packages.some(pkg => pkg === "pi-knowledge" || pkg === "pi-natives")
+				!rustSelection.packages.some(pkg => pkg === "omp-knowledge" || pkg === "omp-natives")
 			) {
 				tests = tests.filter(command => !command.label.startsWith("test/Rust"));
 				await recordNotSelected(

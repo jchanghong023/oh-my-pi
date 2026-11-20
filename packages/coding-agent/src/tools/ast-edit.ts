@@ -29,7 +29,13 @@ import { createFileRecorder, formatResultPath, resultSnapshotPath } from "./file
 import { invalidateFsScanAfterUncertainWrites, invalidateFsScanAfterWrites } from "./fs-cache-invalidation";
 import { formatGroupedFiles } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
 
-import { relativeSearchResultPath, resolveSearchResultPath, resolveToolSearchScope } from "./path-utils";
+import {
+	parseSearchPath,
+	relativeSearchResultPath,
+	resolveSearchResultPath,
+	resolveToolSearchScope,
+} from "./path-utils";
+import { searchApprovalCacheTargets } from "./search-approval-targets";
 import {
 	capParseErrors,
 	formatCodeFrameLine,
@@ -146,6 +152,16 @@ async function runAstEditTargets(
 	let limitReached = false;
 	let applied = !options.dryRun;
 	let targetIndex = 0;
+	// Validate all rewrites before writing any, so a later target's failure does not partially apply the batch.
+	if (!options.dryRun && targets.length > 1) {
+		for (const [index, target] of targets.entries()) {
+			await runNativeAstEdit(
+				{ ...options, path: target.basePath, glob: target.glob, dryRun: true },
+				nativeAstEdit,
+				index,
+			);
+		}
+	}
 	for (const target of targets) {
 		const targetResult = await runNativeAstEdit(
 			{
@@ -250,6 +266,15 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			decisions.push(router.writeTier(target, undefined, undefined));
 		}
 		return strictestApproval(decisions);
+	};
+	readonly approvalCacheTargets = (args: unknown): readonly string[] | undefined => {
+		const paths = isRecord(args) ? args.paths : undefined;
+		if (!Array.isArray(paths)) return undefined;
+		return searchApprovalCacheTargets(
+			paths.filter((entry): entry is string => typeof entry === "string"),
+			this.session,
+			entry => parseSearchPath(entry).basePath,
+		);
 	};
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<AstEditSchemaInfer>;

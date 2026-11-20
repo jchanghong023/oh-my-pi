@@ -16,6 +16,12 @@
 - Tool cancellations are reported consistently during execution and replay, and paused speculative reads wait before collecting evidence.
 - Compaction retries oversized requests to a separate summary endpoint and ignores invalid saved token counts.
 
+## [19.0.0] - 2026-11-18
+
+### Added
+
+- Added support for excluding custom messages from model context and compaction or branch summaries, while allowing queued steering and follow-up messages to continue correctly after excluded messages.
+
 ## [18.22.1] - 2026-11-17
 
 ### Added

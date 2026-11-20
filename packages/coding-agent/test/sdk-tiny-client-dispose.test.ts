@@ -1,14 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import type { Api, ModelSpec } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as daemonClient from "@oh-my-pi/pi-coding-agent/daemon/client";
+import type { DaemonClient, DaemonTunnel, UnitSnapshot } from "@oh-my-pi/pi-coding-agent/daemon/protocol";
 import { type CreateAgentSessionOptions, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createSubagentSettings } from "@oh-my-pi/pi-coding-agent/task/executor";
-import * as titleClient from "@oh-my-pi/pi-coding-agent/tiny/title-client";
+import { tinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import type { TinyWorkerRequest, TinyWorkerResponse } from "@oh-my-pi/pi-coding-agent/tiny/title-protocol";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -28,64 +30,72 @@ const model = buildModel(modelSpec);
 
 const TINY_MODEL = "qwen3-1.7b";
 
-/** Stands in for the tiny-model worker; replies only when the test emits one. */
-class FakeTinyWorker {
-	#messageHandlers = new Set<(message: TinyWorkerResponse) => void>();
-	#errorHandlers = new Set<(error: Error) => void>();
-	#requests: TinyWorkerRequest[] = [];
-	#waiters: Array<(request: TinyWorkerRequest) => void> = [];
-
-	send(message: TinyWorkerRequest): void {
-		if (message.type === "ping") return;
-		const waiter = this.#waiters.shift();
-		if (waiter) waiter(message);
-		else this.#requests.push(message);
-	}
-
-	/** Resolves with the next non-ping request the client sends. */
-	nextRequest(): Promise<TinyWorkerRequest> {
-		const queued = this.#requests.shift();
-		if (queued) return Promise.resolve(queued);
-		const { promise, resolve } = Promise.withResolvers<TinyWorkerRequest>();
-		this.#waiters.push(resolve);
-		return promise;
-	}
-
-	onMessage(handler: (message: TinyWorkerResponse) => void): () => void {
-		this.#messageHandlers.add(handler);
-		return () => this.#messageHandlers.delete(handler);
-	}
-
-	onError(handler: (error: Error) => void): () => void {
-		this.#errorHandlers.add(handler);
-		return () => this.#errorHandlers.delete(handler);
-	}
-
-	async terminate(): Promise<void> {}
-
-	ref(): void {}
-
-	unref(): void {}
-
-	emit(message: TinyWorkerResponse): void {
-		for (const handler of this.#messageHandlers) handler(message);
-	}
+/** Replaces the daemon transport, leaving the real InferConnection and Tiny client in use. */
+function fakeInferDaemon() {
+	const received = () => Promise.withResolvers<(text: string) => void>();
+	let nextChat = received();
+	const released: string[] = [];
+	const closed: string[] = [];
+	let opens = 0;
+	const decoder = new TextDecoder();
+	const encoder = new TextEncoder();
+	const stub: Pick<DaemonClient, "open" | "attach" | "release" | "onReconnect"> = {
+		async open(request) {
+			expect(request.kind).toBe("infer");
+			expect(request.key).toStartWith(`tiny:${TINY_MODEL}:onnx:`);
+			const id = String(++opens);
+			return { unit: { id } as UnitSnapshot, lease: id, created: true };
+		},
+		async attach(unit) {
+			if (typeof unit !== "string") throw new Error("Expected an infer unit ID");
+			let onData: Parameters<DaemonTunnel["start"]>[0];
+			return {
+				unit: { id: unit } as UnitSnapshot,
+				send(line) {
+					const request = JSON.parse(typeof line === "string" ? line : decoder.decode(line)) as TinyWorkerRequest;
+					if (request.type === "chat") {
+						nextChat.resolve(text => {
+							if (closed.includes(unit)) return;
+							const reply: TinyWorkerResponse = { type: "text", id: request.id, text };
+							onData(encoder.encode(`${JSON.stringify(reply)}\n`));
+						});
+					}
+					return true;
+				},
+				async drained() {},
+				start(receive) {
+					onData = receive;
+				},
+				close() {
+					closed.push(unit);
+				},
+				ref() {},
+				unref() {},
+			};
+		},
+		async release(lease) {
+			released.push(lease);
+		},
+		onReconnect: () => () => {},
+	};
+	return {
+		stub: stub as DaemonClient,
+		closed,
+		released,
+		async replyFor(completion: Promise<string | null>) {
+			const reply = await Promise.race([nextChat.promise, completion]);
+			if (typeof reply !== "function") throw new Error("Tiny completion settled before reaching the infer tunnel");
+			nextChat = received();
+			return reply;
+		},
+	};
 }
 
-// The tiny-model client is a process singleton; terminating it fails every request
-// in flight, so only the session that owns process state may shut it down, once.
+const TEST_NAME = "keeps pending requests alive until the final SDK owner disposes";
+const CHILD_ENV = "OMP_TEST_TINY_CLIENT_DISPOSE";
+
 describe("tiny-model client shutdown on session dispose", () => {
-	const sessions: AgentSession[] = [];
-
-	afterEach(async () => {
-		for (const session of sessions.splice(0)) {
-			if (!session.isDisposed) await session.dispose();
-		}
-		await titleClient.tinyTitleClient.terminate();
-		vi.restoreAllMocks();
-	});
-
-	const starter = async (tempDir: TempDir) => {
+	const starter = async (tempDir: TempDir, sessions: AgentSession[]) => {
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		authStorage.keys.setRuntime(model.provider, "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
@@ -107,6 +117,7 @@ describe("tiny-model client shutdown on session dispose", () => {
 				promptTemplates: [],
 				slashCommands: [],
 				rules: [],
+				toolNames: [],
 				enableMCP: false,
 				enableLsp: false,
 				...extra,
@@ -117,45 +128,89 @@ describe("tiny-model client shutdown on session dispose", () => {
 		return { start, close: () => authStorage.close() };
 	};
 
-	it("keeps pending requests alive until the parent's first dispose", async () => {
-		using tempDir = TempDir.createSync("@pi-tiny-client-dispose-");
-		const { start, close } = await starter(tempDir);
-		const worker = new FakeTinyWorker();
-		vi.spyOn(titleClient, "tinyWorkerUsesMlx").mockReturnValue(false);
-		vi.spyOn(titleClient, "connectTinyWorker").mockResolvedValue(worker);
-		const client = titleClient.tinyTitleClient;
-		try {
-			const parentSettings = Settings.isolated({ "compaction.enabled": false });
-			const parent = await start(parentSettings);
-			const sub = await start(createSubagentSettings(parentSettings), {
-				parentTaskPrefix: "0-Sub",
-				taskDepth: 1,
-				agentId: "0-Sub",
-			});
-			const helper = await start(await parentSettings.cloneForCwd(tempDir.path()), { bindProcessState: false });
+	it(
+		TEST_NAME,
+		async () => {
+			// Every process-state owner must belong to this test, even in a batched run.
+			if (process.env[CHILD_ENV] !== "1") {
+				using root = TempDir.createSync("@pi-tiny-client-process-");
+				const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern", TEST_NAME], {
+					env: {
+						...process.env,
+						[CHILD_ENV]: "1",
+						OMP_CONFIG_ROOT: root.path(),
+						PI_CODING_AGENT_DIR: root.join("agent"),
+						PI_TINY_DEVICE: "cpu",
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+					signal: AbortSignal.timeout(30_000),
+				});
+				const [exit, stdout, stderr] = await Promise.all([
+					child.exited,
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+				]);
+				expect(exit, stdout + stderr).toBe(0);
+				expect(stdout + stderr).toMatch(/\b1 pass\b/);
+				return;
+			}
 
-			// A subagent or helper finishing leaves the parent's request running.
-			const first = client.complete(TINY_MODEL, "first");
-			const firstRequest = await worker.nextRequest();
-			await sub.dispose();
-			await helper.dispose();
-			worker.emit({ type: "text", id: firstRequest.id, text: "kept" });
-			expect(await first).toBe("kept");
+			using tempDir = TempDir.createSync("@pi-tiny-client-dispose-");
+			const sessions: AgentSession[] = [];
+			const { start, close } = await starter(tempDir, sessions);
+			const transport = fakeInferDaemon();
+			const client = tinyTitleClient;
+			using mocks = new DisposableStack();
+			try {
+				const parentSettings = Settings.isolated({ "compaction.enabled": false, "memory.backend": "off" });
+				const parent = await start(parentSettings);
+				const peer = await start(await parentSettings.cloneForCwd(tempDir.path()), { agentId: "Peer" });
+				const sub = await start(createSubagentSettings(parentSettings), {
+					parentTaskPrefix: "0-Sub",
+					taskDepth: 1,
+					agentId: "0-Sub",
+				});
+				const helper = await start(await parentSettings.cloneForCwd(tempDir.path()), { bindProcessState: false });
+				const daemon = vi.spyOn(daemonClient, "daemonClient").mockResolvedValue(transport.stub);
+				mocks.defer(() => daemon.mockRestore());
 
-			// The parent owns process state: its dispose fails what is still in flight.
-			const second = client.complete(TINY_MODEL, "second");
-			await worker.nextRequest();
-			await parent.dispose();
-			expect(await second).toBeNull();
+				// A subagent, helper, or non-final SDK owner finishing leaves shared work running.
+				const first = client.complete(TINY_MODEL, "first");
+				const replyFirst = await transport.replyFor(first);
+				await sub.dispose();
+				await helper.dispose();
+				await parent.dispose();
+				expect(transport.closed).toEqual([]);
+				expect(transport.released).toEqual([]);
+				replyFirst("kept");
+				expect(await first).toBe("kept");
 
-			// A repeat dispose must not cancel requests made after the first one.
-			const third = client.complete(TINY_MODEL, "third");
-			const thirdRequest = await worker.nextRequest();
-			await parent.dispose();
-			worker.emit({ type: "text", id: thirdRequest.id, text: "after" });
-			expect(await third).toBe("after");
-		} finally {
-			close();
-		}
-	});
+				// Only the final process-state owner cancels in-flight work and drops the lease.
+				const second = client.complete(TINY_MODEL, "second");
+				await transport.replyFor(second);
+				await peer.dispose();
+				expect(await second).toBeNull();
+				expect(transport.closed).toEqual(["1"]);
+				expect(transport.released).toEqual(["1"]);
+
+				// Repeat disposes must not cancel requests on a subsequently opened tunnel.
+				const third = client.complete(TINY_MODEL, "third");
+				const replyThird = await transport.replyFor(third);
+				await parent.dispose();
+				await peer.dispose();
+				expect(transport.closed).toEqual(["1"]);
+				replyThird("after");
+				expect(await third).toBe("after");
+			} finally {
+				try {
+					for (const session of sessions) await session.dispose();
+					await client.terminate();
+				} finally {
+					close();
+				}
+			}
+		},
+		35_000,
+	);
 });

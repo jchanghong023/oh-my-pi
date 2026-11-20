@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Fork-local: PTY smoke test for the ordinary interactive CLI.
 // Spawns packages/coding-agent/src/cli.ts in a real PTY (ConPTY on Windows,
-// openpty on POSIX) through the locally built pi-natives addon, waits for the
+// openpty on POSIX) through the locally built omp-natives addon, waits for the
 // full-screen interface to render, probes that the input loop is live, then
 // exits the app cleanly. No network access, no auto-downloaded addons.
 // Runs standalone (`bun scripts/fulltest-ui-smoke.ts [--debug]`) and as the
@@ -15,15 +15,11 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { IpcConnection, Process, PtySession } from "@oh-my-pi/pi-natives";
-import { isEnoent, postmortem } from "@oh-my-pi/pi-utils";
+import { FileLock, Process, PtySession } from "@oh-my-pi/pi-natives";
+import { postmortem } from "@oh-my-pi/pi-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
-import { daemonBrokerEndpoint } from "../packages/coding-agent/src/launch/paths";
-import {
-	parseDaemonRpcResult,
-	parseDaemonWireMessage,
-	type DaemonWireRequest,
-} from "../packages/coding-agent/src/launch/protocol";
+import { probeDaemon } from "../packages/coding-agent/src/daemon/client";
+import { DAEMON_DIR_ENV, DAEMON_TCP_ENV } from "../packages/coding-agent/src/daemon/protocol";
 import { observeGateUnhandledFailures, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath, writeCommandCase } from "./test-reporting";
 
@@ -39,7 +35,7 @@ interface Outcome {
 const debugDump = process.argv.includes("--debug");
 const teamOnly = process.argv.includes("--team-only");
 
-// Both normal teardown and fatal cleanup must await fixture-owned brokers.
+// Both normal teardown and fatal cleanup must await the fixture-owned daemon.
 const stubServerCleanup: { run?: () => Promise<void> } = {};
 const activeTuis = new Set<TuiHandle>();
 
@@ -52,8 +48,7 @@ async function cleanupSmokeFixture(): Promise<void> {
 postmortem.register("ui-smoke-fixture", cleanupSmokeFixture);
 
 async function removeFixture(configRoot: string): Promise<void> {
-	// PTY completion only reaps the interactive CLI. Detached brokers have their
-	// own lease and idle shutdown; deleting first races their final meta writes.
+	// PTY completion only reaps the interactive CLI, not its detached daemon.
 	for (const handle of activeTuis) {
 		try {
 			handle.session.kill();
@@ -61,70 +56,35 @@ async function removeFixture(configRoot: string): Promise<void> {
 		const exited = await Promise.race([handle.exitPromise, sleep(20_000).then(() => undefined)]);
 		if (!exited) throw new Error("Fixture TUI did not exit before cleanup");
 	}
-	const runtimeRoot = path.join(configRoot, "run", "daemons");
+	const oldDir = process.env[DAEMON_DIR_ENV];
+	const oldTcp = process.env[DAEMON_TCP_ENV];
+	const runtimeDir = path.join(configRoot, "run", "daemon");
+	process.env[DAEMON_DIR_ENV] = runtimeDir;
+	delete process.env[DAEMON_TCP_ENV];
 	try {
-		await fs.access(runtimeRoot);
-	} catch (error) {
-		if (!isEnoent(error)) throw error;
-		await removeWithRetries(configRoot);
-		return;
-	}
-	// Only authenticated scopes inside this mkdtemp root are ours. Never use
-	// daemonClientForGlobal(), which would resolve the user's shared broker.
-	for await (const tokenFile of new Bun.Glob("**/broker.token").scan(runtimeRoot)) {
-		const runtimeDir = path.dirname(path.join(runtimeRoot, tokenFile));
-		let lease: { pid: number };
-		try {
-			lease = JSON.parse(await fs.readFile(path.join(runtimeDir, "broker.pid"), "utf8")) as { pid: number };
-		} catch (error) {
-			if (isEnoent(error)) continue; // Already released; never spawn a replacement.
-			throw error;
+		// Probe only this fixture's authenticated endpoint and never spawn a replacement.
+		const daemon = await probeDaemon();
+		if (daemon) {
+			const processHandle = Process.fromPid(daemon.welcome.daemon.pid);
+			const exited = processHandle?.waitForExit({ timeoutMs: 5_000 });
+			let shutdownError: unknown;
+			try {
+				await daemon.request({ op: "shutdown" });
+			} catch (error) {
+				shutdownError = error;
+			} finally {
+				daemon.close();
+			}
+			if (exited && !(await exited)) {
+				throw shutdownError ?? new Error(`Fixture daemon did not exit: ${runtimeDir}`);
+			}
+		} else if (FileLock.isHeld(path.join(runtimeDir, "daemon.lock"))) {
+			throw new Error(`Fixture daemon holds its lock but did not answer: ${runtimeDir}`);
 		}
-		if (!Number.isInteger(lease.pid) || lease.pid <= 0)
-			throw new Error(`Invalid fixture broker lease: ${runtimeDir}`);
-		const broker = Process.fromPid(lease.pid);
-		if (!broker || broker.status() === "exited") continue;
-		let connection: IpcConnection | undefined;
-		let timer: NodeJS.Timeout | undefined;
-		let shutdownError: unknown;
-		try {
-			const token = (await fs.readFile(path.join(runtimeDir, "broker.token"), "utf8")).trim();
-			connection = await IpcConnection.connect(daemonBrokerEndpoint(runtimeDir), {
-				framing: "lines",
-				timeoutMs: 250,
-			});
-			const id = crypto.randomUUID();
-			const response = Promise.withResolvers<void>();
-			timer = setTimeout(() => response.reject(new Error("Fixture broker shutdown response timed out")), 5_000);
-			connection.start(
-				line => {
-					try {
-						const message = parseDaemonWireMessage(JSON.parse(line));
-						if ("event" in message || message.id !== id) return;
-						if (!message.ok) throw new Error(message.error);
-						parseDaemonRpcResult({ op: "shutdown" }, message.result);
-						response.resolve();
-					} catch (error) {
-						response.reject(error);
-					}
-				},
-				() => response.reject(new Error("Fixture broker connection closed")),
-			);
-			console.log(`ui-smoke: releasing fixture broker (${runtimeDir})`);
-			connection.send(JSON.stringify({ id, token, operation: { op: "shutdown" } } satisfies DaemonWireRequest));
-			await response.promise;
-		} catch (error) {
-			// Idle shutdown can remove the pipe before the process handle signals
-			// exit. Preserve the error until the existing exit wait confirms release.
-			shutdownError = error;
-		} finally {
-			clearTimeout(timer);
-			connection?.destroy();
-		}
-		if (!(await broker.waitForExit({ timeoutMs: 5_000 }))) {
-			if (shutdownError !== undefined) throw shutdownError;
-			throw new Error(`Fixture broker did not exit after shutdown: ${runtimeDir}`);
-		}
+	} finally {
+		if (oldDir === undefined) delete process.env[DAEMON_DIR_ENV];
+		else process.env[DAEMON_DIR_ENV] = oldDir;
+		if (oldTcp !== undefined) process.env[DAEMON_TCP_ENV] = oldTcp;
 	}
 	await removeWithRetries(configRoot);
 }
@@ -155,6 +115,7 @@ interface TuiHandle {
 }
 
 function tuiEnvironment(env: Record<string, string | undefined>): Record<string, string> {
+	const configRoot = env.OMP_CONFIG_ROOT ?? (env.PI_CONFIG_DIR ? path.join(os.homedir(), env.PI_CONFIG_DIR) : "");
 	// N-API accepts string values only; empty overrides also suppress
 	// inherited flags in the PTY's environment overlay.
 	return Object.fromEntries(
@@ -162,10 +123,12 @@ function tuiEnvironment(env: Record<string, string | undefined>): Record<string,
 			...process.env,
 			TERM: "xterm-256color",
 			// Fixture roots must win over a user's whole-root override.
-			OMP_CONFIG_ROOT: env.PI_CONFIG_DIR ? path.join(os.homedir(), env.PI_CONFIG_DIR) : "",
+			OMP_CONFIG_ROOT: configRoot,
 			// Loopback-model cases are online unless the fixture opts in.
 			OMP_OFFLINE: "",
 			...env,
+			[DAEMON_DIR_ENV]: path.join(configRoot, "run", "daemon"),
+			[DAEMON_TCP_ENV]: "",
 			// This child is the real interactive CLI, not a headless test child.
 			PI_TEST_RUNTIME: "",
 		}).map(([key, value]) => [key, value ?? ""]),

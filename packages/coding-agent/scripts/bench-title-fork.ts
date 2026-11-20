@@ -379,7 +379,7 @@ async function createHeadlessSession(cwd: string, config: Config, agentId: strin
 		enableLsp: false,
 		enableIrc: false,
 		disableExtensionDiscovery: true,
-		cacheWarming: false,
+		cacheWarming: "off",
 		agentId,
 	});
 	await session.modelRegistry.refresh();

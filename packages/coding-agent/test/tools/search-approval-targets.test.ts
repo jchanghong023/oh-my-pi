@@ -127,11 +127,33 @@ describe("search tool approval cache targets", () => {
 		// A root nothing occupies is not worth a grant.
 		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "missing/nothing.txt" })).toBeUndefined();
 		expect(glob.approvalCacheTargets?.({ path: "missing/**" })).toBeUndefined();
-		// An internal URL keeps the normalized form a read of the same resource mints.
-		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "local://notes/a.md" })).toEqual([
-			"local://notes/a.md",
+		// Non-filesystem internal URLs keep their normalized identity.
+		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "history://current/full" })).toEqual([
+			"history://current/full",
 		]);
-		expect(glob.approvalCacheTargets?.({ path: "local://notes" })).toEqual(["local://notes"]);
+	});
+
+	it("routes session-local search and read grants to backing paths and enforces restrictions below them", () => {
+		const session = { ...createToolSession(cwd), localProtocolOptions: { getArtifactsDir: () => cwd } };
+		const localNotes = path.join(cwd, "local", "notes");
+		const localFile = path.join(localNotes, "a.md");
+		fs.mkdirSync(localNotes, { recursive: true });
+		fs.writeFileSync(localFile, "hello");
+		const grep = new GrepTool(session);
+		const read = new ReadTool(session);
+		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "local://notes/a.md" })).toEqual(
+			read.approvalCacheTargets({ path: "local://notes/a.md:1-1" }),
+		);
+		const underRoot = { pattern: "hello", path: "local://" };
+		expect(grep.approvalCacheTargets?.(underRoot)).toEqual([
+			approvalTreeSearchKey(approvalDirectoryKey(path.dirname(localNotes))),
+		]);
+		expect(
+			resolveApproval(grep, underRoot, "yolo", {}, undefined, { cwd, restrictedFolders: [localNotes] }),
+		).toMatchObject({
+			policy: "prompt",
+			source: "restriction",
+		});
 	});
 
 	it("gates a private host written as an absolute name like its relative form", () => {

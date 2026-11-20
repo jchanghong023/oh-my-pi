@@ -44,7 +44,7 @@ import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identit
 import type { ModelRefreshStrategy } from "@oh-my-pi/pi-catalog/model-manager";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
-import { $env } from "@oh-my-pi/pi-utils/env";
+import { $env, isInteractiveHost } from "@oh-my-pi/pi-utils/env";
 import { getAgentDir, getModelDbPath, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
@@ -114,6 +114,7 @@ import { bindEffects, combine } from "./config/registry";
 import { Settings } from "./config/settings";
 import { CursorExecHandlers, type CursorMcpResourceAdapter } from "./cursor";
 import { createBridgeEditTool, createBridgeGrepFactory } from "./cursor-bridge-tools";
+import { daemonMutex } from "./daemon/modules/mutex";
 import "./discovery";
 import { LiveImageUrlService } from "./blob-broker/service";
 import { wrapStreamFnWithBlobUrlFallback } from "./blob-broker/stream-fallback";
@@ -178,6 +179,7 @@ import {
 import { type FileSlashCommand, loadSlashCommands as loadSlashCommandsInternal } from "./extensibility/slash-commands";
 import type { HindsightSessionStateApi } from "./hindsight/state";
 import { LocalProtocolHandler, type LocalProtocolOptions, outRepliesActive } from "./internal-urls";
+import { onJudgeRejection } from "./judgment";
 import { stripXdUnderscorePrefix, stripXdUrlPrefix } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { holdSharedLsp } from "./lsp/client";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "./lsp/startup-events";
@@ -192,9 +194,11 @@ import {
 	MCPToolCache,
 	type MCPToolsLoadResult,
 	reconnectMCPServers,
+	resolveMCPTransformContext,
 	shouldFilterBrowserMCPForPrelude,
 } from "./mcp";
 import { parseMCPToolName } from "@oh-my-pi/pi-tui/tools/mcp";
+import { isEvalNamespaceTool, MCPEvalNamespaceCatalog } from "./mcp/eval-namespaces";
 import { mapPromptArguments } from "./mcp/prompt-args";
 import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } from "./mcp/startup-events";
 import { resolveMCPToolAlias } from "./mcp/tool-bridge";
@@ -276,6 +280,7 @@ import {
 import { describeUsageFallback } from "./session/retry-fallback-reason";
 import { kUsageLimitRequestProvider } from "./session/turn-recovery";
 import { getReadableCompactionEntry, getRestorableSessionModels } from "./session/session-context";
+import { completionRecord } from "./session/model-usage-journal";
 import { SessionManager } from "./session/session-manager";
 import { cfgOffline } from "./config/auxiliary-model-policy";
 import { SHAPE_RULE } from "./spotlight/shape";
@@ -296,7 +301,12 @@ import {
 	type SystemPromptRebuilder,
 } from "./session/session-tools";
 import { anthropicSlowModeHasNoSiblingHeadroom } from "./session/anthropic-slow-mode";
-import { CacheWarmer } from "./session/cache-warmer";
+import {
+	CacheWarmer,
+	type CacheWarmingMode,
+	capCacheWarmingMode,
+	resolveBridgeCompactionThreshold,
+} from "./session/cache-warmer";
 import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
 import { currentExecutionModel, releaseCurrentExecutionModel } from "./session/execution-model";
 import { streamWithExecutionRecovery, type ExecutionStreamDispatch } from "./session/execution-stream";
@@ -432,6 +442,9 @@ import {
 	cfgPersonality,
 	cfgProviderAppendOnlyContext,
 	cfgProvidersCacheWarming,
+	cfgProvidersCacheWarmingCompactPercent,
+	cfgProvidersCacheWarmingCompactTokens,
+	cfgProvidersCacheWarmingStrategy,
 	cfgProvidersKimiApiFormat,
 	cfgProvidersThinkingProbe,
 	cfgRetryFallbackChains,
@@ -476,6 +489,7 @@ import {
 import { cfgLspEnabled, cfgLspLazy, cfgLspShared } from "./lsp/settings";
 import {
 	cfgMcpEnableProjectConfig,
+	cfgMcpEvalNamespaces,
 	cfgMcpNotificationDebounceMs,
 	cfgMcpNotifications,
 	cfgMcpStartupTimeoutMs,
@@ -489,13 +503,23 @@ import {
 	cfgSnapcompactToolResults,
 	cfgWorkspaceAdditionalDirectories,
 } from "./session/context-settings";
-import { cfgTaskBatch, cfgTaskDisabledAgents, cfgTaskEager, ovnfsCommand } from "./task/settings";
+import { cfgTaskBatch, cfgTaskCrossInstance, cfgTaskDisabledAgents, cfgTaskEager, ovnfsCommand } from "./task/settings";
 
 /** Agent-level tool-call switches, snapshotted by the agent loop per prompt run. */
 const cfgToolCallSwitches = combine({
 	intentTracing: cfgToolsIntentTracing,
 	abortOnFabricatedResult: cfgToolsAbortOnFabricatedResult,
 });
+
+/**
+ * Whether tool calls carry {@link INTENT_FIELD}: an explicit `tools.intentTracing` (any settings layer
+ * or `PI_INTENT_TRACING`) wins; unset, it follows {@link isInteractiveHost} — on in the interactive TUI
+ * and its subagents, whose transcript and task progress show intents, off in print, RPC, ACP, and SDK
+ * processes, where the field only costs tokens.
+ */
+function intentTracingActive(settings: Settings): boolean {
+	return cfgToolsIntentTracing.isConfigured(settings) ? cfgToolsIntentTracing.get(settings) : isInteractiveHost();
+}
 
 /** Settings skill and file slash-command discovery reads (foreign sources gated by the provider lists). */
 const cfgSkillsAndCommandsDiscovery = combine({
@@ -731,8 +755,11 @@ export interface CreateAgentSessionOptions {
 	modelPattern?: string | string[];
 	/** A deferred CLI model scope uses automatic, cache-only discovery in offline processes. */
 	modelPatternSource?: "explicit" | "scope";
-	/** Authenticated fallback selector for deferred subagent model patterns. */
-	modelPatternAuthFallback?: string;
+	/**
+	 * Parent model selector a subagent falls back to when its deferred patterns
+	 * resolve to no model, or to one without credentials.
+	 */
+	modelPatternParentFallback?: string;
 	/** Role name used to install retry fallbacks after deferred subagent patterns resolve. */
 	modelPatternFallbackRole?: string;
 	/** Validated inherited retry chain for a deferred singleton pattern; empty explicitly disables fallbacks. */
@@ -767,12 +794,14 @@ export interface CreateAgentSessionOptions {
 	/** OpenAI service-tier override for this session. `null` omits `service_tier`. */
 	openAIServiceTier?: ServiceTier | null;
 	/**
-	 * Enable prompt-cache warming for this session's main loop. Defaults to
-	 * `true`; one-shot and spawned sessions (task subagents, standalone
-	 * compaction, agentic commit) pass `false` so short-lived sessions never
-	 * schedule background warm requests.
+	 * Highest prompt-cache warming mode for this session's main loop; the
+	 * effective mode is the lower of this and `providers.cacheWarming`.
+	 * Defaults to `"idle"` (the setting alone decides). Task subagents pass
+	 * `"streaming"` so their long tool waits are bridged but nothing warms
+	 * after they settle; one-shot sessions (standalone compaction, agentic
+	 * commit, worker warm-up) pass `"off"`, which builds no warmer.
 	 */
-	cacheWarming?: boolean;
+	cacheWarming?: CacheWarmingMode;
 	/**
 	 * Per-family service tiers for this session, replacing the `tier.*` settings
 	 * and any persisted tier history. Called once the initial model is final —
@@ -1133,12 +1162,12 @@ export interface CreateAgentSessionOptions {
 	 */
 	autoTitle?: boolean;
 	/**
-	 * Hold background skill-description compression until
-	 * {@link AgentSession.startSkillDescriptionCompression}: resolving its model composes the
+	 * Hold background routing-hint compression (skill descriptions, MCP namespace hints) until
+	 * {@link AgentSession.startHintCompression}: resolving its model composes the
 	 * whole model catalog. The interactive TUI sets this and starts it after the first frame.
 	 * Default: false, which starts it once the session (and so its cost gate) exists.
 	 */
-	deferSkillDescriptionCompression?: boolean;
+	deferHintCompression?: boolean;
 	/**
 	 * Defer `confirm` reserve-policy fallback until AgentSession prompt-time UI is configured.
 	 * ACP uses this while capabilities are negotiated without enabling UI-only tools.
@@ -3097,7 +3126,7 @@ async function createAgentSessionScoped(
 			}
 			const usagePurpose =
 				(purpose: string): ModelJobWidgetAuthorOptions["onUsage"] =>
-				message => {
+				(message, userPrompt) => {
 					if (!message.usage) return;
 					sessionManager.appendModelUsage(
 						{
@@ -3108,6 +3137,9 @@ async function createAgentSessionScoped(
 							usage: message.usage,
 							stopReason: message.stopReason,
 							errorMessage: message.errorMessage,
+							duration: message.duration,
+							ttft: message.ttft,
+							completion: completionRecord(userPrompt, message),
 						},
 						{ sessionId: sessionManager.getSessionId(), parentId: sessionManager.getLeafId() },
 					);
@@ -3316,6 +3348,8 @@ async function createAgentSessionScoped(
 					if (!model) return undefined;
 					return session.getPromptCacheKeyForModel(model) ?? session.agent.sessionId;
 				},
+				getPromptCacheEntry: () => session?.promptCacheEntry,
+				hasWakeAfterTurn: () => session?.hasWakeAfterTurn() ?? false,
 				getToolByName: name => session?.getToolByName(name),
 				getToolForEvalBridge: name => session?.getToolForEvalBridge(name),
 				getAdvertisedEvalToolNames: () => session?.getAdvertisedEvalToolNames() ?? [],
@@ -3420,9 +3454,9 @@ async function createAgentSessionScoped(
 				clearPendingInvokers: () => session.clearPendingInvokers(),
 				peekPlanProposalHandler: () => session.peekPlanProposalHandler(),
 				setPlanProposalHandler: handler => session.setPlanProposalHandler(handler),
-				allocateOutputArtifact: async toolType => {
+				allocateOutputArtifact: async () => {
 					try {
-						return await sessionManager.allocateArtifactPath(toolType);
+						return await sessionManager.allocateArtifactPath();
 					} catch {
 						return {};
 					}
@@ -3450,6 +3484,12 @@ async function createAgentSessionScoped(
 			let archivePrelude: EvalPreludeDefinition | undefined;
 			let commitPrelude: EvalPreludeDefinition | undefined;
 			let dsmPrelude: EvalPreludeDefinition | undefined;
+			// `mcp.evalNamespaces`: MCP servers as eval globals. The catalog is built with the skill
+			// description catalog below; until then (and before any MCP tool exists) no namespace is listed.
+			const bindsMcpToEval = (): boolean => !restrictToolNames && cfgMcpEvalNamespaces.get(settings);
+			// oxlint-disable-next-line prefer-const -- captured by getEvalPreludes before assignment
+			let mcpNamespaces: MCPEvalNamespaceCatalog | undefined;
+			let initialEvalBoundToolNames: readonly string[] = [];
 			const getEvalPreludes = (): readonly EvalPreludeDefinition[] => {
 				if (restrictToolNames || !toolRegistry.has("eval") || !activeToolNames.has("eval")) return [];
 				const builtins: EvalPreludeDefinition[] = [];
@@ -3477,7 +3517,16 @@ async function createAgentSessionScoped(
 					dsmPrelude ??= createDsmPrelude(toolSession);
 					builtins.push(dsmPrelude);
 				}
-				return getEnabledEvalPreludes(builtins);
+				const enabled = getEnabledEvalPreludes(builtins);
+				if (!mcpNamespaces || !bindsMcpToEval()) return enabled;
+				const evalBound = (hasSession ? session.getEvalBoundToolNames() : initialEvalBoundToolNames).flatMap(
+					name => {
+						const tool = toolRegistry.get(name);
+						return tool ? [tool] : [];
+					},
+				);
+				const taken = new Set(enabled.flatMap(prelude => [prelude.name, ...prelude.exports]));
+				return [...enabled, ...mcpNamespaces.preludes(evalBound, taken)];
 			};
 			toolSession.getEvalPreludes = getEvalPreludes;
 			// SessionTools owns the advertised snapshot; before it exists the base
@@ -3508,12 +3557,10 @@ async function createAgentSessionScoped(
 			}
 			toolSession.getArtifactsDir = getArtifactsDir;
 			toolSession.localProtocolOptions = localProtocolOptions;
-			toolSession.agentOutputManager = new AgentOutputManager(
-				getArtifactsDir,
-				options.parentTaskPrefix || options.agentOutputPrefix
-					? { parentPrefix: options.parentTaskPrefix ?? options.agentOutputPrefix }
-					: undefined,
-			);
+			toolSession.agentOutputManager = new AgentOutputManager(getArtifactsDir, {
+				settings,
+				parentPrefix: options.parentTaskPrefix ?? options.agentOutputPrefix,
+			});
 
 			// Create built-in tools (already wrapped with meta notice formatting)
 			await logger.time("createAllTools", createTools, toolSession, options.toolNames);
@@ -3579,6 +3626,9 @@ async function createAgentSessionScoped(
 				filterExa: true,
 				// Filter browser MCP only when Eval can expose the built-in browser prelude.
 				filterBrowser: initialBrowserPreludeAvailable,
+				builtinTransforms: resolveMCPTransformContext(settings, {
+					evalActive: toolRegistry.has("eval") && activeToolNames.has("eval"),
+				}),
 				extensionRoots: buildSessionExtensionRoots(),
 			};
 			if (enableMCP && !mcpManager && isMainThread()) {
@@ -4259,10 +4309,10 @@ async function createAgentSessionScoped(
 						selectedExplicitThinkingLevel = true;
 					}
 					let authFallbackUsed = false;
-					if (options.modelPatternAuthFallback) {
+					if (options.modelPatternParentFallback) {
 						const primaryKey = await modelRegistry.getApiKey(primary.model);
 						if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
-							const fallback = resolveDeferredPattern(options.modelPatternAuthFallback, resolutionModels);
+							const fallback = resolveDeferredPattern(options.modelPatternParentFallback, resolutionModels);
 							if (fallback.model) {
 								const fallbackKey = await modelRegistry.getApiKey(fallback.model);
 								if (isAuthenticated(fallbackKey)) {
@@ -4345,6 +4395,19 @@ async function createAgentSessionScoped(
 							? providerModelHint(deferredModelPatterns[0], allEnabledModels)
 							: "";
 					modelFallbackMessage = `Model ${requested} not found${hint ? `.${hint}` : ""}`;
+					// Online, keep the upstream no-match fallback. An offline cache miss
+					// must not dispatch to a parent outside the resolved candidate chain.
+					const parentFallback =
+						deferredDiscoveryStrategy !== "offline" && options.modelPatternParentFallback
+							? resolveDeferredPattern(options.modelPatternParentFallback, availableModels)
+							: undefined;
+					if (parentFallback?.model) {
+						model = parentFallback.model;
+						if (parentFallback.explicitThinkingLevel) restoredSessionThinkingLevel = parentFallback.thinkingLevel;
+						adoptThinkingForModel(parentFallback.model);
+						void prewarmModelConnection(parentFallback.model);
+						modelFallbackMessage += `. Using parent model ${parentFallback.model.provider}/${parentFallback.model.id}`;
+					}
 				}
 			}
 
@@ -5115,18 +5178,34 @@ async function createAgentSessionScoped(
 				path.resolve(agentDir) === path.resolve(getAgentDir())
 					? undefined
 					: openSessionSkillDescriptionStore(agentDir);
+			const hintCompressorOptions = {
+				getCwd: () => sessionManager.getCwd(),
+				getCostGate: currentCostGate,
+				usageLedger: sessionManager,
+				getTelemetry: () =>
+					agent
+						? resolveTelemetry(agent.telemetry, agent.sessionId)
+						: resolveTelemetry(options.telemetry, providerSessionId),
+			};
+			// One omp process asks the model for a hint; the others wait on the daemon and read its answer.
+			const hintLock = (job: string) => daemonMutex("routing-hints").lock(job);
 			const skillDescriptions = new SkillDescriptionCatalog({
 				store: ownedSkillDescriptionStore,
 				// Hold requests until the session owns its cost gate.
 				deferCompression: true,
+				compress: createSkillDescriptionCompressor(modelRegistry, settings, hintCompressorOptions),
+				lock: hintLock,
+			});
+			mcpNamespaces = new MCPEvalNamespaceCatalog({
+				store: ownedSkillDescriptionStore,
+				deferCompression: true,
+				resources: () => toolSession.mcpManager,
 				compress: createSkillDescriptionCompressor(modelRegistry, settings, {
-					getCwd: () => sessionManager.getCwd(),
-					getCostGate: currentCostGate,
-					getTelemetry: () =>
-						agent
-							? resolveTelemetry(agent.telemetry, agent.sessionId)
-							: resolveTelemetry(options.telemetry, providerSessionId),
+					...hintCompressorOptions,
+					purpose: "mcp-namespace-hint",
+					oneshotKind: "mcp_namespace_hint",
 				}),
+				lock: hintLock,
 			});
 			// Instructions from MCP servers the host connects outside `mcpManager`
 			// (ACP client-declared servers); installed via
@@ -5354,7 +5433,7 @@ async function createAgentSessionScoped(
 					skillsSettings: cfgSkills.get(settings),
 					inlineToolDescriptors,
 					nativeTools,
-					intentField: cfgToolsIntentTracing.get(settings) ? INTENT_FIELD : undefined,
+					intentField: intentTracingActive(settings) ? INTENT_FIELD : undefined,
 					// Spotlight ranks output against the call's intent: experiment sessions ask what each call's output is for.
 					intentGuidance: spotlightExperiment ? SPOTLIGHT_INTENT_GUIDANCE : undefined,
 					// task.eager steers the top-level agent only; subagents keep the model's own delegation policy.
@@ -5376,6 +5455,7 @@ async function createAgentSessionScoped(
 					securityEnabled: cfgSecurityEnabled.get(settings),
 					settingsApproval: toolSession.settingsApproval === true,
 					outReplies: outRepliesActive(settings, tuiTranscript),
+					crossInstanceAgents: cfgTaskCrossInstance.get(settings) && options.agentRegistry === undefined,
 					evalPreludes: toolSession.getAdvertisedEvalPreludes?.(),
 					model: getActiveModelString(),
 					includeModelInPrompt: cfgIncludeModelInPrompt.get(settings),
@@ -5529,6 +5609,13 @@ async function createAgentSessionScoped(
 			// constructed and attached. Startup failure therefore leaves it revivable.
 			hasRegistered = options.expectedAgentRef === undefined || options.expectedAgentRef === null;
 
+			// `mcp.evalNamespaces`: with `eval` top-level, MCP tools present only as eval
+			// namespace methods (same rule as `SessionTools` applies on every later change).
+			if (bindsMcpToEval() && initialToolNames.includes("eval")) {
+				initialEvalBoundToolNames = initialToolNames.filter(name => isEvalNamespaceTool(toolRegistry.get(name)));
+				const evalBound = new Set(initialEvalBoundToolNames);
+				initialToolNames = initialToolNames.filter(name => !evalBound.has(name));
+			}
 			// Partition the initial enabled set for the xd:// transport. Tool instances
 			// remain in the canonical map; only presentation names move between layers.
 			// Mounting requires both transport halves in the granted set (`read xd://`
@@ -5928,18 +6015,31 @@ async function createAgentSessionScoped(
 					mainRequest,
 				);
 			};
-			// Prompt-cache warmer for the main agent loop only: replays the last
+			// Prompt-cache warmer for the main agent loop only: refreshes the last
 			// request through the same primary wrapper just before the entry would
-			// expire, so idle gaps do not force a full-prefix cache re-write.
-			// Spawned/one-shot sessions opt out via `cacheWarming: false`.
+			// expire, so long tool calls and idle gaps do not force a full-prefix
+			// cache re-write, and bridges a wait that outgrows renting with
+			// compaction. One-shot sessions opt out via `cacheWarming: "off"`.
+			const cacheWarmingCap = options.cacheWarming ?? "idle";
 			const cacheWarmer: CacheWarmer | undefined =
-				options.cacheWarming === false
+				cacheWarmingCap === "off"
 					? undefined
 					: new CacheWarmer({
-							stream: primaryStreamFn,
+							stream: (model, context, streamOptions) => primaryStreamFn(model, context, streamOptions),
 							getPromptTokens: () => session.lastPromptTokens(),
-							getMode: () => cfgProvidersCacheWarming.get(settings),
+							getMode: () => capCacheWarmingMode(cfgProvidersCacheWarming.get(settings), cacheWarmingCap),
 							decide: event => extensionRunner.emitCacheWarmingDecision(event),
+							bridge: {
+								strategy: () => cfgProvidersCacheWarmingStrategy.get(settings),
+								thresholdTokens: model =>
+									resolveBridgeCompactionThreshold(
+										model.contextWindow ?? 0,
+										cfgProvidersCacheWarmingCompactPercent.get(settings),
+										cfgProvidersCacheWarmingCompactTokens.get(settings),
+									),
+								estimate: promptTokens => session.bridgeCompactionEstimate(promptTokens),
+								compact: () => session.startBridgeCompaction(),
+							},
 						});
 			const transformToolCallArguments = (args: Record<string, unknown>): Record<string, unknown> => {
 				let result = args;
@@ -6104,7 +6204,7 @@ async function createAgentSessionScoped(
 				transformAssistantMessagePreservesToolCalls: true,
 				resolveFallbackTool: resolveDeviceTool,
 				suggestFallbackToolNames: suggestDeviceToolNames,
-				intentTracing: cfgToolsIntentTracing.get(settings),
+				intentTracing: intentTracingActive(settings),
 				intentDescription: spotlightExperiment ? SPOTLIGHT_INTENT_DESCRIPTION : undefined,
 				pruneToolDescriptions: resolveInlineToolDescriptors(),
 				// Per request against the model actually requested, so `tools.format`
@@ -6375,6 +6475,9 @@ async function createAgentSessionScoped(
 								...mcpDiscoverOptions,
 								enableProjectConfig: cfgMcpEnableProjectConfig.get(settings),
 								filterBrowser: session.getEvalPreludes().some(definition => definition.name === "browser"),
+								builtinTransforms: resolveMCPTransformContext(settings, {
+									evalActive: session.getActiveToolNames().includes("eval"),
+								}),
 								extensionRoots: buildSessionExtensionRoots(),
 							});
 							if (session.isDisposed) {
@@ -6442,6 +6545,7 @@ async function createAgentSessionScoped(
 				customCommands: customCommandsResult.commands,
 				skills,
 				skillDescriptions,
+				mcpNamespaces,
 				skillWarnings,
 				skillsReloadable: options.skills === undefined,
 				skillsSettings: cfgSkills.get(settings),
@@ -6497,6 +6601,8 @@ async function createAgentSessionScoped(
 				getXdevToolEntries: () => (toolSession.xdev ? xdevEntries(toolSession.xdev) : []),
 				xdev: toolSession.xdev,
 				presentationPinnedToolNames,
+				bindsMcpToEval,
+				evalBoundToolNames: initialEvalBoundToolNames,
 				setActiveToolNames: setSessionActiveToolNames,
 				ensureWriteRegistered,
 				isDeviceOnlyWrite: () => toolSession.deviceOnlyWrite === true,
@@ -6558,21 +6664,24 @@ async function createAgentSessionScoped(
 				);
 			}
 			// The session now owns its cost gate; the interactive TUI starts compression after its first frame.
-			if (options.deferSkillDescriptionCompression !== true) skillDescriptions.startCompression();
+			if (options.deferHintCompression !== true) session.startHintCompression();
 			credentialNoticeSession = session;
 			// Tool state belongs to one conversation: /new and switchSession fire the
 			// change callbacks, so start a fresh one there. Stale hashline tags would
 			// otherwise surface as "issued in this session" in mismatch diagnostics
 			// (#13370), and conflict ids, already-shown diagnostics and repeat-read
-			// counts would leak into the new conversation. The tools keep their state
-			// on THIS session, not the AgentSession's own lazy mention store.
+			// counts would leak into the new conversation. The tools and @file
+			// mentions keep their state on THIS session.
 			session.registerSessionChangeCallback(() => {
 				toolSession.state = new ToolConversationState();
 			});
 			if (ownedSkillDescriptionStore) {
 				// Let in-flight compressions land before releasing the file.
 				session.addDisposer(
-					() => void skillDescriptions.waitForPending().finally(() => ownedSkillDescriptionStore.close()),
+					() =>
+						void Promise.all([skillDescriptions.waitForPending(), mcpNamespaces.waitForPending()]).finally(() =>
+							ownedSkillDescriptionStore.close(),
+						),
 				);
 			}
 			// A caller-supplied store belongs to the caller (the CLI keeps it in sync itself).
@@ -6607,8 +6716,8 @@ async function createAgentSessionScoped(
 			// Agent-level tool-call switches: the loop snapshots them per prompt run, so a
 			// change applies from the next run without splitting one response's schema/strip.
 			// The prompt listener above republishes the intent-field guidance.
-			cfgToolCallSwitches.listen(session, ({ intentTracing, abortOnFabricatedResult }) => {
-				agent.intentTracing = intentTracing;
+			cfgToolCallSwitches.listen(session, ({ abortOnFabricatedResult }) => {
+				agent.intentTracing = intentTracingActive(settings);
 				agent.abortOnFabricatedToolResult = abortOnFabricatedResult;
 			});
 			// Tool-gating settings add or remove the tools they gate and refresh the
@@ -6626,6 +6735,10 @@ async function createAgentSessionScoped(
 				// `find.enabled: auto` follows the judge role; a role change only touches
 				// the prompt when it actually adds or removes `find`.
 				cfgModelRoles.listen(session, () => reconcileGatedTools({ refreshPrompt: false }));
+				// A judge rejecting the account withdraws `find` (and its hints) once no native judge is left.
+				session.addDisposer(
+					onJudgeRejection(modelRegistry, () => void reconcileGatedTools({ refreshPrompt: false })),
+				);
 			}
 			// Backfill the resumed advisor spend without blocking startup: the scan
 			// runs after the session is live, so `--resume` no longer scales with the

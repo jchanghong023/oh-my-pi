@@ -39,7 +39,7 @@ else { process.stdout.write(${JSON.stringify(output)}); process.stderr.write(${J
 	}
 }
 
-it.each([[[]], [["pi-natives", "pi-knowledge", "other"]]])(
+it.each([[[]], [["omp-natives", "omp-knowledge", "other"]]])(
 	"passes cargo-delta affected output through: %j",
 	async packages => {
 		const { selection, calls, gateResult, root } = await fixture(JSON.stringify({ Affected: packages }));
@@ -71,20 +71,20 @@ it("recognizes the pinned CLI's explicit clean-tree diagnostic, not an ambiguous
 	);
 	expect(clean.selection).toMatchObject({ mode: "affected", packages: [], baseline });
 	const ambiguous = await fixture("");
-	expect(ambiguous.selection).toMatchObject({ mode: "full", packages: ["pi-knowledge", "pi-natives"] });
+	expect(ambiguous.selection).toMatchObject({ mode: "full", packages: ["omp-knowledge", "omp-natives"] });
 });
 
 it.each([
 	["not json", 0],
 	["{}", 0],
 	['{"Affected":["bad package"]}', 0],
-	['{"Affected":["pi-knowledge","pi-knowledge"]}', 0],
+	['{"Affected":["omp-knowledge","omp-knowledge"]}', 0],
 	['{"Affected":[],"Unknown":[]}', 0],
 	['{"Affected":[]}', 2],
 ])("falls back when impact fails or output is unsafe", async (output, exitCode) => {
 	const { selection, gateResult } = await fixture(output, exitCode);
 	expect(gateResult.exitCode).toBe(0);
-	expect(selection).toMatchObject({ mode: "full", packages: ["pi-knowledge", "pi-natives"] });
+	expect(selection).toMatchObject({ mode: "full", packages: ["omp-knowledge", "omp-natives"] });
 	expect(selection.reason.length).toBeGreaterThan(0);
 });
 
@@ -104,7 +104,7 @@ it("does not invoke delta without a qualified baseline", async () => {
 		{ print: () => {} },
 	);
 	expect(gateResult.exitCode).toBe(0);
-	expect(selection).toMatchObject({ mode: "full", packages: ["pi-knowledge", "pi-natives"] });
+	expect(selection).toMatchObject({ mode: "full", packages: ["omp-knowledge", "omp-natives"] });
 });
 
 // Exercise cargo-delta's actual Git/Cargo dependency analysis, not an injected
@@ -135,22 +135,22 @@ it("real cargo-delta follows a changed crate through reverse dependencies and ex
 		);
 		await fs.writeFile(
 			path.join(root, "Cargo.toml"),
-			'[workspace]\nresolver = "2"\nmembers = ["pi-knowledge", "pi-natives", "independent"]\n',
+			'[workspace]\nresolver = "2"\nmembers = ["omp-knowledge", "omp-natives", "independent"]\n',
 		);
 		await fs.writeFile(path.join(root, ".gitignore"), "target/\n");
-		for (const name of ["pi-knowledge", "pi-natives", "independent"]) {
+		for (const name of ["omp-knowledge", "omp-natives", "independent"]) {
 			const crate = path.join(root, name);
 			await fs.mkdir(path.join(crate, "src"), { recursive: true });
 			await fs.writeFile(
 				path.join(crate, "Cargo.toml"),
 				`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n${
-					name === "pi-natives" ? '[dependencies]\npi-knowledge = { path = "../pi-knowledge" }\n' : ""
+					name === "omp-natives" ? '[dependencies]\nomp-knowledge = { path = "../omp-knowledge" }\n' : ""
 				}`,
 			);
 			await fs.writeFile(
 				path.join(crate, "src", "lib.rs"),
-				name === "pi-natives"
-					? "pub fn answer() -> u8 { pi_knowledge::answer() }\n"
+				name === "omp-natives"
+					? "pub fn answer() -> u8 { omp_knowledge::answer() }\n"
 					: "pub fn answer() -> u8 { 1 }\n",
 			);
 		}
@@ -161,7 +161,7 @@ it("real cargo-delta follows a changed crate through reverse dependencies and ex
 		await run("git", "add", ".");
 		await run("git", "-c", "commit.gpgsign=false", "commit", "-qm", "dependency baseline");
 		const revision = await run("git", "rev-parse", "HEAD");
-		await fs.writeFile(path.join(root, "pi-knowledge", "src", "lib.rs"), "pub fn answer() -> u8 { 2 }\n");
+		await fs.writeFile(path.join(root, "omp-knowledge", "src", "lib.rs"), "pub fn answer() -> u8 { 2 }\n");
 		let selected: RustDeltaSelection | undefined;
 		const result = await runGate(
 			"fulltest",
@@ -172,10 +172,10 @@ it("real cargo-delta follows a changed crate through reverse dependencies and ex
 		);
 		expect(result.exitCode).toBe(0);
 		expect(selected).toMatchObject({ tool: "cargo-delta", mode: "affected", baseline: revision });
-		expect(selected!.packages.toSorted()).toEqual(["pi-knowledge", "pi-natives"]);
+		expect(selected!.packages.toSorted()).toEqual(["omp-knowledge", "omp-natives"]);
 		// No cargo test/build is needed to prove selection, and no result cache
 		// may be substituted for analyzing this still-dirty source.
-		expect(await run("git", "status", "--porcelain")).toContain("pi-knowledge/src/lib.rs");
+		expect(await run("git", "status", "--porcelain")).toContain("omp-knowledge/src/lib.rs");
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}

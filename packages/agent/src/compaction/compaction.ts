@@ -29,10 +29,15 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-compaction";
 import type { OpenAICodexCompactionBody } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { InputItem as CodexInputItem } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
-import { buildResponsesInput, resolveOpenAICompatPolicy } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import {
+	buildResponsesInput,
+	calculateOpenAIUsageAccounting,
+	resolveOpenAICompatPolicy,
+} from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { isSurvivingAssistant } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { stripOpenAIResponsesOutputOnlyStatusesForReplay } from "@oh-my-pi/pi-ai/utils";
 import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy";
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { isRecord, logger, prompt, withLoopPhase } from "@oh-my-pi/pi-utils";
@@ -53,6 +58,8 @@ import {
 	buildCompactionV2Request,
 	buildCompactionV2RequestFromBody,
 	getCompactionV2PreserveData,
+	type ResponsesCompactionUsage,
+	remoteCompactionPolicyModel,
 	requestCompactionV2Streaming,
 	shouldUseCompactionV2Streaming,
 	storeCompactionV2PreserveData,
@@ -483,8 +490,9 @@ function findValidCutPoints(entries: SessionEntry[], startIndex: number, endInde
 			case "custom_message":
 			case "label":
 		}
-		// branch_summary and custom_message are user-role messages, valid cut points
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
+		// branch_summary and custom_message are user-role messages, valid cut points; a row kept out of
+		// context is not one, so keeping it must not move the cut past the reply before it.
+		if (entry.type === "branch_summary" || (entry.type === "custom_message" && !entry.excludeFromContext)) {
 			cutPoints.push(i);
 		}
 	}
@@ -498,7 +506,7 @@ function findValidCutPoints(entries: SessionEntry[], startIndex: number, endInde
  * transcript's orphan-head trim all share this boundary definition.
  */
 export function isTurnStartEntry(entry: SessionEntry): boolean {
-	if (entry.type === "branch_summary" || entry.type === "custom_message") {
+	if (entry.type === "branch_summary" || (entry.type === "custom_message" && !entry.excludeFromContext)) {
 		return true;
 	}
 	if (entry.type === "message") {
@@ -878,6 +886,13 @@ export interface SummaryOptions {
 		options: SimpleStreamOptions,
 	) => Promise<AssistantMessage>;
 	/**
+	 * Receives each OpenAI remote compaction request (V1 `/responses/compact`,
+	 * V2 streaming) whose response reported usage. Those transports bypass
+	 * {@link completeImpl}, so this is the only record of their spend: a
+	 * content-less assistant message carrying the priced usage and duration.
+	 */
+	onRemoteUsage?: (message: AssistantMessage) => void;
+	/**
 	 * Transient-failure retry for the summarization oneshots (`generateSummary`,
 	 * `generateShortSummary`, `generateTurnPrefixSummary`).
 	 *
@@ -891,6 +906,42 @@ export interface SummaryOptions {
 	 * stacks on top of the inner backoff.
 	 */
 	oneshotRetry?: OneshotRetryOptions | false;
+}
+
+/**
+ * The record {@link SummaryOptions.onRemoteUsage} receives for one OpenAI
+ * remote compaction request, priced at `model`'s catalog rates (a
+ * `remoteCompaction.model` override is recorded by id; it has no rates here).
+ */
+function remoteCompactionUsageMessage(
+	model: Model,
+	usage: ResponsesCompactionUsage,
+	startedAt: number,
+): AssistantMessage {
+	const target = remoteCompactionPolicyModel(model);
+	const tokens = calculateOpenAIUsageAccounting({
+		promptTokens: usage.inputTokens,
+		outputTokens: usage.outputTokens,
+		cachedTokens: usage.cachedInputTokens ?? 0,
+		reasoningTokens: usage.reasoningOutputTokens ?? 0,
+		cacheWriteOpenRouter: usage.cacheWriteTokens,
+		cacheWriteDeepSeek: undefined,
+		hasDeepSeekCacheHitAndMiss: false,
+	});
+	const billed: Usage = { ...tokens, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+	billed.cost = calculateCost(model, billed);
+	const now = Date.now();
+	return {
+		role: "assistant",
+		content: [],
+		api: target.api,
+		provider: model.provider,
+		model: target.id,
+		usage: billed,
+		stopReason: "stop",
+		timestamp: now,
+		duration: now - startedAt,
+	};
 }
 
 /**
@@ -1969,6 +2020,7 @@ export async function compact(
 					fetch: options?.fetch,
 					onPayload: options?.onPayload,
 					completeImpl: options?.completeImpl,
+					onRemoteUsage: options?.onRemoteUsage,
 					// The caller's opt-out must reach every summarization oneshot, otherwise
 					// an outer retry loop multiplies with the inner one (see SummaryOptions).
 					oneshotRetry: options?.oneshotRetry,
@@ -2037,6 +2089,11 @@ export async function compact(
 				// If the complete history overflows, compact only the prefix and replay
 				// the kept tail unchanged. Do not truncate its tool outputs first.
 				const canCompactBeforeTail = lastSummarizedEntryId !== undefined && recentMessages.length > 0;
+				const reportRemoteUsage = (usage: ResponsesCompactionUsage | undefined, startedAt: number): void => {
+					if (usage && summaryOptions.onRemoteUsage) {
+						summaryOptions.onRemoteUsage(remoteCompactionUsageMessage(model, usage, startedAt));
+					}
+				};
 				const sendRemoteCompaction = async (
 					sendWhole: () => Promise<void>,
 					sendPrefix: () => Promise<boolean>,
@@ -2215,6 +2272,7 @@ export async function compact(
 							effective_effort: effectiveEffort,
 							input_item_count: request.input.length,
 						});
+						const startedAt = Date.now();
 						const remote = await withAuth(
 							apiKey,
 							key =>
@@ -2227,6 +2285,7 @@ export async function compact(
 								}),
 							{ signal },
 						);
+						reportRemoteUsage(remote.usage, startedAt);
 						preserveData = { ...preserveData, ...storeCompactionV2PreserveData(remote, model) };
 						finalMethod = "responses_v2";
 						outputTokens = remote.usage?.outputTokens;
@@ -2323,7 +2382,8 @@ export async function compact(
 							effective_effort: "not_applicable",
 							input_item_count: remoteHistory.length,
 						});
-						const remote = await withAuth(
+						const startedAt = Date.now();
+						const { usage, ...remote } = await withAuth(
 							apiKey,
 							key =>
 								requestOpenAiRemoteCompaction(
@@ -2343,6 +2403,7 @@ export async function compact(
 								),
 							{ signal },
 						);
+						reportRemoteUsage(usage, startedAt);
 						preserveData = withOpenAiRemoteCompactionPreserveData(preserveData, remote);
 						finalMethod = "responses_v1";
 						logger.info("Compaction native method completed", {

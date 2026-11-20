@@ -440,21 +440,20 @@ agent 拿到的是结构化内容，而不是被剥光的 HTML。
 
 六个 crate，一个带平台标签的 N-API addon。搜索、shell、AST、高亮、PTY、桌面控制、图片解码、BPE 计数 —— 全部在进程内、跑在 libuv 线程池上。热路径上没有 fork/exec。shell 使用我们自研的 bash 5.3 引擎，58 个命令行工具 —— coreutils、findutils、sed、jq、ripgrep 驱动的 grep、fd、diff、moreutils —— 全部移植进 builtins crate，直接编译进 shell。
 
-- Crates：`pi-natives`、`pi-shell`、`pi-ast`、`pi-iso`、`pi-voice`、`pi-walker`
+- Crates：`omp-natives`、`omp-shell`、`omp-ast`、`omp-iso`、`omp-voice`、`omp-xfs`
 - Platforms：`linux-x64`、`linux-arm64`、`darwin-x64`、`darwin-arm64`、`win32-x64`、`win32-arm64` —— x64 同时提供 AVX2 与 baseline 两种二进制
 
 按 crate 统计，只算代码行：
-
 | Crate         | 作用                                                                                   |   ~LoC |
 | ------------- | -------------------------------------------------------------------------------------- | -----: |
-| pi-shell      | 内嵌 bash 引擎 · 持久会话 · 进程内 coreutils 调度 · 输出 minimizer | 38,000 |
-| pi-natives    | N-API 接口层 —— 即下表所有模块                                    | 25,000 |
-| pi-walker     | 并行遍历 · 目录列表缓存 · glob · 供 natives 与 shell rg/grep/fd 共用的正则搜索 | 11,400 |
-| pi-iso        | 工作区隔离 · apfs · btrfs · zfs · reflink · overlayfs · projfs · rcopy        |  3,300 |
-| pi-ast        | tree-sitter + ast-grep 匹配、代码块定位、结构化摘要                |  2,900 |
-| pi-voice      | 音频采集/播放 · Opus · 实时 WebRTC                                            |  1,000 |
+| omp-shell   | 内嵌 bash 引擎 · 持久会话 · 进程内 coreutils 调度 · 输出 minimizer | 38,000 |
+| omp-natives | N-API 接口层 —— 即下表所有模块 | 25,000 |
+| omp-xfs     | 并行遍历 · 目录列表缓存 · glob · 供 natives 与 shell rg/grep/fd 共用的正则搜索 | 11,400 |
+| omp-iso     | 工作区隔离 · apfs · btrfs · zfs · reflink · overlayfs · projfs · rcopy | 3,300 |
+| omp-ast     | tree-sitter + ast-grep 匹配、代码块定位、结构化摘要 | 2,900 |
+| omp-voice   | 音频采集/播放 · Opus · 实时 WebRTC | 1,000 |
 
-`pi-natives` 内部的逐模块拆分（省略胶水代码与测试）：
+`omp-natives` 内部的逐模块拆分（省略胶水代码与测试）：
 
 | Module        | 作用                                                                              | 依赖                                |   ~LoC |
 | ------------- | --------------------------------------------------------------------------------- | ----------------------------------------- | -----: |
@@ -613,7 +612,7 @@ bun setup
 bun dev
 ```
 
-用 `nix build .#omp` 构建可分发的 Nix 包并做冒烟测试。Wayland screencast 支持默认关闭（将 libpipewire 加入插件的库搜索路径会让运行时闭包增加约 750 MB）；可用 `omp.override { withWaylandScreencast = true; }` 启用。发布构建以 fat LTO 链接 `pi-natives`；本地可用 `omp.override { withFatLto = false; }` 改用 thin LTO，大幅加快重新构建。Rust 依赖与 native addon 在独立 derivation 中构建，因此修改 Rust 时可复用已编译依赖，修改 TypeScript 时可复用 addon。`nix/bun.nix` 只在 `bun.lock` 变化时生成；发版时会自动重新生成。若改动了依赖，请运行：
+用 `nix build .#omp` 构建可分发的 Nix 包并做冒烟测试。Wayland screencast 支持默认关闭（将 libpipewire 加入插件的库搜索路径会让运行时闭包增加约 750 MB）；可用 `omp.override { withWaylandScreencast = true; }` 启用。发布构建以 fat LTO 链接 `omp-natives`；本地可用 `omp.override { withFatLto = false; }` 改用 thin LTO，大幅加快重新构建。Rust 依赖与 native addon 在独立 derivation 中构建，因此修改 Rust 时可复用已编译依赖，修改 TypeScript 时可复用 addon。`nix/bun.nix` 只在 `bun.lock` 变化时生成；发版时会自动重新生成。若改动了依赖，请运行：
 
 ```sh
 bun run gen:nix
@@ -669,14 +668,14 @@ Apple Intelligence。若要不带 bridge 构建，使用
 
 | Crate | 说明 |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| **[pi-natives](crates/pi-natives)**                | `@oh-my-pi/pi-natives` 使用的核心 Rust 原生 addon（N-API `cdylib`）；聚合下列 crates |
-| **[pi-shell](crates/pi-shell)**                    | 内嵌 bash 5.3 引擎（解析器、VM、进程创建、会话）、PTY 与进程管理 |
-| **[pi-ast](crates/pi-ast)**                        | 基于 tree-sitter 的代码摘要器与 AST 工具（50+ 语言语法） |
-| **[pi-iso](crates/pi-iso)**                        | 任务隔离后端解析器：APFS clones、btrfs/zfs reflinks、overlayfs、projfs、rcopy |
-| **[pi-voice](crates/pi-voice)**                    | 音频采集/播放、Opus 编解码与实时 WebRTC 流式原语 |
-| **[pi-walker](crates/pi-walker)**                  | 供 natives 与 shell 共用的并行忽略规则感知遍历器、目录列表缓存、glob 与内容搜索 |
-| **[pi-edit](crates/pi-edit)**                      | `edit` 工具背后的编辑引擎：基于行的 patch/hashline 模式、流式预览、原子应用 |
-| **[pi-builtins](crates/pi-builtins)**              | 67 个进程内命令行工具及进程 builtins（ps、top、pgrep、pkill 等） |
+| **[omp-natives](crates/natives)** | `@oh-my-pi/pi-natives` 使用的核心 Rust 原生 addon（N-API `cdylib`）；聚合下列 crates |
+| **[omp-shell](crates/shell)** | 内嵌 bash 5.3 引擎（解析器、VM、进程创建、会话）、PTY 与进程管理 |
+| **[omp-ast](crates/ast)** | 基于 tree-sitter 的代码摘要器与 AST 工具（50+ 语言语法） |
+| **[omp-iso](crates/iso)** | 任务隔离后端解析器：APFS clones、btrfs/zfs reflinks、overlayfs、projfs、rcopy |
+| **[omp-voice](crates/voice)** | 音频采集/播放、Opus 编解码与实时 WebRTC 流式原语 |
+| **[omp-xfs](crates/xfs)** | 供 natives 与 shell 共用的并行忽略规则感知遍历器、目录列表缓存、glob 与内容搜索 |
+| **[omp-edit](crates/edit)** | `edit` 工具背后的编辑引擎：基于行的 patch/hashline 模式、流式预览、原子应用 |
+| **[omp-builtins](crates/builtins)** | 67 个进程内命令行工具及进程 builtins（ps、top、pgrep、pkill 等） |
 
 ## 贡献
 
@@ -688,7 +687,7 @@ Issues 与 pull requests 对所有人开放。目前的开放 PR 仍属**试行*
 
 OMP 基于 [MIT License](LICENSE) 授权。
 
-第三方与 vendor 代码（包括 `crates/pi-builtins/LICENSE` 中标明的第三方部分）仍遵循各自的上游许可证。每个分发组件均带有自己的 `THIRD-PARTY-NOTICES.txt`：CLI（`packages/coding-agent`）、原生 addon（`packages/natives`）和 robomp（`python/robomp`）。`omp --license` 会打印 CLI 与 addon 的声明。
+第三方与 vendor 代码（包括 `crates/builtins/LICENSE` 中标明的第三方部分）仍遵循各自的上游许可证。每个分发组件均带有自己的 `THIRD-PARTY-NOTICES.txt`：CLI（`packages/coding-agent`）、原生 addon（`packages/natives`）和 robomp（`python/robomp`）。`omp --license` 会打印 CLI 与 addon 的声明。
 
 © 2025 Mario Zechner
 © 2025-2026 Can Bölük

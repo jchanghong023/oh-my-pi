@@ -969,7 +969,8 @@ export const cfgToolsIntentTracing = register({
 		tab: "tools",
 		group: "执行",
 		label: "意图追踪",
-		description: "要求 Agent 在执行每次工具调用前说明其意图",
+		description:
+			"要求 Agent 在执行每次工具调用前说明其意图。未设置时，仅交互式 TUI 开启；print、RPC、ACP 和 SDK 会话关闭。",
 	},
 });
 

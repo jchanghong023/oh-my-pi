@@ -9,6 +9,8 @@ import {
 	listLocalFiles,
 	resolveLocalUrlToPath,
 } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { InternalUrlFilesystem } from "@oh-my-pi/pi-coding-agent/internal-urls/url-filesystem";
+import { resolveToolSearchScope } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -77,6 +79,26 @@ describe("LocalProtocolHandler", () => {
 			expect(await router.locate("local://report.json", context)).toBe(await fs.realpath(localFile));
 			expect(await router.locate("local://", context)).toBe(await fs.realpath(path.dirname(localFile)));
 			expect(await router.locate("local://missing.json", context)).toBeNull();
+		});
+	});
+
+	it("locates a large spill for search without materializing it as a virtual resource", async () => {
+		await withTempDir(async tempDir => {
+			const spill = "local://0.log";
+			const file = path.join(tempDir, "local", "0.log");
+			await Bun.write(file, "x".repeat(2 * 1024 * 1024));
+			const context = { localProtocolOptions: { getArtifactsDir: () => tempDir } };
+			const router = InternalUrlRouter.instance();
+			expect((await router.resolve(spill, context)).content).toContain("Cannot materialize local:// file");
+			expect(await router.locate(spill, context)).toBe(await fs.realpath(file));
+			const scope = await resolveToolSearchScope({
+				rawPaths: [spill],
+				cwd: tempDir,
+				internalUrlAction: "search",
+				filesystem: new InternalUrlFilesystem({ context, tier: "read" }),
+			});
+			expect(scope.searchPath).toBe(spill);
+			expect(scope.isDirectory).toBe(false);
 		});
 	});
 

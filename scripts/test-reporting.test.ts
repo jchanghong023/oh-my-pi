@@ -68,7 +68,7 @@ const affectedDelta = {
 	tool: "cargo-delta",
 	mode: "affected",
 	baseline: "a".repeat(40),
-	packages: ["pi-natives"],
+	packages: ["omp-natives"],
 };
 
 test("affected selection reports only executed XML cases and native deselections", async () => {
@@ -209,11 +209,11 @@ test("cargo-delta reports empty and executed package selections without fabricat
 	expect(mixed.completion).toBe("complete");
 	expect(mixed.coverage).toBe("affected-tests-only");
 	expect(mixed.reconciliation).toMatchObject({ status: "validated", cases: 1, executed: 1, failures: 0 });
-	expect(mixed.producers[0].selection.packages).toEqual(["pi-natives"]);
+	expect(mixed.producers[0].selection.packages).toEqual(["omp-natives"]);
 
 	const withDoctest = await fixture([
-		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, packages: ["pi-knowledge"] } },
-		{ status: "stage", selection: { ...affectedDelta, packages: ["pi-knowledge"] } },
+		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, packages: ["omp-knowledge"] } },
+		{ status: "stage", selection: { ...affectedDelta, packages: ["omp-knowledge"] } },
 	]);
 	expect(withDoctest.completion).toBe("complete");
 	expect(withDoctest.reconciliation).toMatchObject({ cases: 1, executed: 1, failures: 0 });
@@ -225,7 +225,7 @@ test("cargo-delta reports empty and executed package selections without fabricat
 		{ xml: failedXml, status: "passed", exitCode: 0, selection: affectedDelta },
 		{ xml: oneCase, status: "partial", selection: affectedDelta },
 		{ status: "failed", exitCode: 1, selection: affectedDelta },
-		{ status: "failed", exitCode: 1, selection: { ...affectedDelta, packages: ["pi-knowledge"] } },
+		{ status: "failed", exitCode: 1, selection: { ...affectedDelta, packages: ["omp-knowledge"] } },
 	]) {
 		const report = await fixture([record, emptyDelta]);
 		expect(report.completion).toBe("partial");
@@ -238,7 +238,7 @@ test("cargo-delta rejects incomplete or fabricated empty selection evidence", as
 		{ ...emptyDelta, selection: { ...selection, baseline: undefined } },
 		{ ...emptyDelta, selection: { ...selection, baseline: "bad" } },
 		{ ...emptyDelta, selection: { ...selection, packages: undefined } },
-		{ ...emptyDelta, selection: { ...selection, packages: ["pi-knowledge"] } },
+		{ ...emptyDelta, selection: { ...selection, packages: ["omp-knowledge"] } },
 		{ ...emptyDelta, selection: { ...selection, selected: 1 } },
 		{ ...emptyDelta, selection: { ...selection, mode: "full" } },
 		{ ...emptyDelta, selection: { ...selection, changedPaths: ["../outside"] } },

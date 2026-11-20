@@ -243,6 +243,12 @@ function pythonCommandPrefixLength(trimmedText: string): 0 | 1 | 2 {
 	return next === 32 || next === 9 || next === 10 || next === 13 ? prefixLength : 0;
 }
 
+/** The question after a `?` draft's sigil (the `/btw` shortcut), or undefined when the draft is not one. */
+function parseBtwShortcutInput(text: string): string | undefined {
+	const trimmed = text.trimStart();
+	return trimmed.startsWith("?") ? trimmed.slice(1).trim() : undefined;
+}
+
 function parsePythonCommandInput(text: string): { code: string; isExcluded: boolean } | undefined {
 	const trimmed = text.trimStart();
 	const prefixLength = pythonCommandPrefixLength(trimmed);
@@ -386,6 +392,8 @@ export class InputController {
 			this.ctx.ui.addInputListener(data => {
 				if (!this.ctx.focusedAgentId) return undefined;
 				if (!matchesKey(data, "left")) return undefined;
+				// An open overlay (the model picker's thinking slider) owns ←.
+				if (this.ctx.ui.getFocused() !== this.ctx.editor) return undefined;
 				if (this.ctx.editor.getText().trim()) return undefined;
 				this.#handleFocusedLeftTap();
 				return { consume: true };
@@ -547,8 +555,7 @@ export class InputController {
 
 			// Side-channel panels own Esc for cancellation or closing before
 			// loop mode, maintenance, or the underlying main turn.
-			// Active context maintenance owns Esc: auto/manual compaction,
-			// handoff generation, and auto-retry backoff all advertise
+			// Active context maintenance owns Esc: compaction and retry backoff advertise
 			// "(esc to cancel)". Dispatch on live session state instead of
 			// swapping onEscape handlers — interleaved start/end events used
 			// to clobber the single saved-handler slot (auto-compaction start
@@ -560,8 +567,7 @@ export class InputController {
 			// accidentally killing a focused subagent's compaction on the way out
 			// was #2819. The auto-maintenance loaders relabel their hint to match
 			// (see EventController). Main-session maintenance still owns Esc and
-			// stays cancellable from the main view (focused submit gates /compact
-			// and handoff, so manual maintenance is main-only anyway).
+			// stays cancellable from the main view (manual compaction is main-only).
 			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
 				return;
 			}
@@ -578,12 +584,8 @@ export class InputController {
 			if (!this.ctx.focusedAgentId) {
 				const viewSession = this.ctx.viewSession;
 				let aborted = false;
-				if (viewSession.isCompacting) {
+				if (viewSession.isCompacting || this.ctx.session.isBackgroundCompacting) {
 					safeAbort("compaction", () => viewSession.abortCompaction());
-					aborted = true;
-				}
-				if (viewSession.isGeneratingHandoff) {
-					safeAbort("handoff", () => viewSession.abortHandoff());
 					aborted = true;
 				}
 				if (viewSession.isRetrying) {
@@ -658,6 +660,10 @@ export class InputController {
 				this.ctx.editor.setText("");
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
+			} else if (this.ctx.isBtwMode) {
+				this.ctx.editor.setText("");
+				this.ctx.isBtwMode = false;
+				this.ctx.updateEditorBorderColor();
 			} else if (awaitingAsyncWork) {
 				// End the wait: the run ends now. The jobs keep running; their results
 				// land in context for the next prompt instead of starting a turn.
@@ -713,6 +719,8 @@ export class InputController {
 		this.ctx.editor.setActionKeys("app.thinking.cycle", this.ctx.keybindings.getKeys("app.thinking.cycle"));
 		this.ctx.editor.onCycleThinkingLevel = () => {
 			if (this.ctx.isWebGuiModeActive?.()) return;
+			// Shift+Tab, Tab's way back: from the composer to the ask waiting above it.
+			if (this.ctx.focusAsk()) return;
 			hintUsage.record("effort");
 			this.cycleThinkingLevel();
 		};
@@ -834,14 +842,12 @@ export class InputController {
 				this.ctx.handleBtwInjectKey();
 			});
 		}
-		const hubKeys = new Set([
-			...this.ctx.keybindings.getKeys("app.agents.hub"),
-			...this.ctx.keybindings.getKeys("app.session.observe"),
-		]);
+		const agentsHubKeys = new Set(this.ctx.keybindings.getKeys("app.agents.hub"));
+		const hubKeys = new Set([...agentsHubKeys, ...this.ctx.keybindings.getKeys("app.session.observe")]);
 		for (const key of hubKeys) {
 			this.ctx.editor.setCustomKeyHandler(key, () => {
 				if (this.ctx.isWebGuiModeActive?.()) return;
-				this.ctx.showAgentHub();
+				this.ctx.showAgentHub(agentsHubKeys.has(key) ? { trayFirst: true } : undefined);
 			});
 		}
 
@@ -860,7 +866,7 @@ export class InputController {
 			}
 			if (this.#detectLeftDoubleTap()) {
 				hintUsage.record("agents");
-				this.ctx.showAgentHub({ requireContent: true, armCloseTap: true });
+				this.ctx.showAgentHub({ requireContent: true, armCloseTap: true, trayFirst: true });
 			}
 		};
 		// The native composer's viewing header: an ancestor crumb, or back to main.
@@ -878,10 +884,16 @@ export class InputController {
 			if (wasComposing !== (text.trim() !== "")) this.ctx.syncIdleMaintenanceView();
 			const wasBashMode = this.ctx.isBashMode;
 			const wasPythonMode = this.ctx.isPythonMode;
+			const wasBtwMode = this.ctx.isBtwMode;
 			const trimmed = text.trimStart();
 			this.ctx.isBashMode = trimmed.startsWith("!");
 			this.ctx.isPythonMode = parsePythonCommandInput(trimmed) !== undefined;
-			if (wasBashMode !== this.ctx.isBashMode || wasPythonMode !== this.ctx.isPythonMode) {
+			this.ctx.isBtwMode = parseBtwShortcutInput(trimmed) !== undefined;
+			if (
+				wasBashMode !== this.ctx.isBashMode ||
+				wasPythonMode !== this.ctx.isPythonMode ||
+				wasBtwMode !== this.ctx.isBtwMode
+			) {
 				this.ctx.updateEditorBorderColor();
 			}
 			// Editor input repaints through the scoped fast path (only the editor
@@ -1167,6 +1179,9 @@ export class InputController {
 			) {
 				text = expandEmoticons(text);
 			}
+			// `? <question>` is the `/btw` shortcut.
+			const btwQuestion = parseBtwShortcutInput(text);
+			if (btwQuestion) text = `/btw ${btwQuestion}`;
 
 			// A `/btw` note the composer talks to takes plain drafts as its follow-ups (an empty
 			// Enter does nothing); commands and shell drafts run as usual.
@@ -1957,8 +1972,8 @@ export class InputController {
 			// children that must survive the suspend (Linux/other POSIX MCP stdio
 			// servers via the platform-specific `detached: true` spawn in
 			// `mcp/transports/stdio.ts`, every external the embedded bash engine
-			// runs via `Sessions::Detach` in `crates/pi-shell/src/host.rs`, which
-			// `setsid`s the child in `crates/pi-shell/src/sys/spawn/unix.rs`) are
+			// runs via `Sessions::Detach` in `crates/shell/src/host.rs`, which
+			// `setsid`s the child in `crates/shell/src/sys/spawn/unix.rs`) are
 			// their own sessions, so pgid=0 does not reach them.
 			process.kill(0, "SIGSTOP");
 		} catch (err) {

@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
@@ -9,7 +10,7 @@ import { tinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 const cwd = process.env.OMP_CONFIG_ROOT;
 if (!cwd) throw new Error("Expected an isolated configuration root");
 const authStorage = await AuthStorage.create(":memory:");
-const modelRegistry = new ModelRegistry(authStorage);
+const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
 const sessions: AgentSession[] = [];
 const observations: number[] = [];
 const originalTerminate = tinyTitleClient.terminate;
@@ -25,7 +26,7 @@ try {
 			agentId: `tiny-owner-${id}`,
 			authStorage,
 			modelRegistry,
-			settings: Settings.isolated(),
+			settings: Settings.isolated({ "memory.backend": "off" }),
 			sessionManager: SessionManager.inMemory(cwd),
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -45,8 +46,11 @@ try {
 	await sessions[0].dispose();
 	observations.push(terminations);
 } finally {
-	for (const session of sessions) await session.dispose();
-	tinyTitleClient.terminate = originalTerminate;
-	authStorage.close();
+	try {
+		for (const session of sessions) await session.dispose();
+	} finally {
+		tinyTitleClient.terminate = originalTerminate;
+		authStorage.close();
+	}
 }
 process.stdout.write(JSON.stringify(observations));

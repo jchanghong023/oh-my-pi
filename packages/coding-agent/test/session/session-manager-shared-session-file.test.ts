@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { readSessionHeaderId } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager, type SessionPersistenceNotice } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage, tryAcquireSessionLease } from "@oh-my-pi/pi-coding-agent/session/session-storage";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { spillFileName, TempDir } from "@oh-my-pi/pi-utils";
 
 const SESSION_MANAGER_MODULE = path.join(import.meta.dir, "../../src/session/session-manager.ts");
 
@@ -246,8 +246,8 @@ describe("SessionManager on a session file another omp process writes", () => {
 		const original = await createSession(tempDir);
 		// Artifacts live beside the journal's real name.
 		const artifactsDir = original.slice(0, -".jsonl".length);
-		fs.mkdirSync(artifactsDir, { recursive: true });
-		fs.writeFileSync(path.join(artifactsDir, "1.bash.log"), "tool output");
+		fs.mkdirSync(path.join(artifactsDir, "local"), { recursive: true });
+		fs.writeFileSync(path.join(artifactsDir, "local", spillFileName("1")), "tool output");
 
 		const { other } = await OtherProcess.resume(tempDir, original);
 		try {
@@ -256,7 +256,7 @@ describe("SessionManager on a session file another omp process writes", () => {
 			fs.symlinkSync(original, alias);
 			const { savedTo } = await resumeAndAppend(alias, tempDir.path());
 			if (!savedTo) throw new Error("Expected the resumed session to save somewhere");
-			const copied = path.join(savedTo.slice(0, -".jsonl".length), "1.bash.log");
+			const copied = path.join(savedTo.slice(0, -".jsonl".length), "local", spillFileName("1"));
 			expect(fs.readFileSync(copied, "utf8")).toBe("tool output");
 		} finally {
 			await other.close();

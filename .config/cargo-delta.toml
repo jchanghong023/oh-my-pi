@@ -11,12 +11,12 @@ trip_wire_patterns = [
   "packages/natives/package.json", "packages/natives/scripts/**",
   "scripts/bazel-natives.ts", "scripts/host-detect.ts", "scripts/stamp-native-version.ts",
   "scripts/run-rs-task.ts", "scripts/test-gate-delta.ts", "scripts/test-gate-native-events.ts",
-  # Generates pi-ast's compiled grammar table.
+  # Generates omp-ast's compiled grammar table.
   "scripts/gen-grammars.ts",
-  "crates/pi-natives/src/syntaxes/**",
-  "crates/pi-natives/src/applefm/**",
-  "crates/pi-natives/src/desktop/macos/**",
-  "crates/pi-natives/src/oauth_callback/**",
+  "crates/natives/src/syntaxes/**",
+  "crates/natives/src/applefm/**",
+  "crates/natives/src/desktop/macos/**",
+  "crates/natives/src/oauth_callback/**",
 ]
 
 [parser]

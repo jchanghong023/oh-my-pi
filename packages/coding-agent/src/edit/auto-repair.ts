@@ -19,6 +19,7 @@ import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { cfgOffline } from "../config/auxiliary-model-policy";
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { WritethroughCallback } from "../lsp";
+import { journalCompletion } from "../session/model-usage-journal";
 import type { ToolSession } from "../tools";
 import { invalidateFsScanAfterWrite } from "../tools/fs-cache-invalidation";
 import repairPromptSource from "./auto-repair.md" with { type: "text" };
@@ -381,6 +382,7 @@ export async function attemptEditAutoRepair(options: {
 	const timeout = AbortSignal.timeout(REPAIR_TIMEOUT_MS);
 	const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
 	const complete = async (builtPrompt: string): Promise<string> => {
+		const journal = journalCompletion(session.sessionManager, { purpose: "edit-repair", role: "smol" });
 		const response = await retryTransientCompletion(
 			async () => {
 				session.costGate?.admit();
@@ -397,6 +399,7 @@ export async function attemptEditAutoRepair(options: {
 					},
 				);
 				session.costGate?.record(attempt.usage.cost.total);
+				journal?.(attempt, builtPrompt);
 				return attempt;
 			},
 			{

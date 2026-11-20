@@ -397,12 +397,12 @@ describe("P2-21 Python Eval runtime scope", () => {
 	test.skipIf(!hostPython).each([
 		["linux", "1", 10, false],
 		["linux", "1", 11, true],
-		["linux", "0", 7, false],
-		["linux", "0", 8, true],
-		["darwin", "1", 7, false],
-		["darwin", "1", 8, true],
-		["win32", "1", 7, false],
-		["win32", "1", 8, true],
+		["linux", "0", 8, false],
+		["linux", "0", 9, true],
+		["darwin", "1", 8, false],
+		["darwin", "1", 9, true],
+		["win32", "1", 8, false],
+		["win32", "1", 9, true],
 	] as const)(
 		"enforces the interpreter version on %s offline=%s Python 3.%i",
 		async (platform, offline, minor, ok) => {
@@ -429,8 +429,10 @@ describe("P2-21 Python Eval runtime scope", () => {
 
 			expect(result.ok).toBe(ok);
 			expect(result.pythonPath).toBe(explicitPython);
-			if (!ok)
-				expect(result.reason).toContain(platform === "linux" && offline === "1" ? "Python 3.11+" : "Python 3.8+");
+			if (!ok) {
+				const requiredMinor = platform === "linux" && offline === "1" ? 11 : 9;
+				expect(result.reason).toContain(`Python 3.${minor} is too old; 3.${requiredMinor}+ required`);
+			}
 		},
 	);
 

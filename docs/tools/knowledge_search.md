@@ -8,7 +8,7 @@
 - Key collaborators:
   - `packages/coding-agent/src/knowledge/service.ts` — host adapter for owner-scoped worker IPC, cancellation, shutdown and logger context
   - `packages/coding-agent/src/knowledge/engine.ts` and `models.ts` — worker-side optional model request orchestration and shared reciprocal-rank fusion (RRF), alongside host path and lifecycle adapters
-  - `crates/pi-natives/src/knowledge/` and `crates/pi-knowledge/` — native snapshot and index ownership, Markdown ingestion, full-text and grep search, complete rankings, cursors and evidence; existing Rust vector kernels provide numerical computation. Native bindings handle page budgets, evidence rendering and cancellable minimum-duration waiting.
+  - `crates/natives/src/knowledge/` and `crates/knowledge/` — native snapshot and index ownership, Markdown ingestion, full-text and grep search, complete rankings, cursors and evidence; existing Rust vector kernels provide numerical computation. Native bindings handle page budgets, evidence rendering and cancellable minimum-duration waiting.
   - Full-text and grep retain their Rust implementation; optional semantic recall and reranking use the existing TypeScript model clients and shared ranking utilities.
   - Index lifecycle: `omp knowledge init "<dir>" --name <name>` / `omp knowledge remove <name> --force`
 

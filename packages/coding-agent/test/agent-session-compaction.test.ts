@@ -1080,7 +1080,9 @@ describe("AgentSession compaction provider replay policy", () => {
 				await session.waitForIdle();
 				expect(events.some(event => event.type === "auto_compaction_end" && event.errorMessage)).toBe(true);
 			} else {
-				await expect(operation === "compact" ? session.compact() : session.handoff()).rejects.toBeInstanceOf(Error);
+				await expect(
+					operation === "compact" ? session.compact() : session.compact(undefined, { mode: "handoff" }),
+				).rejects.toBeInstanceOf(Error);
 			}
 			expect(requests).toBe(1);
 			expect(manager.getBranch().filter(entry => entry.type === "compaction")).toHaveLength(0);

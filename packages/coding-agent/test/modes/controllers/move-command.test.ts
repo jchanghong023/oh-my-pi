@@ -97,6 +97,7 @@ describe("CommandController /move", () => {
 					branch: "feature",
 					sourceCwd: sourceDir,
 					baseCommit: "0",
+					keptChanges: false,
 					created: true,
 					createdBranch: true,
 				};
@@ -148,6 +149,7 @@ describe("CommandController /move", () => {
 					branch: "feature",
 					sourceCwd: sourceDir,
 					baseCommit: "0",
+					keptChanges: false,
 					created: true,
 					createdBranch: true,
 				};

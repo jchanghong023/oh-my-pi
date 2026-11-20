@@ -22,7 +22,14 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { FileSessionStorage, MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { getTerminalId } from "@oh-my-pi/pi-tui";
 import { isTaskToolDetails, type TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
-import { getAgentDir, getTerminalSessionsDir, removeWithRetries, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import {
+	getAgentDir,
+	getTerminalSessionsDir,
+	removeWithRetries,
+	setAgentDir,
+	spillFileName,
+	TempDir,
+} from "@oh-my-pi/pi-utils";
 
 interface JsonlMessageEntry {
 	type: "message";
@@ -53,9 +60,10 @@ async function createSessionWithArtifacts(root: string): Promise<{
 		timestamp: new Date().toISOString(),
 		cwd,
 	};
+	await fs.mkdir(path.join(sourceArtifactsDir, "local"), { recursive: true });
 	await fs.mkdir(path.join(sourceArtifactsDir, "nested"), { recursive: true });
 	await Bun.write(sourceFile, `${JSON.stringify(sourceHeader)}\n`);
-	await Bun.write(path.join(sourceArtifactsDir, "1.read.log"), "tool output");
+	await Bun.write(path.join(sourceArtifactsDir, "local", spillFileName("1")), "tool output");
 	await Bun.write(path.join(sourceArtifactsDir, "nested", "result.txt"), "nested output");
 	return { cwd, sessionDir, sourceFile, sourceArtifactsDir };
 }
@@ -142,9 +150,9 @@ describe("SessionManager.forkFrom", () => {
 		if (!forkFile) throw new Error("expected forked session file");
 		const forkArtifactsDir = forkFile.slice(0, -".jsonl".length);
 
-		expect(await Bun.file(path.join(forkArtifactsDir, "1.read.log")).text()).toBe("tool output");
+		expect(await Bun.file(path.join(forkArtifactsDir, "local", spillFileName("1"))).text()).toBe("tool output");
 		expect(await Bun.file(path.join(forkArtifactsDir, "nested", "result.txt")).text()).toBe("nested output");
-		expect(await Bun.file(path.join(sourceArtifactsDir, "1.read.log")).text()).toBe("tool output");
+		expect(await Bun.file(path.join(sourceArtifactsDir, "local", spillFileName("1"))).text()).toBe("tool output");
 	});
 
 	it("does not copy artifacts when the caller opts out", async () => {
@@ -159,7 +167,7 @@ describe("SessionManager.forkFrom", () => {
 		if (!forkFile) throw new Error("expected forked session file");
 		const forkArtifactsDir = forkFile.slice(0, -".jsonl".length);
 
-		expect(await Bun.file(path.join(forkArtifactsDir, "1.read.log")).exists()).toBe(false);
+		expect(await Bun.file(path.join(forkArtifactsDir, "local", spillFileName("1"))).exists()).toBe(false);
 	});
 
 	it("does not treat an extensionless source's parent directory as artifacts", async () => {

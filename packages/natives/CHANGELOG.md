@@ -11,6 +11,32 @@
 - Linux offline startup rejects unsafe directories or files in the default shared-memory grammar cache.
 - Offline Linux binaries can load their native addon when the shared memory filesystem is mounted `noexec`.
 
+## [19.0.1] - 2026-11-19
+
+### Fixed
+
+- Fixed omp freezing for seconds to minutes on WSL2 while saving sessions: Linux `FileLock` now locks a sidecar file instead of binding a socket, which takes about 10 ms per call there. Older omp versions still running do not see these locks, so restart them after updating ([#19704](https://github.com/can1357/oh-my-pi/pull/19704) by [@turgaybulut](https://github.com/turgaybulut))
+
+## [19.0.0] - 2026-11-18
+
+### Added
+
+- Added `VcsGitRepo.worktreeToGit()` to convert worktree content into the blob representation produced by `git add`.
+- Added support for using a `Shell` as a process's shell, routing commands through the process's standard streams while preserving the process session and terminal for external commands.
+- Added `ShellRunOptions.speech` to connect the host speech handler to the shell's `say` command.
+- Added an in-process `file` shell builtin with broad file-type detection, MIME and encoding output, archive/image/document support, and compatibility with the commonly used `file` command options.
+
+### Changed
+
+- Improved typing and key-press responsiveness in iPhone Mirroring, reducing per-character latency by approximately half.
+
+### Fixed
+
+- Fixed screenshots of partially off-screen Linux windows on Wayland and X11 so the visible region is captured and coordinate-based zoom targets correctly.
+- Fixed Wayland input operations on desktops without an available input route to fail immediately with a clear `PermissionDenied` error instead of attempting unnecessary screen capture first.
+- Fixed macOS `computer` interactions so background clicks, key presses, pop-up menu actions, and takeover calls restore the previously active window within the call.
+- Fixed macOS pop-up menu reads immediately after typing so they reflect the option selected by the entered letters.
+
 ## [18.22.2] - 2026-11-18
 
 ### Added

@@ -4,30 +4,18 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { IsoBackendKind } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { hashPath, isEnoent } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import { hashPath, isEnoent } from "@oh-my-pi/pi-utils";
 import type { SettingValueOf } from "../config/registry";
 import type { Settings } from "../config/settings";
-import { formatIsolationBackend, parseIsolationBackend } from "../task/worktree";
-import { resolveAvailableWorktreePath } from "../tools/gh-pr-checkout";
-
 import { cfgIsolationBackend, cfgWorktreeClone, type cfgWorktreeOnExit } from "../task/settings";
+import { formatIsolationBackend, parseIsolationBackend } from "../task/worktree";
+import type { SessionWorktree as BackendSessionWorktree } from "../worktree/backend";
+import { resolveAvailableWorktreePath } from "../worktree/paths";
+import { worktreeBackend, worktreeOrigin } from "../worktree/worktrees";
 
-export interface SessionWorktree {
-	/** Worktree root, or the unchanged cwd when already on the target branch. */
-	path: string;
-	/** Branch checked out in the worktree. */
-	branch: string;
-	/** Backend that cloned the checkout, or undefined for a plain checkout. */
-	clonedWith?: IsoBackendKind;
-	/** Why the clone fell back to a plain checkout, when it did. */
-	cloneError?: string;
-	/** Checkout the worktree was forked from. */
-	sourceCwd: string;
-	/** Target branch's initial commit, used to detect later branch movement. */
-	baseCommit: string;
+export interface SessionWorktree extends BackendSessionWorktree {
 	/** Whether this session created the worktree rather than reusing it. */
 	created: boolean;
 	/** Whether this session also created the branch. */
@@ -62,10 +50,10 @@ export function decideWorktreeExit(policy: WorktreeExitPolicy, state: SessionWor
 	return "prompt";
 }
 
-/** Reports whether a fresh session in `cwd` may get a worktree: a primary git checkout with commits. */
-export async function canAutoCreateWorktree(cwd: string): Promise<boolean> {
+/** Reports whether `cwd` is a primary Git checkout with commits, not an existing worktree. */
+export async function canAutoCreateWorktree(cwd: string, settings?: Settings): Promise<boolean> {
 	const repository = vcs.git(cwd);
-	if (!repository || repository.linkedWorktree()) return false;
+	if (!repository || (await worktreeOrigin(cwd, settings))) return false;
 	return Boolean(await repository.headSha());
 }
 
@@ -112,13 +100,29 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 	const worktrees = await repository.worktrees();
 	if (!createdBranch) {
 		if ((await repository.currentBranch()) === branch) {
-			return { path: cwd, branch, sourceCwd: cwd, baseCommit, created: false, createdBranch: false };
+			return {
+				path: cwd,
+				branch,
+				sourceCwd: cwd,
+				baseCommit,
+				keptChanges: false,
+				created: false,
+				createdBranch: false,
+			};
 		}
 		for (const existing of worktrees) {
 			if (existing.branch !== branchRef) continue;
 			try {
 				const reusedPath = await fs.realpath(existing.path);
-				return { path: reusedPath, branch, sourceCwd: cwd, baseCommit, created: false, createdBranch: false };
+				return {
+					path: reusedPath,
+					branch,
+					sourceCwd: cwd,
+					baseCommit,
+					keptChanges: false,
+					created: false,
+					createdBranch: false,
+				};
 			} catch (error) {
 				if (!isEnoent(error)) throw error;
 				// worktreeAdd confirms the checkout is absent and the registration is unlocked before pruning it.
@@ -150,10 +154,11 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 	return {
 		path: await fs.realpath(worktreePath),
 		branch,
-		clonedWith: result.clonedWith ?? undefined,
-		cloneError: result.cloneError ?? undefined,
 		sourceCwd: cwd,
 		baseCommit,
+		clonedWith: result.clonedWith ?? undefined,
+		cloneError: result.cloneError ?? undefined,
+		keptChanges: false,
 		created: true,
 		createdBranch,
 	};
@@ -168,18 +173,13 @@ interface WorktreeSnapshot {
 }
 
 async function snapshotSessionWorktree(wt: SessionWorktree): Promise<WorktreeSnapshot> {
-	const sourceRepo = vcs.git(wt.sourceCwd);
-	let moved = true;
+	const { checkout: worktreeRepo, branchRepo, missingBranchRepoMeansMoved } = await worktreeBackend(wt).inspect(wt);
+	let moved = missingBranchRepoMeansMoved;
 	let tip: string | null | undefined;
-	if (sourceRepo) {
-		tip = await sourceRepo.resolveRef(`refs/heads/${wt.branch}`);
+	if (branchRepo) {
+		tip = await branchRepo.resolveRef(`refs/heads/${wt.branch}`);
 		moved = tip !== null && tip !== undefined && tip !== wt.baseCommit;
 	}
-	const worktreeExists = await fs.stat(wt.path).then(
-		() => true,
-		() => false,
-	);
-	const worktreeRepo = worktreeExists ? vcs.git(wt.path) : null;
 	if (!worktreeRepo) {
 		return { state: { dirty: false, moved, offBranch: false }, fingerprint: `missing\0${tip ?? ""}`, present: false };
 	}
@@ -208,7 +208,8 @@ async function snapshotSessionWorktree(wt: SessionWorktree): Promise<WorktreeSna
 /**
  * Gets the state of `wt`. A missing worktree is not dirty and not off-branch; a
  * deleted branch has not moved; a missing source repo counts as moved so the
- * branch is never deleted.
+ * branch is never deleted; a missing ovnfs checkout took its branch along, so
+ * it has not moved. Throws when the daemon serving an ovnfs checkout cannot start.
  */
 export async function inspectSessionWorktree(wt: SessionWorktree): Promise<SessionWorktreeState> {
 	return (await snapshotSessionWorktree(wt)).state;
@@ -305,12 +306,6 @@ export async function removeExitWorktrees(plan: readonly WorktreeExitPlan[]): Pr
  * Throws a user-facing error when git refuses either step.
  */
 export async function removeSessionWorktree(wt: SessionWorktree, moved: boolean): Promise<void> {
-	if (!wt.created) return;
-	const repository = vcs.requireGit(wt.sourceCwd);
-	if (!(await repository.worktreeRemove(wt.path, true))) {
-		throw new Error(`Failed to remove worktree ${wt.path}; branch '${wt.branch}' kept.`);
-	}
-	if (wt.createdBranch && !moved && !(await repository.deleteBranch(wt.branch, true))) {
-		throw new Error(`Removed worktree ${wt.path} but failed to delete branch '${wt.branch}'.`);
-	}
+	if (wt.created === false) return;
+	await worktreeBackend(wt).remove(wt, moved || wt.createdBranch === false);
 }

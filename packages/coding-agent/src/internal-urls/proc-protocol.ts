@@ -1,10 +1,11 @@
 import { formatDuration } from "@oh-my-pi/pi-tui/render/render-utils";
-import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
-import { formatBytes, logger, sanitizeText, truncate } from "@oh-my-pi/pi-utils";
+import type { UnitSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
+import { formatBytes, logger, sanitizeText, spillUrl, truncate } from "@oh-my-pi/pi-utils";
 import type { AsyncJob } from "../async";
 import {
 	agentStaleNote,
 	cancelAgentRegistration,
+	describeEvictedJob,
 	executeCancel,
 	runningAgentsOutsideJobs,
 	runningTaskProgressSuffix,
@@ -19,6 +20,7 @@ import {
 	serviceLogPath,
 	serviceLogsWithRows,
 	serviceStatus,
+	serviceUnitLogPath,
 	stopService,
 } from "../launch/services";
 import type { ProcReadDetails } from "@oh-my-pi/pi-tui/tools/proc-render";
@@ -78,6 +80,12 @@ function writeOnlyError(id: string, action: "kill" | "mode"): string {
 	return `proc://${id}/mode is write-only; modes and stdin are services-only, not available for in-process jobs or agents. To set a service's mode, call write with ${JSON.stringify({ path: `proc://${id}/mode`, content: "persist" })} (persist, session, or detached); read proc://${id} for its current mode.`;
 }
 
+/** A service's `proc://<id>/mode` value, derived from its unit policy. */
+function serviceMode(service: UnitSnapshot): "persist" | "session" | "detached" {
+	if (service.policy.hold === "detached") return "detached";
+	return service.policy.hold === "persist" ? "persist" : "session";
+}
+
 function ownerJobs(session: ToolSession): AsyncJob[] {
 	return session.asyncJobManager?.getAllJobs({ ownerId: session.getAgentId?.() ?? undefined }) ?? [];
 }
@@ -88,6 +96,11 @@ function ownerJobs(session: ToolSession): AsyncJob[] {
  */
 function runningJobOfAgent(jobs: readonly AsyncJob[], agentId: string): AsyncJob | undefined {
 	return jobs.find(job => job.status === "running" && job.agentId === agentId && job.id !== agentId);
+}
+
+/** A job's status as listed: a running job still waiting for its execution slot (a spawn behind `task.maxConcurrency`) is `queued`. */
+function jobState(job: AsyncJob): string {
+	return job.status === "running" && job.queued ? "queued" : job.status;
 }
 
 function textResource(
@@ -114,11 +127,35 @@ function textResource(
  * output. A stream read is decoded, carriage-return progress becomes lines,
  * and control sequences are stripped, as for the job's output.
  */
-function streamsResource(url: InternalUrl, session: ToolSession, id: string, stream?: number): InternalResource {
+async function streamsResource(
+	url: InternalUrl,
+	session: ToolSession,
+	id: string,
+	stream: number | undefined,
+	signal: AbortSignal | undefined,
+): Promise<InternalResource> {
 	const job = ownerJobs(session).find(item => item.id === id);
-	if (!job) throw new Error(`Background job not found: ${id}`);
+	if (!job) {
+		const kind = runningAgentsOutsideJobs(session).some(agent => agent.id === id)
+			? "an agent"
+			: cfgLaunchEnabled.get(session.settings) &&
+				  (await listServicesTolerant(session, signal)).services.some(service => service.key === id)
+				? "a service"
+				: undefined;
+		if (kind) throw new Error(`${id} is ${kind}; it has no pipe streams. Read proc://${id} for its output.`);
+		const evicted = session.asyncJobManager?.getEvictedJob(id, { ownerId: session.getAgentId?.() ?? undefined });
+		throw new Error(
+			evicted ? `No pipe streams kept: ${describeEvictedJob(evicted)}` : `Background job not found: ${id}`,
+		);
+	}
 	const streams = job.process?.streams;
-	if (!streams) return textResource(url, `${id} has no available pipe streams.`, undefined, stream === undefined);
+	if (!streams)
+		return textResource(
+			url,
+			`${id} has no available pipe streams. Only bash jobs with \`|\` stages record them. Read proc://${id} for its output.`,
+			undefined,
+			stream === undefined,
+		);
 	if (stream === undefined) {
 		const rows = streams.list().map(info => {
 			// Stage source spans lines (`for …; do …; done`); a row shows each on one line.
@@ -127,7 +164,13 @@ function streamsResource(url: InternalUrl, session: ToolSession, id: string, str
 			);
 			return `proc://${id}/streams/${info.id} ${info.open ? "open" : "closed"} ${formatBytes(info.total)} — ${producer} → ${consumer}`;
 		});
-		return textResource(url, rows.join("\n") || `${id} has not piped anything yet.`, undefined, true);
+		return textResource(
+			url,
+			rows.join("\n") ||
+				`${id} has piped nothing between \`|\` stages yet (a command without \`|\` never does). Read proc://${id} for its output.`,
+			undefined,
+			true,
+		);
 	}
 	const chunk = streams.read(stream);
 	if (!chunk)
@@ -163,7 +206,8 @@ export class ProcProtocolHandler implements ProtocolHandler {
 
 	/**
 	 * A project service's output log. Jobs and running agents have no log file,
-	 * so their URLs (and the listing) locate to null. Never contacts the daemon broker.
+	 * so their URLs (and the listing) locate to null without contacting the daemon;
+	 * an id the daemon has no service for locates to null too.
 	 */
 	async locate(url: InternalUrl, context?: ResolveContext, options?: LocateOptions): Promise<string | null> {
 		const session = context?.session;
@@ -173,6 +217,7 @@ export class ProcProtocolHandler implements ProtocolHandler {
 		if (ownerJobs(session).some(job => job.id === id)) return null;
 		if (runningAgentsOutsideJobs(session).some(agent => agent.id === id)) return null;
 		const logPath = await serviceLogPath(session, id);
+		if (!logPath) return null;
 		return options?.create || (await Bun.file(logPath).exists()) ? logPath : null;
 	}
 
@@ -181,10 +226,10 @@ export class ProcProtocolHandler implements ProtocolHandler {
 		if (!session) throw new Error("proc:// requires a tool session");
 		const procTarget = target(url);
 		const { id } = procTarget;
-		if (procTarget.action === "streams") return streamsResource(url, session, id, procTarget.stream);
+		if (procTarget.action === "streams") return streamsResource(url, session, id, procTarget.stream, context?.signal);
 		if (procTarget.action !== "stdin") throw new Error(writeOnlyError(id || "<id>", procTarget.action));
 		const jobs = ownerJobs(session);
-		// Jobs and agents are in-process; a hung broker must not hide them.
+		// Jobs and agents are in-process; a hung daemon must not hide them.
 		const { services, error: servicesError } = cfgLaunchEnabled.get(session.settings)
 			? await listServicesTolerant(session, context?.signal)
 			: { services: [], error: undefined };
@@ -199,14 +244,14 @@ export class ProcProtocolHandler implements ProtocolHandler {
 							: `in ${formatDuration(job.endTime - job.startTime)}`;
 					const progress = runningTaskProgressSuffix(snapshots[index], { duration: false });
 					const intent = job.intent ? `${job.intent} — ` : "";
-					return `${job.id} [${job.type}] ${job.status} ${duration} — ${job.name ? `${job.name} — ` : ""}${intent}${job.label.replace(/\s+/g, " ")}${progress}`;
+					return `${job.id} [${job.type}] ${jobState(job)} ${duration} — ${job.name ? `${job.name} — ` : ""}${intent}${job.label.replace(/\s+/g, " ")}${progress}`;
 				}),
 				...runningAgentsOutsideJobs(session).map(
 					agent =>
 						`${agent.id} [task] running up ${formatDuration(agent.ageMs)} — ${agent.activity ?? "agent"}${agentStaleNote(agent)}`,
 				),
 				...services.map(service => serviceStatus(service)),
-				...(servicesError ? [`Services unavailable (daemon broker): ${servicesError}`] : []),
+				...(servicesError ? [`Services unavailable (daemon): ${servicesError}`] : []),
 			];
 			return textResource(url, rows.join("\n") || "No background jobs or services.", undefined, true, {
 				jobs: snapshots,
@@ -214,12 +259,12 @@ export class ProcProtocolHandler implements ProtocolHandler {
 				daemons: services,
 			});
 		}
-		const service = services.find(item => item.name === id);
+		const service = services.find(item => item.key === id);
 		const job = jobs.find(item => item.id === id) ?? (service ? undefined : runningJobOfAgent(jobs, id));
 		if (job && service) throw new Error(`proc://${id} is ambiguous: both job ${id} and service ${id} exist.`);
 		if (service) {
-			const header = `${serviceStatus(service)}\nready=${service.readyAt !== undefined || service.state === "ready" || service.state === "running"} persist=${service.persist} detached=${service.detached}${service.exitCode === undefined ? "" : ` exit=${service.exitCode}`}`;
-			const sourcePath = await serviceLogPath(session, id);
+			const header = `${serviceStatus(service)}\nready=${service.readyAt !== undefined || service.state === "ready" || service.state === "running"} mode=${serviceMode(service)}${service.exitCode === undefined ? "" : ` exit=${service.exitCode}`}`;
+			const sourcePath = serviceUnitLogPath(service);
 			const logs = await serviceLogsWithRows(session, id, context?.signal);
 			return textResource(
 				url,
@@ -232,7 +277,7 @@ export class ProcProtocolHandler implements ProtocolHandler {
 		if (job) {
 			const snapshot = snapshotJobs(session, [job])[0];
 			const lines = [
-				`${job.id} [${job.type}] — ${job.status} — ${job.intent ? `${job.intent} — ` : ""}${job.label}${runningTaskProgressSuffix(snapshot, { duration: true })}`,
+				`${job.id} [${job.type}] — ${jobState(job)} — ${job.intent ? `${job.intent} — ` : ""}${job.label}${runningTaskProgressSuffix(snapshot, { duration: true })}`,
 			];
 			if (job.name) lines.push(`Name: ${job.name}`);
 			if (job.resultText) lines.push(job.resultText);
@@ -242,7 +287,7 @@ export class ProcProtocolHandler implements ProtocolHandler {
 				if (typeof details?.output === "string") lines.push(details.output);
 				if (job.type === "task") lines.push(`agent://${job.agentId ?? job.id}`);
 				const artifact = details?.meta?.truncation?.artifactId;
-				if (artifact) lines.push(`artifact://${artifact}`);
+				if (artifact) lines.push(spillUrl(artifact));
 			} else if (job.type === "task") {
 				const agentId = job.agentId ?? job.id;
 				const successor = runningJobOfAgent(jobs, agentId);
@@ -262,6 +307,8 @@ export class ProcProtocolHandler implements ProtocolHandler {
 				false,
 				{ agents: [agent] },
 			);
+		const evicted = session.asyncJobManager?.getEvictedJob(id, { ownerId: session.getAgentId?.() ?? undefined });
+		if (evicted) return textResource(url, describeEvictedJob(evicted));
 		if (servicesError)
 			throw new Error(`Background job or service not found: ${id} (services unavailable: ${servicesError})`);
 		throw new Error(`Background job or service not found: ${id}`);
@@ -277,7 +324,7 @@ export class ProcProtocolHandler implements ProtocolHandler {
 				"Write requires proc://<service> for stdin, proc://<id>/kill, or proc://<service>/mode; stdin and modes are services-only.",
 			);
 		const ownerId = session.getAgentId?.() ?? undefined;
-		// Stamped before the broker lookup below: a job that settles while that
+		// Stamped before the daemon lookup below: a job that settles while that
 		// await runs finished during this call, and the kill snapshot must say so
 		// rather than calling the result genuinely late (#16052 review).
 		const callStartedAt = Date.now();
@@ -287,16 +334,16 @@ export class ProcProtocolHandler implements ProtocolHandler {
 		const exactJob = jobs.find(item => item.id === id);
 		const agentJob = exactJob ? undefined : runningJobOfAgent(jobs, id);
 		const agent = runningAgentsOutsideJobs(session).find(item => item.id === id);
-		let service: DaemonSnapshot | undefined;
+		let service: UnitSnapshot | undefined;
 		if (cfgLaunchEnabled.get(session.settings)) {
 			try {
 				service = await findService(session, id, context?.signal);
 			} catch (error) {
-				// Killing an in-process job or agent needs no broker. Skipping the
+				// Killing an in-process job or agent needs no daemon. Skipping the
 				// lookup only loses the job/service collision check, which cannot be
-				// answered while the broker is down anyway.
+				// answered while the daemon is down anyway.
 				if (context?.signal?.aborted || action !== "kill" || !(exactJob || agentJob || agent)) throw error;
-				logger.warn("Daemon broker lookup failed; cancelling in-process target", {
+				logger.warn("Daemon lookup failed; cancelling in-process target", {
 					id,
 					error: error instanceof Error ? error.message : String(error),
 				});
@@ -349,6 +396,13 @@ export class ProcProtocolHandler implements ProtocolHandler {
 			return {
 				content: [{ type: "text", text: outcome.message }],
 				details: { proc: { op: "cancel", jobs: [], cancelled: [{ id, status: outcome.status }] } },
+			};
+		}
+		const evicted = manager?.getEvictedJob(id, { ownerId });
+		if (evicted) {
+			return {
+				content: [{ type: "text", text: `Nothing to cancel: ${describeEvictedJob(evicted)}` }],
+				details: { proc: { op: "cancel", jobs: [], cancelled: [{ id, status: "already_completed" }] } },
 			};
 		}
 		throw new Error(`Background job or service not found: ${id}`);

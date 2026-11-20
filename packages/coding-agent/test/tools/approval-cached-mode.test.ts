@@ -30,6 +30,7 @@ import { approvalTargetKey, approvalTreeSearchKey } from "@oh-my-pi/pi-coding-ag
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { resolveXdevTool, type XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
+import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getAgentDir, isRecord, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 /** Tool that keys `args.path` like read/write/edit do. */
@@ -320,9 +321,47 @@ describe("grant choices in the prompt", () => {
 		fs.writeFileSync(path.join(desktop, "alpha.txt"), "x");
 		const { ui, prompts } = recordingUi();
 		await requestApproval(ui, pathTool("read", "read", desktop), { path: "notes.txt" }, { grants: true });
-		expect(prompts[0]!.grants?.map(grant => grant.scope)).toEqual(["folder", "target"]);
-		for (const entry of ["TestFolder/", "alpha.txt", "notes.txt"]) {
-			expect(prompts[0]!.full).toContain(entry);
+		const label = shortenPath(approvalDirectoryKey(desktop).replace(/[\\/]+$/, ""));
+		expect(prompts[0]!.grants).toEqual([
+			{ scope: "folder", label: `允许目录：${label}`, alwaysLabel: `始终允许目录：${label}` },
+			{ scope: "target", label: "允许文件", alwaysLabel: "始终允许文件" },
+		]);
+		expect(prompts[0]!.full.split("\n")).toEqual([
+			"Allow tool: read",
+			`Folder: ${label} — 3 entries (1 folder, 2 files)`,
+			"  - TestFolder/",
+			"  - alpha.txt",
+			"  - notes.txt",
+		]);
+	});
+
+	it("caps the compact listing and bounds the folder scan", async () => {
+		const agentDir = freshAgentDir();
+		const huge = path.join(agentDir, "Huge");
+		fs.mkdirSync(huge);
+		const names: string[] = [];
+		for (let index = 0; index < 205; index += 1) {
+			const name = `entry-${String(index).padStart(3, "0")}.txt`;
+			fs.writeFileSync(path.join(huge, name), "x");
+			names.push(name);
+		}
+		const { ui, prompts } = recordingUi();
+		await requestApproval(ui, pathTool("write", "write", huge), { path: "entry-000.txt" }, { grants: true });
+		const compact = prompts[0]!.compact.split("\n");
+		expect(compact[1]).toContain("200+ entries");
+		expect(compact.at(-1)).toBe("  … 196 more");
+		// The scan stops after 200 of the 205 entries, in the order the directory returns them:
+		// creation order on some filesystems, name-hash order on others (ext4), so which five go
+		// unread depends on the machine. The prompt names the first four in sort order of those it
+		// read; with five unread at most, the i-th of them lies between the i-th and the (i+5)-th name.
+		const listed = compact.slice(2, -1);
+		expect(listed).toHaveLength(4);
+		const listedNames = listed.map(line => line.replace(/^ {2}- /, ""));
+		expect(listed).toEqual(listedNames.map(name => `  - ${name}`));
+		expect(listedNames).toEqual([...new Set(listedNames)].sort());
+		for (const [i, name] of listedNames.entries()) {
+			expect(names.indexOf(name)).toBeGreaterThanOrEqual(i);
+			expect(names.indexOf(name)).toBeLessThanOrEqual(i + 5);
 		}
 	});
 

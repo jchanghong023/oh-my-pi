@@ -63,10 +63,7 @@ const todoSchema = type({
 	"list?": InitListEntry.array().describe("phases for init"),
 	"task?": type("string | string[]").describe("verbatim task content; array targets several (not start)"),
 	"phase?": type("string").describe("required for append; target phase name (created if absent)"),
-	// No `atLeastLength(1)` here: `items` is only meaningful for `init`/`append`,
-	// and both enforce non-empty with op-specific errors. A stray `items: []` on
-	// an op that ignores it (e.g. `view`) must not be a hard schema rejection.
-	"items?": type("string").array().describe("tasks for flat init or append; required and non-empty for append"),
+	"items?": type("string").array().describe("tasks for init, append, or as targets for done/drop/rm/block/unblock"),
 	"reason?": type("string").describe("blocker note for block"),
 });
 
@@ -306,14 +303,21 @@ function resolvePhaseOrError(phases: TodoPhase[], name: string | undefined, erro
 	return phase;
 }
 
-function getTaskTargets(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoItem[] {
+/** The tasks `done`/`drop`/`rm` name: `task`, else `items` (the list models pass alongside), as contents. */
+function namedTaskContents(phases: TodoPhase[], entry: TodoOpEntryValue): string[] {
 	const contents = todoTaskTargets(phases, entry.task);
+	return contents.length > 0 ? contents : (entry.items ?? []);
+}
+
+function getTaskTargets(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoItem[] {
+	const contents = namedTaskContents(phases, entry);
 	if (contents.length > 0) return resolveTasksOrError(phases, contents, errors).map(hit => hit.task);
 	if (entry.phase) {
 		const phase = resolvePhaseOrError(phases, entry.phase, errors);
 		return phase ? [...phase.tasks] : [];
 	}
-	return phases.flatMap(phase => phase.tasks);
+	errors.push(`${entry.op} needs a task, items or a phase`);
+	return [];
 }
 
 /** Phase name for `init` with an absent or empty phase name. */
@@ -396,7 +400,7 @@ function appendItems(phases: TodoPhase[], entry: TodoOpEntryValue, errors: strin
 }
 
 function removeTasks(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
-	const contents = todoTaskTargets(phases, entry.task);
+	const contents = namedTaskContents(phases, entry);
 	if (contents.length > 0) {
 		for (const hit of resolveTasksOrError(phases, contents, errors)) {
 			hit.phase.tasks = hit.phase.tasks.filter(candidate => candidate !== hit.task);
@@ -409,9 +413,7 @@ function removeTasks(phases: TodoPhase[], entry: TodoOpEntryValue, errors: strin
 		phase.tasks = [];
 		return phases;
 	}
-	for (const phase of phases) {
-		phase.tasks = [];
-	}
+	errors.push("rm needs a task, items or a phase");
 	return phases;
 }
 
@@ -450,10 +452,6 @@ function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string
 			return phases;
 		}
 		case "block": {
-			if (!entry.task && !entry.phase) {
-				errors.push("block requires a task or phase target");
-				return phases;
-			}
 			const reason = entry.reason?.replace(/\s+/g, " ").trim() || undefined;
 			for (const task of getTaskTargets(phases, entry, errors)) {
 				if (task.status !== "pending" && task.status !== "in_progress" && task.status !== "blocked") continue;
@@ -463,10 +461,6 @@ function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string
 			return phases;
 		}
 		case "unblock": {
-			if (!entry.task && !entry.phase) {
-				errors.push("unblock requires a task or phase target");
-				return phases;
-			}
 			for (const task of getTaskTargets(phases, entry, errors)) {
 				if (task.status === "blocked") {
 					task.status = "pending";
@@ -653,9 +647,12 @@ function formatSummary(phases: TodoPhase[], errors: string[], readOnly = false):
 		.filter(phase => phase.tasks.length > 0);
 	const remainingTasks = remainingByPhase.flatMap(phase => phase.tasks.map(task => ({ ...task, phase: phase.name })));
 
-	let currentIdx = phases.findIndex(phase =>
-		phase.tasks.some(task => task.status === "pending" || task.status === "in_progress"),
-	);
+	// The active phase holds the in-progress task (`start` can pick one in any phase); without one, the earliest
+	// phase with open work.
+	let currentIdx = phases.findIndex(phase => phase.tasks.some(task => task.status === "in_progress"));
+	if (currentIdx === -1) {
+		currentIdx = phases.findIndex(phase => phase.tasks.some(task => task.status === "pending"));
+	}
 	if (currentIdx === -1) currentIdx = phases.length - 1;
 	const current = phases[currentIdx];
 	const done = current.tasks.filter(task => task.status === "completed" || task.status === "abandoned").length;
@@ -673,8 +670,7 @@ function formatSummary(phases: TodoPhase[], errors: string[], readOnly = false):
 	// Closed = completed + abandoned, mirroring the per-phase `done` count.
 	const closedAll = tasks.filter(task => task.status === "completed" || task.status === "abandoned").length;
 	const blockedAll = tasks.filter(task => task.status === "blocked").length;
-	// The active phase is the EARLIEST one still holding open work, so the
-	// in-progress pointer can sit in a phase whose successors already have
+	// The in-progress pointer can sit in a phase whose successors already have
 	// completed tasks. Detect that "worked ahead" case to explain the
 	// otherwise-surprising backward pointer instead of letting it read as a
 	// completed task reverting to pending.
@@ -688,7 +684,7 @@ function formatSummary(phases: TodoPhase[], errors: string[], readOnly = false):
 	lines.push(
 		`Active phase ${currentIdx + 1}/${phases.length} "${current.name}" (${done}/${current.tasks.length})${
 			workedAhead
-				? " — earliest phase with open tasks; the in-progress pointer auto-advances to the earliest open task on each completion, so it can sit behind out-of-order work (nothing was un-completed)."
+				? " — the in-progress pointer auto-advances to the earliest open task on each completion, so it can sit behind out-of-order work (nothing was un-completed)."
 				: "."
 		}`,
 	);
@@ -756,13 +752,13 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		if (
 			(op === "done" || op === "drop" || op === "rm" || op === "block" || op === "unblock") &&
 			!entry.phase &&
-			!entry.task?.length
+			namedTaskContents(previousPhases, entry).length === 0
 		) {
 			return {
 				content: [
 					{
 						type: "text",
-						text: `${op} requires a task or phase target. No tasks were changed. Use view to recover the exact target.`,
+						text: `${op} requires a task, items, or phase target. No tasks were changed. Use view to recover the exact target.`,
 					},
 				],
 				details: { op, phases: previousPhases, storage },

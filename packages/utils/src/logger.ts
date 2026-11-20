@@ -12,8 +12,8 @@
  * on the first record written. Records are batched — one write per second or
  * per 64 KiB — while `warn`/`error` records are written at once together with
  * everything buffered before them; exit, fatal, and signal paths flush the
- * rest. `OMP_LOG_LEVEL` limits file levels (default: warn offline, all otherwise).
- * Offline filtering also gates console output and registered sinks.
+ * rest. `OMP_LOG_LEVEL` limits file and console levels (default: warn offline,
+ * all otherwise). Offline filtering also gates registered sinks.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
@@ -588,10 +588,11 @@ function isOffline(): boolean {
 }
 
 /**
- * Rank of the most verbose level the file transport persists. Explicit levels
- * win; offline defaults to warn, other processes to debug (everything).
+ * Rank of the most verbose level the local transports (file and console)
+ * write. Explicit `OMP_LOG_LEVEL` wins; offline defaults to warn, other
+ * processes to debug (everything).
  */
-function resolveFileLevelRank(): number {
+function resolveLevelRank(): number {
 	const requested = process.env.OMP_LOG_LEVEL?.trim().toLowerCase();
 	return requested && Object.hasOwn(LOG_LEVEL_RANK, requested)
 		? LOG_LEVEL_RANK[requested as LogLevel]
@@ -602,7 +603,7 @@ function resolveFileLevelRank(): number {
 
 /** Drop filtered offline records before context serialization or sink delivery. */
 function isOfflineLevelFiltered(level: LogLevel): boolean {
-	return isOffline() && LOG_LEVEL_RANK[level] > resolveFileLevelRank();
+	return isOffline() && LOG_LEVEL_RANK[level] > resolveLevelRank();
 }
 
 /**
@@ -629,8 +630,8 @@ let transportOpts: { console?: boolean; file?: boolean | string } = { file: true
 interface LocalTransports {
 	readonly file: RotatingFileSink | undefined;
 	readonly console: boolean;
-	/** Rank of the most verbose level written to {@link file}. */
-	readonly fileLevelRank: number;
+	/** Rank of the most verbose level written to {@link file} and the console. */
+	readonly levelRank: number;
 }
 
 /** Local transports, constructed lazily on first log emission. */
@@ -661,8 +662,9 @@ export function initializeDiagnosticLogging(mode?: string): void {
 	if (isOfflineLevelFiltered("info")) return;
 	const transports = getLocalTransports();
 	const file = transports.file;
-	const actualPath = file?.prepare();
-	if (!file || !actualPath || LOG_LEVEL_RANK.info > transports.fileLevelRank) return;
+	if (!file || LOG_LEVEL_RANK.info > transports.levelRank) return;
+	const actualPath = file.prepare();
+	if (!actualPath) return;
 	file.write(
 		formatLogRecord(
 			"info",
@@ -677,8 +679,8 @@ export function initializeDiagnosticLogging(mode?: string): void {
 				version: VERSION,
 				platform: process.platform,
 				path: actualPath,
-				log_level: Object.entries(LOG_LEVEL_RANK).find(([, rank]) => rank === transports.fileLevelRank)?.[0],
-				...(mode && /^(?:cli|interactive|headless|rpc|print)$/.test(mode) ? { mode } : {}),
+				log_level: Object.entries(LOG_LEVEL_RANK).find(([, rank]) => rank === transports.levelRank)?.[0],
+				...(mode && /^(?:cli|daemon|interactive|headless|rpc|print)$/.test(mode) ? { mode } : {}),
 			},
 			formatLocalTimestamp(new Date()),
 			undefined,
@@ -694,7 +696,7 @@ export function shutdownDiagnosticLogging(exitCode = process.exitCode ?? 0): voi
 	const transports = activeTransports;
 	const file = transports?.file;
 	if (!transports || !file?.filePath) return;
-	if (LOG_LEVEL_RANK.info > transports.fileLevelRank) {
+	if (LOG_LEVEL_RANK.info > transports.levelRank) {
 		flush();
 		return;
 	}
@@ -718,7 +720,7 @@ function buildTransports(opts: { console?: boolean; file?: boolean | string }): 
 	return {
 		file: opts.file ? makeFileTransport(typeof opts.file === "string" ? opts.file : undefined) : undefined,
 		console: opts.console === true,
-		fileLevelRank: resolveFileLevelRank(),
+		levelRank: resolveLevelRank(),
 	};
 }
 
@@ -741,12 +743,11 @@ function emitLocally(
 ): void {
 	const transports = getLocalTransports();
 	const rank = LOG_LEVEL_RANK[level];
-	const file = rank <= transports.fileLevelRank ? transports.file : undefined;
-	if (!file && !transports.console) return;
+	if (rank > transports.levelRank || (!transports.file && !transports.console)) return;
 	const now = new Date();
 	const scoped = foreignTimestamp ? undefined : logContextStorage.getStore();
 	const line = formatLogRecord(level, message, context, formatLocalTimestamp(foreignTimestamp ?? now), scoped);
-	file?.write(line, rank <= IMMEDIATE_FLUSH_RANK || exiting, localDay(now));
+	transports.file?.write(line, rank <= IMMEDIATE_FLUSH_RANK || exiting, localDay(now));
 	if (transports.console) fs.writeSync(1, `${line}${os.EOL}`);
 }
 
@@ -755,13 +756,13 @@ function emitLocally(
  * long-running services (the auth broker, etc.) that want their structured
  * logs piped into a process supervisor instead of the rotating file.
  * The previous file transport writes its buffered records before closing, and
- * the file level (`OMP_LOG_LEVEL`) is re-read on each reconfiguration.
+ * the level (`OMP_LOG_LEVEL`) is re-read on each reconfiguration.
  */
 export function setTransports(opts: { console?: boolean; file?: boolean | string }): void {
 	transportOpts = opts;
 	if (!activeTransports) return; // applied lazily when local logging is first initialized
 	const previousTransports = activeTransports;
-	activeTransports = { file: undefined, console: false, fileLevelRank: previousTransports.fileLevelRank };
+	activeTransports = { file: undefined, console: false, levelRank: previousTransports.levelRank };
 	previousTransports.file?.close();
 	activeTransports = buildTransports(opts);
 }

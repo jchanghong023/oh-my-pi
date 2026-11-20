@@ -451,6 +451,7 @@ function normalizeSessionMessageForProviderReplay(message: AgentMessage): unknow
 				role: message.role,
 				customType: message.customType,
 				content: normalizeProviderReplayValue(message.content),
+				excludeFromContext: message.role === "custom" ? message.excludeFromContext : undefined,
 			};
 		case "branchSummary":
 			return { role: message.role, summary: message.summary };
@@ -1246,7 +1247,7 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 			return out;
 		}
 		case "custom": {
-			if (!isCustomMessageContent(m.content)) return [];
+			if (m.excludeFromContext || !isCustomMessageContent(m.content)) return [];
 			if (isSteeringUserMessage(m)) {
 				const converted = convertMessageToLlm(wrapSteeringUserMessage(m));
 				return converted ? [converted] : [];

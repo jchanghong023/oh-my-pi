@@ -163,7 +163,7 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 		{ changed: ["Cargo.lock"], packages: [], full: false, bunFull: true },
 		{
 			changed: ["packages/coding-agent/src/tools/knowledge-search.ts"],
-			packages: ["pi-knowledge", "other-crate"],
+			packages: ["omp-knowledge", "other-crate"],
 			full: false,
 			bunFull: false,
 		},
@@ -173,7 +173,7 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 			full: false,
 			bunFull: false,
 		},
-		{ changed: ["Cargo.lock"], packages: ["pi-natives"], full: false, bunFull: true },
+		{ changed: ["Cargo.lock"], packages: ["omp-natives"], full: false, bunFull: true },
 		{ changed: ["packages/coding-agent/src/tools/knowledge-search.ts"], packages: [], full: true, bunFull: true },
 	] as const;
 	for (const scenario of cases) {
@@ -216,7 +216,7 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 		const rust = commands.filter(
 			command => command.label === (scenario.full ? "test/Rust workspace" : "test/Rust fork features"),
 		);
-		const forkAffected = scenario.packages.some(pkg => pkg === "pi-knowledge" || pkg === "pi-natives");
+		const forkAffected = scenario.packages.some(pkg => pkg === "omp-knowledge" || pkg === "omp-natives");
 		expect(rust).toHaveLength(scenario.full || forkAffected ? 1 : 0);
 		if (rust.length) {
 			expect(rust[0]!.argv).toEqual([
@@ -285,7 +285,7 @@ test("delta failure and absence of a qualified baseline retain the full Rust for
 		expect(JSON.parse(rust[0]!.env!.OMP_RUST_DELTA_SELECTION!)).toMatchObject({
 			tool: "cargo-delta",
 			mode: "full",
-			packages: ["pi-knowledge", "pi-natives"],
+			packages: ["omp-knowledge", "omp-natives"],
 		});
 	}
 });
@@ -515,7 +515,7 @@ test("fulltest records revision once and passes scheduling hints after native ge
 			selectRustPackages: async () => ({
 				tool: "cargo-delta",
 				mode: "full",
-				packages: ["pi-knowledge", "pi-natives"],
+				packages: ["omp-knowledge", "omp-natives"],
 				reason: "fixture",
 			}),
 			fastcheckCommands: async () => [],
@@ -592,7 +592,7 @@ if (label === ordinary) process.exit(17);
 						selectRustPackages: async () => ({
 							tool: "cargo-delta",
 							mode: "full",
-							packages: ["pi-knowledge", "pi-natives"],
+							packages: ["omp-knowledge", "omp-natives"],
 							reason: "fixture",
 						}),
 						fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],

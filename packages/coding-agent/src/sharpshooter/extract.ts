@@ -12,6 +12,7 @@ import extractInputTemplate from "../prompts/memories/sharpshooter-extract-input
 import extractSystemTemplate from "../prompts/memories/sharpshooter-extract-system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { customMessageContentText } from "../session/checkpoint-entries";
+import { journalCompletion } from "../session/model-usage-journal";
 import { cfgProvidersThinkingProbe } from "../session/settings";
 import { appendSharpshooterDelta } from "./queue";
 import type { SharpshooterDelta, SharpshooterDeltaKind, SharpshooterDeltaSource, SharpshooterFriction } from "./types";
@@ -259,6 +260,7 @@ async function runSharpshooterExtraction(
 	if (!model || session.isDisposed || (cfgOffline.get(settings) && session.model?.provider !== model.provider)) return;
 
 	const input = prompt.render(extractInputTemplate, { ...envelope });
+	const journal = journalCompletion(session.sessionManager, { purpose: "sharpshooter:extract" });
 	const response = await retryTransientCompletion(
 		() => {
 			if (cfgOffline.get(settings) && session.model?.provider !== model.provider) {
@@ -278,6 +280,7 @@ async function runSharpshooterExtraction(
 					reasoning: clampThinkingLevelForModel(model, Effort.Low),
 					thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 					toolChoice: "required",
+					onAttempt: message => journal?.(message, input),
 				},
 			);
 		},

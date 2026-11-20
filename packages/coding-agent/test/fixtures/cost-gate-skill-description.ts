@@ -135,7 +135,7 @@ try {
 			disableExtensionDiscovery: true,
 			enableMCP: false,
 			enableLsp: false,
-			cacheWarming: false,
+			cacheWarming: "off",
 			contextFiles: [],
 			promptTemplates: [],
 			slashCommands: [],

@@ -1339,7 +1339,7 @@ export const cfgProvidersCacheWarming = register({
 		tab: "providers",
 		group: "协议",
 		label: "缓存预热",
-		description: "在 Prompt 缓存条目即将过期前，以一个 Token 的输出预算重新发送上次请求",
+		description: "在 Prompt 缓存条目即将过期前刷新缓存（Anthropic 使用零 Token 预热，其他提供商使用一个 Token 重放）",
 		options: [
 			{ value: "off", label: "关闭", description: "关闭缓存预热" },
 			{
@@ -1352,6 +1352,74 @@ export const cfgProvidersCacheWarming = register({
 				label: "空闲期间",
 				description: "在预期节省仍高于成本下限时，也在运行间隙刷新 5 分钟缓存条目",
 			},
+		],
+	},
+});
+
+export const cfgProvidersCacheWarmingStrategy = register({
+	id: "providers.cacheWarmingStrategy",
+	type: "enum",
+	values: ["auto", "keepalive", "compact"] as const,
+	default: "auto",
+	ui: {
+		tab: "providers",
+		group: "Protocol",
+		label: "Cache Warming Strategy",
+		description:
+			"How a long tool call is bridged once refreshing stops paying: compact the history before the cache expires, or let it expire",
+		options: [
+			{
+				value: "auto",
+				label: "Auto",
+				description:
+					"Refresh while the refresh spend stays within the cheaper buy-out, then compact large prompts or let the entry expire",
+			},
+			{ value: "keepalive", label: "Keep Alive", description: "Never compact; refresh until it stops paying" },
+			{
+				value: "compact",
+				label: "Compact",
+				description: "Compact at the first decision once the prompt reaches the bridge-compaction threshold",
+			},
+		],
+	},
+});
+
+export const cfgProvidersCacheWarmingCompactPercent = register({
+	id: "providers.cacheWarmingCompactPercent",
+	type: "number",
+	default: 60,
+	ui: {
+		tab: "providers",
+		group: "Protocol",
+		label: "Cache Bridge Compaction Percent",
+		description:
+			"Share of the context window a prompt must reach before a long tool call may be bridged with compaction; the lower of this and the token limit applies",
+		options: [
+			{ value: "40", label: "40%" },
+			{ value: "50", label: "50%" },
+			{ value: "60", label: "60%" },
+			{ value: "70", label: "70%" },
+			{ value: "80", label: "80%" },
+		],
+	},
+});
+
+export const cfgProvidersCacheWarmingCompactTokens = register({
+	id: "providers.cacheWarmingCompactTokens",
+	type: "number",
+	default: 150_000,
+	ui: {
+		tab: "providers",
+		group: "Protocol",
+		label: "Cache Bridge Compaction Tokens",
+		description:
+			"Prompt tokens from which a long tool call may be bridged with compaction; the lower of this and the window percent applies",
+		options: [
+			{ value: "50000", label: "50K tokens" },
+			{ value: "100000", label: "100K tokens" },
+			{ value: "150000", label: "150K tokens" },
+			{ value: "200000", label: "200K tokens" },
+			{ value: "300000", label: "300K tokens" },
 		],
 	},
 });

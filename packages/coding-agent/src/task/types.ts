@@ -43,7 +43,7 @@ export type NativeSubagentOverrides = Pick<
 	| "subagentHooks"
 	| "extensionProviderOwnership"
 	| "preloadedPreparedExtensions"
-	| "deferSkillDescriptionCompression"
+	| "deferHintCompression"
 > & {
 	onSessionCreated?: (session: AgentSession) => void | (() => void);
 };

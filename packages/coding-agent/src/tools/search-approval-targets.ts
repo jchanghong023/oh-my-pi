@@ -14,9 +14,11 @@
  */
 import { isReadableUrlPath } from "@oh-my-pi/pi-tui/tools/read";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { InternalUrlRouter } from "../internal-urls/router";
-import { approvalDirectoryKey } from "./approval-cache";
+import { approvalCacheKeyForPath, approvalDirectoryKey } from "./approval-cache";
 import { approvalTargetKey, approvalTreeSearchKey, isApprovalPublicUrl } from "./approval-targets";
+import type { ToolSession } from "./index";
 import { normalizePathLikeInput, resolveToCwd } from "./path-utils";
 
 /** List delimiters the execution-side path parser splits a root on. */
@@ -51,7 +53,7 @@ export function approvalRootCandidates(rawRoot: string): string[] {
  */
 export function searchApprovalCacheTargets(
 	roots: readonly string[],
-	cwd: string,
+	session: ToolSession,
 	splitBase: (root: string) => string,
 	isRecursive: (root: string) => boolean = () => true,
 	skipCandidate?: (candidate: string, wholeList: boolean) => boolean,
@@ -67,7 +69,7 @@ export function searchApprovalCacheTargets(
 			// A caller's own list syntax (grep's `!glob` exclusions) names parts that search nothing.
 			if (skipCandidate?.(candidate, candidates.length > 1 && index === 0)) continue;
 			const base = normalizePathLikeInput(splitBase(candidate));
-			const key = searchRootApprovalKey(base, cwd, isRecursive(candidate));
+			const key = searchRootApprovalKey(base, session, isRecursive(candidate));
 			if (key !== undefined) keys.add(key);
 		}
 	}
@@ -77,32 +79,38 @@ export function searchApprovalCacheTargets(
 /**
  * One cache key for a resolution-ready search root: a file reports the file key
  * a `read` of it would mint, a folder reports the folder key a folder grant
- * covers, a folder walked recursively reports its tree key, and a registered
- * internal URL keeps its normalized form. `undefined` for anything else — a
- * public web URL, or a root that does not resolve or does not exist.
+ * covers, and a folder walked recursively reports its tree key. Session-local
+ * URLs follow the same path rules; other internal URLs keep their normalized form.
  */
-function searchRootApprovalKey(root: string, cwd: string, recursive: boolean): string | undefined {
+function searchRootApprovalKey(root: string, session: ToolSession, recursive: boolean): string | undefined {
 	if (root.length === 0) return undefined;
 	if (isReadableUrlPath(root)) {
 		// A public page is ungated like a public read; a private host is gated like a file.
-		return isApprovalPublicUrl(root) ? undefined : approvalTargetKey(cwd, root);
+		return isApprovalPublicUrl(root) ? undefined : approvalTargetKey(session.cwd, root);
 	}
 	const router = InternalUrlRouter.instance();
-	if (router.canHandle(router.normalize(root))) return approvalTargetKey(cwd, root);
+	if (router.canHandle(router.normalize(root))) {
+		const key = approvalTargetKey(session.cwd, root, session);
+		if (!key || !path.isAbsolute(key)) return key;
+		return searchFolderKey(key, recursive) ?? key;
+	}
 	let absolute: string;
 	try {
-		absolute = resolveToCwd(root, cwd);
+		absolute = resolveToCwd(root, session.cwd);
 	} catch {
 		// resolveToCwd rejects unknown URL schemes; there is no filesystem target to key.
 		return undefined;
 	}
+	return searchFolderKey(absolute, recursive);
+}
+
+function searchFolderKey(absolute: string, recursive: boolean): string | undefined {
 	try {
-		if (!fs.statSync(absolute).isDirectory()) return approvalTargetKey(cwd, root);
+		if (!fs.statSync(absolute).isDirectory()) return approvalCacheKeyForPath(absolute);
 		const directoryKey = approvalDirectoryKey(absolute);
 		return recursive ? approvalTreeSearchKey(directoryKey) : directoryKey;
 	} catch {
-		// The search of a path that does not exist finds nothing and errors out;
-		// nothing about it is worth remembering.
+		// A missing path finds nothing and the search errors out.
 		return undefined;
 	}
 }

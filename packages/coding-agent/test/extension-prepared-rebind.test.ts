@@ -105,7 +105,6 @@ describe("prepared extension rebinding", () => {
 			preloadedCustomToolPaths: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		};
 		const bindings: ExtensionAPI[] = [];
 		const sdkExtension: ExtensionFactory = api => {

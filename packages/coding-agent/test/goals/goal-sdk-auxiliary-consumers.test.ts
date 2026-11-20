@@ -72,7 +72,6 @@ async function harness(reply: (request: ModelRequest) => Reply) {
 		try {
 			for (const current of sessions) {
 				current.setAdvisorEnabled(false);
-				current.abortHandoff();
 				current.abortCompaction(controller.signal.reason);
 			}
 			await Promise.all(sessions.map(current => current.abort({ goalReason: "internal" })));
@@ -407,7 +406,9 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 					).toBe("GOAL_AUXILIARY_FINISHED");
 					break;
 				case "handoff":
-					expect((await h.run(() => h.session.handoff(undefined, { signal: h.signal })))?.document).toBe(
+					expect(
+						(await h.run(() => h.session.compact(undefined, { mode: "handoff", signal: h.signal }))).summary,
+					).toContain(
 						"## Goal\nContinue inspecting the saved work.\n\n## Progress\nThe previous inspection finished.",
 					);
 					break;

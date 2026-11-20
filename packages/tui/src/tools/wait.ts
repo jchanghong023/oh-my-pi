@@ -872,6 +872,7 @@ export function createIrcMessageCard(
 function describeJobsResult(
 	result: ToolRenderResult<CoordinationDetails>,
 	isPartial: boolean,
+	tray: boolean,
 	expanded: boolean,
 	settledBashJobs?: ReadonlyMap<string, string>,
 ): NativeToolView | undefined {
@@ -973,6 +974,8 @@ function describeJobsResult(
 		tone: counts.failed > 0 ? "warning" : counts.running > 0 || agents.length > 0 ? "info" : "success",
 		// The tiles are what a wait shows: clamping the body by lines would cut them.
 		preview: "children",
+		// While it waits, a host's tray already shows these jobs live: the card starts folded.
+		...(isPartial && tray ? { folded: true } : {}),
 		body,
 	};
 }
@@ -1003,9 +1006,10 @@ export const waitToolRenderer = {
 		result: ToolRenderResult<CoordinationDetails>,
 		options: RenderResultOptions,
 	): NativeToolView | undefined {
+		const tray = options.tray === true;
 		return waitResultMemo.get(
 			result,
-			[options.isPartial, options.expanded, options.settledBashJobs, widgetStamp(result.details?.jobs)],
+			[options.isPartial, tray, options.expanded, options.settledBashJobs, widgetStamp(result.details?.jobs)],
 			() => {
 				if (result.isError) return errorView("Wait", resultText(result));
 				const details = result.details;
@@ -1026,11 +1030,12 @@ export const waitToolRenderer = {
 						return describeJobsResult(
 							{ ...result, details: { ...details, jobs: visible } },
 							options.isPartial,
+							tray,
 							options.expanded,
 						);
 					}
 				}
-				return describeJobsResult(result, options.isPartial, options.expanded, options.settledBashJobs);
+				return describeJobsResult(result, options.isPartial, tray, options.expanded, options.settledBashJobs);
 			},
 		);
 	},

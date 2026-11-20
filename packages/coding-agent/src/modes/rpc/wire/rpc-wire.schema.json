@@ -1499,6 +1499,9 @@
 				"details": {},
 				"attribution": {
 					"$ref": "#/$defs/Attribution"
+				},
+				"excludeFromContext": {
+					"type": "boolean"
 				}
 			},
 			"required": [
@@ -3703,6 +3706,13 @@
 			],
 			"type": "string"
 		},
+		"CacheWarmingMethod": {
+			"enum": [
+				"prewarm",
+				"replay"
+			],
+			"type": "string"
+		},
 		"CacheWarmingOutcome": {
 			"enum": [
 				"hit",
@@ -4039,7 +4049,7 @@
 				"type",
 				"operationId"
 			],
-			"description": "A manual compaction (`compact` command, `/compact`, extension `ctx.compact()`) began; the live turn is already aborted."
+			"description": "A manual compaction began. Handoff mode leaves live turns running and applies between turns or when idle."
 		},
 		"ManualCompactionEndEvent": {
 			"type": "object",
@@ -4145,6 +4155,9 @@
 				"phase": {
 					"$ref": "#/$defs/CacheWarmingPhase"
 				},
+				"method": {
+					"$ref": "#/$defs/CacheWarmingMethod"
+				},
 				"provider": {
 					"type": "string"
 				},
@@ -4155,6 +4168,7 @@
 			"required": [
 				"type",
 				"phase",
+				"method",
 				"provider",
 				"model"
 			],
@@ -4168,6 +4182,9 @@
 				},
 				"phase": {
 					"$ref": "#/$defs/CacheWarmingPhase"
+				},
+				"method": {
+					"$ref": "#/$defs/CacheWarmingMethod"
 				},
 				"provider": {
 					"type": "string"
@@ -4190,6 +4207,7 @@
 			"required": [
 				"type",
 				"phase",
+				"method",
 				"provider",
 				"model",
 				"outcome"

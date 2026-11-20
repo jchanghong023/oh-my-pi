@@ -416,15 +416,18 @@ test("compact mixed long session preserves input, tool effects and peer messages
 					expectVisibleDraft(frame, "MIXED_DRAFT_END", 100, 28),
 				);
 				allowTools.resolve();
+				// The inline form preserves the nonempty composer and lets sending its draft skip the ask.
+				// Use the form-focus key instead of moving the cursor inside the draft.
+				await tui("expect", "text", "Alt+E 回答", "--timeout", "60000");
+				await tui("key", "press", "Alt+E");
 				await tui("expect", "text", "MIXED_DECISION", "--timeout", "60000");
 				await tui("expect", "text", "Proceed", "--timeout", "30000");
 				await screen.checkpoint("tool confirmation modal", frame => {
 					expect(frame.screen).toContain("MIXED_DECISION");
 					expect(frame.screen).toContain("Proceed");
 				});
-				// Hand the draft's input focus to the form, choose Proceed, then
-				// submit from the HTML form's separate Submit stop.
-				await tui("key", "press", "Down", "Enter", "Enter");
+				// Proceed is preselected. Confirm it, then submit from the separate Submit stop.
+				await tui("key", "press", "Enter", "Enter");
 				// Leave room for the transcript beside the long draft and both child docks.
 				await tui("resize", "120", "48");
 				await screen.waitForVisualHandoff();

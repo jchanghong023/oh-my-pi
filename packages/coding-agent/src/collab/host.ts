@@ -13,7 +13,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import type {
 	BusChannel,
 	CollabUiRequest,
@@ -242,6 +242,16 @@ function isWireAgentEvent(event: AgentSessionEvent): event is AgentSessionEvent 
 
 function isWireSessionEntry(entry: StoredSessionEntry): entry is StoredSessionEntry & WireSessionEntry {
 	return entry.type in WIRE_SESSION_ENTRY_TYPES;
+}
+
+/**
+ * The queue key one subagent's progress frames share: its agent id, which is unique where index and parent tool
+ * call are not (eval `agent()` and workpool spawns all report index 0 with no parent call). Undefined for an
+ * unkeyable payload, which then goes out unsuperseded.
+ */
+function progressKey(data: unknown): string | undefined {
+	if (!isRecord(data) || !isRecord(data.progress) || typeof data.progress.id !== "string") return undefined;
+	return `bus-progress:${data.progress.id}`;
 }
 const CONNECT_TIMEOUT_MS = 15_000;
 /** Max bytes served per fetch-transcript reply (guest re-requests from `newSize`). */
@@ -651,7 +661,17 @@ export class CollabHost {
 			for (const channel of COLLAB_BUS_CHANNELS) {
 				this.#busUnsubscribers.push(
 					observabilityBus.on(channel, data => {
-						if (this.#broadcastAllowed()) this.#send({ t: "bus", channel, data });
+						if (!this.#broadcastAllowed()) return;
+						// Each progress frame carries the whole snapshot, so a slow relay only
+						// needs the newest queued frame for each subagent.
+						const frame = { t: "bus", channel, data } as const;
+						const key = channel === TASK_SUBAGENT_PROGRESS_CHANNEL ? progressKey(data) : undefined;
+						if (key) {
+							this.#socket?.sendLatest(key, frame);
+							if (this.#localPeers.size > 0) this.#deliverLocal(JSON.stringify(frame));
+						} else {
+							this.#send(frame);
+						}
 					}),
 				);
 			}

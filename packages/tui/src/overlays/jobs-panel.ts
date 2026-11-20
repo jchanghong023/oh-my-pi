@@ -6,7 +6,7 @@
  * (cwd, live pids, exit code, artifact) and live output.
  */
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
-import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatDuration, sanitizeText, spillUrl } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
 import { matchesKey } from "../keys";
@@ -145,8 +145,10 @@ export class JobsSheet implements Component {
 	 */
 	#held: { job: JobsPanelJob; detail: JobsPanelDetail | undefined; agents: readonly JobTreeAgent[] } | undefined;
 
-	constructor(source: JobsSheetSource) {
+	/** `selected`: the job to open on, when it is listed; else the first, as always. */
+	constructor(source: JobsSheetSource, options: { selected?: string } = {}) {
 		this.#source = source;
+		this.#selectedId = options.selected;
 	}
 
 	describe(_cx: DescribeContext): NativeNode {
@@ -230,7 +232,7 @@ export class JobsSheet implements Component {
 				detail.cwd && `cwd ${detail.cwd}`,
 				detail.pids.length > 0 && `pid ${detail.pids.join(", ")}`,
 				detail.exitCode !== undefined && `exit ${detail.exitCode}`,
-				detail.artifactId && `artifact://${detail.artifactId}`,
+				detail.artifactId && spillUrl(detail.artifactId),
 			]);
 			if (facts.length > 0) factLines.push(truncateToWidth(`   ${facts.join(" · ")}`, width));
 			if (detail.widget && widgetHasData(detail.widget)) {
@@ -289,7 +291,7 @@ export class JobsSheet implements Component {
 			const outputCount = Math.min(outputLines.length, remaining);
 			lines.push(
 				...widgetLines.slice(0, remaining - outputCount),
-				...outputLines.slice(-outputCount || outputLines.length),
+				...(outputCount ? outputLines.slice(-outputCount) : []),
 			);
 		}
 		return lines;
@@ -511,7 +513,7 @@ function describeDetail(
 		detail?.cwd ? { k: "Directory", v: [span(detail.cwd, "path")] } : undefined,
 		pids.length > 0 && { k: pids.length > 1 ? "PIDs" : "PID", v: [span(pids.join(", "), "num")] },
 		exit !== undefined && { k: "Exit code", v: [span(String(exit), exit === 0 ? "success" : "error")] },
-		detail?.artifactId ? { k: "Full output", v: [span(`artifact://${detail.artifactId}`, "mono")] } : undefined,
+		detail?.artifactId ? { k: "Full output", v: [span(spillUrl(detail.artifactId), "mono")] } : undefined,
 	]);
 	const children = compact<NativeChild>([
 		row(

@@ -2,7 +2,7 @@
 # across the whole workspace, so anything that relied on `cargo test`'s
 # one-binary-at-a-time execution has to declare that here.
 #
-# Nextest cannot run doctests; the Rust task runs pi-knowledge doctests separately
+# Nextest cannot run doctests; the Rust task runs the selected doctests separately
 # using cargo test --doc and records command timing without a JUnit report.
 
 [profile.default]
@@ -28,7 +28,7 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 # The deep-chain walk tests build and delete a directory chain as deep as the
 # host's path syscalls reach. That saturates the filesystem for as long as they
 # run, which pushes tests elsewhere in the workspace past their own latency
-# assertions (pi-natives' OAuth callback wake, pi-shell's TERM-trap cleanup).
+# assertions (omp-natives' OAuth callback wake, omp-shell's TERM-trap cleanup).
 # Each takes every test thread, so it runs alone.
 [[profile.default.overrides]]
 filter = 'test(deeper_than_the_stack) + test(stopping_at_the_leaf_of_a_deep_ignore_chain_returns)'

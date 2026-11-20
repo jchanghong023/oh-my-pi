@@ -135,7 +135,7 @@ async function handlePythonSetup(flags: { json?: boolean; check?: boolean }): Pr
 
 	if (!check.pythonPath) {
 		console.error(chalk.red(`${theme.status.error} Python not found`));
-		console.error(chalk.dim("Install Python 3.8+ or set python.interpreter to its executable path"));
+		console.error(chalk.dim("Install a compatible Python or set python.interpreter to its executable path"));
 		process.exit(1);
 	}
 

@@ -29,6 +29,7 @@ import { isExtensionFile, listPackageExtensionModules } from "../../../extensibi
 import type { SkillsSettings } from "../../../extensibility/settings";
 import { loadSkillCatalog } from "../../../extensibility/skills";
 import { readDisabledServers, readEnabledServers } from "../../../mcp/config-writer";
+import type { MCPDroppedServer } from "../../../mcp/transforms";
 import { commandPreview } from "@oh-my-pi/pi-tui/overlays/extensions/inspector-model";
 import { inferMcpTransport } from "@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime";
 import {
@@ -123,11 +124,16 @@ async function loadPackageModules(
  * installed-plugin and configured-package modules are listed beside native
  * ones. Only `disabledExtensions` gates those at runtime, so their state
  * ignores provider switches.
+ *
+ * `builtinDrops` are the MCP servers the session's manager left unconnected
+ * because a built-in transform dropped them (`MCPManager.getBuiltinDrops`);
+ * their rows show as disabled.
  */
 export async function loadAllExtensions(
 	cwd?: string,
 	disabledIds?: string[],
 	extensionRoots?: EffectiveExtensionRoots,
+	builtinDrops?: ReadonlyMap<string, MCPDroppedServer>,
 	skillsSettings: SkillsSettings = {},
 ): Promise<Extension[]> {
 	const extensions: Extension[] = [];
@@ -253,7 +259,8 @@ export async function loadAllExtensions(
 	// the per-server `enabled: false` flag, and the user-level `disabledServers`
 	// denylist that `/mcp disable` writes through `setServerDisabled`. The
 	// user-level `enabledServers` allowlist overrides a non-writable source's
-	// `enabled: false` (e.g. opencode.json) but never the denylist.
+	// `enabled: false` (e.g. opencode.json) but never the denylist. A server a
+	// built-in transform dropped is disabled too, until it is enabled explicitly.
 	try {
 		const userMcpPath = cwd ? getMCPConfigPath("user", cwd) : undefined;
 		const [mcpDisabledNames, mcpForcedEnabled] = await Promise.all([
@@ -273,7 +280,11 @@ export async function loadAllExtensions(
 			const id = makeExtensionId("mcp", server.name);
 			const forced = mcpForcedEnabled.has(server.name);
 			const sourceSaysDisabled = server.enabled === false && !forced;
-			const isDisabled = mcpDisabledNames.has(server.name) || disabledExtensions.has(id) || sourceSaysDisabled;
+			const isDisabled =
+				mcpDisabledNames.has(server.name) ||
+				disabledExtensions.has(id) ||
+				sourceSaysDisabled ||
+				builtinDrops?.has(server.name) === true;
 			const { state, disabledReason } = resolveState(
 				server._source,
 				isDisabled,

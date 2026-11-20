@@ -7,7 +7,6 @@ import type { ReadableStreamDefaultReader } from "node:stream/web";
 import { pathToFileURL } from "node:url";
 import { Process } from "@oh-my-pi/pi-natives";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
 
 const packageRoot = path.resolve(import.meta.dir, "../..");
 const nativeDir = path.resolve(packageRoot, "../natives/native");
@@ -24,7 +23,6 @@ async function createHost(root: string): Promise<string> {
 	await fs.writeFile(compressed, Bun.zstdCompressSync(image));
 	const host = path.join(root, "native-host.ts");
 	const moduleUrl = (relative: string) => JSON.stringify(pathToFileURL(path.resolve(packageRoot, relative)).href);
-	await fs.mkdir(path.join(root, "project"));
 	await fs.mkdir(path.join(root, "smoke-tmp"));
 	await fs.writeFile(
 		host,
@@ -34,9 +32,9 @@ import * as path from "node:path";
 import { createRequire } from "node:module";
 import { declareWorkerHostEntry } from ${moduleUrl("../utils/src/index.ts")};
 import { extractEmbeddedAddons, prepareNativeVersionDir } from ${moduleUrl("../natives/native/loader-state.js")};
-import { createDaemonBrokerClient, smokeTestDaemonBroker } from ${moduleUrl("src/launch/client.ts")};
-import { startDaemonBrokerFromEnvironment } from ${moduleUrl("src/launch/broker.ts")};
-import { DAEMON_BROKER_WORKER_ARG } from ${moduleUrl("src/launch/protocol.ts")};
+import { closeDaemonClient, daemonClient, isolateDaemonForSmokeTest, probeDaemon, smokeTestDaemon } from ${moduleUrl("src/daemon/client.ts")};
+import { startDaemonFromEnvironment } from ${moduleUrl("src/daemon/server.ts")};
+import { DAEMON_WORKER_ARG } from ${moduleUrl("src/daemon/protocol.ts")};
 declareWorkerHostEntry();
 const mode = process.argv[2];
 const input = Bun.stdin.stream().getReader();
@@ -50,22 +48,36 @@ prepareNativeVersionDir(root);
 extractEmbeddedAddons({ files: [{ filename: ${JSON.stringify(filename)}, size: ${image.length}, zstdPath: ${JSON.stringify(compressed)} }], targetDir: root });
 const binding = createRequire(import.meta.url)(path.join(root, ${JSON.stringify(filename)}));
 if (typeof binding.ipcEndpoint(root, "native-probe") !== "string") throw new Error("Real native binding did not load");
-if (mode === DAEMON_BROKER_WORKER_ARG) {
-	await fs.writeFile(${JSON.stringify(path.join(root, "broker-pid"))}, String(process.pid));
-	await startDaemonBrokerFromEnvironment();
+if (mode === DAEMON_WORKER_ARG) {
+	await fs.writeFile(${JSON.stringify(path.join(root, "daemon-native-root"))}, root);
+	await fs.writeFile(${JSON.stringify(path.join(root, "daemon-pid"))}, String(process.pid));
+	await startDaemonFromEnvironment();
 } else if (mode === "cold") {
 	process.stdout.write("loaded\\n");
 	await input.read();
 } else if (mode === "smoke") {
-	await smokeTestDaemonBroker();
+	const cleanup = await isolateDaemonForSmokeTest();
+	try {
+		await smokeTestDaemon();
+	} finally {
+		await cleanup();
+	}
 	process.stdout.write("smoke-complete\\n");
 	await input.read();
 } else {
-	const client = await createDaemonBrokerClient(${JSON.stringify(path.join(root, "project"))}, { runtimeDir: ${JSON.stringify(path.join(root, "runtime"))} });
-	await client.request({ op: "list" });
+	const client = mode === "observer" ? await probeDaemon() : await daemonClient();
+	if (!client) throw new Error("No daemon to observe");
+	await client.request({ op: "ping" });
 	process.stdout.write("connected\\n");
 	await input.read();
-	client.close();
+	if (mode === "observer") {
+		await client.request({ op: "ping" });
+		process.stdout.write("still-connected\\n");
+		await input.read();
+		client.close();
+	} else {
+		await closeDaemonClient();
+	}
 }
 `,
 	);
@@ -84,6 +96,8 @@ function startHost(host: string, mode: string, nativeRoot: string): NativeHost {
 			...process.env,
 			PI_NATIVES_DIR: nativeRoot,
 			OMP_CONFIG_ROOT: path.join(path.dirname(host), "config"),
+			OMP_DAEMON_DIR: path.join(path.dirname(host), "runtime"),
+			OMP_DAEMON_TCP: "",
 			OMP_OFFLINE: "0",
 			...(mode === "smoke"
 				? Object.fromEntries(
@@ -117,29 +131,25 @@ async function expectExit(host: NativeHost): Promise<void> {
 	expect(code).toBe(0);
 }
 
-describe("broker native cache ownership", () => {
-	it("removes the public smoke runtime after the real embedded broker exits", async () => {
+describe("daemon native cache ownership", () => {
+	it("removes the public smoke runtime after the real embedded daemon exits", async () => {
 		using temp = TempDir.createSync("@omp-broker-smoke-native-");
 		const root = temp.path();
 		const host = await createHost(root);
 		const worker = startHost(host, "smoke", path.join(root, "creator-natives"));
 		const stdout = worker.proc.stdout.getReader();
 		try {
-			// Broker re-entry loads its real DLL from the smoke runtime's natives/.
-			// On Windows the old smoke helper fails with EPERM before this signal.
+			// Daemon re-entry loads the real native image. A mapped DLL prevents
+			// recursive cleanup on Windows until the process exits.
 			await expectLine(stdout, "smoke-complete", worker);
 			expect(await fs.readdir(path.join(root, "smoke-tmp"))).toEqual([]);
-			const brokerPid = Number(await fs.readFile(path.join(root, "broker-pid"), "utf8"));
-			expect(Number.isSafeInteger(brokerPid) && brokerPid > 0).toBe(true);
-			const broker = Process.fromPid(brokerPid);
-			if (broker) expect(await broker.waitForExit({ timeoutMs: 10_000 })).toBe(true);
 		} finally {
 			worker.proc.stdin.end();
 			await expectExit(worker);
 		}
 	}, 30_000);
 
-	it("releases the creator leaf while another client keeps the real broker usable", async () => {
+	it("isolates the creator's native leaf where required without stopping the shared daemon", async () => {
 		using temp = TempDir.createSync("@omp-broker-native-");
 		const root = temp.path();
 		const host = await createHost(root);
@@ -147,34 +157,34 @@ describe("broker native cache ownership", () => {
 		const runtime = path.join(root, "runtime");
 		const creator = startHost(host, "creator", creatorLeaf);
 		const stdout = creator.proc.stdout.getReader();
-		let observer: DaemonBrokerClient | undefined;
-		let brokerExit: Promise<boolean> | undefined;
+		let observer: NativeHost | undefined;
+		let daemonExit: Promise<boolean> | undefined;
 		try {
 			await expectLine(stdout, "connected", creator);
-			const brokerPid = Number(await fs.readFile(path.join(root, "broker-pid"), "utf8"));
-			expect(Number.isSafeInteger(brokerPid) && brokerPid > 0).toBe(true);
-			const broker = Process.fromPid(brokerPid);
-			if (!broker) throw new Error(`Broker ${brokerPid} exited while its creator was connected`);
-			// Pin the real process identity and arm its OS exit notification while
-			// the creator still holds a connection, before either client disconnects.
-			brokerExit = broker.waitForExit({ timeoutMs: 10_000 });
-			observer = await createDaemonBrokerClient(path.join(root, "project"), {
-				runtimeDir: runtime,
-			});
-			expect((await observer.request({ op: "list" })).op).toBe("list");
+			const nativeRoot = await fs.readFile(path.join(root, "daemon-native-root"), "utf8");
+			expect(nativeRoot).toBe(process.platform === "linux" ? creatorLeaf : path.join(runtime, "natives"));
+			observer = startHost(host, "observer", path.join(root, "observer-natives"));
+			const observerOutput = observer.proc.stdout.getReader();
+			await expectLine(observerOutput, "connected", observer);
+			const pid = Number(await fs.readFile(path.join(root, "daemon-pid"), "utf8"));
+			expect(pid).toBeGreaterThan(0);
+			const daemon = Process.fromPid(pid);
+			if (!daemon) throw new Error("Shared daemon disappeared while the creator was connected");
+			daemonExit = daemon.waitForExit({ timeoutMs: 15_000 });
 			creator.proc.stdin.end();
 			await expectExit(creator);
-			// On Windows a live broker loading the creator's DLL makes this fail with EPERM.
-			await fs.rm(creatorLeaf, { recursive: true });
-			expect((await observer.request({ op: "list" })).op).toBe("list");
+			// On Windows a mapped creator DLL makes this fail with EPERM.
+			if (process.platform !== "linux") await fs.rm(creatorLeaf, { recursive: true });
+			observer.proc.stdin.write("check\n");
+			await expectLine(observerOutput, "still-connected", observer);
 		} finally {
 			creator.proc.stdin.end();
-			observer?.close();
+			observer?.proc.stdin.end();
 			await creator.proc.exited;
-			if (brokerExit) expect(await brokerExit).toBe(true);
+			if (observer) await expectExit(observer);
+			if (daemonExit) expect(await daemonExit).toBe(true);
 		}
-		// Returning from broker.run() does not unmap its DLL: only OS exit does.
-		await fs.rm(path.join(runtime, "natives"), { recursive: true, force: true });
+		if (process.platform !== "linux") await fs.rm(path.join(runtime, "natives"), { recursive: true });
 	}, 30_000);
 
 	it("loads two simultaneous cold native images without changing a published DLL", async () => {

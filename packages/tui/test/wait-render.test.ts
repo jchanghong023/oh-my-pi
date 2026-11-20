@@ -148,7 +148,7 @@ describe("job renderer task-result preview", () => {
 			outputLines: 500,
 			outputBytes: 50_000,
 			maxBytes: 50_000,
-			artifactId: "capture-123",
+			artifactId: "123",
 		};
 		const output = [
 			'","truncated_json_fragment":true}',
@@ -194,7 +194,7 @@ describe("job renderer task-result preview", () => {
 			expect(collapsed).not.toContain("earlier output not in the preview");
 			expect(collapsed).not.toContain("Command exited with code");
 			expect(collapsed).not.toContain("Wall time:");
-			expect(collapsed).toContain("artifact://capture-123");
+			expect(collapsed).toContain("local://123.log");
 			for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(160);
 
 			const expanded = Bun.stripANSI(
@@ -215,7 +215,7 @@ describe("job renderer task-result preview", () => {
 			expect(native).not.toContain("earlier output not in the preview");
 			expect(native).not.toContain("Command exited with code");
 			expect(native).not.toContain("Wall time:");
-			expect(native).toContain("artifact://capture-123");
+			expect(native).toContain("local://123.log");
 		});
 
 		it("labels a capped artifact as a sample in both views", () => {
@@ -223,7 +223,7 @@ describe("job renderer task-result preview", () => {
 			const terminal = Bun.stripANSI(waitToolRenderer.renderResult(result, options, theme).render(160).join("\n"));
 			const native = JSON.stringify(waitToolRenderer.describeResult!(result, options));
 			for (const view of [terminal, native]) {
-				expect(view).toContain("artifact://capture-123");
+				expect(view).toContain("local://123.log");
 				expect(view).toMatch(/(?:sample|not saved|样本)/i);
 				expect(view).not.toMatch(/full output/i);
 			}
@@ -252,7 +252,7 @@ describe("job renderer task-result preview", () => {
 			expect(native).toContain("literal\\\\ntext");
 			for (const view of [terminal, native]) {
 				expect(view).toContain("last output line");
-				expect(view).not.toContain("artifact://");
+				expect(view).not.toMatch(/local:\/\/\d+\.log/);
 			}
 		});
 
@@ -278,7 +278,7 @@ describe("job renderer task-result preview", () => {
 			for (const view of [terminal, native]) {
 				expect(view).toContain("task exception first line");
 				expect(view).not.toContain("additional task detail");
-				expect(view).not.toContain("artifact://");
+				expect(view).not.toMatch(/local:\/\/\d+\.log/);
 			}
 		});
 	});

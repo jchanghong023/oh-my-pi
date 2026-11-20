@@ -63,7 +63,7 @@ const rustLauncherDirectory = path.resolve(
 	`${process.platform}-${process.arch}`,
 );
 
-/** Bootstrap-safe version of pi-natives' Windows file-lock object-lifetime lease. */
+/** Bootstrap-safe version of omp-natives' Windows file-lock object-lifetime lease. */
 async function acquireWindowsRustLauncherLease(directory: string): Promise<() => void> {
 	// Resolve junctions and case before naming the lease for this actual cache.
 	const identity = (await fs.realpath(directory)).toLowerCase();

@@ -118,7 +118,7 @@ const create = async (
 		enableMCP: false,
 		enableLsp: false,
 		enableIrc: true,
-		cacheWarming: false,
+		cacheWarming: "off",
 		toolNames: tools,
 		restrictToolNames: true,
 	});

@@ -178,7 +178,15 @@ export function makeIsolationCommitMessage(session: ToolSession): BuildCommitMes
 		const settings = session.settings;
 		const sessionId = session.getSessionId?.() ?? undefined;
 		return async (diff: string) =>
-			generateCommitMessage(diff, registry, settings, cwd, sessionId, session.getActiveModel?.()?.provider);
+			generateCommitMessage(
+				diff,
+				registry,
+				settings,
+				cwd,
+				sessionId,
+				session.getActiveModel?.()?.provider,
+				session.sessionManager,
+			);
 	};
 }
 

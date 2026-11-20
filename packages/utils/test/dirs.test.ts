@@ -12,7 +12,7 @@ import {
 	getBaseConfigRoot,
 	getConfigRootDir,
 	getDocumentConversionCacheDir,
-	getGlobalDaemonRuntimeRoot,
+	getDaemonDir,
 	getLogsDir,
 	getPluginsDir,
 	getProfileRootDir,
@@ -242,12 +242,12 @@ describe("OMP_CONFIG_ROOT relocation", () => {
 				expect(getPuppeteerDir()).toBe(path.join(root, "puppeteer"));
 				expect(getSessionsDir()).toBe(path.join(root, "agent", "sessions"));
 				expect(getDocumentConversionCacheDir()).toBe(path.join(root, "agent", "cache", "document-conversions"));
-				expect(getGlobalDaemonRuntimeRoot()).toBe(path.join(root, "run", "daemons", "global"));
+				expect(getDaemonDir()).toBe(path.join(root, "run", "daemon"));
 
 				setProfile("work");
 				expect(getLogsDir()).toBe(path.join(root, "profiles", "work", "logs"));
 				expect(getSessionsDir()).toBe(path.join(root, "profiles", "work", "agent", "sessions"));
-				expect(getGlobalDaemonRuntimeRoot()).toBe(path.join(root, "run", "daemons", "global"));
+				expect(getDaemonDir()).toBe(path.join(root, "run", "daemon"));
 			} finally {
 				fs.rmSync(fixture, { recursive: true, force: true });
 			}

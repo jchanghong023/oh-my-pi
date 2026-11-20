@@ -39,7 +39,13 @@ export function createExtensionDashboardRuntime(options: {
 			})),
 		loadExtensions: disabledIds =>
 			withActiveSettings(settings, () =>
-				loadAllExtensions(cwd, disabledIds, extensionRoots?.(), cfgSkills.get(settings)),
+				loadAllExtensions(
+					cwd,
+					disabledIds,
+					extensionRoots?.(),
+					mcpManager?.getBuiltinDrops(),
+					cfgSkills.get(settings),
+				),
 			),
 		toggleProvider,
 		toggleUserSource,

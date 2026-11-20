@@ -313,7 +313,7 @@ try {
 			spawns: "",
 			bindProcessState: false,
 			autoApprove: true,
-			cacheWarming: false,
+			cacheWarming: "off",
 			suppressAutoPrewalk: true,
 			autoTitle: false,
 			disableModelFallback: true,

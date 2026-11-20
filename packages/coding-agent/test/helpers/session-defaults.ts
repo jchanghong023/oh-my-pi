@@ -27,5 +27,6 @@ export function createSessionDefaults() {
 			getCwd: () => process.cwd(),
 			appendSessionInit: () => "",
 		} as unknown as AgentSession["sessionManager"],
+		getWorkPoolYieldItems: () => [],
 	} satisfies Partial<AgentSession>;
 }

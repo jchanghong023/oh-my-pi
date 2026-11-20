@@ -113,7 +113,7 @@ export async function buildReleaseNative(): Promise<string> {
 		path.join(repoRoot, "Cargo.toml"),
 		"--locked",
 		"--package",
-		"pi-natives",
+		"omp-natives",
 		"--lib",
 		"--profile",
 		"local",

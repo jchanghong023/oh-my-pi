@@ -412,7 +412,17 @@ export function resolvePluginManifestEntries(
 	const manifest = plugin.manifest;
 
 	const expandDirectory = key === "extensions";
-	const resolveEntry = (entry: string): Array<{ entry: string; resolvedPath: string | null }> => {
+	// Manifest JSON is untrusted: an entry can be an object, number, or null
+	// despite the `string` type. Report it as unresolved instead of letting
+	// `path.join` throw and abort loading every extension.
+	const resolveEntry = (entry: unknown): Array<{ entry: string; resolvedPath: string | null }> => {
+		if (typeof entry !== "string") {
+			logger.warn("plugins: ignoring non-string manifest entry", {
+				key,
+				entry_type: entry === null ? "null" : Array.isArray(entry) ? "array" : typeof entry,
+			});
+			return [{ entry: JSON.stringify(entry), resolvedPath: null }];
+		}
 		const files = resolveManifestEntryFiles(path.join(plugin.path, entry), expandDirectory);
 		return files.length > 0 ? files.map(resolvedPath => ({ entry, resolvedPath })) : [{ entry, resolvedPath: null }];
 	};

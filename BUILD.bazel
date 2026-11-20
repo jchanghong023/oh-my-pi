@@ -16,7 +16,7 @@ exports_files([
 
 exports_files(
     ["packages/coding-agent/test/fixtures/docs-v3.sql"],
-    visibility = ["//crates/pi-natives:__pkg__"],
+    visibility = ["//crates/natives:__pkg__"],
 )
 
 _ADDONS = {
@@ -34,7 +34,7 @@ _ADDONS = {
 [
     native_addon(
         name = "natives-" + target,
-        lib = "//crates/pi-natives:pi_natives",
+        lib = "//crates/natives:pi_natives",
         out = out,
         platform = platform,
     )

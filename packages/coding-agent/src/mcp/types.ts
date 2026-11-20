@@ -1,4 +1,5 @@
 import type {
+	MCPAudioContent,
 	MCPContent,
 	MCPImageContent,
 	MCPProgress,
@@ -163,7 +164,7 @@ export interface MCPConfigFile {
 	mcpServers?: Record<string, MCPServerConfig>;
 	/** Names to hide regardless of any source `enabled` flag. Highest precedence. */
 	disabledServers?: string[];
-	/** Names to force-enable when a non-writable source reports `enabled: false`. */
+	/** Names to force-enable when a non-writable source reports `enabled: false` or a built-in transform would drop them. */
 	enabledServers?: string[];
 }
 
@@ -313,7 +314,7 @@ export interface MCPRequestOptions {
 	signal?: AbortSignal;
 	/**
 	 * Adds `_meta.progressToken` to the request and receives only this request's
-	 * `notifications/progress` while pending. Progress never extends its deadline.
+	 * `notifications/progress` while pending; each one restarts a default tool-call deadline (never a configured one).
 	 */
 	onProgress?: (progress: MCPProgress) => void;
 }
@@ -477,13 +478,6 @@ export interface MCPPrompt {
 export interface MCPPromptsListResult {
 	prompts: MCPPrompt[];
 	nextCursor?: string;
-}
-
-/** Audio content in prompt messages */
-export interface MCPAudioContent {
-	type: "audio";
-	data: string;
-	mimeType: string;
 }
 
 /** Content type union for prompt messages */

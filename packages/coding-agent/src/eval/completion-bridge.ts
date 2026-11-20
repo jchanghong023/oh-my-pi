@@ -51,6 +51,7 @@ import {
 import type { JsStatusEvent } from "./js/shared/types";
 
 import { cfgDisabledProviders } from "../config/model-settings";
+import { journalCompletion } from "../session/model-usage-journal";
 import { cfgProvidersThinkingProbe, cfgRetry } from "../session/settings";
 
 /** Synthetic bridge name reserved for the `completion()` helper across both runtimes. */
@@ -376,6 +377,8 @@ async function executeCompletion(
 	// mirroring session recovery. Keyless candidates are skipped without
 	// consuming budget so a usable later fallback is still attempted.
 	const maxRetries = Math.max(0, cfgRetry.get(session.settings).maxRetries);
+	// One journal for the whole request: every fallback it sends is billed to the branch that asked.
+	const journal = journalCompletion(session.sessionManager, { purpose: "completion", role: finalTier });
 	let response: AssistantMessage | undefined;
 	let model: Model<Api> | undefined;
 	let lastError: unknown;
@@ -427,6 +430,7 @@ async function executeCompletion(
 				{ telemetry, oneshotKind: "eval_completion" },
 			);
 			session.costGate?.record(response.usage.cost.total);
+			journal?.(response, prompt);
 		} catch (error) {
 			if (attempt.outcome !== "no-credentials") failAttempt(attempt, error, signal);
 			lastError = error;

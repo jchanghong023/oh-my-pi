@@ -23,11 +23,9 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { withTimeout } from "@oh-my-pi/pi-utils";
+import { getDaemonRuntimeDir, withTimeout } from "@oh-my-pi/pi-utils";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { DaemonBrokerClient } from "@oh-my-pi/pi-coding-agent/launch/client";
-import { daemonRuntimeDir } from "@oh-my-pi/pi-coding-agent/launch/paths";
-import type { DaemonOperation } from "@oh-my-pi/pi-coding-agent/launch/protocol";
+import type { DaemonClient, DaemonOp, DaemonResult, UnitSnapshot } from "@oh-my-pi/pi-coding-agent/daemon/protocol";
 import {
 	forgetSharedTarget,
 	recordSharedTarget,
@@ -47,7 +45,6 @@ import {
 import type { WorkerTabSession } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
-import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { rejectionOf } from "../helpers/rejection";
 
@@ -79,7 +76,7 @@ async function ownedTargets(scope: SharedTargetScope): Promise<string[]> {
 	const probe = `chain-probe-${crypto.randomUUID()}`;
 	await recordSharedTarget(scope, probe);
 	await forgetSharedTarget(scope, probe);
-	const file = path.join(daemonRuntimeDir(scope.projectDir), `${scope.daemonName}.targets`, `${process.pid}.json`);
+	const file = path.join(getDaemonRuntimeDir(scope.projectDir), `${scope.daemonName}.targets`, `${process.pid}.json`);
 	const raw = await Bun.file(file)
 		.text()
 		.catch(() => null);
@@ -169,7 +166,7 @@ function makeWedgeTab(scope: SharedTargetScope, options: WedgeOptions = {}): Wor
 /** The worker shuts down normally; only its shared browser's CDP cleanup is wedged. */
 function makeStrictWedgeTab(scope: SharedTargetScope, options: WedgeOptions = {}): WorkerTabSession {
 	const tab = makeWedgeTab(scope, options);
-	tab.uploadDir = path.join(daemonRuntimeDir(scope.projectDir), "uploads");
+	tab.uploadDir = path.join(getDaemonRuntimeDir(scope.projectDir), "uploads");
 	tab.worker.onMessage = handler => {
 		handler({ type: "closed" });
 		return () => undefined;
@@ -187,49 +184,54 @@ function makeSession(): ToolSession {
 	} as unknown as ToolSession;
 }
 
-function makeSnapshot(readyMatch: string | undefined): DaemonSnapshot {
+function makeSnapshot(readyMatch: string | undefined): UnitSnapshot {
 	return {
-		name: DAEMON_NAME,
 		id: "daemon-wedge",
-		state: "ready",
+		generation: crypto.randomUUID(),
+		key: DAEMON_NAME,
+		kind: "proc",
+		scope: { kind: "global" },
+		label: DAEMON_NAME,
+		state: "running",
+		pids: [4242],
 		createdAt: 0,
 		startedAt: 0,
 		readyAt: 1,
 		restartCount: 0,
 		outputBytes: 0,
-		persist: false,
-		detached: false,
-		...(readyMatch === undefined ? {} : { readyMatch }),
+		leases: 0,
+		policy: { hold: "leases", idleMs: 3_000, onIdle: "stop", restart: "no", survive: "exec" },
+		supervised: true,
+		readyMatch,
 	};
 }
 
-/**
- * Broker double: answers `describe` with a snapshot, records every `stop`, and
- * reports a terminal snapshot for a stop unless told otherwise — a real broker
- * returns the post-stop record, so a stop that never landed is either a
- * rejected request (`stopFails`) or a non-terminal snapshot (`stopState`).
- */
 function makeBroker(
-	opts: { snapshot?: DaemonSnapshot; fail?: boolean; stopFails?: boolean; stopState?: DaemonSnapshot["state"] },
+	opts: {
+		snapshot?: UnitSnapshot;
+		fail?: boolean;
+		stopFails?: boolean;
+		stopState?: UnitSnapshot["state"];
+		beforeStop?: () => Promise<void>;
+	},
 	stops: string[],
-): DaemonBrokerClient {
+): DaemonClient {
 	return {
-		projectDir: "/tmp/omp-wedge-broker",
-		close: () => undefined,
-		onCompletion: () => () => undefined,
-		onNotify: () => () => undefined,
-		request: async (operation: DaemonOperation) => {
-			if (opts.fail === true) throw new Error("broker unreachable");
-			if (operation.op === "describe") return { op: "describe", daemon: opts.snapshot };
+		async request<O extends DaemonOp>(operation: O): Promise<DaemonResult<O["op"]>> {
+			if (opts.fail) throw new Error("daemon unreachable");
+			const unit = opts.snapshot;
+			if (!unit) throw new Error("unknown unit");
+			if (operation.op === "describe") return { unit } as DaemonResult<O["op"]>;
 			if (operation.op === "stop") {
-				stops.push(operation.name);
-				if (opts.stopFails === true) throw new Error("broker rejected the stop");
-				const stopped = { ...(opts.snapshot ?? makeSnapshot(undefined)), state: opts.stopState ?? "exited" };
-				return { op: "stop", daemon: stopped };
+				await opts.beforeStop?.();
+				if (operation.generation !== unit.generation) return { unit } as DaemonResult<O["op"]>;
+				stops.push(unit.key);
+				if (opts.stopFails) throw new Error("daemon rejected the stop");
+				return { unit: { ...unit, state: opts.stopState ?? "exited" } } as DaemonResult<O["op"]>;
 			}
-			throw new Error(`unexpected broker op ${operation.op}`);
+			throw new Error(`unexpected daemon op ${operation.op}`);
 		},
-	} as unknown as DaemonBrokerClient;
+	} as DaemonClient;
 }
 
 /** Live endpoint string as the broker stamps it once Chrome's listener is up. */
@@ -244,7 +246,7 @@ afterEach(async () => {
 		await releaseTab(name, { kill: false }).catch(() => undefined);
 	}
 	for (const scope of scopes.splice(0)) {
-		await fs.rm(daemonRuntimeDir(scope.projectDir), { recursive: true, force: true }).catch(() => undefined);
+		await fs.rm(getDaemonRuntimeDir(scope.projectDir), { recursive: true, force: true }).catch(() => undefined);
 	}
 });
 
@@ -548,15 +550,16 @@ describe("strict shared browser owner cleanup", () => {
 		const stopAllowed = Promise.withResolvers<void>();
 		const stops: string[] = [];
 		const probes: string[] = [];
-		const broker = makeBroker({ snapshot: makeSnapshot(READY_MATCH) }, stops);
-		const request = broker.request.bind(broker);
-		broker.request = async (operation, signal) => {
-			if (operation.op === "stop") {
-				stopEntered.resolve();
-				await stopAllowed.promise;
-			}
-			return await request(operation, signal);
-		};
+		const broker = makeBroker(
+			{
+				snapshot: makeSnapshot(READY_MATCH),
+				beforeStop: async () => {
+					stopEntered.resolve();
+					await stopAllowed.promise;
+				},
+			},
+			stops,
+		);
 		const check = sharedDaemon.stopSharedBrowserIfUnreachable;
 		const healthCheck = spyOn(sharedDaemon, "stopSharedBrowserIfUnreachable").mockImplementation(scope =>
 			check(scope, {
@@ -623,9 +626,9 @@ describe("strict shared browser owner cleanup", () => {
 			const scope = trackedScope();
 			const stops: string[] = [];
 			const options: {
-				snapshot: DaemonSnapshot;
+				snapshot: UnitSnapshot;
 				stopFails: boolean;
-				stopState: DaemonSnapshot["state"];
+				stopState: UnitSnapshot["state"];
 			} = {
 				snapshot: makeSnapshot(READY_MATCH),
 				stopFails: failure === "rejected",
@@ -761,54 +764,6 @@ describe("shared browser reachability check", () => {
 			"ws://127.0.0.1:63199/devtools/browser/wedged",
 		]);
 		expect(stops).toEqual([DAEMON_NAME]);
-	});
-
-	it("leaves a replacement browser alone instead of stopping it under the old name", async () => {
-		const stops: string[] = [];
-		const probes: string[] = [];
-		let describeCount = 0;
-		let current = makeSnapshot(READY_MATCH);
-		const broker = {
-			projectDir: "/tmp/omp-wedge-replaced",
-			close: () => undefined,
-			onCompletion: () => () => undefined,
-			onNotify: () => () => undefined,
-			request: async (operation: DaemonOperation) => {
-				if (operation.op === "describe") {
-					describeCount++;
-					return { op: "describe", daemon: current };
-				}
-				if (operation.op === "stop") {
-					stops.push(operation.name);
-					return { op: "stop", daemon: current };
-				}
-				throw new Error(`unexpected broker op ${operation.op}`);
-			},
-		} as unknown as DaemonBrokerClient;
-
-		const stopped = await stopSharedBrowserIfUnreachable(
-			{ projectDir: "/tmp/omp-wedge-replaced", daemonName: DAEMON_NAME },
-			{
-				client: broker,
-				probe: async wsEndpoint => {
-					probes.push(wsEndpoint);
-					// Another session replaced the daemon while we probe its
-					// predecessor: a healthy browser now answers to that name.
-					current = makeSnapshot("DevTools listening on ws://127.0.0.1:63199/devtools/browser/replacement");
-					return false;
-				},
-			},
-		);
-
-		expect(stopped).toBe(false);
-		expect(stops).toEqual([]);
-		// Both probes addressed the instance we described, and the stop was
-		// withheld after re-describing found a different one.
-		expect(probes).toEqual([
-			"ws://127.0.0.1:63199/devtools/browser/wedged",
-			"ws://127.0.0.1:63199/devtools/browser/wedged",
-		]);
-		expect(describeCount).toBe(2);
 	});
 
 	it("settles and frees its single-flight slot when the CDP connect never opens", async () => {

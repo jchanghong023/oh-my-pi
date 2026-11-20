@@ -1729,6 +1729,7 @@ export class AcpAgent implements Agent {
 							configured: cfgExtensions.get(sm),
 							configuredLevel: sm.extensionsSourceLevel(),
 						},
+						undefined,
 						cfgSkills.get(sm),
 					),
 				);

@@ -64,7 +64,7 @@ describe("resolveTodoMarkdownPath", () => {
 	it("rejects internal URL schemes", () => {
 		const cwd = path.resolve("tmp", "todo-workspace");
 
-		expect(() => resolveTodoMarkdownPath("artifact://todo", cwd)).toThrow("internal scheme");
+		expect(() => resolveTodoMarkdownPath("agent://todo", cwd)).toThrow("internal scheme");
 	});
 });
 
@@ -517,6 +517,18 @@ describe("TodoTool operations", () => {
 		expect(result.details?.phases).toEqual(initialized.details?.phases);
 		expect(session.getTodoPhases?.()).toEqual(initialized.details?.phases);
 		expect(result.details?.completedTasks).toBeUndefined();
+	});
+
+	it("accepts items as explicit task targets", async () => {
+		const tool = new TodoTool(createSession());
+		await tool.execute("init", { op: "init", items: ["First", "Second", "Third"] });
+		const result = await tool.execute("done", { op: "done", items: ["Second"] });
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.phases[0]?.tasks.map(task => task.status)).toEqual([
+			"in_progress",
+			"completed",
+			"pending",
+		]);
 	});
 
 	it("drops all tasks in a phase", async () => {
