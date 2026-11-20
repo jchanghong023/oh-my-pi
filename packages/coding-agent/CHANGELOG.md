@@ -99,6 +99,7 @@
 - Stopping a daemon module no longer delays daemon shutdown after the module has already exited.
 - Detached services on Windows now survive daemon restarts and return to their original session.
 - RPC shutdown waits for its private MCP host to finish stopping local tool processes.
+- Chromium downloads on Windows keep their suggested filenames when a short-lived file lock delays the final rename.
 - Local British speech voices keep their `en_GB` locale when the display names are translated.
 - ACP extension listings use project settings for `cwd` queries and live session settings only when a `sessionId` is supplied.
 - Compact tool output backgrounds now start in the same column as the two activity rows, leaving the shared left gutter clear.

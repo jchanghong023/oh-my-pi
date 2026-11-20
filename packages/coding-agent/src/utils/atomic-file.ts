@@ -18,7 +18,10 @@ export async function replaceFileAtomically(tempPath: string, targetPath: string
 		} catch (error) {
 			if (
 				process.platform !== "win32" ||
-				(!hasFsCode(error, "EPERM") && !hasFsCode(error, "EACCES") && !isEexist(error))
+				(!hasFsCode(error, "EPERM") &&
+					!hasFsCode(error, "EACCES") &&
+					!hasFsCode(error, "EBUSY") &&
+					!isEexist(error))
 			) {
 				throw error;
 			}

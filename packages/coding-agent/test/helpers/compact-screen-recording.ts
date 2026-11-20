@@ -3,6 +3,13 @@ type Snapshot = NativeSnapshot & { columns: number; rows: number };
 type Tui = (...args: string[]) => Promise<string>;
 type SnapshotReader = (tui: Tui) => Promise<NativeSnapshot>;
 
+function composerBounds(screen: string) {
+	const lines = screen.split("\n");
+	const start = lines.findLastIndex(line => line.startsWith("╭── "));
+	const end = lines.findIndex((line, index) => index > start && line.startsWith("╰─"));
+	return { lines, start, end };
+}
+
 // tui-test decodes the real PTY/ConPTY stream. These are sampled snapshots,
 // not completed-frame coverage: the VT journey owns the all-frame oracle.
 export class CompactScreenRecording {
@@ -88,10 +95,9 @@ export class CompactScreenRecording {
 		return this.#observe(event, check);
 	}
 
-	// A PTY acknowledgement can precede the app repaint; global visual idle
-	// never arrives while a tool spinner runs. Observe stability rather than
-	// an expected assertion result. The minimum also covers the renderer's
-	// 120ms resize settle and 200ms CPR fallback.
+	// The PTY resize acknowledgement can precede the app repaint. Wait for the
+	// resized composer and caret, not its animated header or elapsed-time footer.
+	// The minimum covers the renderer's 120ms settle and 200ms CPR fallback.
 	async waitForVisualHandoff(event = "resize"): Promise<void> {
 		this.mark(`${event} visual handoff`);
 		if (this.#failure) throw this.#failure;
@@ -100,22 +106,24 @@ export class CompactScreenRecording {
 		let stableSince = started;
 		while (Date.now() - started < 60_000) {
 			const frame = await this.#observe("resize handoff sample");
-			const footer = frame.screen
-				.split("\n")
-				.filter(line => line.trim())
-				.slice(-2)
-				.join("\n");
-			const fingerprint = JSON.stringify([frame.cursor.x, frame.cursor.y, footer]);
+			const { lines, start, end } = composerBounds(frame.screen);
+			const fingerprint =
+				start >= 0 &&
+				frame.cursor.y > start &&
+				frame.cursor.y < end &&
+				Bun.stringWidth(lines[end]!.trimEnd()) === frame.columns
+					? JSON.stringify([frame.cursor.x, frame.cursor.y, start, end, lines.slice(start + 1, end)])
+					: "";
 			const now = Date.now();
 			if (fingerprint !== previous) {
 				previous = fingerprint;
 				stableSince = now;
-			} else if (now - started >= 500 && now - stableSince >= 250) {
+			} else if (fingerprint && now - started >= 500 && now - stableSince >= 250) {
 				return;
 			}
 			await Bun.sleep(100);
 		}
-		throw new Error(`${event} did not reach a stable sampled footer and caret within 60 seconds`);
+		throw new Error(`${event} did not reach a stable sampled composer and caret within 60 seconds`);
 	}
 
 	async #observe(event: string, check?: (snapshot: Snapshot) => void): Promise<Snapshot> {
@@ -155,9 +163,7 @@ export class CompactScreenRecording {
 // The draft's tail and caret must be inside the composer, not merely present
 // in transcript/scrollback. Long drafts may legitimately scroll their prefix.
 export function expectVisibleDraft(snapshot: Snapshot, tail: string, columns: number, rows: number): void {
-	const lines = snapshot.screen.split("\n");
-	const start = lines.findLastIndex(line => line.startsWith("╭── "));
-	const end = lines.findIndex((line, index) => index > start && line.startsWith("╰─"));
+	const { lines, start, end } = composerBounds(snapshot.screen);
 	if (start < 0 || end <= start || snapshot.cursor.y <= start || snapshot.cursor.y >= end)
 		throw new Error("Composer borders and focused draft caret are not ordered in the visible viewport");
 	if (snapshot.cursor.x < 3 || snapshot.cursor.x >= columns || snapshot.cursor.y >= rows)
