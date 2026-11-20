@@ -40,6 +40,7 @@
 
 ### Changed
 
+- Compaction logs omit repetitive model selection and attempt records while retaining failure and fallback details.
 - TUI input predictions use the upstream request lifecycle and still discard suggestions from a previous session.
 - Session lists no longer drop a readable session just because it grows during a scan.
 - The intranet system notice describes the CentOS 7, NFS, and `/dev/shm` deployment without assuming the current host matches it.
