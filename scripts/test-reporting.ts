@@ -62,9 +62,33 @@ interface HistoryRun {
 	producers?: (TestProducerRecord & { report?: string })[];
 }
 
+const bunFulltestScopes = {
+	"ci-test-ts:local-ts": "fulltest: fork feature suites",
+	"ci-test-ts:all": "fulltest: all test suites",
+} as const;
+export type BunFulltestProducerScope = keyof typeof bunFulltestScopes;
+
+export async function isActiveBunFulltest(
+	scope: BunFulltestProducerScope,
+	dir = process.env.OMP_TEST_REPORT_DIR,
+	id = process.env.OMP_TEST_RUN_ID,
+): Promise<boolean> {
+	if (!dir || !id) return false;
+	try {
+		const run = JSON.parse(await fs.readFile(path.join(dir, "run.json"), "utf8"));
+		return run?.runId === id && run.scope === bunFulltestScopes[scope] && run.completion === "running";
+	} catch {
+		return false;
+	}
+}
+
+const timingHistoryMs = 7 * 24 * 60 * 60 * 1000;
+const generatedRunDirectory = /^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d\.\d{3}Z-\d+-[0-9a-f]{8}$/;
+
 // Scheduling hints are independent of successful coverage and affected-selection
 // baselines. A failed or interrupted fulltest still has completed chunk timings.
-export async function latestLocalTestProducers(
+export async function latestFulltestBunProducers(
+	scope: BunFulltestProducerScope,
 	currentSourceRevision: string | undefined,
 	root: string = reportRoot,
 	now: number = Date.now(),
@@ -74,8 +98,12 @@ export async function latestLocalTestProducers(
 	try {
 		const entries = await fs.readdir(root, { withFileTypes: true });
 		const latest = new Map<string, { started: number; producer?: TestProducerRecord }>();
+		// Old versions captured startedAtUtc after initial Git setup; leave a day
+		// of slack for generated directory names and apply the exact window below.
+		const oldPrefix = new Date(now - timingHistoryMs - 86400000).toISOString().replaceAll(":", "-");
 		for (const entry of entries) {
 			if (!entry.isDirectory() || entry.name === currentRunId) continue;
+			if (entry.name < oldPrefix && generatedRunDirectory.test(entry.name)) continue;
 			let run: HistoryRun;
 			try {
 				run = JSON.parse(await fs.readFile(path.join(root, entry.name, "run.json"), "utf8"));
@@ -86,14 +114,14 @@ export async function latestLocalTestProducers(
 			if (currentRunId !== undefined && run.runId === currentRunId) continue;
 			const started = Date.parse(run.startedAtUtc ?? "");
 			if (
-				run.scope !== "fulltest: fork feature suites" ||
+				run.scope !== bunFulltestScopes[scope] ||
 				run.platform !== process.platform ||
 				run.architecture !== process.arch ||
 				run.runtimeVersions?.bun !== Bun.version ||
 				!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(run.sourceRevision ?? "") ||
 				!Number.isFinite(started) ||
 				started > now ||
-				now - started > 7 * 24 * 60 * 60 * 1000
+				now - started > timingHistoryMs
 			)
 				continue;
 			const dir = path.join(root, entry.name);
@@ -115,11 +143,11 @@ export async function latestLocalTestProducers(
 			for (const producer of producers) {
 				if (
 					!producer ||
-					producer.scope !== "ci-test-ts:local-ts" ||
+					producer.scope !== scope ||
 					producer.report !== "available" ||
 					producer.selection?.tool !== "bun" ||
 					producer.selection.mode !== "full" ||
-					producer.selection.suiteRevision !== BUN_FORK_SUITE_REVISION ||
+					(scope === "ci-test-ts:local-ts" && producer.selection.suiteRevision !== BUN_FORK_SUITE_REVISION) ||
 					!["ordinary", "startup"].includes(producer.selection.group ?? "") ||
 					!Number.isInteger(producer.exitCode) ||
 					producer.exitCode < 0 ||
@@ -127,7 +155,7 @@ export async function latestLocalTestProducers(
 					producer.status !== (producer.exitCode === 0 ? "passed" : "failed")
 				)
 					continue;
-				const key = localTestProducerKey(producer);
+				const key = bunTestProducerKey(producer, scope);
 				const measured = Date.parse(producer.startedAt);
 				if (!key || !Number.isFinite(measured) || measured < started || measured > now) continue;
 				const previous = latest.get(key);
@@ -142,9 +170,9 @@ export async function latestLocalTestProducers(
 }
 
 /** Exact label and pre-budget argv identify a chunk, never its individual files. */
-export function localTestProducerKey(producer: TestProducerRecord): string | undefined {
+export function bunTestProducerKey(producer: TestProducerRecord, scope: BunFulltestProducerScope): string | undefined {
 	if (
-		(producer.scope !== "ci-test-ts:local" && producer.scope !== "ci-test-ts:local-ts") ||
+		producer.scope !== scope ||
 		typeof producer.producer !== "string" ||
 		!Array.isArray(producer.command) ||
 		!producer.command.every(arg => typeof arg === "string") ||
@@ -158,10 +186,17 @@ export function localTestProducerKey(producer: TestProducerRecord): string | und
 	const prefix = `${producer.scope}:`;
 	const match = /^([0-9a-f]{8}):(.+):attempt-1$/.exec(producer.producer.slice(prefix.length));
 	if (!producer.producer.startsWith(prefix) || !match) return undefined;
-	const argv = producer.command.filter(
-		arg => !/^(?:--parallel=|--timeout=|--reporter=|--reporter-outfile=)/.test(arg),
-	);
-	return JSON.stringify([match[2], argv]);
+	// Only remove the suffix written by the runner. A pre-budget argument
+	// with the same option name still belongs to the exact command identity.
+	const argv = producer.command;
+	let end = argv.length;
+	if (argv[end - 2] === "--reporter=junit" && argv[end - 1]?.startsWith("--reporter-outfile=")) end -= 2;
+	const grant = /^--max-concurrency=[12]$/.test(argv[end - 1] ?? "") ? 1 : 0;
+	if (argv[end - grant - 1]?.startsWith("--timeout=")) {
+		end -= 1 + grant;
+		if (argv[end - 1]?.startsWith("--parallel=")) end--;
+	}
+	return JSON.stringify([match[2], argv.slice(0, end)]);
 }
 
 /** Command-level cases are only for a single observable CLI probe, never a whole multi-case runner. */

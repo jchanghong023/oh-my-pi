@@ -48,7 +48,7 @@ it.each([
 					hook: theme.icon.extensionHook,
 				};
 			}
-			const custom = new Theme({}, {}, "truecolor", "unicode", {
+			const custom = new Theme({}, { statusLineBg: "#000000" }, "truecolor", "unicode", {
 				"icon.tokens": "T", "cmd.eraser": "C", "icon.extensionHook": "H",
 			});
 			result.custom = { tokens: custom.icon.tokens, clear: custom.cmd.eraser, hook: custom.icon.extensionHook };

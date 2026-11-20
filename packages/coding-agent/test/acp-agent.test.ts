@@ -4644,6 +4644,7 @@ describe("ACP agent MCP server configuration (late-connecting servers)", () => {
 			expect(namesOf(refreshSpy.mock.calls.at(-1)?.[0] ?? [])).toEqual([`mcp__delayed_${DELAYED_MCP_TOOL_NAME}`]);
 		} finally {
 			refreshSpy.mockRestore();
+			await harness.agent.dispose();
 		}
 	}, 15_000);
 
@@ -4663,6 +4664,7 @@ describe("ACP agent MCP server configuration (late-connecting servers)", () => {
 			expect(namesOf(refreshSpy.mock.calls[0]?.[0] ?? [])).toEqual([`mcp__delayed_${DELAYED_MCP_TOOL_NAME}`]);
 		} finally {
 			refreshSpy.mockRestore();
+			await harness.agent.dispose();
 		}
 	}, 15_000);
 

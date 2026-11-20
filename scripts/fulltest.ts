@@ -9,7 +9,13 @@ import { getPuppeteerDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
-import { buildChildEnv, bunTestSelection, testTimeoutMs } from "./ci-test-ts";
+import {
+	buildChildEnv,
+	bunTestSelection,
+	FULLTEST_BUN_CAPACITY_FILE,
+	FULLTEST_HOME_PREFIX,
+	testTimeoutMs,
+} from "./ci-test-ts";
 import { gateRepoRoot, fastcheckCommands } from "./fastcheck";
 import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateAbortError, GateCommandError } from "./test-gate-failure-events";
@@ -57,32 +63,46 @@ export function gateCpuBudget(
 	return release.toLowerCase().includes("microsoft") ? halfCores : cores;
 }
 
-/** Keep static/subprocess headroom while favoring the longer Bun test lane. */
+const MIN_PARALLEL_BUDGET = 4;
+
+/** Rust static and workspace tests share a reservation because they both use Cargo. */
 export function fulltestWorkerAllocation(
 	cpuBudget: number,
 	hasOrdinaryTests: boolean,
-	hasRustTests: boolean,
+	hasRustWork: boolean,
 	hasStartupTests: boolean,
+	tsChecks: number,
+	scriptCommands: number,
+	sharedTypeScript = false,
 ) {
 	const budget = testConcurrencyLimit(cpuBudget, process.platform, "");
-	const capacity = Math.max(1, budget - 4);
-	const lanes = Number(hasOrdinaryTests) + Number(hasRustTests) + Number(hasStartupTests);
-	const serial = capacity < Math.max(2, lanes);
+	const serial = budget < MIN_PARALLEL_BUDGET;
+	const lanes = Number(hasOrdinaryTests) + Number(hasRustWork) + Number(hasStartupTests);
+	const staticWorkers = Math.min(tsChecks, serial ? 1 : Math.min(2, budget - lanes, Math.floor(budget / 4)));
+	// Pure fixtures reuse the static slot under pressure. Keep room for two
+	// ordinary workers plus startup, whether shared or split across pools.
+	const bunHeadroom = staticWorkers && hasOrdinaryTests ? (sharedTypeScript ? 2 : 1) : 0;
+	const scriptCapacity = budget - lanes - staticWorkers - bunHeadroom;
+	const scripts = Math.min(scriptCommands, serial ? 1 : Math.min(2, Math.max(0, scriptCapacity)));
+	const capacity = budget - staticWorkers - scripts;
 	const startup = !hasStartupTests
 		? 0
 		: serial
 			? 1
-			: !hasOrdinaryTests && !hasRustTests
+			: !hasOrdinaryTests && !hasRustWork
 				? capacity
 				: Math.min(4, Math.max(1, Math.floor(capacity / 4)));
 	const remaining = serial ? 1 : capacity - startup;
-	const rust = !hasRustTests
+	// A workspace Nextest run otherwise keeps the Cargo lane busy long after
+	// Bun drains. Use the second slot only when the two Bun workers still fit.
+	const minRust = sharedTypeScript && budget >= 8 && remaining >= 4 ? 2 : 1;
+	const rust = !hasRustWork
 		? 0
 		: !hasOrdinaryTests || serial
 			? remaining
-			: Math.min(4, Math.max(1, Math.floor(remaining / 4)));
+			: Math.min(4, Math.max(minRust, Math.floor(remaining / 4)));
 	const ordinary = hasOrdinaryTests ? (serial ? 1 : remaining - rust) : 0;
-	return { ordinary, rust, startup, serial };
+	return { ordinary, rust, startup, staticWorkers, scripts, serial };
 }
 
 /** Runtime tests use local fixtures, never the owner's live model credentials. */
@@ -153,36 +173,55 @@ export function localTestEnvironment(home: string): Record<string, string | unde
 	};
 }
 
+function typeScriptEnvironment(home: string): Record<string, string | undefined> {
+	const env = localTestEnvironment(home);
+	if (process.platform === "win32") {
+		// Chromium resolves its default profile through Windows known folders.
+		// A redirected USERPROFILE with host AppData makes it reject even a
+		// separate --user-data-dir as default and refuse to start DevTools.
+		env.APPDATA = path.join(home, "AppData", "Roaming");
+		env.LOCALAPPDATA = path.join(home, "AppData", "Local");
+	}
+	return env;
+}
+
+const fullTypeScriptLabel = "test/TypeScript full suite";
+const forkTypeScriptLabel = "test/TypeScript fork feature suite";
+const startupTypeScriptLabel = "test/TypeScript startup suite";
+
 /** Execute the requested suites; independently authorized integrations stay separate. */
 export function fulltestCommands(options: FulltestOptions, home: string, sourceRevision?: string): GateCommand[] {
 	const env = localTestEnvironment(home);
 	return [
 		{
-			label: "test/TypeScript fork feature suite",
+			label: options.full ? fullTypeScriptLabel : forkTypeScriptLabel,
 			argv: options.full
-				? ["bun", "scripts/ci-test-ts.ts", "all", "--exclude-desktop", "--unsharded", "--defer-startup"]
+				? ["bun", "scripts/ci-test-ts.ts", "all", "--exclude-desktop", "--unsharded", "--shared-fulltest-pool"]
 				: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--defer-startup"],
 			cwd: gateRepoRoot,
 			env: {
-				...localTestEnvironment(path.join(home, "typescript")),
+				...typeScriptEnvironment(path.join(home, "typescript")),
 				OMP_TEST_CONCURRENCY: "all",
 				OMP_FULLTEST_AFFECTED: options.full ? undefined : "1",
+				OMP_FULLTEST_STARTUP_HOME: options.full ? path.join(home, "typescript-startup") : undefined,
 				OMP_FULLTEST_SOURCE_REVISION: sourceRevision,
 			},
 		},
-		{
-			label: "test/TypeScript startup suite",
-			argv: options.full
-				? ["bun", "scripts/ci-test-ts.ts", "all", "--exclude-desktop", "--unsharded", "--only-startup"]
-				: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--only-startup"],
-			cwd: gateRepoRoot,
-			env: {
-				...localTestEnvironment(path.join(home, "typescript-startup")),
-				OMP_TEST_CONCURRENCY: "all",
-				OMP_FULLTEST_AFFECTED: options.full ? undefined : "1",
-				OMP_FULLTEST_SOURCE_REVISION: sourceRevision,
-			},
-		},
+		...(options.full
+			? []
+			: [
+					{
+						label: startupTypeScriptLabel,
+						argv: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--only-startup"],
+						cwd: gateRepoRoot,
+						env: {
+							...typeScriptEnvironment(path.join(home, "typescript-startup")),
+							OMP_TEST_CONCURRENCY: "all",
+							OMP_FULLTEST_AFFECTED: "1",
+							OMP_FULLTEST_SOURCE_REVISION: sourceRevision,
+						},
+					},
+				]),
 		{
 			label: options.full ? "test/Rust workspace" : "test/Rust fork features",
 			argv: ["bun", "scripts/run-rs-task.ts", "test:rs", ...(options.full ? ["--full"] : [])],
@@ -422,7 +461,7 @@ async function runFulltestObserved(
 		].map(command => attempt(command.label, () => gate.run(command))),
 	);
 	const home = await acquire("isolated test home", () =>
-		fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-home-")),
+		fs.promises.mkdtemp(path.join(os.tmpdir(), FULLTEST_HOME_PREFIX)),
 	);
 	try {
 		// Native source/binding generation must finish before static/test readers.
@@ -440,7 +479,6 @@ async function runFulltestObserved(
 				{ concurrency: 1 },
 			),
 		);
-		const cpuBudget = testConcurrencyLimit(infrastructure.cpuBudget ?? gateCpuBudget());
 		if (report?.owner) {
 			report.sourceRevision = source.head;
 			report.dirtyState = source.dirty ? "dirty" : "clean";
@@ -615,20 +653,37 @@ async function runFulltestObserved(
 			scope: options.full ? "all-tests" : "fork-features",
 		});
 		await attempt("test homes", async () => {
-			for (const command of tests)
-				if (command.env?.HOME) await gate.charged(() => fs.promises.mkdir(command.env!.HOME!, { recursive: true }));
+			for (const command of tests) {
+				if (!command.env?.HOME) continue;
+				const directories = [command.env.HOME];
+				if (process.platform === "win32" && command.label.startsWith("test/TypeScript")) {
+					directories.push(command.env.APPDATA!, command.env.LOCALAPPDATA!);
+				}
+				const startupHome =
+					command.label === fullTypeScriptLabel ? command.env.OMP_FULLTEST_STARTUP_HOME : undefined;
+				if (startupHome) {
+					directories.push(startupHome);
+					if (process.platform === "win32") {
+						directories.push(
+							path.join(startupHome, "AppData", "Roaming"),
+							path.join(startupHome, "AppData", "Local"),
+						);
+					}
+				}
+				await gate.charged(() =>
+					Promise.all(directories.map(directory => fs.promises.mkdir(directory, { recursive: true }))),
+				);
+			}
 		});
-		// Share the test capacity across all independent lanes; long startup
-		// consumers must not wait behind the entire ordinary queue.
-		const ordinaryTests = tests.filter(command => command.label === "test/TypeScript fork feature suite");
-		const startupTests = tests.filter(command => command.label === "test/TypeScript startup suite");
-		const rustTests = tests.filter(command => command.label.startsWith("test/Rust"));
-		const allocation = fulltestWorkerAllocation(
-			cpuBudget,
-			ordinaryTests.length > 0,
-			rustTests.length > 0,
-			startupTests.length > 0,
+		const typeScriptLabel = options.full ? fullTypeScriptLabel : forkTypeScriptLabel;
+		const typeScriptTests = tests.filter(command => command.label === typeScriptLabel);
+		const startupTests = tests.filter(command => command.label === startupTypeScriptLabel);
+		const rustTests = tests.filter(command => command.argv[1] === "scripts/run-rs-task.ts");
+		const rustSdk = tests.filter(command => command.label === "test/Rust SDK");
+		const otherSuites = tests.filter(
+			command => command.label === "test/Python suites" || command.label === "test/Go SDK",
 		);
+		const smokeTests = tests.filter(command => command.label === "smoke/isolated native TUI PTY");
 		const withBudget = (command: GateCommand, budget: number): GateCommand => ({
 			...command,
 			env: {
@@ -638,81 +693,185 @@ async function runFulltestObserved(
 				RUST_TEST_THREADS: String(budget),
 			},
 		});
-		const scriptRun = attempt("independent repository scripts", () =>
-			runGateCommands(gate, independentScriptCommands, { concurrency: allocation.serial ? 1 : 2 }),
-		);
-		if (allocation.serial) await scriptRun;
-		// Rust tests need only wait for the Cargo static lane, not unrelated TS checks.
-		const rustChecksFinished = Promise.withResolvers<void>();
-		const staticRun = (async () => {
-			try {
-				await attempt("static checks", () =>
-					gate.childGate("fastcheck", async child => {
-						const checks = (await child.charged(fastcheckCommands)).map(command =>
-							command.label.startsWith("static/Rust")
-								? { ...command, env: { ...localTestEnvironment(home), ...command.env } }
-								: command,
-						);
-						if (!checks.length) console.error("fulltest: NOT_RUN static checks");
-						let remainingRustChecks = checks.filter(command => command.label.startsWith("static/Rust")).length;
-						if (!remainingRustChecks) rustChecksFinished.resolve();
-						await runGateCommands(child, checks, {
-							concurrency: allocation.serial ? 1 : 2,
-							onCommandSettled: command => {
-								if (command.label.startsWith("static/Rust") && --remainingRustChecks === 0)
-									rustChecksFinished.resolve();
-							},
-						});
-					}),
-				);
-			} finally {
-				// Also release on selection failure or cancellation before a Rust check starts.
-				rustChecksFinished.resolve();
-			}
-		})();
-		const smokeTests = tests.filter(command => command.label === "smoke/isolated native TUI PTY");
-		const otherTests = tests.filter(
-			command =>
-				command.label !== "test/TypeScript fork feature suite" &&
-				command.label !== "test/TypeScript startup suite" &&
-				command.label !== "smoke/isolated native TUI PTY" &&
-				!command.label.startsWith("test/Rust"),
-		);
-		const startupRun = (async () => {
-			if (allocation.serial) await staticRun;
-			await attempt("TypeScript startup tests", () =>
+		const runTests = (label: string, commands: GateCommand[], budget: number) =>
+			attempt(label, () =>
 				runGateCommands(
 					gate,
-					startupTests.map(command => withBudget(command, allocation.startup)),
+					commands.map(command => withBudget(command, budget)),
 					{ concurrency: 1 },
 				),
 			);
+		const runScripts = (concurrency: number) =>
+			attempt("independent repository scripts", () =>
+				runGateCommands(gate, independentScriptCommands, { concurrency }),
+			);
+		// Count Windows memory after isolated script fixtures have released their processes.
+		const cpuBudget = testConcurrencyLimit(infrastructure.cpuBudget ?? gateCpuBudget());
+		if (cpuBudget < MIN_PARALLEL_BUDGET && independentScriptCommands.length) await runScripts(1);
+
+		const checksReady = Promise.withResolvers<{ ts: number; rust: number }>();
+		const rustChecksFinished = Promise.withResolvers<void>();
+		const tsChecksFinished = Promise.withResolvers<void>();
+		const allocationReady = checksReady.promise.then(({ ts, rust }) =>
+			fulltestWorkerAllocation(
+				cpuBudget,
+				typeScriptTests.length > 0,
+				rust > 0 || rustTests.length > 0 || rustSdk.length > 0,
+				startupTests.length > 0,
+				ts,
+				independentScriptCommands.length,
+				options.full,
+			),
+		);
+		const staticRun = attempt("static checks", () =>
+			gate.childGate("fastcheck", async child => {
+				const checks = await child.charged(fastcheckCommands);
+				if (!checks.length) console.error("fulltest: NOT_RUN static checks");
+				const rustChecks = checks.filter(command => command.label.startsWith("static/Rust"));
+				checksReady.resolve({ ts: checks.length - rustChecks.length, rust: rustChecks.length });
+				const allocation = await allocationReady;
+				const budgetCheck = (command: GateCommand) =>
+					command.label.startsWith("static/Rust")
+						? withBudget({ ...command, env: { ...localTestEnvironment(home), ...command.env } }, allocation.rust)
+						: withBudget({ ...command, env: { ...command.env, GOMAXPROCS: "1", RAYON_NUM_THREADS: "1" } }, 1);
+				if (allocation.serial) {
+					await runGateCommands(child, checks.map(budgetCheck), { concurrency: 1 });
+				} else {
+					// Keep one reservation for Cargo even as its static checks turn over to tests.
+					const tsChecks = checks.filter(command => !command.label.startsWith("static/Rust"));
+					const failures: unknown[] = [];
+					const runChecks = async (commands: GateCommand[], concurrency: number, release: () => void) => {
+						try {
+							await runGateCommands(child, commands.map(budgetCheck), { concurrency });
+						} catch (error) {
+							failures.push(error);
+						} finally {
+							release();
+						}
+					};
+					await Promise.all([
+						runChecks(rustChecks, 1, rustChecksFinished.resolve),
+						runChecks(tsChecks, allocation.staticWorkers, tsChecksFinished.resolve),
+					]);
+					if (failures.length) throw failures[0];
+				}
+			}),
+		).finally(() => {
+			// Release on plan failure or child cancellation before any command starts.
+			checksReady.resolve({ ts: 0, rust: 0 });
+			rustChecksFinished.resolve();
+			tsChecksFinished.resolve();
+		});
+		const allocation = await allocationReady;
+		const elasticBun = options.full && !allocation.serial && allocation.ordinary > 0;
+		const borrowedScriptSlot = Number(!allocation.scripts && independentScriptCommands.length > 0);
+		let bunCapacity = allocation.ordinary;
+		let bunCapacityFile: string | undefined;
+		let otherSlotReserved = false;
+		const giveBunSlots = (slots: number) => {
+			if (!elasticBun || !slots || gate.signal.aborted) return;
+			bunCapacity += slots;
+			const file = bunCapacityFile;
+			if (file) return attempt("shared Bun capacity", async () => fs.truncateSync(file, bunCapacity));
+		};
+		const releaseBackground = (slots: number, availableToOther: boolean) => {
+			// Python/Go get the first eligible background slot, not a second CPU budget.
+			if (elasticBun && availableToOther && otherSuites.length && !otherSlotReserved) {
+				otherSlotReserved = true;
+				slots--;
+			}
+			return giveBunSlots(slots);
+		};
+		const tsSlotsReleased = elasticBun
+			? tsChecksFinished.promise.then(() => {
+					if (allocation.staticWorkers)
+						return releaseBackground(allocation.staticWorkers - borrowedScriptSlot, !borrowedScriptSlot);
+				})
+			: tsChecksFinished.promise;
+		const scriptRun = (async () => {
+			if (allocation.serial || !independentScriptCommands.length) return;
+			// When only one background slot fits, pure fixtures take it after TS static checks.
+			if (!allocation.scripts) await tsChecksFinished.promise;
+			await runScripts(allocation.scripts || 1);
+			await releaseBackground(allocation.scripts || 1, true);
+		})();
+		const startupRun = (async () => {
+			if (!startupTests.length) return;
+			if (allocation.serial) await staticRun;
+			await runTests("TypeScript startup tests", startupTests, allocation.startup);
 		})();
 		const testRun = (async () => {
-			if (allocation.serial) await startupRun;
-			await attempt("non-Rust tests", () =>
-				runGateCommands(
-					gate,
-					ordinaryTests.map(command => withBudget(command, allocation.ordinary)),
-					{
-						concurrency: 1,
-					},
-				),
-			);
+			if (allocation.serial) await (startupTests.length ? startupRun : staticRun);
+			if (elasticBun && !gate.signal.aborted) {
+				await attempt("shared Bun capacity", async () => {
+					const file = path.join(home, FULLTEST_BUN_CAPACITY_FILE);
+					// File length is the monotonic slot count: a reader cannot see a partial value.
+					fs.writeFileSync(file, Buffer.alloc(bunCapacity), { flag: "wx" });
+					bunCapacityFile = file;
+				});
+			}
+			const commands = bunCapacityFile
+				? typeScriptTests.map(command => ({
+						...command,
+						env: { ...command.env, OMP_FULLTEST_BUN_MAX_CAPACITY: String(cpuBudget) },
+					}))
+				: typeScriptTests;
+			try {
+				await runTests("TypeScript tests", commands, allocation.ordinary);
+			} finally {
+				bunCapacityFile = undefined;
+			}
 		})();
 		const rustRun = (async () => {
-			if (allocation.serial) await testRun;
-			else await rustChecksFinished.promise;
-			await attempt("Rust tests", () =>
-				runGateCommands(
-					gate,
-					rustTests.map(command => withBudget(command, allocation.rust)),
-					{ concurrency: 1 },
-				),
-			);
+			await (allocation.serial ? testRun : rustChecksFinished.promise);
+			await runTests("Rust tests", rustTests, allocation.rust);
 		})();
-		await Promise.all([staticRun, testRun, rustRun, startupRun, scriptRun]);
-		await attempt("other tests", () => runGateCommands(gate, otherTests, { concurrency: 1 }));
+		const otherRun = (async () => {
+			if (!otherSuites.length) return;
+			if (allocation.serial) {
+				await rustRun;
+			} else {
+				// Reuse the first released non-Cargo reservation. Don't race an absent lane.
+				const releasedLanes = [
+					...(allocation.startup ? [startupRun] : []),
+					...(allocation.ordinary ? [testRun] : []),
+					...(independentScriptCommands.length ? [scriptRun] : []),
+					...(allocation.staticWorkers && (allocation.scripts || !independentScriptCommands.length)
+						? [tsSlotsReleased]
+						: []),
+				];
+				if (releasedLanes.length) await Promise.race(releasedLanes);
+			}
+			await runTests(
+				"Python and Go tests",
+				otherSuites.map(command =>
+					command.label === "test/Go SDK" ? { ...command, env: { ...command.env, GOMAXPROCS: "1" } } : command,
+				),
+				1,
+			);
+			await giveBunSlots(Number(otherSlotReserved));
+		})();
+		const sdkRun = (async () => {
+			if (!rustSdk.length) return;
+			// The SDK is a standalone Cargo workspace but can share CARGO_HOME or CARGO_TARGET_DIR.
+			await (allocation.serial ? otherRun : rustRun);
+			await runTests("Rust SDK tests", rustSdk, allocation.rust);
+		})();
+		// Release the Cargo reservation only after its final user, including the standalone SDK.
+		const cargoReleased = elasticBun
+			? (rustSdk.length ? sdkRun : rustRun).then(() => giveBunSlots(allocation.rust))
+			: undefined;
+		await Promise.all([
+			staticRun,
+			testRun,
+			rustRun,
+			startupRun,
+			scriptRun,
+			otherRun,
+			sdkRun,
+			tsSlotsReleased,
+			cargoReleased,
+		]);
 		await attempt("isolated native TUI smoke", () =>
 			runGateCommands(
 				gate,

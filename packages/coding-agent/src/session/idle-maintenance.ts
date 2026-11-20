@@ -86,6 +86,8 @@ export class IdleMaintenance {
 	#pending: PendingStretch | undefined;
 	/** Bumped to supersede the settling check that will arm this stretch. */
 	#check = 0;
+	/** A still-open run may end after reload without starting another model loop. */
+	#runSuperseded = false;
 	/** The recap request in flight; aborted when it is no longer wanted. */
 	#recapRun: AbortController | undefined;
 	#recapTimer: NodeJS.Timeout | undefined;
@@ -112,11 +114,13 @@ export class IdleMaintenance {
 		this.#schedule();
 	}
 
-	/**
-	 * Supersede the current stretch: nothing captured before this call may arm, record or announce
-	 * afterwards. Called on new activity, maintenance, at the start of every session transition and on disposal.
-	 */
-	invalidate(): void {
+	/** Supersede the current stretch and any terminal event still owed by the outgoing transcript. */
+	onSessionTransition(): void {
+		this.#runSuperseded = this.#session.isRunActive;
+		this.#invalidate();
+	}
+
+	#invalidate(): void {
 		this.#pending = undefined;
 		this.#clearTimers();
 		this.#check++;
@@ -126,19 +130,26 @@ export class IdleMaintenance {
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
-		this.invalidate();
+		this.#invalidate();
 		for (const stop of this.#stops.splice(0)) stop();
 	}
 
 	#observe(event: AgentSessionEvent): void {
 		switch (event.type) {
 			case "agent_start":
+				this.#runSuperseded = false;
+				this.#invalidate();
+				break;
 			case "auto_compaction_start":
 			case "auto_compaction_end":
-				this.invalidate();
+				this.#invalidate();
 				break;
 			case "agent_end":
-				this.invalidate();
+				this.#invalidate();
+				if (this.#runSuperseded) {
+					this.#runSuperseded = false;
+					break;
+				}
 				// Nothing was generated to recap: the stretch owes no recap, however its blockers change later.
 				this.#pending = { recap: priorMessageWasGenerated(event.messages), compaction: true };
 				this.#schedule();

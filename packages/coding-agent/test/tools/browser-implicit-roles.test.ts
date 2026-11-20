@@ -103,24 +103,40 @@ describe.skipIf(!available)("browser implicit role selectors", () => {
 				const name = String(ax.name?.value ?? "");
 				computed.push({ id, role, name });
 			}
+			// Tern computes names from the DOM; it cannot read Chrome's locale-specific AX captions.
+			const ternDefaultNames = new Map([
+				["submit-target", "Submit"],
+				["submit-target-section", "Submit"],
+				["bare-image-target", "Submit"],
+				["bare-image-section", "Submit"],
+				["reset-target", "Reset"],
+				["reset-target-section", "Reset"],
+			]);
+			const ternNameOf = (entry: (typeof computed)[number]) => ternDefaultNames.get(entry.id) ?? entry.name;
 			const mismatches = [];
-			for (const { role, name } of computed) {
+			for (const entry of computed) {
+				const { role, name } = entry;
 				const query = `${role}[name="${name}" exact]`;
 				const expected = computed
 					.filter(entry => entry.role === role && entry.name === name)
 					.map(entry => entry.id)
 					.sort();
 				const ids = await page.$$eval(`role/${query}`, elements => elements.map(element => element.id));
+				const ternName = ternNameOf(entry);
+				const ternQuery = `${role}[name="${ternName}" exact]`;
+				const expectedTernCount =
+					ids.filter(id => !id).length +
+					computed.filter(entry => entry.role === role && ternNameOf(entry) === ternName).length;
 				const ternCount = await page.evaluate(query => {
 					// The kit is installed above in this page's realm.
 					const globals = globalThis as unknown as { __ompTernKit: { count(selector: unknown): number } };
 					return globals.__ompTernKit.count({ engine: "role", query });
-				}, query);
+				}, ternQuery);
 				// Chrome leaves plain containers (divs, spans) out of its tree while the kit calls them all generic, so
 				// generic counts are compared through the ids above only.
-				const ternMatches = role === "generic" || ternCount === ids.length;
+				const ternMatches = role === "generic" || ternCount === expectedTernCount;
 				if (JSON.stringify(ids.filter(Boolean).sort()) !== JSON.stringify(expected) || !ternMatches) {
-					mismatches.push({ query, expected, ids, ternCount });
+					mismatches.push({ query, expected, ids, ternQuery, expectedTernCount, ternCount });
 				}
 			}
 			expect(mismatches).toEqual([]);

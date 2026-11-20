@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
-import { randomUUID } from "node:crypto";
-import type { Dirent } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { type Dirent, lstatSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,13 +13,17 @@ import type { GateRun } from "./test-gate-runtime";
 import {
 	beginTestRun,
 	BUN_FORK_SUITE_REVISION,
+	bunTestProducerKey,
 	endTestRun,
-	latestLocalTestProducers,
-	localTestProducerKey,
+	isActiveBunFulltest,
+	latestFulltestBunProducers,
 	recordTestProducer,
 	testReportPath,
 } from "./test-reporting";
-import type { TestProducerRecord } from "./test-reporting";
+import type { BunFulltestProducerScope, TestProducerRecord } from "./test-reporting";
+
+export const FULLTEST_HOME_PREFIX = "omp-fulltest-home-";
+export const FULLTEST_BUN_CAPACITY_FILE = ".bun-capacity";
 
 type Mode =
 	| "all"
@@ -42,6 +46,9 @@ interface TestCommand {
 	command: string[];
 	/** `bun test --parallel` width this chunk wants when it has the machine to itself. */
 	parallel?: number;
+	/** A fresh command process already isolates a one-file chunk. */
+	oneFile?: boolean;
+	knowledgeCliSlots?: 1 | 2;
 	requireNoSelection?: boolean;
 	selection?: BunSelection;
 }
@@ -49,6 +56,7 @@ interface TestCommand {
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
 
 const repoRoot = path.join(import.meta.dir, "..");
+const knowledgeCliTest = "test/knowledge-search-cli.e2e.test.ts";
 
 export interface BunSelection {
 	tool: "bun";
@@ -229,6 +237,8 @@ const quiet = onlyFailures;
 // A gate receives failures immediately; independent chunks and the rest of
 // each suite still run so one failure cannot hide the remaining results.
 const gateReportsFailures = Boolean(process.env.OMP_GATE_EVENT_TOKEN);
+const sharedFulltestPool = args.includes("--shared-fulltest-pool");
+const fulltestStartupHome = sharedFulltestPool ? Bun.env.OMP_FULLTEST_STARTUP_HOME : undefined;
 
 const validModes: Record<Mode, true> = {
 	all: true,
@@ -787,6 +797,7 @@ async function codingAgentTestCommands(
 	bucket: CodingAgentBucket,
 	forkOnly = false,
 	all = false,
+	isolateKnowledgeCli = false,
 ): Promise<TestCommand[]> {
 	const partition = await getCodingAgentTestPartition(all);
 	const testFiles = partition[bucket].filter(file =>
@@ -801,7 +812,7 @@ async function codingAgentTestCommands(
 	const chunks: string[][] = [];
 	let pending: string[] = [];
 	for (const file of testFiles) {
-		if (isStartupTest(file)) {
+		if (isStartupTest(file) || (isolateKnowledgeCli && file === knowledgeCliTest)) {
 			if (pending.length) chunks.push(pending);
 			pending = [];
 			chunks.push([file]);
@@ -814,12 +825,17 @@ async function codingAgentTestCommands(
 		}
 	}
 	if (pending.length) chunks.push(pending);
-	const chunkCount = chunks.length;
+	// The label is also timing identity: adding unrelated files must not rename an
+	// unchanged chunk, particularly a one-file Windows or startup chunk.
 	const commands: TestCommand[] = [];
 	for (const chunk of chunks) {
-		const chunkLabel = chunkCount > 1 ? ` chunk ${commands.length + 1}/${chunkCount}` : "";
+		const first = chunk[0]!;
+		const members =
+			chunk.length === 1
+				? first
+				: `${first} + ${chunk.length - 1} more; ${createHash("sha256").update(JSON.stringify(chunk)).digest("hex").slice(0, 12)}`;
 		commands.push({
-			label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel}${chunkLabel}; ${chunk.length} files)`,
+			label: `packages/coding-agent (${plan.label}; ${members})`,
 			cwd: "packages/coding-agent",
 			command: [
 				"bun",
@@ -828,12 +844,14 @@ async function codingAgentTestCommands(
 				...chunk.map(file => (file.endsWith(".e2e.ts") ? `./${file}` : file)),
 			],
 			parallel: plan.parallel,
+			oneFile: chunk.length === 1,
+			...(isolateKnowledgeCli && first === knowledgeCliTest ? { knowledgeCliSlots: 1 as const } : {}),
 		});
 	}
 	return commands;
 }
 
-async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
+async function commandsForMode(mode: Mode, isolateKnowledgeCli = false): Promise<TestCommand[]> {
 	switch (mode) {
 		case "workspace":
 			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
@@ -858,10 +876,10 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			return [
 				...(await commandsForMode("workspace")),
 				...(await commandsForMode("native")),
-				...(await codingAgentTestCommands("singleton", false, true)),
-				...(await codingAgentTestCommands("ui", false, true)),
-				...(await codingAgentTestCommands("runtime", false, true)),
-				...(await codingAgentTestCommands("native", false, true)),
+				...(await codingAgentTestCommands("singleton", false, true, isolateKnowledgeCli)),
+				...(await codingAgentTestCommands("ui", false, true, isolateKnowledgeCli)),
+				...(await codingAgentTestCommands("runtime", false, true, isolateKnowledgeCli)),
+				...(await codingAgentTestCommands("native", false, true, isolateKnowledgeCli)),
 			];
 		// Select individual fork consumers before applying the usual isolation chunks.
 		case "local-ts": {
@@ -884,10 +902,10 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			}
 			return [
 				...packages,
-				...(await codingAgentTestCommands("singleton", true)),
-				...(await codingAgentTestCommands("ui", true)),
-				...(await codingAgentTestCommands("runtime", true)),
-				...(await codingAgentTestCommands("native", true)),
+				...(await codingAgentTestCommands("singleton", true, false, isolateKnowledgeCli)),
+				...(await codingAgentTestCommands("ui", true, false, isolateKnowledgeCli)),
+				...(await codingAgentTestCommands("runtime", true, false, isolateKnowledgeCli)),
+				...(await codingAgentTestCommands("native", true, false, isolateKnowledgeCli)),
 			];
 		}
 		// Root `bun run test` adds the Rust fork task to local TypeScript.
@@ -1001,6 +1019,23 @@ async function recordAttempt(
 	return missing;
 }
 
+function testCommandEnv(testCommand: TestCommand, env: Record<string, string | undefined>) {
+	const startupHome = testCommand.selection?.group === "startup" ? fulltestStartupHome : undefined;
+	if (!startupHome && testCommand.knowledgeCliSlots !== 2) return env;
+	return {
+		...env,
+		...(startupHome && {
+			HOME: startupHome,
+			USERPROFILE: startupHome,
+			...(process.platform === "win32" && {
+				APPDATA: path.join(startupHome, "AppData", "Roaming"),
+				LOCALAPPDATA: path.join(startupHome, "AppData", "Local"),
+			}),
+		}),
+		...(testCommand.knowledgeCliSlots === 2 && { OMP_TEST_KNOWLEDGE_CLI_SLOTS: "2" }),
+	};
+}
+
 async function runTestCommand(
 	testCommand: TestCommand,
 	notifyFailure?: (error: GateCommandError) => void,
@@ -1013,7 +1048,7 @@ async function runTestCommand(
 		return;
 	}
 
-	const env = buildChildEnv();
+	const env = testCommandEnv(testCommand, buildChildEnv());
 	for (let attempt = 1; ; attempt++) {
 		const { command, reportPath } = reportedCommand(testCommand, attempt);
 		const renderedCommand = command.map(shellQuote).join(" ");
@@ -1140,6 +1175,8 @@ export function buildChildEnv(): Record<string, string | undefined> {
 		GITHUB_ACTIONS: "",
 		...(Bun.env.GITHUB_ACTIONS === "true" ? { OMP_FORCE_RUST_TASKS: "1" } : {}),
 		PI_TEST_RUNTIME: "1",
+		OMP_TEST_KNOWLEDGE_CLI_SLOTS: undefined,
+		OMP_FULLTEST_BUN_MAX_CAPACITY: undefined,
 		BUN_JSC_useConcurrentGC: "0",
 		BUN_JSC_numberOfGCMarkers: "1",
 	};
@@ -1333,22 +1370,22 @@ export function testTimeoutMs(override: string | undefined = Bun.env.OMP_TEST_TI
 	return 30_000;
 }
 
-// Materialize each chunk's argv against the pool width it will actually run at,
-// rewriting `parallel` from the requested width to the granted one so later
-// reporting reads the truth. A `parallel` request marks the command as a `bun
-// test` invocation, so that is also where the shared per-test timeout is
-// applied; the Rust task, which has neither, passes through untouched.
-function applyChunkBudget(commands: TestCommand[], poolWidth: number): TestCommand[] {
-	const timeout = testTimeoutMs();
-	return commands.map(testCommand => {
-		if (testCommand.parallel === undefined) return testCommand;
-		const parallel = budgetedParallel(testCommand.parallel, poolWidth);
-		return {
-			...testCommand,
-			command: [...testCommand.command, `--parallel=${parallel}`, `--timeout=${timeout}`],
-			parallel,
-		};
-	});
+// Materialize argv from the actual lease, rather than requesting more files or
+// concurrent Knowledge scenarios than fit alongside the other live children.
+function applyChunkBudget(testCommand: TestCommand, parallel: number, slots: number, inFulltest: boolean): TestCommand {
+	if (testCommand.parallel === undefined) return testCommand;
+	const knowledgeCliSlots = testCommand.knowledgeCliSlots === undefined ? undefined : slots >= 2 ? 2 : 1;
+	return {
+		...testCommand,
+		command: [
+			...testCommand.command,
+			...(inFulltest && testCommand.oneFile ? [] : [`--parallel=${parallel}`]),
+			`--timeout=${testTimeoutMs()}`,
+			...(knowledgeCliSlots === undefined ? [] : [`--max-concurrency=${knowledgeCliSlots}`]),
+		],
+		knowledgeCliSlots,
+		parallel,
+	};
 }
 
 // ANSI styling for interactive runs only; disabled when stdout is not a TTY or
@@ -1494,48 +1531,102 @@ function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): strin
 	return lines.join("\n");
 }
 
-// Workers exit when no runnable item remains. If only capped items are left,
-// their active workers will take them as slots open; no polling or wakeup is
-// needed, and runnable items retain their original relative order.
+// Refill on every completion, including when one weighted chunk releases
+// multiple slots. Skip blocked entries without disturbing runnable order.
+interface PoolLease<T> {
+	budget: number;
+	slots: (item: T) => readonly [minimum: number, preferred: number];
+	/** Absolute slot capacity; only the gate-owned shared pool can grow. */
+	readBudget?: () => number | undefined;
+}
+
 export async function runBoundedPool<T>(
 	items: T[],
 	concurrency: number,
 	isBounded: (item: T) => boolean,
 	boundedLimit: number,
-	run: (item: T) => Promise<void>,
+	run: (item: T, slots: number) => Promise<void>,
 	isExclusive: (item: T) => boolean = () => false,
+	lease?: PoolLease<T>,
 ): Promise<void> {
-	const queue = items.map(item => ({ item, bounded: isBounded(item), exclusive: isExclusive(item) }));
+	let budget = lease?.budget ?? concurrency;
+	let width = concurrency;
+	const queue = items.map(item => {
+		const [minimum, preferred] = lease?.slots(item) ?? [1, 1];
+		return { item, bounded: isBounded(item), exclusive: isExclusive(item), minimum, preferred };
+	});
+	const done = Promise.withResolvers<void>();
+	let active = 0;
+	let activeSlots = 0;
 	let activeBounded = 0;
 	let activeExclusive = 0;
-	async function worker(): Promise<void> {
-		for (;;) {
+	let failed = false;
+	async function runEntry(entry: (typeof queue)[number], slots: number): Promise<void> {
+		try {
+			await run(entry.item, slots);
+		} catch (error) {
+			failed = true;
+			done.reject(error);
+		} finally {
+			active--;
+			activeSlots -= slots;
+			if (entry.bounded) activeBounded--;
+			if (entry.exclusive) activeExclusive--;
+		}
+		dispatch();
+	}
+	function dispatch(): void {
+		while (!failed && active < width && queue.length) {
+			const available = budget - activeSlots;
 			const index = queue.findIndex(
-				entry => (!entry.bounded || activeBounded < boundedLimit) && (!entry.exclusive || activeExclusive === 0),
+				entry =>
+					entry.minimum <= available &&
+					(!entry.bounded || activeBounded < boundedLimit) &&
+					(!entry.exclusive || activeExclusive === 0),
 			);
-			if (index === -1) return;
+			if (index === -1) break;
 			const [entry] = queue.splice(index, 1);
+			const slots = Math.min(available, entry.preferred);
+			active++;
+			activeSlots += slots;
 			if (entry.bounded) activeBounded++;
 			if (entry.exclusive) activeExclusive++;
-			try {
-				await run(entry.item);
-			} finally {
-				if (entry.bounded) activeBounded--;
-				if (entry.exclusive) activeExclusive--;
-			}
+			void runEntry(entry, slots);
+		}
+		if (!active && !queue.length) done.resolve();
+	}
+	function refreshBudget(): void {
+		if (failed || !queue.length) return;
+		const updated = lease?.readBudget?.();
+		if (updated !== undefined && updated > budget) {
+			budget = updated;
+			width = Math.min(items.length, updated);
+			dispatch();
 		}
 	}
-	await Promise.all(Array.from({ length: concurrency }, () => worker()));
+	refreshBudget();
+	dispatch();
+	const timer = lease?.readBudget && queue.length ? setInterval(refreshBudget, 1000).unref() : undefined;
+	try {
+		await done.promise;
+	} finally {
+		clearInterval(timer);
+	}
 }
 
-// Run every command through a fixed-width worker pool. Each child's stdout and
+// Run every command through a bounded worker pool. Each child's stdout and
 // stderr are drained concurrently (so a chatty test never deadlocks on a full
 // pipe) and buffered. Quiet mode (the default) prints one progress line per
 // finished chunk and replays full output only for failures, in a single report
 // at the end; `--full` streams every chunk's output inline as it completes.
 // Gate-owned runs also stream authenticated failure notifications, but keep
 // executing independent work until the shared deadline or cancellation.
-async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<number> {
+async function runTestCommandsInParallel(
+	commands: TestCommand[],
+	concurrency: number,
+	budget?: PoolLease<TestCommand>,
+	materialize?: (command: TestCommand, slots: number) => TestCommand,
+): Promise<number> {
 	const env = buildChildEnv();
 	const failures: ChunkOutcome[] = [];
 	let completed = 0;
@@ -1547,11 +1638,13 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		reportGateFailure(error);
 		return true;
 	}
-	const fileWidths = [...new Set(commands.map(c => c.parallel).filter(p => p !== undefined))].sort((a, b) => a - b);
+	const fileWidths = [...new Set(commands.map(command => command.parallel).filter(width => width !== undefined))];
+	if (sharedFulltestPool && (budget?.budget ?? 1) >= 2 && commands.some(hasElasticFulltestFiles)) fileWidths.push(2);
+	fileWidths.sort((a, b) => a - b);
 	console.log(
 		`Running ${commands.length} test command(s), up to ${concurrency} in parallel ` +
 			`(OMP_TEST_CONCURRENCY=<n> to lower); ${os.availableParallelism()} cores, ` +
-			`--parallel=${fileWidths.join("/") || "n/a"} per chunk.`,
+			`--parallel=${fileWidths.join("/") || "n/a"} per chunk${sharedFulltestPool ? " (shared fulltest budget)" : ""}.`,
 	);
 
 	// Incremental, cancellable drain into a mutable sink, so a watchdog-killed
@@ -1612,7 +1705,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		const start = performance.now();
 		const proc = Bun.spawn(command, {
 			cwd: path.join(repoRoot, testCommand.cwd),
-			env,
+			env: testCommandEnv(testCommand, env),
 			stdout: "pipe",
 			stderr: "pipe",
 		});
@@ -1730,10 +1823,14 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 	await runBoundedPool(
 		commands,
 		concurrency,
-		command => isLimitedIntegrationCommand(command),
+		command =>
+			sharedFulltestPool
+				? isStartupCommand(command) || isIntegrationCommand(command)
+				: isLimitedIntegrationCommand(command),
 		4,
-		runChunk,
+		(command, slots) => runChunk(materialize?.(command, slots) ?? command),
 		isBrowserCommand,
+		budget,
 	);
 
 	if (quiet) {
@@ -1790,13 +1887,25 @@ function selectShard<T>(commands: T[], spec: string | undefined): T[] {
 	return selected;
 }
 
+// These Knowledge suites have repeatedly dominated cold fulltest timings. Only
+// use this fallback when that exact chunk has no usable measurement.
+const expensiveFulltestFiles = [
+	knowledgeCliTest,
+	"test/knowledge-search-tool.test.ts",
+	"test/knowledge-semantic.test.ts",
+];
+
 // The producer label and exact pre-budget argv together identify an unchanged
 // chunk. Never distribute a chunk's wall time among its files or rechunk it.
-export function prioritizeLocalCommands<T extends TestCommand>(commands: T[], producers: TestProducerRecord[]): T[] {
+export function prioritizeBunCommands<T extends TestCommand>(
+	commands: T[],
+	producers: TestProducerRecord[],
+	scope: BunFulltestProducerScope,
+): T[] {
 	const durations = new Map<string, number>();
 	const ambiguous = new Set<string>();
 	for (const producer of producers) {
-		const key = localTestProducerKey(producer);
+		const key = bunTestProducerKey(producer, scope);
 		if (!key) continue;
 		if (durations.has(key)) {
 			ambiguous.add(key);
@@ -1806,13 +1915,38 @@ export function prioritizeLocalCommands<T extends TestCommand>(commands: T[], pr
 	}
 	for (const key of ambiguous) durations.delete(key);
 	return commands
-		.map((command, index) => ({
-			command,
-			index,
-			duration: durations.get(JSON.stringify([command.label, command.command])),
-		}))
-		.sort((a, b) => (b.duration ?? -1) - (a.duration ?? -1) || a.index - b.index)
+		.map(command => {
+			const duration = durations.get(JSON.stringify([command.label, command.command]));
+			const fallback =
+				duration === undefined && command.cwd === "packages/coding-agent"
+					? expensiveFulltestFiles.findIndex(file => command.command.includes(file))
+					: expensiveFulltestFiles.length;
+			return { command, duration, fallback: fallback < 0 ? expensiveFulltestFiles.length : fallback };
+		})
+		.sort((a, b) => (b.duration ?? -1) - (a.duration ?? -1) || a.fallback - b.fallback)
 		.map(item => item.command);
+}
+
+/** Preserve history order within each group while offering startup work early. */
+function interleaveFulltestCommands(commands: TestCommand[], parallel: boolean): TestCommand[] {
+	const startup: TestCommand[] = [];
+	const ordinary: TestCommand[] = [];
+	for (const command of commands) (command.selection?.group === "startup" ? startup : ordinary).push(command);
+	if (!parallel) return [...startup, ...ordinary];
+	// This is only a queue preference, not a separate startup reservation.
+	const scheduled: TestCommand[] = [];
+	let cursor = 0;
+	for (const command of startup) {
+		scheduled.push(command);
+		for (let i = 0; i < 3 && cursor < ordinary.length; i++) scheduled.push(ordinary[cursor++]!);
+	}
+	for (; cursor < ordinary.length; cursor++) scheduled.push(ordinary[cursor]!);
+	return scheduled;
+}
+
+/** Only this whole-package chunk can use a second file worker in the shared pool. */
+function hasElasticFulltestFiles(command: TestCommand): boolean {
+	return command.cwd === "packages/ai" && command.parallel !== undefined;
 }
 
 /** Revision history only orders chunks; worktree changes never invalidate test execution. */
@@ -1830,6 +1964,38 @@ export async function verifiedFulltestRevision(
 	}
 }
 
+/** The gate publishes only a number, at a fixed location in its isolated home. */
+function sharedFulltestBudgetReader(initial: number): PoolLease<TestCommand>["readBudget"] {
+	const ceiling = Number(Bun.env.OMP_FULLTEST_BUN_MAX_CAPACITY);
+	const home = Bun.env.HOME;
+	if (
+		!Number.isSafeInteger(ceiling) ||
+		ceiling <= initial ||
+		ceiling !== testConcurrencyLimit(os.availableParallelism(), process.platform, String(ceiling)) ||
+		!home ||
+		!path.isAbsolute(home) ||
+		path.basename(home) !== "typescript"
+	)
+		return;
+	const root = path.dirname(home);
+	const name = path.basename(root);
+	if (
+		!name.startsWith(FULLTEST_HOME_PREFIX) ||
+		!/^[A-Za-z0-9]{6}$/.test(name.slice(FULLTEST_HOME_PREFIX.length)) ||
+		fulltestStartupHome !== path.join(root, "typescript-startup")
+	)
+		return;
+	const file = path.join(root, FULLTEST_BUN_CAPACITY_FILE);
+	return () => {
+		try {
+			const stat = lstatSync(file);
+			if (stat.isFile() && stat.size <= ceiling) return stat.size;
+		} catch {
+			// Cleanup can remove the file on cancellation; never increase on a failed read.
+		}
+	};
+}
+
 // Fork gates and changelog tests reuse the child environment and timeout helpers.
 // Importing them must not validate a CLI mode or start the upstream test plan.
 if (import.meta.main) {
@@ -1843,10 +2009,20 @@ if (import.meta.main) {
 	if (deferStartup && onlyStartup) throw new Error("--defer-startup and --only-startup are mutually exclusive");
 	if ((deferStartup || onlyStartup) && requestedMode !== "local-ts" && requestedMode !== "all")
 		throw new Error("--defer-startup and --only-startup require local-ts or all mode");
+	if (sharedFulltestPool && (requestedMode !== "all" || deferStartup || onlyStartup))
+		throw new Error("--shared-fulltest-pool requires all mode without --defer-startup or --only-startup");
 	const changedArgs = args.filter(arg => arg === "--changed" || arg.startsWith("--changed="));
 	if (changedArgs.length > 1 || changedArgs.some(arg => arg === "--changed="))
 		throw new Error("Expected at most one --changed or --changed=<ref> option");
-	const commands = await commandsForMode(requestedMode as Mode);
+	const historyScope =
+		reportScope === "ci-test-ts:local-ts" || reportScope === "ci-test-ts:all" ? reportScope : undefined;
+	const inFulltest = Boolean(
+		(sharedFulltestPool || deferStartup || onlyStartup) &&
+		historyScope &&
+		gateReportsFailures &&
+		(await isActiveBunFulltest(historyScope)),
+	);
+	const commands = await commandsForMode(requestedMode as Mode, sharedFulltestPool || inFulltest);
 	// Explicit upstream native mode may require the desktop authorization boundary.
 	if (args.includes("--exclude-desktop") && requestedMode !== "local" && requestedMode !== "local-ts") {
 		const native = commands.find(command => command.cwd === "packages/natives");
@@ -1924,17 +2100,30 @@ if (import.meta.main) {
 			? `selection=affected-tests-only tool=bun baseline=${selection.baseline ?? "working-tree"}; not full coverage`
 			: `selection=${group === "all" ? "full" : `full-${group}-group`} tool=bun reason=${selection.reason}`,
 	);
+	const groupedSelection = {
+		startup: { ...selection, group: "startup" as const },
+		ordinary: { ...selection, group: "ordinary" as const },
+	};
 	for (const command of requestedCommands) {
 		if (command.parallel === undefined) continue;
-		command.selection = selection;
+		command.selection = sharedFulltestPool
+			? groupedSelection[isStartupCommand(command) ? "startup" : "ordinary"]
+			: selection;
 		if (selection.mode === "affected") command.command.push(changedArgs[0] ?? `--changed=${selection.baseline}`);
 	}
 	// Prioritize within the selected shard, without changing shard membership.
 	requestedCommands.sort((a, b) => Number(isIntegrationCommand(b)) - Number(isIntegrationCommand(a)));
-	const revision =
-		requestedMode === "local-ts" ? await verifiedFulltestRevision(Bun.env.OMP_FULLTEST_SOURCE_REVISION) : undefined;
-	const producers = revision ? await latestLocalTestProducers(revision) : [];
-	const scheduledCommands = localMode ? prioritizeLocalCommands(requestedCommands, producers) : requestedCommands;
+	const scheduledCommands =
+		selection.mode === "full" && inFulltest && historyScope
+			? prioritizeBunCommands(
+					requestedCommands,
+					await latestFulltestBunProducers(
+						historyScope,
+						await verifiedFulltestRevision(Bun.env.OMP_FULLTEST_SOURCE_REVISION),
+					),
+					historyScope,
+				)
+			: requestedCommands;
 	const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
 	// CI defaults to one process at a time, but memory-sized workflow buckets
 	// explicitly opt into bounded process concurrency. Local runs fan out by
@@ -1945,11 +2134,36 @@ if (import.meta.main) {
 	const poolWidth = pooled
 		? testConcurrency(scheduledCommands.length, Bun.env.OMP_TEST_CONCURRENCY, os.availableParallelism())
 		: 1;
-	const testCommands = applyChunkBudget(scheduledCommands, poolWidth);
+	const cpuBudget = testConcurrencyLimit(os.availableParallelism());
+	const scheduled = sharedFulltestPool
+		? interleaveFulltestCommands(scheduledCommands, poolWidth > 1)
+		: scheduledCommands;
+	for (const command of scheduled) {
+		if (command.parallel !== undefined)
+			command.parallel = sharedFulltestPool ? 1 : budgetedParallel(command.parallel, poolWidth, cpuBudget);
+	}
+	const elasticFiles = (command: TestCommand) => sharedFulltestPool && hasElasticFulltestFiles(command);
+	const lease: PoolLease<TestCommand> = {
+		budget: cpuBudget,
+		readBudget:
+			sharedFulltestPool && inFulltest && pooled && !isDryRun && Bun.env.OMP_TEST_CONCURRENCY === "all"
+				? sharedFulltestBudgetReader(cpuBudget)
+				: undefined,
+		slots: command => {
+			const files = command.parallel ?? 1;
+			const preferred = command.knowledgeCliSlots !== undefined || elasticFiles(command) ? 2 : 1;
+			return [files, Math.min(cpuBudget, Math.max(files, preferred))];
+		},
+	};
+	const materialize = (command: TestCommand, slots: number) =>
+		applyChunkBudget(command, elasticFiles(command) ? slots : (command.parallel ?? 1), slots, inFulltest);
 	const run = isDryRun ? undefined : await beginTestRun(reportScope);
 	let failed = false;
 	try {
-		const exitCode = await runTestCommands(testCommands, pooled ? poolWidth : undefined);
+		const exitCode =
+			pooled && !isDryRun
+				? await runTestCommandsInParallel(scheduled, poolWidth, lease, materialize)
+				: await runTestCommands(scheduled.map(command => materialize(command, lease.slots(command)[1])));
 		if (exitCode) {
 			failed = true;
 			process.exitCode = exitCode;

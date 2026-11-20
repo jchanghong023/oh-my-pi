@@ -164,13 +164,11 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser semantic selectors and queries", (
 		})) as { details?: { value?: number } };
 		expect(result.details?.value).toBe(1);
 	});
-	it.skipIf(process.platform === "win32")(
-		"uses native submit and reset names for exact and substring role queries",
-		async () => {
-			const result = (await invoke({
-				action: "run",
-				name: namesTab,
-				code: `const inputs = await tab.evaluate(() => Array.from(document.querySelectorAll('input[type=submit], input[type=reset]'), el => ({
+	it("uses native submit and reset names for exact and substring role queries", async () => {
+		const result = (await invoke({
+			action: "run",
+			name: namesTab,
+			code: `const inputs = await tab.evaluate(() => Array.from(document.querySelectorAll('input[type=submit], input[type=reset]'), el => ({
 				type: el.type, hasValue: el.hasAttribute("value")
 			})));
 			const counts = [];
@@ -182,24 +180,23 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser semantic selectors and queries", (
 				counts.push([await tab.count(exact), await tab.count(partial)]);
 			}
 			return { inputs, counts };`,
-			})) as {
-				details?: {
-					value?: { inputs: { type: string; hasValue: boolean }[]; counts: number[][]; missing?: string };
-				};
+		})) as {
+			details?: {
+				value?: { inputs: { type: string; hasValue: boolean }[]; counts: number[][]; missing?: string };
 			};
-			const value = result.details?.value;
-			expect(value?.inputs).toEqual([
-				{ type: "submit", hasValue: false },
-				{ type: "reset", hasValue: false },
-			]);
-			expect(value?.missing).toBeUndefined();
-			expect(value?.counts).toHaveLength(2);
-			for (const [exact, partial] of value?.counts ?? []) {
-				expect(exact).toBeGreaterThanOrEqual(1);
-				expect(partial).toBeGreaterThanOrEqual(exact);
-			}
-		},
-	);
+		};
+		const value = result.details?.value;
+		expect(value?.inputs).toEqual([
+			{ type: "submit", hasValue: false },
+			{ type: "reset", hasValue: false },
+		]);
+		expect(value?.missing).toBeUndefined();
+		expect(value?.counts).toHaveLength(2);
+		for (const [exact, partial] of value?.counts ?? []) {
+			expect(exact).toBeGreaterThanOrEqual(1);
+			expect(partial).toBeGreaterThanOrEqual(exact);
+		}
+	});
 
 	it("matches role/ exact names to every name the Tern page kit's observe() shows", async () => {
 		const result = (await invoke({

@@ -268,7 +268,7 @@ async fn configuration_file_is_honored() {
 	for line in [
 		"warn_timeout 1m30s".to_owned(),
 		format!("whitelist.prefix [{trusted}]"),
-		format!("Found RC path {trusted}/.env"),
+		format!("Found RC path {}", tree.path("trusted").join(".env").display()),
 		"Found RC allowed 0".to_owned(),
 	] {
 		assert!(out.lines().any(|found| found == line), "missing {line:?} in:\n{out}");

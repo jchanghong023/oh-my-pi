@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Process } from "@oh-my-pi/pi-natives";
+import { Process, ProcessStatus } from "@oh-my-pi/pi-natives";
 import { Settings } from "../../src/config/settings";
 import { canonicalProjectDir, closeDaemonClient, daemonClient, probeDaemon } from "../../src/daemon/client";
 import { projectScope, type DaemonCompletionEvent } from "../../src/daemon/protocol";
@@ -169,22 +169,29 @@ describe("session-owned daemon services", () => {
 				owner,
 				proc: {
 					application: process.execPath,
-					args: ["-e", "Bun.serve({port: 0, fetch() { return new Response('ok'); } })"],
+					args: ["-e", "setInterval(() => {}, 1000); console.log('service-ready')"],
 					env: {},
 					cwd: harness.dir,
 					pty: false,
+					ready: { log: "service-ready", timeoutMs: 5_000 },
 				},
 				policy: { hold: "detached" },
 			});
 			const pid = unit.pids[0];
-			expect(pid).toBeNumber();
-			harness.track(pid!);
+			if (pid === undefined) throw new Error(`Detached service did not start: ${unit.exitReason ?? unit.state}`);
+			harness.track(pid);
+			expect(unit.state).toBe("ready");
+			const processRef = Process.fromPid(pid);
+			if (!processRef) throw new Error("Detached service disappeared before daemon shutdown");
 			for (const dispose of disposals) await dispose();
 			await restartDaemon();
+			expect(processRef.status()).toBe(ProcessStatus.Running);
 			const later = await listServices(makeSession("later-session"));
-			expect(later.find(candidate => candidate.key === unit.key)?.pids).toEqual([pid]);
-			const processRef = Process.fromPid(pid!);
-			if (!processRef) throw new Error("Recovered detached service disappeared");
+			expect(later.find(candidate => candidate.key === unit.key)).toMatchObject({
+				id: unit.id,
+				owner,
+				pids: [pid],
+			});
 			await processRef.terminate({ group: true, gracefulMs: 0, timeoutMs: 5_000 });
 			const client = await daemonClient();
 			expect(

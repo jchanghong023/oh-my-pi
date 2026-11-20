@@ -12,8 +12,9 @@ describe("knowledge_search CLI without source files", () => {
 	let directory: string | undefined;
 	let preparedIndex: ReadonlyArray<{ name: string; bytes: Uint8Array }>;
 	const profile = "wiki-e2e";
-	// Start each real-process watchdog with its scenario, not while it waits in a private queue.
-	const scenarioTest = it.serial;
+	// The gate opts this standalone file into Bun's two-scenario scheduler only
+	// after reserving both slots. Serial is safe for a shared or single-slot run.
+	const scenarioTest = process.env.OMP_TEST_KNOWLEDGE_CLI_SLOTS === "2" ? it.concurrent : it.serial;
 	const sections = Array.from(
 		{ length: 12 },
 		(_, index) =>
@@ -34,12 +35,14 @@ describe("knowledge_search CLI without source files", () => {
 		// Consumers receive only these immutable index bytes, never shared app state.
 		const documents = path.join(directory, "documents");
 		await fs.mkdir(documents, { recursive: true });
-		await Bun.write(
-			path.join(documents, "guide.md"),
-			"# Workflow\nWIKIE2EBEACON\nThe workflow requires exactly seven cycles.\nInspect MBIST_CHECK.RPT for the pass criterion.\nUse C++ and docs/src/main.rs.\nPAIR=echo echo\n",
-		);
-		await Bun.write(path.join(documents, "procedures.md"), sections.join("\n"));
-		await Bun.write(path.join(documents, "related.md"), "# Reports\nInspect another_check.rpt for report syntax.\n");
+		await Promise.all([
+			Bun.write(
+				path.join(documents, "guide.md"),
+				"# Workflow\nWIKIE2EBEACON\nThe workflow requires exactly seven cycles.\nInspect MBIST_CHECK.RPT for the pass criterion.\nUse C++ and docs/src/main.rs.\nPAIR=echo echo\n",
+			),
+			Bun.write(path.join(documents, "procedures.md"), sections.join("\n")),
+			Bun.write(path.join(documents, "related.md"), "# Reports\nInspect another_check.rpt for report syntax.\n"),
+		]);
 		const preparation = await createScenario();
 		try {
 			expect(
@@ -102,7 +105,9 @@ describe("knowledge_search CLI without source files", () => {
 		const root = path.join(scenarioDirectory, "project");
 		const configRoot = path.join(scenarioDirectory, "config");
 		const agentDir = path.join(configRoot, "profiles", profile, "agent");
-		// OMP_CACHE_DIR is cleared in each child so the index lives with its isolated agent.
+		const home = path.join(scenarioDirectory, "home");
+		const temp = path.join(scenarioDirectory, "temp");
+		// With no cache-root override, the database lives with the isolated agent.
 		const knowledgePath = path.join(agentDir, "knowledge.db");
 		const observed: Array<{ text: string; isError: boolean; elapsedMs: number }> = [];
 		const observedCalls = new Set<string>();
@@ -127,7 +132,7 @@ describe("knowledge_search CLI without source files", () => {
 		}
 
 		try {
-			await Promise.all([root, agentDir].map(dir => fs.mkdir(dir, { recursive: true })));
+			await Promise.all([root, agentDir, home, temp].map(dir => fs.mkdir(dir, { recursive: true })));
 			if (prepared) {
 				await Promise.all(prepared.map(file => Bun.write(path.join(agentDir, file.name), file.bytes)));
 			}
@@ -284,16 +289,29 @@ describe("knowledge_search CLI without source files", () => {
 					...args,
 				],
 				{
-					cwd: path.resolve(import.meta.dir, ".."),
+					cwd: root,
 					env: {
-						...process.env,
+						PATH: process.env.PATH ?? process.env.Path,
+						PATHEXT: process.env.PATHEXT,
+						SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT,
+						WINDIR: process.env.WINDIR,
+						COMSPEC: process.env.COMSPEC ?? process.env.ComSpec,
+						BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH,
+						BUN_JSC_useConcurrentGC: process.env.BUN_JSC_useConcurrentGC,
+						BUN_JSC_numberOfGCMarkers: process.env.BUN_JSC_numberOfGCMarkers,
+						PI_TEST_RUNTIME: process.env.PI_TEST_RUNTIME,
+						HOME: home,
+						USERPROFILE: home,
+						APPDATA: home,
+						LOCALAPPDATA: home,
+						XDG_CONFIG_HOME: home,
+						XDG_DATA_HOME: home,
+						XDG_CACHE_HOME: home,
+						XDG_STATE_HOME: home,
+						TMPDIR: temp,
+						TMP: temp,
+						TEMP: temp,
 						OMP_CONFIG_ROOT: configRoot,
-						OMP_CACHE_DIR: "",
-						OMP_PROFILE: profile,
-						PI_PROFILE: "",
-						PI_CODING_AGENT_DIR: "",
-						OMP_OFFLINE: "",
-						PI_CONFIG_FILES: "",
 						MNEMOPI_NO_EMBEDDINGS: "true",
 					},
 					stderr: "full",

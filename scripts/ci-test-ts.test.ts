@@ -8,12 +8,12 @@ import {
 	bunTestSelection,
 	isIntegrationCommand,
 	isLimitedIntegrationCommand,
-	prioritizeLocalCommands,
+	prioritizeBunCommands,
 	runBoundedPool,
 	testConcurrency,
 	verifiedFulltestRevision,
 } from "./ci-test-ts";
-import { latestLocalTestProducers, type TestProducerRecord } from "./test-reporting";
+import { isActiveBunFulltest, latestFulltestBunProducers, type TestProducerRecord } from "./test-reporting";
 import { fulltestCommands } from "./fulltest";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
 
@@ -48,9 +48,22 @@ test("Bun discovery keeps OMP consumers but excludes vendor tests", async () => 
 
 test("affected selection needs a qualifying full TS baseline reachable in Git", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bun-baseline-"));
-	const previous = process.env.OMP_FULLTEST_AFFECTED;
+	const select = (fixtureRoot: string, hint: string | null = null, currentRunId = "") =>
+		bunTestSelection(fixtureRoot, true, hint, currentRunId);
 	const git = async (...args: string[]) => {
-		const child = Bun.spawn(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+		const child = Bun.spawn(
+			[
+				"git",
+				"-c",
+				"user.email=fixture@example.invalid",
+				"-c",
+				"user.name=Fixture",
+				"-c",
+				"commit.gpgSign=false",
+				...args,
+			],
+			{ cwd: root, stdout: "pipe", stderr: "pipe" },
+		);
 		const [out, err, code] = await Promise.all([
 			new Response(child.stdout).text(),
 			new Response(child.stderr).text(),
@@ -60,23 +73,23 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		return out.trim();
 	};
 	try {
-		process.env.OMP_FULLTEST_AFFECTED = "1";
-		expect(await verifiedFulltestRevision(undefined, root)).toBeUndefined();
-		expect(await verifiedFulltestRevision("invalid", root)).toBeUndefined();
-		expect(await verifiedFulltestRevision("a".repeat(40), root)).toBeUndefined();
-		expect((await bunTestSelection(root)).mode).toBe("full");
+		const [noRevision, malformedRevision, noGitRevision, noReport] = await Promise.all([
+			verifiedFulltestRevision(undefined, root),
+			verifiedFulltestRevision("invalid", root),
+			verifiedFulltestRevision("a".repeat(40), root),
+			select(root),
+			fs.writeFile(path.join(root, "fixture.ts"), "export const value = 1;\n"),
+			fs.writeFile(path.join(root, ".gitignore"), "runs/\n"),
+		]);
+		expect(noRevision).toBeUndefined();
+		expect(malformedRevision).toBeUndefined();
+		expect(noGitRevision).toBeUndefined();
+		expect(noReport.mode).toBe("full");
 		await git("init", "-q");
-		await git("config", "user.email", "fixture@example.invalid");
-		await git("config", "user.name", "Fixture");
-		await fs.writeFile(path.join(root, "fixture.ts"), "export const value = 1;\n");
-		await fs.writeFile(path.join(root, ".gitignore"), "runs/\n");
 		await git("add", "fixture.ts", ".gitignore");
 		await git("commit", "-qm", "fixture baseline");
 		const revision = await git("rev-parse", "HEAD");
-		expect(await verifiedFulltestRevision(revision, root)).toBe(revision);
-		expect(await verifiedFulltestRevision("b".repeat(40), root)).toBeUndefined();
-		const dir = path.join(root, "runs", "test-timing", "fixture");
-		await fs.mkdir(dir, { recursive: true });
+		const unrelatedRevision = git("commit-tree", `${revision}^{tree}`, "-m", "unrelated history");
 		const report = {
 			scope: "fulltest: fork feature suites",
 			completion: "complete",
@@ -119,131 +132,89 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 					selection: { mode: "full" },
 				},
 				{ scope: "all scenarios", producer: "ui-smoke/runner-stage", exitCode: 0, status: "stage" },
-			] as {
-				scope: string;
-				producer?: string;
-				exitCode: number;
-				status: string;
-				report?: string;
-				selection?: { mode: string; group?: string; suiteRevision?: number };
-			}[],
+			] as const,
 		};
-		const save = () => fs.writeFile(path.join(dir, "run.json"), JSON.stringify(report));
-		await save();
-		report.scope = "fulltest: full current-platform project suites";
-		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.scope = "fulltest: fork feature suites";
-		await save();
-		// Ordinary and startup producers together cover the current fork TS scope.
-		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
-		// A newer failure/cancellation/incomplete attempt must not inherit an
-		// older clean success and omit the unchanged tests that just failed.
-		const newer = path.join(root, "runs", "test-timing", "zz-newer-attempt");
-		await fs.mkdir(newer);
-		for (const [completion, exitCode] of [
-			["partial", 23],
-			["partial", 130],
-			["running", null],
-		] as const) {
-			await fs.writeFile(
-				path.join(newer, "run.json"),
-				JSON.stringify({ ...report, completion, exitCode, startedAtUtc: new Date().toISOString() }),
-			);
-			expect((await bunTestSelection(root)).mode).toBe("full");
-		}
-		await fs.writeFile(
-			path.join(newer, "run.json"),
-			JSON.stringify({ ...report, runId: "zz-newer-attempt", completion: "running", exitCode: null }),
-		);
-		expect(await bunTestSelection(root, true, null, "zz-newer-attempt")).toMatchObject({
-			mode: "affected",
-			baseline: revision,
-		});
-		expect((await bunTestSelection(root, true, null, "different-current-run")).mode).toBe("full");
-		await fs.rm(newer, { recursive: true });
-		// Missing or old scope revisions do not cover the current consumers.
-		report.producers[0]!.selection = { mode: "full", group: "ordinary" };
-		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[0]!.selection = { mode: "full", group: "ordinary", suiteRevision: 6 };
-		report.producers[1]!.selection = { mode: "full", group: "startup" };
-		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[1]!.selection = { mode: "full", group: "startup", suiteRevision: 6 };
-		await save();
-		for (const index of [0, 1]) {
-			report.producers[index]!.selection!.suiteRevision = 5;
-			await save();
-			expect((await bunTestSelection(root)).mode).toBe("full");
-			report.producers[index]!.selection!.suiteRevision = 6;
-		}
-		await save();
-		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
-		expect((await bunTestSelection(root, true, "f".repeat(40))).mode).toBe("full");
-		report.completion = "partial";
-		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.completion = "complete";
-		await save();
-		expect(await bunCleanBaseline({ tool: "bun", mode: "affected", baseline: revision }, root)).toBe(true);
-		await fs.writeFile(path.join(root, "new-source.ts"), "export {};\n");
-		expect(await bunCleanBaseline({ tool: "bun", mode: "affected", baseline: revision }, root)).toBe(false);
-		await fs.rm(path.join(root, "new-source.ts"));
-		await fs.appendFile(path.join(root, "fixture.ts"), "// working tree change\n");
-		expect(await bunCleanBaseline({ tool: "bun", mode: "affected", baseline: revision }, root)).toBe(false);
-		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
+		const save = async (fixtureRoot: string, data: object, runId = "baseline") => {
+			const dir = path.join(fixtureRoot, "runs", "test-timing", runId);
+			await fs.mkdir(dir, { recursive: true });
+			await fs.writeFile(path.join(dir, "run.json"), JSON.stringify(data));
+		};
+		// Isolate report variants under the same Git history: a wrongly accepted
+		// report can reach Git and return affected, rather than failing for lack of a repo.
+		const caseRoot = (name: string) => path.join(root, "runs", "cases", name);
+		const [ordinary, startup, ...otherProducers] = report.producers;
+		const withStartup = (producer: object) => ({ ...report, producers: [ordinary, producer, ...otherProducers] });
+		const rejectedReports = [
+			["other scope", { ...report, scope: "fulltest: full current-platform project suites" }],
+			["missing suite revision", withStartup({ ...startup, selection: { mode: "full", group: "startup" } })],
+			["old suite revision", withStartup({ ...startup, selection: { ...startup.selection, suiteRevision: 5 } })],
+			["dirty baseline", { ...report, dirtyState: "dirty" }],
+			["affected producer", withStartup({ ...startup, selection: { mode: "affected" } })],
+			["missing startup group", { ...report, producers: [ordinary, ...otherProducers] }],
+			["failed producer", withStartup({ ...startup, exitCode: 1, status: "failed" })],
+			["missing producer report", withStartup({ ...startup, report: "missing" })],
+		] as const;
+		const currentRunId = "zz-newer-attempt";
+		const running = { ...report, runId: currentRunId, completion: "running", exitCode: null };
+		const checkNewerAttempt = async (name: string, newer: object, runId?: string) => {
+			const fixtureRoot = caseRoot(name);
+			await Promise.all([save(fixtureRoot, report), save(fixtureRoot, newer, currentRunId)]);
+			return select(fixtureRoot, null, runId);
+		};
+		const savedBaseline = save(root, report);
+		const unrelatedRoot = caseRoot("unreachable");
+		const [baseline, clean, wrongHint, current, failed, incomplete, previousRunning, unreachable, rejected] =
+			await Promise.all([
+				savedBaseline.then(() => select(root)),
+				bunCleanBaseline({ tool: "bun", mode: "affected", baseline: revision }, root),
+				Promise.all([savedBaseline, unrelatedRevision]).then(([, unrelated]) => select(root, unrelated)),
+				checkNewerAttempt("current run", running, currentRunId),
+				checkNewerAttempt("failed run", { ...report, exitCode: 23 }),
+				checkNewerAttempt("partial run", { ...report, completion: "partial" }),
+				checkNewerAttempt("another running attempt", running, "different-current-run"),
+				unrelatedRevision.then(async unrelated => {
+					await save(unrelatedRoot, { ...report, sourceRevision: unrelated });
+					return select(unrelatedRoot);
+				}),
+				Promise.all(
+					rejectedReports.map(async ([name, candidate]) => {
+						const fixtureRoot = caseRoot(name);
+						await save(fixtureRoot, candidate);
+						return [name, (await select(fixtureRoot)).mode] as const;
+					}),
+				),
+			]);
+		expect(baseline).toMatchObject({ mode: "affected", baseline: revision });
+		expect(clean).toBe(true);
+		expect(wrongHint.mode).toBe("full");
+		expect(current).toMatchObject({ mode: "affected", baseline: revision });
+		expect(failed.mode).toBe("full");
+		expect(incomplete.mode).toBe("full");
+		expect(previousRunning.mode).toBe("full");
+		expect(unreachable.mode).toBe("full");
+		for (const [name, mode] of rejected) expect(mode, name).toBe("full");
+
+		const untracked = path.join(root, "new-source.ts");
+		await fs.writeFile(untracked, "export {};\n");
+		expect(await bunCleanBaseline(baseline, root)).toBe(false);
+		await Promise.all([fs.rm(untracked), fs.appendFile(path.join(root, "fixture.ts"), "// working tree change\n")]);
+		const [trackedClean, dirtySelection, dirtyRevision] = await Promise.all([
+			bunCleanBaseline(baseline, root),
+			select(root),
+			verifiedFulltestRevision(revision, root),
+		]);
+		expect(trackedClean).toBe(false);
+		expect(dirtySelection).toMatchObject({ mode: "affected", baseline: revision });
 		// Scheduling provenance is the Git revision, not a worktree content snapshot.
-		expect(await verifiedFulltestRevision(revision, root)).toBe(revision);
-		report.dirtyState = "dirty";
-		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.dirtyState = "clean";
-		report.producers[0] = {
-			...report.producers[0]!,
-			selection: { mode: "affected" },
-		} as (typeof report.producers)[number];
-		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[0] = {
-			scope: "ci-test-ts:local-ts",
-			exitCode: 0,
-			status: "passed",
-			report: "available",
-			selection: { mode: "full", group: "ordinary", suiteRevision: 6 },
-		};
-		const startup = report.producers.splice(1, 1)[0]!;
-		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers.push(startup);
-		await save();
-		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
-		report.producers.splice(report.producers.indexOf(startup), 1);
-		report.producers.push({ ...startup, exitCode: 1, status: "failed" });
-		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers.pop();
-		report.producers.push({ ...startup, selection: { mode: "full", group: "ordinary", suiteRevision: 6 } });
-		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers.pop();
-		report.producers.push({ ...startup, report: "missing" });
-		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers.pop();
-		report.producers.push(startup);
-		await save();
-		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
-		await git("add", "fixture.ts");
-		await git("commit", "-qm", "working tree change");
-		expect(await verifiedFulltestRevision(revision, root)).toBeUndefined();
-		await git("checkout", "-q", "--orphan", "unrelated");
-		await git("add", "fixture.ts");
-		await git("commit", "-qm", "unrelated history");
-		expect((await bunTestSelection(root)).mode).toBe("full");
+		expect(dirtyRevision).toBe(revision);
+		await git("commit", "-qam", "working tree change");
+		const [ancestorSelection, previousRevision] = await Promise.all([
+			select(root),
+			verifiedFulltestRevision(revision, root),
+		]);
+		expect(ancestorSelection).toMatchObject({ mode: "affected", baseline: revision });
+		expect(previousRevision).toBeUndefined();
 	} finally {
-		if (previous === undefined) delete process.env.OMP_FULLTEST_AFFECTED;
-		else process.env.OMP_FULLTEST_AFFECTED = previous;
 		await fs.rm(root, { recursive: true, force: true });
 	}
 }, 20_000);
@@ -396,6 +367,94 @@ test("bounded pool preserves order with fewer workers than the heavy limit", asy
 	expect(started).toEqual(items);
 });
 
+test("weighted leases release both slots and keep only one browser active", async () => {
+	const items = ["browser-1", "knowledge", "browser-2", "ordinary-1", "ordinary-2", "ordinary-3"];
+	const released = new Map<string, () => void>();
+	const launches: [string, number][] = [];
+	let activeSlots = 0;
+	let peakSlots = 0;
+	const pool = runBoundedPool(
+		items,
+		3,
+		() => false,
+		4,
+		async (item, slots) => {
+			launches.push([item, slots]);
+			activeSlots += slots;
+			peakSlots = Math.max(peakSlots, activeSlots);
+			await new Promise<void>(resolve => released.set(item, resolve));
+			activeSlots -= slots;
+		},
+		item => item.startsWith("browser-"),
+		{ budget: 3, slots: item => [1, item === "knowledge" ? 2 : 1] },
+	);
+	const release = async (item: string) => {
+		released.get(item)!();
+		await Promise.resolve();
+	};
+	expect(launches).toEqual([
+		["browser-1", 1],
+		["knowledge", 2],
+	]);
+	await release("knowledge");
+	expect(launches.slice(2)).toEqual([
+		["ordinary-1", 1],
+		["ordinary-2", 1],
+	]);
+	await release("browser-1");
+	expect(launches.at(-1)).toEqual(["browser-2", 1]);
+	await release("browser-2");
+	expect(launches.at(-1)).toEqual(["ordinary-3", 1]);
+	for (const item of ["ordinary-1", "ordinary-2", "ordinary-3"]) await release(item);
+	await pool;
+	expect(peakSlots).toBe(3);
+	expect(activeSlots).toBe(0);
+	expect(launches.map(([item]) => item).sort()).toEqual(items.sort());
+});
+
+test("a live pool dispatches extra jobs only after its slot capacity grows", async () => {
+	const unchangedPoll = Promise.withResolvers<void>();
+	const expanded = Promise.withResolvers<void>();
+	const finish = Promise.withResolvers<void>();
+	const started: [string, number][] = [];
+	let budget = 2;
+	let reads = 0;
+	const pool = runBoundedPool(
+		["weighted", "first", "second"],
+		budget,
+		() => false,
+		4,
+		async (job, slots) => {
+			started.push([job, slots]);
+			if (started.length === 3) expanded.resolve();
+			await finish.promise;
+		},
+		undefined,
+		{
+			budget,
+			slots: job => [1, job === "weighted" ? 2 : 1],
+			readBudget: () => {
+				if (++reads === 2) unchangedPoll.resolve();
+				return budget;
+			},
+		},
+	);
+	try {
+		await unchangedPoll.promise;
+		expect(started).toEqual([["weighted", 2]]);
+		budget = 4;
+		await expanded.promise;
+		expect(started).toEqual([
+			["weighted", 2],
+			["first", 1],
+			["second", 1],
+		]);
+	} finally {
+		finish.resolve();
+		await pool;
+	}
+});
+
 test("startup file workers use the fulltest budget without exceeding CPU or command count", async () => {
 	const startup = fulltestCommands({ debug: false }, "home").find(
 		command => command.label === "test/TypeScript startup suite",
@@ -461,6 +520,7 @@ test("historical chunk durations reorder only exact matches, retaining every com
 		command: ["bun", "test", "--only-failures", `test/${name}.test.ts`],
 		parallel: 1,
 	}));
+	const rank = (producers: TestProducerRecord[]) => prioritizeBunCommands(commands, producers, "ci-test-ts:local-ts");
 	const producer = (index: number, durationSeconds: number): TestProducerRecord => ({
 		producer: `ci-test-ts:local-ts:1234abcd:${commands[index].label}:attempt-1`,
 		command: [
@@ -476,24 +536,44 @@ test("historical chunk durations reorder only exact matches, retaining every com
 		durationSeconds,
 		exitCode: 0,
 	});
-	const ordered = prioritizeLocalCommands(commands, [producer(0, 1), producer(2, 20), producer(3, 20)]);
+	const ordered = rank([producer(0, 1), producer(2, 20), producer(3, 20)]);
 	expect(ordered).toEqual([commands[2], commands[3], commands[0], commands[1]]);
-	expect(prioritizeLocalCommands(commands, [])).toEqual(commands);
+	expect(rank([])).toEqual(commands);
 	const changed = producer(2, 100);
 	changed.command[3] = "test/other.test.ts";
-	expect(prioritizeLocalCommands(commands, [changed])).toEqual(commands);
-	expect(prioritizeLocalCommands(commands, [producer(2, 10), producer(2, 20)])).toEqual(commands);
+	expect(rank([changed])).toEqual(commands);
+	const changedOption = producer(2, 100);
+	changedOption.command.splice(4, 0, "--timeout=10");
+	expect(rank([changedOption])).toEqual(commands);
+	expect(rank([producer(2, 10), producer(2, 20)])).toEqual(commands);
 	const relabeled = producer(2, 100);
 	relabeled.producer = relabeled.producer.replace(commands[2].label, "packages/coding-agent (new chunk)");
-	expect(prioritizeLocalCommands(commands, [relabeled])).toEqual(commands);
+	expect(rank([relabeled])).toEqual(commands);
 	const duplicate = producer(2, 20);
-	expect(prioritizeLocalCommands(commands, [duplicate, { ...duplicate }])).toEqual(commands);
+	expect(rank([duplicate, { ...duplicate }])).toEqual(commands);
 	expect(commands.map(command => command.command[3])).toEqual([
 		"test/a.test.ts",
 		"test/b.test.ts",
 		"test/c.test.ts",
 		"test/d.test.ts",
 	]);
+	const cli = { ...commands[1], command: ["bun", "test", "test/knowledge-search-cli.e2e.test.ts"] };
+	const full = [commands[0], cli, commands[2]];
+	const fullProducer = (index: number, duration: number): TestProducerRecord => ({
+		...producer(index, duration),
+		producer: `ci-test-ts:all:1234abcd:${full[index].label}:attempt-1`,
+		scope: "ci-test-ts:all",
+		command: [
+			...full[index].command,
+			...(index === 1 ? [] : ["--parallel=1"]),
+			"--timeout=30000",
+			...(index === 1 ? ["--max-concurrency=2"] : []),
+		],
+	});
+	expect(prioritizeBunCommands(full, [producer(2, 40)], "ci-test-ts:all")).toEqual([cli, commands[0], commands[2]]);
+	expect(
+		prioritizeBunCommands(full, [fullProducer(0, 2), fullProducer(1, 1), fullProducer(2, 40)], "ci-test-ts:all"),
+	).toEqual([commands[2], commands[0], cli]);
 });
 
 test("completed chunk hints do not require a successful or finalized fulltest", async () => {
@@ -537,7 +617,8 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 			records.map((record, index) => Bun.write(path.join(dir, `${index}.producer.json`), JSON.stringify(record))),
 		);
 	};
-	const readHistory = () => latestLocalTestProducers(currentRevision, root, now, "current");
+	const readHistory = (source: string | undefined = currentRevision) =>
+		latestFulltestBunProducers("ci-test-ts:local-ts", source, root, now, "current");
 	try {
 		expect(await readHistory()).toEqual([]);
 		await put();
@@ -556,13 +637,13 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 		// Historical finalized summaries still work when no incremental records exist.
 		await put({ completion: "complete", exitCode: 0, producers: [producer] }, []);
 		expect(await readHistory()).toEqual([producer]);
-		expect(await latestLocalTestProducers(revision, root, now, "current")).toEqual([producer]);
-		expect(await latestLocalTestProducers(undefined, root, now, "current")).toEqual([]);
-		expect(await latestLocalTestProducers("invalid", root, now, "current")).toEqual([]);
-		expect(await latestLocalTestProducers("c".repeat(64), root, now, "current")).toEqual([producer]);
+		expect(await readHistory(revision)).toEqual([producer]);
+		expect(await latestFulltestBunProducers("ci-test-ts:local-ts", undefined, root, now, "current")).toEqual([]);
+		expect(await readHistory("invalid")).toEqual([]);
+		expect(await readHistory("c".repeat(64))).toEqual([producer]);
 		for (const overrides of [
 			{ runId: "current" },
-			{ scope: "fulltest: full current-platform project suites" },
+			{ scope: "fulltest: all test suites" },
 			{ sourceRevision: "invalid" },
 			{ sourceRevision: null },
 			{ sourceRevision: "b".repeat(41) },
@@ -602,6 +683,30 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 		expect(await readHistory()).toEqual([]);
 		await Bun.write(path.join(root, "history", "0.producer.json"), "{");
 		expect(await readHistory()).toEqual([]);
+		const fullRun = { scope: "fulltest: all test suites" };
+		const fullProducer = {
+			...producer,
+			producer: producer.producer.replace("ci-test-ts:local-ts:", "ci-test-ts:all:"),
+			scope: "ci-test-ts:all",
+			status: "failed",
+			exitCode: 1,
+			selection: { tool: "bun", mode: "full", group: "ordinary" },
+		};
+		const readFullHistory = () => latestFulltestBunProducers("ci-test-ts:all", currentRevision, root, now, "current");
+		const dir = path.join(root, "history");
+		await put({}, [fullProducer]);
+		expect(await readFullHistory()).toEqual([]);
+		await put(fullRun, [producer, fullProducer]);
+		expect(await readHistory()).toEqual([]);
+		expect(await readFullHistory()).toEqual([fullProducer]);
+		expect(await isActiveBunFulltest("ci-test-ts:all", dir, "history")).toBe(true);
+		expect(await isActiveBunFulltest("ci-test-ts:local-ts", dir, "history")).toBe(false);
+		expect(await isActiveBunFulltest("ci-test-ts:all", dir, "other-id")).toBe(false);
+		await put({ ...fullRun, completion: "complete", exitCode: 1 }, [
+			{ ...fullProducer, selection: { ...fullProducer.selection, mode: "affected" } },
+		]);
+		expect(await readFullHistory()).toEqual([]);
+		expect(await isActiveBunFulltest("ci-test-ts:all", dir, "history")).toBe(false);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
@@ -652,8 +757,10 @@ test("each exact chunk keeps its latest usable measurement across interrupted ru
 			records.map((record, index) => Bun.write(path.join(dir, `${index}.producer.json`), JSON.stringify(record))),
 		);
 	};
-	const readHistory = () => latestLocalTestProducers(revision, root, now, "current");
-	const ordered = async () => prioritizeLocalCommands(commands, await readHistory());
+	const rank = (items: typeof commands, producers: TestProducerRecord[]) =>
+		prioritizeBunCommands(items, producers, "ci-test-ts:local-ts");
+	const readHistory = () => latestFulltestBunProducers("ci-test-ts:local-ts", revision, root, now, "current");
+	const ordered = async () => rank(commands, await readHistory());
 	try {
 		const fast = producer(0, 1, 180_000);
 		const slow = producer(1, 20, 180_000);
@@ -681,10 +788,10 @@ test("each exact chunk keeps its latest usable measurement across interrupted ru
 		// Relabeling or changing argv makes a new identity, not an inherited duration.
 		const changed = commands.map(command => ({ ...command, command: [...command.command] }));
 		changed[1].command[2] = "test/changed.test.ts";
-		expect(prioritizeLocalCommands(changed, await readHistory())).toEqual(changed);
+		expect(rank(changed, await readHistory())).toEqual(changed);
 		changed[1].command = [...commands[1].command];
 		changed[1].label = "packages/foo (relabeled)";
-		expect(prioritizeLocalCommands(changed, await readHistory())).toEqual(changed);
+		expect(rank(changed, await readHistory())).toEqual(changed);
 		// Equal-time conflicting records are ambiguous, not a fabricated duration.
 		await put("ambiguous", 20_000, [producer(1, 5, 10_000), producer(1, 50, 10_000)]);
 		expect(await ordered()).toEqual(commands);
@@ -901,38 +1008,119 @@ test("local suites select fork consumers and drain failures without widening to 
 		for (const file of singletonFiles) await put(`packages/coding-agent/${file}`, fixture(file));
 		const output = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--dry-run"]);
 		for (const file of singletonFiles) expect(output).not.toContain(file);
-		const shards = await Promise.all(
-			["1/3", "2/3", "3/3"].map(shard =>
-				run([process.execPath, "scripts/ci-test-ts.ts", "coding-agent-singleton", "--dry-run"], {
+		const dryCommands = (output: string) =>
+			output
+				.split("\n")
+				.filter(line => line.startsWith("$ "))
+				.map(line => line.trimEnd().replace(/ --parallel=\S+ --timeout=\S+$/, ""));
+		const verifyShards = async (mode: string, files: string[], count: number) => {
+			const dryRun = (shard = "") =>
+				run([process.execPath, "scripts/ci-test-ts.ts", mode, "--dry-run"], {
 					CI: "true",
 					OMP_TEST_SHARD: shard,
-				}),
-			),
-		);
-		for (const file of ["test/settings.test.ts", ...singletonFiles]) {
-			expect(shards.join("\n").split(file).length - 1).toBe(1);
-		}
-		for (const [index, shardOutput] of shards.entries()) {
-			const chunkNumbers = [...shardOutput.matchAll(/chunk (\d+)\/\d+/g)].map(match => Number(match[1]));
-			for (const number of chunkNumbers) expect((number - 1) % 3).toBe(index);
-		}
+				});
+			const [unsharded, ...shards] = await Promise.all([
+				dryRun(),
+				...Array.from({ length: count }, (_, index) => dryRun(`${index + 1}/${count}`)),
+			]);
+			const commands = dryCommands(unsharded);
+			const shardedCommands = shards.flatMap(dryCommands);
+			for (const file of files) expect(shardedCommands.filter(line => line.includes(file))).toHaveLength(1);
+			// Shards are chosen before priority sorting, so compare their combined
+			// membership without using the unsharded launch order as shard indices.
+			expect(shardedCommands.sort()).toEqual(commands.sort());
+			for (const [index, shard] of shards.entries()) {
+				const expectedSize = Math.floor(commands.length / count) + Number(index < commands.length % count);
+				expect(dryCommands(shard)).toHaveLength(expectedSize);
+			}
+			return unsharded;
+		};
+		await verifyShards("coding-agent-singleton", ["test/settings.test.ts", ...singletonFiles], 3);
 		const nativeFiles = Array.from({ length: 11 }, (_, i) => `test/native-${String(i).padStart(2, "0")}.test.ts`);
 		await put("packages/coding-agent/test/native.test.ts", fixture("native"));
 		for (const file of nativeFiles) await put(`packages/coding-agent/${file}`, fixture(file));
-		const nativeShards = await Promise.all(
-			["1/2", "2/2"].map(shard =>
-				run([process.execPath, "scripts/ci-test-ts.ts", "coding-agent-native", "--dry-run"], {
-					CI: "true",
-					OMP_TEST_SHARD: shard,
-				}),
-			),
-		);
-		for (const file of ["test/native.test.ts", ...nativeFiles]) {
-			expect(nativeShards.join("\n").split(file).length - 1).toBe(1);
+		const before = await verifyShards("coding-agent-native", ["test/native.test.ts", ...nativeFiles], 2);
+		if (process.platform === "win32") {
+			const labelFor = (output: string, file: string) =>
+				output.split("\n").find(line => line.startsWith("==> ") && line.includes(file));
+			await put("packages/coding-agent/test/native-00-early.test.ts", fixture("earlier native"));
+			const after = await run([process.execPath, "scripts/ci-test-ts.ts", "coding-agent-native", "--dry-run"]);
+			for (const file of nativeFiles) {
+				expect(labelFor(before, file)).toBeDefined();
+				expect(labelFor(after, file)).toBe(labelFor(before, file));
+			}
 		}
-		for (const [index, shardOutput] of nativeShards.entries()) {
-			const chunkNumbers = [...shardOutput.matchAll(/chunk (\d+)\/\d+/g)].map(match => Number(match[1]));
-			for (const number of chunkNumbers) expect((number - 1) % 2).toBe(index);
+
+		// The shared all-mode still includes the complete package list in this
+		// artificial checkout, rather than replacing it with the fork selection.
+		for (const cwd of [
+			"packages/omptype",
+			"packages/utils",
+			"packages/catalog",
+			"packages/snapcompact",
+			"packages/agent",
+			"packages/mnemopi",
+			"packages/typescript-edit-benchmark",
+			"packages/stats",
+			"packages/metaharness",
+			"python/robomp/web",
+		]) {
+			const file = `${cwd}/test/full.test.ts`;
+			await put(file, fixture(file));
+		}
+		await put(".omp/tests/tui.test.ts", fixture("project tools"));
+		await put(
+			"packages/coding-agent/test/tools/browser-launch.test.ts",
+			`// launchHeadlessBrowser()
+import { writeFileSync } from "node:fs";
+writeFileSync(process.env.MARKER! + ".startup-home", process.env.HOME!);
+${fixture("browser acceptance")}`,
+		);
+		await put(
+			"packages/ai/test/unrelated.test.ts",
+			`import { writeFileSync } from "node:fs";
+writeFileSync(process.env.MARKER! + ".ordinary-home", process.env.HOME!);
+${fixture("packages/ai/test/unrelated.test.ts")}`,
+		);
+		const knowledgeFile = "test/knowledge-search-cli.e2e.test.ts";
+		await put(`packages/coding-agent/${knowledgeFile}`, fixture("knowledge CLI"));
+		const full = fulltestCommands({ debug: false, full: true }, path.join(temp, "home")).find(
+			command => command.argv[1] === "scripts/ci-test-ts.ts",
+		)!;
+		const fullArgv = [process.execPath, ...full.argv.slice(1)];
+		const fullEnv = { ...full.env, OMP_TEST_SHARD: "1/200" };
+		const serialCommands = dryCommands(
+			await run([...fullArgv, "--dry-run"], { ...fullEnv, OMP_TEST_CPU_BUDGET: "1" }),
+		);
+		const parallelCommands = dryCommands(
+			await run([...fullArgv, "--dry-run"], { ...fullEnv, OMP_TEST_CPU_BUDGET: "3" }),
+		);
+		const isStartup = (command: string) =>
+			[...startupFiles, "test/tools/browser-launch.test.ts"].some(file => command.includes(file));
+		expect(serialCommands.slice(0, startupFiles.length + 1).every(isStartup)).toBe(true);
+		expect(serialCommands.slice(startupFiles.length + 1).some(isStartup)).toBe(false);
+		expect(parallelCommands[0]).toBe(serialCommands[0]);
+		expect(parallelCommands.slice(1, 3).some(command => !isStartup(command))).toBe(true);
+		expect(serialCommands.filter(command => command.includes(knowledgeFile))).toHaveLength(1);
+		await clear();
+		const priorReports = new Set(await fs.readdir(reportRoot));
+		await run(fullArgv, { ...fullEnv, OMP_TEST_CPU_BUDGET: "3" });
+		expect(await executed()).toContain("packages/ai/test/unrelated.test.ts");
+		expect(await executed()).toContain("browser acceptance");
+		expect(await executed()).not.toContain("packages/natives/test/desktop.test.ts");
+		expect(await fs.readFile(`${marker}.startup-home`, "utf8")).toBe(full.env?.OMP_FULLTEST_STARTUP_HOME);
+		expect(await fs.readFile(`${marker}.ordinary-home`, "utf8")).toBe(full.env?.HOME);
+		const fullReportDirs = (await fs.readdir(reportRoot)).filter(name => !priorReports.has(name));
+		expect(fullReportDirs).toHaveLength(1);
+		const fullReport = JSON.parse(
+			await fs.readFile(path.join(reportRoot, fullReportDirs[0]!, "run.json"), "utf8"),
+		) as { scope: string; producers: TestProducerRecord[] };
+		expect(fullReport.scope).toBe("ci-test-ts:all");
+		expect(fullReport.producers).toHaveLength(serialCommands.length);
+		for (const producer of fullReport.producers) {
+			const group = isStartup(producer.command.join(" ")) ? "startup" : "ordinary";
+			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", group });
+			expect(producer.status).toBe("passed");
 		}
 	} finally {
 		await fs.rm(temp, { recursive: true, force: true });

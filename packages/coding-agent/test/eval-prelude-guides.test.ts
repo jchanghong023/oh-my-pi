@@ -58,6 +58,7 @@ describe("Eval first-call guide messages", () => {
 				"async.enabled": false,
 				"compaction.enabled": false,
 				"todo.enabled": false,
+				"eval.js": true,
 				"tools.artifactSpillThreshold": 1,
 				"tools.artifactHeadBytes": 0,
 				"tools.artifactTailBytes": 1,

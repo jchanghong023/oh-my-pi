@@ -49,8 +49,7 @@ extractEmbeddedAddons({ files: [{ filename: ${JSON.stringify(filename)}, size: $
 const binding = createRequire(import.meta.url)(path.join(root, ${JSON.stringify(filename)}));
 if (typeof binding.ipcEndpoint(root, "native-probe") !== "string") throw new Error("Real native binding did not load");
 if (mode === DAEMON_WORKER_ARG) {
-	await fs.writeFile(${JSON.stringify(path.join(root, "daemon-native-root"))}, root);
-	await fs.writeFile(${JSON.stringify(path.join(root, "daemon-pid"))}, String(process.pid));
+	await fs.writeFile(${JSON.stringify(path.join(root, "daemon-native-root-"))} + process.pid, root);
 	await startDaemonFromEnvironment();
 } else if (mode === "cold") {
 	process.stdout.write("loaded\\n");
@@ -67,7 +66,8 @@ if (mode === DAEMON_WORKER_ARG) {
 } else {
 	const client = mode === "observer" ? await probeDaemon() : await daemonClient();
 	if (!client) throw new Error("No daemon to observe");
-	await client.request({ op: "ping" });
+	const { pid } = await client.request({ op: "ping" });
+	await fs.writeFile(${JSON.stringify(path.join(root, "connected-pid-"))} + mode, String(pid));
 	process.stdout.write("connected\\n");
 	await input.read();
 	if (mode === "observer") {
@@ -161,13 +161,14 @@ describe("daemon native cache ownership", () => {
 		let daemonExit: Promise<boolean> | undefined;
 		try {
 			await expectLine(stdout, "connected", creator);
-			const nativeRoot = await fs.readFile(path.join(root, "daemon-native-root"), "utf8");
+			const pid = Number(await fs.readFile(path.join(root, "connected-pid-creator"), "utf8"));
+			expect(pid).toBeGreaterThan(0);
+			const nativeRoot = await fs.readFile(path.join(root, `daemon-native-root-${pid}`), "utf8");
 			expect(nativeRoot).toBe(process.platform === "linux" ? creatorLeaf : path.join(runtime, "natives"));
 			observer = startHost(host, "observer", path.join(root, "observer-natives"));
 			const observerOutput = observer.proc.stdout.getReader();
 			await expectLine(observerOutput, "connected", observer);
-			const pid = Number(await fs.readFile(path.join(root, "daemon-pid"), "utf8"));
-			expect(pid).toBeGreaterThan(0);
+			expect(Number(await fs.readFile(path.join(root, "connected-pid-observer"), "utf8"))).toBe(pid);
 			const daemon = Process.fromPid(pid);
 			if (!daemon) throw new Error("Shared daemon disappeared while the creator was connected");
 			daemonExit = daemon.waitForExit({ timeoutMs: 15_000 });

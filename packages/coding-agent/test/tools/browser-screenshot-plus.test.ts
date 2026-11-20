@@ -320,6 +320,7 @@ body { margin: 0; }
 					"browser.cmux": false,
 					"browser.tern": false,
 					"async.enabled": false,
+					"eval.js": true,
 				}),
 				getEvalSessionId: () => "browser-screenshot-eval",
 				getEvalPreludes: () => [prelude],

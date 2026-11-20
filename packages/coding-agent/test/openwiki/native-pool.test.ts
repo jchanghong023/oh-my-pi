@@ -17,14 +17,21 @@ async function repository(root: string) {
 			cwd: root,
 			stdout: "ignore",
 			stderr: "pipe",
-			env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: root, GIT_CONFIG_NOSYSTEM: "1" },
+			env: {
+				PATH: process.env.PATH,
+				SystemRoot: process.env.SystemRoot,
+				HOME: root,
+				GIT_CONFIG_NOSYSTEM: "1",
+				GIT_AUTHOR_NAME: "Fixture",
+				GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+				GIT_COMMITTER_NAME: "Fixture",
+				GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+			},
 		});
 		const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
 		if (code !== 0) throw new Error(`git ${args.join(" ")}: ${stderr}`);
 	}
 	await git("init", "--quiet");
-	await git("config", "user.name", "Fixture");
-	await git("config", "user.email", "fixture@example.invalid");
 	await writeFile(path.join(root, "README.md"), "Stable source for pool tests.\n");
 	await git("add", "README.md");
 	await git("commit", "--quiet", "-m", "stable pool source");
@@ -88,8 +95,16 @@ async function scenario(
 			let message: object = { role: "assistant", content: "Finished." };
 			if (!page && !results.has("call_submit_plan")) {
 				plans++;
+				// Instruction updates exercise invalidation and checkpointing, not page rewrites.
+				// Partial recovery only needs the worker whose page is still stale.
+				const plannedPages =
+					mode === "instructions" && plans > 1
+						? []
+						: mode === "partial-baseline" && plans === 3
+							? pages.slice(0, 1)
+							: pages;
 				message = call("submit_plan", {
-					pages: pages.map(page => ({
+					pages: plannedPages.map(page => ({
 						path: page,
 						title: path.basename(page, ".md"),
 						purpose: "Document stable source",
@@ -194,7 +209,7 @@ async function scenario(
 				plannerModel: model,
 				embedded: true,
 				skillsDir: path.resolve(import.meta.dir, "../../../../vendor/openwiki/skills"),
-				pageConcurrency: mode === "fatal" || mode === "partial-baseline" ? 1 : 2,
+				pageConcurrency: mode === "fatal" || mode === "partial-baseline" || mode === "instructions" ? 1 : 2,
 				signal,
 				onEvent: event => {
 					if (
@@ -311,8 +326,7 @@ async function scenario(
 				path.join(root, "README.md"),
 				"Stable source for pool tests.\nNew committed source context.\n",
 			);
-			await git("add", "README.md");
-			await git("commit", "--quiet", "-m", "change pool source");
+			await git("commit", "--quiet", "--all", "-m", "change pool source");
 			const partial = await execute(AbortSignal.timeout(20_000), "update");
 			expect(partial.partialFailure).toBe(true);
 			const incomplete = JSON.parse(await readFile(metadataPath, "utf8"));
@@ -330,6 +344,7 @@ async function scenario(
 			expect(complete.gitHead).toBe(completedAfter.pages[pages[1]].gitHead);
 			const completedRecovered = JSON.parse(await readFile(manifestPath, "utf8"));
 			expect(completedRecovered.pages[pages[0]].gitHead).toBe(complete.gitHead);
+			expect(completedRecovered.pages[pages[1]]).toEqual(completedAfter.pages[pages[1]]);
 		}
 	} finally {
 		betaReady.resolve();

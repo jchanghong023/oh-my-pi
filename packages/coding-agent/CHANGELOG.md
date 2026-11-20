@@ -95,6 +95,11 @@
 
 ### Fixed
 
+- Reloading a session no longer lets a background job from the previous run trigger stale idle compaction.
+- Stopping a daemon module no longer delays daemon shutdown after the module has already exited.
+- Detached services on Windows now survive daemon restarts and return to their original session.
+- RPC shutdown waits for its private MCP host to finish stopping local tool processes.
+- Local British speech voices keep their `en_GB` locale when the display names are translated.
 - ACP extension listings use project settings for `cwd` queries and live session settings only when a `sessionId` is supplied.
 - Compact tool output backgrounds now start in the same column as the two activity rows, leaving the shared left gutter clear.
 - Compact Output expires from its own session's run end without reappearing in later turns; changing the display mode or focused agent no longer revives stale thinking.

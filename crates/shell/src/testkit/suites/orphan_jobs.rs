@@ -262,6 +262,6 @@ fn cancel_signals_current_externals_but_spares_prior_jobs() {
 			}
 		}
 		assert_eq!(signals.lock().as_slice(), if started { &[Signal::Term][..] } else { &[] });
-		assert_eq!(r.shell().live_external_jobs(), 1, "the prior external survives");
+		assert_eq!(shell.live_external_jobs(store), 1, "the prior external survives");
 	}
 }

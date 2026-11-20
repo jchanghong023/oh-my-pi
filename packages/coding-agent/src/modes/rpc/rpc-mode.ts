@@ -51,6 +51,7 @@ import {
 import { requestTextPrediction, textPredictionBackend } from "../../predict/client";
 import { type AgentSession, type NavigateTreeResult, SessionBusyError } from "../../session/agent-session";
 import type { AgentSessionHandle } from "../../session/agent-session-handle";
+import { disposeLocalMcpHost } from "../../mcp/host/local";
 import type { MCPManager } from "../../mcp/manager";
 import { reconnectMcpManagerServer } from "../../mcp/oauth-reauth";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
@@ -1855,8 +1856,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			await liveBridge.stop();
 			slashModes.dispose();
 			await session.dispose();
+			// Releasing the session's leases starts private unit shutdown, but
+			// process.exit() cannot await the host's registered exit callback.
+			await disposeLocalMcpHost();
 		} catch (error) {
 			if (!persistenceFailure || error !== persistenceFailure) throw error;
+			await disposeLocalMcpHost();
 			// The notice frame this failure queued must reach the client before the
 			// process ends (review 3983906393).
 			await outputWriter.close();

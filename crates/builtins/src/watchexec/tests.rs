@@ -151,10 +151,11 @@ fn events_take_watchexecs_text_json_and_environment_forms() {
 	);
 
 	let separator = if cfg!(windows) { ";" } else { ":" };
+	let root = Path::new(std::path::MAIN_SEPARATOR_STR).join("p");
 	let mut variables = environment(&changes);
 	variables.sort_unstable();
 	assert_eq!(variables, [
-		("WATCHEXEC_COMMON_PATH", "/p".to_owned()),
+		("WATCHEXEC_COMMON_PATH", root.display().to_string()),
 		("WATCHEXEC_CREATED_PATH", "src/a.rs".to_owned()),
 		("WATCHEXEC_REMOVED_PATH", "docs".to_owned()),
 		("WATCHEXEC_RENAMED_PATH", "src/old.rs".to_owned()),
@@ -167,7 +168,7 @@ fn events_take_watchexecs_text_json_and_environment_forms() {
 	];
 	assert_eq!(environment(&one), [
 		("WATCHEXEC_META_CHANGED_PATH", format!("a.rs{separator}b.rs")),
-		("WATCHEXEC_COMMON_PATH", "/p/src".to_owned()),
+		("WATCHEXEC_COMMON_PATH", root.join("src").display().to_string()),
 	]);
 	assert!(environment(&[]).is_empty());
 }

@@ -2,12 +2,12 @@ import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Text } from "@oh-my-pi/pi-tui";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { createSessionStub } from "./helpers/interactive-mode-context";
 
 type Harness = {
 	mode: InteractiveMode;
@@ -26,28 +26,17 @@ async function createHarness(): Promise<Harness> {
 	}
 
 	const tempDir = TempDir.createSync("@pi-deferred-notice-");
+	resetSettingsForTest();
 	await Settings.init({ inMemory: true, cwd: tempDir.path() });
 	await initTheme(false);
 	const sessionManager = SessionManager.inMemory(tempDir.path());
 	await sessionManager.setSessionName("Deferred notice", "user");
 	let streaming = false;
-	const session = {
-		sessionManager,
-		settings,
-		agent: { state: { tools: [] }, metadataForProvider: () => undefined },
-		customCommands: [],
-		skills: [],
-		autoCompactionEnabled: true,
-		messages: [],
-		systemPrompt: [],
-		state: { model: undefined },
-		model: undefined,
-		thinkingLevel: undefined,
-		buildTranscriptSessionContext: () => ({ messages: [] }),
+	const session = createSessionStub(sessionManager, settings, {
 		get isStreaming() {
 			return streaming;
 		},
-	} as unknown as AgentSession;
+	});
 	const mode = new InteractiveMode(session, "test");
 	harness = {
 		mode,

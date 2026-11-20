@@ -1325,16 +1325,17 @@ describe("AskDialogComponent", () => {
 			expect(out).toContain("PREVIEW-FIRST");
 			expect(out).not.toContain("PREVIEW-MIDDLE");
 			expect(out).not.toContain("PREVIEW-LAST");
-			expect(component.keyHints()).not.toContain("page");
+			expect(stripVTControlCharacters(component.keyHints())).not.toContain("PgUp/PgDn");
 			component.handleInput(DOWN);
 			render(component);
-			expect(stripVTControlCharacters(component.keyHints())).toContain("PgUp/PgDn page");
+			expect(stripVTControlCharacters(component.keyHints())).toContain("PgUp/PgDn");
 			for (let page = 0; page < 3; page++) component.handleInput(PAGE_DOWN);
 			out = render(component);
 			expect(out).toContain("PREVIEW-MIDDLE");
 			component.handleInput(DOWN);
 			out = render(component);
-			expect(out).toContain("其他（自行输入）");
+			const focusedOther = /❯ ○ (?!Plain\b|Alpha\b)\S/;
+			expect(out).toMatch(focusedOther);
 			expect(out).not.toContain("PREVIEW-MIDDLE");
 			component.handleInput(UP);
 			out = render(component);
@@ -1344,10 +1345,10 @@ describe("AskDialogComponent", () => {
 				out = render(component);
 			}
 			expect(out).toContain("PREVIEW-LAST");
-			expect(out).not.toContain("其他（自行输入）");
+			expect(out).not.toContain("○ ");
 			component.handleInput(DOWN);
 			out = render(component);
-			expect(out).toContain("其他（自行输入）");
+			expect(out).toMatch(focusedOther);
 			component.handleInput(UP);
 			out = render(component);
 			for (let page = 0; page < 10; page++) {

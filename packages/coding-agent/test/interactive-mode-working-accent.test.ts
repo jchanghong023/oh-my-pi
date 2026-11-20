@@ -1,15 +1,14 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
-import { Loader, type WorkingRowSpec } from "@oh-my-pi/pi-tui";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { cfgDisplayMode, cfgStatusLineSessionAccent } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import { Loader, type WorkingRowSpec } from "@oh-my-pi/pi-tui";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import * as sessionColor from "@oh-my-pi/pi-tui/theme/session-color";
 import { adjustHsv, TempDir } from "@oh-my-pi/pi-utils";
-
-import { cfgDisplayMode, cfgStatusLineSessionAccent } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { createSessionStub } from "./helpers/interactive-mode-context";
 
 type Harness = {
 	mode: InteractiveMode;
@@ -51,26 +50,11 @@ async function createHarness(sessionName: string): Promise<Harness> {
 	await initTheme(false);
 	const sessionManager = SessionManager.inMemory(tempDir.path());
 	await sessionManager.setSessionName(sessionName, "user");
-	const session = {
-		sessionManager,
-		settings,
-		agent: {
-			state: { tools: [], pendingToolCalls: new Set(), streamMessage: null },
-			metadataForProvider: () => undefined,
-		},
-		customCommands: [],
-		skills: [],
-		autoCompactionEnabled: true,
-		messages: [],
-		systemPrompt: [],
-		state: { model: undefined },
+	const session = createSessionStub(sessionManager, settings, {
 		isStreaming: true,
-		model: undefined,
-		thinkingLevel: undefined,
-		titleGenerationSignal: new AbortController().signal,
 		// No conversation to title: a bare /rename reports usage.
 		renameTitle: async () => null,
-	} as unknown as AgentSession;
+	});
 	const mode = new InteractiveMode(session, "test");
 	harness = { mode, sessionManager, tempDir };
 	return harness;
@@ -135,6 +119,7 @@ describe("InteractiveMode working activity", () => {
 		const { mode } = await createHarness("Active rename session");
 		mode.ensureLoadingAnimation();
 		const loader = defined(mode.loadingAnimation);
+		mode.setWorkingMessage("Active work");
 		expect(mode.session.isStreaming).toBe(true);
 
 		try {
@@ -143,6 +128,8 @@ describe("InteractiveMode working activity", () => {
 			expect(handled).toBe(true);
 			expect(mode.session.isStreaming).toBe(true);
 			expect(mode.loadingAnimation).toBe(loader);
+			expect(Bun.stripANSI(renderLoader(mode))).toContain("Active work");
+			expect(mode.lastStatus?.message).toContain("/rename <title>");
 		} finally {
 			loader.stop();
 		}

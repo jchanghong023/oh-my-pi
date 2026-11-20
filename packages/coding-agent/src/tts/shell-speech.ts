@@ -91,10 +91,9 @@ interface PcmChunk {
 
 function backendVoices(backend: SpeechBackend): ShellSpeechVoice[] {
 	if (backend.kind === "local") {
-		// The local model's voices are American or British English.
 		return (getTtsLocalModelSpec(backend.modelKey)?.voices ?? []).map(voice => ({
 			name: voice.id,
-			locale: voice.label.includes("British") ? "en_GB" : "en_US",
+			locale: voice.locale,
 			sample: voice.label,
 		}));
 	}

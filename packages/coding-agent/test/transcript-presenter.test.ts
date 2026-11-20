@@ -20,6 +20,7 @@ import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { cfgExtensionTranscriptPresenters } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -728,8 +729,13 @@ describe("extension transcript presenters", () => {
 			});
 		custom("advisor", { notes: [{ note: "ADVISOR-NOTE" }] }, 10);
 		custom("skill-prompt", { name: "demo-skill", path: "/skills/demo/SKILL.md", lineCount: 1 }, 20);
-		custom("async-result", { jobId: "bg-7", type: "bash", durationMs: 1200 }, 30);
+		custom("async-result", { jobs: [{ jobId: "bg-7", type: "bash", status: "completed", durationMs: 1200 }] }, 30);
 		await start();
+		await mode.renderInitialMessages();
+		// Detailed mode shows this persisted receipt; clean mode must hide even its compact presentation.
+		expect(chat()).toContain("MSG-async-result");
+		cfgDisplayMode.override(mode.settings, "clean");
+		await Promise.resolve();
 		await mode.renderInitialMessages();
 		for (const type of ["advisor", "skill-prompt"]) expect(chat()).toContain(`MSG-${type}`);
 		expect(chat()).not.toContain("ADVISOR-NOTE");
@@ -738,6 +744,7 @@ describe("extension transcript presenters", () => {
 		mode.setToolsExpanded(true);
 		expect(chat()).not.toContain("MSG-");
 		expect(chat()).toContain("ADVISOR-NOTE");
+		expect(chat()).toContain("demo-skill");
 		expect(chat()).not.toContain("bg-7");
 	});
 

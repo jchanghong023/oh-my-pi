@@ -167,12 +167,20 @@ describe("disassembler backend selection", () => {
 	});
 
 	it("keeps IDA first in auto when Binary Ninja is installed too", () => {
-		const settings = Settings.isolated({ "ida.installDir": withIdalib, "binja.installDir": withBinja });
+		const settings = Settings.isolated({
+			"disassembler.backend": "auto",
+			"ida.installDir": withIdalib,
+			"binja.installDir": withBinja,
+		});
 		expect(cfgDisasmBackend.get(settings)).toBe("ida");
 	});
 
 	it("never picks Binary Ninja in auto, even where it is the only backend installed", () => {
-		const settings = Settings.isolated({ "ida.installDir": withoutIdalib, "binja.installDir": withBinja });
+		const settings = Settings.isolated({
+			"disassembler.backend": "auto",
+			"ida.installDir": withoutIdalib,
+			"binja.installDir": withBinja,
+		});
 		expect(cfgDisasmBackend.get(settings)).toBe(ghidraHostSupported() ? "ghidra" : undefined);
 	});
 

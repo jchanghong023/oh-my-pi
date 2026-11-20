@@ -129,6 +129,7 @@ describe("built-in MCP transforms", () => {
 
 	test("the session context follows mcp.builtinTransforms and eval.js", () => {
 		const settings = Settings.isolated();
+		cfgEvalJs.set(settings, true);
 		expect(resolveMCPTransformContext(settings, { evalActive: true })).toEqual({ evalJs: true });
 		expect(resolveMCPTransformContext(settings, { evalActive: false })).toEqual({ evalJs: false });
 

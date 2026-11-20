@@ -294,16 +294,17 @@ describe("P2-21 Python Eval runtime scope", () => {
 
 			expect(probe).not.toHaveBeenCalled();
 			expect(spawn).toHaveBeenCalledTimes(1);
-			expect(spawn).toHaveBeenCalledWith(
-				[interpreter ?? offlinePython, "-u", scriptPath],
-				expect.objectContaining({
-					env: {
-						...(selection === "explicit" ? env : { PATH: env.PATH, LD_LIBRARY_PATH: env.LD_LIBRARY_PATH }),
-						PYTHONUNBUFFERED: "1",
-						PYTHONIOENCODING: "utf-8",
-					},
-				}),
-			);
+			const [command, spawnOptions] = spawn.mock.calls[0];
+			expect(command[0]).toBe(interpreter ?? offlinePython);
+			const childEnv = spawnOptions?.env;
+			if (selection === "explicit") {
+				expect(childEnv).toMatchObject(originalEnv);
+			} else {
+				expect(childEnv).toMatchObject({ PATH: originalEnv.PATH, LD_LIBRARY_PATH: originalEnv.LD_LIBRARY_PATH });
+				for (const key of ["VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV", "PYTHONPATH", "PYTHONHOME"]) {
+					expect(childEnv).not.toHaveProperty(key);
+				}
+			}
 			expect(env).toEqual(originalEnv);
 		},
 	);

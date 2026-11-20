@@ -2769,6 +2769,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			toolNames: ["read"],
 			modelPattern: "openai/gpt-5.6-terra",
 		});
+		const reapply = vi.spyOn(session.modelRegistry, "reapplyModelPolicies");
 		try {
 			expect(session.model?.contextWindow).toBe(272_000);
 			// Setting listeners run one microtask after the write; no catalog rebuild
@@ -2780,7 +2781,13 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			await Promise.resolve();
 			expect(session.model?.contextWindow).toBe(272_000);
 		} finally {
-			await session.dispose();
+			try {
+				await session.dispose();
+			} finally {
+				// The settings listeners' catalog rebuilds can still hold models.db
+				// after session disposal. Drain them before the fixture removes tempDir.
+				await Promise.all(reapply.mock.results.map(result => result.value));
+			}
 		}
 	});
 

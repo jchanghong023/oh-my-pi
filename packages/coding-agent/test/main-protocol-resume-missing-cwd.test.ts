@@ -214,7 +214,7 @@ async function runCli(argv: string[], isTTY: boolean): Promise<CliRun> {
 	try {
 		await runRootCommand(parsed, rawArgs, {
 			discoverAuthStorage: async () => authStorage,
-			settings: Settings.isolated({ "marketplace.autoUpdate": "off" }),
+			settings: Settings.isolated(),
 			createAgentSession: async options => {
 				run.manager = options?.sessionManager;
 				if (run.manager) managers.add(run.manager);

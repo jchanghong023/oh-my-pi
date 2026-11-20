@@ -110,7 +110,9 @@ function modelServer() {
 	};
 }
 
-async function fixture() {
+type FixtureModels = { embedding?: string; reranker?: boolean };
+
+async function fixture(initialModels: FixtureModels = {}) {
 	const envKeys = ["PI_CONFIG_FILES", "MNEMOPI_NO_EMBEDDINGS", "MNEMOPI_EMBEDDING_MAX_INPUT_CHARS"] as const;
 	const previousEnv = envKeys.map(key => [key, process.env[key]] as const);
 	for (const key of envKeys) delete process.env[key];
@@ -126,7 +128,11 @@ async function fixture() {
 	await fs.mkdir(agentDir);
 	const server = modelServer();
 	let service: KnowledgeService;
-	async function configure(options: { embedding?: string; reranker?: boolean } = {}) {
+	cleanups.push(() => {
+		server.releaseHeld();
+		return service?.close();
+	});
+	async function configure(options: FixtureModels = {}) {
 		if (service) await service.close();
 		await Bun.write(
 			path.join(agentDir, "config.yml"),
@@ -147,11 +153,6 @@ async function fixture() {
 			}),
 		);
 		service = new KnowledgeService({ agentDir, cwd: root });
-		const owned = service;
-		cleanups.push(() => {
-			server.releaseHeld();
-			return owned.close();
-		});
 		return service;
 	}
 	async function add(index: string, files: Record<string, string>, signal?: AbortSignal) {
@@ -161,7 +162,7 @@ async function fixture() {
 		await service.init(dir, index, { signal });
 		return dir;
 	}
-	await configure();
+	await configure(initialModels);
 	return {
 		root,
 		agentDir,
@@ -206,8 +207,7 @@ const lexicalFiles = {
 };
 
 it("rebuilds missing ANN indexes from saved vectors without model calls or source files", async () => {
-	const f = await fixture();
-	await f.configure({ embedding: "test-embedding" });
+	const f = await fixture({ embedding: "test-embedding" });
 	const source = await f.add("manual", lexicalFiles);
 	await fs.rm(source, { recursive: true, force: true });
 	await f.configure();
@@ -234,8 +234,7 @@ it("rebuilds missing ANN indexes from saved vectors without model calls or sourc
 it.each(["unavailable", "abort", "stale"] as const)(
 	"handles native vector scoring %s without losing the fulltext or cancellation contract",
 	async failure => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding" });
+		const f = await fixture({ embedding: "test-embedding" });
 		await f.add("manual", lexicalFiles);
 		await f.configure();
 		const baseline = await f.service.search("alpha beta");
@@ -270,8 +269,7 @@ it.each(["unavailable", "abort", "stale"] as const)(
 );
 
 it("scopes semantic candidates before top-k and reports the ranking actually used across pages", async () => {
-	const f = await fixture();
-	await f.configure({ embedding: "test-embedding", reranker: true });
+	const f = await fixture({ embedding: "test-embedding", reranker: true });
 	const files: Record<string, string> = Object.fromEntries(
 		Array.from({ length: 70 }, (_, i) => [`outside/${i}.md`, `# Outside ${i}\nunrelated evidence ${i}\n`]),
 	);
@@ -313,10 +311,9 @@ it("scopes semantic candidates before top-k and reports the ranking actually use
 it.each(["model-without-vectors", "vectors-without-model"] as const)(
 	"keeps the full-text evidence and actual status for %s",
 	async capability => {
-		const f = await fixture();
-		if (capability === "vectors-without-model") await f.configure({ embedding: "test-embedding" });
+		const f = await fixture(capability === "vectors-without-model" ? { embedding: "test-embedding" } : {});
 		await f.add("manual", lexicalFiles);
-		await f.configure();
+		if (capability === "vectors-without-model") await f.configure();
 		const baseline = await f.service.search("alpha beta");
 		if (capability === "model-without-vectors") await f.configure({ embedding: "test-embedding" });
 		const before = f.server.requests.length;
@@ -332,8 +329,7 @@ it.each(["model-without-vectors", "vectors-without-model"] as const)(
 
 // A committed window survives optional preparation failure and resumes DB-only.
 it("retries only missing vectors after a later window fails without rereading sources", async () => {
-	const f = await fixture();
-	await f.configure({ embedding: "test-embedding" });
+	const f = await fixture({ embedding: "test-embedding" });
 	f.server.setEmbedding("partial");
 	const source = path.join(f.root, "partial-source");
 	for (let i = 0; i < 130; i++) {
@@ -386,8 +382,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("recalls DB-only cross-wording evidence without presenting it as an exact name", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding" });
+		const f = await fixture({ embedding: "test-embedding" });
 		const dir = await f.add("manual", { "repair.md": "# Recovery\nRestart the worker after a failed checkpoint.\n" });
 		await fs.rm(dir, { recursive: true });
 		const result = await f.service.search("如何恢复任务");
@@ -404,8 +399,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("excludes an old model generation without excluding its full-text evidence or a valid generation", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "old-model" });
+		const f = await fixture({ embedding: "old-model" });
 		await f.add("old", {
 			"old.md": "# Old\nalpha beta old lexical evidence.\n",
 			"old-semantic.md": "# Obsolete\nAn old checkpoint needs recovery.\n",
@@ -420,8 +414,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("excludes only the stored generation with a malformed vector, retaining its full-text matches", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding" });
+		const f = await fixture({ embedding: "test-embedding" });
 		await f.add("A", { "semantic-a.md": "# Recovery\nRestart a failed checkpoint.\n" });
 		await f.add("B", {
 			"lexical-b.md": "# Lexical\nalpha beta complete evidence.\n",
@@ -442,8 +435,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("falls back to complete full text without embedding when every stored generation is malformed", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding" });
+		const f = await fixture({ embedding: "test-embedding" });
 		await f.add("A", { "a.md": lexicalFiles["a.md"], "b.md": lexicalFiles["b.md"] });
 		await f.add("B", {
 			"c.md": lexicalFiles["c.md"],
@@ -492,8 +484,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	it.each(["rejected", "partial"] as const)(
 		"keeps full text available when embedding preparation is %s and never exposes its partial generation",
 		async failure => {
-			const f = await fixture();
-			await f.configure({ embedding: "test-embedding" });
+			const f = await fixture({ embedding: "test-embedding" });
 			f.server.setEmbedding(failure);
 			await f.add("manual", { ...lexicalFiles, "semantic.md": "# Recovery\nRestart a failed checkpoint.\n" });
 			f.server.setEmbedding("ok");
@@ -508,8 +499,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	);
 
 	it("does not turn cancellation during embedding import into a successful published full-text index", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding" });
+		const f = await fixture({ embedding: "test-embedding" });
 		f.server.setEmbedding("hold");
 		const held = f.server.held();
 		const controller = new AbortController();
@@ -522,8 +512,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("preserves distinct identical sources while deduplicating a section recalled by both paths", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding" });
+		const f = await fixture({ embedding: "test-embedding" });
 		const duplicate = "# Shared\nalpha beta identical complete evidence.\n";
 		await f.add("first", { "copy.md": duplicate });
 		await f.add("second", { "copy.md": duplicate });
@@ -535,8 +524,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("keeps complete-name evidence first even when semantic and rerank favor a partial name", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding", reranker: true });
+		const f = await fixture({ embedding: "test-embedding", reranker: true });
 		await f.add("manual", {
 			"a.md": "# Exact\nRead mbist_check.rpt for the report.\n",
 			"z.md": "# Similar\nRead mbist_check.rpt.bak for the backup.\n",
@@ -548,8 +536,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("paginates all full-text evidence beyond the semantic and rerank candidate windows", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding" });
+		const f = await fixture({ embedding: "test-embedding" });
 		const files = Object.fromEntries(
 			Array.from({ length: 140 }, (_, i) => [
 				`file-${String(i).padStart(3, "0")}.md`,
@@ -630,8 +617,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("sends the same capped query to embedding and reranking and continues without model calls", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding", reranker: true });
+		const f = await fixture({ embedding: "test-embedding", reranker: true });
 		await f.add("manual", lexicalFiles);
 		const query = `alpha beta ${"z".repeat(510)}`;
 		const expected = `${query.slice(0, 499)}…`;
@@ -665,8 +651,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("does not send either model a grep query, including with configured failing services", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding", reranker: true });
+		const f = await fixture({ embedding: "test-embedding", reranker: true });
 		await f.add("manual", lexicalFiles);
 		f.server.setEmbedding("http");
 		f.server.setRerank("http");
@@ -709,8 +694,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	it.each(["update", "delete", "replace"] as const)(
 		"rejects a semantic ranking after SQL %s changes stored evidence",
 		async operation => {
-			const f = await fixture();
-			await f.configure({ embedding: "test-embedding" });
+			const f = await fixture({ embedding: "test-embedding" });
 			await f.add("manual", lexicalFiles);
 			const first = await f.service.search("alpha beta", { limit: 1 });
 			expect(first.cursor).toBeTruthy();
@@ -735,8 +719,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	it.each([false, true])(
 		"reranks %s vector-backed base results without changing their evidence set",
 		async vector => {
-			const f = await fixture();
-			await f.configure(vector ? { embedding: "test-embedding" } : {});
+			const f = await fixture(vector ? { embedding: "test-embedding" } : {});
 			await f.add("manual", lexicalFiles);
 			const base = await f.service.search("alpha beta");
 			await f.configure({ ...(vector ? { embedding: "test-embedding" } : {}), reranker: true });
@@ -780,8 +763,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	);
 
 	it("does not call a configured reranker for an empty database or a zero-hit full-text search", async () => {
-		const f = await fixture();
-		await f.configure({ reranker: true });
+		const f = await fixture({ reranker: true });
 		await expect(f.service.search("alpha beta")).rejects.toThrow();
 		expect(f.server.requests).toHaveLength(0);
 		await f.add("manual", lexicalFiles);
@@ -791,8 +773,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("aborts rather than falling back while a query embedding is in flight", async () => {
-		const f = await fixture();
-		await f.configure({ embedding: "test-embedding" });
+		const f = await fixture({ embedding: "test-embedding" });
 		await f.add("manual", lexicalFiles);
 		f.server.setEmbedding("hold");
 		const held = f.server.held();
@@ -804,9 +785,8 @@ describe("Knowledge semantic and rerank public contracts", () => {
 	}, 30_000);
 
 	it("aborts rather than delivering base results when an in-flight reranker is cancelled", async () => {
-		const f = await fixture();
+		const f = await fixture({ reranker: true });
 		await f.add("manual", lexicalFiles);
-		await f.configure({ reranker: true });
 		f.server.setRerank("hold");
 		const held = f.server.held();
 		const controller = new AbortController();

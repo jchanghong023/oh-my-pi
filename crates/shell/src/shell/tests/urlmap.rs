@@ -117,10 +117,10 @@ async fn the_listing_round_trips_and_mounts_are_removed_by_url() {
 	let (result, output) = execute_captured(command).await;
 
 	let listing = format!(
-		"urlmap local:// {}\nurlmap -r skill://review '{}'\nurlmap -r -e skill://review '{}'\n",
-		fixture.local.display(),
-		fixture.skill.display(),
-		fixture.skill.join("SKILL.md").display(),
+		"urlmap local:// {}\nurlmap -r skill://review {}\nurlmap -r -e skill://review {}\n",
+		quote_arg(&fixture.local.to_string_lossy()),
+		quote_arg(&fixture.skill.to_string_lossy()),
+		quote_arg(&fixture.skill.join("SKILL.md").to_string_lossy()),
 	);
 	assert!(output.starts_with("left=\n"), "{output}");
 	assert!(output.contains("gone=1\nsame\n# Review\n"), "{output}");

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
+import { RpcClient, RpcCommandError } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
 import type { RpcPromptResultFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -45,15 +45,18 @@ describe("RPC native input handlers", () => {
 		expect(userTexts(await client.getMessages())).toEqual(["  transformed by hook\n"]);
 	}, 30_000);
 
-	test("/delete reaches the agent without replacing the session", async () => {
+	test("rejects the interactive-only /delete without replacing or modifying the RPC session", async () => {
 		await client.promptAndWait("before delete");
 		const sessionId = (await client.getState()).sessionId;
 
-		const events = await client.promptAndWait("/delete");
-
-		expect(events.some(event => event.type === "agent_start")).toBe(true);
+		const error = await client.promptAndWait("/delete").then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		expect(error).toBeInstanceOf(RpcCommandError);
+		expect(error).toMatchObject({ command: "prompt", message: expect.stringMatching(/\/delete.*interactive TUI/) });
 		expect((await client.getState()).sessionId).toBe(sessionId);
-		expect(userTexts(await client.getMessages())).toEqual(["before delete", "/delete"]);
+		expect(userTexts(await client.getMessages())).toEqual(["before delete"]);
 	}, 30_000);
 
 	test("a later prompt does not overtake an earlier one whose handler is still running", async () => {

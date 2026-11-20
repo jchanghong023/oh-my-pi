@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
@@ -22,6 +22,7 @@ describe("disabledProviders takes effect live", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let session: AgentSession | undefined;
+	let reapply: Mock<ModelRegistry["reapplyModelPolicies"]> | undefined;
 
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-model-availability-live-");
@@ -31,14 +32,24 @@ describe("disabledProviders takes effect live", () => {
 	});
 
 	afterEach(async () => {
-		await session?.dispose();
-		session = undefined;
-		authStorage.close();
-		tempDir.removeSync();
-		vi.restoreAllMocks();
+		try {
+			await session?.dispose();
+		} finally {
+			session = undefined;
+			try {
+				// Disposing stops the settings listener, but its in-flight rebuild can still hold models.db.
+				await Promise.all(reapply?.mock.results.map(result => result.value) ?? []);
+			} finally {
+				reapply = undefined;
+				vi.restoreAllMocks();
+				authStorage.close();
+				tempDir.removeSync();
+			}
+		}
 	});
 
 	const startSession = (settings: Settings, modelRegistry: ModelRegistry, scopedModels: Model<Api>[]) => {
+		reapply = vi.spyOn(modelRegistry, "reapplyModelPolicies");
 		session = new AgentSession({
 			agent: new Agent({
 				initialState: {
@@ -82,13 +93,11 @@ describe("disabledProviders takes effect live", () => {
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings });
 		startSession(settings, modelRegistry, [sonnet]);
 		expect(modelRegistry.getDiscoverableProviders()).not.toContain("lm-studio");
-		// Only a catalog rebuild re-seeds implicit discovery; await the one the session's
-		// settings listener starts (the rebuild is async and exposes no other signal).
-		const reapply = vi.spyOn(modelRegistry, "reapplyModelPolicies");
-
+		// Only a catalog rebuild re-seeds implicit discovery. Give the settings listener
+		// its microtask, then await the real rebuild before checking the catalog.
 		cfgDisabledProviders.set(settings, []);
 		await Promise.resolve();
-		await reapply.mock.results[0]?.value;
+		await reapply?.mock.results[0]?.value;
 
 		expect(modelRegistry.getDiscoverableProviders()).toContain("lm-studio");
 	});

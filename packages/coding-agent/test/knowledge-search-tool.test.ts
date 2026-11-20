@@ -109,16 +109,23 @@ async function pages(
 }
 
 /** Indexes `files` (name → Markdown) into a throwaway agent directory. */
-async function indexedFixture(files: Record<string, string>): Promise<{ root: string; agent: string }> {
+async function openIndexedFixture(files: Record<string, string>) {
 	const root = await tempDir("docs-tool-root-");
 	const agent = await agentDir("docs-tool-agent-");
 	for (const [name, body] of Object.entries(files)) await Bun.write(path.join(root, name), body);
 	const service = new KnowledgeService({ agentDir: agent, cwd: root });
 	try {
 		await service.init(".", "manual");
-	} finally {
+	} catch (error) {
 		await service.close();
+		throw error;
 	}
+	return { root, agent, service };
+}
+
+async function indexedFixture(files: Record<string, string>): Promise<{ root: string; agent: string }> {
+	const { root, agent, service } = await openIndexedFixture(files);
+	await service.close();
 	return { root, agent };
 }
 
@@ -131,10 +138,10 @@ it("restricts file and directory searches to stored paths across indexes and bin
 	);
 	files["scope/a%_.md"] = "# Special\nscopebeacon literal punctuation\n";
 	files["scope-other/no.md"] = "# Outside\nscopebeacon outside\n";
-	const fixture = await indexedFixture(files);
 	const other = await tempDir("wiki-scope-second-");
 	await Bun.write(path.join(other, "scope/a%_.md"), "# Other index\nscopebeacon second source\n");
-	const service = new KnowledgeService({ agentDir: fixture.agent, cwd: fixture.root });
+	const fixture = await openIndexedFixture(files);
+	const { service } = fixture;
 	try {
 		await service.init(other, "second");
 	} finally {
@@ -184,10 +191,10 @@ describe("KnowledgeSearchTool", () => {
 	});
 
 	it("identifies conflicting same-path evidence by index and stable document fingerprint", async () => {
-		const fixture = await indexedFixture({ "guide.md": "# Policy\nsharedpolicybeacon requires five cycles.\n" });
 		const second = await tempDir("docs-tool-other-");
 		await Bun.write(path.join(second, "guide.md"), "# Policy\nsharedpolicybeacon requires seven cycles.\n");
-		const service = new KnowledgeService({ agentDir: fixture.agent });
+		const fixture = await openIndexedFixture({ "guide.md": "# Policy\nsharedpolicybeacon requires five cycles.\n" });
+		const { service } = fixture;
 		try {
 			await service.init(second, "other-version");
 		} finally {
@@ -362,8 +369,8 @@ describe("KnowledgeSearchTool", () => {
 				return [`part-${id}.md`, `# Part ${id}\ncompactbeacon evidence record${id}\n`];
 			}),
 		);
-		const fixture = await indexedFixture(files);
-		const service = new KnowledgeService({ agentDir: fixture.agent, cwd: fixture.root });
+		const fixture = await openIndexedFixture(files);
+		const { service } = fixture;
 		let ranked: string[];
 		try {
 			ranked = (await service.search("compactbeacon", { mode, limit: 50 })).sections.map(section => section.path);
@@ -393,8 +400,7 @@ describe("KnowledgeSearchTool", () => {
 					return [`hint-${id}.md`, `# Topic ${id}\nhintbeacon full evidence ${id}\n`];
 				}),
 			);
-			const fixture = await indexedFixture(files);
-			const service = new KnowledgeService({ agentDir: fixture.agent, cwd: fixture.root });
+			const { service } = await openIndexedFixture(files);
 			try {
 				const baseline = await service.search("hintbeacon", { mode, limit: 50 });
 				const first = await service.searchKnowledge("hintbeacon", { mode });
@@ -439,8 +445,7 @@ describe("KnowledgeSearchTool", () => {
 				`# Cursor ${index}\ncursorbudget ${"evidence ".repeat(36)}${index}\n`,
 			]),
 		);
-		const fixture = await indexedFixture(files);
-		const service = new KnowledgeService({ agentDir: fixture.agent, cwd: fixture.root });
+		const { service } = await openIndexedFixture(files);
 		try {
 			const baseline = await service.search("cursorbudget", { mode: "grep", limit: 50 });
 			const actual = await service.searchKnowledge("cursorbudget", { mode: "grep" });
@@ -508,8 +513,7 @@ describe("KnowledgeSearchTool", () => {
 			"a.md": `# First\nhintunicode ${"evidence ".repeat(190)}\n`,
 			"b.md": `# ${heading}\nhintunicode ${"details ".repeat(360)}\n`,
 		};
-		const fixture = await indexedFixture(files);
-		const service = new KnowledgeService({ agentDir: fixture.agent, cwd: fixture.root });
+		const { service } = await openIndexedFixture(files);
 		try {
 			const first = await service.searchKnowledge("hintunicode", { mode: "grep" });
 			const hint = first.text.match(/^- \[hint\] manual · b\.md:\d+-\d+ · ([^\n]+)$/m)?.[1];
@@ -527,8 +531,7 @@ describe("KnowledgeSearchTool", () => {
 
 	it("keeps oversized evidence whole and leaves unlisted hits for continuation", async () => {
 		const body = `# Long\nhintoversize ${"evidence ".repeat(800)}\n`;
-		const fixture = await indexedFixture({ "a.md": body, "b.md": "# Next\nhintoversize tail\n" });
-		const service = new KnowledgeService({ agentDir: fixture.agent, cwd: fixture.root });
+		const { service } = await openIndexedFixture({ "a.md": body, "b.md": "# Next\nhintoversize tail\n" });
 		try {
 			const first = await service.searchKnowledge("hintoversize", { mode: "grep" });
 			expect(first.result.sections.map(hit => hit.path)).toEqual(["a.md"]);
@@ -551,8 +554,8 @@ describe("KnowledgeSearchTool", () => {
 		const files = Object.fromEntries(
 			Array.from({ length: 12 }, (_, index) => [`sec-${index}.md`, `# sec-${index}\n${filler}\nneedle ${index}\n`]),
 		);
-		const fixture = await indexedFixture(files);
-		const service = new KnowledgeService({ agentDir: fixture.agent, cwd: fixture.root });
+		const fixture = await openIndexedFixture(files);
+		const { service } = fixture;
 		let ranked: string[];
 		try {
 			ranked = (await service.search("needle", { limit: 200 })).sections.map(section => section.path);
@@ -779,8 +782,8 @@ describe("KnowledgeSearchTool", () => {
 			"b.md": `# Budget\nbudgetbeacon ${"second ".repeat(900)}\n`,
 			"c.md": "# Budget\nbudgetbeacon small tail\n",
 		};
-		const fixture = await indexedFixture(files);
-		const service = new KnowledgeService({ agentDir: fixture.agent });
+		const fixture = await openIndexedFixture(files);
+		const { service } = fixture;
 		let ranked: string[];
 		try {
 			ranked = (await service.search("budgetbeacon")).sections.map(section => section.path);

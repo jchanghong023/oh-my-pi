@@ -113,6 +113,6 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 		if (!call) throw new Error("expected session.prompt to be called");
 		expect(call[0]).toBe(expanded);
 		expect(call[0]).not.toContain("[Paste #");
-		expect(call[1]?.streamingBehavior).toBeUndefined();
+		expect(editorText).toBe("");
 	});
 });

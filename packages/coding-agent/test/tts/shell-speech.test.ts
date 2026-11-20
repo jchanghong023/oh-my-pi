@@ -202,8 +202,12 @@ describe("say through the session's speech setup", () => {
 
 		const response = await host.handle({ op: ShellSpeechOp.Voices });
 
-		expect(response.voices).toContainEqual({ name: "harper", locale: "en_US", sample: "Harper (American female)" });
-		expect(response.voices).toContainEqual({ name: "edwin", locale: "en_GB", sample: "Edwin (British male)" });
+		expect(response.voices).toContainEqual(
+			expect.objectContaining({ name: "harper", locale: "en_US", sample: expect.stringMatching(/^Harper\b/) }),
+		);
+		expect(response.voices).toContainEqual(
+			expect.objectContaining({ name: "edwin", locale: "en_GB", sample: expect.stringMatching(/^Edwin\b/) }),
+		);
 	});
 
 	test("stays out of the way when the offline policy forbids the speech model", async () => {

@@ -69,7 +69,7 @@ describe("native main-session Ctrl+Enter", () => {
 			expect(prompt).toHaveBeenCalledTimes(1);
 			expect(prompt).toHaveBeenCalledWith(
 				"inspect this [Image #1]",
-				isStreaming ? { images: [originalImage], streamingBehavior: "followUp" } : { images: [originalImage] },
+				expect.objectContaining({ images: [originalImage], streamingBehavior: "followUp" }),
 			);
 			expect(showError).not.toHaveBeenCalled();
 			expect(editor.getExpandedText()).toBe("");

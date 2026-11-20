@@ -120,12 +120,15 @@ describe("native composer", () => {
 		let ask: ComposerNativeState["ask"] = "pending";
 		const editor = new CustomEditor(getEditorTheme());
 		editor.composerState = () => ({ running: true, ask });
-		editor.onSubmit = vi.fn();
+		const submitted: string[] = [];
+		editor.onSubmit = text => {
+			submitted.push(text);
+		};
 
 		const away = editor.describe(cx);
 		expect(away.p).toMatchObject({ folded: true });
 		expect(nodes(away).find(n => n.k === "editor")?.p).toMatchObject({
-			placeholder: "Answer above, or type here to skip the questions",
+			placeholder: expect.stringMatching(/\S/),
 		});
 		expect(byRole(away, "omp.composer.stop")).toBeDefined();
 
@@ -139,7 +142,7 @@ describe("native composer", () => {
 		expect(byRole(skipping, "omp.composer.stop")).toBeUndefined();
 		expect(byRole(skipping, "omp.composer.skip")?.p).toMatchObject({ actions: { click: "submit" } });
 		editor.handleNativeEvent({ type: "action", key: "bar/skip", act: "submit", mods: [] });
-		expect(editor.onSubmit).toHaveBeenCalledWith("drop them instead");
+		expect(submitted).toEqual(["drop them instead"]);
 	});
 
 	it("routes a picked thinking level (`thinking.set` with the level as value)", () => {

@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { disposeLocalMcpHost } from "@oh-my-pi/pi-coding-agent/mcp/host/local";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
@@ -24,6 +25,7 @@ import {
 	setProjectDir,
 } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { restoreEnvValue } from "./helpers/settings-test-state";
 
 /** Newline-delimited JSON-RPC MCP server exposing one `<server>_probe` tool. */
 const MCP_SERVER_SOURCE = `
@@ -96,8 +98,8 @@ function writeProject(root: string, label: string, mcpServerScript: string): voi
 }
 
 /**
- * `/move` reconnects MCP servers in the background (turns wait for them, bounded) and exposes no
- * completion signal, so the test polls the live registry while real stdio servers handshake.
+ * Both initial discovery and `/move` can leave MCP handshakes running in the
+ * background. Poll the live registry for publication rather than timing the child.
  */
 async function until(condition: () => boolean, what: string): Promise<void> {
 	const deadline = Date.now() + 10_000;
@@ -112,11 +114,15 @@ describe("/move re-scopes project-discovered capabilities", () => {
 	const originalProjectDir = getProjectDir();
 	const originalAgentDir = getAgentDir();
 
-	afterEach(() => {
-		setProjectDir(originalProjectDir);
-		setAgentDir(originalAgentDir);
-		AgentStorage.close();
-		for (const tempDir of tempDirs.splice(0)) removeSyncWithRetries(tempDir);
+	afterEach(async () => {
+		try {
+			await disposeLocalMcpHost();
+		} finally {
+			setProjectDir(originalProjectDir);
+			setAgentDir(originalAgentDir);
+			AgentStorage.close();
+			for (const tempDir of tempDirs.splice(0)) removeSyncWithRetries(tempDir);
+		}
 	});
 
 	it("swaps agents, extensions, custom tools, and MCP servers to the destination and back", async () => {
@@ -133,11 +139,15 @@ describe("/move re-scopes project-discovered capabilities", () => {
 		writeProject(cwdB, "beta", mcpServerScript);
 		setProjectDir(cwdA);
 
-		const authStorage = createInMemoryAuthStorage();
-		const settings = await Settings.loadIsolated({ cwd: cwdA, agentDir });
+		// Keep the fixture's real servers in-process instead of leasing them from a user daemon.
+		const settings = Settings.isolated({ "mcp.shared": false });
 		const sessionManager = SessionManager.create(cwdA, SessionManager.getDefaultSessionDir(cwdA, agentDir));
+		const authStorage = createInMemoryAuthStorage();
+		const envKeys = ["CLAUDE_CONFIG_DIR", "OMP_MCP_STARTUP_TIMEOUT_MS", "OMP_MCP_TIMEOUT_MS"];
+		const originalEnv = envKeys.map(key => [key, Bun.env[key]] as const);
 		let session: AgentSession | undefined;
 		try {
+			for (const key of envKeys) restoreEnvValue(key, undefined);
 			({ session } = await createAgentSession({
 				cwd: cwdA,
 				agentDir,
@@ -175,7 +185,7 @@ describe("/move re-scopes project-discovered capabilities", () => {
 			};
 
 			expect(tools()).toEqual(expect.arrayContaining(["alpha_ext_tool", "alpha_custom_tool"]));
-			expect(hasMcpProbe("alpha")).toBe(true);
+			await until(() => hasMcpProbe("alpha"), "initial alpha MCP tools to publish");
 			expect(taskDescription()).toContain("alpha-agent");
 
 			await move(cwdB, cwdA);
@@ -200,8 +210,15 @@ describe("/move re-scopes project-discovered capabilities", () => {
 			expect(taskDescription()).toContain("alpha-agent");
 			await until(() => hasMcpProbe("alpha") && !hasMcpProbe("beta"), "alpha MCP tools to return");
 		} finally {
-			await session?.dispose();
-			authStorage.close();
+			try {
+				await session?.dispose();
+			} finally {
+				try {
+					authStorage.close();
+				} finally {
+					for (const [key, value] of originalEnv) restoreEnvValue(key, value);
+				}
+			}
 		}
 	}, 60_000);
 });

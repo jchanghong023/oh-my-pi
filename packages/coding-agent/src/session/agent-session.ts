@@ -6919,9 +6919,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	#beginSessionTransition(): Disposable {
 		this.#cancelTodoLoop(true);
-		// Before anything awaits: a reload keeps the session id, so only the transition itself can supersede
-		// a pending idle check or an in-flight recap that belong to the transcript being replaced.
-		this.#idleMaintenance?.invalidate();
+		this.#idleMaintenance?.onSessionTransition();
 		if (this.#sessionTransitionDepth++ === 0) {
 			const settled = Promise.withResolvers<void>();
 			this.#sessionTransitionSettled = settled.promise;

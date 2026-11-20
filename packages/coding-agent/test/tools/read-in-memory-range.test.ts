@@ -40,6 +40,7 @@ function shownLines(output: string): number[] {
 
 describe("in-memory range reads keep the requested lines", () => {
 	let tmpDir: string;
+	let tool: ReadTool;
 	let read: (target: string) => Promise<string>;
 
 	beforeAll(async () => {
@@ -60,7 +61,7 @@ describe("in-memory range reads keep the requested lines", () => {
 			settings: Settings.isolated({ readLineNumbers: true }),
 			enableLsp: false,
 		};
-		const tool = wrapToolWithMetaNotice(new ReadTool(session));
+		tool = wrapToolWithMetaNotice(new ReadTool(session));
 		read = async target => textOutput(await tool.execute("read", { path: target }));
 	});
 
@@ -95,11 +96,26 @@ describe("in-memory range reads keep the requested lines", () => {
 		expect(shownLines(await read("remote://host/fits.txt:3-4"))).toEqual([2, 3, 4]);
 	});
 
-	it("reports the byte budget as the limit of a byte-truncated page", async () => {
-		files["rows.txt"] = Array.from({ length: 200 }, (_, index) => `row-${index + 1} ${"x".repeat(1_000)}`).join("\n");
+	it("reports the source byte budget after reserving room for numbered rows", async () => {
+		const rows = Array.from({ length: 200 }, (_, index) => `row-${index + 1} ${"x".repeat(1_000)}`);
+		files["rows.txt"] = rows.join("\n");
 
-		const output = await read("remote://host/rows.txt:1-200");
+		const result = await tool.execute("read", { path: "remote://host/rows.txt:1-200" });
+		const output = textOutput(result);
 
-		expect(output).toMatch(/\[Showing lines 1-\d+ of 200 \(50\.0KB limit\)\. Use :\d+- to continue\]/);
+		expect(shownLines(output)).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+		expect(output).toContain(rows[49]);
+		expect(result.details?.meta?.truncation).toMatchObject({
+			truncatedBy: "bytes",
+			// 50 KiB spill threshold minus four prefix bytes per potential row.
+			maxBytes: 50 * 1024 - 200 * 4,
+			outputBytes: Buffer.byteLength(rows.slice(0, 50).join("\n")),
+			nextOffset: 51,
+		});
+		expect(output).toContain("[Showing lines 1-50 of 200 (49.2KB limit). Use :51- to continue]");
+
+		const continuation = await read("remote://host/rows.txt:51-");
+		expect(shownLines(continuation).slice(0, 2)).toEqual([50, 51]);
+		expect(continuation).toContain(rows[50]);
 	});
 });

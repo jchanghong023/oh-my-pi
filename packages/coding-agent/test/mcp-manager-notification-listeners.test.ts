@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { MCPServerConfig, MCPStdioServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
-import { isRecord, removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import { isRecord, removeWithRetries } from "@oh-my-pi/pi-utils";
 import { CUSTOM_NOTIFICATION_METHOD, CUSTOM_NOTIFICATION_PAYLOAD } from "./fixtures/notifications-mcp";
 
 const FIXTURE_PATH = path.join(import.meta.dir, "fixtures", "notifications-mcp.ts");
@@ -69,8 +69,9 @@ describe("MCPManager notification listeners", () => {
 		workDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mcp-notif-"));
 	});
 
-	afterEach(() => {
-		removeSyncWithRetries(workDir);
+	afterEach(async () => {
+		// Disconnect releases the links; the host may still be reaping their children.
+		await removeWithRetries(workDir);
 	});
 
 	it("delivers known and server-custom notifications to a registered listener", async () => {

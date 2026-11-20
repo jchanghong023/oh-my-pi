@@ -990,7 +990,6 @@ describe("AgentSession idle maintenance", () => {
 			expect(journal()).toEqual([]);
 		});
 
-		// Only idle compaction waits on background work; the recap is armed before that wait.
 		const compactionOnly = {
 			"recap.enabled": false,
 			"compaction.idleEnabled": true,
@@ -1027,14 +1026,22 @@ describe("AgentSession idle maintenance", () => {
 			const job = startBackgroundJob(h);
 			await runTurn(h);
 			await drive(h.session.sessionManager.flush());
+			expect(h.session.sessionManager.isSessionOnDisk()).toBe(true);
+			expect(h.session.isRunActive).toBe(true);
+			const sessionId = h.session.sessionManager.getSessionId();
 
-			// The session id never changes on a reload, so only the transition itself can supersede the check.
+			// The old run can still end after a reload, but its completion must not re-arm idle compaction.
 			await drive(h.session.reload());
+			expect(h.session.sessionManager.getSessionId()).toBe(sessionId);
 			expect(h.session.getContextUsage()?.tokens ?? 0).toBeGreaterThanOrEqual(1_000);
 			await job.finishWithoutWake();
 			await elapse(2 * COMPACTION_DELAY_MS);
 
 			expect(compaction).not.toHaveBeenCalled();
+
+			await runTurn(h, "work after reload");
+			await elapse(COMPACTION_DELAY_MS);
+			await until(() => compaction.mock.calls.length === 1, "the fresh turn's idle compaction pass");
 		});
 	});
 });

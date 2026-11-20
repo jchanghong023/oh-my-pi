@@ -65,8 +65,7 @@ test("full mode selects every supported language plan without enabling separate 
 	});
 	const commands = fulltestCommands({ full: true, debug: true }, "isolated-home");
 	expect(commands.map(command => command.label)).toEqual([
-		"test/TypeScript fork feature suite",
-		"test/TypeScript startup suite",
+		"test/TypeScript full suite",
 		"test/Rust workspace",
 		"test/Python suites",
 		"test/Go SDK",
@@ -77,6 +76,7 @@ test("full mode selects every supported language plan without enabling separate 
 		expect(command.argv).toContain("all");
 		expect(command.argv).toContain("--unsharded");
 		expect(command.argv).toContain("--exclude-desktop");
+		expect(command.argv).toContain("--shared-fulltest-pool");
 		expect(command.env?.OMP_FULLTEST_AFFECTED).toBeUndefined();
 	}
 	for (const command of commands.filter(

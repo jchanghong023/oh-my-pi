@@ -225,7 +225,7 @@ function registerUpstreamTests(): void {
 	});
 
 	describe("getLatestGitHubRelease", () => {
-		if (inChild) afterEach(vi.restoreAllMocks);
+		if (inChild) afterEach(() => vi.restoreAllMocks());
 
 		it("maps the fork's latest GitHub release to a binary-only update", async () => {
 			let requestedUrl = "";
@@ -293,7 +293,7 @@ function registerUpstreamTests(): void {
 	});
 
 	describe("getLatestRelease rename pointers", () => {
-		if (inChild) afterEach(vi.restoreAllMocks);
+		if (inChild) afterEach(() => vi.restoreAllMocks());
 
 		function stubRegistry(manifests: Record<string, unknown>): string[] {
 			const urls: string[] = [];
@@ -364,7 +364,7 @@ function registerUpstreamTests(): void {
 	});
 
 	describe("getLatestRelease configured registry", () => {
-		if (inChild) afterEach(vi.restoreAllMocks);
+		if (inChild) afterEach(() => vi.restoreAllMocks());
 
 		const feed = () => ({
 			url: "https://npm.corp.example/api/npm/feed/",
@@ -558,7 +558,7 @@ function registerUpstreamTests(): void {
 	});
 
 	describe("getLatestRelease proxy errors", () => {
-		if (inChild) afterEach(vi.restoreAllMocks);
+		if (inChild) afterEach(() => vi.restoreAllMocks());
 
 		it("translates Bun's UnsupportedProxyProtocol fetch failure into an actionable CLI message", async () => {
 			const fetchStub = Object.assign(

@@ -1,12 +1,13 @@
 /**
- * Shared `InteractiveModeContext` fixture for controller tests that drive
- * `EventController` / `MCPCommandController` / `UiHelpers` without booting
+ * Shared `AgentSession` and `InteractiveModeContext` fixtures. Controller tests
+ * can exercise `EventController` / `MCPCommandController` / `UiHelpers` without
+ * booting `InteractiveMode`; renderer tests can pass the session stub to a real
  * `InteractiveMode`.
  *
- * Defaults cover every member those paths read, using real components where
- * they are cheap (`TranscriptContainer`, `Container`, `SessionManager.inMemory`,
- * the `settings` singleton, `OAuthManualInputManager`) and inert stubs
- * elsewhere. Tests override only what they assert on:
+ * Defaults use real components where they are cheap (`TranscriptContainer`,
+ * `Container`, `SessionManager.inMemory`, the `settings` singleton,
+ * `OAuthManualInputManager`) and inert stubs elsewhere. Tests override only
+ * what they assert on:
  *
  * ```ts
  * const ctx = createInteractiveModeContext({
@@ -44,6 +45,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TokenRateMeter } from "@oh-my-pi/pi-coding-agent/utils/token-rate";
+import { restoreWorkspaceModeState } from "@oh-my-pi/pi-coding-agent/workspace-mode";
 import { type Component, Container } from "@oh-my-pi/pi-tui";
 
 import { cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -90,7 +92,7 @@ function layer(target: object, overrides: object, skip?: Record<string, true>): 
 	}
 }
 
-/** Inert `AgentSession` covering the members interactive controllers read. */
+/** Inert `AgentSession` for interactive controllers and real `InteractiveMode` render tests. */
 export function createSessionStub(
 	sessionManager: SessionManager,
 	sessionSettings: Settings,
@@ -102,6 +104,7 @@ export function createSessionStub(
 		sessionManager,
 		settings: sessionSettings,
 		isStreaming: false,
+		autoCompactionEnabled: true,
 		isCompacting: false,
 		isAborting: false,
 		isRetrying: false,
@@ -113,6 +116,8 @@ export function createSessionStub(
 		model: undefined,
 		sessionFile: undefined,
 		skills: [],
+		customCommands: [],
+		systemPrompt: [],
 		ttsrManager: undefined,
 		extensionRunner: undefined,
 		effectiveExtensionRoots: { explicit: [], mode: "merge", configured: [], configuredLevel: "user" },
@@ -121,15 +126,24 @@ export function createSessionStub(
 		hasBuiltInTool: () => true,
 		getLastAssistantMessage: () => undefined,
 		agent: {
-			state: { streamMessage: null, activeThinkingIndex: undefined, pendingToolCalls: new Set<string>() },
+			state: { tools: [], streamMessage: null, activeThinkingIndex: undefined, pendingToolCalls: new Set<string>() },
 			getPendingToolResults: () => [],
 			metadataForProvider: () => undefined,
 		},
+		get state() {
+			return this.agent?.state;
+		},
+		buildTranscriptSessionContext: options =>
+			sessionManager.buildSessionContext({
+				transcript: true,
+				collapseCompactedHistory: options?.collapseCompactedHistory,
+			}),
 		getEvalPreludes: () => [],
 		getActiveToolNames: () => [],
 		getEnabledToolNames: () => [],
 		getContextUsage: () => undefined,
 		getGoalModeState: () => undefined,
+		getWorkspaceModeState: () => restoreWorkspaceModeState(sessionManager.getBranch()),
 		refreshMCPTools: vi.fn(async () => {}),
 		setMCPPromptCommands: vi.fn(),
 		setActiveToolsByName: vi.fn(async () => {}),

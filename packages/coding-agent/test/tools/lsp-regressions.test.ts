@@ -3641,16 +3641,36 @@ describe("lsp regressions", () => {
 					const source = path.join(tempDir.path(), "old.ts");
 					const dest = path.join(tempDir.path(), "new.ts");
 					const reference = path.join(tempDir.path(), "consumer.ts");
-					await Bun.write(source, "export const x = 1;\n");
+					const sourceText = "export const x = 1;\n";
+					await Bun.write(source, sourceText);
 					await Bun.write(reference, "import './old';\n");
 					const server: ServerConfig = { command: "test-lsp", fileTypes: ["ts"], rootMarkers: [] };
-					const client = {
+					const client: LspClient = {
 						name: "test-lsp",
 						cwd: tempDir.path(),
 						config: server,
+						proc: {
+							stdin: { write() {}, flush: async () => {} },
+						} as unknown as LspClient["proc"],
+						requestId: 0,
+						diagnostics: new Map(),
+						publishedDiagnostics: new Map(),
+						pulledDiagnostics: new Map(),
+						diagnosticsVersion: 0,
+						openFiles: new Map(),
+						pendingRequests: new Map(),
+						isReading: false,
+						status: "ready",
+						lastActivity: Date.now(),
+						writeQueue: Promise.resolve(),
+						activeProgressTokens: new Set(),
 						projectLoaded: Promise.resolve(),
-						openFiles: new Map(notification === "textDocument/didClose" ? [[fileToUri(source), {}]] : []),
-					} as unknown as LspClient;
+						resolveProjectLoaded: () => {},
+					};
+					if (notification === "textDocument/didClose") {
+						// Register the synced document before willRenameFiles reconciles open files.
+						await lspClient.ensureFileOpen(client, source);
+					}
 					vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
 						servers: { "test-lsp": server },
 						idleTimeoutMs: undefined,
@@ -3667,7 +3687,8 @@ describe("lsp regressions", () => {
 						},
 					});
 					const controller = new AbortController();
-					vi.spyOn(lspClient, "sendNotification").mockImplementation(async (_client, method, _params, signal) => {
+					const notify = vi.spyOn(lspClient, "sendNotification");
+					notify.mockImplementation(async (_client, method, _params, signal) => {
 						if (method !== notification) return;
 						if (interruption === "cancel") controller.abort();
 						if (!signal?.aborted) {
@@ -3683,13 +3704,14 @@ describe("lsp regressions", () => {
 						controller.signal,
 					);
 					expect(fs.existsSync(source)).toBe(false);
-					expect(fs.existsSync(dest)).toBe(true);
+					expect(await Bun.file(dest).text()).toBe(sourceText);
 					expect(await Bun.file(reference).text()).toBe("import './new';\n");
 					expect(result.isError).toBe(true);
 					expect(result.details).toMatchObject({
 						success: false,
 						renameFile: { committed: true, referenceEditCount: 1, notificationsComplete: false },
 					});
+					expect(notify.mock.calls.map(([, method]) => method)).toContain(notification);
 					const text = result.content.map(block => (block.type === "text" ? block.text : "")).join("\n");
 					expect(text).toContain(interruption === "timeout" ? "timed out" : "cancelled");
 					expect(text).toContain("Do not retry the move");

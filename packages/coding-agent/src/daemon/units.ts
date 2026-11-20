@@ -20,9 +20,7 @@ import type { DaemonReadySpec } from "@oh-my-pi/pi-tui/tools/daemon";
 import { isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { TerminalQueryResponder } from "@oh-my-pi/pi-utils/vterm";
 import { compileNotifyPattern, type NotifyBatch, OutputNotifier } from "../async/notify";
-import { hostHasInheritableConsole } from "../eval/py/spawn-options";
 import { TextTap } from "../job-widgets/text-tap";
-import { resolveDaemonSpawnOptions } from "../launch/spawn-options";
 import { renderTerminalOutput } from "../launch/terminal-output";
 import { adoptChild, isSameProcess, processStartTime, spawnManagedChild } from "./children";
 import type { DaemonModule, ManagedChild, ModuleClient, ModuleContext, ModuleTunnel, ModuleUnit } from "./module";
@@ -67,10 +65,6 @@ const INHERITED_FDS_META = "inherited_fds";
 const LOG_FILE = "output.log";
 const PREVIOUS_LOG_FILE = "output.previous.log";
 const SERVICE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/;
-const DAEMON_SPAWN_OPTIONS = resolveDaemonSpawnOptions({
-	platform: process.platform,
-	hostHasInheritableConsole: hostHasInheritableConsole(),
-});
 
 const SIGNAL_NUMBER: Record<DaemonSignal, number> = {
 	SIGINT: os.constants.signals.SIGINT,
@@ -1745,7 +1739,9 @@ export class UnitTable {
 				cwd: proc.cwd,
 				env: proc.env,
 				stdio: ["ignore", output.fd, output.fd],
-				...DAEMON_SPAWN_OPTIONS,
+				// Unref alone leaves a Windows child in libuv's kill-on-close job.
+				detached: true,
+				windowsHide: true,
 			});
 			child.unref();
 			const state = { exited: false };
@@ -2047,7 +2043,14 @@ export class UnitTable {
 			} catch (error) {
 				logger.warn("Module unit stop failed", { id: entry.snapshot.id, error: errorMessage(error) });
 			}
-			await Promise.race([unit.exited.catch(() => undefined), Bun.sleep(timeoutMs + 1_000)]);
+			const deadline = Promise.withResolvers<void>();
+			const timer = setTimeout(deadline.resolve, timeoutMs + 1_000);
+			try {
+				await Promise.race([unit.exited.catch(() => undefined), deadline.promise]);
+			} finally {
+				// A stopped unit's deadline must not keep the daemon process alive.
+				clearTimeout(timer);
+			}
 			this.#settleModule(entry, unit, undefined, reason);
 			return;
 		}

@@ -85,7 +85,7 @@ describe("createAgentSession built-in MCP transforms", () => {
 	}
 
 	it("does not start Codex's node_repl while eval runs JavaScript", async () => {
-		const manager = await startSession({});
+		const manager = await startSession({ "eval.js": true });
 
 		expect([...manager.getBuiltinDrops().keys()]).toEqual(["node_repl"]);
 		expect(manager.getAllServerNames()).toEqual([]);

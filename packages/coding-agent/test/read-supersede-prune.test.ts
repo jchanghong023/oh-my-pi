@@ -63,6 +63,7 @@ beforeAll(async () => {
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated({
 			"lsp.enabled": false,
+			"read.defaultLimit": 500,
 			"read.summarize.enabled": true,
 			"read.summarize.minBodyLines": 4,
 			"read.summarize.minTotalLines": 100,

@@ -5,10 +5,11 @@
  */
 import type { PinnedHubFile } from "../downloads/pinned-hub-files";
 
-/** A selectable voice: a stable id (the `tts.localVoice` value) plus a display label. */
+/** A selectable voice: stable identifier and locale with an independent display label. */
 export interface TtsLocalVoiceSpec {
 	id: string;
 	label: string;
+	locale: "en_US" | "en_GB";
 }
 
 /**
@@ -93,31 +94,39 @@ const PHONON_VOICES = [
 	{
 		id: "maeve",
 		label: "Maeve（英式女声）",
+		locale: "en_GB",
 		catalogId: "6PWnV0Nq4wu7RVBT",
 		sha256: "56494ee67d533ad227ff0dfd0b1c13ff5aa91f1ad6e596e66c2986ba3005e844",
 	},
 	{
 		id: "bryony",
 		label: "Bryony（英式女声）",
+		locale: "en_GB",
 		catalogId: "gfP44RlHwr2kEwk7",
 		sha256: "bcc207a73b7885e45b49ab633d3377a10158292e3a7cef9cd6764ad107f1cb9b",
 	},
 	{
 		id: "edwin",
 		label: "Edwin（英式男声）",
+		locale: "en_GB",
 		catalogId: "zUCxzrOrugTSis03",
 		sha256: "ff1d0735b8b45710462b1d1f846da040f970c6eb62c7c2f36dbfb8e5bde74f1e",
 	},
 	{
 		id: "hugh",
 		label: "Hugh（英式男声）",
+		locale: "en_GB",
 		catalogId: "YyKcxPG7iIgS3jsK",
 		sha256: "3169d74b47a54d1eb15e4c243f56393abe9fe90c7e1c308ecf96ee67618b152a",
 	},
 ] as const;
 
 /** The voice catalog surfaced by settings, the `tts` tool, and ACP. */
-export const TTS_LOCAL_VOICES: readonly TtsLocalVoiceSpec[] = PHONON_VOICES.map(({ id, label }) => ({ id, label }));
+export const TTS_LOCAL_VOICES: readonly TtsLocalVoiceSpec[] = PHONON_VOICES.map(voice => ({
+	id: voice.id,
+	label: voice.label,
+	locale: "locale" in voice ? voice.locale : "en_US",
+}));
 
 /** Default voice within the default model. */
 export const DEFAULT_TTS_VOICE = "harper";

@@ -1765,7 +1765,7 @@ describe("ExtensionRunner", () => {
 					const session: ToolSession = {
 						cwd: tempDir.path(),
 						hasUI: false,
-						settings: Settings.isolated({ "eval.autoBackground.enabled": false }),
+						settings: Settings.isolated({ "eval.js": true, "eval.autoBackground.enabled": false }),
 						getSessionFile: () => null,
 						getSessionSpawns: () => null,
 						getEvalSessionId: () => owner,
@@ -3224,10 +3224,9 @@ describe("ExtensionRunner", () => {
 			};
 			const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), persistent, modelRegistry);
 			const onDiskAtPrompt: unknown[][] = [];
-			const answers = ["Approve", "Deny"];
-			initializeRunner(runner, async () => {
+			initializeRunner(runner, async (_title, options) => {
 				onDiskAtPrompt.push(records());
-				return answers.shift();
+				return onDiskAtPrompt.length === 1 ? options[0] : options.at(-1);
 			});
 			const wrapper = new ExtensionToolWrapper({ ...approvalTool, parameters: Type.Object({}) }, runner);
 			const context = () => ({

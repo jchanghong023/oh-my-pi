@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { keyText } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-coding-agent-shim";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -60,7 +59,6 @@ describe("display rebuilds during idle user execution", () => {
 
 	for (const language of ["bash", "python"] as const) {
 		it(`keeps a running ${language} command visible through display changes and replays its completion once`, async () => {
-			const messages: AgentMessage[] = [];
 			const completion = Promise.withResolvers<void>();
 			let appendOutput: ((chunk: string) => void) | undefined;
 			const output = "STREAMED_EXECUTION_OUTPUT\nCOMPLETED_EXECUTION_OUTPUT\n";
@@ -78,17 +76,11 @@ describe("display rebuilds during idle user execution", () => {
 			};
 			const sessionManager = SessionManager.inMemory(tempDir.path());
 			const session = createSessionStub(sessionManager, settings, {
-				agent: { state: { tools: [] } },
-				customCommands: [],
-				autoCompactionEnabled: true,
-				systemPrompt: [],
-				state: { model: undefined },
-				buildTranscriptSessionContext: () => ({ messages, models: {}, injectedTtsrRules: [], mode: "none" }),
 				executeBash: async (command, onChunk, options) => {
 					appendOutput = onChunk;
 					await completion.promise;
 					const message: BashExecutionMessage = { ...result, role: "bashExecution", command, timestamp: 1 };
-					messages.push(message);
+					sessionManager.appendMessage(message);
 					options?.onRecorded?.(message);
 					return result;
 				},
@@ -96,7 +88,7 @@ describe("display rebuilds during idle user execution", () => {
 					appendOutput = onChunk;
 					await completion.promise;
 					const message: PythonExecutionMessage = { ...result, role: "pythonExecution", code, timestamp: 1 };
-					messages.push(message);
+					sessionManager.appendMessage(message);
 					options?.onRecorded?.(message);
 					return result;
 				},

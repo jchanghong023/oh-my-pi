@@ -52,7 +52,11 @@ it("runs /handoff from the live composer and keeps the reply on the compacted tr
 			getApiKey: () => "test-key",
 		}),
 		sessionManager: manager,
-		settings: Settings.isolated({ "compaction.enabled": false, "compaction.keepRecentTokens": 1 }),
+		settings: Settings.isolated({
+			"compaction.enabled": false,
+			"compaction.keepRecentTokens": 1,
+			"display.mode": "compact",
+		}),
 		modelRegistry,
 		sideStreamFn: side.stream,
 	});
@@ -64,6 +68,7 @@ it("runs /handoff from the live composer and keeps the reply on the compacted tr
 			.getViewport()
 			.map(row => Bun.stripANSI(row))
 			.join("\n");
+	const waitingForModel = /^ *模型：等待响应 *$/m;
 
 	try {
 		await session.prompt("Earlier request");
@@ -71,13 +76,13 @@ it("runs /handoff from the live composer and keeps the reply on the compacted tr
 		void mode.getUserInput();
 		const livePrompt = session.prompt("Keep working on the report");
 		await liveStarted.promise;
-		await terminal.waitForRender(() => screen().includes("Working"));
+		await terminal.waitForRender(() => waitingForModel.test(screen()));
 
 		terminal.sendInput("/handoff keep report constraints");
 		terminal.sendInput("\r");
 		await handoffStarted.promise;
 		await terminal.waitForRender(() => screen().includes("Compacting context in the background"));
-		expect(screen()).toContain("Working");
+		expect(screen()).toMatch(waitingForModel);
 		expect(JSON.stringify(side.calls[0]?.context.messages)).toContain("keep report constraints");
 
 		handoffResponse.resolve({ content: ["## Goal\nPreserve the report constraints"] });

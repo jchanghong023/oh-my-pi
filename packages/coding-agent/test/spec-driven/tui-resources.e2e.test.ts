@@ -23,6 +23,10 @@ function nativeReadResult(request: ModelRequest, target: string): string {
 }
 
 for (const location of ["directory", "absent", "file", "parent-only"] as const) {
+	// Discovery and URI authorization use pinned skill metadata and session
+	// provenance, not the workspace's openspec path. Keep the full matrix in
+	// the file case, alongside the native completion and argument checks.
+	const exhaustive = location === "file";
 	test.skipIf(!tuiTest || (process.platform === "win32" && location === "absent"))(
 		`ordinary TUI discovers core OpenSpec and scopes manual resource grants (${location})`,
 		async () => {
@@ -110,7 +114,8 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 							skill.source === "superpowers" ||
 							(skill.source === "openspec" && !coreOpenSpec.includes(skill.name)),
 					);
-					const deniedPaths = manualOnly.map(skill => `skill://${skill.name}:raw`);
+					const deniedNames = exhaustive ? manualOnly.map(skill => skill.name) : ["brainstorming"];
+					const deniedPaths = deniedNames.map(name => `skill://${name}:raw`);
 					let previousReply = `${MARKER}_CHAT_READY`;
 					let turn = 0;
 					async function newBranch() {
@@ -161,10 +166,11 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 						if (!completed) throw new Error(`No completed native resource request for turn ${turnId}`);
 						return completed;
 					}
-					for (const skill of openSpec) {
+					const readSkills = exhaustive ? openSpec : openSpec.filter(skill => skill.name === "openspec-explore");
+					for (const skill of readSkills) {
 						await newBranch();
 						const selectedPath = `skill://${skill.name}:raw`;
-						const explicit = location === "file" && skill.name === "openspec-explore";
+						const explicit = exhaustive && skill.name === "openspec-explore";
 						const argumentsText = `${MARKER} inspect-only 参数 with spaces`;
 						const completed = await readResources(
 							explicit
@@ -189,8 +195,10 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 						expect(selected.frontmatter.name).toBe(skill.name);
 						expect(selected.frontmatter.description).toBeString();
 						const denied = nativeReadResult(completed, deniedPaths.join(";"));
-						for (const other of manualOnly) expect(denied).toContain(`Skill access denied: ${other.name}`);
+						for (const name of deniedNames) expect(denied).toContain(`Skill access denied: ${name}`);
 					}
+					if (!exhaustive) return;
+
 					// Explicit user invocations grant only the selected hidden packaged skill.
 					for (const name of [
 						"systematic-debugging",
