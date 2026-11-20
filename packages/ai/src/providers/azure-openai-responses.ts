@@ -10,7 +10,7 @@ import type {
 	StreamOptions,
 	ToolChoice,
 } from "../types";
-import { resolveCacheRetention } from "../utils";
+import { hasRequestAuthMaterial, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { withReplaySafeStreamRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
@@ -24,6 +24,7 @@ import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import { isOpenAIResponsesProgressEvent } from "../utils/websocket";
+import { mergeHeaders } from "./anthropic-headers";
 import {
 	applyOpenAIReasoningEffortFallback,
 	createOpenAIReasoningEffortFallbackKey,
@@ -124,8 +125,7 @@ const streamAzureOpenAIResponsesOnce = (
 			: undefined;
 
 		try {
-			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const { url, headers, baseUrl } = buildAzureResponsesRequest(model, apiKey, options);
+			const { url, headers, baseUrl } = buildAzureResponsesRequest(model, options);
 			const requestModel = modelForAzureEndpoint(model, baseUrl);
 			let params = buildParams(requestModel, context, options, deploymentName);
 			const replacementPayload = await options?.onPayload?.(params, requestModel);
@@ -144,6 +144,7 @@ const streamAzureOpenAIResponsesOnce = (
 				method: "POST",
 				url,
 				body: params,
+				requestAuth: options?.requestAuth,
 			};
 			const reasoningEffortFallbackKey = createOpenAIReasoningEffortFallbackKey(
 				"azure-responses",
@@ -335,24 +336,26 @@ function modelForAzureEndpoint(
  */
 function buildAzureResponsesRequest(
 	model: Model<"azure-openai-responses">,
-	apiKey: string,
 	options?: AzureOpenAIResponsesOptions,
 ): { url: string; headers: Record<string, string>; baseUrl: string } {
-	if (!apiKey) {
-		const envKey = $env.AZURE_OPENAI_API_KEY;
-		if (!envKey) {
-			throw new AIError.MissingApiKeyError(
-				undefined,
-				"Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
-			);
-		}
-		apiKey = envKey;
+	const requestAuth = options?.requestAuth;
+	const apiKey =
+		requestAuth !== undefined
+			? (options?.requestAuthPrepared ? options.apiKey : requestAuth.apiKey)?.trim()
+			: options?.apiKey || getEnvApiKey(model.provider) || $env.AZURE_OPENAI_API_KEY;
+	if (!apiKey && !hasRequestAuthMaterial(requestAuth)) {
+		throw new AIError.MissingApiKeyError(
+			undefined,
+			"Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
+		);
 	}
 
-	const headers: Record<string, string> = { "api-key": apiKey, ...model.headers };
-	if (options?.headers) {
-		Object.assign(headers, options.headers);
-	}
+	const headers = mergeHeaders(
+		apiKey ? { "api-key": apiKey } : undefined,
+		model.headers,
+		options?.headers,
+		requestAuth?.headers,
+	);
 
 	const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
 

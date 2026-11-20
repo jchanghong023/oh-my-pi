@@ -434,12 +434,7 @@ describe("Todo failure replay", () => {
 		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
 		const f = createPresentationFixture();
 		const component = new ToolExecutionComponent("todo", { todos: [] }, {}, undefined, f.ctx.ui);
-		component.updateResult(
-			{ content: [{ type: "text", text: "OLD_FAILURE" }], isError: true },
-			false,
-			"todo-1",
-			true,
-		);
+		component.updateResult({ content: [{ type: "text", text: "OLD_FAILURE" }], isError: true }, false, "todo-1");
 		component.updateResult({ content: [{ type: "text", text: "NEW_LIVE_FAILURE" }], isError: true });
 		component.setExpanded(true);
 		const expanded = Bun.stripANSI(component.render(180).join("\n"));

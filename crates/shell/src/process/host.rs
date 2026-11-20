@@ -536,7 +536,7 @@ impl ExtProc for SignalsOnExit {
 	fn signal_wave(
 		&mut self,
 		sig: crate::bash::Signal,
-		pids: &[u32],
+		pids: &[(u32, Option<u32>)],
 		extra: &[crate::proctree::Process],
 		groups: bool,
 	) -> bool {

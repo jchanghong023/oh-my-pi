@@ -48,8 +48,8 @@ pub const TERM_GRACE: Duration = Duration::from_secs(1);
 /// The [`Session`](crate::session::Session) lists a run's live children
 /// through it (pi's `Shell::pids()`). Implementations must not block.
 pub trait SpawnObserver: Send + Sync {
-	/// `pid` was spawned; `detached` commands are excluded from cancellation.
-	fn spawned(&self, pid: u32, detached: bool);
+	/// `pid` was spawned.
+	fn spawned(&self, pid: u32);
 	/// `pid`'s exit was observed, or the engine abandoned it (the spawner
 	/// then terminates it in the background).
 	fn released(&self, pid: u32);
@@ -432,7 +432,7 @@ impl Launcher {
 		Ok(match &self.observer {
 			Some(observer) => {
 				let pid = child.pid();
-				observer.spawned(pid, lineage.detached);
+				observer.spawned(pid);
 				Box::new(Observed { child, observer: Arc::clone(observer), released: false })
 			},
 			None => child,
@@ -970,7 +970,7 @@ impl ExtProc for Observed {
 	fn signal_wave(
 		&mut self,
 		sig: Signal,
-		pids: &[u32],
+		pids: &[(u32, Option<u32>)],
 		extra: &[crate::proctree::Process],
 		groups: bool,
 	) -> bool {

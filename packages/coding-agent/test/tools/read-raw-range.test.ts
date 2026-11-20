@@ -206,7 +206,12 @@ describe("read tool raw range exactness", () => {
 
 	it("still reports a real line ceiling for an open-ended raw read", async () => {
 		await Bun.write(filePath, Array.from({ length: 320 }, (_, i) => `line ${i + 1}`).join("\n"));
-		const result = await wrapToolWithMetaNotice(tool).execute("raw-line-ceiling", { path: `${filePath}:raw` });
+		// Exercise the configured page ceiling independently of the product default.
+		const limited = new ReadTool({
+			...makeSession(testDir),
+			settings: Settings.isolated({ "read.defaultLimit": 300 }),
+		});
+		const result = await wrapToolWithMetaNotice(limited).execute("raw-line-ceiling", { path: `${filePath}:raw` });
 		const truncation = result.details?.meta?.truncation;
 		if (!truncation) throw new Error("expected line-limit metadata");
 

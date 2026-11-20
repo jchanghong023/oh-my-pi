@@ -979,6 +979,7 @@ class TreeList implements Component {
 		if (node) node.label = label;
 		this.#labelVersion++;
 		this.#tree.invalidate();
+		this.#collapseUnselectedDetails();
 	}
 
 	#getFilterLabel(): string {

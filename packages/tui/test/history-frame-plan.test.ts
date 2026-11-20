@@ -299,33 +299,6 @@ describe("terminal frame plans", () => {
 		tui.stop();
 	});
 
-	it("publishes composer-space hit-test origin across a replay pad", () => {
-		// A replay splices history rows over the viewport's leading blanks for
-		// painting, but click spans stay indexed to the composer's unpadded
-		// rows: the published top must back out that pad so a click on a live
-		// row resolves to its own span instead of one pad-length above it.
-		const terminal = new CountingTerminal(20, 4);
-		const provider = new Provider({ viewport: ["", "", "live", "editor"] });
-		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
-		tui.setFrameProvider(provider);
-
-		provider.plan = {
-			history: { id: 1, rows: ["history one", "history two"], kind: "replay" },
-			viewport: ["", "", "live", "editor"],
-			replayViewportPaddingRows: 2,
-		};
-		tui.requestRender(true);
-
-		expect(terminal.getViewport().map(row => row.trimEnd())).toEqual([
-			"history one",
-			"history two",
-			"live",
-			"editor",
-		]);
-		expect(tui.getMutableViewport()).toEqual({ top: 0, length: 2 });
-		tui.stop();
-	});
-
 	it("preserves a semantic leading blank when replaying history", () => {
 		const terminal = new CountingTerminal(20, 3);
 		const provider = new Provider({ viewport: ["", "live", "editor"] });

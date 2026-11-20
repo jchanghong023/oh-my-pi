@@ -68,7 +68,7 @@ import {
 import { groupedReadUsageCallIds, ReadToolGroupComponent, readArgsCollapseIntoGroup } from "./read-tool-group";
 import { isReplyWrite, ReplyWriteComponent, replyDisplayMessage, toolResultReplies } from "./reply-write";
 import { SkillMessageComponent } from "./skill-message";
-import { settledBashCards, toolRenderName, ToolExecutionComponent, type ToolExecutionHandle } from "./tool-execution";
+import { toolRenderName, ToolExecutionComponent, type ToolExecutionHandle } from "./tool-execution";
 import { TranscriptContainer } from "../chrome/transcript-container";
 import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "../overlays/usage-row";
 import { CollapsedSyntheticMessageComponent, UserMessageComponent } from "./user-message";
@@ -94,6 +94,7 @@ export interface ChatTranscriptBuilderDeps {
 
 export class ChatTranscriptBuilder {
 	readonly container = new TranscriptContainer();
+	readonly #getContainer = () => this.container;
 	#pendingTools = new Map<string, ToolExecutionHandle>();
 	#readGroup: ReadToolGroupComponent | null = null;
 	#pendingUsage: Usage | undefined;
@@ -298,7 +299,7 @@ export class ChatTranscriptBuilder {
 			) ??
 				false);
 		if (!usageAttached) {
-			this.#readGroup?.seal();
+			this.#readGroup?.finalize();
 			this.#readGroup = null;
 			this.container.addChild(
 				createUsageRowBlock(
@@ -321,7 +322,7 @@ export class ChatTranscriptBuilder {
 	#appendChatMessage(message: AgentMessage): void {
 		if (message.role !== "toolResult") this.#flushPendingUsage();
 		if (message.role !== "assistant" && message.role !== "toolResult") {
-			this.#readGroup?.seal();
+			this.#readGroup?.finalize();
 			this.#readGroup = null;
 		}
 		switch (message.role) {
@@ -479,7 +480,7 @@ export class ChatTranscriptBuilder {
 		const hasVisibleAssistantContent = assistantHasVisibleContent(message);
 		if (hasVisibleAssistantContent) {
 			// New visible turn content closes the current read run (mirrors rebuild).
-			this.#readGroup?.seal();
+			this.#readGroup?.finalize();
 			this.#readGroup = null;
 		}
 
@@ -535,7 +536,7 @@ export class ChatTranscriptBuilder {
 				continue;
 			}
 
-			this.#readGroup?.seal();
+			this.#readGroup?.finalize();
 			this.#readGroup = null;
 			const builtIn = this.#deps.isBuiltInTool?.(renderToolName) ?? true;
 			let component: ToolExecutionHandle;
@@ -573,11 +574,7 @@ export class ChatTranscriptBuilder {
 
 			if (hasErrorStop && errorMessage) {
 				const result = { content: [{ type: "text", text: errorMessage }], isError: true };
-				if (component instanceof ToolExecutionComponent) {
-					component.updateResult(result, false, content.id, true);
-				} else {
-					component.updateResult(result, false, content.id);
-				}
+				component.updateResult(result, false, content.id);
 			} else {
 				this.#pendingTools.set(content.id, component);
 			}
@@ -624,10 +621,9 @@ export class ChatTranscriptBuilder {
 		}
 		if (!pending) return;
 		if (renderToolName === "wait" && pending instanceof ToolExecutionComponent) {
-			pending.setSettledBashJobs(() => settledBashCards(this.container.children));
+			pending.setSettledBashTranscript(this.#getContainer);
 		}
-		if (pending instanceof ToolExecutionComponent) pending.updateResult(message, false, message.toolCallId, true);
-		else pending.updateResult(message, false, message.toolCallId);
+		pending.updateResult(message, false, message.toolCallId);
 		this.#pendingTools.delete(message.toolCallId);
 		if (renderToolName === "wait" && pending instanceof ToolExecutionComponent && pending.isDisplaceableBlock()) {
 			this.#waitingPoll = pending;

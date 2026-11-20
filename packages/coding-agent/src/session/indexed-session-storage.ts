@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { toError } from "@oh-my-pi/pi-utils";
 import {
 	directChildKeyName,
+	listBucketFilesFromKeys,
 	SessionWriteConflictError,
 	type SessionStorage,
 	type SessionStorageStat,
@@ -275,6 +276,10 @@ export class IndexedSessionStorage implements SessionStorage {
 			out.push(key);
 		}
 		return out;
+	}
+
+	listBucketFilesSync(root: string, pattern: string): string[] {
+		return listBucketFilesFromKeys(this.#index.keys(), root, pattern);
 	}
 
 	exists(path: string): Promise<boolean> {

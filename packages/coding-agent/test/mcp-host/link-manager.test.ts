@@ -13,7 +13,7 @@ import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { reconnectMcpManagerServer } from "@oh-my-pi/pi-coding-agent/mcp/oauth-reauth";
 import type { McpConnectionStatusEvent } from "@oh-my-pi/pi-coding-agent/mcp/startup-events";
 import type { MCPTool } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
-import type { MCPAuthInvocation, MCPHttpServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
+import type { MCPAuthChallenge, MCPHttpServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 import { FakeHost, type FakeTunnel, type Message, paramsOf, settled, unauthorized } from "./link-fake-host";
 
@@ -222,12 +222,12 @@ describe("MCPManager on a scripted host", () => {
 		expect(host.tunnels).toHaveLength(1);
 	});
 
-	it("attributes a tool challenge and keeps its load mode when retargeting to refreshed credentials", async () => {
+	it("handles a tool challenge and keeps its load mode when retargeting to refreshed credentials", async () => {
 		const config: MCPHttpServerConfig = { type: "http", url: URL, alwaysLoad: false };
 		const first = await connect(config);
-		const calls: Array<{ serverName: string; invocation: MCPAuthInvocation | undefined }> = [];
-		manager.setAuthHandler(async (serverName, _challenge, invocation) => {
-			calls.push({ serverName, invocation });
+		const calls: Array<{ serverName: string; challenge: MCPAuthChallenge }> = [];
+		manager.setAuthHandler(async (serverName, challenge) => {
+			calls.push({ serverName, challenge });
 			return { ...config, headers: { Authorization: "Bearer refreshed" } };
 		});
 		answers["tools/call"] = (_message, tunnel) => ({
@@ -235,18 +235,10 @@ describe("MCPManager on a scripted host", () => {
 		});
 		const [tool] = manager.getTools();
 		expect(tool.loadMode).toBe("discoverable");
-		const { signal } = new AbortController();
-		const release = manager.trackToolCall("task-scope", "call-oauth");
-		try {
-			const result = await tool.execute("call-oauth", {}, noop, noCtx, signal);
-			expect(result.content).toEqual(PONG.content);
-			expect(result.details?.isError).toBeFalsy();
-		} finally {
-			release();
-		}
-		expect(calls).toEqual([
-			{ serverName: SERVER, invocation: { scope: "task-scope", toolCallId: "call-oauth", signal } },
-		]);
+		const result = await tool.execute("call-oauth", {}, noop, noCtx);
+		expect(result.content).toEqual(PONG.content);
+		expect(result.details?.isError).toBeFalsy();
+		expect(calls).toEqual([{ serverName: SERVER, challenge: { wwwAuthenticate: ["Bearer"] } }]);
 		expect(first.released).toBe(true);
 		expect(authorization(host.tunnel)).toBe("Bearer refreshed");
 		expect(manager.getTools()[0].loadMode).toBe("discoverable");

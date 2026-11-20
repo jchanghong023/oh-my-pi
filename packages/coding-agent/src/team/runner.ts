@@ -273,7 +273,9 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						authStorage: deps.authStorage,
 						modelRegistry: deps.modelRegistry,
 						settings: deps.settings,
-						contextFiles: deps.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
+						contextFiles: deps.contextFiles?.filter(
+							file => path.basename(file.path).toLowerCase() !== "agents.md",
+						),
 						skills: deps.skills ? [...deps.skills] : undefined,
 						workspaceTree: deps.workspaceTree,
 						promptTemplates: deps.promptTemplates,

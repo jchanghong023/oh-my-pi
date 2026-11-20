@@ -548,16 +548,20 @@ export class ModelHubComponent implements Component {
 			this.#setActiveEntry("all");
 		}
 
-		this.#catalogRefreshing = true;
-		Promise.all([this.#scopedModels.length === 0 ? this.#registry.refresh("online") : Promise.resolve()])
-			.then(() => this.#afterRegistryRefresh())
-			.catch(error => {
-				this.#configError = error instanceof Error ? error.message : String(error);
-			})
-			.finally(() => {
-				this.#catalogRefreshing = false;
-				this.#requestRender();
-			});
+		// Reconcile catalogs in the background only when there is no existing scope.
+		if (this.#scopedModels.length === 0) {
+			this.#catalogRefreshing = true;
+			this.#registry
+				.refresh("online")
+				.then(() => this.#afterRegistryRefresh())
+				.catch(error => {
+					this.#configError = error instanceof Error ? error.message : String(error);
+				})
+				.finally(() => {
+					this.#catalogRefreshing = false;
+					this.#requestRender();
+				});
+		}
 	}
 
 	/** Cancel pending provider refresh timers and the spinner. Host calls this on overlay close. */

@@ -426,7 +426,10 @@ const forkSystemProxyBypassGlobs = FORK_SYSTEM_PROXY_BYPASS.filter(entry => entr
 
 /** Hostname match for {@link FORK_SYSTEM_PROXY_BYPASS}; see the entry semantics there. */
 export function matchesForkSystemProxyBypass(hostname: string): boolean {
-	const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+	const host = hostname
+		.toLowerCase()
+		.replace(/^\[|\]$/g, "")
+		.replace(/\.$/, "");
 	const ipv4 = net.isIPv4(hostname);
 	if (forkSystemProxyBypassGlobs.some(({ ipv4Only, pattern }) => (!ipv4Only || ipv4) && pattern.test(host)))
 		return true;

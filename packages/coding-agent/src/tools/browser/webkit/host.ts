@@ -178,6 +178,12 @@ export class WebKitHost {
 		return this.#transport.child?.pid;
 	}
 
+	/** Native exit of this owned host proves its blocks no longer exist. */
+	get exited(): boolean {
+		const child = this.#transport.child;
+		return child !== undefined && (child.exitCode !== null || child.signalCode !== null);
+	}
+
 	/**
 	 * The `identity` op's noise seed for tabs of session `sessionId`: the same
 	 * for every tab of a session (so a page reading a canvas twice, or in two

@@ -74,19 +74,17 @@ export type EffectiveStatusLineSettings = Required<
 
 export type RGB = readonly [number, number, number];
 
-/** Changed files, with each path counted once even when both index and worktree differ. */
-export interface GitStatus {
-	staged: number;
-	unstaged: number;
-	untracked: number;
-	changed: number;
-	/** Lossless Git path keys by category; null for JJ's disjoint numeric status summary. */
-	paths: {
-		staged: readonly string[];
-		unstaged: readonly string[];
-		untracked: readonly string[];
-	} | null;
-}
+/** Distinct changed paths by visibility mask: index (1), worktree (2), untracked (4). */
+export type GitStatus = readonly [
+	none: number,
+	index: number,
+	worktree: number,
+	indexOrWorktree: number,
+	untracked: number,
+	indexOrUntracked: number,
+	worktreeOrUntracked: number,
+	all: number,
+];
 
 export interface SegmentContext {
 	session: StatusLineSession;
@@ -124,6 +122,7 @@ export interface SegmentContext {
 		state: "waiting" | "running" | "paused";
 		limit?: LoopLimitRuntime;
 		condition?: LoopConditionConfig;
+		sequence?: { current: number; total: number };
 	} | null;
 	goalStatusInFooter?: boolean;
 	goalMode: {

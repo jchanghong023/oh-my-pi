@@ -48,7 +48,6 @@ import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
 import {
 	isSettledJobFrame,
 	parksAsBackground,
-	settledBashCards,
 	settleWithJobFrame,
 	ToolExecutionComponent,
 	type ToolExecutionHandle,
@@ -67,12 +66,13 @@ import {
 import { normalizeBlobExtension } from "@oh-my-pi/pi-tui/prompt/image-format";
 import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { theme } from "@oh-my-pi/pi-tui/theme";
-import type {
-	CompactionQueuedMessage,
-	InteractiveModeContext,
-	RenderInitialMessagesOptions,
-	RenderSessionContextOptions,
-	ShowStatusOptions,
+import {
+	type CompactionQueuedMessage,
+	type InteractiveModeContext,
+	isLoopCommand,
+	type RenderInitialMessagesOptions,
+	type RenderSessionContextOptions,
+	type ShowStatusOptions,
 } from "../../modes/types";
 import { extractVisibleAssistantText } from "../rpc/rpc-live";
 import { ASYNC_NOTIFY_MESSAGE_TYPE } from "@oh-my-pi/pi-tui/chat/messages";
@@ -235,6 +235,8 @@ function imageLinksForMessage(
 }
 
 export class UiHelpers {
+	// Replay stages cards in a temporary container before moving them into the live one.
+	readonly #getChatContainer = () => this.ctx.chatContainer;
 	/**
 	 * Tail of the transcript-replay chain. Replays swap `ctx.chatContainer` and the
 	 * live component maps for their whole duration, so two overlapping replays would
@@ -788,11 +790,7 @@ export class UiHelpers {
 
 					if (hasErrorStop && errorMessage) {
 						const result = { content: [{ type: "text", text: errorMessage }], isError: true };
-						if (component instanceof ToolExecutionComponent) {
-							component.updateResult(result, false, content.id, true);
-						} else {
-							component.updateResult(result, false, content.id);
-						}
+						component.updateResult(result, false, content.id);
 					} else {
 						this.ctx.pendingTools.set(content.id, component);
 					}
@@ -878,8 +876,8 @@ export class UiHelpers {
 				// Match tool results to pending tool components
 				const component = this.ctx.pendingTools.get(message.toolCallId);
 				if (component) {
-					if (message.toolName === "wait" && component instanceof ToolExecutionComponent) {
-						component.setSettledBashJobs(() => settledBashCards(this.ctx.chatContainer.children));
+					if (renderToolName === "wait" && component instanceof ToolExecutionComponent) {
+						component.setSettledBashTranscript(this.#getChatContainer);
 					}
 					const jobId = (message.details as { async?: { jobId?: string } } | undefined)?.async?.jobId;
 					const frame = activeToolExecutionUpdates.find(
@@ -903,11 +901,7 @@ export class UiHelpers {
 					} else if (frame && isBackground) {
 						component.updateResult(frame, true, message.toolCallId);
 					} else {
-						if (component instanceof ToolExecutionComponent) {
-							component.updateResult(message, isBackground, message.toolCallId, true);
-						} else {
-							component.updateResult(message, isBackground, message.toolCallId);
-						}
+						component.updateResult(message, isBackground, message.toolCallId);
 					}
 					if (isBackground && !settled) {
 						component.parkAsBackground();
@@ -1420,11 +1414,42 @@ export class UiHelpers {
 		}
 		requireOwner();
 		if (typeof builtin === "string") {
-			const forwarded = await owner.prompt(builtin, {
-				streamingBehavior: message.mode,
-				images: message.images,
-				onPromptQueued: onQueued,
-			});
+			const prepared =
+				message.mode === "followUp" && isLoopCommand(parseSlashCommand(message.text)?.name)
+					? this.ctx.prepareLoopPrompt(builtin, true)
+					: undefined;
+			const admitLoopPrompt = prepared?.onPromptAdmitted;
+			let queuedForTurn = false;
+			const dispatch = () => {
+				requireOwner();
+				return owner.prompt(prepared?.text ?? builtin, {
+					streamingBehavior: message.mode,
+					images: message.images,
+					onPromptQueued: admitLoopPrompt
+						? queued => {
+								queuedForTurn = queued.length > 0;
+								onQueued(queued);
+							}
+						: onQueued,
+					onPromptAdmitted: admitLoopPrompt
+						? () => {
+								if (!isOwnerVisible() || !admitLoopPrompt()) return;
+								this.ctx.armLoopAutoSubmit(
+									promptPromise.then(async forwarded => {
+										if (!forwarded) throw new Error("Loop prompt was not forwarded");
+										// When the session enqueues the prompt, dispatch may settle before its turn.
+										if (queuedForTurn) await owner.waitForIdle();
+									}),
+									Promise.resolve(),
+								);
+							}
+						: undefined,
+				});
+			};
+			// Give the admission callback the actual dispatch promise even when
+			// the owner admits the queued prompt synchronously.
+			const promptPromise: Promise<boolean> = admitLoopPrompt ? Promise.resolve().then(dispatch) : dispatch();
+			const forwarded = await promptPromise;
 			if (isOwnerVisible()) this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return !forwarded;
 		}
@@ -1605,11 +1630,14 @@ export class UiHelpers {
 				}
 			}
 
+			const firstAdmission =
+				this.ctx.loopModeEnabled && this.ctx.loopPrompt === first.text ? Promise.withResolvers<void>() : undefined;
 			const onFirstQueued = (queued: readonly AgentMessage[]) => {
 				firstQueued = queued;
 			};
 			const onFirstAdmitted = () => {
 				firstAdmitted = firstQueued;
+				firstAdmission?.resolve();
 				// Admitted after the batch was already restored with it: the session must not send
 				// it as well. Take a queued prompt back out (the batch keeps it); a prompt whose turn
 				// already started leaves the batch instead.
@@ -1651,12 +1679,8 @@ export class UiHelpers {
 				this.ctx.updatePendingMessagesDisplay();
 			};
 
-			// First prompt is fire-and-forget — its rejection is funneled through
-			// `onFirstFailed` rather than rethrown. Plain prompts use primitive
-			// recordLocalSubmission and dispose manually in the catch. Skill prompts
-			// are rebuilt as user-attributed custom messages so queued `/skill:` text
-			// is not sent as a literal prompt after compaction.
-			let promptPromise: Promise<unknown>;
+			// Rollback observes the dispatch without consuming its outcome for the loop.
+			let promptPromise: Promise<boolean>;
 			if (!isOwnerVisible()) {
 				parkRemaining(queuedMessages.slice(firstPromptIndex));
 				return;
@@ -1667,34 +1691,43 @@ export class UiHelpers {
 					parkRemaining(queuedMessages.slice(firstPromptIndex));
 					return;
 				}
-				promptPromise = built
-					? owner
-							.promptCustomMessage(built.message, {
-								...built.options,
-								onPromptQueued: onFirstQueued,
-								onPromptAdmitted: onFirstAdmitted,
-							})
-							.then(sent => {
-								if (sent === false) onFirstDropped();
-							}, onFirstFailed)
-					: Promise.resolve();
-			} else {
-				const disposeFirstPrompt = this.ctx.recordLocalSubmission(first.text, first.images?.length ?? 0);
-				promptPromise = owner
-					.prompt(first.text, {
-						streamingBehavior: first.mode === "followUp" ? "followUp" : "steer",
-						images: first.images,
+				if (built) {
+					promptPromise = owner.promptCustomMessage(built.message, {
+						...built.options,
 						onPromptQueued: onFirstQueued,
 						onPromptAdmitted: onFirstAdmitted,
-					})
-					.catch((error: unknown) => {
-						disposeFirstPrompt();
-						onFirstFailed(error);
 					});
+					void promptPromise.then(sent => {
+						if (sent === false) onFirstDropped();
+					}, onFirstFailed);
+				} else {
+					promptPromise = Promise.resolve(false);
+				}
+			} else {
+				const disposeFirstPrompt = this.ctx.recordLocalSubmission(first.text, first.images?.length ?? 0);
+				promptPromise = owner.prompt(first.text, {
+					streamingBehavior: first.mode === "followUp" ? "followUp" : "steer",
+					images: first.images,
+					onPromptQueued: onFirstQueued,
+					onPromptAdmitted: onFirstAdmitted,
+				});
+				void promptPromise.catch((error: unknown) => {
+					disposeFirstPrompt();
+					onFirstFailed(error);
+				});
 			}
 			// This dispatch leaves the original input waiter unresolved. Capture
 			// the loop generation now, before draining any more queued messages.
-			if (isOwnerVisible() && this.ctx.loopModeEnabled) this.ctx.armLoopAutoSubmit(promptPromise);
+			if (firstAdmission && isOwnerVisible() && this.ctx.loopModeEnabled && this.ctx.loopPrompt === first.text) {
+				const loopSettlement = promptPromise.then(async forwarded => {
+					// Admission onto the session queue can precede settlement of the actual turn.
+					if (forwarded && firstAdmitted?.length && (!restored || firstLeftOut)) await owner.waitForIdle();
+					if (!forwarded || firstAdmitted === undefined || (restored && !firstLeftOut)) {
+						throw new Error("Loop prompt was not admitted");
+					}
+				});
+				this.ctx.armLoopAutoSubmit(loopSettlement, firstAdmission.promise);
+			}
 
 			for (let i = 0; i < rest.length; i++) {
 				if (!isOwnerVisible()) {

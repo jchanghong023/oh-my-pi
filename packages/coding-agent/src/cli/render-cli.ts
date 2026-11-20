@@ -147,9 +147,8 @@ export async function runRenderCommand(args: RenderCommandArgs): Promise<number>
 	const sourcePath = await resolveSessionFileArg(args.session, cwd);
 	const sourceSize = (await fs.stat(sourcePath)).size;
 
-	// Copy before opening: SessionManager.open takes the single-writer lock and
-	// session teardown appends a session_exit entry — neither may touch a live
-	// session file the user has open in another omp.
+	// Render a read-only snapshot, preserving the header id without claiming
+	// the live session or writing exit bookkeeping to the copy.
 	const tempDir = TempDir.createSync("@omp-render-");
 	const workingCopy = path.join(tempDir.path(), path.basename(sourcePath));
 
@@ -162,7 +161,7 @@ export async function runRenderCommand(args: RenderCommandArgs): Promise<number>
 		await fs.copyFile(sourcePath, workingCopy);
 		const openStart = performance.now();
 		const sessionManager = await SessionManager.open(workingCopy, undefined, undefined, {
-			suppressBreadcrumb: true,
+			readOnly: true,
 		});
 		const openMs = performance.now() - openStart;
 

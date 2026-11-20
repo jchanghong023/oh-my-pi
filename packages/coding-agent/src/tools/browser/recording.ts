@@ -155,6 +155,8 @@ export interface RecordingFrameSource {
 	start(params: RecordingFrameSourceStartParams, signal?: AbortSignal): Promise<void>;
 	/** Stop delivering frames (idempotent); no `onFrame` call starts after it resolves. */
 	stop(): Promise<void>;
+	/** Whether the backend has confirmed this source is permanently gone. */
+	isGone?(): boolean;
 	/** Capture one JPEG of the viewport; used when a recording ends without any delivered frame. */
 	captureFrame(quality: number, signal?: AbortSignal): Promise<Uint8Array>;
 	/** Install the cursor overlay page script (`installCursorOverlay`) for current and future documents. */
@@ -203,6 +205,12 @@ export class BrowserRecordingError extends ToolError {
 class RecordingFrameWriteError extends BrowserRecordingError {
 	constructor(error: unknown) {
 		super(`tab.recordStop() failed writing a frame: ${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+
+class RecordingSourceGoneError extends BrowserRecordingError {
+	constructor() {
+		super("tab.recordStop() could not produce a recording: the source disappeared before any frame was saved");
 	}
 }
 
@@ -658,8 +666,18 @@ export class RecordingController {
 				throw new RecordingFrameWriteError(active.writeError);
 			}
 			if (active.frames.length === 0) {
+				const bytes = active.source.isGone?.()
+					? undefined
+					: await active.source.captureFrame(active.options.quality, context.signal).catch(error => {
+							if (!active.source.isGone?.()) throw error;
+							return undefined;
+						});
+				if (bytes === undefined) {
+					await removeWithRetries(active.spool.path());
+					this.#active = undefined;
+					throw new RecordingSourceGoneError();
+				}
 				const fallback = active.spool.join("frame-000000000.jpg");
-				const bytes = await active.source.captureFrame(active.options.quality, context.signal);
 				await Bun.write(fallback, bytes);
 				active.frames.push({ path: fallback, timestampMs: 0 });
 			}
@@ -740,7 +758,7 @@ export class RecordingController {
 		try {
 			await this.stop({}, options);
 		} catch (error) {
-			if (!(error instanceof RecordingFrameWriteError)) throw error;
+			if (!(error instanceof RecordingFrameWriteError || error instanceof RecordingSourceGoneError)) throw error;
 			logger.warn("Failed to finalize browser recording during close", { error: error.message });
 		}
 	}

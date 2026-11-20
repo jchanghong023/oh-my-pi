@@ -12,7 +12,6 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { stripBom } from "../edit/normalize";
 import type { InternalWriteResult } from "../internal-urls/types";
 import { writethroughNoop } from "../lsp/writethrough";
-import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import {
 	expandContentTokens,
 	getConflictHistory,
@@ -160,7 +159,6 @@ async function resolveConflict(
 	};
 
 	await writethroughNoop(absolutePath, bom + newContent, signal);
-	invalidateFsScanAfterWrite(absolutePath);
 	session.bumpFileMutationVersion?.(absolutePath);
 	session.recordFileChange?.({
 		path: absolutePath,
@@ -425,7 +423,6 @@ async function resolveAllConflicts(
 		const change: EditToolPerFileResult = { path: absolutePath, ...editDiffString(originalText, text, absolutePath) };
 		await writethroughNoop(absolutePath, bom + text, signal);
 		conflictChanges.push(change);
-		invalidateFsScanAfterWrite(absolutePath);
 		session.bumpFileMutationVersion?.(absolutePath);
 		session.recordFileChange?.({ path: absolutePath, tool: "edit", before: bom + original, after: bom + text });
 		for (const entry of resolvedEntries) history.invalidate(entry.id);

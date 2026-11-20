@@ -1868,7 +1868,7 @@ async function openCodexWebSocketTransport(
 	}
 }
 
-/** Context hooks may rewrite history without creating a new conversational role. */
+/** Only per-call context without a history origin is transparent to turn detection. */
 function getCodexTurnRole(message: Message | undefined): Message["role"] | undefined {
 	const origin = getPerCallContextHistoryOrigin(message);
 	if (!origin) return isPerCallContextMessage(message) ? undefined : message?.role;
@@ -1897,8 +1897,8 @@ function getCodexTurnStartedAtUnixMs(context: Context): number {
 }
 
 /**
- * True when the request continues the current turn (everything after the
- * last assistant message is tool results or per-call context), false when a new user turn starts.
+ * True when the request continues the current turn (everything after the last
+ * assistant message is tool results or inserted context), false when a new user turn starts.
  * Mirrors codex-rs, which scopes `x-codex-turn-state` to a single turn and
  * clears it when the next one begins.
  */

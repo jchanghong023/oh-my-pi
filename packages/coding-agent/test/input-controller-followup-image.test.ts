@@ -5,10 +5,12 @@
  * queued message reached the model as text only and the image was silently
  * dropped.
  */
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
+import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 
 interface StubEditor {
 	setText: (text: string) => void;
@@ -21,10 +23,6 @@ interface StubEditor {
 	pendingImages: ImageContent[];
 	pendingImageLinks: (string | undefined)[];
 	clearDraft: (text?: string) => void;
-}
-interface PromptOptionsLike {
-	streamingBehavior?: "steer" | "followUp";
-	images?: ImageContent[];
 }
 
 function createContext(opts: {
@@ -60,7 +58,10 @@ function createContext(opts: {
 			this.pendingImageLinks = [];
 		},
 	};
-	const prompt = vi.fn(async (_text: string, _options?: PromptOptionsLike) => {});
+	const prompt = vi.fn(async (_text: string, options?: PromptOptions) => {
+		options?.onPromptAdmitted?.();
+		return true;
+	});
 	const updatePendingMessagesDisplay = vi.fn();
 	const requestRender = vi.fn();
 	const showError = vi.fn();
@@ -74,6 +75,7 @@ function createContext(opts: {
 		sessionManager: { getSessionId: () => "follow-up-session", getLeafId: () => null },
 		handleDevInput: async () => false,
 		skillCommands: new Map<string, string>(),
+		fileSlashCommands: new Set<string>(),
 		session: {
 			isStreaming: opts.isStreaming,
 			isCompacting: false,
@@ -102,28 +104,51 @@ function createContext(opts: {
 }
 
 describe("InputController.handleFollowUp image forwarding", () => {
-	afterEach(() => {
-		vi.restoreAllMocks();
-	});
-
-	it("forwards pending images to session.prompt while streaming and clears them", async () => {
+	it("detaches an image follow-up immediately and admits it before later follow-ups", async () => {
 		const image: ImageContent = { type: "image", mimeType: "image/png", data: "aGVsbG8=" };
 		const { ctx, editor, prompt } = createContext({ isStreaming: true, pendingImages: [image] });
 
+		const preflight = Promise.withResolvers<void>();
+		const runFinished = Promise.withResolvers<boolean>();
+		prompt.mockImplementationOnce(async (_text, options) => {
+			await preflight.promise;
+			options?.onPromptAdmitted?.();
+			return runFinished.promise;
+		});
 		const controller = new InputController(ctx);
 		editor.setText("[Image #1] look at this");
-		await controller.handleFollowUp();
-
-		expect(prompt).toHaveBeenCalledTimes(1);
-		const call = prompt.mock.calls[0];
-		if (!call) throw new Error("expected session.prompt to be called");
-		expect(call[0]).toBe("[Image #1] look at this");
-		expect(call[1]?.streamingBehavior).toBe("followUp");
-		expect(call[1]?.images).toEqual([image]);
-
-		// Pending image state is consumed so the next message does not resend it.
+		const first = controller.handleFollowUp();
+		expect(editor.getText()).toBe("");
 		expect(ctx.editor.pendingImages).toEqual([]);
 		expect(ctx.editor.pendingImageLinks).toEqual([]);
+
+		editor.setText("sent second");
+		const second = controller.handleFollowUp();
+		editor.setText("unsent draft");
+		try {
+			await Bun.sleep(0);
+			expect(prompt).toHaveBeenCalledTimes(1);
+			expect(prompt).toHaveBeenNthCalledWith(
+				1,
+				"[Image #1] look at this",
+				expect.objectContaining({ streamingBehavior: "followUp", images: [image] }),
+			);
+
+			preflight.resolve();
+			await Bun.sleep(0);
+			// The first prompt is still running, but its admission releases the next draft.
+			expect(prompt).toHaveBeenCalledTimes(2);
+			expect(prompt).toHaveBeenNthCalledWith(
+				2,
+				"sent second",
+				expect.objectContaining({ streamingBehavior: "followUp" }),
+			);
+			expect(editor.getText()).toBe("unsent draft");
+		} finally {
+			preflight.resolve();
+			runFinished.resolve(true);
+			await Promise.all([first, second]);
+		}
 	});
 
 	it("queues image-only follow-ups while streaming", async () => {
@@ -151,45 +176,45 @@ describe("InputController.handleFollowUp image forwarding", () => {
 		editor.setText("[Image #1] describe it");
 		await controller.handleFollowUp();
 
-		expect(prompt).toHaveBeenCalledTimes(1);
-		const call = prompt.mock.calls[0];
-		if (!call) throw new Error("expected session.prompt to be called");
-		expect(call[1]?.images).toEqual([image]);
-		expect(call[1]?.streamingBehavior).toBeUndefined();
+		expect(prompt).toHaveBeenCalledWith(
+			"[Image #1] describe it",
+			expect.objectContaining({ streamingBehavior: "followUp", images: [image] }),
+		);
 		expect(ctx.editor.pendingImages).toEqual([]);
 	});
 
-	it("omits images when none are pending", async () => {
-		const { ctx, editor, prompt } = createContext({ isStreaming: true, pendingImages: [] });
-
-		const controller = new InputController(ctx);
-		editor.setText("just text");
-		await controller.handleFollowUp();
-
-		expect(prompt).toHaveBeenCalledTimes(1);
-		const call = prompt.mock.calls[0];
-		if (!call) throw new Error("expected session.prompt to be called");
-		expect(call[1]?.images).toBeUndefined();
-		expect(call[1]?.streamingBehavior).toBe("followUp");
-	});
-
-	it("restores text and pending images when streaming follow-up dispatch rejects", async () => {
+	it("restores an image draft and releases later follow-ups when dispatch rejects before admission", async () => {
 		const image: ImageContent = { type: "image", mimeType: "image/png", data: "aGVsbG8=" };
 		const { ctx, editor, prompt, showError } = createContext({
 			isStreaming: true,
 			pendingImages: [image],
 			pendingImageLinks: ["local://draft.png"],
 		});
+		const preflight = Promise.withResolvers<void>();
 		prompt.mockImplementationOnce(async () => {
+			await preflight.promise;
 			throw new Error("queue rejected");
 		});
 
 		const controller = new InputController(ctx);
 		editor.setText("[Image #1] look at this");
-		await controller.handleFollowUp();
+		const first = controller.handleFollowUp();
+		editor.setText("sent second");
+		const second = controller.handleFollowUp();
+		editor.setText("newer draft");
+		preflight.resolve();
+		await first;
+		await Bun.sleep(0);
+
+		expect(prompt).toHaveBeenNthCalledWith(
+			2,
+			"sent second",
+			expect.objectContaining({ streamingBehavior: "followUp" }),
+		);
+		await second;
 
 		expect(showError).toHaveBeenCalledWith("queue rejected");
-		expect(editor.getText()).toBe("[Image #1] look at this");
+		expect(editor.getText()).toBe("[Image #1] look at this\n\nnewer draft");
 		expect(ctx.editor.pendingImages).toEqual([image]);
 		expect(ctx.editor.pendingImageLinks).toEqual(["local://draft.png"]);
 		expect(ctx.editor.imageLinks).toEqual(["local://draft.png"]);
@@ -214,6 +239,46 @@ describe("InputController.handleFollowUp image forwarding", () => {
 		expect(ctx.editor.pendingImages).toEqual([image]);
 		expect(ctx.editor.pendingImageLinks).toEqual([undefined]);
 		expect(ctx.editor.imageLinks).toEqual([undefined]);
+	});
+
+	it("restores an admitted follow-up with its image when interrupting the run", async () => {
+		const queuedImage: ImageContent = { type: "image", mimeType: "image/png", data: "aGVsbG8=" };
+		const draftImage: ImageContent = { type: "image", mimeType: "image/png", data: "ZHJhZnQ=" };
+		const { ctx, editor, prompt } = createContext({ isStreaming: true, pendingImages: [queuedImage] });
+		const queued: { text: string; images?: ImageContent[] }[] = [];
+		const runFinished = Promise.withResolvers<boolean>();
+		prompt.mockImplementationOnce(async (text, options) => {
+			if (options?.streamingBehavior === "followUp") queued.push({ text, images: options.images });
+			options?.onPromptAdmitted?.();
+			return runFinished.promise;
+		});
+		const clearQueue = vi.fn(() => ({ steering: [], followUp: queued.splice(0) }));
+		let textAtAbort: string | undefined;
+		const abort = vi.fn(async () => {
+			textAtAbort = editor.getText();
+			runFinished.resolve(true);
+		});
+		Object.assign(ctx.session, { clearQueue, abort });
+		const controller = new InputController(ctx);
+
+		editor.setText("[Image #1] queued");
+		const submitted = controller.handleFollowUp();
+		try {
+			await Bun.sleep(0);
+			editor.setText("[Image #1] not yet sent");
+			editor.pendingImages.push(draftImage);
+			editor.pendingImageLinks.push("local://newer.png");
+
+			expect(controller.restoreQueuedMessagesToEditor({ abort: true })).toBe(1);
+			expect(clearQueue).toHaveBeenCalledWith({ forInterrupt: true });
+			expect(abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+			expect(textAtAbort).toBe("[Image #2] queued\n\n[Image #1] not yet sent");
+			expect(editor.pendingImages).toEqual([draftImage, queuedImage]);
+			expect(editor.pendingImageLinks).toEqual(["local://newer.png", undefined]);
+		} finally {
+			runFinished.resolve(true);
+			await submitted;
+		}
 	});
 
 	it("forwards follow-up mode attachments before the command clears the draft", async () => {

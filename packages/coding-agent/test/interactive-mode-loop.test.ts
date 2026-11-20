@@ -480,18 +480,34 @@ describe("InteractiveMode loop auto-submit", () => {
 				mode.locallySubmittedUserSignatures.delete("queued first turn\u00000");
 			});
 
-			async function queueFirstTurn(command = "/loop 3 5s queued first turn") {
+			async function queueFirstTurn(
+				command = "/loop 3 5s queued first turn",
+				{ admitImmediately = true, enqueueInSession = false } = {},
+			) {
 				let compacting = true;
 				let streaming = false;
 				const turn = Promise.withResolvers<boolean>();
+				const queuedTurn = enqueueInSession ? Promise.withResolvers<void>() : undefined;
+				if (queuedTurn) vi.spyOn(session, "waitForIdle").mockReturnValue(queuedTurn.promise);
 				Object.defineProperty(session, "isCompacting", { configurable: true, get: () => compacting });
 				Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
-				const prompt = vi.spyOn(session, "prompt").mockImplementation(() => {
-					streaming = true;
-					return turn.promise;
+				let admit: (() => void) | undefined;
+				const prompt = vi.spyOn(session, "prompt").mockImplementation((text, options) => {
+					admit = () => {
+						streaming = true;
+						if (queuedTurn) {
+							options?.onPromptQueued?.([
+								{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() },
+							]);
+						}
+						options?.onPromptAdmitted?.();
+					};
+					if (admitImmediately) admit();
+					return queuedTurn ? Promise.resolve(true) : turn.promise;
 				});
 				finishFirstTurn = () => {
 					streaming = false;
+					queuedTurn?.resolve();
 					turn.resolve(true);
 				};
 
@@ -515,6 +531,14 @@ describe("InteractiveMode loop auto-submit", () => {
 				return {
 					prompt,
 					resolved,
+					admit: async () => {
+						admit?.();
+						await flushMicrotasks();
+					},
+					reject: async (error: Error) => {
+						turn.reject(error);
+						await flushMicrotasks();
+					},
 					finish: async () => {
 						finishFirstTurn?.();
 						await flushMicrotasks();
@@ -548,6 +572,18 @@ describe("InteractiveMode loop auto-submit", () => {
 				},
 			);
 
+			it("waits a complete positional interval after a session-queued turn settles", async () => {
+				const first = await queueFirstTurn(undefined, { enqueueInSession: true });
+				await advance(6_000);
+				expect(first.resolved).toHaveLength(0);
+
+				await first.finish();
+				await advance(4_999);
+				expect(first.resolved).toHaveLength(0);
+				await advance(1);
+				expect(first.resolved).toHaveLength(1);
+			});
+
 			it.each([200, 2_000])(
 				"preserves the interrupt window without an interval after a queued first turn lasting %i ms",
 				async durationMs => {
@@ -567,6 +603,47 @@ describe("InteractiveMode loop auto-submit", () => {
 					expect(first.resolved[0].text).toBe("queued first turn");
 					expect(first.prompt).toHaveBeenCalledTimes(1);
 					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
+				},
+			);
+
+			it("anchors the interrupt window to admission rather than dispatch", async () => {
+				const first = await queueFirstTurn("/loop 3 queued first turn", { admitImmediately: false });
+				await advance(2_100);
+				expect(first.resolved).toHaveLength(0);
+
+				await first.admit();
+				await advance(200);
+				await first.finish();
+				await advance(599);
+				expect(first.resolved).toHaveLength(0);
+				await advance(1);
+				expect(first.resolved).toHaveLength(1);
+			});
+
+			it("does not start legacy polling when a superseded dispatch is admitted late", async () => {
+				const first = await queueFirstTurn("/loop 3 queued first turn", { admitImmediately: false });
+				mode.setLoopPrompt("queued first turn");
+				await first.admit();
+				await first.finish();
+				await advance(2_000);
+
+				expect(first.resolved).toHaveLength(0);
+				expect(mode.loopPrompt).toBe("queued first turn");
+				expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 3 });
+			});
+
+			it.each(["/loop 3 queued first turn", "/loop 3 5s queued first turn"])(
+				"never resubmits after the first dispatch rejects before admission: %s",
+				async command => {
+					const first = await queueFirstTurn(command, { admitImmediately: false });
+					await advance(6_000);
+					expect(first.resolved).toHaveLength(0);
+
+					await first.reject(new Error("not admitted"));
+					await advance(6_000);
+					expect(first.resolved).toHaveLength(0);
+					expect(first.prompt).toHaveBeenCalledTimes(1);
+					expect(mode.loopPrompt).toBeUndefined();
 				},
 			);
 

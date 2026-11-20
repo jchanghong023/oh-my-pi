@@ -1144,6 +1144,7 @@ async function acquireWebKitTab(
 			userAgent: opts.userAgent,
 			insecure: opts.insecure,
 			identitySeed: browser.webkit.identitySeed(opts.ownerSessionId),
+			hostExited: () => browser.webkit.exited,
 		});
 	} catch (error) {
 		// A timeout spent the open's budget: nothing is left for Chromium to open in.
@@ -1795,6 +1796,8 @@ interface TabCleanupProgress extends BrowserReleaseProgress {
 const tabCleanupProgress = new WeakMap<TabSession, TabCleanupProgress>();
 // A failed strict close remains owner-reachable even if its name is replaced.
 const strictTabs = new Set<TabSession>();
+// A confirmed shared Chromium stop is evidence for every tab on this original handle only.
+const stoppedSharedBrowsers = new WeakSet<PuppeteerBrowserHandle>();
 
 function cleanupProgress(tab: TabSession): TabCleanupProgress {
 	let progress = tabCleanupProgress.get(tab);
@@ -1836,7 +1839,7 @@ function trackCleanupStage<T>(tab: TabSession, stage: TabCleanupStage, run: Prom
 	const progress = cleanupProgress(tab);
 	const pending = run
 		.then(value => {
-			if (stage !== "page" || value !== false) progress.done.add(stage);
+			if ((stage !== "page" && stage !== "uploads") || value !== false) progress.done.add(stage);
 			return value;
 		})
 		.finally(() => {
@@ -1949,6 +1952,12 @@ export function ensureSpawnedKilledForTest(browser: BrowserHandle): Promise<void
 	return ensureSpawnedKilled(browser);
 }
 
+function discardTabRuntime(tab: TabSession): void {
+	// A hung run may have left ownership of this process's realm in its runtime.
+	if (tab.backend === "tern" || tab.backend === "webkit") tab.ternTab.discardRuntime();
+	else if (tab.backend === "cmux") tab.cmuxTab.discardRuntime();
+}
+
 async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOptions): Promise<"released" | "kept"> {
 	const progress = cleanupProgress(tab);
 	const wasAlive = progress.wasAlive;
@@ -1974,11 +1983,10 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 		pending.reject(closeError);
 	}
 	tab.pending.clear();
+	discardTabRuntime(tab);
 	const timeoutMs = opts.timeoutMs ?? DEFAULT_TAB_CLOSE_TIMEOUT_MS;
 	if (opts.strict) return await releaseTabStrict(tab, name, opts, progress);
 	if (tab.backend === "tern" || tab.backend === "webkit") {
-		// Its runtime would otherwise keep any run ownership of this process's realm a hung run left behind.
-		tab.ternTab.discardRuntime();
 		let closeError: unknown;
 		if (wasAlive) {
 			try {
@@ -2021,7 +2029,6 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 		return "released";
 	}
 	if (tab.backend === "cmux") {
-		tab.cmuxTab.discardRuntime();
 		let closeError: unknown;
 		if (wasAlive && tab.cmuxOwnsSurface) {
 			try {
@@ -2104,15 +2111,8 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 	}
 	// A borrowed, retained, or unconfirmed page may still read the staged files.
 	if (closesPage && !targetCloseFailed) {
-		await trackCleanupStage(
-			tab,
-			"uploads",
-			removeUploadStaging(tab.uploadDir, {
-				get strict() {
-					return opts.strict;
-				},
-			}),
-		);
+		await trackCleanupStage(tab, "uploads", removeUploadStaging(tab.uploadDir));
+		if (opts.strict) return await releaseTabStrict(tab, name, opts, progress);
 	}
 	try {
 		await releaseTabBrowser(tab, opts, timeoutMs);
@@ -2194,6 +2194,7 @@ async function releaseTabStrict(
 			},
 		);
 	} else {
+		const scope = sharedTargetScopeOf(tab.browser);
 		await strictCleanupStage(tab, "worker", timeoutMs, "tab worker termination", async () => {
 			if (progress.wasAlive && !(tab.worker as ExitTrackedWorker)[kWorkerExited]) {
 				try {
@@ -2207,8 +2208,9 @@ async function releaseTabStrict(
 		});
 		if (progress.cleanupBrowser && !progress.pending.has("page")) await disconnectCleanupConnection(tab, timeoutMs);
 		if (tab.ownsPage && (!opts.keepPage || tab.connectionScoped)) {
-			// A connection-scoped page closed at worker termination; no other connection can confirm it by id.
-			if (tab.connectionScoped) progress.done.add("page");
+			// A connection-scoped page closes at worker termination. A broker-confirmed stop
+			// closes every page on the original shared browser.
+			if (tab.connectionScoped || stoppedSharedBrowsers.has(tab.browser)) progress.done.add("page");
 			if (tab.browser.kind.kind === "relay" && !progress.strictPageConfirmed) progress.done.delete("page");
 			try {
 				await strictCleanupStage(
@@ -2223,20 +2225,21 @@ async function releaseTabStrict(
 					},
 				);
 			} catch (error) {
-				const scope = sharedTargetScopeOf(tab.browser);
 				// A page timeout can leave CDP work pending forever. The guarded
 				// health check is independently bounded and proves every page gone
 				// only after the broker confirms the unreachable daemon stopped.
-				if (!scope || !(await stopSharedBrowserIfUnreachable(scope))) throw error;
+				if (!stoppedSharedBrowsers.has(tab.browser)) {
+					const generation = tab.browser.daemonLease?.unit.generation;
+					if (!scope || !(await stopSharedBrowserIfUnreachable({ ...scope, generation }))) throw error;
+					stoppedSharedBrowsers.add(tab.browser);
+				}
 				progress.done.add("page");
-				progress.strictPageConfirmed = true;
 			}
 			await disconnectCleanupConnection(tab, timeoutMs);
 			await strictCleanupStage(tab, "uploads", timeoutMs, "upload staging", () =>
 				removeUploadStaging(tab.uploadDir, { strict: true }),
 			);
 		}
-		const scope = sharedTargetScopeOf(tab.browser);
 		if (scope) {
 			await strictCleanupStage(tab, "shared", timeoutMs, "shared target ownership", () =>
 				forgetSharedTarget(scope, tab.targetId),
@@ -3123,6 +3126,7 @@ async function forceKillTab(name: string, reason: string): Promise<void> {
 		pending.reject(error);
 	}
 	tab.pending.clear();
+	discardTabRuntime(tab);
 	// Published before the first await so a release landing during the close
 	// below joins instead of tearing the same tab down a second time. The
 	// published result is the release contract — the tab is gone either way; a

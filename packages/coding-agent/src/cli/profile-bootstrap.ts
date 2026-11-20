@@ -65,7 +65,7 @@ export interface ProfileBootstrapResult {
  * and the captured flag values.
  *
  * Global flag extraction stops only when the first residual argv token names a
- * registered command that owns its own flags (e.g. `grep`): everything from
+ * command that owns its own flags (e.g. `grep` or `superpowers`): everything from
  * that token onward is forwarded verbatim so a subcommand's own flags and
  * positionals are never stolen (`omp grep --profile <path>` greps for
  * `--profile`; it does not select a profile). `launch`, `acp`, `dev`, and `openwiki`
@@ -217,7 +217,11 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 		// any other token has been forwarded, later subcommand names are launch text.
 		// Profile-aware commands use this same bootstrap before loading their modules;
 		// accepting profile flags does not imply accepting the launch flag surface.
-		if (canDispatchSubcommand && isSubcommand(arg) && PROFILE_FLAG_COMMANDS[arg] !== true) {
+		// `cli.ts` dispatches `superpowers` directly, outside the command table.
+		if (
+			canDispatchSubcommand &&
+			(arg === "superpowers" || (isSubcommand(arg) && PROFILE_FLAG_COMMANDS[arg] !== true))
+		) {
 			sawSubcommand = true;
 		}
 		canDispatchSubcommand = false;

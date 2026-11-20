@@ -1850,17 +1850,18 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 			// name per command.
 			let name = &current_argv(vp)[0];
 			let has_slash = names_path(k, name);
+			let utf8_name = std::str::from_utf8(name).is_ok();
 			// zsh's reserved `typeset`, `local`, …: their builtin even when
 			// disabled, before any function of the name (`execcmd_exec`
 			// with `WC_TYPESET`).
-			if zsh && typeset && via == Via::Plain && std::str::from_utf8(name).is_ok() {
+			if zsh && typeset && via == Via::Plain && utf8_name {
 				let rctx = ResolveCtx { has_slash, via };
 				if let Resolved::Intrinsic(id) = cx.host.resolve(BStr::new(name), mode, rctx) {
 					break Resolved::Intrinsic(id).into();
 				}
 			}
 			// Native byte names cannot designate a shell function or builtin.
-			if external_only || std::str::from_utf8(name).is_err() {
+			if via != Via::Builtin && (external_only || !utf8_name) {
 				break if has_slash {
 					Target::External(absolute(&vp.cwd, name))
 				} else {
@@ -1868,7 +1869,7 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 				};
 			}
 			// POSIX: special builtins are found before functions.
-			let special = if posix && !has_slash {
+			let special = if utf8_name && posix && !has_slash {
 				let rctx = ResolveCtx { has_slash, via };
 				match resolve(k, cx, vp, name, mode, rctx) {
 					Ok(resolved) => matches!(resolved, Resolved::Intrinsic(id) if is_special(id)),
@@ -1894,13 +1895,17 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 					break Target::Function(name.clone());
 				}
 			}
-			let rctx = ResolveCtx { has_slash, via };
-			let mut resolved = match resolve(k, cx, vp, name, mode, rctx) {
-				Ok(resolved) => resolved,
-				Err(err) => {
-					k.fail(err);
-					return Some(Flow::Discard(1));
-				},
+			let mut resolved = if utf8_name {
+				let rctx = ResolveCtx { has_slash, via };
+				match resolve(k, cx, vp, name, mode, rctx) {
+					Ok(resolved) => resolved,
+					Err(err) => {
+						k.fail(err);
+						return Some(Flow::Discard(1));
+					},
+				}
+			} else {
+				Resolved::NotFound
 			};
 			// Host commands that consume strings must not receive a lossy
 			// conversion. Byte-native intrinsics handle their own operands.

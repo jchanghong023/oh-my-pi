@@ -1,9 +1,11 @@
 import { ProviderHttpError, ProviderResponseError } from "@oh-my-pi/pi-ai/error";
 import { rerank } from "@oh-my-pi/pi-ai/rerank";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { DEFAULT_EMBEDDING_API_URL } from "@oh-my-pi/pi-mnemopi/config";
 import {
 	effectiveMaxInputChars,
 	embedConfiguredApi,
+	embeddingEnvApiKey,
 	embeddingsDisabled,
 	isApiModel,
 } from "@oh-my-pi/pi-mnemopi/core/embeddings";
@@ -74,11 +76,11 @@ export async function resolveKnowledgeModels(
 		const embeddingOptions = resolveMnemopiEmbeddingOptions(settings);
 		const configuredModel = cfgMnemopiEmbeddingModel.get(settings)?.trim();
 		const model = configuredModel || (embeddingOptions.embeddingApiUrl ? embeddingOptions.embeddingModel : undefined);
-		const apiKey = embeddingOptions.embeddingApiKey ?? "";
+		const apiKey = embeddingOptions.embeddingApiKey ?? embeddingEnvApiKey(embeddingOptions.embeddingApiUrl);
 		const useConfiguredApi =
 			model && apiKey && withMnemopiRuntimeOptions({ embeddings: { model } }, () => isApiModel(model));
 		const baseUrl = endpoint(
-			embeddingOptions.embeddingApiUrl ?? (useConfiguredApi ? "https://openrouter.ai/api/v1" : undefined),
+			embeddingOptions.embeddingApiUrl ?? (useConfiguredApi ? DEFAULT_EMBEDDING_API_URL : undefined),
 		);
 		if (model && baseUrl) {
 			const active = getMnemopiRuntimeOptions()?.embeddings;
@@ -91,7 +93,9 @@ export async function resolveKnowledgeModels(
 					requestTimeoutMs:
 						options.embeddingPurpose === "import" ? KNOWLEDGE_EMBEDDING_IMPORT_TIMEOUT_MS : undefined,
 					requestMaxAttempts:
-						options.embeddingPurpose === "import" ? KNOWLEDGE_EMBEDDING_IMPORT_MAX_ATTEMPTS : undefined,
+						options.embeddingPurpose === "import"
+							? KNOWLEDGE_EMBEDDING_IMPORT_MAX_ATTEMPTS
+							: embeddingOptions.requestMaxAttempts,
 					requestRetryDelayMs:
 						options.embeddingPurpose === "import" ? KNOWLEDGE_EMBEDDING_IMPORT_RETRY_DELAY_MS : undefined,
 					retryTimeouts: options.embeddingPurpose === "import",

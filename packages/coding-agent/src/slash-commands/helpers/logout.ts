@@ -107,6 +107,7 @@ export function toLogoutAccounts(
 }
 
 export interface LogoutCommandUI {
+	selectSingletons?: boolean;
 	selectProvider(providers: readonly OAuthProviderInfo[]): Promise<string | undefined>;
 	selectAccount(provider: OAuthProviderInfo, accounts: LogoutAccount[]): Promise<number | undefined>;
 }
@@ -149,7 +150,9 @@ export async function logoutProviderForCommand(
 			};
 		}
 		const selectedProviderId =
-			storedProviders.length === 1 ? storedProviders[0]!.id : await ui.selectProvider(storedProviders);
+			!ui.selectSingletons && storedProviders.length === 1
+				? storedProviders[0]!.id
+				: await ui.selectProvider(storedProviders);
 		if (selectedProviderId === undefined) return { status: "cancelled" };
 		provider = storedProviders.find(candidate => candidate.id === selectedProviderId);
 		if (!provider) {
@@ -172,7 +175,9 @@ export async function logoutProviderForCommand(
 		};
 	}
 	const selectedCredentialId =
-		accounts.length === 1 ? accounts[0]!.credentialId : await ui.selectAccount(provider, accounts);
+		!ui.selectSingletons && accounts.length === 1
+			? accounts[0]!.credentialId
+			: await ui.selectAccount(provider, accounts);
 	if (selectedCredentialId === undefined) return { status: "cancelled" };
 	const account = accounts.find(candidate => candidate.credentialId === selectedCredentialId);
 	if (!account) {

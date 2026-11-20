@@ -147,6 +147,93 @@ pub(super) fn guard_owned_path(repo: &GitRepo, path: &str) -> Result<PathBuf> {
 	Ok(absolute)
 }
 
+#[cfg(unix)]
+fn owned_file_identity(path: &Path) -> io::Result<(u64, u64)> {
+	use std::os::unix::fs::MetadataExt;
+
+	let metadata = fs::symlink_metadata(path)?;
+	Ok((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn owned_file_identity(path: &Path) -> io::Result<(u64, u64)> {
+	use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+
+	use windows_sys::Win32::Storage::FileSystem::{
+		BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+		FILE_READ_ATTRIBUTES, GetFileInformationByHandle,
+	};
+
+	let file = fs::OpenOptions::new()
+		.access_mode(FILE_READ_ATTRIBUTES)
+		.custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+		.open(path)?;
+	let mut info = BY_HANDLE_FILE_INFORMATION::default();
+	// SAFETY: The file handle is live and `info` is writable.
+	if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) } == 0 {
+		return Err(io::Error::last_os_error());
+	}
+	Ok((
+		u64::from(info.dwVolumeSerialNumber),
+		(u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+	))
+}
+
+fn reject_owned_rename_alias(
+	repo: &GitRepo,
+	source: Option<&str>,
+	target: Option<&str>,
+) -> Result<()> {
+	let (Some(source), Some(target)) = (source, target) else {
+		return Ok(());
+	};
+	if source == target {
+		return Ok(());
+	}
+	let source_path = guard_owned_path(repo, source)?;
+	let target_path = guard_owned_path(repo, target)?;
+	let identity = |path: &Path| match owned_file_identity(path) {
+		Ok(id) => Ok(Some(id)),
+		Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+		Err(err) => Err(err),
+	};
+	let Some(source_id) = identity(&source_path)? else {
+		return Ok(());
+	};
+	if identity(&target_path)? != Some(source_id) {
+		return Ok(());
+	}
+	let (Some(source_parent), Some(target_parent)) = (source_path.parent(), target_path.parent())
+	else {
+		return Ok(());
+	};
+	if source_parent != target_parent
+		&& owned_file_identity(source_parent)? != owned_file_identity(target_parent)?
+	{
+		return Ok(());
+	}
+
+	// A shared file ID is not enough: two hard links can be distinct
+	// directory entries even when their names differ only by case.
+	let source_name = source_path.file_name();
+	let target_name = target_path.file_name();
+	if source_name != target_name {
+		let (mut has_source, mut has_target) = (false, false);
+		for entry in fs::read_dir(source_parent)? {
+			let name = entry?.file_name();
+			has_source |= Some(name.as_os_str()) == source_name;
+			has_target |= Some(name.as_os_str()) == target_name;
+			if has_source && has_target {
+				return Ok(());
+			}
+		}
+	}
+	Err(Error::backend(
+		"git owned patch",
+		format!("rename paths alias the same directory entry: {source} -> {target}"),
+	))
+}
+
 fn owned_raw_version(repo: &GitRepo, path: &str) -> Result<Option<String>> {
 	let absolute = guard_owned_path(repo, path)?;
 	let metadata = match fs::symlink_metadata(&absolute) {
@@ -295,6 +382,7 @@ impl GitRepo {
 		let mut touched = BTreeSet::new();
 		for patch in &patches {
 			let (source, target, ..) = patch_sides(patch, options.reverse);
+			reject_owned_rename_alias(self, source, target)?;
 			let paths = [source, target.filter(|target| Some(*target) != source)];
 			let start = expected.len();
 			for path in paths.into_iter().flatten() {
@@ -376,6 +464,8 @@ impl GitRepo {
 					));
 				}
 			}
+			// Reject aliases across the whole patch before writing any entry.
+			reject_owned_rename_alias(self, old, new)?;
 		}
 		if touched.len() != expected.len() {
 			return Err(Error::backend(
@@ -447,6 +537,7 @@ impl GitRepo {
 					}
 					postimages[position] = bytes.zip(entry.map(|entry| entry.mode));
 				}
+				reject_owned_rename_alias(self, source, target)?;
 				// Materialize a rename target before deleting its source. A
 				// partial rename can then resume from the retained source and
 				// already-matching target without overwriting either blindly.

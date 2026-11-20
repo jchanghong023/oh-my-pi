@@ -215,8 +215,7 @@ export class ModelPickerComponent implements Component {
 	#currentQuickRoleSelector: string | undefined;
 	#modelItems: ModelBrowserItem[] = [];
 	#candidateCatalogue: Map<string, ModelBrowserItem> | undefined;
-	#quickRoleItems: ModelBrowserItem[] = [];
-	#quickRoleSourceItems: ModelBrowserItem[] = [];
+	readonly #quickRoleItems: ModelBrowserItem[];
 	#quickRoles = new Map<string, ResolvedRoleModel>();
 	#roleMode = false;
 	#taskMode = false;
@@ -267,7 +266,7 @@ export class ModelPickerComponent implements Component {
 			this.#taskModeKey = options.taskModeKeys?.[0];
 			for (const key of options.taskModeKeys ?? []) addKeyAliases(this.#taskMatchKeys, key);
 		}
-		this.#quickRoleSourceItems = this.#buildQuickRoleItems(
+		this.#quickRoleItems = this.#buildQuickRoleItems(
 			options.quickRoles ?? [],
 			options.quickRoleOrder ?? options.quickRoles?.map(entry => entry.role) ?? [],
 		);
@@ -281,8 +280,8 @@ export class ModelPickerComponent implements Component {
 					? `  ${editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p")} 轮换中没有快捷角色`
 					: undefined,
 		});
-		// The rail's logos name each row's provider: the rows show the model id alone.
-		this.#browser.setPickerProvider(false);
+		// Selection-only has no provider rail, so its native rows must identify the provider.
+		this.#browser.setPickerProvider(this.#selectOnly);
 		this.#browser.onActivate = item => {
 			const quickRole = this.#quickRoles.get(item.selector);
 			if (quickRole) {
@@ -366,7 +365,6 @@ export class ModelPickerComponent implements Component {
 		);
 		this.#configError = scope.error;
 		this.#modelItems = scope.items;
-		this.#quickRoleItems = [...this.#quickRoleSourceItems];
 		this.#browser.setRoles(scope.roles);
 		this.#browser.setMruOrder(scope.mruOrder);
 		this.#browser.setPerfStats(this.#settings.modelPerf);

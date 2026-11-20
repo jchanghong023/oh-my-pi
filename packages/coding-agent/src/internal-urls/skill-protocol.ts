@@ -24,7 +24,7 @@ import {
 } from "../extensibility/skills";
 import { MCPManager, type MCPManagerApi } from "../mcp/manager";
 import skillDoc from "../prompts/internal-urls/skill.md" with { type: "text" };
-import { ensureSpecDrivenResources } from "../spec-driven/resources";
+import { ensureSpecDrivenResources, hasBundledSpecDrivenSkill } from "../spec-driven/resources";
 import {
 	checkSkillReadAccess,
 	getGrantedSpecSkill,
@@ -101,9 +101,10 @@ function findKnownUrlSkill(
 
 /** An unloaded pinned name remains protected even when no local skill owns the URL. */
 async function findBundledSkill(skillName: string): Promise<Skill | undefined> {
+	if (!hasBundledSpecDrivenSkill(skillName)) return undefined;
 	const resources = await ensureSpecDrivenResources();
 	const entry = resources.manifest.skills.find(entry => entry.name === skillName);
-	if (!entry) return undefined;
+	if (!entry) throw new Error(`Missing bundled skill in manifest: ${skillName}`);
 	const filePath = path.resolve(resources.root, entry.path);
 	return {
 		name: entry.name,
@@ -432,11 +433,9 @@ export class SkillProtocolHandler implements ProtocolHandler {
 	}
 
 	async complete(): Promise<UrlCompletion[]> {
-		return getActiveSkills()
-			.filter(skill => !skill.hide && !isExplicitOnlySkill(skill))
-			.map(skill => ({
-				value: skill.name,
-				...(skill.description ? { description: skill.description } : {}),
-			}));
+		return getActiveSkills().map(skill => ({
+			value: skill.name,
+			...(skill.description ? { description: skill.description } : {}),
+		}));
 	}
 }

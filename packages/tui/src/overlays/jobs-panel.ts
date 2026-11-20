@@ -227,8 +227,6 @@ export class JobsSheet implements Component {
 				if (hidden > 0) commandLines.push(truncateToWidth(`   … ${hidden} more command lines`, width));
 			}
 			const facts = compact([
-				selected.name && `Name ${selected.name}`,
-				selected.name && `ID ${selected.id}`,
 				detail.cwd && `cwd ${detail.cwd}`,
 				detail.pids.length > 0 && `pid ${detail.pids.join(", ")}`,
 				detail.exitCode !== undefined && `exit ${detail.exitCode}`,

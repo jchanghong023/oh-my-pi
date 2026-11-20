@@ -156,7 +156,9 @@ export type ComputerWorkerOutbound =
 	| { type: "capabilities"; id: string; ok: false; error: RunErrorPayload }
 	| { type: "tool-call"; id: string; runId: string; name: string; args: unknown }
 	| { type: "control-request"; id: string; runId: string; reason: string; timeoutMs: number }
-	| { type: "closed" };
+	/** The native session is absent or its close completed, including the thread join. */
+	| { type: "closed" }
+	| { type: "close-failed"; error: RunErrorPayload; retryable: boolean };
 
 /** Transport used by the worker core in Bun workers and tests. */
 export interface ComputerWorkerTransport {

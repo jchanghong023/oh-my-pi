@@ -2118,56 +2118,6 @@ export function createAutoLearnCaptureRunner(
 	};
 }
 
-const managedAsyncJobManagerOwners = new Map<AsyncJobManager, number>();
-
-function retainAsyncJobManager(
-	manager: AsyncJobManager,
-): ((options?: { strict?: boolean }) => Promise<boolean | void>) | undefined {
-	const owners = managedAsyncJobManagerOwners.get(manager);
-	if (owners === undefined) return undefined;
-	managedAsyncJobManagerOwners.set(manager, owners + 1);
-	let released = false;
-	let strictCall: Promise<boolean | void> | undefined;
-	let strictOwnershipReleased = false;
-	return async options => {
-		if (options?.strict) {
-			if (released) return;
-			strictCall ??= (async () => {
-				if (!strictOwnershipReleased) {
-					managedAsyncJobManagerOwners.set(manager, managedAsyncJobManagerOwners.get(manager)! - 1);
-					strictOwnershipReleased = true;
-				}
-				if ((managedAsyncJobManagerOwners.get(manager) ?? 0) > 0) {
-					released = true;
-					return;
-				}
-				const drained = await manager.dispose({ timeoutMs: 3_000, strict: true });
-				if (drained === false) throw new Error("Async job manager did not drain during strict disposal");
-				if (managedAsyncJobManagerOwners.get(manager) === 0) {
-					managedAsyncJobManagerOwners.delete(manager);
-					if (AsyncJobManager.instance() === manager) AsyncJobManager.setInstance(undefined);
-				}
-				released = true;
-				return drained;
-			})().catch(error => {
-				strictCall = undefined;
-				throw error;
-			});
-			return strictCall;
-		}
-		if (released) return;
-		released = true;
-		const remaining = managedAsyncJobManagerOwners.get(manager)! - 1;
-		if (remaining > 0) {
-			managedAsyncJobManagerOwners.set(manager, remaining);
-			return;
-		}
-		managedAsyncJobManagerOwners.delete(manager);
-		if (AsyncJobManager.instance() === manager) AsyncJobManager.setInstance(undefined);
-		return manager.dispose({ timeoutMs: 3_000 });
-	};
-}
-
 let tinyTitleClientOwners = 0;
 
 function retainTinyTitleClient(): (options?: { strict?: boolean }) => Promise<void> {
@@ -2895,50 +2845,7 @@ async function createAgentSessionScoped(
 				maxRunningJobs: () => Math.min(32, cfgAsyncMaxJobs.get(settings)),
 			})
 		: undefined;
-	if (asyncJobManager) {
-		managedAsyncJobManagerOwners.set(asyncJobManager, 0);
-		if (!AsyncJobManager.instance()) AsyncJobManager.setInstance(asyncJobManager);
-		const usagePurpose =
-			(purpose: string): ModelJobWidgetAuthorOptions["onUsage"] =>
-			(message, userPrompt) => {
-				if (!message.usage) return;
-				sessionManager.appendModelUsage(
-					{
-						purpose,
-						api: message.api,
-						provider: message.provider,
-						model: message.model,
-						usage: message.usage,
-						stopReason: message.stopReason,
-						errorMessage: message.errorMessage,
-						duration: message.duration,
-						ttft: message.ttft,
-						completion: completionRecord(userPrompt, message),
-					},
-					{ sessionId: sessionManager.getSessionId(), parentId: sessionManager.getLeafId() },
-				);
-			};
-		const cheapModelOptions: Omit<ModelJobWidgetAuthorOptions, "onUsage"> = {
-			settings,
-			modelRegistry,
-			sessionId: () => sessionManager.getSessionId(),
-			costGate: currentCostGate,
-			telemetry: () => agent?.telemetry,
-			obfuscate: () => (obfuscator?.hasSecrets() ? text => obfuscator?.obfuscate(text) ?? text : undefined),
-		};
-		asyncJobManager.widgets = new JobWidgets({
-			enabled: () => cfgAsyncWidgets.get(settings),
-			author:
-				options.jobWidgetAuthor ??
-				createModelJobWidgetAuthor({ ...cheapModelOptions, onUsage: usagePurpose("job-widget") }),
-			captioner:
-				options.jobCaptionWriter ??
-				createModelJobCaptionWriter({ ...cheapModelOptions, onUsage: usagePurpose("job-caption") }),
-		});
-	}
 	const scopedAsyncJobManager = asyncJobManager ?? options.asyncJobManager;
-	const releaseAsyncJobManager =
-		!options.parentTaskPrefix && asyncJobManager ? retainAsyncJobManager(asyncJobManager) : undefined;
 
 	const resolvedAgentId = options.agentId ?? options.parentTaskPrefix ?? MAIN_AGENT_ID;
 	const journalAgent = { agent: resolvedAgentId, parent: options.parentAgentId };
@@ -2981,6 +2888,47 @@ async function createAgentSessionScoped(
 	};
 	let startupOwnsToolCallbacks = true;
 	try {
+		if (asyncJobManager) {
+			if (!AsyncJobManager.instance()) AsyncJobManager.setInstance(asyncJobManager);
+			const usagePurpose =
+				(purpose: string): ModelJobWidgetAuthorOptions["onUsage"] =>
+				(message, userPrompt) => {
+					if (!message.usage) return;
+					sessionManager.appendModelUsage(
+						{
+							purpose,
+							api: message.api,
+							provider: message.provider,
+							model: message.model,
+							usage: message.usage,
+							stopReason: message.stopReason,
+							errorMessage: message.errorMessage,
+							duration: message.duration,
+							ttft: message.ttft,
+							completion: completionRecord(userPrompt, message),
+						},
+						{ sessionId: sessionManager.getSessionId(), parentId: sessionManager.getLeafId() },
+					);
+				};
+			const cheapModelOptions: Omit<ModelJobWidgetAuthorOptions, "onUsage"> = {
+				settings,
+				modelRegistry,
+				sessionId: () => sessionManager.getSessionId(),
+				costGate: currentCostGate,
+				telemetry: () => agent?.telemetry,
+				obfuscate: () => (obfuscator?.hasSecrets() ? text => obfuscator?.obfuscate(text) ?? text : undefined),
+			};
+			asyncJobManager.widgets = new JobWidgets({
+				enabled: () => cfgAsyncWidgets.get(settings),
+				author:
+					options.jobWidgetAuthor ??
+					createModelJobWidgetAuthor({ ...cheapModelOptions, onUsage: usagePurpose("job-widget") }),
+				captioner:
+					options.jobCaptionWriter ??
+					createModelJobCaptionWriter({ ...cheapModelOptions, onUsage: usagePurpose("job-caption") }),
+			});
+		}
+
 		const getActiveModelString = (): string | undefined => {
 			const activeModel = agent?.state.model;
 			if (activeModel) return formatModelStringWithRouting(activeModel);
@@ -3142,7 +3090,9 @@ async function createAgentSessionScoped(
 			recordFileChange: change => {
 				const journal = changeJournal();
 				// Session artifacts (local:// plans, outputs) are never commit material.
-				if (!journal || change.path.startsWith(`${journal.dir}${path.sep}`)) return;
+				if (journal && change.path.startsWith(`${journal.dir}${path.sep}`)) return;
+				session?.recordLatestTurnFileChange(change);
+				if (!journal) return;
 				const owner = change.agent ?? journalAgent;
 				journal.recordChange({
 					agent: owner.agent,
@@ -6046,10 +5996,8 @@ async function createAgentSessionScoped(
 			autoApprove: options.autoApprove,
 			scoutAllowedBySpawnPolicy: isScoutSpawnable(undefined, options.spawns ?? "*"),
 			evalKernelOwnerId,
-			// SDK roots release their lease; standalone AgentSession construction
-			// can still own and dispose a manager directly.
-			ownedAsyncJobManager: releaseAsyncJobManager ? asyncJobManager : undefined,
-			releaseOwnedAsyncJobManager: releaseAsyncJobManager,
+			// Children borrow their parent's manager but never dispose it.
+			ownedAsyncJobManager: asyncJobManager,
 			asyncJobManager: scopedAsyncJobManager,
 			scopedModels: options.scopedModels,
 			inheritedSessionAgents: options.inheritedSessionAgents,
@@ -7172,7 +7120,13 @@ async function createAgentSessionScoped(
 				if (hasRegistered) unregisterUnlessParked();
 			} else {
 				if (hasRegistered) unregisterUnlessParked();
-				await releaseAsyncJobManager?.();
+				if (asyncJobManager) {
+					try {
+						await asyncJobManager.dispose({ timeoutMs: 3_000 });
+					} finally {
+						if (AsyncJobManager.instance() === asyncJobManager) AsyncJobManager.setInstance(undefined);
+					}
+				}
 				await releaseComputerSessionsForOwner(evalKernelOwnerId);
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
 				await disposeVmContextsByOwner(evalKernelOwnerId);

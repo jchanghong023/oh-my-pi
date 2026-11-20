@@ -49,6 +49,47 @@ export interface SpecDrivenProcessResult {
 /** SDK/tool calls capture by default; only the standalone CLI selects terminal inheritance. */
 export type SpecDrivenProcessIO = "capture" | "terminal";
 
+// Keep URL ownership available even if the resource archive or its cache cannot be opened.
+// Extraction checks this pinned index against the archive manifest.
+const bundledSkillNames = new Set([
+	"big-review-scan",
+	"big-review-verify",
+	"brainstorming",
+	"diagnosing-superpowers",
+	"dispatching-parallel-agents",
+	"executing-plans",
+	"finishing-a-development-branch",
+	"jch-codebase-design",
+	"jch-grill-me",
+	"jch-grill-todo",
+	"openspec-apply-change",
+	"openspec-archive-change",
+	"openspec-bulk-archive-change",
+	"openspec-continue-change",
+	"openspec-explore",
+	"openspec-ff-change",
+	"openspec-new-change",
+	"openspec-onboard",
+	"openspec-propose",
+	"openspec-sync-specs",
+	"openspec-update-change",
+	"openspec-verify-change",
+	"receiving-code-review",
+	"requesting-code-review",
+	"subagent-driven-development",
+	"systematic-debugging",
+	"test-driven-development",
+	"using-git-worktrees",
+	"using-superpowers",
+	"verification-before-completion",
+	"writing-plans",
+	"writing-skills",
+]);
+
+export function hasBundledSpecDrivenSkill(name: string): boolean {
+	return bundledSkillNames.has(name);
+}
+
 function inside(root: string, target: string): boolean {
 	const relative = path.relative(root, target);
 	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
@@ -144,11 +185,15 @@ async function extractResources(): Promise<SpecDrivenResources> {
 			throw new Error(`Incomplete spec-driven archive (${required}); run bun run gen:spec-driven-resources.`);
 		}
 	}
+	const unmatchedSkills = new Set(bundledSkillNames);
 	for (const skill of manifest.skills) {
+		if (!unmatchedSkills.delete(skill.name)) throw new Error(`Unexpected bundled skill in manifest: ${skill.name}`);
 		if (!declaredPaths.has(skill.path)) {
 			throw new Error(`Incomplete spec-driven skill (${skill.path}); run bun run gen:spec-driven-resources.`);
 		}
 	}
+	if (unmatchedSkills.size > 0)
+		throw new Error(`Missing bundled skills in manifest: ${[...unmatchedSkills].join(", ")}`);
 	for (const file of manifest.files) {
 		const archived = archiveFiles.get(file.path);
 		if (

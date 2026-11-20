@@ -26,7 +26,8 @@
 import { dlopen, FFIType } from "bun:ffi";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getLogPath, prepareLogDirectory } from "./dirs";
+import { prepareLogDirectory } from "./dirs";
+import { prepareStderrLog, setLogFileObserver } from "./logger";
 
 const STDOUT_FILENO = 1;
 const STDERR_FILENO = 2;
@@ -79,21 +80,13 @@ function stderrSharesStdoutTerminal(): boolean {
 /** Saved dup of the real stderr while suppression is active, else null. */
 let savedStderrFd: number | null = null;
 
-/** Newest log file the guard knows about; see {@link setStderrRedirectTarget}. */
+/** Destination of a non-default sink that explicitly reported its active file. */
 let redirectTarget: string | null = null;
 
-function openStderrLog(filePath: string): number {
-	// The logger creates its directory lazily; stderr can be redirected first.
-	if (!prepareLogDirectory(path.dirname(filePath))) return fs.openSync(filePath, "a");
-	const fd = fs.openSync(
-		filePath,
-		fs.constants.O_WRONLY |
-			fs.constants.O_CREAT |
-			fs.constants.O_APPEND |
-			fs.constants.O_NOFOLLOW |
-			fs.constants.O_NONBLOCK,
-		0o600,
-	);
+function openStderrLog(filePath: string, create = false): number {
+	const flags = fs.constants.O_WRONLY | fs.constants.O_APPEND | (create ? fs.constants.O_CREAT : 0);
+	if (!prepareLogDirectory(path.dirname(filePath))) return fs.openSync(filePath, flags);
+	const fd = fs.openSync(filePath, flags | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
 	try {
 		const stat = fs.fstatSync(fd);
 		if (!stat.isFile() || stat.uid !== process.getuid!() || (stat.mode & 0o077) !== 0) {
@@ -108,9 +101,8 @@ function openStderrLog(filePath: string): number {
 
 export interface SuppressTerminalStderrOptions {
 	/**
-	 * Redirect target path; defaults to the log file the rotating sink last
-	 * reported (see {@link setStderrRedirectTarget}), then today's omp log
-	 * file, then /dev/null.
+	 * Redirect target path; defaults to the rotating sink's active file, then
+	 * /dev/null if the sink cannot provide a file.
 	 */
 	redirectPath?: string;
 	/** Bypass the same-terminal gate. Tests only. */
@@ -138,12 +130,16 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
 		return false;
 	}
 
-	let redirectFd: number;
+	let redirectFd: number | undefined;
 	try {
-		const redirectPath = options?.redirectPath ?? redirectTarget ?? getLogPath();
-		redirectFd = openStderrLog(redirectPath);
-		redirectTarget = redirectPath;
+		const redirectPath = options?.redirectPath ?? redirectTarget ?? prepareStderrLog();
+		if (redirectPath !== undefined) {
+			redirectFd = openStderrLog(redirectPath, options?.redirectPath !== undefined);
+		}
 	} catch {
+		// The log destination could not be opened; keep native writes off the TUI.
+	}
+	if (redirectFd === undefined) {
 		try {
 			redirectFd = fs.openSync("/dev/null", "w");
 		} catch {
@@ -163,10 +159,9 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
 }
 
 /**
- * Point fd 2 at `logPath`, the log file the rotating sink is currently
- * writing.
+ * Report the active file of a non-default rotating sink and point fd 2 at it.
  *
- * The logger calls this on every sink rotation. Without it fd 2 keeps the
+ * The sink calls this on every rotation. Without it fd 2 keeps the
  * descriptor opened at TUI start, so after local midnight raw stderr — this
  * process's and every child that inherited fd 2 — keeps landing in the
  * previous day's file, which the sink eventually prunes out from under it.
@@ -178,6 +173,10 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
  */
 export function setStderrRedirectTarget(logPath: string): void {
 	redirectTarget = logPath;
+	redirectStderrToLog(logPath);
+}
+
+function redirectStderrToLog(logPath: string): void {
 	if (savedStderrFd === null) return;
 	const libc = libcFdOps();
 	if (!libc) return;
@@ -190,6 +189,8 @@ export function setStderrRedirectTarget(logPath: string): void {
 	libc.dup2(redirectFd, STDERR_FILENO);
 	fs.closeSync(redirectFd);
 }
+
+setLogFileObserver(redirectStderrToLog);
 
 /**
  * Re-point fd 2 at the saved terminal stderr. Safe to call unconditionally:

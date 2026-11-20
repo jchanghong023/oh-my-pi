@@ -141,6 +141,7 @@ import {
 } from "../eval/judgment-batch-events";
 import { onDownloadActivity } from "../downloads/activity";
 import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
+import { CompactFileDiff } from "./compact-file-diff";
 import { CompactThinkingPreview } from "./compact-thinking-preview";
 import { CompactToolOutputPreview } from "./compact-tool-output-preview";
 import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
@@ -359,7 +360,7 @@ import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
 import { imageReferenceHyperlink, setImageBlobWriter } from "@oh-my-pi/pi-tui/prompt/image-references";
 import { describeLoopCondition, evaluateLoopCondition, type LoopConditionVerdict } from "./loop-condition";
-import { isLoopGoalComplete } from "./loop-goal";
+import { isLoopGoalComplete, renderLoopGoalPrompt } from "./loop-goal";
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
@@ -406,6 +407,7 @@ import type {
 	InteractiveModeContext,
 	InteractiveModeInitOptions,
 	InteractiveSelectorDialogOptions,
+	PreparedLoopPrompt,
 	RenderInitialMessagesOptions,
 	RenderSessionContextOptions,
 	ResumeSessionOptions,
@@ -1404,11 +1406,25 @@ export class InteractiveMode implements InteractiveModeContext {
 		width => this.compactToolOutputPreview.compactActivity(width),
 	);
 	/** Read-only Output sits above the activity dock; the input and its trailing chrome win space. */
-	readonly compactToolOutputPreview = new CompactToolOutputPreview(this, () =>
+	readonly compactToolOutputPreview = new CompactToolOutputPreview(
+		this,
+		() =>
+			Math.max(
+				0,
+				this.ui.terminal.rows -
+					Math.max(this.composer.rowsBelow(this.compactToolOutputPreview) ?? 0, this.editor.renderedRows + 4),
+			),
+		(file, width) => this.compactFileDiff.coveredDiff(file, width),
+	);
+	readonly compactFileDiff: CompactFileDiff = new CompactFileDiff(this, () =>
 		Math.max(
 			0,
-			this.ui.terminal.rows -
-				Math.max(this.composer.rowsBelow(this.compactToolOutputPreview) ?? 0, this.editor.renderedRows + 4),
+			Math.min(
+				Math.floor(this.ui.terminal.rows / 3),
+				this.ui.terminal.rows -
+					Math.max(this.composer.rowsBelow(this.compactFileDiff) ?? 0, this.editor.renderedRows + 4) -
+					2,
+			),
 		),
 	);
 	/** Whether {@link statusContainer} rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
@@ -1490,6 +1506,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#loopConditionAbort: AbortController | undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
 	#loopAutoSubmitGeneration = 0;
+	#loopAutoSubmitPendingFor: string | undefined;
+	#loopPromptGeneration = 0;
 	#loopIntervalMs: number | undefined;
 	#pendingLoopIterations = 0;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
@@ -2194,6 +2212,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!options?.viewOnly) this.#inputController.restoreCompactionQueueToEditor();
 		this.compactThinkingPreview.clear();
 		this.compactToolOutputPreview.clear();
+		this.compactFileDiff.clear();
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.lastAssistantUsage = undefined;
@@ -2315,6 +2334,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
 		this.settings = session.settings;
+		session.getLatestTurnFileChanges();
 		const preferences = {
 			quiet: cfgStartupQuiet.get(settings),
 			composerShape: cfgComposerShape.get(settings),
@@ -2751,6 +2771,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.attachmentChipsContainer,
 				this.editorTopGapContainer,
 				this.hookWidgetContainerAbove,
+				this.compactFileDiff,
 				this.compactToolOutputPreview,
 				this.compactThinkingPreview,
 				// Keep a pending ask next to the composer, ahead of previews when
@@ -2788,6 +2809,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.modelCycleContainer,
 					this.progressHudContainer,
 					this.compactToolOutputPreview,
+					this.compactFileDiff,
 				],
 				// The working row, the idle status line that replaces it, and the
 				// margin above the editor (the band composer's gap opens when that
@@ -2813,6 +2835,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.statusContainer,
 					{ component: this.#tray, feature: "tray" },
 					this.pendingMessagesContainer,
+					this.compactFileDiff,
 					this.compactToolOutputPreview,
 					this.compactThinkingPreview,
 					this.editorContainer,
@@ -3466,9 +3489,16 @@ export class InteractiveMode implements InteractiveModeContext {
 						this.pauseLoop();
 					} else if (this.loopGoalMode && this.loopPrompt && isLoopGoalComplete(event.messages)) {
 						this.disableLoopMode("Loopgoal completed.");
-					} else if (this.onInputCallback) {
-						if (this.#loopIntervalMs === undefined) this.#scheduleLoopAutoSubmit();
-						else this.armLoopAutoSubmit(this.session.waitForIdle());
+					} else if (
+						this.onInputCallback &&
+						this.#loopAutoSubmitPendingFor !== this.sessionManager.getSessionId()
+					) {
+						if (this.#loopIntervalMs === undefined) {
+							// A compaction-drained prompt may already be polling from admission.
+							if (!this.#loopAutoSubmitTimer) this.#scheduleLoopAutoSubmit();
+						} else {
+							this.armLoopAutoSubmit(this.session.waitForIdle());
+						}
 					}
 				}
 				void this.#handleGoalSessionEvent(event);
@@ -3542,7 +3572,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#scheduleLoopAutoSubmit(): void {
+		if (this.#loopAutoSubmitPendingFor === this.sessionManager.getSessionId()) return;
 		this.#cancelLoopAutoSubmit();
+		this.#startLoopAutoSubmitTimer();
+	}
+
+	#startLoopAutoSubmitTimer(): void {
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
 		if (this.#loopIntervalMs !== undefined && isLoopLimitExhausted(this.loopLimit)) {
 			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
@@ -3578,6 +3613,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#cancelLoopAutoSubmit(): void {
 		this.#loopAutoSubmitGeneration++;
+		this.#loopAutoSubmitPendingFor = undefined;
 		if (this.#loopAutoSubmitTimer) {
 			clearTimeout(this.#loopAutoSubmitTimer);
 			this.#loopAutoSubmitTimer = undefined;
@@ -3777,7 +3813,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
 		// Do not compact or reset a LoopN turn while its native jobs are still settling.
 		// The prompt-only path checks the same gate immediately before advancing the list.
-		if (this.#isAutoSubmitBlocked() || (action !== "prompt" && this.#hasLoopNBackgroundWork())) {
+		if (
+			this.#loopAutoSubmitPendingFor === this.sessionManager.getSessionId() ||
+			this.#isAutoSubmitBlocked() ||
+			(action !== "prompt" && this.#hasLoopNBackgroundWork())
+		) {
 			this.#deferLoopAutoSubmit(() => {
 				void this.#runLoopIteration(action, prompt);
 			});
@@ -3888,13 +3928,16 @@ export class InteractiveMode implements InteractiveModeContext {
 				? "running"
 				: "waiting";
 		this.statusLine.setLoopModeStatus(
-			this.loopModeEnabled && !this.loopNActive
-				? { state, limit: this.loopLimit, condition: this.loopCondition }
+			this.loopModeEnabled
+				? {
+						state,
+						limit: this.loopLimit,
+						condition: this.loopCondition,
+						sequence: this.#loopNPrompts
+							? { current: this.#loopNIndex + 1, total: this.#loopNPrompts.length }
+							: undefined,
+					}
 				: undefined,
-		);
-		this.statusLine.setHookStatus(
-			"loopn",
-			this.#loopNPrompts ? `LoopN · ${this.#loopNIndex + 1}/${this.#loopNPrompts.length}` : undefined,
 		);
 		this.ui.requestRender();
 		this.#notifyModeChanged();
@@ -3902,6 +3945,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	disableLoopMode(message = "Loop mode disabled."): void {
 		const wasEnabled = this.loopModeEnabled;
+		this.#loopPromptGeneration++;
 		this.loopModeEnabled = false;
 		this.loopModePaused = false;
 		this.loopGoalMode = false;
@@ -3919,8 +3963,43 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	prepareLoopPrompt(text: string, capture: boolean): PreparedLoopPrompt {
+		if (!text || !this.loopModeEnabled) return { text };
+		const space = text.indexOf(" ");
+		const command = text.startsWith("/") ? text.slice(1, space === -1 ? undefined : space) : undefined;
+		if (command && this.session.extensionRunner?.getCommand(command)) return { text };
+		if (this.loopGoalMode) {
+			text = renderLoopGoalPrompt(text);
+		} else if (
+			command &&
+			(this.session.customCommands.some(entry => entry.command.name === command) ||
+				this.session.mcpPromptCommands.some(entry => entry.command.name === command))
+		) {
+			// Routing a local command is also a session admission, but it needn't send a model prompt.
+			return { text };
+		}
+		if (!capture) return { text };
+		const generation = this.#loopPromptGeneration;
+		const sessionId = this.sessionManager.getSessionId();
+		return {
+			text,
+			onPromptAdmitted: () => {
+				if (
+					generation !== this.#loopPromptGeneration ||
+					sessionId !== this.sessionManager.getSessionId() ||
+					!this.loopModeEnabled ||
+					this.#isShuttingDown
+				)
+					return false;
+				this.setLoopPrompt(text);
+				return true;
+			},
+		};
+	}
+
 	setLoopPrompt(prompt: string): void {
 		if (!this.loopModeEnabled) return;
+		this.#loopPromptGeneration++;
 		this.#cancelLoopAutoSubmit();
 		// Any manual submit supersedes whatever gate is currently pending, even
 		// one resubmitting identical text: the gate was checking the *previous*
@@ -3934,25 +4013,43 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
-	 * Schedule the next auto-resubmit for a submission that never reached
-	 * {@link getUserInput}. Positional intervals start after that turn settles;
-	 * legacy loops keep their original interrupt-window polling cadence.
+	 * Schedule the next auto-resubmit for a submission that bypassed {@link getUserInput}.
+	 * With an admission signal, legacy loops begin polling at admission; an explicit interval
+	 * always starts after settlement. Neither may submit again before the dispatch succeeds.
 	 */
-	armLoopAutoSubmit(promptPromise: Promise<unknown>): void {
+	armLoopAutoSubmit(promptPromise: Promise<unknown>, admission?: Promise<void>): void {
 		this.#cancelLoopAutoSubmit();
-		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
-		if (this.#loopIntervalMs === undefined) {
-			this.#scheduleLoopAutoSubmit();
-			return;
-		}
+		const active = this.loopModeEnabled && !!this.loopPrompt && !this.#isShuttingDown;
 		const generation = this.#loopAutoSubmitGeneration;
-		void promptPromise.then(
-			() => {
-				if (generation !== this.#loopAutoSubmitGeneration) return;
-				this.#scheduleLoopAutoSubmit();
-			},
-			() => {},
-		);
+		const loopGeneration = this.#loopPromptGeneration;
+		const sessionId = this.sessionManager.getSessionId();
+		if (active) this.#loopAutoSubmitPendingFor = sessionId;
+		const isCurrent = () => {
+			if (!active || generation !== this.#loopAutoSubmitGeneration) return false;
+			return (
+				loopGeneration === this.#loopPromptGeneration &&
+				sessionId === this.sessionManager.getSessionId() &&
+				this.loopModeEnabled &&
+				!this.#isShuttingDown
+			);
+		};
+		const settle = () => {
+			if (generation !== this.#loopAutoSubmitGeneration) return false;
+			this.#loopAutoSubmitPendingFor = undefined;
+			return isCurrent();
+		};
+		const pollFromAdmission = admission !== undefined && this.#loopIntervalMs === undefined;
+		const fail = () => {
+			if (settle()) this.pauseLoop();
+		};
+		if (admission) {
+			void admission.then(() => {
+				if (pollFromAdmission && isCurrent()) this.#startLoopAutoSubmitTimer();
+			}, fail);
+		}
+		void promptPromise.then(() => {
+			if (settle() && !pollFromAdmission) this.#scheduleLoopAutoSubmit();
+		}, fail);
 	}
 
 	/**
@@ -3965,6 +4062,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.disableLoopMode("LoopN stopped.");
 			return;
 		}
+		this.#loopPromptGeneration++;
 		this.loopPrompt = undefined;
 		this.loopModePaused = true;
 		this.#cancelLoopAutoSubmit();
@@ -4027,6 +4125,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		hasPrompt: boolean,
 		intervalMs?: number,
 	): void {
+		this.#loopPromptGeneration++;
 		this.loopModeEnabled = true;
 		this.loopModePaused = false;
 		this.loopPrompt = undefined;
@@ -4710,6 +4809,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (any("display.mode")) {
 			this.hideToolActivity = hideToolActivity;
 			if (!hideToolActivity) this.toolOutputExpanded = false;
+			this.compactFileDiff.clear();
 			for (const child of this.chatContainer.children) {
 				if (
 					!hideToolActivity &&
@@ -8792,6 +8892,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#micCursor = undefined;
 		this.compactThinkingPreview.clear();
 		this.compactToolOutputPreview.clear();
+		this.compactFileDiff.clear();
 		// Stop the shared tool-spinner ticker: a live block missed by per-component
 		// stopAnimation would otherwise keep the shared interval pinning the process.
 		stopSharedSpinnerTicker();

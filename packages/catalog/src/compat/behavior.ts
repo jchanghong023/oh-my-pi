@@ -11,11 +11,6 @@ import type { CompiledMatchList } from "./types";
 
 const behavior = rules.behavior;
 
-/** Whether the model-policy cascade declares this provider, including runtime-only catalogs. */
-export function hasProviderModelRules(provider: string): boolean {
-	return rules.cascade.rules.some(rule => rule.providers?.includes(provider));
-}
-
 function matchesList(match: CompiledMatchList, model: string, modelLower: string): boolean {
 	if (match.exact?.some(candidate => candidate === model)) return true;
 	if (match.prefix?.some(prefix => model.startsWith(prefix))) return true;

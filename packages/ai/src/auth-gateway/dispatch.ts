@@ -66,7 +66,8 @@ export interface AuthGatewayRouteOptions {
 	 */
 	credentials?: {
 		resolve(model: Model<Api>, sessionId: string, signal: AbortSignal): Promise<ResolvedApiKey | undefined>;
-		resolver(model: Model<Api>, sessionId: string): ApiKeyResolver;
+		/** Build the retry resolver with the credential already selected for this request. */
+		resolver(model: Model<Api>, sessionId: string, initialKey: ResolvedApiKey): ApiKeyResolver;
 	};
 	/** Retain provider-native assistant tool turns for this in-process router. */
 	preserveAssistantToolTurns?: boolean;
@@ -239,8 +240,11 @@ export function buildGatewayApiKeyResolver(
 	peer: string,
 	onResolvedKey?: (resolved: ResolvedApiKey) => void,
 ): ApiKeyResolver {
+	if (initialKey.apiKey === NO_AUTH_SENTINEL && initialKey.credentialId === undefined) {
+		return ({ error }) => (error === undefined ? initialKey : undefined);
+	}
 	if (opts.credentials && !opts.client) {
-		const resolver = opts.credentials.resolver(model, sessionId);
+		const resolver = opts.credentials.resolver(model, sessionId, initialKey);
 		return async context => {
 			if (context.error === undefined) return initialKey;
 			const value = await resolver({ ...context, signal: context.signal ?? requestSignal });
@@ -256,9 +260,6 @@ export function buildGatewayApiKeyResolver(
 	const provenance = createOAuthProvenance();
 	provenance.record(initialKey);
 	return async ({ lastChance, error, signal, previousKey }) => {
-		if (initialKey.apiKey === NO_AUTH_SENTINEL && initialKey.credentialId === undefined) {
-			return error === undefined ? initialKey : undefined;
-		}
 		const sig = signal ?? requestSignal;
 		// Only the bearer the failed request actually sent names the rejected
 		// token; a caller that cannot report it keeps the previous behaviour.

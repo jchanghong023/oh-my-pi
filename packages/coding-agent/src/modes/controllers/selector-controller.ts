@@ -2335,6 +2335,7 @@ export class SelectorController {
 			const session = this.ctx.session;
 			try {
 				const result = await logoutProviderForCommand(session, providerId, {
+					selectSingletons: true,
 					selectProvider: () => this.#selectLogoutProvider(),
 					selectAccount: (provider, accounts) => this.#selectLogoutAccount(provider, accounts),
 				});

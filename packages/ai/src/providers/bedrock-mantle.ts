@@ -1,5 +1,6 @@
 import { NO_AUTH_SENTINEL } from "../auth-retry";
 import { type AwsBedrockProviderOptions, resolveAwsBearerToken } from "../registry/aws";
+import { AUTHENTICATED_SENTINEL } from "../registry/types";
 import type { FetchImpl, Model } from "../types";
 import { resolveAwsRegion } from "../utils/aws-profile";
 import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-credentials";
@@ -65,20 +66,32 @@ function createSignedFetch(options: BedrockMantleOptions, region: string): Fetch
 }
 
 function resolveBearerToken(options: BedrockMantleOptions): string | undefined {
+	if (options.requestAuth !== undefined) {
+		const token = (options.requestAuthPrepared ? options.apiKey : options.requestAuth.apiKey)?.trim();
+		return token && token !== NO_AUTH_SENTINEL && token !== AUTHENTICATED_SENTINEL ? token : undefined;
+	}
 	const apiKey = options.apiKey === NO_AUTH_SENTINEL ? undefined : options.apiKey;
 	return resolveAwsBearerToken(apiKey, options.providerOptions?.bearerToken);
 }
 
 export function createBedrockMantleAuthenticatedFetch(options: BedrockMantleOptions = {}): FetchImpl {
-	const region = resolveAwsRegion(options.providerOptions?.region, options.providerOptions?.profile);
 	const bearerToken = resolveBearerToken(options);
-	if (!bearerToken) return createSignedFetch(options, region);
-
+	if (!bearerToken && options.requestAuth === undefined) {
+		const region = resolveAwsRegion(options.providerOptions?.region, options.providerOptions?.profile);
+		return createSignedFetch(options, region);
+	}
 	const baseFetch = options.fetch ?? (globalThis.fetch as FetchImpl);
+	const authHeaders = options.requestAuth?.headers;
+	if (!bearerToken && !authHeaders) return baseFetch;
 	const authenticatedFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 		const headers = new Headers(input instanceof Request ? input.headers : undefined);
 		for (const [name, value] of new Headers(init?.headers)) headers.set(name, value);
-		headers.set("authorization", `Bearer ${bearerToken}`);
+		if (bearerToken) headers.set("authorization", `Bearer ${bearerToken}`);
+		if (authHeaders) {
+			for (const name in authHeaders) {
+				if (Object.hasOwn(authHeaders, name)) headers.set(name, authHeaders[name]);
+			}
+		}
 		return baseFetch(input, { ...init, headers });
 	};
 	return Object.assign(authenticatedFetch, baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {});
@@ -96,6 +109,9 @@ export function prepareBedrockMantleRequest(
 	const region = resolveAwsRegion(options.providerOptions?.region, options.providerOptions?.profile);
 	const resolvedModel = { ...model, baseUrl: model.baseUrl.replaceAll("{region}", encodeURIComponent(region)) };
 	const bearerToken = resolveBearerToken(options);
+	if (options.requestAuth !== undefined) {
+		return { model: resolvedModel, options: { ...options, apiKey: bearerToken, requestAuthPrepared: true } };
+	}
 	if (bearerToken) {
 		return { model: resolvedModel, options: { ...options, apiKey: bearerToken } };
 	}

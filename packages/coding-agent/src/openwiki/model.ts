@@ -165,7 +165,8 @@ async function createRuntimeModel(
 						modelId: model.id,
 						signal,
 					}),
-				resolver: (model, sessionId) => registry.resolver(model, sessionId),
+				resolver: (model, sessionId, initialKey) =>
+					registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl, modelId: model.id, initialKey }),
 			},
 			preserveAssistantToolTurns: true,
 		});

@@ -2646,9 +2646,8 @@ export async function runRootCommand(
 			// Kick off background model discovery only after createAgentSession finishes its parallel
 			// discovery arms; running these concurrently contends for the event loop and stretches
 			// every parallel arm by ~30ms. Interactive startup defers it further, behind the first
-			// frame (see `startDeferredStartupWork`), for the same reason. Offline skips it:
-			// no automatic online discovery.
-			if (!isInteractive && !parsedArgs.offline) modelRegistry.refreshInBackground();
+			// frame (see `startDeferredStartupWork`), for the same reason.
+			if (!isInteractive) modelRegistry.refreshInBackground(parsedArgs.offline ? "offline" : undefined);
 			return result;
 		};
 
@@ -2910,10 +2909,10 @@ export async function runRootCommand(
 				}
 				void session.loadDeferredExtensions();
 				session.startHintCompression();
-				if (!parsedArgs.offline) modelRegistry.refreshInBackground();
+				modelRegistry.refreshInBackground(parsedArgs.offline ? "offline" : undefined);
 				session.validateRetryFallbackChains();
 				if (configuredScope.length > 0) {
-					// Follow online refresh when enabled; offline only rebuilds from the hydrated catalog.
+					// Must follow refreshInBackground: it waits on the in-flight refresh.
 					void rebuildScopedModelsAfterDiscovery(session, parsedArgs, modelRegistry, settingsInstance).catch(
 						error => logger.warn("Scoped model rebuild after discovery failed", { error: String(error) }),
 					);

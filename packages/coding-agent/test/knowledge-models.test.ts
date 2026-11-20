@@ -152,7 +152,7 @@ describe("Knowledge model adapters", () => {
 		]);
 	});
 
-	test("knowledge embedding retries a temporary overload and stops after four attempts", async () => {
+	test("knowledge embedding retries temporary overloads and stops after three attempts", async () => {
 		let calls = 0;
 		let fail = false;
 		const baseUrl = server(async req => {
@@ -169,7 +169,7 @@ describe("Knowledge model adapters", () => {
 		expect(calls).toBe(2);
 		fail = true;
 		await expect(embedding!.embed(["MBIST repair"])).rejects.toThrow();
-		expect(calls).toBe(6);
+		expect(calls).toBe(5);
 	});
 
 	test("explicit embedding configuration sends only its own credentials and orders indexed rows", async () => {

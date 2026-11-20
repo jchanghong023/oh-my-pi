@@ -6,6 +6,9 @@
 
 - The embedded gateway keeps tool turns separate by session and restores Responses tool calls using the IDs returned to the client.
 - Explicit request credentials no longer fall back to a Gemini environment key or appear in raw request recordings.
+- Explicit credentials keep the provider-adapted wire key, do not fall back to an ambient key, and are redacted from Google request dumps and OpenRouter error details.
+- Gateway OAuth retries track the credential rejected by the first request, and Codex keeps rewritten user messages in the correct turn.
+- Windows system proxy bypass rules recognize hostnames with a trailing DNS root dot.
 
 ### Fixed
 

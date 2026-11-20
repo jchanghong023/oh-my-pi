@@ -726,38 +726,6 @@ const completeCompaction: typeof instrumentedCompleteSimple = async (model, cont
 	);
 };
 
-const requestSummaryCompaction: typeof requestRemoteCompaction = async (endpoint, request, signal, options) => {
-	return logger.withLogContext({ call_id: `compact-remote-${crypto.randomUUID()}` }, async () => {
-		const started = performance.now();
-		const fields = {
-			component: "compaction",
-			event: "compaction_remote_summary_request",
-			stage: "request",
-			method: "POST",
-			...logger.diagnosticUrl(endpoint),
-			effective_effort: "not_applicable",
-		};
-		logger.info("Remote compaction summary request started", { ...fields, result: "started" });
-		try {
-			const response = await requestRemoteCompaction(endpoint, request, signal, options);
-			logger.info("Remote compaction summary request completed", {
-				...fields,
-				result: "success",
-				elapsed_ms: performance.now() - started,
-			});
-			return response;
-		} catch (error) {
-			(signal?.aborted ? logger.info : logger.warn)("Remote compaction summary request ended", {
-				...fields,
-				result: signal?.aborted ? "cancelled" : "failed",
-				elapsed_ms: performance.now() - started,
-				...logger.diagnosticError(error),
-			});
-			throw error;
-		}
-	});
-};
-
 /**
  * Build the error thrown when an LLM summarization call ends with
  * `stopReason === "error"`. Carries the provider's HTTP `errorStatus`
@@ -1190,7 +1158,7 @@ async function summarizeConversationWindow(
 		const remote = await withAuth(
 			apiKey,
 			key =>
-				requestSummaryCompaction(
+				requestRemoteCompaction(
 					endpoint,
 					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText, maxTokens },
 					signal,
@@ -1436,7 +1404,7 @@ async function generateShortSummary(
 			const remote = await withAuth(
 				apiKey,
 				key =>
-					requestSummaryCompaction(
+					requestRemoteCompaction(
 						endpoint,
 						{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText, maxTokens },
 						signal,
@@ -1634,6 +1602,31 @@ export function findReadableCompactionIndex(
 	return -1;
 }
 
+/** A durable Goal notice attached to, rather than following, a compaction boundary. */
+export function isCompactionGoalRestoreEntry(entry: SessionEntry | undefined, compactionEntryId: string): boolean {
+	return (
+		entry?.type === "custom_message" &&
+		entry.customType === "goal-auto-orchestrate-context" &&
+		isRecord(entry.details) &&
+		entry.details.source === "goal-auto-orchestrate" &&
+		typeof entry.details.goalId === "string" &&
+		entry.details.compactionEntryId === compactionEntryId
+	);
+}
+
+export function getTrailingCompactionEntry(entries: readonly SessionEntry[]): CompactionEntry | undefined {
+	const last = entries.at(-1);
+	if (last?.type === "compaction") return last;
+	const previous = entries.at(-2);
+	if (
+		previous?.type === "compaction" &&
+		last?.parentId === previous.id &&
+		isCompactionGoalRestoreEntry(last, previous.id)
+	) {
+		return previous;
+	}
+}
+
 /**
  * Pass the caller's warm `tokenizer` (the Agent's for the active model) so the
  * full-branch estimate walk hits its memo; the cold default is for one-shot
@@ -1658,11 +1651,11 @@ function prepareCompactionUnlabeled(
 	activeModel: Model | undefined,
 	tokenizer: Tokenizer,
 ): CompactionPreparation | undefined {
-	const lastEntry = pathEntries[pathEntries.length - 1];
+	const lastEntry = getTrailingCompactionEntry(pathEntries);
 	// A speculative native record may leave uncovered messages before the record.
 	// A trailing boundary this preparation re-expands covers nothing yet.
 	if (
-		lastEntry?.type === "compaction" &&
+		lastEntry &&
 		!lastEntry.providerReplayThroughEntryId &&
 		(!activeModel || remotePreserveReusable(lastEntry.preserveData, activeModel, settings))
 	) {
@@ -2655,8 +2648,10 @@ export async function compact(
 					const inputTokens = getCompactionV2PreserveData(preserveData)?.usedTokens ?? 0;
 					summary = formatRemoteCompactionSummary(inputTokens);
 				} else if (isSplitTurn && turnPrefixMessages.length > 0) {
-					// Generate both summaries in parallel
-					const [historyResult, turnPrefixResult] = await Promise.all([
+					// Generate both summaries in parallel. With a separate remote endpoint,
+					// wait for the CodeAgent prefix request before deciding if an endpoint
+					// error can retry the whole attempt.
+					const summaries = [
 						messagesToSummarize.length > 0 || previousSummaryForCompaction
 							? generateSummary(
 									messagesToSummarize,
@@ -2670,7 +2665,17 @@ export async function compact(
 								)
 							: Promise.resolve("No prior history."),
 						generateTurnPrefixSummary(turnPrefixMessages, model, reserveTokens, apiKey, signal, summaryOptions),
-					]);
+					] as const;
+					const [historyResult, turnPrefixResult] =
+						model.provider === "codeagent" && summaryOptions.remoteEndpoint
+							? await Promise.all([
+									summaries[0].catch(async error => {
+										await summaries[1];
+										throw error;
+									}),
+									summaries[1],
+								])
+							: await Promise.all(summaries);
 					// Merge into single summary
 					summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
 				} else if (messagesToSummarize.length > 0) {

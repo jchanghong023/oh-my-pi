@@ -68,7 +68,10 @@ export function buildAsyncResultBlock(
 	for (const job of jobs) {
 		const jobId = job.jobId ?? "unknown";
 		const status = job.status ?? (job.jobId ? "finished" : undefined);
-		if (status === "completed" || status === "failed" || status === "cancelled" || status === "finished") {
+		if (
+			job.type !== "task" &&
+			(status === "completed" || status === "failed" || status === "cancelled" || status === "finished")
+		) {
 			const isRepresented =
 				job.type && job.jobId && status !== "finished"
 					? (represented ??= settledBackgroundJobs(transcript)).has(`${job.type}:${job.jobId}:${status}`)

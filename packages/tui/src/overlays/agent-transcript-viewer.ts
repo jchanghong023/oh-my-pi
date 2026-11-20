@@ -681,6 +681,8 @@ export class AgentTranscriptViewer implements Component {
 	 * terminal's, so the j/k/g/G scroll hints are omitted.
 	 */
 	describe(_cx: DescribeContext): NativeNode {
+		if (!this.#sendable) this.#editor = undefined;
+		const editor = this.#editor;
 		const ref = this.#deps.registry.get(this.#deps.agentId);
 		const notice = this.#notice ?? (this.#remoteError && !this.#builder.isEmpty ? this.#remoteError : undefined);
 		const placeholder = this.#builder.isEmpty ? this.#placeholder(NATIVE_LINE_WIDTH) : undefined;
@@ -692,6 +694,7 @@ export class AgentTranscriptViewer implements Component {
 			ref?.status,
 			ref?.kind,
 			ref?.parentId,
+			editor !== undefined,
 			this.#model,
 			notice,
 			placeholder,
@@ -734,7 +737,7 @@ export class AgentTranscriptViewer implements Component {
 				),
 			);
 		}
-		if (this.#editor) children.push(this.#editor);
+		if (editor) children.push(editor);
 		if (progress) {
 			const statSpans: TspSpan[] = [];
 			const sep = (): void => {
@@ -780,7 +783,7 @@ export class AgentTranscriptViewer implements Component {
 		}
 		children.push(
 			hintsRow([
-				this.#editor ? actionHint("tui.input.submit", "send") : undefined,
+				editor ? actionHint("tui.input.submit", "send") : undefined,
 				{ keys: [this.#deps.expandKeys[0] ?? "ctrl+o"], label: "expand" },
 			]),
 		);

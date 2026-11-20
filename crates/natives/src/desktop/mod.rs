@@ -2085,10 +2085,11 @@ const fn read_screen_state(_: &DisplaySelector) -> ScreenState {
 }
 
 struct Lifecycle {
-	tx:     Option<flume::Sender<QueuedRequest>>,
-	done:   Option<flume::Receiver<()>>,
-	join:   Option<JoinHandle<()>>,
-	closed: bool,
+	tx:          Option<flume::Sender<QueuedRequest>>,
+	done:        Option<flume::Receiver<()>>,
+	join:        Option<JoinHandle<()>>,
+	closed:      bool,
+	close_error: Option<DesktopError>,
 }
 struct SessionCore {
 	selector:          DisplaySelector,
@@ -2119,10 +2120,11 @@ impl SessionCore {
 		Arc::new(Self {
 			selector,
 			lifecycle: Mutex::new(Lifecycle {
-				tx:     None,
-				done:   None,
-				join:   None,
-				closed: false,
+				tx:          None,
+				done:        None,
+				join:        None,
+				closed:      false,
+				close_error: None,
 			}),
 			capabilities: Arc::default(),
 			display_awake: Arc::default(),
@@ -2193,29 +2195,41 @@ impl SessionCore {
 		// Closed before cancelling, so no request gets a token from after the
 		// cancel and starts behind it, holding the display past this release.
 		let mut lifecycle = self.lifecycle.lock();
-		lifecycle.closed = true;
-		self.display_awake.cancel_and_release(&self.cancellation);
-		let Some(tx) = lifecycle.tx.take() else {
-			return Ok(());
-		};
-		let (rtx, rrx) = flume::bounded(1);
-		tx.send(QueuedRequest {
-			request: Request::Close { reply: rtx },
-			token:   self.cancellation.token(),
-		})
-		.map_err(|_| DesktopError::closed())?;
-		let _ = rrx.recv_timeout(CLOSE_TIMEOUT).map_err(|e| {
-			DesktopError::timeout(format!("timed out closing native desktop worker: {e}"))
-		})?;
-		if let Some(done) = lifecycle.done.take() {
-			done.recv_timeout(CLOSE_TIMEOUT).map_err(|e| {
-				DesktopError::timeout(format!("native desktop worker did not exit: {e}"))
-			})?;
+		if !lifecycle.closed {
+			lifecycle.closed = true;
+			self.display_awake.cancel_and_release(&self.cancellation);
+			if let Some(tx) = lifecycle.tx.take() {
+				let (reply, _) = flume::bounded(1);
+				// The thread exit supersedes the request reply. If the queue is
+				// disconnected, joining below still checks how the thread exited.
+				let _ = tx.send(QueuedRequest {
+					request: Request::Close { reply },
+					token:   self.cancellation.token(),
+				});
+			}
+		}
+		if let Some(error) = &lifecycle.close_error {
+			return Err(error.clone());
+		}
+		// Retain both handles on timeout. A disconnected signal also means the
+		// thread is exiting; join it to distinguish a clean exit from a panic.
+		if let Some(done) = &lifecycle.done
+			&& done.recv_timeout(CLOSE_TIMEOUT) == Err(flume::RecvTimeoutError::Timeout)
+		{
+			// The computer worker uses this specific reason to reject retries on
+			// older addons.
+			return Err(DesktopError::timeout(
+				"native desktop worker did not exit; close can be retried",
+			));
 		}
 		if let Some(join) = lifecycle.join.take() {
-			join
-				.join()
-				.map_err(|_| DesktopError::internal("native desktop worker panicked during close"))?;
+			let result = join.join();
+			lifecycle.done = None;
+			if result.is_err() {
+				let error = DesktopError::internal("native desktop worker panicked during close");
+				lifecycle.close_error = Some(error.clone());
+				return Err(error);
+			}
 		}
 		Ok(())
 	}
@@ -4130,8 +4144,8 @@ mod capture_tests {
 		assert_eq!(core.close().err().unwrap().code, ErrorCode::Timeout);
 		assert_eq!(*awake.lock(), [true, false], "close releases the hold");
 		drop(unblock);
-		let join = core.lifecycle.lock().join.take().unwrap();
-		join.join().unwrap();
+		core.close().unwrap();
+		assert!(core.lifecycle.lock().join.is_none(), "retry joined the native worker");
 		assert_eq!(*awake.lock(), [true, false], "the late return neither holds nor releases again");
 	}
 

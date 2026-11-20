@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fuzzyFind } from "@oh-my-pi/pi-natives";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, offlineFromEnv } from "@oh-my-pi/pi-utils";
 
 const PATH_DELIMITERS = new Set([" ", "\t", '"', "'", "="]);
 
@@ -672,7 +672,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		this.#commands = commands;
 		this.#basePath = basePath;
 		this.#commandUsage = options?.commandUsage;
-		const configured = process.env.FS_SCAN_CACHE_TTL_MS?.trim();
+		const configured = offlineFromEnv() ? process.env.FS_SCAN_CACHE_TTL_MS?.trim() : undefined;
 		if (configured) {
 			const ttl = Number(configured);
 			if (Number.isInteger(ttl) && ttl >= 0 && ttl <= 0xffff_ffff) {

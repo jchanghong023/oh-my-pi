@@ -33,7 +33,7 @@ import {
 import { createAbortSourceTracker } from "../utils/abort";
 import { withReplaySafeStreamRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import type { RawHttpRequestDump } from "../utils/http-inspector";
+import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
@@ -791,13 +791,12 @@ const streamOpenAIResponsesOnce = (
 			const routingSessionId = getOpenAIResponsesRoutingSessionId(options);
 			const promptCacheSessionId = getOpenAIPromptCacheKey(options);
 			const apiKey =
-				options?.requestAuth !== undefined
-					? (options.requestAuth.apiKey ?? "")
-					: options?.apiKey || getEnvApiKey(model.provider) || "";
+				options?.apiKey || (options?.requestAuth === undefined ? getEnvApiKey(model.provider) : undefined);
 			const { headers, copilotPremiumRequests, baseUrl, copilotCacheKey, copilotCacheSnapshot } =
 				resolveOpenAIRequestSetup(model, {
 					apiKey,
 					requestAuth: options?.requestAuth,
+					requestAuthPrepared: options?.requestAuthPrepared,
 					extraHeaders: options?.headers,
 					initiatorOverride: options?.initiatorOverride,
 					messages: context.messages,
@@ -1599,7 +1598,10 @@ const streamOpenAIResponsesOnce = (
 			}
 			// Some providers via OpenRouter include extra details here.
 			const rawMetadata = readOpenRouterRawMetadata(capturedErrorResponse);
-			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
+			// Redact only the supplement without writing another request dump.
+			if (rawMetadata) {
+				output.errorMessage += `\n${await appendRawHttpRequestDumpFor400(rawMetadata, undefined, rawRequestDump)}`;
+			}
 		} finally {
 			webSocketLease?.release();
 		}

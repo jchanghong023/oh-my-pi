@@ -1673,18 +1673,24 @@ impl ExtProc for UnixProc {
 	fn signal_wave(
 		&mut self,
 		sig: Signal,
-		pids: &[u32],
+		children: &[(u32, Option<u32>)],
 		extra: &[crate::proctree::Process],
 		groups: bool,
 	) -> bool {
 		let mut targets = crate::proctree::TerminationTargets::new();
 		for process in extra {
+			if children
+				.iter()
+				.any(|&(pid, _)| i32::try_from(pid).ok() == Some(process.pid()))
+			{
+				continue;
+			}
 			if groups && let Some(pgid) = process.group_id() {
 				targets.add_pgid(pgid);
 			}
 			targets.add_process(process.clone());
 		}
-		for &pid in pids {
+		for &(pid, pgid) in children {
 			let Some(process) = i32::try_from(pid)
 				.ok()
 				.and_then(crate::proctree::Process::from_pid)
@@ -1693,7 +1699,9 @@ impl ExtProc for UnixProc {
 				// be pinned; let the caller use its live process handles.
 				return false;
 			};
-			if groups && let Some(pgid) = process.group_id() {
+			// The handle keeps its launch scope even when an exited leader
+			// can no longer report a group but has left live group members.
+			if groups && let Some(pgid) = pgid.and_then(|id| i32::try_from(id).ok()) {
 				targets.add_pgid(pgid);
 			}
 			targets.add_process(process);

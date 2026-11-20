@@ -10,6 +10,7 @@ import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { ComposerOwner, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import {
 	type Component,
@@ -117,7 +118,9 @@ async function createContext() {
 		refreshAppearance();
 		resetDisplay();
 	});
-	const prompt = vi.fn(async () => {});
+	const prompt = vi.fn(async (_text: string, options?: PromptOptions) => {
+		options?.onPromptAdmitted?.();
+	});
 	const retry = vi.fn(async () => true);
 	const followUp = vi.fn(async (_text: string, _images?: ImageContent[]) => {});
 	const abort = vi.fn(async () => {});
@@ -757,6 +760,8 @@ describe("InputController keybinding setup", () => {
 		expect(ctx.locallySubmittedUserSignatures.has("follow up after current response\u00000")).toBe(true);
 		expect(spies.prompt).toHaveBeenCalledWith("follow up after current response", {
 			streamingBehavior: "followUp",
+			images: undefined,
+			onPromptAdmitted: expect.any(Function),
 		});
 		expect(spies.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
 	});
@@ -770,8 +775,11 @@ describe("InputController keybinding setup", () => {
 		await controller.handleFollowUp();
 
 		expect(ctx.locallySubmittedUserSignatures.has("plain idle submit\u00000")).toBe(true);
-		// Idle submit calls prompt() with no streamingBehavior (images forwarded, undefined here).
-		expect(spies.prompt).toHaveBeenCalledWith("plain idle submit", { images: undefined });
+		expect(spies.prompt).toHaveBeenCalledWith("plain idle submit", {
+			streamingBehavior: "followUp",
+			images: undefined,
+			onPromptAdmitted: expect.any(Function),
+		});
 	});
 
 	it("surfaces and recovers from an idle follow-up dispatch failure", async () => {
@@ -1009,14 +1017,28 @@ describe("InputController keybinding setup", () => {
 		const { InputController, ctx, editor, spies } = await createContext();
 		Object.assign(ctx.session, { isStreaming: true });
 		// Queued follow-ups resolve with the run; admission is what a queued `/compact` waits for.
-		spies.prompt.mockImplementation(() => new Promise(() => {}));
+		const runFinished = Promise.withResolvers<void>();
+		spies.prompt.mockImplementation((_text, options) => {
+			options?.onPromptAdmitted?.();
+			return runFinished.promise;
+		});
 		const controller = new InputController(ctx);
 
 		editor.setText("sent before the compaction");
-		void controller.handleFollowUp();
-		await controller.waitForSubmissionDispatches();
-
-		expect(spies.prompt).toHaveBeenCalledTimes(1);
+		const submitted = controller.handleFollowUp();
+		let dispatched = false;
+		const waiting = controller.waitForSubmissionDispatches().then(() => {
+			dispatched = true;
+		});
+		try {
+			await Bun.sleep(0);
+			expect(spies.prompt).toHaveBeenCalledTimes(1);
+			expect(dispatched).toBe(true);
+		} finally {
+			runFinished.resolve();
+			await submitted;
+			await waiting;
+		}
 	});
 
 	it("tracks an Enter submission until it reaches the session", async () => {
@@ -1061,10 +1083,10 @@ describe("InputController keybinding setup", () => {
 		await new InputController(ctx).handleFollowUp();
 
 		expect(ctx.yieldCompaction).toBeUndefined();
-		expect(spies.prompt).toHaveBeenCalledWith("for the new conversation", {
-			streamingBehavior: "followUp",
-			images: undefined,
-		});
+		expect(spies.prompt).toHaveBeenCalledWith(
+			"for the new conversation",
+			expect.objectContaining({ streamingBehavior: "followUp", onPromptAdmitted: expect.any(Function) }),
+		);
 		expect(editor.getText()).toBe("/compact");
 	});
 

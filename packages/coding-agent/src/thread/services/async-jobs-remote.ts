@@ -270,6 +270,7 @@ export class RemoteAsyncJobManager implements AsyncJobManagerApi {
 			onProgress: options?.onProgress,
 			queued: options?.queued,
 			foreground: options?.foreground,
+			suppressDelivery: options?.suppressDelivery,
 			intent: options?.intent,
 			feed: feed?.wire(),
 		};

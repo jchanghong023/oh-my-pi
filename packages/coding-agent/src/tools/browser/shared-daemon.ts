@@ -348,7 +348,10 @@ export interface SharedBrowserHealthDeps {
 	probeCapMs?: number;
 }
 
-/** In-flight checks per shared browser unit, so the tabs of one failed sweep share one stop round. */
+/** A generation guard ties a stop result to the browser a strict caller used. */
+type SharedBrowserHealthScope = SharedTargetScope & { generation?: string };
+
+/** In-flight checks for the same unit and generation guard share one stop round. */
 const reachabilityChecks = new Map<string, Promise<boolean>>();
 
 /**
@@ -371,10 +374,10 @@ const reachabilityChecks = new Map<string, Promise<boolean>>();
  * Best-effort: never throws, and returns true only when the daemon confirmed the stop.
  */
 export function stopSharedBrowserIfUnreachable(
-	scope: SharedTargetScope,
+	scope: SharedBrowserHealthScope,
 	deps: SharedBrowserHealthDeps = {},
 ): Promise<boolean> {
-	const key = `${scope.projectDir}\u0000${scope.daemonName}`;
+	const key = `${scope.projectDir}\u0000${scope.daemonName}\u0000${scope.generation ?? ""}`;
 	const inFlight = reachabilityChecks.get(key);
 	if (inFlight) return inFlight;
 	// The body bounds every phase it can see. This outer race is what guarantees
@@ -394,7 +397,10 @@ export function stopSharedBrowserIfUnreachable(
 }
 
 /** One reachability round. Resolves false for every non-destructive outcome; never rejects. */
-async function checkSharedBrowserReachable(scope: SharedTargetScope, deps: SharedBrowserHealthDeps): Promise<boolean> {
+async function checkSharedBrowserReachable(
+	scope: SharedBrowserHealthScope,
+	deps: SharedBrowserHealthDeps,
+): Promise<boolean> {
 	const signal = deps.signal ?? AbortSignal.timeout(HEALTH_CHECK_BUDGET_MS);
 	const deadlineAt = Date.now() + HEALTH_CHECK_BUDGET_MS;
 	try {
@@ -402,6 +408,7 @@ async function checkSharedBrowserReachable(scope: SharedTargetScope, deps: Share
 		const identity: UnitIdentity = { kind: "proc", scope: projectScope(scope.projectDir), key: scope.daemonName };
 		const existing = await describeUnit(client, identity, signal);
 		if (!existing || !isLiveUnit(existing)) return false;
+		if (scope.generation !== undefined && scope.generation !== existing.generation) return false;
 		const wsEndpoint = wsEndpointOf(existing);
 		// No endpoint stamped yet: still starting (or never became ready). The
 		// acquire path owns that state; stopping here would race a cross-process
@@ -446,7 +453,7 @@ async function checkSharedBrowserReachable(scope: SharedTargetScope, deps: Share
 		// snapshot proves the daemon actually ended. Reporting a stop that never
 		// happened would let the caller forget targets that are still open —
 		// exactly the leak this check exists to prevent.
-		if (stopped?.state !== "exited" && stopped?.state !== "failed") {
+		if (stopped?.generation !== existing.generation || (stopped.state !== "exited" && stopped.state !== "failed")) {
 			logger.debug("Shared browser stop was not confirmed", { daemon: scope.daemonName, state: stopped?.state });
 			return false;
 		}

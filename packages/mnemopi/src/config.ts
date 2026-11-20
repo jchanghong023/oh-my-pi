@@ -79,15 +79,12 @@ export function embeddingDim(env: Env = process.env): number {
 }
 
 export function embeddingApiKey(env: Env = process.env): string {
-	return envString(
-		"MNEMOPI_EMBEDDING_API_KEY",
-		envString("OPENROUTER_API_KEY", envString("OPENAI_API_KEY", "", env), env),
-		env,
-	);
+	const openAiKey = isOpenRouterEmbeddingUrl(embeddingApiUrl(env)) ? "" : envString("OPENAI_API_KEY", "", env);
+	return envString("MNEMOPI_EMBEDDING_API_KEY", envString("OPENROUTER_API_KEY", openAiKey, env), env);
 }
 
 export function embeddingApiUrl(env: Env = process.env): string {
-	return envString("MNEMOPI_EMBEDDING_API_URL", envString("OPENROUTER_BASE_URL", DEFAULT_EMBEDDING_API_URL, env), env);
+	return env.MNEMOPI_EMBEDDING_API_URL || env.OPENROUTER_BASE_URL || DEFAULT_EMBEDDING_API_URL;
 }
 
 export function embeddingsViaApi(env: Env = process.env): boolean {
@@ -132,16 +129,14 @@ export function isOpenRouterEmbeddingUrl(baseUrl: string | undefined): boolean {
 export function isApiEmbeddingModel(model = embeddingModel(), env: Env = process.env): boolean {
 	if (model.startsWith("openai/") || model.includes("text-embedding") || model.startsWith("text-embedding"))
 		return true;
-	const baseUrl = envString("MNEMOPI_EMBEDDING_API_URL", envString("OPENROUTER_BASE_URL", "", env), env);
-	if (baseUrl && !isOpenRouterEmbeddingUrl(baseUrl)) return true;
+	if (!isOpenRouterEmbeddingUrl(embeddingApiUrl(env))) return true;
 	return embeddingsViaApi(env);
 }
 
 export function apiEmbeddingsAvailable(env: Env = process.env): boolean {
 	if (embeddingsDisabled(env)) return false;
 	if (!isApiEmbeddingModel(embeddingModel(env), env)) return false;
-	const baseUrl = envString("MNEMOPI_EMBEDDING_API_URL", envString("OPENROUTER_BASE_URL", "", env), env);
-	return Boolean(baseUrl && !isOpenRouterEmbeddingUrl(baseUrl)) || Boolean(embeddingApiKey(env));
+	return !isOpenRouterEmbeddingUrl(embeddingApiUrl(env)) || Boolean(embeddingApiKey(env));
 }
 
 export function workingMemoryMaxItems(env: Env = process.env): number {

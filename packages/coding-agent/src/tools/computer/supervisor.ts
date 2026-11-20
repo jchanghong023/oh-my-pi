@@ -214,8 +214,9 @@ export class ComputerSupervisor implements ComputerController {
 	/** A worker was started, so its sessions may have counted stops under the key. */
 	#started = false;
 	#closed = false;
+	#nativeClose?: PromiseWithResolvers<void>;
+	#strictCloseRequested = false;
 	#strictCloseCall?: Promise<void>;
-	#strictCloseCompleted = false;
 	#unsubscribeMessage?: () => void;
 	#unsubscribeError?: () => void;
 
@@ -252,6 +253,7 @@ export class ComputerSupervisor implements ComputerController {
 		if (this.#escapeStopped()) throw new ToolError(ESCAPE_REFUSED_MESSAGE);
 		if (signal?.aborted) throw new ToolAbortError();
 		await this.#start();
+		if (this.#closed) throw new ToolError("Computer session is closed");
 		if (signal?.aborted) throw new ToolAbortError();
 
 		const id = `computer-cap-${++this.#nextId}`;
@@ -294,6 +296,7 @@ export class ComputerSupervisor implements ComputerController {
 		} finally {
 			this.#startingRuns.delete(session);
 		}
+		if (this.#closed) throw new ToolError("Computer session is closed");
 		if (signal?.aborted || epoch !== this.#controlEpoch) throw new ToolAbortError();
 
 		const id = `computer-${++this.#nextId}`;
@@ -379,6 +382,16 @@ export class ComputerSupervisor implements ComputerController {
 	}
 
 	#handleMessage(message: ComputerWorkerOutbound): void {
+		if (message.type === "closed") {
+			this.#nativeClose?.resolve();
+			return;
+		}
+		if (message.type === "close-failed") {
+			const closed = this.#nativeClose;
+			if (message.retryable) this.#nativeClose = undefined;
+			closed?.reject(errorFromPayload(message.error));
+			return;
+		}
 		if (message.type === "ready") {
 			this.#startResolve?.();
 			this.#startResolve = undefined;
@@ -578,12 +591,19 @@ export class ComputerSupervisor implements ComputerController {
 
 	async #workerFailed(error: Error): Promise<void> {
 		logger.warn("Computer worker failed", { error: error.message });
+		this.#nativeClose?.reject(error);
 		await this.#terminate(error);
 	}
 
 	async #terminate(reason: unknown, strict = false): Promise<void> {
+		// A run deadline, worker error, or concurrent reset must not preempt a strict native close.
+		if (!strict && this.#strictCloseRequested) return;
 		const worker = this.#worker;
-		if (!strict) this.#worker = undefined;
+		if (!strict) {
+			this.#worker = undefined;
+			this.#nativeClose?.reject(reason);
+			this.#nativeClose = undefined;
+		}
 		this.#startPromise = undefined;
 		this.#startReject?.(reason);
 		this.#startReject = undefined;
@@ -604,6 +624,7 @@ export class ComputerSupervisor implements ComputerController {
 		if (strict) {
 			await worker?.terminate();
 			if (this.#worker === worker) this.#worker = undefined;
+			this.#nativeClose = undefined;
 		} else {
 			await worker?.terminate().catch(() => undefined);
 		}
@@ -615,42 +636,33 @@ export class ComputerSupervisor implements ComputerController {
 	}
 
 	async close(options?: { strict?: boolean }): Promise<void> {
-		if (options?.strict) {
-			if (this.#strictCloseCompleted) return;
-			this.#strictCloseCall ??= (async () => {
-				this.#closed = true;
-				if (this.#started) {
-					try {
-						this.#escapeStops.forget(this.#escapeKey);
-					} catch {
-						// Older addons kept no Escape counter; the worker must still close.
-					}
-				}
-				const worker = this.#worker;
-				if (worker) {
-					const closed = Promise.withResolvers<void>();
-					const unsubscribe = worker.onMessage(message => {
-						if (message.type === "closed") closed.resolve();
-					});
-					try {
-						worker.send({ type: "close" });
-						await withTimeout(closed.promise, this.#timeouts.closeMs, "Timed out closing computer worker");
-					} catch {
-						// The existing bounded fallback must itself succeed in strict mode.
-					} finally {
-						unsubscribe();
-					}
-					await this.#terminate(new ToolError("Computer session closed"), true);
-				}
-				this.#strictCloseCompleted = true;
-			})().catch(error => {
+		if (options?.strict || this.#strictCloseRequested) {
+			this.#closed = true;
+			this.#strictCloseRequested = true;
+			this.#strictCloseCall ??= this.#closeStrict().catch(error => {
 				this.#strictCloseCall = undefined;
 				throw error;
 			});
-			return this.#strictCloseCall;
+			// Bound this caller, not the close handshake. A later call can still receive its final result.
+			return withTimeout(this.#strictCloseCall, this.#timeouts.closeMs, "Timed out closing computer worker");
 		}
 		if (this.#closed) return;
 		this.#closed = true;
+		await this.#shutdown();
+		if (this.#strictCloseRequested) return this.close({ strict: true });
+		this.#forgetEscapeStops();
+	}
+
+	async #closeStrict(): Promise<void> {
+		const worker = this.#worker;
+		if (worker) {
+			await this.#requestNativeClose(worker);
+			await this.#terminate(new ToolError("Computer session closed"), true);
+		}
+		this.#forgetEscapeStops();
+	}
+
+	#forgetEscapeStops(): void {
 		if (this.#started) {
 			try {
 				this.#escapeStops.forget(this.#escapeKey);
@@ -658,27 +670,37 @@ export class ComputerSupervisor implements ComputerController {
 				// An addon without the Escape exports kept no count to drop; the worker must still close.
 			}
 		}
-		await this.#shutdown();
 	}
 
 	/** Asks the worker to close its native session, then terminates it; a later `#start()` spawns a new one. */
 	async #shutdown(): Promise<void> {
 		const worker = this.#worker;
 		if (!worker) return;
-		const closed = Promise.withResolvers<void>();
-		const unsubscribe = worker.onMessage(message => {
-			if (message.type === "closed") closed.resolve();
-		});
 		try {
-			worker.send({ type: "close" });
-			await withTimeout(closed.promise, this.#timeouts.closeMs, "Timed out closing computer worker");
+			await withTimeout(
+				this.#requestNativeClose(worker),
+				this.#timeouts.closeMs,
+				"Timed out closing computer worker",
+			);
 		} catch {
 			// Forced termination below is the bounded close fallback.
 		} finally {
-			unsubscribe();
+			// Strict close, if requested in the meantime, will still wait for native confirmation.
 			// A crash while closing already terminated this worker; a call since may have started its successor.
 			if (this.#worker === worker) await this.#terminate(new ToolError("Computer session closed"));
 		}
+	}
+
+	#requestNativeClose(worker: ComputerWorkerHandle): Promise<void> {
+		if (this.#nativeClose) return this.#nativeClose.promise;
+		const closed = Promise.withResolvers<void>();
+		this.#nativeClose = closed;
+		try {
+			worker.send({ type: "close" });
+		} catch (error) {
+			closed.reject(error);
+		}
+		return closed.promise;
 	}
 }
 
@@ -773,31 +795,25 @@ export async function releaseComputerSessionsForOwner(
 	options?: { strict?: boolean },
 ): Promise<void> {
 	if (!ownerId) return;
-	if (options?.strict) {
-		const controllers = ownedSupervisors.get(ownerId);
-		if (!controllers) {
-			ownerTurns.delete(ownerId);
-			return;
-		}
-		const results = await Promise.allSettled(
-			Array.from(controllers, async controller => {
-				await controller.close({ strict: true });
-				controllers.delete(controller);
-			}),
-		);
-		const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
-		if (failures.length) throw new AggregateError(failures, "Failed closing owned computer sessions");
-		if (ownedSupervisors.get(ownerId) === controllers && controllers.size === 0) {
-			ownedSupervisors.delete(ownerId);
-			ownerTurns.delete(ownerId);
-		}
+	const controllers = ownedSupervisors.get(ownerId);
+	if (!controllers) {
+		ownerTurns.delete(ownerId);
 		return;
 	}
-	ownerTurns.delete(ownerId);
-	const controllers = ownedSupervisors.get(ownerId);
-	if (!controllers) return;
-	ownedSupervisors.delete(ownerId);
-	await Promise.allSettled(Array.from(controllers, controller => controller.close()));
+	const results = await Promise.allSettled(
+		Array.from(controllers, async controller => {
+			await controller.close(options);
+			controllers.delete(controller);
+		}),
+	);
+	if (ownedSupervisors.get(ownerId) === controllers && controllers.size === 0) {
+		ownedSupervisors.delete(ownerId);
+		ownerTurns.delete(ownerId);
+	}
+	if (options?.strict) {
+		const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+		if (failures.length) throw new AggregateError(failures, "Failed closing owned computer sessions");
+	}
 }
 
 /** Verifies computer worker startup, messaging, and bounded shutdown. */
@@ -811,6 +827,7 @@ export async function smokeTestComputerWorker(
 		const unsubscribeMessage = worker.onMessage(received => {
 			if (received.type === expected) response.resolve();
 			else if (received.type === "result" && !received.ok) response.reject(errorFromPayload(received.error));
+			else if (received.type === "close-failed") response.reject(errorFromPayload(received.error));
 		});
 		const unsubscribeError = worker.onError(error => response.reject(error));
 		try {

@@ -89,11 +89,35 @@ pub(crate) const SYMLINK_PREFIX: &[u8] = b"/rsyncd-munged/";
 /// `base` joined with a (possibly absolute) entry name.
 fn join_name(base: &Path, name: &[u8]) -> io::Result<PathBuf> {
 	if is_absolute_bytes(name) {
+		// A normalized absolute merge/anchor name on a verbatim base's volume
+		// must be opened in that namespace, not through Win32 normalization.
+		if is_verbatim(base)
+			&& let Some(root) = base.ancestors().last()
+		{
+			let root_name = path_bytes(root);
+			let prefix = root_name.strip_suffix(b"/").unwrap_or(&root_name);
+			if let Some(tail) = name.strip_prefix(prefix)
+				&& (tail.is_empty() || tail.starts_with(b"/"))
+			{
+				let mut out = root.to_path_buf();
+				push_rel(&mut out, tail)?;
+				return Ok(out);
+			}
+		}
 		return bytes_path(name).map(Path::to_path_buf);
 	}
 	let mut out = base.to_path_buf();
 	push_rel(&mut out, name)?;
 	Ok(out)
+}
+
+fn is_verbatim(path: &Path) -> bool {
+	paths::verbatim_prefix_offset(path.as_os_str().as_encoded_bytes()).is_some()
+}
+
+/// Slice a parent at `slash` without turning a rooted drive path into `C:`.
+fn operand_parent_len(slash: usize, volume_root: Option<usize>) -> usize {
+	if slash == 0 || volume_root == Some(slash + 1) { slash + 1 } else { slash }
 }
 
 /// `st_rdev` → (major, minor).
@@ -307,6 +331,9 @@ struct Base {
 	/// As given (None = the starting directory), for `--debug=FLIST3`.
 	dir: Option<Vec<u8>>,
 	abs: PathBuf,
+	/// An explicit verbatim operand is distinct from an ordinary operand with
+	/// the same matching bytes, even when the shell's cwd is itself verbatim.
+	verbatim_operand: bool,
 }
 
 /// A remembered operand root (upstream sender_source_root).
@@ -372,12 +399,18 @@ struct Counts {
 	total_size: i64,
 }
 
+struct Source {
+	name: Vec<u8>,
+	/// Only verbatim operands need a separate native spelling.
+	native: Option<Vec<u8>>,
+}
+
 /// Sender-side file-list builder (send_file_list / send_extra_file_list).
 pub(crate) struct Scanner {
 	ctx: Ctx,
 	filters: Filters,
 	files_from: Option<Box<dyn Read + Send>>,
-	sources: Vec<Vec<u8>>,
+	sources: Vec<Source>,
 	access: Access,
 	recurse: bool,
 	xfer_dirs: bool,
@@ -428,8 +461,17 @@ impl Scanner {
 		let o = &ctx.opts;
 		let mut srcs = Vec::with_capacity(sources.len());
 		for s in sources {
-			os_bytes(s).map_err(|e| RsyncError::new(RERR_SYNTAX, format!("{e}")))?;
-			srcs.push(path_bytes(Path::new(s)).into_owned());
+			let bytes = os_bytes(s).map_err(|e| RsyncError::new(RERR_SYNTAX, format!("{e}")))?;
+			let name = path_bytes(Path::new(s)).into_owned();
+			let native = if paths::verbatim_prefix_offset(bytes).is_some() {
+				if bytes.contains(&b'/') || paths::volume_root_len(&name).is_none() {
+					return Err(RsyncError::new(RERR_SYNTAX, "invalid verbatim source path"));
+				}
+				Some(bytes.to_vec())
+			} else {
+				None
+			};
+			srcs.push(Source { name, native });
 		}
 		let follow = o.copy_links || o.copy_unsafe_links || o.copy_dirlinks || o.insecure_links;
 		let access = if follow {
@@ -587,9 +629,11 @@ impl Scanner {
 	fn anchor_for(&self, base: u32, name: &[u8]) -> io::Result<(Tree, Vec<u8>)> {
 		let full = self.full_path_bytes(base, name);
 		let mut best: Option<&Anchor> = None;
+		let verbatim = is_verbatim(&self.bases[base as usize].abs);
 		for a in &self.anchors {
 			let len = a.full.len();
 			if full.starts_with(&a.full)
+				&& is_verbatim(&a.path) == verbatim
 				&& (a.full.last() == Some(&b'/') || full.len() == len || full.get(len) == Some(&b'/'))
 				&& best.is_none_or(|b| len > b.full.len())
 			{
@@ -838,17 +882,22 @@ impl Scanner {
 	// ----- pathname contexts --------------------------------------------------
 
 	/// change_pathname(NULL, dir, -dirlen): switches the base, false on failure.
-	fn change_pathname(&mut self, dir: Option<&[u8]>) -> bool {
-		if let Some(i) = self.bases.iter().position(|b| b.dir.as_deref() == dir) {
+	fn change_pathname(&mut self, dir: Option<&[u8]>, native: Option<&[u8]>) -> bool {
+		if let Some(i) = self.bases.iter().position(|b| {
+			b.dir.as_deref() == dir
+				&& b.verbatim_operand == native.is_some()
+				&& native.is_none_or(|raw| b.abs.as_os_str().as_encoded_bytes() == raw)
+		}) {
 			self.cur_base = i as u32;
 			let abs = path_bytes(&self.bases[i].abs);
 			self.filters.set_curr_dir(&abs);
 			return true;
 		}
-		let abs = match dir {
-			None => Ok(self.orig.clone()),
-			Some(d) if is_absolute_bytes(d) => bytes_path(d).map(|p| self.ctx.paths.resolve(p)),
-			Some(d) => join_name(&self.orig, d),
+		let abs = match (dir, native) {
+			(_, Some(d)) => bytes_path(d).map(Path::to_path_buf),
+			(None, None) => Ok(self.orig.clone()),
+			(Some(d), None) if is_absolute_bytes(d) => bytes_path(d).map(|p| self.ctx.paths.resolve(p)),
+			(Some(d), None) => join_name(&self.orig, d),
 		};
 		let checked = abs.and_then(|abs| match self.ctx.fs.metadata(&abs) {
 			Ok(m) if m.is_dir() => Ok(abs),
@@ -858,7 +907,7 @@ impl Scanner {
 		match checked {
 			Ok(abs) => {
 				self.filters.set_curr_dir(&path_bytes(&abs));
-				self.bases.push(Base { dir: dir.map(<[u8]>::to_vec), abs });
+				self.bases.push(Base { dir: dir.map(<[u8]>::to_vec), abs, verbatim_operand: native.is_some() });
 				self.cur_base = (self.bases.len() - 1) as u32;
 				true
 			},
@@ -882,30 +931,36 @@ impl Scanner {
 
 	/// remember_sender_source_arg.
 	fn remember_arg(&mut self, name: &[u8], st: &St) {
-		let full = self.full_path_bytes(self.cur_base, name);
-		let (full, id) = if mode_is_dir(st.mode) {
-			(full, st.has_id.then_some((st.dev, st.ino)))
-		} else {
+		let mut full = self.full_path_bytes(self.cur_base, name);
+		let is_dir = mode_is_dir(st.mode);
+		if !is_dir {
 			let Some(slash) = memchr::memrchr(b'/', &full) else {
 				return;
 			};
-			let parent = if slash == 0 { full[..1].to_vec() } else { full[..slash].to_vec() };
-			let Ok(path) = bytes_path(&parent) else {
-				return;
-			};
+			full.truncate(operand_parent_len(slash, paths::volume_root_len(&full)));
+		}
+		let base = &self.base().abs;
+		let native = if is_verbatim(base) {
+			join_name(base, &full)
+		} else {
+			bytes_path(&full).map(Path::to_path_buf)
+		};
+		let Ok(path) = native else {
+			return;
+		};
+		if self.anchors.iter().any(|a| a.path == path && a.full == full) {
+			return;
+		}
+		let id = if is_dir {
+			st.has_id.then_some((st.dev, st.ino))
+		} else {
 			match self.ctx.fs.metadata(&path) {
 				Ok(m) if m.is_dir() => {
 					let s = St::of(&m);
-					(parent, s.has_id.then_some((s.dev, s.ino)))
+					s.has_id.then_some((s.dev, s.ino))
 				},
 				_ => return,
 			}
-		};
-		if self.anchors.iter().any(|a| a.full == full) {
-			return;
-		}
-		let Ok(path) = bytes_path(&full).map(Path::to_path_buf) else {
-			return;
 		};
 		self.anchors.push(Anchor { full, path, id });
 	}
@@ -916,19 +971,18 @@ impl Scanner {
 	fn filter_reader(&self) -> impl Fn(&[u8]) -> io::Result<Option<Vec<u8>>> + use<> {
 		let fs = self.ctx.fs.clone();
 		let base = self.base().abs.clone();
+		#[cfg(windows)]
+		let unc = path_bytes(&base).starts_with(b"//");
 		let insecure = self.ctx.opts.insecure_links;
 		let confine = self.ctx.opts.confine_root.as_ref().map(PathBuf::from);
 		move |p: &[u8]| -> io::Result<Option<Vec<u8>>> {
-			// Filter paths use a Unix-style leading slash, including before a
-			// Windows drive. Restore the native absolute path before opening it.
+			// The filter engine represents UNC matching paths with one leading slash.
 			#[cfg(windows)]
-			let path = if p.len() >= 4 && p[0] == b'/' && p[1].is_ascii_alphabetic() && &p[2..4] == b":/" {
-				bytes_path(&p[1..])?.to_path_buf()
-			} else if p.starts_with(b"/") && path_bytes(&base).starts_with(b"//") {
+			let path = if p.starts_with(b"/") && unc {
 				let mut unc = Vec::with_capacity(p.len() + 1);
 				unc.push(b'/');
 				unc.extend_from_slice(p);
-				bytes_path(&unc)?.to_path_buf()
+				join_name(&base, &unc)?
 			} else {
 				join_name(&base, p)?
 			};
@@ -1678,8 +1732,8 @@ impl Scanner {
 		}
 
 		if self.use_ff {
-			if let Some(dir) = self.sources.first().cloned() {
-				let path = bytes_path(&dir).map(|p| ctx.paths.resolve(p));
+			if let Some(dir) = self.sources.first() {
+				let path = bytes_path(dir.native.as_deref().unwrap_or(&dir.name)).map(|p| ctx.paths.resolve(p));
 				let checked = path.and_then(|p| match ctx.fs.metadata(&p) {
 					Ok(m) if m.is_dir() => Ok(p),
 					Ok(_) => Err(io::Error::from(io::ErrorKind::NotADirectory)),
@@ -1688,7 +1742,7 @@ impl Scanner {
 				match checked {
 					Ok(p) => self.orig = p,
 					Err(e) => {
-						let text = [&b"change_dir "[..], &full_fname(&self.orig, &dir), b" failed"].concat();
+						let text = [&b"change_dir "[..], &full_fname(&self.orig, &dir.name), b" failed"].concat();
 						logger.rsyserr(LogCode::ErrorXfer, &e, &text);
 						return Err(RsyncError::new(RERR_FILESELECT, String::from_utf8_lossy(&text)).at("flist.c", 2791));
 					},
@@ -1696,28 +1750,26 @@ impl Scanner {
 			}
 		}
 		self.bases.clear();
-		self.bases.push(Base { dir: None, abs: self.orig.clone() });
+		self.bases.push(Base { dir: None, abs: self.orig.clone(), verbatim_operand: false });
 		self.cur_base = 0;
 		self.filters.set_curr_dir(&path_bytes(&self.orig));
 
 		let mut implied_dot_dir = 0i32;
-		let mut last_dir: Option<Option<Vec<u8>>> = None;
-		let mut argi = 0usize;
+		let mut sources = std::mem::take(&mut self.sources).into_iter();
 		loop {
 			ctx.check_cancel()?;
-			let fbuf = if self.use_ff {
-				match self.next_files_from()? {
-					Some(line) => line,
-					None => break,
-				}
-			} else {
-				let Some(arg) = self.sources.get(argi).cloned() else {
+			let Source { name, native } = if self.use_ff {
+				let Some(name) = self.next_files_from()? else {
 					break;
 				};
-				argi += 1;
+				Source { name, native: None }
+			} else {
+				let Some(arg) = sources.next() else {
+					break;
+				};
 				arg
 			};
-			self.send_operand(&mut w, fbuf, flags, &mut implied_dot_dir, &mut last_dir)?;
+			self.send_operand(&mut w, name, native.as_deref(), flags, &mut implied_dot_dir)?;
 		}
 
 		let built = start.elapsed();
@@ -1800,15 +1852,22 @@ impl Scanner {
 		&mut self,
 		w: &mut Out,
 		mut fbuf: Vec<u8>,
+		native: Option<&[u8]>,
 		flags: u32,
 		implied_dot_dir: &mut i32,
-		last_dir: &mut Option<Option<Vec<u8>>>,
 	) -> Result<(), RsyncError> {
 		let o = Arc::clone(&self.ctx.opts);
 		let inc = self.ctx.inc_recurse;
+		// Replacing native separators is byte-for-byte; account for the
+		// normalized prefix before cutting the original native parent.
+		let native_offset = native.map_or(0, |raw| raw.len() - fbuf.len());
+		let volume_root = paths::volume_root_len(&fbuf);
+		let bare_volume = volume_root == Some(fbuf.len()) && fbuf.last() != Some(&b'/');
 		let mut name_type;
 		if self.relative {
 			name_type = NORMAL_NAME;
+		} else if bare_volume {
+			name_type = DOTDIR_NAME;
 		} else if fbuf.is_empty() || fbuf.last() == Some(&b'/') {
 			if fbuf == b"./" {
 				fbuf.pop();
@@ -1834,30 +1893,29 @@ impl Scanner {
 			name_type = NORMAL_NAME;
 		}
 
-		let dir: Option<Vec<u8>>;
-		let mut fname: Vec<u8>;
-		if !self.relative {
-			match memchr::memrchr(b'/', &fbuf) {
-				Some(p) => {
-					dir = Some(if p == 0 { b"/".to_vec() } else { fbuf[..p].to_vec() });
-					fname = fbuf[p + 1..].to_vec();
-				},
-				None => {
-					dir = None;
-					fname = fbuf.clone();
-				},
+		let (dir, mut fname, native_end) = if !self.relative {
+			if bare_volume {
+				let end = fbuf.len();
+				(Some(fbuf), b".".to_vec(), Some(end))
+			} else if let Some(p) = memchr::memrchr(b'/', &fbuf) {
+				let end = operand_parent_len(p, volume_root);
+				(Some(fbuf[..end].to_vec()), fbuf[p + 1..].to_vec(), Some(end))
+			} else {
+				(None, fbuf, None)
 			}
 		} else {
-			match memchr::memmem::find(&fbuf, b"/./") {
-				Some(p) => {
-					dir = Some(if p == 0 { b"/".to_vec() } else { paths::clean_local_fname_flags(&fbuf[..p], 0).unwrap_or_else(|p| p) });
-					fname = fbuf[p + 3..].iter().copied().skip_while(|&b| b == b'/').collect();
-				},
-				None => {
-					dir = None;
-					fname = fbuf.clone();
-				},
-			}
+			let (dir, mut fname, native_end) = if let Some(p) = memchr::memmem::find(&fbuf, b"/./") {
+				let end = operand_parent_len(p, volume_root);
+				let dir = paths::clean_local_fname_flags(&fbuf[..end], 0).unwrap_or_else(|p| p);
+				let name = fbuf[p + 3..].iter().copied().skip_while(|&b| b == b'/').collect();
+				(Some(dir), name, Some(end))
+			} else if let Some(end) = volume_root {
+				// Windows volumes are local roots, not transferable components.
+				let name = fbuf[end..].iter().copied().skip_while(|&b| b == b'/').collect();
+				(Some(fbuf[..end].to_vec()), name, Some(end))
+			} else {
+				(None, fbuf, None)
+			};
 			if fname.starts_with(b"./") && fname.len() > 2 && *implied_dot_dir == 0 {
 				*implied_dot_dir = -1;
 			}
@@ -1884,22 +1942,15 @@ impl Scanner {
 				}
 				i = p + 2;
 			}
-		}
+			(dir, fname, native_end)
+		};
 		if fname.is_empty() {
 			fname = b".".to_vec();
 			name_type = DOTDIR_NAME;
 		}
 
-		let switched = if last_dir.as_ref() != Some(&dir) {
-			let ok = self.change_pathname(dir.as_deref());
-			if ok {
-				*last_dir = Some(dir.clone());
-			}
-			ok
-		} else {
-			self.change_pathname(dir.as_deref())
-		};
-		if !switched {
+		let native_dir = native.zip(native_end).map(|(raw, end)| &raw[..native_offset + end]);
+		if !self.change_pathname(dir.as_deref(), native_dir) {
 			if *implied_dot_dir < 0 {
 				*implied_dot_dir = 0;
 			}

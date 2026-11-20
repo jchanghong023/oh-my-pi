@@ -1936,7 +1936,7 @@ describe("TUI inline-image budget", () => {
 	});
 
 	it.each([false, true])(
-		"retransmits Kitty image data when provider history clears placements (placeholders=%s)",
+		"retransmits Kitty image data when a forced history replay clears placements (placeholders=%s)",
 		async unicodePlaceholders => {
 			const originalGraphics = { ...getKittyGraphics() };
 			setKittyGraphics({ unicodePlaceholders });
@@ -1955,9 +1955,7 @@ describe("TUI inline-image budget", () => {
 			tui.setFrameProvider({
 				renderFrame: size => ({
 					viewport: image.render(size.columns),
-					...(replay && acknowledgements === 0
-						? { history: { id: 1, kind: "replay" as const, rows: [], clearScrollback: true } }
-						: {}),
+					...(replay && acknowledgements === 0 ? { history: { id: 1, kind: "replay" as const, rows: [] } } : {}),
 				}),
 				acknowledgeHistory: () => {
 					acknowledgements++;
@@ -1969,7 +1967,7 @@ describe("TUI inline-image budget", () => {
 				expect(writes.join("")).toContain("\x1b_Ga=t");
 				writes.length = 0;
 				replay = true;
-				tui.requestRender();
+				tui.requestRender(true, { clearScrollback: true });
 				await scheduler.settle(term);
 				const output = writes.join("");
 				const deleted = output.indexOf("\x1b_Ga=d,d=A");

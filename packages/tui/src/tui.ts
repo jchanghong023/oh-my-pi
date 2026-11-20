@@ -181,13 +181,11 @@ export interface HistoryBatch {
 	readonly rows: readonly string[];
 	/**
 	 * `append` (the default) adds finalized or naturally emitted rows. `replay`
-	 * is the complete logical ledger; the writer bottom-splits it against the
-	 * leading blank viewport and serializes the remainder plus final viewport in
-	 * one synchronous terminal write.
+	 * is the complete logical ledger; the writer can place adjacent history in
+	 * its own leading viewport padding and serialize the remainder plus final
+	 * viewport in one synchronous terminal write.
 	 */
 	readonly kind?: "append" | "replay";
-	/** Replace stale projected history, rather than retaining it as an append-mode resize does. */
-	readonly clearScrollback?: boolean;
 }
 
 /** One history append or complete replay plus the mutable viewport for a terminal frame. */
@@ -196,8 +194,6 @@ export interface TerminalFramePlan {
 	readonly viewport: readonly string[];
 	/** False when clipped or browsed live content separates replay history from the viewport. */
 	readonly replayHistoryAdjacent?: boolean;
-	/** Leading viewport rows explicitly reserved as replaceable physical replay padding. */
-	readonly replayViewportPaddingRows?: number;
 }
 
 /** Produces bounded terminal frames and retires acknowledged history batches. */
@@ -539,6 +535,15 @@ export interface OverlayHandle {
 	setHidden(hidden: boolean): void;
 	/** Check if overlay is temporarily hidden */
 	isHidden(): boolean;
+}
+
+interface OverlayMouseBounds {
+	overlay: TUI["overlayStack"][number];
+	row: number;
+	col: number;
+	width: number;
+	height: number;
+	firstLine: number;
 }
 
 /**
@@ -1156,13 +1161,15 @@ export class TUI extends Container {
 		/** Focus restored after closing; tracks live focus changes beneath an input-less key holder. */
 		preFocus: Component | null;
 		hidden: boolean;
-		mouseBounds?: { row: number; col: number; width: number; height: number; firstLine: number };
 		/**
 		 * A sheet the user clicked away from (see {@link TUI.#focusFromPointer}):
 		 * it stays up but no longer holds the keys, until focus moves back into it.
 		 */
 		released: boolean;
 	}[] = [];
+
+	#composedOverlayMouseBounds: OverlayMouseBounds | undefined;
+	#paintedOverlayMouseBounds: OverlayMouseBounds | undefined;
 
 	constructor(terminal: Terminal, showHardwareCursor?: boolean, options?: TUIOptions) {
 		super();
@@ -1429,9 +1436,8 @@ export class TUI extends Container {
 	 * the display, while a resize transaction is settling, and while a Ghostty
 	 * image paint is deferred — the painted rows predate the latest spans in
 	 * all three cases, so hits would map to unrelated old rows.
-	 * The origin is in composer rows: a replay paint replaces leading composer
-	 * blanks with history rows and prepends blanks for a short viewport, so
-	 * the painted top is backed out by that net pad.
+	 * The origin is in composer rows, so it accounts for any padding the
+	 * writer prepended to a short viewport during replay.
 	 */
 	getMutableViewport(): { top: number; length: number } {
 		if (
@@ -1651,6 +1657,7 @@ export class TUI extends Container {
 		this.terminal.start(
 			data => this.#handleInput(data),
 			() => {
+				this.#paintedOverlayMouseBounds = undefined;
 				if (this.#nativeLive) {
 					// The terminal lays the surface out: a resize only refreshes the
 					// width `rows` fallback nodes render at. No replay.
@@ -1854,6 +1861,7 @@ export class TUI extends Container {
 	 * the surface opens where the rows began.
 	 */
 	#eraseRowPaintForNative(): void {
+		this.#paintedOverlayMouseBounds = undefined;
 		this.#cancelResizeProbe();
 		this.#resizeSettleTimer?.cancel();
 		this.#resizeSettleTimer = undefined;
@@ -2684,18 +2692,10 @@ export class TUI extends Container {
 				plan = provider.renderFrame({ columns: width, rows: height });
 				viewport = Array.from(plan.viewport);
 				if (viewport.length > height) viewport = viewport.slice(0, height);
-			} while (this.#imageBudget.endPass() || this.#prepareHistoryReset(plan.history));
+			} while (this.#imageBudget.endPass());
 			if (plan.history === undefined) return;
 			const acceptedBefore = this.#acceptedHistoryBatchId;
-			this.#emitPlanFrame(
-				width,
-				height,
-				viewport,
-				plan.history,
-				provider,
-				plan.replayHistoryAdjacent,
-				plan.replayViewportPaddingRows,
-			);
+			this.#emitPlanFrame(width, height, viewport, plan.history, provider, plan.replayHistoryAdjacent);
 			if (plan.history.id > acceptedBefore && this.#acceptedHistoryBatchId === acceptedBefore) {
 				throw new Error("History flush did not accept the offered batch");
 			}
@@ -2703,6 +2703,7 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
+		this.#paintedOverlayMouseBounds = undefined;
 		this.#renderSession++;
 		this.#outputDrainWait?.unsubscribe?.();
 		this.#outputDrainWait = undefined;
@@ -3136,10 +3137,12 @@ export class TUI extends Container {
 			const overlay = this.#getTopmostVisibleOverlay();
 			if (overlay?.options?.mouseTracking === true && !overlay.options.fullscreen && overlay.component.routeMouse) {
 				const event = parseSgrMouse(data);
-				const bounds = overlay.mouseBounds;
+				const bounds = this.#paintedOverlayMouseBounds;
 				if (
 					event &&
-					bounds &&
+					bounds?.overlay === overlay &&
+					this.terminal.columns === this.#previousWidth &&
+					this.terminal.rows === this.#previousHeight &&
 					event.row >= bounds.row &&
 					event.row < bounds.row + bounds.height &&
 					event.col >= bounds.col &&
@@ -3402,12 +3405,19 @@ export class TUI extends Container {
 	 * outside the cap for as long as it stays up.
 	 */
 	#compositeVisibleOverlays(viewport: string[], width: number, height: number): string[] {
-		if (this.#getTopmostVisibleOverlay() === undefined) return viewport;
+		this.#composedOverlayMouseBounds = undefined;
+		const top = this.#getTopmostVisibleOverlay();
+		if (top === undefined) return viewport;
 		while (viewport.length < height) viewport.push("");
-		return this.#compositeOverlaysIntoWindow(viewport, width, height);
+		return this.#compositeOverlaysIntoWindow(viewport, width, height, top);
 	}
 
-	#compositeOverlaysIntoWindow(window: string[], termWidth: number, termHeight: number): string[] {
+	#compositeOverlaysIntoWindow(
+		window: string[],
+		termWidth: number,
+		termHeight: number,
+		top?: TUI["overlayStack"][number],
+	): string[] {
 		const result = [...window];
 		for (const entry of this.overlayStack) {
 			if (!this.#isOverlayVisible(entry)) continue;
@@ -3426,8 +3436,15 @@ export class TUI extends Container {
 				overlayLines = overlayLines.slice(firstLine, firstLine + maxHeight);
 			}
 			const { row, col } = this.#resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
-			if (options?.mouseTracking === true && component.routeMouse) {
-				entry.mouseBounds = { row, col, width, height: overlayLines.length, firstLine };
+			if (entry === top && options?.mouseTracking === true && !options.fullscreen && component.routeMouse) {
+				this.#composedOverlayMouseBounds = {
+					overlay: entry,
+					row,
+					col,
+					width,
+					height: overlayLines.length,
+					firstLine,
+				};
 			}
 			for (let i = 0; i < overlayLines.length; i++) {
 				const idx = row + i;
@@ -3609,7 +3626,7 @@ export class TUI extends Container {
 				viewport = viewport.slice(0, height);
 			}
 			viewport = this.#compositeVisibleOverlays(viewport, width, height);
-		} while (this.#imageBudget.endPass() || this.#prepareHistoryReset(plan.history));
+		} while (this.#imageBudget.endPass());
 		if (this.#maybeDeferGhosttyInitialImagePaint()) return;
 		this.#emitPlanFrame(
 			width,
@@ -3618,7 +3635,7 @@ export class TUI extends Container {
 			plan.history,
 			provider,
 			plan.replayHistoryAdjacent,
-			plan.replayViewportPaddingRows,
+			this.#composedOverlayMouseBounds,
 		);
 	}
 	/**
@@ -3860,7 +3877,7 @@ export class TUI extends Container {
 		offered: HistoryBatch | undefined,
 		provider: TerminalFrameProvider | undefined,
 		replayHistoryAdjacent = true,
-		replayViewportPaddingRows = 0,
+		mouseBounds?: OverlayMouseBounds,
 	): void {
 		// Callers composite their overlays inside the budget pass, so `viewportRows`
 		// is already the complete frame. Bound the store here rather than at
@@ -3875,23 +3892,11 @@ export class TUI extends Container {
 		let replayViewportRows = 0;
 		let replayPrependedBlanks = 0;
 		if (history?.kind === "replay") {
-			// The provider may explicitly identify its own physical padding;
-			// other blank rows can be meaningful paragraph separators. Never
-			// replace content, even if an overlay covers a declared pad.
-			let providerPadding = 0;
-			while (
-				providerPadding < replayViewportPaddingRows &&
-				providerPadding < viewportRows.length &&
-				!/\S/.test(viewportRows[providerPadding]!)
-			)
-				providerPadding++;
 			// Providers may omit unused leading rows from a short viewport.
 			replayPrependedBlanks = Math.max(0, height - viewport.length);
 			while (viewport.length < height) viewport.unshift("");
 			// A clipped live prefix makes history and the viewport disjoint.
-			const moved = replayHistoryAdjacent
-				? Math.min(historyRows.length, replayPrependedBlanks + providerPadding)
-				: 0;
+			const moved = replayHistoryAdjacent ? Math.min(historyRows.length, replayPrependedBlanks) : 0;
 			if (moved > 0) {
 				viewport = [...historyRows.slice(historyRows.length - moved), ...viewport.slice(moved)];
 				historyRows = historyRows.slice(0, historyRows.length - moved);
@@ -3907,7 +3912,7 @@ export class TUI extends Container {
 		// Destructive reset (session replace, /tree, explicit clear, or a settled
 		// resize in rebuild mode): erase native history and the viewport,
 		// then repaint from row zero.
-		const destructiveReset = this.#clearScrollbackOnNextRender || history?.clearScrollback === true;
+		const destructiveReset = this.#clearScrollbackOnNextRender;
 		const compactReplay = destructiveReset && classifyTerminalMultiplexerModule()?.expandsRepPadding === true;
 		if (destructiveReset) {
 			this.#providerViewportTop = 0;
@@ -4123,6 +4128,7 @@ export class TUI extends Container {
 		this.#providerViewportPadTop = replayViewportRows - replayPrependedBlanks;
 		this.#previousWidth = width;
 		this.#previousHeight = height;
+		this.#paintedOverlayMouseBounds = mouseBounds;
 		this.#resizeBurstGrew = false;
 		this.#resizeBurstShrank = false;
 		this.#resizeBurstLastHeight = undefined;
@@ -4157,6 +4163,9 @@ export class TUI extends Container {
 	/** Render one frame: alt-screen modal, provider plan, or children fallback. */
 	#doRender(): void {
 		if (this.#stopped) return;
+		// Composition can update a component's row mapping without writing it
+		// (e.g. a deferred Ghostty image paint). Enable hits only after a write.
+		this.#paintedOverlayMouseBounds = undefined;
 		if (this.#nativeLive) {
 			this.#native!.render();
 			return;
@@ -4289,28 +4298,12 @@ export class TUI extends Container {
 	 * buffer carries them off without the repaint that restores them. A latch that
 	 * never reaches a repaint — `stop()` drops it — then deletes nothing.
 	 *
-	 * Must run before composing a latched reset. A reset first discovered in a
-	 * provider's composed history batch uses #prepareHistoryReset to invalidate
-	 * the transmit cache and retry before emitting or acknowledging that frame.
+	 * Must run before composing a latched reset so the frame re-sends its images.
 	 */
 	#forgetTransmittedForPendingReset(): void {
 		if (!this.#clearScrollbackOnNextRender) return;
 		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return;
 		this.#imageBudget.forgetTransmitted();
-	}
-
-	/** Recompose a newly offered destructive history batch before any bytes leave. */
-	#prepareHistoryReset(history: HistoryBatch | undefined): boolean {
-		if (
-			history?.clearScrollback !== true ||
-			history.id <= this.#acceptedHistoryBatchId ||
-			this.#clearScrollbackOnNextRender
-		) {
-			return false;
-		}
-		this.#clearScrollbackOnNextRender = true;
-		this.#forgetTransmittedForPendingReset();
-		return TERMINAL.imageProtocol === ImageProtocol.Kitty;
 	}
 
 	/**
@@ -4328,7 +4321,7 @@ export class TUI extends Container {
 			viewport = this.#compositeVisibleOverlays(viewport, width, height);
 		} while (this.#imageBudget.endPass());
 		if (this.#maybeDeferGhosttyInitialImagePaint()) return;
-		this.#emitPlanFrame(width, height, viewport, undefined, undefined);
+		this.#emitPlanFrame(width, height, viewport, undefined, undefined, true, this.#composedOverlayMouseBounds);
 	}
 
 	/**

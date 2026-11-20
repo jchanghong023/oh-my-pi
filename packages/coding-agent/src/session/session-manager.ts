@@ -1193,6 +1193,7 @@ export class SessionManager {
 	 * 已有 owner 时拒绝第二宿主，不能留下 idle 却没有租约的存活会话。
 	 */
 	acquireRuntimeOwnership(): void {
+		if (!this.#persist) return;
 		const wasRuntimeOwner = this.#runtimeOwnership;
 		this.#runtimeOwnership = true;
 		try {
@@ -1486,11 +1487,16 @@ export class SessionManager {
 		if (writer) void writer.close().catch(() => undefined);
 	}
 
-	async #closeWriterHandle(): Promise<void> {
+	async #closeWriterHandle(retainOnFailure = false): Promise<void> {
 		const writer = this.#writer;
 		if (!writer) return;
 		this.#writer = undefined;
-		await writer.close();
+		try {
+			await writer.close();
+		} catch (error) {
+			if (retainOnFailure && writer.isOpen()) this.#writer = writer;
+			throw error;
+		}
 	}
 
 	#latchIndeterminate(operationError: Error, recoveryErrors: readonly Error[]): SessionPersistenceIndeterminateError {
@@ -3075,20 +3081,26 @@ export class SessionManager {
 		}
 	}
 
-	/** Flush, then close the append writer. */
-	async close(): Promise<void> {
+	/** Flush and close the writer. Strict close seals and releases only after confirmed persistence. */
+	close(options?: { strict?: boolean }): Promise<void> {
+		return options?.strict ? this.#withAtomicPersistenceLock(() => this.#close(true)) : this.#close(false);
+	}
+
+	async #close(strict: boolean): Promise<void> {
 		if (!this.#persist) {
+			if (strict) this.seal();
 			this.#runtimeOwnership = false;
 			return;
 		}
 		let terminalError: Error | undefined;
+		let confirmed = false;
 		try {
 			// Drain even after a latched error: deferred publishes may still
 			// confirm, and no new owner may overlap the terminal writer.
 			await this.#scheduleDiskWork(
 				async () => {
 					const hadWriter = this.#writer !== undefined;
-					await this.#closeWriterHandle();
+					await this.#closeWriterHandle(strict);
 					if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
 						this.#fileIsCurrent = true;
 				},
@@ -3096,8 +3108,10 @@ export class SessionManager {
 			).catch(error => {
 				terminalError = toError(error);
 			});
-			await this.#pendingArtifactCopy?.done;
-			await this.#dropIfEmptyAndNoDraft();
+			if (!strict) {
+				await this.#pendingArtifactCopy?.done;
+				await this.#dropIfEmptyAndNoDraft();
+			}
 			await this.#scheduleDiskWork(
 				async () => {
 					await this.#storage.drain();
@@ -3106,7 +3120,15 @@ export class SessionManager {
 			).catch(error => {
 				terminalError ??= toError(error);
 			});
-			if (
+			if (strict && terminalError && this.#writer?.isOpen()) throw terminalError;
+			if (strict && !this.#released && this.#diskFailure && this.#sessionFile && this.#shouldHaveSessionFile()) {
+				// The runtime lease is still held. Retry the intended journal, not
+				// just the failed append, and clear the failure only on confirmation.
+				await this.#authoritativelyRewriteCurrentStateLocked(this.#diskFailure);
+				this.#notifyDurableEntries();
+				terminalError = undefined;
+			} else if (
+				!strict &&
 				this.#diskFailure &&
 				this.#sessionFile &&
 				this.#storage.defersSyncPublish &&
@@ -3127,22 +3149,29 @@ export class SessionManager {
 			}
 			if (terminalError) throw terminalError;
 			if (this.#diskFailure) throw this.#diskFailure;
+			if (strict) {
+				await this.#pendingArtifactCopy?.done;
+				await this.#dropIfEmptyAndNoDraft();
+				this.seal();
+			}
+			confirmed = true;
 		} finally {
-			// Only this manager's callbacks are released, after all terminal
-			// persistence work, including when close reports a real failure.
-			this.#runtimeOwnership = false;
-			const claim = this.#sessionClaim;
-			const retained = this.#retainedSessionClaim;
-			this.#retainedSessionClaim = undefined;
-			try {
-				claim?.release?.();
-			} finally {
-				if (claim) claim.release = undefined;
-				if (retained && retained !== claim) {
-					try {
-						retained.release?.();
-					} finally {
-						retained.release = undefined;
+			// A failed strict attempt leaves ownership intact for a later retry.
+			if (!strict || confirmed) {
+				this.#runtimeOwnership = false;
+				const claim = this.#sessionClaim;
+				const retained = this.#retainedSessionClaim;
+				this.#retainedSessionClaim = undefined;
+				try {
+					claim?.release?.();
+				} finally {
+					if (claim) claim.release = undefined;
+					if (retained && retained !== claim) {
+						try {
+							retained.release?.();
+						} finally {
+							retained.release = undefined;
+						}
 					}
 				}
 			}
@@ -4564,6 +4593,7 @@ export class SessionManager {
 	 * @param sessionDir Optional dir for /new or /branch; defaults to the file's parent.
 	 * @param options.initialCwd Cwd to use when the file is empty or missing.
 	 * @param options.throwIfMissing Propagate ENOENT instead of creating a new session at a missing path.
+	 * @param options.readOnly Load a snapshot without persistence, breadcrumbs, or runtime ownership.
 	 * @param options.parentSession Parent session file recorded when the file is empty or missing.
 	 */
 	static async open(
@@ -4573,6 +4603,7 @@ export class SessionManager {
 		options?: {
 			initialCwd?: string;
 			parentSession?: string;
+			readOnly?: boolean;
 			suppressBreadcrumb?: boolean;
 			throwIfMissing?: boolean;
 			runtimeOwnership?: boolean;
@@ -4594,9 +4625,9 @@ export class SessionManager {
 			(recordedCwd && !recordedCwdUsable
 				? SessionManager.getDefaultSessionDir(cwd, undefined, storage)
 				: path.dirname(storage instanceof FileSessionStorage ? path.resolve(filePath) : filePath));
-		const manager = new SessionManager(cwd, dir, true, storage);
-		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
-		manager.#runtimeOwnership = options?.runtimeOwnership === true;
+		const manager = new SessionManager(cwd, dir, !options?.readOnly, storage);
+		manager.#suppressBreadcrumb = options?.readOnly === true || options?.suppressBreadcrumb === true;
+		manager.#runtimeOwnership = !options?.readOnly && options?.runtimeOwnership === true;
 		// Freshness gate for fail-closed callers (revive): the cwd probe above
 		// yields, so re-read after it and adopt only the fresh snapshot. A
 		// transcript deleted, truncated, or replaced mid-probe then fails

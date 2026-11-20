@@ -1461,11 +1461,13 @@ impl Filters {
 	}
 
 	fn read_via(&self, rd: &Reader<'_>, path: &[u8]) -> io::Result<Vec<u8>> {
-		if rd.relativize
+		let path = if rd.relativize
 			&& let Some(rel) = self.relative_to_curr(path)
 		{
-			return (rd.read)(rel);
-		}
+			rel
+		} else {
+			path
+		};
 		(rd.read)(os_name(path))
 	}
 

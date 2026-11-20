@@ -67,10 +67,22 @@ import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { ConversationPosition } from "./utils/conversation-position";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { CompactFileDiff } from "./compact-file-diff";
 import type { CompactThinkingPreview } from "./compact-thinking-preview";
 import type { CompactToolOutputPreview } from "./compact-tool-output-preview";
 
+export function isLoopCommand(name: string | undefined): boolean {
+	return name === "loop" || name === "loopgoal" || name === "loopn";
+}
+
+export type PreparedLoopPrompt = {
+	text: string;
+	/** Returns false if the loop changed before the session took the prompt. */
+	onPromptAdmitted?: () => boolean;
+};
+
 export type CompactionQueuedMessage = {
+	/** Follow-up builtins stay as submitted until they reach their position in the drain. */
 	text: string;
 	mode: "steer" | "followUp";
 	images?: ImageContent[];
@@ -209,6 +221,7 @@ export interface InteractiveModeContext {
 	statusContainer: Container;
 	readonly compactThinkingPreview?: Pick<CompactThinkingPreview, "observe">;
 	readonly compactToolOutputPreview?: CompactToolOutputPreview;
+	readonly compactFileDiff?: Pick<CompactFileDiff, "sync" | "toggle">;
 	/** Whether the status/working row rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	readonly statusRowOccupied: boolean;
 	todoContainer: Container;
@@ -241,8 +254,6 @@ export interface InteractiveModeContext {
 	sessionManager: SessionManager;
 	/** Dispose long-lived native resources only during real host shutdown. */
 	registerHostShutdown(dispose: () => Promise<void>): () => void;
-	/** Re-resolve the CLI/settings model scope after a successful OAuth login. */
-	refreshScopedModelsAfterLogin?: () => Promise<void>;
 	/** The current session display name / title. */
 	readonly sessionName: string | undefined;
 	/** Session the transcript/editor/status are attached to: the focused agent's, else `session`. */
@@ -803,8 +814,11 @@ export interface InteractiveModeContext {
 	isGuidedGoalInterviewActive(): boolean;
 	handleLoopCommand(args?: string, goal?: boolean): Promise<string | undefined>;
 	handleLoopNCommand(args?: string): string | undefined;
+	/** Prepare a model prompt with an admission callback scoped to the live loop. */
+	prepareLoopPrompt(text: string, capture: boolean): PreparedLoopPrompt;
 	setLoopPrompt(prompt: string): void;
-	armLoopAutoSubmit(promptPromise: Promise<unknown>): void;
+	/** Anchor polling to admission and positional intervals to dispatch completion. */
+	armLoopAutoSubmit(promptPromise: Promise<unknown>, admission?: Promise<void>): void;
 	disableLoopMode(message?: string): void;
 	cancelGoalContinuation(): void;
 	disableGoalMode(message?: string): void;

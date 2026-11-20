@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { type AgentMessage, createSyntheticToolResultMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, StopReason } from "@oh-my-pi/pi-ai";
 import { GoalContinuationGuard } from "@oh-my-pi/pi-coding-agent/goals/state";
 
@@ -86,7 +86,7 @@ describe("bounded goal tool-call recovery", () => {
 		expect(guard.observe([textTurn()])).toBe("recover");
 	});
 
-	it("stops tool-free errors, truncation and aborts after maintenance instead of continuing on cached evidence", () => {
+	it("stops tool-free terminal failures after maintenance instead of continuing on cached evidence", () => {
 		for (const reason of ["error", "length", "aborted"] as const) {
 			for (const recovering of [false, true]) {
 				const guard = new GoalContinuationGuard();
@@ -94,7 +94,11 @@ describe("bounded goal tool-call recovery", () => {
 				guard.recordActivity(toolTurn.slice(1));
 				expect(guard.observe([textTurn(reason)])).toBe("stop");
 				expect(guard.recoveryPending).toBe(false);
-				expect(guard.stopNotice).toBeUndefined();
+				if (recovering && reason !== "aborted") {
+					expect(guard.stopNotice).toContain("unfinished");
+				} else {
+					expect(guard.stopNotice).toBeUndefined();
+				}
 				// A terminal failure neither spends nor replenishes the recovery quota.
 				expect(guard.observe([textTurn()])).toBe(recovering ? "stop" : "recover");
 			}
@@ -167,15 +171,35 @@ describe("bounded goal tool-call recovery", () => {
 		expect(guard.recoveryPending).toBe(false);
 	});
 
-	it("reports a failed recovery but does not warn on a user abort", () => {
+	it("reports a provider error during recovery despite a partial tool call and its placeholder result", () => {
 		const guard = new GoalContinuationGuard();
-		guard.observe([textTurn()]);
-		expect(guard.observe([textTurn("error")])).toBe("stop");
-		expect(guard.stopNotice).toContain("unfinished");
-		guard.reset();
-		guard.observe([textTurn()]);
-		expect(guard.observe([textTurn("aborted")])).toBe("stop");
+		const toolCall = { type: "toolCall", id: "read-1", name: "read", arguments: {} } as const;
+		const errorMessage = "Provider stream failed";
+		expect(guard.observe([textTurn()])).toBe("recover");
+		expect(
+			guard.observe([
+				{ ...textTurn("error"), content: [toolCall], errorMessage },
+				createSyntheticToolResultMessage(toolCall, "error", errorMessage),
+			]),
+		).toBe("stop");
+		expect(guard.stopNotice).toBe(
+			"Goal automatic continuation stopped: the model request failed during forced-tool recovery. The goal is still unfinished.",
+		);
+		expect(guard.recoveryPending).toBe(false);
+	});
+
+	it("stops a user-aborted recovery without warning even if it left a placeholder tool result", () => {
+		const guard = new GoalContinuationGuard();
+		const toolCall = { type: "toolCall", id: "read-1", name: "read", arguments: {} } as const;
+		expect(guard.observe([textTurn()])).toBe("recover");
+		expect(
+			guard.observe([
+				{ ...textTurn("aborted"), content: [toolCall] },
+				createSyntheticToolResultMessage(toolCall, "aborted"),
+			]),
+		).toBe("stop");
 		expect(guard.stopNotice).toBeUndefined();
+		expect(guard.recoveryPending).toBe(false);
 	});
 
 	it("allows another bounded recovery only after the host explicitly re-arms the continuation stretch", () => {

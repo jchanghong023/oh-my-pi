@@ -1205,6 +1205,7 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 				url: plan.url,
 				body: params,
 				headers: plan.headers,
+				requestAuth: options?.requestAuth,
 			};
 
 			const wireBody = paramsToWireBody(params);

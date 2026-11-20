@@ -8,9 +8,9 @@ import {
 	applyTextEdits,
 	applyTextEditsToString,
 	applyWorkspaceEdit,
+	type ExecutedWorkspaceChange,
 } from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import type { TextEdit } from "@oh-my-pi/pi-coding-agent/lsp/types";
-import { subscribeFsMutation } from "@oh-my-pi/pi-coding-agent/tools/fs-cache-invalidation";
 
 // Rewrite `./moved` → `./renamed` on line 0 of the reference file below.
 const importEdit: TextEdit[] = [
@@ -60,21 +60,14 @@ describe("applyEditsThenRename", () => {
 	});
 });
 
-describe("LSP resource root notifications", () => {
+describe("LSP directory resource operations", () => {
 	let cwd: string;
-	let unsubscribe: () => void;
-	let notifications: Array<{ paths: readonly string[]; reason?: string }>;
 
 	beforeEach(async () => {
 		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "lsp-resource-root-"));
-		notifications = [];
-		unsubscribe = subscribeFsMutation((paths, reason) => {
-			if (paths.some(file => file.startsWith(`${cwd}${path.sep}`))) notifications.push({ paths, reason });
-		});
 	});
 
 	afterEach(async () => {
-		unsubscribe();
 		await fs.rm(cwd, { recursive: true, force: true });
 	});
 
@@ -112,13 +105,10 @@ describe("LSP resource root notifications", () => {
 			}
 			expect(await Bun.file(path.join(target, "nested", "child.py")).text()).toBe("def movedentry(): pass\n");
 			expect(await fs.lstat(source).catch(() => undefined)).toBeUndefined();
-			expect(notifications).toHaveLength(1);
-			expect(notifications[0].paths).toEqual([source, target]);
-			expect(notifications[0].reason).toBeUndefined();
 		});
 	}
 
-	it("notifies the overwrite target root without enumerating its descendants", async () => {
+	it("overwrites a directory without enumerating its descendants", async () => {
 		const source = path.join(cwd, "source");
 		const target = path.join(cwd, "target");
 		await fs.mkdir(source);
@@ -127,7 +117,7 @@ describe("LSP resource root notifications", () => {
 		await Bun.write(path.join(target, "nested", "old.py"), "def displacedentry(): pass\n");
 		const enumerationSpy = denyEnumeration(path.join(target, "nested"));
 		try {
-			await applyWorkspaceEdit(
+			const result = await applyWorkspaceEdit(
 				{
 					documentChanges: [
 						{ kind: "rename", oldUri: uri(source), newUri: uri(target), options: { overwrite: true } },
@@ -135,20 +125,16 @@ describe("LSP resource root notifications", () => {
 				},
 				cwd,
 			);
+			expect(result.executed).toEqual([{ kind: "rename", oldUri: uri(source), newUri: uri(target) }]);
 		} finally {
 			enumerationSpy.mockRestore();
 		}
 		expect(await Bun.file(path.join(target, "moved.py")).text()).toBe("def movedentry(): pass\n");
 		expect(await Bun.file(path.join(target, "nested", "old.py")).exists()).toBe(false);
 		expect(await fs.lstat(source).catch(() => undefined)).toBeUndefined();
-		expect(notifications).toHaveLength(2);
-		expect(notifications[0].paths).toEqual([target]);
-		expect(notifications[0].reason).toBeUndefined();
-		expect(notifications[1].paths).toEqual([source, target]);
-		expect(notifications[1].reason).toBeUndefined();
 	});
 
-	it("notifies the displaced root and restores the target after a real rename failure", async () => {
+	it("restores the displaced directory after a real rename failure", async () => {
 		const source = path.join(cwd, "source");
 		// The kernel rejects moves into a descendant; rollback must restore the displaced target.
 		const target = path.join(source, "target");
@@ -175,14 +161,9 @@ describe("LSP resource root notifications", () => {
 		expect(await Bun.file(path.join(source, "source.py")).text()).toBe("def sourceentry(): pass\n");
 		expect(await Bun.file(path.join(target, "nested", "old.py")).text()).toBe("def restoredentry(): pass\n");
 		expect(executed).toEqual([]);
-		expect(notifications).toHaveLength(2);
-		for (const notification of notifications) {
-			expect(notification.paths).toEqual([target]);
-			expect(notification.reason).toBeUndefined();
-		}
 	});
 
-	it("notifies the deleted directory root without a pre-delete snapshot", async () => {
+	it("deletes a directory without a pre-delete snapshot", async () => {
 		const target = path.join(cwd, "target");
 		await fs.mkdir(path.join(target, "nested"), { recursive: true });
 		await Bun.write(path.join(target, "nested", "child.py"), "def removedentry(): pass\n");
@@ -197,28 +178,20 @@ describe("LSP resource root notifications", () => {
 			enumerationSpy.mockRestore();
 		}
 		expect(await fs.lstat(target).catch(() => undefined)).toBeUndefined();
-		expect(notifications).toHaveLength(1);
-		expect(notifications[0].paths).toEqual([target]);
-		expect(notifications[0].reason).toBeUndefined();
 	});
 });
 
-describe("LSP edit mutation notifications", () => {
+describe("LSP workspace edits", () => {
 	let temp: string;
 	let cwd: string;
-	let notifications: Array<{ paths: readonly string[]; reason?: string }>;
-	let unsubscribe: () => void;
 
 	beforeEach(async () => {
 		temp = await fs.mkdtemp(path.join(os.tmpdir(), "lsp-edits-mutations-"));
 		cwd = path.join(temp, "project");
 		await fs.mkdir(cwd);
-		notifications = [];
-		unsubscribe = subscribeFsMutation((paths, reason) => notifications.push({ paths, reason }));
 	});
 
 	afterEach(async () => {
-		unsubscribe();
 		await fs.rm(temp, { recursive: true, force: true });
 	});
 
@@ -238,18 +211,18 @@ describe("LSP edit mutation notifications", () => {
 		}
 	}
 
-	it("notifies a committed text rename", async () => {
+	it("applies and reports a committed text rename", async () => {
 		await seed({ "engine.py": "def staleidentifier(): pass\n" });
-		await applyWorkspaceEdit(
+		const result = await applyWorkspaceEdit(
 			{ changes: { [uri("engine.py")]: renameSymbol("staleidentifier", "freshbinding") } },
 			cwd,
 		);
 		expect(await Bun.file(path.join(cwd, "engine.py")).text()).toBe("def freshbinding(): pass\n");
-		expect(notifications).toEqual([{ paths: [path.join(cwd, "engine.py")], reason: undefined }]);
+		expect(result.executed).toEqual([{ kind: "edit", uri: uri("engine.py") }]);
 	});
 
 	for (const format of ["changes", "documentChanges"] as const) {
-		it(`notifies the committed prefix when a later ${format} edit fails`, async () => {
+		it(`reports the committed prefix when a later ${format} edit fails`, async () => {
 			await seed({ "first.py": "def initialbinding(): pass\n" });
 			const firstEdits = renameSymbol("initialbinding", "committedentry");
 			const missingEdits = renameSymbol("missing", "unreachable");
@@ -262,13 +235,14 @@ describe("LSP edit mutation notifications", () => {
 								{ textDocument: { uri: uri("missing.py") }, edits: missingEdits },
 							],
 						};
-			await expect(applyWorkspaceEdit(edit, cwd)).rejects.toThrow();
+			const executed: ExecutedWorkspaceChange[] = [];
+			await expect(applyWorkspaceEdit(edit, cwd, change => executed.push(change))).rejects.toThrow();
 			expect(await Bun.file(path.join(cwd, "first.py")).text()).toBe("def committedentry(): pass\n");
-			expect(notifications).toEqual([{ paths: [path.join(cwd, "first.py")], reason: undefined }]);
+			expect(executed).toEqual([{ kind: "edit", uri: uri("first.py") }]);
 		});
 	}
 
-	it("notifies an uncertain failed write", async () => {
+	it("propagates the original error after a partial text write", async () => {
 		await seed({ "engine.py": "def before_failure(): pass\n" });
 		const file = path.join(cwd, "engine.py");
 		const write = Bun.write.bind(Bun);
@@ -286,7 +260,6 @@ describe("LSP edit mutation notifications", () => {
 			writeSpy.mockRestore();
 		}
 		expect(await Bun.file(file).text()).toBe("def partial_write(): pass\n");
-		expect(notifications).toEqual([{ paths: [file], reason: expect.any(String) }]);
 	});
 
 	it("tracks create, overwrite rename and delete at their committed paths", async () => {
@@ -299,8 +272,8 @@ describe("LSP edit mutation notifications", () => {
 			cwd,
 		);
 		expect(await Bun.file(path.join(cwd, "cleared.py")).text()).toBe("");
-		await applyWorkspaceEdit({ documentChanges: [{ kind: "create", uri: uri("created.py") }] }, cwd);
-		expect(notifications.at(-1)).toEqual({ paths: [path.join(cwd, "created.py")], reason: undefined });
+		const creation = await applyWorkspaceEdit({ documentChanges: [{ kind: "create", uri: uri("created.py") }] }, cwd);
+		expect(creation.executed).toEqual([{ kind: "create", uri: uri("created.py") }]);
 		await applyTextEdits(path.join(cwd, "created.py"), [
 			{
 				range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
@@ -308,7 +281,7 @@ describe("LSP edit mutation notifications", () => {
 			},
 		]);
 		expect(await Bun.file(path.join(cwd, "created.py")).text()).toBe("def createdentry(): pass\n");
-		await applyWorkspaceEdit(
+		const move = await applyWorkspaceEdit(
 			{
 				documentChanges: [
 					{
@@ -323,19 +296,17 @@ describe("LSP edit mutation notifications", () => {
 		);
 		expect(await Bun.file(path.join(cwd, "nested/renamed.py")).text()).toBe("def createdentry(): pass\n");
 		expect(await Bun.file(path.join(cwd, "created.py")).exists()).toBe(false);
-		expect(notifications.flatMap(notification => notification.paths)).toEqual(
-			expect.arrayContaining([path.join(cwd, "created.py"), path.join(cwd, "nested/renamed.py")]),
-		);
-		await applyWorkspaceEdit(
+		expect(move.executed).toEqual([{ kind: "rename", oldUri: uri("created.py"), newUri: uri("nested/renamed.py") }]);
+		const deletion = await applyWorkspaceEdit(
 			{ documentChanges: [{ kind: "delete", uri: uri("nested"), options: { recursive: true } }] },
 			cwd,
 		);
 		expect(await Bun.file(path.join(cwd, "nested/renamed.py")).exists()).toBe(false);
-		expect(notifications.at(-1)?.paths).toEqual([path.join(cwd, "nested")]);
+		expect(deletion.executed).toEqual([{ kind: "delete", uri: uri("nested") }]);
 	});
 
 	for (const entrypoint of ["workspace", "references"] as const) {
-		it(`notifies resource roots after a directory rename via ${entrypoint}`, async () => {
+		it(`preserves nested files after a directory rename via ${entrypoint}`, async () => {
 			await seed({
 				"before/engine.py": "def directoryentry(): pass\n",
 				"before/nested/child.py": "def descendantentry(): pass\n",
@@ -351,13 +322,10 @@ describe("LSP edit mutation notifications", () => {
 			expect(await Bun.file(path.join(cwd, "after/engine.py")).text()).toBe("def directoryentry(): pass\n");
 			expect(await Bun.file(path.join(cwd, "after/nested/child.py")).text()).toBe("def descendantentry(): pass\n");
 			expect(await fs.lstat(path.join(cwd, "before")).catch(() => undefined)).toBeUndefined();
-			expect(notifications).toEqual([
-				{ paths: [path.join(cwd, "before"), path.join(cwd, "after")], reason: undefined },
-			]);
 		});
 	}
 
-	it("marks the directory root uncertain after a recursive delete partially fails", async () => {
+	it("propagates the original error after a partial recursive delete", async () => {
 		await seed({
 			"nested/removed.py": "def removedentry(): pass\n",
 			"nested/retained.py": "def retainedentry(): pass\n",
@@ -384,13 +352,9 @@ describe("LSP edit mutation notifications", () => {
 		}
 		expect(await Bun.file(path.join(directory, "removed.py")).exists()).toBe(false);
 		expect(await Bun.file(path.join(directory, "retained.py")).text()).toBe("def retainedentry(): pass\n");
-		expect(notifications).toContainEqual({
-			paths: [directory],
-			reason: expect.any(String),
-		});
 	});
 
-	it("tracks the old and new paths of a rename with reference edits", async () => {
+	it("renames a resource and updates its references", async () => {
 		await seed({
 			"moved.py": "def moved_symbol(): pass\n",
 			"reference.py": "def before_reference(): pass\n",
@@ -403,12 +367,9 @@ describe("LSP edit mutation notifications", () => {
 		expect(await Bun.file(path.join(cwd, "renamed.py")).text()).toBe("def moved_symbol(): pass\n");
 		expect(await Bun.file(path.join(cwd, "moved.py")).exists()).toBe(false);
 		expect(await Bun.file(path.join(cwd, "reference.py")).text()).toBe("def after_reference(): pass\n");
-		expect(notifications.flatMap(notification => notification.paths)).toEqual(
-			expect.arrayContaining(["moved.py", "renamed.py", "reference.py"].map(name => path.join(cwd, name))),
-		);
 	});
 
-	it("notifies restored reference edits after temporary edits were committed", async () => {
+	it("restores reference edits after temporary edits were committed", async () => {
 		await seed({
 			"moved.py": "def moved_symbol(): pass\n",
 			"first.py": "def before_reference(): pass\n",
@@ -446,10 +407,9 @@ describe("LSP edit mutation notifications", () => {
 		expect(await Bun.file(first).text()).toBe("def before_reference(): pass\n");
 		expect(await Bun.file(second).text()).toBe("def second_reference(): pass\n");
 		expect(await Bun.file(path.join(cwd, "moved.py")).text()).toBe("def moved_symbol(): pass\n");
-		expect(notifications.filter(notification => notification.paths.includes(first)).length).toBeGreaterThanOrEqual(2);
 	});
 
-	it("invalidates an overwrite destination restored after a failed resource rename", async () => {
+	it("restores an overwrite destination after a failed resource rename", async () => {
 		await seed({
 			"source.py": "def source_symbol(): pass\n",
 			"target.py": "def target_symbol(): pass\n",
@@ -488,10 +448,9 @@ describe("LSP edit mutation notifications", () => {
 		expect(destinationWasDisplaced).toBe(true);
 		expect(await Bun.file(source).text()).toBe("def source_symbol(): pass\n");
 		expect(await Bun.file(target).text()).toBe("def target_symbol(): pass\n");
-		expect(notifications.flatMap(notification => notification.paths)).toContain(target);
 	});
 
-	it("notifies the displaced directory root when a failed rename restores it", async () => {
+	it("restores a displaced directory after a failed rename", async () => {
 		await seed({
 			"source/engine.py": "def sourceentry(): pass\n",
 			"target/nested/child.py": "def restoredentry(): pass\n",
@@ -525,10 +484,9 @@ describe("LSP edit mutation notifications", () => {
 		expect(destinationWasDisplaced).toBe(true);
 		expect(await Bun.file(path.join(target, "nested/child.py")).text()).toBe("def restoredentry(): pass\n");
 		expect(await Bun.file(path.join(source, "engine.py")).text()).toBe("def sourceentry(): pass\n");
-		expect(notifications.flatMap(notification => notification.paths)).toContain(target);
 	});
 
-	it("does not publish mutations for previews, ignored operations or rejected edits", async () => {
+	it("does not change files for previews, ignored operations or rejected edits", async () => {
 		await seed({
 			"source.py": "def source_symbol(): pass\n",
 			"target.py": "def target_symbol(): pass\n",
@@ -566,7 +524,6 @@ describe("LSP edit mutation notifications", () => {
 				cwd,
 			),
 		).rejects.toThrow("overlapping LSP edits");
-		expect(notifications).toEqual([]);
 		expect(await Bun.file(path.join(cwd, "source.py")).text()).toBe("def source_symbol(): pass\n");
 		expect(await Bun.file(path.join(cwd, "target.py")).text()).toBe("def target_symbol(): pass\n");
 	});

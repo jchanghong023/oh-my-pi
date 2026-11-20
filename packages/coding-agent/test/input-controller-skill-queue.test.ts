@@ -18,6 +18,7 @@ import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
 	SKILL_PROMPT_MESSAGE_TYPE,
@@ -59,7 +60,7 @@ type PromptCustomMessage = Mock<
 			onPromptQueued?: (queued: readonly unknown[]) => void;
 			onPromptAdmitted?: () => void;
 		},
-	) => Promise<void>
+	) => Promise<boolean>
 >;
 
 async function writeSkillFile(dir: string, skillName: string, body: string): Promise<Skill> {
@@ -102,8 +103,14 @@ function createStubInputControllerContext(opts: {
 		pendingImages: [] as ImageContent[],
 		pendingImageLinks: [] as (string | undefined)[],
 	};
-	const promptCustomMessage: PromptCustomMessage = vi.fn(async () => {});
-	const prompt = vi.fn(async (_text: string, _options?: unknown) => {});
+	const promptCustomMessage: PromptCustomMessage = vi.fn(async (_message, options) => {
+		options?.onPromptAdmitted?.();
+		return true;
+	});
+	const prompt = vi.fn(async (_text: string, options?: PromptOptions) => {
+		options?.onPromptAdmitted?.();
+		return true;
+	});
 	const handleGoalModeCommand = vi.fn(async (_rest?: string) => {});
 	const updatePendingMessagesDisplay = vi.fn();
 	const requestRender = vi.fn();
@@ -381,6 +388,7 @@ describe("InputController optimistic skill row (#8895)", () => {
 		renderOptimisticSkillMessage.mockImplementation(() => order.push("render"));
 		promptCustomMessage.mockImplementation(async () => {
 			order.push("dispatch");
+			return true;
 		});
 
 		const controller = new InputController(ctx);
@@ -443,19 +451,23 @@ describe("compaction skill re-invocation", () => {
 		return call;
 	}
 
-	function createCompactionDrainContext(queuedMessages: CompactionQueuedMessage[], loopModeEnabled = false) {
-		const promptCustomMessageCalled = Promise.withResolvers<void>();
-		const promptCustomMessage: PromptCustomMessage = vi.fn(async () => {
-			promptCustomMessageCalled.resolve();
+	function createCompactionDrainContext(queuedMessages: CompactionQueuedMessage[], loopPrompt?: string) {
+		const promptCustomMessage: PromptCustomMessage = vi.fn(async (_message, options) => {
+			options?.onPromptAdmitted?.();
+			return true;
 		});
-		const prompt = vi.fn(async (_text: string, _options?: { streamingBehavior?: "steer" | "followUp" }) => {});
+		const prompt = vi.fn(async (_text: string, options?: PromptOptions) => {
+			options?.onPromptAdmitted?.();
+			return true;
+		});
 		const steer = vi.fn(async (_text: string, _images?: ImageContent[]) => {});
 		const followUp = vi.fn(async (_text: string, _images?: ImageContent[]) => {});
-		const armLoopAutoSubmit = vi.fn();
+		const armLoopAutoSubmit = vi.fn((_admission: Promise<unknown>) => {});
 		const ctx = {
 			skillCommands,
 			compactionQueuedMessages: queuedMessages,
-			loopModeEnabled,
+			loopModeEnabled: loopPrompt !== undefined,
+			loopPrompt,
 			armLoopAutoSubmit,
 			updatePendingMessagesDisplay: vi.fn(),
 			showError: vi.fn(),
@@ -472,7 +484,7 @@ describe("compaction skill re-invocation", () => {
 				dropQueuedMessages: vi.fn(),
 			},
 		} as unknown as InteractiveModeContext;
-		return { ctx, promptCustomMessage, promptCustomMessageCalled, prompt, steer, followUp, armLoopAutoSubmit };
+		return { ctx, promptCustomMessage, prompt, steer, followUp, armLoopAutoSubmit };
 	}
 
 	beforeEach(async () => {
@@ -487,26 +499,29 @@ describe("compaction skill re-invocation", () => {
 	});
 
 	it("arms the loop after re-invoking a queued skill (regression: /loop never resubmitted after compaction)", async () => {
-		const { ctx, promptCustomMessageCalled, armLoopAutoSubmit } = createCompactionDrainContext(
-			[{ text: "/skill:test-skill arg1 arg2", mode: "steer" }],
-			true,
+		const loopPrompt = "/skill:test-skill arg1 arg2";
+		const { ctx, promptCustomMessage, armLoopAutoSubmit } = createCompactionDrainContext(
+			[{ text: loopPrompt, mode: "steer" }],
+			loopPrompt,
 		);
 		const uiHelpers = new UiHelpers(ctx);
 
 		await uiHelpers.flushCompactionQueue({ willRetry: false });
-		await promptCustomMessageCalled;
 
+		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
 		expect(armLoopAutoSubmit).toHaveBeenCalledTimes(1);
+		await expect(armLoopAutoSubmit.mock.calls[0]?.[0]).resolves.toBeUndefined();
 	});
 
 	it("re-invokes a queued skill as a user-attributed skill prompt", async () => {
 		const image: ImageContent = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
-		const { ctx, promptCustomMessage, promptCustomMessageCalled, prompt, steer, followUp } =
-			createCompactionDrainContext([{ text: "/skill:test-skill arg1 arg2", mode: "followUp", images: [image] }]);
+		const { ctx, promptCustomMessage, prompt, steer, followUp, armLoopAutoSubmit } = createCompactionDrainContext(
+			[{ text: "/skill:test-skill arg1 arg2", mode: "followUp", images: [image] }],
+			"different loop body",
+		);
 		const uiHelpers = new UiHelpers(ctx);
 
 		await uiHelpers.flushCompactionQueue({ willRetry: false });
-		await promptCustomMessageCalled;
 
 		const [message, options] = firstPromptCustomCall(promptCustomMessage);
 		expect(message.customType).toBe(SKILL_PROMPT_MESSAGE_TYPE);
@@ -532,6 +547,9 @@ describe("compaction skill re-invocation", () => {
 			onPromptQueued: expect.any(Function),
 			onPromptAdmitted: expect.any(Function),
 		});
+		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
+		expect(armLoopAutoSubmit).not.toHaveBeenCalled();
+		expect(ctx.loopPrompt).toBe("different loop body");
 		expect(prompt).not.toHaveBeenCalled();
 		expect(steer).not.toHaveBeenCalled();
 		expect(followUp).not.toHaveBeenCalled();

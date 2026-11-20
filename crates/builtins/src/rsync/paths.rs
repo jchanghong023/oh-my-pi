@@ -512,23 +512,56 @@ pub(crate) fn rel_path_lossy(name: &[u8]) -> PathBuf {
 	path
 }
 
-/// The bytes of a local path with `/` separators (`\` also separates on
-/// Windows). Windows verbatim drive and UNC prefixes are converted to their
-/// ordinary forms before converting separators; forward slashes are not valid
-/// separators in verbatim paths. Ill-formed UTF-16 is replaced.
+/// The offset between normalized matching bytes and native bytes for a
+/// verbatim Windows drive or UNC path.
+pub(crate) fn verbatim_prefix_offset(bytes: &[u8]) -> Option<usize> {
+	if cfg!(windows) && bytes.starts_with(b"\\\\?\\UNC\\") {
+		Some(6)
+	} else if cfg!(windows)
+		&& bytes.starts_with(b"\\\\?\\")
+		&& bytes.get(4).is_some_and(u8::is_ascii_alphabetic)
+		&& bytes.get(5) == Some(&b':')
+	{
+		Some(4)
+	} else {
+		None
+	}
+}
+
+/// The length of a Windows drive or UNC root in a `/`-separated local name,
+/// including its separator if present.
+pub(crate) fn volume_root_len(name: &[u8]) -> Option<usize> {
+	if !cfg!(windows) {
+		return None;
+	}
+	if matches!(name, [drive, b':', b'/', ..] if drive.is_ascii_alphabetic()) {
+		return Some(3);
+	}
+	let unc = name.strip_prefix(b"//")?;
+	let server = memchr::memchr(b'/', unc)?;
+	let share = &unc[server + 1..];
+	if server == 0 || share.is_empty() || share.starts_with(b"/") {
+		return None;
+	}
+	let share_len = memchr::memchr(b'/', share).map_or(share.len(), |n| n + 1);
+	Some(3 + server + share_len)
+}
+
+/// A local path's normalized spelling for matching and display, not for local
+/// I/O. Windows verbatim drive and UNC prefixes are converted to their ordinary
+/// forms, `\` separators become `/`, and ill-formed UTF-16 is replaced.
 pub(crate) fn path_bytes(path: &Path) -> Cow<'_, [u8]> {
 	let mut bytes = crate::host::os_bytes_lossy(path.as_os_str());
 	if cfg!(windows) {
-		if bytes.starts_with(b"\\\\?\\UNC\\") {
-			let mut normal = Vec::with_capacity(bytes.len() - 6);
-			normal.extend_from_slice(b"//");
-			normal.extend_from_slice(&bytes[8..]);
-			bytes = Cow::Owned(normal);
-		} else if bytes.starts_with(b"\\\\?\\")
-			&& bytes.get(4).is_some_and(u8::is_ascii_alphabetic)
-			&& bytes.get(5) == Some(&b':')
-		{
-			bytes = Cow::Owned(bytes[4..].to_vec());
+		match verbatim_prefix_offset(&bytes) {
+			Some(6) => {
+				let mut normal = Vec::with_capacity(bytes.len() - 6);
+				normal.extend_from_slice(b"//");
+				normal.extend_from_slice(&bytes[8..]);
+				bytes = Cow::Owned(normal);
+			},
+			Some(offset) => bytes = Cow::Owned(bytes[offset..].to_vec()),
+			None => {},
 		}
 		if bytes.contains(&b'\\') {
 			forward_slashes(bytes.to_mut());

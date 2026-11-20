@@ -49,7 +49,6 @@ import { createLspWritethrough, type WritethroughCallback, writethroughNoop } fr
 
 import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
 import { getLspBatchRequest } from "../lsp/batch";
-import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
 
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
@@ -799,7 +798,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					throw new ToolError(error instanceof Error ? error.message : String(error));
 				}
 
-				invalidateFsScanAfterWrite(resolvedArchivePath.absolutePath);
 				const outputPath = `${formatPathRelativeToCwd(resolvedArchivePath.absolutePath, this.session.cwd)}:${
 					resolvedArchivePath.archiveSubPath
 				}`;
@@ -932,7 +930,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				}
 			}
 
-			invalidateFsScanAfterWrite(resolvedSqlitePath.absolutePath);
 			return toolResult<WriteToolDetails>({ resolvedPath: resolvedSqlitePath.absolutePath })
 				.text(resultText)
 				.sourcePath(resolvedSqlitePath.absolutePath)
@@ -1260,7 +1257,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					}
 					const finalContent = diagnostics.finalContent;
 					journal(finalContent);
-					invalidateFsScanAfterWrite(absolutePath);
 
 					const header = maybeWriteSnapshotHeader(this.session, absolutePath, finalContent, displayPath);
 					const finalBytes = finalContent === writeContent ? writeBytes : Buffer.byteLength(finalContent, "utf8");

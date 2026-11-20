@@ -3,11 +3,10 @@
 //!
 //! Used by the spawner's leak checks and KILL escalation, and by
 //! conformance harnesses to clean up after each upstream test driver. A pid can
-//! be recycled between a scan and a signal; every signal here first pins the
-//! scanned process: on Linux through a pidfd plus a start-time recheck (the
-//! signal then cannot reach another process), on macOS through a start-time
-//! recheck immediately before `kill` (the remaining window is a pid wrapping
-//! around within microseconds).
+//! be recycled between a scan and a signal. On Linux a pidfd plus a
+//! start-time recheck pins the scanned identity. When falling back to
+//! `kill` without a pidfd, or on macOS, the start time is checked
+//! immediately before `kill`, leaving a small PID-reuse window.
 
 use std::io;
 
@@ -117,13 +116,13 @@ fn signal_all(mut procs: Vec<ProcInfo>, sig: Signal) -> io::Result<Vec<ProcInfo>
 /// Send `sig` to `p` if the pid still names the process that was scanned.
 /// `Ok(false)` when it has exited or the pid now names another process.
 pub fn signal_pinned(p: &ProcInfo, sig: Signal) -> io::Result<bool> {
-	signal_pinned_raw(p, i32::from(sig.number(Platform::current())))
+	sys::signal_pinned(p, i32::from(sig.number(Platform::current())), false)
 }
 
-/// Signal a scanned identity using a raw signal number (including realtime
-/// signals).
-pub(crate) fn signal_pinned_raw(p: &ProcInfo, sig: i32) -> io::Result<bool> {
-	sys::signal_pinned(p, sig)
+/// Signal a scanned group member using a raw signal number. If a pidfd
+/// cannot be opened, use a start-time recheck rather than a group broadcast.
+pub(crate) fn signal_group_member(p: &ProcInfo, sig: i32) -> io::Result<bool> {
+	sys::signal_pinned(p, sig, true)
 }
 
 /// Split a Linux `/proc/<pid>/stat` line into `(comm, fields after comm)`.
@@ -242,16 +241,17 @@ mod sys {
 		Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
 	}
 
-	pub fn signal_pinned(p: &ProcInfo, sig: i32) -> io::Result<bool> {
+	pub fn signal_pinned(p: &ProcInfo, sig: i32, allow_unpinned: bool) -> io::Result<bool> {
 		let pidfd = match pidfd_open(p.pid) {
 			Ok(fd) => Some(fd),
 			Err(e) if e.raw_os_error() == Some(libc::ESRCH) => return Ok(false),
-			// Kernels before 5.3: fall back to a start-time recheck.
-			Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => None,
+			// Old kernels lack pidfds. Group cleanup also needs to work
+			// when pidfd_open is blocked or otherwise unavailable.
+			Err(e) if allow_unpinned || e.raw_os_error() == Some(libc::ENOSYS) => None,
 			Err(e) => return Err(e),
 		};
-		// With the pidfd open the pid cannot be reused for another process
-		// while we check that it still names the scanned one.
+		// Check that the PID still names the scanned identity. When
+		// available, the pidfd keeps delivery bound to that process.
 		if info(p.pid).is_none_or(|now| now.start != p.start) {
 			return Ok(false);
 		}
@@ -369,7 +369,7 @@ mod sys {
 		Ok(since.as_micros() as u64)
 	}
 
-	pub fn signal_pinned(p: &ProcInfo, sig: i32) -> io::Result<bool> {
+	pub fn signal_pinned(p: &ProcInfo, sig: i32, _allow_unpinned: bool) -> io::Result<bool> {
 		if info(p.pid).is_none_or(|now| now.start != p.start) {
 			return Ok(false);
 		}

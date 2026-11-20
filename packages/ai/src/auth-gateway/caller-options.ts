@@ -73,6 +73,7 @@ const OPTION_TIERS = {
 	signal: "server",
 	apiKey: "server",
 	requestAuth: "server",
+	requestAuthPrepared: "server",
 	credentialId: "server",
 	oauthIdentity: "server",
 	fetch: "server",

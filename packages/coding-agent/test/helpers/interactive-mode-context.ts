@@ -97,6 +97,7 @@ export function createSessionStub(
 	overrides?: SessionOverrides,
 ): AgentSession {
 	if (overrides !== undefined && !isPlainObject(overrides)) return overrides as AgentSession;
+	const turnFileChanges = { files: new Map(), revision: 0 };
 	const stub = {
 		sessionManager,
 		settings: sessionSettings,
@@ -139,6 +140,7 @@ export function createSessionStub(
 		waitForRunEnd: async () => {},
 		getAsyncJobSnapshot: () => null,
 		getLiveToolOutputPreview: () => undefined,
+		getLatestTurnFileChanges: () => turnFileChanges,
 		modelStage: null,
 		subscribe: vi.fn(() => () => {}),
 	} satisfies SessionOverrides;

@@ -83,15 +83,25 @@ export const cloudflareAiGatewayTransport: ProviderTransport = {
 		return model;
 	},
 	prepareRequest: (model, options) => {
-		const credential = parseCloudflareCredential(options.apiKey ?? $env.CLOUDFLARE_AI_GATEWAY_API_KEY ?? "");
-		if (!credential) return { model, options };
-		const accountId = credential.accountId ?? $env.CLOUDFLARE_ACCOUNT_ID;
-		const gatewayId = credential.gatewayId ?? $env.CLOUDFLARE_GATEWAY_ID;
+		const apiKey =
+			options.requestAuth !== undefined
+				? options.requestAuth.apiKey
+				: (options.apiKey ?? $env.CLOUDFLARE_AI_GATEWAY_API_KEY);
+		const credential = parseCloudflareCredential(apiKey ?? "");
+		if (!credential && options.requestAuth === undefined) return { model, options };
 		let baseUrl = model.baseUrl;
 		if (baseUrl.startsWith(CLOUDFLARE_AI_GATEWAY_BASE_URL)) {
+			const accountId = credential?.accountId ?? $env.CLOUDFLARE_ACCOUNT_ID;
+			const gatewayId = credential?.gatewayId ?? $env.CLOUDFLARE_GATEWAY_ID;
 			if (!accountId) throw new AIError.ConfigurationError("Cloudflare account ID is required");
 			if (!gatewayId) throw new AIError.ConfigurationError("Cloudflare AI Gateway ID is required");
 			baseUrl = baseUrl.replace("<account>", accountId).replace("<gateway>", gatewayId);
+		}
+		if (!credential) {
+			return {
+				model: baseUrl === model.baseUrl ? model : { ...model, baseUrl },
+				options: { ...options, apiKey: undefined, requestAuthPrepared: true },
+			};
 		}
 
 		const isAnthropic = model.api === "anthropic-messages";
@@ -106,7 +116,11 @@ export const cloudflareAiGatewayTransport: ProviderTransport = {
 		}
 		return {
 			model: { ...model, baseUrl, headers },
-			options: { ...options, apiKey: isAnthropic ? credential.token : NO_AUTH_SENTINEL },
+			options: {
+				...options,
+				apiKey: isAnthropic ? credential.token : NO_AUTH_SENTINEL,
+				...(options.requestAuth !== undefined ? { requestAuthPrepared: true } : {}),
+			},
 		};
 	},
 };

@@ -47,7 +47,7 @@ export interface ReportBundleOptions {
 	sessionFile: string | undefined;
 	/** Reports directory override (tests isolate here; defaults to ~/.omp/reports). */
 	reportsDir?: string;
-	/** Logs directory override (tests isolate here; defaults to the logger's current destination). */
+	/** Scan only this directory instead of the configured and active logger destinations. */
 	logsDir?: string;
 	/** Settings to include */
 	settings?: Record<string, unknown>;
@@ -259,34 +259,42 @@ async function collectSameDayLogs(
 ): Promise<{ tails: string; sessionLines: string }> {
 	logger.flush();
 	// Resolve after flushing: the buffered write may have selected a fallback.
-	logsDir ??= logger.getCurrentLogsDir();
+	const dirs =
+		logsDir === undefined ? [...new Set([logger.getConfiguredLogsDir(), logger.getCurrentLogsDir()])] : [logsDir];
 	// Log files are named with the local day (see localDay / RotatingFileSink),
 	// so match them with the local day too — the UTC key misses the live log
 	// between local midnight and UTC midnight.
 	const today = localDay(new Date());
-	const sameDay: Array<{ name: string; mtimeMs: number }> = [];
-	try {
-		const entries = await fs.readdir(logsDir, { withFileTypes: true });
-		for (const entry of entries) {
-			if (!entry.isFile()) continue;
-			const match = LOG_FILE_PATTERN.exec(entry.name);
-			if (!match || match[1] !== today) continue;
-			try {
-				const stat = await fs.stat(path.join(logsDir, entry.name));
-				sameDay.push({ name: entry.name, mtimeMs: stat.mtimeMs });
-			} catch {
-				// File may have rotated away between readdir and stat.
+	const sameDay: Array<{ filePath: string; mtimeMs: number }> = [];
+	const seenDirs = new Set<string>();
+	for (const dir of dirs) {
+		try {
+			const realDir = dirs.length > 1 ? await fs.realpath(dir) : dir;
+			if (seenDirs.has(realDir)) continue;
+			seenDirs.add(realDir);
+			const entries = await fs.readdir(realDir, { withFileTypes: true });
+			for (const entry of entries) {
+				if (!entry.isFile()) continue;
+				const match = LOG_FILE_PATTERN.exec(entry.name);
+				if (!match || match[1] !== today) continue;
+				const filePath = path.join(realDir, entry.name);
+				try {
+					const stat = await fs.stat(filePath);
+					sameDay.push({ filePath, mtimeMs: stat.mtimeMs });
+				} catch {
+					// File may have rotated away between readdir and stat.
+				}
 			}
+		} catch {
+			// Opening one directory may fail independently of the other.
 		}
-	} catch {
-		return { tails: "", sessionLines: "" };
 	}
 	sameDay.sort((a, b) => a.mtimeMs - b.mtimeMs);
 
 	const chunks: string[] = [];
 	const sessionLines: string[] = [];
-	for (const { name } of sameDay) {
-		const filePath = path.join(logsDir, name);
+	for (const { filePath } of sameDay) {
+		const name = path.basename(filePath);
 		if (sessionIds.size === 0) {
 			const text = await readLastLines(filePath, linesPerFile);
 			if (text) chunks.push(`===== ${name} =====\n${text}`);

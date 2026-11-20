@@ -49,6 +49,7 @@
 - Compact mode keeps file targets and live reasoning visible alongside ongoing work, and shows up to five output lines without losing the last useful preview to empty or separator-only updates.
 - Compact mode reuses the session’s selected tool output when redrawing, without rescanning tool results.
 - Compact mode emphasizes file names, live thinking and failure diagnostics, and animates active labels in step with the status spinner.
+- Compact mode again shows the current turn's file diffs without change counts; use `Ctrl+O` to expand them.
 - Updated to upstream v18.22.2 while retaining intranet providers, fork commands and TUI presentation.
 - Selective commit through `/commit` and the eval `commit` namespace is now opt-in via `commit.enabled`; unfinished merges use plain `git commit`.
 - Added `providers.thinkingProbe` (default off) so unknown-model thinking probes never add requests to intranet, company or custom providers.
@@ -111,6 +112,13 @@
 - Concurrent cleanup of one browser tab no longer disconnects another tab sharing its browser.
 - Multi-path reads no longer report identical results when the displayed log errors have changed.
 - Long-running sessions release subagent ancestry once no retained background jobs need it.
+- Goal and Loop commands respect actual prompt admission, and cancelled or rejected first turns no longer restart a loop.
+- Goal context survives compaction within the selected budget, and a failed CodeAgent request can still fall back to local cleanup without replaying it.
+- Strict session shutdown waits for owned resources and can retry transient transcript writes; read-only rendering does not claim the original session.
+- Offline model discovery completes against the cache, Team writes preserve pending settings, and TUI logout remains cancellable.
+- Log reads retain matching evidence, use the live ACP buffer, and preserve programmatic raw output. Diagnostic reports collect logs from both active and fallback directories.
+- Worktree reuse checks the actual repository and branch; a new `/wt` checkout contains only the target commit.
+- Packaged HTML exports use a hosted integrity-pinned session viewer. User skill completion includes manual skills without changing model visibility.
 - Linux and Windows installers verify downloaded binaries against the authenticated Release digest before running them.
 - Large-repository reviews now submit complete results per workpool item, detect Python 3.11+ on Windows, store reports in worktree-local Git metadata, and accept `--base REF` without guessing the upstream branch.
 - LoopN waits for background work before advancing, and queued compaction input stays with its original session after `/new`.

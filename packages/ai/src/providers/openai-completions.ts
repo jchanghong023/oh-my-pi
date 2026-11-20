@@ -50,7 +50,7 @@ import { createAbortSourceTracker } from "../utils/abort";
 import { isDemotedThinking, kStreamingLastParseLen } from "../utils/block-symbols";
 import { hasVisibleAssistantContent, withReplaySafeStreamRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import type { RawHttpRequestDump } from "../utils/http-inspector";
+import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
@@ -943,9 +943,7 @@ export const streamOpenAICompletionsOnce = (
 		try {
 			const policy = resolveOpenAICompatForRequest(model, options, Boolean(context.tools?.length));
 			const apiKey =
-				options?.requestAuth !== undefined
-					? (options.requestAuth.apiKey ?? "")
-					: options?.apiKey || getEnvApiKey(model.provider) || "";
+				options?.apiKey || (options?.requestAuth === undefined ? getEnvApiKey(model.provider) : undefined);
 			const idleTimeoutFallbackMs = model.compat.streamIdleTimeoutMs;
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(idleTimeoutFallbackMs);
 			const firstEventTimeoutMs =
@@ -970,7 +968,7 @@ export const streamOpenAICompletionsOnce = (
 				options?.initiatorOverride,
 				promptCacheSessionId,
 				options?.sessionId,
-				options?.requestAuth,
+				options,
 				// The family affinity key rides only an explicit prompt-cache
 				// identity; the sessionId-derived cache-id fallback never does.
 				options?.promptCacheKey ? promptCacheSessionId : undefined,
@@ -2019,7 +2017,10 @@ export const streamOpenAICompletionsOnce = (
 			// Some providers via OpenRouter include extra details here.
 			if (!codeAgent) {
 				const rawMetadata = readOpenRouterRawMetadata(capturedErrorResponse);
-				if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
+				// Redact only the supplement without writing another request dump.
+				if (rawMetadata) {
+					output.errorMessage += `\n${await appendRawHttpRequestDumpFor400(rawMetadata, undefined, rawRequestDump)}`;
+				}
 			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
@@ -2078,14 +2079,15 @@ function createRequestSetup(
 	initiatorOverride?: MessageAttribution,
 	promptCacheSessionId?: string,
 	sessionId?: string,
-	requestAuth?: OpenAICompletionsOptions["requestAuth"],
+	authOptions?: Pick<OpenAICompletionsOptions, "requestAuth" | "requestAuthPrepared">,
 	promptCacheAffinityKey?: string,
 ): OpenAIRequestSetup & { baseUrl: string } {
 	const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 	const deploymentName = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
 	const setup = resolveOpenAIRequestSetup(model, {
 		apiKey,
-		requestAuth,
+		requestAuth: authOptions?.requestAuth,
+		requestAuthPrepared: authOptions?.requestAuthPrepared,
 		extraHeaders,
 		initiatorOverride,
 		promptCacheSessionId,

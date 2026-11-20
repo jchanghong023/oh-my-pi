@@ -72,18 +72,12 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 		return session;
 	}
 
-	it.each(
-		[false, true].flatMap(offline => [
-			{ offline, label: "default", settings: undefined, limit: 32 },
-			{
-				offline,
-				label: "above the hard ceiling",
-				settings: { "async.maxJobs": 100, "task.maxConcurrency": 1 },
-				limit: 32,
-			},
-			{ offline, label: "a lower configured limit", settings: { "async.maxJobs": 2 }, limit: 2 },
-		]),
-	)(
+	it.each([
+		{ offline: false, label: "default", settings: undefined, limit: 32 },
+		// Offline boot is a spec boundary, not a separate limit implementation.
+		{ offline: true, label: "above the hard ceiling", settings: { "async.maxJobs": 100 }, limit: 32 },
+		{ offline: false, label: "a lower configured limit", settings: { "async.maxJobs": 2 }, limit: 2 },
+	])(
 		"rejects excess background work with $label settings (offline=$offline)",
 		async ({ settings, limit, offline }) => {
 			const session = await spawnTopLevelSession(settings, [], offline);
@@ -106,34 +100,6 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 					manager.register("task", "excess work", run, { ownerId: "CapacityProbe", suppressDelivery: true }),
 				).toThrow(/Background job limit reached/);
 				expect(started).toBe(limit);
-				vi.spyOn(taskDiscovery, "discoverAgents").mockResolvedValue({
-					agents: [
-						{
-							name: "task",
-							description: "Capacity probe",
-							systemPrompt: "Probe",
-							source: "bundled",
-							spawns: "*",
-							model: ["@task"],
-						},
-					],
-					projectAgentsDir: null,
-				});
-				const execute = vi.spyOn(taskExecutor, "runSubprocess");
-				const evalSession: ToolSession = {
-					cwd: session.sessionManager.getCwd(),
-					settings: session.settings,
-					asyncJobManager: manager,
-					hasUI: false,
-					getSessionFile: () => null,
-					getSessionSpawns: () => "*",
-					getActiveModelString: () => "openai/gpt-4o-mini",
-				};
-				await expect(runEvalAgent({ prompt: "must not start" }, { session: evalSession })).rejects.toThrow(
-					/Background job limit reached/,
-				);
-				expect(execute).not.toHaveBeenCalled();
-				expect(started).toBe(limit);
 			} finally {
 				release.resolve("done");
 				await session.asyncJobManager?.waitForAll();
@@ -142,6 +108,52 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 		},
 		60000,
 	);
+
+	it("rejects an eval agent before launch when other background work fills the shared limit", async () => {
+		const session = await spawnTopLevelSession({ "async.maxJobs": 2, "task.maxConcurrency": 1 });
+		const release = Promise.withResolvers<string>();
+		try {
+			const manager = session.asyncJobManager;
+			if (!manager) throw new Error("Expected the root session's async job manager");
+			for (const kind of ["bash", "task"] as const) {
+				manager.register(kind, "capacity probe", () => release.promise, {
+					ownerId: "CapacityProbe",
+					suppressDelivery: true,
+				});
+			}
+			vi.spyOn(taskDiscovery, "discoverAgents").mockResolvedValue({
+				agents: [
+					{
+						name: "task",
+						description: "Capacity probe",
+						systemPrompt: "Probe",
+						source: "bundled",
+						spawns: "*",
+						model: ["@task"],
+					},
+				],
+				projectAgentsDir: null,
+			});
+			const execute = vi.spyOn(taskExecutor, "runSubprocess");
+			const evalSession: ToolSession = {
+				cwd: session.sessionManager.getCwd(),
+				settings: session.settings,
+				asyncJobManager: manager,
+				hasUI: false,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				getActiveModelString: () => "openai/gpt-4o-mini",
+			};
+			await expect(runEvalAgent({ prompt: "must not start" }, { session: evalSession })).rejects.toThrow(
+				/Background job limit reached/,
+			);
+			expect(execute).not.toHaveBeenCalled();
+		} finally {
+			release.resolve("done");
+			await session.asyncJobManager?.waitForAll();
+			await session.dispose();
+		}
+	}, 60000);
 
 	it("releases root-manager capacity after completion, failure and cancellation while queued tasks stay uncounted", async () => {
 		const session = await spawnTopLevelSession({ "async.maxJobs": 1 });

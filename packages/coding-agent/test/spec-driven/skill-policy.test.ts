@@ -151,7 +151,9 @@ describe("pinned skill discovery and access", () => {
 				.sort(),
 		).toEqual(ordinaryNames);
 		setActiveSkills(skills);
-		expect((await handler.complete()).map(entry => entry.value).sort()).toEqual(ordinaryNames);
+		expect((await handler.complete()).map(entry => entry.value).sort()).toEqual(
+			resources.manifest.skills.map(entry => entry.name).sort(),
+		);
 		for (const skill of skills) {
 			const url = parseInternalUrl(`skill://${skill.name}`);
 			const context = { skills, getSessionBranch: () => [] };
@@ -307,7 +309,7 @@ describe("pinned skill discovery and access", () => {
 		async name => {
 			const skill = await loadSpecDrivenSkill("jch", name);
 			setActiveSkills([skill]);
-			expect(await handler.complete()).toEqual([]);
+			expect((await handler.complete()).map(entry => entry.value)).toEqual([name]);
 			const url = parseInternalUrl(`skill://${name}`);
 			const resources = ["agents/openai.yaml"];
 			const context = { skills: [skill], getSessionBranch: () => [] };
@@ -634,11 +636,11 @@ describe("pinned skill discovery and access", () => {
 		}
 	});
 
-	it("does not enumerate hidden names and keeps user-authored hidden resources readable", async () => {
+	it("completes hidden names for users without listing them in unknown-skill errors", async () => {
 		const pinned = await loadSpecDrivenSkill("jch", "jch-grill-me");
 		const custom = { ...(await fixture()), name: "my-hidden-skill", source: "custom:project" };
 		setActiveSkills([pinned, custom]);
-		expect(await handler.complete()).toEqual([]);
+		expect((await handler.complete()).map(entry => entry.value).sort()).toEqual([pinned.name, custom.name].sort());
 		expect((await handler.resolve(parseInternalUrl(`skill://${custom.name}`))).sourcePath).toBe(custom.filePath);
 		const mcp = spyOn(MCPManager, "load").mockResolvedValue(undefined);
 		try {

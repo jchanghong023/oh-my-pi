@@ -58,6 +58,8 @@ export interface MnemopiEmbeddingRuntimeOptions {
 	maxInputChars?: number;
 	/** Override `MNEMOPI_EMBEDDING_BATCH_SIZE`: max texts per embedding API request. */
 	batchSize?: number;
+	/** Total HTTP attempts, including the initial request; defaults to three. */
+	requestMaxAttempts?: number;
 	/**
 	 * Override `MNEMOPI_EMBEDDING_QUERY_PREFIX`: text prepended to recall queries before
 	 * embedding, for instruction-tuned embedders (Qwen3-Embedding `Instruct: …\nQuery: `,
@@ -111,7 +113,7 @@ export interface ResolvedMnemopiEmbeddingRuntimeOptions {
 	strictApi?: boolean;
 	/** HTTP timeout in milliseconds; defaults to 30 seconds. */
 	requestTimeoutMs?: number;
-	/** Total HTTP attempts, including the initial request; defaults to four. */
+	/** Total HTTP attempts, including the initial request; defaults to three. */
 	requestMaxAttempts?: number;
 	/** Optional fixed delay between HTTP attempts, overriding server hints. */
 	requestRetryDelayMs?: number;

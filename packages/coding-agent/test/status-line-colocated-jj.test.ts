@@ -15,14 +15,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:te
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
+import { parseGitStatus } from "@oh-my-pi/pi-tui/status-line/git-utils";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo } from "@oh-my-pi/pi-natives";
+import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo, VcsStatusSummary } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { github } from "@oh-my-pi/pi-coding-agent/utils/github";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
-
-type GitStatus = { staged: number; unstaged: number; untracked: number };
 
 const originalProjectDir = getProjectDir();
 
@@ -91,7 +90,7 @@ function gitHandle(head: VcsHeadState | null, status: string): VcsGitRepo {
 	return {
 		headSync: () => head,
 		linkedWorktree: () => null,
-		statusPorcelainBytes: async (): Promise<Buffer> => Buffer.from(status),
+		statusChangeCounts: async () => parseGitStatus(status),
 	} as unknown as VcsGitRepo;
 }
 
@@ -110,7 +109,7 @@ function operationalGit(root: string, head: VcsHeadState | null, status = ""): V
 	} as unknown as VcsRepo;
 }
 
-function displayJj(root: string, label: () => Promise<string | null>, status: GitStatus): VcsRepo {
+function displayJj(root: string, label: () => Promise<string | null>, status: VcsStatusSummary): VcsRepo {
 	return {
 		kind: () => "jj",
 		asGit: () => null,

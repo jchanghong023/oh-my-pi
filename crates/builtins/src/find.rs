@@ -4714,6 +4714,9 @@ pub mod matchers {
 					}
 					let expression = args[i];
 					let executable = args[i + 1];
+					if expression == "-execdir" && executable.contains("{}") {
+						return Err("You may not use {} within the utility name for -execdir".into());
+					}
 					let exec_args = &args[i + 2..arg_index];
 					i = arg_index;
 					match args[arg_index] {

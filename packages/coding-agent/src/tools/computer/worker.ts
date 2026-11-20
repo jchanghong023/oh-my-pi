@@ -1562,6 +1562,7 @@ export class ComputerWorkerCore {
 	 */
 	readonly #runContexts = new AsyncLocalStorage<ComputerRunContext>();
 	#closed = false;
+	#retryClose = false;
 	/** The latest agent turn whose end was sent here; a run of that turn or earlier, arriving late, holds nothing. */
 	#releasedTurn = 0;
 
@@ -1611,6 +1612,7 @@ export class ComputerWorkerCore {
 
 	/** Returns the raw session; the desktop scope gets `#guarded`, which checks for the user's Escape on every access. */
 	async #ensureSession(snapshot: ComputerSessionSnapshot, escape: ComputerEscapeScope): Promise<NativeDesktopSession> {
+		if (this.#closed) throw new ToolError("Computer worker is closed");
 		if (this.#session) return this.#session;
 		// Single-flight: share one creation promise so a run and a capabilities
 		// request racing on a cold worker cannot each build (and leak) a session.
@@ -2270,20 +2272,28 @@ export class ComputerWorkerCore {
 	}
 
 	async #close(): Promise<void> {
-		if (this.#closed) return;
-		this.#closed = true;
-		this.#active?.ac.abort(new ToolAbortError());
-		try {
-			await this.#session?.close();
-		} catch {
-			// Closing is best-effort; the worker is exiting and has no request to report this against.
-		} finally {
-			this.#session = undefined;
-			this.#guarded = undefined;
-			this.#sessionInit = undefined;
-			this.#unsubscribe();
-			this.#transport.send({ type: "closed" });
-			this.#transport.close();
+		if (this.#closed && !this.#retryClose) return;
+		this.#retryClose = false;
+		if (!this.#closed) {
+			this.#closed = true;
+			this.#active?.ac.abort(new ToolAbortError());
 		}
+		try {
+			// A close can race lazy creation; do not acknowledge until that session is closed too.
+			await this.#sessionInit?.catch(() => undefined);
+			await this.#session?.close();
+		} catch (error) {
+			const payload = errorPayload(error);
+			// Only the native close implementation that retains its join handle emits this reason.
+			this.#retryClose = payload.message === "Timeout: native desktop worker did not exit; close can be retried";
+			this.#transport.send({ type: "close-failed", error: payload, retryable: this.#retryClose });
+			return;
+		}
+		this.#session = undefined;
+		this.#guarded = undefined;
+		this.#sessionInit = undefined;
+		this.#unsubscribe();
+		this.#transport.send({ type: "closed" });
+		this.#transport.close();
 	}
 }

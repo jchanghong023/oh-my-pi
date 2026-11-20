@@ -1722,6 +1722,7 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 		return done(status);
 	}
 	let first = args.len() - o.rest.len();
+	let special = matches!(kind, DeclareKind::Readonly | DeclareKind::Export);
 	for (j, arg) in o.rest.iter().enumerate() {
 		let compound_word = ctx.compound.contains(&((1 + first + j) as u32));
 		if kind == DeclareKind::Local && arg.as_slice() == b"-" {
@@ -1743,6 +1744,7 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 		};
 		let (name, index, append, value) = split_assignment(arg, flat);
 		if std::str::from_utf8(name).is_err() {
+			ctx.usage_error |= special;
 			let operand = String::from_utf8_lossy(arg);
 			if kind == DeclareKind::Export {
 				ctx.usage(format!("{operand}: invalid variable name"));
@@ -1750,6 +1752,9 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 			} else {
 				ctx.usage(format!("{operand}: not a valid variable name"));
 				status = 1;
+			}
+			if special && ctx.option(OptId::Posix)? {
+				break;
 			}
 			continue;
 		}
@@ -1791,7 +1796,6 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 		// `declare -r c[100]` declares an indexed array; `readonly a[5]`
 		// and `export a[5]` are no names.
 		let subscripted = value.is_none() && name.len() < arg.len();
-		let special = matches!(kind, DeclareKind::Readonly | DeclareKind::Export);
 		if subscripted && special {
 			ctx.err(Diag::InvalidIdent { name: arg.clone() });
 			// A POSIX shell exits on a special builtin's usage error.

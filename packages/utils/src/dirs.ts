@@ -438,16 +438,6 @@ class DirResolver {
 		}
 		return path.join(xdg === "cache" && this.cacheRoot ? this.#agentDirs.cache : userAgentDir, subdir);
 	}
-
-	/**
-	 * Agent subdirectory path without caching or filesystem access, for callers
-	 * that keep opaque keys in non-filesystem backends.
-	 */
-	agentSubdirPath(userAgentDir: string | undefined, subdir: string, xdg?: XdgCategory): string {
-		const base =
-			!userAgentDir || userAgentDir === this.agentDir ? (xdg ? this.#agentDirs[xdg] : this.agentDir) : userAgentDir;
-		return path.join(base, subdir);
-	}
 }
 
 /**
@@ -1040,14 +1030,6 @@ export function getPredictStateDir(agentDir: string | undefined, method: string)
 /** Get the sessions directory (~/.omp/agent/sessions). */
 export function getSessionsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "sessions", "data");
-}
-
-/**
- * Get the sessions directory path without filesystem access, for backends
- * that keep opaque keys and must not probe disk.
- */
-export function getSessionsDirPath(agentDir?: string): string {
-	return dirs.agentSubdirPath(agentDir, "sessions", "data");
 }
 
 /** Get the content-addressed blob store directory (~/.omp/agent/blobs). */

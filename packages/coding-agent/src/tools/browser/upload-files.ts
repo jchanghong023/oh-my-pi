@@ -164,13 +164,15 @@ export function newUploadStagingDir(): string {
 	return path.join(os.tmpdir(), `omp-uploads-${process.pid}-${crypto.randomUUID().slice(0, 8)}`);
 }
 
-/** Remove a tab's staging folder, once the page that may read its copies is gone. */
-export async function removeUploadStaging(directory: string, options?: { strict?: boolean }): Promise<void> {
-	if (options?.strict) {
+/** Remove a tab's staging folder, returning whether its absence was confirmed. */
+export async function removeUploadStaging(directory: string, options?: { strict?: boolean }): Promise<boolean> {
+	try {
 		await fs.rm(directory, { recursive: true, force: true });
-		return;
+		return true;
+	} catch (error) {
+		if (options?.strict) throw error;
+		return false;
 	}
-	await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
 }
 
 function processAlive(pid: number): boolean {

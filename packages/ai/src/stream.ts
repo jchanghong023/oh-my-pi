@@ -969,7 +969,9 @@ function streamDispatch<TApi extends Api>(
 	const preparedOptions = prepared?.options ?? (requestOptions as StreamOptions);
 	const requestAuth = requestOptions.requestAuth;
 	const apiKey =
-		requestAuth !== undefined ? requestAuth.apiKey : preparedOptions.apiKey || getEnvApiKey(providerModel.provider);
+		requestAuth !== undefined
+			? preparedOptions.apiKey
+			: preparedOptions.apiKey || getEnvApiKey(providerModel.provider);
 	if (!apiKey && !hasRequestAuthMaterial(requestAuth)) {
 		throw new AIError.MissingApiKeyError(providerModel.provider);
 	}
@@ -984,6 +986,7 @@ function streamDispatch<TApi extends Api>(
 					...preparedOptions,
 					apiKey,
 					requestAuth,
+					requestAuthPrepared: true,
 					headers: mergeHeaders(preparedOptions.headers, requestAuth.headers),
 				}
 			: { ...preparedOptions, apiKey };

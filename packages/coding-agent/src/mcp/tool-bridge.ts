@@ -31,7 +31,6 @@ import { formatMCPToolFailure, MCPTransportError } from "./errors";
 import { describeMCPCall, describeMCPResult, renderMCPCall, renderMCPResult } from "@oh-my-pi/pi-tui/tools/mcp";
 import type {
 	MCPAuthChallenge,
-	MCPAuthInvocation,
 	MCPRequestOptions,
 	MCPServerConnection,
 	MCPToolCallParams,
@@ -44,8 +43,6 @@ import type { MCPContent } from "@oh-my-pi/pi-tui/tools/mcp";
 export interface MCPReconnectOptions {
 	/** Authorize first: the server answered the call with this challenge. */
 	authChallenge?: MCPAuthChallenge;
-	/** Caller captured before dispatch; only used when an interactive challenge is returned. */
-	invocation?: MCPAuthInvocation;
 	/**
 	 * The server refused the call because the protocol session it holds for us
 	 * is gone, and the host did not replace that session itself: a
@@ -61,14 +58,8 @@ export type MCPReconnect = (options?: MCPReconnectOptions) => Promise<MCPServerC
  * Told about every MCP tool call when it starts, by tool-call id; returns the
  * callback the call awaits before it returns its result. Lets the owning
  * manager settle the tool-list changes the call provoked into the caller's view.
- * Its optional invocation is captured at entry and travels with that call's auth challenge.
  */
-export type MCPToolCallObserver = (
-	toolCallId: string,
-	signal?: AbortSignal,
-) => (() => Promise<void>) & {
-	readonly invocation?: MCPAuthInvocation;
-};
+export type MCPToolCallObserver = (toolCallId: string) => () => Promise<void>;
 
 /**
  * Network-level and stale-session errors that warrant a reconnect + single retry.
@@ -501,7 +492,6 @@ async function callToolWithAuthRetry(
 	reconnect: MCPReconnect | undefined,
 	signal?: AbortSignal,
 	onProgress?: MCPRequestOptions["onProgress"],
-	invocation?: MCPAuthInvocation,
 ): Promise<MCPToolCallAttempt> {
 	const result = await callTool(connection, toolName, args, { signal, onProgress });
 	const authChallenge = getMcpAuthChallenge(result);
@@ -509,7 +499,7 @@ async function callToolWithAuthRetry(
 
 	let newConnection: MCPServerConnection | null;
 	try {
-		newConnection = await reconnectWithAbort(reconnect, signal, { authChallenge, invocation });
+		newConnection = await reconnectWithAbort(reconnect, signal, { authChallenge });
 	} catch (error) {
 		rethrowIfAborted(error, signal);
 		return { connection, error };
@@ -893,9 +883,9 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		ctx: CustomToolContext,
 		signal?: AbortSignal,
 	): Promise<CustomToolResult<MCPToolDetails>> {
-		const settle = this.observeCall?.(toolCallId, signal);
+		const settle = this.observeCall?.(toolCallId);
 		try {
-			return await this.#call(params, onUpdate, ctx, signal, settle?.invocation);
+			return await this.#call(params, onUpdate, ctx, signal);
 		} finally {
 			await settle?.();
 		}
@@ -906,7 +896,6 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		onUpdate: AgentToolUpdateCallback<MCPToolDetails> | undefined,
 		_ctx: CustomToolContext,
 		signal?: AbortSignal,
-		invocation?: MCPAuthInvocation,
 	): Promise<CustomToolResult<MCPToolDetails>> {
 		throwIfAborted(signal);
 		const args = await prepareOutboundArgs(params, this.tool.inputSchema, _ctx);
@@ -923,7 +912,6 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 				this.reconnect,
 				signal,
 				onProgress,
-				invocation,
 			);
 			if (attempt.error !== undefined) {
 				return buildErrorResult(attempt.error, this.connection.name, this.tool.name, provider, providerName);

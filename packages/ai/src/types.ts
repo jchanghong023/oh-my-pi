@@ -519,6 +519,8 @@ export interface StreamOptions {
 	apiKey?: string;
 	/** Explicit per-request credentials. When present, ambient key lookup is disabled. */
 	requestAuth?: { apiKey?: string; headers?: Record<string, string> };
+	/** @internal Provider preparation populated apiKey for the wire; requestAuth retains the caller's credentials. */
+	requestAuthPrepared?: boolean;
 	/** @internal Stored credential row serving this request, when known. */
 	credentialId?: number;
 	/** @internal Non-secret identity of the bearer serving this attempt; never persisted in history. */

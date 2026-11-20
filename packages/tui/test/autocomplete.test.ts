@@ -838,15 +838,20 @@ describe("CombinedAutocompleteProvider", () => {
 	describe("@ scan-cache TTL", () => {
 		let baseDir: string;
 		let previousTtl: string | undefined;
+		let previousOffline: string | undefined;
 
 		beforeEach(() => {
 			baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "autocomplete-scan-ttl-"));
 			previousTtl = process.env.FS_SCAN_CACHE_TTL_MS;
+			previousOffline = process.env.OMP_OFFLINE;
+			process.env.OMP_OFFLINE = " YeS ";
 		});
 
 		afterEach(() => {
 			if (previousTtl === undefined) delete process.env.FS_SCAN_CACHE_TTL_MS;
 			else process.env.FS_SCAN_CACHE_TTL_MS = previousTtl;
+			if (previousOffline === undefined) delete process.env.OMP_OFFLINE;
+			else process.env.OMP_OFFLINE = previousOffline;
 			vi.restoreAllMocks();
 			fs.rmSync(baseDir, { recursive: true, force: true });
 		});
@@ -909,6 +914,26 @@ describe("CombinedAutocompleteProvider", () => {
 
 			provider.invalidateDirCache(baseDir);
 			expect(await values(provider, "@")).toEqual(["@another.ts", "@new.ts", "@old.ts"]);
+		});
+
+		it.each(["30000", "0"])("ignores a scan-cache TTL of %s outside offline mode", async ttl => {
+			delete process.env.OMP_OFFLINE;
+			process.env.FS_SCAN_CACHE_TTL_MS = ttl;
+			const clock = spyOn(Date, "now").mockReturnValue(1_000);
+			const provider = new CombinedAutocompleteProvider([], baseDir);
+			fs.writeFileSync(path.join(baseDir, "old.ts"), "");
+			expect(await values(provider, "@")).toEqual(["@old.ts"]);
+
+			fs.unlinkSync(path.join(baseDir, "old.ts"));
+			clock.mockReturnValue(2_999);
+			expect(await values(provider, "@")).toEqual(["@old.ts"]);
+			clock.mockReturnValue(3_000);
+			expect(await values(provider, "@")).toEqual([]);
+
+			const fuzzy = spyOn(natives, "fuzzyFind");
+			await values(provider, "@old");
+			expect(fuzzy).toHaveBeenCalledTimes(1);
+			expect(fuzzy.mock.calls[0]?.[0]).not.toHaveProperty("cacheTtlMs");
 		});
 	});
 

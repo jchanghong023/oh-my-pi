@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { buildSessionTraceFromSnapshots } from "@oh-my-pi/omp-stats/trace";
 import type { SessionTrace } from "@oh-my-pi/omp-stats/types";
 import type { AgentState } from "@oh-my-pi/pi-agent-core";
-import { APP_NAME, isCompiledBinary, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
+import { APP_NAME, isCompiledBinary, isEnoent } from "@oh-my-pi/pi-utils";
 import { getResolvedThemeColors, getThemeExportColors } from "@oh-my-pi/pi-tui/theme";
 import type { SessionEntry, SessionHeader } from "../../session/session-entries";
 import { SessionManager } from "../../session/session-manager";
@@ -19,18 +19,23 @@ export { type ExportThemeNames, parseExportArgs } from "./args";
 let cachedTemplate: string | undefined;
 const SESSION_DATA_MARKER = "{{SESSION_DATA}}";
 
-/** Create an export document with an inline or integrity-pinned hosted viewer. */
+// The fork does not publish a hosted viewer. Pin the payload-compatible viewer from the integrated upstream release.
+const HOSTED_VIEWER_URL =
+	"https://build.stencil.so/web/omp/19.0.1/export-viewer-1ae4bd46d3c40dc063601ddfbca2bf14fd7b57cb5bba470d3a6b5fc56f8f0f84.js";
+const HOSTED_VIEWER_INTEGRITY = "sha256-GuS9RtPEDcBjYB3fvKK/FP17V8tbukcNOmtfxW+PD4Q=";
+
+/** Create an export document with a checkout viewer or an integrity-pinned release viewer. */
 export function getTemplate(): string {
 	if (cachedTemplate) return cachedTemplate;
-	const compiled = isCompiledBinary();
 	const sourceCheckout =
-		!compiled &&
+		!isCompiledBinary() &&
 		!process.env.PI_BUNDLED &&
 		!import.meta.dir.split(/[\\/]/).includes("node_modules") &&
 		fs.existsSync(path.join(import.meta.dir, "shell.html"));
-	let viewer = compiled ? process.env.PI_HTML_EXPORT_VIEWER : undefined;
+	let viewerScript: string;
 	if (sourceCheckout) {
 		const viewerPath = path.resolve(import.meta.dir, "../../../export-assets", viewerAsset.file);
+		let viewer: string;
 		try {
 			viewer = fs.readFileSync(viewerPath, "utf8");
 		} catch (err) {
@@ -41,16 +46,12 @@ export function getTemplate(): string {
 			}
 			throw err;
 		}
-	}
-	let viewerScript: string;
-	if (viewer !== undefined) {
 		// Inline classic scripts run before deferred external scripts. Wait for
 		// both shared libraries, and prevent embedded text from closing the tag.
 		const escaped = viewer.replace(/<\/script/gi, match => `<\\/${match.slice(2)}`);
 		viewerScript = `<script>window.addEventListener("DOMContentLoaded",function(){\n${escaped}\n});</script>`;
 	} else {
-		const viewerUrl = `https://build.stencil.so/web/omp/${encodeURIComponent(VERSION)}/${viewerAsset.file}`;
-		viewerScript = `<script defer src="${viewerUrl}" integrity="${viewerAsset.integrity}" crossorigin="anonymous" onerror="document.getElementById('viewer-status').textContent='Could not load the session viewer. Connect to the internet and reload this file.'"></script>`;
+		viewerScript = `<script defer src="${HOSTED_VIEWER_URL}" integrity="${HOSTED_VIEWER_INTEGRITY}" crossorigin="anonymous" onerror="document.getElementById('viewer-status').textContent='Could not load the session viewer. Connect to the internet and reload this file.'"></script>`;
 	}
 	cachedTemplate = templateHtml
 		.replace("{{MARKED_URL}}", () => "https://stencil.so/assets/omp/marked.333561b9.js")

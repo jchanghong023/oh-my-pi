@@ -322,7 +322,10 @@ describe("interactive native input ingress", () => {
 			{ type: "input", source: "interactive", text: "changed [Image #1]", images: [transformedImage] },
 		]);
 		expect(h.prompt.mock.calls).toEqual([
-			["changed [Image #1] final", { streamingBehavior: "followUp", images: [transformedImage] }],
+			[
+				"changed [Image #1] final",
+				expect.objectContaining({ streamingBehavior: "followUp", images: [transformedImage] }),
+			],
 		]);
 		expect(h.editor.pendingImages).toEqual([transformedImage]);
 		const link = h.editor.pendingImageLinks[0];
@@ -941,10 +944,8 @@ describe("interactive native input ingress", () => {
 
 				expect(h.prompt).toHaveBeenCalledTimes(1);
 				const [modelText, options] = h.prompt.mock.calls[0]!;
-				expect(options).toEqual({
-					streamingBehavior: key === ENTER ? "steer" : "followUp",
-					images: undefined,
-				});
+				expect(options?.streamingBehavior).toBe(key === ENTER ? "steer" : "followUp");
+				expect(options?.images).toBeUndefined();
 				expect(modelText.startsWith("workflowz\n")).toBe(true);
 				expect(modelText.slice(-task.length)).toBe(task);
 				expect(h.ctx.showError).not.toHaveBeenCalled();
@@ -1027,7 +1028,10 @@ describe("interactive native input ingress", () => {
 
 		clearImages = true;
 		await h.pressSubmit(FOLLOW_UP);
-		expect(h.prompt.mock.calls[1]).toEqual(["text only", { streamingBehavior: "followUp", images: [] }]);
+		expect(h.prompt.mock.calls[1]).toEqual([
+			"text only",
+			expect.objectContaining({ streamingBehavior: "followUp", images: [] }),
+		]);
 		expect(h.editor.getText()).toBe("text only");
 		expect(h.editor.pendingImages).toEqual([]);
 		expect(h.editor.pendingImageLinks).toEqual([]);

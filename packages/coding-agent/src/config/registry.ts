@@ -314,7 +314,7 @@ export abstract class Derived<T> {
 				reportListenerError(sources, error);
 			}
 		};
-		let current = this.get(settings);
+		let current = settings.settingChangeValue(this);
 		let queued = false;
 		let active = true;
 		const stop = settings.onEffectiveChange(sources, () => {
@@ -324,7 +324,7 @@ export abstract class Derived<T> {
 			queueMicrotask(() => {
 				queued = false;
 				if (!active) return;
-				const next = this.get(settings);
+				const next = settings.settingChangeValue(this);
 				if (settingValuesEqual(next, current)) return;
 				const previous = current;
 				current = next;

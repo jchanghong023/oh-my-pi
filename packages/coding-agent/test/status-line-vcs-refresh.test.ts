@@ -18,15 +18,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
-import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line";
+import type { GitStatus, StatusLineSettings } from "@oh-my-pi/pi-tui/status-line";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
+import { parseGitStatus } from "@oh-my-pi/pi-tui/status-line/git-utils";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo } from "@oh-my-pi/pi-natives";
+import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo, VcsStatusSummary } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
-
-type GitStatus = { staged: number; unstaged: number; untracked: number };
 
 const originalProjectDir = getProjectDir();
 
@@ -94,7 +93,7 @@ const gitControls = {
 	defaultBranch: vi.fn(async (_signal?: AbortSignal): Promise<string | null> => null),
 	head: vi.fn(async (_signal?: AbortSignal): Promise<VcsHeadState | null> => fakeRefHead),
 	headSync: vi.fn((): VcsHeadState | null => fakeRefHead),
-	statusPorcelainBytes: vi.fn(async (_signal?: AbortSignal): Promise<Buffer> => Buffer.alloc(0)),
+	statusChangeCounts: vi.fn(async (_signal?: AbortSignal): Promise<GitStatus> => parseGitStatus("")),
 };
 
 const fakeRepository = {
@@ -102,11 +101,11 @@ const fakeRepository = {
 	head: (signal?: AbortSignal) => gitControls.head(signal),
 	headSync: () => gitControls.headSync(),
 	linkedWorktree: () => null,
-	statusPorcelainBytes: (signal?: AbortSignal) => gitControls.statusPorcelainBytes(signal),
+	statusChangeCounts: (signal?: AbortSignal) => gitControls.statusChangeCounts(signal),
 } as unknown as VcsGitRepo;
 
 const jjControls = {
-	statusSummary: vi.fn(async (_signal?: AbortSignal): Promise<GitStatus | null> => ({
+	statusSummary: vi.fn(async (_signal?: AbortSignal): Promise<VcsStatusSummary | null> => ({
 		staged: 0,
 		unstaged: 0,
 		untracked: 0,
@@ -140,7 +139,7 @@ beforeEach(() => {
 	gitControls.defaultBranch.mockReset().mockResolvedValue(null);
 	gitControls.head.mockReset().mockResolvedValue(fakeRefHead);
 	gitControls.headSync.mockReset().mockReturnValue(fakeRefHead);
-	gitControls.statusPorcelainBytes.mockReset().mockResolvedValue(Buffer.alloc(0));
+	gitControls.statusChangeCounts.mockReset().mockResolvedValue(parseGitStatus(""));
 	jjControls.statusSummary.mockReset().mockResolvedValue({ staged: 0, unstaged: 0, untracked: 0 });
 	jjControls.label.mockReset().mockResolvedValue(null);
 	vi.spyOn(vcs, "gitInfo").mockReturnValue(fakeRepoInfo);
@@ -167,7 +166,7 @@ function fakeRepoHandle(info: VcsGitRepoInfo, branch: string): VcsRepo {
 		defaultBranch: (signal?: AbortSignal) => gitControls.defaultBranch(signal),
 		headSync: () => ({ ...fakeRefHead, branch, refName: `refs/heads/${branch}` }),
 		linkedWorktree: () => null,
-		statusPorcelainBytes: (signal?: AbortSignal) => gitControls.statusPorcelainBytes(signal),
+		statusChangeCounts: (signal?: AbortSignal) => gitControls.statusChangeCounts(signal),
 	} as unknown as VcsGitRepo;
 	return unifiedGit(repository, info);
 }
@@ -199,7 +198,7 @@ describe("StatusLineComponent repaints when an async VCS fetch resolves", () => 
 		let now = 1_000_000;
 		vi.spyOn(Date, "now").mockImplementation(() => now);
 		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);
-		gitControls.statusPorcelainBytes.mockResolvedValue(Buffer.from(" M tracked.txt\0?? new.txt\0"));
+		gitControls.statusChangeCounts.mockResolvedValue(parseGitStatus(" M tracked.txt\0?? new.txt\0"));
 		const component = new StatusLineComponent(makeSession(), statusLineHost);
 		try {
 			component.updateSettings(gitSegment);
@@ -207,25 +206,25 @@ describe("StatusLineComponent repaints when an async VCS fetch resolves", () => 
 			await Promise.resolve();
 			await Promise.resolve();
 			expect(component.getTopBorder(80).content).toContain("改动2");
-			expect(gitControls.statusPorcelainBytes).toHaveBeenCalledTimes(1);
+			expect(gitControls.statusChangeCounts).toHaveBeenCalledTimes(1);
 
 			now += ttl - 1;
 			component.invalidate();
 			expect(component.getTopBorder(80).content).toContain("改动2");
-			expect(gitControls.statusPorcelainBytes).toHaveBeenCalledTimes(1);
+			expect(gitControls.statusChangeCounts).toHaveBeenCalledTimes(1);
 
 			now++;
 			component.getTopBorder(80);
 			await Promise.resolve();
 			await Promise.resolve();
-			expect(gitControls.statusPorcelainBytes).toHaveBeenCalledTimes(2);
+			expect(gitControls.statusChangeCounts).toHaveBeenCalledTimes(2);
 
-			gitControls.statusPorcelainBytes.mockResolvedValue(Buffer.from(" M tracked.txt\0"));
+			gitControls.statusChangeCounts.mockResolvedValue(parseGitStatus(" M tracked.txt\0"));
 			component.invalidateGitCaches();
 			component.getTopBorder(80);
 			await Promise.resolve();
 			await Promise.resolve();
-			expect(gitControls.statusPorcelainBytes).toHaveBeenCalledTimes(3);
+			expect(gitControls.statusChangeCounts).toHaveBeenCalledTimes(3);
 			expect(component.getTopBorder(80).content).toContain("改动1");
 		} finally {
 			component.dispose();
@@ -238,8 +237,8 @@ describe("StatusLineComponent repaints when an async VCS fetch resolves", () => 
 	it("fires #onBranchChange when git status resolves on the cold paint", async () => {
 		gitControls.headSync.mockReturnValue(fakeRefHead);
 		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);
-		const status = Promise.withResolvers<Buffer>();
-		gitControls.statusPorcelainBytes.mockReturnValue(status.promise);
+		const status = Promise.withResolvers<GitStatus>();
+		gitControls.statusChangeCounts.mockReturnValue(status.promise);
 
 		const onBranchChange = vi.fn();
 		const component = new StatusLineComponent(makeSession(), statusLineHost);
@@ -249,7 +248,7 @@ describe("StatusLineComponent repaints when an async VCS fetch resolves", () => 
 		component.getTopBorder(80); // cold paint kicks off the git-status fetch
 		expect(onBranchChange).not.toHaveBeenCalled();
 
-		status.resolve(Buffer.from("MM tracked.txt\0 M modified.txt\0?? new-a.txt\0?? new-b.txt\0?? new-c.txt\0"));
+		status.resolve(parseGitStatus("MM tracked.txt\0 M modified.txt\0?? new-a.txt\0?? new-b.txt\0?? new-c.txt\0"));
 		await Promise.resolve();
 		await Promise.resolve();
 
@@ -261,7 +260,7 @@ describe("StatusLineComponent repaints when an async VCS fetch resolves", () => 
 	it("fires #onBranchChange when the jj label resolves on the cold paint", async () => {
 		gitControls.headSync.mockReturnValue(null); // no git branch -> jj overlay
 		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise); // isolate the jj fire
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise); // isolate the jj fire
 		vi.spyOn(vcs, "repo").mockReturnValue(fakeJjRepository);
 		const label = Promise.withResolvers<string | null>();
 		jjControls.label.mockReturnValue(label.promise);
@@ -285,10 +284,10 @@ describe("StatusLineComponent repaints when an async VCS fetch resolves", () => 
 	it("fires #onBranchChange when jj status resolves on the cold paint", async () => {
 		gitControls.headSync.mockReturnValue(null); // no git -> jj repo
 		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		vi.spyOn(vcs, "repo").mockReturnValue(fakeJjRepository);
 		jjControls.label.mockReturnValue(Promise.withResolvers<string | null>().promise); // isolate the status fire
-		const status = Promise.withResolvers<GitStatus | null>();
+		const status = Promise.withResolvers<VcsStatusSummary | null>();
 		jjControls.statusSummary.mockReturnValue(status.promise);
 
 		const onBranchChange = vi.fn();
@@ -314,7 +313,7 @@ describe("StatusLineComponent reftable branch resolve honors mid-flight invalida
 		useReftable();
 		// Keep the sibling async fetches quiet so only the branch resolve drives
 		// #onBranchChange: git.status stays in flight forever, jj is no repo here.
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		const refHead = (branchName: string): VcsHeadState => ({
 			...fakeRefHead,
 			branch: branchName,
@@ -373,7 +372,7 @@ describe("StatusLineComponent reftable branch resolve honors mid-flight invalida
 
 	it("aborts an invalidated resolve and starts only one replacement resolve", async () => {
 		useReftable();
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		const signals: AbortSignal[] = [];
 		gitControls.head.mockImplementation(signal => {
 			if (!signal) throw new Error("reftable resolve must receive an abort signal");
@@ -402,7 +401,7 @@ describe("StatusLineComponent reftable branch resolve honors mid-flight invalida
 
 	it("generic invalidate does not abort or restart a live reftable HEAD resolve", async () => {
 		useReftable();
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		vi.spyOn(nodeFs, "watchFile").mockImplementation(() => {
 			throw new Error("watch unavailable");
 		});
@@ -443,7 +442,7 @@ describe("StatusLineComponent reftable branch resolve honors mid-flight invalida
 
 	it("polls a reftable branch after HEAD watcher installation fails", async () => {
 		useReftable();
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		vi.spyOn(nodeFs, "watchFile").mockImplementation(() => {
 			throw new Error("watch unavailable");
 		});
@@ -484,7 +483,7 @@ describe("StatusLineComponent reftable branch resolve honors mid-flight invalida
 			repoRoot: nestedGitCwd,
 		});
 		gitControls.head.mockReturnValue(Promise.withResolvers<VcsHeadState | null>().promise);
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		const jjLabel = jjControls.label.mockReturnValue(Promise.resolve("ancestor-bookmark"));
 		const jjStatus = jjControls.statusSummary.mockReturnValue(
 			Promise.resolve({ staged: 0, unstaged: 0, untracked: 0 }),
@@ -514,7 +513,7 @@ describe("StatusLineComponent reftable branch resolve honors mid-flight invalida
 			repoRoot: "/nested",
 		});
 		gitControls.head.mockResolvedValue(null);
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 
 		const component = new StatusLineComponent(makeSession(), statusLineHost);
 		component.updateSettings(gitSegment);
@@ -546,9 +545,11 @@ describe("StatusLineComponent VCS watcher and jj request lifecycle", () => {
 	it("refetches working-tree counts on the first paint past the status TTL, without a polling tick", async () => {
 		let now = 1_000_000;
 		vi.spyOn(Date, "now").mockImplementation(() => now);
-		gitControls.statusPorcelainBytes
-			.mockResolvedValueOnce(Buffer.from("M  staged.txt\0"))
-			.mockResolvedValueOnce(Buffer.from(" M a.txt\0 M b.txt\0 M c.txt\0 M d.txt\0 M e.txt\0 M f.txt\0 M g.txt\0"));
+		gitControls.statusChangeCounts
+			.mockResolvedValueOnce(parseGitStatus("M  staged.txt\0"))
+			.mockResolvedValueOnce(
+				parseGitStatus(" M a.txt\0 M b.txt\0 M c.txt\0 M d.txt\0 M e.txt\0 M f.txt\0 M g.txt\0"),
+			);
 		const component = new StatusLineComponent(makeSession(), statusLineHost);
 		component.updateSettings(gitSegment);
 
@@ -560,12 +561,12 @@ describe("StatusLineComponent VCS watcher and jj request lifecycle", () => {
 		// Inside the freshness window repaints reuse the cached counts.
 		now += 9_000;
 		component.getTopBorder(80);
-		expect(gitControls.statusPorcelainBytes).toHaveBeenCalledTimes(1);
+		expect(gitControls.statusChangeCounts).toHaveBeenCalledTimes(1);
 
 		// Past it, the next paint refetches with no invalidate() in between.
 		now += 1_001;
 		component.getTopBorder(80);
-		expect(gitControls.statusPorcelainBytes).toHaveBeenCalledTimes(2);
+		expect(gitControls.statusChangeCounts).toHaveBeenCalledTimes(2);
 		await Promise.resolve();
 		await Promise.resolve();
 		expect(component.getTopBorder(80).content).toContain("改动7");
@@ -580,7 +581,7 @@ describe("StatusLineComponent VCS watcher and jj request lifecycle", () => {
 			now >= repositoryCreatedAt ? { ...fakeRepoInfo, isReftable: true } : null,
 		);
 		vi.spyOn(vcs, "repo").mockImplementation(() => (now >= repositoryCreatedAt ? fakeVcsRepository : null));
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		const head = Promise.withResolvers<VcsHeadState | null>();
 		gitControls.head.mockReturnValue(head.promise);
 
@@ -611,7 +612,7 @@ describe("StatusLineComponent VCS watcher and jj request lifecycle", () => {
 	it("aborts superseded jj branch and status queries without blocking their replacements", async () => {
 		gitControls.headSync.mockReturnValue(null);
 		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		vi.spyOn(vcs, "repo").mockReturnValue(fakeJjRepository);
 
 		const labelRequests: Array<{ signal: AbortSignal; resolve: (value: string | null) => void }> = [];
@@ -624,12 +625,12 @@ describe("StatusLineComponent VCS watcher and jj request lifecycle", () => {
 			labelRequests.push({ signal, resolve: request.resolve });
 			return request.promise;
 		});
-		const statusRequests: Array<{ signal: AbortSignal; resolve: (value: GitStatus | null) => void }> = [];
+		const statusRequests: Array<{ signal: AbortSignal; resolve: (value: VcsStatusSummary | null) => void }> = [];
 		jjControls.statusSummary.mockImplementation(signal => {
 			if (!signal) {
 				throw new Error("jj status requires the central bounded options");
 			}
-			const request = Promise.withResolvers<GitStatus | null>();
+			const request = Promise.withResolvers<VcsStatusSummary | null>();
 			signal.addEventListener("abort", () => request.resolve(null), { once: true });
 			statusRequests.push({ signal, resolve: request.resolve });
 			return request.promise;
@@ -739,7 +740,7 @@ describe("StatusLineComponent applyCwdChange re-points watcher ownership", () =>
 			return null;
 		});
 		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		const watchFileSpy = vi.spyOn(nodeFs, "watchFile").mockReturnValue(fakeStatWatcher());
 		const unwatchFileSpy = vi.spyOn(nodeFs, "unwatchFile").mockImplementation(() => {});
 
@@ -782,7 +783,7 @@ describe("StatusLineComponent applyCwdChange re-points watcher ownership", () =>
 		vi.spyOn(vcs, "repo").mockImplementation((cwd: string) => (cwd === dirA ? repoA : null));
 		vi.spyOn(vcs, "gitInfo").mockImplementation((cwd: string) => (cwd === dirA ? repoAInfo : null));
 		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		const watchFileSpy = vi.spyOn(nodeFs, "watchFile").mockReturnValue(fakeStatWatcher());
 		const unwatchFileSpy = vi.spyOn(nodeFs, "unwatchFile").mockImplementation(() => {});
 
@@ -838,7 +839,7 @@ describe("StatusLineComponent git watcher survives atomic HEAD renames", () => {
 	it("keeps firing #onBranchChange across consecutive branch switches", async () => {
 		vi.restoreAllMocks();
 		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);
-		gitControls.statusPorcelainBytes.mockReturnValue(Promise.withResolvers<Buffer>().promise);
+		gitControls.statusChangeCounts.mockReturnValue(Promise.withResolvers<GitStatus>().promise);
 		const watchFileSpy = vi.spyOn(nodeFs, "watchFile");
 
 		setProjectDir(repoDir);

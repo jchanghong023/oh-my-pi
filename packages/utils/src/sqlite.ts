@@ -482,7 +482,8 @@ function readSalvageBoundary(db: Database, table: string, after: number): number
  * damaged store. A full scan aborts at the first unreadable page, so this walks
  * rowids with indexed seeks instead. On damage, a rowid-only seek can skip an
  * unreadable record without decoding its payload. Damaged pages can be skipped
- * using subtree boundaries; if unavailable, use bounded incremental probes.
+ * using subtree boundaries; if unavailable, double the seek stride and bisect
+ * back to the first clear seek.
  * Cross-linked pages can still decode rows with foreign column types, so
  * callers validate types.
  * Rows returned out of rowid order count as damage. Only corruption errors are
@@ -518,14 +519,12 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 	let after = Number.MIN_SAFE_INTEGER;
 	let damaged = 0;
 	let rowidSeek: Statement<{ salvage_rowid: number }, [number]> | undefined;
-	let useBoundaries = true;
 	while (after < Number.MAX_SAFE_INTEGER) {
 		const row = probe(seek, after);
 		if (row === null) break;
 		if (row) {
 			keep(row);
 			after = row.salvage_rowid;
-			useBoundaries = true;
 			continue;
 		}
 		if (++damaged > SALVAGE_MAX_DAMAGED_REGIONS) break;
@@ -535,11 +534,23 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 			after = unreadable.salvage_rowid;
 			continue;
 		}
-		const nextBoundary: number | undefined = useBoundaries ? readSalvageBoundary(db, table, after) : undefined;
-		// Do not repeat page reads on every incremental probe within this damaged region.
-		useBoundaries = nextBoundary !== undefined;
-		const clear = nextBoundary ?? after + 1;
-		// Probe the next key exactly before resuming strict-greater-than seeks.
+		const nextBoundary = readSalvageBoundary(db, table, after);
+		let clear = nextBoundary ?? Number.MAX_SAFE_INTEGER;
+		if (nextBoundary === undefined) {
+			// End-of-table counts as clear: readable rows may still lie below it.
+			let bad = after;
+			for (let step = 1; after + step < clear; step *= 2) {
+				const candidate = after + step;
+				if (probe(seek, candidate) !== undefined) clear = candidate;
+				else bad = candidate;
+			}
+			while (clear - bad > 1) {
+				const mid = bad + Math.floor((clear - bad) / 2);
+				if (probe(seek, mid) === undefined) bad = mid;
+				else clear = mid;
+			}
+		}
+		// A strict-greater-than seek from clear would otherwise skip clear itself.
 		const boundary = probe(exact, after, clear);
 		if (boundary) keep(boundary);
 		after = clear;

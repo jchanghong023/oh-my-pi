@@ -172,6 +172,8 @@ describe("job renderer task-result preview", () => {
 						status: "failed" as const,
 						label: "run checks",
 						durationMs: 3_200,
+						wallTimeMs: 3_200,
+						wallTimeNoticeEmitted: true,
 						errorText: output + formatOutputNotice(meta),
 						meta,
 					},
@@ -229,7 +231,7 @@ describe("job renderer task-result preview", () => {
 			}
 		});
 
-		it("keeps literal escape sequences and does not invent an artifact for a short Bash failure", () => {
+		it("keeps timing-like output without notice metadata and does not invent an artifact", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
 				details: {
@@ -241,7 +243,7 @@ describe("job renderer task-result preview", () => {
 							status: "failed" as const,
 							label: "short command",
 							durationMs: 10,
-							errorText: "literal\\ntext\nlast output line\n\nCommand exited with code 1",
+							errorText: "literal\\ntext\nWall time: 0.01 seconds\n\nCommand exited with code 1",
 						},
 					],
 				},
@@ -251,7 +253,8 @@ describe("job renderer task-result preview", () => {
 			expect(terminal).toContain("literal\\ntext");
 			expect(native).toContain("literal\\\\ntext");
 			for (const view of [terminal, native]) {
-				expect(view).toContain("last output line");
+				expect(view).toContain("Wall time: 0.01 seconds");
+				expect(view).not.toContain("Command exited with code");
 				expect(view).not.toMatch(/local:\/\/\d+\.log/);
 			}
 		});

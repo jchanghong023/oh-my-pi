@@ -2189,7 +2189,7 @@ impl Shell {
 	) {
 		let included =
 			|i: usize, detached: bool| selected.map_or(!detached, |hits| hits.contains(&i));
-		let mut pids = Vec::new();
+		let mut children = Vec::new();
 		for ext in self
 			.procs
 			.iter()
@@ -2201,12 +2201,15 @@ impl Shell {
 				Live::Ext(ext) => Some(ext),
 				_ => None,
 			}) {
-			pids.push(ext.pid());
+			children.push((ext.pid(), if groups { ext.pgid() } else { None }));
 			if let Some(members) = tracked.as_deref_mut()
 				&& let Some(process) = ext.process()
 			{
 				members.push(process);
 			}
+		}
+		if children.is_empty() && extra.is_empty() {
+			return;
 		}
 		let mut batched = false;
 		'first: for (i, p) in self.procs.iter_mut().enumerate() {
@@ -2217,7 +2220,7 @@ impl Shell {
 				if let Some(sc) = frame.scratch.as_mut()
 					&& let Live::Ext(ext) = &mut sc.live
 				{
-					batched = ext.signal_wave(sig, &pids, extra, groups);
+					batched = ext.signal_wave(sig, &children, extra, groups);
 					break 'first;
 				}
 			}
@@ -2225,7 +2228,10 @@ impl Shell {
 		if !batched && !extra.is_empty() {
 			let mut targets = crate::proctree::TerminationTargets::new();
 			for process in extra {
-				if !u32::try_from(process.pid()).is_ok_and(|pid| pids.contains(&pid)) {
+				if !children
+					.iter()
+					.any(|&(pid, _)| i32::try_from(pid).ok() == Some(process.pid()))
+				{
 					if groups && let Some(pgid) = process.group_id() {
 						targets.add_pgid(pgid);
 					}
@@ -2257,6 +2263,111 @@ impl Shell {
 					if resume {
 						let _ = ext.cont();
 					}
+				}
+			}
+		}
+	}
+
+	/// The terminating wave has already been sent. Resume only stopped
+	/// members of its scope, without waking a running member's CONT trap.
+	/// `selected` contains strictly increasing vproc indices.
+	fn resume_stopped_externals(
+		&mut self,
+		selected: &[usize],
+		extra: &[crate::proctree::Process],
+		groups: bool,
+	) {
+		#[cfg(unix)]
+		let mut roots = HashSet::new();
+		#[cfg(unix)]
+		let mut pgids = HashSet::new();
+		let mut stopped = Vec::new();
+		let mut remaining = self.procs.as_mut_slice();
+		let mut start = 0;
+		for &i in selected {
+			let (p, rest) = remaining[i - start..]
+				.split_first_mut()
+				.expect("selected vproc");
+			remaining = rest;
+			start = i + 1;
+			for frame in &mut p.frames {
+				if let Some(sc) = frame.scratch.as_mut()
+					&& let Live::Ext(ext) = &mut sc.live
+				{
+					#[cfg(unix)]
+					{
+						let Ok(pid) = i32::try_from(ext.pid()) else {
+							continue;
+						};
+						if groups && let Some(pgid) = ext.pgid().and_then(|id| i32::try_from(id).ok()) {
+							pgids.insert(pgid);
+						}
+						if roots.insert(pid) && externally_stopped(pid) {
+							stopped.push(ext);
+						}
+					}
+					#[cfg(not(unix))]
+					if p.stopped {
+						stopped.push(ext);
+					}
+				}
+			}
+		}
+		#[cfg(unix)]
+		{
+			use crate::sys::proc::{self, ProcState};
+
+			// A tracked identity may also be one of the owned handles. In
+			// that case its launch group, not its current group, is the scope.
+			let stopped_extra: Vec<_> = extra
+				.iter()
+				.filter(|process| {
+					if process.status() != crate::proctree::ProcessStatus::Running
+						|| !roots.insert(process.pid())
+					{
+						return false;
+					}
+					if groups && let Some(pgid) = process.group_id() {
+						pgids.insert(pgid);
+					}
+					externally_stopped(process.pid())
+				})
+				.collect();
+			let members = if pgids.is_empty() {
+				None
+			} else {
+				proc::list().ok()
+			};
+			for ext in stopped {
+				let _ = ext.signal_single(Signal::Cont);
+			}
+			let number = i32::from(Signal::Cont.number(crate::bash::Platform::current()));
+			for process in stopped_extra {
+				let _ = process.signal(number);
+			}
+			let own_pid = std::process::id();
+			if let Some(members) = members
+				&& let Some(own) = members.iter().find(|p| p.pid as u32 == own_pid)
+			{
+				pgids.remove(&own.pgid);
+				for member in members {
+					if member.state == ProcState::Stopped
+						&& pgids.contains(&member.pgid)
+						&& !roots.contains(&member.pid)
+					{
+						let _ = proc::signal_group_member(&member, number);
+					}
+				}
+			}
+		}
+		#[cfg(not(unix))]
+		{
+			let _ = extra;
+			for ext in stopped {
+				if groups {
+					let _ = ext.cont();
+				} else {
+					let _ = ext.signal_single(Signal::Cont);
 				}
 			}
 		}
@@ -2373,10 +2484,9 @@ impl Shell {
 							.filter(|&i| labels.contains(&self.procs[i].lineage.label))
 							.collect();
 						self.callout_trees(&mut hits);
-						let resume = sig.default_action() == DefaultAction::Terminate;
-						self.signal_externals(sig, Some(&hits), &extra, groups, resume && groups, None);
-						if resume && !groups {
-							self.signal_externals(Signal::Cont, Some(&hits), &extra, false, false, None);
+						self.signal_externals(sig, Some(&hits), &extra, groups, false, None);
+						if sig.default_action() == DefaultAction::Terminate && sig != Signal::Kill {
+							self.resume_stopped_externals(&hits, &extra, groups);
 						}
 						for label in labels {
 							self.deliver(cx, SigTarget::Label(label), sig, true);
@@ -2687,7 +2797,7 @@ impl Shell {
 				{
 					let p = &mut self.procs[i];
 					if p.stopped {
-						set_stopped(p, false);
+						set_stopped(p, false, externals_signaled);
 						changed.push((p.vpid, None));
 					}
 					continue;
@@ -2706,7 +2816,7 @@ impl Shell {
 					if stopped {
 						// Continued so the program can act on the signal (bash
 						// `kill_pid` continues a stopped job it signals).
-						set_stopped(p, false);
+						set_stopped(p, false, externals_signaled);
 						changed.push((p.vpid, None));
 					}
 					continue;
@@ -2753,7 +2863,7 @@ impl Shell {
 					if p.stopped != stop {
 						changed.push((p.vpid, stop.then_some(sig)));
 					}
-					set_stopped(p, stop);
+					set_stopped(p, stop, externals_signaled);
 				},
 				DefaultAction::Ignore => {},
 			}
@@ -2766,7 +2876,7 @@ impl Shell {
 	fn set_paused(&mut self, cx: &mut Cx<'_>, on: bool) {
 		self.k.paused = on;
 		for p in &mut self.procs {
-			pause_handles(p, on);
+			pause_handles(p, on, false);
 		}
 		let root = (self.procs[0].vpid, self.procs[0].mode);
 		let data = if on {
@@ -3059,18 +3169,25 @@ fn stands_for_nested(p: &Vproc) -> Option<Vpid> {
 	(nested && last).then_some(shell)
 }
 
-fn set_stopped(p: &mut Vproc, on: bool) {
+#[cfg(unix)]
+fn externally_stopped(pid: i32) -> bool {
+	crate::sys::proc::info(pid)
+		.is_some_and(|info| info.state == crate::sys::proc::ProcState::Stopped)
+}
+
+fn set_stopped(p: &mut Vproc, on: bool, externals_signaled: bool) {
 	p.stopped = on;
-	pause_handles(p, on);
+	pause_handles(p, on, externals_signaled);
 }
 
 /// Pause or resume a vproc's task or external.
-fn pause_handles(p: &mut Vproc, on: bool) {
+fn pause_handles(p: &mut Vproc, on: bool, externals_signaled: bool) {
 	for f in &mut p.frames {
 		if let Some(sc) = f.scratch.as_mut() {
 			match &mut sc.live {
 				Live::Task(t) if on => t.pause(),
 				Live::Task(t) => t.resume(),
+				Live::Ext(_) if externals_signaled => {},
 				Live::Ext(e) if on => {
 					let _ = e.stop();
 				},

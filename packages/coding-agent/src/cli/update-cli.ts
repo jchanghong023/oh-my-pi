@@ -3627,11 +3627,6 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 				} else {
 					console.log(chalk.yellow(`Forcing reinstall of ${release.version}`));
 				}
-				if (release.packages.pkg !== PACKAGE) {
-					console.log(
-						chalk.cyan(`The npm package moved to ${release.packages.pkg}; updating migrates this install.`),
-					);
-				}
 
 				if (opts.check) {
 					fields.reason = "check_only";
@@ -3639,34 +3634,18 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 					return { kind: "available", version: release.version };
 				}
 
-				// Choose update method based on the prioritized omp binary in PATH. For
-				// binary-only releases the package managers are never consulted: a bun/npm
-				// symlink resolves to method "binary" and is replaced in place, keeping the
-				// same PATH entry live.
+				// Fork releases are binary-only. Resolve the launcher selected by PATH,
+				// taking over package-manager shims in place rather than reinstalling the package.
 				try {
-					const forceBinary = shouldForceBinaryUpdate(release);
-					const allowPrerelease = channel === "canary";
 					const target = await observeUpdateStage("target_resolution", () =>
-						resolveUpdateTarget({ allowPackageManagers: !forceBinary }),
+						resolveUpdateTarget({ allowPackageManagers: false }),
 					);
 					fields.method = target.method;
 					updateEvent("target_selected", "completed", {
 						method: target.method,
-						force_binary: forceBinary,
+						force_binary: true,
 						replaces_symlink: "replacesSymlink" in target ? (target.replacesSymlink ?? false) : false,
 					});
-					if (
-						channel === "canary" &&
-						(target.method === "nix" || target.method === "brew" || target.method === "mise")
-					) {
-						fields.outcome = "skipped";
-						fields.reason = "unsupported_channel_method";
-						console.log(chalk.yellow("Canary updates are only supported for bun, npm, or binary installs."));
-						return {
-							kind: "unsupported",
-							reason: "Canary updates are only supported for bun, npm, or binary installs.",
-						};
-					}
 					if (target.method === "nix") {
 						fields.outcome = "skipped";
 						fields.reason = "nix_managed";
@@ -3692,41 +3671,25 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 						opts.onProgress?.({ phase: "installing", version: release.version });
 						await updateViaMise(release.version, opts.force);
 					} else if (target.method === "bun" || target.method === "npm") {
-						if (forceBinary) {
-							// Reachable in forced mode only through a Windows script
-							// launcher resolved from PATH (the bun/npm bin-dir probes are
-							// skipped), so the launcher path is always known.
-							if (!target.path) throw new Error(`Could not resolve ${APP_NAME} launcher path in PATH`);
-							console.log(
-								chalk.dim("This release ships as a standalone binary; replacing the script launcher."),
-							);
-							await updateViaShimTakeover(target.path, release.version, {
-								allowPrerelease,
-								onProgress: opts.onProgress,
-							});
-							console.log(
-								chalk.yellow(
-									`This install is no longer managed by ${target.method}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
-								),
-							);
-						} else {
-							opts.onProgress?.({ phase: "installing", version: release.version });
-							await updateViaManager(
-								release,
-								target.path,
-								packageManagerUpdateSteps(target.method, release, opts.onProgress),
-							);
-						}
+						// With package-manager routing disabled, only Windows script
+						// launchers selected from PATH can reach this branch.
+						if (!target.path) throw new Error(`Could not resolve ${APP_NAME} launcher path in PATH`);
+						console.log(chalk.dim("This release ships as a standalone binary; replacing the script launcher."));
+						await updateViaShimTakeover(target.path, release.version, { onProgress: opts.onProgress });
+						console.log(
+							chalk.yellow(
+								`This install is no longer managed by ${target.method}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
+							),
+						);
 					} else {
-						if (forceBinary && target.replacesSymlink) {
+						if (target.replacesSymlink) {
 							console.log(chalk.dim("Replacing the package-manager launcher with the standalone binary."));
 						}
 						await updateViaBinaryAt(target.path, release.version, {
-							allowPrerelease,
 							onProgress: opts.onProgress,
 							validateExistingTarget: target.validateExistingTarget,
 						});
-						if (forceBinary && target.replacesSymlink) {
+						if (target.replacesSymlink) {
 							console.log(
 								chalk.yellow(
 									`This install is no longer managed by bun/npm. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,

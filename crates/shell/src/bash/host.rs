@@ -649,13 +649,15 @@ pub trait ExtProc: Send {
 	fn signal_single(&mut self, sig: Signal) -> io::Result<()> {
 		self.signal(sig)
 	}
-	/// Signal a complete wave when this host can snapshot it. `extra` contains
-	/// pinned processes that the interpreter no longer owns.
+	/// Signal a complete wave when this host can snapshot it. `children`
+	/// contains each selected handle's PID and, for group waves only, its
+	/// launch PGID. `extra` contains pinned processes no longer owned by
+	/// the interpreter.
 	/// Returns false without signaling when batching is unsupported.
 	fn signal_wave(
 		&mut self,
 		_sig: Signal,
-		_pids: &[u32],
+		_children: &[(u32, Option<u32>)],
 		_extra: &[crate::proctree::Process],
 		_groups: bool,
 	) -> bool {

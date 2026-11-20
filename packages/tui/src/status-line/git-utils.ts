@@ -1,25 +1,26 @@
 import type { GitStatus } from "./types";
 
-/** Count distinct porcelain v1 -z paths; rename/copy sources are not separate changes. */
+/** Count distinct porcelain v1 -z paths for each visibility mask; skip rename/copy sources. */
 export function parseGitStatus(input: Buffer | string): GitStatus {
 	// Latin-1 maps every byte to a distinct code unit. These keys are compared,
 	// not displayed; UTF-8 replacement would merge different invalid paths.
 	const porcelain = typeof input === "string" ? input : input.toString("latin1");
-	const staged = new Set<string>();
-	const unstaged = new Set<string>();
-	const untracked = new Set<string>();
+	const paths = new Map<string, number>();
 	let offset = 0;
 	while (offset < porcelain.length) {
 		const end = porcelain.indexOf("\0", offset);
 		if (end === -1) throw new Error("Incomplete Git status record");
 		const index = porcelain[offset];
 		const worktree = porcelain[offset + 1];
-		const path = porcelain.slice(offset + 3, end);
+		let mask = 0;
 		if (index === "?" && worktree === "?") {
-			untracked.add(path);
-		} else if (index !== "!" && (index !== " " || worktree !== " ")) {
-			if (index !== " ") staged.add(path);
-			if (worktree !== " ") unstaged.add(path);
+			mask = 4;
+		} else if (index !== "!" || worktree !== "!") {
+			mask = Number(index !== " ") | (Number(worktree !== " ") << 1);
+		}
+		if (mask !== 0) {
+			const path = porcelain.slice(offset + 3, end);
+			paths.set(path, (paths.get(path) ?? 0) | mask);
 		}
 		offset = end + 1;
 		if (index === "R" || index === "C" || worktree === "R" || worktree === "C") {
@@ -28,16 +29,15 @@ export function parseGitStatus(input: Buffer | string): GitStatus {
 			offset = sourceEnd + 1;
 		}
 	}
-	const changed = new Set(staged);
-	for (const path of unstaged) changed.add(path);
-	for (const path of untracked) changed.add(path);
-	return {
-		staged: staged.size,
-		unstaged: unstaged.size,
-		untracked: untracked.size,
-		changed: changed.size,
-		paths: { staged: [...staged], unstaged: [...unstaged], untracked: [...untracked] },
-	};
+	const histogram = [0, 0, 0, 0, 0, 0, 0, 0];
+	for (const mask of paths.values()) histogram[mask]++;
+	const counts: [...GitStatus] = [0, 0, 0, 0, 0, 0, 0, 0];
+	for (let enabled = 1; enabled < counts.length; enabled++) {
+		for (let mask = 1; mask < histogram.length; mask++) {
+			if (enabled & mask) counts[enabled] += histogram[mask];
+		}
+	}
+	return counts;
 }
 
 /**

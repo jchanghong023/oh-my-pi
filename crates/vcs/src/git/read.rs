@@ -1,7 +1,7 @@
 //! Read-side operations on [`GitRepo`](super::GitRepo).
 
 use std::{
-	collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
+	collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
 	path::{Path, PathBuf},
 };
 
@@ -284,20 +284,26 @@ impl GitRepo {
 		self.status_porcelain_capped(options, super::cli::OUTPUT_LIMIT_BYTES)
 	}
 
-	/// Complete NUL-delimited porcelain with raw paths and every untracked file.
-	pub fn status_porcelain_bytes(&self) -> Result<Vec<u8>> {
+	/// Deduplicated file counts indexed by visibility mask: staged (1),
+	/// unstaged (2), and untracked (4). A file counts for any mask that
+	/// enables at least one of its change categories.
+	pub fn status_change_counts(&self) -> Result<[usize; 8]> {
 		let args = ["status", "--porcelain", "--untracked-files=all", "-z"].map(str::to_owned);
-		match super::cli::run_sync_complete_stdout(self.root(), &args, super::cli::COMMAND_TIMEOUT) {
-			Err(err) if !self.is_reftable() && super::cli::prefers_in_process(&err) => self
-				.status_porcelain_gix_bytes(
-					&StatusOptions {
-						untracked: UntrackedMode::All,
-						nul_terminated: true,
-						..Default::default()
-					},
-					super::cli::OUTPUT_LIMIT_BYTES,
-				),
-			result => result,
+		match super::cli::run_sync_fold_stdout(
+			self.root(),
+			&args,
+			super::cli::COMMAND_TIMEOUT,
+			StatusRecords::append,
+		) {
+			Err(err) if !self.is_reftable() && super::cli::prefers_in_process(&err) => {
+				let mut masks = HashMap::new();
+				self.status_porcelain_gix_each(
+					&StatusOptions { untracked: UntrackedMode::All, ..Default::default() },
+					|x, y, path, _| *masks.entry(path).or_default() |= status_mask(x, y),
+				)?;
+				Ok(status_mask_counts(masks))
+			},
+			result => result?.finish(),
 		}
 	}
 
@@ -330,12 +336,33 @@ impl GitRepo {
 	/// without a git binary. Must stay byte-identical to `git status
 	/// --porcelain` — the oracle test compares both against the real CLI.
 	fn status_porcelain_gix(&self, options: &StatusOptions) -> Result<String> {
-		self
-			.status_porcelain_gix_bytes(options, usize::MAX)
-			.map(String::from_utf8_lossy_owned)
+		let mut out = Vec::new();
+		self.status_porcelain_gix_each(options, |x, y, path, old| {
+			out.extend_from_slice(&[x, y, b' ']);
+			if options.nul_terminated {
+				out.extend_from_slice(&path);
+				out.push(0);
+				if let Some(old) = old {
+					out.extend_from_slice(&old);
+					out.push(0);
+				}
+			} else {
+				if let Some(old) = old {
+					quote_path(&mut out, &old);
+					out.extend_from_slice(b" -> ");
+				}
+				quote_path(&mut out, &path);
+				out.push(b'\n');
+			}
+		})?;
+		Ok(String::from_utf8_lossy_owned(out))
 	}
 
-	fn status_porcelain_gix_bytes(&self, options: &StatusOptions, limit: usize) -> Result<Vec<u8>> {
+	fn status_porcelain_gix_each(
+		&self,
+		options: &StatusOptions,
+		mut emit: impl FnMut(u8, u8, Vec<u8>, Option<Vec<u8>>),
+	) -> Result<()> {
 		let repo = self.gix()?;
 		let untracked = match options.untracked {
 			UntrackedMode::No => gix::status::UntrackedFiles::None,
@@ -436,33 +463,14 @@ impl GitRepo {
 				},
 			}
 		}
-		let mut out = Vec::new();
 		for (path, (x, y, old)) in states.into_iter().chain(
 			untracked_paths
 				.into_iter()
 				.map(|path| (path, (b'?', b'?', None))),
 		) {
-			out.extend_from_slice(&[x, y, b' ']);
-			if options.nul_terminated {
-				out.extend_from_slice(&path);
-				out.push(0);
-				if let Some(old) = old {
-					out.extend_from_slice(&old);
-					out.push(0);
-				}
-			} else {
-				if let Some(old) = old {
-					quote_path(&mut out, &old);
-					out.extend_from_slice(b" -> ");
-				}
-				quote_path(&mut out, &path);
-				out.push(b'\n');
-			}
-			if out.len() > limit {
-				return Err(Error::backend("git status", "status exceeds the capture limit"));
-			}
+			emit(x, y, path, old);
 		}
-		Ok(out)
+		Ok(())
 	}
 
 	/// Count staged, unstaged, and untracked status entries.
@@ -1170,6 +1178,75 @@ fn dir_contains_file(dir: &Path) -> bool {
 	false
 }
 
+#[derive(Default)]
+struct StatusRecords {
+	paths:              HashMap<Vec<u8>, u8>,
+	pending:            Vec<u8>,
+	skip_rename_source: bool,
+	malformed:          bool,
+}
+
+impl StatusRecords {
+	fn append(&mut self, mut bytes: &[u8]) {
+		while !self.malformed {
+			let Some(end) = bytes.find_byte(0) else {
+				self.pending.extend_from_slice(bytes);
+				return;
+			};
+			let mut record = &bytes[..end];
+			if !self.pending.is_empty() {
+				self.pending.extend_from_slice(record);
+				record = &self.pending;
+			}
+			if self.skip_rename_source {
+				self.skip_rename_source = false;
+				self.malformed = record.is_empty();
+			} else if let [x, y, b' ', path @ ..] = record
+				&& !path.is_empty()
+			{
+				let mask = status_mask(*x, *y);
+				if mask != 0 {
+					*self.paths.entry(path.to_vec()).or_default() |= mask;
+				}
+				self.skip_rename_source = matches!(*x, b'R' | b'C') || matches!(*y, b'R' | b'C');
+			} else {
+				self.malformed = true;
+			}
+			self.pending.clear();
+			bytes = &bytes[end + 1..];
+		}
+	}
+
+	fn finish(self) -> Result<[usize; 8]> {
+		if self.malformed || !self.pending.is_empty() || self.skip_rename_source {
+			return Err(Error::backend("git status", "invalid or incomplete porcelain record"));
+		}
+		Ok(status_mask_counts(self.paths))
+	}
+}
+
+fn status_mask(x: u8, y: u8) -> u8 {
+	match (x, y) {
+		(b'?', b'?') => 4,
+		(b'!', b'!') => 0,
+		_ => u8::from(x != b' ') | (u8::from(y != b' ') << 1),
+	}
+}
+
+fn status_mask_counts(paths: HashMap<Vec<u8>, u8>) -> [usize; 8] {
+	let mut histogram = [0; 8];
+	for mask in paths.into_values() {
+		histogram[usize::from(mask)] += 1;
+	}
+	std::array::from_fn(|enabled| {
+		histogram
+			.iter()
+			.enumerate()
+			.filter_map(|(mask, &count)| (mask & enabled != 0).then_some(count))
+			.sum()
+	})
+}
+
 type PorcelainStates = BTreeMap<Vec<u8>, (u8, u8, Option<Vec<u8>>)>;
 
 fn set_index(states: &mut PorcelainStates, path: &gix::bstr::BStr, code: u8, old: Option<Vec<u8>>) {
@@ -1743,6 +1820,24 @@ mod tests {
 		assert!(repo.merge_base("main", "does-not-exist").is_err());
 		Ok(())
 	}
+
+	#[test]
+	fn status_records_count_raw_paths_across_chunks() -> TestResult {
+		let mut status = StatusRecords::default();
+		let porcelain = b"D  same\0?? same\0RM renamed\0old\0?? dir/\xff\0?? dir/\xfe\0!! ignored\0";
+		for chunk in porcelain.chunks(3) {
+			status.append(chunk);
+		}
+		assert_eq!(status.finish()?, [0, 2, 1, 2, 3, 4, 4, 4]);
+
+		for porcelain in [b" M unfinished".as_slice(), b"R  destination\0source"] {
+			let mut status = StatusRecords::default();
+			status.append(porcelain);
+			assert!(status.finish().is_err(), "incomplete status should fail");
+		}
+		Ok(())
+	}
+
 	#[test]
 	fn read_status_porcelain_survives_output_larger_than_pipe_buffer() -> TestResult {
 		let (dir, repo) = repo()?;
@@ -1762,6 +1857,7 @@ mod tests {
 			..Default::default()
 		})?;
 		assert_eq!(text.lines().count(), 3000);
+		assert_eq!(repo.status_change_counts()?, [0, 0, 0, 0, 3000, 3000, 3000, 3000]);
 		Ok(())
 	}
 
@@ -1800,6 +1896,7 @@ mod tests {
 			unstaged:  2,
 			untracked: 2,
 		});
+		assert_eq!(repo.status_change_counts()?, [0, 2, 2, 3, 3, 5, 5, 6]);
 		Ok(())
 	}
 

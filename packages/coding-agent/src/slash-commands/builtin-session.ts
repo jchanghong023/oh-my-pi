@@ -286,10 +286,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				// unresumable transcript).
 				let deleted: boolean;
 				try {
-					const options = { drop: true, throwOnDropFailure: true };
-					deleted = runtime.newSession
-						? await runtime.newSession(options)
-						: await runtime.session.newSession(options);
+					deleted = await runtime.session.newSession({ drop: true, throwOnDropFailure: true });
 				} catch (err) {
 					const switched = runtime.sessionManager.getSessionFile() !== sessionFile;
 					return usage(

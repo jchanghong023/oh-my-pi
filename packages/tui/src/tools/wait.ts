@@ -13,6 +13,7 @@ import {
 	stripTrailingNotice,
 	type OutputMeta,
 } from "./output-meta";
+import { formatWallTimeNotice } from "./bash";
 import {
 	FEED_MODEL_BADGE_WIDTH,
 	formatBadge,
@@ -74,6 +75,10 @@ export interface JobSnapshot {
 	settledAtMs?: number;
 	/** Process exit status when the job reports one. */
 	exitCode?: number;
+	/** Bash's measured wall time, not the age of the tracked job. */
+	wallTimeMs?: number;
+	/** Whether Bash appended its wall-time notice to the captured text. */
+	wallTimeNoticeEmitted?: boolean;
 	/** Effective task model selector, including an explicit reasoning suffix when configured. */
 	resolvedModel?: string;
 	/** Provider/id including routing, with no added thinking suffix. */
@@ -273,13 +278,16 @@ function failurePreview(job: JobSnapshot): { lines: string[]; artifact?: string 
 			?.trim();
 		return { lines: first ? [first] : [] };
 	}
-	// Wait snapshots retain the exit code but not Bash's exact wall-time metadata.
-	// Either notice can be last; remove each at most once, with blank lines between.
-	const withoutWall = stripTrailingNotice(raw, line => /^Wall time: \d+\.\d{2} seconds$/u.test(line));
+	// Either notice can be last. Without explicit timing metadata, a matching line is output.
+	const wallNotice =
+		job.wallTimeNoticeEmitted === true && job.wallTimeMs !== undefined
+			? formatWallTimeNotice(job.wallTimeMs)
+			: undefined;
+	const withoutWall = wallNotice === undefined ? raw : stripTrailingNotice(raw, line => line === wallNotice);
 	const withoutExit = stripTrailingNotice(withoutWall, line => /^Command exited with code -?\d+$/u.test(line));
 	const withoutNotices =
-		withoutWall === raw
-			? stripTrailingNotice(withoutExit, line => /^Wall time: \d+\.\d{2} seconds$/u.test(line))
+		wallNotice !== undefined && withoutWall === raw && withoutExit !== raw
+			? stripTrailingNotice(withoutExit, line => line === wallNotice)
 			: withoutExit;
 	const output = stripRawOutputArtifactNotice(withoutNotices).text;
 	const truncation = job.meta?.truncation;

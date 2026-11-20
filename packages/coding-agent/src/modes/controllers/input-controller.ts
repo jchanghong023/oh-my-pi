@@ -40,11 +40,15 @@ import { setCachedImageDimensions } from "@oh-my-pi/pi-tui/prompt/image-referenc
 import { createPromptActionAutocompleteProvider } from "@oh-my-pi/pi-tui/prompt/prompt-action-autocomplete";
 import { createModelMentionSource } from "@oh-my-pi/pi-tui/prompt/model-mention-autocomplete";
 import { createModelBrowserSource } from "../model-browser-source";
-import { renderLoopGoalPrompt } from "../loop-goal";
 import { formatQueueShorthand, parseQueueShorthand, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import { parseFileSlashInvocation, renderFileSlashCommand } from "../../extensibility/slash-commands";
-import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
+import {
+	type InteractiveModeContext,
+	isLoopCommand,
+	type PreparedLoopPrompt,
+	type SubmittedUserInput,
+} from "../../modes/types";
 import { openLocalFileInEditor } from "../local-file-editor";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { DequeuedMessage, RestoredQueuedMessage } from "../../session/agent-session-types";
@@ -341,6 +345,8 @@ export class InputController {
 	 * Each submission awaits the previous one's, so queue placement follows submission order.
 	 */
 	#submissionHookOrder: Promise<void> = Promise.resolve();
+	/** Follow-ups enter the session in submission order, without waiting for prior turns to finish. */
+	#followUpAdmissionOrder: Promise<void> = Promise.resolve();
 	/** Submissions (Enter or the follow-up key) the session has not admitted yet and that still dispatch locally. */
 	readonly #submissionDispatches = new Set<Promise<void>>();
 
@@ -1267,6 +1273,7 @@ export class InputController {
 			if (bareSlashCommand) text = bareSlashCommand.command;
 
 			// Handle built-in slash commands
+			let inlineLoop = false;
 			if (text) {
 				this.#recordSlashCommandUsage(text);
 				const input =
@@ -1293,6 +1300,7 @@ export class InputController {
 					// Record the original slash command text so Up Arrow recalls
 					// "/loop 10 fix bug" rather than just "fix bug".
 					if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
+					inlineLoop = isLoopCommand(parseSlashCommand(text)?.name);
 					text = slashResult;
 				}
 			}
@@ -1404,22 +1412,17 @@ export class InputController {
 			}
 
 			const localExtensionCommand = this.#isLocalExtensionCommand(text);
-			if (!localExtensionCommand && text && this.ctx.loopGoalMode) text = renderLoopGoalPrompt(text);
+			const prepared: PreparedLoopPrompt =
+				this.ctx.loopModeEnabled && (this.ctx.loopGoalMode || inlineLoop)
+					? this.ctx.prepareLoopPrompt(text, inlineLoop || !this.ctx.loopPrompt)
+					: { text };
+			text = prepared.text;
 
 			// Queue input during compaction
 			if (this.ctx.session.isCompacting) {
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.queueCompactionMessage(text, "steer", images);
-				// An inline `/loop` body queued here arms the loop only when it is
-				// an actual model prompt. Skill/bash/python bodies never reach this
-				// branch, but an extension-command body would otherwise be retained
-				// as loopPrompt while the drain executes it locally — and idle
-				// submissions never arm commands.
-				if (
-					(submittedMode === "loop" || submittedMode === "loopgoal" || submittedMode === "loopn") &&
-					!localExtensionCommand
-				)
-					this.ctx.setLoopPrompt(text);
+				prepared.onPromptAdmitted?.();
 				return;
 			}
 
@@ -1461,18 +1464,16 @@ export class InputController {
 				// typed since queuing intact. Same protection as #783, applied to
 				// the streaming/queue path.
 				try {
-					const forwarded = await this.ctx.withLocalSubmission(
+					await this.ctx.withLocalSubmission(
 						text,
-						() => this.ctx.session.prompt(text, { streamingBehavior: "steer", images }),
+						() =>
+							this.ctx.session.prompt(text, {
+								streamingBehavior: "steer",
+								images,
+								onPromptAdmitted: prepared.onPromptAdmitted,
+							}),
 						{ imageCount: images?.length ?? 0 },
 					);
-					// An inline `/loop` body arms the loop only after dispatch
-					// confirms it was forwarded: arming before the await would
-					// retain a body whose dispatch rejects, resubmitting a failed
-					// prompt after every yield. A rejection leaves prior loop
-					// state untouched, so the previous body (if any) survives.
-					if ((submittedMode === "loop" || submittedMode === "loopgoal" || submittedMode === "loopn") && forwarded)
-						this.ctx.setLoopPrompt(text);
 				} catch (error) {
 					// Don't lose the queued steer draft: restore images then the collapsed
 					// text so chip tokens (and band cards) survive the retry.
@@ -2217,6 +2218,8 @@ export class InputController {
 
 		const origin = conversationPosition(this.ctx.sessionManager);
 		const dispatch = Promise.withResolvers<void>();
+		const earlierFollowUp = this.#followUpAdmissionOrder;
+		this.#followUpAdmissionOrder = earlierFollowUp.then(() => dispatch.promise);
 		this.#submissionDispatches.add(dispatch.promise);
 		const admitted = () => {
 			if (this.#submissionDispatches.delete(dispatch.promise)) dispatch.resolve();
@@ -2242,6 +2245,7 @@ export class InputController {
 			} finally {
 				hooksDone.resolve();
 			}
+			await earlierFollowUp;
 			await this.#dispatchFollowUp(text, images, imageLinks, origin, admitted);
 		} finally {
 			admitted();
@@ -2286,6 +2290,7 @@ export class InputController {
 			return;
 		}
 
+		let inlineLoop = false;
 		if (text) {
 			try {
 				const input =
@@ -2304,6 +2309,7 @@ export class InputController {
 					// Command handled but returned remaining text to use as prompt.
 					// Record the original slash command text so Up Arrow recalls it.
 					if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
+					inlineLoop = isLoopCommand(parseSlashCommand(text)?.name);
 					text = slashResult;
 				}
 			} catch (error) {
@@ -2330,40 +2336,32 @@ export class InputController {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		};
 
-		if (this.ctx.session.isStreaming) {
-			this.ctx.editor.addToHistory(text);
-			try {
-				await this.ctx.withLocalSubmission(
-					text,
-					() => {
-						const pending = this.ctx.session.prompt(text, { streamingBehavior: "followUp", images });
-						admitted();
-						return pending;
-					},
-					{ imageCount: images?.length ?? 0 },
-				);
-			} catch (error) {
-				restoreOnError(error);
-			}
-			this.ctx.updatePendingMessagesDisplay();
-			this.ctx.ui.requestRender();
-			return;
-		}
-
-		// Not streaming — just submit normally
+		const wasStreaming = this.ctx.session.isStreaming;
+		const prepared: PreparedLoopPrompt =
+			this.ctx.loopModeEnabled && (inlineLoop || this.ctx.loopGoalMode)
+				? this.ctx.prepareLoopPrompt(text, inlineLoop || !this.ctx.loopPrompt)
+				: { text };
 		this.ctx.editor.addToHistory(text);
 		try {
 			await this.ctx.withLocalSubmission(
-				text,
-				() => {
-					const pending = this.ctx.session.prompt(text, { images });
-					admitted();
-					return pending;
-				},
+				prepared.text,
+				() =>
+					this.ctx.session.prompt(prepared.text, {
+						streamingBehavior: "followUp",
+						images,
+						onPromptAdmitted: () => {
+							prepared.onPromptAdmitted?.();
+							admitted();
+						},
+					}),
 				{ imageCount: images?.length ?? 0 },
 			);
 		} catch (error) {
 			restoreOnError(error);
+		}
+		if (wasStreaming) {
+			this.ctx.updatePendingMessagesDisplay();
+			this.ctx.ui.requestRender();
 		}
 	}
 
@@ -3292,6 +3290,7 @@ export class InputController {
 
 	toggleToolOutputExpansion(): void {
 		if (this.ctx.hideToolActivity && cfgDisplayMode.get(this.ctx.settings) === "compact") {
+			if (this.ctx.compactFileDiff?.toggle()) return;
 			const expanded = !this.#compactTodoLoopExpanded;
 			if (!this.#setTodoLoopExpanded(expanded)) return;
 			this.#compactTodoLoopExpanded = expanded;

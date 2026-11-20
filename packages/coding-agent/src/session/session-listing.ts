@@ -711,9 +711,8 @@ export async function listAllSessions(
 ): Promise<SessionInfo[]> {
 	try {
 		const files =
-			storage instanceof FileSessionStorage
-				? await dedupeRealPaths(await scanBucketFiles(sessionsRoot, "*.jsonl"))
-				: storage.listFilesSync(sessionsRoot, "*/*.jsonl");
+			storage.listBucketFilesSync?.(sessionsRoot, "*.jsonl") ??
+			(await dedupeRealPaths(await scanBucketFiles(sessionsRoot, "*.jsonl")));
 		return await collectSessionsFromFiles(files, storage, true);
 	} catch {
 		return [];
@@ -784,6 +783,12 @@ export async function listAllSessionsForPicker(
 ): Promise<PickerListing> {
 	let files: string[];
 	try {
+		const storedFiles = storage.listBucketFilesSync?.(sessionsRoot, "*.jsonl");
+		if (storedFiles) {
+			return pickerListing(storedFiles, storage, pinnedIds, () =>
+				collectSessionsFromFiles(storedFiles, storage, true),
+			);
+		}
 		files = await scanBucketFiles(sessionsRoot, "*.jsonl");
 	} catch {
 		return settledListing([]);

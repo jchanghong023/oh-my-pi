@@ -26,7 +26,6 @@ import { resolveToolTier, strictestApproval, truncateForPrompt } from "./approva
 import { parseReadUrlTarget } from "./fetch";
 import { type FileSnapshot, readSnapshot } from "../commit/selective/journal";
 import { createFileRecorder, formatResultPath, resultSnapshotPath } from "./file-recorder";
-import { invalidateFsScanAfterUncertainWrites, invalidateFsScanAfterWrites } from "./fs-cache-invalidation";
 import { formatGroupedFiles } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
 
 import {
@@ -177,13 +176,6 @@ async function runAstEditTargets(
 			nativeAstEdit,
 			targetIndex++,
 		);
-		if (targetResult.applied && targetResult.fileChanges.length) {
-			invalidateFsScanAfterWrites(
-				targetResult.fileChanges.map(change =>
-					resolveAstEditResultPath(target.basePath, target.isDirectory, change.path),
-				),
-			);
-		}
 		totalReplacements += targetResult.totalReplacements;
 		filesSearched += targetResult.filesSearched;
 		limitReached = limitReached || targetResult.limitReached;
@@ -220,7 +212,6 @@ async function runAstEditTargets(
 function runAstEditOnce(
 	targets: Array<{ basePath: string; glob?: string; isDirectory: boolean }> | undefined,
 	resolvedSearchPath: string,
-	isDirectory: boolean,
 	globFilter: string | undefined,
 	options: AstEditCallOptions,
 	nativeAstEdit: typeof astEdit,
@@ -240,14 +231,7 @@ function runAstEditOnce(
 			filesystem: options.filesystem,
 		},
 		nativeAstEdit,
-	).then(result => {
-		if (result.applied && result.fileChanges.length) {
-			invalidateFsScanAfterWrites(
-				result.fileChanges.map(change => resolveAstEditResultPath(resolvedSearchPath, isDirectory, change.path)),
-			);
-		}
-		return result;
-	});
+	);
 }
 
 type AstEditSchemaInfer = typeof astEditSchema.infer;
@@ -363,7 +347,6 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			...logger.getLogContext(),
 			operation_id: logger.getLogContext().operation_id ?? `ast-edit-${crypto.randomUUID()}`,
 			tool_call_id: _toolCallId,
-			mutation_source: "ast_edit",
 		};
 		return logger.withLogContext(logContext, () => {
 			const previewStarted = performance.now();
@@ -428,7 +411,6 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					runAstEditOnce(
 						targets,
 						resolvedSearchPath,
-						isDirectory,
 						globFilter,
 						{
 							rewrites: normalizedRewrites,
@@ -619,10 +601,11 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 										stage: "deferred_apply",
 										result: "started",
 										candidate_count: result.fileChanges.length,
-										reported_written_count: "unknown",
+										reported_written_count: 0,
 									});
-									let applyStage = "native_apply";
-									let reportedWrittenCount: number | "unknown" = "unknown";
+									let applyStage = "resolve_scope";
+									let reportedWrittenCount = 0;
+									let possiblePartialWrite = false;
 									try {
 										// The apply outlives the preview call: its filesystem carries no signal.
 										const applyContext = sessionResolveContext(this.session);
@@ -641,6 +624,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 													})),
 												)
 											: undefined;
+										applyStage = "prepare_apply";
 										const journaled: Array<{ path: string; before: FileSnapshot }> = [];
 										if (this.session.recordFileChange) {
 											for (const relativePath of fileList) {
@@ -653,12 +637,12 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 												if (absolute !== undefined && before) journaled.push({ path: absolute, before });
 											}
 										}
+										const nativeAstEdit = this.nativeAstEdit;
 										const applyResult = await (async () => {
 											try {
-												return await runAstEditOnce(
+												const applied = await runAstEditOnce(
 													applyTargets,
 													resolvedSearchPath,
-													applyIsDirectory,
 													globFilter,
 													{
 														rewrites: normalizedRewrites,
@@ -667,8 +651,17 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 														failOnParseError: false,
 														filesystem: applyFilesystem.shellFilesystem(),
 													},
-													this.nativeAstEdit,
+													options => {
+														applyStage = options.dryRun ? "native_preflight" : "native_apply";
+														// Native apply can reject after committing a subset of files.
+														if (!options.dryRun) possiblePartialWrite = true;
+														return nativeAstEdit(options);
+													},
 												);
+												reportedWrittenCount = applied.applied ? applied.fileChanges.length : 0;
+												possiblePartialWrite = false;
+												applyStage = "journal_apply";
+												return applied;
 											} finally {
 												for (const { path: file, before } of journaled) {
 													const after = await readSnapshot(file);
@@ -683,7 +676,6 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 												}
 											}
 										})();
-										reportedWrittenCount = applyResult.applied ? applyResult.fileChanges.length : 0;
 										applyStage = "render_apply_result";
 										const formatAppliedPath = (filePath: string): string =>
 											formatResultPath(filePath, applyIsDirectory, resolvedSearchPath, this.session.cwd);
@@ -800,17 +792,6 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 											freshTagLines.length > 0 ? `${appliedText}\n${freshTagLines.join("\n")}` : appliedText;
 										return toolResult(appliedDetails).text(text).done();
 									} catch (error) {
-										if (applyStage === "native_apply") {
-											// Native apply commits files sequentially and can reject after a partial write.
-											// Preview paths are candidates, not proof of success or an exhaustive
-											// post-preview scope: notify observers of possible partial writes.
-											invalidateFsScanAfterUncertainWrites(
-												result.fileChanges.map(change =>
-													resolveAstEditResultPath(resolvedSearchPath, isDirectory, change.path),
-												),
-												"AST edit apply failed; files may have been partially written",
-											);
-										}
 										logger.error("Deferred AST edit apply failed", {
 											component: "ast_edit",
 											event: "ast_edit_deferred_apply_failed",
@@ -818,10 +799,8 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 											result: "failed",
 											elapsed_ms: performance.now() - applyStarted,
 											candidate_count: result.fileChanges.length,
-											reported_written_count: reportedWrittenCount,
-											possible_partial_write: reportedWrittenCount === "unknown",
-											uncertain_notification_count:
-												reportedWrittenCount === "unknown" ? result.fileChanges.length : 0,
+											reported_written_count: possiblePartialWrite ? "unknown" : reportedWrittenCount,
+											possible_partial_write: possiblePartialWrite,
 											...logger.diagnosticError(error),
 										});
 										throw error;

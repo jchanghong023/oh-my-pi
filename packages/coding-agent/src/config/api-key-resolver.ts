@@ -2,6 +2,7 @@ import {
 	type ApiKeyResolution,
 	type ApiKeyResolver,
 	createOAuthProvenance,
+	type ResolvedApiKey,
 	resolveAfterRotation,
 } from "@oh-my-pi/pi-ai/auth-retry";
 import * as AIError from "@oh-my-pi/pi-ai/error";
@@ -18,6 +19,8 @@ export interface ApiKeyResolverOptions {
 	baseUrl?: string;
 	/** Provider model id forwarded to model-scoped usage ranking/backoff. */
 	modelId?: string;
+	/** Seed OAuth provenance when the dispatch path already selected the first credential. */
+	initialKey?: ResolvedApiKey;
 }
 
 /**
@@ -62,6 +65,7 @@ export function createApiKeyResolver(
 	// One resolver serves many requests, and they fail out of order, so the
 	// token a 401 rejected is looked up from the bearer that request sent.
 	const provenance = createOAuthProvenance();
+	provenance.record(options.initialKey);
 	const resolveKey = async (
 		forceRefresh: boolean | undefined,
 		signal?: AbortSignal,

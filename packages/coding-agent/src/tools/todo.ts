@@ -10,7 +10,7 @@ import {
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 
-import { isRecord, prompt } from "@oh-my-pi/pi-utils";
+import { isRecord, prompt, tryParseJson } from "@oh-my-pi/pi-utils";
 
 import todoDescription from "../prompts/tools/todo.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
@@ -550,6 +550,9 @@ const STATUS_TO_MARKER: Record<TodoStatus, string> = {
 	blocked: "!",
 };
 
+const BLOCKER_COMMENT_PREFIX = "<!-- omp:todo-blocker: ";
+const BLOCKER_COMMENT_SUFFIX = " -->";
+
 export function resolveTodoMarkdownPath(input: string, cwd: string): string {
 	const raw = normalizePathLikeInput(input) || "TODO.md";
 	return resolveToCwd(raw, cwd);
@@ -563,8 +566,12 @@ export function phasesToMarkdown(phases: TodoPhase[]): string {
 		if (i > 0) out.push("");
 		out.push(`# ${phases[i].name}`);
 		for (const task of phases[i].tasks) {
-			const blockerNote = task.status === "blocked" && task.blocker ? ` <!-- blocker: ${task.blocker} -->` : "";
-			out.push(`- [${STATUS_TO_MARKER[task.status]}] ${task.content}${blockerNote}`);
+			out.push(`- [${STATUS_TO_MARKER[task.status]}] ${task.content}`);
+			if (task.status === "blocked" && task.blocker !== undefined) {
+				// Keep the note off the task line, and keep comment delimiters out of its payload.
+				const blocker = JSON.stringify(task.blocker).replaceAll("<", "\\u003c").replaceAll("--", "\\u002d\\u002d");
+				out.push(`  ${BLOCKER_COMMENT_PREFIX}${blocker}${BLOCKER_COMMENT_SUFFIX}`);
+			}
 		}
 	}
 	return `${out.join("\n")}\n`;
@@ -617,10 +624,20 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 				errors.push(`Line ${lineNum + 1}: unknown status marker "[${marker}]" (use [ ], [x], [/], [-], [!])`);
 				continue;
 			}
-			const rawContent = taskMatch[2].trim();
-			const blockerMatch = /^(.*?)\s*<!--\s*blocker:\s*(.*?)\s*-->$/.exec(rawContent);
-			const task: TodoItem = { content: blockerMatch ? blockerMatch[1].trim() : rawContent, status };
-			if (status === "blocked" && blockerMatch) task.blocker = blockerMatch[2].trim();
+			const task: TodoItem = { content: taskMatch[2].trim(), status };
+			const note = lines[lineNum + 1]?.trim();
+			if (note?.startsWith(BLOCKER_COMMENT_PREFIX) && note.endsWith(BLOCKER_COMMENT_SUFFIX)) {
+				lineNum++;
+				// Changing the checkbox status makes its separate blocker note irrelevant.
+				if (status === "blocked") {
+					const blocker = tryParseJson(note.slice(BLOCKER_COMMENT_PREFIX.length, -BLOCKER_COMMENT_SUFFIX.length));
+					if (typeof blocker === "string") {
+						task.blocker = blocker;
+					} else {
+						errors.push(`Line ${lineNum + 1}: invalid blocker note (expected a JSON string)`);
+					}
+				}
+			}
 			currentPhase.tasks.push(task);
 			continue;
 		}

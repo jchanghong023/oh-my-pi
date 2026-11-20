@@ -45,6 +45,7 @@ import {
 	type AnySetting,
 	all as allSettings,
 	bindEffects,
+	type Derived,
 	inheritWarnings,
 	lookup as lookupSetting,
 	resetRegistryForTest,
@@ -1161,7 +1162,6 @@ export class Settings {
 		if (!this.#mirror) throw new Error("Settings.applyMirrorState expects a worker mirror");
 		if (state.generation <= this.#mirrorGeneration) return;
 		const previous = this.#mirrorGeneration < 0 ? undefined : this.#snapshot();
-		const previousDefaults = this.#defaultModelRoles;
 		this.#mirrorGeneration = state.generation;
 		this.#cwd = state.cwd;
 		this.#agentDir = state.agentDir;
@@ -1176,7 +1176,6 @@ export class Settings {
 		this.#overlayShellPathSource = state.overlayShellPathSource;
 		this.#rebuildMerged();
 		if (previous) this.#fireChangesSince(previous);
-		if (previous && !settingValuesEqual(previousDefaults, this.#defaultModelRoles)) this.#notifyChange(cfgModelRoles);
 	}
 
 	/**
@@ -1420,7 +1419,7 @@ export class Settings {
 			this.#savedRuntimeModelRoleOverrides.clear();
 		}
 		if (layer === "override") this.#softPins.delete(setting);
-		const prev = setting.get(this);
+		const prev = this.settingChangeValue(setting);
 		// Re-setting the persisted global value is a no-op for config.yml: staging it would still
 		// queue a full re-read, rewrite, fsync, and rename of the file.
 		const persistGlobal = layer === "global" && !this.#globalWriteIsNoop(setting.segments, value);
@@ -1445,7 +1444,7 @@ export class Settings {
 		const current = getByPath(this.#global, setting.segments);
 		const persistRemoval = current !== undefined;
 		if (!persistRemoval && !this.#softPins.has(setting)) return;
-		const prev = setting.get(this);
+		const prev = this.settingChangeValue(setting);
 		this.#releaseSoftPin(setting);
 		if (persistRemoval) this.#stageGlobal(setting.segments, undefined);
 		this.#rebuildMerged();
@@ -1472,7 +1471,7 @@ export class Settings {
 				? !this.#globalWriteIsNoop([...setting.segments, key], value)
 				: isRecord(record) && Object.hasOwn(record, key);
 		if (!staged && !this.#softPins.has(setting)) return;
-		const prev = setting.get(this);
+		const prev = this.settingChangeValue(setting);
 		this.#releaseSoftPin(setting);
 		if (staged) {
 			// Replace rather than mutate the record: the merged view and cached reads may share it.
@@ -1561,15 +1560,21 @@ export class Settings {
 		}
 		this.#softPins.delete(setting);
 		if (getByPath(this.#overrides, setting.segments) === undefined) return;
-		const prev = setting.get(this);
+		const prev = this.settingChangeValue(setting);
 		deleteByPath(this.#overrides, setting.segments);
 		this.#rebuildMerged();
 		this.#fireIfChanged(setting, prev);
 	}
 
+	/** Registry plumbing: role listeners observe resolved roles while the handle reads configured roles. */
+	settingChangeValue<T>(value: Derived<T>): T;
+	settingChangeValue(value: Derived<unknown>): unknown {
+		return value === cfgModelRoles ? this.getModelRoles() : value.get(this);
+	}
+
 	/** Effective value of every setting (in registration order), captured before a bulk layer refresh. */
 	#snapshot(): unknown[] {
-		return allSettings().map(setting => setting.get(this));
+		return allSettings().map(setting => this.settingChangeValue(setting));
 	}
 
 	/**
@@ -1580,12 +1585,15 @@ export class Settings {
 		const settings = allSettings();
 		for (let i = 0; i < previous.length; i++) {
 			const setting = settings[i];
-			if (!settingValuesEqual(setting.get(this), previous[i])) this.#notifyChange(setting);
+			if (!settingValuesEqual(this.settingChangeValue(setting), previous[i])) this.#notifyChange(setting);
 		}
 	}
 
 	#fireIfChanged(setting: AnySetting, prev: unknown): void {
-		if (!Object.is(setting.get(this), prev)) this.#notifyChange(setting);
+		const next = this.settingChangeValue(setting);
+		if (!(setting === cfgModelRoles ? settingValuesEqual(next, prev) : Object.is(next, prev))) {
+			this.#notifyChange(setting);
+		}
 	}
 
 	/** Runs the listeners observing `setting`, then forwards the change to overlay children. */
@@ -2269,7 +2277,7 @@ export class Settings {
 	 * semantics that `override("modelRoles", …)` carries.
 	 */
 	#setRuntimeModelRoleOverrides(next: Record<string, string>): void {
-		const prev = cfgModelRoles.get(this);
+		const prev = this.getModelRoles();
 		setByPath(this.#overrides, ["modelRoles"], next);
 		this.#rebuildMerged();
 		this.#fireIfChanged(cfgModelRoles, prev);
@@ -2328,7 +2336,7 @@ export class Settings {
 	}
 
 	#setProjectModelRoleValue(role: ModelRole | string, modelId: string | null): void {
-		const prev = cfgModelRoles.get(this);
+		const prev = this.getModelRoles();
 		const projectRoles = getByPath(this.#project, ["modelRoles"]);
 		const current: Record<string, unknown> = isRecord(projectRoles) ? { ...projectRoles } : {};
 		current[role] = modelId;
@@ -2356,7 +2364,7 @@ export class Settings {
 	 */
 	setModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		if (this.#mirror) return this.#forward(this.#mirror, { op: "setModelRole", role, modelId });
-		const prev = cfgModelRoles.get(this);
+		const prev = this.getModelRoles();
 		// Re-setting the persisted role (or clearing an absent one) stages no config.yml rewrite;
 		// the runtime-override sync below still applies.
 		if (!this.#globalWriteIsNoop(["modelRoles", role], modelId)) {
@@ -2469,9 +2477,10 @@ export class Settings {
 			if (model) defaults[role] = model;
 		}
 		if (settingValuesEqual(this.#defaultModelRoles, defaults)) return;
+		const prev = this.getModelRoles();
 		this.#defaultModelRoles = defaults;
 		this.#rebuildMerged();
-		this.#notifyChange(cfgModelRoles);
+		this.#fireIfChanged(cfgModelRoles, prev);
 	}
 	/**
 	 * Get a model role from only the global settings layer (an {@link overlay}'s own, else its parent's).
@@ -4538,13 +4547,20 @@ export class Settings {
 			throw error;
 		}
 	}
-	/** Retry a readback overtaken by another persisted mutation before adopting it. */
+	/** Read back the committed layer without overtaking an in-flight ordinary save or flushing pending edits. */
 	async #refreshSavedGlobal(store: UserSettingsStore): Promise<void> {
 		for (;;) {
+			if (this.#savesCancelled) return;
+			const saving = this.#savePromise;
+			if (saving) {
+				// A failed save restores its pending edits before settling; adoption will reapply them.
+				await saving.catch(() => {});
+				continue;
+			}
 			const generation = this.#persistedMutationGeneration;
 			const raw = await store.readActiveRaw();
 			if (this.#savesCancelled) return;
-			if (generation !== this.#persistedMutationGeneration) continue;
+			if (this.#savePromise || generation !== this.#persistedMutationGeneration) continue;
 			this.#adoptSavedGlobal(raw, this.#configPath ?? this.#agentDir);
 			return;
 		}

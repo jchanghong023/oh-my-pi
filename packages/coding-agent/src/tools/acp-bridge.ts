@@ -12,7 +12,6 @@ import { InternalUrlRouter } from "../internal-urls";
 import { notifyWorkspaceWatchedFiles } from "../lsp/client";
 import { FileChangeType } from "../lsp/types";
 import type { ToolSession } from ".";
-import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { resolvePlanPath, targetsLocalSandbox } from "./plan-mode-guard";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 
@@ -67,8 +66,7 @@ export interface BridgeWriteResult {
  *
  * Performs the full guard check, bridge call (wrapped in {@link ToolError}),
  * a post-write read-back to detect client-side transformation (e.g.
- * format-on-save), FS-scan cache invalidation, and session mutation-version
- * bump.
+ * format-on-save), LSP notification, and session mutation-version bump.
  *
  * Returns `undefined` when the bridge is unavailable or the path should not
  * be routed through it — the caller must fall back to the writethrough path.
@@ -105,7 +103,6 @@ export async function routeWriteThroughBridge(
 	} catch (error) {
 		throw new ToolError(error instanceof Error ? error.message : String(error));
 	}
-	invalidateFsScanAfterWrite(absolutePath);
 	if (session.enableLsp ?? true) {
 		await notifyWorkspaceWatchedFiles(session.cwd, [{ filePath: absolutePath, type: changeType }], signal);
 	}

@@ -1005,11 +1005,14 @@ impl VcsGitRepo {
 		})
 	}
 
-	/// Complete NUL-delimited porcelain with raw paths and every untracked file.
-	#[napi]
-	pub fn status_porcelain_bytes(&self, signal: Option<Unknown>) -> Promise<Buffer> {
-		blocking("vcs.statusPorcelainBytes", self.inner.clone(), signal, |r| {
-			r.status_porcelain_bytes().map(Buffer::from)
+	/// Deduplicated file counts by visibility mask (staged 1, unstaged 2,
+	/// untracked 4).
+	#[napi(ts_return_type = "Promise<readonly [number, number, number, number, number, number, \
+	                         number, number]>")]
+	pub fn status_change_counts(&self, signal: Option<Unknown>) -> Promise<Vec<f64>> {
+		blocking("vcs.statusChangeCounts", self.inner.clone(), signal, |r| {
+			r.status_change_counts()
+				.map(|counts| counts.into_iter().map(|count| count as f64).collect())
 		})
 	}
 

@@ -25,9 +25,6 @@ import type { InstalledPlugin, PluginManifest, PluginRuntimeConfig, ProjectPlugi
 /** Installed plugin plus the root scope that supplied its runtime metadata. */
 export interface ScopedInstalledPlugin extends InstalledPlugin {
 	scope: "user" | "project";
-	enabledSource?: "user" | "project";
-	/** Metadata-only inventory state; execution loaders never return unavailable packages. */
-	metadataError?: "missing" | "unreadable" | "invalid";
 }
 
 installLegacyPiSpecifierShim();
@@ -109,10 +106,9 @@ async function collectPluginsAtRoot(
 	root: string,
 	projectOverrides: ProjectPluginOverrides,
 	scope: ScopedInstalledPlugin["scope"],
-	includeDisabled = false,
 ): Promise<ScopedInstalledPlugin[]> {
 	const nodeModulesPath = path.join(root, "node_modules");
-	if (!fs.existsSync(nodeModulesPath) && !includeDisabled) return [];
+	if (!fs.existsSync(nodeModulesPath)) return [];
 
 	let depsKeys: string[] = [];
 	let hasPackageManifest = false;
@@ -170,12 +166,7 @@ async function collectPluginsAtRoot(
 		// only for linked plugins (`omp plugin link`, marketplace runtime
 		// registration), which are symlinks into node_modules. Without a
 		// manifest, retain the established lockfile-only directory layout.
-		if (
-			!includeDisabled &&
-			hasPackageManifest &&
-			!depsKeys.includes(name) &&
-			!(await isSymlink(path.join(nodeModulesPath, name)))
-		) {
+		if (hasPackageManifest && !depsKeys.includes(name) && !(await isSymlink(path.join(nodeModulesPath, name)))) {
 			logger.warn("plugins: skipping stale lockfile entry not declared in package.json", {
 				name,
 				root,
@@ -186,30 +177,7 @@ async function collectPluginsAtRoot(
 		let pluginPkg: { version: string; omp?: PluginManifest; pi?: PluginManifest };
 		try {
 			pluginPkg = await Bun.file(pluginPkgPath).json();
-			if (
-				includeDisabled &&
-				(!pluginPkg ||
-					typeof pluginPkg !== "object" ||
-					Array.isArray(pluginPkg) ||
-					typeof pluginPkg.version !== "string")
-			) {
-				throw new SyntaxError("Invalid plugin package metadata");
-			}
 		} catch (err) {
-			if (includeDisabled) {
-				const state = runtimeConfig.plugins[name];
-				plugins.push({
-					name,
-					version: state?.version ?? "",
-					path: path.join(nodeModulesPath, name),
-					scope,
-					manifest: { version: state?.version ?? "" },
-					enabledFeatures: state?.enabledFeatures ?? null,
-					enabled: false,
-					metadataError: isEnoent(err) ? "missing" : isUnreadableRoot(err) ? "unreadable" : "invalid",
-				});
-				continue;
-			}
 			// Lockfile entry without a corresponding node_modules tree means the
 			// link was deleted out from under us; skip silently.
 			if (isEnoent(err)) continue;
@@ -233,12 +201,12 @@ async function collectPluginsAtRoot(
 		const runtimeState = runtimeConfig.plugins[name];
 
 		// Check if disabled globally
-		if (runtimeState && !runtimeState.enabled && !includeDisabled) {
+		if (runtimeState && !runtimeState.enabled) {
 			continue;
 		}
 
 		// Check if disabled in project
-		if (projectOverrides.disabled?.includes(name) && !includeDisabled) {
+		if (projectOverrides.disabled?.includes(name)) {
 			continue;
 		}
 
@@ -251,10 +219,7 @@ async function collectPluginsAtRoot(
 			scope,
 			manifest,
 			enabledFeatures,
-			enabled: runtimeState?.enabled !== false && !projectOverrides.disabled?.includes(name),
-			...(includeDisabled
-				? { enabledSource: projectOverrides.disabled?.includes(name) ? ("project" as const) : scope }
-				: {}),
+			enabled: true,
 		});
 	}
 
@@ -294,27 +259,18 @@ export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {
 	}
 }
 
-/** Read manifest metadata, including disabled packages, without importing any entry point. */
-export async function getInstalledPlugins(cwd: string, opts: { home?: string } = {}): Promise<ScopedInstalledPlugin[]> {
-	return loadEnabledPlugins(cwd, opts.home, true);
-}
-
-async function loadEnabledPlugins(
-	cwd: string,
-	home?: string,
-	includeDisabled = false,
-): Promise<ScopedInstalledPlugin[]> {
+async function loadEnabledPlugins(cwd: string, home?: string): Promise<ScopedInstalledPlugin[]> {
 	const projectOverrides = await loadProjectOverrides(cwd);
 
 	const userRoot = getPluginsDir(home);
-	const userPlugins = await collectPluginsAtRoot(userRoot, projectOverrides, "user", includeDisabled);
+	const userPlugins = await collectPluginsAtRoot(userRoot, projectOverrides, "user");
 
 	let projectPlugins: ScopedInstalledPlugin[] = [];
 	const projectRegistryPath = await resolveActiveProjectRegistryPath(cwd);
 	if (projectRegistryPath) {
 		const projectRoot = path.dirname(projectRegistryPath);
 		if (normalizePathForComparison(projectRoot) !== normalizePathForComparison(userRoot)) {
-			projectPlugins = await collectPluginsAtRoot(projectRoot, projectOverrides, "project", includeDisabled);
+			projectPlugins = await collectPluginsAtRoot(projectRoot, projectOverrides, "project");
 		}
 	}
 

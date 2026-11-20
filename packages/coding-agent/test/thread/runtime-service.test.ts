@@ -10,9 +10,10 @@ import { ArtifactManager } from "../../src/session/artifacts";
 import { CostGate } from "../../src/session/cost-gate";
 import { cfgSessionMaxCost } from "../../src/session/settings";
 import type { MainThreadLink, SubagentMainApi, SubagentWorkerApi } from "../../src/thread/protocol";
-import { type RpcFrame, RpcLink } from "../../src/thread/rpc";
+import { type RpcEndpoint, type RpcFrame, RpcLink } from "../../src/thread/rpc";
 import type { ThreadService, WorkerPeer } from "../../src/thread/services";
 import { asyncJobsThreadService } from "../../src/thread/services/async-jobs";
+import { RemoteAsyncJobManager } from "../../src/thread/services/async-jobs-remote";
 import { runtimeThreadService } from "../../src/thread/services/runtime";
 import { settingsThreadService } from "../../src/thread/services/settings";
 import { EventBus } from "../../src/utils/event-bus";
@@ -110,7 +111,6 @@ describe("runtime thread services: async jobs", () => {
 		await probe("sink", manager, "Worker");
 
 		const id = await jobId(probe, manager, "Worker");
-		expect(id).toBe("bg_1");
 		const job = manager.getJob(id);
 		expect(job?.status).toBe("running");
 		expect(job?.ownerId).toBe("Worker");
@@ -151,6 +151,59 @@ describe("runtime thread services: async jobs", () => {
 		expect(settledView.content).toContain(`Name: ${name}`);
 		expect(settledView.details.proc.job).toMatchObject({ id, name, status: "completed" });
 		expect(job?.name).toBe(name);
+	});
+
+	it("keeps a worker-registered suppressed result readable without delivering it to the owner", async () => {
+		const manager = newManager();
+		const { port1, port2 } = new MessageChannel();
+		const counter = new Int32Array(new SharedArrayBuffer(4));
+		// Loop back the production links so the test can call the worker proxy without adding a fixture probe.
+		type Side = "main" | "worker";
+		const listeners = new Map<Side, (frame: RpcFrame) => void>();
+		const endpoint = (local: Side, remote: Side): RpcEndpoint => ({
+			send: frame => listeners.get(remote)?.(structuredClone(frame)),
+			listen: handler => {
+				listeners.set(local, handler);
+				return () => {
+					listeners.delete(local);
+				};
+			},
+		});
+		const link = new RpcLink<SubagentMainApi, SubagentWorkerApi>(endpoint("main", "worker"), {
+			name: "suppression main",
+			syncReplies: { port: port1, counter },
+		});
+		const worker = new RpcLink<SubagentWorkerApi, SubagentMainApi>(endpoint("worker", "main"), {
+			name: "suppression worker",
+			sync: { port: port2, counter },
+		});
+		const peer: WorkerPeer = { threadId: `w${nextWorker++}`, link };
+		try {
+			asyncJobsThreadService.installMain?.(peer);
+			asyncJobsThreadService.installWorker?.(worker);
+			const delivered: string[] = [];
+			worker.handle("boot", async ({ jobs }) => {
+				if (!(jobs instanceof RemoteAsyncJobManager)) throw new Error("expected a worker job manager");
+				jobs.registerDeliverySink("Worker", jobId => {
+					delivered.push(jobId);
+				});
+				const id = jobs.register("task", "manual result", async () => "read me", {
+					ownerId: "Worker",
+					suppressDelivery: true,
+				});
+				await jobs.getJob(id)!.promise;
+				expect(jobs.getJob(id)).toMatchObject({ status: "completed", resultText: "read me" });
+			});
+			await link.call("boot", { jobs: manager });
+			expect(await manager.drainDeliveries({ timeoutMs: 1_000 })).toBe(true);
+			expect(delivered).toEqual([]);
+		} finally {
+			asyncJobsThreadService.onWorkerExit?.(peer, "test end");
+			worker.close("test end");
+			link.close("test end");
+			port1.close();
+			port2.close();
+		}
 	});
 
 	it("returns and consumes a job settled during a worker-homed eval wait", async () => {

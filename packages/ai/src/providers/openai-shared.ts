@@ -184,6 +184,7 @@ export interface OpenAICacheOptions {
 export interface OpenAIRequestSetupOptions {
 	apiKey?: string;
 	requestAuth?: StreamOptions["requestAuth"];
+	requestAuthPrepared?: StreamOptions["requestAuthPrepared"];
 	extraHeaders?: Record<string, string>;
 	initiatorOverride?: MessageAttribution;
 	messages: Message[];
@@ -249,7 +250,9 @@ export function resolveOpenAIRequestSetup(
 	model: OpenAIRequestSetupModel,
 	options: OpenAIRequestSetupOptions,
 ): OpenAIRequestSetup {
-	let apiKey = (options.requestAuth !== undefined ? options.requestAuth.apiKey : options.apiKey) ?? "";
+	const explicitApiKey =
+		options.requestAuth !== undefined && !options.requestAuthPrepared ? options.requestAuth.apiKey : options.apiKey;
+	let apiKey = explicitApiKey ?? "";
 	if (options.requestAuth !== undefined && !hasRequestAuthMaterial(options.requestAuth)) {
 		throw new AIError.MissingApiKeyError(model.provider);
 	}
@@ -326,7 +329,7 @@ export function resolveOpenAIRequestSetup(
 		// Require an explicitly resolved Token Plan credential. The generic
 		// `$env.OPENAI_API_KEY` fallback above matches the broad `sk-*` token
 		// grammar and would otherwise be sent to QwenCloud as bearer material.
-		if (!options.apiKey) {
+		if (!explicitApiKey) {
 			throw new AIError.MissingApiKeyError("alibaba-token-plan");
 		}
 		const credential = parseAlibabaTokenPlanCredential(rawApiKey);

@@ -300,7 +300,13 @@ impl Timeout {
 	}
 
 	/// Send one snapshot wave to the labeled tree and its tracked externals.
-	fn send(&mut self, turn: &Turn<'_>, opts: &Options, signal: Signal) {
+	fn send(
+		&mut self,
+		turn: &Turn<'_>,
+		opts: &Options,
+		signal: Signal,
+		extra: Vec<crate::proctree::Process>,
+	) {
 		if opts.verbose {
 			let name: &'static str = signal.into();
 			let command = opts.command[0].to_str_lossy();
@@ -310,7 +316,7 @@ impl Timeout {
 		}
 		turn
 			.ctl
-			.signal_wave(turn.group, signal, turn.log.live(turn.group), !opts.foreground);
+			.signal_wave(turn.group, signal, extra, !opts.foreground);
 	}
 
 	pub(super) fn advance(
@@ -330,7 +336,7 @@ impl Timeout {
 			Phase::Running { opts, deadline } => match self.child.status {
 				Some(status) => Phase::Exit(status),
 				None if deadline.is_some_and(|at| now >= at) => {
-					self.send(turn, &opts, opts.signal);
+					self.send(turn, &opts, opts.signal, turn.log.live(turn.group));
 					let killed = opts.signal == Signal::Kill;
 					Phase::Signalled {
 						kill_at: (!killed)
@@ -344,13 +350,22 @@ impl Timeout {
 				None => Phase::Running { opts, deadline },
 			},
 			Phase::Signalled { opts, mut kill_at, mut give_up, .. } => {
-				if kill_at.is_some_and(|at| now >= at) {
-					self.send(turn, &opts, Signal::Kill);
-					kill_at = None;
-					give_up = Some(now.saturating_add(nanos(REAP_AFTER_KILL)));
-				}
+				let ended = if kill_at.is_some_and(|at| now >= at) {
+					// Use the same live external snapshot to decide and send the
+					// wave.
+					let extra = turn.log.live(turn.group);
+					if turn.live || !extra.is_empty() {
+						self.send(turn, &opts, Signal::Kill, extra);
+						kill_at = None;
+						give_up = Some(now.saturating_add(nanos(REAP_AFTER_KILL)));
+						false
+					} else {
+						self.child.status.is_some()
+					}
+				} else {
+					self.child.status.is_some() && !turn.live && !turn.log.has_live(turn.group)
+				};
 				let killed = !cfg!(windows) && (opts.signal == Signal::Kill || give_up.is_some());
-				let ended = self.child.status.is_some() && !turn.live && !turn.log.has_live(turn.group);
 				if ended || give_up.is_some_and(|at| now >= at) {
 					let platform = Platform::current();
 					Phase::Exit(if killed {

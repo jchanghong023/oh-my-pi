@@ -10,13 +10,14 @@
 ### Changed
 
 - Support independent per-attempt embedding deadlines and fixed retry policies for bulk imports without extending search deadlines or retrying user cancellation.
-- Retry transient embedding overloads up to three times after the initial request, using 1s, 2s and 4s fallback delays.
+- Ordinary HTTP embedding requests make at most three attempts. Company embedding requests keep four attempts; bulk imports retain their separate policy.
 
 - Keep Linux offline memory databases, banks, blobs, plugins and checkpoints inside the active shm domain without automatically adopting legacy disk data.
 
 ### Fixed
 
 - Embedding requests can retry when a transient HTTP error returns headers but its body stalls.
+- OpenRouter embeddings prefer the stored OpenRouter credential over environment fallbacks and do not use an unrelated OpenAI key.
 
 ### Fixed
 

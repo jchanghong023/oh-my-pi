@@ -184,6 +184,7 @@ function mainRegisterOptions(options: WireRegisterOptions | undefined, feed: Job
 		onProgress: options?.onProgress,
 		queued: options?.queued,
 		foreground: options?.foreground,
+		suppressDelivery: options?.suppressDelivery,
 		intent: options?.intent,
 		process: feed?.process,
 		widgetInputs: feed?.widgetInputs,

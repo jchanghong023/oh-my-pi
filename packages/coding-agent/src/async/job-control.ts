@@ -177,6 +177,13 @@ export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[]): JobS
 		const resultConsumed = session.asyncJobManager?.isJobResultConsumed(latest.id) === true;
 		let resolvedModel: string | undefined;
 		const exitCode = typeof latest.latestDetails?.exitCode === "number" ? latest.latestDetails.exitCode : undefined;
+		const wallTimeMs =
+			!resultConsumed &&
+			latest.type === "bash" &&
+			latest.status === "failed" &&
+			latest.latestDetails?.wallTimeNoticeEmitted === true
+				? finiteNumber(latest.latestDetails.wallTimeMs)
+				: undefined;
 		let resolvedModelIdentity: string | undefined;
 		let resolvedThinkingLevel: JobSnapshot["resolvedThinkingLevel"];
 		let advisor = false;
@@ -232,6 +239,7 @@ export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[]): JobS
 			durationMs: Math.max(0, (latest.endTime ?? now) - latest.startTime),
 			...(latest.endTime !== undefined ? { settledAtMs: latest.endTime } : {}),
 			...(exitCode !== undefined ? { exitCode } : {}),
+			...(wallTimeMs !== undefined ? { wallTimeMs, wallTimeNoticeEmitted: true } : {}),
 			...(resolvedModel ? { resolvedModel } : {}),
 			...(resolvedModelIdentity ? { resolvedModelIdentity } : {}),
 			...(resolvedThinkingLevel !== undefined ? { resolvedThinkingLevel } : {}),

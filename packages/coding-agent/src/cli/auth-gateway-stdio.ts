@@ -113,7 +113,8 @@ export async function runAuthGatewayStdio(): Promise<void> {
 					modelId: model.id,
 					signal,
 				}),
-			resolver: (model, sessionId) => registry.resolver(model, sessionId),
+			resolver: (model, sessionId, initialKey) =>
+				registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl, modelId: model.id, initialKey }),
 		},
 		resolveModel: stdioModelResolver(routed, registry),
 		listModels: () => GATEWAY_MODEL_KINDS.flatMap(kind => registry.getAvailable(kind)),

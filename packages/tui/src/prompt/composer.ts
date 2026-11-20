@@ -274,7 +274,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				id: number;
 				rows: readonly string[];
 				kind: "append" | "replay";
-				clearScrollback?: boolean;
 				source:
 					| "header"
 					| {
@@ -983,7 +982,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				id: this.#offeredHistory.id,
 				rows: this.#offeredHistory.rows,
 				kind: this.#offeredHistory.kind,
-				clearScrollback: this.#offeredHistory.clearScrollback,
 			};
 		}
 		if (this.#headerReplayPending) {
@@ -1022,25 +1020,20 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			? transcript.peekFlushBatch(width)
 			: transcript.peekFinalizedBatch(width, Math.max(0, rows - chromeRows));
 		if (batch === undefined) return undefined;
-		if (batch.clearScrollback && (this.#retiredHeaderRows?.length ?? 0) > 0) {
-			return this.#offerHeaderReplay(transcript, width, batch);
-		}
 		this.#offeredHistory = {
 			id: this.#nextHistoryId++,
 			rows: batch.rows,
 			kind: batch.kind ?? "append",
-			clearScrollback: batch.clearScrollback,
 			source: { transcript, transcriptId: batch.id, header: "none" },
 		};
 		return {
 			id: this.#offeredHistory.id,
 			rows: this.#offeredHistory.rows,
 			kind: this.#offeredHistory.kind,
-			clearScrollback: this.#offeredHistory.clearScrollback,
 		};
 	}
 
-	/** A destructive transcript replay owns the retired header bytes as well. */
+	/** A complete transcript replay also owns the retired header bytes. */
 	#offerHeaderReplay(
 		transcript: TranscriptContainer,
 		width: number,
@@ -1055,7 +1048,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			id: this.#nextHistoryId++,
 			rows: [...headerRows, ...(transcriptReplay?.rows ?? [])],
 			kind: "replay",
-			clearScrollback: transcriptReplay?.clearScrollback,
 			source: {
 				transcript,
 				transcriptId: transcriptReplay?.id,
@@ -1067,7 +1059,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			id: this.#offeredHistory.id,
 			rows: this.#offeredHistory.rows,
 			kind: this.#offeredHistory.kind,
-			clearScrollback: this.#offeredHistory.clearScrollback,
 		};
 	}
 

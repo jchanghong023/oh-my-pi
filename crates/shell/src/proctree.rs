@@ -1267,7 +1267,7 @@ fn signal_group_only_members(
 			&& !seen.contains(&member.pid)
 			&& !protected.contains(&member.pid)
 		{
-			let _ = proc::signal_pinned_raw(&member, signal);
+			let _ = proc::signal_group_member(&member, signal);
 		}
 	}
 }

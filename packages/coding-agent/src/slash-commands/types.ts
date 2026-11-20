@@ -1,4 +1,3 @@
-import type { Model } from "@oh-my-pi/pi-ai";
 import type { Settings } from "../config/settings";
 import type { SlashCommandIconName } from "@oh-my-pi/pi-tui/theme/symbols";
 import type { ExtensionUIContext } from "../extensibility/extensions/types";
@@ -7,7 +6,6 @@ import type { ConversationPosition } from "../modes/utils/conversation-position"
 import type { MCPManager } from "../mcp/manager";
 import type { MCPServerConfig } from "../mcp/types";
 import type { AgentSession } from "../session/agent-session";
-import type { NewSessionOptions } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
 
 /** Declarative subcommand definition for commands like /mcp. */
@@ -83,14 +81,8 @@ export interface SlashCommandRuntime {
 	signal?: AbortSignal;
 	/** Actual host dialogs, including headless RPC tool UI when extensions have no UI. */
 	ui?: Pick<ExtensionUIContext, "select" | "confirm"> & Partial<Pick<ExtensionUIContext, "input">>;
-	/** Host model-selection policy. */
-	setModel?: (model: Model) => Promise<void>;
-	/** Host session-transition lifecycle; falls back to the session outside adapted hosts. */
-	newSession?: (options?: NewSessionOptions) => Promise<boolean>;
 	/** Emit text to the operator, optionally preserving a feedback severity. */
 	output: (text: string, level?: "info" | "warning" | "error") => Promise<void> | void;
-	/** Host already renders display:true custom messages; do not also echo controller output. */
-	observesCustomMessages?: boolean;
 	/** Re-advertise the available command list (no-op outside ACP). */
 	refreshCommands: () => Promise<void> | void;
 	/**

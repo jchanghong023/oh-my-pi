@@ -1928,6 +1928,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			if (!isCurrent()) return "cancelled";
 			if (!text.trim() && !images?.length) return "local";
 			let goalAutoOrchestrateInitialId: string | undefined;
+			let streamingBehavior = command.type === "prompt" ? command.streamingBehavior : undefined;
 			if (command.type === "steer") {
 				await session.steer(text, images);
 				return "admitted";
@@ -1961,7 +1962,13 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					cwd: session.sessionManager.getCwd(),
 					ui: rpcUiContext,
 					output: outputCommand,
-					runModeCommand: (mode, args) => slashModes.run(mode, args, builtinAbort.signal),
+					runModeCommand: async (mode, args) => {
+						const result = await slashModes.run(mode, args, builtinAbort.signal);
+						if ((mode === "goal" || mode === "goal-autopilot") && result && "prompt" in result) {
+							streamingBehavior ??= "steer";
+						}
+						return result;
+					},
 					refreshCommands: emitAvailableCommandsUpdate,
 					reloadPlugins: reloadPluginState,
 					mcpManager: options.mcpManager,
@@ -2019,11 +2026,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				startPrompt: onPromptAdmitted =>
 					session.prompt(text, {
 						images,
-						...(goalAutoOrchestrateInitialId !== undefined
-							? { goalAutoOrchestrateInitialId, streamingBehavior: "steer" as const }
-							: command.type === "prompt"
-								? { streamingBehavior: command.streamingBehavior }
-								: {}),
+						streamingBehavior,
+						...(goalAutoOrchestrateInitialId !== undefined ? { goalAutoOrchestrateInitialId } : {}),
 						onPromptAdmitted,
 					}),
 				results: promptResults,

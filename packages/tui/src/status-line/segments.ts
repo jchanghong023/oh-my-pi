@@ -504,6 +504,19 @@ function formatLoopLimit(
 	return `${seconds}s left`;
 }
 
+function loopText(loop: NonNullable<SegmentContext["loopMode"]>, nowMs?: number): string {
+	if (loop.sequence) {
+		const { current, total } = loop.sequence;
+		return `LoopN · ${current}/${total}${loop.state === "paused" ? " (paused)" : ""}`;
+	}
+	const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
+	const parts = [`Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`];
+	const limit = formatLoopLimit(loop.limit, nowMs);
+	if (limit) parts.push(limit);
+	if (loop.condition) parts.push(summarizeLoopCondition(loop.condition, TRUNCATE_LENGTHS.SHORT));
+	return parts.join(" ");
+}
+
 const primaryModeSegment: StatusLineSegment = {
 	id: "mode",
 	render(ctx) {
@@ -540,15 +553,8 @@ const primaryModeSegment: StatusLineSegment = {
 		if (loop) {
 			const icon = loop.state === "paused" ? theme.icon.pause || theme.icon.loop : theme.icon.loop;
 			const color: ThemeColor = loop.state === "paused" ? "warning" : "customMessageLabel";
-			const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
-			const label = `Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`;
-			const parts = [withIcon(icon, label)];
-			const limit = formatLoopLimit(loop.limit, ctx.now?.getTime());
-			if (limit) parts.push(limit);
-			if (loop.condition) {
-				parts.push(summarizeLoopCondition(loop.condition, TRUNCATE_LENGTHS.SHORT));
-			}
-			return { content: theme.fg(color, parts.join(" ")), visible: true };
+			const content = withIcon(icon, loopText(loop, ctx.now?.getTime()));
+			return { content: theme.fg(color, content), visible: true };
 		}
 
 		return { content: "", visible: false };
@@ -567,13 +573,8 @@ const primaryModeSegment: StatusLineSegment = {
 		const loop = ctx.loopMode;
 		if (loop) {
 			const paused = loop.state === "paused";
-			const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
-			const parts = [`Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`];
-			const limit = formatLoopLimit(loop.limit, ctx.now?.getTime());
-			if (limit) parts.push(limit);
-			if (loop.condition) parts.push(summarizeLoopCondition(loop.condition, TRUNCATE_LENGTHS.SHORT));
 			return segView(
-				[span(parts.join(" "), paused ? "warning" : "customMessageLabel")],
+				[span(loopText(loop, ctx.now?.getTime()), paused ? "warning" : "customMessageLabel")],
 				paused ? "pause" : "loop",
 				paused ? "warning" : undefined,
 			);
@@ -668,27 +669,11 @@ function pathSpans(value: string): TspSpan[] {
 function gitText(ctx: SegmentContext): string {
 	const { branch, status } = ctx.git;
 	const opts = ctx.options.git ?? {};
-	const showStaged = opts.showStaged !== false;
-	const showUnstaged = opts.showUnstaged !== false;
-	const showUntracked = opts.showUntracked !== false;
-	let changed = 0;
-	if (status) {
-		if (showStaged && showUnstaged && showUntracked) {
-			changed = status.changed;
-		} else if (status.paths) {
-			const paths = new Set<string>();
-			if (showStaged) for (const path of status.paths.staged) paths.add(path);
-			if (showUnstaged) for (const path of status.paths.unstaged) paths.add(path);
-			if (showUntracked) for (const path of status.paths.untracked) paths.add(path);
-			changed = paths.size;
-		} else {
-			// JJ has no index and its added/modified path categories are disjoint.
-			changed =
-				(showStaged ? status.staged : 0) +
-				(showUnstaged ? status.unstaged : 0) +
-				(showUntracked ? status.untracked : 0);
-		}
-	}
+	const mask =
+		(opts.showStaged !== false ? 1 : 0) |
+		(opts.showUnstaged !== false ? 2 : 0) |
+		(opts.showUntracked !== false ? 4 : 0);
+	const changed = status?.[mask] ?? 0;
 	const branchText = opts.showBranch !== false && branch ? branch : "";
 	if (!branchText && changed === 0) return "";
 	return `git${branchText ? ` ${branchText}` : ""}${changed > 0 ? `${branchText ? " · " : " "}改动${changed}` : ""}`;
@@ -699,13 +684,13 @@ const gitSegment: StatusLineSegment = {
 	render(ctx) {
 		const content = gitText(ctx);
 		if (!content) return { content: "", visible: false };
-		const colorName = (ctx.git.status?.changed ?? 0) > 0 ? "statusLineGitDirty" : "statusLineGitClean";
+		const colorName = (ctx.git.status?.[7] ?? 0) > 0 ? "statusLineGitDirty" : "statusLineGitClean";
 		return { content: theme.fg(colorName, content), visible: true };
 	},
 	describe(ctx) {
 		const content = gitText(ctx);
 		if (!content) return null;
-		const isDirty = (ctx.git.status?.changed ?? 0) > 0;
+		const isDirty = (ctx.git.status?.[7] ?? 0) > 0;
 		const colorName = isDirty ? "statusLineGitDirty" : "statusLineGitClean";
 		const spans = [span(content, colorName)];
 		return isDirty ? { spans, tone: "warning" } : { spans };

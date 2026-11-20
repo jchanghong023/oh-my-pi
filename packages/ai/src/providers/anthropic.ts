@@ -900,6 +900,8 @@ export interface AnthropicOptions extends StreamOptions {
 export type AnthropicClientOptionsArgs = {
 	model: Model<"anthropic-messages">;
 	apiKey: string;
+	/** @internal Explicit headers are the only credentials; do not synthesize a gateway bearer. */
+	headerOnlyAuth?: boolean;
 	extraBetas?: string[];
 	stream?: boolean;
 	interleavedThinking?: boolean;
@@ -2057,7 +2059,7 @@ const streamAnthropicOnce = (
 			if (transport) options = transport.prepareOptions(options ?? {});
 			const apiKey =
 				options?.requestAuth !== undefined
-					? (options.requestAuth.apiKey ?? "")
+					? ((options.requestAuthPrepared ? options.apiKey : options.requestAuth.apiKey)?.trim() ?? "")
 					: (options?.apiKey ?? getEnvApiKey(model.provider) ?? "");
 			const callerHeaders = options?.requestAuth?.headers
 				? mergeHeaders(options?.headers, options.requestAuth.headers)
@@ -2363,6 +2365,7 @@ const streamAnthropicOnce = (
 				clientArgs = {
 					model,
 					apiKey,
+					headerOnlyAuth: options?.requestAuth !== undefined && !apiKey,
 					extraBetas,
 					stream: true,
 					interleavedThinking: options?.interleavedThinking ?? true,
@@ -4566,6 +4569,13 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	});
 
 	if (model.provider === "cloudflare-ai-gateway") {
+		if (args.headerOnlyAuth) {
+			// The gateway header builder synthesizes a bearer even with no API key.
+			// Keep an explicit header as supplied, including differently cased names.
+			const authorization = requestModelHeaders["cf-aig-authorization"];
+			if (authorization === undefined) delete defaultHeaders["cf-aig-authorization"];
+			else defaultHeaders["cf-aig-authorization"] = authorization;
+		}
 		return {
 			isOAuthToken: false,
 			apiKey: null,

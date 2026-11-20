@@ -1928,12 +1928,18 @@ impl Stdin {
 		use windows_sys::Win32::{
 			Foundation::ERROR_BROKEN_PIPE,
 			Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType},
-			System::Pipes::PeekNamedPipe,
+			System::Pipes::{GetNamedPipeInfo, PeekNamedPipe},
 		};
 
 		let handle = file.as_raw_handle();
 		// SAFETY: the file owns the handle for the whole call.
 		if unsafe { GetFileType(handle) } != FILE_TYPE_PIPE {
+			return Ok(());
+		}
+		// GetFileType also reports sockets as pipes; only peek on verified pipes.
+		let null = std::ptr::null_mut();
+		// SAFETY: the file owns the handle and all output pointers are optional.
+		if unsafe { GetNamedPipeInfo(handle, null, null, null, null) } == 0 {
 			return Ok(());
 		}
 		loop {

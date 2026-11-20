@@ -8,12 +8,13 @@
  *
  * Each entry includes `process.pid` so concurrent omp instances stay
  * traceable, and the fields of the enclosing {@link withContext} (a session's
- * `sessionId`) so sessions sharing one process stay apart. The file is created
- * on the first record written. Records are batched — one write per second or
- * per 64 KiB — while `warn`/`error` records are written at once together with
- * everything buffered before them; exit, fatal, and signal paths flush the
- * rest. `OMP_LOG_LEVEL` limits file and console levels (default: warn offline,
- * all otherwise). Offline filtering also gates registered sinks.
+ * `sessionId`) so sessions sharing one process stay apart. The file is opened
+ * lazily for structured logs or the TUI stderr guard. Records are batched —
+ * one write per second or per 64 KiB — while `warn`/`error` records are
+ * written at once together with everything buffered before them; exit,
+ * fatal, and signal paths flush the rest. `OMP_LOG_LEVEL` limits file and
+ * console levels (default: warn offline, all otherwise). Offline filtering
+ * also gates registered sinks.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
@@ -24,7 +25,6 @@ import { isPromise } from "node:util/types";
 import { APP_NAME, getLogPath, getLogsDir, localDay, VERSION } from "./dirs";
 import { RotatingFileSink } from "./logger/rotating-file";
 import { isPidAlive } from "./pid";
-import { setStderrRedirectTarget } from "./stderr-guard";
 import { drainModuleLoadEvents } from "./timing-buffer";
 import { isRecord } from "./type-guards";
 /** Severity names accepted by the centralized logger. */
@@ -520,6 +520,13 @@ let exitFlushInstalled = false;
 /** Set once the process is exiting: every later record is written immediately. */
 let exiting = false;
 
+let logFileObserver: ((filePath: string) => void) | undefined;
+
+/** Let the stderr guard follow the local file transport without owning its allocation. */
+export function setLogFileObserver(observer: (filePath: string) => void): void {
+	logFileObserver = observer;
+}
+
 function flushOnExit(code: number): void {
 	exiting = true;
 	shutdownDiagnosticLogging(process.exitCode ?? code);
@@ -534,7 +541,6 @@ function makeFileTransport(dir?: string): RotatingFileSink {
 		exitFlushInstalled = true;
 		process.on("exit", flushOnExit);
 	}
-	// The sink opens (and creates) its file on the first batch written.
 	return new RotatingFileSink({
 		directory: logsDir,
 		filenamePrefix: "omp",
@@ -543,7 +549,7 @@ function makeFileTransport(dir?: string): RotatingFileSink {
 		maxFiles: 5,
 		batch: { intervalMs: FILE_FLUSH_INTERVAL_MS, maxBytes: FILE_FLUSH_BYTES },
 		// Keep the stderr guard's fd 2 on the file this sink is writing.
-		onRotate: setStderrRedirectTarget,
+		onRotate: filePath => logFileObserver?.(filePath),
 		fallbackDirectory: () => fallbackLogsDir(logsDir),
 		onFailure: (error, stage, recoveredPath) => {
 			if (recoveredPath) {
@@ -653,6 +659,19 @@ export function getCurrentLogPath(): string {
 export function getCurrentLogsDir(): string {
 	const filePath = activeTransports?.file?.filePath;
 	return filePath ? path.dirname(filePath) : getLogsDir();
+}
+
+/** Directory selected before any write failure redirected the file transport. */
+export function getConfiguredLogsDir(): string {
+	return (
+		activeTransports?.file?.configuredDirectory ??
+		(typeof transportOpts.file === "string" ? transportOpts.file : getLogsDir())
+	);
+}
+
+/** Open the local file transport for native stderr without logging a record. */
+export function prepareStderrLog(): string | undefined {
+	return getLocalTransports().file?.prepare();
 }
 
 /** Opt the executable into lifecycle diagnostics; pure logger/SDK users remain unchanged. */

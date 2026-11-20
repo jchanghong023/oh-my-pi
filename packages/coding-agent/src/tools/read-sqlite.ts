@@ -49,6 +49,14 @@ export async function resolveSqliteReadPath(
 	signal?: AbortSignal,
 ): Promise<ResolvedSqliteReadPath | null> {
 	const candidates = parseSqlitePathCandidates(readPath);
+	let rejectedPaths: Set<string> | undefined;
+	const probe = async (absolutePath: string): Promise<boolean> => {
+		if (rejectedPaths?.has(absolutePath)) return false;
+		await assertTeamReadTarget(session, absolutePath);
+		if (await isSqliteFile(absolutePath)) return true;
+		(rejectedPaths ??= new Set()).add(absolutePath);
+		return false;
+	};
 	for (const candidate of candidates) {
 		let absolutePath = resolveReadPath(candidate.sqlitePath, session.cwd);
 		let suffixResolution: { from: string; to: string } | undefined;
@@ -75,8 +83,7 @@ export async function resolveSqliteReadPath(
 			suffixResolution = { from: candidate.sqlitePath, to: suffixMatch.displayPath };
 		}
 
-		await assertTeamReadTarget(session, absolutePath);
-		if (!(await isSqliteFile(absolutePath))) continue;
+		if (!(await probe(absolutePath))) continue;
 		return {
 			absolutePath,
 			sqliteSubPath: candidate.subPath,
@@ -91,7 +98,7 @@ export async function resolveSqliteReadPath(
 		const stat = await Bun.file(absolutePath)
 			.stat()
 			.catch(() => null);
-		if (!stat?.isFile() || !(await isSqliteFile(absolutePath))) continue;
+		if (!stat?.isFile() || !(await probe(absolutePath))) continue;
 		return { absolutePath, sqliteSubPath: candidate.subPath, queryString: candidate.queryString };
 	}
 

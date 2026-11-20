@@ -2,7 +2,7 @@
  * CLI argument parsing and help display
  */
 import * as path from "node:path";
-import { $env, APP_NAME } from "@oh-my-pi/pi-utils";
+import { $env, APP_NAME, offlineFromEnv } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { MotionMode } from "../config/motion-presets";
 import type { ServiceTierOpenAISettingValue } from "../config/service-tier";
@@ -20,20 +20,9 @@ import {
 import { getExtraHelpText } from "./help-extra";
 import { CliUsageError } from "./usage-error";
 
-export { getExtraHelpText };
+export { getExtraHelpText, offlineFromEnv };
 
 export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui";
-
-/**
- * Whether `OMP_OFFLINE` selects the company intranet profile: CentOS 7, NFS,
- * `/dev/shm`, and no internet access. This flag does not probe the host.
- * The environment variable is inherited by child processes and is the only
- * trigger. Only `1`, `true`, `yes`, and `on` enable it (trimmed, case-insensitive).
- */
-export function offlineFromEnv(): boolean {
-	const raw = process.env.OMP_OFFLINE?.trim().toLowerCase();
-	return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
 
 export interface Args {
 	cwd?: string;

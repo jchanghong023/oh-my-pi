@@ -483,7 +483,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "clean", description: "隐藏思考与工具活动" },
 			{
 				name: "compact",
-				description: "隐藏普通工具历史卡片，在输入框上方显示两行活动和最近工具输出",
+				description: "隐藏普通工具历史卡片，在输入框上方显示本轮文件差异、两行活动和最近工具输出",
 			},
 			{ name: "detailed", description: "沿用上游完整思考与工具显示" },
 		],
@@ -657,8 +657,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					);
 				}
 				try {
-					if (runtime.setModel) await runtime.setModel(match);
-					else await runtime.session.setModel(match);
+					await runtime.session.setModel(match);
 					if (resolved.thinkingLevel !== undefined) runtime.session.setThinkingLevel(resolved.thinkingLevel);
 					await runtime.output(`Model set to ${match.provider}/${match.id}.`);
 					await runtime.notifyTitleChanged?.();

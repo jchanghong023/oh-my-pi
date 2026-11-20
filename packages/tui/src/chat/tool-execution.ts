@@ -313,13 +313,29 @@ export function settleWithJobFrame(component: ToolExecutionHandle, frame: ToolRe
 	component.updateResult({ ...frame, isError: state === "failed" }, false, toolCallId);
 }
 
-/** Terminal Bash cards already present in this transcript, keyed by their actual job identity. */
-export function settledBashCards(children: readonly Component[]): Map<string, string> {
+// A transcript's synchronous paint/description shares one lookup, including repeated
+// describes from compact-run grouping and reconciliation. Do not pin a transcript index
+// in each historical wait card.
+let bashCardIndexes: WeakMap<readonly Component[], { size: number; jobs: ReadonlyMap<string, string> }> | undefined;
+let bashCardIndexResetPending = false;
+
+function settledBashCards(children: readonly Component[]): ReadonlyMap<string, string> {
+	const indexes = (bashCardIndexes ??= new WeakMap());
+	const cached = indexes.get(children);
+	if (cached?.size === children.length) return cached.jobs;
 	const jobs = new Map<string, string>();
 	for (const child of children) {
 		if (!(child instanceof ToolExecutionComponent)) continue;
 		const job = child.settledBashJob();
 		if (job) jobs.set(job.id, job.state);
+	}
+	indexes.set(children, { size: children.length, jobs });
+	if (!bashCardIndexResetPending) {
+		bashCardIndexResetPending = true;
+		queueMicrotask(() => {
+			bashCardIndexes = undefined;
+			bashCardIndexResetPending = false;
+		});
 	}
 	return jobs;
 }
@@ -558,6 +574,7 @@ export class ToolExecutionComponent extends Container {
 	// the terminal never triggers an unnecessary full-viewport replay.
 	#firstResultViewportRepaintShapePainted = false;
 	#partialResultShapePainted = false;
+	#settledBashTranscript: (() => Container) | undefined;
 	#renderState: {
 		spinnerFrame?: number;
 		expanded: boolean;
@@ -791,6 +808,7 @@ export class ToolExecutionComponent extends Container {
 		this.#args = args;
 		this.#blockVersion++;
 		this.#presentation.markStale();
+		if (this.#toolName === "bash") bashCardIndexes = undefined;
 		this.#displayInputVersion++;
 		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
@@ -890,7 +908,7 @@ export class ToolExecutionComponent extends Container {
 
 	/** Only a terminal frame on the original Bash card can replace another job row. */
 	settledBashJob(): { id: string; state: string } | undefined {
-		return this.#toolName === "bash" ? this.#settledJob() : undefined;
+		return this.#toolName === "bash" && this.#toolActivityVisible ? this.settledBackgroundJob() : undefined;
 	}
 
 	#settledJob(): { id: string; state: string } | undefined {
@@ -909,11 +927,38 @@ export class ToolExecutionComponent extends Container {
 		return job ? { type: this.#toolName, ...job } : undefined;
 	}
 
-	setSettledBashJobs(jobs: () => ReadonlyMap<string, string>): void {
-		Object.defineProperty(this.#renderState, "settledBashJobs", { get: jobs, configurable: true });
+	setSettledBashTranscript(transcript: () => Container): void {
+		if (transcript === this.#settledBashTranscript) return;
+		this.#settledBashTranscript = transcript;
+		this.#renderState.settledBashJobs = undefined;
 	}
 
-	updateResult(result: ToolResultFrame, isPartial = false, _toolCallId?: string, _historical = false): void {
+	/** Keep the render memo stable unless a job referenced by this wait changes representation. */
+	#refreshSettledBashJobs(): ReadonlyMap<string, string> | undefined {
+		if (!this.#toolActivityVisible) return (this.#renderState.settledBashJobs = undefined);
+		const transcript = this.#settledBashTranscript?.();
+		const jobs = (this.#result as ToolRenderResult<CoordinationDetails> | undefined)?.details?.jobs;
+		if (!transcript || !Array.isArray(jobs)) return;
+		let index: ReadonlyMap<string, string> | undefined;
+		const previous = this.#renderState.settledBashJobs;
+		let changed = false;
+		for (const job of jobs) {
+			if (job.type !== "bash") continue;
+			index ??= settledBashCards(transcript.children);
+			if ((index.get(job.id) === job.status) !== (previous?.get(job.id) === job.status)) {
+				changed = true;
+				break;
+			}
+		}
+		if (!changed || !index) return previous;
+		let next: Map<string, string> | undefined;
+		for (const job of jobs) {
+			if (job.type === "bash" && index.get(job.id) === job.status) (next ??= new Map()).set(job.id, job.status);
+		}
+		return (this.#renderState.settledBashJobs = next);
+	}
+
+	updateResult(result: ToolResultFrame, isPartial = false, _toolCallId?: string): void {
 		const hadNoResult = this.#result === undefined;
 		const wasPartialResult = this.#result !== undefined && this.#isPartial;
 		const firstResultRepaintShapePainted = this.#firstResultViewportRepaintShapePainted;
@@ -926,10 +971,12 @@ export class ToolExecutionComponent extends Container {
 		// separately for links and media through the built-in render context.
 		const details = sanitizeTextDeep(result.details);
 		this.#result = details === result.details ? result : { ...result, details };
+		this.#renderState.settledBashJobs = undefined;
 		this.#resultVersion++;
 		this.#blockVersion++;
 		this.#isPartial = isPartial;
 		this.#presentation.markStale();
+		if (this.#toolName === "bash") bashCardIndexes = undefined;
 		// A final frame can land after the card retired to scrollback, which is never drawn again.
 		if (!isPartial) this.#presentation.recheck();
 		this.#displaceableByToolName = displaceableToolName(this.#toolName, result, isPartial);
@@ -1203,6 +1250,7 @@ export class ToolExecutionComponent extends Container {
 	seal(): void {
 		if (this.#sealed) return;
 		this.#sealed = true;
+		if (this.#toolName === "bash") bashCardIndexes = undefined;
 		this.#blockVersion++;
 		this.#displaceableByToolName = undefined;
 		this.#executionEndedAtNow ??= performance.now();
@@ -1235,6 +1283,7 @@ export class ToolExecutionComponent extends Container {
 	 * interval alive and keep being repainted.
 	 */
 	override dispose(): void {
+		if (this.#toolName === "bash") bashCardIndexes = undefined;
 		this.#stopShellReplay();
 		this.#shellInspector?.hide();
 		this.#shellInspector = undefined;
@@ -1262,7 +1311,10 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	setExpanded(expanded: boolean): void {
-		if (this.#expanded !== expanded) this.#blockVersion++;
+		if (this.#expanded !== expanded) {
+			this.#blockVersion++;
+			if (this.#toolName === "bash") bashCardIndexes = undefined;
+		}
 		this.#expanded = expanded;
 		this.#updateDisplay();
 	}
@@ -1301,6 +1353,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	refreshTranscriptPresentation(ids?: ReadonlySet<string>): boolean {
+		if (this.#toolName === "bash") bashCardIndexes = undefined;
 		if (!this.#presentation.refresh(ids)) return false;
 		this.#blockVersion++;
 		super.invalidate();
@@ -1312,6 +1365,7 @@ export class ToolExecutionComponent extends Container {
 		if (toolCallId === this.#toolCallId) return;
 		this.#toolCallId = toolCallId;
 		this.#presentation.markStale();
+		if (this.#toolName === "bash") bashCardIndexes = undefined;
 		this.#blockVersion++;
 		super.invalidate();
 	}
@@ -1372,11 +1426,12 @@ export class ToolExecutionComponent extends Container {
 	 * mounted so toggling it is one prop change; a presenter's answer applies on top.
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
+		const settledBashJobs = this.#toolName === "wait" ? this.#refreshSettledBashJobs() : undefined;
 		if (
 			this.#toolName === "wait" &&
 			!this.#expanded &&
 			this.#result &&
-			isDuplicateOnlyWait(this.#result as ToolRenderResult<CoordinationDetails>, this.#renderState.settledBashJobs)
+			isDuplicateOnlyWait(this.#result as ToolRenderResult<CoordinationDetails>, settledBashJobs)
 		)
 			return EMPTY_NODE;
 		if (this.#toolName === "wait" && this.#isBenignSkip()) return EMPTY_NODE;
@@ -1403,7 +1458,7 @@ export class ToolExecutionComponent extends Container {
 			this.#displayInputVersion,
 			this.#toolActivityVisible,
 			this.#toolImagesHidden(),
-			this.#renderState.settledBashJobs ? JSON.stringify([...this.#renderState.settledBashJobs]) : undefined,
+			settledBashJobs,
 			cx?.cols,
 			host.media,
 			host.json,
@@ -1713,7 +1768,10 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	setToolActivityVisible(visible: boolean): void {
-		if (this.#toolActivityVisible !== visible) this.#blockVersion++;
+		if (this.#toolActivityVisible !== visible) {
+			this.#blockVersion++;
+			if (this.#toolName === "bash") bashCardIndexes = undefined;
+		}
 		this.#toolActivityVisible = visible;
 		this.#spotlight.setHidden(!visible);
 		this.#lateDiagnosticsBlock?.block.setToolActivityVisible(visible);
@@ -1811,6 +1869,7 @@ export class ToolExecutionComponent extends Container {
 				this.#allocation,
 			);
 		}
+		if (this.#toolName === "wait") this.#refreshSettledBashJobs();
 		if (this.#renderState.expanded !== this.#expanded || this.#displayImagesHidden !== this.#toolImagesHidden())
 			this.#updateDisplay();
 		let lines = super.render(width);

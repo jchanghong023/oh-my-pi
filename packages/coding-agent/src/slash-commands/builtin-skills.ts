@@ -43,10 +43,10 @@ async function handleProtocolSkillsCommand(command: ParsedSlashCommand, runtime:
 	await handleSkillsCommand(command.args, {
 		cwd: runtime.cwd,
 		registryUrl: cfgSkillsRegistryUrl.get(runtime.settings) || DEFAULT_SKILLS_URL,
-		output: text => runtime.output(text),
+		output: text => runtime.output(text, "info"),
 		error: async text => {
 			failed = true;
-			await runtime.output(text);
+			await runtime.output(text, "error");
 		},
 		refresh: async () => {
 			await runtime.session.refreshSkills();
@@ -67,7 +67,7 @@ async function handleProtocolSkillsCommand(command: ParsedSlashCommand, runtime:
 			},
 		},
 	});
-	for (const warning of warnings) await runtime.output(warning);
+	for (const warning of warnings) await runtime.output(warning, "warning");
 	return commandConsumed({ failed });
 }
 

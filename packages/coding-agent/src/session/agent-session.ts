@@ -139,7 +139,6 @@ import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { SessionAccountPoolScope } from "../config/account-pools";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
-import { isCompanyLaneActive } from "../config/company-provider";
 import { cfgOffline } from "../config/auxiliary-model-policy";
 import type { ModelRegistry } from "../config/model-registry";
 import {
@@ -264,7 +263,7 @@ import {
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
 import { isAttachmentOnlyTitleInput, isLowSignalTitleInput } from "../tiny/text";
-import type { ImageAttachmentEntry, ToolSession } from "../tools";
+import type { FileChangeReport, ImageAttachmentEntry, ToolSession } from "../tools";
 import { resolveApproval } from "../tools/approval";
 import { invokeCrawlBrowserWithSession, writeCrawlMarkdownWithSession } from "../tools/browser/crawl-access";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
@@ -339,6 +338,7 @@ import {
 	type LiveToolOutputPreview,
 	type LiveToolOutputSnapshot,
 } from "./agent-session-handle";
+import { LatestTurnFileChanges, type TurnFileChanges } from "./latest-turn-file-changes";
 import { LiveToolOutputState } from "./live-tool-output";
 import {
 	asyncJobSnapshot,
@@ -1210,6 +1210,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	readonly #liveToolOutput = new LiveToolOutputState();
 	#modelStage: ModelStage | null = null;
+	#latestTurnFileChanges?: LatestTurnFileChanges;
 	#runStateListeners = new Set<(state: "running" | "idle", at: number) => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
 	#runStartedAt: number | undefined;
@@ -1327,7 +1328,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#todoLoopController: AbortController | undefined;
 	/** Manager owned by this top-level session; subagents borrow but never dispose it. */
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
-	readonly #releaseOwnedAsyncJobManager: ((options?: { strict?: boolean }) => Promise<boolean | void>) | undefined;
 	/** Root-scoped manager shared with descendants; job queries and cancellation stay owner-scoped. */
 	readonly #asyncJobManager: AsyncJobManagerApi | undefined;
 	/** Clears this session's owner delivery sink registration; set when a manager + agent id exist. */
@@ -2473,7 +2473,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			inheritedAgents: config.inheritedSessionAgents,
 		});
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
-		this.#releaseOwnedAsyncJobManager = config.releaseOwnedAsyncJobManager;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
 		const modelControlsHost: ModelControlsHost = {
 			agent: this.agent,
@@ -3218,7 +3217,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			drainStrandedQueuedMessages: () => this.#drainStrandedQueuedMessages(),
 			buildDisplaySessionContext: model => this.buildDisplaySessionContext(model),
 			replaceMessagesFromSessionContext: messages => this.replaceMessagesFromSessionContext(messages),
-			restoreGoalAutoOrchestrateContext: entryId => this.#appendGoalAutoOrchestrateContext(entryId),
+			previewGoalAutoOrchestrateContext: () => this.#previewGoalAutoOrchestrateContext(),
+			restoreGoalAutoOrchestrateContext: (entryId, preview) =>
+				this.#appendGoalAutoOrchestrateContext(entryId, undefined, preview),
 			persistEvalStateContext: () => {
 				// The rewritten history carries no snapshot yet, so always build one.
 				const message = this.#buildEvalStateContextMessage([]);
@@ -4285,6 +4286,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Emit an event to all listeners */
 	#emit(event: AgentSessionEvent): void {
 		this.#modelStage = nextModelStage(this.#modelStage, event);
+		if (event.type === "message_start" && event.message.role === "user") {
+			this.#latestTurnFileChanges?.start(this.sessionId);
+		}
 		// Listener array is copy-on-write (see `subscribe`), so iterating the
 		// current array is safe against (un)subscribes made by a listener.
 		for (const l of this.#eventListeners) {
@@ -4313,6 +4317,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#runStartedAt = undefined;
 			this.#modelStage = null;
 		} else {
+			if (this.#runStartedAt === undefined) this.#latestTurnFileChanges?.start(this.sessionId);
 			this.#runStartedAt ??= at;
 		}
 		this.#liveToolOutput.setRunActive(state === "running", at);
@@ -6588,6 +6593,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#modelStage;
 	}
 
+	/** Opt in from the terminal before the next write; never replay edits from chat history. */
+	getLatestTurnFileChanges(): TurnFileChanges {
+		return (this.#latestTurnFileChanges ??= new LatestTurnFileChanges()).get(this.sessionId);
+	}
+
+	recordLatestTurnFileChange(change: FileChangeReport): void {
+		if (this.#runActive) this.#latestTurnFileChanges?.record(this.sessionId, change);
+	}
+
 	/**
 	 * Observe run-state transitions: `running` when a run opens, `idle` when it ends
 	 * (just before its `agent_end`) or a transition abandons it. A paused run stays
@@ -7285,26 +7299,22 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			return;
 		}
 		if (strict) {
-			const drained = this.#releaseOwnedAsyncJobManager
-				? await this.#releaseOwnedAsyncJobManager({ strict: true })
-				: await manager.dispose({ timeoutMs: 3_000, strict: true });
+			const drained = await manager.dispose({ timeoutMs: 3_000, strict: true });
 			if (drained === false) throw new Error("Async job completion deliveries still pending during strict dispose");
-			if (!this.#releaseOwnedAsyncJobManager && AsyncJobManager.instance() === manager) {
+			if (AsyncJobManager.instance() === manager) {
 				AsyncJobManager.setInstance(undefined);
 			}
 			return;
 		}
 
 		try {
-			const drained = this.#releaseOwnedAsyncJobManager
-				? await this.#releaseOwnedAsyncJobManager()
-				: await manager.dispose({ timeoutMs: 3_000 });
+			const drained = await manager.dispose({ timeoutMs: 3_000 });
 			const deliveryState = manager.getDeliveryState();
 			if (drained === false && deliveryState) {
 				logger.warn("Async job completion deliveries still pending during dispose", { ...deliveryState });
 			}
 		} finally {
-			if (!this.#releaseOwnedAsyncJobManager && AsyncJobManager.instance() === manager) {
+			if (AsyncJobManager.instance() === manager) {
 				AsyncJobManager.setInstance(undefined);
 			}
 		}
@@ -7526,6 +7536,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			options.drainTimeoutMs ?? POST_PROMPT_DRAIN_TIMEOUT_MS,
 			"Timed out waiting for the active agent run to settle during dispose",
 		);
+		await this.#drainCancelledShells();
 		const finalizers = this.#strictDisposeFinalizers!;
 		const finalized = await Promise.allSettled(
 			[...finalizers].map(async dispose => {
@@ -7538,8 +7549,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#eventListeners = [];
 		this.#runStateListeners.clear();
 		this.#sessionChangeCallbacks.clear();
-		this.sessionManager.seal();
-		await this.sessionManager.close();
+		await this.sessionManager.close({ strict: true });
 		this.#releaseRetainedSessionMemory();
 		this.#accountPoolScope?.release();
 	}
@@ -7674,10 +7684,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		} catch (error) {
 			logger.warn("Active agent run still settling at dispose deadline", { error: String(error) });
 		}
-		// The agent turn can finish before the native shell's delayed KILL wave.
-		// Keep that wave alive through this session's process teardown, including
-		// commands that started under a session id this one has since replaced.
-		await Promise.all([drainAbortedShells(this.sessionManager.getSessionId()), this.#bash.drainCancelled()]);
+		await this.#drainCancelledShells();
 		// Forwarding stays connected through the drain above so a tool that
 		// settles inside it still reaches subscribers (issue #18450); detach now
 		// so events past the deadline are neither forwarded nor persisted.
@@ -7701,6 +7708,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// closes the writer.
 		this.sessionManager.seal();
 		return drained;
+	}
+
+	/** The agent turn can finish before the native KILL wave, even for a previous session id. */
+	async #drainCancelledShells(): Promise<void> {
+		await Promise.all([drainAbortedShells(this.sessionManager.getSessionId()), this.#bash.drainCancelled()]);
 	}
 
 	/** Drop the in-memory conversation state after the terminal dispose flush. */
@@ -9402,6 +9414,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.agent.state.messages.some(isNotice);
 	}
 
+	#previewGoalAutoOrchestrateContext(): CustomMessage | undefined {
+		const state = this.#goalModeState;
+		if (state?.autoOrchestrate !== true || this.#isDisposed) return undefined;
+		return buildGoalAutoOrchestrateMessage(state, this.getEnabledToolNames());
+	}
+
 	#buildGoalAutoOrchestrateContext(compactionEntryId?: string, initialGoalId?: string): CustomMessage | undefined {
 		const state = this.#goalModeState;
 		if (
@@ -9421,9 +9439,16 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return notice;
 	}
 
-	#appendGoalAutoOrchestrateContext(compactionEntryId?: string, initialGoalId?: string): CustomMessage | undefined {
-		const notice = this.#buildGoalAutoOrchestrateContext(compactionEntryId, initialGoalId);
+	#appendGoalAutoOrchestrateContext(
+		compactionEntryId?: string,
+		initialGoalId?: string,
+		preview?: { notice: CustomMessage | undefined },
+	): CustomMessage | undefined {
+		const notice = preview ? preview.notice : this.#buildGoalAutoOrchestrateContext(compactionEntryId, initialGoalId);
 		if (!notice) return undefined;
+		if (preview && isRecord(notice.details)) {
+			notice.details = { ...notice.details, compactionEntryId };
+		}
 		this.agent.appendMessage(notice);
 		this.sessionManager.appendCustomMessageEntry(
 			notice.customType,
@@ -10588,6 +10613,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#promptSetupAbortController = setupAbort;
 		try {
 			await this.#recovery.maybeRestoreRetryFallbackPrimary();
+			// Restore the planning model from the previous task's handoff before checking its credentials.
+			const userTask = this.#isUserTask(message);
+			if (userTask) await this.#prewalk.beginAutoTask();
+			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 			// Eligibility permits selecting a configured model; admitting a new turn
 			// requires resolving its actual authentication before any model work.
 			const admissionModel = this.model;
@@ -10610,10 +10639,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				);
 			}
 			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
-			// Auto-prewalk: return from the previous task's handoff before the usage preflight checks the model,
-			// then judge this task alongside the rest of setup; the decision is applied right before dispatch.
-			const userTask = this.#isUserTask(message);
-			if (userTask) await this.#prewalk.beginAutoTask();
 			const autoPrewalk = userTask ? this.#prewalk.classifyAuto(expandedText, setupAbort.signal) : undefined;
 			// Auto-parallel splits typed prompts only; a skill prompt's body is instructions, not a list of tasks.
 			const autoParallel =
@@ -15876,13 +15901,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			disabledProviderIds(this.settings),
 		);
 		if (providers.size === 0) return undefined;
-		// An OMP_OFFLINE process must not reach the network during a session
-		// switch either: the cache-only strategy keeps the restore chain local,
-		// and a cold cache falls through to the fail-closed restore error.
-		await this.#modelRegistry.refreshDiscoverableProviders(
-			providers,
-			isCompanyLaneActive() ? "offline" : "online-if-uncached",
-		);
+		await this.#modelRegistry.refreshDiscoverableProviders(providers);
 		return resolve();
 	}
 

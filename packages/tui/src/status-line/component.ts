@@ -40,13 +40,7 @@ import {
 	type CodexResetUsageSnapshot,
 	detectCodexResetFireworks,
 } from "../overlays/codex-reset-fireworks";
-import {
-	canReuseCachedPr,
-	createPrCacheContext,
-	isSamePrCacheContext,
-	parseGitStatus,
-	type PrCacheContext,
-} from "./git-utils";
+import { canReuseCachedPr, createPrCacheContext, isSamePrCacheContext, type PrCacheContext } from "./git-utils";
 import { summarizeUsageResetCredits } from "../overlays/usage-display";
 import { getPreset } from "./presets";
 import { describeSegment, renderSegment, type SegmentContext } from "./segments";
@@ -72,6 +66,10 @@ import type {
 	StatusLineSettings,
 	StatusResetExpiry,
 } from "./types";
+
+function sameGitStatus(left: GitStatus | null, right: GitStatus | null): boolean {
+	return left === right || (left !== null && right !== null && left.every((count, index) => count === right[index]));
+}
 
 /** Sparkline cells the ANSI jobs segment draws after the freshest widget's headline. */
 const JOBS_SEGMENT_SPARK_CELLS = 8;
@@ -1238,7 +1236,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			this.#loopModeStatus === next ||
 			(this.#loopModeStatus?.state === next?.state &&
 				this.#loopModeStatus?.limit === next?.limit &&
-				this.#loopModeStatus?.condition === next?.condition)
+				this.#loopModeStatus?.condition === next?.condition &&
+				this.#loopModeStatus?.sequence?.current === next?.sequence?.current &&
+				this.#loopModeStatus?.sequence?.total === next?.sequence?.total)
 		) {
 			return;
 		}
@@ -1935,11 +1935,20 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			(async () => {
 				let next: GitStatus | null = null;
 				try {
-					const summary = await repository.statusSummary(
+					const { staged, unstaged, untracked } = await repository.statusSummary(
 						AbortSignal.any([request.controller.signal, AbortSignal.timeout(JJ_COMMAND_TIMEOUT_MS)]),
 					);
 					// JJ has no index: added and modified paths are disjoint.
-					next = { ...summary, changed: summary.staged + summary.unstaged + summary.untracked, paths: null };
+					next = [
+						0,
+						staged,
+						unstaged,
+						staged + unstaged,
+						untracked,
+						staged + untracked,
+						unstaged + untracked,
+						staged + unstaged + untracked,
+					];
 				} catch {
 					next = null;
 				} finally {
@@ -1950,7 +1959,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				this.#noteVcsStaleAt(this.#jjStatusLastFetch + JJ_REFRESH_TTL_MS);
 				const prev = this.#cachedJjStatus;
 				this.#cachedJjStatus = next;
-				if (JSON.stringify(prev) !== JSON.stringify(next)) {
+				if (!sameGitStatus(prev, next)) {
 					this.#invalidateStatusLineRenderCache();
 					this.#onBranchChange?.();
 				}
@@ -1974,7 +1983,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			try {
 				const taggedRepository: GitViewTaggedRepo = repository;
 				const gitRepository = (taggedRepository[GIT_VIEW] ??= repository.asGit());
-				if (gitRepository) nextStatus = parseGitStatus(await gitRepository.statusPorcelainBytes());
+				if (gitRepository) nextStatus = await gitRepository.statusChangeCounts();
 			} catch {
 				nextStatus = null;
 			} finally {
@@ -1986,7 +1995,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 					this.#gitStatusInFlightCwd = undefined;
 					// A zeroed stamp (superseded generation) is already due: refetch next frame.
 					this.#noteVcsStaleAt(this.#gitStatusLastFetch + this.#gitStatusTtlMs);
-					if (!this.#disposed && JSON.stringify(prev) !== JSON.stringify(nextStatus)) {
+					if (!this.#disposed && !sameGitStatus(prev, nextStatus)) {
 						this.#invalidateStatusLineRenderCache();
 						this.#onBranchChange?.();
 					}

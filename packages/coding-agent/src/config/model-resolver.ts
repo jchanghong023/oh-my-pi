@@ -1291,6 +1291,7 @@ function resolveConfiguredRolePattern(
 	value: string,
 	settings?: RoleLookup,
 	visited: Set<string> = new Set(),
+	automatic = false,
 ): ResolvedRolePattern[] | undefined {
 	const normalized = value.trim();
 	if (!normalized) return undefined;
@@ -1301,7 +1302,7 @@ function resolveConfiguredRolePattern(
 		MAX_THINKING_SUFFIX_OPTIONS,
 	);
 	const role = getModelRoleAlias(aliasCandidate, settings);
-	if (!role) return [{ pattern: normalized, automatic: false }];
+	if (!role) return [{ pattern: normalized, automatic }];
 	if (visited.has(role)) return undefined;
 	visited.add(role);
 
@@ -1557,6 +1558,18 @@ export interface ResolvedModelRoleValue {
 	warning: string | undefined;
 }
 
+function expandRoleValue(
+	value: string | undefined,
+	lookup: RoleLookup | undefined,
+	automatic?: boolean,
+): ResolvedRolePattern[] {
+	const normalized = value?.trim();
+	if (!normalized || normalized === DEFAULT_MODEL_ROLE) return [];
+	return normalizeModelPatternList(normalized).flatMap(
+		pattern => resolveConfiguredRolePattern(pattern, lookup, undefined, automatic) ?? [],
+	);
+}
+
 export function resolveModelRoleValue(
 	roleValue: string | undefined,
 	availableModels: Model<Api>[],
@@ -1564,19 +1577,10 @@ export function resolveModelRoleValue(
 		settings?: Settings;
 		roleLookup?: ModelRoleLookup;
 		matchPreferences?: ModelMatchPreferences;
-		/** Retain automatic provenance when matching an already-expanded role candidate. */
+		/** Mark literal selectors as automatic; role aliases retain their expanded provenance. */
 		automatic?: boolean;
 	},
 ): ResolvedModelRoleValue {
-	if (!roleValue) {
-		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
-	}
-
-	const normalized = roleValue.trim();
-	if (!normalized || normalized === DEFAULT_MODEL_ROLE) {
-		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
-	}
-
 	const { roleLookup, settings } = options ?? {};
 	const lookup: RoleLookup | undefined =
 		roleLookup && settings
@@ -1585,32 +1589,36 @@ export function resolveModelRoleValue(
 					getDictationLanguage: () => settings.getDictationLanguage(),
 				}
 			: (roleLookup ?? settings);
-	const effectivePatterns = normalizeModelPatternList(normalized).flatMap(
-		pattern => resolveConfiguredRolePattern(pattern, lookup) ?? [],
-	);
-	if (!effectivePatterns || effectivePatterns.length === 0) {
+	const patterns = expandRoleValue(roleValue, lookup, options?.automatic);
+	if (patterns.length === 0) {
 		return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
 	}
+	const matchPreferences = mergeModelMatchPreferences(settings, options?.matchPreferences);
+	return matchRolePatterns(patterns, createRolePatternMatcher(availableModels, matchPreferences));
+}
 
+function createRolePatternMatcher(availableModels: Model<Api>[], preferences: ModelMatchPreferences) {
+	let preferenceContext: ModelPreferenceContext | undefined;
+	let automaticContext: ModelPreferenceContext | undefined;
+	let automaticModels: Model<Api>[] | undefined;
+	return ({ pattern, automatic }: ResolvedRolePattern): ParsedModelResult => {
+		if (automatic) {
+			automaticModels ??= availableModels.filter(model => providerEntry(model.provider)?.automaticDefault !== false);
+			automaticContext ??= buildPreferenceContext(automaticModels, preferences);
+			return matchPatternWithContext(pattern, automaticModels, automaticContext);
+		}
+		preferenceContext ??= buildPreferenceContext(availableModels, preferences);
+		return matchPatternWithContext(pattern, availableModels, preferenceContext);
+	};
+}
+
+function matchRolePatterns(
+	effectivePatterns: ResolvedRolePattern[],
+	match: (pattern: ResolvedRolePattern) => ParsedModelResult,
+): ResolvedModelRoleValue {
 	let warning: string | undefined;
-	const matchPreferences = mergeModelMatchPreferences(options?.settings, options?.matchPreferences);
-	// Preserve priority provenance through alias expansion: a user's literal
-	// selector or configured role may opt in, but automatic defaults may not.
-	const automaticModels =
-		options?.automatic || effectivePatterns.some(candidate => candidate.automatic)
-			? availableModels.filter(model => providerEntry(model.provider)?.automaticDefault !== false)
-			: availableModels;
-	const preferenceContext = buildPreferenceContext(availableModels, matchPreferences);
-	const automaticPreferenceContext =
-		automaticModels === availableModels
-			? preferenceContext
-			: buildPreferenceContext(automaticModels, matchPreferences);
-	for (const [patternIndex, { pattern: effectivePattern, automatic }] of effectivePatterns.entries()) {
-		const resolved = matchPatternWithContext(
-			effectivePattern,
-			automatic || options?.automatic ? automaticModels : availableModels,
-			automatic || options?.automatic ? automaticPreferenceContext : preferenceContext,
-		);
+	for (const [patternIndex, pattern] of effectivePatterns.entries()) {
+		const resolved = match(pattern);
 		if (resolved.model) {
 			return {
 				model: resolved.model,
@@ -1752,14 +1760,12 @@ export function resolveRoleChain(role: string, settings: Settings, pool: Model<A
 	];
 	const candidates: RoleChainCandidate[] = [];
 	const candidateByRoute = new Map<string, RoleChainCandidate>();
-	const automaticPool = hasConfiguredFallbackChain
-		? pool
-		: pool.filter(model => providerEntry(model.provider)?.automaticDefault !== false);
+	const match = createRolePatternMatcher(pool, getModelMatchPreferences(settings));
 	// First explicitly configured provider-qualified selector that resolved to
 	// nothing; the next candidate carries it so callers can say what replaced it.
 	let unresolvedExplicit: string | undefined;
 	for (const { selector, explicit, automatic } of selectors) {
-		const resolved = resolveModelRoleValue(selector, automatic ? automaticPool : pool, { settings });
+		const resolved = matchRolePatterns(expandRoleValue(selector, settings, automatic), match);
 		// An explicit value that resolved nothing, or a list that matched on a later
 		// entry, skipped expanded patterns (role aliases included): record the first
 		// provider-qualified one among them.

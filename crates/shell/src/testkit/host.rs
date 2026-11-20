@@ -239,7 +239,7 @@ impl ExtProc for CountedExt {
 	fn signal_wave(
 		&mut self,
 		sig: Signal,
-		pids: &[u32],
+		pids: &[(u32, Option<u32>)],
 		extra: &[crate::proctree::Process],
 		groups: bool,
 	) -> bool {

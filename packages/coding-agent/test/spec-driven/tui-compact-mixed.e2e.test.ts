@@ -838,9 +838,10 @@ test("resumed compact transcript stays in place while successive tools finish an
 	}
 }, 120_000);
 
-test("retained real edit stays hidden in compact while the next assistant stream is empty or hidden", async () => {
+test("compact shows the current turn's real Write/Edit net diff through later tool and model activity", async () => {
 	if (!tuiTest) throw new Error("tui-test is required for the compact empty-stream regression");
 	const original = "const original = 0;";
+	const intermediate = "const written = 1;";
 	const editTail = "export const EDIT_CLI_46 = 46;";
 	const draft = "CLI_UNSENT_DRAFT";
 	const edited = Array.from(
@@ -848,6 +849,11 @@ test("retained real edit stays hidden in compact while the next assistant stream
 		(_, i) => `export const EDIT_CLI_${String(i + 1).padStart(2, "0")} = ${i + 1};`,
 	).join("\n");
 	const actions: Action[] = [
+		{
+			name: "write",
+			args: { path: "retained-edit.ts", content: `${intermediate}\n` },
+			intent: "Writing retained evidence",
+		},
 		{ name: "read", args: { path: "retained-edit.ts" }, intent: "Reading source before edit" },
 		{
 			name: "edit",
@@ -861,6 +867,8 @@ test("retained real edit stays hidden in compact while the next assistant stream
 		},
 		{ name: "read", args: { path: "retained-read.txt" }, intent: "Reading retained evidence" },
 	];
+	const writeReturned = Promise.withResolvers<void>();
+	const continueToRead = Promise.withResolvers<void>();
 	const editReturned = Promise.withResolvers<string>();
 	const continueToGrep = Promise.withResolvers<void>();
 	const waiting = Promise.withResolvers<void>();
@@ -900,24 +908,30 @@ test("retained real edit stays hidden in compact while the next assistant stream
 						return respond(request);
 					const users = request.messages.filter(message => message.role === "user");
 					const last = contentText(users.at(-1)?.content);
+					if (last.includes("CLI_FOLLOWING_TURN")) return { text: "CLI_FOLLOWING_DONE" };
 					if (!last.includes("CLI_EDIT_PROMPT")) return respond(request);
 					if (step > 0) {
 						const output = result(request, actions[step - 1]!);
 						if (step === 1) {
+							expect(output).toContain("Successfully wrote");
+							writeReturned.resolve();
+							await continueToRead.promise;
+						}
+						if (step === 2) {
 							const header = output.match(/\[retained-edit\.ts#[A-F0-9]{4}\]/u)?.[0];
-							if (!header || !output.includes(original))
-								throw new Error(`Missing source hashline or content: ${output}`);
-							actions[1]!.args.input = `*** Begin Patch\n${header}\nPUT 1.=1:\n${edited
+							if (!header || !output.includes(intermediate))
+								throw new Error(`Missing written source hashline or content: ${output}`);
+							actions[2]!.args.input = `*** Begin Patch\n${header}\nPUT 1.=1:\n${edited
 								.split("\n")
 								.map(line => `+${line}`)
 								.join("\n")}\n*** End Patch\n`;
 						}
-						if (step === 2) {
+						if (step === 3) {
 							editReturned.resolve(output);
 							await continueToGrep.promise;
 						}
-						if (step === 3) expect(output).toContain("CLI_GREPPED");
-						if (step === 4) expect(output).toContain("CLI_READ_RESULT");
+						if (step === 4) expect(output).toContain("CLI_GREPPED");
+						if (step === 5) expect(output).toContain("CLI_READ_RESULT");
 					}
 					if (step < actions.length) return { tools: [call(request, actions[step++]!)] };
 					waiting.resolve();
@@ -945,26 +959,65 @@ test("retained real edit stays hidden in compact while the next assistant stream
 					frame => frame.screen.includes(`${MARKER}_CHAT_READY`),
 				);
 				await tui("submit", "CLI_EDIT_PROMPT");
+				await writeReturned.promise;
+				await eventually(
+					() => screen.checkpoint("compact Write card shows the confirmed before and after"),
+					frame =>
+						frame.screen.includes("retained-edit.ts") &&
+						frame.screen.includes(original) &&
+						frame.screen.includes(intermediate) &&
+						!frame.screen.includes("Successfully wrote"),
+				);
+				continueToRead.resolve();
 				const editOutput = await editReturned.promise;
 				expect(editOutput).toContain(`46:${editTail}`);
 				expect(editOutput).not.toContain(original);
-				const editPreview = await eventually(
-					() => screen.checkpoint("compact shows the bounded raw edit result"),
-					frame => frame.screen.includes(`46:${editTail}`),
+				await eventually(
+					() => screen.checkpoint("compact Edit card shows the net change rather than its intermediate input"),
+					frame =>
+						frame.screen.includes("retained-edit.ts") &&
+						frame.screen.includes(original) &&
+						frame.screen.includes("EDIT_CLI_01") &&
+						!frame.screen.includes(intermediate) &&
+						!frame.screen.includes(editTail),
 				);
-				expect(editPreview.screen).not.toContain("EDIT_CLI_01");
-				expect(editPreview.screen).not.toContain(original);
 				continueToGrep.resolve();
 				await waiting.promise;
 				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(`${edited}\n`);
 				const hiddenTools = /retained-(?:edit\.ts|search\.txt)|EDIT_CLI_\d{2}|const original = 0;|CLI_GREPPED/u;
+				const collapsedDiff = (text: string) =>
+					text.includes("retained-edit.ts") &&
+					text.includes(original) &&
+					text.includes("EDIT_CLI_01") &&
+					!text.includes(editTail) &&
+					!text.includes(intermediate);
 				await tui("type", draft);
-				const baseline = await eventually(
-					() => screen.checkpoint("compact shows only the latest read output beside history and draft"),
-					frame =>
-						frame.screen.includes("CLI_READ_RESULT") && nativeDraftMatches(frame.screen, draft, frame.cursor),
+				await eventually(
+					() => screen.checkpoint("read output does not replace the current-turn diff"),
+					frame => collapsedDiff(frame.screen) && frame.screen.includes("CLI_READ_RESULT"),
 				);
-				const markers = [`${MARKER}_CHAT_READY`, "CLI_EDIT_PROMPT", "CLI_READ_RESULT"];
+				await tui("key", "press", "Ctrl+O");
+				await eventually(
+					() => screen.checkpoint("Ctrl+O expands the current-turn net diff"),
+					frame => frame.screen.includes("修改 retained-edit.ts") && frame.screen.includes(original),
+				);
+				await tui("key", "press", "End");
+				await eventually(
+					() => screen.checkpoint("the expanded net diff scrolls to its last change"),
+					frame => frame.screen.includes(editTail),
+				);
+				await tui("key", "press", "Escape");
+				const baseline = await eventually(
+					() => screen.checkpoint("Esc restores the compact file card and the unsent draft"),
+					frame =>
+						collapsedDiff(frame.screen) &&
+						frame.screen.includes("CLI_READ_RESULT") &&
+						nativeDraftMatches(frame.screen, draft, frame.cursor),
+				);
+				expect(baseline.screen).not.toContain("本轮改动");
+				const cardHead = baseline.screen.split("\n").find(line => line.includes("retained-edit.ts"));
+				expect(cardHead).not.toMatch(/\+46\b|-1\b/u);
+				const markers = [`${MARKER}_CHAT_READY`, "CLI_EDIT_PROMPT", original, "EDIT_CLI_01", "CLI_READ_RESULT"];
 				const rows = (text: string) =>
 					markers.map(marker => {
 						const matches = text
@@ -985,12 +1038,11 @@ test("retained real edit stays hidden in compact while the next assistant stream
 				const check = (frame: typeof baseline) => {
 					expect(rows(frame.screen)).toEqual(expected);
 					expect(composer(frame)).toEqual(inputGeometry);
-					expect(frame.screen).not.toMatch(hiddenTools);
+					expect(collapsedDiff(frame.screen)).toBe(true);
+					expect(frame.screen).not.toContain("retained-search.txt");
 					expect(frame.screen).not.toContain("CLI_HIDDEN_REASONING");
 				};
 				check(baseline);
-				await tui("key", "press", "Ctrl+O");
-				await screen.checkpoint("compact expansion does not reveal hidden tool cards or a file diff", check);
 				startStream.resolve();
 				const controller = await opened.promise;
 				for (let tick = 0; tick < 6; tick++) {
@@ -1029,7 +1081,8 @@ test("retained real edit stays hidden in compact while the next assistant stream
 					}
 					return undefined;
 				}, Boolean))!;
-				for (const [index, marker] of [original, editTail, "CLI_GREPPED", "CLI_READ_RESULT"].entries()) {
+				const receipts = ["Successfully wrote", intermediate, editTail, "CLI_GREPPED", "CLI_READ_RESULT"];
+				for (const [index, marker] of receipts.entries()) {
 					const output = recordedResult(completed.history, actions[index]!.intent);
 					expect(output.isError).toBe(false);
 					expect(contentText(output.content)).toContain(marker);
@@ -1045,16 +1098,17 @@ test("retained real edit stays hidden in compact while the next assistant stream
 				const detailed = await eventually(
 					() => screen.checkpoint("detailed edit initially collapsed"),
 					frame =>
-						frame.screen.includes(original) &&
+						frame.screen.includes(intermediate) &&
 						frame.screen.includes("EDIT_CLI_01") &&
 						!frame.screen.includes("EDIT_CLI_46") &&
 						frame.screen.includes("retained-read.txt"),
 				);
 				expect(detailed.screen).toContain("retained-search.txt");
+				expect(detailed.screen).not.toContain(original);
 				await tui("key", "press", "Ctrl+O");
 				await eventually(
 					() => screen.checkpoint("detailed edit expanded"),
-					frame => frame.screen.includes(original) && frame.screen.includes("EDIT_CLI_46"),
+					frame => frame.screen.includes(intermediate) && frame.screen.includes("EDIT_CLI_46"),
 				);
 				await tui("key", "press", "Ctrl+O");
 				await eventually(
@@ -1076,22 +1130,31 @@ test("retained real edit stays hidden in compact while the next assistant stream
 				await tui("submit", "/display compact");
 				await tui("expect", "text", "compact", "--timeout", "30000");
 				const restored = await eventually(
-					() => screen.checkpoint("compact restores read activity without reconstructing a file diff"),
-					frame => frame.screen.includes("Agent：上次读取完成") && !frame.screen.includes("CLI_READ_RESULT"),
+					() => screen.checkpoint("compact restores the current-turn diff without reviving expired read output"),
+					frame =>
+						collapsedDiff(frame.screen) &&
+						frame.screen.includes("Agent：上次读取完成") &&
+						!frame.screen.includes("CLI_READ_RESULT"),
 				);
 				// After the bounded output preview closes, only the completed read activity remains.
 				const readRows = restored.screen.split("\n").filter(line => line.includes("retained-read.txt"));
 				expect(readRows).toHaveLength(1);
 				expect(readRows[0]).toContain("Agent：上次读取完成");
 				expect(readRows[0]).toContain("Reading retained evidence");
-				expect(restored.screen).not.toMatch(hiddenTools);
+				expect(restored.screen).not.toContain("retained-search.txt");
 				expect(provider.requests).toHaveLength(requests);
 				expect(messages(await journal(completed.file))).toEqual(completed.history);
 				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(`${edited}\n`);
+				await tui("submit", "CLI_FOLLOWING_TURN");
+				await eventually(
+					() => screen.checkpoint("a new turn clears the diff without replaying file cards into history"),
+					frame => frame.screen.includes("CLI_FOLLOWING_DONE") && !hiddenTools.test(frame.screen),
+				);
 				await screen.stop();
 			},
 		);
 	} finally {
+		continueToRead.resolve();
 		continueToGrep.resolve();
 		startStream.resolve();
 		if (streamController && streamController.desiredSize !== null) {
@@ -1297,8 +1360,11 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 						const [row, extra] = actionRows(text, writeDone);
 						return !!row && !extra && row.includes(target) && matches(row);
 					};
-					const full = await observe(`${target}: latest write shows path before intent`, text =>
-						isCurrentWrite(text, line => line.indexOf(source.intent) > line.indexOf(target)),
+					const full = await observe(
+						`${target}: latest write shows both the activity and a real file change`,
+						text =>
+							isCurrentWrite(text, line => line.indexOf(source.intent) > line.indexOf(target)) &&
+							text.includes(source.evidence),
 					);
 					const [label, pathRun, intent] = await readRuns(full.screen, writeDone, target, source.intent);
 					expect(pathRun![0]!.y).toBe(intent![0]!.y);

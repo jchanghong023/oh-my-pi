@@ -216,6 +216,8 @@ export interface SessionStorage {
 	updateSessionTitle(path: string, update: SessionTitleUpdate): Promise<void>;
 	statSync(path: string): SessionStorageStat;
 	listFilesSync(dir: string, pattern: string): string[];
+	/** List matches in the root's immediate project buckets using the storage's own keys. */
+	listBucketFilesSync?(root: string, pattern: string): string[];
 
 	exists(path: string): Promise<boolean>;
 	readText(path: string): Promise<string>;
@@ -1676,6 +1678,19 @@ export function directChildKeyName(resolvedDir: string, key: string): string | u
 	return path.resolve(path.dirname(key)) === resolvedDir ? name : undefined;
 }
 
+/** Match exactly one bucket level, keeping each original key for subsequent reads. */
+export function listBucketFilesFromKeys(keys: Iterable<string>, root: string, pattern: string): string[] {
+	const resolvedRoot = path.resolve(root);
+	const files: string[] = [];
+	for (const key of keys) {
+		const name = path.basename(key);
+		if (!name || name.includes("\\") || !matchesPattern(name, pattern)) continue;
+		const bucket = path.resolve(path.dirname(key));
+		if (bucket !== resolvedRoot && path.dirname(bucket) === resolvedRoot) files.push(key);
+	}
+	return files;
+}
+
 class MemorySessionStorageWriter implements SessionStorageWriter {
 	#storage: MemorySessionStorage;
 	#path: string;
@@ -1938,6 +1953,10 @@ export class MemorySessionStorage implements SessionStorage {
 			files.push(key);
 		}
 		return files;
+	}
+
+	listBucketFilesSync(root: string, pattern: string): string[] {
+		return listBucketFilesFromKeys(this.#files.keys(), root, pattern);
 	}
 
 	exists(path: string): Promise<boolean> {

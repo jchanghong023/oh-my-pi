@@ -442,10 +442,8 @@ describe("managed ovnfs worktree backend and lifecycle", () => {
 		await Bun.write(path.join(repo, "tracked.txt"), "base\n");
 		git(repo, "add", ".");
 		git(repo, "commit", "-q", "-m", "init");
-		const command = path.join(root, "ovnfs");
-		await Bun.write(command, "#!/bin/sh\n");
-		await fs.chmod(command, 0o755);
-		settings = Settings.isolated({ "ovnfs.path": command });
+		// Executable discovery is real; the daemon and socket calls below are mocked.
+		settings = Settings.isolated({ "ovnfs.path": process.execPath });
 		savedEnv = process.env.OMP_WORKTREE_DIR;
 		process.env.OMP_WORKTREE_DIR = path.join(root, "wt");
 		checkouts = new Map();

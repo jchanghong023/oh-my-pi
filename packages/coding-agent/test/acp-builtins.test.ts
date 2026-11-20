@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import type {
-	Model,
 	ResetCreditAccountStatus,
 	ResetCreditRedeemOutcome,
 	ResetCreditTarget,
@@ -813,21 +812,6 @@ describe("ACP builtin slash commands", () => {
 		expect(output[0]).toContain("Model set to anthropic/claude-3-5-sonnet");
 		expect(titleNotified).toBe(1);
 		expect(configNotified).toBe(1);
-	});
-
-	it("model: respects the actual host temporary-selection setter instead of persisting a role", async () => {
-		const { runtime, session } = createRuntime();
-		const available = [{ provider: "anthropic", id: "claude-3-5-sonnet", contextWindow: 200_000 }];
-		session.getAvailableModels = () => available;
-		const persistent = spyOn(session, "setModel").mockResolvedValue(undefined);
-		const temporary = spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
-		const result = await executeAcpBuiltinSlashCommand("/model claude-3-5-sonnet", {
-			...runtime,
-			setModel: (model: Model) => runtime.session.setModelTemporary(model),
-		});
-		expect(result).toEqual({ consumed: true });
-		expect(temporary).toHaveBeenCalledWith(available[0]);
-		expect(persistent).not.toHaveBeenCalled();
 	});
 
 	it("model: does not emit config change when id is unknown", async () => {

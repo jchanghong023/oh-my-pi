@@ -136,6 +136,7 @@ interface AdmittedBody {
 	namespace: string;
 	filePath: string;
 	realPath: string;
+	shared: boolean;
 }
 
 interface CollisionResolution {
@@ -176,7 +177,8 @@ function resolveCollision(
 	candidateBody: string,
 	candidateFrontmatter: SkillFrontmatter | undefined,
 	namespace: string,
-	allowOverride = true,
+	shared: boolean,
+	allowOverride: boolean,
 ): CollisionResolution | undefined {
 	const existingEntries = [...admitted.entries()].filter(([_, e]) => e.rawName === candidate.name);
 	if (existingEntries.length === 0) {
@@ -184,10 +186,11 @@ function resolveCollision(
 	}
 
 	const bareSkill = skillMap.get(candidate.name);
+	const bareEntry = admitted.get(candidate.name);
 	const candidateInstalled = candidate._source?.provider === SKILLSHARE_PROVIDER_ID;
 	const bareInstalled = bareSkill?._source?.provider === SKILLSHARE_PROVIDER_ID;
-	const candidateCustom = candidate._source?.provider === CUSTOM_DIR_PROVIDER_ID;
-	const bareCustom = bareSkill?._source?.provider === CUSTOM_DIR_PROVIDER_ID;
+	const candidateCustom = shared || candidate._source?.provider === CUSTOM_DIR_PROVIDER_ID;
+	const bareCustom = bareEntry?.shared || bareSkill?._source?.provider === CUSTOM_DIR_PROVIDER_ID;
 	// Inactive sources stay independently addressable in the management list,
 	// even when their content matches the active fallback.
 	const identical = existingEntries
@@ -200,9 +203,13 @@ function resolveCollision(
 		)
 		.map(([name]) => name);
 
-	if (allowOverride && bareSkill && ((bareInstalled && !candidateInstalled) || (candidateCustom && !bareCustom))) {
+	if (
+		allowOverride &&
+		bareSkill &&
+		bareEntry &&
+		((bareInstalled && !candidateInstalled) || (candidateCustom && !bareCustom))
+	) {
 		if (identical.includes(candidate.name)) return { name: candidate.name, dropped: identical };
-		const bareEntry = admitted.get(candidate.name)!;
 		let namespacedBare = `${bareEntry.namespace}/${bareEntry.rawName}`;
 		for (let n = 2; skillMap.has(namespacedBare) && !identical.includes(namespacedBare); n++)
 			namespacedBare = `${bareEntry.namespace}/${bareEntry.rawName}~${n}`;
@@ -376,15 +383,12 @@ export async function loadSkillCatalog(
 		if (provider === "native" && level === "project") return enablePiProject;
 		if (provider === "agents" && level === "user") return enableAgentsUser;
 		if (provider === "agents" && level === "project") return enableAgentsProject;
-		// User-scope claude-plugins skills carry the root's origin (#10743). omp's
-		// own installs (`omp` registry, `--plugin-dir`) are not the foreign
-		// ~/.claude/plugins tree, so the foreign opt-in gate applies only to
-		// claude-origin roots — parity with allowedRoots() in
-		// discovery/claude-plugins.ts. Without this, #10666's root-level fix is
-		// re-dropped here for every user-level claude-plugins skill.
-		if (provider === "claude-plugins" && source.origin !== undefined && source.origin !== "claude") return true;
-		// Portable packages keep their provider ID, but only Claude registry
-		// installs follow the Claude source switch (including project installs).
+		// Both plugin providers distinguish Claude registry roots from OMP
+		// installs and explicit --plugin-dir roots, regardless of install scope.
+		if (provider === "claude-plugins") {
+			if (source.origin !== undefined) return source.origin !== "claude" || claudePluginSourceEnabled;
+			if (level === "user") return claudePluginSourceEnabled; // Registry discovery has no root origin yet.
+		}
 		if (provider === "agent-plugins" && source.origin === "claude") return claudePluginSourceEnabled;
 		if (level === "user") return isUserSourceEnabled(provider);
 		return true;
@@ -495,7 +499,10 @@ export async function loadSkillCatalog(
 		frontmatter: SkillFrontmatter | undefined,
 		namespace: string,
 		realPath: string,
+		shared = false,
 	): string | undefined {
+		const sameFile = realPathSet.has(realPath);
+		if (sameFile && !shared) return undefined;
 		if (/[\\/]/.test(skill.name)) {
 			collisionWarnings.push({
 				skillPath: skill.filePath,
@@ -503,22 +510,33 @@ export async function loadSkillCatalog(
 			});
 			return undefined;
 		}
-		if (realPathSet.has(realPath)) {
+		if (sameFile) {
 			for (const [name, entry] of admitted) {
 				if (entry.realPath !== realPath) continue;
-				// A custom/Shared root may promote a provider's copy, even when a
-				// symlink directory supplied a different fallback name. Keep the
-				// original raw name so its disable still covers the same file.
-				if (
-					skill._source.provider !== CUSTOM_DIR_PROVIDER_ID ||
-					skillMap.get(name)!._source.provider === CUSTOM_DIR_PROVIDER_ID
-				)
-					return undefined;
+				const existing = skillMap.get(name)!;
+				if (entry.shared || existing._source.provider === CUSTOM_DIR_PROVIDER_ID) return undefined;
+				// Shared can promote this file, but it keeps the original raw name
+				// for filters and cannot replace a plugin's canonical ownership.
+				if (existing.containRoot !== undefined) {
+					skill = { ...existing, _source: { ...existing._source, providerName: "Shared" } };
+					body = entry.body;
+					frontmatter = entry.frontmatter;
+					namespace = entry.namespace;
+				}
 				skill.name = entry.rawName;
 				break;
 			}
 		}
-		const resolved = resolveCollision(skillMap, admitted, skill, body, frontmatter, namespace, !skill.disabledReason);
+		const resolved = resolveCollision(
+			skillMap,
+			admitted,
+			skill,
+			body,
+			frontmatter,
+			namespace,
+			shared,
+			!skill.disabledReason,
+		);
 		if (!resolved) return undefined;
 		const { name, warning, dropped, displaced } = resolved;
 
@@ -543,7 +561,7 @@ export async function loadSkillCatalog(
 		const rawName = skill.name;
 		skill.name = name;
 		skillMap.set(name, skill);
-		admitted.set(name, { rawName, body, frontmatter, namespace, filePath: skill.filePath, realPath });
+		admitted.set(name, { rawName, body, frontmatter, namespace, filePath: skill.filePath, realPath, shared });
 		realPathSet.add(realPath);
 		return name;
 	}
@@ -574,6 +592,7 @@ export async function loadSkillCatalog(
 		body: string;
 		frontmatter: SkillFrontmatter | undefined;
 		namespace: string;
+		shared: boolean;
 	}> = [];
 	for (const { expandedDir, scanResult, shared } of customDirectoryResults) {
 		for (const capSkill of scanResult.items) {
@@ -588,6 +607,7 @@ export async function loadSkillCatalog(
 				body: capSkill.content,
 				frontmatter: capSkill.frontmatter,
 				namespace: skillNamespace(capSkill),
+				shared,
 			});
 		}
 		collisionWarnings.push(...(scanResult.warnings ?? []).map(message => ({ skillPath: expandedDir, message })));
@@ -604,9 +624,9 @@ export async function loadSkillCatalog(
 	);
 
 	for (let i = 0; i < allCustomSkills.length; i++) {
-		const { skill, body, frontmatter, namespace } = allCustomSkills[i];
+		const { skill, body, frontmatter, namespace, shared } = allCustomSkills[i];
 		const resolvedPath = customRealPaths[i];
-		admit(skill, body, frontmatter, namespace, resolvedPath);
+		admit(skill, body, frontmatter, namespace, resolvedPath, shared);
 	}
 
 	// Managed (auto-learn) skills resolve dead-last with first-wins. Source from

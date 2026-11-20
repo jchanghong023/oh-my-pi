@@ -3,6 +3,7 @@ import { customMessageEntryMessage, isUserRequestEntry } from "@oh-my-pi/pi-tui/
 import {
 	canReplayRemoteCompaction,
 	getAnthropicCompactionPayload,
+	isCompactionGoalRestoreEntry,
 	isTurnStartEntry,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import {
@@ -510,12 +511,15 @@ export function buildSessionContext(
 			const entry = path[index];
 			handleEntryResetTracking(entry);
 			if (entry.type === "compaction") {
-				const replacement = path[index + 1];
+				const next = path[index + 1];
+				const restore =
+					next?.parentId === entry.id && isCompactionGoalRestoreEntry(next, entry.id) ? next : undefined;
+				const replacement = restore ? path[index + 2] : next;
 				if (
 					replacement?.type === "compaction" &&
 					entry.method === "snapcompact" &&
 					replacement.method === "snapcompact" &&
-					replacement.parentId === entry.id &&
+					replacement.parentId === (restore?.id ?? entry.id) &&
 					replacement.firstKeptEntryId === entry.firstKeptEntryId &&
 					replacement.tokensBefore === entry.tokensBefore
 				) {

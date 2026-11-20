@@ -245,10 +245,12 @@ export interface TernOpenOptions {
 	 * open never sets this.
 	 */
 	identitySeed?: string;
+	/** Native exit check supplied only by the owned WebKit host. */
+	hostExited?: () => boolean;
 }
 
 /** Options of {@link TernTab.adopt}: like an open, but every page setting only when given. */
-export interface TernAdoptOptions extends Omit<TernOpenOptions, "pane" | "viewport" | "identitySeed"> {
+export interface TernAdoptOptions extends Omit<TernOpenOptions, "pane" | "viewport" | "identitySeed" | "hostExited"> {
 	/** The user's browser block to drive. */
 	block: TernBlockEntry;
 	/** Page layout size for an adopted PiP; a docked block's page keeps the block's size. */
@@ -562,6 +564,7 @@ export class TernTab implements InProcessRunTab {
 	readonly #screenshotHistory = new Map<string, ScreenshotHistory>();
 	readonly #ariaBaselines = new Map<string, AriaSnapshotBaseline>();
 	readonly #recording = new RecordingController();
+	readonly #hostExited: (() => boolean) | undefined;
 
 	constructor(opts: {
 		client: TernSocketClient;
@@ -569,6 +572,7 @@ export class TernTab implements InProcessRunTab {
 		name: string;
 		viewport: ViewportOptions;
 		adopted?: TernBlockEntry;
+		hostExited?: () => boolean;
 	}) {
 		this.#client = opts.client;
 		this.product = opts.client.product;
@@ -582,6 +586,7 @@ export class TernTab implements InProcessRunTab {
 		this.#name = opts.name;
 		this.#viewport = { ...opts.viewport };
 		this.adopted = opts.adopted;
+		this.#hostExited = opts.hostExited;
 	}
 
 	/**
@@ -614,7 +619,13 @@ export class TernTab implements InProcessRunTab {
 		if (!isRecord(opened) || typeof opened.block !== "number") {
 			throw new ToolError(`${client.product} answered the browser open without a block id`);
 		}
-		const tab = new TernTab({ client, block: opened.block, name: opts.name, viewport: opts.viewport });
+		const tab = new TernTab({
+			client,
+			block: opened.block,
+			name: opts.name,
+			viewport: opts.viewport,
+			hostExited: opts.hostExited,
+		});
 		try {
 			await tab.#configure(opts, remainingMs());
 			// The PiP already shows about:blank, and a Tern web view never reloads an unchanged address.
@@ -738,7 +749,7 @@ export class TernTab implements InProcessRunTab {
 	 * driving it and resets what omp set, the user's page stays. A Tern without
 	 * `release` (answers `invalid`) only gets omp's scripts cleared, best-effort
 	 * unless strict cleanup was requested. A block already gone is no error;
-	 * strict cleanup requires a native acknowledgement, not a closed transport.
+	 * strict cleanup requires a native acknowledgement or confirmed owned host exit.
 	 */
 	async close(opts: { timeoutMs: number; strict?: boolean }): Promise<void> {
 		if (opts.strict) {
@@ -751,12 +762,14 @@ export class TernTab implements InProcessRunTab {
 				});
 			});
 		}
+		if (this.#hostExited?.()) return;
 		try {
 			await this.#client.request(
 				{ op: this.adopted ? "release" : "close", block: this.block },
 				{ timeoutMs: opts.timeoutMs },
 			);
 		} catch (error) {
+			if (this.#hostExited?.()) return;
 			if (error instanceof TernError && (error.kind === "not_found" || (!opts.strict && error.kind === "closed")))
 				return;
 			if (!(this.adopted && error instanceof TernError && error.kind === "invalid")) throw error;
@@ -909,12 +922,12 @@ export class TernTab implements InProcessRunTab {
 	 * window's `blocks` no longer list this block (DOM ops answer `not_found`
 	 * for a stale element ref too: that block is still there).
 	 */
-	async #blockFailure(error: unknown): Promise<unknown> {
+	async #blockFailure(error: unknown, signal: AbortSignal | null = this.#signal ?? null): Promise<unknown> {
 		if (this.#gone) return this.#gone.error;
 		if (!(error instanceof TernError) || error.kind !== "not_found") return error;
 		let listed: boolean;
 		try {
-			const blocks = await listTernBlocks(this.#client, { timeoutMs: 2_000, signal: this.#signal });
+			const blocks = await listTernBlocks(this.#client, { timeoutMs: 2_000, signal: signal ?? undefined });
 			listed = blocks.some(entry => entry.block === this.block);
 		} catch {
 			return error;
@@ -3910,6 +3923,7 @@ export class TernTab implements InProcessRunTab {
 		let loop: Promise<void> | undefined;
 		let cursorScriptsRemoved = false;
 		const tab = this;
+		const isGone = (): boolean => tab.gone !== undefined || tab.#hostExited?.() === true;
 		const capture = async (quality: number): Promise<Uint8Array> =>
 			await tab.captureBytes({ format: "jpeg", quality: Math.max(1, Math.min(100, Math.round(quality))) });
 		return {
@@ -3932,7 +3946,14 @@ export class TernTab implements InProcessRunTab {
 							logger.debug("Tern recording frame capture failed", {
 								error: error instanceof Error ? error.message : String(error),
 							});
-							if (error instanceof TernError && (error.kind === "closed" || error.kind === "not_found")) return;
+							if (error instanceof TernError) {
+								if (error.kind === "not_found") {
+									// Capture bypasses #op and may outlive the run that started it.
+									await tab.#blockFailure(error, null);
+									return;
+								}
+								if (error.kind === "closed") return;
+							}
 						}
 						await Bun.sleep(Math.max(0, intervalMs - (Date.now() - startedAt)));
 					}
@@ -3942,6 +3963,7 @@ export class TernTab implements InProcessRunTab {
 				active = false;
 				await loop;
 			},
+			isGone,
 			captureFrame: async quality => await capture(quality),
 			installCursor: async () => {
 				cursorScriptsRemoved = false;
@@ -3951,6 +3973,7 @@ export class TernTab implements InProcessRunTab {
 			},
 			removeCursor: async options => {
 				tab.#cursorOverlay = false;
+				if (isGone()) return;
 				if (!options?.strict) {
 					await tab.#syncScripts().catch(() => undefined);
 					await tab.#eval(removeCursorOverlay.toString(), [], "page", null).catch(() => undefined);
@@ -3977,7 +4000,7 @@ export class TernTab implements InProcessRunTab {
 						{ timeoutMs },
 					);
 				} catch (error) {
-					if (!(error instanceof TernError && error.kind === "not_found")) throw error;
+					if (!isGone() && !(error instanceof TernError && error.kind === "not_found")) throw error;
 				}
 			},
 		};

@@ -15,7 +15,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { EmbeddingModel } from "fastembed";
-import { isOpenRouterEmbeddingUrl } from "../config";
+import { DEFAULT_EMBEDDING_API_URL, isOpenRouterEmbeddingUrl } from "../config";
 import { loadFastembed, withEmbedSessionBudget } from "./fastembed-runtime";
 import {
 	type EmbeddingOutput,
@@ -221,12 +221,18 @@ function capInputs(texts: readonly string[]): readonly string[] {
 	return trimmed;
 }
 
-function embeddingApiKey(): ApiKey {
-	const active = activeEmbeddingOptions();
-	if (active?.apiKey !== undefined) {
-		return active.apiKey;
-	}
-	return $env.MNEMOPI_EMBEDDING_API_KEY || $env.OPENROUTER_API_KEY || $env.OPENAI_API_KEY || "";
+/** Resolve the environment fallback without sending a generic OpenAI key to OpenRouter. */
+export function embeddingEnvApiKey(baseUrl = DEFAULT_EMBEDDING_API_URL): string {
+	return (
+		$env.MNEMOPI_EMBEDDING_API_KEY ||
+		$env.OPENROUTER_API_KEY ||
+		(!isOpenRouterEmbeddingUrl(baseUrl) && $env.OPENAI_API_KEY) ||
+		""
+	);
+}
+
+function embeddingApiKey(baseUrl?: string): ApiKey {
+	return activeEmbeddingOptions()?.apiKey ?? embeddingEnvApiKey(baseUrl ?? embeddingBaseUrl());
 }
 
 /** A resolver always counts as configured; a static key only when non-empty. */
@@ -239,7 +245,7 @@ function embeddingBaseUrl(): string {
 	if (active?.apiUrl !== undefined) {
 		return active.apiUrl;
 	}
-	return $env.MNEMOPI_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
+	return $env.MNEMOPI_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL || DEFAULT_EMBEDDING_API_URL;
 }
 
 function defaultModel(): string {
@@ -449,7 +455,7 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 			const strict = activeEmbeddingOptions()?.strictApi === true;
 			const callerSignal = activeEmbeddingOptions()?.signal;
 			const timeoutMs = activeEmbeddingOptions()?.requestTimeoutMs ?? 30_000;
-			const maxAttempts = activeEmbeddingOptions()?.requestMaxAttempts ?? 4;
+			const maxAttempts = activeEmbeddingOptions()?.requestMaxAttempts ?? 3;
 			const fixedDelayMs = activeEmbeddingOptions()?.requestRetryDelayMs;
 			const retryTimeouts = activeEmbeddingOptions()?.retryTimeouts === true;
 			callerSignal?.throwIfAborted();
@@ -509,7 +515,7 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 				result: "started",
 			});
 			const isCustom = !isOpenRouterEmbeddingUrl(baseUrl);
-			const apiKey = embeddingApiKey();
+			const apiKey = embeddingApiKey(baseUrl);
 			if (!isCustom && !embeddingKeyConfigured(apiKey)) {
 				return degraded("credentials_unavailable");
 			}

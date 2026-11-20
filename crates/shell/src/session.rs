@@ -278,7 +278,7 @@ impl Children {
 }
 
 impl SpawnObserver for Children {
-	fn spawned(&self, pid: u32, _detached: bool) {
+	fn spawned(&self, pid: u32) {
 		self.0.pids.lock().push(pid);
 	}
 

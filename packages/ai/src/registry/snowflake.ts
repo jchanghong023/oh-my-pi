@@ -120,17 +120,19 @@ function parseSnowflakeCredential(value: string): SnowflakeCredential | null {
 
 export const snowflakeTransport: ProviderTransport = {
 	prepareRequest: (model, options) => {
-		// Match stream.ts: an empty apiKey falls through to the environment.
-		const credential = parseSnowflakeCredential(options.apiKey?.trim() || $env.SNOWFLAKE_PAT || "");
-		if (!credential) return { model, options };
+		// Only implicit credentials fall back to the environment.
+		const apiKey =
+			options.requestAuth !== undefined ? options.requestAuth.apiKey : options.apiKey?.trim() || $env.SNOWFLAKE_PAT;
+		const credential = parseSnowflakeCredential(apiKey ?? "");
+		if (!credential && options.requestAuth === undefined) return { model, options };
 		let baseUrl = model.baseUrl;
 		if (
 			baseUrl === SNOWFLAKE_ACCOUNT_ORIGIN_PLACEHOLDER ||
 			baseUrl.startsWith(`${SNOWFLAKE_ACCOUNT_ORIGIN_PLACEHOLDER}/`)
 		) {
-			const accountUrl = credential.accountUrl ?? normalizeSnowflakeAccountUrl($env.SNOWFLAKE_ACCOUNT ?? "");
+			const accountUrl = credential?.accountUrl ?? normalizeSnowflakeAccountUrl($env.SNOWFLAKE_ACCOUNT ?? "");
 			baseUrl = accountUrl + baseUrl.slice(SNOWFLAKE_ACCOUNT_ORIGIN_PLACEHOLDER.length);
-		} else if (credential.accountUrl) {
+		} else if (credential?.accountUrl) {
 			let origin: string | undefined;
 			try {
 				origin = new URL(baseUrl).origin;
@@ -143,7 +145,13 @@ export const snowflakeTransport: ProviderTransport = {
 		}
 		return {
 			model: baseUrl === model.baseUrl ? model : { ...model, baseUrl },
-			options: { ...options, apiKey: credential.token },
+			options: credential
+				? {
+						...options,
+						apiKey: credential.token,
+						...(options.requestAuth !== undefined ? { requestAuthPrepared: true } : {}),
+					}
+				: { ...options, apiKey: undefined, requestAuthPrepared: true },
 		};
 	},
 };

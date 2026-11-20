@@ -53,67 +53,68 @@ describe("background receipt projections", () => {
 		setChatTranscriptDisplayPreferences(previous);
 	});
 
-	it("shows unrepresented async-result statuses only with visible tool activity", async () => {
-		const messages = [
-			createCustomMessage(
-				"async-result",
-				"results",
-				true,
-				{
-					jobs: [
-						{ jobId: "bash-complete", type: "bash", status: "completed", durationMs: 1000 },
-						{ jobId: "bash-failed", type: "bash", status: "failed", label: "compile project" },
-						{ jobId: "bash-cancelled", type: "bash", status: "cancelled" },
-						{ jobId: "task-failed", type: "task", status: "failed" },
-						{ jobId: "task-complete", type: "task", status: "completed" },
-						{ jobId: "eval-cancelled", type: "eval", status: "cancelled" },
-						{ jobId: "eval-running", type: "eval", status: "running" },
-					],
-				},
-				"2026",
-			),
-			createCustomMessage(
-				"async-result",
-				"single result",
-				true,
-				{ jobId: "single-job", type: "task", status: "failed" },
-				"2026",
-			),
-		];
-		for (const message of messages) {
-			const original = JSON.stringify(message);
-			for (const current of [message, JSON.parse(original) as typeof message]) {
-				for (const hideToolActivity of [true, false]) {
-					setChatTranscriptDisplayPreferences({ hideToolActivity });
-					const block = buildAsyncResultBlock(current);
-					block.setToolActivityVisible(!hideToolActivity);
-					const lines = block.render(160);
-					if (hideToolActivity) expect(lines).toEqual([]);
-					else expect(lines.join("\n")).toContain("Background job");
-					harness = await TspHarness.start(tui => tui.addChild(block), { cols: 160, rows: 20 });
-					await harness.render();
-					const native = JSON.stringify(harness.doc());
-					const activity = harness.find(node => node.p?.role === "omp.activity");
-					expect(activity?.p?.hidden === true).toBe(hideToolActivity);
-					expect(native).toContain("Background job failed");
-					if (message === messages[0]) {
-						expect(native).toContain("bash-failed");
-						expect(native).toContain("task-failed");
-						expect(native).toContain("eval-cancelled");
-						expect(native).toContain("compile project");
-					} else {
-						expect(native).toContain("single-job");
-					}
-					harness.stop();
-					harness = undefined;
-				}
-				expect(JSON.stringify(current)).toBe(original);
-			}
-			expect(JSON.stringify(message)).toBe(original);
+	it("shows unrepresented bash and eval statuses, but not task receipts, with visible tool activity", async () => {
+		const message = createCustomMessage(
+			"async-result",
+			"results",
+			true,
+			{
+				jobs: [
+					{ jobId: "bash-complete", type: "bash", status: "completed", durationMs: 1000 },
+					{ jobId: "bash-failed", type: "bash", status: "failed", label: "compile project" },
+					{ jobId: "bash-cancelled", type: "bash", status: "cancelled" },
+					{ jobId: "task-failed", type: "task", status: "failed" },
+					{ jobId: "task-complete", type: "task", status: "completed" },
+					{ jobId: "eval-cancelled", type: "eval", status: "cancelled" },
+					{ jobId: "eval-running", type: "eval", status: "running" },
+				],
+			},
+			"2026",
+		);
+		const original = JSON.stringify(message);
+		// Build without original tool cards: task receipts alone never add status rows.
+		const block = buildAsyncResultBlock(message);
+		harness = await TspHarness.start(tui => tui.addChild(block), { cols: 160, rows: 20 });
+		await harness.render();
+		for (const output of [Bun.stripANSI(block.render(160).join("\n")), JSON.stringify(harness.doc())]) {
+			expect(output).toContain("Background job completed");
+			expect(output).toContain("bash-complete");
+			expect(output).toContain("Background job failed");
+			expect(output).toContain("bash-failed");
+			expect(output).toContain("compile project");
+			expect(output).toContain("Background job cancelled");
+			expect(output).toContain("bash-cancelled");
+			expect(output).toContain("eval-cancelled");
+			expect(output).not.toContain("task-failed");
+			expect(output).not.toContain("task-complete");
+			expect(output).not.toContain("eval-running");
 		}
+
+		block.setToolActivityVisible(false);
+		expect(block.render(160)).toEqual([]);
+		await harness.render();
+		expect(harness.find(node => node.p?.role === "omp.activity")?.p?.hidden).toBe(true);
+		expect(JSON.stringify(message)).toBe(original);
 	});
 
-	it("preserves independent artifact and schema diagnostics alongside unrepresented status rows", async () => {
+	it("suppresses a standalone task status without an original card", async () => {
+		const message = createCustomMessage(
+			"async-result",
+			"single result",
+			true,
+			{ jobId: "single-task", type: "task", status: "failed" },
+			"2026",
+		);
+		const block = buildAsyncResultBlock(message);
+		expect(block.render(160)).toEqual([]);
+		harness = await TspHarness.start(tui => tui.addChild(block), { cols: 160, rows: 20 });
+		await harness.render();
+		const native = JSON.stringify(harness.doc());
+		expect(native).not.toContain("single-task");
+		expect(native).not.toContain("Background job failed");
+	});
+
+	it("keeps task diagnostics but omits status rows for cancelled tasks", async () => {
 		const message = createCustomMessage(
 			"async-result",
 			"results",
@@ -121,44 +122,27 @@ describe("background receipt projections", () => {
 			{
 				jobs: [
 					{
-						jobId: "bad",
-						type: "bash",
+						jobId: "diagnostic-task",
+						type: "task",
 						status: "failed",
-						label: "hidden command",
 						meta: { artifactError: "write" },
 						schema: { status: "invalid", error: "invalid output" },
 					},
-					{ jobId: "other", type: "task", status: "cancelled" },
+					{ jobId: "cancelled-task", type: "task", status: "cancelled" },
 				],
 			},
 			"2026",
 		);
 		const original = JSON.stringify(message);
-		for (const current of [message, JSON.parse(original) as typeof message]) {
-			for (const hideToolActivity of [true, false]) {
-				setChatTranscriptDisplayPreferences({ hideToolActivity });
-				const output = Bun.stripANSI(buildAsyncResultBlock(current).render(160).join("\n"));
-				expect(output).toContain("artifact write failed");
-				expect(output).toContain("invalid output");
-				expect(output).toContain("Background job failed");
-				expect(output).toContain("hidden command");
-				expect(output).toContain("other");
-
-				harness = await TspHarness.start(tui => tui.addChild(buildAsyncResultBlock(current)), {
-					cols: 160,
-					rows: 20,
-				});
-				await harness.render();
-				const native = JSON.stringify(harness.doc());
-				expect(native).toContain("artifact write failed");
-				expect(native).toContain("invalid output");
-				expect(native).toContain("Background job failed");
-				expect(native).toContain("hidden command");
-				expect(native).toContain("other");
-				harness.stop();
-				harness = undefined;
-			}
-			expect(JSON.stringify(current)).toBe(original);
+		const block = buildAsyncResultBlock(message);
+		harness = await TspHarness.start(tui => tui.addChild(block), { cols: 160, rows: 20 });
+		await harness.render();
+		for (const output of [Bun.stripANSI(block.render(160).join("\n")), JSON.stringify(harness.doc())]) {
+			expect(output).toContain("artifact write failed");
+			expect(output).toContain("invalid output");
+			expect(output).not.toContain("Background job failed");
+			expect(output).not.toContain("Background job cancelled");
+			expect(output).not.toContain("cancelled-task");
 		}
 		expect(JSON.stringify(message)).toBe(original);
 	});

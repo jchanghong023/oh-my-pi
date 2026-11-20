@@ -6,11 +6,10 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { hashPath, isEnoent } from "@oh-my-pi/pi-utils";
+import { hashPath } from "@oh-my-pi/pi-utils";
 import type { SettingValueOf } from "../config/registry";
 import type { Settings } from "../config/settings";
-import { cfgIsolationBackend, cfgWorktreeClone, type cfgWorktreeOnExit } from "../task/settings";
-import { formatIsolationBackend, parseIsolationBackend } from "../task/worktree";
+import type { cfgWorktreeOnExit } from "../task/settings";
 import type { SessionWorktree as BackendSessionWorktree } from "../worktree/backend";
 import { resolveAvailableWorktreePath } from "../worktree/paths";
 import { worktreeBackend, worktreeOrigin } from "../worktree/worktrees";
@@ -65,11 +64,7 @@ export function defaultSessionWorktreeBranch(now = new Date()): string {
 
 /** One-line confirmation shown after the session moved into `worktree`. */
 export function formatSessionWorktreeSummary(worktree: SessionWorktree): string {
-	const how = !worktree.created
-		? "reused existing worktree"
-		: worktree.clonedWith === undefined
-			? "checked out, committed branch contents"
-			: `cloned via ${formatIsolationBackend(worktree.clonedWith)}, committed branch contents`;
+	const how = worktree.created ? "checked out, committed branch contents" : "reused existing worktree";
 	return `Moved to worktree ${worktree.path} on branch ${worktree.branch} (${how}).`;
 }
 
@@ -110,10 +105,20 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 				createdBranch: false,
 			};
 		}
+		let invalidRegistration: Error | undefined;
 		for (const existing of worktrees) {
 			if (existing.branch !== branchRef) continue;
 			try {
 				const reusedPath = await fs.realpath(existing.path);
+				const checkout = vcs.requireGit(reusedPath);
+				const { repoRoot, commonDir } = checkout.info();
+				if (
+					(await fs.realpath(repoRoot)) !== reusedPath ||
+					(await fs.realpath(commonDir)) !== (await fs.realpath(repository.info().commonDir)) ||
+					(await checkout.head()).refName !== branchRef
+				) {
+					throw new Error("Directory is not a checkout of the requested branch in this repository.");
+				}
 				return {
 					path: reusedPath,
 					branch,
@@ -123,11 +128,14 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 					created: false,
 					createdBranch: false,
 				};
-			} catch (error) {
-				if (!isEnoent(error)) throw error;
-				// worktreeAdd confirms the checkout is absent and the registration is unlocked before pruning it.
+			} catch (cause) {
+				invalidRegistration ??= new Error(
+					`Cannot reuse worktree ${existing.path} for '${branch}'. Restore the checkout or run \`git worktree repair\` if it was moved; its registration was left intact.`,
+					{ cause },
+				);
 			}
 		}
+		if (invalidRegistration) throw invalidRegistration;
 	}
 	const primaryRoot = repository.primaryRoot() ?? repository.info().repoRoot;
 	const slug = branch.replaceAll(/[^A-Za-z0-9._-]+/g, "-");
@@ -135,20 +143,10 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 	const worktreePath = await resolveAvailableWorktreePath(basePath, worktrees);
 	await fs.mkdir(path.dirname(worktreePath), { recursive: true });
 
-	// Cloning a checkout into itself would recursively include the destination.
-	const sourceRoot = await fs.realpath(repository.info().repoRoot);
-	const destination = path.join(await fs.realpath(path.dirname(worktreePath)), path.basename(worktreePath));
-	const relativeDestination = path.relative(sourceRoot, destination);
-	const outsideSource =
-		relativeDestination === ".." ||
-		relativeDestination.startsWith(`..${path.sep}`) ||
-		path.isAbsolute(relativeDestination);
-
 	if (createdBranch) await repository.createBranch(branch, baseCommit, false);
-	const result = await repository.worktreeAdd(worktreePath, branchRef, {
+	await repository.worktreeAdd(worktreePath, branchRef, {
 		detach: false,
-		clone: cfgWorktreeClone.get(settings) && outsideSource,
-		backend: parseIsolationBackend(cfgIsolationBackend.get(settings)),
+		clone: false,
 		keepChanges: false,
 	});
 	return {
@@ -156,8 +154,6 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 		branch,
 		sourceCwd: cwd,
 		baseCommit,
-		clonedWith: result.clonedWith ?? undefined,
-		cloneError: result.cloneError ?? undefined,
 		keptChanges: false,
 		created: true,
 		createdBranch,

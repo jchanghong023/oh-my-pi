@@ -3,12 +3,6 @@ import * as path from "node:path";
 import { isEexist, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { formatPathRelativeToCwd } from "../tools/path-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import {
-	invalidateFsScanAfterDelete,
-	invalidateFsScanAfterRename,
-	invalidateFsScanAfterUncertainWrites,
-	invalidateFsScanAfterWrite,
-} from "../tools/fs-cache-invalidation";
 import type {
 	CreateFile,
 	CreateFileOptions,
@@ -162,15 +156,16 @@ export function flattenWorkspaceTextEdits(edit: WorkspaceEdit): Map<string, Text
 	return out;
 }
 
-/** Notify at the write boundary, including a failed write that may have truncated its target. */
-async function writeTextAndInvalidate(filePath: string, content: string): Promise<void> {
+async function writeText(filePath: string, content: string): Promise<void> {
 	try {
 		await Bun.write(filePath, content);
 	} catch (error) {
-		invalidateFsScanAfterUncertainWrites([filePath], "LSP text write failed; target may have been partially written");
+		logger.warn("LSP text write failed; target may have been partially written", {
+			...logger.diagnosticError(error),
+			possible_partial_write: true,
+		});
 		throw error;
 	}
-	invalidateFsScanAfterWrite(filePath);
 }
 
 /**
@@ -180,7 +175,7 @@ async function writeTextAndInvalidate(filePath: string, content: string): Promis
 export async function applyTextEdits(filePath: string, edits: TextEdit[]): Promise<void> {
 	const content = await readTextFromDisk(filePath);
 	const result = applyTextEditsToString(content, edits);
-	await writeTextAndInvalidate(filePath, result);
+	await writeText(filePath, result);
 }
 
 /** A reference file and the text edits a rename computed for it. */
@@ -214,9 +209,8 @@ export async function applyEditsThenRename(
 	try {
 		await fs.mkdir(path.dirname(dest), { recursive: true });
 		await fs.rename(source, dest);
-		invalidateFsScanAfterRename(source, dest);
 	} catch (err) {
-		await Promise.all(backups.map(({ filePath, original }) => writeTextAndInvalidate(filePath, original)));
+		await Promise.all(backups.map(({ filePath, original }) => writeText(filePath, original)));
 		throw err;
 	}
 }
@@ -359,10 +353,9 @@ export async function applyWorkspaceEdit(
 				await fs.mkdir(path.dirname(filePath), { recursive: true });
 				try {
 					if (op.options?.overwrite) {
-						await writeTextAndInvalidate(filePath, "");
+						await writeText(filePath, "");
 					} else {
 						const handle = await fs.open(filePath, "wx");
-						invalidateFsScanAfterWrite(filePath);
 						await handle.close();
 					}
 				} catch (error) {
@@ -399,7 +392,6 @@ export async function applyWorkspaceEdit(
 							const holdFile = path.join(holdDir, path.basename(newPath));
 							try {
 								await fs.rename(newPath, holdFile);
-								invalidateFsScanAfterDelete(newPath);
 							} catch (error) {
 								await fs.rm(holdDir, { recursive: true, force: true }).catch(() => {});
 								throw error;
@@ -411,12 +403,10 @@ export async function applyWorkspaceEdit(
 					}
 					try {
 						await fs.rename(oldPath, newPath);
-						invalidateFsScanAfterRename(oldPath, newPath);
 					} catch (error) {
 						if (displaced) {
 							try {
 								await fs.rename(displaced.file, newPath);
-								invalidateFsScanAfterWrite(newPath);
 							} catch {
 								// Restoration failed: the destination really is gone, so
 								// report it to reconciliation as an executed delete.
@@ -448,15 +438,14 @@ export async function applyWorkspaceEdit(
 							await fs.rm(filePath, { recursive: op.options?.recursive ?? false });
 						} catch (error) {
 							if (stat.isDirectory() && op.options?.recursive) {
-								invalidateFsScanAfterUncertainWrites(
-									[filePath],
-									"LSP delete failed; target may have been partially removed",
-								);
+								logger.warn("LSP delete failed; target may have been partially removed", {
+									...logger.diagnosticError(error),
+									possible_partial_write: true,
+								});
 							}
 							throw error;
 						}
 					}
-					invalidateFsScanAfterDelete(filePath);
 				} catch (error) {
 					if (!(op.options?.ignoreIfNotExists && isEnoent(error))) throw error;
 					continue;

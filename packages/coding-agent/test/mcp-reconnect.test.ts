@@ -18,12 +18,7 @@ import {
 	MCPTool,
 } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
 import type { MCPImageContent } from "@oh-my-pi/pi-tui/tools/mcp";
-import type {
-	MCPAuthInvocation,
-	MCPServerConnection,
-	MCPToolCallResult,
-	MCPTransport,
-} from "@oh-my-pi/pi-coding-agent/mcp/types";
+import type { MCPServerConnection, MCPToolCallResult, MCPTransport } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { logger, removeWithRetries } from "@oh-my-pi/pi-utils";
 import { asGlobalFetch } from "./helpers/fetch-mock";
@@ -572,35 +567,43 @@ describe("MCPTool.execute retry on connection error", () => {
 		expect(result.content[0]).toEqual({ type: "text", text: "authorized" });
 	});
 
-	it("carries the call-entry scope, id and signal into tool authorization", async () => {
+	it("awaits the tool observer's settlement after an OAuth retry", async () => {
+		const events: string[] = [];
 		const original = makeConnection(
-			mockTransport(async () => ({
-				...toolCallResult("authorize me", true),
-				_meta: { "mcp/www_authenticate": ["Bearer"] },
-			})),
+			mockTransport(async () => {
+				events.push("challenge");
+				return {
+					...toolCallResult("authorize me", true),
+					_meta: { "mcp/www_authenticate": ["Bearer"] },
+				};
+			}),
 		);
-		const authorized = makeConnection(mockTransport(async () => toolCallResult("authorized")));
-		const seen: MCPAuthInvocation[] = [];
-		const reconnect: MCPReconnect = async options => {
-			if (options?.invocation) seen.push(options.invocation);
-			return authorized;
+		const authorized = makeConnection(
+			mockTransport(async () => {
+				events.push("retry");
+				return toolCallResult("authorized");
+			}),
+		);
+		const settling = Promise.withResolvers<void>();
+		const refresh = Promise.withResolvers<void>();
+		const observe: MCPToolCallObserver = toolCallId => {
+			events.push(`observe:${toolCallId}`);
+			return async () => {
+				settling.resolve();
+				await refresh.promise;
+				events.push("settled");
+			};
 		};
-		let scope = "actor-at-call-entry";
-		let settled = false;
-		const observe: MCPToolCallObserver = (toolCallId, signal) =>
-			Object.assign(
-				async () => {
-					settled = true;
-				},
-				{ invocation: { scope, toolCallId, signal } },
-			);
-		const tool = new MCPTool(original, TOOL_DEF, reconnect, observe);
-		const controller = new AbortController();
-		const pending = tool.execute("auth-call", {}, noop, noCtx, controller.signal);
-		scope = "unrelated-later-actor";
+		const tool = new MCPTool(original, TOOL_DEF, async () => authorized, observe);
+		const pending = tool.execute("auth-call", {}, noop, noCtx).then(result => {
+			events.push("returned");
+			return result;
+		});
+		await Promise.race([settling.promise, pending]);
+		refresh.resolve();
 		const result = await pending;
-		expect(seen).toEqual([{ scope: "actor-at-call-entry", toolCallId: "auth-call", signal: controller.signal }]);
-		expect(settled).toBe(true);
+
+		expect(events).toEqual(["observe:auth-call", "challenge", "retry", "settled", "returned"]);
 		expect(result.content[0]).toEqual({ type: "text", text: "authorized" });
 	});
 

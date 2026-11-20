@@ -20,6 +20,7 @@
 
 - Tool cancellations are reported consistently during execution and replay.
 - Compaction retries oversized requests to a separate summary endpoint.
+- A separate remote compaction endpoint uses its own retry policy and reports a single request outcome.
 - Task calls no longer fail solely because their intent label contains JSON-like text.
 - `Agent.reset()` no longer cancels an ordinary in-flight run or releases `waitForIdle()` before it settles.
 

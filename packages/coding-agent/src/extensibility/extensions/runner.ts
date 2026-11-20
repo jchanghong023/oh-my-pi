@@ -601,6 +601,41 @@ export const UNAVAILABLE_ANNOTATIONS: ExtensionAnnotationsAPI = Object.freeze({
 	open: () => Promise.reject(new Error("ctx.annotations is not available in this host.")),
 });
 
+/**
+ * Hooks that construct fresh objects lose the index preserved by object spread.
+ * Recover it from a unique role/timestamp pair, never from the output position:
+ * a hook can insert, filter, or reorder messages in the same pass.
+ */
+function restoreContextHistoryIndices(previousMessages: AgentMessage[], nextMessages: AgentMessage[]): void {
+	const claimed = new Set<number>();
+	const replacements = new Map<string, { message: AgentMessage; historyIndex?: number | null } | null>();
+	for (const message of nextMessages) {
+		if (!message) continue;
+		const index = getContextHistoryIndex(message);
+		if (index !== undefined) {
+			claimed.add(index);
+			continue;
+		}
+		const key = `${message.role}:${message.timestamp}`;
+		replacements.set(key, replacements.has(key) ? null : { message });
+	}
+	if (replacements.size === 0) return;
+
+	for (const message of previousMessages) {
+		if (!message) continue;
+		const replacement = replacements.get(`${message.role}:${message.timestamp}`);
+		if (!replacement) continue;
+		const index = getContextHistoryIndex(message);
+		// A previous insertion or a second source with this identity makes the
+		// match ineligible, as does an index that survives elsewhere in the output.
+		replacement.historyIndex =
+			replacement.historyIndex === undefined && index !== undefined && !claimed.has(index) ? index : null;
+	}
+	for (const replacement of replacements.values()) {
+		if (replacement?.historyIndex != null) setContextHistoryIndex(replacement.message, replacement.historyIndex);
+	}
+}
+
 export class ExtensionRunner {
 	#uiContext: ExtensionUIContext;
 	#mode: ExtensionMode = "print";
@@ -2527,7 +2562,9 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				const event: ContextEvent = { type: "context", messages: currentMessages };
+				// Keep the input positions available even if the handler edits its array in place.
+				const inputMessages = currentMessages.slice();
+				const event: ContextEvent = { type: "context", messages: inputMessages };
 				const handlerResult = await this.#runHandlerWithTimeout(
 					handler,
 					event,
@@ -2538,20 +2575,9 @@ export class ExtensionRunner {
 					signal,
 				);
 
-				if (handlerResult && (handlerResult as ContextEventResult).messages) {
-					const nextMessages = (handlerResult as ContextEventResult).messages!;
-					for (let index = 0; index < nextMessages.length; index++) {
-						const message = nextMessages[index];
-						if (!message || getContextHistoryIndex(message) !== undefined) continue;
-						const previousMessage = currentMessages[index];
-						if (!previousMessage) continue;
-						const historyIndex = getContextHistoryIndex(previousMessage);
-						if (historyIndex === undefined) continue;
-						setContextHistoryIndex(message, historyIndex);
-						if (!Bun.deepEquals(message, previousMessage)) clearContextHistoryIndex(message);
-					}
-					currentMessages = nextMessages;
-				}
+				const nextMessages = (handlerResult as ContextEventResult | undefined)?.messages;
+				if (nextMessages) restoreContextHistoryIndices(currentMessages, nextMessages);
+				currentMessages = nextMessages ?? inputMessages;
 			}
 		}
 

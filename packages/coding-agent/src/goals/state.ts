@@ -89,22 +89,23 @@ export function goalContinuationActivity(messages: readonly AgentMessage[]): str
 	return digests.join(":");
 }
 
+const NO_TOOL_RECOVERY_NOTICE =
+	"Goal automatic continuation stopped: the model did not produce a tool call after one forced-tool recovery. The goal is still unfinished; check the model or gateway's tool-calling support.";
+
 /** One forced-tool recovery per uninterrupted continuation stretch; real work does not replenish it. */
 export class GoalContinuationGuard {
 	#previousActivity: string | undefined;
 	#pendingActivity = "";
 	#recoveryUsed = false;
 	#recoveryPending = false;
-	#stoppedWithoutTools = false;
+	#stopNotice: string | undefined;
 
 	get recoveryPending(): boolean {
 		return this.#recoveryPending;
 	}
 
 	get stopNotice(): string | undefined {
-		return this.#stoppedWithoutTools
-			? "Goal automatic continuation stopped: the model did not produce a tool call after one forced-tool recovery. The goal is still unfinished; check the model or gateway's tool-calling support."
-			: undefined;
+		return this.#stopNotice;
 	}
 
 	reset(): void {
@@ -112,7 +113,7 @@ export class GoalContinuationGuard {
 		this.#pendingActivity = "";
 		this.#recoveryUsed = false;
 		this.#recoveryPending = false;
-		this.#stoppedWithoutTools = false;
+		this.#stopNotice = undefined;
 	}
 
 	/** Keep only tool evidence across maintenance runs of the same pending submission. */
@@ -123,40 +124,43 @@ export class GoalContinuationGuard {
 	}
 
 	observe(messages: readonly AgentMessage[]): "continue" | "recover" | "stop" {
-		const currentActivity = goalContinuationActivity(messages);
-		const activity =
-			this.#pendingActivity && currentActivity
-				? `${this.#pendingActivity}:${currentActivity}`
-				: this.#pendingActivity || currentActivity;
+		const pendingActivity = this.#pendingActivity;
 		this.#pendingActivity = "";
-		const previous = this.#previousActivity;
-		this.#previousActivity = activity;
 		const wasRecovery = this.#recoveryPending;
 		this.#recoveryPending = false;
-		this.#stoppedWithoutTools = false;
+		this.#stopNotice = undefined;
 		const assistant = messages.findLast(message => message.role === "assistant");
-		if (activity.length > 0) {
-			// Cached maintenance evidence must not override a later tool-free failure.
-			if (
-				currentActivity.length === 0 &&
-				assistant?.role === "assistant" &&
-				(assistant.stopReason === "error" ||
-					assistant.stopReason === "length" ||
-					assistant.stopReason === "aborted")
-			) {
-				return "stop";
+		const stopReason = assistant?.role === "assistant" ? assistant.stopReason : undefined;
+		const failed = stopReason === "error" || stopReason === "length" || stopReason === "aborted";
+		// The final recovery failure takes precedence over streamed calls and their placeholder results.
+		if (wasRecovery && failed) {
+			if (stopReason === "error") {
+				this.#stopNotice =
+					"Goal automatic continuation stopped: the model request failed during forced-tool recovery. The goal is still unfinished.";
+			} else if (stopReason === "length") {
+				this.#stopNotice =
+					"Goal automatic continuation stopped: the model output was truncated during forced-tool recovery. The goal is still unfinished.";
 			}
-			return activity === previous ? "stop" : "continue";
+			return "stop";
 		}
-		if (assistant?.role === "assistant" && assistant.stopReason === "aborted") return "stop";
+
+		const currentActivity = goalContinuationActivity(messages);
+		const activity =
+			pendingActivity && currentActivity
+				? `${pendingActivity}:${currentActivity}`
+				: pendingActivity || currentActivity;
+		const previous = this.#previousActivity;
+		this.#previousActivity = activity;
+		if (currentActivity.length === 0 && failed) return "stop";
+		if (activity.length > 0) return activity === previous ? "stop" : "continue";
 		if (wasRecovery) {
-			this.#stoppedWithoutTools = true;
+			this.#stopNotice = NO_TOOL_RECOVERY_NOTICE;
 			return "stop";
 		}
 		if (assistant?.role !== "assistant" || assistant.stopReason !== "stop") return "stop";
 		if (!assistant.content.some(block => block.type === "text" && block.text.trim().length > 0)) return "stop";
 		if (this.#recoveryUsed) {
-			this.#stoppedWithoutTools = true;
+			this.#stopNotice = NO_TOOL_RECOVERY_NOTICE;
 			return "stop";
 		}
 		this.#recoveryUsed = true;

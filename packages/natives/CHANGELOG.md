@@ -10,6 +10,9 @@
 
 - Linux offline startup rejects unsafe directories or files in the default shared-memory grammar cache.
 - Offline Linux binaries can load their native addon when the shared memory filesystem is mounted `noexec`.
+- Owned Git patches reject filesystem-alias renames before writing, and worktree creation no longer prunes another checkout's Git index.
+- Git status counts no longer depend on the subprocess output capture cap. Remote branch lookup rejects non-UTF-8 ref names instead of returning the wrong ref.
+- Shell cancellation and timeout preserve process scope and exit status. Windows rsync preserves native verbatim paths, and directory listing retains entries that deny metadata refresh.
 
 ### Fixed
 

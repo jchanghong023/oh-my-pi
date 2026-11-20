@@ -130,7 +130,8 @@ export interface SessionTransport {
 	onClose?: (reason: string, willReconnect: boolean) => void;
 	connect(): void;
 	close(): void;
-	send(frame: GuestFrame): void;
+	/** Transports that report local prompt admission return its receipt here. */
+	send(frame: GuestFrame): Promise<SubmitResult> | void;
 }
 
 export type { ComposerPort, SubmitResult } from "@oh-my-pi/pi-wire";
@@ -238,8 +239,8 @@ export class SessionReplica {
 		return this.#snapshot;
 	}
 
-	sendPrompt(text: string, images?: readonly ImageContent[]): void {
-		this.#socket.send({ t: "prompt", text, images: images ? [...images] : undefined });
+	sendPrompt(text: string, images?: readonly ImageContent[]): Promise<SubmitResult> | void {
+		return this.#socket.send({ t: "prompt", text, images: images ? [...images] : undefined });
 	}
 
 	sendUiResponse(reqId: number, value?: CollabUiResponseValue): void {
@@ -783,8 +784,7 @@ export class GuestClient extends SessionReplica {
 export function guestComposerPort(client: GuestClient): ComposerPort {
 	return {
 		async sendPrompt(text, images) {
-			client.sendPrompt(text, images);
-			return { kind: "sent" };
+			return client.sendPrompt(text, images) ?? { kind: "sent" };
 		},
 		async sendUiResponse(reqId, value) {
 			client.sendUiResponse(reqId, value);

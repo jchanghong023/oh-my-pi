@@ -6,9 +6,9 @@
  * exponential backoff. Guests survive host-drop teardown while the host recreates the room.
  */
 
-import type { GuestFrame, HostFrame, RelayControlMessage } from "@oh-my-pi/pi-wire";
+import type { GuestFrame, HostFrame, RelayControlMessage, SubmitResult } from "@oh-my-pi/pi-wire";
 import { open, seal } from "./codec";
-import { packEnvelope, unpackEnvelope } from "./link";
+import { ENVELOPE_HEADER_LENGTH, packEnvelope, unpackEnvelope } from "./link";
 
 const RELAY_CLOSE_REASONS: Record<number, string> = {
 	4001: "room closed",
@@ -21,6 +21,8 @@ const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 /** Max enveloped frames buffered while a reconnect is pending; overflow is dropped. */
 const MAX_PENDING_SENDS = 256;
+/** Bun's relay WebSocket maxPayloadLength, including the peer envelope. */
+const MAX_RELAY_FRAME_BYTES = 16 * 1024 * 1024;
 
 export interface CollabSocketOptions {
 	/** wss://host[:port]/r/<roomId> — no query string. */
@@ -47,7 +49,7 @@ export class CollabSocket {
 	/** Allows a previously joined guest to outlive room recreation races. */
 	#retryMissingRoom = false;
 	/** Serializes seal() so frames hit the wire in send() order. */
-	#sendChain: Promise<void> = Promise.resolve();
+	#sendChain: Promise<SubmitResult | void> = Promise.resolve();
 	/** Serializes open() so frames are delivered in arrival order. */
 	#recvChain: Promise<void> = Promise.resolve();
 	/** Envelopes sealed while disconnected, flushed on the next open. */
@@ -69,23 +71,32 @@ export class CollabSocket {
 		this.#openSocket();
 	}
 
-	send(frame: GuestFrame, targetPeer = 0): void {
-		this.#sendChain = this.#sendChain
-			.then(async () => {
-				if (this.#closed) return;
+	send(frame: GuestFrame, targetPeer = 0): Promise<SubmitResult> | void {
+		const pending = this.#sendChain
+			.then(async (): Promise<SubmitResult> => {
+				if (this.#closed) return { kind: "rejected", message: "Collab connection is closed." };
 				const sealed = await seal(await this.#opts.key, frame);
-				const envelope = packEnvelope(targetPeer, sealed);
+				if (sealed.byteLength + ENVELOPE_HEADER_LENGTH > MAX_RELAY_FRAME_BYTES) {
+					return {
+						kind: "rejected",
+						message:
+							"Collab messages cannot exceed 16 MiB after encoding. Remove attachments or shorten the message.",
+					};
+				}
+				if (this.#closed) return { kind: "rejected", message: "Collab connection is closed." };
 				const ws = this.#ws;
 				if (ws && ws.readyState === WebSocket.OPEN) {
-					ws.send(envelope);
-					return;
+					ws.send(packEnvelope(targetPeer, sealed));
+				} else if (this.#pendingSends.length >= MAX_PENDING_SENDS) {
+					return { kind: "rejected", message: "Collab send queue is full." };
+				} else {
+					this.#pendingSends.push(packEnvelope(targetPeer, sealed));
 				}
-				if (this.#pendingSends.length >= MAX_PENDING_SENDS) return;
-				this.#pendingSends.push(envelope);
+				return { kind: "sent" };
 			})
-			.catch(() => {
-				// dropped frame; the socket-level close path reports actionable failures
-			});
+			.catch((): SubmitResult => ({ kind: "rejected", message: "Could not send the Collab message." }));
+		this.#sendChain = pending;
+		if (frame.t === "prompt") return pending;
 	}
 
 	/** Intentional close: clears any retry timer, suppresses reconnect. A later connect() starts fresh. */

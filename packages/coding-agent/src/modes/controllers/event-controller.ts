@@ -27,12 +27,10 @@ import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { TodoReminderComponent } from "@oh-my-pi/pi-tui/chat/todo-reminder";
 import { isNativeRendering, nativePacing } from "@oh-my-pi/pi-tui/native/state";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
-import { settledBackgroundJobs } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import {
 	asyncJobState,
 	isSettledJobFrame,
 	parksAsBackground,
-	settledBashCards,
 	settleWithJobFrame,
 	ToolExecutionComponent,
 	type ToolExecutionHandle,
@@ -132,17 +130,12 @@ interface AsyncResultJob {
 	durationMs?: number;
 }
 
-/** Notify for native task completions already shown by their original cards. */
-function nativeTaskJobToast(
-	message: { role: string; customType?: string; details?: unknown },
-	transcript: readonly Component[],
-): string | undefined {
+/** Notify transiently for automatic native task completions, even without a tool card. */
+function nativeTaskJobToast(message: { role: string; customType?: string; details?: unknown }): string | undefined {
 	if (message.role !== "custom" || message.customType !== "async-result" || !isRecord(message.details)) return;
 	const details = message.details as AsyncResultJob & { jobs?: AsyncResultJob[] };
 	const jobs = details.jobs && details.jobs.length > 0 ? details.jobs : [details];
 	if (!jobs.every(job => job.type === "task" && job.status === "completed" && job.jobId)) return;
-	const represented = settledBackgroundJobs(transcript);
-	if (!jobs.every(job => represented.has(`task:${job.jobId}:completed`))) return;
 	if (jobs.length > 1) return `${jobs.length} background tasks completed`;
 	const job = jobs[0]!;
 	const name = sanitizeText(job.name ?? job.label ?? job.jobId ?? "task").trim() || "task";
@@ -221,6 +214,7 @@ function renderArgsWithIntent(args: unknown, intent: string | undefined): unknow
 }
 
 export class EventController {
+	readonly #getChatContainer = () => this.ctx.chatContainer;
 	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;
 	/** Timestamp of the current turn's user prompt; drives the usage row's prompt→yield delta. */
 	#turnStartedAt: number | undefined = undefined;
@@ -1206,6 +1200,9 @@ export class EventController {
 		if (generation !== this.#dispatchGeneration) return;
 		this.ctx.compactThinkingPreview?.observe(event);
 		this.ctx.compactToolOutputPreview?.observe(event);
+		if (event.type === "agent_start" || (event.type === "message_start" && event.message.role === "user")) {
+			this.ctx.compactFileDiff?.sync();
+		}
 		if (event.type === "agent_end" || event.type === "session_abort") {
 			this.ctx.ui.requestRender();
 		}
@@ -1394,7 +1391,7 @@ export class EventController {
 			} else {
 				this.ctx.addMessageToChat(event.message);
 				if (isNativeRendering()) {
-					const toast = nativeTaskJobToast(event.message, this.ctx.chatContainer.children);
+					const toast = nativeTaskJobToast(event.message);
 					if (toast) this.ctx.showStatus(toast);
 				}
 			}
@@ -2311,7 +2308,7 @@ export class EventController {
 		event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
 	): void {
 		if (event.toolName === "wait" && component instanceof ToolExecutionComponent) {
-			component.setSettledBashJobs(() => settledBashCards(this.ctx.chatContainer.children));
+			component.setSettledBashTranscript(this.#getChatContainer);
 		}
 		const settled = this.#settledBeforeReturn.get(event.toolCallId)?.partialResult;
 		this.#settledBeforeReturn.delete(event.toolCallId);

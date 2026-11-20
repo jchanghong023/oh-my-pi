@@ -200,8 +200,9 @@ export class IrcBus implements IrcBusApi {
 				}
 			}
 		}
-		// 写工具会持久化回执；丢掉消息身份会使冷恢复将发送与接收误当两条通信。
-		return receipt.outcome === "failed" ? receipt : { ...receipt, id: message.id, ts: message.ts };
+		// Mesh receipts already carry the recipient's message identity; local receipts need ours.
+		if (receipt.outcome === "failed" || (receipt.id !== undefined && receipt.ts !== undefined)) return receipt;
+		return { ...receipt, id: receipt.id ?? message.id, ts: receipt.ts ?? message.ts };
 	}
 
 	park(msg: Omit<IrcMessage, "id" | "ts">): IrcMessage {

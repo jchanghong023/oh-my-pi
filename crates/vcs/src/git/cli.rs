@@ -27,6 +27,7 @@ use std::{
 	time::Duration,
 };
 
+use gix::bstr::ByteSlice;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 #[cfg(windows)]
@@ -62,9 +63,8 @@ const TRUNCATION_MARKER: &str = "\n[git subprocess output truncated at the captu
 /// Publish each chunk so a bounded drain can return the bytes already captured.
 #[derive(Default)]
 struct OutputCapture {
-	retained:  Vec<u8>,
-	truncated: bool,
-	closed:    bool,
+	output: CapturedBytes,
+	closed: bool,
 }
 
 impl OutputCapture {
@@ -73,21 +73,13 @@ impl OutputCapture {
 		if self.closed {
 			return false;
 		}
-		if !self.truncated {
-			let keep = bytes.len().min(limit - self.retained.len());
-			self.retained.extend_from_slice(&bytes[..keep]);
-			self.truncated = keep < bytes.len();
-		}
+		self.output.append(bytes, limit);
 		true
-	}
-
-	fn take(&mut self) -> String {
-		self.take_bytes().into_text()
 	}
 
 	fn take_bytes(&mut self) -> CapturedBytes {
 		self.closed = true;
-		CapturedBytes { bytes: std::mem::take(&mut self.retained), truncated: self.truncated }
+		std::mem::take(&mut self.output)
 	}
 }
 
@@ -98,6 +90,14 @@ struct CapturedBytes {
 }
 
 impl CapturedBytes {
+	fn append(&mut self, bytes: &[u8], limit: usize) {
+		if !self.truncated {
+			let keep = bytes.len().min(limit - self.bytes.len());
+			self.bytes.extend_from_slice(&bytes[..keep]);
+			self.truncated = keep < bytes.len();
+		}
+	}
+
 	fn into_text(self) -> String {
 		let mut text = String::from_utf8_lossy_owned(self.bytes);
 		if self.truncated {
@@ -266,6 +266,10 @@ pub(crate) fn detach_from_terminal(cmd: &mut std::process::Command) {
 /// Run `git` asynchronously with bounded capture and a deadline.
 /// Non-zero exits are returned in [`CliOutput`], not raised.
 pub(crate) async fn run(cwd: &Path, args: &[String], options: &RunOptions) -> Result<CliOutput> {
+	Ok(run_raw(cwd, args, options).await?.into_text())
+}
+
+async fn run_raw(cwd: &Path, args: &[String], options: &RunOptions) -> Result<CapturedOutput> {
 	let argv = hardened_args(args, options.read_only);
 	let mut cmd = tokio::process::Command::new("git");
 	cmd.args(&argv)
@@ -347,12 +351,13 @@ pub(crate) async fn run(cwd: &Path, args: &[String], options: &RunOptions) -> Re
 	.await;
 	stdout_task.abort();
 	stderr_task.abort();
+	let stdout_eof = drained.is_ok();
 	if let Ok(result) = drained {
 		result?;
 	}
-	let stdout = stdout_capture.lock().unwrap().take();
-	let stderr = stderr_capture.lock().unwrap().take();
-	Ok(CliOutput { exit_code: exit.code().unwrap_or(-1), stdout, stderr })
+	let stdout = stdout_capture.lock().unwrap().take_bytes();
+	let stderr = stderr_capture.lock().unwrap().take_bytes();
+	Ok(CapturedOutput { exit_code: exit.code().unwrap_or(-1), stdout, stderr, stdout_eof })
 }
 
 /// Run `git` asynchronously and map a non-zero exit to [`Error::Cli`].
@@ -430,7 +435,8 @@ pub(crate) fn run_sync_write(
 	timeout: Duration,
 	input: &SyncWrite<'_>,
 ) -> Result<CliOutput> {
-	Ok(run_sync_impl(cwd, args, timeout, OUTPUT_LIMIT_BYTES, Some(input))?.into_text())
+	Ok(run_sync_impl(cwd, args, timeout, OUTPUT_LIMIT_BYTES, Some(input), CapturedBytes::append)?
+		.into_text())
 }
 
 /// [`run_sync`] with an explicit retention cap. The cap is a parameter rather
@@ -443,38 +449,43 @@ pub(crate) fn run_sync_capped(
 	timeout: Duration,
 	limit: usize,
 ) -> Result<CliOutput> {
-	Ok(run_sync_impl(cwd, args, timeout, limit, None)?.into_text())
+	Ok(run_sync_impl(cwd, args, timeout, limit, None, CapturedBytes::append)?.into_text())
 }
 
-/// Capture raw stdout only if Git succeeds and the entire stream was read.
-pub(crate) fn run_sync_complete_stdout(
+/// Fold stdout chunks without retaining the stream. Only return the accumulator
+/// if Git succeeds and the reader observes EOF.
+pub(crate) fn run_sync_fold_stdout<T: Default + Send + 'static>(
 	cwd: &Path,
 	args: &[String],
 	timeout: Duration,
-) -> Result<Vec<u8>> {
-	let out = run_sync_impl(cwd, args, timeout, OUTPUT_LIMIT_BYTES, None)?;
+	mut append: impl FnMut(&mut T, &[u8]) + Send + 'static,
+) -> Result<T> {
+	let out =
+		run_sync_impl(cwd, args, timeout, OUTPUT_LIMIT_BYTES, None, move |state, bytes, _| {
+			append(state, bytes);
+		})?;
 	if out.exit_code != 0 {
 		return Err(Error::Cli {
 			command:   format!("git {}", args.join(" ")),
 			exit_code: out.exit_code,
-			stdout:    out.stdout.into_text(),
+			stdout:    String::new(),
 			stderr:    out.stderr.into_text(),
 		});
 	}
-	if out.stdout.truncated || !out.stdout_eof {
-		return Err(Error::backend("git status", "incomplete stdout capture"));
+	if !out.stdout_eof {
+		return Err(Error::backend("git status", "incomplete stdout stream"));
 	}
-	Ok(out.stdout.bytes)
+	Ok(out.stdout)
 }
 
-struct SyncCliOutput {
+struct CapturedOutput<T = CapturedBytes> {
 	exit_code:  i32,
-	stdout:     CapturedBytes,
+	stdout:     T,
 	stderr:     CapturedBytes,
 	stdout_eof: bool,
 }
 
-impl SyncCliOutput {
+impl CapturedOutput {
 	fn into_text(self) -> CliOutput {
 		CliOutput {
 			exit_code: self.exit_code,
@@ -485,13 +496,14 @@ impl SyncCliOutput {
 }
 
 /// Shared synchronous runner: read-only when `write` is `None`.
-fn run_sync_impl(
+fn run_sync_impl<T: Default + Send + 'static>(
 	cwd: &Path,
 	args: &[String],
 	timeout: Duration,
 	limit: usize,
 	write: Option<&SyncWrite<'_>>,
-) -> Result<SyncCliOutput> {
+	mut append: impl FnMut(&mut T, &[u8], usize) + Send + 'static,
+) -> Result<CapturedOutput<T>> {
 	let argv = hardened_args(args, write.is_none());
 	let mut cmd = std::process::Command::new("git");
 	cmd.args(&argv)
@@ -512,7 +524,9 @@ fn run_sync_impl(
 		}
 	}
 	let mut child = cmd.spawn().map_err(|err| spawn_error(cwd, err))?;
-	let stdout = spawn_sync_reader("git-cli-stdout", child.stdout.take(), limit);
+	let stdout = spawn_sync_reader_with("git-cli-stdout", child.stdout.take(), move |out, bytes| {
+		append(out, bytes, limit);
+	});
 	let stderr = spawn_sync_reader("git-cli-stderr", child.stderr.take(), limit);
 	std::thread::scope(|scope| {
 		// The writer runs beside the deadline loop: a child that stops reading
@@ -542,13 +556,13 @@ fn run_sync_impl(
 }
 
 /// Deadline loop and output collection for [`run_sync_impl`].
-fn wait_sync(
+fn wait_sync<T: Default>(
 	argv: &[String],
 	mut child: std::process::Child,
-	stdout: Option<SyncReader>,
-	stderr: Option<SyncReader>,
+	stdout: Option<SyncReader<T>>,
+	stderr: Option<SyncReader<CapturedBytes>>,
 	timeout: Duration,
-) -> Result<SyncCliOutput> {
+) -> Result<CapturedOutput<T>> {
 	let deadline = std::time::Instant::now() + timeout;
 	let status = loop {
 		match child.try_wait()? {
@@ -565,32 +579,37 @@ fn wait_sync(
 	// both readers one bounded grace period, then collect their current buffers.
 	// Collection closes each capture; polling readers notice it even without
 	// EOF.
-	let readers = [stdout, stderr];
+	let reading = |thread: &std::thread::JoinHandle<bool>| !thread.is_finished();
 	let drain_deadline = std::time::Instant::now() + DRAIN_GRACE;
-	while readers
-		.iter()
-		.flatten()
-		.any(|reader| !reader.thread.is_finished())
+	while (stdout
+		.as_ref()
+		.is_some_and(|reader| reading(&reader.thread))
+		|| stderr
+			.as_ref()
+			.is_some_and(|reader| reading(&reader.thread)))
 		&& std::time::Instant::now() < drain_deadline
 	{
 		std::thread::sleep(Duration::from_millis(10));
 	}
-	let [(stdout, stdout_eof), (stderr, _)] = readers.map(|reader| {
-		reader.map_or_default(|reader| {
-			let eof = reader.thread.is_finished() && reader.thread.join().unwrap_or(false);
-			let bytes = reader.output.lock().unwrap().take_bytes();
-			(bytes, eof)
-		})
-	});
+	let (stdout, stdout_eof) = stdout.map_or_default(SyncReader::collect);
+	let (stderr, _) = stderr.map_or_default(SyncReader::collect);
 	let Some(status) = status else {
 		return Err(Error::CliTimeout { command: format!("git {}", argv.join(" ")) });
 	};
-	Ok(SyncCliOutput { exit_code: status.code().unwrap_or(-1), stdout, stderr, stdout_eof })
+	Ok(CapturedOutput { exit_code: status.code().unwrap_or(-1), stdout, stderr, stdout_eof })
 }
 
-struct SyncReader {
+struct SyncReader<T> {
 	thread: std::thread::JoinHandle<bool>,
-	output: Arc<Mutex<OutputCapture>>,
+	output: Arc<Mutex<Option<T>>>,
+}
+
+impl<T: Default> SyncReader<T> {
+	fn collect(self) -> (T, bool) {
+		let eof = self.thread.is_finished() && self.thread.join().unwrap_or(false);
+		let output = self.output.lock().unwrap().take().unwrap_or_default();
+		(output, eof)
+	}
 }
 
 /// Drain a child stream on a helper thread, mirroring [`read_capped`].
@@ -603,26 +622,36 @@ fn spawn_sync_reader(
 	name: &'static str,
 	stream: Option<impl std::io::Read + AsRawPipe + Send + 'static>,
 	limit: usize,
-) -> Option<SyncReader> {
+) -> Option<SyncReader<CapturedBytes>> {
+	spawn_sync_reader_with(name, stream, move |out: &mut CapturedBytes, bytes| {
+		out.append(bytes, limit);
+	})
+}
+
+fn spawn_sync_reader_with<T: Default + Send + 'static>(
+	name: &'static str,
+	stream: Option<impl std::io::Read + AsRawPipe + Send + 'static>,
+	append: impl FnMut(&mut T, &[u8]) + Send + 'static,
+) -> Option<SyncReader<T>> {
 	let stream = stream?;
-	let output = Arc::new(Mutex::new(OutputCapture::default()));
+	let output = Arc::new(Mutex::new(Some(T::default())));
 	let capture = Arc::clone(&output);
 	let thread = std::thread::Builder::new()
 		.name(name.into())
-		.spawn(move || read_capped_sync(stream, limit, &capture))
+		.spawn(move || read_sync(stream, &capture, append))
 		.ok()?;
 	Some(SyncReader { thread, output })
 }
 
-/// Synchronous mirror of [`read_capped`]: drain without blocking the child,
-/// checking for collection between bounded waits even when the pipe stays open.
-fn read_capped_sync(
+/// Drain without blocking the child, checking for collection between bounded
+/// waits even when the pipe stays open.
+fn read_sync<T>(
 	mut stream: impl std::io::Read + AsRawPipe,
-	limit: usize,
-	output: &Mutex<OutputCapture>,
+	output: &Mutex<Option<T>>,
+	mut append: impl FnMut(&mut T, &[u8]),
 ) -> bool {
 	let mut buf = [0u8; 8 * 1024];
-	while !output.lock().unwrap().closed {
+	while output.lock().unwrap().is_some() {
 		match sync_pipe_ready(&stream) {
 			Ok(true) => {},
 			Ok(false) => continue,
@@ -637,9 +666,9 @@ fn read_capped_sync(
 			Err(_) => break,
 			Ok(n) => n,
 		};
-		if !output.lock().unwrap().append(&buf[..n], limit) {
-			break;
-		}
+		let mut output = output.lock().unwrap();
+		let Some(state) = output.as_mut() else { break };
+		append(state, &buf[..n]);
 	}
 	false
 }
@@ -938,27 +967,37 @@ impl GitRepo {
 			remote.to_owned(),
 			"HEAD".to_owned(),
 		];
-		let output = run(self.root(), &args, &RunOptions {
+		let output = run_raw(self.root(), &args, &RunOptions {
 			read_only: true,
 			timeout: Some(NETWORK_TIMEOUT),
 			cancel,
 			..RunOptions::default()
 		})
 		.await?;
-		if is_truncated(&output.stdout) || is_truncated(&output.stderr) {
-			return Err(Error::backend(OP, "truncated remote HEAD advertisement"));
+		if output.stdout.truncated || output.stderr.truncated || !output.stdout_eof {
+			return Err(Error::backend(OP, "incomplete remote HEAD advertisement"));
 		}
-		let output = output.into_checked(&args)?;
+		if output.exit_code != 0 {
+			return Err(Error::Cli {
+				command:   format!("git {}", args.join(" ")),
+				exit_code: output.exit_code,
+				stdout:    output.stdout.into_text(),
+				stderr:    output.stderr.into_text(),
+			});
+		}
 		let mut branch = None;
 		let mut sha = None;
-		for line in output.stdout.lines() {
-			let Some((value, name)) = line.split_once('\t') else {
+		for line in output.stdout.bytes.as_bstr().lines() {
+			let Some(tab) = line.find_byte(b'\t') else {
 				return Err(Error::backend(OP, "malformed remote HEAD advertisement"));
 			};
-			if name != "HEAD" {
+			let (value, name) = (&line[..tab], &line[tab + 1..]);
+			if name != b"HEAD" {
 				continue;
 			}
-			if let Some(target) = value.strip_prefix("ref: ") {
+			if let Some(target) = value.strip_prefix(b"ref: ") {
+				let target = std::str::from_utf8(target)
+					.map_err(|_| Error::backend(OP, "remote HEAD branch name is not valid UTF-8"))?;
 				let _: gix::refs::FullName =
 					target.try_into().map_err(|err| Error::backend(OP, err))?;
 				let Some(path) = target
@@ -974,8 +1013,7 @@ impl GitRepo {
 					return Err(Error::backend(OP, "ambiguous remote HEAD symbolic advertisement"));
 				}
 			} else {
-				let id = gix::hash::ObjectId::from_hex(value.as_bytes())
-					.map_err(|err| Error::backend(OP, err))?;
+				let id = gix::hash::ObjectId::from_hex(value).map_err(|err| Error::backend(OP, err))?;
 				if id.is_null() || sha.replace(id.to_hex().to_string()).is_some() {
 					return Err(Error::backend(
 						OP,
@@ -1110,6 +1148,19 @@ mod tests {
 	use super::*;
 
 	#[cfg(unix)]
+	#[test]
+	fn sync_stdout_fold_can_read_past_the_capture_limit() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let args =
+			["-c", "alias.bulk=!dd if=/dev/zero bs=65536 count=129", "bulk"].map(str::to_owned);
+		let size = run_sync_fold_stdout(dir.path(), &args, SYNC_TIMEOUT, |n: &mut usize, chunk| {
+			*n += chunk.len();
+		})
+		.expect("fold bulk stdout");
+		assert_eq!(size, OUTPUT_LIMIT_BYTES + 65_536);
+	}
+
+	#[cfg(unix)]
 	struct PipeHolder(tempfile::TempDir);
 
 	#[cfg(unix)]
@@ -1219,11 +1270,12 @@ mod tests {
 			spawn_sync_reader("git-cli-test", Some(read), OUTPUT_LIMIT_BYTES).expect("reader");
 		write.write_all(b"out\n").expect("write output");
 		let deadline = std::time::Instant::now() + Duration::from_secs(1);
-		while reader.output.lock().unwrap().retained.len() < 4 && std::time::Instant::now() < deadline
+		while reader.output.lock().unwrap().as_ref().unwrap().bytes.len() < 4
+			&& std::time::Instant::now() < deadline
 		{
 			std::thread::sleep(Duration::from_millis(10));
 		}
-		assert_eq!(reader.output.lock().unwrap().take(), "out\n");
+		assert_eq!(reader.output.lock().unwrap().take().unwrap().into_text(), "out\n");
 		let deadline = std::time::Instant::now() + Duration::from_secs(1);
 		while !reader.thread.is_finished() && std::time::Instant::now() < deadline {
 			std::thread::sleep(Duration::from_millis(10));

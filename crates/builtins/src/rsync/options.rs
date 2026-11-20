@@ -1511,7 +1511,7 @@ impl<'e> Parser<'e> {
 				return Err(self.option_error("--confine-root must be an absolute path"));
 			} else if self.o.insecure_links {
 				return Err(self.option_error("--insecure-links cannot be combined with --confine-root"));
-			} else {
+			} else if crate::rsync::paths::verbatim_prefix_offset(root.as_encoded_bytes()).is_none() {
 				let bytes = crate::rsync::paths::path_bytes(std::path::Path::new(&root));
 				let clean = crate::rsync::paths::clean_local_fname_flags(
 					&bytes,

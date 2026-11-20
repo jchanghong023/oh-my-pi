@@ -50,11 +50,6 @@ import {
 	isPermissionDeniedError,
 	writeFileWithFallback,
 } from "../tools/file-write-fallback";
-import {
-	invalidateFsScanAfterDelete,
-	invalidateFsScanAfterRename,
-	invalidateFsScanAfterWrite,
-} from "../tools/fs-cache-invalidation";
 import { outputMeta, resolveOutputMaxColumns } from "../tools/output-meta";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { DEFAULT_MAX_COLUMN } from "@oh-my-pi/pi-tui/tools/streaming-output";
@@ -801,7 +796,6 @@ export class EditTool implements AgentTool<TInput> {
 		};
 		if (request.op === "delete") {
 			await deleteFileWithFallback(request.path, Bun.file(request.path));
-			invalidateFsScanAfterDelete(request.path);
 			journal(request.path, null);
 			if ((this.session.enableLsp ?? true) && cfgLspEnabled.get(this.session.settings)) {
 				await notifyWorkspaceWatchedFiles(
@@ -835,7 +829,6 @@ export class EditTool implements AgentTool<TInput> {
 			await writeFileWithFallback(request.moveTo, request.content);
 			if (mode !== undefined) await chmodMovedFile(request.moveTo, mode);
 			await deleteFileWithFallback(request.path, Bun.file(request.path));
-			invalidateFsScanAfterRename(request.path, request.moveTo);
 			journal(request.path, null);
 			journal(request.moveTo, request.content, destination);
 			if ((this.session.enableLsp ?? true) && cfgLspEnabled.get(this.session.settings)) {
@@ -926,7 +919,6 @@ export class EditTool implements AgentTool<TInput> {
 			}
 		}
 
-		invalidateFsScanAfterWrite(request.path);
 		if (!began) this.session.bumpFileMutationVersion?.(request.path);
 		journal(request.path, diagnostics.finalContent);
 		return {

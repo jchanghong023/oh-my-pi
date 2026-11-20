@@ -210,6 +210,8 @@ export interface EditRenderContext {
 	editStreamingFallback?: string;
 	/** Function to render diff text with syntax highlighting */
 	renderDiff?: (diffText: string, options?: { filePath?: string }) => string;
+	/** Body row budget for the compact file dock; omits change totals and the standalone expand hint. */
+	compactDiffPreviewRows?: number;
 	/** Unsanitized result metadata, used only for filesystem link targets. */
 	rawDetails?: unknown;
 }
@@ -376,6 +378,7 @@ function renderEditHeader(
 		statsSuffix?: string;
 		extraSuffix?: string;
 		title?: string;
+		pathOnly?: boolean;
 	},
 ): string {
 	const title = options.title ?? getOperationTitle(options.op);
@@ -388,16 +391,20 @@ function renderEditHeader(
 	const formatted = formatEditDescription(options.rawPath, uiTheme, descriptionOptions);
 	const suffix = `${options.statsSuffix ?? ""}${options.extraSuffix ?? ""}`;
 	const buildHeader = (description: string): string =>
-		renderStatusLine(
-			{
-				icon: options.icon,
-				spinnerFrame: options.spinnerFrame,
-				iconOverride: options.iconOverride,
-				title,
-				description,
-			},
-			uiTheme,
-		) + suffix;
+		options.pathOnly
+			? options.op === "delete" && options.iconOverride
+				? `${options.iconOverride} ${description}`
+				: description
+			: renderStatusLine(
+					{
+						icon: options.icon,
+						spinnerFrame: options.spinnerFrame,
+						iconOverride: options.iconOverride,
+						title,
+						description,
+					},
+					uiTheme,
+				) + suffix;
 
 	const header = buildHeader(formatted.description);
 	const overflow = visibleWidth(header) - editHeaderLabelBudget(width, uiTheme);
@@ -427,6 +434,7 @@ function renderInlineEditRow(
 		linkPath?: string;
 		renameLinkPath?: string;
 		pending: boolean;
+		pathOnly?: boolean;
 	},
 ): Component {
 	const isDelete = opts.op === "delete";
@@ -439,6 +447,7 @@ function renderInlineEditRow(
 					: uiTheme.styledSymbol(isDelete ? "tool.delete" : "tool.move", "accent"),
 				op: opts.op,
 				title: isDelete ? "Delete" : "Move",
+				pathOnly: opts.pathOnly,
 				rawPath: opts.rawPath,
 				rename: opts.rename,
 				linkPath: opts.linkPath,
@@ -1010,6 +1019,19 @@ function formatDiffStatsSuffix(diff: string, uiTheme: Theme): string {
 	].filter(value => value !== undefined);
 	return ` ${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${stats.join(uiTheme.fg("dim", "/"))}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
 }
+
+/** Take only the raw rows a compact preview can show, starting with a change rather than context. */
+function compactDiffPrefix(diff: string, rows: number): string {
+	const start = /^[+-]/m.exec(diff)?.index ?? 0;
+	let end = start;
+	for (let row = 0; row < rows; row++) {
+		const next = diff.indexOf("\n", end);
+		if (next === -1) return start === 0 ? diff : diff.slice(start);
+		end = next + 1;
+	}
+	return diff.slice(start, end - 1);
+}
+
 function renderDiffSection(
 	diff: string,
 	rawPath: string,
@@ -1019,8 +1041,18 @@ function renderDiffSection(
 	renderDiffFn: (t: string, o?: { filePath?: string }) => string,
 	renderCache?: RenderedStringCache,
 	sectionCache?: RenderedStringCache,
+	compactRows?: number,
 ): string {
-	return cachedRenderedString(sectionCache, uiTheme, expanded, `${rawPath}:${innerWidth}`, diff, () => {
+	const cacheKey = compactRows === undefined ? `${rawPath}:${innerWidth}` : `${rawPath}:${innerWidth}:${compactRows}`;
+	return cachedRenderedString(sectionCache, uiTheme, expanded, cacheKey, diff, () => {
+		if (!expanded && compactRows !== undefined) {
+			const rows = Math.min(PREVIEW_LIMITS.DIFF_COLLAPSED_LINES, compactRows);
+			const preview = compactDiffPrefix(diff, rows);
+			const rendered = cachedRenderedString(renderCache, uiTheme, false, rawPath, preview, () =>
+				renderDiffFn(preview, { filePath: rawPath }),
+			);
+			return sliceCollapsedDiffRows(rendered, innerWidth, rows).text;
+		}
 		const {
 			text: truncatedDiff,
 			hiddenHunks,
@@ -1485,6 +1517,7 @@ function renderSingleFileResult(
 	args?: EditRenderArgs,
 ): Component {
 	const details = result.details;
+	const compactPreview = options.renderContext?.compactDiffPreviewRows !== undefined;
 	const rawPaths = rawEditPaths(options.renderContext?.rawDetails);
 	const isError = result.isError ?? (details && "isError" in details ? details.isError : false);
 	const edits = Array.isArray(args?.edits) ? args.edits : undefined;
@@ -1530,6 +1563,7 @@ function renderSingleFileResult(
 			linkPath,
 			renameLinkPath: rename ? (rawPaths.path ?? detailPath) : undefined,
 			pending: false,
+			pathOnly: compactPreview,
 		});
 	}
 
@@ -1539,7 +1573,7 @@ function renderSingleFileResult(
 	let diffSectionRenderDiffFn: ((t: string, o?: { filePath?: string }) => string) | undefined;
 	const diffSectionCache = createRenderedStringCache();
 	const renderedDiffCache = createRenderedStringCache();
-	const statsSuffixCache = createRenderedStringCache();
+	const statsSuffixCache = compactPreview ? undefined : createRenderedStringCache();
 
 	return framedToolCard(
 		uiTheme,
@@ -1568,7 +1602,7 @@ function renderSingleFileResult(
 
 			// Change stats ride inline on the header bar next to the path.
 			const previewDiff = editDiffPreview && !("error" in editDiffPreview) ? editDiffPreview.diff : undefined;
-			const headerDiff = isError ? undefined : details?.diff || previewDiff;
+			const headerDiff = isError || compactPreview ? undefined : details?.diff || previewDiff;
 			const statsSuffix = headerDiff
 				? cachedRenderedString(statsSuffixCache, uiTheme, false, "", headerDiff, () =>
 						formatDiffStatsSuffix(headerDiff, uiTheme),
@@ -1584,6 +1618,7 @@ function renderSingleFileResult(
 				linkPath,
 				renameLinkPath: rename ? (rawPaths.path ?? detailPath) : undefined,
 				statsSuffix,
+				pathOnly: compactPreview,
 			});
 			const innerWidth = Math.max(1, width - 2);
 
@@ -1600,6 +1635,7 @@ function renderSingleFileResult(
 					renderDiffFn,
 					renderedDiffCache,
 					diffSectionCache,
+					renderContext?.compactDiffPreviewRows,
 				);
 			} else if (details) {
 				// Authoritative result with no textual diff: a delete, a move-only

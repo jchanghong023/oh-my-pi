@@ -389,8 +389,6 @@ export interface AgentSessionConfig {
 	evalKernelOwnerId?: string;
 	/** Async job manager whose ownership is released when this session closes. */
 	ownedAsyncJobManager?: AsyncJobManager;
-	/** Release a shared SDK ownership lease instead of disposing the manager outright. */
-	releaseOwnedAsyncJobManager?: (options?: { strict?: boolean }) => Promise<boolean | void>;
 	/** Async job manager visible to this session. */
 	asyncJobManager?: AsyncJobManagerApi;
 	/** Registry identity used for IRC routing. */

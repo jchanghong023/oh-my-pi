@@ -43,11 +43,11 @@ export interface RotatingFileOptions {
 /**
  * Synchronous append sink with local-day and size rotation plus bounded retention.
  *
- * Construction performs no filesystem I/O: the first file is created when the
- * first record is written out, so a process that never logs leaves nothing on
- * disk. Every file name embeds the owning process's suffix (its PID). Existing
- * files are never reopened, even after PID reuse; collisions advance the size
- * index. Only files exclusively created by this sink enter its retention set.
+ * Construction performs no filesystem I/O: the first file is created when
+ * prepared or when the first record is written out. Every file name embeds
+ * the owning process's suffix (its PID). Existing files are never reopened,
+ * even after PID reuse; collisions advance the size index. Only files
+ * exclusively created by this sink enter its retention set.
  *
  * With {@link RotatingFileOptions.batch}, records are buffered and written in
  * one `write` per batch. Buffered bytes already count toward the active file's
@@ -55,6 +55,7 @@ export interface RotatingFileOptions {
  * selection matches an unbatched sink record for record.
  */
 export class RotatingFileSink {
+	readonly configuredDirectory: string;
 	#directory: string;
 	readonly #filenamePrefix: string;
 	readonly #filenameSuffix: string;
@@ -84,6 +85,7 @@ export class RotatingFileSink {
 	#flushTimer: NodeJS.Timeout | undefined;
 
 	constructor(options: RotatingFileOptions) {
+		this.configuredDirectory = options.directory;
 		this.#directory = options.directory;
 		this.#filenamePrefix = options.filenamePrefix;
 		this.#filenameSuffix = options.filenameSuffix;

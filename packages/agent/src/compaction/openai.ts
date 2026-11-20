@@ -1090,90 +1090,112 @@ export async function requestRemoteCompaction(
 		onPayload?: SimpleStreamOptions["onPayload"];
 	},
 ): Promise<RemoteCompactionResponse> {
-	let endpointPath = endpoint;
-	try {
-		endpointPath = new URL(endpoint).pathname;
-	} catch {
-		// Keep the raw endpoint for relative/custom fetch implementations.
-	}
-	const isChatCompletions = /\/chat\/completions\/?$/.test(endpointPath);
-	const headers = new Headers({ "content-type": "application/json" });
-	if (isChatCompletions) {
-		if (opts?.apiKey) headers.set("Authorization", `Bearer ${opts.apiKey}`);
-		const model = opts?.model;
-		const configuredHeaders = model ? (await withResolvedHeaders(model, signal)).headers : undefined;
-		// `set` replaces case-insensitively, so a configured `authorization` overrides the default bearer.
-		if (configuredHeaders) {
-			for (const name in configuredHeaders) headers.set(name, configuredHeaders[name]!);
-		}
-	}
-
-	let body: unknown = isChatCompletions
-		? {
-				model: opts?.model ? resolveOpenAiCompactModel(opts.model) : undefined,
-				messages: [
-					{ role: "system", content: request.systemPrompt },
-					{ role: "user", content: request.prompt },
-				],
-				stream: false,
-				max_tokens: request.maxTokens,
-			}
-		: { systemPrompt: request.systemPrompt, prompt: request.prompt, maxTokens: request.maxTokens };
-	const replacement = await opts?.onPayload?.(body, opts.model, signal);
-	if (replacement !== undefined) body = replacement;
-
-	const response = await (opts?.fetch ?? fetch)(endpoint, {
-		method: "POST",
-		headers,
-		body: stringifyJson(body),
-		signal: ptree.combineSignals(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
-	});
-
-	if (!response.ok) {
-		const errorText = await response.text().catch(() => "");
-		logger.warn("Remote compaction failed", {
+	return logger.withLogContext({ call_id: `compact-remote-${crypto.randomUUID()}` }, async () => {
+		const started = performance.now();
+		const fields = {
+			component: "compaction",
+			event: "compaction_remote_summary_request",
+			stage: "request",
+			method: "POST",
 			...logger.diagnosticUrl(endpoint),
-			status: response.status,
-			bodyLength: errorText.length,
-		});
-		throw new ProviderHttpError(
-			`Remote compaction failed (${response.status} ${response.statusText})`,
-			response.status,
-			{
-				headers: response.headers,
-			},
-		);
-	}
-
-	if (isChatCompletions) {
-		type ChatCompletionsResponse = {
-			choices?: Array<{
-				message?: {
-					content?: string | Array<{ type?: string; text?: string }> | null;
-				};
-			}>;
+			effective_effort: "not_applicable",
 		};
-		const data = (await response.json()) as ChatCompletionsResponse | undefined;
-		const choice = data?.choices?.[0]?.message?.content;
-		let summary: string | undefined;
-		if (typeof choice === "string") {
-			summary = choice;
-		} else if (Array.isArray(choice)) {
-			summary = choice
-				.filter((part): part is { type?: string; text: string } => typeof part?.text === "string")
-				.map(part => part.text)
-				.join("");
-		}
-		if (typeof summary !== "string" || summary.length === 0) {
-			throw new Error("Remote compaction response missing choices[0].message.content");
-		}
-		return { summary };
-	}
+		logger.info("Remote compaction summary request started", { ...fields, result: "started" });
+		let failureBodyLength: number | undefined;
+		try {
+			let endpointPath = endpoint;
+			try {
+				endpointPath = new URL(endpoint).pathname;
+			} catch {
+				// Keep the raw endpoint for relative/custom fetch implementations.
+			}
+			const isChatCompletions = /\/chat\/completions\/?$/.test(endpointPath);
+			const headers = new Headers({ "content-type": "application/json" });
+			if (isChatCompletions) {
+				if (opts?.apiKey) headers.set("Authorization", `Bearer ${opts.apiKey}`);
+				const model = opts?.model;
+				const configuredHeaders = model ? (await withResolvedHeaders(model, signal)).headers : undefined;
+				// `set` replaces case-insensitively, so a configured `authorization` overrides the default bearer.
+				if (configuredHeaders) {
+					for (const name in configuredHeaders) headers.set(name, configuredHeaders[name]!);
+				}
+			}
 
-	const data = (await response.json()) as RemoteCompactionResponse | undefined;
-	if (!data || typeof data.summary !== "string") {
-		throw new Error("Remote compaction response missing summary");
-	}
+			let body: unknown = isChatCompletions
+				? {
+						model: opts?.model ? resolveOpenAiCompactModel(opts.model) : undefined,
+						messages: [
+							{ role: "system", content: request.systemPrompt },
+							{ role: "user", content: request.prompt },
+						],
+						stream: false,
+						max_tokens: request.maxTokens,
+					}
+				: { systemPrompt: request.systemPrompt, prompt: request.prompt, maxTokens: request.maxTokens };
+			const replacement = await opts?.onPayload?.(body, opts.model, signal);
+			if (replacement !== undefined) body = replacement;
 
-	return data;
+			const response = await (opts?.fetch ?? fetch)(endpoint, {
+				method: "POST",
+				headers,
+				body: stringifyJson(body),
+				signal: ptree.combineSignals(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
+			});
+			if (!response.ok) {
+				failureBodyLength = (await response.text().catch(() => "")).length;
+				throw new ProviderHttpError(
+					`Remote compaction failed (${response.status} ${response.statusText})`,
+					response.status,
+					{ headers: response.headers },
+				);
+			}
+
+			let result: RemoteCompactionResponse;
+			if (isChatCompletions) {
+				type ChatCompletionsResponse = {
+					choices?: Array<{
+						message?: {
+							content?: string | Array<{ type?: string; text?: string }> | null;
+						};
+					}>;
+				};
+				const data = (await response.json()) as ChatCompletionsResponse | undefined;
+				const choice = data?.choices?.[0]?.message?.content;
+				let summary: string | undefined;
+				if (typeof choice === "string") {
+					summary = choice;
+				} else if (Array.isArray(choice)) {
+					summary = choice
+						.filter((part): part is { type?: string; text: string } => typeof part?.text === "string")
+						.map(part => part.text)
+						.join("");
+				}
+				if (typeof summary !== "string" || summary.length === 0) {
+					throw new Error("Remote compaction response missing choices[0].message.content");
+				}
+				result = { summary };
+			} else {
+				const data = (await response.json()) as RemoteCompactionResponse | undefined;
+				if (!data || typeof data.summary !== "string") {
+					throw new Error("Remote compaction response missing summary");
+				}
+				result = data;
+			}
+			logger.info("Remote compaction summary request completed", {
+				...fields,
+				result: "success",
+				elapsed_ms: performance.now() - started,
+			});
+			return result;
+		} catch (error) {
+			(signal?.aborted ? logger.info : logger.warn)("Remote compaction summary request ended", {
+				...fields,
+				result: signal?.aborted ? "cancelled" : "failed",
+				elapsed_ms: performance.now() - started,
+				...logger.diagnosticError(error),
+				...(failureBodyLength !== undefined ? { bodyLength: failureBodyLength } : {}),
+			});
+			throw error;
+		}
+	});
 }

@@ -226,8 +226,8 @@ const fn is_dot_or_dot_dot_utf16(name: &[u8]) -> bool {
 	matches!(name, [b'.', 0] | [b'.', 0, b'.', 0])
 }
 
-/// Reads every entry of `dir` into `out`. Full detail refreshes the metadata
-/// from each entry rather than relying on the directory index's cached values.
+/// Reads every entry of `dir` into `out`. Full detail refreshes each entry's
+/// metadata, keeping the directory index's values if access is denied.
 pub(crate) fn list(
 	s: &mut Scratch,
 	dir: &Handle,
@@ -333,11 +333,7 @@ pub(crate) fn list(
 					record.mtime = Some(info.stamp.mtime);
 					true
 				},
-				Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-					// Keep the enumerated metadata so descent can report an open
-					// error.
-					record.file_type == FileType::Dir
-				},
+				Err(err) if err.kind() == io::ErrorKind::PermissionDenied => true,
 				Err(err) if err.kind() == io::ErrorKind::NotFound => false,
 				Err(err) => {
 					error = Some(err);

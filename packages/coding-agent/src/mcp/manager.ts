@@ -55,7 +55,6 @@ import { type MCPReconnect, type MCPReconnectOptions, MCPTool, type MCPToolCallO
 import type { MCPDroppedServer, MCPTransformContext } from "./transforms";
 import type {
 	MCPAuthChallenge,
-	MCPAuthInvocation,
 	MCPGetPromptResult,
 	MCPPrompt,
 	MCPRequestOptions,
@@ -225,11 +224,7 @@ export interface MCPDiscoverOptions {
 }
 
 /** Handles an MCP `WWW-Authenticate` challenge and returns refreshed config. */
-export type MCPAuthHandler = (
-	serverName: string,
-	challenge: MCPAuthChallenge,
-	invocation?: MCPAuthInvocation,
-) => Promise<MCPServerConfig | undefined>;
+export type MCPAuthHandler = (serverName: string, challenge: MCPAuthChallenge) => Promise<MCPServerConfig | undefined>;
 
 /** Whether a handshake rejection is the teardown abort of `signal`, not a failure that preceded it. */
 function isAbortedHandshake(signal: AbortSignal, error: unknown): boolean {
@@ -1156,20 +1151,17 @@ export class MCPManager implements MCPManagerApi {
 	 * it provoked lands, then its session sees every tool the server now serves.
 	 */
 	#observeToolCall(name: string): MCPToolCallObserver {
-		return (toolCallId, signal) => {
+		return toolCallId => {
 			const scope = this.#toolCallScopes.get(toolCallId) ?? OWNER_TOOL_SCOPE;
 			this.#inFlightToolCalls.set(name, (this.#inFlightToolCalls.get(name) ?? 0) + 1);
-			return Object.assign(
-				async () => {
-					const remaining = (this.#inFlightToolCalls.get(name) ?? 1) - 1;
-					if (remaining > 0) this.#inFlightToolCalls.set(name, remaining);
-					else this.#inFlightToolCalls.delete(name);
-					// A `list_changed` sent during the call already started this refresh.
-					await this.#toolRefreshes.get(name)?.promise.catch(() => {});
-					this.#grantServerTools(name, scope);
-				},
-				{ invocation: { scope, toolCallId, signal } },
-			);
+			return async () => {
+				const remaining = (this.#inFlightToolCalls.get(name) ?? 1) - 1;
+				if (remaining > 0) this.#inFlightToolCalls.set(name, remaining);
+				else this.#inFlightToolCalls.delete(name);
+				// A `list_changed` sent during the call already started this refresh.
+				await this.#toolRefreshes.get(name)?.promise.catch(() => {});
+				this.#grantServerTools(name, scope);
+			};
 		};
 	}
 
@@ -1679,7 +1671,7 @@ export class MCPManager implements MCPManagerApi {
 				return null;
 			}
 			try {
-				const refreshedConfig = await this.#authHandler(name, options.authChallenge, options.invocation);
+				const refreshedConfig = await this.#authHandler(name, options.authChallenge);
 				if (!refreshedConfig) return null;
 				config = refreshedConfig;
 				this.#serverConfigs.set(name, config);

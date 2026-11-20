@@ -1146,6 +1146,8 @@ export class ModelBrowser implements Component {
 	/** First visible list row; panned by the wheel, snapped to the selection on keyboard navigation. */
 	#windowStart = 0;
 	#windowCount = 0;
+	#paintedWindowStart = 0;
+	#paintedItems: readonly ModelBrowserItem[] | undefined;
 	/** Whether the host pane owns arrow keys; drives cursor strength and the selected-row band. */
 	#focused = true;
 	/** `provider/id` of the session's active model; marked in rows and detail. */
@@ -1574,6 +1576,9 @@ export class ModelBrowser implements Component {
 			return;
 		}
 		if (!event.leftClick) return;
+		// The wheel, keyboard, or a catalogue refresh can change the list before
+		// the scheduled repaint. Never activate a row from that unseen state.
+		if (this.#paintedWindowStart !== this.#windowStart || this.#paintedItems !== this.#menu.visibleItems) return;
 		const index = this.#hoverIndexAt(line);
 		const item = index !== null ? this.#menu.visibleItems[index] : undefined;
 		if (index === null || !item) return;
@@ -1803,7 +1808,8 @@ export class ModelBrowser implements Component {
 		lines.push(` ${searchIcon} ${this.#searchInput.render(inputWidth)[0] ?? ""}`);
 		lines.push("");
 
-		const total = this.#menu.visibleItems.length;
+		const visible = this.#menu.visibleItems;
+		const total = visible.length;
 		// The window is persistent state: wheel scrolling panned it, keyboard
 		// navigation snapped it to the selection. Re-clamp here because items
 		// or maxVisible may have changed since.
@@ -1811,6 +1817,8 @@ export class ModelBrowser implements Component {
 		const startIndex = this.#windowStart;
 		const endIndex = Math.min(startIndex + this.#maxVisible, total);
 		this.#windowCount = Math.max(0, endIndex - startIndex);
+		this.#paintedWindowStart = startIndex;
+		this.#paintedItems = visible;
 
 		if (total === 0) {
 			const message = this.#emptyText?.() ?? (this.query.trim() ? "  没有匹配的模型" : "  当前范围内没有可用模型");
@@ -1824,7 +1832,6 @@ export class ModelBrowser implements Component {
 			const perfMode: PerfMode = width >= PERF_FULL_MIN_WIDTH ? "full" : width >= PERF_TPS_MIN_WIDTH ? "tps" : "off";
 			let intelligenceWidth = 0;
 			let perfWidth = 0;
-			const visible = this.#menu.visibleItems;
 			const windowMetrics: MetricCells[] = [];
 			const windowPerf: string[] = [];
 			for (let i = startIndex; i < endIndex; i++) {

@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MnemopiOptions } from "@oh-my-pi/pi-mnemopi";
+import { isOpenRouterEmbeddingUrl } from "@oh-my-pi/pi-mnemopi/config";
 import { getMemoriesDir, logger, withLoopPhase } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { expandTilde } from "../tools/path-utils";
@@ -71,25 +72,34 @@ export interface MnemopiBackendConfig {
 }
 
 /** Resolve embedding settings without probing or opening the memory database. */
-export function resolveMnemopiEmbeddingOptions(
-	settings: Settings,
-): Pick<MnemopiProviderOptions, "noEmbeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey"> {
+export function resolveMnemopiEmbeddingOptions(settings: Settings): Pick<
+	MnemopiProviderOptions,
+	"noEmbeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey"
+> & {
+	requestMaxAttempts?: number;
+} {
 	const embeddingOverride = cfgMnemopiEmbeddingModel.get(settings);
 	const embeddingVariant = cfgMnemopiEmbeddingVariant.get(settings);
 	// Avoid indexing with an untrusted config value; unknown variants use the English default.
 	const variantModel =
 		embeddingVariant === "multilingual" ? "intfloat/multilingual-e5-large" : "BAAI/bge-base-en-v1.5";
+	const embeddingApiUrl =
+		cfgMnemopiEmbeddingApiUrl.get(settings) ??
+		(Bun.env.MNEMOPI_EMBEDDING_API_URL || Bun.env.OPENROUTER_BASE_URL || undefined);
+	const company = getCompanyEmbeddingDefaults(settings);
 	return {
 		noEmbeddings: cfgMnemopiNoEmbeddings.get(settings),
 		embeddingModel: embeddingOverride?.trim() || variantModel,
 		// Explicit settings (including empty strings) remain authoritative.
-		embeddingApiUrl:
-			cfgMnemopiEmbeddingApiUrl.get(settings) ??
-			(Bun.env.MNEMOPI_EMBEDDING_API_URL || Bun.env.OPENROUTER_BASE_URL || undefined),
+		embeddingApiUrl,
 		embeddingApiKey:
 			cfgMnemopiEmbeddingApiKey.get(settings) ??
-			(Bun.env.MNEMOPI_EMBEDDING_API_KEY || Bun.env.OPENROUTER_API_KEY || Bun.env.OPENAI_API_KEY || undefined),
-		...getCompanyEmbeddingDefaults(settings),
+			// Let the managed OpenRouter resolver run before the environment fallback.
+			(embeddingApiUrl && !isOpenRouterEmbeddingUrl(embeddingApiUrl)
+				? Bun.env.MNEMOPI_EMBEDDING_API_KEY || Bun.env.OPENROUTER_API_KEY || Bun.env.OPENAI_API_KEY || undefined
+				: undefined),
+		...company,
+		requestMaxAttempts: company ? 4 : undefined,
 	};
 }
 
@@ -105,6 +115,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const recallBanks =
 		scoping === "global" ? scope.recallBanks : extendRecallWithLegacyBanks(scope.recallBanks, dbPath, cwd);
 	const llmMode = cfgMnemopiLlmMode.get(settings);
+	const { requestMaxAttempts, ...embeddingOptions } = resolveMnemopiEmbeddingOptions(settings);
 	return {
 		dbPath,
 		baseBank: scope.baseBank,
@@ -125,12 +136,13 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 		injectionTokenLimit: Math.max(256, Math.floor(cfgMnemopiInjectionTokenLimit.get(settings))),
 		debug: cfgMnemopiDebug.get(settings),
 		providerOptions: {
-			...resolveMnemopiEmbeddingOptions(settings),
+			...embeddingOptions,
 			debug: cfgMnemopiDebug.get(settings),
 			embeddings: {
 				// A blank prefix is unset; a set one keeps its whitespace (`query: `).
 				queryPrefix: cfgMnemopiEmbeddingQueryPrefix.get(settings) || undefined,
 				inputType: cfgMnemopiEmbeddingInputType.get(settings),
+				requestMaxAttempts,
 			},
 			llm:
 				llmMode === "remote"

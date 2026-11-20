@@ -5421,6 +5421,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			}
 			// Only a fresh child gets the launch snapshot. Existing transcripts,
 			// including old logs without workspace metadata, retain their own state.
+			let workspaceModeSnapshot: WorkspaceModeState | undefined;
 			if (options.workspaceMode && sessionManager.getEntries().length === 0) {
 				const inheritedScope = options.workspaceMode.inheritedScope;
 				const allowedRoots = [...(inheritedScope?.allowedRoots ?? [])];
@@ -5435,10 +5436,10 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 						allowedRoots.push(root);
 					}
 				}
-				sessionManager.appendCustomEntry(WORKSPACE_MODE_STATE_TYPE, {
+				workspaceModeSnapshot = {
 					enabled: options.workspaceMode.enabled,
 					inheritedScope: { projectRoot: inheritedScope?.projectRoot ?? null, allowedRoots },
-				} satisfies WorkspaceModeState);
+				};
 			}
 			sessionOpenedAt = performance.now();
 			await refreshSubagentIrcRoot(sessionSpec.prompt, sessionManager, sessionFile);
@@ -5501,6 +5502,10 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				checkAbort();
 				sessionPromise = createAgentSession(configuredOptions);
 				({ session, modelFallbackMessage } = await awaitAbortable(sessionPromise));
+				// Keep the transcript empty until the SDK records the child's initial configuration.
+				if (workspaceModeSnapshot) {
+					sessionManager.appendCustomEntry(WORKSPACE_MODE_STATE_TYPE, workspaceModeSnapshot);
+				}
 				disposeSessionObserver = observeSession?.(session) ?? undefined;
 				// Stash the sibling family candidate once the child session exists,
 				// independent of its initial model, so a later model change (retry
