@@ -75,7 +75,7 @@ describe("/compact dispatch (ACP)", () => {
 		expect((h.output.mock.calls[0]?.[0] as string) ?? "").toContain("snapcompact");
 	});
 
-	it("leaves the RPC command queue free while compaction runs", async () => {
+	it("returns before compaction finishes when the host schedules it in the background", async () => {
 		const compactStarted = Promise.withResolvers<void>();
 		const compactFinished = Promise.withResolvers<void>();
 		const h = acpRuntime();
@@ -88,8 +88,6 @@ describe("/compact dispatch (ACP)", () => {
 			backgroundTasks.push(task());
 		};
 
-		// The dispatcher must resolve before compaction finishes so the RPC
-		// serialized queue can dequeue a follow-up abort.
 		const result = await executeAcpBuiltinSlashCommand("/compact", h.runtime);
 		await compactStarted.promise;
 		expect(result).toEqual({ consumed: true });

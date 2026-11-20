@@ -50,7 +50,7 @@ import {
 	type TernBrowserHandle,
 	type WebKitBrowserHandle,
 } from "./registry";
-import { isLoopbackRelayUrl } from "./relay/daemon";
+import { isLoopbackRelayUrl } from "./relay/kind";
 import { FOREIGN_FRAME_REFUSAL, type HiddenFrame } from "./relay/protocol";
 import {
 	type AttachPage,
@@ -1893,8 +1893,8 @@ async function releaseKnownTab(tab: TabSession, opts: ReleaseTabOptions): Promis
 		if (!opts.keepPage && joined === "kept" && tab.backend === "worker") {
 			// The first release already decided to keep the page and may have disconnected.
 			// Reconnect to its browser, not a same-name tab which could now belong to another caller;
-			// a close never starts or replaces the relay that kept the page.
-			const browser = await acquireBrowser(tab.browser.kind, { cwd: getProjectDir(), startRelay: false });
+			// a close never restarts the relay that kept the page.
+			const browser = await acquireBrowser(tab.browser.kind, { cwd: getProjectDir(), restartRelay: false });
 			holdBrowser(browser);
 			try {
 				const timeoutMs = opts.timeoutMs ?? DEFAULT_TAB_CLOSE_TIMEOUT_MS;

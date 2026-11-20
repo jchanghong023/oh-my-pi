@@ -354,7 +354,7 @@ OMP MUST 保持既有 `search` 参数及默认行为并允许 `knowledge_search`
 
 #### Scenario: 结果计数和耗尽表述
 
-- **WHEN** 融合结果被交付给工具、SDK、TUI 或 RPC
+- **WHEN** 融合结果被交付给工具、SDK 或 TUI
 - **THEN** 保持现有结果字段，`total` 表示范围内全部全文命中与本次有效语义候选去重后的章节数，`hasMore` 与 `cursor` 仅描述该固定集合；正文说明其范围，不宣称已穷尽所有可能语义相关的章节。
 - **AND** 全文回退与正常无匹配按既有结果结构表达；无索引仍按 HEAD 的错误与展示合同处理，不改成正常空结果，不新增客户端算法或空状态字段。
 
@@ -380,8 +380,8 @@ OMP MUST 保持既有 `search` 参数及默认行为并允许 `knowledge_search`
 
 #### Scenario: 同一既有接口覆盖所有消费者
 
-- **WHEN** Agent 顶层工具或 `xd://knowledge_search`、KnowledgeService、TUI、RPC 对同一 profile 与相同语料发起等效查询
-- **THEN** 使用相同的内部选择、模型身份、RRF、可选精排、缺库与回退事实；前端不自行启动模型或实现搜索；`knowledge_search` 工具按本变更合同提供可选路径参数及结果文本中的实际状态，TUI、RPC 不需新增方法、参数、模式、开关、结果字段或必填配置。
+- **WHEN** Agent 顶层工具或 `xd://knowledge_search`、KnowledgeService、TUI 对同一 profile 与相同语料发起等效查询
+- **THEN** 使用相同的内部选择、模型身份、RRF、可选精排、缺库与回退事实；前端不自行启动模型或实现搜索；`knowledge_search` 工具按本变更合同提供可选路径参数及结果文本中的实际状态，TUI 不需新增方法、参数、模式、开关、结果字段或必填配置。
 
 #### Scenario: 在现有能力上集中复用
 

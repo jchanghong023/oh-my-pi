@@ -91,10 +91,7 @@ describe("/retry dispatch (ACP)", () => {
 		expect(result).toEqual({ consumed: true, agentInvoked: true });
 	});
 
-	it("returns immediately for hosts that stream the continuation themselves (RPC/TUI)", async () => {
-		// RPC's `prompt` awaits this dispatcher before responding and serializes
-		// later frames, so blocking here would break `RpcClient.prompt()`'s
-		// documented immediate return and strand a follow-up `abort`.
+	it("returns immediately when the host streams the continuation itself", async () => {
 		const h = acpRuntime({ retryResult: true, withKeepOpen: false });
 		const result = await executeAcpBuiltinSlashCommand("/retry", h.runtime);
 		expect(h.retry).toHaveBeenCalledTimes(1);

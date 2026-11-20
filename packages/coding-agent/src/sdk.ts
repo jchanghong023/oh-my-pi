@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { type CallRecord, ChangeJournal, callDetails } from "./commit/selective/journal";
+import { ChangeJournal } from "./commit/selective/journal";
 import { createCommitPrelude } from "./commit/selective/prelude-definition";
 import { cfgDisasmBackend } from "./disasm/active";
 import { createDsmPrelude, releaseDsmReferences } from "./disasm/prelude-definition";
@@ -297,6 +297,7 @@ import {
 	projectMountedMCPXdevGuidance,
 	type SettingsGatedToolDelta,
 	type SystemPromptRebuilder,
+	standbyTools,
 } from "./session/session-tools";
 import { anthropicSlowModeHasNoSiblingHeadroom } from "./session/anthropic-slow-mode";
 import {
@@ -3101,7 +3102,6 @@ async function createAgentSessionScoped(
 					path: change.path,
 					before: change.before,
 					after: change.after,
-					beforeMtimeMs: change.beforeMtimeMs,
 				});
 			},
 			getTodoPhases: () => session.getTodoPhases(),
@@ -3151,6 +3151,10 @@ async function createAgentSessionScoped(
 			authStorage,
 			modelRegistry,
 			getTelemetry: () => agent?.telemetry,
+			// Late-bound: session construction follows tool registration.
+			get rawSseDebugBuffer() {
+				return session?.rawSseDebugBuffer;
+			},
 			// Each session uses its root's manager; deliveries are routed to the
 			// session's owner sink and cannot fall back to another root.
 			asyncJobManager: scopedAsyncJobManager,
@@ -5706,6 +5710,7 @@ async function createAgentSessionScoped(
 					: undefined
 				: undefined,
 		});
+		agent.setStandbyTools(standbyTools(toolRegistry, initialToolNames));
 		// Stamp the issued pool before AgentSession accounts for the finalized message.
 		agent.subscribe(event => {
 			if (event.type === "message_end" && event.message.role === "assistant" && mainRequestProvider !== undefined) {
@@ -5714,25 +5719,6 @@ async function createAgentSessionScoped(
 				] = mainRequestProvider;
 			} else if (event.type === "turn_end" || event.type === "agent_end") {
 				mainRequestProvider = undefined;
-			}
-		});
-		// Shell-like calls bound the windows in which scripts, formatters, and codegen changed
-		// files on this agent's behalf; selective commits match file ctimes against them, and the
-		// paths their scripts name against deleted files.
-		const shellCalls = new Map<string, Omit<CallRecord, "type" | "agent" | "parent" | "end">>();
-		agent.subscribe(event => {
-			if (event.type === "tool_execution_start") {
-				if (event.toolName !== "bash" && event.toolName !== "eval") return;
-				shellCalls.set(event.toolCallId, {
-					tool: event.toolName,
-					start: Date.now(),
-					...callDetails(event.args),
-				});
-			} else if (event.type === "tool_execution_end") {
-				const call = shellCalls.get(event.toolCallId);
-				if (!call) return;
-				shellCalls.delete(event.toolCallId);
-				changeJournal()?.recordCall({ ...journalAgent, ...call, end: Date.now() });
 			}
 		});
 		// Catalog rows carry the registry settings' extended-window opt-ins; this

@@ -13,9 +13,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { executeRpcBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import type { RpcSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 import * as sketch from "@oh-my-pi/pi-coding-agent/sketch/server";
 import { decodePng } from "@oh-my-pi/pi-coding-agent/tools/browser/screenshot";
 import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
@@ -180,7 +178,7 @@ describe("native /sketch", () => {
 		expect(s.close).toHaveBeenCalled();
 	});
 
-	it("refuses RPC invocation and TUI arguments without starting a sketch or changing the draft", async () => {
+	it("refuses TUI arguments without starting a sketch or changing the draft", async () => {
 		const h = createHarness();
 		const s = service();
 		const existing = oldImage();
@@ -188,9 +186,6 @@ describe("native /sketch", () => {
 		h.editor.pendingImageLinks.push("file:///existing.png");
 		h.editor.setCollapsedText("keep [Image #1] and this text");
 		const before = h.editor.getExpandedText();
-		await expect(executeRpcBuiltinSlashCommand("/sketch", {} as RpcSlashCommandRuntime)).rejects.toThrow(
-			"/sketch is only available in the interactive TUI.",
-		);
 		expect(await executeBuiltinSlashCommand("/sketch extra", { ctx: h.ctx })).toBe(false);
 		expect(s.start).not.toHaveBeenCalled();
 		expect(open.openPath).not.toHaveBeenCalled();

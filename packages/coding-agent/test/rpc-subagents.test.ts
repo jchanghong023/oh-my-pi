@@ -296,10 +296,10 @@ describe("RPC subagent registry", () => {
 		const frames: RpcSubagentFrame[] = [];
 		const eventBus = new EventBus();
 		const registry = new RpcSubagentRegistry(eventBus, frame => frames.push(frame));
-		const eventPayload: SubagentEventPayload = {
+		const eventPayload = {
 			id: "SubagentA",
 			event: { type: "agent_start" },
-		};
+		} satisfies SubagentEventPayload;
 
 		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
 		expect(frames).toHaveLength(0);
@@ -364,9 +364,7 @@ describe("readRpcSubagentTranscript", () => {
 });
 
 describe("RpcClient subagent frames", () => {
-	// Bun on Windows loses fast back-to-back child stdout writes: frames the
-	// mock emits right after its ready/negotiate responses never arrive.
-	test.skipIf(process.platform === "win32")("dispatches subagent frames and session-specific events", async () => {
+	test("dispatches subagent frames and session-specific events", async () => {
 		const scriptPath = path.join(os.tmpdir(), `omp-rpc-subagent-client-${Date.now()}.js`);
 		tempPaths.push(scriptPath);
 		await Bun.write(

@@ -9,8 +9,8 @@ import { Settings } from "../../src/config/settings";
 import { createAgentSession, type CreateAgentSessionResult } from "../../src/sdk";
 import { SessionManager } from "../../src/session/session-manager";
 import * as sessionWorktree from "../../src/session/session-worktree";
-import { executeRpcBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
-import type { RpcSlashCommandRuntime } from "../../src/slash-commands/types";
+import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
+import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -56,21 +56,18 @@ async function fixture() {
 			restrictToolNames: true,
 		});
 		created.push(result);
-		const output: string[] = [];
-		const runtime = {
+		const runtime: SlashCommandRuntime = {
 			session: result.session,
 			sessionManager: manager,
 			settings,
 			get cwd() {
 				return manager.getCwd();
 			},
-			output: (text: string) => {
-				output.push(text);
-			},
+			output: () => {},
 			refreshCommands: async () => {},
 			reloadPlugins: async () => {},
-		} as unknown as RpcSlashCommandRuntime;
-		return { ...result, runtime, manager, settings, output };
+		};
+		return { ...result, runtime, manager, settings };
 	}
 	return { source, make };
 }
@@ -106,7 +103,7 @@ describe("personal command session isolation", () => {
 		const nativeProcessDirectory = process.cwd();
 		const worktree = vi.spyOn(sessionWorktree, "createSessionWorktree");
 		const move = vi.spyOn(host.session, "moveSession");
-		expect(await executeRpcBuiltinSlashCommand("/wt main", host.runtime)).toEqual({ consumed: true });
+		expect(await executeAcpBuiltinSlashCommand("/wt main", host.runtime)).toEqual({ consumed: true });
 		expect(worktree).toHaveBeenCalledTimes(1);
 		expect(worktree).toHaveBeenCalledWith(f.source, host.settings, "main");
 		await expect(worktree.mock.results[0]!.value).resolves.toMatchObject({
@@ -144,7 +141,7 @@ describe("personal command session isolation", () => {
 		host.session.agent.replaceMessages([message]);
 		const identity = host.manager.getSessionId();
 		const model = host.session.model;
-		expect(await executeRpcBuiltinSlashCommand("/clear", host.runtime)).toEqual({ consumed: true });
+		expect(await executeAcpBuiltinSlashCommand("/clear", host.runtime)).toEqual({ consumed: true });
 		expect(host.session.agent.state.messages).toEqual([]);
 		expect(host.manager.getSessionId()).toBe(identity);
 		expect(host.manager.getSessionName()).toBe("keep-session-title");

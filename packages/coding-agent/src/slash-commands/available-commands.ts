@@ -29,16 +29,10 @@ export interface AvailableCommandsSession {
 	sessionManager: { getCwd(): string };
 }
 
-export interface AvailableCommandsOptions {
-	/** Include RPC host adapters without changing the ACP command surface. */
-	includeRpcBuiltins?: boolean;
-}
-
 export async function buildAvailableSlashCommands(
 	session: AvailableCommandsSession,
 	loadFileCommands: (cwd: string) => Promise<FileSlashCommand[]> = cwd =>
 		loadSlashCommands({ cwd, extensionRoots: session.effectiveExtensionRoots }),
-	options: AvailableCommandsOptions = {},
 ): Promise<InternalAvailableSlashCommand[]> {
 	const commands: InternalAvailableSlashCommand[] = [];
 	const seenNames = new Set<string>();
@@ -59,16 +53,7 @@ export async function buildAvailableSlashCommands(
 	};
 
 	for (const command of BUILTIN_SLASH_COMMANDS_INTERNAL) {
-		const executable = command.handle ?? (options.includeRpcBuiltins ? command.handleRpc : undefined);
-		if (!executable) {
-			// RPC resolves every registry name before trying custom or file
-			// commands, so skipped names and aliases stay reserved.
-			if (options.includeRpcBuiltins) {
-				builtinNames.add(command.name);
-				for (const alias of command.aliases ?? []) builtinNames.add(alias);
-			}
-			continue;
-		}
+		if (!command.handle) continue;
 		builtinNames.add(command.name);
 		for (const alias of command.aliases ?? []) builtinNames.add(alias);
 		const hint = command.acpInputHint ?? command.inlineHint;
@@ -82,9 +67,7 @@ export async function buildAvailableSlashCommands(
 		});
 		// ACP dispatch resolves builtin aliases before `session.prompt()` sees the
 		// input, so a custom/file command sharing an alias would be advertised but
-		// never run. Reserve aliases here too; builtins skipped above leave their
-		// aliases to whoever else claims them — except on the RPC surface, which
-		// rejects every registry name and keeps skipped names reserved above.
+		// never run. Aliases of TUI-only commands stay available.
 		for (const alias of command.aliases ?? []) seenNames.add(alias);
 	}
 

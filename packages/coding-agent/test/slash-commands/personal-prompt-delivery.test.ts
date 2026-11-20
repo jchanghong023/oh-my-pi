@@ -8,8 +8,8 @@ import { Settings } from "../../src/config/settings";
 import { AgentSession } from "../../src/session/agent-session";
 import { convertToLlm } from "../../src/session/messages";
 import { SessionManager } from "../../src/session/session-manager";
-import { executeAcpBuiltinSlashCommand, executeRpcBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
-import type { RpcSlashCommandRuntime } from "../../src/slash-commands/types";
+import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
+import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 const tools: AgentTool[] = ["task", "eval"].map(name => ({
@@ -39,17 +39,24 @@ describe("personal prompt commands reach the provider", () => {
 			convertToLlm,
 			getApiKey: () => "test-key",
 		});
+		const sessionManager = SessionManager.inMemory();
 		const session = new AgentSession({
 			agent,
 			settings,
-			sessionManager: SessionManager.inMemory(),
+			sessionManager,
 			modelRegistry: new ModelRegistry(auth),
 		});
 		try {
-			const runtime = { session, settings, output: () => {} } as unknown as RpcSlashCommandRuntime;
-			const expanded = await executeRpcBuiltinSlashCommand(command, runtime);
-			const acp = await executeAcpBuiltinSlashCommand(command, runtime);
-			expect(acp).toEqual(expanded);
+			const runtime: SlashCommandRuntime = {
+				session,
+				sessionManager,
+				settings,
+				cwd: sessionManager.getCwd(),
+				output: () => {},
+				refreshCommands: () => {},
+				reloadPlugins: async () => {},
+			};
+			const expanded = await executeAcpBuiltinSlashCommand(command, runtime);
 			if (!expanded || !("prompt" in expanded)) throw new Error("Expected a model prompt");
 			expect(expanded.prompt).toContain("task-marker-5bc");
 			await session.prompt(expanded.prompt);

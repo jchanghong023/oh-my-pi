@@ -12,12 +12,15 @@
  * in, text (or, with `schema`, a structured object) out.
  */
 
+import * as os from "node:os";
+import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import { type Api, type AssistantMessage, Effort, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buffer";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
 
 import type { ModelRegistry } from "../config/model-registry";
@@ -70,7 +73,8 @@ const TIER_TO_PATTERN: Record<CompletionTier, string> = {
 
 const completionArgsSchema = type({
 	prompt: "string>0",
-	"model?": "'smol'|'default'|'slow'",
+	// A tier name, or a user-tagged model agent (`m<N>`); see {@link isCompletionTier}.
+	"model?": "string",
 	"system?": "string",
 	"schema?": { "[string]": "unknown" },
 });
@@ -152,13 +156,14 @@ interface CompletionCandidate {
 	disableReasoning: boolean;
 }
 
+/** Apply explicit effort to slow and tagged requests; only slow has a tier default. */
 function reasoningForCandidate(
-	tier: CompletionTier,
+	tier: CompletionTier | undefined,
 	model: Model<Api>,
 	level?: ConfiguredThinkingLevel,
 	parent?: Pick<CompletionCandidate, "reasoning" | "disableReasoning">,
 ): Pick<CompletionCandidate, "reasoning" | "disableReasoning"> {
-	if (tier !== "slow") return { reasoning: undefined, disableReasoning: false };
+	if (tier === "smol" || tier === "default") return { reasoning: undefined, disableReasoning: false };
 	// "auto" is a session-level selector; completion() has no per-prompt
 	// classifier, so it follows the tier default just like an omitted suffix.
 	const normalizedLevel = level === AUTO_THINKING ? undefined : level;
@@ -341,22 +346,46 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
  * throwing downstream on models that cannot reason. Uses the highest
  * supported effort.
  */
-function reasoningForTier(tier: CompletionTier, model: Model<Api>): Effort | undefined {
+function reasoningForTier(tier: CompletionTier | undefined, model: Model<Api>): Effort | undefined {
 	if (tier !== "slow" || !model.reasoning) return undefined;
 	const efforts = getSupportedEfforts(model);
 	if (efforts.length === 0) return undefined;
 	return efforts[efforts.length - 1];
 }
 
+/** Whether `value` names one of the fixed completion tiers rather than a model agent. */
+function isCompletionTier(value: string): value is CompletionTier {
+	return value === "smol" || value === "default" || value === "slow";
+}
+
+/**
+ * Resolve a user-tagged model agent (`m<N>`) to its candidate. The agent's
+ * definition pins the exact `provider/id[:level]` the user tagged, so the
+ * candidate inherits that selector's effort. Returns nothing when the name is
+ * unknown or its pinned model is unavailable.
+ */
+function resolveTaggedAgentCandidates(agentName: string, session: ToolSession): CompletionCandidate[] {
+	const modelRegistry = session.modelRegistry;
+	if (!modelRegistry) return [];
+	const agent = session.getSessionAgents?.().find(candidate => candidate.name === agentName);
+	const selector = agent?.model?.[0];
+	if (!selector) return [];
+	const resolved = resolveModelOverride([selector], modelRegistry, session.settings, { exactOnly: true });
+	if (!resolved.model) return [];
+	const reasoning = reasoningForCandidate(undefined, resolved.model, resolved.thinkingLevel ?? agent?.thinkingLevel);
+	return [{ selector, model: resolved.model, ...reasoning }];
+}
+
 async function executeCompletion(
 	prompt: string,
-	finalTier: CompletionTier,
+	tier: CompletionTier | undefined,
 	system: string | undefined,
 	schema: Record<string, unknown> | undefined,
 	candidates: CompletionCandidate[],
 	session: ToolSession,
 	signal: AbortSignal,
 	attempts: CompletionAttempt[],
+	rawBuffer: RawSseDebugBuffer,
 ): Promise<EvalCompletionResult> {
 	const registry = session.modelRegistry;
 	if (!registry) throw new ToolError("completion() has no model registry.");
@@ -378,7 +407,7 @@ async function executeCompletion(
 	// consuming budget so a usable later fallback is still attempted.
 	const maxRetries = Math.max(0, cfgRetry.get(session.settings).maxRetries);
 	// One journal for the whole request: every fallback it sends is billed to the branch that asked.
-	const journal = journalCompletion(session.sessionManager, { purpose: "completion", role: finalTier });
+	const journal = journalCompletion(session.sessionManager, { purpose: "completion", role: tier });
 	let response: AssistantMessage | undefined;
 	let model: Model<Api> | undefined;
 	let lastError: unknown;
@@ -406,7 +435,7 @@ async function executeCompletion(
 			if (!apiKey) {
 				attempt.outcome = "no-credentials";
 				lastError = new ToolError(
-					`completion() has no API key for ${formatModelString(model)}. Configure credentials for this provider or choose another tier.`,
+					`completion() has no API key for ${formatModelString(model)}. Configure credentials for this provider or choose another model.`,
 				);
 				if (terminalFailure) throw lastError;
 				continue;
@@ -426,6 +455,13 @@ async function executeCompletion(
 					thinkingProbe: cfgProvidersThinkingProbe.get(session.settings),
 					disableReasoning: candidate.disableReasoning,
 					toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,
+					// Capture this request's raw provider frames (SSE / synthesized WS
+					// frames): the local buffer backs the on-error dump; the session
+					// buffer surfaces the same frames in `/debug`.
+					onSseEvent: (event, model) => {
+						rawBuffer.recordEvent(event, model);
+						session.rawSseDebugBuffer?.recordEvent(event, model);
+					},
 				},
 				{ telemetry, oneshotKind: "eval_completion" },
 			);
@@ -465,7 +501,11 @@ async function executeCompletion(
 	attempt.outcome = "succeeded";
 	return {
 		text: resultText,
-		details: { model: formatModelString(model), tier: finalTier, structured: Boolean(schema) },
+		details: {
+			model: formatModelString(model),
+			...(tier === undefined ? {} : { tier }),
+			structured: Boolean(schema),
+		},
 	};
 }
 
@@ -500,18 +540,65 @@ export async function runEvalCompletion(
 	if (parsed instanceof type.errors) {
 		throw new ToolError(`completion() received invalid arguments: ${parsed.summary}`);
 	}
-	const { prompt, model: modelTier, system, schema } = parsed;
-	const finalTier: CompletionTier = modelTier ?? "default";
-	const candidates = resolveTierCandidates(finalTier, options.session);
+	const { prompt, model: modelArg, system, schema } = parsed;
+	const requested = modelArg ?? "default";
+	const tier = isCompletionTier(requested) ? requested : undefined;
+	const candidates = tier
+		? resolveTierCandidates(tier, options.session)
+		: resolveTaggedAgentCandidates(requested, options.session);
 	if (candidates.length === 0) {
 		throw new ToolError(
-			`completion() could not resolve a model for the "${finalTier}" tier. Configure modelRoles.${finalTier === "default" ? "default" : finalTier} or ensure a provider is available.`,
+			tier
+				? `completion() could not resolve a model for the "${tier}" tier. Configure modelRoles.${tier === "default" ? "default" : tier} or ensure a provider is available.`
+				: `completion() could not resolve model "${requested}". Pass a tier ("smol"|"default"|"slow") or the name of a user-tagged model agent ("m<N>").`,
 		);
 	}
 
-	return retainCompletionHandle("cmp", options, (signal, attempts) =>
-		executeCompletion(prompt, finalTier, system, schema, candidates, options.session, signal, attempts),
-	);
+	return retainCompletionHandle("cmp", options, async (signal, attempts) => {
+		const rawBuffer = new RawSseDebugBuffer();
+		try {
+			return await executeCompletion(
+				prompt,
+				tier,
+				system,
+				schema,
+				candidates,
+				options.session,
+				signal,
+				attempts,
+				rawBuffer,
+			);
+		} catch (error) {
+			// A user cancel is not a diagnostic failure; skip the dump.
+			if (!signal.aborted) {
+				const file = await dumpCompletionStream(rawBuffer, options.session);
+				if (file && error instanceof Error) {
+					error.message = `${error.message}\nStreamed provider frames written to ${file}.`;
+				}
+			}
+			throw error;
+		}
+	});
+}
+
+/**
+ * Persist a failed `completion()`'s captured provider frames to a `.log` file,
+ * preferring the session artifacts directory so it is discoverable and cleaned
+ * up with the session. Returns the path, or `null` when nothing was captured
+ * (e.g. a transport without raw-frame support) or the write failed.
+ */
+async function dumpCompletionStream(buffer: RawSseDebugBuffer, session: ToolSession): Promise<string | null> {
+	const text = buffer.toRawText();
+	if (!text.trim()) return null;
+	const dir = session.sessionManager?.getArtifactsDir?.() ?? os.tmpdir();
+	const file = path.join(dir, `completion-${Snowflake.next()}.sse.log`);
+	try {
+		await Bun.write(file, text);
+		return file;
+	} catch (error) {
+		logger.debug("completion() stream dump failed", { file, error });
+		return null;
+	}
 }
 
 /**

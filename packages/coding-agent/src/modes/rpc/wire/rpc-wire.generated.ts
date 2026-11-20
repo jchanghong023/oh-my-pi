@@ -391,7 +391,7 @@ export type CacheWarmingMode = "off" | "streaming" | "idle";
 /** `set_event_filter` projection: `delta` replaces the accumulated snapshots with the block a start/end event touches. */
 export type MessageUpdates = "full" | "delta";
 
-export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "blocked";
+export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
 
 export type GoalOp = "get" | "create" | "resume" | "pause" | "drop";
 
@@ -409,7 +409,6 @@ export type SubagentStatus = "pending" | "running" | "completed" | "failed" | "a
 export interface TodoItem {
 	content: string;
 	status: TodoStatus;
-	blocker?: string;
 	details?: string;
 	notes?: string[];
 }
@@ -908,8 +907,6 @@ export interface ToolExecutionEndEvent {
 	toolName: string;
 	result?: unknown;
 	isError?: boolean;
-	/** The tool execution was cancelled. */
-	cancelled?: boolean;
 }
 
 export interface AutoCompactionStartEvent {
@@ -932,8 +929,6 @@ export interface AutoCompactionEndEvent {
 /** A manual compaction began. Handoff mode leaves live turns running and applies between turns or when idle. */
 export interface ManualCompactionStartEvent {
 	type: "manual_compaction_start";
-	/** Identifies this operation and its matching `manual_compaction_end`. */
-	operationId: string;
 	/** The `/compact <mode>` subcommand, when one was given. */
 	mode?: string;
 }
@@ -941,8 +936,6 @@ export interface ManualCompactionStartEvent {
 /** Outcome of the compaction announced by the matching `manual_compaction_start`. */
 export interface ManualCompactionEndEvent {
 	type: "manual_compaction_end";
-	/** The ID from the matching `manual_compaction_start`. */
-	operationId: string;
 	/** The compaction was cancelled (abort, or a `session_before_compact` hook). */
 	aborted: boolean;
 	/** Present when the compaction committed. */
@@ -1358,6 +1351,15 @@ export interface AskUiRequest {
 	timeout?: number;
 }
 
+/** The HTML `<form>` of one `ui.formDialog` call (the `ask` tool or an extension); no opt-in is required. */
+export interface FormUiRequest {
+	type: "extension_ui_request";
+	id: string;
+	method: "form";
+	html: string;
+	timeout?: number;
+}
+
 /** Close the dialog opened by request `targetId`; a later answer to it is ignored. */
 export interface CancelUiRequest {
 	type: "extension_ui_request";
@@ -1416,7 +1418,7 @@ export interface OpenUrlUiRequest {
 }
 
 /** Extension UI request, discriminated by `method`. */
-export type ExtensionUiRequest = SelectUiRequest | ConfirmUiRequest | InputUiRequest | EditorUiRequest | AskUiRequest | CancelUiRequest | NotifyUiRequest | SetStatusUiRequest | SetWidgetUiRequest | SetTitleUiRequest | SetEditorTextUiRequest | OpenUrlUiRequest;
+export type ExtensionUiRequest = SelectUiRequest | ConfirmUiRequest | InputUiRequest | EditorUiRequest | AskUiRequest | FormUiRequest | CancelUiRequest | NotifyUiRequest | SetStatusUiRequest | SetWidgetUiRequest | SetTitleUiRequest | SetEditorTextUiRequest | OpenUrlUiRequest;
 
 /** Answer to one `ui.askDialog` question: exact option labels, plus optional free text. */
 export interface AskAnswer {
@@ -1439,7 +1441,7 @@ export interface ConfirmUiResponse {
 	confirmed: boolean;
 }
 
-/** Dismisses a dialog; `timedOut` reports the host's own deadline (an `ask` dialog then takes its recommended answers). */
+/** Dismisses a dialog; `timedOut` reports the host's own deadline (an `ask` dialog then takes its recommended answers, a `form` its defaults). */
 export interface CancelUiResponse {
 	type: "extension_ui_response";
 	id: string;
@@ -1454,8 +1456,16 @@ export interface AnswersUiResponse {
 	answers: AskAnswer[];
 }
 
+/** Answers a `form` request with the submitted form data. */
+export interface DataUiResponse {
+	type: "extension_ui_response";
+	id: string;
+	/** Submitted values by control `name`: a string, a number, or a string array. */
+	data: Record<string, unknown>;
+}
+
 /** Host reply to an extension UI request; variants share `type` and differ by their payload key. */
-export type ExtensionUiResponse = ValueUiResponse | ConfirmUiResponse | CancelUiResponse | AnswersUiResponse;
+export type ExtensionUiResponse = ValueUiResponse | ConfirmUiResponse | CancelUiResponse | AnswersUiResponse | DataUiResponse;
 
 export interface HostToolCallRequest {
 	type: "host_tool_call";

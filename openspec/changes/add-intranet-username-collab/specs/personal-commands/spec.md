@@ -59,4 +59,4 @@ CentOS 7 原生 TUI MUST 仅在进程启用 `OMP_OFFLINE` 时支持本次用户�
 #### Scenario: 非 TUI 宿主不隐式执行
 
 - **WHEN** ACP 或 RPC 宿主收到新增的用户名协作命令调用
-- **THEN** 继续遵循现有命令可执行性和参数门禁，不隐式启动 TUI、房间或 Relay，不将仅 TUI 可用的流程冒充已成功执行
+- **THEN** ACP 沿用现有命令可执行性和参数门禁，RPC 沿用上游命令分发；两者均不隐式启动 TUI、房间或 Relay，不将仅 TUI 可用的流程冒充已成功执行

@@ -147,7 +147,7 @@ Environment variables are never written back to `config.yml`. Variables declared
 | `OMP_AUTH_BROKER_TOKEN`                             | `auth.broker.token`                               | Env value takes precedence over config.                                                           |
 | `PI_CODING_AGENT_DIR`                               | (relocates default-profile agent dir)             | Named profiles ignore this override.                                                              |
 | `OMP_PROFILE` / `PI_PROFILE`                        | (selects profile)                                 | `OMP_PROFILE` wins when present; `--profile` wins over env.                                       |
-| `PI_EDIT_VARIANT`                                   | `edit.mode`                                       | `apply_patch`, `hashline`, `patch`, `replace`, or `sloppy`; `auto` is unset.                      |
+| `PI_EDIT_VARIANT`                                   | `edit.mode`                                       | `apply_patch`, `hashline`, `patch`, `replace`, `sloppy`, `magic`, or `none`; `auto` is unset. |
 | `PI_EDIT_FUZZY`                                     | `edit.fuzzyMatch`                                 | Exact lowercase `1`/`true` enables; `0`/`false` disables; other text defers to config.            |
 | `PI_EDIT_FUZZY_THRESHOLD`                           | `edit.fuzzyThreshold`                             | Parsed floating-point threshold from 0–1; invalid/out-of-range values are unset.                  |
 | `PI_INTENT_TRACING`                                 | `tools.intentTracing`                             | Uses the boolean env parser.                                                                      |
@@ -708,6 +708,8 @@ Individual built-in tools and Eval preludes are toggled by their own keys, e.g. 
 
 `find.verifyModel` (an unset-by-default model selector, e.g. `openrouter/liquid/d1-ultra`) tries that model first for passage verification; filename and sketch ranking stay on the `judge` role. It resolves against the judge role's candidates, then falls back to the role chain without duplicates under the same fallback rules; a selector matching nothing logs a warning and leaves verification on the plain `judge` chain (see [find](./tools/find.md)). Empty or whitespace-only values are unset.
 
+To use your existing Chrome tabs, set `browser.relay: true` (default `false`) and install the extension and native host with `omp browser-relay install`. The extension's native host serves the relay while Chrome runs, at `http://127.0.0.1:9224` by default. Set `browser.relayUrl` to use a forwarded endpoint. `PI_BROWSER_RELAY=0` or `PI_BROWSER_RELAY=1` overrides `browser.relay`; a subagent must explicitly open with `app: "relay"`. See [Browser](./tools/browser.md) for how the relay and other browser backends are selected.
+
 ### Window-scoped computer use
 
 The disabled-by-default `computer` Eval prelude captures and controls real host windows through native OS APIs. Window handles isolate an application without focusing it or moving the real pointer; the `desktop` object preserves selected-display composite and global input behavior. It remains separate from the `browser` Eval prelude, which manages Chromium/CDP tabs and structured page automation.
@@ -807,7 +809,9 @@ read:
 
 | Key                       | Type    | Default    | Notes                                                                                                             |
 | ------------------------- | ------- | ---------- | ----------------------------------------------------------------------------------------------------------------- |
-| `edit.mode`               | enum    | `hashline` | `apply_patch`, `hashline`, `patch`, `replace`, `sloppy`. `PI_EDIT_VARIANT` pins the mode.                         |
+| `edit.mode`               | enum    | `hashline` | `apply_patch`, `hashline`, `patch`, `replace`, `sloppy`, `magic` (describe the changes; a model writes them), or `none` (remove `edit` and keep `bash` enabled). `PI_EDIT_VARIANT` pins the mode. |
+| `edit.magic.format`       | enum    | `xml`      | How `magic` payloads name each file: `xml` (`<edit file="path">` elements) or `markdown` (`# path` lines).       |
+| `edit.magic.model`        | string  | unset      | Model selector, or role alias such as `@slow`, for the model that writes `magic` changes; unset uses the `smol` role. |
 | `edit.modelVariants`      | record  | `{}`       | Case-insensitive model-selector substring → edit mode; the longest matching key wins, ties keep config order.     |
 | `edit.fuzzyMatch`         | boolean | `true`     | Allow fuzzy anchor matching.                                                                                      |
 | `edit.fuzzyThreshold`     | number  | `0.95`     | Similarity threshold for fuzzy matching.                                                                          |
@@ -966,7 +970,7 @@ tui:
 | `display.pinnedAgents`        | enum    | `collapsed`      | Pinned live-agent jump list above the editor: `off` hides it, `collapsed` shows a few rows with an expander, `full` lists all. |
 | `display.subagentLivePreview` | boolean | `false`          | Show each pinned subagent's current (or most recent) tool call beneath its jump-list row. |
 | `tui.resizeScrollback`        | enum    | `rebuild`        | How a settled width resize refreshes transcript rows kept in terminal scrollback: `append` replays the transcript at the new width below retained history, `rebuild` erases pane scrollback then replays one current-width copy, `preserve` repaints only the viewport. |
-| `tui.completeScrollback`      | boolean | `false`          | Send transcript rows pushed off screen by a growing HUD or dialog straight to scrollback. When it shrinks, blank rows sit between the transcript and the input until new output fills them. |
+| `tui.completeScrollback`      | boolean | `true`           | Send transcript rows pushed off screen by a growing HUD or dialog straight to scrollback. When it shrinks, blank rows sit between the transcript and the input until new output fills them. |
 
 The display tier is saved as `display.mode`; the former `display.compactToolActivity` and `display.hideToolActivity` switches no longer control presentation. Select the desired tier with `/display` instead. Existing configuration layer precedence still applies to `display.mode`.
 
@@ -992,8 +996,9 @@ The `cache` segment (in the `full` and `nerd` presets) shows before you send whe
 | `autoResume`           | boolean | `false`         | Auto-resume the most recent session in the cwd. If its saved model cannot be restored without forbidden fallback, implicit interactive startup warns and starts a new session without the old history; explicit resume and headless behavior are unchanged. |
 | `plan.enabled`         | boolean | `true`          | Enable plan mode.                                                                                       |
 | `plan.defaultOnStartup` | boolean | `false`         | Start each fresh interactive session in plan mode when plan mode is enabled. Print/JSON (`--print`) mode ignores this and prints a note; use `--plan-yolo` for a headless plan flow. |
-| `ask.timeout`          | number  | `0`             | Submit the ask form's current values after this many seconds; `0` disables timeout. Also bounds `cfg://` approval prompts; an unanswered approval denies the write. |
+| `ask.timeout`          | number  | `0`             | Submit the `ask` form's current values after this many seconds; `0` disables the timeout. Also bounds `cfg://` approval prompts, but an unanswered approval denies the write instead of auto-submitting. |
 | `ask.notify`           | enum    | `on`            | `on`, `off`.                                                                                            |
+| `pty.notify`           | enum    | `on`            | `on`, `off`. Notify when a program in a bash `pty` console waits for input, such as at a `sudo` password prompt. |
 | `input.bareExitOnEmptySession` | boolean | `true` | Submitting exactly `exit`, `quit`, or `q` (case-insensitive) before the first message quits. |
 | `input.bareSlashCommands` | boolean | `false` | Run an exact command name without `/`; after session messages exist, Enter must be pressed twice to confirm. |
 | `tui.vimMode` | boolean | `false` | Enable modal prompt editing; `tui.vimModeDisplay` selects `text`, `icon`, or `none` (default `text`). |

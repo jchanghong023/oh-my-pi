@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import math
 import os
 import queue
 import signal
@@ -358,6 +359,7 @@ class HostToolCompletedEvent:
 
     tool_name: str
     tool_call_id: str
+
 
 
 @dataclass(slots=True, frozen=True)
@@ -810,13 +812,9 @@ class RpcClient(WireClient):
                     pass
         return all(process is exclude for process, _ in self._survivors)
 
-    def on_host_tool_completed(
-        self, listener: HostToolCompletedListener
-    ) -> Callable[[], None]:
+    def on_host_tool_completed(self, listener: HostToolCompletedListener) -> Callable[[], None]:
         self._host_tool_completed_listeners.append(listener)
-        return lambda: self._remove_listener(
-            self._host_tool_completed_listeners, listener
-        )
+        return lambda: self._remove_listener(self._host_tool_completed_listeners, listener)
 
     def on_event(self, listener: AgentEventListener) -> Callable[[], None]:
         self._event_listeners.append(listener)
@@ -918,7 +916,7 @@ class RpcClient(WireClient):
                 else:
                     self.cancel_ui_request(request.id)
                 return
-            if request.method == "ask":
+            if request.method in ("ask", "form"):
                 self.cancel_ui_request(request.id)
 
         return self.on_ui_request(handle)
@@ -956,6 +954,36 @@ class RpcClient(WireClient):
             {"type": "extension_ui_response", "id": request_id, "answers": wire_answers}
         )
 
+    def send_ui_data(self, request_id: str, data: Mapping[str, str | int | float | Sequence[str]]) -> None:
+        """Answer a `form` request with the submitted values by control `name`.
+
+        Raises `TypeError` for a `bool` (forms submit option values, never booleans),
+        a value that is neither a string, a number nor a sequence of strings (`None`,
+        a mapping, a set), or a list member that is not a string, and `ValueError` for
+        a non-finite float, which JSON cannot carry.
+        """
+        wire_data: JsonObject = {}
+        for name, value in data.items():
+            if isinstance(value, bool):
+                raise TypeError(f"form field {name!r} must be a string, a number or a list of strings, not a bool")
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError(f"form field {name!r} must be a finite number, not {value!r}")
+            if isinstance(value, (str, int, float)):
+                wire_data[name] = value
+                continue
+            if not isinstance(value, Sequence):
+                raise TypeError(
+                    f"form field {name!r} must be a string, a number or a list of strings, not {type(value).__name__}"
+                )
+            # Members are checked too: a NaN inside a list would write invalid JSON the server cannot parse.
+            members = list(value)
+            if not all(isinstance(member, str) for member in members):
+                raise TypeError(f"form field {name!r} must be a list of strings, not {members!r}")
+            wire_data[name] = members
+        self._send_notification(
+            {"type": "extension_ui_response", "id": request_id, "data": wire_data}
+        )
+
     def cancel_ui_request(self, request_id: str, *, timed_out: bool = False) -> None:
         payload: JsonObject = {
             "type": "extension_ui_response",
@@ -975,10 +1003,7 @@ class RpcClient(WireClient):
         phases = self._normalize_todo_phases(todos)
         data = self._command("set_todos", {"phases": phases})
         return required(
-            expect_object(data, "set_todos"),
-            "todoPhases",
-            array(parse_todo_phase),
-            "set_todos",
+            expect_object(data, "set_todos"), "todoPhases", array(parse_todo_phase), "set_todos"
         )
 
     def clear_todos(self) -> tuple[TodoPhase, ...]:
@@ -1052,10 +1077,7 @@ class RpcClient(WireClient):
             definitions.append(definition)
         data = self._command("set_host_tools", {"tools": definitions})
         return required(
-            expect_object(data, "set_host_tools"),
-            "toolNames",
-            array(decode_str),
-            "set_host_tools",
+            expect_object(data, "set_host_tools"), "toolNames", array(decode_str), "set_host_tools"
         )
 
     def set_host_uris(self, host_uris: Sequence[HostUri[Any]]) -> tuple[str, ...]:
@@ -1618,9 +1640,7 @@ class RpcClient(WireClient):
                     "host_tool_completed",
                     tool_name,
                     self._host_tool_completed_listeners,
-                    HostToolCompletedEvent(
-                        tool_name=tool_name, tool_call_id=tool_call_id
-                    ),
+                    HostToolCompletedEvent(tool_name=tool_name, tool_call_id=tool_call_id),
                 )
                 if pending_call.cancel_event.is_set():
                     return
@@ -1774,18 +1794,13 @@ class RpcClient(WireClient):
             status: TodoStatus,
             details: object,
             notes: object,
-            blocker: object,
         ) -> JsonObject:
             item: JsonObject = {"content": content, "status": status}
-            if isinstance(blocker, str):
-                item["blocker"] = blocker
             if isinstance(details, str):
                 item["details"] = details
             if isinstance(notes, str):
                 item["notes"] = [notes]
-            elif isinstance(notes, (list, tuple)) and all(
-                isinstance(n, str) for n in notes
-            ):
+            elif isinstance(notes, (list, tuple)) and all(isinstance(n, str) for n in notes):
                 item["notes"] = list(cast(Sequence[str], notes))
             return item
 
@@ -1796,9 +1811,7 @@ class RpcClient(WireClient):
             if isinstance(seed, TodoItem):
                 if seed.status not in _TODO_STATUS_VALUES:
                     raise RpcError(f"Unsupported todo status: {seed.status}")
-                return wire_item(
-                    seed.content, seed.status, seed.details, seed.notes, seed.blocker
-                )
+                return wire_item(seed.content, seed.status, seed.details, seed.notes)
 
             content = seed.get("content")
             if not isinstance(content, str) or not content.strip():
@@ -1811,13 +1824,7 @@ class RpcClient(WireClient):
                 status: TodoStatus = cast(TodoStatus, raw_status)
             else:
                 status = "pending"
-            return wire_item(
-                content,
-                status,
-                seed.get("details"),
-                seed.get("notes"),
-                seed.get("blocker"),
-            )
+            return wire_item(content, status, seed.get("details"), seed.get("notes"))
 
         def is_phase_seed(seed: TodoSeed | TodoPhaseSeed) -> bool:
             if isinstance(seed, TodoPhase):

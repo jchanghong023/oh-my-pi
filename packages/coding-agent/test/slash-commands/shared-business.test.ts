@@ -2,13 +2,13 @@ import { afterEach, describe, expect, test, vi } from "bun:test";
 import { getOAuthCredentialProvider } from "@oh-my-pi/pi-ai/oauth";
 import { Settings } from "../../src/config/settings";
 import { getExtensionUISelectOptionLabel, type ExtensionUIContext } from "../../src/extensibility/extensions/types";
-import { executeAcpBuiltinSlashCommand, executeRpcBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
+import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
 import {
 	type BuiltinSlashCommandRuntime,
 	executeBuiltinSlashCommand,
 	lookupBuiltinSlashCommand,
 } from "../../src/slash-commands/builtin-registry";
-import type { RpcSlashCommandRuntime, SlashCommandRuntime } from "../../src/slash-commands/types";
+import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 import type { AgentSession } from "../../src/session/agent-session";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { resetContextForCommand } from "../../src/slash-commands/helpers/clear";
@@ -311,39 +311,26 @@ describe("shared clear business", () => {
 		expect(newSession).not.toHaveBeenCalled();
 	});
 
-	for (const host of [executeAcpBuiltinSlashCommand, executeRpcBuiltinSlashCommand]) {
-		test(`${host.name} clears the current session without creating another`, async () => {
-			const fixture = ordinaryTaskDispatchFixture();
-			fixture.resetSessionContext.mockResolvedValueOnce({ droppedCount: 1 });
-			const result = await fixture[host === executeAcpBuiltinSlashCommand ? "acp" : "rpc"]("/clear");
-			expect(result).toEqual({ consumed: true });
-			expect(fixture.resetSessionContext).toHaveBeenCalledTimes(1);
-			expect(fixture.newSession).not.toHaveBeenCalled();
+	test("ACP clear reports a compaction/session race without rejecting the request", async () => {
+		const fixture = ordinaryTaskDispatchFixture();
+		const session = fixture.tuiRuntime.ctx.session;
+		Object.defineProperty(session, "isCompacting", { configurable: true, value: true });
+		vi.spyOn(Bun, "sleep").mockImplementation(async () => {
+			Object.defineProperty(session, "sessionGeneration", { value: 1 });
+			Object.defineProperty(session, "isCompacting", { value: false });
 		});
+		expect(await fixture.acp("/clear")).toEqual({ consumed: true });
+		expect(fixture.resetSessionContext).not.toHaveBeenCalled();
+		expect(fixture.newSession).not.toHaveBeenCalled();
+	});
 
-		test(`${host.name} reports a compaction/session race without rejecting the request`, async () => {
-			const fixture = ordinaryTaskDispatchFixture();
-			const session = fixture.tuiRuntime.ctx.session;
-			Object.defineProperty(session, "isCompacting", { configurable: true, value: true });
-			vi.spyOn(Bun, "sleep").mockImplementation(async () => {
-				Object.defineProperty(session, "sessionGeneration", { value: 1 });
-				Object.defineProperty(session, "isCompacting", { value: false });
-			});
-			expect(await fixture[host === executeAcpBuiltinSlashCommand ? "acp" : "rpc"]("/clear")).toEqual({
-				consumed: true,
-			});
-			expect(fixture.resetSessionContext).not.toHaveBeenCalled();
-			expect(fixture.newSession).not.toHaveBeenCalled();
-		});
-
-		test(`${host.name} reports a streaming refusal rather than a successful reset`, async () => {
-			const fixture = ordinaryTaskDispatchFixture();
-			fixture.resetSessionContext.mockResolvedValueOnce(undefined);
-			await fixture[host === executeAcpBuiltinSlashCommand ? "acp" : "rpc"]("/clear");
-			expect(fixture.resetSessionContext).toHaveBeenCalledTimes(1);
-			expect(fixture.newSession).not.toHaveBeenCalled();
-		});
-	}
+	test("ACP clear reports a streaming refusal rather than a successful reset", async () => {
+		const fixture = ordinaryTaskDispatchFixture();
+		fixture.resetSessionContext.mockResolvedValueOnce(undefined);
+		await fixture.acp("/clear");
+		expect(fixture.resetSessionContext).toHaveBeenCalledTimes(1);
+		expect(fixture.newSession).not.toHaveBeenCalled();
+	});
 });
 
 function ordinaryTaskDispatchFixture() {
@@ -371,7 +358,7 @@ function ordinaryTaskDispatchFixture() {
 		},
 		refreshCommands: async () => {},
 		reloadPlugins: async () => {},
-	} as unknown as RpcSlashCommandRuntime;
+	} as unknown as SlashCommandRuntime;
 	const setText = vi.fn();
 	const tuiRuntime = {
 		ctx: {
@@ -394,12 +381,11 @@ function ordinaryTaskDispatchFixture() {
 		tuiRuntime,
 		tui: (text: string) => executeBuiltinSlashCommand(text, tuiRuntime),
 		acp: (text: string) => executeAcpBuiltinSlashCommand(text, runtime),
-		rpc: (text: string) => executeRpcBuiltinSlashCommand(text, runtime),
 	};
 }
 
 describe("shared task dispatch", () => {
-	for (const host of ["tui", "acp", "rpc"] as const) {
+	for (const host of ["tui", "acp"] as const) {
 		test(`${host} keeps ordinary model command expansion`, async () => {
 			const fixture = ordinaryTaskDispatchFixture();
 			const task = "first line  \r\n\r\nlast line";

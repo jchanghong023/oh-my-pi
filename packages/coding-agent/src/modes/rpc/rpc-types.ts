@@ -27,14 +27,16 @@ import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/ses
 import type { UsageLimitState } from "../../session/usage-limit";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
-import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
+import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
 import type { RpcMessagesPage } from "./rpc-messages";
-import type { GoalModeState } from "../../goals/state";
-import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
+import type { RpcGoalModeState, RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
+
+export type RpcTodoItem = Omit<TodoItem, "status" | "blocker"> & { status: Exclude<TodoItem["status"], "blocked"> };
+export type RpcTodoPhase = Omit<TodoPhase, "tasks"> & { tasks: RpcTodoItem[] };
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -77,7 +79,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_entries"; since?: string }
 	| { id?: string; type: "get_tree" }
-	| { id?: string; type: "set_todos"; phases: TodoPhase[] }
+	| { id?: string; type: "set_todos"; phases: RpcTodoPhase[] }
 	| { id?: string; type: "set_host_tools"; tools: RpcHostToolDefinition[] }
 	| { id?: string; type: "set_host_uri_schemes"; schemes: RpcHostUriSchemeDefinition[] }
 	| { id?: string; type: "set_subagent_subscription"; level: RpcSubagentSubscriptionLevel }
@@ -209,14 +211,14 @@ export interface RpcSessionState {
 	 *  `liveSteered` counts the leading `steering` entries already sent into the
 	 *  streaming response; `remove_queued_message` cannot reach them. */
 	queuedMessages: { steering: string[]; followUp: string[]; liveSteered: number };
-	todoPhases: TodoPhase[];
+	todoPhases: RpcTodoPhase[];
 	/** For session dump / export (plain-text parity with /dump). */
 	systemPrompt?: string[];
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 	/** Current context window usage. */
 	contextUsage?: ContextUsage;
 	/** Current goal-mode state; `null` when the session has no goal. */
-	goal: GoalModeState | null;
+	goal: RpcGoalModeState | null;
 }
 
 export interface RpcAvailableSlashCommand {
@@ -495,7 +497,7 @@ export type RpcResponse =
 			success: true;
 			data: { tree: SessionTreeNode[]; leafId: string | null };
 	  }
-	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: TodoPhase[] } }
+	| { id?: string; type: "response"; command: "set_todos"; success: true; data: { todoPhases: RpcTodoPhase[] } }
 	| { id?: string; type: "response"; command: "set_host_tools"; success: true; data: { toolNames: string[] } }
 	| { id?: string; type: "response"; command: "set_host_uri_schemes"; success: true; data: { schemes: string[] } }
 	| {
@@ -715,7 +717,7 @@ export interface RpcSubagentProgressFrame {
 
 export interface RpcSubagentEventFrame {
 	type: "subagent_event";
-	payload: SubagentEventPayload;
+	payload: { id: string; event: RpcSessionEventProjection<AgentSessionEvent> };
 }
 
 export type RpcSubagentFrame = RpcSubagentLifecycleFrame | RpcSubagentProgressFrame | RpcSubagentEventFrame;
@@ -760,9 +762,22 @@ export type RpcDeltaMessageUpdateFrame = Omit<
 	assistantMessageEvent: RpcDeltaAssistantMessageEvent;
 };
 
+/** Keeps local cancellation, compaction correlation and orchestration metadata off the upstream wire. */
+export type RpcSessionEventProjection<Event> = Event extends { type: "session_abort" }
+	? never
+	: Event extends { type: "tool_execution_end" }
+		? Omit<Event, "cancelled">
+		: Event extends { type: "manual_compaction_start" | "manual_compaction_end" }
+			? Omit<Event, "operationId">
+			: Event extends { type: "todo_reminder" }
+				? Omit<Event, "todos"> & { todos: RpcTodoItem[] }
+				: Event extends { type: "goal_updated" }
+					? Omit<Event, "state"> & { state?: RpcGoalModeState }
+					: Event;
+
 /** Session event as written to stdout by default: message lifecycle events carry a `messageId`. */
 export type RpcAgentSessionEventFrame =
-	| Exclude<WireSessionEvent, { type: RpcMessageEventType | "session_abort" }>
+	| RpcSessionEventProjection<Exclude<WireSessionEvent, { type: RpcMessageEventType }>>
 	| RpcMessageEventFrame;
 
 /** Every session event shape RPC mode can write, including the opt-in `messageUpdates: "delta"` projection. */
@@ -834,6 +849,8 @@ export type RpcExtensionUIRequest =
 			questions: RpcAskDialogQuestion[];
 			timeout?: number;
 	  }
+	/** The whole HTML form of one `ui.formDialog` call (the `ask` tool or an extension); no opt-in is required. */
+	| { type: "extension_ui_request"; id: string; method: "form"; html: string; timeout?: number }
 	| { type: "extension_ui_request"; id: string; method: "cancel"; targetId: string }
 	| {
 			type: "extension_ui_request";
@@ -989,7 +1006,9 @@ export type RpcExtensionUIResponse =
 			type: "extension_ui_response";
 			id: string;
 			answers: Array<{ id: string; selectedOptions: string[]; customInput?: string }>;
-	  };
+	  }
+	/** Submitted data of a `form` request, by control `name`; validated against the form. */
+	| { type: "extension_ui_response"; id: string; data: Record<string, unknown> };
 
 // ============================================================================
 // Helper type for extracting command types

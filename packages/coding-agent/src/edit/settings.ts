@@ -25,10 +25,11 @@ export const EDIT_MODES = [
 ] as const satisfies readonly EditMode[];
 
 /**
- * `edit.mode` value: an edit tool variant, or `"none"` to unregister the edit tool and force-enable
- * `bash` (see `resolveBuiltinToolPlan` in `tools/index.ts`).
+ * `edit.mode` value: an edit tool variant, `"magic"` for calls that describe the change in
+ * words (see `edit/magic.ts`), or `"none"` to unregister the edit tool and force-enable `bash` (see
+ * `resolveBuiltinToolPlan` in `tools/index.ts`).
  */
-export type EditModeSetting = EditMode | "none";
+export type EditModeSetting = EditMode | "magic" | "none";
 
 /** Narrows free text (config values, per-model variants) to an edit mode; `undefined` when unknown. */
 export function normalizeEditMode(mode?: string | null): EditMode | undefined {
@@ -43,7 +44,7 @@ export function normalizeEditMode(mode?: string | null): EditMode | undefined {
 export const cfgEditMode = register({
 	id: "edit.mode",
 	type: "enum",
-	values: [...EDIT_MODES, "none"] as const satisfies readonly EditModeSetting[],
+	values: [...EDIT_MODES, "magic", "none"] as const satisfies readonly EditModeSetting[],
 	default: "hashline",
 	// Pins the variant: it also skips the per-model hashline fallback (see `utils/edit-mode.ts`).
 	env: "PI_EDIT_VARIANT",
@@ -51,7 +52,36 @@ export const cfgEditMode = register({
 		tab: "files",
 		group: "编辑",
 		label: "编辑模式",
-		description: "选择 edit 工具变体（replace、patch、hashline 或 apply_patch）；none 移除 edit 工具并保持 bash 启用",
+		description:
+			"选择 edit 工具变体（apply_patch、hashline、patch、replace 或 sloppy）；magic 让快速模型按描述编写修改；none 移除 edit 工具并保持 bash 启用",
+	},
+});
+
+/** Payload syntax of `magic` calls: `<edit file="path">` elements or `# path` lines. */
+export const cfgEditMagicFormat = register({
+	id: "edit.magic.format",
+	type: "enum",
+	values: ["xml", "markdown"] as const,
+	default: "xml",
+	env: "PI_EDIT_MAGIC_FORMAT",
+	ui: {
+		tab: "files",
+		group: "编辑",
+		label: "Magic 编辑格式",
+		description: '选择 magic 调用中标记文件的格式：<edit file="path"> 元素（xml）或 "# path" 行（markdown）',
+	},
+});
+
+/** Model that writes the patch for a `magic` call: a selector or role alias (`@slow`); unset uses the `smol` role. */
+export const cfgEditMagicModel = register({
+	id: "edit.magic.model",
+	type: "string",
+	default: undefined,
+	ui: {
+		tab: "files",
+		group: "编辑",
+		label: "Magic 编辑模型",
+		description: "编写 magic 模式修改的模型选择器或角色别名（如 @slow）；留空时使用 smol 角色",
 	},
 });
 

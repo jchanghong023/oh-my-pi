@@ -671,7 +671,6 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 														tool: "ast_edit",
 														before: before.text,
 														after: after.text,
-														beforeMtimeMs: before.mtimeMs,
 													});
 												}
 											}

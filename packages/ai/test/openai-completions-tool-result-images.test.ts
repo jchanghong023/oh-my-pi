@@ -69,6 +69,7 @@ const compat: ResolvedOpenAICompat = {
 	rejectRootObjectUnion: false,
 	retryWithoutStrictOnGrammarError: false,
 	supportsPromptCacheKey: false,
+	foldUserAfterToolResult: false,
 };
 
 function buildToolResult(toolCallId: string, timestamp: number): ToolResultMessage {

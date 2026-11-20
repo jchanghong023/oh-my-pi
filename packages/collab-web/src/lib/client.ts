@@ -239,8 +239,9 @@ export class SessionReplica {
 		return this.#snapshot;
 	}
 
+	/** Prompts the host; `images` ride in the same `prompt` frame (omitted when empty). */
 	sendPrompt(text: string, images?: readonly ImageContent[]): Promise<SubmitResult> | void {
-		return this.#socket.send({ t: "prompt", text, images: images ? [...images] : undefined });
+		return this.#socket.send(images?.length ? { t: "prompt", text, images: [...images] } : { t: "prompt", text });
 	}
 
 	sendUiResponse(reqId: number, value?: CollabUiResponseValue): void {

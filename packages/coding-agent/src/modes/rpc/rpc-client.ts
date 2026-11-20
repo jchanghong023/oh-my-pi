@@ -10,7 +10,6 @@ import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { isRecord, ptree, readJsonl, toError } from "@oh-my-pi/pi-utils";
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { FileSink } from "bun";
 import type { BashResult } from "../../exec/bash-executor";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
@@ -48,6 +47,7 @@ import type {
 	RpcPromptResultFrame,
 	RpcRemoveQueuedMessageResult,
 	RpcResponse,
+	RpcSessionEventProjection,
 	RpcSessionSettledFrame,
 	RpcSessionState,
 	RpcSubagentEventFrame,
@@ -56,6 +56,7 @@ import type {
 	RpcSubagentProgressFrame,
 	RpcSubagentSnapshot,
 	RpcSubagentSubscriptionLevel,
+	RpcTodoPhase,
 } from "./rpc-types";
 
 /** Distributive Omit that works with union types */
@@ -111,7 +112,8 @@ export interface RpcClientOptions {
 export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
 
 export type RpcEventListener = (event: AgentEvent) => void;
-export type RpcSessionEventListener = (event: AgentSessionEvent) => void;
+export type RpcReceivedSessionEvent = RpcSessionEventProjection<AgentSessionEvent>;
+export type RpcSessionEventListener = (event: RpcReceivedSessionEvent) => void;
 export type RpcSubagentLifecycleListener = (payload: RpcSubagentLifecycleFrame["payload"]) => void;
 export type RpcSubagentProgressListener = (payload: RpcSubagentProgressFrame["payload"]) => void;
 export type RpcSubagentEventListener = (payload: RpcSubagentEventFrame["payload"]) => void;
@@ -161,7 +163,7 @@ const agentEventTypes = new Set<AgentEvent["type"]>([
 	"tool_execution_end",
 ]);
 
-const sessionEventTypes = new Set<AgentSessionEvent["type"]>([
+const sessionEventTypes = new Set<RpcReceivedSessionEvent["type"]>([
 	...agentEventTypes,
 	"auto_compaction_start",
 	"auto_compaction_end",
@@ -213,11 +215,11 @@ function isAgentEvent(value: unknown): value is AgentEvent {
 	return agentEventTypes.has(type as AgentEvent["type"]);
 }
 
-function isAgentSessionEvent(value: unknown): value is AgentSessionEvent {
+function isAgentSessionEvent(value: unknown): value is RpcReceivedSessionEvent {
 	if (!isRecord(value)) return false;
 	const type = value.type;
 	if (typeof type !== "string") return false;
-	return sessionEventTypes.has(type as AgentSessionEvent["type"]);
+	return sessionEventTypes.has(type as RpcReceivedSessionEvent["type"]);
 }
 
 function isRpcSubagentLifecycleFrame(value: unknown): value is RpcSubagentLifecycleFrame {
@@ -1216,9 +1218,9 @@ export class RpcClient {
 	 * Replace the session's todo list; it is recorded on the current branch.
 	 * @returns The normalized phases now in effect
 	 */
-	async setTodos(phases: TodoPhase[]): Promise<TodoPhase[]> {
+	async setTodos(phases: RpcTodoPhase[]): Promise<RpcTodoPhase[]> {
 		const response = await this.#send({ type: "set_todos", phases });
-		return this.#getData<{ todoPhases: TodoPhase[] }>(response).todoPhases;
+		return this.#getData<{ todoPhases: RpcTodoPhase[] }>(response).todoPhases;
 	}
 
 	/**

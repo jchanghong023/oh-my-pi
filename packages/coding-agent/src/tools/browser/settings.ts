@@ -38,7 +38,7 @@ export const cfgBrowserRelay = register({
 		group: "Grep 与浏览器",
 		label: "浏览器中继",
 		description:
-			'通过 omp 浏览器中继操控你自己的 Chrome 标签页。只需安装一次扩展（`omp browser-relay install`）；browser 预置环境需要时会自动启动中继服务器。优先于浏览器 CDP URL；设置 PI_BROWSER_RELAY=0 或 PI_BROWSER_RELAY=1 可覆盖此设置。子代理默认跳过中继，除非打开时显式传入 app: "relay"。',
+			'通过 omp 浏览器中继操控你自己的 Chrome 标签页。安装扩展（`omp browser-relay install`）后，Chrome 运行时由扩展的 native host 托管。优先于浏览器 CDP URL；设置 PI_BROWSER_RELAY=0 或 PI_BROWSER_RELAY=1 可覆盖此设置。子代理默认跳过中继，除非打开时显式传入 app: "relay"。',
 	},
 });
 
@@ -50,7 +50,8 @@ export const cfgBrowserRelayUrl = register({
 		tab: "tools",
 		group: "Grep 与浏览器",
 		label: "浏览器中继 URL",
-		description: "omp 浏览器中继端点（默认 http://127.0.0.1:9224）。",
+		description:
+			"omp 浏览器中继端点（默认由扩展的 native host 在 http://127.0.0.1:9224 提供）；可指定其他机器转发的中继。",
 	},
 });
 

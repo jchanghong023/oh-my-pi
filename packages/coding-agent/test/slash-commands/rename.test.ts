@@ -419,7 +419,7 @@ it("suppresses confirmation when the prompt is cancelled during title notificati
 	}
 });
 
-it("releases the RPC command while title inference runs in the background and preserves a newer rename", async () => {
+it("returns while title inference runs in the background and preserves a newer rename", async () => {
 	const { session, sessionManager, runtime } = createRuntime("headless");
 	const { started, response } = deferTitle();
 	let backgroundTask: Promise<void> | undefined;
@@ -430,16 +430,16 @@ it("releases the RPC command while title inference runs in the background and pr
 	try {
 		await Promise.race([started.promise, dispatched]);
 		expect(backgroundTask).toBeDefined();
-		// The deferred inference is unresolved: the RPC command must already return.
+		// The dispatcher returns while the deferred inference is still pending.
 		expect(await dispatched).toMatchObject({ consumed: true });
 		await started.promise;
-		await executeAcpBuiltinSlashCommand("/rename My newer RPC title", runtime);
+		await executeAcpBuiltinSlashCommand("/rename My newer title", runtime);
 		const entries = sessionManager.getEntries();
 
 		response.resolve("Stale generated title");
 		await backgroundTask;
 
-		expect(session.sessionName).toBe("My newer RPC title");
+		expect(session.sessionName).toBe("My newer title");
 		expectOnlyTitleUsageJournaled(sessionManager, entries, "Stale generated title");
 	} finally {
 		response.resolve(null);
@@ -448,7 +448,7 @@ it("releases the RPC command while title inference runs in the background and pr
 	}
 });
 
-it("aborts a background RPC rename silently and allows a later rename", async () => {
+it("aborts a background rename silently and allows a later rename", async () => {
 	const { session, runtime } = createRuntime("headless");
 	const { started, response, generate } = deferTitle();
 	const output = vi.spyOn(runtime, "output");
@@ -461,22 +461,22 @@ it("aborts a background RPC rename silently and allows a later rename", async ()
 		await started.promise;
 		await session.abort();
 		expect(generate.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
-		response.resolve("Cancelled RPC title");
+		response.resolve("Cancelled title");
 		await backgroundTask;
 		expect(session.sessionName).toBeUndefined();
 		expect(output).not.toHaveBeenCalled();
 
-		generate.mockResolvedValue("Fresh RPC title");
+		generate.mockResolvedValue("Fresh title");
 		await executeAcpBuiltinSlashCommand("/rename", runtime);
 		await backgroundTask;
-		expect(session.sessionName).toBe("Fresh RPC title");
+		expect(session.sessionName).toBe("Fresh title");
 	} finally {
 		response.resolve(null);
 		await backgroundTask;
 	}
 });
 
-it.each([true, false])("keeps the latest RPC rename request when older finishes first: %s", async olderFirst => {
+it.each([true, false])("keeps the latest background rename request when older finishes first: %s", async olderFirst => {
 	const { session, sessionManager, runtime } = createRuntime("headless");
 	await sessionManager.setSessionName("Original title", "user");
 	const responses = [Promise.withResolvers<string | null>(), Promise.withResolvers<string | null>()];

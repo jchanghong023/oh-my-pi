@@ -2299,8 +2299,7 @@
 				"pending",
 				"in_progress",
 				"completed",
-				"abandoned",
-				"blocked"
+				"abandoned"
 			],
 			"type": "string"
 		},
@@ -2370,9 +2369,6 @@
 				},
 				"status": {
 					"$ref": "#/$defs/TodoStatus"
-				},
-				"blocker": {
-					"type": "string"
 				},
 				"details": {
 					"type": "string"
@@ -3966,10 +3962,6 @@
 				"result": {},
 				"isError": {
 					"type": "boolean"
-				},
-				"cancelled": {
-					"type": "boolean",
-					"description": "The tool execution was cancelled."
 				}
 			},
 			"required": [
@@ -4036,18 +4028,13 @@
 				"type": {
 					"const": "manual_compaction_start"
 				},
-				"operationId": {
-					"type": "string",
-					"description": "Identifies this operation and its matching `manual_compaction_end`."
-				},
 				"mode": {
 					"type": "string",
 					"description": "The `/compact <mode>` subcommand, when one was given."
 				}
 			},
 			"required": [
-				"type",
-				"operationId"
+				"type"
 			],
 			"description": "A manual compaction began. Handoff mode leaves live turns running and applies between turns or when idle."
 		},
@@ -4056,10 +4043,6 @@
 			"properties": {
 				"type": {
 					"const": "manual_compaction_end"
-				},
-				"operationId": {
-					"type": "string",
-					"description": "The ID from the matching `manual_compaction_start`."
 				},
 				"aborted": {
 					"type": "boolean",
@@ -4079,7 +4062,6 @@
 			},
 			"required": [
 				"type",
-				"operationId",
 				"aborted"
 			],
 			"description": "Outcome of the compaction announced by the matching `manual_compaction_start`."
@@ -5414,6 +5396,33 @@
 			],
 			"description": "Every question of one extension `ui.askDialog` call; sent only after `set_ask_dialog` enables it."
 		},
+		"FormUiRequest": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "extension_ui_request"
+				},
+				"id": {
+					"type": "string"
+				},
+				"method": {
+					"const": "form"
+				},
+				"html": {
+					"type": "string"
+				},
+				"timeout": {
+					"type": "integer"
+				}
+			},
+			"required": [
+				"type",
+				"id",
+				"method",
+				"html"
+			],
+			"description": "The HTML `<form>` of one `ui.formDialog` call (the `ask` tool or an extension); no opt-in is required."
+		},
 		"CancelUiRequest": {
 			"type": "object",
 			"properties": {
@@ -5616,6 +5625,9 @@
 					"$ref": "#/$defs/AskUiRequest"
 				},
 				{
+					"$ref": "#/$defs/FormUiRequest"
+				},
+				{
 					"$ref": "#/$defs/CancelUiRequest"
 				},
 				{
@@ -5722,7 +5734,7 @@
 				"id",
 				"cancelled"
 			],
-			"description": "Dismisses a dialog; `timedOut` reports the host's own deadline (an `ask` dialog then takes its recommended answers)."
+			"description": "Dismisses a dialog; `timedOut` reports the host's own deadline (an `ask` dialog then takes its recommended answers, a `form` its defaults)."
 		},
 		"AnswersUiResponse": {
 			"type": "object",
@@ -5747,6 +5759,29 @@
 			],
 			"description": "Answers an `ask` request: one `AskAnswer` per question, in question order."
 		},
+		"DataUiResponse": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "extension_ui_response"
+				},
+				"id": {
+					"type": "string"
+				},
+				"data": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {},
+					"description": "Submitted values by control `name`: a string, a number, or a string array."
+				}
+			},
+			"required": [
+				"type",
+				"id",
+				"data"
+			],
+			"description": "Answers a `form` request with the submitted form data."
+		},
 		"ExtensionUiResponse": {
 			"anyOf": [
 				{
@@ -5760,6 +5795,9 @@
 				},
 				{
 					"$ref": "#/$defs/AnswersUiResponse"
+				},
+				{
+					"$ref": "#/$defs/DataUiResponse"
 				}
 			],
 			"description": "Host reply to an extension UI request; variants share `type` and differ by their payload key."

@@ -93,8 +93,8 @@ _MESSAGE_UPDATES_VALUES: Final[frozenset[str]] = frozenset({"full", "delta"})
 _decode_message_updates = cast("Decoder[MessageUpdates]", literal(_MESSAGE_UPDATES_VALUES))
 
 
-TodoStatus: TypeAlias = Literal["pending", "in_progress", "completed", "abandoned", "blocked"]
-_TODO_STATUS_VALUES: Final[frozenset[str]] = frozenset({"pending", "in_progress", "completed", "abandoned", "blocked"})
+TodoStatus: TypeAlias = Literal["pending", "in_progress", "completed", "abandoned"]
+_TODO_STATUS_VALUES: Final[frozenset[str]] = frozenset({"pending", "in_progress", "completed", "abandoned"})
 _decode_todo_status = cast("Decoder[TodoStatus]", literal(_TODO_STATUS_VALUES))
 
 
@@ -196,8 +196,8 @@ _WIDGET_PLACEMENT_VALUES: Final[frozenset[str]] = frozenset({"aboveEditor", "bel
 _decode_widget_placement = cast("Decoder[WidgetPlacement]", literal(_WIDGET_PLACEMENT_VALUES))
 
 
-ExtensionUiMethod: TypeAlias = Literal["select", "confirm", "input", "editor", "ask", "cancel", "notify", "setStatus", "setWidget", "setTitle", "set_editor_text", "open_url"]
-_EXTENSION_UI_METHOD_VALUES: Final[frozenset[str]] = frozenset({"select", "confirm", "input", "editor", "ask", "cancel", "notify", "setStatus", "setWidget", "setTitle", "set_editor_text", "open_url"})
+ExtensionUiMethod: TypeAlias = Literal["select", "confirm", "input", "editor", "ask", "form", "cancel", "notify", "setStatus", "setWidget", "setTitle", "set_editor_text", "open_url"]
+_EXTENSION_UI_METHOD_VALUES: Final[frozenset[str]] = frozenset({"select", "confirm", "input", "editor", "ask", "form", "cancel", "notify", "setStatus", "setWidget", "setTitle", "set_editor_text", "open_url"})
 _decode_extension_ui_method = cast("Decoder[ExtensionUiMethod]", literal(_EXTENSION_UI_METHOD_VALUES))
 
 
@@ -563,7 +563,6 @@ class ModelInfo:
 class TodoItem:
     content: str
     status: TodoStatus
-    blocker: str | None = None
     details: str | None = None
     notes: tuple[str, ...] | None = None
 
@@ -1095,8 +1094,6 @@ class ToolExecutionEndEvent:
     tool_name: str
     result: JsonValue | None = None
     is_error: bool | None = None
-    cancelled: bool | None = None
-    """The tool execution was cancelled."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1122,8 +1119,6 @@ class AutoCompactionEndEvent:
 class ManualCompactionStartEvent:
     """A manual compaction began. Handoff mode leaves live turns running and applies between turns or when idle."""
     type: Literal["manual_compaction_start"] = "manual_compaction_start"
-    operation_id: str
-    """Identifies this operation and its matching `manual_compaction_end`."""
     mode: str | None = None
     """The `/compact <mode>` subcommand, when one was given."""
 
@@ -1132,8 +1127,6 @@ class ManualCompactionStartEvent:
 class ManualCompactionEndEvent:
     """Outcome of the compaction announced by the matching `manual_compaction_start`."""
     type: Literal["manual_compaction_end"] = "manual_compaction_end"
-    operation_id: str
-    """The ID from the matching `manual_compaction_start`."""
     aborted: bool
     """The compaction was cancelled (abort, or a `session_before_compact` hook)."""
     result: CompactionResult | None = None
@@ -1582,6 +1575,16 @@ class AskUiRequest:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class FormUiRequest:
+    """The HTML `<form>` of one `ui.formDialog` call (the `ask` tool or an extension); no opt-in is required."""
+    type: Literal["extension_ui_request"] = "extension_ui_request"
+    id: str
+    method: Literal["form"] = "form"
+    html: str
+    timeout: int | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class CancelUiRequest:
     """Close the dialog opened by request `targetId`; a later answer to it is ignored."""
     type: Literal["extension_ui_request"] = "extension_ui_request"
@@ -1669,6 +1672,7 @@ class ExtensionUiRequest(ExtensionUiRequestMixin):
     prefill: str | None = None
     prompt_style: bool | None = None
     questions: tuple[AskQuestion, ...] | None = None
+    html: str | None = None
     target_id: str | None = None
     notify_type: NotifyType | None = None
     status_key: str | None = None
@@ -1976,7 +1980,6 @@ def parse_todo_item(value: object, path: str = "TodoItem") -> TodoItem:
     return TodoItem(
         content=required(payload, "content", decode_str, path),
         status=required(payload, "status", _decode_todo_status, path),
-        blocker=optional(payload, "blocker", decode_str, path),
         details=optional(payload, "details", decode_str, path),
         notes=optional(payload, "notes", array(decode_str), path),
     )
@@ -2555,7 +2558,6 @@ def parse_tool_execution_end_event(value: object, path: str = "ToolExecutionEndE
         tool_name=required(payload, "toolName", decode_str, path),
         result=optional(payload, "result", decode_json, path),
         is_error=optional(payload, "isError", decode_bool, path),
-        cancelled=optional(payload, "cancelled", decode_bool, path),
     )
 
 
@@ -2585,7 +2587,6 @@ def parse_manual_compaction_start_event(value: object, path: str = "ManualCompac
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["manual_compaction_start"]]', literal(frozenset({"manual_compaction_start"}))), path)
     return ManualCompactionStartEvent(
-        operation_id=required(payload, "operationId", decode_str, path),
         mode=optional(payload, "mode", decode_str, path),
     )
 
@@ -2594,7 +2595,6 @@ def parse_manual_compaction_end_event(value: object, path: str = "ManualCompacti
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["manual_compaction_end"]]', literal(frozenset({"manual_compaction_end"}))), path)
     return ManualCompactionEndEvent(
-        operation_id=required(payload, "operationId", decode_str, path),
         aborted=required(payload, "aborted", decode_bool, path),
         result=optional(payload, "result", parse_compaction_result, path),
         skipped=optional(payload, "skipped", decode_bool, path),
@@ -3095,6 +3095,17 @@ def parse_ask_ui_request(value: object, path: str = "AskUiRequest") -> AskUiRequ
     )
 
 
+def parse_form_ui_request(value: object, path: str = "FormUiRequest") -> FormUiRequest:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["extension_ui_request"]]', literal(frozenset({"extension_ui_request"}))), path)
+    required(payload, "method", cast('Decoder[Literal["form"]]', literal(frozenset({"form"}))), path)
+    return FormUiRequest(
+        id=required(payload, "id", decode_str, path),
+        html=required(payload, "html", decode_str, path),
+        timeout=optional(payload, "timeout", decode_int, path),
+    )
+
+
 def parse_cancel_ui_request(value: object, path: str = "CancelUiRequest") -> CancelUiRequest:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["extension_ui_request"]]', literal(frozenset({"extension_ui_request"}))), path)
@@ -3191,6 +3202,7 @@ def parse_extension_ui_request(value: object, path: str = "ExtensionUiRequest") 
         prefill=optional(payload, "prefill", decode_str, path),
         prompt_style=optional(payload, "promptStyle", decode_bool, path),
         questions=optional(payload, "questions", array(parse_ask_question), path),
+        html=optional(payload, "html", decode_str, path),
         target_id=optional(payload, "targetId", decode_str, path),
         notify_type=optional(payload, "notifyType", _decode_notify_type, path),
         status_key=optional(payload, "statusKey", decode_str, path),
@@ -4138,6 +4150,7 @@ __all__ = [
     "FastModeResult",
     "FileMentionItem",
     "FileMentionMessage",
+    "FormUiRequest",
     "GetSessionLeaseResult",
     "Goal",
     "GoalModeState",
@@ -4330,6 +4343,7 @@ __all__ = [
     "parse_fast_mode_result",
     "parse_file_mention_item",
     "parse_file_mention_message",
+    "parse_form_ui_request",
     "parse_get_session_lease_result",
     "parse_goal",
     "parse_goal_mode_state",

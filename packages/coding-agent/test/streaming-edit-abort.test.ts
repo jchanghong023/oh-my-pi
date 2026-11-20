@@ -81,6 +81,7 @@ describe("streamed edit revisions", () => {
 				toolName: "edit",
 				emit() {},
 			});
+			if (!stream) throw new Error("Expected hashline edit argument stream");
 			const encoded = JSON.stringify(original);
 			for (let offset = 0; offset < encoded.length; offset += 7) stream.push(encoded.slice(offset, offset + 7));
 			stream.end(original);
@@ -131,6 +132,7 @@ describe("streaming edit abort", () => {
 					}
 				},
 			});
+			if (!stream) throw new Error("Expected patch edit argument stream");
 			const encoded = JSON.stringify(args);
 			for (let offset = 0; offset < encoded.length; offset += 7) stream.push(encoded.slice(offset, offset + 7));
 			stream.end(args);
@@ -193,6 +195,7 @@ describe("streaming edit abort", () => {
 					}
 				},
 			});
+			if (!stream) throw new Error("Expected replace edit argument stream");
 			const encoded = JSON.stringify(args);
 			for (let offset = 0; offset < encoded.length; offset += 7) stream.push(encoded.slice(offset, offset + 7));
 			stream.end(args);

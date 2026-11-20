@@ -2017,7 +2017,6 @@ const (
 	TodoStatusInProgress TodoStatus = "in_progress"
 	TodoStatusCompleted  TodoStatus = "completed"
 	TodoStatusAbandoned  TodoStatus = "abandoned"
-	TodoStatusBlocked    TodoStatus = "blocked"
 )
 
 func (v *TodoStatus) UnmarshalJSON(data []byte) error {
@@ -2026,7 +2025,7 @@ func (v *TodoStatus) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	switch value := TodoStatus(s); value {
-	case TodoStatusPending, TodoStatusInProgress, TodoStatusCompleted, TodoStatusAbandoned, TodoStatusBlocked:
+	case TodoStatusPending, TodoStatusInProgress, TodoStatusCompleted, TodoStatusAbandoned:
 		*v = value
 		return nil
 	}
@@ -2172,7 +2171,6 @@ func (v *SubagentStatus) UnmarshalJSON(data []byte) error {
 type TodoItem struct {
 	Content string     `json:"content"`
 	Status  TodoStatus `json:"status"`
-	Blocker *string    `json:"blocker,omitempty"`
 	Details *string    `json:"details,omitempty"`
 	Notes   []string   `json:"notes,omitempty"`
 }
@@ -2186,7 +2184,6 @@ func (v *TodoItem) decodeFrom(raw map[string]json.RawMessage) error {
 	d := fieldDecoder{raw: raw, owner: "TodoItem"}
 	d.required("content", &out.Content)
 	d.required("status", &out.Status)
-	d.optional("blocker", &out.Blocker)
 	d.optional("details", &out.Details)
 	d.optional("notes", &out.Notes)
 	if d.err != nil {
@@ -3980,8 +3977,6 @@ type ToolExecutionEndEvent struct {
 	ToolName   string          `json:"toolName"`
 	Result     json.RawMessage `json:"result,omitempty"`
 	IsError    *bool           `json:"isError,omitempty"`
-	// The tool execution was cancelled.
-	Cancelled *bool `json:"cancelled,omitempty"`
 }
 
 func (v *ToolExecutionEndEvent) UnmarshalJSON(data []byte) error {
@@ -3996,7 +3991,6 @@ func (v *ToolExecutionEndEvent) decodeFrom(raw map[string]json.RawMessage) error
 	d.required("toolName", &out.ToolName)
 	d.optional("result", &out.Result)
 	d.optional("isError", &out.IsError)
-	d.optional("cancelled", &out.Cancelled)
 	if d.err != nil {
 		return d.err
 	}
@@ -4074,8 +4068,6 @@ func (v AutoCompactionEndEvent) MarshalJSON() ([]byte, error) {
 
 // A manual compaction began. Handoff mode leaves live turns running and applies between turns or when idle.
 type ManualCompactionStartEvent struct {
-	// Identifies this operation and its matching `manual_compaction_end`.
-	OperationID string `json:"operationId"`
 	// The `/compact <mode>` subcommand, when one was given.
 	Mode *string `json:"mode,omitempty"`
 }
@@ -4088,7 +4080,6 @@ func (v *ManualCompactionStartEvent) decodeFrom(raw map[string]json.RawMessage) 
 	var out ManualCompactionStartEvent
 	d := fieldDecoder{raw: raw, owner: "ManualCompactionStartEvent"}
 	d.constant("type", "manual_compaction_start")
-	d.required("operationId", &out.OperationID)
 	d.optional("mode", &out.Mode)
 	if d.err != nil {
 		return d.err
@@ -4104,8 +4095,6 @@ func (v ManualCompactionStartEvent) MarshalJSON() ([]byte, error) {
 
 // Outcome of the compaction announced by the matching `manual_compaction_start`.
 type ManualCompactionEndEvent struct {
-	// The ID from the matching `manual_compaction_start`.
-	OperationID string `json:"operationId"`
 	// The compaction was cancelled (abort, or a `session_before_compact` hook).
 	Aborted bool `json:"aborted"`
 	// Present when the compaction committed.
@@ -4123,7 +4112,6 @@ func (v *ManualCompactionEndEvent) decodeFrom(raw map[string]json.RawMessage) er
 	var out ManualCompactionEndEvent
 	d := fieldDecoder{raw: raw, owner: "ManualCompactionEndEvent"}
 	d.constant("type", "manual_compaction_end")
-	d.required("operationId", &out.OperationID)
 	d.required("aborted", &out.Aborted)
 	d.optional("result", &out.Result)
 	d.optional("skipped", &out.Skipped)
@@ -5924,6 +5912,37 @@ func (v AskUiRequest) MarshalJSON() ([]byte, error) {
 	return encodeObject(plain(v), `"type":"extension_ui_request","method":"ask"`, nil)
 }
 
+// The HTML `<form>` of one `ui.formDialog` call (the `ask` tool or an extension); no opt-in is required.
+type FormUiRequest struct {
+	ID      string `json:"id"`
+	HTML    string `json:"html"`
+	Timeout *int64 `json:"timeout,omitempty"`
+}
+
+func (v *FormUiRequest) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "FormUiRequest", v.decodeFrom)
+}
+
+func (v *FormUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
+	var out FormUiRequest
+	d := fieldDecoder{raw: raw, owner: "FormUiRequest"}
+	d.constant("type", "extension_ui_request")
+	d.required("id", &out.ID)
+	d.constant("method", "form")
+	d.required("html", &out.HTML)
+	d.optional("timeout", &out.Timeout)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v FormUiRequest) MarshalJSON() ([]byte, error) {
+	type plain FormUiRequest
+	return encodeObject(plain(v), `"type":"extension_ui_request","method":"form"`, nil)
+}
+
 // Close the dialog opened by request `targetId`; a later answer to it is ignored.
 type CancelUiRequest struct {
 	ID       string `json:"id"`
@@ -6150,6 +6169,7 @@ func (ConfirmUiRequest) isExtensionUiRequest()       {}
 func (InputUiRequest) isExtensionUiRequest()         {}
 func (EditorUiRequest) isExtensionUiRequest()        {}
 func (AskUiRequest) isExtensionUiRequest()           {}
+func (FormUiRequest) isExtensionUiRequest()          {}
 func (CancelUiRequest) isExtensionUiRequest()        {}
 func (NotifyUiRequest) isExtensionUiRequest()        {}
 func (SetStatusUiRequest) isExtensionUiRequest()     {}
@@ -6183,6 +6203,8 @@ func (v *ExtensionUiRequest) decodeFrom(raw map[string]json.RawMessage) error {
 		value, err = decodeVariant[EditorUiRequest](raw)
 	case "ask":
 		value, err = decodeVariant[AskUiRequest](raw)
+	case "form":
+		value, err = decodeVariant[FormUiRequest](raw)
 	case "cancel":
 		value, err = decodeVariant[CancelUiRequest](raw)
 	case "notify":
@@ -6287,7 +6309,7 @@ func (v ConfirmUiResponse) MarshalJSON() ([]byte, error) {
 	return encodeObject(plain(v), `"type":"extension_ui_response"`, nil)
 }
 
-// Dismisses a dialog; `timedOut` reports the host's own deadline (an `ask` dialog then takes its recommended answers).
+// Dismisses a dialog; `timedOut` reports the host's own deadline (an `ask` dialog then takes its recommended answers, a `form` its defaults).
 type CancelUiResponse struct {
 	ID       string `json:"id"`
 	TimedOut *bool  `json:"timedOut,omitempty"`
@@ -6344,6 +6366,35 @@ func (v AnswersUiResponse) MarshalJSON() ([]byte, error) {
 	return encodeObject(plain(v), `"type":"extension_ui_response"`, nil)
 }
 
+// Answers a `form` request with the submitted form data.
+type DataUiResponse struct {
+	ID string `json:"id"`
+	// Submitted values by control `name`: a string, a number, or a string array.
+	Data map[string]json.RawMessage `json:"data"`
+}
+
+func (v *DataUiResponse) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "DataUiResponse", v.decodeFrom)
+}
+
+func (v *DataUiResponse) decodeFrom(raw map[string]json.RawMessage) error {
+	var out DataUiResponse
+	d := fieldDecoder{raw: raw, owner: "DataUiResponse"}
+	d.constant("type", "extension_ui_response")
+	d.required("id", &out.ID)
+	d.required("data", &out.Data)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v DataUiResponse) MarshalJSON() ([]byte, error) {
+	type plain DataUiResponse
+	return encodeObject(plain(v), `"type":"extension_ui_response"`, nil)
+}
+
 // Host reply to an extension UI request; variants share `type` and differ by their payload key.
 type ExtensionUiResponse struct {
 	// Value holds one variant. Encode-only: no discriminator tells the variants apart.
@@ -6359,6 +6410,7 @@ func (ValueUiResponse) isExtensionUiResponse()   {}
 func (ConfirmUiResponse) isExtensionUiResponse() {}
 func (CancelUiResponse) isExtensionUiResponse()  {}
 func (AnswersUiResponse) isExtensionUiResponse() {}
+func (DataUiResponse) isExtensionUiResponse()    {}
 
 func (v ExtensionUiResponse) MarshalJSON() ([]byte, error) {
 	return encodeVariant("ExtensionUiResponse", v.Value)
@@ -6711,6 +6763,7 @@ func (ValueUiResponse) isRpcInbound()   {}
 func (ConfirmUiResponse) isRpcInbound() {}
 func (CancelUiResponse) isRpcInbound()  {}
 func (AnswersUiResponse) isRpcInbound() {}
+func (DataUiResponse) isRpcInbound()    {}
 func (HostToolUpdate) isRpcInbound()    {}
 func (HostToolResult) isRpcInbound()    {}
 func (HostUriResult) isRpcInbound()     {}

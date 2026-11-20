@@ -30,7 +30,7 @@ import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata } from "@oh-my-
 import { noThinkingMessage, resolveThinkingArgument } from "./helpers/effort";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
 import { handleSecurityCommand } from "./helpers/security";
-import type { SlashCommandResult, SlashCommandRuntime, SlashCommandSpec } from "./types";
+import type { SlashCommandSpec } from "./types";
 
 import {
 	cfgComputerBackgroundFallback,
@@ -60,15 +60,6 @@ export const workspaceCommand = {
 	inlineHint: "[prompt]",
 	allowArgs: true,
 	getTuiAutocompleteDescription: runtime => `Workspace: ${runtime.ctx.workspaceModeEnabled ? "on" : "off"}`,
-	handleRpc: (command, runtime: SlashCommandRuntime): Exclude<SlashCommandResult, undefined> => {
-		const state = runtime.session.getWorkspaceModeState();
-		if (!command.args || !state.enabled) {
-			runtime.session.setWorkspaceModeState({ ...state, enabled: command.args ? true : !state.enabled });
-		}
-		if (command.args) return { prompt: command.args };
-		runtime.output(`Workspace mode ${state.enabled ? "disabled" : "enabled"}.`);
-		return { consumed: true };
-	},
 	handleTui: async (command, runtime) => {
 		await runWithDetachedDraft(command, runtime, () =>
 			runtime.ctx.handleWorkspaceModeCommand(command.args || undefined, runtime.input, runtime.followUp),
@@ -271,7 +262,6 @@ const LOOP_MODE_SLASH_COMMAND: SlashCommandSpec = {
 	},
 	inlineHint: "[count|duration] [interval] [--while|--until '<cmd>'] [prompt]",
 	allowArgs: true,
-	handleRpc: (command, runtime) => runtime.runModeCommand("loop", command.args),
 	getTuiAutocompleteDescription: runtime => {
 		if (!runtime.ctx.loopModeEnabled) return "Loop: off";
 		if (runtime.ctx.loopModePaused) return "Loop: paused";
@@ -306,7 +296,6 @@ const GOAL_MODE_SLASH_COMMAND: SlashCommandSpec = {
 	],
 	inlineHint: "[objective]",
 	allowArgs: true,
-	handleRpc: (command, runtime) => runtime.runModeCommand("goal", command.args),
 	getTuiAutocompleteDescription: runtime => {
 		if (!cfgGoalEnabled.get(runtime.ctx.settings)) return "Goal: disabled in settings";
 		if (runtime.ctx.planModeEnabled) return "Goal: blocked by plan mode";
@@ -524,7 +513,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Toggle plan mode (agent plans before executing)",
 		inlineHint: "[prompt]",
 		allowArgs: true,
-		handleRpc: (command, runtime) => runtime.runModeCommand("plan", command.args),
 		getTuiAutocompleteDescription: runtime => {
 			if (!cfgPlanEnabled.get(runtime.ctx.settings)) return "Plan: disabled in settings";
 			if (runtime.ctx.planModeEnabled) {
@@ -575,7 +563,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "goal-autopilot",
 		description:
 			"Manage a persistent goal with unattended orchestration saved in history and restored after compaction",
-		handleRpc: (command, runtime) => runtime.runModeCommand("goal-autopilot", command.args),
 		handleTui: async (command, runtime) => {
 			await runWithDetachedDraft(command, runtime, () =>
 				runtime.ctx.handleGoalModeCommand(command.args || undefined, runtime.input, { autoOrchestrate: true }),
@@ -600,7 +587,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "loopgoal",
 		description:
 			"Repeat a fixed goal prompt after each turn until the agent replies 无. Uses the same parameters, context handling and stop controls as /loop.",
-		handleRpc: (command, runtime) => runtime.runModeCommand("loopgoal", command.args),
 		handleTui: async (command, runtime) => {
 			const prompt = await runtime.ctx.handleLoopCommand(command.args, true);
 			clearSubmittedText(runtime);

@@ -616,6 +616,7 @@ export async function runMcpOAuthFlow(opts: McpOAuthFlowRunOptions): Promise<OAu
 			clientSecret: flow.registeredClientSecret ?? resolvedClientSecret,
 			resource: flow.resource,
 			authorizationUrl: flow.authorizationUrl,
+			scope: flow.grantedScope,
 		};
 
 		await opts.authStorage.credentials.set(credentialId, oauthCredential);

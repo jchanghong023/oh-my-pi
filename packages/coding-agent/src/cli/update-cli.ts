@@ -1905,10 +1905,25 @@ function formatVerificationFailure(result: InstalledVersionVerification, expecte
 	return `could not verify updated version${result.path ? ` at ${result.path}` : ""}`;
 }
 
-/**
- * Print post-update verification result.
- */
-function printVerificationResult(result: InstalledVersionVerification, expectedVersion: string): void {
+/** Publish extension assets from the verified launcher, not from the updating process. */
+export async function syncRelayAfterVerifiedUpdate(launcher: string | undefined): Promise<void> {
+	if (!launcher) return;
+	try {
+		const result = await $`${launcher} browser-relay sync`.quiet().nothrow();
+		if (result.exitCode !== 0) {
+			logger.warn("browser relay sync after update failed", {
+				launcher,
+				exitCode: result.exitCode,
+				error: result.stderr.toString().trim(),
+			});
+		}
+	} catch (error) {
+		logger.warn("browser relay sync after update failed", { launcher, error: String(error) });
+	}
+}
+
+/** Report verification and sync assets only after the requested version is confirmed. */
+async function finishVerifiedUpdate(result: InstalledVersionVerification, expectedVersion: string): Promise<void> {
 	updateEvent(
 		"path_verification",
 		result.ok ? "completed" : "partial",
@@ -1922,6 +1937,7 @@ function printVerificationResult(result: InstalledVersionVerification, expectedV
 	);
 	if (result.ok) {
 		printVerifiedVersion(expectedVersion, result.path);
+		await syncRelayAfterVerifiedUpdate(result.path);
 		return;
 	}
 	console.log(chalk.yellow(`\nWarning: ${formatVerificationFailure(result, expectedVersion)}`));
@@ -1930,7 +1946,7 @@ function printVerificationResult(result: InstalledVersionVerification, expectedV
 
 /** Verify the PATH-resolved launcher and print the outcome. */
 async function printVerification(expectedVersion: string): Promise<void> {
-	printVerificationResult(await verifyInstalledVersion(expectedVersion), expectedVersion);
+	await finishVerifiedUpdate(await verifyInstalledVersion(expectedVersion), expectedVersion);
 }
 
 async function unlinkIfExists(filePath: string): Promise<void> {
@@ -2497,7 +2513,7 @@ export async function migrateRenamedInstall(release: ReleaseInfo, steps: RenameM
 					`${formatVerificationFailure(verification, release.version)}; reinstall with: ${installerHint()}`,
 				);
 			}
-			printVerifiedVersion(release.version);
+			await finishVerifiedUpdate(verification, release.version);
 		},
 		fields,
 	);
@@ -2704,7 +2720,7 @@ export async function updateViaManager(
 			if (!launcherNeedsRepair) {
 				if (installError) throw installError;
 				if (!result.ok) fields.outcome = "partial";
-				printVerificationResult(result, release.version);
+				await finishVerifiedUpdate(result, release.version);
 				return;
 			}
 			if (!launcherPath) {
@@ -3014,7 +3030,7 @@ export async function updateViaBinaryAt(
 					return result;
 				}),
 			);
-			printVerifiedVersion(installedVersion, verification.path ?? targetPath);
+			await finishVerifiedUpdate({ ...verification, path: verification.path ?? targetPath }, installedVersion);
 			console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
 		},
 		{
@@ -3250,6 +3266,7 @@ export async function updateViaShimTakeover(
 				);
 			}
 			printVerifiedVersion(installedVersion);
+			await syncRelayAfterVerifiedUpdate(exePath);
 			console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
 			fields.forwarded_count = forwarded.length;
 			fields.stuck_count = stuck.length;

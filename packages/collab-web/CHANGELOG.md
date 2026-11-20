@@ -12,6 +12,10 @@
 - Sending waits for selected images to finish loading; copying transcript text in Chromium no longer includes decorative labels, prompts, or diff gaps.
 - Oversized image submissions are rejected before clearing the draft or attachments.
 
+### Added
+
+- `GuestClient.sendPrompt` accepts images and sends them with the prompt.
+
 ## [19.0.0] - 2026-11-18
 
 ### Fixed

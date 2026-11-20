@@ -7,6 +7,19 @@
 - Windows extension builds now archive only generated files and complete embedded CLI resource generation.
 - The extension ZIP now reports the version of the fork binary published in the same release.
 
+### Breaking Changes
+
+- The omp extension has a pinned Chrome ID. Remove the old unpinned extension and use _Load unpacked_ to install it again once.
+- The omp extension reaches the browser relay through its native host instead of a websocket, so the relay is up whenever Chrome runs. Its options page (relay port and token) is gone.
+
+### Added
+
+- The omp extension adds a Chrome side panel, page overlays, image and element picks, Teach, scheduled shortcuts, and GIF export.
+
+### Changed
+
+- The omp extension now keeps registered installations current across omp upgrades and reloads when idle.
+
 ## [19.0.1] - 2026-11-19
 
 ### Fixed

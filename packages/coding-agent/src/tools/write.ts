@@ -1197,7 +1197,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 							tool: "write",
 							before: before.text,
 							after,
-							beforeMtimeMs: before.mtimeMs,
 						});
 					};
 

@@ -5,8 +5,8 @@ import * as path from "node:path";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
 import { executeBuiltinSlashCommand } from "../../src/slash-commands/builtin-registry";
-import { executeAcpBuiltinSlashCommand, executeRpcBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
-import type { RpcSlashCommandRuntime, SlashCommandRuntime } from "../../src/slash-commands/types";
+import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
+import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 import type { TodoLoopRunOptions, TodoLoopState } from "../../src/todoloop/runner";
 import { TodoLoopStatusBlock } from "../../src/todoloop/presentation";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
@@ -194,10 +194,7 @@ describe("native /todoloop command", () => {
 		expect(unregister).toHaveBeenCalledTimes(1);
 	});
 
-	it("uses existing non-TUI availability gates", async () => {
+	it("does not dispatch in ACP", async () => {
 		expect(await executeAcpBuiltinSlashCommand("/todoloop a.md --check", {} as SlashCommandRuntime)).toBe(false);
-		await expect(executeRpcBuiltinSlashCommand("/todoloop a.md", {} as RpcSlashCommandRuntime)).rejects.toThrow(
-			"only available in the interactive TUI",
-		);
 	});
 });

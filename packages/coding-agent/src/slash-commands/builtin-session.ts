@@ -40,7 +40,6 @@ import {
 import { StatsNotice } from "@oh-my-pi/pi-tui/overlays/stats-notice";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
-import { handleRpcKnowledgeDashboard } from "./helpers/index-dashboard";
 import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 async function handleUsageResetCommand(
@@ -604,7 +603,6 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "knowledge",
 		icon: "tree",
 		description: "Open the knowledge index hub",
-		handleRpc: (_command, runtime) => handleRpcKnowledgeDashboard(runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showKnowledgeDashboard();
 			clearSubmittedText(runtime);

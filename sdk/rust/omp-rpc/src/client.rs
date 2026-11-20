@@ -50,7 +50,6 @@ const PAGE_BUSY_ERROR: &str = "Cannot page messages while the session is changin
 const PAGE_STALE_ERROR: &str = "RPC message cursor is stale";
 /// How long teardown waits for the process group leader after each signal.
 const LEADER_EXIT_TIMEOUT: Duration = Duration::from_secs(1);
-#[cfg(unix)]
 /// After SIGKILL, killed members linger until reaped by their (new) parent.
 const KILL_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 /// How long teardown waits for the reader thread once the process is gone.
@@ -459,8 +458,7 @@ impl Shared {
 			}
 		}
 		if !response.success {
-			// An uncorrelated failure belongs to the only pending call of that
-			// command.
+			// An uncorrelated failure belongs to the only pending call of that command.
 			let mut matching = state
 				.pending
 				.iter()
@@ -838,8 +836,7 @@ impl Client {
 			default_timeout: options.default_timeout,
 			registration: Mutex::new(()),
 		};
-		// From here on an early return drops `client`, which tears everything
-		// down.
+		// From here on an early return drops `client`, which tears everything down.
 		client.ready = match ready_rx.recv_timeout(options.ready_timeout) {
 			Ok(ready) => ready,
 			Err(RecvTimeoutError::Timeout) => {
@@ -1001,8 +998,7 @@ impl Client {
 		let id = self.next_id();
 		let frame = encode_command(&id, prompt)?;
 		let (tx, rx) = mpsc::channel();
-		// Registered before writing: the result may arrive before the
-		// acknowledgement.
+		// Registered before writing: the result may arrive before the acknowledgement.
 		self.shared.state().prompts.insert(id.clone(), tx);
 		let _collector = Collector { shared: &self.shared, id: &id };
 		let response = self.request(&id, PromptCommand::NAME, &frame, timeout)?;

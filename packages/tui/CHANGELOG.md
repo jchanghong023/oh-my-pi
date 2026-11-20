@@ -2,18 +2,37 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Moved `convertImageToPng`, `convertImageToPngShared`, `cachedPngConversion` and `imagePayloadKey` from `@oh-my-pi/pi-tui/chat/image-loading` to `@oh-my-pi/pi-tui/png-conversion`; import them from the new path ([#19829](https://github.com/can1357/oh-my-pi/pull/19829) by [@jaredlyon](https://github.com/jaredlyon))
+- `OutputSinkOptions.artifactPath`/`artifactId` are replaced by `allocateArtifact` (`ArtifactAllocator`), which the sink calls only when output first overflows its inline view
+- Removed the `windows-altgr` module (`translateWindowsAltGrSequence`, `readAltGrLayer`, `createRightAltLatch`, `RIGHT_ALT_LATCH_MS`, `AltGrHost`, `KeyboardLayoutHandle`); AltGr recovery is `translateWindowsAltGrSequence` in `@oh-my-pi/pi-natives`
+
 ### Added
 
 - Added handling of `features` terminal events to update UI without waiting for a new hello
+
+### Changed
+
+- Native chats no longer show a crossed-out Spotlight star or leave an empty row under unchanged tool results.
+- Windows console VT input and AltGr recovery go through `@oh-my-pi/pi-natives` instead of `bun:ffi`
+- The background jobs sheet reads a job's output from where its command sends it: a command that pipes (`| tail`) or redirects (`> log`) gets a tab per stream beside Output and opens on the one being written, instead of "No output yet" until it ends
+- The background jobs sheet draws a job's command as its live shell visualization with the running step in view, and fits what the job is for, its caption and its facts in fewer lines
 
 ### Fixed
 
 - The status line updates total active time while the turn spinner animates.
 - Fixed the `status` status-line segment repainting extension `ctx.ui.setStatus` text in the accent colour: statuses that set their own foreground colour or text style keep it, and uncoloured ones still take the accent ([#19727](https://github.com/can1357/oh-my-pi/pull/19727) by [@robfeldmann](https://github.com/robfeldmann))
+- The terminal cursor no longer blinks off and on with every spinner tick in kitty
 - Scrolling no longer drops the background from truncated rows, so tinted lines keep their color to the end of the viewport ([#19632](https://github.com/can1357/oh-my-pi/pull/19632) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 - Model pickers use the last rendered mouse targets across scrolls and resizes, and Team suggestions identify their providers.
 - The status line counts overlapping Git changes once, including in large worktrees, and shows LoopN progress independently of hook notices.
 - Read-only transcripts no longer offer a composer, and background job failures keep their real output without duplicating completion rows.
+- Fixed WebP and JPEG images drawing as a blank gap on Kitty-graphics terminals (Ghostty, Kitty, herdr) when shown through a bare `Image`, such as an extension's pasted-image preview ([#19829](https://github.com/can1357/oh-my-pi/pull/19829) by [@jaredlyon](https://github.com/jaredlyon))
+- Large repaints are again written in pieces that end between rows, so output from another process sharing the terminal cannot land inside a row or an escape sequence
+- Terminals the output writer cannot reopen (after `su` to another user, inside some sandboxes) are written off the JS thread too, so a slow terminal no longer freezes input there
+- `ask` HTML forms keep a prefilled or hidden control named `__proto__` in their default data, so a timed-out form no longer drops it ([#18646](https://github.com/can1357/oh-my-pi/pull/18646) by [@pasquale95](https://github.com/pasquale95))
+- An ask form with one question submits on one Enter instead of stopping on Submit first
 
 ## [19.0.1] - 2026-11-19
 

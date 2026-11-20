@@ -144,6 +144,7 @@ describe("EditTool internal URL targets", () => {
 				}
 			},
 		});
+		if (!stream) throw new Error("Expected replace edit argument stream");
 		const encoded = JSON.stringify(args);
 		for (let offset = 0; offset < encoded.length; offset += 7) stream.push(encoded.slice(offset, offset + 7));
 		stream.end(args);

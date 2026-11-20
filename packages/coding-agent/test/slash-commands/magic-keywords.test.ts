@@ -87,10 +87,9 @@ describe("JCH batch argument parsing", () => {
 });
 
 describe("public command inventory", () => {
-	it("does not advertise RPC custom or file names captured by a builtin colon-prefix or alias", async () => {
+	it("does not advertise ACP custom or file names captured by a builtin colon-prefix or alias", async () => {
 		const session = {
 			customCommands: [
-				{ command: { name: "login:company", description: "Unreachable panel shadow" } },
 				{ command: { name: "model:company", description: "Unreachable shared shadow" } },
 				{ command: { name: "review:company", description: "Reachable custom command" } },
 			],
@@ -98,16 +97,11 @@ describe("public command inventory", () => {
 			sessionManager: { getCwd: () => "/tmp/commands" },
 			setSlashCommands: () => {},
 		} as unknown as AvailableCommandsSession;
-		const commands = await buildAvailableSlashCommands(
-			session,
-			async () => [
-				{ name: "models:company", description: "Unreachable alias shadow", content: "body", source: "test" },
-				{ name: "review:file", description: "Reachable file command", content: "body", source: "test" },
-			],
-			{ includeRpcBuiltins: true },
-		);
+		const commands = await buildAvailableSlashCommands(session, async () => [
+			{ name: "models:company", description: "Unreachable alias shadow", content: "body", source: "test" },
+			{ name: "review:file", description: "Reachable file command", content: "body", source: "test" },
+		]);
 		const names = commands.map(command => command.name);
-		expect(names).not.toContain("login:company");
 		expect(names).not.toContain("model:company");
 		expect(names).not.toContain("models:company");
 		expect(names).toContain("review:company");
