@@ -9,6 +9,7 @@ import { forwardNextestOutput, withRustCompilerEvents } from "./test-gate-native
 import { testConcurrencyLimit } from "./test-gate-scheduler";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 import type { RustDeltaSelection } from "./test-gate-delta";
+import { ensureWindowsBuildTools } from "./windows-build-tools";
 
 const forkPackages = ["omp-knowledge", "omp-natives"] as const;
 const packageNamePattern = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
@@ -133,7 +134,8 @@ const selection = taskName === "test:rs" && !full ? readDeltaSelection() : undef
 const selectedPackages =
 	selection?.mode === "affected" ? forkPackages.filter(name => selection.packages.includes(name)) : [...forkPackages];
 Object.assign(process.env, windowsTestTempOverride());
-prepareWindowsRustEnvironment();
+// Leave missing Visual Studio tools to Cargo's diagnostics in the Rust gate.
+ensureWindowsBuildTools({ tolerateProbeFailure: true });
 const commands =
 	taskName !== "test:rs" ? TASK_COMMANDS[taskName] : full ? FULL_TEST_COMMANDS : forkTestCommands(selectedPackages);
 await runCommands(commands, taskName === "test:rs" ? (full ? "rust-workspace" : "rust-fork-features") : undefined);
@@ -295,48 +297,6 @@ function cargoEnvironment(binary: string): Record<string, string> {
 	const toolchain = toolchainOfCargo(binary);
 	if (toolchain !== undefined) env.RUSTUP_TOOLCHAIN = toolchain;
 	return env;
-}
-
-function prepareWindowsRustEnvironment(): void {
-	// Windows: cc-rs and rustc auto-locate cl.exe/link.exe through the VS
-	// registry, but the cmake crate (opusic-sys' bundled Opus) needs cmake —
-	// and its Ninja generator needs ninja — on PATH (`.cargo/config.toml` forces
-	// CMAKE_GENERATOR=Ninja). VS Build Tools ships both without exposing them, so
-	// outside a vcvars prompt the build dies on "CMake was unable to find a build
-	// program". Resolve the VS install via vswhere and append its CMake/Ninja
-	// dirs, keeping any user-provided tools ahead. Mirrors
-	// packages/natives/scripts/build-bindings.ts.
-	if (process.platform === "win32" && (!Bun.which("cmake") || !Bun.which("ninja"))) {
-		const vcToolsComponent =
-			process.arch === "arm64"
-				? "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
-				: "Microsoft.VisualStudio.Component.VC.Tools.x86.x64";
-		const vswhere = path.join(
-			process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
-			"Microsoft Visual Studio",
-			"Installer",
-			"vswhere.exe",
-		);
-		let vsRoot = "";
-		try {
-			const probe = Bun.spawnSync(
-				[vswhere, "-latest", "-products", "*", "-requires", vcToolsComponent, "-property", "installationPath"],
-				{ stdout: "pipe", stderr: "pipe" },
-			);
-			if (probe.exitCode === 0) vsRoot = probe.stdout.toString("utf-8").trim();
-		} catch {
-			// VS Installer is optional; let cargo report any missing build tools.
-		}
-		if (vsRoot) {
-			const cmakeExt = path.join(vsRoot, "Common7", "IDE", "CommonExtensions", "Microsoft", "CMake");
-			const extraDirs = [path.join(cmakeExt, "CMake", "bin"), path.join(cmakeExt, "Ninja")].filter(dir =>
-				fs.existsSync(dir),
-			);
-			if (extraDirs.length > 0) {
-				process.env.PATH = [process.env.PATH ?? "", ...extraDirs].filter(Boolean).join(path.delimiter);
-			}
-		}
-	}
 }
 
 function isRustTaskName(value: string | undefined): value is RustTaskName {

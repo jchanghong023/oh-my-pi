@@ -262,9 +262,7 @@ export type PluginConstructor<T extends MnemopiPlugin = MnemopiPlugin> = new (co
 export class PluginManager {
 	private readonly registry = new Map<string, PluginConstructor>();
 	private readonly instances = new Map<string, MnemopiPlugin>();
-	private readonly pluginDir: string;
-	constructor(pluginDir = DEFAULT_PLUGIN_DIR) {
-		this.pluginDir = pluginDir;
+	constructor(private readonly pluginDir = DEFAULT_PLUGIN_DIR) {
 		this.registerPlugin("logging", LoggingPlugin);
 		this.registerPlugin("metrics", MetricsPlugin);
 		this.registerPlugin("filter", FilterPlugin);

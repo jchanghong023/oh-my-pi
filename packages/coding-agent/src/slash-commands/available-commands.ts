@@ -5,6 +5,7 @@ import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { ExtensionRunner } from "../extensibility/extensions";
 import { getSkillSlashCommandName, type Skill } from "../extensibility/skills";
 import { type FileSlashCommand, loadSlashCommands } from "../extensibility/slash-commands";
+import { acpBuiltinReservedNames, isAcpBuiltinShadowedName } from "./acp-builtins";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "./builtin-registry";
 
 export type AvailableSlashCommandSource = "builtin" | "skill" | "extension" | "custom" | "mcp_prompt" | "file";
@@ -36,17 +37,8 @@ export async function buildAvailableSlashCommands(
 ): Promise<InternalAvailableSlashCommand[]> {
 	const commands: InternalAvailableSlashCommand[] = [];
 	const seenNames = new Set<string>();
-	const builtinNames = new Set<string>();
 	const appendCommand = (command: InternalAvailableSlashCommand): void => {
-		if (command.source !== "builtin") {
-			// `builtinNames` is the dispatch-reserved surface for this listing:
-			// exact names and colon namespaces that dispatch would capture before
-			// the non-builtin handler can run must not be advertised.
-			const colon = command.name.indexOf(":");
-			if (builtinNames.has(command.name) || (colon !== -1 && builtinNames.has(command.name.slice(0, colon)))) {
-				return;
-			}
-		}
+		if (command.source !== "builtin" && isAcpBuiltinShadowedName(command.name)) return;
 		if (seenNames.has(command.name)) return;
 		seenNames.add(command.name);
 		commands.push(command);
@@ -54,8 +46,6 @@ export async function buildAvailableSlashCommands(
 
 	for (const command of BUILTIN_SLASH_COMMANDS_INTERNAL) {
 		if (!command.handle) continue;
-		builtinNames.add(command.name);
-		for (const alias of command.aliases ?? []) builtinNames.add(alias);
 		const hint = command.acpInputHint ?? command.inlineHint;
 		appendCommand({
 			name: command.name,
@@ -84,7 +74,7 @@ export async function buildAvailableSlashCommands(
 
 	const runner = session.extensionRunner;
 	if (runner) {
-		for (const command of runner.getRegisteredCommands(builtinNames)) {
+		for (const command of runner.getRegisteredCommands(acpBuiltinReservedNames())) {
 			appendCommand({
 				name: command.name,
 				description: command.description ?? "(extension command)",

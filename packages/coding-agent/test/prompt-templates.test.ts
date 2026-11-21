@@ -265,6 +265,16 @@ describe("template expansion fallback", () => {
 		expect(result).toBe("Do: sample input text");
 	});
 
+	test("substitutes the original arguments once for a file command using rawArguments", () => {
+		const result = expandSlash('/test-command "quoted  input"  tail', "Do: {{{rawArguments}}}");
+		expect(result).toBe('Do: "quoted  input"  tail');
+	});
+
+	test("appends parsed arguments when a prompt template references the file-command-only rawArguments", () => {
+		const result = expandPrompt('/test-template "quoted  input"  tail', "Do:{{{rawArguments}}}");
+		expect(result).toBe("Do:\n\nquoted  input tail");
+	});
+
 	for (const { name, invocation, expand } of helperConsumptionCases) {
 		test(`should not append fallback text when Handlebars default consumes args for ${name} even when the rendered text is unchanged`, () => {
 			const result = expand(invocation, '{{default arguments "none"}}');

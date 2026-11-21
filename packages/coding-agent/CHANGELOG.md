@@ -40,6 +40,8 @@
 - `/clear` is TUI-only again; ACP, RPC, and print no longer clear the current session through this slash command.
 - `/logout` is TUI-only again. RPC clients can still remove a stored credential through the native `logout` request.
 - Use `read` for help on `xd://resolve`, `xd://reject`, `xd://propose`, and `xd://report_issue`. Writing `?` now passes it to the action handler.
+- Ordinary prompt templates no longer expose `rawArguments`. File-based slash commands such as `/dt` still accept it.
+- Extension `exec()` no longer accepts the fork-only `windowsVerbatimArguments` option; it uses upstream Windows argument escaping.
 
 ### Added
 
@@ -61,6 +63,7 @@
 - CLI sessions honor `lsp.enabled: true` again. LSP remains off by default, and `--no-lsp` still disables it for one run.
 - `omp config set` and `reset` no longer print the internal revision on success. Concurrent edits are still rejected.
 - ACP slash commands now pass arguments to their native text handlers instead of forwarding the command as a prompt when TUI disallows arguments.
+- `/team configure` in text hosts now points to the TUI instead of retired RPC endpoints.
 - `/jobs full` follows upstream and omits supplemental text when a job's command or label is already its ID.
 - In ANSI terminals, `/jobs` shows the upstream task-tree report again. Native terminals keep the live jobs panel.
 - Advisor transcripts use upstream `ask` input formatting: the HTML form or recorded question text, without expanding legacy call arguments.

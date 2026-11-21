@@ -224,6 +224,7 @@ new Mnemopi({
 ## Operational notes
 
 - The default shared database lives under the agent memories directory in `mnemopi/mnemopi.db`; project-scoped banks use sibling database paths under that Mnemopi directory.
+- `OMP_OFFLINE` does not relocate Mnemopi databases to `/dev/shm`; the default persistent location and explicit database paths still apply.
 - `/memory clear` removes every scoped Mnemopi SQLite database and sidecar WAL/SHM files for the active configuration.
 - `/memory enqueue` forces retention of the current session, flushes pending fact extractions, and runs Mnemopi sleep/consolidation for eligible working-memory rows.
 - `/memory stats` and `/memory diagnose` render backend-specific bank statistics/diagnostics when the Mnemopi backend is active.
