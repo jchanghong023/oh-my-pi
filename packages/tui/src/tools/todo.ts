@@ -24,10 +24,9 @@ import type { NativeToolView, ToolRenderResult } from "./renderer";
 
 /** Lifecycle state of a todo item. */
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
-export type LocalTodoStatus = TodoStatus | "blocked";
 
 /** Operation names accepted by the todo tool and echoed in successful result details. */
-export type TodoOperation = "init" | "start" | "done" | "rm" | "drop" | "block" | "unblock" | "append" | "view";
+export type TodoOperation = "init" | "start" | "done" | "rm" | "drop" | "append" | "view";
 
 /** A task displayed within a todo phase. */
 export interface TodoItem {
@@ -43,40 +42,6 @@ export interface TodoPhase {
 	tasks: TodoItem[];
 }
 
-export interface LocalTodoItem extends Omit<TodoItem, "status"> {
-	status: LocalTodoStatus;
-	/** An optional dependency note for blocked work. */
-	blocker?: string;
-}
-
-export interface LocalTodoPhase extends Omit<TodoPhase, "tasks"> {
-	tasks: LocalTodoItem[];
-}
-
-function isPublicTodoItem(item: LocalTodoItem): item is TodoItem {
-	return item.status !== "blocked" && !("blocker" in item);
-}
-
-export function publicTodoItems(items: LocalTodoItem[]): TodoItem[] {
-	if (items.every(isPublicTodoItem)) return items;
-	return items.map(item => {
-		if (isPublicTodoItem(item)) return item;
-		const { blocker: _, status, ...fields } = item;
-		return { ...fields, status: status === "blocked" ? "pending" : status };
-	});
-}
-
-function isPublicTodoPhase(phase: LocalTodoPhase): phase is TodoPhase {
-	return phase.tasks.every(isPublicTodoItem);
-}
-
-export function publicTodoPhases(phases: LocalTodoPhase[]): TodoPhase[] {
-	if (phases.every(isPublicTodoPhase)) return phases;
-	return phases.map(phase =>
-		isPublicTodoPhase(phase) ? phase : { name: phase.name, tasks: publicTodoItems(phase.tasks) },
-	);
-}
-
 /** A task that became complete in the latest update. */
 export interface TodoCompletionTransition {
 	phase: string;
@@ -87,7 +52,7 @@ export interface TodoCompletionTransition {
 export interface TodoToolDetails {
 	/** Operation that produced this snapshot; absent on legacy transcript entries. */
 	op?: TodoOperation;
-	phases: LocalTodoPhase[];
+	phases: TodoPhase[];
 	storage: "session" | "memory";
 	completedTasks?: TodoCompletionTransition[];
 }
@@ -157,7 +122,7 @@ export function todoMatchesAnyDescription(content: string, descriptions: readonl
 /** Whether a todo is settled: completed or deliberately abandoned. Shared so
  *  the collapsed viewport, the HUD progress counters, and the HUD's closed-todo
  *  auto-clear can never disagree about what "done" hides. */
-export function isClosedTodo<T extends { status: LocalTodoStatus }>(task: T): boolean {
+export function isClosedTodo<T extends { status: TodoStatus }>(task: T): boolean {
 	return task.status === "completed" || task.status === "abandoned";
 }
 
@@ -202,10 +167,7 @@ function splitTaskList(content: string, known: ReadonlySet<string>): string[] {
  * newline- or space-separated) splits like a path list, with parts trimmed and unquoted (see
  * {@link TASK_LIST_DELIMITERS}). Array entries expand the same way; absent, `""` and `[]` target none.
  */
-export function todoTaskTargets(
-	phases: readonly LocalTodoPhase[],
-	task: string | readonly string[] | undefined,
-): string[] {
+export function todoTaskTargets(phases: readonly TodoPhase[], task: string | readonly string[] | undefined): string[] {
 	if (task === undefined || task === "") return [];
 	const known = new Set(phases.flatMap(phase => phase.tasks.map(item => item.content)));
 	return (typeof task === "string" ? [task] : task).flatMap(content => splitTaskList(content, known));
@@ -217,7 +179,7 @@ export function todoTaskTargets(
  * collapsed views (transient tool result + sticky HUD) run this same policy so
  * they can never disagree about what the agent is doing (#5873).
  */
-function isActiveTodo<T extends { status: LocalTodoStatus }>(task: T, isMatched: (task: T) => boolean): boolean {
+function isActiveTodo<T extends { status: TodoStatus }>(task: T, isMatched: (task: T) => boolean): boolean {
 	return task.status === "in_progress" || (task.status === "pending" && isMatched(task));
 }
 
@@ -254,7 +216,7 @@ const COLLAPSED_CLOSED_CONTEXT = 1;
  * The summary occupies a row, so a summary that would hide exactly one task is
  * replaced by that task: the selection spends at most `cap + 1` rows.
  */
-function selectWithinCap<T extends { status: LocalTodoStatus }>(
+function selectWithinCap<T extends { status: TodoStatus }>(
 	base: T[],
 	isMatched: (task: T) => boolean,
 	cap: number,
@@ -300,7 +262,7 @@ function selectWithinCap<T extends { status: LocalTodoStatus }>(
  * `summary` counts the open tasks that did not fit; the closed lead is context,
  * not part of the budget.
  */
-export function selectCollapsedTodos<T extends { status: LocalTodoStatus }>(
+export function selectCollapsedTodos<T extends { status: TodoStatus }>(
 	tasks: T[],
 	isMatched: (task: T) => boolean,
 	cap: number,
@@ -468,7 +430,7 @@ function strikeRevealCount(label: TodoLabel, frame: number | undefined): number 
 }
 
 function formatTodoLine(
-	item: LocalTodoItem,
+	item: TodoItem,
 	label: TodoLabel,
 	uiTheme: Theme,
 	prefix: string,
@@ -490,10 +452,6 @@ function formatTodoLine(
 			return uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${text}`);
 		case "abandoned":
 			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${strikethroughText(text)}`);
-		case "blocked": {
-			const note = item.blocker ? `blocked: ${forDisplay(item.blocker)}` : "blocked";
-			return uiTheme.fg("warning", `${prefix}${checkbox.unchecked} ${text} (${note})`);
-		}
 		default:
 			// A pending todo lit by a live subagent match renders accent, matching
 			// the sticky HUD's convention (#5873).
@@ -508,7 +466,7 @@ function formatTodoLine(
  */
 function computeTouchedPhases(
 	args: TodoRenderArgs | undefined,
-	phases: LocalTodoPhase[],
+	phases: TodoPhase[],
 	completedTasks: TodoCompletionTransition[],
 ): Set<string> | null {
 	const touched = new Set<string>();
@@ -545,13 +503,13 @@ function computeTouchedPhases(
  * completed ones: the collapsed viewport hides both, so an abandoned task has to
  * move the counter or its phase reads as permanently stuck.
  */
-function formatPhaseProgress(phase: LocalTodoPhase, uiTheme: Theme): string {
+function formatPhaseProgress(phase: TodoPhase, uiTheme: Theme): string {
 	const done = phase.tasks.filter(isClosedTodo).length;
 	return uiTheme.fg("dim", `  ${done}/${phase.tasks.length}`);
 }
 
 /** One-line summary for a collapsed (untouched) phase: dim header + progress. */
-function formatPhaseSummary(phase: LocalTodoPhase, oneBasedIndex: number, uiTheme: Theme): string {
+function formatPhaseSummary(phase: TodoPhase, oneBasedIndex: number, uiTheme: Theme): string {
 	const name = uiTheme.fg("dim", chalk.bold(formatPhaseDisplayName(phase.name, oneBasedIndex)));
 	return `${name}${formatPhaseProgress(phase, uiTheme)}`;
 }
@@ -572,21 +530,17 @@ export function setActiveTodoDescriptionsProvider(provider: () => readonly strin
 }
 
 /** omp todo status → checklist item status (§7.5). */
-const CHECKLIST_STATUS: Record<LocalTodoStatus, TspChecklistItem["status"]> = {
+const CHECKLIST_STATUS: Record<TodoStatus, TspChecklistItem["status"]> = {
 	pending: "pending",
 	in_progress: "active",
 	completed: "done",
 	abandoned: "dropped",
-	blocked: "blocked",
 };
 
 /** Checklist item for one todo; a pending todo an in-flight subagent executes reads as active. */
-function checklistItem(task: LocalTodoItem, id: string, matched = false): TspChecklistItem {
+function checklistItem(task: TodoItem, id: string, matched = false): TspChecklistItem {
 	const status = task.status === "pending" && matched ? "active" : CHECKLIST_STATUS[task.status];
-	const note = task.status === "blocked" && task.blocker ? forDisplay(task.blocker) : undefined;
-	return note === undefined
-		? { id, text: forDisplay(task.content), status }
-		: { id, text: forDisplay(task.content), status, note };
+	return { id, text: forDisplay(task.content), status };
 }
 
 /**
@@ -594,8 +548,8 @@ function checklistItem(task: LocalTodoItem, id: string, matched = false): TspChe
  * numerals — the terminal numbers nothing), completed phases folded.
  */
 export function todoChecklistPhases(
-	phases: readonly { name: string; tasks: readonly LocalTodoItem[] }[],
-	isMatched: (task: LocalTodoItem) => boolean = () => false,
+	phases: readonly { name: string; tasks: readonly TodoItem[] }[],
+	isMatched: (task: TodoItem) => boolean = () => false,
 ): TspChecklistPhase[] {
 	return phases.map((phase, p) => ({
 		id: `p${p}`,
@@ -630,7 +584,7 @@ function describeTodoResult(
 	}
 	const closed = phases.reduce((sum, phase) => sum + phase.tasks.filter(isClosedTodo).length, 0);
 	const activeDescs = options.expanded ? [] : activeTodoDescriptionsProvider();
-	const isMatched = (task: LocalTodoItem): boolean =>
+	const isMatched = (task: TodoItem): boolean =>
 		activeDescs.length > 0 && todoMatchesAnyDescription(task.content, activeDescs);
 	return {
 		tool: { title: "Todo", target: `${closed}/${total}`, targetKind: "text" },
@@ -710,8 +664,8 @@ export const todoToolRenderer = {
 		// Everything below is fixed for this result; only the spinner frame and
 		// the live subagent description set vary per frame, so derive labels,
 		// touched phases and normalized match state once and reuse them.
-		const labels = new Map<LocalTodoItem, TodoLabel>();
-		const labelFor = (task: LocalTodoItem): TodoLabel => {
+		const labels = new Map<TodoItem, TodoLabel>();
+		const labelFor = (task: TodoItem): TodoLabel => {
 			let label = labels.get(task);
 			if (!label) {
 				// Sanitize only for display: a mirrored Cursor snapshot carries
@@ -761,7 +715,7 @@ export const todoToolRenderer = {
 			// sticky HUD does (#5873). Empty outside an interactive session.
 			const activeDescs = expanded ? [] : activeTodoDescriptionsProvider();
 			if (activeDescs.length > 0) syncActiveDescs(activeDescs);
-			const isMatched = (task: LocalTodoItem): boolean => {
+			const isMatched = (task: TodoItem): boolean => {
 				if (activeDescs.length === 0) return false;
 				let matched = matchByContent.get(task.content);
 				if (matched === undefined) {

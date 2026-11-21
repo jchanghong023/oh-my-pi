@@ -794,8 +794,8 @@ async function runInteractiveMode(
 			await mode.maybeAutoCreateWorktree();
 		}
 
-		// `omp join` dispatches through the same builtin path as a typed `/join`
-		// so collab guards and error rendering stay in one place.
+		// `omp join <link>`: dispatch through the same builtin path as a typed
+		// `/join` so collab guards and error rendering stay in one place.
 		if (joinLink !== undefined) {
 			const executeBuiltinSlashCommand = await loadBuiltinSlashCommandExecutor();
 			await executeBuiltinSlashCommand(`/join ${joinLink}`, { ctx: mode });

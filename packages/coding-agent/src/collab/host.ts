@@ -11,7 +11,6 @@
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import type {
@@ -32,12 +31,6 @@ import type { SessionEntry as StoredSessionEntry } from "../session/session-entr
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
-import {
-	configuredIntranetRelayOrigin,
-	intranetCollabEnabled,
-	intranetUsername,
-	isPublicCollabRelay,
-} from "./intranet";
 import {
 	type AgentSnapshot,
 	COLLAB_PROMPT_MESSAGE_TYPE,
@@ -73,7 +66,6 @@ import {
 	serializeReplicatedEntry,
 	serializeReplicatedEvent,
 } from "./replication-shrink";
-import { cfgCollabRelayUrl } from "./settings";
 
 /** Events that change the footer state guests render. */
 const STATE_TRIGGER_EVENTS: Record<string, true> = {
@@ -232,7 +224,6 @@ export class CollabHost {
 	#webLink = "";
 	#viewLink = "";
 	#webViewLink = "";
-	#intranetUsername: string | undefined;
 	#writeToken: Uint8Array | null = null;
 	#sessionId: string;
 	#startedAt = 0;
@@ -338,11 +329,6 @@ export class CollabHost {
 
 	get relayConnected(): boolean {
 		return this.#relayConnected;
-	}
-
-	/** Actual login account registered with the trusted intranet relay. */
-	get intranetUsername(): string | undefined {
-		return this.#intranetUsername;
 	}
 
 	get link(): string {
@@ -528,25 +514,16 @@ export class CollabHost {
 
 	async start(relayUrl: string, webUrl = ""): Promise<void> {
 		if (this.ending) throw new CollabHostStoppedError("collab host already stopped");
-		const intranet = intranetCollabEnabled();
-		const configuredOrigin = intranet
-			? configuredIntranetRelayOrigin(cfgCollabRelayUrl.get(this.#ctx.settings))
-			: undefined;
 		const rawKey = generateRoomKey();
 		const writeToken = generateWriteToken();
 		const roomId = generateRoomId();
 		this.#writeToken = writeToken;
-		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken, configuredOrigin);
-		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl, configuredOrigin);
-		this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey, undefined, configuredOrigin);
-		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl, configuredOrigin);
-		const parsed = parseCollabLink(this.#link, configuredOrigin);
+		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
+		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl);
+		this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey);
+		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl);
+		const parsed = parseCollabLink(this.#link);
 		if ("error" in parsed) throw new Error(parsed.error);
-		const relay = new URL(parsed.wsUrl);
-		if (intranet && isPublicCollabRelay(relay)) {
-			throw new Error("Configure an intranet collab.relayUrl; the default public relay is unavailable offline.");
-		}
-		this.#intranetUsername = configuredOrigin && relay.origin === configuredOrigin ? intranetUsername() : undefined;
 		const firstOpen = Promise.withResolvers<void>();
 		// stop() may reject this before start() reaches its await (during key
 		// import); mark the rejection handled so it can only surface at the await.
@@ -555,18 +532,10 @@ export class CollabHost {
 		const key = await importRoomKey(rawKey);
 		if (this.ending) throw new CollabHostStoppedError("collab host stopped before connecting");
 
-		const intranetRegistration = this.#intranetUsername
-			? {
-					username: this.#intranetUsername,
-					hostname: os.hostname(),
-					link: this.#access === "view" ? this.#viewLink : this.#link,
-				}
-			: undefined;
 		const socket = new CollabSocket({
 			wsUrl: parsed.wsUrl,
 			role: "host",
 			key,
-			...(intranetRegistration ? { intranetRegistration } : {}),
 		});
 		this.#socket = socket;
 
@@ -598,7 +567,7 @@ export class CollabHost {
 			} else {
 				void this.#teardown();
 				this.#ctx.session.emitNotice("warning", `Collab ended: ${reason}`, "collab");
-				if (!socket.registrationFailed) this.#onEnded?.();
+				this.#onEnded?.();
 			}
 		};
 		socket.connect();

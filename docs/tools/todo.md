@@ -24,26 +24,23 @@ The params object **is** a single op — the discriminator and its fields live a
 | `start`   | `task`                       | None                                                                     | Marks one task `in_progress`; any other `in_progress` task is demoted to `pending`.                                                                                    |
 | `done`    | `task` or `phase` | None | Marks the target task or every task in the target phase `completed`; an omitted target is rejected. |
 | `drop`    | `task` or `phase` | None | Marks the target task or every task in the target phase `abandoned`; an omitted target is rejected. |
-| `block` | `task` or `phase` | `reason` | Marks actionable targets `blocked`; completed/abandoned tasks remain closed. |
-| `unblock` | `task` or `phase` | None | Returns blocked targets to `pending` and clears blocker notes. |
 | `rm`      | `task` or `phase` | None | Removes the target task or clears the target phase's task list; an omitted target is rejected. |
-| `append`  | `phase` and non-empty `items` | None | Appends new `pending` tasks to the exact named phase; creates the phase if missing. |
+| `append`  | `items`                      | `phase` (defaults to the active/next task's phase, then the last phase, then `Tasks`) | Appends new `pending` tasks to the selected phase; creates the phase if missing. |
 | `view`    | None                         | None                                                                     | Echoes the current list. A `view` call is read-only: no normalization, no state write.                                                                                 |
 
 ### Fields
 
 | Field    | Type                                                                                          | Required                                                                                          | Description                                                                                                                                                                      |
 | -------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `op` | `"init" \| "start" \| "done" \| "rm" \| "drop" \| "block" \| "unblock" \| "append" \| "view"` | Yes in the schema | Operation discriminator. An omitted op is repaired only for unambiguous `list`/`items` payloads (see Flow). |
+| `op`     | `"init" \| "start" \| "done" \| "rm" \| "drop" \| "append" \| "view"`                         | Yes in the schema                                                                                 | Operation discriminator. At execution time, an omitted op is repaired only for unambiguous `list`/`items` payloads (see Flow).                                                   |
 | `list`   | `{ phase: string; items: string[] }[]`                                                        | For `init` (unless a flat `items` list is given)                                                  | Full replacement payload. Each phase's `items` has `minItems: 1`; an explicit `list: []` clears all phases.                                                                      |
-| `task` | `string` | For `start`; for task-targeted `done`/`drop`/`block`/`unblock`/`rm` | Exact task content match. |
-| `phase` | `string` | For `append` and phase-targeted `done`/`drop`/`block`/`unblock`/`rm`; optional for flat `init` | Exact phase name match. `append` requires a non-empty name and creates that phase if missing. Flat `init` defaults to `Tasks`. |
+| `task`   | `string`                                                                                      | For `start`; for task-targeted `done`/`drop`/`rm`                                                 | Exact task content match.                                                                                                                                                        |
+| `phase`  | `string` | For phase-targeted `done`/`drop`/`rm`; optional for `append` and flat `init` | Exact phase name match. `append` creates a named phase if missing; omitted names use the selection rules below. Flat `init` defaults to `Tasks`. |
 | `items`  | `string[]`                                                                                    | For `append`; or as a flat `init` payload                                                         | Tasks to append, or the full task list for a flat `init`. Op-specific validation requires at least one item; a stray empty array on an unrelated op is schema-valid and ignored. |
-| `reason` | `string` | No | Optional blocker note for `block`; normalized to a single trimmed line. |
 
 For `init`, an absent or empty phase name becomes `Tasks`; duplicate phase names are rejected after this default applies.
 
-For `append`, `phase` and non-empty `items` are required, even after flat `init`; omitted or empty phase names are rejected without changing existing progress. Use the exact target phase name; a new name creates a phase. If the existing name is unknown, call `view`, then retry `append` with that phase and the original items; never reinitialize to recover an append error. Omitting `op` as well as `phase` remains ambiguous when a list exists and is not inferred as `append`.
+For `append`, an omitted `phase` selects the in-progress task's phase, otherwise the first pending task's phase. If no task is actionable, it uses the last phase; if no phases exist, it creates `Tasks`. An explicit phase overrides this selection, but an explicit empty string is rejected. Omitting `op` as well as `phase` remains ambiguous when a list exists and is not inferred as `append`.
 
 ## Outputs
 
@@ -62,7 +59,7 @@ The tool returns a single-shot `AgentToolResult`:
 `TodoPhase` / `TodoItem` state model:
 
 - `TodoPhase`: `{ name: string, tasks: TodoItem[] }`
-- `TodoItem`: `{ content: string; status: "pending" | "in_progress" | "completed" | "abandoned" | "blocked"; blocker?: string }`
+- `TodoItem`: `{ content: string, status: "pending" | "in_progress" | "completed" | "abandoned" }`
 
 The TUI renderer (`todoToolRenderer`) merges call and result into one transcript block and renders phases as a tree. Collapsed transcript previews cap tree items at `PREVIEW_LIMITS.COLLAPSED_ITEMS` (`8`).
 
@@ -75,9 +72,8 @@ The TUI renderer (`todoToolRenderer`) merges call and result into one transcript
    - `initPhases(...)` rebuilds the list from scratch.
    - `start` resolves a task by exact `content`, demotes every other `in_progress` task to `pending`, then marks the target `in_progress`.
    - `done` / `drop` use `getTaskTargets(...)` to target one task or every task in one phase.
-   - `block` / `unblock` require an explicit task or phase. Blocking affects only pending, active or blocked tasks; unblocking returns only blocked tasks to pending and clears their notes.
    - `rm` removes one task or clears one phase's `tasks`.
-   - `appendItems(...)` requires a non-empty phase name and non-empty items, resolves or creates that exact phase, and pushes new `pending` tasks unless the same task content already exists anywhere.
+   - `appendItems(...)` resolves or creates the target phase and pushes new `pending` tasks unless the same task content already exists anywhere.
 5. Missing task/phase references and op-specific failures are recorded in an `errors` array; any error discards the op's mutations at the end.
 6. After a successful mutation, `normalizeInProgressTask(...)` enforces the single-active-task invariant:
    - if multiple tasks are `in_progress`, only the first stays active and the rest become `pending`;
@@ -107,7 +103,6 @@ Normalization then re-applies the single-active-task rule after the op runs.
    - `task` set: affect one exact-content task.
    - else `phase` set: affect every task in that exact-name phase.
    - else: reject the call without changing any tasks; use `view` to recover the exact target.
-- `block` / `unblock` reject omitted targets.
 - `append` is the only op that creates a missing phase.
 - `init` discards previous phases entirely.
 
@@ -115,7 +110,7 @@ Normalization then re-applies the single-active-task rule after the op runs.
 
 The same file also exposes non-tool helpers used by `/todo`:
 
-- `phasesToMarkdown(...)` serializes phases as headings plus checklist items (`[ ]`, `[/]`, `[x]`, `[-]`, `[!]`); blocked notes round-trip in trailing HTML comments.
+- `phasesToMarkdown(...)` serializes phases as headings plus checklist items (`[ ]`, `[/]`, `[x]`, `[-]`).
 - `markdownToPhases(...)` parses that format, defaults orphan tasks into a `Todos` phase, also accepts `>` as `in_progress` and `~` as `abandoned` and runs the same normalization step.
 
 ## Side Effects
@@ -156,9 +151,8 @@ The same file also exposes non-tool helpers used by `/todo`:
    - `Task "..." not found` with an extra empty-list hint when applicable, or a hint that tasks are referenced by content (not `task-N` IDs) when the missing content looks like an ID
    - `Missing phase name`
    - `Phase "..." not found`
-   - `Missing phase name for append operation` (omitted or empty `phase`); the error confirms nothing was added and directs the caller to `view` and retry with the original items, not reinitialize
-   - `Missing items for append operation`; the error confirms nothing was added and directs the caller to retry with the target phase and non-empty items
-   - `block requires a task or phase target` / `unblock requires a task or phase target`
+   - `Missing phase name for append operation` (an explicit empty `phase`, not an omitted one)
+   - `Missing items for append operation`
    - `Task "..." already exists`
    - `done requires a task or phase target` / `drop requires a task or phase target` / `rm requires a task or phase target`; these return early with unchanged phases and a `view` recovery hint
 - A `todo` call carries a single op; any error in it discards every mutation the op made.

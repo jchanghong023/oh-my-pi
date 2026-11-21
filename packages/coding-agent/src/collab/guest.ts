@@ -38,7 +38,6 @@ import { GuestLifecycleEmitter } from "../extensibility/extensions/lifecycle-mir
 import { setSessionTerminalTitle } from "../utils/title-generator";
 import { importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
-import { configuredIntranetRelayOrigin, intranetCollabEnabled } from "./intranet";
 import {
 	type AgentSnapshot,
 	COLLAB_PROTO,
@@ -48,7 +47,6 @@ import {
 	parseCollabLink,
 } from "./protocol";
 import { CollabSocket } from "./relay-client";
-import { cfgCollabRelayUrl } from "./settings";
 
 /** Commands a guest may run locally; everything else is host-only. */
 export const COLLAB_GUEST_ALLOWED_COMMANDS: Record<string, true> = {
@@ -329,10 +327,7 @@ export class CollabGuestLink {
 	}
 
 	async join(link: string): Promise<void> {
-		const configuredOrigin = intranetCollabEnabled()
-			? configuredIntranetRelayOrigin(cfgCollabRelayUrl.get(this.#ctx.settings))
-			: undefined;
-		const parsed = parseCollabLink(link, configuredOrigin);
+		const parsed = parseCollabLink(link);
 		if ("error" in parsed) throw new Error(parsed.error);
 		if (this.#ctx.collabGuest || this.#left) throw new Error("Already in a collab session (/leave first)");
 		this.#roomId = parsed.roomId;

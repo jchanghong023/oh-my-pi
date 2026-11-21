@@ -2,7 +2,7 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { TspText } from "@oh-my-pi/pi-wire";
 import type { Component, TUI } from "../tui";
 import type { Theme } from "../theme/theme";
-import type { LocalTodoItem } from "../tools/todo";
+import type { TodoItem } from "../tools/todo";
 import type { BashExecutionMessage, CustomMessage, HookMessage, PythonExecutionMessage } from "./messages";
 import type { NotificationRule } from "./ttsr-notification";
 
@@ -110,7 +110,7 @@ export type TranscriptBlock =
 				| { readonly type: "ttsr_triggered"; readonly rules: readonly NotificationRule[] }
 				| {
 						readonly type: "todo_reminder";
-						readonly todos: readonly LocalTodoItem[];
+						readonly todos: readonly TodoItem[];
 						readonly attempt: number;
 						readonly maxAttempts: number;
 				  };

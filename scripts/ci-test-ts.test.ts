@@ -107,14 +107,14 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "ordinary", suiteRevision: 7 },
+					selection: { mode: "full", group: "ordinary", suiteRevision: 8 },
 				},
 				{
 					scope: "ci-test-ts:local-ts",
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "startup", suiteRevision: 7 },
+					selection: { mode: "full", group: "startup", suiteRevision: 8 },
 				},
 				{
 					scope: "rust-fork-features",
@@ -149,7 +149,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		const rejectedReports = [
 			["other scope", { ...report, scope: "fulltest: full current-platform project suites" }],
 			["missing suite revision", withStartup({ ...startup, selection: { mode: "full", group: "startup" } })],
-			["old suite revision", withStartup({ ...startup, selection: { ...startup.selection, suiteRevision: 5 } })],
+			["old suite revision", withStartup({ ...startup, selection: { ...startup.selection, suiteRevision: 7 } })],
 			["dirty baseline", { ...report, dirtyState: "dirty" }],
 			["affected producer", withStartup({ ...startup, selection: { mode: "affected" } })],
 			["missing startup group", { ...report, producers: [ordinary, ...otherProducers] }],
@@ -604,7 +604,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 		durationSeconds: 12,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 7 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 8 },
 		report: "available",
 	} satisfies TestProducerRecord & { report: string };
 	const put = async (overrides: object = {}, records: unknown[] = [producer]) => {
@@ -685,7 +685,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 			{ startedAt: new Date(now + 1000).toISOString() },
 			{ startedAt: new Date(now - 180_000).toISOString() },
 			{ selection: { ...producer.selection, mode: "affected" } },
-			{ selection: { ...producer.selection, suiteRevision: 5 } },
+			{ selection: { ...producer.selection, suiteRevision: 7 } },
 			{ selection: { tool: "bun", mode: "full", group: "ordinary" } },
 			{ selection: { ...producer.selection, group: "other" } },
 		]) {
@@ -745,7 +745,7 @@ test("each exact chunk keeps its latest usable measurement across interrupted ru
 		durationSeconds,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 7 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 8 },
 		report: "available",
 	});
 	const put = async (name: string, age: number, records: object[], overrides: object = {}) => {
@@ -886,7 +886,6 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/collab-web/test/transcript.test.tsx",
 			"packages/collab-web/test/tool-view.test.tsx",
 			"packages/collab-web/test/markdown.test.tsx",
-			"packages/coding-agent/test/collab/intranet-relay.test.ts",
 			"packages/coding-agent/test/spec-driven/resources.test.ts",
 			"packages/coding-agent/test/spec-driven/skill-policy.test.ts",
 			"packages/coding-agent/test/spec-driven/process.e2e.test.ts",
@@ -946,7 +945,7 @@ test("local suites select fork consumers and drain failures without widening to 
 		const bunProducers = report.producers.filter(producer => producer.scope === expectedScope);
 		expect(bunProducers.length).toBeGreaterThan(0);
 		for (const producer of bunProducers) {
-			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 7 });
+			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 8 });
 			expect(producer.exitCode).toBe(0);
 			expect(producer.status).toBe("passed");
 		}

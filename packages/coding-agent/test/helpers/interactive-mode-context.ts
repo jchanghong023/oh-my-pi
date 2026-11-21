@@ -144,7 +144,7 @@ export function createSessionStub(
 		getContextUsage: () => undefined,
 		getGoalModeState: () => undefined,
 		getLocalGoalModeState: () => undefined,
-		getLocalTodoPhases: () => [],
+		getTodoPhases: () => [],
 		getWorkspaceModeState: () => restoreWorkspaceModeState(sessionManager.getBranch()),
 		refreshMCPTools: vi.fn(async () => {}),
 		setMCPPromptCommands: vi.fn(),

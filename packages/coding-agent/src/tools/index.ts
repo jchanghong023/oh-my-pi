@@ -83,7 +83,7 @@ import type { PlanProposalHandler } from "./resolve";
 import { SecurityScanTool } from "./security-scan";
 import { SpecVerifyTool } from "./spec-verify";
 import { supportsExternalThinking, ThinkTool } from "./think";
-import { type LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
 import { KnowledgeSearchTool } from "./knowledge-search";
 import { WriteTool } from "./write";
@@ -531,16 +531,16 @@ export interface ToolSession {
 	/** Bridge to the connected client (e.g. ACP editor host). Tools should route fs/terminal/permission requests through this when available. */
 	getClientBridge?: () => ClientBridge | undefined;
 	/** Get cached todo phases for this session. */
-	getTodoPhases?: () => LocalTodoPhase[];
+	getTodoPhases?: () => TodoPhase[];
 	/** Replace cached todo phases for this session. */
-	setTodoPhases?: (phases: LocalTodoPhase[]) => void;
+	setTodoPhases?: (phases: TodoPhase[]) => void;
 	/**
 	 * Replace the todo list from outside the `todo` tool: update the cache and
 	 * record it on the session branch. Direct `todo` calls persist via their
 	 * toolResult entry; callers that produce none (the eval bridge, Cursor sync)
 	 * use this so branch rehydration agrees with the in-memory list.
 	 */
-	commitTodoPhases?: (phases: LocalTodoPhase[]) => void;
+	commitTodoPhases?: (phases: TodoPhase[]) => void;
 	/** Active workpool items whose incremental yields complete the current turn. */
 	getWorkPoolYieldItems?: () => readonly WorkPoolYieldItem[];
 	/** The `i` intent the model wrote on a tool call of the current turn, by call ID. */
@@ -1061,10 +1061,10 @@ export type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 // package). Re-export it so the pi-tui renderer migration doesn't drop it.
 export { askToolRenderer } from "@oh-my-pi/pi-tui/tools/ask";
 export type {
-	LocalTodoStatus,
+	TodoStatus,
 	TodoOperation,
-	LocalTodoItem,
-	LocalTodoPhase,
+	TodoItem,
+	TodoPhase,
 	TodoCompletionTransition,
 	TodoToolDetails,
 	CollapsedTodoSelection,

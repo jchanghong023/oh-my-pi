@@ -7,7 +7,7 @@ import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text
 import midRunTodoNudgePrompt from "../prompts/system/mid-run-todo-nudge.md" with { type: "text" };
 import { toolWireName } from "../tools/builtin-names";
 import { getLatestTodoPhasesFromEntries, isTodoPhase } from "../tools/todo";
-import { type LocalTodoItem, type LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { type TodoItem, type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AgentSessionEvent } from "./agent-session-events";
 import type { SessionManager } from "./session-manager";
@@ -106,7 +106,7 @@ export interface TodoTrackerHost {
 /** Owns canonical todo state, eager preludes, and completion reminders. */
 export class TodoTracker {
 	readonly #host: TodoTrackerHost;
-	#phases: LocalTodoPhase[] = [];
+	#phases: TodoPhase[] = [];
 	#reminderCount = 0;
 	#reminderAwaitingProgress = false;
 	#mutationsSinceLastTouch = 0;
@@ -117,12 +117,12 @@ export class TodoTracker {
 	}
 
 	/** Returns a defensive clone of the current todo phases. */
-	get phases(): LocalTodoPhase[] {
+	get phases(): TodoPhase[] {
 		return this.#clonePhases(this.#phases);
 	}
 
 	/** Replaces todo phases with a defensive clone. */
-	setPhases(phases: LocalTodoPhase[]): void {
+	setPhases(phases: TodoPhase[]): void {
 		this.#phases = this.#clonePhases(phases);
 		// Every state write lands here — the native tool, a Cursor sync, or a
 		// bridged call — so the nudge budget re-arms on the progress it
@@ -136,7 +136,7 @@ export class TodoTracker {
 	}
 
 	/** Returns a defensive clone suitable for snapshots and branch state. */
-	clonePhases(phases: LocalTodoPhase[]): LocalTodoPhase[] {
+	clonePhases(phases: TodoPhase[]): TodoPhase[] {
 		return this.#clonePhases(phases);
 	}
 
@@ -280,7 +280,7 @@ export class TodoTracker {
 				name: phase.name,
 				tasks: phase.tasks
 					.filter(
-						(task): task is LocalTodoItem & { status: "pending" | "in_progress" } =>
+						(task): task is TodoItem & { status: "pending" | "in_progress" } =>
 							task.status === "pending" || task.status === "in_progress",
 					)
 					.map(task => ({ content: task.content, status: task.status })),
@@ -389,14 +389,10 @@ export class TodoTracker {
 		};
 	}
 
-	#clonePhases(phases: LocalTodoPhase[]): LocalTodoPhase[] {
+	#clonePhases(phases: TodoPhase[]): TodoPhase[] {
 		return phases.map(phase => ({
 			name: phase.name,
-			tasks: phase.tasks.map(task =>
-				task.blocker !== undefined
-					? { content: task.content, status: task.status, blocker: task.blocker }
-					: { content: task.content, status: task.status },
-			),
+			tasks: phase.tasks.map(task => ({ content: task.content, status: task.status })),
 		}));
 	}
 }

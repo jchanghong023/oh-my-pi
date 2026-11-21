@@ -295,7 +295,7 @@ import {
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "../tools/todo";
-import { type LocalTodoPhase, publicTodoPhases, type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { currentThreadId, isMainThread } from "../thread/identity";
 import { registerLocalSession } from "../thread/session-directory";
@@ -1070,19 +1070,6 @@ function isEvalActivity(message: AgentMessage): boolean {
 	return (
 		message.role === "assistant" && message.content.some(block => block.type === "toolCall" && block.name === "eval")
 	);
-}
-
-/** Match the retried operation even when it only adds the explicitly required append phase. */
-function todoRetryMatches(failed: Record<string, unknown>, retry: Record<string, unknown>): boolean {
-	if (Bun.deepEquals(failed, retry)) return true;
-	if (failed.op !== "append" || Object.hasOwn(failed, "phase") || typeof retry.phase !== "string") return false;
-	for (const key in failed) {
-		if (!Object.hasOwn(retry, key) || !Bun.deepEquals(failed[key], retry[key])) return false;
-	}
-	for (const key in retry) {
-		if (key !== "phase" && !Object.hasOwn(failed, key)) return false;
-	}
-	return true;
 }
 
 /**
@@ -5013,9 +5000,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	/**
 	 * Drops queued `todo-error-reminder`s superseded by a successful `todo` call.
-	 * Exact retries (including an append that supplies only its missing phase)
-	 * clear every matching failure. Otherwise clear the oldest failure of the
-	 * same op; failures of other ops stay queued.
+	 * Exact retries clear every matching failure. Otherwise the call is treated
+	 * as a corrected retry of the oldest outstanding failure with the same op
+	 * (placeholder task text, missing items, ...); failures of other ops stay queued.
 	 */
 	#dropSupersededTodoReminders(retry: Record<string, unknown>, op: string | undefined): void {
 		const reminders: Array<{ message: CustomMessage; details: Record<string, unknown> }> = [];
@@ -5026,7 +5013,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 		const exact = reminders.filter(({ details }) => {
 			const failed = details.attemptedArgs;
-			return isRecord(failed) && todoRetryMatches(failed, retry);
+			return isRecord(failed) && Bun.deepEquals(failed, retry);
 		});
 		const superseded =
 			exact.length > 0
@@ -9502,7 +9489,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		if (!cfgTodoEnabled.get(this.settings)) return undefined;
 		const canCallTodoTool = this.getActiveToolNames().includes("todo");
 		if (!canCallTodoTool) return undefined;
-		const phases = this.getLocalTodoPhases().filter(phase => phase.tasks.length > 0);
+		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return undefined;
 
 		let total = 0;
@@ -12900,19 +12887,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	getTodoPhases(): TodoPhase[] {
-		return publicTodoPhases(this.#todo.phases);
-	}
-
-	getLocalTodoPhases(): LocalTodoPhase[] {
 		return this.#todo.phases;
 	}
 
-	setTodoPhases(phases: LocalTodoPhase[]): void {
+	setTodoPhases(phases: TodoPhase[]): void {
 		this.#todo.setPhases(phases);
 	}
 
 	/** Replace the list from outside the `todo` tool: update the cache and record a `user_todo_edit` entry so reloads keep it. */
-	commitTodoPhases(phases: LocalTodoPhase[]): void {
+	commitTodoPhases(phases: TodoPhase[]): void {
 		this.#todo.setPhases(phases);
 		this.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases });
 	}

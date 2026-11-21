@@ -6,7 +6,7 @@ import type { RetryErrorUpdate } from "../extensibility/shared-events";
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
 import { type GoalModeState, type LocalGoalModeState, publicGoalModeState } from "../goals/state";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
-import { type LocalTodoItem, publicTodoItems, type TodoItem } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoItem } from "@oh-my-pi/pi-tui/tools/todo";
 import type { CustomMessage } from "./messages";
 import type { CacheWarmingRefreshEnd, CacheWarmingRefreshStart } from "./cache-warmer";
 
@@ -102,7 +102,7 @@ export type LocalAgentSessionEvent =
 	| { type: "advisor_cost_changed" }
 	| { type: "advisor_yielded" }
 	| { type: "ttsr_triggered"; rules: Rule[] }
-	| { type: "todo_reminder"; todos: LocalTodoItem[]; attempt: number; maxAttempts: number }
+	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
 	| { type: "irc_message"; message: CustomMessage }
 	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
@@ -130,11 +130,9 @@ type PublicEvent<Event> = Event extends { type: "session_abort" }
 		? Omit<Event, "cancelled">
 		: Event extends { type: "manual_compaction_start" | "manual_compaction_end" }
 			? Omit<Event, "operationId">
-			: Event extends { type: "todo_reminder" }
-				? Omit<Event, "todos"> & { todos: TodoItem[] }
-				: Event extends { type: "goal_updated" }
-					? Omit<Event, "state"> & { state?: GoalModeState }
-					: Event;
+			: Event extends { type: "goal_updated" }
+				? Omit<Event, "state"> & { state?: GoalModeState }
+				: Event;
 
 export type AgentSessionEvent = PublicEvent<LocalAgentSessionEvent>;
 
@@ -153,8 +151,6 @@ function publicSessionEvent(event: LocalAgentSessionEvent): AgentSessionEvent | 
 			const { operationId: _, ...fields } = event;
 			return fields;
 		}
-		case "todo_reminder":
-			return { ...event, todos: publicTodoItems(event.todos) };
 		case "goal_updated": {
 			if (!event.state) return event;
 			const state = publicGoalModeState(event.state);

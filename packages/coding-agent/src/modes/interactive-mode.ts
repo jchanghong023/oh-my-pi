@@ -416,7 +416,7 @@ import type {
 	SubmittedUserInput,
 	YieldCompaction,
 } from "./types";
-import type { LocalTodoItem, LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { ConversationPosition } from "./utils/conversation-position";
 import { materializeImageChipLinks, UiHelpers } from "./utils/ui-helpers";
 
@@ -1530,7 +1530,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #judgmentBatchProgressClearTimers = new Map<string, NodeJS.Timeout>();
 	#nextAppearanceRequestToken = 1;
 	#appearanceRefreshRequest: { token: TerminalAppearanceRequestToken; deadline: number } | undefined;
-	todoPhases: LocalTodoPhase[] = [];
+	todoPhases: TodoPhase[] = [];
 	/**
 	 * Session that owns the plan currently in {@link todoPhases}. HUD
 	 * visibility (dismissal and reveal entries) persists to this session, not
@@ -3659,7 +3659,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.planModeEnabled || this.planModePaused) return stop("plan_mode");
 		if (!this.goalModeEnabled || this.goalModePaused) return stop("goal_disabled_or_paused");
 		if (this.#goalSuppressNextContinuation) return stop("no_new_activity");
-		if (this.#goalOpenWorkAllBlocked()) return stop("all_work_blocked");
+
 		if (this.#pendingSubmittedInput) return stop("pending_submission");
 		if (this.editor.getText().trim().length > 0) return stop("editor_has_text");
 		if ((this.editor.pendingImages?.length ?? 0) > 0) return stop("editor_has_images");
@@ -3695,7 +3695,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				const latestState = this.session.getLocalGoalModeState();
 				if (!latestState?.enabled || latestState.goal.status !== "active") return stopWaiting("goal_not_active");
 				if (latestState.goal.id !== diagnostics.goal_id) return stopWaiting("goal_replaced");
-				if (this.#goalOpenWorkAllBlocked()) return stopWaiting("all_work_blocked");
+
 				const recovery = this.#goalContinuationGuard.recoveryPending;
 				// Failed admission has no agent_end; keep it stopped unless this turn proves progress.
 				if (recovery) this.#goalSuppressNextContinuation = true;
@@ -3727,18 +3727,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}, 800);
 		this.syncIdleMaintenanceView();
-	}
-
-	/** A blocked-only todo list has no work the agent can advance without another turn. */
-	#goalOpenWorkAllBlocked(): boolean {
-		const phases = this.session.getLocalTodoPhases();
-		if (nextActionableTask(phases)) return false;
-		for (const phase of phases) {
-			for (const task of phase.tasks) {
-				if (task.status === "blocked") return true;
-			}
-		}
-		return false;
 	}
 
 	#cancelGoalContinuation(reason = "cancelled"): void {
@@ -5631,7 +5619,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 	}
 
-	#formatTodoLine(todo: LocalTodoItem, prefix: string, matched: boolean): string {
+	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
 		const checkbox = theme.checkbox;
 		const marker = formatHudNoteMarker(todo.notes?.length ?? 0);
 		switch (todo.status) {
@@ -5641,8 +5629,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 			case "abandoned":
 				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
-			case "blocked":
-				return theme.fg("warning", `${prefix}${checkbox.unchecked} ${todo.content} (blocked)`) + marker;
 			default:
 				if (matched) return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
@@ -5750,7 +5736,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#modelCycleClearTimer.unref?.();
 	}
 
-	#getActivePhase(phases: LocalTodoPhase[]): LocalTodoPhase | undefined {
+	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
 		const nonEmpty = phases.filter(phase => phase.tasks.length > 0);
 		const active = nonEmpty.find(phase =>
 			phase.tasks.some(task => task.status === "pending" || task.status === "in_progress"),
@@ -5806,14 +5792,14 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// A pending todo "lights up" (accent) when an in-flight subagent is doing
 		// its work, matched by normalized content overlap.
-		const isMatched = (todo: LocalTodoItem): boolean =>
+		const isMatched = (todo: TodoItem): boolean =>
 			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
 		// Task subtree for a phase. Collapsed runs the shared walking-viewport
 		// policy (completed/abandoned omitted, active work pulled to the head,
 		// then following pending tasks) so the HUD and the transient tool result
 		// can never disagree about the current work (#5873). Expanded lists all.
-		const renderTasks = (phase: LocalTodoPhase): string[] => {
+		const renderTasks = (phase: TodoPhase): string[] => {
 			if (expanded) {
 				return renderTreeList(
 					{
@@ -5839,7 +5825,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// One phase node. The active stage is highlighted with normal-brightness task
 		// progress; other stages render their whole row (name + progress) in the
 		// brighter muted gray. Overall progress lives in the tree spine (below).
-		const renderPhase = (phase: LocalTodoPhase, oneBased: number, isActive: boolean): string | string[] => {
+		const renderPhase = (phase: TodoPhase, oneBased: number, isActive: boolean): string | string[] => {
 			const label = multiPhase ? formatPhaseDisplayName(phase.name, oneBased) : phase.name;
 			// Closed, not just completed: the collapsed task window hides abandoned
 			// tasks too, so counting only completions leaves the phase reading stuck.
@@ -5939,7 +5925,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.todoContainer.addChild(new WidthAwareText(formatRows, 1, 0));
 
 		// Native: the same stage window as a tree, overall progress as a bar.
-		const describeTask = (todo: LocalTodoItem, id: string): TspTreeNode => {
+		const describeTask = (todo: TodoItem, id: string): TspTreeNode => {
 			const done = todo.status === "completed";
 			const token =
 				todo.status === "completed"
@@ -5949,18 +5935,13 @@ export class InteractiveMode implements InteractiveModeContext {
 						: todo.status === "in_progress" || isMatched(todo)
 							? "accent"
 							: "dim";
-			const label: TspSpan[] = [
-				span(
-					todo.status === "blocked" ? `${todo.content} (blocked)` : todo.content,
-					todo.status === "blocked" ? "warning" : token,
-				),
-			];
+			const label: TspSpan[] = [span(todo.content, token)];
 			const notes = todo.notes?.length ?? 0;
 			if (notes > 0) label.push(span(` +${notes}`, "dim em"));
 			return { id, label, icon: done ? "check" : "circle" };
 		};
-		const describeTasks = (phase: LocalTodoPhase, phaseIndex: number): TspTreeNode[] => {
-			const index = (todo: LocalTodoItem): string => `${phaseIndex}.${phase.tasks.indexOf(todo)}`;
+		const describeTasks = (phase: TodoPhase, phaseIndex: number): TspTreeNode[] => {
+			const index = (todo: TodoItem): string => `${phaseIndex}.${phase.tasks.indexOf(todo)}`;
 			if (expanded) return phase.tasks.map(todo => describeTask(todo, index(todo)));
 			const selection = selectCollapsedTodos(phase.tasks, isMatched, activeTaskCap);
 			const nodes = selection.items.map(todo => describeTask(todo, index(todo)));
@@ -6004,7 +5985,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			title: multiPhase ? formatPhaseDisplayName(phase.name, phaseIndex + 1) : phase.name,
 			collapsed: phase.tasks.every(isClosedTodo) || undefined,
 			items: phase.tasks.map((todo, taskIndex): TspChecklistItem => {
-				const note = todo.blocker ?? todo.notes?.at(-1);
+				const note = todo.notes?.at(-1);
 				return {
 					id: `${phaseIndex}.${taskIndex}`,
 					text: todo.content,
@@ -6013,11 +5994,9 @@ export class InteractiveMode implements InteractiveModeContext {
 							? "done"
 							: todo.status === "abandoned"
 								? "dropped"
-								: todo.status === "blocked"
-									? "blocked"
-									: todo.status === "in_progress" || isMatched(todo)
-										? "active"
-										: "pending",
+								: todo.status === "in_progress" || isMatched(todo)
+									? "active"
+									: "pending",
 					note,
 				};
 			}),
@@ -6043,7 +6022,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (phases.length === 0) return childLines;
 
 		const activeDescs = this.#getActiveSubagentDescriptions();
-		const isMatched = (todo: LocalTodoItem): boolean =>
+		const isMatched = (todo: TodoItem): boolean =>
 			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
 		const totalTasks = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
@@ -6098,7 +6077,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #loadTodoList(source: AgentViewSession = this.session): Promise<void> {
-		this.todoPhases = source.getLocalTodoPhases();
+		this.todoPhases = source.getTodoPhases();
 		this.#todoPhasesOwner = source;
 		this.#syncTodoHudState(source);
 		this.#renderTodoList();
@@ -10679,14 +10658,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	setTodos(todos: LocalTodoItem[] | LocalTodoPhase[]): void {
+	setTodos(todos: TodoItem[] | TodoPhase[]): void {
 		if (todos.length > 0 && "tasks" in todos[0]) {
-			this.todoPhases = todos as LocalTodoPhase[];
+			this.todoPhases = todos as TodoPhase[];
 		} else {
 			this.todoPhases = [
 				{
 					name: "Todos",
-					tasks: todos as LocalTodoItem[],
+					tasks: todos as TodoItem[],
 				},
 			];
 		}

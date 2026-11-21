@@ -360,7 +360,6 @@ Fork releases require explicit user authorization and use the manual CI workflow
 - `OMP_OFFLINE` 标记公司内部网络环境：CentOS 7、使用 NFS、有 `/dev/shm`、无法连接互联网；可用已配置的内网服务。NEVER 把环境标记当作宿主探测，或扩大现有工具禁用范围、URL 拒绝与审批规则。
 - 公司 offline 内网 Git 平台经用户 2026-11-12 实测支持查询／创建 PR／MR，且克隆→改代码→push→建 MR→放弃→删分支链路已跑通。平台支持这些操作不意味着获准自动编码、合并或清理分支。
 - offline 的 `/sketch` 不自动启动浏览器；显示完整地址供手动打开，保留 Linux offline 地址复制。非 offline 与普通链接／文件打开沿用原行为，详见[运行约定](openspec/specs/fork-runtime/spec.md)。
-- offline 内网用户名协作：`packages/coding-agent/src/collab/intranet.ts`（门禁、登录名、入口与查找）、`packages/coding-agent/src/collab/relay-server.ts`（内置 Relay）；[本次变更需求](openspec/changes/add-intranet-username-collab/specs/)覆盖协作、运行与命令边界，[内网快速指南](docs-zh-CN/quick-start-intranet.md)提供普通 WS 直连部署入口。仅 offline 启用；非 offline 保持既有协作与安全策略。
 - Developer Test Agent 内置资源位于 `packages/coding-agent/src/extensibility/plugins/bundled/developer-test-agent/`；其命令和技能使用 OMP 原生接口，业务流程边界见[个人命令](openspec/specs/personal-commands/spec.md)。
 - [OpenWiki](openspec/specs/openwiki/spec.md) 通过 `vendor/openwiki` 子模块维护；`omp openwiki` 默认使用 OMP 的 `default` 模型，内置 `openwiki_*` 查询工具只读。修改子模块源码、技能或资源依赖后运行 `bun run gen:openwiki-resources`；资源指纹不匹配时不得使用旧资源。
 - 父仓静态检查与测试发现 MUST 排除 `vendor/openwiki` 子模块；OMP 宿主集成测试不受此限制。

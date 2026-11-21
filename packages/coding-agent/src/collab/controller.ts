@@ -218,13 +218,13 @@ export class CollabController {
 	}
 
 	#resolveRelayUrl(relay?: string): string {
-		const input = relay?.trim() || cfgCollabRelayUrl.get(this.#ctx.settings).trim();
+		const input = relay?.trim() || cfgCollabRelayUrl.get(this.#ctx.settings) || "";
 		if (!input) {
 			throw new Error(
 				"No relay configured. Set collab.relayUrl in /settings or pass one: /collab relay.example.com",
 			);
 		}
-		// Scheme-less relay args default to wss (plaintext must be spelled out).
+		// Scheme-less relay args default to wss (ws:// must be spelled out for localhost).
 		return input.includes("://") ? input : `wss://${input}`;
 	}
 

@@ -200,21 +200,6 @@ describe("AgentSession todo-error reminder", () => {
 		expect(reminders[0]).not.toContain(failureFor("todo-duplicate"));
 	});
 
-	it("clears repeated missing-phase failures without discarding an older unrelated append failure", async () => {
-		const { reminders, failureFor } = await runTwoPrompts([
-			todoCall("todo-missing-items", { op: "append", phase: "Ship" }),
-			todoCall("todo-missing-phase", { op: "append", items: ["Add tests"] }),
-			todoCall("todo-missing-phase-again", { op: "append", items: ["Add tests"] }),
-			todoCall("todo-retry", { op: "append", phase: "Build", items: ["Add tests"] }),
-			{ content: ["Appended"] },
-		]);
-
-		expect(session?.getTodoPhases()[0]?.tasks.map(task => task.content)).toEqual(["Write code", "Add tests"]);
-		expect(reminders).toHaveLength(1);
-		expect(reminders[0]).toContain(failureFor("todo-missing-items"));
-		expect(reminders[0]).not.toContain(failureFor("todo-missing-phase"));
-	});
-
 	it("drops reminders when retries correct other invalid arguments", async () => {
 		const { reminders } = await runTwoPrompts([
 			todoCall("todo-missing-items", { op: "append", phase: "Build" }),

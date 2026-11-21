@@ -23,7 +23,7 @@ import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort, ImageContent, Model, ServiceTierByFamily, ToolResultMessage, UsageReport } from "@oh-my-pi/pi-ai";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
-import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { AsyncJobManagerApi } from "../async";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -189,7 +189,7 @@ export interface SessionViewState {
 	goalMode: LocalGoalModeState | undefined;
 	advisorCost: number;
 	advisorUsingSubscription: boolean;
-	todoPhases: LocalTodoPhase[];
+	todoPhases: TodoPhase[];
 	queuedMessages: SessionQueuedMessages;
 	restorableQueue: SessionRestorableQueue;
 	ephemeralMaxTokensPreservesRequest: boolean;
@@ -260,7 +260,7 @@ export type SessionHostProtocol = {
 	 * never be delivered.
 	 */
 	popQueuedMessage: RpcMethod<[id: string], void>;
-	setTodoPhases: RpcMethod<[phases: LocalTodoPhase[]], void>;
+	setTodoPhases: RpcMethod<[phases: TodoPhase[]], void>;
 	appendCustomEntry: RpcMethod<[customType: string, data: unknown], void>;
 	appendModelUsage: RpcMethod<[usage: ModelUsageRecord, owner: { sessionId: string; parentId: string | null }], void>;
 	flushSession: RpcMethod<[], void>;

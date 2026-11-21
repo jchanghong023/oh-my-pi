@@ -15,8 +15,6 @@
 
 |活动 change|现有材料|specs|仍缺的原生产物|
 |---|---|---|---|
-|add-fork-review-workflow|proposal|fork-review、personal-commands|design、tasks|
-|add-intranet-username-collab|proposal|fork-runtime、intranet-collaboration、personal-commands|design、tasks|
 |add-todoloop-command|proposal、tasks|personal-commands|design|
 |refine-compact-output-preview|proposal|tui-presentation|design、tasks|
 |revamp-compact-activity-dock|proposal|tui-presentation|design、tasks|

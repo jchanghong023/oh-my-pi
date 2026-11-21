@@ -3104,7 +3104,7 @@ async function createAgentSessionScoped(
 					after: change.after,
 				});
 			},
-			getTodoPhases: () => session.getLocalTodoPhases(),
+			getTodoPhases: () => session.getTodoPhases(),
 			setTodoPhases: phases => session.setTodoPhases(phases),
 			commitTodoPhases: phases => session.commitTodoPhases(phases),
 			getWorkPoolYieldItems: () => session?.getWorkPoolYieldItems() ?? [],
@@ -4720,7 +4720,7 @@ async function createAgentSessionScoped(
 			getToolContext: () => toolContextStore.getContext(),
 			mcpResources: cursorMcpResources,
 			emitEvent: event => cursorEventEmitter?.(event),
-			getTodoPhases: () => session.getLocalTodoPhases(),
+			getTodoPhases: () => session.getTodoPhases(),
 			commitTodoPhases: phases => session.commitTodoPhases(phases),
 			// `pi_grep` carries its own context width and match cap, which the
 			// shared grep instance fixed at construction cannot express. Gated on

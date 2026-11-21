@@ -2,7 +2,7 @@ import { Text } from "../components/text";
 import { Container } from "../tui";
 import { MessageNoticeComponent } from "../chrome/message-notice";
 import { theme } from "../theme";
-import { type LocalTodoItem, todoChecklistPhases } from "../tools/todo";
+import { type TodoItem, todoChecklistPhases } from "../tools/todo";
 import { node, span, withHidden } from "../native/describe";
 import type { DescribeContext, NativeNode } from "../native/node";
 
@@ -14,11 +14,11 @@ import type { DescribeContext, NativeNode } from "../native/node";
  */
 export class TodoReminderComponent extends Container {
 	readonly #notice: MessageNoticeComponent;
-	readonly #todos: LocalTodoItem[];
+	readonly #todos: TodoItem[];
 	readonly #note: string;
 	#hidden = false;
 
-	constructor(todos: LocalTodoItem[], attempt: number, maxAttempts: number) {
+	constructor(todos: TodoItem[], attempt: number, maxAttempts: number) {
 		super();
 		this.#todos = todos;
 		this.#note = `reminder ${attempt}/${maxAttempts}`;

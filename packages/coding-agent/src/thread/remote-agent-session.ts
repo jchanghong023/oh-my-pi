@@ -43,7 +43,7 @@ import type { Effort, ImageContent, Model, ServiceTier, ToolResultMessage, Usage
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { JobWidgetEntry } from "@oh-my-pi/pi-tui/tools/job-widget";
-import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { getBlobsDir, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManagerApi } from "../async";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -709,18 +709,18 @@ export class RemoteAgentSession implements AgentViewSession {
 		if (this.#asyncJobs) requestJobTreeCaptions(this.#asyncJobs, this.agentId);
 	}
 
-	getLocalTodoPhases(): LocalTodoPhase[] {
+	getTodoPhases(): TodoPhase[] {
 		return this.#view.todoPhases;
 	}
 
 	/** Applied to the mirror at once and sent to the home worker. */
-	setTodoPhases(phases: LocalTodoPhase[]): void {
+	setTodoPhases(phases: TodoPhase[]): void {
 		this.#view = { ...this.#view, todoPhases: phases };
 		this.#notify("setTodoPhases", toWireData(phases));
 	}
 
 	/** Same two steps as a home session: the optimistic entry and the mirror update reach the worker in order. */
-	commitTodoPhases(phases: LocalTodoPhase[]): void {
+	commitTodoPhases(phases: TodoPhase[]): void {
 		this.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases });
 		this.setTodoPhases(phases);
 	}

@@ -12,7 +12,7 @@ import { extractUriScheme } from "../../internal-urls/parse";
 import type { SchemeSpec } from "../../internal-urls/types";
 import type { LocalAgentSessionEvent } from "../../session/agent-session";
 import { resolveToCwd, splitPathAndSelPreferringLiteralSync } from "../../tools/path-utils";
-import type { LocalTodoStatus } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoStatus } from "@oh-my-pi/pi-tui/tools/todo";
 import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
 
 interface MessageProgress {
@@ -387,15 +387,14 @@ function toSessionNotification(sessionId: string, update: SessionUpdate): Sessio
 	return { sessionId, update };
 }
 
-const todoStatusMap: Record<LocalTodoStatus, "pending" | "in_progress" | "completed"> = {
+const todoStatusMap: Record<TodoStatus, "pending" | "in_progress" | "completed"> = {
 	pending: "pending",
 	in_progress: "in_progress",
-	blocked: "pending",
 	completed: "completed",
 	abandoned: "completed",
 };
 
-function mapTodoStatus(status: LocalTodoStatus): "pending" | "in_progress" | "completed" {
+function mapTodoStatus(status: TodoStatus): "pending" | "in_progress" | "completed" {
 	return todoStatusMap[status];
 }
 
@@ -430,8 +429,8 @@ function extractTodoPhases(result: unknown): unknown {
 	return (details as { phases?: unknown }).phases;
 }
 
-function extractTodoEntries(phases: unknown[]): Array<{ content: string; status: LocalTodoStatus }> {
-	const entries: Array<{ content: string; status: LocalTodoStatus }> = [];
+function extractTodoEntries(phases: unknown[]): Array<{ content: string; status: TodoStatus }> {
+	const entries: Array<{ content: string; status: TodoStatus }> = [];
 	for (const phase of phases) {
 		if (typeof phase !== "object" || phase === null || !("tasks" in phase)) {
 			continue;
@@ -448,14 +447,14 @@ function extractTodoEntries(phases: unknown[]): Array<{ content: string; status:
 			if (typeof content !== "string" || content.length === 0) {
 				continue;
 			}
-			const status = (task as { status?: LocalTodoStatus }).status;
+			const status = (task as { status?: TodoStatus }).status;
 			entries.push({ content, status: isTodoStatus(status) ? status : "pending" });
 		}
 	}
 	return entries;
 }
 
-function isTodoStatus(status: unknown): status is LocalTodoStatus {
+function isTodoStatus(status: unknown): status is TodoStatus {
 	return status === "pending" || status === "in_progress" || status === "completed" || status === "abandoned";
 }
 export function buildToolCallStartUpdate(input: {

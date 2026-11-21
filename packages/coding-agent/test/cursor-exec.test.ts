@@ -44,7 +44,7 @@ import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { TodoTool } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import type { TruncationMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
-import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { removeWithRetries, spillFileName, spillUrl } from "@oh-my-pi/pi-utils";
 import { AdviseTool } from "../src/advisor/advise-tool";
 
@@ -1386,7 +1386,7 @@ describe("CursorExecHandlers argument validation", () => {
 	}
 
 	function todoBridge() {
-		let phases: LocalTodoPhase[] = [];
+		let phases: TodoPhase[] = [];
 		const tool = new TodoTool(
 			createTestSession(".", {
 				getTodoPhases: () => phases,

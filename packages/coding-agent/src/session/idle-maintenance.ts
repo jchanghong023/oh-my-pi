@@ -50,7 +50,7 @@ export type IdleMaintenanceSession = SessionSettleState &
 		| "waitForAdmittedSubmissions"
 		| "getContextUsage"
 		| "getGoalModeState"
-		| "getLocalTodoPhases"
+		| "getTodoPhases"
 		| "runIdleCompaction"
 		| "promptCacheEntry"
 		| "runEphemeralTurn"
@@ -330,7 +330,7 @@ export class IdleMaintenance {
 			}
 			const promptText = prompt.render(idleRecapPrompt, {
 				goal: this.#goalText() ?? "",
-				task: nextActionableTask(session.getLocalTodoPhases())?.content ?? "",
+				task: nextActionableTask(session.getTodoPhases())?.content ?? "",
 			});
 			const { replyText } = await session.runEphemeralTurn({ promptText, purpose: "recap", signal: run.signal });
 			if (this.#recapRun !== run || run.signal.aborted) return;

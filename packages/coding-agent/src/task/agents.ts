@@ -9,7 +9,6 @@ import { parseAgentFields } from "../discovery/helpers";
 import developerTestAgentMd from "../extensibility/plugins/bundled/developer-test-agent/agents/developer-test-agent.md" with { type: "text" };
 // Embed agent markdown files at build time
 import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { type: "text" };
-import forkreviewerMd from "../prompts/agents/forkreviewer.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import scoutMd from "../prompts/agents/scout.md" with { type: "text" };
 import securityReviewerMd from "../prompts/agents/security-reviewer.md" with { type: "text" };
@@ -47,7 +46,6 @@ function buildAgentContent(def: EmbeddedAgentDef): string {
 const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "scout.md", template: scoutMd },
 	{ fileName: "reviewer.md", template: reviewerMd },
-	{ fileName: "forkreviewer.md", template: forkreviewerMd },
 	{ fileName: "security-reviewer.md", template: securityReviewerMd },
 	{ fileName: "developer-test-agent.md", template: developerTestAgentMd },
 	{

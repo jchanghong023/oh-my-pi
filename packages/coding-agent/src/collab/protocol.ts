@@ -178,14 +178,8 @@ export function generateRoomId(): string {
 	return Buffer.from(bytes).toString("base64url");
 }
 
-/**
- * Normalize a relay base URL (ws/wss/http/https) into a ws/wss origin.
- * A configured non-loopback plaintext relay requires its exact canonical WS origin.
- */
-export function normalizeRelayOrigin(
-	relayUrl: string,
-	allowedIntranetRelayOrigin?: string,
-): { origin: string } | { error: string } {
+/** Normalize a relay base URL (ws/wss/http/https) into a ws/wss origin, or an error. */
+function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: string } {
 	let url: URL;
 	try {
 		url = new URL(relayUrl);
@@ -205,18 +199,18 @@ export function normalizeRelayOrigin(
 		default:
 			return { error: `Unsupported relay URL scheme: ${url.protocol}` };
 	}
-	const port = url.port ? `:${url.port}` : "";
-	const origin = `${scheme}//${url.hostname}${port}`;
-	if (scheme === "ws:" && !isLocalHostname(url.hostname) && origin !== allowedIntranetRelayOrigin) {
+	if (scheme === "ws:" && !isLocalHostname(url.hostname)) {
 		return { error: "relay link must be wss:// (plain ws:// is only allowed for localhost)" };
 	}
-	return { origin };
+	const port = url.port ? `:${url.port}` : "";
+	return { origin: `${scheme}//${url.hostname}${port}` };
 }
 
 /**
  * Render the shareable link. Compact forms: the default relay collapses to
  * `<roomId>.<key>`, other wss relays drop the scheme (`host[:port]/r/…`);
- * ws:// links keep their full URL so parsing cannot mis-infer wss.
+ * only localhost ws:// links keep their full URL so parsing cannot
+ * mis-infer wss.
  *
  * The room secret is dot-joined (`<roomId>.<key>`) rather than `#`-joined:
  * RFC 3986 forbids a raw `#` inside a fragment, so strict URL stacks (macOS
@@ -228,14 +222,8 @@ export function normalizeRelayOrigin(
  * (`base64url(key ∥ writeToken)`); read-only (view) links carry the bare
  * 32-byte key, which is also the pre-token link format.
  */
-export function formatCollabLink(
-	relayUrl: string,
-	roomId: string,
-	key: Uint8Array,
-	writeToken?: Uint8Array,
-	allowedIntranetRelayOrigin?: string,
-): string {
-	const normalized = normalizeRelayOrigin(relayUrl, allowedIntranetRelayOrigin);
+export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Array, writeToken?: Uint8Array): string {
+	const normalized = normalizeRelayOrigin(relayUrl);
 	if ("error" in normalized) throw new Error(normalized.error);
 	const secret = writeToken ? Buffer.concat([key, writeToken]) : Buffer.from(key);
 	const keyText = secret.toString("base64url");
@@ -246,10 +234,10 @@ export function formatCollabLink(
 	return `${compact}/r/${roomId}.${keyText}`;
 }
 
-function normalizeCollabWebBaseUrl(relayUrl: string, webUrl?: string, allowedIntranetRelayOrigin?: string): string {
+function normalizeCollabWebBaseUrl(relayUrl: string, webUrl?: string): string {
 	const explicitWebUrl = webUrl?.trim();
 	if (!explicitWebUrl) {
-		const normalized = normalizeRelayOrigin(relayUrl, allowedIntranetRelayOrigin);
+		const normalized = normalizeRelayOrigin(relayUrl);
 		if ("error" in normalized) throw new Error(normalized.error);
 		return normalized.origin.startsWith("wss://")
 			? `https://${normalized.origin.slice("wss://".length)}`
@@ -286,16 +274,11 @@ export function formatCollabWebLink(
 	key: Uint8Array,
 	writeToken?: Uint8Array,
 	webUrl?: string,
-	allowedIntranetRelayOrigin?: string,
 ): string {
-	const base = normalizeCollabWebBaseUrl(relayUrl, webUrl, allowedIntranetRelayOrigin);
-	return `${base}/#${formatCollabLink(relayUrl, roomId, key, writeToken, allowedIntranetRelayOrigin)}`;
+	return `${normalizeCollabWebBaseUrl(relayUrl, webUrl)}/#${formatCollabLink(relayUrl, roomId, key, writeToken)}`;
 }
 
-export function parseCollabLink(
-	link: string,
-	allowedIntranetRelayOrigin?: string,
-): ParsedCollabLink | { error: string } {
+export function parseCollabLink(link: string): ParsedCollabLink | { error: string } {
 	// Lenient input: terminals that open OSC 8 links through strict URL stacks
 	// (macOS Foundation) percent-encode the legacy second `#` to `%23`.
 	let text = link.trim().replace(/%23/gi, "#");
@@ -312,10 +295,10 @@ export function parseCollabLink(
 	}
 	if ((url.protocol === "http:" || url.protocol === "https:") && url.hash) {
 		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
-		const parsed = parseCollabLink(inner, allowedIntranetRelayOrigin);
+		const parsed = parseCollabLink(inner);
 		if (!("error" in parsed)) return parsed;
 	}
-	const normalized = normalizeRelayOrigin(url.origin, allowedIntranetRelayOrigin);
+	const normalized = normalizeRelayOrigin(url.origin);
 	if ("error" in normalized) return normalized;
 	const match = ROOM_PATH_RE.exec(url.pathname);
 	if (!match) {
@@ -323,9 +306,7 @@ export function parseCollabLink(
 		// fragment. http(s) links are handled once above so invalid fragments
 		// fall through to direct relay validation instead of double-recursing.
 		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
-		if (inner && url.protocol !== "http:" && url.protocol !== "https:") {
-			return parseCollabLink(inner, allowedIntranetRelayOrigin);
-		}
+		if (inner && url.protocol !== "http:" && url.protocol !== "https:") return parseCollabLink(inner);
 		return { error: "Collab link must contain a /r/<roomId> path" };
 	}
 	const roomId = match[1]!;

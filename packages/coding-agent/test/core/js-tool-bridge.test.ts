@@ -9,7 +9,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/eval/bridge-timeout";
 import { callSessionTool } from "@oh-my-pi/pi-coding-agent/eval/js/tool-bridge";
 import type { EvalShadowCellSession } from "@oh-my-pi/pi-coding-agent/eval/speculation/cell-session";
-import { type LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
@@ -159,7 +159,7 @@ describe("callSessionTool", () => {
 	});
 
 	it("validates optional nulls before executing a real todo tool", async () => {
-		let phases: LocalTodoPhase[] = [
+		let phases: TodoPhase[] = [
 			{
 				name: "Regression",
 				tasks: [{ content: "Exercise bridge", status: "in_progress" }],
@@ -724,7 +724,7 @@ describe("callSessionTool", () => {
 	});
 
 	it("recovers a missing todo operation from raw parse metadata", async () => {
-		let phases: LocalTodoPhase[] = [];
+		let phases: TodoPhase[] = [];
 		const session: ToolSession = {
 			...createSession([]),
 			getTodoPhases: () => phases,
@@ -752,8 +752,8 @@ describe("callSessionTool", () => {
 	});
 
 	it("persists bridged todo mutations to the branch, which a direct toolResult would carry", async () => {
-		let phases: LocalTodoPhase[] = [{ name: "Ship", tasks: [{ content: "Persist", status: "in_progress" }] }];
-		const persisted: LocalTodoPhase[][] = [];
+		let phases: TodoPhase[] = [{ name: "Ship", tasks: [{ content: "Persist", status: "in_progress" }] }];
+		const persisted: TodoPhase[][] = [];
 		const session: ToolSession = {
 			...createSession([]),
 			getTodoPhases: () => phases,
@@ -775,8 +775,8 @@ describe("callSessionTool", () => {
 	});
 
 	it("persists and summarizes a todo wire alias using the resolved canonical identity", async () => {
-		let phases: LocalTodoPhase[] = [{ name: "Ship", tasks: [{ content: "Persist alias", status: "in_progress" }] }];
-		const persisted: LocalTodoPhase[][] = [];
+		let phases: TodoPhase[] = [{ name: "Ship", tasks: [{ content: "Persist alias", status: "in_progress" }] }];
+		const persisted: TodoPhase[][] = [];
 		const statuses: Array<Record<string, unknown>> = [];
 		const lookup = vi.fn((name: string) => (name === "checklist" ? (todoTool as unknown as AgentTool) : undefined));
 		const session: ToolSession = {
@@ -841,7 +841,7 @@ describe("callSessionTool", () => {
 	});
 
 	it("keeps persisted nested Todo status bounded for large checklists", async () => {
-		let phases: LocalTodoPhase[] = [
+		let phases: TodoPhase[] = [
 			{
 				name: "Ship",
 				tasks: Array.from({ length: 100 }, (_, index) => ({

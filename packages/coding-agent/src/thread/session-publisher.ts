@@ -552,7 +552,7 @@ export class SessionPublisher {
 			goalMode: toWireData(session.getLocalGoalModeState()),
 			advisorCost: session.getAdvisorCost(),
 			advisorUsingSubscription: session.isAdvisorUsingSubscription(),
-			todoPhases: toWireData(session.getLocalTodoPhases()),
+			todoPhases: toWireData(session.getTodoPhases()),
 			queuedMessages: toWireData(session.getQueuedMessages()),
 			restorableQueue: toWireData({ steering: steering.map(queuedEntry), followUp: followUp.map(queuedEntry) }),
 			ephemeralMaxTokensPreservesRequest: session.ephemeralMaxTokensPreservesRequest(),

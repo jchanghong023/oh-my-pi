@@ -69,7 +69,7 @@ interface FakeAcpBuiltinSession {
 	setSlashCommands(commands: unknown[]): void;
 	refreshSkillsAndCommands(): Promise<void>;
 	refreshProjectScope(): Promise<void>;
-	getLocalTodoPhases(): Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
+	getTodoPhases(): Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
 	commitTodoPhases(phases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>): void;
 	refreshBaseSystemPrompt(): Promise<void>;
 	getHindsightSessionState(): undefined;
@@ -160,7 +160,7 @@ function createRuntime() {
 		async exportToHtml(outputPath?: string) {
 			return outputPath ?? "/tmp/exported-session.html";
 		},
-		getLocalTodoPhases() {
+		getTodoPhases() {
 			return this._todoPhases;
 		},
 		commitTodoPhases(phases) {

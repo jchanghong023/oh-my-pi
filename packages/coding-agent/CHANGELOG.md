@@ -10,7 +10,7 @@
 - Removed the fork-only `Settings.saveUserModelRole()` and `ModelRoleConflictError`; use upstream `setModelRole()` and `flush()` for ordinary role changes.
 - Removed the retired ZCode SDK startup option `createAgentSession({ prepareConfiguration })`.
 - Removed the retired ZCode edit-and-resend SDK method `AgentSession.promptEditedUserQuery()` and its branch-rollback helper `SessionManager.restoreLeaf()`.
-- Removed the retired AIReq workbench’s in-process Collab connection. Relay-based collaboration and intranet username joins are unchanged.
+- Removed the retired AIReq workbench’s in-process Collab connection. Relay-based collaboration remains available.
 - Removed the ZCode SDK input-delivery hook, command metadata, and queue mutation APIs. Native steering and follow-up controls remain available.
 - Removed the retired ZCode SDK method `AgentSession.refreshCurrentModelMetadata()`. Native model discovery and context-window updates are unchanged.
 - Removed the retired ZCode `PromptOptions.attachments` field. Use `images` for inline images; existing session history remains readable.
@@ -27,6 +27,9 @@
 - Removed the retired ZCode child-session interaction factory and restored the two-argument `setToolUIContext()`.
 - Removed the old ZCode-only filesystem rollback and runtime provider admission overrides. Native edit/format locking and SDK request hooks remain available.
 - Removed the retired `onModelResponse` SDK hook and Team workbench-only runner options. Request authentication, response metadata hooks, and native Team read isolation are unchanged.
+- Removed offline username joins and the built-in `omp collab serve` relay. Collaboration uses upstream invitation links and relay configuration.
+- Removed `todo`'s fork-only `block` and `unblock` operations and restored upstream phase selection when `append` omits `phase`.
+- Removed `/forkreviewer` and its bundled specialist. `/review` remains available.
 
 ### Added
 

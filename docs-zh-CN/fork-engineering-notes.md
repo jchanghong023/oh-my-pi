@@ -46,7 +46,7 @@
 
 #### 不混入上游 bug PR 的变更
 
-- 恢复完整 Provider／模型目录是本次明确选择的 fork 策略回退；退役模型 ID、中文／compact 默认值、原生表单、`blocked` Todo 状态及测试缺失 settings／认证／运行所有权上下文，分别属于过期 fixture 或本地合同对齐。
+- 恢复完整 Provider／模型目录是本次明确选择的 fork 策略回退；退役模型 ID、中文／compact 默认值、原生表单及测试缺失 settings／认证／运行所有权上下文，分别属于过期 fixture 或本地合同对齐。
 - capability 的禁用 Provider item 二次过滤条件是 fork 差异：上述上游基线没有该条件，不能将本次 `includeDisabledProviders` 修正报为上游缺陷。
 - MCP 初始自签名证书被接受由继承的 `NODE_TLS_REJECT_UNAUTHORIZED=0` 导致；修正的是测试环境隔离，不是上游 TLS 漏洞。
 - stats Windows 端口查询合并了重复的 `tasklist`／CIM 信息读取；完整 stats 套件已通过，但旧用例超时与串行查询耗时的精确因果未独立量化。暂记为性能补丁候选，不列为已证实上游功能 bug，也不宣称解决总超时。

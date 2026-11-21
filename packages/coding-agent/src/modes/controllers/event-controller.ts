@@ -42,7 +42,7 @@ import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "@oh-my-pi/pi
 import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { getSymbolTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../modes/types";
-import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { LocalAgentSessionEvent } from "../../session/agent-session";
 import type { WakeSources } from "../../session/agent-session-events";
 import {
@@ -1937,7 +1937,7 @@ export class EventController {
 		// The persistence slot exists before message_end notification, unlike
 		// tool_execution_end. Resolve HUD identity only after canonical append.
 		if (event.message.role === "toolResult" && event.message.toolName === "todo" && !event.message.isError) {
-			const details = event.message.details as { op?: string; phases?: LocalTodoPhase[] } | undefined;
+			const details = event.message.details as { op?: string; phases?: TodoPhase[] } | undefined;
 			if (details?.op !== "view" && details?.phases) {
 				const owner = this.ctx.viewSession;
 				const sessionId = owner.sessionManager.getSessionId();
@@ -1948,7 +1948,7 @@ export class EventController {
 					owner.sessionManager.getSessionId() === sessionId &&
 					owner.sessionManager.getSessionFile() === sessionFile
 				) {
-					this.ctx.setTodos(owner.getLocalTodoPhases());
+					this.ctx.setTodos(owner.getTodoPhases());
 				}
 			}
 		}
@@ -2442,11 +2442,11 @@ export class EventController {
 		}
 		if (syntheticFailureCard) this.#syntheticFailureCards.set(event.toolCallId, syntheticFailureCard);
 		if (event.toolName === "todo" && !event.isError) {
-			const details = event.result.details as { op?: string; phases?: LocalTodoPhase[] } | undefined;
+			const details = event.result.details as { op?: string; phases?: TodoPhase[] } | undefined;
 			if (details?.op !== "view" && details?.phases) this.ctx.setTodos(details.phases);
 		}
 		if (event.toolName === "eval" && hasNestedTodo(event.result.details)) {
-			this.ctx.setTodos(this.ctx.viewSession.getLocalTodoPhases());
+			this.ctx.setTodos(this.ctx.viewSession.getTodoPhases());
 		}
 		if (event.toolName === "todo" && event.isError && !event.cancelled) {
 			const textContent = event.result.content.find(
