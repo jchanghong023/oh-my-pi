@@ -719,22 +719,6 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		}
 		const entry = resolved;
 		const op = entry.op;
-		if (
-			(op === "done" || op === "drop" || op === "rm") &&
-			!entry.phase &&
-			namedTaskContents(previousPhases, entry).length === 0
-		) {
-			return {
-				content: [
-					{
-						type: "text",
-						text: `${op} requires a task, items, or phase target. No tasks were changed. Use view to recover the exact target.`,
-					},
-				],
-				details: { op, phases: previousPhases, storage },
-				isError: true,
-			};
-		}
 		// Pure-view calls are reads: no normalization, no state write.
 		const readOnly = op === "view";
 		const { phases: updated, errors } = readOnly

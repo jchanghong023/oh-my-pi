@@ -22,9 +22,9 @@ The params object **is** a single op — the discriminator and its fields live a
 | --------- | ---------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `init`    | `list` **or** flat `items`   | `phase` (names the phase for the flat `items` form; defaults to `Tasks`) | Replaces the entire list — with `list`, uses the given phases; with a flat `items` array, synthesizes one phase. Every new task starts `pending` before normalization. |
 | `start`   | `task`                       | None                                                                     | Marks one task `in_progress`; any other `in_progress` task is demoted to `pending`.                                                                                    |
-| `done`    | `task` or `phase` | None | Marks the target task or every task in the target phase `completed`; an omitted target is rejected. |
-| `drop`    | `task` or `phase` | None | Marks the target task or every task in the target phase `abandoned`; an omitted target is rejected. |
-| `rm`      | `task` or `phase` | None | Removes the target task or clears the target phase's task list; an omitted target is rejected. |
+| `done`    | `task`, `items`, or `phase`  | None | Marks the targeted tasks `completed`. |
+| `drop`    | `task`, `items`, or `phase`  | None | Marks the targeted tasks `abandoned`. |
+| `rm`      | `task`, `items`, or `phase`  | None | Removes the targeted tasks or clears the target phase's task list. |
 | `append`  | `items`                      | `phase` (defaults to the active/next task's phase, then the last phase, then `Tasks`) | Appends new `pending` tasks to the selected phase; creates the phase if missing. |
 | `view`    | None                         | None                                                                     | Echoes the current list. A `view` call is read-only: no normalization, no state write.                                                                                 |
 
@@ -67,12 +67,12 @@ The TUI renderer (`todoToolRenderer`) merges call and result into one transcript
 
 1. `TodoTool.execute(...)` clones the current cached phases from `session.getTodoPhases?.() ?? []` (`packages/coding-agent/src/tools/todo.ts`).
 2. `resolveTodoParams(...)` validates the raw single-op payload. With `lenientArgValidation`, an omitted `op` can be inferred from non-empty `list` (`init`), non-empty `items` plus a non-empty `phase` (`append`), or non-empty `items` without that phase when no phases exist (`init`). Targeting fields alone cannot infer an op. Other schema failures return `Invalid todo arguments: ...`.
-3. `execute(...)` rejects `done`, `drop`, or `rm` without a task or phase target before applying mutations; otherwise `applyParams(...)` applies the resolved op with `applyEntry(...)`.
+3. `applyParams(...)` applies the resolved op with `applyEntry(...)`.
 4. Each op mutates the working phase array:
    - `initPhases(...)` rebuilds the list from scratch.
    - `start` resolves a task by exact `content`, demotes every other `in_progress` task to `pending`, then marks the target `in_progress`.
-   - `done` / `drop` use `getTaskTargets(...)` to target one task or every task in one phase.
-   - `rm` removes one task or clears one phase's `tasks`.
+   - `done` / `drop` use `getTaskTargets(...)` to resolve named tasks or every task in one phase.
+   - `rm` removes named tasks or clears one phase's `tasks`.
    - `appendItems(...)` resolves or creates the target phase and pushes new `pending` tasks unless the same task content already exists anywhere.
 5. Missing task/phase references and op-specific failures are recorded in an `errors` array; any error discards the op's mutations at the end.
 6. After a successful mutation, `normalizeInProgressTask(...)` enforces the single-active-task invariant:
@@ -100,9 +100,10 @@ Normalization then re-applies the single-active-task rule after the op runs.
 ### Op targeting rules
 
 - `done`, `drop`, `rm`:
-   - `task` set: affect one exact-content task.
+   - `task` set: affect the named tasks.
+   - else `items` non-empty: affect the tasks with those names.
    - else `phase` set: affect every task in that exact-name phase.
-   - else: reject the call without changing any tasks; use `view` to recover the exact target.
+   - else: report an error without changing any tasks.
 - `append` is the only op that creates a missing phase.
 - `init` discards previous phases entirely.
 
@@ -154,13 +155,13 @@ The same file also exposes non-tool helpers used by `/todo`:
    - `Missing phase name for append operation` (an explicit empty `phase`, not an omitted one)
    - `Missing items for append operation`
    - `Task "..." already exists`
-   - `done requires a task or phase target` / `drop requires a task or phase target` / `rm requires a task or phase target`; these return early with unchanged phases and a `view` recovery hint
+   - `done needs a task, items or a phase` / `drop needs a task, items or a phase` / `rm needs a task, items or a phase`
 - A `todo` call carries a single op; any error in it discards every mutation the op made.
 - Runtime-level tool failure is handled outside the tool body: `agent-session` injects a hidden reminder and the event controller warns the user that visible progress may be stale.
 - Idempotency is op-specific:
    - `init` is a full replacement; replaying the same payload yields the same state.
    - `start`, `done`, and `drop` are effectively idempotent on an existing target state, though `start` also demotes another active task.
-   - Task-targeted `rm` is not idempotent: the second call errors because the task is gone. Phase-targeted `rm` only empties the phase, so repeating it succeeds; untargeted `rm` is rejected.
+   - Task-targeted `rm` is not idempotent: the second call errors because the task is gone. Phase-targeted `rm` only empties the phase, so repeating it succeeds.
    - `append` is not idempotent: duplicate task content is rejected with `Task "..." already exists`; the `append` op validates up front, so an op with any duplicate appends nothing.
 
 ## Notes

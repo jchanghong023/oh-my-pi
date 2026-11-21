@@ -116,7 +116,6 @@
 - Native child agents inherit the launching session's credentials and tool restrictions, and caller restrictions also apply to Cursor, Advisors, and resumed queued input.
 - Offline mode preserves the user's `models.offline` setting.
 - Intranet model catalogs only refresh manually against configured discovery endpoints; signing in still uses the local catalog cache.
-- Intranet sharing refuses the default public relay; `omp join` accepts a username when launching the native TUI.
 - Standard input and `@file` content remain prompt text rather than becoming local commands.
 - Strict task cleanup can retry a failed isolated release.
 - Concurrent cleanup of one browser tab no longer disconnects another tab sharing its browser.
@@ -176,7 +175,6 @@
 - Offline OpenWiki planning now respects the effective plan model role after runtime defaults are applied.
 - Team truncates oversized narrative output before strict validation instead of aborting the discussion.
 - Native subagents retain access to their exact granted Skills until their session is released.
-- RPC clients retain blocked task status and blocker notes; ACP plans display blocked tasks as pending.
 - Provider-scoped model lookups no longer include unrelated runtime models before OAuth login.
 - WebKit browser shutdown waits for owned host and viewer processes and retains failed cleanup for retry.
 

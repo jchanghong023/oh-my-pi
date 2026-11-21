@@ -532,11 +532,7 @@ export class CollabHost {
 		const key = await importRoomKey(rawKey);
 		if (this.ending) throw new CollabHostStoppedError("collab host stopped before connecting");
 
-		const socket = new CollabSocket({
-			wsUrl: parsed.wsUrl,
-			role: "host",
-			key,
-		});
+		const socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "host", key });
 		this.#socket = socket;
 
 		let opened = false;
