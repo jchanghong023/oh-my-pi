@@ -73,14 +73,8 @@ import type { CompactThinkingPreview } from "./compact-thinking-preview";
 import type { CompactToolOutputPreview } from "./compact-tool-output-preview";
 
 export function isLoopCommand(name: string | undefined): boolean {
-	return name === "loop" || name === "loopgoal" || name === "loopn";
+	return name === "loop" || name === "loopn";
 }
-
-export type PreparedLoopPrompt = {
-	text: string;
-	/** Returns false if the loop changed before the session took the prompt. */
-	onPromptAdmitted?: () => boolean;
-};
 
 export type CompactionQueuedMessage = {
 	/** Follow-up builtins stay as submitted until they reach their position in the drain. */
@@ -373,7 +367,6 @@ export interface InteractiveModeContext {
 	goalModePaused: boolean;
 	loopModeEnabled: boolean;
 	loopModePaused: boolean;
-	loopGoalMode?: boolean;
 	readonly loopNActive: boolean;
 	loopPrompt?: string;
 	loopLimit?: LoopLimitRuntime;
@@ -815,10 +808,10 @@ export interface InteractiveModeContext {
 	handleGuidedGoalCommand(rest?: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
 	/** True while `/guided-goal` is interviewing the user and no goal record exists yet. */
 	isGuidedGoalInterviewActive(): boolean;
-	handleLoopCommand(args?: string, goal?: boolean): Promise<string | undefined>;
+	handleLoopCommand(args?: string): Promise<string | undefined>;
 	handleLoopNCommand(args?: string): string | undefined;
-	/** Prepare a model prompt with an admission callback scoped to the live loop. */
-	prepareLoopPrompt(text: string, capture: boolean): PreparedLoopPrompt;
+	/** Capture the prompt only when the session admits it and the same loop is still live. */
+	captureLoopPromptOnAdmission(text: string): (() => boolean) | undefined;
 	setLoopPrompt(prompt: string): void;
 	/** Anchor polling to admission and positional intervals to dispatch completion. */
 	armLoopAutoSubmit(promptPromise: Promise<unknown>, admission?: Promise<void>): void;

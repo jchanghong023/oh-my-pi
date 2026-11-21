@@ -58,7 +58,7 @@ import {
 	getCompanyConfigError,
 	setCompanyOfflineEnabled,
 } from "./config/company-provider";
-import { cfgNoJudge, cfgNoSpotlight } from "./config/auxiliary-model-policy";
+import { cfgNoJudge, cfgNoSpotlight, cfgOffline } from "./config/auxiliary-model-policy";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
@@ -1104,7 +1104,7 @@ export async function resolveScopedModels(
 	}
 	// Offline processes keep this cache-aware pass cache-only; a collapsed scope
 	// surfaces its models from SQLite instead of fetching discovery endpoints.
-	await modelRegistry.refresh(parsed.offline ? "offline" : "online-if-uncached");
+	await modelRegistry.refresh(parsed.intranetOffline ? "offline" : "online-if-uncached");
 	return await resolveModelScope(modelPatterns, modelRegistry, preferences, activeSettings);
 }
 
@@ -1444,7 +1444,7 @@ export function applyResolvedSystemPromptInputs(
 	}
 	// OMP_OFFLINE: append the offline-environment notice after any resolved append
 	// prompt so it reaches the model in every session built from this launch.
-	const offlineNoticeText = getOfflineSystemNotice(parsed.offline);
+	const offlineNoticeText = getOfflineSystemNotice(parsed.intranetOffline);
 	if (offlineNoticeText) {
 		options.appendSystemPrompt = options.appendSystemPrompt
 			? `${options.appendSystemPrompt}\n\n${offlineNoticeText}`
@@ -1467,7 +1467,7 @@ export async function buildSessionOptions(
 	const options: CreateAgentSessionOptions = {
 		cwd: parsed.cwd ?? getProjectDir(),
 		autoApprove: parsed.autoApprove ?? false,
-		offline: parsed.offline === true,
+		offline: parsed.intranetOffline === true,
 	};
 	const restoringSession = Boolean(parsed.continue || parsed.resume || isForeignSessionImport(parsed));
 	if (parsed.serviceTier !== undefined) {
@@ -1705,7 +1705,7 @@ export async function buildSessionOptions(
 			modelRegistry,
 			modelMatchPreferences,
 			disabledProviders,
-			{ deferUnregistered: true, offline: parsed.offline === true, settings: activeSettings, roleLookup },
+			{ deferUnregistered: true, offline: parsed.intranetOffline === true, settings: activeSettings, roleLookup },
 		);
 		if (selection.deferred) {
 			// Preserve role fallback order until extensions have registered their providers.
@@ -1872,7 +1872,7 @@ export async function runRootCommand(
 	logger.startTiming();
 	// Set the offline scan-cache TTL before constructing @ file autocomplete providers.
 	// Explicitly configured values, including "0", take precedence.
-	if (parsed.offline === true && (process.env.FS_SCAN_CACHE_TTL_MS ?? "") === "") {
+	if (parsed.intranetOffline === true && (process.env.FS_SCAN_CACHE_TTL_MS ?? "") === "") {
 		process.env.FS_SCAN_CACHE_TTL_MS = OFFLINE_SCAN_CACHE_TTL_MS;
 	}
 	startStartupWatchdog();
@@ -1934,7 +1934,7 @@ export async function runRootCommand(
 		// Start credential I/O before independent preload, stdin and settings work.
 		const companyLaneOperationId = logger.getLogContext().operation_id ?? `startup-lanes-${randomUUID()}`;
 		const companySnapshotPromise = logger.withLogContext({ operation_id: companyLaneOperationId }, () =>
-			setCompanyOfflineEnabled(parsedArgs.offline === true),
+			setCompanyOfflineEnabled(parsedArgs.intranetOffline === true),
 		);
 		companySnapshotPromise.catch(() => {});
 
@@ -2007,7 +2007,7 @@ export async function runRootCommand(
 			}
 			if (isInteractive) notifs.push({ kind: "warn", message: companyProviderError });
 			else process.stderr.write(`${companyProviderError}\n`);
-		} else if (!parsedArgs.offline && companyExplicitlyRequested) {
+		} else if (!parsedArgs.intranetOffline && companyExplicitlyRequested) {
 			logger.warn("Explicit company model selection requires offline mode", {
 				component: "main",
 				event: "company_selection_rejected",
@@ -2078,14 +2078,15 @@ export async function runRootCommand(
 		if (parsedArgs.maxCost !== undefined) cfgSessionMaxCost.override(settingsInstance, parsedArgs.maxCost);
 		if (parsedArgs.noJudge) cfgNoJudge.override(settingsInstance, true);
 		if (parsedArgs.noSpotlight) cfgNoSpotlight.override(settingsInstance, true);
+		if (parsedArgs.offline) cfgOffline.override(settingsInstance, true);
 		if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
 			applyProtocolDefaults("rpc", settingsInstance);
 		} else if (parsedArgs.mode === "acp") {
 			applyProtocolDefaults("acp", settingsInstance);
 		}
 
-		// Process-only offline overrides; apply before the registry captures company models.
-		if (parsedArgs.offline) {
+		// Intranet-only overrides; apply before the registry captures company models.
+		if (parsedArgs.intranetOffline) {
 			cfgWebSearchEnabled.override(settingsInstance, false);
 			cfgBrowserEnabled.override(settingsInstance, false);
 			cfgAstEditEnabled.override(settingsInstance, false);
@@ -2170,7 +2171,7 @@ export async function runRootCommand(
 				plan: planModel,
 			});
 		}
-		if (parsedArgs.offline) {
+		if (parsedArgs.intranetOffline) {
 			const matchingDefaultRoles = Object.entries(COMPANY_OFFLINE_ROLE_DEFAULTS)
 				.filter(([role, selector]) => settingsInstance.getModelRole(role) === selector)
 				.map(([role]) => role);
@@ -2592,7 +2593,7 @@ export async function runRootCommand(
 			const selectionFields = {
 				component: "main",
 				operation_id: companyLaneOperationId,
-				offline: parsedArgs.offline === true,
+				offline: parsedArgs.intranetOffline === true,
 				explicit_model: Boolean(parsedArgs.model),
 				explicit_provider: Boolean(parsedArgs.provider),
 				explicit_scope_count: parsedArgs.models?.length ?? 0,
@@ -2653,7 +2654,7 @@ export async function runRootCommand(
 			// discovery arms; running these concurrently contends for the event loop and stretches
 			// every parallel arm by ~30ms. Interactive startup defers it further, behind the first
 			// frame (see `startDeferredStartupWork`), for the same reason.
-			if (!isInteractive) modelRegistry.refreshInBackground(parsedArgs.offline ? "offline" : undefined);
+			if (!isInteractive) modelRegistry.refreshInBackground(parsedArgs.intranetOffline ? "offline" : undefined);
 			return result;
 		};
 
@@ -2798,7 +2799,7 @@ export async function runRootCommand(
 			// resumed/imported sessions neither read nor advance startup changelogs.
 			const showsStartupChangelog =
 				isInteractive &&
-				!parsedArgs.offline &&
+				!parsedArgs.intranetOffline &&
 				!(parsedArgs.continue || parsedArgs.resume || isForeignSessionImport(parsedArgs));
 			const lastChangelogVersion = showsStartupChangelog ? await readLastChangelogVersion() : undefined;
 
@@ -2915,7 +2916,7 @@ export async function runRootCommand(
 				}
 				void session.loadDeferredExtensions();
 				session.startHintCompression();
-				modelRegistry.refreshInBackground(parsedArgs.offline ? "offline" : undefined);
+				modelRegistry.refreshInBackground(parsedArgs.intranetOffline ? "offline" : undefined);
 				session.validateRetryFallbackChains();
 				if (configuredScope.length > 0) {
 					// Must follow refreshInBackground: it waits on the in-flight refresh.
@@ -2923,7 +2924,7 @@ export async function runRootCommand(
 						error => logger.warn("Scoped model rebuild after discovery failed", { error: String(error) }),
 					);
 				}
-				if (!parsedArgs.offline) void startBackgroundModelDiscovery?.();
+				if (!parsedArgs.intranetOffline) void startBackgroundModelDiscovery?.();
 				if (cfgGcAutoCompress.get(settingsInstance)) {
 					void scheduleGcAutoCompress(getAgentDir()).catch(error =>
 						logger.warn("Background session compression failed to start", { error: String(error) }),
@@ -3073,7 +3074,7 @@ export async function runRootCommand(
 						parsedArgs.join,
 						startDeferredStartupWork,
 						startupLease,
-						parsedArgs.offline,
+						parsedArgs.intranetOffline,
 						initialArgs.goal,
 						parsedArgs.restore ? () => restoreSession(session, { eventBus, subagentEventBus }) : undefined,
 					);

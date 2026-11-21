@@ -272,6 +272,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 				process.stderr.write(
 					`OpenWiki debug: model=${selected.modelId} plannerModel=${planner.modelId} pageConcurrency=${pageConcurrency}\n`,
 				);
+			const printOutput: string[] | undefined = command.print ? [] : undefined;
 			const result = await runNativeRepositoryGeneration({
 				root,
 				mode: command.command,
@@ -286,11 +287,13 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 				skillsDir,
 				signal: controller.signal,
 				onEvent: event => {
-					if (event.type === "text") process.stdout.write(event.text);
-					else if (event.type === "repository_progress") {
-						process.stderr.write(
-							`OpenWiki: ${event.stage}${event.resumed ? " (resumed)" : ""}${event.page ? ` ${event.page}` : ""}\n`,
-						);
+					if (event.type === "text") {
+						if (printOutput) printOutput.push(event.text);
+						else process.stdout.write(event.text);
+					} else if (event.type === "repository_progress") {
+						const progress = `OpenWiki: ${event.stage}${event.resumed ? " (resumed)" : ""}${event.page ? ` ${event.page}` : ""}\n`;
+						if (printOutput) printOutput.push(progress);
+						else process.stderr.write(progress);
 					} else if (debug && event.type === "debug") process.stderr.write(`OpenWiki debug: ${event.message}\n`);
 					else if (debug && event.type === "tool_start")
 						process.stderr.write(
@@ -303,6 +306,8 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 				},
 			});
 			if (controller.signal.aborted) return 130;
+			const text = printOutput?.join("").trim();
+			if (text) process.stdout.write(`${text}\n`);
 			if (result.partialFailure) {
 				process.stderr.write("OpenWiki generation did not complete all pages; run update to retry.\n");
 				return 1;

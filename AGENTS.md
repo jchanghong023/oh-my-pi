@@ -354,7 +354,6 @@ Fork releases require explicit user authorization and use the manual CI workflow
 - 旧 `mini`／`omp-spec` 自定义 schema MUST 由用户显式迁移，NEVER 恢复包内别名或私有 bridge。缺少 `design.md`／`tasks.md` MUST 如实记录待完成，NEVER 仅改 schema 名称宣称完成；历史归档不批量改写。
 - [个人命令](openspec/specs/personal-commands/spec.md)维护 fork 内置斜杠命令及其行为边界。
 - 原生 TUI `/workspace` 是独立持久化的工作区写入提醒，可与 Plan 共存；不是沙箱或 `approvalMode`，不改变工具、模型或审批。状态与范围逻辑位于 `packages/coding-agent/src/workspace-mode.ts`，命令位于 `packages/coding-agent/src/slash-commands/builtin-modes.ts`；权威边界见[个人命令的工作区提醒需求](openspec/specs/personal-commands/spec.md#requirement-原生-workspace-工作区写入提醒)。
-- `/loopgoal` 复用 `/loop`，仅增加固定目标提示词包装及最终回复精确为 `无` 时停止；参数、上下文策略、首轮提交、调度与暂停恢复均沿用 Loop，不另设压缩阈值或准备流程，不接入 Goal 管理。提示词位于 `packages/coding-agent/src/prompts/loop-goal.md`，共享语义位于 `packages/coding-agent/src/modes/loop-goal.ts`，详见[个人命令](openspec/specs/personal-commands/spec.md)。
 - Firefox 浏览器测试 MUST 使用 Selenium＋geckodriver 驱动本机真实 Firefox，并使用隔离临时 profile；NEVER 以 Chromium、兼容模式或自写 Marionette 驱动替代。记录实际浏览器版本与验证范围，不自动安装浏览器／驱动，不修改个人浏览器配置。
 - 原生 TUI `/sketch`：`packages/coding-agent/src/sketch/` 及 `packages/coding-agent/src/slash-commands/builtin-sketch.ts`；资源静态内嵌，以 Firefox 128 原生能力为基线，不再兼容 52。画布工作区铺满窗口，支持缩放和平移，视野操作不改变完整 PNG 附件尺寸；本机验证不等于公司实机验证。
 - `OMP_OFFLINE` 标记公司内部网络环境：CentOS 7、使用 NFS、有 `/dev/shm`、无法连接互联网；可用已配置的内网服务。NEVER 把环境标记当作宿主探测，或扩大现有工具禁用范围、URL 拒绝与审批规则。

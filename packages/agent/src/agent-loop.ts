@@ -2158,12 +2158,8 @@ async function streamAssistantResponse(
 	const resolvedMetadata = config.metadataResolver ? config.metadataResolver(model.provider) : config.metadata;
 	const effectiveTemperature =
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
-	// Sample even when a higher-priority directive wins; never postpone the one-shot to a later attempt.
-	const promptToolChoice = config.getToolChoiceOnce?.();
 	// Owned tool calling sends no native tools, so any tool_choice would error.
-	const effectiveToolChoice = ownedDialect
-		? undefined
-		: (hostToolChoice ?? forcedToolChoice ?? promptToolChoice ?? config.toolChoice);
+	const effectiveToolChoice = ownedDialect ? undefined : (hostToolChoice ?? forcedToolChoice ?? config.toolChoice);
 	const effectiveReasoning = dynamicReasoning ?? config.reasoning;
 	const effectiveDisableReasoning = dynamicDisableReasoning ?? config.disableReasoning;
 	// `getCwd` is read once per LLM call so a mid-run session move (`/move`) reaches
@@ -3060,20 +3056,9 @@ function formatToolNotFoundMessage(
 	fallbackNames?: Iterable<string>,
 ): string {
 	const suggestions = suggestToolNames(name, tools, fallbackNames);
-	const suggestion =
-		suggestions.length === 0
-			? ""
-			: suggestions.length === 1
-				? ` Did you mean ${suggestions[0]}?`
-				: ` Closest available: ${suggestions.slice(0, MAX_TOOL_NAME_SUGGESTIONS).join(", ")}.`;
-	const offered = tools
-		?.slice(0, 20)
-		.map(tool => tool.name)
-		.join(", ");
-	const roster = offered
-		? `Tools in this request: ${offered}${tools && tools.length > 20 ? ", ..." : ""}.`
-		: "No tools were listed in this request.";
-	return `Tool ${name} not found.${suggestion} The tool was not executed. ${roster} Use an appropriate available tool instead; do not repeat the unavailable call.`;
+	if (suggestions.length === 0) return `Tool ${name} not found`;
+	if (suggestions.length === 1) return `Tool ${name} not found. Did you mean ${suggestions[0]}?`;
+	return `Tool ${name} not found. Closest available: ${suggestions.slice(0, MAX_TOOL_NAME_SUGGESTIONS).join(", ")}`;
 }
 
 /**

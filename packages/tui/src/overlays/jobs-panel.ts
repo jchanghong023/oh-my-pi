@@ -33,7 +33,6 @@ export interface JobsPanelJob {
 	readonly type: string;
 	readonly status: "running" | "completed" | "failed" | "cancelled";
 	readonly label: string;
-	readonly name?: string;
 	/** What the job is for, in the model's words; rows and the detail lead with it over a command `label`. */
 	readonly intent?: string;
 	/** One line on what a command does and when it ends, from the cheap model; the detail shows it under the intent. */
@@ -356,9 +355,7 @@ export class JobsSheet implements Component {
 			const age = formatDuration(jobAge(job, now));
 			const agent = entry.agent && entry.agent.id !== job.label ? `${entry.agent.id}: ` : "";
 			// The intent is model-written: strip terminal controls and flatten it to one row like the command.
-			const title = shortenEmbeddedPaths(
-				collapseCommand(sanitizeText(`${job.name ? `${job.name} · ${job.id} — ` : ""}${job.intent ?? job.label}`)),
-			);
+			const title = shortenEmbeddedPaths(collapseCommand(sanitizeText(job.intent ?? job.label)));
 			lines.push(truncateToWidth(`${cursor} ${guide}${job.status}  ${job.type} ${age}  ${agent}${title}`, width));
 		}
 		if (budget === undefined || lines.length + allDetail.length <= budget) {
@@ -591,7 +588,6 @@ function describeJobItem(job: JobsPanelJob, agentName: string | undefined, guide
 		label: compact([
 			guide !== "" && span(guide, "mono dim"),
 			agentName !== undefined && agentName !== job.label && span(`${agentName} `, "strong"),
-			job.name !== undefined && span(`${job.name} · ${job.id} — `, "mono"),
 			job.intent
 				? span(job.intent)
 				: job.type === "task"
@@ -601,8 +597,8 @@ function describeJobItem(job: JobsPanelJob, agentName: string | undefined, guide
 		value: [span(age, "mono")],
 		icon: TYPE_ICON[job.type] ?? "job",
 		tone: STATUS_TONE[job.status],
-		title: `${job.name ? `${job.name}\n` : ""}${job.intent ? `${job.intent}\n` : ""}${job.caption ? `${job.caption}\n` : ""}${job.label}\n${status} · ${job.type} · ${job.id}`,
-		aria: `${job.name ? `${job.name}, ${job.id}, ` : ""}${job.intent ?? job.label}, ${status.toLowerCase()}, ${age}`,
+		title: `${job.intent ? `${job.intent}\n` : ""}${job.caption ? `${job.caption}\n` : ""}${job.label}\n${status} · ${job.type} · ${job.id}`,
+		aria: `${job.intent ?? job.label}, ${status.toLowerCase()}, ${age}`,
 	});
 }
 
@@ -743,7 +739,6 @@ function describeDetail(
 	const title = job.intent ?? (command ? undefined : job.label);
 	const pids = detail?.pids ?? [];
 	const facts = compact([
-		job.name ? { k: "Name", v: [span(job.name)] } : undefined,
 		job.agentId ? { k: "Agent", v: [span(job.agentId, "mono")] } : undefined,
 		detail?.cwd ? { k: "Directory", v: [span(detail.cwd, "path")] } : undefined,
 		pids.length > 0 && { k: pids.length > 1 ? "PIDs" : "PID", v: [span(pids.join(", "), "num")] },

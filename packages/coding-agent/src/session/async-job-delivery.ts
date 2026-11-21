@@ -54,7 +54,6 @@ type AsyncResultJobDetails = {
 	status?: AsyncJob["status"];
 	agentId?: string;
 	label?: string;
-	name?: string;
 	durationMs?: number;
 	/** Source capture metadata belongs to this job, not to the enclosing delivery report. */
 	meta?: OutputMeta;
@@ -144,10 +143,10 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 		// text the job controls: it must not close the `<system-notice>` it renders
 		// into or open a forged harness block. Neither may the label naming it
 		// or a /tan job's quoted user request.
-		// Keep the full command identity alongside the finite job's independent display name.
+		// A bash job is named by its whole command: its label truncates the tail, so parallel jobs
+		// that share a prefix would otherwise read the same in the notice that delivers them.
 		const command = entry.job?.type === "bash" ? entry.job.process?.command : undefined;
-		const identity = command === undefined ? entry.job?.label : commandIdentity(command);
-		const headerLabel = entry.job?.name ? `${entry.job.name}${identity ? ` — ${identity}` : ""}` : identity;
+		const headerLabel = command === undefined ? entry.job?.label : commandIdentity(command);
 		return {
 			jobId: entry.jobId,
 			agentUrlId,
@@ -158,7 +157,6 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 			status: entry.job?.status,
 			agentId: entry.job?.agentId,
 			label: entry.job?.label,
-			name: entry.job?.name,
 			headerLabel: headerLabel ? escapeHarnessTags(headerLabel) : undefined,
 			request: entry.job?.request === undefined ? undefined : escapeHarnessTags(entry.job.request),
 			namedByCommand: command !== undefined,
@@ -181,7 +179,6 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 			status: job.status,
 			agentId: job.agentId,
 			label: job.label,
-			...(job.name ? { name: job.name } : {}),
 			durationMs: job.durationMs,
 			...(job.meta ? { meta: job.meta } : {}),
 			...(job.structured ? { schema: job.structured } : {}),

@@ -34,7 +34,9 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 
 ## 启动与策略边界
 
-在启动 OMP 及其子进程前设置 `OMP_OFFLINE=1`。也接受忽略大小写和首尾空白的 `true`、`yes`、`on`；其他值不启用。没有 `--offline` 参数。内网使用者可先按公司流程执行 `ma dmas_ide` 和 `ide agent`，使 IDE 与模型代理就绪，再启动 OMP。
+在启动 OMP 及其子进程前设置 `OMP_OFFLINE=1`。也接受忽略大小写和首尾空白的 `true`、`yes`、`on`；其他值不启用。内网使用者可先按公司流程执行 `ma dmas_ide` 和 `ide agent`，使 IDE 与模型代理就绪，再启动 OMP。
+
+上游 `--offline` 是独立的 Provider 限制，通过 `models.offline` 控制辅助服务，不触发公司内网模式；两者可同时使用。
 
 - 启动时临时关闭 `web_search.enabled`、`browser.enabled`、`astEdit.enabled`、`fetch.enabled`，并告知模型不要访问公网；这些覆盖不写入持久配置。bash、Eval、本地文件、Git 和按配置启用的 LSP 等仍可用。
 - 自动版本检查、插件市场自动检查与更新、启动更新日志和在线模型目录发现被跳过。手动刷新、selector 未命中、会话恢复及 task 子代理的目录发现也只用内置数据和缓存；缓存缺失可能使模型不可解析，而不是去公网补齐。显式更新命令、实际模型和 OAuth 请求不因此被禁止。

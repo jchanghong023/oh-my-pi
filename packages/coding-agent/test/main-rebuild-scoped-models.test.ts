@@ -254,7 +254,7 @@ describe("resolveScopedModels", () => {
 		});
 
 		const scoped = await resolveScopedModels(
-			{ ...parseArgs(["--models", "prov/b"]), offline: true },
+			{ ...parseArgs(["--models", "prov/b"]), intranetOffline: true },
 			registry,
 			settings,
 		);
@@ -313,9 +313,9 @@ describe("buildSessionOptions --models scope selection", () => {
 		expect(options.scopedModels?.map(entry => entry.model.id)).toEqual(["a"]);
 	});
 
-	it("forwards offline mode to the session options and defaults it off otherwise", async () => {
+	it("forwards intranet mode to the session options and keeps upstream --offline separate", async () => {
 		const offline = await buildSessionOptions(
-			{ ...parseArgs([]), offline: true },
+			{ ...parseArgs([]), intranetOffline: true },
 			[],
 			SessionManager.inMemory(),
 			registry(),
@@ -324,7 +324,7 @@ describe("buildSessionOptions --models scope selection", () => {
 		expect(offline.offline).toBe(true);
 
 		const online = await buildSessionOptions(
-			parseArgs([]),
+			{ ...parseArgs(["--offline"]), intranetOffline: undefined },
 			[],
 			SessionManager.inMemory(),
 			registry(),
@@ -362,7 +362,7 @@ describe("buildSessionOptions prewalk target discovery", () => {
 	it("resolves the prewalk target cache-only in an offline process", async () => {
 		const registry = prewalkRegistry();
 		await buildSessionOptions(
-			{ ...parseArgs(["--prewalk-into", "prov/b"]), offline: true },
+			{ ...parseArgs(["--prewalk-into", "prov/b"]), intranetOffline: true },
 			[],
 			SessionManager.inMemory(),
 			registry as unknown as ModelRegistry,

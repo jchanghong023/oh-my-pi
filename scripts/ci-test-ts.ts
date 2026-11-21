@@ -749,7 +749,6 @@ function isIntegrationTest(testFile: string): boolean {
 	return (
 		/(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile) ||
 		/^(?:\.\/)?test\/openwiki\/visualize-browser\.test\.ts$/.test(testFile) ||
-		testFile === "test/goals/goal-recovery-public-wire.test.ts" ||
 		testFile === "test/goals/goal-sdk-auxiliary-consumers.test.ts" ||
 		// Repository snapshots and bundled shell helpers spawn repeated native subprocesses.
 		testFile === "test/openwiki/native-pool.test.ts" ||

@@ -181,6 +181,40 @@ describe("TUI input/render scheduling", () => {
 		}
 	});
 
+	it("keeps the offline background cadence when a listener consumes input without repainting", () => {
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+		const originalOffline = process.env.OMP_OFFLINE;
+		Object.defineProperty(process, "platform", { ...originalPlatform, value: "linux" });
+		process.env.OMP_OFFLINE = "1";
+		const term = new VirtualTerminal(20, 4);
+		const scheduler = new DeferredRenderScheduler();
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+		tui.addChild(new InputProbe([]));
+		tui.addInputListener(() => ({ consume: true }));
+		try {
+			tui.start();
+			scheduler.nowMs = 1000;
+			tui.renderNow();
+			for (const immediate of scheduler.immediates.splice(0)) immediate();
+			scheduler.nowMs += 10;
+			term.sendInput("x");
+			tui.requestRender();
+			for (const immediate of scheduler.immediates.splice(0)) immediate();
+			const background = scheduler.timers[0]!;
+			expect(background.delayMs).toBe(90);
+
+			term.sendInput("x");
+			for (const immediate of scheduler.immediates.splice(0)) immediate();
+			expect(scheduler.timers).toEqual([background]);
+			expect(background.canceled).toBe(false);
+		} finally {
+			tui.stop();
+			Object.defineProperty(process, "platform", originalPlatform);
+			if (originalOffline === undefined) delete process.env.OMP_OFFLINE;
+			else process.env.OMP_OFFLINE = originalOffline;
+		}
+	});
+
 	it.each([
 		[4, 240],
 		[30, 90],

@@ -2,22 +2,37 @@ import { expect, it } from "bun:test";
 import * as net from "node:net";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { CLAUDE_TRACE_DEBUG_CERT, CLAUDE_TRACE_DEBUG_KEY } from "../../src/cli/claude-trace-cli";
 
-it("uses the configured registry for explicit checks in offline mode without enabling telemetry", async () => {
+it("keeps explicit offline checks on the configured HTTPS mirror without enabling telemetry", async () => {
 	await using temp = await TempDir.create("@omp-openspec-offline-");
-	let connections = 0;
-	const registry = net.createServer(socket => {
-		connections++;
+	let redirectConnections = 0;
+	// Count even a TCP connection, not just a successful HTTPS request.
+	const redirectTarget = net.createServer(socket => {
+		redirectConnections++;
 		socket.destroy();
 	});
 	const listening = Promise.withResolvers<void>();
-	registry.once("error", listening.reject);
-	registry.listen(0, "127.0.0.1", listening.resolve);
+	redirectTarget.once("error", listening.reject);
+	redirectTarget.listen(0, "127.0.0.1", listening.resolve);
 	await listening.promise;
-	const address = registry.address();
-	if (!address || typeof address === "string") throw new Error("Missing loopback registry port");
-	const port = address.port;
+	const address = redirectTarget.address();
+	if (!address || typeof address === "string") throw new Error("Missing loopback redirect target port");
 	try {
+		const sameOriginPath = "/within-mirror";
+		const mirrorPaths: string[] = [];
+		using mirror = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			tls: { cert: CLAUDE_TRACE_DEBUG_CERT, key: CLAUDE_TRACE_DEBUG_KEY },
+			fetch(request) {
+				const pathname = new URL(request.url).pathname;
+				mirrorPaths.push(pathname);
+				const location = pathname === sameOriginPath ? `https://127.0.0.1:${address.port}/latest` : sameOriginPath;
+				return new Response(null, { status: 302, headers: { Location: location } });
+			},
+		});
+		const mirrorHops = ["/@fission-ai/openspec/latest", sameOriginPath];
 		const packageRoot = path.resolve(import.meta.dir, "../..");
 		const probe = temp.join("probe.ts");
 		await Bun.write(
@@ -48,12 +63,12 @@ it("uses the configured registry for explicit checks in offline mode without ena
 					XDG_DATA_HOME: temp.join("data"),
 					BUN_RUNTIME_TRANSPILER_CACHE_PATH: temp.join("bun-cache"),
 					NODE_ENV: "production",
-					NODE_TLS_REJECT_UNAUTHORIZED: "1",
+					NODE_TLS_REJECT_UNAUTHORIZED: "0", // Self-signed loopback fixture only.
 					CI: "false",
 					OPENSPEC_TELEMETRY: "1",
 					DO_NOT_TRACK: "0",
 					OPENSPEC_NO_UPDATE_CHECK: undefined,
-					npm_config_registry: `https://127.0.0.1:${port}`,
+					npm_config_registry: mirror.url.origin,
 				},
 			});
 			const [stdout, stderr, code] = await Promise.all([
@@ -61,7 +76,7 @@ it("uses the configured registry for explicit checks in offline mode without ena
 				new Response(child.stderr).text(),
 				child.exited,
 			]);
-			expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+			if (code !== 0) throw new Error(`OpenSpec exited with ${code}: ${stderr}`);
 			return JSON.parse(stdout);
 		}
 		expect((await report(" on ", probe)).update.status).toBe("offline");
@@ -69,14 +84,16 @@ it("uses the configured registry for explicit checks in offline mode without ena
 			(await report("true", path.join(packageRoot, "src/cli.ts"), ["openspec", "version", "--check", "--json"]))
 				.update.status,
 		).toBe("offline");
-		expect(connections).toBe(2);
+		expect(mirrorPaths.splice(0)).toEqual([...mirrorHops, ...mirrorHops]);
+		expect(redirectConnections).toBe(0);
 		expect((await report("false", probe)).update.status).toBe("offline");
-		expect(connections).toBe(3);
+		expect(mirrorPaths).toEqual(mirrorHops);
+		expect(redirectConnections).toBe(1);
 		// Opting in through the inherited environment/config must not create an anonymous telemetry ID.
 		expect(await Bun.file(configPath).text()).toBe(config);
 	} finally {
 		const closed = Promise.withResolvers<void>();
-		registry.close(error => (error ? closed.reject(error) : closed.resolve()));
+		redirectTarget.close(error => (error ? closed.reject(error) : closed.resolve()));
 		await closed.promise;
 	}
 }, 30_000);

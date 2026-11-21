@@ -754,7 +754,7 @@ describe("Coding Agent Tools", () => {
 			const testFile = path.join(testDir, "large.txt");
 			const lines = Array.from({ length: 3500 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
-			const defaultLimit = 2000;
+			const defaultLimit = 300;
 
 			const result = await readTool.execute("test-call-3", { path: testFile });
 			const output = getTextOutput(result);
@@ -1022,7 +1022,7 @@ describe("Coding Agent Tools", () => {
 			const testFile = path.join(testDir, "large-file.txt");
 			const lines = Array.from({ length: 3500 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
-			const defaultLimit = 2000;
+			const defaultLimit = 300;
 
 			const result = await readTool.execute("test-call-9", { path: testFile });
 
@@ -2648,7 +2648,7 @@ function b() {
 
 		it("should auto-background at the threshold even with a longer timeout", async () => {
 			const deliveries: Array<{ jobId: string; text: string }> = [];
-			const updates: Array<{ text: string; state?: string; name?: string }> = [];
+			const updates: Array<{ text: string; state?: string }> = [];
 			const asyncJobManager = new AsyncJobManager({
 				onJobComplete: async (jobId, text) => {
 					deliveries.push({ jobId, text });
@@ -2681,7 +2681,6 @@ function b() {
 					updates.push({
 						text: update.content?.find(block => block.type === "text")?.text ?? "",
 						state: update.details?.async?.state,
-						name: update.details?.async?.name,
 					});
 				},
 			);
@@ -2698,9 +2697,6 @@ function b() {
 			if (!jobId) {
 				throw new Error("expected an auto-backgrounded job id");
 			}
-			const name = result.details?.async?.name;
-			expect(name?.trim()).toBeTruthy();
-			expect(getTextOutput(result)).toContain(`${jobId} — ${name}`);
 			const runningJob = asyncJobManager.getJob(jobId);
 			expect(runningJob?.status).toBe("running");
 			const updatesAtBackground = updates.length;
@@ -2713,7 +2709,6 @@ function b() {
 			// The job keeps filling the call's card and settles it with its outcome.
 			const jobFrames = updates.slice(updatesAtBackground);
 			expect(jobFrames.every(frame => frame.state !== undefined)).toBe(true);
-			expect(jobFrames.every(frame => frame.name === name)).toBe(true);
 			expect(jobFrames.at(-1)?.state).toBe("completed");
 			expect(jobFrames.at(-1)?.text).toContain("done");
 			await asyncJobManager.dispose();
@@ -2765,9 +2760,6 @@ function b() {
 			if (!jobId) {
 				throw new Error("expected a steer-backgrounded job id");
 			}
-			const name = result.details?.async?.name;
-			expect(name?.trim()).toBeTruthy();
-			expect(getTextOutput(result)).toContain(`${jobId} — ${name}`);
 			const job = asyncJobManager.getJob(jobId);
 			expect(job?.status).toBe("running");
 			await job?.promise;

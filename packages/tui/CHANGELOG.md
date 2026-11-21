@@ -22,6 +22,8 @@
 
 ### Fixed
 
+- Detailed `wait` cards keep their job snapshots, and hiding tool activity no longer hides extension-owned async results.
+- Consumed input that does not request a repaint no longer accelerates background frames in offline Linux sessions.
 - The status line updates total active time while the turn spinner animates.
 - Fixed the `status` status-line segment repainting extension `ctx.ui.setStatus` text in the accent colour: statuses that set their own foreground colour or text style keep it, and uncoloured ones still take the accent ([#19727](https://github.com/can1357/oh-my-pi/pull/19727) by [@robfeldmann](https://github.com/robfeldmann))
 - The terminal cursor no longer blinks off and on with every spinner tick in kitty

@@ -83,7 +83,7 @@ export function goalTokenDelta(current: GoalTokenUsage, baseline: GoalTokenUsage
 	);
 }
 
-export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal, toolRecovery = false): string {
+export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal): string {
 	const template =
 		kind === "active"
 			? goalModeActivePrompt
@@ -96,7 +96,6 @@ export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal, toolRecovery 
 		tokenBudget: budgetValue(goal),
 		remainingTokens: remainingValue(goal),
 		timeUsedSeconds: String(goal.timeUsedSeconds),
-		toolRecovery,
 	});
 }
 
@@ -657,10 +656,10 @@ export class GoalRuntime {
 			: undefined;
 	}
 
-	buildContinuationPrompt(toolRecovery = false): string | undefined {
+	buildContinuationPrompt(): string | undefined {
 		const state = this.#host.getState();
 		return state?.enabled && state.goal.status === "active"
-			? renderGoalPrompt("continuation", state.goal, toolRecovery)
+			? renderGoalPrompt("continuation", state.goal)
 			: undefined;
 	}
 

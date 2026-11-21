@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -63,71 +63,6 @@ function rows(text: string): Map<number, string> {
 	}
 	return shown;
 }
-
-describe("read filters business errors in log files", () => {
-	let dir: string;
-	let originalPattern: string | undefined;
-
-	beforeAll(async () => {
-		await Settings.init({ inMemory: true });
-		dir = await fs.mkdtemp(path.join(os.tmpdir(), "read-log-errors-"));
-	});
-
-	afterAll(async () => {
-		await removeWithRetries(dir);
-	});
-
-	beforeEach(() => {
-		originalPattern = Bun.env.OMP_LOG_ERROR_REGEX;
-		Bun.env.OMP_LOG_ERROR_REGEX = "^ERROR \\[E\\d+\\]$|Exception!";
-	});
-
-	afterEach(() => {
-		if (originalPattern === undefined) delete Bun.env.OMP_LOG_ERROR_REGEX;
-		else Bun.env.OMP_LOG_ERROR_REGEX = originalPattern;
-	});
-
-	it("returns exactly two lines even when the clean log is read repeatedly", async () => {
-		const file = path.join(dir, "clean.log");
-		await Bun.write(file, "Started\r\nCompleted\r\n");
-		const session = createSession(dir);
-		for (let i = 0; i < 4; i++) {
-			expect(await read(session, file)).toBe("执行成功\n退出码 0");
-		}
-	});
-
-	it("prepends original line numbers for errors outside the range in a streamed log", async () => {
-		const file = path.join(dir, "deep.log");
-		const progressLine = `${"progress ".padEnd(90, ".")}\r\n`;
-		await Bun.write(file, `Started\r\n${progressLine.repeat(49_998)}ERROR [E42]\r\nException!`);
-		const session = createSession(dir);
-		const target = `${file}:1-1:raw`;
-		const pattern = Bun.env.OMP_LOG_ERROR_REGEX;
-		delete Bun.env.OMP_LOG_ERROR_REGEX;
-		const normal = await read(session, target);
-		Bun.env.OMP_LOG_ERROR_REGEX = pattern;
-		expect(normal.trim()).toBe("Started");
-		expect(await read(session, target)).toBe(`50000:ERROR [E42]\n50001:Exception!\n\n${normal}`);
-	});
-
-	it("preserves regular reads for other extensions and when the pattern is unset", async () => {
-		const textFile = path.join(dir, "plain.txt");
-		const logFile = path.join(dir, "unfiltered.log");
-		await Bun.write(textFile, "Started");
-		await Bun.write(logFile, "Started");
-		const session = createSession(dir);
-		expect(await read(session, `${textFile}:raw`)).toBe("Started");
-		delete Bun.env.OMP_LOG_ERROR_REGEX;
-		expect(await read(session, `${logFile}:raw`)).toBe("Started");
-	});
-
-	it("reports a malformed pattern instead of reporting success", async () => {
-		const file = path.join(dir, "invalid.log");
-		await Bun.write(file, "Started");
-		Bun.env.OMP_LOG_ERROR_REGEX = "[";
-		await expect(read(createSession(dir), file)).rejects.toThrow("Invalid regular expression in OMP_LOG_ERROR_REGEX");
-	});
-});
 
 // Numbered reads display a line wider than `tools.outputMaxColumns` cut to the
 // cap, so the page budget charges that cut width, not the line's source size.

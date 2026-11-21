@@ -18,7 +18,7 @@ const text = (result: { content: Array<{ type: string; text?: string }> }) =>
 		.join("\n");
 
 describe("personal tool argument correction feedback", () => {
-	it("returns parse, schema and unavailable-tool failures to the next model turn without replaying a successful call", async () => {
+	it("returns parse and schema failures to the next model turn without replaying a successful call", async () => {
 		const executed: string[] = [];
 		const schema = type({ value: "string" });
 		const tool: AgentTool<typeof schema> = {
@@ -31,13 +31,6 @@ describe("personal tool argument correction feedback", () => {
 				return { content: [{ type: "text", text: `accepted:${args.value}` }] };
 			},
 		};
-		const tools: AgentTool[] = [
-			tool,
-			...Array.from({ length: 21 }, (_, index) => ({
-				...tool,
-				name: `fixture_${String(index).padStart(2, "0")}`,
-			})),
-		];
 		const model = createMockModel({
 			responses: [
 				{
@@ -49,7 +42,6 @@ describe("personal tool argument correction feedback", () => {
 							arguments: { __parseError: "Expected comma", __rawJson: '{"value": nope}' },
 						},
 						{ type: "toolCall", id: "schema", name: "echo", arguments: {} },
-						{ type: "toolCall", id: "unknown", name: "bad_echo", arguments: { value: "do-not-run" } },
 						{ type: "toolCall", id: "good", name: "echo", arguments: { value: "once" } },
 					],
 				},
@@ -58,7 +50,7 @@ describe("personal tool argument correction feedback", () => {
 		});
 		const messages = await agentLoop(
 			[{ role: "user", content: "perform the requested calls", timestamp: 1 }],
-			{ systemPrompt: [""], messages: [], tools },
+			{ systemPrompt: [""], messages: [], tools: [tool] },
 			{ model: model.model, convertToLlm: messages => messages as never },
 			undefined,
 			model.stream,
@@ -81,18 +73,9 @@ describe("personal tool argument correction feedback", () => {
 		expect(text(invalid)).toContain("Received arguments:");
 		expect(text(invalid)).toContain("not run");
 		expect(text(invalid)).toContain("call the tool again");
-		const unknown = results.get("unknown")!;
-		expect(unknown.isError).toBe(true);
-		expect(text(unknown)).toContain("Tool bad_echo not found.");
-		expect(text(unknown)).toContain("Did you mean echo?");
-		expect(text(unknown)).toContain("not executed");
-		const roster = text(unknown).split("Tools in this request: ")[1]!.split(".")[0]!;
-		expect(roster).toContain("fixture_18, ");
-		expect(roster).not.toContain("fixture_19");
-		expect(text(unknown)).toContain(", ...");
 		expect(text(results.get("good")!)).toBe("accepted:once");
 		const nextResults = model.calls[1]!.context.messages.filter(message => message.role === "toolResult");
-		expect(nextResults.map(message => message.toolCallId)).toEqual(["parse", "schema", "unknown", "good"]);
+		expect(nextResults.map(message => message.toolCallId)).toEqual(["parse", "schema", "good"]);
 	});
 
 	it("refuses a plain write without content and leaves the existing target unchanged", async () => {

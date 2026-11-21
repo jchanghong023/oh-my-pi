@@ -411,9 +411,7 @@ export async function runCrawl(
 			if (!info || normalizedUrl(info.url) !== finalUrl) throw new Error("Page navigated while being inspected");
 			if (!/^(?:text\/html|application\/xhtml\+xml)$/i.test(info.contentType))
 				throw new Error(`Not an HTML page: ${info.contentType}`);
-			if (info.login || /(?:^|\/)(?:login|log-in|signin|sign-in|auth)(?:\/|$)/i.test(new URL(finalUrl).pathname)) {
-				throw new Error("Page requires login or redirected to a login page");
-			}
+			if (info.login) throw new Error("Page requires login or redirected to a login page");
 			// Discover navigation independently of extraction, including when extraction fails.
 			if (options.recursive && (options.maxDepth === undefined || item.depth < options.maxDepth)) {
 				for (const link of info.links) {

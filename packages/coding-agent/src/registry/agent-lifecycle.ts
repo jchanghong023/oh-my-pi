@@ -153,8 +153,9 @@ export interface AgentReleaseOptions {
 
 interface StrictRelease {
 	ref: AgentRef;
-	/** Exact root whose strict descendant snapshot owns this generation. */
-	root?: AgentRef;
+	/** Exact lineage at reservation time, nearest parent first. */
+	ancestors: AgentRef[];
+	options: AgentReleaseOptions;
 	adoptions: Set<AdoptedAgent>;
 	live: AgentSessionHandle | null;
 	disposed: boolean;
@@ -814,13 +815,36 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		if (!options?.tombstone) this.#registry.unregister(id, ref);
 	}
 
-	#retainStrictRelease(ref: AgentRef): StrictRelease {
+	#ancestorRefs(ref: AgentRef, detachedRoot?: AgentRef): AgentRef[] {
+		const ancestors: AgentRef[] = [];
+		const seen = new Set([ref.id]);
+		let parentId = ref.parentId;
+		while (parentId) {
+			if (seen.has(parentId)) return [];
+			const parent =
+				this.#registry.get(parentId) ??
+				(detachedRoot?.id === parentId ? detachedRoot : this.#adopted.get(parentId)?.ref);
+			if (!parent) break;
+			ancestors.push(parent);
+			seen.add(parentId);
+			parentId = parent.parentId;
+		}
+		return ancestors;
+	}
+
+	#retainStrictRelease(
+		ref: AgentRef,
+		options: AgentReleaseOptions,
+		ancestors = this.#ancestorRefs(ref),
+	): StrictRelease {
 		const pending = this.#strictReleases.get(ref);
 		if (pending) return pending;
 		const adopted = this.#adopted.get(ref.id);
 		const park = this.#parks.get(ref.id);
 		const entry: StrictRelease = {
 			ref,
+			ancestors,
+			options,
 			adoptions: new Set(adopted?.ref === ref ? [adopted] : []),
 			live: ref.session ?? (park?.ref === ref ? park.session : null),
 			disposed: false,
@@ -849,9 +873,13 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			pending?.ref ??
 			(current && matches(current) ? current : adopted && matches(adopted.ref) ? adopted.ref : undefined);
 		if (!ref) return false;
-		const entry = pending ?? this.#retainStrictRelease(ref);
-		if (entry.promise) return entry.promise;
-		const owned = entry;
+		return this.#releaseStrictRef(pending ?? this.#retainStrictRelease(ref, options), options.dispose);
+	}
+
+	async #releaseStrictRef(owned: StrictRelease, dispose?: AgentSessionDisposeOptions): Promise<boolean> {
+		if (owned.promise) return owned.promise;
+		const { ref, options } = owned;
+		const { id } = ref;
 		for (const adoption of owned.adoptions) clearTimeout(adoption.timer);
 		owned.promise = (async () => {
 			const park = this.#parks.get(id);
@@ -878,7 +906,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			// Keep the adoption and captured session until every owned operation
 			// succeeds. SDK disposal may remove its registry route on success.
 			if (!owned.disposed) {
-				await owned.live?.dispose({ ...options.dispose, strict: true });
+				await owned.live?.dispose({ ...options.dispose, ...dispose, strict: true });
 				owned.disposed = true;
 			}
 			const releaseAdoptions = async (): Promise<void> => {
@@ -927,85 +955,97 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		return owned.promise;
 	}
 
-	/** Release a root's current descendants, fenced against replacement of the root ref. */
+	/** Release current descendants and any reservations pinned to this exact root. */
 	async releaseDescendants(
 		root: AgentRef,
 		deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS,
 		options?: AgentReleaseOptions,
 	): Promise<void> {
-		if (options?.retainRecord) options = { ...options, strict: true };
+		const strict = options?.strict || options?.retainRecord;
 		const registeredRoot = this.#registry.get(root.id);
-		const currentRoot = registeredRoot === root;
-		if (!currentRoot && !options?.strict) return;
-		const refs = options?.strict
-			? [
-					...new Set([
-						...(currentRoot || !registeredRoot
-							? [...this.#registry.list(), ...[...this.#adopted.values()].map(adopted => adopted.ref)].filter(
-									ref => {
-										const owner = this.#strictReleases.get(ref)?.root;
-										return !owner || owner === root;
-									},
-								)
-							: []),
-						...[...this.#strictReleases.values()].filter(entry => entry.root === root).map(entry => entry.ref),
-					]),
-				]
-			: this.#registry.list();
-		const descendants = new Set([root.id]);
-		let changed = true;
-		while (changed) {
-			changed = false;
-			for (const ref of refs) {
-				if (ref.parentId && descendants.has(ref.parentId) && !descendants.has(ref.id)) {
-					descendants.add(ref.id);
-					changed = true;
+		const refs = new Set<AgentRef>();
+		for (const entry of this.#strictReleases.values()) {
+			if (entry.ancestors.includes(root)) refs.add(entry.ref);
+		}
+		// Never discover fresh descendants through a replacement root. Pinned
+		// reservations above still belong to the requested exact generation.
+		if (registeredRoot === root || (strict && !registeredRoot)) {
+			const candidates = this.#registry.list();
+			if (strict) candidates.push(...[...this.#adopted.values()].map(adopted => adopted.ref));
+			for (const ref of candidates) {
+				if (ref === root || refs.has(ref) || this.#strictReleases.has(ref)) continue;
+				const ancestors = this.#ancestorRefs(ref, strict ? root : undefined);
+				if (!ancestors.includes(root)) continue;
+				refs.add(ref);
+				if (strict && options) {
+					const childOptions = ref.status === "running" || options.retainRecord ? options : { strict: true };
+					this.#retainStrictRelease(ref, childOptions, ancestors);
 				}
 			}
 		}
-		if (options?.strict) {
-			for (const ref of refs) {
-				if (ref !== root && descendants.has(ref.id)) this.#retainStrictRelease(ref).root = root;
+		await this.#releaseSnapshot(refs, deadlineAt, options, `Failed releasing descendants of ${root.id}`);
+	}
+
+	async #releaseSnapshot(
+		refs: Set<AgentRef>,
+		deadlineAt: number,
+		options: AgentReleaseOptions | undefined,
+		failureMessage: string,
+	): Promise<void> {
+		const reserved = new Set<AgentRef>();
+		const dependencies = new Map<AgentRef, Set<AgentRef>>();
+		const roots = new Set(refs);
+		for (const ref of refs) {
+			const entry = this.#strictReleases.get(ref);
+			if (!entry) continue;
+			reserved.add(ref);
+			// Link adjacent refs still in this snapshot; a detached intermediate
+			// must not let its surviving ancestor overtake the reserved cleanup.
+			let child = ref;
+			for (const ancestor of entry.ancestors) {
+				if (!refs.has(ancestor)) continue;
+				const children = dependencies.get(ancestor);
+				if (children) children.add(child);
+				else dependencies.set(ancestor, new Set([child]));
+				roots.delete(child);
+				child = ancestor;
 			}
-			const visited = new Set<AgentRef>();
-			const releaseTree = async (parent: AgentRef): Promise<void> => {
-				if (visited.has(parent)) return;
-				visited.add(parent);
-				const children = refs.filter(ref => ref !== root && ref.parentId === parent.id && descendants.has(ref.id));
-				const results = await Promise.allSettled(children.map(releaseTree));
-				const errors = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
-				if (errors.length) throw new AggregateError(errors, `Failed releasing descendants of ${parent.id}`);
-				if (parent === root) return;
-				const childOptions = parent.status === "running" || options.retainRecord ? options : { strict: true };
-				const release = this.release(parent.id, parent, childOptions).then(() => {});
+		}
+		// Only an explicit owner exit marks in-flight descendants as interrupted.
+		// Soft releases remain best-effort; reserved releases must report failure.
+		const results = new Map<AgentRef, Promise<void>>();
+		const releaseRef = (ref: AgentRef): Promise<void> => {
+			const existing = results.get(ref);
+			if (existing) return existing;
+			const release = (async () => {
+				const children = dependencies.get(ref);
+				if (children) {
+					const settled = await Promise.allSettled([...children].map(releaseRef));
+					const errors = settled.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+					if (errors.length) throw new AggregateError(errors, `Failed releasing descendants of ${ref.id}`);
+				}
+				const entry = this.#strictReleases.get(ref);
+				if (reserved.has(ref) && !entry) return; // An overlapping teardown completed this reservation.
+				const runningOptions = ref.status === "running" ? options : undefined;
+				const work = (
+					entry
+						? this.#releaseStrictRef(entry, runningOptions?.dispose)
+						: this.release(ref.id, ref, runningOptions)
+				).then(() => {});
 				try {
-					await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), () => release);
+					await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), work);
 				} catch (error) {
-					if (Date.now() >= deadlineAt) trackLateCleanup(release, { id: parent.id, resource: "adopted-agent" });
-					throw error;
+					if (Date.now() >= deadlineAt) trackLateCleanup(work, { id: ref.id, resource: "adopted-agent" });
+					if (entry) throw error;
+					logger.warn("Agent cleanup exceeded its deadline", { id: ref.id, ...logger.diagnosticError(error) });
 				}
-			};
-			await releaseTree(root);
-			return;
-		}
-		// Only an explicit owner exit marks an in-flight descendant as interrupted;
-		// ordinary root disposal keeps the fork's normal stop semantics.
-		await Promise.all(
-			refs
-				.filter(ref => ref !== root && descendants.has(ref.id))
-				.map(async ref => {
-					const release = this.release(ref.id, ref, ref.status === "running" ? options : undefined).then(() => {});
-					try {
-						await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), () => release);
-					} catch (error) {
-						if (Date.now() >= deadlineAt) trackLateCleanup(release, { id: ref.id, resource: "adopted-agent" });
-						logger.warn("Agent cleanup exceeded its deadline", {
-							id: ref.id,
-							...logger.diagnosticError(error),
-						});
-					}
-				}),
-		);
+			})();
+			results.set(ref, release);
+			return release;
+		};
+		const settled = await Promise.allSettled([...roots].map(releaseRef));
+		const errors = settled.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+		if (errors.length) throw new AggregateError(errors, failureMessage);
 	}
 
 	/** Teardown everything; disposing the global manager makes its next owner a fresh instance. */
@@ -1013,28 +1053,14 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		this.#unsubscribe?.();
 		this.#disposed = true;
 		this.#unsubscribe = undefined;
-		const ids = [...new Set([...this.#adopted.keys(), ...this.#parks.keys()])];
+		const refs = new Set(this.#strictReleases.keys());
+		for (const adoption of this.#adopted.values()) refs.add(adoption.ref);
+		for (const park of this.#parks.values()) refs.add(park.ref);
 		// A turn still running (a revived or woken agent) is cut off by this
 		// teardown, not stopped: its session records a process exit, so
 		// `omp --restore` goes on with it.
 		const cutOff: AgentReleaseOptions = { dispose: { reason: postmortem.Reason.EXIT } };
-		await Promise.all(
-			ids.map(async id => {
-				const running = this.#registry.get(id)?.status === "running";
-				const release = this.release(id, undefined, running ? cutOff : undefined).then(() => {});
-				try {
-					await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), () => release);
-				} catch (error) {
-					if (Date.now() >= deadlineAt) {
-						trackLateCleanup(release, { id, resource: "adopted-agent" });
-					}
-					logger.warn("Agent cleanup exceeded its deadline", {
-						id,
-						error: error instanceof Error ? error.message : String(error),
-					});
-				}
-			}),
-		);
+		await this.#releaseSnapshot(refs, deadlineAt, cutOff, "Failed releasing owned agents");
 		this.#revivals.clear();
 		this.#parks.clear();
 		this.#persistedReviverFactory = undefined;

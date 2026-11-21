@@ -1,8 +1,8 @@
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { LocalAgentSessionEvent } from "./agent-session-events";
-import type { LiveToolOutputPreview, LiveToolOutputSnapshot } from "./agent-session-handle";
-import { toolOutputSource, toolOutputText } from "./live-tool-output-text";
+import type { LiveToolOutputPreview, LiveToolOutputProjection, LiveToolOutputSnapshot } from "./agent-session-handle";
+import { mayBeCoveredByFileDiff, toolOutputSource, toolOutputText } from "./live-tool-output-text";
 
 /**
  * Keep display source and lifecycle facts independent of which frame supplies the body.
@@ -57,24 +57,31 @@ function withOutputFacts(
 	};
 }
 
-/** Dispatch facts for the in-flight calls and the latest real Output, never transcript history. */
+/** Dispatch facts for in-flight calls and retained Output candidates, never transcript history. */
 export class LiveToolOutputState {
 	readonly #calls = new Map<string, LiveToolOutputSnapshot>();
+	// Dispatch order, starting at the newest source that cannot be hidden by a file Diff.
+	readonly #previews: LiveToolOutputPreview[] = [];
+	#floor = 0;
 	#dispatchOrder = 0;
-	// Keep the selected call after expiry: its dispatch order still excludes older calls.
-	#selected: LiveToolOutputPreview | undefined;
 	#runActive = false;
 
 	clear(): void {
 		this.#calls.clear();
 		this.#dispatchOrder = 0;
-		this.#selected = undefined;
+		this.#floor = 0;
+		this.#previews.length = 0;
 	}
 
 	setRunActive(active: boolean, at: number): void {
 		if (active === this.#runActive) return;
 		this.#runActive = active;
+		// Expired candidates before every still-live call cannot be a visible fallback.
+		let keepFrom = active ? this.#previews.at(-1)?.call.dispatchOrder : undefined;
 		for (const call of this.#calls.values()) {
+			if (keepFrom !== undefined && (call.expiresAt === undefined || call.expiresAt > at)) {
+				keepFrom = Math.min(keepFrom, call.dispatchOrder);
+			}
 			if (call.terminalAt === undefined) continue;
 			if (active) {
 				// Keep a still-visible source during a new run, but never revive an expired one.
@@ -83,25 +90,33 @@ export class LiveToolOutputState {
 				call.expiresAt = Math.max(call.terminalAt, at) + 3000;
 			}
 		}
+		const order = keepFrom;
+		if (order !== undefined && order > this.#floor) {
+			const index = this.#previews.findIndex(preview => preview.call.dispatchOrder >= order);
+			this.#prune(order, index);
+		}
 	}
 
 	restore(snapshots: readonly LiveToolOutputSnapshot[], runActive: boolean): void {
 		this.clear();
 		this.#runActive = runActive;
-		for (const snapshot of snapshots) {
+		for (const snapshot of snapshots.toSorted((a, b) => a.dispatchOrder - b.dispatchOrder)) {
 			this.#calls.set(snapshot.toolCallId, snapshot);
 			this.#dispatchOrder = Math.max(this.#dispatchOrder, snapshot.dispatchOrder);
-			const selected = this.#selected;
-			if (!snapshot.result || (selected && snapshot.dispatchOrder <= selected.call.dispatchOrder)) continue;
+			if (!snapshot.result) continue;
 			const text = toolOutputText(snapshot.toolName, snapshot.result, snapshot.args);
-			if (text) this.#selected = { call: snapshot, text };
+			if (text) this.#remember(snapshot, text, -1);
 		}
-		this.#prune();
 	}
 
-	preview(): LiveToolOutputPreview | undefined {
-		const selected = this.#selected;
-		return selected?.text ? selected : undefined;
+	preview(project?: LiveToolOutputProjection): LiveToolOutputPreview | undefined {
+		for (let i = this.#previews.length - 1; i >= 0; i--) {
+			const preview = this.#previews[i]!;
+			const text = project ? project(preview) : preview.text;
+			// Eligibility precedes expiry: an eligible but expired source still blocks older Output.
+			if (text) return text === preview.text ? preview : { call: preview.call, text };
+		}
+		return undefined;
 	}
 
 	get(toolCallId: string): LiveToolOutputSnapshot | undefined {
@@ -113,10 +128,9 @@ export class LiveToolOutputState {
 	}
 
 	observe(event: LocalAgentSessionEvent, receivedAt: number, dispatchOrder?: number): void {
-		const selected = this.#selected;
 		if (event.type === "tool_execution_start") {
 			const order = dispatchOrder ?? this.#dispatchOrder + 1;
-			if (this.#calls.has(event.toolCallId) || (selected && order < selected.call.dispatchOrder)) return;
+			if (this.#calls.has(event.toolCallId) || order < this.#floor) return;
 			this.#dispatchOrder = Math.max(this.#dispatchOrder, order);
 			this.#calls.set(event.toolCallId, {
 				toolCallId: event.toolCallId,
@@ -151,7 +165,8 @@ export class LiveToolOutputState {
 		}
 		const isError = event.type === "tool_execution_end" ? event.isError : undefined;
 		const previous = call.result;
-		const hadOutput = selected?.call === call;
+		const previewIndex = previous ? this.#previews.findLastIndex(preview => preview.call === call) : -1;
+		const hadOutput = previewIndex !== -1;
 		// A startup receipt may contain an older buffered preview. It can seed a body,
 		// but must not backdate actual progress already received from the same job.
 		const candidate =
@@ -162,8 +177,7 @@ export class LiveToolOutputState {
 		if (candidate && text) {
 			call.args = args;
 			call.result = candidate;
-			if (!hadOutput || text !== selected.text) this.#selected = { call, text };
-			if (!hadOutput) this.#prune();
+			this.#remember(call, text, previewIndex);
 		} else if (call.terminalAt !== undefined && !hadOutput) {
 			this.#calls.delete(call.toolCallId);
 		} else {
@@ -179,19 +193,35 @@ export class LiveToolOutputState {
 				isError,
 			);
 			call.result = merged;
-			if (hadOutput && merged !== previous) {
-				const text = toolOutputText(call.toolName, merged, call.args);
-				if (text !== selected.text) this.#selected = { call, text };
+			if (hadOutput) {
+				const text =
+					merged === previous
+						? this.#previews[previewIndex]!.text
+						: toolOutputText(call.toolName, merged, call.args);
+				this.#remember(call, text, previewIndex);
 			}
 		}
 	}
 
-	#prune(): void {
-		// Older calls cannot reclaim the preview, even while they keep executing.
-		const order = this.#selected?.call.dispatchOrder;
-		if (order === undefined) return;
-		for (const [id, call] of this.#calls) {
-			if (call.dispatchOrder < order) this.#calls.delete(id);
+	#remember(call: LiveToolOutputSnapshot, text: string, index: number): void {
+		const previews = this.#previews;
+		if (index === -1) {
+			index = previews.findLastIndex(preview => preview.call.dispatchOrder < call.dispatchOrder) + 1;
+			previews.splice(index, 0, { call, text });
+		} else if (previews[index]!.text !== text) {
+			previews[index] = { call, text };
+		}
+		// File results are provisional until the view knows which lines the Diff covers.
+		// Other results supersede older sources permanently, including after expiry.
+		if (!text || call.dispatchOrder <= this.#floor || mayBeCoveredByFileDiff(call)) return;
+		this.#prune(call.dispatchOrder, index);
+	}
+
+	#prune(order: number, previewCount: number): void {
+		this.#floor = order;
+		if (previewCount > 0) this.#previews.splice(0, previewCount);
+		for (const [id, older] of this.#calls) {
+			if (older.dispatchOrder < this.#floor) this.#calls.delete(id);
 		}
 	}
 }

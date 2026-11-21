@@ -43,12 +43,7 @@ import { createModelBrowserSource } from "../model-browser-source";
 import { formatQueueShorthand, parseQueueShorthand, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import { parseFileSlashInvocation, renderFileSlashCommand } from "../../extensibility/slash-commands";
-import {
-	type InteractiveModeContext,
-	isLoopCommand,
-	type PreparedLoopPrompt,
-	type SubmittedUserInput,
-} from "../../modes/types";
+import { type InteractiveModeContext, isLoopCommand, type SubmittedUserInput } from "../../modes/types";
 import { openLocalFileInEditor } from "../local-file-editor";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { DequeuedMessage, RestoredQueuedMessage } from "../../session/agent-session-types";
@@ -1077,12 +1072,6 @@ export class InputController {
 		this.ctx.ui.addStartListener(() => this.#enhancedPaste?.enable());
 	}
 
-	#trimSubmittedText(text: string): string {
-		const commandText = text.trimStart();
-		// Batch task whitespace is payload, unlike ordinary composer padding.
-		return parseSlashCommand(commandText)?.name === "jch-workflowzbatch" ? commandText : commandText.trimEnd();
-	}
-
 	/** Enforce the deleted-chip contract at submit time: images whose inline token was removed
 	 *  from the draft are dropped, and surviving markers are renumbered to the dense 1..K the
 	 *  positional `[Image #N] ↔ images[N-1]` mapping requires. Returns the rewritten text. */
@@ -1093,7 +1082,7 @@ export class InputController {
 		editor.pendingImages = compacted.keep.map(i => editor.pendingImages[i]);
 		editor.pendingImageLinks = compacted.keep.map(i => editor.pendingImageLinks[i]);
 		editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
-		return this.#trimSubmittedText(compacted.text);
+		return compacted.text.trim();
 	}
 
 	#dropSubmittedPending(images: ImageContent[] | undefined): void {
@@ -1117,7 +1106,7 @@ export class InputController {
 	): Promise<{ text: string; images?: ImageContent[]; imageLinks?: (string | undefined)[] } | undefined> {
 		const result = await this.ctx.session.extensionRunner?.emitInput(text, images, "interactive");
 		if (result?.handled) return undefined;
-		if (result?.text !== undefined) text = this.#trimSubmittedText(result.text);
+		if (result?.text !== undefined) text = result.text.trim();
 		if (result?.images !== undefined) {
 			images = result.images;
 			imageLinks = await materializeImageChipLinks(images, this.ctx.sessionManager);
@@ -1127,7 +1116,7 @@ export class InputController {
 	}
 
 	setupEditorSubmitHandler(): void {
-		const submit = async (text: string, rawText?: string) => {
+		const submit = async (text: string) => {
 			const submittedText = text;
 			// The Editor resets before calling onSubmit, so this is normally empty;
 			// different editor text after an await below is a newer draft.
@@ -1136,15 +1125,9 @@ export class InputController {
 			this.#armedBareCommand = undefined;
 			const armedBareCommand =
 				armed && armed.sessionId === this.ctx.sessionManager.getSessionId() ? armed.text : undefined;
-			text = this.#compactDraftImages(this.#trimSubmittedText(rawText ?? text));
+			text = this.#compactDraftImages(text.trim());
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
-			if (
-				(!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) &&
-				text &&
-				parseSlashCommand(text)?.name !== "jch-workflowzbatch"
-			) {
-				text = expandEmoticons(text);
-			}
+			if ((!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) text = expandEmoticons(text);
 			// `? <question>` is the `/btw` shortcut.
 			const btwQuestion = parseBtwShortcutInput(text);
 			if (btwQuestion) text = `/btw ${btwQuestion}`;
@@ -1349,9 +1332,9 @@ export class InputController {
 			// During compaction, queue immediately so bash/python/loop-mode branches do
 			// not consume the skill before the compaction-resume path re-parses it.
 			if (text && isKnownSkillCommand(this.ctx, text)) {
-				// Loop and LoopN still capture skill invocations here because they return
-				// before the regular capture path. A skill command is not a Loopgoal target.
-				if (this.ctx.loopModeEnabled && !this.ctx.loopGoalMode) {
+				// Loop and LoopN capture skill invocations here because they return
+				// before the regular capture path.
+				if (this.ctx.loopModeEnabled) {
 					this.ctx.setLoopPrompt(text);
 				}
 				if (this.ctx.session.isCompacting) {
@@ -1412,17 +1395,13 @@ export class InputController {
 			}
 
 			const localExtensionCommand = this.#isLocalExtensionCommand(text);
-			const prepared: PreparedLoopPrompt =
-				this.ctx.loopModeEnabled && (this.ctx.loopGoalMode || inlineLoop)
-					? this.ctx.prepareLoopPrompt(text, inlineLoop || !this.ctx.loopPrompt)
-					: { text };
-			text = prepared.text;
+			const captureLoopPrompt = inlineLoop ? this.ctx.captureLoopPromptOnAdmission(text) : undefined;
 
 			// Queue input during compaction
 			if (this.ctx.session.isCompacting) {
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.queueCompactionMessage(text, "steer", images);
-				prepared.onPromptAdmitted?.();
+				captureLoopPrompt?.();
 				return;
 			}
 
@@ -1470,7 +1449,7 @@ export class InputController {
 							this.ctx.session.prompt(text, {
 								streamingBehavior: "steer",
 								images,
-								onPromptAdmitted: prepared.onPromptAdmitted,
+								onPromptAdmitted: captureLoopPrompt,
 							}),
 						{ imageCount: images?.length ?? 0 },
 					);
@@ -1575,7 +1554,7 @@ export class InputController {
 		};
 		// A queued `/compact` waits for Enter input taken before it to reach the session (skill
 		// expansion, `/queue`, mode commands), the same as for the follow-up key.
-		this.ctx.editor.onSubmit = (text, rawText) => this.#trackSubmission(() => submit(text, rawText));
+		this.ctx.editor.onSubmit = text => this.#trackSubmission(() => submit(text));
 	}
 
 	/**
@@ -2200,7 +2179,7 @@ export class InputController {
 
 	/** Send editor text as a follow-up message (queued behind current stream). */
 	async handleFollowUp(): Promise<void> {
-		let text = this.#compactDraftImages(this.#trimSubmittedText(this.ctx.editor.getExpandedText()));
+		let text = this.#compactDraftImages(this.ctx.editor.getExpandedText().trim());
 		let images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 		let imageLinks =
 			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
@@ -2337,20 +2316,17 @@ export class InputController {
 		};
 
 		const wasStreaming = this.ctx.session.isStreaming;
-		const prepared: PreparedLoopPrompt =
-			this.ctx.loopModeEnabled && (inlineLoop || this.ctx.loopGoalMode)
-				? this.ctx.prepareLoopPrompt(text, inlineLoop || !this.ctx.loopPrompt)
-				: { text };
+		const captureLoopPrompt = inlineLoop ? this.ctx.captureLoopPromptOnAdmission(text) : undefined;
 		this.ctx.editor.addToHistory(text);
 		try {
 			await this.ctx.withLocalSubmission(
-				prepared.text,
+				text,
 				() =>
-					this.ctx.session.prompt(prepared.text, {
+					this.ctx.session.prompt(text, {
 						streamingBehavior: "followUp",
 						images,
 						onPromptAdmitted: () => {
-							prepared.onPromptAdmitted?.();
+							captureLoopPrompt?.();
 							admitted();
 						},
 					}),

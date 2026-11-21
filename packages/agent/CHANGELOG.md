@@ -6,6 +6,7 @@
 
 - Removed ZCode-only input metadata, per-agent pause gates, and manual queue holding. Native pause, steering, follow-ups, and inline images remain supported.
 - Removed the unused `stateOnly` option from `Agent.emitExternalEvent()`; normal external events still update live thinking and notify subscribers.
+- Removed the fork-only `toolChoiceOnce` prompt option. Upstream tool-choice controls remain available.
 
 ### Added
 

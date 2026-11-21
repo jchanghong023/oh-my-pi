@@ -1132,8 +1132,6 @@ export declare class VcsGitRepo {
   stashTryPop(reinstateIndex: boolean, signal?: unknown | undefined | null): Promise<boolean>
   /** Push via Git CLI. */
   push(options: VcsPushOptions, signal?: unknown | undefined | null): Promise<void>
-  /** Observe exactly one full remote ref; transport errors remain unknown. */
-  remoteRef(remote: string, fullRef: string, signal?: unknown | undefined | null): Promise<VcsRemoteRefResult>
   /** Resolve the live remote HEAD; detached, unborn, or invalid HEAD rejects. */
   remoteDefaultBranch(remote: string, signal?: unknown | undefined | null): Promise<VcsRemoteDefaultBranch>
   /** Fetch a refspec via Git CLI. */
@@ -5201,11 +5199,6 @@ export interface VcsPushOptions {
 export interface VcsRemoteDefaultBranch {
   branch: string
   sha: string
-}
-
-/** Successful exact remote advertisement observation. */
-export interface VcsRemoteRefResult {
-  sha: string | null
 }
 
 /** Restore options. */

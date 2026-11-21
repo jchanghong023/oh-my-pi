@@ -35,8 +35,6 @@ sources:
     resource: repo://packages/coding-agent/src/modes/settings.ts
   - id: openwiki-source-d4c8d3a41b515d201a02c44a
     resource: repo://packages/coding-agent/src/prompts/jch-ime.md
-  - id: openwiki-source-6e159a85c1f614af467d6e6f
-    resource: repo://packages/coding-agent/src/prompts/jch-workflowzbatch.md
   - id: openwiki-source-b8e3f7cd433536ba3eb10ebc
     resource: repo://packages/coding-agent/src/slash-commands/builtin-modes.ts
   - id: openwiki-source-aa1c354e5b335f7af8239bbe
@@ -117,7 +115,6 @@ fork 规格还规定输入区默认 `composer.shape=box`、`composer.predictions
 个人命令复用共享 slash-command 链路，有的执行本地 UI 操作，有的展开为用户 prompt；不要把 prompt 中对模型的指令误认为程序强制执行的权限或调度限制。
 
 - `/jchime [故障现象]` 展开 IBus 恢复提示词，由模型结合现场核实执行，不是无模型本地修复。提示词限定当前用户和 DISPLAY，并要求最终由用户在故障窗口确认中文输入；不能把模拟测试当作公司实际环境验收。
-- `/jch-workflowzbatch <任务块软目标> <并发上限> <任务正文>` 校验两个正的安全整数和非空正文，再展开为 `workflowz` 用户消息；非法输入只显示用法。任务块数是软目标，并发上限是提示词指令而非新增程序级限制；模板明确限制测试和全仓检查，不能据命令成功展开就断言模型遵守了约束。
 - `/team <问题或需求>` 启动只读规划讨论；空问题只给用法，`/team configure` 打开配置而不启动讨论。失败派发时 TUI 尝试恢复草稿与附件。详细工作流见[团队讨论](../workflows/team-discussion.md)。
 - `/loop [次数或总时长] [间隔] [任务内容]` 首轮立即执行，之后在轮次间等待；暂停或切换会话后旧定时器不得继续提交。间隔超出 `2147483647` 毫秒时报错且不启动；未知单位的 token 保留为任务正文。
 

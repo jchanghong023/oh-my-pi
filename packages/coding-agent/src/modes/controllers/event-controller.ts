@@ -126,7 +126,6 @@ interface AsyncResultJob {
 	type?: string;
 	status?: string;
 	label?: string;
-	name?: string;
 	durationMs?: number;
 }
 
@@ -138,9 +137,9 @@ function nativeTaskJobToast(message: { role: string; customType?: string; detail
 	if (!jobs.every(job => job.type === "task" && job.status === "completed" && job.jobId)) return;
 	if (jobs.length > 1) return `${jobs.length} background tasks completed`;
 	const job = jobs[0]!;
-	const name = sanitizeText(job.name ?? job.label ?? job.jobId ?? "task").trim() || "task";
+	const label = sanitizeText(job.label ?? job.jobId ?? "task").trim() || "task";
 	const took = typeof job.durationMs === "number" ? ` · ${formatDuration(job.durationMs)}` : "";
-	return `Background task ${name} completed${took}`;
+	return `Background task ${label} completed${took}`;
 }
 
 function exposesRawPartialJson(toolName: string, rawInput: boolean, tool: unknown): boolean {

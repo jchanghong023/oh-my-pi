@@ -511,9 +511,15 @@ impl<'a> PathScope<'a> {
 	pub(crate) fn validate(path: Option<&'a str>) -> CoreResult<Option<Self>> {
 		let Some(path) = path else { return Ok(None) };
 		let bytes = path.as_bytes();
+		// Keep Windows absolute paths invalid on every host, but allow literal
+		// POSIX names that only look like Windows drive-relative paths.
+		let drive_path = bytes.len() >= 2
+			&& bytes[0].is_ascii_alphabetic()
+			&& bytes[1] == b':'
+			&& (cfg!(windows) || matches!(bytes.get(2), Some(b'/' | b'\\')));
 		if path.is_empty()
 			|| path.starts_with(['/', '\\'])
-			|| (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+			|| drive_path
 			|| path.split(['/', '\\']).any(|component| component == "..")
 		{
 			return Err(KnowledgeError::message("Invalid documentation search path"));

@@ -440,11 +440,26 @@ function anthropicThreadChainForAuth(
 	chains: AnthropicThreadChains,
 	sessionId: string,
 	apiKey: string,
-	headers: Record<string, string>,
+	headers: Record<string, string> | undefined,
+	declaredHeaders: Record<string, string> | undefined,
 ): ReturnType<typeof anthropicThreadChain> {
-	const identity = new Bun.CryptoHasher("sha256")
-		.update(JSON.stringify([apiKey, Object.entries(headers).sort(([a], [b]) => a.localeCompare(b))]))
-		.digest("hex");
+	// Custom credential headers must be declared through requestAuth; ordinary
+	// request metadata (such as a correlation ID) does not own the thread.
+	const declaredNames = declaredHeaders && new Set(Object.keys(declaredHeaders).map(name => name.toLowerCase()));
+	const credentials: [string, string][] = [];
+	for (const name in headers) {
+		const lower = name.toLowerCase();
+		if (
+			lower === "authorization" ||
+			lower === "x-api-key" ||
+			lower === "cf-aig-authorization" ||
+			declaredNames?.has(lower)
+		) {
+			credentials.push([lower, headers[name]]);
+		}
+	}
+	credentials.sort(([a], [b]) => a.localeCompare(b));
+	const identity = new Bun.CryptoHasher("sha256").update(JSON.stringify([apiKey, credentials])).digest("hex");
 	let chain = anthropicThreadChain(chains, sessionId);
 	const previous = anthropicThreadAuth.get(chain);
 	if (previous !== undefined && previous !== identity) {
@@ -2412,7 +2427,8 @@ const streamAnthropicOnce = (
 								providerSessionState.threads,
 								threadSessionId,
 								apiKey,
-								mergedCallerHeaders,
+								clientDefaultHeaders,
+								options?.requestAuth?.headers,
 							),
 							{ resendSystemAndTools: isOAuthToken },
 						)

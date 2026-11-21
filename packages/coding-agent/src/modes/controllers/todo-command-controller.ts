@@ -88,10 +88,7 @@ function findPhaseFuzzy(phases: TodoPhase[], query: string): TodoPhase | undefin
 	return undefined;
 }
 
-function findTaskFuzzy(
-	phases: TodoPhase[],
-	query: string,
-): { task: TodoItem; phase: TodoPhase } | undefined {
+function findTaskFuzzy(phases: TodoPhase[], query: string): { task: TodoItem; phase: TodoPhase } | undefined {
 	const q = query.trim().toLowerCase();
 	if (!q) return undefined;
 	// Exact content (case-insensitive)

@@ -15,4 +15,10 @@ describe("expandCommand", () => {
 	it("keeps $-patterns in user input literal", () => {
 		expect(expandCommand(makeCommand("Run $@"), "echo $$ $& $' $` $@")).toBe("Run echo $$ $& $' $` $@");
 	});
+
+	it("leaves slash-command template placeholders untouched", () => {
+		expect(expandCommand(makeCommand("Example {{{rawArguments}}}; run $@"), "echo hello")).toBe(
+			"Example {{{rawArguments}}}; run echo hello",
+		);
+	});
 });

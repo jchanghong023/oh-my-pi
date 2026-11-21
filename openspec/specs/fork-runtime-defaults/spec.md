@@ -18,7 +18,6 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 保持以下 fork 默认值：
 
 - `recap.enabled=false`
-- `read.defaultLimit=2000`，用于未指定行数的读取。
 - `debug.enabled=false`、`disassembler.backend=none`、`archive.enabled=false`（普通与 offline 启动均默认关闭；显式配置 `auto`、`ida`、`ghidra` 或 `binja` 时沿用上游反汇编后端选择，`auto` 不选择 Binary Ninja；已有配置和用户显式开启仍优先，不改写配置文件）。
 - `commit.enabled=false`：`/commit` 与 eval `commit` 选择性提交默认关闭；显式开启后沿用上游行归属、私有索引构建及“合并／变基等操作进行中拒绝提交”的行为。
 - `providers.thinkingProbe=false`：未知模型的思考能力探测默认关闭，不为内网、自有 Provider 或自定义模型额外发送探测请求；显式开启后沿用上游探测、持久化与等级收敛行为。
@@ -65,27 +64,6 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - **THEN** 按既有行为发送程序状态通知，默认值不覆盖该选择。
 - **WHEN** 用户显式设置 `terminal.programStatus=false`
 - **THEN** 普通与 offline 模式均保持关闭，默认值变化不改写已保存配置。
-
-### Requirement: 日志读取的业务错误筛选
-
-OMP 的 `read` 读取普通本地 `.log` 文本文件时，若进程环境变量 `OMP_LOG_ERROR_REGEX` 非空，MUST 使用其值作为 JavaScript 正则表达式逐行搜索整个文件。搜索范围独立于本次读取的行范围和输出预算。
-
-#### Scenario: 全文件没有匹配
-
-- **WHEN** 正则成功扫描整个日志且没有命中
-- **THEN** 返回给模型的正文只有两行，依次为 `执行成功` 和 `退出码 0`，不包含日志正文或重复读取提示。
-
-#### Scenario: 错误在所读范围以外
-
-- **WHEN** 有一行或多行命中正则，即使命中位于当前读取范围之外
-- **THEN** 先按文件顺序输出命中行和原始行号，再输出正常的读取结果。
-
-#### Scenario: 未配置或筛选失败
-
-- **WHEN** 环境变量未设置或为空，或者目标不是普通 `.log` 文本文件
-- **THEN** 保持原有读取行为。
-- **WHEN** 日志筛选遇到非法正则、扫描失败或取消
-- **THEN** 如实报告失败或取消，不返回成功正文。
 
 ### Requirement: CLI 默认轻量启动参数
 

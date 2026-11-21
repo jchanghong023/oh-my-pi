@@ -1506,6 +1506,100 @@ describe("AgentLifecycleManager strict owned release", () => {
 		}
 	});
 
+	for (const shutdown of ["root", "manager"] as const) {
+		it(`retries exact nested strict reservations during normal ${shutdown} shutdown`, async () => {
+			const registry = new AgentRegistry();
+			const lifecycle = new AgentLifecycleManager(registry);
+			const root = registry.register({ id: "root", displayName: "root", kind: "main", session: null });
+			const nested = registry.register({
+				id: "nested",
+				displayName: "nested",
+				kind: "sub",
+				parentId: root.id,
+				session: null,
+				status: "parked",
+			});
+			const parentSession = makeSessionStub();
+			const parent = registry.register({
+				id: "parent",
+				displayName: "parent",
+				kind: "sub",
+				parentId: nested.id,
+				session: parentSession.session,
+				status: "idle",
+			});
+			const childSession = makeSessionStub();
+			const child = registry.register({
+				id: "child",
+				displayName: "child",
+				kind: "sub",
+				parentId: parent.id,
+				session: childSession.session,
+				status: "idle",
+			});
+			let fail = true;
+			const finishChild = deferred();
+			let blockChild = false;
+			const failure = new Error("child workspace is busy");
+			const order: AgentRef[] = [];
+			const releaseChild = vi.fn(async () => {
+				if (fail) throw failure;
+				if (blockChild) await finishChild.promise;
+				order.push(child);
+			});
+			lifecycle.adopt(child.id, { idleTtlMs: 0, onRelease: releaseChild }, child);
+			lifecycle.adopt(parent.id, { idleTtlMs: 0, onRelease: async () => void order.push(parent) }, parent);
+			const dispose = (deadlineAt?: number) =>
+				shutdown === "root" ? lifecycle.releaseDescendants(root, deadlineAt) : lifecycle.dispose(deadlineAt);
+			try {
+				await expect(lifecycle.releaseDescendants(nested, undefined, { retainRecord: true })).rejects.toThrow();
+				expect(child.session).toBeNull();
+				expect(parentSession.disposeCalls()).toBe(0);
+				const nestedReplacement = registry.register({
+					id: nested.id,
+					displayName: "unrelated replacement",
+					kind: "sub",
+					session: null,
+				});
+				const replacementSession = makeSessionStub();
+				const replacement = registry.register({
+					id: child.id,
+					displayName: "unrelated replacement",
+					kind: "sub",
+					session: replacementSession.session,
+					status: "idle",
+				});
+
+				const rejected = await dispose().catch((error: unknown) => error);
+				expect(rejected).toBeInstanceOf(AggregateError);
+				expect(cleanupErrors(rejected)).toContain(failure);
+				expect(releaseChild).toHaveBeenCalledTimes(2);
+				expect(parentSession.disposeCalls()).toBe(0);
+
+				fail = false;
+				blockChild = true;
+				await expect(dispose(Date.now())).rejects.toThrow();
+				expect(parentSession.disposeCalls()).toBe(0);
+				expect(releaseChild).toHaveBeenCalledTimes(3);
+				finishChild.resolve();
+				await dispose();
+				expect(order).toEqual([child, parent]);
+				expect(childSession.disposeCalls()).toBe(1);
+				expect(parentSession.disposeCalls()).toBe(1);
+				expect(registry.get(parent.id)).toBe(parent);
+				expect(parent).toMatchObject({ status: "parked", session: null, history: { executionEnded: true } });
+				expect(lifecycle.has(child.id, child)).toBe(false);
+				expect(registry.get(nested.id)).toBe(nestedReplacement);
+				expect(registry.get(child.id)).toBe(replacement);
+				expect(replacementSession.disposeCalls()).toBe(0);
+			} finally {
+				fail = false;
+				finishChild.resolve();
+				await lifecycle.dispose();
+			}
+		});
+	}
+
 	it("retries a failed old generation without releasing its same-id replacement", async () => {
 		const registry = new AgentRegistry();
 		const lifecycle = new AgentLifecycleManager(registry);

@@ -263,30 +263,8 @@
           "version": "repo-lines-v1:sha256:92968d5bec3891ed2f0e58d023e2ab6b88a5d62c5ed938f1f076cdeb3006c625:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNGE3NjFjOGFjOGI2NzUxMWM5YzkyMjI3N2RhOWUwM2JhYTM2NGM4NmU2NDgwMTZiY2I2M2VmYWMxYTEzNGY0NiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMjVhNjA1MzA3N2U3ZmQ1ODhjMWFhMDVhNmUzMDJkYmI0NmRiN2QyYWU1MWFkZTY0NDg0MmY5ZjdhODA3NWY1YyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiM2NjMThhZTRhZDZmYWFmYmZkNThiMDg3YTNiMzI5ZGJmOTE0NmJjNWY0Yzk3ZDk2YjFiNjAxMDk1Y2FkNGJhMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNDUxZTE1ZWFjYzUzNGFiZjk0NWM0YWIxM2Y2MWYzOGZkMmQ1YWUzMDEwODNiYzE4YjQ5NjU1M2U4MjQxODcwZCJ9"
         },
         {
-          "resource": "repo://packages/coding-agent/src/jch-commands/workflow.ts#L30-L35",
-          "version": "repo-lines-v1:sha256:5ecdf16ca3343a5f6ca8c2da098c15530cd27631a1eb1c1de575c61ddaaccc1b:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNjZmYmI0ZjAwM2ZhZWI5NGUxNDQyNDYzOTkyNmYwMWMxMDVhNTk3YjlhZWUyYTJmNWQzYjM1NDNhNTIxNzhmNSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNTQxZWZhYmRmZTQ4MzdhN2UyYThkMTA3ZjIyN2E4MTQ3MGU0N2VmN2JiNWNmMmU0NDhiMjAyMDk4ZjhlZWY4YyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYTE1OGRiOGE5NGNmNjNkOGMyNGEyYjk3MTVkY2QwZTRmYTAwMWQxMDlkMmQyM2FhZGUxZjJiZThlOTIwMmFmNCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjEsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYjAyZDJjMGQ2ZGM1ZTc0ZDkyZmExNGI5MWRiZWEyNjQwOTBiZWIzNWZkYjkxODhkOWIzNDExODFkY2U5ZjRjZSJ9"
-        },
-        {
           "resource": "repo://packages/coding-agent/src/prompts/jch-ime.md",
           "version": "repo-file-v1:sha256:ca8f94662f6d390c310af575c6a8e8d2b8bcee418a6cc4bc365d2d8b5409ab3c"
-        }
-      ]
-    },
-    {
-      "id": "claim_1fb7bb1c83cf4121930569f49f12111f",
-      "statement": "/jch-workflowzbatch 校验两个正安全整数和非空正文，合法输入展开为 workflowz 提示词；任务块为软目标、并发上限为模型指令而非新程序级调度限制，展开成功不保证模型服从。",
-      "evidence": [
-        {
-          "resource": "repo://openspec/specs/personal-commands/spec.md#L137-L145",
-          "version": "repo-lines-v1:sha256:81fe0c0c445ab49c6af41aa37f95ad99b92deb6df484de44f8c3c056ebf7e83b:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNmM2YjFiNjNhMzk1ZmM3YmVmOGQwNjI1MThiZDVlYTgyMzVhNDJiYWQ0Nzg4ZDFmMTNmMWE5NmZhYzA5MWY5ZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjIyYjA0OWYxYTY2ODU1M2Q2MWJiM2U2YjBmMzI3ZWY3NTA5NjJjZGFjMmIzMDU5Y2VjNzY5ODgwYTFjYjBiNSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOTU4YjhkMjM4NDI0ZDU1OTIyZWRkOThlZTdlYTNhNjFiMDRlMjA4YmY4NzBhOGRlMzZiM2Y4MmU0MTA5NGY5YyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYzQ4MmE2YWY1ZGMzNzBlYjI5OWM3ZGY0MTNmMzVmZGIxNTkzYTU5ZmYxOTcwYWFjMTkxZDNlZjQyZTg2MWZlNSJ9"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/jch-commands/workflow.ts#L8-L28",
-          "version": "repo-lines-v1:sha256:f5b11f14b2cfe61bcc55fa0dd5ea48e70dec07d8fc8b29533aa01ecd4088bfb9:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIxMzgzMDE5NGFkM2VjODQ4OGExMzY5MGNlNmI5Yzk0OGVlMzFjNzBhMzE3Mjk5NWYyZThiZDdlZWVhOTI0MTciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjViYWQ3Y2MyZGZhZmMyMTc1ZmEyZDk3MDRlMDIwMmY5NDA4M2E5ZGE2OWE1ODViMGIxOGM0OGJlYTIzNjI3NWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjVkYzkyNTYxZDBjMzA1Yjc3N2ZiODFjNjI1ZWZiMmFkM2Y1NWQ3MzI4ZjNmOTA5YTQzOTc1MmEzMmIyNjMzMTkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIyNzhkMGIxZWRkYmU4OTk3OWJkMzA3ZDI1NTUyMDg1MDVlNDViOWQ3MWQ2M2E5MmIwNzUyMWU4NWQ0MjIzMGQifQ"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/prompts/jch-workflowzbatch.md",
-          "version": "repo-file-v1:sha256:0f6ddbc6ce4e11a0a56a96b24068036a8cae76f706f050283144eadcf05daf0f"
         }
       ]
     },

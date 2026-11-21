@@ -292,13 +292,6 @@ pub struct ScopedCommitResult {
 	pub diagnostic:    Option<String>,
 }
 
-/// A precisely observed advertised remote ref; absence is not a network error.
-#[derive(Debug, Clone)]
-pub struct RemoteRefResult {
-	/// Advertised object id, or absent after a successful exact query.
-	pub sha: Option<String>,
-}
-
 /// The live remote HEAD's symbolic branch and advertised object id.
 #[derive(Debug, Clone)]
 pub struct RemoteDefaultBranch {

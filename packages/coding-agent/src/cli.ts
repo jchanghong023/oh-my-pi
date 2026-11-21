@@ -102,6 +102,7 @@ const PREPAINT_SAFE_FLAGS: Record<string, true> = {
 	"--no-tools": true,
 	"--no-judge": true,
 	"--no-spotlight": true,
+	"--offline": true,
 	"--no-lsp": true,
 	"--no-title": true,
 	"--no-prewalk": true,

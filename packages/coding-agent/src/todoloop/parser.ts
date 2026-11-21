@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { CloserIndexes } from "@oh-my-pi/pi-utils/marked/inline-closers";
 
 export interface TodoLoopTask {
 	id: string;
@@ -49,6 +50,26 @@ function expandIndent(line: string): string {
 	return " ".repeat(column) + line.slice(prefix.length);
 }
 
+/** Find a comment that continues onto the next line, excluding literal Markdown. */
+function unclosedCommentStart(line: string): number {
+	if (!line.includes("<!--")) return -1;
+	const markers = /\\[\\`<]|`+|<!--/g;
+	let indexes: CloserIndexes | undefined;
+	for (let marker = markers.exec(line); marker; marker = markers.exec(line)) {
+		if (marker[0] === "<!--") {
+			const close = line.indexOf("-->", markers.lastIndex);
+			if (close === -1) return marker.index;
+			markers.lastIndex = close + 3;
+		} else if (marker[0][0] === "`") {
+			indexes ??= new CloserIndexes(line);
+			const width = marker[0].length;
+			const close = indexes.codeRuns.closerAfter(markers.lastIndex, width);
+			if (close !== -1) markers.lastIndex = close + width;
+		}
+	}
+	return -1;
+}
+
 function parseDocument(content: string): ParsedDocument {
 	const lines = content.split(/\r\n|\n|\r/);
 	// A terminal newline is a line delimiter, not an immutable empty paragraph.
@@ -69,8 +90,8 @@ function parseDocument(content: string): ParsedDocument {
 	let groupCount = 0;
 
 	for (let index = 0; index < lines.length; index++) {
-		const raw = lines[index];
-		const line = expandIndent(index === 0 && raw.startsWith("\uFEFF") ? raw.slice(1) : raw);
+		let raw = lines[index];
+		let line = expandIndent(index === 0 && raw.startsWith("\uFEFF") ? raw.slice(1) : raw);
 		const indent = line.length - line.trimStart().length;
 		if (fence) {
 			const closing = line.trimStart().match(/^(`+|~+)[ \t]*$/)?.[1];
@@ -80,7 +101,12 @@ function parseDocument(content: string): ParsedDocument {
 			continue;
 		}
 		if (commentLine !== undefined) {
-			if (line.includes("-->")) commentLine = undefined;
+			const close = line.indexOf("-->");
+			if (close !== -1) {
+				commentLine = unclosedCommentStart(line.slice(close + 3)) === -1 ? undefined : index + 1;
+			}
+			current = undefined;
+			paragraph = undefined;
 			continue;
 		}
 		if (!line.trim()) {
@@ -100,7 +126,7 @@ function parseDocument(content: string): ParsedDocument {
 			continue;
 		}
 		if (line.trimStart().startsWith("<!--")) {
-			commentLine = line.includes("-->", line.indexOf("<!--") + 4) ? undefined : index + 1;
+			if (unclosedCommentStart(line) !== -1) commentLine = index + 1;
 			current = undefined;
 			paragraph = undefined;
 			continue;
@@ -111,6 +137,18 @@ function parseDocument(content: string): ParsedDocument {
 			current = undefined;
 			paragraph = undefined;
 			continue;
+		}
+		let list = line.match(LIST_PATTERN);
+		const listFence = list?.[4].match(/^(`{3,}|~{3,})(.*)$/);
+		const startsListFence = listFence && !(listFence[1][0] === "`" && listFence[2].includes("`"));
+		if (!startsListFence) {
+			const comment = unclosedCommentStart(line);
+			if (comment !== -1) {
+				commentLine = index + 1;
+				raw = raw.slice(0, raw.length - (line.length - comment));
+				line = line.slice(0, comment).trimEnd();
+				list = line.match(LIST_PATTERN);
+			}
 		}
 		const heading = line.match(/^ {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)$/);
 		const setext = paragraph && line.match(/^ {0,3}(=+|-+)[ \t]*$/);
@@ -129,15 +167,13 @@ function parseDocument(content: string): ParsedDocument {
 			current = undefined;
 			continue;
 		}
-		const list = line.match(LIST_PATTERN);
 		if (list) {
 			current = undefined;
 			paragraph = undefined;
 			let contentIndent = indent + list[2].length;
 			for (const char of list[3]) contentIndent += char === "\t" ? 4 - (contentIndent % 4) : 1;
 			lists.push({ indent, contentIndent });
-			const listFence = list[4].match(/^(`{3,}|~{3,})(.*)$/);
-			if (listFence && !(listFence[1][0] === "`" && listFence[2].includes("`"))) {
+			if (startsListFence) {
 				fence = {
 					char: listFence[1][0],
 					length: listFence[1].length,

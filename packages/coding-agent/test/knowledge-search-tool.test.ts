@@ -175,6 +175,18 @@ it("restricts file and directory searches to stored paths across indexes and bin
 		await expect(run(tool, { query: "scopebeacon", path })).rejects.toThrow();
 }, 30_000);
 
+it.skipIf(process.platform === "win32")("finds a literal POSIX filename starting with a letter and colon", async () => {
+	const fixture = await indexedFixture({
+		"x:manual.md": "# Manual\nscopebeacon target\n",
+		"other.md": "# Other\nscopebeacon outside the requested path\n",
+	});
+	const tool = new KnowledgeSearchTool(session(fixture.agent, fixture.root));
+	const page = text(await run(tool, { query: "scopebeacon", path: "x:manual.md" }));
+	expect(page).toContain("x:manual.md:1-2");
+	expect(page).toContain("scopebeacon target");
+	expect(page).not.toContain("outside the requested path");
+});
+
 describe("KnowledgeSearchTool", () => {
 	it("awaits explicit disposal after the real session callback starts teardown", async () => {
 		const fixture = await indexedFixture({ "guide.md": "# Guide\nshutdownbeacon complete evidence\n" });
@@ -636,8 +648,8 @@ describe("KnowledgeSearchTool", () => {
 		expect(page).toContain("Command: scan");
 	});
 
-	it("collapses duplicate bodies only after complete text while preserving each citation", async () => {
-		const section = `## Shared\n${"长".repeat(220)} needle\n`;
+	it("counts actual duplicate pointers, not matching prose, while preserving each citation", async () => {
+		const section = `## Shared\n${"长".repeat(220)} needle\n(identical text to hit [99] on this page)\n`;
 		const fixture = await indexedFixture({ "a.md": section, "b.md": section });
 		const page = text(await run(new KnowledgeSearchTool(session(fixture.agent, fixture.root)), { query: "needle" }));
 		expect(page).toContain(section);

@@ -1,14 +1,13 @@
 #!/usr/bin/env bun
 /**
- * Build the HTML export viewer, including shared React tool/trace views.
- * Local `bun run gen:export-viewer` updates the committed viewer metadata;
- * CI and `--check` verify it, and `--write` updates it even under CI=true.
- * Checkout exports inline the generated viewer.
+ * Build the hosted HTML export viewer, including shared React tool/trace views.
+ * Local `bun run gen:export-viewer` updates the committed viewer.generated.json;
+ * CI and `--check` verify it instead, and `--write` updates it even under CI=true.
+ * Only the content-addressed JS is uploaded.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { withCompilerActivity } from "../../../scripts/test-gate-events";
 import { exportThemeStyles, webExportThemeVars } from "../../coding-agent/src/export/html/web-palette";
 
 const collabDir = path.join(import.meta.dir, "..");
@@ -36,26 +35,24 @@ export interface ExportViewerBuildOptions {
 export async function buildExportViewer(options: ExportViewerBuildOptions = {}): Promise<ExportViewerMetadata> {
 	const outDir = options.outDir ?? path.join(agentDir, "export-assets");
 	const metadataPath = options.metadataPath ?? path.join(options.outDir ?? htmlDir, "viewer.generated.json");
-	const result = await withCompilerActivity(() =>
-		Bun.build({
-			entrypoints: [path.join(collabDir, "src/export-standalone.ts")],
-			root: collabDir,
-			target: "browser",
-			format: "iife",
-			minify: true,
-			define: { "process.env.NODE_ENV": JSON.stringify("production") },
-			plugins: [
-				{
-					name: "shared-export-markdown",
-					setup(build) {
-						build.onResolve({ filter: /^@oh-my-pi\/pi-utils\/marked$/ }, () => ({
-							path: path.join(collabDir, "src/export-markdown-bridge.ts"),
-						}));
-					},
+	const result = await Bun.build({
+		entrypoints: [path.join(collabDir, "src/export-standalone.ts")],
+		root: collabDir,
+		target: "browser",
+		format: "iife",
+		minify: true,
+		define: { "process.env.NODE_ENV": JSON.stringify("production") },
+		plugins: [
+			{
+				name: "shared-export-markdown",
+				setup(build) {
+					build.onResolve({ filter: /^@oh-my-pi\/pi-utils\/marked$/ }, () => ({
+						path: path.join(collabDir, "src/export-markdown-bridge.ts"),
+					}));
 				},
-			],
-		}),
-	);
+			},
+		],
+	});
 	if (!result.success) throw new AggregateError(result.logs, "Export viewer React bundle failed");
 
 	let js = "";

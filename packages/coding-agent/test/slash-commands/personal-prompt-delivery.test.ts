@@ -24,7 +24,6 @@ describe("personal prompt commands reach the provider", () => {
 	it.each([
 		["/minimal task-marker-5bc", undefined],
 		["/jchime task-marker-5bc", undefined],
-		["/jch-workflowzbatch 12 2 task-marker-5bc\n    preserve indentation  ", "workflow-notice"],
 		["/ultrathink task-marker-5bc", "ultrathink-notice"],
 		["/orchestrate task-marker-5bc", "orchestrate-notice"],
 		["/workflowz task-marker-5bc", "workflow-notice"],

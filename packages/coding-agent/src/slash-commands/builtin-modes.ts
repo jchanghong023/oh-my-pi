@@ -583,17 +583,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	},
 	LOOP_MODE_SLASH_COMMAND,
 	{
-		...LOOP_MODE_SLASH_COMMAND,
-		name: "loopgoal",
-		description:
-			"Repeat a fixed goal prompt after each turn until the agent replies 无. Uses the same parameters, context handling and stop controls as /loop.",
-		handleTui: async (command, runtime) => {
-			const prompt = await runtime.ctx.handleLoopCommand(command.args, true);
-			clearSubmittedText(runtime);
-			if (prompt) return { prompt };
-		},
-	},
-	{
 		name: "loopn",
 		icon: "loop",
 		description: "Cycle through prompts in order; Esc or /loopn stops",

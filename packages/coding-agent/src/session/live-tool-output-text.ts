@@ -7,6 +7,7 @@ import { type OutputMeta, stripOutputNotice } from "@oh-my-pi/pi-tui/tools/outpu
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import type { LiveToolOutputSnapshot } from "./agent-session-handle";
 
 /** A compact preview row must contain a Unicode letter or number, not just decoration. */
 export function isToolOutputRow(row: string): boolean {
@@ -21,6 +22,19 @@ export function toolOutputSource(toolName: string, result?: ToolRenderResult<unk
 		return { name: dispatch.tool, details: isRecord(dispatch.inner) ? dispatch.inner : undefined, dispatch };
 	}
 	return { name: toolName, details };
+}
+
+/** Successful direct file operations may duplicate the compact file Diff. */
+export function mayBeCoveredByFileDiff(call: LiveToolOutputSnapshot): boolean {
+	const { toolName, result } = call;
+	if (toolName !== "write" && toolName !== "edit" && toolName !== "apply_patch") return false;
+	const details = isRecord(result?.details) ? result.details : undefined;
+	return (
+		!result?.isError &&
+		!details?.xdev &&
+		details?.cancelled !== true &&
+		(call.terminalAt === undefined || details !== undefined)
+	);
 }
 
 /** Actual displayable compact Output, using the same output boundaries as the tool renderers. */

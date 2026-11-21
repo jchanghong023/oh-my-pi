@@ -142,7 +142,6 @@ export function toJobWire(job: AsyncJob): AsyncJobWire {
 		startTime: job.startTime,
 		endTime: job.endTime,
 		label: job.label,
-		name: job.name,
 		intent: job.intent,
 		resultText: job.resultText,
 		errorText: job.errorText,
@@ -217,7 +216,6 @@ function serveManager(threadId: ThreadId): RpcServe<AsyncJobManager, AsyncJobMan
 				ctx => {
 					const wire: WireRunContext = {
 						jobId: ctx.jobId,
-						name: ctx.name,
 						signal: toWireSignal(ctx.signal),
 						reportProgress: ctx.reportProgress,
 						markRunning: ctx.markRunning,

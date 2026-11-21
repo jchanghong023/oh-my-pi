@@ -995,6 +995,7 @@ export class TUI extends Container {
 	static readonly #INPUT_FRAME_INTERVAL_MS = 1000 / 30;
 	static readonly #INPUT_RENDER_GRACE_MS = TUI.#INPUT_FRAME_INTERVAL_MS;
 	#inputRenderPending = false;
+	#dispatchingOfflineInput = false;
 	/**
 	 * Cap on the adaptive floor derived from `#lastFrameCostMs`. Bounds the UI
 	 * responsiveness at ~5 fps under sustained heavy renders — anything slower
@@ -2849,9 +2850,9 @@ export class TUI extends Container {
 			});
 			return;
 		}
-		// A render while a keystroke's latch is set rides the fixed input cadence: an animation frame
-		// parked further out under the `tui.maxFps` ceiling is replaced by one the keystroke can ride.
-		// Input listeners (scroll wheel, toggles) and focused components alike request through here.
+		// During offline input, only a handler that asks to paint can promote a background frame.
+		if (this.#dispatchingOfflineInput) this.#inputRenderPending = true;
+		// A pending input paint rides the fixed input cadence instead of the background ceiling.
 		if (this.#inputRenderPending && this.#renderTimer && !this.#nativeLive) {
 			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
@@ -2889,6 +2890,7 @@ export class TUI extends Container {
 	 */
 	requestComponentRender(_component: Component): void {
 		if (this.#stopped) return;
+		if (this.#dispatchingOfflineInput) return this.requestRender();
 		this.#requestOrdinaryRender();
 	}
 
@@ -3080,12 +3082,21 @@ export class TUI extends Container {
 			data = data.slice(0, searchFrom + match.index) + data.slice(searchFrom + match.index + match[0].length);
 		}
 		if (data.length === 0) return;
-		// Every keystroke arms the input latch before any consumer runs, so whichever consumer
-		// requests the paint — an input listener or the focused component — it is paced at the input
-		// cadence, not the ceiling. Input that triggers no render leaves the latch for the next frame
-		// to consume at the 30 fps floor once; harmless.
-		this.#inputRenderPending = true;
+		if (!this.#offlineLinux) {
+			this.#inputRenderPending = true;
+			this.#dispatchInput(data);
+			return;
+		}
+		const wasDispatching = this.#dispatchingOfflineInput;
+		this.#dispatchingOfflineInput = true;
+		try {
+			this.#dispatchInput(data);
+		} finally {
+			this.#dispatchingOfflineInput = wasDispatching;
+		}
+	}
 
+	#dispatchInput(data: string): void {
 		if (
 			this.#heldInput !== undefined &&
 			this.#focusedComponent === this.#heldFocus &&
@@ -3108,13 +3119,6 @@ export class TUI extends Container {
 				// No visible overlays, restore to preFocus
 				this.setFocus(focusedOverlay.preFocus);
 			}
-		}
-		if (this.#offlineLinux && this.#renderTimer) {
-			// Input can arrive without requesting another render. Re-evaluate a
-			// pending offline background timer so it does not delay input echo.
-			this.#renderTimer.cancel();
-			this.#renderTimer = undefined;
-			this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
 		}
 		// Ctrl+C/Esc use app-level double-press windows. Give those gestures one
 		// frame to drain queued input before an ordinary repaint; delaying every

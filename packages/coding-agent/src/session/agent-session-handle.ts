@@ -256,6 +256,9 @@ export interface LiveToolOutputPreview {
 	readonly text: string;
 }
 
+/** Returns the text still visible in the current view, or empty if fully covered. */
+export type LiveToolOutputProjection = (preview: LiveToolOutputPreview) => string;
+
 /** Home-thread time and ordering for the mirrored output projection. */
 export interface LiveToolOutputStamp {
 	receivedAt: number;
@@ -327,8 +330,8 @@ export interface AgentViewSession extends AgentSessionHandle {
 	readonly hasInterruptibleInput: boolean;
 	/** Tool execution updates of tools still running, for mid-tool attach. */
 	activeToolExecutionUpdates(): readonly ToolExecutionUpdateEvent[];
-	/** Latest eligible output, including its original dismissal deadline. */
-	getLiveToolOutputPreview(): LiveToolOutputPreview | undefined;
+	/** Most recent projected Output, including its original dismissal deadline. */
+	getLiveToolOutputPreview(project?: LiveToolOutputProjection): LiveToolOutputPreview | undefined;
 	/** Latest view-only model stage, including before the first response frame. */
 	readonly modelStage: ModelStage | null;
 	getLatestTurnFileChanges(): TurnFileChanges | undefined;

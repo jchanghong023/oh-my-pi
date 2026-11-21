@@ -71,7 +71,7 @@ const md = new Marked({
 			const url = safeHref(href);
 			if (url === null) return inner;
 			const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
-			return `<a href="${escapeHtml(url)}"${titleAttr} target="_blank" rel="noopener noreferrer">${inner}</a>`;
+			return `<a href="${escapeHtml(url)}"${titleAttr} target="_blank" rel="noopener">${inner}</a>`;
 		},
 	},
 	breaks: true,
@@ -107,14 +107,8 @@ const NO_PREFIX: FrozenMarkdownPrefix = { source: "", html: "" };
  * it on into one block across blank lines, so nothing at or past it freezes.
  */
 const MATH_OPENER_LINE = /^ {0,3}(?:\$\$|\\\[)[ \t]*$/m;
-const WHITESPACE = /\s/;
-
-/** Whether the line at exactly `from` is whitespace-only, including an unfinished last line. */
-function whitespaceLineAt(source: string, from: number): boolean {
-	let at = from;
-	while (at < source.length && source.charCodeAt(at) !== 0x0a && WHITESPACE.test(source[at]!)) at++;
-	return at === source.length || source.charCodeAt(at) === 0x0a;
-}
+/** A whitespace-only line from the sticky offset, capturing its terminator ("\n", or "" at end of text). */
+const WHITESPACE_LINE = /[^\S\n]*(\n|$)/y;
 
 /**
  * Number of leading `tokens` (lexed from `src`) that end on a stable block
@@ -137,11 +131,12 @@ function stableTokenCount(src: string, tokens: readonly Token[]): { count: numbe
 		// whitespace, joins the blank run in front of the cut.
 		if (raw.endsWith("\n\n") && tokenEnd < src.length) {
 			const next = src.charCodeAt(tokenEnd);
+			WHITESPACE_LINE.lastIndex = tokenEnd;
 			const prev = i > 0 ? tokens[i - 1] : undefined;
 			if (
 				next !== 0x20 &&
 				next !== 0x0a &&
-				!whitespaceLineAt(src, tokenEnd) &&
+				WHITESPACE_LINE.exec(src) === null &&
 				(prev?.type !== "list" || !listMayContinueAt(src, tokenEnd, prev.raw))
 			) {
 				count = i + 1;
@@ -169,7 +164,7 @@ export function renderStreamingMarkdown(
 	if (text.includes("\r")) return { html: renderMarkdown(text), prefix: NO_PREFIX };
 	// Tabs expand to four spaces (as marked's own normalization does), so token
 	// raws tile `src` exactly.
-	const src = text.includes("\t") ? text.replace(/\t/g, "    ") : text;
+	const src = text.includes("\t") ? text.replaceAll("\t", "    ") : text;
 	const base = src.length > prefix.source.length && src.startsWith(prefix.source) ? prefix : NO_PREFIX;
 	const rest = base.source.length === 0 ? src : src.slice(base.source.length);
 	try {

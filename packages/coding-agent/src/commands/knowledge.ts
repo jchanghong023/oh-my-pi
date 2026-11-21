@@ -1,14 +1,13 @@
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
-import { getAgentDir, sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reportCliUsageError } from "../cli/args";
 import { knowledgeHelp as commandHelp } from "../cli/command-help";
 import { runKnowledgeCommand } from "../cli/knowledge-cli";
 import { CliUsageError } from "../cli/usage-error";
-import { runKnowledgeMcp } from "../knowledge/mcp-server";
 import { initializeOfflineModelCommand } from "../sdk";
 
-const ACTIONS = ["init", "remove", "mcp"] as const;
+const ACTIONS = ["init", "remove"] as const;
 
 export default class Knowledge extends Command {
 	static description = commandHelp.description;
@@ -21,7 +20,7 @@ export default class Knowledge extends Command {
 	};
 	static flags = {
 		name: Flags.string({ description: "Unique index name (init only)" }),
-		json: Flags.boolean({ description: "Output one JSON value (init/remove only)", default: false }),
+		json: Flags.boolean({ description: "Output one JSON value", default: false }),
 		force: Flags.boolean({ description: "Confirm destructive removal", default: false }),
 	};
 
@@ -34,15 +33,10 @@ export default class Knowledge extends Command {
 				if (!target) throw new CliUsageError("knowledge init requires <dir>");
 				if (!flags.name?.trim()) throw new CliUsageError("knowledge init requires --name <name>");
 				if (flags.force) throw new CliUsageError("--force is valid only for knowledge remove");
-			} else if (action === "remove") {
+			} else {
 				if (!target) throw new CliUsageError("knowledge remove requires <name>");
 				if (!flags.force) throw new CliUsageError("knowledge remove requires --force");
 				if (flags.name !== undefined) throw new CliUsageError("knowledge remove does not accept --name");
-			} else if (action === "mcp") {
-				if (target !== undefined) throw new CliUsageError("knowledge mcp does not accept a target");
-				if (flags.name !== undefined) throw new CliUsageError("knowledge mcp does not accept --name");
-				if (flags.force) throw new CliUsageError("knowledge mcp does not accept --force");
-				if (flags.json) throw new CliUsageError("knowledge mcp does not accept --json");
 			}
 		} catch (error) {
 			// This class is `../cli/usage-error`, which the pi-utils framework handler
@@ -57,10 +51,6 @@ export default class Knowledge extends Command {
 		await initializeOfflineModelCommand(undefined, undefined, message => {
 			process.stderr.write(`${message}\n`);
 		});
-		if (action === "mcp") {
-			await runKnowledgeMcp({ agentDir: getAgentDir(), cwd: process.cwd() });
-			return;
-		}
 		const controller = new AbortController();
 		const onSigint = () => controller.abort();
 		process.once("SIGINT", onSigint);

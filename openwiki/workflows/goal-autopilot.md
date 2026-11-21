@@ -25,8 +25,6 @@ sources:
     resource: repo://packages/coding-agent/src/session/agent-session.ts
   - id: openwiki-source-a174621081630abddc079969
     resource: repo://packages/coding-agent/test/agent-session-goal-midrun-compaction.test.ts
-  - id: openwiki-source-de1d42ac488c716715c0803c
-    resource: repo://packages/coding-agent/test/goals/goal-continuation-guard.test.ts
   - id: openwiki-source-1d2e61f7d60a56117b08dc55
     resource: repo://packages/coding-agent/test/goals/goal-runtime.test.ts
 generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
@@ -72,7 +70,7 @@ stateDiagram-v2
 
 普通 Goal 的活动上下文包含目标和可用的 todo 上下文。交互宿主在一轮结束后，只有 Goal 启用且状态为 `active`、对应运行模式允许续跑、没有互斥的 plan/loop、未提交输入或编辑器内容，且待办不全被阻塞时，才安排约 800 ms 的空闲等待。等待结束再次检查会话、目标 ID、忙闲和输入，然后以不显示的 `goal-continuation` 提交；因此目标存在不保证持续调用模型。
 
-续跑保护器比较整轮工具调用及结果的摘要：重复活动停止自动续跑。成功返回非空文本但没有工具活动时，每段连续续跑最多一次 `goal-tool-recovery`，对该次请求的首次模型调用强制工具选择；纠偏后仍无工具活动则停止并通知目标未完成，真实工具活动也不会补充纠偏次数。错误、取消、截断、空输出及所有工作受阻不能靠纠偏无限重试。用户 follow-up 在活动 Goal 的工具批次结束后可按队列提升，不必等整个目标完成，也不会中断当前工具批次。
+续跑沿用上游 Goal 的判定：整轮没有工具调用或结果，或摘要与上一轮相同，则停止自动续跑，目标仍未完成。用户 follow-up 在活动 Goal 的工具批次结束后可按队列提升，不必等整个目标完成，也不会中断当前工具批次。
 
 `/goal-autopilot` 另在首次提交及真正成功提交压缩后的历史重写边界，附加持久的 `goal-auto-orchestrate-context`：使用保存的完整目标、固定无人值守指令及共享 Orchestrate 规则。构造时读取当前启用能力，包括间接工具；`task` 不可用时只省略编排规则。消息具有用户而非系统授权层级，并按目标及压缩事件去重。普通工具往返、续跑、状态恢复和失败或未提交的压缩不重建它；已经写入的旧通知也不会因暂停或模式退出而被追溯删除。成功压缩后重新读取当前有效目标与能力，而不是依赖摘要保存完整指令。历史通知本身不构成再次启动或绕过审批的授权。
 
@@ -86,4 +84,4 @@ Goal 限制的是 token，不是费用上限或时间截止。每次结算按累
 
 Goal 不赋予系统权限、替代强制审批或允许绕过用户停止；受阻时应报告证据和缺失前提，而非虚报完成。
 
-维护时可重点检查 `test/goals/goal-runtime.test.ts` 的计量和内部中断、`goal-continuation-guard.test.ts` 的无进展与一次性纠偏、`test/agent-session-goal-midrun-compaction.test.ts` 的运行中压缩及通知持久化。规格中的真实 TUI 和 Provider 协议验收要求不等同于这些局部测试已经证明真实模型质量或费用节省。
+维护时可重点检查 `test/goals/goal-runtime.test.ts` 的计量和内部中断，以及 `test/agent-session-goal-midrun-compaction.test.ts` 的运行中压缩及通知持久化。规格中的真实 TUI 和 Provider 协议验收要求不等同于这些局部测试已经证明真实模型质量或费用节省。

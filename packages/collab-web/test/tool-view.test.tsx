@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { parseHTML } from "@oh-my-pi/pi-utils/dom";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ToolView } from "../src/tool-render";
+import { ToolView } from "../src/tool-render/ToolView";
 
 describe("ToolView xd:// dispatches", () => {
 	it("renders successful execute-mode xdev writes as the inner generate_image tool", () => {
@@ -230,53 +229,29 @@ describe("ToolView task renderer", () => {
 
 describe("ToolView ask renderer", () => {
 	const form = `<form>
-		<fieldset><legend>Storage <strong>backend</strong></legend>
-			<label><input type="radio" name="db" value="sqlite" checked>SQLite</label>
-			<label><input type="radio" name="db" value="postgres">Postgres</label>
-		</fieldset>
-		<fieldset><legend>Notes &amp; caveats</legend><textarea name="notes"></textarea></fieldset>
-		<input type="hidden" name="token" value="private">
-		<input type="submit" name="submit" value="Send">
-	</form>`;
+<fieldset><legend>Storage backend</legend>
+<label><input type="radio" name="db" value="sqlite" checked> SQLite</label>
+<label><input type="radio" name="db" value="pg"> Postgres</label>
+</fieldset>
+<fieldset><legend>Notes &amp; caveats</legend><textarea name="notes"></textarea></fieldset>
+</form>`;
 
-	it("outlines pending native forms and counts distinct visible fields", () => {
+	it("outlines a pending form by its legends and named field count", () => {
 		const html = renderToStaticMarkup(<ToolView name="ask" defaultOpen args={{ html: form }} />);
-		const { document } = parseHTML(`<html><body>${html}</body></html>`);
 
-		expect(document.body.textContent).toContain("Storage backend");
-		expect(document.body.textContent).toContain("Notes & caveats");
-		expect(document.body.textContent).toContain("2 fields");
-		expect(document.querySelectorAll(".tv-row")).toHaveLength(2);
-		expect(document.querySelectorAll("form, input, textarea, strong")).toHaveLength(0);
-		expect(document.body.textContent).not.toContain("private");
+		expect(html).toContain("Storage backend");
+		expect(html).toContain("Notes &amp; caveats");
+		expect(html).toContain("2 fields");
 	});
 
-	it("uses captions or field names when pending forms have no legends", () => {
-		const captioned = renderToStaticMarkup(
-			<ToolView
-				name="ask"
-				defaultOpen
-				args={{ html: '<form><label>Deployment region<input name="region"></label>' }}
-			/>,
-		);
-		const unnamedCaption = renderToStaticMarkup(
-			<ToolView name="ask" defaultOpen args={{ html: '<form><input name="region"><textarea name="notes">' }} />,
-		);
-
-		expect(captioned).toContain("Deployment region");
-		expect(unnamedCaption).toContain("region");
-		expect(unnamedCaption).toContain("notes");
-		expect(unnamedCaption).toContain("2 fields");
-	});
-
-	it("renders structured field answers and flags form timeouts", () => {
+	it("pairs each question with its answer and flags timed-out submissions", () => {
 		const html = renderToStaticMarkup(
 			<ToolView
 				name="ask"
 				defaultOpen
 				args={{ html: form }}
 				result={{
-					content: [{ type: "text", text: "Raw form data fallback" }],
+					content: [{ type: "text", text: 'User answers:\n{"db":"pg","notes":""}' }],
 					details: {
 						answers: [
 							{ name: "db", question: "Storage backend", answer: "Postgres" },
@@ -288,18 +263,12 @@ describe("ToolView ask renderer", () => {
 			/>,
 		);
 
-		const { document } = parseHTML(`<html><body>${html}</body></html>`);
-		const answerRows = Array.from(document.querySelectorAll(".tv-row"))
-			.filter(row => row.querySelector(".tv-row-key")?.textContent === "✓")
-			.map(row => row.querySelector(".tv-row-val")?.textContent);
-		expect(answerRows).toEqual(["Postgres"]);
-		expect(document.body.textContent).toContain("(no answer)");
-		expect(document.body.textContent).not.toContain("Raw form data fallback");
-		expect(document.querySelectorAll(".tv-note--warn")).toHaveLength(1);
-		expect(document.querySelector(".tv-note--warn")?.textContent).toContain("not a user choice");
+		expect(html).toContain("<span>Postgres</span>");
+		expect(html).toContain("(no answer)");
+		expect(html).toContain("auto-selected after timeout");
 	});
 
-	it("attaches option notes to the matching field and question without rendering HTML", () => {
+	it("renders selected option notes under the matching answer", () => {
 		const html = renderToStaticMarkup(
 			<ToolView
 				name="ask"
@@ -309,137 +278,34 @@ describe("ToolView ask renderer", () => {
 					content: [],
 					details: {
 						answers: [
-							{ name: "primary", question: "Storage backend", answer: "Postgres" },
-							{ name: "replica", question: "Storage backend", answer: "SQLite" },
+							{ name: "notes", question: "Notes & caveats", answer: "none" },
+							{ name: "db", question: "Storage backend", answer: "SQLite, Postgres, managed" },
 						],
 						notes: [
-							{ name: "replica", question: "Storage backend", option: "SQLite", text: "Read-only replica" },
-							{
-								name: "primary",
-								question: "Storage backend",
-								option: "Postgres",
-								text: '<img src=x onerror="alert(1)">Team standard',
-							},
-							{ name: "primary", question: "Different question", option: "Postgres", text: "Wrong question" },
-							{ name: "primary", question: "Storage backend", option: "Postgres", text: { malformed: true } },
+							{ name: "db", question: "Storage backend", option: "Postgres, managed", text: "Team standard" },
+							{ name: "db", question: "Storage backend", option: 12, text: "ignored malformed note" },
 						],
 					},
 				}}
 			/>,
 		);
 
-		const { document } = parseHTML(`<html><body>${html}</body></html>`);
-		const notes = Array.from(document.querySelectorAll(".tv-note"));
-		expect(notes).toHaveLength(2);
-		expect(notes[0]?.textContent).toContain('Postgres: <img src=x onerror="alert(1)">Team standard');
-		expect(notes[0]?.parentElement?.textContent).toContain("Postgres");
-		expect(notes[0]?.parentElement?.textContent).not.toContain("SQLite");
-		expect(notes[1]?.textContent).toContain("SQLite: Read-only replica");
-		expect(notes[1]?.parentElement?.textContent).not.toContain("Postgres");
-		expect(document.body.textContent).not.toContain("Wrong question");
-		expect(document.querySelectorAll("img, script, [onerror]")).toHaveLength(0);
+		expect(html).toContain("✎ Postgres, managed: Team standard");
+		expect(html.indexOf("Team standard")).toBeGreaterThan(html.lastIndexOf("Storage backend"));
+		expect(html).not.toContain("ignored malformed note");
 	});
 
-	it("renders valid persisted answers despite malformed args and partial details", () => {
-		const html = renderToStaticMarkup(
-			<ToolView
-				name="ask"
-				defaultOpen
-				args={{ html: { incomplete: true } }}
-				result={{
-					content: [],
-					details: {
-						answers: [
-							null,
-							"invalid",
-							{ name: "bad", question: "Ignore this question", answer: 42 },
-							{ name: "db", question: "Recovered question", answer: "<script>literal answer</script>" },
-						],
-						notes: [null, { name: "db", question: "Recovered question", option: "value", text: null }],
-						timedOut: "true",
-					},
-				}}
-			/>,
-		);
-		const { document } = parseHTML(`<html><body>${html}</body></html>`);
-
-		expect(document.body.textContent).toContain("Recovered question");
-		expect(document.body.textContent).toContain("<script>literal answer</script>");
-		expect(document.body.textContent).not.toContain("Ignore this question");
-		expect(document.querySelectorAll("script, .tv-note")).toHaveLength(0);
-	});
-
-	it("outlines partially streamed markup and decodes entities safely", () => {
-		const html = renderToStaticMarkup(
-			<ToolView
-				name="ask"
-				defaultOpen
-				args={{
-					html: '<form><fieldset><legend>Storage &amp; &#x1f4be; &#1114112; &lt;img src=x onerror=alert(1)&gt;</legend><input name="db"',
-				}}
-			/>,
-		);
-		const { document } = parseHTML(`<html><body>${html}</body></html>`);
-
-		expect(document.body.textContent).toContain("Storage & 💾 &#1114112; <img src=x onerror=alert(1)>");
-		expect(document.querySelectorAll(".tv-row")).toHaveLength(1);
-		expect(document.querySelectorAll("img, input, [onerror]")).toHaveLength(0);
-	});
-
-	it("falls back to result text when the producer returns no answers", () => {
+	it("falls back to the result text when details carry no answers", () => {
 		const html = renderToStaticMarkup(
 			<ToolView
 				name="ask"
 				defaultOpen
 				args={{ html: "<form></form>" }}
-				result={{
-					content: [{ type: "text", text: "Error: the form has no named controls." }],
-					details: { answers: [] },
-				}}
+				result={{ content: [{ type: "text", text: "The form needs at least one named control." }], isError: true }}
 			/>,
 		);
 
-		expect(html).toContain("the form has no named controls");
-	});
-});
-
-describe("ToolView native host expansion", () => {
-	it("uses an explicit native expand command for the real tool body", () => {
-		const html = renderToStaticMarkup(
-			<ToolView
-				name="read"
-				host={{ toolsExpanded: true }}
-				args={{ path: "actual.md" }}
-				result={{ content: [{ type: "text", text: "full actual output" }] }}
-			/>,
-		);
-		const expanded: string[] = [];
-		new HTMLRewriter()
-			.on("button.tv-head", {
-				element(element) {
-					expanded.push(element.getAttribute("aria-expanded") ?? "");
-				},
-			})
-			.transform(html);
-		expect(expanded).toEqual(["true"]);
-		expect(html).toContain("full actual output");
-	});
-	it("lets native collapse override defaultOpen while leaving undefined callers unchanged", () => {
-		const collapsed = renderToStaticMarkup(
-			<ToolView
-				name="read"
-				defaultOpen
-				host={{ toolsExpanded: false }}
-				result={{ content: [{ type: "text", text: "body only when open" }] }}
-			/>,
-		);
-		const ordinary = renderToStaticMarkup(
-			<ToolView name="read" defaultOpen result={{ content: [{ type: "text", text: "body only when open" }] }} />,
-		);
-		expect(collapsed).toContain('aria-expanded="false"');
-		expect(collapsed).not.toContain("body only when open");
-		expect(ordinary).toContain('aria-expanded="true"');
-		expect(ordinary).toContain("body only when open");
+		expect(html).toContain("at least one named control");
 	});
 });
 

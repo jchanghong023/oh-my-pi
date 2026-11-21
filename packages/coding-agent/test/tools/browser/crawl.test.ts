@@ -497,18 +497,22 @@ describe("crawl real DOM reading contracts", () => {
 		await close?.();
 	});
 
-	it("absolutizes relative body anchors before serializing saved Markdown", async () => {
-		const result = await crawlDomFixture({
-			"/article/preview": `<html><head><base href="/docs/v2/"></head><body><article>
+	it("saves an auth documentation route with absolute body links", async () => {
+		const entry = "/docs/auth/overview";
+		const result = await crawlDomFixture(
+			{
+				[entry]: `<html><head><base href="/docs/v2/"></head><body><article>
 				<h1>Link resolution</h1><p>Read the <a href="../guide?mode=all&amp;lang=en#install">installation guide</a>
 				and <a href="/reference">API reference</a> for complete setup instructions.</p>
 			</article></body></html>`,
-		});
+			},
+			entry,
+		);
 		const guide = `${result.origin}/docs/guide?mode=all&lang=en#install`;
 		expect(result.extractedAnchors).toEqual([[guide, `${result.origin}/reference`]]);
 		expect(result.markdown).toContain(`[installation guide](${guide})`);
 		expect(result.markdown).toContain(`[API reference](${result.origin}/reference)`);
-		expect(result.navigations).toEqual([`${result.origin}/article/preview`]);
+		expect(result.navigations).toEqual([`${result.origin}${entry}`]);
 	}, 30_000);
 
 	it("prefers an in-page expander over a later full-article navigation candidate", async () => {

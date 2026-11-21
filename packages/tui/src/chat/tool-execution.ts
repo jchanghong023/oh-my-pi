@@ -52,7 +52,7 @@ import { type EditMode, type PerFileDiffPreview, renderStreamingFallback } from 
 import { taskCardAgentIds } from "../tools/task";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../tools/todo";
 import { isNativeRendering } from "../native/state";
-import { isDuplicateOnlyWait, isWaitingPollDetails, type CoordinationDetails } from "../tools/wait";
+import { isWaitingPollDetails, type CoordinationDetails } from "../tools/wait";
 import {
 	DEFAULT_TERMINAL_PREVIEW_LINES,
 	formatStatusIcon,
@@ -1427,13 +1427,6 @@ export class ToolExecutionComponent extends Container {
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
 		const settledBashJobs = this.#toolName === "wait" ? this.#refreshSettledBashJobs() : undefined;
-		if (
-			this.#toolName === "wait" &&
-			!this.#expanded &&
-			this.#result &&
-			isDuplicateOnlyWait(this.#result as ToolRenderResult<CoordinationDetails>, settledBashJobs)
-		)
-			return EMPTY_NODE;
 		if (this.#toolName === "wait" && this.#isBenignSkip()) return EMPTY_NODE;
 		const dataFirst = cx?.supports("tool") === true;
 		const host: NativeHostKinds = {

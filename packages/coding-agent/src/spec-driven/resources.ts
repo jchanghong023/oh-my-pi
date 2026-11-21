@@ -326,7 +326,7 @@ export async function runOpenSpec(
 ): Promise<SpecDrivenProcessResult> {
 	const resources = await ensureSpecDrivenResources();
 	const entry = await resolveSpecDrivenResourcePath(resources.openspecRoot, "bin/openspec.js");
-	const extraEnv: Record<string, string> = { BUN_BE_BUN: "1" };
+	const extraEnv: Record<string, string> = { BUN_BE_BUN: "1", OMP_OPENSPEC_REGISTRY_ORIGIN: "" };
 	if (offlineFromEnv()) {
 		const registry = URL.parse(process.env.npm_config_registry?.trim() ?? "");
 		if (
@@ -334,6 +334,8 @@ export async function runOpenSpec(
 			registry.hostname.replace(/\.$/, "") === new URL(DEFAULT_NPM_REGISTRY).hostname
 		) {
 			extraEnv.OPENSPEC_NO_UPDATE_CHECK = "1";
+		} else {
+			extraEnv.OMP_OPENSPEC_REGISTRY_ORIGIN = registry.origin;
 		}
 	}
 	return run([process.execPath, entry, ...args], cwd, signal, extraEnv, io);

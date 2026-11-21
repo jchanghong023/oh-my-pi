@@ -203,7 +203,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			const cliOptions = await buildCliSessionOptions(
 				{
 					...parseArgs([source === "scope" ? "--models" : "--model", selector]),
-					offline: true,
+					intranetOffline: true,
 				},
 				[],
 				SessionManager.inMemory(),

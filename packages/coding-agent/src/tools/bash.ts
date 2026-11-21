@@ -1305,9 +1305,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			trace?: ShellTrace;
 		} = {},
 	): AgentToolResult<BashToolDetails> {
-		const name = this.session.asyncJobManager?.getJob(jobId)?.name;
 		const details: BashToolDetails = {
-			async: { state: "running", jobId, name, type: "bash" },
+			async: { state: "running", jobId, type: "bash" },
 		};
 		if (options.trace) details.trace = options.trace;
 		if (options.replies?.length) details.replies = [...options.replies];
@@ -1327,7 +1326,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (options.notices?.length) {
 			lines.push(...options.notices, "");
 		}
-		lines.push(formatBackgroundNotice(jobId, timeoutSec, name));
+		lines.push(formatBackgroundNotice(jobId, timeoutSec));
 		return {
 			content: [{ type: "text", text: lines.join("\n") }],
 			details,
@@ -1409,7 +1408,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const jobId = manager.register(
 			"bash",
 			label,
-			async ({ jobId, name, signal: runSignal, reportProgress }) => {
+			async ({ jobId, signal: runSignal, reportProgress }) => {
 				// Records the job's progress and shows it on the call's card: plain output
 				// while the call still waits on it, the job frame (`details.async`) once
 				// backgrounded, so the card keeps filling and settles with the job.
@@ -1474,14 +1473,14 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							notifier?.poll();
 						},
 						onPreview: text => {
-							void report(text, { output: text, async: { state: "running", jobId, name, type: "bash" } });
+							void report(text, { output: text, async: { state: "running", jobId, type: "bash" } });
 						},
 						onTrace: cfgDisplayShellVisualization.get(this.session.settings)
 							? trace => {
 									liveTrace = trace;
 									void report(latestText, {
 										output: latestText,
-										async: { state: "running", jobId, name, type: "bash" },
+										async: { state: "running", jobId, type: "bash" },
 									});
 								}
 							: undefined,
@@ -1527,7 +1526,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					}
 					await report(finalText, {
 						...latestProgressDetails,
-						async: { state: "completed", jobId, name, type: "bash" },
+						async: { state: "completed", jobId, type: "bash" },
 					});
 					return finalText;
 				} catch (error) {
@@ -1536,7 +1535,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					// Only a cancel aborts the job's own signal (deadlines end in a timed-out result).
 					await report(message, {
 						...latestProgressDetails,
-						async: { state: runSignal.aborted ? "cancelled" : "failed", jobId, name, type: "bash" },
+						async: { state: runSignal.aborted ? "cancelled" : "failed", jobId, type: "bash" },
 					});
 					throw error;
 				}

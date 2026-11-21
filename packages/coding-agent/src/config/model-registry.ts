@@ -1569,9 +1569,7 @@ export class ModelRegistry {
 			});
 		}
 		this.#keylessProviders = keylessProviders;
-		this.#discoverableProviders = this.#ignoreLocalModelConfig
-			? discoverableProviders
-			: discoverableProviders.filter(provider => provider.provider !== COMPANY_PROVIDER_ID);
+		this.#discoverableProviders = discoverableProviders;
 		this.#customModelOverlays = customModels;
 		this.#providerOverrides = this.#internProviderOverrides(overrides);
 		this.#modelOverrides = modelOverrides;

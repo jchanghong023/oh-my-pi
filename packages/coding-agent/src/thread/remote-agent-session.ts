@@ -72,6 +72,7 @@ import {
 	type AgentViewState,
 	isLocalAgentSession,
 	type LiveToolOutputPreview,
+	type LiveToolOutputProjection,
 	type LiveToolOutputStamp,
 	type ToolExecutionUpdateEvent,
 } from "../session/agent-session-handle";
@@ -545,8 +546,8 @@ export class RemoteAgentSession implements AgentViewSession {
 		return [...this.#activeUpdates.values()];
 	}
 
-	getLiveToolOutputPreview(): LiveToolOutputPreview | undefined {
-		return this.#liveToolOutput.preview();
+	getLiveToolOutputPreview(project?: LiveToolOutputProjection): LiveToolOutputPreview | undefined {
+		return this.#liveToolOutput.preview(project);
 	}
 
 	get modelStage(): ModelStage | null {

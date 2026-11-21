@@ -218,9 +218,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 				},
 				{
 					name: "Remaining work",
-					tasks: [
-						{ content: "remaining task", status },
-					],
+					tasks: [{ content: "remaining task", status }],
 				},
 			];
 			session.sessionManager.appendMessage(assistantMsg("Work remains."));
@@ -360,9 +358,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		setTodoClearDelay(1);
 		vi.useFakeTimers();
 
-		const phases: TodoPhase[] = [
-			{ name: "Implementation", tasks: [{ content: "done task", status: "completed" }] },
-		];
+		const phases: TodoPhase[] = [{ name: "Implementation", tasks: [{ content: "done task", status: "completed" }] }];
 		session.sessionManager.appendCustomEntry("user_todo_edit", { phases });
 		session.setTodoPhases(phases);
 		mode.setTodos(session.getTodoPhases());

@@ -114,7 +114,6 @@ export class RemoteAsyncJob implements AsyncJob {
 	readonly startTime: number;
 	readonly endTime?: number;
 	readonly label: string;
-	readonly name?: string;
 	readonly intent?: string;
 	readonly resultText?: string;
 	readonly errorText?: string;
@@ -139,7 +138,6 @@ export class RemoteAsyncJob implements AsyncJob {
 		this.startTime = wire.startTime;
 		this.endTime = wire.endTime;
 		this.label = wire.label;
-		this.name = wire.name;
 		this.intent = wire.intent;
 		this.resultText = wire.resultText;
 		this.errorText = wire.errorText;
@@ -252,7 +250,6 @@ export class RemoteAsyncJobManager implements AsyncJobManagerApi {
 			try {
 				return await run({
 					jobId: ctx.jobId,
-					name: ctx.name,
 					signal: fromWireSignal(ctx.signal),
 					reportProgress: ctx.reportProgress,
 					markRunning: () => ignoreSettle(ctx.markRunning()),

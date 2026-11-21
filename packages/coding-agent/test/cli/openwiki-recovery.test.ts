@@ -290,7 +290,7 @@ async function scenario(interrupt: boolean): Promise<void> {
 			const timer = setTimeout(() => run.proc.kill("SIGKILL"), 100_000);
 			try {
 				const [code, stdout, stderr] = await run.output;
-				return { code, output: stdout + stderr };
+				return { code, stdout, stderr, output: stdout + stderr };
 			} finally {
 				clearTimeout(timer);
 			}
@@ -337,7 +337,11 @@ async function scenario(interrupt: boolean): Promise<void> {
 			}
 		}
 		const first = await finish(initial);
-		if (!interrupt) expect(first.code, first.output).toBe(0);
+		if (!interrupt) {
+			expect(first.code, first.output).toBe(0);
+			expect(first.stdout).toMatch(/^OpenWiki: planning\b/m);
+			expect(first.stderr).not.toMatch(/^OpenWiki: /m);
+		}
 		const instructions = path.join(root, "openwiki", "INSTRUCTIONS.md");
 		expect(await readFile(instructions, "utf8")).toBe(interrupt ? "Keep my instructions.\n" : "");
 		if (interrupt) {
@@ -397,7 +401,9 @@ async function scenario(interrupt: boolean): Promise<void> {
 			const requestCount = requests.length;
 			const unchanged = await finish(launch("--update"));
 			expect(unchanged.code, unchanged.output).toBe(0);
-			expect(unchanged.output).toContain("OpenWiki is up to date.");
+			expect(unchanged.stdout).toMatch(/^OpenWiki: noop\b/m);
+			expect(unchanged.stdout).toContain("OpenWiki is up to date.");
+			expect(unchanged.stderr).not.toMatch(/^OpenWiki: /m);
 			expect(requests).toHaveLength(requestCount);
 			expect(await readFile(instructions, "utf8")).toBe("");
 			const lastUpdate = JSON.parse(await readFile(metadataPath, "utf8"));

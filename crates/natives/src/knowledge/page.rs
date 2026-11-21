@@ -660,6 +660,7 @@ pub fn knowledge_tool_page<'env>(
 	let mut selected = env.create_array(0)?;
 	let mut bodies = Vec::new();
 	let mut shown: HashMap<Vec<u16>, u32> = HashMap::new();
+	let mut duplicates = 0;
 	let mut cost = 0;
 	for index in 0..hits.len().min(10) {
 		let hit: Object = hits
@@ -688,7 +689,9 @@ pub fn knowledge_tool_page<'env>(
 			break;
 		}
 		cost += section_cost;
-		if earlier.is_none() {
+		if earlier.is_some() {
+			duplicates += 1;
+		} else {
 			shown.insert(text.to_vec(), index);
 		}
 		bodies.push(body);
@@ -699,15 +702,6 @@ pub fn knowledge_tool_page<'env>(
 	let technical: Option<Utf16String> = window.get_named_property("technicalName")?;
 	let cursor = continuation(&base, selected_count as usize, total)?;
 	let result = result_object(env, &window, selected, cursor.as_deref())?;
-	let pointer = b"\n(identical text to hit [";
-	let duplicates = bodies
-		.iter()
-		.filter(|body| {
-			body
-				.windows(pointer.len())
-				.any(|window| ascii_units_equal(window, pointer))
-		})
-		.count();
 	let mut text = header;
 	for body in &bodies {
 		append(&mut text, "\n\n");

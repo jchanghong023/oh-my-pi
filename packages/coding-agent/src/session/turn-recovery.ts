@@ -2,7 +2,6 @@ import {
 	type Agent,
 	AgentBusyError,
 	type AgentMessage,
-	type AgentPromptOptions,
 	isExcludedFromContext,
 	isSyntheticToolResultMessage,
 	lastContextIndex,
@@ -17,6 +16,7 @@ import type {
 	Model,
 	ModelUsageHealth,
 	TextContent,
+	ToolChoice,
 	AnthropicFallbackCreditHandle,
 } from "@oh-my-pi/pi-ai";
 import { calculateRateLimitBackoffMs, isBillingCapUsageLimit, parseRateLimitReason } from "@oh-my-pi/pi-ai";
@@ -940,7 +940,7 @@ export class TurnRecovery {
 	 *  caller mark the exact moment its own run went live. */
 	async promptAgentWithIdleRetry(
 		messages: AgentMessage[],
-		options?: AgentPromptOptions,
+		options?: { toolChoice?: ToolChoice },
 		onClaimed?: () => void,
 	): Promise<void> {
 		return this.#promptAgentWithIdleRetry(messages, options, onClaimed);
@@ -3557,7 +3557,7 @@ export class TurnRecovery {
 
 	async #promptAgentWithIdleRetry(
 		messages: AgentMessage[],
-		options?: AgentPromptOptions,
+		options?: { toolChoice?: ToolChoice },
 		onClaimed?: () => void,
 	): Promise<void> {
 		const deadline = Date.now() + 30_000;

@@ -25,13 +25,10 @@ import {
 	isProbablyBinaryHeader,
 	isEnoent,
 	logger,
-	materializeString,
 	parseHeifImageMimeType,
 	parseImageMetadata,
-	parseSpillUrl,
 	prompt,
 	readImageMetadata,
-	readLines,
 	untilAborted,
 } from "@oh-my-pi/pi-utils";
 import { peekFile } from "@oh-my-pi/pi-utils/peek-file";
@@ -47,12 +44,9 @@ import readSourcesDoc from "../prompts/tools/read-sources.md" with { type: "text
 import type { ToolSession } from "../sdk";
 import { McpResourceNotFoundError } from "../internal-urls/mcp-protocol";
 import { parseInternalUrl } from "../internal-urls/parse";
-import type { SpotlightDetails } from "@oh-my-pi/pi-tui/chat/spotlight";
-import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
-	enforceInlineByteCap,
 	type TruncationResult,
 	truncateHead,
 	truncateHeadBytes,
@@ -307,72 +301,6 @@ function deriveBufferedFileText(bytes: Buffer): BufferedFileText {
 		addressableLines,
 		endsWithNewline: bytes.length > 0 && bytes[bytes.length - 1] === LF_BYTE,
 	};
-}
-
-interface LogErrorMatches {
-	text: string;
-	truncated: boolean;
-}
-
-interface FilesystemReadPresentation {
-	mediaPath?: string;
-	logMatches?: LogErrorMatches | "";
-}
-
-function* logTextLines(text: string): Iterable<string> {
-	for (let start = 0; start < text.length;) {
-		const end = text.indexOf("\n", start);
-		if (end === -1) {
-			yield text.slice(start);
-			break;
-		}
-		yield text.slice(start, end);
-		start = end + 1;
-	}
-}
-
-async function findLogErrorLines(
-	pattern: string,
-	lines: Iterable<string> | AsyncIterable<Uint8Array>,
-	maxBytes: number,
-	signal: AbortSignal | undefined,
-	lineCount = Infinity,
-): Promise<LogErrorMatches | ""> {
-	let regex: RegExp;
-	try {
-		regex = new RegExp(pattern);
-	} catch {
-		throw new ToolError("Invalid regular expression in OMP_LOG_ERROR_REGEX");
-	}
-
-	const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
-	const matches: string[] = [];
-	let keptBytes = 0;
-	let truncated = false;
-	let lineNumber = 0;
-	for await (const line of lines) {
-		throwIfAborted(signal);
-		if (++lineNumber > lineCount) break;
-		let text = (typeof line === "string" ? line : decoder.decode(line)).replace(/\r$/, "");
-		if (lineNumber === 1) text = text.replace(/^\uFEFF/, "");
-		if (!regex.test(text) || truncated) continue;
-		const prefix = `${lineNumber}:`;
-		const remaining = maxBytes - keptBytes - Number(matches.length > 0);
-		const lineBytes =
-			prefix.length + text.length <= remaining ? prefix.length + Buffer.byteLength(text, "utf-8") : Infinity;
-		if (lineBytes > remaining) {
-			// Preserve a numbered preview when even the first match is wider than the budget.
-			if (matches.length === 0 && prefix.length <= remaining) {
-				matches.push(prefix + materializeString(truncateHeadBytes(text, remaining - prefix.length).text));
-			}
-			truncated = true;
-			continue;
-		}
-		keptBytes += lineBytes + Number(matches.length > 0);
-		matches.push(prefix + text);
-	}
-	throwIfAborted(signal);
-	return matches.length || truncated ? { text: matches.join("\n"), truncated } : "";
 }
 
 /** The line window a range read renders, with the budget accounting behind it. */
@@ -1040,57 +968,11 @@ async function splitQueryPathList(readPath: string, cwd: string): Promise<string
  * call and joins them again ({@link joinReadList}).
  */
 const kReadList = Symbol("read.list");
-const kLogErrorLines = Symbol("read.logErrorLines");
 
 interface ReadDetailsWithWindow extends ReadToolDetails {
-	spotlight?: SpotlightDetails;
 	[kSpotlightWindow]?: ShapeInput["read"];
 	[kSpotlightWide]?: true;
 	[kReadList]?: ReadList;
-	[kLogErrorLines]?: LogErrorMatches | "";
-}
-
-const LOG_ERROR_MATCHES_TRUNCATED = "[Log error matches truncated: output byte limit]";
-
-function textContentBytes(content: AgentToolResult<ReadToolDetails>["content"]): number {
-	let bytes = 0;
-	let textBlocks = 0;
-	for (const block of content) {
-		if (block.type === "text") bytes += Buffer.byteLength(block.text, "utf-8") + Number(textBlocks++ > 0);
-	}
-	return bytes;
-}
-
-function formatLogErrorPrefix(matches: LogErrorMatches, budget: number): string {
-	const maxBytes = budget - 2; // blank line between the matches and the requested output
-	if (!matches.truncated && Buffer.byteLength(matches.text, "utf-8") <= maxBytes) return `${matches.text}\n\n`;
-	const noticeBytes = LOG_ERROR_MATCHES_TRUNCATED.length;
-	if (maxBytes < noticeBytes) return "";
-	const head = truncateHeadBytes(matches.text, Math.max(0, maxBytes - noticeBytes - 1)).text;
-	return `${head ? `${head}\n` : ""}${LOG_ERROR_MATCHES_TRUNCATED}\n\n`;
-}
-
-function logOutputBytesRemaining(session: ToolSession, result: AgentToolResult<ReadToolDetails>): number {
-	const meta = result.details?.meta;
-	const maxBytes = meta?.pagedSource
-		? resolveInlineByteCapBudget(session.settings)
-		: resolveArtifactSpillThreshold(session.settings);
-	return maxBytes - textContentBytes(result.content) - Buffer.byteLength(formatOutputNotice(meta), "utf-8");
-}
-
-function prependLogErrorLines(
-	session: ToolSession,
-	result: AgentToolResult<ReadToolDetails>,
-): AgentToolResult<ReadToolDetails> {
-	const details: ReadDetailsWithWindow | undefined = result.details;
-	const matches = details?.[kLogErrorLines];
-	if (!matches || result.isError) return result;
-	const firstText = result.content.find((c): c is TextContent => c.type === "text");
-	if (!firstText) return result;
-	const prefix = formatLogErrorPrefix(matches, logOutputBytesRemaining(session, result));
-	if (!prefix) return result;
-	const content = result.content.map(c => (c === firstText ? { ...firstText, text: prefix + firstText.text } : c));
-	return { ...result, content };
 }
 
 /** A `;`/`,` path list as read: its note, then in order each part read, a nested list, or a part that failed. */
@@ -1193,16 +1075,7 @@ const REPEAT_READ_TRACKER_CAP = 64;
 function appendRepeatReadHint(session: ToolSession, path: string, result: AgentToolResult<ReadToolDetails>): void {
 	const notice = repeatReadNotice(session, path, result);
 	const block = result.content.find(entry => entry.type === "text");
-	if (!notice || !block) return;
-	const details: ReadDetailsWithWindow = (result.details ??= {});
-	if (
-		details[kLogErrorLines] &&
-		!details.raw &&
-		Buffer.byteLength(notice, "utf-8") + 2 > logOutputBytesRemaining(session, result)
-	) {
-		return;
-	}
-	block.text = appendReadNotice(block.text, notice, details, "\n\n");
+	if (notice && block) block.text = appendReadNotice(block.text, notice, (result.details ??= {}), "\n\n");
 }
 
 /** Counts `result` as a read of `path`; the loop-breaking hint when it repeats identical output often enough. */
@@ -1211,8 +1084,6 @@ function repeatReadNotice(
 	path: string,
 	result: AgentToolResult<ReadToolDetails>,
 ): string | undefined {
-	const details: ReadDetailsWithWindow | undefined = result.details;
-	if (details?.[kLogErrorLines] === "") return;
 	const block = result.content?.find(entry => entry.type === "text");
 	if (!block || typeof block.text !== "string" || block.text.length === 0 || result.isError) return;
 
@@ -1522,7 +1393,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			// lexical path instead, so the committed result matches an ordinary
 			// read exactly (hashline headers, source metadata).
 			const requestedPath = (context.args as ReadParams).path;
-			const inner = await speculativeTool.#executeInner(
+			const result = await speculativeTool.#executeInner(
 				context.toolCall.id,
 				{ ...(context.args as ReadParams), path: absolutePath },
 				signal,
@@ -1536,7 +1407,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				},
 				path.resolve(this.session.cwd, requestedPath),
 			);
-			const result = prependLogErrorLines(this.session, inner);
 			const snapshotHash = store.headHash(absolutePath);
 			if (!signal.aborted && !execution.discarded && snapshotHash) {
 				this.#speculativeReads.set(context.toolCall.id, {
@@ -1661,11 +1531,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						? { list: nested }
 						: {
 								part: {
-									request: {
-										path: part,
-										raw: partDetails?.[kLogErrorLines] === "" || partDetails?.raw,
-										read: partDetails?.[kSpotlightWindow],
-									},
+									request: { path: part, raw: partDetails?.raw, read: partDetails?.[kSpotlightWindow] },
 									result,
 									plain: partDetails?.[kSpotlightWide] ? () => readPart(part, true) : undefined,
 								},
@@ -2180,10 +2046,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (earlierEffects) await untilAborted(signal, earlierEffects);
 		const inner = await this.#executeInner(toolCallId, params, signal, onUpdate, toolContext);
 		const innerDetails: ReadDetailsWithWindow | undefined = inner.details;
-		if (innerDetails?.[kLogErrorLines] === "") return inner;
 		const list = innerDetails?.[kReadList];
 		const result = list
-			? await this.#shapeList(toolCallId, params, inner, list, signal, toolContext)
+			? await this.#shapeList(toolCallId, params, inner, list, signal)
 			: await shapeToolResult(
 					this.session,
 					toolCallId,
@@ -2215,9 +2080,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				);
 		const displayTarget = InternalUrlRouter.instance().locateSync(params.path);
 		if (displayTarget && result.details) result.details.displayTarget = displayTarget;
-		const presented = prependLogErrorLines(this.session, result);
-		appendRepeatReadHint(this.session, params.path, presented);
-		return presented;
+		appendRepeatReadHint(this.session, params.path, result);
+		return result;
 	}
 
 	/**
@@ -2231,16 +2095,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		inner: AgentToolResult<ReadToolDetails>,
 		list: ReadList,
 		signal: AbortSignal | undefined,
-		toolContext: AgentToolContext | undefined,
-	): Promise<AgentToolResult<ReadDetailsWithWindow>> {
+	): Promise<AgentToolResult<ReadToolDetails>> {
 		const read = joinReadList(list, part => part.result);
 		const hints = new Map<ShapePart<ReadToolDetails>, string>();
 		for (const part of read.parts) {
-			const notice = repeatReadNotice(
-				this.session,
-				part.request.path ?? "",
-				prependLogErrorLines(this.session, part.result),
-			);
+			const notice = repeatReadNotice(this.session, part.request.path ?? "", part.result);
 			// A raw part's notice goes to notes, not its bytes (`appendReadNotice`); a list keeps no part's notes.
 			if (notice && !part.request.raw) hints.set(part, notice);
 		}
@@ -2257,71 +2116,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			signal,
 		);
 		const results = new Map(read.parts.map((part, i) => [part, shaped.results[i]]));
-		const resultOf = (part: ShapePart<ReadToolDetails>) => results.get(part) ?? part.result;
-		let { content } = joinReadList(list, resultOf, hints);
-		let spotlight = shaped.spotlight;
-
-		// Keep numbered matches out of the body spill window: a match can belong to any part,
-		// including one omitted from both the head and the tail of a long result.
-		const threshold = resolveArtifactSpillThreshold(this.session.settings);
-		let remaining = threshold;
-		let evidence = "";
-		for (let i = 0; i < shaped.results.length; i++) {
-			const result = shaped.results[i];
-			const details: ReadDetailsWithWindow | undefined = result.details;
-			const matches = details?.[kLogErrorLines];
-			if (!matches || result.isError) continue;
-			const heading = `Log error matches in ${read.parts[i].request.path}:\n`;
-			const prefix = formatLogErrorPrefix(matches, remaining - Buffer.byteLength(heading, "utf-8"));
-			if (!prefix) continue;
-			const section = heading + prefix;
-			evidence += section;
-			remaining -= Buffer.byteLength(section, "utf-8");
-		}
-		let details = inner.details;
-		if (evidence) {
-			// The shared inline slack leaves room for the body preview and recovery link even
-			// if evidence alone fills the spill threshold.
-			const bodyBudget = Math.max(remaining, resolveInlineByteCapBudget(this.session.settings) - threshold);
-			const spillBody = !toolContext?.programmatic && textContentBytes(content) > bodyBudget;
-			if (spillBody) {
-				const texts: string[] = [];
-				const images: ImageContent[] = [];
-				for (const part of content) {
-					if (part.type === "text") texts.push(part.text);
-					else images.push(part);
-				}
-				const preview = await enforceInlineByteCap(texts.join("\n"), {
-					maxBytes: bodyBudget,
-					saveArtifact: async fullText => {
-						try {
-							const full = evidence + fullText;
-							if (toolContext?.sessionManager) return await toolContext.sessionManager.saveArtifact(full);
-							const artifact = await this.session.allocateOutputArtifact?.();
-							if (!artifact?.path || !artifact.id) return undefined;
-							await Bun.write(artifact.path, full);
-							return artifact.id;
-						} catch (error) {
-							logger.warn("Failed to spill read list to artifact", { error });
-							return undefined;
-						}
-					},
-				});
-				content = [...images, { type: "text", text: evidence + preview }];
-			} else {
-				const firstText = content.find((part): part is TextContent => part.type === "text");
-				if (firstText) firstText.text = evidence + firstText.text;
-			}
-			if (!toolContext?.programmatic) details = { ...details, meta: { ...details?.meta, completePage: true } };
-			if (spotlight?.original?.map) {
-				// Prefix rows have no source window; the independently elided body no longer has a valid map.
-				const map = spillBody
-					? undefined
-					: [...Array<null>(countTextLines(evidence) - 1).fill(null), ...spotlight.original.map];
-				spotlight = { ...spotlight, original: { ...spotlight.original, map } };
-			}
-		}
-		return { ...inner, content, details: spotlight ? { ...details, spotlight } : details };
+		const { content } = joinReadList(list, part => results.get(part) ?? part.result, hints);
+		const details = shaped.spotlight ? { ...inner.details, spotlight: shaped.spotlight } : inner.details;
+		return { ...inner, content, details };
 	}
 
 	async #executeInner(
@@ -2517,22 +2314,17 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		readPath: string,
 		options: FilesystemReadOptions,
 	): Promise<AgentToolResult<ReadToolDetails>> {
-		const presentation: FilesystemReadPresentation = {};
-		const result = await this.#readFilesystemPipeline(readPath, options, presentation);
-		if (result.isError) return result;
-		if (presentation.logMatches !== undefined) {
-			const details: ReadDetailsWithWindow = (result.details ??= {});
-			details[kLogErrorLines] = presentation.logMatches;
-		}
-		if (presentation.mediaPath === undefined) return result;
-		return { ...result, details: { ...result.details, mediaPath: presentation.mediaPath } };
+		const media: { path?: string } = {};
+		const result = await this.#readFilesystemPipeline(readPath, options, media);
+		if (media.path === undefined || result.isError) return result;
+		return { ...result, details: { ...result.details, mediaPath: media.path } };
 	}
 
-	/** {@link #readFilesystemPath}'s body; records media paths and matching log lines for the result. */
+	/** {@link #readFilesystemPath}'s body; sets `media.path` once the read is known to be a whole Tern-viewable file. */
 	async #readFilesystemPipeline(
 		readPath: string,
 		options: FilesystemReadOptions,
-		presentation: FilesystemReadPresentation,
+		media: { path?: string },
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		const {
 			located,
@@ -2822,7 +2614,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			(localTarget.sel === undefined || parsed.kind === "raw" || parsed.kind === "image") &&
 			ternShowsMedia(absolutePath)
 		) {
-			presentation.mediaPath = absolutePath;
+			media.path = absolutePath;
 		}
 
 		// Metadata inspection precedes whole-file snapshots and never starts analysis.
@@ -3024,59 +2816,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const buffered = wholeFileBytes ? deriveBufferedFileText(wholeFileBytes) : undefined;
 			if (buffered) onBufferedFile?.(buffered.bytes);
 
-			const programmaticRaw = programmatic && isRawSelector(parsed);
-			const logErrorPattern =
-				!programmaticRaw && ext === ".log" && parseSpillUrl(selectorBase) === undefined
-					? Bun.env.OMP_LOG_ERROR_REGEX
-					: undefined;
-			let logBridgeFailed = false;
-			if (logErrorPattern) {
-				// Choose the editor buffer before filtering, including for tail and multi-range selectors.
-				throwIfAborted(signal);
-				let bridgeText: string | undefined;
-				if (!located) {
-					try {
-						const pending = routeReadThroughBridge(this.session, absolutePath);
-						if (pending !== undefined) bridgeText = await untilAborted(signal, pending);
-					} catch (error) {
-						throwIfAborted(signal);
-						logBridgeFailed = true;
-						logger.warn("ACP fs readTextFile failed; falling back to disk", { path: absolutePath, error });
-					}
-				}
-				const lines =
-					bridgeText !== undefined
-						? logTextLines(bridgeText)
-						: (buffered?.rawSegments ?? readLines(Bun.file(absolutePath).stream(), signal));
-				const lineCount =
-					bridgeText === undefined && buffered
-						? buffered.rawSegments.length - Number(buffered.endsWithNewline || buffered.bytes.length === 0)
-						: undefined;
-				const maxBytes = resolveInlineByteCapBudget(this.session.settings);
-				const logMatches = await findLogErrorLines(logErrorPattern, lines, maxBytes, signal, lineCount);
-				presentation.logMatches = logMatches;
-				if (!logMatches) return toolResult<ReadToolDetails>({}).text("执行成功\n退出码 0").done();
-				if (bridgeText !== undefined) {
-					const bridgeResult = await buildInMemorySelectorResult(this.session, bridgeText, parsed, {
-						details: markMarkdownContentType(
-							this.session,
-							{ resolvedPath: absolutePath, suffixResolution },
-							absolutePath,
-						),
-						sourcePath: absolutePath,
-						entityLabel: "file",
-					});
-					if (suffixResolution) {
-						const firstText = bridgeResult.content.find((c): c is TextContent => c.type === "text");
-						if (firstText) firstText.text = prependSuffixResolutionNotice(firstText.text, suffixResolution);
-					}
-					return bridgeResult;
-				}
-			}
-
 			// Unbounded schemes (instruction documents) read whole: no summary, no result limits.
 			// So does a program's `:raw` read: it parses the bytes, so a page or a cut line would corrupt them.
-			if (located?.spec.unbounded || programmaticRaw) {
+			if (located?.spec.unbounded || (programmatic && isRawSelector(parsed))) {
 				const text = buffered?.strippedText ?? (await Bun.file(absolutePath).text());
 				return buildInMemorySelectorResult(this.session, text, parsed, {
 					details: { resolvedPath: renderAbsolutePath },
@@ -3088,7 +2830,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 
 			if (
-				!logBridgeFailed &&
 				parsed.kind === "none" &&
 				cfgReadSummarizeEnabled.get(this.session.settings) &&
 				!nativeShapingOff(this.session) &&
@@ -3146,13 +2887,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 
 			if (!content) {
-				const diskSignal = logErrorPattern ? signal : undefined;
-				const { sel, seekTo: tailSeekTo } = await resolveFileTailSelector(
-					parsed,
-					absolutePath,
-					buffered,
-					diskSignal,
-				);
+				const { sel, seekTo: tailSeekTo } = await resolveFileTailSelector(parsed, absolutePath, buffered);
 				if (sel.kind === "lines" && sel.ranges.length > 1) {
 					const multiResult = await this.#readLocalFileMultiRange(
 						absolutePath,
@@ -3163,8 +2898,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						displayMode,
 						suffixResolution,
 						selectorBase,
-						diskSignal,
-						!located && !logErrorPattern, // filtered logs already selected disk or the ACP buffer
+						undefined, // plain-file read: deterministic and fast, never abort mid-read
+						!located, // located URLs read their backing file directly, as their handlers do
 					);
 					if (multiResult.bridgeResult) return multiResult.bridgeResult;
 					content = [{ type: "text", text: multiResult.outputText }];
@@ -3177,8 +2912,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// Try ACP bridge first — editor's in-memory buffer is source of truth.
 					// Request full text so local range rendering keeps normal context and line numbers.
 					// Located URLs read their backing file directly, as their handlers do.
-					const bridgePromise =
-						located || logErrorPattern ? undefined : routeReadThroughBridge(this.session, absolutePath);
+					const bridgePromise = located ? undefined : routeReadThroughBridge(this.session, absolutePath);
 					if (bridgePromise !== undefined) {
 						try {
 							const bridgeText = await bridgePromise;
@@ -3278,7 +3012,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 									lineCount,
 									maxBytes,
 									selectedLimit,
-									diskSignal,
+									undefined,
 									{
 										stopScanAfterCollect: fileSize > SNAPSHOT_MAX_BYTES,
 										seek: tailSeekTo?.(firstLine),

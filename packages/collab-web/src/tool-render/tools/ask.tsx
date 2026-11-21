@@ -54,7 +54,7 @@ function formOutline(html: string): { headings: string[]; fields: number } {
 		html,
 	);
 	const caption = first ? htmlText(first[1] ?? "") : "";
-	return { headings: caption ? [caption] : [...names].map(htmlText), fields: names.size };
+	return { headings: caption ? [caption] : [], fields: names.size };
 }
 
 /** Answers from `result.details`; null when the result carries none (error, cancel, older sessions). */
@@ -68,7 +68,7 @@ function answersOf(details: Record<string, unknown> | null): AskAnswer[] | null 
 		const answer = str(entry.answer);
 		if (question !== null && answer !== null) out.push({ name: name ?? "", question, answer });
 	}
-	return out.length > 0 ? out : null;
+	return out;
 }
 
 /** Valid selected-option notes from persisted details; ignore malformed entries. */

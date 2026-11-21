@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
-import { renderLoopGoalPrompt } from "@oh-my-pi/pi-coding-agent/modes/loop-goal";
-import type {
-	InteractiveModeContext,
-	PreparedLoopPrompt,
-	SubmittedUserInput,
-} from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { InteractiveModeContext, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 
 function createLoopContext(options: {
@@ -14,7 +9,6 @@ function createLoopContext(options: {
 	extensionCommand?: string;
 	customCommand?: string;
 	inlineBody?: string;
-	loopGoalMode?: boolean;
 	onInputCallback?: (input: SubmittedUserInput) => void;
 }) {
 	const sessionId = crypto.randomUUID();
@@ -67,25 +61,17 @@ function createLoopContext(options: {
 		handleDevInput: async () => false,
 		isDevInputRoute: () => false,
 		loopModeEnabled: true,
-		loopGoalMode: options.loopGoalMode ?? false,
 		get loopPrompt() {
 			return loopPrompt;
 		},
 		handleLoopCommand: async () => options.inlineBody,
-		prepareLoopPrompt(text: string, capture: boolean): PreparedLoopPrompt {
+		captureLoopPromptOnAdmission(text: string): (() => boolean) | undefined {
 			// Local commands may be admitted without starting a model turn.
 			const name = text.startsWith("/") ? text.slice(1).split(" ", 1)[0] : undefined;
-			if (name && (extensionRunner?.getCommand(name) || name === options.customCommand)) return { text };
-			if (options.loopGoalMode) text = renderLoopGoalPrompt(text);
-			if (!capture) {
-				return { text };
-			}
-			return {
-				text,
-				onPromptAdmitted: () => {
-					setLoopPrompt(text);
-					return true;
-				},
+			if (name && (extensionRunner?.getCommand(name) || name === options.customCommand)) return undefined;
+			return () => {
+				setLoopPrompt(text);
+				return true;
 			};
 		},
 		setLoopPrompt,
@@ -147,35 +133,6 @@ describe("loop mode interjections", () => {
 		expect(getLoopPrompt()).toBe("new loop body");
 		expect(onInputCallback).toHaveBeenCalledWith(expect.objectContaining({ text: "new loop body" }));
 		expect(prompt).not.toHaveBeenCalled();
-	});
-
-	it("dispatches the prepared inline /loopgoal body and captures it at admission", async () => {
-		const { ctx, prompt, getLoopPrompt } = createLoopContext({
-			isStreaming: true,
-			inlineBody: "inline loop body",
-			loopGoalMode: true,
-		});
-		const entered = Promise.withResolvers<PromptOptions | undefined>();
-		const finish = Promise.withResolvers<boolean>();
-		prompt.mockImplementationOnce((_text, options) => {
-			entered.resolve(options);
-			return finish.promise;
-		});
-		const controller = new InputController(ctx);
-		controller.setupEditorSubmitHandler();
-
-		const submitted = ctx.editor.onSubmit?.("/loopgoal 3 inline loop body");
-		const options = await entered.promise;
-		const preparedText = renderLoopGoalPrompt("inline loop body");
-		try {
-			expect(prompt).toHaveBeenCalledWith(preparedText, expect.objectContaining({ streamingBehavior: "steer" }));
-			expect(getLoopPrompt()).toBe("original loop prompt");
-			options?.onPromptAdmitted?.();
-			expect(getLoopPrompt()).toBe(preparedText);
-		} finally {
-			finish.resolve(true);
-			await submitted;
-		}
 	});
 
 	it("records an inline /loop prompt queued during compaction", async () => {

@@ -283,6 +283,16 @@ describe("TodoLoop file parsing", () => {
 		["short closing fence", "````\n```\n- [ ] 1 Hidden", /unclosed code fence/],
 		["wrong closing fence", "```\n~~~\n- [ ] 1 Hidden", /unclosed code fence/],
 		["unclosed HTML comment", "## G\n- [x] A\n<!--\n- [ ] B\n", /unclosed HTML comment at line 3/],
+		[
+			"only tasks hidden by an inline HTML comment",
+			"Example plan: <!--\n- [ ] Hidden task\n-->",
+			/no executable tasks/,
+		],
+		[
+			"only tasks hidden by consecutive HTML comments",
+			"<!-- Comment A\n--> <!-- Comment B --> <!-- Comment C\n- [ ] Hidden task\n-->",
+			/no executable tasks/,
+		],
 		["no tasks", "# Background\nOnly prose", /no executable tasks/],
 	] as const) {
 		it(`rejects ${name} through the file consumer`, async () => {
@@ -424,8 +434,7 @@ describe("TodoLoop Markdown format and update compatibility", () => {
 			"- [~] Not a task",
 			"```markdown",
 			"-->", // A fence inside a comment must not hide the following real task.
-			"- [ ] Prepare configuration",
-			"  <!--",
+			"- [ ] Prepare configuration <!--",
 			"  - [ ] Not a nested task",
 			"  -->",
 			"## Deliver",
@@ -442,6 +451,11 @@ describe("TodoLoop Markdown format and update compatibility", () => {
 		const after = await readTodoLoop(filePath);
 		validateTodoLoopChange(before, after, "1");
 		expect(after.groups.find(group => group.tasks.some(task => !task.done))?.title).toBe("Deliver");
+	});
+
+	it("does not treat a literal comment opener in inline code or an escape as hiding tasks", () => {
+		const snapshot = parseTodoLoop("- [ ] Describe `<!--` and \\<!--\n- [ ] Verify entry");
+		expect(snapshot.tasks.map(task => task.text)).toEqual(["Describe `<!--` and \\<!--", "Verify entry"]);
 	});
 
 	it("allows appending a record at EOF without requiring an extra trailing newline", async () => {

@@ -54,35 +54,7 @@ describe("job renderer task-result preview", () => {
 		await initTheme();
 	});
 
-	it("shows finite Bash names beside their original IDs in ANSI and native job snapshots", () => {
-		for (const status of ["running", "completed", "failed", "cancelled"] as const) {
-			const result = {
-				content: [{ type: "text", text: "" }],
-				details: {
-					op: "wait" as const,
-					jobs: [
-						{
-							id: "bg_7",
-							name: "Owner Bash 4",
-							type: "bash" as const,
-							status,
-							label: "cargo test --workspace",
-							durationMs: 500,
-						},
-					],
-				},
-			};
-			const options = { expanded: true, isPartial: false };
-			const ansi = Bun.stripANSI(waitToolRenderer.renderResult(result, options, theme).render(160).join("\n"));
-			const native = JSON.stringify(waitToolRenderer.describeResult(result, options));
-			for (const rendered of [ansi, native]) {
-				expect(rendered).toContain("Owner Bash 4");
-				expect(rendered).toContain("bg_7");
-			}
-		}
-	});
-
-	it("omits only matching Bash outcomes from collapsed wait rows", () => {
+	it("keeps collapsed job snapshots but does not repeat output owned by an original Bash card", () => {
 		const result = {
 			content: [{ type: "text", text: "original wait output" }],
 			details: {
@@ -109,11 +81,14 @@ describe("job renderer task-result preview", () => {
 		};
 		const options = { expanded: false, isPartial: false, settledBashJobs: new Map([["bg_1", "failed"]]) };
 		const collapsed = Bun.stripANSI(waitToolRenderer.renderResult(result, options, theme).render(120).join("\n"));
-		expect(collapsed).not.toContain("bg_1");
+		expect(collapsed).toContain("bg_1");
+		expect(collapsed).not.toContain("first error");
 		expect(collapsed).toContain("bg_2");
 		expect(collapsed).toContain("second error");
 		const native = JSON.stringify(waitToolRenderer.describeResult(result, options));
-		expect(native).not.toContain("bg_1");
+		expect(native).toContain("bg_1");
+		expect(native).not.toContain("first error");
+		expect(native).toContain("second error");
 		expect(native).toContain("bg_2");
 		const expanded = Bun.stripANSI(
 			waitToolRenderer
@@ -129,7 +104,7 @@ describe("job renderer task-result preview", () => {
 				.render(120)
 				.join("\n"),
 		);
-		expect(unmatched).toContain("bg_1");
+		expect(unmatched).toContain("first error");
 		const diagnostic = {
 			...result,
 			details: { ...result.details, jobs: [{ ...result.details.jobs[0]!, artifactError: "write" as const }] },

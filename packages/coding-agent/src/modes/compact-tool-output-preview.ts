@@ -21,7 +21,7 @@ import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { LocalAgentSessionEvent } from "../session/agent-session";
 import type { LiveToolOutputPreview, LiveToolOutputSnapshot } from "../session/agent-session-handle";
-import { isToolOutputRow, toolOutputSource } from "../session/live-tool-output-text";
+import { isToolOutputRow, mayBeCoveredByFileDiff, toolOutputSource } from "../session/live-tool-output-text";
 import { formatPathRelativeToCwd } from "../tools/path-utils";
 import { compactToolPreviewInfo } from "./compact-thinking-preview";
 import { cfgDisplayMode } from "./settings";
@@ -154,15 +154,15 @@ export class CompactToolOutputPreview implements Component {
 			event.type === "tool_execution_update" ||
 			event.type === "tool_execution_end"
 		) {
-			this.#source();
+			this.#source(this.ctx.ui.terminal.columns);
 		}
 	}
 
 	restore(): void {
-		this.#source();
+		this.#source(this.ctx.ui.terminal.columns);
 	}
 
-	#source(): LiveToolOutputPreview | undefined {
+	#source(width: number): LiveToolOutputPreview | undefined {
 		const session = this.ctx.viewSession;
 		const sessionId = session.sessionManager.getSessionId();
 		if (session !== this.#session || sessionId !== this.#sessionId) {
@@ -170,7 +170,9 @@ export class CompactToolOutputPreview implements Component {
 			this.#session = session;
 			this.#sessionId = sessionId;
 		}
-		const selected = session.getLiveToolOutputPreview();
+		const selected = session.getLiveToolOutputPreview(
+			this.coveredDiff ? ({ call, text }) => this.#withoutCoveredOutput(call, text, width) : undefined,
+		);
 		const deadline = selected?.call.expiresAt;
 		if (this.#deadline !== deadline) {
 			clearTimeout(this.#timer);
@@ -202,16 +204,11 @@ export class CompactToolOutputPreview implements Component {
 		};
 	}
 
-	#withoutCoveredOutput(
-		call: LiveToolOutputSnapshot,
-		output: string,
-		width: number,
-		details: Record<string, unknown> | undefined,
-	): string {
-		if (!this.coveredDiff || call.terminalAt === undefined || call.result?.isError) return output;
-		if (!details || details.cancelled === true || details.xdev) return output;
+	#withoutCoveredOutput(call: LiveToolOutputSnapshot, output: string, width: number): string {
+		if (!this.coveredDiff || call.terminalAt === undefined || !mayBeCoveredByFileDiff(call)) return output;
+		const { details } = toolOutputSource(call.toolName, call.result);
+		if (!details) return output;
 		const name = call.toolName;
-		if (name !== "write" && name !== "edit" && name !== "apply_patch") return output;
 
 		const cwd = this.ctx.viewSession.sessionManager.getCwd();
 		const targets = new Map<string, string>();
@@ -289,18 +286,14 @@ export class CompactToolOutputPreview implements Component {
 	}
 
 	#header(width: number): PreviewHeader | undefined {
-		const selected = this.#source();
+		const selected = this.#source(width);
 		if (cfgDisplayMode.get(this.ctx.settings) !== "compact" || !selected || width < 1) return undefined;
 		const height = Math.max(0, Math.min(6, Math.floor(this.availableRows())));
 		if (height === 0) return undefined;
 		const inset = Math.min(getPaddingX(1), width - 1);
 		const contentWidth = width - inset;
-		const { call } = selected;
+		const { call, text: output } = selected;
 		const source = toolOutputSource(call.toolName, call.result);
-		const output = source.dispatch
-			? selected.text
-			: this.#withoutCoveredOutput(call, selected.text, width, source.details);
-		if (!output) return undefined;
 		const info = compactToolPreviewInfo(call.toolName, call.args, call.intent, call.result);
 		const { name: toolName, details } = source;
 		const job = isRecord(details?.async) ? details.async : undefined;
@@ -314,10 +307,7 @@ export class CompactToolOutputPreview implements Component {
 						: "completed";
 		const name = singleLine(info.name);
 		const nameWidth = visibleWidth(name);
-		const jobIdentity = [job?.name, job?.jobId]
-			.map(value => (typeof value === "string" ? singleLine(value) : ""))
-			.filter(Boolean)
-			.join(" · ");
+		const jobIdentity = typeof job?.jobId === "string" ? singleLine(job.jobId) : "";
 		const word = PREVIEW_STATE_WORD[state];
 		const wordWidth = visibleWidth(word);
 		const separator = " · ";

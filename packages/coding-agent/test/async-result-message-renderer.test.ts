@@ -8,7 +8,7 @@ import type { TUI } from "@oh-my-pi/pi-tui";
 
 const DIAGNOSTIC = "Missing required result field";
 
-function renderReplay(renderer: MessageRenderer): string {
+function renderReplay(renderer: MessageRenderer, toolActivityVisible = true): string {
 	const builder = new ChatTranscriptBuilder({
 		ui: { requestRender: vi.fn() } as unknown as TUI,
 		cwd: process.cwd(),
@@ -25,6 +25,7 @@ function renderReplay(renderer: MessageRenderer): string {
 	builder.rebuild([
 		{ type: "message", id: "e1", parentId: null, timestamp: new Date(0).toISOString(), message } as never,
 	]);
+	builder.container.setToolActivityVisible(toolActivityVisible);
 	return builder.container.children.map(child => child.render(120).join("\n")).join("\n");
 }
 
@@ -33,8 +34,8 @@ beforeAll(async () => {
 });
 
 describe("async-result message renderer (#14131)", () => {
-	it("lets a registered renderer own the card", () => {
-		const rendered = renderReplay(() => new Text("EXTENSION CARD"));
+	it("keeps the registered card when transcript tool activity is hidden", () => {
+		const rendered = renderReplay(() => new Text("EXTENSION CARD"), false);
 		expect(rendered).toContain("EXTENSION CARD");
 		expect(rendered).not.toContain(DIAGNOSTIC);
 	});

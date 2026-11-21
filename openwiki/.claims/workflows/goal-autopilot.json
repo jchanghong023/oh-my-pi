@@ -109,20 +109,6 @@
       ]
     },
     {
-      "id": "claim_f2ba7016398d4f2b8319251605e74b2e",
-      "statement": "续跑守卫通过工具调用和结果摘要检测重复活动；成功非空但无工具活动时每段至多一次强制工具纠偏，失败则停止并提示未完成。",
-      "evidence": [
-        {
-          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L179-L182",
-          "version": "repo-lines-v1:sha256:aab7c424134bcffd86611dda249fc25846cbd00ff24f10db18a9e2093f9166f6:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZjk2Y2Q3MjMyNTQ1ODk3Njg0YTM5YmFhMmMxMDI3YTAyNjdkYWE2YjFmNDhhY2Y1MTM5MDNmYzQ3ZDUxNjE1OCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiN2MyMDg4MmVlNGEzZTMyODMxYzQ5YTY3Zjg1ZjI1YjhmMmU2YWY4ZDYxMDAzMzM3MmY1MzMwNzE4MDc5M2Y1MyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZDMzYzJhM2JmYThiYWE2ZWViNDJkZDdiYjk1NTQzNTdkM2ExMmI0ZjM4MmYxN2ZiMDM2ZWZhYWIxNzcyY2EyOSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDMyNjk0MDk5YzAwY2Y4Y2NiYTJmOTIyYTE1ZWNmMjgyYTMyM2YzMmZhYTc3ZGJlNzE5YzhhMjRmMzdhNGIxNyJ9"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/goals/state.ts#L70-L165",
-          "version": "repo-lines-v1:sha256:01c361881483f7a68604216bb9cb99e12b6805fdd4803c3bdfe7c80bd2481b40:eyJzZWxlY3RlZExpbmVDb3VudCI6OTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU0YmE3MjYzYzEwODcwMmE1NWNjOWRjZjU4MWYxMTMzMzc4Mjk3NmRlN2U2MDRkMTIxNWU2ZDhjZjUxYTA4ZmYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
-        }
-      ]
-    },
-    {
       "id": "claim_6ddfe5dff2114d5fb77bdfc5f8132733",
       "statement": "活动 Goal 的用户 follow-up 在当前完整工具批次结束后可按队列提升，不中断当前工具批次。",
       "evidence": [
@@ -216,7 +202,7 @@
     },
     {
       "id": "claim_c367c43c39e9412fb6bfeb790cf97d76",
-      "statement": "局部回归测试覆盖 Goal 计量、续跑保护和运行中压缩；规格要求的真实入口与协议验收不等同于局部测试证明模型质量或费用节省。",
+      "statement": "局部回归测试覆盖 Goal 计量和运行中压缩；规格要求的真实入口与协议验收不等同于局部测试证明模型质量或费用节省。",
       "evidence": [
         {
           "resource": "repo://openspec/specs/goal-autopilot/spec.md#L191-L219",
@@ -225,10 +211,6 @@
         {
           "resource": "repo://packages/coding-agent/test/agent-session-goal-midrun-compaction.test.ts",
           "version": "repo-file-v1:sha256:72ea5366dfdb46ed82a732588e02ff22bd7e2045b0d04b2ebb3a4fc41fd278e6"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/goals/goal-continuation-guard.test.ts",
-          "version": "repo-file-v1:sha256:51b5a890eb7f90af096a541ddeff3d942a191a1939d5741b4f1ef32a8b4c37d1"
         },
         {
           "resource": "repo://packages/coding-agent/test/goals/goal-runtime.test.ts",

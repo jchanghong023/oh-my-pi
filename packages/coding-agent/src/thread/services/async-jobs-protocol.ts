@@ -43,7 +43,6 @@ export interface AsyncJobWire {
 	readonly startTime: number;
 	readonly endTime?: number;
 	readonly label: string;
-	readonly name?: string;
 	readonly intent?: string;
 	readonly resultText?: string;
 	readonly errorText?: string;
@@ -103,7 +102,6 @@ export interface WireRegisterOptions {
 /** The run context main hands a worker job body. */
 export interface WireRunContext {
 	readonly jobId: string;
-	readonly name?: string;
 	/** Aborts with the wire form of the job's abort reason (see {@link fromWireReason}). */
 	readonly signal: AbortSignal;
 	readonly reportProgress: (text: string, details?: AsyncJobDetails) => Promise<void>;

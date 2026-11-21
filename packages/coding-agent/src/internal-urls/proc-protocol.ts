@@ -244,7 +244,7 @@ export class ProcProtocolHandler implements ProtocolHandler {
 							: `in ${formatDuration(job.endTime - job.startTime)}`;
 					const progress = runningTaskProgressSuffix(snapshots[index], { duration: false });
 					const intent = job.intent ? `${job.intent} — ` : "";
-					return `${job.id} [${job.type}] ${jobState(job)} ${duration} — ${job.name ? `${job.name} — ` : ""}${intent}${job.label.replace(/\s+/g, " ")}${progress}`;
+					return `${job.id} [${job.type}] ${jobState(job)} ${duration} — ${intent}${job.label.replace(/\s+/g, " ")}${progress}`;
 				}),
 				...runningAgentsOutsideJobs(session).map(
 					agent =>
@@ -279,7 +279,6 @@ export class ProcProtocolHandler implements ProtocolHandler {
 			const lines = [
 				`${job.id} [${job.type}] — ${jobState(job)} — ${job.intent ? `${job.intent} — ` : ""}${job.label}${runningTaskProgressSuffix(snapshot, { duration: true })}`,
 			];
-			if (job.name) lines.push(`Name: ${job.name}`);
 			if (job.resultText) lines.push(job.resultText);
 			if (job.errorText) lines.push(`Error: ${job.errorText}`);
 			if (job.status === "running") {

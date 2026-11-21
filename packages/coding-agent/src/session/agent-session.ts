@@ -28,7 +28,6 @@ import {
 	AgentBusyError,
 	type AgentEvent,
 	type AgentMessage,
-	type AgentPromptOptions,
 	type AgentPreModelCallStop,
 	type AgentState,
 	type AgentTool,
@@ -338,6 +337,7 @@ import {
 	type AgentViewSession,
 	isLocalAgentSession,
 	type LiveToolOutputPreview,
+	type LiveToolOutputProjection,
 	type LiveToolOutputSnapshot,
 } from "./agent-session-handle";
 import { LatestTurnFileChanges, type TurnFileChanges } from "./latest-turn-file-changes";
@@ -6570,8 +6570,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return [...this.#activeToolExecutionUpdates.values()];
 	}
 
-	getLiveToolOutputPreview(): LiveToolOutputPreview | undefined {
-		return this.#liveToolOutput.preview();
+	getLiveToolOutputPreview(project?: LiveToolOutputProjection): LiveToolOutputPreview | undefined {
+		return this.#liveToolOutput.preview(project);
 	}
 
 	getLiveToolOutputCall(toolCallId: string): LiveToolOutputSnapshot | undefined {
@@ -10090,27 +10090,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			onPromptQueued?: PromptOptions["onPromptQueued"];
 		},
 	): Promise<boolean> {
-		if (message.customType !== "goal-tool-recovery") {
-			return this.#admitSubmission(() => this.#promptCustomMessage(message, options));
-		}
-		try {
-			return await this.#admitSubmission(() => this.#promptCustomMessage(message, options));
-		} catch (error) {
-			const state = this.getLocalGoalModeState();
-			if (
-				state?.enabled &&
-				state.mode === "active" &&
-				state.goal.status === "active" &&
-				!(error instanceof Error && error.name === "AbortError")
-			) {
-				this.emitNotice(
-					"warning",
-					"Goal automatic continuation stopped: the forced-tool recovery could not run. The goal is still unfinished.",
-					"goal",
-				);
-			}
-			throw error;
-		}
+		return this.#admitSubmission(() => this.#promptCustomMessage(message, options));
 	}
 
 	async #promptCustomMessage<T = unknown>(
@@ -10180,23 +10160,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		outcome: PromptDispatchOutcome,
 		followUps: PromptFollowUps | undefined,
 	): Promise<boolean> {
-		if (message.customType === "goal-tool-recovery") {
-			const state = this.getLocalGoalModeState();
-			if (!state?.enabled || state.mode !== "active" || state.goal.status !== "active") {
-				this.#reportDroppedCustomPrompt(message, options, followUps);
-				return false;
-			}
-			const toolName = this.getActiveToolNames()[0];
-			if (this.isStreaming || options?.queueOnly || !toolName || !buildNamedToolChoice(toolName, this.model)) {
-				this.emitNotice(
-					"warning",
-					"Goal automatic continuation stopped: forced-tool recovery is unavailable for the current model or active tool set. The goal is still unfinished.",
-					"goal",
-				);
-				this.#reportDroppedCustomPrompt(message, options, followUps);
-				return false;
-			}
-		}
 		// A prompt that lands on a queue reaches the agent there: its follow-ups queue right behind it.
 		const onPromptQueuedAdmitted = followUps
 			? () => {
@@ -10853,12 +10816,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				);
 			}
 
-			const agentPromptOptions: AgentPromptOptions | undefined =
-				message.role === "custom" && message.customType === "goal-tool-recovery"
-					? { toolChoiceOnce: "required" }
-					: options?.toolChoice
-						? { toolChoice: options.toolChoice }
-						: undefined;
+			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
 			// Recheck eligibility and deduplication: committed maintenance may
 			// already have restored the Goal context while its preview was pending.
 			this.#appendGoalAutoOrchestrateContext(undefined, options?.goalAutoOrchestrateInitialId);

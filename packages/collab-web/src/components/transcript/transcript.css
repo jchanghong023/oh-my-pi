@@ -38,7 +38,6 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	-moz-user-select: none;
 	user-select: none;
 }
 
@@ -73,6 +72,7 @@
 .tr-body > .tr-md {
 	align-self: stretch;
 }
+
 
 .tr-row--custom .tr-body {
 	color: var(--fg-muted);
@@ -122,15 +122,15 @@
 }
 
 .tr-chip--err {
-	border-color: rgba(var(--err-rgb), 0.5);
+	border-color: color-mix(in oklch, var(--err) 50%, var(--border));
 	color: var(--err);
-	background: rgba(var(--err-rgb), 0.1);
+	background: color-mix(in oklch, var(--err) 10%, transparent);
 }
 
 .tr-chip--warn {
-	border-color: rgba(var(--warn-rgb), 0.5);
+	border-color: color-mix(in oklch, var(--warn) 50%, var(--border));
 	color: var(--warn);
-	background: rgba(var(--warn-rgb), 0.1);
+	background: color-mix(in oklch, var(--warn) 10%, transparent);
 }
 
 .tr-stop {
@@ -199,7 +199,6 @@
 	margin: 16px 0;
 	color: var(--fg-faint);
 	font-size: 12px;
-	-moz-user-select: none;
 	user-select: none;
 }
 
@@ -367,7 +366,8 @@
 	font-size: 12.5px;
 }
 
-/* Emergency wrapping keeps long URLs and identifiers from expanding the table. */
+/* Table cells need `anywhere` so long URLs/identifiers contribute a shrinkable
+ * intrinsic width instead of expanding under the transcript's clipped overflow. */
 .tr-md th,
 .tr-md td {
 	padding: 3px 8px;

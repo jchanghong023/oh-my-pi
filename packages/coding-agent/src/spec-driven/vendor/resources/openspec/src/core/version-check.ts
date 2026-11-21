@@ -170,7 +170,7 @@ interface HttpsResponse {
  */
 function httpsGet(
   url: URL,
-  options: { deadline: number; followRedirects: boolean }
+  options: { deadline: number; followRedirects: boolean; allowedOrigin?: string }
 ): Promise<HttpsResponse | null> {
   return new Promise((resolve) => {
     let settled = false;
@@ -193,6 +193,12 @@ function httpsGet(
     let activeRequest: http.ClientRequest | undefined;
 
     const send = (target: URL): void => {
+      // OMP pins the first request and every redirect to its configured mirror
+      // origin in offline mode. Otherwise redirects may cross origins over TLS.
+      if (options.allowedOrigin && target.origin !== options.allowedOrigin) {
+        finish(null);
+        return;
+      }
       const request = (target.protocol === 'http:' ? http : https).get(
         target,
         { timeout: REQUEST_TIMEOUT_MS },
@@ -214,12 +220,8 @@ function httpsGet(
             redirectsLeft -= 1;
             try {
               const next = new URL(location, target);
-              // Cross-host is allowed - that is the whole point of following a
-              // redirect for a mirror or corporate front-end - but never off
-              // TLS: a MITM on a cleartext hop would control the "newer
-              // version" answer, and the reply cannot install anything on its
-              // own (canSelfUpgrade refuses a non-default registry, and the
-              // version is re-validated against a strict pattern).
+              // Never leave TLS: a cleartext hop would let anyone on the path
+              // control the "newer version" answer.
               if (next.protocol === 'https:') {
                 send(next);
                 return;
@@ -292,6 +294,7 @@ async function fetchLatestVersion(): Promise<string | null> {
   const response = await httpsGet(url, {
     deadline: Date.now() + REQUEST_TIMEOUT_MS,
     followRedirects: true,
+    allowedOrigin: process.env.OMP_OPENSPEC_REGISTRY_ORIGIN,
   });
   if (!response || response.status !== 200) return null;
   try {

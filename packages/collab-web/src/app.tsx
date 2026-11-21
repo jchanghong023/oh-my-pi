@@ -3,13 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentDrawer } from "./components/agents/AgentDrawer";
 import { AgentsPanel } from "./components/agents/AgentsPanel";
 import { Banners } from "./components/shell/Banners";
-import { Composer, type ComposerEditorUpdate } from "./components/shell/Composer";
+import { Composer } from "./components/shell/Composer";
 import { ConnectScreen } from "./components/shell/ConnectScreen";
 import { HeaderBar } from "./components/shell/HeaderBar";
 import { Toasts } from "./components/shell/Toasts";
 import { Transcript } from "./components/transcript/Transcript";
-import { GuestClient, guestAgentPort, guestComposerPort } from "./lib/client";
-import type { AgentPort, ComposerPort, GuestSnapshot } from "./lib/client";
+import { GuestClient } from "./lib/client";
 import { useGuestSnapshot } from "./lib/use-guest";
 import type { ToolRenderHost } from "./tool-render";
 import "./components/shell/shell.css";
@@ -122,54 +121,6 @@ interface SessionProps {
 
 function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 	const snap = useGuestSnapshot(client);
-	const composer = useMemo(() => guestComposerPort(client), [client]);
-	const agents = useMemo(() => guestAgentPort(client), [client]);
-	return (
-		<SessionSurface
-			snapshot={snap}
-			composer={composer}
-			agents={agents}
-			manageDocumentTitle
-			onLeave={onLeave}
-			onRejoin={onRejoin}
-		/>
-	);
-}
-
-export interface SessionSurfaceProps {
-	snapshot: GuestSnapshot;
-	composerIdentity?: string;
-	composer: ComposerPort;
-	agents: AgentPort;
-	manageDocumentTitle?: boolean;
-	active?: boolean;
-	allowRejoin?: boolean;
-	editorUpdate?: ComposerEditorUpdate | null;
-	onDraftChange?(text: string, identity: string, edited: boolean): void;
-	toolsExpanded?: boolean;
-	aboveComposer?: ReactNode;
-	belowComposer?: ReactNode;
-	onLeave(): void;
-	onRejoin(): void;
-}
-
-/** Native session presentation shared without sharing connection or execution ownership. */
-export function SessionSurface({
-	snapshot: snap,
-	composer,
-	composerIdentity,
-	agents,
-	active = true,
-	allowRejoin = true,
-	manageDocumentTitle = false,
-	editorUpdate,
-	onDraftChange,
-	toolsExpanded,
-	aboveComposer,
-	belowComposer,
-	onLeave,
-	onRejoin,
-}: SessionSurfaceProps): ReactNode {
 	const [railOpen, setRailOpen] = useState(false);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const autoOpenedRef = useRef(false);
@@ -180,13 +131,12 @@ export function SessionSurface({
 	const agentIds = useMemo(() => new Set(snap.agents.map(a => a.id)), [snap.agents]);
 	const toolHost = useMemo<ToolRenderHost>(
 		() => ({
-			toolsExpanded,
 			hasAgent: id => agentIds.has(id),
 			openAgent: id => {
 				if (agentIds.has(id)) setSelectedId(id);
 			},
 		}),
-		[agentIds, toolsExpanded],
+		[agentIds],
 	);
 
 	// Auto-open the rail the first time a subagent appears.
@@ -199,10 +149,10 @@ export function SessionSurface({
 
 	const title = snap.header?.title ?? snap.state?.sessionName ?? "session";
 	useEffect(() => {
-		if (manageDocumentTitle) document.title = `${title} · omp collab`;
-	}, [title, manageDocumentTitle]);
+		document.title = `${title} · omp collab`;
+	}, [title]);
 
-	const drawerAgent = active && selectedId != null ? snap.agents.find(a => a.id === selectedId) : undefined;
+	const drawerAgent = selectedId != null ? snap.agents.find(a => a.id === selectedId) : undefined;
 	const toggleRail = useCallback(() => setRailOpen(open => !open), []);
 	const closeDrawer = useCallback(() => setSelectedId(null), []);
 
@@ -232,19 +182,14 @@ export function SessionSurface({
 							phase={snap.phase}
 						/>
 					</div>
-					{aboveComposer}
 					<Composer
-						client={composer}
-						identity={composerIdentity}
-						editorUpdate={editorUpdate}
-						onDraftChange={onDraftChange}
+						client={client}
 						phase={snap.phase}
 						readOnly={snap.readOnly}
 						uiRequest={snap.uiRequest}
 						working={snap.working}
 						queuedMessageCount={snap.state?.queuedMessageCount ?? 0}
 					/>
-					{belowComposer}
 				</section>
 				{railOpen && (
 					<>
@@ -268,29 +213,20 @@ export function SessionSurface({
 						agent={drawerAgent}
 						progress={snap.progress.get(drawerAgent.id)}
 						lifecycle={snap.lifecycle.get(drawerAgent.id)}
-						client={agents}
+						client={client}
 						readOnly={snap.readOnly}
 						host={toolHost}
 						onClose={closeDrawer}
 					/>
 				</>
 			)}
-			{snap.phase === "ended" && !allowRejoin ? (
-				<div role="status">
-					Shared session ended: {snap.endedReason}
-					<button type="button" onClick={onLeave}>
-						Leave ended guest session
-					</button>
-				</div>
-			) : (
-				<Banners
-					phase={snap.phase}
-					endedReason={snap.endedReason}
-					loading={snap.loading}
-					onRejoin={onRejoin}
-					onNewLink={onLeave}
-				/>
-			)}
+			<Banners
+				phase={snap.phase}
+				endedReason={snap.endedReason}
+				loading={snap.loading}
+				onRejoin={onRejoin}
+				onNewLink={onLeave}
+			/>
 			<Toasts notices={snap.notices} />
 		</div>
 	);

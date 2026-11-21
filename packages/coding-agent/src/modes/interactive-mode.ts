@@ -360,7 +360,6 @@ import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
 import { imageReferenceHyperlink, setImageBlobWriter } from "@oh-my-pi/pi-tui/prompt/image-references";
 import { describeLoopCondition, evaluateLoopCondition, type LoopConditionVerdict } from "./loop-condition";
-import { isLoopGoalComplete, renderLoopGoalPrompt } from "./loop-goal";
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
@@ -407,7 +406,6 @@ import type {
 	InteractiveModeContext,
 	InteractiveModeInitOptions,
 	InteractiveSelectorDialogOptions,
-	PreparedLoopPrompt,
 	RenderInitialMessagesOptions,
 	RenderSessionContextOptions,
 	ResumeSessionOptions,
@@ -487,7 +485,7 @@ import { cfgDefaultThinkingLevel, cfgHideThinkingBlock } from "../session/settin
 import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
 import { cfgExtensionHandlersModeControl } from "../extensibility/settings";
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
-import { GoalContinuationGuard, goalFromModeData } from "../goals/state";
+import { goalContinuationActivity, goalFromModeData } from "../goals/state";
 import { cfgPlanEnabled, shouldEnterPlanModeOnStartup } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
 import { cfgSttEnabled } from "../stt/settings";
@@ -1473,7 +1471,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	planModePlanFilePath: string | undefined = undefined;
 	loopModeEnabled = false;
 	loopModePaused = false;
-	loopGoalMode = false;
 	loopPrompt: string | undefined = undefined;
 	loopLimit: LoopLimitRuntime | undefined = undefined;
 	loopCondition: LoopConditionConfig | undefined = undefined;
@@ -2006,7 +2003,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#goalContinuationDiagnostics: { operation_id: string; goal_id: string; started_at: number } | undefined;
 	/** Submitted continuation turns awaiting their asynchronously delivered `agent_end`. */
 	#pendingGoalContinuationTurns = 0;
-	readonly #goalContinuationGuard = new GoalContinuationGuard();
+	#previousGoalContinuationActivity: string | undefined;
 	#goalSuppressNextContinuation = false;
 	#planModePreviousModelState: { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined;
 	#pendingModelSwitch: { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined;
@@ -3496,8 +3493,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					const last = event.messages.findLast(message => message.role === "assistant");
 					if (last?.stopReason === "error" && this.loopPrompt) {
 						this.pauseLoop();
-					} else if (this.loopGoalMode && this.loopPrompt && isLoopGoalComplete(event.messages)) {
-						this.disableLoopMode("Loopgoal completed.");
 					} else if (
 						this.onInputCallback &&
 						this.#loopAutoSubmitPendingFor !== this.sessionManager.getSessionId()
@@ -3665,7 +3660,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if ((this.editor.pendingImages?.length ?? 0) > 0) return stop("editor_has_images");
 		const state = this.session.getLocalGoalModeState();
 		if (!state?.enabled || state.goal.status !== "active") return stop("goal_not_active");
-		const prompt = this.session.goalRuntime.buildContinuationPrompt(this.#goalContinuationGuard.recoveryPending);
+		const prompt = this.session.goalRuntime.buildContinuationPrompt();
 		const owner = this.session;
 		if (!prompt) return stop("continuation_unavailable");
 		const diagnostics = {
@@ -3696,16 +3691,13 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (!latestState?.enabled || latestState.goal.status !== "active") return stopWaiting("goal_not_active");
 				if (latestState.goal.id !== diagnostics.goal_id) return stopWaiting("goal_replaced");
 
-				const recovery = this.#goalContinuationGuard.recoveryPending;
-				// Failed admission has no agent_end; keep it stopped unless this turn proves progress.
-				if (recovery) this.#goalSuppressNextContinuation = true;
 				this.#pendingGoalContinuationTurns++;
 				this.#logGoalContinuation("started", "idle_ready", { ...elapsed(), stage: "submit" });
 				try {
 					this.onInputCallback(
 						this.startPendingSubmission({
 							text: prompt,
-							customType: recovery ? "goal-tool-recovery" : "goal-continuation",
+							customType: "goal-continuation",
 							display: false,
 						}),
 					);
@@ -3945,7 +3937,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#loopPromptGeneration++;
 		this.loopModeEnabled = false;
 		this.loopModePaused = false;
-		this.loopGoalMode = false;
 		this.loopPrompt = undefined;
 		this.loopLimit = undefined;
 		this.loopCondition = undefined;
@@ -3960,37 +3951,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	prepareLoopPrompt(text: string, capture: boolean): PreparedLoopPrompt {
-		if (!text || !this.loopModeEnabled) return { text };
+	captureLoopPromptOnAdmission(text: string): (() => boolean) | undefined {
+		if (!text || !this.loopModeEnabled) return undefined;
 		const space = text.indexOf(" ");
 		const command = text.startsWith("/") ? text.slice(1, space === -1 ? undefined : space) : undefined;
-		if (command && this.session.extensionRunner?.getCommand(command)) return { text };
-		if (this.loopGoalMode) {
-			text = renderLoopGoalPrompt(text);
-		} else if (
+		if (command && this.session.extensionRunner?.getCommand(command)) return undefined;
+		if (
 			command &&
 			(this.session.customCommands.some(entry => entry.command.name === command) ||
 				this.session.mcpPromptCommands.some(entry => entry.command.name === command))
 		) {
 			// Routing a local command is also a session admission, but it needn't send a model prompt.
-			return { text };
+			return undefined;
 		}
-		if (!capture) return { text };
 		const generation = this.#loopPromptGeneration;
 		const sessionId = this.sessionManager.getSessionId();
-		return {
-			text,
-			onPromptAdmitted: () => {
-				if (
-					generation !== this.#loopPromptGeneration ||
-					sessionId !== this.sessionManager.getSessionId() ||
-					!this.loopModeEnabled ||
-					this.#isShuttingDown
-				)
-					return false;
-				this.setLoopPrompt(text);
-				return true;
-			},
+		return () => {
+			if (
+				generation !== this.#loopPromptGeneration ||
+				sessionId !== this.sessionManager.getSessionId() ||
+				!this.loopModeEnabled ||
+				this.#isShuttingDown
+			)
+				return false;
+			this.setLoopPrompt(text);
+			return true;
 		};
 	}
 
@@ -4067,9 +4052,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncLoopModeStatus();
 	}
 
-	async handleLoopCommand(args = "", goal = false): Promise<string | undefined> {
+	async handleLoopCommand(args = ""): Promise<string | undefined> {
 		if (this.loopNActive) {
-			this.showError("Stop /loopn before starting /loop or /loopgoal.");
+			this.showError("Stop /loopn before starting /loop.");
 			return undefined;
 		}
 		if (this.loopModeEnabled) {
@@ -4081,7 +4066,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showError(parsed);
 			return undefined;
 		}
-		this.loopGoalMode = goal;
 		this.#enableLoopMode(parsed.limit, parsed.condition, Boolean(parsed.prompt), parsed.intervalMs);
 		// Hand any inline prompt back to the dispatcher so the normal submit flow
 		// runs the first iteration — it records the text as the loop prompt and
@@ -4096,7 +4080,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return undefined;
 		}
 		if (this.loopModeEnabled) {
-			this.showError("Stop /loop or /loopgoal before starting /loopn.");
+			this.showError("Stop /loop before starting /loopn.");
 			return undefined;
 		}
 		let prompts: string[];
@@ -4528,7 +4512,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			cancelled: false,
 			started: false,
 		};
-		if (submission.customType !== "goal-continuation" && submission.customType !== "goal-tool-recovery") {
+		if (submission.customType !== "goal-continuation") {
 			this.#pendingGoalContinuationTurns = 0;
 		}
 		this.#pendingSubmittedInput = submission;
@@ -4579,7 +4563,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingSubmissionPreservesDraft = false;
 		this.clearOptimisticUserMessage();
 		this.#pendingWorkingMessage = undefined;
-		if (submission.customType === "goal-continuation" || submission.customType === "goal-tool-recovery") {
+		if (submission.customType === "goal-continuation") {
 			this.#releaseGoalContinuationTurn();
 			this.#logGoalContinuation("cancelled", "pending_submission_cancelled", { stage: "submit" });
 		}
@@ -4666,8 +4650,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (wasPendingSubmission) {
 			// A refused continuation has no agent_end. Only release the current
 			// submission's claim, never one belonging to a later lifecycle.
-			const releaseGoalTurn =
-				!dispatched && (input.customType === "goal-continuation" || input.customType === "goal-tool-recovery");
+			const releaseGoalTurn = !dispatched && input.customType === "goal-continuation";
 			this.#pendingSubmittedInput = undefined;
 			this.#pendingSubmissionDispose = undefined;
 			this.#pendingSubmissionPreservesDraft = false;
@@ -6230,7 +6213,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#resetGoalContinuationSuppression(): void {
 		this.#goalSuppressNextContinuation = false;
-		this.#goalContinuationGuard.reset();
+		this.#previousGoalContinuationActivity = undefined;
 	}
 
 	#getPausedGoalState(): LocalGoalModeState | undefined {
@@ -6265,26 +6248,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#updateGoalModeStatus();
 			return;
 		}
-		if (event.type === "agent_pause") {
-			if (this.#pendingGoalContinuationTurns > 0) this.#goalContinuationGuard.recordActivity(event.messages);
-			return;
-		}
 		if (event.type !== "agent_end") return;
 		if (this.#guidedGoalInterviewActive && event.messages.some(hasAssistantToolCall)) {
 			this.#guidedGoalInterviewActive = false;
 		}
 		if (this.#pendingGoalContinuationTurns > 0) {
 			this.#pendingGoalContinuationTurns--;
-			const decision = this.#goalContinuationGuard.observe(event.messages);
-			this.#goalSuppressNextContinuation = decision === "stop";
-			const state = this.session.getLocalGoalModeState();
-			const notice = this.#goalContinuationGuard.stopNotice;
-			if (notice && state?.enabled && state.mode === "active" && state.goal.status === "active") {
-				this.session.emitNotice("warning", notice, "goal");
-			}
+			const activity = goalContinuationActivity(event.messages);
+			this.#goalSuppressNextContinuation =
+				activity.length === 0 || activity === this.#previousGoalContinuationActivity;
+			this.#previousGoalContinuationActivity = activity;
 			this.#logGoalContinuation(
 				this.#goalSuppressNextContinuation ? "suppressed" : "completed",
-				decision === "recover" ? "tool_recovery" : decision === "stop" ? "no_new_activity" : "new_activity",
+				this.#goalSuppressNextContinuation ? "no_new_activity" : "new_activity",
 				{ stage: "turn_end" },
 			);
 		} else {
@@ -6434,7 +6410,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.goalModePaused = false;
 			this.#goalToolAddedByMode = false;
 			this.#pendingGoalContinuationTurns = 0;
-			this.#goalContinuationGuard.reset();
+			this.#previousGoalContinuationActivity = undefined;
 			this.#goalSuppressNextContinuation = false;
 			this.#cancelGoalContinuation();
 			this.syncIdleMaintenanceView();
@@ -6942,7 +6918,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.goalModePaused = options?.paused ?? false;
 		this.#goalToolAddedByMode = false;
 		this.#pendingGoalContinuationTurns = 0;
-		this.#goalContinuationGuard.reset();
+		this.#previousGoalContinuationActivity = undefined;
 		this.#goalSuppressNextContinuation = false;
 		this.#cancelGoalContinuation();
 		this.syncIdleMaintenanceView();

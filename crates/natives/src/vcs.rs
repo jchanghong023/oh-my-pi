@@ -240,11 +240,6 @@ pub struct VcsScopedCommitResult {
 	pub index_updated: bool,
 	pub diagnostic:    Option<String>,
 }
-/// Successful exact remote advertisement observation.
-#[napi(object)]
-pub struct VcsRemoteRefResult {
-	pub sha: Either<String, Null>,
-}
 /// Live remote HEAD; branch is relative to refs/heads/, never a cached guess.
 #[napi(object)]
 pub struct VcsRemoteDefaultBranch {
@@ -1658,25 +1653,6 @@ impl VcsGitRepo {
 		let options = options.into();
 		let cancel = cancellation_token(signal);
 		vcs_future(env, "vcs.push", async move { repo.push(&options, cancel).await })
-	}
-
-	/// Observe exactly one full remote ref; transport errors remain unknown.
-	#[napi(ts_return_type = "Promise<VcsRemoteRefResult>")]
-	pub fn remote_ref<'e>(
-		&self,
-		remote: String,
-		full_ref: String,
-		signal: Option<Unknown>,
-		env: &'e Env,
-	) -> Result<Object<'e>> {
-		let repo = self.inner.clone();
-		let cancel = cancellation_token(signal);
-		vcs_future(env, "vcs.remoteRef", async move {
-			repo
-				.remote_ref(&remote, &full_ref, cancel)
-				.await
-				.map(|result| VcsRemoteRefResult { sha: result.sha.map_or(Either::B(Null), Either::A) })
-		})
 	}
 
 	/// Resolve the live remote HEAD; detached, unborn, or invalid HEAD rejects.

@@ -1428,15 +1428,14 @@ export class UiHelpers {
 		}
 		requireOwner();
 		if (typeof builtin === "string") {
-			const prepared =
+			const admitLoopPrompt =
 				message.mode === "followUp" && isLoopCommand(parseSlashCommand(message.text)?.name)
-					? this.ctx.prepareLoopPrompt(builtin, true)
+					? this.ctx.captureLoopPromptOnAdmission(builtin)
 					: undefined;
-			const admitLoopPrompt = prepared?.onPromptAdmitted;
 			let queuedForTurn = false;
 			const dispatch = () => {
 				requireOwner();
-				return owner.prompt(prepared?.text ?? builtin, {
+				return owner.prompt(builtin, {
 					streamingBehavior: message.mode,
 					images: message.images,
 					onPromptQueued: admitLoopPrompt

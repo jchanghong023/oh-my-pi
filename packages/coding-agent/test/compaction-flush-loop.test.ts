@@ -48,16 +48,12 @@ function makeCtx(initialQueue: CompactionQueuedMessage[], loopPrompt: string | u
 		get loopPrompt() {
 			return currentLoopPrompt;
 		},
-		prepareLoopPrompt(text: string, capture: boolean) {
-			return capture && this.loopModeEnabled
-				? {
-						text,
-						onPromptAdmitted: () => {
-							currentLoopPrompt = text;
-							return true;
-						},
-					}
-				: { text };
+		captureLoopPromptOnAdmission(text: string) {
+			if (!ctx.loopModeEnabled) return undefined;
+			return () => {
+				currentLoopPrompt = text;
+				return true;
+			};
 		},
 		armLoopAutoSubmit,
 		pauseLoop,

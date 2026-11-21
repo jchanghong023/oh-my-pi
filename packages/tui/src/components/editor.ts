@@ -963,7 +963,7 @@ export class Editor implements Component, Focusable {
 	 * the composer); false lets ↑ recall history or move the cursor as usual.
 	 */
 	onUpFromTop?: () => boolean;
-	onSubmit?: (text: string, rawText?: string) => void | Promise<void>;
+	onSubmit?: (text: string) => void | Promise<void>;
 	onAltEnter?: (text: string) => void;
 	onChange?: (text: string) => void;
 	#textRevision = 0;
@@ -4151,8 +4151,7 @@ export class Editor implements Component, Focusable {
 		this.#endVimSession();
 		this.#resetKillSequence();
 
-		const rawText = this.#expandPasteMarkers(this.#state.lines.join("\n"));
-		const result = rawText.trim();
+		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();
 
 		this.#state = { lines: [""], cursorLine: 0, cursorCol: 0 };
 		this.clearPasteState();
@@ -4166,7 +4165,7 @@ export class Editor implements Component, Focusable {
 			this.#startVimSession(mark, this.#vim.mode === "replace");
 		}
 		this.#notifyChange("");
-		if (this.onSubmit) this.onSubmit(result, rawText);
+		if (this.onSubmit) this.onSubmit(result);
 	}
 
 	/** Resolve the compiled, global copy of `atomicTokenPattern`, rebuilt only when the source changes. */

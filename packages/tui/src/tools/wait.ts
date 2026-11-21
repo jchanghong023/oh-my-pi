@@ -62,8 +62,6 @@ export interface JobSnapshot {
 	type: "bash" | "task" | "eval";
 	status: "running" | "completed" | "failed" | "cancelled";
 	label: string;
-	/** Stable display name of a finite Bash job, independent of its command and ID. */
-	name?: string;
 	/** What the job is for, in the model's words (a process job's `label` is its command line). */
 	intent?: string;
 	durationMs: number;
@@ -186,23 +184,6 @@ function duplicatesBashCard(job: JobSnapshot, jobs: ReadonlyMap<string, string> 
 	);
 }
 
-export function isDuplicateOnlyWait(
-	result: ToolRenderResult<CoordinationDetails>,
-	jobs: ReadonlyMap<string, string> | undefined,
-): boolean {
-	const details = result.details;
-	return Boolean(
-		!result.isError &&
-		details &&
-		!details.interrupted &&
-		!details.meta?.artifactError &&
-		!details.agents?.length &&
-		!details.cancelled?.length &&
-		details.jobs?.length &&
-		details.jobs.every(job => duplicatesBashCard(job, jobs)),
-	);
-}
-
 // =============================================================================
 // TUI Renderer
 // =============================================================================
@@ -302,7 +283,7 @@ function failurePreview(job: JobSnapshot): { lines: string[]; artifact?: string 
 /** The row label: a running task's own stage line when it reports one, else what the job is for, else its label. */
 function jobRowLabel(job: JobSnapshot): string {
 	if (job.type === "task" && job.status === "running" && job.stage?.trim()) return job.stage;
-	return `${job.name ? `${job.name} — ` : ""}${job.intent || job.label}`;
+	return job.intent || job.label;
 }
 
 /** A job as its tile; `live` while the card's clocks run. */
@@ -470,12 +451,10 @@ function jobsRenderResult(
 	const widgetJobs = sortedJobs.filter(job => job.status === "running" && job.widget?.state === "live");
 	const compactJobLines = (width: number, live: boolean): string[] => {
 		const lines: string[] = [];
-		const represented = options.settledBashJobs;
-		const visibleSettledJobs = settledJobs.filter(job => !duplicatesBashCard(job, represented));
 		const indent = " ".repeat(visibleWidth(formatStatusIcon("success", uiTheme)) + 1);
 		// Failures sort first, so the cap never hides one behind successes;
 		// Ctrl+O lists the rest.
-		for (const job of visibleSettledJobs.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)) {
+		for (const job of settledJobs.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)) {
 			const icon = formatStatusIcon(statusToIcon(job.status), uiTheme);
 			const word = job.status === "completed" ? "done" : job.status;
 			const exit =
@@ -497,6 +476,7 @@ function jobsRenderResult(
 				line += `  ${uiTheme.fg("muted", truncateToWidth(label, labelBudget, Ellipsis.Unicode))}`;
 			}
 			lines.push(line);
+			if (duplicatesBashCard(job, options.settledBashJobs)) continue;
 			const preview = failurePreview(job);
 			if (job.type === "bash" && preview.lines.length > 0) {
 				lines.push(`${indent}${uiTheme.fg("muted", "Output tail:")}`);
@@ -518,7 +498,7 @@ function jobsRenderResult(
 				lines.push(uiTheme.fg("warning", truncateToWidth(formatArtifactErrorNotice(artifactError), width)));
 			}
 		}
-		const hiddenSettled = visibleSettledJobs.length - PREVIEW_LIMITS.COLLAPSED_ITEMS;
+		const hiddenSettled = settledJobs.length - PREVIEW_LIMITS.COLLAPSED_ITEMS;
 		if (hiddenSettled > 0) lines.push(`${indent}${uiTheme.fg("dim", `… ${hiddenSettled} more settled`)}`);
 		const shownWidgetJobs = widgetJobs.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
 		for (const job of shownWidgetJobs) {
@@ -1003,7 +983,7 @@ export const waitToolRenderer = {
 			return { label: "Wait", detail: "Background work or peer message" };
 		}
 		const label = typeof job.label === "string" ? job.label.split(/\r?\n/, 1)[0].trim() : "";
-		const target = `[${job.type}] ${job.id}${job.name ? ` ${job.name}` : ""}${label && label !== job.id ? ` ${label}` : ""}`;
+		const target = `[${job.type}] ${job.id}${label && label !== job.id ? ` ${label}` : ""}`;
 		return { label: "Wait", detail: `${target}${jobs.length > 1 ? ` · +${jobs.length - 1} jobs` : ""}` };
 	},
 	renderCall: waitRenderCall,
@@ -1027,21 +1007,6 @@ export const waitToolRenderer = {
 						tone: "info",
 						inline: true,
 					};
-				}
-				const jobs = details?.jobs;
-				if (!options.expanded && jobs && options.settledBashJobs) {
-					const visible = jobs.filter(job => !duplicatesBashCard(job, options.settledBashJobs));
-					if (visible.length !== jobs.length) {
-						if (!visible.length && !details.agents?.length && !details.meta?.artifactError) {
-							return { head: [], inline: true };
-						}
-						return describeJobsResult(
-							{ ...result, details: { ...details, jobs: visible } },
-							options.isPartial,
-							tray,
-							options.expanded,
-						);
-					}
 				}
 				return describeJobsResult(result, options.isPartial, tray, options.expanded, options.settledBashJobs);
 			},

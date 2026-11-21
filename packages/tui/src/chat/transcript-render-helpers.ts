@@ -56,7 +56,6 @@ export function buildAsyncResultBlock(
 		type?: string;
 		status?: string;
 		label?: string;
-		name?: string;
 		durationMs?: number;
 		meta?: OutputMeta;
 		schema?: StructuredSubagentOutput;
@@ -87,8 +86,8 @@ export function buildAsyncResultBlock(
 								? "warning"
 								: "info";
 				const identity = plainLine(jobId);
-				const name = plainLine(job.name ?? job.label ?? "");
-				const label = name !== identity ? name : undefined;
+				const commandLabel = plainLine(job.label ?? "");
+				const label = commandLabel !== identity ? commandLabel : undefined;
 				const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
 				rows.push({
 					parts: [
@@ -132,6 +131,26 @@ export function settledBackgroundJobs(transcript: readonly Component[]): Set<str
 	return jobs;
 }
 
+/** The extension renderer owns visibility; only the built-in fallback follows tool activity. */
+class AsyncResultCard extends CustomMessageComponent {
+	readonly #block: ToolActivityContainer;
+
+	constructor(message: CustomOrHookMessage, renderer: MessageRenderer, block: ToolActivityContainer) {
+		super(message as CustomMessage<unknown>, (delegate, options, rendererTheme) => {
+			try {
+				return renderer(delegate, options, rendererTheme) ?? block;
+			} catch {
+				return block;
+			}
+		});
+		this.#block = block;
+	}
+
+	setToolActivityVisible(visible: boolean): void {
+		this.#block.setToolActivityVisible(visible);
+	}
+}
+
 /**
  * The `async-result` card for both transcript surfaces: a registered renderer owns it (#14131);
  * the built-in block covers no renderer, a declining renderer, and a throwing one.
@@ -140,17 +159,9 @@ export function buildAsyncResultComponent(
 	message: CustomOrHookMessage,
 	renderer: MessageRenderer | undefined,
 	transcript?: readonly Component[],
-): ToolActivityContainer {
+): AsyncResultCard | ToolActivityContainer {
 	const block = buildAsyncResultBlock(message, transcript);
-	if (!renderer) return block;
-	const card = new CustomMessageComponent(message as CustomMessage<unknown>, (delegate, options, rendererTheme) => {
-		try {
-			return renderer(delegate, options, rendererTheme) ?? block;
-		} catch {
-			return block;
-		}
-	});
-	return new ToolActivityContainer(card);
+	return renderer ? new AsyncResultCard(message, renderer, block) : block;
 }
 
 /** The warning row under a background job whose output artifact could not be saved. */

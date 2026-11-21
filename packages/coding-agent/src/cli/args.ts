@@ -31,8 +31,8 @@ export interface Args {
 	profile?: string;
 	alias?: string;
 	allowHome?: boolean;
-	/** Use intranet mode: disable Web Search, Browser, AST Edit, and Fetch for this launch. */
-	offline?: boolean;
+	/** Company intranet mode, enabled only by OMP_OFFLINE. */
+	intranetOffline?: boolean;
 	provider?: string;
 	model?: string;
 	config?: string[];
@@ -86,6 +86,7 @@ export interface Args {
 	noPty?: boolean;
 	noJudge?: boolean;
 	noSpotlight?: boolean;
+	offline?: boolean;
 	hooks?: string[];
 	extensions?: string[];
 	trustedExtensions?: string[];
@@ -262,7 +263,7 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 		unrecognizedFlags: [],
 		invalidFlagValues: [],
 		sessionDir: $env.PI_CODING_AGENT_SESSION_DIR || undefined,
-		offline: offlineFromEnv() || undefined,
+		intranetOffline: offlineFromEnv() || undefined,
 		// Fork launches skip automatic LSP and extension discovery on every platform.
 		noLsp: true,
 		noExtensions: true,
@@ -380,6 +381,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.noJudge = true;
 		} else if (arg === "--no-spotlight") {
 			result.noSpotlight = true;
+		} else if (arg === "--offline") {
+			result.offline = true;
 		} else if (arg === "--hide-thinking") {
 			result.hideThinking = true;
 		} else if (arg === "--advisor") {

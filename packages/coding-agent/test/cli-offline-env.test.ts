@@ -13,7 +13,9 @@ describe("parseArgs — OMP_OFFLINE environment variable", () => {
 	it("activates offline mode for every truthy spelling", () => {
 		for (const value of ["1", "true", "TRUE", "Yes", "on"]) {
 			process.env.OMP_OFFLINE = value;
-			expect(parseArgs([]).offline, value).toBe(true);
+			const parsed = parseArgs([]);
+			expect(parsed.intranetOffline, value).toBe(true);
+			expect(parsed.offline, value).toBeUndefined();
 		}
 	});
 
@@ -21,7 +23,7 @@ describe("parseArgs — OMP_OFFLINE environment variable", () => {
 		for (const value of [undefined, "", "0", "false", "off", "garbage"]) {
 			if (value === undefined) delete process.env.OMP_OFFLINE;
 			else process.env.OMP_OFFLINE = value;
-			expect(parseArgs([]).offline, String(value)).toBeUndefined();
+			expect(parseArgs([]).intranetOffline, String(value)).toBeUndefined();
 		}
 	});
 
@@ -32,19 +34,21 @@ describe("parseArgs — OMP_OFFLINE environment variable", () => {
 		expect(offlineFromEnv()).toBe(false);
 	});
 
-	it("applies to launches that carry other flags and messages", () => {
+	it("allows the intranet mode and upstream --offline together", () => {
 		process.env.OMP_OFFLINE = "1";
-		const result = parseArgs(["--model", "opus", "hello"]);
+		const result = parseArgs(["--offline", "--model", "opus", "hello"]);
 		expect(result.offline).toBe(true);
+		expect(result.intranetOffline).toBe(true);
 		expect(result.model).toBe("opus");
 		expect(result.messages).toEqual(["hello"]);
 	});
 
-	it("treats the removed --offline token as an unrecognized flag", () => {
+	it("accepts --offline without enabling the intranet mode", () => {
 		delete process.env.OMP_OFFLINE;
 		const result = parseArgs(["--offline"]);
-		expect(result.offline).toBeUndefined();
-		expect(result.unrecognizedFlags).toContain("--offline");
+		expect(result.offline).toBe(true);
+		expect(result.intranetOffline).toBeUndefined();
+		expect(result.unrecognizedFlags).toEqual([]);
 	});
 
 	it("treats --offline after -- as a positional, not a flag", () => {
@@ -59,7 +63,7 @@ describe("parseArgs — OMP_OFFLINE environment variable", () => {
 		const extracted = extractProfileFlags(["--profile", "work", "hello"]);
 		expect(extracted.profile).toBe("work");
 		const parsed = parseArgs(extracted.argv);
-		expect(parsed.offline).toBeUndefined();
+		expect(parsed.intranetOffline).toBeUndefined();
 		expect(parsed.messages).toEqual(["hello"]);
 	});
 });

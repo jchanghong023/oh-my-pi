@@ -1,8 +1,8 @@
 # @oh-my-pi/collab-web
 
-Browser interface for [omp collab sessions](../../docs/collab.md). The guest app accepts a `/collab` link and shows the shared native session: streaming transcript, tool-call cards, subagent transcripts and a composer.
+Web client for [omp collab sessions](../../docs/collab.md). Paste a `/collab` link into the browser and you get the same live session guests see in the TUI: streaming transcript, tool-call cards, subagent panel with live transcripts, and a composer that prompts (or interrupts) the host agent.
 
-## Standalone guest quick start
+## Quick start
 
 ```sh
 # dev server (Bun HTML dev server with HMR) — http://localhost:3000
@@ -14,7 +14,7 @@ bun run mock-host
 
 Host a session from any omp instance (`/collab`, or `/collab ws://localhost:7466` to use the mock relay), then paste the printed link into the connect screen. Deep links work too: `http://localhost:3000/#<roomId>.<key>` auto-connects on load.
 
-## Standalone guest build & deploy
+## Build & deploy
 
 ```sh
 bun run build   # static site in dist/
@@ -32,6 +32,6 @@ The room key never leaves the URL fragment — it is not sent to the relay or an
 - `src/lib/` — vendored wire codec (`codec.ts` AES-256-GCM, `link.ts` envelope + link grammar), `socket.ts` reconnecting relay socket, `client.ts` guest session store (`GuestClient` + immutable snapshots for `useSyncExternalStore`). Shared protocol shapes come from `@oh-my-pi/pi-wire`.
 - `src/components/` — `transcript/` (entries, markdown, tool cards), `agents/` (panel + transcript drawer), `shell/` (connect screen, header, composer, banners, toasts).
 - `src/tool-render/` — per-tool React renderers shared with coding-agent HTML session exports: one view per built-in tool, common `ToolView` chrome, theme-adaptive `tv-` design tokens, and an `<omp-tool-view>` web-component wrapper. The `ToolRenderHost` seam lets hosts wire agent-id chips to a sub-session view (drawer here, sidebar navigation in exports).
-- `scripts/` — `local-relay.ts` (content-blind relay on `Bun.serve`), `mock-host.ts` + `fixture.ts` (scripted host for offline dev), `build-export-viewer.ts` (bundles the tool/trace renderers, React, export shell and styles for embedding in standalone HTML exports).
+- `scripts/` — `local-relay.ts` (content-blind relay on `Bun.serve`), `mock-host.ts` + `fixture.ts` (scripted host for offline dev), `build-export-viewer.ts` (bundles the tool/trace renderers, React, export shell and styles into a content-addressed JS file under `packages/coding-agent/export-assets/`; release CI publishes it to `build.stencil.so`).
 
-`GuestClient` has no coding-agent runtime dependency and shares protocol shapes through `@oh-my-pi/pi-wire`; sealed-frame interop is covered by `test/codec.test.ts`. Native models, tools, MCP, extensions, approvals, Team and Goal stay on the OMP host; browser components do not grant permissions or declare execution success.
+The package is intentionally standalone — no dependency on `@oh-my-pi/pi-coding-agent` at runtime or type level. Wire-shape drift is prevented by consuming the same `@oh-my-pi/pi-wire` contracts as the host, with sealed-frame interop still covered by `test/codec.test.ts`.

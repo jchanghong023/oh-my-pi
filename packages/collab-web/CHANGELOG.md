@@ -4,16 +4,6 @@
 
 ### Added
 
-- Added the native-session browser development workbench with eight-stage materials, explicit Git confirmations, Markdown import, and offline Collab participation.
-
-### Fixed
-
-- Ask cards now display native HTML form questions, saved answers, option notes and timeout status.
-- Sending waits for selected images to finish loading; copying transcript text in Chromium no longer includes decorative labels, prompts, or diff gaps.
-- Oversized image submissions are rejected before clearing the draft or attachments.
-
-### Added
-
 - `GuestClient.sendPrompt` accepts images and sends them with the prompt.
 
 ## [19.0.0] - 2026-11-18
@@ -50,27 +40,7 @@
 
 ### Changed
 
-- Show Dev requirements, stages, materials and shared chat in a compact dark workbench with a mobile materials/chat switch and a native-session model control.
-- Build the Dev workbench for native Firefox 128 capabilities instead of Firefox 68, without overriding React's native microtask and error-reporting feature detection.
-- Open Dev requirement creation as a spacious full-page form without changing creation, Markdown import, or local-writing behavior.
-
-### Fixed
-
-- Move Dev stage actions beside document tools and keep secondary actions and receipts out of the chat area, including on narrow screens.
-- Restore the selected Dev requirement and viewed stage after refresh without replaying messages or approvals.
-- Replace existing Dev business Markdown only after explicit current-version confirmation, preserving external originals.
-- Load the Dev favicon from embedded production resources instead of requesting a missing root icon.
-
-- Preserve development-workbench composer drafts and attachments until host admission is known; unconfirmed workbench sends retain input.
-- Keep shared tool renderers safe to import during server-side rendering; custom elements initialize only through their browser entry.
-- Keep Dev stage navigation, document controls and the chat composer usable as the browser window narrows.
-- Admit local business writing and let disconnected guests rejoin explicitly.
-- Keep the Dev composer visible while short windows scroll and show long confirmation scopes before the reply field.
-- Avoid false native editor-sync errors after a Dev message is accepted.
-
-### Changed
-
-- Preserve structured `ask` question cards, recommended choices, selected answers and notes, including explicit timeout-selection feedback.
+- `ask` tool cards show the HTML form's fieldset legends and field count while pending, and each question with its submitted answer (or "(no answer)") once answered, flagging submissions made by the timeout
 
 ## [18.15.0] - 2026-11-01
 

@@ -6,6 +6,7 @@
 
 - Restored the upstream RPC contract.
 - Removed `/webgui` and `omp webgui`, including the bundled ZCode frontend. Native TUI, RPC, `/sketch`, and Collab Web remain available.
+- Removed `/jch-workflowzbatch`. `/workflowz` remains available.
 - Removed the retired ZCode SDK method `AgentSession.withExecutionModel()` and its private request recovery. Session-scoped `setModelTemporary()` and explicit SDK request hooks remain available.
 - Removed the fork-only `Settings.saveUserModelRole()` and `ModelRoleConflictError`; use upstream `setModelRole()` and `flush()` for ordinary role changes.
 - Removed the retired ZCode SDK startup option `createAgentSession({ prepareConfiguration })`.
@@ -30,12 +31,14 @@
 - Removed offline username joins and the built-in `omp collab serve` relay. Collaboration uses upstream invitation links and relay configuration.
 - Removed `todo`'s fork-only `block` and `unblock` operations and restored upstream phase selection when `append` omits `phase`.
 - Removed `/forkreviewer` and its bundled specialist. `/review` remains available.
+- Collab Web now uses the upstream guest UI and relay client without fork-only presentation or composer features.
+- Removed `/loopgoal`. `/loop` and `/loopn` remain available.
+- Goal continuation now follows upstream: a turn with no new tool activity stops automatic continuation without sending a forced-tool recovery request.
+- Removed `omp knowledge mcp`. The built-in `knowledge_search` tool, `/knowledge` panel, and index management commands remain available.
 
 ### Added
 
 - Review large repositories with the paired manual skills `/skill:big-review-scan` and `/skill:big-review-verify`, resumable shard reports and source-backed verification. Use `/skill:big-review-verify workflowz` to request the workflow notice.
-
-- Set `OMP_LOG_ERROR_REGEX` to make `read` return a two-line success result for clean `.log` files and show numbered error matches from anywhere in the file ahead of the normal output.
 - Use `/workspace` for session-scoped write-boundary reminders, or `/workspace <message>` to enable them and send a task, independently of Plan mode; this is a prompt, not a sandbox.
 - Cycle through multiple prompts with `/loopn "x1" "x2" …`; Esc or `/loopn` stops the sequence.
 - Design simpler module interfaces with the discoverable `jch-codebase-design` skill or `/skill:jch-codebase-design`, retaining upstream descriptions and design references.
@@ -44,6 +47,7 @@
 
 ### Changed
 
+- Restored upstream `--offline` for launch and `omp find`; it restricts auxiliary services independently of `OMP_OFFLINE`.
 - Compaction logs omit repetitive model selection and attempt records while retaining failure and fallback details.
 - TUI input predictions use the upstream request lifecycle and still discard suggestions from a previous session.
 - Session lists no longer drop a readable session just because it grows during a scan.
@@ -58,7 +62,8 @@
 - Selective commit through `/commit` and the eval `commit` namespace is now opt-in via `commit.enabled`; unfinished merges use plain `git commit`.
 - Added `providers.thinkingProbe` (default off) so unknown-model thinking probes never add requests to intranet, company or custom providers.
 - Binary analysis remains disabled by default after the upstream IDA/Ghidra migration; enable it with `disassembler.backend`.
-- Read up to 2,000 lines by default when no line limit is specified.
+- `read` defaults to 300 lines when no limit is specified; `read.defaultLimit: 2000` still opts into larger pages.
+- Unknown-tool errors use upstream suggestions without listing tools that may not have been sent to the model.
 - Restored the upstream Provider catalog, login choices, custom providers and runtime discovery while retaining the fork's intranet providers.
 - OpenSpec 在所有新旧项目的产物生成指令中内置中文正文要求，保留项目上下文及必需的英文结构，无须修改项目配置。
 - Bundled `jch-grill-me` and `jch-grill-todo` now instruct research subagents to start with a fresh context window.
@@ -99,6 +104,14 @@
 
 ### Fixed
 
+- `/loop` follow-ups queued during compaction resume repeating only after their inline prompt is admitted.
+- Offline `omp openspec version --check` follows redirects only within the configured HTTPS mirror.
+- `/todoloop` skips tasks hidden by multiline HTML comments, including comments that start after visible text.
+- Session shutdown retries pending subagent cleanup after an earlier strict cleanup failed and reports any remaining failure.
+- Knowledge search accepts exact POSIX paths such as `x:manual.md` and counts only hits that were actually collapsed.
+- Compact mode keeps the previous valid Output when a file Diff fully covers a newer success receipt.
+- `omp openwiki --init/--update --print` includes generation progress on stdout.
+- `/crawl` saves readable documents whose URL contains an authentication-related path segment instead of treating the path alone as a login prompt.
 - Reloading a session no longer lets a background job from the previous run trigger stale idle compaction.
 - Stopping a daemon module no longer delays daemon shutdown after the module has already exited.
 - Detached services on Windows now survive daemon restarts and return to their original session.
@@ -119,19 +132,17 @@
 - Standard input and `@file` content remain prompt text rather than becoming local commands.
 - Strict task cleanup can retry a failed isolated release.
 - Concurrent cleanup of one browser tab no longer disconnects another tab sharing its browser.
-- Multi-path reads no longer report identical results when the displayed log errors have changed.
 - Long-running sessions release subagent ancestry once no retained background jobs need it.
 - Goal and Loop commands respect actual prompt admission, and cancelled or rejected first turns no longer restart a loop.
 - Goal context survives compaction within the selected budget, and a failed CodeAgent request can still fall back to local cleanup without replaying it.
 - Strict session shutdown waits for owned resources and can retry transient transcript writes; read-only rendering does not claim the original session.
 - Offline model discovery completes against the cache, Team writes preserve pending settings, and TUI logout remains cancellable.
-- Log reads retain matching evidence, use the live ACP buffer, and preserve programmatic raw output. Diagnostic reports collect logs from both active and fallback directories.
+- Diagnostic reports collect logs from both active and fallback directories.
 - Worktree reuse checks the actual repository and branch; a new `/wt` checkout contains only the target commit.
 - Packaged HTML exports use a hosted integrity-pinned session viewer. User skill completion includes manual skills without changing model visibility.
 - Linux and Windows installers verify downloaded binaries against the authenticated Release digest before running them.
 - Large-repository reviews now submit complete results per workpool item, detect Python 3.11+ on Windows, store reports in worktree-local Git metadata, and accept `--base REF` without guessing the upstream branch.
 - LoopN waits for background work before advancing, and queued compaction input stays with its original session after `/new`.
-- Log reads respect the inline byte budget even when many lines match `OMP_LOG_ERROR_REGEX`.
 - Fork binaries embed the HTML export viewer so exported sessions do not depend on a fork-specific viewer download.
 - Compact mode now shows background-work waits in the two-line activity area instead of above command output.
 - Binary release builds now initialize their temporary directories without failing workflow validation.
@@ -269,6 +280,11 @@
 - Fixed `computer` on Windows passing off a fully covered window's screenshot and `ax()` tree as current: for Chrome, Edge and Electron apps, which can stop drawing while covered, both now say the window appeared covered and may be stale ([#19849](https://github.com/can1357/oh-my-pi/pull/19849) by [@will-bogusz](https://github.com/will-bogusz))
 - Entering `/goal` on Anthropic no longer re-writes the cached system prompt and transcript ([#19826](https://github.com/can1357/oh-my-pi/issues/19826))
 - Fixed isolated `task` subagents starting with no git work tree when the session cwd is a bare-repository container (`.git` with `core.bare=true`); isolation now refuses before spawning and names the repository's work trees to start from ([#19791](https://github.com/can1357/oh-my-pi/issues/19791))
+
+### Removed
+
+- Finite background Bash jobs no longer get `Bash N` labels; their original job IDs, commands, and intents still identify them.
+- Removed implicit `.log` filtering from `read`. Log files now use the same selectors as other text files.
 
 ## [19.0.1] - 2026-11-19
 

@@ -1,8 +1,10 @@
+import * as path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { setStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { CompactFileDiff } from "@oh-my-pi/pi-coding-agent/modes/compact-file-diff";
 import { CompactThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-thinking-preview";
 import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
@@ -17,6 +19,7 @@ import type {
 	LiveToolOutputPreview,
 	LiveToolOutputSnapshot,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
+import { LatestTurnFileChanges } from "@oh-my-pi/pi-coding-agent/session/latest-turn-file-changes";
 import { LiveToolOutputState } from "@oh-my-pi/pi-coding-agent/session/live-tool-output";
 import { toolOutputText } from "@oh-my-pi/pi-coding-agent/session/live-tool-output-text";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -201,13 +204,18 @@ const outputPreviews: CompactToolOutputPreview[] = [];
 const activityDocks: CompactThinkingPreview[] = [];
 let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 
-function focusFixture() {
+function focusFixture(fileDiffRows?: () => number) {
 	const main = liveSession();
 	const statusLine = new StatusLineComponent<AgentSession>(main.session, statusLineHost);
 	statusLines.push(statusLine);
 	const ctx = createInteractiveModeContext({ session: main.session, statusLine });
 	cfgDisplayMode.set(ctx.settings, "compact");
-	const output = new CompactToolOutputPreview(ctx);
+	const fileDiff = fileDiffRows && new CompactFileDiff(ctx, fileDiffRows);
+	const output = new CompactToolOutputPreview(
+		ctx,
+		undefined,
+		fileDiff ? (file, width) => fileDiff.coveredDiff(file, width) : undefined,
+	);
 	const dock = new CompactThinkingPreview(ctx, undefined, width => output.compactActivity(width));
 	outputPreviews.push(output);
 	activityDocks.push(dock);
@@ -1291,6 +1299,66 @@ describe("compact latest live Output consumers", () => {
 		expect(view.nativeBody).toEqual(["SHELL_OUTPUT"]);
 	});
 
+	it("keeps the previous Output and its deadline across fully covered write receipts", async () => {
+		setSystemTime(10_000);
+		let diffRows = 6;
+		const h = focusFixture(() => diffRows);
+		const live = liveSession();
+		const output = new LiveToolOutputState();
+		const fileChanges = new LatestTurnFileChanges();
+		const sessionId = live.session.sessionManager.getSessionId();
+		const file = path.resolve(live.session.sessionManager.getCwd(), "result.txt");
+		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(project => output.preview(project));
+		vi.spyOn(live.session, "getLatestTurnFileChanges").mockImplementation(() => fileChanges.get(sessionId));
+		h.register("CoveredWrites", live);
+		await h.focus.focusAgent("CoveredWrites");
+		output.restore([outputCall("shell", 1, "retained Output", { terminalAt: 10_000 })], false);
+		const original = h.previewView();
+		expect(original).toMatchObject({
+			head: "已完成 · bash · echo shell",
+			body: ["retained Output"],
+			nativeHead: "已完成 · bash · echo shell",
+			nativeBody: ["retained Output"],
+		});
+
+		for (let i = 1; i <= 2; i++) {
+			vi.advanceTimersByTime(500);
+			const toolCallId = `write-${i}`;
+			output.observe(
+				{ type: "tool_execution_start", toolCallId, toolName: "write", args: { path: file } },
+				Date.now(),
+			);
+			fileChanges.record(sessionId, { path: file, tool: "write", before: `${i - 1}\n`, after: `${i}\n` });
+			output.observe(
+				{
+					type: "tool_execution_end",
+					toolCallId,
+					toolName: "write",
+					isError: false,
+					result: {
+						content: [{ type: "text", text: "Successfully wrote 2 bytes to result.txt" }],
+						details: { resolvedPath: file },
+					},
+				},
+				Date.now(),
+			);
+			expect(h.previewView()).toEqual(original);
+		}
+		output.restore(output.snapshot(), false);
+		expect(h.previewView()).toEqual(original);
+
+		diffRows = 0;
+		expect(h.previewView()).toMatchObject({
+			body: ["Successfully wrote 2 bytes to result.txt"],
+			nativeBody: ["Successfully wrote 2 bytes to result.txt"],
+		});
+		diffRows = 6;
+		vi.advanceTimersByTime(1999);
+		expect(h.previewView()).toEqual(original);
+		vi.advanceTimersByTime(1);
+		expect(h.outputRows()).toEqual([[], []]);
+	});
+
 	it("selects by dispatch order only after real Output and replaces cumulative frames", async () => {
 		const h = focusFixture();
 		const live = liveSession();
@@ -1349,7 +1417,7 @@ describe("compact latest live Output consumers", () => {
 		const h = focusFixture();
 		const live = liveSession(null, undefined, true);
 		const args = { command: "echo shell" };
-		const details = { async: { jobId: "bg_1", name: "BuildPackage", state: "running" } };
+		const details = { async: { jobId: "bg_1", state: "running" } };
 		h.register("BackgroundOutput", live);
 		await h.focus.focusAgent("BackgroundOutput");
 		await live.emit({ type: "agent_start" });
@@ -1373,9 +1441,9 @@ describe("compact latest live Output consumers", () => {
 				partialResult: { content: [{ type: "text", text: `tick ${second}` }], details },
 			});
 			const view = h.previewView();
-			expect(view.head).toContain("运行中 · bash · BuildPackage · bg_1");
+			expect(view.head).toContain("运行中 · bash · bg_1");
 			expect(view.body).toEqual([`tick ${second}`]);
-			expect(view.nativeHead).toContain("运行中 · bash · BuildPackage · bg_1");
+			expect(view.nativeHead).toContain("运行中 · bash · bg_1");
 		}
 		expect(h.ctx.pendingTools.size).toBe(0);
 	});
