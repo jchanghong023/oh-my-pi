@@ -43,7 +43,6 @@ import type { CustomMessage } from "../session/messages";
 import type { UsageStatistics } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
-import type { ToolRestrictions } from "../session/tool-restrictions";
 import { TaskTool } from "../task";
 import type { PerCallModelAdvertisement } from "../task/model-approval";
 import type { AgentOutputManager } from "../task/output-manager";
@@ -367,8 +366,6 @@ export interface ToolSession {
 	 * required yield tool). Suppresses automatic tool-set expansion.
 	 */
 	restrictToolNames?: boolean;
-	/** Caller admission policy shared by advertised tools and canonical execution. */
-	toolRestrictions?: ToolRestrictions;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
 	/** Get this agent's eval executor session ID; keys its retained JS/Python/Ruby/Julia state. */
@@ -729,12 +726,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		: toolNames
 			? normalizeToolNames(toolNames)
 			: undefined;
-	if (
-		!restrictToolNames &&
-		!session.toolRestrictions?.hasAllowlist &&
-		requestedTools?.includes("read") &&
-		(session.taskDepth ?? 0) === 0
-	) {
+	if (!restrictToolNames && requestedTools?.includes("read") && (session.taskDepth ?? 0) === 0) {
 		for (const name of OPENWIKI_QUERY_TOOL_NAMES) {
 			if (!requestedTools.includes(name)) requestedTools.push(name);
 		}
@@ -743,20 +735,14 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	const goalModeActive = !restrictToolNames && goalEnabled && session.getGoalModeState?.()?.enabled === true;
 	const externalThinkingActive =
 		cfgExternalThinking.get(session.settings) && supportsExternalThinking(session.getActiveModel?.());
-	if (
-		goalModeActive &&
-		requestedTools &&
-		!session.toolRestrictions?.hasAllowlist &&
-		!requestedTools.includes("goal")
-	) {
+	if (goalModeActive && requestedTools && !requestedTools.includes("goal")) {
 		requestedTools.push("goal");
 	}
 	// Register enabled backends without probing Python; availability is checked on execution.
 	const backends = resolveEvalBackends(session);
 	const allowEval = backends.python || backends.js;
 
-	// Convenience pairing cannot widen an explicit caller allowlist.
-	if (requestedTools && !session.toolRestrictions?.hasAllowlist && cfgCheckpointEnabled.get(session.settings)) {
+	if (requestedTools && cfgCheckpointEnabled.get(session.settings)) {
 		if (requestedTools.includes("checkpoint") && !requestedTools.includes("rewind")) {
 			requestedTools.push("rewind");
 		} else if (requestedTools.includes("rewind") && !requestedTools.includes("checkpoint")) {
@@ -765,7 +751,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	}
 	// Auto-include AST counterparts when their text-based sibling is present.
 	// Restricted callers own the active list and must not have it widened.
-	if (requestedTools && !restrictToolNames && !session.toolRestrictions?.hasAllowlist) {
+	if (requestedTools && !restrictToolNames) {
 		if (
 			cfgCompactionExperimentalContextManagement.get(session.settings) &&
 			requestedTools.includes("read") &&
@@ -820,7 +806,6 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	}
 	const editDisabled = cfgEditMode.get(session.settings) === "none";
 	const isToolAllowed = (name: string) => {
-		if (session.toolRestrictions?.allows(name) === false) return false;
 		// Default child tool sets must not silently gain OpenWiki access. Explicit
 		// grants remain available, as for other child-gated built-ins.
 		if (OPENWIKI_QUERY_TOOL_NAMES.includes(name)) {
@@ -889,7 +874,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		}
 		return true;
 	};
-	if (includeYield && requestedTools && !session.toolRestrictions?.hasAllowlist && !requestedTools.includes("yield")) {
+	if (includeYield && requestedTools && !requestedTools.includes("yield")) {
 		requestedTools.push("yield");
 	}
 
@@ -915,11 +900,10 @@ export function createXdevState(
 		tools,
 		mountedNames,
 		builtInNames,
-		isAllowed: name => session.toolRestrictions?.allows(name) !== false,
-		isActive: name => session.toolRestrictions?.allows(name) !== false && session.isToolActive?.(name) === true,
+		isActive: name => session.isToolActive?.(name) === true,
 		// Card rendering reads the same predicate as execution: mounted devices
 		// plus active top-level tools, which the `write` transport also accepts.
-		resolve: name => (session.toolRestrictions?.allows(name) === false ? undefined : resolveXdevTool(state, name)),
+		resolve: name => resolveXdevTool(state, name),
 	};
 	return state;
 }
@@ -951,8 +935,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		baseEntries.map(async ([name, factory]) => {
 			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, session);
 			if (!tool) return null;
-			const wrapped = wrapToolWithMetaNotice(isolateTeamReads(tool, session));
-			return session.toolRestrictions?.wrap(wrapped) ?? wrapped;
+			return wrapToolWithMetaNotice(isolateTeamReads(tool, session));
 		}),
 	);
 	let tools = baseResults.filter((r): r is Tool => r !== null);
@@ -974,8 +957,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// mounting, they were already presented — and callable — top-level.
 	if (
 		xdevRequested &&
-		!session.toolRestrictions?.hasAllowlist &&
-		session.toolRestrictions?.allows("write") !== false &&
 		requestedTools !== undefined &&
 		!tools.some(tool => tool.name === "write") &&
 		tools.some(tool => tool.name === "read")
@@ -983,8 +964,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		session.deviceOnlyWrite = true;
 		const writeTool = await logger.time("createTools:write:xdev-transport", BUILTIN_TOOLS.write, session);
 		if (writeTool) {
-			const base = wrapToolWithMetaNotice(writeTool);
-			const wrapped = session.toolRestrictions?.wrap(base) ?? base;
+			const wrapped = wrapToolWithMetaNotice(writeTool);
 			tools.push(wrapped);
 			toolRegistry.set(wrapped.name, wrapped);
 			builtInNames.add(wrapped.name);
@@ -1015,31 +995,21 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const xdevMounted = (session.xdev?.mountedNames.size ?? 0) > 0;
 	if (
 		!restrictToolNames &&
-		!session.toolRestrictions?.hasAllowlist &&
-		session.toolRestrictions?.allows("write") !== false &&
 		tools.some(tool => tool.deferrable === true) &&
 		!tools.some(tool => tool.name === "write")
 	) {
 		const writeTool = await logger.time("createTools:write", BUILTIN_TOOLS.write, session);
 		if (writeTool) {
-			const base = wrapToolWithMetaNotice(writeTool);
-			const wrapped = session.toolRestrictions?.wrap(base) ?? base;
+			const wrapped = wrapToolWithMetaNotice(writeTool);
 			tools.push(wrapped);
 			toolRegistry.set(wrapped.name, wrapped);
 			builtInNames.add(wrapped.name);
 		}
 	}
-	if (
-		!restrictToolNames &&
-		!session.toolRestrictions?.hasAllowlist &&
-		session.toolRestrictions?.allows("read") !== false &&
-		xdevMounted &&
-		!tools.some(tool => tool.name === "read")
-	) {
+	if (!restrictToolNames && xdevMounted && !tools.some(tool => tool.name === "read")) {
 		const readTool = await logger.time("createTools:read", BUILTIN_TOOLS.read, session);
 		if (readTool) {
-			const base = wrapToolWithMetaNotice(readTool);
-			const wrapped = session.toolRestrictions?.wrap(base) ?? base;
+			const wrapped = wrapToolWithMetaNotice(readTool);
 			tools.push(wrapped);
 			toolRegistry.set(wrapped.name, wrapped);
 			builtInNames.add(wrapped.name);

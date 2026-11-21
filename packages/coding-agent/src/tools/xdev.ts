@@ -246,8 +246,6 @@ export interface XdevState {
 	readonly builtInNames: Set<string>;
 	/** Whether a name is active at the top level. */
 	readonly isActive: (name: string) => boolean;
-	/** Optional caller admission boundary, independent of top-level/mounted presentation. */
-	readonly isAllowed?: (name: string) => boolean;
 	/** Canonical renderer for a dispatched device name; mirrors {@link resolveXdevTool}. */
 	readonly resolve?: (name: string) => Tool | undefined;
 	/** Optional execution-only decorator, such as the ACP permission gate. */
@@ -264,12 +262,7 @@ export const XDEV_EXTERNAL_DESCRIPTION_CAP = 200;
 /** Resolve enabled canonical names or unambiguous wire aliases through the session map. */
 export function resolveXdevTool(state: XdevState, name: string): Tool | undefined {
 	const resolved = resolveToolWireName(state.tools, name);
-	if (
-		!resolved ||
-		state.isAllowed?.(resolved.name) === false ||
-		(!state.mountedNames.has(resolved.name) && !state.isActive(resolved.name))
-	)
-		return undefined;
+	if (!resolved || (!state.mountedNames.has(resolved.name) && !state.isActive(resolved.name))) return undefined;
 	return resolved;
 }
 
@@ -291,7 +284,7 @@ export function isReadOnlyIndexDevice(state: XdevState | undefined, name: string
  */
 export function resolveMountedXdevTool(state: XdevState, name: string): Tool | undefined {
 	const canonicalName = stripXdUrlPrefix(name);
-	return state.mountedNames.has(canonicalName) ? resolveXdevTool(state, canonicalName) : undefined;
+	return state.mountedNames.has(canonicalName) ? state.tools.get(canonicalName) : undefined;
 }
 
 /**
@@ -312,7 +305,7 @@ export function resolveMountedXdevExecutable(state: XdevState, name: string): To
 /** Mounted tools in presentation order, resolved from the canonical map. */
 export function listXdevTools(state: XdevState): Tool[] {
 	return [...state.mountedNames].flatMap(name => {
-		const tool = resolveXdevTool(state, name);
+		const tool = state.tools.get(name);
 		return tool ? [tool] : [];
 	});
 }

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as pyKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
-import { ToolRestrictions } from "@oh-my-pi/pi-coding-agent/session/tool-restrictions";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 const openwikiQueryTools = ["openwiki_search", "openwiki_read", "openwiki_list_workspaces", "openwiki_list_wikis"];
@@ -136,16 +135,6 @@ describe("createTools", () => {
 		const child = createTestSession({ taskDepth: 1, restrictToolNames: true });
 		const names = (await createTools(child, ["read", "openwiki_search"])).map(tool => tool.name);
 		expect(new Set(names)).toEqual(new Set(["read", "openwiki_search"]));
-	});
-
-	it("does not widen a caller allowlist with OpenWiki convenience tools", async () => {
-		const session = createTestSession({
-			toolRestrictions: new ToolRestrictions({ allowlist: ["read", "openwiki_search"] }),
-		});
-		const readOnly = (await createTools(session, ["read"])).map(tool => tool.name);
-		expect(readOnly).toEqual(["read"]);
-		const explicitlyGranted = (await createTools(session, ["read", "openwiki_search"])).map(tool => tool.name);
-		expect(new Set(explicitlyGranted)).toEqual(new Set(["read", "openwiki_search"]));
 	});
 
 	it("lowercases requested tool subset", async () => {

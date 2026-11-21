@@ -65,7 +65,6 @@ export async function writeCrawlMarkdownWithSession(
 		throw new Error("Crawl output filename must be a single file name.");
 	}
 	const context = session.getToolContext?.();
-	session.toolRestrictions?.assertAllowed("write");
 	if (!context) throw new Error("Crawl output requires a live tool context.");
 	const outputDirectory = path.resolve(session.cwd, expandTilde(directory));
 	const { name, ext } = path.parse(basename);
@@ -77,7 +76,6 @@ export async function writeCrawlMarkdownWithSession(
 		if (session.deviceOnlyWrite && !(await targetsLocalSandbox(session, target, signal))) {
 			throw new Error("The current session does not permit filesystem writes.");
 		}
-		session.toolRestrictions?.assertAllowed("write");
 		await enforcePlanModeWrite(session, target, { op: "create", signal });
 		const settings = context.settings ?? session.settings;
 		const { approvalMode, userPolicies } = resolveApprovalFromContext(context);
@@ -100,7 +98,6 @@ export async function writeCrawlMarkdownWithSession(
 			if (answer === "deny") throw new Error("Tool call denied by user: write");
 		}
 		signal?.throwIfAborted();
-		session.toolRestrictions?.assertAllowed("write");
 		await fs.mkdir(outputDirectory, { recursive: true });
 		signal?.throwIfAborted();
 		try {

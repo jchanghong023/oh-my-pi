@@ -307,7 +307,6 @@ import {
 	resolveBridgeCompactionThreshold,
 } from "./session/cache-warmer";
 import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
-import { ToolRestrictions } from "./session/tool-restrictions";
 import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
 import { createSnapcompactSavingsRecorder } from "./session/snapcompact-savings-journal";
 import { createSpeculativeToolExecutionConfig } from "./speculation/host";
@@ -674,8 +673,6 @@ export interface CreateAgentSessionOptions {
 		  }
 		| undefined
 	>;
-	/** Explicit embedding caller policy, separate from normal configured tool activation. */
-	toolRestrictions?: ToolRestrictions;
 	/** Spawns to allow. Default: "*" */
 	spawns?: string;
 	/** User-authorized model agents inherited from the parent session for nested delegation. */
@@ -2158,34 +2155,17 @@ async function resolveSessionSettings(cwd: string, agentDir: string): Promise<Se
 	return Settings.loadIsolated({ cwd, agentDir });
 }
 
-class GuardedToolRegistry extends Map<string, Tool & Pick<ToolDefinition, "defaultInactive">> {
-	readonly #policy: ToolRestrictions;
-	constructor(policy: ToolRestrictions) {
-		super();
-		this.#policy = policy;
-	}
-	override set(name: string, tool: Tool & Pick<ToolDefinition, "defaultInactive">): this {
-		return super.set(name, this.#policy.wrap(tool));
-	}
-}
-
 export type NativeChildSessionHooks = Pick<
 	CreateAgentSessionOptions,
-	"resolveRequestAuth" | "getApiKey" | "onPayload" | "onResponse" | "toolRestrictions"
+	"resolveRequestAuth" | "getApiKey" | "onPayload" | "onResponse"
 >;
 
-/** These request hooks and policies cannot be passed through worker placement. */
+/** These request hooks cannot be passed through worker placement. */
 export function hasNativeChildSessionHooks(hooks: NativeChildSessionHooks | undefined): boolean {
-	return !!(
-		hooks?.resolveRequestAuth ||
-		hooks?.getApiKey ||
-		hooks?.onPayload ||
-		hooks?.onResponse ||
-		hooks?.toolRestrictions
-	);
+	return !!(hooks?.resolveRequestAuth || hooks?.getApiKey || hooks?.onPayload || hooks?.onResponse);
 }
 
-/** Select effective hooks; callers clone an inherited tool policy when creating a session. */
+/** Select effective request hooks for a child session. */
 export function resolveNativeChildSessionHooks(
 	options: NativeChildSessionHooks,
 	parent?: NativeChildSessionHooks,
@@ -2195,7 +2175,6 @@ export function resolveNativeChildSessionHooks(
 		getApiKey: options.getApiKey,
 		onPayload: options.onPayload ?? parent?.onPayload,
 		onResponse: options.onResponse ?? parent?.onResponse,
-		toolRestrictions: options.toolRestrictions ?? parent?.toolRestrictions,
 	};
 }
 
@@ -2940,9 +2919,7 @@ async function createAgentSessionScoped(
 		// mutation (any tool) bumped it in the meantime.
 		const fileMutationVersions = new Map<string, number>();
 		const activeToolNames = new Set<string>();
-		const toolRegistry = options.toolRestrictions
-			? new GuardedToolRegistry(options.toolRestrictions)
-			: new Map<string, Tool & Pick<ToolDefinition, "defaultInactive">>();
+		const toolRegistry = new Map<string, Tool & Pick<ToolDefinition, "defaultInactive">>();
 		const setActiveToolNames = (names: Iterable<string>): void => {
 			activeToolNames.clear();
 			for (const name of names) {
@@ -2950,7 +2927,6 @@ async function createAgentSessionScoped(
 			}
 		};
 		const toolSession: ToolSession = {
-			toolRestrictions: options.toolRestrictions,
 			subagentHooks: options.subagentHooks,
 			get cwd() {
 				return sessionManager.getCwd();
@@ -4503,12 +4479,7 @@ async function createAgentSessionScoped(
 			// building one unconditionally would hand a read-only agent a
 			// mutating tool it was denied (the issue #5680 escalation).
 			if (!editWasGranted) return undefined;
-			cursorBridgeEditTool ??= createBridgeEditTool(
-				toolSession,
-				extensionRunner,
-				undefined,
-				options.toolRestrictions,
-			);
+			cursorBridgeEditTool ??= createBridgeEditTool(toolSession, extensionRunner);
 			return cursorBridgeEditTool;
 		};
 
@@ -4726,21 +4697,16 @@ async function createAgentSessionScoped(
 			// the grant: the factory builds a fresh tool and `executeTool` prefers
 			// it over the registry, so installing it unconditionally would let a
 			// session without `grep` search anyway.
-			createGrepTool: toolRegistry.has("grep")
-				? createBridgeGrepFactory(toolSession, extensionRunner, undefined, options.toolRestrictions)
-				: undefined,
+			createGrepTool: toolRegistry.has("grep") ? createBridgeGrepFactory(toolSession, extensionRunner) : undefined,
 			// Native delete and resource-download frames mutate files without a
 			// registry tool. Resolve both the transactional active predicate and
 			// live access mode: Agent.state.tools commits only after prompt rebuilding,
 			// while this predicate revokes before the await and rolls back on failure.
 			allowDirectFileMutation: () =>
-				options.toolRestrictions?.allows("write") !== false &&
-				((editWasGranted &&
-					options.toolRestrictions?.allows("edit") !== false &&
-					toolSession.isToolActive?.("edit") === true) ||
-					(toolSession.isToolActive?.("write") === true &&
-						toolRegistry.has("write") &&
-						toolSession.deviceOnlyWrite !== true)),
+				(editWasGranted && toolSession.isToolActive?.("edit") === true) ||
+				(toolSession.isToolActive?.("write") === true &&
+					toolRegistry.has("write") &&
+					toolSession.deviceOnlyWrite !== true),
 		});
 
 		// Resolve the live inline-descriptors setting against the active model.
@@ -5355,9 +5321,7 @@ async function createAgentSessionScoped(
 
 		const initialTools = initialToolNames
 			.map(name => toolRegistry.get(name))
-			.filter(
-				(tool): tool is AgentTool => tool !== undefined && (options.toolRestrictions?.allows(tool.name) ?? true),
-			);
+			.filter((tool): tool is AgentTool => tool !== undefined);
 
 		// `model` is final here: deferred patterns, auth fallback, and extension
 		// role reclaim have all run, so a resolver can scope tiers to its family.
@@ -5469,9 +5433,6 @@ async function createAgentSessionScoped(
 				assertOfflineDispatchModel(streamModel);
 			} catch (error) {
 				return Promise.reject(error);
-			}
-			if (options.toolRestrictions) {
-				if (context.tools) context = { ...context, tools: options.toolRestrictions.filter(context.tools) };
 			}
 			if (mainRequest) mainRequestProvider = streamModel.provider;
 			if (options.resolveRequestAuth) {
@@ -5840,10 +5801,8 @@ async function createAgentSessionScoped(
 			if (tool instanceof Promise) throw new Error(`Advisor tool "${name}" must build synchronously`);
 			return tool;
 		};
-		const advisorRestrictions = options.toolRestrictions;
 		let advisorAvailableToolNames: string[] | undefined;
 		const advisorTools: AdvisorToolFactory = {
-			restrictions: advisorRestrictions,
 			names: () => {
 				if (!advisorAvailableToolNames) {
 					const probeSession = createAdvisorToolSession();
@@ -5857,8 +5816,7 @@ async function createAgentSessionScoped(
 				// is active only once its factory returns a tool, so a grant for an
 				// unavailable built-in (lsp with language servers off) is not advertised.
 				const activeToolNames = new Set<string>();
-				advisorSession.isToolActive = name =>
-					activeToolNames.has(name) && advisorRestrictions?.allows(name) !== false;
+				advisorSession.isToolActive = name => activeToolNames.has(name);
 				const tools: Tool[] = [];
 				for (const name of advisorBuiltinNames) {
 					if (!granted.has(name)) continue;
@@ -5875,24 +5833,17 @@ async function createAgentSessionScoped(
 					// bridge both run these instances directly, so a raw one would execute a
 					// `bash`/`write` the user configured as `ask` or `deny`. Meta-notice
 					// first, matching the registry's wrap order.
-					const approved = new ExtensionToolWrapper(wrapToolWithMetaNotice(tool), extensionRunner, advisorAgent);
-					tools.push(advisorRestrictions?.wrap(approved) ?? approved);
+					tools.push(new ExtensionToolWrapper(wrapToolWithMetaNotice(tool), extensionRunner, advisorAgent));
 				}
 				return {
 					tools,
 					// Same per-call `grep` seam the primary bridge gets, built against the
 					// advisor's own tool session so a `pi_grep` frame's context width and
 					// match cap are honored there too.
-					createGrepTool: createBridgeGrepFactory(
-						advisorSession,
-						extensionRunner,
-						advisorAgent,
-						advisorRestrictions,
-					),
+					createGrepTool: createBridgeGrepFactory(advisorSession, extensionRunner, advisorAgent),
 					// Same `replace`-mode requirement as the primary bridge; the advisor
 					// path gates it on the advisor's own `edit` grant.
-					createEditTool: () =>
-						createBridgeEditTool(advisorSession, extensionRunner, advisorAgent, advisorRestrictions),
+					createEditTool: () => createBridgeEditTool(advisorSession, extensionRunner, advisorAgent),
 					resetState: () => {
 						advisorSession.state = new ToolConversationState();
 					},

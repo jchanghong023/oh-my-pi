@@ -234,7 +234,6 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						getApiKey: deps.getApiKey,
 						onPayload: deps.onPayload,
 						onResponse: deps.onResponse,
-						toolRestrictions: deps.toolRestrictions?.clone(),
 						agent,
 						task: call.task,
 						assignment: call.task,

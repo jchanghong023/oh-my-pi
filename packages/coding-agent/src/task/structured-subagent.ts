@@ -766,7 +766,6 @@ function buildExecutorOptions(
 		resolveRequestAuth: session.resolveRequestAuth,
 		onPayload: session.onPayload,
 		onResponse: session.onResponse,
-		toolRestrictions: session.toolRestrictions,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,
 		// A stepped spawn starts on its first step prompt; the executor sends the rest.
@@ -775,12 +774,7 @@ function buildExecutorOptions(
 		assignment: request.assignment.trim(),
 		context: request.context?.trim() || undefined,
 		planReference: undefined,
-		approvedPlanChecks:
-			policy.planMode ||
-			session.toolRestrictions?.allows("spec_verify") === false ||
-			session.toolRestrictions?.allows("bash") === false
-				? undefined
-				: session.getApprovedPlanChecks?.(),
+		approvedPlanChecks: policy.planMode ? undefined : session.getApprovedPlanChecks?.(),
 		// Task `name` is the spawn handle (id allocation). Eval `label` is a
 		// real UI description. Copy it only for eval so generateTaskLabel can run.
 		description: request.invocationKind === "eval" ? trimToUndefined(request.identity?.label) : undefined,

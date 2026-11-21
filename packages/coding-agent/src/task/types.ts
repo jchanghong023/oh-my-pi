@@ -28,7 +28,6 @@ export interface NativeSpawnOverrides {
 /** Capability-only overrides: native identity, models and ownership remain host-owned. */
 export type NativeSubagentOverrides = Pick<
 	CreateAgentSessionOptions,
-	| "toolRestrictions"
 	| "toolNames"
 	| "customTools"
 	| "systemPrompt"

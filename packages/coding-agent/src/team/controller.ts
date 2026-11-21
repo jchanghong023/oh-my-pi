@@ -216,7 +216,6 @@ export function buildRunnerDeps(
 		settings,
 		modelRegistry,
 		...sessionHooks,
-		toolRestrictions: sessionHooks.toolRestrictions?.clone(),
 		authStorage: modelRegistry.authStorage,
 		sessionFile: session.sessionFile ?? null,
 		artifactsDir: session.sessionManager.getArtifactsDir(),

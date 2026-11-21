@@ -4342,8 +4342,6 @@ function buildSubagentSessionOptions(
 	const customTools = spec.options.customTools ?? [];
 	return {
 		...spec.options,
-		// Launch uses the snapshot taken at spawn; revival gets its own runtime policy instance.
-		toolRestrictions: launch ? spec.options.toolRestrictions : spec.options.toolRestrictions?.clone(),
 		mcpTools: mcpTools.length > 0 ? mcpTools : undefined,
 		mcpToolScope: mcpFollower?.scope,
 		customTools: customTools.length > 0 ? customTools : undefined,
@@ -4407,7 +4405,6 @@ async function configureNativeSubagentSession(
 	const overrides = await spec.hooks.configureSession(spec.request, Object.freeze(resolvedOptions));
 	const configured = { ...resolvedOptions };
 	const keys = [
-		"toolRestrictions",
 		"toolNames",
 		"customTools",
 		"systemPrompt",
@@ -4723,7 +4720,6 @@ async function reviveAdmittedSubagent(
  * read from `options.settings`; a call without settings runs here.
  */
 export async function runSubprocess(options: ExecutorOptions): Promise<SingleResult> {
-	if (options.toolRestrictions) options = { ...options, toolRestrictions: options.toolRestrictions.clone() };
 	const pool = isMainThread() && options.settings ? subagentWorkerPool(options.settings) : undefined;
 	// Keep realm-local native callbacks on their owning thread.
 	// Read-isolated Team runs also need synchronous local-protocol getters that the worker codec does not bridge.

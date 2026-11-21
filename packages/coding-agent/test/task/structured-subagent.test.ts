@@ -48,7 +48,6 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { ToolRestrictions } from "@oh-my-pi/pi-coding-agent/session/tool-restrictions";
 import { setSubagentWorkerPoolForTests, SubagentWorkerPool } from "@oh-my-pi/pi-coding-agent/thread/subagent-worker";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
@@ -2114,7 +2113,6 @@ describe("agent frontmatter structured opt-in", () => {
 								allowRestrictedCustomTools: true,
 								toolNames: ["scope_probe"],
 								customTools: [probe],
-								toolRestrictions: new ToolRestrictions({ allowlist: ["scope_probe"] }),
 								enableMCP: false,
 								enableLsp: false,
 								enableIrc: false,
@@ -2258,7 +2256,6 @@ describe("agent frontmatter structured opt-in", () => {
 								allowRestrictedCustomTools: true,
 								toolNames: leaf ? ["scope_probe"] : ["task"],
 								customTools: leaf ? [probe] : [],
-								toolRestrictions: new ToolRestrictions({ allowlist: leaf ? ["scope_probe"] : ["task"] }),
 								subagentHooks: hooks(owner),
 								enableMCP: false,
 								enableLsp: false,

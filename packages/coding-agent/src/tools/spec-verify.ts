@@ -31,8 +31,6 @@ export class SpecVerifyTool implements AgentTool<typeof schema, BashToolDetails>
 	}
 
 	#command(args: unknown): string {
-		this.session.toolRestrictions?.assertAllowed(this.name);
-		this.session.toolRestrictions?.assertAllowed("bash");
 		if (this.session.getPlanModeState?.()?.enabled) throw new ToolError("Verification is unavailable in plan mode.");
 		const params = schema(args);
 		if (params instanceof type.errors) throw new ToolError(params.summary);

@@ -22,6 +22,7 @@
 - Removed the retired ZCode `SessionManager.create()` option for supplying a session ID. Existing session IDs and ownership transitions are unchanged.
 - Removed the retired ZCode compaction-to-journal references from session events and new journal entries. Diagnostic log correlation is unchanged.
 - Removed the fork-only SDK option `allowRestrictedGoal`. Restricted sessions follow upstream Goal tool admission rules.
+- Removed the fork-only `createAgentSession({ toolRestrictions })` policy. Use `toolNames` with `restrictToolNames: true` for an explicit tool roster and `tools.approval` for per-tool approval.
 - Removed the unused `AgentSession.disposeHeldQueue()` SDK method. Native Stop and queued input controls are unchanged.
 - Removed the fork-only SDK option `getAgentDefinitions`. Define project agents in `.omp/agents/`; native agent discovery and session model tags are unchanged.
 - Removed the fork-only SDK option `createAgentSession({ editMode })`. Edit schemas and read anchors use the upstream settings and model rules.

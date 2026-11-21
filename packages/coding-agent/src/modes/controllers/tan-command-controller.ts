@@ -182,8 +182,7 @@ export class TanCommandController {
 		const enableLsp = cfgTaskEnableLsp.get(this.ctx.settings) !== false;
 		const agentRegistry = AgentRegistry.global();
 		const label = `/tan ${previewWork(trimmedWork)}`;
-		const parentHooks = sdk.resolveNativeChildSessionHooks({}, session.nativeChildCapabilities);
-		const sessionHooks = { ...parentHooks, toolRestrictions: parentHooks.toolRestrictions?.clone() };
+		const sessionHooks = sdk.resolveNativeChildSessionHooks({}, session.nativeChildCapabilities);
 		const naming = generateTanName(session, trimmedWork);
 		this.ctx.showStatus("Naming background tan…");
 

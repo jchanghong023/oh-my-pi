@@ -338,8 +338,6 @@ describe("OMP OpenWiki read-only tools", () => {
 		});
 		expect(noHits.isError).not.toBe(true);
 		expect(json<WikiSearchResults>(noHits).results).toEqual([]);
-		const restricted = new WriteTool({ ...context, xdev: { ...xdev, isAllowed: () => false } });
-		expect(restricted.approval(args)).toBe("exec");
 	}, 30_000);
 
 	// The host must preserve full Markdown and bound corrective anchor disclosure.

@@ -12,7 +12,6 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { EditTool } from "./edit";
 import type { ExtensionAgentIdentity, ExtensionRunner } from "./extensibility/extensions";
 import { ExtensionToolWrapper } from "./extensibility/extensions";
-import type { ToolRestrictions } from "./session/tool-restrictions";
 import type { GrepToolOptions, Tool, ToolSession } from "./tools";
 import { GrepTool } from "./tools";
 
@@ -32,12 +31,10 @@ export function createBridgeGrepFactory(
 	session: ToolSession,
 	extensionRunner: ExtensionRunner,
 	agent?: ExtensionAgentIdentity,
-	restrictions?: ToolRestrictions,
 ): (options: GrepToolOptions) => AgentTool {
 	return options => {
 		const grepTool: Tool = new GrepTool(session, options);
-		const approved = new ExtensionToolWrapper(grepTool, extensionRunner, agent);
-		return restrictions?.wrap(approved) ?? approved;
+		return new ExtensionToolWrapper(grepTool, extensionRunner, agent);
 	};
 }
 
@@ -58,11 +55,9 @@ export function createBridgeEditTool(
 	session: ToolSession,
 	extensionRunner: ExtensionRunner,
 	agent?: ExtensionAgentIdentity,
-	restrictions?: ToolRestrictions,
 ): AgentTool {
 	const editTool: Tool = new EditTool(session, "replace");
-	const approved = new ExtensionToolWrapper(editTool, extensionRunner, agent);
-	return restrictions?.wrap(approved) ?? approved;
+	return new ExtensionToolWrapper(editTool, extensionRunner, agent);
 }
 
 /**

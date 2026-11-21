@@ -422,7 +422,6 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 	try {
 		({ session } = await createAgentSession({
 			...spec.sessionHooks,
-			toolRestrictions: spec.sessionHooks?.toolRestrictions?.clone(),
 			cwd: spec.root.sessionManager.getCwd(),
 			costGate: spec.costGate,
 			authStorage: spec.authStorage,

@@ -804,12 +804,10 @@ export class VibeSessionRegistry {
 	/** Spawn a persistent worker session and start its first turn in the background. */
 	async spawn(session: ToolSession, args: { cli: VibeCli; name?: string; prompt: string }): Promise<VibeSpawnOutcome> {
 		const scope = this.ownerScope(session);
-		// Capture the caller's effective policy before the lock or background job can defer execution.
 		const hooks: NativeChildSessionHooks = {
 			resolveRequestAuth: session.resolveRequestAuth,
 			onPayload: session.onPayload,
 			onResponse: session.onResponse,
-			toolRestrictions: session.toolRestrictions?.clone(),
 		};
 		return this.#withTerminationLock(scope, () => this.#spawnLocked(session, scope, args, hooks));
 	}
