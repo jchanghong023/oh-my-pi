@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { Settings } from "../../src/config/settings";
-import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
+import { ACP_BUILTIN_SLASH_COMMANDS, executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
 import {
 	type BuiltinSlashCommandRuntime,
 	executeBuiltinSlashCommand,
@@ -321,14 +321,21 @@ function ordinaryTaskDispatchFixture() {
 }
 
 describe("shared task dispatch", () => {
-	for (const host of ["tui", "acp"] as const) {
-		test(`${host} keeps ordinary model command expansion`, async () => {
+	test.each(["ultrathink", "orchestrate", "workflowz"])(
+		"/%s preserves internal task whitespace in TUI and falls through in ACP",
+		async name => {
 			const fixture = ordinaryTaskDispatchFixture();
 			const task = "first line  \r\n\r\nlast line";
-			const result = await fixture[host](`/ultrathink:\t ${task}\t \r\n`);
-			const prompt = `ultrathink ${task}`;
-			expect(result).toEqual(host === "tui" ? prompt : { prompt });
+			const text = `/${name}:\t ${task}\t \r\n`;
+			expect(await fixture.tui(text)).toBe(`${name} ${task}`);
+			expect(await fixture.acp(text)).toBe(false);
+			expect(ACP_BUILTIN_SLASH_COMMANDS.some(command => command.name === name)).toBe(false);
+		},
+	);
 
+	for (const host of ["tui", "acp"] as const) {
+		test(`${host} expands /jchime through its shared handler`, async () => {
+			const fixture = ordinaryTaskDispatchFixture();
 			const command = lookupBuiltinSlashCommand("jchime")!;
 			const handle = vi.spyOn(command, "handle");
 			const text = "/jchime investigate the distinct dispatch regression";

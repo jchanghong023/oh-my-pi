@@ -5,14 +5,15 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { hashPath } from "@oh-my-pi/pi-utils";
+import { sanitizeDisplayLines, sanitizeDisplayWarnings, shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import { $which, hashPath } from "@oh-my-pi/pi-utils";
 import type { SettingValueOf } from "../config/registry";
 import type { Settings } from "../config/settings";
 import type { cfgWorktreeOnExit } from "../task/settings";
 import type { SessionWorktree as BackendSessionWorktree } from "../worktree/backend";
 import { resolveAvailableWorktreePath } from "../worktree/paths";
 import { worktreeBackend, worktreeOrigin } from "../worktree/worktrees";
+import type { AgentSession } from "./agent-session";
 
 export interface SessionWorktree extends BackendSessionWorktree {
 	/** Whether this session created the worktree rather than reusing it. */
@@ -66,6 +67,49 @@ export function defaultSessionWorktreeBranch(now = new Date()): string {
 export function formatSessionWorktreeSummary(worktree: SessionWorktree): string {
 	const how = worktree.created ? "checked out, committed branch contents" : "reused existing worktree";
 	return `Moved to worktree ${worktree.path} on branch ${worktree.branch} (${how}).`;
+}
+
+/** Bytes at the end of a failed hook's output that are searched for its last line. */
+const HOOK_OUTPUT_TAIL_BYTES = 4096;
+
+/**
+ * Runs the `post-checkout` hook of a linked worktree `/wt` created, with the
+ * arguments `git worktree add` gives it. Then rediscovers skills and commands
+ * so the session sees what the hook added. A failing hook keeps the worktree
+ * and returns a display-ready warning.
+ */
+export async function runSessionWorktreeHook(
+	worktree: SessionWorktree,
+	session: Pick<AgentSession, "isDisposed" | "refreshSkillsAndCommands">,
+): Promise<string[]> {
+	// Without a `git` executable no hook can run: stay silent, as `/wt` was before it ran hooks.
+	if (!$which("git")) return [];
+	const warnings: string[] = [];
+	try {
+		const hook = await vcs.runPostCheckoutHook(worktree.path, worktree.baseCommit);
+		if (hook.exitCode !== 0) {
+			// `git hook run` sends the hook's stdout to stderr; the fallback for git older than 2.36 keeps
+			// them apart, and stderr's last line wins.
+			const tails = [hook.stdout, hook.stderr].map(bytes =>
+				new TextDecoder().decode(bytes.subarray(-HOOK_OUTPUT_TAIL_BYTES)),
+			);
+			const lastLine = sanitizeDisplayLines(tails.join("\n"))
+				.map(line => line.trim())
+				.findLast(Boolean);
+			warnings.push(`post-checkout hook exited with ${hook.exitCode}${lastLine ? `: ${lastLine}` : ""}`);
+		}
+	} catch (error) {
+		warnings.push(`post-checkout hook could not run: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	// The session can end while the hook runs.
+	if (!session.isDisposed) {
+		try {
+			await session.refreshSkillsAndCommands();
+		} catch (error) {
+			warnings.push(`skill and command rescan failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	return sanitizeDisplayWarnings(warnings.map(warning => `Worktree created, but ${warning}`));
 }
 
 /**

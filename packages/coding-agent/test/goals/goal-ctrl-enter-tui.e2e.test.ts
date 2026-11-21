@@ -18,8 +18,7 @@ describe("native Goal Ctrl+Enter tool-batch delivery", () => {
 			const feedbackTurn = autopilot ? 2 : 3;
 			const feedbackCount = (request: ModelRequest) =>
 				request.messages.filter(
-					message =>
-						message.role === "user" && contentText(message.content).includes("ENTER_CHANGE_DIRECTION"),
+					message => message.role === "user" && contentText(message.content).includes("ENTER_CHANGE_DIRECTION"),
 				).length;
 			let turns = 0;
 			await withTui(

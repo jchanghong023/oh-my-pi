@@ -1482,16 +1482,20 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				const settledForegrounds = new Set<string>();
 				for (const [index, source] of sources.entries()) {
 					const target = `${source.parent}/shared.txt`;
+					const receipt = `Successfully wrote ${Buffer.byteLength(source.evidence)} bytes to ${source.file}`;
 					const isCurrentWrite = (text: string, matches: (line: string) => boolean) => {
 						const [row, extra] = actionRows(text, writeDone);
 						return !!row && !extra && row.includes(target) && matches(row);
 					};
 					const full = await observe(
-						`${target}: latest write shows both the activity and a real file change`,
+						`${target}: latest write shows both the activity and the tool receipt`,
 						text =>
 							isCurrentWrite(text, line => line.indexOf(source.intent) > line.indexOf(target)) &&
-							text.includes(source.evidence),
+							text.includes(receipt),
 					);
+					// Plain Write returns a receipt, not an original Diff. Verify the change on disk.
+					expect(full.screen).not.toContain(source.evidence);
+					expect(await Bun.file(path.join(cwd, source.file)).text()).toBe(source.evidence);
 					const [label, pathRun, intent] = await readRuns(full.screen, writeDone, target, source.intent);
 					expect(pathRun![0]!.y).toBe(intent![0]!.y);
 					expect(pathRun![0]!.x).toBeLessThan(intent![0]!.x);

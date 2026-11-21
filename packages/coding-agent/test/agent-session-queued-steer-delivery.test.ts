@@ -294,12 +294,12 @@ describe("AgentSession queued steer delivery", () => {
 			}
 			await session.waitForIdle();
 
-			const active = goalState === "ordinary-active" || goalState === "autopilot-active";
+			const promoted = goalState === "autopilot-active";
 			const nextRequest = JSON.stringify(mock.calls[1].context.messages);
-			expect(nextRequest.includes(feedback)).toBe(active);
+			expect(nextRequest.includes(feedback)).toBe(promoted);
 			expect(nextRequest).toContain("total=3");
-			expect(totals).toEqual(active ? [1, 3, 33] : [1, 3, 6]);
-			expect(JSON.stringify(mock.calls[2].context.messages)).toContain(active ? "total=33" : "total=6");
+			expect(totals).toEqual(promoted ? [1, 3, 33] : [1, 3, 6]);
+			expect(JSON.stringify(mock.calls[2].context.messages)).toContain(promoted ? "total=33" : "total=6");
 			expect(interrupted).toBe(false);
 			const deliveredFeedback = session.messages.filter(
 				message => message.role === "user" && JSON.stringify(message.content).includes(feedback),
@@ -313,8 +313,8 @@ describe("AgentSession queued steer delivery", () => {
 					message => message.role === "user" && JSON.stringify(message.content).includes(feedback),
 				),
 			);
-			expect(providerDeliveries.map(messages => messages.length)).toEqual(active ? [0, 1, 1] : [0, 0, 0, 1]);
-			expect(JSON.stringify(mock.calls.at(-1)!.context.messages)).toContain(active ? "total=33" : "total=6");
+			expect(providerDeliveries.map(messages => messages.length)).toEqual(promoted ? [0, 1, 1] : [0, 0, 0, 1]);
+			expect(JSON.stringify(mock.calls.at(-1)!.context.messages)).toContain(promoted ? "total=33" : "total=6");
 			expect(
 				sessionManager
 					.getEntries()
@@ -332,7 +332,7 @@ describe("AgentSession queued steer delivery", () => {
 					}),
 				}),
 			]);
-			expect(mock.calls).toHaveLength(active ? 3 : 4);
+			expect(mock.calls).toHaveLength(promoted ? 3 : 4);
 			expect(session.agent.hasQueuedMessages()).toBe(false);
 		});
 	}

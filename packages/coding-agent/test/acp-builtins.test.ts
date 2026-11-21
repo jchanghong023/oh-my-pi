@@ -1214,6 +1214,7 @@ describe("wave 3 commands", () => {
 		worktreeGit(repoDir, "config", "core.autocrlf", "false");
 		worktreeGit(repoDir, "config", "user.email", "t@example.com");
 		worktreeGit(repoDir, "config", "user.name", "t");
+		worktreeGit(repoDir, "config", "core.hooksPath", path.join(path.dirname(repoDir), "hooks"));
 		await Bun.write(path.join(repoDir, "tracked.txt"), "committed\n");
 		await Bun.write(path.join(repoDir, "deleted.txt"), "committed\n");
 		await Bun.write(path.join(repoDir, "unstaged-deleted.txt"), "committed\n");
@@ -1395,6 +1396,53 @@ describe("wave 3 commands", () => {
 			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
+
+	it.skipIf(process.platform === "win32").each([
+		["and reports its failure", false],
+		["and drops its warning once the prompt was cancelled", true],
+	])(
+		"/wt: runs the post-checkout hook after reporting the move without cleaning the source %s",
+		async (_what, cancelled) => {
+			const { output, runtime, fakeSessionManager } = createRuntime();
+			const prompt = new AbortController();
+			const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-hook-")));
+			const repoDir = path.join(root, "repo");
+			const hook = path.join(root, "hooks", "post-checkout");
+			const originalProjectDir = process.cwd();
+			try {
+				await prepareWorktreeRepo(repoDir);
+				await Bun.write(
+					hook,
+					'#!/bin/sh\ncat ../repo/untracked.txt > .source-at-hook\necho "hook failed" >&2\nexit 3\n',
+				);
+				await fs.chmod(hook, 0o755);
+				await Bun.write(path.join(repoDir, "untracked.txt"), "new\n");
+				fakeSessionManager._cwd = repoDir;
+
+				// The summary comes before the hook starts: a cancel then is a cancel while the hook runs.
+				const result = await executeAcpBuiltinSlashCommand("/wt feature/hook", {
+					...runtime,
+					signal: prompt.signal,
+					output: text => {
+						runtime.output(text);
+						if (cancelled) prompt.abort();
+					},
+				});
+
+				expect(result).toEqual({ consumed: true });
+				const movedTo = fakeSessionManager.getCwd();
+				expect(output).toEqual([
+					expect.stringContaining(`Moved to worktree ${movedTo} on branch feature/hook`),
+					...(cancelled ? [] : ["Warning: Worktree created, but post-checkout hook exited with 3: hook failed"]),
+				]);
+				expect(await Bun.file(path.join(movedTo, ".source-at-hook")).text()).toBe("new\n");
+				expect(await Bun.file(path.join(movedTo, "untracked.txt")).exists()).toBe(false);
+			} finally {
+				setProjectDir(originalProjectDir);
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("/wt: aborts and leaves source checkout untouched when settings flush fails", async () => {
 		const { output, runtime, fakeSessionManager } = createRuntime();

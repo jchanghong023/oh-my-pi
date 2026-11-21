@@ -15,6 +15,7 @@ import {
 	createSessionWorktree,
 	defaultSessionWorktreeBranch,
 	formatSessionWorktreeSummary,
+	runSessionWorktreeHook,
 	type SessionWorktree,
 } from "../session/session-worktree";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
@@ -738,6 +739,12 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 				if (failure) return failure;
 			}
 			await runtime.output(formatSessionWorktreeSummary(worktree));
+			if (worktree.created) {
+				for (const warning of await runSessionWorktreeHook(worktree, runtime.session)) {
+					// Cancelled while the hook ran: ACP already answered the prompt.
+					if (!runtime.signal?.aborted) await runtime.output(`Warning: ${warning}`);
+				}
+			}
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {

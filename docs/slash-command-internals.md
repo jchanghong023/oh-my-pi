@@ -188,6 +188,7 @@ Slash command state is refreshed:
 - when the editor component is swapped
 - by explicit plugin reload flows such as `/reload-plugins`
 - when session command-metadata notifications arrive, including live settings changes, skill management, and MCP prompt updates (autocomplete rebuilds from current session state)
+- after `/wt` moves into a newly created linked Git worktree: it runs the configured `post-checkout` hook with the arguments `git worktree add` uses (`vcs.runPostCheckoutHook`), then refreshes skills and commands. A failing hook keeps the worktree and shows a warning. Reusing a worktree does not run the hook, and `/wt` does not clean the source checkout.
 
 There is no continuous file watcher for command directories.
 
