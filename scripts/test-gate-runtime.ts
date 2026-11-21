@@ -727,8 +727,8 @@ class Runtime {
 			await Promise.race([task, aborted.promise]);
 		} finally {
 			// Never report completion while an owned subprocess or stream pump is still running.
+			let failedCleanup: PromiseRejectedResult | undefined;
 			try {
-				let failedCleanup: PromiseRejectedResult | undefined;
 				for (;;) {
 					// A tracked promise can disappear before its caller's finally
 					// registers cleanup. Cross an event-loop turn to drain the whole
@@ -779,8 +779,11 @@ class Runtime {
 				// Owned commands/streams above must finish; an untracked blocked
 				// work promise cannot prevent an already-cancelled gate summary.
 				if (!scope.failure) await task;
-				if (failedCleanup) throw failedCleanup.reason;
 			} catch (error) {
+				failedCleanup = { status: "rejected", reason: error };
+			}
+			if (failedCleanup) {
+				const error = failedCleanup.reason;
 				logger.error("Gate final cleanup failed", {
 					component: "test-gate",
 					event: "gate_final_cleanup_failed",
@@ -1084,6 +1087,16 @@ export class GateRun {
 		let wallTimer: Timer | undefined;
 		let wallExpired = false;
 		let relay: GateEventRelay | undefined;
+		const reportRelayCleanupFailure = (error: unknown): never => {
+			logger.error("Gate stage relay cleanup failed", {
+				...fields,
+				event: "gate_relay_cleanup_failed",
+				result: "failed",
+				elapsed_ms: performance.now() - started,
+				...logger.diagnosticError(error),
+			});
+			throw error;
+		};
 		const event = (activity: Activity, at?: number, raw?: GateActivityEvent) =>
 			this.runtime.activity(this.scope, key, kind === "compile" ? kind : activity, { at, raw });
 		const observed = (failure: GateCommandError) => {
@@ -1387,14 +1400,7 @@ export class GateRun {
 				try {
 					if (relay) await relay.close();
 				} catch (error) {
-					logger.error("Gate stage relay cleanup failed", {
-						...fields,
-						event: "gate_relay_cleanup_failed",
-						result: "failed",
-						elapsed_ms: performance.now() - started,
-						...logger.diagnosticError(error),
-					});
-					throw error;
+					reportRelayCleanupFailure(error);
 				} finally {
 					this.runtime.activity(this.scope, key);
 				}

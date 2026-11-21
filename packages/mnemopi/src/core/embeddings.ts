@@ -635,7 +635,7 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 					if (strict) {
 						if (data.model !== undefined && data.model !== model) return degraded("model_mismatch");
 						if (!Array.isArray(rows) || rows.length !== texts.length) return degraded("row_count");
-						const indexed = new Array<(typeof rows)[number]>(rows.length);
+						const indexed: typeof rows = [];
 						for (const row of rows) {
 							if (
 								!row ||

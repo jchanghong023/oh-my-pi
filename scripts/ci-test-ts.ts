@@ -2129,6 +2129,10 @@ if (import.meta.main) {
 		applyChunkBudget(command, elasticFiles(command) ? slots : (command.parallel ?? 1), inFulltest);
 	const run = isDryRun ? undefined : await beginTestRun(reportScope);
 	let failed = false;
+	const handleReportFinalizationFailure = (error: unknown): void => {
+		if (failed || process.exitCode) console.error("Failed to finalize test report:", error);
+		else throw error;
+	};
 	try {
 		const exitCode =
 			pooled && !isDryRun
@@ -2146,8 +2150,7 @@ if (import.meta.main) {
 			try {
 				await endTestRun(run, Number(process.exitCode) || (failed ? 1 : 0));
 			} catch (error) {
-				if (failed || process.exitCode) console.error("Failed to finalize test report:", error);
-				else throw error;
+				handleReportFinalizationFailure(error);
 			}
 		}
 	}

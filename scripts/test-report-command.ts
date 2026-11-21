@@ -16,6 +16,10 @@ const startedAt = new Date().toISOString();
 const started = performance.now();
 let exitCode = 1;
 let status: "passed" | "failed" | "error" = "passed";
+function reportAndRethrow(error: unknown): never {
+	reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode || 1));
+	throw error;
+}
 try {
 	try {
 		const child = Bun.spawn(command, { env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
@@ -45,14 +49,12 @@ try {
 		timingBasis: "atomic command wall time (seconds), includes its own setup/worker calls",
 	});
 } catch (error) {
-	reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode || 1));
-	throw error;
+	reportAndRethrow(error);
 } finally {
 	try {
 		await endTestRun(run, exitCode);
 	} catch (error) {
-		reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode || 1));
-		throw error;
+		reportAndRethrow(error);
 	}
 }
 process.exitCode = exitCode;

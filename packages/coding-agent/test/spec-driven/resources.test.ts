@@ -1027,6 +1027,14 @@ it("embedded script launch preserves exact arguments and workspace runtime envir
 	}
 }, 30_000);
 
+function killScriptIfRunning(pid: number): void {
+	try {
+		process.kill(pid, "SIGKILL");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+	}
+}
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
 	it(`public Superpowers ${signal} waits for the actual bundled server to exit without reporting success`, async () => {
 		const cwd = path.join(temporary, `script-signal-${signal}`);
@@ -1105,13 +1113,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 			await expect(fetch(url)).rejects.toThrow();
 		} finally {
 			if (child.exitCode === null) child.kill();
-			if (scriptPid !== undefined) {
-				try {
-					process.kill(scriptPid, "SIGKILL");
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-				}
-			}
+			if (scriptPid !== undefined) killScriptIfRunning(scriptPid);
 			await child.exited;
 			await Promise.all([stdout, stderr]);
 		}

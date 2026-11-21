@@ -16,7 +16,7 @@ describe("fork release workflow definition contract", () => {
 		expect(Object.keys(value.on)).toEqual(["workflow_dispatch"]);
 		expect(value.on.workflow_dispatch.inputs.publish_release).toMatchObject({ type: "boolean", default: false });
 		expect(value.concurrency).toMatchObject({
-			group: "${{ github.workflow }}-${{ github.ref }}",
+			group: `\${{ github.workflow }}-\${{ github.ref }}`,
 			"cancel-in-progress": false,
 		});
 		const enabled = (await fs.readdir(path.join(root, ".github/workflows"))).filter(name => /\.ya?ml$/.test(name));

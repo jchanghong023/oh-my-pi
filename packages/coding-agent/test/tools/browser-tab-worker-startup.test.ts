@@ -1370,7 +1370,7 @@ describe("browser tabs whose renderer crashed", () => {
 			try {
 				const url = `data:text/html,<title>${name}</title>`;
 				await acquireTab(name, browser, { url, timeoutMs: 30_000 });
-				const { client, crashed } = await watchRenderer(browser, url);
+				const { crashed } = await watchRenderer(browser, url);
 				// Trigger the crash as the run completes; it may be reported by this run or the next one.
 				const first = await runInTab(name, {
 					code: 'void page.goto("chrome://crash").catch(() => undefined);',

@@ -319,9 +319,9 @@ export class ModelPickerComponent implements Component {
 		if (this.#getCandidates) return;
 
 		// Refresh stale catalog state without delaying the first paint.
-		Promise.all([this.#scopedModels.length === 0 ? this.#registry.refreshIfStale() : Promise.resolve(false)])
-			.then(changes => {
-				if (changes.some(Boolean)) this.#syncFromRegistryState();
+		(this.#scopedModels.length === 0 ? this.#registry.refreshIfStale() : Promise.resolve(false))
+			.then(changed => {
+				if (changed) this.#syncFromRegistryState();
 			})
 			.catch(error => {
 				this.#configError = error instanceof Error ? error.message : String(error);

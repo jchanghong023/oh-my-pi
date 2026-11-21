@@ -1315,6 +1315,15 @@ export class Settings {
 		let refresh = false;
 		let committed = false;
 		let receipt: UserSettingSaveResult | undefined;
+		const handleRefreshFailure = (error: unknown): void => {
+			if (receipt) {
+				throw new UserSettingError("execution_failed", `Failed to read saved user settings: ${String(error)}`, {
+					...receipt,
+					saveState: "failed",
+				});
+			}
+			logger.warn("Settings: failed to read saved user settings", { error: String(error) });
+		};
 		try {
 			receipt = await store.save([{ segments: setting.segments, value }], expectedRevision);
 			refresh = receipt.write.status === "saved" || receipt.write.status === "unchanged";
@@ -1334,14 +1343,7 @@ export class Settings {
 					try {
 						await this.#refreshSavedGlobal(store);
 					} catch (error) {
-						if (receipt) {
-							throw new UserSettingError(
-								"execution_failed",
-								`Failed to read saved user settings: ${String(error)}`,
-								{ ...receipt, saveState: "failed" },
-							);
-						}
-						logger.warn("Settings: failed to read saved user settings", { error: String(error) });
+						handleRefreshFailure(error);
 					}
 				}
 			} finally {

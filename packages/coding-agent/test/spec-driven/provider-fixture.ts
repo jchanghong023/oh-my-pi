@@ -2,8 +2,7 @@ import { isRecord } from "@oh-my-pi/pi-utils";
 
 export const MARKER = "OMP_SPEC_PUBLIC_GREETING";
 export const IMPLEMENTATION_PATH = "src/greeting.ts";
-export const IMPLEMENTATION =
-	'export function greet(name: string): string {\n  return `Hello, ${name.trim() || "world"}!`;\n}\n';
+export const IMPLEMENTATION = `export function greet(name: string): string {\n  return \`Hello, \${name.trim() || "world"}!\`;\n}\n`;
 
 export interface ModelRequest {
 	model: string;

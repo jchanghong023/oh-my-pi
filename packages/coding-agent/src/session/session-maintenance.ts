@@ -2017,16 +2017,21 @@ export class SessionMaintenance {
 			}
 			// Publish the result only after reconnecting and releasing the admission barrier.
 			if (manualCompactionStarted) {
-				try {
-					await this.#emitManualCompactionEnd(
+				const emitEnd = () =>
+					this.#emitManualCompactionEnd(
 						compactionId,
 						manualCompactionResult,
 						manualCompactionError,
 						compactionSignal.aborted,
 					);
-				} catch (error) {
-					if (!manualCompactionFailed) throw error;
-					logger.warn("Manual compaction end observer failed", { error: String(error) });
+				if (manualCompactionFailed) {
+					try {
+						await emitEnd();
+					} catch (error) {
+						logger.warn("Manual compaction end observer failed", { error: String(error) });
+					}
+				} else {
+					await emitEnd();
 				}
 			}
 		}

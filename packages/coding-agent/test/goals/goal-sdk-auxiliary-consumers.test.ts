@@ -75,7 +75,7 @@ async function harness(reply: (request: ModelRequest) => Reply) {
 				current.abortCompaction(controller.signal.reason);
 			}
 			await Promise.all(sessions.map(current => current.abort({ goalReason: "internal" })));
-			await Promise.allSettled([...pending]);
+			await Promise.allSettled(pending);
 			// A child under construction when cancellation landed is owned as soon
 			// as creation settles, before run() can admit its first prompt.
 			for (const current of new Set([...children, ...(session ? [session] : [])])) await current.dispose();

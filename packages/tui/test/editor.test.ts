@@ -1160,7 +1160,9 @@ describe("Editor component", () => {
 
 			editor.setImeSafeCursorLayout(true);
 			const safeRows = editor.render(20);
-			expect(safeRows).toEqual(closedRows.map((row, index) => (index === cursorRowIndex ? row.slice(0, cursorEnd) : row)));
+			expect(safeRows).toEqual(
+				closedRows.map((row, index) => (index === cursorRowIndex ? row.slice(0, cursorEnd) : row)),
+			);
 			expect(stripVTControlCharacters(safeRows[cursorRowIndex]!.replaceAll(CURSOR_MARKER, ""))).toBe("|  first");
 		});
 

@@ -781,6 +781,13 @@ esac
 			expect(stderr).toBe("");
 			expect(code).toBe(0);
 		};
+		const killIfPresent = (pid: number) => {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+			}
+		};
 		try {
 			const reader = monitor.getReader();
 			let startup = "";
@@ -820,13 +827,7 @@ esac
 				const pid = Number(pidText);
 				if (!pid || pid === process.pid || !birth) continue;
 				const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8").catch(() => "");
-				if (stat.split(") ")[1]?.split(" ")[19] === birth) {
-					try {
-						process.kill(pid, "SIGKILL");
-					} catch (error) {
-						if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-					}
-				}
+				if (stat.split(") ")[1]?.split(" ")[19] === birth) killIfPresent(pid);
 			}
 			running.kill();
 			unrelated.kill();

@@ -3066,7 +3066,9 @@ export async function runRootCommand(
 			} else if (isInteractive) {
 				const versionCheckPromise = cfgStartupCheckUpdate.get(settingsInstance)
 					? loadUpdateCli()
-							.then(({ checkForNewVersion }) => checkForNewVersion(VERSION, cfgUpdateChannel.get(settingsInstance)))
+							.then(({ checkForNewVersion }) =>
+								checkForNewVersion(VERSION, cfgUpdateChannel.get(settingsInstance)),
+							)
 							.catch(() => undefined)
 					: undefined;
 

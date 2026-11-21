@@ -6582,6 +6582,10 @@ async function createAgentSessionScoped(
 
 		{
 			const originalDispose = session.dispose.bind(session);
+			const throwOwnedCleanupFailures = (failures: unknown[]): void => {
+				if (failures.length === 1) throw failures[0];
+				if (failures.length) throw new AggregateError(failures, "Session owned cleanup failed");
+			};
 			let strictDisposeCall: Promise<void> | undefined;
 			let strictDisposalRequested = false;
 			let strictOwnerReleased = false;
@@ -6731,8 +6735,8 @@ async function createAgentSessionScoped(
 					// the bridge closure past explicit dispose.
 					unsubscribeMcpNotifications = undefined;
 					unregisterMcpPostmortem = undefined;
-					if (failures.length === 1) throw failures[0];
-					if (failures.length) throw new AggregateError(failures, "Session owned cleanup failed");
+					// Owned cleanup failures take precedence over the earlier disposal result.
+					throwOwnedCleanupFailures(failures);
 				}
 			};
 		}

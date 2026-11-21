@@ -1681,6 +1681,12 @@ it.each(["completed", "failure"])(
 			new Response(prepared.stderr).text(),
 		]);
 		const controller = new AbortController();
+		const releasePreparation = async () => {
+			controller.abort(new Error("Cargo fixture settled"));
+			await fs.writeFile(rustCargoHandshake.stop, "released");
+			const [code, stdout, stderr] = await output;
+			if (code !== 0) throw new Error(`Prepared Cargo callback failed: ${code}\n${stdout}\n${stderr}`);
+		};
 		try {
 			// Preparation remains inside fulltest's real wall clock, outside only
 			// this injected accounting budget. The consumer handshake stays charged.
@@ -1708,10 +1714,7 @@ it.each(["completed", "failure"])(
 			expect(result.totalSeconds).toBeGreaterThan(result.limitSeconds);
 			expect(result.compileExcludedSeconds).toBeGreaterThan(result.limitSeconds);
 		} finally {
-			controller.abort(new Error("Cargo fixture settled"));
-			await fs.writeFile(rustCargoHandshake.stop, "released");
-			const [code, stdout, stderr] = await output;
-			if (code !== 0) throw new Error(`Prepared Cargo callback failed: ${code}\n${stdout}\n${stderr}`);
+			await releasePreparation();
 		}
 	},
 );

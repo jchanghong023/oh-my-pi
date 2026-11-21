@@ -672,6 +672,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					await observeResult(runOutcome);
 				}
 			} catch (error) {
+				let releaseError = error;
 				try {
 					if (sourceResult && (opts.onBeforeCapture || opts.onAfterResult)) {
 						const result = runOutcome ?? sourceResult;
@@ -689,7 +690,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 						await preserveWorkspace();
 					}
 				} catch (preservationError) {
-					error = new AggregateError(
+					releaseError = new AggregateError(
 						[error, preservationError],
 						`Failed preserving isolated task ${opts.agentId}`,
 					);
@@ -697,9 +698,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				try {
 					await cleanupHandle();
 				} catch (cleanupError) {
-					throw new AggregateError([error, cleanupError], `Failed releasing isolated task ${opts.agentId}`);
+					throw new AggregateError([releaseError, cleanupError], `Failed releasing isolated task ${opts.agentId}`);
 				}
-				throw error;
+				throw releaseError;
 			}
 			await cleanupHandle();
 		})().catch(error => {

@@ -78,6 +78,18 @@ async function readPid(file: string): Promise<number> {
 		await Bun.sleep(5);
 	}
 }
+async function killSupervisorIfOwned(pid: number, birth: string): Promise<void> {
+	try {
+		const text = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+		const start = text
+			.slice(text.lastIndexOf(") ") + 2)
+			.trim()
+			.split(/\s+/)[19];
+		if (start === birth) process.kill(pid, "SIGKILL");
+	} catch (error) {
+		if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+	}
+}
 function supervisor(prefix: string, preload?: string) {
 	const ready = Promise.withResolvers<void>();
 	const outcome = Promise.withResolvers<number>();
@@ -275,18 +287,8 @@ for (const mode of ["abort", "disconnect"]) {
 				await fs.writeFile(`${unrelatedPrefix}.worker-release`, "release");
 				await terminateOwnedSubprocess(parent, { detached: true });
 				await terminateOwnedSubprocess(unrelated, { detached: false });
-				if (supervisorPid !== undefined && supervisorStart !== undefined) {
-					try {
-						const text = await fs.readFile(`/proc/${supervisorPid}/stat`, "utf8");
-						const start = text
-							.slice(text.lastIndexOf(") ") + 2)
-							.trim()
-							.split(/\s+/)[19];
-						if (start === supervisorStart) process.kill(supervisorPid, "SIGKILL");
-					} catch (error) {
-						if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
-					}
-				}
+				if (supervisorPid !== undefined && supervisorStart !== undefined)
+					await killSupervisorIfOwned(supervisorPid, supervisorStart);
 			}
 		},
 	);

@@ -202,7 +202,7 @@ describe("SessionManager runtime ownership", () => {
 		try {
 			const snapshot = owner.captureState();
 			{
-				using retained = owner.retainRuntimeOwnership();
+				using _retained = owner.retainRuntimeOwnership();
 				await owner.setSessionFile(target);
 				expect(owner.getSessionFile()).toBe(target);
 				expect(() => originalWitness.acquireRuntimeOwnership()).toThrow();
