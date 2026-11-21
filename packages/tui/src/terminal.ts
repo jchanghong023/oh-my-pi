@@ -368,8 +368,6 @@ export class StdoutStallWatchdog {
  * Minimal terminal interface for TUI
  */
 
-// Track a started terminal until teardown completes, including interrupted stop().
-let terminalRestorePending = false;
 // Whether the alternate screen buffer is currently active (mirrors the TUI's
 // overlay enter/leave writes). Consulted by emergencyTerminalRestore: DECRST
 // 1049 must never be written blindly, because Windows' shared VT dispatcher
@@ -415,28 +413,6 @@ export function emergencyTerminalRestore(): void {
 			// Queue every restore before stop retires the bounded output pump.
 			terminal.showCursor(true);
 			terminal.stop();
-		} else if (terminalRestorePending && !isTerminalHeadless()) {
-			// Ownership can be released before stop finishes. Recover only that
-			// interrupted teardown, never a terminal already handed back to its shell.
-			process.stdout.write(
-				"\x1b[?2026l" + // End synchronized output
-					"\x1b[?7h" + // Restore autowrap
-					"\x1b[?1l\x1b>" + // Restore normal cursor-key + keypad mode
-					"\x1b[?2004l" + // Disable bracketed paste
-					"\x1b[?2031l" + // Disable appearance notifications
-					"\x1b[?2048l" + // Disable in-band resize notifications
-					"\x1b[?5522l" + // Disable enhanced paste notifications
-					"\x1b[<u" + // Pop kitty keyboard protocol
-					"\x1b[>4;0m" + // Disable modifyOtherKeys fallback
-					"\x1b[?9001l" + // Disable win32-input-mode fallback
-					"\x1b[?1006l\x1b[?1003l\x1b[?1000l" + // Disable mouse tracking
-					(altScreenActive ? "\x1b[?1049l\x1b[?1l\x1b>\x1b[<u" : "") +
-					"\x1b[0 q" + // Restore configured cursor shape
-					"\x1b[?25h", // Show cursor
-			);
-			altScreenActive = false;
-			if (process.stdin.setRawMode) process.stdin.setRawMode(false);
-			terminalRestorePending = false;
 		}
 	} catch {
 		// Terminal may already be dead during crash cleanup - ignore errors
@@ -1148,7 +1124,6 @@ export class ProcessTerminal implements Terminal {
 		setActiveTerminal(this);
 		// RGB belongs to this ownership session, including deferred-input prepaint.
 		setTerminalBackgroundColor(undefined);
-		terminalRestorePending = true;
 		const outputSession = ++this.#outputSession;
 		const terminalRef = new WeakRef(this);
 		this.#outputDrainCallback = () => {
@@ -2752,7 +2727,6 @@ export class ProcessTerminal implements Terminal {
 		// After stop() the terminal is shared with other writers; visibility
 		// tracking is only meaningful while this instance owns the TTY.
 		this.#cursorVisible = undefined;
-		terminalRestorePending = false;
 	}
 
 	#ensureStdoutErrorHandler(): void {

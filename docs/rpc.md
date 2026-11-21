@@ -1367,23 +1367,23 @@ Example:
 - `{ type: "extension_ui_response", id: string, value: string }`
 - `{ type: "extension_ui_response", id: string, confirmed: boolean }`
 - `{ type: "extension_ui_response", id: string, cancelled: true, timedOut?: boolean }`
-- `{ type: "extension_ui_response", id: string, answers: Array<{ id: string, selectedOptions: string[], customInput?: string }> }` (answers an `ask` request)
-- `{ type: "extension_ui_response", id: string, data: Record<string, string | number | string[]> }` (answers a `form` request)
+- `{ type: "extension_ui_response", id: string, answers: Array<{ id: string, selectedOptions: string[], customInput?: string }> }` (extension `ui.askDialog`, RPC method `ask`)
+- `{ type: "extension_ui_response", id: string, data: Record<string, string | number | string[]> }` (`ui.formDialog`, RPC method `form`, including the `ask` tool)
 
 `select` and `input` resolve to `undefined`, and `confirm` to `false`, on
 cancellation, timeout, or signal abort. Signal abort emits a `cancel` request
 with `targetId`. `editor` supports cancellation and signal abort but has no wire timeout.
 Presentation methods and `open_url` are fire-and-forget and require no response.
 
-If a dialog has a timeout, RPC mode resolves to a default value when timeout/abort fires, and emits
-`{ method: "cancel", targetId }` so the host closes the dialog; a later answer to it is ignored. For `ask`, a timeout
-(omp's timer or a host `cancelled: true, timedOut: true` reply) answers every question with its recommended
-option, else its first.
+When omp's timer expires or its signal aborts, RPC emits `{ method: "cancel", targetId }` to
+close the pending dialog and ignores late replies. A timeout in the extension's `ui.askDialog`
+(omp's timer or a host reply with `cancelled: true, timedOut: true`) selects each question's
+recommended option or its first option. This rule does not apply to the `ask` tool.
 
 `answers` must list one entry per question in request order, with each `id` equal to that question's `id`.
 `selectedOptions` holds exact option labels without duplicates; a multi-select may be empty. A single-select
 (`multi` absent or false) takes at most one option and not both an option and `customInput`. `customInput`
-is trimmed and ignored when empty. Any other shape fails the `ask` tool call instead of guessing.
+is trimmed and ignored when empty. Invalid `answers` reject the extension's `ui.askDialog` call.
 
 `data` holds the submitted values by control `name`, as an HTML form submits them. A radio group, a single
 `<select>` or a lone checkbox gives one option `value` (omitted when nothing is chosen); a checkbox group or a
@@ -1393,16 +1393,21 @@ option gives that one value like a lone checkbox; a text field gives its text, o
 unless it already has an option labelled `Other`, takes one extra string that is not an option value as its "Other"
 answer. Hidden inputs keep the form's own values.
 Unknown names, disabled options, wrong types, and answers that break `required`, `min`/`max`,
-`minlength`/`maxlength`, `email`/`url` or `pattern` fail the `ask` tool call instead of guessing. A `form` timeout
-(omp's timer or a host `cancelled: true, timedOut: true` reply) submits the form's defaults. A form whose frame
-exceeds the transport limit (1 MiB under protocol v1, 64 MiB after `negotiate_protocol` to v2) fails the `ask` tool
-call without being sent, instead of reaching the host truncated.
+`minlength`/`maxlength`, `email`/`url` or `pattern` reject the `form` reply. A `form` timeout
+(omp's timer or a host reply with `cancelled: true, timedOut: true`) returns the form's defaults.
+If those values leave a required control unanswered or otherwise invalid, the
+[`ask` tool](./tools/ask.md#outputs) reports no answer instead of selecting an option. An oversized `form`
+request fails before sending (1 MiB under protocol v1, 64 MiB after negotiation to v2).
 
 A valid choice answer, including a permitted "Other" answer, takes precedence over a same-name hidden value. An otherwise invalid choice value that exactly matches that hidden value counts as no selection; it does not satisfy a required field. Inside a checkbox group's or multi-select's array, one entry equal to the hidden value is dropped as the hidden input's echo (as browser form data sends it) when no option carries that value, or when keeping it would make the array invalid.
 
 Fields sharing a `name` share its one entry. Each field whose shape fits the entry takes it; a same-name field that cannot carry it (a radio group beside a checkbox group, a group without "Other" beside a text input) counts as unanswered and must still pass its own constraints. An entry no field of its name can carry fails the call.
 
-An invalid `data` reply fails the whole `ask` call, with no round for correcting a field, so hosts must enforce the form's constraints before sending: `required` (a whitespace-only text answer counts as empty), `min`/`max`, `minlength`/`maxlength`, `email`, `url`, and `pattern` (anchored to the whole value; an invalid pattern is ignored).
+There is no retry for an invalid `data` reply. Hosts must validate constraints before submitting:
+`required` (whitespace-only text counts as empty), `min`/`max`, `minlength`/`maxlength`, `email`, `url`, and `pattern`
+(anchored to the whole value; an invalid pattern is ignored).
+
+Extension `ui.askDialog` example (`ask` / `answers`):
 
 ```json
 {
@@ -1434,6 +1439,25 @@ An invalid `data` reply fails the whole `ask` call, with no round for correcting
 		{ "id": "db", "selectedOptions": [], "customInput": "DuckDB" },
 		{ "id": "features", "selectedOptions": ["Auth", "Search"] }
 	]
+}
+```
+
+`ask` tool example (`form` / `data`):
+
+```json
+{
+	"type": "extension_ui_request",
+	"id": "ui_10",
+	"method": "form",
+	"html": "<form><label>Database <input name=\"db\" required></label></form>"
+}
+```
+
+```json
+{
+	"type": "extension_ui_response",
+	"id": "ui_10",
+	"data": { "db": "DuckDB" }
 }
 ```
 

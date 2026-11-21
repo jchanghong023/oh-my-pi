@@ -6,7 +6,7 @@ import type { GateRun } from "./test-gate-runtime";
 const reportRoot = path.join(import.meta.dir, "..", "runs", "test-timing");
 
 /** Identifies the current fork Bun consumer set for baselines and timing history. */
-export const BUN_FORK_SUITE_REVISION = 9;
+export const BUN_FORK_SUITE_REVISION = 10;
 
 export interface TestReportRun {
 	id: string;

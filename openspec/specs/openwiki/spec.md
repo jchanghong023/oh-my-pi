@@ -115,7 +115,7 @@ OMP MUST 复用 OpenWiki 原有的规划 Agent、页面工作池、Claims、增�
 
 ### Requirement: OMP 内置只读查询工具
 
-OMP MUST 内置 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`、`openwiki_list_wikis` 四项只读能力，在进程内直接调用 OpenWiki 查询逻辑，不通过 MCP。查询执行 MUST NOT 调用模型、启动生成／更新，或修改仓库 Wiki、Claims 和工作区注册表；OMP 对话的 OpenWiki 工具面 MUST NOT 包含生成生命周期工具。
+OMP MUST 内置 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`、`openwiki_list_wikis` 四项只读能力，在进程内直接调用 OpenWiki 查询逻辑，不通过 MCP。查询执行 MUST NOT 调用模型、启动生成／更新，或修改仓库 Wiki、Claims 和工作区注册表；OMP 对话的 OpenWiki 工具面 MUST NOT 包含生成生命周期工具。工具挂载方式 MUST NOT 扩大受限子代理的工具清单。
 
 #### Scenario: AI 搜索后读取章节
 - **WHEN** 用户要求 OMP 查询仓库 Wiki，AI 调用搜索并使用返回的 Wiki ID、页面和章节引用继续读取
@@ -148,10 +148,14 @@ OMP MUST 内置 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`
 - **THEN** 只有上述四项只读能力，不包含 begin、计划提交、任务领取、Claims 写入、页面提交或 finish 等生成工具
 - **AND** OpenWiki 原生生成 Agent 内部所需的计划／页面提交工具继续属于其生成执行链，不被注册到 OMP 普通对话工具面
 
-#### Scenario: 内置工具的挂载与权限
+#### Scenario: 启用 `tools.xdev` 时挂载为可发现设备
 - **WHEN** OMP 非受限会话启用 `tools.xdev`
-- **THEN** 四项只读能力遵循现有可发现设备挂载规则，AI 可按需发现和调用；关闭 `tools.xdev` 时按 OMP 既有规则作为顶层工具提供
-- **AND** 设备派发保留只读权限语义，不因通过设备传输被当作文件写入；受限子代理的工具清单不会因此自动扩大
+- **THEN** 四项只读能力遵循现有可发现设备挂载规则，AI 可按需发现和调用
+- **AND** 设备派发保留只读权限语义，不因通过设备传输被当作文件写入
+
+#### Scenario: 关闭 `tools.xdev` 时提供顶层工具
+- **WHEN** OMP 非受限会话关闭 `tools.xdev`
+- **THEN** 四项只读查询工具按 OMP 既有规则作为顶层工具提供
 
 ### Requirement: 按需检索仓库 Wiki
 

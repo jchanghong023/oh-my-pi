@@ -1848,7 +1848,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Re-open the `ask` dialog with the original form (issue #5642):
+	 * Re-open the `ask` form with the original `html` (issue #5642):
 	 * runs a standalone `AskTool.execute()` outside a normal agent turn,
 	 * reusing the same dialog primitives a live `ask` tool call gets.
 	 * Returns `undefined` when the user cancels — mirrors `navigateTree`'s
@@ -1870,14 +1870,12 @@ export class SelectorController {
 		};
 		const askTool = new AskTool(toolSession);
 		const context = this.ctx.session.buildAskReanswerContext(uiContext);
-		let result: AgentToolResult<AskToolDetails>;
 		try {
-			result = await askTool.execute("tree-reanswer", { html }, undefined, undefined, context);
+			return await askTool.execute("tree-reanswer", { html }, undefined, undefined, context);
 		} catch (error) {
 			if (error instanceof ToolAbortError) return undefined;
 			throw error;
 		}
-		return result;
 	}
 
 	async showSessionSelector(source?: ForeignSessionSource): Promise<void> {
@@ -2306,7 +2304,6 @@ export class SelectorController {
 			const session = this.ctx.session;
 			try {
 				const result = await logoutProviderForCommand(session, providerId, {
-					selectSingletons: true,
 					selectProvider: () => this.#selectLogoutProvider(),
 					selectAccount: (provider, accounts) => this.#selectLogoutAccount(provider, accounts),
 				});

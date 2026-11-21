@@ -107,7 +107,6 @@ export function toLogoutAccounts(
 }
 
 export interface LogoutCommandUI {
-	selectSingletons?: boolean;
 	selectProvider(providers: readonly OAuthProviderInfo[]): Promise<string | undefined>;
 	selectAccount(provider: OAuthProviderInfo, accounts: LogoutAccount[]): Promise<number | undefined>;
 }
@@ -117,7 +116,7 @@ export type LogoutCommandResult =
 	| { status: "skipped"; level: "info" | "warning" | "error"; message: string }
 	| { status: "removed"; account: LogoutAccount; remainingSource?: string };
 
-/** One logout operation, shared by the native selectors and protocol-backed dialogs. */
+/** Select and remove a stored credential from the terminal UI. */
 export async function logoutProviderForCommand(
 	session: Pick<
 		AgentSession,
@@ -125,7 +124,6 @@ export async function logoutProviderForCommand(
 	>,
 	providerId: string | undefined,
 	ui: LogoutCommandUI,
-	signal?: AbortSignal,
 ): Promise<LogoutCommandResult> {
 	const providers = getAllOAuthProviders();
 	let provider = providerId ? providers.find(candidate => candidate.id === providerId) : undefined;
@@ -149,10 +147,7 @@ export async function logoutProviderForCommand(
 				message: "No stored provider credentials to log out. Remove env or config auth at its source.",
 			};
 		}
-		const selectedProviderId =
-			!ui.selectSingletons && storedProviders.length === 1
-				? storedProviders[0]!.id
-				: await ui.selectProvider(storedProviders);
+		const selectedProviderId = await ui.selectProvider(storedProviders);
 		if (selectedProviderId === undefined) return { status: "cancelled" };
 		provider = storedProviders.find(candidate => candidate.id === selectedProviderId);
 		if (!provider) {
@@ -174,16 +169,12 @@ export async function logoutProviderForCommand(
 			message: `Logout skipped: no stored credentials for ${provider.id}.${suffix}`,
 		};
 	}
-	const selectedCredentialId =
-		!ui.selectSingletons && accounts.length === 1
-			? accounts[0]!.credentialId
-			: await ui.selectAccount(provider, accounts);
+	const selectedCredentialId = await ui.selectAccount(provider, accounts);
 	if (selectedCredentialId === undefined) return { status: "cancelled" };
 	const account = accounts.find(candidate => candidate.credentialId === selectedCredentialId);
 	if (!account) {
 		return { status: "skipped", level: "error", message: "The selected logout account is no longer available." };
 	}
-	signal?.throwIfAborted();
 	if (
 		session.isDisposed ||
 		session.sessionGeneration !== generation ||

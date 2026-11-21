@@ -201,6 +201,8 @@ The unified built-in registry is checked before `AgentSession.prompt(...)` in TU
 
 Built-in parsing splits at the first whitespace or colon, so `/model:opus` is a built-in invocation. Extension/custom/file parsing instead splits only at the first literal space, preserving names such as `plugin:command`. In the TUI, a built-in with arguments falls through when its spec does not declare `allowArgs`; the ACP dispatcher leaves argument validation to the handler.
 
+For example, ACP `/model <selector>` switches models through its text handler. ACP `/share` ignores trailing arguments and still shares the session; use these commands only when you intend to run them.
+
 After that boundary, `AgentSession.prompt(...)` processes slash input in this order when `expandPromptTemplates !== false`:
 
 1. **Extension commands** (`#tryExecuteExtensionCommand`)  

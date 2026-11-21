@@ -357,18 +357,6 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		if (this.session.lspReadOnly && !LSP_READONLY_ACTIONS.has(action)) {
 			throw new ToolError(`LSP action ${action} is disabled in this read-only session`);
 		}
-		if (action === "code_actions" && apply === true && !query?.trim()) {
-			return {
-				content: [
-					{
-						type: "text",
-						text: "Error: query parameter required when apply=true for code_actions; no action was applied.",
-					},
-				],
-				details: { action, success: false, request: params },
-				isError: true,
-			};
-		}
 		const budget = resolveLspTimeouts(
 			timeout,
 			cfgLspRequestTimeout.get(this.session.settings),
@@ -1763,25 +1751,32 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 						break;
 					}
 
-					if (apply === true && query) {
-						const normalizedQuery = query.trim();
+					if (apply === true) {
+						const normalizedQuery = query?.trim() ?? "";
 						const parsedIndex = /^\d+$/.test(normalizedQuery) ? Number.parseInt(normalizedQuery, 10) : null;
+						// Without a query, apply the one action there is, or the server's one preferred action.
+						const preferred = result.filter(actionItem => "isPreferred" in actionItem && actionItem.isPreferred);
 						const selectedAction =
-							parsedIndex !== null
-								? result[parsedIndex]
-								: result.find(actionItem =>
-										actionItem.title.toLowerCase().includes(normalizedQuery.toLowerCase()),
-									);
+							normalizedQuery.length === 0
+								? result.length === 1
+									? result[0]
+									: preferred.length === 1
+										? preferred[0]
+										: undefined
+								: parsedIndex !== null
+									? result[parsedIndex]
+									: result.find(actionItem =>
+											actionItem.title.toLowerCase().includes(normalizedQuery.toLowerCase()),
+										);
 
 						if (!selectedAction) {
 							const actionLines = result.map((actionItem, index) => `  ${formatCodeAction(actionItem, index)}`);
+							const reason =
+								normalizedQuery.length === 0
+									? "apply=true needs query (an action's title or index) to choose among"
+									: `No code action matches "${normalizedQuery}". Available actions:`;
 							return {
-								content: [
-									{
-										type: "text",
-										text: `No code action matches "${normalizedQuery}". Available actions:\n${actionLines.join("\n")}`,
-									},
-								],
+								content: [{ type: "text", text: `${reason}\n${actionLines.join("\n")}` }],
 								details: { serverName, action, success: false, request: params },
 								isError: true,
 							};

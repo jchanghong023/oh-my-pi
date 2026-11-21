@@ -19,7 +19,7 @@ OMP MUST 默认启用 Codex 用户技能发现。
 
 #### Scenario: Codex 用户技能的可观察行为
 
-- **WHEN** 未设置额外技能目录
+- **WHEN** 技能发现已启用，且未显式配置 `skills.enableCodexUser`，无论是否设置额外技能目录
 - **THEN** 默认启用 Codex 用户技能发现
 
 ### Requirement: 团队共享技能目录

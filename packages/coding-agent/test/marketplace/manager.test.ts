@@ -1219,9 +1219,9 @@ describe("MarketplaceManager", () => {
 		expect(userSummary!.shadowedBy).toBe("project");
 	});
 
-	// ── Manual updates ───────────────────────────────────────────────────────
+	// ── Updates ──────────────────────────────────────────────────────────────
 
-	describe("manual updates", () => {
+	describe("updates", () => {
 		// Writable per-test copy of the shared fixture: these tests mutate plugin manifests.
 		let mktDir: string;
 		beforeEach(() => {
@@ -1465,7 +1465,7 @@ describe("MarketplaceManager", () => {
 			expect(fs.readFileSync(path.join(marketplace, "catalog"), "utf8")).toBe("preserve if active");
 		});
 
-		it("keeps stale catalogs and installed plugins unchanged until an explicit update", async () => {
+		it("keeps stale catalogs and installed plugins unchanged when browsing", async () => {
 			const added = await ctx.manager.addMarketplace(mktDir);
 			await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
 			const sourcePath = path.join(mktDir, ".claude-plugin", "marketplace.json");
@@ -1487,6 +1487,25 @@ describe("MarketplaceManager", () => {
 			await manager.updateAllMarketplaces();
 			expect(await manager.listAvailablePlugins("test-marketplace")).toMatchObject([{ version: "2.0.0" }]);
 			expect(await manager.listInstalledPlugins()).toMatchObject([{ entries: [{ version: "1.0.0" }] }]);
+		});
+
+		it("refreshStaleMarketplaces skips fresh marketplaces", async () => {
+			await ctx.manager.addMarketplace(mktDir);
+			await setCatalogEntryVersion("2.0.0");
+
+			await ctx.manager.refreshStaleMarketplaces();
+
+			expect(await ctx.manager.listAvailablePlugins("test-marketplace")).toMatchObject([{ version: "2.0.0" }]);
+		});
+
+		it("refreshStaleMarketplaces re-fetches stale marketplaces", async () => {
+			await ctx.manager.addMarketplace(mktDir);
+			await setCatalogEntryVersion("2.0.0");
+			setMarketplaceUpdatedAt(new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString());
+
+			await ctx.manager.refreshStaleMarketplaces();
+
+			expect(await ctx.manager.listAvailablePlugins("test-marketplace")).toMatchObject([{ version: "1.0.0" }]);
 		});
 
 		it("upgradePluginAcrossScopes upgrades in all scopes, returns both entries", async () => {

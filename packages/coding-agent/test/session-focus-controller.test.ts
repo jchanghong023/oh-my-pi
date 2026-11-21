@@ -7,13 +7,17 @@ import {
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID, type AgentRef } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type {
+	LocalAgentSessionEvent,
+	LocalAgentSessionEventListener,
+} from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 interface SessionStub {
 	session: AgentSession;
-	/** Emit an event through the listener captured by the last subscribe(). */
+	/** Emit an event through the listener captured by the last subscribeLocal(). */
 	emit: (event: unknown) => Promise<void>;
 	unsubscribeCalls: () => number;
 	setStreaming: (streaming: boolean) => void;
@@ -24,14 +28,14 @@ interface SessionStub {
 }
 
 function makeSessionStub(opts: { isStreaming?: boolean } = {}): SessionStub {
-	let listener: ((event: AgentSessionEvent) => Promise<void> | void) | undefined;
+	let listener: LocalAgentSessionEventListener | undefined;
 	let unsubscribeCalls = 0;
 	let queue: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
 	const stub = {
 		isStreaming: opts.isStreaming ?? false,
 		runStartedAt: undefined as number | undefined,
 		agent: { state: { streamMessage: null, activeThinkingIndex: undefined } },
-		subscribe(fn: (event: AgentSessionEvent) => Promise<void> | void) {
+		subscribeLocal(fn: LocalAgentSessionEventListener) {
 			listener = fn;
 			return () => {
 				if (listener === fn) listener = undefined;
@@ -45,8 +49,8 @@ function makeSessionStub(opts: { isStreaming?: boolean } = {}): SessionStub {
 	return {
 		session: stub as unknown as AgentSession,
 		emit: async event => {
-			if (!listener) throw new Error("no listener captured: subscribe() was never called");
-			await listener(event as AgentSessionEvent);
+			if (!listener) throw new Error("no listener captured: subscribeLocal() was never called");
+			await listener(event as LocalAgentSessionEvent);
 		},
 		unsubscribeCalls: () => unsubscribeCalls,
 		setStreaming: streaming => {
@@ -345,6 +349,10 @@ describe("SessionFocusController", () => {
 
 	it("focusParent walks parentId to a registered non-main agent, then re-attaches the main session", async () => {
 		const h = makeHarness();
+		const notices: string[] = [];
+		h.ctx.showStatus = text => {
+			notices.push(text);
+		};
 		const parent = makeSessionStub();
 		const worker = makeSessionStub();
 		registerSub(h.registry, "Parent", parent.session, MAIN_AGENT_ID);
@@ -367,6 +375,7 @@ describe("SessionFocusController", () => {
 			[parent.session, "Parent"],
 			[h.main.session, undefined],
 		]);
+		expect(notices).toEqual([]);
 	});
 
 	it("parking the focused agent auto-unfocuses back to the main session", async () => {

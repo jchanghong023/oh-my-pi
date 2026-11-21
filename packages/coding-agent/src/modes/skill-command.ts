@@ -13,10 +13,7 @@ type SkillCommandHost = Pick<
 	| "optimisticSkillMessagePending"
 	| "restoreDroppedPrompt"
 > & {
-	session: Pick<
-		InteractiveModeContext["session"],
-		"model" | "buildUserSkillPrompt" | "promptCustomMessage" | "isStreaming"
-	>;
+	session: Pick<InteractiveModeContext["session"], "buildUserSkillPrompt" | "promptCustomMessage" | "isStreaming">;
 };
 
 type SkillPromptMessage = Pick<

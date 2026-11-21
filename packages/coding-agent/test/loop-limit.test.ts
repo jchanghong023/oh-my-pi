@@ -86,66 +86,13 @@ describe("loop limit parsing", () => {
 	});
 });
 
-describe("positional loop intervals", () => {
-	test("separates a positional interval from the prompt while retaining bare-limit behavior", () => {
-		expect(parseLoopArgs("10 30s xxx")).toEqual({
+describe("loop prompt after a limit", () => {
+	test("preserves a second duration token in the prompt", () => {
+		expect(parseLoopArgs("10 30s check status")).toEqual({
 			limit: { kind: "iterations", iterations: 10 },
-			intervalMs: 30_000,
-			prompt: "xxx",
-		});
-		expect(parseLoopArgs("10 xxx")).toEqual({
-			limit: { kind: "iterations", iterations: 10 },
-			prompt: "xxx",
+			prompt: "30s check status",
 		});
 	});
-
-	test("keeps unknown-unit and incomplete duration tokens as prompt text", () => {
-		for (const prompt of ["3D modeling", "0s3D modeling", "30s. timeout"]) {
-			expect(parseLoopArgs(`3 ${prompt}`)).toEqual({
-				limit: { kind: "iterations", iterations: 3 },
-				intervalMs: undefined,
-				prompt,
-			});
-		}
-	});
-
-	test("combines a duration budget, compound interval and condition without consuming prompt text", () => {
-		expect(parseLoopArgs("10m 1m30s --until 'bun test' fix 30s timeout")).toEqual({
-			limit: { kind: "duration", durationMs: 600_000 },
-			intervalMs: 90_000,
-			condition: { command: "bun test", until: true },
-			prompt: "fix 30s timeout",
-		});
-		expect(parseLoopArgs("10 fix 30s timeout")).toEqual({
-			limit: { kind: "iterations", iterations: 10 },
-			prompt: "fix 30s timeout",
-		});
-	});
-
-	test("rejects unusable intervals and conflicting interval declarations", () => {
-		expect(typeof parseLoopArgs("10 0s xxx")).toBe("string");
-		expect(typeof parseLoopArgs("10 999999999999h xxx")).toBe("string");
-		expect(typeof parseLoopArgs("10 30s --interval 1m xxx")).toBe("string");
-	});
-
-	test("accepts the largest whole-second interval below the timer ceiling and rejects the next second", () => {
-		expect(parseLoopArgs("2 2147483s check")).toEqual({
-			limit: { kind: "iterations", iterations: 2 },
-			intervalMs: 2_147_483_000,
-			prompt: "check",
-		});
-		expect(parseLoopArgs("2 2147484s check")).toBe("Loop interval must not exceed 2147483647 milliseconds.");
-		expect(parseLoopArgs("2 596h32m check")).toBe("Loop interval must not exceed 2147483647 milliseconds.");
-	});
-
-	test.each(["-1s", "1.5s", "0s", "9007199254740992s"])(
-		"rejects a known-unit interval with an invalid amount: %s",
-		token => {
-			const result = parseLoopArgs(`2 ${token} check`);
-			expect(typeof result).toBe("string");
-			expect(result).toContain("Loop duration must be positive.");
-		},
-	);
 });
 
 describe("loop condition parsing", () => {

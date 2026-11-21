@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { getOAuthCredentialProvider } from "@oh-my-pi/pi-ai/oauth";
 import { Settings } from "../../src/config/settings";
-import { getExtensionUISelectOptionLabel, type ExtensionUIContext } from "../../src/extensibility/extensions/types";
 import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
 import {
 	type BuiltinSlashCommandRuntime,
@@ -154,15 +153,15 @@ describe("shared logout business", () => {
 		},
 	);
 
-	test("automatically chooses a sole provider and account, warning about the real remaining auth source", async () => {
+	test("warns about the real remaining auth source after removing the selected account", async () => {
 		const { storage, session, refreshProvider } = await logoutFixture();
 		await storage.credentials.set("anthropic", [{ type: "api_key", key: "stored-key" }]);
 		storage.keys.setRuntime("anthropic", "runtime-key");
-		const ui = { selectProvider: vi.fn(), selectAccount: vi.fn() };
-		const result = await logoutProviderForCommand(session, undefined, ui);
+		const result = await logoutProviderForCommand(session, "anthropic", {
+			selectProvider: async () => undefined,
+			selectAccount: async (_provider, accounts) => accounts[0]?.credentialId,
+		});
 		expect(storage.credentials.list("anthropic")).toEqual([]);
-		expect(ui.selectProvider).not.toHaveBeenCalled();
-		expect(ui.selectAccount).not.toHaveBeenCalled();
 		expect(refreshProvider).toHaveBeenCalledWith("anthropic", "online");
 		expect(result.status).toBe("removed");
 		expect("remainingSource" in result ? result.remainingSource : undefined).toBe(
@@ -215,33 +214,6 @@ describe("shared logout business", () => {
 		expect(ui.selectAccount).not.toHaveBeenCalled();
 		expect(refreshProvider).not.toHaveBeenCalled();
 	});
-
-	test("ACP logout selects among stored accounts and consumes only the chosen credential", async () => {
-		const { storage, session, refreshProvider } = await logoutFixture();
-		const originalRows = storage.credentials.list("anthropic");
-		const output: string[] = [];
-		const select = vi.fn<ExtensionUIContext["select"]>(async (_title, options) => {
-			const chosen =
-				options.find(option => getExtensionUISelectOptionLabel(option).includes("b@example.com")) ?? options[0];
-			return chosen === undefined ? undefined : getExtensionUISelectOptionLabel(chosen);
-		});
-		const runtime = {
-			session,
-			cwd: "/logout-test",
-			settings: Settings.isolated(),
-			sessionManager: { getCwd: () => "/logout-test" },
-			output: (text: string) => {
-				output.push(text);
-			},
-			ui: { select, confirm: async () => false },
-			refreshCommands: async () => {},
-			reloadPlugins: async () => {},
-		} as unknown as SlashCommandRuntime;
-		expect(await executeAcpBuiltinSlashCommand("/logout", runtime)).toEqual({ consumed: true });
-		expect(storage.credentials.list("anthropic").map(row => row.id)).toEqual([originalRows[0]!.id]);
-		expect(refreshProvider).toHaveBeenCalledWith("anthropic", "online");
-		expect(storage.credentials.list("anthropic")[0]!.credential).toEqual(originalRows[0]!.credential);
-	});
 });
 
 describe("shared clear business", () => {
@@ -290,66 +262,13 @@ describe("shared clear business", () => {
 		await expect(resetContextForCommand(session)).rejects.toThrow("Session changed");
 		expect(session.resetSessionContext).not.toHaveBeenCalled();
 	});
-
-	test("ACP clear uses in-place reset, not a new session", async () => {
-		const resetSessionContext = vi.fn(async () => ({ droppedCount: 2 }));
-		const newSession = vi.fn(async () => true);
-		const output: string[] = [];
-		const runtime = {
-			session: { isCompacting: false, sessionGeneration: 0, isDisposed: false, resetSessionContext, newSession },
-			settings: Settings.isolated(),
-			cwd: "/clear-test",
-			sessionManager: { getCwd: () => "/clear-test" },
-			output: (text: string) => {
-				output.push(text);
-			},
-			refreshCommands: async () => {},
-			reloadPlugins: async () => {},
-		} as unknown as SlashCommandRuntime;
-		expect(await executeAcpBuiltinSlashCommand("/clear", runtime)).toEqual({ consumed: true });
-		expect(resetSessionContext).toHaveBeenCalledTimes(1);
-		expect(newSession).not.toHaveBeenCalled();
-	});
-
-	test("ACP clear reports a compaction/session race without rejecting the request", async () => {
-		const fixture = ordinaryTaskDispatchFixture();
-		const session = fixture.tuiRuntime.ctx.session;
-		Object.defineProperty(session, "isCompacting", { configurable: true, value: true });
-		vi.spyOn(Bun, "sleep").mockImplementation(async () => {
-			Object.defineProperty(session, "sessionGeneration", { value: 1 });
-			Object.defineProperty(session, "isCompacting", { value: false });
-		});
-		expect(await fixture.acp("/clear")).toEqual({ consumed: true });
-		expect(fixture.resetSessionContext).not.toHaveBeenCalled();
-		expect(fixture.newSession).not.toHaveBeenCalled();
-	});
-
-	test("ACP clear reports a streaming refusal rather than a successful reset", async () => {
-		const fixture = ordinaryTaskDispatchFixture();
-		fixture.resetSessionContext.mockResolvedValueOnce(undefined);
-		await fixture.acp("/clear");
-		expect(fixture.resetSessionContext).toHaveBeenCalledTimes(1);
-		expect(fixture.newSession).not.toHaveBeenCalled();
-	});
 });
 
 function ordinaryTaskDispatchFixture() {
-	const resetSessionContext = vi.fn<AgentSession["resetSessionContext"]>(async () => ({ droppedCount: 2 }));
-	const newSession = vi.fn(async () => true);
-	const session = {
-		model: { api: "openai-responses" },
-		isCompacting: false,
-		abortCompaction: vi.fn(),
-		sessionGeneration: 0,
-		isDisposed: false,
-		resetSessionContext,
-		newSession,
-	};
 	const output: string[] = [];
 	const settings = Settings.isolated();
 	const sessionManager = { getCwd: () => "/remote-task-test" };
 	const runtime = {
-		session,
 		settings,
 		cwd: sessionManager.getCwd(),
 		sessionManager,
@@ -362,23 +281,14 @@ function ordinaryTaskDispatchFixture() {
 	const setText = vi.fn();
 	const tuiRuntime = {
 		ctx: {
-			session,
 			settings,
 			sessionManager,
 			editor: { setText },
 			showStatus: runtime.output,
 			refreshSlashCommandState: runtime.refreshCommands,
-			handleResetContextCommand: async () => {
-				await resetContextForCommand(session);
-			},
 		},
 	} as unknown as BuiltinSlashCommandRuntime;
 	return {
-		output,
-		resetSessionContext,
-		newSession,
-		setText,
-		tuiRuntime,
 		tui: (text: string) => executeBuiltinSlashCommand(text, tuiRuntime),
 		acp: (text: string) => executeAcpBuiltinSlashCommand(text, runtime),
 	};

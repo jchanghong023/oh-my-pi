@@ -236,14 +236,16 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 		}
 	});
 
-	it("(e) falls back to a plain leaf move when the original ask arguments can't be recovered", async () => {
+	it.each([
+		{ label: "malformed legacy questions", args: { questions: [{ id: "deploy_target" }] } },
+		{ label: "empty HTML", args: { html: "" } },
+	])("(e) falls back to a plain leaf move for $label", async ({ args }) => {
 		const ctx = await createTestSession({ inMemory: true });
 		try {
 			const { session, sessionManager } = ctx;
 
 			sessionManager.appendMessage(userMsg("please deploy"));
-			// Neither form `html` nor a legacy `questions[]` entry with its question text.
-			sessionManager.appendMessage(toolCallMsg("ask-call-bad", "ask", { questions: [{ id: "deploy_target" }] }));
+			sessionManager.appendMessage(toolCallMsg("ask-call-bad", "ask", args));
 			const trBadId = sessionManager.appendMessage(toolResultMsg("ask-call-bad", "ask", "User selected: staging"));
 			sessionManager.appendMessage(assistantMsg("deploying to staging"));
 

@@ -17,7 +17,7 @@ const text = (result: { content: Array<{ type: string; text?: string }> }) =>
 		.map(part => part.text)
 		.join("\n");
 
-describe("personal tool argument correction feedback", () => {
+describe("tool argument failure feedback", () => {
 	it("returns parse and schema failures to the next model turn without replaying a successful call", async () => {
 		const executed: string[] = [];
 		const schema = type({ value: "string" });
@@ -65,14 +65,11 @@ describe("personal tool argument correction feedback", () => {
 		const parse = results.get("parse")!;
 		expect(parse.isError).toBe(true);
 		expect(text(parse)).toContain("Expected comma");
-		expect(text(parse)).toContain("not run");
-		expect(text(parse)).toContain("valid JSON");
-		expect(text(parse)).toContain("repeat successful");
+		expect(text(parse)).toContain('{"value": nope}');
 		const invalid = results.get("schema")!;
 		expect(invalid.isError).toBe(true);
 		expect(text(invalid)).toContain("Received arguments:");
-		expect(text(invalid)).toContain("not run");
-		expect(text(invalid)).toContain("call the tool again");
+		expect(text(invalid)).toContain("value");
 		expect(text(results.get("good")!)).toBe("accepted:once");
 		const nextResults = model.calls[1]!.context.messages.filter(message => message.role === "toolResult");
 		expect(nextResults.map(message => message.toolCallId)).toEqual(["parse", "schema", "good"]);

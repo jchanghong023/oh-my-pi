@@ -781,8 +781,7 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	#publishLockPath(fpath: string): string {
-		const lockPath = path.join(path.dirname(fpath), `.${path.basename(fpath)}.lock`);
-		return lockPath;
+		return path.join(path.dirname(fpath), `.${path.basename(fpath)}.lock`);
 	}
 
 	/**
@@ -1063,7 +1062,9 @@ export class FileSessionStorage implements SessionStorage {
 		stage: (tempPath: string) => void,
 		options: SessionStorageWriteOptions | undefined,
 	): void {
-		// Rewrite a normal-mode symlink through its referent without replacing the link.
+		// A symlinked transcript is rewritten through its referent: the rename
+		// below would otherwise replace the link and strand the transcript it
+		// points at.
 		const target = sessionPublishTarget(fpath);
 		const dir = path.dirname(target);
 		this.ensureDirSync(dir);
@@ -1166,8 +1167,8 @@ export class FileSessionStorage implements SessionStorage {
 		}
 	}
 
-	async writeText(fpath: string, content: string): Promise<void> {
-		await Bun.write(fpath, content, { createPath: true });
+	async writeText(path: string, content: string): Promise<void> {
+		await Bun.write(path, content, { createPath: true });
 	}
 
 	async writeTextAtomic(fpath: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
@@ -1192,7 +1193,8 @@ export class FileSessionStorage implements SessionStorage {
 		stage: (tempPath: string) => Promise<void>,
 		options: WriteTextAtomicOptions | undefined,
 	): Promise<void> {
-		// As in the synchronous publish, keep normal-mode transcript links intact.
+		// As {@link #publishSync}: a symlinked transcript is rewritten through
+		// its referent, so the rename does not replace the link.
 		const target = sessionPublishTarget(fpath);
 		const dir = path.resolve(target, "..");
 		const tempPath = sessionStagingPath(target);

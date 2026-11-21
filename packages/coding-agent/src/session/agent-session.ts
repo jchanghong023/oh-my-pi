@@ -756,8 +756,8 @@ export interface NavigateTreeResult {
 	/**
 	 * Set when `targetId` is an `ask` toolResult, `options.allowAskReopen`
 	 * was set, and `options.reanswerAskResult` was not supplied: nothing was
-	 * mutated. The caller must re-open the ask picker with these
-	 * `questions`, then call `navigateTree(targetId, { ...options,
+	 * mutated. The caller must re-open the ask form from this `html`,
+	 * then call `navigateTree(targetId, { ...options,
 	 * reanswerAskResult })` with the produced result to actually branch
 	 * (issue #5642).
 	 */

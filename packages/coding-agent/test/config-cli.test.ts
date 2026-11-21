@@ -259,7 +259,6 @@ describe("config CLI schema coverage", () => {
 				key: "compaction.enabled",
 				value: true,
 				overriddenBy: "overlay",
-				revision: expect.any(String),
 			});
 		} finally {
 			if (previousConfigFiles === undefined) delete process.env.PI_CONFIG_FILES;

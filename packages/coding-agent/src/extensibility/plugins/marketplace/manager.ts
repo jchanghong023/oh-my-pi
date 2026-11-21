@@ -791,6 +791,22 @@ export class MarketplaceManager {
 
 	// ── Update / upgrade ─────────────────────────────────────────────────────
 
+	// Refresh marketplace catalogs that haven't been updated in more than 24 h.
+	// updateMarketplace also prunes abandoned clones, including for manual updates.
+	async refreshStaleMarketplaces(): Promise<void> {
+		const reg = await readMarketplacesRegistry(this.#opts.marketplacesRegistryPath);
+		const staleMs = 24 * 60 * 60 * 1000;
+		for (const entry of reg.marketplaces) {
+			if (Date.now() - Date.parse(entry.updatedAt) >= staleMs) {
+				try {
+					await this.updateMarketplace(entry.name);
+				} catch {
+					// Network or parse failure — leave stale, try next time.
+				}
+			}
+		}
+	}
+
 	// Compare installed plugin versions against the version each catalog entry currently publishes
 	// (see #resolveCatalogVersion). Returns one entry per (pluginId, scope) pair that is outdated.
 	// Plugins whose catalog side declares no version are skipped: the "0.0.0" a reinstall records

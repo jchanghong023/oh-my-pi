@@ -1,7 +1,7 @@
 import type { AgentSession } from "../../session/agent-session";
 import type { ResetSessionContextResult } from "../../session/agent-session-types";
 
-/** The business part of `/clear`; each host owns only its transcript presentation. */
+/** Wait for compaction to settle before resetting the originating session. */
 export async function resetContextForCommand(
 	session: Pick<
 		AgentSession,

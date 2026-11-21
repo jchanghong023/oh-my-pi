@@ -1,7 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
-import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { type AgentLifecycleApi, AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import {
 	AgentRegistry,
@@ -73,7 +71,7 @@ export class SessionFocusController {
 	#focusedAgentId: string | undefined;
 	/** Session currently attached while focused; undefined when unfocused. */
 	#attachedSession: AgentViewSession | undefined;
-	#focusAttachment: Promise<boolean> | undefined;
+	#focusAttachment: Promise<void> | undefined;
 	#registryUnsubscribe: (() => void) | undefined;
 	#attachGeneration = 0;
 	/** Monotonic focus-request id: a request that resolves after a newer one drops instead of clobbering the view. */
@@ -130,20 +128,13 @@ export class SessionFocusController {
 			attachment = this.#attach(session);
 			this.#focusAttachment = attachment;
 		}
-		let attached = false;
 		try {
-			attached = await attachment;
+			await attachment;
 		} catch (error) {
 			if (request !== this.#focusRequestSeq) return;
 			throw error;
 		} finally {
 			if (this.#focusAttachment === attachment) this.#focusAttachment = undefined;
-		}
-		if (request !== this.#focusRequestSeq) return;
-		if (attached && this.#focusedAgentId === id && this.#attachedSession === session) {
-			this.ctx.showStatus(
-				`Viewing agent ${id} — ${appKey(this.ctx.keybindings, "app.interrupt")} returns to main, ${formatDoubleTap("left")} hops to parent`,
-			);
 		}
 	}
 
@@ -175,8 +166,7 @@ export class SessionFocusController {
 		if (!this.#focusedAgentId) return;
 		this.#focusedAgentId = undefined;
 		this.#attachedSession = undefined;
-		const attached = await this.#attach(this.ctx.session);
-		if (attached && this.#focusedAgentId === undefined) this.ctx.showStatus("Returned to main session");
+		await this.#attach(this.ctx.session);
 	}
 
 	dispose(): void {
@@ -214,7 +204,7 @@ export class SessionFocusController {
 	}
 
 	/** Retarget core, both directions: swap subscription, transcript, and status line onto `target`. */
-	async #attach(target: AgentViewSession): Promise<boolean> {
+	async #attach(target: AgentViewSession): Promise<void> {
 		const generation = ++this.#attachGeneration;
 		this.ctx.syncIdleMaintenanceView(target);
 		try {
@@ -277,14 +267,13 @@ export class SessionFocusController {
 				restored = rebuilt?.restored;
 			});
 			await restored;
-			if (generation !== this.#attachGeneration) return false;
+			if (generation !== this.#attachGeneration) return;
 			this.ctx.compactToolOutputPreview?.restore();
 			await this.ctx.reloadTodos(target);
-			if (generation !== this.#attachGeneration) return false;
+			if (generation !== this.#attachGeneration) return;
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.updateEditorBorderColor();
 			this.ctx.ui.requestRender();
-			return true;
 		} catch (error) {
 			if (generation === this.#attachGeneration) {
 				this.#focusedAgentId = undefined;

@@ -51,7 +51,7 @@
 
 ## Flow
 
-1. `packages/coding-agent/src/tools/index.ts` registers `lsp: LspTool.createIf`. The tool is present only when both `session.enableLsp !== false` and `lsp.enabled` (default `true`) allow it. A session with `lspReadOnly` rejects every action outside `LSP_READONLY_ACTIONS`; restricted sessions default both to LSP disabled and read-only if it is explicitly re-enabled.
+1. `packages/coding-agent/src/tools/index.ts` registers `lsp: LspTool.createIf`. The tool requires both session-level LSP permission (`enableLsp`) and `lsp.enabled: true` (default `false`). Restricted sessions deny that permission by default and remain read-only unless `lspReadOnly` is explicitly set to `false`. A read-only session rejects actions outside `LSP_READONLY_ACTIONS`.
 2. `LspTool.execute()` in `packages/coding-agent/src/lsp/tool.ts` resolves `timeout` and the `lsp.requestTimeout` setting with `resolveLspTimeouts()`, including the optional global `tools.maxTimeout` ceiling, builds an `AbortSignal.timeout(...)` for the call deadline, and combines it with the caller signal.
 3. `getConfig()` loads and caches `LspConfig` per cwd and reuses the cached config on later calls. Workspace `reload` is the explicit exception: it clears and rebuilds that cwd's config cache before reloading the newly selected servers.
 4. Config loading in `packages/coding-agent/src/lsp/config.ts` merges `defaults.json` with JSON/YAML overrides from project, project config dirs, user config dirs, plugin roots/marketplace metadata, and home. In every case, it filters disabled servers and requires matching root markers plus a resolvable local/PATH executable, then selects one TypeScript server. See [LSP configuration](../lsp-config.md) for filenames, precedence, and server fields.
@@ -224,7 +224,7 @@ Uses the same location normalization and output shape as `definition`, but sends
 - Uses cached diagnostics for the open URI; when disk reconciliation sent a `didChange` or reopened a document closed for idleness, it first waits for fresh diagnostics at that version (falling back to the cache on non-abort failure). Sends `textDocument/codeAction` for a zero-width range at the resolved position.
 - When `apply !== true`, `query` is passed as `context.only: [query]`; this is a server-side kind filter.
 - When `apply === true` and `query` is non-empty, it is a client-side selector: either a zero-based numeric index or a case-insensitive substring of the action title.
-- When `apply === true` but `query` is omitted, the current implementation falls through to list mode and does not apply an action.
+- When `apply === true` and `query` is omitted or blank, applies the sole candidate or, among multiple candidates, the one the server uniquely marks preferred. If multiple candidates cannot be resolved this way, specify a title or index.
 - Applying a `CodeAction` uses `applyCodeAction()`: optionally `codeAction/resolve`, then `applyWorkspaceEdit(edit)`, then optional `workspace/executeCommand`.
 - Applying a bare `Command` only runs `workspace/executeCommand`.
 
@@ -234,6 +234,7 @@ Uses the same location normalization and output shape as `definition`, but sends
 - Apply mode success: `Applied "title":` plus `Workspace edit:` and/or `Executed command(s):` sections.
 - Apply mode miss: `No code action matches "query". Available actions:`.
 - Apply mode with no edit/command: `Action "title" has no workspace edit or command to apply`.
+- If apply mode cannot select or apply an action, it reports failure rather than falling back to listing.
 
 ### `status`
 
@@ -379,7 +380,6 @@ Uses the same location normalization and output shape as `definition`, but sends
 - `getServersForFile()` matches both file extensions and exact basenames from `fileTypes`; config can target names like `Dockerfile` if present.
 - `symbol` matching uses identifier boundaries for bare identifiers, exact case first, then case-insensitive matching, and selects the Nth occurrence on the specified line only. Repeated matches default to the first; use `#N` to select another. It never scans other lines.
 - For `definition`, `references`, and `rename` against project-aware servers, omitting `symbol` while passing `line` is rejected with a `ToolError` instead of silently falling back to the first non-whitespace column.
-- `code_actions` uses `query` in two different ways: server-side `context.only` filter in list mode, client-side title/index selector when both `apply: true` and a non-empty `query` are present. Despite the model prompt requiring a selector, the implementation currently lists actions rather than applying one when `apply: true` omits `query`.
 - `rename` and `rename_file` default to apply. Preview requires `apply: false`.
 - `request` with `file: "*"` is treated the same as omitted `file`: it does not build workspace-specific params.
 - `reload` does not recreate a client immediately after killing it; the next request triggers reinitialization.

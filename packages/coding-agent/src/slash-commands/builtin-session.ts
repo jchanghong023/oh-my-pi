@@ -18,7 +18,6 @@ import { buildJobTree, jobTreeGuide, jobTreeIndent } from "@oh-my-pi/pi-tui/over
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { handleMcpAcp } from "./helpers/mcp";
-import { formatLogoutCommandResult, logoutProviderForCommand } from "./helpers/logout";
 import { markdownFenceFor } from "../utils/markdown-fence";
 import { openLocalFileInEditor } from "../modes/local-file-editor";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
@@ -749,51 +748,6 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Logout from OAuth provider",
 		inlineHint: "[provider]",
 		allowArgs: true,
-		handle: async (command, runtime) => {
-			try {
-				const result = await logoutProviderForCommand(
-					runtime.session,
-					command.args.trim() || undefined,
-					{
-						selectProvider: async providers => {
-							if (!runtime.ui) throw new Error("Logout requires a provider/account selection UI.");
-							const options = providers.map(provider => ({ label: `${provider.name} (${provider.id})` }));
-							const selected = await runtime.ui.select(
-								"Select provider to logout",
-								options,
-								runtime.signal ? { signal: runtime.signal } : undefined,
-							);
-							if (selected === undefined) return undefined;
-							const index = options.findIndex(option => option.label === selected);
-							if (index < 0) throw new Error("Invalid logout provider selection.");
-							return providers[index]!.id;
-						},
-						selectAccount: async (provider, accounts) => {
-							if (!runtime.ui) throw new Error("Logout requires a provider/account selection UI.");
-							const options = accounts.map(account => ({
-								label: `${account.label} [#${account.credentialId}]`,
-								description: `${account.detail}${account.active ? "; active" : ""}`,
-							}));
-							const selected = await runtime.ui.select(
-								`Select ${provider.name} account to log out`,
-								options,
-								runtime.signal ? { signal: runtime.signal } : undefined,
-							);
-							if (selected === undefined) return undefined;
-							const index = options.findIndex(option => option.label === selected);
-							if (index < 0) throw new Error("Invalid logout account selection.");
-							return accounts[index]!.credentialId;
-						},
-					},
-					runtime.signal,
-				);
-				const feedback = formatLogoutCommandResult(result);
-				if (feedback) await runtime.output(feedback.message, feedback.level);
-			} catch (error) {
-				await runtime.output(`Logout failed: ${errorMessage(error)}`, "error");
-			}
-			return commandConsumed();
-		},
 		handleTui: (command, runtime) => {
 			clearSubmittedText(runtime);
 			void runtime.ctx.showOAuthSelector("logout", command.args.trim() || undefined);

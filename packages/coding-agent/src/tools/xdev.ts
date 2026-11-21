@@ -163,7 +163,7 @@ function parseDeviceArgs(
 		parsed = JSON.parse(content);
 	} catch (error) {
 		throw new ToolError(
-			`${XD_URL_PREFIX}${device.name} expects a JSON args object as content (${error instanceof Error ? error.message : String(error)}). For docs, call write with path "${XD_URL_PREFIX}${device.name}" and content "?"; then retry with a JSON object as content.`,
+			`${XD_URL_PREFIX}${device.name} expects a JSON args object as content (${error instanceof Error ? error.message : String(error)}). Write \`?\` for docs.`,
 		);
 	}
 	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {

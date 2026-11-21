@@ -20,7 +20,8 @@ type AggregateRow = {
 };
 
 export function getConn(dbPath?: string): Database {
-	return openDatabase(dbPath ?? DEFAULT_LOG_DB, { pragmas: false });
+	const path = dbPath ?? DEFAULT_LOG_DB;
+	return openDatabase(path, { pragmas: false });
 }
 
 export function initCostLog(dbPath?: string): void {

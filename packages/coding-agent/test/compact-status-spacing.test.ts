@@ -34,14 +34,14 @@ import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 withoutTerminalMultiplexer();
 
 const compacted = "Session compacted 2 times";
-const returned = "Returned to main session";
+const status = "Workspace status updated";
 
 // Count only wholly blank rows between the two unique notices. Missing or
 // duplicated notices are a different failure, not a spacing observation.
 function gap(rows: readonly string[], label: string): number {
 	const clean = rows.map(row => Bun.stripANSI(row));
 	const first = clean.flatMap((row, index) => (row.includes(compacted) ? [index] : []));
-	const second = clean.flatMap((row, index) => (row.includes(returned) ? [index] : []));
+	const second = clean.flatMap((row, index) => (row.includes(status) ? [index] : []));
 	if (first.length !== 1 || second.length !== 1 || first[0]! >= second[0]!) {
 		throw new Error(`${label}: notices missing, duplicated or out of order\n${numbered(clean)}`);
 	}
@@ -62,11 +62,11 @@ beforeAll(async () => {
 });
 afterAll(() => resetSettingsForTest());
 
-describe("compaction and focus status spacing", () => {
+describe("transcript status spacing", () => {
 	it("reserves a status notice's boundary under emergency pressure", () => {
 		const transcript = new TranscriptContainer();
 		const first = new StatusNotice(compacted);
-		const second = new StatusNotice(returned);
+		const second = new StatusNotice(status);
 		transcript.addChild(new Text("older content", 0, 0));
 		transcript.addChild(first);
 		transcript.addChild(second);
@@ -74,14 +74,14 @@ describe("compaction and focus status spacing", () => {
 		const plain = (rows: readonly string[]) => rows.map(row => Bun.stripANSI(row).trim());
 		// Three available rows fit the pair and their semantic separator, not
 		// the older block as well. The separator is not owned by either notice.
-		expect(plain(transcript.renderViewport(80, 3, frame))).toEqual([compacted, "", returned]);
+		expect(plain(transcript.renderViewport(80, 3, frame))).toEqual([compacted, "", status]);
 		expect(transcript.getLastViewportSpans()).toEqual([
 			{ component: first, start: 0, end: 1 },
 			{ component: second, start: 2, end: 3 },
 		]);
 		// With only two rows the pair and its separator cannot all fit, so
 		// retain the newer notice rather than draw a false zero-gap pair.
-		expect(plain(transcript.renderViewport(80, 2, frame))).toEqual([returned]);
+		expect(plain(transcript.renderViewport(80, 2, frame))).toEqual([status]);
 	});
 
 	it("keeps the source-derived gap through live rendering, retirement and display replay", async () => {
@@ -210,7 +210,7 @@ describe("compaction and focus status spacing", () => {
 			frame => {
 				if (expectedGap === undefined) return;
 				const view = frame.viewport.join("\n");
-				if (!view.includes(compacted) || !view.includes(returned)) return;
+				if (!view.includes(compacted) || !view.includes(status)) return;
 				eligibleFrames++;
 				compare(`frame ${event}`, expectedGap, frame.viewport);
 			},
@@ -236,10 +236,8 @@ describe("compaction and focus status spacing", () => {
 		try {
 			await paint("initial");
 			await focus.focusAgent("ScreenOracle");
-			// The journal does not persist focus switches or transient notices.
-			// Exercise the real attach path while the main session is running:
-			// it restores an in-flight assistant after the compaction notice and
-			// before emitting the return notice, without inventing an IRC eviction.
+			// Return while main is streaming so the real attach path restores its
+			// in-flight assistant between the compaction notice and a later status.
 			Object.defineProperty(main, "isStreaming", { configurable: true, value: true });
 			Object.assign(main.agent.state, {
 				streamMessage: {
@@ -261,6 +259,7 @@ describe("compaction and focus status spacing", () => {
 				},
 			});
 			await focus.unfocus();
+			ctx.showStatus(status);
 			await paint("return to streaming main session");
 			const semantic = ctx.chatContainer.renderTail(160, 1000);
 			const expected = gap(semantic, "semantic transcript");
@@ -342,11 +341,12 @@ describe("compaction and focus status spacing", () => {
 			composer.ui.resetDisplay();
 			await paint("replay committed history");
 			const history = terminal.getScrollBuffer();
-			if (history.some(row => row.includes(compacted)) && history.some(row => row.includes(returned))) {
+			if (history.some(row => row.includes(compacted)) && history.some(row => row.includes(status))) {
 				compare("history after replay", expected, history);
 			}
 			await focus.focusAgent("ScreenOracle");
 			await focus.unfocus();
+			ctx.showStatus(status);
 			await paint("focus return rebuild");
 			compare("rebuilt semantic transcript", expected, ctx.chatContainer.renderTail(160, 1000));
 			compare("rebuilt focus frame", expected, terminal.getViewport());

@@ -51,7 +51,7 @@ export interface HistoryFormatOptions {
 	 */
 	expandEditDiffs?: boolean;
 	/**
-	 * Append bounded tool-result text and, for `ask`, the structured questions.
+	 * Append bounded tool-result text and, for `ask`, the form it showed.
 	 * Advisor transcripts enable this so reviewers see user decisions and the
 	 * evidence returned by primary tools without admitting unbounded output.
 	 */
@@ -300,19 +300,6 @@ function boundedFencedToolContext(text: string, language: string, maxLines = EXP
 	);
 }
 
-function expandedAskArguments(
-	args: Record<string, unknown> | undefined,
-	transform?: (text: string) => string,
-): string | undefined {
-	if (!args) return undefined;
-	const visibleArgs = Object.fromEntries(Object.entries(args).filter(([key]) => key !== INTENT_FIELD));
-	try {
-		return boundedAskJson(visibleArgs, transform);
-	} catch {
-		return undefined;
-	}
-}
-
 function expandedAskDetails(
 	result: ToolResultMessage | undefined,
 	transform?: (text: string) => string,
@@ -372,10 +359,9 @@ function toolCallLine(
 			if (typeof html === "string") {
 				sections.push(`Ask input:\n${boundedFencedToolContext(transformExpandedToolIO?.(html) ?? html, "html")}`);
 			} else {
-				const askArguments =
-					expandedAskArguments(args, transformExpandedToolIO) ??
-					expandedAskDetails(result, transformExpandedToolIO);
-				if (askArguments) sections.push(`Ask input:\n${boundedFencedToolContext(askArguments, "json")}`);
+				// An orphaned result (its call not in view) still names the questions it answered.
+				const askQuestions = expandedAskDetails(result, transformExpandedToolIO);
+				if (askQuestions) sections.push(`Ask input:\n${boundedFencedToolContext(askQuestions, "json")}`);
 			}
 		}
 		if (result) {

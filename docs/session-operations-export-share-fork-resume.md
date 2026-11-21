@@ -250,11 +250,10 @@ while giving the provider stream state a clean slate.
 
 ## Clear
 
-`/clear` clears the current conversation context in place through shared
-TUI/ACP/RPC business logic. It does not reset while a response is streaming or a
+Interactive `/clear` clears the current conversation context in place. It is
+available only in the TUI and is rejected while a response is streaming or a
 foreground bash/Python execution is running. If compaction is active, the
-command aborts it and waits for it to stop before resetting; it does not create
-a new session or alter its id, title, cwd or transcript file.
+command aborts it and waits for it to stop before resetting.
 
 `AgentSession.resetSessionContext()`:
 

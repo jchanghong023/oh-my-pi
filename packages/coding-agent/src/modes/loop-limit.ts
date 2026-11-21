@@ -29,9 +29,8 @@ const TIME_UNITS_MS = new Map<string, number>([
 	["hours", 3_600_000],
 ]);
 
-const MAX_LOOP_INTERVAL_MS = 2_147_483_647;
 const LOOP_USAGE =
-	"Usage: /loop [count|duration] [interval] [--while|--until '<command>'] [prompt]. Examples: /loop 10 30s check status, /loop 10m 30s check status, /loop 10, /loop 20 --until 'bun test' fix the failing tests.";
+	"Usage: /loop [count|duration] [--while|--until '<command>'] [prompt]. Examples: /loop 10, /loop 10m, /loop 20 --until 'bun test' fix the failing tests.";
 
 /**
  * Flag → `until` polarity. `--while` continues while the command succeeds;
@@ -45,17 +44,15 @@ const CONDITION_FLAGS: Record<string, boolean | undefined> = {
 export interface ParsedLoopArgs {
 	/** Iteration/duration budget, when the user supplied a leading limit token. */
 	limit?: LoopLimitConfig;
-	/** Delay after each completed turn; numeric limits include the initial turn when set. */
-	intervalMs?: number;
-	/** Continue-condition from `/loop --while` / `--until`, re-evaluated before each iteration. */
+	/** Continue-condition from `--while` / `--until`, re-evaluated before each iteration. */
 	condition?: LoopConditionConfig;
 	/** Inline loop prompt: text after the limit and flags, or the whole argument when neither was given. */
 	prompt?: string;
 }
 
 /**
- * Parse `/loop` arguments into an optional leading limit, repeat interval,
- * continue-condition, and inline prompt.
+ * Parse `/loop` arguments into an optional leading limit, an optional
+ * continue-condition flag, and an optional inline prompt.
  *
  * A leading token that *looks* like a limit (starts with a digit or sign) or
  * like a flag (starts with `--`) but fails to parse is a hard error, so a typo
@@ -70,26 +67,11 @@ export function parseLoopArgs(args: string): ParsedLoopArgs | string {
 	const limitResult = takeLoopLimit(trimmed);
 	if (typeof limitResult === "string") return limitResult;
 
-	let rest = limitResult.rest;
-	let intervalMs: number | undefined;
-	if (limitResult.limit) {
-		const token = /^\S+/.exec(rest)?.[0];
-		const interval = token === undefined ? undefined : parseCompoundDuration(token.toLowerCase(), true);
-		if (typeof interval === "string") return interval;
-		if (interval?.kind === "duration") {
-			if (!Number.isSafeInteger(interval.durationMs) || interval.durationMs > MAX_LOOP_INTERVAL_MS) {
-				return `Loop interval must not exceed ${MAX_LOOP_INTERVAL_MS} milliseconds.`;
-			}
-			intervalMs = interval.durationMs;
-			rest = rest.slice(token!.length).trim();
-		}
-	}
-	const conditionResult = takeLoopCondition(rest);
+	const conditionResult = takeLoopCondition(limitResult.rest);
 	if (typeof conditionResult === "string") return conditionResult;
 
 	return {
 		limit: limitResult.limit,
-		intervalMs,
 		condition: conditionResult.condition,
 		prompt: conditionResult.rest || undefined,
 	};
@@ -177,29 +159,29 @@ function makeDuration(amountText: string, unitMs: number): LoopLimitConfig | str
 
 /**
  * Parse a compact duration token such as `10m`, or a compound one like `1h30m`.
- * Returns `undefined` when the token is not duration-shaped (or has an unknown
- * unit when parsing an optional interval), otherwise an error for an unknown
- * unit / invalid amount. Limits retain unsigned integer syntax; intervals also
- * recognize signed and fractional amounts so known units cannot hide invalid values.
+ * Returns `undefined` when the token is not duration-shaped, or an error string
+ * when it is shaped like a duration but uses an unknown unit / non-positive
+ * amount.
  */
-function parseCompoundDuration(token: string, unknownUnitsArePrompt = false): LoopLimitConfig | string | undefined {
-	const durationPattern = unknownUnitsArePrompt ? /^(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)[a-z]+)+$/ : /^(?:\d+[a-z]+)+$/;
-	if (!durationPattern.test(token)) return undefined;
+function parseCompoundDuration(token: string): LoopLimitConfig | string | undefined {
+	if (!/^(?:\d+[a-z]+)+$/.test(token)) return undefined;
+	const segments = token.match(/\d+[a-z]+/g);
+	if (!segments) return undefined;
 	let totalMs = 0;
-	let invalidAmount = false;
-	for (const match of token.matchAll(/([+-]?(?:\d+(?:\.\d*)?|\.\d+))([a-z]+)/g)) {
+	for (const segment of segments) {
+		const match = /^(\d+)([a-z]+)$/.exec(segment);
+		if (!match) return LOOP_USAGE;
 		const unitMs = TIME_UNITS_MS.get(match[2]);
 		if (unitMs === undefined) {
-			return unknownUnitsArePrompt ? undefined : "Loop duration unit must be seconds, minutes, or hours.";
+			return "Loop duration unit must be seconds, minutes, or hours.";
 		}
 		const amount = Number(match[1]);
 		if (!Number.isSafeInteger(amount) || amount <= 0) {
-			if (!unknownUnitsArePrompt) return "Loop duration must be positive.";
-			invalidAmount = true;
+			return "Loop duration must be positive.";
 		}
 		totalMs += amount * unitMs;
 	}
-	if (invalidAmount || totalMs <= 0) return "Loop duration must be positive.";
+	if (totalMs <= 0) return "Loop duration must be positive.";
 	return { kind: "duration", durationMs: totalMs };
 }
 

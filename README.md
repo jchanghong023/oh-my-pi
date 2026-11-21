@@ -69,7 +69,11 @@ fork 发布版二进制报告的版本号为 `omp/<upstream-version>+fork.<build
 
 安装器获取 Release 元数据时验证 TLS 证书；如果企业代理拦截 TLS，安装器使用的客户端必须信任该代理的 CA。二进制资产下载保留原有传输兼容性，但在运行下载文件前，安装器会将其 SHA-256 与上述元数据中同名资产的摘要比对。摘要缺失或不匹配时，不运行下载文件并保留旧安装。摘要匹配后才运行 `omp --version`，确认与所选 Release 完全一致后再替换旧安装；已安装所选版本时仍跳过下载。
 
+OMP 运行时的 HTTPS 请求不沿用上述安装器规则：本 fork 在未显式设置 `NODE_TLS_REJECT_UNAUTHORIZED` 时，默认关闭 `fetch` 的 TLS 证书验证。在可能被劫持的网络上，凭据有被截获的风险。启动 OMP 前设置 `NODE_TLS_REJECT_UNAUTHORIZED=1` 可恢复严格校验；如使用企业代理，客户端仍需信任其 CA。
+
 运行中的会话通常继续使用旧映像，安装后退出并重新打开才能使用新版本；Windows 仅在旧映像无法重命名时回退为按安装路径匹配的进程终止。已有 fork 二进制可用 `omp update --stable` 更新，完成后运行 `omp --version` 核对 PATH 实际命中的版本。
+
+如果旧版 `-fork.N` 安装（构建号 35 或更早）运行 `omp update` 时报告 `Invalid fork release tag`，请用上面的安装器重装。这些旧版本不识别当前的 `+fork.N` 标签，无法自行更新。
 
 Windows 二进制下载在未设置代理环境变量时自动使用当前用户的系统代理；显式的 `HTTPS_PROXY` / `ALL_PROXY` 仍优先，curl 下载遵循 `NO_PROXY`。下载完成后的校验、替换或 PATH 配置失败时，安装器会打印失败阶段、具体错误、相关文件和日志路径，以及可复制执行的恢复、重试和版本核对命令。已验证但未换入的下载文件会保留；旧映像清理失败只提示警告，不代表新版安装失败。
 
@@ -115,19 +119,21 @@ omp 最初构建在 [Mario Zechner](https://github.com/mariozechner) 出色的 [
 
 ### 01 · 带工具调用的代码执行
 
-多数 harness 给 agent 一个 Python 沙箱就算完事。我们则同时运行持久化的 Python 和一个 Bun worker，两个内核都能通过 loopback 桥回调 agent 自己的工具——read、search、task。agent 在 Python 里用 tool.read 加载 CSV，再从 JavaScript 里画图，全程不必离开当前 cell。
+Eval 默认提供持久化的 Python 内核，可在单元内通过 `tool.read` 等接口调用 agent 的工具。JavaScript Eval 默认关闭；需要时可在配置中设置 `eval.js: true`，或在启动前设置 `PI_JS=1`。启用后，JavaScript 单元也能调用 agent 的工具。
 
 ![omp TUI 正在运行 Python 代码并绘制图表。](assets/python.webp)
 
-### 02 · LSP 接入每一次写入
+### 02 · LSP 辅助重命名
 
-让它改名，得到的就是真正的改名。该调用走 workspace/willRenameFiles，因此 re-export、barrel 文件和别名导入都会在文件移动之前同步更新。你的 IDE 知道的一切，agent 都知道。
+在启用了 LSP 的宿主中，重命名文件时，相关语言服务器若支持 `workspace/willRenameFiles`，OMP 会应用服务器返回的导入和重新导出修改；没有服务器支持时，导入不会自动更新。
 
 ![omp TUI 中 TypeScript 与 Biome 语言服务器已激活。](assets/lspv.webp)
 
 _[阅读 LSP 配置文档](docs/lsp-config.md)_
 
 ### 03 · 驱动真正的调试器
+
+`debug` 工具默认关闭。使用前需设置 `debug.enabled: true`，并准备目标语言对应的调试适配器。
 
 C 二进制段错误：agent 挂上 lldb，单步走到出错的指针，读取栈帧。Go 服务卡住：它挂上 dlv，遍历 goroutine。Python 进程僵死：debugpy，暂停、检查、求值。而多数 agent 还在到处撒 print。
 
@@ -233,7 +239,7 @@ _[观看录屏 ↗](https://omp.sh/clips/codemod.mp4)_
 
 ### 20 · 驱动_真正的浏览器_。_或者你的 Slack？_
 
-Eval 的 `browser.open(...)` 返回一个 tab 句柄，带有直接的导航、检查、交互和元素操作辅助方法；`tab.run(...)` 负责自定义 JavaScript。它在一个隔离的 tab 运行时里驱动 Chromium 或 Electron。隐身模式默认开启，而浏览器 relay 可以接管你已经打开的 Chrome 标签页，且不抢走焦点。
+Eval 的 `browser.open(...)` 返回一个 tab 句柄，带有直接的导航、检查、交互和元素操作辅助方法；`tab.run(...)` 负责自定义 JavaScript。自动选择自管后端时，OMP 在 WebKit 可用且满足窗口要求时优先使用它，否则使用 Chromium；也可通过 CDP 接入 Electron 应用。自管 Chromium 默认使用独立的临时用户数据目录；浏览器 relay 接入已有 Chrome 标签页时，会沿用该标签页的会话状态，不抢走焦点。
 
 ### 21 · 亲手接管桌面本身
 
@@ -242,7 +248,7 @@ Eval 的 `computer` 辅助方法——`computer.window(...)`、`win.screenshot()
 
 ## 无论任务需要什么，_它都已经内置_。
 
-核心工具与 `read`、`bash` 处于同一命名空间。用 `--tools read,edit,bash,…` 固定启用的工具集；不常用的可发现工具留在 `xd://` 设备之后。`read xd://` 可列出它们，启用 `tools.xdev` 后可用 `write xd://<tool>` 运行其中一个。
+核心工具与 `read`、`bash` 处于同一命名空间。用 `--tools read,edit,bash` 选择内置工具；这不是工具白名单，不会因此禁用已配置的 MCP 工具。`read xd://` 可列出可发现的工具，启用 `tools.xdev` 后可用 `write xd://<tool>` 调用。即使名单里没有 `write`，OMP 也可能提供仅用于调用 `xd://` 设备的 `write`，不授予普通文件写入权限。
 
 **文件与搜索**
 
@@ -274,12 +280,15 @@ Eval 的 `computer` 辅助方法——`computer.window(...)`、`win.screenshot()
 
 **桌面与 Web**
 
-- `browser` — 通过 Puppeteer 操作无头 Chromium 中的标签页、CDP 接入的应用，或经 relay 操作你自己的 Chrome。
-- `computer` — 针对宿主桌面的持久化 JS：窗口、截图、原生输入、AX 树、剪贴板。
-- `web_search` — 一次查询覆盖已配置的多个 provider，返回答案与引用。
+- `browser`（`eval` 命名空间）— 操作自管 WebKit 或 Chromium、通过 CDP 接入的应用，或经 relay 使用已有 Chrome 标签页。
+- `computer`（`eval` 命名空间）— 用持久化 JavaScript 操作宿主桌面：窗口、截图、原生输入、无障碍树和剪贴板。
+
+`browser` 和 `computer` 都通过 `eval` 使用，不是可用 `--tools` 单独启用的顶层工具。
+
+- `web_search` — 按顺序尝试搜索后端，返回首个可用结果及其引用（如有）。
 - `github` — GitHub CLI 操作 —— 仓库、PR、issue、代码搜索、Actions 运行监视。
 - `generate_image` — 通过 Gemini、GPT 或 xAI Grok 图像模型生成或编辑位图。
-- `tts` — 通过 xAI Grok Voice 做语音合成 —— 五个内置音色，WAV 或 MP3。
+- `tts` — 按 `speech` 模型角色合成语音：本机 Phonon 输出 WAV，xAI Grok Voice 或 OpenAI 语音后端可输出 WAV 或 MP3。
 
 **记忆与 skills**
 
@@ -580,14 +589,14 @@ omp 是 [Mario Zechner](https://github.com/mariozechner) 的 [pi-mono](https://g
 
 ### 项目输入与信任
 
-打开一个仓库时，按设计会加载它的项目输入：设置、扩展、hooks、tools、命令、skills、规则以及项目 MCP 配置。如果某次调用要排除项目的 `.mcp.json`，传入 `--config <file>` 指向一个使用嵌套键的 YAML overlay（单行的 `mcp.enableProjectConfig: false` 会被忽略）：
+打开一个仓库时，CLI 按各自的规则加载项目设置、tools、命令、skills、规则以及项目 MCP 配置。普通和 offline 启动都默认跳过扩展自动发现。如果某次调用要排除项目的 `.mcp.json`，传入 `--config <file>` 指向一个使用嵌套键的 YAML overlay（单行的 `mcp.enableProjectConfig: false` 会被忽略）：
 
 ```yaml
 mcp:
   enableProjectConfig: false
 ```
 
-用 `--no-extensions` 跳过环境扩展发现；或用 `--trusted-extension /absolute/path/to/file.ts` 给出精确的扩展白名单。`--no-tools` 会禁用内置工具，但项目 tool 模块仍是独立的发现面。这些旗标只收窄输入，不改变仓库信任模型。
+CLI 默认按 `--no-extensions` 运行，不需要再传这个参数。可用 `-e`／`--extension` 或 `--hook` 显式加载，也可改用 `--trusted-extension /absolute/path/to/file.ts` 指定精确的扩展白名单。这个默认行为不会一并禁用 Skills 或 MCP。`--no-tools` 会禁用内置工具，但项目 tool 模块仍是独立的发现面。这些旗标只收窄输入，不改变仓库信任模型。
 
 ---
 
@@ -597,12 +606,16 @@ mcp:
 
 全新克隆的仓库需要先装好 workspace 依赖并构建本地 Rust/N-API addon，源码 CLI 才能启动。
 
+`bun setup` 还会更新 Bun 全局 bin 目录中的 `omp` 入口，可能覆盖该目录里已有的入口。如果这个目录在 `PATH` 中优先，之后直接运行 `omp` 可能启动开发版而非发行版。
+
 ```sh
 bun setup
 bun dev
 ```
 
 `bun setup` 会安装 Bun workspaces 并构建 `@oh-my-pi/pi-natives`。改动 Rust crates 或 `packages/natives` 后，重新运行 `bun run build:native`。
+
+需要在源码版使用 OpenWiki 时，请先运行 `git submodule update --init -- vendor/openwiki`，再运行 `bun setup`。如果已经在缺少子模块的情况下完成了 `bun setup`，初始化子模块后，从仓库根目录运行 `bun run gen:openwiki-resources`。发行版二进制已内嵌这些资源，无需执行这两步。
 
 Nix 用户可以直接获得锁定版本的 Bun 与 Rust 工具链，以及所有原生构建依赖：
 

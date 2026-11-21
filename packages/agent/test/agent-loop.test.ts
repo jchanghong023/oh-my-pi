@@ -1900,53 +1900,6 @@ describe("agentLoop with AgentMessage", () => {
 		expect(requiredOwnedWire?.required).toContain(INTENT_FIELD);
 	});
 
-	it("explains invalid bash arguments without executing the command", async () => {
-		const schema = type({ command: "string", "timeout?": "number" });
-		const executed: string[] = [];
-		const tool: AgentTool<typeof schema> = {
-			name: "bash",
-			label: "Bash",
-			description: "Run a command",
-			parameters: schema,
-			async execute(_id, args) {
-				executed.push(args.command);
-				return { content: [{ type: "text", text: "ran" }] };
-			},
-		};
-		const mock = createMockModel({
-			responses: [
-				{
-					content: [
-						{ type: "toolCall", id: "bad", name: "bash", arguments: { "<rfl:parameter name=": "pwd" } },
-						{
-							type: "toolCall",
-							id: "bad-timeout",
-							name: "bash",
-							arguments: { command: "pwd", timeout: "invalid" },
-						},
-						{ type: "toolCall", id: "good", name: "bash", arguments: { command: "pwd" } },
-					],
-				},
-				{ content: ["done"] },
-			],
-		});
-		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
-		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
-		const messages = await agentLoop([createUserMessage("run")], context, config, undefined, mock.stream).result();
-		const results = new Map(
-			messages
-				.filter((message): message is ToolResultMessage => message.role === "toolResult")
-				.map(result => [result.toolCallId, result]),
-		);
-		expect(executed).toEqual(["pwd"]);
-		expect(results.get("bad")?.isError).toBe(true);
-		expect(toolResultText(results.get("bad")!)).toContain("not run");
-		expect(toolResultText(results.get("bad")!)).toContain('{"command":"pwd"}');
-		expect(results.get("bad-timeout")?.isError).toBe(true);
-		expect(toolResultText(results.get("bad-timeout")!)).toContain("not run");
-		expect(results.get("good")?.isError).toBe(false);
-	});
-
 	it("runs shared tools in parallel and records results in call order", async () => {
 		const toolSchema = type({ value: "string" });
 		const startTimes: Record<string, number> = {};

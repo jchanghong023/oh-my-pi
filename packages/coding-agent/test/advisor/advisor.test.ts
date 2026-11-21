@@ -359,13 +359,13 @@ describe("advisor", () => {
 				expandToolIO: true,
 			});
 
-			expect(compact).not.toContain("User answers:");
-			expect(expanded).toContain("Authorize deployment?");
-			expect(expanded).toContain("Yes</label>");
-			expect(expanded).toContain("User answers:");
+			expect(compact).not.toContain('"deploy": "yes"');
+			expect(expanded).toContain("<p>Authorize deployment?</p>");
+			expect(expanded).toContain('value="no"> No</label>');
+			expect(expanded).toContain('"deploy": "yes"');
 		});
 
-		it("bounds long ask questions and custom answers with visible head and tail context", () => {
+		it("bounds long ask forms and answers with visible head and tail context", () => {
 			const questionEnd = "question-at-end";
 			const answerEnd = "answer-at-end";
 			const longQuestion = {
@@ -374,7 +374,7 @@ describe("advisor", () => {
 					{
 						...(askCall as unknown as { content: Record<string, unknown>[] }).content[0],
 						arguments: {
-							html: `<form><p>question-start ${"context ".repeat(1200)}${questionEnd}</p><label><input name="deploy"> Custom</label></form>`,
+							html: `<form><p>question-start ${"context\n".repeat(1200)}${questionEnd}</p><textarea name="answer"></textarea></form>`,
 						},
 					},
 				],
@@ -399,10 +399,8 @@ describe("advisor", () => {
 				role: "toolResult",
 				toolCallId: "ask-orphan",
 				toolName: "ask",
-				content: [{ type: "text", text: "deploy: Yes" }],
-				details: {
-					answers: [{ name: "deploy", question: "Authorize production deployment?", answer: "Yes" }],
-				},
+				content: [{ type: "text", text: 'User answers:\n{\n  "deploy": "yes"\n}' }],
+				details: { answers: [{ name: "deploy", question: "Authorize production deployment?", answer: "Yes" }] },
 				isError: false,
 				timestamp: 2,
 			} as unknown as AgentMessage;
@@ -410,7 +408,27 @@ describe("advisor", () => {
 			const expanded = formatSessionHistoryMarkdown([orphan], { expandToolIO: true });
 
 			expect(expanded).toContain("Authorize production deployment?");
-			expect(expanded).toContain("deploy: Yes");
+			expect(expanded).toContain('"deploy": "yes"');
+		});
+
+		it("uses answered questions rather than raw legacy arguments in the expanded ask input", () => {
+			const legacyCall = {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "ask-1",
+						name: "ask",
+						arguments: { questions: [{ question: "Question not recorded in the answer" }] },
+					},
+				],
+				timestamp: 1,
+			} as unknown as AgentMessage;
+
+			const expanded = formatSessionHistoryMarkdown([legacyCall, askResult], { expandToolIO: true });
+			const askInput = expanded.split("Ask input:\n")[1]?.split("\nTool result:")[0];
+			expect(askInput).toContain("Authorize deployment?");
+			expect(askInput).not.toContain("Question not recorded in the answer");
 		});
 
 		it("bounds expanded tool results with visible head and tail context", () => {

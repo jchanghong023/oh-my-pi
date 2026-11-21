@@ -95,7 +95,7 @@ With the default batched task schema, supply shared `context` and per-item `task
 
 ## User-tagged model agents
 
-Type `^` in the composer to choose a model from the same scope and ranking as the `Alt+P` session picker. Accepting a completion inserts an atomic chip showing its display name. For example, type `Have ^`, pick a model, then finish with `review this change`.
+Type `^` in the composer to choose a model from the same scope and ranking as the temporary model picker (`Ctrl+T` by default). Accepting a completion inserts an atomic chip showing its display name. For example, type `Have ^`, pick a model, then finish with `review this change`.
 
 On submit, each first-mentioned model receives a branch-local pseudonym (`m1`, `m2`, …). The user message carries `<model agent="m1" name="Display Name"/>`; the task description lists its provider/model selector. `task`, eval `agent()`, and `workpool()` accept that pseudonym as their `agent`. These agents use the bundled general-purpose task template, not a specialist template, and are intended only for requests explicitly naming the tagged model.
 
@@ -170,7 +170,7 @@ Because bundled parsing uses `level: "fatal"`, unrecoverable YAML errors or inva
    - the session's effective `extensions:` array, in its configured order
    - installed npm/link plugins
      Project and user `extensions:` arrays are not concatenated: settings use array-replacement precedence. Session overlays/runtime overrides and the configured array's project/user provenance are preserved. In `explicit-only` mode (`--no-extensions` or SDK `disableExtensionDiscovery`), only explicit roots contribute this package surface; file entrypoints have no `agents/` subdirectory to scan.
-4. Claude marketplace plugin roots (`listClaudePluginRoots(home, cwd)`) with `agents/` subdirs — only when `isProviderEnabled("claude-plugins")`; project-scope plugins sort before user-scope. User-scope roots additionally require the `claude-plugins` or `claude` user source to be enabled (`isUserSourceEnabled`: normally via `enabledProviders`, e.g. `["claude-plugins"]`; `claude` is also enabled implicitly when `CLAUDE_CONFIG_DIR` is set), except roots whose origin is not the foreign `~/.claude/plugins` tree (omp's own installs with `origin: "omp"` and `--plugin-dir` roots) — mirroring the skills path's exemption.
+4. Marketplace plugin roots (`listClaudePluginRoots(home, cwd)`) with `agents/` subdirs — only when `isProviderEnabled("claude-plugins")`; project-scope plugins sort before user-scope. Roots from Claude's own registry are skipped by default. To include them, add `claude-plugins` or `claude` to `enabledProviders` (`*` or `all` also works). `CLAUDE_CONFIG_DIR` sets the Claude directory but does not enable its plugin registry. OMP-installed plugins and `--plugin-dir` roots do not require this opt-in.
 5. Bundled agents (`loadBundledAgents()`)
 
 The OMP extension-package surface is disabled when the `omp-plugins` capability provider is disabled. Marketplace roots are excluded from `listOmpExtensionRoots` and enter only through the separately gated Claude-plugin path.
@@ -295,7 +295,7 @@ For a per-call `model`, `task.maxEffort` bounds every per-call-model spawn, not 
 
 After policy resolution, the `before_subagent_spawn` extension hook runs once for the actual dispatch. It can block the spawn or replace the resolved model patterns; a routing note is carried into progress metadata.
 
-The `Alt+P` task model pick is session-only; saving a model in `/agents` replaces that runtime selection for the current session and persists the new value for future sessions.
+Press `Ctrl+T` to open the temporary model picker, then press it again to switch to Task model selection. The choice applies only to the current session. Saving a model in `/agents` replaces that runtime selection and persists the new value for future sessions.
 
 Compaction triggers are separate from model and service-tier selection: an exact, case-sensitive
 `task.agentCompactionThresholdOverrides[agentName]` entry (`90000` or `"80%"`) replaces the

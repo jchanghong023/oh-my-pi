@@ -16,6 +16,7 @@
 
 - Context budgeting follows upstream for queued input and request-only context.
 - OpenAI V2 compaction logs one transport start and terminal result while retaining retry and failure diagnostics.
+- Malformed tool-call JSON reports the upstream parser diagnostic and received input without an extra retry instruction.
 
 ### Fixed
 

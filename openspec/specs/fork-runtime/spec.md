@@ -29,10 +29,15 @@ OMP MUST 按同一 operation_id 记录安全的阶段、结果与时长；offlin
 - 日志目录不可写时 MUST 尝试合理的用户级目录回退；仍失败则向 stderr 有界报告日志初始化故障；日志失败不能递归、掩盖业务结果或使业务崩溃。启动/退出须可追踪并刷新关键记录。
 - 本契约覆盖已保留的 fork 功能及其公共边界：team、Goal、knowledge、AST 通知、company 与向量请求、门禁和安装/更新；补日志不改变业务控制流、权限、重试次数或超时。验收包含真实入口的成功/失败、适用的网络与 IPC/子进程异常、关联重建及生成日志的敏感信息检查。
 
-#### Scenario: 运行诊断日志的可观察行为
+#### Scenario: offline 默认过滤 INFO／DEBUG
 
-- **WHEN** 关键操作开始、结束或失败
-- **THEN** 按同一 operation_id 记录安全的阶段、结果与时长；offline 默认记录 WARN／ERROR，尊重显式日志级别，日志故障不掩盖业务结果
+- **WHEN** 启用 `OMP_OFFLINE` 且未设置有效的 `OMP_LOG_LEVEL`
+- **THEN** 仅保留 WARN／ERROR 诊断；正常启动、运行阶段和成功结束的 INFO／DEBUG 记录不进入日志
+
+#### Scenario: 显式启用 INFO／DEBUG 时关联操作起止
+
+- **WHEN** 显式将 `OMP_LOG_LEVEL` 设为 `info` 或 `debug`，且关键操作开始并结束
+- **THEN** 恢复所选级别允许的阶段与起止诊断，包括正常成功的操作；用同一 `operation_id` 关联记录，并记录安全的阶段、结果与时长
 
 ### Requirement: offline 环境专用系统提示词
 
@@ -108,7 +113,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - offline 时，CLI 启动时临时将 `web_search.enabled`、`browser.enabled`、`astEdit.enabled` 和 `fetch.enabled` 设为 `false`；不改审批，也不禁止 `omp read` 访问可达的内网 HTTP(S) 服务。`company/Qwen3.8-27B` 的 `contextWindow` 设为 `262144` tokens（256 × 1024），其他 `company` 聊天模型设为 `204800` tokens（200 × 1024）；模型特定限制由既有 KDL 策略维护（不改 `maxTokens`）。这些启动覆盖优先于已保存配置，不写配置文件，退出即消失，普通启动保持原值。Python Eval 的解释器优先级为显式 `python.interpreter` → Linux offline 固定候选 `/software/public/python/3.11.4/bin/python3.11` → 原有自动候选，并补查 PATH 中的版本化 `python3.15` 至 `python3.11`、`python3` 和 `python`；同一路径不重复探测。Linux offline 复用统一的 `OMP_OFFLINE` 真值判断（`1`、`true`、`yes`、`on`，忽略大小写及首尾空白），所有候选均实际检查 Python ≥3.11，旧业务 Python 3.6 或 3.10 不可成为 Eval 解释器；找不到合适版本时明确失败，不降级。显式解释器不可用或不兼容时不 fallback；固定候选缺失或不适合时继续查找，不因 PATH 中已有旧 `python` 而停止。其他平台或非 offline 进程保留原有候选和 Python 3.8+ 门槛。新发现的系统解释器只用于 OMP Eval 子进程，清除其继承的业务 venv／Conda／PYTHONPATH，不修改主进程 PATH、项目虚拟环境或业务 Python，不扫描软件目录找版本、不安装包。系统提示词遵循上文「offline 环境专用系统提示词」。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
 - offline 且 company provider 可用时，仅为未配置的 model role 补充当前进程默认值：`default`、`plan`、`slow` → `company/GLM-5.3-public`；`smol`、`task`、`vision`、`advisor` → `company/Qwen3.8-27B`；`tiny`、`commit` → `company/Qwen3.6-35B-A3B`；`memory` 未配置时继续按既有规则自动解析，不新增固定赋值。已有角色配置（包括显式 `null` 清除项）和显式 CLI 模型参数仍优先，不写配置文件，不限制 `/model`、`Ctrl+T` 或角色切换，也不锁定 company。保存、活动匹配与切换冲突比较统一排除这些隐式默认角色，不误报刚保存的 preset 与公司默认值冲突；用户显式配置或 CLI 选择的角色仍按原规则保存和比较，包括显式选择的 company 模型。普通启动不受影响。
 - offline 当前进程将 `startup.setupWizard` 覆盖为 `false`，不自动弹出或导入首次启动的全屏配置向导；显式启用的启动动画按需独立加载，手动设置入口保持原有行为。
-- offline 启动不读取或展示启动更新日志。模型目录自动发现及手动刷新遵循[公司内网模型规格](../model-providers/spec.md)：自动发现只读缓存，手动刷新只请求显式配置的发现端点。已启用来源的已安装插件、内置和缓存模型照常加载。`OMP_OFFLINE` 不覆盖用户配置的 `models.offline`，实际模型／OAuth 请求、更新命令及 `/changelog` 的其他行为不变。`omp openspec version --check` 在 offline 下仅对 `npm_config_registry` 明确配置的非默认 HTTPS 镜像发起查询，不回退到公网 npm。OMP 与插件市场的自动更新检查在全部平台、全部启动模式下均取消，见「全平台轻量启动」；Claude 插件来源默认不扫描，见[默认设置](../fork-runtime-defaults/spec.md#requirement-claude-插件发现默认关闭)。
+- offline 启动不读取或展示启动更新日志。模型目录自动发现及手动刷新遵循[公司内网模型规格](../model-providers/spec.md)：自动发现只读缓存，手动刷新只请求显式配置的发现端点。内置和缓存模型照常加载。`OMP_OFFLINE` 不覆盖用户配置的 `models.offline`，实际模型／OAuth 请求、更新命令及 `/changelog` 的其他行为不变。`omp openspec version --check` 在 offline 下仅对 `npm_config_registry` 明确配置的非默认 HTTPS 镜像发起查询，不回退到公网 npm。应用和插件市场更新分别见[全平台轻量启动](#requirement-全平台轻量启动)及[插件市场更新](#requirement-插件市场更新)；Claude 插件来源默认不扫描，见[默认设置](../fork-runtime-defaults/spec.md#requirement-claude-插件发现默认关闭)。
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
@@ -123,8 +128,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - 本地二进制构建 MUST 向终端输出目标平台、资源生成、编译、适用的签名及生成文件恢复阶段；仅在全部步骤成功后输出构建完成、实际可执行文件路径和总耗时，避免把编译阶段的静默成功误判为未执行而重复构建。
 - `omp update` 先比较正常 SemVer，再比较同基线的 fork build counter；本地构建未带 `+fork.N` 时按 counter 0 比较，因此可取得同基线的新 fork Release，而不把更高上游基线降级。支持 `%2B` 编码的 `+` 版本 URL；GitHub 元数据和资产统一优先环境令牌，再尝试本机 `gh auth token`，无凭据才匿名请求。
 - `omp update` 下载二进制时，在交互终端显示下载百分比、速度与预计剩余时间；非 TTY 输出（如 CI、管道）不显示动态进度。若 `PATH` 中的 `omp` 与更新目标解析为不同文件，更新前警告并提示更新后运行 `omp --version` 核对实际生效的版本；指向同一文件的符号链接不视为冲突。
-- `update.channel=canary` 在 fork 二进制上不可用：显式执行 `omp update` 时提示该配置并指向 `omp update --stable`，不在启动时检查或提示更新渠道。
-- `-fork.N` 时代（fork build ≤ 35，2026-08-26 及更早）的旧安装内嵌只认 `vX.Y.Z-fork.N` 的校验，会拒绝此后所有 `+fork.N` Release（报 `Invalid fork release tag`）且无法自愈，只能用安装器重装后再交给 `omp update`。
+- `update.channel=canary` 在 fork 二进制上不可用：显式执行 `omp update` 时提示该配置并指向 `omp update --stable`；可选启动检查遇到该渠道时静默跳过，不发起版本查询。
 - 发布链路不发布核心或平台 npm 包，也不发布 Homebrew tap；Release notes 由 GitHub 自动生成。CI 只构建 Linux glibc x64 和 Windows x64 二进制，Release 上传的附件仅为 `omp-linux-x64`、`omp-windows-x64.exe` 和 `omp-browser-relay-extension.zip`；GitHub 自动提供的源码归档不属于上传附件。更新器使用 GitHub 资产元数据的 SHA-256。其他平台不再提供新的预编译版本。
 - 安装器只安装 fork Release 的预编译二进制；当前 Release 仅提供 Linux glibc x64 和 Windows x64，其他 Linux 架构及 musl 无对应新版本资产。`install.sh` 在 macOS 上于联网前明确拒绝安装。安装目标已是所选 Release 版本时提示已安装并跳过下载，同时仍检查 PATH 配置。
 - fork 不提供源码安装：两个安装器都不再有 source 模式，安装验证只覆盖 Release 二进制。上游的源码安装测试 `scripts/install.test.ts` 与 `scripts/install-tests/source.dockerfile` 在 fork 中删除，`run-ci.sh` 不再执行源码安装冒烟；同步时 MUST NOT 恢复这些入口，除非先显式修改本节需求。
@@ -205,14 +209,15 @@ OMP MUST 在保留 Git-only 源码同步和干净提交边界的前提下并行�
 
 ### Requirement: 全平台轻量启动
 
-OMP MUST 在所有运行平台的普通与 offline 启动中省去自动更新检查及未启用的设置向导初始化，offline 认证读取异步并行；不依赖用户新增配置文件，也不改变显式操作入口。
+OMP MUST 默认省去 OMP 本体版本检查，并按需加载设置向导；offline 认证读取异步并行。不依赖用户新增配置文件，不改变显式操作入口。
 
-#### Scenario: 启动不检查更新
+#### Scenario: 仅普通交互启动可选检查 OMP 新版本
 
-- **WHEN** 启动终端交互、print、RPC 或 ACP，或创建、恢复会话
-- **THEN** 不自动查询 OMP 新版本，不自动刷新、检查或升级插件市场，不创建相应后台任务或展示新版通知。
-- **AND** 删除 `startup.checkUpdate`、`marketplace.autoUpdate` 设置与对应 UI；遗留配置值不能重新启用这些行为，不改写用户配置。
-- **AND** 普通启动不加载仅供更新命令使用的实现；显式 `omp update`（含检查模式）及插件市场刷新、升级仍沿用原有入口和行为，已启用来源的已安装插件照常加载；Claude 插件来源默认不扫描，具体边界见[默认设置](../fork-runtime-defaults/spec.md#requirement-claude-插件发现默认关闭)。
+- **WHEN** 普通终端交互启动且 `startup.checkUpdate=true`
+- **THEN** 源码检出及不支持自更新的受管理安装跳过检查；其他安装后台查询自身发行源，按 `update.channel` 检查新版，且只在新版可用时通知。不下载或安装更新，不提供后台自动安装设置。
+- **WHEN** 未开启 `startup.checkUpdate`，或在 `OMP_OFFLINE`、print、RPC、ACP 启动
+- **THEN** 不发起 OMP 版本查询，不为该检查加载更新实现或展示新版通知。`OMP_OFFLINE` 只在本次运行关闭检查，不改写配置。
+- **AND** 显式 `omp update`（含检查模式）沿用既有行为。插件市场遵循[插件市场更新](#requirement-插件市场更新)；Claude 插件来源默认不扫描，具体边界见[默认设置](../fork-runtime-defaults/spec.md#requirement-claude-插件发现默认关闭)。
 
 #### Scenario: 未启用的设置向导不参与启动
 
@@ -226,20 +231,25 @@ OMP MUST 在所有运行平台的普通与 offline 启动中省去自动更新�
 - **THEN** 提前发起异步快照读取，与配置加载和插件预加载等无认证依赖的步骤并行推进；依赖公司配置的模型注册与 Worker 启动仍等待快照就绪。
 - **AND** 单次读取、终态缓存、错误呈现与凭据继承边界遵循[公司内网模型](../model-providers/spec.md#requirement-公司内网模型仅-omp_offline)，不新增同步读取回退、重试或额外配置。
 
-### Requirement: 插件市场仅手动更新
+### Requirement: 插件市场更新
 
-OMP MUST 关闭 marketplace 自动更新，不提供自动刷新、检查或升级的设置和后台任务；目录是否超过 24 小时不触发刷新。
+OMP MUST 沿用上游 `marketplace.autoUpdate` 的可选自动更新，保持[缺省关闭](../fork-runtime-defaults/spec.md#requirement-默认设置)，且 `OMP_OFFLINE` 进程仅允许手动更新。
 
-#### Scenario: 读取过期市场缓存
+#### Scenario: 普通启动显式开启自动更新
 
-- **WHEN** 启动、创建或恢复会话，或列出、浏览插件市场，即使目录缓存已超过 24 小时
-- **THEN** 使用已有目录缓存和已安装插件，不自动拉取市场源、不改写目录缓存或更新时间，也不自动检查或升级插件。
-- **AND** 遗留 `marketplace.autoUpdate` 的 `notify` 或 `auto` 值不能恢复自动更新，用户配置保持原样。
+- **WHEN** 普通 CLI 启动且 `marketplace.autoUpdate` 为 `notify` 或 `auto`
+- **THEN** 沿用上游后台调度，尽力刷新至少 24 小时未更新的目录，再检查可用升级；`notify` 只将可用升级写入调试日志，`auto` 还会升级已安装插件。
+
+#### Scenario: 未启用或处于内网模式
+
+- **WHEN** 普通 CLI 启动时 `marketplace.autoUpdate=off`，或 `OMP_OFFLINE` 进程启动时设置为任意值
+- **THEN** 不调度市场自动刷新、检查或升级；offline 只在本次进程覆盖该设置，不改写用户配置。两种模式仍照常加载已启用来源的已安装插件。
+- **AND** 列出或浏览市场只读已有缓存，不自行触发更新。
 
 #### Scenario: 显式刷新和升级
 
 - **WHEN** 用户执行 `/marketplace update [name]` 或 `omp plugin marketplace update [name]`
-- **THEN** 仅刷新指定或全部市场目录，不自动重装或升级已安装插件；遗留克隆临时目录清理只在显式添加或更新市场时进行。
+- **THEN** 仅刷新指定或全部市场目录，不自动重装或升级已安装插件；添加或刷新市场时清理遗留克隆临时目录，不影响进行中的克隆。
 - **AND** `/marketplace upgrade` 和 `omp plugin upgrade` 继续作为显式插件升级入口，保留原有作用域和状态保留规则。
 
 ### Requirement: 发布 CI 的触发、并发与权限
@@ -324,14 +334,14 @@ OMP MUST 只在能确认进程映像就是安装目标时执行强杀回退。
 
 OMP MUST 在 Windows 上替换仍被其他进程加载的过期内嵌 addon，而不中断旧进程；不能因替换失败继续使用缺少当前 shell trace API 的旧缓存。
 
-上游缺陷归属：已集成基线 `can1357/oh-my-pi@88a69582c755bd000e8dc0290981fc787a4f400c` 的 [`writeEmbeddedAddonFile`、`maybeExtractEmbeddedAddon`](https://github.com/can1357/oh-my-pi/blob/88a69582c755bd000e8dc0290981fc787a4f400c/packages/natives/native/loader-state.js#L456-L524) 直接重命名覆盖缓存 DLL；Windows 已映射该文件时返回 `EPERM`。提取失败后 [`loadNative` 仍尝试旧缓存](https://github.com/can1357/oh-my-pi/blob/88a69582c755bd000e8dc0290981fc787a4f400c/packages/natives/native/loader-state.js#L857-L890)，且版本校验接受同版本的旧构建，可能使 Bash 预览实例化 `RunTrace` 时抛出 `undefined is not a constructor`。本条记录该上游基线的缺陷，不断言后续上游版本状态。
-
 #### Scenario: 同版本重建后旧进程仍占用缓存
 
 - **WHEN** 新二进制需要提取大小已变化的内嵌 addon，且另一进程仍加载同版本缓存中的旧 DLL
 - **THEN** 优先原子替换；Windows 不允许覆盖时把旧文件重命名到同目录唯一让位路径，再安装新文件，不终止旧进程、不改变现有缓存目录或 addon 文件名
 - **AND** 旧进程仍可调用其已加载 addon，新进程可加载新文件并使用 `RunTrace`；换入失败恢复旧文件，回滚失败保留新旧恢复文件并报出路径，让位文件清理失败不使换入失败
 - **AND** 验收使用真实已加载 DLL 复现替换失败，再确认替换后的文件字节、新进程的 shell trace 能力及旧进程继续运行；普通 native 构建和 `local`／`cnb` 的验证授权边界不变
+
+上游缺陷归属：已集成基线 `can1357/oh-my-pi@88a69582c755bd000e8dc0290981fc787a4f400c` 的 [`writeEmbeddedAddonFile`、`maybeExtractEmbeddedAddon`](https://github.com/can1357/oh-my-pi/blob/88a69582c755bd000e8dc0290981fc787a4f400c/packages/natives/native/loader-state.js#L456-L524) 直接重命名覆盖缓存 DLL；Windows 已映射该文件时返回 `EPERM`。提取失败后 [`loadNative` 仍尝试旧缓存](https://github.com/can1357/oh-my-pi/blob/88a69582c755bd000e8dc0290981fc787a4f400c/packages/natives/native/loader-state.js#L857-L890)，且版本校验接受同版本的旧构建，可能使 Bash 预览实例化 `RunTrace` 时抛出 `undefined is not a constructor`。本条记录该上游基线的缺陷，不断言后续上游版本状态。
 
 ### Requirement: native 能力缺失时的运行期降级
 
@@ -380,7 +390,7 @@ OMP MUST 区分“被中断取消”与“执行失败”，并在工具结果�
 
 - 写入前 MUST 取得当前配置 revision；提交时 revision 已变化 MUST 拒绝写入并报冲突，MUST NOT 静默覆盖他人改动。
 - 配置文件不存在、不可解析或 revision 无法确立时 MUST 以非零退出码失败，MUST NOT 退化为整文件覆盖。
-- 成功写入 MUST 保留无关键、注释与结构，并返回新 revision。
+- 成功写入 MUST 保留无关键、注释与结构；CLI 成功回执不输出内部 revision。
 - 该版本校验 MUST NOT 扩大到普通会话中的运行时设置写入。
 
 #### Scenario: 无法安全读取时拒绝写入
@@ -520,10 +530,12 @@ OMP MUST 提供可选的 `OMP_CACHE_DIR`，用于分离既有 Cache、统计、�
 
 ### Requirement: 公司 offline 内网 Git API 可用（2026-11-12 权威补充）
 
-`offline` 表示无公网。OMP MUST NOT 仅据此判定内网 Git API 不可用，或以该推断要求用户手工创建 MR。平台能力不构成操作授权。
+OMP MUST 区分无法访问公网与内网 Git API 不可用，不因启用 `OMP_OFFLINE` 就认定用户必须手工创建 MR。
 
-#### Scenario: 公司内网 Git 平台可达
+#### Scenario: 在公司 offline 环境中判断 PR／MR API 是否可用
 
-- **WHEN** 在用户已实测的公司 offline 内网环境中评估 PR／MR 操作
-- **THEN** 以用户实测为依据：平台提供 PR／MR 查询和创建 API，已跑通「克隆 → 改代码 → push → 建 MR → 放弃 → 删分支」；这不是本工作区的测试结果。
-- **AND** 不据此推断具体 Git 产品、API 地址、认证格式或自动合并能力。
+- **WHEN** 任务需要在公司 offline 环境中查询或创建内网 PR／MR
+- **THEN** MUST 按目标平台和已配置的接入判断 API 是否可用，不能仅凭无公网判定 API 不可用或要求用户手工创建 MR。
+- **AND** 已确认的平台能力不等于操作授权，也不推断具体 Git 产品、API 地址、认证格式或自动合并能力。
+
+证据：用户已在公司 offline 环境实测确认内网 Git 平台提供 PR／MR 查询和创建 API，并跑通“克隆 → 改代码 → push → 建 MR → 放弃 → 删分支”。这不是本工作区的测试结果。

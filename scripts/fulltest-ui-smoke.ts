@@ -93,6 +93,13 @@ function dumpTail(handle: TuiHandle, bytes = 3500): void {
 	console.error(`ui-smoke: --- TUI output tail (normalized) ---\n${normalizedTail}\nui-smoke: --- end tail ---`);
 }
 
+function hasRenderedTui({ output }: TuiHandle): boolean {
+	// The π status line and cursor controls identify the in-place TUI render.
+	// Composer hints are contextual, so a particular shortcut is not a readiness signal.
+	const cursorControl = output.includes("\x1b[?25l") || output.includes("\x1b[H") || /\x1b\[\d+;\d+H/.test(output);
+	return cursorControl && output.includes("π");
+}
+
 function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -291,14 +298,7 @@ if (!process.argv.includes("--team-group-only")) {
 		"composer:\n  shape: pi\nstartup:\n  setupWizard: false\n",
 	);
 	const main = startTui(["--profile", "localci-ui"], baseEnv);
-	const rendered = await waitFor(() => {
-		// The TUI repaints in place: hides the cursor, positions it absolutely,
-		// and paints the status line (whose "π" brand segment is present under
-		// the fork-default `composer.shape=pi`). It does not use the alternate screen.
-		const cursorControl =
-			main.output.includes("\x1b[?25l") || main.output.includes("\x1b[H") || /\x1b\[\d+;\d+H/.test(main.output);
-		return cursorControl && main.output.includes("π") && normalizePtyOutput(main.output).includes("Ctrl+T");
-	}, 120_000);
+	const rendered = await waitFor(() => hasRenderedTui(main), 120_000);
 	if (!rendered) {
 		fail(
 			`interface did not render within 120 s (bytes=${main.totalBytes}, cursorControl=${/\x1b\[\d+;\d+H/.test(main.output)}, mainMarker=${main.output.includes("π")})`,
@@ -825,11 +825,7 @@ try {
 		PI_PROFILE: "",
 		PI_CODING_AGENT_DIR: "",
 	});
-	const teamRendered = await waitFor(() => {
-		const cursorControl =
-			team.output.includes("\x1b[?25l") || team.output.includes("\x1b[H") || /\x1b\[\d+;\d+H/.test(team.output);
-		return cursorControl && team.output.includes("π") && normalizePtyOutput(team.output).includes("Ctrl+T");
-	}, 120_000);
+	const teamRendered = await waitFor(() => hasRenderedTui(team), 120_000);
 	if (!teamRendered) {
 		dumpTail(team);
 		fail("/team TUI did not render within 120 s", team.session);
@@ -1044,13 +1040,7 @@ try {
 		PI_PROFILE: "",
 		PI_CODING_AGENT_DIR: "",
 	});
-	const cancelRendered = await waitFor(() => {
-		const cursorControl =
-			cancelTui.output.includes("\x1b[?25l") ||
-			cancelTui.output.includes("\x1b[H") ||
-			/\x1b\[\d+;\d+H/.test(cancelTui.output);
-		return cursorControl && cancelTui.output.includes("π") && normalizePtyOutput(cancelTui.output).includes("Ctrl+T");
-	}, 120_000);
+	const cancelRendered = await waitFor(() => hasRenderedTui(cancelTui), 120_000);
 	if (!cancelRendered) {
 		dumpTail(cancelTui);
 		fail("/team cancel TUI did not render within 120 s", cancelTui.session);

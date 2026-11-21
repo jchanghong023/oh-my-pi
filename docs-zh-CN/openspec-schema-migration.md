@@ -9,11 +9,11 @@
 - schema 迁移本身没有生成、删除或改写 proposal、specs、design、tasks；迁移时逐文件摘要验证原有材料保持不变。
 - 不批量改写历史 `changes/archive/`；其中旧 schema 名称保留为历史记录。没有恢复 `mini`／`omp-spec` 兼容 schema 或别名。
 
-## 活动材料核对
+## 迁移时的活动材料快照
 
-下表列出仍保留的活动 change，并记录 schema 迁移时的材料。`specs` 列为 `specs/<capability>/spec.md` 的 capability 名称。文件存在不代表内容完整、实现完成、任务完成或业务获批；迁移不自动生成缺失设计／任务，也不关闭校验。
+下表只记录迁移当时的活动 change 和材料，不代表当前活动清单。`specs` 列为 `specs/<capability>/spec.md` 的 capability 名称。文件存在不代表内容完整、实现完成、任务完成或业务获批；迁移没有补齐设计／任务，也没有关闭校验。
 
-|活动 change|现有材料|specs|仍缺的原生产物|
+|迁移时活动的 change|当时已有材料|specs|当时缺少的原生产物|
 |---|---|---|---|
 |add-todoloop-command|proposal、tasks|personal-commands|design|
 |refine-compact-output-preview|proposal|tui-presentation|design、tasks|

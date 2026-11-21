@@ -1521,6 +1521,18 @@ export async function getLatestRelease(
 	);
 }
 
+/** A read-only startup check against the running installation's update source. */
+export async function checkForNewVersion(currentVersion: string, channel: UpdateChannel): Promise<string | undefined> {
+	if (!(await canSelfUpdate())) return undefined;
+	const isFork = isForkUpdateRepository();
+	const { version } =
+		!isFork && isCompiledBinary()
+			? await fetchBuild({ channel }, { timeoutMs: 5_000, fromVersion: currentVersion })
+			: await getLatestRelease({ channel, timeoutMs: 5_000 });
+	const order = isFork ? compareUpdateVersions(version, currentVersion) : Bun.semver.order(version, currentVersion);
+	return order > 0 ? version : undefined;
+}
+
 interface BunInstallCachePruneResult {
 	scannedPackages: number;
 	removedEntries: number;

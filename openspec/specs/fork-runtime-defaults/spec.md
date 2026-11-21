@@ -8,7 +8,7 @@
 
 ### Requirement: 默认设置
 
-OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置和环境变量仍按原优先级覆盖。纯默认值统一在“默认设置”表中维护；`tools.approvalMode` 的默认值归[审批策略](../approval-policy/spec.md)，此处不重复。
+OMP MUST 应用下列设置的缺省值；显式配置和环境变量仍按原优先级覆盖。纯默认值统一在本节维护；`tools.approvalMode` 的默认值归[审批策略](../approval-policy/spec.md)，此处不重复。
 
 #### Scenario: 默认设置的详细边界
 
@@ -24,7 +24,9 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - `eval.js=false`：所有平台、普通与 offline 启动均默认关闭 JavaScript Eval。默认工具 schema 和对应运行时说明只声明 Python；显式开启 JavaScript 后恢复该后端。未开启时拒绝 JavaScript 执行，显式开启后可实际执行。
 - `async.maxJobs=32`；后台任务的硬上限及计数边界见下文。
 - 欢迎界面的使用提示、字体提醒与提示／新功能标签采用简体中文，展示边界见[简体中文用户界面](../tui-presentation/spec.md)。
-- `startup.setupWizard=false`：不因 setupVersion 落后于当前版本而自动运行或加载完整设置向导；全平台启动减负与取消自动更新检查的边界见[全平台轻量启动](../fork-runtime/spec.md#requirement-全平台轻量启动)。
+- `startup.setupWizard=false`：不因 setupVersion 落后于当前版本而自动运行或加载完整设置向导；见[全平台轻量启动](../fork-runtime/spec.md#requirement-全平台轻量启动)。
+- `startup.checkUpdate=false`：默认不查询 OMP 新版本；仅普通交互启动可显式开启。`OMP_OFFLINE` 始终跳过检查，不影响手动更新。
+- `marketplace.autoUpdate=off`：默认不自动刷新市场目录、检查或升级插件；普通模式可显式开启，`OMP_OFFLINE` 仍只允许手动更新。详见[插件市场更新](../fork-runtime/spec.md#requirement-插件市场更新)。
 - `statusLine.compactThinkingLevel=false`
 - `composer.shape=box`（Rounded Box）
 - `tui.completeScrollback=true`：默认启用上游完整滚动历史；HUD 或对话框挤出屏幕的可归档正文立即进入终端原生历史，收起后的空间补偿沿用上游。显式 `false` 保持上游暂留及收起后恢复行为，不新增自动 HUD 特例、不改写配置文件。
@@ -33,7 +35,7 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - `display.showTurnTime=true`
 - `terminal.programStatus`：所有平台的 offline（`OMP_OFFLINE`）进程默认 `false`，避免不兼容终端把 OSC 7501 程序状态序列显示为文本；普通模式仍默认 `true`。用户显式配置优先，不改写已有配置文件。
 - 界面显示默认采用 `compact`，完整行为与验收见[界面显示模式](../tui-presentation/spec.md)。
-- **CLI 默认 `--no-lsp`**：所有平台、普通与 offline 的 CLI 启动均按 `--no-lsp` 语义执行，即使已保存 `lsp.enabled=true`，本次会话仍禁用 LSP 工具、自动格式化、诊断、文件通知及启动预热，不改写配置文件。`lsp.enabled` 的缺省值仍为 `false`；SDK 等非 CLI 宿主的显式 LSP 控制保持原有语义，不新增开关或别名。
+- `lsp.enabled=false`：普通与 offline 启动均默认关闭 LSP。显式配置为 `true` 时按上游规则启用；显式 `--no-lsp` 仅关闭本次运行，优先于保存的设置。SDK 等非 CLI 宿主的会话级 LSP 控制不变。
 - **CLI 默认 `--no-extensions`**：所有平台、普通与 offline 的 CLI 启动均跳过扩展自动发现，不加载用户、项目或插件中自动发现的扩展。默认或显式关闭扩展自动发现时仍加载全部 bundled TypeScript custom commands（含 `/review`、`/annotate`、`/green`），不探测或遍历用户／项目 custom command 目录；`restrictToolNames === true` 的限制会话仍不加载任何 custom commands。显式 `-e`／`--extension`、`--hook` 和可信扩展白名单仍按现有规则加载；Skills、规则、上下文文件和 MCP 不因本默认值被一并关闭，不改写用户配置。
 - **默认不扫描 Claude 插件**：所有平台、普通与 offline 启动默认跳过 Claude 插件注册表及插件缓存发现，不为插件发现读取 `enabledPlugins`；沿用现有来源启用机制显式恢复，OMP 原生插件和明确指定的插件目录不受影响，完整边界见下文。
 - `mnemopi.embeddingVariant=multilingual`
@@ -41,8 +43,8 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 
 #### Scenario: 默认设置的可观察行为
 
-- **WHEN** 用户未显式配置运行默认值
-- **THEN** 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置和环境变量仍按原优先级覆盖
+- **WHEN** 普通运行设置没有显式配置或环境变量覆盖
+- **THEN** 应用本节列明的缺省值；CLI 的 LSP 启动行为单独按「默认参数覆盖已保存的 LSP 启用配置」场景验收。
 
 #### Scenario: 输入区预测默认开启且允许显式关闭
 
@@ -67,12 +69,7 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 
 ### Requirement: CLI 默认轻量启动参数
 
-OMP CLI MUST 在首次参数解析和扩展参数重新解析中默认应用 `--no-lsp`、`--no-extensions`，不要求 shell alias、配置文件或用户手动补参数；交互、print、RPC 与 ACP 启动使用同一默认值。
-
-#### Scenario: 默认参数覆盖已保存的 LSP 启用配置
-
-- **WHEN** CLI 不携带 `--no-lsp` 启动，且用户配置 `lsp.enabled=true`
-- **THEN** 本次会话仍不注册 LSP 工具、不发现或预热语言服务器，不执行自动格式化、诊断及 LSP 文件通知；保留已保存配置，非 CLI 宿主不被强制关闭。
+OMP CLI MUST 在首次参数解析和扩展参数重新解析中默认应用 `--no-extensions`，不要求 shell alias、配置文件或用户手动补参数；交互、print、RPC 与 ACP 启动使用同一默认值。
 
 #### Scenario: 默认跳过自动扩展并保留显式扩展
 

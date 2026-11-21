@@ -571,7 +571,7 @@ async function startTeamDiscussionImpl(
 	logFollowupStage("started");
 	try {
 		if (!isCurrentSession()) return { started: true, jobId, message: dispatchNotice };
-		await session.sendCustomMessage(
+		await session.appendCustomMessage(
 			{
 				customType: TEAM_DISPATCH_MESSAGE_TYPE,
 				content: dispatchNotice,
@@ -579,10 +579,8 @@ async function startTeamDiscussionImpl(
 				attribution: "agent",
 				details: { jobId, question, dispatch: true },
 			},
-			{ triggerTurn: false, deliverAs: "nextTurn" },
+			{ signal: sessionAbort.signal, waitForIdle: false },
 		);
-		// Resolving this call does not certify persistence; its boolean only
-		// indicates whether it started a turn, not whether dispatch succeeded.
 		noticeDispatchCompleted = true;
 		logFollowupStage("completed");
 		noticeStage = "chat_rebuild";
@@ -617,7 +615,8 @@ async function startTeamDiscussionImpl(
 		// failed dispatch breadcrumb must not reject the command — the caller
 		// would lose the submitted question and surface an unhandled rejection.
 		const reason = error instanceof Error ? error.message : String(error);
-		report(`/team 已启动（任务 ${jobId}），但写入派发通知失败：${reason}`);
+		const failure = noticeDispatchCompleted ? "派发通知已记录，但刷新界面失败" : "但写入派发通知失败";
+		report(`/team 已启动（任务 ${jobId}），${failure}：${reason}`);
 	}
 
 	return { started: true, jobId, message: dispatchNotice };

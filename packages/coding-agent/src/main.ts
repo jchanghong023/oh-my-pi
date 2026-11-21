@@ -75,12 +75,21 @@ import { serviceTierSettingToTier } from "./config/service-tier";
 import { all, combine, type ProtocolHost } from "./config/registry";
 import { Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
-import { clearPluginRootsAndCaches, injectPluginDirRoots, preloadPluginRoots } from "./discovery/helpers";
+import {
+	clearPluginRootsAndCaches,
+	injectPluginDirRoots,
+	preloadPluginRoots,
+	resolveActiveProjectRegistryPath,
+} from "./discovery/helpers";
 import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
 import { formatExtensionLoadNotifications } from "./extensibility/extensions/load-errors";
 import { loadExtensions } from "./extensibility/extensions/loader";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
+import {
+	scheduleMarketplaceAutoUpdate,
+	type MarketplaceAutoUpdateOptions,
+} from "./extensibility/plugins/marketplace-auto-update";
 import type { MCPManager } from "./mcp";
 import type { InteractiveMode } from "./modes/interactive-mode";
 import { formatSessionContinuationNotice } from "./modes/persistence-failure";
@@ -173,12 +182,14 @@ import {
 	cfgColorBlindMode,
 	cfgComposerShape,
 	cfgImagesAutoResize,
+	cfgMarketplaceAutoUpdate,
 	cfgSetupVersion,
 	cfgShowHardwareCursor,
 	cfgSpellingAutocomplete,
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
 	cfgStartupChangelogMode,
+	cfgStartupCheckUpdate,
 	cfgStartupQuiet,
 	cfgStartupSetupWizard,
 	cfgStartupShowSplash,
@@ -195,6 +206,7 @@ import {
 	cfgTuiMaxFps,
 	cfgTuiMotion,
 	cfgTerminalProgramStatus,
+	cfgUpdateChannel,
 } from "./modes/settings";
 import {
 	cfgDefaultThinkingLevel,
@@ -221,6 +233,9 @@ type RunRpcMode = (session: AgentSession, options?: RpcModeOptions) => Promise<n
 async function loadInteractiveModeConstructor() {
 	return (await import("./modes/interactive-mode")).InteractiveMode;
 }
+
+// Opt-in only; keep the update command graph out of ordinary startup.
+const loadUpdateCli = () => import("./cli/update-cli");
 
 type SessionPicker = (
 	sessions: SessionInfo[],
@@ -666,6 +681,7 @@ async function runInteractiveMode(
 	session: AgentSession,
 	version: string,
 	notifs: (InteractiveModeNotify | null)[],
+	versionCheckPromise: Promise<string | undefined> | undefined,
 	initialMessages: string[],
 	setExtensionUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 	lspServers: LspStartupServerInfo[] | undefined,
@@ -769,6 +785,10 @@ async function runInteractiveMode(
 		await logger.time("InteractiveMode.renderInitialMessages", () =>
 			mode.renderInitialMessages({ preserveExistingChat: true }),
 		);
+		// A resolved version check must not insert its banner into a partial transcript.
+		void versionCheckPromise?.then(newVersion => {
+			if (newVersion && cfgStartupCheckUpdate.get(settings)) mode.showNewVersionNotification(newVersion);
+		});
 
 		const advisorConfigWarnings = session.getAdvisorConfigWarnings();
 		if (advisorConfigWarnings.length > 0) {
@@ -2091,6 +2111,8 @@ export async function runRootCommand(
 			cfgBrowserEnabled.override(settingsInstance, false);
 			cfgAstEditEnabled.override(settingsInstance, false);
 			cfgFetchEnabled.override(settingsInstance, false);
+			cfgMarketplaceAutoUpdate.override(settingsInstance, "off");
+			cfgStartupCheckUpdate.override(settingsInstance, false);
 			cfgStartupSetupWizard.override(settingsInstance, false);
 			cfgTuiAutoGraph.override(settingsInstance, "off");
 			cfgTuiTitleState.override(settingsInstance, false);
@@ -2553,6 +2575,11 @@ export async function runRootCommand(
 			return options;
 		};
 		let sessionOptions = await buildStartupSessionOptions(sessionManager);
+		const marketplaceAutoUpdateOptions: MarketplaceAutoUpdateOptions = {
+			autoUpdate: cfgMarketplaceAutoUpdate.get(settingsInstance),
+			resolveActiveProjectRegistryPath,
+			clearPluginRootsCache: clearPluginRootsAndCaches,
+		};
 
 		// OTEL: unless `telemetry.otlpExportEnabled` is off, register global OTLP
 		// exporters when an endpoint is configured via env, then switch on the agent
@@ -2684,6 +2711,7 @@ export async function runRootCommand(
 			});
 			// Branch-only protocol runner: keep ACP server code out of normal interactive startup.
 			const runAcpMode = deps.runAcpMode ?? (await import("./modes/acp/acp-mode")).runAcpMode;
+			scheduleMarketplaceAutoUpdate(marketplaceAutoUpdateOptions);
 			stopStartupWatchdog();
 			// Startup is over: stop recording spans, or every later session and subagent
 			// appends to the timing tree for the life of the server.
@@ -2853,6 +2881,7 @@ export async function runRootCommand(
 				await session.dispose();
 				throw error;
 			}
+			scheduleMarketplaceAutoUpdate(marketplaceAutoUpdateOptions);
 
 			// Cold-revive support: a `parked` subagent ref restored from disk (Agent Hub
 			// scan, collab mirror, resumed process) has a sessionFile but no in-memory
@@ -3035,6 +3064,12 @@ export async function runRootCommand(
 					input: rpcInput,
 				});
 			} else if (isInteractive) {
+				const versionCheckPromise = cfgStartupCheckUpdate.get(settingsInstance)
+					? loadUpdateCli()
+							.then(({ checkForNewVersion }) => checkForNewVersion(VERSION, cfgUpdateChannel.get(settingsInstance)))
+							.catch(() => undefined)
+					: undefined;
+
 				const modelScopeNotification = buildModelScopeNotification(
 					scopedModels,
 					cfgStartupQuiet.get(settingsInstance),
@@ -3060,6 +3095,7 @@ export async function runRootCommand(
 						session,
 						VERSION,
 						notifs,
+						versionCheckPromise,
 						initialArgs.messages,
 						setToolUIContext,
 						lspServers,

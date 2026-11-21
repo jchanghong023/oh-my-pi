@@ -373,6 +373,7 @@ import {
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { formatPersistenceNotice } from "./persistence-failure";
+import { resolveComposerHint } from "@oh-my-pi/pi-tui/prompt/composer-hints";
 import { hintUsage } from "../utils/usage-counter";
 import {
 	getInspectableSubagentCount,
@@ -1512,7 +1513,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#loopAutoSubmitGeneration = 0;
 	#loopAutoSubmitPendingFor: string | undefined;
 	#loopPromptGeneration = 0;
-	#loopIntervalMs: number | undefined;
 	#pendingLoopIterations = 0;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	#todoAutoClearGeneration = 0;
@@ -3495,14 +3495,11 @@ export class InteractiveMode implements InteractiveModeContext {
 						this.pauseLoop();
 					} else if (
 						this.onInputCallback &&
-						this.#loopAutoSubmitPendingFor !== this.sessionManager.getSessionId()
+						this.#loopAutoSubmitPendingFor !== this.sessionManager.getSessionId() &&
+						!this.#loopAutoSubmitTimer
 					) {
-						if (this.#loopIntervalMs === undefined) {
-							// A compaction-drained prompt may already be polling from admission.
-							if (!this.#loopAutoSubmitTimer) this.#scheduleLoopAutoSubmit();
-						} else {
-							this.armLoopAutoSubmit(this.session.waitForIdle());
-						}
+						// A compaction-drained prompt may already be polling from admission.
+						this.#scheduleLoopAutoSubmit();
 					}
 				}
 				void this.#handleGoalSessionEvent(event);
@@ -3583,35 +3580,24 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#startLoopAutoSubmitTimer(): void {
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
-		if (this.#loopIntervalMs !== undefined && isLoopLimitExhausted(this.loopLimit)) {
-			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
-			return;
-		}
 		const prompt = this.loopPrompt;
 		const loopAction = cfgLoopMode.get(settings);
 		this.#deferLoopAutoSubmit(() => {
 			void this.#runLoopIteration(loopAction, prompt);
-		}, this.#loopIntervalMs ?? 800);
+		});
 	}
 
-	#deferLoopAutoSubmit(callback: () => void, delayMs = 800): void {
-		// Maintenance retries use the interrupt window, not another full interval.
-		if (this.#loopIntervalMs !== undefined && this.loopLimit?.kind === "duration") {
-			delayMs = Math.min(delayMs, Math.max(0, this.loopLimit.deadlineMs - Date.now()));
-		}
+	#deferLoopAutoSubmit(callback: () => void): void {
+		// Brief delay so the user has a chance to press Esc between iterations.
 		this.#loopAutoSubmitTimer = setTimeout(() => {
 			this.#loopAutoSubmitTimer = undefined;
 			try {
 				if (!this.loopModeEnabled || !this.onInputCallback || this.#isShuttingDown) return;
-				if (this.#loopIntervalMs !== undefined && isLoopDurationExpired(this.loopLimit)) {
-					this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
-					return;
-				}
 				callback();
 			} finally {
 				this.syncIdleMaintenanceView();
 			}
-		}, delayMs);
+		}, 800);
 		this.syncIdleMaintenanceView();
 	}
 
@@ -3940,7 +3926,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loopPrompt = undefined;
 		this.loopLimit = undefined;
 		this.loopCondition = undefined;
-		this.#loopIntervalMs = undefined;
 		this.#loopNPrompts = undefined;
 		this.#loopNIndex = 0;
 		this.#cancelLoopAutoSubmit();
@@ -3996,8 +3981,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/**
 	 * Schedule the next auto-resubmit for a submission that bypassed {@link getUserInput}.
-	 * With an admission signal, legacy loops begin polling at admission; an explicit interval
-	 * always starts after settlement. Neither may submit again before the dispatch succeeds.
+	 * With an admission signal, begin polling at admission without submitting
+	 * again before the dispatch succeeds.
 	 */
 	armLoopAutoSubmit(promptPromise: Promise<unknown>, admission?: Promise<void>): void {
 		this.#cancelLoopAutoSubmit();
@@ -4020,17 +4005,16 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#loopAutoSubmitPendingFor = undefined;
 			return isCurrent();
 		};
-		const pollFromAdmission = admission !== undefined && this.#loopIntervalMs === undefined;
 		const fail = () => {
 			if (settle()) this.pauseLoop();
 		};
 		if (admission) {
 			void admission.then(() => {
-				if (pollFromAdmission && isCurrent()) this.#startLoopAutoSubmitTimer();
+				if (isCurrent()) this.#startLoopAutoSubmitTimer();
 			}, fail);
 		}
 		void promptPromise.then(() => {
-			if (settle() && !pollFromAdmission) this.#scheduleLoopAutoSubmit();
+			if (settle() && !admission) this.#scheduleLoopAutoSubmit();
 		}, fail);
 	}
 
@@ -4066,7 +4050,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showError(parsed);
 			return undefined;
 		}
-		this.#enableLoopMode(parsed.limit, parsed.condition, Boolean(parsed.prompt), parsed.intervalMs);
+		this.#enableLoopMode(parsed.limit, parsed.condition, Boolean(parsed.prompt));
 		// Hand any inline prompt back to the dispatcher so the normal submit flow
 		// runs the first iteration — it records the text as the loop prompt and
 		// auto-resubmits it after each yield, identical to typing the prompt right
@@ -4104,18 +4088,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		limit: LoopLimitConfig | undefined,
 		condition: LoopConditionConfig | undefined,
 		hasPrompt: boolean,
-		intervalMs?: number,
 	): void {
 		this.#loopPromptGeneration++;
 		this.loopModeEnabled = true;
 		this.loopModePaused = false;
 		this.loopPrompt = undefined;
 		this.loopLimit = createLoopLimitRuntime(limit);
-		this.#loopIntervalMs = intervalMs;
-		if (intervalMs !== undefined && this.loopLimit?.kind === "iterations") {
-			// The inline prompt (or the next manual prompt) is the first turn.
-			consumeLoopLimitIteration(this.loopLimit);
-		}
 		this.loopCondition = condition;
 		this.#syncLoopModeStatus();
 		if (this.loopNActive) {
@@ -4124,16 +4102,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const limitSuffix = limit ? ` Limited to ${describeLoopLimit(limit)}.` : "";
 		const remainingSuffix = this.loopLimit ? ` ${describeLoopLimitRuntime(this.loopLimit)}.` : "";
-		const intervalSuffix =
-			intervalMs !== undefined
-				? ` Delay after each turn: ${describeLoopLimit({ kind: "duration", durationMs: intervalMs })}.`
-				: "";
 		// The condition is a *continuation* signal: the first iteration always
 		// runs, and it is re-evaluated before each subsequent one.
 		const conditionSuffix = condition ? ` Continuing ${describeLoopCondition(condition)}.` : "";
 		const tail = hasPrompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn.";
 		this.showStatus(
-			`Loop mode enabled.${limitSuffix}${remainingSuffix}${intervalSuffix}${conditionSuffix} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; /loop again to disable.`,
+			`Loop mode enabled.${limitSuffix}${remainingSuffix}${conditionSuffix} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; /loop again to disable.`,
 		);
 	}
 
@@ -5442,12 +5416,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		return lineage;
 	}
 
-	/** Fixed empty-composer help, except when an ask needs focus guidance. */
+	/** Placeholder for the empty composer; see `COMPOSER_HINTS` for the registered hints. */
 	#composerHint(): string | undefined {
 		// An ask above holding the keys: its key hints; the keys here: what typing does.
 		const ask = this.#extensionUiController.composerAsk();
 		if (ask) return this.#extensionUiController.askKeyHints() ?? ASK_COMPOSER_HINT;
-		return theme.fg("dim", "Ctrl+T 模型  Ctrl+Q 排队  Esc Esc 回退  /display 显示模式  /tree 历史");
+		return resolveComposerHint({
+			runningAgents: this.#runningSubagentCount,
+			focusedOnAgent: this.focusedAgentId !== undefined,
+			conversationStarted: this.viewSession.messages.length > 0,
+			keybindings: this.keybindings,
+			uses: id => hintUsage.get(id),
+		});
 	}
 
 	rebuildChatFromMessages(options: { reuseSettledComponents?: boolean } = {}): void {
@@ -9389,7 +9369,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 			{ selected },
 		);
-		sheet.renderHeightProvider = () => Math.max(1, Math.floor(this.ui.terminal.rows * 0.9));
 		this.#jobsSheetHandle = this.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
 		this.#jobsSheetTimer = setInterval(() => this.ui.requestRender(), JOBS_SHEET_REFRESH_MS);
 		this.ui.setFocus(sheet);
@@ -9743,6 +9722,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		const message = this.#pendingWorkingMessage;
 		this.#pendingWorkingMessage = undefined;
 		this.setWorkingMessage(message);
+	}
+
+	showNewVersionNotification(newVersion: string): void {
+		this.#uiHelpers.showNewVersionNotification(newVersion);
 	}
 
 	/**

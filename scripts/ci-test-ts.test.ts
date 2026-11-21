@@ -13,7 +13,12 @@ import {
 	testConcurrency,
 	verifiedFulltestRevision,
 } from "./ci-test-ts";
-import { isActiveBunFulltest, latestFulltestBunProducers, type TestProducerRecord } from "./test-reporting";
+import {
+	BUN_FORK_SUITE_REVISION,
+	isActiveBunFulltest,
+	latestFulltestBunProducers,
+	type TestProducerRecord,
+} from "./test-reporting";
 import { fulltestCommands } from "./fulltest";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
 
@@ -107,14 +112,14 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "ordinary", suiteRevision: 9 },
+					selection: { mode: "full", group: "ordinary", suiteRevision: BUN_FORK_SUITE_REVISION },
 				},
 				{
 					scope: "ci-test-ts:local-ts",
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "startup", suiteRevision: 9 },
+					selection: { mode: "full", group: "startup", suiteRevision: BUN_FORK_SUITE_REVISION },
 				},
 				{
 					scope: "rust-fork-features",
@@ -596,7 +601,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 		durationSeconds: 12,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 9 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: BUN_FORK_SUITE_REVISION },
 		report: "available",
 	} satisfies TestProducerRecord & { report: string };
 	const put = async (overrides: object = {}, records: unknown[] = [producer]) => {
@@ -737,7 +742,7 @@ test("each exact chunk keeps its latest usable measurement across interrupted ru
 		durationSeconds,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 9 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: BUN_FORK_SUITE_REVISION },
 		report: "available",
 	});
 	const put = async (name: string, age: number, records: object[], overrides: object = {}) => {
@@ -887,7 +892,6 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/openwiki/resources.test.ts",
 			"packages/coding-agent/test/openwiki/model-selection.test.ts",
 			"packages/coding-agent/test/lsp/edits.test.ts",
-			"packages/coding-agent/test/slash-commands/shared-skills.test.ts",
 			"packages/coding-agent/test/acp-builtins.test.ts",
 			"packages/tui/test/composer-inline-shrink.test.ts",
 			"packages/tui/test/composer-welcome-scrollback.test.ts",
@@ -937,7 +941,11 @@ test("local suites select fork consumers and drain failures without widening to 
 		const bunProducers = report.producers.filter(producer => producer.scope === expectedScope);
 		expect(bunProducers.length).toBeGreaterThan(0);
 		for (const producer of bunProducers) {
-			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 9 });
+			expect(producer.selection).toMatchObject({
+				tool: "bun",
+				mode: "full",
+				suiteRevision: BUN_FORK_SUITE_REVISION,
+			});
 			expect(producer.exitCode).toBe(0);
 			expect(producer.status).toBe("passed");
 		}
