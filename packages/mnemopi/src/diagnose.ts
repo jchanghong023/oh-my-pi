@@ -1,13 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
-import {
-	dataDir as configuredDataDir,
-	dbPath as configuredDbPath,
-	DEFAULT_DATA_DIR,
-	DEFAULT_DB_FILENAME,
-} from "./config";
+import { dataDir as configuredDataDir, dbPath as configuredDbPath } from "./config";
 import { initBeam } from "./core/beam";
 import { closeQuietly, openDatabase } from "./db";
 
@@ -98,7 +93,7 @@ function failStatus(status: string): boolean {
 }
 
 export function inspectDatabase(options: DiagnosticOptions = {}): DiagnosticSummary {
-	let path = options.dbPath ?? join(DEFAULT_DATA_DIR, DEFAULT_DB_FILENAME);
+	const path = options.dbPath ?? configuredDbPath();
 	const entries: DiagnosticEntry[] = [];
 	const log = (category: string, check: string, status: string, detail = ""): void => {
 		entries.push({ ts: nowIso(), category, check, status, detail });
@@ -108,15 +103,13 @@ export function inspectDatabase(options: DiagnosticOptions = {}): DiagnosticSumm
 	log("env", "platform", `${process.platform}-${process.arch}`);
 	log("env", "MNEMOPI_DATA_DIR", safeEnv("MNEMOPI_DATA_DIR"));
 	log("env", "MNEMOPI_VEC_TYPE", safeEnv("MNEMOPI_VEC_TYPE"));
+	log("db", "db_path", "OK", path);
+	log("db", "data_dir", "OK", options.dataDir ?? configuredDataDir());
+	log("db", "data_dir_parent", existsSync(dirname(path)) ? "OK" : "MISSING", dirname(path));
 
 	let db = options.db;
 	let owned = false;
 	try {
-		path = options.dbPath ?? configuredDbPath();
-		log("db", "db_path", "OK", path);
-		log("db", "data_dir", "OK", options.dataDir ?? configuredDataDir());
-		log("db", "data_dir_parent", existsSync(dirname(path)) ? "OK" : "MISSING", dirname(path));
-
 		if (!db) {
 			db = openDatabase(path);
 			owned = true;

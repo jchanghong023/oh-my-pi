@@ -72,7 +72,9 @@
 - 默认 Bun 门禁只在 fork 白名单内以 `--changed` 按变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不回退上游全量。`CI` 与本地 TS 的 `OMP_TEST_SHARD` 不改变本地范围；仓库脚本自测仅对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 入口保留。
 - 根目录的 `docs/`、`docs-zh-CN/` 和 `AGENTS.md` 不作为 Git 测试选测输入，不会单独触发 Bun 全量回退或独立 UI smoke。混合变更仍按其他运行输入判断；包内 Markdown、提示词等运行资源不在排除范围内。缺少合格基线和显式 `--full` 时的行为不变。
 - `bun run fulltest --full` 显式覆盖当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 与仓库脚本测试，不使用 fork 白名单、变更选测、testmon 或环境分片；默认范围不变。全量模式不发现或运行 `vendor/openwiki` 子模块自身的测试，OMP 宿主侧的 OpenWiki 集成测试仍在范围内。测试自身 skip、平台不支持、真实桌面输入与另需单独授权的集成仍受原边界约束。
+- 全量门禁不自动执行 POSIX 安装路由用例；需要时在支持 POSIX `sh` 的环境中显式运行 `bun test ./scripts/install-tests/fork-installer-routing.test.ts`，也可通过 `bun run test:scripts` 执行。默认 fulltest 仍按变更选入仓库脚本自测。
 - 本地 Markdown 索引退役后，`bun run test:rs` 和默认 fulltest／slowtest 的 Rust 测试范围 `rust-fork-features` 没有选中的测试，记录 `not-selected`；不执行 Nextest、Cargo doctest 或 cargo-delta，不生成虚构用例或 PASS。显式 `bun run test:rs --full` 和 `bun run fulltest --full` 保留完整 workspace 的 Nextest 和 Cargo doctest；静态检查、编译及正常 Cargo 增量缓存不变。
+- Windows 的 Rust 门禁、本地 native 构建和发布 native 构建共用 VS Build Tools 的 CMake/Ninja 探测，优先使用现有 `PATH` 中的工具；Rust 门禁找不到 `vswhere` 时仍交给 Cargo 报告缺失工具。
 - 独立 UI smoke 和仓库脚本仍按 Git 变更规划；CLI、native、Team、TUI 等实际依赖变化须运行 UI。缺基线或依赖未知时保守运行，静态检查及必要 native 准备始终全局执行。Git 未选证据包含有效基线 revision、相对变更路径、零选择及原因，不虚构 XML、用例或耗时。实际执行的全量 Nextest 保留真实 JUnit；doctest 无 JUnit，按实际阶段结果报告，未选不冒充 PASS。混合报告保留实际用例和失败；affected、partial、失败报告不能作为完整基线，不提交报告 sidecar 或改写历史。
 - Bun 的依赖分析有近似：动态依赖、环境或外部输入可能漏检，affected 不等于完整新回归。Bun fork 套件版本见 [`BUN_FORK_SUITE_REVISION`](../scripts/test-reporting.ts#L9)；范围变化后须在干净工作区通过一次获授权的完整 fork 回归才能建立新基线，旧范围报告不可复用。报告区分本轮实际执行、deselected、not-selected 与未运行；默认 fulltest scope 为 `fulltest: fork feature suites`，控制台范围为 `fork-features`。历史用例耗时不算本轮新执行，也不能称全仓全量通过。普通失败继续其他独立工作，保留首个实际失败退出码；取消、参数错误和原预算到限仍停止本次拥有的工作。
 - CLI 子进程夹具在公共 harness 或独立启动器中静态导入真实使用的 Tools registry，补足 Bun 无法追踪的 spawn 路径字符串；不导入或执行 CLI 主入口，不仅为某两个实验源码添加特例依赖。

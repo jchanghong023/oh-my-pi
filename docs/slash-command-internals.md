@@ -213,8 +213,10 @@ After that boundary, `AgentSession.prompt(...)` processes slash input in this or
    - empty string or `void/undefined` -> treated as handled; no LLM prompt
 3. **File-based slash commands** (`expandSlashCommand`)  
    If text still starts with `/`, attempt markdown command expansion.
+   File commands can use `{{{rawArguments}}}` to insert everything after the first space verbatim. The bundled Developer Test Agent commands use it to preserve the user's original input.
 4. **Prompt templates** (`expandPromptTemplate`)  
    Applied after slash/custom processing.
+   Ordinary prompt templates (`.omp/prompts/`) use the upstream argument syntax such as `{{arguments}}` or `$ARGUMENTS`. They do not expose `rawArguments`; if no supported placeholder consumes the arguments, the parsed argument text is appended.
 5. **Delivery**
    - idle: prompt is sent immediately to agent
    - streaming: prompt is queued according to `streamingBehavior` (`steer`, `followUp`, or `aside`)
@@ -276,7 +278,9 @@ TUI and ACP/RPC dispatch the shared built-in registry before `session.prompt(...
 
 ## ACP/RPC availability
 
-`buildAvailableSlashCommands(...)` publishes commands first-wins in this order: text-capable built-ins, optional skill commands, extension commands, TypeScript/MCP custom commands, then discovered file commands. Built-in primary names and aliases are reserved; extension names such as `model:foo`, whose prefix parses as a built-in, are filtered from ACP availability. The same file-command load updates the session expansion set.
+`buildAvailableSlashCommands(...)` publishes commands first-wins in this order: text-capable built-ins, optional skill commands, extension commands, TypeScript/MCP custom commands, then discovered file commands. The ACP built-in rules reserve primary names, aliases, and their colon prefixes (such as `model:foo`) across all non-built-in sources. A file-command load updates the session expansion set only if the working directory has not changed.
+
+`/team configure` opens the Team configuration panel in the TUI. Text hosts point users to that entry without starting a discussion.
 
 ## 8) Streaming-time differences vs idle
 

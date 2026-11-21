@@ -203,7 +203,10 @@ test("fulltest preserves Bun selection and schedules Rust tests only with --full
 			{
 				cpuBudget: 28,
 				captureSourceRevision: async () => revision,
-				scriptTestFiles: async () => [],
+				scriptTestFiles: async () =>
+					scenario.full
+						? ["scripts/fulltest.test.ts", "scripts/install-tests/fork-installer-routing.test.ts"]
+						: [],
 				captureChangedPaths: async (_gate, _root, base) => {
 					observedBase = base;
 					return [...scenario.changed];
@@ -234,6 +237,11 @@ test("fulltest preserves Bun selection and schedules Rust tests only with --full
 		expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
 		const ts = commands.filter(command => command.label.startsWith("test/TypeScript"));
 		if (scenario.full) {
+			expect(
+				commands
+					.filter(command => command.argv[1] === "scripts/test-report-bun.ts")
+					.map(command => command.argv[2]),
+			).toEqual(["scripts/fulltest.test.ts"]);
 			expect(ts).toHaveLength(1);
 			expect(ts[0]!.argv).toEqual([
 				"bun",

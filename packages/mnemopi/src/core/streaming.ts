@@ -306,12 +306,10 @@ export class DeltaSync {
 		mkdirSync(this.checkpointDir, { recursive: true });
 	}
 	private checkpointPath(peerId: string, table: DeltaTable): string {
-		const path = join(this.checkpointDir, `${peerId}.${table}.json`);
-		return path;
+		return join(this.checkpointDir, `${peerId}.${table}.json`);
 	}
 	private legacyCheckpointPath(peerId: string): string {
-		const path = join(this.checkpointDir, `${peerId}.json`);
-		return path;
+		return join(this.checkpointDir, `${peerId}.json`);
 	}
 	getCheckpoint(peerId: string, table: DeltaTable = "working_memory"): SyncCheckpoint | null {
 		assertDeltaTable(table);

@@ -1,6 +1,6 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { existsSync, writeFileSync } from "node:fs";
-import { closeQuietly, type DatabasePath, enablePragmas } from "../../db";
+import { closeQuietly, type DatabasePath, openDatabase } from "../../db";
 
 export const ANNOTATION_KINDS = ["mentions", "fact", "occurred_on", "has_source"] as const;
 export type AnnotationKind = (typeof ANNOTATION_KINDS)[number];
@@ -43,7 +43,7 @@ function hasTable(db: Database, name: string): boolean {
 function copyDatabase(source: DatabasePath, destination: string): void {
 	let db: Database | null = null;
 	try {
-		db = new Database(source, { create: false, readwrite: false, strict: true });
+		db = openDatabase(source, { create: false, readwrite: false, pragmas: false });
 		writeFileSync(destination, (db as SerializableDatabase).serialize());
 	} finally {
 		closeQuietly(db);
@@ -159,10 +159,7 @@ export function migrate(
 		throw new Error(`database not found: ${dbPath}`);
 	}
 
-	// This explicit migration operates on its requested input, unlike normal
-	// memory APIs. Automatic callers already supply the resolved runtime path.
-	let db = new Database(dbPath, { create: false, readwrite: true, strict: true });
-	enablePragmas(db, dbPath);
+	let db = openDatabase(dbPath, { create: false });
 	let classified: Classification;
 	try {
 		classified = classifyRows(db);
@@ -194,8 +191,7 @@ export function migrate(
 		}
 	}
 
-	db = new Database(dbPath, { create: false, readwrite: true, strict: true });
-	enablePragmas(db, dbPath);
+	db = openDatabase(dbPath, { create: false });
 	try {
 		db.run("BEGIN IMMEDIATE");
 		try {

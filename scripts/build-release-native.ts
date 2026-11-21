@@ -6,8 +6,9 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { ensureWindowsBuildTools, installBinary } from "../packages/natives/scripts/build-bindings";
+import { installBinary } from "../packages/natives/scripts/build-bindings";
 import { nativesPackageVersion, stampNativeVersion } from "./stamp-native-version";
+import { ensureWindowsBuildTools } from "./windows-build-tools";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 

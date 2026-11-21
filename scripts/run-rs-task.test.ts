@@ -31,6 +31,7 @@ async function runWorkspace(
 		for (const name of [
 			"run-rs-task.ts",
 			"windows-test-temp.ts",
+			"windows-build-tools.ts",
 			"test-gate-failure-events.ts",
 			"test-gate-native-events.ts",
 			"test-gate-scheduler.ts",

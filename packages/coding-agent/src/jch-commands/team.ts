@@ -47,9 +47,7 @@ async function handleTeamCommand(
 ): Promise<SlashCommandResult> {
 	const question = command.args.trim();
 	if (question === "configure") {
-		await runtime.output(
-			"Team 配置请使用 TUI /team configure，或 RPC v3 teamConfig 能力的 get_team_config / get_team_models / set_team_config 接口。此命令不发起讨论。",
-		);
+		await runtime.output("Team 配置请在 TUI 中运行 /team configure。此命令不发起讨论。");
 		return { consumed: true };
 	}
 	if (!question) {
@@ -77,7 +75,6 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Team：至少三个代理独立调查、交叉审查与方案汇总（只读规划）",
 		allowArgs: true,
 		inlineHint: "<问题或需求>",
-		acpInputHint: "<问题或需求>",
 		subcommandOptional: true,
 		subcommands: [{ name: "configure", description: "编辑 Team 有序模型槽位（不调用模型）" }],
 		handle: handleTeamCommand,

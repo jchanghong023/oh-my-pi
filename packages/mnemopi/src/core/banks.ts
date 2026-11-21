@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { dataDir as configuredDataDir, DEFAULT_DATA_DIR } from "../config";
+import { dataDir as configuredDataDir } from "../config";
 import { closeQuietly, openDatabase } from "../db";
 
-export { DEFAULT_DATA_DIR };
+export const DEFAULT_DATA_DIR = join(homedir(), ".hermes", "mnemopi", "data");
 export const BANKS_DIR = join(DEFAULT_DATA_DIR, "banks");
 const DB_FILENAME = "mnemopi.db";
 
@@ -32,9 +33,9 @@ export class BankManager {
 	createBank(name: string): string {
 		this.validateName(name);
 		const bankDir = join(this.banksDir, name);
-		const dbPath = join(bankDir, DB_FILENAME);
 		if (existsSync(bankDir)) throw new ValueError(`Bank '${name}' already exists`);
 		mkdirSync(bankDir, { recursive: true });
+		const dbPath = join(bankDir, DB_FILENAME);
 		const db = openDatabase(dbPath);
 		closeQuietly(db);
 		return dbPath;

@@ -168,7 +168,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 	#hasSelectableAuth(providerId: string): boolean {
 		return this.#mode === "logout"
-			? this.#authStorage.credentials.has(getOAuthCredentialProvider(providerId))
+			? this.#authStorage.credentials.has(providerId)
 			: this.#authStorage.keys.source(providerId) !== undefined;
 	}
 

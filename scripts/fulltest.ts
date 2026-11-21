@@ -193,6 +193,7 @@ function typeScriptEnvironment(home: string): Record<string, string | undefined>
 const fullTypeScriptLabel = "test/TypeScript full suite";
 const forkTypeScriptLabel = "test/TypeScript fork feature suite";
 const startupTypeScriptLabel = "test/TypeScript startup suite";
+const INSTALLER_ROUTING_TEST = "scripts/install-tests/fork-installer-routing.test.ts";
 
 /** Execute the requested suites; independently authorized integrations stay separate. */
 export function fulltestCommands(options: FulltestOptions, home: string, sourceRevision?: string): GateCommand[] {
@@ -526,7 +527,9 @@ async function runFulltestObserved(
 		const files = await acquire("repository script test discovery", () =>
 			gate.charged(infrastructure.scriptTestFiles ?? scriptTestFiles),
 		);
-		const scriptTests = options.full ? files : selectChangedScriptTests(changedPaths, files);
+		const scriptTests = options.full
+			? files.filter(file => file !== INSTALLER_ROUTING_TEST)
+			: selectChangedScriptTests(changedPaths, files);
 		let independentScriptCommands: GateCommand[] = [];
 		if (scriptTests.length) {
 			// Only short, pure fixtures may share the heavy phase's reserved workers.
@@ -535,7 +538,7 @@ async function runFulltestObserved(
 			// clock/watchdog selftests and shared writers also stay isolated.
 			const parallelScripts = new Set([
 				"scripts/ci-release-checksums.test.ts",
-				"scripts/install-tests/fork-installer-routing.test.ts",
+				INSTALLER_ROUTING_TEST,
 				"scripts/slowtest.test.ts",
 				"scripts/test-reporting.test.ts",
 			]);

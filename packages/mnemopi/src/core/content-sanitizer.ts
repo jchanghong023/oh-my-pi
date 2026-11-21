@@ -64,8 +64,8 @@ export function looksLikeBase64Blob(content: string): boolean {
 export function storeBlob(rawBytes: Uint8Array): string {
 	const sha256 = computeSha256(rawBytes);
 	const blobDir = join(blobRoot(), sha256.slice(0, 2), sha256.slice(0, 4));
-	const blobPath = join(blobDir, sha256);
 	mkdirSync(blobDir, { recursive: true });
+	const blobPath = join(blobDir, sha256);
 	if (!existsSync(blobPath)) writeFileSync(blobPath, rawBytes);
 	return sha256;
 }

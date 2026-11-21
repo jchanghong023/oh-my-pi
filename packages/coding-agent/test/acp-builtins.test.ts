@@ -516,6 +516,15 @@ describe("ACP builtin slash commands", () => {
 		expect(result).toBe(false);
 	});
 
+	it("directs /team configure to the TUI instead of starting a discussion or suggesting RPC", async () => {
+		const { output, runtime } = createRuntime();
+		expect(await executeAcpBuiltinSlashCommand("/team configure", runtime)).toEqual({ consumed: true });
+		const message = output.join("\n");
+		expect(message).toContain("TUI");
+		expect(message).toContain("/team configure");
+		expect(message).not.toContain("RPC");
+	});
+
 	// /jobs
 	it("jobs: shows informative message when snapshot is null", async () => {
 		const { output, runtime } = createRuntime();
