@@ -311,7 +311,7 @@ function focusFixture(fileDiffRows?: () => number) {
 			});
 			return Bun.stripANSI(nativeRows(node).join("\n")).trimEnd();
 		},
-		rows: () => dock.render(60),
+		rows: (width = 60) => dock.render(width),
 	};
 }
 
@@ -811,18 +811,8 @@ describe("compact action dock", () => {
 			await live.emit({
 				type: "tool_execution_start",
 				toolCallId: "with-intent",
-				toolName: "write",
-				args: { path: "xd://bash", content: '{"command":"echo raw","i":"Describe action"}' },
-			});
-			await live.emit({
-				type: "tool_execution_update",
-				toolCallId: "with-intent",
-				toolName: "write",
-				args: { path: "xd://bash" },
-				partialResult: {
-					content: [],
-					details: { xdev: { mode: "execute", tool: "bash", args: { command: "echo raw" } } },
-				},
+				toolName: "bash",
+				args: { command: "echo raw", i: "Describe action" },
 			});
 			for (const rows of [dock.render(60), nativeRows(dock.describe(cx(60)))]) {
 				expect(plain(rows)[1]).toContain("Describe action");
@@ -837,7 +827,7 @@ describe("compact action dock", () => {
 			await live.emit({
 				type: "tool_execution_end",
 				toolCallId: "with-intent",
-				toolName: "write",
+				toolName: "bash",
 				result: { content: [] },
 				isError: false,
 			});
@@ -1091,32 +1081,40 @@ describe("compact action dock", () => {
 		expect(plain(h.rows())[1]).toBe(" Agent：正在读取  src/宽字符.ts");
 	});
 
-	it("projects device inner targets without leaking the transport URI or private payloads", async () => {
+	it("uses structured mounted command arguments and keeps mixed shell operations as Bash", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "device",
-			toolName: "write",
-			args: { path: "xd://bash", content: JSON.stringify({ command: "pwd && echo done" }) },
-		});
-		const row = plain(h.rows())[1]!;
-		expect(row).toStartWith(" Agent：正在执行  ");
-		// The full inner command is shown (new spec replaces the old first-segment preview); no transport URI.
-		expect(row).toContain("pwd && echo done");
-		expect(row).not.toMatch(/xd:\/\//);
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "private",
-			toolName: "write",
-			args: { path: "xd://think", content: '{"thoughts":"PRIVATE_THOUGHTS"}' },
-		});
-		expect(h.rendered()).not.toContain("PRIVATE_THOUGHTS");
+		const mount = {
+			tool: "ast_grep",
+			mode: "execute" as const,
+			exitCode: 0,
+			args: { pat: "const $NAME = 7", path: "fixture.ts" },
+		};
+		const sole = 'ast_grep --json \'{"pat":"const $NAME = 7","path":"fixture.ts","other":"PRIVATE_PAYLOAD"}\'';
+		const mixed = "ast_grep --path fixture.ts; echo done";
+		for (const [id, command, expected] of [
+			["sole", sole, "正在调用  bash (ast_grep) const $NAME = 7 · fixture.ts"],
+			["mixed", mixed, `正在执行  ${mixed}`],
+		] as const) {
+			const args = { command };
+			await live.emit({ type: "tool_execution_start", toolCallId: id, toolName: "bash", args });
+			const result = { content: [], details: { toolCommands: [mount] } };
+			await live.emit({
+				type: "tool_execution_update",
+				toolCallId: id,
+				toolName: "bash",
+				args: {},
+				partialResult: result,
+			});
+			expect(plain(h.rows(100))[1]).toBe(` Agent：${expected}`);
+			expect(h.rendered()).not.toContain("PRIVATE_PAYLOAD");
+			await live.emit({ type: "tool_execution_end", toolCallId: id, toolName: "bash", result, isError: false });
+		}
 	});
 
-	it("labels wrapped file patches as writes and config, messaging and control transports as generic calls", async () => {
+	it("labels mounted file patches as writes and keeps URL transports as generic calls", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -1130,20 +1128,31 @@ describe("compact action dock", () => {
 			"*** End Patch",
 		].join("\n");
 		for (const [id, path, content, expected] of [
-			["patch", "XD://apply_patch", JSON.stringify({ input: patch }), "正在写入  src/one.ts (2 files)"],
+			["patch", "apply_patch", patch, "正在写入  src/one.ts (2 files)"],
 			["settings", "cfg://display", "PRIVATE_BODY", "正在调用  write cfg://display"],
 			["message", "agent://Worker", "PRIVATE_BODY", "正在调用  write agent://Worker"],
 			["control", "proc://job/kill", "PRIVATE_BODY", "正在调用  write proc://job/kill"],
-			["help", "xd://write", "?", "正在调用  write xd://write"],
 		] as const) {
-			await live.emit({ type: "tool_execution_start", toolCallId: id, toolName: "write", args: { path, content } });
+			const toolName = id === "patch" ? "bash" : "write";
+			const args = id === "patch" ? { command: "apply_patch @patch.txt" } : { path, content };
+			const result =
+				id === "patch"
+					? {
+							content: [],
+							details: {
+								toolCommands: [{ tool: path, mode: "execute", exitCode: 0, args: { input: content } }],
+							},
+						}
+					: { content: [] };
+			await live.emit({ type: "tool_execution_start", toolCallId: id, toolName, args });
+			await live.emit({ type: "tool_execution_update", toolCallId: id, toolName, args, partialResult: result });
 			expect(plain(h.rows())[1]).toBe(` Agent：${expected}`);
 			expect(h.rendered()).not.toContain("PRIVATE_BODY");
 			await live.emit({
 				type: "tool_execution_end",
 				toolCallId: id,
-				toolName: "write",
-				result: { content: [] },
+				toolName,
+				result,
 				isError: false,
 			});
 			expect(plain(h.rows())[1]).toContain(id === "patch" ? "写入完成" : "调用完成");
@@ -1268,17 +1277,16 @@ describe("compact latest live Output consumers", () => {
 	const todoRoutes: { route: string; options: Partial<LiveToolOutputSnapshot> }[] = [
 		{ route: "direct", options: { toolName: "todo", args: { op: "view" } } },
 		{
-			route: "device result",
+			route: "sole Bash command",
 			options: {
-				toolName: "write",
-				args: {},
+				toolName: "bash",
+				args: { command: "todo --op view" },
 				result: {
 					content: [{ type: "text" as const, text: "TODO_RESULT" }],
-					details: { xdev: { tool: "todo", mode: "execute", inner: {} } },
+					details: { toolCommands: [{ tool: "todo", mode: "execute", exitCode: 0, inner: {} }] },
 				},
 			},
 		},
-		{ route: "device path", options: { toolName: "write", args: { path: "xd://todo", content: "{}" } } },
 	];
 	it.each(todoRoutes)("excludes todo via $route without replacing another tool's output", async ({ options }) => {
 		const h = focusFixture();
@@ -1297,6 +1305,35 @@ describe("compact latest live Output consumers", () => {
 		expect(view.body).toEqual(["SHELL_OUTPUT"]);
 		expect(view.nativeHead).toContain("已完成 · bash · echo shell");
 		expect(view.nativeBody).toEqual(["SHELL_OUTPUT"]);
+	});
+
+	it("updates the TODO panel from a successful command even when a later shell step fails", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("TodoOutput", live);
+		await h.focus.focusAgent("TodoOutput");
+		const setTodos = vi.spyOn(h.ctx, "setTodos");
+		const command = 'todo --json \'{"op":"init","items":["Work"]}\'; false';
+		const phases = [{ name: "Work", tasks: [{ content: "Work", status: "pending" }] }];
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "todo-bash",
+			toolName: "bash",
+			args: { command },
+		});
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "todo-bash",
+			toolName: "bash",
+			isError: true,
+			result: {
+				content: [],
+				details: {
+					toolCommands: [{ tool: "todo", mode: "execute", exitCode: 0, inner: { op: "init", phases } }],
+				},
+			},
+		});
+		expect(setTodos).toHaveBeenCalledWith(phases);
 	});
 
 	it("keeps the previous Output and its deadline across fully covered write receipts", async () => {
@@ -1609,7 +1646,7 @@ describe("compact latest live Output consumers", () => {
 		expect(h.previewView().body).toEqual(["new source"]);
 	});
 
-	it("retains device and async facts after an empty terminal frame and rejects late startup receipts", async () => {
+	it("retains Bash async facts after an empty terminal frame and rejects late startup receipts", async () => {
 		setSystemTime(10_000);
 		const h = focusFixture();
 		const live = liveSession();
@@ -1617,19 +1654,21 @@ describe("compact latest live Output consumers", () => {
 		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
 		h.register("AsyncOutput", live);
 		await h.focus.focusAgent("AsyncOutput");
-		output.observe({ type: "tool_execution_start", toolCallId: "job", toolName: "write", args: {} }, 10_000);
-		const xdev = { tool: "bash", mode: "execute", args: { command: "echo active" } };
+		output.observe(
+			{ type: "tool_execution_start", toolCallId: "job", toolName: "bash", args: { command: "echo active" } },
+			10_000,
+		);
 		output.observe(
 			{
 				type: "tool_execution_update",
 				toolCallId: "job",
-				toolName: "write",
+				toolName: "bash",
 				args: {},
 				partialResult: {
 					content: [
 						{ type: "text", text: "Error: failed at step 2\n\nBackgrounded as job bg_1; output will follow" },
 					],
-					details: { xdev: { ...xdev, inner: { async: { name: "Build", jobId: "bg_1", state: "running" } } } },
+					details: { async: { name: "Build", jobId: "bg_1", state: "running" } },
 				},
 			},
 			10_000,
@@ -1637,10 +1676,10 @@ describe("compact latest live Output consumers", () => {
 		const startupReceipt: AgentSessionEvent = {
 			type: "tool_execution_end",
 			toolCallId: "job",
-			toolName: "write",
+			toolName: "bash",
 			result: {
 				content: [{ type: "text", text: "older buffered output" }],
-				details: { xdev: { ...xdev, inner: { async: { jobId: "bg_1", state: "running" } } } },
+				details: { async: { jobId: "bg_1", state: "running" } },
 			},
 			isError: false,
 		};
@@ -1650,11 +1689,11 @@ describe("compact latest live Output consumers", () => {
 			{
 				type: "tool_execution_update",
 				toolCallId: "job",
-				toolName: "write",
+				toolName: "bash",
 				args: {},
 				partialResult: {
 					content: [{ type: "text", text: "{}" }],
-					details: { xdev: { tool: "bash", mode: "execute", inner: { async: { state: "failed" } } } },
+					details: { async: { state: "failed" } },
 				},
 			},
 			10_001,
@@ -1663,27 +1702,27 @@ describe("compact latest live Output consumers", () => {
 		output.observe(startupReceipt, 10_002);
 		expect(output.preview()?.call.terminalAt).toBe(10_001);
 		const view = h.previewView();
-		expect(view.head).toBe("失败 · write (bash) · bg_1 · echo active");
+		expect(view.head).toBe("失败 · bash · bg_1 · echo active");
 		expect(view.nativeHead).toBe(view.head);
 		expect(view.body).toEqual(["Error: failed at step 2"]);
 		expect(view.nativeBody).toEqual(view.body);
 	});
 
-	it("renormalizes a retained body when later device metadata identifies its Bash startup notice", async () => {
+	it("renormalizes a retained body when later Bash metadata identifies its startup notice", async () => {
 		setSystemTime(10_000);
 		const h = focusFixture();
 		const live = liveSession();
 		const output = new LiveToolOutputState();
 		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
-		h.register("LateDeviceFacts", live);
-		await h.focus.focusAgent("LateDeviceFacts");
-		output.observe({ type: "tool_execution_start", toolCallId: "job", toolName: "write", args: {} }, 10_000);
+		h.register("LateBashFacts", live);
+		await h.focus.focusAgent("LateBashFacts");
+		output.observe({ type: "tool_execution_start", toolCallId: "job", toolName: "bash", args: {} }, 10_000);
 		const notice = "Backgrounded as job bg_1; output will follow";
 		output.observe(
 			{
 				type: "tool_execution_update",
 				toolCallId: "job",
-				toolName: "write",
+				toolName: "bash",
 				args: {},
 				partialResult: { content: [{ type: "text", text: `actual body\n\n${notice}` }] },
 			},
@@ -1694,19 +1733,19 @@ describe("compact latest live Output consumers", () => {
 			{
 				type: "tool_execution_update",
 				toolCallId: "job",
-				toolName: "write",
+				toolName: "bash",
 				args: {},
 				partialResult: {
 					content: [],
 					details: {
-						xdev: { tool: "bash", mode: "execute", inner: { async: { jobId: "bg_1", state: "running" } } },
+						async: { jobId: "bg_1", state: "running" },
 					},
 				},
 			},
 			10_001,
 		);
 		const visible = h.previewView();
-		expect(visible.head).toContain("运行中 · write (bash) · bg_1");
+		expect(visible.head).toContain("运行中 · bash · bg_1");
 		expect(visible.body).toEqual(["actual body"]);
 		expect(visible.nativeBody).toEqual(visible.body);
 		output.restore(output.snapshot(), false);
@@ -1829,7 +1868,7 @@ describe("compact latest live Output consumers", () => {
 		expect(view.nativeBody).toEqual(view.body);
 	});
 
-	it("prefers glob file rows over directory headings and device-wrapped grep keeps its inner identity", async () => {
+	it("prioritizes glob and sole Bash grep hits but keeps mixed shell output in shell order", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		const globText = ["# src/", "a.ts", "## sub/", "b.ts", "c.ts", "d.ts", "e.ts"].join("\n");
@@ -1839,11 +1878,10 @@ describe("compact latest live Output consumers", () => {
 			terminalAt: Date.now(),
 		});
 		const wrapped = outputCall("wrapped", 2, "# src/\n 10│context\n*12│wrapped hit\n 13│context after", {
-			toolName: "write",
-			args: { path: "xd://grep", content: '{"pattern":"wrapped"}' },
+			args: { command: "grep --pattern wrapped" },
 			result: {
 				content: [{ type: "text", text: "# src/\n 10│context\n*12│wrapped hit\n 13│context after" }],
-				details: { xdev: { tool: "grep", mode: "execute", inner: { matchCount: 1 } } },
+				details: { toolCommands: [{ tool: "grep", mode: "execute", exitCode: 0, inner: { matchCount: 1 } }] },
 			},
 			terminalAt: Date.now(),
 		});
@@ -1856,8 +1894,15 @@ describe("compact latest live Output consumers", () => {
 		expect(globView.nativeBody).toEqual(globView.body);
 		source.mockReturnValue(previewFixture(wrapped));
 		const wrappedView = h.previewView();
+		expect(wrappedView.head).toContain("bash (grep)");
 		expect(wrappedView.body).toEqual(["*12│wrapped hit", "# src/", " 10│context", " 13│context after"]);
 		expect(wrappedView.nativeBody).toEqual(wrappedView.body);
+		const mixed = { ...wrapped, args: { command: "grep --pattern wrapped | cat" } };
+		source.mockReturnValue(previewFixture(mixed));
+		const mixedView = h.previewView();
+		expect(mixedView.head).toContain("bash · grep --pattern wrapped | cat");
+		expect(mixedView.body).toEqual(["# src/", " 10│context", "*12│wrapped hit", " 13│context after"]);
+		expect(mixedView.nativeBody).toEqual(mixedView.body);
 	});
 
 	it("prioritizes real failure diagnostics ahead of later output without inventing reasons", async () => {

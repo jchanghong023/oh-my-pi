@@ -52,7 +52,6 @@ it("retires the welcome before growing chrome displaces a live reply", async () 
 	const composer = new Composer({
 		terminal,
 		tuiOptions: { renderScheduler: scheduler },
-		preferences: { completeScrollback: false },
 	});
 	composer.setHeaderExtras([], [new Text("WELCOME_MARKER", 0, 0)]);
 	const transcript = new TranscriptContainer();
@@ -60,9 +59,7 @@ it("retires the welcome before growing chrome displaces a live reply", async () 
 	transcript.addChild(active);
 	let chromeRows = 0;
 	const chrome = { render: () => Array.from({ length: chromeRows }, (_, index) => `HUD_${index}`) };
-	composer.setRuntimeChildren([transcript, chrome, new Text("EDITOR", 0, 0)], {
-		selfClearingChrome: [chrome],
-	});
+	composer.setRuntimeChildren([transcript, chrome, new Text("EDITOR", 0, 0)]);
 	composer.start({ playWelcomeIntro: false });
 	try {
 		await scheduler.settle(terminal);

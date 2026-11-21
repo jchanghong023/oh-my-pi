@@ -2,7 +2,7 @@ import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { LocalAgentSessionEvent } from "./agent-session-events";
 import type { LiveToolOutputPreview, LiveToolOutputProjection, LiveToolOutputSnapshot } from "./agent-session-handle";
-import { mayBeCoveredByFileDiff, toolOutputSource, toolOutputText } from "./live-tool-output-text";
+import { mayBeCoveredByFileDiff, toolOutputText } from "./live-tool-output-text";
 
 /**
  * Keep display source and lifecycle facts independent of which frame supplies the body.
@@ -10,20 +10,19 @@ import { mayBeCoveredByFileDiff, toolOutputSource, toolOutputText } from "./live
  * applied to an earlier valid body.
  */
 function withOutputFacts(
-	toolName: string,
 	body: ToolRenderResult<unknown>,
 	previous: ToolRenderResult<unknown> | undefined,
 	incoming: ToolRenderResult<unknown>,
 	cancelled: boolean,
 	isError: boolean | undefined,
 ): ToolRenderResult<unknown> {
-	const source = toolOutputSource(toolName, body);
-	const before = toolOutputSource(toolName, previous);
-	const update = toolOutputSource(toolName, incoming);
-	const dispatch = update.dispatch || before.dispatch;
-	const previousJob = isRecord(before.details?.async) ? before.details.async : undefined;
-	const nextJob = isRecord(update.details?.async) ? update.details.async : undefined;
-	const bodyJob = isRecord(source.details?.async) ? source.details.async : undefined;
+	const source = isRecord(body.details) ? body.details : undefined;
+	const before = isRecord(previous?.details) ? previous.details : undefined;
+	const update = isRecord(incoming.details) ? incoming.details : undefined;
+	const commands = update?.toolCommands ?? before?.toolCommands;
+	const previousJob = isRecord(before?.async) ? before.async : undefined;
+	const nextJob = isRecord(update?.async) ? update.async : undefined;
+	const bodyJob = isRecord(source?.async) ? source.async : undefined;
 	const job =
 		nextJob &&
 		previousJob &&
@@ -32,28 +31,26 @@ function withOutputFacts(
 			(nextJob.state === undefined && previousJob.state !== undefined))
 			? { ...previousJob, ...nextJob }
 			: (nextJob ?? previousJob);
-	const wasCancelled = cancelled || update.details?.cancelled === true || before.details?.cancelled === true;
+	const wasCancelled = cancelled || update?.cancelled === true || before?.cancelled === true;
 	const failed =
 		incoming.isError === true || isError === true ? true : (isError ?? incoming.isError ?? previous?.isError);
 	if (
-		dispatch === source.dispatch &&
-		!(dispatch && dispatch.args === undefined && before.dispatch?.args !== undefined) &&
+		commands === source?.toolCommands &&
 		job === bodyJob &&
-		(!wasCancelled || source.details?.cancelled === true) &&
+		(!wasCancelled || source?.cancelled === true) &&
 		failed === body.isError
 	)
 		return body;
 	const details = {
-		...source.details,
+		...source,
+		...(commands ? { toolCommands: commands } : {}),
 		...(job ? { async: job } : {}),
 		...(wasCancelled ? { cancelled: true } : {}),
 	};
 	return {
 		...body,
 		isError: failed,
-		details: dispatch
-			? { xdev: { ...before.dispatch, ...dispatch, args: dispatch.args ?? before.dispatch?.args, inner: details } }
-			: details,
+		details,
 	};
 }
 
@@ -147,7 +144,7 @@ export class LiveToolOutputState {
 		if (!call || call.terminalAt !== undefined) return;
 		const result: ToolRenderResult<unknown> =
 			event.type === "tool_execution_update" ? event.partialResult : event.result;
-		const { details } = toolOutputSource(call.toolName, result);
+		const details = isRecord(result.details) ? result.details : undefined;
 		const async = isRecord(details?.async) ? details.async : undefined;
 		const updateArgs = event.type === "tool_execution_update" ? event.args : undefined;
 		const args =
@@ -170,9 +167,7 @@ export class LiveToolOutputState {
 		// A startup receipt may contain an older buffered preview. It can seed a body,
 		// but must not backdate actual progress already received from the same job.
 		const candidate =
-			isStartupReceipt && hadOutput
-				? undefined
-				: withOutputFacts(call.toolName, result, previous, result, cancelled, isError);
+			isStartupReceipt && hadOutput ? undefined : withOutputFacts(result, previous, result, cancelled, isError);
 		const text = candidate && toolOutputText(call.toolName, candidate, args);
 		if (candidate && text) {
 			call.args = args;
@@ -184,14 +179,7 @@ export class LiveToolOutputState {
 			// Keep the earlier body, but incorporate lifecycle and dispatch facts. Those
 			// facts can change which parts of the body qualify as displayable output.
 			call.args ??= args;
-			const merged = withOutputFacts(
-				call.toolName,
-				previous ?? { content: [] },
-				previous,
-				result,
-				cancelled,
-				isError,
-			);
+			const merged = withOutputFacts(previous ?? { content: [] }, previous, result, cancelled, isError);
 			call.result = merged;
 			if (hadOutput) {
 				const text =

@@ -1,9 +1,8 @@
-//! `sloppy` mode applies line-anchored edits with tolerant matching.
+//! `sloppy` mode: tolerant-match edits inside `*** Edit File:` sections.
 //!
-//! `*** Find` anchors with `*** Replace` replacements,
-//! `*** Insert Before`/`*** Insert After` insertions, or `*** Cut` and
-//! `*** Paste Before`/`*** Paste After` moves inside `*** Edit File:` file
-//! sections.
+//! Supports `*** Find` anchors with `*** Replace` replacements,
+//! `*** Insert Before`/`*** Insert After` insertions, and `*** Cut` with
+//! `*** Paste Before`/`*** Paste After` moves.
 
 pub mod apply;
 pub mod parse;

@@ -2,7 +2,7 @@
 
 > Search existing repository OpenWiki sections on demand, including linked repositories. This read-only tool does not invoke a model, generate or update a wiki, or change the workspace registry.
 
-In ordinary unrestricted sessions with `tools.xdev=true`, the tool is discoverable at `xd://openwiki_search`: read that URI for its schema, then write JSON arguments to it. If exposed as a top-level tool, call `openwiki_search` directly. Mounted execution uses read approval.
+When `tools.commands` is enabled and Bash is available, run `openwiki_search --help` through the `bash` tool for usage, then run `openwiki_search` with the query arguments. Otherwise, call `openwiki_search` as a top-level tool. Both paths use read approval.
 
 ## When to use
 

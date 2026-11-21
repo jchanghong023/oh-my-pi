@@ -28,12 +28,28 @@ function picker(selector: OAuthSelectorComponent) {
 	return { ...node.p, items };
 }
 
+function auth(...providers: string[]) {
+	return {
+		credentials: {
+			has: (provider: string) => providers.includes(provider),
+			list: () =>
+				providers.map((provider, id) => ({
+					provider,
+					id,
+					credential: { type: "oauth" as const, access: "test", refresh: "test", expires: 0 },
+					disabledCause: null,
+				})),
+		},
+		keys: { source: () => undefined },
+	};
+}
+
 describe("OAuth logout selector", () => {
 	test("offers one canonical logout entry for shared credentials, including disabled providers", () => {
 		let selected: string | undefined;
 		const selector = new OAuthSelectorComponent(
 			"logout",
-			{ credentials: { has: provider => provider === "openai-codex" }, keys: { source: () => undefined } },
+			auth("openai-codex", "openai-codex"),
 			provider => {
 				selected = provider;
 			},
@@ -65,10 +81,7 @@ describe("OAuth logout selector", () => {
 		const selected: string[] = [];
 		const selector = new OAuthSelectorComponent(
 			"logout",
-			{
-				credentials: { has: provider => provider === "openai-codex" || provider === other.id },
-				keys: { source: () => undefined },
-			},
+			auth("openai-codex", other.id),
 			provider => selected.push(provider),
 			() => {},
 		);
@@ -102,7 +115,7 @@ describe("OAuth logout selector", () => {
 		let selected: string | undefined;
 		const selector = new OAuthSelectorComponent(
 			"login",
-			{ credentials: { has: () => false }, keys: { source: () => undefined } },
+			auth(),
 			provider => {
 				selected = provider;
 			},
@@ -124,7 +137,7 @@ describe("OAuth logout selector", () => {
 		let selected: string | undefined;
 		const selector = new OAuthSelectorComponent(
 			"logout",
-			{ credentials: { has: () => false }, keys: { source: () => undefined } },
+			auth(),
 			provider => {
 				selected = provider;
 			},
@@ -139,5 +152,24 @@ describe("OAuth logout selector", () => {
 		} finally {
 			selector.stopValidation();
 		}
+	});
+
+	test("offers a stored retired provider for logout, not login", () => {
+		const provider = "gemini-cli";
+		const source = auth(provider);
+		const logout = new OAuthSelectorComponent(
+			"logout",
+			source,
+			() => {},
+			() => {},
+		);
+		const login = new OAuthSelectorComponent(
+			"login",
+			source,
+			() => {},
+			() => {},
+		);
+		expect(picker(logout).items.map(item => item.id)).toEqual([provider]);
+		expect(picker(login).items.some(item => item.id === provider)).toBe(false);
 	});
 });

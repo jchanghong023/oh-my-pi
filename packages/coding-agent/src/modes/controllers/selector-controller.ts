@@ -7,14 +7,7 @@ import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
-import {
-	getAgentDbPath,
-	getAgentDir,
-	getProjectDir,
-	logger,
-	normalizePathForComparison,
-	sanitizeText,
-} from "@oh-my-pi/pi-utils";
+import { getAgentDir, getProjectDir, logger, normalizePathForComparison, sanitizeText } from "@oh-my-pi/pi-utils";
 import {
 	ADVISOR_DEFAULT_TOOL_NAMES,
 	discoverAdvisorConfigs,
@@ -57,6 +50,7 @@ import type {
 } from "../../modes/types";
 import type { SessionOAuthAccountList } from "../../session/agent-session-types";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "../../session/auth-storage";
+import { credentialStoreLabel } from "../../session/auth-broker-config";
 import {
 	createForeignSessionStore,
 	foreignSessionInfoToSessionInfo,
@@ -2283,7 +2277,8 @@ export class SelectorController {
 					0,
 				),
 			);
-			block.addChild(new Text(theme.fg("dim", `凭据已保存到 ${getAgentDbPath()}`), 1, 0));
+			const destination = await credentialStoreLabel(getOAuthCredentialProvider(providerId));
+			block.addChild(new Text(theme.fg("dim", `凭据已保存到 ${destination}`), 1, 0));
 			this.ctx.present(block);
 			return true;
 		} catch (error: unknown) {

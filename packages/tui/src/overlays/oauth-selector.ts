@@ -1,5 +1,5 @@
 import type { CredentialsApi, KeysApi } from "@oh-my-pi/pi-ai";
-import { getAllOAuthProviders, getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { getOAuthProviders, getStoredOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
 import {
 	Container,
@@ -28,7 +28,7 @@ const OAUTH_SELECTOR_MAX_VISIBLE = 10;
 
 /** Credential presence and provenance needed by the provider picker. */
 export interface OAuthSelectorAuthSource {
-	readonly credentials: Pick<CredentialsApi, "has">;
+	readonly credentials: Pick<CredentialsApi, "has" | "list">;
 	readonly keys: Pick<KeysApi, "source">;
 }
 
@@ -173,16 +173,10 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 
 	#loadProviders(disabledProviders: readonly string[] = []): void {
-		const providers = this.#mode === "logout" ? getAllOAuthProviders() : getOAuthProviders();
 		if (this.#mode === "logout") {
 			// Logout stays unfiltered by `disabledProviders`: a now-disabled
 			// provider may still hold stored credentials worth removing.
-			this.#menu.setItems(
-				providers.filter(
-					provider =>
-						provider.id === getOAuthCredentialProvider(provider.id) && this.#hasSelectableAuth(provider.id),
-				),
-			);
+			this.#menu.setItems(getStoredOAuthProviders(this.#authStorage.credentials));
 		} else {
 			const disabled = new Set(disabledProviders);
 			// Hide a login entry when either its own id or the provider id it
@@ -190,7 +184,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			// `openai-codex-device` ⇒ `openai-codex`) disappear alongside the
 			// model provider they authenticate.
 			this.#menu.setItems(
-				providers.filter(
+				getOAuthProviders().filter(
 					provider =>
 						!disabled.has(provider.id) &&
 						!(provider.storeCredentialsAs && disabled.has(provider.storeCredentialsAs)),

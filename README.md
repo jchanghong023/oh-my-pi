@@ -231,7 +231,7 @@ _[观看录屏 ↗](https://omp.sh/clips/conflict.mp4)_
 
 ### 19 · 先预览，再接受。
 
-`ast_edit` 会返回一张 _(proposed)_ 卡片，附上替换数量。改动处于暂存状态。agent 往 `xd://resolve` 写入一行理由；TUI 把它变成一张 **Accept** 卡片，随后磁盘操作才发生——原子、全有或全无。
+`ast_edit` 会返回一张 _(proposed)_ 卡片，附上替换数量。改动处于暂存状态。agent 运行 `resolve "<reason>"`；TUI 把它变成一张 **Accept** 卡片，随后才原子写入磁盘——要么全部成功，要么不写入。
 
 ![omp TUI：✓ AST Edit: console.log($X)（proposed）3 replacements · 1 file，随后 ✓ Accept: 3 replacements in 1 file (AST Edit)，最后显示 'Applied 3 replacements in src/auth.ts.'](https://omp.sh/clips/codemod-poster.webp)
 
@@ -248,7 +248,7 @@ Eval 的 `computer` 辅助方法——`computer.window(...)`、`win.screenshot()
 
 ## 无论任务需要什么，_它都已经内置_。
 
-核心工具与 `read`、`bash` 处于同一命名空间。用 `--tools read,edit,bash` 选择内置工具；这不是工具白名单，不会因此禁用已配置的 MCP 工具。`read xd://` 可列出可发现的工具，启用 `tools.xdev` 后可用 `write xd://<tool>` 调用。即使名单里没有 `write`，OMP 也可能提供仅用于调用 `xd://` 设备的 `write`，不授予普通文件写入权限。
+核心工具与 `read`、`bash` 处于同一命名空间。用 `--tools read,edit,bash` 选择内置工具；这不是工具白名单，不会因此禁用已配置的 MCP 工具。启用 `tools.commands` 时，不常用的可发现工具挂载为 Bash 命令：用 Bash 工具运行 `<tool> <args>`，用 `<tool> --help` 查看由 schema 生成的用法，无需在每次模型请求中附带 schema。
 
 **文件与搜索**
 

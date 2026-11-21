@@ -10,16 +10,13 @@ import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme, type ThemeColor } from "@oh-my-pi/pi-tui/theme";
 import { describeShimmer, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
-import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
-import { REPORT_ISSUE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/report-tool-issue";
-import { isResolutionDeviceName } from "@oh-my-pi/pi-tui/tools/resolve";
 import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
-import { isXdHelpContent, parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { getPaddingX, padding, sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { LocalAgentSessionEvent, ModelStage } from "../session/agent-session-events";
 import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
+import { toolOutputSource } from "../session/live-tool-output-text";
 import type { CompactPreviewActivity } from "./compact-tool-output-preview";
 import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-summary";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
@@ -47,7 +44,7 @@ type Call = {
 	waitTarget?: string;
 	command?: string;
 	intent?: string;
-	embeddedIntent?: string;
+	shellCommand?: string;
 	file?: CompactFileSummary;
 	startedAt?: number;
 	endedAt?: number;
@@ -98,67 +95,43 @@ function fields(value: unknown): Record<string, unknown> {
 /** Project the transport and its structured result without exposing payload or output text. */
 function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknown>): void {
 	const outer = fields(args);
-	const dispatch = fields(fields(result?.details).xdev);
-	const outerPath = outer.path ?? outer.file_path;
-	const path = typeof outerPath === "string" ? outerPath : undefined;
-	const device = call.name === "write" && path ? parseXdUrl(unwrapHashlineHeaderPath(path)) : null;
-	const deviceName =
-		device?.name ??
-		(typeof dispatch.tool === "string" ? dispatch.tool : undefined) ??
-		(path === undefined && call.semanticName !== call.name ? call.semanticName : undefined);
-	const help =
-		dispatch.mode === "help" ||
-		(!!deviceName &&
-			typeof outer.content === "string" &&
-			(deviceName === REPORT_ISSUE_DEVICE_NAME || isResolutionDeviceName(deviceName)
-				? outer.content.trim() === "?"
-				: isXdHelpContent(outer.content)));
-	const wrapped = call.name === "write" && !!deviceName && !help;
-	const semanticName = wrapped ? deviceName! : call.name;
+	if (call.name === "bash" && typeof outer.command === "string") call.shellCommand = outer.command;
+	const source = toolOutputSource(
+		call.name,
+		result,
+		call.shellCommand && outer.command === undefined ? { command: call.shellCommand } : outer,
+	);
+	// Ignore sparse updates without dispatch metadata after a mounted command was identified.
+	if (!source.shellDetails?.toolCommands && call.semanticName && call.semanticName !== call.name) return;
+	const { name: semanticName, dispatch } = source;
 	const identityChanged = call.semanticName !== undefined && call.semanticName !== semanticName;
 	if (identityChanged) {
 		call.detail = "";
 		call.command = undefined;
 		call.waitTarget = undefined;
 		call.file = undefined;
-		call.embeddedIntent = undefined;
 	}
 	call.semanticName = semanticName;
-	let effectiveArgs = outer;
-	let effectiveResult = result;
-	if (wrapped) {
-		const decoded =
-			typeof outer.content === "string" && outer.content.length
-				? decodeStreamedToolArgs(outer.content, { rawInput: false })
-				: undefined;
-		// Both sources belong only to this event; retain the resulting display facts, not their payloads.
-		effectiveArgs = { ...fields(decoded), ...fields(dispatch.args) };
-		call.embeddedIntent ??= [effectiveArgs.i, effectiveArgs.intent, effectiveArgs.title].find(
-			(value): value is string => typeof value === "string" && !!value.trim(),
-		);
-		effectiveResult = result ? { ...result, details: dispatch.inner } : undefined;
-	}
-	const target = waitTarget(semanticName, effectiveResult as ToolRenderResult<CoordinationDetails> | undefined);
+	const effectiveArgs = dispatch?.args ?? (dispatch ? {} : outer);
+	const target = waitTarget(
+		semanticName,
+		(dispatch && result ? { ...result, details: source.details } : result) as
+			| ToolRenderResult<CoordinationDetails>
+			| undefined,
+	);
 	if (target) call.waitTarget = target;
 	call.intent = [call.intent, outer.i, outer.intent, outer.title].find(
 		(value): value is string => typeof value === "string" && !!value.trim(),
 	);
-	if (
-		!Object.keys(effectiveArgs).length &&
-		!target &&
-		!identityChanged &&
-		(call.detail || call.command || (!path && !call.intent))
-	)
-		return;
+	if (!Object.keys(effectiveArgs).length && !target && !identityChanged && !dispatch) return;
 	const detail = summarizeCompactTool(
 		semanticName,
-		effectiveArgs,
-		call.intent ?? call.embeddedIntent,
+		dispatch ? effectiveArgs : call.shellCommand ? { ...outer, command: call.shellCommand } : outer,
+		call.intent,
 		semanticName === "wait" ? call.waitTarget : undefined,
 	);
 	if (detail.file || effectiveArgs.path !== undefined || effectiveArgs.file_path !== undefined)
 		call.file = detail.file;
-	if (wrapped && !detail.detail && !detail.command && !call.detail && !call.command && path) detail.detail = path;
 	if (detail.detail || detail.command) {
 		call.detail = detail.detail;
 		if (detail.command) call.command = detail.command;

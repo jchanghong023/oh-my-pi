@@ -9,7 +9,7 @@ import type {
 	ToolActivitySummary,
 	ToolRenderer,
 } from "./renderer";
-import { INTENT_FIELD, type TspSpan } from "@oh-my-pi/pi-wire";
+import { INTENT_FIELD, type TspSpan, toolIntentLabel } from "@oh-my-pi/pi-wire";
 import { code, compact, keyed, md, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
 import { plainText } from "../native/spans";
@@ -353,7 +353,8 @@ function renderAgentProgressEvents(
 
 		const status = agentEventStatus(event.status);
 		const currentTool = eventString(event.currentTool);
-		const lastIntent = eventString(event.lastIntent);
+		const intent = eventString(event.lastIntent);
+		const lastIntent = intent && toolIntentLabel(intent);
 		const preview = status === "running" && !currentTool && !lastIntent ? eventString(event.taskPreview) : undefined;
 		const toolCount = eventNumber(event.toolCount);
 		lines.push(

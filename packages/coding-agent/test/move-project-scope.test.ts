@@ -185,7 +185,7 @@ describe("/move re-scopes project-discovered capabilities", () => {
 			};
 
 			expect(tools()).toEqual(expect.arrayContaining(["alpha_ext_tool", "alpha_custom_tool"]));
-			await until(() => hasMcpProbe("alpha"), "initial alpha MCP tools to publish");
+			await until(() => hasMcpProbe("alpha"), "alpha MCP tools to arrive");
 			expect(taskDescription()).toContain("alpha-agent");
 
 			await move(cwdB, cwdA);

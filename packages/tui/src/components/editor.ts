@@ -874,6 +874,8 @@ export class Editor implements Component, Focusable {
 	#autocompleteProvider?: AutocompleteProvider;
 	#textAssistProvider?: EditorTextAssistProvider;
 	#autocompleteList?: SelectList;
+	/** Rows the completion list took in the last render. */
+	#popupRows = 0;
 	#autocompleteState: "regular" | "force" | "assist" | null = null;
 	#textAssistReplacement:
 		| {
@@ -1909,6 +1911,7 @@ export class Editor implements Component, Focusable {
 		const frameHeight = this.renderHeightProvider?.();
 		const autocompleteList = this.#visibleAutocompleteList();
 		this.#autocompleteHiddenByHeight = false;
+		this.#popupRows = 0;
 		if (autocompleteList) {
 			const viewportRows = this.viewportRowsProvider?.() || process.stdout.rows || Number(Bun.env.LINES) || 24;
 			const cursorRow = result.findIndex(row => row.includes(CURSOR_MARKER));
@@ -1922,7 +1925,9 @@ export class Editor implements Component, Focusable {
 			if (availableRows > 0) {
 				const usualLimit = Math.max(3, viewportRows - result.length - 2);
 				autocompleteList.setMaxVisible(Math.min(this.#autocompleteMaxVisible, usualLimit, availableRows));
-				result.push(...autocompleteList.render(width));
+				const list = autocompleteList.render(width);
+				result.push(...list);
+				this.#popupRows = list.length;
 			}
 		}
 
@@ -4950,7 +4955,12 @@ export class Editor implements Component, Focusable {
 					: this.#state.cursorCol - 1
 				: undefined;
 
-			const idx = isForward ? line.indexOf(char, searchFrom) : line.lastIndexOf(char, searchFrom);
+			// `lastIndexOf` clamps a negative start to 0: at column 0 it would find the cursor's own character.
+			const idx = isForward
+				? line.indexOf(char, searchFrom)
+				: searchFrom !== undefined && searchFrom < 0
+					? -1
+					: line.lastIndexOf(char, searchFrom);
 
 			if (idx !== -1) {
 				this.#state.cursorLine = lineIdx;
@@ -5402,6 +5412,10 @@ export class Editor implements Component, Focusable {
 	 * while its refresh is pending stays open internally but is hidden, so it does
 	 * not claim keys (Escape, Vim mode switches) meant for the editor or app.
 	 */
+	coveringRows(): number {
+		return this.#popupRows;
+	}
+
 	isShowingAutocomplete(): boolean {
 		return !this.#autocompleteHiddenByHeight && this.#visibleAutocompleteList() !== undefined;
 	}

@@ -6,6 +6,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 const cli = path.resolve(import.meta.dir, "../../src/cli.ts");
 const beacon = "OPENWIKI_SESSION_BEACON";
 const evidence = "The service requires exactly seven verification cycles.";
+const sectionTail = `${" untruncated".repeat(350)} SECTION_END_MARKER`;
 type Message = { role: string; content?: unknown; tool_call_id?: string };
 type Request = { model: string; stream?: boolean; messages: Message[]; tools?: Array<{ function?: { name: string } }> };
 type Reply = { id: string; name: string; args: object } | { text: string };
@@ -63,7 +64,7 @@ async function snapshot(directory: string): Promise<Record<string, string>> {
 	return files;
 }
 
-async function scenario(xdev: boolean, ordinary = false) {
+async function scenario(commands: boolean, ordinary = false) {
 	using dir = TempDir.createSync("@omp-openwiki-ai-query-");
 	const home = dir.join("home");
 	const configRoot = dir.join("config");
@@ -111,7 +112,7 @@ async function scenario(xdev: boolean, ordinary = false) {
 	await mkdir(path.join(other, "openwiki", "architecture"), { recursive: true });
 	await writeFile(
 		path.join(other, "openwiki", "architecture", "service.md"),
-		`---\ntype: guide\ntitle: Service\ndescription: Service operation guide\nsources:\n  - id: source\n    resource: repo://src/service.ts\n---\n\n# Service\n\n## Operation\n\n${beacon} identifies this procedure. ${evidence}\n`,
+		`---\ntype: guide\ntitle: Service\ndescription: Service operation guide\nsources:\n  - id: source\n    resource: repo://src/service.ts\n---\n\n# Service\n\n## Operation\n\n${beacon} identifies this procedure. ${evidence}${sectionTail}\n`,
 	);
 	const registry = path.join(registryDir, "wiki-workspaces.json");
 	await writeFile(
@@ -152,15 +153,15 @@ async function scenario(xdev: boolean, ordinary = false) {
 			try {
 				if (ordinary) {
 					reply = { text: "ORDINARY_RESULT_4" };
-				} else if (xdev && results.discover === undefined) {
-					reply = { id: "discover", name: "read", args: { path: "xd://" } };
+				} else if (commands && results.discover === undefined) {
+					reply = { id: "discover", name: "bash", args: { command: "openwiki_search --help" } };
 				} else if (results.search === undefined) {
 					const args = { query: beacon };
-					reply = xdev
+					reply = commands
 						? {
 								id: "search",
-								name: "write",
-								args: { path: "xd://openwiki_search", content: JSON.stringify(args) },
+								name: "bash",
+								args: { command: `openwiki_search --json '${JSON.stringify(args)}'` },
 							}
 						: { id: "search", name: "openwiki_search", args };
 				} else if (results.read === undefined) {
@@ -172,11 +173,11 @@ async function scenario(xdev: boolean, ordinary = false) {
 					const ref = hit.ref.find(item => item.includes("#"))!;
 					const separator = ref.indexOf("#");
 					readArgs = { wiki: hit.wiki!, page: ref.slice(0, separator), sections: [ref.slice(separator + 1)] };
-					reply = xdev
+					reply = commands
 						? {
 								id: "read",
-								name: "write",
-								args: { path: "xd://openwiki_read", content: JSON.stringify(readArgs) },
+								name: "bash",
+								args: { command: `openwiki_read --json '${JSON.stringify(readArgs)}'` },
 							}
 						: { id: "read", name: "openwiki_read", args: readArgs };
 				} else {
@@ -216,7 +217,7 @@ async function scenario(xdev: boolean, ordinary = false) {
 		);
 		await writeFile(
 			path.join(agent, "config.yml"),
-			`modelRoles:\n  default: deepseek/fixture-model\n  smol: deepseek/fixture-model\nstartup:\n  setupWizard: false\ntools:\n  xdev: ${xdev}\n`,
+			`modelRoles:\n  default: deepseek/fixture-model\n  smol: deepseek/fixture-model\nstartup:\n  setupWizard: false\ntools:\n  commands: ${commands}\n`,
 		);
 		const child = Bun.spawn(
 			[
@@ -228,7 +229,7 @@ async function scenario(xdev: boolean, ordinary = false) {
 				"--no-session",
 				"--model",
 				"deepseek/fixture-model",
-				...(xdev ? [] : ["--tools", "read,write"]),
+				...(commands ? [] : ["--tools", "read,write"]),
 				ordinary
 					? "Compute two plus two without looking up repository information."
 					: `Find ${beacon} in the linked workspace and read the matching section.`,
@@ -270,10 +271,12 @@ async function scenario(xdev: boolean, ordinary = false) {
 			expect(await Promise.all([snapshot(repo), snapshot(other), snapshot(registryDir)])).toEqual(before);
 			return;
 		}
-		expect(requests.length, output).toBeGreaterThanOrEqual(xdev ? 4 : 3);
+		expect(requests.length, output).toBeGreaterThanOrEqual(commands ? 4 : 3);
 		const offered = requests.flatMap(request =>
 			(request.tools ?? []).map(tool => tool.function?.name).filter(Boolean),
 		);
+		const firstBashRequest = requests.find(request => request.tools?.some(tool => tool.function?.name === "bash"));
+		const initialPrompt = firstBashRequest ? JSON.stringify(firstBashRequest.messages) : "";
 		for (const name of [
 			"openwiki_begin",
 			"openwiki_submit_plan",
@@ -283,16 +286,19 @@ async function scenario(xdev: boolean, ordinary = false) {
 			"openwiki_finish",
 		]) {
 			expect(offered).not.toContain(name);
-			if (xdev) expect(results.discover).not.toContain(`xd://${name}`);
+			if (commands) expect(initialPrompt).not.toContain(name);
 		}
-		if (xdev) {
-			expect(offered).toContain("read");
-			expect(offered).toContain("write");
+		const queryNames = ["openwiki_search", "openwiki_read", "openwiki_list_workspaces", "openwiki_list_wikis"];
+		if (commands) {
+			expect(offered).toContain("bash");
 			expect(results.discover).toContain("openwiki_search");
-			expect(results.discover).toContain("openwiki_read");
+			expect(results.discover).toContain("--query");
+			for (const name of queryNames) {
+				expect(offered).not.toContain(name);
+				expect(initialPrompt).toContain(name);
+			}
 		} else {
-			expect(offered).toContain("openwiki_search");
-			expect(offered).toContain("openwiki_read");
+			expect(offered).toEqual(expect.arrayContaining(queryNames));
 		}
 		expect(readArgs?.wiki).toBe("service");
 		expect(readArgs?.page).toBe("openwiki/architecture/service.md");
@@ -305,6 +311,7 @@ async function scenario(xdev: boolean, ordinary = false) {
 			}),
 		);
 		const read = JSON.parse(results.read) as { sections: Array<{ content: string }> };
+		expect(read.sections[0].content).toContain(sectionTail);
 		expect(read.sections[0].content).toContain(`${beacon} identifies this procedure. ${evidence}`);
 		expect(stdout).toContain(evidence);
 		expect(await Promise.all([snapshot(repo), snapshot(other), snapshot(registryDir)])).toEqual(before);
@@ -319,7 +326,7 @@ describe("OMP CLI OpenWiki query with a scripted local model", () => {
 		async () => scenario(false),
 		120_000,
 	);
-	it("discovers and dispatches the same queries through xdev", async () => scenario(true), 120_000);
+	it("discovers and dispatches the same queries through Bash tool commands", async () => scenario(true), 120_000);
 	it(
 		"does not preload or enumerate wiki content for an unrelated ordinary conversation",
 		async () => scenario(true, true),

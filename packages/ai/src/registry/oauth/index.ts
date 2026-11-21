@@ -3,7 +3,7 @@
 // ============================================================================
 
 import { authPolicyFor, providerDisabledReason, providerLoginWarning } from "@oh-my-pi/pi-catalog/compat/auth";
-import type { OAuthRefreshReason } from "../../auth/types";
+import type { CredentialsApi, OAuthRefreshReason } from "../../auth/types";
 import * as AIError from "../../error";
 import { jwtExpiryMs, NEVER_EXPIRES } from "../engine/common";
 import { getProviderDefinition, PROVIDER_REGISTRY } from "../registry";
@@ -129,7 +129,7 @@ export function unregisterOAuthProviders(sourceId: string): void {
  * Refresh a built-in OAuth grant, cancelling provider work when refresh ownership ends.
  */
 export async function refreshOAuthToken(
-	provider: OAuthProvider,
+	provider: OAuthProviderId,
 	credentials: OAuthCredentials,
 	signal?: AbortSignal,
 	reason?: OAuthRefreshReason,
@@ -152,6 +152,28 @@ export async function refreshOAuthToken(
 	// Providers without a real refresher (static bearer tokens / API keys that
 	// don't expire) return the credentials unchanged.
 	return def.refreshToken ? def.refreshToken(credentials, signal, reason) : credentials;
+}
+
+/**
+ * Refresh `credentials` through the login that owns `provider`: an extension's registered
+ * OAuth provider, else the built-in one ({@link refreshOAuthToken}). This is the local token
+ * exchange AuthStorage runs when no store or caller refresh hook owns the credential.
+ */
+export async function refreshProviderOAuthToken(
+	provider: OAuthProviderId,
+	credentials: OAuthCredentials,
+	signal?: AbortSignal,
+	reason?: OAuthRefreshReason,
+): Promise<OAuthCredentials> {
+	const custom = customOAuthProviders.get(provider);
+	if (!custom) return refreshOAuthToken(provider, credentials, signal, reason);
+	if (!custom.refreshToken) {
+		throw new AIError.OAuthError(`OAuth provider "${provider}" does not support token refresh`, {
+			kind: "configuration",
+			provider,
+		});
+	}
+	return custom.refreshToken(credentials, signal, reason);
 }
 const JWT_EXPIRY_SKEW_MS = 5 * 60_000;
 export function normalizeOAuthCredentialExpiry<T extends OAuthCredentials>(provider: string, credentials: T): T {
@@ -224,10 +246,7 @@ export async function getOAuthApiKey(
 	return { newCredentials: creds, apiKey };
 }
 
-/**
- * Get all OAuth providers, including ones no longer offered for login. This
- * list is used for managing credentials that were stored by earlier versions.
- */
+/** Registered OAuth providers, including providers paused by their auth rules. */
 export function getAllOAuthProviders(): OAuthProviderInfo[] {
 	const customProviders = Array.from(customOAuthProviders.values(), provider => ({
 		id: provider.id,
@@ -238,6 +257,18 @@ export function getAllOAuthProviders(): OAuthProviderInfo[] {
 	// Credential management includes paused targets; only login choices filter them.
 	const builtIns = builtInOAuthProviders.filter(provider => !customOAuthProviders.has(provider.id));
 	return [...builtIns, ...customProviders];
+}
+
+/** Credential management follows stored provider ids, even after a login is removed. */
+export function getStoredOAuthProviders(credentials: Pick<CredentialsApi, "list">): OAuthProviderInfo[] {
+	const known = new Map(getAllOAuthProviders().map(provider => [provider.id, provider]));
+	const stored = new Map<string, OAuthProviderInfo>();
+	for (const { provider } of credentials.list()) {
+		if (stored.has(provider) || provider !== getOAuthCredentialProvider(provider)) continue;
+		const entry = known.get(provider);
+		stored.set(provider, entry?.available ? entry : { id: provider, name: entry?.name ?? provider, available: true });
+	}
+	return [...stored.values()];
 }
 
 /**

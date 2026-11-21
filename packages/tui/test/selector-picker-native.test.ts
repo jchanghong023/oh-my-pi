@@ -219,7 +219,7 @@ describe("oauth selector picker", () => {
 	const providers = getOAuthProviders();
 	const signedIn = providers[0]!.id;
 	const auth: OAuthSelectorAuthSource = {
-		credentials: { has: (id: string) => id === signedIn },
+		credentials: { has: (id: string) => id === signedIn, list: () => [] },
 		keys: { source: (id: string) => (id === signedIn ? { kind: "oauth" } : undefined) } as never,
 	};
 

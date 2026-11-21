@@ -19,9 +19,11 @@
 - Embedding requests can retry when a transient HTTP error returns headers but its body stalls.
 - OpenRouter embeddings prefer the stored OpenRouter credential over environment fallbacks and do not use an unrelated OpenAI key.
 
+## [19.1.0] - 2026-11-21
+
 ### Fixed
 
-- Fixed a failing embedding provider (`embeddings.provider` or `setEmbeddingProvider`) leaving no trace: when its `embed()` or `available()` throws, the failure is now logged with the error, at debug level or at warn with runtime debug on, like local model failures; embedding still falls back to `null` as before
+- Improved diagnostics when a configured embedding provider fails, making provider errors visible in logs while preserving the existing fallback behavior.
 
 ## [18.22.1] - 2026-11-17
 

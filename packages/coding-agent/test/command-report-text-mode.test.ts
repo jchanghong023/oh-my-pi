@@ -41,7 +41,7 @@ describe("text-mode command reports on a real terminal core", () => {
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "tui.completeScrollback": false }),
+			settings: Settings.isolated(),
 			modelRegistry,
 		});
 		term = new VirtualTerminal(120, ROWS);

@@ -105,7 +105,8 @@ describe("fork runtime defaults", () => {
 				const plan = await resolveBuiltinToolPlan(owner, ["eval", "debug", "lsp"]);
 				expect(plan.names).toEqual(["eval"]);
 				const tools = await createTools(owner, ["eval"]);
-				expect(tools.map(tool => tool.name)).toEqual(["eval"]);
+				expect(tools.some(tool => tool.name === "eval")).toBe(true);
+				expect(tools.some(tool => tool.name === "debug" || tool.name === "lsp")).toBe(false);
 			}
 			expect(probe).not.toHaveBeenCalled();
 			expect(start).not.toHaveBeenCalled();

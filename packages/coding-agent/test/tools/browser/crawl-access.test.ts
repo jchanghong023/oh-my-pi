@@ -15,7 +15,10 @@ let directory: TempDir;
 let auth: AuthStorage;
 let created: CreateAgentSessionResult | undefined;
 
-async function createSession(settings: Record<string, unknown> = {}): Promise<CreateAgentSessionResult> {
+async function createSession(
+	settings: Record<string, unknown> = {},
+	toolNames = ["write", "eval"],
+): Promise<CreateAgentSessionResult> {
 	created = await createAgentSession({
 		cwd: directory.path(),
 		agentDir: directory.path(),
@@ -31,7 +34,7 @@ async function createSession(settings: Record<string, unknown> = {}): Promise<Cr
 		contextFiles: [],
 		promptTemplates: [],
 		slashCommands: [],
-		toolNames: ["write", "eval"],
+		toolNames,
 		restrictToolNames: false,
 		enableMCP: false,
 		enableLsp: false,
@@ -89,6 +92,14 @@ describe("crawl session access", () => {
 		);
 		expect(await Bun.file(directory.join("denied/nested/page.md")).exists()).toBe(false);
 		await expect(fs.stat(directory.join("denied"))).rejects.toThrow();
+	});
+
+	it("does not create files when the session has no active write grant", async () => {
+		const { session } = await createSession({ "tools.approvalMode": "yolo" }, ["eval"]);
+		await expect(writeCrawlMarkdown(session, "not-granted", "page.md", "text")).rejects.toThrow(
+			"does not permit filesystem writes",
+		);
+		await expect(fs.stat(directory.join("not-granted"))).rejects.toThrow();
 	});
 
 	it("honors an interactive browser denial before dispatch", async () => {

@@ -300,7 +300,7 @@ describe("MCP fallback and prompt formatting", () => {
 		expect(formatApprovalPrompt(subject, {}, undefined)).toBe("Allow tool: mcp__server__safe");
 	});
 
-	it("shows decoded manifests through MCP registrations, MCP fallback, and device writes", () => {
+	it("shows decoded manifests through MCP registrations and MCP fallback", () => {
 		const args = {
 			context: "some-context",
 			resource: "apiVersion: v1\nkind: Pod\nmetadata:\n  name: probe\n  namespace: probe-ns",
@@ -309,7 +309,6 @@ describe("MCP fallback and prompt formatting", () => {
 		// tool-bridge 在途改动读取 connection.config.alwaysLoad,夹具需补 config。
 		const connection = { name: "kubernetes", config: {} } as MCPServerConnection;
 		const eager = new MCPTool(connection, definition);
-		const writeTool = new WriteTool({ cwd: "." } as ToolSession);
 		const expected = [
 			"Arguments:",
 			"{",
@@ -326,7 +325,6 @@ describe("MCP fallback and prompt formatting", () => {
 		const cases: { subject: ApprovalTool; args: unknown }[] = [
 			{ subject: eager, args },
 			{ subject: tool(eager.name), args },
-			{ subject: writeTool, args: { path: `xd://${eager.name}`, content: JSON.stringify(args) } },
 		];
 		for (const entry of cases) {
 			expect(formatApprovalPrompt(entry.subject, entry.args)).toContain(expected);
@@ -365,14 +363,6 @@ describe("MCP fallback and prompt formatting", () => {
 		).toContain("Custom details");
 	});
 
-	it("shows empty and null JSON device payloads while omitting absent direct MCP arguments", () => {
-		const writeTool = new WriteTool({ cwd: "." } as ToolSession);
-		for (const content of ["{}", "[]", "null"]) {
-			expect(formatApprovalPrompt(writeTool, { path: "XD://run", content })).toContain(`Arguments:\n${content}`);
-		}
-		expect(formatApprovalPrompt(tool("mcp__server__run"), undefined)).not.toContain("Arguments:");
-	});
-
 	it("regular file write keeps Path and Content lines unchanged", () => {
 		const session = { cwd: "." } as ToolSession;
 		const writeTool = new WriteTool(session);
@@ -383,17 +373,7 @@ describe("MCP fallback and prompt formatting", () => {
 		expect(details).toEqual(["Path: src/main.ts", 'Content:\n{"script":"first\\nsecond"}']);
 	});
 
-	it("falls back to raw Content for xd:// write with non-JSON content", () => {
-		const session = { cwd: "." } as ToolSession;
-		const writeTool = new WriteTool(session);
-		const details = writeTool.formatApprovalDetails({
-			path: "xd://some_device",
-			content: "not-json-content",
-		});
-		expect(details).toEqual(["Path: xd://some_device", "Content:\nnot-json-content"]);
-	});
-
-	it("caps large device argument payloads at prompt truncation limit", () => {
+	it("caps large argument payloads at prompt truncation limit", () => {
 		const longScript = "echo test\n".repeat(300);
 		const subject = tool("mcp__server__eval");
 		const prompt = formatApprovalPrompt(subject, { script: longScript });
@@ -455,52 +435,6 @@ describe("MCP fallback and prompt formatting", () => {
 		const input = sloppySection("src/config.go", "[local://notes]", "updated");
 		expect(editTool.approval?.({ input })).toBe("write");
 		expect(formatApprovalPrompt(editTool, { input })).toBe("Allow tool: edit\nFile: src/config.go");
-	});
-});
-
-describe("decision policyKey scopes user policy to a sub-tool", () => {
-	// The write tool reports this decision for an exec-tier `xd://debug` dispatch:
-	// the tier comes from the mounted tool, and the policyKey makes the user
-	// override key on the device instead of the invoking `write` tool (#7923).
-	const dispatch = tool("write", { tier: "exec", policyKey: "debug" });
-
-	it("consults tools.approval.<policyKey> for the user override", () => {
-		expect(resolveApproval(dispatch, {}, "always-ask", { debug: "allow" })).toMatchObject({
-			policy: "allow",
-			source: "user",
-			policyKey: "debug",
-		});
-		expect(resolveApproval(dispatch, {}, "always-ask", { debug: "prompt" }).policy).toBe("prompt");
-		expect(resolveApproval(dispatch, {}, "always-ask", { debug: "deny" }).policy).toBe("deny");
-	});
-
-	it("falls back to the invoking tool's own policy when the keyed one is unset", () => {
-		expect(resolveApproval(dispatch, {}, "always-ask", { write: "allow" }).policy).toBe("allow");
-		expect(resolveApproval(dispatch, {}, "always-ask", { write: "prompt" }).policy).toBe("prompt");
-		expect(resolveApproval(dispatch, {}, "always-ask", { write: "deny" }).policy).toBe("deny");
-	});
-
-	it("device policy wins over the invoking tool's policy", () => {
-		expect(resolveApproval(dispatch, {}, "always-ask", { write: "prompt", debug: "allow" }).policy).toBe("allow");
-		expect(resolveApproval(dispatch, {}, "always-ask", { write: "allow", debug: "deny" }).policy).toBe("deny");
-	});
-
-	it("names the policy key in user-deny refusals", () => {
-		expect(() => requiresApproval(dispatch, {}, "always-ask", { debug: "deny" })).toThrow(
-			'Tool "debug" is blocked by user policy',
-		);
-		expect(() => requiresApproval(dispatch, {}, "always-ask", { debug: "deny" })).toThrow(
-			'remove "tools.approval.debug: deny"',
-		);
-		expect(() => requiresApproval(dispatch, {}, "always-ask", { write: "deny" })).toThrow(
-			'remove "tools.approval.write: deny"',
-		);
-	});
-
-	it("does not change resolution for tools without a policyKey", () => {
-		const plain = tool("write", "exec");
-		expect(resolveApproval(plain, {}, "always-ask", { write: "allow" }).policy).toBe("allow");
-		expect(resolveApproval(plain, {}, "always-ask", { debug: "allow" }).policy).toBe("prompt");
 	});
 });
 

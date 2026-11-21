@@ -239,7 +239,7 @@ omp openwiki code --update --modelId provider/page-model --planner-model provide
 
 可选的 `--telemetry-file reports/run.json` 仅写入本地禁用状态，不发送 OpenWiki 遥测；无法写入时会提示警告，生成仍继续。
 
-**让 AI 查已有 Wiki：** 在相同数据根、profile 和仓库上下文启动 OMP，在输入框例如输入“查询当前仓库 OpenWiki，说明配置加载流程并引用相关章节”。AI 可按需使用 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces` 和 `openwiki_list_wikis`；它们是只读 AI 工具，不是终端的 `search`／`read` 子命令，不会生成或更新 Wiki。工具检索本身不调用模型，但 AI 对话仍需要可用模型；普通任务不会预加载 Wiki。工具遵循 `tools.xdev` 的挂载规则，受限子代理不会因此自动获得权限。
+**让 AI 查已有 Wiki：** 在相同数据根、profile 和仓库上下文启动 OMP，在输入框例如输入“查询当前仓库 OpenWiki，说明配置加载流程并引用相关章节”。AI 可按需使用 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces` 和 `openwiki_list_wikis`；它们是只读 AI 工具，不是终端的 `search`／`read` 子命令，不会生成或更新 Wiki。工具检索本身不调用模型，但 AI 对话仍需要可用模型；普通任务不会预加载 Wiki。`tools.commands` 启用且 Bash 工具可用时，通过 Bash 工具按需调用；否则作为顶层工具提供。挂载方式不向受限子代理额外授予权限。
 
 **关联多个已有仓库 Wiki：** 在交互终端执行 `omp openwiki link [directory]`，按界面创建或管理命名工作区并选择仓库。然后可在当前仓库用以下命令选择、查看或清除活动工作区；将示例名称换成已有工作区名称或 ID：
 

@@ -44,7 +44,7 @@ describe("bashToolRenderer", () => {
 				const rendered = sanitizeText(
 					bashToolRenderer.renderResult(result, options, uiTheme, args).render(120).join("\n"),
 				);
-				expect(rendered).toContain("Full output: local://195.log");
+				expect(rendered).toContain(`${uiTheme.icon.output} ${spillUrl(195)}`);
 				expect(rendered).toContain("diagnostic");
 				const native = JSON.stringify(bashToolRenderer.describeResult(result, options, args));
 				expect(native).toContain("Full output: local://195.log");
@@ -141,8 +141,8 @@ describe("bashToolRenderer", () => {
 			{ command: "python3 scripts/edit-benchmark.py", timeout: 1200 },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		expect(rendered).toContain("Timeout: 120s");
-		expect(rendered).not.toContain("Timeout: 1200s");
+		expect(rendered).toContain(`${uiTheme.status.pending} 2m`);
+		expect(rendered).not.toContain(`${uiTheme.status.pending} 20m`);
 	});
 
 	it("renders wall time alongside the timeout label and strips the textual notice", async () => {
@@ -157,8 +157,7 @@ describe("bashToolRenderer", () => {
 			{ command: "echo hi" },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		expect(rendered).toContain("Wall: 1.23s");
-		expect(rendered).toContain("Timeout: 5s");
+		expect(rendered).toContain(`${uiTheme.icon.time} 1.2s/5.0s`);
 		// Notice text must not appear in the output region — the styled label is the
 		// only place wall time is shown so users don't read it twice.
 		expect(rendered).not.toContain("Wall time: 1.23 seconds");
@@ -175,7 +174,7 @@ describe("bashToolRenderer", () => {
 			const component = bashToolRenderer.renderResult(result, options, uiTheme, args);
 			const rendered = sanitizeText(component.render(120).join("\n"));
 			expect(rendered.match(/Wall time: 0\.02 seconds/gu)).toHaveLength(1);
-			expect(rendered).toContain("Wall: 0.02s");
+			expect(rendered).toContain(`${uiTheme.icon.time} 20ms`);
 			const view = bashToolRenderer.describeResult(result, options, args);
 			const output = (view.body ?? [])
 				.flatMap(node => ("k" in node ? (node.c ?? []) : []))
@@ -196,12 +195,12 @@ describe("bashToolRenderer", () => {
 			{ command: "bun run dev", name: "web", ready: { log: "READY" } },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		expect(rendered).toContain("Service: web");
-		expect(rendered).toContain("State: ready");
-		expect(rendered).toContain("Ready: yes");
-		expect(rendered).toContain("PID: 42");
+		expect(rendered).toContain(`${uiTheme.icon.server} web`);
+		expect(rendered).toContain(`${uiTheme.status.success} ready`);
+		expect(rendered).toContain(`${uiTheme.status.success} ready`);
+		expect(rendered).toContain(`${uiTheme.icon.pid}42`);
 		expect(rendered).toContain("listening");
-		expect(rendered).not.toContain("Timeout:");
+		expect(rendered).not.toContain(uiTheme.status.pending);
 	});
 
 	it("renders a backgrounded job as a static footer notice, with or without a stated deadline", async () => {
@@ -229,7 +228,7 @@ describe("bashToolRenderer", () => {
 			);
 			const rendered = sanitizeText(component.render(120).join("\n"));
 			expect(rendered, label).toContain("started");
-			expect(rendered, label).toContain("Backgrounded: bash-42");
+			expect(rendered, label).toContain(`${uiTheme.icon.job} bash-42`);
 			// Shared by every notice form, so a row whose notice is not stripped fails here.
 			expect(rendered, label).not.toContain("injected into the conversation");
 			expect(rendered, label).not.toContain("Do NOT poll");
@@ -250,8 +249,7 @@ describe("bashToolRenderer", () => {
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
 		expect(rendered).toContain("filtered");
-		expect(rendered).toContain("Wall: 0.08s");
-		expect(rendered).toContain("Timeout: 300s");
+		expect(rendered).toContain(`${uiTheme.icon.time} 80ms/5m`);
 		// The footer notice leaves the body; its URL shows once, in the status line.
 		expect(rendered).not.toContain("[raw output:");
 		expect(rendered.split(spillUrl(13))).toHaveLength(2);
@@ -268,11 +266,9 @@ describe("bashToolRenderer", () => {
 			{ command: "false" },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		// Command statistics include the exit code.
-		expect(rendered).toContain("Wall: 0.02s");
-		expect(rendered).toContain("Timeout: 300s");
-		expect(rendered).toContain("Exit: 23");
-		// The generated notices are not echoed in the output region.
+		// Both notices are folded into the footer rather than echoed in the command's output.
+		expect(rendered).toContain(`${uiTheme.icon.time} 20ms/5m`);
+		expect(rendered).toContain(`${uiTheme.status.error} 23`);
 		expect(rendered).not.toContain("Command exited with code 23");
 		expect(rendered).not.toContain("Wall time: 0.02 seconds");
 		// The command's own output still shows.
@@ -310,9 +306,8 @@ describe("bashToolRenderer", () => {
 			{ command: "true" },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		expect(rendered).toContain("Wall: 0.02s");
-		expect(rendered).toContain("Timeout: 300s");
-		expect(rendered).not.toContain("Exit:");
+		expect(rendered).toContain(`${uiTheme.icon.time} 20ms/5m`);
+		expect(rendered).not.toContain(uiTheme.status.error);
 	});
 
 	it("bypasses truncation/styling for SIXEL lines", async () => {
@@ -513,8 +508,8 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain("\x07");
 		const footer = Bun.stripANSI(rendered)
 			.split("\n")
-			.find(line => line.includes("Minimized:"));
-		expect(footer).toContain(`Minimized: ${label} 1.9KB → 27B`);
+			.find(line => line.includes(uiTheme.icon.minimize));
+		expect(footer).toContain(`${uiTheme.icon.minimize} ${label} 1.9KB → 27B`);
 		expect(footer).not.toContain("\t");
 		const view = JSON.stringify(bashToolRenderer.describeResult(result, options, args));
 		expect(view).toContain(`Minimized ${label} 1.9KB → 27B`);
@@ -537,7 +532,7 @@ describe("bashToolRenderer", () => {
 				.renderResult(result, options, uiTheme, { command: "lint" })
 				.render(200)
 				.join("\n");
-			expect(Bun.stripANSI(rendered)).toContain("Minimized: ~/bin/lint 1.9KB → 27B");
+			expect(Bun.stripANSI(rendered)).toContain(`${uiTheme.icon.minimize} ~/bin/lint 1.9KB → 27B`);
 			expect(rendered).not.toContain("/home/alice");
 		} finally {
 			home.mockRestore();

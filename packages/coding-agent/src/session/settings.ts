@@ -383,7 +383,7 @@ export const cfgModelToolCallLoopGuardExemptTools = register({
 		group: "思考",
 		label: "工具调用循环豁免工具",
 		description:
-			"允许连续重复调用而不触发跨轮次循环防护的工具名称或 write 分发的 xd:// 设备名称（例如 mcp__peers_wait）",
+			"允许连续重复调用而不触发跨轮次循环防护的工具名称，包括通过 bash 运行的工具命令（例如 mcp__peers_wait）。",
 	},
 });
 
@@ -812,7 +812,7 @@ export const cfgRetryMaxDelayMs = register({
 		group: "重试与回退",
 		label: "最大重试延迟",
 		description:
-			"重试之间的最长等待时间，单位为毫秒。当 Provider 要求等待更久，且凭据或模型回退均未成功时，请求会立即失败而非休眠（例如 Anthropic 的 3 小时限流窗口）。0 表示取消上限，让会话在 Provider 指定的配额重置后自动恢复。",
+			"重试之间的最长等待时间（毫秒）。若重试需等待更久且凭据或模型回退均失败，请求将立即失败（例如 Anthropic 的 3 小时限流窗口）。0 表示取消上限。",
 	},
 });
 
@@ -825,7 +825,7 @@ export const cfgRetryWaitForUsageReset = register({
 		group: "重试与回退",
 		label: "等待用量重置",
 		get description() {
-			return `当 Provider 报告用量耗尽并给出重置时间时（任意 Provider 的 5 小时或每周配额窗口），等待至重置，而不是在超过 retry.maxDelayMs 后立即失败。可中止等待（${formatKeyHint("escape")}），但等待也会阻塞 Subagent，因此无人值守运行时应关闭。`;
+			return `用量重置等待在 retry.maxDelayMs 内默认允许。启用后，Provider 给出重置时间时可等待超过上限（如 5 小时或每周配额）。可中止等待（${formatKeyHint("escape")}），但会阻塞子代理，无人值守运行时应关闭。`;
 		},
 	},
 });

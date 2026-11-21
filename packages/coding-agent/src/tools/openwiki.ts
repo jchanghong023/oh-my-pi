@@ -99,7 +99,10 @@ async function runQuery(session: ToolSession, query: Query, signal?: AbortSignal
 		}
 	}
 	signal?.throwIfAborted();
-	return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: {} };
+	return {
+		content: [{ type: "text" as const, text: JSON.stringify(result) }],
+		details: { meta: { completePage: true } },
+	};
 }
 
 async function executeQuery(session: ToolSession, query: Query, signal?: AbortSignal) {

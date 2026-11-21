@@ -73,7 +73,7 @@ export async function writeCrawlMarkdownWithSession(
 		signal?.throwIfAborted();
 		const target = path.join(outputDirectory, suffix === 0 ? basename : `${name}-${suffix}${ext}`);
 		const args = { path: target, content };
-		if (session.deviceOnlyWrite && !(await targetsLocalSandbox(session, target, signal))) {
+		if (session.isToolActive?.("write") === false && !(await targetsLocalSandbox(session, target, signal))) {
 			throw new Error("The current session does not permit filesystem writes.");
 		}
 		await enforcePlanModeWrite(session, target, { op: "create", signal });

@@ -34,6 +34,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { getPuppeteerDir } from "@oh-my-pi/pi-utils";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import puppeteer, { type Browser, type Page, type Protocol } from "puppeteer-core";
+import { relayNativePortFixture } from "./browser-relay-native-port-fixture";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
@@ -197,7 +198,7 @@ async function launchRelayFixture(
 		const deadline = Date.now() + 10_000;
 		for (;;) {
 			try {
-				await page.goto(`chrome-extension://${extensionId}/options.html`);
+				await page.goto(`chrome-extension://${extensionId}/test-fixture.html`);
 				break;
 			} catch (error) {
 				if (!String(error).includes("ERR_BLOCKED_BY_CLIENT") || Date.now() > deadline) throw error;
@@ -220,14 +221,13 @@ async function launchRelayFixture(
 	}
 	try {
 		await writeRelayExtension(extensionDir, VERSION);
+		await Bun.write(path.join(extensionDir, "test-fixture.html"), "<title>Relay fixture</title>");
 		const backgroundPath = path.join(extensionDir, "background.js");
 		const background = await Bun.file(backgroundPath).text();
-		// Have the first worker read wait for settings without deferring listener registration.
+		// Replace only the native port; keep real Chrome debugger, tab, and worker behavior.
 		await Bun.write(
 			backgroundPath,
-			`const testPortReady = chrome.storage.local.set({ port: ${port} });
-const testReadStorage = chrome.storage.local.get.bind(chrome.storage.local);
-chrome.storage.local.get = (...args) => testPortReady.then(() => testReadStorage(...args));
+			`${relayNativePortFixture(port)}
 const testRegisterDetach = chrome.debugger.onDetach.addListener.bind(chrome.debugger.onDetach);
 chrome.debugger.onDetach.addListener = listener => {
 	globalThis.testDebuggerDetach = listener;

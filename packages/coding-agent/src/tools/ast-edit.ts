@@ -31,7 +31,7 @@ import { formatGroupedFiles } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
 import {
 	parseSearchPath,
 	relativeSearchResultPath,
-	resolveSearchResultPath,
+	resolveTargetResultPath,
 	resolveToolSearchScope,
 } from "./path-utils";
 import { searchApprovalCacheTargets } from "./search-approval-targets";
@@ -78,10 +78,6 @@ interface AstEditAggregatedResult {
 	limitReached: boolean;
 	parseErrors?: string[];
 	missingGrammars?: string[];
-}
-
-function resolveAstEditResultPath(basePath: string, isDirectory: boolean, resultPath: string): string {
-	return isDirectory ? resolveSearchResultPath(basePath, resultPath) : basePath;
 }
 
 async function runNativeAstEdit(
@@ -183,11 +179,11 @@ async function runAstEditTargets(
 		if (targetResult.parseErrors) parseErrors.push(...targetResult.parseErrors);
 		for (const language of targetResult.missingGrammars ?? []) missingGrammars.add(language);
 		for (const change of targetResult.changes) {
-			const absolute = resolveAstEditResultPath(target.basePath, target.isDirectory, change.path);
+			const absolute = resolveTargetResultPath(target, change.path);
 			aggregatedChanges.push({ ...change, path: relativeSearchResultPath(commonBasePath, absolute) });
 		}
 		for (const fileChange of targetResult.fileChanges) {
-			const absolute = resolveAstEditResultPath(target.basePath, target.isDirectory, fileChange.path);
+			const absolute = resolveTargetResultPath(target, fileChange.path);
 			const rebased = relativeSearchResultPath(commonBasePath, absolute);
 			fileCounts.set(rebased, (fileCounts.get(rebased) ?? 0) + fileChange.count);
 		}

@@ -9,8 +9,9 @@ import {
 	OpenWikiReadTool,
 	OpenWikiSearchTool,
 } from "@oh-my-pi/pi-coding-agent/tools/openwiki";
-import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
-import { resolveXdevTool, type XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
+import { createToolCommandHandler } from "@oh-my-pi/pi-coding-agent/exec/tool-command-host";
+import type { ToolCommandDispatch } from "@oh-my-pi/pi-coding-agent/tools/tool-commands";
+import { requiresApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { saveWikiWorkspaces } from "#openwiki-vendor";
 
@@ -290,54 +291,78 @@ describe("OMP OpenWiki read-only tools", () => {
 		).rejects.toThrow(/invalid_state:.*omp openwiki --init/);
 	}, 30_000);
 
-	it("dispatches a mounted query under read approval, not file-write approval", async () => {
-		using dir = TempDir.createSync("@omp-openwiki-xdev-");
-		await repository(dir.join("repo"), "XDEV_BEACON");
+	it("dispatches mounted queries with their own read approval", async () => {
+		using dir = TempDir.createSync("@omp-openwiki-commands-");
+		await repository(dir.join("repo"), "COMMAND_BEACON");
 		const context = session(dir.join("repo"), dir.join("agent"));
-		const devices = [
+		const commands = [
 			new OpenWikiSearchTool(context),
 			new OpenWikiReadTool(context),
 			new OpenWikiListWorkspacesTool(context),
 			new OpenWikiListWikisTool(context),
 		] as unknown as Tool[];
-		const names = devices.map(device => device.name);
-		const xdev: XdevState = {
-			tools: new Map(devices.map(device => [device.name, device])),
+		const names = commands.map(command => command.name);
+		const policies: Record<string, unknown> = { write: "deny" };
+		context.isToolActive = name => name === "bash";
+		context.toolCommands = {
+			tools: new Map(commands.map(command => [command.name, command])),
 			mountedNames: new Set(names),
 			builtInNames: new Set(names),
-			isActive: () => false,
-			resolve: name => resolveXdevTool(xdev, name),
+			isActive: context.isToolActive,
+			decorateExecution(tool) {
+				return new Proxy(tool, {
+					get(target, key) {
+						if (key !== "execute") return Reflect.get(target, key);
+						return (id: string, args: Record<string, unknown>) => {
+							expect(requiresApproval(target, args, "write", policies).required).toBe(false);
+							return target.execute(id, args);
+						};
+					},
+				});
+			},
 		};
-		const write = new WriteTool({ ...context, xdev });
-		for (const name of names) {
-			const request = { path: `xd://${name}`, content: "{}" };
-			expect(write.approval(request)).toEqual({ tier: "read", policyKey: name, fallbackToToolPolicy: false });
-			expect(write.concurrency(request)).toBe("shared");
-		}
-		const args = { path: "xd://openwiki_search", content: JSON.stringify({ query: "XDEV_BEACON" }) };
-		expect(write.approval(args)).toEqual({ tier: "read", policyKey: "openwiki_search", fallbackToToolPolicy: false });
-		expect(write.concurrency(args)).toBe("shared");
-		const result = await write.execute("mounted-search", args);
-		expect(result.isError).not.toBe(true);
-		expect(result.details?.xdev).toMatchObject({ tool: "openwiki_search", mode: "execute", tier: "read" });
-		const found = json<WikiSearchResults>(result);
+		const dispatches: ToolCommandDispatch[] = [];
+		const run = createToolCommandHandler({
+			session: context,
+			toolCallId: "openwiki",
+			onDispatch: dispatch => dispatches.push(dispatch),
+		});
+		const query = async <T>(name: string, args: object): Promise<T> => {
+			const result = await run({ name, argv: ["--json", JSON.stringify(args)], stdin: "", cwd: context.cwd });
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(dispatches.at(-1)).toMatchObject({ tool: name, mode: "execute", tier: "read" });
+			return JSON.parse(result.stdout) as T;
+		};
+		const found = await query<WikiSearchResults>("openwiki_search", { query: "COMMAND_BEACON" });
 		const expectedRef = "openwiki/architecture/service.md#operation";
 		const hit = found.results.find(entry => entry.ref.includes(expectedRef));
 		expect(hit).toBeDefined();
 		expect(hit!.kind).toBe("section");
 		const [page, section] = hit!.ref.find(ref => ref === expectedRef)!.split("#");
-		const readResult = await write.execute("mounted-read", {
-			path: "xd://openwiki_read",
-			content: JSON.stringify({ page, sections: [section] }),
+		const readResult = await query<WikiReadResponse>("openwiki_read", { page, sections: [section] });
+		expect(readResult.sections[0].content).toContain("COMMAND_BEACON is required");
+		const noHits = await query<WikiSearchResults>("openwiki_search", { query: "neverfoundtoken987654" });
+		expect(noHits.results).toEqual([]);
+
+		const linked = dir.join("linked");
+		await repository(linked, "LINKED_BEACON");
+		await saveWikiWorkspaces([{ name: "Mounted", roots: [context.cwd, linked] }], {
+			configDirectory: path.join(context.settings.getAgentDir(), "openwiki"),
 		});
-		expect(readResult.isError).not.toBe(true);
-		expect(json<WikiReadResponse>(readResult).sections[0].content).toContain("XDEV_BEACON is required");
-		const noHits = await write.execute("mounted-no-hits", {
-			path: "xd://openwiki_search",
-			content: JSON.stringify({ query: "neverfoundtoken987654" }),
+		const workspaces = await query<WikiWorkspaceList>("openwiki_list_workspaces", {});
+		expect(workspaces.workspaces.map(workspace => workspace.id)).toEqual(["mounted"]);
+		const wikis = await query<WorkspaceWikiList>("openwiki_list_wikis", { workspace: "mounted" });
+		expect(wikis.wikis.map(wiki => wiki.id).sort()).toEqual(["linked", "repo"]);
+
+		policies.openwiki_search = "deny";
+		const denied = await run({
+			name: "openwiki_search",
+			argv: ["--query", "COMMAND_BEACON"],
+			stdin: "",
+			cwd: context.cwd,
 		});
-		expect(noHits.isError).not.toBe(true);
-		expect(json<WikiSearchResults>(noHits).results).toEqual([]);
+		expect(denied.exitCode).toBe(1);
+		expect(denied.stderr).toContain('Tool "openwiki_search" is blocked by user policy');
 	}, 30_000);
 
 	// The host must preserve full Markdown and bound corrective anchor disclosure.

@@ -568,7 +568,7 @@ describe("TranscriptContainer", () => {
 		expect(transcript.peekFinalizedBatch(80, 0)).toBeUndefined();
 	});
 
-	it("emits only the stable current head under row pressure", () => {
+	it("emits a streaming block's stable rows only once every block above it retires", () => {
 		const transcript = new TranscriptContainer();
 		const head = new Block(["mutable head"], false);
 		const later = new AppendBlock(["later stable", "later partial"], ["later stable"]);
@@ -577,13 +577,13 @@ describe("TranscriptContainer", () => {
 
 		expect(transcript.peekFinalizedBatch(80, 1)).toBeUndefined();
 
+		// The stable row that no longer fits rides with the block retired above it.
 		head.finalize(["mutable head"]);
 		const retired = transcript.peekFinalizedBatch(80, 1);
-		expect(retired?.rows).toEqual(["mutable head", ""]);
+		expect(retired?.rows).toEqual(["mutable head", "", "later stable"]);
 		transcript.acknowledgeFinalizedBatch(retired!.id);
 
-		const emitted = transcript.peekFinalizedBatch(80, 1);
-		expect(emitted?.rows).toEqual(["later stable"]);
+		expect(transcript.peekFinalizedBatch(80, 1)).toBeUndefined();
 		expect(transcript.renderViewport(80, 1, frame)).toEqual(["later partial"]);
 	});
 
@@ -640,11 +640,8 @@ describe("TranscriptContainer", () => {
 		const block = new ReflowingAppendBlock();
 		transcript.addChild(block);
 
-		// Room 2: "efgh" is still on screen, so its stable prefix stays live —
-		// committing it would strand that row above the live tail.
-		expect(transcript.peekFinalizedBatch(4, 2)).toBeUndefined();
-		// Room 1: the whole two-row stable prefix has left the screen.
-		const emitted = transcript.peekFinalizedBatch(4, 1)!;
+		// Room 2: "abcd" has left the screen, and its semantic row goes whole.
+		const emitted = transcript.peekFinalizedBatch(4, 2)!;
 		expect(emitted.rows).toEqual(["abcd", "efgh"]);
 		transcript.acknowledgeFinalizedBatch(emitted.id);
 		expect(transcript.renderViewport(8, 1, frame)).toEqual(["partial"]);
@@ -1141,10 +1138,9 @@ describe("TranscriptContainer", () => {
 		expect(transcript.blockStates()).toEqual(["committed", "active"]);
 	});
 
-	/** A settled block, then a streaming one whose stable rows a completeScrollback commit carries along. */
+	/** A settled block, then a streaming one whose stable rows the commit carries along. */
 	function commitCarryingHead() {
 		const transcript = new TranscriptContainer();
-		transcript.completeScrollback = true;
 		transcript.addChild(new Block(["settled"], true));
 		const head = new AppendBlock(["s1", "s2", "s3", "tail"], ["s1", "s2", "s3"]);
 		transcript.addChild(head);
@@ -2090,19 +2086,22 @@ describe("TranscriptContainer file changes", () => {
 				},
 				false,
 			);
-			call(root, "write", { path: "xd://edit", content: JSON.stringify({ path: "device.ts" }) }).updateResult(
+			call(root, "bash", { command: "edit --path device.ts" }).updateResult(
 				{
 					content: [{ type: "text", text: "edited" }],
 					details: {
-						xdev: {
-							tool: "edit",
-							mode: "execute",
-							args: { path: "device.ts" },
-							inner: {
-								path: "device.ts",
-								diff: "-1 DEVICE_OLD\n+1 DEVICE_NEW",
+						toolCommands: [
+							{
+								tool: "edit",
+								mode: "execute",
+								exitCode: 0,
+								args: { path: "device.ts" },
+								inner: {
+									path: "device.ts",
+									diff: "-1 DEVICE_OLD\n+1 DEVICE_NEW",
+								},
 							},
-						},
+						],
 					},
 				},
 				false,
@@ -2133,19 +2132,22 @@ describe("TranscriptContainer file changes", () => {
 					false,
 				);
 			}
-			call(root, "write", { path: "xd://edit", content: "help" }).updateResult(
+			call(root, "bash", { command: "edit --help" }).updateResult(
 				{
 					content: [{ type: "text", text: "DEVICE_HELP_NOT_A_DIFF" }],
 					details: {
-						xdev: {
-							tool: "edit",
-							mode: "help",
-							args: {},
-							inner: {
-								path: "help.ts",
-								diff: "-1 HELP_OLD\n+1 HELP_NEW",
+						toolCommands: [
+							{
+								tool: "edit",
+								mode: "help",
+								exitCode: 0,
+								args: {},
+								inner: {
+									path: "help.ts",
+									diff: "-1 HELP_OLD\n+1 HELP_NEW",
+								},
 							},
-						},
+						],
 					},
 				},
 				false,
@@ -2239,29 +2241,15 @@ describe("TranscriptContainer file changes", () => {
 			file.updateArgs({ path: "lifecycle.txt", content: "lifecycle body" });
 			file.setExecutionStarted();
 			expect(file.isTranscriptBlockFinalized()).toBe(false);
-			const wrapped = call(root, "write", {
-				path: "xd://write",
-				content: JSON.stringify({ path: "wrapped.txt", content: "wrapped body" }),
-			});
+			const wrapped = call(root, "bash", { command: "write --path wrapped.txt --content 'wrapped body'" });
 			wrapped.setExecutionStarted();
-			const wrappedEdit = call(root, "write", {
-				path: "xd://edit",
-				content: JSON.stringify({ path: "wrapped-edit.txt" }),
-			});
-			const wrappedPatch = call(root, "write", {
-				path: "xd://apply_patch",
-				content: JSON.stringify({
-					input: "*** Begin Patch\n*** Update File: wrapped-patch.txt\n@@\n-old\n+new\n*** End Patch",
-				}),
-			});
+			const wrappedEdit = call(root, "bash", { command: "edit --path wrapped-edit.txt" });
+			const wrappedPatch = call(root, "bash", { command: "apply_patch @wrapped-patch.txt" });
 			wrappedEdit.setExecutionStarted();
 			wrappedPatch.setExecutionStarted();
 			expect(wrappedEdit.render(120).join("")).not.toBe("");
 			expect(wrappedPatch.render(120).join("")).not.toBe("");
-			const streaming = call(root, "write", {
-				path: "xd://write",
-				content: '{"path":"known-target.txt","content":"partial',
-			});
+			const streaming = call(root, "bash", { command: "write --path known-target.txt --content 'partial" });
 			for (const view of views(root)) expect(view).toContain("known-target.txt");
 			streaming.seal();
 

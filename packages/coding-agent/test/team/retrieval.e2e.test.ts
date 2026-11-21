@@ -152,7 +152,7 @@ test("public Team stages and recheck verify supplemental documents and current s
 			overrides: {
 				"compaction.enabled": false,
 				"prewalk.enabled": false,
-				"tools.xdev": false,
+				"tools.commands": false,
 				"todo.enabled": false,
 				"mnemopi.noEmbeddings": true,
 				"task.maxConcurrency": 2,

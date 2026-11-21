@@ -7,18 +7,27 @@
 - Windows extension builds now archive only generated files and complete embedded CLI resource generation.
 - The extension ZIP now reports the version of the fork binary published in the same release.
 
+## [19.1.0] - 2026-11-21
+
 ### Breaking Changes
 
-- The omp extension has a pinned Chrome ID. Remove the old unpinned extension and use _Load unpacked_ to install it again once.
-- The omp extension reaches the browser relay through its native host instead of a websocket, so the relay is up whenever Chrome runs. Its options page (relay port and token) is gone.
+- The omp extension now connects to the browser relay through its native host. Reinstall with `omp browser-relay install` to register the host; follow the manual loading steps if automatic profile installation is unavailable. The relay port and token options have been removed.
 
 ### Added
 
-- The omp extension adds a Chrome side panel, page overlays, image and element picks, Teach, scheduled shortcuts, and GIF export.
+- Added an omp Chrome side panel with session model selection, role shortcuts, thinking controls, input shortcuts, message queuing, and run interruption controls.
+- Added browser interaction features including page overlays, image and element picking, Teach, scheduled shortcuts, and GIF export.
 
 ### Changed
 
-- The omp extension now keeps registered installations current across omp upgrades and reloads when idle.
+- The Chrome side panel shows brief labels for tool steps with structured intents.
+- The extension now keeps registered installations up to date across omp upgrades and reloads when idle.
+- Browser relay ports are assigned automatically and discovered locally by terminal clients, while sidebar chats continue using their existing connection.
+- Side panel sessions now control the connected Chrome browser directly instead of opening a separate headless browser.
+
+### Fixed
+
+- Improved relay recovery so Chrome reconnects automatically when the native host is unavailable or a stale connection drops.
 
 ## [19.0.1] - 2026-11-19
 

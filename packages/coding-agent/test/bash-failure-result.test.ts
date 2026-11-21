@@ -10,8 +10,6 @@ import { Settings, resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
-import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
-import type { XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { loadSpecDrivenSkill } from "@oh-my-pi/pi-coding-agent/spec-driven/resources";
 import { Shell } from "@oh-my-pi/pi-natives";
 import { getThemeByName } from "@oh-my-pi/pi-tui/theme";
@@ -161,7 +159,7 @@ describe("BashTool execution results", () => {
 		expect(message).not.toContain("Command aborted");
 	});
 
-	it.each([false, true])("retains a real Bash cancellation through the agent (xd=%s)", async wrapped => {
+	it("retains a real Bash cancellation through the agent", async () => {
 		const dispatched = Promise.withResolvers<void>();
 		const shellFinished = Promise.withResolvers<void>();
 		const realRun = Shell.prototype.run;
@@ -175,18 +173,8 @@ describe("BashTool execution results", () => {
 		});
 		const session = makeSession();
 		const bash = new BashTool(session);
-		const xdev: XdevState = {
-			tools: new Map([["bash", bash]]),
-			mountedNames: new Set(["bash"]),
-			builtInNames: new Set(["bash"]),
-			isActive: () => false,
-			resolve: name => (name === "bash" ? bash : undefined),
-		};
-		const write = new WriteTool({ ...session, xdev });
-		const toolName = wrapped ? "write" : "bash";
-		const args = wrapped
-			? { path: "xd://bash", content: JSON.stringify({ command: "sleep 3" }) }
-			: { command: "sleep 3" };
+		const toolName = "bash";
+		const args = { command: "sleep 3" };
 		const model = createMockModel({
 			responses: [
 				{ content: [{ type: "toolCall", id: "cancel-call", name: toolName, arguments: args }] },
@@ -196,7 +184,7 @@ describe("BashTool execution results", () => {
 		const controller = new AbortController();
 		const stream = agentLoop(
 			[{ role: "user", content: [{ type: "text", text: "run" }], timestamp: Date.now() }],
-			{ systemPrompt: [""], messages: [], tools: wrapped ? [write] : [bash] },
+			{ systemPrompt: [""], messages: [], tools: [bash] },
 			{
 				model: model.model,
 				convertToLlm: (messages: AgentMessage[]) =>
@@ -218,11 +206,10 @@ describe("BashTool execution results", () => {
 		const end = events.find(event => event.type === "tool_execution_end" && event.toolCallId === "cancel-call");
 		if (!end || end.type !== "tool_execution_end") throw new Error("Expected Bash execution result");
 		expect(end.isError).toBe(true);
-		const diagnostic = wrapped ? "EXECUTION_CANCELLED" : "[Command cancelled]";
 		const block = end.result.content[0];
 		expect(block.type).toBe("text");
 		expect(typeof block.text).toBe("string");
-		expect(block.text).toContain(diagnostic);
+		expect(block.text).toContain("[Command cancelled]");
 	});
 
 	it("returns a success result with no exit-code detail for a zero exit", async () => {
@@ -265,29 +252,20 @@ describe("BashTool execution results", () => {
 
 	it("gives a call the identity of the session it started in, even if the session changes before it runs", async () => {
 		let sessionId = "session-a";
-		const gate = Promise.withResolvers<void>();
-		let allocating = Promise.withResolvers<void>();
 		const tool = new BashTool({
 			...makeSession(),
 			getSessionId: () => sessionId,
 			getSessionFile: () => path.resolve(`/sessions/${sessionId}.jsonl`),
-			allocateOutputArtifact: async () => {
-				allocating.resolve();
-				await gate.promise;
-				return {};
-			},
 		} as unknown as ToolSession);
 		const probe = `printf '%s|%s|' "$PI_SESSION_ID" "$PI_SESSION_FILE"`;
 		const fields = (result: { content: readonly { type: string; text?: string }[] }) =>
 			(result.content.find(c => c.type === "text")?.text ?? "").split("|").slice(0, 2);
 
 		const pending = tool.execute("call-a", { command: probe });
-		await allocating.promise;
-		sessionId = "session-b"; // e.g. `/fork` while the call waits on its artifact
-		gate.resolve();
+		// e.g. `/fork` landing after the call started but before its shell runs.
+		sessionId = "session-b";
 		expect(fields(await pending)).toEqual(["session-a", path.resolve("/sessions/session-a.jsonl")]);
 
-		allocating = Promise.withResolvers<void>();
 		expect(fields(await tool.execute("call-b", { command: probe }))).toEqual([
 			"session-b",
 			path.resolve("/sessions/session-b.jsonl"),
@@ -349,7 +327,8 @@ describe("BashTool execution results", () => {
 			});
 		});
 		const artifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "bash-minimized-meta-"));
-		// Sequential ids like the session's spill manager: the output spill gets 1, the raw original 2.
+		// Sequential ids like the session's spill manager. Output that fits inline claims
+		// no spill, so the raw original gets the first id.
 		let nextId = 1;
 		const session = {
 			...makeSession(),
@@ -367,12 +346,12 @@ describe("BashTool execution results", () => {
 				filter: "lint",
 				inputBytes: Buffer.byteLength(rawOutput, "utf-8"),
 				outputBytes: Buffer.byteLength(minimizedText, "utf-8"),
-				artifactId: "2",
+				artifactId: "1",
 			});
 			const text = result.content.find(c => c.type === "text")?.text ?? "";
-			expect(text).toContain(formatRawOutputNotice("2"));
+			expect(text).toContain(formatRawOutputNotice("1"));
 			expect(text).not.toContain("Minimized");
-			expect(await Bun.file(path.join(artifactsDir, "2.log")).text()).toBe(rawOutput);
+			expect(await Bun.file(path.join(artifactsDir, "1.log")).text()).toBe(rawOutput);
 
 			const theme = await getThemeByName("dark");
 			if (!theme) throw new Error("Expected dark theme");
@@ -382,7 +361,7 @@ describe("BashTool execution results", () => {
 					.render(160)
 					.join("\n"),
 			);
-			expect(rendered).toContain("Minimized: lint 1.9KB → 27B");
+			expect(rendered).toContain(`${theme.icon.minimize} lint 1.9KB → 27B`);
 			const view = JSON.stringify(
 				bashToolRenderer.describeResult(result, { expanded: false, isPartial: false }, args),
 			);

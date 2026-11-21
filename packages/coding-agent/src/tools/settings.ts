@@ -685,7 +685,7 @@ export const cfgGenerateImageEnabled = register({
 		tab: "tools",
 		group: "可用工具",
 		label: "图片生成",
-		description: "启用 generate_image 工具（文生图与图片编辑）。tools.xdev 开启时以 xd:// 设备形式提供。",
+		description: "启用 generate_image 工具（文生图与图片编辑）。tools.commands 开启时可通过 bash 调用。",
 	},
 });
 
@@ -1088,65 +1088,64 @@ export const cfgAsyncWidgets = register({
 	},
 });
 
-export const cfgToolsXdev = register({
-	id: "tools.xdev",
+export const cfgToolsCommands = register({
+	id: "tools.commands",
 	type: "boolean",
 	default: true,
 	ui: {
 		tab: "tools",
 		group: "发现与 MCP",
-		label: "xd:// 工具",
+		label: "工具命令",
 		description:
-			"将不常用（可发现）的工具挂载到通过 read/write 操作的 xd:// 设备 URL 下，而非在每次请求中附带其 schema。会话显式工具列表允许 read 但未包含 write 时，通过仅限设备的 write 传输挂载设备（除设备外，仅 local:// 临时区域仍可写）。关闭后，所有已启用工具均在顶层提供。",
+			"将不常用的可发现工具挂载为 bash 命令，使用 --help 查询参数。关闭此设置或未启用 bash 时，已启用的工具保留在顶层。",
 	},
 });
 
-export const cfgToolsXdevDocs = register({
-	id: "tools.xdevDocs",
+export const cfgToolsCommandDocs = register({
+	id: "tools.commandDocs",
 	type: "enum",
 	values: ["inline", "builtins", "catalog"] as const,
 	default: "catalog",
 	ui: {
 		tab: "tools",
 		group: "发现与 MCP",
-		label: "xd:// Prompt 文档",
+		label: "工具命令提示词文档",
 		description:
-			"选择在系统 Prompt 中内联哪些已挂载设备的文档和 schema。“仅内置”会内联核心工具，而 MCP 和扩展工具仍按需获取。",
+			"选择在系统提示词中内联哪些已挂载命令的 --help 文档。“仅内置”会内联内置帮助，MCP 和扩展命令的帮助按需获取。",
 		options: [
-			{ value: "inline", label: "所有设备", description: "内联所有已挂载设备的文档和 schema。" },
+			{ value: "inline", label: "所有命令", description: "内联所有已挂载命令的帮助。" },
 			{
 				value: "builtins",
 				label: "仅内置",
-				description: "内联内置文档；按需获取 MCP 和扩展文档。",
+				description: "内联内置帮助；按需获取 MCP 和扩展命令的帮助。",
 			},
-			{ value: "catalog", label: "仅目录", description: "列出所有设备；按需获取全部文档。" },
+			{ value: "catalog", label: "仅目录", description: "列出所有命令；按需运行 --help。" },
 		],
 	},
 });
 
-export const cfgToolsXdevInlineDevices = register({
-	id: "tools.xdevInlineDevices",
+export const cfgToolsCommandInline = register({
+	id: "tools.commandInline",
 	type: "array",
 	default: EMPTY_STRING_ARRAY,
 	ui: {
 		tab: "tools",
 		group: "发现与 MCP",
-		label: "xd:// 内联设备",
+		label: "工具命令内联帮助",
 		description:
-			"“xd:// Prompt 文档”设为“仅内置”时，内联名称匹配这些 glob 模式的动态设备（例如 mcp__context_mode_*）。“仅目录”会忽略此设置。",
+			"命令文档设为“仅内置”时，也内联名称匹配这些 glob 模式的动态命令（例如 mcp__context_mode_*）。“仅目录”会忽略此设置。",
 	},
 });
 
-export const cfgToolsXdevNotices = register({
-	id: "tools.xdevNotices",
+export const cfgToolsCommandNotices = register({
+	id: "tools.commandNotices",
 	type: "boolean",
 	default: true,
 	ui: {
 		tab: "tools",
 		group: "发现与 MCP",
-		label: "xd:// Mount Notices",
-		description:
-			"Show an `xd://: mounted …` notice when MCP or extension tools are mounted or unmounted. The model still learns of the change with its next prompt.",
+		label: "工具命令挂载通知",
+		description: "在 MCP 或扩展工具命令挂载或卸载时显示通知；模型仍会在下一次提示中收到变更。",
 	},
 });
 
@@ -1159,8 +1158,7 @@ export const cfgDevAutoqa = register({
 		tab: "tools",
 		group: "开发者",
 		label: "自动 QA",
-		description:
-			"自动报告工具问题（xd://report_issue）。默认开启；首次报告会征求同意，拒绝后会关闭报告，直到再次显式启用",
+		description: "自动报告工具问题（report_issue）。默认开启；首次报告会征求同意，拒绝后关闭，直到再次显式启用。",
 	},
 });
 
@@ -1234,5 +1232,5 @@ export const cfgSessionToolGates = combine({
 	builtins: cfgBuiltinToolGates,
 	generateImage: cfgGenerateImageEnabled,
 	speechgen: cfgSpeechgenEnabled,
-	xdev: cfgToolsXdev,
+	toolCommands: cfgToolsCommands,
 });

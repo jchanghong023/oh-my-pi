@@ -18,7 +18,7 @@ describe("native Goal user follow-up delivery", () => {
 			await withTui(
 				{
 					configuration: {
-						tools: { xdev: false },
+						tools: { commands: true },
 						compaction: { enabled: false },
 						goal: { continuationModes: [] },
 						bash: { direnv: "off", allowCompoundCommands: true },
@@ -104,7 +104,10 @@ describe("native Goal user follow-up delivery", () => {
 						contentText(message.content).includes("MUST 全自动无人值守完成完整目标。"),
 					);
 					expect(notices).toHaveLength(command === "goal-autopilot" ? 1 : 0);
-					if (notices.length) expect(notices[0]!.role).toBe("user");
+					if (notices.length) {
+						expect(notices[0]!.role).toBe("user");
+						expect(contentText(notices[0]!.content)).toContain("`task` dispatch");
+					}
 				},
 			);
 		},

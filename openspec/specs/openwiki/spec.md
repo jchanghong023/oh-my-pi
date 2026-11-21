@@ -148,13 +148,13 @@ OMP MUST 内置 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`
 - **THEN** 只有上述四项只读能力，不包含 begin、计划提交、任务领取、Claims 写入、页面提交或 finish 等生成工具
 - **AND** OpenWiki 原生生成 Agent 内部所需的计划／页面提交工具继续属于其生成执行链，不被注册到 OMP 普通对话工具面
 
-#### Scenario: 启用 `tools.xdev` 时挂载为可发现设备
-- **WHEN** OMP 非受限会话启用 `tools.xdev`
-- **THEN** 四项只读能力遵循现有可发现设备挂载规则，AI 可按需发现和调用
-- **AND** 设备派发保留只读权限语义，不因通过设备传输被当作文件写入
+#### Scenario: 启用 `tools.commands` 且 Bash 可用时挂载为命令
+- **WHEN** OMP 非受限会话启用 `tools.commands`，且内置 Bash 工具可用
+- **THEN** 四项只读能力遵循现有 Bash 工具命令挂载规则，AI 可按需发现和调用
+- **AND** 命令派发保持只读权限语义，不因通过 Bash 传输而被视为文件写入
 
-#### Scenario: 关闭 `tools.xdev` 时提供顶层工具
-- **WHEN** OMP 非受限会话关闭 `tools.xdev`
+#### Scenario: 不挂载命令时提供顶层工具
+- **WHEN** OMP 非受限会话关闭 `tools.commands` 或内置 Bash 工具不可用
 - **THEN** 四项只读查询工具按 OMP 既有规则作为顶层工具提供
 
 ### Requirement: 按需检索仓库 Wiki
@@ -178,7 +178,7 @@ OMP MUST 仅在用户要求或任务确需相关证据时按需检索 OpenWiki�
 
 #### Scenario: 工具受限或 Wiki 不可用
 - **WHEN** 会话未开放 OpenWiki 搜索工具，或 Wiki 已排除、已知缺失，或查询返回 `invalid_state`、空结果、过时或冲突内容
-- **THEN** OMP 继续使用源码完成任务；工具不可用时默认系统提示词不要求调用该工具，工具引用遵循顶层或 `xd://` 的实际挂载形式
+- **THEN** OMP 继续使用源码完成任务；工具不可用时默认系统提示词不要求调用该工具，工具引用遵循顶层或 Bash 工具命令的实际挂载形式
 - **AND** 不因 Wiki 不可用而阻塞普通任务，也不隐式生成 Wiki
 
 ### Requirement: 保留跨仓库工作区链接

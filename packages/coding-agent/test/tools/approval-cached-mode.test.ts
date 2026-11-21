@@ -29,7 +29,7 @@ import {
 import { approvalTargetKey, approvalTreeSearchKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
-import { resolveXdevTool, type XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
+import { OpenWikiReadTool, OpenWikiSearchTool } from "@oh-my-pi/pi-coding-agent/tools/openwiki";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getAgentDir, isRecord, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
@@ -201,56 +201,27 @@ describe("always-ask-cached resolution", () => {
 		});
 	});
 
-	it("keeps native read-only index approval semantics through bare and wrapped xd targets", () => {
+	it("uses read policy for native OpenWiki queries and write policy for file writes", () => {
 		const agentDir = freshAgentDir();
-		const nativeTools = ["openwiki_search", "openwiki_read", "peek"].map(name => ({
-			...pathTool(name, "read", agentDir),
-			approvalCacheTargets: undefined,
-		}));
-		const xdev: XdevState = {
-			tools: new Map(nativeTools.map(tool => [tool.name, tool])),
-			mountedNames: new Set(nativeTools.map(tool => tool.name)),
-			builtInNames: new Set(nativeTools.filter(tool => tool.name !== "peek").map(tool => tool.name)),
-			isActive: () => false,
-			resolve: name => resolveXdevTool(xdev, name),
-		};
 		const session: ToolSession = {
 			cwd: agentDir,
 			hasUI: true,
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 			settings: Settings.isolated({}),
-			xdev,
 		};
 		const write = new WriteTool(session);
 		const grants = getApprovalGrants(agentDir, "index-query");
-		for (const native of nativeTools.filter(tool => tool.name !== "peek")) {
-			expect(resolveApproval(native, { query: "needle" }, "always-ask-cached", {}, grants).policy).toBe("allow");
-			for (const target of [`xd://${native.name}`, `[xd://${native.name}#ABCD]`]) {
-				const args = { path: target, content: JSON.stringify({ query: "needle" }) };
-				expect(write.approvalCacheTargets(args)).toBeUndefined();
-				expect(resolveApproval(write, args, "always-ask-cached", { write: "deny" }, grants).policy).toBe("allow");
-				for (const policy of ["prompt", "deny"] as const) {
-					expect(resolveApproval(write, args, "always-ask-cached", { [native.name]: policy }, grants).policy).toBe(
-						policy,
-					);
-				}
+		for (const tool of [new OpenWikiSearchTool(session), new OpenWikiReadTool(session)]) {
+			expect(resolveApproval(tool, {}, "always-ask-cached", { write: "deny" }, grants).policy).toBe("allow");
+			for (const policy of ["prompt", "deny"] as const) {
+				expect(resolveApproval(tool, {}, "always-ask-cached", { [tool.name]: policy }, grants).policy).toBe(policy);
 			}
 		}
-
-		// Other read-only devices still carry their URI target; files remain write-tier.
-		for (const target of ["xd://peek", "notes.txt"]) {
-			const args = { path: target, content: "{}" };
-			expect(write.approvalCacheTargets(args)).toEqual([approvalTargetKey(agentDir, target)!]);
-			expect(resolveApproval(write, args, "always-ask-cached", {}, grants).policy).toBe("prompt");
-			expect(resolveApproval(write, args, "always-ask-cached", { write: "deny" }, grants).policy).toBe("deny");
-		}
-
-		// An extension with an index tool's name is not a recognized built-in.
-		const extensionWrite = new WriteTool({ ...session, xdev: { ...xdev, builtInNames: new Set() } });
-		expect(extensionWrite.approvalCacheTargets({ path: "xd://openwiki_search" })).toEqual([
-			approvalTargetKey(agentDir, "xd://openwiki_search")!,
-		]);
+		const args = { path: "notes.txt", content: "{}" };
+		expect(write.approvalCacheTargets(args)).toEqual([approvalTargetKey(agentDir, args.path)!]);
+		expect(resolveApproval(write, args, "always-ask-cached", {}, grants).policy).toBe("prompt");
+		expect(resolveApproval(write, args, "always-ask-cached", { write: "deny" }, grants).policy).toBe("deny");
 	});
 });
 

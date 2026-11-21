@@ -29,7 +29,6 @@ OMP MUST 应用下列设置的缺省值；显式配置和环境变量仍按原�
 - `marketplace.autoUpdate=off`：默认不自动刷新市场目录、检查或升级插件；普通模式可显式开启，`OMP_OFFLINE` 仍只允许手动更新。详见[插件市场更新](../fork-runtime/spec.md#requirement-插件市场更新)。
 - `statusLine.compactThinkingLevel=false`
 - `composer.shape=box`（Rounded Box）
-- `tui.completeScrollback=true`：默认启用上游完整滚动历史；HUD 或对话框挤出屏幕的可归档正文立即进入终端原生历史，收起后的空间补偿沿用上游。显式 `false` 保持上游暂留及收起后恢复行为，不新增自动 HUD 特例、不改写配置文件。
 - `composer.predictions=true`：所有平台、普通与 offline 启动均默认启用上游输入区预测；沿用当前模型生成下一条消息建议、Tab／右方向键插入但不发送及额外用量计入 `/stats` 的行为。用户显式配置 `false` 时保持关闭，不改写已有配置。
 - `theme.dark=titanium`：普通与 offline 启动均与上游一致，使用 Titanium 内置原配色；仅在未显式配置时生效，不迁移或覆盖已保存的主题选择。`theme.light=light` 保持不变。
 - `display.showTurnTime=true`

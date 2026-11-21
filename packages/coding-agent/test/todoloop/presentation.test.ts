@@ -134,7 +134,7 @@ describe("TodoLoop native transcript presentation", () => {
 			const composer = new Composer({
 				terminal,
 				tuiOptions: { renderScheduler: scheduler },
-				preferences: { ...COMPOSER_DEFAULTS, quiet: true, completeScrollback: false },
+				preferences: { ...COMPOSER_DEFAULTS, quiet: true },
 			});
 			const ctx = createInteractiveModeContext({ settings: Settings.isolated(), hideToolActivity: true });
 			cfgDisplayMode.set(ctx.settings, "compact");
@@ -145,8 +145,6 @@ describe("TodoLoop native transcript presentation", () => {
 			const editor = new Container();
 			editor.addChild(new Text("❯ \n\nFixed footer hints\nEsc interrupt · Ctrl+O expand", 0, 0));
 			composer.setRuntimeChildren([ctx.chatContainer, ctx.statusContainer, editor], {
-				transientChrome: [editor],
-				billedChrome: [ctx.statusContainer],
 				nativeDock: [ctx.statusContainer, editor],
 			});
 			composer.start({ playWelcomeIntro: false });

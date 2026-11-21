@@ -11,10 +11,7 @@ import {
 	type BrowserKind,
 	releaseBrowser,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
-import {
-	unpackedExtensionId,
-	writeRelayExtension,
-} from "@oh-my-pi/pi-coding-agent/tools/browser/relay/extension-files";
+import { writeRelayExtension } from "@oh-my-pi/pi-coding-agent/tools/browser/relay/extension-files";
 import { waitForRelayExtension } from "@oh-my-pi/pi-coding-agent/tools/browser/relay/probe";
 import { startRelayServer } from "@oh-my-pi/pi-coding-agent/tools/browser/relay/server";
 import {
@@ -26,6 +23,7 @@ import {
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import puppeteer, { type Browser, type Page, type WebWorker } from "puppeteer-core";
+import { relayNativePortFixture } from "./browser-relay-native-port-fixture";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
@@ -113,17 +111,16 @@ async function withRelay(run: (fixture: RelayFixture) => Promise<void>): Promise
 		await writeRelayExtension(extensionDir, VERSION);
 		const backgroundPath = path.join(extensionDir, "background.js");
 		const background = await Bun.file(backgroundPath).text();
-		// Point the disposable extension at this relay before its code can dial a user's default relay.
-		await Bun.write(backgroundPath, `chrome.storage.local.set({ port: ${port} }).then(() => {\n${background}\n});`);
-		const extensionId = await unpackedExtensionId(extensionDir);
-		if (!extensionId) throw new Error("Missing relay extension directory");
+		// Avoid using the user's installed native host; Chrome still runs the actual extension worker.
+		await Bun.write(backgroundPath, relayNativePortFixture(port) + background);
 		browser = await puppeteer.launch({
 			executablePath: await ensureChromiumExecutable(),
 			headless: true,
 			pipe: true,
-			enableExtensions: [extensionDir],
+			enableExtensions: true,
 			args: ["--no-first-run", "--no-default-browser-check", "--use-mock-keychain"],
 		});
+		const extensionId = await browser.installExtension(extensionDir);
 		const extension = await (
 			await browser.waitForTarget(
 				target =>

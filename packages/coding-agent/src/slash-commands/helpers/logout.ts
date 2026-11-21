@@ -1,4 +1,9 @@
-import { getAllOAuthProviders, getOAuthCredentialProvider, type OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
+import {
+	getAllOAuthProviders,
+	getOAuthCredentialProvider,
+	getStoredOAuthProviders,
+	type OAuthProviderInfo,
+} from "@oh-my-pi/pi-ai/oauth";
 import type { AgentSession } from "../../session/agent-session";
 import type { AuthStorage, OAuthAccountIdentity, StoredAuthCredential } from "../../session/auth-storage";
 
@@ -125,21 +130,20 @@ export async function logoutProviderForCommand(
 	providerId: string | undefined,
 	ui: LogoutCommandUI,
 ): Promise<LogoutCommandResult> {
-	const providers = getAllOAuthProviders();
-	let provider = providerId ? providers.find(candidate => candidate.id === providerId) : undefined;
-	if (providerId && !provider) {
-		return { status: "skipped", level: "warning", message: `Unknown OAuth provider: ${providerId}` };
-	}
 	const modelRegistry = session.modelRegistry;
 	const sessionId = session.sessionId;
 	const generation = session.sessionGeneration;
 	const authStorage = modelRegistry.authStorage;
 	await authStorage.credentials.reload();
+	const storedProviders = getStoredOAuthProviders(authStorage.credentials);
+	let provider = providerId
+		? (getAllOAuthProviders().find(candidate => candidate.id === providerId) ??
+			storedProviders.find(candidate => candidate.id === providerId))
+		: undefined;
+	if (providerId && !provider) {
+		return { status: "skipped", level: "warning", message: `Unknown OAuth provider: ${providerId}` };
+	}
 	if (!provider) {
-		const storedProviders = providers.filter(
-			candidate =>
-				candidate.id === getOAuthCredentialProvider(candidate.id) && authStorage.credentials.has(candidate.id),
-		);
 		if (storedProviders.length === 0) {
 			return {
 				status: "skipped",

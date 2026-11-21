@@ -1,6 +1,7 @@
 import { PipeStreams, type PipeStreamInfo } from "@oh-my-pi/pi-natives";
 import { collapseCommand } from "@oh-my-pi/pi-tui/apps/ps-data";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import { shellStreamId } from "@oh-my-pi/pi-tui/tools/shell-steps";
 import { truncate } from "@oh-my-pi/pi-utils";
 import type { JobTextChunk, JobTextSource } from "./types";
 
@@ -25,11 +26,6 @@ export function createPipeStreams(binding: unknown = PipeStreams): PipeStreams |
 
 /** Longest stream label: `producer → consumer` on one line. */
 const MAX_LABEL_CHARS = 80;
-
-/** A stream's id among its job's sources: `pipe:<n>`, or `file:<n>` for a redirected file. */
-export function pipeSourceId(info: PipeStreamInfo): string {
-	return `${info.file ? "file" : "pipe"}:${info.id}`;
-}
 
 /**
  * One tapped pipe of a bash run as a {@link JobTextSource} with id
@@ -60,7 +56,7 @@ export class PipeTextSource implements JobTextSource {
 		readonly streams: PipeStreams,
 		info: PipeStreamInfo,
 	) {
-		this.id = pipeSourceId(info);
+		this.id = shellStreamId(info);
 		this.streamId = info.id;
 		// Stage source can span lines (`for …; do …; done`): the label keeps each side on one. The path leads a
 		// file's label, so a long command never cuts it off.

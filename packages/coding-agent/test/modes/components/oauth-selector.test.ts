@@ -52,7 +52,7 @@ describe("OAuthSelectorComponent", () => {
 		const component = new OAuthSelectorComponent(
 			"logout",
 			{
-				credentials: { has: (_providerId: string) => false },
+				credentials: { list: () => [], has: (_providerId: string) => false },
 				keys: {
 					source: (providerId: string) =>
 						providerId === "opencode-go" || providerId === "opencode-zen"
@@ -77,7 +77,10 @@ describe("OAuthSelectorComponent", () => {
 		const component = new OAuthSelectorComponent(
 			"logout",
 			{
-				credentials: { has: (providerId: string) => providerId === "anthropic" },
+				credentials: {
+					list: () => [{ provider: "anthropic" }],
+					has: (providerId: string) => providerId === "anthropic",
+				},
 				keys: {
 					source: (providerId: string) =>
 						providerId === "anthropic" ? { kind: "api_key", concrete: true } : undefined,
@@ -168,7 +171,10 @@ describe("OAuthSelectorComponent", () => {
 			const component = new OAuthSelectorComponent(
 				"logout",
 				{
-					credentials: { has: (providerId: string) => providerId === "opencode-go" },
+					credentials: {
+						list: () => [{ provider: "opencode-go" }],
+						has: (providerId: string) => providerId === "opencode-go",
+					},
 					keys: {
 						source: (providerId: string) =>
 							providerId === "opencode-go" ? { kind: "api_key", concrete: true } : undefined,

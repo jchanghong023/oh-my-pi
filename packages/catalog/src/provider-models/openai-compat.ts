@@ -4183,6 +4183,7 @@ export function vercelAiGatewayModelManagerOptions(
 				provider: "vercel-ai-gateway",
 				baseUrl: catalogBaseUrl,
 				apiKey,
+				retryWithoutApiKeyOnUnauthorized: true,
 				filterModel: (entry: OpenAICompatibleModelRecord) => {
 					const tags = entry.tags;
 					return Array.isArray(tags) && tags.includes("tool-use");

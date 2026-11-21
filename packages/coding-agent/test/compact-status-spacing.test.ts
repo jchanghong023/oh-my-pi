@@ -96,7 +96,7 @@ describe("transcript status spacing", () => {
 			tuiOptions: { renderScheduler: scheduler },
 			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
 		});
-		const ctx = createInteractiveModeContext({ composer, ui: composer.ui, editor: composer.editor });
+		const ctx = createInteractiveModeContext({ ui: composer.ui, editor: composer.editor });
 		cfgDisplayMode.set(ctx.settings, "compact");
 		ctx.present = (content: Component | readonly Component[]) => {
 			for (const component of Array.isArray(content) ? content : [content as Component])
@@ -189,13 +189,13 @@ describe("transcript status spacing", () => {
 			ctx.streamingMessage = undefined;
 			ctx.pendingTools.clear();
 		};
-		composer.setRuntimeChildren(
-			[ctx.chatContainer, mode.todoContainer, ctx.statusContainer, thinkingDock, composer.editor],
-			{
-				selfClearingChrome: [mode.todoContainer],
-				transientChrome: [thinkingDock, composer.editor],
-			},
-		);
+		composer.setRuntimeChildren([
+			ctx.chatContainer,
+			mode.todoContainer,
+			ctx.statusContainer,
+			thinkingDock,
+			composer.editor,
+		]);
 		composer.ui.setFocus(composer.editor);
 		composer.start({ playWelcomeIntro: false });
 		const contract = new DisplayContract(2112);
@@ -377,7 +377,7 @@ describe("transcript status spacing", () => {
 			tuiOptions: { renderScheduler: scheduler },
 			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
 		});
-		const ctx = createInteractiveModeContext({ composer, ui: composer.ui, editor: composer.editor });
+		const ctx = createInteractiveModeContext({ ui: composer.ui, editor: composer.editor });
 		cfgDisplayMode.set(ctx.settings, "compact");
 		let terminalAt: number | undefined;
 		const text = "TEMPORARY_OUTPUT_ONLY";
@@ -398,10 +398,7 @@ describe("transcript status spacing", () => {
 		const output: CompactToolOutputPreview = new CompactToolOutputPreview(ctx, () =>
 			Math.max(0, terminal.rows - Math.max(composer.rowsBelow(output) ?? 0, composer.editor.renderedRows + 4)),
 		);
-		composer.setRuntimeChildren([ctx.chatContainer, output, summary, composer.editor], {
-			selfClearingChrome: [output],
-			transientChrome: [composer.editor],
-		});
+		composer.setRuntimeChildren([ctx.chatContainer, output, summary, composer.editor]);
 		composer.editor.setText("INPUT_PRIORITY");
 		composer.ui.setFocus(composer.editor);
 		composer.start({ playWelcomeIntro: false });

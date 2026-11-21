@@ -7,6 +7,7 @@ import {
 	buildDeveloperTestAgentResources,
 	createDeveloperTestAgentArchivePlugin,
 } from "./developer-test-agent-resources";
+import { embeddedRelayExtensionFiles } from "./embed-relay-extension";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
@@ -166,6 +167,8 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 			entrypoints: [path.join(packageDir, "src/cli.ts")],
 			outdir: outDir,
 			target: "bun",
+			// Also refreshes `src/.../extension.generated.json`, which SDK consumers of `src` read.
+			files: await embeddedRelayExtensionFiles(),
 			plugins: [
 				createJsonParsePlugin(),
 				createDeveloperTestAgentArchivePlugin(await buildDeveloperTestAgentResources()),

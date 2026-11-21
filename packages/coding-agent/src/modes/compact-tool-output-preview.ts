@@ -206,9 +206,8 @@ export class CompactToolOutputPreview implements Component {
 
 	#withoutCoveredOutput(call: LiveToolOutputSnapshot, output: string, width: number): string {
 		if (!this.coveredDiff || call.terminalAt === undefined || !mayBeCoveredByFileDiff(call)) return output;
-		const { details } = toolOutputSource(call.toolName, call.result);
+		const { details, name } = toolOutputSource(call.toolName, call.result, call.args);
 		if (!details) return output;
-		const name = call.toolName;
 
 		const cwd = this.ctx.viewSession.sessionManager.getCwd();
 		const targets = new Map<string, string>();
@@ -293,14 +292,15 @@ export class CompactToolOutputPreview implements Component {
 		const inset = Math.min(getPaddingX(1), width - 1);
 		const contentWidth = width - inset;
 		const { call, text: output } = selected;
-		const source = toolOutputSource(call.toolName, call.result);
+		const source = toolOutputSource(call.toolName, call.result, call.args);
 		const info = compactToolPreviewInfo(call.toolName, call.args, call.intent, call.result);
-		const { name: toolName, details } = source;
-		const job = isRecord(details?.async) ? details.async : undefined;
+		const { name: toolName, details, shellDetails } = source;
+		const lifecycle = shellDetails ?? details;
+		const job = isRecord(lifecycle?.async) ? lifecycle.async : undefined;
 		const state: PreviewState =
 			call.terminalAt === undefined
 				? "running"
-				: job?.state === "cancelled" || details?.cancelled === true
+				: job?.state === "cancelled" || lifecycle?.cancelled === true
 					? "cancelled"
 					: call.result?.isError || job?.state === "failed"
 						? "failed"

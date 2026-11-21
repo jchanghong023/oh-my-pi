@@ -28,7 +28,7 @@ describe("failed native AST apply", () => {
 				hasUI: true,
 				getSessionFile: () => null,
 				getSessionSpawns: () => "*",
-				settings: Settings.isolated({ "tools.xdev": false }),
+				settings: Settings.isolated({ "tools.commands": false }),
 				getToolChoiceQueue: () => queue,
 				buildToolChoice: () => ({ type: "tool", name: "resolve" }),
 				steer: () => {},

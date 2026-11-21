@@ -3,14 +3,15 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Settings, resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import type { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { TUI } from "@oh-my-pi/pi-tui/tui";
+import { createAssistantMessage } from "../../helpers/agent-session-setup";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 
 /** The native node a TSP terminal draws for the card. */
@@ -71,26 +72,29 @@ describe("EventController tool intent", () => {
 	});
 
 	it("shows the intent on a card created by tool_execution_start", async () => {
-		const { controller, pendingTools } = fixture();
-		await controller.handleEvent(start("Listing the working tree"));
+		const { controller, pendingTools, ctx } = fixture();
+		await controller.handleEvent(start("Listing the working tree...: Which files have changed?"));
 		const card = pendingTools.get("tc-bash");
 		if (!card) throw new Error("no card for the call");
-		expect(headTargetText(card)).toBe("Listing the working tree");
+		expect(headTargetText(card)).toBe("Listing the working tree...");
+		expect(toolNode(card).p).toMatchObject({ intent: "Listing the working tree..." });
+		expect(ctx.setWorkingMessage).toHaveBeenLastCalledWith("Listing the working tree");
 	});
 
 	it("keeps the intent when tool_execution_start refreshes a streamed card", async () => {
 		const { controller, pendingTools, ctx } = fixture();
-		const streamed = new ToolExecutionComponent(
-			"bash",
-			{ command: "ls -la", i: "Listing the working tree" },
-			{ useBuiltInRenderer: true },
-			undefined,
-			ctx.ui as unknown as TUI,
-			"/tmp",
-			"tc-bash",
-		);
-		pendingTools.set("tc-bash", streamed);
-		await controller.handleEvent(start("Listing the working tree"));
-		expect(headTargetText(streamed)).toBe("Listing the working tree");
+		const args = { command: "ls -la", i: "Listing the working tree: Which files have changed?" };
+		const message = createAssistantMessage("");
+		message.content = [{ type: "toolCall", id: "tc-bash", name: "bash", arguments: args }];
+		ctx.streamingComponent = new AssistantMessageComponent();
+		await controller.syncAssistantMessage(message);
+		const card = pendingTools.get("tc-bash");
+		if (!card) throw new Error("no streamed card for the call");
+		expect(headTargetText(card)).toBe("Listing the working tree");
+		expect(toolNode(card).p).toMatchObject({ intent: "Listing the working tree" });
+		expect(ctx.setWorkingMessage).toHaveBeenLastCalledWith("Listing the working tree");
+		await controller.handleEvent(start(args.i));
+		expect(headTargetText(card)).toBe("Listing the working tree");
+		expect(toolNode(card).p).toMatchObject({ intent: "Listing the working tree" });
 	});
 });

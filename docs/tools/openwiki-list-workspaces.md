@@ -2,7 +2,7 @@
 
 > List named OpenWiki workspaces containing the current or another reachable repository wiki. This read-only tool does not invoke a model, generate or update a wiki, or change the workspace registry.
 
-In ordinary unrestricted sessions with `tools.xdev=true`, the tool is discoverable at `xd://openwiki_list_workspaces`: read that URI for its schema, then write JSON arguments to it. If exposed as a top-level tool, call `openwiki_list_workspaces` directly. Mounted execution uses read approval.
+When `tools.commands` is enabled and Bash is available, run `openwiki_list_workspaces --help` through the `bash` tool for usage, then run `openwiki_list_workspaces` with the optional wiki argument. Otherwise, call `openwiki_list_workspaces` as a top-level tool. Both paths use read approval.
 
 Use this tool when workspace membership or the active selection matters, not as routine task-start discovery. Workspace state is scoped to the active OMP profile. The session working directory determines the Git worktree root; there is no `root` input.
 

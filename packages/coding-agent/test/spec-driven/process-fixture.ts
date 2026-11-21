@@ -122,7 +122,7 @@ async function fixture(root: TempDir, baseUrl: string) {
 	);
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
-		"modelRoles:\n  default: deepseek/deepseek-v4-flash\n  smol: deepseek/deepseek-v4-flash\ntools:\n  xdev: false\nasync:\n  enabled: false\n",
+		"modelRoles:\n  default: deepseek/deepseek-v4-flash\n  smol: deepseek/deepseek-v4-flash\ntools:\n  commands: false\nasync:\n  enabled: false\n",
 	);
 	const env: NodeJS.ProcessEnv = {
 		PATH: Bun.env.PATH,

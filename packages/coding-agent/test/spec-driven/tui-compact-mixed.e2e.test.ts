@@ -24,9 +24,10 @@ function call(request: ModelRequest, action: Action): { name: string; args: Reco
 	const args = { ...action.args, i: action.intent };
 	const direct = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === action.name)?.function;
 	if (direct) return { name: direct.name, args };
-	const write = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === "write")?.function;
-	if (!write) throw new Error(`Default tool ${action.name} is neither advertised nor reachable through write`);
-	return { name: write.name, args: { i: action.intent, path: `xd://${action.name}`, content: JSON.stringify(args) } };
+	const bash = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === "bash")?.function;
+	if (!bash) throw new Error(`Default tool ${action.name} is neither advertised nor reachable through bash`);
+	const json = JSON.stringify(action.args).replaceAll("'", "'\\''");
+	return { name: bash.name, args: { i: action.intent, command: `${action.name} --json '${json}'` } };
 }
 
 function result(request: ModelRequest, action: Action): string {
@@ -702,6 +703,61 @@ test("compact mixed long session preserves input, tool effects and peer messages
 	}
 }, 180_000);
 
+test("compact PTY shows structured output from a mounted Bash tool command", async () => {
+	if (!tuiTest) throw new Error("tui-test is required for the compact mounted command regression");
+	const prompt = "Inspect the mounted command fixture";
+	const marker = "MOUNTED_COMMAND_MATCH";
+	const action: Action = {
+		name: "ast_grep",
+		args: { pat: "const $NAME = 7", path: "mounted.ts" },
+		intent: "Searching the mounted fixture",
+	};
+	const release = Promise.withResolvers<void>();
+	let dispatched = false;
+	try {
+		await withTui(
+			{
+				screenDiagnostics: true,
+				configuration: {
+					display: { mode: "compact" },
+					tools: { commands: true },
+					astGrep: { enabled: true },
+				},
+				setup: async cwd => {
+					await Bun.write(path.join(cwd, "mounted.ts"), `const ${marker} = 7;\n`);
+				},
+				async reply(request) {
+					const last = request.messages.findLast(message => message.role === "user");
+					if (!contentText(last?.content).includes(prompt)) return respond(request);
+					if (!dispatched) {
+						dispatched = true;
+						const tool = call(request, action);
+						expect(tool.name.replace(/^_/u, "")).toBe("bash");
+						return { tools: [tool] };
+					}
+					expect(result(request, action)).toContain(marker);
+					await release.promise;
+					return { text: "MOUNTED_COMMAND_DONE" };
+				},
+			},
+			[120, 40],
+			async ({ tui, screen }) => {
+				await tui("submit", prompt);
+				await eventually(
+					() => screen.checkpoint("mounted Bash command output"),
+					frame => frame.screen.includes("bash (ast_grep)") && frame.screen.includes(marker),
+					30_000,
+				);
+				release.resolve();
+				await tui("expect", "text", "MOUNTED_COMMAND_DONE", "--timeout", "30000");
+				await screen.stop();
+			},
+		);
+	} finally {
+		release.resolve();
+	}
+}, 90_000);
+
 test("resumed compact transcript stays in place while successive tools finish and the model waits", async () => {
 	if (!tuiTest) throw new Error("tui-test is required for the compact resumed-session regression");
 	const actions: Action[] = [
@@ -878,6 +934,9 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 				configuration: {
 					display: { mode: "compact" },
 					hideThinkingBlock: true,
+					// Skill optimization has an independent transient HUD row. This case
+					// isolates redraws that have no visible status change.
+					skills: { enabled: false },
 					edit: { modelVariants: { "deepseek/chat-a": "hashline" } },
 				},
 				setup: async cwd => {

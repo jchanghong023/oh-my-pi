@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { getOAuthCredentialProvider } from "@oh-my-pi/pi-ai/oauth";
+import { getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { Settings } from "../../src/config/settings";
 import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
 import {
@@ -74,6 +74,32 @@ describe("shared logout business", () => {
 		expect(refreshProvider).toHaveBeenCalledWith("anthropic", "online");
 		expect(refreshScopedModels).toHaveBeenCalledTimes(1);
 		expect(result.status === "removed" && result.account.credentialId).toBe(selectedId);
+	});
+
+	test.each(["picker", "explicit"])("logs out retired credentials via %s", async method => {
+		const { storage, session, refreshProvider } = await logoutFixture();
+		const id = "google-gemini-cli";
+		await storage.credentials.set(id, [
+			{ type: "oauth", access: "retired-access", refresh: "retired-refresh", expires: Date.now() + 60_000 },
+		]);
+		expect(getOAuthProviders().some(provider => provider.id === id)).toBe(false);
+		const stored = storage.credentials.list(id)[0]!;
+		const selectProvider = vi.fn(async (providers: Parameters<LogoutCommandUI["selectProvider"]>[0]) => {
+			expect(providers.filter(provider => provider.id === id)).toHaveLength(1);
+			return id;
+		});
+		const result = await logoutProviderForCommand(session, method === "explicit" ? id : undefined, {
+			selectProvider,
+			selectAccount: async (provider, accounts) => {
+				expect(provider.id).toBe(id);
+				return accounts[0]!.credentialId;
+			},
+		});
+		expect(selectProvider).toHaveBeenCalledTimes(method === "explicit" ? 0 : 1);
+		expect(result).toMatchObject({ status: "removed", account: { provider: id, credentialId: stored.id } });
+		expect(storage.credentials.list(id)).toEqual([]);
+		expect(storage.credentials.list("anthropic")).toHaveLength(2);
+		expect(refreshProvider).toHaveBeenCalledWith(id, "online");
 	});
 
 	test("explicit provider and account cancellation leave every credential intact", async () => {

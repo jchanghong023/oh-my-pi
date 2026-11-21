@@ -1,5 +1,12 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 
+export const OPENWIKI_QUERY_TOOL_NAMES: readonly string[] = [
+	"openwiki_search",
+	"openwiki_read",
+	"openwiki_list_workspaces",
+	"openwiki_list_wikis",
+];
+
 export const BUILTIN_TOOL_NAMES = [
 	"read",
 	"bash",
@@ -104,6 +111,36 @@ const CANONICAL_TOOL_NAMES: Record<string, true> = Object.fromEntries(
 export function normalizeToolName(name: string): string {
 	const lower = name.toLowerCase();
 	return LEGACY_BUILTIN_TOOL_NAME_ALIASES.get(lower) ?? (Object.hasOwn(CANONICAL_TOOL_NAMES, lower) ? lower : name);
+}
+
+/**
+ * Claude Code tool names (lowercased) and the omp built-in that covers each. Only names with a real
+ * equivalent are listed; Claude-only tools such as `ExitPlanMode` or `KillShell` have none.
+ */
+export const CLAUDE_CODE_TOOL_NAMES: ReadonlyMap<string, BuiltinToolName> = new Map([
+	["task", "task"],
+	["agent", "task"],
+	["bash", "bash"],
+	["read", "read"],
+	["notebookread", "read"],
+	["ls", "read"],
+	["webfetch", "read"],
+	["skill", "read"],
+	["write", "write"],
+	["edit", "edit"],
+	["multiedit", "edit"],
+	["notebookedit", "edit"],
+	["glob", "glob"],
+	["grep", "grep"],
+	["websearch", "web_search"],
+	["todowrite", "todo"],
+	["todoread", "todo"],
+	["askuserquestion", "ask"],
+]);
+
+/** Canonicalize a tool name written in the Claude Code dialect, falling back to {@link normalizeToolName}. */
+export function normalizeClaudeCodeToolName(name: string): string {
+	return CLAUDE_CODE_TOOL_NAMES.get(name.toLowerCase()) ?? normalizeToolName(name);
 }
 
 /** Normalize and deduplicate tool names while preserving first-seen order. */

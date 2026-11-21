@@ -18,7 +18,7 @@ describe("native Goal Ctrl+Enter tool-batch delivery", () => {
 			await withTui(
 				{
 					configuration: {
-						tools: { xdev: false },
+						tools: { commands: false },
 						compaction: { enabled: false },
 						goal: { continuationModes: [] },
 						bash: { direnv: "off", allowCompoundCommands: true },

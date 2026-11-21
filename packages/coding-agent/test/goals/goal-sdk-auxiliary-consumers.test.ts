@@ -24,7 +24,7 @@ const indirectTask: ExtensionFactory = api => {
 	api.registerTool({
 		name: "task",
 		label: "Native Goal child",
-		description: "Run a native child inspection through xd://task.",
+		description: "Run a native child inspection through the task command.",
 		parameters,
 		loadMode: "discoverable",
 		approval: "exec",
@@ -128,7 +128,7 @@ async function harness(reply: (request: ModelRequest) => Reply) {
 			enabledProviders: ["deepseek"],
 			enabledModels: [modelName],
 			defaultThinkingLevel: "minimal",
-			"tools.xdev": true,
+			"tools.commands": true,
 			"async.enabled": false,
 			"task.batch": false,
 			"task.structured": false,
@@ -237,7 +237,7 @@ async function enter(session: AgentSession, signal: AbortSignal) {
 }
 
 describe("Goal SDK indirect capability and auxiliary history consumers", () => {
-	test("native xd://task executes a real child while the Goal notice uses the enabled capability view", async () => {
+	test("mounted task executes a real child while the Goal notice uses the enabled capability view", async () => {
 		let childStage = false;
 		await using h = await harness(request => {
 			if (!childStage) return { text: "GOAL_PRIMARY_FINISHED" };
@@ -252,9 +252,9 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 				: { tool: { name: callable(request, "read"), args: { path: "child-input.txt" } } };
 		});
 		expect(h.session.getActiveToolNames()).not.toContain("task");
-		expect(h.session.getMountedXdevToolNames()).toContain("task");
+		expect(h.session.getMountedToolCommandNames()).toContain("task");
 		expect(h.session.getEnabledToolNames()).toContain("task");
-		expect(h.session.getToolByName("xd://task")?.name).toBe("task");
+		expect(h.session.getToolByName("task")?.name).toBe("task");
 		const notice = await h.run(() => enter(h.session, h.signal));
 		const original = JSON.stringify(notice);
 		const rules = renderOrchestrateNotice({ tools: h.session.getEnabledToolNames() }, { authority: "user" });
@@ -266,18 +266,18 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 		await Bun.write(h.root.join("child-input.txt"), "REAL_CHILD_FILE_BYTES");
 		childStage = true;
 		const before = h.provider.requests.length;
-		const write = h.session.getToolByName("write");
-		if (!write) throw new Error("Missing actual xd:// write transport");
+		const bash = h.session.getToolByName("bash");
+		if (!bash) throw new Error("Missing mounted task command transport");
+		const params = JSON.stringify({
+			name: "GoalAuxChild",
+			task: "Read child-input.txt and report the actual file bytes; do not inherit the root Goal authorization.",
+			solutionSpace: "one read-only inspection",
+		});
 		const result = await h.run(() =>
-			write.execute(
+			bash.execute(
 				"goal-native-task",
 				{
-					path: "xd://task",
-					content: JSON.stringify({
-						name: "GoalAuxChild",
-						task: "Read child-input.txt and report the actual file bytes; do not inherit the root Goal authorization.",
-						solutionSpace: "one read-only inspection",
-					}),
+					command: `task --json '${params}'`,
 				},
 				h.signal,
 			),
@@ -303,12 +303,12 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 		expect(h.provider.failures).toEqual([]);
 	}, 60_000);
 
-	test("disabled native task stays absent until a committed compaction reads the restored xd:// capability", async () => {
+	test("disabled native task stays absent until a committed compaction reads the restored command capability", async () => {
 		await using h = await harness(() => ({
 			text: "## Goal\nContinue the saved inspection.\n\n## Progress\nPrior inspection finished.",
 		}));
 		const enabled = h.session.getEnabledToolNames();
-		const mounted = h.session.getMountedXdevToolNames();
+		const mounted = h.session.getMountedToolCommandNames();
 		expect(mounted).toContain("task");
 		await h.run(() =>
 			h.session.setActiveToolPresentation(

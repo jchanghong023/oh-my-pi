@@ -1,11 +1,9 @@
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { sanitizeDisplayLines } from "@oh-my-pi/pi-tui/render/render-utils";
-import { type BashToolDetails, stripBashNotices } from "@oh-my-pi/pi-tui/tools/bash";
-import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
+import { type BashToolDetails, shellToolCommands, stripBashNotices } from "@oh-my-pi/pi-tui/tools/bash";
 import { resultText } from "@oh-my-pi/pi-tui/tools/native-view";
 import { type OutputMeta, stripOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
-import { parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { LiveToolOutputSnapshot } from "./agent-session-handle";
 
@@ -14,53 +12,56 @@ export function isToolOutputRow(row: string): boolean {
 	return /[\p{L}\p{N}]/u.test(row);
 }
 
-/** Tool identity and details after an actual device dispatch, or the direct call's facts. */
-export function toolOutputSource(toolName: string, result?: ToolRenderResult<unknown>) {
+/** A sole command carries the inner tool identity; compound shell calls remain Bash. */
+export function toolOutputSource(toolName: string, result?: ToolRenderResult<unknown>, args?: unknown) {
 	const details = isRecord(result?.details) ? result.details : undefined;
-	const dispatch = isRecord(details?.xdev) ? details.xdev : undefined;
-	if (toolName === "write" && typeof dispatch?.tool === "string" && dispatch.mode !== "help") {
-		return { name: dispatch.tool, details: isRecord(dispatch.inner) ? dispatch.inner : undefined, dispatch };
+	const shellDetails = toolName === "bash" ? (details as BashToolDetails | undefined) : undefined;
+	const fields = isRecord(args) ? args : undefined;
+	const command = typeof fields?.command === "string" ? fields.command : undefined;
+	if (shellDetails) {
+		const { dispatches, sole } = shellToolCommands(shellDetails, command);
+		const dispatch = sole ? dispatches[0] : undefined;
+		if (dispatch) {
+			return {
+				name: dispatch.tool,
+				details: isRecord(dispatch.inner) ? dispatch.inner : undefined,
+				dispatch,
+				shellDetails,
+			};
+		}
 	}
-	return { name: toolName, details };
+	return { name: toolName, details, shellDetails };
 }
 
 /** Successful direct file operations may duplicate the compact file Diff. */
 export function mayBeCoveredByFileDiff(call: LiveToolOutputSnapshot): boolean {
-	const { toolName, result } = call;
-	if (toolName !== "write" && toolName !== "edit" && toolName !== "apply_patch") return false;
-	const details = isRecord(result?.details) ? result.details : undefined;
+	const { toolName, result, args } = call;
+	const { name, details, shellDetails } = toolOutputSource(toolName, result, args);
+	if (name !== "write" && name !== "edit" && name !== "apply_patch") return false;
 	return (
 		!result?.isError &&
-		!details?.xdev &&
-		details?.cancelled !== true &&
+		(shellDetails ?? details)?.cancelled !== true &&
 		(call.terminalAt === undefined || details !== undefined)
 	);
 }
 
 /** Actual displayable compact Output, using the same output boundaries as the tool renderers. */
 export function toolOutputText(toolName: string, result: ToolRenderResult<unknown>, args?: unknown): string {
-	const { name, details, dispatch } = toolOutputSource(toolName, result);
-	if (toolName === "todo") return "";
-	if (toolName === "write") {
-		const fields = isRecord(args) ? args : undefined;
-		const device = typeof fields?.path === "string" ? parseXdUrl(unwrapHashlineHeaderPath(fields.path)) : null;
-		if (device?.name === "todo" || dispatch?.tool === "todo") return "";
-		// Help does not dispatch, but its result can still identify a TODO request.
-		if (isRecord(details?.xdev) && details.xdev.tool === "todo") return "";
-	}
+	const { name, details, shellDetails } = toolOutputSource(toolName, result, args);
+	if (name === "todo") return "";
 	const raw = resultText(result);
 	let output: string;
-	if (name === "bash") {
-		const bash = details as BashToolDetails | undefined;
-		const job = bash?.async;
-		// A retained running body can outlive its job. Keep excluding the job's startup receipt.
-		const noticeDetails =
-			job && job.state !== "running" ? { ...bash, async: { ...job, state: "running" as const } } : bash;
-		output = stripBashNotices(raw, noticeDetails).text;
-	} else if (name === "read" && isRecord(details?.displayContent) && typeof details.displayContent.text === "string") {
+	if (name === "read" && isRecord(details?.displayContent) && typeof details.displayContent.text === "string") {
 		output = details.displayContent.text;
 	} else {
-		output = stripOutputNotice(raw, details?.meta as OutputMeta | undefined);
+		// A retained running body can outlive its job. Keep excluding the startup receipt.
+		const job = shellDetails?.async;
+		const noticeDetails =
+			job && job.state !== "running"
+				? { ...shellDetails, async: { ...job, state: "running" as const } }
+				: shellDetails;
+		const text = toolName === "bash" ? stripBashNotices(raw, noticeDetails).text : raw;
+		output = stripOutputNotice(text, details?.meta as OutputMeta | undefined);
 	}
 	const lines = sanitizeDisplayLines(output);
 	let size = 0;

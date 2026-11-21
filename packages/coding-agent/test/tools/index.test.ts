@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as pyKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { toolCommandNames } from "@oh-my-pi/pi-coding-agent/exec/tool-command-host";
 
 const openwikiQueryTools = ["openwiki_search", "openwiki_read", "openwiki_list_workspaces", "openwiki_list_wikis"];
 
@@ -11,13 +12,14 @@ function createTestSession(overrides: Partial<ToolSession> = {}): ToolSession {
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
+		settings: Settings.isolated({ "dev.autoqa": false }),
 		...overrides,
 	};
 }
 
 function createSettingsWithOverrides(overrides: Record<string, unknown> = {}): Settings {
 	return Settings.isolated({
+		"dev.autoqa": false,
 		"lsp.formatOnWrite": true,
 		"bashInterceptor.enabled": true,
 		...overrides,
@@ -91,44 +93,26 @@ describe("createTools", () => {
 		expect(new Set(names)).toEqual(new Set(["read", "write", ...openwikiQueryTools]));
 	});
 
-	it("creates xd:// presentation state without remounting explicitly requested built-ins", async () => {
-		const session = createTestSession({ settings: Settings.isolated({ "lsp.enabled": true }) });
+	it("keeps an explicit tool list top-level when it omits bash", async () => {
+		const session = createTestSession({ settings: createSettingsWithOverrides({ "lsp.enabled": true }) });
 		const tools = await createTools(session, ["read", "lsp", "write"]);
 
-		expect(session.xdev).toBeDefined();
-		expect(session.xdev?.mountedNames.size).toBe(0);
+		expect(session.toolCommands).toBeUndefined();
 		expect(new Set(tools.map(tool => tool.name))).toEqual(new Set(["read", "lsp", "write", ...openwikiQueryTools]));
 	});
 
-	it("grants a device-only xd:// transport write when an explicit list keeps read but omits write", async () => {
-		// The xd:// transport rides `write xd://<tool>`; with no write at all the
-		// session would allocate no xd:// state and later SDK assembly would
-		// expose custom/MCP tools top-level. A device-only write restores
-		// mounting while filesystem writes stay rejected (see WriteTool).
-		const session = createTestSession({ settings: Settings.isolated({ "lsp.enabled": true }) });
-		const tools = await createTools(session, ["read", "lsp"]);
-
-		expect(session.deviceOnlyWrite).toBe(true);
-		expect(session.xdev).toBeDefined();
-		expect(new Set(tools.map(tool => tool.name))).toEqual(new Set(["read", "lsp", "write", ...openwikiQueryTools]));
-	});
-
-	it.each([true, false])("exposes OpenWiki queries with default tools when xdev is %s", async xdev => {
-		const session = createTestSession({ settings: Settings.isolated({ "tools.xdev": xdev }) });
+	it.each([true, false])("exposes OpenWiki queries with default tools when commands are %s", async commands => {
+		const session = createTestSession({ settings: createSettingsWithOverrides({ "tools.commands": commands }) });
 		const names = new Set((await createTools(session)).map(tool => tool.name));
 		for (const name of openwikiQueryTools) {
-			if (xdev) {
-				expect(names.has(name)).toBe(false);
-				expect(session.xdev?.mountedNames.has(name)).toBe(true);
-			} else {
-				expect(names.has(name)).toBe(true);
-			}
+			expect(names.has(name)).toBe(!commands);
+			if (commands) expect(session.toolCommands?.mountedNames.has(name)).toBe(true);
 		}
 	});
 
 	it("does not give child sessions OpenWiki queries unless explicitly granted", async () => {
 		for (const requested of [undefined, ["read"]] as const) {
-			const session = createTestSession({ taskDepth: 1, settings: Settings.isolated({ "tools.xdev": false }) });
+			const session = createTestSession({ taskDepth: 1 });
 			const names = (await createTools(session, requested ? [...requested] : undefined)).map(tool => tool.name);
 			for (const name of openwikiQueryTools) expect(names).not.toContain(name);
 		}
@@ -221,8 +205,7 @@ describe("createTools", () => {
 			}),
 			["ask", "read"],
 		);
-		// write joins as the device-only xd:// transport (read granted, ask disabled).
-		expect(new Set(requested.map(t => t.name))).toEqual(new Set(["read", "write", ...openwikiQueryTools]));
+		expect(new Set(requested.map(t => t.name))).toEqual(new Set(["read", ...openwikiQueryTools]));
 	});
 
 	it("filters disabled builtin tools by settings", async () => {
@@ -251,9 +234,7 @@ describe("createTools", () => {
 		expect(names).not.toContain("browser");
 
 		const requestedTools = await createTools(createTestSession({ settings: session.settings }), ["bash", "read"]);
-		// `write` joins as the device-only xd:// transport: read was granted,
-		// write omitted (see the "device-only xd:// transport write" test).
-		expect(new Set(requestedTools.map(t => t.name))).toEqual(new Set(["read", "write", ...openwikiQueryTools]));
+		expect(new Set(requestedTools.map(t => t.name))).toEqual(new Set(["read", ...openwikiQueryTools]));
 	});
 
 	it("auto-includes goal when goal mode is active", async () => {
@@ -266,7 +247,23 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["read"]);
 		const names = tools.map(t => t.name);
 
-		expect(new Set(names)).toEqual(new Set(["read", "goal", "write", ...openwikiQueryTools]));
+		expect(new Set(names)).toEqual(new Set(["read", "goal", ...openwikiQueryTools]));
+	});
+
+	it("presents report_issue top-level when Auto-QA is on and bash is not requested", async () => {
+		const session = createTestSession({ settings: Settings.isolated({ "dev.autoqa": true }) });
+		const tools = await createTools(session, ["read"]);
+
+		expect(new Set(tools.map(tool => tool.name))).toEqual(new Set(["read", "report_issue", ...openwikiQueryTools]));
+		expect(session.toolCommands).toBeUndefined();
+	});
+
+	it("runs report_issue as a command when Auto-QA is on and bash is active", async () => {
+		const session = createTestSession({ settings: Settings.isolated({ "dev.autoqa": true }) });
+		const tools = await createTools(session, ["bash", "read"]);
+
+		expect(tools.map(tool => tool.name)).not.toContain("report_issue");
+		expect(toolCommandNames(session)).toContain("report_issue");
 	});
 
 	it("does not widen a restricted explicit tool list for an active goal", async () => {

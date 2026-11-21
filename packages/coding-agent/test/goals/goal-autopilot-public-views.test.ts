@@ -152,7 +152,7 @@ describe("Goal public management and history views", () => {
 			path.join(config.agentDir, "config.yml"),
 			JSON.stringify({
 				modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
-				tools: { xdev: false },
+				tools: { commands: false },
 				skills: { enabled: false },
 				startup: { setupWizard: false },
 				compaction: { enabled: false },
@@ -169,7 +169,7 @@ describe("Goal public management and history views", () => {
 			auth.keys.setRuntime("deepseek", "isolated-goal-public-key");
 			const settings = Settings.isolated({
 				modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
-				"tools.xdev": false,
+				"tools.commands": false,
 				"async.enabled": false,
 				"compaction.enabled": false,
 				"providers.cacheWarming": "off",
@@ -305,7 +305,7 @@ describe("Goal public management and history views", () => {
 			await withTui(
 				{
 					configuration: {
-						tools: { xdev: false },
+						tools: { commands: false },
 						skills: { enabled: false },
 						compaction: { enabled: false },
 						goal: { continuationModes: [] },

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { MissingApiKeyError } from "../src/error";
+import { setProviderHooks } from "../src/provider-hooks";
 import { streamAnthropic } from "../src/providers/anthropic";
 import { streamOpenAICompletions } from "../src/providers/openai-completions";
 import { streamOpenAIResponses } from "../src/providers/openai-responses";
-import { streamSimple } from "../src/stream";
+import { stream, streamSimple } from "../src/stream";
 import type { Context, SimpleStreamOptions, StreamOptions } from "../src/types";
+import { withEnv } from "./helpers";
 
 const context: Context = { messages: [{ role: "user", content: "Reply locally", timestamp: 0 }] };
 const provider = "header-only-auth-dispatch-local-fixture";
@@ -209,6 +211,31 @@ describe("generic header-only authentication dispatch", () => {
 			).toBe(expectedText);
 		} finally {
 			await server.stop(true);
+		}
+	});
+
+	it("passes only explicit request auth to a provider hook even with an ambient key", async () => {
+		const model = { ...localModel("openai-completions", "http://127.0.0.1:1/v1"), provider: "openai" };
+		const requestAuth = { headers: { "x-host-credential": "local-host-secret" } };
+		const reachedHook = new Error("provider hook reached");
+		setProviderHooks(model.provider, {
+			stream(_model, _context, options) {
+				expect(options.apiKey).toBeUndefined();
+				expect(new Headers(options.headers).get("x-host-credential")).toBe("local-host-secret");
+				expect(options.requestAuth).toEqual(requestAuth);
+				throw reachedHook;
+			},
+		});
+		try {
+			await withEnv({ OPENAI_API_KEY: "fixture-only-ambient-key" }, async () => {
+				for (const dispatch of [stream, streamSimple]) {
+					await expect((async () => dispatch(model, context, { requestAuth }).result())()).rejects.toThrow(
+						reachedHook,
+					);
+				}
+			});
+		} finally {
+			setProviderHooks(model.provider, undefined);
 		}
 	});
 

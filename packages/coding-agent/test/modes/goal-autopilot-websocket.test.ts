@@ -95,7 +95,7 @@ describe("native Goal Codex WebSocket history", () => {
 					overrides: {
 						modelRoles: { default: "openai-codex/gpt-5.3-codex-spark", smol: "openai-codex/gpt-5.3-codex-spark" },
 						defaultThinkingLevel: "minimal",
-						"tools.xdev": false,
+						"tools.commands": false,
 						"async.enabled": false,
 						"skills.enabled": false,
 						"providers.openaiWebsockets": "on",

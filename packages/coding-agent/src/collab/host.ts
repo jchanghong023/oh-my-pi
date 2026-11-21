@@ -465,53 +465,6 @@ export class CollabHost {
 		}
 	}
 
-	#subscribeSession(): void {
-		this.#unsubscribe = this.#ctx.session.subscribeLocal(event => {
-			// Guests speak the per-loop `agent_end` wire shape (see loop-end-wire.ts).
-			const wireEvent = toWireEvent(event);
-			if (isWireAgentEvent(wireEvent)) this.#broadcastEvent(wireEvent);
-			this.#onEventForState(event);
-		});
-		// Subagent frames publish on the session tree's observability bus at
-		// any spawn depth; mirroring from it is what lets nested agents reach
-		// guests at all. Embedders on the previous constructor signature only
-		// wire a session bus — fall back to it so depth-1 frames keep flowing.
-		const observabilityBus = this.#ctx.subagentEventBus ?? this.#ctx.eventBus;
-		if (observabilityBus) {
-			for (const channel of COLLAB_BUS_CHANNELS) {
-				this.#busUnsubscribers.push(
-					observabilityBus.on(channel, data => {
-						if (!this.#broadcastAllowed()) return;
-						// A progress frame is the subagent's whole progress so far, so a newer one
-						// supersedes any still queued for the same subagent (as message_update does):
-						// a busy host's subagents can't fill the queue behind a slow welcome.
-						const key = channel === TASK_SUBAGENT_PROGRESS_CHANNEL ? progressKey(data) : undefined;
-						if (key) this.#socket?.sendLatest(key, { t: "bus", channel, data });
-						else this.#send({ t: "bus", channel, data });
-					}),
-				);
-			}
-		}
-		this.#registryUnsubscribe = AgentRegistry.global().onChange(() => this.#scheduleAgentsBroadcast());
-		this.#ctx.sessionManager.onEntryAppended = entry => {
-			if (isWireSessionEntry(entry) && this.#broadcastAllowed()) {
-				const bounded = serializeReplicatedEntry(entry);
-				const shrunk = bounded.value;
-				if (shrunk.type === "custom_message" && shrunk.customType === COLLAB_ENTRY_OMITTED_CUSTOM_TYPE) {
-					// The live path also emits a guest-visible notice: guests only
-					// apply `message` entries to their agent context, so without
-					// this the substitution would be silently invisible there
-					// (PR #11999 review). Notices never enter agent state.
-					this.#send({ t: "event", event: oversizedEntryNotice(entry.type) });
-				}
-				this.#socket?.send(encodeEntryFrame(bounded.json));
-			}
-			// Model/thinking/title changes land as entries while idle; refresh
-			// guest state promptly (debounce + JSON diff dedupe).
-			this.#scheduleStateBroadcast();
-		};
-	}
-
 	async start(relayUrl: string, webUrl = ""): Promise<void> {
 		if (this.ending) throw new CollabHostStoppedError("collab host already stopped");
 		const rawKey = generateRoomKey();
@@ -593,7 +546,50 @@ export class CollabHost {
 		// Frames are mirrored only while #broadcastAllowed() holds (at least one
 		// peer); a joining guest's welcome snapshot covers everything before that.
 		// The local registry work below is independent of this.
-		this.#subscribeSession();
+		this.#unsubscribe = this.#ctx.session.subscribeLocal(event => {
+			// Guests speak the per-loop `agent_end` wire shape (see loop-end-wire.ts).
+			const wireEvent = toWireEvent(event);
+			if (isWireAgentEvent(wireEvent)) this.#broadcastEvent(wireEvent);
+			this.#onEventForState(event);
+		});
+		// Subagent frames publish on the session tree's observability bus at
+		// any spawn depth; mirroring from it is what lets nested agents reach
+		// guests at all. Embedders on the previous constructor signature only
+		// wire a session bus — fall back to it so depth-1 frames keep flowing.
+		const observabilityBus = this.#ctx.subagentEventBus ?? this.#ctx.eventBus;
+		if (observabilityBus) {
+			for (const channel of COLLAB_BUS_CHANNELS) {
+				this.#busUnsubscribers.push(
+					observabilityBus.on(channel, data => {
+						if (!this.#broadcastAllowed()) return;
+						// A progress frame is the subagent's whole progress so far, so a newer one
+						// supersedes any still queued for the same subagent (as message_update does):
+						// a busy host's subagents can't fill the queue behind a slow welcome.
+						const key = channel === TASK_SUBAGENT_PROGRESS_CHANNEL ? progressKey(data) : undefined;
+						if (key) this.#socket?.sendLatest(key, { t: "bus", channel, data });
+						else this.#send({ t: "bus", channel, data });
+					}),
+				);
+			}
+		}
+		this.#registryUnsubscribe = AgentRegistry.global().onChange(() => this.#scheduleAgentsBroadcast());
+		this.#ctx.sessionManager.onEntryAppended = entry => {
+			if (isWireSessionEntry(entry) && this.#broadcastAllowed()) {
+				const bounded = serializeReplicatedEntry(entry);
+				const shrunk = bounded.value;
+				if (shrunk.type === "custom_message" && shrunk.customType === COLLAB_ENTRY_OMITTED_CUSTOM_TYPE) {
+					// The live path also emits a guest-visible notice: guests only
+					// apply `message` entries to their agent context, so without
+					// this the substitution would be silently invisible there
+					// (PR #11999 review). Notices never enter agent state.
+					this.#send({ t: "event", event: oversizedEntryNotice(entry.type) });
+				}
+				this.#socket?.send(encodeEntryFrame(bounded.json));
+			}
+			// Model/thinking/title changes land as entries while idle; refresh
+			// guest state promptly (debounce + JSON diff dedupe).
+			this.#scheduleStateBroadcast();
+		};
 		this.#updateStatusSegment();
 
 		// Publish to the local host registry only after the relay connection
@@ -861,11 +857,19 @@ export class CollabHost {
 				break;
 			case "prompt":
 				if (this.#rejectWhileStarting("prompting", fromPeer)) break;
-				void this.#handlePrompt(frame.text, frame.images, fromPeer);
+				this.#handlePrompt(frame.text, frame.images, frame.followUp === true, fromPeer);
 				break;
 			case "abort":
 				if (this.#rejectWhileStarting("interrupting", fromPeer)) break;
 				this.#handleAbort(fromPeer);
+				break;
+			case "resume":
+				if (this.#rejectWhileStarting("resuming", fromPeer)) break;
+				this.#handleResume(fromPeer);
+				break;
+			case "deliver-queue":
+				if (this.#rejectWhileStarting("interrupting", fromPeer)) break;
+				this.#handleDeliverQueue(fromPeer);
 				break;
 			case "agent-cmd":
 				if (this.#rejectWhileStarting("agent control", fromPeer)) break;
@@ -1151,7 +1155,7 @@ export class CollabHost {
 		}
 	}
 
-	async #handlePrompt(text: string, images: ImageContent[] | undefined, fromPeer: number): Promise<void> {
+	#handlePrompt(text: string, images: ImageContent[] | undefined, followUp: boolean, fromPeer: number): void {
 		const peer = this.#peers.get(fromPeer);
 		if (!peer?.canWrite) {
 			this.#rejectReadOnly("prompting", fromPeer);
@@ -1166,8 +1170,8 @@ export class CollabHost {
 			this.#ctx.ui.requestRender();
 			this.#scheduleStateBroadcast();
 		}
-		try {
-			const dispatched = await this.#ctx.session.promptCustomMessage(
+		this.#ctx.session
+			.promptCustomMessage(
 				{
 					customType: COLLAB_PROMPT_MESSAGE_TYPE,
 					content,
@@ -1175,13 +1179,15 @@ export class CollabHost {
 					details,
 					attribution: "user",
 				},
-				{ streamingBehavior: "steer", queueChipText: text },
-			);
-			if (dispatched === false) await this.#notifyPromptDropped(fromPeer);
-		} catch (err) {
-			logger.warn("collab guest prompt failed", { error: String(err) });
-			this.#send({ t: "error", message: `prompt failed: ${String(err)}` }, fromPeer);
-		}
+				{ streamingBehavior: followUp ? "followUp" : "steer", queueChipText: text },
+			)
+			.then(dispatched => {
+				if (dispatched === false) return this.#notifyPromptDropped(fromPeer);
+			})
+			.catch(err => {
+				logger.warn("collab guest prompt failed", { error: String(err) });
+				this.#send({ t: "error", message: `prompt failed: ${String(err)}` }, fromPeer);
+			});
 	}
 
 	async #notifyPromptDropped(fromPeer: number): Promise<void> {
@@ -1215,6 +1221,40 @@ export class CollabHost {
 				this.#ctx.session.emitNotice("info", `${name} interrupted`, "collab");
 			})
 			.catch(err => logger.warn("collab guest abort failed", { error: String(err) }));
+	}
+
+	/** A guest's `.`/`c`: continue the agent as the host's own continue shortcut would. */
+	#handleResume(fromPeer: number): void {
+		const peer = this.#peers.get(fromPeer);
+		if (!peer?.canWrite) {
+			this.#rejectReadOnly("resuming", fromPeer);
+			return;
+		}
+		this.#ctx.session.resume().catch(err => {
+			if (!this.#guestTrafficAllowed()) return;
+			this.#send({ t: "error", message: err instanceof Error ? err.message : String(err) }, fromPeer);
+		});
+	}
+
+	/** A guest's empty Enter: interrupt a run that has queued input and continue it with that input. */
+	#handleDeliverQueue(fromPeer: number): void {
+		const peer = this.#peers.get(fromPeer);
+		if (!peer?.canWrite) {
+			this.#rejectReadOnly("interrupting", fromPeer);
+			return;
+		}
+		const session = this.#ctx.session;
+		if (!session.isStreaming || !session.hasInterruptibleInput) return;
+		const name = peer.name;
+		void session
+			.abort({ reason: USER_INTERRUPT_LABEL, deliverQueuedMessages: true })
+			.then(() => {
+				if (!this.#guestTrafficAllowed()) return;
+				this.#ctx.updatePendingMessagesDisplay();
+				this.#ctx.ui.requestRender();
+				session.emitNotice("info", `${name} interrupted`, "collab");
+			})
+			.catch(err => logger.warn("collab guest interrupt failed", { error: String(err) }));
 	}
 
 	/**

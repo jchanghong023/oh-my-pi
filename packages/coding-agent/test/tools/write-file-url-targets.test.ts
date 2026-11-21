@@ -8,7 +8,6 @@ import { InternalUrlRouter, VaultProtocolHandler } from "@oh-my-pi/pi-coding-age
 import * as vaultProtocol from "@oh-my-pi/pi-coding-agent/internal-urls/vault-protocol";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
-import { resolveXdevTool, type XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
@@ -111,39 +110,7 @@ describe("write to file-backed internal URLs", () => {
 		}
 	});
 
-	it("renders file URL write cards dispatched through xd://write only in detailed mode", async () => {
-		const session = createSession(tmpDir);
-		const inner = new WriteTool(session);
-		const xdev: XdevState = {
-			tools: new Map([[inner.name, inner]]),
-			mountedNames: new Set([inner.name]),
-			builtInNames: new Set([inner.name]),
-			isActive: () => false,
-			resolve: name => resolveXdevTool(xdev, name),
-		};
-		session.xdev = xdev;
-		const outer = new WriteTool(session);
-		const file = path.join(vaultRoot, "device.md");
-		for (const [id, content] of [
-			["created", "Device first marker\n"],
-			["unchanged", "Device first marker\n"],
-			["updated", "Device updated marker\n"],
-		] as const) {
-			const input = { path: "vault://Work/device.md", content };
-			const args = { path: "xd://write", content: JSON.stringify(input) };
-			const result = await outer.execute(`device-${id}`, args);
-			expect(await fs.readFile(file, "utf8")).toBe(content);
-			expect(result.details?.xdev).toMatchObject({
-				tool: "write",
-				mode: "execute",
-				args: input,
-				inner: { resolvedPath: await fs.realpath(file) },
-			});
-			expectWriteCard(args, result, content.trim());
-		}
-	});
-
-	it("renders device and partial write cards only in detailed mode, regardless of result metadata", () => {
+	it("renders handler-backed and partial write cards only in detailed mode", () => {
 		for (const target of ["agent://peer", "proc://job", "cfg://display/test"]) {
 			const args = { path: target, content: "Not a file" };
 			expectWriteCard(args, {
@@ -155,18 +122,6 @@ describe("write to file-backed internal URLs", () => {
 				details: { conflictChanges: [{ path: "/tmp/file", diff: "-old\n+new" }] },
 			});
 		}
-		const wrapped = { path: "xd://write", content: JSON.stringify({ path: "agent://peer", content: "Message" }) };
-		expectWriteCard(wrapped, {
-			content: [{ type: "text", text: "Message" }],
-			details: {
-				xdev: {
-					tool: "write",
-					mode: "execute",
-					args: { path: "agent://peer" },
-					inner: { fileChanged: true, path: "/tmp/file", resolvedPath: "/tmp/file" },
-				},
-			},
-		});
 		expectWriteCard(
 			{ path: "vault://Work/note.md", content: "Unverified" },
 			{
@@ -183,20 +138,6 @@ describe("write to file-backed internal URLs", () => {
 			undefined,
 			true,
 		);
-		for (const mode of ["help", "preview"] as const) {
-			const args = { path: "xd://write", content: mode === "help" ? "?" : "{}" };
-			expectWriteCard(args, {
-				content: [{ type: "text", text: "Not a file" }],
-				details: {
-					xdev: {
-						tool: "write",
-						mode,
-						args: { path: "vault://Work/note.md" },
-						inner: { fileChanged: true, path: "/tmp/file", resolvedPath: "/tmp/file" },
-					},
-				},
-			});
-		}
 	});
 
 	it("renders file and handler-backed URL write cards only in detailed mode without change metadata", () => {

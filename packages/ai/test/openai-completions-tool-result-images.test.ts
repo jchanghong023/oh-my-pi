@@ -30,6 +30,7 @@ const compat: ResolvedOpenAICompat = {
 	maxTokensField: "max_completion_tokens",
 	requiresToolResultName: false,
 	requiresAssistantAfterToolResult: false,
+	foldUserAfterToolResult: false,
 	requiresThinkingAsText: false,
 	requiresMistralToolIds: false,
 	thinkingFormat: "openai",
@@ -69,7 +70,6 @@ const compat: ResolvedOpenAICompat = {
 	rejectRootObjectUnion: false,
 	retryWithoutStrictOnGrammarError: false,
 	supportsPromptCacheKey: false,
-	foldUserAfterToolResult: false,
 };
 
 function buildToolResult(toolCallId: string, timestamp: number): ToolResultMessage {
