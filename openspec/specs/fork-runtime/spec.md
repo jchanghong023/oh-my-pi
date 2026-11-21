@@ -520,4 +520,10 @@ OMP MUST 提供可选的 `OMP_CACHE_DIR`，用于分离 Knowledge 数据库及�
 
 ### Requirement: 公司 offline 内网 Git API 可用（2026-11-12 权威补充）
 
-用户已在公司 offline 内部环境实测确认：内网 Git 平台提供 PR／MR 查询和创建 API，且已完整跑通“克隆 → 改代码 → push → 建 MR → 放弃 → 删分支”。offline 表示无公网，不得据此推断内网 Git API 不可用，也不得继续以该推断要求用户必须手工创建 MR。此记录来自用户提供的公司实测信息，不是本工作区测试结果；不推断具体 Git 产品、API 地址、认证格式或自动合并能力。
+`offline` 表示无公网。OMP MUST NOT 仅据此判定内网 Git API 不可用，或以该推断要求用户手工创建 MR。平台能力不构成操作授权。
+
+#### Scenario: 公司内网 Git 平台可达
+
+- **WHEN** 在用户已实测的公司 offline 内网环境中评估 PR／MR 操作
+- **THEN** 以用户实测为依据：平台提供 PR／MR 查询和创建 API，已跑通「克隆 → 改代码 → push → 建 MR → 放弃 → 删分支」；这不是本工作区的测试结果。
+- **AND** 不据此推断具体 Git 产品、API 地址、认证格式或自动合并能力。
