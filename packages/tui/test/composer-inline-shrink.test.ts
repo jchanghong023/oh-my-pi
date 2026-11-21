@@ -432,6 +432,8 @@ describe("composer inline shrink (#11007)", () => {
 			autoCompactEnabled: false,
 			compactionBoundaries: null,
 		});
+		// Keep the status budget deterministic: only hook rows, not top-border overflow.
+		status.setComposerStyle({ statusAttachment: "none", bottomBar: "none", bottomBarGap: false });
 		for (let i = 0; i < 3; i++) status.setHookStatus(`status-${i}`, `STATUS ${i}`);
 		composer.setStatusComponent(status);
 		composer.editor.setText("INPUT");

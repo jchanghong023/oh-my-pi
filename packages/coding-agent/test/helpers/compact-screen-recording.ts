@@ -3,7 +3,8 @@ type Snapshot = NativeSnapshot & { columns: number; rows: number };
 type Tui = (...args: string[]) => Promise<string>;
 type SnapshotReader = (tui: Tui) => Promise<NativeSnapshot>;
 
-function composerBounds(screen: string) {
+/** The default box composer paints its last input row on the bottom border. */
+export function composerBounds(screen: string) {
 	const lines = screen.split("\n");
 	const start = lines.findLastIndex(line => line.startsWith("╭── "));
 	const end = lines.findIndex((line, index) => index > start && line.startsWith("╰─"));
@@ -110,9 +111,9 @@ export class CompactScreenRecording {
 			const fingerprint =
 				start >= 0 &&
 				frame.cursor.y > start &&
-				frame.cursor.y < end &&
+				frame.cursor.y <= end &&
 				Bun.stringWidth(lines[end]!.trimEnd()) === frame.columns
-					? JSON.stringify([frame.cursor.x, frame.cursor.y, start, end, lines.slice(start + 1, end)])
+					? JSON.stringify([frame.cursor.x, frame.cursor.y, start, end, lines.slice(start + 1, end + 1)])
 					: "";
 			const now = Date.now();
 			if (fingerprint !== previous) {
@@ -164,13 +165,13 @@ export class CompactScreenRecording {
 // in transcript/scrollback. Long drafts may legitimately scroll their prefix.
 export function expectVisibleDraft(snapshot: Snapshot, tail: string, columns: number, rows: number): void {
 	const { lines, start, end } = composerBounds(snapshot.screen);
-	if (start < 0 || end <= start || snapshot.cursor.y <= start || snapshot.cursor.y >= end)
+	if (start < 0 || end <= start || snapshot.cursor.y <= start || snapshot.cursor.y > end)
 		throw new Error("Composer borders and focused draft caret are not ordered in the visible viewport");
 	if (snapshot.cursor.x < 3 || snapshot.cursor.x >= columns || snapshot.cursor.y >= rows)
 		throw new Error("Draft caret is outside the resized composer viewport");
 	if (
 		!lines
-			.slice(start + 1, end)
+			.slice(start + 1, end + 1)
 			.join("\n")
 			.includes(tail)
 	)

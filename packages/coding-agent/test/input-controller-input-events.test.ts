@@ -195,13 +195,14 @@ describe("interactive native input ingress", () => {
 				});
 				const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 				const register = vi.fn(() => "bg_team_images");
+				const appendCustomMessage = vi.fn(async () => {});
 				Object.assign(h.session, {
 					model: starts ? model : undefined,
 					modelRegistry: { getAvailable: () => [model], authStorage: undefined },
 					sessionManager: h.ctx.sessionManager,
 					registerSessionChangeCallback: () => () => {},
 					asyncJobManager: { register },
-					sendCustomMessage: async () => false,
+					appendCustomMessage,
 				});
 				h.draftWithImage("/team inspect [Image #1] attachment://1");
 				const submitting = h.pressSubmit(key);
@@ -239,6 +240,7 @@ describe("interactive native input ingress", () => {
 					if (!starts) expect(h.editor.pendingImages[1]).toBe(originalImage);
 					expect(h.editor.pendingImageLinks).toEqual(starts ? [pastedLink] : [pastedLink, "local://original.png"]);
 					expect(register).toHaveBeenCalledTimes(starts ? 1 : 0);
+					expect(appendCustomMessage).toHaveBeenCalledTimes(starts ? 1 : 0);
 					expect(h.prompt).not.toHaveBeenCalled();
 					if (starts) expect(h.ctx.showError).not.toHaveBeenCalled();
 				} finally {

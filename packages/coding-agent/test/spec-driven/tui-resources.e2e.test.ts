@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
+import { composerBounds } from "../helpers/compact-screen-recording";
 import { contentText, MARKER, respond, type ModelRequest } from "./provider-fixture";
 import { clearNativeDraft, eventually, nativeDraftMatches, nativeDraftSnapshot, tuiTest, withTui } from "./tui-harness";
 
@@ -139,15 +140,12 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 						await eventually(
 							() => nativeDraftSnapshot(tui),
 							({ screen, cursor }) => {
-								const lines = screen.split("\n");
-								const start = lines.findLastIndex(line => line.startsWith("╭── "));
-								const end = lines.findIndex((line, index) => index > start && line.startsWith("╰─"));
+								const { lines, start, end } = composerBounds(screen);
+								if (start < 0 || end <= start || cursor.y !== end) return false;
+								const input = lines[end]!.slice(3);
 								return (
-									start >= 0 &&
-									end > start &&
-									cursor.y === end - 1 &&
-									((cursor.x === 3 + turnMarker.length && lines[cursor.y]?.startsWith(`│  ${turnMarker}`)) ||
-										(end === start + 2 && lines[cursor.y]?.startsWith("│  📄 #")))
+									(cursor.x === 3 + turnMarker.length && input.startsWith(turnMarker)) ||
+									(end === start + 1 && input.startsWith("📄 #"))
 								);
 							},
 						);

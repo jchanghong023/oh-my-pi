@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
-import { CompactScreenRecording } from "../helpers/compact-screen-recording";
+import { composerBounds, CompactScreenRecording } from "../helpers/compact-screen-recording";
 import {
 	contentText,
 	createProviderFixture,
@@ -55,26 +55,26 @@ async function nativeDraftSnapshot(tui: (...args: string[]) => Promise<string>) 
 }
 
 function nativeDraftMatches(screen: string, expected: string, cursor?: { x: number; y: number }): boolean {
-	const lines = screen.split("\n");
-	const start = lines.findLastIndex(line => line.startsWith("╭── "));
-	if (start < 0) return false;
-	const end = lines.findIndex((line, index) => index > start && line.startsWith("╰─"));
-	if (end < 0) return false;
+	const { lines, start, end } = composerBounds(screen);
+	if (start < 0 || end <= start) return false;
 	if (cursor) {
 		if (!expected) return cursor.y === start + 1 && cursor.x === 3;
-		if (cursor.y !== end - 1) return false;
+		if (cursor.y !== end) return false;
 	}
-	const rows = lines.slice(start + 1, end);
-	if (!rows.length) return false;
+	const rows = lines.slice(start + 1, end + 1);
 	let remaining = expected;
 	for (const [index, row] of rows.entries()) {
-		if (!row.startsWith("│  ") || row.lastIndexOf("│") < 3) return false;
-		const limit = cursor && index === rows.length - 1 ? cursor.x : row.lastIndexOf("│");
-		const text = row.slice(3, limit).trimEnd();
+		const last = index === rows.length - 1;
+		const border = last ? /─?╯\s*$/u : /[│█]\s*$/u;
+		const limit = row.search(border);
+		if (!row.startsWith(last ? "╰─ " : "│  ") || limit < 3) return false;
+		if (cursor && last && (cursor.x < 3 || cursor.x > limit)) return false;
+		const text = row.slice(3, cursor && last ? cursor.x : limit);
+		const input = text.trimEnd();
 		// Submitted control commands are one logical line. Extra blank rows
 		// mean another draft/keypress was merged into it, not exact restoration.
-		if (!text || !remaining.startsWith(text)) return false;
-		remaining = remaining.slice(text.length);
+		if (!input || !remaining.startsWith(input)) return false;
+		remaining = remaining.slice(input.length);
 		// Word wrapping omits the boundary space from the painted row.
 		if (index < rows.length - 1 && remaining.startsWith(" ")) remaining = remaining.slice(1);
 	}
