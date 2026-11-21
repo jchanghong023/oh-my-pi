@@ -16,7 +16,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FileLock, Process, PtySession } from "@oh-my-pi/pi-natives";
-import { postmortem } from "@oh-my-pi/pi-utils";
+import { postmortem, withTimeout } from "@oh-my-pi/pi-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { probeDaemon } from "../packages/coding-agent/src/daemon/client";
 import { DAEMON_DIR_ENV, DAEMON_TCP_ENV } from "../packages/coding-agent/src/daemon/protocol";
@@ -53,8 +53,7 @@ async function removeFixture(configRoot: string): Promise<void> {
 		try {
 			handle.session.kill();
 		} catch {}
-		const exited = await Promise.race([handle.exitPromise, sleep(20_000).then(() => undefined)]);
-		if (!exited) throw new Error("Fixture TUI did not exit before cleanup");
+		await withTimeout(handle.exitPromise, 20_000, "Fixture TUI did not exit before cleanup");
 	}
 	const oldDir = process.env[DAEMON_DIR_ENV];
 	const oldTcp = process.env[DAEMON_TCP_ENV];
@@ -193,6 +192,12 @@ function startTui(argv: string[], env: Record<string, string | undefined>, proje
 	return handle;
 }
 
+function waitForCleanExit(handle: TuiHandle, label: string): Promise<Outcome> {
+	return withTimeout(handle.exitPromise, 20_000, `${label} did not exit within 20 s after Ctrl+D`).catch(
+		(error: Error) => fail(error.message, handle.session),
+	);
+}
+
 function fail(message: string, ...sessions: PtySession[]): never {
 	reportGateFailure(new GateCommandError(message, 1));
 	console.error(`ui-smoke: FAIL — ${message}`);
@@ -323,10 +328,7 @@ if (!process.argv.includes("--team-group-only")) {
 	console.log("ui-smoke: sending Ctrl+D to exit…");
 	main.session.write("\x04");
 	{
-		const outcome = await Promise.race([main.exitPromise, sleep(20_000).then(() => undefined)]);
-		if (!outcome) {
-			fail("TUI did not exit within 20 s after Ctrl+D", main.session);
-		}
+		const outcome = await waitForCleanExit(main, "TUI");
 		if (outcome.exitCode !== 0) {
 			fail(`TUI exited with code ${outcome.exitCode} (expected 0)`);
 		}
@@ -984,10 +986,7 @@ try {
 	invalidRequiredRecheck = false;
 
 	team.session.write("\x04");
-	const teamOutcome = await Promise.race([team.exitPromise, sleep(20_000).then(() => undefined)]);
-	if (!teamOutcome) {
-		fail("/team TUI did not exit within 20 s after Ctrl+D", team.session);
-	}
+	const teamOutcome = await waitForCleanExit(team, "/team TUI");
 	if (teamOutcome.exitCode !== 0) {
 		fail(`/team TUI exited with code ${teamOutcome.exitCode} (expected 0)`);
 	}
@@ -1127,10 +1126,7 @@ try {
 		);
 	}
 	cancelTui.session.write("\x04");
-	const cancelOutcome = await Promise.race([cancelTui.exitPromise, sleep(20_000).then(() => undefined)]);
-	if (!cancelOutcome) {
-		fail("/team cancel TUI did not exit within 20 s after Ctrl+D", cancelTui.session);
-	}
+	const cancelOutcome = await waitForCleanExit(cancelTui, "/team cancel TUI");
 	if (cancelOutcome.exitCode !== 0) {
 		fail(`/team cancel TUI exited with code ${cancelOutcome.exitCode} (expected 0)`);
 	}

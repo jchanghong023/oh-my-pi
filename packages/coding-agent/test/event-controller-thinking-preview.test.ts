@@ -1663,7 +1663,7 @@ describe("compact latest live Output consumers", () => {
 		output.observe(startupReceipt, 10_002);
 		expect(output.preview()?.call.terminalAt).toBe(10_001);
 		const view = h.previewView();
-		expect(view.head).toBe("失败 · write (bash) · Build · bg_1 · echo active");
+		expect(view.head).toBe("失败 · write (bash) · bg_1 · echo active");
 		expect(view.nativeHead).toBe(view.head);
 		expect(view.body).toEqual(["Error: failed at step 2"]);
 		expect(view.nativeBody).toEqual(view.body);

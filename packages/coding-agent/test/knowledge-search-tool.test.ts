@@ -655,8 +655,8 @@ describe("KnowledgeSearchTool", () => {
 		expect(page).toContain(section);
 		expect(page).toContain("(identical text to hit [1] on this page)");
 		expect(page).toContain("1 repeated hit(s) collapsed to a page-local pointer");
-		expect(page).toContain("a.md:1-2");
-		expect(page).toContain("b.md:1-2");
+		expect(page).toContain("a.md:1-3");
+		expect(page).toContain("b.md:1-3");
 		expect([...page.matchAll(/sha256=[a-f0-9]{64} · sectionId=\d+/g)]).toHaveLength(2);
 	});
 

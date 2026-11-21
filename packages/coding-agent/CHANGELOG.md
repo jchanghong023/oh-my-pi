@@ -104,6 +104,7 @@
 
 ### Fixed
 
+- `fulltest` no longer waits for the PTY exit deadline after the smoke tests have already finished.
 - `/loop` follow-ups queued during compaction resume repeating only after their inline prompt is admitted.
 - Offline `omp openspec version --check` follows redirects only within the configured HTTPS mirror.
 - `/todoloop` skips tasks hidden by multiline HTML comments, including comments that start after visible text.

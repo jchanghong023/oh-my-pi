@@ -937,6 +937,17 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 			[100, 80],
 			async ({ agentDir, cwd, provider, tui, screen }) => {
 				screen.start();
+				const fileCard = (text: string) =>
+					text.match(/^[^\n]*╭─+[^\n]*retained-edit\.ts[^\n]*\n[\s\S]*?^ *╰─+[^\n]*/mu)?.[0] ?? "";
+				const collapsedDiff = (text: string) => {
+					const card = fileCard(text);
+					return (
+						card.includes(original) &&
+						card.includes("EDIT_CLI_01") &&
+						!card.includes(editTail) &&
+						!card.includes(intermediate)
+					);
+				};
 				await eventually(
 					() => screen.checkpoint("initial reply"),
 					frame => frame.screen.includes(`${MARKER}_CHAT_READY`),
@@ -945,11 +956,10 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 				await writeReturned.promise;
 				await eventually(
 					() => screen.checkpoint("compact Write card shows the confirmed before and after"),
-					frame =>
-						frame.screen.includes("retained-edit.ts") &&
-						frame.screen.includes(original) &&
-						frame.screen.includes(intermediate) &&
-						!frame.screen.includes("Successfully wrote"),
+					({ screen: text }) =>
+						fileCard(text).includes(original) &&
+						fileCard(text).includes(intermediate) &&
+						!text.includes("Successfully wrote"),
 				);
 				continueToRead.resolve();
 				const editOutput = await editReturned.promise;
@@ -957,23 +967,12 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 				expect(editOutput).not.toContain(original);
 				await eventually(
 					() => screen.checkpoint("compact Edit card shows the net change rather than its intermediate input"),
-					frame =>
-						frame.screen.includes("retained-edit.ts") &&
-						frame.screen.includes(original) &&
-						frame.screen.includes("EDIT_CLI_01") &&
-						!frame.screen.includes(intermediate) &&
-						!frame.screen.includes(editTail),
+					frame => collapsedDiff(frame.screen) && frame.screen.includes(intermediate),
 				);
 				continueToGrep.resolve();
 				await waiting.promise;
 				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(`${edited}\n`);
 				const hiddenTools = /retained-(?:edit\.ts|search\.txt)|EDIT_CLI_\d{2}|const original = 0;|CLI_GREPPED/u;
-				const collapsedDiff = (text: string) =>
-					text.includes("retained-edit.ts") &&
-					text.includes(original) &&
-					text.includes("EDIT_CLI_01") &&
-					!text.includes(editTail) &&
-					!text.includes(intermediate);
 				await tui("type", draft);
 				await eventually(
 					() => screen.checkpoint("read output does not replace the current-turn diff"),
@@ -998,7 +997,7 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 						nativeDraftMatches(frame.screen, draft, frame.cursor),
 				);
 				expect(baseline.screen).not.toContain("本轮改动");
-				const cardHead = baseline.screen.split("\n").find(line => line.includes("retained-edit.ts"));
+				const cardHead = fileCard(baseline.screen).split("\n", 1)[0];
 				expect(cardHead).not.toMatch(/\+46\b|-1\b/u);
 				const markers = [`${MARKER}_CHAT_READY`, "CLI_EDIT_PROMPT", original, "EDIT_CLI_01", "CLI_READ_RESULT"];
 				const rows = (text: string) =>
