@@ -344,13 +344,12 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 		process.exit(1);
 	}
 
-	let revision: string | undefined;
 	try {
 		const parsed = def.setting.parse(value);
 		def.setting.assertWritable(parsed);
 		const snapshot = await settings.readUserSetting(def.path);
 		if (snapshot.revision === null) throw new Error("User configuration cannot be safely read; nothing was saved.");
-		revision = (await settings.saveUserSetting(def.path, parsed, snapshot.revision)).revision;
+		await settings.saveUserSetting(def.path, parsed, snapshot.revision);
 	} catch (err) {
 		console.error(chalk.red(String(err)));
 		process.exit(1);
@@ -367,14 +366,12 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 			JSON.stringify({
 				key: def.path,
 				...(redacted ? { redacted: true } : { value: saved }),
-				revision,
 				...shadow?.json,
 			}),
 		);
 		return;
 	}
 	console.log(chalk.green(`${theme.status.success} Set ${def.path} = ${redacted ? REDACTED : formatValue(saved)}`));
-	console.log(chalk.dim(`Revision: ${revision}`));
 	if (shadow) console.log(chalk.yellow(`${theme.status.warning} ${shadow.message}`));
 }
 
@@ -436,13 +433,11 @@ async function handleReset(key: string | undefined, flags: { json?: boolean }): 
 		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
 		process.exit(1);
 	}
-	let revision: string | undefined;
-
 	try {
 		// Explicit CAS persistence cannot silently discard a conflicting edit and report success.
 		const snapshot = await settings.readUserSetting(def.path);
 		if (snapshot.revision === null) throw new Error("User configuration cannot be safely read; nothing was reset.");
-		revision = (await settings.saveUserSetting(def.path, undefined, snapshot.revision)).revision;
+		await settings.saveUserSetting(def.path, undefined, snapshot.revision);
 	} catch (err) {
 		console.error(chalk.red(String(err)));
 		process.exit(1);
@@ -452,14 +447,11 @@ async function handleReset(key: string | undefined, flags: { json?: boolean }): 
 	const value = def.setting.get(settings);
 	const redacted = def.setting.isCredential && !!value;
 	if (flags.json) {
-		console.log(
-			JSON.stringify(redacted ? { key: def.path, redacted: true, revision } : { key: def.path, value, revision }),
-		);
+		console.log(JSON.stringify(redacted ? { key: def.path, redacted: true } : { key: def.path, value }));
 	} else {
 		console.log(
 			chalk.green(`${theme.status.success} Reset ${def.path} to ${redacted ? REDACTED : formatValue(value)}`),
 		);
-		console.log(chalk.dim(`Revision: ${revision}`));
 	}
 }
 

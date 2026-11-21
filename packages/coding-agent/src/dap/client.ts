@@ -249,8 +249,7 @@ export class DapClient {
 		env: Record<string, string | undefined>;
 		timeoutMs: number;
 	}): Promise<DapClient> {
-		const socketName = `dap-${adapter.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-		const socketPath = `/tmp/${socketName}.sock`;
+		const socketPath = `/tmp/dap-${adapter.name}-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`;
 		const proc = ptree.spawn([adapter.resolvedCommand, ...adapter.args, `--listen=unix:${socketPath}`], {
 			cwd,
 			stdin: "pipe",

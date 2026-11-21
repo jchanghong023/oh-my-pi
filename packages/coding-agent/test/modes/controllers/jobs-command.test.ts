@@ -143,8 +143,7 @@ describe("/jobs in the terminal", () => {
 		resetSettingsForTest();
 	});
 
-	it.each([false, true])("shows live output without changing the transcript (native=%s)", async native => {
-		setNativeRendering(native);
+	it("shows live output without changing the transcript in the native terminal", async () => {
 		const gate = Promise.withResolvers<string>();
 		let progress: ((text: string) => Promise<void>) | undefined;
 		manager.register(
@@ -271,7 +270,8 @@ describe("/jobs in the terminal", () => {
 			sheet?.handleInput?.("\x1b");
 
 			setNativeRendering(false);
-			await mode.handleJobsCommand({ full: true });
+			await mode.handleJobsCommand();
+			expect(mode.ui.hasOverlay()).toBe(false);
 			const report = Bun.stripANSI(mode.reportContainer.render(100).join("\n"));
 			expect(report).toContain("worker cargo test");
 			expect(report).not.toContain("main-only build");

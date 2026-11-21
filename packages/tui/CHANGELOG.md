@@ -8,6 +8,7 @@
 - `OutputSinkOptions.artifactPath`/`artifactId` are replaced by `allocateArtifact` (`ArtifactAllocator`), which the sink calls only when output first overflows its inline view
 - Removed the `windows-altgr` module (`translateWindowsAltGrSequence`, `readAltGrLayer`, `createRightAltLatch`, `RIGHT_ALT_LATCH_MS`, `AltGrHost`, `KeyboardLayoutHandle`); AltGr recovery is `translateWindowsAltGrSequence` in `@oh-my-pi/pi-natives`
 - Removed the fork-only blocked todo state and blocker note from the TUI todo types.
+- Removed the fork-only `runInput()` `previewLines` option. Native command and code previews keep the upstream six-line limit.
 
 ### Added
 
@@ -16,6 +17,12 @@
 ### Changed
 
 - Native chats no longer show a crossed-out Spotlight star or leave an empty row under unchanged tool results.
+- Emergency terminal cleanup only sends reset sequences while OMP still owns the terminal.
+- The optional `dark-terminal` theme uses the upstream bright green and red palette again.
+- Choosing `Match terminal` in the setup wizard now sets the dark and light themes to Titanium and Light.
+- Empty ANSI composer hints sit on the right and are hidden when they don't fit.
+- The ANSI composer no longer adds a fixed blank row below the draft or hint.
+- The ANSI `/session info` panel uses upstream text wrapping again; continuation lines no longer repeat tree guides.
 - Windows console VT input and AltGr recovery go through `@oh-my-pi/pi-natives` instead of `bun:ffi`
 - The background jobs sheet reads a job's output from where its command sends it: a command that pipes (`| tail`) or redirects (`> log`) gets a tab per stream beside Output and opens on the one being written, instead of "No output yet" until it ends
 - The background jobs sheet draws a job's command as its live shell visualization with the running step in view, and fits what the job is for, its caption and its facts in fewer lines

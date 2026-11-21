@@ -5,11 +5,18 @@
  * Final delivery is acknowledged only after its durable append receipt.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
+import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	buildRunnerDeps,
 	deliverTeamReport,
@@ -19,6 +26,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/team/controller";
 import * as orchestratorModule from "@oh-my-pi/pi-coding-agent/team/orchestrator";
 import type { TeamRunResult } from "@oh-my-pi/pi-coding-agent/team/types";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import {
@@ -71,9 +79,8 @@ function stubSession(jobManager: JobManagerStub, sentMessages: { customType: str
 				},
 			};
 		},
-		sendCustomMessage: async (payload: { customType: string; content: string }) => {
+		appendCustomMessage: async (payload: { customType: string; content: string }) => {
 			sentMessages.push({ customType: payload.customType, content: payload.content });
-			return false;
 		},
 		sessionManager: { getAdditionalDirectories: () => [], getArtifactsDir: () => null },
 		sessionFile: undefined,
@@ -287,7 +294,9 @@ describe("team controller dispatch", () => {
 			modelRegistry: { getAvailable: () => [base] },
 			asyncJobManager: manager,
 			isStreaming: false,
-			appendCustomMessage: append,
+			appendCustomMessage: async (payload: { customType: string }) => {
+				if (payload.customType === "team-result") await append();
+			},
 			sessionManager: { getAdditionalDirectories: () => [], getArtifactsDir: () => null },
 		} as unknown as AgentSession;
 		try {
@@ -504,7 +513,9 @@ describe("team controller dispatch", () => {
 				},
 				asyncJobManager: manager,
 				isStreaming: false,
-				appendCustomMessage: append,
+				appendCustomMessage: async (payload: { customType: string }) => {
+					if (payload.customType === "team-result") await append();
+				},
 				registerSessionChangeCallback: (callback: () => void) => {
 					callbacks.add(callback);
 					return () => callbacks.delete(callback);
@@ -576,23 +587,89 @@ describe("team controller dispatch", () => {
 		expect(output[0]).toContain("hub cancel");
 	});
 
-	it("registers without acknowledging the unfinished result, and sends the dispatch breadcrumb", async () => {
-		const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
-		const sent: { customType: string; content: string }[] = [];
-		const result = await startTeamDiscussion("分析 X", {
-			session: stubSession(jobManager, sent),
-			settings: teamSettings(),
-			cwd: "/tmp/repo",
-			hooks: {},
+	it("persists the dispatch in the original journal before an active model turn ends", async () => {
+		const temp = TempDir.createSync("@pi-team-dispatch-");
+		const cwd = temp.path();
+		const auth = await AuthStorage.create(":memory:");
+		const streamStarted = Promise.withResolvers<void>();
+		const releaseStream = Promise.withResolvers<void>();
+		const mock = createMockModel({
+			handler: async () => {
+				streamStarted.resolve();
+				await releaseStream.promise;
+				return { content: ["original turn completed"] };
+			},
 		});
-		expect(result.started).toBe(true);
-		expect(result.jobId).toBe("bg_stub_1");
-		// The final report has not been persisted by the still-running job.
-		expect(jobManager.acknowledged).toEqual([]);
-		// The dispatch breadcrumb carries the ASCII job marker.
-		expect(sent).toHaveLength(1);
-		expect(sent[0]!.customType).toBe("team-dispatch");
-		expect(sent[0]!.content).toContain("[team-dispatch bg_stub_1]");
+		const manager = new AsyncJobManager({});
+		const journal = SessionManager.create(cwd, cwd);
+		const registry = new ModelRegistry(auth, path.join(cwd, "models.yml"));
+		vi.spyOn(registry, "getAvailable").mockReturnValue([MODEL]);
+		vi.spyOn(registry, "getApiKey").mockResolvedValue("test-key");
+		vi.spyOn(orchestratorModule, "runTeamDiscussion").mockResolvedValue({
+			runId: "dispatch-journal",
+			inputVersion: "controller-input-v1",
+			candidates: [],
+			interpretationDifferences: [],
+			status: "cancelled",
+		});
+		const settings = Settings.isolated({
+			"team.members": [MODEL_PATTERN],
+			"compaction.enabled": false,
+			"prewalk.enabled": false,
+			"todo.enabled": false,
+		});
+		const session = new AgentSession({
+			agent: new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model: MODEL, systemPrompt: ["Test"], tools: [], messages: [] },
+				convertToLlm,
+				streamFn: mock.stream,
+			}),
+			sessionManager: journal,
+			settings,
+			modelRegistry: registry,
+			toolRegistry: new Map(),
+			ownedAsyncJobManager: manager,
+		});
+		const prompt = session.prompt("original turn");
+		try {
+			await Promise.race([streamStarted.promise, prompt]);
+			expect(session.isStreaming).toBe(true);
+			const idleWait = Promise.withResolvers<"waiting">();
+			const waitForIdle = session.waitForIdle.bind(session);
+			vi.spyOn(session, "waitForIdle").mockImplementation(() => {
+				idleWait.resolve("waiting");
+				return waitForIdle();
+			});
+			const dispatch = startTeamDiscussion("inspect the module", { session, settings, cwd, hooks: {} });
+			const result = await Promise.race([dispatch, idleWait.promise]);
+			if (result === "waiting") {
+				releaseStream.resolve();
+				await dispatch;
+				throw new Error("Team dispatch waited for the active turn to end");
+			}
+			expect(result.started).toBe(true);
+			expect(session.isStreaming).toBe(true);
+			expect(Bun.JSONL.parse(await Bun.file(journal.getSessionFile()!).text())).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						type: "custom_message",
+						customType: "team-dispatch",
+						content: expect.stringContaining(`[team-dispatch ${result.jobId}]`),
+						details: expect.objectContaining({ jobId: result.jobId }),
+					}),
+				]),
+			);
+			releaseStream.resolve();
+			await prompt;
+			expect(mock.calls).toHaveLength(1);
+		} finally {
+			releaseStream.resolve();
+			await prompt.catch(() => {});
+			await session.dispose();
+			auth.close();
+			temp.removeSync();
+		}
 	});
 
 	it("includes all first 80 question characters in the durable dispatch preview before any truncation marker", async () => {
@@ -676,8 +753,8 @@ describe("team controller dispatch", () => {
 		const question = "NOTICE_QUESTION_CANARY";
 		const reason = "session disposed NOTICE_ERROR_CANARY";
 		const cwd = "/private/NOTICE_PATH_CANARY";
-		// Registration succeeds, but the notice call itself does not resolve.
-		const send = vi.spyOn(session, "sendCustomMessage").mockImplementation(async () => {
+		// Registration succeeds, but the notice cannot be saved.
+		vi.spyOn(session, "appendCustomMessage").mockImplementation(async () => {
 			expect(jobManager.registerCalls).toBe(1);
 			calls.push("notice_dispatch");
 			throw new Error(reason);
@@ -724,12 +801,11 @@ describe("team controller dispatch", () => {
 			]);
 		} finally {
 			dispose();
-			send.mockRestore();
 		}
 	});
 
 	it.each(["chat_rebuild", "status_update"] as const)(
-		"keeps the registered job when %s throws after the notice call resolves false",
+		"reports a UI failure without claiming the saved notice was lost when %s throws",
 		async failedStage => {
 			const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
 			const sent: { customType: string; content: string }[] = [];
@@ -741,14 +817,11 @@ describe("team controller dispatch", () => {
 			const question = "UI_QUESTION_CANARY";
 			const reason = `${failedStage} UI_ERROR_CANARY`;
 			const cwd = "/private/UI_PATH_CANARY";
-			const originalSend = session.sendCustomMessage.bind(session);
-			const send = vi.spyOn(session, "sendCustomMessage").mockImplementation(async (...args) => {
+			const originalAppend = session.appendCustomMessage.bind(session);
+			vi.spyOn(session, "appendCustomMessage").mockImplementation(async (...args) => {
 				expect(jobManager.registerCalls).toBe(1);
 				calls.push("notice_dispatch");
-				const startedTurn = await originalSend(...args);
-				// This boolean describes turn startup, not durable persistence.
-				expect(startedTurn).toBe(false);
-				return startedTurn;
+				await originalAppend(...args);
 			});
 			const dispose = registerLogSink(event => {
 				if (event.context?.component === "team.controller") events.push(event);
@@ -785,14 +858,6 @@ describe("team controller dispatch", () => {
 				expect(sent).toEqual([{ customType: "team-dispatch", content: result.message! }]);
 				expect(sent[0]!.content).toContain(`[team-dispatch ${result.jobId}]`);
 				expect(sent[0]!.content).toContain(question);
-				expect(send).toHaveBeenCalledWith(
-					expect.objectContaining({
-						customType: "team-dispatch",
-						display: true,
-						details: { jobId: result.jobId, question, dispatch: true },
-					}),
-					{ triggerTurn: false, deliverAs: "nextTurn" },
-				);
 				expect(calls).toEqual([
 					"notice_dispatch",
 					"chat_rebuild",
@@ -800,12 +865,11 @@ describe("team controller dispatch", () => {
 					"showError",
 					"output",
 				]);
-				expect(errors).toEqual([`/team 已启动（任务 ${result.jobId}），但写入派发通知失败：${reason}`]);
+				expect(errors).toEqual([`/team 已启动（任务 ${result.jobId}），派发通知已记录，但刷新界面失败：${reason}`]);
 				expect(output).toEqual(errors);
 				expectDispatchFollowupFailure(events, failedStage, [question, "UI_ERROR_CANARY", cwd, sent[0]!.content]);
 			} finally {
 				dispose();
-				send.mockRestore();
 			}
 		},
 	);

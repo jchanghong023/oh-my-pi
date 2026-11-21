@@ -264,8 +264,7 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 		invalidFlagValues: [],
 		sessionDir: $env.PI_CODING_AGENT_SESSION_DIR || undefined,
 		intranetOffline: offlineFromEnv() || undefined,
-		// Fork launches skip automatic LSP and extension discovery on every platform.
-		noLsp: true,
+		// Fork launches skip automatic extension discovery on every platform.
 		noExtensions: true,
 	};
 

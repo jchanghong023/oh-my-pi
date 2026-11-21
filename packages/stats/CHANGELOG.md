@@ -8,8 +8,7 @@
 
 ### Fixed
 
-- Windows stats startup avoids a redundant process lookup when the requested port is occupied.
-- On Windows, stats falls back to `tasklist` when CIM cannot identify the process holding its port.
+- On Windows, stats uses the upstream port-holder lookup order while preserving the PowerShell filter needed to identify the process.
 
 ## [19.0.1] - 2026-11-19
 

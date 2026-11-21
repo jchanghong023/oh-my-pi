@@ -128,6 +128,7 @@ function getDefaultSessionDirName(cwd: string): {
  */
 function migrateHomeSessionDirs(sessionsRoot: string): void {
 	if (migratedSessionRoots.has(sessionsRoot)) return;
+	migratedSessionRoots.add(sessionsRoot);
 
 	const home = os.homedir();
 	const homeEncoded = home.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
@@ -138,7 +139,6 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 	try {
 		entries = fs.readdirSync(sessionsRoot);
 	} catch {
-		migratedSessionRoots.add(sessionsRoot);
 		return;
 	}
 
@@ -166,14 +166,12 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 			});
 		}
 	}
-	migratedSessionRoots.add(sessionsRoot);
 }
 
 /** Move the session dir `legacyDirName` under `sessionsRoot` into `sessionDir`. Best-effort. */
 function migrateNamedSessionDir(legacyDirName: string, sessionDir: string, sessionsRoot: string): void {
 	const legacyDir = path.join(sessionsRoot, legacyDirName);
-	if (legacyDir === sessionDir) return;
-	if (!fs.existsSync(legacyDir)) return;
+	if (legacyDir === sessionDir || !fs.existsSync(legacyDir)) return;
 
 	try {
 		migrateSessionDirPath(legacyDir, sessionDir);
@@ -193,8 +191,7 @@ function migrateNamedSessionDir(legacyDirName: string, sessionDir: string, sessi
  */
 function migrateHashedSessionDir(hashedDirName: string, sessionDir: string, sessionsRoot: string): void {
 	const hashedDir = path.join(sessionsRoot, hashedDirName);
-	if (hashedDir === sessionDir) return;
-	if (!fs.existsSync(hashedDir)) return;
+	if (hashedDir === sessionDir || !fs.existsSync(hashedDir)) return;
 
 	try {
 		migrateSessionDirPath(hashedDir, sessionDir);
@@ -302,8 +299,8 @@ export function computeDefaultSessionDir(
 ): string {
 	const { encodedDirName, hashedDirName, shadowedHomeDirName, shadowedHomeHashedDirName, resolvedCwd } =
 		getDefaultSessionDirName(cwd);
-	const sessionDir = path.join(sessionsRoot, encodedDirName);
 	migrateHomeSessionDirs(sessionsRoot);
+	const sessionDir = path.join(sessionsRoot, encodedDirName);
 	migrateNamedSessionDir(encodeLegacyAbsoluteSessionDirName(resolvedCwd), sessionDir, sessionsRoot);
 	if (shadowedHomeDirName) migrateNamedSessionDir(shadowedHomeDirName, sessionDir, sessionsRoot);
 	if (shadowedHomeHashedDirName) migrateNamedSessionDir(shadowedHomeHashedDirName, sessionDir, sessionsRoot);

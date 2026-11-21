@@ -859,9 +859,12 @@ describe("lsp regressions", () => {
 		}
 	});
 
-	it("rejects code action apply without a selector and applies a selected action", async () => {
+	it("selects sole, preferred, and explicit code actions and reports failures", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-action-selector-");
-		let executed = 0;
+		const fix: CodeAction = { title: "Fix it", command: { title: "Fix it", command: "fix" } };
+		const alternative: CodeAction = { title: "Other fix", command: { title: "Other fix", command: "other" } };
+		let actions = [fix];
+		const executed: string[] = [];
 		let failCommand = false;
 		try {
 			const config: ServerConfig = { command: "fake-lsp", fileTypes: [".ts"], rootMarkers: [] };
@@ -869,9 +872,11 @@ describe("lsp regressions", () => {
 				if (message.method === "initialize") {
 					server.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { codeActionProvider: true } } });
 				} else if (message.method === "textDocument/codeAction") {
-					server.send({ jsonrpc: "2.0", id: message.id, result: [{ title: "Fix it", command: "fix" }] });
+					server.send({ jsonrpc: "2.0", id: message.id, result: actions });
+				} else if (message.method === "codeAction/resolve") {
+					server.send({ jsonrpc: "2.0", id: message.id, result: message.params });
 				} else if (message.method === "workspace/executeCommand") {
-					executed++;
+					executed.push((message.params as { command: string }).command);
 					server.send(
 						failCommand
 							? {
@@ -891,54 +896,41 @@ describe("lsp regressions", () => {
 			const client = await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
 			const file = await openDocument(client, "target.ts");
 			const tool = new LspTool(makeLspSession(tempDir.path()));
-			for (const query of [undefined, "   "]) {
-				const result = await tool.execute("missing-selector", {
-					action: "code_actions",
-					file,
-					line: 1,
-					apply: true,
-					query,
-				});
-				expect(result.details?.success).toBe(false);
-				expect(result.isError).toBe(true);
-				expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("query") });
-				expect(executed).toBe(0);
-			}
-			const unmatched = await tool.execute("unmatched-action", {
-				action: "code_actions",
-				file,
-				line: 1,
-				apply: true,
-				query: "missing",
-			});
+			const applyAction = (query?: string) =>
+				tool.execute("apply-action", { action: "code_actions", file, line: 1, apply: true, query });
+
+			const sole = await applyAction();
+			expect(sole.details?.success).toBe(true);
+			expect(executed).toEqual(["fix"]);
+
+			actions = [fix, alternative];
+			const ambiguous = await applyAction();
+			expect(ambiguous.details?.success).toBe(false);
+			expect(ambiguous.isError).toBe(true);
+			expect(ambiguous.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("needs query") });
+			expect(executed).toEqual(["fix"]);
+
+			actions = [fix, { ...alternative, isPreferred: true }];
+			const preferred = await applyAction("   ");
+			expect(preferred.details?.success).toBe(true);
+			expect(executed).toEqual(["fix", "other"]);
+			const unmatched = await applyAction("missing");
 			expect(unmatched.details?.success).toBe(false);
 			expect(unmatched.isError).toBe(true);
-			expect(executed).toBe(0);
-			const result = await tool.execute("selected-action", {
-				action: "code_actions",
-				file,
-				line: 1,
-				apply: true,
-				query: "Fix",
-			});
+			expect(executed).toEqual(["fix", "other"]);
+			const result = await applyAction("0");
 			expect(result.details?.success).toBe(true);
 			expect(result.isError).not.toBe(true);
-			expect(executed).toBe(1);
+			expect(executed).toEqual(["fix", "other", "fix"]);
 			failCommand = true;
-			const failed = await tool.execute("failed-action", {
-				action: "code_actions",
-				file,
-				line: 1,
-				apply: true,
-				query: "Fix",
-			});
+			const failed = await applyAction("Other fix");
 			expect(failed.details?.success).toBe(false);
 			expect(failed.isError).toBe(true);
 			expect(failed.content[0]).toMatchObject({
 				type: "text",
 				text: expect.stringContaining("fixture application rejected"),
 			});
-			expect(executed).toBe(2);
+			expect(executed).toEqual(["fix", "other", "fix", "other"]);
 		} finally {
 			await lspClient.shutdownAll();
 			tempDir.removeSync();

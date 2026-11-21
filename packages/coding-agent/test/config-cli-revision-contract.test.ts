@@ -43,7 +43,6 @@ describe("explicit config CLI revision-safe persistence", () => {
 					if (source !== undefined) await fs.writeFile(file, source);
 					const result = await invoke(root, action);
 					expect(result.code, result.stdout + result.stderr).toBe(1);
-					expect(result.stdout).not.toContain('"revision"');
 					if (source === undefined) expect(await Bun.file(file).exists()).toBe(false);
 					else expect(await fs.readFile(file, "utf8")).toBe(source);
 				} finally {
@@ -52,7 +51,7 @@ describe("explicit config CLI revision-safe persistence", () => {
 			},
 		);
 
-		it(`${action} preserves unrelated structure and returns the committed revision`, async () => {
+		it(`${action} preserves unrelated configuration and omits internal revisions from its receipt`, async () => {
 			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-config-revision-"));
 			try {
 				const file = path.join(root, "config", "agent", "config.yml");
@@ -62,8 +61,7 @@ describe("explicit config CLI revision-safe persistence", () => {
 				expect(result.code, result.stderr).toBe(0);
 				const payload = JSON.parse(result.stdout);
 				expect(payload.key).toBe("temperature");
-				expect(typeof payload.revision).toBe("string");
-				expect(payload.revision.length).toBeGreaterThan(0);
+				expect(payload).not.toHaveProperty("revision");
 				const saved = await fs.readFile(file, "utf8");
 				expect(saved).toContain("# owner comment");
 				expect(YAML.parse(saved)).toEqual({

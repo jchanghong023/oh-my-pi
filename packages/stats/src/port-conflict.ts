@@ -194,23 +194,6 @@ async function findWindowsPortHolder(port: number): Promise<PortHolder | null> {
 	}
 	if (pid === null) return null;
 
-	const powershell = $which("powershell") ?? $which("pwsh");
-	if (powershell) {
-		// CIM already supplies the executable name and full command line. Fetch both
-		// together instead of serializing an additional tasklist process before it.
-		// Single quotes preserve the filter through native Windows argument parsing.
-		const command = `$holder = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}' -Property Name,CommandLine; if ($holder.Name) { $holder.Name; $holder.CommandLine }`;
-		const processInfo = await $`${powershell} -NoProfile -NonInteractive -Command ${command}`.quiet().nothrow();
-		if (processInfo.exitCode === 0) {
-			// The image occupies the first line; retain the entire remaining command
-			// line, including embedded newlines, for the ownership identity check.
-			const output = processInfo.text();
-			const separator = output.indexOf("\n");
-			const image = (separator === -1 ? output : output.slice(0, separator)).trim();
-			if (image) return { pid, image, commandLine: separator === -1 ? "" : output.slice(separator + 1).trim() };
-		}
-	}
-
 	let image = "unknown";
 	const tasklist = $which("tasklist");
 	if (tasklist) {
@@ -222,7 +205,12 @@ async function findWindowsPortHolder(port: number): Promise<PortHolder | null> {
 		}
 	}
 
-	return { pid, image, commandLine: "" };
+	const powershell = $which("powershell") ?? $which("pwsh");
+	if (!powershell) return { pid, image, commandLine: "" };
+	// Single quotes keep the CIM filter intact through native Windows argument parsing.
+	const command = `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').CommandLine`;
+	const processInfo = await $`${powershell} -NoProfile -NonInteractive -Command ${command}`.quiet().nothrow();
+	return { pid, image, commandLine: processInfo.exitCode === 0 ? processInfo.text().trim() : "" };
 }
 
 async function findPortHolder(port: number): Promise<PortHolder | null> {

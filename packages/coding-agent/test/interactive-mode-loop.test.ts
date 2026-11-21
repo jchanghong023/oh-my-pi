@@ -277,20 +277,15 @@ describe("InteractiveMode loop auto-submit", () => {
 		expect(mode.loopNActive).toBe(false);
 	});
 
-	describe("positional interval", () => {
-		let nowMs: number;
-
+	describe("automatic repeats", () => {
 		beforeEach(() => {
 			vi.useFakeTimers();
-			nowMs = 1_000_000;
-			vi.spyOn(Date, "now").mockImplementation(() => nowMs);
 			Object.defineProperty(session, "isCompacting", { configurable: true, get: () => false });
 			Object.defineProperty(session, "isStreaming", { configurable: true, get: () => false });
 			Object.defineProperty(session, "hasPostPromptWork", { configurable: true, get: () => false });
 		});
 
 		async function advance(ms: number): Promise<void> {
-			nowMs += ms;
 			vi.advanceTimersByTime(ms);
 			await flushMicrotasks();
 		}
@@ -302,61 +297,7 @@ describe("InteractiveMode loop auto-submit", () => {
 			return resolved;
 		}
 
-		it("submits the first turn immediately and waits the full interval after each terminal turn", async () => {
-			new InputController(mode).setupEditorSubmitHandler();
-			const first = waitForNextInput();
-			await mode.editor.onSubmit?.("/loop 3 5s repeat this");
-			await flushMicrotasks();
-			expect(first).toHaveLength(1);
-			expect(first[0].text).toBe("repeat this");
-			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
-			mode.cancelPendingSubmission();
-
-			// A long first turn does not consume any of the requested idle gap.
-			await advance(20_000);
-			const second = waitForNextInput();
-			await advance(4_999);
-			expect(second).toHaveLength(0);
-			await advance(1);
-			expect(second).toHaveLength(1);
-			expect(second[0].text).toBe("repeat this");
-			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
-			mode.cancelPendingSubmission();
-
-			await advance(2_000);
-			const third = waitForNextInput();
-			await advance(4_999);
-			expect(third).toHaveLength(0);
-			await advance(1);
-			expect(third).toHaveLength(1);
-			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 0 });
-			mode.cancelPendingSubmission();
-
-			const fourth = waitForNextInput();
-			expect(mode.loopModeEnabled).toBe(false);
-			await advance(10_000);
-			expect(fourth).toHaveLength(0);
-		});
-
-		it("counts the first manual prompt when the command has no inline prompt", async () => {
-			new InputController(mode).setupEditorSubmitHandler();
-			const first = waitForNextInput();
-			await mode.editor.onSubmit?.("/loop 1 5s");
-			expect(first).toHaveLength(0);
-			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 1, remaining: 0 });
-
-			await mode.editor.onSubmit?.("manual first turn");
-			await flushMicrotasks();
-			expect(first).toHaveLength(1);
-			expect(first[0].text).toBe("manual first turn");
-			mode.cancelPendingSubmission();
-			const next = waitForNextInput();
-			await advance(5_000);
-			expect(next).toHaveLength(0);
-			expect(mode.loopModeEnabled).toBe(false);
-		});
-
-		it("preserves the repeat-count budget and 800ms delay without an interval", async () => {
+		it("applies the repeat-count budget after the first turn and waits for the interrupt window", async () => {
 			expect(await mode.handleLoopCommand("1 repeat this")).toBe("repeat this");
 			mode.setLoopPrompt("repeat this");
 			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 1, remaining: 1 });
@@ -368,81 +309,7 @@ describe("InteractiveMode loop auto-submit", () => {
 			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 1, remaining: 0 });
 		});
 
-		it.each(["pauseLoop", "disableLoopMode"] as const)("cancels the interval timer on %s", async cancel => {
-			await mode.handleLoopCommand("3 5s repeat this");
-			mode.setLoopPrompt("repeat this");
-			const next = waitForNextInput();
-			await advance(1_000);
-			mode[cancel]();
-			await advance(10_000);
-			expect(next).toHaveLength(0);
-			expect(mode.loopPrompt).toBeUndefined();
-			expect(mode.loopModeEnabled).toBe(cancel === "pauseLoop");
-		});
-
-		it("cancels a pending interval when a manual prompt supersedes it", async () => {
-			await mode.handleLoopCommand("3 5s repeat this");
-			mode.setLoopPrompt("repeat this");
-			const next = waitForNextInput();
-			await advance(1_000);
-			mode.setLoopPrompt("replacement");
-			await advance(10_000);
-			expect(next).toHaveLength(0);
-
-			mode.armLoopAutoSubmit(Promise.resolve());
-			await flushMicrotasks();
-			await advance(4_999);
-			expect(next).toHaveLength(0);
-			await advance(1);
-			expect(next).toHaveLength(1);
-			expect(next[0].text).toBe("replacement");
-		});
-
-		it("wakes at the duration deadline even when it is sooner than the interrupt window", async () => {
-			await mode.handleLoopCommand("1s 5s repeat this");
-			mode.setLoopPrompt("repeat this");
-			await advance(700);
-			const next = waitForNextInput();
-			await advance(299);
-			expect(mode.loopModeEnabled).toBe(true);
-			await advance(1);
-			expect(next).toHaveLength(0);
-			expect(mode.loopModeEnabled).toBe(false);
-		});
-
-		it("expires at the deadline while post-prompt work blocks maintenance retries", async () => {
-			Object.defineProperty(session, "hasPostPromptWork", { configurable: true, get: () => true });
-			await mode.handleLoopCommand("2s 1s repeat this");
-			mode.setLoopPrompt("repeat this");
-			const next = waitForNextInput();
-			await advance(1_000);
-			expect(next).toHaveLength(0);
-			expect(mode.loopModeEnabled).toBe(true);
-			await advance(800);
-			expect(mode.loopModeEnabled).toBe(true);
-			await advance(200);
-			expect(next).toHaveLength(0);
-			expect(mode.loopModeEnabled).toBe(false);
-		});
-
-		it("polls blocked submissions without spending budget or waiting another full interval", async () => {
-			let streaming = true;
-			Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
-			await mode.handleLoopCommand("3 5s repeat this");
-			mode.setLoopPrompt("repeat this");
-			const next = waitForNextInput();
-			await advance(5_000);
-			expect(next).toHaveLength(0);
-			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
-			streaming = false;
-			await advance(799);
-			expect(next).toHaveLength(0);
-			await advance(1);
-			expect(next).toHaveLength(1);
-			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
-		});
-
-		it("does not recompact or repeat the interval while waiting for compact maintenance to settle", async () => {
+		it("does not recompact while waiting for compact maintenance to settle", async () => {
 			cfgLoopMode.set(settings, "compact");
 			let streaming = false;
 			Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
@@ -450,18 +317,18 @@ describe("InteractiveMode loop auto-submit", () => {
 				streaming = true;
 				return "ok";
 			});
-			await mode.handleLoopCommand("3 5s repeat this");
+			await mode.handleLoopCommand("3 repeat this");
 			mode.setLoopPrompt("repeat this");
 			const next = waitForNextInput();
-			await advance(5_000);
+			await advance(800);
 			expect(compact).toHaveBeenCalledTimes(1);
 			expect(next).toHaveLength(0);
-			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
 			streaming = false;
 			await advance(800);
 			expect(compact).toHaveBeenCalledTimes(1);
 			expect(next).toHaveLength(1);
-			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
 		});
 
 		describe("compaction-queued first turn", () => {
@@ -480,40 +347,29 @@ describe("InteractiveMode loop auto-submit", () => {
 				mode.locallySubmittedUserSignatures.delete("queued first turn\u00000");
 			});
 
-			async function queueFirstTurn(
-				command = "/loop 3 5s queued first turn",
-				{ admitImmediately = true, enqueueInSession = false } = {},
-			) {
+			async function queueFirstTurn({ admitImmediately = true } = {}) {
 				let compacting = true;
 				let streaming = false;
 				const turn = Promise.withResolvers<boolean>();
-				const queuedTurn = enqueueInSession ? Promise.withResolvers<void>() : undefined;
-				if (queuedTurn) vi.spyOn(session, "waitForIdle").mockReturnValue(queuedTurn.promise);
 				Object.defineProperty(session, "isCompacting", { configurable: true, get: () => compacting });
 				Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
 				let admit: (() => void) | undefined;
-				const prompt = vi.spyOn(session, "prompt").mockImplementation((text, options) => {
+				const prompt = vi.spyOn(session, "prompt").mockImplementation((_text, options) => {
 					admit = () => {
 						streaming = true;
-						if (queuedTurn) {
-							options?.onPromptQueued?.([
-								{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() },
-							]);
-						}
 						options?.onPromptAdmitted?.();
 					};
 					if (admitImmediately) admit();
-					return queuedTurn ? Promise.resolve(true) : turn.promise;
+					return turn.promise;
 				});
 				finishFirstTurn = () => {
 					streaming = false;
-					queuedTurn?.resolve();
 					turn.resolve(true);
 				};
 
 				new InputController(mode).setupEditorSubmitHandler();
 				const resolved = waitForNextInput();
-				await mode.editor.onSubmit?.(command);
+				await mode.editor.onSubmit?.("/loop 3 queued first turn");
 				await flushMicrotasks();
 				expect(mode.compactionQueuedMessages).toEqual([
 					{ text: "queued first turn", mode: "steer", images: undefined, draftDetached: true },
@@ -546,55 +402,16 @@ describe("InteractiveMode loop auto-submit", () => {
 				};
 			}
 
-			it.each([2_000, 20_000])(
-				"waits a complete positional interval after a queued first turn lasting %i ms",
+			it.each([200, 2_000])(
+				"preserves the interrupt window after a queued first turn lasting %i ms",
 				async durationMs => {
 					const first = await queueFirstTurn();
-					await advance(durationMs);
-					expect(first.resolved).toHaveLength(0);
-					expect(first.prompt).toHaveBeenCalledTimes(1);
-					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
-
-					await first.finish();
-					await advance(4_999);
-					expect(first.resolved).toHaveLength(0);
-					await advance(1);
-					expect(first.resolved).toHaveLength(1);
-					expect(first.resolved[0].text).toBe("queued first turn");
-					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
-
-					// The original input waiter is consumed only once; no second
-					// submission or budget consumption may leak out of retry timers.
-					await advance(10_000);
-					expect(first.resolved).toHaveLength(1);
-					expect(first.prompt).toHaveBeenCalledTimes(1);
-					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
-				},
-			);
-
-			it("waits a complete positional interval after a session-queued turn settles", async () => {
-				const first = await queueFirstTurn(undefined, { enqueueInSession: true });
-				await advance(6_000);
-				expect(first.resolved).toHaveLength(0);
-
-				await first.finish();
-				await advance(4_999);
-				expect(first.resolved).toHaveLength(0);
-				await advance(1);
-				expect(first.resolved).toHaveLength(1);
-			});
-
-			it.each([200, 2_000])(
-				"preserves the interrupt window without an interval after a queued first turn lasting %i ms",
-				async durationMs => {
-					const first = await queueFirstTurn("/loop 3 queued first turn");
 					await advance(durationMs);
 					expect(first.resolved).toHaveLength(0);
 					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 3 });
 					await first.finish();
 
-					// Legacy loops keep polling on the original interrupt cadence;
-					// finishing a queued turn does not start a fresh 800 ms wait.
+					// Finishing a queued turn does not start a fresh 800 ms wait.
 					const untilNextPoll = 800 - (durationMs % 800);
 					await advance(untilNextPoll - 1);
 					expect(first.resolved).toHaveLength(0);
@@ -607,7 +424,7 @@ describe("InteractiveMode loop auto-submit", () => {
 			);
 
 			it("anchors the interrupt window to admission rather than dispatch", async () => {
-				const first = await queueFirstTurn("/loop 3 queued first turn", { admitImmediately: false });
+				const first = await queueFirstTurn({ admitImmediately: false });
 				await advance(2_100);
 				expect(first.resolved).toHaveLength(0);
 
@@ -620,8 +437,8 @@ describe("InteractiveMode loop auto-submit", () => {
 				expect(first.resolved).toHaveLength(1);
 			});
 
-			it("does not start legacy polling when a superseded dispatch is admitted late", async () => {
-				const first = await queueFirstTurn("/loop 3 queued first turn", { admitImmediately: false });
+			it("does not start polling when a superseded dispatch is admitted late", async () => {
+				const first = await queueFirstTurn({ admitImmediately: false });
 				mode.setLoopPrompt("queued first turn");
 				await first.admit();
 				await first.finish();
@@ -632,20 +449,17 @@ describe("InteractiveMode loop auto-submit", () => {
 				expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 3 });
 			});
 
-			it.each(["/loop 3 queued first turn", "/loop 3 5s queued first turn"])(
-				"never resubmits after the first dispatch rejects before admission: %s",
-				async command => {
-					const first = await queueFirstTurn(command, { admitImmediately: false });
-					await advance(6_000);
-					expect(first.resolved).toHaveLength(0);
+			it("never resubmits after the first dispatch rejects before admission", async () => {
+				const first = await queueFirstTurn({ admitImmediately: false });
+				await advance(6_000);
+				expect(first.resolved).toHaveLength(0);
 
-					await first.reject(new Error("not admitted"));
-					await advance(6_000);
-					expect(first.resolved).toHaveLength(0);
-					expect(first.prompt).toHaveBeenCalledTimes(1);
-					expect(mode.loopPrompt).toBeUndefined();
-				},
-			);
+				await first.reject(new Error("not admitted"));
+				await advance(6_000);
+				expect(first.resolved).toHaveLength(0);
+				expect(first.prompt).toHaveBeenCalledTimes(1);
+				expect(mode.loopPrompt).toBeUndefined();
+			});
 
 			it.each(["pauseLoop", "disableLoopMode"] as const)(
 				"does not rearm after %s while the queued first turn is still running",
@@ -675,7 +489,7 @@ describe("InteractiveMode loop auto-submit", () => {
 					expect(first.resolved).toHaveLength(0);
 					expect(first.prompt).toHaveBeenCalledTimes(1);
 					expect(mode.loopPrompt).toBe(replacement);
-					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
+					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 3 });
 				},
 			);
 		});

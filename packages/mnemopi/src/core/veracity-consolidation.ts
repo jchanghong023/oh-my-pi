@@ -196,7 +196,7 @@ export class VeracityConsolidator {
 
 	constructor(dbPath: DatabasePath = ":memory:", conn?: Database) {
 		this.dbPath = dbPath;
-		this.conn = conn ?? openDatabase(this.dbPath, { create: true, readwrite: true, strict: true, pragmas: true });
+		this.conn = conn ?? openDatabase(dbPath, { create: true, readwrite: true, strict: true, pragmas: true });
 		this.ownsConnection = conn === undefined;
 		this.initTables();
 	}

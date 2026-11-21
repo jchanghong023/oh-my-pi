@@ -116,9 +116,9 @@ fork 规格还规定输入区默认 `composer.shape=box`、`composer.predictions
 
 - `/jchime [故障现象]` 展开 IBus 恢复提示词，由模型结合现场核实执行，不是无模型本地修复。提示词限定当前用户和 DISPLAY，并要求最终由用户在故障窗口确认中文输入；不能把模拟测试当作公司实际环境验收。
 - `/team <问题或需求>` 启动只读规划讨论；空问题只给用法，`/team configure` 打开配置而不启动讨论。失败派发时 TUI 尝试恢复草稿与附件。详细工作流见[团队讨论](../workflows/team-discussion.md)。
-- `/loop [次数或总时长] [间隔] [任务内容]` 首轮立即执行，之后在轮次间等待；暂停或切换会话后旧定时器不得继续提交。间隔超出 `2147483647` 毫秒时报错且不启动；未知单位的 token 保留为任务正文。
+- `/loop` 沿用上游次数／总时长与 `--while`／`--until` 参数，不支持轮次间隔。首轮立即执行，次数限制的是此后的重复次数。
 
-命令目录按宿主能力暴露，TUI、ACP 和 RPC 并非完全相同：规格规定 ACP 不接受参数的内置命令退回普通 prompt，而 RPC 对仅 TUI 命令或不允许的参数明确报错。共享进程中的目录迁移应绑定当前会话而不是修改进程级目录；`/wt` 目标与当前工作树相同时不清理源目录。不要把 TUI 中看到的选择器或快捷键视为所有宿主都有的能力。参见[个人命令规格](../../openspec/specs/personal-commands/spec.md)及[命令实现](../../packages/coding-agent/src/jch-commands/workflow.ts)。
+命令目录按宿主能力暴露，TUI、ACP 和 RPC 并非完全相同：ACP 将命中的内置命令交由文本处理器解析参数，不套用 TUI 的参数规则；无文本处理器的命令仍不走 ACP 内置派发。RPC 对仅 TUI 命令或不允许的参数明确报错。共享进程中的目录迁移应绑定当前会话而不是修改进程级目录；`/wt` 目标与当前工作树相同时不清理源目录。参见[命令派发](../../docs/slash-command-internals.md#5-routing-and-prompt-pipeline-placement)及[个人命令规格](../../openspec/specs/personal-commands/spec.md)。
 
 ## 修改与验证时的关注点
 

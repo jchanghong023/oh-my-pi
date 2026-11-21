@@ -125,35 +125,4 @@ describe("personal command session isolation", () => {
 		expect(await Bun.file(path.join(f.source, "tracked.txt")).text()).toBe("unstaged\n");
 		expect(await Bun.file(path.join(f.source, "untracked.txt")).text()).toBe("untracked\n");
 	});
-
-	it("clears real conversation state in place while retaining durable identity, title, directory and model", async () => {
-		const f = await fixture();
-		const host = await f.make(f.source);
-		const sibling = await f.make(f.source);
-		const siblingMessages = [{ role: "user" as const, content: "keep sibling context", timestamp: 2 }];
-		sibling.session.agent.replaceMessages(siblingMessages);
-		const siblingIdentity = sibling.manager.getSessionId();
-		const processDirectory = getProjectDir();
-		const nativeProcessDirectory = process.cwd();
-		await host.manager.setSessionName("keep-session-title", "user");
-		const message = { role: "user" as const, content: "discard this context", timestamp: 1 };
-		host.manager.appendMessage(message);
-		host.session.agent.replaceMessages([message]);
-		const identity = host.manager.getSessionId();
-		const model = host.session.model;
-		expect(await executeAcpBuiltinSlashCommand("/clear", host.runtime)).toEqual({ consumed: true });
-		expect(host.session.agent.state.messages).toEqual([]);
-		expect(host.manager.getSessionId()).toBe(identity);
-		expect(host.manager.getSessionName()).toBe("keep-session-title");
-		expect(host.manager.getCwd()).toBe(f.source);
-		expect(host.session.model).toBe(model);
-		expect(host.session.settings).toBe(host.settings);
-		expect(host.session.isDisposed).toBe(false);
-		expect(host.manager.buildSessionContext().messages).toEqual([]);
-		expect(sibling.session.agent.state.messages).toEqual(siblingMessages);
-		expect(sibling.manager.getSessionId()).toBe(siblingIdentity);
-		expect(sibling.manager.getCwd()).toBe(f.source);
-		expect(getProjectDir()).toBe(processDirectory);
-		expect(process.cwd()).toBe(nativeProcessDirectory);
-	});
 });

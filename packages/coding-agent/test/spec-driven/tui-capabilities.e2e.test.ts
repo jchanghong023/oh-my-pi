@@ -72,7 +72,7 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 					if (bashCalls.length === 0)
 						return invoke(request, "bash", { i: "Checking directory", "<rfl:parameter name=": "pwd" });
 					if (bashCalls.length === 1) {
-						expect(result(request, "bash")).toContain('{"command":"pwd"}');
+						expect(result(request, "bash")).toMatch(/\bcommand\b.*(?:missing|required|string)/i);
 						return invoke(request, "bash", { i: "Checking directory", command: "pwd" });
 					}
 					return { text: "OMP_INVALID_BASH_RECOVERED" };

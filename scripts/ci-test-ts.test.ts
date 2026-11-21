@@ -895,7 +895,6 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/knowledge-models.test.ts",
 			"packages/coding-agent/test/knowledge-semantic.test.ts",
 			"packages/coding-agent/test/lsp/edits.test.ts",
-			"packages/coding-agent/test/slash-commands/shared-skills.test.ts",
 			"packages/coding-agent/test/acp-builtins.test.ts",
 			"packages/tui/test/composer-inline-shrink.test.ts",
 			"packages/tui/test/composer-welcome-scrollback.test.ts",

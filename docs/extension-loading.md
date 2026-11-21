@@ -109,23 +109,19 @@ extensions:
 
 ### Disable discovery
 
-- CLI: `--no-extensions`
-- SDK option: `disableExtensionDiscovery`
+- **CLI:** Both normal and offline runs skip automatic extension discovery by
+  default, even without `--no-extensions`. Explicit `-e`/`--extension` and
+  `--hook` paths still load, and only sibling capability roots from explicitly
+  named extension packages remain eligible. Project/user `extensions:` settings
+  and installed OMP extension packages are excluded from that sibling surface.
+  `--trusted-extension` remains available as an alternative for exact files.
+- **SDK:** Set `disableExtensionDiscovery=true` to exclude ambient extension
+  factories. `additionalExtensionPaths` are still resolved normally, including
+  package directories with `package.json#omp.extensions`.
 
-Behavior split:
-
-- SDK: when `disableExtensionDiscovery=true`, ambient extension factories are
-  excluded, while `additionalExtensionPaths` are still resolved normally
-  (including package directories with `package.json#omp.extensions`).
-- CLI: `--no-extensions` follows the same explicit-only contract. Explicit
-  `-e/--extension` and `--hook` paths still load, and only sibling capability
-  roots from explicitly named extension packages remain eligible. Project/user
-  `extensions:` settings and installed OMP extension packages are excluded from
-  that sibling surface.
-
-This flag governs extension factories and OMP extension-package sibling roots;
-it is not a whole-process capability-isolation switch. Skills, MCP servers,
-tools, prompts, and rules owned by other discovery subsystems retain their own
+Disabling extension discovery governs extension factories and OMP extension-package
+sibling roots; it does not isolate the whole process. Skills, MCP servers, tools,
+prompts, and rules owned by other discovery subsystems retain their own
 enable/disable controls.
 
 ### Exact module allowlist

@@ -2180,7 +2180,7 @@ export function validateToolArguments(
 
 	const errorMessage = `Validation failed for tool "${
 		toolCall.name
-	}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(receivedArgs, null, 2)}\n\nThe tool was not run. Fix the invalid arguments above and call the tool again. Do not repeat successful calls.`;
+	}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(receivedArgs, null, 2)}`;
 
 	throw new AIError.ValidationError(errorMessage);
 }

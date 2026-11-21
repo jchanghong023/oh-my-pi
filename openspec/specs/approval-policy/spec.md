@@ -60,7 +60,7 @@ OMP MUST 提供 `always-ask`、`always-ask-cached`、`write`、`yolo`、`guarded
 
 ### Requirement: 未知或非法模式取值
 
-OMP MUST NOT 把未知模式当作已放行。设置项 `tools.approvalMode` 出现未知取值时 MUST 回落缺省 `yolo`；启动参数 `--approval-mode` 出现未知取值时 MUST 作为非法参数报错并拒绝该值，MUST NOT 静默降级为其他模式。
+OMP MUST NOT 将未知值识别为有效授权模式。配置项 `tools.approvalMode` 出现未知值时 MUST 回退到默认 `yolo`，工具调用仍受逐工具策略和受限目录规则约束。启动参数 `--approval-mode` 出现未知值时 MUST 报参数错误，不得回退到默认值或其他模式。
 
 #### Scenario: 设置项损坏
 

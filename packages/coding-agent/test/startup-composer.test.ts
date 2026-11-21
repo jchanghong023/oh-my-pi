@@ -41,12 +41,14 @@ import { createTestSession } from "./utilities";
 import {
 	cfgAutocompleteMaxVisible,
 	cfgComposerShape,
+	cfgMarketplaceAutoUpdate,
 	cfgSetupVersion,
 	cfgShowHardwareCursor,
 	cfgSpellingAutocomplete,
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
 	cfgStartupChangelogMode,
+	cfgStartupCheckUpdate,
 	cfgStartupQuiet,
 	cfgStartupSetupWizard,
 	cfgStartupShowSplash,
@@ -266,7 +268,7 @@ it("overlaps real startup settings and plugin preload with the company snapshot 
 
 // Isolate the module registry: other tests may have already opened the wizard.
 it.each(["online", "offline", "splash"] as const)(
-	"keeps %s startup free of automatic updates and setup graph",
+	"keeps %s startup free of background update checks and the full setup graph",
 	async mode => {
 		const child = Bun.spawn(
 			[
@@ -315,15 +317,19 @@ describe("outer startup collaboration gate", () => {
 			},
 		});
 		setProjectDir(testSession.tempDir);
-		const legacyConfig = path.join(testSession.tempDir, "legacy-startup.yml");
-		if (probe) {
-			await Bun.write(legacyConfig, "startup:\n  checkUpdate: true\nmarketplace:\n  autoUpdate: auto\n");
+		const offlineConfig = path.join(testSession.tempDir, "offline-startup.yml");
+		if (probe === "offline") {
+			await Bun.write(offlineConfig, "startup:\n  checkUpdate: true\nmarketplace:\n  autoUpdate: auto\n");
 		}
 		const activeSettings = await Settings.init({
 			inMemory: true,
 			cwd: testSession.tempDir,
-			configFiles: probe ? [legacyConfig] : undefined,
+			configFiles: probe === "offline" ? [offlineConfig] : undefined,
 		});
+		if (probe === "offline") {
+			expect(cfgMarketplaceAutoUpdate.get(activeSettings)).toBe("auto");
+			expect(cfgStartupCheckUpdate.get(activeSettings)).toBe(true);
+		}
 		cfgStartupChangelogMode.override(activeSettings, "hidden");
 		cfgStartupSetupWizard.override(activeSettings, false);
 		cfgSetupVersion.override(activeSettings, 0);
@@ -481,6 +487,8 @@ describe("outer startup collaboration gate", () => {
 			} else {
 				expect(await running).toBe(finished);
 				if (probe) {
+					expect(cfgMarketplaceAutoUpdate.get(activeSettings)).toBe("off");
+					expect(cfgStartupCheckUpdate.get(activeSettings)).toBe(false);
 					// Drain queued startup work before asserting the negative contract.
 					await Bun.sleep(0);
 					expect(network).not.toHaveBeenCalled();
@@ -489,7 +497,7 @@ describe("outer startup collaboration gate", () => {
 					// build-service is shared with explicit WebKit downloads, not update-only code.
 					expect(
 						loaded.filter(file =>
-							/\/(?:coding-agent\/src\/modes\/setup|tui\/src\/setup\/wizard|coding-agent\/src\/cli\/update-cli|coding-agent\/src\/extensibility\/plugins\/marketplace-auto-update)\.ts$/.test(
+							/\/(?:coding-agent\/src\/modes\/setup|tui\/src\/setup\/wizard|coding-agent\/src\/cli\/update-cli)\.ts$/.test(
 								file,
 							),
 						),

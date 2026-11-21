@@ -124,10 +124,9 @@ describe("/team command gates", () => {
 			model: MODEL,
 			modelRegistry: { getAvailable: () => [MODEL], authStorage: undefined },
 			asyncJobManager: { register: () => "bg_images" },
-			sendCustomMessage: async () => {
+			appendCustomMessage: async () => {
 				noticeStarted.resolve();
 				await noticePersisted.promise;
-				return false;
 			},
 		});
 		const { runtime } = tuiRuntime(session);
@@ -199,7 +198,7 @@ describe("/team command gates", () => {
 				register: () => "bg_1",
 				acknowledgeDeliveries: () => {},
 			},
-			sendCustomMessage: async () => false,
+			appendCustomMessage: async () => {},
 		});
 		const { runtime, editorClears, restored } = tuiRuntime(session);
 		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);

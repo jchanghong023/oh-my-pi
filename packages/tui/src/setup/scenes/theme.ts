@@ -26,12 +26,8 @@ import type { SetupScene, SetupSceneController, SetupSceneHost } from "./types";
 type ThemeMode = "curated" | "all";
 
 const CURATED_ITEMS: readonly SelectItem[] = [
-	{
-		value: "auto",
-		label: "Match terminal",
-		description: "Your dark theme in dark terminals, Light in light terminals",
-	},
-	{ value: "theme:titanium", label: "Titanium", description: "Classic dark theme" },
+	{ value: "auto", label: "Match terminal", description: "Titanium in dark terminals, Light in light terminals" },
+	{ value: "theme:titanium", label: "Titanium", description: "Default dark theme" },
 	{ value: "theme:light", label: "Light", description: "Default light theme" },
 	{ value: "colorblind", label: "Colorblind colors", description: "Adjust red/green contrast" },
 	{ value: "ansi", label: "ANSI-safe", description: "ASCII glyphs with the dark terminal theme" },
@@ -354,10 +350,7 @@ class ThemeSceneController implements SetupSceneController {
 
 	async #commit(value: string): Promise<void> {
 		if (value === "auto") {
-			// "Match terminal" is also the highlighted row for any non-Light theme, so
-			// saving a hard-coded dark theme here used to overwrite the configured one
-			// on a bare Enter. Only pin the light mapping; the dark mapping keeps the
-			// user's saved choice and auto-detection re-evaluates against it.
+			this.#host.ctx.saveTheme("dark", "titanium");
 			this.#host.ctx.saveTheme("light", "light");
 			await this.#applyPreviewPresentation(this.#originalSymbolPreset, this.#originalColorBlindMode);
 			enableAutoTheme();

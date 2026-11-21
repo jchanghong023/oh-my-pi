@@ -24,124 +24,9 @@ describe("Editor component", () => {
 		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
 	});
 
-	describe("Empty-editor hint spacing", () => {
-		it("keeps the hint next to the cursor instead of shifting it across free space on resize", () => {
-			const editor = new Editor(defaultEditorTheme);
-			editor.focused = true;
-			editor.placeholder = () => "\x1b[2m帮助\x1b[0m";
-
-			const wide = editor.render(80)[1]!;
-			const cursorEnd = wide.indexOf(CURSOR_MARKER) + CURSOR_MARKER.length;
-			const gap = stripVTControlCharacters(wide.slice(cursorEnd, wide.indexOf("帮助")));
-			expect(gap).toBe(`${defaultEditorTheme.symbols.inputCursor}  `);
-			const hintColumn = visibleWidth(wide.slice(0, wide.indexOf("帮助")));
-
-			const narrow = editor.render(40)[1]!;
-			expect(visibleWidth(narrow.slice(0, narrow.indexOf("帮助")))).toBe(hintColumn);
-			editor.setText("draft");
-			expect(editor.render(40).join("\n")).not.toContain("帮助");
-			editor.setText("");
-			expect(editor.render(40)[1]).toContain("帮助");
-		});
-
-		for (const terminalCursor of [false, true]) {
-			it(`wraps a wide-character hint through narrow resizes with a ${terminalCursor ? "terminal" : "painted"} cursor`, () => {
-				const editor = new Editor(defaultEditorTheme);
-				editor.focused = true;
-				editor.setUseTerminalCursor(terminalCursor);
-				editor.placeholder = () => "\x1b[2m帮助\x1b[0m";
-
-				const fits = editor.render(13)[1]!;
-				expect(fits).toContain("帮助");
-				expect(visibleWidth(fits)).toBe(13);
-				for (const width of [80, 12, 10, 9, 8, 80]) {
-					const wrapped = editor.render(width);
-					expect(wrapped.join("").replace(/[^\u3400-\u9fff]/g, "")).toBe("帮助");
-					for (const row of wrapped) expect(visibleWidth(row)).toBe(width);
-					expect(wrapped.join("").split(CURSOR_MARKER)).toHaveLength(2);
-					expect(editor.getText()).toBe("");
-					expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
-				}
-				editor.setText("draft");
-				for (const width of [80, 12, 10, 9, 8, 80]) {
-					const draft = editor.render(width);
-					expect(draft.join("")).not.toContain("帮助");
-					for (const row of draft) expect(visibleWidth(row)).toBe(width);
-					expect(draft.join("").split(CURSOR_MARKER)).toHaveLength(2);
-					expect(editor.getText()).toBe("draft");
-					expect(editor.getCursor()).toEqual({ line: 0, col: 5 });
-				}
-				editor.setText("");
-				expect(editor.render(80)[1]).toContain("帮助");
-			});
-		}
-
-		for (const terminalCursor of [false, true]) {
-			it(`reflows long styled help on resize and bounds its height with a ${terminalCursor ? "terminal" : "painted"} cursor`, () => {
-				const editor = new Editor(defaultEditorTheme);
-				editor.focused = true;
-				editor.minContentRows = 2;
-				editor.setUseTerminalCursor(terminalCursor);
-				const help = "快捷键帮助".repeat(12) + "最终反馈";
-				editor.placeholder = () => `\x1b[2m${help}\x1b[0m`;
-
-				const wide = editor.render(160);
-				expect(wide[1]).toContain(help);
-				const narrow = editor.render(80);
-				expect(narrow.join("").replace(/[^\u3400-\u9fff]/g, "")).toBe(help);
-				expect(narrow[narrow.length - 1]).toContain("最终反馈");
-				for (const row of narrow) expect(visibleWidth(row)).toBe(80);
-				expect(narrow.join("").split(CURSOR_MARKER)).toHaveLength(2);
-				expect(editor.getText()).toBe("");
-				expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
-
-				editor.setMaxHeight(3);
-				const bounded = editor.render(40);
-				expect(bounded.length).toBeLessThanOrEqual(3);
-				expect(bounded[1]).toContain("快捷键帮助");
-				for (const row of bounded) expect(visibleWidth(row)).toBe(40);
-				editor.setText("draft");
-				expect(editor.render(40).join("")).not.toContain("快捷键帮助");
-				editor.setText("");
-				editor.setMaxHeight(undefined);
-				const restored = editor.render(80);
-				expect(restored.join("").replace(/[^\u3400-\u9fff]/g, "")).toBe(help);
-			});
-		}
-
-		it("keeps a completely blank bottom row below wrapped help and multiline drafts", () => {
-			const editor = new CustomEditor(defaultEditorTheme);
-			editor.focused = true;
-			const help = "快捷键帮助".repeat(12) + "最终反馈";
-			editor.placeholder = () => `\x1b[2m${help}\x1b[0m`;
-
-			const hintRows = editor.render(80);
-			expect(hintRows.join("").replace(/[^\u3400-\u9fff]/g, "")).toBe(help);
-			expect(stripVTControlCharacters(hintRows[hintRows.length - 1]!).replace(/[-+|\s]/g, "")).toBe("");
-			expect(hintRows[hintRows.length - 2]).toContain("最终反馈");
-
-			editor.setText("first\nsecond");
-			const draftRows = editor.render(80);
-			expect(draftRows.join("")).toContain("first");
-			expect(draftRows.join("")).toContain("second");
-			expect(stripVTControlCharacters(draftRows[draftRows.length - 1]!).replace(/[-+|\s]/g, "")).toBe("");
-			expect(draftRows.join("").split(CURSOR_MARKER)).toHaveLength(2);
-			expect(editor.getText()).toBe("first\nsecond");
-			for (const row of draftRows) expect(visibleWidth(row)).toBe(80);
-
-			editor.setMaxHeight(4);
-			editor.setText("one\ntwo\nthree\nfour");
-			const capped = editor.render(80);
-			expect(capped.length).toBeLessThanOrEqual(4);
-			expect(capped.join("")).toContain("four");
-			expect(capped.join("").split(CURSOR_MARKER)).toHaveLength(2);
-			expect(stripVTControlCharacters(capped[capped.length - 1]!).replace(/[-+|\s]/g, "")).toBe("");
-		});
-	});
-
 	describe("Frame height budgeting", () => {
 		for (const terminalCursor of [false, true]) {
-			it(`keeps the current input row before chrome and bottom padding with a ${terminalCursor ? "terminal" : "painted"} cursor`, () => {
+			it(`keeps the current input row visible in a short frame with a ${terminalCursor ? "terminal" : "painted"} cursor`, () => {
 				const editor = new CustomEditor(defaultEditorTheme);
 				editor.focused = true;
 				editor.setUseTerminalCursor(terminalCursor);
@@ -165,7 +50,6 @@ describe("Editor component", () => {
 				const restored = editor.render(24);
 				expect(restored.join("")).toContain("first");
 				expect(restored.join("")).toContain("last");
-				expect(stripVTControlCharacters(restored[restored.length - 1]!).replace(/[-+|\s]/g, "")).toBe("");
 				editor.setMaxHeight(3);
 				expect(editor.render(24).length).toBeLessThanOrEqual(3);
 				rows = 1;
@@ -1258,46 +1142,26 @@ describe("Editor component", () => {
 			expect(lines).toEqual(["+------------------+", "+- ast            -+"]);
 		});
 
-		it("keeps IME cursor tails open above box bottom padding on every input row", () => {
-			for (const draft of ["ast", "first\nast"]) {
-				const editor = new CustomEditor(defaultEditorTheme);
-				editor.focused = true;
-				editor.setUseTerminalCursor(true);
-				editor.setText(draft);
-				const textLines = draft.split("\n");
+		it("leaves the box open after the IME cursor on a non-final input row", () => {
+			const editor = new CustomEditor(defaultEditorTheme);
+			editor.focused = true;
+			editor.setUseTerminalCursor(true);
+			editor.setText("first\nlast");
+			editor.render(20);
+			editor.handleInput("\x1b[A");
+			editor.moveToLineEnd();
 
-				for (let cursorLine = textLines.length - 1; cursorLine >= 0; cursorLine--) {
-					editor.setImeSafeCursorLayout(false);
-					const closedRows = editor.render(20);
-					const cursorRowIndex = closedRows.findIndex(row => row.includes(CURSOR_MARKER));
-					const closedCursorRow = closedRows[cursorRowIndex]!;
-					const cursorEnd = closedCursorRow.indexOf(CURSOR_MARKER) + CURSOR_MARKER.length;
-					expect(closedRows).toHaveLength(textLines.length + 2);
-					expect(stripVTControlCharacters(closedCursorRow.slice(cursorEnd))).toMatch(/^ +\|$/);
-					for (const row of closedRows) expect(visibleWidth(row)).toBe(20);
-					expect(stripVTControlCharacters(closedRows[closedRows.length - 1]!)).toBe(`+-${" ".repeat(16)}-+`);
+			editor.setImeSafeCursorLayout(false);
+			const closedRows = editor.render(20);
+			const cursorRowIndex = closedRows.findIndex(row => row.includes(CURSOR_MARKER));
+			const closedCursorRow = closedRows[cursorRowIndex]!;
+			const cursorEnd = closedCursorRow.indexOf(CURSOR_MARKER) + CURSOR_MARKER.length;
+			expect(stripVTControlCharacters(closedCursorRow.slice(cursorEnd))).toMatch(/^ +\|$/);
 
-					editor.setImeSafeCursorLayout(true);
-					const safeRows = editor.render(20);
-					const safeCursorRow = safeRows[cursorRowIndex]!;
-					const safeCursorEnd = safeCursorRow.indexOf(CURSOR_MARKER) + CURSOR_MARKER.length;
-					expect(safeRows).toHaveLength(closedRows.length);
-					expect(stripVTControlCharacters(safeCursorRow.replaceAll(CURSOR_MARKER, ""))).toBe(
-						`|  ${textLines[cursorLine]}`,
-					);
-					expect(stripVTControlCharacters(safeCursorRow.slice(safeCursorEnd))).toBe("");
-					for (let index = 0; index < closedRows.length; index++) {
-						if (index !== cursorRowIndex) expect(safeRows[index]).toBe(closedRows[index]);
-					}
-					editor.setImeSafeCursorLayout(false);
-					expect(editor.render(20)).toEqual(closedRows);
-
-					if (cursorLine > 0) {
-						editor.handleInput("\x1b[A");
-						editor.moveToLineEnd();
-					}
-				}
-			}
+			editor.setImeSafeCursorLayout(true);
+			const safeRows = editor.render(20);
+			expect(safeRows).toEqual(closedRows.map((row, index) => (index === cursorRowIndex ? row.slice(0, cursorEnd) : row)));
+			expect(stripVTControlCharacters(safeRows[cursorRowIndex]!.replaceAll(CURSOR_MARKER, ""))).toBe("|  first");
 		});
 
 		it("keeps terminal-local IME preedit from displacing the editor border (#5563)", async () => {

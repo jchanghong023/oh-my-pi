@@ -34,10 +34,15 @@ Shell MUST 将非 UTF-8 的原生字节参数原样交给被启动的程序，�
 - **WHEN** 会接收普通字符串参数的内建命令收到非 UTF-8 参数
 - **THEN** 该调用 MUST 以内部错误失败，错误信息为 `builtin cannot accept non-UTF-8 argument`，且 MUST NOT 以去掉该参数后的剩余参数继续执行产生副作用。
 
-#### Scenario: 声明与导出内建的诊断
+#### Scenario: 声明内建的显示模式诊断
 
-- **WHEN** `declare` 系列命令（含 `local`、`readonly`）收到非 UTF-8 或赋值形式的操作数
-- **THEN** MUST 在 stderr 输出 `<命令名>: <操作数>: not found`（显示模式下）或 `<命令名>: <操作数>: not a valid variable name`（定义模式下），并以通用错误（非零）退出。
+- **WHEN** `declare`、`local` 或 `readonly` 在显示模式下收到非 UTF-8 或包含 `=` 的操作数
+- **THEN** MUST 在 stderr 输出 `<命令名>: <操作数>: not found`，并以通用错误（非零）退出。
+
+#### Scenario: 声明内建的定义模式诊断
+
+- **WHEN** `declare`、`local` 或 `readonly` 在定义模式下收到变量名不是 UTF-8 的操作数
+- **THEN** MUST 在 stderr 输出 `<命令名>: <操作数>: not a valid variable name`，并以通用错误（非零）退出。合法的 `name=value` 操作数不因其赋值形式被拒绝。
 
 #### Scenario: 导出内建的诊断
 
@@ -77,9 +82,13 @@ Windows 内建 rsync MUST 正确处理 UNC 和 verbatim 路径，同时保留过
 - **WHEN** 未使用 `--preserve-status`
 - **THEN** 死于 KILL 时 MUST 返回 `137`，其余超时终止 MUST 返回 `124`。
 
+#### Scenario: 进程内操作数超时后达到升级期限
+- **WHEN** Windows 上进程内操作数不响应初次取消，随后 `timeout -k` 升级期限到达
+- **THEN** 未使用 `--preserve-status` MUST 返回 `124`；使用 `--preserve-status` 的取消回退 MUST 返回 `128`；不得仅因升级期限到达而返回 `137`。
+
 ### Requirement: 进程树信号的快照式投递
 
-向进程树投递信号 MUST 先对目标集合取快照再一次性投递，作用域限定为该命令实际启动的外部成员及其进程组，并 MUST 保护宿主进程。
+向进程树投递信号 MUST 在每一波投递前对目标集合取快照，不在同一波组投递后重新枚举；作用域限定为该命令实际启动的外部成员及其进程组，并 MUST 保护宿主进程。
 
 #### Scenario: 信号处理中新建的子进程不受本波影响
 
@@ -105,15 +114,6 @@ Windows 内建 rsync MUST 正确处理 UNC 和 verbatim 路径，同时保留过
 - **WHEN** 取消信号在管道成员已成功启动之后到达
 - **THEN** 等待 MUST 继续到这些成员按 TERM 清理规则结束，MUST NOT 立即销毁进程句柄或跳过宽限；已停止的成员 MUST 以轮询方式回收，剩余成员继续按取消语义等待。
 
-### Requirement: 终止进程树时执行快照式信号投递
-
-进程树终止路径 MUST 遵守进程树信号快照与去重合同，每一波投递前确定目标；不得因组投递后重新枚举而向本波中新建的清理子进程发信号。
-
-#### Scenario: 组内成员处理 TERM
-
-- **WHEN** 终止进程树时进程组成功收到 TERM，成员的处理程序启动清理子进程
-- **THEN** 已由组信号覆盖的成员不再收到本波逐成员信号，新建的清理子进程不被本波命中；组投递失败时回退逐成员投递。
-
 ### Requirement: 声明命令显示诊断使用实际命令名
 
 OMP MUST 在声明系列显示模式拒绝非 UTF-8 或赋值形式操作数时，按现有声明诊断契约使用实际调用的命令名。
@@ -121,22 +121,3 @@ OMP MUST 在声明系列显示模式拒绝非 UTF-8 或赋值形式操作数时�
 #### Scenario: local 显示无效操作数
 - **WHEN** 函数内执行 `local -p` 并提供非 UTF-8 或赋值形式操作数
 - **THEN** MUST 在 stderr 输出以 `local:` 开头的 `<命令名>: <操作数>: not found`，并以非零状态退出；不得误报为 `declare:`。
-
-### Requirement: Windows timeout 升级取消回退状态
-
-OMP MUST 将 Windows `timeout -k` 的取消回退与可投递的 POSIX KILL 区分，不得因取消回退返回 137。
-
-#### Scenario: 进程内操作数超时后达到升级期限
-- **WHEN** Windows 上进程内操作数不响应初次取消，随后 `-k` 升级期限到达
-- **THEN** 未使用 `--preserve-status` MUST 返回 124；使用 `--preserve-status` 的取消回退 MUST 返回 128；不得仅因升级期限到达而返回 137。
-- **AND** POSIX 实际 KILL 的现有 137 契约保持不变。
-
-### Requirement: ZLE 跨平台路径缓冲界限
-
-OMP MUST 保留 ZLE 补全与增量搜索既有的平台缓冲界限，不将内部算法缓冲作为文件系统路径限制。
-
-#### Scenario: ZLE 补全与增量搜索的路径缓冲界限
-
-- **WHEN** 在 Windows 或 Unix 构建 ZLE 补全和增量搜索
-- **THEN** MUST 共享平台可编译的 ZLE 缓冲上限：Unix 使用原有 `libc::PATH_MAX`，非 Unix 使用现有 Zsh 约定的 1024 字节界限；补全保留两倍缓冲界限，增量搜索保留原有长度判定。
-- **AND** 此值只约束原有 ZLE 算法缓冲，不作为 Windows 文件系统路径限制，不削弱宿主长路径支持。

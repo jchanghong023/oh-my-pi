@@ -29,6 +29,7 @@
 - `TtyWriter` writes a terminal it cannot reopen (a PTY master, a TTY that is not yours after `su`, a sandbox that hides its path) through a duplicate instead of refusing it
 - `TtyWriter` ends each 16 KiB write where a row or a `write()` ends whenever one fits, so a large repaint is no longer cut inside a row or an escape sequence
 - `TtyWriter` turns Windows console VT processing back on when it finds it off, instead of printing escape sequences as text
+- On Windows, Zsh incremental search and completion use the upstream limits of 4096 and 8192 bytes, respectively.
 
 ### Fixed
 

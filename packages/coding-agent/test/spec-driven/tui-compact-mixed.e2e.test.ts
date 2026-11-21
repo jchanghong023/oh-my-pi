@@ -100,6 +100,7 @@ test("compact mixed long session preserves input, tool effects and peer messages
 	const visibilityReached = Promise.withResolvers<void>();
 	const allowVisibility = Promise.withResolvers<void>();
 	const observed: ObservedResult[] = [];
+	const bashValidationDiagnostic = 'Validation failed for tool "bash"';
 	const tableMarkers = Array.from({ length: 80 }, (_, i) => `MIXED_ROW_${String(i + 1).padStart(3, "0")}`);
 	const table = `| Item | Evidence |\n| --- | --- |\n${tableMarkers.map(marker => `| ${marker} | 正文和工具反馈不得丢失 |`).join("\n")}\n`;
 	const input = `MIXED_ROOT_BEGIN\n${Array.from({ length: 300 }, (_, i) => `需求 ${String(i + 1).padStart(3, "0")}：在同一长会话中读取、编辑、检索并收取子代理结果。`).join("\n")}\nMIXED_ROOT_END`;
@@ -168,7 +169,7 @@ test("compact mixed long session preserves input, tool effects and peer messages
 								name: "bash",
 								args: {},
 								intent: "Checking invalid command arguments",
-								verify: contains("The tool was not run"),
+								verify: contains(bashValidationDiagnostic),
 							},
 						],
 						[
@@ -458,7 +459,7 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				expect(before).not.toContain("MIXED_COMMAND_FAILURE_ONE");
 				expect(before).not.toContain("MIXED_COMMAND_FAILURE_TWO");
 				// These are invocation/argument failures, not diagnostics from a process that ran.
-				for (const diagnostic of ["The tool was not run", "Working directory does not exist"]) {
+				for (const diagnostic of [bashValidationDiagnostic, "Working directory does not exist"]) {
 					expect(before).not.toContain(diagnostic);
 				}
 				const beforeDisplayRequests = provider.requests.length;
@@ -469,9 +470,9 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				await screen.checkpoint("detailed display rebuild", frame => expectVisibleDraft(frame, "", 120, 80));
 				const detailed = await eventually(
 					() => tui("text", "--full"),
-					text => text.includes("The tool was not run") && text.includes("Working directory does not exist"),
+					text => text.includes(bashValidationDiagnostic) && text.includes("Working directory does not exist"),
 				);
-				expect(detailed).toContain("The tool was not run");
+				expect(detailed).toContain(bashValidationDiagnostic);
 				expect(detailed).toContain("Working directory does not exist");
 				expect(detailed).toContain("missing-working-directory");
 				await tui("submit", "/display compact");

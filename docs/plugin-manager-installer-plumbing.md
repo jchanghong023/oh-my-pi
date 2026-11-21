@@ -30,7 +30,7 @@ omp plugin install name@marketplace / omp install name@marketplace
   -> mutate scope registry and shared cache
   -> symlink the cached package into the scope's node_modules and update omp-plugins.lock.json
   -> `claude-plugins` discovery loads legacy marketplace content; `agent-plugins` handles portable skills/MCP for standard root plugin.json packages
-  -> task discovery loads `agents/`; extension loader imports `package.json#omp.extensions`
+  -> task discovery loads `agents/`; automatic extension discovery, when enabled, imports `package.json#omp.extensions` (off by default in CLI sessions)
 ```
 
 ### Command entrypoints
@@ -65,7 +65,7 @@ Marketplace installs add registry and cache state alongside those runtime entrie
 - `<anchor>/.omp/plugins/installed_plugins.json` — project-scoped marketplace installs
 - user plugins data root `cache/{marketplaces,plugins}/` — cached catalogs and plugin directories
 - user plugins data root `project_registries.json` — project `installed_plugins.json` files whose installs link into the shared plugin cache; consulted before a cached plugin directory is deleted, so cleanup run outside a project does not remove a directory that project still uses
-- `<scope>/plugins/node_modules/<package>` — symlink to the cached plugin, allowing its `package.json` `omp.extensions` and tools to load
+- `<scope>/plugins/node_modules/<package>` — symlink to the cached plugin. Installation makes it available to the loaders; importing installed `package.json#omp.extensions` modules requires automatic extension discovery.
 - `<scope>/plugins/omp-plugins.lock.json` — enablement and feature state shared with the runtime plugin loader
 
 ## Plugin spec parsing and metadata interpretation

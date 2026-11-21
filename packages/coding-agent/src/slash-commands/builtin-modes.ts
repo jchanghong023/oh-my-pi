@@ -258,9 +258,9 @@ const LOOP_MODE_SLASH_COMMAND: SlashCommandSpec = {
 	icon: "loop",
 	acpDescription: "Repeat the next prompt after each turn; Stop pauses the loop and /loop again disables it",
 	get description() {
-		return `Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Use a count/duration followed by an optional interval (10 30s: 10 total turns, waiting 30s after each turn); without an interval, a count limits repeats after the first turn. Gate repeats with \`--until '<cmd>'\` / \`--while '<cmd>'\`. ${formatKeyHint("escape")} suspends the ongoing loop; /loop again to disable.`;
+		return `Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Bound it with a count/duration, or gate it with \`--until '<cmd>'\` / \`--while '<cmd>'\` — the command's exit status decides whether the next iteration runs. ${formatKeyHint("escape")} suspends the ongoing loop; /loop again to disable.`;
 	},
-	inlineHint: "[count|duration] [interval] [--while|--until '<cmd>'] [prompt]",
+	inlineHint: "[count|duration] [--while|--until '<cmd>'] [prompt]",
 	allowArgs: true,
 	getTuiAutocompleteDescription: runtime => {
 		if (!runtime.ctx.loopModeEnabled) return "Loop: off";
@@ -615,7 +615,6 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Switch model for this session",
 		acpDescription: "Show current model or select a model",
 		acpInputHint: "[model]",
-		acpAllowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.viewSession.model;
 			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";

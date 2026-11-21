@@ -50,7 +50,7 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 
 | 入口 | 当前有效范围 | 非编译硬上限 | 总墙钟硬上限 |
 | --- | --- | --- | --- |
-| `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 360 秒 | 沿用非编译预算 |
+| `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 360 秒 | 无独立总墙钟硬上限；仅按非编译预算判定超时 |
 | `bun run fulltest` | 全部 fastcheck 检查 + 本机 fork 功能的 Bun、Cargo/Nextest 和适用 doctest、变更对应的仓库脚本自测、native 构建及普通 TUI smoke；测试选择见下文，无跨 WSL | 1800 秒 | 1800 秒 |
 | `bun run slowtest` | 本机 fulltest 一次 + 项目所需且现有兼容 WSL 可用时的 Linux fulltest；无适用 WSL 时保留本机 fulltest | 3000 秒 | 3000 秒 |
 
@@ -59,27 +59,25 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 - 三层门禁及根脚本直接调用既有 Bun／Cargo 检查、构建与测试原语，保持平台限制和报告语义；fastcheck 不运行测试，保留既有工具及增量编译缓存，但不缓存门禁或完整命令结果以免执行。不建立 fork 专用 Bazel 验证图或自建结果缓存框架。上游原有显式目标 Bazel 工具及其 CI 原生产物不属于此门禁改动。
 - 日常门禁包含真实 Rust 编译和 Clippy：`check:rs` 依次运行 `cargo fmt --all -- --check`、`cargo build --workspace`（保留既有 vendored fork 排除）和与 `lint:rs` 相同的 workspace Clippy（保留既有第三方排除、`--no-deps` 与 `-D warnings`）。编译必须生成并链接产物，不能以 Clippy／`cargo check` 代替；fastcheck 及复用它的 fulltest／slowtest 均检查 Rust 编译器与 Clippy 警告并以非零退出阻断。固定工具链、显式 `lint:rs`／`fix:rs` 入口、其他检查和测试范围及预算保持不变。
 - 日常 `bun run test`、`test:ts`、`test:rs`、fulltest 和 slowtest 测试 fork 自有功能；父仓静态检查与测试发现排除 `vendor/openwiki` 子模块，构建和运行仍使用真实 fork。保留 OpenSpec 原生技能与资源、Team/Goal（包括取消与持久化）、Knowledge 索引、OpenWiki、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
-- 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留。真实 PTY 中普通 TUI 的错误、状态和焦点边界保留。本次 tui-presentation 允许清退的旧 compact 专属测试、fixture 和断言仍按原边界处理；上游、clean、detailed、共享布局或其他 fork 功能不在清退范围。
+- 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留。真实 PTY 中普通 TUI 的错误、状态和焦点边界保留。
 - 默认 fulltest 的普通 Bun 测试在 fork 白名单内以原生 `--changed` 根据变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不能回退整个上游测试集。新 compact 的显示差异纳入普通 Bun 消费者范围，不再设始终完整运行的 compact 专属通道。显式选测及 `local`／`local-ts` 须如实报告范围，宿主 `CI` 或 `OMP_TEST_SHARD` 不改变本地范围；保留文件隔离、TSX 和共享并发预算。仓库脚本自测只在对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 保留。
 - collab-web 的 fork 白名单仅纳入 `test/composer.test.tsx`、`test/transcript.test.tsx`、`test/tool-view.test.tsx`、`test/markdown.test.tsx`，不纳入整个 collab-web 或通用 VCS 套件。测试发现、文件计数、空选择探针和报告 MUST 同时识别 `.test.tsx`。
 - Bun fork 套件版本 MUST 使用 `suiteRevision: 8`；消费者集合变化时 MUST 同步递增 `suiteRevision`，下一次获授权的完整 fork 回归须在干净工作区为新范围建立基线。完整基线与计时提示资格须匹配当前消费者范围，旧范围报告不可复用。affected、失败及未完成报告的原语义不变。
 - 保留 `scripts/ci-test-ts.ts` 白名单内适用的原生 Agent／TUI 消费者覆盖及原生 MCP 能力边界，不扩大整个上游 agent 或通用 Browser 套件，也不增加 MCP 连接／授权验收。
-- 显示验证 MUST 围绕 clean 基线、按文件目标筛选且与上游 detailed 一致的 write／edit 原组件显示、固定两行活动区及隐藏独立模型处理忙碌提示的消费者契约，复用既有普通测试入口和必要的共享布局、渲染、恢复验证；不按文件名收集 compact 大套件。纯上下文压缩模式注册、算法、预算、队列和 `/compact` 参数派发不因名称相似纳入。
-- 旧 `compact_display` 命令、独立清单、执行通道、排除参数、专属报告和基线要求 MUST 移除，不保留兼容别名或用新名称重建同类通道。仍适用的显示消费者测试由普通选测机制发现，只执行一次，不再从普通组排除后另行执行。
-- 旧 compact 专属完成帧矩阵、随机旅程、截图回归与真实 CLI 场景仅为旧行为存在的部分 MUST 清退，不以改写预期保留旧套件。新需求优先复用现有消费者验证，以显示差异的实际可观察结果和必要状态切换为边界；共享上游布局与其他 fork 场景不因此删减。实际执行、采样、平台条件和未覆盖部分须如实区分，不新增 skip 或放宽时限掩盖失败。
+- 显示验证 MUST 覆盖 clean 基线、compact 的本轮文件净差异、固定两行活动区、隐藏独立模型处理忙碌提示，以及 detailed 的上游原组件。按普通消费者规则选测且只执行一次，复用必要的共享布局、渲染和恢复验证，不为 compact 新建专属通道或全工具矩阵。纯上下文压缩模式注册、算法、预算、队列和 `/compact` 参数派发不因名称相似纳入。
 - 根目录 `docs/`、`docs-zh-CN/` 和 `AGENTS.md` 不作为 Git 测试选择输入，不触发 Bun 全量回退或独立 UI smoke；混合变更仍按其余运行输入判断。排除不扩大到包内 Markdown/prompt 等运行资源；缺少合格基线和显式 `--full` 的行为不变。
 - `bun run fulltest --full` 显式运行当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 和仓库脚本测试，但不发现或运行 `vendor/openwiki` 子模块自身的测试；OMP OpenWiki 消费者测试仍在范围内。不使用 fork 白名单、变更选测、pytest-testmon 或环境分片；默认 fulltest 及 slowtest 不变。保留测试自身的 skip、平台不支持、真实桌面输入及另需单独授权的集成边界；不因全量模式放宽门禁时限。
 - 独立 Python SDK、Robomp 和 legacy 通用 SDK 不纳入默认 fork 门禁，手动入口保留；Robomp integration 仍须单独显式启用，Windows 原生调用报告不支持并非零退出。
 - `bun run test:rs` 用 Cargo 包及 Nextest namespace 标准筛选 `omp-knowledge` 全包和 `omp-natives` 的 `knowledge::` 绑定测试；scope 为 `rust-fork-features`。独立 doctest 阶段实际运行 `cargo test -p omp-knowledge --doc --no-fail-fast`，报告真实命令、退出码和命令墙钟时间；Cargo doctest 无标准 JUnit 报告，记 `report=not-supported`。`omp-natives` 是 `cdylib`，无 doctest，不生成虚构用例或 PASS，不运行上游 tree-sitter-go 文档例子凑数。保留同平台构建配置及正常 Cargo 增量编译缓存。
 - 非 Rust 变更不能一律视为与 Rust 无关：构建脚本、配置、清单、锁文件、工具链、生成输入及跨语言依赖等可能影响 Rust。Bun 文件依赖是近似，动态依赖、环境和外部输入可能漏检；受影响选测不是全新完整回归的证明。
 - 通过子进程启动 CLI 的测试须在公共 harness 或独立启动器中静态声明真实运行依赖，让 Bun `--changed` 能识别间接消费者；Tools registry 可作为输入，不能导入并执行 CLI 主入口来构造依赖图。
-- 默认 fulltest 使用同一个真实 clean、完整成功的 fork 基线；Bun 完整基线包含当前普通和启动敏感组所需工作，不再要求已移除的 `compact-display` producer；旧范围报告不能充当新范围完整基线。Rust 用 cargo-delta 0.5.0 对 Git 变更和 Cargo metadata 分析受影响 crate 及逆向依赖，与 fork 包范围取交集后以标准 Cargo 包选择执行 Nextest。配置 tripwire 覆盖全局或无法安全归属的输入；动态依赖、构建脚本、环境及外部输入仍可能超出分析，无法确定时回退完整 fork 范围，仍须适时完整回归。工具缺失、失败或输出无效亦回退完整 fork 范围；无合格基线同样回退。空交集不启动 Cargo，`omp-knowledge` 被选时才独立运行 doctest；`omp-natives` 无 doctest。独立 UI smoke 和仓库脚本仍按 Git 变更规划，缺基线或依赖未知时保守执行；静态检查及必要 native 准备始终全局执行。affected、partial 或失败报告不能作为完整基线，不以提交 sidecar 或改写历史建立基线。
+- 默认 fulltest 使用同一个真实 clean、完整成功的 fork 基线；Bun 完整基线包含当前普通和启动敏感组所需工作，旧范围报告不能充当新范围完整基线。Rust 用 cargo-delta 0.5.0 对 Git 变更和 Cargo metadata 分析受影响 crate 及逆向依赖，与 fork 包范围取交集后以标准 Cargo 包选择执行 Nextest。配置 tripwire 覆盖全局或无法安全归属的输入；动态依赖、构建脚本、环境及外部输入仍可能超出分析，无法确定时回退完整 fork 范围，仍须适时完整回归。工具缺失、失败或输出无效亦回退完整 fork 范围；无合格基线同样回退。空交集不启动 Cargo，`omp-knowledge` 被选时才独立运行 doctest；`omp-natives` 无 doctest。独立 UI smoke 和仓库脚本仍按 Git 变更规划，缺基线或依赖未知时保守执行；静态检查及必要 native 准备始终全局执行。affected、partial 或失败报告不能作为完整基线，不以提交 sidecar 或改写历史建立基线。
 - cargo-delta 须预先安装 `cargo install cargo-delta --version 0.5.0 --locked`，门禁不自动安装；其标准分析缓存不是测试结果缓存。直接 `test:rs` 始终运行完整 fork 范围，`--full` 始终运行完整 workspace，不使用 delta。Git／cargo-delta 未选阶段记录有效基线 revision、相对变更路径、原因和零选择，cargo-delta 另记录空包列表；不虚构 XML、用例或耗时。实际受影响包的 Nextest 保留真实 JUnit、包列表和基线，doctest 按实际阶段状态报告；全未选可报告真实零执行，混合报告保留实际 XML 与失败，均不得当作完整新执行或完整基线。
 - 单个用例、文件或语言套件失败后继续执行独立的其余必需测试，Nextest 与 rustdoc 使用 `--no-fail-fast`，Bun 不添加 `--bail`，pytest 不添加 `-x`；只有总预算、取消或参数错误可终止剩余工作。
 - 默认 fulltest 不自动纳入独立 Go/Rust SDK；安装测试和另需授权的集成入口也不自动纳入 `--full`。手动构建发布 CI 不运行任何测试，也不以测试作业为发布依赖；保留的 `ci:test:*` 脚本只是显式测试工具，不由 CI 工作流调用。发布仍依赖版本元数据、二进制与浏览器扩展构建成功，不增加自动触发。
 - native 安装从真实构建产物执行版本戳及宿主加载核验；最终版本戳后的 addon 字节与 bindings 内容均未变化、且已有文件可写时，保留安装文件及其修改时间。版本或内容变化时 MUST 按下文「原生安装替换与回滚」执行替换。
 
-- 三层均在一个单调累计时钟下计费，排除实际观测到的**纯编译区间之并集**；编译和非编译并行时重叠仍计费一次。发现、准备、原生选测、下载、同步、非编译等待、汇总和清理计费；不能把混合检查/测试命令整段排除，也不能将历史耗时计入本轮编译排除。fulltest/slowtest 另有包含编译及全部收尾的总墙钟硬上限，不因纯编译排除而延长；嵌套阶段共享外层剩余额度，并保持更严格的内层上限。`--limit-seconds` 同时下调本入口的非编译与总墙钟上限。
+- 三层均在一个单调累计时钟下计费，排除实际观测到的**纯编译区间之并集**；编译和非编译并行时重叠仍计费一次。发现、准备、原生选测、下载、同步、非编译等待、汇总和清理计费；不能把混合检查/测试命令整段排除，也不能将历史耗时计入本轮编译排除。fulltest/slowtest 另有包含编译及全部收尾的总墙钟硬上限，不因纯编译排除而延长；嵌套阶段共享外层剩余额度，并保持更严格的内层上限。`--limit-seconds` 对 `fastcheck` 仅下调非编译上限，不新增总墙钟上限；对 `fulltest` 和 `slowtest` 同时下调非编译与总墙钟上限。
 - 到限主动终止本次拥有的进程树，非零退出并报告 `TIMEOUT`，不在阶段间重置时钟、不放宽上限。所有退出路径（成功、失败、缺工具、超时、中断、参数错误）都输出 status、total、compile_excluded、budgeted、limit 与退出码，秒至少一位小数。fastcheck 按 budgeted 判断到限；fulltest/slowtest 在 budgeted 或 total 任一到限时退出，独立线程须能在主线程同步阻塞时执行总墙钟强退。
 - 三级门禁默认只向控制台显示失败用例及错误诊断；成功用例、成功分块、成功命令及其 stdout/stderr MUST 隐藏，不生成逐条成功用例的普通过程日志。保留最外层入口最终状态、耗时、退出码及报告位置。失败名称、错误／堆栈、相关命令上下文和取消／超时诊断 MUST 保留，首错通知不得等待输出缓冲收尾。此规则仅改变呈现，不改变执行范围、失败继续、并发、预算或原退出码；成功与失败用例的完整 JUnit、计时及结构化结果仍须记录。
 - fastcheck／fulltest／slowtest 的验证失败不终止整轮：记录实际用例、检查、编译、执行、准备或核验失败及原退出码，继续执行不依赖它的剩余必需工作；同一 producer 内完整执行其余用例（如 nextest 使用 `--no-fail-fast`）。工具或环境缺失仅使依赖它的工作失败或阻塞，被阻塞的依赖项标记未运行且不计通过。只有到限、中断或参数错误才立即终止本次拥有的任务与进程树。嵌套运行器及时通知外层并保留原退出码；汇总全部失败，最终退出码取首个实际失败的原退出码（失败状态附带 0 时归为 1），未启动、取消或阻塞不算通过。
@@ -147,7 +145,7 @@ fulltest 和 slowtest MUST 使用 Bun 原生选测能力和 cargo-delta 受影�
 
 - **WHEN** 日常 `test`、`test:ts`、默认 fulltest 或 slowtest 发现 fork 功能测试
 - **THEN** 紧凑模式的两行状态、最近工具只读 Output 及其必要的历史和模式切换消费者进入现有普通白名单，不增加专用测试通道。
-- **AND** 现有 clean、detailed（含上游 Edit／Write 卡片、原有 Diff 及普通工具结果）、共享布局、输入、恢复及其他 fork 功能的有效测试按原职责保留，纯旧 compact 专属部分删除，不按测试文件名称整块删减。
+- **AND** 保留现有 clean、detailed（含上游 Edit／Write 卡片、原有 Diff 及普通工具结果）、共享布局、输入、恢复及其他 fork 功能的有效测试。
 - **AND** 保留原有有效消费者对流式表格、Composer 布局及历史重建、Web Search 完整答案、压缩期间子代理消息投递和压缩后继续收取结果的业务断言；这些能力不因原测试曾位于旧显示清单而被删除，也不因名称含 compact 把纯压缩算法套件强制纳入显示验证。
 - **AND** 使用既有 affected 选择、失败继续、隔离、报告和预算规则，fastcheck 仍不运行测试；不为新 compact 新建独立执行通道或大型替代套件。
 
@@ -230,37 +228,37 @@ OMP MUST 在 native 产物成功替换后立即尝试清理该次让位的旧文
 - **THEN** MUST 尝试删除该次让位文件；删除失败 MUST NOT 撤销成功换入或将安装判失败。
 - **AND** 换入失败时继续按既有回滚及恢复文件保留要求处理，不能先删除恢复所需的文件。
 
-### Requirement: 新 compact 的最小必要验证边界
+### Requirement: compact 的最小必要验证边界
 
 紧凑模式 MUST 复用现有测试入口，只验证模型／Agent 阶段区分、最近工具只读 Output、历史稳定性和既有交互等可观察契约，不重建测试框架、截图矩阵或全工具组合套件。
 
 #### Scenario: 活动区、既有展开与布局具有行为证据
 
-- **WHEN** 后续另获授权实施并验证本变更
-- **THEN** 验证 compact 的 `Ctrl+O` 只展开／收起显式 TodoLoop 任务卡片；展开、窄屏和活动区收起不覆盖、重复或遗失正文与草稿。
+- **WHEN** 验证 compact 显示与交互
+- **THEN** 按[显示规格](../tui-presentation/spec.md#scenario-clean-与-compact-的显示差异)验证 `Ctrl+O` 优先展开本轮文件净差异，无可展开差异时才处理显式 TodoLoop 任务卡片；展开、窄屏和活动区收起不覆盖、重复或遗失正文与草稿。
 - **AND** 验证真实模型阶段与已派发工具占独立行，传输参数不算执行，最近结束结果带「上次」，并发工具不轮播；思考显隐、会话隔离和减少动效继续覆盖。
 - **AND** 优先复用既有 ANSI／native、模式切换和真实入口设施，只针对消费者可观察缺陷验证，不检查源文本、内部接线、默认常量或快照长度增长。
 
 #### Scenario: 最小上游差异与执行授权
 
-- **WHEN** 选择验证范围或清理旧测试
+- **WHEN** 选择显示验证范围
 - **THEN** 不因实现简化重建上游行为、重跑无关矩阵、补齐测试类别或扩大门禁；相关输入未变且已有有效证据足够时复用原结果。
 - **AND** 非显示门禁的预算、失败继续、Git 版本记录、平台与独立授权要求保持不变；新增需求产物本身不授予构建、测试、真实模型、发布或部署权限。
-- **AND** 仅因旧断言禁止任何普通工具正文而与只读 Output 临时区冲突时，应调整相应消费者契约，不保留互相矛盾的断言；仍保护 clean、detailed、历史隐藏、文件组件、两行摘要、输入及共享布局的有效断言继续保留。
+- **AND** 验证只读 Output 的临时显示与聊天历史隐藏各自成立，继续保护 clean、detailed、文件组件、两行摘要、输入及共享布局。
 
-#### Scenario: 六行只读 Output 的实时显示与稳定布局
+#### Scenario: 只读 Output 的实时显示与稳定布局
 
-- **WHEN** 后续另获授权验证只读输出预览的实际消费者行为
-- **THEN** 证据 MUST 证明正常空间下总高固定 6 行，恰由 1 行真实工具信息及单行命令／目标、5 行最新 Output 组成；不另加标题或边框行，不显示参数区、Shell 结构、图片或交互控件。无 Output 或到期关闭时占 0 行，原活动摘要和输入区保持独立。
+- **WHEN** 验证只读输出预览的实际消费者行为
+- **THEN** 按[显示规格](../tui-presentation/spec.md#requirement-紧凑模式的最近工具只读输出预览)验证最多六行：一行真实工具信息、最多五行有效输出，不补空行。无 Output 或到期关闭时占零行，原活动摘要和输入区保持独立。
 - **AND** 验证按派发顺序选最近已有非空 Output 的调用：B 无输出时保留 A 及其真实身份，B 首次有输出才切换，之后 A 迟到不能抢占 B；空白、参数和非文本帧不冒充 Output，同名调用不合并，不按缓存更新顺序恢复来源。
 - **AND** 对每秒输出、持续 25 秒的有限异步 Bash，证明未被较新 Output 替换时预览在命令运行期间更新，启动返回或 loop 结束不提前关闭，不依赖模型读取 `proc://`、调用 wait 或重复查询驱动；前台及自动转后台仅补齐实际不同的路径缺口，不为同一路径重复排列输入。
-- **AND** 验证累计输出快照替换而非重复追加，按可用宽度排版后过滤空行和纯空白显示行，再保留最近五个有文字的显示行；不足时补空位保持六行预算，控制字符及宽字符不溢出，不改写原始 Output。read 只预览所选调用自身 Output，不搬聚合组件；`out://` 正文不被抽取、移走、重复或随预览关闭删除。
-- **AND** 来源切换和输出增长不改变显示期间高度或焦点，低高度终端优先保证输入和实际交互可达；预览不复用完整卡片，不在两处挂载同一原组件，也不接管原卡片的焦点、按键、图形或详情生命周期。
+- **AND** 验证累计输出快照替换而非重复追加，有效输出按可用宽度排版、控制字符和宽字符不溢出、不改写原始 Output。read 只预览所选调用自身 Output，不搬聚合组件；`out://` 正文不被抽取、移走、重复或随预览关闭删除。
+- **AND** 来源切换和输出增长按内容调整高度，不改变焦点；低高度终端优先保证输入和实际交互可达。预览不复用完整卡片，不在两处挂载同一原组件，也不接管原卡片的交互。
 - **AND** 收起只要求预览自身占用归零，不影响两行活动区和历史。允许正常归档补偿空白，不回放或搬动终端历史。
 
 #### Scenario: 运行保留、停止后计时与恢复不倒退
 
-- **WHEN** 后续另获授权验证自动收起和会话恢复
+- **WHEN** 验证自动收起和会话恢复
 - **THEN** 证据 MUST 证明复用状态栏运行判定，运行期间不因工具已终态而收起；状态栏停止且来源整体终态均已发生后，从较晚时刻起计时 3 秒，不等待可见绘制。切换视图、档位、全屏覆盖、输出更新及重建不暂停或重置期限；空闲时终态可在尚未看到时到期，切回不重新给三秒。
 - **AND** 覆盖 B 仅派发无输出时不替换 A，运行期间保留 A，停止后按适用期限收起；B 输出被选中后 A 旧关闭动作不能关闭 B。允许新来源提前替换，不要求每个结果都完整展示三秒；空闲到期后不回退到更早仍运行的来源，也不被旧输出或重复终态重新打开。
 - **AND** 验证有限异步调用返回 running 不算整体终态；终态先于启动回执且马上重建／跨线程重新聚焦时不恢复 running、不丢失原期限；多 job task 不按 primary job 单独结束关闭，最后排队项取消且无后续输出时仍能按已有权威结算关闭。

@@ -119,11 +119,11 @@
 
 | 层级 | 目的 | 边界 |
 | --- | --- | --- |
-| `fastcheck` | 高频快速反馈 | AI 可自主执行；单次墙钟 ≤ 60 秒，超时失败并清理进程树 |
-| `fulltest` | 当前平台完整本地验证 | 须人工授权，不触发其他平台或远端流水线 |
-| `slowtest` | 综合验收 | 含 `fulltest` 及跨环境、远端或发布流程；须人工授权 |
+| `fastcheck` | 高频快速反馈 | 静态检查和适用的增量编译，不运行项目测试 |
+| `fulltest` | 当前平台完整日常回归 | 业务测试须另获明确授权 |
+| `slowtest` | 综合验收 | 包含一次 `fulltest` 和适用的扩展验证；不触发远端 CI 或发布 |
 
-**技能方案与仓库现状要分开**：本 OMP fork 的 `fastcheck` 非编译硬上限为 360 秒，`fulltest` 按需求记录的上游基线差异选测试，`slowtest` 包含一次 `fulltest` 及适用的 WSL 本地验证，不推送、不触发 CI、不发布，以[根 AGENTS.md](../AGENTS.md#验证) 为准。调用技能也不等于授权运行测试；脚本里的授权标记代替不了用户授权。
+**技能方案与仓库现状要分开**：技能预算以已安装版本为准。本 OMP fork 的 `fastcheck` 非编译硬上限为 360 秒；默认 `fulltest` 以干净工作区中完整通过的 fork 门禁报告为基线做受影响选测，没有合格基线则回退到完整 fork 范围。`slowtest` 包含一次本机 `fulltest` 及适用的 WSL 本地验证，不推送、不触发 CI、不发布。详见[验证门禁主规格](../openspec/specs/fork-verification-gates/spec.md#requirement-fork-验证体系)。调用技能不等于授权运行测试；脚本里的授权标记代替不了用户授权。
 
 ![三级门禁报告：fastcheck 失败，fulltest 与 slowtest 未获授权执行](assets/jch-test-gates-example.png)
 

@@ -77,7 +77,7 @@ If omitted, it resolves:
 - skills/rules/context files/prompt templates/slash commands/extensions/custom TS commands
 - built-in tools via `createTools(...)`
 - MCP tools (enabled by default; Exa MCP servers are folded into native Exa integration, and browser automation MCP servers are filtered when the built-in Eval browser prelude is enabled)
-- LSP integration (enabled by default)
+- LSP integration requires `lsp.enabled: true` (default `false`). Unrestricted SDK sessions allow LSP by default at the session level; restricted sessions also require `enableLsp: true`.
 - `eventBus`: new `EventBus()` unless supplied
 
 ### Required vs optional inputs
@@ -280,7 +280,11 @@ Related APIs:
 
 ## Idle maintenance
 
-A session starts no autonomous idle work until its owner opts in with `session.enableIdleMaintenance({ isBlocked?, scheduledTurn?, onRecap? })`; the interactive TUI does, SDK, RPC and print sessions do not. After a turn whose last message is a generated assistant reply (text, thinking or a tool call, even if the turn was then aborted), once nothing is live, admitted, queued or scheduled, the session generates the idle recap (`recap.*` settings), journals it in the history database and passes the full nonblank reply to `onRecap`; the recap never enters the transcript or model context. Idle compaction (`compaction.idle*` settings) also waits until no background job or delivery can wake the session. `isBlocked` says the owner wants no autonomous work (a draft being composed, a view that left, startup unfinished); `scheduledTurn` says the owner has decided to start a turn it has not yet admitted. Call `session.refreshIdleMaintenance()` when either answer changes: work that is no longer wanted is dropped and what the stretch still owes is re-armed with a fresh delay. Repeated activation keeps the first owner's options; session disposal owns cleanup.
+A session starts no autonomous idle work until its owner opts in with `session.enableIdleMaintenance({ isBlocked?, scheduledTurn?, onRecap? })`; the interactive TUI does, SDK, RPC and print sessions do not.
+
+Idle recaps also require `recap.enabled: true` (default `false`). After a turn whose last message is a generated assistant reply (text, thinking or a tool call, even if the turn was then aborted), once nothing is live, admitted, queued or scheduled, the session generates the idle recap, journals it in the history database and passes the full nonblank reply to `onRecap`; the recap never enters the transcript or model context. Idle compaction is controlled separately by `compaction.idle*` settings and also waits until no background job or delivery can wake the session.
+
+`isBlocked` says the owner wants no autonomous work (a draft being composed, a view that left, startup unfinished); `scheduledTurn` says the owner has decided to start a turn it has not yet admitted. Call `session.refreshIdleMaintenance()` when either answer changes: work that is no longer wanted is dropped and what the stretch still owes is re-armed with a fresh delay. Repeated activation keeps the first owner's options; session disposal owns cleanup.
 
 ## `AgentSession` lifecycle and disposal
 

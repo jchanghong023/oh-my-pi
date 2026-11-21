@@ -6,7 +6,6 @@ import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgLspEnabled } from "@oh-my-pi/pi-coding-agent/lsp/settings";
 import { buildSessionOptions } from "@oh-my-pi/pi-coding-agent/main";
 import { createAgentSession, loadSessionExtensions } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -27,9 +26,14 @@ afterAll(async () => {
 	await tempDir.remove();
 });
 
-test.each(["-e", "--extension", "--hook", "--trusted-extension"])(
-	"default CLI startup preserves %s while disabling ambient extensions and configured LSP",
-	async flag => {
+test.each([
+	{ flag: "-e", settings: {}, args: [], expectLsp: false },
+	{ flag: "--extension", settings: { "lsp.enabled": true }, args: [], expectLsp: true },
+	{ flag: "--hook", settings: { "lsp.enabled": true }, args: ["--no-lsp"], expectLsp: false },
+	{ flag: "--trusted-extension", settings: {}, args: [], expectLsp: false },
+])(
+	"default CLI startup preserves $flag, skips ambient extensions, and respects LSP settings and flags",
+	async ({ flag, settings: overrides, args, expectLsp }) => {
 		const cwd = tempDir.join(`default-startup-${flag.replaceAll("-", "")}`);
 		const extensionPath = path.join(cwd, "explicit.ts");
 		await Bun.write(
@@ -40,8 +44,8 @@ test.each(["-e", "--extension", "--hook", "--trusted-extension"])(
 			extensionPath,
 			'export default function (pi) { pi.registerCommand("startup-fixture", { handler: async () => {} }); }',
 		);
-		const parsed = parseArgs([flag, extensionPath]);
-		const settings = Settings.isolated({ "lsp.enabled": true, "lsp.lazy": false });
+		const parsed = parseArgs([flag, extensionPath, ...args]);
+		const settings = Settings.isolated({ ...overrides, "lsp.lazy": true });
 		const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
 		const options = await buildSessionOptions(parsed, [], SessionManager.inMemory(cwd), modelRegistry, settings);
 		const extensions = await loadSessionExtensions(options, cwd, settings, new EventBus());
@@ -66,10 +70,8 @@ test.each(["-e", "--extension", "--hook", "--trusted-extension"])(
 			slashCommands: [],
 		});
 		try {
-			expect(session.getAllToolNames()).not.toContain("lsp");
-			expect(lspServers).toBeUndefined();
-			expect(cfgLspEnabled.get(settings)).toBe(true);
-			expect(options.enableLsp).toBe(false);
+			expect(session.getAllToolNames().includes("lsp")).toBe(expectLsp);
+			if (!expectLsp) expect(lspServers).toBeUndefined();
 			expect(options.disableExtensionDiscovery).toBe(true);
 			expect(options.skills).toBeUndefined();
 			expect(options.rules).toBeUndefined();
@@ -95,7 +97,7 @@ test.each([
 	const first = parseArgs(raw);
 	const reparsed = parseArgs(raw, flags);
 	for (const parsed of [first, reparsed]) {
-		expect(parsed.noLsp).toBe(true);
+		expect(parsed.noLsp).toBeUndefined();
 		expect(parsed.noExtensions).toBe(true);
 		expect(parsed.extensions).toEqual([explicit]);
 		expect(parsed.noSkills).toBeUndefined();

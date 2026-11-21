@@ -1,7 +1,7 @@
 //! Deterministic endpoint naming shared by every process that dials or binds.
 //!
-//! Naming is deterministic for processes using the same directory.
-//! Stem sanitizing, `sun_path` relocation and Windows pipe shape are testable.
+//! The helpers here are pure so the naming rules (stem sanitizing, `sun_path`
+//! relocation, Windows pipe shape) are testable on any host OS.
 
 #[cfg(windows)]
 use std::path::{self, Path};
@@ -166,7 +166,7 @@ mod tests {
 		let mut key = too_long.clone().into_bytes();
 		key.push(0);
 		key.extend_from_slice(name.as_bytes());
-		assert_eq!(relocated, format!("{}/{}.sock", relocation_dir(501), hash16(&key)));
+		assert_eq!(relocated, format!("/tmp/omp-501/{}.sock", hash16(&key)));
 		// Linux's larger sun_path keeps the same directory in place.
 		assert_eq!(unix_endpoint(&too_long, name, 501, 108), format!("{too_long}/n.sock"));
 	}

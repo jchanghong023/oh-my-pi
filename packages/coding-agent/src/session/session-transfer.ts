@@ -310,8 +310,7 @@ export async function packSession(sessionFile: string, outPath: string): Promise
 		const artifactsDir = realSource.slice(0, -".jsonl".length);
 		if (realSource.endsWith(".jsonl")) {
 			for (const relative of await listFilesRecursive(artifactsDir)) {
-				const artifact = path.join(artifactsDir, ...relative.split("/"));
-				const bytes = await fs.promises.readFile(artifact);
+				const bytes = await fs.promises.readFile(path.join(artifactsDir, ...relative.split("/")));
 				members.push([`${ARTIFACTS_PREFIX}${relative}`, bytes]);
 				if (relative.endsWith(".jsonl")) collectBlobHashes(bytes.toString("utf8"), hashes);
 			}
@@ -464,11 +463,8 @@ function isTranscriptPrefix(local: readonly SessionEntry[], incoming: readonly S
 async function findLocalCopies(id: string, sessionDir: string): Promise<string[]> {
 	const candidates = new Set((await findSessionFiles(id)).map(file => path.resolve(file)));
 	try {
-		for await (const name of new Bun.Glob(`*_${id}.jsonl`).scan({
-			cwd: sessionDir,
-			followSymlinks: true,
-		})) {
-			candidates.add(path.join(sessionDir, name));
+		for await (const name of new Bun.Glob(`*_${id}.jsonl`).scan({ cwd: sessionDir, followSymlinks: true })) {
+			candidates.add(path.resolve(sessionDir, name));
 		}
 	} catch (error) {
 		if (!isEnoent(error)) throw error;

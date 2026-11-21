@@ -12,6 +12,7 @@ import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-q
 import { LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 import { KnowledgeService } from "@oh-my-pi/pi-coding-agent/knowledge/service";
 import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { requiresApproval, resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { Text } from "@oh-my-pi/pi-tui";
 import { githubToolRenderer } from "@oh-my-pi/pi-tui/tools/github";
@@ -139,47 +140,21 @@ describe("read and write route xd:// device URLs", () => {
 		}
 	});
 
-	it("only treats a trimmed question mark as device documentation", async () => {
-		let calls = 0;
-		const device: AgentTool = {
-			name: "peek",
-			label: "Peek",
-			description: "Read-only device",
-			parameters: type({ q: "string" }),
-			async execute() {
-				calls++;
-				return { content: [{ type: "text", text: "peeked" }] };
-			},
-		};
-		const write = new WriteTool(xdevSession(process.cwd(), { xdev: createTestXdevState([device]) }));
-		const docs = await write.execute("docs", { path: "xd://peek", content: " \t? \n" });
-		expect(docs.details?.xdev?.mode).toBe("help");
-		expect(docs.isError).not.toBe(true);
-		for (const content of ["", " ", "help", "HELP", "Help"]) {
-			const result = await write.execute("invalid", { path: "xd://peek", content });
-			expect(result.details?.xdev?.mode).toBe("execute");
-			expect(result.isError).toBe(true);
-		}
-		expect(calls).toBe(0);
-	});
-
-	it("documents resolution devices without invoking their action", async () => {
-		let calls = 0;
+	it("reads proposal usage without dispatching and writes a literal question mark as the proposal title", async () => {
+		const titles: string[] = [];
 		const session = xdevSession(process.cwd(), {
-			peekPlanProposalHandler: () => async () => {
-				calls++;
+			peekPlanProposalHandler: () => async title => {
+				titles.push(title);
 				return { content: [{ type: "text", text: "submitted" }] };
 			},
 		});
-		const write = new WriteTool(session);
-		const docs = await write.execute("docs", { path: "xd://propose", content: " ? " });
-		expect(docs.details?.xdev?.mode).toBe("help");
-		expect(calls).toBe(0);
-		for (const content of ["", "help", "HELP"]) {
-			const result = await write.execute("action", { path: "xd://propose", content });
-			expect(result.details?.xdev?.mode).toBe("execute");
-		}
-		expect(calls).toBe(3);
+		const docs = await new ReadTool(session).execute("docs", { path: "xd://propose" });
+		expect(docs.content.find(entry => entry.type === "text")?.text).toContain("local://<slug>-plan.md");
+		expect(titles).toEqual([]);
+
+		const result = await new WriteTool(session).execute("action", { path: "xd://propose", content: " ? " });
+		expect(titles).toEqual(["?"]);
+		expect(result.details?.xdev?.mode).toBe("execute");
 	});
 
 	it("records a read tier on the dispatch of a read-only device", async () => {

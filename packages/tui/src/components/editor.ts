@@ -40,7 +40,6 @@ import {
 	sliceByColumn,
 	truncateToWidth,
 	visibleWidth,
-	wrapTextWithAnsi,
 } from "../utils";
 import {
 	countGraphemes,
@@ -464,7 +463,7 @@ const VIM_NAV_KEYS: Record<string, string | undefined> = {
 	space: "l",
 };
 
-/** Minimum free cells between an end-of-line cursor and a placeholder. */
+/** Minimum free cells between an end-of-line cursor and a right-aligned placeholder. */
 const PLACEHOLDER_MIN_GAP = 2;
 
 const DEFAULT_PAGE_SCROLL_LINES = 10;
@@ -761,10 +760,6 @@ export class Editor implements Component, Focusable {
 	};
 	/** Focusable interface - set by TUI when focus changes */
 	focused: boolean = false;
-	/** Minimum painted ANSI content rows, still bounded by the configured maximum height. */
-	minContentRows = 1;
-	/** Blank ANSI content rows kept below the draft or placeholder, subject to the maximum height. */
-	contentPaddingBottom = 0;
 
 	#theme: EditorTheme;
 	#useTerminalCursor = false;
@@ -982,10 +977,10 @@ export class Editor implements Component, Focusable {
 	protected get nativeSendable(): boolean {
 		return false;
 	}
-	/** Placeholder painted after the cursor while the editor is empty and no
-	 *  autocomplete is open; wraps within the content width and maximum height,
-	 *  keeping {@link PLACEHOLDER_MIN_GAP} cells from the cursor. The host styles it
-	 *  (ANSI allowed). Re-evaluated on every render, so hosts can derive it from live state. */
+	/** Placeholder painted right-aligned on the cursor row while the editor is empty and no
+	 *  autocomplete is open; hidden when it can't keep {@link PLACEHOLDER_MIN_GAP} cells from the
+	 *  cursor. The host styles it (ANSI allowed). Re-evaluated on every render, so hosts can derive
+	 *  it from live state. */
 	placeholder?: () => string | undefined;
 	/** Whole-message predictions for the next prompt, most likely first. The first one the single-line
 	 *  buffer is a strict prefix of is painted as ghost text after the cursor while the cursor sits at
@@ -1464,7 +1459,7 @@ export class Editor implements Component, Focusable {
 			frameHeight === undefined
 				? this.#maxHeight
 				: Math.min(this.#maxHeight ?? Number.POSITIVE_INFINITY, frameHeight);
-		if (maxHeight === undefined) return Math.max(this.minContentRows, contentLines);
+		if (maxHeight === undefined) return contentLines;
 		return Math.max(1, maxHeight - this.#effectiveStyle().verticalChrome);
 	}
 	/** Apply the optional input decorator to a plain (ANSI-free) text segment.
@@ -1598,7 +1593,7 @@ export class Editor implements Component, Focusable {
 		const visibleHeight =
 			this.#maxHeight === undefined && this.renderHeightProvider === undefined
 				? DEFAULT_PAGE_SCROLL_LINES
-				: Math.max(1, this.#getVisibleContentHeight(totalVisualLines) - this.contentPaddingBottom);
+				: this.#getVisibleContentHeight(totalVisualLines);
 		return Math.max(1, visibleHeight - 1);
 	}
 
@@ -1635,48 +1630,16 @@ export class Editor implements Component, Focusable {
 
 		// Layout the text
 		const layoutLines = this.#layoutText(layoutWidth);
-		const placeholder = this.#getPlaceholder();
-		let placeholderLines: string[] | undefined;
-		let placeholderIndent = 0;
-		if (
-			placeholder &&
-			(!this.#useTerminalCursor || this.focused) &&
-			!(this.#imeSafeCursorLayout && this.#useTerminalCursor && isSideBordered)
-		) {
-			const cursorWidth = this.#useTerminalCursor
-				? 0
-				: this.cursorOverride
-					? visibleWidth(this.cursorOverride)
-					: this.#getStyledInputCursor().width;
-			placeholderIndent = cursorWidth + PLACEHOLDER_MIN_GAP;
-			const placeholderWidth = Math.max(1, contentAreaWidth - placeholderIndent);
-			if (contentAreaWidth > 0) {
-				placeholderLines = wrapTextWithAnsi(replaceTabs(placeholder), placeholderWidth);
-				if (visibleWidth(placeholderLines[0] ?? "") > contentAreaWidth - placeholderIndent) {
-					// Keep the cursor gap intact; an oversized first grapheme starts on the next row.
-					placeholderLines.unshift("");
-				}
-			}
-		}
-		const paintedContentLines = Math.max(layoutLines.length, placeholderLines?.length ?? 0);
-		const visibleContentHeight = this.#getVisibleContentHeight(paintedContentLines + this.contentPaddingBottom);
-		const visibleTextHeight = Math.max(1, visibleContentHeight - this.contentPaddingBottom);
-		this.#updateScrollOffset(layoutWidth, layoutLines, visibleTextHeight);
-		const visibleLayoutLines = layoutLines.slice(this.#scrollOffset, this.#scrollOffset + visibleTextHeight);
-		const contentRows = Math.min(
-			visibleContentHeight,
-			Math.max(
-				this.minContentRows,
-				Math.max(visibleLayoutLines.length, placeholderLines?.length ?? 0) + this.contentPaddingBottom,
-			),
-		);
+		const visibleContentHeight = this.#getVisibleContentHeight(layoutLines.length);
+		this.#updateScrollOffset(layoutWidth, layoutLines, visibleContentHeight);
+		const visibleLayoutLines = layoutLines.slice(this.#scrollOffset, this.#scrollOffset + visibleContentHeight);
 
 		const result: string[] = [];
 		// Scrollbar: shown only when content overflows and the caller opted in.
-		const needsScrollbar = this.#scrollbarVisible && layoutLines.length > visibleTextHeight;
+		const needsScrollbar = this.#scrollbarVisible && layoutLines.length > visibleContentHeight;
 		let scrollbarThumb: { start: number; end: number } | null = null;
-		if (needsScrollbar && visibleTextHeight > 0) {
-			scrollbarThumb = scrollbarThumbRange(visibleTextHeight, layoutLines.length, this.#scrollOffset);
+		if (needsScrollbar && visibleContentHeight > 0) {
+			scrollbarThumb = scrollbarThumbRange(visibleContentHeight, layoutLines.length, this.#scrollOffset);
 		}
 
 		// Resolve the custom top-border content once per frame; the style decides
@@ -1712,7 +1675,8 @@ export class Editor implements Component, Focusable {
 		const lineContentWidth = contentAreaWidth;
 
 		// Text painted after an end-of-line cursor with `avail` free cells: dim ghost text
-		// against the cursor, or the placeholder after a small gap.
+		// against the cursor, or the placeholder flush right.
+		const placeholder = this.#getPlaceholder();
 		const inlineHint = placeholder ? null : this.#getInlineHint();
 		// Whether the hint is the prediction, and how many of its cells this frame draws: a full row,
 		// an unfocused hardware-cursor row, or the IME-safe layout can leave it unpainted.
@@ -1721,10 +1685,8 @@ export class Editor implements Component, Focusable {
 		const hintStyle = this.#theme.hintStyle ?? ((t: string) => `\x1b[2m${t}\x1b[0m`);
 		const hintTail = (avail: number): { text: string; width: number } | undefined => {
 			if (placeholder) {
-				const firstLine = placeholderLines?.[0];
-				if (!firstLine) return undefined;
-				const width = PLACEHOLDER_MIN_GAP + visibleWidth(firstLine);
-				return width <= avail ? { text: padding(PLACEHOLDER_MIN_GAP) + firstLine, width } : undefined;
+				const gap = avail - visibleWidth(placeholder);
+				return gap >= PLACEHOLDER_MIN_GAP ? { text: padding(gap) + placeholder, width: avail } : undefined;
 			}
 			if (!inlineHint) return undefined;
 			return {
@@ -1931,34 +1893,11 @@ export class Editor implements Component, Focusable {
 					text: renderedText,
 					pad: linePad,
 					gutter: gutterText,
-					isLastRow: visibleIndex === contentRows - 1,
+					isLastRow: visibleIndex === visibleLayoutLines.length - 1,
 					cursorOverflow: cursorPaddingOverflow,
 					imeSafeCursorTail,
 					scrollbarThumb:
 						scrollbarThumb !== null && visibleIndex >= scrollbarThumb.start && visibleIndex < scrollbarThumb.end,
-				}),
-			);
-		}
-		for (let index = visibleLayoutLines.length; index < contentRows; index++) {
-			let placeholderLine = index < visibleTextHeight ? placeholderLines?.[index] : undefined;
-			let placeholderLineWidth = placeholderLine ? visibleWidth(placeholderLine) : 0;
-			if (placeholderLineWidth > lineContentWidth) {
-				placeholderLine = sliceByColumn(placeholderLine!, 0, lineContentWidth, true);
-				placeholderLineWidth = visibleWidth(placeholderLine);
-			}
-			// Wrapping can retain a wide grapheme even with a one-cell budget.
-			const indent = Math.min(placeholderIndent, Math.max(0, lineContentWidth - placeholderLineWidth));
-			const text = placeholderLine ? padding(indent) + placeholderLine : "";
-			result.push(
-				...style.renderRow({
-					...chromeCtx,
-					text,
-					pad: padding(Math.max(0, lineContentWidth - (placeholderLine ? indent + placeholderLineWidth : 0))),
-					gutter: promptGutter?.continuation ?? "",
-					isLastRow: index === contentRows - 1,
-					cursorOverflow: 0,
-					imeSafeCursorTail: false,
-					scrollbarThumb: false,
 				}),
 			);
 		}

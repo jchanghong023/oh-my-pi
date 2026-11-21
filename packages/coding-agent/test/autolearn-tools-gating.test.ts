@@ -146,6 +146,7 @@ describe("manage_skill execute", () => {
 		await expect(tool().execute("3", { action: "create", name: "nobody", description: "d" })).rejects.toThrow(
 			/requires/,
 		);
+		expect(await Bun.file(path.join(getManagedSkillsDir(), "nobody", "SKILL.md")).exists()).toBe(false);
 		await expect(tool().execute("4", { action: "delete", name: "absent" })).rejects.toThrow(/does not exist/);
 	});
 

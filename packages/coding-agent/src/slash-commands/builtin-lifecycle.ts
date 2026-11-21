@@ -1,5 +1,4 @@
 import { clearSubmittedText, refuseImages, restoreDetachedDraft, runWithDetachedDraft } from "./helpers/draft";
-import { formatResetContextResult, resetContextForCommand } from "./helpers/clear";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CompactionCancelledError } from "@oh-my-pi/pi-agent-core/compaction";
@@ -8,7 +7,6 @@ import { rescopeSessionToCwd } from "../session/cwd-rescope";
 import { memoryStatsUnavailableMessage, resolveMemoryBackend } from "../memory-backend";
 import { continuesConversation } from "../modes/utils/conversation-position";
 import type { FreshSessionResult } from "../session/agent-session";
-import type { ResetSessionContextResult } from "../session/agent-session-types";
 import { COMPACT_MODES, findCompactMode, type ParsedCompactArgs, parseCompactArgs } from "../session/compact-modes";
 import { USER_INTERRUPT_LABEL } from "../session/messages";
 import { resolveResumableSession, resolveResumeTarget } from "../session/session-listing";
@@ -286,26 +284,6 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Clear the conversation context in place, keeping the session",
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.session.isStreaming ? "Clear: unavailable while streaming" : "Clear: drop context, keep session",
-		handle: async (_command, runtime) => {
-			let result: ResetSessionContextResult | undefined;
-			try {
-				result = await resetContextForCommand(runtime.session);
-			} catch (error) {
-				// The helper's wait for a compaction abort can lose the race with a
-				// session switch or dispose; that designed outcome is reported here —
-				// a throw would fail the whole ACP/RPC prompt request (the TUI host
-				// catches the same code in handleResetContextCommand).
-				if ((error as { code?: unknown } | null)?.code !== "session_changed") throw error;
-				await runtime.output("Session changed while resetting the context; nothing was cleared.");
-				return commandConsumed();
-			}
-			await runtime.output(
-				result
-					? formatResetContextResult(result)
-					: "Wait for the current response to finish or abort it before resetting the context.",
-			);
-			return commandConsumed();
-		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleResetContextCommand();

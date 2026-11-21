@@ -12,6 +12,8 @@ import { theme, type ThemeColor } from "@oh-my-pi/pi-tui/theme";
 import { describeShimmer, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
+import { REPORT_ISSUE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/report-tool-issue";
+import { isResolutionDeviceName } from "@oh-my-pi/pi-tui/tools/resolve";
 import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
 import { isXdHelpContent, parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { getPaddingX, padding, sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
@@ -100,11 +102,17 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 	const outerPath = outer.path ?? outer.file_path;
 	const path = typeof outerPath === "string" ? outerPath : undefined;
 	const device = call.name === "write" && path ? parseXdUrl(unwrapHashlineHeaderPath(path)) : null;
-	const help = (typeof outer.content === "string" && isXdHelpContent(outer.content)) || dispatch.mode === "help";
 	const deviceName =
 		device?.name ??
 		(typeof dispatch.tool === "string" ? dispatch.tool : undefined) ??
 		(path === undefined && call.semanticName !== call.name ? call.semanticName : undefined);
+	const help =
+		dispatch.mode === "help" ||
+		(!!deviceName &&
+			typeof outer.content === "string" &&
+			(deviceName === REPORT_ISSUE_DEVICE_NAME || isResolutionDeviceName(deviceName)
+				? outer.content.trim() === "?"
+				: isXdHelpContent(outer.content)));
 	const wrapped = call.name === "write" && !!deviceName && !help;
 	const semanticName = wrapped ? deviceName! : call.name;
 	const identityChanged = call.semanticName !== undefined && call.semanticName !== semanticName;

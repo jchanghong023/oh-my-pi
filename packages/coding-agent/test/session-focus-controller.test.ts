@@ -345,6 +345,10 @@ describe("SessionFocusController", () => {
 
 	it("focusParent walks parentId to a registered non-main agent, then re-attaches the main session", async () => {
 		const h = makeHarness();
+		const notices: string[] = [];
+		h.ctx.showStatus = text => {
+			notices.push(text);
+		};
 		const parent = makeSessionStub();
 		const worker = makeSessionStub();
 		registerSub(h.registry, "Parent", parent.session, MAIN_AGENT_ID);
@@ -367,6 +371,7 @@ describe("SessionFocusController", () => {
 			[parent.session, "Parent"],
 			[h.main.session, undefined],
 		]);
+		expect(notices).toEqual([]);
 	});
 
 	it("parking the focused agent auto-unfocuses back to the main session", async () => {

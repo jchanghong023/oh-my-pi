@@ -33,8 +33,13 @@
 - Removed `/forkreviewer` and its bundled specialist. `/review` remains available.
 - Collab Web now uses the upstream guest UI and relay client without fork-only presentation or composer features.
 - Removed `/loopgoal`. `/loop` and `/loopn` remain available.
+- `/loop` no longer accepts a positional delay. A second duration token such as `30s` in `/loop 10 30s task` is now part of the prompt.
 - Goal continuation now follows upstream: a turn with no new tool activity stops automatic continuation without sending a forced-tool recovery request.
 - Removed `omp knowledge mcp`. The built-in `knowledge_search` tool, `/knowledge` panel, and index management commands remain available.
+- `/skills` is TUI-only again. Outside the TUI, use `omp skill` to manage registry skills.
+- `/clear` is TUI-only again; ACP, RPC, and print no longer clear the current session through this slash command.
+- `/logout` is TUI-only again. RPC clients can still remove a stored credential through the native `logout` request.
+- Use `read` for help on `xd://resolve`, `xd://reject`, `xd://propose`, and `xd://report_issue`. Writing `?` now passes it to the action handler.
 
 ### Added
 
@@ -48,6 +53,21 @@
 ### Changed
 
 - Restored upstream `--offline` for launch and `omp find`; it restricts auxiliary services independently of `OMP_OFFLINE`.
+- Restored opt-in marketplace checks and upgrades. They are off by default and remain manual-only under `OMP_OFFLINE`.
+- Restored opt-in OMP version checks on interactive startup, without automatic downloads or installs. Checks are disabled by default and skipped under `OMP_OFFLINE`.
+- JSON `xd://` devices again show documentation for `?`, blank input, or `help` without running the device.
+- Invalid JSON sent to an `xd://` device uses the shorter upstream diagnostic, including the parse error and the `?` documentation hint.
+- LSP code actions can again apply the sole or uniquely preferred action without a query; a failed application still reports failure.
+- CLI sessions honor `lsp.enabled: true` again. LSP remains off by default, and `--no-lsp` still disables it for one run.
+- `omp config set` and `reset` no longer print the internal revision on success. Concurrent edits are still rejected.
+- ACP slash commands now pass arguments to their native text handlers instead of forwarding the command as a prompt when TUI disallows arguments.
+- `/jobs full` follows upstream and omits supplemental text when a job's command or label is already its ID.
+- In ANSI terminals, `/jobs` shows the upstream task-tree report again. Native terminals keep the live jobs panel.
+- Advisor transcripts use upstream `ask` input formatting: the HTML form or recorded question text, without expanding legacy call arguments.
+- `/ratchet` guides the model to use one native `ask` form with recommendations preselected.
+- Plan mode uses one native `ask` form per interview round, with recommended options preselected.
+- Switching between subagent and main views no longer adds transient status messages. The focused subagent remains identified in the status line.
+- Empty ANSI composers show contextual shortcut hints again instead of a fixed shortcut list.
 - Compaction logs omit repetitive model selection and attempt records while retaining failure and fallback details.
 - TUI input predictions use the upstream request lifecycle and still discard suggestions from a previous session.
 - Session lists no longer drop a readable session just because it grows during a scan.
@@ -64,7 +84,7 @@
 - Binary analysis remains disabled by default after the upstream IDA/Ghidra migration; enable it with `disassembler.backend`.
 - `read` defaults to 300 lines when no limit is specified; `read.defaultLimit: 2000` still opts into larger pages.
 - Unknown-tool errors use upstream suggestions without listing tools that may not have been sent to the model.
-- Restored the upstream Provider catalog, login choices, custom providers and runtime discovery while retaining the fork's intranet providers.
+- Restored the upstream Provider catalog, login choices, `omp login --help` examples, custom providers and runtime discovery while retaining the fork's intranet providers.
 - OpenSpec 在所有新旧项目的产物生成指令中内置中文正文要求，保留项目上下文及必需的英文结构，无须修改项目配置。
 - Bundled `jch-grill-me` and `jch-grill-todo` now instruct research subagents to start with a fresh context window.
 - TodoLoop now accepts unnumbered Markdown checkboxes without rewriting the task file.
@@ -104,6 +124,7 @@
 
 ### Fixed
 
+- `/team` saves its dispatch notice to the originating session even while a model turn is running, without starting another turn.
 - `fulltest` no longer waits for the PTY exit deadline after the smoke tests have already finished.
 - `/loop` follow-ups queued during compaction resume repeating only after their inline prompt is admitted.
 - Offline `omp openspec version --check` follows redirects only within the configured HTTPS mirror.

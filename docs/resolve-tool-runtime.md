@@ -8,6 +8,8 @@ Pending previews and plan approval do not use a `resolve` tool. They finalize th
 
 These are internal URLs, not filesystem paths. `read xd://resolve`, `read xd://reject`, and `read xd://propose` return a one-line usage hint. Bodies are trimmed plain text, not JSON; the runtime does not enforce sentence count or a nonempty reason. Completed device writes carry `details.xdev` metadata; `writeDeviceDispatch()` exposes the envelope and `resolveDispatchDetails()` extracts apply/discard details from `xdev.inner`.
 
+Use `read` for help, including for `xd://report_issue`. A `write` with `?` is passed to the device as action input, not treated as help. On `xd://resolve` or `xd://reject` it can apply or discard a pending action with `?` as the reason.
+
 ## Preview flows
 
 Preview producers call `queueResolveHandler(...)` with `apply(reason)` and optional `reject(reason)` callbacks. Each preview receives a unique pending-invoker ID in `ToolChoiceQueue`, so stacked previews do not overwrite one another.
