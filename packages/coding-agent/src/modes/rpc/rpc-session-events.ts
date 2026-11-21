@@ -3,76 +3,14 @@
  * `messageId` and applies the host's `set_event_filter` selection.
  */
 import type { AssistantMessage, AssistantMessageEvent } from "@oh-my-pi/pi-ai";
-import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { toWireEvent, type WireSessionEvent } from "../../session/loop-end-wire";
-import { toRpcGoalModeState } from "./rpc-goal";
 import type {
 	RpcAgentSessionEventFrame,
 	RpcDeltaAssistantMessageEvent,
 	RpcMessageUpdates,
 	RpcProjectedSessionEventFrame,
-	RpcSessionEventProjection,
-	RpcTodoItem,
-	RpcTodoPhase,
 } from "./rpc-types";
-
-function isRpcTodoItem(item: TodoItem): item is RpcTodoItem {
-	return item.status !== "blocked" && !("blocker" in item);
-}
-
-function isRpcTodoPhase(phase: TodoPhase): phase is RpcTodoPhase {
-	return phase.tasks.every(isRpcTodoItem);
-}
-
-function toRpcTodoItems(items: TodoItem[]): RpcTodoItem[] {
-	if (items.every(isRpcTodoItem)) return items;
-	return items.map(item => {
-		if (isRpcTodoItem(item)) return item;
-		const { blocker: _, status, ...wire } = item;
-		// The upstream protocol has no blocked status. Keep the unfinished item visible.
-		return { ...wire, status: status === "blocked" ? "pending" : status };
-	});
-}
-
-export function toRpcTodoPhases(phases: TodoPhase[]): RpcTodoPhase[] {
-	if (phases.every(isRpcTodoPhase)) return phases;
-	return phases.map(phase =>
-		isRpcTodoPhase(phase) ? phase : { name: phase.name, tasks: toRpcTodoItems(phase.tasks) },
-	);
-}
-
-export function projectRpcSessionEvent(
-	event: WireSessionEvent,
-): RpcSessionEventProjection<WireSessionEvent> | undefined;
-export function projectRpcSessionEvent(
-	event: AgentSessionEvent,
-): RpcSessionEventProjection<AgentSessionEvent> | undefined;
-export function projectRpcSessionEvent(event: AgentSessionEvent | WireSessionEvent) {
-	switch (event.type) {
-		case "session_abort":
-			return undefined;
-		case "tool_execution_end": {
-			if (!("cancelled" in event)) return event;
-			const { cancelled: _, ...wire } = event;
-			return wire;
-		}
-		case "manual_compaction_start":
-		case "manual_compaction_end": {
-			const { operationId: _, ...wire } = event;
-			return wire;
-		}
-		case "todo_reminder":
-			return { ...event, todos: toRpcTodoItems(event.todos) };
-		case "goal_updated": {
-			if (!event.state) return event;
-			const state = toRpcGoalModeState(event.state);
-			return state === event.state ? event : { ...event, state };
-		}
-		default:
-			return event;
-	}
-}
 
 /**
  * The shell of a block a `*_start` opens. The snapshot behind a start event is cloned when the agent loop consumes the
@@ -154,7 +92,7 @@ export class RpcSessionEventForwarder {
 		this.#output = output;
 	}
 
-	/** Forward only the listed RPC event types; `null` forwards every RPC event. Returns the active selection. */
+	/** Forward only the listed event types; `null` forwards everything. Returns the active selection. */
 	setFilter(events: readonly string[] | null, messageUpdates: RpcMessageUpdates = "full"): string[] | null {
 		this.#filter = events === null ? undefined : new Set(events);
 		this.#messageUpdates = messageUpdates;
@@ -162,9 +100,7 @@ export class RpcSessionEventForwarder {
 	}
 
 	forward(event: AgentSessionEvent): void {
-		const projected = projectRpcSessionEvent(toWireEvent(event));
-		if (!projected) return;
-		const frame = this.#stamp(projected);
+		const frame = this.#stamp(toWireEvent(event));
 		if (this.#filter && !this.#filter.has(frame.type)) return;
 		if (frame.type === "message_update" && this.#messageUpdates === "delta") {
 			this.#output({
@@ -177,7 +113,7 @@ export class RpcSessionEventForwarder {
 		this.#output(frame);
 	}
 
-	#stamp(event: RpcSessionEventProjection<WireSessionEvent>): RpcAgentSessionEventFrame {
+	#stamp(event: WireSessionEvent): RpcAgentSessionEventFrame {
 		switch (event.type) {
 			case "message_start": {
 				const messageId = this.#mintMessageId();

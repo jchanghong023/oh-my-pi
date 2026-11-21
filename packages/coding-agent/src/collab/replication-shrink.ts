@@ -43,7 +43,7 @@
  */
 
 import type { SessionEntry as WireSessionEntry } from "@oh-my-pi/pi-wire";
-import type { AgentSessionEvent } from "../session/agent-session";
+import type { LocalAgentSessionEvent } from "../session/agent-session";
 import type { SessionEntry } from "../session/session-entries";
 
 /**
@@ -393,7 +393,7 @@ export function serializeReplicatedEntry(entry: ReplicatedEntry): SerializedRepl
  * was dropped (PR #11999 review) — notices never enter agent state and never
  * reach the model, so this is display-only.
  */
-export function oversizedEntryNotice(entryType: string): Extract<AgentSessionEvent, { type: "notice" }> {
+export function oversizedEntryNotice(entryType: string): Extract<LocalAgentSessionEvent, { type: "notice" }> {
 	return {
 		type: "notice",
 		level: "warning",
@@ -413,10 +413,10 @@ export function oversizedEntryNotice(entryType: string): Extract<AgentSessionEve
  * substitution out of the guest's context instead of silently diverging from
  * the host's view.
  */
-export function serializeReplicatedEvent(event: AgentSessionEvent): SerializedReplication<AgentSessionEvent> {
+export function serializeReplicatedEvent(event: LocalAgentSessionEvent): SerializedReplication<LocalAgentSessionEvent> {
 	const shrunk = shrinkPayloadShape(event);
 	if (shrunk.json !== null) return { value: shrunk.value, json: shrunk.json };
-	const notice: AgentSessionEvent = {
+	const notice: LocalAgentSessionEvent = {
 		type: "notice",
 		level: "warning",
 		source: "collab",

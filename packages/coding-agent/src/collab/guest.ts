@@ -27,7 +27,7 @@ import { takeAutoRejoin } from "@oh-my-pi/pi-wire";
 import type { AgentHubRemote, AgentHubRemoteTranscript } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentRegistry } from "../registry/agent-registry";
-import type { AgentSessionEvent } from "../session/agent-session";
+import type { LocalAgentSessionEvent } from "../session/agent-session";
 import { fromWireEvent } from "../session/loop-end-wire";
 import type { SessionEntry } from "../session/session-entries";
 import { mintSessionId, SessionManager } from "../session/session-manager";
@@ -747,7 +747,7 @@ export class CollabGuestLink {
 		}
 	}
 
-	#applyEvent(event: AgentSessionEvent): void {
+	#applyEvent(event: LocalAgentSessionEvent): void {
 		// Orphan-delta guard: when joining mid-turn the message_start for the
 		// in-flight assistant message predates the snapshot. message_update
 		// carries the full accumulating message, so synthesize the missing start
@@ -781,7 +781,7 @@ export class CollabGuestLink {
 		this.#mirrorEvent(event);
 	}
 
-	#mirrorEvent(event: AgentSessionEvent): void {
+	#mirrorEvent(event: LocalAgentSessionEvent): void {
 		this.#dispatchEvent(event);
 		// Lifecycle mirror: the guest's own agent loop never runs, so the session's
 		// extension-event path stays silent. Route the mirrored wire event through
@@ -800,7 +800,7 @@ export class CollabGuestLink {
 	 * every other event runs serialized behind it, so a mirrored stream tail
 	 * cannot reorder (message_update → message_end → agent_end).
 	 */
-	#dispatchEvent(event: AgentSessionEvent): void {
+	#dispatchEvent(event: LocalAgentSessionEvent): void {
 		this.#ctx.eventController.dispatchSessionEvent(event).catch(err => {
 			logger.warn("collab guest event dispatch failed", { type: event.type, error: String(err) });
 		});

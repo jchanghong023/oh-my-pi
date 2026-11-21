@@ -55,7 +55,7 @@ import {
 	splitPathAndSelPreferringLiteral,
 } from "./tools/path-utils";
 import type { EditToolDetails } from "@oh-my-pi/pi-tui/tools/edit";
-import type { TodoPhase, TodoStatus } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoPhase, LocalTodoStatus } from "@oh-my-pi/pi-tui/tools/todo";
 
 /** Phase used for Cursor-owned tasks with no local phase grouping. */
 const CURSOR_TODO_PHASE = "Tasks";
@@ -125,8 +125,8 @@ interface CursorExecBridgeOptions {
 	 * emits no local `todo` toolResult, so without this bridge the provider's
 	 * list and the local `todo` state diverge silently and reloads lose it.
 	 */
-	commitTodoPhases?: (phases: TodoPhase[]) => void;
-	getTodoPhases?: () => TodoPhase[];
+	commitTodoPhases?: (phases: LocalTodoPhase[]) => void;
+	getTodoPhases?: () => LocalTodoPhase[];
 	/**
 	 * Build a `grep` tool honoring a frame's own context width and match cap.
 	 *
@@ -592,7 +592,7 @@ function formatMcpToolErrorMessage(toolName: string, availableTools: string[]): 
  * call produces no local tool output, but the transcript entry still needs
  * text content alongside the phases the UI renders.
  */
-function formatTodoSyncSummary(phases: TodoPhase[]): string {
+function formatTodoSyncSummary(phases: LocalTodoPhase[]): string {
 	const tasks = phases.flatMap(phase => phase.tasks);
 	if (tasks.length === 0) return "No todos";
 	const done = tasks.filter(task => task.status === "completed").length;
@@ -614,7 +614,7 @@ function formatTodoSyncSummary(phases: TodoPhase[]): string {
  */
 function buildTodoSyncResult(
 	toolCallId: string,
-	phases: TodoPhase[] | undefined,
+	phases: LocalTodoPhase[] | undefined,
 	error: string | null,
 ): ToolResultMessage {
 	return {
@@ -1107,14 +1107,14 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		// Settling the call is NOT: the interactive card leaves `pendingTools`
 		// only on a matching `tool_execution_end`, so a refusal, a server error,
 		// or a host with no local todo state must still resolve it.
-		let phases: TodoPhase[] | undefined;
+		let phases: LocalTodoPhase[] | undefined;
 		if (snapshot && commitPhases) {
 			const phaseByContent = new Map<string, string>();
 			for (const phase of existing) {
 				for (const task of phase.tasks) phaseByContent.set(task.content, phase.name);
 			}
 
-			const grouped = new Map<string, TodoPhase["tasks"]>();
+			const grouped = new Map<string, LocalTodoPhase["tasks"]>();
 			for (const todo of snapshot.todos) {
 				const name = phaseByContent.get(todo.content) ?? CURSOR_TODO_PHASE;
 				let tasks = grouped.get(name);
@@ -1122,11 +1122,11 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 					tasks = [];
 					grouped.set(name, tasks);
 				}
-				tasks.push({ content: todo.content, status: todo.status as TodoStatus });
+				tasks.push({ content: todo.content, status: todo.status as LocalTodoStatus });
 			}
 
 			// Preserve the local phase order; phases new to this snapshot append.
-			const next: TodoPhase[] = [];
+			const next: LocalTodoPhase[] = [];
 			for (const phase of existing) {
 				const tasks = grouped.get(phase.name);
 				if (!tasks) continue;

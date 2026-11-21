@@ -148,7 +148,7 @@ function makeControllerContext(over: { autoStart?: "off" | "view" | "control"; r
 			sessionName: "controller-test",
 			model: { provider: "test-provider", id: "test-model" },
 			thinkingLevel: undefined,
-			subscribe: () => () => {},
+			subscribeLocal: () => () => {},
 			emitNotice: () => {},
 			promptCustomMessage: (message: { content: unknown }) => {
 				state.prompts.push(String(message.content));

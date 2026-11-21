@@ -67,7 +67,7 @@ import type { ContextUsage } from "@oh-my-pi/pi-tui/status-line/types";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { ConversationPosition } from "./utils/conversation-position";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
-import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoItem, LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { CompactFileDiff } from "./compact-file-diff";
 import type { CompactThinkingPreview } from "./compact-thinking-preview";
 import type { CompactToolOutputPreview } from "./compact-tool-output-preview";
@@ -457,7 +457,7 @@ export interface InteractiveModeContext {
 	fileSlashCommands: Set<string>;
 	skillCommands: Map<string, Skill>;
 	oauthManualInput: OAuthManualInputManager;
-	todoPhases: TodoPhase[];
+	todoPhases: LocalTodoPhase[];
 
 	// Lifecycle
 	init(options?: InteractiveModeInitOptions): Promise<void>;
@@ -624,7 +624,7 @@ export interface InteractiveModeContext {
 	syncRunningSubagentBadge(): void;
 	updateEditorBorderColor(): void;
 	rebuildChatFromMessages(options?: { reuseSettledComponents?: boolean }): void;
-	setTodos(todos: TodoItem[] | TodoPhase[]): void;
+	setTodos(todos: LocalTodoItem[] | LocalTodoPhase[]): void;
 	reloadTodos(source?: AgentViewSession): Promise<void>;
 	toggleTodoExpansion(): void;
 	setTodoExpanded(expanded: boolean): void;

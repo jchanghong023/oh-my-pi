@@ -25,18 +25,9 @@ export interface RpcGoalCommand {
 	token_budget?: number;
 }
 
-/** Goal-autopilot metadata is local to the session, not part of the RPC goal state. */
-export type RpcGoalModeState = Omit<GoalModeState, "autoOrchestrate">;
-
-export function toRpcGoalModeState(state: GoalModeState): RpcGoalModeState {
-	if (!("autoOrchestrate" in state)) return state;
-	const { autoOrchestrate: _, ...wire } = state;
-	return wire;
-}
-
 export interface RpcGoalResult {
 	goal: Goal | null;
-	state: RpcGoalModeState | null;
+	state: GoalModeState | null;
 }
 
 export type RpcGoalSession = Pick<
@@ -132,7 +123,7 @@ export class RpcGoalController {
 
 	get #state(): RpcGoalResult {
 		const state = this.#session.getGoalModeState();
-		return { goal: state?.goal ?? null, state: state ? toRpcGoalModeState(state) : null };
+		return { goal: state?.goal ?? null, state: state ?? null };
 	}
 
 	/**

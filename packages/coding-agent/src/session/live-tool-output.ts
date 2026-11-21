@@ -1,6 +1,6 @@
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import type { AgentSessionEvent } from "./agent-session-events";
+import type { LocalAgentSessionEvent } from "./agent-session-events";
 import type { LiveToolOutputPreview, LiveToolOutputSnapshot } from "./agent-session-handle";
 import { toolOutputSource, toolOutputText } from "./live-tool-output-text";
 
@@ -112,7 +112,7 @@ export class LiveToolOutputState {
 		return [...this.#calls.values()];
 	}
 
-	observe(event: AgentSessionEvent, receivedAt: number, dispatchOrder?: number): void {
+	observe(event: LocalAgentSessionEvent, receivedAt: number, dispatchOrder?: number): void {
 		const selected = this.#selected;
 		if (event.type === "tool_execution_start") {
 			const order = dispatchOrder ?? this.#dispatchOrder + 1;

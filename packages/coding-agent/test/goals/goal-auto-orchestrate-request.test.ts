@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { buildGoalAutoOrchestrateMessage } from "@oh-my-pi/pi-coding-agent/goals/request-context";
-import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
+import type { LocalGoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { renderOrchestrateNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 
 const objective = `  Full objective\r\n\n{{objective}} $& <b>markup</b>\t\n${"保留长文本 & 原样内容 ".repeat(300)}\nFINAL_OBJECTIVE_SENTINEL  \n`;
 
-function state(overrides: Partial<GoalModeState> = {}): GoalModeState {
+function state(overrides: Partial<LocalGoalModeState> = {}): LocalGoalModeState {
 	return {
 		enabled: true,
 		mode: "active",
@@ -32,7 +32,7 @@ function text(value: unknown): string {
 	return "";
 }
 
-function render(current: GoalModeState, tools: string[]) {
+function render(current: LocalGoalModeState, tools: string[]) {
 	const message = buildGoalAutoOrchestrateMessage(current, tools);
 	if (!message) throw new Error("Expected an active automatic goal to construct a persistent notice");
 	return message;

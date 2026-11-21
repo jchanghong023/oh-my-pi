@@ -2,7 +2,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import { MAGIC_KEYWORDS, renderOrchestrateNotice } from "../modes/magic-keywords";
 import goalAutoOrchestratePrompt from "../prompts/goals/goal-auto-orchestrate.md" with { type: "text" };
 import type { CustomMessage } from "../session/messages";
-import type { GoalModeState } from "./state";
+import type { LocalGoalModeState } from "./state";
 
 export const GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE = "goal-auto-orchestrate";
 const orchestrateKeyword = MAGIC_KEYWORDS.find(keyword => keyword.id === "orchestrate")!;
@@ -14,7 +14,7 @@ const renderGoalAutoOrchestrate = prompt.compile(goalAutoOrchestratePrompt.trim(
  * Tool names are the enabled callable capabilities, including indirect tools.
  */
 export function buildGoalAutoOrchestrateMessage(
-	state: GoalModeState | undefined,
+	state: LocalGoalModeState | undefined,
 	tools: readonly string[],
 ): CustomMessage | undefined {
 	if (state?.autoOrchestrate !== true || !state.enabled || state.mode !== "active" || state.goal.status !== "active") {

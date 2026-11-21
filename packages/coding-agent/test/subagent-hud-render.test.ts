@@ -26,7 +26,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { type AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
-import { type TodoPhase, todoToolRenderer } from "@oh-my-pi/pi-tui/tools/todo";
+import { type LocalTodoPhase, todoToolRenderer } from "@oh-my-pi/pi-tui/tools/todo";
 import {
 	type SubagentLifecyclePayload,
 	type SubagentProgressPayload,
@@ -1087,7 +1087,7 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		await mode.init({ suppressWelcomeIntro: true });
 		vi.useFakeTimers();
 		const target = "Verify transcript repaint";
-		const transcriptPhases: TodoPhase[] = [
+		const transcriptPhases: LocalTodoPhase[] = [
 			{
 				name: "Review",
 				tasks: [...Array.from({ length: 10 }, (_, index) => `Inspect module ${index}`), target].map(content => ({
@@ -1096,7 +1096,7 @@ describe("InteractiveMode subagent observer UI sync", () => {
 				})),
 			},
 		];
-		const closedPhases: TodoPhase[] = transcriptPhases.map(phase => ({
+		const closedPhases: LocalTodoPhase[] = transcriptPhases.map(phase => ({
 			...phase,
 			tasks: phase.tasks.map(task => ({ ...task, status: "completed" })),
 		}));

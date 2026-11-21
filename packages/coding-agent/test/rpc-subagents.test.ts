@@ -296,10 +296,10 @@ describe("RPC subagent registry", () => {
 		const frames: RpcSubagentFrame[] = [];
 		const eventBus = new EventBus();
 		const registry = new RpcSubagentRegistry(eventBus, frame => frames.push(frame));
-		const eventPayload = {
+		const eventPayload: SubagentEventPayload = {
 			id: "SubagentA",
 			event: { type: "agent_start" },
-		} satisfies SubagentEventPayload;
+		};
 
 		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
 		expect(frames).toHaveLength(0);

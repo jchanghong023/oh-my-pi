@@ -43,7 +43,7 @@ import type { Effort, ImageContent, Model, ServiceTier, ToolResultMessage, Usage
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { JobWidgetEntry } from "@oh-my-pi/pi-tui/tools/job-widget";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { getBlobsDir, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManagerApi } from "../async";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -52,15 +52,17 @@ import { Settings } from "../config/settings";
 import type { ExtensionRunner } from "../extensibility/extensions";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
-import type { GoalModeState } from "../goals/state";
+import { type GoalModeState, type LocalGoalModeState, publicGoalModeState } from "../goals/state";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
 import {
-	type AgentSessionEvent,
+	type LocalAgentSessionEvent,
 	type AgentSessionEventListener,
+	type LocalAgentSessionEventListener,
 	type ModelStage,
 	nextModelStage,
 } from "../session/agent-session-events";
+import { publicSessionListener } from "../session/agent-session-events";
 import {
 	type AgentSessionAdvisorOverview,
 	type AgentViewLoop,
@@ -297,7 +299,7 @@ export class RemoteAgentSession implements AgentViewSession {
 	#settings: Settings | undefined;
 	#tokenizer: { model: Model | undefined; tokenizer: Tokenizer } | undefined;
 	readonly #ruleSource: AgentViewRuleSource;
-	readonly #listeners = new Set<AgentSessionEventListener>();
+	readonly #listeners = new Set<LocalAgentSessionEventListener>();
 	readonly #runStateListeners = new Set<(state: SessionRunState) => void>();
 	#closed: string | undefined;
 
@@ -664,6 +666,10 @@ export class RemoteAgentSession implements AgentViewSession {
 	}
 
 	getGoalModeState(): GoalModeState | undefined {
+		return this.#view.goalMode && publicGoalModeState(this.#view.goalMode);
+	}
+
+	getLocalGoalModeState(): LocalGoalModeState | undefined {
 		return this.#view.goalMode;
 	}
 
@@ -703,18 +709,18 @@ export class RemoteAgentSession implements AgentViewSession {
 		if (this.#asyncJobs) requestJobTreeCaptions(this.#asyncJobs, this.agentId);
 	}
 
-	getTodoPhases(): TodoPhase[] {
+	getLocalTodoPhases(): LocalTodoPhase[] {
 		return this.#view.todoPhases;
 	}
 
 	/** Applied to the mirror at once and sent to the home worker. */
-	setTodoPhases(phases: TodoPhase[]): void {
+	setTodoPhases(phases: LocalTodoPhase[]): void {
 		this.#view = { ...this.#view, todoPhases: phases };
 		this.#notify("setTodoPhases", toWireData(phases));
 	}
 
 	/** Same two steps as a home session: the optimistic entry and the mirror update reach the worker in order. */
-	commitTodoPhases(phases: TodoPhase[]): void {
+	commitTodoPhases(phases: LocalTodoPhase[]): void {
 		this.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases });
 		this.setTodoPhases(phases);
 	}
@@ -833,6 +839,10 @@ export class RemoteAgentSession implements AgentViewSession {
 	}
 
 	subscribe(listener: AgentSessionEventListener): () => void {
+		return this.subscribeLocal(publicSessionListener(listener));
+	}
+
+	subscribeLocal(listener: LocalAgentSessionEventListener): () => void {
 		const first = this.#listeners.size === 0;
 		this.#listeners.add(listener);
 		if (first) this.#watch(true);
@@ -951,7 +961,7 @@ export class RemoteAgentSession implements AgentViewSession {
 	}
 
 	/** Bridge only: dispatch one forwarded event to subscribers. */
-	applyEvent(event: AgentSessionEvent, outputStamp: LiveToolOutputStamp | undefined): void {
+	applyEvent(event: LocalAgentSessionEvent, outputStamp: LiveToolOutputStamp | undefined): void {
 		if (this.#closed !== undefined) return;
 		this.#view.modelStage = nextModelStage(this.modelStage, event);
 		this.#trackEvent(event);
@@ -1012,7 +1022,7 @@ export class RemoteAgentSession implements AgentViewSession {
 	}
 
 	/** Keep the event-derived mirror (stream message, running tool updates, tok/s meter) current. */
-	#trackEvent(event: AgentSessionEvent): void {
+	#trackEvent(event: LocalAgentSessionEvent): void {
 		switch (event.type) {
 			case "message_start":
 				if (event.message.role !== "assistant") return;

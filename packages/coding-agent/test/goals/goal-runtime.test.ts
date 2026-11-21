@@ -7,7 +7,7 @@ import {
 	renderTrustedObjective,
 } from "@oh-my-pi/pi-coding-agent/goals/runtime";
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
-import type { GoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "@oh-my-pi/pi-coding-agent/goals/state";
+import type { LocalGoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 
 function createUsage(overrides: Partial<GoalTokenUsage> = {}): GoalTokenUsage {
@@ -38,7 +38,7 @@ function cloneGoal(goal: Goal): Goal {
 	return { ...goal };
 }
 
-function cloneState(state: GoalModeState | undefined): GoalModeState | undefined {
+function cloneState(state: LocalGoalModeState | undefined): LocalGoalModeState | undefined {
 	return state ? { ...state, goal: cloneGoal(state.goal) } : undefined;
 }
 
@@ -53,12 +53,12 @@ function cloneEvent(event: GoalRuntimeEvent): GoalRuntimeEvent {
 	return { ...event };
 }
 
-function createHarness(initial: { state?: GoalModeState; usage?: GoalTokenUsage; now?: number } = {}) {
+function createHarness(initial: { state?: LocalGoalModeState; usage?: GoalTokenUsage; now?: number } = {}) {
 	let state = cloneState(initial.state);
 	let usage = createUsage(initial.usage);
 	let now = initial.now ?? 0;
 	const events: GoalRuntimeEvent[] = [];
-	const persists: Array<{ mode: "goal" | "goal_paused" | "none"; state?: GoalModeState }> = [];
+	const persists: Array<{ mode: "goal" | "goal_paused" | "none"; state?: LocalGoalModeState }> = [];
 	const hiddenMessages: Array<{ customType: string; content: string; deliverAs?: "steer" | "followUp" | "nextTurn" }> =
 		[];
 	const host: GoalRuntimeHost = {
@@ -81,7 +81,7 @@ function createHarness(initial: { state?: GoalModeState; usage?: GoalTokenUsage;
 	return {
 		runtime: new GoalRuntime(host),
 		getState: () => cloneState(state),
-		setState: (next: GoalModeState | undefined) => {
+		setState: (next: LocalGoalModeState | undefined) => {
 			state = cloneState(next);
 		},
 		setUsage: (next: Partial<GoalTokenUsage>) => {

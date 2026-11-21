@@ -32,7 +32,7 @@ describe("print mode disposes the session before terminating", () => {
 		};
 		const session = {
 			extensionRunner: undefined,
-			subscribe: () => {},
+			subscribeLocal: () => {},
 			settings: Settings.isolated(),
 			sessionManager: {
 				buildSessionContext: () => ({ messages: [] }),
@@ -121,7 +121,7 @@ describe("print mode disposes the session before terminating", () => {
 		let disposeReason: postmortem.Reason | "dispose" | undefined;
 		const session = {
 			extensionRunner: undefined,
-			subscribe: () => {},
+			subscribeLocal: () => {},
 			settings: Settings.isolated(),
 			sessionManager: {
 				buildSessionContext: () => ({ messages: [] }),

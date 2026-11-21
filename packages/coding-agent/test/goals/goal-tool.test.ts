@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "bun:test";
 import { completionBudgetReport, GoalRuntime } from "@oh-my-pi/pi-coding-agent/goals/runtime";
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
-import type { GoalModeState, GoalTokenUsage } from "@oh-my-pi/pi-coding-agent/goals/state";
+import type { LocalGoalModeState, GoalTokenUsage } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { GoalTool } from "@oh-my-pi/pi-coding-agent/goals/tools/goal-tool";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
@@ -30,7 +30,7 @@ function createGoal(overrides: Partial<Goal> = {}): Goal {
 	};
 }
 
-function cloneState(state: GoalModeState | undefined): GoalModeState | undefined {
+function cloneState(state: LocalGoalModeState | undefined): LocalGoalModeState | undefined {
 	return state ? { ...state, goal: { ...state.goal } } : undefined;
 }
 
@@ -38,7 +38,7 @@ function createToolSession(overrides: Partial<ToolSession>): ToolSession {
 	return overrides as ToolSession;
 }
 
-function createRuntimeHarness(initialState?: GoalModeState) {
+function createRuntimeHarness(initialState?: LocalGoalModeState) {
 	let state = cloneState(initialState);
 	const runtime = new GoalRuntime({
 		getState: () => cloneState(state),
@@ -59,12 +59,12 @@ function createRuntimeHarness(initialState?: GoalModeState) {
 
 describe("GoalTool", () => {
 	it("routes create/get/complete operations and returns completion budget details", async () => {
-		const createGoalState: GoalModeState = {
+		const createGoalState: LocalGoalModeState = {
 			enabled: true,
 			mode: "active",
 			goal: createGoal({ objective: "Create route", tokenBudget: 10 }),
 		};
-		const getGoalState: GoalModeState = {
+		const getGoalState: LocalGoalModeState = {
 			enabled: true,
 			mode: "active",
 			goal: createGoal({ objective: "Get route", tokensUsed: 4, tokenBudget: 10 }),

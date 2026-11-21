@@ -12,7 +12,7 @@ import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
@@ -150,7 +150,7 @@ function focusHarness(): FocusHarness {
 	const main = {
 		isStreaming: false,
 		agent: { state: { streamMessage: null } },
-		subscribe: () => () => {},
+		subscribeLocal: () => () => {},
 		settleInFlightMessagePersistence: async () => {},
 		activeToolExecutionUpdates: () => [],
 	};
@@ -161,7 +161,7 @@ function focusHarness(): FocusHarness {
 		get viewSession() {
 			return focus.controller?.target ?? main;
 		},
-		unsubscribe: undefined,
+		unsubscribeLocal: undefined,
 		eventController: {
 			handleEvent: async (event: AgentSessionEvent) => {
 				if (event.type === "agent_start")
@@ -425,9 +425,9 @@ describe("focused view of a worker-homed agent session", () => {
 		await view.controller.focusAgent("W1");
 		expect(cfgTasksTodoClearDelay.get(remote.settings)).toBe(7);
 
-		const phases: TodoPhase[] = [{ name: "Plan", tasks: [{ content: "write test", status: "completed" }] }];
+		const phases: LocalTodoPhase[] = [{ name: "Plan", tasks: [{ content: "write test", status: "completed" }] }];
 		remote.setTodoPhases(phases);
-		expect(remote.getTodoPhases()).toEqual(phases);
+		expect(remote.getLocalTodoPhases()).toEqual(phases);
 		const data = { phases, visibility: "dismissed" };
 		remote.sessionManager.appendCustomEntry(TODO_HUD_STATE_CUSTOM_TYPE, data);
 		const optimistic = remote.sessionManager.getBranch().at(-1);

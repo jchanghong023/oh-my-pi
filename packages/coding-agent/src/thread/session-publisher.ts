@@ -55,7 +55,7 @@ import type { Skill } from "../extensibility/skills";
 import { deobfuscateAssistantContent } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { AgentSession } from "../session/agent-session";
-import type { AgentSessionEvent } from "../session/agent-session-events";
+import type { LocalAgentSessionEvent } from "../session/agent-session-events";
 import type { AgentViewToolSchema } from "../session/agent-session-handle";
 import type { TurnFileChange, TurnFileChanges } from "../session/latest-turn-file-changes";
 import {
@@ -256,7 +256,7 @@ export class SessionPublisher {
 			},
 		};
 		session.agent.queuedMessageGate = this.#gate;
-		this.#unsubscribe = session.subscribe(event => this.#onEvent(event));
+		this.#unsubscribe = session.subscribeLocal(event => this.#onEvent(event));
 		this.#unsubscribeRunState = session.subscribeRunState((state, at) => this.#onRunState(state, at));
 		// `ircWakesPending` gates main's idle parking and, like `hasPendingWake`, changes without an event.
 		this.#unsubscribeWakeState = session.subscribeWakeState(() => this.schedule());
@@ -321,7 +321,7 @@ export class SessionPublisher {
 		});
 	}
 
-	#onEvent(event: AgentSessionEvent): void {
+	#onEvent(event: LocalAgentSessionEvent): void {
 		if (this.#closed) return;
 		// Streaming ticks only move the cursor; main derives `streamMessage` from forwarded updates.
 		const tick = event.type === "message_update" || event.type === "tool_execution_update";
@@ -549,10 +549,10 @@ export class SessionPublisher {
 			fastModeActive: session.isFastModeActive(),
 			anthropicSlowModeLabel: session.getAnthropicSlowModeLabel(),
 			prewalk: toWireData(session.getPrewalkState()),
-			goalMode: toWireData(session.getGoalModeState()),
+			goalMode: toWireData(session.getLocalGoalModeState()),
 			advisorCost: session.getAdvisorCost(),
 			advisorUsingSubscription: session.isAdvisorUsingSubscription(),
-			todoPhases: toWireData(session.getTodoPhases()),
+			todoPhases: toWireData(session.getLocalTodoPhases()),
 			queuedMessages: toWireData(session.getQueuedMessages()),
 			restorableQueue: toWireData({ steering: steering.map(queuedEntry), followUp: followUp.map(queuedEntry) }),
 			ephemeralMaxTokensPreservesRequest: session.ephemeralMaxTokensPreservesRequest(),

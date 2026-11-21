@@ -4,9 +4,9 @@ import type { Effort } from "@oh-my-pi/pi-ai";
 import type { Rule } from "../capability/rule";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
-import type { GoalModeState } from "../goals/state";
+import { type GoalModeState, type LocalGoalModeState, publicGoalModeState } from "../goals/state";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
-import type { TodoItem } from "@oh-my-pi/pi-tui/tools/todo";
+import { type LocalTodoItem, publicTodoItems, type TodoItem } from "@oh-my-pi/pi-tui/tools/todo";
 import type { CustomMessage } from "./messages";
 import type { CacheWarmingRefreshEnd, CacheWarmingRefreshStart } from "./cache-warmer";
 
@@ -22,7 +22,7 @@ import type { CacheWarmingRefreshEnd, CacheWarmingRefreshStart } from "./cache-w
  * dispose) abandons an open run without either. The RPC, JSON print and collab wires and
  * the extension `agent_end` keep their per-loop `agent_end` shape (see `loop-end-wire.ts`).
  */
-export type AgentSessionEvent =
+export type LocalAgentSessionEvent =
 	| AgentEvent
 	| {
 			type: "agent_pause";
@@ -63,13 +63,13 @@ export type AgentSessionEvent =
 	// the next configured method stay inside the same pair.
 	| {
 			type: "manual_compaction_start";
-			operationId: string;
+			operationId?: string;
 			/** The `/compact <mode>` subcommand, when one was given. */
 			mode?: string;
 	  }
 	| {
 			type: "manual_compaction_end";
-			operationId: string;
+			operationId?: string;
 			/** Present when the compaction committed. */
 			result?: CompactionResult;
 			/** True when the compaction was cancelled (abort, or a `session_before_compact` hook). */
@@ -102,7 +102,7 @@ export type AgentSessionEvent =
 	| { type: "advisor_cost_changed" }
 	| { type: "advisor_yielded" }
 	| { type: "ttsr_triggered"; rules: Rule[] }
-	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
+	| { type: "todo_reminder"; todos: LocalTodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
 	| { type: "irc_message"; message: CustomMessage }
 	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
@@ -114,7 +114,7 @@ export type AgentSessionEvent =
 			/** The level `auto` resolved to this turn, once classified. */
 			resolved?: Effort;
 	  }
-	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState }
+	| { type: "goal_updated"; goal: Goal | null; state?: LocalGoalModeState }
 	// Coalesced snapshot of the displayable steering/follow-up queue: emitted
 	// whenever it differs from the last `queue_update` (enqueue, dequeue on
 	// delivery, remove, clear/restore, live-steering adoption/withdrawal, or
@@ -122,7 +122,48 @@ export type AgentSessionEvent =
 	// `AgentSession.getQueuedMessages()`; `liveSteered` counts the leading
 	// `steering` entries already sent into the streaming response, which
 	// `remove_queued_message` cannot reach.
-	| { type: "queue_update"; steering: readonly string[]; followUp: readonly string[]; liveSteered: number };
+	| { type: "queue_update"; steering: string[]; followUp: string[]; liveSteered: number };
+
+type PublicEvent<Event> = Event extends { type: "session_abort" }
+	? never
+	: Event extends { type: "tool_execution_end" }
+		? Omit<Event, "cancelled">
+		: Event extends { type: "manual_compaction_start" | "manual_compaction_end" }
+			? Omit<Event, "operationId">
+			: Event extends { type: "todo_reminder" }
+				? Omit<Event, "todos"> & { todos: TodoItem[] }
+				: Event extends { type: "goal_updated" }
+					? Omit<Event, "state"> & { state?: GoalModeState }
+					: Event;
+
+export type AgentSessionEvent = PublicEvent<LocalAgentSessionEvent>;
+
+/** Strip local lifecycle and orchestration metadata before publishing events. */
+function publicSessionEvent(event: LocalAgentSessionEvent): AgentSessionEvent | undefined {
+	switch (event.type) {
+		case "session_abort":
+			return undefined;
+		case "tool_execution_end": {
+			if (!("cancelled" in event)) return event;
+			const { cancelled: _, ...fields } = event;
+			return fields;
+		}
+		case "manual_compaction_start":
+		case "manual_compaction_end": {
+			const { operationId: _, ...fields } = event;
+			return fields;
+		}
+		case "todo_reminder":
+			return { ...event, todos: publicTodoItems(event.todos) };
+		case "goal_updated": {
+			if (!event.state) return event;
+			const state = publicGoalModeState(event.state);
+			return state === event.state ? event : { ...event, state };
+		}
+		default:
+			return event;
+	}
+}
 
 /**
  * What can still resume a session's run without user input once its model loop
@@ -139,11 +180,19 @@ export interface WakeSources {
 
 /** Listener function for agent session events. */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
+export type LocalAgentSessionEventListener = (event: LocalAgentSessionEvent) => void;
+
+export function publicSessionListener(listener: AgentSessionEventListener): LocalAgentSessionEventListener {
+	return event => {
+		const published = publicSessionEvent(event);
+		if (published) return listener(published);
+	};
+}
 
 export type ModelStage = "waiting" | "thinking" | "replying" | "tool-arguments";
 
 /** Display phase derived from real events, even while no terminal is watching. */
-export function nextModelStage(stage: ModelStage | null, event: AgentSessionEvent): ModelStage | null {
+export function nextModelStage(stage: ModelStage | null, event: LocalAgentSessionEvent): ModelStage | null {
 	switch (event.type) {
 		case "turn_start":
 			return "waiting";

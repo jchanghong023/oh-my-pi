@@ -4,16 +4,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { TodoCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/todo-command-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { type LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
-function createContext(cwd: string, phases: TodoPhase[]): InteractiveModeContext {
+function createContext(cwd: string, phases: LocalTodoPhase[]): InteractiveModeContext {
 	return {
 		agent: {
 			appendMessage: vi.fn(),
 		},
 		session: {
-			getTodoPhases: () => phases,
+			getLocalTodoPhases: () => phases,
 			commitTodoPhases: vi.fn(),
 		},
 		sessionManager: {
@@ -38,7 +38,7 @@ describe("TodoCommandController", () => {
 
 	it("exports the default TODO.md under the active session cwd", async () => {
 		tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-tui-todo-export-"));
-		const phases: TodoPhase[] = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
+		const phases: LocalTodoPhase[] = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
 		const ctx = createContext(tempRoot, phases);
 		const controller = new TodoCommandController(ctx);
 
@@ -52,7 +52,7 @@ describe("TodoCommandController", () => {
 
 	it("exports a quoted path with spaces", async () => {
 		tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-tui-todo-export-quoted-"));
-		const phases: TodoPhase[] = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
+		const phases: LocalTodoPhase[] = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
 		const target = path.join(tempRoot, "todo file.md");
 		const ctx = createContext(tempRoot, phases);
 		const controller = new TodoCommandController(ctx);
@@ -73,7 +73,9 @@ describe("TodoCommandController", () => {
 
 		await controller.handleTodoCommand("import");
 
-		const expected: TodoPhase[] = [{ name: "Imported", tasks: [{ content: "From cwd", status: "in_progress" }] }];
+		const expected: LocalTodoPhase[] = [
+			{ name: "Imported", tasks: [{ content: "From cwd", status: "in_progress" }] },
+		];
 		expect(ctx.session.commitTodoPhases).toHaveBeenCalledWith(expected);
 		expect(ctx.setTodos).toHaveBeenCalledWith(expected);
 		expect(ctx.agent.appendMessage).toHaveBeenCalledWith(expect.objectContaining({ role: "developer" }));
@@ -91,7 +93,7 @@ describe("TodoCommandController", () => {
 
 		await controller.handleTodoCommand(`import "${target}"`);
 
-		const expected: TodoPhase[] = [
+		const expected: LocalTodoPhase[] = [
 			{ name: "Quoted", tasks: [{ content: "From quoted path", status: "in_progress" }] },
 		];
 		expect(ctx.session.commitTodoPhases).toHaveBeenCalledWith(expected);
@@ -128,7 +130,7 @@ describe("TodoCommandController", () => {
 
 	it("reports invalid internal-scheme export paths", async () => {
 		tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-tui-todo-export-invalid-"));
-		const phases: TodoPhase[] = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
+		const phases: LocalTodoPhase[] = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
 		const ctx = createContext(tempRoot, phases);
 		const controller = new TodoCommandController(ctx);
 
@@ -146,7 +148,7 @@ describe("TodoCommandController", () => {
 
 	it("tells the model not to recreate the list after /todo rm (all)", async () => {
 		tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-tui-todo-rm-all-"));
-		const phases: TodoPhase[] = [
+		const phases: LocalTodoPhase[] = [
 			{ name: "Foundation", tasks: [{ content: "Scaffold crate", status: "in_progress" }] },
 		];
 		const ctx = createContext(tempRoot, phases);
@@ -162,7 +164,7 @@ describe("TodoCommandController", () => {
 
 	it("tells the model not to re-add a removed phase after /todo rm <phase>", async () => {
 		tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-tui-todo-rm-phase-"));
-		const phases: TodoPhase[] = [
+		const phases: LocalTodoPhase[] = [
 			{ name: "Foundation", tasks: [{ content: "Scaffold crate", status: "completed" }] },
 			{ name: "Auth", tasks: [{ content: "Port credential store", status: "pending" }] },
 		];
@@ -176,7 +178,7 @@ describe("TodoCommandController", () => {
 
 	it("keeps status-mutation reminders neutral (no do-not-recreate directive)", async () => {
 		tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-tui-todo-done-"));
-		const phases: TodoPhase[] = [
+		const phases: LocalTodoPhase[] = [
 			{ name: "Foundation", tasks: [{ content: "Scaffold crate", status: "in_progress" }] },
 		];
 		const ctx = createContext(tempRoot, phases);

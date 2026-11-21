@@ -120,7 +120,7 @@ import type {
 import type { Skill } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
 import { loadSlashCommands } from "../extensibility/slash-commands";
-import { type GoalModeState, type GoalSubcommand, parseGoalSubcommand } from "../goals/state";
+import { type LocalGoalModeState, type GoalSubcommand, parseGoalSubcommand } from "../goals/state";
 import { rescopeSessionToCwd } from "../session/cwd-rescope";
 import { copyLocalArtifacts, resolveLocalRoot } from "../internal-urls";
 import { hasNativeJudge } from "../judgment";
@@ -158,7 +158,7 @@ import type { AgentCostSnapshot } from "@oh-my-pi/pi-tui/overlays/agent-hub-proj
 import { sumSubagentTreeCost } from "./agent-hub-runtime";
 import {
 	type AgentSession,
-	type AgentSessionEvent,
+	type LocalAgentSessionEvent,
 	type DroppedPrompt,
 	type ResolvedRoleModel,
 	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
@@ -416,7 +416,7 @@ import type {
 	SubmittedUserInput,
 	YieldCompaction,
 } from "./types";
-import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoItem, LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { ConversationPosition } from "./utils/conversation-position";
 import { materializeImageChipLinks, UiHelpers } from "./utils/ui-helpers";
 
@@ -1530,7 +1530,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #judgmentBatchProgressClearTimers = new Map<string, NodeJS.Timeout>();
 	#nextAppearanceRequestToken = 1;
 	#appearanceRefreshRequest: { token: TerminalAppearanceRequestToken; deadline: number } | undefined;
-	todoPhases: TodoPhase[] = [];
+	todoPhases: LocalTodoPhase[] = [];
 	/**
 	 * Session that owns the plan currently in {@link todoPhases}. HUD
 	 * visibility (dismissal and reveal entries) persists to this session, not
@@ -1844,7 +1844,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * Follow the main session's turn and calls for the tray's `main` prop, repainting
 	 * a tray host the moment it flips (a `wait` starting or ending, the turn yielding).
 	 */
-	#followTrayMain(event: AgentSessionEvent): void {
+	#followTrayMain(event: LocalAgentSessionEvent): void {
 		switch (event.type) {
 			case "agent_start":
 			case "agent_pause":
@@ -3485,7 +3485,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#bindSessionSubscriptions(): void {
 		for (const unsubscribe of this.#sessionBindingUnsubscribers) unsubscribe();
 		this.#sessionBindingUnsubscribers = [
-			this.session.subscribe(event => {
+			this.session.subscribeLocal(event => {
 				this.#followTrayMain(event);
 				if (event.type === "model_changed") {
 					this.#scheduleComposerStatusPersist();
@@ -3566,7 +3566,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async getUserInput(): Promise<SubmittedUserInput> {
-		if (this.session.getGoalModeState()?.mode === "exiting") {
+		if (this.session.getLocalGoalModeState()?.mode === "exiting") {
 			await this.#exitGoalMode({ reason: "completed", silent: true });
 		}
 		const { promise, resolve } = Promise.withResolvers<SubmittedUserInput>();
@@ -3631,7 +3631,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#logGoalContinuation(result: string, reason: string, fields?: Record<string, unknown>): void {
-		const state = this.session.getGoalModeState();
+		const state = this.session.getLocalGoalModeState();
 		if (!state && !this.goalModeEnabled && !this.goalModePaused && !fields?.goal_id) return;
 		logger.info("Goal continuation decision", {
 			component: "goal.interactive",
@@ -3663,7 +3663,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#pendingSubmittedInput) return stop("pending_submission");
 		if (this.editor.getText().trim().length > 0) return stop("editor_has_text");
 		if ((this.editor.pendingImages?.length ?? 0) > 0) return stop("editor_has_images");
-		const state = this.session.getGoalModeState();
+		const state = this.session.getLocalGoalModeState();
 		if (!state?.enabled || state.goal.status !== "active") return stop("goal_not_active");
 		const prompt = this.session.goalRuntime.buildContinuationPrompt(this.#goalContinuationGuard.recoveryPending);
 		const owner = this.session;
@@ -3692,7 +3692,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (this.#pendingSubmittedInput) return stopWaiting("pending_submission");
 				if (this.editor.getText().trim().length > 0) return stopWaiting("editor_has_text");
 				if ((this.editor.pendingImages?.length ?? 0) > 0) return stopWaiting("editor_has_images");
-				const latestState = this.session.getGoalModeState();
+				const latestState = this.session.getLocalGoalModeState();
 				if (!latestState?.enabled || latestState.goal.status !== "active") return stopWaiting("goal_not_active");
 				if (latestState.goal.id !== diagnostics.goal_id) return stopWaiting("goal_replaced");
 				if (this.#goalOpenWorkAllBlocked()) return stopWaiting("all_work_blocked");
@@ -3731,7 +3731,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** A blocked-only todo list has no work the agent can advance without another turn. */
 	#goalOpenWorkAllBlocked(): boolean {
-		const phases = this.session.getTodoPhases();
+		const phases = this.session.getLocalTodoPhases();
 		if (nextActionableTask(phases)) return false;
 		for (const phase of phases) {
 			for (const task of phase.tasks) {
@@ -4166,7 +4166,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#getSessionModeState(): SessionModeState {
-		const goalState = this.session.getGoalModeState();
+		const goalState = this.session.getLocalGoalModeState();
 		// A completed goal keeps its tool until the turn ends; it stays active until #exitGoalMode tears it down.
 		const goalActive = this.goalModeEnabled || goalState?.mode === "exiting";
 		return {
@@ -4245,7 +4245,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.#modesRestored || this.session.isSessionTransitioning) {
 			return refuse("busy", "The session's saved modes are still being restored; retry after the switch settles.");
 		}
-		if (this.session.getGoalModeState()?.mode === "exiting") {
+		if (this.session.getLocalGoalModeState()?.mode === "exiting") {
 			return refuse("busy", "The completed goal is still being torn down; retry after its `mode_changed`.");
 		}
 		const transition = this.#planSessionModeTransition(request);
@@ -4316,7 +4316,7 @@ export class InteractiveMode implements InteractiveModeContext {
 							return invalid("Goal tokenBudget must be a positive integer.");
 						}
 						if (this.goalModeEnabled) {
-							const current = this.session.getGoalModeState()?.goal;
+							const current = this.session.getLocalGoalModeState()?.goal;
 							if (current?.objective === objective && current.tokenBudget === budget) return undefined;
 							return invalid("A goal is already active; drop it before setting a new objective.");
 						}
@@ -5631,7 +5631,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 	}
 
-	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
+	#formatTodoLine(todo: LocalTodoItem, prefix: string, matched: boolean): string {
 		const checkbox = theme.checkbox;
 		const marker = formatHudNoteMarker(todo.notes?.length ?? 0);
 		switch (todo.status) {
@@ -5750,7 +5750,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#modelCycleClearTimer.unref?.();
 	}
 
-	#getActivePhase(phases: TodoPhase[]): TodoPhase | undefined {
+	#getActivePhase(phases: LocalTodoPhase[]): LocalTodoPhase | undefined {
 		const nonEmpty = phases.filter(phase => phase.tasks.length > 0);
 		const active = nonEmpty.find(phase =>
 			phase.tasks.some(task => task.status === "pending" || task.status === "in_progress"),
@@ -5806,14 +5806,14 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// A pending todo "lights up" (accent) when an in-flight subagent is doing
 		// its work, matched by normalized content overlap.
-		const isMatched = (todo: TodoItem): boolean =>
+		const isMatched = (todo: LocalTodoItem): boolean =>
 			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
 		// Task subtree for a phase. Collapsed runs the shared walking-viewport
 		// policy (completed/abandoned omitted, active work pulled to the head,
 		// then following pending tasks) so the HUD and the transient tool result
 		// can never disagree about the current work (#5873). Expanded lists all.
-		const renderTasks = (phase: TodoPhase): string[] => {
+		const renderTasks = (phase: LocalTodoPhase): string[] => {
 			if (expanded) {
 				return renderTreeList(
 					{
@@ -5839,7 +5839,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// One phase node. The active stage is highlighted with normal-brightness task
 		// progress; other stages render their whole row (name + progress) in the
 		// brighter muted gray. Overall progress lives in the tree spine (below).
-		const renderPhase = (phase: TodoPhase, oneBased: number, isActive: boolean): string | string[] => {
+		const renderPhase = (phase: LocalTodoPhase, oneBased: number, isActive: boolean): string | string[] => {
 			const label = multiPhase ? formatPhaseDisplayName(phase.name, oneBased) : phase.name;
 			// Closed, not just completed: the collapsed task window hides abandoned
 			// tasks too, so counting only completions leaves the phase reading stuck.
@@ -5939,7 +5939,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.todoContainer.addChild(new WidthAwareText(formatRows, 1, 0));
 
 		// Native: the same stage window as a tree, overall progress as a bar.
-		const describeTask = (todo: TodoItem, id: string): TspTreeNode => {
+		const describeTask = (todo: LocalTodoItem, id: string): TspTreeNode => {
 			const done = todo.status === "completed";
 			const token =
 				todo.status === "completed"
@@ -5959,8 +5959,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (notes > 0) label.push(span(` +${notes}`, "dim em"));
 			return { id, label, icon: done ? "check" : "circle" };
 		};
-		const describeTasks = (phase: TodoPhase, phaseIndex: number): TspTreeNode[] => {
-			const index = (todo: TodoItem): string => `${phaseIndex}.${phase.tasks.indexOf(todo)}`;
+		const describeTasks = (phase: LocalTodoPhase, phaseIndex: number): TspTreeNode[] => {
+			const index = (todo: LocalTodoItem): string => `${phaseIndex}.${phase.tasks.indexOf(todo)}`;
 			if (expanded) return phase.tasks.map(todo => describeTask(todo, index(todo)));
 			const selection = selectCollapsedTodos(phase.tasks, isMatched, activeTaskCap);
 			const nodes = selection.items.map(todo => describeTask(todo, index(todo)));
@@ -6043,7 +6043,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (phases.length === 0) return childLines;
 
 		const activeDescs = this.#getActiveSubagentDescriptions();
-		const isMatched = (todo: TodoItem): boolean =>
+		const isMatched = (todo: LocalTodoItem): boolean =>
 			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
 		const totalTasks = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
@@ -6098,7 +6098,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #loadTodoList(source: AgentViewSession = this.session): Promise<void> {
-		this.todoPhases = source.getTodoPhases();
+		this.todoPhases = source.getLocalTodoPhases();
 		this.#todoPhasesOwner = source;
 		this.#syncTodoHudState(source);
 		this.#renderTodoList();
@@ -6254,15 +6254,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#goalContinuationGuard.reset();
 	}
 
-	#getPausedGoalState(): GoalModeState | undefined {
-		const state = this.session.getGoalModeState();
+	#getPausedGoalState(): LocalGoalModeState | undefined {
+		const state = this.session.getLocalGoalModeState();
 		if (!state?.goal || state.enabled || state.goal.status !== "paused") {
 			return undefined;
 		}
 		return state;
 	}
 
-	async #handleGoalSessionEvent(event: AgentSessionEvent): Promise<void> {
+	async #handleGoalSessionEvent(event: LocalAgentSessionEvent): Promise<void> {
 		if (event.type === "agent_start") {
 			this.#cancelGoalContinuation("agent_started");
 			return;
@@ -6298,7 +6298,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#pendingGoalContinuationTurns--;
 			const decision = this.#goalContinuationGuard.observe(event.messages);
 			this.#goalSuppressNextContinuation = decision === "stop";
-			const state = this.session.getGoalModeState();
+			const state = this.session.getLocalGoalModeState();
 			const notice = this.#goalContinuationGuard.stopNotice;
 			if (notice && state?.enabled && state.mode === "active" && state.goal.status === "active") {
 				this.session.emitNotice("warning", notice, "goal");
@@ -6311,7 +6311,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		} else {
 			this.#resetGoalContinuationSuppression();
 		}
-		if (this.session.getGoalModeState()?.mode === "exiting") {
+		if (this.session.getLocalGoalModeState()?.mode === "exiting") {
 			await this.#exitGoalMode({ reason: "completed", silent: true });
 			return;
 		}
@@ -6889,7 +6889,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const goalTools = [...new Set([...enabledTools, "goal"])];
 		const ownedGoalTool = this.#goalToolAddedByMode;
 		if (!enabledTools.includes("goal")) this.#goalToolAddedByMode = true;
-		let state: GoalModeState | undefined;
+		let state: LocalGoalModeState | undefined;
 		try {
 			state = await logger.withLogContext({ session_id: this.session.sessionId }, () =>
 				options.resume
@@ -6945,7 +6945,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Not gated on goalModeEnabled: a pause's goal_updated clears that flag
 		// before this runs, which used to leave the goal tool active.
 		await this.#removeGoalToolPreservingRoster();
-		const currentState = this.session.getGoalModeState();
+		const currentState = this.session.getLocalGoalModeState();
 		this.#logGoalContinuation("stopped", options?.reason ?? (options?.paused ? "paused" : "disabled"), {
 			stage: "exit",
 		});
@@ -7997,7 +7997,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #handleGoalBudgetCommand(rawBudget: string): Promise<void> {
-		const state = this.session.getGoalModeState();
+		const state = this.session.getLocalGoalModeState();
 		if (!this.goalModeEnabled || !state?.enabled) {
 			this.showWarning("No active goal.");
 			return;
@@ -8168,7 +8168,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #openGoalMenu(state: "active" | "paused"): Promise<void> {
-		const goal = this.session.getGoalModeState()?.goal;
+		const goal = this.session.getLocalGoalModeState()?.goal;
 		if (!goal) return;
 		const summary = goal.objective.length > 48 ? `${goal.objective.slice(0, 47)}…` : goal.objective;
 		const title = state === "active" ? `Goal: ${summary} (${goal.status})` : `Goal paused: ${summary}`;
@@ -8198,7 +8198,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#showGoalDetails(): void {
-		const state = this.session.getGoalModeState();
+		const state = this.session.getLocalGoalModeState();
 		const goal = state?.goal;
 		if (!goal) {
 			this.showStatus("No goal set.");
@@ -8219,7 +8219,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #promptGoalBudgetEdit(): Promise<void> {
-		const goal = this.session.getGoalModeState()?.goal;
+		const goal = this.session.getLocalGoalModeState()?.goal;
 		const prefill = goal?.tokenBudget !== undefined ? String(goal.tokenBudget) : "";
 		const input = (
 			await this.showHookEditor("Goal budget (number, `off`, or empty to cancel)", prefill, undefined, {
@@ -8283,7 +8283,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		options?: { autoOrchestrate?: boolean },
 	): Promise<boolean> {
 		await this.#enterGoalMode({ objective, silent: true, autoOrchestrate: options?.autoOrchestrate });
-		const state = this.session.getGoalModeState();
+		const state = this.session.getLocalGoalModeState();
 		const goalAutoOrchestrateInitialId = state?.autoOrchestrate === true ? state.goal.id : undefined;
 		this.#resetGoalContinuationSuppression();
 		if (this.session.isStreaming) {
@@ -10679,14 +10679,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	setTodos(todos: TodoItem[] | TodoPhase[]): void {
+	setTodos(todos: LocalTodoItem[] | LocalTodoPhase[]): void {
 		if (todos.length > 0 && "tasks" in todos[0]) {
-			this.todoPhases = todos as TodoPhase[];
+			this.todoPhases = todos as LocalTodoPhase[];
 		} else {
 			this.todoPhases = [
 				{
 					name: "Todos",
-					tasks: todos as TodoItem[],
+					tasks: todos as LocalTodoItem[],
 				},
 			];
 		}

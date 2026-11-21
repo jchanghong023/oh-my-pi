@@ -7,12 +7,21 @@ export interface GoalModeState {
 	enabled: boolean;
 	mode: "active" | "exiting";
 	reason?: "completed";
-	autoOrchestrate?: boolean;
 	goal: Goal;
 }
 
+export interface LocalGoalModeState extends GoalModeState {
+	autoOrchestrate?: boolean;
+}
+
+export function publicGoalModeState(state: LocalGoalModeState): GoalModeState {
+	if (!("autoOrchestrate" in state)) return state;
+	const { autoOrchestrate: _, ...fields } = state;
+	return fields;
+}
+
 export type GoalRuntimeEvent =
-	| { type: "goal_updated"; goal: Goal | null; state?: GoalModeState }
+	| { type: "goal_updated"; goal: Goal | null; state?: LocalGoalModeState }
 	| { type: "goal_continuation_requested"; prompt: string };
 
 export type GoalTokenUsage = Pick<UsageStatistics, "input" | "output" | "cacheRead" | "cacheWrite">;

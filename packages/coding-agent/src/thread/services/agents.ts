@@ -233,7 +233,7 @@ function serveBridge(): RpcServe<MainSessionBridge, SessionBridgeProtocol> {
 		readMessages: (_bridge, session) => toWireData(session.messages),
 		hasQueuedIrcFrom: (_bridge, session, from) => session.hasQueuedIrcFrom(from),
 		subscribe: (bridge, session, listener) =>
-			bridge.forward(listener, forward => session.subscribe(event => forward(toWireData(event)))),
+			bridge.forward(listener, forward => session.subscribeLocal(event => forward(toWireData(event)))),
 		subscribeRunState: (bridge, session, listener) =>
 			bridge.forward(listener, forward => session.subscribeRunState(forward)),
 		prompt: (_bridge, session, text, options) => session.prompt(text, options),

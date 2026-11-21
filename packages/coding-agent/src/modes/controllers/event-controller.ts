@@ -42,8 +42,8 @@ import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "@oh-my-pi/pi
 import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { getSymbolTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../modes/types";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
-import type { AgentSessionEvent } from "../../session/agent-session";
+import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalAgentSessionEvent } from "../../session/agent-session";
 import type { WakeSources } from "../../session/agent-session-events";
 import {
 	isSilentAbort,
@@ -91,7 +91,7 @@ import {
 import { cfgReadToolResultPreview } from "../../tools/settings";
 import { cfgSpeechEnabled, cfgSpeechMode } from "../../tts/settings";
 
-type AgentSessionEventKind = AgentSessionEvent["type"];
+type AgentSessionEventKind = LocalAgentSessionEvent["type"];
 
 const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
 /**
@@ -151,11 +151,11 @@ function exposesRawPartialJson(toolName: string, rawInput: boolean, tool: unknow
 }
 
 type AgentSessionEventHandlers = {
-	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
+	[E in AgentSessionEventKind]: (event: Extract<LocalAgentSessionEvent, { type: E }>) => Promise<void>;
 };
 
 interface PendingMessageUpdate {
-	event: Extract<AgentSessionEvent, { type: "message_update" }>;
+	event: Extract<LocalAgentSessionEvent, { type: "message_update" }>;
 	restarted: boolean;
 	scheduled: boolean;
 }
@@ -238,7 +238,7 @@ export class EventController {
 	 * call was still executing, keyed by call id: a fast job can settle before
 	 * the call's `tool_execution_end` carries its `running` start result.
 	 */
-	#settledBeforeReturn = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
+	#settledBeforeReturn = new Map<string, Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>>();
 	#approvalPreviewGates = new Map<string, ApprovalPreviewGate>();
 	#pendingStreamPreviews = new Map<string, unknown>();
 	#detachToolApprovalPreviewWaiter: (() => void) | undefined;
@@ -283,7 +283,7 @@ export class EventController {
 	// User-facing side effects run only on first arrival; only the component
 	// update is deferred. Call ids are unique per turn, and this map is cleared
 	// with the other transcript anchors.
-	#orphanedToolCompletions = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_end" }>>();
+	#orphanedToolCompletions = new Map<string, Extract<LocalAgentSessionEvent, { type: "tool_execution_end" }>>();
 	#postToolAssistantComponents = new Map<string, AssistantMessageComponent>();
 	/** Reply blocks drawn per call from its frames' `details.replies`, in order; the count dedupes repeated frames. */
 	#toolReplyBlocks = new Map<string, AssistantMessageComponent[]>();
@@ -954,7 +954,7 @@ export class EventController {
 	 * latest snapshot is meaningful; non-update events flush the pending
 	 * snapshot first so ordering is preserved.
 	 */
-	async dispatchSessionEvent(event: AgentSessionEvent): Promise<void> {
+	async dispatchSessionEvent(event: LocalAgentSessionEvent): Promise<void> {
 		const generation = this.#dispatchGeneration;
 		// Thinking boundaries carry phase timing, not just a cumulative snapshot.
 		if (
@@ -1046,7 +1046,7 @@ export class EventController {
 	 * Speech is per-delta, so the delta is vocalized at arrival before the
 	 * snapshot is (possibly) superseded by a newer one.
 	 */
-	#enqueueMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
+	#enqueueMessageUpdate(event: Extract<LocalAgentSessionEvent, { type: "message_update" }>): void {
 		// Speech is per-delta: every delta is spoken at arrival even when its
 		// cumulative snapshot is later superseded and never rebuilt.
 		this.#vocalizeDelta(event);
@@ -1192,7 +1192,7 @@ export class EventController {
 		}
 	}
 
-	async handleEvent(event: AgentSessionEvent): Promise<void> {
+	async handleEvent(event: LocalAgentSessionEvent): Promise<void> {
 		const generation = this.#dispatchGeneration;
 		if (!this.ctx.isInitialized) {
 			await this.ctx.init();
@@ -1214,7 +1214,7 @@ export class EventController {
 		// is awaiting, then the handler's own final requestRender schedules a
 		// second identical frame. Removing it lets the render cadence follow real
 		// state changes rather than event volume (issue #4353).
-		const run = this.#handlers[event.type] as (e: AgentSessionEvent) => Promise<void>;
+		const run = this.#handlers[event.type] as (e: LocalAgentSessionEvent) => Promise<void>;
 		await run(event);
 		// Some hidden or already-settled tool cards return without requesting a
 		// frame, but the compact dock still follows the authoritative lifecycle.
@@ -1284,7 +1284,7 @@ export class EventController {
 		this.#retrySupersededAssistantQueue = [];
 	}
 
-	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
+	async #handleAgentStart(_event: Extract<LocalAgentSessionEvent, { type: "agent_start" }>): Promise<void> {
 		// A loop started before the interrupt landed; that abort ends this loop
 		// as a plain user interrupt.
 		this.#stoppedWaiting = false;
@@ -1353,7 +1353,7 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
-	async #handleMessageStart(event: Extract<AgentSessionEvent, { type: "message_start" }>): Promise<void> {
+	async #handleMessageStart(event: Extract<LocalAgentSessionEvent, { type: "message_start" }>): Promise<void> {
 		this.#ensureWorkingLoaderWhileStreaming();
 		if (event.message.role === "hookMessage" || event.message.role === "custom") {
 			if (event.message.role === "custom" && !this.ctx.initialChatRendered && !this.ctx.viewSession.isStreaming) {
@@ -1496,7 +1496,7 @@ export class EventController {
 		}
 	}
 
-	async #handleIrcMessage(event: Extract<AgentSessionEvent, { type: "irc_message" }>): Promise<void> {
+	async #handleIrcMessage(event: Extract<LocalAgentSessionEvent, { type: "irc_message" }>): Promise<void> {
 		if (!event.message.display) return;
 		const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
 		if (this.#renderedCustomMessages.has(signature)) {
@@ -1656,7 +1656,7 @@ export class EventController {
 		}
 	}
 
-	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
+	async #handleNotice(event: Extract<LocalAgentSessionEvent, { type: "notice" }>): Promise<void> {
 		const message = event.source ? `${event.source}: ${event.message}` : event.message;
 		if (event.level === "error") {
 			this.ctx.showError(message);
@@ -1673,7 +1673,7 @@ export class EventController {
 	 * assistant|all speak text; all also speaks thinking; yield speaks nothing
 	 * live (the final message is spoken at turn end).
 	 */
-	#vocalizeDelta(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
+	#vocalizeDelta(event: Extract<LocalAgentSessionEvent, { type: "message_update" }>): void {
 		if (!cfgSpeechEnabled.get(settings)) return;
 		const mode = cfgSpeechMode.get(settings);
 		const delta = event.assistantMessageEvent;
@@ -1689,7 +1689,7 @@ export class EventController {
 	 * one shot here (the only mode that is post-hoc); every other mode just makes
 	 * sure the live buffer's trailing partial gets flushed.
 	 */
-	#handleTurnEnd(event: Extract<AgentSessionEvent, { type: "turn_end" }>): void {
+	#handleTurnEnd(event: Extract<LocalAgentSessionEvent, { type: "turn_end" }>): void {
 		if (!cfgSpeechEnabled.get(settings)) return;
 		if (cfgSpeechMode.get(settings) !== "yield") {
 			vocalizer.flush();
@@ -1725,7 +1725,7 @@ export class EventController {
 		this.#resetReadGroup();
 	}
 
-	async #handleMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): Promise<void> {
+	async #handleMessageUpdate(event: Extract<LocalAgentSessionEvent, { type: "message_update" }>): Promise<void> {
 		const generation = this.#dispatchGeneration;
 		this.#ensureWorkingLoaderWhileStreaming();
 		if (!this.#vocalizedMessageUpdates.delete(event)) {
@@ -1933,11 +1933,11 @@ export class EventController {
 		}
 	}
 
-	async #handleMessageEnd(event: Extract<AgentSessionEvent, { type: "message_end" }>): Promise<void> {
+	async #handleMessageEnd(event: Extract<LocalAgentSessionEvent, { type: "message_end" }>): Promise<void> {
 		// The persistence slot exists before message_end notification, unlike
 		// tool_execution_end. Resolve HUD identity only after canonical append.
 		if (event.message.role === "toolResult" && event.message.toolName === "todo" && !event.message.isError) {
-			const details = event.message.details as { op?: string; phases?: TodoPhase[] } | undefined;
+			const details = event.message.details as { op?: string; phases?: LocalTodoPhase[] } | undefined;
 			if (details?.op !== "view" && details?.phases) {
 				const owner = this.ctx.viewSession;
 				const sessionId = owner.sessionManager.getSessionId();
@@ -1948,7 +1948,7 @@ export class EventController {
 					owner.sessionManager.getSessionId() === sessionId &&
 					owner.sessionManager.getSessionFile() === sessionFile
 				) {
-					this.ctx.setTodos(owner.getTodoPhases());
+					this.ctx.setTodos(owner.getLocalTodoPhases());
 				}
 			}
 		}
@@ -2147,7 +2147,9 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
-	async #handleToolExecutionStart(event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): Promise<void> {
+	async #handleToolExecutionStart(
+		event: Extract<LocalAgentSessionEvent, { type: "tool_execution_start" }>,
+	): Promise<void> {
 		if (this.#retractedToolCallIds.has(event.toolCallId)) return;
 		this.#ensureWorkingLoaderWhileStreaming();
 		this.#updateWorkingMessageFromIntent(event.intent);
@@ -2233,7 +2235,7 @@ export class EventController {
 	}
 
 	async #handleToolExecutionUpdate(
-		event: Extract<AgentSessionEvent, { type: "tool_execution_update" }>,
+		event: Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>,
 	): Promise<void> {
 		this.#ensureWorkingLoaderWhileStreaming();
 		this.#showToolReplies(event.toolCallId, event.partialResult.details);
@@ -2279,7 +2281,7 @@ export class EventController {
 	 */
 	#settleHeldCompletion(
 		component: ToolExecutionHandle,
-		event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
+		event: Extract<LocalAgentSessionEvent, { type: "tool_execution_end" }>,
 	): void {
 		if (event.toolName === "read") this.#inlineReadToolImages(event.toolCallId, event.result);
 		this.#applyToolCompletion(component, event);
@@ -2305,7 +2307,7 @@ export class EventController {
 
 	#applyToolCompletion(
 		component: ToolExecutionHandle,
-		event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
+		event: Extract<LocalAgentSessionEvent, { type: "tool_execution_end" }>,
 	): void {
 		if (event.toolName === "wait" && component instanceof ToolExecutionComponent) {
 			component.setSettledBashTranscript(this.#getChatContainer);
@@ -2339,7 +2341,9 @@ export class EventController {
 		}
 	}
 
-	async #handleToolExecutionEnd(event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>): Promise<void> {
+	async #handleToolExecutionEnd(
+		event: Extract<LocalAgentSessionEvent, { type: "tool_execution_end" }>,
+	): Promise<void> {
 		// `createAbortedToolResult` emits start/end after an error/aborted
 		// assistant message. The matching card was deliberately retracted at
 		// message_end; consume the completion instead of recreating/updating UI.
@@ -2438,11 +2442,11 @@ export class EventController {
 		}
 		if (syntheticFailureCard) this.#syntheticFailureCards.set(event.toolCallId, syntheticFailureCard);
 		if (event.toolName === "todo" && !event.isError) {
-			const details = event.result.details as { op?: string; phases?: TodoPhase[] } | undefined;
+			const details = event.result.details as { op?: string; phases?: LocalTodoPhase[] } | undefined;
 			if (details?.op !== "view" && details?.phases) this.ctx.setTodos(details.phases);
 		}
 		if (event.toolName === "eval" && hasNestedTodo(event.result.details)) {
-			this.ctx.setTodos(this.ctx.viewSession.getTodoPhases());
+			this.ctx.setTodos(this.ctx.viewSession.getLocalTodoPhases());
 		}
 		if (event.toolName === "todo" && event.isError && !event.cancelled) {
 			const textContent = event.result.content.find(
@@ -2515,7 +2519,7 @@ export class EventController {
 	 * (`yielded: false`), or queued input, a peer message, a background job or a
 	 * child agent resumes it (`yielded: true`), or the run's `agent_end` closes it.
 	 */
-	async #handleAgentPause(event: Extract<AgentSessionEvent, { type: "agent_pause" }>): Promise<void> {
+	async #handleAgentPause(event: Extract<LocalAgentSessionEvent, { type: "agent_pause" }>): Promise<void> {
 		if (event.yielded) this.showAsyncWait();
 		// The plan-mode reconciler queues a model switch to apply once the current
 		// stream ends; the continuation must not run on the old model.
@@ -2525,7 +2529,7 @@ export class EventController {
 		this.ctx.flushPendingCommandOutput();
 	}
 
-	async #handleAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
+	async #handleAgentEnd(event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>): Promise<void> {
 		const stoppedWaiting = this.#stoppedWaiting;
 		this.#stoppedWaiting = false;
 		const view = this.ctx.viewSession;
@@ -2619,7 +2623,7 @@ export class EventController {
 	 * retry leaves the user at the prompt). Reads the turn's own `agent_end`
 	 * messages for the reason `sendErrorNotification` does.
 	 */
-	#settledRunStatus(event: Extract<AgentSessionEvent, { type: "agent_end" }>): RunFlowStatus {
+	#settledRunStatus(event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>): RunFlowStatus {
 		if (this.#retryPending) return { state: "idle" };
 		const last = event.messages.findLast((message): message is AssistantMessage => message.role === "assistant");
 		if (last?.stopReason === "error") return { state: "error", msg: last.errorMessage };
@@ -2628,7 +2632,7 @@ export class EventController {
 	}
 
 	async #finishAgentEnd(
-		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
+		event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>,
 		options?: { interrupted?: boolean },
 	): Promise<void> {
 		this.#showingAsyncWait = false;
@@ -2724,7 +2728,7 @@ export class EventController {
 	}
 
 	async #handleAutoCompactionStart(
-		event: Extract<AgentSessionEvent, { type: "auto_compaction_start" }>,
+		event: Extract<LocalAgentSessionEvent, { type: "auto_compaction_start" }>,
 	): Promise<void> {
 		this.composerPrediction.cancel();
 		if (!this.#terminalProgressActive) {
@@ -2774,7 +2778,9 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
-	async #handleAutoCompactionEnd(event: Extract<AgentSessionEvent, { type: "auto_compaction_end" }>): Promise<void> {
+	async #handleAutoCompactionEnd(
+		event: Extract<LocalAgentSessionEvent, { type: "auto_compaction_end" }>,
+	): Promise<void> {
 		if (this.#compactionOwnsProgress) {
 			this.#compactionOwnsProgress = false;
 			this.#setTerminalProgress(false);
@@ -2859,7 +2865,7 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
-	async #handleAutoRetryStart(event: Extract<AgentSessionEvent, { type: "auto_retry_start" }>): Promise<void> {
+	async #handleAutoRetryStart(event: Extract<LocalAgentSessionEvent, { type: "auto_retry_start" }>): Promise<void> {
 		this.#retryPending = true;
 		this.#trackRetrySupersededAssistantComponent(this.#lastAssistantComponent);
 		// A retry supersedes the just-failed turn: its assistant + tool calls are
@@ -2912,7 +2918,7 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
-	async #handleAutoRetryEnd(event: Extract<AgentSessionEvent, { type: "auto_retry_end" }>): Promise<void> {
+	async #handleAutoRetryEnd(event: Extract<LocalAgentSessionEvent, { type: "auto_retry_end" }>): Promise<void> {
 		this.#retryPending = false;
 		if (this.ctx.retryLoader) {
 			this.ctx.retryLoader.stop();
@@ -2977,7 +2983,7 @@ export class EventController {
 	}
 
 	async #handleRetryFallbackApplied(
-		event: Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>,
+		event: Extract<LocalAgentSessionEvent, { type: "retry_fallback_applied" }>,
 	): Promise<void> {
 		const reason = event.reason
 			? `\n${previewLine(sanitizeText(event.reason), TRUNCATE_LENGTHS.LINE * PREVIEW_LIMITS.COLLAPSED_LINES)}`
@@ -2986,12 +2992,12 @@ export class EventController {
 	}
 
 	async #handleRetryFallbackSucceeded(
-		event: Extract<AgentSessionEvent, { type: "retry_fallback_succeeded" }>,
+		event: Extract<LocalAgentSessionEvent, { type: "retry_fallback_succeeded" }>,
 	): Promise<void> {
 		this.ctx.showStatus(`Fallback succeeded on ${event.model}`);
 	}
 
-	async #handleTtsrTriggered(event: Extract<AgentSessionEvent, { type: "ttsr_triggered" }>): Promise<void> {
+	async #handleTtsrTriggered(event: Extract<LocalAgentSessionEvent, { type: "ttsr_triggered" }>): Promise<void> {
 		// Consecutive notifications (e.g. per-tool matches from one assistant
 		// message) merge into the previous block instead of stacking. Mutating an
 		// existing block is only safe while none of its rows have entered native
@@ -3023,7 +3029,7 @@ export class EventController {
 		this.#lastTtsrNotification = component;
 	}
 
-	async #handleTodoReminder(event: Extract<AgentSessionEvent, { type: "todo_reminder" }>): Promise<void> {
+	async #handleTodoReminder(event: Extract<LocalAgentSessionEvent, { type: "todo_reminder" }>): Promise<void> {
 		const { todos, attempt, maxAttempts } = event;
 		const component = new PresentedBlock(new TodoReminderComponent(todos, attempt, maxAttempts), {
 			type: "event",
@@ -3033,11 +3039,11 @@ export class EventController {
 		component.setExpanded(this.ctx.toolOutputExpanded);
 		this.ctx.present(component);
 	}
-	async #handleTodoAutoClear(_event: Extract<AgentSessionEvent, { type: "todo_auto_clear" }>): Promise<void> {
+	async #handleTodoAutoClear(_event: Extract<LocalAgentSessionEvent, { type: "todo_auto_clear" }>): Promise<void> {
 		await this.ctx.reloadTodos();
 	}
 
-	sendErrorNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
+	sendErrorNotification(event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>): void {
 		// `AgentSession` defers and coalesces the wire-level `agent_end` while a
 		// prompt is still in flight (see `#emitSessionEvent` in agent-session.ts):
 		// every mid-retry attempt's own settle is superseded, so this method often
@@ -3075,7 +3081,7 @@ export class EventController {
 		});
 	}
 
-	sendCompletionNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
+	sendCompletionNotification(event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>): void {
 		const notify = cfgCompletionNotify.get(settings);
 		if (notify === "off") return;
 

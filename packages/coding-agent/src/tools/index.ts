@@ -20,7 +20,7 @@ import type {
 	PreparedExtension,
 } from "../extensibility/extensions/types";
 import type { Skill, SkillRediscoveryHost } from "../extensibility/skills";
-import type { GoalModeState, GoalRuntime } from "../goals";
+import type { LocalGoalModeState, GoalRuntime } from "../goals";
 import { GoalTool } from "../goals/tools/goal-tool";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
@@ -83,7 +83,7 @@ import type { PlanProposalHandler } from "./resolve";
 import { SecurityScanTool } from "./security-scan";
 import { SpecVerifyTool } from "./spec-verify";
 import { supportsExternalThinking, ThinkTool } from "./think";
-import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { type LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
 import { KnowledgeSearchTool } from "./knowledge-search";
 import { WriteTool } from "./write";
@@ -519,7 +519,7 @@ export interface ToolSession {
 	/** Snapshot available for dispatching descendants, not populated from prompt text. */
 	getApprovedPlanChecks?: () => ApprovedPlanChecks | undefined;
 	/** Goal mode state (if active or paused) */
-	getGoalModeState?: () => GoalModeState | undefined;
+	getGoalModeState?: () => LocalGoalModeState | undefined;
 	/** Goal runtime for the active agent session. */
 	getGoalRuntime?: () => GoalRuntime | undefined;
 	/** Get cumulative session usage statistics (input/output tokens, cost). */
@@ -531,16 +531,16 @@ export interface ToolSession {
 	/** Bridge to the connected client (e.g. ACP editor host). Tools should route fs/terminal/permission requests through this when available. */
 	getClientBridge?: () => ClientBridge | undefined;
 	/** Get cached todo phases for this session. */
-	getTodoPhases?: () => TodoPhase[];
+	getTodoPhases?: () => LocalTodoPhase[];
 	/** Replace cached todo phases for this session. */
-	setTodoPhases?: (phases: TodoPhase[]) => void;
+	setTodoPhases?: (phases: LocalTodoPhase[]) => void;
 	/**
 	 * Replace the todo list from outside the `todo` tool: update the cache and
 	 * record it on the session branch. Direct `todo` calls persist via their
 	 * toolResult entry; callers that produce none (the eval bridge, Cursor sync)
 	 * use this so branch rehydration agrees with the in-memory list.
 	 */
-	commitTodoPhases?: (phases: TodoPhase[]) => void;
+	commitTodoPhases?: (phases: LocalTodoPhase[]) => void;
 	/** Active workpool items whose incremental yields complete the current turn. */
 	getWorkPoolYieldItems?: () => readonly WorkPoolYieldItem[];
 	/** The `i` intent the model wrote on a tool call of the current turn, by call ID. */
@@ -1061,10 +1061,10 @@ export type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 // package). Re-export it so the pi-tui renderer migration doesn't drop it.
 export { askToolRenderer } from "@oh-my-pi/pi-tui/tools/ask";
 export type {
-	TodoStatus,
+	LocalTodoStatus,
 	TodoOperation,
-	TodoItem,
-	TodoPhase,
+	LocalTodoItem,
+	LocalTodoPhase,
 	TodoCompletionTransition,
 	TodoToolDetails,
 	CollapsedTodoSelection,

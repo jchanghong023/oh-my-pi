@@ -25,7 +25,7 @@ import type {
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
-import type { AgentSessionEvent } from "../session/agent-session";
+import type { LocalAgentSessionEvent } from "../session/agent-session";
 import { toWireEvent } from "../session/loop-end-wire";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import type { SessionEntry as StoredSessionEntry } from "../session/session-entries";
@@ -126,7 +126,7 @@ const COLLAB_BUS_CHANNELS = [
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 ] as const satisfies readonly BusChannel[];
 
-function isWireAgentEvent(event: AgentSessionEvent): event is AgentSessionEvent & WireAgentEvent {
+function isWireAgentEvent(event: LocalAgentSessionEvent): event is LocalAgentSessionEvent & WireAgentEvent {
 	return event.type in WIRE_AGENT_EVENT_TYPES;
 }
 
@@ -480,7 +480,7 @@ export class CollabHost {
 	}
 
 	#subscribeSession(): void {
-		this.#unsubscribe = this.#ctx.session.subscribe(event => {
+		this.#unsubscribe = this.#ctx.session.subscribeLocal(event => {
 			// Guests speak the per-loop `agent_end` wire shape (see loop-end-wire.ts).
 			const wireEvent = toWireEvent(event);
 			if (isWireAgentEvent(wireEvent)) this.#broadcastEvent(wireEvent);
@@ -852,7 +852,7 @@ export class CollabHost {
 	}
 
 	/** Broadcast one session event, bounded and serialized exactly once. */
-	#broadcastEvent(event: AgentSessionEvent): void {
+	#broadcastEvent(event: LocalAgentSessionEvent): void {
 		if (event.type === "message_start") this.#messageSeq++;
 		if (!this.#broadcastAllowed()) return;
 		const frame = encodeEventFrame(serializeReplicatedEvent(event).json);
@@ -1389,7 +1389,7 @@ export class CollabHost {
 		};
 	}
 
-	#onEventForState(event: AgentSessionEvent): void {
+	#onEventForState(event: LocalAgentSessionEvent): void {
 		if (!STATE_TRIGGER_EVENTS[event.type]) return;
 		this.#scheduleStateBroadcast();
 		if (event.type === "agent_start" && !this.#streamingInterval) {

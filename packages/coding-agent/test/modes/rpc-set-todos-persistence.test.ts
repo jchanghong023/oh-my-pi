@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
-import type { RpcTodoPhase } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 let client: RpcClient;
@@ -30,7 +30,7 @@ it("restores RPC todo edits and explicit clears after reloading the session", as
 	await client.promptAndWait("seed");
 	const { sessionFile } = await client.getState();
 	if (!sessionFile) throw new Error("expected a persisted session file");
-	const phases: RpcTodoPhase[] = [{ name: "Plan", tasks: [{ content: "Review changes", status: "pending" }] }];
+	const phases: TodoPhase[] = [{ name: "Plan", tasks: [{ content: "Review changes", status: "pending" }] }];
 
 	await client.setTodos(phases);
 	await client.switchSession(sessionFile);

@@ -10,9 +10,9 @@ import type {
 import { InternalUrlRouter } from "../../internal-urls/router";
 import { extractUriScheme } from "../../internal-urls/parse";
 import type { SchemeSpec } from "../../internal-urls/types";
-import type { AgentSessionEvent } from "../../session/agent-session";
+import type { LocalAgentSessionEvent } from "../../session/agent-session";
 import { resolveToCwd, splitPathAndSelPreferringLiteralSync } from "../../tools/path-utils";
-import type { TodoStatus } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoStatus } from "@oh-my-pi/pi-tui/tools/todo";
 import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
 
 interface MessageProgress {
@@ -186,7 +186,7 @@ export function mapToolKind(toolName: string, args?: unknown): ToolKind {
 }
 
 export function mapAgentSessionEventToAcpSessionUpdates(
-	event: AgentSessionEvent,
+	event: LocalAgentSessionEvent,
 	sessionId: string,
 	options: AcpEventMapperOptions = {},
 ): SessionNotification[] {
@@ -271,7 +271,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 }
 
 function mapAssistantMessageUpdate(
-	event: Extract<AgentSessionEvent, { type: "message_update" }>,
+	event: Extract<LocalAgentSessionEvent, { type: "message_update" }>,
 	sessionId: string,
 	options: AcpEventMapperOptions,
 ): SessionNotification[] {
@@ -357,7 +357,7 @@ function mapAssistantMessageUpdate(
 }
 
 function mapAssistantMessageEnd(
-	event: Extract<AgentSessionEvent, { type: "message_end" }>,
+	event: Extract<LocalAgentSessionEvent, { type: "message_end" }>,
 	sessionId: string,
 	options: AcpEventMapperOptions,
 ): SessionNotification[] {
@@ -387,7 +387,7 @@ function toSessionNotification(sessionId: string, update: SessionUpdate): Sessio
 	return { sessionId, update };
 }
 
-const todoStatusMap: Record<TodoStatus, "pending" | "in_progress" | "completed"> = {
+const todoStatusMap: Record<LocalTodoStatus, "pending" | "in_progress" | "completed"> = {
 	pending: "pending",
 	in_progress: "in_progress",
 	blocked: "pending",
@@ -395,12 +395,12 @@ const todoStatusMap: Record<TodoStatus, "pending" | "in_progress" | "completed">
 	abandoned: "completed",
 };
 
-function mapTodoStatus(status: TodoStatus): "pending" | "in_progress" | "completed" {
+function mapTodoStatus(status: LocalTodoStatus): "pending" | "in_progress" | "completed" {
 	return todoStatusMap[status];
 }
 
 function mapTodoResultToPlanUpdate(
-	event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
+	event: Extract<LocalAgentSessionEvent, { type: "tool_execution_end" }>,
 ): SessionUpdate | undefined {
 	if (event.toolName !== "todo" || event.isError) {
 		return undefined;
@@ -430,8 +430,8 @@ function extractTodoPhases(result: unknown): unknown {
 	return (details as { phases?: unknown }).phases;
 }
 
-function extractTodoEntries(phases: unknown[]): Array<{ content: string; status: TodoStatus }> {
-	const entries: Array<{ content: string; status: TodoStatus }> = [];
+function extractTodoEntries(phases: unknown[]): Array<{ content: string; status: LocalTodoStatus }> {
+	const entries: Array<{ content: string; status: LocalTodoStatus }> = [];
 	for (const phase of phases) {
 		if (typeof phase !== "object" || phase === null || !("tasks" in phase)) {
 			continue;
@@ -448,14 +448,14 @@ function extractTodoEntries(phases: unknown[]): Array<{ content: string; status:
 			if (typeof content !== "string" || content.length === 0) {
 				continue;
 			}
-			const status = (task as { status?: TodoStatus }).status;
+			const status = (task as { status?: LocalTodoStatus }).status;
 			entries.push({ content, status: isTodoStatus(status) ? status : "pending" });
 		}
 	}
 	return entries;
 }
 
-function isTodoStatus(status: unknown): status is TodoStatus {
+function isTodoStatus(status: unknown): status is LocalTodoStatus {
 	return status === "pending" || status === "in_progress" || status === "completed" || status === "abandoned";
 }
 export function buildToolCallStartUpdate(input: {
@@ -499,7 +499,7 @@ export function normalizeReplayToolArguments(value: unknown): { args: unknown } 
 }
 
 function getToolExecutionEndArgs(
-	event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
+	event: Extract<LocalAgentSessionEvent, { type: "tool_execution_end" }>,
 	options: AcpEventMapperOptions,
 ): unknown {
 	if ("args" in event) {

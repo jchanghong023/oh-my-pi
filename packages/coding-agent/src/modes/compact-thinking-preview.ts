@@ -16,7 +16,7 @@ import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/too
 import { isXdHelpContent, parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { getPaddingX, padding, sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import type { AgentSessionEvent, ModelStage } from "../session/agent-session-events";
+import type { LocalAgentSessionEvent, ModelStage } from "../session/agent-session-events";
 import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
 import type { CompactPreviewActivity } from "./compact-tool-output-preview";
 import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-summary";
@@ -373,7 +373,7 @@ export class CompactThinkingPreview implements Component {
 		memory.calls = memory.calls.filter(call => call.endedAt === undefined || call === last);
 	}
 
-	observe(event: AgentSessionEvent): void {
+	observe(event: LocalAgentSessionEvent): void {
 		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
 			this.clear();
 			return;

@@ -199,7 +199,7 @@ import { checkSkillInvocation } from "../spec-driven/skill-policy";
 import { expandSlashCommand, type FileSlashCommand, loadSlashCommands } from "../extensibility/slash-commands";
 import { normalizeToolEventInput, resolveToolEventInput } from "../extensibility/tool-event-input";
 import { GoalRuntime } from "../goals/runtime";
-import type { GoalModeState, GoalTokenUsage } from "../goals/state";
+import { type GoalModeState, type GoalTokenUsage, type LocalGoalModeState, publicGoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import {
 	InternalUrlRouter,
@@ -295,7 +295,7 @@ import {
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "../tools/todo";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { type LocalTodoPhase, publicTodoPhases, type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { currentThreadId, isMainThread } from "../thread/identity";
 import { registerLocalSession } from "../thread/session-directory";
@@ -326,10 +326,12 @@ import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { EventBus } from "../utils/event-bus";
 import type { VibeModeState } from "../vibe/state";
 import {
-	type AgentSessionEvent,
 	type AgentSessionEventListener,
+	type LocalAgentSessionEvent,
+	type LocalAgentSessionEventListener,
 	type ModelStage,
 	nextModelStage,
+	publicSessionListener,
 	type WakeSources,
 } from "./agent-session-events";
 import {
@@ -1206,8 +1208,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#idleMaintenance: IdleMaintenance | undefined;
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
-	#eventListeners: AgentSessionEventListener[] = [];
-	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
+	#eventListeners: LocalAgentSessionEventListener[] = [];
+	#activeToolExecutionUpdates = new Map<string, Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>>();
 	readonly #liveToolOutput = new LiveToolOutputState();
 	#modelStage: ModelStage | null = null;
 	#latestTurnFileChanges?: LatestTurnFileChanges;
@@ -1254,7 +1256,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#experimentalContextNotesReminder: { prompt: string; generation: number } | undefined;
 	#planModeState: PlanModeState | undefined;
 	#vibeModeState: VibeModeState | undefined;
-	#goalModeState: GoalModeState | undefined;
+	#goalModeState: LocalGoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
 	readonly #advisors: SessionAdvisors;
 	/** Resolves once the resume-time advisor spend backfill settles. */
@@ -4284,7 +4286,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	// =========================================================================
 
 	/** Emit an event to all listeners */
-	#emit(event: AgentSessionEvent): void {
+	#emit(event: LocalAgentSessionEvent): void {
 		this.#modelStage = nextModelStage(this.#modelStage, event);
 		if (event.type === "message_start" && event.message.role === "user") {
 			this.#latestTurnFileChanges?.start(this.sessionId);
@@ -4411,10 +4413,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 	}
 
-	#queuedExtensionEvents: AgentSessionEvent[] = [];
+	#queuedExtensionEvents: LocalAgentSessionEvent[] = [];
 	#drainingExtensionEvents = false;
 
-	#queueExtensionEvent(event: AgentSessionEvent): void {
+	#queueExtensionEvent(event: LocalAgentSessionEvent): void {
 		this.#queuedExtensionEvents.push(event);
 		if (this.#drainingExtensionEvents) return;
 		this.#drainingExtensionEvents = true;
@@ -4439,7 +4441,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 	}
 
-	async #emitSessionEvent(event: AgentSessionEvent, options: { detachExtensions?: boolean } = {}): Promise<void> {
+	async #emitSessionEvent(event: LocalAgentSessionEvent, options: { detachExtensions?: boolean } = {}): Promise<void> {
 		this.#liveToolOutput.observe(event, Date.now());
 		if (event.type === "tool_execution_update") {
 			// Returned background calls have no later tool result to persist their
@@ -6530,7 +6532,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	/** Emit extension events based on session events */
-	async #emitExtensionEvent(event: AgentSessionEvent): Promise<void> {
+	async #emitExtensionEvent(event: LocalAgentSessionEvent): Promise<void> {
 		if (!this.#extensionRunner) return;
 		if (event.type === "agent_start") {
 			this.#turnIndex = 0;
@@ -6555,6 +6557,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * Multiple listeners can be added. Returns unsubscribe function for this listener.
 	 */
 	subscribe(listener: AgentSessionEventListener): () => void {
+		return this.subscribeLocal(publicSessionListener(listener));
+	}
+
+	subscribeLocal(listener: LocalAgentSessionEventListener): () => void {
 		// Copy-on-write: `#emit` iterates the array it read without copying it.
 		this.#eventListeners = [...this.#eventListeners, listener];
 
@@ -6573,7 +6579,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * returned background call, in oldest-to-newest update order. Focus rebuilds
 	 * replay these after reconstructing persisted transcript state.
 	 */
-	activeToolExecutionUpdates(): readonly Extract<AgentSessionEvent, { type: "tool_execution_update" }>[] {
+	activeToolExecutionUpdates(): readonly Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>[] {
 		return [...this.#activeToolExecutionUpdates.values()];
 	}
 
@@ -9018,10 +9024,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	getGoalModeState(): GoalModeState | undefined {
+		return this.#goalModeState && publicGoalModeState(this.#goalModeState);
+	}
+
+	getLocalGoalModeState(): LocalGoalModeState | undefined {
 		return this.#goalModeState;
 	}
 
-	setGoalModeState(state: GoalModeState | undefined): void {
+	setGoalModeState(state: LocalGoalModeState | undefined): void {
 		this.#goalModeState = state;
 	}
 
@@ -9492,7 +9502,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		if (!cfgTodoEnabled.get(this.settings)) return undefined;
 		const canCallTodoTool = this.getActiveToolNames().includes("todo");
 		if (!canCallTodoTool) return undefined;
-		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
+		const phases = this.getLocalTodoPhases().filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return undefined;
 
 		let total = 0;
@@ -10099,7 +10109,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		try {
 			return await this.#admitSubmission(() => this.#promptCustomMessage(message, options));
 		} catch (error) {
-			const state = this.getGoalModeState();
+			const state = this.getLocalGoalModeState();
 			if (
 				state?.enabled &&
 				state.mode === "active" &&
@@ -10184,7 +10194,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		followUps: PromptFollowUps | undefined,
 	): Promise<boolean> {
 		if (message.customType === "goal-tool-recovery") {
-			const state = this.getGoalModeState();
+			const state = this.getLocalGoalModeState();
 			if (!state?.enabled || state.mode !== "active" || state.goal.status !== "active") {
 				this.#reportDroppedCustomPrompt(message, options, followUps);
 				return false;
@@ -12890,15 +12900,19 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	getTodoPhases(): TodoPhase[] {
+		return publicTodoPhases(this.#todo.phases);
+	}
+
+	getLocalTodoPhases(): LocalTodoPhase[] {
 		return this.#todo.phases;
 	}
 
-	setTodoPhases(phases: TodoPhase[]): void {
+	setTodoPhases(phases: LocalTodoPhase[]): void {
 		this.#todo.setPhases(phases);
 	}
 
 	/** Replace the list from outside the `todo` tool: update the cache and record a `user_todo_edit` entry so reloads keep it. */
-	commitTodoPhases(phases: TodoPhase[]): void {
+	commitTodoPhases(phases: LocalTodoPhase[]): void {
 		this.#todo.setPhases(phases);
 		this.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases });
 	}
@@ -14908,7 +14922,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const abort = (): void => controller.abort(options.signal?.reason);
 		options.signal?.addEventListener("abort", abort, { once: true });
 		if (options.signal?.aborted) abort();
-		const unsubscribe = this.subscribe(event => {
+		const unsubscribe = this.subscribeLocal(event => {
 			if (event.type === "session_abort") controller.abort(event.reason);
 		});
 		try {

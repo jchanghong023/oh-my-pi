@@ -15,8 +15,8 @@ import { CollabHost } from "@oh-my-pi/pi-coding-agent/collab/host";
 import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import type {
-	AgentSessionEvent,
-	AgentSessionEventListener,
+	LocalAgentSessionEvent,
+	LocalAgentSessionEventListener,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 import {
@@ -56,7 +56,7 @@ function assistant(text: string) {
 	};
 }
 
-function streamedUpdate(text: string, delta: string): AgentSessionEvent {
+function streamedUpdate(text: string, delta: string): LocalAgentSessionEvent {
 	const message = assistant(text);
 	return {
 		type: "message_update",
@@ -65,7 +65,7 @@ function streamedUpdate(text: string, delta: string): AgentSessionEvent {
 	};
 }
 
-function textOf(event: AgentSessionEvent): string {
+function textOf(event: LocalAgentSessionEvent): string {
 	if (event.type !== "message_update" || event.message.role !== "assistant") return "";
 	const block = event.message.content[0];
 	return block?.type === "text" ? block.text : "";
@@ -82,13 +82,13 @@ it("supersedes queued updates of a streaming message instead of ending the room"
 	};
 	const seen: HostObservations = { notices: [], participantCounts: [] };
 	const ctx = makeHostContext(snapshot, seen);
-	const listeners: AgentSessionEventListener[] = [];
-	const subscribe = ctx.session.subscribe.bind(ctx.session);
-	ctx.session.subscribe = listener => {
+	const listeners: LocalAgentSessionEventListener[] = [];
+	const subscribe = ctx.session.subscribeLocal.bind(ctx.session);
+	ctx.session.subscribeLocal = listener => {
 		listeners.push(listener);
 		return subscribe(listener);
 	};
-	const emit = (event: AgentSessionEvent) => {
+	const emit = (event: LocalAgentSessionEvent) => {
 		for (const listener of listeners.slice()) listener(event);
 	};
 	const host = new CollabHost(ctx);
@@ -102,11 +102,11 @@ it("supersedes queued updates of a streaming message instead of ending the room"
 
 	const guest = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key });
 	cleanups.push(() => guest.close());
-	const events: AgentSessionEvent[] = [];
+	const events: LocalAgentSessionEvent[] = [];
 	const welcomed = Promise.withResolvers<void>();
 	guest.onFrame = (frame: CollabFrame) => {
 		if (frame.t === "welcome") welcomed.resolve();
-		if (frame.t === "event") events.push(frame.event as AgentSessionEvent);
+		if (frame.t === "event") events.push(frame.event as LocalAgentSessionEvent);
 	};
 	guest.onOpen = () => guest.send({ t: "hello", proto: COLLAB_PROTO, name: "watcher" });
 	guest.connect();

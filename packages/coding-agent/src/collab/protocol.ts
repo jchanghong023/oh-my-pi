@@ -24,7 +24,7 @@ import {
 	WRITE_TOKEN_BYTES,
 } from "@oh-my-pi/pi-wire";
 import type { CollabSessionState } from "@oh-my-pi/pi-tui/status-line/types";
-import type { AgentSessionEvent } from "../session/agent-session";
+import type { LocalAgentSessionEvent } from "../session/agent-session";
 import type { SessionEntry, SessionHeader } from "../session/session-entries";
 
 export type {
@@ -88,7 +88,7 @@ export type CollabFrame =
 	 */
 	| { t: "snapshot-chunk"; entries: SessionEntry[]; final: boolean }
 	| { t: "entry"; entry: SessionEntry }
-	| { t: "event"; event: AgentSessionEvent }
+	| { t: "event"; event: LocalAgentSessionEvent }
 	| { t: "state"; state: CollabSessionState }
 	/** Mirrored EventBus traffic (task subagent lifecycle/progress channels only). */
 	| { t: "bus"; channel: BusChannel; data: unknown }

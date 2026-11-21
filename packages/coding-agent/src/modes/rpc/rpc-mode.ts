@@ -90,7 +90,7 @@ import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from 
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
 import { RpcBtwController } from "./rpc-btw";
-import { RpcGoalController, toRpcGoalModeState } from "./rpc-goal";
+import { RpcGoalController } from "./rpc-goal";
 import { RpcDictationBridge, type RpcDictationControllerFactory } from "./rpc-dictation";
 import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
 import { RpcOutputWriter } from "./rpc-output";
@@ -100,7 +100,7 @@ import {
 	type RpcPromptTicket,
 	watchAndReportPromptResult,
 } from "./rpc-prompt-results";
-import { RpcSessionEventForwarder, toRpcTodoPhases } from "./rpc-session-events";
+import { RpcSessionEventForwarder } from "./rpc-session-events";
 import { isSessionSettled } from "../../session/session-settle";
 import { RpcSessionSettleWatcher, watchedScheduledTurnProbe } from "./rpc-session-settle";
 import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
@@ -2449,7 +2449,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				// A goal exit triggered by the last turn restores tools asynchronously; report after it.
 				await goalController.settled();
 				const queuedMessages = session.getQueuedMessages();
-				const goal = session.getGoalModeState();
 				const state: RpcSessionState = {
 					model: session.model,
 					thinkingLevel: session.thinkingLevel,
@@ -2471,7 +2470,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						followUp: [...queuedMessages.followUp],
 						liveSteered: queuedMessages.liveSteered,
 					},
-					todoPhases: toRpcTodoPhases(session.getTodoPhases()),
+					todoPhases: session.getTodoPhases(),
 					fastModeEnabled: session.isFastModeEnabled(),
 					tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
 					fastModeActive: session.isFastModeActive(),
@@ -2488,7 +2487,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						examples: tool.examples,
 					})),
 					contextUsage: session.getContextUsage(),
-					goal: goal ? toRpcGoalModeState(goal) : null,
+					goal: session.getGoalModeState() ?? null,
 				};
 				return success(id, "get_state", state);
 			}
@@ -2556,7 +2555,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 			case "set_todos": {
 				session.commitTodoPhases(command.phases);
-				const phases = toRpcTodoPhases(session.getTodoPhases());
+				const phases = session.getTodoPhases();
 				return success(id, "set_todos", { todoPhases: phases });
 			}
 

@@ -74,7 +74,7 @@ import {
 	recordApprovedPlanReference,
 	verificationApprovalDetails,
 } from "../../plan-mode/verification";
-import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
+import type { AgentSession, LocalAgentSessionEvent } from "../../session/agent-session";
 import { BlobStore, resolveImageDataSync } from "../../session/blob-store";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import type { UsageStatistics } from "../../session/session-entries";
@@ -1295,7 +1295,7 @@ export class AcpAgent implements Agent {
 					promise: pendingPrompt.promise,
 				};
 
-				record.promptTurn.unsubscribe = record.session.subscribe(event => {
+				record.promptTurn.unsubscribe = record.session.subscribeLocal(event => {
 					this.#trackPromptEvent(record, event);
 				});
 
@@ -1373,7 +1373,7 @@ export class AcpAgent implements Agent {
 		}
 	}
 
-	#trackPromptEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
+	#trackPromptEvent(record: ManagedSessionRecord, event: LocalAgentSessionEvent): void {
 		const handling = this.#handlePromptEvent(record, event).catch((error: unknown) => {
 			logger.warn("ACP prompt event handler failed", { error });
 		});
@@ -1974,7 +1974,7 @@ export class AcpAgent implements Agent {
 		// reconfiguration's `refreshMCPTools` rebuild renders its instructions.
 		session.setMcpServerInstructionsSource(() => record.mcpManager?.getServerInstructions());
 		try {
-			const unsubscribeEvents = session.subscribe(event => {
+			const unsubscribeEvents = session.subscribeLocal(event => {
 				this.#handleLifetimeEvent(record, event);
 			});
 			record.lifetimeUnsubscribe = unsubscribeEvents;
@@ -2017,7 +2017,7 @@ export class AcpAgent implements Agent {
 		};
 	}
 
-	#handleLifetimeEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
+	#handleLifetimeEvent(record: ManagedSessionRecord, event: LocalAgentSessionEvent): void {
 		const sessionId = record.protocolSessionId;
 		let notification: AcpCompactionNotification;
 		if (event.type === "auto_compaction_start") {
@@ -2123,7 +2123,7 @@ export class AcpAgent implements Agent {
 		return storedSession.path;
 	}
 
-	async #handlePromptEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
+	async #handlePromptEvent(record: ManagedSessionRecord, event: LocalAgentSessionEvent): Promise<void> {
 		const promptTurn = record.promptTurn;
 		if (!promptTurn || promptTurn.settled || promptTurn.cancelRequested) {
 			return;
@@ -2207,7 +2207,7 @@ export class AcpAgent implements Agent {
 	 */
 	async #flushMissedFinalAssistantText(
 		record: ManagedSessionRecord,
-		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
+		event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>,
 	): Promise<void> {
 		const progress = record.liveMessageProgress;
 		if (!progress || progress.textEmitted) {
@@ -2246,7 +2246,7 @@ export class AcpAgent implements Agent {
 	 */
 	async #flushUnreportedTurnError(
 		record: ManagedSessionRecord,
-		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
+		event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>,
 	): Promise<void> {
 		const streamedDelivery = record.promptTurn?.errorTextDelivery;
 		if (streamedDelivery && (await streamedDelivery)) {
@@ -2287,7 +2287,7 @@ export class AcpAgent implements Agent {
 		await record.session.waitForIdle();
 	}
 
-	#prepareLiveAssistantMessage(record: ManagedSessionRecord, event: AgentSessionEvent): void {
+	#prepareLiveAssistantMessage(record: ManagedSessionRecord, event: LocalAgentSessionEvent): void {
 		if (
 			(event.type === "message_start" || event.type === "message_update" || event.type === "message_end") &&
 			event.message.role === "assistant" &&
@@ -2306,7 +2306,7 @@ export class AcpAgent implements Agent {
 	 * real progress instead of resurrecting a fresh one (which would double-emit
 	 * the final answer).
 	 */
-	#clearLiveAssistantMessageAfterEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
+	#clearLiveAssistantMessageAfterEvent(record: ManagedSessionRecord, event: LocalAgentSessionEvent): void {
 		if (event.type === "message_end" && event.message.role === "assistant") {
 			record.liveMessageId = undefined;
 			record.liveMessageProgress = undefined;
@@ -2352,7 +2352,7 @@ export class AcpAgent implements Agent {
 	}
 
 	#resolveStopReason(
-		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
+		event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>,
 		cancelRequested: boolean,
 	): PromptResponse["stopReason"] {
 		if (cancelRequested) {
@@ -3235,13 +3235,13 @@ export class AcpAgent implements Agent {
 		options: { includeStart?: boolean; toolArgs?: unknown } = {},
 	): SessionNotification[] {
 		const args = this.#buildReplayToolArgs(message.details);
-		const startEvent: AgentSessionEvent = {
+		const startEvent: LocalAgentSessionEvent = {
 			type: "tool_execution_start",
 			toolCallId: message.toolCallId,
 			toolName: message.toolName,
 			args,
 		};
-		const endEvent: AgentSessionEvent = {
+		const endEvent: LocalAgentSessionEvent = {
 			type: "tool_execution_end",
 			toolCallId: message.toolCallId,
 			toolName: message.toolName,

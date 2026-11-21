@@ -9,7 +9,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { buildGoalAutoOrchestrateMessage } from "@oh-my-pi/pi-coding-agent/goals/request-context";
-import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
+import type { LocalGoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { renderOrchestrateNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -24,7 +24,7 @@ import { computeNonMessageTokens } from "@oh-my-pi/pi-tui/status-line/context-us
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { goalProtocolModel } from "./helpers/goal-protocol-model";
 
-function activeGoalState(): GoalModeState {
+function activeGoalState(): LocalGoalModeState {
 	const now = Date.now();
 	return {
 		enabled: true,
@@ -336,7 +336,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 				onProviderCall: index => {
 					if (index !== 1) return;
 					expectedAtContinuation = buildGoalAutoOrchestrateMessage(
-						session.getGoalModeState(),
+						session.getLocalGoalModeState(),
 						session.getEnabledToolNames(),
 					);
 					liveAtContinuation = session.messages.filter(
@@ -360,7 +360,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 			},
 		);
 		const active = activeGoalState();
-		const state: GoalModeState = {
+		const state: LocalGoalModeState = {
 			...active,
 			autoOrchestrate: true,
 			goal: {
@@ -576,7 +576,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 				message: expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
 			}),
 		);
-		expect(session.getGoalModeState()).toMatchObject({
+		expect(session.getLocalGoalModeState()).toMatchObject({
 			autoOrchestrate: true,
 			goal: { objective, status: "active" },
 		});
@@ -704,7 +704,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		await session.goalRuntime.resumeGoal();
 		await session.prompt("continue the resumed release");
 
-		const resumed = session.getGoalModeState();
+		const resumed = session.getLocalGoalModeState();
 		const expected = buildGoalAutoOrchestrateMessage(resumed, session.getEnabledToolNames());
 		if (!expected) throw new Error("Expected resumed auto Goal notice content");
 		expect(observedContexts).toHaveLength(2);
@@ -924,7 +924,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		await session.goalRuntime.resumeGoal();
 		await session.prompt("continue after the source was invalidated during queued setup");
 
-		const expected = buildGoalAutoOrchestrateMessage(session.getGoalModeState(), session.getEnabledToolNames());
+		const expected = buildGoalAutoOrchestrateMessage(session.getLocalGoalModeState(), session.getEnabledToolNames());
 		if (!expected) throw new Error("Expected resumed auto Goal notice content");
 		expect(observedContexts).toHaveLength(3);
 		for (const context of observedContexts) {
@@ -1081,7 +1081,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		await session.prompt("inspect the resumed queued release");
 		await session.waitForIdle();
 
-		const expected = buildGoalAutoOrchestrateMessage(session.getGoalModeState(), session.getEnabledToolNames());
+		const expected = buildGoalAutoOrchestrateMessage(session.getLocalGoalModeState(), session.getEnabledToolNames());
 		if (!expected) throw new Error("Expected resumed auto Goal notice content");
 		for (const context of observedContexts) {
 			expect(context.join("\n")).not.toContain(JSON.stringify(expected.content));
@@ -1221,7 +1221,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 			},
 		);
 		const running = session.prompt("start an unrelated delivery task");
-		let state: GoalModeState | undefined;
+		let state: LocalGoalModeState | undefined;
 		try {
 			expect(
 				await raceWithTimeout(
@@ -1297,7 +1297,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		"reconciles an unadmitted streaming Goal %s context with committed mid-run recovery",
 		async transition => {
 			const objective = "Finish all release work.\n\nPreserve the complete streaming objective.";
-			let goal: GoalModeState | undefined;
+			let goal: LocalGoalModeState | undefined;
 			let queuedWhileStreaming = false;
 			let liveAtContinuation: AgentMessage[] = [];
 			let durableAtContinuation: unknown[] = [];
@@ -1534,7 +1534,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		});
 
 		await session.compact();
-		const current = session.getGoalModeState()!;
+		const current = session.getLocalGoalModeState()!;
 		const recoveries = sessionManager
 			.getBranch()
 			.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context");

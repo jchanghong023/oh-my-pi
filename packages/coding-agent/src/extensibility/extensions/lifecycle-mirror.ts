@@ -25,7 +25,7 @@
  */
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AgentSessionEvent } from "../../session/agent-session";
+import type { LocalAgentSessionEvent } from "../../session/agent-session";
 import type { ExtensionRunner } from "./runner";
 import type {
 	AgentEndEvent,
@@ -111,7 +111,7 @@ export type MappedExtensionEvent =
  *   does the same for its mirrored stream.
  */
 export function extensionEventFromSessionEvent(
-	event: AgentSessionEvent,
+	event: LocalAgentSessionEvent,
 	turnIndex: number,
 ): MappedExtensionEvent | null {
 	switch (event.type) {
@@ -261,7 +261,7 @@ export class GuestLifecycleEmitter {
 		return this.#active;
 	}
 
-	emit(runner: ExtensionRunner, event: AgentSessionEvent): void {
+	emit(runner: ExtensionRunner, event: LocalAgentSessionEvent): void {
 		if (event.type === "agent_start") {
 			this.#turnIndex = 0;
 			this.#active = true;

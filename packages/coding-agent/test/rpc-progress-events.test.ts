@@ -7,7 +7,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { RpcClient, type RpcReceivedSessionEvent } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
+import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
+import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const FIXTURE = path.join(import.meta.dir, "fixtures", "progress-events-rpc-agent.ts");
@@ -23,14 +24,14 @@ afterEach(async () => {
 });
 
 /** Start the fixture and record every session event frame it writes. */
-async function start(): Promise<{ rpc: RpcClient; events: RpcReceivedSessionEvent[] }> {
+async function start(): Promise<{ rpc: RpcClient; events: AgentSessionEvent[] }> {
 	directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-rpc-progress-"));
 	client = new RpcClient({
 		command: [process.execPath, FIXTURE],
 		cwd: directory,
 		env: { PI_CODING_AGENT_DIR: directory, PI_NO_TITLE: "1" },
 	});
-	const events: RpcReceivedSessionEvent[] = [];
+	const events: AgentSessionEvent[] = [];
 	client.onSessionEvent(event => events.push(event));
 	await client.start();
 	return { rpc: client, events };

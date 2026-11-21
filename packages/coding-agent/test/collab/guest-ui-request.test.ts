@@ -483,7 +483,7 @@ function makeHostContext(): InteractiveModeContext {
 			sessionName: "proto test",
 			model: undefined,
 			thinkingLevel: undefined,
-			subscribe: () => () => {},
+			subscribeLocal: () => () => {},
 			emitNotice: () => {},
 			promptCustomMessage: () => Promise.resolve(),
 			abort: () => Promise.resolve(),

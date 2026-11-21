@@ -5,7 +5,7 @@ import type { AssistantMessage, Message, Model, Usage, UserMessage } from "@oh-m
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildGoalAutoOrchestrateMessage } from "@oh-my-pi/pi-coding-agent/goals/request-context";
-import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
+import type { LocalGoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -188,7 +188,7 @@ describe("AgentSession session stats", () => {
 		const manager = SessionManager.inMemory();
 		let kept = manager.appendMessage({ role: "user", content: "retained history ".repeat(200), timestamp: 1 });
 		session = createStatsSession(manager, target);
-		const state: GoalModeState = {
+		const state: LocalGoalModeState = {
 			enabled: true,
 			mode: "active",
 			autoOrchestrate: true,
@@ -260,7 +260,7 @@ describe("AgentSession session stats", () => {
 		const target = model();
 		const manager = SessionManager.inMemory();
 		session = createStatsSession(manager, target);
-		const state: GoalModeState = {
+		const state: LocalGoalModeState = {
 			enabled: true,
 			mode: "active",
 			autoOrchestrate: true,

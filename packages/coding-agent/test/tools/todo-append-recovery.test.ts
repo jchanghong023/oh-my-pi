@@ -2,10 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TodoTool } from "@oh-my-pi/pi-coding-agent/tools/todo";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 
 function fixture() {
-	let phases: TodoPhase[] = [];
+	let phases: LocalTodoPhase[] = [];
 	const session: ToolSession = {
 		cwd: process.cwd(),
 		hasUI: false,

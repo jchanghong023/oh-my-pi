@@ -144,7 +144,7 @@ describe("AgentSession queued steer delivery", () => {
 
 	function nextUserMessage(target: AgentSession, expected: string): Promise<void> {
 		const { promise, resolve } = Promise.withResolvers<void>();
-		const unsubscribe = target.subscribe(event => {
+		const unsubscribe = target.subscribeLocal(event => {
 			if (event.type !== "message_end" || event.message.role !== "user") return;
 			const content = event.message.content;
 			const text =
@@ -242,7 +242,7 @@ describe("AgentSession queued steer delivery", () => {
 				});
 				if (goalState === "paused") await session.goalRuntime.pauseGoal();
 				if (goalState === "budget-limited" || goalState === "complete" || goalState === "exiting") {
-					const state = session.getGoalModeState()!;
+					const state = session.getLocalGoalModeState()!;
 					session.setGoalModeState({
 						...state,
 						mode: goalState === "exiting" ? "exiting" : "active",
@@ -484,7 +484,7 @@ describe("AgentSession queued steer delivery", () => {
 		// and must be picked up by the settle-time drain.
 		const secondRunDone = Promise.withResolvers<void>();
 		let agentEnds = 0;
-		session.subscribe(event => {
+		session.subscribeLocal(event => {
 			if (event.type !== "agent_end") return;
 			agentEnds++;
 			if (agentEnds === 1) {
@@ -574,13 +574,13 @@ describe("AgentSession queued steer delivery", () => {
 		const { session } = await createSession([]);
 		const events: Array<{
 			type: string;
-			operationId: string;
+			operationId?: string;
 			mode?: string;
 			errorMessage?: string;
 			skipped?: boolean;
 			aborted?: boolean;
 		}> = [];
-		session.subscribe(event => {
+		session.subscribeLocal(event => {
 			if (event.type === "manual_compaction_start" || event.type === "manual_compaction_end") {
 				events.push(event);
 			}
@@ -593,6 +593,7 @@ describe("AgentSession queued steer delivery", () => {
 		}
 		expect(failure).toBeInstanceOf(Error);
 		expect(events.map(event => event.type)).toEqual(["manual_compaction_start", "manual_compaction_end"]);
+		expect(events[0].operationId).toBeTruthy();
 		expect(events[1].operationId).toBe(events[0].operationId);
 		expect(events[0].mode).toBe("soft");
 		expect(events[1].aborted).toBe(false);
@@ -603,7 +604,7 @@ describe("AgentSession queued steer delivery", () => {
 	it("does not emit a manual lifecycle for rejected admission", async () => {
 		const { session } = await createSession([]);
 		const events: string[] = [];
-		session.subscribe(event => {
+		session.subscribeLocal(event => {
 			if (event.type === "manual_compaction_start" || event.type === "manual_compaction_end")
 				events.push(event.type);
 		});
@@ -622,7 +623,7 @@ describe("AgentSession queued steer delivery", () => {
 		const run = session.prompt("hello");
 		await started.promise;
 		let cancellationReason: string | undefined;
-		session.subscribe(event => {
+		session.subscribeLocal(event => {
 			if (event.type === "session_abort") cancellationReason = event.reason;
 		});
 		// Even text-only queue preparation yields during normalization.
@@ -648,7 +649,7 @@ describe("AgentSession queued steer delivery", () => {
 		session.subscribeRunState(state => runStates.push(state));
 		const streaming = Promise.withResolvers<void>();
 		const steered = Promise.withResolvers<void>();
-		session.subscribe(event => {
+		session.subscribeLocal(event => {
 			if (event.type === "message_start" && event.message.role === "assistant") streaming.resolve();
 			if (event.type !== "agent_end" && event.type !== "agent_pause") return;
 			settles.push(event.type);
@@ -839,7 +840,7 @@ describe("AgentSession queued steer delivery", () => {
 		const { session } = await createSession([{ content: ["slow response"], delayMs: 1_000 }]);
 		const settles: string[] = [];
 		const streaming = Promise.withResolvers<void>();
-		session.subscribe(event => {
+		session.subscribeLocal(event => {
 			if (event.type === "message_start" && event.message.role === "assistant") streaming.resolve();
 			if (event.type === "agent_end" || event.type === "agent_pause") settles.push(event.type);
 		});
@@ -1571,7 +1572,7 @@ describe("AgentSession queued steer delivery", () => {
 			const otherPrompt: AgentMessage = { role: "user", content: "Other request", timestamp: 14 };
 			let promoted: boolean[] = [];
 			let injected = false;
-			session.subscribe(event => {
+			session.subscribeLocal(event => {
 				if (event.type !== "turn_end" || injected) return;
 				injected = true;
 				session.agent.replaceQueues(
@@ -1744,7 +1745,7 @@ describe("AgentSession queued steer delivery", () => {
 			const { session } = await createSession([{ content: ["delivered"] }]);
 			await session.followUp("keep me visible");
 			const updates: Array<{ steering: readonly string[]; followUp: readonly string[]; liveSteered: number }> = [];
-			const unsubscribe = session.subscribe(event => {
+			const unsubscribe = session.subscribeLocal(event => {
 				if (event.type === "queue_update")
 					updates.push({ steering: event.steering, followUp: event.followUp, liveSteered: event.liveSteered });
 			});

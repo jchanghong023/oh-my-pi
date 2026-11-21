@@ -777,7 +777,10 @@ describe("AgentSession auto-compaction progress guard", () => {
 				);
 				return;
 			}
-			const context = buildGoalAutoOrchestrateMessage(session.getGoalModeState(), session.getEnabledToolNames());
+			const context = buildGoalAutoOrchestrateMessage(
+				session.getLocalGoalModeState(),
+				session.getEnabledToolNames(),
+			);
 			if (context) done.resolve(context);
 			else done.reject(new Error("Expected active persisted Goal at the committed recovery boundary"));
 		});

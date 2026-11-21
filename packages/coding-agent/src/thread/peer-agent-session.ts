@@ -20,7 +20,12 @@ import type {
 	AgentSessionLoopHandle,
 	AgentSessionManagerHandle,
 } from "../session/agent-session-handle";
-import type { AgentSessionEvent, AgentSessionEventListener } from "../session/agent-session-events";
+import type {
+	AgentSessionEventListener,
+	LocalAgentSessionEvent,
+	LocalAgentSessionEventListener,
+} from "../session/agent-session-events";
+import { publicSessionListener } from "../session/agent-session-events";
 import type {
 	AgentSessionDisposeOptions,
 	PromptOptions,
@@ -72,7 +77,7 @@ export class PeerAgentSession implements AgentSessionHandle {
 	readonly home: ThreadId;
 	readonly agent: AgentSessionLoopHandle;
 	readonly sessionManager: AgentSessionManagerHandle;
-	readonly #listeners = new Set<AgentSessionEventListener>();
+	readonly #listeners = new Set<LocalAgentSessionEventListener>();
 	readonly #runStateListeners = new Set<(state: SessionRunState) => void>();
 	#unsubscribe: (() => void) | undefined;
 	#unsubscribeRunState: (() => void) | undefined;
@@ -181,6 +186,10 @@ export class PeerAgentSession implements AgentSessionHandle {
 	}
 
 	subscribe(listener: AgentSessionEventListener): () => void {
+		return this.subscribeLocal(publicSessionListener(listener));
+	}
+
+	subscribeLocal(listener: LocalAgentSessionEventListener): () => void {
 		this.#listeners.add(listener);
 		if (!this.#unsubscribe) {
 			this.#unsubscribe = mainBridge().remote.callSync("subscribe", this, event => this.#dispatch(event));
@@ -241,7 +250,7 @@ export class PeerAgentSession implements AgentSessionHandle {
 		return value === undefined ? DEFAULTS[field] : value;
 	}
 
-	#dispatch(event: AgentSessionEvent): void {
+	#dispatch(event: LocalAgentSessionEvent): void {
 		// oxlint-disable-next-line unicorn/no-useless-spread -- snapshot: the loop body may add or remove listeners
 		for (const listener of [...this.#listeners]) {
 			try {

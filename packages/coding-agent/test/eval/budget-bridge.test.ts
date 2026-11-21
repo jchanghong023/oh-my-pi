@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { runEvalBudget } from "../../src/eval/budget-bridge";
-import type { GoalModeState } from "../../src/goals/state";
+import type { LocalGoalModeState } from "../../src/goals/state";
 import type { UsageStatistics } from "../../src/session/session-entries";
 import type { ToolSession } from "../../src/tools";
 
 type TurnBudget = { total: number | null; spent: number; hard: boolean };
 
-function makeSession(parts: { turn?: TurnBudget; goal?: GoalModeState; usage?: UsageStatistics }): ToolSession {
+function makeSession(parts: { turn?: TurnBudget; goal?: LocalGoalModeState; usage?: UsageStatistics }): ToolSession {
 	return {
 		getTurnBudget: parts.turn ? () => parts.turn as TurnBudget : undefined,
 		getGoalModeState: parts.goal ? () => parts.goal : undefined,
@@ -14,12 +14,12 @@ function makeSession(parts: { turn?: TurnBudget; goal?: GoalModeState; usage?: U
 	} as unknown as ToolSession;
 }
 
-function goalState(extra: Partial<GoalModeState["goal"]>): GoalModeState {
+function goalState(extra: Partial<LocalGoalModeState["goal"]>): LocalGoalModeState {
 	return {
 		enabled: true,
 		mode: "active",
 		goal: { id: "g1", status: "active", tokensUsed: 0, timeUsedSeconds: 0, ...extra },
-	} as GoalModeState;
+	} as LocalGoalModeState;
 }
 
 function usage(output: number): UsageStatistics {

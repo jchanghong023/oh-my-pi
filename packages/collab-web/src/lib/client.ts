@@ -283,26 +283,6 @@ export class SessionReplica {
 		this.#applyFrameSafe(frame);
 	}
 
-	/** Refresh actual edited history without ending UI waits or dropping events received during the read. */
-	refreshHistory(frames: readonly HostFrame[], knownAtStart: ReadonlySet<string>): void {
-		const welcome = frames.find(frame => frame.t === "welcome");
-		if (!welcome || welcome.header.id !== this.#header?.id)
-			throw new Error("Native transcript snapshot belongs to a different session");
-		if (this.#pendingSnapshot) throw new Error("Native transcript snapshot is still downloading");
-		const entries: SessionEntry[] = [];
-		for (const frame of frames) if (frame.t === "snapshot-chunk") entries.push(...frame.entries);
-		if (entries.length !== welcome.entryCount) throw new Error("Native transcript snapshot is incomplete");
-		const ids = new Set(entries.map(entry => entry.id));
-		for (const entry of this.#entries) if (!knownAtStart.has(entry.id) && !ids.has(entry.id)) entries.push(entry);
-		this.#entries = entries;
-		this.#publishedEntries = [...entries];
-		this.#commit();
-	}
-
-	connectionClosed(reason: string, willReconnect: boolean): void {
-		this.#handleClose(reason, willReconnect);
-	}
-
 	/**
 	 * Test seam: apply a synthetic host frame through the real apply path. With
 	 * `flush` (default), a commit deferred to the next animation frame is

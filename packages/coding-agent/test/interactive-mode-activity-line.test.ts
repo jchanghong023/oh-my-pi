@@ -11,7 +11,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import type { TspKind } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const context = (supports: (kind: TspKind) => boolean): DescribeContext => ({
@@ -23,7 +23,7 @@ const context = (supports: (kind: TspKind) => boolean): DescribeContext => ({
 });
 const cx = context(() => true);
 
-const PLAN: TodoPhase[] = [
+const PLAN: LocalTodoPhase[] = [
 	{ name: "Notifications", tasks: [{ content: "Add new-mail alerts", status: "in_progress" }] },
 ];
 

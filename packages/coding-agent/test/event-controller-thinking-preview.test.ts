@@ -128,7 +128,7 @@ function liveSession(message: AssistantMessage | null = null, activeThinkingInde
 		get state() {
 			return agent.state;
 		},
-		subscribe(listener) {
+		subscribeLocal(listener) {
 			listeners.push(listener);
 			return () => {};
 		},

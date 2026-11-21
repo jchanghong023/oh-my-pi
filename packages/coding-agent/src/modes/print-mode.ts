@@ -13,7 +13,11 @@ import { HINDSIGHT_NOTICE_SOURCE } from "../hindsight/state";
 import type { MCPManager } from "../mcp/manager";
 import { resolveMCPTimeoutMs } from "../mcp/timeout";
 import { MNEMOPI_NOTICE_SOURCE } from "../mnemopi/embedding-notice";
-import { type AgentSession, type AgentSessionEvent, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../session/agent-session";
+import {
+	type AgentSession,
+	type LocalAgentSessionEvent,
+	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
+} from "../session/agent-session";
 import type { PromptOptions } from "../session/agent-session-types";
 import { toWireEvent } from "../session/loop-end-wire";
 import { COST_GATE_NOTICE_SOURCE } from "../session/cost-gate";
@@ -93,7 +97,7 @@ function stripProviderPayload<T extends AgentMessage>(message: T): T {
  * - Loop pauses and the run's end keep the JSON stream's per-loop `agent_end`
  *   shape (`isTerminal`, `yielded`, `awaitingAsyncWork`; see `loop-end-wire.ts`).
  */
-export function printableEvent(sessionEvent: AgentSessionEvent): unknown {
+export function printableEvent(sessionEvent: LocalAgentSessionEvent): unknown {
 	const event = toWireEvent(sessionEvent);
 	switch (event.type) {
 		case "tool_stream_update":
@@ -397,7 +401,7 @@ async function runPrintModeCore(
 	});
 
 	// Always subscribe to enable session persistence via _handleAgentEvent
-	session.subscribe(event => {
+	session.subscribeLocal(event => {
 		// In JSON mode, output all events
 		if (mode === "json") {
 			stdout.writeLine(`${JSON.stringify(printableEvent(event))}\n`);

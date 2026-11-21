@@ -295,7 +295,7 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 		).toBe(true);
 		for (const request of childRequests) expect(occurrences(request, instruction)).toBe(0);
 		expect(notices(h.session).map(message => JSON.stringify(message))).toEqual([original]);
-		expect(h.session.getGoalModeState()).toMatchObject({
+		expect(h.session.getLocalGoalModeState()).toMatchObject({
 			enabled: true,
 			autoOrchestrate: true,
 			goal: { status: "active", objective },

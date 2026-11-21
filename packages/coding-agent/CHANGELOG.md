@@ -4,7 +4,7 @@
 
 ### Breaking Changes
 
-- Restored upstream RPC wire and command dispatch. Fork-only RPC modes, blocked Todo fields and manual compaction operation IDs are no longer exposed; native TUI and ACP commands remain available.
+- Restored the upstream RPC contract.
 - Removed `/webgui` and `omp webgui`, including the bundled ZCode frontend. Native TUI, RPC, `/sketch`, and Collab Web remain available.
 - Removed the retired ZCode SDK method `AgentSession.withExecutionModel()` and its private request recovery. Session-scoped `setModelTemporary()` and explicit SDK request hooks remain available.
 - Removed the fork-only `Settings.saveUserModelRole()` and `ModelRoleConflictError`; use upstream `setModelRole()` and `flush()` for ordinary role changes.

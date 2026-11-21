@@ -15,7 +15,8 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessageEvent, ImageContent, Model, Usage } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
-import type { RpcGoalModeState, RpcGoalResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
+import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
+import type { RpcGoalResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
 import type { RpcMessagesPage } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-messages";
 import type {
 	RpcAbortAndRestoreQueueResult,
@@ -57,8 +58,6 @@ import type {
 	RpcSubagentMessagesResult,
 	RpcSubagentProgressFrame,
 	RpcSubagentSnapshot,
-	RpcTodoItem,
-	RpcTodoPhase,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type * as Wire from "@oh-my-pi/pi-coding-agent/modes/rpc/wire/rpc-wire.generated";
 import type { RestoredQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
@@ -68,6 +67,7 @@ import type { UsageLimitState } from "@oh-my-pi/pi-coding-agent/session/usage-li
 import type { ContextUsage } from "@oh-my-pi/pi-tui/status-line/types";
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
+import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 
 type Assert<T extends true> = T;
 type Leaf = string | number | boolean | null;
@@ -133,7 +133,6 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : { left: A; right: 
 // --- Commands -------------------------------------------------------------
 
 type CommandName = RpcCommand["type"];
-
 type ServerParams<K extends CommandName> = Omit<Extract<RpcCommand, { type: K }>, "id" | "type">;
 type ServerResult<K extends CommandName> =
 	Extract<RpcResponse, { command: K; success: true }> extends infer R
@@ -178,11 +177,12 @@ export type CommandNullability = Assert<
 
 type ServerEventType = RpcAgentSessionEventFrame["type"];
 export type SessionEventSet = Assert<Same<Wire.RpcAgentEvent["type"], ServerEventType>>;
-
-type ServerEvent<K extends ServerEventType> = Extract<RpcAgentSessionEventFrame, { type: K }>;
 export type SessionEvents = Assert<
 	AllTrue<{
-		[K in Wire.RpcAgentEvent["type"]]: Outbound<ServerEvent<K>, Extract<Wire.RpcAgentEvent, { type: K }>>;
+		[K in ServerEventType]: Outbound<
+			Extract<RpcAgentSessionEventFrame, { type: K }>,
+			Extract<Wire.RpcAgentEvent, { type: K }>
+		>;
 	}>
 >;
 
@@ -256,12 +256,12 @@ export type State = Assert<
 		queuedMessages: Outbound<RpcSessionState["queuedMessages"], Wire.QueuedMessagesState>;
 		dumpTool: Outbound<NonNullable<RpcSessionState["dumpTools"]>[number], Wire.ToolDescriptor>;
 		contextUsage: Outbound<ContextUsage, Wire.ContextUsage>;
-		todoPhase: Outbound<RpcTodoPhase, Wire.TodoPhase>;
-		todoItem: Outbound<RpcTodoItem, Wire.TodoItem>;
-		todoPhaseInbound: Inbound<Wire.TodoPhase, RpcTodoPhase>;
-		todoItemInbound: Inbound<Wire.TodoItem, RpcTodoItem>;
+		todoPhase: Outbound<TodoPhase, Wire.TodoPhase>;
+		todoItem: Outbound<TodoItem, Wire.TodoItem>;
+		todoPhaseInbound: Inbound<Wire.TodoPhase, TodoPhase>;
+		todoItemInbound: Inbound<Wire.TodoItem, TodoItem>;
 		goal: Outbound<Goal, Wire.Goal>;
-		goalModeState: Outbound<RpcGoalModeState, Wire.GoalModeState>;
+		goalModeState: Outbound<GoalModeState, Wire.GoalModeState>;
 		goalResult: Outbound<RpcGoalResult, Wire.GoalResult>;
 		usageLimitLowPriority: Outbound<Extract<UsageLimitState, { stage: "low_priority" }>, Wire.UsageLimitLowPriority>;
 		usageLimitWrapUp: Outbound<Extract<UsageLimitState, { stage: "wrap_up" }>, Wire.UsageLimitWrapUp>;

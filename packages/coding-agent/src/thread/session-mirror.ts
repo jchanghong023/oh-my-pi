@@ -23,7 +23,7 @@ import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort, ImageContent, Model, ServiceTierByFamily, ToolResultMessage, UsageReport } from "@oh-my-pi/pi-ai";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { AsyncJobManagerApi } from "../async";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -31,7 +31,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import type { OverlayLayers, Settings } from "../config/settings";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
-import type { GoalModeState } from "../goals/state";
+import type { LocalGoalModeState } from "../goals/state";
 import type {
 	AgentSessionAdvisorOverview,
 	AgentSessionHandle,
@@ -40,7 +40,11 @@ import type {
 	LiveToolOutputStamp,
 	ToolExecutionUpdateEvent,
 } from "../session/agent-session-handle";
-import type { AgentSessionEvent, AgentSessionEventListener, ModelStage } from "../session/agent-session-events";
+import type {
+	LocalAgentSessionEvent,
+	LocalAgentSessionEventListener,
+	ModelStage,
+} from "../session/agent-session-events";
 import type {
 	AgentSessionDisposeOptions,
 	EphemeralTurnOptions,
@@ -182,10 +186,10 @@ export interface SessionViewState {
 	fastModeActive: boolean;
 	anthropicSlowModeLabel: string | undefined;
 	prewalk: Prewalk | undefined;
-	goalMode: GoalModeState | undefined;
+	goalMode: LocalGoalModeState | undefined;
 	advisorCost: number;
 	advisorUsingSubscription: boolean;
-	todoPhases: TodoPhase[];
+	todoPhases: LocalTodoPhase[];
 	queuedMessages: SessionQueuedMessages;
 	restorableQueue: SessionRestorableQueue;
 	ephemeralMaxTokensPreservesRequest: boolean;
@@ -256,7 +260,7 @@ export type SessionHostProtocol = {
 	 * never be delivered.
 	 */
 	popQueuedMessage: RpcMethod<[id: string], void>;
-	setTodoPhases: RpcMethod<[phases: TodoPhase[]], void>;
+	setTodoPhases: RpcMethod<[phases: LocalTodoPhase[]], void>;
 	appendCustomEntry: RpcMethod<[customType: string, data: unknown], void>;
 	appendModelUsage: RpcMethod<[usage: ModelUsageRecord, owner: { sessionId: string; parentId: string | null }], void>;
 	flushSession: RpcMethod<[], void>;
@@ -292,7 +296,7 @@ export type SessionBridgeProtocol = {
 	opened: RpcMethod<[opened: SessionOpened], void>;
 	patch: RpcMethod<[key: string, patch: Partial<SessionMirrorState>], void>;
 	messages: RpcMethod<[key: string, delta: SessionMessagesDelta], void>;
-	event: RpcMethod<[key: string, event: AgentSessionEvent, outputStamp: LiveToolOutputStamp | undefined], void>;
+	event: RpcMethod<[key: string, event: LocalAgentSessionEvent, outputStamp: LiveToolOutputStamp | undefined], void>;
 	runState: RpcMethod<[key: string, state: SessionRunState, at: number], void>;
 	/**
 	 * Watch started: the full view state, and what main's entry list (kept across
@@ -311,7 +315,7 @@ export type SessionBridgeProtocol = {
 	read: RpcMethod<[session: AgentSessionHandle, fields: readonly PeerStateField[]], Partial<SessionMirrorState>>;
 	readMessages: RpcMethod<[session: AgentSessionHandle], AgentMessage[]>;
 	hasQueuedIrcFrom: RpcMethod<[session: AgentSessionHandle, from: string], boolean>;
-	subscribe: RpcMethod<[session: AgentSessionHandle, listener: AgentSessionEventListener], () => void>;
+	subscribe: RpcMethod<[session: AgentSessionHandle, listener: LocalAgentSessionEventListener], () => void>;
 	subscribeRunState: RpcMethod<[session: AgentSessionHandle, listener: (state: SessionRunState) => void], () => void>;
 	prompt: RpcMethod<[session: AgentSessionHandle, text: string, options?: PromptOptions], boolean>;
 	steer: RpcMethod<[session: AgentSessionHandle, text: string, images?: ImageContent[], options?: SteerOptions], void>;

@@ -5,7 +5,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { CursorExecHandlers } from "@oh-my-pi/pi-coding-agent/cursor";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { getLatestTodoPhasesFromEntries, USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
-import { type TodoPhase, todoToolRenderer } from "@oh-my-pi/pi-tui/tools/todo";
+import { type LocalTodoPhase, todoToolRenderer } from "@oh-my-pi/pi-tui/tools/todo";
 import { buildSessionContext } from "../src/session/session-context";
 import type { SessionEntry } from "../src/session/session-entries";
 
@@ -15,13 +15,13 @@ interface Harness {
 	handlers: CursorExecHandlers;
 	entries: SessionEntry[];
 	events: AgentEvent[];
-	current: () => TodoPhase[];
-	reload: () => TodoPhase[];
+	current: () => LocalTodoPhase[];
+	reload: () => LocalTodoPhase[];
 	/** Replays `event-controller.ts`'s todo refresh over the emitted events. */
-	uiTodos: () => TodoPhase[] | null;
+	uiTodos: () => LocalTodoPhase[] | null;
 }
 
-function newHarness(initial: TodoPhase[] = []): Harness {
+function newHarness(initial: LocalTodoPhase[] = []): Harness {
 	const entries: SessionEntry[] = [];
 	const events: AgentEvent[] = [];
 	let phases = initial;
@@ -49,10 +49,10 @@ function newHarness(initial: TodoPhase[] = []): Harness {
 		// Mirrors `AgentSession.#syncTodoPhasesFromBranch`, the reload path.
 		reload: () => getLatestTodoPhasesFromEntries(entries),
 		uiTodos: () => {
-			let todos: TodoPhase[] | null = null;
+			let todos: LocalTodoPhase[] | null = null;
 			for (const event of events) {
 				if (event.type !== "tool_execution_end" || event.toolName !== "todo" || event.isError) continue;
-				const details = event.result.details as { phases?: TodoPhase[] } | undefined;
+				const details = event.result.details as { phases?: LocalTodoPhase[] } | undefined;
 				if (details?.phases) todos = details.phases;
 			}
 			return todos;
@@ -62,7 +62,7 @@ function newHarness(initial: TodoPhase[] = []): Harness {
 
 describe("todo snapshots with blocked tasks", () => {
 	it("preserves blocked status and its blocker in both user-edit and tool-result entries", () => {
-		const saved: TodoPhase[] = [
+		const saved: LocalTodoPhase[] = [
 			{ name: "Work", tasks: [{ content: "wait", status: "blocked", blocker: "approval" }] },
 		];
 		const userEdit = { type: "custom", customType: USER_TODO_EDIT_CUSTOM_TYPE, data: { phases: saved } };

@@ -11,13 +11,13 @@ import {
 	type RegistryEvent,
 } from "../../registry/agent-registry";
 import { type AgentViewSession, isAgentViewSession } from "../../session/agent-session-handle";
-import type { AgentSessionEvent } from "../../session/agent-session";
+import type { LocalAgentSessionEvent } from "../../session/agent-session";
 import { sameMessageContent, sessionMessagePersistenceKey } from "../../session/turn-persistence";
 import { setRunStatus } from "../../utils/run-status";
 import type { InteractiveModeContext } from "../types";
 
 /** Whether a rebuild's own reads of the session already show `event`, the `arrival`-th it emitted. */
-type ShownByRebuild = (event: AgentSessionEvent, arrival: number) => boolean;
+type ShownByRebuild = (event: LocalAgentSessionEvent, arrival: number) => boolean;
 
 /**
  * A message's identity candidate in both the rebuilt transcript and live events. An extension
@@ -237,7 +237,7 @@ export class SessionFocusController {
 			// reads of `target` already show, so nothing is drawn twice or into a replaced chat.
 			let arrivals = 0;
 			let shown: ShownByRebuild | undefined;
-			this.ctx.unsubscribe = target.subscribe(event => {
+			this.ctx.unsubscribe = target.subscribeLocal(event => {
 				const arrival = ++arrivals;
 				const streamMessage = target.agent.state.streamMessage;
 				return this.#runSerialized(generation, async () => {

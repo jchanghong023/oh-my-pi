@@ -40,7 +40,7 @@ function makeHostContext(manager: SessionManager): InteractiveModeContext {
 			sessionName: "host session",
 			model: undefined,
 			thinkingLevel: undefined,
-			subscribe: () => () => {},
+			subscribeLocal: () => () => {},
 			emitNotice: () => {},
 			promptCustomMessage: () => Promise.resolve(),
 			abort: () => Promise.resolve(),

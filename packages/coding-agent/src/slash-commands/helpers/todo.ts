@@ -1,4 +1,4 @@
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import {
 	applyOpsToPhases,
 	getLatestTodoPhasesFromEntries,
@@ -13,7 +13,7 @@ type TodoMutationVerb = "done" | "drop" | "rm";
 
 interface TodoTaskMatch {
 	task: { content: string; status: string };
-	phase: TodoPhase;
+	phase: LocalTodoPhase;
 }
 
 function tokenize(input: string): string[] {
@@ -57,7 +57,7 @@ function titleCaseSentence(text: string): string {
 	return trimmed[0].toUpperCase() + trimmed.slice(1);
 }
 
-function findPhaseFuzzy(phases: TodoPhase[], query: string): TodoPhase | undefined {
+function findPhaseFuzzy(phases: LocalTodoPhase[], query: string): LocalTodoPhase | undefined {
 	const normalizedQuery = query.trim().toLowerCase();
 	if (!normalizedQuery) return undefined;
 	const exact = phases.find(phase => phase.name.toLowerCase() === normalizedQuery);
@@ -69,7 +69,7 @@ function findPhaseFuzzy(phases: TodoPhase[], query: string): TodoPhase | undefin
 	return undefined;
 }
 
-function findTaskFuzzy(phases: TodoPhase[], query: string): TodoTaskMatch | undefined {
+function findTaskFuzzy(phases: LocalTodoPhase[], query: string): TodoTaskMatch | undefined {
 	const normalizedQuery = query.trim().toLowerCase();
 	if (!normalizedQuery) return undefined;
 	for (const phase of phases) {
@@ -89,12 +89,12 @@ function findTaskFuzzy(phases: TodoPhase[], query: string): TodoTaskMatch | unde
 	return undefined;
 }
 
-function currentPhases(runtime: SlashCommandRuntime): TodoPhase[] {
+function currentPhases(runtime: SlashCommandRuntime): LocalTodoPhase[] {
 	const fromEntries = getLatestTodoPhasesFromEntries(runtime.sessionManager.getBranch());
-	return fromEntries.length > 0 ? fromEntries : runtime.session.getTodoPhases();
+	return fromEntries.length > 0 ? fromEntries : runtime.session.getLocalTodoPhases();
 }
 
-function commitTodos(runtime: SlashCommandRuntime, phases: TodoPhase[]): void {
+function commitTodos(runtime: SlashCommandRuntime, phases: LocalTodoPhase[]): void {
 	runtime.session.commitTodoPhases(phases);
 }
 
@@ -163,7 +163,7 @@ async function handleTodoAppendCommand(restArgs: string, runtime: SlashCommandRu
 	const phaseName = tokens.length === 1 ? undefined : tokens[0];
 	const content = tokens.length === 1 ? tokens[0]! : tokens.slice(1).join(" ");
 	const next = current.map(phase => ({ ...phase, tasks: phase.tasks.slice() }));
-	let targetPhase: TodoPhase;
+	let targetPhase: LocalTodoPhase;
 
 	if (phaseName) {
 		const existing = findPhaseFuzzy(next, phaseName);

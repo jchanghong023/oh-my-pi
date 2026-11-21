@@ -3,14 +3,14 @@ import goalBudgetLimitPrompt from "../prompts/goals/goal-budget-limit.md" with {
 import goalContinuationPrompt from "../prompts/goals/goal-continuation.md" with { type: "text" };
 import goalModeActivePrompt from "../prompts/goals/goal-mode-active.md" with { type: "text" };
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
-import type { GoalBudgetSteering, GoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "./state";
+import type { GoalBudgetSteering, LocalGoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "./state";
 
 export interface GoalRuntimeHost {
-	getState(): GoalModeState | undefined;
-	setState(state: GoalModeState | undefined): void;
+	getState(): LocalGoalModeState | undefined;
+	setState(state: LocalGoalModeState | undefined): void;
 	getCurrentUsage(): GoalTokenUsage;
 	emit(event: GoalRuntimeEvent): void | Promise<void>;
-	persist(mode: "goal" | "goal_paused" | "none", state?: GoalModeState): void;
+	persist(mode: "goal" | "goal_paused" | "none", state?: LocalGoalModeState): void;
 	sendHiddenMessage(message: {
 		customType: string;
 		content: string;
@@ -48,7 +48,7 @@ function cloneGoal(goal: Goal): Goal {
 	return { ...goal };
 }
 
-function cloneState(state: GoalModeState): GoalModeState {
+function cloneState(state: LocalGoalModeState): LocalGoalModeState {
 	return { ...state, goal: cloneGoal(state.goal) };
 }
 
@@ -175,13 +175,13 @@ export class GoalRuntime {
 		}
 	}
 
-	#getStateClone(): GoalModeState | undefined {
+	#getStateClone(): LocalGoalModeState | undefined {
 		const state = this.#host.getState();
 		return state ? cloneState(state) : undefined;
 	}
 
 	async #commitState(
-		state: GoalModeState | undefined,
+		state: LocalGoalModeState | undefined,
 		options?: { persist?: "goal" | "goal_paused" | "none"; emit?: boolean; transition?: string },
 	): Promise<void> {
 		const previous = this.#host.getState();
@@ -335,7 +335,7 @@ export class GoalRuntime {
 		});
 	}
 
-	async onThreadResumed(options?: { preserveActiveGoal?: boolean }): Promise<GoalModeState | undefined> {
+	async onThreadResumed(options?: { preserveActiveGoal?: boolean }): Promise<LocalGoalModeState | undefined> {
 		const state = this.#getStateClone();
 		if (!state) return undefined;
 		if (options?.preserveActiveGoal && state.enabled && state.goal.status === "active") {
@@ -361,7 +361,7 @@ export class GoalRuntime {
 		return state;
 	}
 
-	async onBudgetMutated(newBudget: number | undefined): Promise<GoalModeState | undefined> {
+	async onBudgetMutated(newBudget: number | undefined): Promise<LocalGoalModeState | undefined> {
 		validateTokenBudget(newBudget);
 		return await this.#withAccounting(async () => {
 			this.#budgetReportedFor = undefined;
@@ -476,7 +476,7 @@ export class GoalRuntime {
 		await this.#withAccounting(() => this.#flushUsageLocked(steering, currentUsage));
 	}
 
-	#createGoalState(objective: string, tokenBudget: number | undefined, autoOrchestrate?: boolean): GoalModeState {
+	#createGoalState(objective: string, tokenBudget: number | undefined, autoOrchestrate?: boolean): LocalGoalModeState {
 		const now = this.#now();
 		const goal: Goal = {
 			id: String(Snowflake.next()),
@@ -491,9 +491,12 @@ export class GoalRuntime {
 		return { enabled: true, mode: "active", autoOrchestrate: autoOrchestrate === true ? true : undefined, goal };
 	}
 
-	async createGoal(input: GoalStartInput): Promise<GoalModeState>;
-	async createGoal(input: GoalStartInput, isCurrent: (() => boolean) | undefined): Promise<GoalModeState | undefined>;
-	async createGoal(input: GoalStartInput, isCurrent?: () => boolean): Promise<GoalModeState | undefined> {
+	async createGoal(input: GoalStartInput): Promise<LocalGoalModeState>;
+	async createGoal(
+		input: GoalStartInput,
+		isCurrent: (() => boolean) | undefined,
+	): Promise<LocalGoalModeState | undefined>;
+	async createGoal(input: GoalStartInput, isCurrent?: () => boolean): Promise<LocalGoalModeState | undefined> {
 		const objective = input.objective.trim();
 		if (!objective) throw new Error("objective is required when op=create");
 		validateTokenBudget(input.tokenBudget);
@@ -513,9 +516,12 @@ export class GoalRuntime {
 		});
 	}
 
-	async replaceGoal(input: GoalStartInput): Promise<GoalModeState>;
-	async replaceGoal(input: GoalStartInput, isCurrent: (() => boolean) | undefined): Promise<GoalModeState | undefined>;
-	async replaceGoal(input: GoalStartInput, isCurrent?: () => boolean): Promise<GoalModeState | undefined> {
+	async replaceGoal(input: GoalStartInput): Promise<LocalGoalModeState>;
+	async replaceGoal(
+		input: GoalStartInput,
+		isCurrent: (() => boolean) | undefined,
+	): Promise<LocalGoalModeState | undefined>;
+	async replaceGoal(input: GoalStartInput, isCurrent?: () => boolean): Promise<LocalGoalModeState | undefined> {
 		const objective = input.objective.trim();
 		if (!objective) throw new Error("objective is required when op=replace");
 		validateTokenBudget(input.tokenBudget);
@@ -537,7 +543,7 @@ export class GoalRuntime {
 		});
 	}
 
-	async resumeGoal(): Promise<GoalModeState> {
+	async resumeGoal(): Promise<LocalGoalModeState> {
 		return await this.#withAccounting(async () => {
 			const state = this.#getStateClone();
 			if (!state?.goal) throw new Error("No paused goal.");
@@ -557,7 +563,7 @@ export class GoalRuntime {
 		});
 	}
 
-	async pauseGoal(): Promise<GoalModeState | undefined> {
+	async pauseGoal(): Promise<LocalGoalModeState | undefined> {
 		return await this.#withAccounting(async () => {
 			await this.#flushUsageLocked("suppressed");
 			const state = this.#getStateClone();

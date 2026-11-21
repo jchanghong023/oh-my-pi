@@ -51,7 +51,7 @@ function makeFixture(): Fixture {
 			sessionName: "no-peer-test",
 			model: undefined,
 			thinkingLevel: undefined,
-			subscribe: (cb: Fixture["emit"]) => {
+			subscribeLocal: (cb: Fixture["emit"]) => {
 				fixture.emit = cb;
 				return () => {};
 			},

@@ -14,7 +14,7 @@ import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { JobWidgetEntry } from "@oh-my-pi/pi-tui/tools/job-widget";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { ModelRegistry } from "../config/model-registry";
@@ -22,13 +22,18 @@ import type { Settings } from "../config/settings";
 import type { ExtensionRunner } from "../extensibility/extensions";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
-import type { GoalModeState } from "../goals/state";
+import type { GoalModeState, LocalGoalModeState } from "../goals/state";
 import type { TokenRateMeter } from "../utils/token-rate";
 import type { AgentDefinition } from "../task/types";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import { currentThreadId } from "../thread/identity";
 import type { AgentSession } from "./agent-session";
-import type { AgentSessionEvent, AgentSessionEventListener, ModelStage } from "./agent-session-events";
+import type {
+	AgentSessionEventListener,
+	LocalAgentSessionEvent,
+	LocalAgentSessionEventListener,
+	ModelStage,
+} from "./agent-session-events";
 import type { TurnFileChanges } from "./latest-turn-file-changes";
 import type {
 	AgentSessionDisposeOptions,
@@ -132,6 +137,7 @@ export interface AgentSessionHandle {
 	readonly hindsightActive: boolean;
 	/** Subscribe to every session event; returns the unsubscribe function. */
 	subscribe(listener: AgentSessionEventListener): () => void;
+	subscribeLocal(listener: LocalAgentSessionEventListener): () => void;
 	/** Subscribe to authoritative running/idle transitions; returns the unsubscribe function. */
 	subscribeRunState(listener: (state: "running" | "idle") => void): () => void;
 	/** Token, request, tool, and cost totals of the session. */
@@ -229,7 +235,7 @@ export interface AgentViewState {
 }
 
 /** Live `tool_execution_update` event replayed when the TUI attaches mid-tool. */
-export type ToolExecutionUpdateEvent = Extract<AgentSessionEvent, { type: "tool_execution_update" }>;
+export type ToolExecutionUpdateEvent = Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>;
 
 /** Display-only facts retained from actual dispatch, independent of transcript card lifetime. */
 export interface LiveToolOutputSnapshot {
@@ -367,6 +373,7 @@ export interface AgentViewSession extends AgentSessionHandle {
 	getPrewalkState(): Prewalk | undefined;
 	/** Goal-mode state. */
 	getGoalModeState(): GoalModeState | undefined;
+	getLocalGoalModeState(): LocalGoalModeState | undefined;
 	/** Total advisor cost. */
 	getAdvisorCost(): number;
 	/** Whether advisors bill through a subscription. */
@@ -386,11 +393,11 @@ export interface AgentViewSession extends AgentSessionHandle {
 	/** Ask running jobs to refresh their captions. */
 	requestJobCaptions(): void;
 	/** Todo phases of the session. */
-	getTodoPhases(): TodoPhase[];
+	getLocalTodoPhases(): LocalTodoPhase[];
 	/** Replace the todo phases of the session. */
-	setTodoPhases(phases: TodoPhase[]): void;
+	setTodoPhases(phases: LocalTodoPhase[]): void;
 	/** Replace the list from outside the `todo` tool: update the cache and record a `user_todo_edit` entry so reloads keep it. */
-	commitTodoPhases(phases: TodoPhase[]): void;
+	commitTodoPhases(phases: LocalTodoPhase[]): void;
 	/** Registered tool by name. */
 	getToolByName(name: string): AgentTool | undefined;
 	/** Whether a built-in tool with this name is registered. */

@@ -244,7 +244,7 @@ describe("EventController + Cursor todo bridge", () => {
 		const f = createFixture();
 		const recorded = [{ name: "Old", tasks: [{ content: "Earlier", status: "completed" }] }];
 		const current = [{ name: "Current", tasks: [{ content: "Later", status: "in_progress" as const }] }];
-		f.ctx.viewSession.getTodoPhases = () => current;
+		f.ctx.viewSession.getLocalTodoPhases = () => current;
 
 		await f.controller.handleEvent(evalEnd("eval-todo-1", [{ op: "todo", committed: true, phases: recorded }]));
 
@@ -255,7 +255,7 @@ describe("EventController + Cursor todo bridge", () => {
 		// Current eval results keep status events on each cell only, with no call-level copy.
 		const f = createFixture();
 		const current = [{ name: "Current", tasks: [{ content: "Later", status: "in_progress" as const }] }];
-		f.ctx.viewSession.getTodoPhases = () => current;
+		f.ctx.viewSession.getLocalTodoPhases = () => current;
 		const end = evalEnd("eval-todo-cell");
 		end.result.details = {
 			cells: [{ statusEvents: [{ op: "read" }] }, { statusEvents: [{ op: "todo", committed: true }] }],
@@ -269,7 +269,7 @@ describe("EventController + Cursor todo bridge", () => {
 	it("keeps the Todo panel current when Eval fails after a nested update", async () => {
 		const f = createFixture();
 		const current = [{ name: "Current", tasks: [{ content: "Committed", status: "completed" as const }] }];
-		f.ctx.viewSession.getTodoPhases = () => current;
+		f.ctx.viewSession.getLocalTodoPhases = () => current;
 
 		await f.controller.handleEvent(evalEnd("eval-todo-error", [{ op: "todo", committed: true }], true));
 
@@ -277,7 +277,7 @@ describe("EventController + Cursor todo bridge", () => {
 	});
 	it("does not restart Todo auto-clear after a nested read-only view", async () => {
 		const f = createFixture();
-		f.ctx.viewSession.getTodoPhases = () => [];
+		f.ctx.viewSession.getLocalTodoPhases = () => [];
 		await f.controller.handleEvent(evalEnd("eval-todo-view", [{ op: "todo", committed: false }]));
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
 	});

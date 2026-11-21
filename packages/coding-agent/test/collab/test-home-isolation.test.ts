@@ -64,7 +64,7 @@ function makeHostContext(sessionId: string): InteractiveModeContext {
 			sessionName: "isolation-test",
 			model: undefined,
 			thinkingLevel: undefined,
-			subscribe: () => () => {},
+			subscribeLocal: () => () => {},
 			emitNotice: () => {},
 			promptCustomMessage: () => Promise.resolve(),
 			abort: () => Promise.resolve(),

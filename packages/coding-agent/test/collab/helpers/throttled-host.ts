@@ -66,7 +66,7 @@ export function makeHostContext(snapshot: Snapshot, seen: HostObservations): Int
 			sessionName: "queue",
 			model: undefined,
 			thinkingLevel: undefined,
-			subscribe: (listener: (event: unknown) => void) => {
+			subscribeLocal: (listener: (event: unknown) => void) => {
 				listeners.push(listener);
 				return () => {
 					const at = listeners.indexOf(listener);

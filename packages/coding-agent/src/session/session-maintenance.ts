@@ -83,7 +83,7 @@ import { CHAT_MODEL_ROLE_IDS } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import type { ExtensionRunner, SessionBeforeCompactResult } from "../extensibility/extensions";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
-import type { GoalModeState } from "../goals/state";
+import type { LocalGoalModeState } from "../goals/state";
 import { resolveMemoryBackend } from "../memory-backend/resolve";
 import type { MemoryBackendOperationContext } from "../memory-backend/types";
 import { customMessageEntryMessage } from "@oh-my-pi/pi-tui/chat/transcript-entry";
@@ -91,7 +91,7 @@ import { computeNonMessageTokens, type NonMessageTokenSource } from "@oh-my-pi/p
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import { isCompleteReadResult } from "../tools/read-supersede";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
-import type { AgentSessionEvent } from "./agent-session-events";
+import type { LocalAgentSessionEvent } from "./agent-session-events";
 import type { ContextUsageBreakdown } from "./agent-session-types";
 import type { CacheBridgeEstimate, CacheBridgeOutcome } from "./cache-warmer";
 import { findCompactMode } from "./compact-modes";
@@ -554,14 +554,14 @@ export interface SessionMaintenanceHost {
 	sessionId(): string;
 	messages(): AgentMessage[];
 	baseSystemPrompt(): string[];
-	goalModeState(): GoalModeState | undefined;
+	goalModeState(): LocalGoalModeState | undefined;
 	planReferencePath(): string;
 	nonMessageTokenSource(): NonMessageTokenSource;
 	hasExperimentalContextRolloverTools(): boolean;
 	takeExperimentalContextRolloverRequest(context: AgentTurnEndContext | undefined): boolean;
 	queueExperimentalContextNotesReminder(prompt: string): void;
 	memoryBackendSession(): MemoryBackendOperationContext["session"];
-	emitSessionEvent(event: AgentSessionEvent, options?: { detachExtensions?: boolean }): Promise<void>;
+	emitSessionEvent(event: LocalAgentSessionEvent, options?: { detachExtensions?: boolean }): Promise<void>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	scheduleAgentContinue(options: {
 		source: string;
@@ -783,7 +783,7 @@ export class SessionMaintenance {
 		};
 	}
 
-	get #goalModeState(): GoalModeState | undefined {
+	get #goalModeState(): LocalGoalModeState | undefined {
 		return this.#host.goalModeState();
 	}
 
@@ -871,7 +871,7 @@ export class SessionMaintenance {
 	 * fan-out for post-commit events; ordered subscriber delivery still completes
 	 * before maintenance returns.
 	 */
-	#emitLifecycleEvent(event: AgentSessionEvent, detach: boolean, fallback = false): Promise<void> {
+	#emitLifecycleEvent(event: LocalAgentSessionEvent, detach: boolean, fallback = false): Promise<void> {
 		if (event.type === "auto_compaction_start") {
 			this.#autoCompactionStartedAt.set(logger.getLogContext(), performance.now());
 			logger.info("Automatic compaction started", {

@@ -19,7 +19,7 @@ import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format
 import { getPaddingX, padding, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import type { AgentSessionEvent } from "../session/agent-session";
+import type { LocalAgentSessionEvent } from "../session/agent-session";
 import type { LiveToolOutputPreview, LiveToolOutputSnapshot } from "../session/agent-session-handle";
 import { isToolOutputRow, toolOutputSource } from "../session/live-tool-output-text";
 import { formatPathRelativeToCwd } from "../tools/path-utils";
@@ -148,7 +148,7 @@ export class CompactToolOutputPreview implements Component {
 	}
 
 	/** Synchronize even without a visible paint; close only after tool completion and activity stop. */
-	observe(event: AgentSessionEvent): void {
+	observe(event: LocalAgentSessionEvent): void {
 		if (
 			event.type === "tool_execution_start" ||
 			event.type === "tool_execution_update" ||

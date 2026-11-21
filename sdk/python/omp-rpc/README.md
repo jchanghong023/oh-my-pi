@@ -19,16 +19,6 @@ provides:
   observation and control, live voice, OAuth login, handoff, and composer word prediction
 - typed host-tool helpers so Python RPC owners can expose custom tools with JSON Schema metadata
 
-## Tests in this repository
-
-From the repository root, `bun run robomp:install` installs the SDK and robomp
-development dependencies. `bun run test:py` runs their ordinary pytest suites
-on supported platforms. Python suites are excluded from default `bun run fulltest`;
-`bun run fulltest --full` includes the current platform's supported Python suites.
-The manual CI workflow builds and packages without running tests. Robomp integration
-tests remain a separate opt-in `bun run robomp:test:integration` and are not enabled
-by ordinary test runs.
-
 ## Generated from the wire schema
 
 Protocol types, their decoders, every command method, and every `on_<frame type>`

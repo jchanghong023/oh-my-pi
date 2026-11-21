@@ -143,6 +143,8 @@ export function createSessionStub(
 		getEnabledToolNames: () => [],
 		getContextUsage: () => undefined,
 		getGoalModeState: () => undefined,
+		getLocalGoalModeState: () => undefined,
+		getLocalTodoPhases: () => [],
 		getWorkspaceModeState: () => restoreWorkspaceModeState(sessionManager.getBranch()),
 		refreshMCPTools: vi.fn(async () => {}),
 		setMCPPromptCommands: vi.fn(),
@@ -157,6 +159,7 @@ export function createSessionStub(
 		getLatestTurnFileChanges: () => turnFileChanges,
 		modelStage: null,
 		subscribe: vi.fn(() => () => {}),
+		subscribeLocal: vi.fn(() => () => {}),
 	} satisfies SessionOverrides;
 	if (overrides) layer(stub, overrides);
 	return stub as unknown as AgentSession;

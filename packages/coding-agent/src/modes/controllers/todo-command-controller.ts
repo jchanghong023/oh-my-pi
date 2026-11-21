@@ -6,7 +6,7 @@ import {
 	phasesToMarkdown,
 	resolveTodoMarkdownPath,
 } from "../../tools/todo";
-import { type TodoItem, type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { type LocalTodoItem, type LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { copyToClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import type { InteractiveModeContext } from "../types";
@@ -74,7 +74,7 @@ function titleCase(s: string): string {
 // Fuzzy matching
 // =============================================================================
 
-function findPhaseFuzzy(phases: TodoPhase[], query: string): TodoPhase | undefined {
+function findPhaseFuzzy(phases: LocalTodoPhase[], query: string): LocalTodoPhase | undefined {
 	const q = query.trim().toLowerCase();
 	if (!q) return undefined;
 	// Exact name (case-insensitive)
@@ -88,7 +88,10 @@ function findPhaseFuzzy(phases: TodoPhase[], query: string): TodoPhase | undefin
 	return undefined;
 }
 
-function findTaskFuzzy(phases: TodoPhase[], query: string): { task: TodoItem; phase: TodoPhase } | undefined {
+function findTaskFuzzy(
+	phases: LocalTodoPhase[],
+	query: string,
+): { task: LocalTodoItem; phase: LocalTodoPhase } | undefined {
 	const q = query.trim().toLowerCase();
 	if (!q) return undefined;
 	// Exact content (case-insensitive)
@@ -97,7 +100,7 @@ function findTaskFuzzy(phases: TodoPhase[], query: string): { task: TodoItem; ph
 			if (task.content.toLowerCase() === q) return { task, phase };
 		}
 	}
-	const matches: Array<{ task: TodoItem; phase: TodoPhase }> = [];
+	const matches: Array<{ task: LocalTodoItem; phase: LocalTodoPhase }> = [];
 	for (const phase of phases) {
 		for (const task of phase.tasks) {
 			if (task.content.toLowerCase().includes(q)) {
@@ -116,7 +119,7 @@ function findTaskFuzzy(phases: TodoPhase[], query: string): { task: TodoItem; ph
 // Build system reminder
 // =============================================================================
 
-function buildSystemReminder(action: string, phases: TodoPhase[], removed = false): string {
+function buildSystemReminder(action: string, phases: LocalTodoPhase[], removed = false): string {
 	const md = phases.length === 0 ? "(empty)" : phasesToMarkdown(phases).trimEnd();
 	const lines = ["<system-reminder>", `The user manually modified the todo list (${action}).`];
 	if (removed) {
@@ -137,10 +140,10 @@ export class TodoCommandController {
 	 * True latest todo state for the user-facing /todo verbs. Reads from session
 	 * entries or falls back to the active session state.
 	 */
-	#currentPhases(): TodoPhase[] {
+	#currentPhases(): LocalTodoPhase[] {
 		const fromEntries = getLatestTodoPhasesFromEntries(this.ctx.sessionManager.getBranch());
 		if (fromEntries.length > 0) return fromEntries;
-		return this.ctx.session.getTodoPhases();
+		return this.ctx.session.getLocalTodoPhases();
 	}
 
 	async handleTodoCommand(args: string): Promise<void> {
@@ -280,7 +283,7 @@ export class TodoCommandController {
 		}
 
 		const next = current.map(phase => ({ ...phase, tasks: phase.tasks.slice() }));
-		let targetPhase: TodoPhase | undefined;
+		let targetPhase: LocalTodoPhase | undefined;
 
 		if (phaseName) {
 			targetPhase = findPhaseFuzzy(next, phaseName);
@@ -443,7 +446,7 @@ export class TodoCommandController {
 		}
 	}
 
-	#commit(nextPhases: TodoPhase[], action: string, opts?: { removed?: boolean }): void {
+	#commit(nextPhases: LocalTodoPhase[], action: string, opts?: { removed?: boolean }): void {
 		// Commit first so HUD visibility binds to the new canonical source.
 		this.ctx.session.commitTodoPhases(nextPhases);
 		this.ctx.setTodos(nextPhases);

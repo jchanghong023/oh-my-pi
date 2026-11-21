@@ -9,7 +9,7 @@
  * collab host's stream back into session events on the guest.
  */
 import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
-import type { AgentSessionEvent } from "./agent-session-events";
+import type { AgentSessionEvent, LocalAgentSessionEvent } from "./agent-session-events";
 
 type AgentEndEvent = Extract<AgentEvent, { type: "agent_end" }>;
 
@@ -25,9 +25,12 @@ export type WireAgentEnd = AgentEndEvent & {
 
 /** A session event as the wires carry it. */
 export type WireSessionEvent = Exclude<AgentSessionEvent, { type: "agent_pause" | "agent_end" }> | WireAgentEnd;
+type LocalWireSessionEvent = Exclude<LocalAgentSessionEvent, { type: "agent_pause" | "agent_end" }> | WireAgentEnd;
 
 /** Encode a session event for a wire: loop pauses and the run's end both become flagged `agent_end`s. */
-export function toWireEvent(event: AgentSessionEvent): WireSessionEvent {
+export function toWireEvent(event: AgentSessionEvent): WireSessionEvent;
+export function toWireEvent(event: LocalAgentSessionEvent): LocalWireSessionEvent;
+export function toWireEvent(event: LocalAgentSessionEvent): LocalWireSessionEvent {
 	if (event.type === "agent_pause") {
 		return {
 			type: "agent_end",
@@ -45,7 +48,7 @@ export function toWireEvent(event: AgentSessionEvent): WireSessionEvent {
  * Decode a wire event into a session event: an `agent_end` with `isTerminal: false`
  * is a pause; any other `agent_end` (hosts that omit the flags included) ends the run.
  */
-export function fromWireEvent(event: WireSessionEvent | AgentSessionEvent): AgentSessionEvent {
+export function fromWireEvent(event: LocalWireSessionEvent | LocalAgentSessionEvent): LocalAgentSessionEvent {
 	if (event.type !== "agent_end" || !("isTerminal" in event)) return event;
 	const { isTerminal, yielded, awaitingAsyncWork, ...end } = event;
 	if (isTerminal !== false) return end;

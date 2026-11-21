@@ -14,7 +14,6 @@ import {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "../../task";
 import type { EventBus } from "../../utils/event-bus";
-import { projectRpcSessionEvent } from "./rpc-session-events";
 import type {
 	RpcSubagentEventFrame,
 	RpcSubagentFrame,
@@ -257,12 +256,7 @@ export class RpcSubagentRegistry {
 	handleEvent(payload: SubagentEventPayload): void {
 		if (this.#staleSubagentIds.has(payload.id)) return;
 		if (this.#subscriptionLevel !== "events") return;
-		const event = projectRpcSessionEvent(payload.event);
-		if (!event) return;
-		this.#output({
-			type: "subagent_event",
-			payload: event === payload.event ? (payload as RpcSubagentEventFrame["payload"]) : { id: payload.id, event },
-		} satisfies RpcSubagentEventFrame);
+		this.#output({ type: "subagent_event", payload } satisfies RpcSubagentEventFrame);
 	}
 
 	resolveSessionFile(selector: RpcSubagentTranscriptSelector): string {

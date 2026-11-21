@@ -51,7 +51,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/collab/replication-shrink";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { LocalAgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { installTestCollabHome, uninstallTestCollabHome } from "./helpers/in-memory-relay";
@@ -221,7 +221,7 @@ function makeHostHarness(sessionManager: HostReplicationSource): HostHarness {
 			sessionName: "big",
 			model: undefined,
 			thinkingLevel: undefined,
-			subscribe: () => () => {},
+			subscribeLocal: () => () => {},
 			emitNotice: () => {},
 			promptCustomMessage: () => Promise.resolve(),
 			abort: () => Promise.resolve(),
@@ -297,7 +297,7 @@ function boundEntry(entry: ReplicatedEntry): ReplicatedEntry {
 }
 
 /** The bounded event, after checking its JSON is exactly what the frame would carry. */
-function boundEvent(event: AgentSessionEvent): AgentSessionEvent {
+function boundEvent(event: LocalAgentSessionEvent): LocalAgentSessionEvent {
 	const { value, json } = serializeReplicatedEvent(event);
 	expect(json).toBe(JSON.stringify(value));
 	return value;
@@ -544,7 +544,7 @@ describe("serializeReplicatedEntry (#11433)", () => {
 
 describe("serializeReplicatedEvent (#11433)", () => {
 	it("does not substitute a notice for an event that already fits", () => {
-		const event: AgentSessionEvent = { type: "agent_end", messages: [] } as unknown as AgentSessionEvent;
+		const event: LocalAgentSessionEvent = { type: "agent_end", messages: [] } as unknown as LocalAgentSessionEvent;
 		const shrunk = boundEvent(event);
 		expect(shrunk.type).toBe("agent_end");
 		expect(JSON.stringify(shrunk)).not.toContain("Host event omitted");
@@ -556,7 +556,7 @@ describe("serializeReplicatedEvent (#11433)", () => {
 			toolCallId: "call-1",
 			toolName: "read",
 			result: { text: "x".repeat(8 * 1024 * 1024) },
-		} as unknown as AgentSessionEvent;
+		} as unknown as LocalAgentSessionEvent;
 
 		const shrunk = boundEvent(event);
 		expect(shrunk).not.toBe(event);
@@ -574,7 +574,7 @@ describe("serializeReplicatedEvent (#11433)", () => {
 			toolCallId: "call-2",
 			toolName: "read",
 			result: { [giantKey]: 1 },
-		} as unknown as AgentSessionEvent;
+		} as unknown as LocalAgentSessionEvent;
 
 		const shrunk = boundEvent(event);
 		expect(shrunk.type).toBe("notice");

@@ -17,10 +17,10 @@ import type { CompactionPreparation, CompactionResult } from "@oh-my-pi/pi-agent
 import type { AssistantRetryRecovery, ImageContent, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import type { Rule } from "../capability/rule";
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
-import type { GoalModeState } from "../goals/state";
+import type { LocalGoalModeState } from "../goals/state";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "../session/session-entries";
 import type { CacheWarmingAction, CacheWarmingRentMethod } from "../session/cache-warmer";
-import type { TodoItem } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoItem } from "@oh-my-pi/pi-tui/tools/todo";
 
 // ============================================================================
 // Session Events
@@ -171,7 +171,7 @@ export interface SessionTreeEvent {
 export interface GoalUpdatedEvent {
 	type: "goal_updated";
 	goal: Goal | null;
-	state?: GoalModeState;
+	state?: LocalGoalModeState;
 }
 
 export type SessionEvent =
@@ -329,7 +329,7 @@ export interface TtsrTriggeredEvent {
 /** Fired when todo reminder logic detects unfinished todos */
 export interface TodoReminderEvent {
 	type: "todo_reminder";
-	todos: TodoItem[];
+	todos: LocalTodoItem[];
 	attempt: number;
 	maxAttempts: number;
 }

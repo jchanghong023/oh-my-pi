@@ -12,7 +12,8 @@ import {
 	toolEvents,
 	type ResponsesSocket,
 } from "../../ai/test/fixtures/openai-responses-server";
-import { RpcClient, type RpcReceivedSessionEvent } from "../src/modes/rpc/rpc-client";
+import { RpcClient } from "../src/modes/rpc/rpc-client";
+import type { AgentSessionEvent } from "../src/session/agent-session";
 
 const cliEntry = path.resolve(import.meta.dir, "../src/cli.ts");
 const promptTimeout = 25_000;
@@ -26,7 +27,7 @@ async function withCli(
 		project: string;
 		effect: string;
 		events: AgentEvent[];
-		sessionEvents: RpcReceivedSessionEvent[];
+		sessionEvents: AgentSessionEvent[];
 	}) => Promise<void>,
 	options: { first?: number; idle?: number; websockets?: boolean | "default"; modelPreference?: boolean } = {},
 ): Promise<void> {
@@ -103,7 +104,7 @@ async function withCli(
 		spawn: args => ptree.spawn([process.execPath, cliEntry, ...args], { cwd: project, env, stdin: "pipe" }),
 	});
 	const events: AgentEvent[] = [];
-	const sessionEvents: RpcReceivedSessionEvent[] = [];
+	const sessionEvents: AgentSessionEvent[] = [];
 	const detachEvents = client.onEvent(event => events.push(event));
 	const detachSessionEvents = client.onSessionEvent(event => sessionEvents.push(event));
 	try {
@@ -266,7 +267,7 @@ describe("real CLI Responses WebSocket recovery", () => {
 			let rejectUpgrade = true;
 			let project = "";
 			let events: AgentEvent[] = [];
-			let sessionEvents: RpcReceivedSessionEvent[] = [];
+			let sessionEvents: AgentSessionEvent[] = [];
 			const fixture = endpoint(undefined, {
 				rejectUpgrade: () => (rejectUpgrade ? new Response("Use SSE", { status: 426 }) : undefined),
 				httpResponse: (_body, index) => {

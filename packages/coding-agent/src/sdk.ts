@@ -3063,7 +3063,7 @@ async function createAgentSessionScoped(
 			getPlanReferencePath: () => session?.getPlanReferencePath() ?? "local://PLAN.md",
 			approvedPlanChecks: options.approvedPlanChecks,
 			getApprovedPlanChecks: () => session?.getApprovedPlanChecks() ?? options.approvedPlanChecks,
-			getGoalModeState: () => session?.getGoalModeState(),
+			getGoalModeState: () => session?.getLocalGoalModeState(),
 			getGoalRuntime: () => session?.goalRuntime,
 			getUsageStatistics: () => sessionManager.getUsageStatistics(),
 			getTurnBudget: () => sessionManager.getTurnBudget(),
@@ -3104,7 +3104,7 @@ async function createAgentSessionScoped(
 					after: change.after,
 				});
 			},
-			getTodoPhases: () => session.getTodoPhases(),
+			getTodoPhases: () => session.getLocalTodoPhases(),
 			setTodoPhases: phases => session.setTodoPhases(phases),
 			commitTodoPhases: phases => session.commitTodoPhases(phases),
 			getWorkPoolYieldItems: () => session?.getWorkPoolYieldItems() ?? [],
@@ -4720,7 +4720,7 @@ async function createAgentSessionScoped(
 			getToolContext: () => toolContextStore.getContext(),
 			mcpResources: cursorMcpResources,
 			emitEvent: event => cursorEventEmitter?.(event),
-			getTodoPhases: () => session.getTodoPhases(),
+			getTodoPhases: () => session.getLocalTodoPhases(),
 			commitTodoPhases: phases => session.commitTodoPhases(phases),
 			// `pi_grep` carries its own context width and match cap, which the
 			// shared grep instance fixed at construction cannot express. Gated on

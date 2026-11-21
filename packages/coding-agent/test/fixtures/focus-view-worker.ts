@@ -12,7 +12,7 @@ import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions, TextCo
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
@@ -37,7 +37,7 @@ export interface FocusSessionReport {
 	followUp: string[];
 	customEntries: Array<{ customType: string; data: unknown }>;
 	userTexts: string[];
-	todoPhases: TodoPhase[];
+	todoPhases: LocalTodoPhase[];
 }
 
 /** Operations the test drives on the worker. */
@@ -175,7 +175,7 @@ const probe: FocusProbe = {
 				.getEntries()
 				.flatMap(entry => (entry.type === "custom" ? [{ customType: entry.customType, data: entry.data }] : [])),
 			userTexts: session.messages.flatMap(message => (message.role === "user" ? [textOf(message.content)] : [])),
-			todoPhases: session.getTodoPhases(),
+			todoPhases: session.getLocalTodoPhases(),
 		};
 	},
 	dropFollowUps: async id => {

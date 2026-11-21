@@ -1,8 +1,8 @@
 import {
-	type TodoStatus,
+	type LocalTodoStatus,
 	type TodoOperation,
-	type TodoItem,
-	type TodoPhase,
+	type LocalTodoItem,
+	type LocalTodoPhase,
 	type TodoCompletionTransition,
 	type TodoToolDetails,
 	todoTaskTargets,
@@ -19,7 +19,7 @@ import type { SessionEntry } from "../session/session-entries";
 import { normalizePathLikeInput, resolveToCwd } from "./path-utils";
 
 /** Whether an unknown value is a persisted todo phase. */
-export function isTodoPhase(value: unknown): value is TodoPhase {
+export function isTodoPhase(value: unknown): value is LocalTodoPhase {
 	if (!isRecord(value) || typeof value.name !== "string" || !Array.isArray(value.tasks)) return false;
 	return value.tasks.every(
 		task =>
@@ -40,7 +40,7 @@ export function isTodoPhase(value: unknown): value is TodoPhase {
  * toolResult (the eval bridge) must persist them itself or the next branch
  * rehydration (resume, rewind, fork, /btw) silently reverts the change.
  */
-export function committedTodoPhases(result: AgentToolResult): TodoPhase[] | undefined {
+export function committedTodoPhases(result: AgentToolResult): LocalTodoPhase[] | undefined {
 	if (result.isError || !isRecord(result.details)) return undefined;
 	const { op, phases } = result.details;
 	if (op === "view" || !Array.isArray(phases) || !phases.every(isTodoPhase)) return undefined;
@@ -76,7 +76,10 @@ type TodoOpEntryValue = TodoParams;
 // State helpers
 // =============================================================================
 
-function findTaskByContent(phases: TodoPhase[], content: string): { task: TodoItem; phase: TodoPhase } | undefined {
+function findTaskByContent(
+	phases: LocalTodoPhase[],
+	content: string,
+): { task: LocalTodoItem; phase: LocalTodoPhase } | undefined {
 	for (const phase of phases) {
 		const task = phase.tasks.find(t => t.content === content);
 		if (task) return { task, phase };
@@ -84,17 +87,17 @@ function findTaskByContent(phases: TodoPhase[], content: string): { task: TodoIt
 	return undefined;
 }
 
-function findPhaseByName(phases: TodoPhase[], name: string): TodoPhase | undefined {
+function findPhaseByName(phases: LocalTodoPhase[], name: string): LocalTodoPhase | undefined {
 	return phases.find(phase => phase.name === name);
 }
 
-function cloneTask(task: TodoItem): TodoItem {
+function cloneTask(task: LocalTodoItem): LocalTodoItem {
 	return task.blocker !== undefined
 		? { content: task.content, status: task.status, blocker: task.blocker }
 		: { content: task.content, status: task.status };
 }
 
-function clonePhases(phases: TodoPhase[]): TodoPhase[] {
+function clonePhases(phases: LocalTodoPhase[]): LocalTodoPhase[] {
 	return phases.map(phase => ({ name: phase.name, tasks: phase.tasks.map(cloneTask) }));
 }
 
@@ -102,8 +105,8 @@ function todoTransitionKey(phase: string, content: string): string {
 	return `${phase}\u0000${content}`;
 }
 
-function getCompletionTransitions(previous: TodoPhase[], updated: TodoPhase[]): TodoCompletionTransition[] {
-	const previousStatuses = new Map<string, TodoStatus>();
+function getCompletionTransitions(previous: LocalTodoPhase[], updated: LocalTodoPhase[]): TodoCompletionTransition[] {
+	const previousStatuses = new Map<string, LocalTodoStatus>();
 	for (const phase of previous) {
 		for (const task of phase.tasks) {
 			previousStatuses.set(todoTransitionKey(phase.name, task.content), task.status);
@@ -123,7 +126,7 @@ function getCompletionTransitions(previous: TodoPhase[], updated: TodoPhase[]): 
 	return transitions;
 }
 
-function normalizeInProgressTask(phases: TodoPhase[]): void {
+function normalizeInProgressTask(phases: LocalTodoPhase[]): void {
 	const orderedTasks = phases.flatMap(phase => phase.tasks);
 	if (orderedTasks.length === 0) return;
 
@@ -141,8 +144,8 @@ function normalizeInProgressTask(phases: TodoPhase[]): void {
 }
 
 /** Return the active todo task, preferring an in-progress item over the first pending item. */
-export function nextActionableTask(phases: readonly TodoPhase[]): TodoItem | undefined {
-	let firstPending: TodoItem | undefined;
+export function nextActionableTask(phases: readonly LocalTodoPhase[]): LocalTodoItem | undefined {
+	let firstPending: LocalTodoItem | undefined;
 	for (const phase of phases) {
 		for (const task of phase.tasks) {
 			if (task.status === "in_progress") return task;
@@ -167,7 +170,7 @@ export interface TodoHudStateEntryData extends TodoSnapshotIdentity {
 	visibility: TodoHudVisibility;
 }
 
-function todoPhasesFingerprint(phases: readonly TodoPhase[]): string {
+function todoPhasesFingerprint(phases: readonly LocalTodoPhase[]): string {
 	return JSON.stringify(
 		phases.map(phase => ({
 			name: phase.name,
@@ -180,10 +183,10 @@ function todoPhasesFingerprint(phases: readonly TodoPhase[]): string {
 	);
 }
 
-function canonicalTodoPhases(entry: SessionEntry): TodoPhase[] | undefined {
+function canonicalTodoPhases(entry: SessionEntry): LocalTodoPhase[] | undefined {
 	if (entry.type === "custom" && entry.customType === USER_TODO_EDIT_CUSTOM_TYPE) {
 		const phases = (entry.data as { phases?: unknown } | undefined)?.phases;
-		return Array.isArray(phases) ? (phases as TodoPhase[]) : undefined;
+		return Array.isArray(phases) ? (phases as LocalTodoPhase[]) : undefined;
 	}
 	if (entry.type !== "message") return undefined;
 	const message = entry.message as {
@@ -195,12 +198,12 @@ function canonicalTodoPhases(entry: SessionEntry): TodoPhase[] | undefined {
 	if (message.role !== "toolResult" || message.toolName !== "todo" || message.isError) return undefined;
 	if (message.details?.op === "view") return undefined;
 	const phases = message.details?.phases;
-	return Array.isArray(phases) ? (phases as TodoPhase[]) : undefined;
+	return Array.isArray(phases) ? (phases as LocalTodoPhase[]) : undefined;
 }
 
 /** Identify the latest durable canonical todo snapshot on the active branch. */
 export function getLatestTodoSnapshotIdentity(entries: SessionEntry[]): TodoSnapshotIdentity | undefined {
-	let latest: TodoPhase[] | undefined;
+	let latest: LocalTodoPhase[] | undefined;
 	let sourceEntryId: string | undefined;
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const phases = canonicalTodoPhases(entries[i]);
@@ -217,7 +220,7 @@ export function getLatestTodoSnapshotIdentity(entries: SessionEntry[]): TodoSnap
 /** Return the persisted HUD choice only when it targets the current canonical snapshot exactly. */
 export function getTodoHudVisibility(
 	entries: SessionEntry[],
-	phases: readonly TodoPhase[],
+	phases: readonly LocalTodoPhase[],
 ): TodoHudVisibility | undefined {
 	const snapshot = getLatestTodoSnapshotIdentity(entries);
 	if (!snapshot || snapshot.fingerprint !== todoPhasesFingerprint(phases)) return undefined;
@@ -239,7 +242,7 @@ export function getTodoHudVisibility(
 /** Build persisted HUD metadata only for phases matching the latest durable canonical snapshot. */
 export function createTodoHudStateData(
 	entries: SessionEntry[],
-	phases: readonly TodoPhase[],
+	phases: readonly LocalTodoPhase[],
 	visibility: TodoHudVisibility,
 ): TodoHudStateEntryData | undefined {
 	const snapshot = getLatestTodoSnapshotIdentity(entries);
@@ -247,7 +250,7 @@ export function createTodoHudStateData(
 	return { ...snapshot, visibility };
 }
 
-export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPhase[] {
+export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): LocalTodoPhase[] {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const phases = canonicalTodoPhases(entries[i]);
 		if (phases) return clonePhases(phases);
@@ -256,10 +259,10 @@ export function getLatestTodoPhasesFromEntries(entries: SessionEntry[]): TodoPha
 }
 
 function resolveTaskOrError(
-	phases: TodoPhase[],
+	phases: LocalTodoPhase[],
 	content: string | undefined,
 	errors: string[],
-): { task: TodoItem; phase: TodoPhase } | undefined {
+): { task: LocalTodoItem; phase: LocalTodoPhase } | undefined {
 	if (!content) {
 		errors.push("Missing task content");
 		return undefined;
@@ -281,11 +284,11 @@ function resolveTaskOrError(
 
 /** Resolve every targeted task, recording one error per missing content. */
 function resolveTasksOrError(
-	phases: TodoPhase[],
+	phases: LocalTodoPhase[],
 	contents: string[],
 	errors: string[],
-): { task: TodoItem; phase: TodoPhase }[] {
-	const hits: { task: TodoItem; phase: TodoPhase }[] = [];
+): { task: LocalTodoItem; phase: LocalTodoPhase }[] {
+	const hits: { task: LocalTodoItem; phase: LocalTodoPhase }[] = [];
 	for (const content of contents) {
 		const hit = resolveTaskOrError(phases, content, errors);
 		if (hit) hits.push(hit);
@@ -293,7 +296,11 @@ function resolveTasksOrError(
 	return hits;
 }
 
-function resolvePhaseOrError(phases: TodoPhase[], name: string | undefined, errors: string[]): TodoPhase | undefined {
+function resolvePhaseOrError(
+	phases: LocalTodoPhase[],
+	name: string | undefined,
+	errors: string[],
+): LocalTodoPhase | undefined {
 	if (!name) {
 		errors.push("Missing phase name");
 		return undefined;
@@ -304,12 +311,12 @@ function resolvePhaseOrError(phases: TodoPhase[], name: string | undefined, erro
 }
 
 /** The tasks `done`/`drop`/`rm` name: `task`, else `items` (the list models pass alongside), as contents. */
-function namedTaskContents(phases: TodoPhase[], entry: TodoOpEntryValue): string[] {
+function namedTaskContents(phases: LocalTodoPhase[], entry: TodoOpEntryValue): string[] {
 	const contents = todoTaskTargets(phases, entry.task);
 	return contents.length > 0 ? contents : (entry.items ?? []);
 }
 
-function getTaskTargets(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoItem[] {
+function getTaskTargets(phases: LocalTodoPhase[], entry: TodoOpEntryValue, errors: string[]): LocalTodoItem[] {
 	const contents = namedTaskContents(phases, entry);
 	if (contents.length > 0) return resolveTasksOrError(phases, contents, errors).map(hit => hit.task);
 	if (entry.phase) {
@@ -323,7 +330,7 @@ function getTaskTargets(phases: TodoPhase[], entry: TodoOpEntryValue, errors: st
 /** Phase name for `init` with an absent or empty phase name. */
 const DEFAULT_INIT_PHASE = "Tasks";
 
-function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
+function initPhases(entry: TodoOpEntryValue, errors: string[]): LocalTodoPhase[] {
 	// Models routinely flatten the single-phase init into `{op:"init", items:[...]}`
 	// (optionally with a bare `phase`) instead of the canonical
 	// `list: [{phase, items}]`. Accept that shape by synthesizing a one-phase list
@@ -338,7 +345,7 @@ function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 	// An empty phase name cannot be explicitly targeted, so it gets the default.
 	// Duplicate phase names / task contents would be permanently unaddressable
 	// too (every targeting op resolves the first match), so reject them up front.
-	const phases: TodoPhase[] = [];
+	const phases: LocalTodoPhase[] = [];
 	const seenPhases = new Set<string>();
 	const seenTasks = new Set<string>();
 	for (const listEntry of list) {
@@ -347,7 +354,7 @@ function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 			errors.push(`Duplicate phase "${name}" in init list`);
 		}
 		seenPhases.add(name);
-		const tasks: TodoItem[] = [];
+		const tasks: LocalTodoItem[] = [];
 		for (const content of listEntry.items) {
 			if (seenTasks.has(content)) {
 				errors.push(`Duplicate task "${content}" in init list`);
@@ -360,7 +367,7 @@ function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 	return phases;
 }
 
-function appendItems(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
+function appendItems(phases: LocalTodoPhase[], entry: TodoOpEntryValue, errors: string[]): LocalTodoPhase[] {
 	if (!entry.phase) {
 		errors.push(
 			'Missing phase name for append operation. No items were added. Use op="view" to find the target phase, then retry op="append" with phase="<phase name>" and the original items. Do not reinitialize the todo list.',
@@ -399,7 +406,7 @@ function appendItems(phases: TodoPhase[], entry: TodoOpEntryValue, errors: strin
 	return phases;
 }
 
-function removeTasks(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
+function removeTasks(phases: LocalTodoPhase[], entry: TodoOpEntryValue, errors: string[]): LocalTodoPhase[] {
 	const contents = namedTaskContents(phases, entry);
 	if (contents.length > 0) {
 		for (const hit of resolveTasksOrError(phases, contents, errors)) {
@@ -417,7 +424,7 @@ function removeTasks(phases: TodoPhase[], entry: TodoOpEntryValue, errors: strin
 	return phases;
 }
 
-function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
+function applyEntry(phases: LocalTodoPhase[], entry: TodoOpEntryValue, errors: string[]): LocalTodoPhase[] {
 	switch (entry.op) {
 		case "init":
 			return initPhases(entry, errors);
@@ -517,7 +524,10 @@ function resolveTodoParams(raw: unknown, hasExistingPhases: boolean): TodoOpEntr
 	return `Invalid todo arguments: ${direct.summary}`;
 }
 
-function applyParams(phases: TodoPhase[], params: TodoOpEntryValue): { phases: TodoPhase[]; errors: string[] } {
+function applyParams(
+	phases: LocalTodoPhase[],
+	params: TodoOpEntryValue,
+): { phases: LocalTodoPhase[]; errors: string[] } {
 	const errors: string[] = [];
 	const next = applyEntry(phases, params, errors);
 	normalizeInProgressTask(next);
@@ -526,9 +536,9 @@ function applyParams(phases: TodoPhase[], params: TodoOpEntryValue): { phases: T
 
 /** Apply an array of `todo`-style ops to existing phases. Used by /todo slash command. */
 export function applyOpsToPhases(
-	currentPhases: TodoPhase[],
+	currentPhases: LocalTodoPhase[],
 	ops: TodoOpEntryValue[],
-): { phases: TodoPhase[]; errors: string[] } {
+): { phases: LocalTodoPhase[]; errors: string[] } {
 	const errors: string[] = [];
 	let next = clonePhases(currentPhases);
 	for (const op of ops) {
@@ -542,7 +552,7 @@ export function applyOpsToPhases(
 // Markdown round-trip
 // =============================================================================
 
-const STATUS_TO_MARKER: Record<TodoStatus, string> = {
+const STATUS_TO_MARKER: Record<LocalTodoStatus, string> = {
 	pending: " ",
 	in_progress: "/",
 	completed: "x",
@@ -559,7 +569,7 @@ export function resolveTodoMarkdownPath(input: string, cwd: string): string {
 }
 
 /** Render todo phases as a Markdown checklist suitable for editing/copying. */
-export function phasesToMarkdown(phases: TodoPhase[]): string {
+export function phasesToMarkdown(phases: LocalTodoPhase[]): string {
 	if (phases.length === 0) return "# Todos\n";
 	const out: string[] = [];
 	for (let i = 0; i < phases.length; i++) {
@@ -577,7 +587,7 @@ export function phasesToMarkdown(phases: TodoPhase[]): string {
 	return `${out.join("\n")}\n`;
 }
 
-const MARKER_TO_STATUS: Record<string, TodoStatus> = {
+const MARKER_TO_STATUS: Record<string, LocalTodoStatus> = {
 	" ": "pending",
 	"": "pending",
 	x: "completed",
@@ -590,10 +600,10 @@ const MARKER_TO_STATUS: Record<string, TodoStatus> = {
 };
 
 /** Parse a Markdown checklist back into todo phases. */
-export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: string[] } {
+export function markdownToPhases(md: string): { phases: LocalTodoPhase[]; errors: string[] } {
 	const errors: string[] = [];
-	const phases: TodoPhase[] = [];
-	let currentPhase: TodoPhase | undefined;
+	const phases: LocalTodoPhase[] = [];
+	let currentPhase: LocalTodoPhase | undefined;
 
 	const lines = md.split(/\r?\n/);
 	for (let lineNum = 0; lineNum < lines.length; lineNum++) {
@@ -624,7 +634,7 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 				errors.push(`Line ${lineNum + 1}: unknown status marker "[${marker}]" (use [ ], [x], [/], [-], [!])`);
 				continue;
 			}
-			const task: TodoItem = { content: taskMatch[2].trim(), status };
+			const task: LocalTodoItem = { content: taskMatch[2].trim(), status };
 			const note = lines[lineNum + 1]?.trim();
 			if (note?.startsWith(BLOCKER_COMMENT_PREFIX) && note.endsWith(BLOCKER_COMMENT_SUFFIX)) {
 				lineNum++;
@@ -649,7 +659,7 @@ export function markdownToPhases(md: string): { phases: TodoPhase[]; errors: str
 	return { phases, errors };
 }
 
-function formatSummary(phases: TodoPhase[], errors: string[], readOnly = false): string {
+function formatSummary(phases: LocalTodoPhase[], errors: string[], readOnly = false): string {
 	const tasks = phases.flatMap(phase => phase.tasks);
 	if (tasks.length === 0) {
 		if (errors.length > 0) return `Errors: ${errors.join("; ")}`;

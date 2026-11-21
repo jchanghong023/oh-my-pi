@@ -17,9 +17,9 @@ import {
 	selectCollapsedTodos,
 	TODO_STRIKE_HOLD_FRAMES,
 	TODO_STRIKE_TOTAL_FRAMES,
-	type TodoItem,
-	type TodoPhase,
-	type TodoStatus,
+	type LocalTodoItem,
+	type LocalTodoPhase,
+	type LocalTodoStatus,
 	todoMatchesAnyDescription,
 	todoToolRenderer,
 } from "@oh-my-pi/pi-tui/tools/todo";
@@ -29,7 +29,7 @@ import {
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
 
-function createSession(initialPhases: TodoPhase[] = []): ToolSession {
+function createSession(initialPhases: LocalTodoPhase[] = []): ToolSession {
 	let phases = initialPhases;
 	return {
 		cwd: "/tmp/test",
@@ -220,7 +220,7 @@ describe("TodoTool operations", () => {
 	it("splits a flattened task string like a path list, preferring verbatim content", async () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", { op: "init", list: [{ phase: "A", items: ["Fix foo, bar", "a1", "a2", "a3"] }] });
-		const statuses = (phases: TodoPhase[] | undefined) => phases?.[0]?.tasks.map(task => task.status);
+		const statuses = (phases: LocalTodoPhase[] | undefined) => phases?.[0]?.tasks.map(task => task.status);
 
 		const verbatim = await tool.execute("call-2", { op: "done", task: "Fix foo, bar" });
 		expect(statuses(verbatim.details?.phases)).toEqual(["completed", "in_progress", "pending", "pending"]);
@@ -239,7 +239,7 @@ describe("TodoTool operations", () => {
 	it("rejects a task array with a missing entry, or more than one task to start, without changing state", async () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", { op: "init", list: [{ phase: "A", items: ["a1", "a2", "a3"] }] });
-		const before: TodoStatus[] = ["in_progress", "pending", "pending"];
+		const before: LocalTodoStatus[] = ["in_progress", "pending", "pending"];
 
 		const missing = await tool.execute("call-2", { op: "done", task: ["a2", "nope"] });
 		expect(missing.isError).toBe(true);
@@ -428,7 +428,7 @@ describe("TodoTool operations", () => {
 	});
 
 	it("preserves blocked status across the markdown round-trip", () => {
-		const phases: TodoPhase[] = [
+		const phases: LocalTodoPhase[] = [
 			{
 				name: "Work",
 				tasks: [
@@ -594,7 +594,7 @@ describe("TodoTool lenient init shapes", () => {
 	});
 
 	it("rejects normalized duplicate phases without replacing existing state", async () => {
-		const initial: TodoPhase[] = [{ name: "Existing", tasks: [{ content: "Keep", status: "in_progress" }] }];
+		const initial: LocalTodoPhase[] = [{ name: "Existing", tasks: [{ content: "Keep", status: "in_progress" }] }];
 		const session = createSession(initial);
 		const tool = new TodoTool(session);
 		const result = await tool.execute("init", {
@@ -901,13 +901,13 @@ describe("todoToolRenderer.renderResult phase collapsing", () => {
 });
 
 describe("selectCollapsedTodos walking viewport (#5873)", () => {
-	const mk = (n: number, inProgress: number[]): TodoItem[] =>
+	const mk = (n: number, inProgress: number[]): LocalTodoItem[] =>
 		Array.from({ length: n }, (_, i) => ({
 			content: `Task ${i + 1}`,
 			status: inProgress.includes(i + 1) ? "in_progress" : "pending",
 		}));
 	const never = () => false;
-	const contents = (sel: { items: TodoItem[] }) => sel.items.map(t => t.content);
+	const contents = (sel: { items: LocalTodoItem[] }) => sel.items.map(t => t.content);
 
 	it("starts at the sole in-progress task and fills with following tasks", () => {
 		const sel = selectCollapsedTodos(mk(14, [6]), never, 8);
@@ -925,7 +925,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 	});
 
 	it("leads with the last closed task and omits the rest in collapsed mode", () => {
-		const tasks: TodoItem[] = [
+		const tasks: LocalTodoItem[] = [
 			{ content: "done", status: "completed" },
 			{ content: "dropped", status: "abandoned" },
 			{ content: "current", status: "in_progress" },
@@ -939,7 +939,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 	});
 
 	it("keeps an out-of-order completion as the closed lead row", () => {
-		const tasks: TodoItem[] = [
+		const tasks: LocalTodoItem[] = [
 			{ content: "current", status: "in_progress" },
 			{ content: "next", status: "pending" },
 			{ content: "finished early", status: "completed" },
@@ -949,7 +949,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 	});
 
 	it("keeps the closed lead row additive to the open-task cap", () => {
-		const tasks: TodoItem[] = [{ content: "closed", status: "completed" }, ...mk(5, [1])];
+		const tasks: LocalTodoItem[] = [{ content: "closed", status: "completed" }, ...mk(5, [1])];
 		const sel = selectCollapsedTodos(tasks, never, 5);
 		// All 5 open tasks fit the cap; the closed context row does not evict one.
 		expect(contents(sel)).toEqual(["closed", "Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
@@ -958,7 +958,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 
 	it("places every subagent-matched todo at the head in todo order", () => {
 		const tasks = mk(14, []); // all pending
-		const matched = (t: TodoItem) => t.content === "Task 3" || t.content === "Task 9";
+		const matched = (t: LocalTodoItem) => t.content === "Task 3" || t.content === "Task 9";
 		const sel = selectCollapsedTodos(tasks, matched, 5);
 		// Both matched actives lead, then following pending fill from the first active.
 		expect(contents(sel).slice(0, 2)).toEqual(["Task 3", "Task 9"]);
@@ -967,7 +967,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 
 	it("caps active todos and counts the hidden actives in the summary", () => {
 		const tasks = mk(10, []);
-		const matched = (t: TodoItem) =>
+		const matched = (t: LocalTodoItem) =>
 			["Task 1", "Task 2", "Task 3", "Task 4", "Task 5", "Task 6", "Task 7"].includes(t.content);
 		const sel = selectCollapsedTodos(tasks, matched, 5);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
@@ -980,7 +980,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 		// 5 matched actives + 2 trailing pending, cap 5. The active-overflow branch
 		// must NOT swallow the hidden pending work with an empty summary (#5878).
 		const tasks = mk(7, []);
-		const matched = (t: TodoItem) => ["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"].includes(t.content);
+		const matched = (t: LocalTodoItem) => ["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"].includes(t.content);
 		const sel = selectCollapsedTodos(tasks, matched, 5);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
 		expect(sel.summary).toBe("… 2 more todos");
@@ -999,7 +999,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 	it("keeps an overflow summary when one active task overflows the cap and pending remains", () => {
 		// 6 matched actives + 2 pending, cap 5: showing all 6 actives would hide the
 		// pending work with no summary row at all.
-		const sel = selectCollapsedTodos(mk(8, []), (t: TodoItem) => Number(t.content.slice(5)) <= 6, 5);
+		const sel = selectCollapsedTodos(mk(8, []), (t: LocalTodoItem) => Number(t.content.slice(5)) <= 6, 5);
 		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
 		expect(sel.summary).toBe("… 1 more active todo");
 	});
@@ -1011,7 +1011,7 @@ describe("selectCollapsedTodos walking viewport (#5873)", () => {
 	});
 
 	it("falls back to closed tasks when the phase has no open work", () => {
-		const tasks: TodoItem[] = [
+		const tasks: LocalTodoItem[] = [
 			{ content: "done a", status: "completed" },
 			{ content: "done b", status: "completed" },
 		];
@@ -1088,7 +1088,7 @@ describe("todoToolRenderer.renderResult label sanitization", () => {
 	// `details.phases`, and the renderer interpolates it straight into terminal
 	// output. A label holding ANSI/C0 sequences would rewrite the terminal every
 	// time the list renders or replays.
-	function renderPhases(phases: TodoPhase[]): string {
+	function renderPhases(phases: LocalTodoPhase[]): string {
 		const result = {
 			content: [{ type: "text" as const, text: "1/1 tasks completed" }],
 			details: { phases, storage: "session" as const },
@@ -1102,7 +1102,7 @@ describe("todoToolRenderer.renderResult label sanitization", () => {
 		const hostile = "clear\u001b[2Jscreen\u0007bell";
 		const rendered = renderPhases([
 			{ name: "Execution", tasks: [{ content: hostile, status: "pending" }] },
-		] as unknown as TodoPhase[]);
+		] as unknown as LocalTodoPhase[]);
 
 		// The dangerous bytes are gone; the readable text survives.
 		expect(rendered).not.toContain("\u001b[2J");
@@ -1114,7 +1114,7 @@ describe("todoToolRenderer.renderResult label sanitization", () => {
 	it("strips control sequences from a blocker note", () => {
 		const rendered = renderPhases([
 			{ name: "Execution", tasks: [{ content: "ship it", status: "blocked", blocker: "waiting\u001b[2Jhere" }] },
-		] as unknown as TodoPhase[]);
+		] as unknown as LocalTodoPhase[]);
 		expect(rendered).not.toContain("\u001b[2J");
 		expect(Bun.stripANSI(rendered)).toContain("waiting");
 	});
@@ -1125,7 +1125,7 @@ describe("todoToolRenderer.renderResult label sanitization", () => {
 		// styling with control bytes.
 		const rendered = renderPhases([
 			{ name: "Execution", tasks: [{ content: "done\u001b[2Jtask", status: "completed" }] },
-		] as unknown as TodoPhase[]);
+		] as unknown as LocalTodoPhase[]);
 
 		expect(rendered).not.toContain("\u001b[2J");
 		expect(Bun.stripANSI(rendered)).toContain("done");
@@ -1136,7 +1136,7 @@ describe("todoToolRenderer.renderResult label sanitization", () => {
 		const rendered = renderPhases([
 			{ name: "Set\u001b[2Jup", tasks: [{ content: "a", status: "pending" }] },
 			{ name: "Ship", tasks: [{ content: "b", status: "pending" }] },
-		] as unknown as TodoPhase[]);
+		] as unknown as LocalTodoPhase[]);
 
 		expect(rendered).not.toContain("\u001b[2J");
 		expect(Bun.stripANSI(rendered)).toContain("Set");
@@ -1165,7 +1165,7 @@ describe("todoToolRenderer.renderResult label sanitization", () => {
 		const rendered = renderPhases([
 			{ name: "Set\tup", tasks: [{ content: "ship\tit", status: "blocked", blocker: "waiting\there" }] },
 			{ name: "Ship", tasks: [{ content: "b", status: "pending" }] },
-		] as unknown as TodoPhase[]);
+		] as unknown as LocalTodoPhase[]);
 
 		expect(rendered).not.toContain("\t");
 		expect(Bun.stripANSI(rendered)).toContain("ship");
@@ -1224,7 +1224,7 @@ describe("todoToolRenderer.renderCall preview sanitization", () => {
 describe("todo presentation", () => {
 	it("renders upstream ANSI and native todo statuses without mutating them", () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		const phases: TodoPhase[] = [
+		const phases: LocalTodoPhase[] = [
 			{
 				name: "Work",
 				tasks: [
@@ -1263,7 +1263,7 @@ describe("todo presentation", () => {
 
 	it("keeps every matched pending task active with one closed context row and unchanged stored statuses", () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		const tasks: TodoItem[] = [
+		const tasks: LocalTodoItem[] = [
 			{ content: "older completion", status: "completed" },
 			{ content: "last closed context", status: "abandoned" },
 			{ content: "first worker", status: "pending" },

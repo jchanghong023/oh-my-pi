@@ -23,7 +23,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/config/codeagent-provider";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession, type LocalAgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -35,7 +35,7 @@ describe.skipIf(!e2eApiKey("ASCEND_API_KEY"))("AgentSession compaction e2e", () 
 	let session: AgentSession;
 	let tempDir: string;
 	let sessionManager: SessionManager;
-	let events: AgentSessionEvent[];
+	let events: LocalAgentSessionEvent[];
 	let authStorage: AuthStorage | undefined;
 
 	beforeEach(() => {
@@ -91,7 +91,7 @@ describe.skipIf(!e2eApiKey("ASCEND_API_KEY"))("AgentSession compaction e2e", () 
 		});
 
 		// Subscribe to track events
-		session.subscribe(event => {
+		session.subscribeLocal(event => {
 			events.push(event);
 		});
 
@@ -299,8 +299,8 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 			modelRegistry,
 			extensionRunner: extensionRunner as never,
 		});
-		const events: AgentSessionEvent[] = [];
-		session.subscribe(event => {
+		const events: LocalAgentSessionEvent[] = [];
+		session.subscribeLocal(event => {
 			events.push(event);
 		});
 		// An active goal makes a successful maintenance pass eligible to continue;
@@ -335,7 +335,7 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 					directory,
 				);
 				const terminalStates: { isCompacting: boolean; committedEntryId: string | undefined }[] = [];
-				session!.subscribe(event => {
+				session!.subscribeLocal(event => {
 					if (event.type === "manual_compaction_end") {
 						terminalStates.push({
 							isCompacting: session!.isCompacting,
@@ -766,8 +766,8 @@ describe("AgentSession compaction provider replay policy", () => {
 		try {
 			if (operation === "auto") {
 				const completion = Promise.withResolvers<void>();
-				const events: AgentSessionEvent[] = [];
-				session.subscribe(event => {
+				const events: LocalAgentSessionEvent[] = [];
+				session.subscribeLocal(event => {
 					events.push(event);
 					if (event.type === "auto_compaction_end") completion.resolve();
 				});

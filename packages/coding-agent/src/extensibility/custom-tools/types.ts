@@ -30,7 +30,7 @@ import type * as PiCodingAgent from "../../index";
 import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import type { ReadonlySessionManager } from "../../session/session-manager";
-import type { TodoItem } from "@oh-my-pi/pi-tui/tools/todo";
+import type { LocalTodoItem } from "@oh-my-pi/pi-tui/tools/todo";
 import type { RetryErrorUpdate } from "../shared-events";
 
 /** Alias for clarity */
@@ -150,7 +150,7 @@ export type CustomToolSessionEvent =
 	  }
 	| {
 			reason: "todo_reminder";
-			todos: TodoItem[];
+			todos: LocalTodoItem[];
 			attempt: number;
 			maxAttempts: number;
 	  };
