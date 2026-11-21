@@ -14,7 +14,6 @@ import * as memoriesSettings from "../memories/settings";
 import * as sharpshooterSettings from "../sharpshooter/settings";
 import * as autolearnSettings from "../autolearn/settings";
 import * as mnemopiSettings from "../mnemopi/settings";
-import * as knowledgeSettings from "../knowledge/settings";
 import * as hindsightSettings from "../hindsight/settings";
 import * as exportTtsrSettings from "../export/ttsr-settings";
 import * as editSettings from "../edit/settings";
@@ -61,7 +60,6 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	sharpshooterSettings,
 	autolearnSettings,
 	mnemopiSettings,
-	knowledgeSettings,
 	hindsightSettings,
 	exportTtsrSettings,
 	editSettings,

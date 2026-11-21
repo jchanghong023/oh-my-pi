@@ -8,8 +8,6 @@ type RecordLine = {
 	level: string;
 	pid: number;
 	message: string;
-	component?: string;
-	event?: string;
 	operation_id?: string;
 	call_id?: string;
 	stage?: string;
@@ -19,10 +17,9 @@ type RecordLine = {
 };
 
 const repository = path.resolve(import.meta.dir, "../../..");
-const probe = path.join(import.meta.dir, "fixtures/fork-diagnostic-probe.ts");
 const profile = "diagnostic-acceptance";
 
-async function sandbox(level = "debug", offline = false) {
+async function sandbox() {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fork-diagnostic-"));
 	const root = path.join(directory, "project");
 	const home = path.join(directory, "home");
@@ -56,8 +53,8 @@ async function sandbox(level = "debug", offline = false) {
 		OMP_PROFILE: profile,
 		PI_PROFILE: profile,
 		PI_CODING_AGENT_DIR: "",
-		OMP_OFFLINE: offline ? "1" : "0",
-		OMP_LOG_LEVEL: level,
+		OMP_OFFLINE: "1",
+		OMP_LOG_LEVEL: "error",
 	});
 	const selectedCache = process.platform === "linux" ? path.join(cacheRoot, String(process.getuid!())) : cacheRoot;
 	const logsDir = path.join(selectedCache, "profiles", profile, "logs");
@@ -112,91 +109,25 @@ async function sandbox(level = "debug", offline = false) {
 		}
 	}
 	return {
-		directory,
 		root,
-		agent,
 		logsDir,
 		logs,
 		cli: (args: string[]) => run(["run", "dev", "--profile", profile, "--cwd", root, ...args]),
-		async probe(mode: string, canary: string) {
-			const child = await run([probe, mode, root, canary]);
-			if (child.code !== 0) throw new Error(`Diagnostic probe exited ${child.code}: ${child.stderr}`);
-			const value = JSON.parse(child.stdout);
-			expect(path.resolve(value.logsDir)).toBe(path.resolve(logsDir));
-			return value;
-		},
 		async cleanup() {
 			await fs.rm(directory, { recursive: true, force: true });
 		},
 	};
 }
 
-function terminal(record: RecordLine) {
-	return /^(?:knowledge\.init\.finished|knowledge\.import\.completed|knowledge\.database\.(?:completed|failed)|knowledge\.cli\.command\.(?:completed|failed|cancelled|rejected)|knowledge\.query\.(?:completed|finished)|knowledge\.storage\.migration\.(?:completed|failed))$/.test(
-		record.message,
-	);
-}
-
-function expectClosedOperations(records: RecordLine[]) {
-	const business = records.filter(record => /^knowledge(?:\.cli|\.storage)?$/.test(record.component ?? ""));
-	for (const record of business.filter(record => record.event && record.stage)) {
-		expect(typeof record.operation_id).toBe("string");
-		expect(record.operation_id?.length).toBeGreaterThan(0);
-	}
-	const starts = business.filter(record =>
-		/^(?:knowledge\.init|knowledge\.database|knowledge\.cli\.command|knowledge\.query|knowledge\.storage\.migration)\.started$/.test(
-			record.message,
-		),
-	);
-	expect(starts.length).toBeGreaterThan(0);
-	for (const start of starts) {
-		const event = start.event?.replace(/_started$/, "_finished");
-		const endings = business.filter(
-			record =>
-				terminal(record) &&
-				record.operation_id === start.operation_id &&
-				record.call_id === start.call_id &&
-				(record.event === event ||
-					(start.message === "knowledge.init.started" &&
-						record.message === "knowledge.import.completed" &&
-						record.event === "knowledge.import.completed")),
-		);
-		expect(endings.length).toBeGreaterThan(0);
-		for (const end of endings) {
-			expect(typeof end.result).toBe("string");
-			expect(typeof end.stage).toBe("string");
-			expect(typeof end.elapsed_ms).toBe("number");
-			expect(Number.isFinite(end.elapsed_ms)).toBe(true);
-			expect(end.elapsed_ms as number).toBeGreaterThanOrEqual(0);
-		}
-	}
-}
-
-function event(records: RecordLine[], message: string) {
-	const found = records.find(record => record.message === message);
-	if (!found) throw new Error(`Missing disk diagnostic ${message}`);
-	return found;
-}
-
-function sameOperation(records: RecordLine[], record: RecordLine) {
-	return records.filter(candidate => candidate.operation_id === record.operation_id);
-}
-
 describe("fork diagnostics on the real rotating disk transport", () => {
 	it.skipIf(process.platform !== "linux")(
 		"P2-40 writes offline CLI errors to primary logs when fallback-logs is a regular file",
 		async () => {
-			const box = await sandbox("error", true);
+			const box = await sandbox();
 			const fallback = path.join(path.dirname(box.logsDir), "fallback-logs");
-			const documents = path.join(box.directory, "documents");
 			try {
 				await fs.mkdir(box.logsDir, { recursive: true, mode: 0o700 });
 				await fs.writeFile(fallback, "unavailable fallback");
-				await fs.mkdir(documents);
-				await fs.writeFile(path.join(documents, "guide.md"), "# Evidence\nPrimary logging remains usable.\n");
-				const imported = await box.cli(["knowledge", "init", documents, "--name", "primary-logs", "--json"]);
-				expect(imported.code, imported.stderr).toBe(0);
-				expect(JSON.parse(imported.stdout).index).toMatchObject({ name: "primary-logs", documentCount: 1 });
 				const failed = await box.cli([
 					"models",
 					"refresh",
@@ -220,151 +151,8 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 		35_000,
 	);
 
-	it("correlates dev CLI docs publication, stored wiki evidence, rejected builds, rollback and cancellation without content leaks", async () => {
-		const box = await sandbox();
-		const canary = "FORKDIAGNOSTICDOCSPRIVATE";
-		const name = `${canary}INDEX`;
-		const documents = path.join(box.directory, "documents");
-		try {
-			await fs.mkdir(documents);
-			await fs.writeFile(
-				path.join(documents, "guide.md"),
-				`# Evidence\n${canary}QUERY requires exactly seven cycles. ${canary}BODY\n`,
-			);
-			const imported = await box.cli(["knowledge", "init", documents, "--name", name, "--json"]);
-			expect(imported.code).toBe(0);
-			expect(JSON.parse(imported.stdout).index).toMatchObject({ name, documentCount: 1 });
-			const initial = await box.logs();
-			const published = event(initial.records, "knowledge.import.completed");
-			expect(published).toMatchObject({
-				event: "knowledge.import.completed",
-				stage: "publish",
-				result: "completed",
-				file_count: 1,
-				document_count: 1,
-				fulltext_status: "ready",
-			});
-			expect(published.section_count as number).toBeGreaterThan(0);
-			const operation = sameOperation(initial.records, published);
-			expect(operation.map(record => record.message)).toContain("knowledge.cli.command.started");
-			expect(operation.map(record => record.message)).toContain("knowledge.init.fts.completed");
-			expect(operation.map(record => record.message)).toContain("knowledge.cli.command.completed");
-
-			const duplicate = await box.cli(["knowledge", "init", documents, "--name", name, "--json"]);
-			expect(duplicate.code).toBe(1);
-			const missing = await box.cli([
-				"knowledge",
-				"init",
-				path.join(box.directory, "missing"),
-				"--name",
-				`${canary}MISSING`,
-				"--json",
-			]);
-			expect(missing.code).toBe(1);
-			await fs.rename(documents, path.join(box.directory, "documents-unavailable"));
-			const wiki = await box.probe("wiki", canary);
-			expect(wiki.indexes).toHaveLength(1);
-			expect(wiki.indexes[0]).toMatchObject({ name, documentCount: 1 });
-			expect(wiki.text).toContain("exactly seven cycles");
-			expect(wiki.text).toContain(`index=${name}`);
-			expect(wiki.text).toMatch(/sha256=[a-f0-9]{64}/);
-
-			for (const mode of ["rollback", "cancel"]) {
-				const result = await box.probe(mode, canary);
-				expect(result.failure).toBe(mode === "cancel" ? "AbortError" : "Error");
-				expect(result.before).toEqual(wiki.indexes);
-				expect(result.visibleDuringBuild).toEqual(result.before);
-				expect(result.after).toEqual(result.before);
-				expect(result.hidden).toEqual({ count: 0 });
-				await fs.rm(path.join(box.root, "interrupted-documents"), { recursive: true, force: true });
-			}
-			const { raw, records } = await box.logs();
-			expect(raw).not.toContain(canary);
-			expectClosedOperations(records);
-			const rejected = records.find(
-				record => record.message === "knowledge.init.finished" && record.reason === "duplicate_name",
-			);
-			if (!rejected) throw new Error("Missing rejected duplicate-import diagnostic");
-			expect(rejected).toMatchObject({ stage: "validate", result: "rejected", cleanup: "not_needed" });
-			const duplicateOperation = sameOperation(records, rejected);
-			expect(duplicateOperation.some(record => record.message === "knowledge.database.completed")).toBe(true);
-			expect(duplicateOperation.some(record => record.message === "knowledge.init.scan.started")).toBe(false);
-			const absent = records.find(record => record.message === "knowledge.init.finished" && record.stage === "scan");
-			if (!absent) throw new Error("Missing rejected source-directory diagnostic");
-			expect(absent).toMatchObject({
-				result: "rejected",
-				reason: "source_not_directory",
-				document_count: 0,
-				cleanup: "not_needed",
-			});
-			const absentOperation = sameOperation(records, absent);
-			expect(absentOperation.some(record => record.message === "knowledge.init.scan.started")).toBe(true);
-			expect(
-				absentOperation.some(
-					record => record.message === "knowledge.init.scan.completed" || record.stage === "publish",
-				),
-			).toBe(false);
-			const rollback = records.find(
-				record =>
-					record.message === "knowledge.init.finished" &&
-					record.cleanup === "completed" &&
-					record.result === "failed",
-			);
-			if (!rollback) throw new Error("Missing failed import rollback diagnostic");
-			expect(rollback).toMatchObject({ stage: "read", document_count: 1 });
-			const rollbackOperation = sameOperation(records, rollback);
-			expect(rollbackOperation.some(record => record.message === "knowledge.init.lock.completed")).toBe(true);
-			expect(
-				rollbackOperation.some(
-					record => record.message === "knowledge.init.rollback.completed" && record.failed_stage === "read",
-				),
-			).toBe(true);
-			expect(rollbackOperation.some(record => record.stage === "publish")).toBe(false);
-			const cancelled = records.find(
-				record => record.message === "knowledge.init.finished" && record.result === "cancelled",
-			);
-			if (!cancelled) throw new Error("Missing cancelled import diagnostic");
-			expect(cancelled).toMatchObject({ cleanup: "completed", document_count: 1 });
-			expect(sameOperation(records, cancelled).some(record => record.level === "error")).toBe(false);
-			const queried = event(records, "knowledge.query.completed");
-			expect(queried).toMatchObject({ result: "completed", tool_call_id: "diagnostic-wiki" });
-			expect(queried.rendered_section_count as number).toBeGreaterThan(0);
-			expect(queried.match_count as number).toBeGreaterThan(0);
-			const builds = records.filter(record => record.message === "knowledge.init.started");
-			expect(new Set(builds.map(record => record.operation_id)).size).toBe(builds.length);
-		} finally {
-			await box.cleanup();
-		}
-	}, 120_000);
-
-	it("closes SQLite list failures without leaking host content", async () => {
-		const box = await sandbox("info");
-		const canary = "FORKDIAGNOSTICBOUNDARYPRIVATE";
-		try {
-			const value = await box.probe("boundaries", canary);
-			expect(value.listFailure).toBe("SQLiteError");
-			const { raw, records } = await box.logs();
-			expect(raw).not.toContain(canary);
-			const lists = records.filter(record => record.event === "knowledge.list");
-			const listStarts = lists.filter(record => record.result === "started");
-			expect(listStarts).toHaveLength(2);
-			for (const start of listStarts) {
-				expect(
-					lists.filter(record => record.call_id === start.call_id && record.result !== "started"),
-				).toHaveLength(1);
-			}
-			expect(lists.find(record => record.result === "failed")).toMatchObject({
-				level: "error",
-				stage: "query",
-				error_type: "SQLiteError",
-			});
-		} finally {
-			await box.cleanup();
-		}
-	}, 35_000);
-
 	it("closes offline CLI initialization without leaking rejected configuration paths", async () => {
-		const box = await sandbox("error", true);
+		const box = await sandbox();
 		const canary = "FORKDIAGNOSTICCATALOGPRIVATE";
 		try {
 			const success = await box.cli(["models", "refresh", "--json", "--no-extensions"]);

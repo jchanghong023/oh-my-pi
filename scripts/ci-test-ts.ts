@@ -49,7 +49,6 @@ interface TestCommand {
 	parallel?: number;
 	/** A fresh command process already isolates a one-file chunk. */
 	oneFile?: boolean;
-	knowledgeCliSlots?: 1 | 2;
 	requireNoSelection?: boolean;
 	selection?: BunSelection;
 }
@@ -57,7 +56,6 @@ interface TestCommand {
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
 
 const repoRoot = path.join(import.meta.dir, "..");
-const knowledgeCliTest = "test/knowledge-search-cli.e2e.test.ts";
 
 export interface BunSelection {
 	tool: "bun";
@@ -121,6 +119,12 @@ export async function bunTestSelection(
 			const producers = Array.isArray(run.producers)
 				? run.producers.filter((producer: TestProducerRecord) => producer.scope === "ci-test-ts:local-ts")
 				: [];
+			const rustScope: TestProducerRecord | undefined = Array.isArray(run.producers)
+				? run.producers.find(
+						(producer: TestProducerRecord) =>
+							producer.scope === "rust-fork-features" && producer.producer === "cargo nextest run",
+					)
+				: undefined;
 			if (
 				run.dirtyState !== "clean" ||
 				run.runtimeVersions?.bun !== Bun.version ||
@@ -142,18 +146,23 @@ export async function bunTestSelection(
 						(producer: TestProducerRecord) => (producer.selection as BunSelection | undefined)?.group === group,
 					),
 				) ||
-				!["cargo nextest run", "cargo test --doc", "ui-smoke/runner-stage"].every(name =>
-					run.producers.some(
-						(producer: TestProducerRecord) =>
-							producer.producer === name &&
-							producer.exitCode === 0 &&
-							(producer.status === "passed" || producer.status === "stage") &&
-							(name === "ui-smoke/runner-stage" || producer.selection?.mode === "full"),
-					),
+				rustScope?.exitCode !== 0 ||
+				rustScope.status !== "not-selected" ||
+				rustScope.selection?.tool !== "fork-scope" ||
+				rustScope.selection.mode !== "full" ||
+				rustScope.selection.selected !== 0 ||
+				!Array.isArray(rustScope.selection.packages) ||
+				rustScope.selection.packages.length !== 0 ||
+				!run.producers.some(
+					(producer: TestProducerRecord) =>
+						producer.producer === "ui-smoke/runner-stage" &&
+						producer.exitCode === 0 &&
+						(producer.status === "passed" || producer.status === "stage"),
 				) ||
 				run.producers.some(
 					(producer: TestProducerRecord) =>
-						producer.status === "not-selected" || producer.selection?.mode === "affected",
+						(producer.status === "not-selected" && producer !== rustScope) ||
+						producer.selection?.mode === "affected",
 				) ||
 				(hint != null && run.sourceRevision !== hint) ||
 				!/^[a-f0-9]{40,64}$/i.test(run.sourceRevision ?? "") ||
@@ -334,12 +343,6 @@ const forkCodingAgentFiles = new Set([
 	"test/sketch-server.test.ts",
 	"test/slash-commands/sketch.test.ts",
 	"test/input-controller-image-ownership.test.ts",
-	"test/knowledge-index.test.ts",
-	"test/knowledge-search-cli.e2e.test.ts",
-	"test/knowledge-search-tool.test.ts",
-	"test/knowledge-search-tool-availability.test.ts",
-	"test/knowledge-models.test.ts",
-	"test/knowledge-semantic.test.ts",
 	"test/lsp/edits.test.ts",
 	"test/models-offline-company.test.ts",
 	"test/company-models.test.ts",
@@ -422,9 +425,6 @@ const forkCodingAgentFiles = new Set([
 	"test/interactive-mode-working-label.test.ts",
 	"test/internal-urls/mcp-protocol.test.ts",
 	"test/judgment-chain.test.ts",
-	"test/knowledge-cli.test.ts",
-	"test/knowledge-hub.test.ts",
-	"test/knowledge-index-names.test.ts",
 	"test/loop-limit.test.ts",
 	"test/model-picker.test.ts",
 	"test/model-provider-contract.test.ts",
@@ -633,11 +633,10 @@ function workspaceTestCommand(pkg: string, parallel: number, options: { extraArg
 	};
 }
 
-// Root `bun run test` reports the selected fork Rust suite and applicable
-// doctests under the same progress stream and failure report as TypeScript.
+// Root `bun run test` reports the Rust fork scope alongside TypeScript results.
 function rustTestCommand(): TestCommand {
 	return {
-		label: "rust (selected fork features and applicable doctests)",
+		label: "rust (fork test scope)",
 		cwd: ".",
 		command: ["bun", "scripts/run-rs-task.ts", "test:rs"],
 	};
@@ -792,7 +791,6 @@ async function codingAgentTestCommands(
 	bucket: CodingAgentBucket,
 	forkOnly = false,
 	all = false,
-	isolateKnowledgeCli = false,
 ): Promise<TestCommand[]> {
 	const partition = await getCodingAgentTestPartition(all);
 	const testFiles = partition[bucket].filter(file =>
@@ -807,7 +805,7 @@ async function codingAgentTestCommands(
 	const chunks: string[][] = [];
 	let pending: string[] = [];
 	for (const file of testFiles) {
-		if (isStartupTest(file) || (isolateKnowledgeCli && file === knowledgeCliTest)) {
+		if (isStartupTest(file)) {
 			if (pending.length) chunks.push(pending);
 			pending = [];
 			chunks.push([file]);
@@ -840,13 +838,12 @@ async function codingAgentTestCommands(
 			],
 			parallel: plan.parallel,
 			oneFile: chunk.length === 1,
-			...(isolateKnowledgeCli && first === knowledgeCliTest ? { knowledgeCliSlots: 1 as const } : {}),
 		});
 	}
 	return commands;
 }
 
-async function commandsForMode(mode: Mode, isolateKnowledgeCli = false): Promise<TestCommand[]> {
+async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 	switch (mode) {
 		case "workspace":
 			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
@@ -871,10 +868,10 @@ async function commandsForMode(mode: Mode, isolateKnowledgeCli = false): Promise
 			return [
 				...(await commandsForMode("workspace")),
 				...(await commandsForMode("native")),
-				...(await codingAgentTestCommands("singleton", false, true, isolateKnowledgeCli)),
-				...(await codingAgentTestCommands("ui", false, true, isolateKnowledgeCli)),
-				...(await codingAgentTestCommands("runtime", false, true, isolateKnowledgeCli)),
-				...(await codingAgentTestCommands("native", false, true, isolateKnowledgeCli)),
+				...(await codingAgentTestCommands("singleton", false, true)),
+				...(await codingAgentTestCommands("ui", false, true)),
+				...(await codingAgentTestCommands("runtime", false, true)),
+				...(await codingAgentTestCommands("native", false, true)),
 			];
 		// Select individual fork consumers before applying the usual isolation chunks.
 		case "local-ts": {
@@ -897,10 +894,10 @@ async function commandsForMode(mode: Mode, isolateKnowledgeCli = false): Promise
 			}
 			return [
 				...packages,
-				...(await codingAgentTestCommands("singleton", true, false, isolateKnowledgeCli)),
-				...(await codingAgentTestCommands("ui", true, false, isolateKnowledgeCli)),
-				...(await codingAgentTestCommands("runtime", true, false, isolateKnowledgeCli)),
-				...(await codingAgentTestCommands("native", true, false, isolateKnowledgeCli)),
+				...(await codingAgentTestCommands("singleton", true)),
+				...(await codingAgentTestCommands("ui", true)),
+				...(await codingAgentTestCommands("runtime", true)),
+				...(await codingAgentTestCommands("native", true)),
 			];
 		}
 		// Root `bun run test` adds the Rust fork task to local TypeScript.
@@ -1016,18 +1013,15 @@ async function recordAttempt(
 
 function testCommandEnv(testCommand: TestCommand, env: Record<string, string | undefined>) {
 	const startupHome = testCommand.selection?.group === "startup" ? fulltestStartupHome : undefined;
-	if (!startupHome && testCommand.knowledgeCliSlots !== 2) return env;
+	if (!startupHome) return env;
 	return {
 		...env,
-		...(startupHome && {
-			HOME: startupHome,
-			USERPROFILE: startupHome,
-			...(process.platform === "win32" && {
-				APPDATA: path.join(startupHome, "AppData", "Roaming"),
-				LOCALAPPDATA: path.join(startupHome, "AppData", "Local"),
-			}),
+		HOME: startupHome,
+		USERPROFILE: startupHome,
+		...(process.platform === "win32" && {
+			APPDATA: path.join(startupHome, "AppData", "Roaming"),
+			LOCALAPPDATA: path.join(startupHome, "AppData", "Local"),
 		}),
-		...(testCommand.knowledgeCliSlots === 2 && { OMP_TEST_KNOWLEDGE_CLI_SLOTS: "2" }),
 	};
 }
 
@@ -1170,7 +1164,6 @@ export function buildChildEnv(): Record<string, string | undefined> {
 		GITHUB_ACTIONS: "",
 		...(Bun.env.GITHUB_ACTIONS === "true" ? { OMP_FORCE_RUST_TASKS: "1" } : {}),
 		PI_TEST_RUNTIME: "1",
-		OMP_TEST_KNOWLEDGE_CLI_SLOTS: undefined,
 		OMP_FULLTEST_BUN_MAX_CAPACITY: undefined,
 		BUN_JSC_useConcurrentGC: "0",
 		BUN_JSC_numberOfGCMarkers: "1",
@@ -1365,20 +1358,16 @@ export function testTimeoutMs(override: string | undefined = Bun.env.OMP_TEST_TI
 	return 30_000;
 }
 
-// Materialize argv from the actual lease, rather than requesting more files or
-// concurrent Knowledge scenarios than fit alongside the other live children.
-function applyChunkBudget(testCommand: TestCommand, parallel: number, slots: number, inFulltest: boolean): TestCommand {
+// Materialize argv from the actual lease so file parallelism fits alongside the other live children.
+function applyChunkBudget(testCommand: TestCommand, parallel: number, inFulltest: boolean): TestCommand {
 	if (testCommand.parallel === undefined) return testCommand;
-	const knowledgeCliSlots = testCommand.knowledgeCliSlots === undefined ? undefined : slots >= 2 ? 2 : 1;
 	return {
 		...testCommand,
 		command: [
 			...testCommand.command,
 			...(inFulltest && testCommand.oneFile ? [] : [`--parallel=${parallel}`]),
 			`--timeout=${testTimeoutMs()}`,
-			...(knowledgeCliSlots === undefined ? [] : [`--max-concurrency=${knowledgeCliSlots}`]),
 		],
-		knowledgeCliSlots,
 		parallel,
 	};
 }
@@ -1882,14 +1871,6 @@ function selectShard<T>(commands: T[], spec: string | undefined): T[] {
 	return selected;
 }
 
-// These Knowledge suites have repeatedly dominated cold fulltest timings. Only
-// use this fallback when that exact chunk has no usable measurement.
-const expensiveFulltestFiles = [
-	knowledgeCliTest,
-	"test/knowledge-search-tool.test.ts",
-	"test/knowledge-semantic.test.ts",
-];
-
 // The producer label and exact pre-budget argv together identify an unchanged
 // chunk. Never distribute a chunk's wall time among its files or rechunk it.
 export function prioritizeBunCommands<T extends TestCommand>(
@@ -1910,15 +1891,11 @@ export function prioritizeBunCommands<T extends TestCommand>(
 	}
 	for (const key of ambiguous) durations.delete(key);
 	return commands
-		.map(command => {
-			const duration = durations.get(JSON.stringify([command.label, command.command]));
-			const fallback =
-				duration === undefined && command.cwd === "packages/coding-agent"
-					? expensiveFulltestFiles.findIndex(file => command.command.includes(file))
-					: expensiveFulltestFiles.length;
-			return { command, duration, fallback: fallback < 0 ? expensiveFulltestFiles.length : fallback };
-		})
-		.sort((a, b) => (b.duration ?? -1) - (a.duration ?? -1) || a.fallback - b.fallback)
+		.map(command => ({
+			command,
+			duration: durations.get(JSON.stringify([command.label, command.command])) ?? -1,
+		}))
+		.sort((a, b) => b.duration - a.duration)
 		.map(item => item.command);
 }
 
@@ -2017,7 +1994,7 @@ if (import.meta.main) {
 		gateReportsFailures &&
 		(await isActiveBunFulltest(historyScope)),
 	);
-	const commands = await commandsForMode(requestedMode as Mode, sharedFulltestPool || inFulltest);
+	const commands = await commandsForMode(requestedMode as Mode);
 	// Explicit upstream native mode may require the desktop authorization boundary.
 	if (args.includes("--exclude-desktop") && requestedMode !== "local" && requestedMode !== "local-ts") {
 		const native = commands.find(command => command.cwd === "packages/natives");
@@ -2146,12 +2123,12 @@ if (import.meta.main) {
 				: undefined,
 		slots: command => {
 			const files = command.parallel ?? 1;
-			const preferred = command.knowledgeCliSlots !== undefined || elasticFiles(command) ? 2 : 1;
+			const preferred = elasticFiles(command) ? 2 : 1;
 			return [files, Math.min(cpuBudget, Math.max(files, preferred))];
 		},
 	};
 	const materialize = (command: TestCommand, slots: number) =>
-		applyChunkBudget(command, elasticFiles(command) ? slots : (command.parallel ?? 1), slots, inFulltest);
+		applyChunkBudget(command, elasticFiles(command) ? slots : (command.parallel ?? 1), inFulltest);
 	const run = isDryRun ? undefined : await beginTestRun(reportScope);
 	let failed = false;
 	try {

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "pageVersion": "sha256:662ec8ef6e2ffb2f5eeeb2fcd013521d2fe2f2997e7b7588105ec086e15e9076",
+  "pageVersion": "sha256:55e79ffa25be96d3f7750fd3c6833743fe126deef1237d902d348a3c08f56220",
   "claims": [
     {
       "id": "claim_44224e842f4b41ac86c92d2d8d64fbcd",
@@ -107,20 +107,6 @@
         {
           "resource": "repo://openspec/specs/fork-runtime/spec.md#L82-L83",
           "version": "repo-lines-v1:sha256:24f0d38fdbcee1ad5e637d25c47c250cae02d3b356774337d1e96943625fef9e:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYTZjYzdiODNlNWMxNWRmNDQ4YTU5NjU0MjkwZTVjMzNjZDllNTlhZjMxZWJmYjNkMjdlOGI4ZGY3Nzc3MGVhYyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMWYyMzA1ZmFlMWJiYjRhNjM2MjM3ZTdhMzhhZTBhNzQyODVlZmZjOTU2ZDY5ZWFjZWIzMjlkOWMxMGM4NDFhOCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMWRjZWMzOTUyMDgzYjZjNGNkMjVkNTdlMDMxMzNkMDNiZTIwZjIzYThlNzQwNDFiNTkzY2Y5ODIyZWUzYTFkMyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMDZhOWYzZmVkYWIyOTBkM2JhZGM0MzNjNjIyM2VkYmJhYjM2MWI4ZTdiMzc4MDI0ZDJmNDc2ZjM1MjM4MDc1ZSJ9"
-        }
-      ]
-    },
-    {
-      "id": "claim_24f869fd12c3484baf7ea8a948ea88dc",
-      "statement": "Wiki 需要先导入 Markdown，终端导入与会话应使用一致数据根和 profile；基础全文检索无需模型或向量服务，索引保存导入时快照且不会自动刷新。",
-      "evidence": [
-        {
-          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L137-L153",
-          "version": "repo-lines-v1:sha256:7bea7a6a71794a09da5679b9a2a9ab1b68cae3e840812bb21b6be41cfab55258:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZhMDVkYTRjY2RjN2E2NTc4NWRjM2NhM2UyN2ZlMDQxMDFjMDUzNzk1YTFiOWE3YjM3ZWY3MjA4NmVmMjdjZDMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJhOTRkZDM2MDdmMjExMDgxNGFlN2E5ODhhY2MzNmM3NjQ5YjU2YmRhNWI5MWYyNjNkZGY0ZWJhMDVmYmYxOTYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjZmNzE1YTdlMjFjZmYwZWFhYzJkM2NhZGNkNTEzNDRhMzY0YmIwNmQ2ZGRiOTFkYWRkOTQ5NjNmY2UzZTgyMzgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExZjEzMjY0NTFlNGFjOWE4NmVlMTZlMjA3OGI2MWY4YWM0YWE3OWQzMGVkMTlhMWYwMjY1NzI4NDA4MjQ0ZjYifQ"
-        },
-        {
-          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L188-L201",
-          "version": "repo-lines-v1:sha256:ad985be10d516c5330a62ee7c83973b4d64bf343251661824d483196d5a0de08:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRiZGVlMDJhODdjMDM4NzVhYTIwZWFjZWExZjEyODBlMmQ5Njg0YzQ0NmIzNjUxZjlhNzM0Y2U2YWEyZTAyNmEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQzNTRiMTkyZGRlZDg1YzQ0YTc2M2IxNTgyZjQ3YzhiMDczOWM2NTA0YzQ1YTJjM2QzOTNiMjUzMGQxNzkxYzMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc5OGEyY2M4NzNiMTMwNTY5ZGJkZTM2NTkxMmMwMjVlN2JkNTUwNjNkOGE2N2NmNjJhYWY2NDA1ODgyNjNmNjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU5NzM5NjdiYWU0ZDJhYWI2Y2M5MGUxOGQ2ZDg4OWY2Y2UxM2E3MjhjZWViZTlkMTFhMDNmMjdhNDFiMzNmOGEifQ"
         }
       ]
     },

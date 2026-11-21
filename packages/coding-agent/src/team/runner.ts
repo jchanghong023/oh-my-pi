@@ -29,12 +29,11 @@ import { EventBus } from "../utils/event-bus";
 import type { TeamSubagentCall, TeamSubagentOutcome, TeamSubagentRunner } from "./types";
 
 /**
- * The read-only tool set for every `/team` subagent. `knowledge_search` is
- * listed explicitly because `restrictToolNames` suppresses its automatic
- * attachment to read; `yield` is added by the executor's required-yield path.
+ * The read-only tool set for every `/team` subagent.
+ * `yield` is added by the executor's required-yield path.
  * No bash/eval/write/edit/task/hub entry can appear here.
  */
-export const TEAM_READ_ONLY_TOOLS: readonly string[] = ["read", "grep", "glob", "knowledge_search", "ast_grep"];
+export const TEAM_READ_ONLY_TOOLS: readonly string[] = ["read", "grep", "glob", "ast_grep"];
 
 /** Everything the runner needs from the dispatching session, as plain values. */
 export interface TeamRunnerDeps extends NativeChildSessionHooks {

@@ -1762,7 +1762,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("activates the read-only tools force-included next to an explicit read list", async () => {
+	it("activates OpenWiki queries alongside an explicit read list", async () => {
 		const tempDir = makeTempDir();
 
 		const { session } = await createAgentSession({
@@ -1771,8 +1771,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		});
 
 		try {
-			expect(session.getToolByName("knowledge_search")).toBeDefined();
-			expect(session.getActiveToolNames()).toContain("knowledge_search");
 			for (const name of openwikiQueryTools) {
 				expect(session.getToolByName(name)).toBeDefined();
 				expect(session.getActiveToolNames()).toContain(name);
@@ -1844,17 +1842,17 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("does not force-activate an inactive extension replacing knowledge_search", async () => {
+	it("does not force-activate an inactive extension replacing openwiki_search", async () => {
 		const tempDir = makeTempDir();
 		const replacement: ExtensionFactory = pi => {
 			pi.registerTool({
-				name: "knowledge_search",
-				label: "Extension Knowledge Search",
-				description: "Inactive replacement for the built-in knowledge search tool.",
+				name: "openwiki_search",
+				label: "Extension Wiki Search",
+				description: "Inactive replacement for the built-in OpenWiki search tool.",
 				parameters: type({}),
 				defaultInactive: true,
 				async execute() {
-					return { content: [{ type: "text", text: "extension knowledge search" }] };
+					return { content: [{ type: "text", text: "extension wiki search" }] };
 				},
 			});
 		};
@@ -1864,9 +1862,9 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			toolNames: ["read"],
 		});
 		try {
-			expect(session.getToolByName("knowledge_search")?.label).toBe("Extension Knowledge Search");
-			expect(session.hasBuiltInTool("knowledge_search")).toBe(false);
-			expect(session.getActiveToolNames()).not.toContain("knowledge_search");
+			expect(session.getToolByName("openwiki_search")?.label).toBe("Extension Wiki Search");
+			expect(session.hasBuiltInTool("openwiki_search")).toBe(false);
+			expect(session.getActiveToolNames()).not.toContain("openwiki_search");
 		} finally {
 			await session.dispose();
 		}
@@ -2279,7 +2277,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(activeToolNames).toEqual(
 				expect.arrayContaining(["read", "yield", "generate_image", "learn", "manage_skill", "write"]),
 			);
-			expect(activeToolNames).toContain("knowledge_search");
+			expect(activeToolNames).toContain("openwiki_search");
 			// Explicit and force-included tools stay top-level. Ambient custom and
 			// extension capabilities mount through the device-only write transport.
 			const mountedNames = normal.getXdevToolEntries().map(entry => entry.name);
@@ -2305,7 +2303,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("does not add knowledge and wiki queries to explicit tool lists without read", async () => {
+	it("does not add OpenWiki queries to explicit tool lists without read", async () => {
 		const tempDir = makeTempDir();
 		const { session } = await createAgentSession({
 			...baseOptions(tempDir),
@@ -2315,7 +2313,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		try {
 			const activeToolNames = session.getActiveToolNames();
 			expect(activeToolNames).toContain("bash");
-			expect(activeToolNames).not.toContain("knowledge_search");
 			for (const name of openwikiQueryTools) expect(activeToolNames).not.toContain(name);
 		} finally {
 			await session.dispose();

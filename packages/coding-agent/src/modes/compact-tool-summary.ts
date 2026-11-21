@@ -184,8 +184,6 @@ function fallback(name: string, fields: Fields): string {
 			return join(text(fields.status), text(fields.description));
 		case "grep":
 			return join(text(fields.pattern), text(fields.path));
-		case "knowledge_search":
-			return join(text(fields.query), text(fields.path));
 		default:
 			return firstText(fields.path, fields.target, fields.url, fields.query, fields.pattern) ?? "";
 	}

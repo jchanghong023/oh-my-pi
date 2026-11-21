@@ -34,7 +34,7 @@
 - Collab Web now uses the upstream guest UI and relay client without fork-only presentation or composer features.
 - Removed `/loopgoal`. `/loop` and `/loopn` remain available.
 - Goal continuation now follows upstream: a turn with no new tool activity stops automatic continuation without sending a forced-tool recovery request.
-- Removed `omp knowledge mcp`. The built-in `knowledge_search` tool, `/knowledge` panel, and index management commands remain available.
+- Removed the built-in local Markdown index, including `knowledge_search`, `/knowledge`, `omp knowledge` (including `mcp`), and `knowledge.reranker.*`; existing `knowledge.db` files are not deleted or migrated. OpenWiki and external MCP tools remain available.
 
 ### Added
 
@@ -109,7 +109,6 @@
 - Offline `omp openspec version --check` follows redirects only within the configured HTTPS mirror.
 - `/todoloop` skips tasks hidden by multiline HTML comments, including comments that start after visible text.
 - Session shutdown retries pending subagent cleanup after an earlier strict cleanup failed and reports any remaining failure.
-- Knowledge search accepts exact POSIX paths such as `x:manual.md` and counts only hits that were actually collapsed.
 - Compact mode keeps the previous valid Output when a file Diff fully covers a newer success receipt.
 - `omp openwiki --init/--update --print` includes generation progress on stdout.
 - `/crawl` saves readable documents whose URL contains an authentication-related path segment instead of treating the path alone as a login prompt.

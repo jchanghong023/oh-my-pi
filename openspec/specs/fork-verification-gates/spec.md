@@ -51,18 +51,18 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 | 入口 | 当前有效范围 | 非编译硬上限 | 总墙钟硬上限 |
 | --- | --- | --- | --- |
 | `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 360 秒 | 沿用非编译预算 |
-| `bun run fulltest` | 全部 fastcheck 检查 + 本机 fork 功能的 Bun、Cargo/Nextest 和适用 doctest、变更对应的仓库脚本自测、native 构建及普通 TUI smoke；测试选择见下文，无跨 WSL | 1800 秒 | 1800 秒 |
+| `bun run fulltest` | 全部 fastcheck 检查 + 本机 fork 功能的 Bun、变更对应的仓库脚本自测、native 构建及普通 TUI smoke；默认 Rust 测试未选，显式 `--full` 执行 workspace Rust 测试与 doctest；无跨 WSL | 1800 秒 | 1800 秒 |
 | `bun run slowtest` | 本机 fulltest 一次 + 项目所需且现有兼容 WSL 可用时的 Linux fulltest；无适用 WSL 时保留本机 fulltest | 3000 秒 | 3000 秒 |
 
 表中列出必需的独立工作与适用套件；原生增量选测只说明本轮实际覆盖，不能声称整套测试均新执行。
 
 - 三层门禁及根脚本直接调用既有 Bun／Cargo 检查、构建与测试原语，保持平台限制和报告语义；fastcheck 不运行测试，保留既有工具及增量编译缓存，但不缓存门禁或完整命令结果以免执行。不建立 fork 专用 Bazel 验证图或自建结果缓存框架。上游原有显式目标 Bazel 工具及其 CI 原生产物不属于此门禁改动。
 - 日常门禁包含真实 Rust 编译和 Clippy：`check:rs` 依次运行 `cargo fmt --all -- --check`、`cargo build --workspace`（保留既有 vendored fork 排除）和与 `lint:rs` 相同的 workspace Clippy（保留既有第三方排除、`--no-deps` 与 `-D warnings`）。编译必须生成并链接产物，不能以 Clippy／`cargo check` 代替；fastcheck 及复用它的 fulltest／slowtest 均检查 Rust 编译器与 Clippy 警告并以非零退出阻断。固定工具链、显式 `lint:rs`／`fix:rs` 入口、其他检查和测试范围及预算保持不变。
-- 日常 `bun run test`、`test:ts`、`test:rs`、fulltest 和 slowtest 测试 fork 自有功能；父仓静态检查与测试发现排除 `vendor/openwiki` 子模块，构建和运行仍使用真实 fork。保留 OpenSpec 原生技能与资源、Team/Goal（包括取消与持久化）、Knowledge 索引、OpenWiki、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
+- 日常 `bun run test`、`test:ts`、fulltest 和 slowtest 测试 fork 自有功能；父仓静态检查与测试发现排除 `vendor/openwiki` 子模块，构建和运行仍使用真实 fork。保留 OpenSpec 原生技能与资源、Team/Goal（包括取消与持久化）、OpenWiki、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
 - 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留。真实 PTY 中普通 TUI 的错误、状态和焦点边界保留。本次 tui-presentation 允许清退的旧 compact 专属测试、fixture 和断言仍按原边界处理；上游、clean、detailed、共享布局或其他 fork 功能不在清退范围。
 - 默认 fulltest 的普通 Bun 测试在 fork 白名单内以原生 `--changed` 根据变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不能回退整个上游测试集。新 compact 的显示差异纳入普通 Bun 消费者范围，不再设始终完整运行的 compact 专属通道。显式选测及 `local`／`local-ts` 须如实报告范围，宿主 `CI` 或 `OMP_TEST_SHARD` 不改变本地范围；保留文件隔离、TSX 和共享并发预算。仓库脚本自测只在对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 保留。
 - collab-web 的 fork 白名单仅纳入 `test/composer.test.tsx`、`test/transcript.test.tsx`、`test/tool-view.test.tsx`、`test/markdown.test.tsx`，不纳入整个 collab-web 或通用 VCS 套件。测试发现、文件计数、空选择探针和报告 MUST 同时识别 `.test.tsx`。
-- Bun fork 套件版本 MUST 使用 `suiteRevision: 8`；消费者集合变化时 MUST 同步递增 `suiteRevision`，下一次获授权的完整 fork 回归须在干净工作区为新范围建立基线。完整基线与计时提示资格须匹配当前消费者范围，旧范围报告不可复用。affected、失败及未完成报告的原语义不变。
+- Bun fork 套件版本 MUST 使用 `suiteRevision: 9`；消费者集合变化时 MUST 同步递增 `suiteRevision`，下一次获授权的完整 fork 回归须在干净工作区为新范围建立基线。完整基线与计时提示资格须匹配当前消费者范围，旧范围报告不可复用。affected、失败及未完成报告的原语义不变。
 - 保留 `scripts/ci-test-ts.ts` 白名单内适用的原生 Agent／TUI 消费者覆盖及原生 MCP 能力边界，不扩大整个上游 agent 或通用 Browser 套件，也不增加 MCP 连接／授权验收。
 - 显示验证 MUST 围绕 clean 基线、按文件目标筛选且与上游 detailed 一致的 write／edit 原组件显示、固定两行活动区及隐藏独立模型处理忙碌提示的消费者契约，复用既有普通测试入口和必要的共享布局、渲染、恢复验证；不按文件名收集 compact 大套件。纯上下文压缩模式注册、算法、预算、队列和 `/compact` 参数派发不因名称相似纳入。
 - 旧 `compact_display` 命令、独立清单、执行通道、排除参数、专属报告和基线要求 MUST 移除，不保留兼容别名或用新名称重建同类通道。仍适用的显示消费者测试由普通选测机制发现，只执行一次，不再从普通组排除后另行执行。
@@ -70,11 +70,11 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 - 根目录 `docs/`、`docs-zh-CN/` 和 `AGENTS.md` 不作为 Git 测试选择输入，不触发 Bun 全量回退或独立 UI smoke；混合变更仍按其余运行输入判断。排除不扩大到包内 Markdown/prompt 等运行资源；缺少合格基线和显式 `--full` 的行为不变。
 - `bun run fulltest --full` 显式运行当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 和仓库脚本测试，但不发现或运行 `vendor/openwiki` 子模块自身的测试；OMP OpenWiki 消费者测试仍在范围内。不使用 fork 白名单、变更选测、pytest-testmon 或环境分片；默认 fulltest 及 slowtest 不变。保留测试自身的 skip、平台不支持、真实桌面输入及另需单独授权的集成边界；不因全量模式放宽门禁时限。
 - 独立 Python SDK、Robomp 和 legacy 通用 SDK 不纳入默认 fork 门禁，手动入口保留；Robomp integration 仍须单独显式启用，Windows 原生调用报告不支持并非零退出。
-- `bun run test:rs` 用 Cargo 包及 Nextest namespace 标准筛选 `omp-knowledge` 全包和 `omp-natives` 的 `knowledge::` 绑定测试；scope 为 `rust-fork-features`。独立 doctest 阶段实际运行 `cargo test -p omp-knowledge --doc --no-fail-fast`，报告真实命令、退出码和命令墙钟时间；Cargo doctest 无标准 JUnit 报告，记 `report=not-supported`。`omp-natives` 是 `cdylib`，无 doctest，不生成虚构用例或 PASS，不运行上游 tree-sitter-go 文档例子凑数。保留同平台构建配置及正常 Cargo 增量编译缓存。
+- `bun run test:rs`、默认 fulltest 和 slowtest 的 fork Rust 范围没有测试选择器。Rust 测试 scope 为 `rust-fork-features`，MUST 报告 `not-selected`、原因和零选择，不启动 Nextest、doctest 或变更选测工具，也不生成虚构的命令执行、JUnit、用例、耗时或测试 PASS。Rust 静态检查、真实编译及正常 Cargo 增量编译缓存不变。
 - 非 Rust 变更不能一律视为与 Rust 无关：构建脚本、配置、清单、锁文件、工具链、生成输入及跨语言依赖等可能影响 Rust。Bun 文件依赖是近似，动态依赖、环境和外部输入可能漏检；受影响选测不是全新完整回归的证明。
 - 通过子进程启动 CLI 的测试须在公共 harness 或独立启动器中静态声明真实运行依赖，让 Bun `--changed` 能识别间接消费者；Tools registry 可作为输入，不能导入并执行 CLI 主入口来构造依赖图。
-- 默认 fulltest 使用同一个真实 clean、完整成功的 fork 基线；Bun 完整基线包含当前普通和启动敏感组所需工作，不再要求已移除的 `compact-display` producer；旧范围报告不能充当新范围完整基线。Rust 用 cargo-delta 0.5.0 对 Git 变更和 Cargo metadata 分析受影响 crate 及逆向依赖，与 fork 包范围取交集后以标准 Cargo 包选择执行 Nextest。配置 tripwire 覆盖全局或无法安全归属的输入；动态依赖、构建脚本、环境及外部输入仍可能超出分析，无法确定时回退完整 fork 范围，仍须适时完整回归。工具缺失、失败或输出无效亦回退完整 fork 范围；无合格基线同样回退。空交集不启动 Cargo，`omp-knowledge` 被选时才独立运行 doctest；`omp-natives` 无 doctest。独立 UI smoke 和仓库脚本仍按 Git 变更规划，缺基线或依赖未知时保守执行；静态检查及必要 native 准备始终全局执行。affected、partial 或失败报告不能作为完整基线，不以提交 sidecar 或改写历史建立基线。
-- cargo-delta 须预先安装 `cargo install cargo-delta --version 0.5.0 --locked`，门禁不自动安装；其标准分析缓存不是测试结果缓存。直接 `test:rs` 始终运行完整 fork 范围，`--full` 始终运行完整 workspace，不使用 delta。Git／cargo-delta 未选阶段记录有效基线 revision、相对变更路径、原因和零选择，cargo-delta 另记录空包列表；不虚构 XML、用例或耗时。实际受影响包的 Nextest 保留真实 JUnit、包列表和基线，doctest 按实际阶段状态报告；全未选可报告真实零执行，混合报告保留实际 XML 与失败，均不得当作完整新执行或完整基线。
+- 默认 fulltest 使用真实 clean、完整成功的 fork 基线；Bun 完整基线包含当前普通和启动敏感组所需工作，不再要求已移除的 `compact-display` producer；旧范围报告不能充当新范围完整基线。独立 UI smoke 和仓库脚本仍按 Git 变更规划，缺基线或依赖未知时保守执行；静态检查及必要 native 准备始终全局执行。affected、partial 或失败报告不能作为完整基线，不以提交 sidecar 或改写历史建立基线。
+- 显式 `--full` 运行完整 Rust workspace，以 Nextest 执行测试、以 Cargo 执行适用的 doctest，不使用变更选测。报告保留实际命令、退出码、耗时与 Nextest JUnit；doctest 无标准 JUnit 时记 `report=not-supported`，不虚构用例。Git 选测的未选阶段继续记录可用的基线 revision、相对变更路径、原因和零选择；混合报告保留真实 XML 与失败，不把未选工作当作完整新执行。
 - 单个用例、文件或语言套件失败后继续执行独立的其余必需测试，Nextest 与 rustdoc 使用 `--no-fail-fast`，Bun 不添加 `--bail`，pytest 不添加 `-x`；只有总预算、取消或参数错误可终止剩余工作。
 - 默认 fulltest 不自动纳入独立 Go/Rust SDK；安装测试和另需授权的集成入口也不自动纳入 `--full`。手动构建发布 CI 不运行任何测试，也不以测试作业为发布依赖；保留的 `ci:test:*` 脚本只是显式测试工具，不由 CI 工作流调用。发布仍依赖版本元数据、二进制与浏览器扩展构建成功，不增加自动触发。
 - native 安装从真实构建产物执行版本戳及宿主加载核验；最终版本戳后的 addon 字节与 bindings 内容均未变化、且已有文件可写时，保留安装文件及其修改时间。版本或内容变化时 MUST 按下文「原生安装替换与回滚」执行替换。
@@ -93,9 +93,8 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 - `--full` 的共享 Bun 池在非 Rust 静态检查、独立脚本及其 Python／Go 接续工作结束时接管已释放的预算；Cargo 预算只在它的最后阶段（含 Rust SDK）结束后释放。空闲槽可在原 Bun 命令运行时使用，合计不得超过开跑时的共享额度。默认选测和低容量串行不变。
 - `--full` 共享上限至少八槽、扣除静态检查与独立脚本后还可同时容纳两个 Bun 与两个 Cargo worker 时，Cargo 链至少保留两槽，仍受上文四槽上限；默认 fork 及低容量分配不变。
 - Windows `fulltest` 在 native 和串行脚本准备完成后、启动并行阶段前，按可用物理内存限制共享容量（每 GiB 最多一个预算单位，至少一个）；低容量串行，不调整选测或超时。单文件 Bun 分块仍独占进程，直接运行而不再启动额外文件 worker。
-- fulltest MUST 将可用实测耗时最长的分块优先启动。默认和 `--full` 分别使用最近七天内同平台、架构和 Bun 版本的本模式报告；默认还要求 `suiteRevision: 8`。整轮失败、部分完成或被中断时，已完成分块仍可用于排序。优先读取独立 producer，取每个精确分块最新、有效且无歧义的实际命令墙钟耗时。当前运行、未完成分块、缺失报告、非法耗时或有歧义的同次测量不得提供提示。标签不受无关分块序号或分桶大小影响；仅当标签与预算／报告参数以外的 argv 精确匹配时复用，不拆分文件耗时或跨分块重组。无提示仍执行必需工作，先用既有高成本分类，再维持稳定顺序。排序不改变分片、超时、结果或完整成功基线资格。
+- fulltest MUST 将可用实测耗时最长的分块优先启动。默认和 `--full` 分别使用最近七天内同平台、架构和 Bun 版本的本模式报告；默认还要求 `suiteRevision: 9`。整轮失败、部分完成或被中断时，已完成分块仍可用于排序。优先读取独立 producer，取每个精确分块最新、有效且无歧义的实际命令墙钟耗时。当前运行、未完成分块、缺失报告、非法耗时或有歧义的同次测量不得提供提示。标签不受无关分块序号或分桶大小影响；仅当标签与预算／报告参数以外的 argv 精确匹配时复用，不拆分文件耗时或跨分块重组。无提示仍执行必需工作，先用既有高成本分类，再维持稳定顺序。排序不改变分片、超时、结果或完整成功基线资格。
 - 本地高成本 integration／E2E chunk 同时运行不得超过 4 个，且仍受上述 Bun 测试并发上限约束；达到此子限制时，空余并发 MUST 继续调度其他可运行工作，不得因等待高成本 chunk 而闲置，不因此增加普通全局并发。此子限制不改变超时、断言、覆盖及结果合同。
-- Knowledge CLI 的既有真实消费者场景可在单个测试文件内最多两个并行，并遵守调用方单槽预算。每个场景须独立拥有 provider、查询状态、观测、子进程、配置、工作区及清理；只可共享只读的预备索引字节，再复制为各自的数据库／WAL，不共享可变应用状态或 CLI 进程。既有全部用例、分页正文、控制字符、错误、移除索引和真实至少 500ms 对外等待断言保持，不以减少矩阵或跳过实际启动加速。
 - 门禁只以轻量 Git 查询记录本轮开始时的 HEAD 和工作区状态，不遍历、读取或哈希全仓文件及子模块源码，不维护源码指纹、阶段快照或对应环境参数／报告字段。运行期间文件、未跟踪临时文件或 HEAD 变化 MUST NOT 触发整轮失败、取消或自动重跑，也不要求为本机门禁先提交或清空工作区。native 生成仍先于静态检查和测试读取者；版本记录不作为内容未变化的证明，受影响测试选择与实际失败报告保持独立。
 - Windows 测试子进程的 PATH 排除 WindowsApps 执行占位程序，复用已安装的真实 Python；Python 夹具的 UTF-8 标准流协议不依赖宿主 ANSI 代码页。环境覆盖遵循 Windows 变量名大小写不敏感语义，不修改系统 PATH 或宿主配置。测试使用隔离应用配置、HOME 和凭据，不读取用户真实配置；Bun 测试层的 APPDATA、LOCALAPPDATA 与 USERPROFILE 属于同一隔离环境，Chromium 继续使用独立数据目录启动。
 - 既有 PTY smoke 覆盖普通 CLI、`/team`、取消、输入和退出，使用既有 `tui-test`／TUI harness，不另造 PTY／ANSI 驱动。既有启动与 Team／取消独立分组仍受可用核心数与继承的 `OMP_TEST_CPU_BUDGET` 约束，最多两组并行，组内依赖顺序不变，全部自有进程须完成并回收。Goal 手动启动／停止、长任务断线和任意深度子代理结清由对应的独立消费者继续覆盖。缺失 `tui-test` 按缺工具失败。
@@ -127,12 +126,12 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 
 ### Requirement: 原生测试选择
 
-fulltest 和 slowtest MUST 使用 Bun 原生选测能力和 cargo-delta 受影响 crate 分析；不将门禁或整个测试命令作为可跳过的缓存目标；fastcheck 保留原有编译和工具缓存且不运行测试。
+默认 fulltest 和 slowtest MUST 使用 Bun 原生选测能力；不将门禁或整个测试命令作为可跳过的缓存目标；fastcheck 保留原有编译和工具缓存且不运行测试。
 
 #### Scenario: 受影响测试与回退
 
-- **WHEN** 运行本机或适用 WSL 的 fulltest
-- **THEN** Bun 测试在 fork 白名单内依据合格基线使用 `--changed`，新 compact 消费者与其他功能使用同一选择规则；不可建立有效选择时回退完整白名单，不再存在完整执行 compact 专属清单的例外。Rust 基于 cargo-delta 受影响 crate 与 fork 范围的交集执行 Nextest，空交集记为未选；选中 `omp-knowledge` 才运行其 doctest，native `cdylib` 无 doctest。缺基线、工具缺失或失败、输出无效及无法确定边界时回退完整 fork 范围
+- **WHEN** 运行本机或适用 WSL 的默认 fulltest
+- **THEN** Bun 测试在 fork 白名单内依据合格基线使用 `--changed`，新 compact 消费者与其他功能使用同一选择规则；缺基线、工具不支持或无法建立有效选择时回退完整白名单，不再存在完整执行 compact 专属清单的例外。
 - **AND** 选择结果区分执行、排除和未选中，报告 full 或 affected；历史执行与平台跳过不算本轮通过，选择近似不证明完整新回归
 - **AND** 基线扫描仅检查门禁生成的运行 ID 目录；同级手工产物既不提供基线，也不阻断基线。更新的有效运行 ID 对应报告缺失或损坏时仍保守回退，不视为通过。
 - **AND** 失败、取消或未完成的上次执行不得仅因已有历史数据而被排除；运行器须实际重跑并保留真实失败退出码
@@ -151,10 +150,12 @@ fulltest 和 slowtest MUST 使用 Bun 原生选测能力和 cargo-delta 受影�
 - **AND** 保留原有有效消费者对流式表格、Composer 布局及历史重建、Web Search 完整答案、压缩期间子代理消息投递和压缩后继续收取结果的业务断言；这些能力不因原测试曾位于旧显示清单而被删除，也不因名称含 compact 把纯压缩算法套件强制纳入显示验证。
 - **AND** 使用既有 affected 选择、失败继续、隔离、报告和预算规则，fastcheck 仍不运行测试；不为新 compact 新建独立执行通道或大型替代套件。
 
-#### Scenario: Rust 修改 A 选择受影响 crate
+#### Scenario: 默认 Rust 范围为空与显式全量执行
 
-- **WHEN** Rust 源码 A 变化且存在合格基线，cargo-delta 能确定受影响包
-- **THEN** 以 Cargo metadata 逆向依赖与 Git 变更分析选出受影响 crate，在 fork 范围内只对交集执行 Nextest；`omp-knowledge` 被选才执行其 doctest。空交集不启动 Cargo，保留正常增量编译缓存；动态或未知输入不能被假定为已完整追踪，仍须适时完整回归
+- **WHEN** 执行 `bun run test:rs`、默认 fulltest 或 slowtest
+- **THEN** Rust 测试记为 `not-selected`，不启动 Rust 测试命令，不影响静态检查和编译；不能将零选择报告为测试通过
+- **WHEN** 执行 `bun run fulltest --full`
+- **THEN** 实际运行 workspace Nextest 与适用 doctest，如实报告执行结果
 
 #### Scenario: 连续运行验收
 

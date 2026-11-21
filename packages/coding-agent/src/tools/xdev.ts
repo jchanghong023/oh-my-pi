@@ -273,11 +273,10 @@ export function resolveXdevTool(state: XdevState, name: string): Tool | undefine
 	return resolved;
 }
 
-/** Index queries retain native read-only policy and scheduling through the write transport. */
+/** OpenWiki queries retain native read-only policy and scheduling through the write transport. */
 export function isReadOnlyIndexDevice(state: XdevState | undefined, name: string): boolean {
 	return (
-		(name === "knowledge_search" ||
-			name === "openwiki_search" ||
+		(name === "openwiki_search" ||
 			name === "openwiki_read" ||
 			name === "openwiki_list_workspaces" ||
 			name === "openwiki_list_wikis") &&

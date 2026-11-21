@@ -6,7 +6,7 @@ import type { GateRun } from "./test-gate-runtime";
 const reportRoot = path.join(import.meta.dir, "..", "runs", "test-timing");
 
 /** Identifies the current fork Bun consumer set for baselines and timing history. */
-export const BUN_FORK_SUITE_REVISION = 8;
+export const BUN_FORK_SUITE_REVISION = 9;
 
 export interface TestReportRun {
 	id: string;
@@ -195,9 +195,8 @@ export function bunTestProducerKey(producer: TestProducerRecord, scope: BunFullt
 	const argv = producer.command;
 	let end = argv.length;
 	if (argv[end - 2] === "--reporter=junit" && argv[end - 1]?.startsWith("--reporter-outfile=")) end -= 2;
-	const grant = /^--max-concurrency=[12]$/.test(argv[end - 1] ?? "") ? 1 : 0;
-	if (argv[end - grant - 1]?.startsWith("--timeout=")) {
-		end -= 1 + grant;
+	if (argv[end - 1]?.startsWith("--timeout=")) {
+		end--;
 		if (argv[end - 1]?.startsWith("--parallel=")) end--;
 	}
 	return JSON.stringify([match[2], argv.slice(0, end)]);
@@ -281,8 +280,10 @@ export function testReportPath(label: string): string {
 }
 
 /** Independent files allow concurrent producers to finish without a shared metadata-write race. */
-export async function recordTestProducer(info: TestProducerRecord): Promise<void> {
-	const dir = process.env.OMP_TEST_REPORT_DIR;
+export async function recordTestProducer(
+	info: TestProducerRecord,
+	dir = process.env.OMP_TEST_REPORT_DIR,
+): Promise<void> {
 	if (!dir) throw new Error("Test report run was not initialized");
 	let report: "available" | "missing" | "not-supported" = info.reportPath ? "missing" : "not-supported";
 	if (info.reportPath) {
@@ -304,6 +305,24 @@ export async function recordTestProducer(info: TestProducerRecord): Promise<void
 	if (report === "missing") {
 		console.error(`Missing test timing report for ${info.producer}: ${info.reportPath}`);
 	}
+}
+
+const emptyRustForkReason = "No fork-owned Rust tests are configured";
+
+export function recordUnselectedRustForkTests(dir?: string): Promise<void> {
+	return recordTestProducer(
+		{
+			producer: "cargo nextest run",
+			command: ["bun", "scripts/run-rs-task.ts", "test:rs"],
+			scope: "rust-fork-features",
+			startedAt: new Date().toISOString(),
+			durationSeconds: 0,
+			exitCode: 0,
+			status: "not-selected",
+			selection: { tool: "fork-scope", mode: "full", selected: 0, packages: [], reason: emptyRustForkReason },
+		},
+		dir,
+	);
 }
 
 /** Gate reports settle after owned work, and are republished if finalization itself cancels the gate. */
@@ -365,16 +384,28 @@ async function validSelection(producer: ReportProducer): Promise<boolean> {
 	for (const count of [selection.selected, selection.deselected]) {
 		if (count !== undefined && (!Number.isSafeInteger(count) || count < 0)) return false;
 	}
-	if (
-		selection.tool === "cargo-delta" &&
-		(selection.mode !== "affected" ||
-			typeof selection.baseline !== "string" ||
-			!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(selection.baseline) ||
-			!Array.isArray(selection.packages) ||
-			!selection.packages.every((name: unknown) => typeof name === "string" && name.trim().length > 0) ||
-			(producer.status !== "not-selected" && selection.packages.length === 0))
-	)
-		return false;
+	if (selection.tool === "fork-scope") {
+		const record = producer as unknown as Record<string, unknown>;
+		const evidence = selection as unknown as Record<string, unknown>;
+		return (
+			producer.scope === "rust-fork-features" &&
+			producer.producer === "cargo nextest run" &&
+			producer.status === "not-selected" &&
+			producer.exitCode === 0 &&
+			producer.durationSeconds === 0 &&
+			producer.report === "not-supported" &&
+			producer.reportPath == null &&
+			selection.mode === "full" &&
+			selection.selected === 0 &&
+			Array.isArray(selection.packages) &&
+			selection.packages.length === 0 &&
+			selection.reason === emptyRustForkReason &&
+			selection.baseline === undefined &&
+			selection.changedPaths === undefined &&
+			selection.reportPath == null &&
+			!["case", "cases", "testcase", "testcases", "time"].some(key => record[key] != null || evidence[key] != null)
+		);
+	}
 	if (
 		selection.tool === "pytest-testmon" &&
 		selection.mode === "affected" &&
@@ -390,11 +421,10 @@ async function validSelection(producer: ReportProducer): Promise<boolean> {
 		return false;
 	if (producer.status === "not-selected") {
 		if (producer.exitCode !== 0 || selection.mode !== "affected" || selection.selected !== 0) return false;
-		if (selection.tool === "git" || selection.tool === "cargo-delta") {
+		if (selection.tool === "git") {
 			const record = producer as unknown as Record<string, unknown>;
 			const evidence = selection as unknown as Record<string, unknown>;
 			return (
-				(selection.tool !== "cargo-delta" || selection.packages?.length === 0) &&
 				producer.report === "not-supported" &&
 				producer.reportPath == null &&
 				producer.durationSeconds === 0 &&

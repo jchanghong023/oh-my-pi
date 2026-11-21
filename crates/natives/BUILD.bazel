@@ -229,7 +229,6 @@ rust_shared_library(
         "//crates/edit",
         "//crates/xfs",
         "//crates/iso",
-        "//crates/knowledge",
         "//crates/predict",
         "//crates/shell",
         "//crates/vcs",
@@ -253,7 +252,6 @@ rust_test(
 rust_test(
     name = "pi_natives_test",
     crate = ":pi_natives",
-    compile_data = ["//:packages/coding-agent/test/fixtures/docs-v3.sql"],
     edition = "2024",
     proc_macro_deps = all_crate_deps(proc_macro_dev = True),
     deps = all_crate_deps(normal_dev = True) + [

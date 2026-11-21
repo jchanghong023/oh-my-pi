@@ -1667,7 +1667,6 @@ const TOOL_DEFINITION_MARKER = Symbol("__isToolDefinition");
 const MAX_MCP_INSTRUCTIONS_LENGTH = 4000;
 /** Built-ins `createTools` force-includes into explicit tool lists; the active set mirrors them. */
 const SESSION_MANAGED_BUILTIN_TOOL_NAMES = [
-	"knowledge_search",
 	"openwiki_search",
 	"openwiki_read",
 	"openwiki_list_workspaces",
@@ -5077,12 +5076,12 @@ async function createAgentSessionScoped(
 		// Session-managed builtins may be force-included by createTools. Keep the
 		// active set consistent with that registry decision, using built-in
 		// provenance so same-named extension tools are never force-activated.
-		// This keeps the read-only index/read pairing and auto-learn guidance consistent with the
-		// callable tool surface.
+		// Keep OpenWiki paired with read and auto-learn guidance consistent with
+		// the callable tool surface.
 		if (!restrictToolNames && explicitlyRequestedToolNames) {
 			const readToolRequested = explicitlyRequestedToolNames.includes("read");
 			for (const name of SESSION_MANAGED_BUILTIN_TOOL_NAMES) {
-				if ((name === "knowledge_search" || name.startsWith("openwiki_")) && !readToolRequested) continue;
+				if (name.startsWith("openwiki_") && !readToolRequested) continue;
 				if (builtInRegistryToolNames.has(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
 				}

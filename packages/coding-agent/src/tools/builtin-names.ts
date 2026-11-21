@@ -14,7 +14,6 @@ export const BUILTIN_TOOL_NAMES = [
 	"grep",
 	"find",
 	"lsp",
-	"knowledge_search",
 	"openwiki_search",
 	"openwiki_read",
 	"openwiki_list_workspaces",
@@ -70,10 +69,6 @@ export const BUILTIN_TOOL_HELP: Record<BuiltinToolName, BuiltinToolHelp> = {
 	ask: { summary: "Ask the user questions (interactive mode only)", defaultState: "on" },
 	web_search: { summary: "Search the web", defaultState: "on" },
 	lsp: { summary: "Language server queries (code intelligence)", defaultState: "off" },
-	knowledge_search: {
-		summary: "Search indexed enterprise knowledge and documents by full text and vectors",
-		defaultState: "on",
-	},
 	openwiki_search: { summary: "Search existing repository OpenWiki sections", defaultState: "on" },
 	openwiki_read: { summary: "Read complete sections from a repository OpenWiki", defaultState: "on" },
 	openwiki_list_workspaces: { summary: "List workspaces containing a repository OpenWiki", defaultState: "on" },

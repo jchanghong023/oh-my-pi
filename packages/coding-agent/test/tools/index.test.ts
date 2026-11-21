@@ -89,7 +89,7 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["read", "lsp", "write"]);
 		const names = tools.map(t => t.name);
 
-		expect(new Set(names)).toEqual(new Set(["read", "write", "knowledge_search", ...openwikiQueryTools]));
+		expect(new Set(names)).toEqual(new Set(["read", "write", ...openwikiQueryTools]));
 	});
 
 	it("creates xd:// presentation state without remounting explicitly requested built-ins", async () => {
@@ -98,9 +98,7 @@ describe("createTools", () => {
 
 		expect(session.xdev).toBeDefined();
 		expect(session.xdev?.mountedNames.size).toBe(0);
-		expect(new Set(tools.map(tool => tool.name))).toEqual(
-			new Set(["read", "lsp", "write", "knowledge_search", ...openwikiQueryTools]),
-		);
+		expect(new Set(tools.map(tool => tool.name))).toEqual(new Set(["read", "lsp", "write", ...openwikiQueryTools]));
 	});
 
 	it("grants a device-only xd:// transport write when an explicit list keeps read but omits write", async () => {
@@ -113,9 +111,7 @@ describe("createTools", () => {
 
 		expect(session.deviceOnlyWrite).toBe(true);
 		expect(session.xdev).toBeDefined();
-		expect(new Set(tools.map(tool => tool.name))).toEqual(
-			new Set(["read", "lsp", "knowledge_search", "write", ...openwikiQueryTools]),
-		);
+		expect(new Set(tools.map(tool => tool.name))).toEqual(new Set(["read", "lsp", "write", ...openwikiQueryTools]));
 	});
 
 	it.each([true, false])("exposes OpenWiki queries with default tools when xdev is %s", async xdev => {
@@ -157,7 +153,7 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["Read", "Write"]);
 		const names = tools.map(t => t.name);
 
-		expect(new Set(names)).toEqual(new Set(["read", "write", "knowledge_search", ...openwikiQueryTools]));
+		expect(new Set(names)).toEqual(new Set(["read", "write", ...openwikiQueryTools]));
 	});
 
 	it("includes hidden tools when explicitly requested", async () => {
@@ -237,9 +233,7 @@ describe("createTools", () => {
 			["ask", "read"],
 		);
 		// write joins as the device-only xd:// transport (read granted, ask disabled).
-		expect(new Set(requested.map(t => t.name))).toEqual(
-			new Set(["read", "knowledge_search", "write", ...openwikiQueryTools]),
-		);
+		expect(new Set(requested.map(t => t.name))).toEqual(new Set(["read", "write", ...openwikiQueryTools]));
 	});
 
 	it("filters disabled builtin tools by settings", async () => {
@@ -270,9 +264,7 @@ describe("createTools", () => {
 		const requestedTools = await createTools(createTestSession({ settings: session.settings }), ["bash", "read"]);
 		// `write` joins as the device-only xd:// transport: read was granted,
 		// write omitted (see the "device-only xd:// transport write" test).
-		expect(new Set(requestedTools.map(t => t.name))).toEqual(
-			new Set(["read", "knowledge_search", "write", ...openwikiQueryTools]),
-		);
+		expect(new Set(requestedTools.map(t => t.name))).toEqual(new Set(["read", "write", ...openwikiQueryTools]));
 	});
 
 	it("auto-includes goal when goal mode is active", async () => {
@@ -285,7 +277,7 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["read"]);
 		const names = tools.map(t => t.name);
 
-		expect(new Set(names)).toEqual(new Set(["read", "knowledge_search", "goal", "write", ...openwikiQueryTools]));
+		expect(new Set(names)).toEqual(new Set(["read", "goal", "write", ...openwikiQueryTools]));
 	});
 
 	it("does not widen a restricted explicit tool list for an active goal", async () => {

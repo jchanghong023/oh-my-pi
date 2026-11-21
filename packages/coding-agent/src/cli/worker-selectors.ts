@@ -7,8 +7,6 @@
  */
 /** Computer-worker selector shared by the CLI dispatcher and worker launcher. */
 export const COMPUTER_WORKER_ARG = "__omp_worker_computer";
-/** Knowledge-index selector shared by the CLI dispatcher and owner-scoped service launcher. */
-export const KNOWLEDGE_WORKER_ARG = "__omp_worker_knowledge";
 /** Parent-death watchdog thread selector shared by the CLI dispatcher and `startParentWatchdog`. */
 export const PARENT_WATCHDOG_WORKER_ARG = "__omp_worker_parent_watchdog";
 /** Subagent host worker selector shared by the CLI dispatcher and `SubagentWorker`. */

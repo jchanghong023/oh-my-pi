@@ -9,7 +9,6 @@ members = [
    "crates/diff",
    "crates/edit",
    "crates/iso",
-   "crates/knowledge",
    "crates/natives",
    "crates/predict",
    "crates/shell",
@@ -263,7 +262,6 @@ omp-ast = { path = "crates/ast", default-features = false }
 omp-diff = { path = "crates/diff" }
 omp-edit = { path = "crates/edit" }
 omp-iso = { path = "crates/iso" }
-omp-knowledge = { path = "crates/knowledge" }
 omp-shell = { path = "crates/shell" }
 omp-predict = { path = "crates/predict" }
 omp-voice = { path = "crates/voice" }
@@ -301,9 +299,6 @@ base64 = "0.23"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 toml = "1.1"
-rusqlite = { version = "=0.40.2", features = ["bundled", "hooks"] }
-libsqlite3-sys = "=0.38.2"
-ryu-js = "=1.0.3"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Error Handling
@@ -322,8 +317,6 @@ clap = { version = "4", features = ["derive", "env"] }
 # ──────────────────────────────────────────────────────────────────────────────
 pdf-inspector = "1"
 regex = "1"
-unicode-normalization = "=0.1.25"
-usearch = "=2.26.6"
 fontdue = { version = "0.9", default-features = false }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -341,7 +334,6 @@ smallvec = { version = "1.16.1", features = [
 # Hashing
 # ──────────────────────────────────────────────────────────────────────────────
 xxhash-rust = { version = "0.8", features = ["xxh64", "xxh32"] }
-sha2 = "=0.10.9"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Audio & Realtime Media

@@ -13,7 +13,7 @@ interface Producer {
 	status: string;
 	report: string;
 	command: string[];
-	timingBasis: string;
+	durationSeconds: number;
 	selection?: { tool: string; mode: string; reason?: string };
 }
 
@@ -21,9 +21,6 @@ async function runWorkspace(
 	options: {
 		fail?: boolean;
 		failDoc?: boolean;
-		changedPath?: string;
-		selection?: unknown;
-		rawSelection?: string;
 		full?: boolean;
 	} = {},
 ) {
@@ -51,50 +48,51 @@ async function runWorkspace(
 		const utilsSource = path.join(import.meta.dir, "../packages/utils");
 		fs.copyFileSync(path.join(utilsSource, "package.json"), path.join(utils, "package.json"));
 		fs.copyFileSync(path.join(utilsSource, "src/expected-cleanup.ts"), path.join(utils, "src/expected-cleanup.ts"));
-		fs.copyFileSync(path.join(import.meta.dir, "..", "rust-toolchain.toml"), path.join(root, "rust-toolchain.toml"));
-		fs.mkdirSync(path.join(root, ".config"));
-		fs.writeFileSync(path.join(root, ".config", "nextest.toml"), '[profile.default.junit]\npath = "junit.xml"\n');
-		const names = ["omp-knowledge", "omp-natives", "other"];
-		fs.writeFileSync(
-			path.join(root, "Cargo.toml"),
-			`[workspace]\nresolver = "2"\nmembers = ${JSON.stringify(names)}\n`,
-		);
-		for (const name of names) {
-			const crate = path.join(root, name);
-			fs.mkdirSync(path.join(crate, "src"), { recursive: true });
-			fs.writeFileSync(
-				path.join(crate, "Cargo.toml"),
-				`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n${name === "omp-natives" ? '[lib]\ncrate-type = ["cdylib"]\n' : ""}`,
+		if (options.full) {
+			fs.copyFileSync(
+				path.join(import.meta.dir, "..", "rust-toolchain.toml"),
+				path.join(root, "rust-toolchain.toml"),
 			);
+			fs.mkdirSync(path.join(root, ".config"));
+			fs.writeFileSync(path.join(root, ".config", "nextest.toml"), '[profile.default.junit]\npath = "junit.xml"\n');
+			const names = ["native-fixture", "library-fixture"];
 			fs.writeFileSync(
-				path.join(crate, "src", "lib.rs"),
-				name === "omp-knowledge"
-					? `/// Knowledge doctest.
+				path.join(root, "Cargo.toml"),
+				`[workspace]\nresolver = "2"\nmembers = ${JSON.stringify(names)}\n`,
+			);
+			for (const name of names) {
+				const native = name === "native-fixture";
+				const crate = path.join(root, name);
+				fs.mkdirSync(path.join(crate, "src"), { recursive: true });
+				fs.writeFileSync(
+					path.join(crate, "Cargo.toml"),
+					`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n${native ? '[lib]\ncrate-type = ["cdylib"]\n' : ""}`,
+				);
+				fs.writeFileSync(
+					path.join(crate, "src", "lib.rs"),
+					native
+						? `mod shell { #[test] fn native_case() {} }`
+						: `/// Workspace doctest.
 /// \`\`\`
 /// assert!(${options.failDoc ? "false" : "true"});
 /// \`\`\`
 pub fn documented() {}
-mod knowledge { #[test] fn knowledge_case() { assert!(${options.fail ? "false" : "true"}); } }
-mod another_module { #[test] fn knowledge_other_module_case() {} }`
-					: name === "omp-natives"
-						? `mod knowledge { #[test] fn native_knowledge_binding_case() {} }
-mod shell { #[test] fn excluded_case() { ${options.full ? "" : 'panic!("must be filtered");'} } }`
-						: `mod knowledge { #[test] fn other_crate_case() { ${options.full ? "" : 'panic!("must be excluded");'} } }`,
-			);
+#[test] fn library_case() { assert!(${options.fail ? "false" : "true"}); }
+#[test] fn another_library_case() {}`,
+				);
+			}
+		} else {
+			// If default test:rs invokes Cargo to test anything, it must fail.
+			fs.writeFileSync(path.join(root, "Cargo.toml"), "[invalid");
 		}
 		const env = { ...process.env };
-		// Isolate gate/report/selection state without discarding the caller's CPU allocation.
+		// Isolate gate/report state without discarding the caller's CPU allocation.
 		for (const key of Object.keys(env)) {
 			if (key.startsWith("OMP_") && key !== "OMP_TEST_CPU_BUDGET" && key !== "OMP_TEST_CONCURRENCY") delete env[key];
 		}
-		const reportDir = path.join(root, "reports");
-		Object.assign(env, {
-			CI: "0",
-			OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(options.changedPath ? [options.changedPath] : []),
-			OMP_TEST_REPORT_DIR: reportDir,
-		});
-		if (options.selection !== undefined) env.OMP_RUST_DELTA_SELECTION = JSON.stringify(options.selection);
-		if (options.rawSelection !== undefined) env.OMP_RUST_DELTA_SELECTION = options.rawSelection;
+		env.CI = "0";
+		let reportDir = path.join(root, "reports");
+		if (options.full) env.OMP_TEST_REPORT_DIR = reportDir;
 		delete env.CARGO_TARGET_DIR;
 		const child = Bun.spawn(
 			[
@@ -110,6 +108,10 @@ mod shell { #[test] fn excluded_case() { ${options.full ? "" : 'panic!("must be 
 			new Response(child.stdout).text(),
 			new Response(child.stderr).text(),
 		]);
+		if (!options.full) {
+			const reportRoot = path.join(root, "runs", "test-timing");
+			reportDir = path.join(reportRoot, fs.readdirSync(reportRoot)[0]!);
+		}
 		const producers: Producer[] = fs.existsSync(reportDir)
 			? fs
 					.readdirSync(reportDir)
@@ -121,46 +123,71 @@ mod shell { #[test] fn excluded_case() { ${options.full ? "" : 'panic!("must be 
 				? fs.readFileSync(path.join(reportDir, p.reportPath), "utf8")
 				: "",
 		);
-		return { result: { exitCode, stdout, stderr, producers, reports } };
+		const run = options.full ? undefined : JSON.parse(fs.readFileSync(path.join(reportDir, "run.json"), "utf8"));
+		return { exitCode, stdout, stderr, producers, reports, run };
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 }
 
-describe("Rust fork feature CLI", () => {
-	it(
-		"runs the full Knowledge package and native Knowledge bindings regardless of unrelated changes",
-		async () => {
-			const { result: run } = await runWorkspace({ changedPath: "other/src/lib.rs" });
-			expect(run.exitCode, run.stderr).toBe(0);
-			const nextest = run.producers.find(producer => producer.producer === "cargo nextest run")!;
-			expect(nextest.command).toContain(`--test-threads=${testConcurrencyLimit()}`);
-			expect(nextest.scope).toBe("rust-fork-features");
-			expect(nextest.selection).toMatchObject({
-				tool: "cargo-nextest",
+describe("Rust test CLI", () => {
+	it("records an empty default fork scope without running Cargo", async () => {
+		const result = await runWorkspace();
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.stdout).toContain("no fork-owned Rust tests configured");
+		expect(result.producers).toHaveLength(1);
+		expect(result.producers[0]).toMatchObject({
+			producer: "cargo nextest run",
+			scope: "rust-fork-features",
+			status: "not-selected",
+			exitCode: 0,
+			durationSeconds: 0,
+			report: "not-supported",
+			reportPath: null,
+			command: ["bun", "scripts/run-rs-task.ts", "test:rs"],
+			selection: {
+				tool: "fork-scope",
 				mode: "full",
-			});
-			const xml = run.reports[run.producers.indexOf(nextest)];
-			expect(xml).toContain("knowledge_case");
-			expect(xml).toContain("knowledge_other_module_case");
-			expect(xml).not.toContain("excluded_case");
-			expect(xml).toContain("native_knowledge_binding_case");
-			expect(xml).not.toContain("other_crate_case");
-			const doctest = run.producers.find(producer => producer.producer === "cargo test --doc")!;
-			expect(doctest.scope).toBe("rust-fork-features");
+				selected: 0,
+				packages: [],
+				reason: "No fork-owned Rust tests are configured",
+			},
+		});
+		expect(result.run).toMatchObject({
+			scope: "rust-fork-features",
+			completion: "complete",
+			reconciliation: { status: "validated", cases: 0, executed: 0 },
+		});
+	});
+
+	it(
+		"runs all workspace packages and doctests with --full",
+		async () => {
+			const result = await runWorkspace({ full: true });
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(result.producers).toHaveLength(2);
+			const nextest = result.producers.find(producer => producer.producer === "cargo nextest run")!;
+			expect(nextest.command).toContain("--workspace");
+			expect(nextest.command).toContain(`--test-threads=${testConcurrencyLimit()}`);
+			expect(nextest.scope).toBe("rust-workspace");
+			expect(nextest.selection).toMatchObject({ tool: "cargo-nextest", mode: "full" });
+			const xml = result.reports[result.producers.indexOf(nextest)];
+			expect(xml).toContain("library_case");
+			expect(xml).toContain("native_case");
+			const doctest = result.producers.find(producer => producer.producer === "cargo test --doc")!;
+			expect(doctest.command).toContain("--workspace");
+			expect(doctest.scope).toBe("rust-workspace");
 			expect(doctest.status).toBe("stage");
-			expect(doctest.exitCode).toBe(0);
 			expect(doctest.report).toBe("not-supported");
-			expect(doctest.reportPath).toBeNull();
-			expect(run.stdout).toContain("documented");
+			expect(result.stdout).toContain("documented");
 		},
 		testTimeoutMs(),
 	);
 
 	it(
-		"continues selected tests and doctests after a Nextest failure",
+		"continues workspace tests and doctests after a Nextest failure",
 		async () => {
-			const { result } = await runWorkspace({ fail: true });
+			const result = await runWorkspace({ full: true, fail: true });
 			const nextest = result.producers.find(producer => producer.producer === "cargo nextest run")!;
 			const doctest = result.producers.find(producer => producer.producer === "cargo test --doc")!;
 			expect(result.producers).toHaveLength(2);
@@ -168,21 +195,18 @@ describe("Rust fork feature CLI", () => {
 			expect(result.exitCode).toBe(nextest.exitCode);
 			expect(doctest.status).toBe("stage");
 			expect(doctest.exitCode).toBe(0);
-			expect(doctest.report).toBe("not-supported");
 			const xml = result.reports[result.producers.indexOf(nextest)];
-			expect(xml).toContain("knowledge_case");
-			expect(xml).toContain("knowledge_other_module_case");
-			expect(xml).toContain("native_knowledge_binding_case");
+			expect(xml).toContain("another_library_case");
+			expect(xml).toContain("native_case");
 			expect(xml).toContain("failure");
-			expect(xml).not.toContain("excluded_case");
 		},
 		testTimeoutMs(),
 	);
 
 	it(
-		"propagates a doctest failure after successful selected tests",
+		"propagates a workspace doctest failure after successful Nextest tests",
 		async () => {
-			const { result } = await runWorkspace({ failDoc: true });
+			const result = await runWorkspace({ full: true, failDoc: true });
 			const nextest = result.producers.find(producer => producer.producer === "cargo nextest run")!;
 			const doctest = result.producers.find(producer => producer.producer === "cargo test --doc")!;
 			expect(result.producers).toHaveLength(2);
@@ -192,92 +216,6 @@ describe("Rust fork feature CLI", () => {
 			expect(doctest.status).toBe("failed");
 			expect(doctest.report).toBe("not-supported");
 			expect(result.stdout).toContain("documented");
-		},
-		testTimeoutMs(),
-	);
-});
-
-const baseline = "a".repeat(40);
-const affected = (packages: string[]) => ({
-	tool: "cargo-delta",
-	mode: "affected",
-	packages,
-	baseline,
-	reason: "fixture impact",
-});
-
-describe("Rust delta selection", () => {
-	for (const packages of [["omp-knowledge"], ["omp-natives"], ["omp-knowledge", "omp-natives"]]) {
-		it(
-			`executes only selected fork packages ${packages.join(", ")}`,
-			async () => {
-				const { result } = await runWorkspace({ selection: affected([...packages, "other"]) });
-				expect(result.exitCode, result.stderr).toBe(0);
-				const nextest = result.producers.find(producer => producer.producer === "cargo nextest run")!;
-				expect(nextest.selection).toMatchObject({ tool: "cargo-delta", mode: "affected", packages, baseline });
-				for (const name of ["omp-knowledge", "omp-natives"])
-					expect(nextest.command.includes(name)).toBe(packages.includes(name));
-				const xml = result.reports[result.producers.indexOf(nextest)];
-				expect(xml.includes("knowledge_other_module_case")).toBe(packages.includes("omp-knowledge"));
-				expect(xml.includes("native_knowledge_binding_case")).toBe(packages.includes("omp-natives"));
-				expect(xml).not.toContain("excluded_case");
-				const doc = result.producers.find(producer => producer.producer === "cargo test --doc")!;
-				expect(doc.status).toBe(packages.includes("omp-knowledge") ? "stage" : "not-selected");
-				if (!packages.includes("omp-knowledge"))
-					expect(doc.selection).toMatchObject({
-						tool: "cargo-delta",
-						mode: "affected",
-						selected: 0,
-						packages: [],
-					});
-			},
-			testTimeoutMs(),
-		);
-	}
-	it("does not invoke Cargo for an empty fork intersection", async () => {
-		const { result } = await runWorkspace({ selection: affected(["other"]) });
-		expect(result.exitCode, result.stderr).toBe(0);
-		expect(result.producers).toHaveLength(2);
-		for (const producer of result.producers) {
-			expect(producer.status).toBe("not-selected");
-			expect(producer.selection).toMatchObject({ tool: "cargo-delta", mode: "affected", selected: 0, packages: [] });
-		}
-	});
-	it(
-		"falls back to the complete fork for malformed selection",
-		async () => {
-			const { result } = await runWorkspace({ rawSelection: "{bad" });
-			expect(result.exitCode, result.stderr).toBe(0);
-			expect(result.producers[0].selection).toMatchObject({ mode: "full" });
-		},
-		testTimeoutMs(),
-	);
-	it(
-		"treats an invalid package name as a full fork fallback",
-		async () => {
-			const { result } = await runWorkspace({ selection: affected(["--workspace"]) });
-			expect(result.exitCode, result.stderr).toBe(0);
-			expect(result.producers.find(producer => producer.producer === "cargo nextest run")!.selection).toMatchObject({
-				tool: "cargo-nextest",
-				mode: "full",
-			});
-		},
-		testTimeoutMs(),
-	);
-	it(
-		"--full ignores affected selection and exercises all workspace packages and doctests",
-		async () => {
-			const { result } = await runWorkspace({ selection: affected([]), full: true });
-			expect(result.exitCode, result.stderr).toBe(0);
-			const nextest = result.producers.find(producer => producer.producer === "cargo nextest run")!;
-			expect(nextest.command).toContain("--workspace");
-			expect(nextest.selection).toMatchObject({ tool: "cargo-nextest", mode: "full" });
-			const xml = result.reports[result.producers.indexOf(nextest)];
-			expect(xml).toContain("other_crate_case");
-			expect(xml).toContain("excluded_case");
-			expect(result.producers.find(producer => producer.producer === "cargo test --doc")!.command).toContain(
-				"--workspace",
-			);
 		},
 		testTimeoutMs(),
 	);

@@ -1,7 +1,7 @@
 # openwiki Specification
 
 ## Purpose
-规定 OMP 内置代码仓库 OpenWiki 的命令、模型接入、生成与恢复、AI 只读检索、跨仓库工作区和可视化行为。复用 OpenWiki fork 的原有生成能力，让用户只通过 OMP 使用和更新仓库 Wiki，不再依赖独立安装或 MCP 接入，同时保持既有 Wiki 数据和 OMP 文档／代码索引的边界。
+规定 OMP 内置代码仓库 OpenWiki 的命令、模型接入、生成与恢复、AI 只读检索、跨仓库工作区和可视化行为。复用 OpenWiki fork 的原有生成能力，让用户通过 OMP 使用和更新仓库 Wiki，无需独立安装或 MCP 接入，并兼容已有仓库 Wiki 数据。
 
 ## Requirements
 
@@ -153,9 +153,9 @@ OMP MUST 内置 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`
 - **THEN** 四项只读能力遵循现有可发现设备挂载规则，AI 可按需发现和调用；关闭 `tools.xdev` 时按 OMP 既有规则作为顶层工具提供
 - **AND** 设备派发保留只读权限语义，不因通过设备传输被当作文件写入；受限子代理的工具清单不会因此自动扩大
 
-### Requirement: 按需检索与既有索引隔离
+### Requirement: 按需检索仓库 Wiki
 
-OpenWiki MUST 作为独立于现有 Markdown `knowledge_search` 索引的能力，保留其名称、命令和数据语义。OMP MUST 仅在用户要求或任务确需相关证据时按需检索 OpenWiki；架构、功能概览和跨模块关系调研 MUST 优先复用本会话已获取的相关 Wiki 章节或调用可用的 OpenWiki 搜索工具，明确文件、符号、错误、代码修改及当前实现问题 MUST 先读取相关源码。与 Wiki 无关的普通任务开始时 MUST NOT 自动枚举、读取或预加载仓库及关联 Wiki 内容。
+OMP MUST 仅在用户要求或任务确需相关证据时按需检索 OpenWiki；架构、功能概览和跨模块关系调研 MUST 优先复用本会话已获取的相关 Wiki 章节或调用可用的 OpenWiki 搜索工具，明确文件、符号、错误、代码修改及当前实现问题 MUST 先读取相关源码。与 Wiki 无关的普通任务开始时 MUST NOT 自动枚举、读取或预加载仓库及关联 Wiki 内容。
 
 #### Scenario: 普通任务不预加载
 - **WHEN** 用户开始与 Wiki 无关的普通任务
@@ -176,10 +176,6 @@ OpenWiki MUST 作为独立于现有 Markdown `knowledge_search` 索引的能力�
 - **WHEN** 会话未开放 OpenWiki 搜索工具，或 Wiki 已排除、已知缺失，或查询返回 `invalid_state`、空结果、过时或冲突内容
 - **THEN** OMP 继续使用源码完成任务；工具不可用时默认系统提示词不要求调用该工具，工具引用遵循顶层或 `xd://` 的实际挂载形式
 - **AND** 不因 Wiki 不可用而阻塞普通任务，也不隐式生成 Wiki
-
-#### Scenario: 现有 Knowledge 保持原行为
-- **WHEN** 用户使用 `knowledge_search`、`omp knowledge` 或 `/knowledge`
-- **THEN** 继续访问其原有能力和数据，OpenWiki 不占用这些名称、不替换数据库、不新增原文档索引的更新命令
 
 ### Requirement: 保留跨仓库工作区链接
 

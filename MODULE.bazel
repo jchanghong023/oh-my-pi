@@ -245,46 +245,6 @@ crate.annotation(
     deps = ["@@//crates/vendor/grep-searcher:grep-searcher"],
 )
 
-# Pass CXX's single-object runtime archive directly to the final linker.
-# Zig 0.14 does not resolve rustc's -l name inside static-link regions.
-crate.annotation(
-    additive_build_file_content = """
-load("@rules_cc//cc:defs.bzl", "cc_library")
-cc_library(
-    name = "cxx_cc",
-    srcs = ["src/cxx.cc"],
-    hdrs = ["include/cxx.h"],
-    alwayslink = True,
-    include_prefix = "rust",
-    includes = ["include"],
-    linkstatic = True,
-    strip_include_prefix = "include",
-    visibility = ["//visibility:public"],
-)
-""",
-    crate = "cxx",
-)
-
-# Zig 0.14 does not infer EVEX512 from NumKong's AVX-512 flags, and its
-# per-function kernels omit POPCNT. Enable both without raising the shipped
-# x86-64-v2 baseline, which already includes POPCNT; AVX2/AVX-512F stay off.
-crate.annotation(
-    build_script_env = {
-        "CFLAGS_x86_64_unknown_linux_gnu": "-mevex512 -mpopcnt",
-    },
-    crate = "numkong",
-    patch_args = ["-p1"],
-    patches = ["//bazel/patches:numkong-export-headers.patch"],
-)
-
-# cxx-build's source-root symlink is compile-only and otherwise dangles after
-# Bazel removes the build script's temporary manifest directory.
-crate.annotation(
-    crate = "usearch",
-    patch_args = ["-p1"],
-    patches = ["//bazel/patches:usearch-remove-source-symlink.patch"],
-)
-
 # Release addons must never pick up a host libpcre2 (Homebrew paths leaked into
 # shipped dylibs before); always build the vendored static copy.
 crate.annotation(

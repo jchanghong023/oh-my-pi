@@ -51,7 +51,6 @@ omp-diff.workspace = true
 omp-edit.workspace = true
 omp-xfs.workspace = true
 omp-iso.workspace = true
-omp-knowledge.workspace = true
 omp-predict.workspace = true
 omp-shell.workspace = true
 omp-vfs.workspace = true
@@ -110,7 +109,6 @@ winreg.workspace = true
 
 [dev-dependencies]
 fancy-regex.workspace = true # utok scanner differential oracle
-rusqlite.workspace = true
 shlex.workspace = true
 tempfile.workspace = true
 tiktoken-rs.workspace = true # utok openai differential oracle
@@ -145,4 +143,3 @@ zlib-rs = "0.6"
 # participates in resolution, but the unused-dependency lint stays quiet.
 [target."cfg(false)".dependencies]
 find-msvc-tools.workspace = true
-libsqlite3-sys.workspace = true

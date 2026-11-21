@@ -20,8 +20,13 @@ import { gateRepoRoot, fastcheckCommands } from "./fastcheck";
 import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateAbortError, GateCommandError } from "./test-gate-failure-events";
 import { bunRequiresFullSelection, captureChangedPaths, captureSourceRevision } from "./test-gate-source";
-import { selectRustPackages, type RustDeltaSelection } from "./test-gate-delta";
-import { beginTestRun, finalizeTestRun, recordTestProducer, type TestReportRun } from "./test-reporting";
+import {
+	beginTestRun,
+	finalizeTestRun,
+	recordTestProducer,
+	recordUnselectedRustForkTests,
+	type TestReportRun,
+} from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
 import { runGateCommands, testConcurrencyLimit } from "./test-gate-scheduler";
 
@@ -222,14 +227,14 @@ export function fulltestCommands(options: FulltestOptions, home: string, sourceR
 						},
 					},
 				]),
-		{
-			label: options.full ? "test/Rust workspace" : "test/Rust fork features",
-			argv: ["bun", "scripts/run-rs-task.ts", "test:rs", ...(options.full ? ["--full"] : [])],
-			cwd: gateRepoRoot,
-			env,
-		},
 		...(options.full
 			? [
+					{
+						label: "test/Rust workspace",
+						argv: ["bun", "scripts/run-rs-task.ts", "test:rs", "--full"],
+						cwd: gateRepoRoot,
+						env,
+					},
 					{
 						label: "test/Python suites",
 						argv: ["bun", "scripts/test-report-py.ts", "--full"],
@@ -289,7 +294,6 @@ export function selectChangedScriptTests(changed: readonly string[], files: read
 	const dependencies: Record<string, string[]> = {
 		fastcheck: ["fulltest"],
 		"test-gate-source": ["fulltest", "slowtest", "slowtest-wsl-stage", "ci-test-ts"],
-		"test-gate-delta": ["fulltest", "run-rs-task"],
 		"test-gate-scheduler": ["fulltest", "ci-test-ts", "run-rs-task"],
 		"test-gate-runtime": ["fulltest", "slowtest", "slowtest-wsl-stage", "test-gate-runtime", "test-gate-go"],
 		"test-gate-failure-events": [
@@ -329,7 +333,6 @@ interface FulltestInfrastructure {
 	runGateCommands: typeof runGateCommands;
 	fastcheckCommands: typeof fastcheckCommands;
 	bunTestSelection?: typeof bunTestSelection;
-	selectRustPackages?: typeof selectRustPackages;
 	cpuBudget?: number;
 	scriptTestFiles?: () => Promise<string[]>;
 }
@@ -339,7 +342,6 @@ const fulltestInfrastructure: FulltestInfrastructure = {
 	captureChangedPaths,
 	runGateCommands,
 	fastcheckCommands,
-	selectRustPackages,
 };
 
 export async function runFulltest(
@@ -443,7 +445,7 @@ async function runFulltestObserved(
 	} else {
 		console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=fork-features`);
 		console.log(
-			"coverage: fork TypeScript and Rust feature suites; selected changed repository script tests; all static checks; native build; native-TUI smoke",
+			"coverage: fork TypeScript suites; selected changed repository script tests; all static checks; native build; native-TUI smoke",
 		);
 		console.log(
 			"outside-fork scope: Python SDK and Robomp suites; upstream-only suites; real desktop input; live credential-backed integrations; standalone Go/Rust SDKs",
@@ -504,45 +506,21 @@ async function runFulltestObserved(
 			infrastructure.captureChangedPaths(gate, gateRepoRoot, baseline ?? "HEAD"),
 		);
 		const bunRequiresFull = baseline ? bunRequiresFullSelection(changedPaths) : true;
-		const rustSelection: RustDeltaSelection | undefined = options.full
-			? undefined
-			: await (infrastructure.selectRustPackages ?? selectRustPackages)(gate, gateRepoRoot, baseline).catch(
-					error => {
-						if (
-							gate.signal.aborted ||
-							error instanceof GateAbortError ||
-							(error instanceof GateCommandError &&
-								(error.status === "TIMEOUT" || error.status === "INTERRUPTED"))
-						)
-							throw error;
-						return {
-							tool: "cargo-delta" as const,
-							mode: "full" as const,
-							packages: ["omp-knowledge", "omp-natives"],
-							reason: `cargo-delta selection failed: ${String(error)}`,
-						};
-					},
-				);
-		const recordNotSelected = async (
-			producer: string,
-			command: string[],
-			scope: string,
-			reason: string,
-			rust = false,
-		) => {
+		const recordNotSelected = async (producer: string, command: string[], scope: string, reason: string) => {
 			if (!report || !baseline) return;
-			await recordTestProducer({
-				producer,
-				command,
-				scope,
-				startedAt: new Date().toISOString(),
-				durationSeconds: 0,
-				exitCode: 0,
-				status: "not-selected",
-				selection: rust
-					? { tool: "cargo-delta", mode: "affected", baseline, selected: 0, reason, changedPaths, packages: [] }
-					: { tool: "git", mode: "affected", baseline, selected: 0, reason, changedPaths },
-			});
+			await recordTestProducer(
+				{
+					producer,
+					command,
+					scope,
+					startedAt: new Date().toISOString(),
+					durationSeconds: 0,
+					exitCode: 0,
+					status: "not-selected",
+					selection: { tool: "git", mode: "affected", baseline, selected: 0, reason, changedPaths },
+				},
+				report.dir,
+			);
 		};
 		// A clean committed tree has no changed script modules, so runs no script selftests.
 		const files = await acquire("repository script test discovery", () =>
@@ -601,37 +579,11 @@ async function runFulltestObserved(
 						env: { ...command.env, OMP_FULLTEST_BASELINE: baseline && !bunRequiresFull ? baseline : "none" },
 					};
 				}
-				if (command.label.startsWith("test/Rust") && rustSelection) {
-					return {
-						...command,
-						env: {
-							...command.env,
-							OMP_RUST_DELTA_SELECTION: JSON.stringify(rustSelection),
-							OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(changedPaths),
-						},
-					};
-				}
 				return command;
 			});
-			if (
-				rustSelection?.mode === "affected" &&
-				!rustSelection.packages.some(pkg => pkg === "omp-knowledge" || pkg === "omp-natives")
-			) {
-				tests = tests.filter(command => !command.label.startsWith("test/Rust"));
-				await recordNotSelected(
-					"cargo nextest run",
-					["bun", "scripts/run-rs-task.ts", "test:rs"],
-					"rust-fork-features",
-					rustSelection.reason,
-					true,
-				);
-				await recordNotSelected(
-					"cargo test --doc",
-					["bun", "scripts/run-rs-task.ts", "test:rs"],
-					"rust-fork-features",
-					rustSelection.reason,
-					true,
-				);
+			if (!options.full) {
+				console.log("fulltest: Rust fork tests not selected (no fork-owned Rust tests configured)");
+				if (report) await recordUnselectedRustForkTests(report.dir);
 			}
 			if (baseline && changedPaths.length === 0) {
 				tests = tests.filter(command => command.label !== "smoke/isolated native TUI PTY");
@@ -823,6 +775,7 @@ async function runFulltestObserved(
 			}
 		})();
 		const rustRun = (async () => {
+			if (!rustTests.length) return;
 			await (allocation.serial ? testRun : rustChecksFinished.promise);
 			await runTests("Rust tests", rustTests, allocation.rust);
 		})();

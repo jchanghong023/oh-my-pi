@@ -20,6 +20,8 @@ import { bunRequiresFullSelection, captureChangedPaths, type SourceRevision } fr
 import type { TestReportRun } from "./test-reporting";
 import { runGateCommands } from "./test-gate-scheduler";
 
+const ordinaryToolPath = "packages/coding-agent/src/tools/read.ts";
+
 test("fork plan excludes standalone Python suites while preserving the public TUI smoke", () => {
 	const commands = fulltestCommands({ debug: false }, "/tmp/home", "a".repeat(40));
 	expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
@@ -115,7 +117,7 @@ describe("fulltest worker allocation", () => {
 		expect(rust + ordinary + staticWorkers + scripts).toBe(8);
 	});
 
-	test("fork Bun keeps two ordinary slots alongside startup when pure scripts can follow static", () => {
+	test("fork Bun keeps two ordinary slots with startup and Rust static checks", () => {
 		expect(fulltestWorkerAllocation(5, true, true, true, 12, 4)).toEqual({
 			ordinary: 2,
 			rust: 1,
@@ -132,7 +134,6 @@ test("script selection uses changed modules and existing tests, not business fil
 		"scripts/fulltest.test.ts",
 		"scripts/ci-test-ts.test.ts",
 		"scripts/test-reporting.test.ts",
-		"scripts/test-gate-delta.test.ts",
 		"scripts/run-rs-task.test.ts",
 		"scripts/release.test.ts",
 	];
@@ -146,11 +147,6 @@ test("script selection uses changed modules and existing tests, not business fil
 		"scripts/run-rs-task.test.ts",
 		"scripts/test-reporting.test.ts",
 	]);
-	expect(selectChangedScriptTests(["scripts/test-gate-delta.ts"], files)).toEqual([
-		"scripts/fulltest.test.ts",
-		"scripts/run-rs-task.test.ts",
-		"scripts/test-gate-delta.test.ts",
-	]);
 	expect(selectChangedScriptTests(["scripts/release.test.ts", "scripts/unknown.ts"], files)).toEqual([
 		"scripts/release.test.ts",
 	]);
@@ -158,7 +154,7 @@ test("script selection uses changed modules and existing tests, not business fil
 
 test("Bun traces only known static inputs; unknown and dynamic inputs fall back", () => {
 	expect(bunRequiresFullSelection([])).toBe(false);
-	expect(bunRequiresFullSelection(["packages/coding-agent/src/tools/knowledge-search.ts"])).toBe(false);
+	expect(bunRequiresFullSelection([ordinaryToolPath])).toBe(false);
 	for (const file of [
 		"Cargo.lock",
 		"packages/natives/src/lib.rs",
@@ -175,13 +171,13 @@ test("Bun traces only known static inputs; unknown and dynamic inputs fall back"
 test("root documentation does not force full Bun selection or hide changed runtime inputs", () => {
 	const docs = ["docs/guide.md", "docs-zh-CN/guide.md", "AGENTS.md"];
 	expect(bunRequiresFullSelection(docs)).toBe(false);
-	expect(bunRequiresFullSelection([...docs, "packages/coding-agent/src/tools/knowledge-search.ts"])).toBe(false);
+	expect(bunRequiresFullSelection([...docs, ordinaryToolPath])).toBe(false);
 	expect(bunRequiresFullSelection([...docs, "Cargo.lock"])).toBe(true);
 	expect(bunRequiresFullSelection(["packages/coding-agent/src/prompts/system.md"])).toBe(true);
 	expect(bunRequiresFullSelection(["packages/coding-agent/docs/guide.md"])).toBe(true);
 });
 
-test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it for --full", async () => {
+test("fulltest preserves Bun selection and schedules Rust tests only with --full", async () => {
 	const baseline = "a".repeat(40);
 	const revision: SourceRevision = { head: baseline, dirty: true, status: "" };
 	const gate = {
@@ -193,28 +189,14 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 		fail: (error: unknown) => error,
 	} as unknown as GateRun;
 	const cases = [
-		{ changed: ["packages/coding-agent/src/tools/knowledge-search.ts"], packages: [], full: false, bunFull: false },
-		{ changed: ["Cargo.lock"], packages: [], full: false, bunFull: true },
-		{
-			changed: ["packages/coding-agent/src/tools/knowledge-search.ts"],
-			packages: ["omp-knowledge", "other-crate"],
-			full: false,
-			bunFull: false,
-		},
-		{
-			changed: ["packages/coding-agent/src/tools/knowledge-search.ts"],
-			packages: ["other-crate"],
-			full: false,
-			bunFull: false,
-		},
-		{ changed: ["Cargo.lock"], packages: ["omp-natives"], full: false, bunFull: true },
-		{ changed: ["packages/coding-agent/src/tools/knowledge-search.ts"], packages: [], full: true, bunFull: true },
+		{ changed: [ordinaryToolPath], affected: true, full: false, bunFull: false },
+		{ changed: ["Cargo.lock"], affected: true, full: false, bunFull: true },
+		{ changed: [ordinaryToolPath], affected: false, full: false, bunFull: true },
+		{ changed: [ordinaryToolPath], affected: true, full: true, bunFull: true },
 	] as const;
 	for (const scenario of cases) {
 		const commands: { label: string; argv: readonly string[]; env?: Record<string, string | undefined> }[] = [];
 		let observedBase: string | undefined;
-		let deltaBase: string | undefined;
-		let deltaCalls = 0;
 		await runFulltest(
 			gate,
 			{ debug: false, full: scenario.full },
@@ -226,48 +208,28 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 					observedBase = base;
 					return [...scenario.changed];
 				},
-				bunTestSelection: async () => ({ tool: "bun", mode: "affected", baseline }),
-				selectRustPackages: async (_gate, _root, base) => {
-					deltaCalls++;
-					deltaBase = base;
-					return {
-						tool: "cargo-delta",
-						mode: "affected",
-						baseline,
-						packages: [...scenario.packages],
-						reason: "fixture",
-					};
-				},
+				bunTestSelection: async () =>
+					scenario.affected
+						? { tool: "bun", mode: "affected", baseline }
+						: { tool: "bun", mode: "full", reason: "no baseline" },
 				fastcheckCommands: async () => [],
 				runGateCommands: async (_gate, selected) => {
 					commands.push(...selected);
 				},
 			},
 		);
-		expect(observedBase).toBe(scenario.full ? "HEAD" : baseline);
-		expect(deltaCalls).toBe(scenario.full ? 0 : 1);
-		if (!scenario.full) expect(deltaBase).toBe(baseline);
-		const rust = commands.filter(
-			command => command.label === (scenario.full ? "test/Rust workspace" : "test/Rust fork features"),
+		expect(observedBase).toBe(!scenario.full && scenario.affected ? baseline : "HEAD");
+		const rust = commands.filter(command => command.label.startsWith("test/Rust"));
+		expect(rust.map(command => command.label).sort()).toEqual(
+			scenario.full ? ["test/Rust SDK", "test/Rust workspace"] : [],
 		);
-		const forkAffected = scenario.packages.some(pkg => pkg === "omp-knowledge" || pkg === "omp-natives");
-		expect(rust).toHaveLength(scenario.full || forkAffected ? 1 : 0);
-		if (rust.length) {
-			expect(rust[0]!.argv).toEqual([
+		if (scenario.full) {
+			expect(rust.find(command => command.label === "test/Rust workspace")?.argv).toEqual([
 				"bun",
 				"scripts/run-rs-task.ts",
 				"test:rs",
-				...(scenario.full ? ["--full"] : []),
+				"--full",
 			]);
-			if (!scenario.full) {
-				expect(JSON.parse(rust[0]!.env!.OMP_RUST_DELTA_SELECTION!)).toMatchObject({
-					tool: "cargo-delta",
-					mode: "affected",
-					baseline,
-					packages: [...scenario.packages],
-				});
-				expect(JSON.parse(rust[0]!.env!.OMP_FULLTEST_CHANGED_PATHS!)).toEqual([...scenario.changed]);
-			}
 		}
 		expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
 		const ts = commands.filter(command => command.label.startsWith("test/TypeScript"));
@@ -290,52 +252,6 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 				scenario.bunFull ? ["none", "none"] : [baseline, baseline],
 			);
 		}
-	}
-});
-
-test("delta failure and absence of a qualified baseline retain the full Rust fork", async () => {
-	const baseline = "a".repeat(40);
-	const revision: SourceRevision = { head: baseline, dirty: true, status: "" };
-	const gate = {
-		signal: new AbortController().signal,
-		charged: async <T>(work: () => T | Promise<T>) => work(),
-		run: async () => {},
-		childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
-		record: (error: unknown) => error,
-		fail: (error: unknown) => error,
-	} as unknown as GateRun;
-	for (const missingBaseline of [false, true]) {
-		const commands: { label: string; env?: Record<string, string | undefined> }[] = [];
-		let deltaBase: string | undefined;
-		await runFulltest(
-			gate,
-			{ debug: false },
-			{
-				captureSourceRevision: async () => revision,
-				scriptTestFiles: async () => [],
-				captureChangedPaths: async () => [],
-				bunTestSelection: async () =>
-					missingBaseline
-						? { tool: "bun", mode: "full", reason: "no baseline" }
-						: { tool: "bun", mode: "affected", baseline },
-				selectRustPackages: async (_gate, _root, base) => {
-					deltaBase = base;
-					throw new Error("delta unavailable");
-				},
-				fastcheckCommands: async () => [],
-				runGateCommands: async (_gate, selected) => {
-					commands.push(...selected);
-				},
-			},
-		);
-		expect(deltaBase).toBe(missingBaseline ? undefined : baseline);
-		const rust = commands.filter(command => command.label.startsWith("test/Rust"));
-		expect(rust).toHaveLength(1);
-		expect(JSON.parse(rust[0]!.env!.OMP_RUST_DELTA_SELECTION!)).toMatchObject({
-			tool: "cargo-delta",
-			mode: "full",
-			packages: ["omp-knowledge", "omp-natives"],
-		});
 	}
 });
 
@@ -541,7 +457,6 @@ test("fulltest records revision once and passes scheduling hints after native ge
 	const revision: SourceRevision = { head: "a".repeat(40), dirty: true, status: " M scripts/fulltest.ts\n" };
 	let captures = 0;
 	const commands: { label: string; env?: Record<string, string | undefined> }[] = [];
-	const report = { owner: true } as TestReportRun;
 	const gate = {
 		signal: new AbortController().signal,
 		charged: async <T>(operation: () => T | Promise<T>) => operation(),
@@ -550,43 +465,60 @@ test("fulltest records revision once and passes scheduling hints after native ge
 		record: (error: unknown) => error,
 		fail: (error: unknown) => error,
 	} as unknown as GateRun;
-	await runFulltest(
-		gate,
-		{ debug: false },
-		{
-			captureSourceRevision: async () => {
-				captures++;
-				return revision;
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-report-"));
+	try {
+		const report: TestReportRun = {
+			id: path.basename(directory),
+			dir: directory,
+			startedAt: new Date().toISOString(),
+			startedMs: performance.now(),
+			scope: "fulltest",
+			owner: true,
+			sourceRevision: null,
+			dirtyState: null,
+			dirtyStateIdentity: null,
+		};
+		await runFulltest(
+			gate,
+			{ debug: false },
+			{
+				captureSourceRevision: async () => {
+					captures++;
+					return revision;
+				},
+				captureChangedPaths: async () => ["scripts/fulltest.ts"],
+				scriptTestFiles: async () => ["scripts/fulltest.test.ts"],
+				bunTestSelection: async () => ({ tool: "bun", mode: "full", reason: "fixture" }),
+				fastcheckCommands: async () => [],
+				runGateCommands: async (_gate, selected) => {
+					commands.push(...selected);
+				},
 			},
-			captureChangedPaths: async () => ["scripts/fulltest.ts"],
-			scriptTestFiles: async () => ["scripts/fulltest.test.ts"],
-			bunTestSelection: async () => ({ tool: "bun", mode: "full", reason: "fixture" }),
-			selectRustPackages: async () => ({
-				tool: "cargo-delta",
-				mode: "full",
-				packages: ["omp-knowledge", "omp-natives"],
-				reason: "fixture",
-			}),
-			fastcheckCommands: async () => [],
-			runGateCommands: async (_gate, selected) => {
-				commands.push(...selected);
-			},
-		},
-		report,
-	);
-	expect(captures).toBe(1);
-	expect(commands[0]?.label).toBe("build/native");
-	for (const label of [
-		"test/repository scripts scripts/fulltest.test.ts",
-		"test/TypeScript fork feature suite",
-		"test/TypeScript startup suite",
-	]) {
-		const command = commands.find(command => command.label === label);
-		expect(command?.env?.OMP_FULLTEST_SOURCE_REVISION).toBe(revision.head);
-		expect(command?.env?.OMP_FULLTEST_AFFECTED).toBe("1");
+			report,
+		);
+		expect(captures).toBe(1);
+		expect(commands[0]?.label).toBe("build/native");
+		for (const label of [
+			"test/repository scripts scripts/fulltest.test.ts",
+			"test/TypeScript fork feature suite",
+			"test/TypeScript startup suite",
+		]) {
+			const command = commands.find(command => command.label === label);
+			expect(command?.env?.OMP_FULLTEST_SOURCE_REVISION).toBe(revision.head);
+			expect(command?.env?.OMP_FULLTEST_AFFECTED).toBe("1");
+		}
+		expect(report.sourceRevision).toBe(revision.head);
+		expect(report.dirtyState).toBe("dirty");
+		const producers = (await fs.readdir(directory)).filter(file => file.endsWith(".producer.json"));
+		expect(producers).toHaveLength(1);
+		expect(await Bun.file(path.join(directory, producers[0]!)).json()).toMatchObject({
+			scope: "rust-fork-features",
+			status: "not-selected",
+			selection: { selected: 0, packages: [] },
+		});
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
 	}
-	expect(report.sourceRevision).toBe(revision.head);
-	expect(report.dirtyState).toBe("dirty");
 });
 
 for (const full of [false, true]) {
@@ -595,7 +527,6 @@ for (const full of [false, true]) {
 		const worker = path.join(directory, "worker.ts");
 		const ordinaryLabel = full ? "test/TypeScript full suite" : "test/TypeScript fork feature suite";
 		const startupLabel = "test/TypeScript startup suite";
-		const rustLabel = full ? "test/Rust workspace" : "test/Rust fork features";
 		const revision: SourceRevision = { head: "head", dirty: false, status: "" };
 		try {
 			await fs.writeFile(
@@ -639,12 +570,6 @@ if (label === ordinary) process.exit(17);
 						scriptTestFiles: async () => [],
 						captureChangedPaths: async () => ["packages/tui/src/tui.ts"],
 						bunTestSelection: async () => ({ tool: "bun", mode: "affected", baseline: "a".repeat(40) }),
-						selectRustPackages: async () => ({
-							tool: "cargo-delta",
-							mode: "full",
-							packages: ["omp-knowledge", "omp-natives"],
-							reason: "fixture",
-						}),
 						fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
 						runGateCommands: async (_runner, commands, options) => {
 							await runGateCommands(
@@ -682,14 +607,14 @@ if (label === ordinary) process.exit(17);
 			};
 			const ordinary = await starts(ordinaryLabel);
 			const startup = await starts(startupLabel);
-			const rust = await starts(rustLabel);
+			const rust = await starts("test/Rust workspace");
 			expect(ordinary).toHaveLength(1);
 			expect(startup).toHaveLength(full ? 0 : 1);
-			expect(rust).toHaveLength(1);
+			expect(rust).toHaveLength(full ? 1 : 0);
 			expect(ordinary[0]!.nativeFinished).toBe(true);
-			expect(rust[0]!.nativeFinished).toBe(true);
 			expect((await starts("static/TS"))[0]!.nativeFinished).toBe(true);
 			if (full) {
+				expect(rust[0]!.nativeFinished).toBe(true);
 				expect(ordinary[0]!.argv).toContain("--shared-fulltest-pool");
 				expect(ordinary[0]!.argv).not.toContain("--defer-startup");
 				expect(ordinary[0]!.startupHome).toBeDefined();
@@ -720,7 +645,7 @@ if (label === ordinary) process.exit(17);
 
 describe("fulltest lane scheduling", () => {
 	for (const rustCheck of ["success", "failure", "absent"] as const) {
-		test(`releases Rust tests independently of TypeScript static checks when Rust checks are ${rustCheck}`, async () => {
+		test(`releases workspace Rust tests independently of TypeScript static checks when Rust checks are ${rustCheck}`, async () => {
 			const tsStarted = Promise.withResolvers<void>();
 			const finishTs = Promise.withResolvers<void>();
 			const rustStarted = Promise.withResolvers<void>();
@@ -752,7 +677,7 @@ describe("fulltest lane scheduling", () => {
 			} as unknown as GateRun;
 			const run = runFulltest(
 				gate,
-				{ debug: false },
+				{ debug: false, full: true },
 				{
 					cpuBudget: 16,
 					captureSourceRevision: async () => revision,
@@ -770,7 +695,7 @@ describe("fulltest lane scheduling", () => {
 					runGateCommands: async (runner, commands, options) => {
 						if (commands.some(command => command.label.startsWith("static/"))) {
 							await runGateCommands(runner, commands, options);
-						} else if (commands.some(command => command.label.startsWith("test/Rust"))) {
+						} else if (commands.some(command => command.label === "test/Rust workspace")) {
 							rustTestsHaveStarted = true;
 							rustTestsStarted.resolve();
 						}
@@ -1164,16 +1089,13 @@ describe("fulltest lane scheduling", () => {
 		test(`starts startup consumers before ordinary work drains and continues after ${failedLane} failure`, async () => {
 			const staticStarted = Promise.withResolvers<void>();
 			const ordinaryStarted = Promise.withResolvers<void>();
-			const rustStarted = Promise.withResolvers<void>();
 			const smokeStarted = Promise.withResolvers<void>();
 			const startupStarted = Promise.withResolvers<void>();
 			const finishStatic = Promise.withResolvers<void>();
 			const finishOrdinary = Promise.withResolvers<void>();
-			const finishRust = Promise.withResolvers<void>();
 			const finishSmoke = Promise.withResolvers<void>();
 			const finishStartup = Promise.withResolvers<void>();
 			const ordinarySettled = Promise.withResolvers<void>();
-			const rustSettled = Promise.withResolvers<void>();
 			const failures: unknown[] = [];
 			const trailingStarted: string[] = [];
 			const trailingBudgets: number[] = [];
@@ -1218,11 +1140,6 @@ describe("fulltest lane scheduling", () => {
 							await finishOrdinary.promise;
 							ordinarySettled.resolve();
 							throw new Error("ordinary failure");
-						} else if (commands.some(command => command.label.startsWith("test/Rust"))) {
-							rustStarted.resolve();
-							await finishRust.promise;
-							rustSettled.resolve();
-							throw new Error("Rust failure");
 						} else if (smoke) {
 							smokeHome = smoke.env?.HOME;
 							trailingBudgets.push(Number(smoke.env?.OMP_TEST_CPU_BUDGET));
@@ -1250,18 +1167,10 @@ describe("fulltest lane scheduling", () => {
 				},
 			);
 			try {
-				await Promise.all([
-					staticStarted.promise,
-					ordinaryStarted.promise,
-					rustStarted.promise,
-					startupStarted.promise,
-				]);
+				await Promise.all([staticStarted.promise, ordinaryStarted.promise, startupStarted.promise]);
 				expect(trailingStarted).toEqual(["startup"]);
 				finishOrdinary.resolve();
 				await ordinarySettled.promise;
-				expect(trailingStarted).toEqual(["startup"]);
-				finishRust.resolve();
-				await rustSettled.promise;
 				expect(trailingStarted).toEqual(["startup"]);
 				finishStatic.resolve();
 				finishStartup.resolve();
@@ -1271,7 +1180,6 @@ describe("fulltest lane scheduling", () => {
 				finishSmoke.resolve();
 			} finally {
 				finishOrdinary.resolve();
-				finishRust.resolve();
 				finishStatic.resolve();
 				finishSmoke.resolve();
 				finishStartup.resolve();
@@ -1279,7 +1187,6 @@ describe("fulltest lane scheduling", () => {
 			}
 			expect(failures.map(error => String(error))).toEqual([
 				"Error: ordinary failure",
-				"Error: Rust failure",
 				`Error: ${failedLane} failure`,
 			]);
 		});

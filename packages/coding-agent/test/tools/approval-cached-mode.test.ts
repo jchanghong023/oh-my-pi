@@ -203,7 +203,7 @@ describe("always-ask-cached resolution", () => {
 
 	it("keeps native read-only index approval semantics through bare and wrapped xd targets", () => {
 		const agentDir = freshAgentDir();
-		const nativeTools = ["knowledge_search", "openwiki_search", "peek"].map(name => ({
+		const nativeTools = ["openwiki_search", "openwiki_read", "peek"].map(name => ({
 			...pathTool(name, "read", agentDir),
 			approvalCacheTargets: undefined,
 		}));
@@ -248,8 +248,8 @@ describe("always-ask-cached resolution", () => {
 
 		// An extension with an index tool's name is not a recognized built-in.
 		const extensionWrite = new WriteTool({ ...session, xdev: { ...xdev, builtInNames: new Set() } });
-		expect(extensionWrite.approvalCacheTargets({ path: "xd://knowledge_search" })).toEqual([
-			approvalTargetKey(agentDir, "xd://knowledge_search")!,
+		expect(extensionWrite.approvalCacheTargets({ path: "xd://openwiki_search" })).toEqual([
+			approvalTargetKey(agentDir, "xd://openwiki_search")!,
 		]);
 	});
 });

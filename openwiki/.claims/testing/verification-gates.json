@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "pageVersion": "sha256:5fadea7490c0c44831f08184cf09b3075f0574f0459172b89a216da76d99c9b1",
+  "pageVersion": "sha256:baa68442f9368eb99e227a1eda280802bcdfc2ef6da8d7324a4a91dd518f19d4",
   "claims": [
     {
       "id": "claim_592f6372ad0b42a7bafa80aab188318b",
@@ -45,24 +45,6 @@
         {
           "resource": "repo://scripts/test-gate-source.ts",
           "version": "repo-file-v1:sha256:c1cc510c6d8cb42d85e6c09d46fe843018adb8af57065a93e332f943d7543abb"
-        }
-      ]
-    },
-    {
-      "id": "claim_56bc15c86b724917966f5fbc41ce8f65",
-      "statement": "默认 Rust 选测使用 cargo-delta 0.5.0 和合格基线，受影响包与 fork 范围取交集，不确定时回退完整 fork 范围；仅选中 pi-knowledge 时执行其 doctest。",
-      "evidence": [
-        {
-          "resource": "repo://scripts/fulltest.ts",
-          "version": "repo-file-v1:sha256:1f652fb907ce32c8071b6eab6624d5783fc7d4f32328b491638eb36aa7838d8d"
-        },
-        {
-          "resource": "repo://scripts/run-rs-task.ts",
-          "version": "repo-file-v1:sha256:fe82c16765b461f13b4dc060218250f88e6ac5d3e1bfed914996cd33d1ca70b1"
-        },
-        {
-          "resource": "repo://scripts/test-gate-delta.ts",
-          "version": "repo-file-v1:sha256:c8e830bf0e80f453b29710c8f3ff1490f9aa7421f50c6e4d4bb32e94d12d6dc6"
         }
       ]
     },
@@ -198,7 +180,7 @@
     },
     {
       "id": "claim_19b41ae3814f4ce1ab4a5cbd77a2397f",
-      "statement": "公开底层 test 和 test:ts 分别调用 local 和 local-ts，test:rs 运行 fork Rust 范围，test:scripts 是独立脚本测试；它们不等价于完整门禁。",
+      "statement": "公开底层 test 和 test:ts 分别调用 local 和 local-ts，test:scripts 是独立脚本测试；它们不等价于完整门禁。",
       "evidence": [
         {
           "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L60-L70",

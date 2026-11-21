@@ -14,11 +14,6 @@ exports_files([
     "rustfmt.toml",
 ])
 
-exports_files(
-    ["packages/coding-agent/test/fixtures/docs-v3.sql"],
-    visibility = ["//crates/natives:__pkg__"],
-)
-
 _ADDONS = {
     "linux-x64-baseline": ("//bazel/platforms:linux-x64-baseline", "pi_natives.linux-x64-baseline.node"),
     "linux-x64-modern": ("//bazel/platforms:linux-x64-modern", "pi_natives.linux-x64-modern.node"),

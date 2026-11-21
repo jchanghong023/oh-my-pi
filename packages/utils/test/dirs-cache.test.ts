@@ -14,7 +14,6 @@ import {
 	getFastembedCacheDir,
 	getGithubCacheDbPath,
 	getHistoryDbPath,
-	getKnowledgeDbPath,
 	getLogsDir,
 	getModelDbPath,
 	getNativeGrammarsDir,
@@ -73,7 +72,7 @@ describe("cache root", () => {
 		__resetDirsFromEnvForTests();
 		expect(getConfigRootDir()).toBe(path.join(temp, "persistent"));
 		expect(getAgentDir()).toBe(path.join(temp, "persistent", "agent"));
-		expect(getKnowledgeDbPath()).toBe(path.join(temp, "persistent", "agent", "knowledge.db"));
+		expect(getStatsDbPath()).toBe(path.join(temp, "persistent", "stats.db"));
 		expect(fs.existsSync(wiki)).toBe(false);
 	});
 
@@ -106,8 +105,6 @@ describe("cache root", () => {
 		expect(getWebKitHostPath("linux")).toBe(path.join(selectedRoot, "lib", "abkit", "ABHost"));
 		expect(getWebKitHostPath("win32")).toBe(path.join(selectedRoot, "lib", "abkit", "ABHost.exe"));
 		expect(getNativeGrammarsDir()).toBe(path.join(selectedRoot, "natives", "grammars"));
-		expect(getKnowledgeDbPath()).toBe(path.join(selectedRoot, "knowledge.db"));
-		expect(getKnowledgeDbPath(path.join(temp, "other-agent"))).toBe(path.join(selectedRoot, "knowledge.db"));
 		process.env.OMP_GITHUB_CACHE_DB = path.join(temp, "github.db");
 		expect(getGithubCacheDbPath()).toBe(path.join(temp, "github.db"));
 	});
@@ -208,14 +205,14 @@ describe("cache root", () => {
 		const first = path.join(temp, "first-cache");
 		process.env.OMP_CACHE_DIR = first;
 		__resetDirsFromEnvForTests();
-		const oldKnowledge = getKnowledgeDbPath();
-		fs.mkdirSync(path.dirname(oldKnowledge), { recursive: true });
-		fs.writeFileSync(oldKnowledge, "old knowledge bytes");
+		const oldStats = getStatsDbPath();
+		fs.mkdirSync(path.dirname(oldStats), { recursive: true });
+		fs.writeFileSync(oldStats, "old stats bytes");
 		fs.rmSync(first, { recursive: true });
 		process.env.OMP_CACHE_DIR = path.join(temp, "second-cache");
 		__resetDirsFromEnvForTests();
-		expect(getKnowledgeDbPath()).not.toBe(oldKnowledge);
-		expect(fs.existsSync(getKnowledgeDbPath())).toBe(false);
+		expect(getStatsDbPath()).not.toBe(oldStats);
+		expect(fs.existsSync(getStatsDbPath())).toBe(false);
 		expect(fs.existsSync(process.env.OMP_CACHE_DIR)).toBe(false);
 		expect(fs.readFileSync(config, "utf8")).toBe("temperature: 0.4\n");
 		expect(fs.readFileSync(session, "utf8")).toBe("persistent session evidence\n");

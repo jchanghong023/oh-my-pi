@@ -2,7 +2,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { saveWikiWorkspaces } from "#openwiki-vendor";
-import { KnowledgeService } from "../../src/knowledge/service";
 
 export interface MixedWorkspace {
 	readonly configuration: Record<string, unknown>;
@@ -11,7 +10,7 @@ export interface MixedWorkspace {
 	[Symbol.asyncDispose](): Promise<void>;
 }
 
-/** Start the external search fixture; all Git, Wiki, and knowledge operations remain real. */
+/** Start the external search fixture; Git and OpenWiki operations remain real. */
 export function createMixedWorkspace(): MixedWorkspace {
 	const searchQueries: string[] = [];
 	const server = Bun.serve({
@@ -62,7 +61,6 @@ export function createMixedWorkspace(): MixedWorkspace {
 			await vcs.clone(cwd, peer);
 			await Promise.all([
 				fs.mkdir(path.join(cwd, "src"), { recursive: true }),
-				fs.mkdir(path.join(cwd, "docs"), { recursive: true }),
 				fs.mkdir(path.join(cwd, "openwiki", "architecture"), { recursive: true }),
 				fs.mkdir(path.join(peer, "openwiki", "architecture"), { recursive: true }),
 			]);
@@ -74,10 +72,6 @@ export function createMixedWorkspace(): MixedWorkspace {
 				fs.writeFile(path.join(cwd, "src", "alpha.ts"), "export const alpha = 1;\n"),
 				fs.writeFile(path.join(cwd, "src", "beta.ts"), "export const beta = 2;\n"),
 				fs.writeFile(path.join(cwd, "src", "ast.ts"), "export const total = 1 + 2;\n"),
-				fs.writeFile(
-					path.join(cwd, "docs", "evidence.md"),
-					"# Mixed knowledge evidence\n\nMIXED_KNOWLEDGE_EVIDENCE identifies the indexed documentation.\n",
-				),
 				fs.writeFile(path.join(cwd, "openwiki", ".last-update.json"), "{}\n"),
 				fs.writeFile(path.join(cwd, "openwiki", "quickstart.md"), "# Quickstart\n"),
 				fs.writeFile(
@@ -102,12 +96,6 @@ export function createMixedWorkspace(): MixedWorkspace {
 			await saveWikiWorkspaces([{ id: "mixed", name: "Mixed", roots: [cwd, peer] }], {
 				configDirectory: path.join(agentDir, "openwiki"),
 			});
-			const knowledge = new KnowledgeService({ cwd, agentDir });
-			try {
-				await knowledge.init("docs", "mixed");
-			} finally {
-				await knowledge.close();
-			}
 		},
 		async [Symbol.asyncDispose]() {
 			await server.stop(true);

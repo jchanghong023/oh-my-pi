@@ -7,12 +7,13 @@ import { windowsTestTempOverride } from "./windows-test-temp";
 import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { forwardNextestOutput, withRustCompilerEvents } from "./test-gate-native-events";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
-import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
-import type { RustDeltaSelection } from "./test-gate-delta";
-
-const forkPackages = ["omp-knowledge", "omp-natives"] as const;
-const packageNamePattern = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
-const baselinePattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
+import {
+	beginTestRun,
+	endTestRun,
+	recordTestProducer,
+	recordUnselectedRustForkTests,
+	testReportPath,
+} from "./test-reporting";
 
 const RUST_AFFECTING_FILE_NAMES = [
 	"Cargo.toml",
@@ -129,126 +130,20 @@ if (taskName !== "test:rs" && taskName !== "fmt:rs") {
 	if (!decision.run) process.exit(0);
 }
 
-const selection = taskName === "test:rs" && !full ? readDeltaSelection() : undefined;
-const selectedPackages =
-	selection?.mode === "affected" ? forkPackages.filter(name => selection.packages.includes(name)) : [...forkPackages];
-Object.assign(process.env, windowsTestTempOverride());
-prepareWindowsRustEnvironment();
-const commands =
-	taskName !== "test:rs" ? TASK_COMMANDS[taskName] : full ? FULL_TEST_COMMANDS : forkTestCommands(selectedPackages);
+if (taskName !== "test:rs" || full) {
+	Object.assign(process.env, windowsTestTempOverride());
+	prepareWindowsRustEnvironment();
+}
+const commands = full ? FULL_TEST_COMMANDS : TASK_COMMANDS[taskName];
 await runCommands(commands, taskName === "test:rs" ? (full ? "rust-workspace" : "rust-fork-features") : undefined);
-
-function readDeltaSelection(): RustDeltaSelection | undefined {
-	const raw = process.env.OMP_RUST_DELTA_SELECTION;
-	if (raw === undefined) return undefined;
-	try {
-		const value: unknown = JSON.parse(raw);
-		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not an object");
-		const item = value as Record<string, unknown>;
-		if (
-			item.tool !== "cargo-delta" ||
-			!["affected", "full"].includes(item.mode as string) ||
-			!Array.isArray(item.packages) ||
-			!item.packages.every(name => typeof name === "string" && packageNamePattern.test(name)) ||
-			new Set(item.packages).size !== item.packages.length ||
-			typeof item.reason !== "string" ||
-			!item.reason.trim() ||
-			(item.baseline !== undefined && (typeof item.baseline !== "string" || !baselinePattern.test(item.baseline))) ||
-			(item.mode === "affected" && (typeof item.baseline !== "string" || !baselinePattern.test(item.baseline)))
-		)
-			throw new Error("invalid selection");
-		if (item.mode === "affected" && !validChangedPaths()) throw new Error("missing changed-path evidence");
-		return item as unknown as RustDeltaSelection;
-	} catch {
-		console.warn("Warning: invalid Rust delta selection or evidence; running full fork tests.");
-		return undefined;
-	}
-}
-
-function validChangedPaths(): string[] | undefined {
-	try {
-		const paths: unknown = JSON.parse(process.env.OMP_FULLTEST_CHANGED_PATHS ?? "null");
-		if (
-			!Array.isArray(paths) ||
-			!paths.every(
-				value =>
-					typeof value === "string" &&
-					value.length > 0 &&
-					!value.includes("\\") &&
-					!value.startsWith("/") &&
-					!/^[a-z]:/i.test(value) &&
-					value.split("/").every(part => part !== "" && part !== "." && part !== ".."),
-			)
-		)
-			return undefined;
-		return paths;
-	} catch {
-		return undefined;
-	}
-}
-
-function forkTestCommands(packages: readonly string[]): readonly (readonly string[])[] {
-	if (!packages.length) return [];
-	const knowledge = packages.includes("omp-knowledge");
-	const native = packages.includes("omp-natives");
-	const expression = [knowledge && "package(omp-knowledge)", native && "(package(omp-natives) & test(/^knowledge::/))"]
-		.filter(Boolean)
-		.join(" | ");
-	return [
-		[
-			"cargo",
-			"nextest",
-			"run",
-			`--test-threads=${testConcurrencyLimit()}`,
-			"--no-fail-fast",
-			"--message-format=libtest-json-plus",
-			"--message-format-version=0.1",
-			...packages.flatMap(name => ["-p", name]),
-			"-E",
-			expression,
-			"--status-level=fail",
-			"--final-status-level=fail",
-		],
-		...(knowledge ? [["cargo", "test", "-p", "omp-knowledge", "--doc", "--no-fail-fast"]] : []),
-	];
-}
 
 async function runCommands(commands: readonly (readonly string[])[], scope?: string): Promise<void> {
 	const run = scope ? await beginTestRun(scope) : undefined;
 	let exitCode = 0;
 	try {
-		if (selection?.mode === "affected") {
-			const skipped = !selectedPackages.length
-				? ([
-						["cargo nextest run", ["cargo", "nextest", "run"]],
-						["cargo test --doc", ["cargo", "test", "--doc"]],
-					] as const)
-				: !selectedPackages.includes("omp-knowledge")
-					? ([["cargo test --doc", ["cargo", "test", "-p", "omp-knowledge", "--doc"]]] as const)
-					: [];
-			for (const [producer, command] of skipped) {
-				await recordTestProducer({
-					producer,
-					command: [...command],
-					scope: scope!,
-					startedAt: new Date().toISOString(),
-					durationSeconds: 0,
-					exitCode: 0,
-					status: "not-selected",
-					selection: {
-						tool: "cargo-delta",
-						mode: "affected",
-						baseline: selection.baseline,
-						packages: [],
-						selected: 0,
-						changedPaths: validChangedPaths()!,
-						reason:
-							producer === "cargo test --doc"
-								? "omp-knowledge is not affected"
-								: "no fork packages are affected",
-					},
-				});
-			}
+		if (scope === "rust-fork-features") {
+			console.log("Skipping test:rs: no fork-owned Rust tests configured (use --full for workspace tests)");
+			await recordUnselectedRustForkTests();
 		}
 		for (const command of commands) {
 			let commandExitCode: number;
@@ -569,22 +464,7 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 				exitCode,
 				reportPath,
 				status: partial ? "partial" : undefined,
-				selection:
-					selection?.mode === "affected"
-						? {
-								tool: "cargo-delta",
-								mode: "affected",
-								baseline: selection.baseline,
-								packages: selectedPackages,
-								reason: selection.reason,
-							}
-						: {
-								tool: "cargo-nextest",
-								mode: "full",
-								reason: full
-									? "all workspace packages and test namespaces"
-									: "full omp-knowledge package and omp-natives knowledge bindings",
-							},
+				selection: { tool: "cargo-nextest", mode: "full", reason: "all workspace packages and test namespaces" },
 				timingBasis: "nextest native JUnit case time",
 				runnerVersion: toolVersion([executable, "nextest", "--version"], env),
 			});
@@ -606,16 +486,7 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 				exitCode,
 				status: exitCode === 0 ? "stage" : "failed",
 				timingBasis: "command wall time; Cargo doctests do not provide standard JUnit reports",
-				selection:
-					selection?.mode === "affected"
-						? {
-								tool: "cargo-delta",
-								mode: "affected",
-								baseline: selection.baseline,
-								packages: ["omp-knowledge"],
-								reason: selection.reason,
-							}
-						: { tool: "cargo", mode: "full", reason: full ? "workspace doctests" : "omp-knowledge doctests" },
+				selection: { tool: "cargo", mode: "full", reason: "workspace doctests" },
 				runnerVersion: toolVersion([executable, "--version"], env),
 			});
 		} catch (error) {

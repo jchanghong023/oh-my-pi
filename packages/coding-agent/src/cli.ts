@@ -40,7 +40,6 @@ import { isNativeShell, runNativeShell } from "./cli/native-shell";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import {
 	COMPUTER_WORKER_ARG,
-	KNOWLEDGE_WORKER_ARG,
 	PARENT_WATCHDOG_WORKER_ARG,
 	STATS_ACTIVITY_WORKER_ARG,
 	SUBAGENT_WORKER_ARG,
@@ -161,8 +160,6 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestTtsWorker } = await import("./tts/tts-client");
 	const { smokeTestMnemopiEmbedWorker } = await import("./mnemopi/embed-client");
 	const { smokeTestStatsActivityWorker } = await import("./stats/activity-client");
-	// Keep the smoke-only subprocess graph out of normal CLI startup.
-	const { smokeTestKnowledgeWorker } = await import("./knowledge/service");
 	const { smokeTestTranscriptIndexWorker } = await import("./session/transcript-index-client");
 	const { smokeTestJsEvalWorker } = await import("./eval/js/context-manager");
 	// Other smoke dependencies stay lazy so normal CLI startup does not load their worker clients.
@@ -174,7 +171,6 @@ async function runSmokeTest(): Promise<void> {
 		await smokeTestSyncWorker();
 		await smokeTestSpotlightWorker();
 		await smokeTestStatsActivityWorker();
-		await smokeTestKnowledgeWorker();
 		await smokeTestTranscriptIndexWorker();
 
 		const statsServer = await startServer(0);
@@ -300,12 +296,6 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === MNEMOPI_EMBED_WORKER_ARG) {
 		const { startMnemopiEmbedWorker } = await import("./mnemopi/embed-worker");
 		await startMnemopiEmbedWorker();
-		return true;
-	}
-	if (arg === KNOWLEDGE_WORKER_ARG) {
-		// This import is the isolation boundary: static loading would open the SQLite runtime in ordinary CLI startup.
-		const { startKnowledgeWorker } = await import("./knowledge/worker");
-		await runIpcSubprocessWorker(startKnowledgeWorker);
 		return true;
 	}
 	if (arg === STATS_ACTIVITY_WORKER_ARG) {

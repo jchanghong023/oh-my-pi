@@ -5,7 +5,6 @@ import { setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { TEAM_SLASH_COMMANDS } from "../../src/jch-commands/team";
-import { KnowledgeService } from "../../src/knowledge/service";
 import { createAgentSession } from "../../src/sdk";
 import type { AgentSession } from "../../src/session/agent-session";
 import { AuthStorage } from "../../src/session/auth-storage";
@@ -16,24 +15,22 @@ import { beginSettingsTest, restoreSettingsTestState } from "../helpers/settings
 import { contentText, createProviderFixture, type ModelRequest, type Reply } from "../spec-driven/provider-fixture";
 
 // Real registered /team handler -> native background owner -> every real child
-// SDK session -> HTTP model fixture -> actual Knowledge/grep/read tools -> durable report.
+// SDK session -> HTTP model fixture -> actual grep/read tools -> durable report.
 // The fixture proves tool access and evidence transport, not model reasoning quality.
-test("public Team stages and recheck query retained Knowledge and current source evidence without modifying project bytes", async () => {
+test("public Team stages and recheck verify supplemental documents and current source without modifying project bytes", async () => {
 	const state = beginSettingsTest();
 	await using root = await TempDir.create("@omp-team-retrieval-");
 	const cwd = root.join("project");
 	const agentDir = root.join("agent");
-	const documents = root.join("documents");
-	await Promise.all([cwd, agentDir, documents].map(directory => fs.mkdir(directory, { recursive: true })));
+	await Promise.all([cwd, agentDir].map(directory => fs.mkdir(directory, { recursive: true })));
 	setAgentDir(agentDir);
 	const source = path.join(cwd, "engine.py");
 	const sourceText = "def preserve_api(): return 'TEAM_SOURCE_BEACON'\n";
 	await fs.writeFile(source, sourceText);
-	await fs.writeFile(
-		path.join(documents, "guide.md"),
-		"# Compatibility\nTEAM_WIKI_BEACON requires preserving the public API.\n",
-	);
-	const wiki = new KnowledgeService({ agentDir, cwd });
+	const guide = path.join(cwd, "guide.md");
+	const guideRule = "TEAM_GUIDE_BEACON requires preserving the public API.";
+	const guideText = `# Compatibility\n${guideRule}\n`;
+	await fs.writeFile(guide, guideText);
 	const auth = await AuthStorage.create(":memory:");
 	let session: AgentSession | undefined;
 	const observed: Array<{ marker: string; results: string[] }> = [];
@@ -57,7 +54,7 @@ test("public Team stages and recheck query retained Knowledge and current source
 			.filter(message => message.role === "tool")
 			.map(message => contentText(message.content));
 		const queries = [
-			{ name: "knowledge_search", args: { query: "TEAM_WIKI_BEACON", mode: "grep" } },
+			{ name: "read", args: { path: guide } },
 			{ name: "grep", args: { pattern: "TEAM_SOURCE_BEACON", path: source } },
 			{ name: "read", args: { path: source } },
 		];
@@ -66,7 +63,7 @@ test("public Team stages and recheck query retained Knowledge and current source
 			return { tool: { name: advertised(query.name), args: query.args } };
 		}
 		expect(results).toHaveLength(3);
-		expect(results[0]).toContain("TEAM_WIKI_BEACON");
+		expect(results[0]).toContain(guideRule);
 		expect(results[1]).toContain("TEAM_SOURCE_BEACON");
 		expect(results[2]).toContain(sourceText.trim());
 		observed.push({ marker, results });
@@ -100,7 +97,7 @@ test("public Team stages and recheck query retained Knowledge and current source
 					{
 						findingId: "A-F1",
 						disposition: "accepted-and-revised",
-						explanation: "The retained Wiki guide requires compatibility.",
+						explanation: "The compatibility guide requires preserving the public API.",
 					},
 				],
 				reviewFlags: {
@@ -114,7 +111,7 @@ test("public Team stages and recheck query retained Knowledge and current source
 			const finding = marker.includes("target=A") && !marker.includes("recheck");
 			data = {
 				noSubstantiveIssues: !finding,
-				reviewSummary: "Verified current code and retained Wiki evidence.",
+				reviewSummary: "Verified current code and the compatibility guide.",
 				findings: finding
 					? [
 							{
@@ -131,7 +128,7 @@ test("public Team stages and recheck query retained Knowledge and current source
 		} else if (marker.startsWith("synthesis"))
 			data = {
 				reportMarkdown:
-					"## Evidence\nTEAM_WIKI_BEACON and TEAM_SOURCE_BEACON establish the compatibility condition. Preserve the existing API.",
+					"## Evidence\nTEAM_GUIDE_BEACON and TEAM_SOURCE_BEACON establish the compatibility condition. Preserve the existing API.",
 				recommendedProposal: "A",
 				recommendationReason: "Preserves verified compatibility",
 				recommendationPreconditions: "Keep the public API",
@@ -142,8 +139,6 @@ test("public Team stages and recheck query retained Knowledge and current source
 	};
 	await using provider = createProviderFixture({ reply });
 	try {
-		await wiki.init(documents, "manual");
-		await fs.rm(documents, { recursive: true });
 		const configFile = path.join(agentDir, "models.yml");
 		await fs.writeFile(
 			configFile,
@@ -189,8 +184,8 @@ test("public Team stages and recheck query retained Knowledge and current source
 		await TEAM_SLASH_COMMANDS[0]!.handle!(
 			{
 				name: "team",
-				args: "Use the retained Wiki and current code to plan compatible API changes.",
-				text: "/team Use the retained Wiki and current code to plan compatible API changes.",
+				args: "Use guide.md and current code to plan compatible API changes.",
+				text: "/team Use guide.md and current code to plan compatible API changes.",
 			},
 			{
 				session,
@@ -224,16 +219,16 @@ test("public Team stages and recheck query retained Knowledge and current source
 				.getBranch()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "team-result"),
 		).toHaveLength(1);
-		expect(result.reportMarkdown).toContain("TEAM_WIKI_BEACON");
+		expect(result.reportMarkdown).toContain("TEAM_GUIDE_BEACON");
 		expect(result.reportMarkdown).toContain("TEAM_SOURCE_BEACON");
 		expect(await fs.readFile(source, "utf8")).toBe(sourceText);
+		expect(await fs.readFile(guide, "utf8")).toBe(guideText);
 		expect(await fs.readFile(configFile, "utf8")).toBe(configBytes);
-		expect(await fs.readdir(cwd)).toEqual(["engine.py"]);
+		expect((await fs.readdir(cwd)).sort()).toEqual(["engine.py", "guide.md"]);
 		expect(provider.failures).toEqual([]);
 	} finally {
 		await session?.dispose();
 		auth.close();
-		await wiki.close();
 		restoreSettingsTestState(state);
 	}
 }, 120_000);

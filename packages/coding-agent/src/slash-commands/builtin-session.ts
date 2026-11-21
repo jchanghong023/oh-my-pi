@@ -600,15 +600,6 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
-		name: "knowledge",
-		icon: "tree",
-		description: "Open the knowledge index hub",
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showKnowledgeDashboard();
-			clearSubmittedText(runtime);
-		},
-	},
-	{
 		name: "git",
 		icon: "branch",
 		description: "Open the git UI (split diff viewer, staging, commit composer)",

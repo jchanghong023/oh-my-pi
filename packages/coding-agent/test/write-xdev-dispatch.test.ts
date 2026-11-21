@@ -10,7 +10,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
-import { KnowledgeService } from "@oh-my-pi/pi-coding-agent/knowledge/service";
 import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { requiresApproval, resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -202,28 +201,27 @@ describe("read and write route xd:// device URLs", () => {
 	});
 
 	it("resolves device dispatches against the device's user policy, falling back to write's", async () => {
-		// Like the pi-knowledge plugin in #7923: the mounted device declares no
-		// approval, so it defaults to exec tier — but a device-scoped user policy
-		// must still gate, and without one the dispatch must honor `write`'s policy.
+		// With no declared approval, the extension device defaults to exec tier.
+		// A device-scoped policy takes precedence over the write policy.
 		const device: AgentTool = {
-			name: "knowledge_search",
-			label: "Knowledge Search",
+			name: "extension_lookup",
+			label: "Extension Lookup",
 			description: "Read-only device without a tier declaration",
 			parameters: type({ q: "string" }),
 			async execute() {
 				return { content: [{ type: "text", text: "ok" }] };
 			},
 		};
-		const xdev = createTestXdevState([device]);
+		const xdev = createTestXdevState([device], []);
 		const write = new WriteTool(xdevSession(process.cwd(), { xdev }));
-		const args = { path: "xd://knowledge_search", content: JSON.stringify({ q: "x" }) };
+		const args = { path: "xd://extension_lookup", content: JSON.stringify({ q: "x" }) };
 
 		const approval = write.approval;
 		expect(typeof approval).toBe("function");
 		if (typeof approval !== "function") throw new Error("expected a function approval");
 		// The gate reports the mounted tool's (default exec) tier and keys user
 		// policy on the device name.
-		expect(approval(args)).toEqual({ tier: "exec", policyKey: "knowledge_search" });
+		expect(approval(args)).toEqual({ tier: "exec", policyKey: "extension_lookup" });
 
 		// No device policy → falls back to the write tool's own policy.
 		expect(resolveApproval(write, args, "always-ask", { write: "prompt" }).policy).toBe("prompt");
@@ -231,66 +229,59 @@ describe("read and write route xd:// device URLs", () => {
 
 		// Device-scoped allow lets the dispatch through even while the blanket
 		// write policy stays prompt — the exact scenario from #7923.
-		const allowed = resolveApproval(write, args, "always-ask", { write: "prompt", knowledge_search: "allow" });
-		expect(allowed).toMatchObject({ policy: "allow", source: "user", policyKey: "knowledge_search" });
+		const allowed = resolveApproval(write, args, "always-ask", { write: "prompt", extension_lookup: "allow" });
+		expect(allowed).toMatchObject({ policy: "allow", source: "user", policyKey: "extension_lookup" });
 
 		// Device-scoped deny blocks the dispatch and names the device in the refusal.
-		expect(() => requiresApproval(write, args, "always-ask", { knowledge_search: "deny" })).toThrow(
-			'remove "tools.approval.knowledge_search: deny"',
+		expect(() => requiresApproval(write, args, "always-ask", { extension_lookup: "deny" })).toThrow(
+			'remove "tools.approval.extension_lookup: deny"',
 		);
 
 		// Device-scoped prompt forces a prompt for this device.
-		expect(resolveApproval(write, args, "always-ask", { knowledge_search: "prompt" }).policy).toBe("prompt");
+		expect(resolveApproval(write, args, "always-ask", { extension_lookup: "prompt" }).policy).toBe("prompt");
 
 		// An unrelated device's policy does not leak into this dispatch.
 		expect(resolveApproval(write, args, "always-ask", { other_device: "deny" }).policy).toBe("prompt");
 	});
 
-	it("keeps index query policies independent of the write transport", async () => {
+	it("keeps OpenWiki query policies independent of the write transport", async () => {
 		const session = xdevSession(process.cwd(), {});
 		const tools = await createTools(session);
 		const write = tools.find(tool => tool.name === "write")!;
-		for (const name of ["knowledge_search", "openwiki_search"]) {
-			const args = { path: `xd://${name}`, content: JSON.stringify({ query: "probe" }) };
-			expect(requiresApproval(write, args, "always-ask", { write: "deny" }).required).toBe(false);
-			expect(requiresApproval(write, args, "always-ask", { write: "prompt" }).required).toBe(false);
-			expect(() => requiresApproval(write, args, "yolo", { write: "allow", [name]: "deny" })).toThrow(
-				`tools.approval.${name}: deny`,
-			);
-			expect(requiresApproval(write, args, "always-ask", { write: "deny", [name]: "prompt" }).required).toBe(true);
-		}
+		const name = "openwiki_search";
+		const args = { path: `xd://${name}`, content: JSON.stringify({ query: "probe" }) };
+		expect(requiresApproval(write, args, "always-ask", { write: "deny" }).required).toBe(false);
+		expect(requiresApproval(write, args, "always-ask", { write: "prompt" }).required).toBe(false);
+		expect(() => requiresApproval(write, args, "yolo", { write: "allow", [name]: "deny" })).toThrow(
+			`tools.approval.${name}: deny`,
+		);
+		expect(requiresApproval(write, args, "always-ask", { write: "deny", [name]: "prompt" }).required).toBe(true);
 		expect(() => requiresApproval(write, { path: "target.txt", content: "text" }, "yolo", { write: "deny" })).toThrow(
 			"tools.approval.write: deny",
 		);
 	});
 
-	it("runs index device queries concurrently while keeping file writes exclusive", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-index-scheduling-"));
-		const cleanups = new Set<() => void | Promise<void>>();
+	it("runs OpenWiki device queries concurrently while keeping file writes exclusive", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-wiki-scheduling-"));
 		try {
 			const agentDir = path.join(tempDir, "agent");
-			const documents = path.join(tempDir, "documents");
-			await Bun.write(path.join(agentDir, "config.yml"), "mnemopi:\n  noEmbeddings: true\n");
-			await Bun.write(path.join(documents, "guide.md"), "# Scheduling\nSCHEDULING_BEACON\n");
-			// Use a real local index: OpenWiki requires Git, and knowledge_search
-			// correctly rejects an empty profile rather than returning a successful query.
-			const service = new KnowledgeService({ agentDir, cwd: tempDir });
-			try {
-				await service.init(documents, "scheduling");
-			} finally {
-				await service.close();
-			}
-			const settings = Object.assign(Settings.isolated({}), { getAgentDir: () => agentDir });
-			const session = xdevSession(tempDir, {
-				settings,
-				enableLsp: false,
-				registerDisposeCallback: cleanup => {
-					cleanups.add(cleanup);
-					return () => {
-						cleanups.delete(cleanup);
-					};
-				},
-			});
+			await Promise.all([
+				fs.mkdir(path.join(tempDir, ".git", "objects"), { recursive: true }),
+				fs.mkdir(path.join(tempDir, ".git", "refs", "heads"), { recursive: true }),
+			]);
+			await Promise.all([
+				Bun.write(path.join(tempDir, ".git", "HEAD"), "ref: refs/heads/main\n"),
+				Bun.write(path.join(tempDir, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n\tbare = false\n"),
+				Bun.write(path.join(tempDir, "openwiki", ".last-update.json"), "{}\n"),
+				Bun.write(path.join(tempDir, "openwiki", "quickstart.md"), "# Quickstart\n"),
+				Bun.write(
+					path.join(tempDir, "openwiki", "architecture", "service.md"),
+					"---\ntype: guide\ntitle: Service\ndescription: Service operation guide\n---\n\n# Service\n\n## Operation\n\nSCHEDULING_BEACON is required for service operation.\n",
+				),
+			]);
+			const settings = Settings.isolated({});
+			settings.getAgentDir = () => agentDir;
+			const session = xdevSession(tempDir, { settings, enableLsp: false });
 			const tools = await createTools(session);
 			const write = tools.find(tool => tool.name === "write")!;
 			const runBatch = async (args: Array<{ path: string; content: string }>) => {
@@ -334,8 +325,8 @@ describe("read and write route xd:// device URLs", () => {
 				return maximum;
 			};
 			const query = {
-				path: "xd://knowledge_search",
-				content: JSON.stringify({ query: "SCHEDULING_BEACON", mode: "grep" }),
+				path: "xd://openwiki_search",
+				content: JSON.stringify({ query: "SCHEDULING_BEACON" }),
 			};
 			expect(await runBatch([query, query])).toBe(2);
 			const target = path.join(tempDir, "target.txt");
@@ -347,11 +338,7 @@ describe("read and write route xd:// device URLs", () => {
 			).toBe(1);
 			expect(await Bun.file(target).text()).toBe("second");
 		} finally {
-			try {
-				await Promise.all([...cleanups].map(cleanup => cleanup()));
-			} finally {
-				await removeWithRetries(tempDir);
-			}
+			await removeWithRetries(tempDir);
 		}
 	}, 30_000);
 

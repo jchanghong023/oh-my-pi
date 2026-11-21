@@ -60,15 +60,20 @@ const emptyGit = {
 		changedPaths: ["packages/example/src/a.ts"],
 	},
 };
-const emptyDelta = {
-	...emptyGit,
-	selection: { ...emptyGit.selection, tool: "cargo-delta", packages: [] },
-};
-const affectedDelta = {
-	tool: "cargo-delta",
-	mode: "affected",
-	baseline: "a".repeat(40),
-	packages: ["omp-natives"],
+const emptyRustFork = {
+	producer: "cargo nextest run",
+	scope: "rust-fork-features",
+	command: ["bun", "scripts/run-rs-task.ts", "test:rs"],
+	status: "not-selected",
+	durationSeconds: 0,
+	exitCode: 0,
+	selection: {
+		tool: "fork-scope",
+		mode: "full",
+		selected: 0,
+		packages: [],
+		reason: "No fork-owned Rust tests are configured",
+	},
 };
 
 test("affected selection reports only executed XML cases and native deselections", async () => {
@@ -198,61 +203,67 @@ test("Git selection rejects incomplete, contradictory or fabricated evidence", a
 	}
 });
 
-test("cargo-delta reports empty and executed package selections without fabricated cases", async () => {
-	const empty = await fixture([emptyDelta, emptyDelta]);
-	expect(empty.completion).toBe("complete");
-	expect(empty.coverage).toBe("affected-tests-only");
-	expect(empty.reconciliation).toMatchObject({ status: "validated", cases: 0, executed: 0, failures: 0 });
-	expect(empty.producers[0].selection.packages).toEqual([]);
-
-	const mixed = await fixture([{ xml: oneCase, status: "passed", selection: affectedDelta }, emptyDelta]);
-	expect(mixed.completion).toBe("complete");
-	expect(mixed.coverage).toBe("affected-tests-only");
-	expect(mixed.reconciliation).toMatchObject({ status: "validated", cases: 1, executed: 1, failures: 0 });
-	expect(mixed.producers[0].selection.packages).toEqual(["omp-natives"]);
-
-	const withDoctest = await fixture([
-		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, packages: ["omp-knowledge"] } },
-		{ status: "stage", selection: { ...affectedDelta, packages: ["omp-knowledge"] } },
+test("default Rust fork scope completes without reporting any executed tests", async () => {
+	const report = await fixture([emptyRustFork]);
+	expect(report.completion).toBe("complete");
+	expect(report.coverage).toBe("selected-producers-only");
+	expect(report.reconciliation).toEqual({ status: "validated", cases: 0, executed: 0, failures: 0 });
+	expect(report.producers).toEqual([
+		{ ...emptyRustFork, startedAt: expect.any(String), reportPath: null, report: "not-supported" },
 	]);
-	expect(withDoctest.completion).toBe("complete");
-	expect(withDoctest.reconciliation).toMatchObject({ cases: 1, executed: 1, failures: 0 });
-	expect(withDoctest.producers[1].reportPath).toBeNull();
-
-	const failedXml = '<testsuite><testcase name="failed" time="0.2"><failure /></testcase></testsuite>';
-	for (const record of [
-		{ xml: failedXml, status: "failed", exitCode: 1, selection: affectedDelta },
-		{ xml: failedXml, status: "passed", exitCode: 0, selection: affectedDelta },
-		{ xml: oneCase, status: "partial", selection: affectedDelta },
-		{ status: "failed", exitCode: 1, selection: affectedDelta },
-		{ status: "failed", exitCode: 1, selection: { ...affectedDelta, packages: ["omp-knowledge"] } },
-	]) {
-		const report = await fixture([record, emptyDelta]);
-		expect(report.completion).toBe("partial");
-	}
 });
 
-test("cargo-delta rejects incomplete or fabricated empty selection evidence", async () => {
-	const selection = emptyDelta.selection;
+test("Rust fork scope rejects incomplete, contradictory or fabricated skip evidence", async () => {
+	const selection = emptyRustFork.selection;
 	for (const record of [
-		{ ...emptyDelta, selection: { ...selection, baseline: undefined } },
-		{ ...emptyDelta, selection: { ...selection, baseline: "bad" } },
-		{ ...emptyDelta, selection: { ...selection, packages: undefined } },
-		{ ...emptyDelta, selection: { ...selection, packages: ["omp-knowledge"] } },
-		{ ...emptyDelta, selection: { ...selection, selected: 1 } },
-		{ ...emptyDelta, selection: { ...selection, mode: "full" } },
-		{ ...emptyDelta, selection: { ...selection, changedPaths: ["../outside"] } },
-		{ ...emptyDelta, selection: { ...selection, reason: "" } },
-		{ ...emptyDelta, durationSeconds: 1 },
-		{ ...emptyDelta, xml: oneCase },
-		{ ...emptyDelta, cases: 1 },
-		{ ...emptyDelta, exitCode: 1 },
-		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, packages: [] } },
-		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, baseline: undefined } },
-		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, packages: [""] } },
+		{ ...emptyRustFork, scope: "rust-workspace" },
+		{ ...emptyRustFork, producer: "cargo test --doc" },
+		{ ...emptyRustFork, status: "stage" },
+		{ ...emptyRustFork, durationSeconds: 1 },
+		{ ...emptyRustFork, exitCode: 1 },
+		{ ...emptyRustFork, xml: oneCase },
+		{ ...emptyRustFork, reportPath: "fake.xml" },
+		{ ...emptyRustFork, cases: 1 },
+		{ ...emptyRustFork, selection: undefined },
+		{ ...emptyRustFork, selection: { ...selection, mode: "affected" } },
+		{ ...emptyRustFork, selection: { ...selection, selected: 1 } },
+		{ ...emptyRustFork, selection: { ...selection, packages: undefined } },
+		{ ...emptyRustFork, selection: { ...selection, packages: ["fixture-crate"] } },
+		{ ...emptyRustFork, selection: { ...selection, reason: "No affected packages" } },
+		{ ...emptyRustFork, selection: { ...selection, baseline: "a".repeat(40) } },
+		{ ...emptyRustFork, selection: { ...selection, changedPaths: [] } },
+		{ ...emptyRustFork, selection: { ...selection, testcases: ["fabricated"] } },
 	]) {
 		const report = await fixture([record]);
 		expect(report.completion).toBe("partial");
 		expect(report.reconciliation.status).toBe("invalid");
 	}
+});
+
+test("workspace doctest stages preserve Nextest counts and cannot hide failures", async () => {
+	const nextest = {
+		producer: "cargo nextest run",
+		scope: "rust-workspace",
+		command: ["cargo", "nextest", "run", "--workspace"],
+		xml: oneCase,
+		status: "passed",
+		selection: { tool: "cargo-nextest", mode: "full" },
+	};
+	const doctest = {
+		producer: "cargo test --doc",
+		scope: "rust-workspace",
+		command: ["cargo", "test", "--doc", "--workspace"],
+		status: "stage",
+		selection: { tool: "cargo", mode: "full", reason: "workspace doctests" },
+	};
+	const passed = await fixture([nextest, doctest]);
+	expect(passed.completion).toBe("complete");
+	expect(passed.coverage).toBe("selected-producers-only");
+	expect(passed.reconciliation).toMatchObject({ status: "validated", cases: 1, executed: 1, failures: 0 });
+	expect(passed.producers).toContainEqual(
+		expect.objectContaining({ ...doctest, reportPath: null, report: "not-supported" }),
+	);
+	const failed = await fixture([nextest, { ...doctest, status: "failed", exitCode: 1 }]);
+	expect(failed.completion).toBe("partial");
+	expect(failed.reconciliation).toMatchObject({ status: "validated", cases: 1, executed: 1, failures: 0 });
 });

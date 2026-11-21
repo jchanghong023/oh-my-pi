@@ -21,7 +21,6 @@ import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
 	TEAM_CLOSING_CONTRACT,
-	TEAM_READ_ONLY_TOOLS,
 	createTeamSubagentRunner,
 	runTeamDiscussion,
 	resolveTeamParticipants,
@@ -444,8 +443,7 @@ describe("team in-process integration", () => {
 				expect(call.initialMessages).toHaveLength(0);
 				expect(call.outputSchemaMode).toBe("strict");
 				// The executor appends required yield separately; no writable tools leak in.
-				expect([...(call.toolNames ?? [])].sort()).toEqual([...TEAM_READ_ONLY_TOOLS].sort());
-				expect(call.toolNames).toContain("knowledge_search");
+				expect([...(call.toolNames ?? [])].sort()).toEqual(["ast_grep", "glob", "grep", "read"]);
 				expect(call.toolNames).not.toContain("wiki");
 			}
 		});

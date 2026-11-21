@@ -42,6 +42,7 @@
 ### Removed
 
 - Removed the unused fork-only `VcsGitRepo.remoteRef()` API.
+- Removed `KnowledgeSearchEngine` and the native bindings for the retired local Markdown index.
 
 ## [19.0.1] - 2026-11-19
 

@@ -60,9 +60,6 @@ export const compressHelp = {
 } satisfies CommandMetadata;
 
 export const configHelp = { description: "Manage configuration settings" } satisfies CommandMetadata;
-export const knowledgeHelp = {
-	description: "Manage persistent knowledge indexes (init/remove)",
-} satisfies CommandMetadata;
 
 export const dryBalanceHelp = {
 	description: "Dry-run OAuth account balancing across random session ids",

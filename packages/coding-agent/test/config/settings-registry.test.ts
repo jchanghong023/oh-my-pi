@@ -415,39 +415,6 @@ describe("settings registry", () => {
 		expect(new Set(ordered)).toEqual(new Set(all()));
 	});
 
-	it("registers Wiki reranker settings for isolated and loaded configuration", async () => {
-		const model = lookup("knowledge.reranker.model");
-		const url = lookup("knowledge.reranker.baseUrl");
-		const key = lookup("knowledge.reranker.apiKey");
-		expect(key?.isCredential).toBe(true);
-		const isolated = Settings.isolated({ "knowledge.reranker.model": "isolated" });
-		expect(model?.get(isolated)).toBe("isolated");
-		url?.set(isolated, "https://example.test/v1");
-		key?.set(isolated, "secret");
-		expect(url?.get(isolated)).toBe("https://example.test/v1");
-		expect(key?.get(isolated)).toBe("secret");
-
-		const temp = TempDir.createSync("@pi-knowledge-settings-");
-		try {
-			const agentDir = temp.join("agent");
-			fs.mkdirSync(agentDir, { recursive: true });
-			fs.writeFileSync(
-				path.join(agentDir, "config.yml"),
-				YAML.stringify({
-					knowledge: { reranker: { model: "loaded", baseUrl: "https://loaded.test", apiKey: "loaded-secret" } },
-				}),
-			);
-			const loaded = await Settings.loadReadOnly({ agentDir, cwd: agentDir });
-			expect(model?.get(loaded)).toBe("loaded");
-			expect(url?.get(loaded)).toBe("https://loaded.test");
-			expect(key?.get(loaded)).toBe("loaded-secret");
-			model?.set(loaded, "changed");
-			expect(model?.get(loaded)).toBe("changed");
-		} finally {
-			temp.removeSync();
-		}
-	});
-
 	it("rejects overrides for unknown setting ids", () => {
 		expect(() => Settings.isolated({ temprature: 0.2 })).toThrow('Unknown setting "temprature"');
 		expect(() => Settings.isolated().overlay({ "nope.nope": 1 })).toThrow('Unknown setting "nope.nope"');

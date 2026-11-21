@@ -107,29 +107,21 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "ordinary", suiteRevision: 8 },
+					selection: { mode: "full", group: "ordinary", suiteRevision: 9 },
 				},
 				{
 					scope: "ci-test-ts:local-ts",
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "startup", suiteRevision: 8 },
+					selection: { mode: "full", group: "startup", suiteRevision: 9 },
 				},
 				{
 					scope: "rust-fork-features",
 					producer: "cargo nextest run",
 					exitCode: 0,
-					status: "passed",
-					report: "available",
-					selection: { mode: "full" },
-				},
-				{
-					scope: "rust-fork-features",
-					producer: "cargo test --doc",
-					exitCode: 0,
-					status: "stage",
-					selection: { mode: "full" },
+					status: "not-selected",
+					selection: { tool: "fork-scope", mode: "full", selected: 0, packages: [] },
 				},
 				{ scope: "all scenarios", producer: "ui-smoke/runner-stage", exitCode: 0, status: "stage" },
 			] as const,
@@ -144,17 +136,23 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		// Isolate report variants under the same Git history: a wrongly accepted
 		// report can reach Git and return affected, rather than failing for lack of a repo.
 		const caseRoot = (name: string) => path.join(root, "runs", "cases", name);
-		const [ordinary, startup, ...otherProducers] = report.producers;
-		const withStartup = (producer: object) => ({ ...report, producers: [ordinary, producer, ...otherProducers] });
+		const [ordinary, startup, rust, ui] = report.producers;
+		const withStartup = (producer: object) => ({ ...report, producers: [ordinary, producer, rust, ui] });
+		const withRust = (producer: object) => ({ ...report, producers: [ordinary, startup, producer, ui] });
 		const rejectedReports = [
 			["other scope", { ...report, scope: "fulltest: full current-platform project suites" }],
 			["missing suite revision", withStartup({ ...startup, selection: { mode: "full", group: "startup" } })],
-			["old suite revision", withStartup({ ...startup, selection: { ...startup.selection, suiteRevision: 7 } })],
+			["old suite revision", withStartup({ ...startup, selection: { ...startup.selection, suiteRevision: 8 } })],
 			["dirty baseline", { ...report, dirtyState: "dirty" }],
 			["affected producer", withStartup({ ...startup, selection: { mode: "affected" } })],
-			["missing startup group", { ...report, producers: [ordinary, ...otherProducers] }],
+			["missing startup group", { ...report, producers: [ordinary, rust, ui] }],
 			["failed producer", withStartup({ ...startup, exitCode: 1, status: "failed" })],
 			["missing producer report", withStartup({ ...startup, report: "missing" })],
+			["missing Rust scope", { ...report, producers: [ordinary, startup, ui] }],
+			["old Rust scope", withRust({ ...rust, status: "passed", selection: { mode: "full" } })],
+			["nonempty Rust skip", withRust({ ...rust, selection: { ...rust.selection, selected: 1 } })],
+			["Rust scope affected", withRust({ ...rust, selection: { ...rust.selection, mode: "affected" } })],
+			["other skip", { ...report, producers: [...report.producers, { ...rust, producer: "other" }] }],
 		] as const;
 		const currentRunId = "2026-11-20T20-14-46.754Z-99789-2db8930a";
 		const running = { ...report, runId: currentRunId, completion: "running", exitCode: null };
@@ -382,7 +380,7 @@ test("bounded pool preserves order with fewer workers than the heavy limit", asy
 });
 
 test("weighted leases release both slots and keep only one browser active", async () => {
-	const items = ["browser-1", "knowledge", "browser-2", "ordinary-1", "ordinary-2", "ordinary-3"];
+	const items = ["browser-1", "multi-file", "browser-2", "ordinary-1", "ordinary-2", "ordinary-3"];
 	const released = new Map<string, () => void>();
 	const launches: [string, number][] = [];
 	let activeSlots = 0;
@@ -400,7 +398,7 @@ test("weighted leases release both slots and keep only one browser active", asyn
 			activeSlots -= slots;
 		},
 		item => item.startsWith("browser-"),
-		{ budget: 3, slots: item => [1, item === "knowledge" ? 2 : 1] },
+		{ budget: 3, slots: item => [1, item === "multi-file" ? 2 : 1] },
 	);
 	const release = async (item: string) => {
 		released.get(item)!();
@@ -408,9 +406,9 @@ test("weighted leases release both slots and keep only one browser active", asyn
 	};
 	expect(launches).toEqual([
 		["browser-1", 1],
-		["knowledge", 2],
+		["multi-file", 2],
 	]);
-	await release("knowledge");
+	await release("multi-file");
 	expect(launches.slice(2)).toEqual([
 		["ordinary-1", 1],
 		["ordinary-2", 1],
@@ -571,23 +569,17 @@ test("historical chunk durations reorder only exact matches, retaining every com
 		"test/c.test.ts",
 		"test/d.test.ts",
 	]);
-	const cli = { ...commands[1], command: ["bun", "test", "test/knowledge-search-cli.e2e.test.ts"] };
-	const full = [commands[0], cli, commands[2]];
+	const full = commands.slice(0, 3);
 	const fullProducer = (index: number, duration: number): TestProducerRecord => ({
 		...producer(index, duration),
 		producer: `ci-test-ts:all:1234abcd:${full[index].label}:attempt-1`,
 		scope: "ci-test-ts:all",
-		command: [
-			...full[index].command,
-			...(index === 1 ? [] : ["--parallel=1"]),
-			"--timeout=30000",
-			...(index === 1 ? ["--max-concurrency=2"] : []),
-		],
+		command: [...full[index].command, ...(index === 1 ? [] : ["--parallel=1"]), "--timeout=30000"],
 	});
-	expect(prioritizeBunCommands(full, [producer(2, 40)], "ci-test-ts:all")).toEqual([cli, commands[0], commands[2]]);
+	expect(prioritizeBunCommands(full, [producer(2, 40)], "ci-test-ts:all")).toEqual(full);
 	expect(
 		prioritizeBunCommands(full, [fullProducer(0, 2), fullProducer(1, 1), fullProducer(2, 40)], "ci-test-ts:all"),
-	).toEqual([commands[2], commands[0], cli]);
+	).toEqual([commands[2], commands[0], commands[1]]);
 });
 
 test("completed chunk hints do not require a successful or finalized fulltest", async () => {
@@ -604,7 +596,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 		durationSeconds: 12,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 8 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 9 },
 		report: "available",
 	} satisfies TestProducerRecord & { report: string };
 	const put = async (overrides: object = {}, records: unknown[] = [producer]) => {
@@ -685,7 +677,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 			{ startedAt: new Date(now + 1000).toISOString() },
 			{ startedAt: new Date(now - 180_000).toISOString() },
 			{ selection: { ...producer.selection, mode: "affected" } },
-			{ selection: { ...producer.selection, suiteRevision: 7 } },
+			{ selection: { ...producer.selection, suiteRevision: 8 } },
 			{ selection: { tool: "bun", mode: "full", group: "ordinary" } },
 			{ selection: { ...producer.selection, group: "other" } },
 		]) {
@@ -745,7 +737,7 @@ test("each exact chunk keeps its latest usable measurement across interrupted ru
 		durationSeconds,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 8 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 9 },
 		report: "available",
 	});
 	const put = async (name: string, age: number, records: object[], overrides: object = {}) => {
@@ -891,9 +883,9 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/spec-driven/process.e2e.test.ts",
 			"packages/coding-agent/test/team/integration.test.ts",
 			"packages/coding-agent/test/goals/goal-runtime.test.ts",
-			"packages/coding-agent/test/knowledge-index.test.ts",
-			"packages/coding-agent/test/knowledge-models.test.ts",
-			"packages/coding-agent/test/knowledge-semantic.test.ts",
+			"packages/coding-agent/test/cli/openwiki.test.ts",
+			"packages/coding-agent/test/openwiki/resources.test.ts",
+			"packages/coding-agent/test/openwiki/model-selection.test.ts",
 			"packages/coding-agent/test/lsp/edits.test.ts",
 			"packages/coding-agent/test/slash-commands/shared-skills.test.ts",
 			"packages/coding-agent/test/acp-builtins.test.ts",
@@ -923,7 +915,7 @@ test("local suites select fork consumers and drain failures without widening to 
 		];
 		for (const file of [...selected, ...excluded]) await put(file, fixture(file));
 		await put(
-			"packages/coding-agent/test/knowledge-search-tool.test.ts",
+			"packages/coding-agent/test/loop-limit.test.ts",
 			'import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; test("failure", () => { appendFileSync(process.env.MARKER!, "failure\\n"); expect(Boolean(process.env.FAIL_FIXTURE)).toBe(false); }); test("after failure", () => appendFileSync(process.env.MARKER!, "after-failure\\n"));\n',
 		);
 		const fullMarkers = [...selected, "failure", "after-failure"].sort();
@@ -945,7 +937,7 @@ test("local suites select fork consumers and drain failures without widening to 
 		const bunProducers = report.producers.filter(producer => producer.scope === expectedScope);
 		expect(bunProducers.length).toBeGreaterThan(0);
 		for (const producer of bunProducers) {
-			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 8 });
+			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 9 });
 			expect(producer.exitCode).toBe(0);
 			expect(producer.status).toBe("passed");
 		}
@@ -1095,8 +1087,6 @@ ${fixture("browser acceptance")}`,
 writeFileSync(process.env.MARKER! + ".ordinary-home", process.env.HOME!);
 ${fixture("packages/ai/test/unrelated.test.ts")}`,
 		);
-		const knowledgeFile = "test/knowledge-search-cli.e2e.test.ts";
-		await put(`packages/coding-agent/${knowledgeFile}`, fixture("knowledge CLI"));
 		const full = fulltestCommands({ debug: false, full: true }, path.join(temp, "home")).find(
 			command => command.argv[1] === "scripts/ci-test-ts.ts",
 		)!;
@@ -1114,7 +1104,6 @@ ${fixture("packages/ai/test/unrelated.test.ts")}`,
 		expect(serialCommands.slice(startupFiles.length + 1).some(isStartup)).toBe(false);
 		expect(parallelCommands[0]).toBe(serialCommands[0]);
 		expect(parallelCommands.slice(1, 3).some(command => !isStartup(command))).toBe(true);
-		expect(serialCommands.filter(command => command.includes(knowledgeFile))).toHaveLength(1);
 		await clear();
 		const priorReports = new Set(await fs.readdir(reportRoot));
 		await run(fullArgv, { ...fullEnv, OMP_TEST_CPU_BUDGET: "3" });
