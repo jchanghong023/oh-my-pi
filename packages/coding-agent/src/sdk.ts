@@ -492,7 +492,6 @@ import {
 	cfgMcpShared,
 	cfgMcpStartupTimeoutMs,
 } from "./mcp/settings";
-import type { ApprovedPlanChecks } from "./plan-mode/verification";
 import { cfgSecretsEnabled } from "./secrets/settings";
 import {
 	cfgSnapcompactShape,
@@ -838,8 +837,6 @@ export interface CreateAgentSessionOptions {
 
 	/** Custom tools to register (in addition to built-in tools). Accepts both CustomTool and ToolDefinition. */
 	customTools?: (CustomTool | ToolDefinition)[];
-	/** Host-approved verification commands inherited at native task dispatch. */
-	approvedPlanChecks?: ApprovedPlanChecks;
 	/**
 	 * Inline extensions (merged with discovery). In-process child sessions (subagents, `/tan` forks)
 	 * rebind these factories; worker-thread subagents cannot import a closure, so they run without
@@ -3033,9 +3030,7 @@ async function createAgentSessionScoped(
 			getPlanModeState: () => session?.getPlanModeState(),
 			getWorkspaceModeSnapshot: async () => session?.getWorkspaceModeSnapshot() ?? { enabled: false },
 			getPlanReferencePath: () => session?.getPlanReferencePath() ?? "local://PLAN.md",
-			approvedPlanChecks: options.approvedPlanChecks,
-			getApprovedPlanChecks: () => session?.getApprovedPlanChecks() ?? options.approvedPlanChecks,
-			getGoalModeState: () => session?.getLocalGoalModeState(),
+			getGoalModeState: () => session?.getGoalModeState(),
 			getGoalRuntime: () => session?.goalRuntime,
 			getUsageStatistics: () => sessionManager.getUsageStatistics(),
 			getTurnBudget: () => sessionManager.getTurnBudget(),
@@ -3064,7 +3059,6 @@ async function createAgentSessionScoped(
 				const journal = changeJournal();
 				// Session artifacts (local:// plans, outputs) are never commit material.
 				if (journal && change.path.startsWith(`${journal.dir}${path.sep}`)) return;
-				session?.recordLatestTurnFileChange(change);
 				if (!journal) return;
 				const owner = change.agent ?? journalAgent;
 				journal.recordChange({

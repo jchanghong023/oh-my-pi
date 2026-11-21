@@ -58,7 +58,7 @@ import type {
 	SteerOptions,
 } from "../session/agent-session-types";
 import type { IdleMaintenanceOptions } from "../session/idle-maintenance";
-import type { TurnFileChange } from "../session/latest-turn-file-changes";
+import type { TurnToolDiff } from "../session/latest-turn-tool-diffs";
 import type { CustomMessage } from "../session/messages";
 import type { ServingModel } from "../session/retry-fallback-chains";
 import type { ModelUsageRecord, SessionEntry, UsageStatistics } from "../session/session-entries";
@@ -202,11 +202,10 @@ export interface SessionViewState {
 	/** Bounded live Output facts, sent when the view is attached. */
 	liveToolOutput: readonly LiveToolOutputSnapshot[];
 	modelStage?: ModelStage | null;
-	/** Full file facts on attach, then only changed files or a reset when a new turn begins. */
-	turnFiles?: {
+	/** New native diff entries since the last publish, with a reset when the turn changes. */
+	turnToolDiffs?: {
 		reset: boolean;
-		revision: number;
-		entries: [string, TurnFileChange][];
+		entries: TurnToolDiff[];
 	};
 }
 

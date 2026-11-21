@@ -11,7 +11,7 @@ import type {
 import { InternalUrlRouter } from "../../internal-urls/router";
 import { extractUriScheme } from "../../internal-urls/parse";
 import type { SchemeSpec } from "../../internal-urls/types";
-import type { LocalAgentSessionEvent } from "../../session/agent-session";
+import type { AgentSessionEvent } from "../../session/agent-session";
 import { resolveToCwd, splitPathAndSelPreferringLiteralSync } from "../../tools/path-utils";
 import type { TodoStatus } from "@oh-my-pi/pi-tui/tools/todo";
 import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
@@ -187,7 +187,7 @@ export function mapToolKind(toolName: string, args?: unknown): ToolKind {
 }
 
 export function mapAgentSessionEventToAcpSessionUpdates(
-	event: LocalAgentSessionEvent,
+	event: AgentSessionEvent,
 	sessionId: string,
 	options: AcpEventMapperOptions = {},
 ): SessionNotification[] {
@@ -272,7 +272,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 }
 
 function mapAssistantMessageUpdate(
-	event: Extract<LocalAgentSessionEvent, { type: "message_update" }>,
+	event: Extract<AgentSessionEvent, { type: "message_update" }>,
 	sessionId: string,
 	options: AcpEventMapperOptions,
 ): SessionNotification[] {
@@ -358,7 +358,7 @@ function mapAssistantMessageUpdate(
 }
 
 function mapAssistantMessageEnd(
-	event: Extract<LocalAgentSessionEvent, { type: "message_end" }>,
+	event: Extract<AgentSessionEvent, { type: "message_end" }>,
 	sessionId: string,
 	options: AcpEventMapperOptions,
 ): SessionNotification[] {
@@ -400,7 +400,7 @@ function mapTodoStatus(status: TodoStatus): "pending" | "in_progress" | "complet
 }
 
 function mapTodoResultToPlanUpdate(
-	event: Extract<LocalAgentSessionEvent, { type: "tool_execution_end" }>,
+	event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
 ): SessionUpdate | undefined {
 	if (event.toolName !== "todo" || event.isError) {
 		return undefined;
@@ -499,7 +499,7 @@ export function normalizeReplayToolArguments(value: unknown): { args: unknown } 
 }
 
 function getToolExecutionEndArgs(
-	event: Extract<LocalAgentSessionEvent, { type: "tool_execution_end" }>,
+	event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
 	options: AcpEventMapperOptions,
 ): unknown {
 	if ("args" in event) {

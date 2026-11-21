@@ -57,6 +57,7 @@ describe("PlanReviewOverlay", () => {
 			{ onPick: vi.fn(), onCancel: vi.fn() },
 		);
 		const out = render(overlay);
+		expect(out).toContain("Plan Review");
 		expect(out).toContain("My Plan");
 		expect(out).toContain("step one then step two");
 		expect(out).toContain("Plan mode - next step");
@@ -117,7 +118,7 @@ describe("PlanReviewOverlay", () => {
 		expect(onPick).toHaveBeenCalledWith("Approve and execute");
 
 		const committed = stripVTControlCharacters(overlay.render(80).join("\n"));
-		expect(committed).toContain("Approve and execute");
+		expect(committed).toContain("Approve and execute — submitting…");
 
 		// The async approval window keeps the overlay mounted; further keys must
 		// not fire a second callback or move the cursor (#5926).
@@ -327,7 +328,7 @@ describe("PlanReviewOverlay", () => {
 		);
 
 		overlay.setPlanContent("# Edited plan\n\nnew body");
-		expect(render(overlay)).toMatch(/\bc\s/);
+		expect(render(overlay)).toContain("c copy");
 		overlay.handleInput("c");
 
 		expect(onCopyPlan).toHaveBeenCalledTimes(1);
@@ -365,8 +366,8 @@ describe("PlanReviewOverlay", () => {
 		// Tab into the ToC region surfaces its focus-specific help.
 		overlay.handleInput(TAB);
 		const tocFocused = render(overlay);
-		expect(tocFocused).toMatch(/\ba\s/);
-		expect(tocFocused).toMatch(/\bd\s/);
+		expect(tocFocused).toContain("a annotate");
+		expect(tocFocused).toContain("d delete");
 	});
 
 	it("omits the single plan-title heading from the ToC", () => {
@@ -397,7 +398,7 @@ describe("PlanReviewOverlay", () => {
 		for (let i = 0; i < 10; i++) overlay.handleInput(DOWN);
 		const out = render(overlay);
 		// Actions focus restores the option cursor highlight + actions help.
-		expect(out).not.toMatch(/\ba\s/);
+		expect(out).not.toContain("a annotate");
 	});
 
 	it("scrolls the body exactly one line per keystroke in body focus", () => {
@@ -519,6 +520,7 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput(ENTER);
 
 		overlay.handleInput("e");
+		expect(render(overlay)).toContain("Edit annotation");
 		expect(render(overlay)).toContain("first note");
 		expect(render(overlay)).toContain("second note");
 		overlay.handleInput(DOWN);
@@ -625,6 +627,7 @@ describe("PlanReviewOverlay", () => {
 		expect(topVisibleRow).toMatch(/^body-row-\d{3}$/);
 
 		overlay.handleInput("a");
+		expect(render(overlay)).toContain("Annotate");
 		for (const ch of note) overlay.handleInput(ch);
 		overlay.handleInput(ENTER);
 
@@ -909,6 +912,7 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput("\x05"); // ctrl+e
 
 		expect(editorDraft).toBe("draft");
+		expect(render(overlay)).toContain("Annotate");
 		expect(render(overlay)).toContain("- add rollback command");
 		// A multi-line draft renders as separate editor rows, never as an embedded newline.
 		const draftLines = overlay.render(80);
@@ -947,6 +951,7 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput("\x05"); // ctrl+e
 
 		const out = render(overlay);
+		expect(out).toContain("Annotate");
 		expect(out).toContain("draft");
 		expect(onFeedbackChange).not.toHaveBeenCalled();
 	});
@@ -983,7 +988,7 @@ describe("PlanReviewOverlay", () => {
 		// Click the "Steps" entry in the sidebar column.
 		expect(clickRow(overlay, "Steps", 4)).toBe(true);
 		const out = render(overlay);
-		expect(out).toMatch(/\ba\s/); // ToC focus
+		expect(out).toContain("a annotate"); // ToC focus
 		// The body scrubbed to the clicked section.
 		expect(out.split("\n").slice(1, 5).join(" ")).toContain("Steps");
 	});
@@ -1093,7 +1098,7 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput(LEFT); // 1 -> 0
 		expect(changes).toEqual([1, 0]);
 		// Focus stayed on the actions region (left did not jump to the ToC).
-		expect(render(overlay)).not.toMatch(/\ba\s/);
+		expect(render(overlay)).not.toContain("a annotate");
 	});
 
 	it("fast-scrolls the body with Shift+Arrow", () => {

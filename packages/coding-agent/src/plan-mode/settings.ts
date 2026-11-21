@@ -3,22 +3,6 @@
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
 import { register } from "../config/registry";
-import type { Settings } from "../config/settings";
-import type { SessionManager } from "../session/session-manager";
-
-export function shouldEnterPlanModeOnStartup(
-	sessionManager: Pick<SessionManager, "buildSessionContext" | "getEntries">,
-	sessionSettings: Settings,
-): boolean {
-	const hasConversationContext = sessionManager.buildSessionContext().messages.length > 0;
-	const hasExplicitMode = sessionManager.getEntries().some(entry => entry.type === "mode_change");
-	return (
-		!hasConversationContext &&
-		!hasExplicitMode &&
-		cfgPlanDefaultOnStartup.get(sessionSettings) &&
-		cfgPlanEnabled.get(sessionSettings)
-	);
-}
 
 // ────────────────────────────────────────────────────────────────────────
 // Tasks
@@ -31,9 +15,9 @@ export const cfgPlanEnabled = register({
 	default: true,
 	ui: {
 		tab: "tasks",
-		group: "模式",
-		label: "计划模式",
-		description: "启用计划模式，在执行前进行只读探索和规划",
+		group: "Modes",
+		label: "Plan Mode",
+		description: "Enable plan mode for read-only exploration and planning before execution",
 	},
 });
 
@@ -43,9 +27,9 @@ export const cfgPlanDefaultOnStartup = register({
 	default: false,
 	ui: {
 		tab: "tasks",
-		group: "模式",
-		label: "启动时进入计划模式",
-		description: "每个新会话开始时自动进入计划模式",
+		group: "Modes",
+		label: "Start in Plan Mode",
+		description: "Automatically enter plan mode at the start of every new session",
 		condition: "planModeEnabled",
 	},
 });
@@ -56,9 +40,9 @@ export const cfgPlanAutosave = register({
 	default: false,
 	ui: {
 		tab: "tasks",
-		group: "模式",
-		label: "自动保存计划",
-		description: "计划模式完成时，自动将已批准的计划保存到磁盘",
+		group: "Modes",
+		label: "Autosave Plans",
+		description: "Automatically save approved plans to disk when plan mode completes",
 		condition: "planModeEnabled",
 	},
 });
@@ -69,9 +53,10 @@ export const cfgPlanAutosaveDir = register({
 	default: undefined,
 	ui: {
 		tab: "tasks",
-		group: "模式",
-		label: "自动保存目录",
-		description: "自动保存计划的目录。支持 ~、绝对路径和相对于 cwd 的路径。留空则使用 <project>/.omp/plans/。",
+		group: "Modes",
+		label: "Autosave Directory",
+		description:
+			"Directory for autosaved plans. Supports ~, absolute, and cwd-relative paths. Empty uses <project>/.omp/plans/.",
 		condition: "planAutosaveEnabled",
 	},
 });

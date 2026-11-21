@@ -1,3 +1,4 @@
+import { clearSubmittedText } from "./helpers/draft";
 import type { SlashCommandSpec } from "./types";
 import { MAGIC_KEYWORDS } from "../modes/magic-keywords";
 
@@ -8,8 +9,8 @@ export const BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 	description: `Send the ${keyword.word} magic keyword`,
 	allowArgs: true,
 	inlineHint: "[task]",
-	acpInputHint: "[task]",
-	handle: command => {
+	handleTui: (command, runtime) => {
+		clearSubmittedText(runtime);
 		const args = command.args.trim();
 		return { prompt: args ? `${keyword.word} ${args}` : keyword.word };
 	},

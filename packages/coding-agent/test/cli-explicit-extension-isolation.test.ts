@@ -90,24 +90,30 @@ test.each([
 	{ name: "print", argv: ["--print"] },
 	{ name: "RPC", argv: ["--mode", "rpc"] },
 	{ name: "ACP", argv: ["--mode", "acp"] },
-])("first parse and extension-aware reparse retain lightweight defaults for $name", async ({ argv }) => {
-	const explicit = tempDir.join("reparse-fixture.ts");
-	const raw = [...argv, "--extension", explicit, "--probe-option", "value", "hello"];
-	const flags = new Map([["probe-option", { type: "string" as const }]]);
-	const first = parseArgs(raw);
-	const reparsed = parseArgs(raw, flags);
-	for (const parsed of [first, reparsed]) {
-		expect(parsed.noLsp).toBeUndefined();
-		expect(parsed.noExtensions).toBe(true);
-		expect(parsed.extensions).toEqual([explicit]);
-		expect(parsed.noSkills).toBeUndefined();
-		expect(parsed.noRules).toBeUndefined();
-		expect(parsed.noContextFiles).toBeUndefined();
-	}
-	expect(reparsed.unknownFlags.get("probe-option")).toBe("value");
-	expect(reparsed.messages).toEqual(["hello"]);
-	expect(raw).toEqual([...argv, "--extension", explicit, "--probe-option", "value", "hello"]);
-});
+	{ name: "ACP subcommand", argv: [], forcedMode: "acp" as const },
+])(
+	"first parse and extension-aware reparse retain extension defaults for $name",
+	async ({ name, argv, forcedMode }) => {
+		const explicit = tempDir.join("reparse-fixture.ts");
+		const raw = [...argv, "--extension", explicit, "--probe-option", "value", "hello"];
+		const flags = new Map([["probe-option", { type: "string" as const }]]);
+		const first = parseArgs(raw, undefined, forcedMode);
+		const reparsed = parseArgs(raw, flags, forcedMode);
+		for (const parsed of [first, reparsed]) {
+			expect(parsed.noLsp).toBeUndefined();
+			const isAcp = name.startsWith("ACP");
+			if (isAcp) expect(parsed.mode).toBe("acp");
+			expect(parsed.noExtensions).toBe(isAcp ? undefined : true);
+			expect(parsed.extensions).toEqual([explicit]);
+			expect(parsed.noSkills).toBeUndefined();
+			expect(parsed.noRules).toBeUndefined();
+			expect(parsed.noContextFiles).toBeUndefined();
+		}
+		expect(reparsed.unknownFlags.get("probe-option")).toBe("value");
+		expect(reparsed.messages).toEqual(["hello"]);
+		expect(raw).toEqual([...argv, "--extension", explicit, "--probe-option", "value", "hello"]);
+	},
+);
 
 // File symlinks require Developer Mode on Windows; the retargeting fixture cannot be built.
 test.skipIf(process.platform === "win32")(

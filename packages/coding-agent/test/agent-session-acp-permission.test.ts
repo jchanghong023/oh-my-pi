@@ -415,6 +415,7 @@ it("always-ask: an ACP grant satisfies the inner wrapper's explicit prompt polic
 it("ACP bash uses pattern decisions and scopes persistent grants to noncritical commands", async () => {
 	const settingsOverrides = {
 		"tools.approvalMode": "always-ask",
+		// Exercise pattern decisions without an explicit user policy requiring a prompt.
 		"bash.patterns": [
 			{ match: "echo safe*", approval: "allow" },
 			{ match: "echo denied*", approval: "deny" },

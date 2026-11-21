@@ -105,16 +105,16 @@ describe("goal runtime", () => {
 		expect(harness.persists.at(-1)?.state?.autoOrchestrate).toBe(true);
 
 		const ordinary = await harness.runtime.replaceGoal({ objective: "Second" });
-		expect(ordinary.autoOrchestrate).toBeUndefined();
+		expect(ordinary).not.toHaveProperty("autoOrchestrate");
 		expect(ordinary.goal.id).not.toBe(created.goal.id);
 		expect(harness.getState()?.goal.objective).toBe("Second");
-		expect(harness.persists.at(-1)?.state?.autoOrchestrate).toBeUndefined();
+		expect(harness.persists.at(-1)?.state).not.toHaveProperty("autoOrchestrate");
 
 		await harness.runtime.replaceGoal({ objective: "Third", autoOrchestrate: true });
 		expect(harness.getState()?.autoOrchestrate).toBe(true);
 		const disabled = await harness.runtime.replaceGoal({ objective: "Fourth", autoOrchestrate: false });
-		expect(disabled.autoOrchestrate).toBeUndefined();
-		expect(harness.persists.at(-1)?.state?.autoOrchestrate).toBeUndefined();
+		expect(disabled).not.toHaveProperty("autoOrchestrate");
+		expect(harness.persists.at(-1)?.state).not.toHaveProperty("autoOrchestrate");
 	});
 
 	it("does not carry a completed or dropped goal's orchestration into ordinary creation", async () => {
@@ -179,7 +179,38 @@ describe("goal runtime", () => {
 		);
 		expect(empty.getState()).toBeUndefined();
 		expect(empty.persists).toHaveLength(0);
-		expect((await empty.runtime.createGoal({ objective: "Ordinary" })).autoOrchestrate).toBeUndefined();
+		expect(await empty.runtime.createGoal({ objective: "Ordinary" })).not.toHaveProperty("autoOrchestrate");
+	});
+
+	it("does not commit a cancelled autopilot create or replacement", async () => {
+		const harness = createHarness();
+		let current = true;
+		const creating = harness.runtime.createGoal(
+			{ objective: "Cancelled entry", autoOrchestrate: true },
+			() => current,
+		);
+		current = false;
+		expect(await creating).toBeUndefined();
+		expect(harness.getState()).toBeUndefined();
+		expect(harness.events).toHaveLength(0);
+		expect(harness.persists).toHaveLength(0);
+
+		const original = await harness.runtime.createGoal({ objective: "Keep working", autoOrchestrate: true });
+		harness.runtime.onTurnStart("turn-1", createUsage());
+		harness.setUsage({ input: 5 });
+		// The first usage event invalidates entry while replacement is still in the runtime.
+		const eventCount = harness.events.length;
+		const replaced = await harness.runtime.replaceGoal(
+			{ objective: "Cancelled replacement", autoOrchestrate: true },
+			() => harness.events.length === eventCount,
+		);
+		expect(replaced).toBeUndefined();
+		expect(harness.getState()).toMatchObject({
+			autoOrchestrate: true,
+			goal: { id: original.goal.id, objective: original.goal.objective, tokensUsed: 5 },
+		});
+		expect(harness.events).toHaveLength(eventCount + 1);
+		expect(harness.persists).toHaveLength(2);
 	});
 
 	it("preserves orchestration through usage, budget, pause, resume, completion, and accounting resets", async () => {
@@ -237,7 +268,7 @@ describe("goal runtime", () => {
 	});
 
 	it.each([true, false])(
-		"keeps exhausted budgets limited across pause/resume without duplicate steering (autopilot=%s)",
+		"resumes exhausted budgets as limited only for autopilot goals (autopilot=%s)",
 		async autoOrchestrate => {
 			for (const restoredBudget of [20, undefined]) {
 				const harness = createHarness();
@@ -256,18 +287,24 @@ describe("goal runtime", () => {
 				harness.advance(5_000);
 
 				const resumed = await harness.runtime.resumeGoal();
+				const resumedStatus = autoOrchestrate ? "budget-limited" : "active";
 				expect(resumed).toMatchObject({
 					enabled: true,
 					mode: "active",
-					goal: { id: original.goal.id, status: "budget-limited", tokensUsed: 10, timeUsedSeconds: 2 },
+					goal: { id: original.goal.id, status: resumedStatus, tokensUsed: 10, timeUsedSeconds: 2 },
 				});
 				expect(resumed.autoOrchestrate === true).toBe(autoOrchestrate);
 				expect(harness.persists.at(-1)).toMatchObject({
 					mode: "goal",
-					state: { enabled: true, goal: { status: "budget-limited" } },
+					state: { enabled: true, goal: { status: resumedStatus } },
 				});
-				expect(harness.runtime.buildActivePrompt()).toBeUndefined();
-				expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
+				if (autoOrchestrate) {
+					expect(harness.runtime.buildActivePrompt()).toBeUndefined();
+					expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
+				} else {
+					expect(harness.runtime.buildActivePrompt()).toContain(original.goal.objective);
+					expect(harness.runtime.buildContinuationPrompt()).toContain(original.goal.objective);
+				}
 				harness.setUsage({ input: 12 });
 				harness.advance(3_000);
 				await harness.runtime.onToolCompleted("read");
@@ -277,13 +314,14 @@ describe("goal runtime", () => {
 					tokensUsed: 12,
 					timeUsedSeconds: 5,
 				});
-				expect(harness.hiddenMessages).toHaveLength(1);
+				const steerCount = autoOrchestrate ? 1 : 2;
+				expect(harness.hiddenMessages).toHaveLength(steerCount);
 
 				await harness.runtime.onBudgetMutated(restoredBudget);
 				expect(harness.getState()).toMatchObject({ enabled: true, goal: { status: "active", tokensUsed: 12 } });
 				expect(harness.getState()?.autoOrchestrate === true).toBe(autoOrchestrate);
 				expect(harness.runtime.buildContinuationPrompt()).toContain(original.goal.objective);
-				expect(harness.hiddenMessages).toHaveLength(1);
+				expect(harness.hiddenMessages).toHaveLength(steerCount);
 			}
 		},
 	);

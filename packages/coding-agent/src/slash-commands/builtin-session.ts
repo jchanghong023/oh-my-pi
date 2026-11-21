@@ -276,29 +276,27 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				if (runtime.session.isStreaming) return usage("Cannot delete the session while streaming.", runtime);
 				const sessionFile = runtime.sessionManager.getSessionFile();
 				if (!sessionFile) return usage("No session file to delete (in-memory session).", runtime);
-				// Route through AgentSession.newSession({ drop: true }) — the same
-				// entry the interactive /delete flow uses — so the persist writer is
-				// closed and the file deleted, then the session is reset to a
-				// brand-new one. Deleting via SessionManager.dropSession alone
-				// leaves the manager tracking the now-deleted path, so the next
-				// prompt would silently recreate it without a session header (an
-				// unresumable transcript).
-				let deleted: boolean;
+				// Detach the live agent before deleting its file; the next prompt must
+				// belong to a fresh session with a valid header and no old history.
+				// `drop` deletes the old file and keeps the successor lazy, so deleting
+				// never leaves an empty session behind.
 				try {
-					deleted = await runtime.session.newSession({ drop: true, throwOnDropFailure: true });
+					if (!(await runtime.session.newSession({ drop: true })))
+						return usage("Session deletion cancelled.", runtime);
 				} catch (err) {
-					const switched = runtime.sessionManager.getSessionFile() !== sessionFile;
+					return usage(`Failed to start a new session: ${errorMessage(err)}`, runtime);
+				}
+				try {
+					// `drop` only logs a failed delete; retry here to report it (ENOENT is success).
+					await runtime.sessionManager.dropSession(sessionFile);
+				} catch (err) {
 					return usage(
-						`Failed to delete session: ${errorMessage(err)}${switched ? " A new session is now active." : ""}`,
+						`Started new session ${runtime.session.sessionId}, but failed to delete ${sessionFile}: ${errorMessage(err)}`,
 						runtime,
 					);
 				}
-				if (!deleted) {
-					await runtime.output("Session delete cancelled by a session_before_switch hook; nothing was deleted.");
-					return commandConsumed();
-				}
 				await runtime.output(
-					`Session deleted: ${sessionFile}. A new session is now active; use ACP \`session/load\` to switch to another one.`,
+					`Session deleted: ${sessionFile}. New session: ${runtime.session.sessionId} (${runtime.session.sessionFile}).`,
 				);
 				return commandConsumed();
 			}

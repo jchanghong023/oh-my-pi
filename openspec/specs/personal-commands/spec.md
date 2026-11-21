@@ -119,29 +119,28 @@ OMP MUST 提供魔法关键词对应的内置命令，并允许命令后直接�
 - **WHEN** 本节所述功能在适用条件下运行
 - **THEN** 以下具体约束适用：
 
-- fork 为三个关键词新增对应的内置命令 `/ultrathink`、`/orchestrate`、`/workflowz`，方便输入，并允许命令后直接携带任务文本。
+- fork 在原生 TUI 新增 `/ultrathink`、`/orchestrate`、`/workflowz`，并允许命令后直接携带任务文本；ACP 不注册这些内置命令。
 
 #### Scenario: 魔法关键词的内置命令的可观察行为
 
 - **WHEN** 用户调用 `/ultrathink`、`/orchestrate` 或 `/workflowz` 并携带任务文本
 - **THEN** 对应命令接受任务文本并触发相应关键词行为
 
-### Requirement: 共享命令目录与会话迁移
+### Requirement: 同目录工作树切换
 
-OMP MUST 让命令目录与相应宿主的派发能力一致，并保留 `/wt` 的同目录保护。
+OMP MUST 保留 `/wt` 的同目录保护。
 
 #### Scenario: 共享命令目录与会话迁移的详细边界
 
 - **WHEN** 本节所述功能在适用条件下运行
 - **THEN** 以下具体约束适用：
 
-- ACP 命令目录的内置条目只广告有共享处理器的命令。
 - `/wt` 解析出的目标路径与当前会话目录相同时 MUST 跳过重定位，并且 MUST NOT 清理源工作树或其中的未提交内容。
 
 #### Scenario: 共享命令目录与会话迁移的可观察行为
 
-- **WHEN** ACP 宿主广告内置命令，或 `/wt` 解析到当前会话目录
-- **THEN** 目录与派发能力一致，同路径目标不触发重定位或清理
+- **WHEN** `/wt` 解析到当前会话目录
+- **THEN** 不触发重定位或清理
 
 ### Requirement: JCH 命令
 

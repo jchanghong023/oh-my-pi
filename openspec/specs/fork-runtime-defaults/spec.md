@@ -68,11 +68,11 @@ OMP MUST 应用下列设置的缺省值；显式配置和环境变量仍按原�
 
 ### Requirement: CLI 默认轻量启动参数
 
-OMP CLI MUST 在首次参数解析和扩展参数重新解析中默认应用 `--no-extensions`，不要求 shell alias、配置文件或用户手动补参数；交互、print、RPC 与 ACP 启动使用同一默认值。
+交互、print 与 RPC 启动 MUST 在首次参数解析和扩展参数重新解析中默认应用 `--no-extensions`，不要求 shell alias、配置文件或用户手动补参数。ACP 沿用上游扩展发现默认值，并尊重显式的 `--no-extensions`。
 
 #### Scenario: 默认跳过自动扩展并保留显式扩展
 
-- **WHEN** CLI 不携带 `--no-extensions` 启动，存在用户或项目自动扩展，并显式指定 `-e <path>`
+- **WHEN** 非 ACP CLI 不携带 `--no-extensions` 启动，存在用户或项目自动扩展，并显式指定 `-e <path>`
 - **THEN** 不扫描或执行自动扩展，仅加载明确指定的扩展；扩展参数重新解析、工具和命令注册沿用现有行为，不丢失显式路径。
 
 #### Scenario: 关闭自动发现仍保留内置命令

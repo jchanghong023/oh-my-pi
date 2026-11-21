@@ -152,7 +152,7 @@ export class GoalRuntime {
 		return Boolean(state?.enabled && isAccountingStatus(state.goal));
 	}
 
-	async #withAccounting<T>(fn: () => Promise<T> | T): Promise<T> {
+	async #withAccounting<T>(fn: () => Promise<T> | T, autoOrchestrate?: boolean): Promise<T> {
 		const previous = this.#accountingTail;
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#accountingTail = previous.then(
@@ -161,10 +161,12 @@ export class GoalRuntime {
 		);
 		await previous.catch(() => {});
 		try {
+			const state = this.#host.getState();
+			if (autoOrchestrate !== true && state?.autoOrchestrate !== true) return await fn();
 			return await logger.withLogContext(
 				{
 					operation_id: logger.getLogContext().operation_id ?? `goal-${crypto.randomUUID()}`,
-					goal_id: this.#host.getState()?.goal.id,
+					goal_id: state?.goal.id,
 					turn_id: this.#turnSnapshot?.turnId,
 				},
 				fn,
@@ -184,31 +186,34 @@ export class GoalRuntime {
 		options?: { persist?: "goal" | "goal_paused" | "none"; emit?: boolean; transition?: string },
 	): Promise<void> {
 		const previous = this.#host.getState();
-		const startedAt = performance.now();
-		const fields = {
-			component: "goal.runtime",
-			event: "goal_state_transition",
-			operation_id: logger.getLogContext().operation_id ?? `goal-${crypto.randomUUID()}`,
-			goal_id: state?.goal.id ?? previous?.goal.id,
-			previous_goal_id: previous?.goal.id,
-			transition: options?.transition ?? "usage",
-			previous_status: previous?.goal.status ?? "none",
-			previous_mode: previous?.mode ?? "none",
-			previous_enabled: previous?.enabled === true,
-			previous_auto_orchestrate: previous?.autoOrchestrate === true,
-			status: state?.goal.status ?? "none",
-			mode: state?.mode ?? "none",
-			enabled: state?.enabled ?? false,
-			auto_orchestrate: state?.autoOrchestrate === true,
-			token_budget: state?.goal.tokenBudget ?? null,
-			tokens_used: state?.goal.tokensUsed ?? 0,
-			tokens_remaining: remainingTokens(state?.goal),
-			budget_reached: state?.goal.status === "budget-limited",
-			time_used_seconds: state?.goal.timeUsedSeconds ?? 0,
-			persist_mode: options?.persist ?? "memory",
-		};
+		const fields =
+			state?.autoOrchestrate === true || previous?.autoOrchestrate === true
+				? {
+						component: "goal.runtime",
+						event: "goal_state_transition",
+						operation_id: logger.getLogContext().operation_id ?? `goal-${crypto.randomUUID()}`,
+						goal_id: state?.goal.id ?? previous?.goal.id,
+						previous_goal_id: previous?.goal.id,
+						transition: options?.transition ?? "usage",
+						previous_status: previous?.goal.status ?? "none",
+						previous_mode: previous?.mode ?? "none",
+						previous_enabled: previous?.enabled === true,
+						previous_auto_orchestrate: previous?.autoOrchestrate === true,
+						status: state?.goal.status ?? "none",
+						mode: state?.mode ?? "none",
+						enabled: state?.enabled ?? false,
+						auto_orchestrate: state?.autoOrchestrate === true,
+						token_budget: state?.goal.tokenBudget ?? null,
+						tokens_used: state?.goal.tokensUsed ?? 0,
+						tokens_remaining: remainingTokens(state?.goal),
+						budget_reached: state?.goal.status === "budget-limited",
+						time_used_seconds: state?.goal.timeUsedSeconds ?? 0,
+						persist_mode: options?.persist ?? "memory",
+					}
+				: undefined;
+		const startedAt = fields ? performance.now() : 0;
 		let stage = "set_state";
-		logger.info("Goal state transition started", { ...fields, stage, result: "started" });
+		if (fields) logger.info("Goal state transition started", { ...fields, stage, result: "started" });
 		try {
 			this.#host.setState(state ? cloneState(state) : undefined);
 			if (options?.persist) {
@@ -219,20 +224,24 @@ export class GoalRuntime {
 				stage = "emit";
 				await this.#host.emit({ type: "goal_updated", goal: state ? cloneGoal(state.goal) : null, state });
 			}
-			logger.info("Goal state transition completed", {
-				...fields,
-				stage: "completed",
-				result: "completed",
-				elapsed_ms: performance.now() - startedAt,
-			});
+			if (fields) {
+				logger.info("Goal state transition completed", {
+					...fields,
+					stage: "completed",
+					result: "completed",
+					elapsed_ms: performance.now() - startedAt,
+				});
+			}
 		} catch (error) {
-			logger.error("Goal state transition failed", {
-				...fields,
-				stage,
-				result: "failed",
-				elapsed_ms: performance.now() - startedAt,
-				...logger.diagnosticError(error),
-			});
+			if (fields) {
+				logger.error("Goal state transition failed", {
+					...fields,
+					stage,
+					result: "failed",
+					elapsed_ms: performance.now() - startedAt,
+					...logger.diagnosticError(error),
+				});
+			}
 			throw error;
 		}
 	}
@@ -303,7 +312,7 @@ export class GoalRuntime {
 		const state = this.#host.getState();
 		const needsAccounting = state?.enabled && isAccountingStatus(state.goal);
 		const needsPause = options?.reason === "interrupted" && state?.enabled && state.goal.status === "active";
-		if (state)
+		if (state?.autoOrchestrate === true) {
 			logger.info("Goal task aborted", {
 				component: "goal.runtime",
 				event: "goal_task_aborted",
@@ -313,8 +322,9 @@ export class GoalRuntime {
 				turn_id: this.#turnSnapshot?.turnId,
 				reason: options?.reason ?? "unspecified",
 				pause_required: Boolean(needsPause),
-				auto_orchestrate: state.autoOrchestrate === true,
+				auto_orchestrate: true,
 			});
+		}
 		if (!needsAccounting && !needsPause) {
 			this.#turnSnapshot = undefined;
 			return;
@@ -385,7 +395,7 @@ export class GoalRuntime {
 				transition: "budget_mutated",
 			});
 			if (shouldSteer) {
-				await this.#sendBudgetLimitSteer(state.goal);
+				await this.#sendBudgetLimitSteer(state);
 			}
 			return state;
 		});
@@ -435,39 +445,41 @@ export class GoalRuntime {
 		// usage durable before internal session switches because the active runtime is leaving.
 		const shouldPersistUsage = tokenDelta > 0 || flippedToBudgetLimited || (persistWallClock && wallSeconds > 0);
 		await this.#commitState(state, { persist: shouldPersistUsage ? "goal" : undefined });
-		logger.info("Goal usage accounted", {
-			component: "goal.runtime",
-			event: "goal_usage_accounted",
-			stage: "budget",
-			result: "completed",
-			goal_id: state.goal.id,
-			turn_id: this.#turnSnapshot?.turnId,
-			auto_orchestrate: state.autoOrchestrate === true,
-			token_delta: tokenDelta,
-			time_delta_seconds: wallSeconds,
-			tokens_used: state.goal.tokensUsed,
-			time_used_seconds: state.goal.timeUsedSeconds,
-			token_budget: state.goal.tokenBudget ?? null,
-			tokens_remaining: remainingTokens(state.goal),
-			budget_reached: flippedToBudgetLimited,
-			persisted: shouldPersistUsage,
-		});
-		if (flippedToBudgetLimited && steering !== "allowed") {
-			logger.info("Goal budget steer suppressed", {
+		if (state.autoOrchestrate === true) {
+			logger.info("Goal usage accounted", {
 				component: "goal.runtime",
-				event: "goal_budget_steer",
-				stage: "steer",
-				result: "suppressed",
+				event: "goal_usage_accounted",
+				stage: "budget",
+				result: "completed",
 				goal_id: state.goal.id,
-				reason: "accounting_boundary",
+				turn_id: this.#turnSnapshot?.turnId,
+				auto_orchestrate: true,
+				token_delta: tokenDelta,
+				time_delta_seconds: wallSeconds,
+				tokens_used: state.goal.tokensUsed,
+				time_used_seconds: state.goal.timeUsedSeconds,
+				token_budget: state.goal.tokenBudget ?? null,
+				tokens_remaining: remainingTokens(state.goal),
+				budget_reached: flippedToBudgetLimited,
+				persisted: shouldPersistUsage,
 			});
+			if (flippedToBudgetLimited && steering !== "allowed") {
+				logger.info("Goal budget steer suppressed", {
+					component: "goal.runtime",
+					event: "goal_budget_steer",
+					stage: "steer",
+					result: "suppressed",
+					goal_id: state.goal.id,
+					reason: "accounting_boundary",
+				});
+			}
 		}
 
 		if (state.goal.status !== "budget-limited") {
 			this.#budgetReportedFor = undefined;
 		}
 		if (steering === "allowed" && flippedToBudgetLimited && this.#budgetReportedFor !== state.goal.id) {
-			await this.#sendBudgetLimitSteer(state.goal);
+			await this.#sendBudgetLimitSteer(state);
 		}
 	}
 
@@ -487,7 +499,8 @@ export class GoalRuntime {
 			createdAt: now,
 			updatedAt: now,
 		};
-		return { enabled: true, mode: "active", autoOrchestrate: autoOrchestrate === true ? true : undefined, goal };
+		if (autoOrchestrate === true) return { enabled: true, mode: "active", goal, autoOrchestrate: true };
+		return { enabled: true, mode: "active", goal };
 	}
 
 	async createGoal(input: GoalStartInput): Promise<LocalGoalModeState>;
@@ -512,7 +525,7 @@ export class GoalRuntime {
 			this.#markActiveAccounting(state.goal);
 			await this.#commitState(state, { persist: "goal", transition: "create" });
 			return state;
-		});
+		}, input.autoOrchestrate);
 	}
 
 	async replaceGoal(input: GoalStartInput): Promise<LocalGoalModeState>;
@@ -539,7 +552,7 @@ export class GoalRuntime {
 			this.#markActiveAccounting(state.goal);
 			await this.#commitState(state, { persist: "goal", transition: "replace" });
 			return state;
-		});
+		}, input.autoOrchestrate);
 	}
 
 	async resumeGoal(): Promise<LocalGoalModeState> {
@@ -551,7 +564,9 @@ export class GoalRuntime {
 			state.mode = "active";
 			state.reason = undefined;
 			state.goal.status =
-				state.goal.tokenBudget !== undefined && state.goal.tokensUsed >= state.goal.tokenBudget
+				state.autoOrchestrate === true &&
+				state.goal.tokenBudget !== undefined &&
+				state.goal.tokensUsed >= state.goal.tokenBudget
 					? "budget-limited"
 					: "active";
 			state.goal.updatedAt = this.#now();
@@ -589,34 +604,41 @@ export class GoalRuntime {
 			const dropped = { ...state.goal, status: "dropped" as const, updatedAt: this.#now() };
 			this.#clearActiveAccounting();
 			this.#budgetReportedFor = undefined;
-			const startedAt = performance.now();
-			const fields = {
-				component: "goal.runtime",
-				event: "goal_drop_emit",
-				stage: "emit",
-				operation_id: logger.getLogContext().operation_id ?? `goal-${crypto.randomUUID()}`,
-				goal_id: dropped.id,
-				auto_orchestrate: state.autoOrchestrate === true,
-			};
-			logger.info("Goal drop notification started", { ...fields, result: "started" });
+			const fields =
+				state.autoOrchestrate === true
+					? {
+							component: "goal.runtime",
+							event: "goal_drop_emit",
+							stage: "emit",
+							operation_id: logger.getLogContext().operation_id ?? `goal-${crypto.randomUUID()}`,
+							goal_id: dropped.id,
+							auto_orchestrate: true,
+						}
+					: undefined;
+			const startedAt = fields ? performance.now() : 0;
+			if (fields) logger.info("Goal drop notification started", { ...fields, result: "started" });
 			try {
 				await this.#host.emit({
 					type: "goal_updated",
 					goal: dropped,
 					state: { ...state, enabled: false, goal: dropped },
 				});
-				logger.info("Goal drop notification completed", {
-					...fields,
-					result: "completed",
-					elapsed_ms: performance.now() - startedAt,
-				});
+				if (fields) {
+					logger.info("Goal drop notification completed", {
+						...fields,
+						result: "completed",
+						elapsed_ms: performance.now() - startedAt,
+					});
+				}
 			} catch (error) {
-				logger.error("Goal drop notification failed", {
-					...fields,
-					result: "failed",
-					elapsed_ms: performance.now() - startedAt,
-					...logger.diagnosticError(error),
-				});
+				if (fields) {
+					logger.error("Goal drop notification failed", {
+						...fields,
+						result: "failed",
+						elapsed_ms: performance.now() - startedAt,
+						...logger.diagnosticError(error),
+					});
+				}
 				throw error;
 			}
 			await this.#commitState(undefined, { persist: "none", emit: false, transition: "drop" });
@@ -663,42 +685,56 @@ export class GoalRuntime {
 			: undefined;
 	}
 
-	async #sendBudgetLimitSteer(goal: Goal): Promise<void> {
-		const startedAt = performance.now();
-		const fields = {
-			component: "goal.runtime",
-			event: "goal_budget_steer",
-			stage: "steer",
-			operation_id: logger.getLogContext().operation_id ?? `goal-${crypto.randomUUID()}`,
-			goal_id: goal.id,
-			token_budget: goal.tokenBudget ?? null,
-			tokens_used: goal.tokensUsed,
-			tokens_remaining: remainingTokens(goal),
-		};
+	async #sendBudgetLimitSteer(state: LocalGoalModeState): Promise<void> {
+		const { goal } = state;
+		const fields =
+			state.autoOrchestrate === true
+				? {
+						component: "goal.runtime",
+						event: "goal_budget_steer",
+						stage: "steer",
+						operation_id: logger.getLogContext().operation_id ?? `goal-${crypto.randomUUID()}`,
+						goal_id: goal.id,
+						token_budget: goal.tokenBudget ?? null,
+						tokens_used: goal.tokensUsed,
+						tokens_remaining: remainingTokens(goal),
+					}
+				: undefined;
+		const startedAt = fields ? performance.now() : 0;
 		if (this.#budgetReportedFor === goal.id) {
-			logger.info("Goal budget steer suppressed", { ...fields, result: "suppressed", reason: "already_reported" });
+			if (fields) {
+				logger.info("Goal budget steer suppressed", {
+					...fields,
+					result: "suppressed",
+					reason: "already_reported",
+				});
+			}
 			return;
 		}
 		this.#budgetReportedFor = goal.id;
-		logger.info("Goal budget steer started", { ...fields, result: "started" });
+		if (fields) logger.info("Goal budget steer started", { ...fields, result: "started" });
 		try {
 			await this.#host.sendHiddenMessage({
 				customType: "goal-budget-limit",
 				content: renderGoalPrompt("budget-limit", goal),
 				deliverAs: "steer",
 			});
-			logger.info("Goal budget steer sent", {
-				...fields,
-				result: "sent",
-				elapsed_ms: performance.now() - startedAt,
-			});
+			if (fields) {
+				logger.info("Goal budget steer sent", {
+					...fields,
+					result: "sent",
+					elapsed_ms: performance.now() - startedAt,
+				});
+			}
 		} catch (error) {
-			logger.error("Goal budget steer failed", {
-				...fields,
-				result: "failed",
-				elapsed_ms: performance.now() - startedAt,
-				...logger.diagnosticError(error),
-			});
+			if (fields) {
+				logger.error("Goal budget steer failed", {
+					...fields,
+					result: "failed",
+					elapsed_ms: performance.now() - startedAt,
+					...logger.diagnosticError(error),
+				});
+			}
 			throw error;
 		}
 	}

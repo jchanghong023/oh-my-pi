@@ -490,7 +490,6 @@ export interface ExecutorOptions extends NativeChildSessionHooks {
 	 * the session did not start with a plan (or while plan mode is still active).
 	 */
 	planReference?: { path: string; content: string };
-	approvedPlanChecks?: CreateAgentSessionOptions["approvedPlanChecks"];
 	/** Pre-set UI label (e.g. eval bridge label). When absent, a tiny-model label is generated from the assignment. */
 	description?: string;
 	index: number;
@@ -5410,7 +5409,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					// warm after the subagent settles; the user's `off` still wins.
 					cacheWarming: "streaming",
 					toolNames,
-					approvedPlanChecks: options.approvedPlanChecks,
 					outputSchema,
 					outputSchemaMode: options.outputSchemaMode,
 					restrictToolNames,

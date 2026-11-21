@@ -17,6 +17,7 @@ import { isRecord } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { IrcBus } from "../../src/irc/bus";
+import { CompactFileDiff } from "../../src/modes/compact-file-diff";
 import { CompactToolOutputPreview } from "../../src/modes/compact-tool-output-preview";
 import { InputController } from "../../src/modes/controllers/input-controller";
 import { SessionFocusController } from "../../src/modes/controllers/session-focus-controller";
@@ -304,6 +305,48 @@ describe("focused view of a worker-homed agent session", () => {
 		} finally {
 			preview.clear();
 		}
+	});
+
+	it("shows a worker's latest original diff after refocusing and clears it on the next turn", async () => {
+		const probe = await startWorker();
+		const id = "DiffWorker";
+		await probe.open(id, await mainRegistry(), {});
+		const remote = mirrorOf(id);
+		const view = focusHarness();
+		const ctx = createInteractiveModeContext();
+		ctx.ui.getFocused = () => ctx.editor;
+		cfgDisplayMode.set(ctx.settings, "compact");
+		const dock = new CompactFileDiff({ ...ctx, viewSession: remote }, () => 9);
+		const visible = () => stripVTControlCharacters(dock.render(100).join("\n"));
+		const edit = (toolCallId: string, before: string, after: string) =>
+			probe.emit(id, {
+				type: "tool_execution_end",
+				toolCallId,
+				toolName: "edit",
+				isError: false,
+				result: {
+					content: [],
+					details: { path: "example.txt", diff: `-1|${before}\n+1|${after}`, firstChangedLine: 1 },
+				},
+			});
+		await view.controller.focusAgent(id);
+		const running = probe.prompt(id, "[hold] original file diffs");
+		try {
+			await waitFor(() => remote.isStreaming);
+			await edit("edit-first", "ORIGINAL", "FIRST_EDIT");
+			await waitFor(() => visible().includes("FIRST_EDIT"));
+			await view.controller.unfocus();
+			await edit("edit-second", "FIRST_EDIT", "SECOND_EDIT");
+			await view.controller.focusAgent(id);
+			await waitFor(() => visible().includes("SECOND_EDIT"));
+			expect(visible()).toContain("-1│FIRST_EDIT");
+			expect(visible()).not.toContain("ORIGINAL");
+		} finally {
+			await probe.release();
+			await running;
+		}
+		await probe.prompt(id, "next turn");
+		await waitFor(() => visible() === "");
 	});
 
 	it("attaches, rebuilds the transcript, streams deltas in order, and steers from the composer", async () => {

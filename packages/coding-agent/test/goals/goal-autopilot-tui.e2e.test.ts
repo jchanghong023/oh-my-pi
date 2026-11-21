@@ -11,9 +11,16 @@ function callable(request: ModelRequest, name: string): string {
 
 describe("native Goal user follow-up delivery", () => {
 	test.each(["goal", "goal-autopilot"] as const)(
-		"Ctrl+Q changes actual work after the current %s tool batch",
+		"Ctrl+Q changes actual work at the %s follow-up boundary",
 		async command => {
 			if (!tuiTest) throw new Error("tui-test is required to verify the real Goal terminal entry and Ctrl+Q");
+			const autopilot = command === "goal-autopilot";
+			const feedbackTurn = autopilot ? 2 : 3;
+			const feedbackCount = (request: ModelRequest) =>
+				request.messages.filter(
+					message =>
+						message.role === "user" && contentText(message.content).includes("GOAL_CHANGE_DIRECTION"),
+				).length;
 			let goalRequests = 0;
 			await withTui(
 				{
@@ -52,17 +59,16 @@ describe("native Goal user follow-up delivery", () => {
 									},
 								],
 							};
+						expect(feedbackCount(request)).toBe(goalRequests < feedbackTurn ? 0 : 1);
 						if (goalRequests === 2) {
-							const feedback = request.messages.filter(
-								message =>
-									message.role === "user" && contentText(message.content).includes("GOAL_CHANGE_DIRECTION"),
-							);
-							expect(feedback).toHaveLength(1);
 							const results = request.messages
 								.filter(message => message.role === "tool")
 								.map(message => contentText(message.content))
 								.join("\n");
 							expect(results).toContain("GOAL_BATCH_FINISHED");
+						}
+						if (goalRequests < feedbackTurn) return { text: "GOAL_ORIGINAL_TURN_FINISHED" };
+						if (goalRequests === feedbackTurn) {
 							return {
 								tool: {
 									name: callable(request, "write"),
@@ -93,17 +99,18 @@ describe("native Goal user follow-up delivery", () => {
 					await tui("expect", "text", "GOAL_KEYS_FINISHED", "--timeout", "30000");
 					expect(await Bun.file(path.join(cwd, "batch-proof.txt")).text()).toBe("COMPLETE_BATCH");
 					expect(await Bun.file(path.join(cwd, "changed-work.txt")).text()).toBe("FOLLOWUP_CHANGED_REAL_WORK");
-					expect(goalRequests).toBe(3);
+					expect(goalRequests).toBe(feedbackTurn + 1);
 					const goalInputs = provider.requests.filter(request =>
 						request.messages.some(
 							message => message.role === "user" && contentText(message.content).includes("GOAL_KEY_OBJECTIVE"),
 						),
 					);
-					expect(goalInputs).toHaveLength(3);
+					expect(goalInputs).toHaveLength(feedbackTurn + 1);
+					expect(goalInputs.map(feedbackCount)).toEqual(autopilot ? [0, 1, 1] : [0, 0, 1, 1]);
 					const notices = goalInputs[0]!.messages.filter(message =>
 						contentText(message.content).includes("MUST 全自动无人值守完成完整目标。"),
 					);
-					expect(notices).toHaveLength(command === "goal-autopilot" ? 1 : 0);
+					expect(notices).toHaveLength(autopilot ? 1 : 0);
 					if (notices.length) {
 						expect(notices[0]!.role).toBe("user");
 						expect(contentText(notices[0]!.content)).toContain("`task` dispatch");

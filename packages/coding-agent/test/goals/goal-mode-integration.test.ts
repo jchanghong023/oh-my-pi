@@ -1144,11 +1144,11 @@ describe("InteractiveMode goal mode integration", () => {
 		await waiter.inputPromise;
 	});
 
-	it("does not release a newer continuation when an older admission returns false late", async () => {
+	it("does not release a newer autopilot continuation when an older admission returns false late", async () => {
 		vi.spyOn(vcs, "repo").mockReturnValue(null);
 		vi.spyOn(vcs, "git").mockReturnValue(null);
 		await harness.mode.init({ suppressWelcomeIntro: true });
-		await harness.mode.handleGoalModeCommand("Inspect the current task.");
+		await harness.mode.handleGoalModeCommand("Inspect the current task.", undefined, { autoOrchestrate: true });
 		harness.session.agent.streamFn = createMockModel({
 			handler: () => ({ content: ["I will call read now."] }),
 		}).stream;

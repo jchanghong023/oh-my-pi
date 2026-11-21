@@ -106,8 +106,10 @@ describe("goal tool registration when goal mode is enabled at runtime", () => {
 		expect(session.getActiveToolNames()).not.toContain("task");
 		expect(session.getMountedToolCommandNames()).toContain("task");
 		expect(session.getEnabledToolNames()).toContain("task");
-		const state = await session.goalRuntime.createGoal({ objective: "Read the release notes" });
-		const automaticGoal = { ...state, autoOrchestrate: true };
+		const automaticGoal = await session.goalRuntime.createGoal({
+			objective: "Read the release notes",
+			autoOrchestrate: true,
+		});
 		const tools = session.getEnabledToolNames();
 		const mounted = buildGoalAutoOrchestrateMessage(automaticGoal, tools);
 		const withoutTask = buildGoalAutoOrchestrateMessage(automaticGoal, session.getActiveToolNames());

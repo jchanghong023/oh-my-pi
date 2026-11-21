@@ -140,7 +140,7 @@ import {
 	type McpConnectionFailure,
 	type McpConnectionStatusEvent,
 } from "../mcp/startup-events";
-import { type PlanApprovalDetails, resolvePlanTitle } from "../plan-mode/approved-plan";
+import { humanizePlanTitle, type PlanApprovalDetails, resolvePlanTitle } from "../plan-mode/approved-plan";
 import {
 	isJudgmentBatchProgress,
 	JUDGMENT_BATCH_PROGRESS_EVENT_CHANNEL,
@@ -152,11 +152,10 @@ import { CompactFileDiff } from "./compact-file-diff";
 import { CompactThinkingPreview } from "./compact-thinking-preview";
 import { CompactToolOutputPreview } from "./compact-tool-output-preview";
 import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
-import { dispatchApprovedPlan } from "../plan-mode/session-approval";
-import { planVerificationChecks, recordApprovedPlanReference } from "../plan-mode/verification";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
+import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
@@ -493,7 +492,7 @@ import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
 import { cfgExtensionHandlersModeControl } from "../extensibility/settings";
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
 import { goalContinuationActivity, goalFromModeData } from "../goals/state";
-import { cfgPlanEnabled, shouldEnterPlanModeOnStartup } from "../plan-mode/settings";
+import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
 import { cfgSttEnabled } from "../stt/settings";
 import { combine, type SettingValueOf } from "../config/registry";
@@ -700,6 +699,20 @@ function readPersistedToolNames(value: unknown): string[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	if (!value.every(name => typeof name === "string")) return undefined;
 	return value as string[];
+}
+
+export function shouldEnterPlanModeOnStartup(
+	sessionManager: Pick<SessionManager, "buildSessionContext" | "getEntries">,
+	sessionSettings: Settings,
+): boolean {
+	const hasConversationContext = sessionManager.buildSessionContext().messages.length > 0;
+	const hasExplicitMode = sessionManager.getEntries().some(entry => entry.type === "mode_change");
+	return (
+		!hasConversationContext &&
+		!hasExplicitMode &&
+		cfgPlanDefaultOnStartup.get(sessionSettings) &&
+		cfgPlanEnabled.get(sessionSettings)
+	);
 }
 
 /** Options for creating an InteractiveMode instance (for future API use) */
@@ -1433,7 +1446,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.ui.terminal.rows -
 					Math.max(this.composer.rowsBelow(this.compactToolOutputPreview) ?? 0, this.editor.renderedRows + 4),
 			),
-		(file, width) => this.compactFileDiff.coveredDiff(file, width),
+		(toolCallId, file, width) => this.compactFileDiff.coveredDiff(toolCallId, file, width),
 	);
 	readonly compactFileDiff: CompactFileDiff = new CompactFileDiff(this, () =>
 		Math.max(
@@ -2032,8 +2045,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#jobsSheetTimer: NodeJS.Timeout | undefined;
 	#planReviewOwner: object | undefined;
 	#planReviewCancel: (() => void) | undefined;
-	/** Approval still preparing its execution turn, including after its own context clear. */
-	#activePlanApproval: { owner: object; controller: AbortController } | undefined;
 	#planReviewPick: ((choice: string) => boolean) | undefined;
 	/** Runs once when the open review's overlay is hidden; set by `showPlanReview`'s `onClose`. */
 	#planReviewOnHide: (() => void) | undefined;
@@ -2352,7 +2363,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session = session;
 		this.sessionManager = session.sessionManager;
 		this.settings = session.settings;
-		session.getLatestTurnFileChanges();
+		session.getLatestTurnToolDiffs();
 		const preferences = {
 			quiet: cfgStartupQuiet.get(settings),
 			composerShape: cfgComposerShape.get(settings),
@@ -3595,7 +3606,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#logGoalContinuation(result: string, reason: string, fields?: Record<string, unknown>): void {
 		const state = this.session.getLocalGoalModeState();
-		if (!state && !this.goalModeEnabled && !this.goalModePaused && !fields?.goal_id) return;
+		if (state?.autoOrchestrate !== true && fields?.operation_id === undefined) return;
 		logger.info("Goal continuation decision", {
 			component: "goal.interactive",
 			event: "goal_continuation",
@@ -3631,24 +3642,40 @@ export class InteractiveMode implements InteractiveModeContext {
 		const prompt = this.session.goalRuntime.buildContinuationPrompt();
 		const owner = this.session;
 		if (!prompt) return stop("continuation_unavailable");
-		const diagnostics = {
-			operation_id: `goal-continuation-${crypto.randomUUID()}`,
-			goal_id: state.goal.id,
-			started_at: performance.now(),
-		};
+		const diagnostics =
+			state.autoOrchestrate === true
+				? {
+						operation_id: `goal-continuation-${crypto.randomUUID()}`,
+						goal_id: state.goal.id,
+						started_at: performance.now(),
+					}
+				: undefined;
 		this.#goalContinuationDiagnostics = diagnostics;
-		const timerFields = { operation_id: diagnostics.operation_id, goal_id: diagnostics.goal_id };
-		this.#logGoalContinuation("planned", "idle_delay", { ...timerFields, wait_ms: 800 });
-		this.#logGoalContinuation("started", "idle_delay", { ...timerFields, stage: "idle_wait", wait_ms: 800 });
+		if (diagnostics) {
+			const { operation_id, goal_id } = diagnostics;
+			this.#logGoalContinuation("planned", "idle_delay", { operation_id, goal_id, wait_ms: 800 });
+			this.#logGoalContinuation("started", "idle_delay", {
+				operation_id,
+				goal_id,
+				stage: "idle_wait",
+				wait_ms: 800,
+			});
+		}
 		this.#goalContinuationTimer = setTimeout(() => {
 			this.#goalContinuationTimer = undefined;
 			try {
 				this.#goalContinuationDiagnostics = undefined;
-				const elapsed = () => ({ ...timerFields, elapsed_ms: performance.now() - diagnostics.started_at });
-				const stopWaiting = (reason: string) =>
-					this.#logGoalContinuation("suppressed", reason, { ...elapsed(), stage: "idle_wait" });
+				const elapsed = () =>
+					diagnostics && {
+						operation_id: diagnostics.operation_id,
+						goal_id: diagnostics.goal_id,
+						elapsed_ms: performance.now() - diagnostics.started_at,
+					};
+				const stopWaiting = (reason: string) => {
+					if (diagnostics) this.#logGoalContinuation("suppressed", reason, { ...elapsed(), stage: "idle_wait" });
+				};
 				if (!this.onInputCallback) return stopWaiting("not_waiting_for_input");
-				if (this.session !== owner) return stopWaiting("session_changed");
+				if (diagnostics && this.session !== owner) return stopWaiting("session_changed");
 				if (!this.goalModeEnabled || this.goalModePaused) return stopWaiting("goal_disabled_or_paused");
 				// The idle timer can outlive its scheduling window; agent_end reschedules.
 				if (this.#isAutoSubmitBlocked()) return stopWaiting("agent_busy");
@@ -3657,47 +3684,52 @@ export class InteractiveMode implements InteractiveModeContext {
 				if ((this.editor.pendingImages?.length ?? 0) > 0) return stopWaiting("editor_has_images");
 				const latestState = this.session.getLocalGoalModeState();
 				if (!latestState?.enabled || latestState.goal.status !== "active") return stopWaiting("goal_not_active");
-				if (latestState.goal.id !== diagnostics.goal_id) return stopWaiting("goal_replaced");
+				if (diagnostics && latestState.goal.id !== diagnostics.goal_id) return stopWaiting("goal_replaced");
 
 				this.#pendingGoalContinuationTurns++;
-				this.#logGoalContinuation("started", "idle_ready", { ...elapsed(), stage: "submit" });
+				if (diagnostics) this.#logGoalContinuation("started", "idle_ready", { ...elapsed(), stage: "submit" });
 				try {
 					this.onInputCallback(
 						this.startPendingSubmission({
 							text: prompt,
 							customType: "goal-continuation",
+							...(diagnostics ? { goalAutopilotContinuation: true } : {}),
 							display: false,
 						}),
 					);
-					this.#logGoalContinuation("completed", "submitted", { ...elapsed(), stage: "submit" });
+					if (diagnostics) this.#logGoalContinuation("completed", "submitted", { ...elapsed(), stage: "submit" });
 				} catch (error) {
-					logger.error("Goal continuation submission failed", {
-						component: "goal.interactive",
-						event: "goal_continuation",
-						stage: "submit",
-						result: "failed",
-						session_id: this.session.sessionId,
-						...elapsed(),
-						...logger.diagnosticError(error),
-					});
+					if (diagnostics) {
+						logger.error("Goal continuation submission failed", {
+							component: "goal.interactive",
+							event: "goal_continuation",
+							stage: "submit",
+							result: "failed",
+							session_id: this.session.sessionId,
+							...elapsed(),
+							...logger.diagnosticError(error),
+						});
+					}
 					throw error;
 				}
 			} finally {
 				this.syncIdleMaintenanceView();
 			}
 		}, 800);
-		this.syncIdleMaintenanceView();
+		if (diagnostics) this.syncIdleMaintenanceView();
 	}
 
 	#cancelGoalContinuation(reason = "cancelled"): void {
 		if (this.#goalContinuationTimer) {
 			const diagnostics = this.#goalContinuationDiagnostics;
-			this.#logGoalContinuation("cancelled", reason, {
-				stage: "idle_wait",
-				operation_id: diagnostics?.operation_id,
-				goal_id: diagnostics?.goal_id,
-				elapsed_ms: diagnostics ? performance.now() - diagnostics.started_at : undefined,
-			});
+			if (diagnostics) {
+				this.#logGoalContinuation("cancelled", reason, {
+					stage: "idle_wait",
+					operation_id: diagnostics.operation_id,
+					goal_id: diagnostics.goal_id,
+					elapsed_ms: performance.now() - diagnostics.started_at,
+				});
+			}
 			clearTimeout(this.#goalContinuationTimer);
 			this.#goalContinuationTimer = undefined;
 			this.#goalContinuationDiagnostics = undefined;
@@ -4450,6 +4482,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			imageLinks?: (string | undefined)[];
 			customType?: string;
 			goalAutoOrchestrateInitialId?: string;
+			goalAutopilotContinuation?: true;
 			display?: boolean;
 			streamingBehavior?: "steer" | "followUp";
 			followUps?: string[];
@@ -4462,6 +4495,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			imageLinks: input.imageLinks,
 			customType: input.customType,
 			goalAutoOrchestrateInitialId: input.goalAutoOrchestrateInitialId,
+			...(input.goalAutopilotContinuation ? { goalAutopilotContinuation: true } : {}),
 			display: input.display,
 			streamingBehavior: input.streamingBehavior,
 			followUps: input.followUps,
@@ -4600,13 +4634,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		return true;
 	}
 
-	finishPendingSubmission(input: SubmittedUserInput, dispatched = true): void {
+	finishPendingSubmission(input: SubmittedUserInput): void {
+		const refusedContinuation = input.customType === "goal-continuation" && input.started && !input.dispatched;
+		if (refusedContinuation && !input.goalAutopilotContinuation) this.#releaseGoalContinuationTurn();
 		const wasPendingSubmission = this.#pendingSubmittedInput === input;
 		const pendingSubmissionDispose = this.#pendingSubmissionDispose;
 		if (wasPendingSubmission) {
-			// A refused continuation has no agent_end. Only release the current
-			// submission's claim, never one belonging to a later lifecycle.
-			const releaseGoalTurn = !dispatched && input.customType === "goal-continuation";
+			// Autopilot releases only this submission's reservation, not a newer lifecycle's.
+			const releaseGoalTurn = refusedContinuation && input.goalAutopilotContinuation;
 			this.#pendingSubmittedInput = undefined;
 			this.#pendingSubmissionDispose = undefined;
 			this.#pendingSubmissionPreservesDraft = false;
@@ -6432,29 +6467,32 @@ export class InteractiveMode implements InteractiveModeContext {
 		await VibeSessionRegistry.global().rehydrate(vibeSession);
 		const goalEnabled = cfgGoalEnabled.get(this.session.settings);
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
-			logger.info("Goal restore skipped", {
-				component: "goal.interactive",
-				event: "goal_restore",
-				stage: "restore",
-				result: "suppressed",
-				session_id: this.session.sessionId,
-				reason: "goal_setting_disabled",
-			});
+			if (sessionContext.modeData?.autoOrchestrate === true)
+				logger.info("Goal restore skipped", {
+					component: "goal.interactive",
+					event: "goal_restore",
+					stage: "restore",
+					result: "suppressed",
+					session_id: this.session.sessionId,
+					reason: "goal_setting_disabled",
+				});
 			this.session.goalRuntime.clearAccounting();
 			this.sessionManager.appendModeChange("none");
 			return;
 		}
 		if (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused") {
+			const autoOrchestrate = sessionContext.modeData?.autoOrchestrate === true;
 			const goal = goalFromModeData(sessionContext.modeData);
 			if (!goal) {
-				logger.warn("Goal restore skipped", {
-					component: "goal.interactive",
-					event: "goal_restore",
-					stage: "decode",
-					result: "invalid_state",
-					session_id: this.session.sessionId,
-					reason: "goal_mode_data_invalid",
-				});
+				if (autoOrchestrate)
+					logger.warn("Goal restore skipped", {
+						component: "goal.interactive",
+						event: "goal_restore",
+						stage: "decode",
+						result: "invalid_state",
+						session_id: this.session.sessionId,
+						reason: "goal_mode_data_invalid",
+					});
 				this.sessionManager.appendModeChange("none");
 				return;
 			}
@@ -6462,23 +6500,26 @@ export class InteractiveMode implements InteractiveModeContext {
 				enabled: sessionContext.mode === "goal",
 				mode: "active",
 				goal,
-				autoOrchestrate: sessionContext.modeData?.autoOrchestrate === true,
+				...(autoOrchestrate ? { autoOrchestrate: true } : {}),
 			});
-			logger.info("Goal mode restored from session", {
-				component: "goal.interactive",
-				event: "goal_restore",
-				stage: "restore",
-				result: "loaded",
-				session_id: this.session.sessionId,
-				goal_id: goal.id,
-				saved_mode: sessionContext.mode,
-				auto_flag_present: sessionContext.modeData?.autoOrchestrate !== undefined,
-				auto_orchestrate: sessionContext.modeData?.autoOrchestrate === true,
-				preserve_active_goal: options?.preserveActiveGoal === true,
-			});
-			const restored = await logger.withLogContext({ session_id: this.session.sessionId }, () =>
-				this.session.goalRuntime.onThreadResumed({ preserveActiveGoal: options?.preserveActiveGoal }),
-			);
+			if (autoOrchestrate)
+				logger.info("Goal mode restored from session", {
+					component: "goal.interactive",
+					event: "goal_restore",
+					stage: "restore",
+					result: "loaded",
+					session_id: this.session.sessionId,
+					goal_id: goal.id,
+					saved_mode: sessionContext.mode,
+					auto_flag_present: sessionContext.modeData?.autoOrchestrate !== undefined,
+					auto_orchestrate: sessionContext.modeData?.autoOrchestrate === true,
+					preserve_active_goal: options?.preserveActiveGoal === true,
+				});
+			const restore = () =>
+				this.session.goalRuntime.onThreadResumed({ preserveActiveGoal: options?.preserveActiveGoal });
+			const restored = autoOrchestrate
+				? await logger.withLogContext({ session_id: this.session.sessionId }, restore)
+				: await restore();
 			this.goalModeEnabled = restored?.enabled === true;
 			this.goalModePaused = restored?.enabled !== true && restored?.goal.status === "paused";
 			// sdk.ts excludes "goal" from the initial active tool set unconditionally.
@@ -6801,15 +6842,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!enabledTools.includes("goal")) this.#goalToolAddedByMode = true;
 		let state: LocalGoalModeState | undefined;
 		try {
-			state = await logger.withLogContext({ session_id: this.session.sessionId }, () =>
+			const start = () =>
 				options.resume
 					? this.session.goalRuntime.resumeGoal()
 					: this.session.goalRuntime.createGoal({
 							objective: options.objective ?? "",
 							tokenBudget: options.tokenBudget,
-							autoOrchestrate: options.autoOrchestrate,
-						}),
-			);
+							...(options.autoOrchestrate === true ? { autoOrchestrate: true } : {}),
+						});
+			const autoOrchestrate = options.resume
+				? this.session.getLocalGoalModeState()?.autoOrchestrate === true
+				: options.autoOrchestrate === true;
+			state = autoOrchestrate
+				? await logger.withLogContext({ session_id: this.session.sessionId }, start)
+				: await start();
 			await this.session.setActiveToolsByName(goalTools);
 		} catch (error) {
 			this.#goalToolAddedByMode = ownedGoalTool;
@@ -7020,10 +7066,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#hidePlanReview(owner?: object): void {
 		if (owner !== undefined && this.#planReviewOwner !== owner) return;
-		if (owner === undefined) {
-			this.#activePlanApproval?.controller.abort();
-			this.#activePlanApproval = undefined;
-		}
 		this.#planReviewCancel?.();
 		const onHide = this.#planReviewOnHide;
 		this.#planReviewCancel = undefined;
@@ -7100,12 +7142,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		return {
 			option: {
 				id: "keep",
-				label: meta ? `批准并保留上下文 (${meta})` : "批准并保留上下文",
+				label: meta ? `Approve and keep context (${meta})` : "Approve and keep context",
 				disabled,
 			},
 			choice: {
 				id: "keep",
-				label: "批准并保留上下文",
+				label: "Approve and keep context",
 				meta,
 				disabled: disabled ? `Context is over ${PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT}% full` : undefined,
 			},
@@ -7362,10 +7404,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			compactBeforeExecute?: boolean;
 			executionModel?: ResolvedRoleModel;
 			reviewOwner: object;
-			signal: AbortSignal;
 		},
 	): Promise<boolean> {
-		if (options.signal.aborted) return false;
 		const previousPresentation = this.#planModePreviousToolPresentation ?? {
 			enabled: this.session.getEnabledToolNames().filter(name => !isMCPToolName(name)),
 			mounted: this.session.getMountedToolCommandNames().filter(name => !isMCPToolName(name)),
@@ -7388,28 +7428,21 @@ export class InteractiveMode implements InteractiveModeContext {
 				paused: false,
 				deferModelRestore: options.compactBeforeExecute === true,
 			});
-			if (options.signal.aborted) return false;
 
 			if (!options.preserveContext) {
 				const oldLocalRoot = this.#resolveLocalRoot();
-				await this.handleClearCommand(options.reviewOwner);
-				if (options.signal.aborted) return false;
+				await this.handleClearCommand();
 				const newLocalRoot = this.#resolveLocalRoot();
 				await copyLocalArtifacts(oldLocalRoot, newLocalRoot);
-				if (options.signal.aborted) return false;
 				const newLocalPath = this.#resolvePlanFilePath(options.planFilePath);
 				await fs.mkdir(path.dirname(newLocalPath), { recursive: true });
-				if (options.signal.aborted) return false;
 				await fs.writeFile(newLocalPath, planContent);
-				if (options.signal.aborted) return false;
 			} else if (options.compactBeforeExecute) {
 				// Distill the plan-mode transcript before the execution turn is queued so
 				// the plan-approved synthetic prompt lands as a fresh cache anchor.
-				// Outcome is consumed after tool-restoration below; the remaining
-				// plan-reference bookkeeping lives in the dispatch tail
-				// (plan-mode/session-approval.ts). `markPlanReferenceSent` is
-				// intentionally deferred past the cancel guard — see the comment at
-				// the cancel branch.
+				// Outcome is consumed after tool-restoration and plan-reference-path
+				// bookkeeping below; `markPlanReferenceSent` is intentionally deferred
+				// past the cancel guard — see the comment at the cancel branch.
 				// Cancellation skips the synthetic-prompt dispatch (operator's explicit
 				// abort is honored); failure proceeds best-effort — approval intent stands.
 				const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, {
@@ -7418,10 +7451,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				// Pin the plan reference path BEFORE compaction so any user messages
 				// queued during the compaction await (which `handleCompactCommand`
 				// flushes via `flushCompactionQueue` before returning) see the
-				// approved plan in `#buildPlanReferenceMessage`. Reassignment later
-				// (the cancel branch, or the dispatch tail in
-				// plan-mode/session-approval.ts) is idempotent and covers the
-				// !compactBeforeExecute branches.
+				// approved plan in `#buildPlanReferenceMessage`. Reassignment after
+				// the try/finally is idempotent and kept for the !compactBeforeExecute
+				// branch.
 				this.session.setPlanReferencePath(options.planFilePath);
 				// Ride the plan-mode distillation prompt through as `internalGuidance`
 				// so it reaches native summarization without leaking into the public
@@ -7434,10 +7466,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				compactOutcome = await this.handleCompactCommand(
 					undefined,
 					undefined,
-					outcome => {
-						if (!options.signal.aborted)
-							return this.#applyDeferredPlanModelTransition(outcome, options.executionModel);
-					},
+					outcome => this.#applyDeferredPlanModelTransition(outcome, options.executionModel),
 					{ internalGuidance: compactionPrompt, readerModel },
 				);
 			}
@@ -7448,7 +7477,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			// message_end stamping. Guarantees the flag is dead at every exit.
 			this.session.clearPlanInternalAbortPending();
 		}
-		if (options.signal.aborted) return false;
 
 		// Restore the execution tool set, but force-enable `read` so the durable
 		// local:// plan remains available if the inline copy becomes unrecoverable.
@@ -7460,7 +7488,31 @@ export class InteractiveMode implements InteractiveModeContext {
 			previousPresentation.mounted,
 			previousPresentation.registered,
 		);
-		if (options.signal.aborted) return false;
+		this.session.setPlanReferencePath(options.planFilePath);
+		this.sessionManager.appendModeChange("none", { approvedPlanFilePath: options.planFilePath });
+		try {
+			const autosaved = await autosaveApprovedPlan({
+				settings: this.session.settings,
+				cwd: this.sessionManager.getCwd(),
+				title: options.title,
+				planContent,
+			});
+			if (autosaved) {
+				const displayPath = truncateToWidth(replaceTabs(shortenPath(autosaved)), TRUNCATE_LENGTHS.CONTENT);
+				this.showStatus(`Saved plan to ${displayPath}.`);
+			}
+		} catch (error) {
+			const detail = truncateToWidth(
+				shortenEmbeddedPaths(
+					replaceTabs(error instanceof Error ? error.message : String(error))
+						.replace(/[\r\n]+/g, " ")
+						.trim(),
+				),
+				TRUNCATE_LENGTHS.CONTENT,
+			);
+			this.showWarning(`Failed to autosave plan: ${detail}`);
+		}
+
 		// Resolve the deferred plan-approval model transition. On the compact path
 		// the before-flush hook passed to handleCompactCommand already ran this (so
 		// any input queued during compaction executed on the post-compaction
@@ -7474,7 +7526,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		} else {
 			await this.#applyPlanExecutionModel(options.executionModel);
 		}
-		if (options.signal.aborted) return false;
 
 		if (compactOutcome === "cancelled") {
 			// Explicit abort: honor it. `executeCompaction` already surfaced
@@ -7483,80 +7534,66 @@ export class InteractiveMode implements InteractiveModeContext {
 			// prompt. `markPlanReferenceSent` stays unset so
 			// `AgentSession.#buildPlanReferenceMessage` injects the plan reference
 			// on the operator's next `prompt()` call.
-			// The durable plans-dir copy is written BEFORE bailing: upstream saved
-			// the approved plan ahead of this cancel guard, and moving the dispatch
-			// tail (including the autosave) into `dispatchApprovedPlan` below had
-			// shifted the save past this early return — a cancelled compaction
-			// dropped the copy. Same best-effort semantics as the dispatch path
-			// (re-pinning the reference path is idempotent; it was already set
-			// before compaction).
-			recordApprovedPlanReference(this.session, options.planFilePath, planVerificationChecks(planContent));
-			try {
-				const autosaved = await autosaveApprovedPlan({
-					settings: this.session.settings,
-					cwd: this.sessionManager.getCwd(),
-					title: options.title,
-					planContent,
-				});
-				if (options.signal.aborted) return false;
-				if (autosaved) {
-					const displayPath = truncateToWidth(replaceTabs(shortenPath(autosaved)), TRUNCATE_LENGTHS.CONTENT);
-					this.showStatus(`Saved plan to ${displayPath}.`);
-				}
-			} catch (error) {
-				if (options.signal.aborted) return false;
-				const detail = truncateToWidth(
-					shortenEmbeddedPaths(
-						replaceTabs(error instanceof Error ? error.message : String(error))
-							.replace(/[\r\n]+/g, " ")
-							.trim(),
-					),
-					TRUNCATE_LENGTHS.CONTENT,
-				);
-				this.showWarning(`Failed to autosave plan: ${detail}`);
-			}
 			this.showWarning(
 				"Plan approved, but compaction was cancelled — execution not dispatched. Submit a turn to continue.",
 			);
 			return false;
 		}
 
-		// The dispatch tail (plan-reference bookkeeping, autosave, auto-naming,
-		// and the synthetic plan-approved prompt) lives in
-		// plan-mode/session-approval.ts. The review
-		// overlay closes right before the dispatch — after the async title write,
-		// immediately before the execution turn is queued (issues #5688, PR
-		// #5689 review) — preserved here through the `beforeDispatch` hook.
-		// `#hidePlanReview` is idempotent, so the caller's trailing
-		// `closePlanReview()` stays a safe no-op.
-		await dispatchApprovedPlan(this.session, {
-			planFilePath: options.planFilePath,
-			title: options.title,
-			planContent,
-			signal: options.signal,
-			preserveContext: options.preserveContext === true,
-			beforeDispatch: () => {
-				this.#hidePlanReview(options.reviewOwner);
-				this.ui.requestRender();
-			},
-			onAutosave: ({ savedPath, error }) => {
-				if (savedPath) {
-					const displayPath = truncateToWidth(replaceTabs(shortenPath(savedPath)), TRUNCATE_LENGTHS.CONTENT);
-					this.showStatus(`Saved plan to ${displayPath}.`);
-				} else if (error) {
-					const detail = truncateToWidth(
-						shortenEmbeddedPaths(
-							replaceTabs(error.message)
-								.replace(/[\r\n]+/g, " ")
-								.trim(),
-						),
-						TRUNCATE_LENGTHS.CONTENT,
-					);
-					this.showWarning(`Failed to autosave plan: ${detail}`);
-				}
-			},
-		});
+		// Approved plans land in a fresh (or compacted) session whose first user-visible
+		// turn is the synthetic plan-approved prompt — that path bypasses the
+		// input-controller's title generation. Seed an auto-name from the plan title
+		// so the session is not left unnamed, unless automatic titling is disabled
+		// (`--no-title` / PI_NO_TITLE). `setSessionName("auto")` is a no-op when the
+		// user has already chosen a name (preserveContext paths).
+		const seededName = humanizePlanTitle(options.title);
+		if (!$env.PI_NO_TITLE && seededName && !this.sessionManager.getSessionName()) {
+			await this.sessionManager.setSessionName(seededName, "auto");
+		}
 
+		// markPlanReferenceSent fires only on the dispatch path so the synthetic
+		// plan-approved prompt is the source of the reference injection.
+		this.session.markPlanReferenceSent();
+		const planModePrompt = prompt.render(planModeApprovedPrompt, {
+			planFilePath: options.planFilePath,
+			planContent,
+			contextPreserved: options.preserveContext === true,
+		});
+		// Close the review overlay only now — after the async title write and plan
+		// prompt are prepared, immediately before the execution turn is queued. The
+		// synthetic prompt below blocks in `session.prompt` for the whole run, so
+		// hiding here (rather than after #approvePlan returns) keeps the operator off
+		// the stale plan-review screen (issue #5688) while #5319's stale-buffer guard
+		// stays intact. Deferring the hide past the awaited `setSessionName` also
+		// prevents restored editor focus from letting operator keystrokes submit a
+		// normal turn ahead of the approved execution turn (PR #5689 review).
+		// The ownership-bound hide is idempotent, so the caller's trailing
+		// `closePlanReview()` — and a stale continuation after a replacement review
+		// opened — stay safe no-ops.
+		this.#hidePlanReview(options.reviewOwner);
+		this.ui.requestRender();
+		// A user turn queued during compaction was already fired by
+		// `flushCompactionQueue` before we returned from `handleCompactCommand`; the
+		// old abort-then-prompt path would have discarded that operator turn AND
+		// still surfaced `AgentBusyError` when the queued turn kicked off in the
+		// synchronous gap. Preserve the in-flight work and queue the hidden
+		// execution directive behind it as a synthetic follow-up. If `isStreaming`
+		// flips true between the check and dispatch (the same fire-and-forget race
+		// noted below), catch `AgentBusyError` and fall back to the same queue.
+		if (this.session.isStreaming) {
+			await this.session.followUp(planModePrompt, undefined, {
+				synthetic: true,
+			});
+		} else {
+			try {
+				await this.session.prompt(planModePrompt, { synthetic: true });
+			} catch (error) {
+				if (!(error instanceof AgentBusyError)) throw error;
+				await this.session.followUp(planModePrompt, undefined, {
+					synthetic: true,
+				});
+			}
+		}
 		return true;
 	}
 	async #abortPlanApprovalTurnSilently(): Promise<void> {
@@ -8229,7 +8266,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	): Promise<boolean> {
 		const state = await this.session.goalRuntime.replaceGoal({
 			objective,
-			autoOrchestrate: options?.autoOrchestrate,
+			...(options?.autoOrchestrate === true ? { autoOrchestrate: true } : {}),
 		});
 		const goalAutoOrchestrateInitialId = state.autoOrchestrate === true ? state.goal.id : undefined;
 		this.session.setGoalModeState(state);
@@ -8439,17 +8476,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			const keep = this.#planKeepContextChoice(slider ? cycle!.models[tierIndex]?.model : restoredModel);
 			return {
 				options: [
-					{ id: "execute", label: "批准并执行", disabled: false },
-					{ id: "compact", label: "批准并压缩上下文", disabled: false },
+					{ id: "execute", label: "Approve and execute", disabled: false },
+					{ id: "compact", label: "Approve and compact context", disabled: false },
 					keep.option,
-					{ id: "refine", label: "完善计划", disabled: false },
+					{ id: "refine", label: "Refine plan", disabled: false },
 					{ id: "save", label: "Save", disabled: false },
 				],
 				choices: [
-					{ id: "execute", label: "批准并执行", detail: "Start fresh with just the plan" },
+					{ id: "execute", label: "Approve and execute", detail: "Start fresh with just the plan" },
 					{
 						id: "compact",
-						label: "批准并压缩上下文",
+						label: "Approve and compact context",
 						detail: "Summarize this conversation, then execute",
 					},
 					keep.choice,
@@ -8459,7 +8496,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const initialChoices = choicesAt(startTierIndex);
 		// The overlay now owns the dynamic, focus-aware help line; the caller only
 		// supplies the trailing cancel hint.
-		const helpText = `${editorKey("tui.select.cancel")} 取消`;
+		const helpText = `${editorKey("tui.select.cancel")} cancel`;
 		// In-overlay edits (section deletes/undo) and section annotations. Deletes
 		// update `editedContent` (and mirror to disk); annotations build `feedback`
 		// that the Refine branch re-prompts the model with.
@@ -8524,11 +8561,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		const requestDelivered = Promise.withResolvers<void>();
 		const choicePromise = this.showPlanReview(
 			planContent,
-			"计划模式 - 下一步",
+			"Plan mode - next step",
 			initialChoices.choices,
 			{
 				helpText,
-				refine: { id: "refine", label: "完善计划" },
+				refine: { id: "refine", label: "Refine plan" },
 				onSave: content => void savePlan(content),
 				onExternalEditor: () => void this.#openPlanInExternalEditor(planFilePath),
 				onPlanEdited: content => {
@@ -8557,7 +8594,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			},
 			{ slider },
 		);
-		const reviewOwner = this.#planReviewOwner;
 		options?.onOpened?.();
 		// Handlers get their own copy so mutating the event cannot re-enable a refused choice.
 		const requestedDelivery = extensionRunner?.emit(structuredClone(request));
@@ -8568,9 +8604,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		// The plan waits on the user's approval, after the turn that proposed it has ended.
 		const release = holdBlockedStatus({ state: "blocked", kind: "permission", msg: `Review plan: ${details.title}` });
 		const choice = await choicePromise.finally(release);
-		// Ownership replaces the fork generation counter, but must guard choices
-		// too: a settled approval may be superseded before this continuation runs.
-		if (this.#planReviewOwner !== reviewOwner) return;
 		if (this.#pendingPlanReview === pending) this.#pendingPlanReview = undefined;
 		const remote = pending.remote;
 		const closePlanReview = (): void => {
@@ -8584,10 +8617,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				// overlay mirrors edits as they happen, and approval awaits one final
 				// write so the durable plan file and synthetic prompt carry the same text.
 				const latestPlanContent = editedContent ?? (await this.#readPlanFile(planFilePath));
-				if (this.#planReviewOwner !== reviewOwner) return;
 				if (editedContent !== undefined) {
 					await Bun.write(this.#resolvePlanFilePath(planFilePath), editedContent);
-					if (this.#planReviewOwner !== reviewOwner) return;
 				}
 				if (!latestPlanContent) {
 					this.showError(`Plan file not found at ${planFilePath}`);
@@ -8622,26 +8653,14 @@ export class InteractiveMode implements InteractiveModeContext {
 						: -1;
 				const executionModel =
 					slider && cycle && selectedTierIndex !== restoredIndex ? cycle.models[selectedTierIndex] : undefined;
-				const controller = new AbortController();
-				const approval = { owner: pending, controller };
-				this.#activePlanApproval = approval;
-				let executionDispatched: boolean;
-				try {
-					executionDispatched = await this.#approvePlan(latestPlanContent, {
-						planFilePath,
-						title: details.title,
-						preserveContext: choice !== "execute",
-						compactBeforeExecute: choice === "compact",
-						executionModel,
-						reviewOwner: pending,
-						signal: controller.signal,
-					});
-				} catch (error) {
-					if (controller.signal.aborted) return;
-					throw error;
-				} finally {
-					if (this.#activePlanApproval === approval) this.#activePlanApproval = undefined;
-				}
+				const executionDispatched = await this.#approvePlan(latestPlanContent, {
+					planFilePath,
+					title: details.title,
+					preserveContext: choice !== "execute",
+					compactBeforeExecute: choice === "compact",
+					executionModel,
+					reviewOwner: pending,
+				});
 				if (executionDispatched) this.#planReviewAnnotationState.delete(annotationStateKey);
 			} catch (error) {
 				this.showError(
@@ -9934,21 +9953,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		return true;
 	}
 
-	async prepareSessionSwitch(planReviewOwner?: object): Promise<void> {
-		this.#hidePlanReview(planReviewOwner);
+	async prepareSessionSwitch(): Promise<void> {
 		this.#clearJudgmentBatchProgress(true);
 		await this.#btwController.dispose();
 		this.#omfgController.dispose();
 		this.#cleanseController.dispose();
 		this.#extensionUiController.clearExtensionTerminalInputListeners();
 		this.clearPinnedError();
-		this.#hidePlanReview(planReviewOwner);
+		this.#hidePlanReview();
 	}
 
-	async handleClearCommand(planReviewOwner?: object): Promise<void> {
+	async handleClearCommand(): Promise<void> {
 		if (this.#vibeSessionTransitionBlocked()) return;
-		await this.prepareSessionSwitch(planReviewOwner);
-		if (planReviewOwner !== undefined && this.#activePlanApproval?.owner !== planReviewOwner) return;
+		await this.prepareSessionSwitch();
 		await this.#commandController.handleClearCommand();
 	}
 

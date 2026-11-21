@@ -19,7 +19,7 @@ import type {
 	LiveToolOutputPreview,
 	LiveToolOutputSnapshot,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
-import { LatestTurnFileChanges } from "@oh-my-pi/pi-coding-agent/session/latest-turn-file-changes";
+import type { TurnToolDiff } from "@oh-my-pi/pi-coding-agent/session/latest-turn-tool-diffs";
 import { LiveToolOutputState } from "@oh-my-pi/pi-coding-agent/session/live-tool-output";
 import { toolOutputText } from "@oh-my-pi/pi-coding-agent/session/live-tool-output-text";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -214,7 +214,7 @@ function focusFixture(fileDiffRows?: () => number) {
 	const output = new CompactToolOutputPreview(
 		ctx,
 		undefined,
-		fileDiff ? (file, width) => fileDiff.coveredDiff(file, width) : undefined,
+		fileDiff ? (callId, file, width) => fileDiff.coveredDiff(callId, file, width) : undefined,
 	);
 	const dock = new CompactThinkingPreview(ctx, undefined, width => output.compactActivity(width));
 	outputPreviews.push(output);
@@ -1336,19 +1336,18 @@ describe("compact latest live Output consumers", () => {
 		expect(setTodos).toHaveBeenCalledWith(phases);
 	});
 
-	it("keeps the previous Output and its deadline across fully covered write receipts", async () => {
+	it("keeps the previous Output and its deadline across covered original edit receipts", async () => {
 		setSystemTime(10_000);
 		let diffRows = 6;
 		const h = focusFixture(() => diffRows);
 		const live = liveSession();
 		const output = new LiveToolOutputState();
-		const fileChanges = new LatestTurnFileChanges();
-		const sessionId = live.session.sessionManager.getSessionId();
+		const changes: TurnToolDiff[] = [];
 		const file = path.resolve(live.session.sessionManager.getCwd(), "result.txt");
 		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(project => output.preview(project));
-		vi.spyOn(live.session, "getLatestTurnFileChanges").mockImplementation(() => fileChanges.get(sessionId));
-		h.register("CoveredWrites", live);
-		await h.focus.focusAgent("CoveredWrites");
+		vi.spyOn(live.session, "getLatestTurnToolDiffs").mockReturnValue(changes);
+		h.register("CoveredEdits", live);
+		await h.focus.focusAgent("CoveredEdits");
 		output.restore([outputCall("shell", 1, "retained Output", { terminalAt: 10_000 })], false);
 		const original = h.previewView();
 		expect(original).toMatchObject({
@@ -1360,21 +1359,26 @@ describe("compact latest live Output consumers", () => {
 
 		for (let i = 1; i <= 2; i++) {
 			vi.advanceTimersByTime(500);
-			const toolCallId = `write-${i}`;
+			const toolCallId = `edit-${i}`;
 			output.observe(
-				{ type: "tool_execution_start", toolCallId, toolName: "write", args: { path: file } },
+				{ type: "tool_execution_start", toolCallId, toolName: "edit", args: { path: file } },
 				Date.now(),
 			);
-			fileChanges.record(sessionId, { path: file, tool: "write", before: `${i - 1}\n`, after: `${i}\n` });
+			const details = {
+				path: file,
+				diff: `-1|original_${i}\n+1|updated_${i}`,
+				firstChangedLine: 1,
+			};
+			changes.push({ toolCallId, ...details });
 			output.observe(
 				{
 					type: "tool_execution_end",
 					toolCallId,
-					toolName: "write",
+					toolName: "edit",
 					isError: false,
 					result: {
-						content: [{ type: "text", text: "Successfully wrote 2 bytes to result.txt" }],
-						details: { resolvedPath: file },
+						content: [{ type: "text", text: `[result.txt#ABCD]\n1:updated_${i}` }],
+						details,
 					},
 				},
 				Date.now(),
@@ -1386,13 +1390,35 @@ describe("compact latest live Output consumers", () => {
 
 		diffRows = 0;
 		expect(h.previewView()).toMatchObject({
-			body: ["Successfully wrote 2 bytes to result.txt"],
-			nativeBody: ["Successfully wrote 2 bytes to result.txt"],
+			body: ["[result.txt#ABCD]", "1:updated_2"],
+			nativeBody: ["[result.txt#ABCD]", "1:updated_2"],
 		});
 		diffRows = 6;
 		vi.advanceTimersByTime(1999);
 		expect(h.previewView()).toEqual(original);
 		vi.advanceTimersByTime(1);
+		expect(h.outputRows()).toEqual([[], []]);
+
+		const toolCallId = "write-same-path";
+		output.observe({ type: "tool_execution_start", toolCallId, toolName: "write", args: { path: file } }, Date.now());
+		output.observe(
+			{
+				type: "tool_execution_end",
+				toolCallId,
+				toolName: "write",
+				isError: false,
+				result: {
+					content: [{ type: "text", text: "Successfully wrote 2 bytes to result.txt" }],
+					details: { resolvedPath: file },
+				},
+			},
+			Date.now(),
+		);
+		expect(h.previewView()).toMatchObject({
+			body: ["Successfully wrote 2 bytes to result.txt"],
+			nativeBody: ["Successfully wrote 2 bytes to result.txt"],
+		});
+		vi.advanceTimersByTime(3000);
 		expect(h.outputRows()).toEqual([[], []]);
 	});
 

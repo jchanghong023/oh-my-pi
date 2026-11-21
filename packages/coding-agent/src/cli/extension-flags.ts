@@ -33,9 +33,13 @@ export interface ExtensionFlagSink {
  * reparse always runs so `--tools` can be validated against their registered
  * tools even when no extension registered CLI flags.
  */
-export function applyExtensionFlags(runner: ExtensionFlagSink | undefined, rawArgs: string[]): Args | null {
+export function applyExtensionFlags(
+	runner: ExtensionFlagSink | undefined,
+	rawArgs: string[],
+	forcedMode?: Args["mode"],
+): Args | null {
 	if (!runner) return null;
-	const parsed = parseArgs(rawArgs, runner.getFlags());
+	const parsed = parseArgs(rawArgs, runner.getFlags(), forcedMode);
 	// `parseArgs` records extension flag values in `unknownFlags`.
 	for (const [name, value] of parsed.unknownFlags) {
 		runner.setFlagValue(name, value);

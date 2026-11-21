@@ -126,6 +126,8 @@ export const STT_MODELS = [
 	},
 ] as const satisfies readonly SttModelSpec[];
 
+export const DEFAULT_STT_MODEL_KEY = "parakeet-tdt-0.6b-v3";
+
 export type SttModelKey = (typeof STT_MODELS)[number]["key"];
 
 /** A concrete entry from {@link STT_MODELS}; `key` is the literal tier union. */

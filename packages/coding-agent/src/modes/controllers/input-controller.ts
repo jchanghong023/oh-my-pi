@@ -770,11 +770,7 @@ export class InputController {
 		this.registerExtensionShortcuts();
 		const planModeKeys = this.ctx.keybindings.getKeys("app.plan.toggle");
 		for (const key of planModeKeys) {
-			this.ctx.editor.setCustomKeyHandler(key, () => {
-				void this.ctx.handlePlanModeCommand().catch(error => {
-					this.ctx.showWarning(error instanceof Error ? error.message : String(error));
-				});
-			});
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handlePlanModeCommand());
 		}
 
 		for (const key of this.ctx.keybindings.getKeys("app.session.new")) {

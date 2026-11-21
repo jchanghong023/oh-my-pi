@@ -99,7 +99,7 @@ export function createSessionStub(
 	overrides?: SessionOverrides,
 ): AgentSession {
 	if (overrides !== undefined && !isPlainObject(overrides)) return overrides as AgentSession;
-	const turnFileChanges = { files: new Map(), revision: 0 };
+	const turnToolDiffs = [] as const;
 	const stub = {
 		sessionManager,
 		settings: sessionSettings,
@@ -156,7 +156,7 @@ export function createSessionStub(
 		waitForRunEnd: async () => {},
 		getAsyncJobSnapshot: () => null,
 		getLiveToolOutputPreview: () => undefined,
-		getLatestTurnFileChanges: () => turnFileChanges,
+		getLatestTurnToolDiffs: () => turnToolDiffs,
 		modelStage: null,
 		subscribe: vi.fn(() => () => {}),
 		subscribeLocal: vi.fn(() => () => {}),

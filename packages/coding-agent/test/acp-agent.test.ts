@@ -15,6 +15,7 @@ import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extens
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { buildSkillPromptMessage } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { disposeLocalMcpHost } from "@oh-my-pi/pi-coding-agent/mcp/host/local";
 import * as oauthFlowModule from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import {
 	ACP_BOOTSTRAP_RACE_GUARD_MS,
@@ -32,10 +33,9 @@ import { SILENT_ABORT_MARKER, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-a
 import type { ClientBridge } from "@oh-my-pi/pi-coding-agent/session/client-bridge";
 import { closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { getConfigRootDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import type {
 	AgentSideConnection,
 	ClientCapabilities,
@@ -542,12 +542,11 @@ afterEach(async () => {
 		delete process.env.PI_CODING_AGENT_DIR;
 	}
 	resetSettingsForTest();
-	HistoryStorage.close();
 
 	// Renames index titles in the process-wide `<agentDir>/history.db`; Windows cannot delete it while open.
 	closeSessionIndex();
 	for (const root of cleanupRoots.splice(0)) {
-		await removeWithRetries(root);
+		await fs.promises.rm(root, { recursive: true, force: true });
 	}
 });
 
@@ -759,118 +758,6 @@ describe("ACP agent", () => {
 
 		harness.abortController.abort();
 		await Bun.sleep(0);
-	});
-
-	it("passes /delete to the session without deleting its transcript", async () => {
-		const harness = await createHarness();
-		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
-		const session = harness.findSession(created.sessionId)!;
-		try {
-			session.sessionManager.appendMessage({ role: "user", content: "old transcript", timestamp: Date.now() });
-			await session.sessionManager.ensureOnDisk();
-			await session.sessionManager.flush();
-			const oldFile = session.sessionManager.getSessionFile()!;
-
-			const result = await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "/delete" }],
-			});
-
-			expect(result.stopReason).toBe("end_turn");
-			expect(session.promptCalls).toEqual(["/delete"]);
-			expect(session.sessionId).toBe(created.sessionId);
-			expect(session.sessionManager.getSessionFile()).toBe(oldFile);
-			expect(await Bun.file(oldFile).exists()).toBe(true);
-		} finally {
-			harness.abortController.abort();
-			await Bun.sleep(0);
-		}
-	});
-
-	it("keeps the advertised ACP handle usable after deleting and replacing its transcript", async () => {
-		const harness = await createHarness();
-		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
-		const session = harness.findSession(created.sessionId)!;
-		try {
-			session.sessionManager.appendMessage({ role: "user", content: "old transcript", timestamp: Date.now() });
-			await session.sessionManager.ensureOnDisk();
-			await session.sessionManager.flush();
-			const oldFile = session.sessionManager.getSessionFile()!;
-			session.newSession = async (options?: { drop?: boolean }) => {
-				if (options?.drop) await session.sessionManager.dropSession(oldFile);
-				await session.sessionManager.newSession();
-				session.sessionId = session.sessionManager.getSessionId();
-				session.agent.sessionId = session.sessionId;
-				return true;
-			};
-			const deleteResult = await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "/session delete" }],
-			});
-			expect(deleteResult.stopReason).toBe("end_turn");
-			expect(session.sessionId).not.toBe(created.sessionId);
-			const newFile = session.sessionManager.getSessionFile()!;
-			expect(newFile).not.toBe(oldFile);
-			expect(await Bun.file(oldFile).exists()).toBe(false);
-			expect(
-				harness.updates.some(
-					notification =>
-						notification.sessionId === created.sessionId &&
-						notification.update.sessionUpdate === "agent_message_chunk" &&
-						notification.update.content.type === "text" &&
-						notification.update.content.text.includes("Session deleted:"),
-				),
-			).toBe(true);
-
-			const nextResult = await harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "continue in the replacement transcript" }],
-			});
-			expect(nextResult.stopReason).toBe("end_turn");
-			expect(session.promptCalls).toEqual(["continue in the replacement transcript"]);
-			await harness.agent.setSessionConfigOption({
-				sessionId: created.sessionId,
-				configId: "thinking",
-				value: "high",
-			});
-			expect(session.thinkingLevel).toBe("high");
-			expect(
-				harness.updates.some(
-					notification =>
-						notification.sessionId === created.sessionId &&
-						notification.update.sessionUpdate === "config_option_update",
-				),
-			).toBe(true);
-			expect(harness.updates.every(notification => notification.sessionId === created.sessionId)).toBe(true);
-			await session.sessionManager.flush();
-			expect(await Bun.file(newFile).text()).toContain("continue in the replacement transcript");
-			expect(await Bun.file(oldFile).exists()).toBe(false);
-			expectAcpNotifications(harness.updates);
-			const entered = Promise.withResolvers<void>();
-			const release = Promise.withResolvers<void>();
-			session.prompt = async () => {
-				session.isStreaming = true;
-				entered.resolve();
-				await release.promise;
-				return true;
-			};
-			session.abort = async () => {
-				session.isStreaming = false;
-				release.resolve();
-			};
-			const cancelledPrompt = harness.agent.prompt({
-				sessionId: created.sessionId,
-				prompt: [{ type: "text", text: "cancel the replacement session" }],
-			});
-			await entered.promise;
-			await harness.agent.cancel({ sessionId: created.sessionId });
-			expect((await cancelledPrompt).stopReason).toBe("cancelled");
-			await harness.agent.closeSession({ sessionId: created.sessionId });
-			expect(session.disposed).toBe(true);
-		} finally {
-			harness.abortController.abort();
-			await harness.agent.dispose();
-		}
 	});
 
 	it("advertises plan mode and emits schema-valid mode updates", async () => {
@@ -1509,14 +1396,14 @@ describe("ACP agent", () => {
 				speechSpeed: "speech.speed",
 			},
 			defaults: {
-				speechToTextModel: "local/whisper-base",
+				speechToTextModel: "local/parakeet-tdt-0.6b-v3",
 				textToSpeechModel: "local/phonon-31m",
 				voice: "harper",
 				speed: 1,
 			},
 			speechToText: {
 				setting: "modelRoles.dictation",
-				defaultValue: "local/whisper-base",
+				defaultValue: "local/parakeet-tdt-0.6b-v3",
 			},
 			textToSpeech: {
 				modelSetting: "modelRoles.speech",
@@ -1557,7 +1444,7 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
-	it("lists project extensions by cwd and uses live settings only for an explicit ACP session", async () => {
+	it("lists extension modules configured for the requested project, not the ACP process", async () => {
 		const harness = await createHarness();
 		const other = path.join(harness.cwdA, "other");
 		const target = path.join(harness.cwdB, "fleet");
@@ -1571,7 +1458,6 @@ describe("ACP agent", () => {
 			"extensions:\n  - ./fleet\ndisabledExtensions:\n  - extension-module:hello\n",
 		);
 		cfgExtensions.set(Settings.instance, [other]);
-		const { sessionId } = await harness.agent.newSession({ cwd: harness.cwdB, mcpServers: [] });
 
 		const result = await harness.agent.extMethod("_omp/extensions", { cwd: harness.cwdB });
 		expect(result.extensions).toEqual(
@@ -1587,11 +1473,6 @@ describe("ACP agent", () => {
 		);
 		expect(result.extensions).not.toEqual(
 			expect.arrayContaining([expect.objectContaining({ id: "extension-module:wrong" })]),
-		);
-
-		const sessionResult = await harness.agent.extMethod("_omp/extensions", { sessionId });
-		expect(sessionResult.extensions).toEqual(
-			expect.arrayContaining([expect.objectContaining({ id: "extension-module:wrong", state: "active" })]),
 		);
 		harness.abortController.abort();
 		await Bun.sleep(0);
@@ -3489,7 +3370,7 @@ describe("ACP agent", () => {
 				inference.title.resolve(null);
 			}
 			harness.abortController.abort();
-			await harness.agent.dispose();
+			await Bun.sleep(0);
 		}
 	});
 
@@ -4648,6 +4529,7 @@ describe("ACP agent MCP server configuration (late-connecting servers)", () => {
 		} finally {
 			refreshSpy.mockRestore();
 			await harness.agent.dispose();
+			await disposeLocalMcpHost();
 		}
 	}, 15_000);
 
@@ -4668,6 +4550,7 @@ describe("ACP agent MCP server configuration (late-connecting servers)", () => {
 		} finally {
 			refreshSpy.mockRestore();
 			await harness.agent.dispose();
+			await disposeLocalMcpHost();
 		}
 	}, 15_000);
 

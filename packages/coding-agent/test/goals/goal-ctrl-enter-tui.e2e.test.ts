@@ -11,9 +11,16 @@ function callable(request: ModelRequest, name: string): string {
 
 describe("native Goal Ctrl+Enter tool-batch delivery", () => {
 	test.each(["goal", "goal-autopilot"] as const)(
-		"Ctrl+Enter reaches the next %s model turn exactly once without interrupting tools",
+		"Ctrl+Enter follows %s delivery timing exactly once without interrupting tools",
 		async command => {
 			if (!tuiTest) throw new Error("tui-test is required for the physical Ctrl+Enter Goal acceptance case");
+			const autopilot = command === "goal-autopilot";
+			const feedbackTurn = autopilot ? 2 : 3;
+			const feedbackCount = (request: ModelRequest) =>
+				request.messages.filter(
+					message =>
+						message.role === "user" && contentText(message.content).includes("ENTER_CHANGE_DIRECTION"),
+				).length;
 			let turns = 0;
 			await withTui(
 				{
@@ -52,11 +59,7 @@ describe("native Goal Ctrl+Enter tool-batch delivery", () => {
 									},
 								],
 							};
-						const feedback = request.messages.filter(
-							message =>
-								message.role === "user" && contentText(message.content).includes("ENTER_CHANGE_DIRECTION"),
-						);
-						expect(feedback).toHaveLength(1);
+						expect(feedbackCount(request)).toBe(turns < feedbackTurn ? 0 : 1);
 						if (turns === 2) {
 							expect(
 								request.messages
@@ -64,6 +67,9 @@ describe("native Goal Ctrl+Enter tool-batch delivery", () => {
 									.map(message => contentText(message.content))
 									.join("\n"),
 							).toContain("ENTER_BATCH_FINISHED");
+						}
+						if (turns < feedbackTurn) return { text: "GOAL_ORIGINAL_TURN_FINISHED" };
+						if (turns === feedbackTurn) {
 							return {
 								tool: {
 									name: callable(request, "write"),
@@ -95,28 +101,21 @@ describe("native Goal Ctrl+Enter tool-batch delivery", () => {
 					expect(await Bun.file(path.join(cwd, "enter-changed-work.txt")).text()).toBe(
 						"CTRL_ENTER_CHANGED_REAL_WORK",
 					);
-					expect(turns).toBe(3);
+					expect(turns).toBe(feedbackTurn + 1);
 					const inputs = provider.requests.filter(request =>
 						request.messages.some(
 							message =>
 								message.role === "user" && contentText(message.content).includes("GOAL_ENTER_OBJECTIVE"),
 						),
 					);
-					expect(inputs).toHaveLength(3);
-					for (const input of inputs.slice(1)) {
-						expect(
-							input.messages.filter(
-								message =>
-									message.role === "user" && contentText(message.content).includes("ENTER_CHANGE_DIRECTION"),
-							),
-						).toHaveLength(1);
-					}
+					expect(inputs).toHaveLength(feedbackTurn + 1);
+					expect(inputs.map(feedbackCount)).toEqual(autopilot ? [0, 1, 1] : [0, 0, 1, 1]);
 					for (const input of inputs) {
 						expect(
 							input.messages.filter(message =>
 								contentText(message.content).includes("MUST 全自动无人值守完成完整目标。"),
 							),
-						).toHaveLength(command === "goal-autopilot" ? 1 : 0);
+						).toHaveLength(autopilot ? 1 : 0);
 					}
 				},
 			);

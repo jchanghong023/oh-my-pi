@@ -135,7 +135,7 @@ export class CompactToolOutputPreview implements Component {
 	constructor(
 		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "ui" | "settings">,
 		private readonly availableRows: () => number = () => 6,
-		private readonly coveredDiff?: (file: string, width: number) => string | undefined,
+		private readonly coveredDiff?: (toolCallId: string, file: string, width: number) => string | undefined,
 	) {}
 
 	clear(): void {
@@ -211,12 +211,14 @@ export class CompactToolOutputPreview implements Component {
 
 		const cwd = this.ctx.viewSession.sessionManager.getCwd();
 		const targets = new Map<string, string>();
-		const results = Array.isArray(details.perFileResults) ? details.perFileResults : [details];
+		const conflicts =
+			name === "write" && Array.isArray(details.conflictChanges) ? details.conflictChanges : undefined;
+		const results = conflicts ?? (Array.isArray(details.perFileResults) ? details.perFileResults : [details]);
 		for (const result of results) {
 			if (!isRecord(result)) continue;
-			const file = name === "write" ? result.resolvedPath : result.path;
+			const file = name === "write" && !conflicts ? result.resolvedPath : result.path;
 			if (typeof file !== "string" || !path.isAbsolute(file)) continue;
-			const diff = this.coveredDiff(file, width);
+			const diff = this.coveredDiff(call.toolCallId, file, width);
 			if (diff === undefined) continue;
 			if (result.op === "delete" ? diff !== "" : !diff || (name !== "write" && !result.diff)) continue;
 			targets.set(file, diff);

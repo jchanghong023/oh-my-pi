@@ -19,16 +19,13 @@ export default class Acp extends Command {
 		const { args, terminalAuth } = prepareAcpTerminalAuthArgs(this.argv);
 		let parsed: ParsedArgs;
 		try {
-			parsed = parseArgs(args);
+			parsed = parseArgs(args, undefined, terminalAuth ? undefined : "acp");
 		} catch (error) {
 			if (reportCliUsageError(error)) {
 				process.exitCode = 2;
 				return;
 			}
 			throw error;
-		}
-		if (!terminalAuth) {
-			parsed.mode = "acp";
 		}
 		await runRootCommand(parsed, args);
 	}

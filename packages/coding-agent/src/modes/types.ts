@@ -104,6 +104,8 @@ export type SubmittedUserInput = {
 	customType?: string;
 	/** Goal creation/replacement provenance for the submitted initial objective. */
 	goalAutoOrchestrateInitialId?: string;
+	/** A continuation whose reservation belongs to fork autopilot. */
+	goalAutopilotContinuation?: true;
 	/** Dispatch a hidden developer prompt. */
 	synthetic?: boolean;
 	/** Mark a synthetic submission as deliberately initiated by the user. */
@@ -557,6 +559,7 @@ export interface InteractiveModeContext {
 			imageLinks?: (string | undefined)[];
 			customType?: string;
 			goalAutoOrchestrateInitialId?: string;
+			goalAutopilotContinuation?: true;
 			display?: boolean;
 			streamingBehavior?: "steer" | "followUp";
 			followUps?: string[];
@@ -567,7 +570,7 @@ export interface InteractiveModeContext {
 	/** Put a prompt that never reached the agent (and its unsent follow-ups, as one `=>` list) back in an empty editor. */
 	restoreDroppedPrompt(prompt: DroppedPrompt): void;
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;
-	finishPendingSubmission(input: SubmittedUserInput, dispatched?: boolean): void;
+	finishPendingSubmission(input: SubmittedUserInput): void;
 	/**
 	 * Marks a locally-initiated user submission so the eventual `message_start`
 	 * event for that user message does not clobber the editor draft (see #783).

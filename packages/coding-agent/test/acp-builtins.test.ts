@@ -54,7 +54,7 @@ interface FakeAcpBuiltinSession {
 	messages: unknown[];
 	settings: Settings;
 	model: { provider: string; id: string } | undefined;
-	newSession(opts?: { drop?: boolean; throwOnDropFailure?: boolean; parentSession?: string }): Promise<boolean>;
+	newSession(opts?: { drop?: boolean; parentSession?: string }): Promise<boolean>;
 	switchSession(sessionPath: string): Promise<boolean>;
 	moveSession(newCwd: string, targetSessionDir?: string): Promise<void>;
 	markMovedFromEmptySessionFile(sessionFile: string): void;
@@ -133,7 +133,7 @@ function createRuntime() {
 		async redeemResetCredit(_target) {
 			return { ok: false, code: "no_credit" };
 		},
-		async newSession(_opts?: { drop?: boolean; throwOnDropFailure?: boolean; parentSession?: string }) {
+		async newSession(_opts?: { drop?: boolean; parentSession?: string }) {
 			return true;
 		},
 		async switchSession(sessionPath: string) {
@@ -516,15 +516,6 @@ describe("ACP builtin slash commands", () => {
 		expect(result).toBe(false);
 	});
 
-	it("directs /team configure to the TUI instead of starting a discussion or suggesting RPC", async () => {
-		const { output, runtime } = createRuntime();
-		expect(await executeAcpBuiltinSlashCommand("/team configure", runtime)).toEqual({ consumed: true });
-		const message = output.join("\n");
-		expect(message).toContain("TUI");
-		expect(message).toContain("/team configure");
-		expect(message).not.toContain("RPC");
-	});
-
 	// /jobs
 	it("jobs: shows informative message when snapshot is null", async () => {
 		const { output, runtime } = createRuntime();
@@ -861,12 +852,10 @@ describe("ACP builtin slash commands", () => {
 			"/loop",
 			"/hotkeys",
 			"/extensions",
-			"/skills search example",
 			"/agents",
 			"/copy",
 			"/btw hi",
 			"/new",
-			"/clear",
 			"/delete",
 			"/fork",
 		];
@@ -895,21 +884,6 @@ describe("session lifecycle commands", () => {
 		expect(output[0]).toContain("streaming");
 	});
 
-	it("/session delete: reports a failed drop after activating a new session", async () => {
-		const { output, session, fakeSessionManager, runtime } = createRuntime();
-		fakeSessionManager._sessionFile = "/tmp/old-session.jsonl";
-		session.newSession = async options => {
-			expect(options).toEqual({ drop: true, throwOnDropFailure: true });
-			fakeSessionManager._sessionFile = "/tmp/new-session.jsonl";
-			throw new Error("delete denied");
-		};
-		const result = await executeAcpBuiltinSlashCommand("/session delete", runtime);
-		expect(result).toEqual({ consumed: true, failed: true });
-		expect(output[0]).toContain("Failed to delete session: delete denied");
-		expect(output[0]).toContain("A new session is now active.");
-		expect(output[0]).not.toContain("Session deleted:");
-	});
-
 	it("/session delete moves the live session and keeps the next turn resumable", async () => {
 		using tempDir = TempDir.createSync("@pi-acp-session-delete-");
 		const manager = SessionManager.create(tempDir.path(), tempDir.path());
@@ -921,11 +895,9 @@ describe("session lifecycle commands", () => {
 			const deletedId = manager.getSessionId();
 			if (!deletedFile) throw new Error("Expected a persisted session");
 
-			const { session, runtime } = createRuntime();
+			const { output, session, runtime } = createRuntime();
 			runtime.sessionManager = manager;
 			session.newSession = async options => {
-				const previousFile = manager.getSessionFile();
-				if (options?.drop && previousFile) await manager.dropSession(previousFile);
 				await manager.newSession(options);
 				session.sessionId = manager.getSessionId();
 				session.sessionFile = manager.getSessionFile();
@@ -934,8 +906,10 @@ describe("session lifecycle commands", () => {
 			expect(await executeAcpBuiltinSlashCommand("/session delete", runtime)).toEqual({ consumed: true });
 			expect(await Bun.file(deletedFile).exists()).toBe(false);
 			expect(manager.getSessionId()).not.toBe(deletedId);
+			expect(output[0]).toContain(manager.getSessionId());
 			const nextFile = manager.getSessionFile();
 			if (!nextFile) throw new Error("Expected a new session path");
+			expect(output[0]).toContain(nextFile);
 			// The successor stays lazy: deleting must not leave an empty listed session behind.
 			expect(await Bun.file(nextFile).exists()).toBe(false);
 			expect(await SessionManager.list(tempDir.path(), tempDir.path())).toEqual([]);
@@ -1227,6 +1201,7 @@ describe("wave 3 commands", () => {
 		}
 	});
 
+	// The shared /wt command uses the fork worktree backend in every host.
 	const worktreeGit = (cwd: string, ...args: string[]) => {
 		const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
 		if (result.exitCode !== 0) throw new Error(result.stderr.toString());
@@ -1439,7 +1414,6 @@ describe("wave 3 commands", () => {
 		try {
 			await fs.mkdir(repoDir, { recursive: true });
 			await git("init", "-q", "-b", "main");
-			await git("config", "core.autocrlf", "false");
 			await git("config", "user.email", "t@example.com");
 			await git("config", "user.name", "t");
 			await Bun.write(path.join(repoDir, "tracked.txt"), "committed\n");

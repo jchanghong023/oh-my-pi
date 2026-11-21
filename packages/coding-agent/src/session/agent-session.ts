@@ -223,7 +223,6 @@ import { type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/appr
 import { listPlanFiles, readPlanFile, resolvePlanFilePath } from "../plan-mode/plan-files";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import type { PlanModeState } from "../plan-mode/state";
-import { type ApprovedPlanChecks, readApprovedPlanChecks } from "../plan-mode/verification";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
@@ -263,7 +262,7 @@ import {
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
 import { isAttachmentOnlyTitleInput, isLowSignalTitleInput } from "../tiny/text";
-import type { FileChangeReport, ImageAttachmentEntry, ToolSession } from "../tools";
+import type { ImageAttachmentEntry, ToolSession } from "../tools";
 import { resolveApproval } from "../tools/approval";
 import { invokeCrawlBrowserWithSession, writeCrawlMarkdownWithSession } from "../tools/browser/crawl-access";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
@@ -342,7 +341,7 @@ import {
 	type LiveToolOutputProjection,
 	type LiveToolOutputSnapshot,
 } from "./agent-session-handle";
-import { LatestTurnFileChanges, type TurnFileChanges } from "./latest-turn-file-changes";
+import { LatestTurnToolDiffs, type TurnToolDiff } from "./latest-turn-tool-diffs";
 import { LiveToolOutputState } from "./live-tool-output";
 import {
 	asyncJobSnapshot,
@@ -1202,7 +1201,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#activeToolExecutionUpdates = new Map<string, Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>>();
 	readonly #liveToolOutput = new LiveToolOutputState();
 	#modelStage: ModelStage | null = null;
-	#latestTurnFileChanges?: LatestTurnFileChanges;
+	readonly #latestTurnToolDiffs = new LatestTurnToolDiffs();
 	#runStateListeners = new Set<(state: "running" | "idle", at: number) => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
 	#runStartedAt: number | undefined;
@@ -2690,10 +2689,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				context?.willContinue &&
 				!signal?.aborted &&
 				goalState?.enabled &&
+				goalState.autoOrchestrate === true &&
 				goalState.mode === "active" &&
 				goalState.goal.status === "active"
 			) {
-				// Goals may never yield between tool batches. Deliver user feedback
+				// Autopilot may never yield between tool batches. Deliver user feedback
 				// at this completed-batch boundary, not during a running tool.
 				const followUp = this.agent.peekFollowUpQueue();
 				const index = followUp.findIndex(isUserAuthoredQueuedMessage);
@@ -3052,7 +3052,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				if (mode === "none") {
 					this.sessionManager.appendModeChange("none");
 				} else if (state) {
-					this.sessionManager.appendModeChange(mode, { goal: state.goal, autoOrchestrate: state.autoOrchestrate });
+					this.sessionManager.appendModeChange(mode, {
+						goal: state.goal,
+						...(state.autoOrchestrate === true ? { autoOrchestrate: true } : {}),
+					});
 				}
 			},
 			sendHiddenMessage: async message => {
@@ -4273,7 +4276,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#emit(event: LocalAgentSessionEvent): void {
 		this.#modelStage = nextModelStage(this.#modelStage, event);
 		if (event.type === "message_start" && event.message.role === "user") {
-			this.#latestTurnFileChanges?.start(this.sessionId);
+			this.#latestTurnToolDiffs.start(this.sessionId);
 		}
 		// Listener array is copy-on-write (see `subscribe`), so iterating the
 		// current array is safe against (un)subscribes made by a listener.
@@ -4303,7 +4306,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#runStartedAt = undefined;
 			this.#modelStage = null;
 		} else {
-			if (this.#runStartedAt === undefined) this.#latestTurnFileChanges?.start(this.sessionId);
+			if (this.#runStartedAt === undefined) this.#latestTurnToolDiffs.start(this.sessionId);
 			this.#runStartedAt ??= at;
 		}
 		this.#liveToolOutput.setRunActive(state === "running", at);
@@ -4426,6 +4429,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	async #emitSessionEvent(event: LocalAgentSessionEvent, options: { detachExtensions?: boolean } = {}): Promise<void> {
+		if (
+			this.#runActive &&
+			(event.type === "tool_execution_start" ||
+				event.type === "tool_execution_update" ||
+				event.type === "tool_execution_end")
+		) {
+			this.#latestTurnToolDiffs.observe(this.sessionId, event);
+		}
 		this.#liveToolOutput.observe(event, Date.now());
 		if (event.type === "tool_execution_update") {
 			// Returned background calls have no later tool result to persist their
@@ -6580,13 +6591,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#modelStage;
 	}
 
-	/** Opt in from the terminal before the next write; never replay edits from chat history. */
-	getLatestTurnFileChanges(): TurnFileChanges {
-		return (this.#latestTurnFileChanges ??= new LatestTurnFileChanges()).get(this.sessionId);
-	}
-
-	recordLatestTurnFileChange(change: FileChangeReport): void {
-		if (this.#runActive) this.#latestTurnFileChanges?.record(this.sessionId, change);
+	/** Confirmed native diff entries for this turn, in result order. */
+	getLatestTurnToolDiffs(): readonly TurnToolDiff[] {
+		return this.#latestTurnToolDiffs.get(this.sessionId);
 	}
 
 	/**
@@ -9089,19 +9096,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#planReferencePath;
 	}
 
-	getApprovedPlanChecks(): ApprovedPlanChecks | undefined {
-		if (!this.#planReferenceApproved || this.#planModeState?.enabled) return undefined;
-		for (const entry of this.sessionManager.getBranch().reverse()) {
-			if (entry.type !== "mode_change") continue;
-			if (entry.mode === "plan" || entry.mode === "plan_paused") break;
-			const path = entry.data?.approvedPlanFilePath;
-			if (typeof path !== "string") continue;
-			if (path !== this.#planReferencePath) break;
-			return readApprovedPlanChecks(entry.data?.approvedPlanChecks);
-		}
-		return undefined;
-	}
-
 	get clientBridge(): ClientBridge | undefined {
 		return this.#clientBridge;
 	}
@@ -9130,6 +9124,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// survive to be replayed by a focus rebuild in the reset session (#10447).
 		this.#activeToolExecutionUpdates.clear();
 		this.#liveToolOutput.clear();
+		this.#latestTurnToolDiffs.start(this.sessionId);
 	}
 
 	/**
@@ -13642,7 +13637,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#flushExcludedRows();
 		const bashTransition = this.#bash.beginSessionTransition({ persistDetached: options?.drop !== true });
 		let sessionTransitioned = false;
-		let dropFailure: { error: unknown } | undefined;
 		try {
 			advisorRecordersDetached = true;
 			await this.#advisors.drainAndDetachRecorders();
@@ -13656,7 +13650,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						await this.sessionManager.dropSession(previousSessionFile);
 					} catch (err) {
 						logger.error("Failed to delete session during /delete", { err });
-						if (options.throwOnDropFailure) dropFailure = { error: err };
 					}
 				} else {
 					await this.sessionManager.flush();
@@ -13739,7 +13732,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				});
 			}
 
-			if (dropFailure) throw dropFailure.error;
 			return true;
 		} finally {
 			if (advisorRecordersDetached) {

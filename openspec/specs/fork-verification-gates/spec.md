@@ -65,7 +65,7 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 - collab-web 的 fork 白名单仅纳入 `test/composer.test.tsx`、`test/transcript.test.tsx`、`test/tool-view.test.tsx`、`test/markdown.test.tsx`，不纳入整个 collab-web 或通用 VCS 套件。测试发现、文件计数、空选择探针和报告 MUST 同时识别 `.test.tsx`。
 - Bun fork 套件版本 MUST 使用 `scripts/test-reporting.ts` 的 `BUN_FORK_SUITE_REVISION`；消费者集合变化时 MUST 同步递增该值，下一次获授权的完整 fork 回归须在干净工作区为新范围建立基线。完整基线与计时提示资格须匹配当前消费者范围，旧范围报告不可复用。affected、失败及未完成报告的原语义不变。
 - 保留 `scripts/ci-test-ts.ts` 白名单内适用的原生 Agent／TUI 消费者覆盖及原生 MCP 能力边界，不扩大整个上游 agent 或通用 Browser 套件，也不增加 MCP 连接／授权验收。
-- 显示验证 MUST 覆盖 clean 基线、compact 的本轮文件净差异、固定两行活动区、隐藏独立模型处理忙碌提示，以及 detailed 的上游原组件。按普通消费者规则选测且只执行一次，复用必要的共享布局、渲染和恢复验证，不为 compact 新建专属通道或全工具矩阵。纯上下文压缩模式注册、算法、预算、队列和 `/compact` 参数派发不因名称相似纳入。
+- 显示验证 MUST 覆盖 clean 基线、compact 的本轮工具原始 Diff、固定两行活动区、隐藏独立模型处理忙碌提示，以及 detailed 的上游原组件。按普通消费者规则选测且只执行一次，复用必要的共享布局、渲染和恢复验证，不为 compact 新建专属通道或全工具矩阵。纯上下文压缩模式注册、算法、预算、队列和 `/compact` 参数派发不因名称相似纳入。
 - 根目录 `docs/`、`docs-zh-CN/` 和 `AGENTS.md` 不作为 Git 测试选择输入，不触发 Bun 全量回退或独立 UI smoke；混合变更仍按其余运行输入判断。排除不扩大到包内 Markdown/prompt 等运行资源；缺少合格基线和显式 `--full` 的行为不变。
 - `bun run fulltest --full` 显式运行当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 和仓库脚本测试，但不发现或运行 `vendor/openwiki` 子模块自身的测试；OMP OpenWiki 消费者测试仍在范围内。不使用 fork 白名单、变更选测、pytest-testmon 或环境分片；默认 fulltest 及 slowtest 不变。保留测试自身的 skip、平台不支持、真实桌面输入及另需单独授权的集成边界；不因全量模式放宽门禁时限。
 - `bun run fulltest --full` 不自动运行 `scripts/install-tests/fork-installer-routing.test.ts`。默认 fulltest 仍按变更选测，`test:scripts` 和支持 POSIX `sh` 的显式单测入口保留。
@@ -238,7 +238,7 @@ OMP MUST 在 native 产物成功替换后立即尝试清理该次让位的旧文
 #### Scenario: 活动区、既有展开与布局具有行为证据
 
 - **WHEN** 验证 compact 显示与交互
-- **THEN** 按[显示规格](../tui-presentation/spec.md#scenario-clean-与-compact-的显示差异)验证 `Ctrl+O` 优先展开本轮文件净差异，无可展开差异时才处理显式 TodoLoop 任务卡片；展开、窄屏和活动区收起不覆盖、重复或遗失正文与草稿。
+- **THEN** 按[显示规格](../tui-presentation/spec.md#scenario-clean-与-compact-的显示差异)验证 `Ctrl+O` 优先展开本轮工具原始 Diff，无可展开差异时才处理显式 TodoLoop 任务卡片；展开、窄屏和活动区收起不覆盖、重复或遗失正文与草稿。
 - **AND** 验证真实模型阶段与已派发工具占独立行，传输参数不算执行，最近结束结果带「上次」，并发工具不轮播；思考显隐、会话隔离和减少动效继续覆盖。
 - **AND** 优先复用既有 ANSI／native、模式切换和真实入口设施，只针对消费者可观察缺陷验证，不检查源文本、内部接线、默认常量或快照长度增长。
 

@@ -878,27 +878,45 @@ test("resumed compact transcript stays in place while successive tools finish an
 	}
 }, 120_000);
 
-test("compact shows the current turn's real Write/Edit net diff through later tool and model activity", async () => {
+test("compact keeps the Write receipt and original Edit diffs through later tool and model activity", async () => {
 	if (!tuiTest) throw new Error("tui-test is required for the compact empty-stream regression");
 	const original = "const original = 0;";
-	const intermediate = "const written = 1;";
-	const editTail = "export const EDIT_CLI_46 = 46;";
+	const writtenHead = "const written = 1;";
+	const writtenTail = "const expansionSlot = 2;";
+	const firstEdit = "const editedFirst = 3;";
 	const draft = "CLI_UNSENT_DRAFT";
-	const edited = Array.from(
+	const editLines = Array.from(
 		{ length: 46 },
 		(_, i) => `export const EDIT_CLI_${String(i + 1).padStart(2, "0")} = ${i + 1};`,
-	).join("\n");
+	);
+	const editHead = editLines[0]!;
+	const editTail = editLines.at(-1)!;
+	const written = `${writtenHead}\n${writtenTail}\n`;
+	const edited = `${firstEdit}\n${editLines.join("\n")}\n`;
+	const writeReceipt = `Successfully wrote ${Buffer.byteLength(written)} bytes to retained-edit.ts`;
+	const patchLine = (readOutput: string, line: number, oldText: string, newLines: readonly string[]) => {
+		const header = readOutput.match(/\[retained-edit\.ts#[A-F0-9]{4}\]/u)?.[0];
+		if (!header || !readOutput.includes(oldText))
+			throw new Error(`Missing hashline header or ${oldText}: ${readOutput}`);
+		return `*** Begin Patch\n${header}\nPUT ${line}.=${line}:\n${newLines.map(text => `+${text}`).join("\n")}\n*** End Patch\n`;
+	};
 	const actions: Action[] = [
 		{
 			name: "write",
-			args: { path: "retained-edit.ts", content: `${intermediate}\n` },
+			args: { path: "retained-edit.ts", content: written },
 			intent: "Writing retained evidence",
 		},
 		{ name: "read", args: { path: "retained-edit.ts" }, intent: "Reading source before edit" },
 		{
 			name: "edit",
 			args: {},
-			intent: "Editing retained evidence",
+			intent: "Replacing the first retained line",
+		},
+		{ name: "read", args: { path: "retained-edit.ts" }, intent: "Reading source before second edit" },
+		{
+			name: "edit",
+			args: {},
+			intent: "Expanding the second retained line",
 		},
 		{
 			name: "grep",
@@ -909,8 +927,12 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 	];
 	const writeReturned = Promise.withResolvers<void>();
 	const continueToRead = Promise.withResolvers<void>();
-	const editReturned = Promise.withResolvers<string>();
+	const firstEditReturned = Promise.withResolvers<string>();
+	const continueToSecondRead = Promise.withResolvers<void>();
+	const secondEditReturned = Promise.withResolvers<string>();
 	const continueToGrep = Promise.withResolvers<void>();
+	const grepReturned = Promise.withResolvers<void>();
+	const continueToFinalRead = Promise.withResolvers<void>();
 	const waiting = Promise.withResolvers<void>();
 	const startStream = Promise.withResolvers<void>();
 	const opened = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
@@ -934,6 +956,8 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 				configuration: {
 					display: { mode: "compact" },
 					hideThinkingBlock: true,
+					// Keep both reads in the journal to isolate display mode changes from history maintenance.
+					compaction: { supersedeReads: false },
 					// Skill optimization has an independent transient HUD row. This case
 					// isolates redraws that have no visible status change.
 					skills: { enabled: false },
@@ -956,25 +980,29 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 					if (step > 0) {
 						const output = result(request, actions[step - 1]!);
 						if (step === 1) {
-							expect(output).toContain("Successfully wrote");
+							expect(output).toContain(writeReceipt);
 							writeReturned.resolve();
 							await continueToRead.promise;
 						}
-						if (step === 2) {
-							const header = output.match(/\[retained-edit\.ts#[A-F0-9]{4}\]/u)?.[0];
-							if (!header || !output.includes(intermediate))
-								throw new Error(`Missing written source hashline or content: ${output}`);
-							actions[2]!.args.input = `*** Begin Patch\n${header}\nPUT 1.=1:\n${edited
-								.split("\n")
-								.map(line => `+${line}`)
-								.join("\n")}\n*** End Patch\n`;
-						}
+						if (step === 2) actions[2]!.args.input = patchLine(output, 1, writtenHead, [firstEdit]);
 						if (step === 3) {
-							editReturned.resolve(output);
+							firstEditReturned.resolve(output);
+							await continueToSecondRead.promise;
+						}
+						if (step === 4) {
+							expect(output).toContain(firstEdit);
+							actions[4]!.args.input = patchLine(output, 2, writtenTail, editLines);
+						}
+						if (step === 5) {
+							secondEditReturned.resolve(output);
 							await continueToGrep.promise;
 						}
-						if (step === 4) expect(output).toContain("CLI_GREPPED");
-						if (step === 5) expect(output).toContain("CLI_READ_RESULT");
+						if (step === 6) {
+							expect(output).toContain("CLI_GREPPED");
+							grepReturned.resolve();
+							await continueToFinalRead.promise;
+						}
+						if (step === 7) expect(output).toContain("CLI_READ_RESULT");
 					}
 					if (step < actions.length) return { tools: [call(request, actions[step++]!)] };
 					waiting.resolve();
@@ -997,15 +1025,18 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 			[100, 80],
 			async ({ agentDir, cwd, provider, tui, screen }) => {
 				screen.start();
-				const fileCard = (text: string) =>
-					text.match(/^[^\n]*╭─+[^\n]*retained-edit\.ts[^\n]*\n[\s\S]*?^ *╰─+[^\n]*/mu)?.[0] ?? "";
+				const fileCards = (text: string) =>
+					text.match(/^[^\n]*╭─+[^\n]*retained-edit\.ts[^\n]*\n[\s\S]*?^ *╰─+[^\n]*/gmu) ?? [];
 				const collapsedDiff = (text: string) => {
-					const card = fileCard(text);
+					const [card, extra] = fileCards(text);
 					return (
-						card.includes(original) &&
-						card.includes("EDIT_CLI_01") &&
+						card !== undefined &&
+						extra === undefined &&
+						card.includes(`-2│${writtenTail}`) &&
+						card.includes(`+│${editHead}`) &&
 						!card.includes(editTail) &&
-						!card.includes(intermediate)
+						!card.includes(writtenHead) &&
+						!card.includes(original)
 					);
 				};
 				await eventually(
@@ -1015,24 +1046,51 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 				await tui("submit", "CLI_EDIT_PROMPT");
 				await writeReturned.promise;
 				await eventually(
-					() => screen.checkpoint("compact Write card shows the confirmed before and after"),
+					() => screen.checkpoint("compact Write shows the receipt without a synthesized card"),
 					({ screen: text }) =>
-						fileCard(text).includes(original) &&
-						fileCard(text).includes(intermediate) &&
-						!text.includes("Successfully wrote"),
+						text.split("\n").some(line => line.trimStart().startsWith("已完成 · write")) &&
+						text.includes(writeReceipt) &&
+						fileCards(text).length === 0 &&
+						!text.includes(original) &&
+						!text.includes(writtenHead),
 				);
 				continueToRead.resolve();
-				const editOutput = await editReturned.promise;
-				expect(editOutput).toContain(`46:${editTail}`);
-				expect(editOutput).not.toContain(original);
+				const firstOutput = await firstEditReturned.promise;
+				expect(firstOutput).toContain(`1:${firstEdit}`);
+				expect(firstOutput).not.toContain(original);
 				await eventually(
-					() => screen.checkpoint("compact Edit card shows the net change rather than its intermediate input"),
-					frame => collapsedDiff(frame.screen) && frame.screen.includes(intermediate),
+					() => screen.checkpoint("compact first Edit replaces the written line, not the pre-Write file"),
+					({ screen: text }) => {
+						const [card, extra] = fileCards(text);
+						return (
+							card !== undefined &&
+							extra === undefined &&
+							card.includes(`-1│${writtenHead}`) &&
+							card.includes(`+│${firstEdit}`) &&
+							!card.includes(`-2│${writtenTail}`) &&
+							!card.includes(original)
+						);
+					},
+				);
+				continueToSecondRead.resolve();
+				const secondOutput = await secondEditReturned.promise;
+				expect(secondOutput).toContain(`${editLines.length + 1}:${editTail}`);
+				expect(secondOutput).not.toContain(original);
+				await eventually(
+					() => screen.checkpoint("compact folds to the second Edit of the same file"),
+					frame => collapsedDiff(frame.screen),
 				);
 				continueToGrep.resolve();
+				await grepReturned.promise;
+				await eventually(
+					() => screen.checkpoint("grep output does not replace the current-turn diff"),
+					frame => collapsedDiff(frame.screen) && frame.screen.includes("CLI_GREPPED"),
+				);
+				continueToFinalRead.resolve();
 				await waiting.promise;
-				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(`${edited}\n`);
-				const hiddenTools = /retained-(?:edit\.ts|search\.txt)|EDIT_CLI_\d{2}|const original = 0;|CLI_GREPPED/u;
+				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(edited);
+				const hiddenTools =
+					/retained-(?:edit\.ts|search\.txt)|EDIT_CLI_\d{2}|const (?:original|written|expansionSlot|editedFirst) =|CLI_GREPPED/u;
 				await tui("type", draft);
 				await eventually(
 					() => screen.checkpoint("read output does not replace the current-turn diff"),
@@ -1040,13 +1098,27 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 				);
 				await tui("key", "press", "Ctrl+O");
 				await eventually(
-					() => screen.checkpoint("Ctrl+O expands the current-turn net diff"),
-					frame => frame.screen.includes("修改 retained-edit.ts") && frame.screen.includes(original),
+					() => screen.checkpoint("Ctrl+O expands both original Edit diffs in tool order"),
+					({ screen: text }) => {
+						const [, first, second, ...extra] = text.split("修改 retained-edit.ts");
+						return (
+							extra.length === 0 &&
+							first !== undefined &&
+							second !== undefined &&
+							first.includes(`-1│${writtenHead}`) &&
+							first.includes(`+│${firstEdit}`) &&
+							!first.includes(editHead) &&
+							second.includes(`-2│${writtenTail}`) &&
+							second.includes(`+│${editHead}`) &&
+							!second.includes(writtenHead) &&
+							!text.includes(original)
+						);
+					},
 				);
 				await tui("key", "press", "End");
 				await eventually(
-					() => screen.checkpoint("the expanded net diff scrolls to its last change"),
-					frame => frame.screen.includes(editTail),
+					() => screen.checkpoint("the expanded diffs scroll to the second Edit's last change"),
+					frame => frame.screen.includes(`+${editLines.length + 1}│${editTail}`),
 				);
 				await tui("key", "press", "Escape");
 				const baseline = await eventually(
@@ -1057,9 +1129,9 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 						nativeDraftMatches(frame.screen, draft, frame.cursor),
 				);
 				expect(baseline.screen).not.toContain("本轮改动");
-				const cardHead = fileCard(baseline.screen).split("\n", 1)[0];
+				const cardHead = fileCards(baseline.screen)[0]!.split("\n", 1)[0];
 				expect(cardHead).not.toMatch(/\+46\b|-1\b/u);
-				const markers = [`${MARKER}_CHAT_READY`, "CLI_EDIT_PROMPT", original, "EDIT_CLI_01", "CLI_READ_RESULT"];
+				const markers = [`${MARKER}_CHAT_READY`, "CLI_EDIT_PROMPT", writtenTail, editHead, "CLI_READ_RESULT"];
 				const rows = (text: string) =>
 					markers.map(marker => {
 						const matches = text
@@ -1123,11 +1195,20 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 					}
 					return undefined;
 				}, Boolean))!;
-				const receipts = ["Successfully wrote", intermediate, editTail, "CLI_GREPPED", "CLI_READ_RESULT"];
+				const receipts = [
+					writeReceipt,
+					writtenHead,
+					firstEdit,
+					firstEdit,
+					editTail,
+					"CLI_GREPPED",
+					"CLI_READ_RESULT",
+				];
 				for (const [index, marker] of receipts.entries()) {
 					const output = recordedResult(completed.history, actions[index]!.intent);
 					expect(output.isError).toBe(false);
 					expect(contentText(output.content)).toContain(marker);
+					if (index === 0) expect(output.details).not.toHaveProperty("diff");
 				}
 				const requests = provider.requests.length;
 				await tui("key", "press", "Ctrl+C");
@@ -1140,9 +1221,10 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 				const detailed = await eventually(
 					() => screen.checkpoint("detailed edit initially collapsed"),
 					frame =>
-						frame.screen.includes(intermediate) &&
-						frame.screen.includes("EDIT_CLI_01") &&
-						!frame.screen.includes("EDIT_CLI_46") &&
+						frame.screen.includes(writtenHead) &&
+						frame.screen.includes(firstEdit) &&
+						frame.screen.includes(editHead) &&
+						!frame.screen.includes(editTail) &&
 						frame.screen.includes("retained-read.txt"),
 				);
 				expect(detailed.screen).toContain("retained-search.txt");
@@ -1150,12 +1232,12 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 				await tui("key", "press", "Ctrl+O");
 				await eventually(
 					() => screen.checkpoint("detailed edit expanded"),
-					frame => frame.screen.includes(intermediate) && frame.screen.includes("EDIT_CLI_46"),
+					frame => frame.screen.includes(writtenTail) && frame.screen.includes(editTail),
 				);
 				await tui("key", "press", "Ctrl+O");
 				await eventually(
 					() => screen.checkpoint("detailed edit collapsed again"),
-					frame => frame.screen.includes("EDIT_CLI_01") && !frame.screen.includes("EDIT_CLI_46"),
+					frame => frame.screen.includes(editHead) && !frame.screen.includes(editTail),
 				);
 				await tui("submit", "/display clean");
 				await tui("expect", "text", "clean", "--timeout", "30000");
@@ -1186,7 +1268,7 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 				expect(restored.screen).not.toContain("retained-search.txt");
 				expect(provider.requests).toHaveLength(requests);
 				expect(messages(await journal(completed.file))).toEqual(completed.history);
-				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(`${edited}\n`);
+				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(edited);
 				await tui("submit", "CLI_FOLLOWING_TURN");
 				await eventually(
 					() => screen.checkpoint("a new turn clears the diff without replaying file cards into history"),
@@ -1197,7 +1279,9 @@ test("compact shows the current turn's real Write/Edit net diff through later to
 		);
 	} finally {
 		continueToRead.resolve();
+		continueToSecondRead.resolve();
 		continueToGrep.resolve();
+		continueToFinalRead.resolve();
 		startStream.resolve();
 		if (streamController && streamController.desiredSize !== null) {
 			try {

@@ -20,7 +20,7 @@ import type {
 	PreparedExtension,
 } from "../extensibility/extensions/types";
 import type { Skill, SkillRediscoveryHost } from "../extensibility/skills";
-import type { LocalGoalModeState, GoalRuntime } from "../goals";
+import type { GoalModeState, GoalRuntime } from "../goals";
 import { GoalTool } from "../goals/tools/goal-tool";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
@@ -30,7 +30,6 @@ import type { MCPManagerApi, MCPToolScope } from "../mcp";
 import { MEMORY_BACKEND_TOOL_NAMES } from "../memory-backend/tool-names";
 import type { MnemopiSessionState } from "../mnemopi/state";
 import type { PlanModeState } from "../plan-mode/state";
-import type { ApprovedPlanChecks } from "../plan-mode/verification";
 import type { CallContext, SpotlightSession } from "../spotlight/types";
 import type { AgentLifecycleApi } from "../registry/agent-lifecycle";
 import type { AgentRegistryApi } from "../registry/agent-registry";
@@ -85,7 +84,6 @@ import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import { type PlanProposalHandler, specialToolCommands } from "./resolve";
 import { SecurityScanTool } from "./security-scan";
-import { SpecVerifyTool } from "./spec-verify";
 import { supportsExternalThinking, ThinkTool } from "./think";
 import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
@@ -501,12 +499,8 @@ export interface ToolSession {
 	getWorkspaceModeSnapshot?: () => Promise<WorkspaceModeState>;
 	/** Path of the session's active plan reference (e.g. `local://<title>.md`); defaults to `local://PLAN.md`. */
 	getPlanReferencePath?: () => string;
-	/** Exact executable checks inherited from the approval at child dispatch. */
-	approvedPlanChecks?: ApprovedPlanChecks;
-	/** Snapshot available for dispatching descendants, not populated from prompt text. */
-	getApprovedPlanChecks?: () => ApprovedPlanChecks | undefined;
 	/** Goal mode state (if active or paused) */
-	getGoalModeState?: () => LocalGoalModeState | undefined;
+	getGoalModeState?: () => GoalModeState | undefined;
 	/** Goal runtime for the active agent session. */
 	getGoalRuntime?: () => GoalRuntime | undefined;
 	/** Get cumulative session usage statistics (input/output tokens, cost). */
@@ -673,7 +667,6 @@ export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {
 	think: () => new ThinkTool(),
 	yield: s => new YieldTool(s),
 	goal: s => new GoalTool(s),
-	spec_verify: s => new SpecVerifyTool(s),
 };
 
 export type ToolName = BuiltinToolName;

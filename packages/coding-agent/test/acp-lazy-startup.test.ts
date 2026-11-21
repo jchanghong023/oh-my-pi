@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import * as path from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -6,6 +6,7 @@ import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { clearOmpExtensionCliRoots } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
 import { createAcpConnection } from "@oh-my-pi/pi-coding-agent/modes/acp/acp-mode";
+import * as rpcInputModule from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-input";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -21,6 +22,12 @@ import {
 	type SessionNotification,
 } from "@oh-my-pi/pi-utils/acp";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+
+import { cfgAsyncEnabled, cfgAsyncMaxJobs } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import {
+	cfgBashAutoBackgroundEnabled,
+	cfgBashAutoBackgroundThresholdMs,
+} from "@oh-my-pi/pi-coding-agent/exec/settings";
 
 const TEST_MODEL: Model = buildModel({
 	id: "claude-sonnet-4-20250514",
@@ -180,6 +187,71 @@ afterEach(() => {
 });
 
 describe("ACP lazy startup", () => {
+	it("applies schema defaults for ACP background jobs", async () => {
+		const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
+
+		type ObservedBackgroundSettings = {
+			asyncEnabled: boolean;
+			asyncMaxJobs: number;
+			bashAutoBackground: boolean;
+			bashAutoBackgroundThresholdMs: number;
+		};
+
+		const runAcpStartup = async (settings: Settings): Promise<ObservedBackgroundSettings> => {
+			const cwd = startupDir.path();
+			let observed: ObservedBackgroundSettings | undefined;
+			const stopMessage = "stop test ACP mode";
+			try {
+				await runRootCommand(
+					{
+						mode: "acp",
+						messages: [],
+						fileArgs: [],
+						unknownFlags: new Map(),
+						unrecognizedFlags: [],
+						invalidFlagValues: [],
+						noSkills: true,
+						noRules: true,
+						noTools: true,
+						noLsp: true,
+						sessionDir: cwd,
+					},
+					[],
+					{
+						discoverAuthStorage: async () => startupAuthStorage,
+						settings,
+						runAcpMode: async () => {
+							observed = {
+								asyncEnabled: cfgAsyncEnabled.get(settings),
+								asyncMaxJobs: cfgAsyncMaxJobs.get(settings),
+								bashAutoBackground: cfgBashAutoBackgroundEnabled.get(settings),
+								bashAutoBackgroundThresholdMs: cfgBashAutoBackgroundThresholdMs.get(settings),
+							};
+							throw new Error(stopMessage);
+						},
+					},
+				);
+			} catch (error) {
+				if (!(error instanceof Error) || error.message !== stopMessage) {
+					throw error;
+				}
+			}
+
+			if (!observed) {
+				throw new Error("Expected ACP mode to start");
+			}
+			return observed;
+		};
+
+		// An unset ACP config observes the background-job schema defaults.
+		await expect(runAcpStartup(Settings.isolated())).resolves.toEqual({
+			asyncEnabled: true,
+			asyncMaxJobs: 32,
+			bashAutoBackground: true,
+			bashAutoBackgroundThresholdMs: 60000,
+		});
+	});
+
 	it("honors explicit host-defaulted and todo settings for protocol hosts", async () => {
 		// Regression for #3207: in RPC/ACP startup, runtime overrides applied via
 		// `applyDefaultSettingOverrides` previously clobbered any explicitly
@@ -273,8 +345,15 @@ describe("ACP lazy startup", () => {
 			return observed;
 		};
 
-		for (const mode of ["rpc", "rpc-ui", "acp"] as const) {
-			await expect(runProtocolStartup(mode)).resolves.toEqual({ ...explicit, ...rpcOnlyExplicit });
+		const claimRpcInput = spyOn(rpcInputModule, "claimRpcInput").mockImplementation(
+			() => new ReadableStream<Uint8Array>(),
+		);
+		try {
+			for (const mode of ["rpc", "rpc-ui", "acp"] as const) {
+				expect(await runProtocolStartup(mode)).toEqual({ ...explicit, ...rpcOnlyExplicit });
+			}
+		} finally {
+			claimRpcInput.mockRestore();
 		}
 	});
 
@@ -334,15 +413,13 @@ describe("ACP lazy startup", () => {
 		}
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"applies CLI runtime API keys after ACP lazy session creation resolves extension models",
-		async () => {
-			using tempDir = TempDir.createSync("@omp-acp-lazy-api-key-");
-			const cwd = tempDir.path();
+	it("applies CLI runtime API keys after ACP lazy session creation resolves extension models", async () => {
+		using tempDir = TempDir.createSync("@omp-acp-lazy-api-key-");
+		const cwd = tempDir.path();
 
-			await Bun.write(
-				path.join(cwd, "runtime-provider.ts"),
-				`export default function(pi) {
+		await Bun.write(
+			path.join(cwd, "runtime-provider.ts"),
+			`export default function(pi) {
 	pi.registerProvider("runtime-provider", {
 		baseUrl: "https://runtime.example.com/v1",
 		apiKey: "extension-key",
@@ -359,67 +436,65 @@ describe("ACP lazy startup", () => {
 	});
 }
 `,
+		);
+
+		const authStorage = createInMemoryAuthStorage();
+		try {
+			const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
+			const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
+			const { createAgentSession } = await import("@oh-my-pi/pi-coding-agent/sdk");
+			let session: AgentSession | undefined;
+			let sessionHasUI: boolean | undefined;
+			let deferredUsageReserveConfirmation: boolean | undefined;
+
+			const stopped = runRootCommand(
+				{
+					mode: "acp",
+					apiKey: "cli-runtime-key",
+					messages: [],
+					fileArgs: [],
+					unknownFlags: new Map(),
+					unrecognizedFlags: [],
+					invalidFlagValues: [],
+					noSkills: true,
+					noRules: true,
+					noTools: true,
+					noLsp: true,
+					sessionDir: cwd,
+					extensions: [path.join(cwd, "runtime-provider.ts")],
+					model: "runtime-provider/runtime-model",
+				},
+				[],
+				{
+					discoverAuthStorage: async () => authStorage,
+					createAgentSession: options => {
+						const sessionOptions = options ?? {};
+						sessionHasUI = sessionOptions.hasUI;
+						deferredUsageReserveConfirmation = sessionOptions.deferUsageReserveConfirmation;
+						return createAgentSession({
+							...sessionOptions,
+							workspaceTree: sessionOptions.workspaceTree ?? emptyWorkspaceTree(sessionOptions.cwd ?? cwd),
+						});
+					},
+					settings,
+					runAcpMode: async createAcpSession => {
+						session = (await createAcpSession(cwd)).session;
+						throw new Error("stop test ACP mode");
+					},
+				},
 			);
+			await expect(stopped).rejects.toThrow("stop test ACP mode");
 
-			const authStorage = createInMemoryAuthStorage();
-			try {
-				const settings = Settings.isolated();
-				const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
-				const { createAgentSession } = await import("@oh-my-pi/pi-coding-agent/sdk");
-				let session: AgentSession | undefined;
-				let sessionHasUI: boolean | undefined;
-				let deferredUsageReserveConfirmation: boolean | undefined;
-
-				const stopped = runRootCommand(
-					{
-						mode: "acp",
-						apiKey: "cli-runtime-key",
-						messages: [],
-						fileArgs: [],
-						unknownFlags: new Map(),
-						unrecognizedFlags: [],
-						invalidFlagValues: [],
-						noSkills: true,
-						noRules: true,
-						noTools: true,
-						noLsp: true,
-						sessionDir: cwd,
-						extensions: [path.join(cwd, "runtime-provider.ts")],
-						model: "runtime-provider/runtime-model",
-					},
-					[],
-					{
-						discoverAuthStorage: async () => authStorage,
-						createAgentSession: options => {
-							const sessionOptions = options ?? {};
-							sessionHasUI = sessionOptions.hasUI;
-							deferredUsageReserveConfirmation = sessionOptions.deferUsageReserveConfirmation;
-							return createAgentSession({
-								...sessionOptions,
-								workspaceTree: sessionOptions.workspaceTree ?? emptyWorkspaceTree(sessionOptions.cwd ?? cwd),
-							});
-						},
-						settings,
-						runAcpMode: async createAcpSession => {
-							session = (await createAcpSession(cwd)).session;
-							throw new Error("stop test ACP mode");
-						},
-					},
-				);
-				await expect(stopped).rejects.toThrow("stop test ACP mode");
-
-				if (!session?.model) {
-					throw new Error("Expected extension model to resolve");
-				}
-				expect(session.model.provider).toBe("runtime-provider");
-				expect(await session.modelRegistry.getApiKey(session.model)).toBe("cli-runtime-key");
-				expect(sessionHasUI).toBe(false);
-				expect(deferredUsageReserveConfirmation).toBe(true);
-				await session.dispose();
-			} finally {
-				authStorage.close();
+			if (!session?.model) {
+				throw new Error("Expected extension model to resolve");
 			}
-		},
-		15_000,
-	);
+			expect(session.model.provider).toBe("runtime-provider");
+			expect(await session.modelRegistry.getApiKey(session.model)).toBe("cli-runtime-key");
+			expect(sessionHasUI).toBe(false);
+			expect(deferredUsageReserveConfirmation).toBe(true);
+			await session.dispose();
+		} finally {
+			authStorage.close();
+		}
+	}, 15_000);
 });

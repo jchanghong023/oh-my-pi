@@ -34,7 +34,7 @@ import type {
 	LocalAgentSessionEventListener,
 	ModelStage,
 } from "./agent-session-events";
-import type { TurnFileChanges } from "./latest-turn-file-changes";
+import type { TurnToolDiff } from "./latest-turn-tool-diffs";
 import type {
 	AgentSessionDisposeOptions,
 	AsyncJobInspection,
@@ -334,7 +334,8 @@ export interface AgentViewSession extends AgentSessionHandle {
 	getLiveToolOutputPreview(project?: LiveToolOutputProjection): LiveToolOutputPreview | undefined;
 	/** Latest view-only model stage, including before the first response frame. */
 	readonly modelStage: ModelStage | null;
-	getLatestTurnFileChanges(): TurnFileChanges | undefined;
+	/** Native file diffs in result order; the array is appended to until the next turn resets it. */
+	getLatestTurnToolDiffs(): readonly TurnToolDiff[] | undefined;
 	/** Await persistence of messages already emitted. */
 	settleInFlightMessagePersistence(): Promise<void>;
 	/** Session context for transcript rendering. */

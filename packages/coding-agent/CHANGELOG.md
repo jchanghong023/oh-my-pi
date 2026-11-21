@@ -5,6 +5,10 @@
 ### Changed
 
 - OpenWiki's read-only queries use Bash tool commands when `tools.commands` is enabled and Bash is available; otherwise they remain top-level tools.
+- Plan approval, ACP sessions, and ordinary Goal use upstream behavior again. Fork-specific unattended orchestration remains available through `/goal-autopilot`.
+- Removed Plan-specific verification blocks and `spec_verify`; specification executors delegate approved checks through native tasks.
+- RPC slash-command discovery follows upstream; ACP still hides commands that its builtins would intercept.
+- Compact mode shows the original tool diffs in completion order instead of merging writes. The preview and `Ctrl+O` controls are unchanged.
 
 ### Fixed
 

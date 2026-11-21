@@ -251,7 +251,7 @@ describe("createAgentSession session storage isolation", () => {
 			const dropError = new Error("delete denied");
 			spyOn(session.sessionManager, "dropSession").mockRejectedValue(dropError);
 
-			await expect(session.newSession({ drop: true, throwOnDropFailure: true })).rejects.toBe(dropError);
+			await expect(session.newSession({ drop: true })).resolves.toBe(true);
 			const newFile = session.sessionFile;
 			if (!newFile) throw new Error("Expected new session file");
 			expect(newFile).not.toBe(oldFile);

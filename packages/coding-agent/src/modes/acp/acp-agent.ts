@@ -45,7 +45,7 @@ import {
 	type Usage,
 } from "@oh-my-pi/pi-utils/acp";
 import { disableProvider, enableProvider } from "../../capability";
-import { Settings, withActiveSettings } from "../../config/settings";
+import { Settings } from "../../config/settings";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionUIContext,
@@ -68,13 +68,7 @@ import { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-obser
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { normalizePlanTitle, type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import { autosaveApprovedPlan } from "../../plan-mode/plan-autosave";
-import {
-	type ApprovedPlanChecks,
-	planVerificationChecks,
-	recordApprovedPlanReference,
-	verificationApprovalDetails,
-} from "../../plan-mode/verification";
-import type { AgentSession, LocalAgentSessionEvent } from "../../session/agent-session";
+import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { BlobStore, resolveImageDataSync } from "../../session/blob-store";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import type { UsageStatistics } from "../../session/session-entries";
@@ -82,7 +76,7 @@ import type { SessionInfo as StoredSessionInfo } from "../../session/session-lis
 import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
-import { getDefaultLocalSttModel, STT_MODELS } from "../../stt/models";
+import { DEFAULT_STT_MODEL_KEY, STT_MODELS } from "../../stt/models";
 import { refreshAgentDiscovery } from "../../task";
 import { sumSubagentTreeCost } from "../agent-hub-runtime";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
@@ -118,7 +112,7 @@ import {
 } from "./acp-event-mapper";
 import { ACP_TERMINAL_AUTH_FLAG } from "./terminal-auth";
 
-import { cfgDisabledExtensions, cfgExtensions, cfgSkills } from "../../extensibility/settings";
+import { cfgDisabledExtensions, cfgExtensions } from "../../extensibility/settings";
 import { cfgMcpStartupTimeoutMs } from "../../mcp/settings";
 import { cfgPlanEnabled } from "../../plan-mode/settings";
 
@@ -492,7 +486,7 @@ type AcpSpeechTtsModelOption = AcpSpeechOption & {
 function buildAcpSpeechModelsCatalog(): Record<string, unknown> {
 	const localSelector = (modelId: string) => `local/${modelId}`;
 	const defaultSpeechModel = localSelector(TTS_LOCAL_MODELS[0].key);
-	const defaultDictationModel = localSelector(getDefaultLocalSttModel().key);
+	const defaultDictationModel = localSelector(DEFAULT_STT_MODEL_KEY);
 	const voices = TTS_LOCAL_VOICE_OPTIONS.map(({ value, label }) => ({ value, label }));
 	// Speed settings are numeric, so presets are advertised as numbers clients can write back as-is.
 	const speeds = TTS_SPEED_OPTIONS.map(({ value, label }) => ({ value: Number(value), label }));
@@ -1295,7 +1289,7 @@ export class AcpAgent implements Agent {
 					promise: pendingPrompt.promise,
 				};
 
-				record.promptTurn.unsubscribe = record.session.subscribeLocal(event => {
+				record.promptTurn.unsubscribe = record.session.subscribe(event => {
 					this.#trackPromptEvent(record, event);
 				});
 
@@ -1373,7 +1367,7 @@ export class AcpAgent implements Agent {
 		}
 	}
 
-	#trackPromptEvent(record: ManagedSessionRecord, event: LocalAgentSessionEvent): void {
+	#trackPromptEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
 		const handling = this.#handlePromptEvent(record, event).catch((error: unknown) => {
 			logger.warn("ACP prompt event handler failed", { error });
 		});
@@ -1425,11 +1419,7 @@ export class AcpAgent implements Agent {
 			settings: record.session.settings,
 			cwd: record.session.sessionManager.getCwd(),
 			signal: promptTurn?.abortController.signal,
-			ui:
-				this.#clientCapabilities?.elicitation?.form != null
-					? createAcpExtensionUiContext(this.#connection, () => record.protocolSessionId, this.#clientCapabilities)
-					: undefined,
-			output: (output, level) => this.#emitCommandOutput(record, output, level),
+			output: output => this.#emitCommandOutput(record, output),
 			refreshCommands: () => this.#emitAvailableCommandsUpdate(record),
 			reloadPlugins: () => this.#reloadPluginState(record),
 			// `/mcp reauth` writes config-file credentials: reconnect the live
@@ -1532,7 +1522,9 @@ export class AcpAgent implements Agent {
 			return false;
 		}
 		const skill = record.session.skills.find(candidate => candidate.name === parsed.name);
-		if (!skill) return false;
+		if (!skill) {
+			return false;
+		}
 		const built = await record.session.buildUserSkillPrompt(skill, parsed);
 		await record.session.promptCustomMessage(
 			{
@@ -1704,25 +1696,15 @@ export class AcpAgent implements Agent {
 				return { reports: reports ?? [] };
 			}
 			case "_omp/extensions": {
-				const session =
-					typeof params.sessionId === "string" ? this.#getSessionRecord(params.sessionId).session : undefined;
-				const cwd = session?.sessionManager.getCwd() ?? (typeof params.cwd === "string" ? params.cwd : undefined);
-				const sm = session?.settings ?? (cwd ? await Settings.loadReadOnly({ cwd }) : await Settings.init());
+				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
+				const sm = cwd ? await Settings.loadReadOnly({ cwd }) : await Settings.init();
 				const disabledIds = cfgDisabledExtensions.get(sm);
-				const extensions = await withActiveSettings(sm, () =>
-					loadAllExtensions(
-						cwd,
-						disabledIds,
-						session?.effectiveExtensionRoots ?? {
-							explicit: [],
-							mode: "merge",
-							configured: cfgExtensions.get(sm),
-							configuredLevel: sm.extensionsSourceLevel(),
-						},
-						undefined,
-						cfgSkills.get(sm),
-					),
-				);
+				const extensions = await loadAllExtensions(cwd, disabledIds, {
+					explicit: [],
+					mode: "merge",
+					configured: cfgExtensions.get(sm),
+					configuredLevel: sm.extensionsSourceLevel(),
+				});
 				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
 			}
 			case "_omp/extensions/toggle": {
@@ -1974,7 +1956,7 @@ export class AcpAgent implements Agent {
 		// reconfiguration's `refreshMCPTools` rebuild renders its instructions.
 		session.setMcpServerInstructionsSource(() => record.mcpManager?.getServerInstructions());
 		try {
-			const unsubscribeEvents = session.subscribeLocal(event => {
+			const unsubscribeEvents = session.subscribe(event => {
 				this.#handleLifetimeEvent(record, event);
 			});
 			record.lifetimeUnsubscribe = unsubscribeEvents;
@@ -2017,7 +1999,7 @@ export class AcpAgent implements Agent {
 		};
 	}
 
-	#handleLifetimeEvent(record: ManagedSessionRecord, event: LocalAgentSessionEvent): void {
+	#handleLifetimeEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
 		const sessionId = record.protocolSessionId;
 		let notification: AcpCompactionNotification;
 		if (event.type === "auto_compaction_start") {
@@ -2123,7 +2105,7 @@ export class AcpAgent implements Agent {
 		return storedSession.path;
 	}
 
-	async #handlePromptEvent(record: ManagedSessionRecord, event: LocalAgentSessionEvent): Promise<void> {
+	async #handlePromptEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
 		const promptTurn = record.promptTurn;
 		if (!promptTurn || promptTurn.settled || promptTurn.cancelRequested) {
 			return;
@@ -2207,7 +2189,7 @@ export class AcpAgent implements Agent {
 	 */
 	async #flushMissedFinalAssistantText(
 		record: ManagedSessionRecord,
-		event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>,
+		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
 	): Promise<void> {
 		const progress = record.liveMessageProgress;
 		if (!progress || progress.textEmitted) {
@@ -2246,7 +2228,7 @@ export class AcpAgent implements Agent {
 	 */
 	async #flushUnreportedTurnError(
 		record: ManagedSessionRecord,
-		event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>,
+		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
 	): Promise<void> {
 		const streamedDelivery = record.promptTurn?.errorTextDelivery;
 		if (streamedDelivery && (await streamedDelivery)) {
@@ -2287,7 +2269,7 @@ export class AcpAgent implements Agent {
 		await record.session.waitForIdle();
 	}
 
-	#prepareLiveAssistantMessage(record: ManagedSessionRecord, event: LocalAgentSessionEvent): void {
+	#prepareLiveAssistantMessage(record: ManagedSessionRecord, event: AgentSessionEvent): void {
 		if (
 			(event.type === "message_start" || event.type === "message_update" || event.type === "message_end") &&
 			event.message.role === "assistant" &&
@@ -2306,7 +2288,7 @@ export class AcpAgent implements Agent {
 	 * real progress instead of resurrecting a fresh one (which would double-emit
 	 * the final answer).
 	 */
-	#clearLiveAssistantMessageAfterEvent(record: ManagedSessionRecord, event: LocalAgentSessionEvent): void {
+	#clearLiveAssistantMessageAfterEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
 		if (event.type === "message_end" && event.message.role === "assistant") {
 			record.liveMessageId = undefined;
 			record.liveMessageProgress = undefined;
@@ -2352,7 +2334,7 @@ export class AcpAgent implements Agent {
 	}
 
 	#resolveStopReason(
-		event: Extract<LocalAgentSessionEvent, { type: "agent_end" }>,
+		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
 		cancelRequested: boolean,
 	): PromptResponse["stopReason"] {
 		if (cancelRequested) {
@@ -2379,11 +2361,7 @@ export class AcpAgent implements Agent {
 		}
 	}
 
-	async #emitCommandOutput(
-		record: ManagedSessionRecord,
-		text: string,
-		level?: "info" | "warning" | "error",
-	): Promise<void> {
+	async #emitCommandOutput(record: ManagedSessionRecord, text: string): Promise<void> {
 		if (!text) {
 			return;
 		}
@@ -2393,7 +2371,6 @@ export class AcpAgent implements Agent {
 				sessionUpdate: "agent_message_chunk",
 				content: { type: "text", text },
 				messageId: crypto.randomUUID(),
-				...(level ? { _meta: { level } } : {}),
 			},
 		});
 	}
@@ -2625,14 +2602,7 @@ export class AcpAgent implements Agent {
 			readPlan: url => this.#readAcpPlanFile(session, url),
 			listPlanFiles: () => this.#listAcpLocalPlanFiles(session),
 		});
-		const checks =
-			this.#clientCapabilities?.elicitation?.form != null ? planVerificationChecks(planContent) : undefined;
-		const approved = await this.#requestAcpPlanApprovalChoice(
-			record.protocolSessionId,
-			resolvedTitle,
-			planContent,
-			checks,
-		);
+		const approved = await this.#requestAcpPlanApprovalChoice(record.protocolSessionId, resolvedTitle, planContent);
 		const details: PlanApprovalDetails = {
 			planFilePath,
 			title: resolvedTitle,
@@ -2658,9 +2628,10 @@ export class AcpAgent implements Agent {
 		}
 		// Approved. Set the plan reference so the next turn injects the plan
 		// content as context (the file keeps its agent-chosen name — no rename),
-		recordApprovedPlanReference(session, planFilePath, checks);
+		session.setPlanReferencePath(planFilePath);
 		session.setPlanProposalHandler?.(null);
 		session.setPlanModeState(undefined);
+		session.sessionManager.appendModeChange("none", { approvedPlanFilePath: planFilePath });
 		let autosaveFailed = false;
 		try {
 			await autosaveApprovedPlan({
@@ -2752,12 +2723,7 @@ export class AcpAgent implements Agent {
 	 * confirmation surface available; without that, plan mode would strand
 	 * the agent (the bug this method exists to fix).
 	 */
-	async #requestAcpPlanApprovalChoice(
-		sessionId: string,
-		title: string,
-		planContent: string,
-		checks: ApprovedPlanChecks | undefined,
-	): Promise<boolean> {
+	async #requestAcpPlanApprovalChoice(sessionId: string, title: string, planContent: string): Promise<boolean> {
 		const supportsForm = this.#clientCapabilities?.elicitation?.form != null;
 		if (!supportsForm) return true;
 		// Include a short preview of the plan so the user has context in the
@@ -2765,7 +2731,7 @@ export class AcpAgent implements Agent {
 		// inline and a multi-thousand-line plan blows out the dialog.
 		const previewLines = planContent.split("\n").slice(0, 12).join("\n");
 		const ellipsis = planContent.split("\n").length > 12 ? "\n…" : "";
-		const message = `Approve plan "${title}" and start implementation?\n\n${previewLines}${ellipsis}${verificationApprovalDetails(checks)}`;
+		const message = `Approve plan "${title}" and start implementation?\n\n${previewLines}${ellipsis}`;
 		const value = await elicitFromAcpClient(
 			this.#connection,
 			sessionId,
@@ -3235,13 +3201,13 @@ export class AcpAgent implements Agent {
 		options: { includeStart?: boolean; toolArgs?: unknown } = {},
 	): SessionNotification[] {
 		const args = this.#buildReplayToolArgs(message.details);
-		const startEvent: LocalAgentSessionEvent = {
+		const startEvent: AgentSessionEvent = {
 			type: "tool_execution_start",
 			toolCallId: message.toolCallId,
 			toolName: message.toolName,
 			args,
 		};
-		const endEvent: LocalAgentSessionEvent = {
+		const endEvent: AgentSessionEvent = {
 			type: "tool_execution_end",
 			toolCallId: message.toolCallId,
 			toolName: message.toolName,

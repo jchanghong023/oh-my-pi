@@ -63,6 +63,7 @@ import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
 	disabledProviderIds,
+	expandRoleAlias,
 	getModelMatchPreferences,
 	resolveCliModel,
 	resolveConfiguredModelPatterns,
@@ -451,8 +452,7 @@ export async function submitInteractiveInput(
 	if (input.cancelled) {
 		return;
 	}
-	let customDispatched = true;
-	let customSubmissionFinished = false;
+	let autopilotSubmissionFinished = false;
 
 	try {
 		// Honor the submission's queue intent, defaulting to followUp. Reading
@@ -490,8 +490,7 @@ export async function submitInteractiveInput(
 				display: input.display ?? false,
 				attribution: "agent" as const,
 			};
-			customDispatched = false;
-			input.dispatched = customDispatched = await session.promptCustomMessage(message, { streamingBehavior });
+			input.dispatched = await session.promptCustomMessage(message, { streamingBehavior });
 		} else if (input.synthetic) {
 			await session.prompt(input.text, {
 				synthetic: true,
@@ -537,18 +536,14 @@ export async function submitInteractiveInput(
 		}
 	} catch (error: unknown) {
 		const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-		// showError clears the pending-input identity needed to release a refused
-		// continuation. Finish that claim first, without touching newer submissions.
-		if (!customDispatched) {
-			mode.finishPendingSubmission(input, false);
-			customSubmissionFinished = true;
+		// Preserve the autopilot reservation's identity before showing the error.
+		if (input.goalAutopilotContinuation && !input.dispatched) {
+			mode.finishPendingSubmission(input);
+			autopilotSubmissionFinished = true;
 		}
 		mode.showError(errorMessage);
 	} finally {
-		if (!customSubmissionFinished) {
-			if (customDispatched) mode.finishPendingSubmission(input);
-			else mode.finishPendingSubmission(input, false);
-		}
+		if (!autopilotSubmissionFinished) mode.finishPendingSubmission(input);
 		await mode.checkShutdownRequested();
 	}
 }
@@ -657,6 +652,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 					}
 				: undefined,
 			args.rawArgs,
+			"acp",
 		);
 		const effectiveArgs = reparsedArgs ?? args.parsedArgs;
 		if (effectiveArgs.invalidFlagValues.length > 0) {
@@ -1739,13 +1735,8 @@ export async function buildSessionOptions(
 		throw new Error("--plan-yolo-into requires --plan-yolo");
 	}
 	if (parsed.planYolo) {
-		const rolePattern = parsed.planYoloInto ?? "@smol";
-		const resolved = resolveCliModel({
-			cliModel: rolePattern,
-			modelRegistry,
-			settings: activeSettings,
-			preferences: modelMatchPreferences,
-		});
+		const rolePattern = expandRoleAlias(parsed.planYoloInto ?? "@smol", activeSettings);
+		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
 		if (resolved.warning) warn(resolved.warning);
 		if (resolved.error || !resolved.model) {
 			throw new Error(resolved.error ?? `Model "${parsed.planYoloInto ?? "@smol"}" not found`);

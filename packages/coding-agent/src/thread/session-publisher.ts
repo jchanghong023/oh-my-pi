@@ -57,7 +57,7 @@ import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { AgentSession } from "../session/agent-session";
 import type { LocalAgentSessionEvent } from "../session/agent-session-events";
 import type { AgentViewToolSchema } from "../session/agent-session-handle";
-import type { TurnFileChange, TurnFileChanges } from "../session/latest-turn-file-changes";
+import type { TurnToolDiff } from "../session/latest-turn-tool-diffs";
 import {
 	isHiddenUserCompanion,
 	isUserAuthoredQueuedMessage,
@@ -138,8 +138,8 @@ function findQueuedMessage(messages: Iterable<AgentMessage>, id: string): AgentM
 	return undefined;
 }
 
-/** View state diffed between flushes; live tool snapshots and turn-file deltas are handled separately. */
-type DiffedViewState = Omit<SessionViewState, "activeToolExecutionUpdates" | "liveToolOutput" | "turnFiles">;
+/** View state diffed between flushes; live tool output and native diffs are handled separately. */
+type DiffedViewState = Omit<SessionViewState, "activeToolExecutionUpdates" | "liveToolOutput" | "turnToolDiffs">;
 
 /** Live objects behind the wire copies of the heavy view fields; an unchanged source reuses its copy. */
 interface ViewSources {
@@ -214,9 +214,9 @@ export class SessionPublisher {
 	/** Last published view state; undefined until the current watch sent its snapshot. */
 	#view: DiffedViewState | undefined;
 	#viewSources: ViewSources | undefined;
-	#turnFiles?: TurnFileChanges;
-	#turnFilesRevision = -1;
-	readonly #publishedTurnFiles = new Map<string, TurnFileChange>();
+	/** Current turn and published prefix, kept across watches while main retains its mirror. */
+	#turnToolDiffs?: readonly TurnToolDiff[];
+	#publishedTurnToolDiffCount = 0;
 	/** Entries main holds (kept across watches), by identity, in order, and the body revision they were read at. */
 	#entries: SessionEntry[] = [];
 	#entriesRevision = 0;
@@ -231,8 +231,6 @@ export class SessionPublisher {
 		this.session = session;
 		this.#bridge = bridge;
 		this.#key = session.instanceKey;
-		// Collect writes from the start of a run, even before a TUI attaches.
-		session.getLatestTurnFileChanges();
 		this.#state = captureSessionState(session);
 		this.#publishedSource = session.messages;
 		this.#published = [...this.#publishedSource];
@@ -296,8 +294,6 @@ export class SessionPublisher {
 		}
 		this.#view = undefined;
 		this.#viewSources = undefined;
-		this.#turnFiles = undefined;
-		this.#publishedTurnFiles.clear();
 	}
 
 	/** Post `closed` and stop observing the session. Idempotent. */
@@ -439,25 +435,19 @@ export class SessionPublisher {
 		return { kind: "replace", entries: displayEntries(this.#entries, obfuscator) };
 	}
 
-	#captureTurnFiles(): SessionViewState["turnFiles"] {
-		const source = this.session.getLatestTurnFileChanges();
-		const reset = this.#turnFiles !== source;
-		if (!reset && this.#turnFilesRevision === source.revision) return undefined;
-		if (reset) this.#publishedTurnFiles.clear();
-		const entries: [string, TurnFileChange][] = [];
-		for (const [key, change] of source.files) {
-			if (this.#publishedTurnFiles.get(key) === change) continue;
-			this.#publishedTurnFiles.set(key, change);
-			entries.push([key, change]);
-		}
-		this.#turnFiles = source;
-		this.#turnFilesRevision = source.revision;
-		return toWireData({ reset, revision: source.revision, entries });
+	#captureTurnToolDiffs(): SessionViewState["turnToolDiffs"] {
+		const source = this.session.getLatestTurnToolDiffs();
+		const reset = this.#turnToolDiffs !== source;
+		const start = reset ? 0 : this.#publishedTurnToolDiffCount;
+		if (!reset && start === source.length) return undefined;
+		this.#turnToolDiffs = source;
+		this.#publishedTurnToolDiffCount = source.length;
+		return { reset, entries: source.slice(start) };
 	}
 
 	#publishView(): void {
 		const next = this.#captureView();
-		const turnFiles = this.#captureTurnFiles();
+		const turnToolDiffs = this.#captureTurnToolDiffs();
 		const previous = this.#view;
 		this.#view = next;
 		if (!previous) {
@@ -465,7 +455,7 @@ export class SessionPublisher {
 				...next,
 				activeToolExecutionUpdates: toWireData([...this.session.activeToolExecutionUpdates()]),
 				liveToolOutput: toWireData(this.session.getLiveToolOutputSnapshot()),
-				turnFiles,
+				turnToolDiffs,
 			};
 			this.#bridge.remote.notify("view", this.#key, state, this.#entriesDelta());
 			return;
@@ -483,8 +473,8 @@ export class SessionPublisher {
 			copyViewField(patch, next, field);
 			changed = true;
 		}
-		if (turnFiles) patch.turnFiles = turnFiles;
-		if (changed || turnFiles) this.#bridge.remote.notify("viewPatch", this.#key, patch);
+		if (turnToolDiffs) patch.turnToolDiffs = turnToolDiffs;
+		if (changed || turnToolDiffs) this.#bridge.remote.notify("viewPatch", this.#key, patch);
 	}
 
 	#captureView(): DiffedViewState {

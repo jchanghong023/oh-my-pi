@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,12 +10,6 @@ import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type { ClientBridge } from "@oh-my-pi/pi-coding-agent/session/client-bridge";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const FILE_CONTENT = "bridge write content\n";
@@ -52,32 +46,8 @@ function resultText(result: AgentToolResult): string {
 	return text.join("\n");
 }
 
-function expectWriteCard(args: { path: string; content: string }, result: AgentToolResult): void {
-	const previous = { ...chatTranscriptDisplayPreferences };
-	const ui = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} };
-	const card = new ToolExecutionComponent("write", args, {}, undefined, ui);
-	try {
-		card.updateResult(result, false);
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-		card.setToolActivityVisible(true);
-		const detailed = Bun.stripANSI(card.render(120).join("\n"));
-		expect(detailed).toContain(args.content.split("\n")[0]);
-
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
-		card.setToolActivityVisible(false);
-		expect(card.render(120)).toEqual([]);
-	} finally {
-		card.dispose();
-		setChatTranscriptDisplayPreferences(previous);
-	}
-}
-
 describe("write tool ACP fs routing", () => {
 	let tmpDir: string;
-
-	beforeAll(async () => {
-		await initTheme(false);
-	});
 
 	beforeEach(async () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-acp-fs-test-"));
@@ -132,62 +102,6 @@ describe("write tool ACP fs routing", () => {
 		expect(await Bun.file(filePath).text()).toBe(persisted);
 		expect(text).toContain(`[formatted.ts#${hashlineFileHash(persisted)}]`);
 		expect(text).not.toContain(`[formatted.ts#${hashlineFileHash(requested)}]`);
-	});
-
-	it("rejects bridge writes that leave disk unchanged and renders successful writes in detailed mode", async () => {
-		const filePath = path.join(tmpDir, "formatted-existing.ts");
-		const original = "function f() {\n\treturn 1;\n}\n";
-		await fs.writeFile(filePath, original);
-		const bridge: ClientBridge = {
-			capabilities: { writeTextFile: true },
-			writeTextFile: async ({ path: target, content }) => {
-				await fs.writeFile(target, content.replace(/^ {4}/gm, "\t"));
-			},
-		};
-		const tool = new WriteTool(createSession(tmpDir, { bridge }));
-		const same = { path: filePath, content: "function f() {\n    return 1;\n}\n" };
-		await expect(tool.execute("bridge-unchanged", same)).rejects.toThrow(
-			`write through the editor appeared successful but file content did not change on disk: ${filePath}`,
-		);
-		expect(await fs.readFile(filePath, "utf8")).toBe(original);
-
-		const changedArgs = { path: filePath, content: "function f() {\n    return 2;\n}\n" };
-		const changed = await tool.execute("bridge-changed", changedArgs);
-		expect(await fs.readFile(filePath, "utf8")).toBe("function f() {\n\treturn 2;\n}\n");
-		expectWriteCard(changedArgs, changed);
-	});
-
-	it("renders oversized and file URL write cards only in detailed mode", async () => {
-		const filePath = path.join(tmpDir, "large.txt");
-		const original = `before marker\n${`${"a".repeat(64)}\n`.repeat(510)}`;
-		await fs.writeFile(filePath, original);
-		const session = createSession(tmpDir);
-		const tool = new WriteTool(session);
-		const same = { path: filePath, content: original };
-		const unchanged = await tool.execute("large-unchanged", same);
-		expect(await fs.readFile(filePath, "utf8")).toBe(original);
-		expectWriteCard(same, unchanged);
-
-		const changedArgs = { path: filePath, content: `after_ marker\n${`${"b".repeat(64)}\n`.repeat(510)}` };
-		const changed = await tool.execute("large-changed", changedArgs);
-		expect(await fs.readFile(filePath, "utf8")).toBe(changedArgs.content);
-		expectWriteCard(changedArgs, changed);
-
-		const urlArgs = { path: "local://url.txt", content: "URL write marker\n" };
-		const urlPath = resolveLocalUrlToPath(urlArgs.path, {
-			getArtifactsDir: session.getArtifactsDir,
-			getSessionId: session.getSessionId,
-		});
-		const created = await tool.execute("url-created", urlArgs);
-		expect(await fs.readFile(urlPath, "utf8")).toBe(urlArgs.content);
-		expectWriteCard(urlArgs, created);
-		const sameUrl = await tool.execute("url-unchanged", urlArgs);
-		expect(await fs.readFile(urlPath, "utf8")).toBe(urlArgs.content);
-		expectWriteCard(urlArgs, sameUrl);
-		const updatedArgs = { ...urlArgs, content: "Updated URL write marker\n" };
-		const updated = await tool.execute("url-updated", updatedArgs);
-		expect(await fs.readFile(urlPath, "utf8")).toBe(updatedArgs.content);
-		expectWriteCard(updatedArgs, updated);
 	});
 
 	it("emits a progress snapshot before filesystem writes complete", async () => {

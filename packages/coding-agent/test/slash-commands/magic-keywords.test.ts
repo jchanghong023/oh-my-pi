@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	buildAvailableSlashCommands,
 	type AvailableCommandsSession,
+	toAcpAvailableCommands,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
@@ -9,13 +10,10 @@ import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-c
 
 describe("magic keyword public slash dispatch", () => {
 	it.each(["ultrathink", "orchestrate", "workflowz"])(
-		"expands /%s in both the public TUI and ACP paths",
+		"expands /%s in TUI and leaves ACP dispatch upstream",
 		async keyword => {
 			const runtime = { session: { model: undefined }, output: () => {} } as unknown as SlashCommandRuntime;
-			expect(await executeAcpBuiltinSlashCommand(`/${keyword}`, runtime)).toEqual({ prompt: keyword });
-			expect(await executeAcpBuiltinSlashCommand(`/${keyword}  task-marker-43d  `, runtime)).toEqual({
-				prompt: `${keyword} task-marker-43d`,
-			});
+			expect(await executeAcpBuiltinSlashCommand(`/${keyword} task-marker-43d`, runtime)).toBe(false);
 			let editor = `/${keyword} task-marker-43d`;
 			expect(
 				await executeBuiltinSlashCommand(editor, {
@@ -36,7 +34,7 @@ describe("magic keyword public slash dispatch", () => {
 });
 
 describe("public command inventory", () => {
-	it("does not advertise ACP custom or file names captured by a builtin colon-prefix or alias", async () => {
+	it("keeps upstream RPC discovery and hides builtin colon-prefix collisions from ACP clients", async () => {
 		const session = {
 			customCommands: [
 				{ command: { name: "model:company", description: "Unreachable shared shadow" } },
@@ -50,7 +48,10 @@ describe("public command inventory", () => {
 			{ name: "models:company", description: "Unreachable alias shadow", content: "body", source: "test" },
 			{ name: "review:file", description: "Reachable file command", content: "body", source: "test" },
 		]);
-		const names = commands.map(command => command.name);
+		const sources = Object.fromEntries(commands.map(command => [command.name, command.source]));
+		expect(sources["model:company"]).toBe("custom");
+		expect(sources["models:company"]).toBe("file");
+		const names = toAcpAvailableCommands(commands).map(command => command.name);
 		expect(names).not.toContain("model:company");
 		expect(names).not.toContain("models:company");
 		expect(names).toContain("review:company");
