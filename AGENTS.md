@@ -8,18 +8,18 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 ### Package Structure
 
-|Package|Description|
-|---|---|
-|`packages/ai`|Multi-provider LLM client with streaming support|
-|`packages/catalog`|Model catalog: bundled models.json, provider descriptors, model identity/classification|
-|`packages/agent`|Agent runtime with tool calling and state management|
-|`packages/coding-agent`|Main CLI application (primary focus)|
-|`packages/tui`|Terminal UI library with differential rendering|
-|`packages/natives`|Bindings for native text/image/grep operations|
-|`packages/stats`|Local observability dashboard (`omp stats`)|
-|`packages/omptype`|ArkType-compatible schema validation with a lazy JIT runtime|
-|`packages/utils`|Shared utilities (logger, streams, temp files)|
-|`crates/natives`|Rust crate `omp-natives` for performance-critical operations and N-API bindings|
+| Package                 | Description                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------- |
+| `packages/ai`           | Multi-provider LLM client with streaming support                                        |
+| `packages/catalog`      | Model catalog: bundled models.json, provider descriptors, model identity/classification |
+| `packages/agent`        | Agent runtime with tool calling and state management                                    |
+| `packages/coding-agent` | Main CLI application (primary focus)                                                    |
+| `packages/tui`          | Terminal UI library with differential rendering                                         |
+| `packages/natives`      | Bindings for native text/image/grep operations                                          |
+| `packages/stats`        | Local observability dashboard (`omp stats`)                                             |
+| `packages/omptype`      | ArkType-compatible schema validation with a lazy JIT runtime                            |
+| `packages/utils`        | Shared utilities (logger, streams, temp files)                                          |
+| `crates/natives`        | Rust crate `omp-natives` for performance-critical operations and N-API bindings         |
 
 **Catalog import convention**: code in this repo imports catalog _values_ (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort _types_ its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
@@ -55,8 +55,10 @@ When authorized to create or edit a contributor-submitted PR, follow the checkli
   import { workerHostEntry } from "@oh-my-pi/pi-utils";
   const hostEntry = workerHostEntry();
   const worker = hostEntry
-  	? new Worker(hostEntry, { type: "module", argv: ["__omp_worker_<name>"] })
-  	: new Worker(new URL("./<worker>.ts", import.meta.url).href, { type: "module" });
+    ? new Worker(hostEntry, { type: "module", argv: ["__omp_worker_<name>"] })
+    : new Worker(new URL("./<worker>.ts", import.meta.url).href, {
+        type: "module",
+      });
   ```
   When the process was started from the omp CLI — source `cli.ts`, npm-bundle `dist/cli.js`, or compiled binary — `workerHostEntry()` is `Bun.main` and the worker re-enters the single entry module, so no per-worker `--compile` entrypoints or bundle entries exist. Outside a CLI host (`bun test`, SDK embedding, standalone `omp-stats`) it returns `null` and the direct-module fallback loads the worker source. New worker kinds MUST add their selector to the dispatch table in `cli.ts` and keep the fallback branch.
   History: `with { type: "file" }` only copied the entry as a raw asset (workers crashed silently in compiled binaries — issues #1011, #1027), and the later literal-path + extra-entrypoint pattern required keeping spawn literals and two build scripts in sync (issue #1150). The smoke probe below is the live validation of this contract.
@@ -100,7 +102,7 @@ import { $ } from "bun";
 
 const result = await $`git status`.cwd(dir).quiet().nothrow();
 if (result.exitCode === 0) {
-	const text = result.text();
+  const text = result.text();
 }
 
 $`do-stuff ${tmpFile}`.quiet().nothrow(); // fire and forget
@@ -150,10 +152,10 @@ Use `node:fs/promises` for directory ops (`fs.mkdir`, `fs.rm`, `fs.readdir`) —
   ```typescript
   import { isEnoent } from "@oh-my-pi/pi-utils";
   try {
-  	return await Bun.file(path).json();
+    return await Bun.file(path).json();
   } catch (err) {
-  	if (isEnoent(err)) return null;
-  	throw err;
+    if (isEnoent(err)) return null;
+    throw err;
   }
   ```
 - Multiple `Bun.file(path)` handles for the same path (including across `checkX`/`loadX` helpers).
@@ -168,7 +170,7 @@ Prefer centralized helpers:
 import { readStream, readLines } from "./utils/stream";
 const text = await readStream(child.stdout);
 for await (const line of readLines(stream)) {
-	/* ... */
+  /* ... */
 }
 ```
 
@@ -264,17 +266,18 @@ For the bash tool specifically:
 - Never use `tsc`/`npx tsc` — always `bun check`.
 - NEVER run `cargo test` directly for Rust tests — use `bun run test:rs`. The default Rust gate (`rust-fork-features`), including the Rust stage of default `fulltest` and `slowtest`, has no selected tests after the local Markdown index retirement. Explicit `bun run test:rs --full` or `bun run fulltest --full` still runs workspace-wide Nextest and Cargo doctests; static checks and compilation retain their full scope.
 - Merge commits (maintainer merges of PRs) follow: `Merge PR #<number>: <conventional PR subject> (@<author>)` — e.g. `Merge PR #6386: feat(catalog): add native Meta Model API provider (@eggpeat)`.
+
 ## Rust Build Profiles
 
 Profiles live in the root `Cargo.toml`; `.cargo/config.toml` carries the settings Cargo.toml cannot express. Both are committed, so no local `~/.cargo/config.toml` is required.
 
-| Profile | Use |
-| --- | --- |
-| `dev` | Default. Line tables for our crates, no debuginfo for deps, deps at `opt-level = 2`. |
-| `release` | Shipping build: fat LTO, 1 codegen unit, stripped. |
-| `local` | Fast local release iteration: thin LTO, 16 codegen units, incremental. |
-| `profiling` | `release` codegen with symbols kept, for `perf`/`samply`/Instruments. |
-| `ci` | Thin LTO, no debuginfo, stripped. |
+| Profile     | Use                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------ |
+| `dev`       | Default. Line tables for our crates, no debuginfo for deps, deps at `opt-level = 2`. |
+| `release`   | Shipping build: fat LTO, 1 codegen unit, stripped.                                   |
+| `local`     | Fast local release iteration: thin LTO, 16 codegen units, incremental.               |
+| `profiling` | `release` codegen with symbols kept, for `perf`/`samply`/Instruments.                |
+| `ci`        | Thin LTO, no debuginfo, stripped.                                                    |
 
 **Never set `split-debuginfo = "off"` on a profile that has debuginfo.** On Mach-O the linker never merges DWARF into the executable — it writes a debug map (`N_OSO`) pointing at the `.o` files, and `"unpacked"` is what keeps those files. With `"off"` every backtrace frame in our own crates silently loses `file:line`; the `panicked at foo.rs:3` header still prints (that is `#[track_caller]`, not debuginfo), which makes the loss easy to miss. `ci` may use `"off"` only because it sets `debug = false`.
 
@@ -347,7 +350,7 @@ Fork releases require explicit user authorization and use the manual CI workflow
 ## Fork Requirements and Additional Runbooks
 
 - [已批准需求](openspec/specs/)是 fork 的权威需求目录；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-product-scope/spec.md)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证门禁](openspec/specs/fork-verification-gates/spec.md)和[上游基线](openspec/specs/fork-upstream-baseline/spec.md)分别维护相关约束；适用的 fork 约束优先于上游通用约定。
-- 每次功能性改动都 MUST 核对[内网快速指南](docs-zh-CN/quick-start-intranet.md)，在同一变更中更新受影响的现有说明，使其与实际代码一致。指南面向用户快速上手，不要求覆盖所有功能；新增内容只写上手所需的用法与注意事项，完整需求以 `openspec/specs/` 为准。
+- 每次功能性改动都 MUST 核对[内网快速指南](docs-zh-CN/quick-start-intranet.md)，在同一变更中更新受影响的现有说明，使其与实际代码一致。指南面向用户快速上手，不要求覆盖所有功能，不要求更新提交数和上游 PR数；新增内容只写上手所需的用法与注意事项，完整需求以 `openspec/specs/` 为准。
 - `ask` 完整回归上游 HTML 表单协议与默认行为，不再定制 Goal 超时答复或保留 `questions[]` 工具兼容层；全部宿主与测试同步使用原生链路，详见 [上游继承边界](openspec/specs/fork-maintenance/spec.md#requirement-上游继承行为与本地差异边界)。
 - OpenSpec 2.0 随 OMP 内置全部 12 项 Skill；任意目录原生发现／补全，使用 `/skill:<name>` 调用及 `skill://<name>` 按需读取，MUST 保留项目／用户同名覆盖机制及 Superpowers／JCH 原有规则。所有执行入口 MUST 使用 `omp openspec ...`，NEVER 要求独立安装 OpenSpec／Node。
 - `omp openspec init` MUST 只初始化项目目录与配置，默认 `spec-driven`；未初始化项目 MUST 先取得显式初始化授权。NEVER 安装、更新或清理用户 Skill、其他 Agent 配置或旧命令；资源仅随 OMP 升级。CLI `update` 与 `opsx` 文件命令已删除，`openspec-update-change` 是保留的变更材料 Skill。
@@ -365,6 +368,7 @@ Fork releases require explicit user authorization and use the manual CI workflow
 - [python/robomp/AGENTS.md](python/robomp/AGENTS.md) 是 GitHub triage/fix bot 子树的架构、命令、开发约定及验证规则。
 
 <!-- OPENWIKI:START -->
+
 ## OpenWiki
 
 This repository has a generated `openwiki/` knowledge base. Use it as optional context when investigating unfamiliar architecture or behavior, or when source inspection leaves an important uncertainty. Use `openwiki_search` and `openwiki_read` to find relevant sections; if those tools are unavailable, consult `openwiki/quickstart.md` and its links. Source code and tests are authoritative when the Wiki is outdated.
