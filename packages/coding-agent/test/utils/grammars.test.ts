@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WasmGrammarInfo } from "@oh-my-pi/pi-natives";
 import { installGrammar } from "@oh-my-pi/pi-coding-agent/utils/grammars";
+import * as toolsManager from "@oh-my-pi/pi-coding-agent/utils/tools-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const RELEASE = "grammars-test";
@@ -58,6 +59,29 @@ describe("wasm grammar install", () => {
 		expect(await Bun.file(dest).bytes()).toEqual(WASM);
 		expect(fs.existsSync(`${dest}.part`)).toBe(false);
 		expect(fs.existsSync(`${dest}.zst.part`)).toBe(false);
+	});
+
+	it("uses cached grammars without falling back to a public download in offline mode", async () => {
+		using tempDir = TempDir.createSync("@omp-grammar-offline-");
+		const info = grammarInfo("testlang-offline.wasm", WASM_SHA256);
+		const dest = path.join(tempDir.path(), info.file);
+		const previousOffline = process.env.OMP_OFFLINE;
+		const previousMirror = process.env.PI_GRAMMARS_URL;
+		const download = spyOn(toolsManager, "downloadFile").mockRejectedValue(new Error("unexpected download"));
+		try {
+			process.env.OMP_OFFLINE = " TrUe ";
+			delete process.env.PI_GRAMMARS_URL;
+			expect(await installGrammar(info, tempDir.path())).toBe(false);
+			await Bun.write(dest, WASM);
+			expect(await installGrammar(info, tempDir.path())).toBe(true);
+			expect(download).not.toHaveBeenCalled();
+		} finally {
+			download.mockRestore();
+			if (previousOffline === undefined) delete process.env.OMP_OFFLINE;
+			else process.env.OMP_OFFLINE = previousOffline;
+			if (previousMirror === undefined) delete process.env.PI_GRAMMARS_URL;
+			else process.env.PI_GRAMMARS_URL = previousMirror;
+		}
 	});
 
 	it("rejects a digest mismatch without leaving files behind", async () => {

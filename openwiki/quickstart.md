@@ -69,7 +69,7 @@ cd /path/to/project
 omp
 ```
 
-`OMP_CONFIG_ROOT` 是可选的可写绝对数据根，不会自动搬迁旧数据；`OMP_SKILLS_DIR` 也是可选的共享技能目录。公司模式复用已有 Claude Code 公司 API 地址与凭据，前提是它们已正确配置；缺少所需 company 配置时应修复错误，不应假设自动切到别的 provider。模型与角色选择参见[配置、认证与模型选择](concepts/configuration-and-models.md)。
+红区部署必须设置可写的绝对 `OMP_CONFIG_ROOT`，黄区可选；它不会自动搬迁旧数据。`OMP_SKILLS_DIR` 可选，用于团队共享技能。公司模式复用已有 Claude Code 公司 API 地址与凭据，配置缺失时不会自动回退到其他 provider。模型与角色选择参见[配置、认证与模型选择](concepts/configuration-and-models.md)。
 
 `OMP_OFFLINE` 控制当前进程的无公网默认行为和在线目录发现，不等于禁止公司模型 API 请求或所有网络访问；本地工具和公司服务仍可用。运行默认值、可选模型及排障见[公司内网与离线运行](operations/intranet-offline.md)。另外，本 fork 的运行时默认放宽 TLS 证书校验，可能使凭据暴露于可劫持网络；受控环境以外应审查并显式恢复严格校验，详见[运行契约](../openspec/specs/fork-runtime/spec.md)。切勿把真实密钥写入仓库或共享文档。
 

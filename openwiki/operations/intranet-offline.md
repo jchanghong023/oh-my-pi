@@ -34,11 +34,11 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 
 ## 启动与策略边界
 
-在启动 OMP 及其子进程前设置 `OMP_OFFLINE=1`。也接受忽略大小写和首尾空白的 `true`、`yes`、`on`；其他值不启用。内网使用者可先按公司流程执行 `ma dmas_ide` 和 `ide agent`，使 IDE 与模型代理就绪，再启动 OMP。
+按红区快启在启动 OMP 前设置 `OMP_OFFLINE=1` 和可写的绝对 `OMP_CONFIG_ROOT`。`OMP_OFFLINE` 也接受忽略大小写和首尾空白的 `true`、`yes`、`on`。先执行 `ma dmas_ide` 和 `ide agent`，再在代理就绪后启动 OMP。
 
 上游 `--offline` 是独立的 Provider 限制，通过 `models.offline` 控制辅助服务，不触发公司内网模式；两者可同时使用。
 
-- 启动时临时关闭 `web_search.enabled`、`browser.enabled`、`astEdit.enabled`、`fetch.enabled`，并告知模型不要访问公网；这些覆盖不写入持久配置。bash、Eval、本地文件、Git 和按配置启用的 LSP 等仍可用。
+- 启动时临时关闭 Web Search、Browser（含 `/crawl`）和 Fetch，不改写持久配置。AST Edit 沿用正常开关；内置或已缓存的语法包可直接使用，缺包不请求默认 GitHub 源。bash、Eval、本地文件、Git 和按配置启用的 LSP 等仍可用。
 - 自动版本检查、插件市场自动检查与更新、启动更新日志和在线模型目录发现被跳过。手动刷新、selector 未命中、会话恢复及 task 子代理的目录发现也只用内置数据和缓存；缓存缺失可能使模型不可解析，而不是去公网补齐。显式更新命令、实际模型和 OAuth 请求不因此被禁止。
 - `omp models` 用缓存目录列出模型，`omp bench` 则会真正请求所选模型；前者成功不证明网关可达。`omp read` 的本地文件读取和 `omp render` 不要求公司认证，但图片问答需要所选 vision 模型。显式选择的非 company 模型仍按其配置请求。
 - 离线统一 logger 只保留 ERROR，优先于 `OMP_LOG_LEVEL`；界面提示和命令错误仍可出现。缺少 INFO/WARN 不代表没有发生初始化或降级。
@@ -70,7 +70,7 @@ flowchart TD
 
 配置有效时，仅未配置角色获得进程内默认值：`default`、`plan`、`slow` 为 `company/GLM-5.3-public`；`task`、`vision`、`advisor` 为 `company/Qwen3.8-27B`；`smol`、`tiny`、`commit` 为 `company/Qwen3.6-35B-A3B`。`memory` 仍按原规则解析。已有角色配置（包括显式 `null`）和 CLI 选择优先，也可切换其他模型。
 
-启用 Mnemopi 且未显式配置向量时，公司 lane 可默认使用 `Qwen3-VL-Embedding-2B`，复用快照并请求 OpenAI 兼容的 `/v1/embeddings`；不会自动启用 Mnemopi。显式向量配置和指定通用 API 路由优先，公司 token 不发给显式配置的其他地址。内置检索目录还有 `Qwen3-VL-Reranker-2B`，但当前记忆流程只接文本向量，不接远端 reranker 或图片向量；网关是否支持该接口需在内网验证。
+红区启用 Mnemopi 且未配置其他向量模型时，复用公司凭据使用 `Qwen3-Embedding-8B`。显式配置优先；记忆不调用远端 reranker。
 
 可选的 `ascend` 在普通和 offline 模式都可显式选择，需要 `ASCEND_API_KEY`，不改变默认角色；其固定地址 `http://models.ascend.huawei.com` 是明文 HTTP，凭据和内容在传输中不加密。选择它之前应评估网络信任边界。
 

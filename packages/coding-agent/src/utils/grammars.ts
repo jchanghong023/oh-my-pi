@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type WasmGrammarInfo, type WasmGrammarQuery, wasmGrammarFor } from "@oh-my-pi/pi-natives";
-import { getNativeGrammarsDir, logger, withFileLock } from "@oh-my-pi/pi-utils";
+import { getNativeGrammarsDir, logger, offlineFromEnv, withFileLock } from "@oh-my-pi/pi-utils";
 import { withDownload } from "../downloads/activity";
 import { downloadFile } from "./tools-manager";
 
@@ -33,9 +33,9 @@ const failedAt = new Map<string, number>();
 async function fetchGrammar(
 	info: WasmGrammarInfo,
 	dest: string,
+	base: string,
 	onProgress: (loaded: number, total: number | undefined) => void,
 ): Promise<void> {
-	const base = process.env.PI_GRAMMARS_URL?.trim().replace(/\/+$/, "") || DEFAULT_GRAMMARS_URL;
 	const url = `${base}/${info.release}/${info.file}.zst`;
 	const compressed = `${dest}.zst.part`;
 	const part = `${dest}.part`;
@@ -57,7 +57,7 @@ async function fetchGrammar(
 	}
 }
 
-async function installLocked(info: WasmGrammarInfo, dir: string, dest: string): Promise<boolean> {
+async function installLocked(info: WasmGrammarInfo, dir: string, dest: string, base: string): Promise<boolean> {
 	try {
 		await fs.mkdir(dir, { recursive: true });
 		return await withFileLock(
@@ -67,7 +67,7 @@ async function installLocked(info: WasmGrammarInfo, dir: string, dest: string): 
 				if (await Bun.file(dest).exists()) return true;
 				await withDownload(
 					`${info.language} grammar`,
-					tracker => fetchGrammar(info, dest, (loaded, total) => tracker.update({ loaded, total })),
+					tracker => fetchGrammar(info, dest, base, (loaded, total) => tracker.update(loaded, total)),
 					{ detail: info.file },
 				);
 				logger.debug("grammar: installed", { language: info.language, file: info.file });
@@ -97,11 +97,13 @@ async function installLocked(info: WasmGrammarInfo, dir: string, dest: string): 
  */
 export function installGrammar(info: WasmGrammarInfo, dir: string = getNativeGrammarsDir()): Promise<boolean> {
 	const dest = path.join(dir, info.file);
+	const base = process.env.PI_GRAMMARS_URL?.trim().replace(/\/+$/, "");
+	if (!base && offlineFromEnv()) return Bun.file(dest).exists();
 	const pending = inflight.get(dest);
 	if (pending) return pending;
 	const failed = failedAt.get(dest);
 	if (failed !== undefined && Date.now() - failed < RETRY_AFTER_FAILURE_MS) return Promise.resolve(false);
-	const install = installLocked(info, dir, dest).finally(() => inflight.delete(dest));
+	const install = installLocked(info, dir, dest, base || DEFAULT_GRAMMARS_URL).finally(() => inflight.delete(dest));
 	inflight.set(dest, install);
 	return install;
 }
@@ -149,5 +151,5 @@ export async function rerunWithGrammars<T extends { missingGrammars?: string[] }
 
 /** Tool-output note for languages whose files were skipped because their grammar could not be installed. */
 export function missingGrammarsNote(languages: readonly string[]): string {
-	return `Skipped ${languages.join(", ")} files: grammar could not be downloaded (offline?); results exclude them.`;
+	return `Skipped ${languages.join(", ")} files: the required grammar is unavailable; results exclude them.`;
 }

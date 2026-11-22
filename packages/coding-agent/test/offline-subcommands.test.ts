@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isolateDaemonForSmokeTest } from "@oh-my-pi/pi-coding-agent/daemon/client";
 import { stripClaudeToolPrefix } from "../../ai/src/providers/anthropic-identity";
 
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
@@ -225,6 +226,30 @@ function anthropicCommitResponse(body: {
 				},
 	);
 }
+
+it("offers AST Edit in an offline CLI session without re-enabling web tools", async () => {
+	let offered: string[] | undefined;
+	using server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		async fetch(request) {
+			const body = (await request.json()) as { model: string; tools?: Array<{ name: string }> };
+			offered = body.tools?.map(tool => stripClaudeToolPrefix(tool.name));
+			return anthropicResponse(body.model, "offline tool list received");
+		},
+	});
+	const f = await fixture({ companyUrl: server.url.href });
+	await Bun.write(f.configPath, JSON.stringify({ tools: { commands: false } }));
+	const cleanupDaemon = await isolateDaemonForSmokeTest();
+	f.env.OMP_DAEMON_DIR = process.env.OMP_DAEMON_DIR!;
+	const result = await f
+		.run(["--config", f.configPath, "--no-session", "--print", "Show which editing tools are available."])
+		.finally(cleanupDaemon);
+	expect(result.exitCode, result.stderr).toBe(0);
+	expect(result.stdout.trim()).toBe("offline tool list received");
+	expect(offered).toContain("ast_edit");
+	expect(offered).not.toContain("web_search");
+}, 30_000);
 
 describe("offline model-dependent subcommands", () => {
 	it("rejects explicit company CLI selections outside the offline lane without reading company credentials", async () => {

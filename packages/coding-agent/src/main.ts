@@ -167,7 +167,6 @@ import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "./plan-mode/settings";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
 import {
-	cfgAstEditEnabled,
 	cfgAsyncPrintWake,
 	cfgLaunchPersist,
 	cfgFetchEnabled,
@@ -2099,7 +2098,6 @@ export async function runRootCommand(
 		if (parsedArgs.intranetOffline) {
 			cfgWebSearchEnabled.override(settingsInstance, false);
 			cfgBrowserEnabled.override(settingsInstance, false);
-			cfgAstEditEnabled.override(settingsInstance, false);
 			cfgFetchEnabled.override(settingsInstance, false);
 			cfgMarketplaceAutoUpdate.override(settingsInstance, "off");
 			cfgStartupCheckUpdate.override(settingsInstance, false);

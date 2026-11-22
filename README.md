@@ -39,9 +39,9 @@
 
 ## 安装
 
-公司内网使用 `OMP_OFFLINE`：CentOS 7、NFS、有 `/dev/shm`、无法连接互联网。内网部署与使用见[公司内网快速指南](docs-zh-CN/quick-start-intranet.md)；下面的在线安装方式不适用于该环境。
+红区按[内网快速指南](docs-zh-CN/quick-start-intranet.md)设置 `OMP_OFFLINE` 和 `OMP_CONFIG_ROOT`；下面的在线安装方式不适用于无公网环境。
 
-安装本 fork 通过 [`jchanghong023/oh-my-pi` releases](https://github.com/jchanghong023/oh-my-pi/releases) 发布的最新二进制。以下命令直接使用 fork 的 GitHub release 资产，不会安装上游的 npm、Homebrew、Nix 或 `omp.sh` 构建。
+本 Fork 优先从 [CNB Releases](https://cnb.cool/jchanghong/bin/-/releases) 下载二进制，定期同步到 [GitHub Releases](https://github.com/jchanghong023/oh-my-pi/releases)。以下在线安装命令只使用本 Fork 的 GitHub 资产，不会安装上游发行版。
 
 **Linux（glibc x64）**
 

@@ -43,7 +43,7 @@ Full-article reading is also automatic. Visible controls labelled “查看全�
 
 HTTP and JavaScript redirects use the connected browser's native navigation and available login session, including cross-origin redirects. The command records the final page URL rather than rejecting it for differing from the requested origin. Recursion is scoped to the final entry site's origin; a child may redirect elsewhere and be saved, but that does not add the other site's navigation links to the crawl. No separate anonymous browser or synthetic login session is used.
 
-Progress and failures are reported as the command runs. `/crawl stop` cancels the current session's task and retains completed files. Links in the Markdown point to the original site, and extracted content may be incomplete; this is not a lossless offline backup. Browser and write authorization still apply, and `OMP_OFFLINE` disables the browser.
+Progress and failures are reported as the command runs. `/crawl stop` cancels the current session's task and retains completed files. Links in the Markdown point to the original site, and extracted content may be incomplete; this is not a lossless offline backup. Browser and write authorization still apply. `/crawl` can save reachable intranet pages when Browser is enabled; `OMP_OFFLINE` disables both Browser and `/crawl`.
 
 ## First-call guide
 
