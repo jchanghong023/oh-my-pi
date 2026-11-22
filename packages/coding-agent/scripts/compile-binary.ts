@@ -52,6 +52,8 @@ export interface CodingAgentCompileOptions {
 	readonly minifyIdentifiers?: boolean;
 	/** Disable Bun's built-in Darwin signing before the caller re-signs. */
 	readonly skipBuiltinCodesign?: boolean;
+	/** Artifact naming for hosts whose SDK graph contains homonymous dynamic entries. */
+	readonly chunkNaming?: string;
 }
 
 /**
@@ -89,7 +91,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			bytecode: true,
 			splitting: true,
 			// Discovery entry chunks can share a hash; include their source names to avoid collisions.
-			naming: { chunk: "chunks/[name]-[hash].[ext]" },
+			naming: { chunk: options.chunkNaming ?? "chunks/[name]-[hash].[ext]" },
 			minify: {
 				identifiers: options.minifyIdentifiers ?? false,
 				keepNames: true,
