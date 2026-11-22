@@ -108,6 +108,7 @@ export function logProviderTurnError(msg: AssistantMessage): void {
 		error_kind: errorKind,
 		errorStatus: msg.errorStatus,
 		errorId: typeof msg.errorId === "number" ? msg.errorId : undefined,
+		request_id_hash: msg.requestId ? fingerprint(msg.requestId) : undefined,
 		error_message_present: Boolean(msg.errorMessage),
 		error_summary_truncated: (msg.errorMessage?.length ?? 0) > maxDiagnosticChars,
 		error_fingerprint: msg.errorMessage ? fingerprint(msg.errorMessage) : undefined,
@@ -213,13 +214,19 @@ export function buildReplanTitleContext(messages: AgentMessage[]): string {
 }
 
 /**
- * Title text of a message the operator wrote: a typed prompt, or a `/skill:`
- * invocation as its chip (never the expanded skill body). `undefined` for
- * agent-attributed and non-user messages, which automatic titles never name.
+ * Title text of a message the operator wrote: a typed prompt, a writable-collab
+ * peer's prompt (a web client's first instruction included), or a `/skill:`
+ * invocation as its chip (never the expanded skill body). Images never count.
+ * `undefined` for agent-attributed, text-less, and non-user messages, which
+ * automatic titles never name.
  */
 export function operatorTitleText(message: AgentMessage): string | undefined {
-	if (message.role === "custom") return titleTextFromSkillPrompt(message);
-	if (message.role !== "user" || message.attribution !== "user") return undefined;
+	if (message.role === "custom") {
+		if (message.customType !== COLLAB_PROMPT_MESSAGE_TYPE) return titleTextFromSkillPrompt(message);
+	} else if (message.role !== "user") {
+		return undefined;
+	}
+	if (message.attribution !== "user") return undefined;
 	return textFromContent(message.content) || undefined;
 }
 
@@ -327,7 +334,7 @@ function thinkingFromContent(content: unknown): string {
 
 function titleConversationTurnFromMessage(message: AgentMessage): TitleConversationTurn | undefined {
 	if (message.role === "custom") {
-		const text = titleTextFromSkillPrompt(message);
+		const text = operatorTitleText(message);
 		if (!text) return undefined;
 		return { role: "user", text };
 	}

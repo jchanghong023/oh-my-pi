@@ -104,12 +104,36 @@ function getNativeDirs() {
 	return { nativesDir: cachedNativesDir ?? addonCacheDir, addonCacheDir };
 }
 
-function resolveLeafPackageDir(platformTag) {
+/**
+ * Bun's install cache has no `node_modules` around a release copy, so
+ * `require.resolve` cannot reach the platform leaf beside it: a version-pinned
+ * sibling (`pi-natives-<tag>@<version>@@@N`) of the core package. Scan the core
+ * package's scope directory for the leaf that holds the addon, matching the
+ * running version (issue #8901).
+ */
+function findScopedLeafPackageDir(platformTag, addonFilenames) {
+	const scopeDir = path.join(import.meta.dir, "..", "..");
+	let names;
+	try {
+		names = fs.readdirSync(scopeDir);
+	} catch {
+		return null;
+	}
+	const leafName = `pi-natives-${platformTag}`;
+	const leaves = names.filter(name => name === leafName || name.startsWith(`${leafName}@${packageJson.version}@`));
+	for (const name of leaves) {
+		const dir = path.join(scopeDir, name);
+		if (addonFilenames.some(filename => fs.existsSync(path.join(dir, filename)))) return dir;
+	}
+	return null;
+}
+
+function resolveLeafPackageDir(platformTag, addonFilenames) {
 	try {
 		const require_ = createRequire(import.meta.url);
 		return path.dirname(require_.resolve(`@oh-my-pi/pi-natives-${platformTag}/package.json`));
 	} catch {
-		return null;
+		return findScopedLeafPackageDir(platformTag, addonFilenames);
 	}
 }
 
@@ -248,6 +272,8 @@ function isOlderReleaseVersion(candidate, current) {
 // startup to finish; a later launch can reclaim them once they are genuinely
 // stale.
 const NATIVE_CACHE_CLEANUP_GRACE_MS = 10 * 60_000;
+const EMBEDDED_ADDON_DIR_PREFIX = "embedded-";
+const EMBEDDED_ADDON_HASH = /^[0-9a-f]+$/;
 
 class UnsafeOfflineNativeCacheError extends Error {
 	constructor(entryPath, expected) {
@@ -289,6 +315,33 @@ function preparePrivateNativeCacheDirectory(trustedParent, targetDir, uid) {
 			);
 		}
 	}
+}
+
+function isEmbeddedAddonDirectoryName(name) {
+	return (
+		name.startsWith(EMBEDDED_ADDON_DIR_PREFIX) &&
+		EMBEDDED_ADDON_HASH.test(name.slice(EMBEDDED_ADDON_DIR_PREFIX.length))
+	);
+}
+
+// Never descend into unverified trees on the shared-memory filesystem. The
+// only subdirectories under a version are the private, flat hash directories.
+function removePrivateNativeCacheDirectory(dir, uid, allowEmbeddedDirs = false) {
+	if (!isPrivateCacheDirectory(lstatIfPresent(dir), uid)) return false;
+	const entries = fs.readdirSync(dir, { withFileTypes: true });
+	for (const entry of entries) {
+		if (entry.isDirectory() && (!allowEmbeddedDirs || !isEmbeddedAddonDirectoryName(entry.name))) return false;
+	}
+	for (const entry of entries) {
+		const entryPath = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			if (!removePrivateNativeCacheDirectory(entryPath, uid)) return false;
+		} else {
+			fs.unlinkSync(entryPath);
+		}
+	}
+	fs.rmdirSync(dir);
+	return true;
 }
 
 /** A protected cache hit is an actual file, never a link or a module-resolution fallback. */
@@ -378,12 +431,8 @@ export function cleanupStaleNativeVersions({ nativesDir, currentVersion, offline
 			if (Date.now() - stat.mtimeMs < NATIVE_CACHE_CLEANUP_GRACE_MS) continue;
 			if (offlineCacheUid === undefined) {
 				fs.rmSync(targetPath, { recursive: true, force: true });
-			} else {
-				// Version caches contain flat files. Do not descend into old, unverified trees.
-				const files = fs.readdirSync(targetPath, { withFileTypes: true });
-				if (files.some(file => file.isDirectory())) continue;
-				for (const file of files) fs.unlinkSync(path.join(targetPath, file.name));
-				fs.rmdirSync(targetPath);
+			} else if (!removePrivateNativeCacheDirectory(targetPath, offlineCacheUid, true)) {
+				continue;
 			}
 			removed.push(targetPath);
 		} catch {
@@ -584,12 +633,25 @@ function isSafeEmbeddedAddonFilename(filename) {
 	return filename.length > 0 && path.basename(filename) === filename && !filename.includes("/") && !filename.includes("\\");
 }
 
+/**
+ * Embedded addons extract to `<targetDir>/embedded-<hash>/<filename>`, where
+ * `hash` is the manifest's build-time content hash. A path only ever receives
+ * the bytes of its own build, and a file appears there only through an atomic
+ * rename, so its presence at the expected size identifies it. Two builds of
+ * one version never share a path, so a rebuild with a same-size addon, an
+ * interrupted extraction, or two builds extracting at once cannot leave one
+ * build loading the other's addon. Hashing the 100+ MB file at startup is
+ * never needed.
+ */
+export function embeddedAddonPath(targetDir, file) {
+	return path.join(targetDir, `${EMBEDDED_ADDON_DIR_PREFIX}${file.hash}`, file.filename);
+}
+
 function isEmbeddedAddonFileCurrent(targetPath, file, offlineCacheUid) {
 	if (offlineCacheUid !== undefined) return findPrivateNativeCacheFile(targetPath, offlineCacheUid)?.size === file.size;
 	try {
 		const stat = fs.statSync(targetPath);
-		if (!stat.isFile()) return false;
-		return stat.size === file.size;
+		return stat.isFile() && stat.size === file.size;
 	} catch (err) {
 		if (err && err.code === "ENOENT") return false;
 		throw err;
@@ -606,14 +668,14 @@ function publishNativeFile(tempPath, targetPath) {
 		// bytes match our fully staged image; permission and corrupt-cache
 		// failures must still propagate.
 		try {
-			if (fs.readFileSync(tempPath).equals(fs.readFileSync(targetPath))) return;
+			if (fs.readFileSync(tempPath).equals(fs.readFileSync(targetPath))) return false;
 		} catch {
 			// Preserve the original publication failure below.
 		}
 		if (process.platform !== "win32") throw error;
 
-		// A same-version rebuild may replace an addon still mapped by another
-		// omp process. Windows permits renaming that image, but not overwriting it.
+		// Windows permits moving a mapped addon aside, but not overwriting it.
+		// This is needed for node_modules staging and for repairing a damaged cache file.
 		const backupPath = `${targetPath}.old.${process.pid}.${randomUUID()}`;
 		try {
 			fs.renameSync(targetPath, backupPath);
@@ -647,6 +709,7 @@ function publishNativeFile(tempPath, targetPath) {
 			// A successful rename already removed it; otherwise best-effort cleanup.
 		}
 	}
+	return true;
 }
 
 function writeEmbeddedAddonFile(targetPath, content, mode) {
@@ -661,7 +724,7 @@ function writeEmbeddedAddonFile(targetPath, content, mode) {
 		}
 		throw err;
 	}
-	publishNativeFile(tempPath, targetPath);
+	return publishNativeFile(tempPath, targetPath);
 }
 
 export function extractEmbeddedAddons({ files, targetDir, offlineCacheUid }) {
@@ -669,26 +732,79 @@ export function extractEmbeddedAddons({ files, targetDir, offlineCacheUid }) {
 		if (!isSafeEmbeddedAddonFilename(file.filename)) {
 			throw new Error(`Unsafe embedded addon filename: ${file.filename}`);
 		}
+		if (!EMBEDDED_ADDON_HASH.test(file.hash)) {
+			throw new Error(`Unsafe embedded addon hash for ${file.filename}: ${file.hash}`);
+		}
 	}
 	const writtenPaths = [];
 	for (const file of files) {
-		const targetPath = path.join(targetDir, file.filename);
+		const targetPath = embeddedAddonPath(targetDir, file);
+		const addonDir = path.dirname(targetPath);
+		if (offlineCacheUid !== undefined) preparePrivateNativeCacheDirectory(targetDir, addonDir, offlineCacheUid);
 		if (isEmbeddedAddonFileCurrent(targetPath, file, offlineCacheUid)) continue;
 		const content = Bun.zstdDecompressSync(fs.readFileSync(file.zstdPath));
 		if (content.length !== file.size) {
 			throw new Error(`Embedded addon size mismatch for ${file.filename}: expected ${file.size}, got ${content.length}`);
 		}
-		writeEmbeddedAddonFile(targetPath, content, offlineCacheUid === undefined ? 0o755 : 0o700);
-		writtenPaths.push(targetPath);
+		if (offlineCacheUid === undefined) fs.mkdirSync(addonDir, { recursive: true });
+		if (writeEmbeddedAddonFile(targetPath, content, offlineCacheUid === undefined ? 0o755 : 0o700)) {
+			writtenPaths.push(targetPath);
+		}
 	}
 	return writtenPaths;
 }
 
-function maybeExtractEmbeddedAddon(ctx, errors, file = selectEmbeddedAddonFile(ctx.selectedVariant)) {
-	if (!ctx.isCompiledBinary || !embeddedAddon) return null;
-	if (embeddedAddon.platformTag !== ctx.platformTag || embeddedAddon.version !== ctx.packageVersion) return null;
+/**
+ * Best-effort removal of `embedded-<hash>` directories left by other builds of
+ * this version. A directory still loaded by a running process (Windows locks
+ * it) is skipped and retried on a later start.
+ */
+export function pruneStaleEmbeddedAddons({ targetDir, keepHashes, offlineCacheUid }) {
+	const keep = new Set(keepHashes.map(hash => `${EMBEDDED_ADDON_DIR_PREFIX}${hash}`));
+	const removed = [];
+	let entries;
+	try {
+		entries = fs.readdirSync(targetDir, { withFileTypes: true });
+	} catch {
+		return removed;
+	}
+	for (const entry of entries) {
+		if (!entry.isDirectory() || !isEmbeddedAddonDirectoryName(entry.name) || keep.has(entry.name)) continue;
+		const dir = path.join(targetDir, entry.name);
+		try {
+			if (offlineCacheUid === undefined) {
+				fs.rmSync(dir, { recursive: true, force: true });
+			} else if (!removePrivateNativeCacheDirectory(dir, offlineCacheUid)) {
+				continue;
+			}
+			removed.push(dir);
+		} catch {
+			// In use by another process; retried on a later start.
+		}
+	}
+	return removed;
+}
+
+function hasMatchingEmbeddedAddon(ctx) {
+	return (
+		ctx.isCompiledBinary &&
+		!!embeddedAddon &&
+		embeddedAddon.platformTag === ctx.platformTag &&
+		embeddedAddon.version === ctx.packageVersion
+	);
+}
+
+/** This build's embedded addon for the selected variant, plus the lazily extracted baseline fallback on modern x64. */
+function embeddedProbeFiles(ctx) {
+	if (!hasMatchingEmbeddedAddon(ctx)) return { primary: null, fallback: null };
+	const primary = selectEmbeddedAddonFile(ctx.selectedVariant);
+	const baseline =
+		ctx.selectedVariant === "modern" ? embeddedAddon.files.find(file => file.variant === "baseline") || null : null;
+	return { primary, fallback: baseline === primary ? null : baseline };
+}
+
+function maybeExtractEmbeddedAddon(ctx, errors, file) {
 	if (!file) return null;
-	const targetPath = path.join(ctx.versionedDir, file.filename);
 
 	startupMarker("native:extractEmbeddedAddon:start");
 	try {
@@ -701,13 +817,29 @@ function maybeExtractEmbeddedAddon(ctx, errors, file = selectEmbeddedAddonFile(c
 
 	try {
 		extractEmbeddedAddons({ files: [file], targetDir: ctx.versionedDir, offlineCacheUid: ctx.offlineCacheUid });
-		return targetPath;
+		return embeddedAddonPath(ctx.versionedDir, file);
 	} catch (err) {
 		if (err instanceof UnsafeOfflineNativeCacheError) throw err;
 		const message = err instanceof Error ? err.message : String(err);
 		errors.push(`embedded addon extraction (${file.filename}): ${message}`);
 		return null;
 	}
+}
+
+/**
+ * Final probe order for `loadNative`. When the binary carries an addon for
+ * this platform and version, the unhashed `versionedDir/<filename>` paths are
+ * dropped: older builds of this version extracted there, so a file at that
+ * path may belong to any of them and would pass the release-version check.
+ * The embedded addon is reachable only through its own hash path, which the
+ * caller probes after (re-)extracting it.
+ *
+ * @param {{ candidates: string[]; versionedDir: string; hasEmbedded: boolean; embedded: string[]; staged: string | null }} input
+ */
+export function resolveRuntimeCandidates({ candidates, versionedDir, hasEmbedded, embedded, staged }) {
+	const shared = hasEmbedded ? candidates.filter(candidate => path.dirname(candidate) !== versionedDir) : candidates;
+	// Retrying a failed dlopen of a NODELETE image can crash on older glibc.
+	return [...new Set([...embedded, ...(staged ? [staged] : []), ...shared])];
 }
 
 /**
@@ -1090,13 +1222,27 @@ function configureGrammarDir(bindings, nativesDir) {
 }
 
 
+/**
+ * Paths a compiled binary loads its addon from: this build's
+ * `embedded-<hash>/` paths when it embeds an addon (the shared
+ * `versionedDir/<filename>` paths are never probed then), else the shared ones.
+ */
+function compiledAddonTargets(ctx) {
+	const { primary, fallback } = embeddedProbeFiles(ctx);
+	const files = [...new Set([primary, fallback].filter(Boolean))];
+	if (files.length > 0) {
+		return files.map(file => ({ filename: file.filename, targetPath: embeddedAddonPath(ctx.versionedDir, file) }));
+	}
+	return ctx.addonFilenames.map(filename => ({ filename, targetPath: path.join(ctx.versionedDir, filename) }));
+}
+
 function buildHelpMessage(ctx) {
 	if (ctx.isCompiledBinary) {
-		const expectedPaths = ctx.addonFilenames.map(filename => `  ${path.join(ctx.versionedDir, filename)}`).join("\n");
-		const downloadHints = ctx.addonFilenames
-			.map(filename => {
+		const targets = compiledAddonTargets(ctx);
+		const expectedPaths = targets.map(({ targetPath }) => `  ${targetPath}`).join("\n");
+		const downloadHints = targets
+			.map(({ filename, targetPath }) => {
 				const downloadUrl = `https://github.com/can1357/oh-my-pi/releases/latest/download/${filename}`;
-				const targetPath = path.join(ctx.versionedDir, filename);
 				return `  curl -fsSL "${downloadUrl}" -o "${targetPath}"`;
 			})
 			.join("\n");
@@ -1159,25 +1305,28 @@ export function initLoaderContext(overrides = {}) {
 			importMetaUrl: import.meta.url,
 		});
 	const normalizedNativeDir = platform === "win32" ? nativeDir.toLowerCase() : nativeDir;
+	// A published core manifest declares its platform leaf in `optionalDependencies`; a
+	// checkout does not. A release copied into bun's install cache has no `node_modules`
+	// segment, so the path alone cannot tell it from a checkout (issue #8901).
 	const isWorkspaceLoad =
 		!isCompiledBinary &&
+		!packageJson.optionalDependencies?.[`@oh-my-pi/pi-natives-${platformTag}`] &&
 		!normalizedNativeDir.includes("\\node_modules\\") &&
 		!normalizedNativeDir.includes("/node_modules/");
+	const selectedVariant = resolveCpuVariant(getVariantOverride());
+	const addonFilenames = getAddonFilenames({ tag: platformTag, arch: process.arch, variant: selectedVariant });
+	const addonLabel = selectedVariant ? `${platformTag} (${selectedVariant})` : platformTag;
 	const leafPackageDir =
 		isCompiledBinary || isWorkspaceLoad
 			? null
 			: overrides.leafPackageDir === undefined
-				? resolveLeafPackageDir(platformTag)
+				? resolveLeafPackageDir(platformTag, addonFilenames)
 				: overrides.leafPackageDir;
 	const stageFromNodeModules = shouldStageNodeModulesAddon({
 		platform,
 		isCompiledBinary,
 		nativeDir: normalizedNativeDir,
 	});
-
-	const selectedVariant = resolveCpuVariant(getVariantOverride());
-	const addonFilenames = getAddonFilenames({ tag: platformTag, arch: process.arch, variant: selectedVariant });
-	const addonLabel = selectedVariant ? `${platformTag} (${selectedVariant})` : platformTag;
 
 	const candidates = resolveLoaderCandidates({
 		addonFilenames,
@@ -1256,26 +1405,22 @@ export function loadNative() {
 	}
 
 	const errors = [];
-	const selectedEmbeddedFile = selectEmbeddedAddonFile(ctx.selectedVariant);
-	const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors, selectedEmbeddedFile);
-	const selectedEmbeddedPath = selectedEmbeddedFile && path.join(ctx.versionedDir, selectedEmbeddedFile.filename);
+	const hasEmbedded = hasMatchingEmbeddedAddon(ctx);
+	const { primary: primaryEmbeddedFile, fallback: fallbackEmbeddedFile } = embeddedProbeFiles(ctx);
+	const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors, primaryEmbeddedFile);
 	const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
-	const prepended = [embeddedCandidate, stagedCandidate].filter(c => typeof c === "string");
-	const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : ctx.candidates;
-	const fallbackEmbeddedFile =
-		ctx.selectedVariant === "modern" && embeddedAddon
-			? embeddedAddon.files.find(file => file.variant === "baseline")
-			: null;
-	const fallbackEmbeddedPath = fallbackEmbeddedFile && path.join(ctx.versionedDir, fallbackEmbeddedFile.filename);
+	const fallbackEmbeddedPath = fallbackEmbeddedFile && embeddedAddonPath(ctx.versionedDir, fallbackEmbeddedFile);
+	const runtimeCandidates = resolveRuntimeCandidates({
+		candidates: ctx.candidates,
+		versionedDir: ctx.versionedDir,
+		hasEmbedded,
+		embedded: [embeddedCandidate, fallbackEmbeddedPath].filter(c => typeof c === "string"),
+		staged: stagedCandidate,
+	});
 
-	// A failed dlopen can leave a NODELETE image partially relocated on older
-	// glibc. Retrying that same image can crash instead of reporting its error.
-	for (const candidate of new Set(runtimeCandidates)) {
-		// A failed replacement must not fall back to that same stale cache file.
-		if (candidate === selectedEmbeddedPath && !embeddedCandidate) continue;
-		if (fallbackEmbeddedFile && candidate === fallbackEmbeddedPath) {
-			if (!maybeExtractEmbeddedAddon(ctx, errors, fallbackEmbeddedFile)) continue;
-		}
+	for (const candidate of runtimeCandidates) {
+		// Extracted lazily, and never probed unless this build's copy is in place.
+		if (candidate === fallbackEmbeddedPath && !maybeExtractEmbeddedAddon(ctx, errors, fallbackEmbeddedFile)) continue;
 		if (
 			ctx.offlineCacheUid !== undefined &&
 			path.dirname(candidate) === ctx.versionedDir &&
@@ -1297,6 +1442,13 @@ export function loadNative() {
 				currentVersion: ctx.packageVersion,
 				offlineCacheUid: ctx.offlineCacheUid,
 			});
+			if (hasEmbedded) {
+				pruneStaleEmbeddedAddons({
+					targetDir: ctx.versionedDir,
+					keepHashes: [primaryEmbeddedFile, fallbackEmbeddedFile].filter(Boolean).map(file => file.hash),
+					offlineCacheUid: ctx.offlineCacheUid,
+				});
+			}
 			startupMarker("native:loadNative:done");
 			return bindings;
 		} catch (err) {

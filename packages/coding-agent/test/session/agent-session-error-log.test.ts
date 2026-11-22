@@ -1,7 +1,7 @@
 /**
- * Provider-controlled error bodies and custom model/provider identifiers must
- * not leak into diagnostic files. Status and safe failure classification stay
- * available; successful turns do not produce an error event.
+ * Provider-controlled error bodies and identifiers must not leak into
+ * diagnostic files. Status, failure classification, and request fingerprints
+ * stay available; successful turns do not produce an error event.
  */
 import { afterAll, afterEach, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
@@ -40,6 +40,7 @@ describe("logProviderTurnError", () => {
 				errorMessage: `${secret}BODY /private/project Authorization: Bearer ${secret}TOKEN`,
 				errorStatus: 500,
 				errorId: 42,
+				requestId: `${secret}REQUEST`,
 			}),
 		);
 
@@ -55,6 +56,9 @@ describe("logProviderTurnError", () => {
 		expect(warn?.context?.provider_hash).toMatch(/^[a-f0-9]{12}$/);
 		expect(warn?.context?.model_hash).toMatch(/^[a-f0-9]{12}$/);
 		expect(warn?.context?.error_fingerprint).toMatch(/^[a-f0-9]{12}$/);
+		expect(warn?.context?.request_id_hash).toBe(
+			new Bun.CryptoHasher("sha256").update(`${secret}REQUEST`).digest("hex").slice(0, 12),
+		);
 		expect(JSON.stringify(warn)).not.toContain(secret);
 		expect(JSON.stringify(warn)).not.toContain("/private/project");
 	});

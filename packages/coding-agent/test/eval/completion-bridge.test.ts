@@ -238,7 +238,7 @@ process.exit(0);
 `,
 	);
 	// This child exercises a real kernel, so it must discover a compatible interpreter.
-	const child = await $`bun ${scriptPath}`
+	const child = await $`${process.execPath} ${scriptPath}`
 		.cwd(repoRoot)
 		.env({ ...process.env, PI_TEST_RUNTIME: undefined, PI_PYTHON_SKIP_CHECK: undefined })
 		.quiet()

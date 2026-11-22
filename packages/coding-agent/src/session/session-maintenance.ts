@@ -71,7 +71,7 @@ import { replaysNativeResponsesHistory } from "@oh-my-pi/pi-ai/providers/openai-
 import { openAIResponsesReplaysNativeHistory } from "@oh-my-pi/pi-ai/providers/openai-responses-state";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { resolvePromptCacheLookback } from "@oh-my-pi/pi-catalog/compat/prompt-cache-lookback";
-import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
+import { modelsAreEqual, routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import type { CatalogPolicyInputs } from "@oh-my-pi/pi-catalog/types";
 import { isRecord, logger, prompt, Snowflake, spillUrl, toError, withLoopPhase } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
@@ -124,6 +124,7 @@ import {
 	getLatestCompactionEntry,
 	getOpenAiRemoteCompactionPayload,
 	getReadableCompactionEntry,
+	isTranscriptEntry,
 } from "./session-context";
 import type { CompactionEntry, SessionEntry } from "./session-entries";
 import type { HandoffGenerationOptions } from "./session-handoff";
@@ -716,13 +717,14 @@ export class SessionMaintenance {
 	/** In-flight or armed background speculative compaction, if any. */
 	#speculation: SpeculationRun | undefined;
 	/**
-	 * {@link #nativeSpeculationKey} of the session and model whose native
-	 * speculative compaction failed for a reason a retry would hit again (an
-	 * exhausted output budget, a tool call, a refusal). Until a compaction
-	 * commits, speculation does not re-send the request and the threshold pass
-	 * falls back to the next method instead.
+	 * Session and model route whose speculative remote compaction failed
+	 * for a reason a retry would hit again (a native request's exhausted
+	 * output budget, tool call or refusal, or a `compaction.remoteEndpoint`
+	 * rejection such as a 404 for a model it does not serve). Until a
+	 * compaction commits, speculation does not re-send the request and the
+	 * threshold pass falls back to the next method instead.
 	 */
-	#failedNativeSpeculation: string | undefined;
+	#failedRemoteSpeculation: { sessionId: string; model: Model } | undefined;
 	#skipPostTurnMaintenanceAssistantTimestamp: number | undefined;
 	/**
 	 * Consecutive no-progress `response.incomplete` (length-stop) recoveries in
@@ -2060,6 +2062,39 @@ export class SessionMaintenance {
 	}
 
 	/**
+	 * Whether the branch changed since `sourceLeafId` in a way that invalidates
+	 * the prepared compaction: the source leaf left the branch entirely, or an
+	 * entry carrying model-facing content (transcript message, branch summary,
+	 * another compaction, a reset boundary) was appended after it.
+	 *
+	 * Pure journal appends — goal usage bookkeeping (`mode_change`), notes,
+	 * tier/thinking changes — legitimately race the compaction window:
+	 * agent-core dispatches event handlers fire-and-forget, so a
+	 * `tool_execution_end` handler may still be appending while the rollover
+	 * awaits its hooks (#20063). Aborting the rollover on them silently
+	 * dropped explicit `new_context` requests with no trace; they are not
+	 * history rewrites, so the prepared boundary stays valid against the
+	 * new leaf.
+	 */
+	#branchRewrittenSince(sourceLeafId: string | undefined): boolean {
+		const branch = this.#host.sessionManager.getBranch();
+		const start = sourceLeafId ? branch.findIndex(entry => entry.id === sourceLeafId) + 1 : 0;
+		if (sourceLeafId && start === 0) return true;
+		for (let index = start; index < branch.length; index++) {
+			const entry = branch[index];
+			if (
+				isTranscriptEntry(entry) ||
+				entry.type === "branch_summary" ||
+				entry.type === "compaction" ||
+				entry.type === "reset_boundary"
+			) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Commit a notebook-backed boundary without generating, imaging, or otherwise
 	 * rewriting the canonical transcript. Explicit compact modes and focused
 	 * manual compactions deliberately bypass this path.
@@ -2077,7 +2112,6 @@ export class SessionMaintenance {
 
 		const sourceLeafId = entries.at(-1)?.id;
 		const sourceSessionId = this.#host.sessionId();
-		const sourceModel = `${model.provider}/${model.id}`;
 		let hookCompaction: CompactionResult | undefined;
 		let fromExtension = false;
 		if (this.#host.extensionRunner?.hasHandlers("session_before_compact")) {
@@ -2098,8 +2132,8 @@ export class SessionMaintenance {
 			signal.aborted ||
 			!this.#usesExperimentalContextManagement() ||
 			this.#host.sessionId() !== sourceSessionId ||
-			this.#host.sessionManager.getBranch().at(-1)?.id !== sourceLeafId ||
-			(this.#model && `${this.#model.provider}/${this.#model.id}` !== sourceModel)
+			this.#branchRewrittenSince(sourceLeafId) ||
+			!routedModelsAreEqual(this.#model, model)
 		) {
 			throw new CompactionCancelledError(undefined, { cause: signal.reason });
 		}
@@ -2108,8 +2142,8 @@ export class SessionMaintenance {
 			signal.aborted ||
 			!this.#usesExperimentalContextManagement() ||
 			this.#host.sessionId() !== sourceSessionId ||
-			this.#host.sessionManager.getBranch().at(-1)?.id !== sourceLeafId ||
-			(this.#model && `${this.#model.provider}/${this.#model.id}` !== sourceModel)
+			this.#branchRewrittenSince(sourceLeafId) ||
+			!routedModelsAreEqual(this.#model, model)
 		) {
 			throw new CompactionCancelledError(undefined, { cause: signal.reason });
 		}
@@ -2176,7 +2210,6 @@ export class SessionMaintenance {
 		if (!preparation) return COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION;
 		const sourceLeafId = branch.at(-1)?.id;
 		const sourceSessionId = this.#host.sessionId();
-		const sourceModel = `${model.provider}/${model.id}`;
 
 		this.cancelSpeculation();
 		this.#autoCompactionAbortController?.abort();
@@ -2249,12 +2282,13 @@ export class SessionMaintenance {
 			}
 
 			const prepared = await this.#prepareCompactionFromHooks(preparation, hookCompaction, controller.signal);
+			const branchRewritten = this.#branchRewrittenSince(sourceLeafId);
 			if (
 				controller.signal.aborted ||
 				!this.#usesExperimentalContextManagement() ||
 				this.#host.sessionId() !== sourceSessionId ||
-				this.#host.sessionManager.getBranch().at(-1)?.id !== sourceLeafId ||
-				(this.#model && `${this.#model.provider}/${this.#model.id}` !== sourceModel)
+				branchRewritten ||
+				!routedModelsAreEqual(this.#model, model)
 			) {
 				await this.#emitLifecycleEvent(
 					{
@@ -2267,6 +2301,22 @@ export class SessionMaintenance {
 					},
 					detachPostCommit,
 				);
+				// An explicit `new_context` request dropped by a history rewrite
+				// must not look like it succeeded: the tool already answered
+				// "New context window requested." (#20063).
+				if (
+					!controller.signal.aborted &&
+					this.#usesExperimentalContextManagement() &&
+					this.#host.sessionId() === sourceSessionId &&
+					branchRewritten &&
+					options.explicitNewContextRequest === true
+				) {
+					this.#host.emitNotice(
+						"warning",
+						"The requested context rollover was skipped because the session branch changed while it was prepared; run /compact or ask again for a fresh window.",
+						"compaction",
+					);
+				}
 				return COMPACTION_CHECK_NONE;
 			}
 			const result =
@@ -2618,7 +2668,7 @@ export class SessionMaintenance {
 		const model = this.#model;
 		if (!model) return;
 		const method = resolveSpeculationMethod(model, settings, {
-			skipRemote: this.#nativeSpeculationFailed(model),
+			skipRemote: this.#remoteSpeculationFailed(model),
 		});
 		if (!method) return;
 		this.#startSpeculationRun(contextTokens, method);
@@ -2636,8 +2686,8 @@ export class SessionMaintenance {
 			accepted: false,
 		};
 		const model = this.#model;
-		// Keyed now: the session can switch before the run settles.
-		const nativeKey = model && this.#nativeSpeculationKey(model);
+		// Capture the session before the run: it can switch before the run settles.
+		const sessionId = this.#host.sessionManager.getSessionId();
 		this.#speculation = run;
 		const compactionId = logger.getLogContext().compaction_id ?? `compact-${crypto.randomUUID()}`;
 		run.promise = logger.withLogContext(
@@ -2652,19 +2702,18 @@ export class SessionMaintenance {
 						...logger.diagnosticError(error),
 					});
 					if (this.#speculation === run) this.#speculation = undefined;
-					// Keyed by the live model even when a compaction-model candidate made the
-					// failing request: every consumer checks the live model, and a false hit
-					// only moves this cycle to the next configured method. Errors with no
-					// HTTP status classify by message text, so an unrecognised transient
-					// failure costs the same single early fallback.
+					// Consumers check the live model, even if a compaction-model
+					// candidate made the request. Native failures wrap their cause;
+					// endpoint failures arrive unwrapped.
 					if (
 						method === "remote" &&
 						model &&
 						!controller.signal.aborted &&
-						error instanceof NativeCompactionError &&
-						!AIError.retriable(AIError.classify(error.cause, model.api))
+						!AIError.retriable(
+							AIError.classify(error instanceof NativeCompactionError ? error.cause : error, model.api),
+						)
 					) {
-						this.#failedNativeSpeculation = nativeKey;
+						this.#failedRemoteSpeculation = { sessionId, model };
 					}
 				}),
 		);
@@ -2690,7 +2739,7 @@ export class SessionMaintenance {
 		const method = resolveSpeculationMethod(
 			model,
 			{ ...settings, methodOrder },
-			{ skipRemote: this.#nativeSpeculationFailed(model) },
+			{ skipRemote: this.#remoteSpeculationFailed(model) },
 		);
 		return method === "soft" ? undefined : method;
 	}
@@ -2734,14 +2783,14 @@ export class SessionMaintenance {
 		);
 	}
 
-	/** Identity of `model`'s native speculation in the current session. */
-	#nativeSpeculationKey(model: Model): string {
-		return `${this.#host.sessionManager.getSessionId()}/${model.provider}/${model.id}`;
-	}
-
-	/** Whether `model`'s native speculation already failed for good this cycle. */
-	#nativeSpeculationFailed(model: Model): boolean {
-		return this.#failedNativeSpeculation === this.#nativeSpeculationKey(model);
+	/** Whether `model`'s remote speculation already failed for good this cycle. */
+	#remoteSpeculationFailed(model: Model): boolean {
+		const failed = this.#failedRemoteSpeculation;
+		return (
+			failed !== undefined &&
+			failed.sessionId === this.#host.sessionManager.getSessionId() &&
+			routedModelsAreEqual(failed.model, model)
+		);
 	}
 
 	/**
@@ -2772,7 +2821,7 @@ export class SessionMaintenance {
 		const model = this.#model;
 		if (!model) return false;
 		const method = resolveSpeculationMethod(model, settings, {
-			skipRemote: this.#nativeSpeculationFailed(model),
+			skipRemote: this.#remoteSpeculationFailed(model),
 		});
 		if (!method) return false;
 		const thresholdTokens = resolveThresholdTokens(contextWindow, settings);
@@ -3073,8 +3122,8 @@ export class SessionMaintenance {
 		);
 		args.onCommitted?.();
 		this.#host.persistEvalStateContext();
-		// A committed compaction starts a new cycle; native compaction gets a fresh try.
-		this.#failedNativeSpeculation = undefined;
+		// A committed compaction starts a new cycle; remote compaction gets a fresh try.
+		this.#failedRemoteSpeculation = undefined;
 		const newEntries = this.#host.sessionManager.getEntries();
 		const sessionContext = this.#host.buildDisplaySessionContext();
 		this.#host.replaceMessagesFromSessionContext(sessionContext.messages);
@@ -5874,13 +5923,13 @@ export class SessionMaintenance {
 				)
 			)
 				continue;
-			// Re-sending a native request that just failed for good only delays the
+			// Re-sending a remote request that just failed for good only delays the
 			// fallback. Skip it while a later method can still run.
 			const liveModel = this.#model;
 			if (
 				candidate === "remote" &&
 				liveModel &&
-				this.#nativeSpeculationFailed(liveModel) &&
+				this.#remoteSpeculationFailed(liveModel) &&
 				methods
 					.slice(index + 1)
 					.some(next =>
@@ -5893,12 +5942,12 @@ export class SessionMaintenance {
 						),
 					)
 			) {
-				logger.info("Skipping native compaction after a failed speculative attempt", {
+				logger.info("Skipping remote compaction after a failed speculative attempt", {
 					component: "compaction",
-					event: "compaction_native_skipped",
+					event: "compaction_remote_skipped",
 					stage: "selection",
 					result: "skipped",
-					reason: "speculative_native_failure",
+					reason: "speculative_remote_failure",
 					provider: compactionDiagnosticId(liveModel.provider),
 					model: compactionDiagnosticId(liveModel.id),
 				});

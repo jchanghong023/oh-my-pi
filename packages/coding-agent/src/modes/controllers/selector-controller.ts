@@ -27,7 +27,13 @@ import {
 	modelPresetSavedMessage,
 	saveModelPreset,
 } from "../../config/model-presets";
-import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config/model-resolver";
+import {
+	formatModelStringWithRouting,
+	resolveAdvisorRoleSelection,
+	resolveModelRoleValue,
+	scopeAllowList,
+} from "../../config/model-resolver";
+import { routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { getRoleInfo } from "../../config/model-roles";
 import { settings } from "../../config/settings";
@@ -86,6 +92,7 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../../tools";
 import { AskTool } from "../../tools/ask";
+import { cfgTodoBackend, NATIVE_TODO_BACKEND } from "../../tools/settings";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { sanitizeDisplayWarnings, shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { sanitizeErrorLine } from "@oh-my-pi/pi-tui/chrome/error-block";
@@ -118,6 +125,7 @@ import { type ResetUsageAccount, ResetUsageSelectorComponent } from "@oh-my-pi/p
 import { type BranchVariantPath, RewindSelectorComponent } from "@oh-my-pi/pi-tui/overlays/rewind-selector";
 import { SessionAccountSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-account-selector";
 import { SessionSelectorComponent, type SessionSelectorOptions } from "@oh-my-pi/pi-tui/overlays/session-selector";
+import type { SubmenuOption } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import { TranscriptBlock } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
@@ -305,7 +313,11 @@ export class SelectorController {
 	showSettingsSelector(): void {
 		if (this.#focusOpenMenu("settings")) return;
 		const menu = this.#claimMenu("settings");
-		getAvailableThemes()
+		// Startup-deferred extensions bind first, so the todo backend row lists their backends.
+		const themes = this.ctx.session.hasPendingDeferredExtensions
+			? Promise.all([getAvailableThemes(), this.ctx.session.loadDeferredExtensions()]).then(([names]) => names)
+			: getAvailableThemes();
+		themes
 			.then(availableThemes => {
 				// Fullscreen settings editor on the alternate screen: the overlay
 				// enables mouse tracking (click/hover/wheel) for its lifetime and
@@ -321,6 +333,7 @@ export class SelectorController {
 						availableThinkingLevels: [...this.ctx.session.getAvailableThinkingLevels()],
 						thinkingLevel: this.ctx.session.thinkingLevel,
 						availableThemes,
+						runtimeOptions: new Map([[cfgTodoBackend.id, this.#todoBackendOptions()]]),
 						providers: [...new Set(this.ctx.session.getAvailableModels().map(model => model.provider))].sort(
 							(a, b) => a.localeCompare(b),
 						),
@@ -332,7 +345,19 @@ export class SelectorController {
 						composerPreviewStatus: this.ctx.statusLine,
 					},
 					{
-						onChange: (id, value) => this.handleSettingChange(id, value),
+						onChange: (id, value) => {
+							this.handleSettingChange(id, value);
+							// A backend offered here is registered, so it gets the current list at once. An approved
+							// `cfg://` write can name one whose extension is still loading, like a config reload:
+							// those get the list with the next change. The effective value decides: a project or
+							// runtime layer can keep another backend selected over the global one written here.
+							if (id === cfgTodoBackend.id) {
+								const backend = cfgTodoBackend.get(this.ctx.session.settings);
+								if (backend !== NATIVE_TODO_BACKEND) {
+									this.ctx.session.extensionRunner?.syncTodoBackend(backend, this.ctx.session.getTodoPhases());
+								}
+							}
+						},
 						onThemePreview: async themeName => {
 							const result = await previewTheme(themeName);
 							if (result.success) {
@@ -700,6 +725,17 @@ export class SelectorController {
 		this.#mountMenu(menu, hub, () => this.#showFullscreenMenu(hub));
 	}
 
+	/** `todo.backend` choices: `Native`, then every backend an enabled extension registered. */
+	#todoBackendOptions(): SubmenuOption[] {
+		const options: SubmenuOption[] = [
+			{ value: NATIVE_TODO_BACKEND, label: "Native", description: "Keep the todo list in the session only" },
+		];
+		for (const [id, { definition }] of this.ctx.session.extensionRunner?.getTodoBackends() ?? []) {
+			options.push({ value: id, label: definition.label ?? id, description: definition.description });
+		}
+		return options;
+	}
+
 	/**
 	 * Apply the side effects of a setting change the user made in this process
 	 * (settings selector, approved `cfg://` writes); the value is already stored.
@@ -825,7 +861,7 @@ export class SelectorController {
 		const currentSelector = selectOnly
 			? selectOnly.currentSelector
 			: current
-				? `${current.provider}/${current.id}`
+				? formatModelStringWithRouting(current)
 				: undefined;
 		// Preselect the effective Task model in task mode: the configured override,
 		// else the session model (the bundled task agent inherits it by default).
@@ -840,6 +876,13 @@ export class SelectorController {
 			this.ctx.ui.requestRender();
 		};
 		const isCurrent = () => this.#openMenus.get(menuKind) === menu;
+		// One pick per target: an Enter repeated while that pick applies is dropped, but a
+		// pick of a different model or role made meanwhile queues behind it, so a slower
+		// earlier apply can never resolve after and overwrite a newer pick; a queued pick
+		// that a newer one supersedes is dropped before it applies.
+		let pickInFlightKey: string | null = null;
+		let latestPickId = 0;
+		let pickQueue: Promise<void> = Promise.resolve();
 		const picker = new ModelPickerComponent(
 			this.ctx.ui,
 			createModelBrowserSource(this.ctx.settings, model => viewed.effectiveServiceTier(model)),
@@ -857,19 +900,44 @@ export class SelectorController {
 						}
 						return;
 					}
+					const key = `model:${selector}:${thinkingLevel ?? ""}`;
+					if (pickInFlightKey === key) return;
+					pickInFlightKey = key;
+					const pickId = ++latestPickId;
+					const prev = pickQueue;
+					let release!: () => void;
+					pickQueue = new Promise<void>(resolve => {
+						release = resolve;
+					});
 					try {
+						await prev;
+						// A closed picker never applies, and a newer pick supersedes this one.
+						if (!isCurrent() || pickId !== latestPickId) return;
 						// Over-context pick: close the picker first so the compaction
 						// loader is visible.
 						if (overContext) done();
 						await this.#applySessionModel(model, selector, thinkingLevel, overContext);
-						if (!overContext) done();
+						if (!overContext && pickId === latestPickId) done();
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
+					} finally {
+						if (pickId === latestPickId) pickInFlightKey = null;
+						release();
 					}
 				},
 				onPickRole: async entry => {
-					if (!isCurrent() || selectOnly) return;
+					const key = `role:${entry.role}`;
+					if (!isCurrent() || selectOnly || pickInFlightKey === key) return;
+					pickInFlightKey = key;
+					const pickId = ++latestPickId;
+					const prev = pickQueue;
+					let release!: () => void;
+					pickQueue = new Promise<void>(resolve => {
+						release = resolve;
+					});
 					try {
+						await prev;
+						if (!isCurrent() || pickId !== latestPickId) return;
 						await this.ctx.viewSession.applyRoleModel(entry);
 						this.ctx.statusLine.invalidate();
 						this.ctx.updateEditorBorderColor();
@@ -877,9 +945,12 @@ export class SelectorController {
 							quickRoleOrder.map(role => ({ label: role })),
 							quickRoleOrder.indexOf(entry.role),
 						);
-						done();
+						if (pickId === latestPickId) done();
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
+					} finally {
+						if (pickId === latestPickId) pickInFlightKey = null;
+						release();
 					}
 				},
 				onPickTask: (_model, selector) => {
@@ -899,6 +970,12 @@ export class SelectorController {
 					this.ctx.statusLine.invalidate();
 					this.ctx.updateEditorBorderColor();
 				},
+				onCatalogRefreshed: selectOnly
+					? undefined
+					: async () => {
+							await this.ctx.session.refreshScopedModels();
+							return this.ctx.session.scopedModels;
+						},
 				onCancel: () => {
 					done();
 					selectOnly?.onCancel?.();
@@ -1076,18 +1153,15 @@ export class SelectorController {
 							const exposesPersistedFallback =
 								fallbackProvenance === "project" || fallbackProvenance === "global";
 							if (fallbackRoleValue && exposesPersistedFallback) {
-								const scopedModels = this.ctx.session.scopedModels.map(sm => sm.model);
+								const session = this.ctx.session;
 								const availableModels =
-									scopedModels.length > 0 ? scopedModels : this.ctx.session.getAvailableModels();
+									session.scopedModels.length > 0
+										? scopeAllowList(session.scopedModels)
+										: session.getAvailableModels();
 								const resolved = resolveModelRoleValue(fallbackRoleValue, availableModels, {
 									settings: this.ctx.settings,
 								});
-								const live = this.ctx.session.model;
-								const liveDiffers =
-									!live ||
-									!resolved.model ||
-									live.provider !== resolved.model.provider ||
-									live.id !== resolved.model.id;
+								const liveDiffers = !routedModelsAreEqual(session.model, resolved.model);
 								if (resolved.model && (fallbackRoleValue !== previousEffectiveRoleValue || liveDiffers)) {
 									const fallbackModel = resolved.model;
 									const isAuto = resolved.thinkingLevel === AUTO_THINKING;

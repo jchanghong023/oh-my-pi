@@ -9,6 +9,7 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getUpstreamPin } from "@oh-my-pi/pi-catalog/models";
 import { addKeyAliases, canonicalKeyId } from "../keybindings";
 import { type KeyId, matchesKey, parseKey } from "../keys";
 import type { SgrMouseEvent } from "../mouse";
@@ -50,7 +51,8 @@ export interface ModelPickerRegistry extends ModelBrowserRegistry {
 
 export interface ModelPickerCallbacks {
 	/**
-	 * A model was chosen for a session-only switch. `selector` is `provider/id`.
+	 * A model was chosen. Session selectors include `@upstream` when pinned;
+	 * a selection-only catalogue returns its `provider/id` references.
 	 * `overContext` is true when the session transcript exceeds the model's
 	 * context window — the host must compact before switching. `thinkingLevel`
 	 * is the slider's level clamped to `model`, absent when it was not moved.
@@ -72,6 +74,11 @@ export interface ModelPickerCallbacks {
 	 * (clamped to that model) as the session's thinking level. {@link onCancel} follows.
 	 */
 	onKeepThinking?: (level: ConfiguredThinkingLevel) => void;
+	/** Returns the rebuilt `--models` scope after the catalog moved; `undefined` keeps the current one. */
+	onCatalogRefreshed?: () =>
+		| ReadonlyArray<ScopedModelItem>
+		| undefined
+		| Promise<ReadonlyArray<ScopedModelItem> | undefined>;
 	/** The picker was dismissed. */
 	onCancel: () => void;
 }
@@ -79,7 +86,7 @@ export interface ModelPickerCallbacks {
 export interface ModelPickerOptions {
 	/** Session token count; models with smaller context windows are grayed and compact-first on pick. */
 	currentContextTokens?: number;
-	/** `provider/id` of the session's active model; highlighted and preselected. */
+	/** Selector of the session's active model; highlighted and preselected. */
 	currentSelector?: string;
 	/** Resolved role models in the same order used by the ctrl+p quick-role cycle. */
 	quickRoles?: ReadonlyArray<ResolvedRoleModel>;
@@ -89,7 +96,7 @@ export interface ModelPickerOptions {
 	currentQuickRole?: string;
 	/** Keys that toggle task-subagent mode while the picker is open; the first is shown in the footer. */
 	taskModeKeys?: readonly KeyId[];
-	/** `provider/id` highlighted and preselected in task mode (current Task subagent model). */
+	/** Selector highlighted and preselected in task mode (current Task subagent model). */
 	taskSelector?: string;
 	/** Present selection-only chrome; consumers handle the chosen selector without mutating a session. */
 	selectOnly?: boolean;
@@ -328,10 +335,17 @@ export class ModelPickerComponent implements Component {
 		}
 		if (this.#getCandidates) return;
 
-		// Refresh stale catalog state without delaying the first paint.
-		(this.#scopedModels.length === 0 ? this.#registry.refreshIfStale() : Promise.resolve(false))
-			.then(changed => {
-				if (changed) this.#syncFromRegistryState();
+		// Re-read only if the catalog moves (startup discovery landing, a
+		// models.yml edit, an expired discovery cache): rebuilding a current
+		// catalog on every open blocks the first paint for seconds. The host
+		// re-resolves a --models scope against the moved catalog.
+		this.#registry
+			.refreshIfStale()
+			.then(async changed => {
+				if (!changed) return;
+				const scope = await callbacks.onCatalogRefreshed?.();
+				if (scope) this.#scopedModels = scope;
+				this.#syncFromRegistryState();
 			})
 			.catch(error => {
 				this.#configError = error instanceof Error ? error.message : String(error);
@@ -375,6 +389,15 @@ export class ModelPickerComponent implements Component {
 		);
 		this.#configError = scope.error;
 		this.#modelItems = scope.items;
+		if (!this.#selectOnly) {
+			// Two scoped pins of the same model must remain distinct browser rows.
+			for (const item of this.#modelItems) {
+				const upstream = getUpstreamPin(item.model);
+				if (!upstream) continue;
+				item.id = `${item.id}@${upstream}`;
+				item.selector = `${item.selector}@${upstream}`;
+			}
+		}
 		this.#browser.setRoles(scope.roles);
 		this.#browser.setMruOrder(scope.mruOrder);
 		this.#browser.setPerfStats(this.#settings.modelPerf);

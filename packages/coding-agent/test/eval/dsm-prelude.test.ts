@@ -510,6 +510,8 @@ describe("dsm in real eval runtimes", () => {
 							`Path(${JSON.stringify(reportPath)}).write_text(json.dumps(result), encoding="utf-8")`,
 						].join("\n");
 			const sessionId = `dsm-${language}-${crypto.randomUUID()}`;
+			// afterEach removes the fixture directory before afterAll disposes the
+			// VM contexts; stop this session's worker first so it releases the dir.
 			if (language === "js") cleanups.unshift(() => resetVmContext(sessionId));
 			const result =
 				language === "js"

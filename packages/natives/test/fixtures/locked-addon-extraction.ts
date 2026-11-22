@@ -2,7 +2,7 @@ import * as path from "node:path";
 import type { RunTrace } from "../../native";
 import { extractEmbeddedAddons, openNativeAddon } from "../../native/loader-state.js";
 
-const [target, zstdPath, size] = process.argv.slice(2);
+const [target, zstdPath, size, hash] = process.argv.slice(2);
 const bindings = openNativeAddon(target!) as { RunTrace: typeof RunTrace };
 if (!zstdPath) {
 	const trace = new bindings.RunTrace("echo replacement-loaded");
@@ -10,8 +10,8 @@ if (!zstdPath) {
 } else {
 	const trace = new bindings.RunTrace("echo still-running");
 	const written = extractEmbeddedAddons({
-		files: [{ variant: "default", filename: path.basename(target!), size: Number(size), zstdPath }],
-		targetDir: path.dirname(target!),
+		files: [{ variant: "default", filename: path.basename(target!), size: Number(size), hash: hash!, zstdPath }],
+		targetDir: path.dirname(path.dirname(target!)),
 	});
 	const replacement = Bun.spawn([process.execPath, import.meta.path, target!], { stdout: "pipe", stderr: "inherit" });
 	const replacementOutput = await new Response(replacement.stdout).text();

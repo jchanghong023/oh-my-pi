@@ -17,12 +17,12 @@ A successful call is not memoized by JS. Repeated calls rely on `openNativeAddon
 - `platformTag`: `${platform}-${process.arch}`;
 - package version (the expected addon release, subject to the pre-sentinel compatibility exception below);
 - package-local `nativeDir` and the directory of `process.execPath`;
-- `nativesDir`: `PI_NATIVES_DIR` first (trimmed, `~`-expanded, and normalized; empty or relative values are ignored), then `$XDG_DATA_HOME/omp/natives` only when `$XDG_DATA_HOME/omp` exists, otherwise `~/.omp/natives`;
-- `versionedDir`: `<nativesDir>/<packageVersion>`;
+- `nativesDir` and `addonCacheDir`: `PI_NATIVES_DIR` overrides both, followed by an explicit `OMP_CACHE_DIR`; otherwise the addon cache uses the resolved config/profile root or `XDG_CACHE_HOME` on eligible Linux and macOS installs. On Linux the implicit offline cache can live on `/dev/shm`, which may disallow executable mappings, so only WASM grammars use that cache by default.
+- `versionedDir`: `<addonCacheDir>/<packageVersion>`;
 - legacy compiled-binary directory: `%LOCALAPPDATA%/omp` (or `~/AppData/Local/omp`) on Windows, `~/.local/bin` elsewhere;
 - workspace/install/compiled mode, optional leaf directory, Windows staging policy, CPU variant, filenames, and ordered candidates.
 
-Compiled mode is true when a populated embedded manifest exists, `PI_COMPILED` is set, or `import.meta.url` contains a Bun embedded marker (`$bunfs`, `~BUN`, or `%7EBUN`). A non-compiled `nativeDir` outside a `node_modules` path is a workspace load. Windows path classification is case-insensitive; other platforms use case-sensitive path matching.
+Compiled mode is true when a populated embedded manifest exists, `PI_COMPILED` is set, or `import.meta.url` contains a Bun embedded marker (`$bunfs`, `~BUN`, or `%7EBUN`). A non-compiled load is a workspace load when `nativeDir` is outside a `node_modules` path and the core manifest declares no platform leaf in `optionalDependencies`. A release copied into bun's install cache declares its leaf, so it is an installed package even though its path has no `node_modules` segment. Windows path classification is case-insensitive; other platforms use case-sensitive path matching.
 
 ## Platforms and variants
 
@@ -62,7 +62,7 @@ Detection uses `Bun.spawnSync` when available, then falls back to `node:child_pr
 1. Every selected filename in `@oh-my-pi/pi-natives-<tag>`.
 2. For each filename, package-local `nativeDir`, then the executable directory.
 
-The platform leaf wins over a stale core artifact. Workspace loads deliberately skip leaf resolution.
+The platform leaf wins over a stale core artifact. Workspace loads deliberately skip leaf resolution. The leaf is found with `require.resolve`; when that misses (a release copied into bun's install cache, where the leaf is a version-pinned sibling `pi-natives-<tag>@<version>@@@N` of the core package), the loader takes the sibling `pi-natives-<tag>` directory in the core package's scope directory that holds a selected filename, matching the running version (`pi-natives-<tag>@<version>@@@N`, or the bare `pi-natives-<tag>`).
 
 ### Windows `node_modules` staging
 
@@ -79,14 +79,14 @@ Before probing, `maybeStageNodeModulesAddon()` copies each available filename fr
 1. For each filename, `versionedDir`, then the legacy user-data directory.
 2. For each filename, package-local `nativeDir`, then the executable directory.
 
-A successfully selected embedded candidate is prepended. Windows staging is disabled in compiled mode.
+An addon extracted from a matching embedded manifest is prepended, and its baseline fallback is extracted only if probed. For a matching manifest the old flat `versionedDir/<filename>` candidates are skipped because they may belong to another build of the same release. Windows staging is disabled in compiled mode.
 
 ## Embedded manifest and extraction
 
 `embedded-addon.js` is always `embeddedAddon = null` on disk, including the published core. Standalone binary builds replace it in memory with a manifest from `scripts/embed-native.ts` containing:
 
 - `platformTag` and package `version`;
-- `files[]` with `variant`, basename-only `filename`, decompressed `size`, and `zstdPath`, the embedded `<filename>.zst` zstd frame holding that addon.
+- `files[]` with `variant`, basename-only `filename`, decompressed `size`, content `hash`, and `zstdPath`, the embedded `<filename>.zst` zstd frame holding that addon.
 
 Extraction runs only for compiled mode with matching platform and version and a selectable file. Selection is:
 
@@ -94,9 +94,9 @@ Extraction runs only for compiled mode with matching platform and version and a 
 - modern x64: `modern`, then `baseline`;
 - baseline x64: `baseline` only.
 
-The loader creates `versionedDir` and rejects any manifest filename that is not a bare basename. Each manifest file that is already a regular file with the declared size is reused; every other one is decompressed from its zstd frame, checked against the declared size, and written through a temporary file plus rename. Unreadable frames, corrupt frames, and size mismatches are errors.
+The loader extracts to `versionedDir/embedded-<hash>/<filename>` so two builds of one release never load each other's cached images. It rejects unsafe filenames and hashes. A regular file of the declared size in its build's directory is reused without hashing at startup; otherwise the loader decompresses the frame, checks its size, and publishes it through a temporary file and rename. The Linux private offline cache also verifies directory ownership and rejects links and unsafe permissions. Unreadable frames, corrupt frames, and size mismatches are errors.
 
-Extraction errors are accumulated; the loader continues to ordinary candidates.
+Extraction errors are accumulated and the loader continues to ordinary candidates. An unsafe private offline cache path aborts loading rather than bypassing the ownership and permission checks.
 
 ## Candidate validation and post-load setup
 
@@ -106,7 +106,7 @@ For each candidate:
 2. Open `candidate` with `openNativeAddon`, which calls `process.dlopen` once per path. Bun's `require` cannot load a module from a path that contains `?`, which a `HOME`, `PI_NATIVES_DIR` or install directory can hold; `dlopen` takes the path as it is. A failed open records `dlopen`'s reason for the candidate, caches nothing, and the next candidate is tried.
 3. Unless this is workspace development, require `__piNativesBuildVersion()` to return the package version. The build pipeline writes that version into a fixed 64-byte slot (`PI_NATIVES_VERSION_STAMP:<version>` + NUL padding) after linking (`scripts/stamp-native-version.ts`, called from every `scripts/bazel-natives.ts` install, the local cargo build, and the Nix package build), so a release bump edits no Rust input. Addons published before the stamp expose a per-release `__piNativesV<version_with_underscores>` export instead; those are still read as their release for diagnosis.
 4. Call `__ompInstallTokioRuntime()` if the addon provides it.
-5. Best-effort remove valid semantic-version cache directories older than the current version.
+5. Best-effort remove older release caches and hash directories from other builds of the current release.
 6. Return the bindings.
 
 The version error distinguishes a previous addon still resident in the current process from a stale file on disk. If the loaded exports report an older release but the candidate bytes contain the current stamp (`PI_NATIVES_VERSION_STAMP:<packageVersion>\0`), the diagnostic says to restart. Otherwise it says to reinstall. The loader does not validate all public exports. As a compatibility exception, an addon with no release identity is accepted if it has `countTokens`, `executeShell`, `visibleWidth`, and a `DesktopSession` with `capture`, `execute`, and `close`, and the candidate bytes do not carry the expected current stamp. An unstamped current addon that exposes the stamp reader is not eligible.

@@ -7,11 +7,12 @@ import type { ReadableStreamDefaultReader } from "node:stream/web";
 import { pathToFileURL } from "node:url";
 import { Process } from "@oh-my-pi/pi-natives";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { type EmbeddedAddonFile, embeddedAddonPath } from "../../../natives/native/loader-state.js";
 
 const packageRoot = path.resolve(import.meta.dir, "../..");
 const nativeDir = path.resolve(packageRoot, "../natives/native");
 
-async function createHost(root: string): Promise<string> {
+async function createHost(root: string): Promise<{ host: string; addon: EmbeddedAddonFile }> {
 	const filenames = await fs.readdir(nativeDir);
 	const filename = filenames.find(
 		name => name.startsWith(`pi_natives.${process.platform}-${process.arch}`) && name.endsWith(".node"),
@@ -21,6 +22,13 @@ async function createHost(root: string): Promise<string> {
 	const image = await fs.readFile(path.join(nativeDir, filename));
 	const compressed = path.join(root, "image.zst");
 	await fs.writeFile(compressed, Bun.zstdCompressSync(image));
+	const addon: EmbeddedAddonFile = {
+		variant: "default",
+		filename,
+		size: image.length,
+		hash: Bun.hash.xxHash64(image).toString(16).padStart(16, "0"),
+		zstdPath: compressed,
+	};
 	const host = path.join(root, "native-host.ts");
 	const moduleUrl = (relative: string) => JSON.stringify(pathToFileURL(path.resolve(packageRoot, relative)).href);
 	await fs.mkdir(path.join(root, "smoke-tmp"));
@@ -31,7 +39,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createRequire } from "node:module";
 import { declareWorkerHostEntry } from ${moduleUrl("../utils/src/index.ts")};
-import { extractEmbeddedAddons, prepareNativeVersionDir } from ${moduleUrl("../natives/native/loader-state.js")};
+import { embeddedAddonPath, extractEmbeddedAddons, prepareNativeVersionDir } from ${moduleUrl("../natives/native/loader-state.js")};
 import { closeDaemonClient, daemonClient, isolateDaemonForSmokeTest, probeDaemon, smokeTestDaemon } from ${moduleUrl("src/daemon/client.ts")};
 import { startDaemonFromEnvironment } from ${moduleUrl("src/daemon/server.ts")};
 import { DAEMON_WORKER_ARG } from ${moduleUrl("src/daemon/protocol.ts")};
@@ -45,8 +53,9 @@ if (mode === "cold") {
 const root = process.env.PI_NATIVES_DIR;
 if (!root) throw new Error("Missing native owner");
 prepareNativeVersionDir(root);
-extractEmbeddedAddons({ files: [{ filename: ${JSON.stringify(filename)}, size: ${image.length}, zstdPath: ${JSON.stringify(compressed)} }], targetDir: root });
-const binding = createRequire(import.meta.url)(path.join(root, ${JSON.stringify(filename)}));
+const addon = ${JSON.stringify(addon)};
+extractEmbeddedAddons({ files: [addon], targetDir: root });
+const binding = createRequire(import.meta.url)(embeddedAddonPath(root, addon));
 if (typeof binding.ipcEndpoint(root, "native-probe") !== "string") throw new Error("Real native binding did not load");
 if (mode === DAEMON_WORKER_ARG) {
 	await fs.writeFile(${JSON.stringify(path.join(root, "daemon-native-root-"))} + process.pid, root);
@@ -81,7 +90,7 @@ if (mode === DAEMON_WORKER_ARG) {
 }
 `,
 	);
-	return host;
+	return { host, addon };
 }
 
 interface NativeHost {
@@ -135,7 +144,7 @@ describe("daemon native cache ownership", () => {
 	it("removes the public smoke runtime after the real embedded daemon exits", async () => {
 		using temp = TempDir.createSync("@omp-broker-smoke-native-");
 		const root = temp.path();
-		const host = await createHost(root);
+		const { host } = await createHost(root);
 		const worker = startHost(host, "smoke", path.join(root, "creator-natives"));
 		const stdout = worker.proc.stdout.getReader();
 		try {
@@ -152,7 +161,7 @@ describe("daemon native cache ownership", () => {
 	it("isolates the creator's native leaf where required without stopping the shared daemon", async () => {
 		using temp = TempDir.createSync("@omp-broker-native-");
 		const root = temp.path();
-		const host = await createHost(root);
+		const { host } = await createHost(root);
 		const creatorLeaf = path.join(root, "creator-natives");
 		const runtime = path.join(root, "runtime");
 		const creator = startHost(host, "creator", creatorLeaf);
@@ -191,7 +200,7 @@ describe("daemon native cache ownership", () => {
 	it("loads two simultaneous cold native images without changing a published DLL", async () => {
 		using temp = TempDir.createSync("@omp-native-cold-");
 		const root = temp.path();
-		const host = await createHost(root);
+		const { host, addon } = await createHost(root);
 		const cache = path.join(root, "shared-natives");
 		const workers = [startHost(host, "cold", cache), startHost(host, "cold", cache)];
 		const readers = workers.map(worker => worker.proc.stdout.getReader());
@@ -199,11 +208,9 @@ describe("daemon native cache ownership", () => {
 			await Promise.all(readers.map((reader, index) => expectLine(reader, "ready", workers[index]!)));
 			for (const worker of workers) worker.proc.stdin.write("go\n");
 			await Promise.all(readers.map((reader, index) => expectLine(reader, "loaded", workers[index]!)));
-			const [filename] = (await fs.readdir(cache)).filter(name => name.endsWith(".node"));
-			expect(await fs.readFile(path.join(cache, filename!))).toEqual(
-				await fs.readFile(path.join(nativeDir, filename!)),
-			);
-			expect((await fs.readdir(cache)).filter(name => name.includes(".tmp."))).toEqual([]);
+			const installed = embeddedAddonPath(cache, addon);
+			expect(await fs.readFile(installed)).toEqual(await fs.readFile(path.join(nativeDir, addon.filename)));
+			expect(await fs.readdir(path.dirname(installed))).toEqual([addon.filename]);
 		} finally {
 			for (const worker of workers) worker.proc.stdin.end();
 			await Promise.all(workers.map(expectExit));

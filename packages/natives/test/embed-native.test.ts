@@ -2,10 +2,16 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { embeddedAddonFiles } from "../scripts/embed-native";
-import packageJson from "../package.json" with { type: "json" };
-import { type EmbeddedAddon, extractEmbeddedAddons } from "../native/loader-state.js";
 import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/host-detect";
+import {
+	type EmbeddedAddon,
+	type EmbeddedAddonFile,
+	cleanupStaleNativeVersions,
+	embeddedAddonPath,
+	extractEmbeddedAddons,
+} from "../native/loader-state.js";
+import packageJson from "../package.json" with { type: "json" };
+import { embeddedAddonFiles } from "../scripts/embed-native";
 
 describe("native addon embedding", () => {
 	for (const [label, contents] of [
@@ -77,20 +83,63 @@ describe("native addon embedding", () => {
 					variant: "default",
 					filename: cacheFilename,
 					size: addon.length,
+					hash: Bun.hash.xxHash64(addon).toString(16).padStart(16, "0"),
 					zstdPath: path.join(await fs.realpath(outDir), "pi_natives.win32-arm64.node.zst"),
 				},
 			]);
-			const cachedAddon = path.join(cacheDir, cacheFilename);
+			const cachedAddon = embeddedAddonPath(cacheDir, embeddedAddon.files[0]);
 			expect(extractEmbeddedAddons({ files: embeddedAddon.files, targetDir: cacheDir })).toEqual([cachedAddon]);
 			expect(await Bun.file(cachedAddon).text()).toBe(addon);
 			const beforeReuse = await fs.stat(cachedAddon);
 			expect(extractEmbeddedAddons({ files: embeddedAddon.files, targetDir: cacheDir })).toEqual([]);
 			expect((await fs.stat(cachedAddon)).mtimeMs).toBe(beforeReuse.mtimeMs);
-			// The upstream cache uses the filename and size, not a content hash.
+			// Within a build's hash directory, a complete file of the expected size needs no rehash.
 			const sameSize = addon.replace("binary", "newbin");
 			await Bun.write(cachedAddon, sameSize);
 			expect(extractEmbeddedAddons({ files: embeddedAddon.files, targetDir: cacheDir })).toEqual([]);
 			expect(await Bun.file(cachedAddon).text()).toBe(sameSize);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it.skipIf(process.platform !== "linux")("extracts and reaps only trusted offline cache directories", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-private-"));
+		const offlineCacheUid = process.getuid!();
+		const targetDir = path.join(root, "1.0.0");
+		const unsafeVersionDir = path.join(root, "1.0.1");
+		const bytes = "native addon";
+		const file: EmbeddedAddonFile = {
+			variant: "default",
+			filename: "pi_natives.linux-arm64.node",
+			size: bytes.length,
+			hash: Bun.hash.xxHash64(bytes).toString(16).padStart(16, "0"),
+			zstdPath: path.join(root, "addon.zst"),
+		};
+		const target = embeddedAddonPath(targetDir, file);
+		const unsafeDir = path.dirname(embeddedAddonPath(unsafeVersionDir, file));
+		try {
+			await fs.mkdir(targetDir, { mode: 0o700 });
+			await fs.mkdir(unsafeVersionDir, { mode: 0o700 });
+			await Bun.write(file.zstdPath, Bun.zstdCompressSync(new TextEncoder().encode(bytes)));
+			expect(extractEmbeddedAddons({ files: [file], targetDir, offlineCacheUid })).toEqual([target]);
+			expect((await fs.stat(path.dirname(target))).mode & 0o777).toBe(0o700);
+			expect((await fs.stat(target)).mode & 0o777).toBe(0o700);
+
+			await fs.symlink(path.dirname(target), unsafeDir, "dir");
+			expect(() => extractEmbeddedAddons({ files: [file], targetDir: unsafeVersionDir, offlineCacheUid })).toThrow(
+				"Unsafe Linux offline native cache path",
+			);
+			await fs.unlink(unsafeDir);
+			await fs.mkdir(unsafeDir);
+			await fs.chmod(unsafeDir, 0o777);
+			await fs.utimes(targetDir, 0, 0);
+			await fs.utimes(unsafeVersionDir, 0, 0);
+			expect(cleanupStaleNativeVersions({ nativesDir: root, currentVersion: "2.0.0", offlineCacheUid })).toEqual([
+				targetDir,
+			]);
+			expect(await fs.readdir(root)).not.toContain(path.basename(targetDir));
+			expect((await fs.stat(unsafeDir)).isDirectory()).toBe(true);
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}
@@ -107,11 +156,19 @@ describe("native addon embedding", () => {
 					avx2: detectHostAvx2Support(),
 				});
 				const source = path.join(import.meta.dir, "../native", filename);
-				const target = path.join(root, filename);
-				await fs.copyFile(source, target);
-				// Keep a valid PE image but force extraction of a different build size.
+				// Keep a valid PE image but stage an undersized copy at its expected cache path.
 				const replacement = Buffer.concat([await fs.readFile(source), Buffer.from([0])]);
+				const hash = Bun.hash.xxHash64(replacement).toString(16).padStart(16, "0");
 				const zstdPath = path.join(root, "replacement.zst");
+				const target = embeddedAddonPath(root, {
+					variant: "default",
+					filename,
+					size: replacement.length,
+					hash,
+					zstdPath,
+				});
+				await fs.mkdir(path.dirname(target));
+				await fs.copyFile(source, target);
 				await Bun.write(zstdPath, Bun.zstdCompressSync(replacement, { level: 1 }));
 				const child = Bun.spawn(
 					[
@@ -120,6 +177,7 @@ describe("native addon embedding", () => {
 						target,
 						zstdPath,
 						String(replacement.length),
+						hash,
 					],
 					{ stdout: "pipe", stderr: "pipe" },
 				);
@@ -196,19 +254,22 @@ try {
 					const [output, childExitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
 					expect(childExitCode).toBe(0);
 					const failure: { error: string } = JSON.parse(output);
-					const cachedCandidate = path.join(cache, packageJson.version, `pi_natives.${tag}-${variant}.node`);
-					// Keep the first loader failure, without retrying a partially loaded image.
-					expect(failure.error.split("\n").filter(line => line.startsWith(`- ${cachedCandidate}:`))).toHaveLength(
-						1,
+					const versionDir = path.join(cache, packageJson.version);
+					const extracted = (await fs.readdir(versionDir, { recursive: true })).filter(file =>
+						file.endsWith(".node"),
 					);
-					const extracted = (await fs.readdir(path.join(cache, packageJson.version)))
-						.filter(filename => filename.endsWith(".node"))
-						.sort();
-					expect(extracted).toEqual(
+					expect(extracted.every(file => /^embedded-[0-9a-f]{16}$/.test(path.dirname(file)))).toBe(true);
+					expect(extracted.map(file => path.basename(file)).sort()).toEqual(
 						(variant === "modern"
 							? [`pi_natives.${tag}-modern.node`, `pi_natives.${tag}-baseline.node`]
 							: [`pi_natives.${tag}-baseline.node`]
 						).sort(),
+					);
+					const selected = extracted.find(file => path.basename(file) === `pi_natives.${tag}-${variant}.node`)!;
+					const cachedCandidate = path.join(versionDir, selected);
+					// Keep the first loader failure, without retrying a partially loaded image.
+					expect(failure.error.split("\n").filter(line => line.startsWith(`- ${cachedCandidate}:`))).toHaveLength(
+						1,
 					);
 
 					// Extraction failure must still try the normal compiled-binary candidates.

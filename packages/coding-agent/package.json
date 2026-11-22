@@ -45,6 +45,7 @@
 		"dist/CHANGELOG-*.md",
 		"dist/*.node",
 		"dist/*.json-*.zst",
+		"dist/perturbation-pool.json-*.txt",
 		"scripts",
 		"!scripts/openwiki-vendor-entry.ts",
 		"examples",

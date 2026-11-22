@@ -3000,6 +3000,8 @@ const streamAnthropicOnce = (
 					let response: Response;
 					let requestId: string | null;
 					let recordsRawSseEvents: boolean;
+					// Cleared here, not per retry rung: an attempt that throws before its response must not keep the last one's id.
+					output.requestId = undefined;
 					try {
 						({
 							events: anthropicStream,
@@ -3024,6 +3026,7 @@ const streamAnthropicOnce = (
 						result: response.ok ? "success" : "http_error",
 						attempt_elapsed_ms: performance.now() - attemptStartedAt,
 					});
+					output.requestId = requestId ?? undefined;
 					await notifyProviderResponse(options, response, sourceModel, requestId);
 					stage = "stream";
 					if (slowMode) {

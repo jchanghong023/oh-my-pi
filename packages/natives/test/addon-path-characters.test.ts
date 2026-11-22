@@ -20,6 +20,7 @@ import * as path from "node:path";
 import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/host-detect";
 import { stampNativeVersion } from "../../../scripts/stamp-native-version";
 import packageJson from "../package.json" with { type: "json" };
+import { type EmbeddedAddonFile, embeddedAddonPath } from "../native/loader-state.js";
 
 const packageDir = path.join(import.meta.dir, "..");
 const hostAddonFilename = resolveLocalHostAddon({
@@ -75,7 +76,6 @@ try {
 		const exports = loader.openNativeAddon(process.env.PROBE_OPEN);
 		result = { ok: true, exports: shape(exports), stamp: stamp(exports) };
 	} else {
-		if (process.env.PROBE_EXTRACT) loader.extractEmbeddedAddons(JSON.parse(process.env.PROBE_EXTRACT));
 		const bindings = loader.loadNative();
 		result = { ok: true, path: loader.nativeAddonStatus()?.path, exports: shape(bindings) };
 		if (process.env.PROBE_TWICE) result.sameBindings = loader.loadNative() === bindings;
@@ -89,7 +89,7 @@ process.exit(0);
 
 let root = "";
 let loaderDir = "";
-let frame = "";
+let embeddedFile: EmbeddedAddonFile;
 /**
  * The host addon stamped with this package's version: the loader rejects an
  * addon whose stamp differs, as a build from before a version bump has.
@@ -101,9 +101,14 @@ beforeAll(async () => {
 	root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-path-chars-"));
 	loaderDir = path.join(root, "loader");
 	await fs.mkdir(path.join(loaderDir, "native"), { recursive: true });
-	for (const file of ["loader-state.js", "embedded-addon.js", "offline-root.js", "version-sentinel.js"]) {
+	for (const file of ["loader-state.js", "offline-root.js", "version-sentinel.js"]) {
 		await fs.copyFile(path.join(packageDir, "native", file), path.join(loaderDir, "native", file));
 	}
+	// Supply the manifest that a standalone build would embed, only for the embedded rows.
+	await Bun.write(
+		path.join(loaderDir, "native", "embedded-addon.js"),
+		'export const embeddedAddon = JSON.parse(process.env.PROBE_EMBEDDED ?? "null");',
+	);
 	await fs.copyFile(path.join(packageDir, "package.json"), path.join(loaderDir, "package.json"));
 	await Bun.write(path.join(loaderDir, "probe.ts"), PROBE);
 	addon = path.join(root, hostAddonFilename);
@@ -111,8 +116,16 @@ beforeAll(async () => {
 	await stampNativeVersion(addon, packageJson.version);
 	// The embedded addon's zstd frame, as a standalone binary carries it; a low
 	// level keeps the test fast, and the loader reads any level.
-	frame = path.join(root, `${hostAddonFilename}.zst`);
-	await Bun.write(frame, Bun.zstdCompressSync(await Bun.file(addon).bytes(), { level: 1 }));
+	const bytes = await Bun.file(addon).bytes();
+	const frame = path.join(root, `${hostAddonFilename}.zst`);
+	await Bun.write(frame, Bun.zstdCompressSync(bytes, { level: 1 }));
+	embeddedFile = {
+		variant: variant === "baseline" || variant === "modern" ? variant : "default",
+		filename: hostAddonFilename,
+		size: bytes.length,
+		hash: Bun.hash.xxHash64(bytes).toString(16).padStart(16, "0"),
+		zstdPath: frame,
+	};
 });
 
 afterAll(async () => {
@@ -140,6 +153,7 @@ async function probe(env: Record<string, string>): Promise<ProbeResult> {
 		"XDG_CACHE_HOME",
 		"XDG_DATA_HOME",
 		"__PI_NATIVE_VARIANT_CACHE",
+		"PROBE_EMBEDDED",
 	]) {
 		if (!(key in env)) delete childEnv[key];
 	}
@@ -178,17 +192,16 @@ describe.skipIf(!hasHostAddon)("the addon loads from a directory whose path hold
 		it(`${label}: a HOME the embedded addon is extracted under`, async () => {
 			const home = path.join(root, `home-${dirname}`);
 			const versionedDir = path.join(home, ".omp", "natives", packageJson.version);
-			await fs.mkdir(versionedDir, { recursive: true });
-			const size = (await fs.stat(addon)).size;
 			try {
 				const result = await probe({
 					HOME: home,
-					PROBE_EXTRACT: JSON.stringify({
-						files: [{ variant: variant ?? "default", filename: hostAddonFilename, size, zstdPath: frame }],
-						targetDir: versionedDir,
+					PROBE_EMBEDDED: JSON.stringify({
+						platformTag: `${process.platform}-${process.arch}`,
+						version: packageJson.version,
+						files: [embeddedFile],
 					}),
 				});
-				expect(result).toMatchObject({ ok: true, path: path.join(versionedDir, hostAddonFilename) });
+				expect(result).toMatchObject({ ok: true, path: embeddedAddonPath(versionedDir, embeddedFile) });
 			} finally {
 				await fs.rm(home, { recursive: true, force: true });
 			}

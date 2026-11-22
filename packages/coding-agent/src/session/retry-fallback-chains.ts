@@ -15,7 +15,12 @@ import {
 	concreteThinkingLevel,
 	resolveThinkingLevelForModel,
 } from "@oh-my-pi/pi-tui/thinking";
-import { resolveConfiguredModelPatterns, resolveModelRoleValue, revisionSpellingKey } from "../config/model-resolver";
+import {
+	resolveConfiguredModelPatterns,
+	resolveModelRoleValue,
+	resolveRoutedModelSelector,
+	revisionSpellingKey,
+} from "../config/model-resolver";
 import { getRoleInfo, isKindRole } from "../config/model-roles";
 
 import { cfgRetryFallbackChains, cfgRetryFallbackRevertPolicy, type RetrySettings } from "./settings";
@@ -298,7 +303,7 @@ export function validateRetryFallbackChains(
 				if (!parsedKey) {
 					report(`Invalid model selector key in retry.fallbackChains: ${key}`);
 				} else if (
-					!modelRegistry.find(parsedKey.provider, parsedKey.id) &&
+					!resolveRoutedModelSelector(modelRegistry, parsedKey.raw) &&
 					!isDiscoveryPending(parsedKey.provider)
 				) {
 					report(`retry.fallbackChains key references unknown model: ${key}`);
@@ -355,7 +360,7 @@ export function validateRetryFallbackChains(
 				report(`Invalid fallback selector format in ${keyKind} '${key}': ${selectorStr}`);
 				continue;
 			}
-			if (!modelRegistry.find(parsed.provider, parsed.id) && !isDiscoveryPending(parsed.provider)) {
+			if (!resolveRoutedModelSelector(modelRegistry, parsed.raw) && !isDiscoveryPending(parsed.provider)) {
 				report(`Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`);
 			}
 		}
