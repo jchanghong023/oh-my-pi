@@ -19,6 +19,7 @@ import { CollabController } from "@oh-my-pi/pi-coding-agent/collab/controller";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { CollabGuestLink } from "@oh-my-pi/pi-coding-agent/collab/guest";
 import { CollabHost, CollabHostStoppedError } from "@oh-my-pi/pi-coding-agent/collab/host";
+import { NumberedRoomClient } from "@oh-my-pi/pi-coding-agent/collab/numbered-room";
 import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import * as registry from "@oh-my-pi/pi-coding-agent/collab/registry";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
@@ -523,6 +524,44 @@ describe("interactive collaboration startup", () => {
 		return { local: mode, remote, localFile };
 	}
 
+	it("keeps the local session when a numbered room grants only read access", async () => {
+		const { local, remote, localFile } = await prepareGuestMode();
+		const room = parseCollabLink(remote.viewLink);
+		if ("error" in room) throw new Error(room.error);
+		await expect(new CollabGuestLink(local).joinNumberedRoom(room)).rejects.toThrow("did not grant write access");
+		expect(local.collabGuest).toBeUndefined();
+		expect(testSession.sessionManager.getSessionFile()).toBe(localFile);
+	});
+
+	it("returns queued local text and attachments to the editor when activating a numbered room", async () => {
+		const { local, remote } = await prepareGuestMode();
+		const room = parseCollabLink(remote.link);
+		if ("error" in room) throw new Error(room.error);
+		const image = { type: "image", mimeType: "image/png", data: "aGVsbG8=" } as const;
+		local.queueCompactionMessage("local follow-up", "followUp", [image]);
+
+		await new CollabGuestLink(local).joinNumberedRoom(room);
+
+		expect(local.editor.getText()).toContain("local follow-up");
+		expect(local.editor.pendingImages).toEqual([image]);
+	});
+
+	it("keeps the local session when /leave overtakes a numbered-room lookup", async () => {
+		const { local, remote, localFile } = await prepareGuestMode();
+		const room = parseCollabLink(remote.link);
+		if ("error" in room) throw new Error(room.error);
+		const reply = Promise.withResolvers<typeof room>();
+		spyOn(NumberedRoomClient.prototype, "lookup").mockReturnValueOnce(reply.promise);
+		const joining = executeBuiltinSlashCommand("/collab2 join pending-room", { ctx: local });
+
+		await executeBuiltinSlashCommand("/leave", { ctx: local });
+		reply.resolve(room);
+		await joining;
+
+		expect(local.collabGuest).toBeUndefined();
+		expect(local.sessionManager.getSessionFile()).toBe(localFile);
+	});
+
 	it("does not restart a stopped host when join fails before replica activation", async () => {
 		const { local, remote, localFile } = await prepareGuestMode();
 		const failure = new Error("transport setup failed");
@@ -848,6 +887,67 @@ describe("interactive collaboration startup", () => {
 });
 
 describe("CollabController", () => {
+	it("leaves a queued native host intact when a numbered-room join overlaps it", async () => {
+		const { ctx } = makeControllerContext();
+		controller = new CollabController(ctx);
+		const native = controller.start({ access: "control" });
+		await expect(controller.joinNumberedRoom("queued-native")).rejects.toThrow("Already hosting or starting");
+		const host = await native;
+		expect(await controller.stopNumberedRoom()).toBe(false);
+		expect(host.relayConnected).toBe(true);
+	});
+
+	async function openNumberedHost(controller: CollabController) {
+		const ready = Promise.withResolvers<{ socket: CollabSocket; transport: FakeWebSocket }>();
+		const connect = CollabSocket.prototype.connect;
+		const opening = spyOn(CollabSocket.prototype, "connect").mockImplementation(function (this: CollabSocket) {
+			connect.call(this);
+			const transport = capturedSockets.at(-1)!;
+			queueMicrotask(() => transport.deliverControl('{"t":"host-ready"}'));
+			ready.resolve({ socket: this, transport });
+		});
+		const register = spyOn(NumberedRoomClient.prototype, "register").mockResolvedValueOnce(undefined);
+		try {
+			const host = await controller.startNumberedRoom("test-room");
+			return { host, ...(await ready.promise) };
+		} finally {
+			opening.mockRestore();
+			register.mockRestore();
+		}
+	}
+
+	it("opens a numbered room after the native relay ended the previous room", async () => {
+		const { ctx } = makeControllerContext();
+		controller = new CollabController(ctx);
+		const native = await controller.start({ access: "control" });
+		capturedSockets[0]!.onclose?.({ code: 4001, reason: "room closed" });
+		await controller.idle();
+
+		const { host } = await openNumberedHost(controller);
+
+		expect(native.stopped).toBe(true);
+		expect(host.relayConnected).toBe(true);
+		expect(await registry.listCollabHosts({ dir: tmp })).toEqual([]);
+	});
+
+	it("does not transmit a backpressured application frame when stopping a numbered room", async () => {
+		const { ctx } = makeControllerContext();
+		controller = new CollabController(ctx);
+		const { socket, transport } = await openNumberedHost(controller);
+		transport.bufferedAmount = Number.MAX_SAFE_INTEGER;
+		const transmit = spyOn(transport, "send");
+		try {
+			socket.send({ t: "error", message: "unsent session update" });
+			await socket.flush();
+
+			expect(await controller.stopNumberedRoom()).toBe(true);
+			expect(transport.readyState).toBe(FakeWebSocket.CLOSED);
+			expect(transmit).not.toHaveBeenCalled();
+		} finally {
+			transmit.mockRestore();
+		}
+	});
+
 	it("recovers later rotations after a teardown UI error without hiding the failure", async () => {
 		const { ctx, state } = makeControllerContext({ autoStart: "control" });
 		controller = new CollabController(ctx);

@@ -109,6 +109,7 @@ const REMOTE_CLIPBOARD_STATUS =
  * - /login accepts three callback forms (redirect URL, query string, raw auth
  *   code) — all can contain OAuth code=/state= params.
  * - /join <link> carries a 32-byte room key and optional write token.
+ * - /collab2 arguments can grant write access to a numbered room.
  * - /mcp add --token <token> carries a bearer token.
  *
  * The command name is extracted the same way as parseSlashCommand() — splitting
@@ -128,6 +129,7 @@ export function shouldSkipHistory(slashText: string): boolean {
 	if (name === "login" && hasArgs) return true;
 	// /join <link> — the link carries the 32-byte room key and write token.
 	if (name === "join" && hasArgs) return true;
+	if (name === "collab2" && hasArgs) return true;
 	if (name === "mcp") {
 		const args = body.slice(sep + 1).trim();
 		return args.startsWith("add") && /--token\s/.test(args);
@@ -1194,7 +1196,8 @@ export class InputController {
 			const submittedImages = inputImages;
 			// Team owns this submission before hooks can await: a new paste must
 			// start at #1, not inherit the submitted image prefix.
-			const teamDraftDetached = parseSlashCommand(text)?.name === "team";
+			const originalMode = parseSlashCommand(text)?.name;
+			const teamDraftDetached = originalMode === "team";
 			if (teamDraftDetached) this.#dropSubmittedPending(inputImages);
 
 			// Serialize input hooks across Enter and follow-up submissions.
@@ -1204,7 +1207,8 @@ export class InputController {
 			try {
 				await earlier;
 				if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
-				if (runner?.hasHandlers("input")) {
+				// The room number is a join credential, not extension input.
+				if (originalMode !== "collab2" && runner?.hasHandlers("input")) {
 					try {
 						const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
 						if (!input) {
@@ -2206,7 +2210,7 @@ export class InputController {
 			try {
 				await earlier;
 				if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
-				if (this.ctx.session.extensionRunner?.hasHandlers("input")) {
+				if (parseSlashCommand(text)?.name !== "collab2" && this.ctx.session.extensionRunner?.hasHandlers("input")) {
 					try {
 						const input = await this.#runInputHandlers(text, images, imageLinks);
 						if (!input) return;
@@ -2249,7 +2253,7 @@ export class InputController {
 		// A compaction queued for the next yield holds later follow-ups the same
 		// way, so they run after it.
 		this.releaseStaleYieldCompaction();
-		if (this.ctx.session.isCompacting || this.ctx.yieldCompaction) {
+		if ((this.ctx.session.isCompacting || this.ctx.yieldCompaction) && parseSlashCommand(text)?.name !== "collab2") {
 			if (
 				text &&
 				!this.#matchesBuiltinSlashCommand(text) &&

@@ -15,7 +15,9 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { sanitizeDisplayLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
 import { TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { InteractiveModeContext } from "../modes/types";
+import { CollabGuestLink } from "./guest";
 import { CollabHost, CollabHostStoppedError, CollabRelayUnavailableError } from "./host";
+import { NumberedRoomClient, NumberedRoomError } from "./numbered-room";
 import type { CollabAccess } from "./registry";
 
 import { cfgCollabAutoStart, cfgCollabRelayUrl, cfgCollabWebUrl } from "./settings";
@@ -45,6 +47,9 @@ export class CollabController {
 	#ctx: InteractiveModeContext;
 	#generation = 0;
 	#host: CollabHost | undefined;
+	#legacyStarts = 0;
+	#numberedStart: AbortController | undefined;
+	#numberedLookup: AbortController | undefined;
 	/** Serializes stop/start sequences so a rotation never interleaves with another. */
 	#ops: Promise<void> = Promise.resolve();
 	/** Explicit stop invalidates launch requests, not the saved auto-start policy. */
@@ -156,8 +161,12 @@ export class CollabController {
 		if (this.#shutdown) throw new CollabHostStoppedError("collab controller shut down");
 		if (this.#ctx.collabGuest) throw new CollabHostStoppedError("collab guest owns the session");
 		const existing = this.host;
+		if (this.#host?.numberedRoom && !this.#host.ending) {
+			throw new CollabHostStoppedError("Stop the Collab2 room first (/collab2 stop)");
+		}
 		if (existing && (existing.access === "control" || options.access === "view")) return existing;
 		const stopEpoch = this.#stopEpoch;
+		this.#legacyStarts++;
 		// Abort an in-flight or stale room before queuing behind its startup.
 		const stopping =
 			this.#host && this.#stopHost(this.#host, existing ? "restarting with control access" : SESSION_SWITCH_REASON);
@@ -168,21 +177,93 @@ export class CollabController {
 			// A preceding manual start or rotation may have installed a room while
 			// this request waited. Reuse or upgrade it rather than racing its launch.
 			const current = this.host;
+			if (current?.numberedRoom) throw new CollabHostStoppedError("Stop the Collab2 room first (/collab2 stop)");
 			if (current && (current.access === "control" || options.access === "view")) return current;
 			if (current) await this.#stopHost(current, "restarting with control access");
 			return this.#launch(options.access, stopEpoch, options.relay);
 		});
+		const settled = started.finally(() => {
+			this.#legacyStarts--;
+		});
 		// Report manual failures to the caller without poisoning later rotations.
+		this.#ops = settled.then(
+			() => {},
+			() => {},
+		);
+		return settled;
+	}
+
+	#assertNumberedRoomAvailable(): void {
+		if (this.#shutdown || this.#ctx.session.isSessionTransitioning) {
+			throw new NumberedRoomError("The local session is changing or shutting down");
+		}
+		if (this.#ctx.collabGuest) throw new NumberedRoomError("Already in a collab session (/leave first)");
+		if ((this.#host && !this.#host.stopped) || this.#legacyStarts > 0)
+			throw new NumberedRoomError("Already hosting or starting a collab session");
+	}
+
+	async startNumberedRoom(roomNumber: string): Promise<CollabHost> {
+		this.#assertNumberedRoomAvailable();
+		if (this.#numberedStart || this.#numberedLookup) throw new NumberedRoomError("Collab2 is already starting");
+		const client = new NumberedRoomClient();
+		this.#observeSessionChanges();
+		const start = new AbortController();
+		this.#numberedStart = start;
+		const stopEpoch = this.#stopEpoch;
+		const started = this.#ops.then(async () => {
+			if (start.signal.aborted) throw new NumberedRoomError("Collab2 start was cancelled");
+			this.#assertNumberedRoomAvailable();
+			return this.#launch("control", stopEpoch, undefined, { client, roomNumber });
+		});
 		this.#ops = started.then(
 			() => {},
 			() => {},
 		);
-		return started;
+		try {
+			return await started;
+		} finally {
+			this.#numberedStart = undefined;
+		}
+	}
+
+	async joinNumberedRoom(roomNumber: string): Promise<void> {
+		this.#assertNumberedRoomAvailable();
+		if (this.#numberedStart || this.#numberedLookup) throw new NumberedRoomError("Collab2 is already starting");
+		const client = new NumberedRoomClient();
+		this.#observeSessionChanges();
+		const lookup = new AbortController();
+		this.#numberedLookup = lookup;
+		const sessionId = this.#ctx.sessionManager.getSessionId();
+		try {
+			const room = await client.lookup(roomNumber, lookup.signal);
+			const host = this.#host;
+			if (host?.stopped) await this.#stopHost(host, "joining another session");
+			if (lookup.signal.aborted || sessionId !== this.#ctx.sessionManager.getSessionId()) {
+				throw new NumberedRoomError("Collab2 lookup was cancelled");
+			}
+			// Recheck and claim synchronously after lookup: it does not reserve the
+			// active session against legacy collaboration or session transitions.
+			this.#assertNumberedRoomAvailable();
+			this.#numberedLookup = undefined;
+			await new CollabGuestLink(this.#ctx).joinNumberedRoom(room);
+		} finally {
+			if (this.#numberedLookup === lookup) this.#numberedLookup = undefined;
+		}
+	}
+
+	async stopNumberedRoom(): Promise<boolean> {
+		const start = this.#numberedStart;
+		start?.abort();
+		const host = this.#host;
+		if (!host?.numberedRoom) return start !== undefined;
+		await this.#stopHost(host, "host stopped");
+		return true;
 	}
 
 	/** Cancel pending launches and stop the current room, including a stop already in flight. */
 	async stop(reason: string): Promise<void> {
 		this.#stopEpoch++;
+		this.#numberedLookup?.abort();
 		if (this.#host) await this.#stopHost(this.#host, reason);
 	}
 
@@ -204,6 +285,8 @@ export class CollabController {
 	/** Stop hosting for good; no further rooms are started for this process. */
 	async shutdown(reason: string): Promise<void> {
 		this.#shutdown = true;
+		this.#numberedStart?.abort();
+		this.#numberedLookup?.abort();
 		this.#shutdownWake?.resolve();
 		clearTimeout(this.#relaunchTimer);
 		this.#relaunchTimer = undefined;
@@ -233,7 +316,12 @@ export class CollabController {
 	 * can be retained. During a session transition, wait for its final identity
 	 * and state first. Connect only after the previous room is fully gone.
 	 */
-	async #launch(access: CollabAccess, stopEpoch: number, relay?: string): Promise<CollabHost> {
+	async #launch(
+		access: CollabAccess,
+		stopEpoch: number,
+		relay?: string,
+		numberedRoom?: { client: NumberedRoomClient; roomNumber: string },
+	): Promise<CollabHost> {
 		if (this.#shutdown) throw new CollabHostStoppedError("collab controller shut down");
 		if (stopEpoch !== this.#stopEpoch) throw new CollabHostStoppedError("collab controller stopped");
 		// Identity cleanup callbacks can precede awaited hooks and message replacement.
@@ -247,14 +335,15 @@ export class CollabController {
 		if (this.#shutdown) throw new CollabHostStoppedError("collab controller shut down");
 		if (stopEpoch !== this.#stopEpoch) throw new CollabHostStoppedError("collab controller stopped");
 		if (this.#ctx.collabGuest) throw new CollabHostStoppedError("collab guest owns the session");
-		const relayUrl = this.#resolveRelayUrl(relay);
-		const webUrl = cfgCollabWebUrl.get(this.#ctx.settings) || "";
+		const relayUrl = numberedRoom ? "" : this.#resolveRelayUrl(relay);
+		const webUrl = numberedRoom ? "" : cfgCollabWebUrl.get(this.#ctx.settings) || "";
 		this.#observeSessionChanges();
 		const previous = this.#host;
 		const host: CollabHost = new CollabHost(this.#ctx, {
 			instanceId: this.instanceId,
 			generation: ++this.#generation,
 			access,
+			numberedRoom,
 			guestActionsReady: () => this.#startupComplete && !this.#ctx.session.isSessionTransitioning,
 			onEnded: () => this.#onHostEnded(host),
 		});
@@ -266,6 +355,7 @@ export class CollabController {
 			if (previous) await this.#stopHost(previous, "replaced");
 			await host.start(relayUrl, webUrl);
 		} catch (err) {
+			if (numberedRoom) await this.#stopHost(host, "Collab2 startup failed");
 			if (this.#host === host) this.#host = undefined;
 			if (this.#ctx.collabHost === host) this.#ctx.collabHost = undefined;
 			// No guest or registry reader ever saw this room, so its successor takes
@@ -310,6 +400,8 @@ export class CollabController {
 	 * stop it, then apply the auto-start policy to the new session.
 	 */
 	#onSessionChanged(): void {
+		this.#numberedStart?.abort();
+		this.#numberedLookup?.abort();
 		const previous = this.#host;
 		if (this.host) return;
 		// Stop synchronously so a room still connecting is aborted now rather than
@@ -324,6 +416,10 @@ export class CollabController {
 	 */
 	#onHostEnded(host: CollabHost): void {
 		if (host !== this.#host) return;
+		if (host.numberedRoom) {
+			this.#host = undefined;
+			return;
+		}
 		this.#scheduleRelaunch(this.#stopEpoch);
 	}
 

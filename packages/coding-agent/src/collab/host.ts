@@ -31,6 +31,7 @@ import type { SessionEntry as StoredSessionEntry } from "../session/session-entr
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
+import type { NumberedRoomClient } from "./numbered-room";
 import {
 	type AgentSnapshot,
 	COLLAB_PROMPT_MESSAGE_TYPE,
@@ -177,6 +178,7 @@ export interface CollabHostOptions {
 	instanceId?: string;
 	generation?: number;
 	access?: CollabAccess;
+	numberedRoom?: { client: NumberedRoomClient; roomNumber: string };
 	/**
 	 * Whether guests may drive the session yet: prompts, interrupts, and agent
 	 * commands are refused with an error frame while this returns false. Joins,
@@ -232,6 +234,8 @@ export class CollabHost {
 	readonly #guestActionsReady: () => boolean;
 	readonly #onEnded: (() => void) | undefined;
 	readonly #access: CollabAccess;
+	readonly #numberedRoom: CollabHostOptions["numberedRoom"];
+	#registration: AbortController | undefined;
 	#relayConnected = false;
 	#registryPublication: CollabHostPublication | null = null;
 	/** Publication still being created; teardown awaits and withdraws it. */
@@ -281,6 +285,7 @@ export class CollabHost {
 		this.#access = options.access ?? "control";
 		this.#guestActionsReady = options.guestActionsReady ?? (() => true);
 		this.#onEnded = options.onEnded;
+		this.#numberedRoom = options.numberedRoom;
 		// The room mirrors the session that is active when it is created; the
 		// frame guard and the registry snapshot compare against this from then on.
 		this.#sessionId = ctx.sessionManager.getSessionId();
@@ -325,6 +330,10 @@ export class CollabHost {
 	/** True while a host-side question is retained for (or shown to) a writable guest. */
 	get inputRequired(): boolean {
 		return this.#pendingUi.size > 0;
+	}
+
+	get numberedRoom(): boolean {
+		return this.#numberedRoom !== undefined;
 	}
 
 	get relayConnected(): boolean {
@@ -471,12 +480,19 @@ export class CollabHost {
 		const writeToken = generateWriteToken();
 		const roomId = generateRoomId();
 		this.#writeToken = writeToken;
-		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
-		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl);
-		this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey);
-		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl);
-		const parsed = parseCollabLink(this.#link);
-		if ("error" in parsed) throw new Error(parsed.error);
+		const numberedRoom = this.#numberedRoom;
+		let wsUrl: string;
+		if (numberedRoom) {
+			wsUrl = numberedRoom.client.socketUrl(roomId);
+		} else {
+			this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
+			this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl);
+			this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey);
+			this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl);
+			const parsed = parseCollabLink(this.#link);
+			if ("error" in parsed) throw new Error(parsed.error);
+			wsUrl = parsed.wsUrl;
+		}
 		const firstOpen = Promise.withResolvers<void>();
 		// stop() may reject this before start() reaches its await (during key
 		// import); mark the rejection handled so it can only surface at the await.
@@ -485,7 +501,7 @@ export class CollabHost {
 		const key = await importRoomKey(rawKey);
 		if (this.ending) throw new CollabHostStoppedError("collab host stopped before connecting");
 
-		const socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "host", key });
+		const socket = new CollabSocket({ wsUrl, role: "host", key, numberedRoom: this.numberedRoom });
 		this.#socket = socket;
 
 		let opened = false;
@@ -592,6 +608,27 @@ export class CollabHost {
 		};
 		this.#updateStatusSegment();
 
+		if (numberedRoom) {
+			if (this.ending) throw new CollabHostStoppedError("Collab2 room ended during startup");
+			const registration = new AbortController();
+			this.#registration = registration;
+			try {
+				await numberedRoom.client.register(
+					numberedRoom.roomNumber,
+					roomId,
+					rawKey,
+					writeToken,
+					registration.signal,
+				);
+				if (!this.#guestTrafficAllowed() || !socket.isOpen || this.#ctx.session.isSessionTransitioning) {
+					throw new CollabHostStoppedError("Collab2 room ended during registration");
+				}
+			} finally {
+				this.#registration = undefined;
+			}
+			return;
+		}
+
 		// Publish to the local host registry only after the relay connection
 		// succeeded. Publication failure warns but never breaks hosting (#6099).
 		// The in-flight task is tracked so a stop() that overtakes it withdraws
@@ -646,7 +683,11 @@ export class CollabHost {
 		if (this.#ctx.collabHost === this) this.#ctx.collabHost = undefined;
 		this.#abortStart?.(new CollabHostStoppedError(`collab host stopped: ${reason}`));
 		const socket = this.#socket;
-		if (socket) {
+		if (this.numberedRoom) {
+			this.#registration?.abort();
+			socket?.discardPendingSends();
+			socket?.close();
+		} else if (socket) {
 			// Revocation drops queued application data; only the goodbye may drain.
 			socket.discardPendingSends();
 			// Sealing is asynchronous; without the flush the goodbye would still be
@@ -665,6 +706,7 @@ export class CollabHost {
 	async #runTeardown(): Promise<void> {
 		if (this.#stopped) return;
 		this.#stopped = true;
+		this.#registration?.abort();
 		// A room that ended on its own (fatal relay close) reaches here without
 		// `#runStop`: leave the public slot before the first await as well.
 		if (this.#ctx.collabHost === this) this.#ctx.collabHost = undefined;

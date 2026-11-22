@@ -102,6 +102,8 @@ export interface CollabSocketOptions {
 	wsUrl: string;
 	role: "host" | "guest";
 	key: CryptoKey;
+	/** Numbered rooms are direct, have one connection lifetime, and explicitly admit hosts. */
+	numberedRoom?: boolean;
 }
 
 export class CollabSocket {
@@ -680,7 +682,7 @@ export class CollabSocket {
 		this.#clearBackpressureDrain();
 		const url = `${this.#opts.wsUrl}?role=${this.#opts.role}`;
 		const options = {
-			proxy: getProxyForUrl("collab", new URL(url)),
+			proxy: this.#opts.numberedRoom ? "" : getProxyForUrl("collab", new URL(url)),
 		} satisfies Bun.WebSocketOptions;
 		const ws: WebSocket = Reflect.construct(WebSocket, [url, options]);
 		ws.binaryType = "arraybuffer";
@@ -688,6 +690,7 @@ export class CollabSocket {
 		ws.onopen = () => {
 			if (this.#ws !== ws) return;
 			this.#startHeartbeat(ws);
+			if (this.#opts.numberedRoom && this.#opts.role === "host") return;
 			if (this.#rejoining && this.#hostReclaimUntil !== undefined && Date.now() < this.#hostReclaimUntil) {
 				// The relay may still refuse this socket as a duplicate host; commit only
 				// once it has had the chance to.
@@ -743,7 +746,12 @@ export class CollabSocket {
 				}
 				return;
 			}
-			logger.debug("collab: relay connection went silent; reconnecting", { role: this.#opts.role });
+			logger.debug(
+				this.#opts.numberedRoom
+					? "collab: relay connection went silent"
+					: "collab: relay connection went silent; reconnecting",
+				{ role: this.#opts.role },
+			);
 			this.#clearBackpressureDrain();
 			this.#clearProvisional();
 			this.#stopHeartbeat();
@@ -794,11 +802,19 @@ export class CollabSocket {
 
 	#handleMessage(ws: WebSocket, data: unknown): void {
 		if (typeof data === "string") {
-			let msg: RelayControlMessage;
+			let msg: RelayControlMessage | { t: "host-ready" };
 			try {
-				msg = JSON.parse(data) as RelayControlMessage;
+				msg = JSON.parse(data) as typeof msg;
 			} catch {
 				logger.debug("collab: ignoring malformed control message");
+				return;
+			}
+			if (msg?.t === "host-ready") {
+				if (this.#opts.numberedRoom && this.#opts.role === "host") this.#commitOpen(ws);
+				return;
+			}
+			if (this.#opts.numberedRoom && this.#opts.role === "guest" && msg?.t === "room-closed") {
+				this.#failFatal("room closed");
 				return;
 			}
 			this.#applyPeerLifecycle(msg);
@@ -881,6 +897,12 @@ export class CollabSocket {
 
 	#handleClose(code: number, reason: string): void {
 		if (this.#closed) return;
+		if (this.#opts.numberedRoom) {
+			this.#closed = true;
+			this.#discardPendingSends();
+			this.onClose?.(RELAY_CLOSE_REASONS[code] ?? `connection lost (code ${code})`, false);
+			return;
+		}
 		if (code === 4009 && this.#hostReclaimUntil !== undefined && Date.now() < this.#hostReclaimUntil) {
 			logger.debug("collab: relay still holds this host's dropped connection; retrying", {
 				attempt: this.#reclaimAttempt,

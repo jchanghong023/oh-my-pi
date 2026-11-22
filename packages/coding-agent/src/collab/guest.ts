@@ -44,6 +44,7 @@ import {
 	type CollabFrame,
 	type CollabSessionState,
 	type CollabUiRequest,
+	type ParsedCollabLink,
 	parseCollabLink,
 } from "./protocol";
 import { CollabSocket } from "./relay-client";
@@ -61,6 +62,7 @@ export const COLLAB_GUEST_ALLOWED_COMMANDS: Record<string, true> = {
 	settings: true,
 	leave: true,
 	collab: true,
+	collab2: true,
 	exit: true,
 	quit: true,
 };
@@ -329,6 +331,14 @@ export class CollabGuestLink {
 	async join(link: string): Promise<void> {
 		const parsed = parseCollabLink(link);
 		if ("error" in parsed) throw new Error(parsed.error);
+		await this.#join(parsed, false);
+	}
+
+	async joinNumberedRoom(parsed: ParsedCollabLink): Promise<void> {
+		await this.#join(parsed, true);
+	}
+
+	async #join(parsed: ParsedCollabLink, numberedRoom: boolean): Promise<void> {
 		if (this.#ctx.collabGuest || this.#left) throw new Error("Already in a collab session (/leave first)");
 		this.#roomId = parsed.roomId;
 		this.#writeToken = parsed.writeToken ? Buffer.from(parsed.writeToken).toString("base64url") : undefined;
@@ -344,7 +354,7 @@ export class CollabGuestLink {
 			throw err;
 		}
 
-		const socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key });
+		const socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key, numberedRoom });
 		this.#socket = socket;
 
 		const firstWelcome = Promise.withResolvers<void>();
@@ -376,6 +386,11 @@ export class CollabGuestLink {
 		// hello again, within the auto-rejoin budget.
 		const rejoin = (message: string): void => {
 			if (this.#left) return;
+			if (numberedRoom) {
+				if (joined) this.#restoreAfterDisconnect();
+				else firstWelcome.reject(new Error("Collab2 host did not accept the join"));
+				return;
+			}
 			if (!takeAutoRejoin(this.#autoRejoins)) {
 				this.#ctx.showError(`Collab host: ${message}`);
 				return;
@@ -405,9 +420,14 @@ export class CollabGuestLink {
 					if (this.#left) return;
 					if (frame.t === "welcome") {
 						this.#clearWelcomeTimer();
+						if (numberedRoom && frame.readOnly === true) {
+							if (joined) this.#restoreAfterDisconnect();
+							else firstWelcome.reject(new Error("Collab2 room did not grant write access"));
+							return;
+						}
 						this.#beginWelcome(frame, joined);
 						if (frame.entryCount === 0) {
-							await this.#finalizeSnapshot();
+							await this.#finalizeSnapshot(numberedRoom);
 							finishJoin();
 						}
 						return;
@@ -415,7 +435,7 @@ export class CollabGuestLink {
 					if (frame.t === "snapshot-chunk") {
 						const ready = this.#accumulateSnapshotChunk(frame);
 						if (ready) {
-							await this.#finalizeSnapshot();
+							await this.#finalizeSnapshot(numberedRoom);
 							finishJoin();
 						}
 						return;
@@ -541,7 +561,7 @@ export class CollabGuestLink {
 	}
 
 	/** Write the accumulated welcome snapshot to the replica file and (re)load it through the resume machinery. */
-	async #finalizeSnapshot(): Promise<void> {
+	async #finalizeSnapshot(numberedRoom: boolean): Promise<void> {
 		const pending = this.#pendingSnapshot;
 		this.#pendingSnapshot = null;
 		this.#clearSnapshotProgressTimer();
@@ -576,6 +596,9 @@ export class CollabGuestLink {
 		if (switched === false) {
 			throw new Error("Collab replica activation was cancelled");
 		}
+		// A numbered join can bypass the compaction queue. Return the local
+		// input to the editor before clearing old-session UI state.
+		if (numberedRoom && !this.#replicaActivated) this.#ctx.restoreCompactionQueueToEditor();
 		this.#replicaActivated = true;
 		if (this.#left) return;
 		const orphanedLiveBlocks = [
