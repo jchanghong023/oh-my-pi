@@ -196,6 +196,7 @@ export interface ExtensionFormDialogResult {
 	 */
 	notes?: OptionNote[];
 	timedOut?: boolean;
+	hasValidRecommendation?: boolean;
 }
 
 export function getExtensionUISelectOptionLabel(option: ExtensionUISelectItem): string {
@@ -229,6 +230,7 @@ export function timedOutAskDialogResult(questions: ExtensionAskDialogQuestion[])
 export interface ExtensionUIDialogOptions {
 	signal?: AbortSignal;
 	timeout?: number;
+	silentForm?: boolean;
 	/** Invoked when the UI times out while waiting for a selection/input */
 	onTimeout?: () => void;
 	/** Invoked when the UI-managed timeout countdown starts */

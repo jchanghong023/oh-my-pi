@@ -1,5 +1,6 @@
 import type { AgentToolContext, AgentToolResult, AgentToolUpdateCallback, ToolApproval } from "@oh-my-pi/pi-agent-core";
 import { untilAborted } from "@oh-my-pi/pi-utils";
+import { goalAutopilotRequest } from "../goals/request-context";
 import type { ToolSession } from "../tools";
 import {
 	approvalRestrictions,
@@ -171,6 +172,14 @@ async function approvePreludeInvocation(
 		approvalRestrictions(settings, context.session.cwd),
 	);
 	if (resolved.policy === "deny") throw denyError(resolved, definition.name);
+	const autopilot = goalAutopilotRequest(context.context);
+	if (autopilot) {
+		if (resolved.policy === "prompt")
+			await autopilot.approve(context.session.sessionManager, context.toolCallId, definition.name, context.signal);
+		if (!autopilot.isCurrent())
+			throw new Error(`Eval prelude "${definition.name}": Goal Autopilot run is no longer active.`);
+		return;
+	}
 	if (resolved.policy !== "prompt") return;
 
 	const ui = context.context?.ui;

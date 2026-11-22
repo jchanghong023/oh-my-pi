@@ -335,6 +335,7 @@ export interface InternalUrlFilesystemOptions {
 	onFileChange?: (change: ShellFileChange) => void;
 	/** Tool call the command runs under; handler writes carry its id. */
 	toolCallId?: string;
+	toolContext?: NonNullable<WriteContext["toolCall"]>["context"];
 }
 
 /**
@@ -350,6 +351,7 @@ export class InternalUrlFilesystem {
 	readonly #onWrite: ((report: UrlWriteReport) => void) | undefined;
 	readonly #onFileChange: ((change: ShellFileChange) => void) | undefined;
 	readonly #toolCallId: string | undefined;
+	readonly #toolContext: InternalUrlFilesystemOptions["toolContext"];
 	readonly #handles = new Map<number, VirtualNode | WriteSink>();
 	#nextHandle = 1;
 	/** Sandbox schemes whose session root this run has already created. */
@@ -368,6 +370,7 @@ export class InternalUrlFilesystem {
 		this.#onWrite = options.onWrite;
 		this.#onFileChange = options.onFileChange;
 		this.#toolCallId = options.toolCallId;
+		this.#toolContext = options.toolContext;
 	}
 
 	/** Native shell binding: URL paths reach {@link handle}; host paths stay on the native filesystem. */
@@ -709,7 +712,8 @@ export class InternalUrlFilesystem {
 	/** Handler write context: the session's, cancelled by the run's signal, under the command's tool call. */
 	#writeContext(): WriteContext {
 		const { cwd, signal, localProtocolOptions, session } = this.#context;
-		const toolCall = this.#toolCallId === undefined ? undefined : { id: this.#toolCallId };
+		const toolCall =
+			this.#toolCallId === undefined ? undefined : { id: this.#toolCallId, context: this.#toolContext };
 		return { cwd, signal, localProtocolOptions, session, toolCall };
 	}
 

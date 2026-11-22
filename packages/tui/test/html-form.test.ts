@@ -1174,6 +1174,16 @@ describe("html form", () => {
 			form.dispose();
 		});
 
+		it("does not accept a timeout when a valid duplicate answer masks an empty required control", () => {
+			vi.useFakeTimers();
+			const onTimeout = vi.fn();
+			const html = '<form><input name="x" required><input name="x" value="recommended"></form>';
+			const { form } = dialog(html, { timeout: 1000, validateTimeoutRecommendation: true, onTimeout });
+			vi.advanceTimersByTime(1000);
+			expect(onTimeout).toHaveBeenCalledWith({ x: "recommended" }, [], false);
+			form.dispose();
+		});
+
 		it("rows: stack every question; the focused one opens, the rest fold to their answer or first options", () => {
 			const { form } = dialog(DB_FORM);
 			const rows = plain(form);

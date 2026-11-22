@@ -1,7 +1,9 @@
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { MAGIC_KEYWORDS, renderOrchestrateNotice } from "../modes/magic-keywords";
 import goalAutoOrchestratePrompt from "../prompts/goals/goal-auto-orchestrate.md" with { type: "text" };
 import type { CustomMessage } from "../session/messages";
+import { type ApprovalRecordSink, recordToolApprovalResolved } from "../session/tool-approval-records";
 import type { LocalGoalModeState } from "./state";
 
 export const GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE = "goal-auto-orchestrate";
@@ -36,4 +38,30 @@ export function buildGoalAutoOrchestrateMessage(
 		details: { source: GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE, goalId: state.goal.id },
 		timestamp: Date.now(),
 	};
+}
+
+export class GoalAutopilotRequest {
+	constructor(
+		readonly run: { goalId: string; sessionGeneration: number; review?: GoalAutopilotRequest },
+		readonly isCurrent: () => boolean,
+		readonly flushUsage: () => Promise<void>,
+	) {}
+
+	async currentAfterUsage(): Promise<boolean> {
+		if (!this.isCurrent()) return false;
+		await this.flushUsage();
+		return this.isCurrent();
+	}
+
+	async approve(sink: ApprovalRecordSink | undefined, toolCallId: string, toolName: string, signal?: AbortSignal) {
+		if (!(await this.currentAfterUsage()) || signal?.aborted)
+			throw new Error("Goal Autopilot run is no longer active.");
+		if (sink)
+			await recordToolApprovalResolved(sink, { toolCallId, toolName, approved: true, reason: "goal-autopilot" });
+	}
+}
+
+export function goalAutopilotRequest(context?: AgentToolContext): GoalAutopilotRequest | undefined {
+	const scope = context?.toolCall?.requestScope;
+	return scope instanceof GoalAutopilotRequest ? scope : undefined;
 }

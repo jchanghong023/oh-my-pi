@@ -12,6 +12,7 @@ import {
 import type { ComputerSafetyCheck, ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
 import { prompt, sanitizeText, untilAborted, toError } from "@oh-my-pi/pi-utils";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
+import { goalAutopilotRequest } from "../../goals/request-context";
 import nativeDelegationTemplate from "../../prompts/tools/native-delegation.md" with { type: "text" };
 import {
 	approvalRestrictions,
@@ -403,7 +404,16 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			reason: resolved.reason,
 		};
 
-		if (approvalCheck.required) {
+		const autopilot = goalAutopilotRequest(context);
+		if (autopilot && approvalCheck.required) {
+			if (pendingSafetyChecks.length > 0) {
+				cancelPreflight();
+				throw new Error(
+					`Tool "${this.tool.name}" requires provider safety approval: ${safetyCheckLines(pendingSafetyChecks).join("; ")}`,
+				);
+			}
+			await autopilot.approve(this.runner.approvalRecords, toolCallId, this.tool.name, signal);
+		} else if (approvalCheck.required) {
 			const scheduledCall = context?.toolCall?.toolCalls[context.toolCall.index];
 			if (
 				scheduledCall?.id === toolCallId &&
@@ -517,6 +527,10 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				}
 				context.providerSafetyApproved = true;
 			}
+		}
+		if (autopilot && (!autopilot.isCurrent() || signal?.aborted)) {
+			cancelPreflight();
+			throw new Error(`Tool "${this.tool.name}": Goal Autopilot run is no longer active.`);
 		}
 
 		// Execute the actual tool

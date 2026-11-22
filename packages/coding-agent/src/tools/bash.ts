@@ -1657,6 +1657,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							onReply,
 							onWrite: noticeUrlWrites(notices),
 							toolCallId: options.toolCallId,
+							toolContext,
 						}).shellFilesystem(),
 						speech: sessionShellSpeech(this.session),
 						commands: this.#shellCommands(options.toolCommands, {

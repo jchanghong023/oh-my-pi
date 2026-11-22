@@ -25,6 +25,7 @@ import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
 	type Agent,
+	type AgentContext,
 	AgentBusyError,
 	type AgentEvent,
 	type AgentMessage,
@@ -162,7 +163,7 @@ import { EVAL_STATE_CONTEXT_TYPE, formatEvalStateContext, isEvalStateContext } f
 import { WorkPoolRegistry } from "../task/workpool";
 import { type BashResult, drainAbortedShells, releaseShellSessions } from "../exec/bash-executor";
 import type { TtsrManager } from "../export/ttsr";
-import { buildGoalAutoOrchestrateMessage } from "../goals/request-context";
+import { buildGoalAutoOrchestrateMessage, GoalAutopilotRequest } from "../goals/request-context";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { MCPLoadResult } from "../mcp";
@@ -1178,6 +1179,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	readonly #queuedMessageRawText = new WeakMap<AgentMessage, string>();
 	/** Initial Goal provenance follows its original input, never the provider payload or restored history. */
 	readonly #goalAutoOrchestrateInitialSources = new WeakMap<AgentMessage, { goalId: string; generation: number }>();
+	#autopilotRun?: GoalAutopilotRequest["run"];
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
@@ -2575,7 +2577,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 		});
 		this.agent.prepareQueuedMessages = this.#prepareQueuedUserMessages;
-		this.#detachUsageBeforeModelCall = this.agent.addBeforeModelCallHook(async signal => {
+		this.#detachUsageBeforeModelCall = this.agent.addBeforeModelCallHook(async (signal, context) => {
+			if (this.#goalModeState?.autoOrchestrate)
+				context.captureToolRequestScope ??= () => this.#captureAutopilotRequest(context, signal);
 			if (!cfgRetryUsageAwareFallback.get(this.settings)) return;
 			if (this.#usagePreflightReadyForNextModelCall) {
 				const checkedModel = this.#usagePreflightReadyModel;
@@ -3039,9 +3043,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#modelMentions.syncFromBranch();
 		this.#goalRuntime = new GoalRuntime({
 			getState: () => this.#goalModeState,
-			setState: state => {
-				this.#goalModeState = state;
-			},
+			setState: state => this.setGoalModeState(state),
 			getCurrentUsage: () => this.#goalUsage(),
 			emit: event => {
 				if (event.type === "goal_updated") {
@@ -9020,6 +9022,13 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	setGoalModeState(state: LocalGoalModeState | undefined): void {
+		const run = this.#autopilotRun;
+		if (run && state?.goal.id !== run.goalId) this.#autopilotRun = undefined;
+		else if (
+			run &&
+			(state?.enabled !== this.#goalModeState?.enabled || state?.goal.status !== this.#goalModeState?.goal.status)
+		)
+			this.#autopilotRun = { goalId: run.goalId, sessionGeneration: run.sessionGeneration };
 		this.#goalModeState = state;
 	}
 
@@ -9404,6 +9413,35 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const state = this.#goalModeState;
 		if (state?.autoOrchestrate !== true || this.#isDisposed) return undefined;
 		return buildGoalAutoOrchestrateMessage(state, this.getEnabledToolNames());
+	}
+
+	#captureAutopilotRequest(context: AgentContext, signal?: AbortSignal): GoalAutopilotRequest | undefined {
+		const state = this.#goalModeState;
+		if (this.#agentKind !== "main" || !state?.autoOrchestrate || !state.enabled || state.goal.status !== "active")
+			return;
+		const goalId = state.goal.id;
+		const generation = this.#promptGeneration;
+		const sessionGeneration = this.#sessionGeneration;
+		if (this.#autopilotRun?.goalId !== goalId || this.#autopilotRun.sessionGeneration !== sessionGeneration) {
+			if (
+				!context.messages.some(message => {
+					const source = this.#goalAutoOrchestrateInitialSources.get(message);
+					return source?.goalId === goalId && source.generation === generation;
+				})
+			)
+				return;
+			this.#autopilotRun = { goalId, sessionGeneration };
+		}
+		const run = this.#autopilotRun;
+		return new GoalAutopilotRequest(
+			run,
+			() =>
+				!signal?.aborted &&
+				this.#autopilotRun === run &&
+				this.#sessionGeneration === sessionGeneration &&
+				this.#promptGeneration === generation,
+			() => this.#goalRuntime.flushUsage("allowed"),
+		);
 	}
 
 	#buildGoalAutoOrchestrateContext(compactionEntryId?: string, initialGoalId?: string): CustomMessage | undefined {
@@ -10843,6 +10881,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			try {
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 				options?.onPromptAdmitted?.();
+				if (options?.goalAutoOrchestrateInitialId)
+					this.#goalAutoOrchestrateInitialSources.set(message, {
+						goalId: options.goalAutoOrchestrateInitialId,
+						generation,
+					});
 				await this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions, () => {
 					// `agent.prompt` claims streaming synchronously before its
 					// first await: this callback fires exactly when THIS

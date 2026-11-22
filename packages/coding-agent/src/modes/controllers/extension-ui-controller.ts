@@ -846,6 +846,7 @@ export class ExtensionUiController {
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionFormDialogResult | undefined> {
 		const form = parseHtmlForm(html);
+		if (dialogOptions?.silentForm) return this.#showLocalFormDialog(form, dialogOptions);
 		return this.#raceGuestDialog(
 			dialogOptions,
 			options => this.#showLocalFormDialog(form, options),
@@ -980,15 +981,23 @@ export class ExtensionUiController {
 		dialogOptions: ExtensionUIDialogOptions | undefined,
 	): Promise<ExtensionFormDialogResult | undefined> {
 		const first = form.fields.find(field => field.name);
-		const prompt = { kind: "question", msg: first && fieldQuestions(form).get(first) } as const;
+		const prompt = dialogOptions?.silentForm
+			? undefined
+			: ({ kind: "question", msg: first && fieldQuestions(form).get(first) } as const);
 		return this.#presentDialog<ExtensionFormDialogResult>(prompt, dialogOptions?.signal, settle => {
 			const dialog = new HtmlFormDialog(form, {
 				tui: this.ctx.ui,
 				cwd: this.ctx.sessionManager.getCwd(),
 				timeout: dialogOptions?.timeout,
-				onTimeout: (data, notes) => {
+				validateTimeoutRecommendation: dialogOptions?.silentForm,
+				onTimeout: (data, notes, hasValidRecommendation) => {
 					dialogOptions?.onTimeout?.();
-					settle({ data, ...(notes.length ? { notes } : {}), timedOut: true });
+					settle({
+						data,
+						...(notes.length ? { notes } : {}),
+						timedOut: true,
+						...(hasValidRecommendation !== undefined && { hasValidRecommendation }),
+					});
 				},
 				onSubmit: (data, notes) => settle({ data, ...(notes.length ? { notes } : {}) }),
 				onCancel: () => settle(undefined),
@@ -1870,7 +1879,7 @@ export class ExtensionUiController {
 	 * gates goes on until the user answers. Whether that needs an alert is the terminal's call.
 	 */
 	#presentDialog<T = string>(
-		prompt: Omit<BlockedStatus, "state">,
+		prompt: Omit<BlockedStatus, "state"> | undefined,
 		signal: AbortSignal | undefined,
 		present: (settle: (value: T | undefined) => void) => () => void,
 	): Promise<T | undefined> {
@@ -1907,7 +1916,7 @@ export class ExtensionUiController {
 			started = true;
 			this.#dialogActive = true;
 			// Held before `present` so a synchronous settle still releases it.
-			release = holdBlockedStatus({ state: "blocked", ...prompt });
+			if (prompt) release = holdBlockedStatus({ state: "blocked", ...prompt });
 			try {
 				hide = present(settle);
 			} catch (error) {
@@ -1915,7 +1924,7 @@ export class ExtensionUiController {
 				signal?.removeEventListener("abort", onAbort);
 				this.#dialogActive = false;
 				this.#advanceDialogQueue();
-				release();
+				release?.();
 				reject(error);
 			}
 		};

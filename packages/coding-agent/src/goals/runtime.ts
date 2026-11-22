@@ -3,6 +3,7 @@ import goalBudgetLimitPrompt from "../prompts/goals/goal-budget-limit.md" with {
 import goalContinuationPrompt from "../prompts/goals/goal-continuation.md" with { type: "text" };
 import goalModeActivePrompt from "../prompts/goals/goal-mode-active.md" with { type: "text" };
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
+import type { GoalAutopilotRequest } from "./request-context";
 import type { GoalBudgetSteering, LocalGoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "./state";
 
 export interface GoalRuntimeHost {
@@ -646,7 +647,7 @@ export class GoalRuntime {
 		});
 	}
 
-	async completeGoalFromTool(): Promise<Goal> {
+	async completeGoalFromTool(request?: GoalAutopilotRequest): Promise<Goal> {
 		return await this.#withAccounting(async () => {
 			await this.#flushUsageLocked("suppressed");
 			const state = this.#getStateClone();
@@ -658,6 +659,13 @@ export class GoalRuntime {
 			}
 			if (state.goal.status === "dropped") {
 				throw new Error("cannot complete a dropped goal");
+			}
+			if (request) {
+				if (!request.isCurrent()) throw new Error("Goal Autopilot run is no longer active.");
+				if (!request.run.review || request.run.review === request) {
+					request.run.review = request;
+					return state.goal;
+				}
 			}
 			state.enabled = false;
 			state.goal.status = "complete";

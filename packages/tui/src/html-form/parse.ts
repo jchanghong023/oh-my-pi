@@ -37,6 +37,7 @@ export interface ChoiceOption {
 	disabled: boolean;
 }
 
+export const implicitChoiceDefaults = new WeakSet<ChoiceOption>();
 /** A radio group (`multi: false`), checkbox group (`multi: true`) or `<select>` (`select: true`). */
 export interface ChoiceField {
 	kind: "choice";
@@ -492,7 +493,10 @@ class FormBuilder {
 			// A single select always has a selection: the first enabled option unless one is marked.
 			if (!multi && !options.some(option => option.checked)) {
 				const first = options.find(option => !option.disabled);
-				if (first) first.checked = true;
+				if (first) {
+					first.checked = true;
+					implicitChoiceDefaults.add(first);
+				}
 			}
 			this.#addField({ kind: "choice", name, multi, select: true, other: false, label, options, required });
 			return;

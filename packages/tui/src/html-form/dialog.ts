@@ -99,6 +99,7 @@ import {
 	type FormField,
 	type FormSpan,
 	type HtmlForm,
+	implicitChoiceDefaults,
 	spansText,
 	type TextField,
 } from "./parse";
@@ -119,7 +120,8 @@ export interface HtmlFormDialogOptions {
 	tui?: HtmlFormHost;
 	/** Inactivity in ms after which `onTimeout` receives the current values and notes; any input restarts it. */
 	timeout?: number;
-	onTimeout?(data: HtmlFormData, notes: OptionNote[]): void;
+	onTimeout?(data: HtmlFormData, notes: OptionNote[], hasValidRecommendation?: boolean): void;
+	validateTimeoutRecommendation?: boolean;
 	/** Directory relative `<img src>` paths resolve against; the process's when omitted. */
 	cwd?: string;
 	/** Lets the open option note take pasted images; see {@link HtmlFormDialog.attachImage}. */
@@ -494,6 +496,7 @@ export class HtmlFormDialog implements Component, Focusable {
 	#reveal = 0;
 	/** Collapsed to one row (`app.ask.hide`) while the rows' form stays pending; natively never. */
 	#hidden = false;
+	#recommended = false;
 
 	constructor(form: HtmlForm, options: HtmlFormDialogOptions) {
 		this.#form = form;
@@ -533,6 +536,20 @@ export class HtmlFormDialog implements Component, Focusable {
 				}
 			}
 		}
+		if (options.validateTimeoutRecommendation)
+			this.#recommended = form.fields.some(
+				field =>
+					!!field.name &&
+					!fieldError(field, this.#value(field)) &&
+					(field.kind === "text"
+						? field.value.trim() !== ""
+						: field.options.some(
+								(option, index) =>
+									!option.disabled &&
+									!implicitChoiceDefaults.has(option) &&
+									this.#checked.get(field)!.has(index),
+							)),
+			);
 		this.#stops.push({ kind: "submit" });
 		this.#sole = new Set(this.#stops.flatMap(stop => (stop.kind === "submit" ? [] : [stop.field]))).size === 1;
 		// Open where the answer is, so Enter accepts a preselected choice instead of overwriting it.
@@ -1082,7 +1099,10 @@ export class HtmlFormDialog implements Component, Focusable {
 		if (left <= 0) {
 			this.#stopCountdown();
 			if (this.#noteEditor) this.#saveNote();
-			this.#options.onTimeout?.(this.data(), this.optionNotes());
+			if (this.#options.validateTimeoutRecommendation) {
+				const valid = this.#recommended && this.#form.fields.every(field => !fieldError(field, this.#value(field)));
+				this.#options.onTimeout?.(this.data(), this.optionNotes(), valid);
+			} else this.#options.onTimeout?.(this.data(), this.optionNotes());
 			return;
 		}
 		this.#remaining = Math.ceil(left / 1000);

@@ -23,6 +23,7 @@ import { type CfgWriteDetails, type CfgWriteOutcome } from "@oh-my-pi/pi-tui/too
 import { CFG_SAVE_SEGMENT, CFG_URL_PREFIX, parseCfgUrl } from "@oh-my-pi/pi-tui/tools/cfg-url";
 import { type AnySetting, all } from "../config/registry";
 import type { SettingProvenance, Settings } from "../config/settings";
+import { goalAutopilotRequest } from "../goals/request-context";
 import cfgPromptDoc from "../prompts/internal-urls/cfg.md" with { type: "text" };
 import cfgEnvShadowedTemplate from "../prompts/tools/cfg-env-shadowed.md" with { type: "text" };
 import cfgApprovalTimeoutTemplate from "../prompts/tools/cfg-approval-timeout.md" with { type: "text" };
@@ -432,6 +433,10 @@ export class CfgProtocolHandler implements ProtocolHandler {
 					.trim(),
 			);
 		}
+		if (goalAutopilotRequest(context?.toolCall?.context))
+			throw new Error(
+				`Changing ${leaf.id} via cfg:// requires separate user approval; Goal Autopilot cannot grant it.`,
+			);
 		const host = approvalHost;
 		if (!host) {
 			throw new Error(

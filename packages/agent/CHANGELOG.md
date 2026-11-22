@@ -11,6 +11,7 @@
 ### Added
 
 - Compaction callers can explicitly enable or disable thinking-capability probes.
+- Hosts can associate a model request with its resulting tool batch without assigning that scope to replayed calls.
 
 ### Changed
 

@@ -46,11 +46,13 @@ import type {
 	ExtensionUIDialogOptions,
 	ExtensionUISelectItem,
 } from "../extensibility/extensions";
+import { goalAutopilotRequest } from "../goals/request-context";
 import { sessionLocalProtocolOptions } from "../internal-urls/context";
 import { askTimeoutMs, cfgAskNotify } from "../modes/settings";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
 import askHeadlessForkMessage from "../prompts/tools/ask-headless-fork.md" with { type: "text" };
 import askResultTemplate from "../prompts/tools/ask-result.md" with { type: "text" };
+import autopilotAskTimeout from "../prompts/tools/ask-autopilot-timeout.md" with { type: "text" };
 import { renderAttachmentSourceNotice } from "../session/attachment-source-notice";
 import { cfgSpeechEnabled } from "../tts/settings";
 import { vocalizer } from "../tts/vocalizer";
@@ -509,7 +511,8 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 
 		// Determine timeout based on settings and plan mode
 		const planModeEnabled = this.session.getPlanModeState?.()?.enabled ?? false;
-		const timeout = planModeEnabled ? undefined : askTimeoutMs(this.session.settings);
+		const autopilot = goalAutopilotRequest(context);
+		const timeout = planModeEnabled ? undefined : autopilot ? 60_000 : askTimeoutMs(this.session.settings);
 		// A message the user queues closes the dialog without cancelling the turn: they moved on, and the
 		// message reaches the agent at the batch boundary. Peer IRC, asides and finished background jobs are
 		// not the user's answer, so the dialog stays open for it.
@@ -545,16 +548,14 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		};
 
 		// Send notification if waiting and not suppressed
-		this.#sendAskNotification();
+		if (!autopilot) this.#sendAskNotification();
 
-		// Speak the questions aloud before surfacing them. Ask vocalizes in every
-		// mode — it's the assistant addressing the user — gated only by speech.enabled
-		// (the vocalizer re-checks the setting and no-ops when disabled).
-		if (cfgSpeechEnabled.get(this.session.settings)) {
+		// Interactive asks speak the questions when speech is enabled.
+		if (!autopilot && cfgSpeechEnabled.get(this.session.settings)) {
 			vocalizer.speak(named.map(field => questions.get(field) ?? field.name).join("\n"));
 		}
 
-		let answered: { data: HtmlFormData; notes?: OptionNote[]; timedOut?: boolean } | undefined;
+		let answered: ExtensionFormDialogResult | undefined;
 		try {
 			if (extensionUi.formDialog) {
 				const formDialog = extensionUi.formDialog.bind(extensionUi);
@@ -563,6 +564,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						timeout,
 						signal: dialogSignal,
 						acceptImages: true,
+						...(autopilot && { silentForm: true }),
 						onAbandon: partial => {
 							given = partial;
 						},
@@ -576,10 +578,20 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			throw error;
 		}
 		if (!answered) return cancelAsk();
+		const unattendedTimeout = answered.timedOut && autopilot;
+		if (unattendedTimeout && (!(await unattendedTimeout.currentAfterUsage()) || dialogSignal.aborted))
+			throw abortError();
 		// A timeout submits what the form holds; with a required field still empty that is no answer, not data.
-		if (answered.timedOut && named.some(field => fieldError(field, answered.data[field.name!]) !== undefined)) {
+		if (
+			answered.timedOut &&
+			(unattendedTimeout
+				? answered.hasValidRecommendation !== true
+				: named.some(field => fieldError(field, answered.data[field.name!]) !== undefined))
+		) {
 			return {
-				content: [{ type: "text", text: ASK_TIMED_OUT_UNANSWERED }],
+				content: [
+					{ type: "text", text: unattendedTimeout ? autopilotAskTimeout.trim() : ASK_TIMED_OUT_UNANSWERED },
+				],
 				details: { answers: [], timedOut: true },
 			};
 		}
@@ -603,6 +615,12 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			notes: notes && resultNotes.map(note => ({ ...note, text: note.text.replace(/\s+/g, " ").trim() })),
 		});
 		const imageBlocks = await this.#answerImageBlocks(answerImages, signal);
+		if (
+			unattendedTimeout &&
+			(!(answerImages.length ? await unattendedTimeout.currentAfterUsage() : unattendedTimeout.isCurrent()) ||
+				dialogSignal.aborted)
+		)
+			throw abortError();
 		return { content: [{ type: "text", text }, ...imageBlocks], details };
 	}
 }

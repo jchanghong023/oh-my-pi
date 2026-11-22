@@ -67,7 +67,7 @@ async function installLocked(info: WasmGrammarInfo, dir: string, dest: string, b
 				if (await Bun.file(dest).exists()) return true;
 				await withDownload(
 					`${info.language} grammar`,
-					tracker => fetchGrammar(info, dest, base, (loaded, total) => tracker.update(loaded, total)),
+					tracker => fetchGrammar(info, dest, base, (loaded, total) => tracker.update({ loaded, total })),
 					{ detail: info.file },
 				);
 				logger.debug("grammar: installed", { language: info.language, file: info.file });

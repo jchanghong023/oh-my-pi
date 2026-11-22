@@ -10,11 +10,13 @@ import type {
 import { prompt } from "@oh-my-pi/pi-utils";
 
 import goalDescription from "../../prompts/tools/goal.md" with { type: "text" };
+import reviewBeforeCompletion from "../../prompts/goals/goal-autopilot-review.md" with { type: "text" };
 
 import type { ToolSession } from "../../tools";
 
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 
+import { goalAutopilotRequest } from "../request-context";
 import { completionBudgetReport, remainingTokens } from "../runtime";
 import type { Goal, GoalToolDetails } from "@oh-my-pi/pi-tui/tools/goal";
 
@@ -80,7 +82,7 @@ export class GoalTool implements AgentTool<typeof goalSchema, GoalToolDetails> {
 		params: GoalToolInput,
 		_signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<GoalToolDetails>,
-		_context?: AgentToolContext,
+		context?: AgentToolContext,
 	): Promise<AgentToolResult<GoalToolDetails>> {
 		const runtime = this.#session.getGoalRuntime?.();
 		if (!runtime) {
@@ -104,7 +106,7 @@ export class GoalTool implements AgentTool<typeof goalSchema, GoalToolDetails> {
 			const dropped = await runtime.dropGoal();
 			response = buildGoalToolResponse(dropped ?? null);
 		} else {
-			const completed = await runtime.completeGoalFromTool();
+			const completed = await runtime.completeGoalFromTool(goalAutopilotRequest(context));
 			response = buildGoalToolResponse(completed, { includeCompletionReport: true });
 		}
 		let text: string;
@@ -116,6 +118,8 @@ export class GoalTool implements AgentTool<typeof goalSchema, GoalToolDetails> {
 			if (response.remainingTokens !== null) {
 				text += `\nRemaining tokens: ${response.remainingTokens}`;
 			}
+			if (params.op === "complete" && response.goal.status === "active")
+				text += `\n\n${reviewBeforeCompletion.trim()}`;
 			if (response.completionBudgetReport) {
 				text += `\n\n${response.completionBudgetReport}`;
 			}

@@ -6,6 +6,7 @@ import { withTimeout } from "@oh-my-pi/pi-utils/async";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { workerHostEntry } from "@oh-my-pi/pi-utils/worker-host";
+import { goalAutopilotRequest } from "../../goals/request-context";
 import {
 	type ApprovalContextSource,
 	type ApprovalPolicy,
@@ -448,6 +449,8 @@ export class ComputerSupervisor implements ComputerController {
 				verdict = "approved";
 			} else if (policy === "deny") {
 				verdict = "denied";
+			} else if (goalAutopilotRequest(context)) {
+				throw new ToolError("Foreground computer control requires separate interactive approval.");
 			} else if (!context?.ui || context.hasUI === false) {
 				verdict = "no-ui";
 			} else if (message.timeoutMs <= 0) {

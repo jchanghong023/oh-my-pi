@@ -1525,6 +1525,7 @@ async function runLoopBody(
 				let recovered: HarmonyRecoveredToolCall | undefined;
 				let message: AssistantMessage;
 				let inputsEmitted = false;
+				let requestScope: unknown;
 				try {
 					if (agentPauseGate.paused) await waitForProcessPause(config, signal);
 					message = await streamAssistantResponse(
@@ -1542,6 +1543,7 @@ async function runLoopBody(
 						preparedProviderCall,
 						() => {
 							if (config.isUndeliveredQueuedMessage) signal?.throwIfAborted();
+							requestScope = currentContext.captureToolRequestScope?.();
 							emitTurnInputs();
 							inputsEmitted = true;
 						},
@@ -1765,6 +1767,7 @@ async function runLoopBody(
 						telemetry,
 						invokeAgentSpan,
 						[...liveAccepted, ...liveDeferred],
+						requestScope,
 					);
 					toolResults.push(...executionResult.toolResults);
 
@@ -3358,6 +3361,7 @@ async function executeToolCalls(
 	// Steering the provider took off the queue during the response that emitted
 	// this batch; it injects at this batch's boundary like queued steering.
 	liveSteering: readonly AgentMessage[],
+	requestScope?: unknown,
 ): Promise<{ toolResults: ToolResultMessage[]; additionalContext?: string }> {
 	const tools = currentContext.tools;
 	const {
@@ -3749,6 +3753,7 @@ async function executeToolCalls(
 						total: toolCalls.length,
 						toolCalls: toolCallInfos,
 						steeringSignal: steeringSoftController.signal,
+						...(requestScope !== undefined && { requestScope }),
 						providerMetadata: toolCall.providerMetadata,
 						...(earlierEffectsSettled ? { earlierEffectsSettled } : {}),
 						addAdditionalContext: context => {

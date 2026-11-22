@@ -17,6 +17,7 @@
 ### Changed
 
 - Plan review and save dialogs use the upstream presentation again.
+- Autopilot forms can distinguish explicit recommendations from implicit choices and apply native per-control validation on timeout.
 - Native chats no longer show a crossed-out Spotlight star or leave an empty row under unchanged tool results.
 - Emergency terminal cleanup only sends reset sequences while OMP still owns the terminal.
 - The optional `dark-terminal` theme uses the upstream bright green and red palette again.

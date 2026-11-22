@@ -690,6 +690,8 @@ export interface ToolCallContext {
 	index: number;
 	total: number;
 	toolCalls: Array<{ id: string; name: string }>;
+	/** Host scope captured before the request that produced this batch; absent on tool replay. */
+	requestScope?: unknown;
 	/** Provider-native metadata for the current call, when present. */
 	providerMetadata?: ToolCallProviderMetadata;
 	/**
@@ -1314,6 +1316,7 @@ export interface AgentTool<
 export interface AgentContext {
 	systemPrompt: string[];
 	messages: AgentMessage[];
+	captureToolRequestScope?: () => unknown;
 	tools?: AgentTool<any>[];
 	/**
 	 * Inactive tools that may become active later in the conversation. A provider that announces tool changes
