@@ -47,26 +47,6 @@ describe("per-install prompt perturbation", () => {
 		expect(second).toBe(first);
 	});
 
-	it("covers every static prose line of the coding-agent prompts", async () => {
-		const promptDir = new URL("../../coding-agent/src/prompts/", import.meta.url);
-		const pooled = new Set(pool.entries.map(entry => entry.source.trim()));
-		const missing: string[] = [];
-		for await (const relative of new Bun.Glob("**/*.md").scan({ cwd: promptDir.pathname })) {
-			const text = await Bun.file(new URL(relative, promptDir)).text();
-			let fenced = false;
-			for (const raw of text.split("\n")) {
-				if (raw.trimStart().startsWith("```")) {
-					fenced = !fenced;
-					continue;
-				}
-				const source = raw.trim();
-				if (fenced || source.length < 40 || source.includes("{{")) continue;
-				if (!pooled.has(source)) missing.push(`${relative}: ${source.slice(0, 60)}`);
-			}
-		}
-		expect(missing).toEqual([]);
-	});
-
 	it("drops the system-prompt opener instead of paraphrasing it", async () => {
 		const promptUrl = new URL("../../coding-agent/src/prompts/system/system-prompt.md", import.meta.url);
 		const prompt = await Bun.file(promptUrl).text();

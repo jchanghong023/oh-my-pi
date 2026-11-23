@@ -24,7 +24,10 @@ const held: MockResponse = { content: ["Started"], delayMs: 600_000 };
 // - "live-steer": the provider claims the first user steer into the streaming response,
 //   as a live-steering provider (Codex `response.steer`) does, then holds.
 const firstCall: Record<string, MockHandler> = {
-	hold: held,
+	hold: async () => {
+		await Bun.write(path.join(process.cwd(), "held-model-call"), "");
+		return held;
+	},
 	"until-steer": async (_context, options) => {
 		const live = options?.liveSteering;
 		const signal = options?.signal;

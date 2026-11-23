@@ -2,10 +2,23 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import compressDescriptionPrompt from "../../src/prompts/skills/compress-description.md" with { type: "text" };
 import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
 import { composerBounds } from "../helpers/compact-screen-recording";
 import { contentText, MARKER, respond, type ModelRequest } from "./provider-fixture";
 import { clearNativeDraft, eventually, nativeDraftMatches, nativeDraftSnapshot, tuiTest, withTui } from "./tui-harness";
+
+const skillHintPromptPrefix = compressDescriptionPrompt.slice(0, compressDescriptionPrompt.indexOf("{{name}}"));
+
+function isSkillHintRequest(request: ModelRequest): boolean {
+	const [message] = request.messages;
+	return (
+		request.messages.length === 1 &&
+		!request.tools?.length &&
+		message?.role === "user" &&
+		contentText(message.content).startsWith(skillHintPromptPrefix)
+	);
+}
 
 function nativeReadResult(request: ModelRequest, target: string): string {
 	const call = request.messages
@@ -81,7 +94,7 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 					for (const skill of superpowers) expect(ordinaryContext).not.toContain(skill.name);
 					// Exercise native completion once, including on Windows without a planning directory.
 					if (location === "file") {
-						const requestCount = provider.requests.length;
+						const requestStart = provider.requests.length;
 						for (const skill of inventory.skills.filter(skill => skill.source === "openspec")) {
 							const command = `/skill:${skill.name}`;
 							// The popup clips long labels at this viewport width. Only
@@ -107,7 +120,11 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 							);
 							await clearNativeDraft(tui);
 						}
-						expect(provider.requests).toHaveLength(requestCount);
+						// Startup routing hints can finish dispatching while the composer is open.
+						// Tab completion must not submit a turn or make any other model request.
+						expect(provider.requests.slice(requestStart).filter(request => !isSkillHintRequest(request))).toEqual(
+							[],
+						);
 					}
 					const manualOnly = inventory.skills.filter(
 						skill =>

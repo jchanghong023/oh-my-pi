@@ -121,10 +121,10 @@ describe("bash job widgets", () => {
 			expect(stream).toMatchObject({
 				id: "file:1",
 				kind: "file",
-				consumer: path.join(dir, "bench.log"),
 				bytes: 20,
 				open: true,
 			});
+			expect(path.normalize(stream?.consumer ?? "")).toBe(path.join(dir, "bench.log"));
 			expect(stream?.tail()).toBe("round 1/3\nround 2/3\n");
 			expect(job.widgetInputs?.sources().map(source => source.id)).toEqual(["out", "file:1"]);
 			const states = inspection?.trace?.units.flatMap(unit => unit.nodes.map(node => node.state));

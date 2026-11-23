@@ -23,7 +23,7 @@ const TAG = `${process.platform}-${process.arch}`;
 const LEAF_PACKAGE = `@oh-my-pi/pi-natives-${TAG}`;
 const ADDON = `pi_natives.${TAG}.node`;
 const LOADER_SOURCES = path.join(import.meta.dir, "..", "native");
-const LOADER_MODULES = ["loader-state.js", "embedded-addon.js", "version-sentinel.js"];
+const LOADER_MODULES = ["loader-state.js", "embedded-addon.js", "offline-root.js", "version-sentinel.js"];
 
 const roots: string[] = [];
 

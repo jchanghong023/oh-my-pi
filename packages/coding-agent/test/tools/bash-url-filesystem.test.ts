@@ -239,18 +239,18 @@ describe("bash writes to handler-written URLs", () => {
 
 describe("bash replies through out://", () => {
 	it("carries each closed redirect as a reply, live and in the final result, without touching the output", async () => {
-		const frames: unknown[] = [];
+		const replies: Array<string[] | undefined> = [];
 		const result = await new BashTool({ ...session, tuiTranscript: true }).execute(
 			"call",
 			{ command: "printf '**first**\\n' > out://; echo between; echo second >> out://" },
 			undefined,
-			update => frames.push(update.details),
+			update => replies.push(update.details?.replies),
 		);
 
 		expect(result.content.find(c => c.type === "text")?.text).toBe("between\n");
 		expect(result.details?.replies).toEqual(["**first**\n", "second\n"]);
 		// The first reply reaches the card while the command still runs.
-		expect(frames).toContainEqual({ replies: ["**first**\n"] });
+		expect(replies).toContainEqual(["**first**\n"]);
 	});
 
 	it("drops an oversize reply instead of showing a truncated one, and refuses reads", async () => {

@@ -11,7 +11,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { IpcConnection, Process } from "@oh-my-pi/pi-natives";
-import { isEexist, isEnoent, logger, postmortem, toError } from "@oh-my-pi/pi-utils";
+import { isEexist, isEnoent, logger, postmortem, removeWithRetries, toError } from "@oh-my-pi/pi-utils";
 import { resolveCliEntryCmd, resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { daemonBuildId } from "./build";
 import { canonicalProjectDir, daemonDir, daemonEndpoint, daemonTcpAddress, daemonTokenPath } from "./paths";
@@ -1218,34 +1218,34 @@ export async function isolateDaemonForSmokeTest(): Promise<() => Promise<void>> 
 	process.env[DAEMON_DIR_ENV] = root;
 	delete process.env[DAEMON_TCP_ENV];
 	return async () => {
-		await closeDaemonClient();
 		// The probe follows the env: once something else repointed it, the daemon
 		// it would reach is not this one, and shutting that down is never ours to do.
-		if (process.env[DAEMON_DIR_ENV] === root) {
+		const ownsRuntime = process.env[DAEMON_DIR_ENV] === root;
+		// Authenticate the no-spawn connection before dropping the shared client:
+		// closing the last connection can let the private daemon start exiting.
+		const probe = ownsRuntime ? await probeDaemon() : undefined;
+		try {
+			const daemon = probe && Process.fromPid(probe.welcome.daemon.pid);
+			const exited = daemon?.waitForExit({ timeoutMs: SMOKE_DAEMON_EXIT_MS });
 			try {
-				const probe = await probeDaemon();
-				if (probe) {
-					// Pin the authenticated daemon's OS identity before requesting shutdown.
-					const daemon = Process.fromPid(probe.welcome.daemon.pid);
-					const exited = daemon?.waitForExit({ timeoutMs: SMOKE_DAEMON_EXIT_MS });
-					try {
-						await probe.request({ op: "shutdown" });
-					} catch (error) {
-						logger.debug("Smoke-test daemon shutdown failed", logger.diagnosticError(error));
-					} finally {
-						probe.close();
-					}
-					// The daemon acknowledges before it exits; Windows keeps its DLL mapped
-					// until the process exits, even after all daemon files are closed.
-					if (exited && !(await exited)) throw new Error("Smoke-test daemon did not exit after shutdown");
-				}
+				await closeDaemonClient();
+				await probe?.request({ op: "shutdown" });
+			} catch (error) {
+				logger.debug("Smoke-test daemon shutdown failed", logger.diagnosticError(error));
 			} finally {
+				probe?.close();
+			}
+			// The daemon acknowledges before it exits; Windows keeps its DLL mapped
+			// until the process exits, even after all daemon files are closed.
+			if (exited && !(await exited)) throw new Error("Smoke-test daemon did not exit after shutdown");
+		} finally {
+			if (ownsRuntime) {
 				if (previousDir === undefined) delete process.env[DAEMON_DIR_ENV];
 				else process.env[DAEMON_DIR_ENV] = previousDir;
 				if (previousTcp !== undefined) process.env[DAEMON_TCP_ENV] = previousTcp;
 			}
 		}
-		await fs.rm(root, { recursive: true, force: true });
+		await removeWithRetries(root);
 	};
 }
 

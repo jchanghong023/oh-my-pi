@@ -86,7 +86,10 @@ describe("createTools", () => {
 	});
 
 	it("excludes lsp tool when session disables LSP", async () => {
-		const session = createTestSession({ enableLsp: false, settings: Settings.isolated({ "lsp.enabled": true }) });
+		const session = createTestSession({
+			enableLsp: false,
+			settings: createSettingsWithOverrides({ "lsp.enabled": true }),
+		});
 		const tools = await createTools(session, ["read", "lsp", "write"]);
 		const names = tools.map(t => t.name);
 

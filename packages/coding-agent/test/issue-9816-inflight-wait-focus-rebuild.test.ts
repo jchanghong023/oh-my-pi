@@ -27,7 +27,11 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type {
+	AgentSession,
+	LocalAgentSessionEvent,
+	LocalAgentSessionEventListener,
+} from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type { AgentProgress, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
@@ -141,7 +145,7 @@ const taskProgressUpdate = {
 			],
 		} satisfies TaskToolDetails,
 	},
-} satisfies Extract<AgentSessionEvent, { type: "tool_execution_update" }>;
+} satisfies Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>;
 
 const backgroundTaskCall = {
 	role: "assistant",
@@ -182,7 +186,7 @@ const backgroundTaskRunningResult = {
 function backgroundProgressUpdate(
 	marker: string,
 	state: "running" | "completed" | "failed" = "running",
-): Extract<AgentSessionEvent, { type: "tool_execution_update" }> {
+): Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }> {
 	return {
 		type: "tool_execution_update",
 		toolCallId: "task-bg",
@@ -198,14 +202,14 @@ function backgroundProgressUpdate(
 				async: { state, jobId: "job-bg", type: "task" },
 			} satisfies TaskToolDetails,
 		},
-	} satisfies Extract<AgentSessionEvent, { type: "tool_execution_update" }>;
+	} satisfies Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>;
 }
 
 interface SessionStub {
 	session: AgentSession;
 	hasListener(): boolean;
-	emitToolUpdate(event: Extract<AgentSessionEvent, { type: "tool_execution_update" }>): Promise<void>;
-	emit(event: AgentSessionEvent): Promise<void>;
+	emitToolUpdate(event: Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>): Promise<void>;
+	emit(event: LocalAgentSessionEvent): Promise<void>;
 	setLiveAssistant(message: AssistantMessage | null, results: ToolResultMessage[]): void;
 	stagePersistedCompletion(): () => void;
 }
@@ -217,9 +221,9 @@ function makeSession(
 ): SessionStub {
 	let messages = initialMessages;
 	let streaming = initialStreaming;
-	let listener: ((event: AgentSessionEvent) => Promise<void> | void) | undefined;
+	let listener: LocalAgentSessionEventListener | undefined;
 	let persistence = Promise.resolve();
-	const activeToolUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
+	const activeToolUpdates = new Map<string, Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>>();
 	let liveMessage: AssistantMessage | null = null;
 	let bufferedResults: ToolResultMessage[] = [];
 
@@ -234,7 +238,7 @@ function makeSession(
 			},
 			getPendingToolResults: () => bufferedResults,
 		},
-		subscribe(next: (event: AgentSessionEvent) => Promise<void> | void) {
+		subscribeLocal(next: LocalAgentSessionEventListener) {
 			listener = next;
 			return () => {
 				if (listener === next) listener = undefined;
@@ -319,7 +323,7 @@ function createFixture(main = makeSession([danglingWait], true), worker = makeSe
 		configurable: true,
 		get: () => focus.target ?? main.session,
 	});
-	ctx.unsubscribe = main.session.subscribe(event => eventController.handleEvent(event));
+	ctx.unsubscribe = main.session.subscribeLocal(event => eventController.handleEvent(event));
 	return { ctx, focus, main, worker };
 }
 

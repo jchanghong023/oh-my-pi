@@ -50,6 +50,7 @@ FAKE_SERVER = textwrap.dedent(
     import sys
     import threading
     import time
+    from pathlib import Path
 
     # Background-job completions print from a timer thread; keep frames whole.
     print_lock = threading.Lock()
@@ -478,8 +479,8 @@ FAKE_SERVER = textwrap.dedent(
         elif command_type == "new_session":
             respond(request_id, "new_session", {"cancelled": False})
         elif command_type in {"open_session", "switch_session"}:
-            session_path = command["sessionDir" if command_type == "open_session" else "sessionPath"]
-            if session_path.startswith("/tmp/unavailable") and "provider" not in command:
+            session_path = Path(command["sessionDir" if command_type == "open_session" else "sessionPath"])
+            if session_path == Path("sessions", "unavailable-session") and "provider" not in command:
                 respond(
                     request_id, command_type, success=False,
                     error="Could not restore model local/missing-model",
@@ -497,7 +498,7 @@ FAKE_SERVER = textwrap.dedent(
                         "cancelled": False,
                         "resumed": True,
                         "sessionId": "resumed-session",
-                        "sessionFile": f"{session_path}/resumed.jsonl",
+                        "sessionFile": str(session_path / "resumed.jsonl"),
                     },
                 )
         elif command_type == "set_event_filter":
@@ -1531,8 +1532,9 @@ class RpcClientTests(unittest.TestCase):
         self.assertEqual(turn.require_assistant_text(), "pong")
 
     def test_open_session_returns_typed_result(self) -> None:
+        session_dir = Path("sessions", "host-key")
         with self.make_client() as client:
-            result = client.open_session(Path("/tmp/host-key"))
+            result = client.open_session(session_dir)
 
         self.assertEqual(
             result,
@@ -1540,7 +1542,7 @@ class RpcClientTests(unittest.TestCase):
                 cancelled=False,
                 resumed=True,
                 session_id="resumed-session",
-                session_file="/tmp/host-key/resumed.jsonl",
+                session_file=str(session_dir / "resumed.jsonl"),
             ),
         )
 
@@ -1555,7 +1557,7 @@ class RpcClientTests(unittest.TestCase):
                             f'payload["error"] = error; payload["code"] = {code!r}',
                         )
                     with self.make_client(server) as client:
-                        target = Path("/tmp/unavailable-session")
+                        target = Path("sessions", "unavailable-session")
                         before = client.get_state()
                         change = client.open_session if command == "open_session" else client.switch_session
                         with self.assertRaises(RpcCommandError) as ctx:
@@ -1868,7 +1870,7 @@ class RpcClientTests(unittest.TestCase):
             self.assertEqual(stats.tokens.total, 15)
 
             exported = client.export_html("/tmp/custom.html")
-            self.assertEqual(str(exported), "/tmp/custom.html")
+            self.assertEqual(exported, Path("/tmp/custom.html"))
 
             new_session = client.new_session()
             switched = client.switch_session("/tmp/session.jsonl")

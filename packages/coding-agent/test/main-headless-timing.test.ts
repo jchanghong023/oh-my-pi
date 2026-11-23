@@ -52,7 +52,7 @@ describe("startup timing after a headless runner starts", () => {
 			model: { provider: "anthropic", id: "test-model" },
 			settings: Settings.isolated(),
 			sessionManager: manager,
-			subscribe: () => {},
+			subscribeLocal: () => () => {},
 			addDisposer: () => {},
 			setScopedModelsRefresher: () => {},
 			getAllToolNames: () => [],

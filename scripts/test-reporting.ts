@@ -329,22 +329,28 @@ export function recordUnselectedRustForkTests(dir?: string): Promise<void> {
 export function finalizeTestRun(gate: GateRun, run: TestReportRun, unreconciledScope?: string): void {
 	if (!run.owner) return;
 	let prepared: Promise<ReconciledTestRun> | undefined;
-	gate.onFinalize(async exitCode => {
-		try {
-			prepared ??= reconcileTestRun(run, gate);
-			const { producers, reconciliation } = await prepared;
-			await writeTestRun(run, exitCode, producers, reconciliation, unreconciledScope);
-		} catch (error) {
-			// A failed outcome write must not leave an earlier complete/0 report.
+	gate.onFinalize(
+		async exitCode => {
 			try {
-				await fs.unlink(path.join(run.dir, "run.json"));
-			} catch (removeError) {
-				if ((removeError as NodeJS.ErrnoException).code !== "ENOENT")
-					throw new AggregateError([error, removeError], "Could not finalize or invalidate test timing metadata");
+				prepared ??= reconcileTestRun(run, gate);
+				const { producers, reconciliation } = await prepared;
+				await writeTestRun(run, exitCode, producers, reconciliation, unreconciledScope);
+			} catch (error) {
+				// A failed outcome write must not leave an earlier complete/0 report.
+				try {
+					await fs.unlink(path.join(run.dir, "run.json"));
+				} catch (removeError) {
+					if ((removeError as NodeJS.ErrnoException).code !== "ENOENT")
+						throw new AggregateError(
+							[error, removeError],
+							"Could not finalize or invalidate test timing metadata",
+						);
+				}
+				throw error;
 			}
-			throw error;
-		}
-	});
+		},
+		{ withinGateBudget: true },
+	);
 }
 
 export async function endTestRun(run: TestReportRun, exitCode: number, unreconciledScope?: string): Promise<void> {

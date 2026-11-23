@@ -51,6 +51,7 @@ const PAGE_STALE_ERROR: &str = "RPC message cursor is stale";
 /// How long teardown waits for the process group leader after each signal.
 const LEADER_EXIT_TIMEOUT: Duration = Duration::from_secs(1);
 /// After SIGKILL, killed members linger until reaped by their (new) parent.
+#[cfg(unix)]
 const KILL_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 /// How long teardown waits for the reader thread once the process is gone.
 const READER_JOIN_TIMEOUT: Duration = Duration::from_secs(1);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { watch } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -479,6 +480,20 @@ describe("RPC queued-message editing", () => {
 			await client.stop();
 
 			await startStreamingTurn();
+			// agent_start precedes provider dispatch. Wait for the fixture to consume its
+			// held response, or the continued run could be the first model call and hold.
+			const marker = "held-model-call";
+			const entered = Promise.withResolvers<void>();
+			const watcher = watch(directory, (_event, name) => {
+				if (name === marker) entered.resolve();
+			});
+			try {
+				if (!(await Bun.file(path.join(directory, marker)).exists())) {
+					await withTimeout(entered.promise, 10_000, "First turn never reached the model");
+				}
+			} finally {
+				watcher.close();
+			}
 			await client.resume();
 			// Interrupted before any output, the prompt runs again as is: no second user turn.
 			expect(userTexts(await untilContinued())).toEqual([[{ type: "text", text: "start a long turn" }]]);

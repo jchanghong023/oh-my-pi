@@ -126,6 +126,7 @@ class ProtocolParsingTests(unittest.TestCase):
                 {
                     "type": "cache_warming_end",
                     "phase": "idle",
+                    "method": "replay",
                     "provider": "anthropic",
                     "model": "claude-sonnet-4-5",
                     "outcome": "miss",
@@ -133,8 +134,8 @@ class ProtocolParsingTests(unittest.TestCase):
                     "warmingStopReason": "refresh missed the cache",
                 },
                 CacheWarmingEndEvent,
-                lambda e: (e.outcome, e.usage["input"], e.warming_stop_reason),
-                ("miss", 3, "refresh missed the cache"),
+                lambda e: (e.method, e.outcome, e.usage["input"], e.warming_stop_reason),
+                ("replay", "miss", 3, "refresh missed the cache"),
             ),
             (
                 {"type": "thinking_level_changed", "thinkingLevel": "high", "configured": "auto", "resolved": "high"},

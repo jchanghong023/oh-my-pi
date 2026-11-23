@@ -17,13 +17,14 @@ function makeSession(
 	cwd: string,
 	options: { enableLsp?: boolean; settings?: Record<string, unknown> } = {},
 ): ToolSession {
+	const enableLsp = options.enableLsp ?? false;
 	return {
 		cwd,
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
-		enableLsp: options.enableLsp ?? false,
-		settings: Settings.isolated({ "edit.mode": "patch", ...options.settings }),
+		enableLsp,
+		settings: Settings.isolated({ "edit.mode": "patch", "lsp.enabled": enableLsp, ...options.settings }),
 		getArtifactsDir: () => null,
 		getSessionId: () => null,
 		getPlanModeState: () => undefined,

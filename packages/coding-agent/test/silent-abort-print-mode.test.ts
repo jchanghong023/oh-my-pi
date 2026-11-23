@@ -56,7 +56,7 @@ function createMockSession(
 			onPersistenceNotice: () => () => {},
 		},
 		extensionRunner: undefined,
-		subscribe: () => () => {},
+		subscribeLocal: () => () => {},
 		prompt: async () => {},
 		disableStopTimeTodoReminders: () => {},
 		prepareForHeadlessAdvisorDrain: () => {},

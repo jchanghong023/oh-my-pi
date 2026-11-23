@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -878,11 +878,16 @@ it("republishes a successful report if the remaining charged budget expires afte
 	expect(report.completion).toBe("partial");
 });
 
-it("preserves the first gate failure in finalized partial metadata", async () => {
+it("publishes reconciled partial metadata for a failed suite even when finalizers take over one second", async () => {
 	const run = await reportFixture("first-failure");
 	const result = await runGate(
 		"fulltest",
 		async gate => {
+			const capture = gate.capture.bind(gate);
+			vi.spyOn(gate, "capture").mockImplementation(async command => {
+				await Bun.sleep(1100);
+				return capture(command);
+			});
 			finalizeTestRun(gate, run);
 			throw new GateCommandError("temporary task failed", 47);
 		},
@@ -893,6 +898,7 @@ it("preserves the first gate failure in finalized partial metadata", async () =>
 	expect(result.exitCode).toBe(47);
 	expect(report.exitCode).toBe(result.exitCode);
 	expect(report.completion).toBe("partial");
+	expect(report.reconciliation.status).toBe("validated");
 });
 
 it("keeps a missing producer report partial without treating unreported cases as passed", async () => {

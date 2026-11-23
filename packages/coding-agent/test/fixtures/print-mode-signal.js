@@ -9,7 +9,7 @@ if (!marker) throw new Error("Missing disposal marker path");
 
 const session = {
 	extensionRunner: undefined,
-	subscribe() {},
+	subscribeLocal: () => () => {},
 	settings: Settings.isolated(),
 	sessionManager: {
 		buildSessionContext: () => ({ messages: [] }),

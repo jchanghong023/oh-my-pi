@@ -7,7 +7,7 @@ import {
 	runPrintMode,
 } from "@oh-my-pi/pi-coding-agent/modes/print-mode";
 import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
-import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AgentSession, LocalAgentSessionEventListener } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { CREDENTIAL_DISABLED_NOTICE_SOURCE } from "@oh-my-pi/pi-coding-agent/session/credential-disabled-notice";
 import type { PlanProposalHandler } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 
@@ -42,7 +42,7 @@ interface DelayedSession {
 	getModeChanges: () => Array<{ mode: string; data?: Record<string, unknown> }>;
 	getPlanProposalHandler: () => PlanProposalHandler | undefined;
 	getCurrentPlanMode: () => PlanModeState | undefined;
-	emit: (event: AgentSessionEvent) => void;
+	emit: LocalAgentSessionEventListener;
 	getAbortCalls: () => number;
 }
 
@@ -59,7 +59,7 @@ function createDelayedSession(
 	let enabledToolNames = ["read"];
 	const modeChanges: Array<{ mode: string; data?: Record<string, unknown> }> = [];
 	let planProposalHandler: PlanProposalHandler | undefined;
-	let subscriber: ((event: AgentSessionEvent) => void) | undefined;
+	let subscriber: LocalAgentSessionEventListener | undefined;
 	let textOutputCommitted = true;
 	let abortCalls = 0;
 
@@ -114,7 +114,7 @@ function createDelayedSession(
 		setTextOutputCommitted: (committed: boolean) => {
 			textOutputCommitted = committed;
 		},
-		subscribe: (listener: (event: AgentSessionEvent) => void) => {
+		subscribeLocal: (listener: LocalAgentSessionEventListener) => {
 			subscriber = listener;
 			return () => {};
 		},
@@ -298,7 +298,7 @@ describe("print mode working indicator", () => {
 		const { promise: catchupStarted, resolve: markCatchupStarted } = Promise.withResolvers<void>();
 		let disposed = false;
 		let catchupTimeoutMs: number | undefined;
-		let subscriber: ((event: AgentSessionEvent) => void) | undefined;
+		let subscriber: LocalAgentSessionEventListener | undefined;
 		const session = {
 			state: { messages },
 			getLastAssistantMessage: () => messages.findLast(message => message.role === "assistant"),
@@ -311,7 +311,7 @@ describe("print mode working indicator", () => {
 			},
 			settings: Settings.isolated(),
 			extensionRunner: undefined,
-			subscribe: (listener: (event: AgentSessionEvent) => void) => {
+			subscribeLocal: (listener: LocalAgentSessionEventListener) => {
 				subscriber = listener;
 				return () => {};
 			},
@@ -376,7 +376,7 @@ describe("print mode working indicator", () => {
 			},
 			settings: Settings.isolated(),
 			extensionRunner: undefined,
-			subscribe: () => () => {},
+			subscribeLocal: () => () => {},
 			prompt: async () => {
 				messages.push(message);
 				return true;
@@ -424,7 +424,7 @@ describe("print mode working indicator", () => {
 			},
 			settings: Settings.isolated(),
 			extensionRunner: undefined,
-			subscribe: () => () => {},
+			subscribeLocal: () => () => {},
 			prompt: async () => {
 				messages.push(message);
 				return true;

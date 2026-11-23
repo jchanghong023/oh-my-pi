@@ -73,7 +73,7 @@ function sessionWithJobs(
 	};
 	const session = {
 		extensionRunner: undefined,
-		subscribe: () => () => {},
+		subscribeLocal: () => () => {},
 		settings,
 		isDisposed: false,
 		sessionManager: {

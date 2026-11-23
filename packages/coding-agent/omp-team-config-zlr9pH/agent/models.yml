@@ -1,0 +1,12 @@
+providers:
+  deepseek:
+    baseUrl: https://example.invalid/v1
+    api: openai-completions
+    auth: none
+    models:
+      - id: Qwen3.8-27B
+        name: Qwen 3.8 27B
+        supportsTools: true
+      - id: Qwen3.8-35B
+        name: Qwen 3.8 35B
+        supportsTools: true

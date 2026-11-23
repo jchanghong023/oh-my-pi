@@ -3,7 +3,7 @@ import { removeWithRetries } from "@oh-my-pi/pi-utils";
  * Large-paste menu: when a paste reaches the configured `paste.largeMenuThreshold` line count,
  * the editor's `onLargePaste` hook routes through `InputController.handleLargePaste`, which offers
  * to attach the text as an `<attachment>` block, save it to a `local://` file, or paste it inline.
- * Below the threshold (or when disabled) the editor keeps its default collapse-to-`[Paste]`-marker behavior.
+ * Below the threshold (or when disabled), the controller stages the paste as a text attachment without a menu.
  */
 
 import { afterEach, describe, expect, it, vi } from "bun:test";
@@ -56,7 +56,7 @@ afterEach(() => {
 });
 
 describe("InputController.handleLargePaste gate", () => {
-	it("declines and skips the menu below the threshold", () => {
+	it("stages the paste without a menu below the threshold", () => {
 		const { controller, spies } = createContext({ threshold: 100 });
 		const menu = vi.spyOn(controller, "presentLargePasteMenu").mockResolvedValue();
 
@@ -65,7 +65,7 @@ describe("InputController.handleLargePaste gate", () => {
 		expect(spies.insertTextAttachment).toHaveBeenCalledWith("x");
 	});
 
-	it("declines when disabled (threshold 0), even for a huge paste", () => {
+	it("stages the paste without a menu when disabled (threshold 0), even for a huge paste", () => {
 		const { controller, spies } = createContext({ threshold: 0 });
 		const menu = vi.spyOn(controller, "presentLargePasteMenu").mockResolvedValue();
 
@@ -102,7 +102,8 @@ describe("InputController.handleLargePaste gate", () => {
 			editor.handleInput(`\x1b[200~${payload}\x1b[201~${enter}`);
 
 			expect(spies.showHookSelector).not.toHaveBeenCalled();
-			expect(submitted).toHaveBeenCalledWith(payload, `${payload} `);
+			expect(submitted).toHaveBeenCalledTimes(1);
+			expect(submitted).toHaveBeenCalledWith(payload);
 		});
 	}
 
@@ -142,10 +143,7 @@ describe("InputController.presentLargePasteMenu actions", () => {
 		const submitted = vi.fn();
 		editor.onSubmit = submitted;
 		editor.handleInput("\r");
-		expect(submitted).toHaveBeenCalledWith(
-			"<attachment>\nline one\nline two\n</attachment>",
-			"<attachment>\nline one\nline two\n</attachment> ",
-		);
+		expect(submitted).toHaveBeenCalledWith("<attachment>\nline one\nline two\n</attachment>");
 	});
 
 	it("pastes inline when explicitly selected", async () => {
@@ -211,7 +209,7 @@ describe("InputController.presentLargePasteMenu file attachment", () => {
 		const submitted = vi.fn();
 		editor.onSubmit = submitted;
 		editor.handleInput("\r");
-		expect(submitted).toHaveBeenCalledWith("local://paste-1.md", "local://paste-1.md ");
+		expect(submitted).toHaveBeenCalledWith("local://paste-1.md");
 		expect(await Bun.file(path.join(dir, "local", "paste-1.md")).text()).toBe("first file\nsecond line");
 		expect(await Bun.file(path.join(dir, "local", "paste-2.md")).text()).toBe("another paste");
 	});

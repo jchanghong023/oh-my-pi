@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 
 // Browser globals read inside page.evaluate callbacks; absent from bun-types.
 declare const devicePixelRatio: number;
@@ -23,6 +23,7 @@ import {
 	runInTab,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
+import { withTimeout } from "@oh-my-pi/pi-utils";
 import type { CDPSession } from "puppeteer-core";
 import { chromiumAvailable, visibleBrowserAvailable } from "./chromium-probe";
 
@@ -33,12 +34,17 @@ const CHROMIUM_AVAILABLE = await chromiumAvailable();
 // viewport smoke test only with OMP_TEST_VISIBLE_BROWSER=1.
 const VISIBLE_BROWSER_AVAILABLE = process.env.OMP_TEST_VISIBLE_BROWSER === "1" && (await visibleBrowserAvailable());
 
-// One headless Chromium for the file, held for its whole run: every test opens and closes its own tabs, and none
-// changes the browser in a way another test reads.
+// Share one headless Chromium while it's alive. If an intentional renderer crash
+// takes down Chromium itself, report that test's failure without cascading it to unrelated cases.
 let sharedHeadless: PuppeteerBrowserHandle | undefined;
 
-beforeAll(async () => {
-	if (!CHROMIUM_AVAILABLE) return;
+beforeEach(async () => {
+	if (!CHROMIUM_AVAILABLE || sharedHeadless?.browser.connected) return;
+	if (sharedHeadless) {
+		const disconnected = sharedHeadless;
+		sharedHeadless = undefined;
+		await releaseBrowser(disconnected, { kill: true });
+	}
 	const launched = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
 	if (!("browser" in launched)) throw new Error("Expected a Puppeteer browser");
 	holdBrowser(launched);
@@ -1224,9 +1230,13 @@ describe("browser tabs whose renderer crashed", () => {
 	/** Kill the page's renderer; resolves once Chromium reports the crash. */
 	async function crashRenderer(browser: PuppeteerBrowserHandle, url: string): Promise<void> {
 		const { client, crashed } = await watchRenderer(browser, url);
-		// Page.crash never answers: the renderer it would answer from is gone.
-		void client.send("Page.crash").catch(() => undefined);
-		await crashed;
+		try {
+			// Page.crash never answers: the renderer it would answer from is gone.
+			void client.send("Page.crash").catch(() => undefined);
+			await crashed;
+		} finally {
+			await client.detach();
+		}
 	}
 
 	it.skipIf(!CHROMIUM_AVAILABLE)(
@@ -1429,12 +1439,38 @@ describe("browser tabs whose renderer crashed", () => {
 			const name = `crashed-reopen-${process.pid}`;
 			const url = `data:text/html,<title>${name}</title>`;
 			try {
-				await acquireTab(name, browser, { url, timeoutMs: 30_000 });
+				const { tab } = await acquireTab(name, browser, { url, timeoutMs: 30_000 });
+				if (tab.backend !== "worker") throw new Error("Expected a worker tab");
 				await crashRenderer(browser, url);
-				const reopened = await acquireTab(name, browser, { url, timeoutMs: 30_000 });
+
+				// The independent CDP watcher can observe the crash before the tab worker does. Use a
+				// non-navigating probe on the worker itself so the reopen can't race the crash notification.
+				// The probe bypasses the supervisor's run bookkeeping, so its result cannot reattach the tab.
+				const id = `crash-probe-${name}`;
+				const observed = Promise.withResolvers<Extract<WorkerOutbound, { type: "result" }>>();
+				const unsubscribe = tab.worker.onMessage(msg => {
+					if (msg.type === "result" && msg.id === id) observed.resolve(msg);
+				});
+				try {
+					tab.worker.send({
+						type: "run",
+						id,
+						name,
+						code: "await new Promise(() => {});",
+						timeoutMs: 10_000,
+						session: { cwd: session.cwd },
+					});
+					const result = await withTimeout(observed.promise, 10_000, "Tab worker did not report the renderer crash");
+					expect(result).toMatchObject({ ok: false, error: { rendererCrashed: true } });
+				} finally {
+					unsubscribe();
+				}
+
+				const reopenedUrl = `data:text/html,<title>${name}-new</title>`;
+				const reopened = await acquireTab(name, browser, { url: reopenedUrl, timeoutMs: 30_000 });
 				expect(reopened.created).toBe(false);
 				expect(reopened.note).toContain("This tab's renderer had crashed");
-				expect(reopened.tab.info.title).toBe(name);
+				expect(reopened.tab.info.title).toBe(`${name}-new`);
 			} finally {
 				await releaseTab(name, { kill: true });
 			}

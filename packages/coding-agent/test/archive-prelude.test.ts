@@ -12,6 +12,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/archive/archive";
 import { createArchivePrelude } from "@oh-my-pi/pi-coding-agent/archive/prelude-definition";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { syncTranscripts } from "@oh-my-pi/pi-coding-agent/daemon/modules/transcripts";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import {
 	closeSessionIndex,
@@ -19,7 +20,7 @@ import {
 	recordSessionTitle,
 } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { sessionDirForCwd } from "@oh-my-pi/pi-coding-agent/session/session-paths";
-import { syncTranscripts } from "@oh-my-pi/pi-coding-agent/daemon/modules/transcripts";
+import { closeTranscriptIndex } from "@oh-my-pi/pi-coding-agent/session/transcript-index";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { makeAssistantMessage } from "./session-manager/helpers";
@@ -93,12 +94,14 @@ beforeEach(() => {
 	lib = path.join(root, "lib");
 	HistoryStorage.close();
 	closeSessionIndex();
+	closeTranscriptIndex();
 	setAgentDir(path.join(root, "agent"));
 });
 
 afterEach(() => {
 	HistoryStorage.close();
 	closeSessionIndex();
+	closeTranscriptIndex();
 	if (originalAgentDir) {
 		setAgentDir(originalAgentDir);
 	} else {

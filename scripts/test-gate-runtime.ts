@@ -105,7 +105,7 @@ interface Scope {
 	failure?: GateCommandError;
 	failures: GateCommandError[];
 	aggregate: boolean;
-	finalizers: Array<(exitCode: number) => Promise<void>>;
+	finalizers: Array<{ finalize(exitCode: number): Promise<void>; withinGateBudget: boolean }>;
 	closed: boolean;
 	reportFailure: boolean;
 	exitOnFailure: boolean;
@@ -804,32 +804,34 @@ class Runtime {
 				// metadata write failure can still join the collected list.
 				const knownFailure = scope.failure ?? scope.failures[0];
 				finalizedExitCode = knownFailure?.exitCode ?? 0;
-				// A failed tier must not wait indefinitely for hung report cleanup;
-				// a successful one still lets its finalizer consume the real budget.
-				const finalizerDeadline = knownFailure
-					? performance.now() + Math.min(1000, Math.max(50, scope.limit * 0.2))
-					: Infinity;
-				for (const finalizer of scope.finalizers) {
-					const remaining = finalizerDeadline - performance.now();
-					if (remaining <= 0) {
+				// Reports can use the remaining gate budget after ordinary failures.
+				// Other failed-run cleanup must not hang behind arbitrary callbacks.
+				const grace = Math.min(1000, Math.max(50, scope.limit * 0.2));
+				const signal = scope.controller.signal;
+				let cleanupDeadline = Infinity;
+				for (const { finalize, withinGateBudget } of scope.finalizers) {
+					if (cleanupDeadline <= performance.now() && (signal.aborted || !withinGateBudget)) {
 						print(`${scope.level}: FINALIZE_FAIL finalizer budget exhausted`);
 						break;
 					}
 					let timer: Timer | undefined;
+					const limit = Promise.withResolvers<never>();
+					const startGrace = () => {
+						cleanupDeadline = Math.min(cleanupDeadline, performance.now() + grace);
+						timer = setTimeout(
+							() => limit.reject(new Error("finalizer timeout")),
+							cleanupDeadline - performance.now(),
+						);
+					};
+					if (signal.aborted || (knownFailure && !withinGateBudget)) startGrace();
+					else signal.addEventListener("abort", startGrace, { once: true });
 					try {
-						const work = gate.charged(() => finalizer(finalizedExitCode));
-						if (!Number.isFinite(remaining)) await work;
-						else
-							await Promise.race([
-								work,
-								new Promise<never>((_, reject) => {
-									timer = setTimeout(() => reject(new Error("finalizer timeout")), remaining);
-								}),
-							]);
+						await Promise.race([gate.charged(() => finalize(finalizedExitCode)), limit.promise]);
 					} catch (error) {
 						print(`${scope.level}: FINALIZE_FAIL ${String(error)}`);
 						break;
 					} finally {
+						signal.removeEventListener("abort", startGrace);
 						if (timer) clearTimeout(timer);
 					}
 				}
@@ -859,7 +861,7 @@ class Runtime {
 				// deciding whether reports need the failed outcome published again.
 				if (!scope.failure && scope.charged >= scope.limit)
 					this.cancel(scope, new GateCommandError("Charged budget exhausted", 124, "TIMEOUT"));
-			} while (finalizedExitCode === 0 && scope.failure);
+			} while (scope.failure && finalizedExitCode !== scope.failure.exitCode);
 			result.totalSeconds = (scope.last - scope.started) / 1000;
 			result.compileExcludedSeconds = scope.compile / 1000;
 			result.budgetedSeconds = scope.charged / 1000;
@@ -911,10 +913,14 @@ export class GateRun {
 	/**
 	 * Register charged report cleanup that settles before the gate closes, even after cancellation.
 	 * It must permit a second call with the first failure's exit code if finalization began successfully.
+	 * `withinGateBudget` is for owned timing reports; ordinary failure does not start their cleanup grace.
 	 */
-	onFinalize(finalizer: (exitCode: number) => Promise<void>): void {
+	onFinalize(
+		finalizer: (exitCode: number) => Promise<void>,
+		{ withinGateBudget = false }: { withinGateBudget?: boolean } = {},
+	): void {
 		if (this.scope.closed) throw this.scope.failure ?? new GateCommandError("Gate already settled", 1);
-		this.scope.finalizers.push(finalizer);
+		this.scope.finalizers.push({ finalize: finalizer, withinGateBudget });
 	}
 	/** Stop every scope and owned process while preserving the first triggering failure. */
 	fail(error: unknown): GateCommandError {

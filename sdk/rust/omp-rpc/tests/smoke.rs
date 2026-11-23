@@ -14,11 +14,13 @@ use std::{
 use omp_rpc::*;
 use serde_json::{Map, Value, json};
 
+#[cfg(unix)]
 fn group_alive(pgid: libc::pid_t) -> bool {
 	// SAFETY: signal 0 only probes for a live member.
 	unsafe { libc::kill(-pgid, 0) == 0 }
 }
 
+#[cfg(unix)]
 fn group_members(pgid: libc::pid_t) -> Vec<String> {
 	let output = Process::new("pgrep")
 		.args(["-g", &pgid.to_string()])
@@ -180,8 +182,12 @@ fn smoke_real_server() {
 	assert_eq!(bash.output.trim(), "hi");
 
 	// The server leads its own process group; dropping the client must empty it.
-	let pgid = libc::pid_t::try_from(client.pid().unwrap()).unwrap();
-	println!("server pgid {pgid}, members {:?}", group_members(pgid));
+	#[cfg(unix)]
+	let pgid = {
+		let pgid = libc::pid_t::try_from(client.pid().unwrap()).unwrap();
+		println!("server pgid {pgid}, members {:?}", group_members(pgid));
+		pgid
+	};
 
 	drain(&events, &mut seen, Duration::from_secs(1));
 	let types: Vec<String> = seen.iter().map(notification_type).collect();
@@ -189,13 +195,17 @@ fn smoke_real_server() {
 	assert_clean(&seen);
 	assert!(types.iter().any(|kind| kind == "available_commands_update"));
 	assert!(types.iter().filter(|kind| *kind == "goal_updated").count() >= 3);
+	#[cfg(unix)]
 	let dropped = Instant::now();
 	drop(client);
-	while group_alive(pgid) {
-		assert!(dropped.elapsed() < Duration::from_secs(3), "server group {pgid} survived the drop");
-		std::thread::sleep(Duration::from_millis(20));
+	#[cfg(unix)]
+	{
+		while group_alive(pgid) {
+			assert!(dropped.elapsed() < Duration::from_secs(3), "server group {pgid} survived the drop");
+			std::thread::sleep(Duration::from_millis(20));
+		}
+		println!("server group gone {:?} after drop", dropped.elapsed());
 	}
-	println!("server group gone {:?} after drop", dropped.elapsed());
 	let _ = std::fs::remove_dir_all(&agent_dir);
 }
 

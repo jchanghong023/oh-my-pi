@@ -87,7 +87,7 @@ function printSession(manager: MCPManager, refreshGate?: Promise<void>, onRefres
 	let disposed = false;
 	const session = {
 		extensionRunner: undefined,
-		subscribe: () => {},
+		subscribeLocal: () => () => {},
 		settings: Settings.isolated(),
 		sessionManager: {
 			buildSessionContext: () => ({ messages: [] }),

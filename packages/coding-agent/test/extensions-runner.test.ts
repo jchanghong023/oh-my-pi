@@ -4373,9 +4373,9 @@ describe("ExtensionRunner", () => {
 				modelRegistry,
 			);
 			const order: string[] = [];
-			initApprovalRunner(runner, async () => {
+			initApprovalRunner(runner, async (_title, options) => {
 				order.push("prompt");
-				return "Approve";
+				return options[0];
 			});
 			const wrapped = new ExtensionToolWrapper(createArgGatedTool(recordPath), runner);
 			const contextFor = (mode: string) => ({

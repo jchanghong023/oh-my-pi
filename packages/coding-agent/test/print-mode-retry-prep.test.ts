@@ -56,7 +56,7 @@ function createMockSession(): { session: AgentSession; spies: RetryPrepSpies } {
 			onPersistenceNotice: () => () => {},
 		},
 		isStreaming: false,
-		subscribe: () => () => {},
+		subscribeLocal: () => () => {},
 		prompt: spies.prompt,
 		retry: spies.retry,
 		refreshMCPTools: spies.refreshMCPTools,

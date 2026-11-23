@@ -1040,13 +1040,9 @@ describe("selective commit flow", () => {
 
 	it("commits clean-filtered whole files from the bytes captured at draft time", async () => {
 		const { root, journal } = await emptyRepo();
-		const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-clean-filter-"));
-		tempDirs.push(scriptDir);
-		const script = path.join(scriptDir, "clean.sh");
 		// logo.bin stands in for a Git LFS file: the clean filter turns captured bytes into a pointer.
 		// wide.dat is not valid UTF-8, so it is committed whole, and its attribute turns CRLF into LF.
-		await Bun.write(script, "#!/bin/sh\nprintf 'pointer:'\ncat\n");
-		await git(root, ["config", "filter.asset.clean", `sh ${script}`]);
+		await git(root, ["config", "filter.asset.clean", "printf 'pointer:'; cat"]);
 		await git(root, ["config", "filter.asset.required", "true"]);
 		await Bun.write(path.join(root, ".gitattributes"), "*.bin filter=asset\nwide.dat text eol=lf\n");
 		await Bun.write(path.join(root, "logo.bin"), Buffer.from([0, 1]));

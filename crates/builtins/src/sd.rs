@@ -704,13 +704,13 @@ mod tests {
 	#[test]
 	fn binary_changes_report_only_the_filename_and_preserve_bytes() {
 		let dir = tempfile::tempdir().unwrap();
-		fs::write(dir.path().join("nul"), b"x\0").unwrap();
+		fs::write(dir.path().join("has-nul"), b"x\0").unwrap();
 		fs::write(dir.path().join("invalid"), b"\xffx").unwrap();
-		let args = ["-F", "-U", "0", "--expect", "1", "x", "$0", "nul", "invalid"];
+		let args = ["-F", "-U", "0", "--expect", "1", "x", "$0", "has-nul", "invalid"];
 		let (code, capture) = run_util::<Sd>(&args, "", dir.path());
 		assert_eq!((code, capture.err()), (0, String::new()));
-		assert_eq!(capture.out(), "Binary file nul changed\nBinary file invalid changed\n");
-		assert_eq!(fs::read(dir.path().join("nul")).unwrap(), b"$0\0");
+		assert_eq!(capture.out(), "Binary file has-nul changed\nBinary file invalid changed\n");
+		assert_eq!(fs::read(dir.path().join("has-nul")).unwrap(), b"$0\0");
 		assert_eq!(fs::read(dir.path().join("invalid")).unwrap(), b"\xff$0");
 	}
 

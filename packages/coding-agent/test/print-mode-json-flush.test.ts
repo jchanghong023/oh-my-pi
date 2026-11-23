@@ -15,21 +15,25 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { runPrintMode } from "@oh-my-pi/pi-coding-agent/modes/print-mode";
-import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type {
+	AgentSession,
+	LocalAgentSessionEvent,
+	LocalAgentSessionEventListener,
+} from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { postmortem } from "@oh-my-pi/pi-utils";
 
 interface FlushHarness {
 	session: AgentSession;
 	promptStarted: Promise<void>;
 	resolvePrompt: () => void;
-	emit: (event: AgentSessionEvent) => void;
+	emit: LocalAgentSessionEventListener;
 	disposed: () => boolean;
 }
 
 function createFlushHarness(dispose: () => Promise<void> = async () => {}): FlushHarness {
 	const { promise: promptStarted, resolve: markPromptStarted } = Promise.withResolvers<void>();
 	const { promise: promptReleased, resolve: resolvePrompt } = Promise.withResolvers<void>();
-	let subscriber: ((event: AgentSessionEvent) => void) | undefined;
+	let subscriber: LocalAgentSessionEventListener | undefined;
 	let disposed = false;
 	let advisorDrainPrepared = false;
 
@@ -44,7 +48,7 @@ function createFlushHarness(dispose: () => Promise<void> = async () => {}): Flus
 		settings: Settings.isolated(),
 		getLastAssistantMessage: () => undefined,
 		extensionRunner: undefined,
-		subscribe: (listener: (event: AgentSessionEvent) => void) => {
+		subscribeLocal: (listener: LocalAgentSessionEventListener) => {
 			subscriber = listener;
 			return () => {};
 		},
@@ -76,7 +80,7 @@ function createFlushHarness(dispose: () => Promise<void> = async () => {}): Flus
 	};
 }
 
-function makeLargeAgentEnd(payload: string): AgentSessionEvent {
+function makeLargeAgentEnd(payload: string): LocalAgentSessionEvent {
 	return {
 		type: "agent_end",
 		messages: [
@@ -88,7 +92,7 @@ function makeLargeAgentEnd(payload: string): AgentSessionEvent {
 				timestamp: Date.now(),
 			},
 		],
-	} as unknown as AgentSessionEvent;
+	} as unknown as LocalAgentSessionEvent;
 }
 
 interface HeldAgentEndWrite {

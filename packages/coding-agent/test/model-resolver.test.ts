@@ -410,7 +410,9 @@ describe("pickDefaultAvailableModel", () => {
 		const pool = [remote, ordinary];
 		const automaticFallback = Settings.isolated({ modelRoles: { smol: "anthropic/claude-haiku-5-5" } });
 		expect(resolveRoleChain("smol", automaticFallback, pool).map(candidate => candidate.model)).toEqual([ordinary]);
-		expect(filterAvailableModelsByEnabledPatterns(pool, ["apple/*"], automaticFallback)).toEqual([remote]);
+		const enabled = filterAvailableModelsByEnabledPatterns(pool, ["apple/*"], automaticFallback);
+		expect(enabled).toHaveLength(1);
+		expect(enabled[0]).toBe(remote);
 		// Provider-qualified selectors are exact; a near miss such as apple/haiku is not a fuzzy pin.
 		const explicitFallback = Settings.isolated({
 			modelRoles: { smol: "anthropic/claude-haiku-5-5" },

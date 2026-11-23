@@ -859,10 +859,11 @@ pub(super) mod tests {
 
 	use windows_sys::Win32::{
 		Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-		Graphics::Gdi::SetWindowRgn,
+		Graphics::{Dwm::DwmFlush, Gdi::SetWindowRgn},
 		System::LibraryLoader::GetModuleHandleW,
 		UI::{
 			Controls::{BST_CHECKED, BST_UNCHECKED},
+			HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE,
 			Input::KeyboardAndMouse::EnableWindow,
 			WindowsAndMessaging::{
 				BM_CLICK, BM_GETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_GROUPBOX, BS_OWNERDRAW,
@@ -956,10 +957,9 @@ pub(super) mod tests {
 		text.encode_utf16().chain(Some(0)).collect()
 	}
 
-	/// An ordinary opaque top-level window of class `class` whose visible frame
-	/// is `frame`, shown without activation in the topmost band above every
-	/// window made before it, so the desktop's own windows never cover it.
-	fn window(class: &str, frame: RECT) -> HWND {
+	/// An ordinary opaque top-level window of class `class`, shown without
+	/// activation in the topmost band above the desktop's other windows.
+	fn window(class: &str, bounds: RECT) -> HWND {
 		let class = wide(class);
 		// SAFETY: the class name outlives the call; no parent, menu or data.
 		let hwnd = unsafe {
@@ -968,10 +968,10 @@ pub(super) mod tests {
 				class.as_ptr(),
 				class.as_ptr(),
 				WS_OVERLAPPEDWINDOW,
-				frame.left,
-				frame.top,
-				frame.right - frame.left,
-				frame.bottom - frame.top,
+				bounds.left,
+				bounds.top,
+				bounds.right - bounds.left,
+				bounds.bottom - bounds.top,
 				null_mut(),
 				null_mut(),
 				GetModuleHandleW(std::ptr::null()),
@@ -979,42 +979,46 @@ pub(super) mod tests {
 			)
 		};
 		assert!(!hwnd.is_null());
-		// SAFETY: this thread owns `hwnd`.
+		// SAFETY: this thread owns `hwnd`; flush its queued composition changes
+		// before inspecting its visible frame.
 		unsafe {
-			SetWindowPos(
-				hwnd,
-				HWND_TOPMOST,
-				0,
-				0,
-				0,
-				0,
-				SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+			assert_ne!(
+				SetWindowPos(
+					hwnd,
+					HWND_TOPMOST,
+					0,
+					0,
+					0,
+					0,
+					SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+				),
+				0
 			);
+			assert!(DwmFlush() >= 0);
 		}
-		place(hwnd, frame);
 		hwnd
 	}
 
-	/// Moves `hwnd` so that its visible frame is `frame`, around which the
-	/// window rectangle keeps its invisible resize border.
-	fn place(hwnd: HWND, frame: RECT) {
-		let mut window = RECT::default();
-		// SAFETY: this thread owns `hwnd`; `window` is a writable RECT.
-		unsafe { GetWindowRect(hwnd, &raw mut window) };
-		let shown = frame_bounds(hwnd).expect("the frame of a shown window");
-		let (left, top) = (shown.left - window.left, shown.top - window.top);
-		let (right, bottom) = (window.right - shown.right, window.bottom - shown.bottom);
-		// SAFETY: this thread owns `hwnd`.
+	/// Translate the frame without resizing it: minimum tracking sizes can
+	/// prevent a framed window from being narrowed by the requested amount.
+	fn move_window_by(hwnd: HWND, dx: i32, dy: i32) {
+		let mut bounds = RECT::default();
+		// SAFETY: this thread owns `hwnd` and `bounds` is writable.
 		unsafe {
-			SetWindowPos(
-				hwnd,
-				null_mut(),
-				frame.left - left,
-				frame.top - top,
-				frame.right - frame.left + left + right,
-				frame.bottom - frame.top + top + bottom,
-				SWP_NOZORDER | SWP_NOACTIVATE,
+			assert_ne!(GetWindowRect(hwnd, &raw mut bounds), 0);
+			assert_ne!(
+				SetWindowPos(
+					hwnd,
+					null_mut(),
+					bounds.left + dx,
+					bounds.top + dy,
+					0,
+					0,
+					SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+				),
+				0
 			);
+			assert!(DwmFlush() >= 0);
 		}
 	}
 
@@ -1024,6 +1028,11 @@ pub(super) mod tests {
 
 	#[test]
 	fn a_chromium_window_is_marked_only_when_nothing_of_it_shows() {
+		// Match the desktop worker: Win32 positions are DPI-virtualized on an
+		// unaware thread, but DWM frame bounds are always in physical pixels.
+		// SAFETY: sets the DPI context of this test thread only.
+		let old = unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE) };
+		assert!(!old.is_null());
 		let chromium = wide("Chrome_WidgetWin_7");
 		// SAFETY: the class name outlives the registration's use in this test.
 		unsafe {
@@ -1036,22 +1045,40 @@ pub(super) mod tests {
 		}
 		let native = window("STATIC", rect(100, 100, 300, 300));
 		let target = window("Chrome_WidgetWin_7", rect(100, 100, 300, 300));
-		let cover = window("STATIC", rect(50, 50, 400, 400));
+		let cover_bounds = rect(100, 50, 450, 400);
+		let cover = window("STATIC", cover_bounds);
 		let marked = |hwnd: HWND| capture::window_covered(&(hwnd as usize).to_string());
 		assert!(marked(target), "an opaque window over all of it");
 		assert!(!marked(native), "covered too, but the app keeps drawing");
 		assert!(!marked(cover));
 
-		place(cover, rect(50, 50, 299, 400));
+		let target_frame = frame_bounds(target).unwrap();
+		let cover_frame = frame_bounds(cover).unwrap();
+		let dx = target_frame.left + 1 - cover_frame.left;
+		move_window_by(cover, dx, 0);
+		let shifted = frame_bounds(cover).unwrap();
+		assert_eq!(shifted.left, target_frame.left + 1);
+		assert!(
+			shifted.top <= target_frame.top
+				&& shifted.right >= target_frame.right
+				&& shifted.bottom >= target_frame.bottom,
+			"the cover still spans the rest of the target"
+		);
 		assert!(!marked(target), "one column still shows");
 
-		place(cover, rect(50, 50, 400, 400));
-		// SAFETY: this thread owns `cover`; the system owns each region it is
-		// given.
-		unsafe { SetWindowRgn(cover, CreateRectRgn(0, 0, 100, 100), 1) };
+		move_window_by(cover, -dx, 0);
+		// SAFETY: this thread owns `cover`; a successful call transfers the
+		// region to the system.
+		unsafe {
+			assert_ne!(SetWindowRgn(cover, CreateRectRgn(0, 0, 100, 100), 1), 0);
+			assert!(DwmFlush() >= 0);
+		}
 		assert!(!marked(target), "the cover's window region leaves most of it showing");
 		// SAFETY: as above; a null region restores the whole window.
-		unsafe { SetWindowRgn(cover, null_mut(), 1) };
+		unsafe {
+			assert_ne!(SetWindowRgn(cover, null_mut(), 1), 0);
+			assert!(DwmFlush() >= 0);
+		}
 		assert!(marked(target));
 
 		// SAFETY: `GetWindowLongW` validates the handle.
@@ -1078,7 +1105,7 @@ pub(super) mod tests {
 		// SAFETY: this thread owns `cover`.
 		unsafe { SetWindowLongW(cover, GWL_STYLE, framed | WS_POPUP as i32) };
 		assert!(!marked(target), "Chromium does not count an opaque popup as covering it");
-		let widget = window("Chrome_WidgetWin_7", rect(50, 50, 400, 400));
+		let widget = window("Chrome_WidgetWin_7", cover_bounds);
 		// SAFETY: this thread owns `widget`.
 		unsafe {
 			let style = GetWindowLongW(widget, GWL_STYLE);
@@ -1099,14 +1126,16 @@ pub(super) mod tests {
 		}
 		assert!(!marked(target), "the target shows through a translucent window");
 
-		place(target, rect(-30_000, -30_000, -29_800, -29_800));
+		move_window_by(target, -30_000, -30_000);
 		assert!(marked(target), "off every display");
 
-		// SAFETY: this thread owns the windows.
+		// SAFETY: this thread owns the windows and `old` is its original DPI
+		// context, returned before creating them.
 		unsafe {
 			DestroyWindow(cover);
 			DestroyWindow(target);
 			DestroyWindow(native);
+			SetThreadDpiAwarenessContext(old);
 		}
 	}
 

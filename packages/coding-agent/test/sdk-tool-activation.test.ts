@@ -1708,7 +1708,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(session.getActiveToolNames()).not.toContain("write");
 			expect(session.getMountedToolCommandNames()).toEqual(expect.arrayContaining(openwikiQueryTools.slice(1)));
 			expect(session.getMountedToolCommandNames()).not.toContain("openwiki_search");
-			cfgToolsCommands.set(settings, false);
+			cfgToolsCommands.override(settings, false);
 			await session.reconcileBuiltinTools();
 			expect(session.getMountedToolCommandNames()).toEqual([]);
 			expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(openwikiQueryTools));
@@ -1728,7 +1728,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		});
 		try {
 			for (const enabled of [false, true, false]) {
-				cfgToolsCommands.set(settings, enabled);
+				cfgToolsCommands.override(settings, enabled);
 				await session.reconcileBuiltinTools();
 				for (const name of openwikiQueryTools) {
 					expect(session.getActiveToolNames().includes(name)).toBe(taskDepth === 0);
@@ -1767,7 +1767,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		const { session } = await createAgentSession({ ...baseOptions(tempDir), settings, taskDepth: 1 });
 		try {
 			for (const enabled of [false, true, false]) {
-				cfgToolsCommands.set(settings, enabled);
+				cfgToolsCommands.override(settings, enabled);
 				await session.reconcileBuiltinTools();
 				for (const name of openwikiQueryTools) {
 					expect(session.getToolByName(name)).toBeUndefined();

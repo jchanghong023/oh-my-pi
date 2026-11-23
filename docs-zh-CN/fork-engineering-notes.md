@@ -77,6 +77,7 @@
 - Windows 的 Rust 门禁、本地 native 构建和发布 native 构建共用 VS Build Tools 的 CMake/Ninja 探测，优先使用现有 `PATH` 中的工具；Rust 门禁找不到 `vswhere` 时仍交给 Cargo 报告缺失工具。
 - 独立 UI smoke 和仓库脚本仍按 Git 变更规划；CLI、native、Team、TUI 等实际依赖变化须运行 UI。缺基线或依赖未知时保守运行，静态检查及必要 native 准备始终全局执行。Git 未选证据包含有效基线 revision、相对变更路径、零选择及原因，不虚构 XML、用例或耗时。实际执行的全量 Nextest 保留真实 JUnit；doctest 无 JUnit，按实际阶段结果报告，未选不冒充 PASS。混合报告保留实际用例和失败；affected、partial、失败报告不能作为完整基线，不提交报告 sidecar 或改写历史。
 - Bun 的依赖分析有近似：动态依赖、环境或外部输入可能漏检，affected 不等于完整新回归。Bun fork 套件版本见 [`BUN_FORK_SUITE_REVISION`](../scripts/test-reporting.ts#L9)；范围变化后须在干净工作区通过一次获授权的完整 fork 回归才能建立新基线，旧范围报告不可复用。报告区分本轮实际执行、deselected、not-selected 与未运行；默认 fulltest scope 为 `fulltest: fork feature suites`，控制台范围为 `fork-features`。历史用例耗时不算本轮新执行，也不能称全仓全量通过。普通失败继续其他独立工作，保留首个实际失败退出码；取消、参数错误和原预算到限仍停止本次拥有的工作。
+- 普通用例失败后，门禁在本轮剩余预算内对账并写入带实际退出码的部分报告；不会因报告较大而在一秒后丢弃汇总。硬超时与中断仍优先终止本轮工作。
 - CLI 子进程夹具在公共 harness 或独立启动器中静态导入真实使用的 Tools registry，补足 Bun 无法追踪的 spawn 路径字符串；不导入或执行 CLI 主入口，不仅为某两个实验源码添加特例依赖。
 - 并发门禁中的时序断言以实际完成边界为准：Superpowers 服务启动先等待完整换行终止的状态记录，再验证 HTTP 与进程退出；Settings 的“排队保存后发生外部编辑”场景须在同一 JS turn 完成外部写入，再 flush，不能让异步文件 I/O 与 100ms debounce 自由竞争后仍假定固定顺序。原退出、回收、外部值优先及内存状态断言保持。
 - fastcheck、fulltest、slowtest 默认隐藏成功用例、成功分块及成功命令输出，仅显示失败用例和错误诊断；最外层最终状态、耗时、退出码和报告路径保留。`--debug` 不恢复成功用例刷屏。静默只影响呈现，本轮实际执行的用例写入 JUnit／计时结果，平台跳过明确报告，首错通知、失败继续、取消与预算不变。真实桌面输入仍需单独授权。

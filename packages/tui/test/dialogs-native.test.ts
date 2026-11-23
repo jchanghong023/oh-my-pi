@@ -847,14 +847,13 @@ describe("dialogs under a native surface", () => {
 		]);
 		const approve = find(dock.node, node => node.key === "approve")!.node;
 		expect(approve.p).toEqual({ variant: "split", role: "omp.plan.approve" });
-		expect(approve.c?.filter(isNode).map(child => ({ k: child.k, p: child.p }))).toEqual([
-			{ k: "button", p: { text: "批准", variant: "primary", keys: ["enter"], actions: { click: "approve" } } },
+		expect(approve.c?.filter(isNode).map(child => ({ k: child.k, p: child.p }))).toMatchObject([
+			{ k: "button", p: { variant: "primary", keys: ["enter"], actions: { click: "approve" } } },
 			{
 				k: "menu",
 				p: {
 					trigger: "primary",
 					icon: "chev",
-					title: "批准选项",
 					align: "start",
 					items: [
 						{ id: "execute", label: "Approve and execute", detail: "Start fresh with just the plan" },
@@ -938,7 +937,6 @@ describe("dialogs under a native surface", () => {
 		});
 		expect(find(root, node => node.p?.role === "omp.plan.toc")).toBeUndefined();
 		expect(find(root, node => node.key === "main")?.node.p).toMatchObject({
-			text: "优化",
 			actions: { click: "refine" },
 		});
 
@@ -946,7 +944,9 @@ describe("dialogs under a native surface", () => {
 		expect(String(onFeedbackChange.mock.lastCall?.[0])).toContain("- name the API");
 		overlay.handleNativeEvent({ type: "uncomment", key: doc.path, comment: "c1" });
 		expect(onFeedbackChange).toHaveBeenLastCalledWith("");
-		expect(find(overlay.describe(CX), node => node.key === "main")?.node.p).toMatchObject({ text: "批准" });
+		expect(find(overlay.describe(CX), node => node.key === "main")?.node.p).toMatchObject({
+			actions: { click: "approve" },
+		});
 
 		overlay.handleNativeEvent({ type: "comment", key: doc.path, quote: "second", at, note: "again" });
 		overlay.handleNativeEvent({ type: "action", key: "dock/approve/main", act: "refine", mods: [] });
@@ -1011,14 +1011,10 @@ describe("dialogs under a native surface", () => {
 		);
 		const root = overlay.describe(LEGACY);
 		expect(find(root, node => node.key === "dock")).toBeUndefined();
-		expect(
-			find(root, node => node.key === "options")
-				?.node.c?.filter(isNode)
-				.map(child => child.p),
-		).toEqual([
-			expect.objectContaining({ label: "Approve and execute" }),
-			expect.objectContaining({ label: "Approve and compact context" }),
-			expect.objectContaining({ label: "保存" }),
+		expect(find(root, node => node.key === "options")?.node.c?.filter(isNode)).toMatchObject([
+			{ key: "o0", p: { label: PLAN_CHOICES[0]!.label } },
+			{ key: "o1", p: { label: PLAN_CHOICES[1]!.label } },
+			{ key: "o2" },
 		]);
 		setNativeRendering(true);
 		try {

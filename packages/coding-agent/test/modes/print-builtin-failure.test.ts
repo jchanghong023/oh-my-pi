@@ -19,7 +19,7 @@ import { removeWithRetries } from "@oh-my-pi/pi-utils";
 function printSession(cwd: string, prompts: string[]): AgentSession {
 	return {
 		extensionRunner: undefined,
-		subscribe: () => () => {},
+		subscribeLocal: () => () => {},
 		settings: Settings.isolated(),
 		sessionManager: {
 			buildSessionContext: () => ({ messages: [] }),
@@ -132,7 +132,7 @@ describe("print mode builtin exit codes", () => {
 		const prompts: string[] = [];
 		const session = {
 			extensionRunner: undefined,
-			subscribe: () => () => {},
+			subscribeLocal: () => () => {},
 			settings: Settings.isolated(),
 			sessionManager: {
 				buildSessionContext: () => ({ messages: [] }),
