@@ -9,6 +9,8 @@ const distro = "Ubuntu-24.04";
 const wslSource = "/root/oh-my-pi";
 const windowsName = "omp-windows-x64.exe";
 const linuxName = "omp-linux-x64";
+const windowsSdkName = "omp-sdk-win32-x64.zip";
+const linuxSdkName = "omp-sdk-linux-x64.zip";
 
 async function safeGit(wsl: string, linux: boolean, args: string[]): Promise<string> {
 	const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
@@ -68,6 +70,12 @@ async function timed<T>(label: string, action: () => Promise<T>): Promise<T> {
 	}
 }
 
+async function artifactSize(file: string): Promise<number> {
+	const stat = await fs.stat(file);
+	if (!stat.isFile() || stat.size === 0) throw new Error(`Build output must be a non-empty file: ${file}`);
+	return stat.size;
+}
+
 function options(): { repo?: string; tag?: string } {
 	const result: { repo?: string; tag?: string } = {};
 	const args = process.argv.slice(2);
@@ -75,7 +83,7 @@ function options(): { repo?: string; tag?: string } {
 		const arg = args[i];
 		if (arg === "--help") {
 			console.log(
-				"Usage: bun run cnb [--repo owner/repository] [--tag tag]\nDefaults to CNB repository jchanghong/bin and existing release tag omp. Requires clean tracking branches on Windows and Ubuntu-24.04 WSL (/root/oh-my-pi) and official @cnbcool/cnb-cli login. Both worktrees are fast-forward pulled and must have the same commit. Builds and uploads only the two binaries, without tests or source archives; matching attachments are always overwritten.",
+				"Usage: bun run cnb [--repo owner/repository] [--tag tag]\nDefaults to CNB repository jchanghong/bin and existing release tag omp. Requires clean tracking branches on Windows and Ubuntu-24.04 WSL (/root/oh-my-pi), initialized vendor/openwiki submodules, Linux zip, and official @cnbcool/cnb-cli login. Both worktrees are fast-forward pulled and must have the same commit. Builds and uploads both binaries and both SDK ZIPs without tests; matching attachments are always overwritten.",
 			);
 			process.exit(0);
 		}
@@ -252,6 +260,7 @@ async function main(): Promise<void> {
 		const release = await getRelease(repo, tag);
 		temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cnb-"));
 		const linuxOut = path.join(temp, linuxName);
+		const linuxSdkOut = path.join(temp, linuxSdkName);
 		// Pin empty values too: a WSL-only dotenv file must not alter cache identity.
 		const releaseVersion = process.env.RELEASE_VERSION ?? "";
 		const updateRepository = process.env.UPDATE_REPOSITORY ?? "";
@@ -259,7 +268,7 @@ async function main(): Promise<void> {
 			createHash("sha256")
 				.update(
 					JSON.stringify({
-						schema: 1,
+						schema: 2,
 						commit,
 						bun: Bun.version,
 						bunRevision: Bun.revision,
@@ -272,6 +281,7 @@ async function main(): Promise<void> {
 		const windowsCache = path.join(cache, "win32-x64-modern");
 		const windowsCompleted = path.join(windowsCache, "completed", cacheKey("win32-x64-modern"));
 		const winOut = path.join(windowsCompleted, windowsName);
+		const winSdkOut = path.join(windowsCompleted, windowsSdkName);
 		const marker = path.join(windowsCompleted, "complete");
 		const cleanEnv: NodeJS.ProcessEnv = {
 			...process.env,
@@ -303,20 +313,22 @@ async function main(): Promise<void> {
 					releaseVersion,
 					updateRepository,
 					Bun.revision,
+					linuxSdkOut,
 				],
 				{ stdin: "ignore", stdout: "inherit", stderr: "inherit", env: wslEnv },
 			);
 			const code = await proc.exited;
 			if (code !== 0) throw new Error(`WSL build failed (${code}).`);
 		};
-		console.log("Using existing Windows and WSL worktrees; CNB receives binaries only, never Git pushes.");
+		console.log("Using existing Windows and WSL worktrees; CNB receives binaries and SDK ZIPs, never Git pushes.");
 		const windowsBuild = timed("Windows build", async () => {
 			await ensureSource(wsl, false, commit);
 			const cached = await timed("Windows cache lookup", async () => {
 				try {
-					const stat = await fs.stat(winOut);
+					const files = await Promise.all([fs.stat(winOut), fs.stat(winSdkOut)]);
 					return (
-						stat.isFile() && stat.size > 0 && (await fs.readFile(marker, "utf8")) === cacheKey("win32-x64-modern")
+						files.every(stat => stat.isFile() && stat.size > 0) &&
+						(await fs.readFile(marker, "utf8")) === cacheKey("win32-x64-modern")
 					);
 				} catch (error) {
 					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -324,13 +336,14 @@ async function main(): Promise<void> {
 				}
 			});
 			if (cached) {
-				console.log("Windows completed-binary cache hit (win32-x64-modern); native/package skipped.");
+				console.log("Windows binary and SDK cache hit (win32-x64-modern); build and packaging skipped.");
 				return;
 			}
-			console.log("Windows completed-binary cache miss (win32-x64-modern).");
+			console.log("Windows binary and SDK cache miss (win32-x64-modern).");
 			await fs.mkdir(windowsCompleted, { recursive: true });
 			await fs.rm(marker, { force: true });
 			await fs.rm(winOut, { force: true });
+			await fs.rm(winSdkOut, { force: true });
 			await timed("Windows dependencies", () =>
 				run([process.execPath, "install", "--frozen-lockfile"], root, cleanEnv),
 			);
@@ -340,9 +353,10 @@ async function main(): Promise<void> {
 			await timed("Windows package", () =>
 				run([process.execPath, "scripts/ci-release-build-binaries.ts", "--targets", "win32-x64"], root, cleanEnv),
 			);
-			const stat = await fs.stat(winOut);
-			if (!stat.isFile() || stat.size === 0)
-				throw new Error("Windows packaging did not produce a non-empty binary.");
+			await timed("Windows SDK ZIP", () =>
+				run([process.execPath, "scripts/pack-sdk.ts", winSdkOut], root, cleanEnv),
+			);
+			await Promise.all([artifactSize(winOut), artifactSize(winSdkOut)]);
 			await ensureSource(wsl, false, commit);
 			const pending = `${marker}.tmp`;
 			await fs.writeFile(pending, cacheKey("win32-x64-modern"));
@@ -352,18 +366,17 @@ async function main(): Promise<void> {
 		const outcomes = await Promise.allSettled([windowsBuild, linuxBuild]);
 		const failure = outcomes.find((result): result is PromiseRejectedResult => result.status === "rejected");
 		if (failure) throw failure.reason;
-		const [winStat, linuxStat] = await Promise.all([fs.stat(winOut), fs.stat(linuxOut)]);
-		if (!winStat.isFile() || !linuxStat.isFile() || winStat.size === 0 || linuxStat.size === 0)
-			throw new Error("Build outputs must be non-empty executable files.");
+		const artifacts = await Promise.all(
+			[winOut, linuxOut, winSdkOut, linuxSdkOut].map(async file => ({ file, size: await artifactSize(file) })),
+		);
 		await Promise.all([ensureSource(wsl, false, commit), ensureSource(wsl, true, commit)]);
-		console.log(`Publishing ${repo} tag ${tag}, source commit ${commit}; overwriting matching binary attachments.`);
-		const uploads = await Promise.allSettled([
-			upload(repo, release, winOut, windowsName, winStat.size),
-			upload(repo, release, linuxOut, linuxName, linuxStat.size),
-		]);
+		console.log(`Publishing ${repo} tag ${tag}, source commit ${commit}; overwriting matching attachments.`);
+		const uploads = await Promise.allSettled(
+			artifacts.map(({ file, size }) => upload(repo, release, file, path.basename(file), size)),
+		);
 		const uploadFailure = uploads.find((result): result is PromiseRejectedResult => result.status === "rejected");
 		if (uploadFailure) throw uploadFailure.reason;
-		console.log("Both CNB binaries uploaded and confirmed.");
+		console.log("Both CNB binaries and both SDK ZIPs uploaded and confirmed.");
 	} finally {
 		console.log(`CNB total elapsed: ${((performance.now() - started) / 1000).toFixed(1)}s`);
 		try {

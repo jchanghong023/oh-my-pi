@@ -119,7 +119,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
 - 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 仅执行构建、打包及其必要准备，不运行单元、集成、冒烟或安装测试；发布 MUST 等待版本元数据、全部二进制和浏览器扩展构建成功，不依赖测试作业。本地测试入口保留，按用户明确授权单独运行。发布须单独明确授权，`bun run slowtest` 仅做本机及适用 WSL 本地验证，NEVER 自动推送、触发/等待 CI 或创建 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
-- 本地开发分发额外提供 `bun run local`（Windows 本机编译并直接替换安装目录中的 `omp.exe`：旧可执行文件先改名，再换入新版，不杀任何已有进程；换入失败恢复旧文件，仍被旧进程占用的映像保留）和 `bun run cnb`（先在 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行安全的 `git pull --ff-only`，确认两端工作区干净且 Git 提交一致，再并行构建两平台二进制，并行上传到已有 CNB Release；默认目标为 `jchanghong/bin` 仓库的 `omp` 标签，可用 `--repo`、`--tag` 显式覆盖，无需交互输入）。执行 `bun run cnb` MUST 始终覆盖 `omp-windows-x64.exe` 和 `omp-linux-x64` 两个同名附件并取得两次上传成功确认，即使复用了已完成二进制也不跳过上传；不另行确认，也不修改其他附件，不提供冗余的 `--overwrite` 参数。该命令只上传这两个二进制，不打包、上传或推送源码，不替代 GitHub 正式 Release，也不改变安装器或 `omp update` 的 GitHub 来源。
+- 本地开发分发额外提供 `bun run local`（Windows 本机编译并直接替换安装目录中的 `omp.exe`：旧可执行文件先改名，再换入新版，不杀任何已有进程；换入失败恢复旧文件，仍被旧进程占用的映像保留）和 `bun run cnb`（先在 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行安全的 `git pull --ff-only`，确认两端工作区干净且 Git 提交一致，再并行构建两平台产物，并行上传到已有 CNB Release；默认目标为 `jchanghong/bin` 仓库的 `omp` 标签，可用 `--repo`、`--tag` 显式覆盖，无需交互输入）。`bun run cnb` MUST 覆盖 `omp-windows-x64.exe`、`omp-linux-x64`、`omp-sdk-win32-x64.zip`、`omp-sdk-linux-x64.zip` 并取得四次上传成功确认，缓存命中也不跳过上传；不另行确认，不修改其他附件，不提供冗余的 `--overwrite` 参数。不上传独立源码归档，不推送 Git 源码，不替代 GitHub 正式 Release，也不改变安装器或 `omp update` 的 GitHub 来源。
 - `local`、`cnb` 和手动发布 CI 的分发构建 MUST NOT 运行任何测试、冒烟、worker 探测、native 加载探测或构建产物试运行。CNB 不执行全仓源码哈希扫描、重复 WSL 预检、Release 附件竞态检查或发布后重复查询；只保留干净工作区、Git 提交一致性、Bun 版本、构建输出及上传接口所必需的检查和确认。WSL 源码及构建脚本 MUST 只通过 Git 远端同步，不通过 stdin 传脚本，也不复制、移动、打补丁或清理用户文件绕过脏工作区检查。两端 Bun 版本 MUST 一致；保留构建资源所必需的 Export viewer 精确字节元数据校验；遗留 `tool-views.generated.js` 仅作为忽略的生成产物保留。
 - 仓库仅启用 `.github/workflows/ci.yml`（手动构建发布），不提供 CNB 源码同步工作流；`nix.yml` 与 `bun-cache-warm.yml` 以 `.disabled` 后缀停用，不参与任何触发。fork 不提供 Nix 发布与独立的 Bun 缓存预热工作流；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
 - CNB 与手动发布 CI 的 native 入口直接构建并写入版本戳，不加载 addon；`bun run local` 安装 native 时继续显式跳过宿主加载探测（`--skip-load-probe`）。普通 `bun run build:native` 的默认加载探测行为不变。
@@ -179,9 +179,9 @@ OMP MUST 在 CNB 与手动发布 CI 中共用宿主原生 Cargo 构建及二进�
 - **AND** MUST NOT 创建 Bazel native matrix、native artifact 汇总或 Bazel cache action 步骤；工作流名和文件路径保持不变，继续按其 `run_number` 生成 `+fork.N`。
 - **AND** 未选择发布时两个二进制和浏览器扩展仍 MUST 可作为 artifact 下载；仅在 `main` 明确授权且全部所需构建成功后发布原有三个附件，不增加 npm、Homebrew 或其他平台附件。
 
-### Requirement: CNB 精确输入缓存与双附件交付
+### Requirement: CNB 精确输入缓存与四附件交付
 
-OMP MUST 在保留 Git-only 源码同步和干净提交边界的前提下并行交付 Windows 与 WSL Linux 二进制，只复用精确输入下已成功完成的二进制，始终覆盖并确认两个上传；暖缓存性能目标 MUST 按命令启动至双附件确认的真实端到端耗时衡量。
+OMP MUST 在保留 Git-only 源码同步和干净提交边界的前提下并行交付 Windows 与 WSL Linux 的 CLI 二进制和 SDK ZIP，只复用精确输入下已成功完成的产物，始终覆盖并确认四个上传；暖缓存性能目标 MUST 按命令启动至全部附件确认的真实端到端耗时衡量。
 
 #### Scenario: Git-only 同步后才构建或复用
 
@@ -189,24 +189,30 @@ OMP MUST 在保留 Git-only 源码同步和干净提交边界的前提下并行�
 - **THEN** MUST 先对 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行安全的 `git pull --ff-only`，确认两端工作区干净、Git 提交一致且 Bun 版本一致，再并行构建或复用各宿主产物。
 - **AND** WSL 源码和构建脚本 MUST 只通过 Git 远端同步，不通过 stdin 传脚本，也不复制、移动、打补丁或清理用户文件以绕过脏工作区检查；必要检查不因二进制缓存命中而跳过。
 
-#### Scenario: 精确输入的完整二进制缓存命中仍上传
+#### Scenario: 精确输入的完整产物缓存命中仍上传
 
-- **WHEN** 宿主缓存包含先前成功完成的完整二进制，且其干净 Git 提交、Bun 版本、固定目标及相关发布环境（包括版本、更新仓库和构建设置）与本次输入完全匹配
-- **THEN** MAY 复用该完整二进制而跳过该宿主 native 构建及打包，并 MUST 明确报告缓存命中，不将跳过阶段报告为本次重新构建。
-- **AND** MUST 仍向默认 `jchanghong/bin` 仓库的 `omp` 标签或显式指定的目标并行上传，覆盖 `omp-windows-x64.exe` 与 `omp-linux-x64`，分别取得上传接口成功确认后才报告本次交付完成；不得以缓存命中跳过任一上传。
+- **WHEN** 宿主缓存包含先前成功生成的二进制与 SDK ZIP，且其干净 Git 提交、Bun 版本、固定目标及相关发布环境（包括版本、更新仓库和构建设置）与本次输入完全匹配
+- **THEN** MAY 复用这两个产物而跳过该宿主 native 构建及打包，并 MUST 明确报告缓存命中，不将跳过阶段报告为本次重新构建。
+- **AND** MUST 等两端的四个产物全部就绪，再向默认 `jchanghong/bin` 仓库的 `omp` 标签或显式指定的目标并行上传，覆盖四个同名附件；分别取得成功确认才报告本次交付完成，不得以缓存命中跳过任一上传。
 
 #### Scenario: 缓存缺失、不完整或输入变化
 
-- **WHEN** 缓存缺失、二进制输出不完整、上次构建未成功完成，或提交、Bun、目标及相关发布环境任一项不匹配
-- **THEN** MUST 将该宿主视为二进制缓存未命中，使用共享入口完成真实构建及打包；未完成或失败产物 MUST NOT 被复用或上传。
+- **WHEN** 缓存缺失、二进制或 SDK ZIP 不完整、上次构建未成功完成，或提交、Bun、目标及相关发布环境任一项不匹配
+- **THEN** MUST 将该宿主视为缓存未命中，使用共享入口完成真实构建及打包；未完成或失败产物 MUST NOT 被复用或上传。
 - **AND** MUST 仅在成功完成构建及打包后记录可复用的完整产物；仍可由 Cargo 及资源缓存独立复用有效中间结果，不缓存门禁通过结果。
+
+#### Scenario: SDK ZIP 复用同宿主发布 addon
+
+- **WHEN** CNB 打包 SDK ZIP
+- **THEN** MUST 使用同次构建的预编译 addon：Windows x64 仅包含 modern，Linux x64 仅包含 glibc 2.17 baseline；不得打包残留的其他变体或为了 SDK 重复构建 native。
+- **AND** ZIP MUST 包含宿主编译入口、锁文件和所需构建输入，不包含 CLI 二进制、已安装依赖或个人设置；解包后宿主编译不得调用 Rust 编译器，Linux 宿主使用 Bun x64 baseline 运行时。
 
 #### Scenario: 暖缓存端到端目标与阶段耗时
 
 - **WHEN** 在持久缓存已就绪的环境衡量一次 `bun run cnb` 交付
-- **THEN** MUST 从命令启动开始计时，到两个附件的上传接口均成功确认为止，目标为约 120 秒；不得只测打包、单宿主构建或单次上传并称为端到端耗时。
-- **AND** MUST 分别报告各宿主 native、打包、上传及二进制缓存命中状态与实际阶段耗时；未实测、未达目标或任一上传失败时 MUST 如实说明，不把性能目标或单端成功冒充已完成的双附件交付。
-- **AND** 计时与分发 MUST NOT 增加测试、冒烟、native／worker 探测、产物试运行、全仓哈希扫描、重复 WSL 预检、附件竞态检查或发布后重复查询；上传接口的两次成功确认即为交付终点。
+- **THEN** MUST 从命令启动开始计时，到四个附件的上传接口均成功确认为止，目标为约 120 秒；不得只测打包、单宿主构建或单次上传并称为端到端耗时。
+- **AND** MUST 分别报告各宿主 native、二进制及 SDK 打包、上传及缓存命中状态与实际阶段耗时；未实测、未达目标或任一上传失败时 MUST 如实说明，不把性能目标或单端成功冒充已完成的四附件交付。
+- **AND** 计时与分发 MUST NOT 增加测试、冒烟、native／worker 探测、产物试运行、全仓哈希扫描、重复 WSL 预检、附件竞态检查或发布后重复查询；上传接口的四次成功确认即为交付终点。
 
 ### Requirement: 全平台轻量启动
 

@@ -529,18 +529,19 @@ const { session } = await createAgentSession({
 await session.prompt("list .ts files");
 ```
 
-#### Windows x64 SDK 构建包
+#### Windows / Linux x64 SDK 构建包
 
-在已初始化 `vendor/openwiki` 的 fork 工作区用 Bun 生成构建包：
+CNB 的 `omp` 发布提供 `omp-sdk-win32-x64.zip`（Windows，要求 AVX2）和 `omp-sdk-linux-x64.zip`（Linux baseline，面向 glibc 2.17，不要求 AVX2）。两包都用于编译嵌入 OMP 的宿主，不是安装包。
 
-```powershell
-bun run build:native
+如需自行打包，在已初始化 `vendor/openwiki` 且准备好本平台 native addon 的工作区运行：
+
+```bash
 bun run pack:sdk
 ```
 
-`pack:sdk` 将 SDK 工作区构建输入、锁文件、编译入口和已有的 Windows x64 `.node` 写入 `dist/omp-sdk-<version>-win32-x64.zip`，并输出 SHA-256。它不包含 `omp.exe`、已安装依赖或个人设置。ZIP 使用当前跟踪文件的工作树内容；发布可复现的版本时请从干净提交构建。
+`pack:sdk` 将工作区构建输入、锁文件、编译入口和预编译 `.node` 写入 `dist/omp-sdk-<version>-<platform>-x64.zip`，并输出 SHA-256。Windows 用 `tar.exe`，可先运行 `bun run build:native`；Linux 用 `zip`，先运行 `bun scripts/build-release-native.ts` 生成 glibc 2.17 baseline addon。ZIP 不包含 CLI、已安装依赖或个人设置。打包读取当前跟踪文件的工作树内容；发布时从干净提交构建。
 
-宿主构建先解包并校验 SHA-256，再以同版 Bun 运行包内 `scripts/compile-sdk-host.ts <entry.ts> <output.exe>`。入口放在解包目录下，可从 `@oh-my-pi/pi-coding-agent/sdk` 导入 SDK。编译入口按锁文件安装依赖、生成 OMP 资源并链接预编译原生模块，不调用 Rust 编译器。打包要求 Windows 自带 `tar.exe`；只有 `modern` addon 的包要求目标 CPU 支持 AVX2。
+解包后，以 `omp-sdk.json` 中指定的 Bun 版本运行 `bun scripts/compile-sdk-host.ts <entry.ts> <output>`（Windows 输出名使用 `.exe`）。入口放在解包目录下，使用上例的包根入口导入 `SessionManager`、`ModelRegistry` 等 API。脚本按锁文件安装依赖、生成 OMP 资源并嵌入预编译原生模块，不调用 Rust 编译器；Linux 使用 Bun 的 x64 baseline 运行时。
 
 ### RPC — 通过 stdio 驱动
 

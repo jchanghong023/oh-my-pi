@@ -12,6 +12,7 @@
 
 - CNB：优先下载，发布更快。`https://cnb.cool/jchanghong/bin/-/releases`
 - GitHub：定期同步。`https://github.com/jchanghong023/oh-my-pi/releases`
+- 嵌入式 SDK：在 CNB 的 `omp` 发布中，黄区 Windows x64 选 `omp-sdk-win32-x64.zip`（需 AVX2），红区 Linux x64 选 `omp-sdk-linux-x64.zip`（glibc 2.17 baseline）。这两个 ZIP 用于[编译 SDK 宿主](../README.md#windows--linux-x64-sdk-构建包)，不是 CLI 安装包。
 
 ## 4. 红区快速使用
 

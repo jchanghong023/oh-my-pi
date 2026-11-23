@@ -16,6 +16,7 @@
 
 ### Added
 
+- CNB publishes SDK build ZIPs for Windows x64 and glibc 2.17 Linux x64 alongside the CLI binaries.
 - `/collab2` lets colleagues join a live TUI session by room number and send prompts to the host over the knowledge server. Use `/leave` to leave the room or cancel a pending join.
 - `/wt` and `worktree.onStart` run the configured `post-checkout` hook for newly created worktrees and refresh skills and commands afterward. TUI shows a spinner; a failing hook or quitting while it runs leaves the worktree in place and shows a warning ([#20045](https://github.com/can1357/oh-my-pi/pull/20045) by [@Dangerboi](https://github.com/Dangerboi))
 - Added `pi.registerTodoBackend()` and the `todo.backend` setting: an extension can mirror the main session's todo list into an external store, which gets the whole list after every change ([#19890](https://github.com/can1357/oh-my-pi/pull/19890) by [@Dangerboi](https://github.com/Dangerboi))

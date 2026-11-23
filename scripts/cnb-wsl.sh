@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 8 ]; then echo 'Invalid CNB WSL build parameters' >&2; exit 1; fi
+if [ "$#" -ne 9 ]; then echo 'Invalid CNB WSL build parameters' >&2; exit 1; fi
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 out=$(wslpath -u "$1")
+sdk_out=$(wslpath -u "$9")
 repo=$2
 expected_bun=$3
 commit=$4
@@ -39,6 +40,7 @@ mkdir -p "$cache"
 if ! mkdir "$cache/lock" 2>/dev/null; then echo 'CNB WSL worktree is locked' >&2; exit 1; fi
 completed="$cache/completed/$key"
 binary="$completed/omp-linux-x64"
+sdk="$completed/${sdk_out##*/}"
 marker="$completed/complete"
 cleanup() {
   rm -f -- "$marker.tmp"
@@ -49,12 +51,12 @@ ensure_source
 started=$SECONDS
 stored_key=
 if [ -f "$marker" ]; then stored_key=$(<"$marker"); fi
-if [ "$stored_key" = "$key" ] && [ -f "$binary" ] && [ -s "$binary" ]; then
-  echo "Linux completed-binary cache hit (linux-x64-baseline-glibc2.17); native/package skipped; lookup elapsed: $((SECONDS - started))s"
+if [ "$stored_key" = "$key" ] && [ -f "$binary" ] && [ -s "$binary" ] && [ -f "$sdk" ] && [ -s "$sdk" ]; then
+  echo "Linux binary and SDK cache hit (linux-x64-baseline-glibc2.17); build and packaging skipped; lookup elapsed: $((SECONDS - started))s"
 else
-  echo "Linux completed-binary cache miss (linux-x64-baseline-glibc2.17); lookup elapsed: $((SECONDS - started))s"
+  echo "Linux binary and SDK cache miss (linux-x64-baseline-glibc2.17); lookup elapsed: $((SECONDS - started))s"
   mkdir -p "$completed"
-  rm -f -- "$marker" "$binary"
+  rm -f -- "$marker" "$binary" "$sdk"
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/omp-cargo-target}"
   export OMP_RELEASE_NATIVE_DIR="$cache/native"
   export OMP_RELEASE_BINARY_DIR="$completed"
@@ -71,8 +73,11 @@ else
   started=$SECONDS
   bun scripts/ci-release-build-binaries.ts --targets linux-x64
   echo "Linux package elapsed: $((SECONDS - started))s"
-  if [ ! -f "$binary" ] || [ ! -s "$binary" ]; then
-    echo 'Linux packaging did not produce a non-empty binary' >&2
+  started=$SECONDS
+  bun scripts/pack-sdk.ts "$sdk"
+  echo "Linux SDK ZIP elapsed: $((SECONDS - started))s"
+  if [ ! -f "$binary" ] || [ ! -s "$binary" ] || [ ! -f "$sdk" ] || [ ! -s "$sdk" ]; then
+    echo 'Linux packaging did not produce a non-empty binary and SDK ZIP' >&2
     exit 1
   fi
   ensure_source
@@ -81,4 +86,5 @@ else
 fi
 started=$SECONDS
 cp -- "$binary" "$out"
+cp -- "$sdk" "$sdk_out"
 echo "Linux upload staging elapsed: $((SECONDS - started))s"
