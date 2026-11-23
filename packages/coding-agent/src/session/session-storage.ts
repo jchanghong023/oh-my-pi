@@ -614,7 +614,8 @@ const TEST_SESSION_OWNERS_DIR_ENV = "PI_TEST_SESSION_OWNERS_DIR";
  */
 function testSessionOwnersDir(): string | undefined {
 	const exported = process.env[TEST_SESSION_OWNERS_DIR_ENV];
-	if (exported || !isBunTestRuntime()) return exported;
+	if (exported) return exported;
+	if (!isBunTestRuntime()) return undefined;
 	const dir = getTestTempDir("omp-test-session-owners");
 	process.env[TEST_SESSION_OWNERS_DIR_ENV] = dir;
 	return dir;

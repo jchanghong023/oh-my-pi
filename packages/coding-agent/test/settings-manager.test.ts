@@ -1104,7 +1104,7 @@ describe("Settings", () => {
 			]);
 		});
 
-		it("falls back to move-aside replacement when Windows reports EPERM", async () => {
+		it("retries a transient config rename denial only on Windows", async () => {
 			await writeSettings({ setupVersion: 1 });
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 			const canonicalConfigPath = await fs.promises.realpath(getConfigPath());
@@ -1119,10 +1119,14 @@ describe("Settings", () => {
 			});
 
 			cfgSetupVersion.set(settings, 2);
-			await settings.flush();
+			if (process.platform === "win32") {
+				await settings.flush();
+			} else {
+				await expect(settings.flush()).rejects.toThrow("injected Windows replacement failure");
+			}
 
 			expect(injected).toBe(true);
-			expect(await readSettings()).toEqual({ setupVersion: 2 });
+			expect(await readSettings()).toEqual({ setupVersion: process.platform === "win32" ? 2 : 1 });
 			expect(fs.readdirSync(agentDir).some(name => name.endsWith(".tmp") || name.endsWith(".bak"))).toBe(false);
 		});
 

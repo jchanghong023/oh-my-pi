@@ -93,7 +93,7 @@ describe("ArtifactManager write integrity", () => {
 		expect(await Bun.file(destination).text()).toBe("original valid report");
 	});
 
-	it("replaces an existing artifact when Windows rejects rename-over-target", async () => {
+	it("retries a transient rename denial on Windows and preserves the old artifact on POSIX", async () => {
 		const dir = freshDir();
 		await fs.promises.mkdir(dir, { recursive: true });
 		const destination = path.join(dir, "Worker.md");
@@ -109,10 +109,18 @@ describe("ArtifactManager write integrity", () => {
 			await rename(source, target);
 		});
 
-		await writeArtifact(destination, "replacement report");
+		if (process.platform === "win32") {
+			await writeArtifact(destination, "replacement report");
+		} else {
+			await expect(writeArtifact(destination, "replacement report")).rejects.toThrow(
+				"injected Windows replacement failure",
+			);
+		}
 
 		expect(injected).toBe(true);
-		expect(await Bun.file(destination).text()).toBe("replacement report");
+		expect(await Bun.file(destination).text()).toBe(
+			process.platform === "win32" ? "replacement report" : "original report",
+		);
 		expect(await fs.promises.readdir(dir)).toEqual(["Worker.md"]);
 	});
 

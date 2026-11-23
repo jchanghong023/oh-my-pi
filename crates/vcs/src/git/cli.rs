@@ -755,7 +755,7 @@ async fn terminate(child: &mut tokio::process::Child, process_tree: &ProcessTree
 	#[cfg(windows)]
 	process_tree.terminate().await;
 	#[cfg(not(windows))]
-	let _ = process_tree;
+	let () = *process_tree;
 	#[cfg(unix)]
 	if let Some(pid) = child.id() {
 		// SAFETY: plain kill(2) on a pid we own; no memory is touched.
