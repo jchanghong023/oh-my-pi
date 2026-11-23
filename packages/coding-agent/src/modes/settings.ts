@@ -1,6 +1,5 @@
 import { combine, effect, register, type Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
-import { offlineFromEnv } from "../cli/args";
 import { MOTION_MODES, MOTION_PRESETS } from "../config/motion-presets";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { cfgReadToolResultPreview } from "../tools/settings";
@@ -414,7 +413,7 @@ export const cfgTerminalShowProgress = register({
 export const cfgTerminalProgramStatus = register({
 	id: "terminal.programStatus",
 	type: "boolean",
-	default: !offlineFromEnv(),
+	default: true,
 	ui: {
 		tab: "appearance",
 		group: "显示",

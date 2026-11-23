@@ -70,12 +70,10 @@ describe("OSC 7501 program-status negotiation", () => {
 		return { terminal, writes, received, results };
 	}
 
-	it("does not query offline by default and honors enabling status at runtime", () => {
+	it("queries offline by default and respects runtime changes", () => {
 		Bun.env.OMP_OFFLINE = "1";
 		const { terminal, writes, results } = startTerminal();
 		try {
-			expect(writes).not.toContain(QUERY);
-			terminal.setProgramStatusProbeEnabled(true);
 			expect(writes.filter(write => write === QUERY)).toHaveLength(1);
 			process.stdin.emit("data", REPLY);
 			expect(results).toEqual([true]);
@@ -87,19 +85,18 @@ describe("OSC 7501 program-status negotiation", () => {
 				() => {},
 			);
 			expect(writes).not.toContain(QUERY);
+			terminal.setProgramStatusProbeEnabled(true);
+			expect(writes.filter(write => write === QUERY)).toHaveLength(1);
 		} finally {
 			terminal.stop();
 		}
 	});
 
-	it.each([
-		["offline explicitly enabled", "true", true, true],
-		["ordinary explicitly disabled", undefined, false, false],
-	] as const)("respects %s before terminal startup", (_label, offline, enabled, queried) => {
-		if (offline !== undefined) Bun.env.OMP_OFFLINE = offline;
-		const { terminal, writes } = startTerminal(enabled);
+	it("does not query offline when explicitly disabled before terminal startup", () => {
+		Bun.env.OMP_OFFLINE = "1";
+		const { terminal, writes } = startTerminal(false);
 		try {
-			expect(writes.includes(QUERY)).toBe(queried);
+			expect(writes).not.toContain(QUERY);
 		} finally {
 			terminal.stop();
 		}

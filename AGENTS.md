@@ -376,6 +376,6 @@ This repository has a generated `openwiki/` knowledge base. Use it as optional c
 
 - 原生 TUI `/todoloop <Markdown 路径> [--check]` 支持首个 checkbox 前置标题层级推断及 Superpowers Step，采用组级编排和组内连续执行；有剩余组时程序先做一次只读 scout 调研，实际结清后通过原生 context 供全部组及接续复用，准备失败即停止，不限制执行 task 自主派生或更改原生缓存策略。实现位于 `packages/coding-agent/src/todoloop/`，命令入口位于 `packages/coding-agent/src/slash-commands/builtin-modes.ts`；现行需求见[个人命令规格](openspec/specs/personal-commands/spec.md)，操作说明见[内网快速指南](docs-zh-CN/quick-start-intranet.md)。
 
-- 原生 TUI `/collab2 <房间号>`、`/collab2 join <房间号>` 和 `/collab2 stop` 通过知识库同端口 HTTP/WS 来宾可写协作。仅新命令使用 `OMP_COLLAB2_IP`（默认 `127.0.0.1`，端口 `9333`），原生 `/collab`、`/join` 不受影响。只用于可信隔离内网；见[内网快速指南](docs-zh-CN/quick-start-intranet.md)。
+- 原生 TUI `/collab2 <房间号>`、`/collab2 join <房间号>` 和 `/collab2 stop` 通过知识库同端口 HTTP/WS 来宾可写协作。仅新命令使用 `OMP_COLLAB2_IP` 覆盖默认地址；`OMP_OFFLINE` 存在时默认 `10.239.93.104`，否则默认 `127.0.0.1`，端口固定 `9333`。原生 `/collab`、`/join` 不受影响。只用于可信隔离内网；见[内网快速指南](docs-zh-CN/quick-start-intranet.md)。
 
 - 内置 Superpowers 仅保留完整 `skills/`、`LICENSE` 与 ESM／版本读取所需的根 `package.json`；同步时 NEVER 恢复其他宿主插件、扩展、hooks、安装入口或品牌图片。技能正文及脚本保留上游内容，全部 `SKILL.md` 持续保留 `disable-model-invocation: true`；根包元数据不保留指向已删除资源的 `main`／`pi` 注册，详见[原生资源边界](openspec/specs/spec-driven-orchestration/spec.md)。

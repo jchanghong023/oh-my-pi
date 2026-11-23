@@ -21,7 +21,7 @@ export class NumberedRoomClient {
 	readonly #authority: string;
 
 	constructor() {
-		const ip = Bun.env.OMP_COLLAB2_IP ?? "127.0.0.1";
+		const ip = Bun.env.OMP_COLLAB2_IP ?? (Bun.env.OMP_OFFLINE === undefined ? "127.0.0.1" : "10.239.93.104");
 		const family = isIP(ip);
 		if (family === 0 || ip.includes("%")) throw new NumberedRoomError("OMP_COLLAB2_IP must be an IP literal");
 		this.#ip = ip;

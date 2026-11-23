@@ -11,6 +11,8 @@
 - RPC slash-command discovery follows upstream; ACP still hides commands that its builtins would intercept.
 - Compact mode shows the original tool diffs in completion order instead of merging writes. The preview and `Ctrl+O` controls are unchanged.
 - AST Edit is available in intranet mode; missing language grammars no longer fall back to a public download.
+- `/collab2` defaults to `10.239.93.104:9333` when `OMP_OFFLINE` is set; `OMP_COLLAB2_IP` still overrides the default.
+- Terminal program status (OSC 7501) is now enabled by default in offline mode; explicit settings still take precedence.
 
 ### Added
 
@@ -26,6 +28,7 @@
 
 ### Fixed
 
+- Fixed CNB packaging leaving the worktree dirty after generating OpenWiki resources.
 - Fulltest now uses its remaining gate budget to finalize timing reports after ordinary test failures instead of abandoning large reports after one second.
 - `omp --smoke-test` waits for its private daemon to exit before removing the Windows runtime directory.
 - Fixed new sessions failing to start when `PI_TEST_SESSION_OWNERS_DIR` is present but empty.

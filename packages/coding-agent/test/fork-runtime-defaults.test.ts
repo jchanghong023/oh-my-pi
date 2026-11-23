@@ -95,7 +95,6 @@ describe("fork runtime defaults", () => {
 			fs.mkdirSync(agentDir);
 			const settings = await Settings.loadReadOnly({ cwd: root.path(), agentDir });
 			for (const [id, expected] of Object.entries(defaults)) expect(value(settings, id), id).toEqual(expected);
-			expect(cfgTerminalProgramStatus.get(settings)).toBe(mode === "ordinary");
 			expect(fs.existsSync(path.join(agentDir, "config.yml"))).toBe(false);
 
 			const probe = vi.spyOn(pyKernel, "checkPythonKernelAvailability");
@@ -125,7 +124,7 @@ describe("fork runtime defaults", () => {
 				expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("42") })]),
 			);
 
-			for (const configured of [undefined, true, false]) {
+			for (const configured of [undefined, false]) {
 				const active =
 					configured === undefined ? settings : Settings.isolated({ "terminal.programStatus": configured });
 				const writes: string[] = [];
@@ -144,7 +143,7 @@ describe("fork runtime defaults", () => {
 					setRunStatus({ state: "working" });
 					setRunStatus({ state: "done" });
 					expect(writes).toEqual(
-						(configured ?? mode === "ordinary")
+						configured !== false
 							? ["\x1b]7501;state=working:app=omp\x1b\\", "\x1b]7501;state=done:app=omp\x1b\\"]
 							: [],
 					);
@@ -159,12 +158,12 @@ describe("fork runtime defaults", () => {
 
 			const file = path.join(agentDir, "config.yml");
 			const saved =
-				"theme:\n  dark: anthracite\ncomposer:\n  predictions: false\nterminal:\n  programStatus: true\nask:\n  timeout: 9\neval:\n  js: true\n";
+				"theme:\n  dark: anthracite\ncomposer:\n  predictions: false\nterminal:\n  programStatus: false\nask:\n  timeout: 9\neval:\n  js: true\n";
 			await Bun.write(file, saved);
 			const configured = await Settings.loadReadOnly({ cwd: root.path(), agentDir });
 			expect(value(configured, "theme.dark")).toBe("anthracite");
 			expect(value(configured, "composer.predictions")).toBe(false);
-			expect(cfgTerminalProgramStatus.get(configured)).toBe(true);
+			expect(cfgTerminalProgramStatus.get(configured)).toBe(false);
 			expect(askTimeoutMs(configured)).toBe(9_000);
 			expect(languages(new EvalTool(toolSession(root.path(), configured)))).toEqual(["py", "js"]);
 			expect(await Bun.file(file).text()).toBe(saved);

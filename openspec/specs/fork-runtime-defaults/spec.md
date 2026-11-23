@@ -32,7 +32,7 @@ OMP MUST 应用下列设置的缺省值；显式配置和环境变量仍按原�
 - `composer.predictions=true`：所有平台、普通与 offline 启动均默认启用上游输入区预测；沿用当前模型生成下一条消息建议、Tab／右方向键插入但不发送及额外用量计入 `/stats` 的行为。用户显式配置 `false` 时保持关闭，不改写已有配置。
 - `theme.dark=titanium`：普通与 offline 启动均与上游一致，使用 Titanium 内置原配色；仅在未显式配置时生效，不迁移或覆盖已保存的主题选择。`theme.light=light` 保持不变。
 - `display.showTurnTime=true`
-- `terminal.programStatus`：所有平台的 offline（`OMP_OFFLINE`）进程默认 `false`，避免不兼容终端把 OSC 7501 程序状态序列显示为文本；普通模式仍默认 `true`。用户显式配置优先，不改写已有配置文件。
+- `terminal.programStatus=true`：所有平台的普通与 offline 启动均默认开启 OSC 7501 程序状态通知；用户显式配置优先，不改写已有配置文件。
 - 界面显示默认采用 `compact`，完整行为与验收见[界面显示模式](../tui-presentation/spec.md)。
 - `lsp.enabled=false`：普通与 offline 启动均默认关闭 LSP。显式配置为 `true` 时按上游规则启用；显式 `--no-lsp` 仅关闭本次运行，优先于保存的设置。SDK 等非 CLI 宿主的会话级 LSP 控制不变。
 - **CLI 默认 `--no-extensions`**：所有平台、普通与 offline 的 CLI 启动均跳过扩展自动发现，不加载用户、项目或插件中自动发现的扩展。默认或显式关闭扩展自动发现时仍加载全部 bundled TypeScript custom commands（含 `/review`、`/annotate`、`/green`），不探测或遍历用户／项目 custom command 目录；`restrictToolNames === true` 的限制会话仍不加载任何 custom commands。显式 `-e`／`--extension`、`--hook` 和可信扩展白名单仍按现有规则加载；Skills、规则、上下文文件和 MCP 不因本默认值被一并关闭，不改写用户配置。
@@ -52,19 +52,12 @@ OMP MUST 应用下列设置的缺省值；显式配置和环境变量仍按原�
 - **WHEN** 用户显式设置 `composer.predictions=false`
 - **THEN** 不请求或展示输入区预测；默认值变更不覆盖该选择。
 
-#### Scenario: offline 默认不发送程序状态序列
+#### Scenario: 程序状态通知默认开启且允许显式关闭
 
-- **WHEN** offline 进程未显式配置 `terminal.programStatus`
-- **THEN** 该设置解析为 `false`，交互式运行状态变化不发送 OSC 7501 程序状态序列；不要求用户额外创建或修改配置文件。
-- **WHEN** 普通模式未显式配置该设置
-- **THEN** 仍解析为 `true`，沿用既有程序状态通知行为。
-
-#### Scenario: 程序状态通知尊重显式配置
-
-- **WHEN** 用户在 offline 模式显式设置 `terminal.programStatus=true`
-- **THEN** 按既有行为发送程序状态通知，默认值不覆盖该选择。
+- **WHEN** 普通或 offline 进程未显式配置 `terminal.programStatus`
+- **THEN** 该设置解析为 `true`，交互式终端按既有行为探测 OSC 7501 支持并报告运行状态。
 - **WHEN** 用户显式设置 `terminal.programStatus=false`
-- **THEN** 普通与 offline 模式均保持关闭，默认值变化不改写已保存配置。
+- **THEN** 普通与 offline 模式均不发起 OSC 7501 探测或报告运行状态，不改写已保存配置。
 
 ### Requirement: CLI 默认轻量启动参数
 

@@ -893,7 +893,7 @@ export class ProcessTerminal implements Terminal {
 	#osc99PendingId: string | undefined;
 	#osc99ResponseBuffer = "";
 	#osc99Capabilities = new Map<string, string>();
-	#programStatusProbeEnabled = !/^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
+	#programStatusProbeEnabled = true;
 	#programStatusPending = false;
 	#programStatusReplyBuffer = "";
 	#programStatusResult: boolean | undefined;
