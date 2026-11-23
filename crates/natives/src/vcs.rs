@@ -293,6 +293,16 @@ pub struct VcsOwnedPatchResult {
 	pub complete:   bool,
 	pub diagnostic: Option<String>,
 }
+
+/// Published private-index commit and any shared-index entries left staged.
+#[napi(object)]
+pub struct VcsReconciledCommit {
+	/// Published commit's object ID.
+	pub sha:         String,
+	/// Staged changes left in the shared index or publication warnings.
+	pub index_notes: Vec<String>,
+}
+
 /// Patch application options.
 #[napi(object)]
 #[derive(Default)]
@@ -1454,6 +1464,22 @@ impl VcsGitRepo {
 			repo
 				.commit_create_scoped(&message, &options)
 				.map(Into::into)
+		})
+	}
+
+	/// Publish a private-index commit after preparing the shared index.
+	#[napi]
+	pub fn commit_reconciled(
+		&self,
+		message: String,
+		options: VcsCommitOptions,
+		selection: String,
+		signal: Option<Unknown>,
+	) -> Promise<VcsReconciledCommit> {
+		let options = options.into();
+		blocking("vcs.commitReconciled", self.inner.clone(), signal, move |r| {
+			let (sha, index_notes) = r.commit_reconciled(&message, &options, &selection)?;
+			Ok(VcsReconciledCommit { sha, index_notes })
 		})
 	}
 

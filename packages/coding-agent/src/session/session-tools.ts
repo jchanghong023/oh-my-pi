@@ -198,6 +198,11 @@ interface SessionToolsOptions {
 	/** Creates the private `think` scratchpad tool for runtime setting changes. */
 	createThinkTool?: () => Promise<AgentTool | null>;
 	builtInToolNames?: Iterable<string>;
+	/**
+	 * Whether a native built-in of this name is still available behind a same-name
+	 * extension override; the command transport needs one to run its commands.
+	 */
+	hasNativeTool?: (name: string) => boolean;
 	presentationPinnedToolNames?: ReadonlySet<string>;
 	/** MCP tool names whose current registry entries came from the manager snapshot. */
 	mcpManagerToolNames?: Iterable<string>;
@@ -441,6 +446,7 @@ export class SessionTools {
 	#builtInToolInstances = new Map<string, AgentTool>();
 	/** An MCP refresh landed while vibe narrowed the active set; vibe exit activates its manager tools. */
 	#vibeDeferredMcpRefresh = false;
+	readonly #hasNativeTool: SessionToolsOptions["hasNativeTool"];
 	#rpcHostToolNames = new Set<string>();
 	#mcpManagerToolNames = new Set<string>();
 	#extensionMcpTools = new Map<string, AgentTool>();
@@ -591,6 +597,7 @@ export class SessionTools {
 			const tool = this.#toolRegistry.get(name);
 			if (tool) this.#builtInToolInstances.set(name, tool);
 		}
+		this.#hasNativeTool = options.hasNativeTool;
 		this.#mcpManagerToolNames = new Set(options.mcpManagerToolNames ?? []);
 		if (options.mcpManagerToolNames === undefined) {
 			for (const name of this.#toolRegistry.keys()) {
@@ -900,7 +907,7 @@ export class SessionTools {
 
 	/** Tool command state while the active `bash` tool runs the commands; undefined while tools present top-level. */
 	get activeToolCommands(): ToolCommandState | undefined {
-		if (!this.#toolCommands || !this.#isCurrentBuiltInTool("bash")) return undefined;
+		if (!this.#toolCommands || !this.#hasToolCommandHost()) return undefined;
 		return this.getActiveToolNames().includes("bash") ? this.#toolCommands : undefined;
 	}
 
@@ -972,6 +979,11 @@ export class SessionTools {
 
 	#isCurrentBuiltInTool(name: string, tool: AgentTool | undefined = this.#toolRegistry.get(name)): boolean {
 		return tool !== undefined && this.#builtInToolInstances.get(name) === tool;
+	}
+
+	/** Either the live bash is built in, or a same-name override can route commands back to native bash. */
+	#hasToolCommandHost(): boolean {
+		return this.#isCurrentBuiltInTool("bash") || this.#hasNativeTool?.("bash") === true;
 	}
 
 	#recordBuiltInTool(name: string): void {
@@ -1535,10 +1547,12 @@ export class SessionTools {
 			const tool = this.#toolRegistry.get(name);
 			return tool ? [{ name, tool }] : [];
 		});
-		// Commands mount only while the built-in bash transport is enabled.
+		// Tool commands run inside the `bash` tool: mounting engages only while it
+		// is enabled and a tool that can run them is still there; every mountable
+		// tool presents top-level otherwise.
 		const commandTransportActive =
 			this.#toolCommands !== undefined &&
-			this.#isCurrentBuiltInTool("bash") &&
+			this.#hasToolCommandHost() &&
 			selectedTools.some(({ name }) => name === "bash");
 		const isPresentationPinned = (name: string): boolean =>
 			this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;

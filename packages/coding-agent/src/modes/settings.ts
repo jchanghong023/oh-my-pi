@@ -1016,7 +1016,55 @@ export const cfgTuiVimModeDisplay = register({
 		options: [
 			{ value: "text", label: "文字", description: "完整模式名：NORMAL、INSERT、VISUAL、V-LINE、REPLACE" },
 			{ value: "icon", label: "图标", description: "每种模式用一个紧凑字形表示" },
-			{ value: "none", label: "隐藏", description: "不在状态栏显示模式" },
+			{
+				value: "none",
+				label: "隐藏",
+				description: "不在状态栏显示模式；启用「显示 Vim 命令」后，仍会显示正在输入的命令",
+			},
+		],
+	},
+});
+
+export const cfgTuiVimShowCommand = register({
+	id: "tui.vimShowCommand",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "interaction",
+		group: "输入",
+		label: "显示 Vim 命令",
+		description: "像 Vim 的 showcmd 一样显示正在输入的命令，例如 15d。隐藏模式指示器时仍会显示",
+		condition: "vimModeEnabled",
+	},
+});
+
+export const cfgTuiVimYankToClipboard = register({
+	id: "tui.vimYankToClipboard",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "interaction",
+		group: "输入",
+		label: "Vim 复制同步到剪贴板",
+		description: '像 Vim 的 clipboard=unnamed 一样同步复制；关闭时仅 "+y 和 "*y 写入剪贴板',
+		condition: "vimModeEnabled",
+	},
+});
+
+export const cfgTuiVimStartMode = register({
+	id: "tui.vimStartMode",
+	type: "enum",
+	values: ["insert", "normal"] as const,
+	default: "insert",
+	ui: {
+		tab: "interaction",
+		group: "输入",
+		label: "Vim 起始模式",
+		description: "启动时、每次发送消息后以及打开对话框文本框时所用的模式",
+		condition: "vimModeEnabled",
+		options: [
+			{ value: "insert", label: "插入", description: "可以直接输入；按 Esc 进入普通模式" },
+			{ value: "normal", label: "普通", description: "可以执行 Vim 命令；按 i、a、o 等开始输入" },
 		],
 	},
 });

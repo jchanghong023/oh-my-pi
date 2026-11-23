@@ -29,6 +29,7 @@ describe("upstream extension argument validation", () => {
 			const context = {} as CustomToolContext;
 			const runner = {
 				getNativeDelegationGuidance: () => undefined,
+				servesToolCommandLine: () => false,
 				createContext: () => context,
 			} as unknown as ExtensionRunner;
 			const tool =

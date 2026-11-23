@@ -14,6 +14,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger, withTimeout } from "@oh-my-pi/pi-utils";
 import { resolveContainedPath } from "../discovery/contained-path";
+import { substitutePluginRoot } from "../discovery/substitute-plugin-root";
 import {
 	findStaleSkillStandIn,
 	getActiveSkills,
@@ -211,6 +212,7 @@ function contextRediscoveryHost(skills: readonly Skill[], context: ResolveContex
 interface LocatedSkillTarget {
 	path: string;
 	stats: fsTypes.Stats | null;
+	skill: Skill;
 }
 
 /**
@@ -293,7 +295,8 @@ async function locateSkillTarget(
 				context,
 			);
 			const heldStats = await statIfExists(heldTarget.path);
-			if (!(await isStaleTarget(heldTarget, heldStats, host))) return { path: heldTarget.path, stats: heldStats };
+			if (!(await isStaleTarget(heldTarget, heldStats, host)))
+				return { path: heldTarget.path, stats: heldStats, skill: heldTarget.skill };
 		}
 		const rediscovered = findStaleSkillStandIn(named.skill, await rediscoverSkills(host));
 		// Not an UnknownSkillError: when an upgrade dropped the skill, another plugin's colliding skill
@@ -310,12 +313,12 @@ async function locateSkillTarget(
 		);
 		stats = await statIfExists(target.path);
 	}
-	return { path: target.path, stats };
+	return { path: target.path, stats, skill: target.skill };
 }
 
 /** The file or directory resource at a located target; a target removed since it was located rejects with ENOENT. */
 async function readSkillTarget(url: InternalUrl, target: LocatedSkillTarget): Promise<InternalResource> {
-	const { path: targetPath, stats } = target;
+	const { skill, path: targetPath, stats } = target;
 	if (!stats) throw new Error(`File not found: ${targetPath}`);
 
 	if (stats.isDirectory()) {
@@ -326,11 +329,18 @@ async function readSkillTarget(url: InternalUrl, target: LocatedSkillTarget): Pr
 	}
 
 	const content = await Bun.file(targetPath).text();
+	// Claude Code parity (#20165): plugin skills resolve ${CLAUDE_PLUGIN_ROOT} /
+	// ${OMP_PLUGIN_ROOT} in Markdown content when it is loaded, not in bash.
+	// Non-Markdown files (bundled scripts, data) are served verbatim.
+	let substituted = content;
+	if (skill.pluginRoot !== undefined && contentTypeForPath(targetPath) === "text/markdown") {
+		substituted = substitutePluginRoot(content, skill.pluginRoot);
+	}
 	return {
 		url: url.href,
-		content,
+		content: substituted,
 		contentType: contentTypeForPath(targetPath),
-		size: Buffer.byteLength(content, "utf-8"),
+		size: Buffer.byteLength(substituted, "utf-8"),
 		sourcePath: targetPath,
 		notes: [],
 	};

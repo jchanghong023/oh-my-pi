@@ -1063,6 +1063,8 @@ export declare class VcsGitRepo {
   commitCreate(message: string, options: VcsCommitOptions, signal?: unknown | undefined | null): Promise<string>
   /** Hook-free confirmed-tree commit with locked, resumable index publication. */
   commitCreateScoped(message: string, options: VcsScopedCommitOptions, signal?: unknown | undefined | null): Promise<VcsScopedCommitResult>
+  /** Publish a private-index commit after preparing the shared index. */
+  commitReconciled(message: string, options: VcsCommitOptions, selection: string, signal?: unknown | undefined | null): Promise<VcsReconciledCommit>
   /**
    * Write a commit object for `tree` on `parents` without moving any ref or
    * touching the index/worktree (`git commit-tree`).
@@ -4965,6 +4967,14 @@ export interface VcsPushOptions {
   remote?: string
   refspec?: string
   forceWithLease?: boolean
+}
+
+/** Published private-index commit and any shared-index entries left staged. */
+export interface VcsReconciledCommit {
+  /** Published commit's object ID. */
+  sha: string
+  /** Staged changes left in the shared index or publication warnings. */
+  indexNotes: Array<string>
 }
 
 /** Live remote HEAD; branch is relative to refs/heads/, never a cached guess. */

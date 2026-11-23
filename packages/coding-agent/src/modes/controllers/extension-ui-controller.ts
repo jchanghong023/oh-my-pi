@@ -29,6 +29,7 @@ import type {
 } from "../../extensibility/extensions";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
 import { cfgExtensionAssistantTextRenderers } from "../../extensibility/settings";
+import { cfgTuiVimMode } from "../settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import {
@@ -1007,6 +1008,8 @@ export class ExtensionUiController {
 				skipNotice: () => this.#skipNotice(),
 				claimKeys: () => this.focusAsk(),
 				releaseKeys: () => this.#focusComposer(),
+				configureEditor: editor => this.ctx.configureDialogEditor(editor),
+				vimMode: cfgTuiVimMode.get(this.ctx.settings),
 			});
 			const slot = this.#mountAsk(dialog);
 			return () => {
@@ -1201,7 +1204,14 @@ export class ExtensionUiController {
 					prefill,
 					(text, images) => finishPrompt({ text, images }),
 					(text, images) => finishPrompt({ draft: { text, images } }),
-					{ promptStyle: true, externalEditor: editDialogExternally, question: prompt.question, ...options },
+					{
+						promptStyle: true,
+						externalEditor: editDialogExternally,
+						question: prompt.question,
+						configureEditor: editor => this.ctx.configureDialogEditor(editor),
+						vimMode: cfgTuiVimMode.get(this.ctx.settings),
+						...options,
+					},
 				);
 				this.ctx.closeLinkBrowser();
 				this.ctx.editorContainer.clear();
@@ -1597,7 +1607,12 @@ export class ExtensionUiController {
 				prefill,
 				value => settle(value),
 				() => settle(undefined),
-				{ ...editorOptions, externalEditor: editDialogExternally },
+				{
+					...editorOptions,
+					externalEditor: editDialogExternally,
+					configureEditor: editor => this.ctx.configureDialogEditor(editor),
+					vimMode: cfgTuiVimMode.get(this.ctx.settings),
+				},
 			);
 			this.ctx.closeLinkBrowser();
 			this.ctx.editorContainer.clear();

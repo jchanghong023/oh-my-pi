@@ -28,6 +28,7 @@ import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { extractImagePathFromText } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
+import { HtmlFormDialog } from "@oh-my-pi/pi-tui/html-form/dialog";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import {
 	chipLabel,
@@ -451,6 +452,17 @@ export class InputController {
 					if (this.ctx.ui.hasOverlay() || this.ctx.ui.getFocused() instanceof HistorySearchComponent) {
 						return undefined;
 					}
+					// Vim Normal mode owns Ctrl-R as redo, in the composer and in a dialog's text box alike;
+					// history search stays on it in Insert mode. Only literal Ctrl-R is the editor's, so a
+					// remapped `app.history.search` key still opens the search from Normal mode.
+					const focused = this.ctx.ui.getFocused();
+					const editor =
+						focused === this.ctx.editor
+							? this.ctx.editor
+							: focused instanceof HookEditorComponent || focused instanceof HtmlFormDialog
+								? focused.activeEditor()
+								: undefined;
+					if (matchesKey(data, "ctrl+r") && editor?.vimEnabled && editor.vimMode === "normal") return undefined;
 					this.ctx.showHistorySearch();
 					return { consume: true };
 				}

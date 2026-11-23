@@ -36,7 +36,8 @@ import {
 	renderJsonTreeLines,
 } from "./json-tree";
 import { formatStyledTruncationWarning, stripOutputNotice } from "./output-meta";
-import { formatMCPProgress, parseMCPProgress } from "./mcp";
+import { formatMCPProgress } from "./mcp";
+import { parseMCPProgress } from "./mcp-progress";
 import { splitPathAndSel } from "./read";
 import {
 	DEFAULT_TERMINAL_PREVIEW_LINES,

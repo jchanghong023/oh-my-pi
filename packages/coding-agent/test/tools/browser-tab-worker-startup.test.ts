@@ -1460,7 +1460,11 @@ describe("browser tabs whose renderer crashed", () => {
 						timeoutMs: 10_000,
 						session: { cwd: session.cwd },
 					});
-					const result = await withTimeout(observed.promise, 10_000, "Tab worker did not report the renderer crash");
+					const result = await withTimeout(
+						observed.promise,
+						10_000,
+						"Tab worker did not report the renderer crash",
+					);
 					expect(result).toMatchObject({ ok: false, error: { rendererCrashed: true } });
 				} finally {
 					unsubscribe();
