@@ -6,7 +6,7 @@ import {
 	TtyWriter,
 	translateWindowsAltGrSequence,
 } from "@oh-my-pi/pi-natives";
-import { $env, isBunTestRuntime, isTerminalHeadless, isWsl } from "@oh-my-pi/pi-utils/env";
+import { $env, isBunTestRuntime, isTerminalHeadless, isWsl, offlineFromEnv } from "@oh-my-pi/pi-utils/env";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils/loop-phase";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
@@ -893,7 +893,7 @@ export class ProcessTerminal implements Terminal {
 	#osc99PendingId: string | undefined;
 	#osc99ResponseBuffer = "";
 	#osc99Capabilities = new Map<string, string>();
-	#programStatusProbeEnabled = true;
+	#programStatusProbeEnabled = !offlineFromEnv();
 	#programStatusPending = false;
 	#programStatusReplyBuffer = "";
 	#programStatusResult: boolean | undefined;

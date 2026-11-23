@@ -124,7 +124,7 @@ describe("fork runtime defaults", () => {
 				expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("42") })]),
 			);
 
-			for (const configured of [undefined, false]) {
+			for (const configured of [undefined, mode === "offline"]) {
 				const active =
 					configured === undefined ? settings : Settings.isolated({ "terminal.programStatus": configured });
 				const writes: string[] = [];
@@ -143,7 +143,7 @@ describe("fork runtime defaults", () => {
 					setRunStatus({ state: "working" });
 					setRunStatus({ state: "done" });
 					expect(writes).toEqual(
-						configured !== false
+						(configured ?? mode === "ordinary")
 							? ["\x1b]7501;state=working:app=omp\x1b\\", "\x1b]7501;state=done:app=omp\x1b\\"]
 							: [],
 					);

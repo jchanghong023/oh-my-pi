@@ -24,6 +24,7 @@ import { setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "@oh-my-
 import { DEFAULT_MAX_FPS, parseMaxFps, setMaxFps } from "@oh-my-pi/pi-tui/frame-rate";
 import { setMotionEffects } from "@oh-my-pi/pi-tui/motion-effects";
 import { parseSpinnerInterval, setSpinnerInterval } from "@oh-my-pi/pi-tui/spinner-clock";
+import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
 
 const EMPTY_UNKNOWN_RECORD: Record<string, unknown> = {};
 
@@ -413,7 +414,7 @@ export const cfgTerminalShowProgress = register({
 export const cfgTerminalProgramStatus = register({
 	id: "terminal.programStatus",
 	type: "boolean",
-	default: true,
+	default: !offlineFromEnv(),
 	ui: {
 		tab: "appearance",
 		group: "显示",

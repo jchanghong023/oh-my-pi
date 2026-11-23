@@ -70,10 +70,12 @@ describe("OSC 7501 program-status negotiation", () => {
 		return { terminal, writes, received, results };
 	}
 
-	it("queries offline by default and respects runtime changes", () => {
+	it("skips the offline probe until explicitly enabled", () => {
 		Bun.env.OMP_OFFLINE = "1";
 		const { terminal, writes, results } = startTerminal();
 		try {
+			expect(writes).not.toContain(QUERY);
+			terminal.setProgramStatusProbeEnabled(true);
 			expect(writes.filter(write => write === QUERY)).toHaveLength(1);
 			process.stdin.emit("data", REPLY);
 			expect(results).toEqual([true]);
@@ -92,8 +94,7 @@ describe("OSC 7501 program-status negotiation", () => {
 		}
 	});
 
-	it("does not query offline when explicitly disabled before terminal startup", () => {
-		Bun.env.OMP_OFFLINE = "1";
+	it("does not query in ordinary mode when explicitly disabled before terminal startup", () => {
 		const { terminal, writes } = startTerminal(false);
 		try {
 			expect(writes).not.toContain(QUERY);

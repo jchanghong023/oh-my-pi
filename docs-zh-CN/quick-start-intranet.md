@@ -34,6 +34,8 @@ omp
 
 红区模式会暂时关闭 Web Search、Browser（含 `/crawl`）和 Fetch；本地文件和已配置、可达的内网服务仍可使用。
 
+红区默认关闭终端程序状态通知（OSC 7501），防止不兼容的终端把 `7501…state=working…` 显示成输入。旧版或曾手动开启时，可运行 `omp config set terminal.programStatus false`，然后重启 OMP。
+
 ## 5. 黄区快速使用
 
 - `OMP_CONFIG_ROOT`：可选，指定持久数据目录。

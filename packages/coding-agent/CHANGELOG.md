@@ -12,7 +12,7 @@
 - Compact mode shows the original tool diffs in completion order instead of merging writes. The preview and `Ctrl+O` controls are unchanged.
 - AST Edit is available in intranet mode; missing language grammars no longer fall back to a public download.
 - `/collab2` defaults to `10.239.93.104:9333` when `OMP_OFFLINE` is set; `OMP_COLLAB2_IP` still overrides the default.
-- Terminal program status (OSC 7501) is now enabled by default in offline mode; explicit settings still take precedence.
+- Offline mode defaults terminal program status (OSC 7501) to off so incompatible terminals do not insert status text into the composer. Explicit settings still take precedence.
 
 ### Added
 
